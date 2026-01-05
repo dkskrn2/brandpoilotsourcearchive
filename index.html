@@ -16,10 +16,12 @@
       --shadow: 0 10px 26px rgba(2,32,71,.10);
       --radius: 18px;
       --max: 1120px;
-      --primary:#3182f6;
-      --primary-2:#1b64da;
       --surface:#f2f4f6;
       --surface-2:#f7f8fa;
+      --accent: #2563eb;
+      --bg1: #ffffff;
+      --bg2: #f8fafc;
+      --bg-soft: #f8fafc;
     }
 
     *{box-sizing:border-box}
@@ -101,14 +103,6 @@
       border-color: rgba(49,130,246,.22);
       background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
     }
-    .btn.ghost{
-      box-shadow:none;
-      border-color: transparent;
-      background: transparent;
-      color: var(--muted);
-      padding: 10px 10px;
-    }
-    .btn.ghost:hover{background: rgba(2,32,71,.04); color: var(--text);}
 
     /* Sections / stripes (Toss-like: airy, clear separation) */
     section{scroll-margin-top: 88px;}
@@ -160,10 +154,6 @@
       gap: 12px;
       margin-top: 14px;
     }
-    /* Only for the first "혼란/질문 카드" row: 2 cards per row (50% / 50%) */
-    .grid2{
-      grid-template-columns: repeat(2, 1fr);
-    }
     @media (max-width: 980px){ .grid3{grid-template-columns:1fr;} }
     .two{
       display:grid;
@@ -199,6 +189,12 @@
       background: var(--surface-2);
       margin-top: 12px;
     }
+    .table-responsive{
+      margin-top: 12px;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .table-responsive table{min-width: 640px;}
     th, td{
       padding: 12px 12px;
       border-bottom: 1px solid var(--line);
@@ -230,24 +226,348 @@
     summary::-webkit-details-marker{display:none}
     .faq p{margin: 10px 0 0; color: var(--muted);}
 
-    /* Hero: slogan only */
+    /* Hero */
     .hero{
-      padding: 78px 0 22px;
-      border-top:none;
+      position: relative;
+      overflow: hidden;
+      background:
+        radial-gradient(900px 500px at 50% -10%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 60%),
+        linear-gradient(180deg, var(--bg1), var(--bg2));
+      padding: clamp(56px, 8vw, 96px) 20px;
     }
-    .hero-center{
-      display:flex;
-      flex-direction:column;
+
+    .hero::before{
+      content:"";
+      position:absolute;
+      inset: -1px;
+      background:
+        radial-gradient(700px 380px at 20% 20%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 60%),
+        radial-gradient(700px 380px at 80% 30%, rgba(15, 23, 42, .06), transparent 60%);
+      pointer-events:none;
+    }
+
+    .hero__inner{
+      position: relative;
+      max-width: 980px;
+      margin: 0 auto;
+      text-align: center;
+    }
+
+    .hero__eyebrow{
+      display:inline-flex;
       align-items:center;
-      text-align:center;
-      gap: 0;
-      padding: 0 6px;
-    }
-    .hero-sub{
-      margin-top: 14px;
+      gap:10px;
+      margin: 0 0 14px;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
       color: var(--muted);
       font-size: 14px;
-      max-width: 64ch;
+      background: rgba(255,255,255,.65);
+      backdrop-filter: blur(8px);
+    }
+
+    .hero__title{
+      margin: 0;
+      color: var(--text);
+      font-weight: 900;
+      letter-spacing: -0.04em;
+      line-height: 1.10;
+      font-size: clamp(34px, 4.6vw, 56px);
+    }
+
+    /* “복잡한” 강조: 포인트 컬러 + 살짝 굵게 */
+    .hl{
+      color: var(--accent);
+      font-weight: 950;
+    }
+
+    /* “준비하기” 강조: 밑줄 하이라이트(마커 느낌) */
+    .hl2{
+      position: relative;
+      font-weight: 950;
+    }
+    .hl2::after{
+      content:"";
+      position:absolute;
+      left: -0.06em;
+      right: -0.06em;
+      bottom: 0.08em;
+      height: 0.34em;
+      background: color-mix(in srgb, var(--accent) 24%, transparent);
+      border-radius: 10px;
+      z-index: -1;
+    }
+
+    .hero__desc{
+      margin: 18px auto 0;
+      max-width: 720px;
+      color: var(--muted);
+      line-height: 1.7;
+      font-size: clamp(15px, 1.6vw, 18px);
+    }
+    .hero__desc strong{
+      color: var(--text);
+      font-weight: 800;
+    }
+
+    .hero__cta{
+      margin-top: 28px;
+      display:flex;
+      justify-content:center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .hero__cta .btn{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      height: 46px;
+      padding: 0 18px;
+      border-radius: 12px;
+      text-decoration:none;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      border: 1px solid transparent;
+      transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
+    }
+    .hero__cta .btn:active{ transform: translateY(1px); }
+
+    .hero__cta .btn--primary{
+      color: white;
+      background: var(--accent);
+      box-shadow: 0 10px 24px color-mix(in srgb, var(--accent) 28%, transparent);
+    }
+    .hero__cta .btn--primary:hover{
+      box-shadow: 0 14px 30px color-mix(in srgb, var(--accent) 34%, transparent);
+    }
+
+    /* Clarify/Solution Switcher */
+    .clarify-solution{
+      background: linear-gradient(180deg, #ffffff, var(--bg-soft));
+      padding: clamp(80px, 10vw, 120px) 20px;
+    }
+
+    .clarify-solution__inner{
+      max-width: 1080px;
+      margin: 0 auto;
+    }
+
+    .clarify-solution__header{
+      margin-bottom: 36px;
+    }
+
+    .clarify-solution__title{
+      margin: 0;
+      font-size: clamp(28px, 3.6vw, 40px);
+      font-weight: 900;
+      letter-spacing: -0.04em;
+      color: var(--text);
+    }
+
+    .clarify-solution__grid{
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 24px;
+    }
+
+    .clarify-solution .switch-card{
+      position: relative;
+      height: 260px;
+    }
+
+    .clarify-solution .switch-card > .card{
+      position: absolute;
+      inset: 0;
+      border-radius: 18px;
+      padding: 26px;
+      transition: opacity .5s ease, transform .5s ease;
+    }
+
+    .clarify-solution .card--problem{
+      background: #ffffff;
+      border: 1px solid var(--line);
+      box-shadow: 0 12px 24px rgba(15,23,42,.05);
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .clarify-solution .card--problem h3{
+      margin: 0 0 8px;
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: var(--text);
+    }
+
+    .clarify-solution .card--problem p{
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.65;
+      color: var(--muted);
+    }
+
+    .clarify-solution .card--problem p strong{
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .clarify-solution .card--solution{
+      background: rgba(37, 99, 235, 0.06);
+      border: 1px solid rgba(37, 99, 235, 0.35);
+      box-shadow: 0 16px 32px rgba(37,99,235,.12);
+      opacity: 0;
+      transform: translateY(12px);
+    }
+
+    .clarify-solution .card--solution .card__context{
+      margin: 0 0 6px;
+      font-size: 13px;
+      line-height: 1.5;
+      color: rgba(37, 99, 235, .7);
+    }
+
+    .clarify-solution .card--solution h3{
+      margin: 0 0 8px;
+      font-size: 18px;
+      font-weight: 850;
+      letter-spacing: -0.02em;
+      color: var(--text);
+    }
+
+    .clarify-solution .card--solution p{
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.65;
+      color: var(--muted);
+    }
+
+    .clarify-solution .card--solution p strong{
+      color: var(--text);
+      font-weight: 750;
+    }
+
+    @media (max-width: 720px){
+      .clarify-solution__grid{
+        grid-template-columns: 1fr;
+      }
+      .clarify-solution .switch-card{
+        height: 240px;
+      }
+    }
+
+    /* Process */
+    .process-c{
+      background:#ffffff;
+      padding:120px 20px;
+    }
+
+    .process-c__inner{
+      max-width:900px;
+      margin:0 auto;
+    }
+
+    .process-c__header{
+      margin-bottom:56px;
+    }
+
+    .process-c__header h2{
+      margin:0 0 12px;
+      font-size:40px;
+      font-weight:900;
+      letter-spacing:-0.04em;
+      color:#0f172a;
+    }
+
+    .process-c__header p{
+      margin:0;
+      font-size:17px;
+      line-height:1.7;
+      color:#475569;
+    }
+
+    .process-c__timeline{
+      list-style:none;
+      margin:0;
+      padding:0;
+      position:relative;
+    }
+
+    .process-c__timeline::before{
+      content:"";
+      position:absolute;
+      left:12px;
+      top:0;
+      bottom:0;
+      width:2px;
+      background:rgba(2,6,23,.08);
+    }
+
+    .process-c__timeline li{
+      position:relative;
+      padding-left:56px;
+      padding-bottom:56px;
+    }
+
+    .process-c__timeline li:last-child{
+      padding-bottom:0;
+    }
+
+    .process-c__timeline .dot{
+      position:absolute;
+      left:6px;
+      top:6px;
+      width:14px;
+      height:14px;
+      border-radius:50%;
+      background:#2563eb;
+    }
+
+    .process-c__timeline h3{
+      margin:0 0 8px;
+      font-size:22px;
+      font-weight:800;
+      letter-spacing:-0.02em;
+      color:#0f172a;
+    }
+
+    .process-c__timeline .desc{
+      margin:0 0 14px;
+      font-size:16px;
+      line-height:1.65;
+      color:#475569;
+    }
+
+    .process-c__timeline .check{
+      margin:0;
+      padding:0;
+      list-style:none;
+    }
+
+    .process-c__timeline .check li{
+      position:relative;
+      padding-left:18px;
+      margin-bottom:8px;
+      font-size:15px;
+      line-height:1.6;
+      color:#334155;
+    }
+
+    .process-c__timeline .check li::before{
+      content:"–";
+      position:absolute;
+      left:0;
+      color:#94a3b8;
+    }
+
+    @media (max-width:720px){
+      .process-c__header h2{
+        font-size:32px;
+      }
     }
 
     /* Apply */
@@ -275,120 +595,180 @@
         <span>IT 전환 설계 패키지</span>
       </a>
       <div class="nav" aria-label="상단 메뉴">
-        <a href="#clarity">문제/질문</a>
-        <a href="#who">대상</a>
-        <a href="#how">진행</a>
-        <a href="#what">산출물</a>
-        <a href="#pricing">가격</a>
-        <a href="#faq">FAQ</a>
-        <a class="btn primary" href="#apply">신청</a>
+        <a href="service.html">service</a>
+        <a href="#how">work</a>
       </div>
     </div>
   </div>
 
   <div id="top" class="wrap">
-    <!-- HERO (slogan only) -->
-    <section class="hero" aria-label="브랜드 슬로건">
-      <div class="hero-center">
-        <h1>실패하지 않는 서비스를 만듭니다</h1>
-        <p class="hero-sub">설명은 뒤로 미룹니다. 먼저, 이 브랜드가 가장 중요하게 여기는 기준을 한 문장으로 고정합니다.</p>
+    <!-- HERO -->
+    <section class="hero">
+      <div class="hero__inner">
+        <p class="hero__eyebrow">대표님은 사업에만 집중하세요</p>
+
+        <h1 class="hero__title">
+          필요하지만 <span class="hl">복잡한</span> 온라인 채널,
+          <br />
+          <span class="hl2">준비하기</span> 어려우신가요?
+        </h1>
+
+        <p class="hero__desc">
+          필요한 IT를 맞춤 설계해 <strong>‘운영되는 구조’</strong>로 만듭니다.
+          <br />
+          기획 · 제작 · 운영을 한 흐름으로 연결합니다.
+        </p>
+
+        <div class="hero__cta">
+          <a class="btn btn--primary" href="#contact">무료 진단 요청</a>
+        </div>
       </div>
     </section>
   </div>
 
-  <!-- 2 + 3 merged: Problem recognition & key questions -->
-  <div class="stripe alt" id="clarity">
-    <div class="inner">
-      <h2>지금 겪는 혼란을 먼저 정리합니다</h2>
-      <p class="lead">해결책보다 먼저, “지금 무엇을 결정해야 하는지”를 문장으로 만들어 냅니다.</p>
+  <section class="clarify-solution" id="clarity">
+    <div class="clarify-solution__inner">
+      <header class="clarify-solution__header">
+        <h2 class="clarify-solution__title">
+          이런 고민을 하고 계신가요?
+        </h2>
+      </header>
 
-      <div class="grid3 grid2" role="list" aria-label="혼란/질문 카드">
-        <div class="card" role="listitem">
-          <p class="qtitle">무엇부터 해야 할지 모르겠어요</p>
-          <p class="qdesc">현황을 객관화하고, 지금 단계에서 해야 할 것과 하지 않을 것을 먼저 고정합니다.</p>
-        </div>
-        <div class="card" role="listitem">
-          <p class="qtitle">기능을 만들수록 혼선이 늘어요</p>
-          <p class="qdesc">업무 흐름(To‑Be)과 범위를 먼저 확정해, 수정·역기획 비용을 줄이는 기준을 만듭니다.</p>
-        </div>
-        
-      </div>
+      <ul class="clarify-solution__grid">
+        <li class="switch-card">
+          <div class="card card--problem">
+            <h3>이걸 만든다고 정말 돈이 될까요?</h3>
+            <p>
+              홈페이지나 온라인 채널이<br />
+              <strong>매출이나 문의로 이어질지 확신이 없습니다.</strong>
+            </p>
+          </div>
 
-      <div class="grid3" style="margin-top:12px;">
-        <div class="card" role="listitem">
-          <p class="qtitle">만든 뒤 운영이 더 불안해요</p>
-          <p class="qdesc">운영 정책·예외·담당 기준을 함께 잡아, “만들고 다시 흔들리는 상태”를 줄입니다.</p>
-        </div>
-        <div class="card">
-          <p class="qtitle">결정을 미루는 비용이 커요</p>
-          <p class="qdesc">결정 기준을 남기면 실행이 쉬워집니다. 기준 없는 실행은 반복 수정으로 이어집니다.</p>
-        </div>
-      
-      </div>
+          <div class="card card--solution">
+            <p class="card__context">“이걸 만든다고 정말 돈이 될까요?”</p>
+            <h3>수익으로 이어지는 구조부터 설계합니다</h3>
+            <p>
+              홈페이지를 단순한 소개가 아니라<br />
+              <strong>문의·전환이 발생하는 흐름</strong>으로 봅니다.
+            </p>
+          </div>
+        </li>
+
+        <li class="switch-card">
+          <div class="card card--problem">
+            <h3>무료 툴이 많은데, 왜 돈을 써야 하나요?</h3>
+            <p>
+              프라이머, 윅스 같은 서비스로도 가능한데<br />
+              <strong>굳이 비용을 들여야 하는 이유를 모르겠습니다.</strong>
+            </p>
+          </div>
+
+          <div class="card card--solution">
+            <p class="card__context">“무료 툴이 많은데, 왜 돈을 써야 하나요?”</p>
+            <h3>지금 단계에 맞는 선택 기준을 먼저 잡습니다</h3>
+            <p>
+              무료 도구와 비교해<br />
+              <strong>어디까지가 한계인지</strong>를 명확히 합니다.
+            </p>
+          </div>
+        </li>
+
+        <li class="switch-card">
+          <div class="card card--problem">
+            <h3>만들고 나서, 운영은 어떻게 하나요?</h3>
+            <p>
+              호스팅, 도메인, 수정 요청까지<br />
+              <strong>결국 신경 써야 할 게 너무 많아 보입니다.</strong>
+            </p>
+          </div>
+
+          <div class="card card--solution">
+            <p class="card__context">“만들고 나서, 운영은 어떻게 하나요?”</p>
+            <h3>운영까지 포함한 구조로 설계합니다</h3>
+            <p>
+              혼자서도 관리 가능한 수준까지<br />
+              <strong>운영 흐름을 함께 정리합니다.</strong>
+            </p>
+          </div>
+        </li>
+
+        <li class="switch-card">
+          <div class="card card--problem">
+            <h3>홈페이지를 왜, 어떻게 써야 하는지 모르겠어요</h3>
+            <p>
+              예쁜 사이트가 중요한 건지,<br />
+              <strong>사업에서 어떤 역할을 해야 하는지 감이 오지 않습니다.</strong>
+            </p>
+          </div>
+
+          <div class="card card--solution">
+            <p class="card__context">“홈페이지를 왜, 어떻게 써야 할지 모르겠어요”</p>
+            <h3>홈페이지의 역할부터 정의합니다</h3>
+            <p>
+              디자인보다 먼저<br />
+              <strong>사업에서 해결해야 할 문제</strong>를 정합니다.
+            </p>
+          </div>
+        </li>
+      </ul>
     </div>
-  </div>
+  </section>
 
-  <!-- WHO -->
-  <div class="stripe" id="who">
-    <div class="inner">
-      <h2>이런 분들께 어울려요</h2>
-      <p class="lead">IT에 익숙하지 않아도 됩니다. 다만, 정리와 결정이 가능한 상태여야 합니다.</p>
+  <section class="process-c" id="how">
+    <div class="process-c__inner">
+      <header class="process-c__header">
+        <h2>그래서, 우리는 이렇게 시작합니다</h2>
+        <p>
+          바로 만들지 않습니다.
+          지금 상황을 정리하고, 판단 기준을 세운 뒤에 움직입니다.
+        </p>
+      </header>
 
-      <div class="two">
-        <div class="card">
-          <p class="qtitle">이런 기업에 맞습니다</p>
-          <ul>
-            <li>수기/카톡/엑셀로 운영 중이라 업무가 누락되거나 반복된다</li>
-            <li>홈페이지, 예약, 정산, 문의 대응이 흩어져 있어 관리가 어렵다</li>
-            <li>AI/자동화를 도입하고 싶지만 어디에 적용해야 할지 모르겠다</li>
-            <li>외주/개발 견적을 받아도 적정한지 판단이 어렵다</li>
+      <ul class="process-c__timeline">
+        <li>
+          <span class="dot"></span>
+          <h3>지금 어떤 상태인지부터 봅니다</h3>
+          <p class="desc">
+            현재 사업이 어떤 구조로 돌아가고 있는지,<br />
+            온라인에서 무엇을 기대하고 있는지부터 확인합니다.
+          </p>
+          <ul class="check">
+            <li>지금 주력으로 하고 있는 사업과 수익 구조</li>
+            <li>홈페이지나 온라인 채널에 기대하는 역할</li>
+            <li>이미 시도해본 것과 잘 안 됐던 이유</li>
           </ul>
-        </div>
-        <div class="card">
-          <p class="qtitle">이런 경우는 진행하지 않습니다</p>
-          <ul>
-            <li>기획/정리 없이 바로 개발만 의뢰하려는 경우</li>
-            <li>조직 내부 의사결정이 전혀 불가능한 상태</li>
-            <li>단기간에 모든 것을 한 번에 만들려는 경우</li>
-            <li>운영 주체(담당자)가 전혀 없는 상태</li>
+        </li>
+
+        <li>
+          <span class="dot"></span>
+          <h3>무엇을 할지, 하지 않을지를 정합니다</h3>
+          <p class="desc">
+            모든 걸 다 하려다 복잡해지지 않도록,<br />
+            지금 단계에서 필요한 것만 남깁니다.
+          </p>
+          <ul class="check">
+            <li>홈페이지가 꼭 해야 할 핵심 역할</li>
+            <li>지금은 굳이 만들지 않아도 되는 기능</li>
+            <li>무료 툴로 충분한지, 아닌지에 대한 기준</li>
           </ul>
-          <p class="muted" style="margin-top:10px;">선별 기준은 품질을 지키기 위한 운영 방식입니다.</p>
-        </div>
-      </div>
+        </li>
+
+        <li>
+          <span class="dot"></span>
+          <h3>만들고 나서까지 함께 생각합니다</h3>
+          <p class="desc">
+            만들고 끝나는 게 아니라,<br />
+            실제로 운영할 수 있는 상태인지까지 봅니다.
+          </p>
+          <ul class="check">
+            <li>누가, 어떤 방식으로 관리하게 될지</li>
+            <li>수정이나 추가가 필요할 때의 흐름</li>
+            <li>사업이 바뀌어도 감당 가능한 구조인지</li>
+          </ul>
+        </li>
+      </ul>
     </div>
-  </div>
-
-  <!-- HOW -->
-  <div class="stripe alt" id="how">
-    <div class="inner">
-      <h2>진행 방식</h2>
-      <p class="lead">필요한 것을 더하기보다, 지금 단계에서 불필요한 것을 줄이는 방식으로 진행합니다.</p>
-
-      <div class="two">
-        <div class="card">
-          <p class="qtitle">진행 흐름</p>
-          <ol>
-            <li>신청서 접수 및 선별/추첨</li>
-            <li>현황 파악 및 목표 1개 고정</li>
-            <li>업무 흐름(To‑Be)과 범위(하지 않을 것) 확정</li>
-            <li>정책/기능/화면 구조 정리</li>
-            <li>기술 도입 방식과 운영 비용(TCO) 가이드</li>
-            <li>최종 제작 의사결정 권고안 제공</li>
-          </ol>
-        </div>
-        <div class="card">
-          <p class="qtitle">우리가 보장하는 것</p>
-          <ul>
-            <li>결정에 필요한 기준을 문장으로 남깁니다</li>
-            <li>이번 단계의 범위와 하지 않을 것을 명확히 합니다</li>
-            <li>운영 가능한 형태로 도입 난이도를 낮춥니다</li>
-            <li>선택의 이유를 설명 가능한 구조로 만듭니다</li>
-          </ul>
-          <p class="muted" style="margin-top:10px;">성과 자체가 아니라, 실패 확률을 줄이는 구조를 제공합니다.</p>
-        </div>
-      </div>
-    </div>
-  </div>
+  </section>
 
   <!-- PRICING -->
   <div class="stripe alt" id="pricing">
@@ -427,42 +807,44 @@
       <h2>산출물</h2>
       <p class="lead">대표가 이해하고 의사결정할 수 있도록 문서와 도식으로 정리합니다. 제작으로 바로 연결 가능한 형태로 제공합니다.</p>
 
-      <table aria-label="산출물 요약 표">
-        <thead>
-          <tr>
-            <th style="width:120px;">단계</th>
-            <th style="width:340px;">핵심 산출물</th>
-            <th>설명</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>Context</td>
-            <td>현황 요약, 전환 가능 영역 맵, 우선순위 매트릭스</td>
-            <td>현재 상태를 객관화하고, 무엇부터 할지 순서를 결정합니다.</td>
-          </tr>
-          <tr>
-            <td>Flow</td>
-            <td>업무 플로우(To‑Be), 문제 지점/개선 포인트, 데이터 자산화 리포트</td>
-            <td>업무가 어떻게 바뀌는지 시각화하고, 데이터를 자산으로 만드는 구조를 제안합니다.</td>
-          </tr>
-          <tr>
-            <td>Standard</td>
-            <td>운영 정책, 범위(Out‑of‑Scope), 화면 리스트/와이어프레임, 기능 정의서(Lite)</td>
-            <td>개발 중 혼선과 역기획 비용을 줄이기 위한 기준을 만듭니다.</td>
-          </tr>
-          <tr>
-            <td>Tech</td>
-            <td>AI/자동화 적용 검토, 기술 스택 추천(SaaS/노코드/커스텀)</td>
-            <td>현재 상황에 맞는 도입 방식과 운영 난이도를 함께 제시합니다.</td>
-          </tr>
-          <tr>
-            <td>Decision</td>
-            <td>3단계 로드맵, 비용/TCO 가이드, 제작 의사결정 권고안(1p)</td>
-            <td>지금 제작해야 하는지, 어떤 형태가 적절한지 최종 판단 근거를 제공합니다.</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-responsive" role="region" aria-label="산출물 요약 표">
+        <table aria-label="산출물 요약 표">
+          <thead>
+            <tr>
+              <th style="width:120px;">단계</th>
+              <th style="width:340px;">핵심 산출물</th>
+              <th>설명</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Context</td>
+              <td>현황 요약, 전환 가능 영역 맵, 우선순위 매트릭스</td>
+              <td>현재 상태를 객관화하고, 무엇부터 할지 순서를 결정합니다.</td>
+            </tr>
+            <tr>
+              <td>Flow</td>
+              <td>업무 플로우(To‑Be), 문제 지점/개선 포인트, 데이터 자산화 리포트</td>
+              <td>업무가 어떻게 바뀌는지 시각화하고, 데이터를 자산으로 만드는 구조를 제안합니다.</td>
+            </tr>
+            <tr>
+              <td>Standard</td>
+              <td>운영 정책, 범위(Out‑of‑Scope), 화면 리스트/와이어프레임, 기능 정의서(Lite)</td>
+              <td>개발 중 혼선과 역기획 비용을 줄이기 위한 기준을 만듭니다.</td>
+            </tr>
+            <tr>
+              <td>Tech</td>
+              <td>AI/자동화 적용 검토, 기술 스택 추천(SaaS/노코드/커스텀)</td>
+              <td>현재 상황에 맞는 도입 방식과 운영 난이도를 함께 제시합니다.</td>
+            </tr>
+            <tr>
+              <td>Decision</td>
+              <td>3단계 로드맵, 비용/TCO 가이드, 제작 의사결정 권고안(1p)</td>
+              <td>지금 제작해야 하는지, 어떤 형태가 적절한지 최종 판단 근거를 제공합니다.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <div class="grid3">
         <div class="card">
@@ -535,5 +917,35 @@
       </div>
     </div>
   </div>
+  <script>
+    window.addEventListener('DOMContentLoaded', () => {
+      const section = document.querySelector('.clarify-solution');
+      if (!section) return;
+
+      const observer = new IntersectionObserver(
+        ([entry]) => {
+          if (!entry.isIntersecting) return;
+
+          document.querySelectorAll('.switch-card').forEach(card => {
+            const problem = card.querySelector('.card--problem');
+            const solution = card.querySelector('.card--solution');
+
+            problem.style.opacity = 0;
+            problem.style.transform = 'translateY(-12px)';
+
+            solution.style.opacity = 1;
+            solution.style.transform = 'translateY(0)';
+          });
+
+          observer.disconnect();
+        },
+        {
+          threshold: 0.45
+        }
+      );
+
+      observer.observe(section);
+    });
+  </script>
 </body>
 </html>
