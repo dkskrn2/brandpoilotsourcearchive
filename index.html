@@ -83,6 +83,14 @@
     }
     .nav a:hover{background: rgba(2,32,71,.04); color: var(--text);}
 
+    .top-actions{
+      display:flex;
+      align-items:center;
+      gap:10px;
+    }
+
+    .topbar .btn{padding: 10px 14px;}
+
     /* Buttons */
     .btn{
       display:inline-flex; align-items:center; justify-content:center;
@@ -592,11 +600,13 @@
     <div class="topbar-inner">
       <a class="brand" href="#top" aria-label="홈으로">
         <span class="dot" aria-hidden="true"></span>
-        <span>IT 전환 설계 패키지</span>
       </a>
-      <div class="nav" aria-label="상단 메뉴">
-        <a href="service.html">service</a>
-        <a href="#how">work</a>
+      <div class="top-actions">
+        <div class="nav" aria-label="상단 메뉴">
+          <a href="service.html">service</a>
+          <a href="#how">work</a>
+        </div>
+        <a class="btn primary" href="#contact">문의하기</a>
       </div>
     </div>
   </div>
@@ -922,25 +932,33 @@
       const section = document.querySelector('.clarify-solution');
       if (!section) return;
 
+      const switchCards = Array.from(document.querySelectorAll('.switch-card'));
+
       const observer = new IntersectionObserver(
         ([entry]) => {
-          if (!entry.isIntersecting) return;
+          const isVisible = entry.isIntersecting;
 
-          document.querySelectorAll('.switch-card').forEach(card => {
+          switchCards.forEach(card => {
             const problem = card.querySelector('.card--problem');
             const solution = card.querySelector('.card--solution');
 
-            problem.style.opacity = 0;
-            problem.style.transform = 'translateY(-12px)';
+            if (isVisible) {
+              problem.style.opacity = 0;
+              problem.style.transform = 'translateY(-12px)';
 
-            solution.style.opacity = 1;
-            solution.style.transform = 'translateY(0)';
+              solution.style.opacity = 1;
+              solution.style.transform = 'translateY(0)';
+            } else {
+              problem.style.opacity = 1;
+              problem.style.transform = 'translateY(0)';
+
+              solution.style.opacity = 0;
+              solution.style.transform = 'translateY(12px)';
+            }
           });
-
-          observer.disconnect();
         },
         {
-          threshold: 0.45
+          threshold: 0.4
         }
       );
 
