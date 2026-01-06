@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Work | Portfolio · Case Studies</title>
+  <meta name="description" content="UX 리서치, 데이터 분석, UX 컨설팅, UX/UI 디자인, UX 라이팅 프로젝트 포트폴리오를 확인하세요." />
+  <meta property="og:title" content="Work | Portfolio · Case Studies" />
+  <meta property="og:description" content="UX 리서치, 데이터 분석, UX 컨설팅, UX/UI 디자인, UX 라이팅 프로젝트 포트폴리오를 확인하세요." />
+  <link rel="canonical" href="work.html" />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="work.html" />
+  <meta name="twitter:card" content="summary" />
+
+  <style>
+    :root{
+      --accent:#2563eb;
+      --text:#0f172a;
+      --muted:#475569;
+      --muted2:#64748b;
+      --line:rgba(2,6,23,.10);
+      --line2:rgba(2,6,23,.06);
+      --bg:#ffffff;
+      --bg-soft:#f8fafc;
+      --card:#ffffff;
+
+      --radius:18px;
+      --radius2:22px;
+      --max:1080px;
+      --pad:clamp(16px,3vw,22px);
+
+      --h1:clamp(32px,4.2vw,46px);
+      --h2:clamp(20px,2.4vw,28px);
+
+      --shadow-sm:0 1px 2px rgba(0,0,0,.02);
+      --shadow-md:0 12px 24px rgba(15,23,42,.06);
+      --shadow-accent:0 16px 34px rgba(37,99,235,.18);
+    }
+
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", Roboto, Helvetica, Arial;
+      color:var(--text);
+      background:var(--bg);
+      -webkit-font-smoothing:antialiased;
+      text-rendering:geometricPrecision;
+    }
+    a{color:inherit;text-decoration:none}
+    .container{width:100%;max-width:var(--max);margin:0 auto;padding:0 var(--pad)}
+
+    /* Header */
+    header{
+      position:sticky;top:0;z-index:50;
+      background:rgba(255,255,255,.92);
+      backdrop-filter: blur(10px);
+      border-bottom:1px solid var(--line2);
+    }
+    .nav{
+      display:flex;align-items:center;justify-content:space-between;
+      padding:14px 0;gap:14px;
+    }
+    .brand{
+      display:inline-flex;align-items:center;gap:10px;
+      font-weight:900;letter-spacing:-.02em;
+    }
+    .brand-badge{
+      width:34px;height:34px;border-radius:12px;
+      background:#0b1220;
+    }
+    .menu{
+      display:flex;align-items:center;gap:18px;
+      color:var(--muted2);font-size:14px;font-weight:800;
+    }
+    .menu a{
+      padding:8px 10px;border-radius:12px;
+      transition:background .15s ease,color .15s ease;
+    }
+    .menu a:hover{background:rgba(2,6,23,.04);color:var(--text)}
+    .menu a[aria-current="page"]{
+      background:rgba(37,99,235,.10);
+      color:var(--text);
+      border:1px solid rgba(37,99,235,.22);
+    }
+
+    .cta{display:flex;align-items:center;gap:10px}
+
+    /* Buttons */
+    .btn{
+      display:inline-flex;align-items:center;justify-content:center;
+      height:42px;padding:0 14px;border-radius:999px;
+      border:1px solid var(--line);
+      background:#fff;color:var(--text);
+      font-weight:900;font-size:14px;letter-spacing:-.01em;
+      transition:transform .15s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease;
+      cursor:pointer;user-select:none;white-space:nowrap;
+      box-shadow:var(--shadow-sm);
+    }
+    .btn:hover{
+      transform:translateY(-1px);
+      border-color:rgba(2,6,23,.16);
+      box-shadow:var(--shadow-md);
+    }
+    .btn.primary{
+      background:var(--accent);
+      color:#fff;
+      border-color:rgba(37,99,235,.35);
+      box-shadow:var(--shadow-accent);
+    }
+    .btn.primary:hover{
+      border-color:rgba(37,99,235,.55);
+      box-shadow:0 18px 40px rgba(37,99,235,.22);
+    }
+
+    /* Page */
+    main{
+      padding: 0 0 96px;
+      background:
+        radial-gradient(1200px 420px at 20% 0%, rgba(37,99,235,.10), transparent 60%),
+        linear-gradient(180deg, #ffffff, var(--bg-soft));
+    }
+
+    .hero{padding: clamp(32px, 5vw, 60px) 0 clamp(18px, 3vw, 32px);}
+    h1{margin:6px 0 8px;font-size:var(--h1);line-height:1.08;letter-spacing:-.05em;font-weight:950;}
+    .lead{margin:0;color:var(--muted);font-size:15px;line-height:1.7;max-width:78ch;}
+
+    .tabs{
+      margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:10px;border:1px solid rgba(2,6,23,.08);
+      background:rgba(255,255,255,.86);border-radius:var(--radius2);box-shadow:var(--shadow-md);
+    }
+    .tab{
+      display:inline-flex;align-items:center;justify-content:center;
+      padding:10px 14px;border-radius:999px;
+      border:1px solid rgba(2,6,23,.10);
+      background:#fff;
+      color:rgba(15,23,42,.78);
+      font-size:13px;font-weight:900;letter-spacing:-.01em;
+      transition:transform .15s ease, border-color .15s ease, background .15s ease, box-shadow .15s ease;
+      white-space:nowrap;
+    }
+    .tab:hover{
+      transform:translateY(-1px);
+      border-color:rgba(37,99,235,.28);
+      box-shadow:0 10px 20px rgba(15,23,42,.06);
+    }
+    .tab[aria-current="page"]{
+      background:rgba(37,99,235,.10);
+      border-color:rgba(37,99,235,.35);
+      color:var(--text);
+      box-shadow:0 12px 24px rgba(37,99,235,.10);
+    }
+
+    /* Layout */
+    .work-layout{display:grid;grid-template-columns: minmax(280px, 320px) 1fr;gap:18px;}
+    .panel{
+      background:var(--card);
+      border:1px solid rgba(2,6,23,.08);
+      border-radius:var(--radius2);
+      box-shadow:var(--shadow-md);
+    }
+
+    .filters{padding:14px;display:flex;flex-direction:column;gap:6px;}
+    .filter-group{border:1px solid var(--line2);border-radius:14px;overflow:hidden;background:#fff;}
+    .filter-head{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;cursor:pointer;font-weight:900;font-size:14px;letter-spacing:-.01em;color:var(--text);}
+    .filter-head span{display:flex;align-items:center;gap:8px;}
+    .chevron{transition:transform .2s ease;}
+    .filter-group[open] .chevron{transform:rotate(90deg);}
+    .filter-list{margin:0;padding:0 0 10px 0;list-style:none;}
+    .filter-list li{padding:8px 14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;border-top:1px solid var(--line2);font-size:13px;font-weight:800;color:var(--muted2);transition:background .15s ease,color .15s ease;}
+    .filter-list li:hover{background:rgba(2,6,23,.03);color:var(--text);}
+    .filter-list li.is-active{background:rgba(37,99,235,.08);color:var(--text);border-left:3px solid var(--accent);padding-left:11px;}
+    .badge{display:inline-flex;align-items:center;justify-content:center;padding:2px 8px;border-radius:999px;background:rgba(2,6,23,.06);font-size:11px;font-weight:900;color:var(--muted2);}
+
+    .project-panel{padding:18px;display:grid;gap:12px;}
+    .thumb{width:100%;border-radius:16px;overflow:hidden;position:relative;aspect-ratio:16/9;background:linear-gradient(135deg, rgba(37,99,235,.14), rgba(37,99,235,.06));border:1px solid rgba(2,6,23,.06);box-shadow:0 16px 30px rgba(15,23,42,.10);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:18px;letter-spacing:-.02em;text-shadow:0 10px 24px rgba(15,23,42,.28);}
+    .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+
+    .meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+    .pill{display:inline-flex;align-items:center;padding:8px 12px;border-radius:999px;border:1px solid rgba(2,6,23,.10);background: rgba(248,250,252,.9);color: rgba(15,23,42,.74);font-size:12px;font-weight:900;letter-spacing:-.01em;}
+    h2{margin:0;font-size:var(--h2);letter-spacing:-.03em;font-weight:950;}
+    .desc{margin:6px 0 0;color:var(--muted);line-height:1.65;font-size:15px;}
+    .project-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px;}
+
+    /* Responsive */
+    @media (max-width:1024px){
+      .work-layout{grid-template-columns:1fr;}
+      .filters{position:relative;}
+    }
+    @media (max-width:640px){
+      .tab,.pill{width:100%;justify-content:center;}
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <div class="nav">
+        <a class="brand" href="agency_home_squarespace_v5.html" aria-label="홈으로">
+          <span class="brand-badge" aria-hidden="true"></span>
+          <span>YOUR AGENCY</span>
+        </a>
+        <nav class="menu" aria-label="메인 메뉴">
+          <a href="service.html">Service</a>
+          <a href="work.html" aria-current="page">Work</a>
+        </nav>
+        <div class="cta">
+          <a class="btn primary" href="agency_home_squarespace_v6.html#contact">프로젝트 문의</a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="container">
+      <section class="hero" aria-label="포트폴리오 소개">
+        <h1>Work</h1>
+        <p class="lead">도메인과 서비스 유형별로 수행한 프로젝트를 살펴보고, 비슷한 과제를 어떻게 해결했는지 확인하세요.</p>
+        <nav class="tabs" aria-label="워크 탭">
+          <a class="tab" href="#domain" aria-current="page" data-view="domain">Domain</a>
+          <a class="tab" href="#service" data-view="service">Service</a>
+        </nav>
+      </section>
+
+      <section aria-label="포트폴리오 목록" class="work-layout">
+        <aside class="panel filters" aria-label="카테고리 필터">
+          <details class="filter-group" open data-view="domain">
+            <summary class="filter-head"><span>AI/Experience</span><span class="chevron" aria-hidden="true">›</span></summary>
+            <ul class="filter-list" role="list">
+              <li data-project="tv-voice" class="is-active">TV Voice 활용 UX 리서치 <span class="badge">리서치</span></li>
+              <li data-project="ai-agent" >AI Agent UX 전략 설계</li>
+              <li data-project="voice-agent">Voice Agent Contact UX Design</li>
+            </ul>
+          </details>
+
+          <details class="filter-group" data-view="domain">
+            <summary class="filter-head"><span>Finance</span><span class="chevron" aria-hidden="true">›</span></summary>
+            <ul class="filter-list" role="list">
+              <li data-project="sol-app">신한 SOL New App UI 개발 <span class="badge">UI</span></li>
+              <li data-project="atm">ATM UX 재설계</li>
+            </ul>
+          </details>
+
+          <details class="filter-group" data-view="domain">
+            <summary class="filter-head"><span>Commerce</span><span class="chevron" aria-hidden="true">›</span></summary>
+            <ul class="filter-list" role="list">
+              <li data-project="commerce-flow">옴니채널 커머스 플로우 개선</li>
+            </ul>
+          </details>
+
+          <details class="filter-group" open data-view="service" hidden>
+            <summary class="filter-head"><span>UX Research</span><span class="chevron" aria-hidden="true">›</span></summary>
+            <ul class="filter-list" role="list">
+              <li data-project="research-voice">Voice UX 정성/정량 리서치</li>
+              <li data-project="research-fin">금융 온보딩 리서치</li>
+            </ul>
+          </details>
+
+          <details class="filter-group" data-view="service" hidden>
+            <summary class="filter-head"><span>UX/UI Design</span><span class="chevron" aria-hidden="true">›</span></summary>
+            <ul class="filter-list" role="list">
+              <li data-project="design-sol" class="is-active">모바일 뱅킹 UI 고도화 <span class="badge">UI</span></li>
+              <li data-project="design-commerce">구독 커머스 앱 구조 설계</li>
+            </ul>
+          </details>
+        </aside>
+
+        <article class="panel project-panel" aria-live="polite">
+          <div class="thumb" data-role="thumb" aria-hidden="true">프로젝트 비주얼</div>
+          <div class="meta" data-role="tags"></div>
+          <h2 data-role="title">TV Voice 활용 UX 리서치</h2>
+          <p class="desc" data-role="desc">TV 환경에서 음성 인터랙션을 사용하는 고객 여정과 니즈를 파악하고, 발화/피드백 정책을 설계했습니다.</p>
+          <div class="project-actions" data-role="actions"></div>
+        </article>
+      </section>
+    </div>
+  </main>
+
+  <footer>
+    <div class="container">
+      <div class="footer-grid" style="display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;align-items:center;padding:32px 0 44px;color:var(--muted2);font-size:13px;border-top:1px solid rgba(2,6,23,.08);">
+        <div>© <span id="y"></span> YOUR AGENCY. All rights reserved.</div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;">
+          <a href="service.html">Service</a>
+          <a href="work.html" aria-current="page">Work</a>
+          <a href="agency_home_squarespace_v5.html#contact">Contact</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    const projects = {
+      domain:{
+        'tv-voice':{
+          title:'TV Voice 활용 UX 리서치',
+          desc:'TV 환경에서 음성 인터랙션을 사용하는 고객 여정과 니즈를 파악하고, 발화/피드백 정책을 설계했습니다.',
+          tags:['Home Appliances','Voice','AI/Experience'],
+          thumbText:'Voice UX',
+          link:null
+        },
+        'ai-agent':{
+          title:'AI Agent UX 전략 설계',
+          desc:'에이전트 기반 서비스의 페르소나·시나리오·라벨링 기준을 정의하고, 운영 정책을 정리했습니다.',
+          tags:['AI Agent','Strategy'],
+          thumbText:'AI Agent',
+          link:null
+        },
+        'voice-agent':{
+          title:'Voice Agent Contact UX Design',
+          desc:'보이스봇 상담 흐름을 설계하고, 실패/재시도 시나리오와 에러 핸들링을 정의했습니다.',
+          tags:['Voice Agent','Contact Center'],
+          thumbText:'Contact UX',
+          link:null
+        },
+        'sol-app':{
+          title:'신한 SOL New App UI 개발',
+          desc:'메인·자산·상품 탐색 흐름을 재설계하고, 금융 상품 카드/필터 기준을 정리했습니다.',
+          tags:['Finance','Mobile App','UI'],
+          thumbText:'Finance UI',
+          link:'https://www.shinhansquare.com/'
+        },
+        'atm':{
+          title:'ATM UX 재설계',
+          desc:'ATM 핵심 업무(출금/이체/통장정리)의 동선을 단축하고, 음성/터치 혼합 인터랙션을 제안했습니다.',
+          tags:['Finance','ATM','Service Design'],
+          thumbText:'ATM UX',
+          link:null
+        },
+        'commerce-flow':{
+          title:'옴니채널 커머스 플로우 개선',
+          desc:'매장/온라인 주문 흐름을 통합하고, 픽업·배송 정책을 명확히 해 이탈을 줄였습니다.',
+          tags:['Commerce','Omnichannel'],
+          thumbText:'Commerce',
+          link:null
+        }
+      },
+      service:{
+        'research-voice':{
+          title:'Voice UX 정성/정량 리서치',
+          desc:'심층 인터뷰와 로그 분석을 결합해 음성 인식 실패 지점을 찾아내고 개선 우선순위를 제시했습니다.',
+          tags:['UX Research','Voice','Mixed Methods'],
+          thumbText:'Research',
+          link:null
+        },
+        'research-fin':{
+          title:'금융 온보딩 리서치',
+          desc:'온보딩 퍼널별 이탈 원인을 파악하고, 실험 가능한 개선안을 도출했습니다.',
+          tags:['UX Research','Finance','Onboarding'],
+          thumbText:'Onboarding',
+          link:null
+        },
+        'design-sol':{
+          title:'모바일 뱅킹 UI 고도화',
+          desc:'주요 기능의 카드/피드 패턴을 표준화하고, 상태/피드백 디자인 시스템을 정리했습니다.',
+          tags:['UX/UI Design','Finance','Design System'],
+          thumbText:'Design',
+          link:'https://www.shinhansquare.com/'
+        },
+        'design-commerce':{
+          title:'구독 커머스 앱 구조 설계',
+          desc:'상품 구독/관리 흐름을 단순화하고, 재구매/추천 경험을 강화하는 IA를 설계했습니다.',
+          tags:['UX/UI Design','Commerce','IA'],
+          thumbText:'Subscription',
+          link:null
+        }
+      }
+    };
+
+    const tabs = Array.from(document.querySelectorAll('a.tab[data-view]'));
+    const filterGroups = Array.from(document.querySelectorAll('.filter-group'));
+    const filterItems = Array.from(document.querySelectorAll('.filter-list li'));
+
+    const titleEl = document.querySelector('[data-role="title"]');
+    const descEl = document.querySelector('[data-role="desc"]');
+    const tagsEl = document.querySelector('[data-role="tags"]');
+    const thumbEl = document.querySelector('[data-role="thumb"]');
+    const actionsEl = document.querySelector('[data-role="actions"]');
+
+    function renderProject(view, key){
+      const data = projects[view]?.[key];
+      if(!data) return;
+
+      titleEl.textContent = data.title;
+      descEl.textContent = data.desc;
+      tagsEl.innerHTML = '';
+      data.tags.forEach(tag=>{
+        const pill = document.createElement('span');
+        pill.className = 'pill';
+        pill.textContent = tag;
+        tagsEl.appendChild(pill);
+      });
+      thumbEl.textContent = data.thumbText || 'Project';
+      actionsEl.innerHTML = '';
+      if(data.link){
+        const linkBtn = document.createElement('a');
+        linkBtn.className = 'btn primary';
+        linkBtn.href = data.link;
+        linkBtn.target = '_blank';
+        linkBtn.rel = 'noreferrer noopener';
+        linkBtn.textContent = '자세히 보기';
+        actionsEl.appendChild(linkBtn);
+      }
+    }
+
+    function setView(view){
+      tabs.forEach(t=>{
+        const is = t.dataset.view === view;
+        if(is) t.setAttribute('aria-current','page');
+        else t.removeAttribute('aria-current');
+      });
+
+      filterGroups.forEach(g=>{
+        const is = g.dataset.view === view;
+        g.hidden = !is;
+      });
+
+      const visibleItems = filterItems.filter(li=>li.closest('.filter-group')?.dataset.view === view);
+      let target = visibleItems.find(li=>li.classList.contains('is-active')) || visibleItems[0];
+      visibleItems.forEach(li=>li.classList.toggle('is-active', li===target));
+      if(target){
+        renderProject(view, target.dataset.project);
+      }
+    }
+
+    filterItems.forEach(li=>{
+      li.addEventListener('click', ()=>{
+        filterItems.forEach(item=>item.classList.remove('is-active'));
+        li.classList.add('is-active');
+        const currentView = li.closest('.filter-group')?.dataset.view === 'service' ? 'service' : 'domain';
+        renderProject(currentView, li.dataset.project);
+      });
+    });
+
+    tabs.forEach(t=>{
+      t.addEventListener('click', e=>{
+        e.preventDefault();
+        const view = t.dataset.view;
+        setView(view);
+        history.replaceState(null, '', '#' + view);
+      });
+    });
+
+    const hash = (location.hash||'').replace('#','');
+    if(hash === 'service') setView('service');
+    else setView('domain');
+
+    document.getElementById('y').textContent = new Date().getFullYear();
+  </script>
+</body>
+</html>
