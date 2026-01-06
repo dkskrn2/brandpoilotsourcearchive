@@ -113,6 +113,32 @@
       box-shadow:0 18px 40px rgba(37,99,235,.22);
     }
 
+    /* Contact modal (match index) */
+    .contact-modal{position:fixed; inset:0; z-index:120; display:flex; align-items:center; justify-content:center; padding:18px; background: rgba(0,8,20,.52); opacity:0; pointer-events:none; transition: opacity .22s ease, transform .24s ease;}
+    .contact-modal__panel{width:min(680px, 100%); background:var(--card); border-radius:20px; border:1px solid var(--line); box-shadow: 0 20px 44px rgba(2,6,23,.18); padding:24px; transform: translateY(12px); transition: transform .22s ease;}
+    .contact-modal__header{display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:10px;}
+    .contact-modal__title{margin:0; font-size:22px; letter-spacing:-.4px;}
+    .contact-modal__body{display:grid; gap:12px;}
+    .contact-modal__section{padding:14px; border-radius:14px; background: var(--bg-soft); border: 1px solid var(--line2);}
+    .contact-modal__section h3{margin:0 0 6px; font-size:16px;}
+    .contact-modal__section p{margin:0; color:var(--muted); font-size:14px;}
+    .contact-modal__form{display:grid; gap:10px; margin-top:4px;}
+    .contact-modal__form label{display:grid; gap:6px; font-size:14px; font-weight:700;}
+    .contact-modal__form input,
+    .contact-modal__form textarea{padding:12px 12px; border-radius:12px; border:1px solid var(--line2); background: var(--bg-soft); font: inherit;}
+    .contact-modal__form textarea{min-height:96px; resize:vertical;}
+    .contact-modal__actions{display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:4px;}
+    .contact-modal__note{margin:0; color:var(--muted2); font-size:13px;}
+    .contact-modal__close{border:none; background:transparent; padding:8px; cursor:pointer; border-radius:10px; color: var(--muted2); font-weight:800;}
+    .contact-modal.is-open{opacity:1; pointer-events:auto;}
+    .contact-modal.is-open .contact-modal__panel{transform: translateY(0);}
+    .contact-modal .btn{box-shadow:none; width:100%; justify-content:center;}
+    body.no-scroll{overflow:hidden;}
+    @media (max-width:560px){
+      .contact-modal__panel{padding:18px;}
+      .contact-modal__actions{flex-direction:column; align-items:stretch;}
+    }
+
     /* Page */
     main{
       padding: 0 0 96px;
@@ -205,7 +231,7 @@
           <a href="work.html" aria-current="page">Work</a>
         </nav>
         <div class="cta">
-          <a class="btn primary" href="agency_home_squarespace_v6.html#contact">프로젝트 문의</a>
+          <a class="btn primary" href="#contact" data-contact-open>프로젝트 문의</a>
         </div>
       </div>
     </div>
@@ -276,6 +302,42 @@
     </div>
   </main>
 
+  <div id="contact" class="contact-modal" role="dialog" aria-modal="true" aria-labelledby="contact-title">
+    <div class="contact-modal__panel" tabindex="-1">
+      <div class="contact-modal__header">
+        <h2 class="contact-modal__title" id="contact-title">문의하기</h2>
+        <button class="contact-modal__close" type="button" aria-label="닫기" data-contact-close>✕</button>
+      </div>
+
+      <div class="contact-modal__body">
+        <div class="contact-modal__section">
+          <h3>신청 전 먼저 확인하세요</h3>
+          <p>상담은 1영업일 내 회신 드립니다. 구체적인 사업 목표를 적어주시면 더 빠르게 준비할 수 있어요.</p>
+        </div>
+
+        <form class="contact-modal__form">
+          <label>
+            회사명 / 담당자명
+            <input type="text" name="name" placeholder="예) ㈜샌드버드 김대표" />
+          </label>
+          <label>
+            연락처(이메일/전화)
+            <input type="text" name="contact" placeholder="예) contact@example.com" />
+          </label>
+          <label>
+            문의 내용
+            <textarea name="message" placeholder="현재 상황과 원하는 목표를 간단히 남겨주세요."></textarea>
+          </label>
+        </form>
+
+        <div class="contact-modal__actions">
+          <p class="contact-modal__note">입력 내용은 상담 안내 외 다른 용도로 사용하지 않습니다.</p>
+          <a class="btn primary" href="#top">임시 제출 링크</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <footer>
     <div class="container">
       <div class="footer-grid" style="display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;align-items:center;padding:32px 0 44px;color:var(--muted2);font-size:13px;border-top:1px solid rgba(2,6,23,.08);">
@@ -283,11 +345,50 @@
         <div style="display:flex;gap:14px;flex-wrap:wrap;">
           <a href="service.html">Service</a>
           <a href="work.html" aria-current="page">Work</a>
-          <a href="agency_home_squarespace_v5.html#contact">Contact</a>
+          <a href="#contact" data-contact-open>Contact</a>
         </div>
       </div>
     </div>
   </footer>
+
+  <script>
+    window.addEventListener('DOMContentLoaded', () => {
+      const modal = document.querySelector('.contact-modal');
+      const closeBtn = modal?.querySelector('[data-contact-close]');
+      const triggers = document.querySelectorAll('[data-contact-open]');
+      const panel = modal?.querySelector('.contact-modal__panel');
+      const focusTarget = closeBtn || panel;
+
+      const openModal = event => {
+        event.preventDefault();
+        if (!modal) return;
+        modal.classList.add('is-open');
+        document.body.classList.add('no-scroll');
+        focusTarget?.focus();
+      };
+
+      const closeModal = () => {
+        if (!modal) return;
+        modal.classList.remove('is-open');
+        document.body.classList.remove('no-scroll');
+      };
+
+      triggers.forEach(trigger => {
+        trigger.addEventListener('click', openModal);
+      });
+
+      closeBtn?.addEventListener('click', closeModal);
+      modal?.addEventListener('click', event => {
+        if (event.target === modal) closeModal();
+      });
+
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && modal?.classList.contains('is-open')) {
+          closeModal();
+        }
+      });
+    });
+  </script>
 
   <script>
     const projects = {
