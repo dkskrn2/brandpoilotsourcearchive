@@ -379,119 +379,77 @@
 
     /* Clarify/Solution Switcher */
     .clarify-solution{
-      background: linear-gradient(180deg, #ffffff, var(--bg-soft));
+      --cs-accent:#2563eb;
+      --cs-text:#0f172a;
+      --cs-muted:#475569;
+      --cs-line:rgba(2,6,23,.08);
+      --cs-bg-soft:#f8fafc;
+      --cs-card-bg:#ffffff;
+      background: linear-gradient(180deg, #ffffff, var(--cs-bg-soft));
       padding: clamp(80px, 10vw, 120px) 20px;
     }
 
-    .clarify-solution__inner{
-      max-width: 1080px;
-      margin: 0 auto;
-    }
-
-    .clarify-solution__header{
-      margin-bottom: 36px;
-    }
-
+    .clarify-solution__inner{max-width:1080px;margin:0 auto;}
+    .clarify-solution__header{margin-bottom:36px;}
     .clarify-solution__title{
-      margin: 0;
-      font-size: clamp(28px, 3.6vw, 40px);
-      font-weight: 900;
-      letter-spacing: -0.04em;
-      color: var(--text);
+      margin:0;
+      font-size:clamp(28px, 3.6vw, 40px);
+      font-weight:900;
+      letter-spacing:-0.04em;
+      color:var(--cs-text);
     }
 
     .clarify-solution__grid{
-      list-style: none;
-      margin: 0;
-      padding: 0;
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 24px;
+      list-style:none;
+      margin:0;
+      padding:0;
+      display:grid;
+      grid-template-columns:repeat(2, 1fr);
+      gap:24px;
     }
 
-    .clarify-solution .switch-card{
-      position: relative;
-      height: 260px;
-    }
-
+    .clarify-solution .switch-card{position:relative;height:260px;}
     .clarify-solution .switch-card > .card{
-      position: absolute;
-      inset: 0;
-      border-radius: 18px;
-      padding: 26px;
+      position:absolute;inset:0;border-radius:18px;padding:26px;
       transition: opacity .5s ease, transform .5s ease;
+      will-change: opacity, transform;
     }
 
     .clarify-solution .card--problem{
-      background: #ffffff;
-      border: 1px solid var(--line);
-      box-shadow: 0 12px 24px rgba(15,23,42,.05);
-      opacity: 1;
-      transform: translateY(0);
+      background:var(--cs-card-bg);
+      border:1px solid var(--cs-line);
+      box-shadow:0 12px 24px rgba(15,23,42,.05);
+      opacity:1;
+      transform:translateY(0);
+      pointer-events:auto;
     }
-
-    .clarify-solution .card--problem h3{
-      margin: 0 0 8px;
-      font-size: 18px;
-      font-weight: 800;
-      letter-spacing: -0.02em;
-      color: var(--text);
-    }
-
-    .clarify-solution .card--problem p{
-      margin: 0;
-      font-size: 15px;
-      line-height: 1.65;
-      color: var(--muted);
-    }
-
-    .clarify-solution .card--problem p strong{
-      color: var(--text);
-      font-weight: 700;
-    }
+    .clarify-solution .card--problem h3{margin:0 0 8px;font-size:18px;font-weight:800;letter-spacing:-0.02em;color:var(--cs-text);}
+    .clarify-solution .card--problem p{margin:0;font-size:15px;line-height:1.65;color:var(--cs-muted);}
+    .clarify-solution .card--problem p strong{color:var(--cs-text);font-weight:700;}
 
     .clarify-solution .card--solution{
-      background: rgba(37, 99, 235, 0.06);
-      border: 1px solid rgba(37, 99, 235, 0.35);
-      box-shadow: 0 16px 32px rgba(37,99,235,.12);
-      opacity: 0;
-      transform: translateY(12px);
+      background:rgba(37, 99, 235, 0.06);
+      border:1px solid rgba(37, 99, 235, 0.35);
+      box-shadow:0 16px 32px rgba(37,99,235,.12);
+      opacity:0;
+      transform:translateY(12px);
+      pointer-events:none;
     }
+    .clarify-solution .card--solution .card__context{margin:0 0 6px;font-size:13px;line-height:1.5;color:#64748b;}
+    .clarify-solution .card--solution h3{margin:0 0 8px;font-size:18px;font-weight:850;letter-spacing:-0.02em;color:var(--cs-text);}
+    .clarify-solution .card--solution p{margin:0;font-size:15px;line-height:1.65;color:var(--cs-muted);}
+    .clarify-solution .card--solution p strong{color:var(--cs-text);font-weight:750;}
 
-    .clarify-solution .card--solution .card__context{
-      margin: 0 0 6px;
-      font-size: 13px;
-      line-height: 1.5;
-      color: rgba(37, 99, 235, .7);
-    }
-
-    .clarify-solution .card--solution h3{
-      margin: 0 0 8px;
-      font-size: 18px;
-      font-weight: 850;
-      letter-spacing: -0.02em;
-      color: var(--text);
-    }
-
-    .clarify-solution .card--solution p{
-      margin: 0;
-      font-size: 15px;
-      line-height: 1.65;
-      color: var(--muted);
-    }
-
-    .clarify-solution .card--solution p strong{
-      color: var(--text);
-      font-weight: 750;
-    }
+    .clarify-solution .switch-card.is-solved .card--problem{opacity:0;transform:translateY(-12px);pointer-events:none;}
+    .clarify-solution .switch-card.is-solved .card--solution{opacity:1;transform:translateY(0);pointer-events:auto;}
 
     @media (max-width: 720px){
-      .clarify-solution__grid{
-        grid-template-columns: 1fr;
-      }
-      .clarify-solution .switch-card{
-        height: 240px;
-      }
+      .clarify-solution__grid{grid-template-columns:1fr;}
+      .clarify-solution .switch-card{height:240px;}
+    }
+
+    @media (prefers-reduced-motion: reduce){
+      .clarify-solution .switch-card > .card{transition:none;}
     }
 
     /* Process */
@@ -655,19 +613,14 @@
           기획 · 제작 · 운영을 한 흐름으로 연결합니다.
         </p>
 
-        <div class="hero__cta">
-          <a class="btn btn--primary contact-trigger" href="#contact" data-contact-open>무료 진단 요청</a>
-        </div>
       </div>
     </section>
   </div>
 
-  <section class="clarify-solution" id="clarity">
+  <section class="clarify-solution" id="clarify-solution" aria-label="이런 고민을 하고 계신가요?">
     <div class="clarify-solution__inner">
       <header class="clarify-solution__header">
-        <h2 class="clarify-solution__title">
-          이런 고민을 하고 계신가요?
-        </h2>
+        <h2 class="clarify-solution__title">이런 고민을 하고 계신가요?</h2>
       </header>
 
       <ul class="clarify-solution__grid">
@@ -694,7 +647,7 @@
           <div class="card card--problem">
             <h3>무료 툴이 많은데, 왜 돈을 써야 하나요?</h3>
             <p>
-              프라이머, 윅스 같은 서비스로도 가능한데<br />
+              무료 도구로도 가능한데<br />
               <strong>굳이 비용을 들여야 하는 이유를 모르겠습니다.</strong>
             </p>
           </div>
@@ -714,16 +667,16 @@
             <h3>만들고 나서, 운영은 어떻게 하나요?</h3>
             <p>
               호스팅, 도메인, 수정 요청까지<br />
-              <strong>결국 신경 써야 할 게 너무 많아 보입니다.</strong>
+              <strong>신경 써야 할 게 너무 많아 보입니다.</strong>
             </p>
           </div>
 
           <div class="card card--solution">
             <p class="card__context">“만들고 나서, 운영은 어떻게 하나요?”</p>
-            <h3>운영까지 포함한 구조로 설계합니다</h3>
+            <h3>운영까지 고려한 구조로 설계합니다</h3>
             <p>
-              혼자서도 관리 가능한 수준까지<br />
-              <strong>운영 흐름을 함께 정리합니다.</strong>
+              운영 흐름까지 포함해<br />
+              <strong>혼자서도 유지 가능한 상태</strong>를 목표로 합니다.
             </p>
           </div>
         </li>
@@ -807,98 +760,359 @@
   </section>
 
   <!-- PRICING -->
-  <div class="stripe alt" id="pricing">
-    <div class="inner">
-      <h2>가격</h2>
-      <p class="lead">3만 원은 견적이 아니라, 실행 판단을 위한 설계도입니다.</p>
+  <!-- pricing section (button styles unified; only recommended is emphasized like main CTA) -->
+<section class="pricingN" id="pricing">
+  <div class="pricingN__inner">
 
-      <div class="two">
-        <div class="card">
-          <p class="qtitle">3만 원 설계 패키지</p>
-          <p style="margin:10px 0 0; font-size:30px; font-weight:950; letter-spacing:-.4px;">30,000원</p>
-          <p class="muted" style="margin-top:6px;">선별/추첨제로 진행</p>
-          <ul>
-            <li>5단계 산출물 묶음 제공</li>
-            <li>3단계 로드맵 및 비용(TCO) 가이드</li>
-            <li>제작 의사결정 권고안(1p)</li>
-          </ul>
-        </div>
+    <header class="pricingN__header">
+      <h2 class="pricingN__title">
+        홈페이지는 기본입니다.<br>
+        필요한 건 그 다음부터입니다.
+      </h2>
+      <p class="pricingN__desc">
+        간단한 홈페이지로 업체의 상황을 파악한 뒤,<br class="mo">
+        실제로 필요한 서비스를 단계적으로 만듭니다.
+      </p>
+    </header>
 
-        <div class="card">
-          <p class="qtitle">제작 전환 시 제공 혜택</p>
-          <ul>
-            <li>설계 산출물 비용 100% 차감 및 재사용</li>
-            <li>외주/개발사 견적 검토 1회 지원</li>
-            <li>운영 기준 템플릿 제공(문의/예외/업무 처리)</li>
-            <li>제작 전환 기업 일정 우선 배정</li>
-          </ul>
-          <p class="muted" style="margin-top:10px;">과장된 할인 대신, 대표가 실제로 불안해하는 지점을 줄이는 방식으로 구성했습니다.</p>
-        </div>
+    <div class="pricingN__table" role="region" aria-label="요금제">
+      <div class="pricingN__grid">
+
+        <!-- Entry -->
+        <article class="planN" aria-label="Entry 기본 제공">
+          <div class="planN__top">
+            <div class="planN__name">기본 제공</div>
+            <div class="planN__sub">Entry · 온라인 진단 홈페이지</div>
+
+            <div class="planN__price">
+              0원 <span class="planN__unit">/ 시작 단계</span>
+            </div>
+
+            <p class="planN__note">
+              선택 상품이 아니라, 업체 상황을 파악하기 위한 기본 제공 단계입니다.
+            </p>
+
+            <!-- same base button, but disabled -->
+            <a class="planN__btn planN__btn--ctaGlow" href="#contact">
+              이 단계로 시작
+            </a>
+          </div>
+
+          <div class="planN__divider" aria-hidden="true"></div>
+
+          <div class="planN__body">
+            <div class="planN__label">하이라이트</div>
+            <ul class="planN__list">
+              <li>원페이지 홈페이지</li>
+              <li>업체 특성 정리 &amp; 핵심 메시지 구조화</li>
+              <li>문의/연락 수단 1개</li>
+              <li>서비스·기능 개발 없음</li>
+            </ul>
+          </div>
+        </article>
+
+        <!-- Anchor (recommended) -->
+        <article class="planN planN--rec" aria-label="Anchor 추천 플랜">
+          <div class="planN__top">
+            <div class="planN__nameRow">
+              <div class="planN__name">Anchor</div>
+              <span class="planN__tag">추천</span>
+            </div>
+
+            <div class="planN__sub">서비스 설계</div>
+
+            <div class="planN__price">
+              39 ~ 69만원 <span class="planN__unit">/ 1회(설계)</span>
+            </div>
+
+            <p class="planN__note">
+              무엇을 만들어야 할지 결정하고, 개발 전 단계까지 명확히 정리합니다.
+            </p>
+
+            <!-- emphasized like main page primary button -->
+            <a class="planN__btn planN__btn--ctaGlow" href="#contact">
+              이 단계로 시작
+            </a>
+          </div>
+
+          <div class="planN__divider" aria-hidden="true"></div>
+
+          <div class="planN__body">
+            <div class="planN__label">하이라이트</div>
+            <ul class="planN__list">
+              <li>업체/고객 흐름 분석</li>
+              <li>온라인에서 해결할 문제 정의</li>
+              <li>필요한 서비스 1~2개 도출</li>
+              <li>구조·기능·우선순위 정리</li>
+              <li>구현 전 단계까지 명확한 기획</li>
+            </ul>
+          </div>
+        </article>
+
+        <!-- Premium -->
+        <article class="planN" aria-label="Premium 플랜">
+          <div class="planN__top">
+            <div class="planN__name">Premium</div>
+            <div class="planN__sub">서비스 제작 &amp; 운영</div>
+
+            <div class="planN__price">
+              150만원 ~ <span class="planN__unit">/ MVP 1차</span>
+            </div>
+
+            <p class="planN__note">
+              설계된 서비스를 실제로 만들고, 배포·초기 안정화까지 진행합니다.
+            </p>
+
+            <!-- same base button as Entry (enabled) -->
+            <a class="planN__btn" href="#contact">
+              상담 후 진행
+            </a>
+          </div>
+
+          <div class="planN__divider" aria-hidden="true"></div>
+
+          <div class="planN__body">
+            <div class="planN__label">하이라이트</div>
+            <ul class="planN__list">
+              <li>서비스 MVP 제작</li>
+              <li>간단한 관리/자동화 구조</li>
+              <li>배포 및 초기 안정화</li>
+              <li>월 운영/개선 지원(옵션)</li>
+            </ul>
+          </div>
+        </article>
+
       </div>
     </div>
+
+    <p class="pricingN__footnote">
+      Entry는 기본 제공 단계이며, 실제 선택은 Anchor/Premium에서 결정됩니다.
+    </p>
+
   </div>
-  <!-- WHAT -->
-  <div class="stripe" id="what">
-    <div class="inner">
-      <h2>산출물</h2>
-      <p class="lead">대표가 이해하고 의사결정할 수 있도록 문서와 도식으로 정리합니다. 제작으로 바로 연결 가능한 형태로 제공합니다.</p>
+</section>
 
-      <div class="table-responsive" role="region" aria-label="산출물 요약 표">
-        <table aria-label="산출물 요약 표">
-          <thead>
-            <tr>
-              <th style="width:120px;">단계</th>
-              <th style="width:340px;">핵심 산출물</th>
-              <th>설명</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Context</td>
-              <td>현황 요약, 전환 가능 영역 맵, 우선순위 매트릭스</td>
-              <td>현재 상태를 객관화하고, 무엇부터 할지 순서를 결정합니다.</td>
-            </tr>
-            <tr>
-              <td>Flow</td>
-              <td>업무 플로우(To‑Be), 문제 지점/개선 포인트, 데이터 자산화 리포트</td>
-              <td>업무가 어떻게 바뀌는지 시각화하고, 데이터를 자산으로 만드는 구조를 제안합니다.</td>
-            </tr>
-            <tr>
-              <td>Standard</td>
-              <td>운영 정책, 범위(Out‑of‑Scope), 화면 리스트/와이어프레임, 기능 정의서(Lite)</td>
-              <td>개발 중 혼선과 역기획 비용을 줄이기 위한 기준을 만듭니다.</td>
-            </tr>
-            <tr>
-              <td>Tech</td>
-              <td>AI/자동화 적용 검토, 기술 스택 추천(SaaS/노코드/커스텀)</td>
-              <td>현재 상황에 맞는 도입 방식과 운영 난이도를 함께 제시합니다.</td>
-            </tr>
-            <tr>
-              <td>Decision</td>
-              <td>3단계 로드맵, 비용/TCO 가이드, 제작 의사결정 권고안(1p)</td>
-              <td>지금 제작해야 하는지, 어떤 형태가 적절한지 최종 판단 근거를 제공합니다.</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+<style>
+  /* tokens used:
+     --accent, --text, --muted, --line, --bg-soft
+  */
+/* 기존 primary는 더 이상 안 쓰거나(권장) 남겨둬도 됨 */
+.planN__btn--ctaGlow{
+  color:#fff;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
 
-      <div class="grid3">
-        <div class="card">
-          <p class="qtitle">대표가 바로 이해할 수 있게</p>
-          <p class="qdesc">전문 용어보다 업무 흐름과 의사결정 기준 중심으로 구성합니다.</p>
-        </div>
-        <div class="card">
-          <p class="qtitle">제작으로 연결 가능한 형태</p>
-          <p class="qdesc">외주/개발사에 전달 가능한 수준의 범위·정책·기능 정의를 포함합니다.</p>
-        </div>
-        <div class="card">
-          <p class="qtitle">운영까지 생각한 설계</p>
-          <p class="qdesc">만든 뒤 흔들리지 않도록 운영 기준과 비용(TCO)을 함께 잡습니다.</p>
-        </div>
-      </div>
-    </div>
-  </div>
+  /* 이미지 같은 그라데이션 톤 */
+  background:
+    radial-gradient(120% 140% at 30% 20%,
+      color-mix(in srgb, #ffffff 28%, transparent) 0%,
+      transparent 55%),
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--accent) 92%, #ffffff) 0%,
+      var(--accent) 55%,
+      color-mix(in srgb, var(--accent) 86%, #000000) 100%);
 
+  box-shadow:
+    0 10px 24px color-mix(in srgb, var(--accent) 28%, transparent),
+    0 2px 0 color-mix(in srgb, #ffffff 28%, transparent) inset;
+
+  transform: translateY(0);
+}
+
+.planN__btn--ctaGlow:hover{
+  transform: translateY(-1px);
+  box-shadow:
+    0 14px 34px color-mix(in srgb, var(--accent) 34%, transparent),
+    0 2px 0 color-mix(in srgb, #ffffff 30%, transparent) inset;
+}
+
+.planN__btn--ctaGlow:active{
+  transform: translateY(0);
+  box-shadow:
+    0 10px 24px color-mix(in srgb, var(--accent) 26%, transparent),
+    0 1px 0 color-mix(in srgb, #ffffff 22%, transparent) inset;
+}
+
+  .pricingN{
+    background:#fff;
+    padding: clamp(72px, 9vw, 110px) 20px;
+  }
+  .pricingN__inner{max-width:1080px;margin:0 auto;}
+  .pricingN__header{margin-bottom:22px;}
+  .pricingN__title{
+    margin:0 0 10px;
+    font-size:clamp(28px, 3.6vw, 40px);
+    font-weight:900;
+    letter-spacing:-0.04em;
+    line-height:1.2;
+    color:var(--text);
+  }
+  .pricingN__desc{
+    margin:0;
+    font-size:16px;
+    line-height:1.75;
+    color:var(--muted);
+  }
+
+  .pricingN__table{
+    border-top:1px solid rgba(2,6,23,.08);
+    border-bottom:1px solid rgba(2,6,23,.08);
+    padding:22px 0 12px;
+  }
+  .pricingN__grid{
+    display:grid;
+    grid-template-columns:repeat(3, minmax(0, 1fr));
+    gap:18px;
+    align-items:stretch;
+  }
+
+  .planN{
+    background:#fff;
+    border:1px solid rgba(2,6,23,.08);
+    border-radius:18px;
+    box-shadow:0 1px 2px rgba(0,0,0,.02), 0 12px 24px rgba(15,23,42,.04);
+    overflow:hidden;
+    display:flex;
+    flex-direction:column;
+    min-height:420px;
+  }
+
+  .planN--rec{
+    border-color: rgba(37,99,235,.22);
+    box-shadow:0 1px 2px rgba(0,0,0,.02), 0 18px 40px rgba(37,99,235,.14);
+  }
+  .planN--rec .planN__top{
+    background: rgba(37,99,235,.06);
+  }
+
+  .planN__top{
+    padding:18px 18px 14px;
+    display:grid;
+    gap:8px;
+    min-height:200px; /* aligns buttons visually */
+    align-content:start;
+  }
+
+  .planN__nameRow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .planN__name{
+    font-size:18px;
+    font-weight:950;
+    letter-spacing:-0.03em;
+    color:var(--text);
+  }
+  .planN__tag{
+    display:inline-flex;
+    align-items:center;
+    padding:4px 8px;
+    border-radius:999px;
+    font-size:12px;
+    font-weight:900;
+    letter-spacing:-0.01em;
+    color:#1e40af;
+    background:rgba(37,99,235,.14);
+    border:1px solid rgba(37,99,235,.18);
+  }
+  .planN__sub{
+    font-size:13px;
+    font-weight:850;
+    color:rgba(15,23,42,.70);
+  }
+  .planN__price{
+    margin-top:6px;
+    font-size:28px;
+    line-height:1.05;
+    font-weight:950;
+    letter-spacing:-0.03em;
+    color:var(--text);
+  }
+  .planN__unit{
+    font-size:13px;
+    font-weight:850;
+    color:rgba(15,23,42,.55);
+  }
+  .planN__note{
+    margin:2px 0 4px;
+    font-size:13px;
+    line-height:1.65;
+    color:var(--muted);
+  }
+
+  /* unified button base (same for all) */
+  .planN__btn{
+    margin-top:10px;
+    height:42px;
+    padding:0 16px;
+    border-radius:999px;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    font-size:14px;
+    font-weight:900;
+    text-decoration:none;
+    border:1px solid rgba(2,6,23,.12);
+    background:#ffffff;
+    color:var(--text);
+    white-space:nowrap;
+    width:fit-content;
+    transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease;
+  }
+  .planN__btn:hover{
+    transform:translateY(-1px);
+    box-shadow:0 12px 22px rgba(15,23,42,.08);
+    border-color:rgba(2,6,23,.18);
+  }
+
+  /* only recommended differs (main CTA vibe) */
+  .planN__btn--primary{
+    background: var(--accent);
+    color:#fff;
+    border-color: rgba(37,99,235,.35);
+    box-shadow: 0 16px 34px rgba(37,99,235,.18);
+  }
+  .planN__btn--primary:hover{
+    border-color: rgba(37,99,235,.55);
+    box-shadow: 0 20px 44px rgba(37,99,235,.22);
+  }
+
+  .planN__btn--disabled{
+    background: rgba(148,163,184,.14);
+    border-color: rgba(148,163,184,.35);
+    color: rgba(15,23,42,.55);
+    pointer-events:none;
+    box-shadow:none;
+  }
+
+  .planN__divider{height:1px;background:rgba(2,6,23,.08);}
+
+  .planN__body{padding:14px 18px 18px;}
+  .planN__label{
+    font-size:12px;
+    font-weight:900;
+    color:rgba(15,23,42,.55);
+    letter-spacing:-0.01em;
+    margin-bottom:10px;
+  }
+  .planN__list{
+    margin:0;
+    padding-left:18px;
+    font-size:14px;
+    line-height:1.75;
+    color:var(--muted);
+  }
+  .planN__list li{margin:6px 0;}
+
+  .pricingN__footnote{
+    margin:14px 0 0;
+    color:#64748b;
+    font-size:13px;
+    line-height:1.6;
+  }
+
+  @media (max-width: 980px){
+    .pricingN__grid{grid-template-columns:1fr;}
+    .planN{min-height:unset;}
+    .planN__top{min-height:unset;}
+  }
+</style>
 
   <!-- FAQ (Accordion) -->
   <div class="stripe" id="faq">
@@ -1025,40 +1239,59 @@
         }
       });
 
-      const section = document.querySelector('.clarify-solution');
-      if (!section) return;
+      const cards = Array.from(document.querySelectorAll('.clarify-solution .switch-card'));
+      if (cards.length === 0) return;
 
-      const switchCards = Array.from(document.querySelectorAll('.switch-card'));
+      const mqMobile = window.matchMedia('(max-width: 720px)');
+      let observer = null;
 
-      const observer = new IntersectionObserver(
-        ([entry]) => {
-          const isVisible = entry.isIntersecting;
-
-          switchCards.forEach(card => {
-            const problem = card.querySelector('.card--problem');
-            const solution = card.querySelector('.card--solution');
-
-            if (isVisible) {
-              problem.style.opacity = 0;
-              problem.style.transform = 'translateY(-12px)';
-
-              solution.style.opacity = 1;
-              solution.style.transform = 'translateY(0)';
-            } else {
-              problem.style.opacity = 1;
-              problem.style.transform = 'translateY(0)';
-
-              solution.style.opacity = 0;
-              solution.style.transform = 'translateY(12px)';
-            }
-          });
-        },
-        {
-          threshold: 0.4
+      const setup = () => {
+        if (observer) {
+          cards.forEach(card => observer.unobserve(card));
+          observer.disconnect();
+          observer = null;
         }
-      );
 
-      observer.observe(section);
+        cards.forEach(card => card.classList.remove('is-solved'));
+
+        if (mqMobile.matches) {
+          observer = new IntersectionObserver((entries) => {
+            for (const entry of entries) {
+              const el = entry.target;
+
+              if (entry.isIntersecting && entry.intersectionRatio >= 0.55) {
+                el.classList.add('is-solved');
+              }
+
+              if (!entry.isIntersecting || entry.intersectionRatio <= 0.15) {
+                el.classList.remove('is-solved');
+              }
+            }
+          }, {
+            threshold: [0, 0.15, 0.55, 1],
+            rootMargin: '0px 0px -10% 0px'
+          });
+
+          cards.forEach(card => observer.observe(card));
+          return;
+        }
+
+        const section = document.querySelector('.clarify-solution');
+        if (!section) return;
+
+        observer = new IntersectionObserver(([entry]) => {
+          if (entry.isIntersecting) {
+            cards.forEach(card => card.classList.add('is-solved'));
+          } else {
+            cards.forEach(card => card.classList.remove('is-solved'));
+          }
+        }, { threshold: 0.35 });
+
+        observer.observe(section);
+      };
+
+      setup();
+      mqMobile.addEventListener?.('change', setup);
     });
   </script>
 </body>
