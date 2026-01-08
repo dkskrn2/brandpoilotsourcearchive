@@ -410,48 +410,23 @@
       gap:24px;
     }
 
-    .clarify-solution .switch-card{position:relative;height:260px;}
+    .clarify-solution .switch-card{list-style:none;}
     .clarify-solution .switch-card > .card{
-      position:absolute;inset:0;border-radius:18px;padding:26px;
-      transition: opacity .5s ease, transform .5s ease;
-      will-change: opacity, transform;
+      border-radius:18px;
+      padding:26px;
     }
 
     .clarify-solution .card--problem{
       background:var(--cs-card-bg);
       border:1px solid var(--cs-line);
       box-shadow:0 12px 24px rgba(15,23,42,.05);
-      opacity:1;
-      transform:translateY(0);
-      pointer-events:auto;
     }
     .clarify-solution .card--problem h3{margin:0 0 8px;font-size:18px;font-weight:800;letter-spacing:-0.02em;color:var(--cs-text);}
     .clarify-solution .card--problem p{margin:0;font-size:15px;line-height:1.65;color:var(--cs-muted);}
     .clarify-solution .card--problem p strong{color:var(--cs-text);font-weight:700;}
 
-    .clarify-solution .card--solution{
-      background:rgba(37, 99, 235, 0.06);
-      border:1px solid rgba(37, 99, 235, 0.35);
-      box-shadow:0 16px 32px rgba(37,99,235,.12);
-      opacity:0;
-      transform:translateY(12px);
-      pointer-events:none;
-    }
-    .clarify-solution .card--solution .card__context{margin:0 0 6px;font-size:13px;line-height:1.5;color:#64748b;}
-    .clarify-solution .card--solution h3{margin:0 0 8px;font-size:18px;font-weight:850;letter-spacing:-0.02em;color:var(--cs-text);}
-    .clarify-solution .card--solution p{margin:0;font-size:15px;line-height:1.65;color:var(--cs-muted);}
-    .clarify-solution .card--solution p strong{color:var(--cs-text);font-weight:750;}
-
-    .clarify-solution .switch-card.is-solved .card--problem{opacity:0;transform:translateY(-12px);pointer-events:none;}
-    .clarify-solution .switch-card.is-solved .card--solution{opacity:1;transform:translateY(0);pointer-events:auto;}
-
     @media (max-width: 720px){
       .clarify-solution__grid{grid-template-columns:1fr;}
-      .clarify-solution .switch-card{height:240px;}
-    }
-
-    @media (prefers-reduced-motion: reduce){
-      .clarify-solution .switch-card > .card{transition:none;}
     }
 
     /* Process */
@@ -634,14 +609,6 @@
             </p>
           </div>
 
-          <div class="card card--solution">
-            <p class="card__context">“이걸 만든다고 정말 돈이 될까요?”</p>
-            <h3>수익으로 이어지는 구조부터 설계합니다</h3>
-            <p>
-              홈페이지를 단순한 소개가 아니라<br />
-              <strong>문의·전환이 발생하는 흐름</strong>으로 봅니다.
-            </p>
-          </div>
         </li>
 
         <li class="switch-card">
@@ -653,14 +620,6 @@
             </p>
           </div>
 
-          <div class="card card--solution">
-            <p class="card__context">“무료 툴이 많은데, 왜 돈을 써야 하나요?”</p>
-            <h3>지금 단계에 맞는 선택 기준을 먼저 잡습니다</h3>
-            <p>
-              무료 도구와 비교해<br />
-              <strong>어디까지가 한계인지</strong>를 명확히 합니다.
-            </p>
-          </div>
         </li>
 
         <li class="switch-card">
@@ -672,14 +631,6 @@
             </p>
           </div>
 
-          <div class="card card--solution">
-            <p class="card__context">“만들고 나서, 운영은 어떻게 하나요?”</p>
-            <h3>운영까지 고려한 구조로 설계합니다</h3>
-            <p>
-              운영 흐름까지 포함해<br />
-              <strong>혼자서도 유지 가능한 상태</strong>를 목표로 합니다.
-            </p>
-          </div>
         </li>
 
       </ul>
@@ -1223,59 +1174,6 @@
         }
       });
 
-      const cards = Array.from(document.querySelectorAll('.clarify-solution .switch-card'));
-      if (cards.length === 0) return;
-
-      const mqMobile = window.matchMedia('(max-width: 720px)');
-      let observer = null;
-
-      const setup = () => {
-        if (observer) {
-          cards.forEach(card => observer.unobserve(card));
-          observer.disconnect();
-          observer = null;
-        }
-
-        cards.forEach(card => card.classList.remove('is-solved'));
-
-        if (mqMobile.matches) {
-          observer = new IntersectionObserver((entries) => {
-            for (const entry of entries) {
-              const el = entry.target;
-
-              if (entry.isIntersecting && entry.intersectionRatio >= 0.55) {
-                el.classList.add('is-solved');
-              }
-
-              if (!entry.isIntersecting || entry.intersectionRatio <= 0.15) {
-                el.classList.remove('is-solved');
-              }
-            }
-          }, {
-            threshold: [0, 0.15, 0.55, 1],
-            rootMargin: '0px 0px -10% 0px'
-          });
-
-          cards.forEach(card => observer.observe(card));
-          return;
-        }
-
-        const section = document.querySelector('.clarify-solution');
-        if (!section) return;
-
-        observer = new IntersectionObserver(([entry]) => {
-          if (entry.isIntersecting) {
-            cards.forEach(card => card.classList.add('is-solved'));
-          } else {
-            cards.forEach(card => card.classList.remove('is-solved'));
-          }
-        }, { threshold: 0.35 });
-
-        observer.observe(section);
-      };
-
-      setup();
-      mqMobile.addEventListener?.('change', setup);
     });
   </script>
 </body>
