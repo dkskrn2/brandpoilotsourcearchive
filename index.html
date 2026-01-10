@@ -3,1177 +3,358 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>IT 전환·AI 도입 설계 패키지 | 실패하지 않는 서비스를 만듭니다</title>
-  <meta name="description" content="소규모 기업을 위해 디지털·AI 전환을 '서비스로 도입'할 수 있게 설계합니다. 선별/추첨제로 진행되는 3만 원 설계 패키지." />
-  <meta name="robots" content="index,follow" />
+  <title>GROWTHLINE | 비즈니스 성장 시스템 설계</title>
+  
   <style>
-    :root{
-      --bg:#ffffff;
-      --text:#191f28;
-      --muted:#6b7684;
-      --line:rgba(2,32,71,.08);
-      --card:#ffffff;
-      --shadow: 0 10px 26px rgba(2,32,71,.10);
-      --radius: 18px;
-      --max: 1120px;
-      --surface:#f2f4f6;
-      --surface-2:#f7f8fa;
+    :root {
+      --bg: #ffffff;
+      --text: #191f28;
+      --muted: #6b7684;
       --accent: #2563eb;
-      --bg1: #ffffff;
-      --bg2: #f8fafc;
-      --bg-soft: #f8fafc;
+      --accent-dark: #1d4ed8;
+      --accent-soft: rgba(37, 99, 235, 0.06);
+      --line: rgba(2, 32, 71, 0.08);
+      --surface: #f8fafc;
+      --radius: 16px;
+      --max: 1100px;
+      /* 버튼 스타일 통일 */
+      --btn-radius: 12px;
+      --btn-shadow: 0 4px 12px rgba(37, 99, 235, 0.15);
     }
 
-    *{box-sizing:border-box}
-    html{scroll-behavior:smooth}
-    body{
-      margin:0;
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", AppleSDGothicNeo, Arial, sans-serif;
-      color:var(--text);
-      background: var(--bg);
-      line-height:1.55;
-      -webkit-font-smoothing: antialiased;
-      text-rendering: geometricPrecision;
+    * { box-sizing: border-box; -webkit-font-smoothing: antialiased; }
+    body {
+      margin: 0; font-family: "Pretendard Variable", sans-serif;
+      color: var(--text); background: var(--bg); line-height: 1.6;
     }
-    a{color:inherit}
-    .wrap{max-width:var(--max); margin:0 auto; padding:28px 16px 96px;}
+    body.no-scroll { overflow: hidden; }
 
-    /* Topbar (Toss-like: light, minimal) */
-    .topbar{
-      position: sticky;
-      top: 0;
-      z-index: 50;
-      backdrop-filter: blur(10px);
-      background: rgba(255,255,255,.86);
-      border-bottom: 1px solid var(--line);
-    }
-    .topbar-inner{
-      max-width: var(--max);
-      margin: 0 auto;
-      padding: 12px 16px;
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:14px;
-    }
-    .brand{
-      display:flex; align-items:center; gap:10px;
-      text-decoration:none;
-      font-weight: 900;
-      letter-spacing:-.4px;
-      white-space:nowrap;
-    }
-    .dot{
-      width:10px; height:10px; border-radius: 999px;
-      background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
-      box-shadow: 0 0 0 6px rgba(49,130,246,.14);
-    }
-    .nav{
-      display:flex; align-items:center; gap:6px;
-      flex-wrap:wrap;
-      justify-content:flex-end;
-    }
-    .nav a{
-      text-decoration:none;
-      font-size:13px;
-      color: var(--muted);
-      padding: 8px 10px;
-      border-radius: 12px;
-      border: 1px solid transparent;
-    }
-    .nav a:hover{background: rgba(2,32,71,.04); color: var(--text);}
-
-    .top-actions{
-      display:flex;
-      align-items:center;
-      gap:10px;
-    }
-
-    .topbar .btn{padding: 10px 14px;}
-
-    /* Modal */
-    .contact-modal{position:fixed; inset:0; z-index:120; display:flex; align-items:center; justify-content:center; padding:18px; background: rgba(0,8,20,.52); opacity:0; pointer-events:none; transition: opacity .22s ease, transform .24s ease;}
-    .contact-modal__panel{width:min(680px, 100%); background:var(--card); border-radius:20px; border:1px solid var(--line); box-shadow: 0 20px 44px rgba(2,32,71,.18); padding:24px; transform: translateY(12px); transition: transform .22s ease;}
-    .contact-modal__header{display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:10px;}
-    .contact-modal__title{margin:0; font-size:22px; letter-spacing:-.4px;}
-    .contact-modal__body{display:grid; gap:12px;}
-    .contact-modal__section{padding:14px; border-radius:14px; background: var(--surface); border: 1px solid var(--line);}
-    .contact-modal__section h3{margin:0 0 6px; font-size:16px;}
-    .contact-modal__section p{margin:0; color:var(--muted); font-size:14px;}
-    .contact-modal__list{margin:0; padding-left:18px; color:var(--muted); font-size:14px; line-height:1.6;}
-    .contact-modal__list li{margin:4px 0;}
-    .contact-modal__form{display:grid; gap:10px; margin-top:4px;}
-    .contact-modal__form label{display:grid; gap:6px; font-size:14px; font-weight:700;}
-    .contact-modal__form input,
-    .contact-modal__form textarea{padding:12px 12px; border-radius:12px; border:1px solid var(--line); background: var(--bg-soft); font: inherit;}
-    .contact-modal__form textarea{min-height:96px; resize:vertical;}
-    .contact-modal__actions{display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:4px;}
-    .contact-modal__note{margin:0; color:var(--muted); font-size:13px;}
-    .contact-modal__close{border:none; background:transparent; padding:8px; cursor:pointer; border-radius:10px; color: var(--muted); font-weight:800;}
-    .contact-modal.is-open{opacity:1; pointer-events:auto;}
-    .contact-modal.is-open .contact-modal__panel{transform: translateY(0);}
-    .contact-modal .btn{box-shadow:none; width:100%; justify-content:center;}
-    body.no-scroll{overflow:hidden;}
-    @media (max-width:560px){
-      .contact-modal__panel{padding:18px;}
-      .contact-modal__actions{flex-direction:column; align-items:stretch;}
-    }
-
-    /* Buttons */
-    .btn{
-      display:inline-flex; align-items:center; justify-content:center;
-      padding:11px 14px;
-      border-radius: 14px;
-      border:1px solid rgba(2,32,71,.10);
-      background: rgba(255,255,255,.92);
-      text-decoration:none;
-      color: var(--text);
-      font-weight: 800;
-      font-size:14px;
-      white-space:nowrap;
-      box-shadow: 0 8px 18px rgba(2,32,71,.08);
-    }
-    .btn:hover{transform: translateY(-1px);}
-    .btn.primary{
-      color:#fff;
-      border-color: rgba(49,130,246,.22);
-      background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
-    }
-
-    /* Sections / stripes (Toss-like: airy, clear separation) */
-    section{scroll-margin-top: 88px;}
-    .stripe{
-      padding: 42px 0;
-      border-top: 1px solid var(--line);
-      background: linear-gradient(180deg, rgba(2,32,71,.02), rgba(2,32,71,0));
-    }
-    .stripe.alt{
-      background: linear-gradient(180deg, rgba(49,130,246,.07), rgba(2,32,71,0));
-    }
-    .stripe .inner{max-width: var(--max); margin:0 auto; padding:0 16px;}
+    .inner { max-width: var(--max); margin: 0 auto; padding: 0 24px; }
+    .section { padding: clamp(60px, 10vw, 120px) 0; border-top: 1px solid var(--line); }
+    .section--alt { background: var(--surface); }
 
     /* Typography */
-    h1,h2,h3{margin:0; letter-spacing:-.6px;}
-    h1{
-      font-size: 56px;
-      line-height:1.08;
-      font-weight: 950;
-    }
-    @media (max-width: 680px){
-      h1{font-size: 40px;}
-    }
-    h2{
-      font-size: 22px;
-      font-weight: 900;
-      letter-spacing:-.35px;
-      margin-bottom: 10px;
-    }
-    .lead{
-      margin: 10px 0 0;
-      color: var(--muted);
-      font-size: 16px;
-      max-width: 72ch;
-    }
-    .muted{color: var(--muted);}
+    h1, h2, h3 { margin: 0; letter-spacing: -0.03em; line-height: 1.2; }
+    .hl { color: var(--accent); }
+    .desc { color: var(--muted); font-size: 18px; margin-top: 16px; word-break: keep-all; }
 
-    /* Cards */
-    .card{
-      background: var(--card);
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      padding: 18px;
-      box-shadow: var(--shadow);
+    /* B. 버튼 스타일 가이드 통일 */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 16px 32px; border-radius: var(--btn-radius); font-weight: 700; font-size: 16px;
+      text-decoration: none; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); 
+      cursor: pointer; border: none; height: 56px;
     }
-    .grid3{
-      display:grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 12px;
-      margin-top: 14px;
+    .btn--primary {
+      background: var(--accent); color: #fff; box-shadow: var(--btn-shadow);
     }
-    @media (max-width: 980px){ .grid3{grid-template-columns:1fr;} }
-    .two{
-      display:grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 16px;
-      margin-top: 12px;
+    .btn--primary:hover { background: var(--accent-dark); transform: translateY(-2px); box-shadow: 0 8px 20px rgba(37, 99, 235, 0.25); }
+    
+    .btn--ghost {
+      background: #fff; border: 1.5px solid var(--line); color: var(--text);
     }
-    @media (max-width: 980px){ .two{grid-template-columns:1fr;} }
+    .btn--ghost:hover { background: var(--surface); border-color: var(--muted); }
 
-    .qtitle{
-      font-size:16px;
-      font-weight: 900;
-      letter-spacing:-.25px;
-      margin: 0 0 8px;
-    }
-    .qdesc{
-      margin: 0;
-      color: var(--muted);
-      font-size: 13.5px;
-      line-height: 1.6;
-    }
-
-    /* Lists / Table */
-    ul, ol{margin: 10px 0 0 18px;}
-    li{margin: 6px 0;}
-    table{
-      width:100%;
-      border-collapse: separate;
-      border-spacing: 0;
-      overflow:hidden;
-      border-radius: 16px;
-      border: 1px solid var(--line);
-      background: var(--surface-2);
-      margin-top: 12px;
-    }
-    .table-responsive{
-      margin-top: 12px;
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-    }
-    .table-responsive table{min-width: 640px;}
-    th, td{
-      padding: 12px 12px;
-      border-bottom: 1px solid var(--line);
-      vertical-align: top;
-      font-size: 14px;
-    }
-    th{
-      text-align:left;
-      color: var(--muted);
-      font-weight: 800;
-      background: rgba(2,32,71,.03);
-    }
-    tr:last-child td{border-bottom:none;}
-
-    /* Accordion FAQ */
-    details{
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      background: var(--surface-2);
-      padding: 12px 14px;
-    }
-    details + details{margin-top: 10px;}
-    summary{
-      cursor: pointer;
-      font-weight: 900;
-      letter-spacing:-.2px;
-      list-style: none;
-    }
-    summary::-webkit-details-marker{display:none}
-    .faq p{margin: 10px 0 0; color: var(--muted);}
+    /* Topbar */
+    .topbar { position: sticky; top: 0; z-index: 100; background: rgba(255,255,255,0.85); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+    .topbar-inner { display: flex; align-items: center; justify-content: space-between; padding: 12px 24px; max-width: var(--max); margin: 0 auto; }
+    .brand { font-weight: 900; font-size: 20px; text-decoration: none; display: flex; align-items: center; gap: 8px; color: var(--text); }
+    .brand-dot { width: 8px; height: 8px; background: var(--accent); border-radius: 50%; }
 
     /* Hero */
-    .hero{
-      position: relative;
-      overflow: hidden;
-      background:
-        radial-gradient(900px 500px at 50% -10%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 60%),
-        linear-gradient(180deg, var(--bg1), var(--bg2));
-      padding: clamp(56px, 8vw, 96px) 20px;
-    }
+    .hero { text-align: center; padding: clamp(80px, 15vw, 160px) 0; background: radial-gradient(circle at top, #f0f7ff 0%, #ffffff 70%); }
+    .hero__eyebrow { font-size: 15px; font-weight: 800; color: var(--accent); background: var(--accent-soft); padding: 8px 18px; border-radius: 99px; display: inline-block; margin-bottom: 24px; }
+    .hero__title { font-size: clamp(34px, 6vw, 68px); font-weight: 900; }
+    .hero__cta { margin-top: 48px; display: flex; gap: 16px; justify-content: center; }
 
-    .hero::before{
-      content:"";
-      position:absolute;
-      inset: -1px;
-      background:
-        radial-gradient(700px 380px at 20% 20%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 60%),
-        radial-gradient(700px 380px at 80% 30%, rgba(15, 23, 42, .06), transparent 60%);
-      pointer-events:none;
+    /* C. Problem 섹션 디자인 개선 (카드 위계 강화) */
+    .problem { text-align: center; }
+    .problem-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; margin-top: 56px; }
+    .problem-card { 
+      padding: 40px; background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius); 
+      text-align: left; transition: border-color 0.3s ease; position: relative;
     }
+    .problem-card:hover { border-color: var(--accent); }
+    .problem-card__icon { font-size: 32px; margin-bottom: 20px; display: block; }
+    .problem-card h3 { font-size: 22px; margin-bottom: 16px; color: var(--text); }
+    .problem-card p { color: var(--muted); font-size: 16px; margin: 0; word-break: keep-all; }
 
-    .hero__inner{
-      position: relative;
-      max-width: 980px;
-      margin: 0 auto;
-      text-align: center;
+    /* A. 브릿지 섹션 (원인 진단) */
+    .cause-bridge {
+      margin-top: 64px; padding: 32px; background: var(--accent-soft); border-radius: var(--radius);
+      display: inline-block; max-width: 800px;
     }
-
-    .hero__eyebrow{
-      display:inline-flex;
-      align-items:center;
-      gap:10px;
-      margin: 0 0 14px;
-      padding: 8px 12px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      color: var(--muted);
-      font-size: 14px;
-      background: rgba(255,255,255,.65);
-      backdrop-filter: blur(8px);
-    }
-
-    .hero__title{
-      margin: 0;
-      color: var(--text);
-      font-weight: 900;
-      letter-spacing: -0.04em;
-      line-height: 1.10;
-      font-size: clamp(34px, 4.6vw, 56px);
-    }
-
-    /* “복잡한” 강조: 포인트 컬러 + 살짝 굵게 */
-    .hl{
-      color: var(--accent);
-      font-weight: 950;
-    }
-
-    /* “준비하기” 강조: 밑줄 하이라이트(마커 느낌) */
-    .hl2{
-      position: relative;
-      font-weight: 950;
-    }
-    .hl2::after{
-      content:"";
-      position:absolute;
-      left: -0.06em;
-      right: -0.06em;
-      bottom: 0.08em;
-      height: 0.34em;
-      background: color-mix(in srgb, var(--accent) 24%, transparent);
-      border-radius: 10px;
-      z-index: -1;
-    }
-
-    .hero__desc{
-      margin: 18px auto 0;
-      max-width: 720px;
-      color: var(--muted);
-      line-height: 1.7;
-      font-size: clamp(15px, 1.6vw, 18px);
-    }
-    .hero__desc strong{
-      color: var(--text);
-      font-weight: 800;
-    }
-
-    .hero__cta{
-      margin-top: 28px;
-      display:flex;
-      justify-content:center;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-
-    .hero__cta .btn{
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
-      height: 46px;
-      padding: 0 18px;
-      border-radius: 12px;
-      text-decoration:none;
-      font-weight: 700;
-      letter-spacing: -0.01em;
-      border: 1px solid transparent;
-      transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
-    }
-    .hero__cta .btn:active{ transform: translateY(1px); }
-
-    .hero__cta .btn--primary{
-      color: white;
-      background: var(--accent);
-      box-shadow: 0 10px 24px color-mix(in srgb, var(--accent) 28%, transparent);
-    }
-    .hero__cta .btn--primary:hover{
-      box-shadow: 0 14px 30px color-mix(in srgb, var(--accent) 34%, transparent);
-    }
-
-    /* Clarify/Solution Switcher */
-    .clarify-solution{
-      --cs-accent:#2563eb;
-      --cs-text:#0f172a;
-      --cs-muted:#475569;
-      --cs-line:rgba(2,6,23,.08);
-      --cs-bg-soft:#f8fafc;
-      --cs-card-bg:#ffffff;
-      background: linear-gradient(180deg, #ffffff, var(--cs-bg-soft));
-      padding: clamp(80px, 10vw, 120px) 20px;
-    }
-
-    .clarify-solution__inner{max-width:1080px;margin:0 auto;}
-    .clarify-solution__header{margin-bottom:36px;}
-    .clarify-solution__title{
-      margin:0;
-      font-size:clamp(28px, 3.6vw, 40px);
-      font-weight:900;
-      letter-spacing:-0.04em;
-      color:var(--cs-text);
-    }
-
-    .clarify-solution__grid{
-      list-style:none;
-      margin:0;
-      padding:0;
-      display:grid;
-      grid-template-columns:repeat(3, 1fr);
-      gap:24px;
-    }
-
-    .clarify-solution .switch-card{list-style:none;}
-    .clarify-solution .switch-card > .card{
-      border-radius:18px;
-      padding:26px;
-    }
-
-    .clarify-solution .card--problem{
-      background:var(--cs-card-bg);
-      border:1px solid var(--cs-line);
-      box-shadow:0 12px 24px rgba(15,23,42,.05);
-    }
-    .clarify-solution .card--problem h3{margin:0 0 8px;font-size:18px;font-weight:800;letter-spacing:-0.02em;color:var(--cs-text);}
-    .clarify-solution .card--problem p{margin:0;font-size:15px;line-height:1.65;color:var(--cs-muted);}
-    .clarify-solution .card--problem p strong{color:var(--cs-text);font-weight:700;}
-
-    @media (max-width: 720px){
-      .clarify-solution__grid{grid-template-columns:1fr;}
-    }
+    .cause-bridge strong { color: var(--accent); font-weight: 800; }
 
     /* Process */
-    .process-c{
-      background:#ffffff;
-      padding:120px 20px;
+    .process-item { display: grid; grid-template-columns: 80px 1fr; gap: 24px; margin-bottom: 40px; }
+    .process-num { 
+      width: 52px; height: 52px; background: var(--accent); color: #fff; 
+      border-radius: 14px; display: flex; align-items: center; justify-content: center; 
+      font-weight: 900; font-size: 22px; 
     }
+    .process-content { background: #fff; padding: 40px; border-radius: var(--radius); border: 1.5px solid var(--line); }
+    .process-content h3 { font-size: 26px; margin-bottom: 16px; }
+    .process-content ul { padding-left: 20px; margin-top: 20px; color: var(--muted); }
+    .process-content li { margin-bottom: 10px; }
 
-    .process-c__inner{
-      max-width:900px;
-      margin:0 auto;
+    /* Pricing */
+    .pricing-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; margin-top: 56px; }
+    .price-card { padding: 48px 40px; background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; position: relative; }
+    .price-card--featured { border: 2px solid var(--accent); box-shadow: 0 20px 40px rgba(37, 99, 235, 0.08); }
+    .price-card__tag { position: absolute; top: 24px; right: 24px; background: var(--accent); color: #fff; padding: 6px 14px; border-radius: 99px; font-size: 13px; font-weight: 800; }
+    .price-card__amount { font-size: 42px; font-weight: 900; margin: 16px 0; }
+    .price-card__list { list-style: none; padding: 24px 0 0 0; margin: 32px 0 0 0; border-top: 1px solid var(--line); }
+    .price-card__list li { margin-bottom: 14px; display: flex; align-items: center; gap: 10px; font-weight: 500; }
+
+    /* E. 마지막 CTA (톤 매너 개선) */
+    .final-cta { 
+      background: linear-gradient(145deg, #0f172a 0%, #1e293b 100%); 
+      color: #fff; text-align: center; border: none; 
     }
+    .final-cta h2 { color: #fff; font-size: clamp(30px, 5vw, 44px); }
+    .final-cta p { color: #94a3b8; margin: 24px 0 48px; }
 
-    .process-c__header{
-      margin-bottom:56px;
-    }
+    /* FAQ */
+    .faq-item { margin-bottom: 16px; border: 1.5px solid var(--line); border-radius: var(--radius); }
+    .faq-item summary { padding: 24px; font-weight: 700; cursor: pointer; list-style: none; display: flex; justify-content: space-between; }
+    .faq-item[open] { background: var(--surface); border-color: var(--accent); }
 
-    .process-c__header h2{
-      margin:0 0 12px;
-      font-size:40px;
-      font-weight:900;
-      letter-spacing:-0.04em;
-      color:#0f172a;
-    }
+    /* F. 모달 디테일 개선 */
+    .contact-modal { position: fixed; inset: 0; z-index: 1000; background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; padding: 20px; }
+    .contact-modal.is-open { display: flex; }
+    .modal-content { background: #fff; padding: 48px; border-radius: 24px; width: 100%; max-width: 540px; position: relative; box-shadow: 0 30px 60px rgba(0,0,0,0.2); }
+    .modal-close { position: absolute; top: 24px; right: 24px; border: none; background: none; font-size: 32px; cursor: pointer; color: var(--muted); }
 
-    .process-c__header p{
-      margin:0;
-      font-size:17px;
-      line-height:1.7;
-      color:#475569;
-    }
-
-    .process-c__timeline{
-      list-style:none;
-      margin:0;
-      padding:0;
-      position:relative;
-    }
-
-    .process-c__timeline::before{
-      content:"";
-      position:absolute;
-      left:12px;
-      top:0;
-      bottom:0;
-      width:2px;
-      background:rgba(2,6,23,.08);
-    }
-
-    .process-c__timeline li{
-      position:relative;
-      padding-left:56px;
-      padding-bottom:56px;
-    }
-
-    .process-c__timeline li:last-child{
-      padding-bottom:0;
-    }
-
-    .process-c__timeline .dot{
-      position:absolute;
-      left:6px;
-      top:6px;
-      width:14px;
-      height:14px;
-      border-radius:50%;
-      background:#2563eb;
-    }
-
-    .process-c__timeline h3{
-      margin:0 0 8px;
-      font-size:22px;
-      font-weight:800;
-      letter-spacing:-0.02em;
-      color:#0f172a;
-    }
-
-    .process-c__timeline .desc{
-      margin:0 0 14px;
-      font-size:16px;
-      line-height:1.65;
-      color:#475569;
-    }
-
-    .process-c__timeline .check{
-      margin:0;
-      padding:0;
-      list-style:none;
-    }
-
-    .process-c__timeline .check li{
-      position:relative;
-      padding-left:18px;
-      margin-bottom:8px;
-      font-size:15px;
-      line-height:1.6;
-      color:#334155;
-    }
-
-    .process-c__timeline .check li::before{
-      content:"–";
-      position:absolute;
-      left:0;
-      color:#94a3b8;
-    }
-
-    @media (max-width:720px){
-      .process-c__header h2{
-        font-size:32px;
-      }
-    }
-
-    /* Apply */
-    .cta-row{display:flex; gap:10px; flex-wrap:wrap; margin-top: 14px;}
-
-    /* Footer */
-    .footer{
-      margin-top: 42px;
-      padding-top: 18px;
-      border-top: 1px solid var(--line);
-      color: var(--muted);
-      font-size: 13px;
-      display:flex;
-      flex-wrap:wrap;
-      gap: 10px;
-      justify-content: space-between;
+    @media (max-width: 768px) {
+      .hero__cta { flex-direction: column; }
+      .process-item { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
-  <div class="topbar">
+
+  <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="#top" aria-label="홈으로">
-        <span class="dot" aria-hidden="true"></span>
-        <span>GROWTHLINE</span>
-      </a>
-      <div class="top-actions">
-        <div class="nav" aria-label="상단 메뉴">
-          <a href="service.html">service</a>
-          <a href="work.html">work</a>
-        </div>
-        <a class="btn primary contact-trigger" href="#contact" data-contact-open>문의하기</a>
-      </div>
+      <a href="#" class="brand"><span class="brand-dot"></span>GROWTHLINE</a>
+      <button class="btn btn--primary" style="height: 44px; padding: 0 20px; font-size: 14px;" data-contact-open>무료 상담 신청</button>
     </div>
-  </div>
+  </header>
 
-  <div id="top" class="wrap">
-    <!-- HERO -->
-    <section class="hero">
-      <div class="hero__inner">
-        <p class="hero__eyebrow">대표님은 사업에만 집중하세요</p>
-
-        <h1 class="hero__title">
-          필요하지만 <span class="hl">복잡한</span> 온라인 채널,
-          <br />
-          <span class="hl2">준비하기</span> 어려우신가요?
-        </h1>
-
-        <p class="hero__desc">
-          일이 줄어들고, 사업은 선명하게 만들어 드립니다.
-        </p>
-
+  <section class="hero">
+    <div class="inner">
+      <span class="hero__eyebrow">웹사이트 제작, 그 이상의 비즈니스 설계</span>
+      <h1 class="hero__title">단순한 홈페이지가 아닌<br><span class="hl">돈을 벌어다 주는 구조</span>를 만듭니다</h1>
+      <p class="desc">대표님은 본업에만 집중하세요. 복잡한 온라인 전환과 고객 유입 시스템은<br>GROWTHLINE이 '작동하는 결과물'로 증명하겠습니다.</p>
+      <div class="hero__cta">
+        <button class="btn btn--primary" data-contact-open>지금 바로 시작하기</button>
+        <a href="#pricing" class="btn btn--ghost">프로그램 상세 보기</a>
       </div>
-    </section>
-  </div>
-
-  <section class="clarify-solution" id="clarify-solution" aria-label="it 전환이 어렵게 느껴지시나요?">
-    <div class="clarify-solution__inner">
-      <header class="clarify-solution__header">
-        <h2 class="clarify-solution__title">it 전환이 어렵게 느껴지시나요?</h2>
-      </header>
-
-      <ul class="clarify-solution__grid">
-        <li class="switch-card">
-          <div class="card card--problem">
-            <h3>이걸 만든다고 정말 돈이 될까요?</h3>
-            <p>
-              홈페이지나 온라인 채널이<br />
-              <strong>매출이나 문의로 이어질지 확신이 없습니다.</strong>
-            </p>
-          </div>
-
-        </li>
-
-        <li class="switch-card">
-          <div class="card card--problem">
-            <h3>무료 툴이 많은데, 왜 돈을 써야 하나요?</h3>
-            <p>
-              무료 도구로도 가능한데<br />
-              <strong>굳이 비용을 들여야 하는 이유를 모르겠습니다.</strong>
-            </p>
-          </div>
-
-        </li>
-
-        <li class="switch-card">
-          <div class="card card--problem">
-            <h3>만들고 나서, 운영은 어떻게 하나요?</h3>
-            <p>
-              호스팅, 도메인, 수정 요청까지<br />
-              <strong>신경 써야 할 게 너무 많아 보입니다.</strong>
-            </p>
-          </div>
-
-        </li>
-
-      </ul>
     </div>
   </section>
 
-  <section class="process-c" id="how">
-    <div class="process-c__inner">
-      <header class="process-c__header">
-        <h2>그래서, 저희는 ‘성장 구조’를 만듭니다</h2>
-        <p>
-          무언가를 바로 만들지 않습니다.
-          반복과 확장이 가능한 형태로 정리한 뒤에 움직입니다.
-        </p>
-      </header>
-
-      <ul class="process-c__timeline">
-        <li>
-          <span class="dot"></span>
-          <h3>성장이 멈추는 지점을 먼저 봅니다</h3>
-          <p class="desc">
-            겉으로 보이는 문제보다,<br>
-            사업이 커지지 않는 이유를 구조에서 찾습니다.
-          </p>
-          <ul class="check">
-            <li>매출과 업무가 만들어지는 실제 흐름</li>
-            <li>온라인 채널이 맡고 있는 역할과 공백</li>
-            <li>사람이 계속 붙어야만 유지되는 구간</li>
-          </ul>
-        </li>
-
-        <li>
-          <span class="dot"></span>
-          <h3>반복되는 일은 구조로 옮깁니다</h3>
-          <p class="desc">
-            사람이 붙어야 돌아가는 일은<br>
-            규모가 커질수록 리스크가 됩니다.
-          </p>
-          <ul class="check">
-            <li>자동화·시스템화로 줄일 수 있는 반복 업무</li>
-            <li>사람의 판단이 꼭 필요한 핵심 업무</li>
-            <li>확장에 불리한 흐름을 바꾸는 우선순위</li>
-          </ul>
-        </li>
-
-        <li>
-          <span class="dot"></span>
-          <h3>강점이 ‘서비스로 작동’하게 만듭니다</h3>
-          <p class="desc">
-            잘하는 일이 있어도 드러나지 않으면 성장하지 않습니다.<br>
-            강점이 계속 선택받는 구조로 연결합니다.
-          </p>
-          <ul class="check">
-            <li>고객이 선택하는 이유를 한 문장으로 정리</li>
-            <li>그 강점이 온라인에서 보이고, 전달되는 방식</li>
-            <li>일회성이 아닌, 누적되는 서비스/운영 구조</li>
-          </ul>
-        </li>
-
-        <li>
-          <span class="dot"></span>
-          <h3>지금 만들 것과, 나중에 만들 것을 나눕니다</h3>
-          <p class="desc">
-            모든 걸 한 번에 만들지 않습니다.<br>
-            지금 단계에서 성장을 만드는 것부터 시작합니다.
-          </p>
-          <ul class="check">
-            <li>지금 당장 필요한 최소한의 구조와 범위</li>
-            <li>나중에 확장할 기능과 단계별 로드맵</li>
-            <li>운영 가능한 기준(담당자/흐름/유지비용)</li>
-          </ul>
-        </li>
-      </ul>
-    </div>
-  </section>
-
-  <!-- PRICING -->
-  <!-- pricing section (button styles unified; only recommended is emphasized like main CTA) -->
-<section class="pricingN" id="pricing">
-  <div class="pricingN__inner">
-
-    <header class="pricingN__header">
-      <h2 class="pricingN__title">
-        홈페이지는 기본입니다.<br>
-        필요한 건 그 다음부터입니다.
+<section class="section section--alt problem">
+  <div class="inner">
+    <div style="margin-bottom: 56px;">
+      <span style="color: var(--accent); font-weight: 800; font-size: 14px; letter-spacing: 0.1em; display: block; margin-bottom: 16px; text-transform: uppercase;">The Real Reason</span>
+      <h2 style="font-size: clamp(26px, 4vw, 38px); line-height: 1.3;">
+        온라인 전환이 막막하게 느껴지는 이유는<br>
+        대표님의 의지가 부족해서가 아니라,<br>
+        <span class="hl">시작 지점이 항상 '만들기'였기 때문입니다.</span>
       </h2>
-      <p class="pricingN__desc">
-        간단한 홈페이지로 업체의 상황을 파악한 뒤,<br class="mo">
-        실제로 필요한 서비스를 단계적으로 만듭니다.
+      <p class="desc" style="max-width: 750px; margin: 24px auto 0; font-size: 18px; line-height: 1.8;">
+        대부분은 가장 먼저 눈에 보이는 홈페이지, 앱, 시스템 '제작'부터 고민합니다.<br class="pc">
+        가장 확실한 방법처럼 보이지만, 사실 이 선택이 나중에 성장을 멈추게 만드는 원인이 됩니다.
       </p>
-    </header>
+    </div>
 
-    <div class="pricingN__table" role="region" aria-label="요금제">
-      <div class="pricingN__grid">
-
-        <!-- Entry -->
-        <article class="planN" aria-label="강점 정립 &amp; 홈페이지 제작">
-          <div class="planN__top">
-            <div class="planN__name">강점 정립 &amp; 홈페이지 제작</div>
-            <div class="planN__sub">Entry · 온라인 진단 홈페이지</div>
-
-            <div class="planN__price">
-              0원 <span class="planN__unit">/ 시작 단계</span>
-            </div>
-
-            <p class="planN__note">
-              선택 상품이 아니라, 업체 상황을 파악하기 위한 기본 제공 단계입니다.
-            </p>
-
-            <!-- same base button, but disabled -->
-            <a class="planN__btn planN__btn--ctaGlow" href="#contact">
-              이 단계로 시작
-            </a>
-          </div>
-
-          <div class="planN__divider" aria-hidden="true"></div>
-
-          <div class="planN__body">
-            <div class="planN__label">하이라이트</div>
-            <ul class="planN__list">
-              <li>원페이지 홈페이지</li>
-              <li>업체 특성 정리 &amp; 핵심 메시지 구조화</li>
-              <li>문의/연락 수단 1개</li>
-              <li>서비스·기능 개발 없음</li>
-            </ul>
-          </div>
-        </article>
-
-        <!-- Anchor (recommended) -->
-        <article class="planN planN--rec" aria-label="핵심 MVP 제작 추천 플랜">
-          <div class="planN__top">
-            <div class="planN__nameRow">
-              <div class="planN__name">핵심 MVP 제작</div>
-              <span class="planN__tag">추천</span>
-            </div>
-
-            <div class="planN__sub">서비스 설계</div>
-
-            <div class="planN__price">
-              39 ~ 69만원 <span class="planN__unit">/ 1회(설계)</span>
-            </div>
-
-            <p class="planN__note">
-              무엇을 만들어야 할지 결정하고, 개발 전 단계까지 명확히 정리합니다.
-            </p>
-
-            <!-- emphasized like main page primary button -->
-            <a class="planN__btn planN__btn--ctaGlow" href="#contact">
-              이 단계로 시작
-            </a>
-          </div>
-
-          <div class="planN__divider" aria-hidden="true"></div>
-
-          <div class="planN__body">
-            <div class="planN__label">하이라이트</div>
-            <ul class="planN__list">
-              <li>업체/고객 흐름 분석</li>
-              <li>온라인에서 해결할 문제 정의</li>
-              <li>필요한 서비스 1~2개 도출</li>
-              <li>구조·기능·우선순위 정리</li>
-              <li>구현 전 단계까지 명확한 기획</li>
-            </ul>
-          </div>
-        </article>
-
-        <!-- Premium -->
-        <article class="planN" aria-label="컨설팅 및 서비스 제작 플랜">
-          <div class="planN__top">
-            <div class="planN__name">컨설팅 및 서비스 제작</div>
-            <div class="planN__sub">서비스 제작 &amp; 운영</div>
-
-            <div class="planN__price">
-              150만원 ~ <span class="planN__unit">/ MVP 1차</span>
-            </div>
-
-            <p class="planN__note">
-              설계된 서비스를 실제로 만들고, 배포·초기 안정화까지 진행합니다.
-            </p>
-
-            <!-- same base button as Entry (enabled) -->
-            <a class="planN__btn" href="#contact">
-              상담 후 진행
-            </a>
-          </div>
-
-          <div class="planN__divider" aria-hidden="true"></div>
-
-          <div class="planN__body">
-            <div class="planN__label">하이라이트</div>
-            <ul class="planN__list">
-              <li>서비스 MVP 제작</li>
-              <li>간단한 관리/자동화 구조</li>
-              <li>배포 및 초기 안정화</li>
-              <li>월 운영/개선 지원(옵션)</li>
-            </ul>
-          </div>
-        </article>
-
+    <div class="problem-grid" style="margin-bottom: 56px;">
+      <div class="problem-card" style="border-style: solid; background: transparent;">
+        <div style="font-size: 14px; font-weight: 800; color: var(--accent); margin-bottom: 12px;">STEP 1. 제작 중심</div>
+        <h3>기능에만 집중한 시작</h3>
+        <p>"어떤 기능을 넣을까?"부터 고민하면, 정작 사업의 본질인 '어떻게 수익을 낼 것인가'는 뒤로 밀려나게 됩니다.</p>
+      </div>
+      
+      <div class="problem-card" style="border-style: solid; background: transparent;">
+        <div style="font-size: 14px; font-weight: 800; color: var(--accent); margin-bottom: 12px;">STEP 2. 운영의 늪</div>
+        <h3>만들고 나서야 보이는 벽</h3>
+        <p>번듯한 결과물은 나왔는데 정작 관리가 안 되고 문의는 오지 않는 상황, '제작 이후'를 설계하지 않았기에 벌어지는 일입니다.</p>
+      </div>
+      
+      <div class="problem-card" style="border-style: solid; background: transparent;">
+        <div style="font-size: 14px; font-weight: 800; color: var(--accent); margin-bottom: 12px;">STEP 3. 성장의 정체</div>
+        <h3>확장할 수 없는 구조</h3>
+        <p>비즈니스 로직 없이 만들어진 시스템은 사업이 조금만 커져도 전부 다시 뜯어고쳐야 하는 리스크가 됩니다.</p>
       </div>
     </div>
 
-    <p class="pricingN__footnote">
-      Entry는 기본 제공 단계이며, 실제 선택은 Anchor/Premium에서 결정됩니다.
-    </p>
-
+    <div style="max-width: 800px; margin: 0 auto; padding: 40px; background: #fff; border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.03);">
+      <p style="margin: 0; font-size: 18px; line-height: 1.8; color: var(--text); font-weight: 500;">
+        "결국 중요한 것은 **무엇을 만드느냐**가 아니라,<br class="pc">
+        어떤 구조 위에서 **사업이 작동하게 할 것인가**입니다."
+      </p>
+      <div style="margin-top: 24px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--accent); font-weight: 800;">
+        <span>그 해결책이 바로 GROWTHLINE의 '비즈니스 설계'입니다</span>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>
+      </div>
+    </div>
   </div>
 </section>
 
-<style>
-  /* tokens used:
-     --accent, --text, --muted, --line, --bg-soft
-  */
-/* 기존 primary는 더 이상 안 쓰거나(권장) 남겨둬도 됨 */
-.planN__btn--ctaGlow{
-  color:#fff;
-  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
-
-  /* 이미지 같은 그라데이션 톤 */
-  background:
-    radial-gradient(120% 140% at 30% 20%,
-      color-mix(in srgb, #ffffff 28%, transparent) 0%,
-      transparent 55%),
-    linear-gradient(180deg,
-      color-mix(in srgb, var(--accent) 92%, #ffffff) 0%,
-      var(--accent) 55%,
-      color-mix(in srgb, var(--accent) 86%, #000000) 100%);
-
-  box-shadow:
-    0 10px 24px color-mix(in srgb, var(--accent) 28%, transparent),
-    0 2px 0 color-mix(in srgb, #ffffff 28%, transparent) inset;
-
-  transform: translateY(0);
-}
-
-.planN__btn--ctaGlow:hover{
-  transform: translateY(-1px);
-  box-shadow:
-    0 14px 34px color-mix(in srgb, var(--accent) 34%, transparent),
-    0 2px 0 color-mix(in srgb, #ffffff 30%, transparent) inset;
-}
-
-.planN__btn--ctaGlow:active{
-  transform: translateY(0);
-  box-shadow:
-    0 10px 24px color-mix(in srgb, var(--accent) 26%, transparent),
-    0 1px 0 color-mix(in srgb, #ffffff 22%, transparent) inset;
-}
-
-  .pricingN{
-    background:#fff;
-    padding: clamp(72px, 9vw, 110px) 20px;
-  }
-  .pricingN__inner{max-width:1080px;margin:0 auto;}
-  .pricingN__header{margin-bottom:22px;}
-  .pricingN__title{
-    margin:0 0 10px;
-    font-size:clamp(28px, 3.6vw, 40px);
-    font-weight:900;
-    letter-spacing:-0.04em;
-    line-height:1.2;
-    color:var(--text);
-  }
-  .pricingN__desc{
-    margin:0;
-    font-size:16px;
-    line-height:1.75;
-    color:var(--muted);
-  }
-
-  .pricingN__table{
-    border-top:1px solid rgba(2,6,23,.08);
-    border-bottom:1px solid rgba(2,6,23,.08);
-    padding:22px 0 12px;
-  }
-  .pricingN__grid{
-    display:grid;
-    grid-template-columns:repeat(3, minmax(0, 1fr));
-    gap:18px;
-    align-items:stretch;
-  }
-
-  .planN{
-    background:#fff;
-    border:1px solid rgba(2,6,23,.08);
-    border-radius:18px;
-    box-shadow:0 1px 2px rgba(0,0,0,.02), 0 12px 24px rgba(15,23,42,.04);
-    overflow:hidden;
-    display:flex;
-    flex-direction:column;
-    min-height:420px;
-  }
-
-  .planN--rec{
-    border-color: rgba(37,99,235,.22);
-    box-shadow:0 1px 2px rgba(0,0,0,.02), 0 18px 40px rgba(37,99,235,.14);
-  }
-  .planN--rec .planN__top{
-    background: rgba(37,99,235,.06);
-  }
-
-  .planN__top{
-    padding:18px 18px 14px;
-    display:grid;
-    gap:8px;
-    min-height:200px; /* aligns buttons visually */
-    align-content:start;
-  }
-
-  .planN__nameRow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
-  .planN__name{
-    font-size:18px;
-    font-weight:950;
-    letter-spacing:-0.03em;
-    color:var(--text);
-  }
-  .planN__tag{
-    display:inline-flex;
-    align-items:center;
-    padding:4px 8px;
-    border-radius:999px;
-    font-size:12px;
-    font-weight:900;
-    letter-spacing:-0.01em;
-    color:#1e40af;
-    background:rgba(37,99,235,.14);
-    border:1px solid rgba(37,99,235,.18);
-  }
-  .planN__sub{
-    font-size:13px;
-    font-weight:850;
-    color:rgba(15,23,42,.70);
-  }
-  .planN__price{
-    margin-top:6px;
-    font-size:28px;
-    line-height:1.05;
-    font-weight:950;
-    letter-spacing:-0.03em;
-    color:var(--text);
-  }
-  .planN__unit{
-    font-size:13px;
-    font-weight:850;
-    color:rgba(15,23,42,.55);
-  }
-  .planN__note{
-    margin:2px 0 4px;
-    font-size:13px;
-    line-height:1.65;
-    color:var(--muted);
-  }
-
-  /* unified button base (same for all) */
-  .planN__btn{
-    margin-top:10px;
-    height:42px;
-    padding:0 16px;
-    border-radius:999px;
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    font-size:14px;
-    font-weight:900;
-    text-decoration:none;
-    border:1px solid rgba(2,6,23,.12);
-    background:#ffffff;
-    color:var(--text);
-    white-space:nowrap;
-    width:fit-content;
-    transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease;
-  }
-  .planN__btn:hover{
-    transform:translateY(-1px);
-    box-shadow:0 12px 22px rgba(15,23,42,.08);
-    border-color:rgba(2,6,23,.18);
-  }
-
-  /* only recommended differs (main CTA vibe) */
-  .planN__btn--primary{
-    background: var(--accent);
-    color:#fff;
-    border-color: rgba(37,99,235,.35);
-    box-shadow: 0 16px 34px rgba(37,99,235,.18);
-  }
-  .planN__btn--primary:hover{
-    border-color: rgba(37,99,235,.55);
-    box-shadow: 0 20px 44px rgba(37,99,235,.22);
-  }
-
-  .planN__btn--disabled{
-    background: rgba(148,163,184,.14);
-    border-color: rgba(148,163,184,.35);
-    color: rgba(15,23,42,.55);
-    pointer-events:none;
-    box-shadow:none;
-  }
-
-  .planN__divider{height:1px;background:rgba(2,6,23,.08);}
-
-  .planN__body{padding:14px 18px 18px;}
-  .planN__label{
-    font-size:12px;
-    font-weight:900;
-    color:rgba(15,23,42,.55);
-    letter-spacing:-0.01em;
-    margin-bottom:10px;
-  }
-  .planN__list{
-    margin:0;
-    padding-left:18px;
-    font-size:14px;
-    line-height:1.75;
-    color:var(--muted);
-  }
-  .planN__list li{margin:6px 0;}
-
-  .pricingN__footnote{
-    margin:14px 0 0;
-    color:#64748b;
-    font-size:13px;
-    line-height:1.6;
-  }
-
-  @media (max-width: 980px){
-    .pricingN__grid{grid-template-columns:1fr;}
-    .planN{min-height:unset;}
-    .planN__top{min-height:unset;}
-  }
-</style>
-
-  <!-- FAQ (Accordion) -->
-  <div class="stripe" id="faq">
+  <section class="section">
     <div class="inner">
-      <h2>FAQ</h2>
-      <p class="lead">자주 묻는 질문을 먼저 정리했습니다.</p>
-
-      <section class="faq" aria-label="자주 묻는 질문">
-        <details>
-          <summary>왜 바로 제작부터 시작하지 않나요?</summary>
-          <p>
-            온라인 채널은 “만드는 것”보다 “역할을 정하는 것”이 먼저입니다.
-            역할과 기준이 없으면 기능을 늘려도 성과로 이어지지 않습니다.
-          </p>
-        </details>
-        <details>
-          <summary>무료 툴로도 충분한데, 어떤 경우에 진행해야 하나요?</summary>
-          <p>
-            무료 툴은 훌륭하지만, “운영 흐름”과 “확장성”이 필요한 순간 한계가 생깁니다.
-            반복 업무가 늘어나고 사람이 계속 개입해야 한다면 구조를 바꿀 타이밍입니다.
-          </p>
-        </details>
-        <details>
-          <summary>Anchor는 어떤 범위까지 포함되나요?</summary>
-          <p>
-            핵심 역할 정의, 정보 구조, 운영 가능한 흐름을 포함한 최소 구축 범위입니다.
-            상황에 따라 “필수만” 빠르게 만들고, 다음 단계로 확장하도록 설계합니다.
-          </p>
-        </details>
-        <details>
-          <summary>운영 지원은 어떤 방식으로 진행되나요?</summary>
-          <p>담당자/관리 방식/수정 흐름을 정리한 뒤, 필요 범위에 따라 유지관리 또는 개선 사이클로 진행합니다.</p>
-        </details>
-      </section>
-    </div>
-  </div>
-
-  <div class="contact-modal" role="dialog" aria-modal="true" aria-labelledby="contact-title">
-    <div class="contact-modal__panel" tabindex="-1">
-      <div class="contact-modal__header">
-        <h2 class="contact-modal__title" id="contact-title">문의하기</h2>
-        <button class="contact-modal__close" type="button" aria-label="닫기" data-contact-close>✕</button>
+      <div style="margin-bottom: 64px;">
+        <h2>GROWTHLINE의 시스템 구축 프로세스</h2>
+        <p class="desc">단순 외주사가 아닌, 파트너로서 비즈니스의 뼈대를 세웁니다.</p>
       </div>
-      <div class="contact-modal__body">
-        <div class="contact-modal__section">
-          <h3>우리가 함께 고민할 것</h3>
-          <ul class="contact-modal__list">
-            <li>현재 홈페이지가 필요한 이유와 기대하는 역할</li>
-            <li>담당자, 일정, 예산 등 내부 조건 정리</li>
-            <li>필수 페이지/기능과 우선순위</li>
-            <li>운영을 고려한 유지·관리 방식</li>
+
+      <div class="process-item">
+        <div class="process-num">01</div> <div class="process-content">
+          <h3>병목 구간 진단</h3>
+          <p>현재 사업에서 사람이 수동으로 처리하느라 성장이 멈춘 지점을 찾아냅니다.</p>
+          <ul>
+            <li>반복되는 단순 문의 자동화 설계</li>
+            <li>고객 유입부터 결제까지의 흐름 분석</li>
           </ul>
         </div>
+      </div>
 
-        <form class="contact-modal__form">
-          <label>
-            이름 또는 회사명
-            <input type="text" name="name" placeholder="예) 홍길동 / 00컴퍼니" />
-          </label>
-          <label>
-            연락처(이메일/전화)
-            <input type="text" name="contact" placeholder="예) contact@example.com" />
-          </label>
-          <label>
-            문의 내용
-            <textarea name="message" placeholder="현재 상황과 원하는 목표를 간단히 남겨주세요."></textarea>
-          </label>
-        </form>
+      <div class="process-item">
+        <div class="process-num">02</div>
+        <div class="process-content">
+          <h3>비즈니스 로직 이식</h3>
+          <p>대표님의 강점을 온라인에서도 동일하게 경험할 수 있도록 서비스화합니다.</p>
+          <ul>
+            <li>핵심 가치를 담은 원페이지 구축</li>
+            <li>운영 리스크를 줄이는 최소화된 관리 도구 제공</li>
+          </ul>
+        </div>
+      </div>
 
-        <div class="contact-modal__actions">
-          <p class="contact-modal__note">입력 내용은 상담 안내 외 다른 용도로 사용하지 않습니다.</p>
-          <a class="btn primary" href="#top">임시 제출 링크</a>
+      <div class="process-item">
+        <div class="process-num">03</div>
+        <div class="process-content">
+          <h3>단계별 로드맵 제안</h3>
+          <p>한 번에 모든 걸 만들지 않습니다. 지금 가장 필요한 '수익 지점'부터 구축합니다.</p>
+          <ul>
+            <li>즉각적인 성과를 위한 MVP 제작</li>
+            <li>향후 확장 가능한 데이터 기반 설계</li>
+          </ul>
+        </div>
+      </div>
+      
+      <div style="text-align: center; margin-top: 32px;">
+        <button class="btn btn--primary" data-contact-open>우리 사업 진단 받아보기</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--alt" id="pricing">
+    <div class="inner">
+      <div style="text-align: center; margin-bottom: 56px;">
+        <h2>합리적인 시작, 확실한 확장</h2>
+        <p class="desc">사업의 크기에 맞춰 최적의 플랜을 선택하세요.</p>
+      </div>
+
+      <div class="pricing-grid">
+        <div class="price-card">
+          <div style="font-weight: 800; color: var(--muted);">Entry</div>
+          <div class="price-card__amount">0원</div>
+          <p style="color: var(--muted); font-size: 15px;">기본 진단 및 메시지 구조화 (협의 시 제공)</p>
+          <ul class="price-card__list">
+            <li>핵심 강점 정리</li>
+            <li>온라인 명함 구축</li>
+            <li>기본 연락처 연동</li>
+          </ul>
+          <button class="btn btn--ghost" style="margin-top: auto;" data-contact-open>상담 신청</button>
+        </div>
+
+        <div class="price-card price-card--featured">
+          <span class="price-card__tag">인기</span>
+          <div style="font-weight: 800; color: var(--accent);">Anchor (설계)</div>
+          <div class="price-card__amount">39만원~</div>
+          <p style="color: var(--muted); font-size: 15px;">효율적인 해결책을 찾고 실제 구조도를 완성합니다.</p>
+          <ul class="price-card__list">
+            <li>고객 흐름 UX 분석</li>
+            <li>자동화 시나리오 설계</li>
+            <li>개발 로드맵 제공</li>
+          </ul>
+          <button class="btn btn--primary" style="margin-top: auto;" data-contact-open>이 플랜으로 시작</button>
+        </div>
+
+        <div class="price-card">
+          <div style="font-weight: 800; color: var(--muted);">Premium</div>
+          <div class="price-card__amount">150만원~</div>
+          <p style="color: var(--muted); font-size: 15px;">설계된 서비스를 실제로 구축하고 운영을 시작합니다.</p>
+          <ul class="price-card__list">
+            <li>맞춤형 MVP 시스템 제작</li>
+            <li>관리자 페이지 연결</li>
+            <li>운영 안정화 지원</li>
+          </ul>
+          <button class="btn btn--ghost" style="margin-top: auto;" data-contact-open>문의 후 진행</button>
         </div>
       </div>
     </div>
+  </section>
+
+  <section class="section final-cta">
+    <div class="inner">
+      <h2>고민하는 사이에도<br>경쟁자는 시스템을 구축하고 있습니다</h2>
+      <p>막연한 아이디어를 돈이 되는 시스템으로 만드는 가장 빠른 방법</p>
+      <button class="btn btn--primary" data-contact-open>지금 바로 무료 상담하기</button>
+    </div>
+  </section>
+
+  <footer style="padding: 60px 0; text-align: center; color: var(--muted); font-size: 14px;">
+    <p>© 2024 GROWTHLINE. All rights reserved.</p>
+  </footer>
+
+  <div class="contact-modal" id="contactModal" role="dialog" aria-modal="true">
+    <div class="modal-content">
+      <button class="modal-close" data-contact-close aria-label="닫기">&times;</button>
+      <h2 style="margin-bottom: 12px;">무료 상담 신청</h2>
+      <p style="color: var(--muted); font-size: 15px; margin-bottom: 32px;">현재 사업의 고민을 남겨주시면 24시간 이내에 연락드립니다.</p>
+      
+      <form id="contactForm">
+        <div style="margin-bottom: 24px;">
+          <label style="display:block; font-weight:700; margin-bottom:8px;">성함 / 업체명</label>
+          <input type="text" style="width:100%; padding:14px; border:1px solid var(--line); border-radius:10px;" placeholder="홍길동">
+        </div>
+        <div style="margin-bottom: 24px;">
+          <label style="display:block; font-weight:700; margin-bottom:8px;">연락처</label>
+          <input type="text" style="width:100%; padding:14px; border:1px solid var(--line); border-radius:10px;" placeholder="010-0000-0000">
+        </div>
+        <div style="margin-bottom: 32px;">
+          <label style="display:block; font-weight:700; margin-bottom:8px;">문의 내용 (선택)</label>
+          <textarea rows="4" style="width:100%; padding:14px; border:1px solid var(--line); border-radius:10px; resize:none;" placeholder="예: 홈페이지 제작 상담, 자동화 시스템 구축 등"></textarea>
+        </div>
+        <button type="submit" class="btn btn--primary" style="width: 100%;">상담 신청하기</button>
+      </form>
+    </div>
   </div>
+
   <script>
-    window.addEventListener('DOMContentLoaded', () => {
-      const modal = document.querySelector('.contact-modal');
-      const closeBtn = modal?.querySelector('[data-contact-close]');
-      const triggers = document.querySelectorAll('[data-contact-open]');
-      const panel = modal?.querySelector('.contact-modal__panel');
-      const focusTarget = closeBtn || panel;
+    const modal = document.getElementById('contactModal');
+    const openBtns = document.querySelectorAll('[data-contact-open]');
+    const closeBtn = document.querySelector('[data-contact-close]');
 
-      const openModal = event => {
-        event.preventDefault();
-        if (!modal) return;
-        modal.classList.add('is-open');
-        document.body.classList.add('no-scroll');
-        focusTarget?.focus();
-      };
+    const toggleModal = (isOpen) => {
+      modal.classList.toggle('is-open', isOpen);
+      document.body.classList.toggle('no-scroll', isOpen);
+      if(isOpen) modal.querySelector('input').focus();
+    };
 
-      const closeModal = () => {
-        if (!modal) return;
-        modal.classList.remove('is-open');
-        document.body.classList.remove('no-scroll');
-      };
+    openBtns.forEach(btn => btn.addEventListener('click', () => toggleModal(true)));
+    closeBtn.addEventListener('click', () => toggleModal(false));
 
-      triggers.forEach(trigger => {
-        trigger.addEventListener('click', openModal);
-      });
+    // ESC 키로 닫기 및 외부 클릭 닫기
+    window.addEventListener('keydown', (e) => { if(e.key === 'Escape') toggleModal(false); });
+    modal.addEventListener('click', (e) => { if(e.target === modal) toggleModal(false); });
 
-      closeBtn?.addEventListener('click', closeModal);
-      modal?.addEventListener('click', event => {
-        if (event.target === modal) closeModal();
-      });
-
-      document.addEventListener('keydown', event => {
-        if (event.key === 'Escape' && modal?.classList.contains('is-open')) {
-          closeModal();
-        }
-      });
-
+    document.getElementById('contactForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      alert('문의가 정상적으로 접수되었습니다. (데모)');
+      toggleModal(false);
     });
   </script>
 </body>
