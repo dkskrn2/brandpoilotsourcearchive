@@ -4,8 +4,13 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>GROWTHLINE | 비즈니스 성장 시스템 설계</title>
-  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+
   <style>
+    body { font-family: 'Inter', 'Pretendard', sans-serif; }
+    .strikethrough { text-decoration: line-through; text-decoration-color: #ef4444; text-decoration-thickness: 2px; }
+
     :root {
       --bg: #ffffff;
       --text: #191f28;
@@ -17,7 +22,6 @@
       --surface: #f8fafc;
       --radius: 16px;
       --max: 1100px;
-      /* 버튼 스타일 통일 */
       --btn-radius: 12px;
       --btn-shadow: 0 4px 12px rgba(37, 99, 235, 0.15);
     }
@@ -38,28 +42,83 @@
     .hl { color: var(--accent); }
     .desc { color: var(--muted); font-size: 18px; margin-top: 16px; word-break: keep-all; }
 
-    /* B. 버튼 스타일 가이드 통일 */
+    /* Buttons */
     .btn {
       display: inline-flex; align-items: center; justify-content: center;
       padding: 16px 32px; border-radius: var(--btn-radius); font-weight: 700; font-size: 16px;
-      text-decoration: none; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); 
+      text-decoration: none; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
       cursor: pointer; border: none; height: 56px;
     }
     .btn--primary {
       background: var(--accent); color: #fff; box-shadow: var(--btn-shadow);
     }
     .btn--primary:hover { background: var(--accent-dark); transform: translateY(-2px); box-shadow: 0 8px 20px rgba(37, 99, 235, 0.25); }
-    
     .btn--ghost {
       background: #fff; border: 1.5px solid var(--line); color: var(--text);
     }
     .btn--ghost:hover { background: var(--surface); border-color: var(--muted); }
 
-    /* Topbar */
-    .topbar { position: sticky; top: 0; z-index: 100; background: rgba(255,255,255,0.85); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
-    .topbar-inner { display: flex; align-items: center; justify-content: space-between; padding: 12px 24px; max-width: var(--max); margin: 0 auto; }
-    .brand { font-weight: 900; font-size: 20px; text-decoration: none; display: flex; align-items: center; gap: 8px; color: var(--text); }
-    .brand-dot { width: 8px; height: 8px; background: var(--accent); border-radius: 50%; }
+    /* Topbar (match work) */
+    .topbar{
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      backdrop-filter: blur(10px);
+      background: rgba(255,255,255,.86);
+      border-bottom: 1px solid rgba(2,32,71,.08);
+    }
+    .topbar-inner{
+      max-width: var(--max);
+      margin: 0 auto;
+      padding: 12px 16px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:14px;
+    }
+    .brand{
+      display:flex; align-items:center; gap:10px;
+      text-decoration:none;
+      font-weight: 900;
+      letter-spacing:-.4px;
+      white-space:nowrap;
+      color: var(--text);
+    }
+    .dot{
+      width:10px; height:10px; border-radius: 999px;
+      background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
+      box-shadow: 0 0 0 6px rgba(49,130,246,.14);
+    }
+    .nav{
+      display:flex; align-items:center; gap:6px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+    }
+    .nav a{
+      text-decoration:none;
+      font-size:13px;
+      color: #6b7684;
+      padding: 8px 10px;
+      border-radius: 12px;
+      border: 1px solid transparent;
+    }
+    .nav a:hover{background: rgba(2,32,71,.04); color: var(--text);}
+    .nav a[aria-current="page"]{
+      background:rgba(37,99,235,.10);
+      color:var(--text);
+      border:1px solid rgba(37,99,235,.22);
+    }
+    .top-actions{
+      display:flex;
+      align-items:center;
+      gap:10px;
+    }
+    .topbar .btn{padding: 10px 14px;}
+    .btn.primary{
+      color:#fff;
+      border-color: rgba(49,130,246,.22);
+      background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
+    }
 
     /* Hero */
     .hero { text-align: center; padding: clamp(80px, 15vw, 160px) 0; background: radial-gradient(circle at top, #f0f7ff 0%, #ffffff 70%); }
@@ -67,11 +126,11 @@
     .hero__title { font-size: clamp(34px, 6vw, 68px); font-weight: 900; }
     .hero__cta { margin-top: 48px; display: flex; gap: 16px; justify-content: center; }
 
-    /* C. Problem 섹션 디자인 개선 (카드 위계 강화) */
+    /* Problem */
     .problem { text-align: center; }
     .problem-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; margin-top: 56px; }
-    .problem-card { 
-      padding: 40px; background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius); 
+    .problem-card {
+      padding: 40px; background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius);
       text-align: left; transition: border-color 0.3s ease; position: relative;
     }
     .problem-card:hover { border-color: var(--accent); }
@@ -79,26 +138,19 @@
     .problem-card h3 { font-size: 22px; margin-bottom: 16px; color: var(--text); }
     .problem-card p { color: var(--muted); font-size: 16px; margin: 0; word-break: keep-all; }
 
-    /* A. 브릿지 섹션 (원인 진단) */
-    .cause-bridge {
-      margin-top: 64px; padding: 32px; background: var(--accent-soft); border-radius: var(--radius);
-      display: inline-block; max-width: 800px;
-    }
-    .cause-bridge strong { color: var(--accent); font-weight: 800; }
-
-    /* Process */
+    /* Process (BASE - will be overridden below for image match) */
     .process-item { display: grid; grid-template-columns: 80px 1fr; gap: 24px; margin-bottom: 40px; }
-    .process-num { 
-      width: 52px; height: 52px; background: var(--accent); color: #fff; 
-      border-radius: 14px; display: flex; align-items: center; justify-content: center; 
-      font-weight: 900; font-size: 22px; 
+    .process-num {
+      width: 52px; height: 52px; background: var(--accent); color: #fff;
+      border-radius: 14px; display: flex; align-items: center; justify-content: center;
+      font-weight: 900; font-size: 22px;
     }
     .process-content { background: #fff; padding: 40px; border-radius: var(--radius); border: 1.5px solid var(--line); }
     .process-content h3 { font-size: 26px; margin-bottom: 16px; }
     .process-content ul { padding-left: 20px; margin-top: 20px; color: var(--muted); }
     .process-content li { margin-bottom: 10px; }
 
-    /* Pricing */
+    /* Pricing (BASE - will be overridden below for image match) */
     .pricing-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; margin-top: 56px; }
     .price-card { padding: 48px 40px; background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; position: relative; }
     .price-card--featured { border: 2px solid var(--accent); box-shadow: 0 20px 40px rgba(37, 99, 235, 0.08); }
@@ -107,20 +159,15 @@
     .price-card__list { list-style: none; padding: 24px 0 0 0; margin: 32px 0 0 0; border-top: 1px solid var(--line); }
     .price-card__list li { margin-bottom: 14px; display: flex; align-items: center; gap: 10px; font-weight: 500; }
 
-    /* E. 마지막 CTA (톤 매너 개선) */
-    .final-cta { 
-      background: linear-gradient(145deg, #0f172a 0%, #1e293b 100%); 
-      color: #fff; text-align: center; border: none; 
+    /* Final CTA (BASE - will be overridden below for image match) */
+    .final-cta {
+      background: linear-gradient(145deg, #0f172a 0%, #1e293b 100%);
+      color: #fff; text-align: center; border: none;
     }
     .final-cta h2 { color: #fff; font-size: clamp(30px, 5vw, 44px); }
     .final-cta p { color: #94a3b8; margin: 24px 0 48px; }
 
-    /* FAQ */
-    .faq-item { margin-bottom: 16px; border: 1.5px solid var(--line); border-radius: var(--radius); }
-    .faq-item summary { padding: 24px; font-weight: 700; cursor: pointer; list-style: none; display: flex; justify-content: space-between; }
-    .faq-item[open] { background: var(--surface); border-color: var(--accent); }
-
-    /* F. 모달 디테일 개선 */
+    /* Modal */
     .contact-modal { position: fixed; inset: 0; z-index: 1000; background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; padding: 20px; }
     .contact-modal.is-open { display: flex; }
     .modal-content { background: #fff; padding: 48px; border-radius: 24px; width: 100%; max-width: 540px; position: relative; box-shadow: 0 30px 60px rgba(0,0,0,0.2); }
@@ -130,16 +177,201 @@
       .hero__cta { flex-direction: column; }
       .process-item { grid-template-columns: 1fr; }
     }
+
+    /* =========================================================
+       ✅ IMAGE MATCH OVERRIDES (from "시스템 구축 프로세스" onward)
+       내용은 그대로 / 디자인만 이미지처럼
+    ========================================================== */
+
+    /* Process section layout */
+    .process-section .inner { max-width: 980px; }
+    .process-section .process-wrap {
+      max-width: 920px;
+      margin: 0 auto;
+    }
+    .process-section .process-head {
+      max-width: 920px;
+      margin: 0 auto 44px;
+    }
+    .process-section .process-head h2{
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+    .process-section .process-head .desc{
+      font-size: 14px;
+      margin-top: 8px;
+      color: var(--muted);
+    }
+
+    .process-section .process-item{
+      grid-template-columns: 64px 1fr;
+      gap: 18px;
+      margin-bottom: 24px;
+      align-items: start;
+    }
+    .process-section .process-num{
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 900;
+      box-shadow: 0 8px 18px rgba(37, 99, 235, 0.18);
+      position: sticky;
+      top: 110px; /* 자연스럽게 스크롤 시 고정 느낌 */
+    }
+    @media (max-width: 768px){
+      .process-section .process-num{ position: static; box-shadow: none; }
+    }
+
+    .process-section .process-content{
+      padding: 26px 28px;
+      border-radius: 14px;
+      border: 1px solid rgba(2, 32, 71, 0.10);
+      box-shadow: 0 10px 26px rgba(0,0,0,0.03);
+    }
+    .process-section .process-content h3{
+      font-size: 18px;
+      font-weight: 800;
+      margin-bottom: 8px;
+      letter-spacing: -0.02em;
+    }
+    .process-section .process-content p{
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.75;
+    }
+    .process-section .process-content ul{
+      margin-top: 14px;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.8;
+    }
+    .process-section .process-content li{
+      margin-bottom: 8px;
+    }
+    .process-section .process-cta{
+      text-align: center;
+      margin-top: 30px;
+    }
+    .process-section .process-cta .btn{
+      height: 44px;
+      padding: 0 22px;
+      font-size: 13px;
+      border-radius: 10px;
+    }
+
+    /* Pricing section layout */
+    .pricing-section .inner { max-width: 1020px; }
+    .pricing-section .pricing-head{
+      text-align: center;
+      margin-bottom: 44px;
+    }
+    .pricing-section .pricing-head h2{
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+    .pricing-section .pricing-head .desc{
+      font-size: 13px;
+      margin-top: 8px;
+    }
+    .pricing-section .pricing-grid{
+      max-width: 980px;
+      margin: 0 auto;
+      gap: 28px;
+      align-items: stretch;
+    }
+    .pricing-section .price-card{
+      padding: 34px 30px;
+      border-radius: 14px;
+      border: 1px solid rgba(2, 32, 71, 0.10);
+      box-shadow: 0 10px 26px rgba(0,0,0,0.03);
+    }
+    .pricing-section .price-card__amount{
+      font-size: 34px;
+      margin: 10px 0 6px;
+      letter-spacing: -0.02em;
+    }
+    .pricing-section .price-card__list{
+      margin-top: 22px;
+      padding-top: 18px;
+    }
+    .pricing-section .price-card__list li{
+      font-size: 13px;
+      margin-bottom: 10px;
+    }
+    .pricing-section .price-card--featured{
+      border: 2px solid var(--accent);
+      box-shadow: 0 22px 50px rgba(37, 99, 235, 0.10);
+      transform: translateY(-6px);
+    }
+    @media (max-width: 900px){
+      .pricing-section .price-card--featured{ transform: none; }
+    }
+    /* "인기"를 이미지처럼 작은 배지 느낌으로 */
+    .pricing-section .price-card__tag{
+      top: 18px;
+      right: 18px;
+      font-size: 11px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      box-shadow: 0 10px 20px rgba(37,99,235,0.20);
+    }
+    .pricing-section .btn{
+      height: 44px;
+      padding: 0 18px;
+      font-size: 13px;
+      border-radius: 10px;
+    }
+
+    /* Final CTA layout */
+    .final-cta--match{
+      padding: 88px 0;
+      background: radial-gradient(1200px 420px at 50% 0%, rgba(59,130,246,0.22) 0%, rgba(15,23,42,0) 52%),
+                  linear-gradient(145deg, #0b1220 0%, #111c33 100%);
+    }
+    .final-cta--match .inner{
+      max-width: 980px;
+    }
+    .final-cta--match h2{
+      font-weight: 900;
+      letter-spacing: -0.03em;
+      line-height: 1.12;
+      font-size: clamp(30px, 4.5vw, 44px);
+    }
+    .final-cta--match p{
+      margin: 14px 0 34px;
+      color: rgba(148,163,184,0.92);
+      font-size: 13px;
+    }
+    .final-cta--match .btn{
+      height: 44px;
+      padding: 0 22px;
+      font-size: 13px;
+      border-radius: 10px;
+    }
   </style>
 </head>
 <body>
 
-  <header class="topbar">
+  <div class="topbar">
     <div class="topbar-inner">
-      <a href="#" class="brand"><span class="brand-dot"></span>GROWTHLINE</a>
-      <button class="btn btn--primary" style="height: 44px; padding: 0 20px; font-size: 14px;" data-contact-open>무료 상담 신청</button>
+      <a class="brand" href="index.html#top" aria-label="홈으로">
+        <span class="dot" aria-hidden="true"></span>
+        <span>GROWTHLINE</span>
+      </a>
+      <div class="top-actions">
+        <div class="nav" aria-label="상단 메뉴">
+          <a href="service.html">service</a>
+          <a href="work.html">work</a>
+        </div>
+        <a class="btn primary contact-trigger" href="#contact" data-contact-open>문의하기</a>
+      </div>
     </div>
-  </header>
+  </div>
 
   <section class="hero">
     <div class="inner">
@@ -156,102 +388,127 @@
 <section class="section section--alt problem">
   <div class="inner">
     <div style="margin-bottom: 56px;">
-      <span style="color: var(--accent); font-weight: 800; font-size: 14px; letter-spacing: 0.1em; display: block; margin-bottom: 16px; text-transform: uppercase;">The Real Reason</span>
-      <h2 style="font-size: clamp(26px, 4vw, 38px); line-height: 1.3;">
+      <span style="color: var(--accent); font-weight: 800; font-size: 14px; letter-spacing: 0.1em; display: block; margin-bottom: 16px; text-transform: uppercase;">
+        THE REAL REASON
+      </span>
+
+      <h1 class="hero__title">
         온라인 전환이 막막하게 느껴지는 이유는<br>
         대표님의 의지가 부족해서가 아니라,<br>
-        <span class="hl">시작 지점이 항상 '만들기'였기 때문입니다.</span>
-      </h2>
-      <p class="desc" style="max-width: 750px; margin: 24px auto 0; font-size: 18px; line-height: 1.8;">
-        대부분은 가장 먼저 눈에 보이는 홈페이지, 앱, 시스템 '제작'부터 고민합니다.<br class="pc">
-        가장 확실한 방법처럼 보이지만, 사실 이 선택이 나중에 성장을 멈추게 만드는 원인이 됩니다.
+        <span class="hl">시작 지점이 '문제 분석'이 아닌 이미 내린 '결론'이었기 때문입니다.</span>
+      </h1>
+
+      <p class="desc" style="max-width: 760px; margin: 24px auto 0; font-size: 18px; line-height: 1.8;">
+        대부분은 “어떤 시스템을 만들까?”라는 결론을 먼저 내리고 제작에 뛰어듭니다.<br class="pc">
+        하지만 현상 뒤의 <strong>본질적인 비즈니스 페인 포인트</strong>를 진단하지 않은 결론은,
+        시장에서 외면받고 성장을 저해하는 가장 큰 리스크가 됩니다.
       </p>
     </div>
 
-    <div class="problem-grid" style="margin-bottom: 56px;">
-      <div class="problem-card" style="border-style: solid; background: transparent;">
-        <div style="font-size: 14px; font-weight: 800; color: var(--accent); margin-bottom: 12px;">STEP 1. 제작 중심</div>
-        <h3>기능에만 집중한 시작</h3>
-        <p>"어떤 기능을 넣을까?"부터 고민하면, 정작 사업의 본질인 '어떻게 수익을 낼 것인가'는 뒤로 밀려나게 됩니다.</p>
-      </div>
-      
-      <div class="problem-card" style="border-style: solid; background: transparent;">
-        <div style="font-size: 14px; font-weight: 800; color: var(--accent); margin-bottom: 12px;">STEP 2. 운영의 늪</div>
-        <h3>만들고 나서야 보이는 벽</h3>
-        <p>번듯한 결과물은 나왔는데 정작 관리가 안 되고 문의는 오지 않는 상황, '제작 이후'를 설계하지 않았기에 벌어지는 일입니다.</p>
-      </div>
-      
-      <div class="problem-card" style="border-style: solid; background: transparent;">
-        <div style="font-size: 14px; font-weight: 800; color: var(--accent); margin-bottom: 12px;">STEP 3. 성장의 정체</div>
-        <h3>확장할 수 없는 구조</h3>
-        <p>비즈니스 로직 없이 만들어진 시스템은 사업이 조금만 커져도 전부 다시 뜯어고쳐야 하는 리스크가 됩니다.</p>
-      </div>
     </div>
-
-    <div style="max-width: 800px; margin: 0 auto; padding: 40px; background: #fff; border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.03);">
-      <p style="margin: 0; font-size: 18px; line-height: 1.8; color: var(--text); font-weight: 500;">
-        "결국 중요한 것은 **무엇을 만드느냐**가 아니라,<br class="pc">
-        어떤 구조 위에서 **사업이 작동하게 할 것인가**입니다."
-      </p>
-      <div style="margin-top: 24px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--accent); font-weight: 800;">
-        <span>그 해결책이 바로 GROWTHLINE의 '비즈니스 설계'입니다</span>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>
-      </div>
-    </div>
-  </div>
 </section>
 
-  <section class="section">
+    <section class="pb-20 px-6 max-w-6xl mx-auto">
+        <div class="grid md:grid-cols-3 gap-8">
+            <div class="bg-white p-8 rounded-2xl border border-orange-100 shadow-sm relative overflow-hidden">
+                <div class="absolute top-0 right-0 bg-orange-100 text-orange-600 px-4 py-1 text-xs font-bold rounded-bl-xl uppercase">Error Case</div>
+                <span class="text-orange-500 font-bold text-sm">STEP 1. 결론 중심</span>
+                <h3 class="text-xl font-bold mt-4 mb-3">정답을 정해둔 시작</h3>
+                <p class="text-slate-500 text-sm leading-relaxed">"일단 홈페이지부터 만들자"는 이미 정해진 결론에서 시작하면, 고객이 우리를 선택해야 할 본질적인 가치가 누락됩니다.</p>
+            </div>
+            <div class="bg-white p-8 rounded-2xl border border-orange-100 shadow-sm relative overflow-hidden">
+                <div class="absolute top-0 right-0 bg-orange-100 text-orange-600 px-4 py-1 text-xs font-bold rounded-bl-xl uppercase">Error Case</div>
+                <span class="text-orange-500 font-bold text-sm">STEP 2. 전략의 부재</span>
+                <h3 class="text-xl font-bold mt-4 mb-3">현상과 괴리된 결과물</h3>
+                <p class="text-slate-500 text-sm leading-relaxed">치밀한 진단 없이 제작된 결과물은 겉만 번듯할 뿐입니다. 결국 "왜 성과가 안 날까?"라는 운영의 벽에 부딪힙니다.</p>
+            </div>
+            <div class="bg-white p-8 rounded-2xl border border-orange-100 shadow-sm relative overflow-hidden">
+                <div class="absolute top-0 right-0 bg-orange-100 text-orange-600 px-4 py-1 text-xs font-bold rounded-bl-xl uppercase">Error Case</div>
+                <span class="text-orange-500 font-bold text-sm">STEP 3. 비효율의 반복</span>
+                <h3 class="text-xl font-bold mt-4 mb-3">확장 불가능한 구조</h3>
+                <p class="text-slate-500 text-sm leading-relaxed">데이터 없이 쌓아 올린 구조물은 성장의 시점에서 결국 전부 다시 뜯어고쳐야 하는 막대한 비용 손실을 초래합니다.</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="bg-slate-900 py-16 px-6">
+        <div class="max-w-4xl mx-auto text-center">
+            <h2 class="text-2xl md:text-4xl font-bold text-white mb-6 leading-tight">
+                우리는 결론부터 내리지 않습니다.<br>
+                <span class="text-blue-400">문제를 먼저 정의합니다.</span>
+            </h2>
+            <div class="grid md:grid-cols-3 gap-6 mt-12 text-left">
+                <div class="border-l border-blue-500/30 pl-6">
+                    <p class="text-blue-400 font-bold text-sm mb-2 uppercase">01. Deep Analysis</p>
+                    <p class="text-slate-300 text-sm">시장과 데이터 기반의 철저한 현황 분석</p>
+                </div>
+                <div class="border-l border-blue-500/30 pl-6">
+                    <p class="text-blue-400 font-bold text-sm mb-2 uppercase">02. Problem Definition</p>
+                    <p class="text-slate-300 text-sm">가설 검증을 통한 비즈니스 본질 진단</p>
+                </div>
+                <div class="border-l border-blue-500/30 pl-6">
+                    <p class="text-blue-400 font-bold text-sm mb-2 uppercase">03. Strategic Build</p>
+                    <p class="text-slate-300 text-sm">해결책에 최적화된 시스템 설계 및 구축</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+  <!-- ✅ 여기부터 디자인만 이미지처럼 변경 -->
+  <section class="section process-section">
     <div class="inner">
-      <div style="margin-bottom: 64px;">
+      <div class="process-head">
         <h2>GROWTHLINE의 시스템 구축 프로세스</h2>
         <p class="desc">단순 외주사가 아닌, 파트너로서 비즈니스의 뼈대를 세웁니다.</p>
       </div>
 
-      <div class="process-item">
-        <div class="process-num">01</div> <div class="process-content">
-          <h3>병목 구간 진단</h3>
-          <p>현재 사업에서 사람이 수동으로 처리하느라 성장이 멈춘 지점을 찾아냅니다.</p>
-          <ul>
-            <li>반복되는 단순 문의 자동화 설계</li>
-            <li>고객 유입부터 결제까지의 흐름 분석</li>
-          </ul>
+      <div class="process-wrap">
+        <div class="process-item">
+          <div class="process-num">01</div>
+          <div class="process-content">
+            <h3>병목 구간 진단</h3>
+            <p>현재 사업에서 사람이 수동으로 처리하느라 성장이 멈춘 지점을 찾아냅니다.</p>
+            <ul>
+              <li>반복되는 단순 문의 자동화 설계</li>
+              <li>고객 유입부터 결제까지의 흐름 분석</li>
+            </ul>
+          </div>
         </div>
-      </div>
 
-      <div class="process-item">
-        <div class="process-num">02</div>
-        <div class="process-content">
-          <h3>비즈니스 로직 이식</h3>
-          <p>대표님의 강점을 온라인에서도 동일하게 경험할 수 있도록 서비스화합니다.</p>
-          <ul>
-            <li>핵심 가치를 담은 원페이지 구축</li>
-            <li>운영 리스크를 줄이는 최소화된 관리 도구 제공</li>
-          </ul>
+        <div class="process-item">
+          <div class="process-num">02</div>
+          <div class="process-content">
+            <h3>비즈니스 로직 이식</h3>
+            <p>대표님의 강점을 온라인에서도 동일하게 경험할 수 있도록 서비스화합니다.</p>
+            <ul>
+              <li>핵심 가치를 담은 원페이지 구축</li>
+              <li>운영 리스크를 줄이는 최소화된 관리 도구 제공</li>
+            </ul>
+          </div>
         </div>
-      </div>
 
-      <div class="process-item">
-        <div class="process-num">03</div>
-        <div class="process-content">
-          <h3>단계별 로드맵 제안</h3>
-          <p>한 번에 모든 걸 만들지 않습니다. 지금 가장 필요한 '수익 지점'부터 구축합니다.</p>
-          <ul>
-            <li>즉각적인 성과를 위한 MVP 제작</li>
-            <li>향후 확장 가능한 데이터 기반 설계</li>
-          </ul>
+        <div class="process-item">
+          <div class="process-num">03</div>
+          <div class="process-content">
+            <h3>단계별 로드맵 제안</h3>
+            <p>한 번에 모든 걸 만들지 않습니다. 지금 가장 필요한 '수익 지점'부터 구축합니다.</p>
+            <ul>
+              <li>즉각적인 성과를 위한 MVP 제작</li>
+              <li>향후 확장 가능한 데이터 기반 설계</li>
+            </ul>
+          </div>
         </div>
-      </div>
-      
-      <div style="text-align: center; margin-top: 32px;">
-        <button class="btn btn--primary" data-contact-open>우리 사업 진단 받아보기</button>
+
+        <div class="process-cta">
+          <button class="btn btn--primary" data-contact-open>우리 사업 진단 받아보기</button>
+        </div>
       </div>
     </div>
   </section>
 
-  <section class="section section--alt" id="pricing">
+  <section class="section section--alt pricing-section" id="pricing">
     <div class="inner">
-      <div style="text-align: center; margin-bottom: 56px;">
+      <div class="pricing-head">
         <h2>합리적인 시작, 확실한 확장</h2>
         <p class="desc">사업의 크기에 맞춰 최적의 플랜을 선택하세요.</p>
       </div>
@@ -297,7 +554,7 @@
     </div>
   </section>
 
-  <section class="section final-cta">
+  <section class="section final-cta final-cta--match">
     <div class="inner">
       <h2>고민하는 사이에도<br>경쟁자는 시스템을 구축하고 있습니다</h2>
       <p>막연한 아이디어를 돈이 되는 시스템으로 만드는 가장 빠른 방법</p>
@@ -314,7 +571,7 @@
       <button class="modal-close" data-contact-close aria-label="닫기">&times;</button>
       <h2 style="margin-bottom: 12px;">무료 상담 신청</h2>
       <p style="color: var(--muted); font-size: 15px; margin-bottom: 32px;">현재 사업의 고민을 남겨주시면 24시간 이내에 연락드립니다.</p>
-      
+
       <form id="contactForm">
         <div style="margin-bottom: 24px;">
           <label style="display:block; font-weight:700; margin-bottom:8px;">성함 / 업체명</label>
@@ -341,15 +598,14 @@
     const toggleModal = (isOpen) => {
       modal.classList.toggle('is-open', isOpen);
       document.body.classList.toggle('no-scroll', isOpen);
-      if(isOpen) modal.querySelector('input').focus();
+      if (isOpen) modal.querySelector('input')?.focus();
     };
 
     openBtns.forEach(btn => btn.addEventListener('click', () => toggleModal(true)));
-    closeBtn.addEventListener('click', () => toggleModal(false));
+    closeBtn?.addEventListener('click', () => toggleModal(false));
 
-    // ESC 키로 닫기 및 외부 클릭 닫기
-    window.addEventListener('keydown', (e) => { if(e.key === 'Escape') toggleModal(false); });
-    modal.addEventListener('click', (e) => { if(e.target === modal) toggleModal(false); });
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape') toggleModal(false); });
+    modal.addEventListener('click', (e) => { if (e.target === modal) toggleModal(false); });
 
     document.getElementById('contactForm').addEventListener('submit', (e) => {
       e.preventDefault();
