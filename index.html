@@ -113,7 +113,19 @@
       align-items:center;
       gap:10px;
     }
-    .topbar .btn{padding: 10px 14px;}
+    .topbar .btn{
+      padding: 11px 14px;
+      height: auto;
+      border-radius: 14px;
+      border: 1px solid rgba(2,32,71,.10);
+      background: rgba(255,255,255,.92);
+      color: var(--text);
+      font-weight: 800;
+      font-size: 14px;
+      white-space: nowrap;
+      box-shadow: 0 8px 18px rgba(2,32,71,.08);
+    }
+    .topbar .btn:hover{transform: translateY(-1px);}
     .btn.primary{
       color:#fff;
       border-color: rgba(49,130,246,.22);
@@ -137,6 +149,81 @@
     .problem-card__icon { font-size: 32px; margin-bottom: 20px; display: block; }
     .problem-card h3 { font-size: 22px; margin-bottom: 16px; color: var(--text); }
     .problem-card p { color: var(--muted); font-size: 16px; margin: 0; word-break: keep-all; }
+
+    /* Social proof */
+    .social-proof {
+      padding: 80px 20px;
+      background-color: #f8faff;
+      font-family: 'Pretendard', sans-serif;
+      text-align: center;
+    }
+    .social-proof .container {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+    .social-proof .header { margin-bottom: 50px; }
+    .social-proof .sub-title {
+      color: #2563eb;
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: 1px;
+      margin-bottom: 10px;
+    }
+    .social-proof .main-title {
+      font-size: 28px;
+      line-height: 1.4;
+      color: #1e293b;
+      font-weight: 800;
+      margin-bottom: 20px;
+    }
+    .social-proof .main-title span { color: #2563eb; }
+    .social-proof .description { color: #64748b; font-size: 16px; }
+    .social-proof .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 25px;
+    }
+    .social-proof .stat-card {
+      background: #ffffff;
+      padding: 40px 30px;
+      border-radius: 20px;
+      box-shadow: 0 10px 25px rgba(37, 99, 235, 0.05);
+      border: 1px solid #e2e8f0;
+      transition: transform 0.3s ease;
+    }
+    .social-proof .stat-card:hover {
+      transform: translateY(-5px);
+      border-color: #2563eb;
+    }
+    .social-proof .category {
+      font-size: 14px;
+      color: #94a3b8;
+      margin-bottom: 15px;
+    }
+    .social-proof .value {
+      font-size: 42px;
+      font-weight: 800;
+      color: #1e293b;
+      margin-bottom: 5px;
+    }
+    .social-proof .value .up { color: #ef4444; }
+    .social-proof .value .down { color: #2563eb; }
+    .social-proof .label {
+      font-size: 18px;
+      font-weight: 700;
+      color: #2563eb;
+      margin-bottom: 15px;
+    }
+    .social-proof .detail {
+      font-size: 14px;
+      color: #64748b;
+      line-height: 1.6;
+      word-break: keep-all;
+    }
+    @media (max-width: 768px) {
+      .social-proof .main-title { font-size: 24px; }
+      .social-proof .stats-grid { grid-template-columns: 1fr; }
+    }
 
     /* Process (BASE - will be overridden below for image match) */
     .process-item { display: grid; grid-template-columns: 80px 1fr; gap: 24px; margin-bottom: 40px; }
@@ -167,11 +254,106 @@
     .final-cta h2 { color: #fff; font-size: clamp(30px, 5vw, 44px); }
     .final-cta p { color: #94a3b8; margin: 24px 0 48px; }
 
-    /* Modal */
-    .contact-modal { position: fixed; inset: 0; z-index: 1000; background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; padding: 20px; }
-    .contact-modal.is-open { display: flex; }
-    .modal-content { background: #fff; padding: 48px; border-radius: 24px; width: 100%; max-width: 540px; position: relative; box-shadow: 0 30px 60px rgba(0,0,0,0.2); }
-    .modal-close { position: absolute; top: 24px; right: 24px; border: none; background: none; font-size: 32px; cursor: pointer; color: var(--muted); }
+    /* Popup */
+    .popup-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      font-family: 'Pretendard', sans-serif;
+    }
+    .popup-content {
+      background: #fff;
+      width: 100%;
+      max-width: 500px;
+      border-radius: 24px;
+      padding: 40px;
+      position: relative;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+    }
+    .close-btn {
+      position: absolute;
+      top: 20px; right: 20px;
+      background: none; border: none;
+      font-size: 30px; color: #94a3b8;
+      cursor: pointer;
+    }
+    .popup-overlay .popup-header { text-align: center; margin-bottom: 30px; }
+    .popup-overlay .badge {
+      display: inline-block;
+      padding: 4px 12px;
+      background: #fef2f2;
+      color: #ef4444;
+      border-radius: 100px;
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 15px;
+    }
+    .popup-overlay .popup-header h2 {
+      font-size: 22px;
+      color: #1e293b;
+      line-height: 1.4;
+      margin-bottom: 12px;
+      word-break: keep-all;
+    }
+    .popup-overlay .popup-header h2 span { color: #2563eb; }
+    .popup-overlay .popup-header p {
+      font-size: 15px;
+      color: #64748b;
+      line-height: 1.5;
+    }
+    .popup-overlay .popup-form .input-group { margin-bottom: 18px; text-align: left; }
+    .popup-overlay .popup-form label {
+      display: block;
+      font-size: 14px;
+      font-weight: 600;
+      color: #334155;
+      margin-bottom: 8px;
+    }
+    .popup-overlay .popup-form input, .popup-overlay .popup-form textarea {
+      width: 100%;
+      padding: 12px 16px;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      font-size: 15px;
+      transition: all 0.2s;
+      box-sizing: border-box;
+    }
+    .popup-overlay .popup-form input:focus, .popup-overlay .popup-form textarea:focus {
+      outline: none;
+      border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    }
+    .popup-overlay .submit-btn {
+      width: 100%;
+      padding: 16px;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.2s;
+      margin-top: 10px;
+    }
+    .popup-overlay .submit-btn:hover { background: #1d4ed8; }
+    .popup-overlay .form-footer {
+      font-size: 12px;
+      color: #94a3b8;
+      margin-top: 15px;
+      text-align: center;
+      line-height: 1.4;
+    }
+    @media (max-width: 480px) {
+      .popup-content { padding: 30px 20px; }
+      .popup-overlay .popup-header h2 { font-size: 19px; }
+    }
 
     @media (max-width: 768px) {
       .hero__cta { flex-direction: column; }
@@ -188,6 +370,9 @@
     .process-section .process-wrap {
       max-width: 920px;
       margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
     }
     .process-section .process-head {
       max-width: 920px;
@@ -206,8 +391,7 @@
 
     .process-section .process-item{
       grid-template-columns: 64px 1fr;
-      gap: 18px;
-      margin-bottom: 24px;
+      gap: 0;
       align-items: start;
     }
     .process-section .process-num{
@@ -255,12 +439,21 @@
     .process-section .process-cta{
       text-align: center;
       margin-top: 30px;
+      grid-column: 1 / -1;
     }
     .process-section .process-cta .btn{
       height: 44px;
       padding: 0 22px;
       font-size: 13px;
       border-radius: 10px;
+    }
+    @media (max-width: 980px){
+      .process-section .process-wrap{
+        grid-template-columns: 1fr;
+      }
+      .process-section .process-item{
+        margin-bottom: 24px;
+      }
     }
 
     /* Pricing section layout */
@@ -380,7 +573,6 @@
       <p class="desc">대표님은 본업에만 집중하세요. 복잡한 온라인 전환과 고객 유입 시스템은<br>GROWTHLINE이 '작동하는 결과물'로 증명하겠습니다.</p>
       <div class="hero__cta">
         <button class="btn btn--primary" data-contact-open>지금 바로 시작하기</button>
-        <a href="#pricing" class="btn btn--ghost">프로그램 상세 보기</a>
       </div>
     </div>
   </section>
@@ -434,8 +626,7 @@
     <section class="bg-slate-900 py-16 px-6">
         <div class="max-w-4xl mx-auto text-center">
             <h2 class="text-2xl md:text-4xl font-bold text-white mb-6 leading-tight">
-                우리는 결론부터 내리지 않습니다.<br>
-                <span class="text-blue-400">문제를 먼저 정의합니다.</span>
+                우리는 무작정 "이렇게 만드세요"라고 말하지 않습니다. 지금 대표님의 사업이 어디서 막혀 있는지 그 병목 현상부터 함께 고민합니다.
             </h2>
             <div class="grid md:grid-cols-3 gap-6 mt-12 text-left">
                 <div class="border-l border-blue-500/30 pl-6">
@@ -453,6 +644,39 @@
             </div>
         </div>
     </section>
+
+  <section class="social-proof">
+    <div class="container">
+        <div class="header">
+            <p class="sub-title">REAL PERFORMANCE</p>
+            <h2 class="main-title">단순히 예쁜 사이트가 아닙니다.<br><span>숫자로 증명된 '매출 구조'</span>의 힘입니다.</h2>
+            <p class="description">대표님과 똑같은 고민을 하던 업체들이 이 구조를 통해 얻은 실제 성과입니다.</p>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="category">A 법률사무소</div>
+                <div class="value">320% <span class="up">↑</span></div>
+                <div class="label">문의 전환율 상승</div>
+                <p class="detail">기존 대비 유입 고객의 상담 예약률이 3배 이상 폭증했습니다.</p>
+            </div>
+
+            <div class="stat-card">
+                <div class="category">B 건강식품 브랜드</div>
+                <div class="value">2.5배 <span class="up">↑</span></div>
+                <div class="label">월 매출 성장</div>
+                <p class="detail">광고비는 그대로, 사이트 구조 개편만으로 매출 성장을 이뤘습니다.</p>
+            </div>
+
+            <div class="stat-card">
+                <div class="category">C 컨설팅 업체</div>
+                <div class="value">15시간 <span class="down">↓</span></div>
+                <div class="label">주간 업무 시간 단축</div>
+                <p class="detail">반복되는 문의를 시스템이 해결하여 대표님의 자유를 찾았습니다.</p>
+            </div>
+        </div>
+    </div>
+  </section>
 
   <!-- ✅ 여기부터 디자인만 이미지처럼 변경 -->
   <section class="section process-section">
@@ -499,9 +723,6 @@
           </div>
         </div>
 
-        <div class="process-cta">
-          <button class="btn btn--primary" data-contact-open>우리 사업 진단 받아보기</button>
-        </div>
       </div>
     </div>
   </section>
@@ -515,7 +736,7 @@
 
       <div class="pricing-grid">
         <div class="price-card">
-          <div style="font-weight: 800; color: var(--muted);">Entry</div>
+          <div style="font-weight: 800; color: var(--muted);">진단</div>
           <div class="price-card__amount">0원</div>
           <p style="color: var(--muted); font-size: 15px;">기본 진단 및 메시지 구조화 (협의 시 제공)</p>
           <ul class="price-card__list">
@@ -528,9 +749,9 @@
 
         <div class="price-card price-card--featured">
           <span class="price-card__tag">인기</span>
-          <div style="font-weight: 800; color: var(--accent);">Anchor (설계)</div>
+          <div style="font-weight: 800; color: var(--accent);">구현</div>
           <div class="price-card__amount">39만원~</div>
-          <p style="color: var(--muted); font-size: 15px;">효율적인 해결책을 찾고 실제 구조도를 완성합니다.</p>
+          <p style="color: var(--muted); font-size: 15px;">홈페이지 제작을 넘어, 내 사업의 확실한 '무기'가 무엇인지 결과물로 확인하는 단계입니다.</p>
           <ul class="price-card__list">
             <li>고객 흐름 UX 분석</li>
             <li>자동화 시나리오 설계</li>
@@ -540,7 +761,7 @@
         </div>
 
         <div class="price-card">
-          <div style="font-weight: 800; color: var(--muted);">Premium</div>
+          <div style="font-weight: 800; color: var(--muted);">컨설팅</div>
           <div class="price-card__amount">150만원~</div>
           <p style="color: var(--muted); font-size: 15px;">설계된 서비스를 실제로 구축하고 운영을 시작합니다.</p>
           <ul class="price-card__list">
@@ -566,51 +787,64 @@
     <p>© 2024 GROWTHLINE. All rights reserved.</p>
   </footer>
 
-  <div class="contact-modal" id="contactModal" role="dialog" aria-modal="true">
-    <div class="modal-content">
-      <button class="modal-close" data-contact-close aria-label="닫기">&times;</button>
-      <h2 style="margin-bottom: 12px;">무료 상담 신청</h2>
-      <p style="color: var(--muted); font-size: 15px; margin-bottom: 32px;">현재 사업의 고민을 남겨주시면 24시간 이내에 연락드립니다.</p>
+  <div id="consultationPopup" class="popup-overlay" role="dialog" aria-modal="true">
+    <div class="popup-content">
+        <button class="close-btn" onclick="closePopup()" aria-label="닫기">&times;</button>
 
-      <form id="contactForm">
-        <div style="margin-bottom: 24px;">
-          <label style="display:block; font-weight:700; margin-bottom:8px;">성함 / 업체명</label>
-          <input type="text" style="width:100%; padding:14px; border:1px solid var(--line); border-radius:10px;" placeholder="홍길동">
+        <div class="popup-header">
+            <span class="badge">현재 1월 상담 잔여 2팀</span>
+            <h2>대표님의 사업을 멈추게 하는<br><span>'병목 현상'</span>, 15분 진단으로 해결해 드립니다.</h2>
+            <p>전문 컨설턴트가 대표님의 사이트를 사전 분석한 후,<br>가장 빠른 매출 해결책을 들고 연락드립니다.</p>
         </div>
-        <div style="margin-bottom: 24px;">
-          <label style="display:block; font-weight:700; margin-bottom:8px;">연락처</label>
-          <input type="text" style="width:100%; padding:14px; border:1px solid var(--line); border-radius:10px;" placeholder="010-0000-0000">
-        </div>
-        <div style="margin-bottom: 32px;">
-          <label style="display:block; font-weight:700; margin-bottom:8px;">문의 내용 (선택)</label>
-          <textarea rows="4" style="width:100%; padding:14px; border:1px solid var(--line); border-radius:10px; resize:none;" placeholder="예: 홈페이지 제작 상담, 자동화 시스템 구축 등"></textarea>
-        </div>
-        <button type="submit" class="btn btn--primary" style="width: 100%;">상담 신청하기</button>
-      </form>
+
+        <form class="popup-form">
+            <div class="input-group">
+                <label>성함 / 업체명</label>
+                <input type="text" placeholder="홍길동 / 그로스라인" required>
+            </div>
+
+            <div class="input-group">
+                <label>연락처</label>
+                <input type="tel" placeholder="010-0000-0000" required>
+            </div>
+
+            <div class="input-group">
+                <label>운영 중인 사이트 URL (선택)</label>
+                <input type="url" placeholder="https://example.com (사전 분석에 활용됩니다)">
+            </div>
+
+            <div class="input-group">
+                <label>현재 가장 고민되는 지점</label>
+                <textarea placeholder="예: 홈페이지는 있는데 문의가 0건입니다 / 신규 사업 매출 구조 설계가 필요합니다" rows="3"></textarea>
+            </div>
+
+            <button type="submit" class="submit-btn">무료 사전 분석 및 상담 신청하기</button>
+            
+            <p class="form-footer">
+                * 남겨주신 정보는 상담 목적으로만 사용되며, 불필요한 광고 전화를 드리지 않습니다.
+            </p>
+        </form>
     </div>
   </div>
 
   <script>
-    const modal = document.getElementById('contactModal');
+    const popup = document.getElementById('consultationPopup');
     const openBtns = document.querySelectorAll('[data-contact-open]');
-    const closeBtn = document.querySelector('[data-contact-close]');
 
-    const toggleModal = (isOpen) => {
-      modal.classList.toggle('is-open', isOpen);
-      document.body.classList.toggle('no-scroll', isOpen);
-      if (isOpen) modal.querySelector('input')?.focus();
-    };
+    function openPopup(event) {
+      if (event) event.preventDefault();
+      popup.style.display = 'flex';
+      document.body.classList.add('no-scroll');
+    }
 
-    openBtns.forEach(btn => btn.addEventListener('click', () => toggleModal(true)));
-    closeBtn?.addEventListener('click', () => toggleModal(false));
+    function closePopup() {
+      popup.style.display = 'none';
+      document.body.classList.remove('no-scroll');
+    }
 
-    window.addEventListener('keydown', (e) => { if (e.key === 'Escape') toggleModal(false); });
-    modal.addEventListener('click', (e) => { if (e.target === modal) toggleModal(false); });
-
-    document.getElementById('contactForm').addEventListener('submit', (e) => {
-      e.preventDefault();
-      alert('문의가 정상적으로 접수되었습니다. (데모)');
-      toggleModal(false);
+    openBtns.forEach((btn) => btn.addEventListener('click', openPopup));
+    popup.addEventListener('click', (event) => {
+      if (event.target === popup) closePopup();
     });
   </script>
 </body>

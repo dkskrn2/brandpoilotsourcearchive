@@ -127,32 +127,106 @@
       background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
     }
 
-    /* Contact modal (match index) */
-    .contact-modal{position:fixed; inset:0; z-index:120; display:flex; align-items:center; justify-content:center; padding:18px; background: rgba(0,8,20,.52); opacity:0; pointer-events:none; transition: opacity .22s ease, transform .24s ease;}
-    .contact-modal__panel{width:min(680px, 100%); background:var(--card); border-radius:20px; border:1px solid var(--line); box-shadow: 0 20px 44px rgba(2,6,23,.18); padding:24px; transform: translateY(12px); transition: transform .22s ease;}
-    .contact-modal__header{display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:10px;}
-    .contact-modal__title{margin:0; font-size:22px; letter-spacing:-.4px;}
-    .contact-modal__body{display:grid; gap:12px;}
-    .contact-modal__section{padding:14px; border-radius:14px; background: var(--bg-soft); border: 1px solid var(--line2);}
-    .contact-modal__section h3{margin:0 0 6px; font-size:16px;}
-    .contact-modal__section p{margin:0; color:var(--muted); font-size:14px;}
-    .contact-modal__list{margin:0; padding-left:18px; color:var(--muted); font-size:14px; line-height:1.6;}
-    .contact-modal__list li{margin:4px 0;}
-    .contact-modal__form{display:grid; gap:10px; margin-top:4px;}
-    .contact-modal__form label{display:grid; gap:6px; font-size:14px; font-weight:700;}
-    .contact-modal__form input,
-    .contact-modal__form textarea{padding:12px 12px; border-radius:12px; border:1px solid var(--line2); background: var(--bg-soft); font: inherit;}
-    .contact-modal__form textarea{min-height:96px; resize:vertical;}
-    .contact-modal__actions{display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:4px;}
-    .contact-modal__note{margin:0; color:var(--muted2); font-size:13px;}
-    .contact-modal__close{border:none; background:transparent; padding:8px; cursor:pointer; border-radius:10px; color: var(--muted2); font-weight:800;}
-    .contact-modal.is-open{opacity:1; pointer-events:auto;}
-    .contact-modal.is-open .contact-modal__panel{transform: translateY(0);}
-    .contact-modal .btn{box-shadow:none; width:100%; justify-content:center;}
+    /* Popup */
+    .popup-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      font-family: 'Pretendard', sans-serif;
+    }
+    .popup-content {
+      background: #fff;
+      width: 100%;
+      max-width: 500px;
+      border-radius: 24px;
+      padding: 40px;
+      position: relative;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+    }
+    .close-btn {
+      position: absolute;
+      top: 20px; right: 20px;
+      background: none; border: none;
+      font-size: 30px; color: #94a3b8;
+      cursor: pointer;
+    }
+    .popup-overlay .popup-header { text-align: center; margin-bottom: 30px; }
+    .popup-overlay .badge {
+      display: inline-block;
+      padding: 4px 12px;
+      background: #fef2f2;
+      color: #ef4444;
+      border-radius: 100px;
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 15px;
+    }
+    .popup-overlay .popup-header h2 {
+      font-size: 22px;
+      color: #1e293b;
+      line-height: 1.4;
+      margin-bottom: 12px;
+      word-break: keep-all;
+    }
+    .popup-overlay .popup-header h2 span { color: #2563eb; }
+    .popup-overlay .popup-header p {
+      font-size: 15px;
+      color: #64748b;
+      line-height: 1.5;
+    }
+    .popup-overlay .popup-form .input-group { margin-bottom: 18px; text-align: left; }
+    .popup-overlay .popup-form label {
+      display: block;
+      font-size: 14px;
+      font-weight: 600;
+      color: #334155;
+      margin-bottom: 8px;
+    }
+    .popup-overlay .popup-form input, .popup-overlay .popup-form textarea {
+      width: 100%;
+      padding: 12px 16px;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      font-size: 15px;
+      transition: all 0.2s;
+      box-sizing: border-box;
+    }
+    .popup-overlay .popup-form input:focus, .popup-overlay .popup-form textarea:focus {
+      outline: none;
+      border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    }
+    .popup-overlay .submit-btn {
+      width: 100%;
+      padding: 16px;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.2s;
+      margin-top: 10px;
+    }
+    .popup-overlay .submit-btn:hover { background: #1d4ed8; }
+    .popup-overlay .form-footer {
+      font-size: 12px;
+      color: #94a3b8;
+      margin-top: 15px;
+      text-align: center;
+      line-height: 1.4;
+    }
     body.no-scroll{overflow:hidden;}
-    @media (max-width:560px){
-      .contact-modal__panel{padding:18px;}
-      .contact-modal__actions{flex-direction:column; align-items:stretch;}
+    @media (max-width: 480px) {
+      .popup-content { padding: 30px 20px; }
+      .popup-overlay .popup-header h2 { font-size: 19px; }
     }
 
     /* Page */
@@ -316,44 +390,43 @@
     </div>
   </main>
 
-  <div id="contact" class="contact-modal" role="dialog" aria-modal="true" aria-labelledby="contact-title">
-    <div class="contact-modal__panel" tabindex="-1">
-      <div class="contact-modal__header">
-        <h2 class="contact-modal__title" id="contact-title">문의하기</h2>
-        <button class="contact-modal__close" type="button" aria-label="닫기" data-contact-close>✕</button>
-      </div>
+  <div id="consultationPopup" class="popup-overlay" role="dialog" aria-modal="true">
+    <div class="popup-content">
+        <button class="close-btn" onclick="closePopup()" aria-label="닫기">&times;</button>
 
-      <div class="contact-modal__body">
-        <div class="contact-modal__section">
-          <h3>우리가 함께 고민할 것</h3>
-          <ul class="contact-modal__list">
-            <li>현재 홈페이지가 필요한 이유와 기대하는 역할</li>
-            <li>담당자, 일정, 예산 등 내부 조건 정리</li>
-            <li>필수 페이지/기능과 우선순위</li>
-            <li>운영을 고려한 유지·관리 방식</li>
-          </ul>
+        <div class="popup-header">
+            <span class="badge">현재 1월 상담 잔여 2팀</span>
+            <h2>대표님의 사업을 멈추게 하는<br><span>'병목 현상'</span>, 15분 진단으로 해결해 드립니다.</h2>
+            <p>전문 컨설턴트가 대표님의 사이트를 사전 분석한 후,<br>가장 빠른 매출 해결책을 들고 연락드립니다.</p>
         </div>
 
-        <form class="contact-modal__form">
-          <label>
-            회사명 / 담당자명
-            <input type="text" name="name" placeholder="예) ㈜샌드버드 김대표" />
-          </label>
-          <label>
-            연락처(이메일/전화)
-            <input type="text" name="contact" placeholder="예) contact@example.com" />
-          </label>
-          <label>
-            문의 내용
-            <textarea name="message" placeholder="현재 상황과 원하는 목표를 간단히 남겨주세요."></textarea>
-          </label>
+        <form class="popup-form">
+            <div class="input-group">
+                <label>성함 / 업체명</label>
+                <input type="text" placeholder="홍길동 / 그로스라인" required>
+            </div>
+
+            <div class="input-group">
+                <label>연락처</label>
+                <input type="tel" placeholder="010-0000-0000" required>
+            </div>
+
+            <div class="input-group">
+                <label>운영 중인 사이트 URL (선택)</label>
+                <input type="url" placeholder="https://example.com (사전 분석에 활용됩니다)">
+            </div>
+
+            <div class="input-group">
+                <label>현재 가장 고민되는 지점</label>
+                <textarea placeholder="예: 홈페이지는 있는데 문의가 0건입니다 / 신규 사업 매출 구조 설계가 필요합니다" rows="3"></textarea>
+            </div>
+
+            <button type="submit" class="submit-btn">무료 사전 분석 및 상담 신청하기</button>
+            
+            <p class="form-footer">
+                * 남겨주신 정보는 상담 목적으로만 사용되며, 불필요한 광고 전화를 드리지 않습니다.
+            </p>
         </form>
-
-        <div class="contact-modal__actions">
-          <p class="contact-modal__note">입력 내용은 상담 안내 외 다른 용도로 사용하지 않습니다.</p>
-          <a class="btn primary" href="#top">임시 제출 링크</a>
-        </div>
-      </div>
     </div>
   </div>
 
@@ -371,41 +444,23 @@
   </footer>
 
   <script>
-    window.addEventListener('DOMContentLoaded', () => {
-      const modal = document.querySelector('.contact-modal');
-      const closeBtn = modal?.querySelector('[data-contact-close]');
-      const triggers = document.querySelectorAll('[data-contact-open]');
-      const panel = modal?.querySelector('.contact-modal__panel');
-      const focusTarget = closeBtn || panel;
+    const popup = document.getElementById('consultationPopup');
+    const openBtns = document.querySelectorAll('[data-contact-open]');
 
-      const openModal = event => {
-        event.preventDefault();
-        if (!modal) return;
-        modal.classList.add('is-open');
-        document.body.classList.add('no-scroll');
-        focusTarget?.focus();
-      };
+    function openPopup(event) {
+      if (event) event.preventDefault();
+      popup.style.display = 'flex';
+      document.body.classList.add('no-scroll');
+    }
 
-      const closeModal = () => {
-        if (!modal) return;
-        modal.classList.remove('is-open');
-        document.body.classList.remove('no-scroll');
-      };
+    function closePopup() {
+      popup.style.display = 'none';
+      document.body.classList.remove('no-scroll');
+    }
 
-      triggers.forEach(trigger => {
-        trigger.addEventListener('click', openModal);
-      });
-
-      closeBtn?.addEventListener('click', closeModal);
-      modal?.addEventListener('click', event => {
-        if (event.target === modal) closeModal();
-      });
-
-      document.addEventListener('keydown', event => {
-        if (event.key === 'Escape' && modal?.classList.contains('is-open')) {
-          closeModal();
-        }
-      });
+    openBtns.forEach((btn) => btn.addEventListener('click', openPopup));
+    popup.addEventListener('click', (event) => {
+      if (event.target === popup) closePopup();
     });
   </script>
 
