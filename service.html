@@ -30,8 +30,8 @@
       --max:1080px;
       --pad:clamp(16px,3vw,22px);
 
-      --h1:clamp(36px,4.8vw,56px);
-      --h2:clamp(22px,2.8vw,34px);
+      --h1:clamp(34px,6vw,68px);
+      --h2:clamp(30px,5vw,44px);
 
       --shadow-sm:0 1px 2px rgba(0,0,0,.02);
       --shadow-md:0 12px 24px rgba(15,23,42,.06);
@@ -223,6 +223,32 @@
       margin-top: 15px;
       text-align: center;
       line-height: 1.4;
+    }
+    .popup-overlay .consent-row {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      font-size: 13px;
+      color: #6b7684;
+      margin-top: 12px;
+    }
+    .popup-overlay .consent-row input {
+      margin-top: 3px;
+    }
+    .popup-overlay .consent-link {
+      background: none;
+      border: none;
+      color: #2563eb;
+      text-decoration: underline;
+      cursor: pointer;
+      font-size: 13px;
+      padding: 0;
+    }
+    .popup-overlay .consent-detail {
+      text-align: left;
+      color: #6b7684;
+      font-size: 14px;
+      line-height: 1.7;
     }
     body.no-scroll{overflow:hidden;}
     @media (max-width: 480px) {
@@ -596,6 +622,14 @@
                 <textarea placeholder="예: 홈페이지는 있는데 문의가 0건입니다 / 신규 사업 매출 구조 설계가 필요합니다" rows="3"></textarea>
             </div>
 
+            <label class="consent-row">
+                <input type="checkbox" required>
+                <span>
+                  개인정보 수집 및 이용에 동의합니다.
+                  <button type="button" class="consent-link" data-consent-open>자세히 보기</button>
+                </span>
+            </label>
+
             <button type="submit" class="submit-btn">무료 사전 분석 및 상담 신청하기</button>
             
             <p class="form-footer">
@@ -605,10 +639,28 @@
     </div>
   </div>
 
+  <div id="consentPopup" class="popup-overlay" role="dialog" aria-modal="true">
+    <div class="popup-content">
+        <button class="close-btn" onclick="closeConsentPopup()" aria-label="닫기">&times;</button>
+
+        <div class="popup-header">
+            <span class="badge">개인정보 수집 및 이용 안내</span>
+            <h2>개인정보 수집 및 이용 동의</h2>
+            <p>아래 내용을 확인하신 후 동의해 주세요.</p>
+        </div>
+
+        <div class="consent-detail">
+            <p><strong>수집 항목</strong>: 성함/업체명, 연락처, 운영 중인 사이트 URL(선택), 문의 내용</p>
+            <p><strong>수집 목적</strong>: 상담 제공, 문의 응대 및 서비스 안내</p>
+            <p><strong>보유 및 이용 기간</strong>: 상담 종료 후 1년 또는 삭제 요청 시 즉시 파기</p>
+            <p><strong>동의 거부 권리</strong>: 동의를 거부할 수 있으며, 거부 시 상담 신청이 제한될 수 있습니다.</p>
+        </div>
+    </div>
+  </div>
+
   <footer>
     <div class="container">
       <div class="footer-grid">
-        <div>© <span id="y"></span> YOUR AGENCY. All rights reserved.</div>
         <div class="footer-links">
           <a href="service.html">Service</a>
           <a href="work.html">Work</a>
@@ -620,24 +672,46 @@
 
   <script>
     const popup = document.getElementById('consultationPopup');
+    const consentPopup = document.getElementById('consentPopup');
     const openBtns = document.querySelectorAll('[data-contact-open]');
+    const consentOpenBtns = document.querySelectorAll('[data-consent-open]');
+
+    function updateBodyScroll() {
+      const anyOpen = [popup, consentPopup].some((el) => el && el.style.display === 'flex');
+      document.body.classList.toggle('no-scroll', anyOpen);
+    }
 
     function openPopup(event) {
       if (event) event.preventDefault();
       popup.style.display = 'flex';
-      document.body.classList.add('no-scroll');
+      updateBodyScroll();
     }
 
     function closePopup() {
       popup.style.display = 'none';
-      document.body.classList.remove('no-scroll');
+      updateBodyScroll();
+    }
+
+    function openConsentPopup(event) {
+      if (event) event.preventDefault();
+      consentPopup.style.display = 'flex';
+      updateBodyScroll();
+    }
+
+    function closeConsentPopup() {
+      consentPopup.style.display = 'none';
+      updateBodyScroll();
     }
 
     openBtns.forEach((btn) => btn.addEventListener('click', openPopup));
     popup.addEventListener('click', (event) => {
       if (event.target === popup) closePopup();
     });
+
+    consentOpenBtns.forEach((btn) => btn.addEventListener('click', openConsentPopup));
+    consentPopup.addEventListener('click', (event) => {
+      if (event.target === consentPopup) closeConsentPopup();
+    });
   </script>
-  <script>document.getElementById('y').textContent = new Date().getFullYear();</script>
 </body>
 </html>

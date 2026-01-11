@@ -29,8 +29,8 @@
       --max:1080px;
       --pad:clamp(16px,3vw,22px);
 
-      --h1:clamp(32px,4.2vw,46px);
-      --h2:clamp(20px,2.4vw,28px);
+      --h1:clamp(34px,6vw,68px);
+      --h2:clamp(30px,5vw,44px);
 
       --shadow-sm:0 1px 2px rgba(0,0,0,.02);
       --shadow-md:0 12px 24px rgba(15,23,42,.06);
@@ -223,6 +223,32 @@
       text-align: center;
       line-height: 1.4;
     }
+    .popup-overlay .consent-row {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      font-size: 13px;
+      color: #6b7684;
+      margin-top: 12px;
+    }
+    .popup-overlay .consent-row input {
+      margin-top: 3px;
+    }
+    .popup-overlay .consent-link {
+      background: none;
+      border: none;
+      color: #2563eb;
+      text-decoration: underline;
+      cursor: pointer;
+      font-size: 13px;
+      padding: 0;
+    }
+    .popup-overlay .consent-detail {
+      text-align: left;
+      color: #6b7684;
+      font-size: 14px;
+      line-height: 1.7;
+    }
     body.no-scroll{overflow:hidden;}
     @media (max-width: 480px) {
       .popup-content { padding: 30px 20px; }
@@ -332,7 +358,6 @@
         <p class="lead">도메인과 서비스 유형별로 수행한 프로젝트를 살펴보고, 비슷한 과제를 어떻게 해결했는지 확인하세요.</p>
         <nav class="tabs" aria-label="워크 탭">
           <a class="tab" href="#domain" aria-current="page" data-view="domain">Domain</a>
-          <a class="tab" href="#service" data-view="service">Service</a>
         </nav>
       </section>
 
@@ -362,21 +387,6 @@
             </ul>
           </details>
 
-          <details class="filter-group" open data-view="service" hidden>
-            <summary class="filter-head"><span>UX Research</span><span class="chevron" aria-hidden="true">›</span></summary>
-            <ul class="filter-list" role="list">
-              <li data-project="research-voice">Voice UX 정성/정량 리서치</li>
-              <li data-project="research-fin">금융 온보딩 리서치</li>
-            </ul>
-          </details>
-
-          <details class="filter-group" data-view="service" hidden>
-            <summary class="filter-head"><span>UX/UI Design</span><span class="chevron" aria-hidden="true">›</span></summary>
-            <ul class="filter-list" role="list">
-              <li data-project="design-sol" class="is-active">모바일 뱅킹 UI 고도화 <span class="badge">UI</span></li>
-              <li data-project="design-commerce">구독 커머스 앱 구조 설계</li>
-            </ul>
-          </details>
         </aside>
 
         <article class="panel project-panel" aria-live="polite">
@@ -421,6 +431,14 @@
                 <textarea placeholder="예: 홈페이지는 있는데 문의가 0건입니다 / 신규 사업 매출 구조 설계가 필요합니다" rows="3"></textarea>
             </div>
 
+            <label class="consent-row">
+                <input type="checkbox" required>
+                <span>
+                  개인정보 수집 및 이용에 동의합니다.
+                  <button type="button" class="consent-link" data-consent-open>자세히 보기</button>
+                </span>
+            </label>
+
             <button type="submit" class="submit-btn">무료 사전 분석 및 상담 신청하기</button>
             
             <p class="form-footer">
@@ -430,10 +448,28 @@
     </div>
   </div>
 
+  <div id="consentPopup" class="popup-overlay" role="dialog" aria-modal="true">
+    <div class="popup-content">
+        <button class="close-btn" onclick="closeConsentPopup()" aria-label="닫기">&times;</button>
+
+        <div class="popup-header">
+            <span class="badge">개인정보 수집 및 이용 안내</span>
+            <h2>개인정보 수집 및 이용 동의</h2>
+            <p>아래 내용을 확인하신 후 동의해 주세요.</p>
+        </div>
+
+        <div class="consent-detail">
+            <p><strong>수집 항목</strong>: 성함/업체명, 연락처, 운영 중인 사이트 URL(선택), 문의 내용</p>
+            <p><strong>수집 목적</strong>: 상담 제공, 문의 응대 및 서비스 안내</p>
+            <p><strong>보유 및 이용 기간</strong>: 상담 종료 후 1년 또는 삭제 요청 시 즉시 파기</p>
+            <p><strong>동의 거부 권리</strong>: 동의를 거부할 수 있으며, 거부 시 상담 신청이 제한될 수 있습니다.</p>
+        </div>
+    </div>
+  </div>
+
   <footer>
     <div class="container">
       <div class="footer-grid" style="display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;align-items:center;padding:32px 0 44px;color:var(--muted2);font-size:13px;border-top:1px solid rgba(2,6,23,.08);">
-        <div>© <span id="y"></span> YOUR AGENCY. All rights reserved.</div>
         <div style="display:flex;gap:14px;flex-wrap:wrap;">
           <a href="service.html">Service</a>
           <a href="work.html" aria-current="page">Work</a>
@@ -445,22 +481,45 @@
 
   <script>
     const popup = document.getElementById('consultationPopup');
+    const consentPopup = document.getElementById('consentPopup');
     const openBtns = document.querySelectorAll('[data-contact-open]');
+    const consentOpenBtns = document.querySelectorAll('[data-consent-open]');
+
+    function updateBodyScroll() {
+      const anyOpen = [popup, consentPopup].some((el) => el && el.style.display === 'flex');
+      document.body.classList.toggle('no-scroll', anyOpen);
+    }
 
     function openPopup(event) {
       if (event) event.preventDefault();
       popup.style.display = 'flex';
-      document.body.classList.add('no-scroll');
+      updateBodyScroll();
     }
 
     function closePopup() {
       popup.style.display = 'none';
-      document.body.classList.remove('no-scroll');
+      updateBodyScroll();
+    }
+
+    function openConsentPopup(event) {
+      if (event) event.preventDefault();
+      consentPopup.style.display = 'flex';
+      updateBodyScroll();
+    }
+
+    function closeConsentPopup() {
+      consentPopup.style.display = 'none';
+      updateBodyScroll();
     }
 
     openBtns.forEach((btn) => btn.addEventListener('click', openPopup));
     popup.addEventListener('click', (event) => {
       if (event.target === popup) closePopup();
+    });
+
+    consentOpenBtns.forEach((btn) => btn.addEventListener('click', openConsentPopup));
+    consentPopup.addEventListener('click', (event) => {
+      if (event.target === consentPopup) closeConsentPopup();
     });
   </script>
 
@@ -472,7 +531,7 @@
           desc:'TV 환경에서 음성 인터랙션을 사용하는 고객 여정과 니즈를 파악하고, 발화/피드백 정책을 설계했습니다.',
           tags:['Home Appliances','Voice','AI/Experience'],
           thumbText:'Voice UX',
-          link:null
+          link:'detail.html'
         },
         'ai-agent':{
           title:'AI Agent UX 전략 설계',
@@ -509,40 +568,9 @@
           thumbText:'Commerce',
           link:null
         }
-      },
-      service:{
-        'research-voice':{
-          title:'Voice UX 정성/정량 리서치',
-          desc:'심층 인터뷰와 로그 분석을 결합해 음성 인식 실패 지점을 찾아내고 개선 우선순위를 제시했습니다.',
-          tags:['UX Research','Voice','Mixed Methods'],
-          thumbText:'Research',
-          link:null
-        },
-        'research-fin':{
-          title:'금융 온보딩 리서치',
-          desc:'온보딩 퍼널별 이탈 원인을 파악하고, 실험 가능한 개선안을 도출했습니다.',
-          tags:['UX Research','Finance','Onboarding'],
-          thumbText:'Onboarding',
-          link:null
-        },
-        'design-sol':{
-          title:'모바일 뱅킹 UI 고도화',
-          desc:'주요 기능의 카드/피드 패턴을 표준화하고, 상태/피드백 디자인 시스템을 정리했습니다.',
-          tags:['UX/UI Design','Finance','Design System'],
-          thumbText:'Design',
-          link:'https://www.shinhansquare.com/'
-        },
-        'design-commerce':{
-          title:'구독 커머스 앱 구조 설계',
-          desc:'상품 구독/관리 흐름을 단순화하고, 재구매/추천 경험을 강화하는 IA를 설계했습니다.',
-          tags:['UX/UI Design','Commerce','IA'],
-          thumbText:'Subscription',
-          link:null
-        }
       }
     };
 
-    const tabs = Array.from(document.querySelectorAll('a.tab[data-view]'));
     const filterGroups = Array.from(document.querySelectorAll('.filter-group'));
     const filterItems = Array.from(document.querySelectorAll('.filter-list li'));
 
@@ -552,8 +580,8 @@
     const thumbEl = document.querySelector('[data-role="thumb"]');
     const actionsEl = document.querySelector('[data-role="actions"]');
 
-    function renderProject(view, key){
-      const data = projects[view]?.[key];
+    function renderProject(key){
+      const data = projects.domain?.[key];
       if(!data) return;
 
       titleEl.textContent = data.title;
@@ -578,49 +606,20 @@
       }
     }
 
-    function setView(view){
-      tabs.forEach(t=>{
-        const is = t.dataset.view === view;
-        if(is) t.setAttribute('aria-current','page');
-        else t.removeAttribute('aria-current');
-      });
-
-      filterGroups.forEach(g=>{
-        const is = g.dataset.view === view;
-        g.hidden = !is;
-      });
-
-      const visibleItems = filterItems.filter(li=>li.closest('.filter-group')?.dataset.view === view);
-      let target = visibleItems.find(li=>li.classList.contains('is-active')) || visibleItems[0];
-      visibleItems.forEach(li=>li.classList.toggle('is-active', li===target));
-      if(target){
-        renderProject(view, target.dataset.project);
-      }
-    }
-
     filterItems.forEach(li=>{
       li.addEventListener('click', ()=>{
         filterItems.forEach(item=>item.classList.remove('is-active'));
         li.classList.add('is-active');
-        const currentView = li.closest('.filter-group')?.dataset.view === 'service' ? 'service' : 'domain';
-        renderProject(currentView, li.dataset.project);
+        renderProject(li.dataset.project);
       });
     });
 
-    tabs.forEach(t=>{
-      t.addEventListener('click', e=>{
-        e.preventDefault();
-        const view = t.dataset.view;
-        setView(view);
-        history.replaceState(null, '', '#' + view);
-      });
-    });
+    filterGroups.forEach(g=>{ g.hidden = g.dataset.view !== 'domain'; });
+    const initialItem = filterItems.find(li=>li.classList.contains('is-active')) || filterItems[0];
+    if(initialItem){
+      renderProject(initialItem.dataset.project);
+    }
 
-    const hash = (location.hash||'').replace('#','');
-    if(hash === 'service') setView('service');
-    else setView('domain');
-
-    document.getElementById('y').textContent = new Date().getFullYear();
   </script>
 </body>
 </html>
