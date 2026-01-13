@@ -30,9 +30,6 @@
       --max:1080px;
       --pad:clamp(16px,3vw,22px);
 
-      --h1:clamp(34px,6vw,68px);
-      --h2:clamp(30px,5vw,44px);
-
       --shadow-sm:0 1px 2px rgba(0,0,0,.02);
       --shadow-md:0 12px 24px rgba(15,23,42,.06);
       --shadow-accent:0 16px 34px rgba(37,99,235,.18);
@@ -264,142 +261,55 @@
         linear-gradient(180deg, #ffffff, var(--bg-soft));
     }
 
-    /* ===== Hero ===== */
-    .hero{
-      padding: clamp(40px, 6vw, 72px) 0 clamp(28px, 4vw, 44px);
-    }
-    h1{
-      margin: 10px 0 12px;
-      font-size:var(--h1);
-      line-height:1.05;
-      letter-spacing:-.05em;
-      font-weight:950;
-    }
-    .sub{
-      margin:0;
-      color:var(--muted);
-      font-size:16px;
-      line-height:1.75;
-      max-width: 78ch;
-    }
-    .hl{color:var(--accent)}
+    /* ===== Service tab section ===== */
+    .service-tab-section { padding: 120px 20px; background: #fff; font-family: 'Pretendard', sans-serif; }
+    .service-tab-section .container { max-width: 1200px; margin: 0 auto; text-align: center; }
 
-    /* hero row layout */
-    .hero-row{
-      display:flex;
-      align-items:flex-end;
-      justify-content:space-between;
-      gap:16px;
-      flex-wrap:wrap;
-      padding-top:8px;
-    }
-    .hero-actions{
-      display:flex;
-      gap:10px;
-      flex-wrap:wrap;
-      align-items:center;
-      justify-content:flex-end;
-    }
+    .section-header { margin-bottom: 60px; }
+    .sub-title { color: #2563eb; font-weight: 700; font-size: 14px; letter-spacing: 2px; margin-bottom: 12px; }
+    .main-title { font-size: 38px; font-weight: 800; line-height: 1.4; color: #1e293b; margin-bottom: 20px; }
+    .main-title span { color: #2563eb; }
+    .header-desc { font-size: 18px; color: #64748b; line-height: 1.6; max-width: 800px; margin: 0 auto; }
 
-    /* ===== Tabs (make it “main-style chips” not heavy black) ===== */
-    .tabs{
-      margin-top:18px;
-      display:flex;
-      gap:10px;
-      flex-wrap:wrap;
-      align-items:center;
-      padding:12px;
-      border:1px solid rgba(2,6,23,.08);
-      background:rgba(255,255,255,.78);
-      border-radius:var(--radius2);
-      box-shadow:var(--shadow-md);
+    /* 탭 스타일 */
+    .tab-nav { display: flex; justify-content: center; border-bottom: 1px solid #e2e8f0; margin-bottom: 50px; flex-wrap: wrap; }
+    .tab-link {
+        padding: 15px 25px; border: none; background: none; color: #94a3b8;
+        font-size: 16px; font-weight: 700; cursor: pointer; position: relative; transition: 0.3s;
     }
-    .tab{
-      display:inline-flex;align-items:center;justify-content:center;
-      padding:10px 14px;border-radius:999px;
-      border:1px solid rgba(2,6,23,.10);
-      background:#fff;
-      color:rgba(15,23,42,.78);
-      font-size:13px;font-weight:900;letter-spacing:-.01em;
-      transition:transform .15s ease, border-color .15s ease, background .15s ease, box-shadow .15s ease;
-      white-space:nowrap;
-    }
-    .tab:hover{
-      transform:translateY(-1px);
-      border-color:rgba(37,99,235,.28);
-      box-shadow:0 10px 20px rgba(15,23,42,.06);
-    }
-    .tab[aria-current="page"]{
-      background:rgba(37,99,235,.10);
-      border-color:rgba(37,99,235,.35);
-      color:var(--text);
-      box-shadow:0 12px 24px rgba(37,99,235,.10);
+    .tab-link.active { color: #2563eb; }
+    .tab-link.active::after { content: ''; position: absolute; bottom: -1px; left: 0; width: 100%; height: 3px; background: #2563eb; }
+
+    /* 패널 스타일 */
+    .tab-panel { display: none; animation: fadeIn 0.4s ease forwards; }
+    .tab-panel.active { display: block; }
+    .panel-inner { display: flex; align-items: center; gap: 60px; background: #f8fbff; padding: 70px; border-radius: 40px; text-align: left; }
+
+    .panel-text { flex: 1.3; }
+    .panel-category { color: #2563eb; font-size: 13px; font-weight: 800; text-transform: uppercase; margin-bottom: 15px; display: block; letter-spacing: 1px; }
+    .panel-text h3 { font-size: 30px; font-weight: 800; color: #1e293b; margin-bottom: 25px; line-height: 1.3; word-break: keep-all; }
+    .panel-text p { font-size: 17px; color: #64748b; line-height: 1.8; margin-bottom: 35px; word-break: keep-all; }
+
+    .check-list { list-style: none; padding: 0; }
+    .check-list li { position: relative; padding-left: 30px; margin-bottom: 15px; color: #475569; font-weight: 600; font-size: 16px; }
+    .check-list li::before { content: '✔'; position: absolute; left: 0; color: #2563eb; font-weight: 900; }
+
+    .panel-visual { flex: 0.7; }
+    .visual-box { width: 100%; height: 350px; background: #fff; border: 1px dashed #cbd5e1; border-radius: 24px; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-weight: 800; font-size: 20px; }
+
+    /* 하단 CTA */
+    .final-cta { margin-top: 50px; }
+    .final-cta button { background: #1e293b; color: #fff; border: none; padding: 20px 40px; border-radius: 14px; font-size: 18px; font-weight: 700; cursor: pointer; transition: 0.3s; }
+    .final-cta button:hover { background: #2563eb; transform: translateY(-5px); }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
     }
 
-    /* ===== Panels (THIS is what makes it feel like your main) ===== */
-    .svc-panel{
-      margin-top:18px;
-      background: var(--card);
-      border: 1px solid rgba(2,6,23,.08);
-      border-radius: var(--radius2);
-      padding: clamp(18px, 2.6vw, 26px);
-      box-shadow: var(--shadow-md);
-    }
-
-    .svc-kicker{
-      display:flex;
-      gap:8px;
-      flex-wrap:wrap;
-      margin-bottom:14px;
-    }
-    .pill{
-      display:inline-flex;
-      align-items:center;
-      padding:8px 12px;
-      border-radius:999px;
-      border:1px solid rgba(2,6,23,.10);
-      background: rgba(248,250,252,.9);
-      color: rgba(15,23,42,.74);
-      font-size:12px;
-      font-weight:900;
-      letter-spacing:-.01em;
-    }
-
-    .svc-panel h2{
-      margin: 0 0 10px;
-      font-size: var(--h2);
-      letter-spacing:-.04em;
-      font-weight:950;
-    }
-    .svc-panel > p{
-      margin: 0 0 18px;
-      color: var(--muted);
-      line-height:1.8;
-      font-size: 15px;
-      max-width: 84ch;
-    }
-    .svc-panel h3{
-      margin: 0 0 10px;
-      font-size: 15px;
-      font-weight:950;
-      letter-spacing:-.02em;
-      color: var(--text);
-    }
-
-    .svc-panel ul{
-      margin:0;
-      padding-left:18px;
-      color: rgba(15,23,42,.76);
-      line-height:1.8;
-      font-size: 14px;
-    }
-    .svc-panel li{margin:6px 0}
-
-    /* subtle divider between hero and panel */
-    .hero-divider{
-      margin-top: 22px;
-      height: 1px;
-      background: rgba(2,6,23,.06);
+    @media (max-width: 992px) {
+        .panel-inner { flex-direction: column; padding: 50px 30px; }
+        .tab-link { padding: 10px 15px; font-size: 14px; }
     }
 
     /* Footer */
@@ -414,11 +324,6 @@
     .footer-links{display:flex;gap:14px;flex-wrap:wrap}
     .footer-links a{color:var(--muted2)}
     .footer-links a:hover{color:var(--text)}
-
-    /* Responsive */
-    @media (max-width: 980px){
-      .hero-actions{justify-content:flex-start}
-    }
   </style>
 </head>
 
@@ -440,155 +345,124 @@
   </div>
 
   <main>
-    <div class="container">
-      <section class="hero" aria-label="Service 소개">
-        <div class="hero-row">
-          <div>
-            <h1>Service</h1>
-            <p class="sub">
-              리서치부터 설계·글쓰기·데이터 기반 개선까지,
-              문제를 <span class="hl">“실행 가능한 형태”</span>로 정리합니다.
-            </p>
+    <section class="service-tab-section">
+      <div class="container">
+        <div class="section-header">
+          <p class="sub-title">OUR SPECIALIZED SERVICES</p>
+          <h2 class="main-title">우리는 단순 제작자가 아닌,<br><span>비즈니스 설계 파트너</span>입니다.</h2>
+          <p class="header-desc">각 분야의 전문 지식을 동원하여, 대표님의 사업이 온라인에서 승리할 수밖에 없는 구조를 만듭니다.</p>
+        </div>
 
-            <nav class="tabs" aria-label="서비스 탭">
-              <a class="tab" href="#ux-research" aria-current="page" data-target="ux-research">UX Research</a>
-              <a class="tab" href="#data-analytics" data-target="data-analytics">Data Analytics</a>
-              <a class="tab" href="#ux-consulting" data-target="ux-consulting">UX Consulting</a>
-              <a class="tab" href="#ux-ui-design" data-target="ux-ui-design">UX/UI Design</a>
-              <a class="tab" href="#ux-writing" data-target="ux-writing">UX Writing</a>
-              <a class="tab" href="#startup-ux-consulting" data-target="startup-ux-consulting">Startup UX Consulting</a>
-            </nav>
-          </div>
+        <div class="tab-nav">
+          <button class="tab-link active" onclick="openService(event, 'research')">고객 분석 진단</button>
+          <button class="tab-link" onclick="openService(event, 'analytics')">데이터 퍼널 분석</button>
+          <button class="tab-link" onclick="openService(event, 'design')">전환 중심 설계</button>
+          <button class="tab-link" onclick="openService(event, 'consulting')">비즈니스 로직 설계</button>
+          <button class="tab-link" onclick="openService(event, 'writing')">설득 카피라이팅</button>
+          <button class="tab-link" onclick="openService(event, 'startup')">스타트업 구축</button>
+        </div>
 
-          <div class="hero-actions">
-            <a class="btn" href="work.html">Work 보기</a>
-            <a class="btn primary" href="#contact" data-contact-open>프로젝트 문의</a>
+        <div id="research" class="tab-panel active">
+          <div class="panel-inner">
+            <div class="panel-text">
+              <span class="panel-category">UX Research</span>
+              <h3>"왜 안 팔리는가?"에 대한<br>데이터 기반의 정답을 찾습니다.</h3>
+              <p>대표님의 직감이 아닌 실제 고객의 목소리와 행동을 분석합니다. 고객이 결제 직전에 망설이는 이유, 경쟁사로 떠나는 결정적인 지점을 포착하여 개선 방향을 제시합니다.</p>
+              <ul class="check-list">
+                <li>사용자 심층 인터뷰(FGI) 및 행동 관찰</li>
+                <li>고객 여정 지도(CJM)를 통한 이탈 구간 식별</li>
+                <li>경쟁사 대비 우위 점유를 위한 차별화 전략 도출</li>
+              </ul>
+            </div>
+            <div class="panel-visual"><div class="visual-box">USER INSIGHT</div></div>
           </div>
         </div>
 
-        <div class="hero-divider" aria-hidden="true"></div>
-
-        <!-- Panels (SEO를 위해 모두 HTML에 포함) -->
-        <div class="svc-panel" role="tabpanel" id="panel-ux-research" aria-labelledby="tab-ux-research">
-          <div class="svc-kicker">
-            <span class="pill">문제 정의</span><span class="pill">사용자 인사이트</span><span class="pill">우선순위</span>
+        <div id="analytics" class="tab-panel">
+          <div class="panel-inner">
+            <div class="panel-text">
+              <span class="panel-category">Data Analytics</span>
+              <h3>직관이 아닌 숫자로<br>매출의 흐름을 통제합니다.</h3>
+              <p>복잡한 데이터 중 진짜 '돈'이 되는 지표(PV, CTR, CVR)만 골라냅니다. 어떤 광고 채널이 효율적인지, 어떤 페이지에서 가장 많은 이탈이 발생하는지 시각화하여 보고합니다.</p>
+              <ul class="check-list">
+                <li>구글 애널리틱스(GA4) 및 핫자(Hotjar) 세밀 세팅</li>
+                <li>매출 직결 퍼널(Funnel) 지표 실시간 추적</li>
+                <li>광고비 대비 효율(ROAS) 극대화 분석</li>
+              </ul>
+            </div>
+            <div class="panel-visual"><div class="visual-box">DATA DASHBOARD</div></div>
           </div>
-          <h2>UX Research</h2>
-          <p>사용자 행동과 맥락을 파악해 “무엇을 먼저 해결해야 하는지”를 명확히 합니다. 정성/정량 데이터를 결합해 의사결정에 바로 쓸 수 있는 인사이트로 정리합니다.</p>
-          <h3>주로 하는 일</h3>
-          <ul>
-            <li>인터뷰/설문/사용성 테스트 설계 및 진행</li>
-            <li>퍼널/이탈 포인트 분석, 핵심 문제 가설 수립</li>
-            <li>인사이트 요약 + 개선 항목(백로그) 도출</li>
-          </ul>
         </div>
 
-        <div class="svc-panel" role="tabpanel" id="panel-data-analytics" aria-labelledby="tab-data-analytics" hidden>
-          <div class="svc-kicker">
-            <span class="pill">지표 설계</span><span class="pill">퍼널</span><span class="pill">개선 검증</span>
+        <div id="design" class="tab-panel">
+          <div class="panel-inner">
+            <div class="panel-text">
+              <span class="panel-category">UX/UI Design</span>
+              <h3>시선이 머물고 지갑이 열리는<br>전환 최적화 화면 설계</h3>
+              <p>단순히 예쁜 디자인은 매출을 보장하지 않습니다. 우리는 고객의 시선이 자연스럽게 '문의하기'나 '구매하기' 버튼으로 흐르도록 심리학 기반의 레이아웃을 설계합니다.</p>
+              <ul class="check-list">
+                <li>시선 추적(Eye-tracking) 기반의 정보 구조 설계</li>
+                <li>브랜드 신뢰도를 높이는 고퀄리티 그래픽 디자인</li>
+                <li>모든 기기에서 완벽하게 작동하는 반응형 웹 구현</li>
+              </ul>
+            </div>
+            <div class="panel-visual"><div class="visual-box">CONVERSION DESIGN</div></div>
           </div>
-          <h2>Data Analytics</h2>
-          <p>“감”이 아니라 데이터로 문제를 확인하고, 개선의 효과를 검증합니다. 운영 지표와 이벤트 설계를 통해 반복 개선이 가능한 구조를 만듭니다.</p>
-          <h3>주로 하는 일</h3>
-          <ul>
-            <li>핵심 KPI/지표 정의, 이벤트/속성 설계</li>
-            <li>퍼널/코호트/세그먼트 분석</li>
-            <li>개선 실험(AB) 가설·측정·리포트</li>
-          </ul>
         </div>
 
-        <div class="svc-panel" role="tabpanel" id="panel-ux-consulting" aria-labelledby="tab-ux-consulting" hidden>
-          <div class="svc-kicker">
-            <span class="pill">구조화</span><span class="pill">리스크 감소</span><span class="pill">실행안</span>
+        <div id="consulting" class="tab-panel">
+          <div class="panel-inner">
+            <div class="panel-text">
+              <span class="panel-category">UX Consulting</span>
+              <h3>사업 모델에 딱 맞는<br>전용 서비스 로직을 설계합니다.</h3>
+              <p>대표님이 주신 요구사항만 구현하지 않습니다. 우리는 사업 모델을 분석하여 상담 자동화, 예약 시스템 등 운영 효율을 200% 높일 수 있는 전용 서비스를 역으로 제안합니다.</p>
+              <ul class="check-list">
+                <li>비즈니스 운영 효율화를 위한 백엔드 로직 기획</li>
+                <li>고객 이탈을 막는 자동 알림 및 상담 시나리오 구축</li>
+                <li>중장기 서비스 확장을 고려한 시스템 아키텍처</li>
+              </ul>
+            </div>
+            <div class="panel-visual"><div class="visual-box">BIZ ARCHITECTURE</div></div>
           </div>
-          <h2>UX Consulting</h2>
-          <p>현재 상태를 진단하고, 실행 가능한 개선 로드맵으로 정리합니다. 이해관계자 합의를 돕는 문서/기준을 만들고, 우선순위를 확정해 실행으로 이어지게 합니다.</p>
-          <h3>주로 하는 일</h3>
-          <ul>
-            <li>현황 진단(정보구조/흐름/정책/운영)</li>
-            <li>개선 로드맵/우선순위/범위 정의</li>
-            <li>기준 문서화(정책/예외/가이드) 및 합의</li>
-          </ul>
         </div>
 
-        <div class="svc-panel" role="tabpanel" id="panel-ux-ui-design" aria-labelledby="tab-ux-ui-design" hidden>
-          <div class="svc-kicker">
-            <span class="pill">화면 설계</span><span class="pill">컴포넌트</span><span class="pill">일관성</span>
+        <div id="writing" class="tab-panel">
+          <div class="panel-inner">
+            <div class="panel-text">
+              <span class="panel-category">UX Writing</span>
+              <h3>고객의 망설임을 확신으로 바꾸는<br>심리 카피라이팅</h3>
+              <p>공급자 위주의 어려운 단어가 아닌, 고객의 통증을 건드리고 이득을 보여주는 언어를 사용합니다. 버튼 문구 하나만 바꿔도 전환율이 30% 상승하는 경험을 선사합니다.</p>
+              <ul class="check-list">
+                <li>추상어를 배제한 성과 중심의 헤드라인 개발</li>
+                <li>거부감 없이 행동을 유도하는 마이크로카피 설계</li>
+                <li>브랜드 고유의 신뢰감 있는 보이스앤톤 수립</li>
+              </ul>
+            </div>
+            <div class="panel-visual"><div class="visual-box">PERSUASIVE COPY</div></div>
           </div>
-          <h2>UX/UI Design</h2>
-          <p>목표와 제약을 기준으로 화면 구조와 인터랙션을 설계합니다. 재사용 가능한 컴포넌트 중심으로 정리해 구현과 운영이 쉬운 UI를 만듭니다.</p>
-          <h3>주로 하는 일</h3>
-          <ul>
-            <li>IA/유저 플로우/와이어프레임</li>
-            <li>컴포넌트/상태 정의(디자인 시스템 관점)</li>
-            <li>디자인 QA 기준 수립 및 검수</li>
-          </ul>
         </div>
 
-        <div class="svc-panel" role="tabpanel" id="panel-ux-writing" aria-labelledby="tab-ux-writing" hidden>
-          <div class="svc-kicker">
-            <span class="pill">마이크로카피</span><span class="pill">정책 문구</span><span class="pill">전환</span>
+        <div id="startup" class="tab-panel">
+          <div class="panel-inner">
+            <div class="panel-text">
+              <span class="panel-category">Startup UX Consulting</span>
+              <h3>초기 사업의 시행착오를 줄이는<br>올인원 구축 패키지</h3>
+              <p>아이디어만 있는 상태인가요? 스타트업의 MVP(최소 기능 제품) 제작부터 시장 검증까지 함께합니다. 가장 적은 비용으로 가장 빠르게 비즈니스를 안착시키는 방법을 제시합니다.</p>
+              <ul class="check-list">
+                <li>핵심 가치 검증을 위한 MVP 전략 및 제작</li>
+                <li>투자 유치 및 홍보를 위한 서비스 IR 기획</li>
+                <li>초기 고객 유입을 위한 그로스해킹 기반 설계</li>
+              </ul>
+            </div>
+            <div class="panel-visual"><div class="visual-box">STARTUP GROWTH</div></div>
           </div>
-          <h2>UX Writing</h2>
-          <p>사용자가 “다음 행동을 확신”할 수 있도록 문구를 설계합니다. 오류/안내/동의/정책처럼 실수하기 쉬운 영역을 명확하게 정리합니다.</p>
-          <h3>주로 하는 일</h3>
-          <ul>
-            <li>핵심 CTA/안내 문구 설계</li>
-            <li>오류 메시지/예외 처리 문구 표준화</li>
-            <li>정책/약관/동의 흐름의 이해도 개선</li>
-          </ul>
         </div>
 
-        <div class="svc-panel" role="tabpanel" id="panel-startup-ux-consulting" aria-labelledby="tab-startup-ux-consulting" hidden>
-          <div class="svc-kicker">
-            <span class="pill">MVP</span><span class="pill">PMF</span><span class="pill">성장</span>
-          </div>
-          <h2>Startup UX Consulting</h2>
-          <p>스타트업이 직면한 문제를 해결하고, 프로덕트의 성장을 돕습니다. 단계(아이디어→MVP→성장)에 맞춰 필요한 UX 조언과 실행안을 제공합니다.</p>
-          <h3>대상</h3>
-          <ul>
-            <li>초기 아이디어 구체화가 필요하거나 MVP를 개발하는 단계</li>
-            <li>초기 사용자 피드백을 빠르게 반영해 개선 루프를 만들고 싶은 팀</li>
-            <li>전환/리텐션 개선을 위해 구조와 지표를 다시 잡고 싶은 팀</li>
-          </ul>
+        <div class="final-cta">
+          <button onclick="openPopup()">내 사업에 필요한 서비스 진단받기</button>
         </div>
-
-      </section>
-    </div>
-
-    <script>
-      (function(){
-        const tabWrap = document.querySelector('nav.tabs[aria-label="서비스 탭"]');
-        if(!tabWrap) return;
-
-        const tabs = Array.from(tabWrap.querySelectorAll('a.tab[data-target]'));
-        const panels = Array.from(document.querySelectorAll('.svc-panel'));
-
-        function activate(target, pushHash){
-          tabs.forEach(t=>{
-            const is = t.dataset.target === target;
-            if(is) t.setAttribute('aria-current','page');
-            else t.removeAttribute('aria-current');
-          });
-          panels.forEach(p=>{
-            const is = p.id === 'panel-' + target;
-            p.toggleAttribute('hidden', !is);
-          });
-          if(pushHash){ history.replaceState(null, '', '#' + target); }
-        }
-
-        tabs.forEach(t=>{
-          t.addEventListener('click', (e)=>{
-            e.preventDefault();
-            activate(t.dataset.target, true);
-          });
-        });
-
-        const hash = (location.hash||'').replace('#','');
-        if(hash && tabs.some(t=>t.dataset.target===hash)) activate(hash, false);
-        else if(tabs[0]) activate(tabs[0].dataset.target, false);
-      })();
-    </script>
+      </div>
+    </section>
   </main>
 
   <div id="consultationPopup" class="popup-overlay" role="dialog" aria-modal="true">
@@ -631,7 +505,7 @@
             </label>
 
             <button type="submit" class="submit-btn">무료 사전 분석 및 상담 신청하기</button>
-            
+
             <p class="form-footer">
                 * 남겨주신 정보는 상담 목적으로만 사용되며, 불필요한 광고 전화를 드리지 않습니다.
             </p>
@@ -669,6 +543,21 @@
       </div>
     </div>
   </footer>
+
+  <script>
+    function openService(evt, serviceName) {
+        var i, tabpanel, tablink;
+        tabpanel = document.getElementsByClassName("tab-panel");
+        for (i = 0; i < tabpanel.length; i++) { tabpanel[i].classList.remove("active"); }
+        tablink = document.getElementsByClassName("tab-link");
+        for (i = 0; i < tablink.length; i++) { tablink[i].classList.remove("active"); }
+        var target = document.getElementById(serviceName);
+        if (target) {
+          target.classList.add("active");
+        }
+        evt.currentTarget.classList.add("active");
+    }
+  </script>
 
   <script>
     const popup = document.getElementById('consultationPopup');
