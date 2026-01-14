@@ -3,343 +3,201 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Service | UX Research · Data Analytics · UX Consulting · UX/UI Design · UX Writing · Startup UX Consulting</title>
-  <meta property="og:title" content="Service | UX Research · Data Analytics · UX Consulting · UX/UI Design · UX Writing · Startup UX Consulting" />
-  <meta property="og:description" content="UX Research, Data Analytics, UX Consulting, UX/UI Design, UX Writing, Startup UX Consulting을 제공합니다." />
-  <meta name="description" content="UX Research, Data Analytics, UX Consulting, UX/UI Design, UX Writing, Startup UX Consulting을 제공합니다." />
-  <link rel="canonical" href="service.html" />
-  <meta property="og:type" content="website" />
-  <meta property="og:url" content="service.html" />
-  <meta name="twitter:card" content="summary" />
-
+  <title>Service | GROWTHLINE</title>
   <style>
     :root{
-      /* main style tokens */
       --accent:#2563eb;
-      --text:#0f172a;
-      --muted:#475569;
-      --muted2:#64748b;
-      --line:rgba(2,6,23,.10);
-      --line2:rgba(2,6,23,.06);
+      --text:#1e293b; /* Work/Contact와 통일 */
+      --muted:#64748b;
+      --line:rgba(2,6,23,.08);
       --bg:#ffffff;
       --bg-soft:#f8fafc;
-      --card:#ffffff;
-
-      --radius:18px;
-      --radius2:22px;
-      --max:1080px;
-      --pad:clamp(16px,3vw,22px);
-
-      --shadow-sm:0 1px 2px rgba(0,0,0,.02);
-      --shadow-md:0 12px 24px rgba(15,23,42,.06);
-      --shadow-accent:0 16px 34px rgba(37,99,235,.18);
+      --radius:24px; /* 곡률 통일 */
+      --max:1100px; /* 전 페이지 공통 컨테이너 너비 */
     }
 
     *{box-sizing:border-box}
-    html,body{height:100%}
     body{
       margin:0;
-      font-family: ui-sans-serif, system-ui, -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", Roboto, Helvetica, Arial;
+      font-family: 'Pretendard', ui-sans-serif, system-ui, -apple-system, sans-serif;
       color:var(--text);
       background:var(--bg);
       -webkit-font-smoothing:antialiased;
-      text-rendering:geometricPrecision;
     }
     a{color:inherit;text-decoration:none}
-    .container{width:100%;max-width:var(--max);margin:0 auto;padding:0 var(--pad)}
+    .container{width:100%;max-width:var(--max);margin:0 auto;padding:0 20px}
 
-    /* ===== Topbar (match index) ===== */
+    /* ===== Topbar (Fixed로 고정 및 스타일 통일) ===== */
     .topbar{
-      position: sticky;
-      top: 0;
-      z-index: 50;
-      backdrop-filter: blur(10px);
-      background: rgba(255,255,255,.86);
-      border-bottom: 1px solid rgba(2,32,71,.08);
+      position: fixed;
+      top: 0; left:0; width:100%;
+      z-index: 1000;
+      backdrop-filter: blur(12px);
+      background: rgba(255,255,255,.85);
+      border-bottom: 1px solid rgba(2,32,71,.05);
     }
     .topbar-inner{
       max-width: var(--max);
       margin: 0 auto;
-      padding: 12px 16px;
+      padding: 16px 20px;
       display:flex;
       align-items:center;
       justify-content:space-between;
-      gap:14px;
     }
-    .brand{
-      display:flex; align-items:center; gap:10px;
-      text-decoration:none;
-      font-weight: 900;
-      letter-spacing:-.4px;
-      white-space:nowrap;
-    }
-    .dot{
-      width:10px; height:10px; border-radius: 999px;
-      background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
-      box-shadow: 0 0 0 6px rgba(49,130,246,.14);
-    }
-    .nav{
-      display:flex; align-items:center; gap:6px;
-      flex-wrap:wrap;
-      justify-content:flex-end;
-    }
-    .nav a{
-      text-decoration:none;
-      font-size:13px;
-      color: #6b7684;
-      padding: 8px 10px;
-      border-radius: 12px;
-      border: 1px solid transparent;
-    }
-    .nav a:hover{background: rgba(2,32,71,.04); color: var(--text);}
-    .nav a[aria-current="page"]{
-      background:rgba(37,99,235,.10);
-      color:var(--text);
-      border:1px solid rgba(37,99,235,.22);
-    }
-    .top-actions{
-      display:flex;
-      align-items:center;
-      gap:10px;
-    }
-    .topbar .btn{padding: 10px 14px;}
+    .brand{ display:flex; align-items:center; gap:8px; font-weight: 900; font-size:18px; letter-spacing:-0.5px; color: #0f172a; }
+    .dot{ width:8px; height:8px; border-radius: 50%; background: var(--accent); }
+    
+    .top-actions { display: flex; align-items: center; gap: 24px; }
+    .nav{ display:flex; align-items:center; gap:24px; }
+    .nav a{ font-size:14px; color: #64748b; font-weight: 600; text-transform: uppercase; transition: 0.2s; }
+    .nav a:hover{ color: var(--accent); }
+    .nav a[aria-current="page"]{ color: var(--accent); font-weight: 800; }
 
-    /* ===== Buttons (match index) ===== */
-    .btn{
-      display:inline-flex;align-items:center;justify-content:center;
-      padding:11px 14px;
-      border-radius: 14px;
-      border:1px solid rgba(2,32,71,.10);
-      background: rgba(255,255,255,.92);
-      text-decoration:none;
-      color: var(--text);
-      font-weight: 800;
-      font-size:14px;
-      white-space:nowrap;
-      box-shadow: 0 8px 18px rgba(2,32,71,.08);
-    }
-    .btn:hover{transform: translateY(-1px);}
-    .btn.primary{
-      color:#fff;
-      border-color: rgba(49,130,246,.22);
-      background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
+    .topbar .btn.primary {
+      padding: 10px 18px; background: #1e293b; color: #fff;
+      border-radius: 12px; font-size: 13px; font-weight: 700;
     }
 
-    /* ===== Page ===== */
-    main{
-      padding: 0 0 110px;
-      background:
-        radial-gradient(1200px 420px at 20% 0%, rgba(37,99,235,.10), transparent 60%),
-        linear-gradient(180deg, #ffffff, var(--bg-soft));
+    /* ===== Main Layout (통일된 상단 여백) ===== */
+    main {
+      padding-top: 140px; /* 모든 상세 페이지 공통 */
+      padding-bottom: 110px;
+      background: radial-gradient(circle at 50% 0%, rgba(37,99,235,0.03) 0%, transparent 50%);
     }
 
-    /* ===== Service tab section ===== */
-    .service-tab-section { padding: 120px 20px; background: #fff; font-family: 'Pretendard', sans-serif; }
-    .service-tab-section .container { max-width: 1200px; margin: 0 auto; text-align: center; }
+    /* ===== Section Header (Work 상세와 규격 통일) ===== */
+    .section-header { margin-bottom: 60px; text-align: left; } /* 좌측 정렬로 통일하여 안정감 부여 */
+    .sub-title { color: var(--accent); font-weight: 800; font-size: 13px; letter-spacing: 1.5px; margin-bottom: 16px; text-transform: uppercase; }
+    .main-title { font-size: clamp(32px, 5vw, 48px); font-weight: 850; line-height: 1.2; color: #0f172a; margin: 0 0 20px; letter-spacing: -0.03em; }
+    .header-desc { font-size: 18px; color: var(--muted); line-height: 1.7; max-width: 800px; margin: 0; word-break: keep-all; }
 
-    .section-header { margin-bottom: 60px; }
-    .sub-title { color: #2563eb; font-weight: 700; font-size: 14px; letter-spacing: 2px; margin-bottom: 12px; }
-    .main-title { font-size: 38px; font-weight: 800; line-height: 1.4; color: #1e293b; margin-bottom: 20px; }
-    .main-title span { color: #2563eb; }
-    .header-desc { font-size: 18px; color: #64748b; line-height: 1.6; max-width: 800px; margin: 0 auto; }
-
-    /* 탭 스타일 */
-    .tab-nav { display: flex; justify-content: center; border-bottom: 1px solid #e2e8f0; margin-bottom: 50px; flex-wrap: wrap; }
+    /* ===== Tab System (기존 스타일 유지하되 정돈) ===== */
+    .tab-nav { display: flex; border-bottom: 1px solid #e2e8f0; margin-bottom: 50px; overflow-x: auto; white-space: nowrap; -ms-overflow-style: none; scrollbar-width: none; }
+    .tab-nav::-webkit-scrollbar { display: none; }
+    
     .tab-link {
-        padding: 15px 25px; border: none; background: none; color: #94a3b8;
-        font-size: 16px; font-weight: 700; cursor: pointer; position: relative; transition: 0.3s;
+        padding: 15px 20px; border: none; background: none; color: #94a3b8;
+        font-size: 15px; font-weight: 700; cursor: pointer; position: relative; transition: 0.3s;
     }
-    .tab-link.active { color: #2563eb; }
-    .tab-link.active::after { content: ''; position: absolute; bottom: -1px; left: 0; width: 100%; height: 3px; background: #2563eb; }
+    .tab-link.active { color: var(--accent); }
+    .tab-link.active::after { content: ''; position: absolute; bottom: -1px; left: 0; width: 100%; height: 2px; background: var(--accent); }
 
-    /* 패널 스타일 */
-    .tab-panel { display: none; animation: fadeIn 0.4s ease forwards; }
-    .tab-panel.active { display: block; }
-    .panel-inner { display: flex; align-items: center; gap: 60px; background: #f8fbff; padding: 70px; border-radius: 40px; text-align: left; }
+    .panel-inner { display: flex; align-items: center; gap: 60px; background: #fff; padding: 60px; border-radius: var(--radius); border: 1px solid var(--line); box-shadow: 0 20px 40px rgba(15,23,42,0.05); }
 
     .panel-text { flex: 1.3; }
-    .panel-category { color: #2563eb; font-size: 13px; font-weight: 800; text-transform: uppercase; margin-bottom: 15px; display: block; letter-spacing: 1px; }
-    .panel-text h3 { font-size: 30px; font-weight: 800; color: #1e293b; margin-bottom: 25px; line-height: 1.3; word-break: keep-all; }
-    .panel-text p { font-size: 17px; color: #64748b; line-height: 1.8; margin-bottom: 35px; word-break: keep-all; }
+    .panel-category { color: var(--accent); font-size: 12px; font-weight: 800; text-transform: uppercase; margin-bottom: 15px; display: block; letter-spacing: 1px; }
+    .panel-text h3 { font-size: 28px; font-weight: 800; color: #1e293b; margin-bottom: 20px; line-height: 1.3; }
+    .panel-text p { font-size: 16px; color: #475569; line-height: 1.8; margin-bottom: 30px; }
 
     .check-list { list-style: none; padding: 0; }
-    .check-list li { position: relative; padding-left: 30px; margin-bottom: 15px; color: #475569; font-weight: 600; font-size: 16px; }
-    .check-list li::before { content: '✔'; position: absolute; left: 0; color: #2563eb; font-weight: 900; }
+    .check-list li { position: relative; padding-left: 28px; margin-bottom: 12px; color: #334155; font-weight: 600; font-size: 15px; }
+    .check-list li::before { content: '→'; position: absolute; left: 0; color: var(--accent); font-weight: 900; }
 
     .panel-visual { flex: 0.7; }
-    .visual-box { width: 100%; height: 350px; background: #fff; border: 1px dashed #cbd5e1; border-radius: 24px; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-weight: 800; font-size: 20px; }
+    .visual-box { width: 100%; height: 300px; background: var(--bg-soft); border: 1px dashed #cbd5e1; border-radius: 20px; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-weight: 700; font-size: 16px; }
 
-    /* 하단 CTA */
-    .final-cta { margin-top: 50px; }
-    .final-cta button { background: #1e293b; color: #fff; border: none; padding: 20px 40px; border-radius: 14px; font-size: 18px; font-weight: 700; cursor: pointer; transition: 0.3s; }
-    .final-cta button:hover { background: #2563eb; transform: translateY(-5px); }
+    .tab-panel { display: none; animation: fadeIn 0.4s ease forwards; }
+    .tab-panel.active { display: block; }
 
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(6px); }
-      to { opacity: 1; transform: translateY(0); }
+    /* 하단 CTA 버튼 스타일 보정 */
+    .final-cta { margin-top: 60px; text-align: center; }
+    .final-cta a { 
+      display: inline-block; background: #1e293b; color: #fff; padding: 20px 40px; 
+      border-radius: 16px; font-size: 16px; font-weight: 700; transition: 0.3s; 
     }
+    .final-cta a:hover { background: var(--accent); transform: translateY(-3px); box-shadow: 0 10px 20px rgba(37, 99, 235, 0.15); }
+
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
     @media (max-width: 992px) {
-        .panel-inner { flex-direction: column; padding: 50px 30px; }
-        .tab-link { padding: 10px 15px; font-size: 14px; }
+        .panel-inner { flex-direction: column; padding: 40px 25px; }
+        .panel-visual { width: 100%; order: -1; margin-bottom: 30px; }
+        .section-header { text-align: center; }
+        .header-desc { margin: 0 auto; }
     }
 
-    /* Footer */
-    footer{
-      border-top:1px solid rgba(2,6,23,.08);
-      padding:34px 0 44px;
-      color:var(--muted2);
-      font-size:13px;
-      background:#fff;
-    }
-    .footer-grid{display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;align-items:center}
-    .footer-links{display:flex;gap:14px;flex-wrap:wrap}
-    .footer-links a{color:var(--muted2)}
-    .footer-links a:hover{color:var(--text)}
+    footer { border-top: 1px solid var(--line); padding: 40px 0; color: var(--muted); font-size: 13px; background: #fff; }
+    .footer-grid { display: flex; justify-content: space-between; align-items: center; }
+    .footer-links { display: flex; gap: 20px; }
   </style>
 </head>
 
 <body>
-  <div class="topbar">
+  <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="index.html#top" aria-label="홈으로">
-        <span class="dot" aria-hidden="true"></span>
+      <a class="brand" href="index.html">
+        <span class="dot"></span>
         <span>GROWTHLINE</span>
       </a>
       <div class="top-actions">
-        <div class="nav" aria-label="상단 메뉴">
+        <nav class="nav">
           <a href="service.html" aria-current="page">service</a>
           <a href="work.html">work</a>
-        </div>
-        <a class="btn primary contact-trigger" href="contact.html">문의하기</a>
+        </nav>
+        <a class="btn primary" href="contact.html">문의하기</a>
       </div>
     </div>
-  </div>
+  </header>
 
   <main>
-    <section class="service-tab-section">
-      <div class="container">
-        <div class="section-header">
-          <p class="sub-title">OUR SPECIALIZED SERVICES</p>
-          <h2 class="main-title">우리는 단순 제작자가 아닌,<br><span>비즈니스 설계 파트너</span>입니다.</h2>
-          <p class="header-desc">각 분야의 전문 지식을 동원하여, 대표님의 사업이 온라인에서 승리할 수밖에 없는 구조를 만듭니다.</p>
-        </div>
+    <div class="container">
+      <section class="section-header">
+        <p class="sub-title">Our Specialized Services</p>
+        <h2 class="main-title">우리는 단순 제작자가 아닌,<br><span>비즈니스 설계 파트너</span>입니다.</h2>
+        <p class="header-desc">각 분야의 전문 지식을 동원하여, 대표님의 사업이 온라인에서 승리할 수밖에 없는 구조를 만듭니다.</p>
+      </section>
 
-        <div class="tab-nav">
-          <button class="tab-link active" onclick="openService(event, 'research')">고객 분석 진단</button>
-          <button class="tab-link" onclick="openService(event, 'analytics')">데이터 퍼널 분석</button>
-          <button class="tab-link" onclick="openService(event, 'design')">전환 중심 설계</button>
-          <button class="tab-link" onclick="openService(event, 'consulting')">비즈니스 로직 설계</button>
-          <button class="tab-link" onclick="openService(event, 'writing')">설득 카피라이팅</button>
-          <button class="tab-link" onclick="openService(event, 'startup')">스타트업 구축</button>
-        </div>
+      <nav class="tab-nav">
+        <button class="tab-link active" onclick="openService(event, 'research')">고객 분석 진단</button>
+        <button class="tab-link" onclick="openService(event, 'analytics')">데이터 퍼널 분석</button>
+        <button class="tab-link" onclick="openService(event, 'design')">전환 중심 설계</button>
+        <button class="tab-link" onclick="openService(event, 'consulting')">비즈니스 로직 설계</button>
+        <button class="tab-link" onclick="openService(event, 'writing')">설득 카피라이팅</button>
+        <button class="tab-link" onclick="openService(event, 'startup')">스타트업 구축</button>
+      </nav>
 
-        <div id="research" class="tab-panel active">
-          <div class="panel-inner">
-            <div class="panel-text">
-              <span class="panel-category">UX Research</span>
-              <h3>"왜 안 팔리는가?"에 대한<br>데이터 기반의 정답을 찾습니다.</h3>
-              <p>대표님의 직감이 아닌 실제 고객의 목소리와 행동을 분석합니다. 고객이 결제 직전에 망설이는 이유, 경쟁사로 떠나는 결정적인 지점을 포착하여 개선 방향을 제시합니다.</p>
-              <ul class="check-list">
-                <li>사용자 심층 인터뷰(FGI) 및 행동 관찰</li>
-                <li>고객 여정 지도(CJM)를 통한 이탈 구간 식별</li>
-                <li>경쟁사 대비 우위 점유를 위한 차별화 전략 도출</li>
-              </ul>
-            </div>
-            <div class="panel-visual"><div class="visual-box">USER INSIGHT</div></div>
+      <div id="research" class="tab-panel active">
+        <div class="panel-inner">
+          <div class="panel-text">
+            <span class="panel-category">UX Research</span>
+            <h3>"왜 안 팔리는가?"에 대한<br>데이터 기반의 정답을 찾습니다.</h3>
+            <p>대표님의 직감이 아닌 실제 고객의 목소리와 행동을 분석합니다. 고객이 결제 직전에 망설이는 이유, 경쟁사로 떠나는 결정적인 지점을 포착하여 개선 방향을 제시합니다.</p>
+            <ul class="check-list">
+              <li>사용자 심층 인터뷰(FGI) 및 행동 관찰</li>
+              <li>고객 여정 지도(CJM)를 통한 이탈 구간 식별</li>
+              <li>경쟁사 대비 우위 점유를 위한 차별화 전략 도출</li>
+            </ul>
           </div>
-        </div>
-
-        <div id="analytics" class="tab-panel">
-          <div class="panel-inner">
-            <div class="panel-text">
-              <span class="panel-category">Data Analytics</span>
-              <h3>직관이 아닌 숫자로<br>매출의 흐름을 통제합니다.</h3>
-              <p>복잡한 데이터 중 진짜 '돈'이 되는 지표(PV, CTR, CVR)만 골라냅니다. 어떤 광고 채널이 효율적인지, 어떤 페이지에서 가장 많은 이탈이 발생하는지 시각화하여 보고합니다.</p>
-              <ul class="check-list">
-                <li>구글 애널리틱스(GA4) 및 핫자(Hotjar) 세밀 세팅</li>
-                <li>매출 직결 퍼널(Funnel) 지표 실시간 추적</li>
-                <li>광고비 대비 효율(ROAS) 극대화 분석</li>
-              </ul>
-            </div>
-            <div class="panel-visual"><div class="visual-box">DATA DASHBOARD</div></div>
-          </div>
-        </div>
-
-        <div id="design" class="tab-panel">
-          <div class="panel-inner">
-            <div class="panel-text">
-              <span class="panel-category">UX/UI Design</span>
-              <h3>시선이 머물고 지갑이 열리는<br>전환 최적화 화면 설계</h3>
-              <p>단순히 예쁜 디자인은 매출을 보장하지 않습니다. 우리는 고객의 시선이 자연스럽게 '문의하기'나 '구매하기' 버튼으로 흐르도록 심리학 기반의 레이아웃을 설계합니다.</p>
-              <ul class="check-list">
-                <li>시선 추적(Eye-tracking) 기반의 정보 구조 설계</li>
-                <li>브랜드 신뢰도를 높이는 고퀄리티 그래픽 디자인</li>
-                <li>모든 기기에서 완벽하게 작동하는 반응형 웹 구현</li>
-              </ul>
-            </div>
-            <div class="panel-visual"><div class="visual-box">CONVERSION DESIGN</div></div>
-          </div>
-        </div>
-
-        <div id="consulting" class="tab-panel">
-          <div class="panel-inner">
-            <div class="panel-text">
-              <span class="panel-category">UX Consulting</span>
-              <h3>사업 모델에 딱 맞는<br>전용 서비스 로직을 설계합니다.</h3>
-              <p>대표님이 주신 요구사항만 구현하지 않습니다. 우리는 사업 모델을 분석하여 상담 자동화, 예약 시스템 등 운영 효율을 200% 높일 수 있는 전용 서비스를 역으로 제안합니다.</p>
-              <ul class="check-list">
-                <li>비즈니스 운영 효율화를 위한 백엔드 로직 기획</li>
-                <li>고객 이탈을 막는 자동 알림 및 상담 시나리오 구축</li>
-                <li>중장기 서비스 확장을 고려한 시스템 아키텍처</li>
-              </ul>
-            </div>
-            <div class="panel-visual"><div class="visual-box">BIZ ARCHITECTURE</div></div>
-          </div>
-        </div>
-
-        <div id="writing" class="tab-panel">
-          <div class="panel-inner">
-            <div class="panel-text">
-              <span class="panel-category">UX Writing</span>
-              <h3>고객의 망설임을 확신으로 바꾸는<br>심리 카피라이팅</h3>
-              <p>공급자 위주의 어려운 단어가 아닌, 고객의 통증을 건드리고 이득을 보여주는 언어를 사용합니다. 버튼 문구 하나만 바꿔도 전환율이 30% 상승하는 경험을 선사합니다.</p>
-              <ul class="check-list">
-                <li>추상어를 배제한 성과 중심의 헤드라인 개발</li>
-                <li>거부감 없이 행동을 유도하는 마이크로카피 설계</li>
-                <li>브랜드 고유의 신뢰감 있는 보이스앤톤 수립</li>
-              </ul>
-            </div>
-            <div class="panel-visual"><div class="visual-box">PERSUASIVE COPY</div></div>
-          </div>
-        </div>
-
-        <div id="startup" class="tab-panel">
-          <div class="panel-inner">
-            <div class="panel-text">
-              <span class="panel-category">Startup UX Consulting</span>
-              <h3>초기 사업의 시행착오를 줄이는<br>올인원 구축 패키지</h3>
-              <p>아이디어만 있는 상태인가요? 스타트업의 MVP(최소 기능 제품) 제작부터 시장 검증까지 함께합니다. 가장 적은 비용으로 가장 빠르게 비즈니스를 안착시키는 방법을 제시합니다.</p>
-              <ul class="check-list">
-                <li>핵심 가치 검증을 위한 MVP 전략 및 제작</li>
-                <li>투자 유치 및 홍보를 위한 서비스 IR 기획</li>
-                <li>초기 고객 유입을 위한 그로스해킹 기반 설계</li>
-              </ul>
-            </div>
-            <div class="panel-visual"><div class="visual-box">STARTUP GROWTH</div></div>
-          </div>
-        </div>
-
-        <div class="final-cta">
-          <a href="contact.html">내 사업에 필요한 서비스 진단받기</a>
+          <div class="panel-visual"><div class="visual-box">USER INSIGHT</div></div>
         </div>
       </div>
-    </section>
+
+      <div id="analytics" class="tab-panel">
+        <div class="panel-inner">
+          <div class="panel-text">
+            <span class="panel-category">Data Analytics</span>
+            <h3>직관이 아닌 숫자로<br>매출의 흐름을 통제합니다.</h3>
+            <p>복잡한 데이터 중 진짜 '돈'이 되는 지표(PV, CTR, CVR)만 골라냅니다. 어떤 광고 채널이 효율적인지 분석하여 보고합니다.</p>
+            <ul class="check-list">
+              <li>구글 애널리틱스(GA4) 및 핫자(Hotjar) 세팅</li>
+              <li>매출 직결 퍼널 지표 실시간 추적</li>
+              <li>광고비 대비 효율(ROAS) 극대화 분석</li>
+            </ul>
+          </div>
+          <div class="panel-visual"><div class="visual-box">DATA DASHBOARD</div></div>
+        </div>
+      </div>
+
+      <div class="final-cta">
+        <a href="contact.html">내 사업에 필요한 서비스 진단받기</a>
+      </div>
+    </div>
   </main>
 
   <footer>
     <div class="container">
       <div class="footer-grid">
+        <span>© 2024 GROWTHLINE. All rights reserved.</span>
         <div class="footer-links">
           <a href="service.html">Service</a>
           <a href="work.html">Work</a>
@@ -356,13 +214,9 @@
         for (i = 0; i < tabpanel.length; i++) { tabpanel[i].classList.remove("active"); }
         tablink = document.getElementsByClassName("tab-link");
         for (i = 0; i < tablink.length; i++) { tablink[i].classList.remove("active"); }
-        var target = document.getElementById(serviceName);
-        if (target) {
-          target.classList.add("active");
-        }
+        document.getElementById(serviceName).classList.add("active");
         evt.currentTarget.classList.add("active");
     }
   </script>
-
 </body>
 </html>
