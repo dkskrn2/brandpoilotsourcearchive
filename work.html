@@ -3,281 +3,197 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Work | Portfolio · Case Studies</title>
-  <meta name="description" content="UX 리서치, 데이터 분석, UX 컨설팅, UX/UI 디자인, UX 라이팅 프로젝트 포트폴리오를 확인하세요." />
-  <meta property="og:title" content="Work | Portfolio · Case Studies" />
-  <meta property="og:description" content="UX 리서치, 데이터 분석, UX 컨설팅, UX/UI 디자인, UX 라이팅 프로젝트 포트폴리오를 확인하세요." />
-  <link rel="canonical" href="work.html" />
-  <meta property="og:type" content="website" />
-  <meta property="og:url" content="work.html" />
-  <meta name="twitter:card" content="summary" />
-
+  <title>Work | GROWTHLINE</title>
+  
   <style>
-    :root{
-      --accent:#2563eb;
-      --text:#0f172a;
-      --muted:#475569;
-      --muted2:#64748b;
-      --line:rgba(2,6,23,.10);
-      --line2:rgba(2,6,23,.06);
-      --bg:#ffffff;
-      --bg-soft:#f8fafc;
-      --card:#ffffff;
-
-      --radius:18px;
-      --radius2:22px;
-      --max:1080px;
-      --pad:clamp(16px,3vw,22px);
-
-      --h1:clamp(34px,6vw,68px);
-      --h2:clamp(30px,5vw,44px);
-
-      --shadow-sm:0 1px 2px rgba(0,0,0,.02);
-      --shadow-md:0 12px 24px rgba(15,23,42,.06);
-      --shadow-accent:0 16px 34px rgba(37,99,235,.18);
+    :root {
+      --accent: #2563eb;
+      --text: #1e293b; /* 전 페이지 공통 텍스트 컬러 */
+      --muted: #64748b;
+      --line: rgba(2, 32, 71, 0.05);
+      --bg: #ffffff;
+      --bg-soft: #f8fafc;
+      --radius: 24px;
+      --max: 1100px;
     }
 
-    *{box-sizing:border-box}
-    html,body{height:100%}
-    body{
-      margin:0;
-      font-family: ui-sans-serif, system-ui, -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", Roboto, Helvetica, Arial;
-      color:var(--text);
-      background:var(--bg);
-      -webkit-font-smoothing:antialiased;
-      text-rendering:geometricPrecision;
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Pretendard", ui-sans-serif, system-ui, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
     }
-    a{color:inherit;text-decoration:none}
-    .container{width:100%;max-width:var(--max);margin:0 auto;padding:0 var(--pad)}
+    a { color: inherit; text-decoration: none; }
+    .container { width: 100%; max-width: var(--max); margin: 0 auto; padding: 0 20px; }
 
-    /* Topbar (match index) */
-    .topbar{
-      position: sticky;
-      top: 0;
-      z-index: 50;
-      backdrop-filter: blur(10px);
-      background: rgba(255,255,255,.86);
-      border-bottom: 1px solid rgba(2,32,71,.08);
+    /* ===== Topbar (Fixed 고정 및 스타일 통일) ===== */
+    .topbar {
+      position: fixed;
+      top: 0; left: 0; width: 100%;
+      z-index: 1000;
+      backdrop-filter: blur(12px);
+      background: rgba(255, 255, 255, .85);
+      border-bottom: 1px solid var(--line);
     }
-    .topbar-inner{
+    .topbar-inner {
       max-width: var(--max);
       margin: 0 auto;
-      padding: 12px 16px;
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:14px;
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
     }
-    .brand{
-      display:flex; align-items:center; gap:10px;
-      text-decoration:none;
-      font-weight: 900;
-      letter-spacing:-.4px;
-      white-space:nowrap;
-    }
-    .dot{
-      width:10px; height:10px; border-radius: 999px;
-      background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
-      box-shadow: 0 0 0 6px rgba(49,130,246,.14);
-    }
-    .nav{
-      display:flex; align-items:center; gap:6px;
-      flex-wrap:wrap;
-      justify-content:flex-end;
-    }
-    .nav a{
-      text-decoration:none;
-      font-size:13px;
-      color: #6b7684;
-      padding: 8px 10px;
-      border-radius: 12px;
-      border: 1px solid transparent;
-    }
-    .nav a:hover{background: rgba(2,32,71,.04); color: var(--text);}
-    .nav a[aria-current="page"]{
-      background:rgba(37,99,235,.10);
-      color:var(--text);
-      border:1px solid rgba(37,99,235,.22);
-    }
-    .top-actions{
-      display:flex;
-      align-items:center;
-      gap:10px;
-    }
-    .topbar .btn{padding: 10px 14px;}
+    .brand { display: flex; align-items: center; gap: 8px; font-weight: 900; font-size: 18px; letter-spacing: -0.5px; color: #0f172a; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+    
+    .top-actions { display: flex; align-items: center; gap: 24px; }
+    .nav { display: flex; align-items: center; gap: 24px; }
+    .nav a { font-size: 14px; color: #64748b; font-weight: 600; text-transform: uppercase; transition: 0.2s; }
+    .nav a:hover { color: var(--accent); }
+    .nav a[aria-current="page"] { color: var(--accent); font-weight: 800; }
 
-    /* Buttons (match index) */
-    .btn{
-      display:inline-flex;align-items:center;justify-content:center;
-      padding:11px 14px;
-      border-radius: 14px;
-      border:1px solid rgba(2,32,71,.10);
-      background: rgba(255,255,255,.92);
-      text-decoration:none;
-      color: var(--text);
-      font-weight: 800;
-      font-size:14px;
-      white-space:nowrap;
-      box-shadow: 0 8px 18px rgba(2,32,71,.08);
-    }
-    .btn:hover{transform: translateY(-1px);}
-    .btn.primary{
-      color:#fff;
-      border-color: rgba(49,130,246,.22);
-      background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
+    .topbar .btn.primary {
+      padding: 10px 18px; background: #1e293b; color: #fff;
+      border-radius: 12px; font-size: 13px; font-weight: 700;
     }
 
-    /* Page */
-    main{
-      padding: 0 0 96px;
-      background:
-        radial-gradient(1200px 420px at 20% 0%, rgba(37,99,235,.10), transparent 60%),
-        linear-gradient(180deg, #ffffff, var(--bg-soft));
+    /* ===== Main Layout (통일된 상단 여백) ===== */
+    main {
+      padding-top: 140px; /* 모든 상세 페이지 공통 규격 */
+      padding-bottom: 110px;
+      background: radial-gradient(circle at 50% 0%, rgba(37,99,235,0.03) 0%, transparent 50%);
     }
 
-    .hero{padding: clamp(32px, 5vw, 60px) 0 clamp(18px, 3vw, 32px);}
-    h1{margin:6px 0 8px;font-size:var(--h1);line-height:1.08;letter-spacing:-.05em;font-weight:950;}
-    .lead{margin:0;color:var(--muted);font-size:15px;line-height:1.7;max-width:78ch;}
+    /* ===== Section Header (Service와 규격 통일) ===== */
+    .section-header { margin-bottom: 50px; text-align: left; }
+    .sub-title { color: var(--accent); font-weight: 800; font-size: 13px; letter-spacing: 1.5px; margin-bottom: 16px; text-transform: uppercase; }
+    .main-title { font-size: clamp(34px, 6vw, 48px); font-weight: 850; line-height: 1.1; color: #0f172a; margin: 0 0 20px; letter-spacing: -0.03em; }
+    .header-desc { font-size: 18px; color: var(--muted); line-height: 1.7; max-width: 800px; margin: 0; word-break: keep-all; }
 
-    .tabs{
-      margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:10px;border:1px solid rgba(2,6,23,.08);
-      background:rgba(255,255,255,.86);border-radius:var(--radius2);box-shadow:var(--shadow-md);
+    /* ===== Work Layout ===== */
+    .work-layout { display: grid; grid-template-columns: 320px 1fr; gap: 24px; align-items: start; }
+    
+    /* 좌측 필터 패널 */
+    .filters-panel {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 12px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
     }
-    .tab{
-      display:inline-flex;align-items:center;justify-content:center;
-      padding:10px 14px;border-radius:999px;
-      border:1px solid rgba(2,6,23,.10);
-      background:#fff;
-      color:rgba(15,23,42,.78);
-      font-size:13px;font-weight:900;letter-spacing:-.01em;
-      transition:transform .15s ease, border-color .15s ease, background .15s ease, box-shadow .15s ease;
-      white-space:nowrap;
+    .filter-group { border: 1px solid #f1f5f9; border-radius: 14px; overflow: hidden; margin-bottom: 8px; }
+    .filter-head { padding: 14px; cursor: pointer; font-weight: 800; font-size: 14px; background: #f8fafc; display: flex; justify-content: space-between; align-items: center; }
+    .filter-list { list-style: none; padding: 0; margin: 0; background: #fff; }
+    .filter-list li { padding: 12px 14px; font-size: 13px; font-weight: 600; color: #64748b; border-top: 1px solid #f1f5f9; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: 0.2s; }
+    .filter-list li:hover { background: #f1f7ff; color: var(--accent); }
+    .filter-list li.is-active { background: #eff6ff; color: var(--accent); border-left: 3px solid var(--accent); padding-left: 11px; }
+    .badge { font-size: 10px; background: #f1f5f9; padding: 2px 6px; border-radius: 4px; color: #94a3b8; }
+
+    /* 우측 프로젝트 상세 패널 */
+    .project-panel {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      padding: 40px;
+      box-shadow: 0 20px 40px rgba(15, 23, 42, 0.06);
     }
-    .tab:hover{
-      transform:translateY(-1px);
-      border-color:rgba(37,99,235,.28);
-      box-shadow:0 10px 20px rgba(15,23,42,.06);
+    .thumb { 
+      width: 100%; aspect-ratio: 16/9; background: #f1f5f9; border-radius: 16px; 
+      margin-bottom: 30px; display: flex; align-items: center; justify-content: center;
+      font-weight: 800; color: #cbd5e1; font-size: 20px; overflow: hidden;
+      border: 1px solid var(--line);
     }
-    .tab[aria-current="page"]{
-      background:rgba(37,99,235,.10);
-      border-color:rgba(37,99,235,.35);
-      color:var(--text);
-      box-shadow:0 12px 24px rgba(37,99,235,.10);
+    .meta { display: flex; gap: 8px; margin-bottom: 16px; }
+    .pill { font-size: 12px; font-weight: 700; color: var(--accent); background: #eff6ff; padding: 4px 12px; border-radius: 100px; }
+    
+    .project-panel h2 { font-size: 32px; font-weight: 850; margin: 0 0 16px; color: #0f172a; }
+    .project-panel .desc { font-size: 17px; line-height: 1.7; color: #475569; margin-bottom: 30px; word-break: keep-all; }
+    
+    .btn-view {
+      display: inline-flex; align-items: center; padding: 14px 28px; background: #1e293b; color: #fff; 
+      border-radius: 12px; font-weight: 700; font-size: 15px; transition: 0.3s;
+    }
+    .btn-view:hover { background: var(--accent); transform: translateY(-2px); box-shadow: 0 10px 20px rgba(37, 99, 235, 0.15); }
+
+    @media (max-width: 1024px) {
+      .work-layout { grid-template-columns: 1fr; }
+      .filters-panel { order: 2; }
+      .project-panel { order: 1; padding: 25px; }
     }
 
-    /* Layout */
-    .work-layout{display:grid;grid-template-columns: minmax(280px, 320px) 1fr;gap:18px;}
-    .panel{
-      background:var(--card);
-      border:1px solid rgba(2,6,23,.08);
-      border-radius:var(--radius2);
-      box-shadow:var(--shadow-md);
-    }
-
-    .filters{padding:14px;display:flex;flex-direction:column;gap:6px;}
-    .filter-group{border:1px solid var(--line2);border-radius:14px;overflow:hidden;background:#fff;}
-    .filter-head{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;cursor:pointer;font-weight:900;font-size:14px;letter-spacing:-.01em;color:var(--text);}
-    .filter-head span{display:flex;align-items:center;gap:8px;}
-    .chevron{transition:transform .2s ease;}
-    .filter-group[open] .chevron{transform:rotate(90deg);}
-    .filter-list{margin:0;padding:0 0 10px 0;list-style:none;}
-    .filter-list li{padding:8px 14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;border-top:1px solid var(--line2);font-size:13px;font-weight:800;color:var(--muted2);transition:background .15s ease,color .15s ease;}
-    .filter-list li:hover{background:rgba(2,6,23,.03);color:var(--text);}
-    .filter-list li.is-active{background:rgba(37,99,235,.08);color:var(--text);border-left:3px solid var(--accent);padding-left:11px;}
-    .badge{display:inline-flex;align-items:center;justify-content:center;padding:2px 8px;border-radius:999px;background:rgba(2,6,23,.06);font-size:11px;font-weight:900;color:var(--muted2);}
-
-    .project-panel{padding:18px;display:grid;gap:12px;}
-    .thumb{width:100%;border-radius:16px;overflow:hidden;position:relative;aspect-ratio:16/9;background:linear-gradient(135deg, rgba(37,99,235,.14), rgba(37,99,235,.06));border:1px solid rgba(2,6,23,.06);box-shadow:0 16px 30px rgba(15,23,42,.10);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:18px;letter-spacing:-.02em;text-shadow:0 10px 24px rgba(15,23,42,.28);}
-    .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
-
-    .meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
-    .pill{display:inline-flex;align-items:center;padding:8px 12px;border-radius:999px;border:1px solid rgba(2,6,23,.10);background: rgba(248,250,252,.9);color: rgba(15,23,42,.74);font-size:12px;font-weight:900;letter-spacing:-.01em;}
-    h2{margin:0;font-size:var(--h2);letter-spacing:-.03em;font-weight:950;}
-    .desc{margin:6px 0 0;color:var(--muted);line-height:1.65;font-size:15px;}
-    .project-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px;}
-
-    /* Responsive */
-    @media (max-width:1024px){
-      .work-layout{grid-template-columns:1fr;}
-      .filters{position:relative;}
-    }
-    @media (max-width:640px){
-      .tab,.pill{width:100%;justify-content:center;}
-    }
+    footer { border-top: 1px solid var(--line); padding: 40px 0; color: var(--muted); font-size: 13px; background: #fff; }
+    .footer-grid { display: flex; justify-content: space-between; align-items: center; }
   </style>
 </head>
 <body>
-  <div class="topbar">
+
+  <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="index.html#top" aria-label="홈으로">
-        <span class="dot" aria-hidden="true"></span>
+      <a class="brand" href="index.html">
+        <span class="dot"></span>
         <span>GROWTHLINE</span>
       </a>
       <div class="top-actions">
-        <div class="nav" aria-label="상단 메뉴">
+        <nav class="nav">
           <a href="service.html">service</a>
           <a href="work.html" aria-current="page">work</a>
-        </div>
-        <a class="btn primary contact-trigger" href="contact.html">문의하기</a>
+        </nav>
+        <a class="btn primary" href="contact.html">문의하기</a>
       </div>
     </div>
-  </div>
+  </header>
 
   <main>
     <div class="container">
-      <section class="hero" aria-label="포트폴리오 소개">
-        <h1>Work</h1>
-        <p class="lead">도메인과 서비스 유형별로 수행한 프로젝트를 살펴보고, 비슷한 과제를 어떻게 해결했는지 확인하세요.</p>
-        <nav class="tabs" aria-label="워크 탭">
-          <a class="tab" href="#domain" aria-current="page" data-view="domain">Domain</a>
-        </nav>
+      <section class="section-header">
+        <p class="sub-title">Success Cases</p>
+        <h1 class="main-title">Work</h1>
+        <p class="header-desc">도메인과 서비스 유형별로 수행한 프로젝트를 살펴보고, 비슷한 과제를 어떻게 해결했는지 확인하세요.</p>
       </section>
 
-      <section aria-label="포트폴리오 목록" class="work-layout">
-        <aside class="panel filters" aria-label="카테고리 필터">
-          <details class="filter-group" open data-view="domain">
-            <summary class="filter-head"><span>AI/Experience</span><span class="chevron" aria-hidden="true">›</span></summary>
-            <ul class="filter-list" role="list">
-              <li data-project="tv-voice" class="is-active">TV Voice 활용 UX 리서치 <span class="badge">리서치</span></li>
-              <li data-project="ai-agent" >AI Agent UX 전략 설계</li>
-              <li data-project="voice-agent">Voice Agent Contact UX Design</li>
+      <div class="work-layout">
+        <aside class="filters-panel">
+          <details class="filter-group" open>
+            <summary class="filter-head">AI / Experience <span>›</span></summary>
+            <ul class="filter-list">
+              <li data-project="tv-voice" class="is-active">TV Voice UX 리서치 <span class="badge">리서치</span></li>
+              <li data-project="ai-agent">AI Agent UX 전략</li>
+              <li data-project="voice-agent">Voice Agent Design</li>
             </ul>
           </details>
-
-          <details class="filter-group" data-view="domain">
-            <summary class="filter-head"><span>Finance</span><span class="chevron" aria-hidden="true">›</span></summary>
-            <ul class="filter-list" role="list">
-              <li data-project="sol-app">신한 SOL New App UI 개발 <span class="badge">UI</span></li>
+          <details class="filter-group" open>
+            <summary class="filter-head">Finance <span>›</span></summary>
+            <ul class="filter-list">
+              <li data-project="sol-app">신한 SOL New App <span class="badge">UI</span></li>
               <li data-project="atm">ATM UX 재설계</li>
             </ul>
           </details>
-
-          <details class="filter-group" data-view="domain">
-            <summary class="filter-head"><span>Commerce</span><span class="chevron" aria-hidden="true">›</span></summary>
-            <ul class="filter-list" role="list">
-              <li data-project="commerce-flow">옴니채널 커머스 플로우 개선</li>
-            </ul>
-          </details>
-
         </aside>
 
-        <article class="panel project-panel" aria-live="polite">
-          <div class="thumb" data-role="thumb" aria-hidden="true">프로젝트 비주얼</div>
-          <div class="meta" data-role="tags"></div>
+        <article class="project-panel">
+          <div class="thumb" data-role="thumb">Project Visual</div>
+          <div class="meta" data-role="tags">
+            <span class="pill">AI/Experience</span>
+          </div>
           <h2 data-role="title">TV Voice 활용 UX 리서치</h2>
           <p class="desc" data-role="desc">TV 환경에서 음성 인터랙션을 사용하는 고객 여정과 니즈를 파악하고, 발화/피드백 정책을 설계했습니다.</p>
-          <div class="project-actions" data-role="actions"></div>
+          <div data-role="actions">
+            <a href="detail.html" class="btn-view">자세히 보기</a>
+          </div>
         </article>
-      </section>
+      </div>
     </div>
   </main>
 
   <footer>
     <div class="container">
-      <div class="footer-grid" style="display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;align-items:center;padding:32px 0 44px;color:var(--muted2);font-size:13px;border-top:1px solid rgba(2,6,23,.08);">
-        <div style="display:flex;gap:14px;flex-wrap:wrap;">
+      <div class="footer-grid">
+        <span>© 2024 GROWTHLINE. All rights reserved.</span>
+        <div class="nav" style="gap:15px">
           <a href="service.html">Service</a>
-          <a href="work.html" aria-current="page">Work</a>
+          <a href="work.html">Work</a>
           <a href="contact.html">Contact</a>
         </div>
       </div>
@@ -285,102 +201,30 @@
   </footer>
 
   <script>
+    /* 기존 스크립트 로직 유지 (프로젝트 데이터 렌더링) */
     const projects = {
-      domain:{
-        'tv-voice':{
-          title:'TV Voice 활용 UX 리서치',
-          desc:'TV 환경에서 음성 인터랙션을 사용하는 고객 여정과 니즈를 파악하고, 발화/피드백 정책을 설계했습니다.',
-          tags:['Home Appliances','Voice','AI/Experience'],
-          thumbText:'Voice UX',
-          link:'detail.html'
-        },
-        'ai-agent':{
-          title:'AI Agent UX 전략 설계',
-          desc:'에이전트 기반 서비스의 페르소나·시나리오·라벨링 기준을 정의하고, 운영 정책을 정리했습니다.',
-          tags:['AI Agent','Strategy'],
-          thumbText:'AI Agent',
-          link:null
-        },
-        'voice-agent':{
-          title:'Voice Agent Contact UX Design',
-          desc:'보이스봇 상담 흐름을 설계하고, 실패/재시도 시나리오와 에러 핸들링을 정의했습니다.',
-          tags:['Voice Agent','Contact Center'],
-          thumbText:'Contact UX',
-          link:null
-        },
-        'sol-app':{
-          title:'신한 SOL New App UI 개발',
-          desc:'메인·자산·상품 탐색 흐름을 재설계하고, 금융 상품 카드/필터 기준을 정리했습니다.',
-          tags:['Finance','Mobile App','UI'],
-          thumbText:'Finance UI',
-          link:'https://www.shinhansquare.com/'
-        },
-        'atm':{
-          title:'ATM UX 재설계',
-          desc:'ATM 핵심 업무(출금/이체/통장정리)의 동선을 단축하고, 음성/터치 혼합 인터랙션을 제안했습니다.',
-          tags:['Finance','ATM','Service Design'],
-          thumbText:'ATM UX',
-          link:null
-        },
-        'commerce-flow':{
-          title:'옴니채널 커머스 플로우 개선',
-          desc:'매장/온라인 주문 흐름을 통합하고, 픽업·배송 정책을 명확히 해 이탈을 줄였습니다.',
-          tags:['Commerce','Omnichannel'],
-          thumbText:'Commerce',
-          link:null
-        }
-      }
+        'tv-voice': { title: 'TV Voice 활용 UX 리서치', desc: 'TV 환경에서 음성 인터랙션을 사용하는 고객 여정과 니즈를 파악하고, 발화/피드백 정책을 설계했습니다.', tags: ['Home Appliances', 'Voice'], link: 'detail.html' },
+        'ai-agent': { title: 'AI Agent UX 전략 설계', desc: '에이전트 기반 서비스의 페르소나·시나리오·라벨링 기준을 정의하고, 운영 정책을 정리했습니다.', tags: ['AI Agent', 'Strategy'], link: '#' },
+        'voice-agent': { title: 'Voice Agent Contact UX Design', desc: '보이스봇 상담 흐름을 설계하고, 실패/재시도 시나리오와 에러 핸들링을 정의했습니다.', tags: ['Voice Agent', 'Contact'], link: '#' },
+        'sol-app': { title: '신한 SOL New App UI 개발', desc: '메인·자산·상품 탐색 흐름을 재설계하고, 금융 상품 카드/필터 기준을 정리했습니다.', tags: ['Finance', 'Mobile App'], link: 'https://www.shinhansquare.com/' },
+        'atm': { title: 'ATM UX 재설계', desc: 'ATM 핵심 업무의 동선을 단축하고, 음성/터치 혼합 인터랙션을 제안했습니다.', tags: ['Finance', 'Service Design'], link: '#' }
     };
 
-    const filterGroups = Array.from(document.querySelectorAll('.filter-group'));
-    const filterItems = Array.from(document.querySelectorAll('.filter-list li'));
-
-    const titleEl = document.querySelector('[data-role="title"]');
-    const descEl = document.querySelector('[data-role="desc"]');
-    const tagsEl = document.querySelector('[data-role="tags"]');
-    const thumbEl = document.querySelector('[data-role="thumb"]');
-    const actionsEl = document.querySelector('[data-role="actions"]');
-
-    function renderProject(key){
-      const data = projects.domain?.[key];
-      if(!data) return;
-
-      titleEl.textContent = data.title;
-      descEl.textContent = data.desc;
-      tagsEl.innerHTML = '';
-      data.tags.forEach(tag=>{
-        const pill = document.createElement('span');
-        pill.className = 'pill';
-        pill.textContent = tag;
-        tagsEl.appendChild(pill);
-      });
-      thumbEl.textContent = data.thumbText || 'Project';
-      actionsEl.innerHTML = '';
-      if(data.link){
-        const linkBtn = document.createElement('a');
-        linkBtn.className = 'btn primary';
-        linkBtn.href = data.link;
-        linkBtn.target = '_blank';
-        linkBtn.rel = 'noreferrer noopener';
-        linkBtn.textContent = '자세히 보기';
-        actionsEl.appendChild(linkBtn);
-      }
-    }
-
-    filterItems.forEach(li=>{
-      li.addEventListener('click', ()=>{
-        filterItems.forEach(item=>item.classList.remove('is-active'));
+    const filterItems = document.querySelectorAll('.filter-list li');
+    filterItems.forEach(li => {
+      li.addEventListener('click', () => {
+        filterItems.forEach(item => item.classList.remove('is-active'));
         li.classList.add('is-active');
-        renderProject(li.dataset.project);
+        const data = projects[li.dataset.project];
+        if(data) {
+          document.querySelector('[data-role="title"]').textContent = data.title;
+          document.querySelector('[data-role="desc"]').textContent = data.desc;
+          const tagsEl = document.querySelector('[data-role="tags"]');
+          tagsEl.innerHTML = '';
+          data.tags.forEach(t => tagsEl.innerHTML += `<span class="pill">${t}</span>`);
+        }
       });
     });
-
-    filterGroups.forEach(g=>{ g.hidden = g.dataset.view !== 'domain'; });
-    const initialItem = filterItems.find(li=>li.classList.contains('is-active')) || filterItems[0];
-    if(initialItem){
-      renderProject(initialItem.dataset.project);
-    }
-
   </script>
 </body>
 </html>
