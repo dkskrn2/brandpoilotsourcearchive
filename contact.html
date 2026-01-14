@@ -10,120 +10,84 @@
   <style>
     :root {
       --bg: #ffffff;
-      --text: #191f28;
-      --muted: #6b7684;
+      --text: #1e293b; /* Work 상세와 동일한 톤으로 보정 */
+      --muted: #64748b;
       --accent: #2563eb;
-      --accent-dark: #1d4ed8;
-      --accent-soft: rgba(37, 99, 235, 0.06);
       --line: rgba(2, 32, 71, 0.08);
       --surface: #f8fafc;
-      --radius: 16px;
+      --radius: 24px; /* 곡률 통일 */
       --max: 1100px;
-      --btn-radius: 12px;
-      --btn-shadow: 0 4px 12px rgba(37, 99, 235, 0.15);
     }
 
     * { box-sizing: border-box; -webkit-font-smoothing: antialiased; }
     body {
       margin: 0;
-      font-family: "Inter", "Pretendard", sans-serif;
+      font-family: "Pretendard", "Inter", sans-serif;
       color: var(--text);
       background: var(--surface);
       line-height: 1.6;
     }
 
-    .topbar{
-      position: sticky;
-      top: 0;
-      z-index: 50;
-      backdrop-filter: blur(10px);
-      background: rgba(255,255,255,.86);
-      border-bottom: 1px solid rgba(2,32,71,.08);
+    /* --- Header (통일된 스타일) --- */
+    .topbar {
+      position: fixed; /* 고정 위치 통일 */
+      top: 0; left: 0; width: 100%;
+      z-index: 1000;
+      backdrop-filter: blur(12px);
+      background: rgba(255,255,255,.85);
+      border-bottom: 1px solid rgba(2,32,71,.05);
     }
-    .topbar-inner{
+    .topbar-inner {
       max-width: var(--max);
       margin: 0 auto;
-      padding: 12px 16px;
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:14px;
-    }
-    .brand{
-      display:flex; align-items:center; gap:10px;
-      text-decoration:none;
-      font-weight: 900;
-      letter-spacing:-.4px;
-      white-space:nowrap;
-      color: var(--text);
-    }
-    .dot{
-      width:10px; height:10px; border-radius: 999px;
-      background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
-      box-shadow: 0 0 0 6px rgba(49,130,246,.14);
-    }
-    .nav{
-      display:flex; align-items:center; gap:6px;
-      flex-wrap:wrap;
-      justify-content:flex-end;
-    }
-    .nav a{
-      text-decoration:none;
-      font-size:13px;
-      color: #6b7684;
-      padding: 8px 10px;
-      border-radius: 12px;
-      border: 1px solid transparent;
-    }
-    .nav a:hover{background: rgba(2,32,71,.04); color: var(--text);}
-    .nav a[aria-current="page"]{
-      background:rgba(37,99,235,.10);
-      color:var(--text);
-      border:1px solid rgba(37,99,235,.22);
-    }
-    .top-actions{display:flex; align-items:center; gap:10px;}
-    .topbar .btn{
-      padding: 11px 14px;
-      height: auto;
-      border-radius: 14px;
-      border: 1px solid rgba(2,32,71,.10);
-      background: rgba(255,255,255,.92);
-      color: var(--text);
-      font-weight: 800;
-      font-size: 14px;
-      white-space: nowrap;
-      box-shadow: 0 8px 18px rgba(2,32,71,.08);
-      text-decoration: none;
-    }
-    .topbar .btn:hover{transform: translateY(-1px);}
-    .btn.primary{
-      color:#fff;
-      border-color: rgba(49,130,246,.22);
-      background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
-    }
-
-    /* Provided consult layout styles */
-    .consult-page-wrapper {
-      min-height: 100vh;
+      padding: 16px 20px;
       display: flex;
       align-items: center;
+      justify-content: space-between;
+    }
+    .brand { display: flex; align-items: center; gap: 8px; font-weight: 900; font-size: 18px; letter-spacing: -0.5px; color: #0f172a; text-decoration: none; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+    
+    .top-actions { display: flex; align-items: center; gap: 24px; }
+    .nav { display: flex; align-items: center; gap: 24px; }
+    .nav a { font-size: 14px; color: #64748b; font-weight: 600; text-transform: uppercase; text-decoration: none; transition: 0.2s; }
+    .nav a:hover { color: var(--accent); }
+    
+    /* 문의하기 버튼 (상단 바 내비 전용) */
+    .topbar .btn.primary {
+      padding: 10px 18px;
+      background: #1e293b;
+      color: #fff;
+      border-radius: 12px;
+      font-size: 13px;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    /* --- Layout Content --- */
+    .consult-page-wrapper {
+      padding-top: 140px; /* Work 상세 페이지와 동일한 상단 여백 확보 */
+      padding-bottom: 100px;
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start; /* 여백 확보를 위해 중앙 정렬 해제 */
       justify-content: center;
-      background-color: #f4f7fa;
-      padding: 40px 20px;
-      font-family: 'Pretendard', sans-serif;
+      background: radial-gradient(circle at 50% 0%, rgba(37,99,235,0.03) 0%, transparent 50%);
     }
 
     .consult-content-card {
       display: flex;
       width: 100%;
-      max-width: 1100px;
-      min-height: 750px;
+      max-width: var(--max);
+      min-height: 720px;
       background: #fff;
       border-radius: 32px;
       overflow: hidden;
-      box-shadow: 0 30px 60px rgba(0, 0, 0, 0.08);
+      box-shadow: 0 30px 60px rgba(15, 23, 42, 0.08); /* 그림자 깊이 통일 */
+      border: 1px solid var(--line);
     }
 
+    /* 좌측 디자인 */
     .info-side {
       flex: 1;
       background-color: #1e293b;
@@ -155,12 +119,14 @@
     .text-wrap strong { display: block; font-size: 17px; margin-bottom: 4px; }
     .text-wrap span { color: #94a3b8; font-size: 14px; line-height: 1.5; }
 
+    /* 우측 폼 디자인 */
     .form-side {
       flex: 1;
       padding: 60px;
       display: flex;
       align-items: center;
       justify-content: center;
+      background: #fff;
     }
     .form-inner { width: 100%; max-width: 420px; }
 
@@ -187,40 +153,41 @@
 
     .agree-row { margin-bottom: 30px; font-size: 14px; color: #64748b; }
     .checkbox-container { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; }
-    .checkbox-container input { width: 16px; height: 16px; }
-    .checkbox-container a { color: #2563eb; text-decoration: underline; }
+    .checkbox-container a { color: #2563eb; font-weight: 600; }
 
     .submit-button {
       width: 100%; padding: 18px; background: #2563eb; color: #fff; border: none;
       border-radius: 14px; font-size: 17px; font-weight: 700; cursor: pointer; transition: 0.3s;
     }
-    .submit-button:hover { background: #1d4ed8; transform: translateY(-2px); }
+    .submit-button:hover { background: #1d4ed8; transform: translateY(-2px); box-shadow: 0 10px 20px rgba(37, 99, 235, 0.15); }
     .disclaimer { margin-top: 15px; font-size: 12px; color: #94a3b8; text-align: center; }
 
     @media (max-width: 900px) {
-      .consult-content-card { flex-direction: column; max-width: 500px; }
+      .consult-page-wrapper { padding-top: 100px; }
+      .consult-content-card { flex-direction: column; max-width: 500px; margin-bottom: 50px; }
       .info-side, .form-side { padding: 40px; }
+      .nav { display: none; }
     }
   </style>
 </head>
 <body>
-  <div class="topbar">
+  <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="index.html#top" aria-label="홈으로">
-        <span class="dot" aria-hidden="true"></span>
+      <a class="brand" href="index.html">
+        <span class="dot"></span>
         <span>GROWTHLINE</span>
       </a>
       <div class="top-actions">
-        <div class="nav" aria-label="상단 메뉴">
+        <nav class="nav">
           <a href="service.html">service</a>
           <a href="work.html">work</a>
-        </div>
-        <a class="btn primary" href="contact.html" aria-current="page">문의하기</a>
+        </nav>
+        <a class="btn primary" href="contact.html">문의하기</a>
       </div>
     </div>
-  </div>
+  </header>
 
-  <section class="consult-page-wrapper">
+  <main class="consult-page-wrapper">
     <div class="consult-content-card">
       <div class="info-side">
         <div class="info-inner">
@@ -284,8 +251,8 @@
 
             <div class="agree-row">
               <label class="checkbox-container">
-                <input type="checkbox" required>
-                개인정보 수집 및 이용에 동의합니다. <a href="#">자세히 보기</a>
+                <input type="checkbox" required style="width: 16px; height: 16px;">
+                <span>개인정보 수집 및 이용에 동의합니다. <a href="#">자세히 보기</a></span>
               </label>
             </div>
 
@@ -296,6 +263,6 @@
       </div>
 
     </div>
-  </section>
+  </main>
 </body>
 </html>
