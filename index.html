@@ -57,7 +57,7 @@
     }
     .btn--ghost:hover { background: var(--surface); border-color: var(--muted); }
 
-    /* Topbar (match work) */
+    /* Topbar */
     .topbar{
       position: sticky;
       top: 0;
@@ -88,12 +88,12 @@
       background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
       box-shadow: 0 0 0 6px rgba(49,130,246,.14);
     }
-    .nav{
+    .topbar .nav{
       display:flex; align-items:center; gap:6px;
       flex-wrap:wrap;
       justify-content:flex-end;
     }
-    .nav a{
+    .topbar .nav a{
       text-decoration:none;
       font-size:13px;
       color: #6b7684;
@@ -101,8 +101,8 @@
       border-radius: 12px;
       border: 1px solid transparent;
     }
-    .nav a:hover{background: rgba(2,32,71,.04); color: var(--text);}
-    .nav a[aria-current="page"]{
+    .topbar .nav a:hover{background: rgba(2,32,71,.04); color: var(--text);}
+    .topbar .nav a[aria-current="page"]{
       background:rgba(37,99,235,.10);
       color:var(--text);
       border:1px solid rgba(37,99,235,.22);
@@ -125,10 +125,14 @@
       box-shadow: 0 8px 18px rgba(2,32,71,.08);
     }
     .topbar .btn:hover{transform: translateY(-1px);}
-    .btn.primary{
+    .topbar .btn.primary{
       color:#fff;
       border-color: rgba(49,130,246,.22);
       background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
+    }
+
+    @media (max-width: 900px) {
+      .topbar .nav { display: none; }
     }
 
     /* Hero */
@@ -453,21 +457,21 @@
 </head>
 <body>
 
-  <div class="topbar">
+  <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="index.html#top" aria-label="홈으로">
+      <a class="brand" href="index.html" aria-label="홈으로">
         <span class="dot" aria-hidden="true"></span>
         <span>GROWTHLINE</span>
       </a>
       <div class="top-actions">
-        <div class="nav" aria-label="상단 메뉴">
+        <nav class="nav" aria-label="상단 메뉴">
           <a href="service.html">service</a>
           <a href="work.html">work</a>
-        </div>
-        <a class="btn primary contact-trigger" href="contact.html">문의하기</a>
+        </nav>
+        <a class="btn primary" href="contact.html">문의하기</a>
       </div>
     </div>
-  </div>
+  </header>
 
   <section class="hero">
     <div class="inner">

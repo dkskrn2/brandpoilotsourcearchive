@@ -28,40 +28,79 @@
       line-height: 1.6;
     }
 
-    /* --- Header (통일된 스타일) --- */
-    .topbar {
-      position: fixed; /* 고정 위치 통일 */
-      top: 0; left: 0; width: 100%;
-      z-index: 1000;
-      backdrop-filter: blur(12px);
-      background: rgba(255,255,255,.85);
-      border-bottom: 1px solid rgba(2,32,71,.05);
+    /* --- Header --- */
+    .topbar{
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      backdrop-filter: blur(10px);
+      background: rgba(255,255,255,.86);
+      border-bottom: 1px solid rgba(2,32,71,.08);
     }
-    .topbar-inner {
+    .topbar-inner{
       max-width: var(--max);
       margin: 0 auto;
-      padding: 16px 20px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
+      padding: 12px 16px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:14px;
     }
-    .brand { display: flex; align-items: center; gap: 8px; font-weight: 900; font-size: 18px; letter-spacing: -0.5px; color: #0f172a; text-decoration: none; }
-    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
-    
-    .top-actions { display: flex; align-items: center; gap: 24px; }
-    .nav { display: flex; align-items: center; gap: 24px; }
-    .nav a { font-size: 14px; color: #64748b; font-weight: 600; text-transform: uppercase; text-decoration: none; transition: 0.2s; }
-    .nav a:hover { color: var(--accent); }
-    
-    /* 문의하기 버튼 (상단 바 내비 전용) */
-    .topbar .btn.primary {
-      padding: 10px 18px;
-      background: #1e293b;
-      color: #fff;
+    .brand{
+      display:flex; align-items:center; gap:10px;
+      text-decoration:none;
+      font-weight: 900;
+      letter-spacing:-.4px;
+      white-space:nowrap;
+      color: var(--text);
+    }
+    .dot{
+      width:10px; height:10px; border-radius: 999px;
+      background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
+      box-shadow: 0 0 0 6px rgba(49,130,246,.14);
+    }
+    .topbar .nav{
+      display:flex; align-items:center; gap:6px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+    }
+    .topbar .nav a{
+      text-decoration:none;
+      font-size:13px;
+      color: #6b7684;
+      padding: 8px 10px;
       border-radius: 12px;
-      font-size: 13px;
-      font-weight: 700;
+      border: 1px solid transparent;
+    }
+    .topbar .nav a:hover{background: rgba(2,32,71,.04); color: var(--text);}
+    .topbar .nav a[aria-current="page"]{
+      background:rgba(37,99,235,.10);
+      color:var(--text);
+      border:1px solid rgba(37,99,235,.22);
+    }
+    .top-actions{
+      display:flex;
+      align-items:center;
+      gap:10px;
+    }
+    .topbar .btn{
+      padding: 11px 14px;
+      height: auto;
+      border-radius: 14px;
+      border: 1px solid rgba(2,32,71,.10);
+      background: rgba(255,255,255,.92);
+      color: var(--text);
+      font-weight: 800;
+      font-size: 14px;
+      white-space: nowrap;
+      box-shadow: 0 8px 18px rgba(2,32,71,.08);
       text-decoration: none;
+    }
+    .topbar .btn:hover{transform: translateY(-1px);}
+    .topbar .btn.primary{
+      color:#fff;
+      border-color: rgba(49,130,246,.22);
+      background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
     }
 
     /* --- Layout Content --- */
@@ -166,19 +205,19 @@
       .consult-page-wrapper { padding-top: 100px; }
       .consult-content-card { flex-direction: column; max-width: 500px; margin-bottom: 50px; }
       .info-side, .form-side { padding: 40px; }
-      .nav { display: none; }
+      .topbar .nav { display: none; }
     }
   </style>
 </head>
 <body>
   <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="index.html">
-        <span class="dot"></span>
+      <a class="brand" href="index.html" aria-label="홈으로">
+        <span class="dot" aria-hidden="true"></span>
         <span>GROWTHLINE</span>
       </a>
       <div class="top-actions">
-        <nav class="nav">
+        <nav class="nav" aria-label="상단 메뉴">
           <a href="service.html">service</a>
           <a href="work.html">work</a>
         </nav>
