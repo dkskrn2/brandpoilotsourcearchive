@@ -3,7 +3,46 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Service | GROWTHLINE</title>
+
+  <!-- SEO essentials -->
+  <title>전환 설계·웹서비스 제작·홈페이지 구축 서비스 | GROWTHLINE</title>
+  <meta name="description" content="GROWTHLINE은 고객 분석, 퍼널 데이터 분석, 전환 중심 설계, 비즈니스 로직 설계, 설득 카피라이팅, 스타트업 구축까지. ‘만드는 것’이 아니라 ‘운영되는 구조’로 온라인 전환을 돕습니다." />
+  <!-- TODO: 아래 canonical/og:url은 실제 도메인으로 교체하세요 -->
+  <link rel="canonical" href="https://YOUR_DOMAIN/service.html" />
+
+  <!-- Open Graph / Twitter -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="GROWTHLINE" />
+  <meta property="og:title" content="전환 설계·웹서비스 제작·홈페이지 구축 서비스 | GROWTHLINE" />
+  <meta property="og:description" content="고객 분석 → 퍼널 분석 → 전환 중심 설계 → 로직/카피까지. 온라인에서 승리할 수밖에 없는 구조를 만듭니다." />
+  <meta property="og:url" content="https://YOUR_DOMAIN/service.html" />
+  <!-- og:image는 실제 이미지 경로로 교체 권장 -->
+  <!-- <meta property="og:image" content="https://YOUR_DOMAIN/og/service.png" /> -->
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="전환 설계·웹서비스 제작·홈페이지 구축 서비스 | GROWTHLINE" />
+  <meta name="twitter:description" content="고객 분석부터 설계·구현·운영 구조까지. 전환을 만드는 서비스." />
+  <!-- <meta name="twitter:image" content="https://YOUR_DOMAIN/og/service.png" /> -->
+
+  <!-- Structured data (JSON-LD) -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "ProfessionalService",
+    "name": "GROWTHLINE",
+    "url": "https://YOUR_DOMAIN/service.html",
+    "areaServed": "KR",
+    "serviceType": [
+      "고객 분석 진단",
+      "데이터 퍼널 분석",
+      "전환 중심 설계",
+      "비즈니스 로직 설계",
+      "설득 카피라이팅",
+      "스타트업 구축"
+    ]
+  }
+  </script>
+
   <style>
     :root{
       --accent:#2563eb;
@@ -101,8 +140,6 @@
       background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
     }
 
-
-
     /* ===== Main Layout (통일된 상단 여백) ===== */
     main {
       padding-top: 140px; /* 모든 상세 페이지 공통 */
@@ -119,7 +156,7 @@
     /* ===== Tab System (기존 스타일 유지하되 정돈) ===== */
     .tab-nav { display: flex; border-bottom: 1px solid #e2e8f0; margin-bottom: 50px; overflow-x: auto; white-space: nowrap; -ms-overflow-style: none; scrollbar-width: none; }
     .tab-nav::-webkit-scrollbar { display: none; }
-    
+
     .tab-link {
         padding: 15px 20px; border: none; background: none; color: #94a3b8;
         font-size: 15px; font-weight: 700; cursor: pointer; position: relative; transition: 0.3s;
@@ -146,9 +183,9 @@
 
     /* 하단 CTA 버튼 스타일 보정 */
     .final-cta { margin-top: 60px; text-align: center; }
-    .final-cta a { 
-      display: inline-block; background: #1e293b; color: #fff; padding: 20px 40px; 
-      border-radius: 16px; font-size: 16px; font-weight: 700; transition: 0.3s; 
+    .final-cta a {
+      display: inline-block; background: #1e293b; color: #fff; padding: 20px 40px;
+      border-radius: 16px; font-size: 16px; font-weight: 700; transition: 0.3s;
     }
     .final-cta a:hover { background: var(--accent); transform: translateY(-3px); box-shadow: 0 10px 20px rgba(37, 99, 235, 0.15); }
 
@@ -188,11 +225,11 @@
     <div class="container">
       <section class="section-header">
         <p class="sub-title">Our Specialized Services</p>
-        <h2 class="main-title">우리는 단순 제작자가 아닌,<br><span>비즈니스 설계 파트너</span>입니다.</h2>
+        <h1 class="main-title">우리는 단순 제작자가 아닌,<br><span>비즈니스 설계 파트너</span>입니다.</h1>
         <p class="header-desc">각 분야의 전문 지식을 동원하여, 대표님의 사업이 온라인에서 승리할 수밖에 없는 구조를 만듭니다.</p>
       </section>
 
-      <nav class="tab-nav">
+      <nav class="tab-nav" aria-label="서비스 탭">
         <button class="tab-link active" onclick="openService(event, 'research')">고객 분석 진단</button>
         <button class="tab-link" onclick="openService(event, 'analytics')">데이터 퍼널 분석</button>
         <button class="tab-link" onclick="openService(event, 'design')">전환 중심 설계</button>
@@ -230,6 +267,70 @@
             </ul>
           </div>
           <div class="panel-visual"><div class="visual-box">DATA DASHBOARD</div></div>
+        </div>
+      </div>
+
+      <div id="design" class="tab-panel">
+        <div class="panel-inner">
+          <div class="panel-text">
+            <span class="panel-category">Conversion Design</span>
+            <h3>예쁘게가 아니라<br>"전환되게" 설계합니다.</h3>
+            <p>페이지를 ‘정보 나열’이 아니라 ‘의사결정 흐름’으로 재구성합니다. 무엇을 먼저 보여주고, 무엇을 숨기며, 어디서 결정을 끌어낼지 구조로 정합니다.</p>
+            <ul class="check-list">
+              <li>핵심 가치·차별점·증거의 우선순위 설계</li>
+              <li>CTA(문의/구매) 동선과 마찰 요소 제거</li>
+              <li>랜딩/서비스/상세 페이지의 역할 분리 및 연결</li>
+            </ul>
+          </div>
+          <div class="panel-visual"><div class="visual-box">CONVERSION FLOW</div></div>
+        </div>
+      </div>
+
+      <div id="consulting" class="tab-panel">
+        <div class="panel-inner">
+          <div class="panel-text">
+            <span class="panel-category">Business Logic</span>
+            <h3>기능을 늘리기 전에<br>업무와 기준을 고정합니다.</h3>
+            <p>개발을 시작하기 전에 ‘업무 흐름(To‑Be)·범위·졸업 조건’을 문서로 고정합니다. 수정·역기획 비용을 줄이고, 팀이 같은 기준으로 움직이게 합니다.</p>
+            <ul class="check-list">
+              <li>요구사항 정리(PRD) 및 우선순위 결정</li>
+              <li>정산/권한/상태값 등 핵심 로직 정의</li>
+              <li>운영 관점의 관리자 기능·로그·권한 설계</li>
+            </ul>
+          </div>
+          <div class="panel-visual"><div class="visual-box">SYSTEM SPEC</div></div>
+        </div>
+      </div>
+
+      <div id="writing" class="tab-panel">
+        <div class="panel-inner">
+          <div class="panel-text">
+            <span class="panel-category">Copywriting</span>
+            <h3>기술을 설명하지 않고<br>고객의 결정을 돕습니다.</h3>
+            <p>고객이 머뭇거리는 지점(가격/신뢰/리스크/대안)을 문장으로 해소합니다. 말의 톤을 통일하고, 증거(사례/지표/프로세스)를 배치해 설득력을 만듭니다.</p>
+            <ul class="check-list">
+              <li>핵심 메시지(1문장) + 섹션별 논리 구조 설계</li>
+              <li>FAQ/반론 처리 문구 구성</li>
+              <li>CTA 주변 문구(불안 해소·다음 행동 유도) 정교화</li>
+            </ul>
+          </div>
+          <div class="panel-visual"><div class="visual-box">MESSAGE MAP</div></div>
+        </div>
+      </div>
+
+      <div id="startup" class="tab-panel">
+        <div class="panel-inner">
+          <div class="panel-text">
+            <span class="panel-category">Build</span>
+            <h3>아이디어를 서비스로<br>"출시 가능한 형태"로 만듭니다.</h3>
+            <p>무작정 풀빌드하지 않습니다. 시장 가설을 검증할 최소 기능(MVP)부터 만들고, 운영·데이터 수집·확장까지 이어지는 구조로 설계합니다.</p>
+            <ul class="check-list">
+              <li>MVP 범위 정의 및 일정/리스크 관리</li>
+              <li>웹서비스/관리자/결제·알림 등 핵심 모듈 구축</li>
+              <li>런칭 이후 개선 사이클(지표 → 가설 → 실험) 설계</li>
+            </ul>
+          </div>
+          <div class="panel-visual"><div class="visual-box">MVP LAUNCH</div></div>
         </div>
       </div>
 
