@@ -244,32 +244,265 @@
       </div>
     </div>
   </footer>
+<script>
+  // ===== CSV Loader =====
+  function parseCSV(text) {
+    // 간단하지만 실무에서 충분히 버티는 CSV 파서(따옴표/콤마 기본 지원)
+    const rows = [];
+    let row = [];
+    let cur = '';
+    let inQuotes = false;
 
-  <script>
-    /* 기존 스크립트 로직 유지 (프로젝트 데이터 렌더링) */
-    const projects = {
-        'tv-voice': { title: 'TV Voice 활용 UX 리서치', desc: 'TV 환경에서 음성 인터랙션을 사용하는 고객 여정과 니즈를 파악하고, 발화/피드백 정책을 설계했습니다.', tags: ['Home Appliances', 'Voice'], link: 'detail.html' },
-        'ai-agent': { title: 'AI Agent UX 전략 설계', desc: '에이전트 기반 서비스의 페르소나·시나리오·라벨링 기준을 정의하고, 운영 정책을 정리했습니다.', tags: ['AI Agent', 'Strategy'], link: '#' },
-        'voice-agent': { title: 'Voice Agent Contact UX Design', desc: '보이스봇 상담 흐름을 설계하고, 실패/재시도 시나리오와 에러 핸들링을 정의했습니다.', tags: ['Voice Agent', 'Contact'], link: '#' },
-        'sol-app': { title: '신한 SOL New App UI 개발', desc: '메인·자산·상품 탐색 흐름을 재설계하고, 금융 상품 카드/필터 기준을 정리했습니다.', tags: ['Finance', 'Mobile App'], link: 'https://www.shinhansquare.com/' },
-        'atm': { title: 'ATM UX 재설계', desc: 'ATM 핵심 업무의 동선을 단축하고, 음성/터치 혼합 인터랙션을 제안했습니다.', tags: ['Finance', 'Service Design'], link: '#' }
-    };
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      const next = text[i + 1];
 
-    const filterItems = document.querySelectorAll('.filter-list li');
-    filterItems.forEach(li => {
-      li.addEventListener('click', () => {
-        filterItems.forEach(item => item.classList.remove('is-active'));
-        li.classList.add('is-active');
-        const data = projects[li.dataset.project];
-        if(data) {
-          document.querySelector('[data-role="title"]').textContent = data.title;
-          document.querySelector('[data-role="desc"]').textContent = data.desc;
-          const tagsEl = document.querySelector('[data-role="tags"]');
-          tagsEl.innerHTML = '';
-          data.tags.forEach(t => tagsEl.innerHTML += `<span class="pill">${t}</span>`);
-        }
+      if (ch === '"' && inQuotes && next === '"') { // escaped quote
+        cur += '"';
+        i++;
+        continue;
+      }
+      if (ch === '"') {
+        inQuotes = !inQuotes;
+        continue;
+      }
+      if (ch === ',' && !inQuotes) {
+        row.push(cur);
+        cur = '';
+        continue;
+      }
+      if ((ch === '\n' || ch === '\r') && !inQuotes) {
+        if (ch === '\r' && next === '\n') i++;
+        row.push(cur);
+        cur = '';
+        if (row.some(v => v.trim() !== '')) rows.push(row);
+        row = [];
+        continue;
+      }
+      cur += ch;
+    }
+    // last cell
+    row.push(cur);
+    if (row.some(v => v.trim() !== '')) rows.push(row);
+
+    if (rows.length === 0) return [];
+
+    const headers = rows[0].map(h => h.trim());
+    const data = rows.slice(1).map(cols => {
+      const obj = {};
+      headers.forEach((h, idx) => obj[h] = (cols[idx] ?? '').trim());
+      return obj;
+    });
+    return data;
+  }
+
+  function toBool(v) {
+    return String(v).toLowerCase() === 'true' || v === '1' || v === 'yes';
+  }
+
+  function toInt(v, fallback = 0) {
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  function splitDomainKeys(v) {
+    // domain_keys: "ai_conversational;enterprise_web" 형태
+    if (!v) return [];
+    return v.split(';').map(s => s.trim()).filter(Boolean);
+  }
+
+  // ===== UI Render =====
+  const els = {
+    filtersRoot: document.getElementById('filtersRoot'),
+    title: document.querySelector('[data-role="title"]'),
+    desc: document.querySelector('[data-role="desc"]'),
+    tags: document.querySelector('[data-role="tags"]'),
+    thumb: document.querySelector('[data-role="thumb"]'),
+    actions: document.querySelector('[data-role="actions"]'),
+  };
+
+  function renderProject(project, domainMap) {
+    if (!project) return;
+
+    els.title.textContent = project.title || '';
+    els.desc.textContent = project.summary || '';
+
+    // tags: 도메인 pill 표시
+    els.tags.innerHTML = '';
+    const keys = splitDomainKeys(project.domain_keys);
+    keys.forEach(k => {
+      const label = domainMap.get(k)?.label ?? k;
+      const span = document.createElement('span');
+      span.className = 'pill';
+      span.textContent = label;
+      els.tags.appendChild(span);
+    });
+
+    // thumb: 있으면 이미지, 없으면 placeholder 텍스트
+    const thumbUrl = project.thumb_url || '';
+    if (thumbUrl) {
+      els.thumb.innerHTML = `<img src="${thumbUrl}" alt="${project.title || 'Project'}" style="width:100%;height:100%;object-fit:cover;display:block;">`;
+    } else {
+      els.thumb.textContent = 'Project Visual';
+    }
+
+    // link
+    els.actions.innerHTML = '';
+    const a = document.createElement('a');
+    a.className = 'btn-view';
+
+    const linkType = (project.primary_link_type || 'detail').toLowerCase();
+    const href = project.primary_link_url || '#';
+
+    a.href = href;
+    a.textContent = '자세히 보기';
+
+    if (linkType === 'external') {
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+    }
+
+    els.actions.appendChild(a);
+  }
+
+  function renderFilters(domains, projects) {
+    // 도메인 맵(키 -> {label,...})
+    const domainMap = new Map(domains.map(d => [d.key, d]));
+
+    // 도메인별 프로젝트 묶기
+    const projectsByDomain = new Map();
+    domains.forEach(d => projectsByDomain.set(d.key, []));
+    projects.forEach(p => {
+      const keys = splitDomainKeys(p.domain_keys);
+      keys.forEach(k => {
+        if (!projectsByDomain.has(k)) projectsByDomain.set(k, []);
+        projectsByDomain.get(k).push(p);
       });
     });
-  </script>
+
+    // 정렬: 도메인 sort_order, 프로젝트 sort_order
+    const sortedDomains = [...domains].sort((a, b) => toInt(a.sort_order) - toInt(b.sort_order));
+    sortedDomains.forEach(d => {
+      const arr = projectsByDomain.get(d.key) || [];
+      arr.sort((a, b) => toInt(a.sort_order) - toInt(b.sort_order));
+    });
+
+    // 좌측 렌더
+    els.filtersRoot.innerHTML = '';
+
+    let firstProject = null;
+    let firstLi = null;
+
+    sortedDomains.forEach(domain => {
+      const list = projectsByDomain.get(domain.key) || [];
+      if (list.length === 0) return;
+
+      const details = document.createElement('details');
+      details.className = 'filter-group';
+      details.open = true;
+
+      const summary = document.createElement('summary');
+      summary.className = 'filter-head';
+      summary.innerHTML = `${domain.label} <span>›</span>`;
+      details.appendChild(summary);
+
+      const ul = document.createElement('ul');
+      ul.className = 'filter-list';
+
+      list.forEach(p => {
+        const li = document.createElement('li');
+        li.dataset.projectId = p.id;
+        li.textContent = p.title || '(제목 없음)';
+
+        // 처음 1개 활성화용
+        if (!firstProject) {
+          firstProject = p;
+          firstLi = li;
+        }
+
+        li.addEventListener('click', () => {
+          // active 처리
+          els.filtersRoot.querySelectorAll('.filter-list li').forEach(x => x.classList.remove('is-active'));
+          li.classList.add('is-active');
+
+          renderProject(p, domainMap);
+        });
+
+        ul.appendChild(li);
+      });
+
+      details.appendChild(ul);
+      els.filtersRoot.appendChild(details);
+    });
+
+    // 초기 선택
+    if (firstProject && firstLi) {
+      firstLi.classList.add('is-active');
+      renderProject(firstProject, domainMap);
+    }
+  }
+
+  async function loadData() {
+    // CSV 경로(네가 넣은 위치에 맞춰 수정 가능)
+    const DOMAINS_CSV = 'data/seed/domains.csv';
+    const PROJECTS_CSV = 'data/seed/projects.csv';
+
+    const [domainsText, projectsText] = await Promise.all([
+      fetch(DOMAINS_CSV, { cache: 'no-store' }).then(r => {
+        if (!r.ok) throw new Error('domains.csv 로드 실패');
+        return r.text();
+      }),
+      fetch(PROJECTS_CSV, { cache: 'no-store' }).then(r => {
+        if (!r.ok) throw new Error('projects.csv 로드 실패');
+        return r.text();
+      }),
+    ]);
+
+    const domainsRaw = parseCSV(domainsText);
+    const projectsRaw = parseCSV(projectsText);
+
+    // domains.csv 최소 컬럼: key,label,sort_order
+    const domains = domainsRaw
+      .filter(d => d.key && d.label)
+      .map(d => ({
+        key: d.key,
+        label: d.label,
+        sort_order: d.sort_order ?? '0',
+      }));
+
+    // projects.csv 최소 컬럼: id,slug,title,summary,is_public,sort_order,published_at,updated_at,thumb_url,primary_link_url,primary_link_type,domain_keys
+    const projects = projectsRaw
+      .filter(p => toBool(p.is_public ?? 'true'))
+      .map(p => ({
+        id: p.id,
+        slug: p.slug,
+        title: p.title,
+        summary: p.summary,
+        is_public: p.is_public,
+        sort_order: p.sort_order ?? '0',
+        published_at: p.published_at,
+        updated_at: p.updated_at,
+        thumb_url: p.thumb_url,
+        primary_link_url: p.primary_link_url,
+        primary_link_type: p.primary_link_type,
+        domain_keys: p.domain_keys || '',
+      }))
+      .sort((a, b) => toInt(a.sort_order) - toInt(b.sort_order));
+
+    renderFilters(domains, projects);
+  }
+
+  // 시작
+  loadData().catch(err => {
+    console.error(err);
+    // 사용자에게 최소한의 피드백
+    els.filtersRoot.innerHTML = `
+      <div style="padding:14px; font-size:13px; color:#64748b; line-height:1.6;">
+        데이터를 불러오지 못했습니다.<br>
+        <strong>data/seed/domains.csv</strong>, <strong>data/seed/projects.csv</strong> 경로에 파일이 있는지 확인하세요.
+      </div>
+    `;
+  });
+</script>
 </body>
 </html>
