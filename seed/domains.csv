@@ -1,0 +1,7 @@
+﻿id,key,label,sort_order
+dom-001,ai_conversational,AI / Conversational UX,1
+dom-002,enterprise_web,Enterprise / Corporate Web,2
+dom-003,app_mobile,App / Mobile Service,3
+dom-004,finance_insurance,Finance / Insurance,4
+dom-005,marketing_campaign,Marketing / Campaign,5
+dom-006,operation_maintenance,Operation / Maintenance,6
