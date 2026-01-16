@@ -3,7 +3,60 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- ✅ SEO: Title 유지 -->
   <title>GROWTHLINE | 비즈니스 성장 시스템 설계</title>
+
+  <!-- ✅ SEO: Meta Description 추가 -->
+  <meta name="description" content="GROWTHLINE은 단순한 홈페이지 제작이 아닌, 매출로 이어지는 비즈니스 구조를 설계합니다. 진단부터 구축, 운영까지 온라인 전환을 시스템으로 만듭니다." />
+
+  <!-- ✅ SEO: Canonical (도메인으로 교체하세요) -->
+  <link rel="canonical" href="https://your-domain.com/" />
+
+  <!-- ✅ SEO: Favicon (경로 교체하세요) -->
+  <link rel="icon" href="/favicon.ico" />
+
+  <!-- ✅ Social (OG) (도메인/이미지 경로 교체하세요) -->
+  <meta property="og:type" content="website" />
+  <meta property="og:locale" content="ko_KR" />
+  <meta property="og:site_name" content="GROWTHLINE" />
+  <meta property="og:title" content="GROWTHLINE | 비즈니스 성장 시스템 설계" />
+  <meta property="og:description" content="단순한 홈페이지가 아닌, 매출 올리는 구조를 만듭니다. 진단부터 구축, 운영까지 온라인 전환을 시스템으로 만듭니다." />
+  <meta property="og:url" content="https://your-domain.com/" />
+  <meta property="og:image" content="https://your-domain.com/og.jpg" />
+
+  <!-- ✅ Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="GROWTHLINE | 비즈니스 성장 시스템 설계" />
+  <meta name="twitter:description" content="단순한 홈페이지가 아닌, 매출 올리는 구조를 만듭니다. 진단부터 구축, 운영까지 온라인 전환을 시스템으로 만듭니다." />
+  <meta name="twitter:image" content="https://your-domain.com/og.jpg" />
+
+  <!-- ✅ Structured Data (Organization / Website) : 정보 교체 권장 -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "name": "GROWTHLINE",
+    "url": "https://your-domain.com/",
+    "logo": "https://your-domain.com/logo.png",
+    "contactPoint": [{
+      "@type": "ContactPoint",
+      "contactType": "sales",
+      "telephone": "+82-10-0000-0000",
+      "areaServed": "KR",
+      "availableLanguage": ["ko"]
+    }]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "name": "GROWTHLINE",
+    "url": "https://your-domain.com/"
+  }
+  </script>
+
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
 
@@ -130,8 +183,6 @@
       border-color: rgba(49,130,246,.22);
       background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
     }
-
-
 
     /* Hero */
     .hero { text-align: center; padding: clamp(80px, 15vw, 160px) 0; background: radial-gradient(circle at top, #f0f7ff 0%, #ffffff 70%); }
@@ -302,7 +353,7 @@
       font-weight: 900;
       box-shadow: 0 8px 18px rgba(37, 99, 235, 0.18);
       position: sticky;
-      top: 110px; /* 자연스럽게 스크롤 시 고정 느낌 */
+      top: 110px;
     }
     @media (max-width: 768px){
       .process-section .process-num{ position: static; box-shadow: none; }
@@ -335,17 +386,6 @@
     }
     .process-section .process-content li{
       margin-bottom: 8px;
-    }
-    .process-section .process-cta{
-      text-align: center;
-      margin-top: 30px;
-      grid-column: 1 / -1;
-    }
-    .process-section .process-cta .btn{
-      height: 44px;
-      padding: 0 22px;
-      font-size: 13px;
-      border-radius: 10px;
     }
     @media (max-width: 980px){
       .process-section .process-wrap{
@@ -409,7 +449,6 @@
     @media (max-width: 900px){
       .pricing-section .price-card--featured{ transform: none; }
     }
-    /* "인기"를 이미지처럼 작은 배지 느낌으로 */
     .pricing-section .price-card__tag{
       top: 18px;
       right: 18px;
@@ -474,8 +513,19 @@
   <section class="hero">
     <div class="inner">
       <span class="hero__eyebrow">웹사이트 제작, 그 이상의 비즈니스 설계</span>
+
+      <!-- ✅ SEO: H1은 1개만 유지 -->
       <h1 class="hero__title">단순한 홈페이지가 아닌<br><span class="hl">매출 올리는 구조</span>를 만듭니다</h1>
+
       <p class="desc">대표님은 본업에만 집중하세요.<br>복잡한 온라인 전환은 GROWTHLINE이<br>'작동하는 결과물'로 증명하겠습니다.</p>
+
+      <!-- ✅ SEO: 키워드(전환/신뢰) 자연 삽입 -->
+      <p class="desc" style="max-width: 860px; margin: 18px auto 0; font-size: 16px; line-height: 1.8;">
+        GROWTHLINE은 <strong>스타트업 홈페이지 제작</strong>, <strong>병원 전문 웹사이트 구축</strong>, <strong>1인 창업자를 위한 웹사이트 제작</strong>을 중심으로
+        <strong>반응형 웹 디자인</strong>과 <strong>워드프레스 커스텀 제작</strong>을 통해
+        고객 유입 → 문의 → 매출로 이어지는 구조를 설계합니다.
+      </p>
+
       <div class="hero__cta">
         <a class="btn btn--primary" href="contact.html">매출 상승 상담 받기</a>
       </div>
@@ -488,6 +538,10 @@
             <p class="sub-title">REAL PERFORMANCE</p>
             <h2 class="main-title">단순히 예쁜 사이트가 아닙니다.<br><span>숫자로 증명된 '매출 구조'</span>의 힘입니다.</h2>
             <p class="description">대표님과 똑같은 고민을 하던 업체들이 이 구조를 통해 얻은 실제 성과입니다.</p>
+            <!-- ✅ E-E-A-T: 성과 데이터의 맥락(짧게) -->
+            <p class="description" style="margin-top:10px; font-size: 13px; color:#94a3b8;">
+              실제 프로젝트 운영 중 내부 측정 기준으로 집계된 지표입니다.
+            </p>
         </div>
 
         <div class="stats-grid">
@@ -515,74 +569,77 @@
     </div>
   </section>
 
-<section class="section section--alt problem">
-  <div class="inner">
-    <div style="margin-bottom: 56px;">
-      <span style="color: var(--accent); font-weight: 800; font-size: 14px; letter-spacing: 0.1em; display: block; margin-bottom: 16px; text-transform: uppercase;">
-        THE REAL REASON
-      </span>
+  <section class="section section--alt problem">
+    <div class="inner">
+      <div style="margin-bottom: 56px;">
+        <span style="color: var(--accent); font-weight: 800; font-size: 14px; letter-spacing: 0.1em; display: block; margin-bottom: 16px; text-transform: uppercase;">
+          THE REAL REASON
+        </span>
 
-      <h1 class="hero__title">
-        온라인 전환이 실패하는 이유는<br>
-        근거 없는 '확신' 때문입니다.
-      </h1>
+        <!-- ✅ SEO: 여기의 h1을 h2로 변경 (H1 중복 제거) -->
+        <h2 class="hero__title">
+          온라인 전환이 실패하는 이유는<br>
+          근거 없는 '확신' 때문입니다.
+        </h2>
 
-      <p class="desc" style="max-width: 760px; margin: 24px auto 0; font-size: 18px; line-height: 1.8;">
-        대부분은 “사업은 잘될거야!”라는 결론을 먼저 내리고 제작에 뛰어듭니다.<br class="pc">
-        하지만 <strong>비즈니스 페인 포인트</strong>를 진단하지 않은 결론은 실패의 가장 큰 리스크가 됩니다.
-      </p>
+        <p class="desc" style="max-width: 760px; margin: 24px auto 0; font-size: 18px; line-height: 1.8;">
+          대부분은 “사업은 잘될거야!”라는 결론을 먼저 내리고 제작에 뛰어듭니다.<br class="pc">
+          하지만 <strong>홈페이지 제작 업체 선정 기준</strong> 없이 진행된 프로젝트는 제작 후 관리가 되지 않거나,
+          <strong>검색 엔진 최적화(SEO)</strong>가 반영되지 않아 성과로 이어지지 않는 경우가 많습니다.
+        </p>
+      </div>
     </div>
+  </section>
 
+  <section class="pb-20 px-6 max-w-6xl mx-auto">
+    <div class="grid md:grid-cols-3 gap-8">
+      <div class="bg-white p-8 rounded-2xl border border-orange-100 shadow-sm relative overflow-hidden">
+        <div class="absolute top-0 right-0 bg-orange-100 text-orange-600 px-4 py-1 text-xs font-bold rounded-bl-xl uppercase">Error Case</div>
+        <span class="text-orange-500 font-bold text-sm">STEP 1. 결론 중심</span>
+        <h3 class="text-xl font-bold mt-4 mb-3">잘못된 근거에서 시작</h3>
+        <p class="text-slate-500 text-sm leading-relaxed">시장, 사용자의 니즈를 파악하지 않고 개개인의 경험만을 바탕으로 시작하면, 서비스의 본질적인 가치가 누락됩니다.</p>
+      </div>
+      <div class="bg-white p-8 rounded-2xl border border-orange-100 shadow-sm relative overflow-hidden">
+        <div class="absolute top-0 right-0 bg-orange-100 text-orange-600 px-4 py-1 text-xs font-bold rounded-bl-xl uppercase">Error Case</div>
+        <span class="text-orange-500 font-bold text-sm">STEP 2. 전략의 부재</span>
+        <h3 class="text-xl font-bold mt-4 mb-3">현상과 괴리된 결과물</h3>
+        <p class="text-slate-500 text-sm leading-relaxed">
+          치밀한 진단 없이 제작된 결과물은 겉만 번듯할 뿐입니다. <strong>검색 엔진 최적화(SEO)</strong>가 고려되지 않아 노출이 되지 않거나,
+          제작 이후 운영·유지보수가 되지 않아 방치되는 경우가 많습니다.
+        </p>
+      </div>
+      <div class="bg-white p-8 rounded-2xl border border-orange-100 shadow-sm relative overflow-hidden">
+        <div class="absolute top-0 right-0 bg-orange-100 text-orange-600 px-4 py-1 text-xs font-bold rounded-bl-xl uppercase">Error Case</div>
+        <span class="text-orange-500 font-bold text-sm">STEP 3. 비효율의 반복</span>
+        <h3 class="text-xl font-bold mt-4 mb-3">확장 불가능한 구조</h3>
+        <p class="text-slate-500 text-sm leading-relaxed">데이터 없이 쌓아 올린 구조물은 성장의 시점에서 결국 전부 다시 뜯어고쳐야 하는 막대한 비용 손실을 초래합니다.</p>
+      </div>
     </div>
-</section>
+  </section>
 
-    <section class="pb-20 px-6 max-w-6xl mx-auto">
-        <div class="grid md:grid-cols-3 gap-8">
-            <div class="bg-white p-8 rounded-2xl border border-orange-100 shadow-sm relative overflow-hidden">
-                <div class="absolute top-0 right-0 bg-orange-100 text-orange-600 px-4 py-1 text-xs font-bold rounded-bl-xl uppercase">Error Case</div>
-                <span class="text-orange-500 font-bold text-sm">STEP 1. 결론 중심</span>
-                <h3 class="text-xl font-bold mt-4 mb-3">잘못된 근거에서 시작</h3>
-                <p class="text-slate-500 text-sm leading-relaxed">시장, 사용자의 니즈를 파악하지 않고 개개인의 경험만을 바탕으로 시작하면, 서비스의 본질적인 가치가 누락됩니다.</p>
-            </div>
-            <div class="bg-white p-8 rounded-2xl border border-orange-100 shadow-sm relative overflow-hidden">
-                <div class="absolute top-0 right-0 bg-orange-100 text-orange-600 px-4 py-1 text-xs font-bold rounded-bl-xl uppercase">Error Case</div>
-                <span class="text-orange-500 font-bold text-sm">STEP 2. 전략의 부재</span>
-                <h3 class="text-xl font-bold mt-4 mb-3">현상과 괴리된 결과물</h3>
-                <p class="text-slate-500 text-sm leading-relaxed">치밀한 진단 없이 제작된 결과물은 겉만 번듯할 뿐입니다. 결국 "왜 성과가 안 날까?"라는 운영의 벽에 부딪힙니다.</p>
-            </div>
-            <div class="bg-white p-8 rounded-2xl border border-orange-100 shadow-sm relative overflow-hidden">
-                <div class="absolute top-0 right-0 bg-orange-100 text-orange-600 px-4 py-1 text-xs font-bold rounded-bl-xl uppercase">Error Case</div>
-                <span class="text-orange-500 font-bold text-sm">STEP 3. 비효율의 반복</span>
-                <h3 class="text-xl font-bold mt-4 mb-3">확장 불가능한 구조</h3>
-                <p class="text-slate-500 text-sm leading-relaxed">데이터 없이 쌓아 올린 구조물은 성장의 시점에서 결국 전부 다시 뜯어고쳐야 하는 막대한 비용 손실을 초래합니다.</p>
-            </div>
+  <section class="bg-slate-900 py-16 px-6">
+    <div class="max-w-4xl mx-auto text-center">
+      <h2 class="text-2xl md:text-4xl font-bold text-white mb-6 leading-tight">
+        우리는 무작정 "이렇게 만드세요"라고 말하지 않습니다.
+        지금 대표님의 사업을 파악하고 분석하여 함께 고민합니다.
+      </h2>
+      <div class="grid md:grid-cols-3 gap-6 mt-12 text-left">
+        <div class="border-l border-blue-500/30 pl-6">
+          <p class="text-blue-400 font-bold text-sm mb-2 uppercase">01. Deep Analysis</p>
+          <p class="text-slate-300 text-sm">시장과 데이터 기반의 철저한 현황 분석</p>
         </div>
-    </section>
-
-    <section class="bg-slate-900 py-16 px-6">
-        <div class="max-w-4xl mx-auto text-center">
-            <h2 class="text-2xl md:text-4xl font-bold text-white mb-6 leading-tight">
-                우리는 무작정 "이렇게 만드세요"라고 말하지 않습니다. 
-                지금 대표님의 사업을 파악하고 분석하여 함께 고민합니다.
-            </h2>
-            <div class="grid md:grid-cols-3 gap-6 mt-12 text-left">
-                <div class="border-l border-blue-500/30 pl-6">
-                    <p class="text-blue-400 font-bold text-sm mb-2 uppercase">01. Deep Analysis</p>
-                    <p class="text-slate-300 text-sm">시장과 데이터 기반의 철저한 현황 분석</p>
-                </div>
-                <div class="border-l border-blue-500/30 pl-6">
-                    <p class="text-blue-400 font-bold text-sm mb-2 uppercase">02. Problem Definition</p>
-                    <p class="text-slate-300 text-sm">가설 검증을 통한 비즈니스 본질 진단</p>
-                </div>
-                <div class="border-l border-blue-500/30 pl-6">
-                    <p class="text-blue-400 font-bold text-sm mb-2 uppercase">03. Strategic Build</p>
-                    <p class="text-slate-300 text-sm">해결책에 최적화된 시스템 설계 및 구축</p>
-                </div>
-            </div>
+        <div class="border-l border-blue-500/30 pl-6">
+          <p class="text-blue-400 font-bold text-sm mb-2 uppercase">02. Problem Definition</p>
+          <p class="text-slate-300 text-sm">가설 검증을 통한 비즈니스 본질 진단</p>
         </div>
-    </section>
+        <div class="border-l border-blue-500/30 pl-6">
+          <p class="text-blue-400 font-bold text-sm mb-2 uppercase">03. Strategic Build</p>
+          <p class="text-slate-300 text-sm">해결책에 최적화된 시스템 설계 및 구축</p>
+        </div>
+      </div>
+    </div>
+  </section>
 
-  <!-- ✅ 여기부터 디자인만 이미지처럼 변경 -->
   <section class="section process-section">
     <div class="inner">
       <div class="process-head">
@@ -607,7 +664,7 @@
           <div class="process-num">02</div>
           <div class="process-content">
             <h3>비즈니스 로직 이식</h3>
-            <p>대표님의 강점을 온라인에서도 동일하게 경험할 수 있도록 서비스화합니다.</p>
+            <p>대표님의 강점을 온라인에서도 동일하게 경험할 수 있도록 서비스화합니다. AI 챗봇 연동, 자동 응답 구조, 향후 확장을 고려한 SaaS 기반 웹서비스 구조를 함께 설계합니다.</p>
             <ul>
               <li>핵심 가치를 담은 원페이지 구축</li>
               <li>운영 리스크를 줄이는 최소화된 관리 도구 제공</li>
@@ -622,7 +679,8 @@
             <p>한 번에 모든 걸 만들지 않습니다. 지금 가장 필요한 '수익 지점'부터 구축합니다.</p>
             <ul>
               <li>즉각적인 성과를 위한 MVP 제작</li>
-              <li>향후 확장 가능한 데이터 기반 설계</li>
+              <li>구글 코어 웹 바이탈을 고려한 속도 최적화</li>
+              <li>PWA(모바일 앱 같은 웹) 구축까지 확장 가능한 설계</li>
             </ul>
           </div>
         </div>
@@ -642,7 +700,7 @@
         <div class="price-card">
           <div style="font-weight: 800; color: var(--muted);">진단</div>
           <div class="price-card__amount">0원</div>
-          <p style="color: var(--muted); font-size: 15px;">기본 진단 및 메시지 구조화 (협의 시 제공)</p>
+          <p style="color: var(--muted); font-size: 15px;">1인 창업자·소규모 사업자를 위한 가성비 중심의 홈페이지 구조 진단 단계입니다. (협의 시 제공)</p>
           <ul class="price-card__list">
             <li>핵심 강점 정리</li>
             <li>온라인 명함 구축</li>
@@ -687,6 +745,21 @@
     </div>
   </section>
 
-  <footer style="padding: 60px 0; text-align: center; color: var(--muted); font-size: 14px;"></footer>
+  <!-- ✅ E-E-A-T: 푸터에 운영 주체/연락 정보(placeholder) 추가 -->
+  <footer style="padding: 60px 0; text-align: center; color: var(--muted); font-size: 14px;">
+    <div class="inner" style="max-width: 980px;">
+      <p style="margin:0 0 10px;">
+        운영: GROWTHLINE · 문의: <a href="contact.html" style="color:inherit; text-decoration: underline;">contact</a>
+      </p>
+      <p style="margin:0; opacity:.9;">
+        사업자 정보/주소/대표자명/연락처는 여기에 입력하세요.
+      </p>
+    </div>
+  </footer>
+
 </body>
 </html>
+"""
+path = Path("/mnt/data/index.html")
+path.write_text(html, encoding="utf-8")
+str(path)
