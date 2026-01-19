@@ -10,24 +10,22 @@
   <meta name="robots" content="index,follow" />
   <link rel="canonical" href="work.html" />
 
-  <!-- ✅ Open Graph (공유/미리보기) -->
+  <!-- ✅ Open Graph / Twitter -->
   <meta property="og:type" content="website" />
   <meta property="og:locale" content="ko_KR" />
   <meta property="og:site_name" content="GROWTHLINE" />
   <meta property="og:title" content="Work | GROWTHLINE" />
   <meta property="og:description" content="GROWTHLINE이 수행한 프로젝트 사례를 도메인과 서비스 유형별로 확인하세요." />
   <meta property="og:url" content="work.html" />
-  <!-- 실제 대표 이미지 경로가 있다면 아래를 교체하세요 -->
   <meta property="og:image" content="assets/og/work.png" />
   <meta property="og:image:alt" content="GROWTHLINE Work 페이지 미리보기" />
 
-  <!-- ✅ Twitter Card -->
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Work | GROWTHLINE" />
   <meta name="twitter:description" content="GROWTHLINE이 수행한 프로젝트 사례를 도메인과 서비스 유형별로 확인하세요." />
   <meta name="twitter:image" content="assets/og/work.png" />
 
-  <!-- ✅ 구조화 데이터 (검색엔진 이해 보조) -->
+  <!-- ✅ 구조화 데이터 -->
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -38,7 +36,8 @@
     "isPartOf": {
       "@type": "WebSite",
       "name": "GROWTHLINE"
-    }
+    },
+    "url": "work.html"
   }
   </script>
 
@@ -64,6 +63,19 @@
     }
     a { color: inherit; text-decoration: none; }
     .container { width: 100%; max-width: var(--max); margin: 0 auto; padding: 0 20px; }
+
+    /* ✅ SEO/접근성용: 화면에는 숨기고 리더/크롤러에만 노출 */
+    .sr-only{
+      position:absolute !important;
+      width:1px !important;
+      height:1px !important;
+      padding:0 !important;
+      margin:-1px !important;
+      overflow:hidden !important;
+      clip:rect(0,0,0,0) !important;
+      white-space:nowrap !important;
+      border:0 !important;
+    }
 
     /* ===== Topbar ===== */
     .topbar{
@@ -251,7 +263,7 @@
         </article>
       </div>
 
-      <!-- ✅ JS 미지원/렌더 실패 대비 (SEO/접근성 보조) -->
+      <!-- ✅ JS 미지원/로드 실패 대비(디자인 영향 없음) -->
       <noscript>
         <div style="margin-top:24px; padding:14px; border:1px solid rgba(2,32,71,.08); border-radius:16px; color:#64748b; background:#fff;">
           이 페이지의 프로젝트 목록과 상세 정보는 자바스크립트를 사용해 불러옵니다. 자바스크립트가 비활성화되어 있으면 목록이 표시되지 않을 수 있습니다.
@@ -350,6 +362,24 @@
       return v.split(';').map(s => s.trim()).filter(Boolean);
     }
 
+    // ✅ 해시 파싱: #project=slug 형태 지원
+    function getProjectSlugFromHash() {
+      const h = (location.hash || "").replace("#", "");
+      if (!h) return "";
+      const m = h.match(/(?:^|&)project=([^&]+)/);
+      if (m && m[1]) return decodeURIComponent(m[1]);
+      // 구버전/직접 slug만 넣은 경우(#my-slug)
+      if (h && !h.includes("=")) return decodeURIComponent(h);
+      return "";
+    }
+
+    function setProjectSlugToHash(slug) {
+      if (!slug) return;
+      const next = "#project=" + encodeURIComponent(slug);
+      if (history && history.replaceState) history.replaceState(null, "", next);
+      else location.hash = next;
+    }
+
     // ===== Elements =====
     const els = {
       filtersRoot: document.getElementById('filtersRoot'),
@@ -380,7 +410,7 @@
       // thumb
       const thumbUrl = project.thumb_url || '';
       if (thumbUrl) {
-        els.thumb.innerHTML = `<img src="${thumbUrl}" alt="${project.title || 'Project'}" style="width:100%;height:100%;object-fit:cover;display:block;">`;
+        els.thumb.innerHTML = `<img src="${thumbUrl}" alt="${project.title || 'Project'}" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block;">`;
       } else {
         els.thumb.textContent = 'Project Visual';
       }
@@ -401,10 +431,14 @@
       }
 
       els.actions.appendChild(a);
+
+      // ✅ 딥링크/공유용 해시 반영 (보이는 내용 변경 없음)
+      if (project.slug) setProjectSlugToHash(project.slug);
     }
 
     function renderFilters(domains, projects) {
       const domainMap = new Map(domains.map(d => [d.key, d]));
+      const slugToProject = new Map(projects.map(p => [p.slug, p]));
 
       // domainKey -> projects[]
       const projectsByDomain = new Map();
@@ -431,6 +465,10 @@
       let firstProject = null;
       let firstLi = null;
 
+      // ✅ 해시로 특정 프로젝트 선택
+      const wantedSlug = getProjectSlugFromHash();
+      const wantedProject = wantedSlug ? slugToProject.get(wantedSlug) : null;
+
       sortedDomains.forEach(domain => {
         const list = projectsByDomain.get(domain.key) || [];
         if (list.length === 0) return;
@@ -450,6 +488,7 @@
         list.forEach(p => {
           const li = document.createElement('li');
           li.dataset.projectId = p.id;
+          li.dataset.projectSlug = p.slug || '';
           li.textContent = p.title || '(제목 없음)';
 
           if (!firstProject) {
@@ -462,6 +501,12 @@
             li.classList.add('is-active');
             renderProject(p, domainMap);
           });
+
+          // ✅ 해시 대상이면 초기 선택으로 세팅
+          if (wantedProject && wantedProject.slug && wantedProject.slug === p.slug) {
+            firstProject = p;
+            firstLi = li;
+          }
 
           ul.appendChild(li);
         });
