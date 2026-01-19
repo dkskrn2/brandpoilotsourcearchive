@@ -312,27 +312,27 @@
       <div class="form-side">
         <div class="form-inner">
           <!-- ✅ form에 action/method는 그대로 비워도 되지만, name/id/for를 추가해 전환/추적/수집 안정성 확보 -->
-          <form class="consult-form" action="#" method="post">
+          <form class="consult-form" action="#" method="post" data-sheet-url="https://docs.google.com/spreadsheets/d/e/2PACX-1vTdMUi4_K8ru0FoHGd9QGXLDBXkhFyL3x-QwmsQ-9rTui9LbclGA1fS0c4Z5PnxaFtVZfq93VNJnRdG/pub">
             <p class="urgency-text">지금 신청하지 않으면 이번 달 무료 진단 기회를 놓칠 수 있습니다.</p>
 
             <div class="input-row">
               <label for="contact_name_company">성함 / 업체명</label>
-              <input id="contact_name_company" name="name_company" type="text" placeholder="홍길동 / 그로스라인" autocomplete="organization" required>
+              <input id="contact_name_company" name="name_company" type="text" placeholder="홍길동 / 그로스라인" autocomplete="organization" required data-sheet-field="name_company">
             </div>
 
             <div class="input-row">
               <label for="contact_phone">연락처</label>
-              <input id="contact_phone" name="phone" type="tel" placeholder="010-0000-0000" autocomplete="tel" required>
+              <input id="contact_phone" name="phone" type="tel" placeholder="010-0000-0000" autocomplete="tel" inputmode="numeric" pattern="[0-9]*" required data-sheet-field="phone">
             </div>
 
             <div class="input-row">
               <label for="contact_site_url">운영 중인 사이트 URL (선택)</label>
-              <input id="contact_site_url" name="site_url" type="url" placeholder="https://example.com (사전 분석에 활용됩니다)" autocomplete="url">
+              <input id="contact_site_url" name="site_url" type="url" placeholder="https://example.com (사전 분석에 활용됩니다)" autocomplete="url" pattern="^[^\\u3131-\\u318E\\uAC00-\\uD7A3]*$" title="한글 없이 URL을 입력해 주세요." data-sheet-field="site_url">
             </div>
 
             <div class="input-row">
               <label for="contact_message">현재 가장 고민되는 지점 (선택)</label>
-              <textarea id="contact_message" name="message" rows="4" placeholder="예: 홈페이지는 있는데 문의가 0건입니다 / 신규 사업 매출 구조 설계가 필요합니다"></textarea>
+              <textarea id="contact_message" name="message" rows="4" placeholder="예: 홈페이지는 있는데 문의가 0건입니다 / 신규 사업 매출 구조 설계가 필요합니다" data-sheet-field="message"></textarea>
             </div>
 
             <div class="agree-row">
@@ -343,6 +343,7 @@
             </div>
 
             <button type="submit" class="submit-button">무료 사전 분석 및 상담 신청하기</button>
+            <p class="disclaimer" id="contact_submit_status" aria-live="polite"></p>
             <p class="disclaimer">* 남겨주신 정보는 상담 목적으로만 사용되며, 불필요한 광고 전화를 드리지 않습니다.</p>
           </form>
         </div>
@@ -350,5 +351,64 @@
 
     </div>
   </main>
+  <script>
+    const QUERY_CHARS_REGEX = /[?&=]/g;
+    const HANGUL_REGEX = /[\u3131-\u318E\uAC00-\uD7A3]/g;
+
+    const sanitizeQueryChars = (value) => value.replace(QUERY_CHARS_REGEX, "");
+
+    const inputs = document.querySelectorAll("input[type='text'], input[type='tel'], input[type='url'], textarea");
+    inputs.forEach((field) => {
+      field.addEventListener("input", (event) => {
+        const target = event.target;
+        let nextValue = sanitizeQueryChars(target.value);
+
+        if (target.id === "contact_phone") {
+          nextValue = nextValue.replace(/\D/g, "");
+        }
+
+        if (target.id === "contact_site_url") {
+          nextValue = nextValue.replace(HANGUL_REGEX, "");
+        }
+
+        if (nextValue !== target.value) {
+          target.value = nextValue;
+        }
+      });
+    });
+
+    const form = document.querySelector(".consult-form");
+    const statusMessage = document.getElementById("contact_submit_status");
+
+    const setStatus = (message, isError = false) => {
+      if (!statusMessage) return;
+      statusMessage.textContent = message;
+      statusMessage.style.color = isError ? "#ef4444" : "#16a34a";
+    };
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      setStatus("");
+
+      const sheetUrl = form.getAttribute("data-sheet-url");
+      const formData = new FormData();
+
+      form.querySelectorAll("[data-sheet-field]").forEach((field) => {
+        formData.append(field.getAttribute("data-sheet-field"), field.value.trim());
+      });
+
+      try {
+        await fetch(`${sheetUrl}?output=csv`, {
+          method: "POST",
+          mode: "no-cors",
+          body: formData,
+        });
+        setStatus("제출이 완료되었습니다. 빠르게 확인 후 연락드리겠습니다.");
+        form.reset();
+      } catch (error) {
+        setStatus("제출에 실패했습니다. 잠시 후 다시 시도해 주세요.", true);
+      }
+    });
+  </script>
 </body>
 </html>
