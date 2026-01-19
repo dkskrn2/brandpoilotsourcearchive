@@ -312,27 +312,27 @@
       <div class="form-side">
         <div class="form-inner">
           <!-- ✅ form에 action/method는 그대로 비워도 되지만, name/id/for를 추가해 전환/추적/수집 안정성 확보 -->
-          <form class="consult-form" action="#" method="post" data-sheet-url="https://docs.google.com/spreadsheets/d/e/2PACX-1vTdMUi4_K8ru0FoHGd9QGXLDBXkhFyL3x-QwmsQ-9rTui9LbclGA1fS0c4Z5PnxaFtVZfq93VNJnRdG/pub">
+          <form class="consult-form" action="#" method="post" data-api-url="/api/contact">
             <p class="urgency-text">지금 신청하지 않으면 이번 달 무료 진단 기회를 놓칠 수 있습니다.</p>
 
             <div class="input-row">
               <label for="contact_name_company">성함 / 업체명</label>
-              <input id="contact_name_company" name="name_company" type="text" placeholder="홍길동 / 그로스라인" autocomplete="organization" required data-sheet-field="name_company">
+              <input id="contact_name_company" name="name_company" type="text" placeholder="홍길동 / 그로스라인" autocomplete="organization" required data-field="name">
             </div>
 
             <div class="input-row">
               <label for="contact_phone">연락처</label>
-              <input id="contact_phone" name="phone" type="tel" placeholder="010-0000-0000" autocomplete="tel" inputmode="numeric" pattern="[0-9]*" required data-sheet-field="phone">
+              <input id="contact_phone" name="phone" type="tel" placeholder="010-0000-0000" autocomplete="tel" inputmode="numeric" pattern="[0-9]*" required data-field="phone">
             </div>
 
             <div class="input-row">
               <label for="contact_site_url">운영 중인 사이트 URL (선택)</label>
-              <input id="contact_site_url" name="site_url" type="url" placeholder="https://example.com (사전 분석에 활용됩니다)" autocomplete="url" pattern="^[^\\u3131-\\u318E\\uAC00-\\uD7A3]*$" title="한글 없이 URL을 입력해 주세요." data-sheet-field="site_url">
+              <input id="contact_site_url" name="site_url" type="url" placeholder="https://example.com (사전 분석에 활용됩니다)" autocomplete="url" pattern="^[^\\u3131-\\u318E\\uAC00-\\uD7A3]*$" title="한글 없이 URL을 입력해 주세요." data-field="site">
             </div>
 
             <div class="input-row">
               <label for="contact_message">현재 가장 고민되는 지점 (선택)</label>
-              <textarea id="contact_message" name="message" rows="4" placeholder="예: 홈페이지는 있는데 문의가 0건입니다 / 신규 사업 매출 구조 설계가 필요합니다" data-sheet-field="message"></textarea>
+              <textarea id="contact_message" name="message" rows="4" placeholder="예: 홈페이지는 있는데 문의가 0건입니다 / 신규 사업 매출 구조 설계가 필요합니다" data-field="message"></textarea>
             </div>
 
             <div class="agree-row">
@@ -390,19 +390,24 @@
       event.preventDefault();
       setStatus("");
 
-      const sheetUrl = form.getAttribute("data-sheet-url");
-      const formData = new FormData();
+      const apiUrl = form.getAttribute("data-api-url");
+      const agree = document.getElementById("contact_agree")?.checked;
+      const payload = {};
 
-      form.querySelectorAll("[data-sheet-field]").forEach((field) => {
-        formData.append(field.getAttribute("data-sheet-field"), field.value.trim());
+      form.querySelectorAll("[data-field]").forEach((field) => {
+        payload[field.getAttribute("data-field")] = field.value.trim();
       });
+      payload.agree = agree ? "Y" : "N";
 
       try {
-        await fetch(`${sheetUrl}?output=csv`, {
+        const response = await fetch(apiUrl, {
           method: "POST",
-          mode: "no-cors",
-          body: formData,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
         });
+        if (!response.ok) {
+          throw new Error("Submit failed");
+        }
         setStatus("제출이 완료되었습니다. 빠르게 확인 후 연락드리겠습니다.");
         form.reset();
       } catch (error) {
