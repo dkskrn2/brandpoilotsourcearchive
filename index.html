@@ -342,7 +342,7 @@
 
     .process-section .process-item{
       grid-template-columns: 64px 1fr;
-      gap: 0;
+      gap: 12px;
       align-items: start;
     }
     .process-section .process-num{
@@ -386,6 +386,14 @@
     }
     .process-section .process-content li{
       margin-bottom: 8px;
+    }
+    @media (min-width: 981px){
+      .process-section .process-item{
+        align-items: stretch;
+      }
+      .process-section .process-content{
+        height: 100%;
+      }
     }
     @media (max-width: 980px){
       .process-section .process-wrap{
@@ -623,7 +631,7 @@
         우리는 무작정 "이렇게 만드세요"라고 말하지 않습니다.
         지금 대표님의 사업을 파악하고 분석하여 함께 고민합니다.
       </h2>
-      <div class="grid md:grid-cols-3 gap-6 mt-12 text-left">
+      <div class="grid md:grid-cols-3 gap-6 mt-12 text-center">
         <div class="border-l border-blue-500/30 pl-6">
           <p class="text-blue-400 font-bold text-sm mb-2 uppercase">01. Deep Analysis</p>
           <p class="text-slate-300 text-sm">시장과 데이터 기반의 철저한 현황 분석</p>
