@@ -3,43 +3,51 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="GROWTHLINE 무료 사전 분석 및 상담 문의 페이지입니다. 운영 중인 사이트/서비스의 병목을 15분 진단으로 정리하고, 다음 실행 우선순위를 제안합니다." />
-  <link rel="canonical" href="https://YOUR_DOMAIN/contact.html" />
 
-  <!-- Open Graph -->
+  <!-- ✅ SEO -->
+  <title>무료 사전 분석·상담 문의 | GROWTHLINE</title>
+  <meta name="description" content="GROWTHLINE 무료 사전 분석 및 상담 문의 페이지입니다. 운영 중인 사이트/서비스의 병목을 15분 진단으로 정리하고, 다음 실행 우선순위를 제안합니다." />
+  <meta name="robots" content="index,follow" />
+  <link rel="canonical" href="/contact.html" />
+
+  <!-- ✅ Open Graph -->
   <meta property="og:type" content="website" />
+  <meta property="og:locale" content="ko_KR" />
+  <meta property="og:site_name" content="GROWTHLINE" />
   <meta property="og:title" content="무료 사전 분석·상담 문의 | GROWTHLINE" />
   <meta property="og:description" content="운영 중인 사이트/서비스의 병목을 15분 진단으로 정리하고, 다음 실행 우선순위를 제안합니다." />
-  <meta property="og:url" content="https://YOUR_DOMAIN/contact.html" />
-  <meta property="og:site_name" content="GROWTHLINE" />
+  <meta property="og:url" content="/contact.html" />
+  <meta property="og:image" content="/og.jpg" />
+  <meta property="og:image:alt" content="GROWTHLINE 상담 문의 페이지 미리보기" />
 
-  <!-- Twitter -->
-  <meta name="twitter:card" content="summary" />
+  <!-- ✅ Twitter -->
+  <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="무료 사전 분석·상담 문의 | GROWTHLINE" />
   <meta name="twitter:description" content="운영 중인 사이트/서비스의 병목을 15분 진단으로 정리하고, 다음 실행 우선순위를 제안합니다." />
+  <meta name="twitter:image" content="/og.jpg" />
 
-  <!-- Structured Data -->
+  <!-- ✅ Structured Data -->
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
     "@type": "ContactPage",
     "name": "무료 사전 분석·상담 문의",
-    "url": "https://YOUR_DOMAIN/contact.html",
+    "url": "/contact.html",
     "isPartOf": {
       "@type": "WebSite",
       "name": "GROWTHLINE",
-      "url": "https://YOUR_DOMAIN/"
+      "url": "/"
     },
     "about": {
       "@type": "ProfessionalService",
       "name": "GROWTHLINE",
-      "url": "https://YOUR_DOMAIN/",
+      "url": "/",
       "serviceType": ["홈페이지 제작", "웹서비스 개발", "전환 설계", "유지보수"],
       "areaServed": "KR"
     }
   }
   </script>
-  <title>무료 사전 분석·상담 문의 | GROWTHLINE</title>
+
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
 
@@ -303,29 +311,33 @@
 
       <div class="form-side">
         <div class="form-inner">
-          <form class="consult-form">
+          <!-- ✅ form에 action/method는 그대로 비워도 되지만, name/id/for를 추가해 전환/추적/수집 안정성 확보 -->
+          <form class="consult-form" action="#" method="post">
             <p class="urgency-text">지금 신청하지 않으면 이번 달 무료 진단 기회를 놓칠 수 있습니다.</p>
 
             <div class="input-row">
-              <label>성함 / 업체명</label>
-              <input type="text" placeholder="홍길동 / 그로스라인" required>
+              <label for="contact_name_company">성함 / 업체명</label>
+              <input id="contact_name_company" name="name_company" type="text" placeholder="홍길동 / 그로스라인" autocomplete="organization" required>
             </div>
+
             <div class="input-row">
-              <label>연락처</label>
-              <input type="tel" placeholder="010-0000-0000" required>
+              <label for="contact_phone">연락처</label>
+              <input id="contact_phone" name="phone" type="tel" placeholder="010-0000-0000" autocomplete="tel" required>
             </div>
+
             <div class="input-row">
-              <label>운영 중인 사이트 URL (선택)</label>
-              <input type="url" placeholder="https://example.com (사전 분석에 활용됩니다)">
+              <label for="contact_site_url">운영 중인 사이트 URL (선택)</label>
+              <input id="contact_site_url" name="site_url" type="url" placeholder="https://example.com (사전 분석에 활용됩니다)" autocomplete="url">
             </div>
+
             <div class="input-row">
-              <label>현재 가장 고민되는 지점</label>
-              <textarea rows="4" placeholder="예: 홈페이지는 있는데 문의가 0건입니다 / 신규 사업 매출 구조 설계가 필요합니다"></textarea>
+              <label for="contact_message">현재 가장 고민되는 지점</label>
+              <textarea id="contact_message" name="message" rows="4" placeholder="예: 홈페이지는 있는데 문의가 0건입니다 / 신규 사업 매출 구조 설계가 필요합니다" required></textarea>
             </div>
 
             <div class="agree-row">
-              <label class="checkbox-container">
-                <input type="checkbox" required style="width: 16px; height: 16px;">
+              <label class="checkbox-container" for="contact_agree">
+                <input id="contact_agree" name="agree_privacy" type="checkbox" required style="width: 16px; height: 16px;">
                 <span>개인정보 수집 및 이용에 동의합니다. <a href="#">자세히 보기</a></span>
               </label>
             </div>
