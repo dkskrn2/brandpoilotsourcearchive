@@ -58,11 +58,14 @@
   </script>
 
   <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
 
   <style>
     body { font-family: 'Inter', 'Pretendard', sans-serif; }
     .strikethrough { text-decoration: line-through; text-decoration-color: #ef4444; text-decoration-thickness: 2px; }
+    .card-hover { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+    .card-hover:hover { transform: translateY(-8px); box-shadow: 0 20px 40px rgba(0,0,0,0.06); }
 
     :root {
       --bg: #ffffff;
@@ -513,19 +516,17 @@
           <a href="service.html">service</a>
           <a href="work.html">work</a>
         </nav>
-        <a class="btn primary" href="contact.html">문의하기</a>
+        <a class="btn primary" href="contact.html">진단받기</a>
       </div>
     </div>
   </header>
 
   <section class="hero">
     <div class="inner">
-      <span class="hero__eyebrow">웹사이트 제작, 그 이상의 비즈니스 설계</span>
+      <span class="hero__eyebrow">대표님은 사업에만 집중하세요.</span>
 
       <!-- ✅ SEO: H1은 1개만 유지 -->
       <h1 class="hero__title">단순한 홈페이지가 아닌<br><span class="hl">매출 상승 구조</span>를 만듭니다</h1>
-
-      <p class="desc">대표님은 본업에만 집중하세요.<br>복잡한 온라인 전환은 GROWTHLINE이<br>'작동하는 결과물'로 증명하겠습니다.</p>
 
       <!-- ✅ SEO: 키워드(전환/신뢰) 자연 삽입 -->
       <p class="desc" style="max-width: 860px; margin: 18px auto 0; font-size: 16px; line-height: 1.8;">
@@ -535,7 +536,7 @@
       </p>
 
       <div class="hero__cta">
-        <a class="btn btn--primary" href="contact.html">매출 상승 상담 받기</a>
+        <a class="btn btn--primary" href="contact.html">우리 사업 진단 받기</a>
       </div>
     </div>
   </section>
@@ -697,49 +698,184 @@
     </div>
   </section>
 
-  <section class="section section--alt pricing-section" id="pricing">
-    <div class="inner">
-      <div class="pricing-head">
-        <h2>합리적인 시작, 확실한 확장</h2>
-        <p class="desc">사업의 크기에 맞춰 최적의 플랜을 선택하세요.</p>
+  <section class="py-24 px-6" id="pricing">
+    <div class="max-w-5xl mx-auto">
+      <div class="text-center mb-16">
+        <span class="text-blue-600 font-bold text-sm tracking-widest uppercase mb-3 block">Comparison</span>
+        <h2 class="text-3xl md:text-4xl font-black leading-tight">
+          왜 GROWTHLINE은 <br class="md:hidden"> 압도적으로 저렴할까요?
+        </h2>
+        <p class="text-gray-500 mt-4 text-lg">우리는 당신이 성공해야 수익이 나는 <strong>'성과 공유 모델'</strong>을 지향합니다.</p>
       </div>
 
-      <div class="pricing-grid">
-        <div class="price-card">
-          <div style="font-weight: 800; color: var(--muted);">진단</div>
-          <div class="price-card__amount">0원</div>
-          <p style="color: var(--muted); font-size: 15px;">1인 창업자·소규모 사업자를 위한 가성비 중심의 홈페이지 구조 진단 단계입니다. (협의 시 제공)</p>
-          <ul class="price-card__list">
-            <li>핵심 강점 정리</li>
-            <li>온라인 명함 구축</li>
-            <li>기본 연락처 연동</li>
+      <div class="grid md:grid-cols-2 gap-6 items-stretch">
+        <div class="bg-white p-10 rounded-[24px] border border-gray-100 shadow-sm">
+          <div class="flex items-center gap-3 mb-8 opacity-50">
+            <div class="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center text-gray-400">
+              <i class="fa-solid fa-building"></i>
+            </div>
+            <span class="font-bold text-gray-500">일반 개발 업체</span>
+          </div>
+          <ul class="space-y-5">
+            <li class="flex gap-3 text-gray-400">
+              <i class="fa-solid fa-circle-xmark text-red-300 mt-1"></i>
+              <span><strong>2,000만원 이상의 높은 구축비</strong><br><small>사업이 검증되기도 전에 큰 리스크 발생</small></span>
+            </li>
+            <li class="flex gap-3 text-gray-400">
+              <i class="fa-solid fa-circle-xmark text-red-300 mt-1"></i>
+              <span><strong>단순 납품 중심의 계약</strong><br><small>완성 후 매출 발생 여부에는 관심이 없음</small></span>
+            </li>
+            <li class="flex gap-3 text-gray-400">
+              <i class="fa-solid fa-circle-xmark text-red-300 mt-1"></i>
+              <span><strong>무거운 유지보수 고정 비용</strong><br><small>매출이 없어도 매달 나가는 관리비 부담</small></span>
+            </li>
           </ul>
-          <a class="btn btn--ghost" style="margin-top: auto;" href="contact.html">상담 신청</a>
         </div>
 
-        <div class="price-card price-card--featured">
-          <span class="price-card__tag">인기</span>
-          <div style="font-weight: 800; color: var(--accent);">구현</div>
-          <div class="price-card__amount">39만원~</div>
-          <p style="color: var(--muted); font-size: 15px;">홈페이지 제작을 넘어, 내 사업의 확실한 '무기'가 무엇인지 결과물로 확인하는 단계입니다.</p>
-          <ul class="price-card__list">
-            <li>고객 흐름 UX 분석</li>
-            <li>자동화 시나리오 설계</li>
-            <li>개발 로드맵 제공</li>
+        <div class="bg-white p-10 rounded-[24px] border-2 border-blue-600 shadow-xl relative overflow-hidden">
+          <div class="absolute top-0 right-0 bg-blue-600 text-white px-6 py-1 font-bold text-xs uppercase">Partner</div>
+          <div class="flex items-center gap-3 mb-8">
+            <div class="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center text-white shadow-lg shadow-blue-200">
+              <i class="fa-solid fa-rocket"></i>
+            </div>
+            <span class="font-bold text-blue-900 text-lg">GROWTHLINE</span>
+          </div>
+          <ul class="space-y-5">
+            <li class="flex gap-3 text-gray-800">
+              <i class="fa-solid fa-circle-check text-blue-600 mt-1"></i>
+              <span><strong>초기 구축비 300만원 수준</strong><br><small class="text-blue-600 font-semibold">타사 대비 약 80% 이상의 초기 비용 절감</small></span>
+            </li>
+            <li class="flex gap-3 text-gray-800">
+              <i class="fa-solid fa-circle-check text-blue-600 mt-1"></i>
+              <span><strong>성과 기반 운영 (Success Fee)</strong><br><small class="text-blue-600 font-semibold">매출이 오를 때 저희도 함께 보상받습니다</small></span>
+            </li>
+            <li class="flex gap-3 text-gray-800">
+              <i class="fa-solid fa-circle-check text-blue-600 mt-1"></i>
+              <span><strong>퍼포먼스 마케팅, seo, 호스팅까지</strong><br><small class="text-blue-600 font-semibold">온라인에 필요한 모든 것을 지원합니다</small></span>
+            </li>
           </ul>
-          <a class="btn btn--primary" style="margin-top: auto;" href="contact.html">이 플랜으로 시작</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="py-24 px-6 bg-[#f8fafc] border-t border-gray-100">
+    <div class="max-w-6xl mx-auto">
+      <div class="text-center mb-16">
+        <h2 class="text-3xl font-black text-gray-900 mb-4">비즈니스 성장 단계별 최적화 플랜</h2>
+        <p class="text-gray-500 text-lg">투자 시리즈에 맞춘 최우선 과제와 합리적인 비용 구조입니다.</p>
+      </div>
+
+      <div class="grid md:grid-cols-3 gap-8">
+        <div class="bg-white p-8 rounded-[24px] border border-gray-200 card-hover flex flex-col">
+          <div class="mb-8">
+            <span class="bg-gray-100 text-gray-500 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">Stage 01</span>
+            <h3 class="text-2xl font-black mt-4">Seed ~ Pre-A</h3>
+            <p class="text-gray-400 text-sm mt-2">시장 생존과 PMF 검증 단계</p>
+          </div>
+
+          <div class="mb-8">
+            <div class="flex items-baseline gap-2">
+              <span class="text-3xl font-black text-blue-600 underline decoration-blue-200">300만원</span>
+              <span class="text-gray-400 text-sm font-medium">부터</span>
+            </div>
+            <p class="text-green-600 text-sm font-bold mt-2 font-mono">운영비: 월 30만원 고정</p>
+          </div>
+
+          <div class="space-y-6 flex-grow">
+            <div class="pt-6 border-t border-gray-50">
+              <p class="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Core Tasks</p>
+              <ul class="text-sm space-y-3 text-gray-600">
+                <li class="flex items-start gap-2">
+                  <i class="fa-solid fa-check text-blue-500 mt-1"></i>
+                  <span>최소 기능 제품(MVP) 신속 구축</span>
+                </li>
+                <li class="flex items-start gap-2">
+                  <i class="fa-solid fa-check text-blue-500 mt-1"></i>
+                  <span>시장 적합성 검증을 위한 데이터 수집</span>
+                </li>
+                <li class="flex items-start gap-2">
+                  <i class="fa-solid fa-check text-blue-500 mt-1"></i>
+                  <span>투자 유치용 기술 IR 프로토타입</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+          <a href="contact.html" class="btn btn--ghost w-full mt-10">가볍게 시작하기</a>
         </div>
 
-        <div class="price-card">
-          <div style="font-weight: 800; color: var(--muted);">컨설팅</div>
-          <div class="price-card__amount">150만원~</div>
-          <p style="color: var(--muted); font-size: 15px;">설계된 서비스를 실제로 구축하고 운영을 시작합니다.</p>
-          <ul class="price-card__list">
-            <li>맞춤형 MVP 시스템 제작</li>
-            <li>관리자 페이지 연결</li>
-            <li>운영 안정화 지원</li>
-          </ul>
-          <a class="btn btn--ghost" style="margin-top: auto;" href="contact.html">문의 후 진행</a>
+        <div class="bg-white p-8 rounded-[24px] border-2 border-blue-600 shadow-xl card-hover flex flex-col relative scale-105 z-10">
+          <div class="absolute -top-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white px-4 py-1 rounded-full text-[11px] font-black tracking-tighter">MOST POPULAR</div>
+          <div class="mb-8">
+            <span class="bg-blue-50 text-blue-600 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">Stage 02</span>
+            <h3 class="text-2xl font-black mt-4">Series A</h3>
+            <p class="text-gray-400 text-sm mt-2">매출 가속화 및 시스템 안정화</p>
+          </div>
+
+          <div class="mb-8">
+            <div class="flex items-baseline gap-2 text-blue-600">
+              <span class="text-3xl font-black">800만원</span>
+              <span class="text-sm font-medium">+ 성과 인센티브</span>
+            </div>
+            <p class="text-green-600 text-sm font-bold mt-2 font-mono">운영비: 매출액의 3~5%</p>
+          </div>
+
+          <div class="space-y-6 flex-grow">
+            <div class="pt-6 border-t border-gray-50">
+              <p class="text-xs font-black text-blue-400 uppercase tracking-widest mb-4">Core Tasks</p>
+              <ul class="text-sm space-y-3 text-gray-700">
+                <li class="flex items-start gap-2">
+                  <i class="fa-solid fa-check text-blue-600 mt-1"></i>
+                  <span><strong>유료 전환 최적화(CRO) 시스템</strong></span>
+                </li>
+                <li class="flex items-start gap-2">
+                  <i class="fa-solid fa-check text-blue-600 mt-1"></i>
+                  <span>대규모 트래픽 대응 서버 아키텍처</span>
+                </li>
+                <li class="flex items-start gap-2">
+                  <i class="fa-solid fa-check text-blue-600 mt-1"></i>
+                  <span>마케팅 자동화 CRM 로직 연동</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+          <a href="contact.html" class="btn btn--primary w-full mt-10 shadow-lg shadow-blue-100">본격적인 성장 시작</a>
+        </div>
+
+        <div class="bg-white p-8 rounded-[24px] border border-gray-200 card-hover flex flex-col opacity-90">
+          <div class="mb-8">
+            <span class="bg-gray-100 text-gray-500 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">Stage 03</span>
+            <h3 class="text-2xl font-black mt-4">Series B ~ C</h3>
+            <p class="text-gray-400 text-sm mt-2">시장 지배력 강화 및 자동화 완성</p>
+          </div>
+
+          <div class="mb-8">
+            <div class="flex items-baseline gap-2">
+              <span class="text-3xl font-black text-gray-900">별도 협의</span>
+            </div>
+            <p class="text-green-600 text-sm font-bold mt-2 font-mono">운영비: 지분 또는 전략적 파트너십</p>
+          </div>
+
+          <div class="space-y-6 flex-grow">
+            <div class="pt-6 border-t border-gray-50">
+              <p class="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Core Tasks</p>
+              <ul class="text-sm space-y-3 text-gray-600">
+                <li class="flex items-start gap-2">
+                  <i class="fa-solid fa-check text-blue-500 mt-1"></i>
+                  <span>엔터프라이즈급 비즈니스 자동화</span>
+                </li>
+                <li class="flex items-start gap-2">
+                  <i class="fa-solid fa-check text-blue-500 mt-1"></i>
+                  <span>글로벌 확장(다국어/결제) 대응</span>
+                </li>
+                <li class="flex items-start gap-2">
+                  <i class="fa-solid fa-check text-blue-500 mt-1"></i>
+                  <span>사내 전담 개발 조직 매니지먼트</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+          <a href="contact.html" class="btn btn--ghost w-full mt-10">전문가 컨설팅 문의</a>
         </div>
       </div>
     </div>
@@ -749,7 +885,7 @@
     <div class="inner">
       <h2>고민하는 사이에도<br>경쟁자는 시스템을 구축하고 있습니다</h2>
       <p>막연한 아이디어를 돈이 되는 시스템으로 만드는 가장 빠른 방법</p>
-      <a class="btn btn--primary" href="contact.html">매출 상승 상담 받기</a>
+      <a class="btn btn--primary" href="contact.html">우리 사업 진단 받기</a>
     </div>
   </section>
 
