@@ -287,9 +287,14 @@
 
   <script>
     /**
-     * ✅ CSV 기반 로딩 방식
-     * - 아래 파일을 사이트 경로에 배치해야 합니다.
+     * ✅ CSV 기반 로딩 방식 (탭 단위 분리 로딩)
+     * - 기본 파일:
      *   /data/seed/domains.csv
+     *
+     * - 프로젝트 파일(권장, 탭 단위 분리):
+     *   /data/seed/projects/<domain_key>.csv
+     *
+     * - 하위 호환(분리 파일이 없을 경우 자동 fallback):
      *   /data/seed/projects.csv
      *
      * - projects.csv 필수 컬럼:
@@ -436,126 +441,21 @@
       if (project.slug) setProjectSlugToHash(project.slug);
     }
 
-    function renderFilters(domains, projects) {
-      const domainMap = new Map(domains.map(d => [d.key, d]));
-      const slugToProject = new Map(projects.map(p => [p.slug, p]));
-
-      // domainKey -> projects[]
-      const projectsByDomain = new Map();
-      domains.forEach(d => projectsByDomain.set(d.key, []));
-
-      projects.forEach(p => {
-        const keys = splitDomainKeys(p.domain_keys);
-        keys.forEach(k => {
-          if (!projectsByDomain.has(k)) projectsByDomain.set(k, []);
-          projectsByDomain.get(k).push(p);
-        });
-      });
-
-      // sort
-      const sortedDomains = [...domains].sort((a, b) => toInt(a.sort_order) - toInt(b.sort_order));
-      sortedDomains.forEach(d => {
-        const arr = projectsByDomain.get(d.key) || [];
-        arr.sort((a, b) => toInt(a.sort_order) - toInt(b.sort_order));
-      });
-
-      // render left
-      els.filtersRoot.innerHTML = '';
-
-      let firstProject = null;
-      let firstLi = null;
-
-      // ✅ 해시로 특정 프로젝트 선택
-      const wantedSlug = getProjectSlugFromHash();
-      const wantedProject = wantedSlug ? slugToProject.get(wantedSlug) : null;
-
-      sortedDomains.forEach(domain => {
-        const list = projectsByDomain.get(domain.key) || [];
-        if (list.length === 0) return;
-
-        const details = document.createElement('details');
-        details.className = 'filter-group';
-        details.open = true;
-
-        const summary = document.createElement('summary');
-        summary.className = 'filter-head';
-        summary.innerHTML = `${domain.label} <span>›</span>`;
-        details.appendChild(summary);
-
-        const ul = document.createElement('ul');
-        ul.className = 'filter-list';
-
-        list.forEach(p => {
-          const li = document.createElement('li');
-          li.dataset.projectId = p.id;
-          li.dataset.projectSlug = p.slug || '';
-          li.textContent = p.title || '(제목 없음)';
-
-          if (!firstProject) {
-            firstProject = p;
-            firstLi = li;
-          }
-
-          li.addEventListener('click', () => {
-            els.filtersRoot.querySelectorAll('.filter-list li').forEach(x => x.classList.remove('is-active'));
-            li.classList.add('is-active');
-            renderProject(p, domainMap);
-          });
-
-          // ✅ 해시 대상이면 초기 선택으로 세팅
-          if (wantedProject && wantedProject.slug && wantedProject.slug === p.slug) {
-            firstProject = p;
-            firstLi = li;
-          }
-
-          ul.appendChild(li);
-        });
-
-        details.appendChild(ul);
-        els.filtersRoot.appendChild(details);
-      });
-
-      // initial selection
-      if (firstProject && firstLi) {
-        firstLi.classList.add('is-active');
-        renderProject(firstProject, domainMap);
-      } else {
-        els.title.textContent = '프로젝트가 없습니다';
-        els.desc.textContent = 'is_public=true 인 프로젝트가 없거나, domain_keys 매핑이 비어 있습니다.';
-        els.tags.innerHTML = '';
-        els.actions.innerHTML = '';
-        els.thumb.textContent = 'Project Visual';
-      }
+    function setEmptyState(message) {
+      els.title.textContent = '프로젝트가 없습니다';
+      els.desc.textContent = message;
+      els.tags.innerHTML = '';
+      els.actions.innerHTML = '';
+      els.thumb.textContent = 'Project Visual';
     }
 
-    async function loadData() {
-      // ✅ 실제 배포 시: 이 경로에 CSV를 두세요
-      const DOMAINS_CSV = 'data/seed/domains.csv';
-      const PROJECTS_CSV = 'data/seed/projects.csv';
+    let domainMap = new Map();
+    let fallbackProjectsCache = null;
+    let fallbackActive = false;
+    let activeProjectSlug = '';
 
-      const [domainsText, projectsText] = await Promise.all([
-        fetch(DOMAINS_CSV, { cache: 'no-store' }).then(r => {
-          if (!r.ok) throw new Error('domains.csv 로드 실패');
-          return r.text();
-        }),
-        fetch(PROJECTS_CSV, { cache: 'no-store' }).then(r => {
-          if (!r.ok) throw new Error('projects.csv 로드 실패');
-          return r.text();
-        }),
-      ]);
-
-      const domainsRaw = parseCSV(domainsText);
-      const projectsRaw = parseCSV(projectsText);
-
-      const domains = domainsRaw
-        .filter(d => d.key && d.label)
-        .map(d => ({
-          key: d.key,
-          label: d.label,
-          sort_order: d.sort_order ?? '0',
-        }));
-
-      const projects = projectsRaw
+    function normalizeProjects(projectsRaw) {
+      return projectsRaw
         .filter(p => toBool(p.is_public ?? 'true'))
         .map(p => ({
           id: p.id,
@@ -572,8 +472,229 @@
           domain_keys: p.domain_keys || '',
         }))
         .sort((a, b) => toInt(a.sort_order) - toInt(b.sort_order));
+    }
 
-      renderFilters(domains, projects);
+    function setActiveProject(li, project) {
+      els.filtersRoot.querySelectorAll('.filter-list li').forEach(x => x.classList.remove('is-active'));
+      li.classList.add('is-active');
+      activeProjectSlug = project.slug || '';
+      renderProject(project, domainMap);
+    }
+
+    function readSessionCache(key) {
+      try {
+        return sessionStorage.getItem(key);
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function writeSessionCache(key, value) {
+      try {
+        sessionStorage.setItem(key, value);
+      } catch (e) {
+        // ignore cache errors
+      }
+    }
+
+    async function fetchCSV(path, cacheKey = '') {
+      if (cacheKey) {
+        const cached = readSessionCache(cacheKey);
+        if (cached) return cached;
+      }
+      const response = await fetch(path, { cache: 'no-store' });
+      if (!response.ok) {
+        const err = new Error(`${path} 로드 실패`);
+        err.status = response.status;
+        throw err;
+      }
+      const text = await response.text();
+      if (cacheKey) writeSessionCache(cacheKey, text);
+      return text;
+    }
+
+    function getDomainProjectsPath(domainKey) {
+      return `data/seed/projects/${domainKey}.csv`;
+    }
+
+    async function loadDomainProjects(domainKey, domainState) {
+      if (domainState.loaded || domainState.loading) return domainState.projects;
+      domainState.loading = true;
+
+      let projects = [];
+      try {
+        const text = await fetchCSV(getDomainProjectsPath(domainKey), `work:domain:${domainKey}`);
+        projects = normalizeProjects(parseCSV(text));
+      } catch (err) {
+        if (err.status === 404 || err.message.includes('로드 실패')) {
+          fallbackActive = true;
+          if (!fallbackProjectsCache) {
+            const fallbackText = await fetchCSV('data/seed/projects.csv', 'work:projects:all');
+            fallbackProjectsCache = normalizeProjects(parseCSV(fallbackText));
+          }
+          projects = fallbackProjectsCache.filter(p => splitDomainKeys(p.domain_keys).includes(domainKey));
+        } else {
+          throw err;
+        }
+      }
+
+      domainState.projects = projects;
+      domainState.loaded = true;
+      domainState.loading = false;
+
+      return projects;
+    }
+
+    function renderDomainList(domainKey, domainState, projects, wantedSlug) {
+      const ul = domainState.list;
+      ul.innerHTML = '';
+
+      if (!projects.length) {
+        const empty = document.createElement('li');
+        empty.textContent = '등록된 프로젝트가 없습니다.';
+        empty.style.cursor = 'default';
+        empty.style.color = '#94a3b8';
+        ul.appendChild(empty);
+        return { selected: false };
+      }
+
+      let firstProject = null;
+      let firstLi = null;
+      let selected = false;
+
+      projects.forEach(p => {
+        const li = document.createElement('li');
+        li.dataset.projectId = p.id;
+        li.dataset.projectSlug = p.slug || '';
+        li.textContent = p.title || '(제목 없음)';
+
+        if (!firstProject) {
+          firstProject = p;
+          firstLi = li;
+        }
+
+        li.addEventListener('click', () => setActiveProject(li, p));
+
+        if (wantedSlug && p.slug === wantedSlug) {
+          setActiveProject(li, p);
+          selected = true;
+        } else if (activeProjectSlug && p.slug === activeProjectSlug) {
+          setActiveProject(li, p);
+          selected = true;
+        }
+
+        ul.appendChild(li);
+      });
+
+      if (!selected && firstProject && firstLi) {
+        setActiveProject(firstLi, firstProject);
+        selected = true;
+      }
+
+      return { selected };
+    }
+
+    async function setupFilters(domains) {
+      domainMap = new Map(domains.map(d => [d.key, d]));
+      const sortedDomains = [...domains].sort((a, b) => toInt(a.sort_order) - toInt(b.sort_order));
+      const domainStates = new Map();
+      const wantedSlug = getProjectSlugFromHash();
+
+      els.filtersRoot.innerHTML = '';
+
+      sortedDomains.forEach((domain, idx) => {
+        const details = document.createElement('details');
+        details.className = 'filter-group';
+        details.open = idx === 0;
+
+        const summary = document.createElement('summary');
+        summary.className = 'filter-head';
+        summary.innerHTML = `${domain.label} <span>›</span>`;
+        details.appendChild(summary);
+
+        const ul = document.createElement('ul');
+        ul.className = 'filter-list';
+        ul.innerHTML = '<li style="cursor:default;color:#94a3b8;">탭을 열면 데이터를 불러옵니다.</li>';
+
+        details.appendChild(ul);
+        els.filtersRoot.appendChild(details);
+
+        const state = {
+          key: domain.key,
+          details,
+          summary,
+          list: ul,
+          loaded: false,
+          loading: false,
+          projects: [],
+        };
+
+        domainStates.set(domain.key, state);
+
+        details.addEventListener('toggle', async () => {
+          if (!details.open) return;
+          if (state.loaded) return;
+          ul.innerHTML = '<li style="cursor:default;color:#94a3b8;">데이터를 불러오는 중입니다...</li>';
+          const projects = await loadDomainProjects(domain.key, state);
+          renderDomainList(domain.key, state, projects, wantedSlug);
+        });
+      });
+
+      const firstDomain = sortedDomains[0];
+      if (!firstDomain) return;
+      const firstState = domainStates.get(firstDomain.key);
+      if (!firstState) return;
+
+      firstState.list.innerHTML = '<li style="cursor:default;color:#94a3b8;">데이터를 불러오는 중입니다...</li>';
+      const firstProjects = await loadDomainProjects(firstDomain.key, firstState);
+      const selection = renderDomainList(firstDomain.key, firstState, firstProjects, wantedSlug);
+
+      if (!selection.selected && !wantedSlug) {
+        setEmptyState('is_public=true 인 프로젝트가 없거나, domain_keys 매핑이 비어 있습니다.');
+      }
+
+      if (wantedSlug && !selection.selected) {
+        for (let i = 1; i < sortedDomains.length; i++) {
+          const domain = sortedDomains[i];
+          const state = domainStates.get(domain.key);
+          if (!state) continue;
+          state.list.innerHTML = '<li style="cursor:default;color:#94a3b8;">데이터를 불러오는 중입니다...</li>';
+          const projects = await loadDomainProjects(domain.key, state);
+          const { selected } = renderDomainList(domain.key, state, projects, wantedSlug);
+          if (selected) {
+            state.details.open = true;
+            break;
+          }
+        }
+        if (!activeProjectSlug) {
+          setEmptyState('해당 프로젝트를 찾을 수 없습니다.');
+        }
+      }
+    }
+
+    async function loadData() {
+      const DOMAINS_CSV = 'data/seed/domains.csv';
+      const domainsText = await fetchCSV(DOMAINS_CSV, 'work:domains');
+
+      const domainsRaw = parseCSV(domainsText);
+      const domains = domainsRaw
+        .filter(d => d.key && d.label)
+        .map(d => ({
+          key: d.key,
+          label: d.label,
+          sort_order: d.sort_order ?? '0',
+        }));
+
+      if (!domains.length) {
+        setEmptyState('domains.csv 데이터가 비어 있습니다.');
+        return;
+      }
+
+      await setupFilters(domains);
+
+      if (fallbackActive && !fallbackProjectsCache?.length) {
+        setEmptyState('is_public=true 인 프로젝트가 없거나, domain_keys 매핑이 비어 있습니다.');
+      }
     }
 
     loadData().catch(err => {
