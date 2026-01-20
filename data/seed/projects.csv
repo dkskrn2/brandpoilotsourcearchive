@@ -1,25 +1,23 @@
-id,slug,title,summary,is_public,detail_enabled,sort_order,published_at,updated_at,thumb_url,primary_link_url,primary_link_type,domain_keys
-c95dada8-9a6d-462a-a14a-f551957c5fab,lg-llm-transition-2025,LG전자 챗봇 LLM 전환,아이디어 제안 / 기획서 검토 · 고객사: LG전자,True,Y,1,2025-01-01,2025-01-01,,/work/lg-llm-transition-2025,detail,ai_conversational
-6fcbf4f9-2d65-47a9-b195-6f98134e16eb,lg-de-lineup-guide-2025,LG전자 독일 라인업 가이드 페이지 구축,기획 · 고객사: LG전자,True,Y,2,2025-01-01,2025-01-01,,/work/lg-de-lineup-guide-2025,detail,enterprise_web
-4fc0357d-81e4-4574-81e5-e4d645fe160d,lg-th-event-2025,LG전자 태국 국문 이벤트 페이지 구축,기획 · 고객사: LG전자,True,Y,3,2025-01-01,2025-01-01,,/work/lg-th-event-2025,detail,marketing_campaign;enterprise_web
-9aff11b5-2bd0-44ba-b922-d2eb63e0b1d2,lg-story-ops-2025,LG전자 스토리 운영,기획 / 콘텐츠 제작 / QA · 고객사: LG전자,True,Y,4,2025-01-01,2025-01-01,,/work/lg-story-ops-2025,detail,enterprise_web;operation_maintenance
-0bc7db95-f696-4d5e-9dbc-37eba2ae3cb1,lg-story-a11y-2024-2025,LG전자 스토리 접근성 개선,기획 / QA · 고객사: HSAD,True,Y,5,2024-01-01,2025-01-01,,/work/lg-story-a11y-2024-2025,detail,enterprise_web
-4e9cae08-6570-4a56-a4c7-2116bd79cd46,lg-chatbot-ops-2024-2025,LG전자 챗봇 운영,기획 전반 · 고객사: LG전자,True,Y,6,2024-01-01,2025-01-01,,/work/lg-chatbot-ops-2024-2025,detail,ai_conversational;operation_maintenance
-0afefe4e-c7ae-4882-bfc8-8c6613ad48c7,lg-story-migration-2024,LG전자 스토리 마이그레이션,콘텐츠 제작 및 운영 · 고객사: HSAD,True,Y,7,2024-01-01,2024-01-01,,/work/lg-story-migration-2024,detail,enterprise_web;operation_maintenance
-3b2f2cb2-0828-493b-8777-e7ddcb523030,lecroi-renewal-2024,르크로이 홈페이지 리뉴얼,QA / 화면설계 · 고객사: 르크로이,True,Y,8,2024-01-01,2024-01-01,,/work/lecroi-renewal-2024,detail,enterprise_web
-25d1362d-d816-4d94-802e-790d53ef84ea,lg-chatbot-renewal-2023,LG전자 챗봇 리뉴얼,기획 · 고객사: LG전자,True,Y,9,2023-01-01,2023-01-01,,/work/lg-chatbot-renewal-2023,detail,ai_conversational
-739c8586-f0b4-4455-9084-62f2565c1658,playd-homepage-2022,플레이디 홈페이지 구축,QA / 화면설계 / 매니징 · 고객사: 플레이디,True,Y,10,2022-01-01,2022-01-01,,/work/playd-homepage-2022,detail,enterprise_web
-96a47ea2-dc1e-4c47-a0dc-836eef3d5c94,25centride-up-2022,25centrid 고도화,QA · 고객사: 앱미,True,Y,11,2022-01-01,2022-01-01,,/work/25centride-up-2022,detail,app_mobile
-bb95f1cc-b7a7-4d17-a2c6-c9bd7e19f228,k2-survey-platform-2022,K2 사용자 평가 온라인 설문조사 플랫폼 고도화,화면설계 · 고객사: K2,True,Y,12,2022-01-01,2022-01-01,,/work/k2-survey-platform-2022,detail,app_mobile
-3af7b008-cbec-45c8-92d0-5f25a8d5ac50,cj-pressway-partial-renewal-2022,CJ 프레스웨이 회사 홈페이지 부분 리뉴얼,QA / 화면설계 · 고객사: CJ 프레스웨이,True,Y,13,2022-01-01,2022-01-01,,/work/cj-pressway-partial-renewal-2022,detail,enterprise_web
-55d80e20-13f1-48b9-8a10-aae3493b6fec,sungsungs-app-2022,송송 앱 구축,화면설계 / 고객사 컨텍 · 고객사: 송송,True,Y,14,2022-01-01,2022-01-01,,/work/sungsungs-app-2022,detail,app_mobile
-1b4a5337-af8e-44dd-a710-ac58124d7eff,class-app-2022,클래스 앱 구축,화면설계 / 기획 · 고객사: 프라임에듀넷,True,Y,15,2022-01-01,2022-01-01,,/work/class-app-2022,detail,app_mobile
-97914341-9e33-4563-a652-8da39d11f310,deokhu-app-2022,덕후 앱 구축,화면설계 / 기획전반 · 고객사: EZWIN Company,True,Y,16,2022-01-01,2022-01-01,,/work/deokhu-app-2022,detail,app_mobile
-86c8db82-11e3-48f7-bb28-3ef2bbbc92a7,realseller-app-2021,리얼셀러 앱 구축,화면설계 / 기획 · 고객사: (주)리얼셀러,True,Y,17,2021-01-01,2021-01-01,,/work/realseller-app-2021,detail,app_mobile
-b0bd8c7a-7fe2-4063-9db3-126b70d63784,yeolmul-satsmun-app-2021,열물/샤츠문 앱 구축,화면설계 / 기획 · 고객사: (주)토바이오에스,True,Y,18,2021-01-01,2021-01-01,,/work/yeolmul-satsmun-app-2021,detail,app_mobile
-17f92d62-9d25-4fe7-9dee-5ba3d58c8227,heungkuklife-event-2021,흥국생명 송금식 이벤트 페이지 구축,화면설계 / 기획전반 · 고객사: 흥국생명,True,Y,19,2021-01-01,2021-01-01,,/work/heungkuklife-event-2021,detail,finance_insurance;marketing_campaign
-6ccf0ef6-f4d9-45b6-b8a6-c215e1c6f6d8,ivillage-app-2021,아이빌란 앱 구축,화면설계 / 기획전반 · 고객사: 이화빌란트빌로,True,Y,20,2021-01-01,2021-01-01,,/work/ivillage-app-2021,detail,app_mobile
-629ae9e3-7cfa-457f-8ea1-accc6d8ef2bc,dadamdark-app-2021,다담닭 앱 구축,QA · 고객사: 와이케이프로젝트,True,Y,21,2021-01-01,2021-01-01,,/work/dadamdark-app-2021,detail,app_mobile
-5e65f2cb-eaa8-45ce-bec7-15bf9c23b056,seoul-scholarship-ops-2021,서울장학재단 홈페이지 운영,운영 기획 · 고객사: 서울장학재단,True,Y,22,2021-01-01,2021-01-01,,/work/seoul-scholarship-ops-2021,detail,enterprise_web;operation_maintenance
-b6e7479a-e1cc-4b41-8ae3-bba56aa229e7,holandz-ops-2021,홀랜드즈 홈페이지 운영,운영 기획 · 고객사: 홀랜드즈,True,Y,23,2021-01-01,2021-01-01,,/work/holandz-ops-2021,detail,enterprise_web;operation_maintenance
-575434af-efe7-45b2-8c0d-f2c47cdb107a,laonak-kevin-app-2021,라오나크 Kevin 앱 구축,모바일 화면설계 · 고객사: 라오나크,True,Y,24,2021-01-01,2021-01-01,,/work/laonak-kevin-app-2021,detail,app_mobile
+id,slug,title,summary,is_public,sort_order,published_at,updated_at,thumb_url,primary_link_url,primary_link_type,domain_keys,detail_enabled
+c95dada8-9a6d-462a-a14a-f551957c5fab,lg-llm-transition-2025,LG전자 챗봇 LLM 전환,아이디어 제안 / 기획서 검토 · 고객사: LG전자,TRUE,1,2025-01-01,2025-01-01,,/work/lg-llm-transition-2025,detail,ai_conversational,Y
+6fcbf4f9-2d65-47a9-b195-6f98134e16eb,lg-de-lineup-guide-2025,LG전자 독일 라인업 가이드 페이지 구축,기획 · 고객사: LG전자,TRUE,2,2025-01-01,2025-01-01,,/work/lg-de-lineup-guide-2025,detail,enterprise_web,N
+4fc0357d-81e4-4574-81e5-e4d645fe160d,lg-th-event-2025,LG전자 태국 국문 이벤트 페이지 구축,기획 · 고객사: LG전자,TRUE,3,2025-01-01,2025-01-01,,/work/lg-th-event-2025,detail,marketing_campaign;enterprise_web,N
+9aff11b5-2bd0-44ba-b922-d2eb63e0b1d2,lg-story-ops-2025,LG전자 스토리 운영,기획 / 콘텐츠 제작 / QA · 고객사: LG전자,TRUE,4,2025-01-01,2025-01-01,,/work/lg-story-ops-2025,detail,enterprise_web;operation_maintenance,N
+0bc7db95-f696-4d5e-9dbc-37eba2ae3cb1,lg-story-a11y-2024-2025,LG전자 스토리 접근성 개선,기획 / QA · 고객사: HSAD,TRUE,5,2024-01-01,2025-01-01,,/work/lg-story-a11y-2024-2025,detail,enterprise_web,N
+4e9cae08-6570-4a56-a4c7-2116bd79cd46,lg-chatbot-ops-2024-2025,LG전자 챗봇 운영,기획 전반 · 고객사: LG전자,TRUE,6,2024-01-01,2025-01-01,,/work/lg-chatbot-ops-2024-2025,detail,ai_conversational;operation_maintenance,N
+0afefe4e-c7ae-4882-bfc8-8c6613ad48c7,lg-story-migration-2024,LG전자 스토리 마이그레이션,콘텐츠 제작 및 운영 · 고객사: HSAD,TRUE,7,2024-01-01,2024-01-01,,/work/lg-story-migration-2024,detail,enterprise_web;operation_maintenance,N
+3b2f2cb2-0828-493b-8777-e7ddcb523030,lecroi-renewal-2024,르노코리아 홈페이지 리뉴얼,QA / 화면설계 · 고객사: 르크로이,TRUE,8,2024-01-01,2024-01-01,,/work/lecroi-renewal-2024,detail,enterprise_web,Y
+25d1362d-d816-4d94-802e-790d53ef84ea,lg-chatbot-renewal-2023,LG전자 챗봇 리뉴얼,기획 · 고객사: LG전자,TRUE,9,2023-01-01,2023-01-01,,/work/lg-chatbot-renewal-2023,detail,ai_conversational,N
+739c8586-f0b4-4455-9084-62f2565c1658,playd-homepage-2022,플레이디 홈페이지 구축,QA / 화면설계 / 매니징 · 고객사: 플레이디,TRUE,10,2022-01-01,2022-01-01,,/work/playd-homepage-2022,detail,enterprise_web,N
+96a47ea2-dc1e-4c47-a0dc-836eef3d5c94,25centride-up-2022,25centrid 고도화,QA · 고객사: 앱미,TRUE,11,2022-01-01,2022-01-01,,/work/25centride-up-2022,detail,app_mobile,N
+bb95f1cc-b7a7-4d17-a2c6-c9bd7e19f228,k2-survey-platform-2022,K2 사용자 평가 온라인 설문조사 플랫폼 고도화,화면설계 · 고객사: K2,TRUE,12,2022-01-01,2022-01-01,,/work/k2-survey-platform-2022,detail,app_mobile,N
+3af7b008-cbec-45c8-92d0-5f25a8d5ac50,cj-pressway-partial-renewal-2022,CJ 프레스웨이 회사 홈페이지 부분 리뉴얼,QA / 화면설계 · 고객사: CJ 프레스웨이,TRUE,13,2022-01-01,2022-01-01,,/work/cj-pressway-partial-renewal-2022,detail,enterprise_web,N
+55d80e20-13f1-48b9-8a10-aae3493b6fec,sungsungs-app-2022,송송 앱 구축,화면설계 / 고객사 컨텍 · 고객사: 송송,TRUE,14,2022-01-01,2022-01-01,,/work/sungsungs-app-2022,detail,app_mobile,N
+1b4a5337-af8e-44dd-a710-ac58124d7eff,class-app-2022,클래스 앱 구축,화면설계 / 기획 · 고객사: 프라임에듀넷,TRUE,15,2022-01-01,2022-01-01,,/work/class-app-2022,detail,app_mobile,N
+97914341-9e33-4563-a652-8da39d11f310,deokhu-app-2022,덕킹 앱 구축,화면설계 / 기획전반 · 고객사: EZWIN Company,TRUE,16,2022-01-01,2022-01-01,,/work/deokhu-app-2022,detail,app_mobile,N
+86c8db82-11e3-48f7-bb28-3ef2bbbc92a7,realseller-app-2021,리얼셀러 앱 구축,화면설계 / 기획 · 고객사: (주)리얼셀러,TRUE,17,2021-01-01,2021-01-01,,/work/realseller-app-2021,detail,app_mobile,N
+17f92d62-9d25-4fe7-9dee-5ba3d58c8227,heungkuklife-event-2021,흥국생명 송금식 이벤트 페이지 구축,화면설계 / 기획전반 · 고객사: 흥국생명,TRUE,19,2021-01-01,2021-01-01,,/work/heungkuklife-event-2021,detail,finance_insurance;marketing_campaign,N
+6ccf0ef6-f4d9-45b6-b8a6-c215e1c6f6d8,ivillage-app-2021,아이발달 앱 구축,화면설계 / 기획전반 · 고객사: 이화빌란트빌로,TRUE,20,2021-01-01,2021-01-01,,/work/ivillage-app-2021,detail,app_mobile,N
+5e65f2cb-eaa8-45ce-bec7-15bf9c23b056,seoul-scholarship-ops-2021,서울장학재단 홈페이지 운영,운영 기획 · 고객사: 서울장학재단,TRUE,22,2021-01-01,2021-01-01,,/work/seoul-scholarship-ops-2021,detail,enterprise_web;operation_maintenance,N
+b6e7479a-e1cc-4b41-8ae3-bba56aa229e7,holandz-ops-2021,홈앤톤즈 홈페이지 운영,운영 기획 · 고객사: 홀랜드즈,TRUE,23,2021-01-01,2021-01-01,,/work/holandz-ops-2021,detail,enterprise_web;operation_maintenance,N
+575434af-efe7-45b2-8c0d-f2c47cdb107a,laonak-kevin-app-2021,라오나크 Kevin 앱 구축,모바일 화면설계 · 고객사: 라오나크,TRUE,24,2021-01-01,2021-01-01,,/work/laonak-kevin-app-2021,detail,app_mobile,N
