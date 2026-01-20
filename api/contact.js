@@ -4,6 +4,7 @@ const buildParams = (data) => {
   params.append("phone", data?.phone || "");
   params.append("site", data?.site || "");
   params.append("message", data?.message || "");
+  params.append("plan", data?.plan || "");
   params.append("agree", data?.agree || "");
   return params;
 };
