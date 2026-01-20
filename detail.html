@@ -214,36 +214,60 @@
         </div>
       </section>
 
-      <section class="detail-grid">
+      <section class="detail-grid" data-role="detail-content">
         <div class="card">
-          <div class="meta">
-            <span class="pill">Voice UX</span>
-            <span class="pill">AI Experience</span>
-            <span class="pill">Research</span>
-          </div>
-          <h2>프로젝트 개요</h2>
-          <p class="lead" style="font-size:16px; margin-bottom:0;">TV 플랫폼에서의 음성 기반 상호작용을 중심으로, 고객이 어떤 상황에서 음성 명령을 시도하고 어디에서 이탈하는지 정성적/정량적 관찰을 진행했습니다.</p>
-        </div>
-
-        <div class="card">
-          <h2>핵심 인사이트</h2>
-          <ul>
-            <li>음성 인식 실패는 ‘명령어 기억’보다 ‘즉시적인 피드백 부족’에서 더 많이 발생했습니다.</li>
-            <li>가족 단위 사용자는 상황마다 음성 톤과 길이가 달라, 실패 시 재시도를 유도하는 가이드가 필수적이었습니다.</li>
-            <li>리모컨 물리 UI와 음성 UI 간의 역할 분리가 명확할수록 사용자 만족도가 비약적으로 상승했습니다.</li>
-          </ul>
-        </div>
-
-        <div class="card">
-          <h2>솔루션 방향</h2>
-          <ul>
-            <li>실패 원인별 대응 메시지 템플릿 12종 정의</li>
-            <li>성공/실패 피드백을 위한 화면 내 시각적 보조 요소(Indicator) 설계</li>
-            <li>음성 재시도 흐름 단축을 위한 지능형 프롬프트 개선</li>
-          </ul>
+          <p class="lead" style="font-size:16px; margin-bottom:0;">
+            상세 내용을 불러오는 중입니다.
+          </p>
         </div>
       </section>
     </div>
   </main>
+  <script>
+    function getSlugFromQuery() {
+      const params = new URLSearchParams(location.search);
+      const slug = params.get('slug');
+      if (slug) return slug;
+      const hash = (location.hash || '').replace('#', '');
+      if (hash) return hash;
+      const pathParts = location.pathname.split('/').filter(Boolean);
+      const last = pathParts[pathParts.length - 1];
+      if (last && last.endsWith('.html')) return '';
+      return last || '';
+    }
+
+    async function loadDetailContent() {
+      const container = document.querySelector('[data-role="detail-content"]');
+      if (!container) return;
+      const slug = getSlugFromQuery();
+      if (!slug) {
+        container.innerHTML = `
+          <div class="card">
+            <p class="lead" style="font-size:16px; margin-bottom:0;">
+              상세 내용을 보려면 올바른 프로젝트 링크로 이동하세요.
+            </p>
+          </div>
+        `;
+        return;
+      }
+
+      try {
+        const response = await fetch(`data/projects/${slug}.html`, { cache: 'no-store' });
+        if (!response.ok) throw new Error('상세 파일 로드 실패');
+        const html = await response.text();
+        container.innerHTML = html;
+      } catch (error) {
+        container.innerHTML = `
+          <div class="card">
+            <p class="lead" style="font-size:16px; margin-bottom:0;">
+              상세 내용을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.
+            </p>
+          </div>
+        `;
+      }
+    }
+
+    loadDetailContent();
+  </script>
 </body>
 </html>

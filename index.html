@@ -224,14 +224,15 @@
       letter-spacing: 1px;
       margin-bottom: 10px;
     }
-    .social-proof .main-title {
+    .main-title {
       font-size: 28px;
       line-height: 1.4;
       color: #1e293b;
       font-weight: 800;
       margin-bottom: 20px;
     }
-    .social-proof .main-title span { color: #2563eb; }
+    .main-title span { color: #2563eb; }
+    .main-title--light { color: #fff; }
     .social-proof .description { color: #64748b; font-size: 16px; }
     .social-proof .stats-grid {
       display: grid;
@@ -276,7 +277,7 @@
       word-break: keep-all;
     }
     @media (max-width: 768px) {
-      .social-proof .main-title { font-size: 24px; }
+      .main-title { font-size: 24px; }
       .social-proof .stats-grid { grid-template-columns: 1fr; }
     }
 
@@ -293,6 +294,7 @@
     .process-content li { margin-bottom: 10px; }
 
     /* Pricing (BASE - will be overridden below for image match) */
+    /*
     .pricing-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; margin-top: 56px; }
     .price-card { padding: 48px 40px; background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; position: relative; }
     .price-card--featured { border: 2px solid var(--accent); box-shadow: 0 20px 40px rgba(37, 99, 235, 0.08); }
@@ -300,13 +302,14 @@
     .price-card__amount { font-size: 42px; font-weight: 900; margin: 16px 0; }
     .price-card__list { list-style: none; padding: 24px 0 0 0; margin: 32px 0 0 0; border-top: 1px solid var(--line); }
     .price-card__list li { margin-bottom: 14px; display: flex; align-items: center; gap: 10px; font-weight: 500; }
+    */
 
     /* Final CTA (BASE - will be overridden below for image match) */
     .final-cta {
       background: linear-gradient(145deg, #0f172a 0%, #1e293b 100%);
       color: #fff; text-align: center; border: none;
     }
-    .final-cta h2 { color: #fff; font-size: clamp(30px, 5vw, 44px); }
+    /* .final-cta h2 { color: #fff; font-size: clamp(30px, 5vw, 44px); } */
     .final-cta p { color: #94a3b8; margin: 24px 0 48px; }
 
     @media (max-width: 768px) {
@@ -332,11 +335,13 @@
       max-width: 920px;
       margin: 0 auto 44px;
     }
+    /*
     .process-section .process-head h2{
       font-size: 20px;
       font-weight: 800;
       letter-spacing: -0.02em;
     }
+    */
     .process-section .process-head .desc{
       font-size: 14px;
       margin-top: 8px;
@@ -408,6 +413,7 @@
     }
 
     /* Pricing section layout */
+    /*
     .pricing-section .inner { max-width: 1020px; }
     .pricing-section .pricing-head{
       text-align: center;
@@ -474,6 +480,7 @@
       font-size: 13px;
       border-radius: 10px;
     }
+    */
 
     /* Final CTA layout */
     .final-cta--match{
@@ -484,12 +491,14 @@
     .final-cta--match .inner{
       max-width: 980px;
     }
+    /*
     .final-cta--match h2{
       font-weight: 900;
       letter-spacing: -0.03em;
       line-height: 1.12;
       font-size: clamp(30px, 4.5vw, 44px);
     }
+    */
     .final-cta--match p{
       margin: 14px 0 34px;
       color: rgba(148,163,184,0.92);
@@ -578,7 +587,7 @@
     </div>
   </section>
 
-  <section class="section section--alt problem">
+  <section class="section section--alt problem" style="background: #fff;">
     <div class="inner">
       <div style="margin-bottom: 56px;">
         <span style="color: var(--accent); font-weight: 800; font-size: 14px; letter-spacing: 0.1em; display: block; margin-bottom: 16px; text-transform: uppercase;">
@@ -586,7 +595,7 @@
         </span>
 
         <!-- ✅ SEO: 여기의 h1을 h2로 변경 (H1 중복 제거) -->
-        <h2 class="hero__title">
+        <h2 class="main-title">
           온라인 전환이 실패하는 이유는<br>
           근거 없는 '확신' 때문입니다.
         </h2>
@@ -600,7 +609,7 @@
     </div>
   </section>
 
-  <section class="pb-20 px-6 max-w-6xl mx-auto">
+  <section class="pb-20 px-6 max-w-6xl mx-auto" style="background: #fff;">
     <div class="grid md:grid-cols-3 gap-8">
       <div class="bg-white p-8 rounded-2xl border border-orange-100 shadow-sm relative overflow-hidden">
         <div class="absolute top-0 right-0 bg-orange-100 text-orange-600 px-4 py-1 text-xs font-bold rounded-bl-xl uppercase">Error Case</div>
@@ -628,7 +637,7 @@
 
   <section class="bg-slate-900 py-16 px-6">
     <div class="max-w-4xl mx-auto text-center">
-      <h2 class="text-2xl md:text-4xl font-bold text-white mb-6 leading-tight">
+      <h2 class="main-title main-title--light">
         우리는 무작정 "이렇게 만드세요"라고 말하지 않습니다.
         지금 대표님의 사업을 파악하고 분석하여 함께 고민합니다.
       </h2>
@@ -652,7 +661,7 @@
   <section class="section process-section">
     <div class="inner">
       <div class="process-head">
-        <h2>GROWTHLINE의 시스템 구축 프로세스</h2>
+        <h2 class="main-title">GROWTHLINE의 시스템 구축 프로세스</h2>
         <p class="desc">단순 외주사가 아닌, 파트너로서 비즈니스의 뼈대를 세웁니다.</p>
       </div>
 
@@ -698,11 +707,11 @@
     </div>
   </section>
 
-  <section class="py-24 px-6" id="pricing">
+  <section class="py-24 px-6" id="pricing" style="background: #f8faff;">
     <div class="max-w-5xl mx-auto">
       <div class="text-center mb-16">
         <span class="text-blue-600 font-bold text-sm tracking-widest uppercase mb-3 block">Comparison</span>
-        <h2 class="text-3xl md:text-4xl font-black leading-tight">
+        <h2 class="main-title">
           왜 GROWTHLINE은 <br class="md:hidden"> 압도적으로 저렴할까요?
         </h2>
         <p class="text-gray-500 mt-4 text-lg">우리는 당신이 성공해야 수익이 나는 <strong>'성과 공유 모델'</strong>을 지향합니다.</p>
@@ -759,10 +768,10 @@
     </div>
   </section>
 
-  <section class="py-24 px-6 bg-[#f8fafc] border-t border-gray-100">
+  <section class="py-24 px-6 bg-[#f8fafc] border-t border-gray-100" style="background: #fff;">
     <div class="max-w-6xl mx-auto">
       <div class="text-center mb-16">
-        <h2 class="text-3xl font-black text-gray-900 mb-4">비즈니스 성장 단계별 최적화 플랜</h2>
+        <h2 class="main-title">비즈니스 성장 단계별 최적화 플랜</h2>
         <p class="text-gray-500 text-lg">투자 시리즈에 맞춘 최우선 과제와 합리적인 비용 구조입니다.</p>
       </div>
 
@@ -883,7 +892,7 @@
 
   <section class="section final-cta final-cta--match">
     <div class="inner">
-      <h2>고민하는 사이에도<br>경쟁자는 시스템을 구축하고 있습니다</h2>
+      <h2 class="main-title main-title--light">고민하는 사이에도<br>경쟁자는 시스템을 구축하고 있습니다</h2>
       <p>막연한 아이디어를 돈이 되는 시스템으로 만드는 가장 빠른 방법</p>
       <a class="btn btn--primary" href="contact.html">우리 사업 진단 받기</a>
     </div>
