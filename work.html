@@ -427,8 +427,10 @@
       // actions
       els.actions.innerHTML = '';
       if (isDetailEnabled(project.detail_enabled)) {
-        const href = project.primary_link_url || '#';
         const linkType = (project.primary_link_type || 'detail').toLowerCase();
+        const href = linkType === 'detail' && project.slug
+          ? `detail.html?slug=${encodeURIComponent(project.slug)}`
+          : (project.primary_link_url || '#');
 
         const a = document.createElement('a');
         a.className = 'btn-view';
