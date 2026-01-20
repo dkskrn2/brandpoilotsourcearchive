@@ -227,12 +227,12 @@
 
     .input-row { margin-bottom: 20px; }
     .input-row label { display: block; font-size: 14px; font-weight: 700; color: #334155; margin-bottom: 8px; }
-    .input-row input, .input-row textarea {
+    .input-row input, .input-row textarea, .input-row select {
       width: 100%; padding: 14px 18px; border: 1px solid #e2e8f0; border-radius: 12px;
       font-size: 15px; outline: none; transition: 0.2s;
       font-family: inherit;
     }
-    .input-row input:focus, .input-row textarea:focus { border-color: #2563eb; box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.05); }
+    .input-row input:focus, .input-row textarea:focus, .input-row select:focus { border-color: #2563eb; box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.05); }
 
     .agree-row { margin-bottom: 30px; font-size: 14px; color: #64748b; }
     .checkbox-container { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; }
@@ -328,6 +328,16 @@
             <div class="input-row">
               <label for="contact_site_url">운영 중인 사이트 URL (선택)</label>
               <input id="contact_site_url" name="site_url" type="url" placeholder="https://example.com (사전 분석에 활용됩니다)" autocomplete="url" pattern="^[^\\u3131-\\u318E\\uAC00-\\uD7A3]*$" title="한글 없이 URL을 입력해 주세요." data-field="site">
+            </div>
+
+            <div class="input-row">
+              <label for="contact_plan">플랜</label>
+              <select id="contact_plan" name="plan" data-field="plan" required>
+                <option value="" disabled selected>선택해 주세요</option>
+                <option value="seed">Seed</option>
+                <option value="series-a">Series A</option>
+                <option value="series-b">Series B</option>
+              </select>
             </div>
 
             <div class="input-row">
