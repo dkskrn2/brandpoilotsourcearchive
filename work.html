@@ -298,7 +298,7 @@
      *   /data/seed/projects.csv
      *
      * - projects.csv 필수 컬럼:
-     *   id,slug,title,summary,is_public,sort_order,published_at,updated_at,thumb_url,primary_link_url,primary_link_type,domain_keys
+     *   id,slug,title,summary,is_public,detail_enabled,sort_order,published_at,updated_at,thumb_url,primary_link_url,primary_link_type,domain_keys
      *
      * - domains.csv 필수 컬럼:
      *   key,label,sort_order
@@ -367,6 +367,10 @@
       return v.split(';').map(s => s.trim()).filter(Boolean);
     }
 
+    function isDetailEnabled(v) {
+      return String(v ?? '').trim().toLowerCase() === 'y';
+    }
+
     // ✅ 해시 파싱: #project=slug 형태 지원
     function getProjectSlugFromHash() {
       const h = (location.hash || "").replace("#", "");
@@ -422,20 +426,22 @@
 
       // actions
       els.actions.innerHTML = '';
-      const href = project.primary_link_url || '#';
-      const linkType = (project.primary_link_type || 'detail').toLowerCase();
+      if (isDetailEnabled(project.detail_enabled)) {
+        const href = project.primary_link_url || '#';
+        const linkType = (project.primary_link_type || 'detail').toLowerCase();
 
-      const a = document.createElement('a');
-      a.className = 'btn-view';
-      a.href = href;
-      a.textContent = '자세히 보기';
+        const a = document.createElement('a');
+        a.className = 'btn-view';
+        a.href = href;
+        a.textContent = '자세히 보기';
 
-      if (linkType === 'external') {
-        a.target = '_blank';
-        a.rel = 'noopener noreferrer';
+        if (linkType === 'external') {
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+        }
+
+        els.actions.appendChild(a);
       }
-
-      els.actions.appendChild(a);
 
       // ✅ 딥링크/공유용 해시 반영 (보이는 내용 변경 없음)
       if (project.slug) setProjectSlugToHash(project.slug);
@@ -463,6 +469,7 @@
           title: p.title,
           summary: p.summary,
           is_public: p.is_public,
+          detail_enabled: p.detail_enabled,
           sort_order: p.sort_order ?? '0',
           published_at: p.published_at,
           updated_at: p.updated_at,
