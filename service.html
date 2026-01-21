@@ -76,9 +76,6 @@
       --h2: clamp(26px, 3.6vw, 44px);
 
       --sectionY: clamp(56px, 8vw, 96px);
-
-      /* ✅ JS로 topbar 높이를 넣어 sticky 위치를 정확히 맞춤 */
-      --tabs-sticky-top: 68px;
     }
 
     *{ box-sizing:border-box; -webkit-font-smoothing: antialiased; }
@@ -261,73 +258,12 @@
       line-height: 1.8;
     }
 
-    /* ✅ 탭 영역 전체 sticky */
-    .tabs-wrap{
-      padding: 18px 0 14px;
-      background: rgba(255,255,255,.78);
-      backdrop-filter: blur(10px);
-      border-bottom: 1px solid rgba(15,23,42,.10);
-
-      position: sticky;
-      top: var(--tabs-sticky-top);
-      z-index: 40;
-    }
-
-    .tablist{
-      display:flex;
-      gap: 10px;
-      padding: 10px;
-      border: 1px solid rgba(15,23,42,.10);
-      border-radius: 999px;
-      background: rgba(255,255,255,.92);
-      box-shadow: var(--shadowSm);
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-      scrollbar-width: none;
-    }
-    .tablist::-webkit-scrollbar{ display:none; }
-
-    .tab{
-      position: relative;
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
-      border: 1px solid transparent;
-      background: transparent;
-      color: var(--muted);
-      font-weight: 900;
-      font-size: 14px;
-      padding: 12px 14px;
-      border-radius: 999px;
-      cursor: pointer;
-      transition: background .18s ease, color .18s ease, border-color .18s ease, transform .18s ease;
-      white-space: nowrap;
-    }
-    .tab:hover{
-      background: rgba(15,23,42,.04);
-      color: var(--text);
-    }
-
-    /* ✅ (4) 활성 탭 피드백 강화: 블루 풀 배경 */
-    .tab.is-active{
-      background: var(--accent);
-      color: #fff;
-      border-color: var(--accent2);
-      box-shadow: 0 12px 30px rgba(37,99,235,.22);
-    }
-
-    .tab:focus-visible{
-      outline: none;
-      box-shadow: 0 0 0 4px rgba(37,99,235,.22);
-    }
-
     /* 섹션 */
     .service-sections{
       padding: 26px 0 var(--sectionY);
       background: #fff;
     }
     .service-section{
-      scroll-margin-top: calc(var(--tabs-sticky-top) + 90px);
       padding: 22px 0 0;
     }
     .service-section + .service-section{
@@ -343,7 +279,6 @@
       padding: clamp(28px, 4vw, 54px);
       overflow: hidden;
 
-      /* 기본 분리감은 inset line로 유지 */
       box-shadow: var(--shadowMd), inset 0 0 0 1px var(--line);
       transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
     }
@@ -476,7 +411,6 @@
     }
 
     @media (max-width: 768px){
-      .tabs-wrap{ padding: 14px 0 12px; }
       .panel-card{ box-shadow: var(--shadowSm), inset 0 0 0 1px var(--line); }
     }
 
@@ -490,22 +424,21 @@
       }
 
       .service-section{
-        padding: 0; /* grid 내에서 불필요 여백 줄임 */
-        scroll-margin-top: calc(var(--tabs-sticky-top) + 110px);
+        padding: 0;
       }
 
       .service-section + .service-section{
-        margin-top: 0; /* grid에서 간격은 gap이 담당 */
+        margin-top: 0;
       }
 
       .final-cta{
-        grid-column: 1 / -1; /* 하단 CTA 가로 전체 */
+        grid-column: 1 / -1;
         margin-top: 10px;
         padding-top: 10px;
       }
 
       .service-sections noscript{
-        grid-column: 1 / -1; /* noscript 블록도 전체 */
+        grid-column: 1 / -1;
       }
     }
   </style>
@@ -536,7 +469,7 @@
     </div>
   </section>
 
-  <!-- ✅ 크롤러/접근성용 앵커 네비게이션 -->
+  <!-- ✅ 크롤러/접근성용 앵커 네비게이션(탭 제거 후에도 유지) -->
   <nav class="sr-only" aria-label="서비스 바로가기">
     <a href="#research">고객 분석 진단</a>
     <a href="#analytics">데이터 퍼널 분석</a>
@@ -545,20 +478,6 @@
     <a href="#writing">설득 카피라이팅</a>
     <a href="#startup">스타트업 구축</a>
   </nav>
-
-  <!-- 탭 = 앵커 링크(숨김 없음) -->
-  <div class="tabs-wrap">
-    <div class="inner">
-      <nav class="tablist" aria-label="서비스 탭">
-        <a class="tab is-active" href="#research" data-target="research">고객 분석 진단</a>
-        <a class="tab" href="#analytics" data-target="analytics">데이터 퍼널 분석</a>
-        <a class="tab" href="#design" data-target="design">전환 중심 설계</a>
-        <a class="tab" href="#consulting" data-target="consulting">비즈니스 로직 설계</a>
-        <a class="tab" href="#writing" data-target="writing">설득 카피라이팅</a>
-        <a class="tab" href="#startup" data-target="startup">스타트업 구축</a>
-      </nav>
-    </div>
-  </div>
 
   <main class="service-sections">
     <div class="inner">
@@ -701,74 +620,5 @@
       </div>
     </div>
   </footer>
-
-  <script>
-    (function(){
-      // ✅ topbar 실제 높이로 sticky top 동적 보정
-      function setStickyTop(){
-        var topbar = document.querySelector('.topbar');
-        if (!topbar) return;
-        var h = Math.ceil(topbar.getBoundingClientRect().height);
-        document.documentElement.style.setProperty('--tabs-sticky-top', h + 'px');
-      }
-      setStickyTop();
-      window.addEventListener('resize', setStickyTop);
-
-      var tabs = Array.prototype.slice.call(document.querySelectorAll('.tablist .tab'));
-      var sections = ['research','analytics','design','consulting','writing','startup']
-        .map(function(id){ return document.getElementById(id); })
-        .filter(Boolean);
-
-      function setActive(id){
-        tabs.forEach(function(t){
-          t.classList.toggle('is-active', t.getAttribute('data-target') === id);
-        });
-      }
-
-      // 클릭 시 부드러운 스크롤 + 해시 반영
-      tabs.forEach(function(t){
-        t.addEventListener('click', function(e){
-          var target = t.getAttribute('data-target');
-          var el = document.getElementById(target);
-          if (!el) return;
-          e.preventDefault();
-          history.replaceState(null, "", "#" + target);
-          el.scrollIntoView({ behavior: "smooth", block: "start" });
-          setActive(target);
-        });
-      });
-
-      // 스크롤 스파이: 현재 화면에 가장 많이 보이는 섹션을 active
-      if ('IntersectionObserver' in window){
-        var visible = {};
-        var io = new IntersectionObserver(function(entries){
-          entries.forEach(function(entry){
-            var id = entry.target.id;
-            if (!id) return;
-            visible[id] = entry.intersectionRatio;
-          });
-          var best = null;
-          var bestScore = 0;
-          Object.keys(visible).forEach(function(id){
-            if (visible[id] > bestScore){
-              bestScore = visible[id];
-              best = id;
-            }
-          });
-          if (best) setActive(best);
-        }, { root: null, threshold: [0, .1, .2, .3, .4, .5, .6, .7] });
-
-        sections.forEach(function(sec){ io.observe(sec); });
-      }
-
-      // 최초 해시 진입
-      var hash = (location.hash || '').replace('#','').trim();
-      if (hash && document.getElementById(hash)){
-        setActive(hash);
-      } else {
-        setActive('research');
-      }
-    })();
-  </script>
 </body>
 </html>
