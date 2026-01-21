@@ -76,6 +76,9 @@
       --h2: clamp(26px, 3.6vw, 44px);
 
       --sectionY: clamp(56px, 8vw, 96px);
+
+      /* ✅ JS로 topbar 높이를 넣어 sticky 위치를 정확히 맞춤 */
+      --tabs-sticky-top: 68px;
     }
 
     *{ box-sizing:border-box; -webkit-font-smoothing: antialiased; }
@@ -258,11 +261,18 @@
       line-height: 1.8;
     }
 
-    /* 앵커 스크롤형 탭 */
+    /* ✅ 탭 영역 전체 sticky */
     .tabs-wrap{
-      padding: 30px 0 10px;
-      background: #fff;
+      padding: 18px 0 14px;
+      background: rgba(255,255,255,.78);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(15,23,42,.10);
+
+      position: sticky;
+      top: var(--tabs-sticky-top);
+      z-index: 40;
     }
+
     .tablist{
       display:flex;
       gap: 10px;
@@ -274,14 +284,11 @@
       overflow-x: auto;
       -webkit-overflow-scrolling: touch;
       scrollbar-width: none;
-      position: sticky;
-      top: 68px; /* topbar 아래에 고정 */
-      z-index: 10;
-      backdrop-filter: blur(10px);
     }
     .tablist::-webkit-scrollbar{ display:none; }
 
     .tab{
+      position: relative;
       display:inline-flex;
       align-items:center;
       justify-content:center;
@@ -300,12 +307,15 @@
       background: rgba(15,23,42,.04);
       color: var(--text);
     }
+
+    /* ✅ (4) 활성 탭 피드백 강화: 블루 풀 배경 */
     .tab.is-active{
-      background: var(--accentSoft);
-      color: var(--text);
-      border-color: rgba(37,99,235,.22);
-      box-shadow: 0 10px 24px rgba(37,99,235,.08);
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent2);
+      box-shadow: 0 12px 30px rgba(37,99,235,.22);
     }
+
     .tab:focus-visible{
       outline: none;
       box-shadow: 0 0 0 4px rgba(37,99,235,.22);
@@ -317,20 +327,30 @@
       background: #fff;
     }
     .service-section{
-      scroll-margin-top: 150px; /* sticky tab 고려 */
+      scroll-margin-top: calc(var(--tabs-sticky-top) + 90px);
       padding: 22px 0 0;
     }
     .service-section + .service-section{
       margin-top: 18px;
     }
 
+    /* ✅ (3) 카드 hover 효과 강화 */
     .panel-card{
+      position: relative;
       background: rgba(255,255,255,.92);
-      border: 1px solid rgba(15,23,42,.10);
+      border: 1px solid transparent; /* 기본 상태 테두리 투명 */
       border-radius: var(--radius);
-      box-shadow: var(--shadowMd);
       padding: clamp(28px, 4vw, 54px);
       overflow: hidden;
+
+      /* 기본 분리감은 inset line로 유지 */
+      box-shadow: var(--shadowMd), inset 0 0 0 1px var(--line);
+      transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+    .panel-card:hover{
+      transform: translateY(-8px);
+      border-color: var(--accentSoft);
+      box-shadow: var(--shadowBlue), inset 0 0 0 1px rgba(37,99,235,.22);
     }
 
     .panel-head{
@@ -341,6 +361,22 @@
       flex-wrap: wrap;
       margin-bottom: 10px;
     }
+
+    /* ✅ (2) Visual Anchor: index number + category 그룹 */
+    .category-group{
+      display:flex;
+      align-items:center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .index-num{
+      font-size: 14px;
+      font-weight: 900;
+      color: var(--accent);
+      opacity: 0.5;
+      letter-spacing: .06em;
+    }
+
     .panel-category{
       display:inline-flex;
       align-items:center;
@@ -388,6 +424,9 @@
       font-size: 15px;
       line-height: 1.7;
       word-break: keep-all;
+
+      transition: transform .2s ease, color .2s ease;
+      will-change: transform;
     }
     .check-list li::before{
       content: "→";
@@ -396,6 +435,10 @@
       top: 0;
       color: var(--accent);
       font-weight: 950;
+    }
+    .check-list li:hover{
+      color: var(--accent);
+      transform: translateX(4px);
     }
 
     .final-cta{
@@ -433,8 +476,37 @@
     }
 
     @media (max-width: 768px){
-      .panel-card{ box-shadow: var(--shadowSm); }
-      .tablist{ top: 62px; }
+      .tabs-wrap{ padding: 14px 0 12px; }
+      .panel-card{ box-shadow: var(--shadowSm), inset 0 0 0 1px var(--line); }
+    }
+
+    /* ✅ (1) 데스크톱 2컬럼 그리드 */
+    @media (min-width: 1024px) {
+      .service-sections .inner{
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 24px;
+        align-items: start;
+      }
+
+      .service-section{
+        padding: 0; /* grid 내에서 불필요 여백 줄임 */
+        scroll-margin-top: calc(var(--tabs-sticky-top) + 110px);
+      }
+
+      .service-section + .service-section{
+        margin-top: 0; /* grid에서 간격은 gap이 담당 */
+      }
+
+      .final-cta{
+        grid-column: 1 / -1; /* 하단 CTA 가로 전체 */
+        margin-top: 10px;
+        padding-top: 10px;
+      }
+
+      .service-sections noscript{
+        grid-column: 1 / -1; /* noscript 블록도 전체 */
+      }
     }
   </style>
 </head>
@@ -494,8 +566,10 @@
       <section id="research" class="service-section" aria-label="고객 분석 진단">
         <div class="panel-card">
           <div class="panel-head">
-            <span class="panel-category">UX Research</span>
-            <!-- ✅ 허브에서만: 자세히 보기 링크 추가(내용 삭제 없음) -->
+            <div class="category-group">
+              <span class="index-num">01</span>
+              <span class="panel-category">UX Research</span>
+            </div>
             <a class="btn btn--ghost" href="service/service-research.html">자세히 보기</a>
           </div>
           <h3>"왜 안 팔리는가?"에 대한<br>데이터 기반의 정답을 찾습니다.</h3>
@@ -511,7 +585,10 @@
       <section id="analytics" class="service-section" aria-label="데이터 퍼널 분석">
         <div class="panel-card">
           <div class="panel-head">
-            <span class="panel-category">Data Analytics</span>
+            <div class="category-group">
+              <span class="index-num">02</span>
+              <span class="panel-category">Data Analytics</span>
+            </div>
             <a class="btn btn--ghost" href="service/service-analytics.html">자세히 보기</a>
           </div>
           <h3>직관이 아닌 숫자로<br>매출의 흐름을 통제합니다.</h3>
@@ -527,7 +604,10 @@
       <section id="design" class="service-section" aria-label="전환 중심 설계">
         <div class="panel-card">
           <div class="panel-head">
-            <span class="panel-category">Conversion Design</span>
+            <div class="category-group">
+              <span class="index-num">03</span>
+              <span class="panel-category">Conversion Design</span>
+            </div>
             <a class="btn btn--ghost" href="service/service-design.html">자세히 보기</a>
           </div>
           <h3>예쁘게가 아니라<br>"전환되게" 설계합니다.</h3>
@@ -543,7 +623,10 @@
       <section id="consulting" class="service-section" aria-label="비즈니스 로직 설계">
         <div class="panel-card">
           <div class="panel-head">
-            <span class="panel-category">Business Logic</span>
+            <div class="category-group">
+              <span class="index-num">04</span>
+              <span class="panel-category">Business Logic</span>
+            </div>
             <a class="btn btn--ghost" href="service/service-consulting.html">자세히 보기</a>
           </div>
           <h3>기능을 늘리기 전에<br>업무와 기준을 고정합니다.</h3>
@@ -559,7 +642,10 @@
       <section id="writing" class="service-section" aria-label="설득 카피라이팅">
         <div class="panel-card">
           <div class="panel-head">
-            <span class="panel-category">Copywriting</span>
+            <div class="category-group">
+              <span class="index-num">05</span>
+              <span class="panel-category">Copywriting</span>
+            </div>
             <a class="btn btn--ghost" href="service/service-writing.html">자세히 보기</a>
           </div>
           <h3>기술을 설명하지 않고<br>고객의 결정을 돕습니다.</h3>
@@ -575,7 +661,10 @@
       <section id="startup" class="service-section" aria-label="스타트업 구축">
         <div class="panel-card">
           <div class="panel-head">
-            <span class="panel-category">Build</span>
+            <div class="category-group">
+              <span class="index-num">06</span>
+              <span class="panel-category">Build</span>
+            </div>
             <a class="btn btn--ghost" href="service/service-startup.html">자세히 보기</a>
           </div>
           <h3>아이디어를 서비스로<br>"출시 가능한 형태"로 만듭니다.</h3>
@@ -615,6 +704,16 @@
 
   <script>
     (function(){
+      // ✅ topbar 실제 높이로 sticky top 동적 보정
+      function setStickyTop(){
+        var topbar = document.querySelector('.topbar');
+        if (!topbar) return;
+        var h = Math.ceil(topbar.getBoundingClientRect().height);
+        document.documentElement.style.setProperty('--tabs-sticky-top', h + 'px');
+      }
+      setStickyTop();
+      window.addEventListener('resize', setStickyTop);
+
       var tabs = Array.prototype.slice.call(document.querySelectorAll('.tablist .tab'));
       var sections = ['research','analytics','design','consulting','writing','startup']
         .map(function(id){ return document.getElementById(id); })
@@ -626,14 +725,12 @@
         });
       }
 
-      // 클릭 시 부드러운 스크롤(브라우저 기본도 되지만, 통일감용)
+      // 클릭 시 부드러운 스크롤 + 해시 반영
       tabs.forEach(function(t){
         t.addEventListener('click', function(e){
           var target = t.getAttribute('data-target');
           var el = document.getElementById(target);
           if (!el) return;
-          // 기본 앵커 동작은 유지(해시/공유)
-          // 스무스 스크롤만 보조
           e.preventDefault();
           history.replaceState(null, "", "#" + target);
           el.scrollIntoView({ behavior: "smooth", block: "start" });
