@@ -1,12 +1,12 @@
 id,slug,title,summary,is_public,sort_order,published_at,updated_at,thumb_url,primary_link_url,primary_link_type,domain_keys,detail_enabled
-c95dada8-9a6d-462a-a14a-f551957c5fab,lg-llm-transition-2025,LG전자 챗봇 LLM 전환,아이디어 제안 / 기획서 검토 · 고객사: LG전자,TRUE,1,2025-01-01,2025-01-01,,/work/lg-llm-transition-2025.html,external,ai_conversational,Y
+c95dada8-9a6d-462a-a14a-f551957c5fab,lg-llm-transition-2025,LG전자 챗봇 LLM 전환,아이디어 제안 / 기획서 검토 · 고객사: LG전자,TRUE,1,2025-01-01,2025-01-01,,/work/lg-llm-transition-2025.html,external,ai_conversational,N
 6fcbf4f9-2d65-47a9-b195-6f98134e16eb,lg-de-lineup-guide-2025,LG전자 독일 라인업 가이드 페이지 구축,기획 · 고객사: LG전자,TRUE,2,2025-01-01,2025-01-01,,/work/lg-de-lineup-guide-2025,detail,enterprise_web,N
 4fc0357d-81e4-4574-81e5-e4d645fe160d,lg-th-event-2025,LG전자 태국 국문 이벤트 페이지 구축,기획 · 고객사: LG전자,TRUE,3,2025-01-01,2025-01-01,,/work/lg-th-event-2025,detail,marketing_campaign;enterprise_web,N
 9aff11b5-2bd0-44ba-b922-d2eb63e0b1d2,lg-story-ops-2025,LG전자 스토리 운영,기획 / 콘텐츠 제작 / QA · 고객사: LG전자,TRUE,4,2025-01-01,2025-01-01,,/work/lg-story-ops-2025,detail,enterprise_web;operation_maintenance,N
 0bc7db95-f696-4d5e-9dbc-37eba2ae3cb1,lg-story-a11y-2024-2025,LG전자 스토리 접근성 개선,기획 / QA · 고객사: HSAD,TRUE,5,2024-01-01,2025-01-01,,/work/lg-story-a11y-2024-2025,detail,enterprise_web,N
 4e9cae08-6570-4a56-a4c7-2116bd79cd46,lg-chatbot-ops-2024-2025,LG전자 챗봇 운영,기획 전반 · 고객사: LG전자,TRUE,6,2024-01-01,2025-01-01,,/work/lg-chatbot-ops-2024-2025,detail,ai_conversational;operation_maintenance,N
 0afefe4e-c7ae-4882-bfc8-8c6613ad48c7,lg-story-migration-2024,LG전자 스토리 마이그레이션,콘텐츠 제작 및 운영 · 고객사: HSAD,TRUE,7,2024-01-01,2024-01-01,,/work/lg-story-migration-2024,detail,enterprise_web;operation_maintenance,N
-3b2f2cb2-0828-493b-8777-e7ddcb523030,lecroi-renewal-2024,르노코리아 홈페이지 리뉴얼,QA / 화면설계 · 고객사: 르크로이,TRUE,8,2024-01-01,2024-01-01,,/work/lecroi-renewal-2024.html,external,enterprise_web,Y
+3b2f2cb2-0828-493b-8777-e7ddcb523030,lecroi-renewal-2024,르노코리아 홈페이지 리뉴얼,QA / 화면설계 · 고객사: 르크로이,TRUE,8,2024-01-01,2024-01-01,,/work/lecroi-renewal-2024.html,external,enterprise_web,N
 25d1362d-d816-4d94-802e-790d53ef84ea,lg-chatbot-renewal-2023,LG전자 챗봇 리뉴얼,기획 · 고객사: LG전자,TRUE,9,2023-01-01,2023-01-01,,/work/lg-chatbot-renewal-2023,detail,ai_conversational,N
 739c8586-f0b4-4455-9084-62f2565c1658,playd-homepage-2022,플레이디 홈페이지 구축,QA / 화면설계 / 매니징 · 고객사: 플레이디,TRUE,10,2022-01-01,2022-01-01,,/work/playd-homepage-2022,detail,enterprise_web,N
 96a47ea2-dc1e-4c47-a0dc-836eef3d5c94,25centride-up-2022,25centrid 고도화,QA · 고객사: 앱미,TRUE,11,2022-01-01,2022-01-01,,/work/25centride-up-2022,detail,app_mobile,N
