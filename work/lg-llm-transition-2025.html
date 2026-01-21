@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LG전자 챗봇 LLM 전환 | GROWTHLINE</title>
+  <meta name="description" content="LG전자 챗봇 LLM 전환 프로젝트에서 아이디어 제안과 기획서 검토를 통해 서비스 전환 방향을 정리한 사례입니다." />
+  <link rel="canonical" href="/work/lg-llm-transition-2025.html" />
+
+  <style>
+    :root{
+      --accent:#2563eb;
+      --text:#1e293b;
+      --muted:#64748b;
+      --line:rgba(2,6,23,.08);
+      --bg:#ffffff;
+      --bg-soft:#f8fafc;
+      --card:#ffffff;
+
+      --radius:24px;
+      --max:1100px;
+      --pad:clamp(20px,5vw,40px);
+
+      --h1:clamp(32px,5vw,48px);
+      --h2:clamp(24px,4vw,30px);
+      --shadow-md:0 20px 40px rgba(15,23,42,.05);
+    }
+
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: 'Pretendard', ui-sans-serif, system-ui, -apple-system, sans-serif;
+      color:var(--text);
+      background:var(--bg);
+      -webkit-font-smoothing:antialiased;
+      line-height: 1.6;
+    }
+    a{color:inherit;text-decoration:none}
+    .container{width:100%;max-width:var(--max);margin:0 auto;padding:0 var(--pad)}
+
+    .topbar{
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      backdrop-filter: blur(10px);
+      background: rgba(255,255,255,.86);
+      border-bottom: 1px solid rgba(2,32,71,.08);
+    }
+    .topbar-inner{
+      max-width: var(--max);
+      margin: 0 auto;
+      padding: 12px 16px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:14px;
+    }
+    .brand{
+      display:flex; align-items:center; gap:10px;
+      text-decoration:none;
+      font-weight: 900;
+      letter-spacing:-.4px;
+      white-space:nowrap;
+      color: var(--text);
+    }
+    .dot{
+      width:10px; height:10px; border-radius: 999px;
+      background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
+      box-shadow: 0 0 0 6px rgba(49,130,246,.14);
+    }
+    .topbar .nav{
+      display:flex; align-items:center; gap:6px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+    }
+    .topbar .nav a{
+      text-decoration:none;
+      font-size:13px;
+      color: #6b7684;
+      padding: 8px 10px;
+      border-radius: 12px;
+      border: 1px solid transparent;
+    }
+    .topbar .nav a:hover{background: rgba(2,32,71,.04); color: var(--text);}
+    .topbar .nav a[aria-current="page"]{
+      background:rgba(37,99,235,.10);
+      color:var(--text);
+      border:1px solid rgba(37,99,235,.22);
+    }
+    .top-actions{
+      display:flex;
+      align-items:center;
+      gap:10px;
+    }
+    .topbar .btn{
+      padding: 11px 14px;
+      height: auto;
+      border-radius: 14px;
+      border: 1px solid rgba(2,32,71,.10);
+      background: rgba(255,255,255,.92);
+      color: var(--text);
+      font-weight: 800;
+      font-size: 14px;
+      white-space: nowrap;
+      box-shadow: 0 8px 18px rgba(2,32,71,.08);
+    }
+    .topbar .btn:hover{transform: translateY(-1px);}
+    .topbar .btn.primary{
+      color:#fff;
+      border-color: rgba(49,130,246,.22);
+      background: linear-gradient(180deg, rgba(49,130,246,1), rgba(27,100,218,1));
+    }
+
+    main {
+      padding-top: 80px;
+      padding-bottom: 100px;
+      background: radial-gradient(circle at 50% 0%, rgba(37,99,235,0.03) 0%, transparent 50%);
+    }
+
+    .hero { margin-bottom: 60px; }
+    h1 {
+      margin: 0 0 20px;
+      font-size: var(--h1);
+      letter-spacing: -0.03em;
+      font-weight: 850;
+      line-height: 1.2;
+      color: #0f172a;
+    }
+    .lead {
+      margin: 0 0 32px;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.7;
+      max-width: 800px;
+      word-break: keep-all;
+    }
+    .hero-actions { display: flex; gap: 12px; }
+
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 14px 24px; border-radius: 12px; font-size: 15px; font-weight: 700;
+      transition: 0.3s; cursor: pointer; border: 1px solid #e2e8f0;
+      background: #fff; color: #475569;
+    }
+    .btn.primary { background: #1e293b; color: #fff; border: none; }
+    .btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.05); }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 24px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 40px;
+      box-shadow: var(--shadow-md);
+    }
+    .meta { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+    .pill {
+      padding: 6px 12px; border-radius: 6px; background: #f1f5f9;
+      color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase;
+    }
+
+    h2 {
+      margin: 0 0 16px;
+      font-size: var(--h2);
+      font-weight: 800;
+      color: #1e293b;
+    }
+
+    ul { margin: 0; padding-left: 20px; color: #475569; }
+    ul li { margin-bottom: 12px; font-size: 16px; line-height: 1.6; }
+    ul li::marker { color: var(--accent); }
+
+    @media (max-width: 768px) {
+      main { padding-top: 100px; }
+      .card { padding: 30px 20px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/index.html" aria-label="홈으로">
+        <span class="dot" aria-hidden="true"></span>
+        <span>GROWTHLINE</span>
+      </a>
+      <div class="top-actions">
+        <nav class="nav" aria-label="상단 메뉴">
+          <a href="/service.html">service</a>
+          <a href="/work.html" aria-current="page">work</a>
+        </nav>
+        <a class="btn primary" href="/contact.html">진단받기</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="container">
+      <section class="hero">
+        <h1>LG전자 챗봇 LLM 전환</h1>
+        <p class="lead">아이디어 제안과 기획서 검토를 통해 기존 챗봇을 LLM 기반 경험으로 전환하는 방향을 정의했습니다.</p>
+        <div class="hero-actions">
+          <a class="btn" href="/work.html">← 목록으로 돌아가기</a>
+        </div>
+      </section>
+
+      <section class="detail-grid">
+        <article class="card">
+          <div class="meta">
+            <span class="pill">AI Conversational</span>
+            <span class="pill">2025</span>
+            <span class="pill">LG전자</span>
+          </div>
+          <h2>프로젝트 개요</h2>
+          <p class="lead" style="font-size:16px; margin-bottom:0;">
+            기존 챗봇의 대화 흐름을 LLM 기반으로 확장하기 위해, 서비스 목표와 고객 질문 패턴을 분석하고 전환 전략을 설계했습니다.
+          </p>
+        </article>
+
+        <article class="card">
+          <h2>주요 과업</h2>
+          <ul>
+            <li>서비스 목표와 사용 시나리오를 정리하고 핵심 전환 포인트를 정의했습니다.</li>
+            <li>LLM 적용 범위와 프롬프트 설계 방향을 제안했습니다.</li>
+            <li>운영 단계에서의 품질 검수 기준과 개선 루프를 정리했습니다.</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <h2>성과 및 시사점</h2>
+          <ul>
+            <li>기존 FAQ 중심 플로우에서 탐색형 대화 경험으로 확장하는 기준을 확보했습니다.</li>
+            <li>고객사가 내부 팀과 공유할 수 있는 전환 로드맵을 제공했습니다.</li>
+          </ul>
+        </article>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
