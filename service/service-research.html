@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>고객 분석 진단 | GROWTHLINE</title>
+  <meta name="description" content="대표님의 직감이 아닌 실제 고객의 목소리와 행동을 분석합니다. 고객이 결제 직전에 망설이는 이유, 경쟁사로 떠나는 결정적인 지점을 포착하여 개선 방향을 제시합니다." />
+  <meta name="robots" content="index,follow" />
+  <link rel="canonical" href="service-research.html" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:locale" content="ko_KR" />
+  <meta property="og:site_name" content="GROWTHLINE" />
+  <meta property="og:title" content="고객 분석 진단 | GROWTHLINE" />
+  <meta property="og:description" content="대표님의 직감이 아닌 실제 고객의 목소리와 행동을 분석합니다. 고객이 결제 직전에 망설이는 이유, 경쟁사로 떠나는 결정적인 지점을 포착하여 개선 방향을 제시합니다." />
+  <meta property="og:url" content="service-research.html" />
+  <meta property="og:image" content="assets/og/service.png" />
+  <meta property="og:image:alt" content="GROWTHLINE Service 상세 페이지 미리보기" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="고객 분석 진단 | GROWTHLINE" />
+  <meta name="twitter:description" content="대표님의 직감이 아닌 실제 고객의 목소리와 행동을 분석합니다." />
+  <meta name="twitter:image" content="assets/og/service.png" />
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Service",
+    "name": "고객 분석 진단",
+    "provider": { "@type": "Organization", "name": "GROWTHLINE" },
+    "areaServed": "KR",
+    "url": "service-research.html"
+  }
+  </script>
+
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --bg:#ffffff; --surface:#f8fafc; --surface2:#f4f7ff;
+      --text:#0f172a; --muted:#64748b; --muted2:#94a3b8;
+      --line:rgba(15,23,42,.10);
+      --accent:#2563eb; --accent2:#1d4ed8;
+      --accentSoft:rgba(37,99,235,.10); --accentSoft2:rgba(37,99,235,.06);
+      --radius:24px; --radiusSm:16px;
+      --shadowSm:0 10px 26px rgba(2,32,71,.06);
+      --shadowMd:0 18px 52px rgba(2,32,71,.10);
+      --shadowBlue:0 22px 64px rgba(37,99,235,.14);
+      --max:1100px; --pad:24px;
+      --h2: clamp(26px, 3.6vw, 44px);
+    }
+    *{box-sizing:border-box;-webkit-font-smoothing:antialiased}
+    html,body{margin:0;padding:0}
+    body{font-family:Inter,'Pretendard','Pretendard Variable',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--text);background:var(--bg);line-height:1.75}
+    a{color:inherit;text-decoration:none}
+    .inner{max-width:var(--max);margin:0 auto;padding:0 var(--pad)}
+    h1,h2,h3{margin:0;letter-spacing:-0.03em;line-height:1.15}
+    .sub-title{font-size:12px;font-weight:900;color:var(--accent);letter-spacing:.16em;text-transform:uppercase;margin:0 0 12px}
+    .main-title{font-size:var(--h2);font-weight:950;letter-spacing:-0.03em;margin:0 0 14px;color:var(--text);line-height:1.15}
+    .main-title span{color:var(--accent)}
+    .desc{color:var(--muted);word-break:keep-all}
+
+    .btn{display:inline-flex;align-items:center;justify-content:center;padding:16px 28px;border-radius:14px;font-weight:900;font-size:14px;border:1px solid transparent;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,background .18s ease,border-color .18s ease,color .18s ease;height:52px;white-space:nowrap}
+    .btn--primary{background:linear-gradient(180deg,#2f6cf0 0%,#1e56d8 100%);color:#fff;box-shadow:0 14px 34px rgba(37,99,235,.22);border-color:rgba(37,99,235,.18)}
+    .btn--primary:hover{transform:translateY(-2px);box-shadow:0 18px 46px rgba(37,99,235,.28);background:linear-gradient(180deg,#2a66ea 0%,#1b4fcf 100%)}
+    .btn--ghost{background:rgba(255,255,255,.92);border:1px solid rgba(15,23,42,.12);color:var(--text);box-shadow:var(--shadowSm)}
+    .btn--ghost:hover{transform:translateY(-2px);border-color:rgba(37,99,235,.22);box-shadow:var(--shadowMd)}
+
+    .topbar{position:sticky;top:0;z-index:50;backdrop-filter:blur(10px);background:rgba(255,255,255,.78);border-bottom:1px solid rgba(15,23,42,.10)}
+    .topbar-inner{max-width:var(--max);margin:0 auto;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:14px}
+    .brand{display:flex;align-items:center;gap:10px;font-weight:950;letter-spacing:-.02em;white-space:nowrap;color:var(--text)}
+    .dot{width:10px;height:10px;border-radius:999px;background:linear-gradient(180deg,#3b82f6 0%,#1d4ed8 100%);box-shadow:0 0 0 6px rgba(37,99,235,.14)}
+    .top-actions{display:flex;align-items:center;gap:10px}
+    .nav{display:flex;align-items:center;gap:6px;justify-content:flex-end}
+    .nav a{font-size:13px;font-weight:800;color:var(--muted);padding:8px 10px;border-radius:12px;border:1px solid transparent;transition:background .18s ease,color .18s ease,border-color .18s ease}
+    .nav a:hover{background:rgba(15,23,42,.04);color:var(--text)}
+    .topbar .btn{padding:10px 14px;height:40px;border-radius:14px;border:1px solid rgba(15,23,42,.10);background:rgba(255,255,255,.92);color:var(--text);font-weight:900;font-size:14px;box-shadow:var(--shadowSm)}
+    .topbar .btn.primary{color:#fff;border-color:rgba(37,99,235,.18);background:linear-gradient(180deg,#2f6cf0 0%,#1e56d8 100%);box-shadow:0 14px 30px rgba(37,99,235,.18)}
+    .topbar .btn:hover{transform:translateY(-1px)}
+    @media (max-width:720px){.nav{display:none}}
+
+    .service-hero{padding:clamp(72px,10vw,110px) 0 40px;background:radial-gradient(900px 420px at 50% 0%, rgba(37,99,235,.18) 0%, rgba(255,255,255,0) 60%),linear-gradient(180deg,#f6f9ff 0%,#ffffff 62%);border-bottom:1px solid rgba(15,23,42,.08)}
+    .service-hero .desc{max-width:860px;margin:18px 0 0;font-size:16px;line-height:1.8}
+
+    .content{padding:40px 0 90px}
+    .panel-card{background:rgba(255,255,255,.92);border:1px solid rgba(15,23,42,.10);border-radius:var(--radius);box-shadow:var(--shadowMd);padding:clamp(28px,4vw,54px)}
+    .panel-category{display:inline-flex;align-items:center;gap:10px;font-size:12px;font-weight:950;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);background:var(--accentSoft2);border:1px solid rgba(37,99,235,.12);padding:10px 14px;border-radius:999px;margin-bottom:16px}
+    .panel-card h3{font-size:clamp(20px,2.4vw,30px);font-weight:950;letter-spacing:-0.03em;color:var(--text);margin:0 0 14px;line-height:1.2}
+    .panel-card p{margin:0 0 22px;color:rgba(71,85,105,1);font-size:16px;line-height:1.85;max-width:920px;word-break:keep-all}
+    .check-list{list-style:none;padding:0;margin:0;display:grid;gap:12px}
+    .check-list li{position:relative;padding-left:28px;color:rgba(51,65,85,1);font-weight:700;font-size:15px;line-height:1.7;word-break:keep-all}
+    .check-list li::before{content:"→";position:absolute;left:0;top:0;color:var(--accent);font-weight:950}
+
+    .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:26px}
+    footer{border-top:1px solid rgba(15,23,42,.08);background:#fff;padding:40px 0;color:var(--muted);font-size:13px}
+    .footer-grid{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+    .footer-links{display:flex;gap:18px}
+    .footer-links a{color:var(--muted);font-weight:800;padding:6px 8px;border-radius:10px;border:1px solid transparent}
+    .footer-links a:hover{color:var(--text);background:rgba(15,23,42,.04);border-color:rgba(15,23,42,.08)}
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="index.html" aria-label="홈으로">
+        <span class="dot" aria-hidden="true"></span>
+        <span>GROWTHLINE</span>
+      </a>
+      <div class="top-actions">
+        <nav class="nav" aria-label="상단 메뉴">
+          <a href="service.html">service</a>
+          <a href="work.html">work</a>
+        </nav>
+        <a class="btn primary" href="contact.html">진단받기</a>
+      </div>
+    </div>
+  </header>
+
+  <section class="service-hero">
+    <div class="inner">
+      <p class="sub-title">Our Specialized Services</p>
+      <h1 class="main-title">우리는 단순 제작자가 아닌,<br><span>비즈니스 설계 파트너</span>입니다.</h1>
+      <p class="desc">각 분야의 전문 지식을 동원하여, 대표님의 사업이 온라인에서 승리할 수밖에 없는 구조를 만듭니다.</p>
+    </div>
+  </section>
+
+  <main class="content">
+    <div class="inner">
+      <div class="panel-card">
+        <span class="panel-category">UX Research</span>
+        <h3>"왜 안 팔리는가?"에 대한<br>데이터 기반의 정답을 찾습니다.</h3>
+        <p>대표님의 직감이 아닌 실제 고객의 목소리와 행동을 분석합니다. 고객이 결제 직전에 망설이는 이유, 경쟁사로 떠나는 결정적인 지점을 포착하여 개선 방향을 제시합니다.</p>
+        <ul class="check-list">
+          <li>사용자 심층 인터뷰(FGI) 및 행동 관찰</li>
+          <li>고객 여정 지도(CJM)를 통한 이탈 구간 식별</li>
+          <li>경쟁사 대비 우위 점유를 위한 차별화 전략 도출</li>
+        </ul>
+
+        <div class="actions">
+          <a class="btn btn--ghost" href="service.html#research">서비스 허브로</a>
+          <a class="btn btn--primary" href="contact.html">내 사업에 필요한 서비스 진단받기</a>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="inner">
+      <div class="footer-grid">
+        <span>© 2024 GROWTHLINE. All rights reserved.</span>
+        <div class="footer-links">
+          <a href="service.html">Service</a>
+          <a href="work.html">Work</a>
+          <a href="contact.html">Contact</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
