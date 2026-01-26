@@ -364,8 +364,30 @@
   <script>
     const QUERY_CHARS_REGEX = /[?&=]/g;
     const HANGUL_REGEX = /[\u3131-\u318E\uAC00-\uD7A3]/g;
+    const PLAN_OPTIONS = new Set(["seed", "series-a", "series-b"]);
+    const STAGE_TO_PLAN = {
+      "1": "seed",
+      "01": "seed",
+      "2": "series-a",
+      "02": "series-a",
+      "3": "series-b",
+      "03": "series-b",
+    };
 
     const sanitizeQueryChars = (value) => value.replace(QUERY_CHARS_REGEX, "");
+
+    const planSelect = document.getElementById("contact_plan");
+    const urlParams = new URLSearchParams(window.location.search);
+    const planParam = urlParams.get("plan");
+    const stageParam = urlParams.get("stage");
+    const normalizedPlan = planParam ? planParam.trim().toLowerCase() : "";
+    const selectedPlan = PLAN_OPTIONS.has(normalizedPlan)
+      ? normalizedPlan
+      : STAGE_TO_PLAN[stageParam?.trim()] || "";
+
+    if (planSelect && selectedPlan) {
+      planSelect.value = selectedPlan;
+    }
 
     const inputs = document.querySelectorAll("input[type='text'], input[type='tel'], input[type='url'], textarea");
     inputs.forEach((field) => {
