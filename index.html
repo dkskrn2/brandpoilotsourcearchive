@@ -153,6 +153,14 @@
     .main-title span{ color: var(--accent); }
     .main-title--light{ color:#fff; }
 
+    /* ---- responsive line breaks ---- */
+    br.mo{ display:none; }
+    br.pc{ display:inline; }
+    @media (max-width: 640px){
+      br.mo{ display:inline; }
+      br.pc{ display:none; }
+    }
+
     /* ---- buttons ---- */
     .btn{
       display:inline-flex;
