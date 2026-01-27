@@ -10,35 +10,35 @@
   <!-- ✅ SEO: Meta Description 추가 -->
   <meta name="description" content="단순한 홈페이지가 아닌, 매출 상승 구조를 만듭니다. 진단부터 구축, 운영까지 온라인 전환을 시스템으로 만듭니다." />
 
-  <!-- ✅ SEO: Canonical (도메인으로 교체하세요) -->
-  <link rel="canonical" href="/" />
+  <!-- ✅ SEO: Canonical (절대 URL 반영) -->
+  <link rel="canonical" href="https://www.danbammsg.co.kr/" />
 
-  <!-- ✅ SEO: Favicon (경로 교체하세요) -->
-  <link rel="icon" href="/favicon.ico" />
+  <!-- ✅ SEO: Favicon (절대 URL 반영) -->
+  <link rel="icon" href="https://www.danbammsg.co.kr/favicon.ico" />
 
-  <!-- ✅ Social (OG) (도메인/이미지 경로 교체하세요) -->
+  <!-- ✅ Social (OG) (절대 URL 반영) -->
   <meta property="og:type" content="website" />
   <meta property="og:locale" content="ko_KR" />
   <meta property="og:site_name" content="GROWTHLINE" />
   <meta property="og:title" content="GROWTHLINE | 비즈니스 성장 구조를 만듭니다." />
   <meta property="og:description" content="단순한 홈페이지가 아닌, 매출 상승 구조를 만듭니다. 진단부터 구축, 운영까지 온라인 전환을 시스템으로 만듭니다." />
-  <meta property="og:url" content="/" />
-  <meta property="og:image" content="/og.jpg" />
+  <meta property="og:url" content="https://www.danbammsg.co.kr/" />
+  <meta property="og:image" content="https://www.danbammsg.co.kr/og.jpg" />
 
-  <!-- ✅ Twitter Card -->
+  <!-- ✅ Twitter Card (절대 URL 반영) -->
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="GROWTHLINE | 비즈니스 성장 시스템 설계" />
   <meta name="twitter:description" content="단순한 홈페이지가 아닌, 매출 상승 구조를 만듭니다. 진단부터 구축, 운영까지 온라인 전환을 시스템으로 만듭니다." />
-  <meta name="twitter:image" content="/og.jpg" />
+  <meta name="twitter:image" content="https://www.danbammsg.co.kr/og.jpg" />
 
-  <!-- ✅ Structured Data (Organization / Website) : 정보 교체 권장 -->
+  <!-- ✅ Structured Data (Organization / Website) : 절대 URL 반영 -->
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
     "@type": "Organization",
     "name": "GROWTHLINE",
-    "url": "/",
-    "logo": "/logo.png",
+    "url": "https://www.danbammsg.co.kr/",
+    "logo": "https://www.danbammsg.co.kr/logo.png",
     "contactPoint": [{
       "@type": "ContactPoint",
       "contactType": "sales",
@@ -53,7 +53,7 @@
     "@context": "https://schema.org",
     "@type": "WebSite",
     "name": "GROWTHLINE",
-    "url": "/"
+    "url": "https://www.danbammsg.co.kr/"
   }
   </script>
 
@@ -375,22 +375,25 @@
 
     /* =========================================================
       ✅ Error Case 섹션 스타일 (error-grid 범위에만 적용)
+      - 화면 유지
+      - 전역 토큰(--accent 등) 재정의 제거
+      - 섹션 전용 토큰은 --eg-* 로 분리
     ========================================================== */
     section.error-grid{
-      --bg:#ffffff;
-      --text:#0f172a;
-      --muted:#6b7280;
-      --line:#e5e7eb;
-      --peach:#fff5ee;
-      --peach-2:#ffe9db;
-      --accent:#ff5a1f;
-      --shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
-      --radius: 22px;
-      --q-bg:#f6f7f9;
-      --q-line:#e6e8ee;
-      --q-text:#111827;
-      --q-sub:#9ca3af;
-      --arrow:#c4c7ce;
+      --eg-peach:#fff5ee;
+      --eg-peach-2:#ffe9db;
+      --eg-accent:#ff5a1f;
+
+      --eg-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+      --eg-radius: 22px;
+
+      --eg-q-bg:#f6f7f9;
+      --eg-q-line:#e6e8ee;
+      --eg-q-text:#111827;
+      --eg-q-sub:#9ca3af;
+
+      --eg-arrow:#c4c7ce;
+
       color: var(--text);
     }
     section.error-grid .error-grid__section{
@@ -410,15 +413,15 @@
       gap: 14px;
     }
     section.error-grid .quote{
-      background: var(--q-bg);
-      border: 1px solid var(--q-line);
+      background: var(--eg-q-bg);
+      border: 1px solid var(--eg-q-line);
       border-radius: 6px;
       padding: 16px 14px 14px;
       min-height: 86px;
     }
     section.error-grid .quote .qtext{
       margin: 0 0 6px;
-      color: var(--q-text);
+      color: var(--eg-q-text);
       font-size: 13px;
       line-height: 1.55;
       font-weight: 700;
@@ -426,7 +429,7 @@
     }
     section.error-grid .quote .sub{
       margin: 0;
-      color: var(--q-sub);
+      color: var(--eg-q-sub);
       font-size: 11px;
       line-height: 1.4;
       font-weight: 600;
@@ -439,11 +442,11 @@
     }
     section.error-grid .card{
       position: relative;
-      background: var(--peach);
-      border: 1px solid var(--peach-2);
-      border-radius: var(--radius);
+      background: var(--eg-peach);
+      border: 1px solid var(--eg-peach-2);
+      border-radius: var(--eg-radius);
       padding: 22px 22px 20px;
-      box-shadow: var(--shadow);
+      box-shadow: var(--eg-shadow);
       min-height: 210px;
       overflow: hidden;
     }
@@ -466,8 +469,8 @@
       top: 12px;
       right: 12px;
       background: #fff;
-      border: 1px solid var(--peach-2);
-      color: var(--accent);
+      border: 1px solid var(--eg-peach-2);
+      color: var(--eg-accent);
       font-weight: 900;
       font-size: 11px;
       letter-spacing: .06em;
@@ -476,7 +479,7 @@
       box-shadow: 0 10px 18px rgba(15,23,42,.06);
     }
     section.error-grid .step{
-      color: var(--accent);
+      color: var(--eg-accent);
       font-weight: 900;
       font-size: 12px;
       letter-spacing: .02em;
@@ -512,10 +515,7 @@
     }
     .process-dark .desc{ color: rgba(148,163,184,.92); }
 
-    /* =========================================================
-      ✅ (변경 1) Dark 섹션의 h2(main-title) 텍스트를 흰색으로
-      - span(파란색)은 유지
-    ========================================================== */
+    /* ✅ Dark 섹션의 h2(main-title) 텍스트를 흰색으로 (span 파란색 유지) */
     .process-dark .main-title{
       color: #ffffff;
     }
@@ -741,8 +741,6 @@
             <p class="sub-title">REAL PERFORMANCE</p>
             <h2 class="main-title">단순히 예쁜 사이트가 아닙니다.<br><span>숫자로 증명된 '매출 구조'</span> <br class="mo">를 만듭니다.</h2>
             <p class="description">대표님과 똑같은 고민을 하던 업체들이<br class="mo"> 이 구조를 통해 얻은 실제 성과입니다.</p>
-            <!-- ✅ E-E-A-T: 성과 데이터의 맥락(짧게) -->
-        
         </div>
 
         <div class="stats-grid">
@@ -777,7 +775,6 @@
           THE REAL REASON
         </span>
 
-        <!-- ✅ SEO: 여기의 h1을 h2로 변경 (H1 중복 제거) -->
         <h2 class="main-title">
           온라인 전환이 실패하는 이유는<br>
           근거 없는 '확신' 때문입니다.
@@ -805,7 +802,7 @@
           <div class="arrow">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
               <path d="M6 9l6 6 6-6"
-                stroke="var(--arrow)"
+                stroke="var(--eg-arrow)"
                 stroke-width="2"
                 stroke-linecap="round"
                 stroke-linejoin="round" />
@@ -833,7 +830,7 @@
           <div class="arrow">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
               <path d="M6 9l6 6 6-6"
-                stroke="var(--arrow)"
+                stroke="var(--eg-arrow)"
                 stroke-width="2"
                 stroke-linecap="round"
                 stroke-linejoin="round" />
@@ -862,7 +859,7 @@
           <div class="arrow">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
               <path d="M6 9l6 6 6-6"
-                stroke="var(--arrow)"
+                stroke="var(--eg-arrow)"
                 stroke-width="2"
                 stroke-linecap="round"
                 stroke-linejoin="round" />
@@ -1054,12 +1051,6 @@
           <a href="contact.html?plan=seed" class="btn btn--ghost w-full mt-10">가볍게 시작하기</a>
         </div>
 
-      
-
-        
-
-        
-
         <div class="bg-white p-8 rounded-[24px] border border-gray-200 card-hover flex flex-col opacity-90">
           <div class="mb-8">
             <span class="bg-gray-100 text-gray-500 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">Stage 03</span>
@@ -1107,7 +1098,6 @@
     </div>
   </section>
 
-  <!-- ✅ E-E-A-T: 푸터에 운영 주체/연락 정보(placeholder) 추가 -->
   <footer style="padding: 60px 0; text-align: center; color: var(--muted); font-size: 14px;">
     <div class="inner" style="max-width: 980px;">
       <p style="margin:0 0 10px;">
