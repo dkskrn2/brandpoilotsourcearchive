@@ -314,59 +314,314 @@
       .hero__cta .btn{ width: min(360px, 100%); }
     }
 
-    /* ---- social proof (통일) ---- */
-    .social-proof{
-      padding: var(--sectionY) 0;
-      background: var(--surface);
-      text-align:center;
+    /* =========================
+      REAL PERFORMANCE (Light Skin)
+    ========================= */
+    .real-perf{
+      --rp-bg: #f6f8fc;
+      --rp-card: #ffffff;
+      --rp-text: #0f172a;
+      --rp-muted: #64748b;
+      --rp-line: #e6edf7;
+      --rp-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+      --rp-radius: 16px;
+
+      /* 브랜드 컬러(페이지 버튼 블루에 맞춰 조정 가능) */
+      --rp-brand: #2563eb;
+      --rp-brand-soft: rgba(37, 99, 235, 0.10);
+
+      /* 결과 컬러 */
+      --rp-up: #ef4444;
+      --rp-down: #2563eb;
+
+      background: var(--rp-bg);
+      padding: 84px 0;
     }
-    .social-proof .container{
-      max-width: var(--max);
+
+    .real-perf .container{
+      max-width: 1100px;
       margin: 0 auto;
-      padding: 0 var(--pad);
+      padding: 0 20px;
     }
-    .social-proof .sub-title{
-      color: var(--accent);
-      font-weight: 900;
+
+    .real-perf__head{
+      text-align: center;
+      margin-bottom: 26px;
+    }
+
+    .real-perf__kicker{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
       font-size: 12px;
-      letter-spacing: 0.16em;
+      letter-spacing: .12em;
+      font-weight: 800;
+      color: var(--rp-brand);
       text-transform: uppercase;
       margin-bottom: 10px;
     }
-    .social-proof .description{
-      color: var(--muted);
+
+    .real-perf__title{
+      margin: 0 0 10px;
+      font-size: 28px;
+      line-height: 1.25;
+      font-weight: 900;
+      color: var(--rp-text);
+    }
+
+    .real-perf__title b{
+      color: var(--rp-brand);
+    }
+
+    .real-perf__desc{
+      margin: 0 auto;
+      max-width: 720px;
+      color: var(--rp-muted);
+      line-height: 1.6;
       font-size: 15px;
-      line-height: 1.8;
     }
-    .social-proof .stats-grid{
-      display:grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+
+    .real-perf__grid{
+      margin-top: 26px;
+      display: grid;
+      grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
       gap: 18px;
-      margin-top: 34px;
+      align-items: stretch;
     }
-    .social-proof .stat-card{
-      background: rgba(255,255,255,.92);
-      padding: 28px 26px;
-      border-radius: var(--radius);
-      box-shadow: var(--shadowSm);
-      border: 1px solid rgba(15,23,42,.10);
-      transition: transform .22s ease, box-shadow .22s ease, border-color .22s ease;
-      text-align:left;
+
+    /* LEFT: 고민 리스트 */
+    .real-perf__nav{
+      position: relative;
     }
-    .social-proof .stat-card:hover{
-      transform: translateY(-6px);
-      box-shadow: var(--shadowMd);
-      border-color: rgba(37,99,235,.22);
+
+    .real-perf__nav::before{
+      content:"";
+      position:absolute;
+      left: 12px;
+      top: 6px;
+      bottom: 6px;
+      width: 2px;
+      background: linear-gradient(to bottom, transparent, #dbe6f7 10%, #dbe6f7 90%, transparent);
     }
-    .social-proof .category{ color: var(--muted2); font-size: 13px; font-weight: 800; margin-bottom: 12px; }
-    .social-proof .value{ font-size: 40px; font-weight: 950; color: var(--text); margin-bottom: 6px; letter-spacing:-0.03em; }
-    .social-proof .value .up{ color: #ef4444; font-weight: 950; }
-    .social-proof .value .down{ color: var(--accent); font-weight: 950; }
-    .social-proof .label{ font-size: 16px; font-weight: 900; color: var(--accent); margin-bottom: 10px; }
-    .social-proof .detail{ font-size: 14px; color: var(--muted); line-height: 1.8; word-break: keep-all; }
-    @media (max-width: 980px){
-      .social-proof .stats-grid{ grid-template-columns: 1fr; }
-      .social-proof .value{ font-size: 36px; }
+
+    .rp-item{
+      width: 100%;
+      border: 0;
+      background: transparent;
+      padding: 14px 14px 14px 0;
+      display: grid;
+      grid-template-columns: 28px 1fr;
+      gap: 10px;
+      text-align: left;
+      cursor: pointer;
+      border-radius: 14px;
+
+      /* 전역 word-break 방어 */
+      word-break: keep-all;
+      overflow-wrap: break-word;
+    }
+
+    .rp-item:focus-visible{
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(37,99,235,.18);
+    }
+
+    .rp-dot{
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      margin-left: 7px;
+      margin-top: 6px;
+      background: #cfe0ff;
+      box-shadow: 0 0 0 4px rgba(37,99,235,.06);
+    }
+
+    .rp-item__meta{
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--rp-muted);
+      margin-bottom: 6px;
+    }
+
+    .rp-item__text{
+      font-size: 14px;
+      font-weight: 800;
+      line-height: 1.35;
+      color: var(--rp-text);
+    }
+
+    /* active */
+    .rp-item.is-active{
+      background: linear-gradient(180deg, var(--rp-brand-soft), rgba(255,255,255,0));
+      padding-left: 10px;
+    }
+
+    .rp-item.is-active .rp-dot{
+      background: var(--rp-brand);
+      box-shadow: 0 0 0 4px rgba(37,99,235,.16);
+    }
+
+    .rp-item.is-active .rp-item__meta{
+      color: var(--rp-brand);
+    }
+
+    /* RIGHT: 상세 카드 */
+    .real-perf__panel{
+      background: var(--rp-card);
+      border: 1px solid var(--rp-line);
+      border-radius: var(--rp-radius);
+      box-shadow: var(--rp-shadow);
+      overflow: hidden;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .real-perf__panel-head{
+      padding: 22px 22px 16px;
+      border-bottom: 1px solid var(--rp-line);
+    }
+
+    .rp-company{
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--rp-muted);
+      margin: 0 0 6px;
+    }
+
+    .rp-problem{
+      margin: 0 0 14px;
+      font-size: 20px;
+      line-height: 1.25;
+      font-weight: 900;
+      color: var(--rp-text);
+    }
+
+    /* 결과: 태그 자리 대체 */
+    .rp-result{
+      display: inline-flex;
+      align-items: baseline;
+      gap: 10px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid var(--rp-line);
+      background: #fbfdff;
+    }
+
+    .rp-result__num{
+      font-size: 26px;
+      font-weight: 950;
+      letter-spacing: -0.02em;
+      line-height: 1;
+    }
+
+    .rp-result__num.is-up{ color: var(--rp-up); }
+    .rp-result__num.is-down{ color: var(--rp-down); }
+
+    .rp-result__label{
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--rp-muted);
+    }
+
+    /* Body */
+    .real-perf__panel-body{
+      padding: 18px 22px 22px;
+    }
+
+    /* AS-IS / TO-BE */
+    .rp-asis-tobe{
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+
+    .rp-box{
+      border: 1px solid var(--rp-line);
+      background: #ffffff;
+      border-radius: 14px;
+      padding: 14px 14px 12px;
+    }
+
+    .rp-box__title{
+      margin: 0 0 8px;
+      font-size: 12px;
+      letter-spacing: .12em;
+      font-weight: 950;
+      color: var(--rp-brand);
+      text-transform: uppercase;
+    }
+
+    .rp-box ul{
+      margin: 0;
+      padding-left: 18px;
+      color: var(--rp-muted);
+      line-height: 1.65;
+      font-size: 14px;
+    }
+
+    .rp-box li{ margin: 6px 0; }
+
+    /* 리뷰 */
+    .rp-review{
+      border: 1px solid var(--rp-line);
+      background: #fbfdff;
+      border-radius: 14px;
+      padding: 14px;
+    }
+
+    .rp-review summary{
+      cursor: pointer;
+      font-weight: 900;
+      color: var(--rp-text);
+      list-style: none;
+    }
+
+    .rp-review summary::-webkit-details-marker{ display:none; }
+
+    .rp-review__hint{
+      margin-left: 8px;
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--rp-muted);
+    }
+
+    .rp-review__text{
+      margin-top: 12px;
+      white-space: pre-line;
+      line-height: 1.75;
+      font-size: 14px;
+      color: #1f2a44;
+    }
+
+    .rp-review__meta{
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--rp-muted);
+      font-weight: 800;
+    }
+
+    /* Responsive */
+    @media (max-width: 920px){
+      .real-perf__grid{ grid-template-columns: 1fr; }
+      .real-perf__nav::before{ display:none; }
+      .real-perf__nav{
+        display: flex;
+        gap: 10px;
+        overflow: auto;
+        padding-bottom: 8px;
+      }
+      .rp-item{
+        min-width: 280px;
+        background: #ffffff;
+        border: 1px solid var(--rp-line);
+        box-shadow: var(--rp-shadow);
+        padding: 14px;
+        grid-template-columns: 1fr;
+      }
+      .rp-dot{ display:none; }
+      .rp-asis-tobe{ grid-template-columns: 1fr; }
     }
 
     /* ---- problem section: 타이포/간격만 정리 (내용 그대로) ---- */
@@ -735,38 +990,193 @@
     </div>
   </section>
 
-  <section class="social-proof">
+  <section class="social-proof real-perf" id="real-performance">
     <div class="container">
-        <div class="header">
-            <p class="sub-title">REAL PERFORMANCE</p>
-            <h2 class="main-title">단순히 예쁜 사이트가 아닙니다.<br><span>숫자로 증명된 '매출 구조'</span> <br class="mo">를 만듭니다.</h2>
-            <p class="description">대표님과 똑같은 고민을 하던 업체들이<br class="mo"> 이 구조를 통해 얻은 실제 성과입니다.</p>
-        </div>
+      <header class="real-perf__head">
+        <div class="real-perf__kicker">REAL PERFORMANCE</div>
+        <h2 class="real-perf__title">
+          단순히 예쁜 사이트가 아닙니다.<br>
+          숫자로 증명된 <b>‘매출 구조’</b>를 만듭니다.
+        </h2>
+        <p class="real-perf__desc">
+          대표님과 똑같은 고민을 하던 업체들이 이 구조를 통해 얻은 실제 성과입니다.
+          왼쪽에서 “고객의 고민”을 선택하면, 오른쪽에 해결 방식과 결과가 표시됩니다.
+        </p>
+      </header>
 
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="category">LG 챗봇 리뉴얼</div>
-                <div class="value">2.4배 <span class="up">↑</span></div>
-                <div class="label">고객 문의 자동 처리율 개선</div>
-                <p class="detail">반복 문의를 챗봇으로 전환해 인력 투입 대비 <br class="mo">응대 효율을 크게 높였습니다.</p>
+      <div class="real-perf__grid">
+        <!-- LEFT: 고객의 고민 -->
+        <aside class="real-perf__nav" aria-label="고객 사례 선택">
+          <button class="rp-item is-active" type="button"
+            data-company="LG 챗봇 리뉴얼"
+            data-problem="문의는 많은데, 응대할 사람이 없었습니다"
+            data-result-num="2.4배 ↑"
+            data-result-dir="up"
+            data-result-label="고객 문의 자동 처리율 개선"
+            data-asis='["반복되는 단순 문의로 CS 인력 소모","상담 품질 편차로 고객 불만 누적","기존 챗봇이 있어도 실사용이 거의 없음"]'
+            data-tobe='["반복 문의 자동 분기 처리로 상담사 부담 감소","사람이 개입해야 할 순간만 남기는 흐름 재설계","고객이 자연스럽게 사용하는 시나리오형 챗봇"]'
+            data-review="솔직히 처음에는 챗봇을 또 손보는 게 의미가 있을까 싶었습니다.
+이전에도 한 번 만들었다가 거의 쓰이지 않았던 경험이 있어서요.
+그런데 이번에는 ‘기능을 늘리는 게 아니라 줄이자’는 접근이 인상적이었어요.
+실제로 어떤 질문이 반복되는지부터 정리해 주시니까 방향이 보이더라고요.
+지금은 상담사들이 같은 질문을 하루에도 수십 번씩 반복하지 않아도 되고,
+고객도 생각보다 자연스럽게 챗봇을 이용합니다.
+문의 수가 줄었다기보다, 사람이 꼭 봐야 할 문의만 남았다는 느낌이에요.
+내부에서는 “이제야 챗봇을 제대로 쓰고 있다”는 말이 나옵니다."
+            data-review-meta="대기업 · 고객지원/운영 담당자">
+            <span class="rp-dot" aria-hidden="true"></span>
+            <span>
+              <div class="rp-item__meta">LG 챗봇 리뉴얼</div>
+              <div class="rp-item__text">문의는 많은데,<br>응대할 사람이 없었습니다</div>
+            </span>
+          </button>
+
+          <button class="rp-item" type="button"
+            data-company="르노코리아 홈페이지 리뉴얼"
+            data-problem="방문자는 있는데, 왜 그냥 나가버릴까요?"
+            data-result-num="이탈률 38% ↓"
+            data-result-dir="down"
+            data-result-label="핵심 페이지 체류 시간 증가"
+            data-asis='["핵심 페이지에서 이탈률 과다","정보가 흩어져 사용자가 길을 잃음","디자인은 깔끔하지만 행동으로 이어지지 않음"]'
+            data-tobe='["유입 목적 기준으로 정보 구조(IA) 전면 재설계","‘보고 싶은 정보 → 다음 행동’ 흐름 명확화","핵심 콘텐츠 우선 배치로 도달률 개선"]'
+            data-review="디자인을 바꿔야 하나 고민을 많이 했는데,
+결과적으로 디자인보다 구조가 문제였다는 걸 알게 됐습니다.
+우리는 정보를 다 넣어놨다고 생각했는데,
+사용자는 어디로 가야 할지 모르는 상태였더라고요.
+페이지를 하나하나 줄이고,
+“이 사람은 왜 여기 들어왔을까?”를 기준으로 다시 정리한 게 컸습니다.
+리뉴얼 이후에 바로 수치가 달라져서 내부에서도 놀랐고,
+특히 영업팀에서 홈페이지에 대한 불만이 거의 사라졌습니다.
+사이트가 설명서가 아니라 안내판 역할을 하게 된 느낌입니다."
+            data-review-meta="대기업 · 디지털/마케팅 팀">
+            <span class="rp-dot" aria-hidden="true"></span>
+            <span>
+              <div class="rp-item__meta">르노코리아 홈페이지</div>
+              <div class="rp-item__text">방문자는 있는데,<br>왜 그냥 나가버릴까요?</div>
+            </span>
+          </button>
+
+          <button class="rp-item" type="button"
+            data-company="K2 설문조사 플랫폼 고도화"
+            data-problem="데이터는 쌓이는데, 결정은 계속 늦어졌습니다"
+            data-result-num="응답 효율 3배 ↑"
+            data-result-dir="up"
+            data-result-label="의사결정 리드타임 단축"
+            data-asis='["설문 참여율이 낮아 데이터 신뢰도 부족","결과 취합·정리에 시간이 과도하게 소요","결정이 ‘감’에 의존하는 상황"]'
+            data-tobe='["응답 흐름 단순화로 중간 이탈 최소화","모바일 중심 UI 개선으로 참여 장벽 제거","바로 판단 가능한 결과 구조로 리포트 정리"]'
+            data-review="설문은 늘 하고 있었지만,
+사실 결과를 얼마나 믿어야 하는지 애매했습니다.
+응답도 적고, 정리하는 데 시간은 오래 걸렸거든요.
+이번 작업에서 좋았던 건 ‘설문을 더 받자’가 아니라
+‘왜 사람들이 중간에 그만두는지’를 먼저 봤다는 점이었어요.
+질문 수를 줄이고 흐름을 바꾸니까
+응답이 눈에 띄게 늘어났고, 결과도 훨씬 명확해졌습니다.
+지금은 설문 결과를 보고 바로 회의에서 결정합니다.
+데이터가 참고자료가 아니라 판단 근거가 된 게 가장 큰 변화예요."
+            data-review-meta="리테일 · 기획/운영 담당자">
+            <span class="rp-dot" aria-hidden="true"></span>
+            <span>
+              <div class="rp-item__meta">K2 설문 플랫폼</div>
+              <div class="rp-item__text">데이터는 쌓이는데,<br>결정은 계속 늦어졌습니다</div>
+            </span>
+          </button>
+        </aside>
+
+        <!-- RIGHT: 상세 -->
+        <article class="real-perf__panel" aria-live="polite">
+          <div class="real-perf__panel-head">
+            <p class="rp-company" id="rpCompany">LG 챗봇 리뉴얼</p>
+            <h3 class="rp-problem" id="rpProblem">문의는 많은데, 응대할 사람이 없었습니다</h3>
+
+            <!-- 결과(태그 자리 대체) -->
+            <div class="rp-result" aria-label="성과 결과">
+              <span class="rp-result__num is-up" id="rpResultNum">2.4배 ↑</span>
+              <span class="rp-result__label" id="rpResultLabel">고객 문의 자동 처리율 개선</span>
+            </div>
+          </div>
+
+          <div class="real-perf__panel-body">
+            <div class="rp-asis-tobe">
+              <div class="rp-box">
+                <p class="rp-box__title">AS-IS</p>
+                <ul id="rpAsis"></ul>
+              </div>
+
+              <div class="rp-box">
+                <p class="rp-box__title">TO-BE</p>
+                <ul id="rpTobe"></ul>
+              </div>
             </div>
 
-            <div class="stat-card">
-                <div class="category">르노코리아 홈페이지 리뉴얼</div>
-                <div class="value">이탈률 38% <span class="down">↓</span></div>
-                <div class="label">핵심 페이지 체류 시간 증가</div>
-                <p class="detail">정보 구조 개선만으로 사용자가 원하는 <br class="mo">콘텐츠 도달률을 높였습니다.</p>
-            </div>
-
-            <div class="stat-card">
-                <div class="category">K2 설문조사 플랫폼 고도화</div>
-                <div class="value">응답 효율 3배 <span class="up">↑</span></div>
-                <div class="label">의사결정 리드타임 단축</div>
-                <p class="detail">사용자 평가 수집 과정을 단순화해 <br class="mo">제품 개선 판단 속도를 크게 줄였습니다.</p>
-            </div>
-        </div>
+            <details class="rp-review" open>
+              <summary>
+                고객 리뷰 <span class="rp-review__hint">(접기/펼치기)</span>
+              </summary>
+              <div class="rp-review__text" id="rpReview">
+                솔직히 처음에는 챗봇을 또 손보는 게 의미가 있을까 싶었습니다.
+                이전에도 한 번 만들었다가 거의 쓰이지 않았던 경험이 있어서요.
+                그런데 이번에는 ‘기능을 늘리는 게 아니라 줄이자’는 접근이 인상적이었어요.
+                실제로 어떤 질문이 반복되는지부터 정리해 주시니까 방향이 보이더라고요.
+                지금은 상담사들이 같은 질문을 하루에도 수십 번씩 반복하지 않아도 되고,
+                고객도 생각보다 자연스럽게 챗봇을 이용합니다.
+                문의 수가 줄었다기보다, 사람이 꼭 봐야 할 문의만 남았다는 느낌이에요.
+                내부에서는 “이제야 챗봇을 제대로 쓰고 있다”는 말이 나옵니다.
+              </div>
+              <div class="rp-review__meta" id="rpReviewMeta">대기업 · 고객지원/운영 담당자</div>
+            </details>
+          </div>
+        </article>
+      </div>
     </div>
   </section>
+
+  <script>
+    (function(){
+      const items = Array.from(document.querySelectorAll(".rp-item"));
+      const company = document.getElementById("rpCompany");
+      const problem = document.getElementById("rpProblem");
+      const resultNum = document.getElementById("rpResultNum");
+      const resultLabel = document.getElementById("rpResultLabel");
+      const asis = document.getElementById("rpAsis");
+      const tobe = document.getElementById("rpTobe");
+      const review = document.getElementById("rpReview");
+      const reviewMeta = document.getElementById("rpReviewMeta");
+
+      if (!items.length) return;
+
+      function render(btn){
+        company.textContent = btn.dataset.company || "";
+        problem.textContent = btn.dataset.problem || "";
+
+        const dir = btn.dataset.resultDir;
+        resultNum.textContent = btn.dataset.resultNum || "";
+        resultLabel.textContent = btn.dataset.resultLabel || "";
+
+        resultNum.classList.remove("is-up","is-down");
+        resultNum.classList.add(dir === "down" ? "is-down" : "is-up");
+
+        const asisArr = JSON.parse(btn.dataset.asis || "[]");
+        const tobeArr = JSON.parse(btn.dataset.tobe || "[]");
+
+        asis.innerHTML = asisArr.map(v => `<li>${v}</li>`).join("");
+        tobe.innerHTML = tobeArr.map(v => `<li>${v}</li>`).join("");
+
+        review.textContent = btn.dataset.review || "";
+        reviewMeta.textContent = btn.dataset.reviewMeta || "";
+      }
+
+      items.forEach(btn => {
+        btn.addEventListener("click", () => {
+          items.forEach(b => b.classList.remove("is-active"));
+          btn.classList.add("is-active");
+          render(btn);
+        });
+      });
+
+      const first = document.querySelector(".rp-item.is-active") || items[0];
+      render(first);
+    })();
+  </script>
 
   <section class="section section--alt problem" style="background: #fff;">
     <div class="inner">
