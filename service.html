@@ -219,15 +219,19 @@
     .nav a{
       font-size:13px;
       font-weight: 800;
-      color: var(--muted);
-      padding: 8px 10px;
+      color: var(--text);
+      padding: 8px 12px;
       border-radius: 12px;
-      border: 1px solid transparent;
-      transition: background .18s ease, color .18s ease, border-color .18s ease;
+      border: 1px solid rgba(15,23,42,.12);
+      background: rgba(255,255,255,.92);
+      box-shadow: 0 8px 18px rgba(15,23,42,.06);
+      transition: background .18s ease, color .18s ease, border-color .18s ease, box-shadow .18s ease;
     }
     .nav a:hover{
-      background: rgba(15,23,42,.04);
+      background: rgba(37,99,235,.10);
       color: var(--text);
+      border-color: rgba(37,99,235,.24);
+      box-shadow: 0 12px 24px rgba(37,99,235,.18);
     }
     .nav a[aria-current="page"]{
       background: var(--accentSoft);
