@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-WDKDVHFMHQ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-WDKDVHFMHQ');
+  </script>
+
+  <title>UX 리서치(UXR)란? 개념·유형·활용 가이드 | GROWTHLINE</title>
+  <meta name="description" content="UX 리서치(UXR)의 정의부터 UX vs UI 차이, 주요 리서치 유형 5가지(서베이·인터뷰·UT·벤치마킹·VoC)와 상황별 활용 포인트까지 한 페이지로 정리했습니다." />
+  <meta name="robots" content="index,follow" />
+  <link rel="canonical" href="uxr-definition.html" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:locale" content="ko_KR" />
+  <meta property="og:site_name" content="GROWTHLINE" />
+  <meta property="og:title" content="UX 리서치(UXR)란? 개념·유형·활용 가이드 | GROWTHLINE" />
+  <meta property="og:description" content="UX 리서치(UXR)의 정의부터 UX vs UI 차이, 대표 유형 5가지와 활용 포인트를 한 페이지로 정리했습니다." />
+  <meta property="og:url" content="uxr-definition.html" />
+  <meta property="og:image" content="assets/og/service.png" />
+  <meta property="og:image:alt" content="GROWTHLINE 콘텐츠 페이지 미리보기" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="UX 리서치(UXR)란? 개념·유형·활용 가이드 | GROWTHLINE" />
+  <meta name="twitter:description" content="UX 리서치의 정의·유형·활용 포인트를 한 페이지로 정리했습니다." />
+  <meta name="twitter:image" content="assets/og/service.png" />
+
+  <!-- Article + FAQPage (SEO 강화) -->
+  <script type="application/ld+json">
+  {
+    "@context":"https://schema.org",
+    "@type":"Article",
+    "headline":"UX 리서치(UXR)란? 개념·유형·활용 가이드",
+    "description":"UX 리서치(UXR)의 정의부터 UX vs UI 차이, 대표 리서치 유형 5가지와 활용 포인트를 정리했습니다.",
+    "inLanguage":"ko-KR",
+    "publisher":{"@type":"Organization","name":"GROWTHLINE"},
+    "mainEntityOfPage":{"@type":"WebPage","@id":"uxr-definition.html"}
+  }
+  </script>
+
+  <script type="application/ld+json">
+  {
+    "@context":"https://schema.org",
+    "@type":"FAQPage",
+    "mainEntity":[
+      {
+        "@type":"Question",
+        "name":"UX와 UI는 같은 말인가요?",
+        "acceptedAnswer":{
+          "@type":"Answer",
+          "text":"아닙니다. UI는 사용자가 마주하는 화면(버튼, 메뉴, 레이아웃 등)이고, UX는 사용자가 서비스를 접하고 사용하며 느끼는 전체 경험(탐색·구매·배송·후기 등 과정과 감정)을 포함합니다."
+        }
+      },
+      {
+        "@type":"Question",
+        "name":"UX 리서치는 언제 해야 하나요?",
+        "acceptedAnswer":{
+          "@type":"Answer",
+          "text":"신규 기획 단계(문제 정의·가설 검증), 출시 전(사용성 확인), 출시 후(이탈 원인·개선 우선순위 도출) 모두에서 의미가 있습니다. 목적에 따라 방법을 조합하는 것이 일반적입니다."
+        }
+      },
+      {
+        "@type":"Question",
+        "name":"UX 리서치 방법은 하나만 선택하면 되나요?",
+        "acceptedAnswer":{
+          "@type":"Answer",
+          "text":"대개 하나만으로는 한계가 있어 목적에 맞춰 병행합니다. 예: 시장/경쟁 파악은 벤치마킹, 사용 흐름 검증은 사용성 테스트, 이유/맥락 파악은 인터뷰, 규모 있는 확인은 서베이 등으로 조합합니다."
+        }
+      }
+    ]
+  }
+  </script>
+
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --bg:#ffffff; --surface:#f8fafc; --surface2:#f4f7ff;
+      --text:#0f172a; --muted:#64748b; --muted2:#94a3b8;
+      --line:rgba(15,23,42,.10);
+      --accent:#2563eb; --accent2:#1d4ed8;
+      --accentSoft:rgba(37,99,235,.10); --accentSoft2:rgba(37,99,235,.06);
+      --radius:24px; --radiusSm:16px;
+      --shadowSm:0 10px 26px rgba(2,32,71,.06);
+      --shadowMd:0 18px 52px rgba(2,32,71,.10);
+      --shadowBlue:0 22px 64px rgba(37,99,235,.14);
+      --max:1100px; --pad:24px;
+      --h2: clamp(26px, 3.6vw, 44px);
+    }
+    *{box-sizing:border-box;-webkit-font-smoothing:antialiased}
+    html,body{margin:0;padding:0}
+    body{font-family:Inter,'Pretendard','Pretendard Variable',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--text);background:var(--bg);line-height:1.75}
+    a{color:inherit;text-decoration:none}
+    .inner{max-width:var(--max);margin:0 auto;padding:0 var(--pad)}
+    h1,h2,h3{margin:0;letter-spacing:-0.03em;line-height:1.15}
+    .sub-title{font-size:12px;font-weight:900;color:var(--accent);letter-spacing:.16em;text-transform:uppercase;margin:0 0 12px}
+    .main-title{font-size:var(--h2);font-weight:950;letter-spacing:-0.03em;margin:0 0 14px;color:var(--text);line-height:1.15}
+    .main-title span{color:var(--accent)}
+    .desc{color:var(--muted);word-break:keep-all}
+
+    .btn{display:inline-flex;align-items:center;justify-content:center;padding:16px 28px;border-radius:14px;font-weight:900;font-size:14px;border:1px solid transparent;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,background .18s ease,border-color .18s ease,color .18s ease;height:52px;white-space:nowrap}
+    .btn--primary{background:linear-gradient(180deg,#2f6cf0 0%,#1e56d8 100%);color:#fff;box-shadow:0 14px 34px rgba(37,99,235,.22);border-color:rgba(37,99,235,.18)}
+    .btn--primary:hover{transform:translateY(-2px);box-shadow:0 18px 46px rgba(37,99,235,.28);background:linear-gradient(180deg,#2a66ea 0%,#1b4fcf 100%)}
+    .btn--ghost{background:rgba(255,255,255,.92);border:1px solid rgba(15,23,42,.12);color:var(--text);box-shadow:var(--shadowSm)}
+    .btn--ghost:hover{transform:translateY(-2px);border-color:rgba(37,99,235,.22);box-shadow:var(--shadowMd)}
+
+    .topbar{position:sticky;top:0;z-index:50;backdrop-filter:blur(10px);background:rgba(255,255,255,.78);border-bottom:1px solid rgba(15,23,42,.10)}
+    .topbar-inner{max-width:var(--max);margin:0 auto;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:14px}
+    .brand{display:flex;align-items:center;gap:10px;font-weight:950;letter-spacing:-.02em;white-space:nowrap;color:var(--text)}
+    .dot{width:10px;height:10px;border-radius:999px;background:linear-gradient(180deg,#3b82f6 0%,#1d4ed8 100%);box-shadow:0 0 0 6px rgba(37,99,235,.14)}
+    .top-actions{display:flex;align-items:center;gap:10px}
+    .nav{display:flex;align-items:center;gap:6px;justify-content:flex-end}
+    .nav a{font-size:13px;font-weight:800;color:var(--muted);padding:8px 10px;border-radius:12px;border:1px solid transparent;transition:background .18s ease,color .18s ease,border-color .18s ease}
+    .nav a:hover{background:rgba(15,23,42,.04);color:var(--text)}
+    .topbar .btn{padding:10px 14px;height:40px;border-radius:14px;border:1px solid rgba(15,23,42,.10);background:rgba(255,255,255,.92);color:var(--text);font-weight:900;font-size:14px;box-shadow:var(--shadowSm)}
+    .topbar .btn.primary{color:#fff;border-color:rgba(37,99,235,.18);background:linear-gradient(180deg,#2f6cf0 0%,#1e56d8 100%);box-shadow:0 14px 30px rgba(37,99,235,.18)}
+    .topbar .btn:hover{transform:translateY(-1px)}
+    @media (max-width:720px){.nav{display:none}}
+
+    .service-hero{padding:clamp(72px,10vw,110px) 0 40px;background:radial-gradient(900px 420px at 50% 0%, rgba(37,99,235,.18) 0%, rgba(255,255,255,0) 60%),linear-gradient(180deg,#f6f9ff 0%,#ffffff 62%);border-bottom:1px solid rgba(15,23,42,.08)}
+    .service-hero .desc{max-width:860px;margin:18px 0 0;font-size:16px;line-height:1.8}
+
+    .content{padding:40px 0 90px}
+    .stack{display:grid;gap:18px}
+    .panel-card{background:rgba(255,255,255,.92);border:1px solid rgba(15,23,42,.10);border-radius:var(--radius);box-shadow:var(--shadowMd);padding:clamp(28px,4vw,54px)}
+    .panel-category{display:inline-flex;align-items:center;gap:10px;font-size:12px;font-weight:950;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);background:var(--accentSoft2);border:1px solid rgba(37,99,235,.12);padding:10px 14px;border-radius:999px;margin-bottom:16px}
+    .panel-card h2{font-size:clamp(20px,2.4vw,30px);font-weight:950;letter-spacing:-0.03em;color:var(--text);margin:0 0 14px;line-height:1.2}
+    .panel-card h3{font-size:18px;font-weight:950;letter-spacing:-0.02em;margin:18px 0 10px}
+    .panel-card p{margin:0 0 18px;color:rgba(71,85,105,1);font-size:16px;line-height:1.85;max-width:920px;word-break:keep-all}
+    .check-list{list-style:none;padding:0;margin:0;display:grid;gap:12px}
+    .check-list li{position:relative;padding-left:28px;color:rgba(51,65,85,1);font-weight:700;font-size:15px;line-height:1.7;word-break:keep-all}
+    .check-list li::before{content:"→";position:absolute;left:0;top:0;color:var(--accent);font-weight:950}
+
+    .toc{margin-top:10px;border-radius:18px;background:linear-gradient(180deg, rgba(37,99,235,.06) 0%, rgba(255,255,255,.88) 100%);border:1px solid rgba(37,99,235,.12);padding:16px 16px 14px}
+    .toc-title{font-weight:950;color:var(--text);font-size:13px;letter-spacing:-0.01em;margin:0 0 8px}
+    .toc ul{list-style:none;padding:0;margin:0;display:grid;gap:8px}
+    .toc a{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border-radius:14px;border:1px solid rgba(15,23,42,.06);background:rgba(255,255,255,.78);font-weight:900;font-size:13px;color:rgba(51,65,85,1)}
+    .toc a:hover{border-color:rgba(37,99,235,.22);transform:translateY(-1px)}
+    .toc small{color:var(--muted);font-weight:800}
+
+    .tag-row{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 0}
+    .tag{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:999px;border:1px solid rgba(15,23,42,.10);background:rgba(255,255,255,.82);font-size:12px;font-weight:900;color:rgba(51,65,85,1)}
+    .tag b{color:var(--accent)}
+    .divider{height:1px;background:rgba(15,23,42,.08);margin:22px 0}
+
+    .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:26px}
+    footer{border-top:1px solid rgba(15,23,42,.08);background:#fff;padding:40px 0;color:var(--muted);font-size:13px}
+    .footer-grid{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+    .footer-links{display:flex;gap:18px}
+    .footer-links a{color:var(--muted);font-weight:800;padding:6px 8px;border-radius:10px;border:1px solid transparent}
+    .footer-links a:hover{color:var(--text);background:rgba(15,23,42,.04);border-color:rgba(15,23,42,.08)}
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="../index.html" aria-label="홈으로">
+        <span class="dot" aria-hidden="true"></span>
+        <span>GROWTHLINE</span>
+      </a>
+      <div class="top-actions">
+        <nav class="nav" aria-label="상단 메뉴">
+          <a href="../service.html">service</a>
+          <a href="../work.html">work</a>
+        </nav>
+        <a class="btn primary" href="../contact.html">진단받기</a>
+      </div>
+    </div>
+  </header>
+
+  <section class="service-hero">
+    <div class="inner">
+      <p class="sub-title">Research Tips</p>
+      <h1 class="main-title">UX 리서치(UXR),<br><span>정의부터 선택 기준까지</span> 한 번에 정리</h1>
+      <p class="desc">
+        UX는 “화면”이 아니라 “경험 전체”입니다. UX 리서치(UXR)는 그 경험을 관찰·검증해,
+        이탈을 줄이고 전환을 높이는 개선 방향을 찾는 과정입니다.
+      </p>
+
+      <div class="toc" aria-label="목차">
+        <p class="toc-title">이 페이지에서 다루는 내용</p>
+        <ul>
+          <li><a href="#ux">UX란 무엇인가요? <small>정의·예시</small></a></li>
+          <li><a href="#why">왜 지금 UX가 중요해졌나요? <small>환경 변화</small></a></li>
+          <li><a href="#ux-ui">UX vs UI 차이 <small>혼동 방지</small></a></li>
+          <li><a href="#uxr">UX 리서치(UXR)란? <small>목적·효과</small></a></li>
+          <li><a href="#methods">대표 UX 리서치 유형 5가지 <small>언제 쓰나</small></a></li>
+          <li><a href="#howto">실무 적용 흐름 <small>가설→검증</small></a></li>
+          <li><a href="#faq">자주 묻는 질문 <small>FAQ</small></a></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <main class="content">
+    <div class="inner">
+      <div class="stack">
+
+        <!-- UX 정의 -->
+        <article class="panel-card" id="ux">
+          <span class="panel-category">UX Basics</span>
+          <h2>UX란 “사용자가 겪는 전체 경험”입니다</h2>
+          <p>
+            UX(User eXperience)는 사용자가 제품·서비스를 접하고 이용하면서 ‘느끼고 생각하게 되는 모든 경험’을 뜻합니다.
+            화면을 보는 순간뿐 아니라 탐색, 비교, 결제, 배송 확인, 후기 작성 같은 과정과 감정까지 포함됩니다.
+          </p>
+          <div class="tag-row" aria-label="UX 구성 요소 예시">
+            <span class="tag"><b>탐색</b> 찾기 쉬운가</span>
+            <span class="tag"><b>결정</b> 망설임이 줄어드는가</span>
+            <span class="tag"><b>사용</b> 막히는 구간이 없는가</span>
+            <span class="tag"><b>신뢰</b> 불안 요소가 없는가</span>
+            <span class="tag"><b>재방문</b> 다시 쓰고 싶은가</span>
+          </div>
+        </article>
+
+        <!-- 왜 중요 -->
+        <section class="panel-card" id="why">
+          <span class="panel-category">Why Now</span>
+          <h2>왜 지금 UX가 더 중요해졌을까요?</h2>
+          <p>
+            디지털 전환이 빨라지면서 사용자 접점이 “웹·앱·오프라인·웨어러블”처럼 훨씬 다양해졌습니다.
+            사용자는 모든 접점에서 매끄러운 흐름을 기대하고, 한 번의 불편한 경험도 쉽게 공유하거나 대체 서비스를 찾습니다.
+          </p>
+          <ul class="check-list">
+            <li>접점이 늘수록 ‘끊기는 경험’이 생기기 쉽고, 그 지점에서 이탈이 발생합니다.</li>
+            <li>불편한 경험은 곧바로 비교·이탈·부정 리뷰로 연결될 수 있습니다.</li>
+            <li>좋은 UX는 전환·재구매·추천으로 이어지는 “성장 지표”로 환산됩니다.</li>
+          </ul>
+        </section>
+
+        <!-- UX vs UI -->
+        <section class="panel-card" id="ux-ui">
+          <span class="panel-category">UX vs UI</span>
+          <h2>UX와 UI는 다릅니다</h2>
+          <p>
+            UI(User Interface)는 사용자가 직접 보는 화면 요소(버튼, 메뉴, 배치, 시각 디자인)입니다.
+            반면 UX는 UI를 포함해, 사용자가 목표를 달성하는 전 과정에서 느끼는 경험 전체입니다.
+          </p>
+          <div class="divider" aria-hidden="true"></div>
+          <ul class="check-list">
+            <li>UI가 좋아도 정보가 부족하거나 기능 흐름이 끊기면 UX는 나빠질 수 있습니다.</li>
+            <li>UX 개선은 ‘예쁜 화면’이 아니라 ‘덜 망설이고, 덜 헤매고, 더 빨리 결정’하게 만드는 일입니다.</li>
+          </ul>
+        </section>
+
+        <!-- UXR 정의 -->
+        <article class="panel-card" id="uxr">
+          <span class="panel-category">UX Research</span>
+          <h2>UX 리서치(UXR)는 “사용 과정을 조사해 개선 방향을 찾는 일”입니다</h2>
+          <p>
+            UX 리서치(User eXperience Research)는 사용자가 제품·서비스와 상호작용하는 과정을 조사해,
+            “누가 / 어떻게 쓰는지 / 어디에서 좋아하고 불편해하는지 / 무엇을 더 원하는지”를 파악합니다.
+            목표는 사용자를 더 잘 맞추기 위한 개선 방향을 찾는 것입니다.
+          </p>
+          <ul class="check-list">
+            <li>이탈 원인을 ‘추측’이 아니라 ‘근거’로 바꿉니다.</li>
+            <li>우선순위를 합의 가능한 형태(증거·패턴·데이터)로 만들 수 있습니다.</li>
+            <li>결과적으로 전환·리텐션·매출 개선 같은 비즈니스 성과로 연결됩니다.</li>
+          </ul>
+        </article>
+
+        <!-- 대표 유형 5가지 -->
+        <section class="panel-card" id="methods">
+          <span class="panel-category">Methods</span>
+          <h2>대표 UX 리서치 유형 5가지</h2>
+          <p>
+            목적에 따라 하나만 고르기보다 방법을 조합하는 편이 실무적으로 유리합니다.
+            (실무 조사에서도 한 조직이 여러 유형을 병행하는 경향이 관찰됩니다.)
+          </p>
+
+          <h3>1) 서베이 / 설문조사</h3>
+          <p>표본을 기반으로 의견·인식·만족·우선순위를 구조화된 문항으로 확인합니다. “얼마나/누가/어떤 패턴인가”를 빠르게 잡을 때 유리합니다.</p>
+
+          <h3>2) 사용자 인터뷰 (IDI / FGI·FGD)</h3>
+          <p>사용자의 맥락·감정·의사결정 이유를 깊게 파고듭니다. “왜 그런 선택을 했는가”를 풀어내는 데 강합니다.</p>
+
+          <h3>3) 사용성 테스트 (UT)</h3>
+          <p>과제를 주고 실제 사용 과정을 관찰합니다. 막히는 구간, 오해하는 지점, 포기하는 순간을 찾아냅니다.</p>
+
+          <h3>4) 벤치마킹</h3>
+          <p>경쟁사·유사 서비스 사례를 분석해 기대 수준과 표준 패턴을 파악합니다. “우리가 뒤처지는 지점/차별화 포인트”를 잡을 때 씁니다.</p>
+
+          <h3>5) VoC 분석</h3>
+          <p>CS, 리뷰, 챗봇, SNS 등에서 고객의 목소리를 수집·분류해 반복되는 문제를 찾아냅니다. 운영 데이터로 개선 아이템을 뽑을 때 좋습니다.</p>
+
+          <div class="divider" aria-hidden="true"></div>
+
+          <h3>상황별 추천 조합 예시</h3>
+          <ul class="check-list">
+            <li>시장·경쟁 파악: 벤치마킹 + 서베이</li>
+            <li>출시 전 흐름 검증: UT + 인터뷰</li>
+            <li>출시 후 이탈 개선: VoC + UT + 서베이(규모 확인)</li>
+          </ul>
+        </section>
+
+        <!-- 실무 적용 -->
+        <section class="panel-card" id="howto">
+          <span class="panel-category">How to Apply</span>
+          <h2>실무 적용 흐름(간단 버전)</h2>
+          <p>
+            “리서치”를 크게 만들기보다, 목표·가설·의사결정 포인트를 먼저 고정하면 빠르게 성과로 연결됩니다.
+            아래는 최소 단위로 돌리는 추천 흐름입니다.
+          </p>
+          <ul class="check-list">
+            <li><b>Step 1.</b> 목표 정의: 무엇을 개선하면 성과가 나는가(전환/이탈/재구매 등)</li>
+            <li><b>Step 2.</b> 가설 설정: 왜 안 되는지 가설 3~5개로 제한</li>
+            <li><b>Step 3.</b> 방법 선택: (이유) 인터뷰/UT, (규모) 서베이, (운영) VoC</li>
+            <li><b>Step 4.</b> 실행·분석: 반복 패턴을 우선순위로 정리</li>
+            <li><b>Step 5.</b> 개선·검증: 바꾸고 다시 측정(전/후 비교)</li>
+          </ul>
+
+          <div class="actions">
+            <a class="btn btn--ghost" href="../service.html#research">서비스 허브로</a>
+            <a class="btn btn--primary" href="../contact.html">내 서비스에 맞는 리서치 설계 상담받기</a>
+          </div>
+        </section>
+
+        <!-- FAQ (본문용) -->
+        <section class="panel-card" id="faq">
+          <span class="panel-category">FAQ</span>
+          <h2>자주 묻는 질문</h2>
+
+          <h3>Q. UX와 UI는 무엇이 다른가요?</h3>
+          <p>A. UI는 화면 요소이고, UX는 사용자가 목표를 달성하는 과정 전체의 경험입니다. UI는 UX의 일부입니다.</p>
+
+          <h3>Q. UX 리서치는 언제가 “적기”인가요?</h3>
+          <p>A. 기획/런칭/운영 모든 단계에서 유효합니다. 중요한 건 “지금 어떤 의사결정을 해야 하는가”를 먼저 정하고, 그에 맞는 방법을 고르는 것입니다.</p>
+
+          <h3>Q. 방법을 하나만 고르면 되나요?</h3>
+          <p>A. 보통은 조합이 더 강합니다. 인터뷰/UT로 이유를 찾고, 서베이로 규모를 확인하고, VoC로 운영 문제를 상시 추적하는 방식이 흔합니다.</p>
+        </section>
+
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="inner">
+      <div class="footer-grid">
+        <span>© 2024 GROWTHLINE. All rights reserved.</span>
+        <div class="footer-links">
+          <a href="../service.html">Service</a>
+          <a href="../work.html">Work</a>
+          <a href="../contact.html">Contact</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,5 @@
+﻿id,slug,title,summary,sort_order,thumb_url,primary_link_url,primary_link_type,domain_keys
+a1f1c2d3-0001-4a1a-9b01-111111111111,tv-voice,,,2024-03-01,/work/tv-voice,detail,,
+a1f1c2d3-0002-4a1a-9b01-222222222222,sol-app,,,2024-04-15,/work/sol-app,detail,,
+a1f1c2d3-0003-4a1a-9b01-333333333333,ai-cs-bot,,,3,,https://example.com/ai-cs-bot,external,
+a1f1c2d3-0004-4a1a-9b01-444444444444,admin-dashboard,,,2023-11-20,/work/admin-dashboard,detail,,

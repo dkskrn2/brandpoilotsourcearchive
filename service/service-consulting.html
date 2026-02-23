@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-WDKDVHFMHQ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-WDKDVHFMHQ');
+  </script>
+
+  <title>Business Logic | 업무와 기준을 고정합니다 | GROWTHLINE</title>
+  <meta name="description" content="기능을 늘리기 전에 업무 흐름(To-Be)·범위·졸업 조건을 문서로 고정합니다. PRD/우선순위, 정산·권한·상태값 등 핵심 로직, 운영 관점의 관리자·로그·권한까지 설계해 수정·역기획 비용을 줄입니다." />
+  <meta name="robots" content="index,follow" />
+  <link rel="canonical" href="business-logic.html" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:locale" content="ko_KR" />
+  <meta property="og:site_name" content="GROWTHLINE" />
+  <meta property="og:title" content="Business Logic | 업무와 기준을 고정합니다 | GROWTHLINE" />
+  <meta property="og:description" content="개발 전에 업무 흐름(To-Be)·범위·졸업 조건을 고정합니다. PRD/우선순위, 핵심 로직, 운영 관점 관리자·로그·권한까지 설계." />
+  <meta property="og:url" content="business-logic.html" />
+  <meta property="og:image" content="assets/og/service.png" />
+  <meta property="og:image:alt" content="GROWTHLINE 콘텐츠 페이지 미리보기" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Business Logic | 업무와 기준을 고정합니다 | GROWTHLINE" />
+  <meta name="twitter:description" content="기능을 늘리기 전에 To-Be·범위·졸업 조건을 문서로 고정해 수정·역기획 비용을 줄입니다." />
+  <meta name="twitter:image" content="assets/og/service.png" />
+
+  <!-- Article + FAQPage (SEO 강화) -->
+  <script type="application/ld+json">
+  {
+    "@context":"https://schema.org",
+    "@type":"Article",
+    "headline":"Business Logic | 업무와 기준을 고정합니다",
+    "description":"기능을 늘리기 전에 업무 흐름(To-Be)·범위·졸업 조건을 문서로 고정합니다. PRD/우선순위, 정산·권한·상태값 등 핵심 로직, 운영 관점의 관리자 기능·로그·권한 설계를 통해 수정·역기획 비용을 줄입니다.",
+    "inLanguage":"ko-KR",
+    "publisher":{"@type":"Organization","name":"GROWTHLINE"},
+    "mainEntityOfPage":{"@type":"WebPage","@id":"business-logic.html"}
+  }
+  </script>
+
+  <script type="application/ld+json">
+  {
+    "@context":"https://schema.org",
+    "@type":"FAQPage",
+    "mainEntity":[
+      {
+        "@type":"Question",
+        "name":"Business Logic 설계는 개발과 무엇이 다른가요?",
+        "acceptedAnswer":{
+          "@type":"Answer",
+          "text":"개발은 기능을 구현하는 단계이고, Business Logic 설계는 구현 전에 ‘업무 흐름(To-Be)·범위·졸업 조건·규칙(정산/권한/상태값)’을 문서로 고정해 팀이 같은 기준으로 움직이게 만드는 단계입니다."
+        }
+      },
+      {
+        "@type":"Question",
+        "name":"왜 기능을 먼저 만들면 위험한가요?",
+        "acceptedAnswer":{
+          "@type":"Answer",
+          "text":"업무 기준과 예외 규칙이 고정되지 않은 상태에서 기능을 늘리면, 중간에 요구사항이 바뀌면서 수정·역기획 비용이 급격히 증가합니다. 특히 정산/권한/상태값 같은 핵심 로직은 뒤집기 어려워 초기에 정의하는 것이 안전합니다."
+        }
+      },
+      {
+        "@type":"Question",
+        "name":"운영 관점 설계는 무엇을 포함하나요?",
+        "acceptedAnswer":{
+          "@type":"Answer",
+          "text":"관리자 화면의 기능 정의, 권한/역할(누가 무엇을 할 수 있는지), 이력/로그(무엇이 언제 어떻게 바뀌었는지), 운영자가 문제를 재현·조치할 수 있는 관측/통제 구조까지 포함합니다."
+        }
+      }
+    ]
+  }
+  </script>
+
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --bg:#ffffff; --surface:#f8fafc; --surface2:#f4f7ff;
+      --text:#0f172a; --muted:#64748b; --muted2:#94a3b8;
+      --line:rgba(15,23,42,.10);
+      --accent:#2563eb; --accent2:#1d4ed8;
+      --accentSoft:rgba(37,99,235,.10); --accentSoft2:rgba(37,99,235,.06);
+      --radius:24px; --radiusSm:16px;
+      --shadowSm:0 10px 26px rgba(2,32,71,.06);
+      --shadowMd:0 18px 52px rgba(2,32,71,.10);
+      --shadowBlue:0 22px 64px rgba(37,99,235,.14);
+      --max:1100px; --pad:24px;
+      --h2: clamp(26px, 3.6vw, 44px);
+    }
+    *{box-sizing:border-box;-webkit-font-smoothing:antialiased}
+    html,body{margin:0;padding:0}
+    body{font-family:Inter,'Pretendard','Pretendard Variable',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--text);background:var(--bg);line-height:1.75}
+    a{color:inherit;text-decoration:none}
+    .inner{max-width:var(--max);margin:0 auto;padding:0 var(--pad)}
+    h1,h2,h3{margin:0;letter-spacing:-0.03em;line-height:1.15}
+    .sub-title{font-size:12px;font-weight:900;color:var(--accent);letter-spacing:.16em;text-transform:uppercase;margin:0 0 12px}
+    .main-title{font-size:var(--h2);font-weight:950;letter-spacing:-0.03em;margin:0 0 14px;color:var(--text);line-height:1.15}
+    .main-title span{color:var(--accent)}
+    .desc{color:var(--muted);word-break:keep-all}
+
+    .btn{display:inline-flex;align-items:center;justify-content:center;padding:16px 28px;border-radius:14px;font-weight:900;font-size:14px;border:1px solid transparent;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,background .18s ease,border-color .18s ease,color .18s ease;height:52px;white-space:nowrap}
+    .btn--primary{background:linear-gradient(180deg,#2f6cf0 0%,#1e56d8 100%);color:#fff;box-shadow:0 14px 34px rgba(37,99,235,.22);border-color:rgba(37,99,235,.18)}
+    .btn--primary:hover{transform:translateY(-2px);box-shadow:0 18px 46px rgba(37,99,235,.28);background:linear-gradient(180deg,#2a66ea 0%,#1b4fcf 100%)}
+    .btn--ghost{background:rgba(255,255,255,.92);border:1px solid rgba(15,23,42,.12);color:var(--text);box-shadow:0 10px 26px rgba(2,32,71,.06)}
+    .btn--ghost:hover{transform:translateY(-2px);border-color:rgba(37,99,235,.22);box-shadow:0 18px 52px rgba(2,32,71,.10)}
+
+    .topbar{position:sticky;top:0;z-index:50;backdrop-filter:blur(10px);background:rgba(255,255,255,.78);border-bottom:1px solid rgba(15,23,42,.10)}
+    .topbar-inner{max-width:var(--max);margin:0 auto;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:14px}
+    .brand{display:flex;align-items:center;gap:10px;font-weight:950;letter-spacing:-.02em;white-space:nowrap;color:var(--text)}
+    .dot{width:10px;height:10px;border-radius:999px;background:linear-gradient(180deg,#3b82f6 0%,#1d4ed8 100%);box-shadow:0 0 0 6px rgba(37,99,235,.14)}
+    .top-actions{display:flex;align-items:center;gap:10px}
+    .nav{display:flex;align-items:center;gap:6px;justify-content:flex-end}
+    .nav a{font-size:13px;font-weight:800;color:var(--muted);padding:8px 10px;border-radius:12px;border:1px solid transparent;transition:background .18s ease,color .18s ease,border-color .18s ease}
+    .nav a:hover{background:rgba(15,23,42,.04);color:var(--text)}
+    .topbar .btn{padding:10px 14px;height:40px;border-radius:14px;border:1px solid rgba(15,23,42,.10);background:rgba(255,255,255,.92);color:var(--text);font-weight:900;font-size:14px;box-shadow:0 10px 26px rgba(2,32,71,.06)}
+    .topbar .btn.primary{color:#fff;border-color:rgba(37,99,235,.18);background:linear-gradient(180deg,#2f6cf0 0%,#1e56d8 100%);box-shadow:0 14px 30px rgba(37,99,235,.18)}
+    .topbar .btn:hover{transform:translateY(-1px)}
+    @media (max-width:720px){.nav{display:none}}
+
+    .service-hero{padding:clamp(72px,10vw,110px) 0 40px;background:radial-gradient(900px 420px at 50% 0%, rgba(37,99,235,.18) 0%, rgba(255,255,255,0) 60%),linear-gradient(180deg,#f6f9ff 0%,#ffffff 62%);border-bottom:1px solid rgba(15,23,42,.08)}
+    .service-hero .desc{max-width:860px;margin:18px 0 0;font-size:16px;line-height:1.8}
+
+    .content{padding:40px 0 90px}
+    .stack{display:grid;gap:18px}
+    .panel-card{background:rgba(255,255,255,.92);border:1px solid rgba(15,23,42,.10);border-radius:var(--radius);box-shadow:0 18px 52px rgba(2,32,71,.10);padding:clamp(28px,4vw,54px)}
+    .panel-category{display:inline-flex;align-items:center;gap:10px;font-size:12px;font-weight:950;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);background:rgba(37,99,235,.06);border:1px solid rgba(37,99,235,.12);padding:10px 14px;border-radius:999px;margin-bottom:16px}
+    .panel-card h2{font-size:clamp(20px,2.4vw,30px);font-weight:950;letter-spacing:-0.03em;color:var(--text);margin:0 0 14px;line-height:1.2}
+    .panel-card h3{font-size:18px;font-weight:950;letter-spacing:-0.02em;margin:18px 0 10px}
+    .panel-card p{margin:0 0 18px;color:rgba(71,85,105,1);font-size:16px;line-height:1.85;max-width:920px;word-break:keep-all}
+    .check-list{list-style:none;padding:0;margin:0;display:grid;gap:12px}
+    .check-list li{position:relative;padding-left:28px;color:rgba(51,65,85,1);font-weight:700;font-size:15px;line-height:1.7;word-break:keep-all}
+    .check-list li::before{content:"→";position:absolute;left:0;top:0;color:var(--accent);font-weight:950}
+
+    .toc{margin-top:10px;border-radius:18px;background:linear-gradient(180deg, rgba(37,99,235,.06) 0%, rgba(255,255,255,.88) 100%);border:1px solid rgba(37,99,235,.12);padding:16px 16px 14px}
+    .toc-title{font-weight:950;color:var(--text);font-size:13px;letter-spacing:-0.01em;margin:0 0 8px}
+    .toc ul{list-style:none;padding:0;margin:0;display:grid;gap:8px}
+    .toc a{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border-radius:14px;border:1px solid rgba(15,23,42,.06);background:rgba(255,255,255,.78);font-weight:900;font-size:13px;color:rgba(51,65,85,1)}
+    .toc a:hover{border-color:rgba(37,99,235,.22);transform:translateY(-1px)}
+    .toc small{color:var(--muted);font-weight:800}
+
+    .tag-row{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 0}
+    .tag{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:999px;border:1px solid rgba(15,23,42,.10);background:rgba(255,255,255,.82);font-size:12px;font-weight:900;color:rgba(51,65,85,1)}
+    .tag b{color:var(--accent)}
+    .divider{height:1px;background:rgba(15,23,42,.08);margin:22px 0}
+
+    .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:26px}
+    footer{border-top:1px solid rgba(15,23,42,.08);background:#fff;padding:40px 0;color:var(--muted);font-size:13px}
+    .footer-grid{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+    .footer-links{display:flex;gap:18px}
+    .footer-links a{color:var(--muted);font-weight:800;padding:6px 8px;border-radius:10px;border:1px solid transparent}
+    .footer-links a:hover{color:var(--text);background:rgba(15,23,42,.04);border-color:rgba(15,23,42,.08)}
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="../index.html" aria-label="홈으로">
+        <span class="dot" aria-hidden="true"></span>
+        <span>GROWTHLINE</span>
+      </a>
+      <div class="top-actions">
+        <nav class="nav" aria-label="상단 메뉴">
+          <a href="../service.html">service</a>
+          <a href="../work.html">work</a>
+        </nav>
+        <a class="btn primary" href="../contact.html">진단받기</a>
+      </div>
+    </div>
+  </header>
+
+  <section class="service-hero">
+    <div class="inner">
+      <p class="sub-title">Business Logic</p>
+      <h1 class="main-title">Business Logic<br><span>업무와 기준을 고정합니다</span></h1>
+      <p class="desc">
+        기능을 늘리기 전에 <b>업무 흐름(To-Be)·범위·졸업 조건</b>을 문서로 고정합니다.
+        수정·역기획 비용을 줄이고, 팀이 같은 기준으로 움직이게 합니다.
+      </p>
+
+      <div class="toc" aria-label="목차">
+        <p class="toc-title">이 섹션에서 다루는 내용</p>
+        <ul>
+          <li><a href="#business-logic">Business Logic이란? <small>정의</small></a></li>
+          <li><a href="#to-be">업무 흐름·범위·졸업 조건 <small>고정</small></a></li>
+          <li><a href="#prd">요구사항(PRD)·우선순위 <small>결정</small></a></li>
+          <li><a href="#core-logic">핵심 로직 정의 <small>정산/권한/상태값</small></a></li>
+          <li><a href="#ops">운영 관점 설계 <small>관리자/로그/권한</small></a></li>
+          <li><a href="#result">결과 <small>팀 기준 통일</small></a></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <main class="content">
+    <div class="inner">
+      <div class="stack">
+
+        <!-- 1) Concept -->
+        <section class="panel-card" id="business-logic">
+          <span class="panel-category">04 · Business Logic</span>
+          <h2>기능을 늘리기 전에<br>업무와 기준을 고정합니다</h2>
+
+          <p>
+            Business Logic은 “무엇을 만들지”보다 먼저,
+            <b>어떻게 운영되고 판단되는지</b>를 고정하는 설계입니다.
+            개발을 시작하기 전에 업무 규칙과 예외를 문서로 정리해,
+            팀이 같은 기준으로 움직이게 만듭니다.
+          </p>
+
+          <p>
+            기준이 고정되지 않은 상태에서 기능이 늘어나면,
+            중간에 요구가 바뀌면서 수정·역기획 비용이 급격히 커집니다.
+            그래서 우리는 구현 전에 <b>업무 흐름(To-Be)·범위·졸업 조건</b>을 먼저 확정합니다.
+          </p>
+
+          <div class="tag-row" aria-label="Business Logic 구성">
+            <span class="tag"><b>To-Be</b> 업무 흐름</span>
+            <span class="tag"><b>Scope</b> 범위</span>
+            <span class="tag"><b>Done</b> 졸업 조건</span>
+            <span class="tag"><b>Rules</b> 권한/상태/정산</span>
+            <span class="tag"><b>Ops</b> 운영/로그</span>
+          </div>
+        </section>
+
+        <!-- 2) To-Be / Scope / Done -->
+        <section class="panel-card" id="to-be">
+          <span class="panel-category">To-Be · Scope · Done</span>
+          <h2>업무 흐름(To-Be)·범위·졸업 조건을 문서로 고정합니다</h2>
+
+          <p>
+            “대충 이런 흐름” 수준으로 개발에 들어가면,
+            중간에 해석이 갈리고 기능이 불어나며 일정이 흔들립니다.
+            우리는 개발 전에 아래 3가지를 명확히 고정합니다.
+          </p>
+
+          <ul class="check-list">
+            <li><b>To-Be</b>: 사용자가 어떤 순서로 업무를 처리해야 하는가(정상 흐름)</li>
+            <li><b>Scope</b>: 이번 버전에 포함/제외되는 기능과 예외는 무엇인가(경계선)</li>
+            <li><b>Done</b>: 언제 “완료”로 볼 것인가(졸업 조건/수용 기준)</li>
+          </ul>
+
+          <p>
+            이 기준이 잡히면 개발 속도가 빨라지는 이유는 단순합니다.
+            “만들면서 정하는” 비용이 줄어들고,
+            팀 내부 커뮤니케이션이 <b>논쟁</b>이 아니라 <b>검증</b>으로 바뀌기 때문입니다.
+          </p>
+        </section>
+
+        <!-- 3) PRD / Priority -->
+        <section class="panel-card" id="prd">
+          <span class="panel-category">PRD & Priority</span>
+          <h2>요구사항 정리(PRD)와 우선순위를 결정합니다</h2>
+
+          <p>
+            요구사항은 “기능 목록”이 아니라
+            <b>문제·사용자·상황·제약·성공 기준</b>까지 포함한 의사결정 문서여야 합니다.
+            그래야 개발/디자인/운영이 같은 목표를 바라봅니다.
+          </p>
+
+          <ul class="check-list">
+            <li>요구사항을 “문제 → 해결 방식 → 수용 기준” 형태로 정리</li>
+            <li>필수/선택을 가르는 우선순위 기준(ROI/리스크/의존성) 확정</li>
+            <li>일정이 흔들릴 때도 판단 가능한 ‘버릴 기준’까지 문서화</li>
+          </ul>
+
+          <p>
+            우선순위가 없으면 기능은 계속 늘고,
+            일정이 부족하면 핵심이 아닌 부분부터 급하게 만들어 품질이 무너집니다.
+            그래서 우리는 “무엇을 먼저 만들지”보다
+            <b>무엇을 이번에는 안 만들지</b>를 먼저 고정합니다.
+          </p>
+        </section>
+
+        <!-- 4) Core Logic -->
+        <section class="panel-card" id="core-logic">
+          <span class="panel-category">Core Logic</span>
+          <h2>정산/권한/상태값 같은 핵심 로직을 먼저 정의합니다</h2>
+
+          <p>
+            서비스가 커질수록 가장 큰 비용은 화면이 아니라
+            <b>규칙(로직)의 변경</b>에서 발생합니다.
+            특히 아래 3가지는 뒤집기 어렵기 때문에 초기에 정의하는 것이 안전합니다.
+          </p>
+
+          <ul class="check-list">
+            <li><b>정산</b>: 가격/수수료/환불/정산 주기/정산 상태의 규칙</li>
+            <li><b>권한</b>: 누가 무엇을 볼 수 있고, 무엇을 바꿀 수 있는가(역할/범위)</li>
+            <li><b>상태값</b>: 진행 단계(대기/진행/완료/취소)와 전이 조건(언제 바뀌나)</li>
+          </ul>
+
+          <p>
+            우리는 “상태값 표”와 “권한 매트릭스”처럼
+            팀이 공통으로 참조할 수 있는 형태로 로직을 정리해,
+            개발 이후에도 기능 확장이 가능하도록 기반을 만듭니다.
+          </p>
+        </section>
+
+        <!-- 5) Ops -->
+        <section class="panel-card" id="ops">
+          <span class="panel-category">Operations</span>
+          <h2>운영 관점의 관리자 기능·로그·권한을 설계합니다</h2>
+
+          <p>
+            운영을 고려하지 않으면, 출시 후 문제를 해결할 수 있는 수단이 없습니다.
+            그래서 우리는 “사용자 화면”만이 아니라
+            <b>운영자가 시스템을 통제할 수 있는 구조</b>를 함께 설계합니다.
+          </p>
+
+          <ul class="check-list">
+            <li><b>관리자 기능</b>: 조회/수정/승인/차단/재처리 등 운영 시나리오 기반 정의</li>
+            <li><b>로그/이력</b>: 누가/언제/무엇을/어떻게 바꿨는지 추적 가능한 기록</li>
+            <li><b>운영 권한</b>: 역할별 접근 범위, 위험 작업(삭제/정산)의 보호 장치</li>
+          </ul>
+
+          <p>
+            운영 설계가 포함되면,
+            장애/문의/정산 오류 같은 이슈가 생겼을 때
+            “개발자 호출” 없이도 운영이 해결할 수 있는 범위가 넓어집니다.
+          </p>
+        </section>
+
+        <!-- 6) Result -->
+        <section class="panel-card" id="result">
+          <span class="panel-category">Result</span>
+          <h2>기준이 고정되면, 팀이 같은 방향으로 빨라집니다</h2>
+
+          <p>
+            Business Logic의 결과물은 문서 자체가 아니라
+            <b>같은 기준으로 의사결정이 가능한 상태</b>입니다.
+            무엇을 만들지, 어디까지인지, 언제 끝나는지,
+            어떤 예외가 있는지 팀이 동일한 언어로 합의할 수 있어야
+            개발이 빨라지고 수정이 줄어듭니다.
+          </p>
+
+          <div class="actions">
+            <a class="btn btn--ghost" href="../service.html">서비스 전체 보기</a>
+            <a class="btn btn--primary" href="../contact.html">우리 서비스 로직·범위 진단받기</a>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="inner">
+      <div class="footer-grid">
+        <span>© 2024 GROWTHLINE. All rights reserved.</span>
+        <div class="footer-links">
+          <a href="../service.html">Service</a>
+          <a href="../work.html">Work</a>
+          <a href="../contact.html">Contact</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
+
