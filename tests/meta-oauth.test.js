@@ -8,6 +8,7 @@ const envKeys = [
   "META_APP_ID",
   "META_APP_SECRET",
   "META_REDIRECT_URI",
+  "META_LOGIN_CONFIG_ID",
   "META_OAUTH_SCOPES",
   "BRAND_PILOT_DEV_REDIRECT_URL",
   "BRAND_PILOT_ALLOW_DEV_TOKEN_REDIRECT",
@@ -66,6 +67,7 @@ afterEach(() => {
 test("start redirects to Meta dialog with the configured HTTPS callback", async () => {
   process.env.META_APP_ID = "123456789";
   process.env.META_REDIRECT_URI = "https://www.danbammsg.co.kr/api/auth/meta/callback";
+  process.env.META_LOGIN_CONFIG_ID = "987654321";
   process.env.META_OAUTH_SCOPES = "pages_show_list,instagram_basic";
 
   const res = createResponse();
@@ -77,6 +79,7 @@ test("start redirects to Meta dialog with the configured HTTPS callback", async 
   assert.equal(location.pathname, "/v20.0/dialog/oauth");
   assert.equal(location.searchParams.get("client_id"), "123456789");
   assert.equal(location.searchParams.get("redirect_uri"), "https://www.danbammsg.co.kr/api/auth/meta/callback");
+  assert.equal(location.searchParams.get("config_id"), "987654321");
   assert.equal(location.searchParams.get("scope"), "pages_show_list,instagram_basic");
   assert.ok(location.searchParams.get("state"));
 });
