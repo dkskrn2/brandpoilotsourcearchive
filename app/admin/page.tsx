@@ -1,0 +1,100 @@
+import type { Metadata } from "next";
+import Link from "next/link";
+import { ArrowSquareOut, Article, FileText, MagnifyingGlass, NotePencil, Plus } from "@phosphor-icons/react/dist/ssr";
+import { toggleArticleStatusAction } from "@/app/admin/actions";
+import { AdminSidebar } from "@/components/admin-sidebar";
+import { formatPublishedDate, getContentStats, listArticles } from "@/lib/content-db";
+
+export const metadata: Metadata = {
+  title: "콘텐츠 관리자",
+  description: "GROWTHLINE 로컬 콘텐츠 관리자입니다.",
+  robots: { index: false, follow: false }
+};
+
+export const dynamic = "force-dynamic";
+
+export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
+  const { q, status, notice, error } = await searchParams;
+  const query = typeof q === "string" ? q : "";
+  const selectedStatus = status === "draft" || status === "published" ? status : undefined;
+  const articles = listArticles({ query, status: selectedStatus });
+  const stats = getContentStats();
+
+  return (
+    <main className="admin-page">
+      <AdminSidebar />
+      <section className="admin-workspace">
+        <header className="admin-topbar">
+          <div><strong>관리자</strong><span>로컬 콘텐츠 운영</span></div>
+          <Link href="/content" target="_blank">콘텐츠 페이지 보기 <ArrowSquareOut aria-hidden size={17} /></Link>
+        </header>
+
+        <div className="admin-canvas">
+          <div className="admin-heading">
+            <div><p>대시보드</p><h1>콘텐츠 운영 현황</h1><span>등록된 글과 발행 상태를 한곳에서 관리합니다.</span></div>
+            <Link className="admin-create-button" href="/admin/content/new"><Plus aria-hidden size={18} weight="bold" /> 새 글 작성</Link>
+          </div>
+
+          {notice && <p className="admin-form-message" role="status">{notice}</p>}
+          {error && <p className="admin-form-message is-error" role="alert">요청을 처리하지 못했습니다.</p>}
+
+          <section className="admin-stats" aria-label="콘텐츠 요약">
+            <article><span>전체 콘텐츠</span><strong>{stats.total}</strong><small>로컬 DB에 저장된 글</small></article>
+            <article><span>게시 상태</span><strong>{stats.published}</strong><small>공개 목록에 노출 중</small></article>
+            <article><span>임시 저장</span><strong>{stats.draft}</strong><small>작성 또는 검토 중</small></article>
+            <article><span>카테고리</span><strong>{stats.categories}</strong><small>사용 중인 분류</small></article>
+          </section>
+
+          <section className="admin-content-panel" id="content">
+            <div className="admin-panel-head">
+              <div><h2>콘텐츠 목록</h2><p>검색, 편집, 게시 전환과 삭제를 관리합니다.</p></div>
+              <form className="admin-search" action="/admin">
+                <label><MagnifyingGlass aria-hidden size={18} /><input type="search" name="q" aria-label="콘텐츠 검색" placeholder="제목 검색" defaultValue={query} /></label>
+                <select name="status" aria-label="게시 상태" defaultValue={selectedStatus ?? ""}><option value="">전체 상태</option><option value="published">게시 중</option><option value="draft">임시 저장</option></select>
+                <button type="submit">검색</button>
+              </form>
+            </div>
+
+            {articles.length ? (
+              <div className="admin-table-wrap">
+                <table>
+                  <thead><tr><th>제목</th><th>카테고리</th><th>상태</th><th>게시일</th><th><span className="sr-only">관리</span></th></tr></thead>
+                  <tbody>
+                    {articles.map((article) => {
+                      const nextStatus = article.status === "published" ? "draft" : "published";
+                      const statusAction = toggleArticleStatusAction.bind(null, article.id);
+                      return (
+                        <tr key={article.id}>
+                          <td>
+                            <div className="admin-title-cell"><span><FileText aria-hidden size={19} /></span><div><strong>{article.title}</strong><small>/content/{article.slug}</small></div></div>
+                            <div className="admin-mobile-row-actions">
+                              <span>{article.category}</span>
+                              <span>{formatPublishedDate(article.publishedAt)}</span>
+                              <form action={statusAction}><input type="hidden" name="status" value={nextStatus} /><button className={`admin-status admin-status--${article.status}`} type="submit">{article.status === "published" ? "게시 중" : "임시 저장"}</button></form>
+                              <Link className="admin-mobile-edit-link" href={`/admin/content/${article.id}`}><NotePencil aria-hidden size={17} /> 편집</Link>
+                            </div>
+                          </td>
+                          <td>{article.category}</td>
+                          <td><form action={statusAction}><input type="hidden" name="status" value={nextStatus} /><button className={`admin-status admin-status--${article.status}`} type="submit" title={article.status === "published" ? "임시 저장으로 전환" : "게시로 전환"}>{article.status === "published" ? "게시 중" : "임시 저장"}</button></form></td>
+                          <td>{formatPublishedDate(article.publishedAt)}</td>
+                          <td><Link className="admin-edit-link" href={`/admin/content/${article.id}`} aria-label={`${article.title} 편집`}><NotePencil aria-hidden size={19} /></Link></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="admin-list-empty"><Article aria-hidden size={30} /><strong>조건에 맞는 콘텐츠가 없습니다.</strong><p>검색어를 바꾸거나 새 콘텐츠를 작성해보세요.</p></div>
+            )}
+          </section>
+
+          <section className="admin-empty-preview">
+            <Article aria-hidden size={28} />
+            <div><strong>로컬 DB 연결됨</strong><p>콘텐츠 변경 사항은 이 컴퓨터의 SQLite 파일에 저장되고 공개 콘텐츠 페이지에 반영됩니다.</p></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  );
+}
