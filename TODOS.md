@@ -18,7 +18,7 @@ Add authentication and authorization for `/admin` and all content mutation actio
 
 **Priority:** P1
 
-Move the remaining Meta OAuth handlers into Next.js Route Handlers and remove the duplicate legacy contact API.
+Move the remaining Meta OAuth handlers from `api/auth/meta` into Next.js Route Handlers, then remove the legacy serverless API directory.
 
 ## Migration
 
