@@ -14,23 +14,23 @@
     gtag('config', 'G-WDKDVHFMHQ');
   </script>
 
-  <title>전환 설계·웹서비스 제작·홈페이지 구축 서비스 | GROWTHLINE</title>
-  <meta name="description" content="GROWTHLINE은 고객 분석, 퍼널 데이터 분석, 전환 중심 설계, 비즈니스 로직 설계, 설득 카피라이팅, 스타트업 구축까지. ‘만드는 것’이 아니라 ‘운영되는 구조’로 온라인 전환을 돕습니다." />
+  <title>전환 설계·웹서비스 제작·콘텐츠 운영 서비스 | GROWTHLINE</title>
+  <meta name="description" content="GROWTHLINE은 고객 분석, 전환 설계, 웹서비스 구축과 Brand Pilot 기반의 콘텐츠 운영까지. 브랜드 맥락을 지키며 발행이 이어지는 구조를 만듭니다." />
   <meta name="robots" content="index,follow" />
   <link rel="canonical" href="service.html" />
 
   <meta property="og:type" content="website" />
   <meta property="og:locale" content="ko_KR" />
   <meta property="og:site_name" content="GROWTHLINE" />
-  <meta property="og:title" content="전환 설계·웹서비스 제작·홈페이지 구축 서비스 | GROWTHLINE" />
-  <meta property="og:description" content="고객 분석 → 퍼널 분석 → 전환 중심 설계 → 로직/카피까지. 온라인에서 승리할 수밖에 없는 구조를 만듭니다." />
+  <meta property="og:title" content="전환 설계·웹서비스 제작·콘텐츠 운영 서비스 | GROWTHLINE" />
+  <meta property="og:description" content="고객 분석부터 Brand Pilot 콘텐츠 운영까지. 브랜드 맥락을 지키며 발행이 이어지는 구조를 만듭니다." />
   <meta property="og:url" content="service.html" />
   <meta property="og:image" content="assets/og/service.png" />
   <meta property="og:image:alt" content="GROWTHLINE Service 페이지 미리보기" />
 
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="전환 설계·웹서비스 제작·홈페이지 구축 서비스 | GROWTHLINE" />
-  <meta name="twitter:description" content="고객 분석부터 설계·구현·운영 구조까지. 전환을 만드는 서비스." />
+  <meta name="twitter:title" content="전환 설계·웹서비스 제작·콘텐츠 운영 서비스 | GROWTHLINE" />
+  <meta name="twitter:description" content="고객 분석부터 설계·구현·Brand Pilot 콘텐츠 운영까지. 전환을 만드는 서비스." />
   <meta name="twitter:image" content="assets/og/service.png" />
 
   <script type="application/ld+json">
@@ -49,7 +49,8 @@
       "전환 중심 설계",
       "비즈니스 로직 설계",
       "설득 카피라이팅",
-      "스타트업 구축"
+      "스타트업 구축",
+      "Brand Pilot 콘텐츠 운영"
     ],
     "url": "service.html"
   }
@@ -390,6 +391,41 @@
       transform: translateX(4px);
     }
 
+    .service-section--featured{
+      grid-column: 1 / -1;
+    }
+    .brand-pilot-card{
+      border-color: rgba(37,99,235,.22);
+      box-shadow: var(--shadowBlue), inset 0 0 0 1px rgba(37,99,235,.14);
+    }
+    .brand-pilot-flow{
+      display:grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap:10px;
+      margin: 26px 0;
+    }
+    .flow-step{
+      min-height: 94px;
+      display:flex;
+      align-items:flex-start;
+      flex-direction:column;
+      gap:6px;
+      padding:14px;
+      border:1px solid rgba(37,99,235,.16);
+      border-radius:12px;
+      background:rgba(37,99,235,.05);
+    }
+    .flow-step span{
+      color:var(--accent);
+      font-size:11px;
+      font-weight:900;
+      letter-spacing:.12em;
+    }
+    .flow-step strong{
+      font-size:14px;
+      line-height:1.35;
+    }
+
     .final-cta{
       margin-top: 40px;
       text-align: center;
@@ -426,6 +462,7 @@
 
     @media (max-width: 768px){
       .panel-card{ box-shadow: var(--shadowSm), inset 0 0 0 1px var(--line); }
+      .brand-pilot-flow{ grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
 
     /* ✅ (1) 데스크톱 2컬럼 그리드 */
@@ -479,7 +516,7 @@
     <div class="inner">
       <p class="sub-title">Our Specialized Services</p>
       <h1 class="main-title">우리는 단순 제작자가 아닌,<br><span>비즈니스 설계 파트너</span>입니다.</h1>
-      <p class="desc">각 분야의 전문 지식을 동원하여, 대표님의 사업이 온라인에서 승리할 수밖에 없는 구조를 만듭니다.</p>
+      <p class="desc">고객 분석과 전환 설계부터 Brand Pilot 기반 콘텐츠 운영까지, 대표님의 사업이 온라인에서 지속적으로 발견되고 선택되는 구조를 만듭니다.</p>
     </div>
   </section>
 
@@ -491,6 +528,7 @@
     <a href="#consulting">비즈니스 로직 설계</a>
     <a href="#writing">설득 카피라이팅</a>
     <a href="#startup">스타트업 구축</a>
+    <a href="#brand-pilot">Brand Pilot 콘텐츠 운영</a>
   </nav>
 
   <main class="service-sections">
@@ -606,6 +644,32 @@
             <li>MVP 범위 정의 및 일정/리스크 관리</li>
             <li>웹서비스/관리자/결제·알림 등 핵심 모듈 구축</li>
             <li>런칭 이후 개선 사이클(지표 → 가설 → 실험) 설계</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="brand-pilot" class="service-section service-section--featured" aria-label="Brand Pilot 콘텐츠 운영">
+        <div class="panel-card brand-pilot-card">
+          <div class="panel-head">
+            <div class="category-group">
+              <span class="index-num">07</span>
+              <span class="panel-category">Brand Pilot</span>
+            </div>
+            <a class="btn btn--ghost" href="contact.html">Brand Pilot 상담하기</a>
+          </div>
+          <h3>좋은 콘텐츠는 한 번 만드는 것이 아니라,<br>브랜드의 맥락을 지키며 계속 발행될 때 쌓입니다.</h3>
+          <p>Brand Pilot은 등록한 소스와 브랜드 정보를 바탕으로 인사이트 콘텐츠 초안을 만들고, Instagram 카드뉴스 이미지 생성과 게시 흐름까지 연결하는 콘텐츠 운영 도구입니다. 매번 빈 화면에서 시작하지 않도록, 브랜드가 말해야 할 이유와 발행 과정을 함께 관리합니다.</p>
+          <div class="brand-pilot-flow" aria-label="Brand Pilot 운영 흐름">
+            <div class="flow-step"><span>01 SOURCE</span><strong>소스와 주제 등록</strong></div>
+            <div class="flow-step"><span>02 DRAFT</span><strong>브랜드 맥락 초안 생성</strong></div>
+            <div class="flow-step"><span>03 VISUAL</span><strong>카드뉴스 이미지 제작</strong></div>
+            <div class="flow-step"><span>04 PUBLISH</span><strong>Instagram 게시 관리</strong></div>
+          </div>
+          <ul class="check-list">
+            <li>자사·참고 소스 URL과 주제표를 기반으로 발행 후보를 관리합니다.</li>
+            <li>브랜드명, 업종, 고객, 서비스 설명, 톤을 기준으로 재사용 가능한 콘텐츠 초안을 만듭니다.</li>
+            <li>콘텐츠 흐름에 맞춰 최대 5장의 Instagram 카드뉴스 이미지를 생성합니다.</li>
+            <li>검토 승인 또는 자동 승인 정책에 따라 Instagram 게시 과정을 관리합니다.</li>
           </ul>
         </div>
       </section>
