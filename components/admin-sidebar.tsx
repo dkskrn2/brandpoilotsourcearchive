@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Article, ChartBar, Gear, House, SignOut, SquaresFour } from "@phosphor-icons/react/dist/ssr";
+import { Article, ChartBar, ChatCircleDots, Gear, House, SignOut, SquaresFour } from "@phosphor-icons/react/dist/ssr";
 import { logoutAdminAction } from "@/app/admin/auth-actions";
 
 export function AdminSidebar({ active = "dashboard" }: { active?: "dashboard" | "content" }) {
@@ -17,6 +17,7 @@ export function AdminSidebar({ active = "dashboard" }: { active?: "dashboard" | 
         <Link className={active === "content" ? "is-active" : ""} href="/admin#content" aria-current={active === "content" ? "page" : undefined}>
           <Article aria-hidden size={20} weight={active === "content" ? "fill" : "regular"} /><span>콘텐츠</span>
         </Link>
+        <Link href="/admin#inquiries"><ChatCircleDots aria-hidden size={20} /><span>상담 문의</span></Link>
         <button type="button" disabled><ChartBar aria-hidden size={20} /><span>분석</span><small>준비 중</small></button>
         <button type="button" disabled><Gear aria-hidden size={20} /><span>설정</span><small>준비 중</small></button>
       </nav>

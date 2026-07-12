@@ -2,12 +2,6 @@
 
 ## Deployment verification
 
-### Configure Vercel environment variables
-
-**Priority:** P0 · operator action
-
-Connect a Vercel Marketplace PostgreSQL provider and set `DATABASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_SESSION_SECRET`, and `GAS_WEBAPP_URL` before the production deployment.
-
 ### Rotate the initial administrator password
 
 **Priority:** P0 · operator action
@@ -25,6 +19,6 @@ Submit one real contact request, create and publish one administrator article, r
 - Replaced local SQLite with provider-neutral PostgreSQL using `DATABASE_URL` or `POSTGRES_URL`.
 - Added administrator login, signed session cookies, proxy protection, and authorization checks in every mutation.
 - Converted legal and service detail content to native React data and removed legacy runtime HTML files.
-- Added server-side contact validation and a bot honeypot.
+- Added server-side contact validation, a bot honeypot, and PostgreSQL inquiry storage.
 - Added optional GA4 loading through an environment variable.
 - Removed unused legacy Meta OAuth serverless endpoints from the deployment surface.

@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.3.1] - 2026-07-12
+
+### Added
+
+- Added PostgreSQL-backed consultation inquiry storage and an administrator inquiry list.
+
+### Changed
+
+- Removed the Google Apps Script contact submission dependency in favor of direct database storage.
+
 ## [0.3.0] - 2026-07-12
 
 ### Added

@@ -50,6 +50,19 @@ test("contact migration preserves the six original field names", () => {
   }
 });
 
+test("contact inquiries are stored in PostgreSQL without a Google Apps Script dependency", () => {
+  const route = read("app/api/contact/route.ts");
+  const database = read("lib/content-db.ts");
+  const admin = read("app/admin/page.tsx");
+
+  assert.match(route, /createContactInquiry/);
+  assert.match(route, /Missing DATABASE_URL/);
+  assert.doesNotMatch(route, /GAS_WEBAPP_URL|google\.com\/macros/);
+  assert.match(database, /CREATE TABLE IF NOT EXISTS contact_inquiries/);
+  assert.match(database, /listContactInquiries/);
+  assert.match(admin, /상담 문의/);
+});
+
 test("work migration keeps all 22 project rows", () => {
   const rows = read("data/seed/projects.csv").trim().split(/\r?\n/);
   assert.equal(rows.length - 1, 22);

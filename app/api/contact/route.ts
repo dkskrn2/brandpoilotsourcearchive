@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createContactInquiry, isDatabaseConfigured } from "@/lib/content-db";
 
 const allowedPlans = new Set(["seed", "series-a", "series-b"]);
 
@@ -16,38 +17,42 @@ function validHttpUrl(value: string) {
 }
 
 export async function POST(request: Request) {
-  const gasUrl = process.env.GAS_WEBAPP_URL;
-  if (!gasUrl) return NextResponse.json({ ok: false, error: "Missing GAS_WEBAPP_URL" }, { status: 503 });
+  if (!isDatabaseConfigured()) return NextResponse.json({ ok: false, error: "Missing DATABASE_URL" }, { status: 503 });
   if (Number(request.headers.get("content-length") ?? 0) > 32_000) {
     return NextResponse.json({ ok: false, error: "Payload too large" }, { status: 413 });
   }
 
+  let payload: Record<string, unknown>;
   try {
-    const payload = await request.json() as Record<string, unknown>;
-    if (text(payload.websiteTrap, 200)) return NextResponse.json({ ok: true });
-    const data = {
-      name: text(payload.name, 100),
-      phone: text(payload.phone, 30).replace(/\D/g, ""),
-      site: text(payload.site, 500),
-      message: text(payload.message, 3000),
-      plan: text(payload.plan, 30),
-      agree: text(payload.agree, 1)
-    };
-    if (!data.name || !/^\d{7,20}$/.test(data.phone) || !allowedPlans.has(data.plan) || data.agree !== "Y" || !validHttpUrl(data.site)) {
-      return NextResponse.json({ ok: false, error: "Invalid form data" }, { status: 400 });
-    }
-    const params = new URLSearchParams();
-    Object.entries(data).forEach(([key, value]) => params.append(key, value));
-    const response = await fetch(gasUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
-      body: params.toString(),
-      cache: "no-store"
-    });
-
-    if (!response.ok) return NextResponse.json({ ok: false, error: "Upstream submission failed" }, { status: 502 });
-    return NextResponse.json({ ok: true });
+    payload = await request.json() as Record<string, unknown>;
   } catch {
     return NextResponse.json({ ok: false, error: "Invalid request" }, { status: 400 });
   }
+
+  if (text(payload.websiteTrap, 200)) return NextResponse.json({ ok: true });
+  const data = {
+    name: text(payload.name, 100),
+    phone: text(payload.phone, 30).replace(/\D/g, ""),
+    site: text(payload.site, 500),
+    message: text(payload.message, 3000),
+    plan: text(payload.plan, 30),
+    agree: text(payload.agree, 1)
+  };
+  if (!data.name || !/^\d{7,20}$/.test(data.phone) || !allowedPlans.has(data.plan) || data.agree !== "Y" || !validHttpUrl(data.site)) {
+    return NextResponse.json({ ok: false, error: "Invalid form data" }, { status: 400 });
+  }
+
+  try {
+    await createContactInquiry({
+      name: data.name,
+      phone: data.phone,
+      site: data.site,
+      message: data.message,
+      plan: data.plan as "seed" | "series-a" | "series-b",
+      agreed: true
+    });
+  } catch {
+    return NextResponse.json({ ok: false, error: "Database submission failed" }, { status: 500 });
+  }
+  return NextResponse.json({ ok: true });
 }

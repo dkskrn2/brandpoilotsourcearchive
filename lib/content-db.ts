@@ -32,6 +32,19 @@ export type ArticleInput = {
   status: ArticleStatus;
 };
 
+export type ContactInquiry = {
+  id: number;
+  name: string;
+  phone: string;
+  site: string;
+  message: string;
+  plan: "seed" | "series-a" | "series-b";
+  agreed: boolean;
+  createdAt: string;
+};
+
+export type ContactInquiryInput = Omit<ContactInquiry, "id" | "createdAt">;
+
 type ArticleRow = {
   id: number;
   slug: string;
@@ -55,6 +68,17 @@ type StatsRow = {
   published: string | number | null;
   draft: string | number | null;
   categories: string | number;
+};
+
+type ContactInquiryRow = {
+  id: number;
+  name: string;
+  phone: string;
+  site: string;
+  message: string;
+  plan: ContactInquiry["plan"];
+  agreed: boolean;
+  created_at: string | Date;
 };
 
 const globalForDb = globalThis as typeof globalThis & {
@@ -139,6 +163,19 @@ async function ensureSchema() {
       )
     `;
     await sql`CREATE INDEX IF NOT EXISTS idx_content_articles_status_date ON content_articles(status, published_at DESC)`;
+    await sql`
+      CREATE TABLE IF NOT EXISTS contact_inquiries (
+        id BIGSERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        site TEXT NOT NULL DEFAULT '',
+        message TEXT NOT NULL DEFAULT '',
+        plan TEXT NOT NULL CHECK (plan IN ('seed', 'series-a', 'series-b')),
+        agreed BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_contact_inquiries_created_at ON contact_inquiries(created_at DESC)`;
 
     for (const article of contentArticles) {
       const now = new Date();
@@ -315,6 +352,39 @@ export async function getContentStats() {
     draft: Number(row.draft ?? 0),
     categories: Number(row.categories)
   };
+}
+
+export async function createContactInquiry(input: ContactInquiryInput) {
+  await ensureSchema();
+  const sql = getSql();
+  const rows = await sql<{ id: number }[]>`
+    INSERT INTO contact_inquiries (name, phone, site, message, plan, agreed)
+    VALUES (${input.name}, ${input.phone}, ${input.site}, ${input.message}, ${input.plan}, ${input.agreed})
+    RETURNING id
+  `;
+  return Number(rows[0].id);
+}
+
+export async function listContactInquiries(limit = 50): Promise<ContactInquiry[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureSchema();
+  const sql = getSql();
+  const rows = await sql<ContactInquiryRow[]>`
+    SELECT id, name, phone, site, message, plan, agreed, created_at
+    FROM contact_inquiries
+    ORDER BY created_at DESC
+    LIMIT ${Math.min(Math.max(limit, 1), 100)}
+  `;
+  return rows.map((row) => ({
+    id: Number(row.id),
+    name: row.name,
+    phone: row.phone,
+    site: row.site,
+    message: row.message,
+    plan: row.plan,
+    agreed: row.agreed,
+    createdAt: toIso(row.created_at)
+  }));
 }
 
 export function formatPublishedDate(value: string) {

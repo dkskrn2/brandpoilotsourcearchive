@@ -3079,6 +3079,10 @@ body:has(> .admin-page) {
 .admin-content-panel table { width: 100%; border-collapse: collapse; white-space: nowrap; }
 .admin-content-panel th { padding: 14px 18px; background: #f8f9fb; color: #778194; font-size: .67rem; font-weight: 800; text-align: left; }
 .admin-content-panel td { padding: 17px 18px; border-top: 1px solid #edf0f4; color: #526075; font-size: .76rem; }
+.admin-panel-count { color: #697489; font-size: .74rem; }
+.admin-inquiry-table td small { display: block; margin-top: 4px; color: #8b95a5; font-size: .68rem; }
+.admin-inquiry-table td a { color: #2457d6; font-weight: 800; }
+.admin-inquiry-message { min-width: 260px; max-width: 420px; white-space: normal; line-height: 1.55; }
 .admin-content-panel tbody tr:first-child td { border-top: 0; }
 .admin-title-cell { min-width: 390px; display: flex; align-items: center; gap: 12px; white-space: normal; }
 .admin-title-cell > span { flex: 0 0 auto; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 9px; background: #edf2ff; color: #2457d6; }

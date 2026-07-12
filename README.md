@@ -1,6 +1,6 @@
 # GROWTHLINE React
 
-Next.js 기반 GROWTHLINE 사이트와 PostgreSQL 콘텐츠 관리자입니다. 공개 사이트는 Vercel에서 실행되고, `/admin`의 콘텐츠는 Vercel Marketplace에서 연결한 PostgreSQL에 저장됩니다.
+Next.js 기반 GROWTHLINE 사이트와 PostgreSQL 관리자입니다. 공개 사이트는 Vercel에서 실행되고, `/admin` 콘텐츠와 상담 문의는 Vercel Marketplace에서 연결한 PostgreSQL에 저장됩니다.
 
 ## 배포 전 준비
 
@@ -15,7 +15,6 @@ Next.js 기반 GROWTHLINE 사이트와 PostgreSQL 콘텐츠 관리자입니다. 
 | `ADMIN_USERNAME` | 필수 | 관리자 아이디. 요청된 값은 `ROOT` |
 | `ADMIN_PASSWORD` | 필수 | 관리자 비밀번호. 요청된 값은 `ROOT` |
 | `ADMIN_SESSION_SECRET` | 필수 | 세션 서명용 32자 이상 임의 문자열 |
-| `GAS_WEBAPP_URL` | 필수 | 상담 폼 Google Apps Script URL |
 | `NEXT_PUBLIC_GA_MEASUREMENT_ID` | 선택 | GA4 측정 ID (`G-...`) |
 
 `ADMIN_SESSION_SECRET` 예시 생성 명령:
@@ -24,7 +23,7 @@ Next.js 기반 GROWTHLINE 사이트와 PostgreSQL 콘텐츠 관리자입니다. 
 openssl rand -base64 48
 ```
 
-환경변수를 추가한 뒤 새 배포를 실행합니다. 첫 PostgreSQL 요청에서 `content_articles` 테이블과 인덱스가 자동 생성되고, 초기 예시 콘텐츠가 중복 없이 추가됩니다.
+환경변수를 추가한 뒤 새 배포를 실행합니다. 첫 PostgreSQL 요청에서 `content_articles`, `contact_inquiries` 테이블과 인덱스가 자동 생성되고, 초기 예시 콘텐츠가 중복 없이 추가됩니다. 상담 폼은 `contact_inquiries`에 바로 저장되며 관리자 대시보드에서 확인할 수 있습니다.
 
 > `ROOT/ROOT`는 요청에 맞춰 예시에 넣었지만 공개된 관리자 화면에는 매우 약한 조합입니다. 정상 동작 확인 직후 `ADMIN_PASSWORD`를 긴 임의 비밀번호로 교체하는 것을 권장합니다.
 
