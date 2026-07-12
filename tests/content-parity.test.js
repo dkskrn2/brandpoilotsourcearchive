@@ -105,6 +105,8 @@ test("admin content manager uses PostgreSQL and protects every mutation", () => 
 
 test("admin article form uses the local Naver SmartEditor adapter safely", () => {
   const form = read("components/admin-article-form.tsx");
+  const imageUpload = read("components/admin-image-upload.tsx");
+  const uploadRoute = read("app/api/admin/images/route.ts");
   const submitButton = read("components/admin-pending-submit-button.tsx");
   const editor = read("components/naver-smart-editor.tsx");
   const actions = read("app/admin/actions.ts");
@@ -112,8 +114,15 @@ test("admin article form uses the local Naver SmartEditor adapter safely", () =>
 
   assert.match(form, /NaverSmartEditor/);
   assert.match(form, /AdminPendingSubmitButton/);
+  assert.match(form, /AdminImageUpload/);
+  assert.doesNotMatch(form, /name="image" required/);
+  assert.match(imageUpload, /type="file"/);
+  assert.match(imageUpload, /api\/admin\/images/);
+  assert.match(uploadRoute, /getAdminSession/);
+  assert.match(uploadRoute, /MAX_IMAGE_BYTES/);
+  assert.match(uploadRoute, /access: "private"/);
   assert.match(submitButton, /useFormStatus/);
-  assert.match(submitButton, /disabled=\{pending\}/);
+  assert.match(submitButton, /disabled=\{disabled\}/);
   assert.match(editor, /HuskyEZCreator\.js/);
   assert.match(editor, /UPDATE_CONTENTS_FIELD/);
   assert.match(editor, /SmartEditor2Skin\.html/);
@@ -130,7 +139,22 @@ test("article saves return to the content list after a single pending submission
   assert.ok(actions.includes('"콘텐츠를 저장했습니다.")}#content'));
   assert.ok(actions.includes('"수정 사항을 저장했습니다.")}#content'));
   assert.match(submitButton, /저장 중…/);
-  assert.match(submitButton, /aria-busy=\{pending\}/);
+  assert.match(submitButton, /aria-busy=\{disabled\}/);
+  assert.match(submitButton, /isUploading/);
+});
+
+test("article images are optional and only accepted from local assets or Vercel Blob", () => {
+  const actions = read("app/admin/actions.ts");
+  const contentIndex = read("app/content/page.tsx");
+  const contentDetail = read("app/content/[slug]/page.tsx");
+  const imageRoute = read("app/api/content-images/[...pathname]/route.ts");
+
+  assert.match(actions, /key !== "image" && key !== "imageAlt"/);
+  assert.match(actions, /content-images/);
+  assert.match(contentIndex, /OptionalImage/);
+  assert.match(contentDetail, /article\.image \? \{ images/);
+  assert.match(imageRoute, /get\(pathname\.join/);
+  assert.match(imageRoute, /access: "private"/);
 });
 
 test("public header keeps customer login disabled and separate from administrator login", () => {

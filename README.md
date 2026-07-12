@@ -15,6 +15,8 @@ Next.js 기반 GROWTHLINE 사이트와 PostgreSQL 관리자입니다. 공개 사
 | `ADMIN_USERNAME` | 필수 | 관리자 아이디. 요청된 값은 `ROOT` |
 | `ADMIN_PASSWORD` | 필수 | 관리자 비밀번호. 요청된 값은 `ROOT` |
 | `ADMIN_SESSION_SECRET` | 필수 | 세션 서명용 32자 이상 임의 문자열 |
+| `BLOB_STORE_ID` + `VERCEL_OIDC_TOKEN` | 이미지 업로드 | Vercel Blob 연결 시 자동 주입 |
+| `BLOB_READ_WRITE_TOKEN` | 로컬 선택 | 로컬 개발에서 Blob 업로드를 테스트할 때만 사용 |
 | `NEXT_PUBLIC_GA_MEASUREMENT_ID` | 선택 | GA4 측정 ID (`G-...`) |
 
 `ADMIN_SESSION_SECRET` 예시 생성 명령:

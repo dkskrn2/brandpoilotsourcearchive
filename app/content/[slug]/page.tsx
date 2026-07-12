@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import Link from "next/link";
 import { ArrowLeft, ArrowUpRight } from "@phosphor-icons/react/dist/ssr";
 import { formatPublishedDate, getArticleBySlug, listPublishedArticles } from "@/lib/content-db";
 import { serializeJsonLd, SITE_NAME, SITE_URL } from "@/lib/seo";
 import { notFound } from "next/navigation";
+import { OptionalImage } from "@/components/optional-image";
 
 export const dynamic = "force-dynamic";
 
@@ -23,12 +23,14 @@ export async function generateMetadata({ params }: PageProps<"/content/[slug]">)
       url: `/content/${article.slug}`,
       siteName: SITE_NAME,
       locale: "ko_KR",
-      images: [{ url: article.image, alt: article.imageAlt }],
+      ...(article.image ? { images: [{ url: article.image, alt: article.imageAlt }] } : {}),
       type: "article",
       publishedTime: article.publishedAt,
       modifiedTime: article.updatedAt
     },
-    twitter: { card: "summary_large_image", title: article.title, description: article.summary, images: [article.image] }
+    twitter: article.image
+      ? { card: "summary_large_image", title: article.title, description: article.summary, images: [article.image] }
+      : { card: "summary", title: article.title, description: article.summary }
   };
 }
 
@@ -42,7 +44,7 @@ export default async function ContentArticlePage({ params }: PageProps<"/content
     "@type": "Article",
     headline: article.title,
     description: article.summary,
-    image: new URL(article.image, SITE_URL).toString(),
+    ...(article.image ? { image: new URL(article.image, SITE_URL).toString() } : {}),
     datePublished: article.publishedAt,
     dateModified: article.updatedAt,
     inLanguage: "ko-KR",
@@ -62,9 +64,9 @@ export default async function ContentArticlePage({ params }: PageProps<"/content
           <p>{article.summary}</p>
         </header>
 
-        <figure className="article-hero-image content-shell">
-          <Image src={article.image} alt={article.imageAlt} width={1600} height={1024} priority sizes="(max-width: 700px) calc(100vw - 32px), 1240px" />
-        </figure>
+        {article.image && <figure className="article-hero-image content-shell">
+          <OptionalImage src={article.image} alt={article.imageAlt} width={1600} height={1024} priority sizes="(max-width: 700px) calc(100vw - 32px), 1240px" />
+        </figure>}
 
         <div className="article-body content-shell">
           <aside aria-label="글 정보"><strong>GROWTHLINE</strong><span>{article.category}</span><span>{formatPublishedDate(article.publishedAt)}</span></aside>

@@ -33,15 +33,21 @@ function parseArticleInput(formData: FormData): ArticleInput {
     status: value(formData, "status") as ArticleStatus
   };
 
-  const required = Object.entries(input).filter(([, fieldValue]) => !fieldValue).map(([key]) => key);
+  const required = Object.entries(input).filter(([key, fieldValue]) => !fieldValue && key !== "image" && key !== "imageAlt").map(([key]) => key);
   if (required.length) throw new Error(`필수 항목을 입력해주세요: ${required.join(", ")}`);
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.slug)) throw new Error("슬러그는 영문 소문자, 숫자, 하이픈만 사용할 수 있습니다.");
-  if (!/^\/images\/[a-zA-Z0-9._/-]+$/.test(input.image) || input.image.includes("..")) {
-    throw new Error("대표 이미지는 /images/ 아래의 로컬 경로를 입력해주세요.");
+  if (input.image && !isAllowedImageSource(input.image)) {
+    throw new Error("대표 이미지는 관리자에서 업로드한 파일만 사용할 수 있습니다.");
   }
   if (!['draft', 'published'].includes(input.status)) throw new Error("올바른 게시 상태를 선택해주세요.");
   if (!articleTextContent(input.body)) throw new Error("본문 내용을 입력해주세요.");
   return input;
+}
+
+function isAllowedImageSource(value: string) {
+  if (/^\/images\/[a-zA-Z0-9._/-]+$/.test(value) && !value.includes("..")) return true;
+  if (/^\/api\/content-images\/content\/[a-f0-9-]+\.(?:jpg|png|webp|gif|avif)$/.test(value)) return true;
+  return false;
 }
 
 function errorMessage(error: unknown, fallback: string) {

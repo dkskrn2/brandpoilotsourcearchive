@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@phosphor-icons/react": "latest",
+    "@vercel/blob": "^2.6.1",
     "jose": "^6.2.3",
     "motion": "latest",
     "next": "latest",
