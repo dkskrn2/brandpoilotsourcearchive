@@ -31,7 +31,8 @@ export function ContactForm({ initialPlan = "" }: { initialPlan?: string }) {
       site: String(formData.get("site_url") ?? "").trim(),
       plan: String(formData.get("plan") ?? "").trim(),
       message: String(formData.get("message") ?? "").trim(),
-      agree: formData.get("agree_privacy") ? "Y" : "N"
+      agree: formData.get("agree_privacy") ? "Y" : "N",
+      websiteTrap: String(formData.get("website") ?? "")
     };
 
     try {
@@ -67,6 +68,7 @@ export function ContactForm({ initialPlan = "" }: { initialPlan?: string }) {
 
       <section className="contact-form-section">
         <form onSubmit={handleSubmit}>
+          <label className="form-honeypot" aria-hidden="true">웹사이트<input name="website" tabIndex={-1} autoComplete="off" /></label>
           <p className="contact-form__lead">작성해주신 내용을 바탕으로 상담 전에 현재 흐름을 먼저 확인합니다.</p>
           <div className="form-field">
             <label htmlFor="contact_name_company">성함 / 업체명</label>

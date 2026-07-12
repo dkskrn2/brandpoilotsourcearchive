@@ -1,8 +1,6 @@
 import "server-only";
 
-import fs from "node:fs";
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import postgres from "postgres";
 import { contentArticles, type ContentArticle, type ContentSection } from "@/lib/content";
 import { editorTextToSections, sectionsToEditorText } from "@/lib/content-format.js";
 import { articleBodyToHtml, isHtmlBody } from "@/lib/content-html";
@@ -47,97 +45,126 @@ type ArticleRow = {
   introduction: string;
   body: string;
   status: ArticleStatus;
-  is_dummy: number;
-  created_at: string;
-  updated_at: string;
+  is_dummy: boolean;
+  created_at: string | Date;
+  updated_at: string | Date;
 };
 
-const globalForDb = globalThis as typeof globalThis & { growthlineContentDb?: DatabaseSync };
+type StatsRow = {
+  total: string | number;
+  published: string | number | null;
+  draft: string | number | null;
+  categories: string | number;
+};
+
+const globalForDb = globalThis as typeof globalThis & {
+  growthlinePostgres?: ReturnType<typeof postgres>;
+  growthlineSchemaPromise?: Promise<void>;
+};
+
+function connectionString() {
+  return process.env.DATABASE_URL?.trim() || process.env.POSTGRES_URL?.trim() || "";
+}
+
+export function isDatabaseConfigured() {
+  return Boolean(connectionString());
+}
+
+function getSql() {
+  const url = connectionString();
+  if (!url) {
+    throw new Error("DATABASE_URL이 설정되지 않았습니다.");
+  }
+  if (!globalForDb.growthlinePostgres) {
+    const isLocal = /(?:localhost|127\.0\.0\.1)/i.test(url);
+    globalForDb.growthlinePostgres = postgres(url, {
+      max: 3,
+      idle_timeout: 20,
+      connect_timeout: 15,
+      prepare: false,
+      ssl: isLocal ? false : "require"
+    });
+  }
+  return globalForDb.growthlinePostgres;
+}
 
 function normalizeSeedDate(value: string) {
   return value.replaceAll(".", "-");
 }
 
-function getDatabase() {
-  if (globalForDb.growthlineContentDb) return globalForDb.growthlineContentDb;
+function toIso(value: string | Date) {
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
 
-  const databasePath = process.env.CONTENT_DB_PATH ?? path.join(process.cwd(), ".runtime", "growthline.sqlite");
-  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  const database = new DatabaseSync(databasePath);
-  database.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS content_articles (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      slug TEXT NOT NULL UNIQUE,
-      category TEXT NOT NULL,
-      title TEXT NOT NULL,
-      summary TEXT NOT NULL,
-      published_at TEXT NOT NULL,
-      reading_time TEXT NOT NULL,
-      image TEXT NOT NULL,
-      image_alt TEXT NOT NULL,
-      introduction TEXT NOT NULL,
-      body TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
-      is_dummy INTEGER NOT NULL DEFAULT 0 CHECK (is_dummy IN (0, 1)),
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_content_articles_status_date ON content_articles(status, published_at DESC);
-  `);
+function seedArticles(): StoredArticle[] {
+  return contentArticles.map((article, index) => {
+    const publishedAt = normalizeSeedDate(article.publishedAt);
+    const body = sectionsToEditorText(article.sections);
+    const timestamp = `${publishedAt}T00:00:00.000Z`;
+    return {
+      ...article,
+      id: index + 1,
+      publishedAt,
+      body,
+      bodyHtml: articleBodyToHtml(body),
+      status: "published",
+      isDummy: true,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+  });
+}
 
-  const columns = database.prepare("PRAGMA table_info(content_articles)").all() as unknown as Array<{ name: string }>;
-  if (!columns.some((column) => column.name === "is_dummy")) {
-    try {
-      database.exec("ALTER TABLE content_articles ADD COLUMN is_dummy INTEGER NOT NULL DEFAULT 0 CHECK (is_dummy IN (0, 1))");
-    } catch (error) {
-      if (!(error instanceof Error) || !error.message.includes("duplicate column name")) throw error;
+async function ensureSchema() {
+  if (globalForDb.growthlineSchemaPromise) return globalForDb.growthlineSchemaPromise;
+  const sql = getSql();
+  globalForDb.growthlineSchemaPromise = (async () => {
+    await sql`
+      CREATE TABLE IF NOT EXISTS content_articles (
+        id BIGSERIAL PRIMARY KEY,
+        slug TEXT NOT NULL UNIQUE,
+        category TEXT NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        published_at DATE NOT NULL,
+        reading_time TEXT NOT NULL,
+        image TEXT NOT NULL,
+        image_alt TEXT NOT NULL,
+        introduction TEXT NOT NULL,
+        body TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
+        is_dummy BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_content_articles_status_date ON content_articles(status, published_at DESC)`;
+
+    for (const article of contentArticles) {
+      const now = new Date();
+      await sql`
+        INSERT INTO content_articles (
+          slug, category, title, summary, published_at, reading_time, image, image_alt,
+          introduction, body, status, is_dummy, created_at, updated_at
+        ) VALUES (
+          ${article.slug}, ${article.category}, ${article.title}, ${article.summary},
+          ${normalizeSeedDate(article.publishedAt)}, ${article.readingTime}, ${article.image},
+          ${article.imageAlt}, ${article.introduction}, ${sectionsToEditorText(article.sections)},
+          'published', TRUE, ${now}, ${now}
+        )
+        ON CONFLICT (slug) DO NOTHING
+      `;
     }
-    const markDummy = database.prepare("UPDATE content_articles SET is_dummy = 1 WHERE slug = ?");
-    for (const article of contentArticles) markDummy.run(article.slug);
-  }
-
-  const count = Number((database.prepare("SELECT COUNT(*) AS count FROM content_articles").get() as { count: number }).count);
-  if (count === 0) {
-    const insert = database.prepare(`
-      INSERT INTO content_articles (
-        slug, category, title, summary, published_at, reading_time, image, image_alt,
-        introduction, body, status, is_dummy, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', 1, ?, ?)
-    `);
-    const now = new Date().toISOString();
-    database.exec("BEGIN");
-    try {
-      for (const article of contentArticles) {
-        insert.run(
-          article.slug,
-          article.category,
-          article.title,
-          article.summary,
-          normalizeSeedDate(article.publishedAt),
-          article.readingTime,
-          article.image,
-          article.imageAlt,
-          article.introduction,
-          sectionsToEditorText(article.sections),
-          now,
-          now
-        );
-      }
-      database.exec("COMMIT");
-    } catch (error) {
-      database.exec("ROLLBACK");
-      throw error;
-    }
-  }
-
-  globalForDb.growthlineContentDb = database;
-  return database;
+  })().catch((error) => {
+    globalForDb.growthlineSchemaPromise = undefined;
+    throw error;
+  });
+  return globalForDb.growthlineSchemaPromise;
 }
 
 function mapArticle(row: ArticleRow): StoredArticle {
   return {
-    id: row.id,
+    id: Number(row.id),
     slug: row.slug,
     category: row.category,
     title: row.title,
@@ -151,100 +178,143 @@ function mapArticle(row: ArticleRow): StoredArticle {
     bodyHtml: articleBodyToHtml(row.body),
     sections: isHtmlBody(row.body) ? [] : editorTextToSections(row.body) as ContentSection[],
     status: row.status,
-    isDummy: row.is_dummy === 1,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
+    isDummy: row.is_dummy,
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at)
   };
 }
 
 const selectColumns = `
-  id, slug, category, title, summary, published_at, reading_time, image, image_alt,
-  introduction, body, status, is_dummy, created_at, updated_at
+  id, slug, category, title, summary, published_at::text AS published_at, reading_time,
+  image, image_alt, introduction, body, status, is_dummy, created_at, updated_at
 `;
 
-export function listArticles(options: { query?: string; status?: ArticleStatus } = {}) {
-  const database = getDatabase();
-  const clauses: string[] = [];
-  const parameters: string[] = [];
-  if (options.status) {
-    clauses.push("status = ?");
-    parameters.push(options.status);
-  }
-  if (options.query?.trim()) {
-    clauses.push("(title LIKE ? OR category LIKE ? OR slug LIKE ?)");
-    const query = `%${options.query.trim()}%`;
-    parameters.push(query, query, query);
-  }
-  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const rows = database.prepare(`SELECT ${selectColumns} FROM content_articles ${where} ORDER BY published_at DESC, id DESC`).all(...parameters) as unknown as ArticleRow[];
+function fallbackArticles(options: { query?: string; status?: ArticleStatus } = {}) {
+  const query = options.query?.trim().toLocaleLowerCase("ko-KR");
+  return seedArticles().filter((article) => {
+    if (options.status && article.status !== options.status) return false;
+    if (!query) return true;
+    return [article.title, article.category, article.slug].some((value) => value.toLocaleLowerCase("ko-KR").includes(query));
+  });
+}
+
+export async function listArticles(options: { query?: string; status?: ArticleStatus } = {}) {
+  if (!isDatabaseConfigured()) return fallbackArticles(options);
+  await ensureSchema();
+  const sql = getSql();
+  const statusFilter = options.status ? sql`AND status = ${options.status}` : sql``;
+  const query = options.query?.trim();
+  const queryFilter = query
+    ? sql`AND (title ILIKE ${`%${query}%`} OR category ILIKE ${`%${query}%`} OR slug ILIKE ${`%${query}%`})`
+    : sql``;
+  const rows = await sql<ArticleRow[]>`
+    SELECT ${sql.unsafe(selectColumns)} FROM content_articles
+    WHERE TRUE ${statusFilter} ${queryFilter}
+    ORDER BY published_at DESC, id DESC
+  `;
   return rows.map(mapArticle);
 }
 
-export function listPublishedArticles() {
+export async function listPublishedArticles() {
   return listArticles({ status: "published" });
 }
 
-export function listIndexableArticles() {
-  return listPublishedArticles().filter((article) => !article.isDummy);
+export async function listIndexableArticles() {
+  return (await listPublishedArticles()).filter((article) => !article.isDummy);
 }
 
-export function getArticleBySlug(slug: string, includeDraft = false) {
-  const database = getDatabase();
-  const sql = `SELECT ${selectColumns} FROM content_articles WHERE slug = ?${includeDraft ? "" : " AND status = 'published'"}`;
-  const row = database.prepare(sql).get(slug) as unknown as ArticleRow | undefined;
-  return row ? mapArticle(row) : undefined;
+export async function getArticleBySlug(slug: string, includeDraft = false) {
+  if (!isDatabaseConfigured()) {
+    return seedArticles().find((article) => article.slug === slug && (includeDraft || article.status === "published"));
+  }
+  await ensureSchema();
+  const sql = getSql();
+  const draftFilter = includeDraft ? sql`` : sql`AND status = 'published'`;
+  const rows = await sql<ArticleRow[]>`
+    SELECT ${sql.unsafe(selectColumns)} FROM content_articles WHERE slug = ${slug} ${draftFilter} LIMIT 1
+  `;
+  return rows[0] ? mapArticle(rows[0]) : undefined;
 }
 
-export function getArticleById(id: number) {
-  const row = getDatabase().prepare(`SELECT ${selectColumns} FROM content_articles WHERE id = ?`).get(id) as unknown as ArticleRow | undefined;
-  return row ? mapArticle(row) : undefined;
+export async function getArticleById(id: number) {
+  if (!isDatabaseConfigured()) return seedArticles().find((article) => article.id === id);
+  await ensureSchema();
+  const sql = getSql();
+  const rows = await sql<ArticleRow[]>`
+    SELECT ${sql.unsafe(selectColumns)} FROM content_articles WHERE id = ${id} LIMIT 1
+  `;
+  return rows[0] ? mapArticle(rows[0]) : undefined;
 }
 
-export function createArticle(input: ArticleInput) {
-  const now = new Date().toISOString();
-  const result = getDatabase().prepare(`
+export async function createArticle(input: ArticleInput) {
+  await ensureSchema();
+  const sql = getSql();
+  const rows = await sql<{ id: number }[]>`
     INSERT INTO content_articles (
       slug, category, title, summary, published_at, reading_time, image, image_alt,
       introduction, body, status, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    input.slug, input.category, input.title, input.summary, input.publishedAt, input.readingTime,
-    input.image, input.imageAlt, input.introduction, input.body, input.status, now, now
-  );
-  return Number(result.lastInsertRowid);
+    ) VALUES (
+      ${input.slug}, ${input.category}, ${input.title}, ${input.summary}, ${input.publishedAt},
+      ${input.readingTime}, ${input.image}, ${input.imageAlt}, ${input.introduction},
+      ${input.body}, ${input.status}, NOW(), NOW()
+    ) RETURNING id
+  `;
+  return Number(rows[0].id);
 }
 
-export function updateArticle(id: number, input: ArticleInput) {
-  getDatabase().prepare(`
+export async function updateArticle(id: number, input: ArticleInput) {
+  await ensureSchema();
+  const sql = getSql();
+  await sql`
     UPDATE content_articles SET
-      slug = ?, category = ?, title = ?, summary = ?, published_at = ?, reading_time = ?,
-      image = ?, image_alt = ?, introduction = ?, body = ?, status = ?, updated_at = ?
-    WHERE id = ?
-  `).run(
-    input.slug, input.category, input.title, input.summary, input.publishedAt, input.readingTime,
-    input.image, input.imageAlt, input.introduction, input.body, input.status, new Date().toISOString(), id
-  );
+      slug = ${input.slug}, category = ${input.category}, title = ${input.title},
+      summary = ${input.summary}, published_at = ${input.publishedAt},
+      reading_time = ${input.readingTime}, image = ${input.image}, image_alt = ${input.imageAlt},
+      introduction = ${input.introduction}, body = ${input.body}, status = ${input.status},
+      is_dummy = FALSE, updated_at = NOW()
+    WHERE id = ${id}
+  `;
 }
 
-export function updateArticleStatus(id: number, status: ArticleStatus) {
-  getDatabase().prepare("UPDATE content_articles SET status = ?, updated_at = ? WHERE id = ?")
-    .run(status, new Date().toISOString(), id);
+export async function updateArticleStatus(id: number, status: ArticleStatus) {
+  await ensureSchema();
+  const sql = getSql();
+  await sql`UPDATE content_articles SET status = ${status}, is_dummy = FALSE, updated_at = NOW() WHERE id = ${id}`;
 }
 
-export function deleteArticle(id: number) {
-  getDatabase().prepare("DELETE FROM content_articles WHERE id = ?").run(id);
+export async function deleteArticle(id: number) {
+  await ensureSchema();
+  const sql = getSql();
+  await sql`DELETE FROM content_articles WHERE id = ${id}`;
 }
 
-export function getContentStats() {
-  const row = getDatabase().prepare(`
+export async function getContentStats() {
+  if (!isDatabaseConfigured()) {
+    const articles = seedArticles();
+    return {
+      total: articles.length,
+      published: articles.filter((article) => article.status === "published").length,
+      draft: articles.filter((article) => article.status === "draft").length,
+      categories: new Set(articles.map((article) => article.category)).size
+    };
+  }
+  await ensureSchema();
+  const sql = getSql();
+  const rows = await sql<StatsRow[]>`
     SELECT
       COUNT(*) AS total,
-      SUM(CASE WHEN status = 'published' THEN 1 ELSE 0 END) AS published,
-      SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) AS draft,
+      COUNT(*) FILTER (WHERE status = 'published') AS published,
+      COUNT(*) FILTER (WHERE status = 'draft') AS draft,
       COUNT(DISTINCT category) AS categories
     FROM content_articles
-  `).get() as { total: number; published: number; draft: number; categories: number };
-  return { total: Number(row.total), published: Number(row.published), draft: Number(row.draft), categories: Number(row.categories) };
+  `;
+  const row = rows[0];
+  return {
+    total: Number(row.total),
+    published: Number(row.published ?? 0),
+    draft: Number(row.draft ?? 0),
+    categories: Number(row.categories)
+  };
 }
 
 export function formatPublishedDate(value: string) {

@@ -1,7 +1,10 @@
 {
   "name": "growthline-react",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -11,8 +14,10 @@
   },
   "dependencies": {
     "@phosphor-icons/react": "latest",
+    "jose": "^6.2.3",
     "motion": "latest",
     "next": "latest",
+    "postgres": "^3.4.9",
     "react": "latest",
     "react-dom": "latest",
     "sanitize-html": "^2.17.6"

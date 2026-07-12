@@ -6,17 +6,14 @@ const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
-test("legacy documents and redesigned marketing pages preserve their source content", () => {
-  const routeMap = {
-    "app/brand-pilot-privacy/page.tsx": "brand-pilot-privacy.html",
-    "app/brand-pilot-terms/page.tsx": "brand-pilot-terms.html",
-    "app/brand-pilot-data-deletion/page.tsx": "brand-pilot-data-deletion.html"
-  };
-
-  for (const [route, legacy] of Object.entries(routeMap)) {
+test("marketing and legal pages are native React without legacy HTML runtime dependencies", () => {
+  for (const route of ["app/brand-pilot-privacy/page.tsx", "app/brand-pilot-terms/page.tsx", "app/brand-pilot-data-deletion/page.tsx"]) {
     const source = read(route);
-    assert.match(source, new RegExp(legacy.replaceAll(".", "\\.")), `${route} must render ${legacy}`);
-    assert.doesNotMatch(source, /MigrationPage|React migration/, `${route} must not use a placeholder`);
+    assert.match(source, /LegalDocument/);
+    assert.doesNotMatch(source, /LegacyContent|\.html/);
+  }
+  for (const legacy of ["index.html", "service.html", "work.html", "contact.html", "detail.html", "brand-pilot-privacy.html", "brand-pilot-terms.html", "brand-pilot-data-deletion.html"]) {
+    assert.equal(fs.existsSync(path.join(root, legacy)), false, `${legacy} must be removed`);
   }
 
   const homeRoute = read("app/page.tsx");
@@ -35,9 +32,9 @@ test("legacy documents and redesigned marketing pages preserve their source cont
   assert.doesNotMatch(detailRoute, /상세 내용을 불러오는 중|MigrationPage|React migration/);
 
   const serviceRoute = read("app/service/[slug]/page.tsx");
-  for (const file of fs.readdirSync(path.join(root, "service")).filter((name) => name.endsWith(".html"))) {
-    assert.match(serviceRoute, new RegExp(file.replaceAll(".", "\\.")), `${file} must have a React route`);
-  }
+  assert.match(serviceRoute, /serviceDetails/);
+  assert.match(serviceRoute, /ServiceDetailPage/);
+  assert.doesNotMatch(serviceRoute, /LegacyContent|\.html/);
 
   const brandPilot = read("app/service/[slug]/brand-pilot-page.tsx");
   for (const content of ["글감보다 운영 기준이 먼저입니다", "말할 근거를 모읍니다", "사람의 판단을 지우지 않도록", "현재는 Instagram 중심으로", "이미지는 항상 5장으로 생성되나요"]) {
@@ -74,7 +71,7 @@ test("content hub reads published database articles as individual pages", () => 
   assert.match(header, /href="\/content"/);
 });
 
-test("admin content manager exposes local CRUD actions", () => {
+test("admin content manager uses PostgreSQL and protects every mutation", () => {
   const admin = read("app/admin/page.tsx");
   const actions = read("app/admin/actions.ts");
   const database = read("lib/content-db.ts");
@@ -83,8 +80,14 @@ test("admin content manager exposes local CRUD actions", () => {
   assert.match(admin, /type="search"/);
   assert.match(admin, /robots: \{ index: false, follow: false \}/);
   for (const action of ["createArticleAction", "updateArticleAction", "toggleArticleStatusAction", "deleteArticleAction"]) assert.match(actions, new RegExp(action));
+  assert.equal((actions.match(/requireAdminSession/g) || []).length, 5);
   assert.match(database, /CREATE TABLE IF NOT EXISTS content_articles/);
-  assert.match(database, /\.runtime.*growthline\.sqlite/);
+  assert.match(database, /DATABASE_URL/);
+  assert.match(database, /postgres\(url/);
+  assert.doesNotMatch(database, /node:sqlite|growthline\.sqlite/);
+  assert.match(read("proxy.ts"), /matcher: \["\/admin\/:path\*"\]/);
+  assert.match(read("lib/admin-auth.ts"), /timingSafeEqual/);
+  assert.match(read("lib/admin-session.ts"), /httpOnly|HS256|ADMIN_SESSION_SECRET/);
 });
 
 test("admin article form uses the local Naver SmartEditor adapter safely", () => {
@@ -103,7 +106,7 @@ test("admin article form uses the local Naver SmartEditor adapter safely", () =>
   assert.ok(fs.existsSync(path.join(root, "public/vendor/smarteditor2/js/service/HuskyEZCreator.js")));
 });
 
-test("public header shows disabled login controls without a login route", () => {
+test("public header keeps customer login disabled and separate from administrator login", () => {
   const header = read("components/site-header.tsx");
   const styles = read("app/globals.css");
   assert.equal((header.match(/className="site-login"/g) || []).length, 2);
@@ -119,7 +122,7 @@ test("SEO metadata excludes seeded dummy content without changing public renderi
   const robots = read("app/robots.ts");
   const seo = read("lib/seo.ts");
 
-  assert.match(database, /is_dummy INTEGER NOT NULL DEFAULT 0/);
+  assert.match(database, /is_dummy BOOLEAN NOT NULL DEFAULT FALSE/);
   assert.match(database, /listIndexableArticles/);
   assert.match(sitemap, /listIndexableArticles/);
   assert.doesNotMatch(sitemap, /listPublishedArticles/);

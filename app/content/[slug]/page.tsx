@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 
 export async function generateMetadata({ params }: PageProps<"/content/[slug]">): Promise<Metadata> {
   const { slug } = await params;
-  const article = getArticleBySlug(slug);
+  const article = await getArticleBySlug(slug);
   if (!article) return {};
   return {
     title: article.title,
@@ -34,9 +34,9 @@ export async function generateMetadata({ params }: PageProps<"/content/[slug]">)
 
 export default async function ContentArticlePage({ params }: PageProps<"/content/[slug]">) {
   const { slug } = await params;
-  const article = getArticleBySlug(slug);
+  const article = await getArticleBySlug(slug);
   if (!article) notFound();
-  const related = listPublishedArticles().filter((item) => item.slug !== article.slug).slice(0, 2);
+  const related = (await listPublishedArticles()).filter((item) => item.slug !== article.slug).slice(0, 2);
   const articleJsonLd = article.isDummy ? undefined : {
     "@context": "https://schema.org",
     "@type": "Article",

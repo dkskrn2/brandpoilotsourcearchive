@@ -1,12 +1,13 @@
-import type { Metadata } from "next";
+import type { Metadata, Route } from "next";
 import Link from "next/link";
 import { ArrowLeft, ArrowSquareOut } from "@phosphor-icons/react/dist/ssr";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { deleteArticleAction, updateArticleAction } from "@/app/admin/actions";
 import { AdminArticleForm } from "@/components/admin-article-form";
 import { AdminDeleteButton } from "@/components/admin-delete-button";
 import { AdminSidebar } from "@/components/admin-sidebar";
-import { getArticleById } from "@/lib/content-db";
+import { getArticleById, isDatabaseConfigured } from "@/lib/content-db";
+import { requireAdminSession } from "@/lib/admin-auth";
 
 export const metadata: Metadata = { title: "콘텐츠 편집", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -14,7 +15,9 @@ export const dynamic = "force-dynamic";
 export default async function EditContentPage({ params, searchParams }: PageProps<"/admin/content/[id]">) {
   const { id: idParam } = await params;
   const id = Number(idParam);
-  const article = Number.isInteger(id) ? getArticleById(id) : undefined;
+  await requireAdminSession(`/admin/content/${idParam}`);
+  if (!isDatabaseConfigured()) redirect("/admin?error=database" as Route);
+  const article = Number.isInteger(id) ? await getArticleById(id) : undefined;
   if (!article) notFound();
   const { notice, error } = await searchParams;
   const updateAction = updateArticleAction.bind(null, article.id);

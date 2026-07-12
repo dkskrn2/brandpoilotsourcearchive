@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.3.0] - 2026-07-12
+
+### Added
+
+- Added environment-configured administrator login with signed, secure session cookies and authorization checks for every content mutation.
+- Added provider-neutral PostgreSQL persistence for Vercel Marketplace databases with automatic schema and seed initialization.
+- Added Vercel deployment documentation, an environment template, server-side contact validation, and optional GA4 loading.
+
+### Changed
+
+- Converted service detail and legal documents from runtime HTML extraction to native React components and structured data.
+- Made public content fall back to read-only seed data when a database has not yet been configured.
+
+### Removed
+
+- Removed legacy standalone marketing HTML files and unused Meta OAuth serverless endpoints from the deployment surface.
+
 ## [0.2.0] - 2026-07-11
 
 ### Added

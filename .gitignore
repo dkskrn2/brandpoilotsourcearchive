@@ -9,4 +9,6 @@ test-results/
 .playwright-cli/
 .runtime/
 output/
+ouput/
 .gstack/
+*.tsbuildinfo

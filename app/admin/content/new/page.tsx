@@ -1,13 +1,19 @@
 import type { Metadata } from "next";
+import type { Route } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { ArrowLeft, ArrowSquareOut } from "@phosphor-icons/react/dist/ssr";
 import { createArticleAction } from "@/app/admin/actions";
 import { AdminArticleForm } from "@/components/admin-article-form";
 import { AdminSidebar } from "@/components/admin-sidebar";
+import { requireAdminSession } from "@/lib/admin-auth";
+import { isDatabaseConfigured } from "@/lib/content-db";
 
 export const metadata: Metadata = { title: "새 콘텐츠 작성", robots: { index: false, follow: false } };
 
 export default async function NewContentPage({ searchParams }: PageProps<"/admin/content/new">) {
+  await requireAdminSession("/admin/content/new");
+  if (!isDatabaseConfigured()) redirect("/admin?error=database" as Route);
   const { error } = await searchParams;
   return (
     <main className="admin-page admin-page--editor">

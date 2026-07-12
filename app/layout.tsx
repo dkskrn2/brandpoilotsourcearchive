@@ -3,6 +3,7 @@ import { Noto_Sans_KR } from "next/font/google";
 import type { ReactNode } from "react";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
+import { GoogleAnalytics } from "@/components/google-analytics";
 import { DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE, SITE_NAME, SITE_URL, organizationJsonLd, serializeJsonLd, websiteJsonLd } from "@/lib/seo";
 import "./globals.css";
 
@@ -24,6 +25,6 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
   return <html lang="ko" className={notoSansKr.variable}><body>
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(organizationJsonLd) }} />
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(websiteJsonLd) }} />
-    <SiteHeader />{children}<SiteFooter />
+    <SiteHeader />{children}<SiteFooter /><GoogleAnalytics />
   </body></html>;
 }

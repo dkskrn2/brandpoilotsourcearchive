@@ -20,8 +20,8 @@ const routes = [
   "/brand-pilot-data-deletion"
 ];
 
-export default function sitemap(): MetadataRoute.Sitemap {
-  const contentRoutes = listIndexableArticles();
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+  const contentRoutes = await listIndexableArticles();
   const staticEntries = routes.map((route) => ({
     url: `${SITE_URL}${route}`,
     changeFrequency: (route === "" ? "weekly" : "monthly") as "weekly" | "monthly",

@@ -3,7 +3,8 @@ import Link from "next/link";
 import { ArrowSquareOut, Article, FileText, MagnifyingGlass, NotePencil, Plus } from "@phosphor-icons/react/dist/ssr";
 import { toggleArticleStatusAction } from "@/app/admin/actions";
 import { AdminSidebar } from "@/components/admin-sidebar";
-import { formatPublishedDate, getContentStats, listArticles } from "@/lib/content-db";
+import { formatPublishedDate, getContentStats, isDatabaseConfigured, listArticles } from "@/lib/content-db";
+import { requireAdminSession } from "@/lib/admin-auth";
 
 export const metadata: Metadata = {
   title: "콘텐츠 관리자",
@@ -14,32 +15,39 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
+  await requireAdminSession("/admin");
   const { q, status, notice, error } = await searchParams;
   const query = typeof q === "string" ? q : "";
   const selectedStatus = status === "draft" || status === "published" ? status : undefined;
-  const articles = listArticles({ query, status: selectedStatus });
-  const stats = getContentStats();
+  const databaseConfigured = isDatabaseConfigured();
+  const [articles, stats] = await Promise.all([
+    listArticles({ query, status: selectedStatus }),
+    getContentStats()
+  ]);
 
   return (
     <main className="admin-page">
       <AdminSidebar />
       <section className="admin-workspace">
         <header className="admin-topbar">
-          <div><strong>관리자</strong><span>로컬 콘텐츠 운영</span></div>
+          <div><strong>관리자</strong><span>Vercel 콘텐츠 운영</span></div>
           <Link href="/content" target="_blank">콘텐츠 페이지 보기 <ArrowSquareOut aria-hidden size={17} /></Link>
         </header>
 
         <div className="admin-canvas">
           <div className="admin-heading">
             <div><p>대시보드</p><h1>콘텐츠 운영 현황</h1><span>등록된 글과 발행 상태를 한곳에서 관리합니다.</span></div>
-            <Link className="admin-create-button" href="/admin/content/new"><Plus aria-hidden size={18} weight="bold" /> 새 글 작성</Link>
+            {databaseConfigured
+              ? <Link className="admin-create-button" href="/admin/content/new"><Plus aria-hidden size={18} weight="bold" /> 새 글 작성</Link>
+              : <span className="admin-create-button is-disabled"><Plus aria-hidden size={18} weight="bold" /> DB 설정 필요</span>}
           </div>
 
           {notice && <p className="admin-form-message" role="status">{notice}</p>}
-          {error && <p className="admin-form-message is-error" role="alert">요청을 처리하지 못했습니다.</p>}
+          {error && <p className="admin-form-message is-error" role="alert">{error === "database" ? "DATABASE_URL을 설정한 뒤 다시 시도해 주세요." : "요청을 처리하지 못했습니다."}</p>}
+          {!databaseConfigured && <p className="admin-form-message is-error" role="alert">현재 시드 콘텐츠를 읽기 전용으로 표시합니다. Vercel에 DATABASE_URL을 설정하면 관리 기능이 활성화됩니다.</p>}
 
           <section className="admin-stats" aria-label="콘텐츠 요약">
-            <article><span>전체 콘텐츠</span><strong>{stats.total}</strong><small>로컬 DB에 저장된 글</small></article>
+            <article><span>전체 콘텐츠</span><strong>{stats.total}</strong><small>PostgreSQL에 저장된 글</small></article>
             <article><span>게시 상태</span><strong>{stats.published}</strong><small>공개 목록에 노출 중</small></article>
             <article><span>임시 저장</span><strong>{stats.draft}</strong><small>작성 또는 검토 중</small></article>
             <article><span>카테고리</span><strong>{stats.categories}</strong><small>사용 중인 분류</small></article>
@@ -70,12 +78,12 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                             <div className="admin-mobile-row-actions">
                               <span>{article.category}</span>
                               <span>{formatPublishedDate(article.publishedAt)}</span>
-                              <form action={statusAction}><input type="hidden" name="status" value={nextStatus} /><button className={`admin-status admin-status--${article.status}`} type="submit">{article.status === "published" ? "게시 중" : "임시 저장"}</button></form>
+                              <form action={statusAction}><input type="hidden" name="status" value={nextStatus} /><button className={`admin-status admin-status--${article.status}`} type="submit" disabled={!databaseConfigured}>{article.status === "published" ? "게시 중" : "임시 저장"}</button></form>
                               <Link className="admin-mobile-edit-link" href={`/admin/content/${article.id}`}><NotePencil aria-hidden size={17} /> 편집</Link>
                             </div>
                           </td>
                           <td>{article.category}</td>
-                          <td><form action={statusAction}><input type="hidden" name="status" value={nextStatus} /><button className={`admin-status admin-status--${article.status}`} type="submit" title={article.status === "published" ? "임시 저장으로 전환" : "게시로 전환"}>{article.status === "published" ? "게시 중" : "임시 저장"}</button></form></td>
+                          <td><form action={statusAction}><input type="hidden" name="status" value={nextStatus} /><button className={`admin-status admin-status--${article.status}`} type="submit" title={article.status === "published" ? "임시 저장으로 전환" : "게시로 전환"} disabled={!databaseConfigured}>{article.status === "published" ? "게시 중" : "임시 저장"}</button></form></td>
                           <td>{formatPublishedDate(article.publishedAt)}</td>
                           <td><Link className="admin-edit-link" href={`/admin/content/${article.id}`} aria-label={`${article.title} 편집`}><NotePencil aria-hidden size={19} /></Link></td>
                         </tr>
@@ -91,7 +99,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
 
           <section className="admin-empty-preview">
             <Article aria-hidden size={28} />
-            <div><strong>로컬 DB 연결됨</strong><p>콘텐츠 변경 사항은 이 컴퓨터의 SQLite 파일에 저장되고 공개 콘텐츠 페이지에 반영됩니다.</p></div>
+            <div><strong>{databaseConfigured ? "Vercel PostgreSQL 연결됨" : "PostgreSQL 연결 대기 중"}</strong><p>{databaseConfigured ? "콘텐츠를 PostgreSQL에 저장하고 공개 페이지에 즉시 반영합니다." : "DATABASE_URL을 입력하기 전까지 시드 콘텐츠만 읽기 전용으로 표시합니다."}</p></div>
           </section>
         </div>
       </section>

@@ -5,8 +5,8 @@ import { ArrowUpRight } from "@phosphor-icons/react/dist/ssr";
 import { formatPublishedDate, listIndexableArticles, listPublishedArticles } from "@/lib/content-db";
 import { createPageMetadata } from "@/lib/seo";
 
-export function generateMetadata(): Metadata {
-  const hasRealContent = listIndexableArticles().length > 0;
+export async function generateMetadata(): Promise<Metadata> {
+  const hasRealContent = (await listIndexableArticles()).length > 0;
   return createPageMetadata({
     title: "Content",
     description: "고객, 데이터, 전환과 운영에 관한 GROWTHLINE의 관점과 실무 기준을 공유합니다.",
@@ -18,7 +18,7 @@ export function generateMetadata(): Metadata {
 export const dynamic = "force-dynamic";
 
 export default async function ContentPage() {
-  const [featured, ...articles] = listPublishedArticles();
+  const [featured, ...articles] = await listPublishedArticles();
 
   return (
     <main className="content-index">

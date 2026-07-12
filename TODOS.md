@@ -1,45 +1,30 @@
 # TODOS
 
-## Deployment
+## Deployment verification
 
-### Replace local SQLite before production deployment
+### Configure Vercel environment variables
 
-**Priority:** P0
+**Priority:** P0 · operator action
 
-Move `content_articles` to a serverless Postgres provider before enabling administrator writes on Vercel.
+Connect a Vercel Marketplace PostgreSQL provider and set `DATABASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_SESSION_SECRET`, and `GAS_WEBAPP_URL` before the production deployment.
 
-### Protect administrator routes
+### Rotate the initial administrator password
 
-**Priority:** P0
+**Priority:** P0 · operator action
 
-Add authentication and authorization for `/admin` and all content mutation actions before public deployment.
+The requested initial credential is `ROOT/ROOT`. Replace `ADMIN_PASSWORD` with a long random password immediately after the first successful sign-in.
 
-### Consolidate API routes
+### Verify production integrations
 
-**Priority:** P1
+**Priority:** P1 · operator action
 
-Move the remaining Meta OAuth handlers from `api/auth/meta` into Next.js Route Handlers, then remove the legacy serverless API directory.
+Submit one real contact request, create and publish one administrator article, redeploy, and confirm that the article persists. If analytics is required, set `NEXT_PUBLIC_GA_MEASUREMENT_ID` and confirm a realtime event.
 
-## Migration
+## Completed in code
 
-### Finish legacy HTML removal
-
-**Priority:** P1
-
-Convert the remaining service-detail and legal HTML documents to native React components before deleting the legacy files.
-
-### Restore production analytics
-
-**Priority:** P1
-
-Port the existing Google Analytics property into the React root layout and verify production events.
-
-## Quality
-
-### Expand automated behavior coverage
-
-**Priority:** P1
-
-Add executable integration coverage for content CRUD, contact error handling, HTML sanitization, public route rendering, and responsive browser flows.
-
-## Completed
+- Replaced local SQLite with provider-neutral PostgreSQL using `DATABASE_URL` or `POSTGRES_URL`.
+- Added administrator login, signed session cookies, proxy protection, and authorization checks in every mutation.
+- Converted legal and service detail content to native React data and removed legacy runtime HTML files.
+- Added server-side contact validation and a bot honeypot.
+- Added optional GA4 loading through an environment variable.
+- Removed unused legacy Meta OAuth serverless endpoints from the deployment surface.

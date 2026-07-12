@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { Article, ChartBar, Gear, House, SquaresFour } from "@phosphor-icons/react/dist/ssr";
+import { Article, ChartBar, Gear, House, SignOut, SquaresFour } from "@phosphor-icons/react/dist/ssr";
+import { logoutAdminAction } from "@/app/admin/auth-actions";
 
 export function AdminSidebar({ active = "dashboard" }: { active?: "dashboard" | "content" }) {
   return (
@@ -22,7 +23,10 @@ export function AdminSidebar({ active = "dashboard" }: { active?: "dashboard" | 
 
       <div className="admin-sidebar__bottom">
         <Link href="/"><House aria-hidden size={19} /> 사이트로 돌아가기</Link>
-        <p>로컬 콘텐츠 관리자<br />데이터는 이 컴퓨터에 저장됩니다.</p>
+        <form action={logoutAdminAction}>
+          <button type="submit"><SignOut aria-hidden size={19} /> 로그아웃</button>
+        </form>
+        <p>Vercel 관리자<br />PostgreSQL에 안전하게 저장됩니다.</p>
       </div>
     </aside>
   );

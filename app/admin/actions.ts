@@ -12,6 +12,7 @@ import {
   type ArticleStatus
 } from "@/lib/content-db";
 import { articleTextContent, sanitizeArticleHtml } from "@/lib/content-html";
+import { requireAdminSession } from "@/lib/admin-auth";
 
 function value(formData: FormData, name: string) {
   return String(formData.get(name) ?? "").trim();
@@ -45,7 +46,9 @@ function parseArticleInput(formData: FormData): ArticleInput {
 
 function errorMessage(error: unknown, fallback: string) {
   const message = error instanceof Error ? error.message : fallback;
-  return message.includes("UNIQUE constraint failed") ? "이미 사용 중인 슬러그입니다." : message;
+  return message.includes("UNIQUE constraint failed") || (error as { code?: string })?.code === "23505"
+    ? "이미 사용 중인 슬러그입니다."
+    : message;
 }
 
 function refreshContent(slug?: string) {
@@ -56,9 +59,10 @@ function refreshContent(slug?: string) {
 }
 
 export async function createArticleAction(formData: FormData) {
+  await requireAdminSession("/admin/content/new");
   let id: number;
   try {
-    id = createArticle(parseArticleInput(formData));
+    id = await createArticle(parseArticleInput(formData));
   } catch (error) {
     redirect(`/admin/content/new?error=${encodeURIComponent(errorMessage(error, "저장하지 못했습니다."))}`);
   }
@@ -67,12 +71,13 @@ export async function createArticleAction(formData: FormData) {
 }
 
 export async function updateArticleAction(id: number, formData: FormData) {
-  const previous = getArticleById(id);
+  await requireAdminSession(`/admin/content/${id}`);
+  const previous = await getArticleById(id);
   if (!previous) redirect("/admin?error=not-found");
   let input: ArticleInput;
   try {
     input = parseArticleInput(formData);
-    updateArticle(id, input);
+    await updateArticle(id, input);
   } catch (error) {
     redirect(`/admin/content/${id}?error=${encodeURIComponent(errorMessage(error, "수정하지 못했습니다."))}`);
   }
@@ -82,18 +87,20 @@ export async function updateArticleAction(id: number, formData: FormData) {
 }
 
 export async function toggleArticleStatusAction(id: number, formData: FormData) {
-  const article = getArticleById(id);
+  await requireAdminSession("/admin");
+  const article = await getArticleById(id);
   if (!article) return;
   const status = value(formData, "status") as ArticleStatus;
   if (!['draft', 'published'].includes(status)) return;
-  updateArticleStatus(id, status);
+  await updateArticleStatus(id, status);
   refreshContent(article.slug);
 }
 
 export async function deleteArticleAction(id: number) {
-  const article = getArticleById(id);
+  await requireAdminSession(`/admin/content/${id}`);
+  const article = await getArticleById(id);
   if (!article) redirect("/admin");
-  deleteArticle(id);
+  await deleteArticle(id);
   refreshContent(article.slug);
   redirect(`/admin?notice=${encodeURIComponent("콘텐츠를 삭제했습니다.")}`);
 }

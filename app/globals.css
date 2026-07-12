@@ -3211,3 +3211,90 @@ body:has(> .admin-page) {
   .admin-mobile-row-actions form { margin-left: auto; }
   .admin-mobile-edit-link { min-height: 30px; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; border: 1px solid #dce2ea; border-radius: 8px; color: #53627a; font-size: .67rem; font-weight: 800; }
 }
+
+/* Native React service detail pages */
+.service-native { overflow: hidden; }
+.service-native__hero,
+.service-native__process,
+.service-native__sections,
+.service-native__cta { width: min(100% - 40px, 1240px); margin-inline: auto; }
+.service-native__hero { min-height: calc(100dvh - var(--header-height)); display: grid; grid-template-columns: minmax(0, .9fr) minmax(480px, 1.1fr); align-items: center; gap: clamp(48px, 7vw, 100px); padding-block: clamp(72px, 9vw, 132px); }
+.service-native__hero > div > p,
+.service-native__process > p,
+.service-native__cta > p { margin: 0 0 20px; color: var(--accent); font-size: .78rem; font-weight: 900; letter-spacing: .14em; }
+.service-native__hero h1 { max-width: 720px; margin: 0; font-size: clamp(3rem, 6vw, 6.6rem); line-height: .98; letter-spacing: -.065em; }
+.service-native__hero > div > span { display: block; max-width: 620px; margin: 28px 0 36px; color: var(--muted); font-size: clamp(1.05rem, 1.4vw, 1.28rem); line-height: 1.75; }
+.service-native__hero > img { width: 100%; height: auto; border-radius: 32px; box-shadow: 0 28px 80px rgba(19, 43, 92, .18); }
+.service-native__process { padding: 44px clamp(24px, 5vw, 68px); border-radius: 28px; background: var(--ink); color: #fff; }
+.service-native__process ol { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin: 0; padding: 0; list-style: none; }
+.service-native__process li { display: grid; gap: 10px; padding: 22px; border: 1px solid rgba(255,255,255,.14); border-radius: 18px; }
+.service-native__process li span { color: #91adff; font-size: .72rem; font-weight: 900; }
+.service-native__process li strong { font-size: 1.05rem; }
+.service-native__sections { padding-block: clamp(80px, 10vw, 148px); }
+.service-native__sections article { display: grid; grid-template-columns: 70px minmax(0, .9fr) minmax(340px, 1fr); gap: clamp(28px, 5vw, 80px); align-items: start; padding-block: clamp(48px, 7vw, 84px); border-top: 1px solid var(--line); }
+.service-native__sections article > span { color: var(--accent); font-size: .78rem; font-weight: 900; }
+.service-native__sections h2 { margin: 0 0 20px; font-size: clamp(2rem, 3.6vw, 4.4rem); line-height: 1.08; letter-spacing: -.05em; }
+.service-native__sections p { margin: 0; color: var(--muted); line-height: 1.75; }
+.service-native__sections ul { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none; }
+.service-native__sections li { display: flex; gap: 12px; align-items: flex-start; padding: 16px 18px; border-radius: 14px; background: var(--surface-soft); line-height: 1.55; }
+.service-native__sections li svg { flex: 0 0 auto; margin-top: 3px; color: var(--accent); }
+.service-native__cta { margin-bottom: clamp(72px, 9vw, 128px); padding: clamp(54px, 7vw, 92px); border-radius: 32px; background: #edf3ff; text-align: center; }
+.service-native__cta h2 { margin: 0 0 34px; font-size: clamp(2.4rem, 5vw, 5.4rem); line-height: 1.04; letter-spacing: -.055em; }
+
+/* Native React legal documents */
+.legal-document { width: min(100% - 40px, 980px); margin-inline: auto; padding-block: clamp(64px, 8vw, 112px); }
+.legal-document > header { padding-bottom: 48px; border-bottom: 2px solid var(--ink); }
+.legal-document > header > p { margin: 0 0 18px; color: var(--accent); font-size: .78rem; font-weight: 900; letter-spacing: .14em; }
+.legal-document h1 { margin: 0; font-size: clamp(2.8rem, 6vw, 5.8rem); line-height: 1; letter-spacing: -.06em; }
+.legal-document > header > span { display: block; margin: 24px 0; color: var(--muted); font-size: 1.08rem; line-height: 1.75; }
+.legal-document > header small { color: var(--muted); }
+.legal-document__body section { padding-block: 42px; border-bottom: 1px solid var(--line); }
+.legal-document__body h2 { margin: 0 0 20px; font-size: clamp(1.35rem, 2.3vw, 2rem); letter-spacing: -.03em; }
+.legal-document__body p,
+.legal-document__body li { color: #3d4654; line-height: 1.8; }
+.legal-document__body ul,
+.legal-document__body ol { display: grid; gap: 8px; padding-left: 24px; }
+.legal-document__table { overflow-x: auto; margin-top: 22px; border: 1px solid var(--line); border-radius: 16px; }
+.legal-document__table table { width: 100%; min-width: 720px; border-collapse: collapse; }
+.legal-document__table th,
+.legal-document__table td { padding: 14px 16px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; line-height: 1.55; }
+.legal-document__table th { background: #eef3ff; color: var(--accent-dark); font-size: .82rem; }
+.legal-document__body nav { display: flex; flex-wrap: wrap; gap: 12px; padding-top: 38px; }
+.legal-document__body nav a { padding: 12px 16px; border-radius: 999px; background: var(--surface-soft); font-weight: 800; }
+
+/* Administrator sign-in */
+.admin-login-page { min-height: 100dvh; display: grid; place-items: center; padding: 24px; background: #eef3ff; }
+.admin-login-card { width: min(100%, 440px); padding: 42px; border: 1px solid rgba(25, 55, 110, .12); border-radius: 28px; background: #fff; box-shadow: 0 24px 70px rgba(19,43,92,.12); }
+.admin-login-card > p:first-child { margin: 0 0 14px; color: var(--accent); font-size: .75rem; font-weight: 900; letter-spacing: .14em; }
+.admin-login-card h1 { margin: 0; font-size: 2.35rem; letter-spacing: -.05em; }
+.admin-login-card > span { display: block; margin: 14px 0 28px; color: var(--muted); }
+.admin-login-card form { display: grid; gap: 18px; }
+.admin-login-card label { display: grid; gap: 8px; font-weight: 800; }
+.admin-login-card input { min-height: 50px; padding: 0 15px; border: 1px solid var(--line); border-radius: 12px; font: inherit; }
+.admin-login-card button { min-height: 52px; border: 0; border-radius: 12px; background: var(--accent); color: #fff; font: inherit; font-weight: 900; cursor: pointer; }
+.admin-login-card button:disabled { opacity: .45; cursor: not-allowed; }
+.admin-create-button.is-disabled { opacity: .5; cursor: not-allowed; }
+.admin-sidebar__bottom form { margin: 0; }
+.admin-sidebar__bottom button { width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border: 0; border-radius: 10px; background: transparent; color: inherit; font: inherit; font-weight: 700; cursor: pointer; }
+.form-honeypot { position: absolute !important; left: -10000px !important; width: 1px !important; height: 1px !important; overflow: hidden !important; }
+
+@media (max-width: 900px) {
+  .service-native__hero { min-height: auto; grid-template-columns: 1fr; }
+  .service-native__process ol { grid-template-columns: 1fr 1fr; }
+  .service-native__sections article { grid-template-columns: 48px 1fr; }
+  .service-native__sections article ul { grid-column: 2; }
+}
+@media (max-width: 600px) {
+  .service-native__hero,
+  .service-native__process,
+  .service-native__sections,
+  .service-native__cta { width: min(100% - 28px, 1240px); }
+  .service-native__hero h1 { font-size: clamp(2.7rem, 14vw, 4rem); }
+  .service-native__process { padding: 28px 20px; }
+  .service-native__process ol { grid-template-columns: 1fr; }
+  .service-native__sections article { grid-template-columns: 1fr; }
+  .service-native__sections article ul { grid-column: 1; }
+  .service-native__cta { padding: 48px 20px; }
+  .legal-document { width: min(100% - 28px, 980px); }
+  .admin-login-card { padding: 30px 22px; }
+}
