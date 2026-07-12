@@ -1,6 +1,7 @@
 import type { StoredArticle } from "@/lib/content-db";
 import { DEFAULT_ARTICLE_HTML } from "@/lib/content-html";
 import { NaverSmartEditor } from "@/components/naver-smart-editor";
+import { AdminPendingSubmitButton } from "@/components/admin-pending-submit-button";
 
 type AdminArticleFormProps = {
   action: (formData: FormData) => void | Promise<void>;
@@ -40,7 +41,7 @@ export function AdminArticleForm({ action, article, submitLabel }: AdminArticleF
           <label><span>카테고리</span><input name="category" required defaultValue={article?.category} placeholder="Growth Strategy" /></label>
           <label><span>게시일</span><input type="date" name="publishedAt" required defaultValue={article?.publishedAt ?? today} /></label>
           <label><span>읽기 시간</span><input name="readingTime" required defaultValue={article?.readingTime ?? "5분"} placeholder="5분" /></label>
-          <button className="admin-save-button" type="submit">{submitLabel}</button>
+          <AdminPendingSubmitButton label={submitLabel} />
         </section>
       </aside>
     </form>

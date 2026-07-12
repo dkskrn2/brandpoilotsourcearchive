@@ -105,11 +105,15 @@ test("admin content manager uses PostgreSQL and protects every mutation", () => 
 
 test("admin article form uses the local Naver SmartEditor adapter safely", () => {
   const form = read("components/admin-article-form.tsx");
+  const submitButton = read("components/admin-pending-submit-button.tsx");
   const editor = read("components/naver-smart-editor.tsx");
   const actions = read("app/admin/actions.ts");
   const detail = read("app/content/[slug]/page.tsx");
 
   assert.match(form, /NaverSmartEditor/);
+  assert.match(form, /AdminPendingSubmitButton/);
+  assert.match(submitButton, /useFormStatus/);
+  assert.match(submitButton, /disabled=\{pending\}/);
   assert.match(editor, /HuskyEZCreator\.js/);
   assert.match(editor, /UPDATE_CONTENTS_FIELD/);
   assert.match(editor, /SmartEditor2Skin\.html/);
@@ -117,6 +121,16 @@ test("admin article form uses the local Naver SmartEditor adapter safely", () =>
   assert.match(detail, /article\.bodyHtml/);
   assert.ok(fs.existsSync(path.join(root, "public/vendor/smarteditor2/LICENSE.md")));
   assert.ok(fs.existsSync(path.join(root, "public/vendor/smarteditor2/js/service/HuskyEZCreator.js")));
+});
+
+test("article saves return to the content list after a single pending submission", () => {
+  const actions = read("app/admin/actions.ts");
+  const submitButton = read("components/admin-pending-submit-button.tsx");
+
+  assert.ok(actions.includes('"콘텐츠를 저장했습니다.")}#content'));
+  assert.ok(actions.includes('"수정 사항을 저장했습니다.")}#content'));
+  assert.match(submitButton, /저장 중…/);
+  assert.match(submitButton, /aria-busy=\{pending\}/);
 });
 
 test("public header keeps customer login disabled and separate from administrator login", () => {

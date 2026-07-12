@@ -3137,6 +3137,7 @@ body:has(> .admin-page) {
 .admin-smart-editor > small { display: block; margin-top: 8px; color: #8791a1; font-size: .68rem; line-height: 1.5; }
 .admin-editor-form__side { position: sticky; top: 24px; }
 .admin-save-button { min-height: 46px; border: 0; border-radius: 9px; background: #2457d6; color: #fff; font-weight: 850; cursor: pointer; }
+.admin-save-button:disabled { cursor: wait; opacity: .72; }
 .admin-danger-zone { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-top: 20px; padding: 22px 24px; border: 1px solid #efcece; border-radius: 12px; background: #fff; }
 .admin-danger-zone strong { color: #8d2929; font-size: .82rem; }
 .admin-danger-zone p { margin: 6px 0 0; color: #8a7474; font-size: .72rem; }

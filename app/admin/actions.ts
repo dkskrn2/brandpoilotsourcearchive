@@ -60,14 +60,13 @@ function refreshContent(slug?: string) {
 
 export async function createArticleAction(formData: FormData) {
   await requireAdminSession("/admin/content/new");
-  let id: number;
   try {
-    id = await createArticle(parseArticleInput(formData));
+    await createArticle(parseArticleInput(formData));
   } catch (error) {
     redirect(`/admin/content/new?error=${encodeURIComponent(errorMessage(error, "저장하지 못했습니다."))}`);
   }
   refreshContent();
-  redirect(`/admin/content/${id}?notice=${encodeURIComponent("콘텐츠를 저장했습니다.")}`);
+  redirect(`/admin?notice=${encodeURIComponent("콘텐츠를 저장했습니다.")}#content`);
 }
 
 export async function updateArticleAction(id: number, formData: FormData) {
@@ -83,7 +82,7 @@ export async function updateArticleAction(id: number, formData: FormData) {
   }
   refreshContent(previous.slug);
   refreshContent(input.slug);
-  redirect(`/admin/content/${id}?notice=${encodeURIComponent("수정 사항을 저장했습니다.")}`);
+  redirect(`/admin?notice=${encodeURIComponent("수정 사항을 저장했습니다.")}#content`);
 }
 
 export async function toggleArticleStatusAction(id: number, formData: FormData) {
