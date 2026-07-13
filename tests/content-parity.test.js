@@ -37,9 +37,12 @@ test("marketing and legal pages are native React without legacy HTML runtime dep
   assert.doesNotMatch(serviceRoute, /LegacyContent|\.html/);
 
   const brandPilot = read("app/service/[slug]/brand-pilot-page.tsx");
-  for (const content of ["글감보다 운영 기준이 먼저입니다", "말할 근거를 모읍니다", "사람의 판단을 지우지 않도록", "현재는 Instagram 중심으로", "이미지는 항상 5장으로 생성되나요"]) {
+  for (const content of ["브랜드 기준으로", "근거를 등록합니다", "사람의 승인을 기본으로", "현재 게시 자동화는 Instagram 중심입니다", "어떤 게시 채널을 지원하나요"]) {
     assert.match(brandPilot, new RegExp(content), `Brand Pilot must preserve ${content}`);
   }
+  assert.match(brandPilot, /className="brand-pilot-product"/);
+  assert.equal((brandPilot.match(/href="\/contact">도입 상담하기/g) || []).length, 2, "product CTAs must use one clear label");
+  assert.doesNotMatch(brandPilot, /[—–]/, "visible product copy must avoid em and en dashes");
   assert.match(serviceRoute, /slug === "brandpilot"/);
 });
 
@@ -62,9 +65,14 @@ test("Brand Pilot has a first-class product route and navigation entry", () => {
   assert.match(product, /BrandPilotPage/);
   assert.match(product, /SoftwareApplication/);
   assert.match(product, /mainEntity/);
+  assert.match(product, /브랜드 콘텐츠 운영 시스템/);
+  assert.match(product, /\/images\/product\/brand-pilot-workflow-v1\.webp/);
+  assert.equal(fs.existsSync(path.join(root, "public/images/product/brand-pilot-workflow-v1.webp")), true);
+  assert.ok(fs.statSync(path.join(root, "public/images/product/brand-pilot-workflow-v1.webp")).size < 150_000, "product visual must stay lightweight");
   assert.match(serviceRoute, /permanentRedirect\("\/product"\)/);
   assert.match(sitemap, /"\/product"/);
   assert.doesNotMatch(sitemap, /"\/service\/brandpilot"/);
+  assert.match(read("app/globals.css"), /prefers-reduced-motion: no-preference/);
 });
 
 test("contact inquiries are stored in PostgreSQL without a Google Apps Script dependency", () => {
