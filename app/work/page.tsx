@@ -5,7 +5,8 @@ import { createPageMetadata } from "@/lib/seo";
 export const metadata = createPageMetadata({
   title: "Work",
   description: "GROWTHLINE이 수행한 기업 웹, 앱, 챗봇, 운영 프로젝트와 해결 과정을 확인하세요.",
-  path: "/work"
+  path: "/work",
+  localized: true
 });
 
 export default function WorkPage() {

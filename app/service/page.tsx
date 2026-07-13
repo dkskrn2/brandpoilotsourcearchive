@@ -9,7 +9,8 @@ import { absoluteUrl, breadcrumbJsonLd, createPageMetadata, serializeJsonLd, web
 export const metadata = createPageMetadata({
   title: "Service",
   description: "고객이 어디서 멈추는지 확인하고 필요한 서비스만 골라 유입부터 운영까지 연결합니다.",
-  path: "/service"
+  path: "/service",
+  localized: true
 });
 
 const understandServices = [

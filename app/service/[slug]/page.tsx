@@ -19,7 +19,7 @@ export async function generateMetadata({ params }: PageProps<"/service/[slug]">)
   const { slug } = await params;
   const service = services[slug as RouteSlug];
   if (!service) return {};
-  return createPageMetadata({ title: service.title, description: service.description, path: `/service/${slug}` });
+  return createPageMetadata({ title: service.title, description: service.description, path: `/service/${slug}`, localized: true });
 }
 
 export default async function ServiceRoutePage({ params }: PageProps<"/service/[slug]">) {

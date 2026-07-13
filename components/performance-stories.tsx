@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-const stories = [
+const koreanStories = [
   {
     company: "LG 챗봇 리뉴얼",
     problem: "문의는 많은데, 응대할 사람이 없었습니다.",
@@ -29,13 +29,41 @@ const stories = [
   }
 ] as const;
 
-export function PerformanceStories() {
+const englishStories = [
+  {
+    company: "LG chatbot renewal",
+    problem: "Enquiries kept growing, but the support team could not scale with them.",
+    result: "2.4x",
+    resultLabel: "automated enquiry handling",
+    before: ["Support capacity consumed by repeated questions", "Inconsistent answers created customer frustration", "The existing chatbot saw little real use"],
+    after: ["Recurring enquiries routed automatically", "Only cases needing a person escalated", "Scenarios rewritten in customers' actual language"]
+  },
+  {
+    company: "Renault Korea website renewal",
+    problem: "The traffic was there. Why were visitors still leaving?",
+    result: "38% lower",
+    resultLabel: "drop-off on key pages",
+    before: ["Essential information spread across multiple pages", "Screens gave no clear next action", "Visual design and conversion flow were disconnected"],
+    after: ["Information architecture organized by visit intent", "Content made the next action explicit", "Decision-critical information moved forward"]
+  },
+  {
+    company: "K2 survey platform enhancement",
+    problem: "Data accumulated, while decisions continued to slow down.",
+    result: "3x",
+    resultLabel: "survey response efficiency",
+    before: ["Low survey participation", "Heavy manual effort to compile results", "Decisions relied on intuition"],
+    after: ["A response flow designed to reduce abandonment", "A mobile-first participation experience", "Results structured for immediate decisions"]
+  }
+] as const;
+
+export function PerformanceStories({ locale = "ko" }: { locale?: "ko" | "en" }) {
+  const stories = locale === "en" ? englishStories : koreanStories;
   const [active, setActive] = useState(0);
   const story = stories[active];
 
   return (
     <div className="studio-stories">
-      <div className="studio-stories__tabs" role="tablist" aria-label="프로젝트 사례 선택">
+      <div className="studio-stories__tabs" role="tablist" aria-label={locale === "en" ? "Choose a project story" : "프로젝트 사례 선택"}>
         {stories.map((item, index) => (
           <button
             aria-selected={active === index}
@@ -56,8 +84,8 @@ export function PerformanceStories() {
           <div><strong>{story.result}</strong><span>{story.resultLabel}</span></div>
         </div>
         <div className="studio-story__compare">
-          <div><h4>바꾸기 전</h4>{story.before.map((item) => <p key={item}>{item}</p>)}</div>
-          <div><h4>바꾼 뒤</h4>{story.after.map((item) => <p key={item}>{item}</p>)}</div>
+          <div><h4>{locale === "en" ? "Before" : "바꾸기 전"}</h4>{story.before.map((item) => <p key={item}>{item}</p>)}</div>
+          <div><h4>{locale === "en" ? "After" : "바꾼 뒤"}</h4>{story.after.map((item) => <p key={item}>{item}</p>)}</div>
         </div>
       </article>
     </div>

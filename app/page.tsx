@@ -7,7 +7,8 @@ export const metadata = createPageMetadata({
   title: "GROWTHLINE | 막힌 매출 흐름을 다시 연결합니다",
   description: "유입과 문의, 매출 사이에서 막힌 구간을 찾고 실제 운영 가능한 시스템으로 연결합니다.",
   path: "/",
-  absoluteTitle: true
+  absoluteTitle: true,
+  localized: true
 });
 
 const failureModes = [

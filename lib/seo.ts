@@ -17,24 +17,35 @@ type PageMetadataOptions = {
   path: string;
   noIndex?: boolean;
   absoluteTitle?: boolean;
+  locale?: "ko" | "en";
+  localized?: boolean;
 };
 
-export function createPageMetadata({ title, description, path, noIndex = false, absoluteTitle = false }: PageMetadataOptions): Metadata {
+export function createPageMetadata({ title, description, path, noIndex = false, absoluteTitle = false, locale = "ko", localized = false }: PageMetadataOptions): Metadata {
+  const koreanPath = locale === "en" ? (path === "/en" ? "/" : path.replace(/^\/en(?=\/)/, "")) : path;
+  const englishPath = koreanPath === "/" ? "/en" : `/en${koreanPath}`;
+  const languages = localized ? {
+    "ko-KR": absoluteUrl(koreanPath),
+    en: absoluteUrl(englishPath),
+    "x-default": absoluteUrl(koreanPath)
+  } : undefined;
+
   return {
     title: absoluteTitle ? { absolute: title } : title,
     description,
-    alternates: { canonical: path },
+    alternates: { canonical: path, ...(languages ? { languages } : {}) },
     robots: noIndex
       ? { index: false, follow: true }
       : { index: true, follow: true, googleBot: { index: true, follow: true, "max-image-preview": "large", "max-snippet": -1, "max-video-preview": -1 } },
     openGraph: {
       type: "website",
-      locale: "ko_KR",
+      locale: locale === "en" ? "en_US" : "ko_KR",
+      ...(localized ? { alternateLocale: [locale === "en" ? "ko_KR" : "en_US"] } : {}),
       siteName: SITE_NAME,
       title,
       description,
       url: path,
-      images: [{ url: DEFAULT_OG_IMAGE, width: 1600, height: 1024, alt: `${SITE_NAME} 서비스 구조` }]
+      images: [{ url: DEFAULT_OG_IMAGE, width: 1600, height: 1024, alt: locale === "en" ? `${SITE_NAME} service architecture` : `${SITE_NAME} 서비스 구조` }]
     },
     twitter: { card: "summary_large_image", title, description, images: [DEFAULT_OG_IMAGE] }
   };
@@ -65,7 +76,7 @@ export const websiteJsonLd = {
   name: SITE_NAME,
   url: SITE_URL,
   description: DEFAULT_DESCRIPTION,
-  inLanguage: "ko-KR",
+  inLanguage: ["ko-KR", "en"],
   publisher: { "@id": ORGANIZATION_ID }
 };
 
@@ -86,12 +97,13 @@ export function breadcrumbJsonLd(items: BreadcrumbItem[]) {
   };
 }
 
-export function webPageJsonLd({ name, description, path, type = "WebPage", hasBreadcrumb = false }: {
+export function webPageJsonLd({ name, description, path, type = "WebPage", hasBreadcrumb = false, language = "ko-KR" }: {
   name: string;
   description: string;
   path: string;
   type?: "WebPage" | "CollectionPage" | "ContactPage";
   hasBreadcrumb?: boolean;
+  language?: "ko-KR" | "en";
 }) {
   const url = absoluteUrl(path);
   return {
@@ -101,14 +113,14 @@ export function webPageJsonLd({ name, description, path, type = "WebPage", hasBr
     url,
     name,
     description,
-    inLanguage: "ko-KR",
+    inLanguage: language,
     isPartOf: { "@id": WEBSITE_ID },
     about: { "@id": ORGANIZATION_ID },
     ...(hasBreadcrumb ? { breadcrumb: { "@id": `${url}#breadcrumb` } } : {})
   };
 }
 
-export function serviceJsonLd({ name, description, path }: { name: string; description: string; path: string }) {
+export function serviceJsonLd({ name, description, path, language = "ko-KR" }: { name: string; description: string; path: string; language?: "ko-KR" | "en" }) {
   const url = absoluteUrl(path);
   return {
     "@context": "https://schema.org",
@@ -117,9 +129,10 @@ export function serviceJsonLd({ name, description, path }: { name: string; descr
     name,
     description,
     url,
+    inLanguage: language,
     provider: { "@id": ORGANIZATION_ID },
-    areaServed: { "@type": "Country", name: "대한민국" },
-    audience: { "@type": "BusinessAudience", audienceType: "온라인 사업자 및 기업" },
+    areaServed: language === "en" ? "Worldwide" : { "@type": "Country", name: "대한민국" },
+    audience: { "@type": "BusinessAudience", audienceType: language === "en" ? "Online businesses and organizations" : "온라인 사업자 및 기업" },
     mainEntityOfPage: { "@id": `${url}#webpage` }
   };
 }

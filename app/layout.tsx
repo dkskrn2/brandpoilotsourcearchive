@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import { Noto_Sans_KR } from "next/font/google";
+import { headers } from "next/headers";
 import type { ReactNode } from "react";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { GoogleAnalytics } from "@/components/google-analytics";
 import { DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE, SITE_NAME, SITE_URL, organizationJsonLd, serializeJsonLd, websiteJsonLd } from "@/lib/seo";
+import { SITE_LOCALE_HEADER } from "@/lib/i18n";
 import "./globals.css";
 
 const notoSansKr = Noto_Sans_KR({ subsets: ["latin"], display: "swap", variable: "--font-sans" });
@@ -24,8 +26,9 @@ export const metadata: Metadata = {
   robots: { index: true, follow: true, googleBot: { index: true, follow: true, "max-image-preview": "large", "max-snippet": -1, "max-video-preview": -1 } }
 };
 
-export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
-  return <html lang="ko" className={notoSansKr.variable}><body>
+export default async function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+  const locale = (await headers()).get(SITE_LOCALE_HEADER) === "en" ? "en" : "ko";
+  return <html lang={locale} className={notoSansKr.variable}><body>
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(organizationJsonLd) }} />
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(websiteJsonLd) }} />
     <SiteHeader />{children}<SiteFooter /><GoogleAnalytics />

@@ -297,6 +297,21 @@ button {
   color: var(--accent);
 }
 
+.site-nav .language-switch {
+  min-width: 42px;
+  padding-inline: 9px;
+  border: 1px solid #d5dce8;
+  border-radius: 999px;
+  color: #354158;
+  font-size: .76rem;
+  letter-spacing: .04em;
+}
+
+.site-nav .language-switch:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .site-login {
   min-height: 40px;
   display: inline-flex;
@@ -943,6 +958,7 @@ button {
   .mobile-menu nav { position: absolute; top: 52px; right: 0; width: 190px; display: grid; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: var(--shadow-soft); }
   .mobile-menu nav a { min-height: 46px; display: flex; align-items: center; padding-inline: 13px; border-radius: 8px; font-weight: 800; }
   .mobile-menu nav .site-login { width: 100%; min-height: 46px; justify-content: flex-start; padding-inline: 13px; border: 0; border-radius: 8px; }
+  .mobile-menu nav .language-switch { margin-block: 4px; border: 1px solid var(--line); color: var(--accent); font-size: .82rem; }
   .mobile-menu nav a:last-child { background: var(--accent); color: #fff; }
 
   .hero-section {

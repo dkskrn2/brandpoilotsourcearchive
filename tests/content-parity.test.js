@@ -62,8 +62,8 @@ test("Brand Pilot has a first-class product route and navigation entry", () => {
   const serviceRoute = read("app/service/[slug]/page.tsx");
   const sitemap = read("app/sitemap.ts");
 
-  assert.equal((header.match(/href="\/product"/g) || []).length, 2, "desktop and mobile menus must expose Product");
-  assert.match(footer, /href="\/product"/);
+  assert.equal((header.match(/href=\{path\("\/product"\)\}/g) || []).length, 2, "desktop and mobile menus must expose localized Product links");
+  assert.match(footer, /href=\{path\("\/product"\)\}/);
   assert.match(product, /BrandPilotPage/);
   assert.match(product, /SoftwareApplication/);
   assert.match(product, /mainEntity/);
@@ -221,7 +221,8 @@ test("admin content manager uses PostgreSQL and protects every mutation", () => 
   assert.match(database, /DATABASE_URL/);
   assert.match(database, /postgres\(url/);
   assert.doesNotMatch(database, /node:sqlite|growthline\.sqlite/);
-  assert.match(read("proxy.ts"), /matcher: \["\/admin\/:path\*"\]/);
+  assert.match(read("proxy.ts"), /const isAdmin = pathname === "\/admin" \|\| pathname\.startsWith\("\/admin\/"\)/);
+  assert.match(read("proxy.ts"), /verifyAdminToken/);
   assert.match(read("lib/admin-auth.ts"), /timingSafeEqual/);
   assert.match(read("lib/admin-session.ts"), /httpOnly|HS256|ADMIN_SESSION_SECRET/);
 });
@@ -311,7 +312,7 @@ test("public header keeps customer login disabled and separate from administrato
   const header = read("components/site-header.tsx");
   const styles = read("app/globals.css");
   assert.equal((header.match(/className="site-login"/g) || []).length, 2);
-  assert.equal((header.match(/disabled>로그인/g) || []).length, 2);
+  assert.equal((header.match(/disabled>\{labels\.login\}/g) || []).length, 2);
   assert.doesNotMatch(header, /href="\/login"/);
   assert.match(styles, /\.mobile-menu nav \.site-login/, "mobile login must use the same menu-row layout as mobile links");
 });
@@ -340,9 +341,39 @@ test("SEO and AEO settings expose authored content and protect private routes", 
   assert.match(robots, /OAI-SearchBot/);
   assert.match(robots, /api\/content-images/);
   assert.match(nextConfig, /X-Robots-Tag/);
-  assert.match(seo, /alternates: \{ canonical: path \}/);
+  assert.match(seo, /alternates: \{ canonical: path, \.\.\.\(languages \? \{ languages \} : \{\}\) \}/);
+  assert.match(seo, /"x-default": absoluteUrl\(koreanPath\)/);
   assert.match(seo, /BreadcrumbList/);
   assert.match(seo, /"@type": "Service"/);
   assert.match(seo, /summary_large_image/);
   assert.match(seo, /replaceAll\("<", "\\\\u003c"\)/);
+});
+
+test("English marketing routes use locale detection, persistent switching, and reciprocal SEO alternates", () => {
+  const proxy = read("proxy.ts");
+  const layout = read("app/layout.tsx");
+  const header = read("components/site-header.tsx");
+  const sitemap = read("app/sitemap.ts");
+  const englishHome = read("app/en/page.tsx");
+  const englishService = read("app/en/service/page.tsx");
+  const englishProduct = read("app/en/product/page.tsx");
+  const englishWork = read("app/en/work/page.tsx");
+  const englishContact = read("app/en/contact/page.tsx");
+
+  assert.match(proxy, /accept-language/);
+  assert.match(proxy, /pathname === "\/" && preferredLocale\(request\) === "en"/);
+  assert.match(proxy, /new URL\("\/en", request\.url\)/);
+  assert.match(layout, /<html lang=\{locale\}/);
+  assert.match(header, /SITE_LOCALE_COOKIE/);
+  assert.match(header, /Content \(KO\)/);
+  assert.match(sitemap, /"\/en\/product"/);
+  assert.match(sitemap, /"\/en\/contact"/);
+
+  for (const source of [englishHome, englishService, englishProduct, englishWork, englishContact]) {
+    assert.match(source, /locale: "en"/);
+    assert.match(source, /localized: true/);
+  }
+  assert.equal(fs.existsSync(path.join(root, "app/en/content/page.tsx")), false, "content must remain Korean-only");
+  assert.match(read("lib/projects.ts"), /getProjects\(locale: "ko" \| "en" = "ko"\)/);
+  assert.match(read("lib/service-details-en.ts"), /UX Research/);
 });

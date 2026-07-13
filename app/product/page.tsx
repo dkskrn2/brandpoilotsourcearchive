@@ -18,7 +18,8 @@ const productId = `${productUrl}#software-application`;
 export const metadata: Metadata = createPageMetadata({
   title: "Brand Pilot | 브랜드 콘텐츠 운영 시스템",
   description: productDescription,
-  path: productPath
+  path: productPath,
+  localized: true
 });
 
 const breadcrumb = breadcrumbJsonLd([
