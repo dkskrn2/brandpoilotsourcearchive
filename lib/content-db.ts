@@ -2,6 +2,7 @@ import "server-only";
 
 import postgres from "postgres";
 import { contentArticles, type ContentArticle, type ContentSection } from "@/lib/content";
+import { CONTENT_PAGE_SIZE, type ContentListItem, type PublishedArticlePage } from "@/lib/content-pagination";
 import { editorTextToSections } from "@/lib/content-format.js";
 import { articleBodyToHtml, isHtmlBody, sectionsToArticleHtml } from "@/lib/content-html";
 
@@ -68,6 +69,17 @@ type StatsRow = {
   published: string | number | null;
   draft: string | number | null;
   categories: string | number;
+};
+
+type ArticleSummaryRow = {
+  slug: string;
+  category: string;
+  title: string;
+  summary: string;
+  published_at: string;
+  reading_time: string;
+  image: string;
+  image_alt: string;
 };
 
 type ContactInquiryRow = {
@@ -269,8 +281,89 @@ export async function listPublishedArticles() {
   return listArticles({ status: "published" });
 }
 
+function toContentListItem(article: StoredArticle): ContentListItem {
+  return {
+    slug: article.slug,
+    category: article.category,
+    title: article.title,
+    summary: article.summary,
+    publishedAt: article.publishedAt,
+    readingTime: article.readingTime,
+    image: article.image,
+    imageAlt: article.imageAlt
+  };
+}
+
+function mapArticleSummary(row: ArticleSummaryRow): ContentListItem {
+  return {
+    slug: row.slug,
+    category: row.category,
+    title: row.title,
+    summary: row.summary,
+    publishedAt: row.published_at,
+    readingTime: row.reading_time,
+    image: row.image,
+    imageAlt: row.image_alt
+  };
+}
+
+export async function listPublishedArticlePage(page = 1, pageSize = CONTENT_PAGE_SIZE): Promise<PublishedArticlePage> {
+  const safePage = Math.max(1, Math.floor(page));
+  const safePageSize = Math.min(20, Math.max(1, Math.floor(pageSize)));
+  const offset = (safePage - 1) * safePageSize;
+
+  if (!isDatabaseConfigured()) {
+    const articles = fallbackArticles({ status: "published" });
+    const total = articles.length;
+    return {
+      items: articles.slice(offset, offset + safePageSize).map(toContentListItem),
+      page: safePage,
+      pageSize: safePageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / safePageSize))
+    };
+  }
+
+  await ensureSchema();
+  const sql = getSql();
+  const countRows = await sql<{ total: string | number }[]>`
+    SELECT COUNT(*) AS total FROM content_articles WHERE status = 'published'
+  `;
+  const rows = await sql<ArticleSummaryRow[]>`
+    SELECT slug, category, title, summary, published_at::text AS published_at,
+      reading_time, image, image_alt
+    FROM content_articles
+    WHERE status = 'published'
+    ORDER BY published_at DESC, id DESC
+    LIMIT ${safePageSize} OFFSET ${offset}
+  `;
+  const total = Number(countRows[0]?.total ?? 0);
+  return {
+    items: rows.map(mapArticleSummary),
+    page: safePage,
+    pageSize: safePageSize,
+    total,
+    totalPages: Math.max(1, Math.ceil(total / safePageSize))
+  };
+}
+
 export async function listIndexableArticles() {
   return (await listPublishedArticles()).filter((article) => !article.isDummy);
+}
+
+export async function hasIndexableArticles() {
+  if (!isDatabaseConfigured()) {
+    return seedArticles().some((article) => article.status === "published" && !article.isDummy);
+  }
+  await ensureSchema();
+  const sql = getSql();
+  const rows = await sql<{ exists: boolean }[]>`
+    SELECT EXISTS(
+      SELECT 1 FROM content_articles
+      WHERE status = 'published' AND is_dummy = FALSE
+    ) AS exists
+  `;
+  return Boolean(rows[0]?.exists);
 }
 
 export async function getArticleBySlug(slug: string, includeDraft = false) {

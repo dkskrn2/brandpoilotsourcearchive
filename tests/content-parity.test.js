@@ -107,12 +107,25 @@ test("content hub reads published database articles as individual pages", () => 
   const contentData = read("lib/content.ts");
   const contentIndex = read("app/content/page.tsx");
   const contentDetail = read("app/content/[slug]/page.tsx");
+  const contentFeed = read("components/infinite-content-list.tsx");
+  const contentApi = read("app/api/content/route.ts");
+  const contentDatabase = read("lib/content-db.ts");
   const header = read("components/site-header.tsx");
 
   for (const slug of ["brand-positioning-choice-criteria", "customer-lifecycle-retention-system", "brand-marketing-incrementality", "july-midyear-growth-review", "spotify-wrapped-data-to-brand-experience", "duolingo-habit-growth-loop", "dominos-digital-order-operating-system", "where-revenue-flow-stops", "research-before-redesign", "decision-ready-data", "repeatable-content-operations"]) {
     assert.match(contentData, new RegExp(slug));
   }
-  assert.match(contentIndex, /listPublishedArticles/);
+  assert.match(contentIndex, /listPublishedArticlePage/);
+  assert.match(contentIndex, /hasIndexableArticles/);
+  assert.match(contentIndex, /InfiniteContentList/);
+  assert.match(contentIndex, /contentPageHref/);
+  assert.match(contentFeed, /IntersectionObserver/);
+  assert.match(contentFeed, /history\.replaceState/);
+  assert.match(contentFeed, /aria-live="polite"/);
+  assert.match(contentFeed, /href=\{contentPageHref\(nextPage\)\}/);
+  assert.match(contentApi, /listPublishedArticlePage/);
+  assert.match(contentApi, /Cache-Control.*no-store/);
+  assert.match(contentDatabase, /LIMIT \$\{safePageSize\} OFFSET \$\{offset\}/);
   assert.match(contentDetail, /getArticleBySlug/);
   assert.match(contentDetail, /force-dynamic/);
   assert.match(header, /href="\/content"/);
