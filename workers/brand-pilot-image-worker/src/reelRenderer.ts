@@ -98,8 +98,10 @@ function validateScenes(input: Parameters<ReelRenderer["render"]>[0]) {
       scene.index !== offset + 1
       || scene.mimeType !== "image/png"
       || scene.bytes.length === 0
-      || scene.width !== 1080
-      || scene.height !== 1920
+      || !Number.isInteger(scene.width)
+      || scene.width <= 0
+      || !Number.isInteger(scene.height)
+      || scene.height <= 0
     ) {
       throw new Error("invalid_reel_scene");
     }

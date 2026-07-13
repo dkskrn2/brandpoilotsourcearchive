@@ -11,16 +11,21 @@ const fixturePng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAA
 
 type ImageDimensions = { width: 1080; height: 1080 | 1920 };
 
-export async function normalizeRenderedPng(
-  bytes: Buffer,
-  dimensions: ImageDimensions = { width: 1080, height: 1080 }
-) {
+async function readPngMetadata(bytes: Buffer) {
   const metadata = await sharp(bytes, { failOn: "error" }).metadata().catch(() => {
     throw new Error("image_render_output_not_png");
   });
   if (metadata.format !== "png" || !metadata.width || !metadata.height) {
     throw new Error("image_render_output_not_png");
   }
+  return { width: metadata.width, height: metadata.height };
+}
+
+export async function normalizeRenderedPng(
+  bytes: Buffer,
+  dimensions: ImageDimensions = { width: 1080, height: 1080 }
+) {
+  const metadata = await readPngMetadata(bytes);
   if (metadata.width * dimensions.height !== metadata.height * dimensions.width) {
     throw new Error("image_render_output_aspect_ratio_invalid");
   }
@@ -28,6 +33,14 @@ export async function normalizeRenderedPng(
     .resize(dimensions.width, dimensions.height, { fit: "fill" })
     .png({ compressionLevel: 9 })
     .toBuffer();
+}
+
+async function preserveRenderedPng(bytes: Buffer) {
+  const metadata = await readPngMetadata(bytes);
+  return {
+    bytes: await sharp(bytes, { failOn: "error" }).png({ compressionLevel: 9 }).toBuffer(),
+    ...metadata
+  };
 }
 
 function maxImagesFor(job: ClaimedImageJob) {
@@ -85,19 +98,26 @@ export async function loadRenderedPackage(
     throw new Error("image_render_output_count_mismatch");
   }
 
-  const dimensions = {
-    width: 1080 as const,
-    height: deliveryFormat === "instagram_feed_carousel" ? 1080 as const : 1920 as const
-  };
-  const images = await Promise.all(manifest.assets.map(async (asset): Promise<RenderedImage> => ({
-    index: asset.index,
-    bytes: await normalizeRenderedPng(
-      await readFile(path.join(outputDir, outputName(deliveryFormat, asset.index))),
-      dimensions
-    ),
-    mimeType: "image/png",
-    ...dimensions
-  })));
+  const images = await Promise.all(manifest.assets.map(async (asset): Promise<RenderedImage> => {
+    const source = await readFile(path.join(outputDir, outputName(deliveryFormat, asset.index)));
+    if (deliveryFormat === "instagram_feed_carousel") {
+      return {
+        index: asset.index,
+        bytes: await normalizeRenderedPng(source, { width: 1080, height: 1080 }),
+        mimeType: "image/png",
+        width: 1080,
+        height: 1080
+      };
+    }
+    const preserved = await preserveRenderedPng(source);
+    return {
+      index: asset.index,
+      bytes: preserved.bytes,
+      mimeType: "image/png",
+      width: preserved.width,
+      height: preserved.height
+    };
+  }));
   return { manifest, images };
 }
 

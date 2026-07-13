@@ -97,7 +97,7 @@ describe("configured image renderer", () => {
 
   it("loads the actual Story asset count and deterministic story.png name from the validated manifest", async () => {
     const directory = await outputDirectory();
-    await writeFile(path.join(directory, "story.png"), await png(900, 1600));
+    await writeFile(path.join(directory, "story.png"), await png(1024, 1536));
     await writeFile(path.join(directory, "content.json"), JSON.stringify({
       deliveryFormat: "instagram_story",
       promptVersion: "worker-story.v1",
@@ -113,15 +113,15 @@ describe("configured image renderer", () => {
       validation: { passed: true }
     });
     expect(rendered.images).toEqual([
-      expect.objectContaining({ index: 1, width: 1080, height: 1920 })
+      expect.objectContaining({ index: 1, width: 1024, height: 1536 })
     ]);
   });
 
   it("loads one to five Reel scenes by scene-NN.png while maxImages remains only an upper bound", async () => {
     const directory = await outputDirectory();
     await Promise.all([
-      writeFile(path.join(directory, "scene-01.png"), await png(900, 1600)),
-      writeFile(path.join(directory, "scene-02.png"), await png(900, 1600)),
+      writeFile(path.join(directory, "scene-01.png"), await png(1024, 1536)),
+      writeFile(path.join(directory, "scene-02.png"), await png(1024, 1536)),
       writeFile(path.join(directory, "content.json"), JSON.stringify({
         deliveryFormat: "instagram_reel",
         promptVersion: "worker-reel.v1",
@@ -136,7 +136,7 @@ describe("configured image renderer", () => {
 
     expect(rendered.manifest.selectedAssetCount).toBe(2);
     expect(rendered.images).toHaveLength(2);
-    expect(rendered.images.every((image) => image.width === 1080 && image.height === 1920)).toBe(true);
+    expect(rendered.images.every((image) => image.width === 1024 && image.height === 1536)).toBe(true);
   });
 
   it("rejects generated file counts that disagree with the validated manifest", async () => {

@@ -23,8 +23,8 @@ export interface RenderedImage {
   index: number;
   bytes: Buffer;
   mimeType: "image/png";
-  width: 1080;
-  height: 1080 | 1920;
+  width: number;
+  height: number;
 }
 
 export interface RenderedReelMedia {
@@ -168,14 +168,16 @@ function validateRenderedImages(
   ) {
     throw new Error("image_render_output_count_invalid");
   }
-  const expectedHeight = manifest.deliveryFormat === "instagram_feed_carousel" ? 1080 : 1920;
   images.forEach((image, index) => {
+    const dimensionsValid = manifest.deliveryFormat === "instagram_feed_carousel"
+      ? image.width === 1080 && image.height === 1080
+      : Number.isInteger(image.width) && image.width > 0
+        && Number.isInteger(image.height) && image.height > 0;
     if (
       image.index !== index + 1
       || image.mimeType !== "image/png"
       || image.bytes.length === 0
-      || image.width !== 1080
-      || image.height !== expectedHeight
+      || !dimensionsValid
     ) {
       throw new Error("image_render_output_invalid");
     }
