@@ -4,8 +4,8 @@ export interface WorkerManifestAsset {
   index: number;
   role: string;
   embeddedText: string;
-  width: 1080;
-  height: 1080 | 1920;
+  width: number;
+  height: number;
   checksum?: string;
 }
 
@@ -102,7 +102,7 @@ function embeddedTextFor(record: Record<string, unknown>) {
 
 function parseAssets(
   values: unknown[],
-  expectedHeight: 1080 | 1920
+  deliveryFormat: InstagramDeliveryFormat
 ): WorkerManifestAsset[] {
   return values.map((value, offset) => {
     const record = asRecord(value);
@@ -111,7 +111,9 @@ function parseAssets(
     if (!Number.isInteger(index) || index !== offset + 1) invalid("image_asset_index_invalid");
     const role = nonEmptyString(record.role);
     if (!role) invalid("asset_role_invalid");
-    if (Number(record.width) !== 1080 || Number(record.height) !== expectedHeight) {
+    const width = deliveryFormat === "instagram_feed_carousel" ? Number(record.width) : 1080;
+    const height = deliveryFormat === "instagram_feed_carousel" ? Number(record.height) : 1920;
+    if (deliveryFormat === "instagram_feed_carousel" && (width !== 1080 || height !== 1080)) {
       invalid("image_asset_dimensions_invalid");
     }
     const checksum = nonEmptyString(record.checksum);
@@ -119,8 +121,8 @@ function parseAssets(
       index,
       role,
       embeddedText: embeddedTextFor(record),
-      width: 1080,
-      height: expectedHeight,
+      width,
+      height,
       ...(checksum ? { checksum } : {})
     };
   });
@@ -207,8 +209,7 @@ export function parseWorkerManifest(
     invalid("selected_asset_count_mismatch");
   }
 
-  const expectedHeight = deliveryFormat === "instagram_feed_carousel" ? 1080 : 1920;
-  const assets = parseAssets(rawAssets, expectedHeight);
+  const assets = parseAssets(rawAssets, deliveryFormat);
   assertUniqueAssets(assets);
   if (assets.some(isCtaOnly)) invalid("asset_final_cta_only");
 

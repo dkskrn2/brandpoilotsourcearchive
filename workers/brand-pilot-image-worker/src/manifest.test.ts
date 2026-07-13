@@ -133,10 +133,20 @@ describe("parseWorkerManifest", () => {
     expect(() => parseWorkerManifest(byText)).toThrow("asset_final_cta_only");
   });
 
-  it("verifies format-specific dimensions", () => {
-    const squareStory = story();
-    squareStory.story[0].height = 1080;
-    expect(() => parseWorkerManifest(squareStory)).toThrow("image_asset_dimensions_invalid");
+  it("accepts CLI-reported vertical dimensions for Story and Reel while keeping Feed square", () => {
+    const verticalStory = story();
+    Reflect.deleteProperty(verticalStory.story[0], "width");
+    Reflect.deleteProperty(verticalStory.story[0], "height");
+    const parsedStory = parseWorkerManifest(verticalStory);
+    if (parsedStory.deliveryFormat !== "instagram_story") throw new Error("expected_story_manifest");
+    expect(parsedStory.story).toMatchObject({ width: 1080, height: 1920 });
+
+    const verticalReel = reel(1);
+    Reflect.deleteProperty(verticalReel.scenes[0], "width");
+    Reflect.deleteProperty(verticalReel.scenes[0], "height");
+    const parsedReel = parseWorkerManifest(verticalReel);
+    if (parsedReel.deliveryFormat !== "instagram_reel") throw new Error("expected_reel_manifest");
+    expect(parsedReel.scenes[0]).toMatchObject({ width: 1080, height: 1920 });
 
     const verticalFeed = feed(1);
     verticalFeed.cards[0].height = 1920;

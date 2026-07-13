@@ -121,13 +121,13 @@ describe("image render job contract", () => {
       ...commonResult(1),
       deliveryFormat: "instagram_story",
       promptVersion: "worker-story.v1",
-      story: pngAsset(1, "story", 1080, 1920, "story.png")
+      story: pngAsset(1, "story", 941, 1672, "story.png")
     });
 
     expect(result).toMatchObject({
       deliveryFormat: "instagram_story",
       selectedAssetCount: 1,
-      story: { width: 1080, height: 1920, mimeType: "image/png" }
+      story: { width: 941, height: 1672, mimeType: "image/png" }
     });
   });
 
@@ -137,8 +137,8 @@ describe("image render job contract", () => {
       deliveryFormat: "instagram_reel",
       promptVersion: "worker-reel.v1",
       scenes: [
-        pngAsset(1, "hook", 1080, 1920, "scene-01.png"),
-        pngAsset(2, "proof", 1080, 1920, "scene-02.png")
+        pngAsset(1, "hook", 941, 1672, "scene-01.png"),
+        pngAsset(2, "proof", 941, 1672, "scene-02.png")
       ],
       cover: {
         url: "https://blob.example.com/rendered-content/instagram/brand-1/output-1/job-1/cover.png",

@@ -199,8 +199,8 @@ function parseCommon(
 function parsePngAsset(
   value: unknown,
   expectedIndex: number,
-  expectedWidth: 1080,
-  expectedHeight: 1080 | 1920,
+  expectedWidth: 1080 | null,
+  expectedHeight: 1080 | null,
   fallbackRole?: unknown
 ): WorkerPngAsset {
   const item = asRecord(value);
@@ -215,7 +215,16 @@ function parsePngAsset(
     invalid("image_asset_url_invalid");
   }
   if (item.mimeType !== "image/png") invalid("image_asset_type_invalid");
-  if (Number(item.width) !== expectedWidth || Number(item.height) !== expectedHeight) {
+  const width = Number(item.width);
+  const height = Number(item.height);
+  if (
+    !Number.isInteger(width)
+    || width <= 0
+    || !Number.isInteger(height)
+    || height <= 0
+    || (expectedWidth !== null && width !== expectedWidth)
+    || (expectedHeight !== null && height !== expectedHeight)
+  ) {
     invalid("image_asset_dimensions_invalid");
   }
   return {
@@ -223,8 +232,8 @@ function parsePngAsset(
     role,
     url,
     mimeType: "image/png",
-    width: expectedWidth,
-    height: expectedHeight
+    width,
+    height
   };
 }
 
@@ -359,7 +368,7 @@ export function parseImageRenderJobResult(
         ? record.images
         : [record.story ?? record.image].filter((item) => item !== undefined);
     if (candidates.length !== 1) invalid("story_asset_count_invalid");
-    const story = parsePngAsset(candidates[0], 1, 1080, 1920);
+    const story = parsePngAsset(candidates[0], 1, null, null);
     if (common.selectedAssetCount !== 1) invalid("selected_asset_count_mismatch");
     return {
       ...common,
@@ -371,7 +380,7 @@ export function parseImageRenderJobResult(
 
   const rawScenes = Array.isArray(record.scenes) ? record.scenes : [];
   if (rawScenes.length < 1 || rawScenes.length > 5) invalid("asset_count_out_of_range");
-  const scenes = rawScenes.map((scene, index) => parsePngAsset(scene, index + 1, 1080, 1920));
+  const scenes = rawScenes.map((scene, index) => parsePngAsset(scene, index + 1, null, null));
   assertUniqueRoles(scenes);
   if (common.selectedAssetCount !== scenes.length) invalid("selected_asset_count_mismatch");
   return {
