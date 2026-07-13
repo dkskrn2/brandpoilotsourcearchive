@@ -38,6 +38,27 @@ npm run dev
 
 `.env.example`을 `.env.local`로 복사하고 필요한 값을 입력합니다. DB 연결 문자열이 없을 때 공개 콘텐츠는 시드 데이터를 읽기 전용으로 표시하지만 관리자 저장·수정·삭제는 실행되지 않습니다.
 
+## 공개 콘텐츠와 제품
+
+- `/content`는 7월 운영 계획과 실제 브랜드 성장 사례를 포함한 장문 콘텐츠를 바로 보여줍니다. 각 글의 마지막 상담 안내는 `/contact`로 연결됩니다.
+- `/product`는 현재 제공 중인 Brand Pilot의 기능과 운영 흐름을 설명합니다. 기존 `/service/brandpilot` 주소는 이 경로로 영구 이동합니다.
+- 콘텐츠와 제품 페이지는 검색·답변 엔진이 이해할 수 있도록 canonical URL, 사이트맵, breadcrumb, BlogPosting, SoftwareApplication 구조화 데이터를 제공합니다.
+
+## 콘텐츠 DB 동기화
+
+소스의 `lib/content.ts`와 운영 PostgreSQL을 비교한 뒤 반영하려면 다음 명령을 사용합니다. `--apply`가 없으면 변경 예정 항목만 출력합니다.
+
+```bash
+node scripts/sync-content-db.mjs
+node scripts/sync-content-db.mjs --apply
+```
+
+DB 콘솔에서 실행할 SQL 파일이 필요하면 다음과 같이 생성합니다.
+
+```bash
+node scripts/content-upsert-sql.mjs --out content-upsert.sql
+```
+
 ## 검증 명령
 
 ```bash
@@ -53,3 +74,8 @@ npm run build
 - `proxy.ts`가 미인증 요청을 로그인 화면으로 보냅니다.
 - 모든 콘텐츠 Server Action은 데이터 변경 직전에 세션을 다시 검증합니다.
 - 관리자 계정과 세션 비밀값은 저장소에 포함하지 않고 Vercel 환경변수로만 관리합니다.
+
+## 프로젝트 문서
+
+- [변경 이력](CHANGELOG.md)
+- [배포 후 확인할 작업](TODOS.md)
