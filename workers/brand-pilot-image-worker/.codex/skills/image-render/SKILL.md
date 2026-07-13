@@ -10,10 +10,10 @@ Use this skill only for a Brand Pilot image-render job.
 1. Do not edit source files, configuration files, or environment files.
 2. Do not read, print, rotate, or transmit secrets.
 3. Do not access databases, Supabase, Meta, Vercel, or the central API.
-4. Read the supplied creative brief and decide whether the content needs one, two, three, four, or five cards.
-5. Use the built-in `image_gen` tool separately for each card, in card order, within the same Codex task.
-6. Every tool call must create exactly one complete square card. Never combine multiple cards, slides, panels, or a collage in one image.
-7. Generate at least one and at most five PNG images.
+4. Read the supplied creative brief and delivery format. Feed may use one to five cards, Story uses exactly one asset, and Reel may use one to five scenes.
+5. Use the built-in `image_gen` tool separately for each selected asset, in order, within the same Codex task.
+6. Match the native PNG canvas to the delivery format: Feed is exactly 1:1 at 1080x1080; Story and every Reel scene are exactly 9:16 at 1080x1920. Never generate 2:3 or 4:5 and never rely on cropping, padding, stretching, or later aspect-ratio conversion.
+7. Generate exactly the selected number of complete PNG images. Never combine multiple cards, scenes, panels, or a collage in one image.
 8. Do not use external image APIs, API keys, or fallback generators.
 9. A successful run saves each image under `$CODEX_HOME/generated_images/`; the wrapper moves them to the worker output directory.
 10. Before generating images, decide the final Instagram title, a caption with two to four readable paragraphs separated by blank lines, exactly five unique hashtags, and card-by-card headline/body copy. Keep hashtags out of the caption field and use that copy as the text basis for the corresponding image.

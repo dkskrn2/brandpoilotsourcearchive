@@ -262,11 +262,11 @@ const readGroupUpdatedAt = async (database) => {
   return result.rows;
 };
 
-test("fresh and authentic legacy paths converge after migration 017", async (context) => {
+test("fresh and authentic legacy paths converge after migration 018", async (context) => {
   const migrations = await loadMigrations();
   let freshSnapshot;
 
-  await context.test("fresh path executes migrations 001-017", async () => {
+  await context.test("fresh path executes migrations 001-018", async () => {
     freshSnapshot = await withDatabase(async (database) => {
       await runMigrationRange(
         database,
@@ -279,7 +279,7 @@ test("fresh and authentic legacy paths converge after migration 017", async (con
         database,
         migrations,
         "014_instagram_delivery_formats.sql",
-        "017_preserve_topic_publish_group_status.sql",
+        "018_repair_active_render_job_unique.sql",
       );
       const snapshot = await readSnapshot(database, fixture.brandId);
       const migration017 = migrations.find(
@@ -297,7 +297,7 @@ test("fresh and authentic legacy paths converge after migration 017", async (con
   });
 
   await context.test(
-    "legacy path executes the authentic 014 fixture followed by 015, 016, and 017",
+    "legacy path executes the authentic 014 fixture followed by 015 through 018",
     async () => {
       const legacySnapshot = await withDatabase(async (database) => {
         await runMigrationRange(
@@ -312,7 +312,7 @@ test("fresh and authentic legacy paths converge after migration 017", async (con
           database,
           migrations,
           "015_delivery_format_legacy_channels.sql",
-          "017_preserve_topic_publish_group_status.sql",
+          "018_repair_active_render_job_unique.sql",
         );
         return readSnapshot(database, fixture.brandId);
       });

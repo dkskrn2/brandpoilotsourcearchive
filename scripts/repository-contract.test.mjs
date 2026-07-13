@@ -213,7 +213,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션은 001부터 017까지 정확한 이름으로 존재한다", async () => {
+test("데이터베이스 마이그레이션은 001부터 018까지 정확한 이름으로 존재한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -235,7 +235,23 @@ test("데이터베이스 마이그레이션은 001부터 017까지 정확한 이
     "015_delivery_format_legacy_channels.sql",
     "016_repair_topic_publish_group_schedule.sql",
     "017_preserve_topic_publish_group_status.sql",
+    "018_repair_active_render_job_unique.sql",
   ]);
+});
+
+test("활성 이미지 렌더 작업 보정은 중복 작업을 종료한 뒤 부분 고유 인덱스를 복구한다", async () => {
+  const migration = await readFile(
+    "db/migrations/018_repair_active_render_job_unique.sql",
+    "utf8",
+  );
+
+  assert.match(migration, /row_number\(\) over \([\s\S]*partition by channel_output_id/i);
+  assert.match(migration, /where active_rank > 1/i);
+  assert.match(migration, /last_error = 'superseded_by_migration_018'/i);
+  assert.match(
+    migration,
+    /create unique index jobs_active_render_output_unique[\s\S]*on jobs\(channel_output_id\)[\s\S]*status in \('queued', 'running'\)/i,
+  );
 });
 
 test("Instagram 전달 형식 마이그레이션은 형식·발행 그룹·렌더 산출물 계약을 정의한다", async () => {

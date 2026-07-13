@@ -57,7 +57,10 @@ describe("buildWorkerPrompt", () => {
     const prompt = buildWorkerPrompt(inputFor("instagram_story"));
 
     expect(prompt).toContain("worker-story.v1");
-    expect(prompt).toContain("exactly 1 story asset");
+    expect(prompt).toContain("Create exactly 1 native 9:16 vertical Story asset");
+    expect(prompt).toContain("native 9:16 vertical Story asset");
+    expect(prompt).toContain("Do not generate 1:1, 2:3, 3:4, 4:5");
+    expect(prompt).toContain("Do not rely on later cropping");
     expect(prompt).toContain("1080x1920");
     expect(prompt).toContain("brief embedded copy");
     expect(prompt).toContain("Do not assume interactive stickers");
@@ -68,7 +71,9 @@ describe("buildWorkerPrompt", () => {
 
     expect(prompt).toContain("worker-reel.v1");
     expect(prompt).toContain("smallest useful scene count from 1 to 5");
-    expect(prompt).toContain("ordered, distinct 1080x1920 scenes");
+    expect(prompt).toContain("native 9:16 vertical scenes");
+    expect(prompt).toContain("Do not generate 1:1, 2:3, 3:4, 4:5");
+    expect(prompt).toContain("Do not rely on later cropping");
     expect(prompt).toContain("caption");
     expect(prompt).toContain("exactly 5 unique valid hashtags");
   });
