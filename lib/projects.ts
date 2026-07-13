@@ -12,7 +12,7 @@ export type Project = {
   year: string;
   primaryLinkUrl: string;
   primaryLinkType: string;
-  domainKeys: string[];
+  domainKey: string;
   detailEnabled: boolean;
 };
 
@@ -57,6 +57,11 @@ export function getProjects(): Project[] {
 
   return rows.map((row) => {
     const record = Object.fromEntries(headers.map((header, index) => [header, row[index] ?? ""]));
+    const domainKey = record.domain_key.trim();
+    if (!domainKey || domainKey.includes(";")) {
+      throw new Error(`Project ${record.id || "unknown"} must have exactly one domain category.`);
+    }
+
     return {
       id: record.id,
       slug: record.slug,
@@ -66,7 +71,7 @@ export function getProjects(): Project[] {
       year: record.published_at.slice(0, 4),
       primaryLinkUrl: record.primary_link_url,
       primaryLinkType: record.primary_link_type,
-      domainKeys: record.domain_keys.split(";").filter(Boolean),
+      domainKey,
       detailEnabled: record.detail_enabled === "Y"
     };
   }).sort((a, b) => a.sortOrder - b.sortOrder);

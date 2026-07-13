@@ -80,9 +80,18 @@ test("contact inquiries are stored in PostgreSQL without a Google Apps Script de
   assert.match(admin, /상담 문의/);
 });
 
-test("work migration keeps all 22 project rows", () => {
-  const rows = read("data/seed/projects.csv").trim().split(/\r?\n/);
+test("work migration keeps 22 projects with exactly one category each", () => {
+  const projectCsv = read("data/seed/projects.csv");
+  const projectModel = read("lib/projects.ts");
+  const projectBrowser = read("components/projects-browser.tsx");
+  const rows = projectCsv.trim().split(/\r?\n/);
   assert.equal(rows.length - 1, 22);
+  assert.doesNotMatch(projectCsv, /;/, "a project must not belong to multiple categories");
+  assert.match(projectCsv, /primary_link_type,domain_key,detail_enabled/);
+  assert.match(projectModel, /domainKey: string/);
+  assert.doesNotMatch(projectModel, /domainKeys/);
+  assert.match(projectModel, /must have exactly one domain category/);
+  assert.match(projectBrowser, /project\.domainKey === domain/);
   assert.match(read("app/work/page.tsx"), /getProjects\(\)/);
 });
 

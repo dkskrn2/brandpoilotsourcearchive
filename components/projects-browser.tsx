@@ -25,8 +25,8 @@ const domainLabels: Record<string, string> = {
 
 export function ProjectsBrowser({ projects }: { projects: Project[] }) {
   const [domain, setDomain] = useState("all");
-  const filtered = useMemo(() => domain === "all" ? projects : projects.filter((project) => project.domainKeys.includes(domain)), [domain, projects]);
-  const counts = useMemo(() => Object.fromEntries(domains.map(({ key }) => [key, key === "all" ? projects.length : projects.filter((project) => project.domainKeys.includes(key)).length])), [projects]);
+  const filtered = useMemo(() => domain === "all" ? projects : projects.filter((project) => project.domainKey === domain), [domain, projects]);
+  const counts = useMemo(() => Object.fromEntries(domains.map(({ key }) => [key, key === "all" ? projects.length : projects.filter((project) => project.domainKey === key).length])), [projects]);
 
   return (
     <div className="projects-browser">
@@ -56,7 +56,7 @@ export function ProjectsBrowser({ projects }: { projects: Project[] }) {
                 <span className="project-card__number">{String(index + 1).padStart(2, "0")}</span>
                 <div>
                   <span>{project.year}</span>
-                  <span>{project.domainKeys.map((key) => domainLabels[key] ?? key).join(" · ")}</span>
+                  <span>{domainLabels[project.domainKey] ?? project.domainKey}</span>
                 </div>
               </div>
               <h2>{project.title}</h2>

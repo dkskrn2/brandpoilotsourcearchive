@@ -12,7 +12,7 @@ export default function WorkPage() {
   const projects = getProjects();
   const years = projects.map((project) => Number(project.year)).filter(Boolean);
   const yearRange = `${Math.min(...years)}-${Math.max(...years)}`;
-  const domainCount = new Set(projects.flatMap((project) => project.domainKeys)).size;
+  const domainCount = new Set(projects.map((project) => project.domainKey)).size;
 
   return (
     <main className="work-page">
