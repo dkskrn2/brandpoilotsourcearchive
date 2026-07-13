@@ -9,8 +9,8 @@ export function ContactForm({ locale = "ko" }: { locale?: "ko" | "en" }) {
   const [status, setStatus] = useState<{ message: string; error: boolean }>({ message: "", error: false });
   const [submitting, setSubmitting] = useState(false);
 
-  const sanitize = (value: string, type: "text" | "phone" | "url" = "text") => {
-    let next = value.replace(/[?&=]/g, "");
+  const sanitize = (value: string, type: "text" | "phone" | "url" | "email" = "text") => {
+    let next = type === "email" ? value.replace(/\s/g, "") : value.replace(/[?&=]/g, "");
     if (type === "phone") next = next.replace(/\D/g, "");
     if (type === "url") next = next.replace(/[ㄱ-ㅎㅏ-ㅣ가-힣]/g, "");
     return next;
@@ -26,6 +26,7 @@ export function ContactForm({ locale = "ko" }: { locale?: "ko" | "en" }) {
     const payload = {
       name: String(formData.get("name_company") ?? "").trim(),
       phone: String(formData.get("phone") ?? "").trim(),
+      email: String(formData.get("email") ?? "").trim(),
       site: String(formData.get("site_url") ?? "").trim(),
       message: String(formData.get("message") ?? "").trim(),
       agree: formData.get("agree_privacy") ? "Y" : "N",
@@ -74,6 +75,10 @@ export function ContactForm({ locale = "ko" }: { locale?: "ko" | "en" }) {
           <div className="form-field">
             <label htmlFor="contact_phone">{english ? "Phone number" : "연락처"}</label>
             <input id="contact_phone" name="phone" type="tel" placeholder={english ? "821000000000" : "01000000000"} autoComplete="tel" inputMode="numeric" required onInput={(event) => { event.currentTarget.value = sanitize(event.currentTarget.value, "phone"); }} />
+          </div>
+          <div className="form-field">
+            <label htmlFor="contact_email">{english ? "Email" : "이메일"}</label>
+            <input id="contact_email" name="email" type="email" placeholder="name@company.com" autoComplete="email" required onInput={(event) => { event.currentTarget.value = sanitize(event.currentTarget.value, "email"); }} />
           </div>
           <div className="form-field">
             <label htmlFor="contact_site_url">{english ? "Current website URL (optional)" : "운영 중인 사이트 URL (선택)"}</label>

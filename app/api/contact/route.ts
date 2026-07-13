@@ -14,6 +14,10 @@ function validHttpUrl(value: string) {
   }
 }
 
+function validEmail(value: string) {
+  return value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
 export async function POST(request: Request) {
   if (!isDatabaseConfigured()) return NextResponse.json({ ok: false, error: "Missing DATABASE_URL" }, { status: 503 });
   if (Number(request.headers.get("content-length") ?? 0) > 32_000) {
@@ -31,11 +35,12 @@ export async function POST(request: Request) {
   const data = {
     name: text(payload.name, 100),
     phone: text(payload.phone, 30).replace(/\D/g, ""),
+    email: text(payload.email, 254),
     site: text(payload.site, 500),
     message: text(payload.message, 3000),
     agree: text(payload.agree, 1)
   };
-  if (!data.name || !/^\d{7,20}$/.test(data.phone) || data.agree !== "Y" || !validHttpUrl(data.site)) {
+  if (!data.name || !/^\d{7,20}$/.test(data.phone) || !validEmail(data.email) || data.agree !== "Y" || !validHttpUrl(data.site)) {
     return NextResponse.json({ ok: false, error: "Invalid form data" }, { status: 400 });
   }
 
@@ -43,6 +48,7 @@ export async function POST(request: Request) {
     await createContactInquiry({
       name: data.name,
       phone: data.phone,
+      email: data.email,
       site: data.site,
       message: data.message,
       agreed: true

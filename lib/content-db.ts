@@ -37,6 +37,7 @@ export type ContactInquiry = {
   id: number;
   name: string;
   phone: string;
+  email: string;
   site: string;
   message: string;
   plan: "seed" | "series-a" | "series-b" | null;
@@ -86,6 +87,7 @@ type ContactInquiryRow = {
   id: number;
   name: string;
   phone: string;
+  email: string;
   site: string;
   message: string;
   plan: ContactInquiry["plan"];
@@ -180,6 +182,7 @@ async function ensureSchema() {
         id BIGSERIAL PRIMARY KEY,
         name TEXT NOT NULL,
         phone TEXT NOT NULL,
+        email TEXT NOT NULL DEFAULT '',
         site TEXT NOT NULL DEFAULT '',
         message TEXT NOT NULL DEFAULT '',
         plan TEXT CHECK (plan IN ('seed', 'series-a', 'series-b')),
@@ -187,6 +190,7 @@ async function ensureSchema() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `;
+    await sql`ALTER TABLE contact_inquiries ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT ''`;
     await sql`ALTER TABLE contact_inquiries ALTER COLUMN plan DROP NOT NULL`;
     await sql`CREATE INDEX IF NOT EXISTS idx_contact_inquiries_created_at ON contact_inquiries(created_at DESC)`;
 
@@ -465,8 +469,8 @@ export async function createContactInquiry(input: ContactInquiryInput) {
   await ensureSchema();
   const sql = getSql();
   const rows = await sql<{ id: number }[]>`
-    INSERT INTO contact_inquiries (name, phone, site, message, agreed)
-    VALUES (${input.name}, ${input.phone}, ${input.site}, ${input.message}, ${input.agreed})
+    INSERT INTO contact_inquiries (name, phone, email, site, message, agreed)
+    VALUES (${input.name}, ${input.phone}, ${input.email}, ${input.site}, ${input.message}, ${input.agreed})
     RETURNING id
   `;
   return Number(rows[0].id);
@@ -477,7 +481,7 @@ export async function listContactInquiries(limit = 50): Promise<ContactInquiry[]
   await ensureSchema();
   const sql = getSql();
   const rows = await sql<ContactInquiryRow[]>`
-    SELECT id, name, phone, site, message, plan, agreed, created_at
+    SELECT id, name, phone, email, site, message, plan, agreed, created_at
     FROM contact_inquiries
     ORDER BY created_at DESC
     LIMIT ${Math.min(Math.max(limit, 1), 100)}
@@ -486,6 +490,7 @@ export async function listContactInquiries(limit = 50): Promise<ContactInquiry[]
     id: Number(row.id),
     name: row.name,
     phone: row.phone,
+    email: row.email,
     site: row.site,
     message: row.message,
     plan: row.plan,
