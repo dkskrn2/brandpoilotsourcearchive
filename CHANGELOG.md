@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.0] - 2026-07-13
+
+### Added
+
+- Added eight detailed, research-backed articles covering July planning, brand growth systems, and real-world success cases, each with a purpose-built editorial image.
+- Added an article-end consultation call to action that guides readers directly to the contact page.
+- Added a dedicated Product navigation item and Brand Pilot product page with product, FAQ, and breadcrumb structured data.
+- Added content database synchronization and SQL generation scripts for keeping published articles aligned with source content.
+
+### Changed
+
+- Expanded the content renderer with sanitized tables, quotations, source sections, and long-form article components for a more useful reading experience.
+- Simplified the content hub so visitors see the article list immediately without the introductory hero section.
+- Improved site-wide SEO and AEO settings, including metadata, canonical URLs, robots rules, sitemap coverage, and JSON-LD schemas.
+- Updated navigation, service links, and the former Brand Pilot service route to use the new Product destination.
+
+### Fixed
+
+- Replaced generic article thumbnails with topic-specific visuals and improved responsive article and call-to-action styling.
+- Strengthened content sanitization and structured-data serialization around database-backed rich text.
+
 ## [0.3.1] - 2026-07-12
 
 ### Added
