@@ -92,7 +92,7 @@ test("content hub reads published database articles as individual pages", () => 
   const contentDetail = read("app/content/[slug]/page.tsx");
   const header = read("components/site-header.tsx");
 
-  for (const slug of ["july-midyear-growth-review", "spotify-wrapped-data-to-brand-experience", "duolingo-habit-growth-loop", "dominos-digital-order-operating-system", "where-revenue-flow-stops", "research-before-redesign", "decision-ready-data", "repeatable-content-operations"]) {
+  for (const slug of ["brand-positioning-choice-criteria", "customer-lifecycle-retention-system", "brand-marketing-incrementality", "july-midyear-growth-review", "spotify-wrapped-data-to-brand-experience", "duolingo-habit-growth-loop", "dominos-digital-order-operating-system", "where-revenue-flow-stops", "research-before-redesign", "decision-ready-data", "repeatable-content-operations"]) {
     assert.match(contentData, new RegExp(slug));
   }
   assert.match(contentIndex, /listPublishedArticles/);
@@ -106,11 +106,11 @@ test("seed articles provide long-form guidance with linked primary sources", () 
   const contentHtml = read("lib/content-html.ts");
   const database = read("lib/content-db.ts");
 
-  assert.equal((contentData.match(/title: "참고 자료(?:와 해석 범위)?"/g) || []).length, 8);
-  assert.ok((contentData.match(/\]\(https:\/\//g) || []).length >= 25, "articles must cite enough external sources");
-  assert.equal((contentData.match(/readingTime: "(?:18|20)분"/g) || []).length, 8);
-  assert.ok((contentData.match(/table: \{/g) || []).length >= 14, "articles must include worked comparison tables");
-  assert.equal((contentData.match(/quote: "/g) || []).length, 8, "every article must establish a clear editorial thesis");
+  assert.equal((contentData.match(/title: "참고 자료(?:와 해석 범위)?"/g) || []).length, 11);
+  assert.ok((contentData.match(/\]\(https:\/\//g) || []).length >= 40, "articles must cite enough external sources");
+  assert.equal((contentData.match(/readingTime: "(?:18|20)분"/g) || []).length, 11);
+  assert.ok((contentData.match(/table: \{/g) || []).length >= 23, "articles must include worked comparison tables");
+  assert.equal((contentData.match(/quote: "/g) || []).length, 11, "every article must establish a clear editorial thesis");
   const articleStarts = [...contentData.matchAll(/    slug: "([^"]+)"/g)];
   for (let index = 0; index < articleStarts.length; index += 1) {
     const start = articleStarts[index].index;
@@ -123,6 +123,7 @@ test("seed articles provide long-form guidance with linked primary sources", () 
     assert.match(contentData, new RegExp(phrase), `long-form content must include ${phrase}`);
   }
   assert.match(contentHtml, /renderInlineMarkdown/);
+  assert.match(contentHtml, /\\\/content\\\//, "inline Markdown must support internal content links");
   assert.match(contentHtml, /sectionsToArticleHtml/);
   assert.match(contentHtml, /<table>/);
   assert.match(contentHtml, /<blockquote>/);
@@ -141,7 +142,10 @@ test("every seed article has a dedicated optimized editorial image", () => {
     "revenue-bottleneck-v1.webp",
     "research-before-redesign-v1.webp",
     "decision-ready-data-v1.webp",
-    "content-operations-v1.webp"
+    "content-operations-v1.webp",
+    "brand-positioning-choice-v1.webp",
+    "customer-lifecycle-retention-v1.webp",
+    "brand-marketing-incrementality-v1.webp"
   ];
 
   for (const asset of assets) {

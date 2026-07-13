@@ -46,14 +46,15 @@ function escapeHtml(value: string) {
 }
 
 function renderInlineMarkdown(value: string) {
-  const linkPattern = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  const linkPattern = /\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/content\/[a-z0-9-]+)\)/g;
   let cursor = 0;
   let rendered = "";
 
   for (const match of value.matchAll(linkPattern)) {
     const index = match.index ?? 0;
+    const isExternal = match[2].startsWith("http");
     rendered += escapeHtml(value.slice(cursor, index));
-    rendered += `<a href="${escapeHtml(match[2])}" target="_blank" rel="noopener noreferrer">${escapeHtml(match[1])}</a>`;
+    rendered += `<a href="${escapeHtml(match[2])}"${isExternal ? ' target="_blank" rel="noopener noreferrer"' : ""}>${escapeHtml(match[1])}</a>`;
     cursor = index + match[0].length;
   }
 
