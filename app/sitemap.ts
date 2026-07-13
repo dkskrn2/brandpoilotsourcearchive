@@ -11,7 +11,7 @@ const routes = [
   "/service/service-consulting",
   "/service/service-writing",
   "/service/service-startup",
-  "/service/brandpilot",
+  "/product",
   "/work",
   "/content",
   "/contact",

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowUpRight } from "@phosphor-icons/react/dist/ssr";
 import { formatPublishedDate, listIndexableArticles, listPublishedArticles } from "@/lib/content-db";
-import { createPageMetadata } from "@/lib/seo";
+import { absoluteUrl, breadcrumbJsonLd, createPageMetadata, serializeJsonLd, webPageJsonLd } from "@/lib/seo";
 import { OptionalImage } from "@/components/optional-image";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -18,18 +18,32 @@ export async function generateMetadata(): Promise<Metadata> {
 export const dynamic = "force-dynamic";
 
 export default async function ContentPage() {
-  const [featured, ...articles] = await listPublishedArticles();
+  const publishedArticles = await listPublishedArticles();
+  const [featured, ...articles] = publishedArticles;
+  const breadcrumb = breadcrumbJsonLd([{ name: "홈", path: "/" }, { name: "콘텐츠", path: "/content" }]);
+  const pageJsonLd = {
+    ...webPageJsonLd({
+      name: "GROWTHLINE Content",
+      description: "고객, 데이터, 전환과 운영에 관한 GROWTHLINE의 관점과 실무 기준을 공유합니다.",
+      path: "/content",
+      type: "CollectionPage",
+      hasBreadcrumb: true
+    }),
+    mainEntity: {
+      "@type": "ItemList",
+      itemListElement: publishedArticles.map((article, index) => ({
+        "@type": "ListItem",
+        position: index + 1,
+        name: article.title,
+        url: absoluteUrl(`/content/${article.slug}`)
+      }))
+    }
+  };
 
   return (
     <main className="content-index">
-      <section className="content-index__hero">
-        <div className="content-shell">
-          <p>GROWTHLINE CONTENT</p>
-          <h1>사업의 흐름을 읽는<br />기준을 공유합니다.</h1>
-          <span>고객을 이해하고, 데이터를 판단하고, 실제 운영으로 연결하는 방법을 기록합니다.</span>
-        </div>
-      </section>
-
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(pageJsonLd) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(breadcrumb) }} />
       {featured ? <section className={`content-featured content-shell${featured.image ? "" : " content-featured--no-image"}`}>
         {featured.image && <Link href={`/content/${featured.slug}`} className="content-featured__image" aria-label={`${featured.title} 읽기`}>
           <OptionalImage src={featured.image} alt={featured.imageAlt} width={1600} height={1024} priority sizes="(max-width: 800px) calc(100vw - 32px), 60vw" />

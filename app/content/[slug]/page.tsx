@@ -2,9 +2,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowLeft, ArrowUpRight } from "@phosphor-icons/react/dist/ssr";
 import { formatPublishedDate, getArticleBySlug, listPublishedArticles } from "@/lib/content-db";
-import { serializeJsonLd, SITE_NAME, SITE_URL } from "@/lib/seo";
+import { absoluteUrl, breadcrumbJsonLd, ORGANIZATION_ID, serializeJsonLd, SITE_NAME, SITE_URL, webPageJsonLd, WEBSITE_ID } from "@/lib/seo";
 import { notFound } from "next/navigation";
 import { OptionalImage } from "@/components/optional-image";
+import { ArticleContactCta } from "@/components/article-contact-cta";
 
 export const dynamic = "force-dynamic";
 
@@ -39,23 +40,38 @@ export default async function ContentArticlePage({ params }: PageProps<"/content
   const article = await getArticleBySlug(slug);
   if (!article) notFound();
   const related = (await listPublishedArticles()).filter((item) => item.slug !== article.slug).slice(0, 2);
+  const articlePath = `/content/${article.slug}`;
+  const articleUrl = absoluteUrl(articlePath);
+  const publishedAt = article.publishedAt.includes("T") ? article.publishedAt : `${article.publishedAt}T09:00:00+09:00`;
+  const breadcrumb = breadcrumbJsonLd([
+    { name: "홈", path: "/" },
+    { name: "콘텐츠", path: "/content" },
+    { name: article.title, path: articlePath }
+  ]);
+  const pageJsonLd = webPageJsonLd({ name: article.title, description: article.summary, path: articlePath, hasBreadcrumb: true });
   const articleJsonLd = article.isDummy ? undefined : {
     "@context": "https://schema.org",
-    "@type": "Article",
+    "@type": "BlogPosting",
+    "@id": `${articleUrl}#article`,
+    url: articleUrl,
     headline: article.title,
     description: article.summary,
-    ...(article.image ? { image: new URL(article.image, SITE_URL).toString() } : {}),
-    datePublished: article.publishedAt,
+    ...(article.image ? { image: { "@type": "ImageObject", url: absoluteUrl(article.image), width: 1600, height: 1024, caption: article.imageAlt } } : {}),
+    datePublished: publishedAt,
     dateModified: article.updatedAt,
     inLanguage: "ko-KR",
-    mainEntityOfPage: `${SITE_URL}/content/${article.slug}`,
-    author: { "@type": "Organization", name: SITE_NAME, url: SITE_URL },
-    publisher: { "@type": "Organization", name: SITE_NAME, url: SITE_URL }
+    articleSection: article.category,
+    isPartOf: { "@id": WEBSITE_ID },
+    mainEntityOfPage: { "@id": `${articleUrl}#webpage` },
+    author: { "@id": ORGANIZATION_ID, "@type": "Organization", name: SITE_NAME, url: SITE_URL },
+    publisher: { "@id": ORGANIZATION_ID }
   };
 
   return (
     <main className="article-page">
       <article>
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(pageJsonLd) }} />
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(breadcrumb) }} />
         {articleJsonLd && <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(articleJsonLd) }} />}
         <header className="article-header content-shell">
           <Link className="article-back" href="/content"><ArrowLeft aria-hidden size={18} /> 콘텐츠 목록</Link>
@@ -76,6 +92,8 @@ export default async function ContentArticlePage({ params }: PageProps<"/content
           </div>
         </div>
       </article>
+
+      <ArticleContactCta />
 
       <section className="article-related">
         <div className="content-shell">

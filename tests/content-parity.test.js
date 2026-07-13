@@ -50,6 +50,23 @@ test("contact migration preserves the six original field names", () => {
   }
 });
 
+test("Brand Pilot has a first-class product route and navigation entry", () => {
+  const header = read("components/site-header.tsx");
+  const footer = read("components/site-footer.tsx");
+  const product = read("app/product/page.tsx");
+  const serviceRoute = read("app/service/[slug]/page.tsx");
+  const sitemap = read("app/sitemap.ts");
+
+  assert.equal((header.match(/href="\/product"/g) || []).length, 2, "desktop and mobile menus must expose Product");
+  assert.match(footer, /href="\/product"/);
+  assert.match(product, /BrandPilotPage/);
+  assert.match(product, /SoftwareApplication/);
+  assert.match(product, /mainEntity/);
+  assert.match(serviceRoute, /permanentRedirect\("\/product"\)/);
+  assert.match(sitemap, /"\/product"/);
+  assert.doesNotMatch(sitemap, /"\/service\/brandpilot"/);
+});
+
 test("contact inquiries are stored in PostgreSQL without a Google Apps Script dependency", () => {
   const route = read("app/api/contact/route.ts");
   const database = read("lib/content-db.ts");
@@ -75,13 +92,79 @@ test("content hub reads published database articles as individual pages", () => 
   const contentDetail = read("app/content/[slug]/page.tsx");
   const header = read("components/site-header.tsx");
 
-  for (const slug of ["where-revenue-flow-stops", "research-before-redesign", "decision-ready-data", "repeatable-content-operations"]) {
+  for (const slug of ["july-midyear-growth-review", "spotify-wrapped-data-to-brand-experience", "duolingo-habit-growth-loop", "dominos-digital-order-operating-system", "where-revenue-flow-stops", "research-before-redesign", "decision-ready-data", "repeatable-content-operations"]) {
     assert.match(contentData, new RegExp(slug));
   }
   assert.match(contentIndex, /listPublishedArticles/);
   assert.match(contentDetail, /getArticleBySlug/);
   assert.match(contentDetail, /force-dynamic/);
   assert.match(header, /href="\/content"/);
+});
+
+test("seed articles provide long-form guidance with linked primary sources", () => {
+  const contentData = read("lib/content.ts");
+  const contentHtml = read("lib/content-html.ts");
+  const database = read("lib/content-db.ts");
+
+  assert.equal((contentData.match(/title: "참고 자료(?:와 해석 범위)?"/g) || []).length, 8);
+  assert.ok((contentData.match(/\]\(https:\/\//g) || []).length >= 25, "articles must cite enough external sources");
+  assert.equal((contentData.match(/readingTime: "(?:18|20)분"/g) || []).length, 8);
+  assert.ok((contentData.match(/table: \{/g) || []).length >= 14, "articles must include worked comparison tables");
+  assert.equal((contentData.match(/quote: "/g) || []).length, 8, "every article must establish a clear editorial thesis");
+  const articleStarts = [...contentData.matchAll(/    slug: "([^"]+)"/g)];
+  for (let index = 0; index < articleStarts.length; index += 1) {
+    const start = articleStarts[index].index;
+    const end = articleStarts[index + 1]?.index ?? contentData.indexOf("\n];", start);
+    const articleSource = contentData.slice(start, end);
+    const editorialText = [...articleSource.matchAll(/"([^"]+)"/g)].map((match) => match[1]).join("");
+    assert.ok(editorialText.length >= 6000, `${articleStarts[index][1]} must provide long-form editorial depth`);
+  }
+  for (const phrase of ["목표 지표", "보호 지표", "참고 자료", "인과관계", "체크리스트"]) {
+    assert.match(contentData, new RegExp(phrase), `long-form content must include ${phrase}`);
+  }
+  assert.match(contentHtml, /renderInlineMarkdown/);
+  assert.match(contentHtml, /sectionsToArticleHtml/);
+  assert.match(contentHtml, /<table>/);
+  assert.match(contentHtml, /<blockquote>/);
+  assert.match(contentHtml, /noopener noreferrer/);
+  assert.match(database, /ON CONFLICT \(slug\) DO UPDATE SET/);
+  assert.match(database, /created_at = content_articles\.updated_at/);
+});
+
+test("every seed article has a dedicated optimized editorial image", () => {
+  const contentData = read("lib/content.ts");
+  const assets = [
+    "july-midyear-review-v1.webp",
+    "spotify-wrapped-experience-v1.webp",
+    "duolingo-habit-loop-v1.webp",
+    "dominos-order-system-v1.webp",
+    "revenue-bottleneck-v1.webp",
+    "research-before-redesign-v1.webp",
+    "decision-ready-data-v1.webp",
+    "content-operations-v1.webp"
+  ];
+
+  for (const asset of assets) {
+    assert.match(contentData, new RegExp(`/images/content/${asset}`));
+    const imagePath = path.join(root, "public", "images", "content", asset);
+    assert.ok(fs.existsSync(imagePath), `${asset} must exist`);
+    assert.ok(fs.statSync(imagePath).size < 250 * 1024, `${asset} must stay below 250KB`);
+  }
+});
+
+test("every article ends with a branded contact CTA before related reading", () => {
+  const route = read("app/content/[slug]/page.tsx");
+  const cta = read("components/article-contact-cta.tsx");
+  const styles = read("app/globals.css");
+
+  const ctaPosition = route.indexOf("<ArticleContactCta />");
+  const relatedPosition = route.indexOf('className="article-related"');
+  assert.ok(ctaPosition > -1, "article route must render the contact CTA");
+  assert.ok(relatedPosition > ctaPosition, "contact CTA must follow the article and precede related reading");
+  assert.match(cta, /href="\/contact"/);
+  assert.match(cta, /15분 사전 진단/);
+  assert.match(cta, /무료 사전 진단 신청하기/);
+  assert.match(styles, /\.article-contact-cta__button/);
 });
 
 test("admin content manager uses PostgreSQL and protects every mutation", () => {
@@ -166,21 +249,33 @@ test("public header keeps customer login disabled and separate from administrato
   assert.match(styles, /\.mobile-menu nav \.site-login/, "mobile login must use the same menu-row layout as mobile links");
 });
 
-test("SEO metadata excludes seeded dummy content without changing public rendering", () => {
+test("SEO and AEO settings expose authored content and protect private routes", () => {
   const database = read("lib/content-db.ts");
   const sitemap = read("app/sitemap.ts");
+  const contentIndex = read("app/content/page.tsx");
   const contentDetail = read("app/content/[slug]/page.tsx");
+  const serviceDetail = read("app/service/[slug]/page.tsx");
   const robots = read("app/robots.ts");
   const seo = read("lib/seo.ts");
+  const nextConfig = read("next.config.ts");
 
   assert.match(database, /is_dummy BOOLEAN NOT NULL DEFAULT FALSE/);
+  assert.match(database, /isDummy: false/);
+  assert.match(database, /SET is_dummy = FALSE/);
   assert.match(database, /listIndexableArticles/);
   assert.match(sitemap, /listIndexableArticles/);
   assert.doesNotMatch(sitemap, /listPublishedArticles/);
   assert.match(contentDetail, /article\.isDummy \? \{ index: false/);
-  assert.match(contentDetail, /application\/ld\+json/);
-  assert.match(robots, /disallow: \["\/admin", "\/api\/"\]/);
+  assert.match(contentDetail, /BlogPosting/);
+  assert.match(contentDetail, /breadcrumbJsonLd/);
+  assert.match(contentIndex, /CollectionPage/);
+  assert.match(serviceDetail, /serviceJsonLd/);
+  assert.match(robots, /OAI-SearchBot/);
+  assert.match(robots, /api\/content-images/);
+  assert.match(nextConfig, /X-Robots-Tag/);
   assert.match(seo, /alternates: \{ canonical: path \}/);
+  assert.match(seo, /BreadcrumbList/);
+  assert.match(seo, /"@type": "Service"/);
   assert.match(seo, /summary_large_image/);
   assert.match(seo, /replaceAll\("<", "\\\\u003c"\)/);
 });

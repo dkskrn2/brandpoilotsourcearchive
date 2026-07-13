@@ -12,6 +12,9 @@ const notoSansKr = Noto_Sans_KR({ subsets: ["latin"], display: "swap", variable:
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   applicationName: SITE_NAME,
+  authors: [{ name: SITE_NAME, url: SITE_URL }],
+  creator: SITE_NAME,
+  publisher: SITE_NAME,
   title: { default: `${SITE_NAME} | 막힌 매출 흐름을 다시 연결합니다`, template: `%s | ${SITE_NAME}` },
   description: DEFAULT_DESCRIPTION,
   category: "business",

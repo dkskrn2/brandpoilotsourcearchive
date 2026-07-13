@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ConversionPathVisual, RevenueDiagnosticVisual } from "@/components/explainer-visuals";
 import { PerformanceStories } from "@/components/performance-stories";
-import { createPageMetadata } from "@/lib/seo";
+import { createPageMetadata, serializeJsonLd, webPageJsonLd } from "@/lib/seo";
 
 export const metadata = createPageMetadata({
   title: "GROWTHLINE | 막힌 매출 흐름을 다시 연결합니다",
@@ -24,9 +24,16 @@ const systemSteps = [
   ["개선과 확장", "데이터와 피드백을 바탕으로 필요한 기능만 더합니다."]
 ] as const;
 
+const homePageJsonLd = webPageJsonLd({
+  name: "GROWTHLINE | 막힌 매출 흐름을 다시 연결합니다",
+  description: "유입과 문의, 매출 사이에서 막힌 구간을 찾고 실제 운영 가능한 시스템으로 연결합니다.",
+  path: "/"
+});
+
 export default function Home() {
   return (
     <main className="studio-home">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(homePageJsonLd) }} />
       <section className="studio-home__hero">
         <div className="studio-home__hero-copy">
           <p className="studio-kicker">온라인 사업 구조 설계</p>

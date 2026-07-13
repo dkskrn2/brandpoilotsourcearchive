@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
+import { serializeJsonLd } from "@/lib/seo";
 
 const workflow = [
   {
@@ -55,9 +56,20 @@ const faqs = [
   }
 ] as const;
 
+const faqJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  mainEntity: faqs.map((faq) => ({
+    "@type": "Question",
+    name: faq.question,
+    acceptedAnswer: { "@type": "Answer", text: faq.answer }
+  }))
+};
+
 export function BrandPilotPage() {
   return (
     <main className="brand-pilot-page">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(faqJsonLd) }} />
       <section className="bp-hero">
         <div className="bp-shell bp-hero__grid">
           <div className="bp-hero__copy">

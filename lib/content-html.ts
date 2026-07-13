@@ -1,5 +1,6 @@
 import sanitizeHtml from "sanitize-html";
-import { editorTextToSections } from "@/lib/content-format.js";
+import { editorTextToSections } from "./content-format.js";
+import type { ContentSection } from "./content";
 
 const colorValue = /^(?:#[0-9a-f]{3,8}|rgba?\([\d.,%\s]+\)|[a-z]+)$/i;
 const sizeValue = /^\d+(?:\.\d+)?(?:px|pt|em|rem|%)$/i;
@@ -44,12 +45,46 @@ function escapeHtml(value: string) {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
+function renderInlineMarkdown(value: string) {
+  const linkPattern = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  let cursor = 0;
+  let rendered = "";
+
+  for (const match of value.matchAll(linkPattern)) {
+    const index = match.index ?? 0;
+    rendered += escapeHtml(value.slice(cursor, index));
+    rendered += `<a href="${escapeHtml(match[2])}" target="_blank" rel="noopener noreferrer">${escapeHtml(match[1])}</a>`;
+    cursor = index + match[0].length;
+  }
+
+  return rendered + escapeHtml(value.slice(cursor));
+}
+
 function legacyTextToHtml(source: string) {
   return editorTextToSections(source).map((section: { title: string; paragraphs: string[]; points?: string[] }) => {
-    const paragraphs = section.paragraphs.map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`).join("");
-    const points = section.points?.length ? `<ul>${section.points.map((point) => `<li>${escapeHtml(point)}</li>`).join("")}</ul>` : "";
+    const paragraphs = section.paragraphs.map((paragraph) => `<p>${renderInlineMarkdown(paragraph)}</p>`).join("");
+    const points = section.points?.length ? `<ul>${section.points.map((point) => `<li>${renderInlineMarkdown(point)}</li>`).join("")}</ul>` : "";
     return `<section><h2>${escapeHtml(section.title)}</h2>${paragraphs}${points}</section>`;
   }).join("");
+}
+
+function renderParagraphs(paragraphs: string[]) {
+  return paragraphs.map((paragraph) => `<p>${renderInlineMarkdown(paragraph)}</p>`).join("");
+}
+
+function renderPoints(points?: string[]) {
+  return points?.length ? `<ul>${points.map((point) => `<li>${renderInlineMarkdown(point)}</li>`).join("")}</ul>` : "";
+}
+
+export function sectionsToArticleHtml(sections: ContentSection[]) {
+  const html = sections.map((section) => {
+    const quote = section.quote ? `<blockquote><p>${renderInlineMarkdown(section.quote)}</p></blockquote>` : "";
+    const table = section.table ? `<table><caption>${escapeHtml(section.table.caption)}</caption><thead><tr>${section.table.headers.map((header) => `<th scope="col">${escapeHtml(header)}</th>`).join("")}</tr></thead><tbody>${section.table.rows.map((row) => `<tr>${row.map((cell) => `<td>${renderInlineMarkdown(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table>` : "";
+    const subsections = section.subsections?.map((subsection) => `<div><h3>${escapeHtml(subsection.title)}</h3>${renderParagraphs(subsection.paragraphs)}${renderPoints(subsection.points)}</div>`).join("") ?? "";
+    return `<section><h2>${escapeHtml(section.title)}</h2>${renderParagraphs(section.paragraphs)}${quote}${table}${renderPoints(section.points)}${subsections}</section>`;
+  }).join("");
+
+  return sanitizeArticleHtml(html);
 }
 
 export function isHtmlBody(source: string) {

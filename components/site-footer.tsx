@@ -10,6 +10,7 @@ export function SiteFooter() {
         </div>
         <nav aria-label="하단 메뉴">
           <Link href="/service">Service</Link>
+          <Link href="/product">Product</Link>
           <Link href="/work">Work</Link>
           <Link href="/content">Content</Link>
           <Link href="/contact">Contact</Link>

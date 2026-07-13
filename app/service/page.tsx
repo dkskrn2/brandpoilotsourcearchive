@@ -4,7 +4,7 @@ import {
   DecisionRulesVisual,
   ServiceArchitectureVisual
 } from "@/components/explainer-visuals";
-import { createPageMetadata } from "@/lib/seo";
+import { absoluteUrl, breadcrumbJsonLd, createPageMetadata, serializeJsonLd, webPageJsonLd } from "@/lib/seo";
 
 export const metadata = createPageMetadata({
   title: "Service",
@@ -46,9 +46,41 @@ const structureServices = [
   }
 ] as const;
 
+const indexedServices = [
+  ["UX 리서치", "/service/service-research"],
+  ["데이터 분석", "/service/service-analytics"],
+  ["전환 중심 설계", "/service/service-design"],
+  ["비즈니스 로직 설계", "/service/service-consulting"],
+  ["설득 카피라이팅", "/service/service-writing"],
+  ["스타트업 구축", "/service/service-startup"],
+  ["Brand Pilot", "/product"]
+] as const;
+
 export default function ServicePage() {
+  const breadcrumb = breadcrumbJsonLd([{ name: "홈", path: "/" }, { name: "서비스", path: "/service" }]);
+  const pageJsonLd = {
+    ...webPageJsonLd({
+      name: "GROWTHLINE Service",
+      description: "고객이 어디서 멈추는지 확인하고 필요한 서비스만 골라 유입부터 운영까지 연결합니다.",
+      path: "/service",
+      type: "CollectionPage",
+      hasBreadcrumb: true
+    }),
+    mainEntity: {
+      "@type": "ItemList",
+      itemListElement: indexedServices.map(([name, path], index) => ({
+        "@type": "ListItem",
+        position: index + 1,
+        name,
+        url: absoluteUrl(path)
+      }))
+    }
+  };
+
   return (
     <main className="studio-service">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(pageJsonLd) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(breadcrumb) }} />
       <section className="studio-service__hero">
         <div>
           <p className="studio-kicker">필요한 일만 정확하게</p>
@@ -120,7 +152,7 @@ export default function ServicePage() {
               <h3>브랜드의 말투를 지키며 꾸준히 발행합니다.</h3>
               <span>소스를 모으고 초안과 이미지를 만든 뒤, 사람이 확인하고 게시하는 흐름을 운영합니다.</span>
               <small>소스 수집 / 초안 / 이미지 / 게시</small>
-              <Link href="/service/brandpilot">Brand Pilot 보기 →</Link>
+              <Link href="/product">Brand Pilot 보기 →</Link>
             </div>
             <ContentOperationVisual />
           </article>

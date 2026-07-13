@@ -2,8 +2,8 @@ import "server-only";
 
 import postgres from "postgres";
 import { contentArticles, type ContentArticle, type ContentSection } from "@/lib/content";
-import { editorTextToSections, sectionsToEditorText } from "@/lib/content-format.js";
-import { articleBodyToHtml, isHtmlBody } from "@/lib/content-html";
+import { editorTextToSections } from "@/lib/content-format.js";
+import { articleBodyToHtml, isHtmlBody, sectionsToArticleHtml } from "@/lib/content-html";
 
 export type ArticleStatus = "draft" | "published";
 
@@ -123,16 +123,16 @@ function toIso(value: string | Date) {
 function seedArticles(): StoredArticle[] {
   return contentArticles.map((article, index) => {
     const publishedAt = normalizeSeedDate(article.publishedAt);
-    const body = sectionsToEditorText(article.sections);
+    const body = sectionsToArticleHtml(article.sections);
     const timestamp = `${publishedAt}T00:00:00.000Z`;
     return {
       ...article,
       id: index + 1,
       publishedAt,
       body,
-      bodyHtml: articleBodyToHtml(body),
+      bodyHtml: body,
       status: "published",
-      isDummy: true,
+      isDummy: false,
       createdAt: timestamp,
       updatedAt: timestamp
     };
@@ -186,11 +186,24 @@ async function ensureSchema() {
         ) VALUES (
           ${article.slug}, ${article.category}, ${article.title}, ${article.summary},
           ${normalizeSeedDate(article.publishedAt)}, ${article.readingTime}, ${article.image},
-          ${article.imageAlt}, ${article.introduction}, ${sectionsToEditorText(article.sections)},
-          'published', TRUE, ${now}, ${now}
+          ${article.imageAlt}, ${article.introduction}, ${sectionsToArticleHtml(article.sections)},
+          'published', FALSE, ${now}, ${now}
         )
-        ON CONFLICT (slug) DO NOTHING
+        ON CONFLICT (slug) DO UPDATE SET
+          category = EXCLUDED.category,
+          title = EXCLUDED.title,
+          summary = EXCLUDED.summary,
+          published_at = EXCLUDED.published_at,
+          reading_time = EXCLUDED.reading_time,
+          image = EXCLUDED.image,
+          image_alt = EXCLUDED.image_alt,
+          introduction = EXCLUDED.introduction,
+          body = EXCLUDED.body,
+          status = EXCLUDED.status,
+          is_dummy = FALSE
+        WHERE content_articles.created_at = content_articles.updated_at
       `;
+      await sql`UPDATE content_articles SET is_dummy = FALSE WHERE slug = ${article.slug} AND is_dummy = TRUE`;
     }
   })().catch((error) => {
     globalForDb.growthlineSchemaPromise = undefined;
@@ -232,7 +245,7 @@ function fallbackArticles(options: { query?: string; status?: ArticleStatus } = 
     if (options.status && article.status !== options.status) return false;
     if (!query) return true;
     return [article.title, article.category, article.slug].some((value) => value.toLocaleLowerCase("ko-KR").includes(query));
-  });
+  }).sort((a, b) => b.publishedAt.localeCompare(a.publishedAt));
 }
 
 export async function listArticles(options: { query?: string; status?: ArticleStatus } = {}) {

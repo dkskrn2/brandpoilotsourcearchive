@@ -12,3 +12,4 @@ output/
 ouput/
 .gstack/
 *.tsbuildinfo
+.vercel

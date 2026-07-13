@@ -1,9 +1,8 @@
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
-import { BrandPilotPage } from "@/app/service/[slug]/brand-pilot-page";
+import { notFound, permanentRedirect } from "next/navigation";
 import { ServiceDetailPage } from "@/components/service-detail-page";
 import { serviceDetails, type ServiceSlug } from "@/lib/service-details";
-import { createPageMetadata } from "@/lib/seo";
+import { breadcrumbJsonLd, createPageMetadata, serializeJsonLd, serviceJsonLd, webPageJsonLd } from "@/lib/seo";
 
 const services = {
   ...serviceDetails,
@@ -25,8 +24,23 @@ export async function generateMetadata({ params }: PageProps<"/service/[slug]">)
 
 export default async function ServiceRoutePage({ params }: PageProps<"/service/[slug]">) {
   const { slug } = await params;
+  if (slug === "brandpilot") permanentRedirect("/product");
   const service = services[slug as RouteSlug];
   if (!service) notFound();
-  if (slug === "brandpilot") return <BrandPilotPage />;
-  return <ServiceDetailPage service={serviceDetails[slug as ServiceSlug]} />;
+  const servicePath = `/service/${slug}`;
+  const breadcrumb = breadcrumbJsonLd([
+    { name: "홈", path: "/" },
+    { name: "서비스", path: "/service" },
+    { name: service.title, path: servicePath }
+  ]);
+  const pageJsonLd = webPageJsonLd({ name: service.title, description: service.description, path: servicePath, hasBreadcrumb: true });
+  const structuredService = serviceJsonLd({ name: service.title, description: service.description, path: servicePath });
+  const page = <ServiceDetailPage service={serviceDetails[slug as ServiceSlug]} />;
+
+  return <>
+    <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(pageJsonLd) }} />
+    <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(breadcrumb) }} />
+    <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(structuredService) }} />
+    {page}
+  </>;
 }

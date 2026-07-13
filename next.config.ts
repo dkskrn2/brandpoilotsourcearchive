@@ -5,6 +5,14 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: process.cwd()
   },
+  async headers() {
+    const noIndexHeaders = [{ key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" }];
+    return [
+      { source: "/admin/:path*", headers: noIndexHeaders },
+      { source: "/api/admin/:path*", headers: noIndexHeaders },
+      { source: "/api/contact", headers: noIndexHeaders }
+    ];
+  },
   async redirects() {
     return [
       { source: "/index.html", destination: "/", permanent: true },
