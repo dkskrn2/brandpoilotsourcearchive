@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>채널 - Brand Pilot</title>
+  <link rel="stylesheet" href="../assets/prototype.css" />
+  <script defer src="../assets/prototype.js"></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-badge">BP</span><span>Brand Pilot</span></div>
+      <nav class="nav" aria-label="고객 메뉴">
+        <a href="onboarding.html">온보딩</a><a href="content.html">콘텐츠</a><a href="publish-queue.html">게시 큐</a><a href="sources.html">소스</a><a href="channels.html" aria-current="page">채널</a><a href="brand-settings.html">브랜드 설정</a>
+      </nav>
+    </aside>
+    <main class="main">
+      <header class="topbar"><div><strong>채널 연결</strong><span>토큰 입력 기반으로 시작하고, 이후 OAuth로 전환합니다.</span></div><span class="badge warn">Threads 미연결</span></header>
+      <section class="content" data-tabs>
+        <div class="page-head">
+          <div><h1>채널</h1><p>Instagram, Threads, Webflow 게시 연결 상태를 확인합니다. 자동 게시에는 채널별 토큰, 권한, 매핑 상태가 모두 필요합니다.</p></div>
+          <div class="actions"><a class="button" href="#check-result">연결 점검</a><a class="button primary" href="#tokens" data-tab-target="tokens">토큰 추가</a></div>
+        </div>
+        <div class="tabs">
+          <a class="tab" aria-selected="true" href="#overview" data-tab-target="overview">연결 상태</a>
+          <a class="tab" aria-selected="false" href="#tokens" data-tab-target="tokens">토큰 정보</a>
+          <a class="tab" aria-selected="false" href="#webflow" data-tab-target="webflow">Webflow 매핑</a>
+        </div>
+        <section data-tab-panel="overview" class="grid three">
+          <article class="panel"><div class="panel-head"><h2>Instagram</h2><span class="badge warn">권한 확인 필요</span></div><div class="panel-body grid"><p>연결 계정: @jeju_trip</p><p class="muted">마지막 정상 확인: 어제 21:10</p><div class="alert warn"><strong>게시 권한 검증 전</strong><span>토큰은 저장되어 있지만 정방형 카드뉴스 컨테이너 생성 테스트가 필요합니다.</span></div><a class="button" href="#tokens" data-tab-target="tokens">상세 보기</a></div></article>
+          <article class="panel"><div class="panel-head"><h2>Threads</h2><span class="badge bad">미연결</span></div><div class="panel-body grid"><p>연결 계정 없음</p><div class="alert bad"><strong>토큰 필요</strong><span>Threads 자동 게시를 위해 계정 토큰과 권한 확인이 필요합니다.</span></div><a class="button primary" href="#tokens" data-tab-target="tokens">연결 정보 입력</a></div></article>
+          <article class="panel"><div class="panel-head"><h2>Webflow</h2><span class="badge ok">연결됨</span></div><div class="panel-body grid"><p>Site: 제주 여행 블로그</p><p class="muted">마지막 게시 성공: 오늘 11:28</p><a class="button" href="#webflow" data-tab-target="webflow">매핑 확인</a></div></article>
+        </section>
+        <section data-tab-panel="tokens" hidden class="panel">
+          <div class="panel-head"><h2>토큰 정보 입력</h2><span class="badge info">암호화 저장 대상</span></div>
+          <div class="panel-body form-grid">
+            <div class="field"><label>Instagram Business Account ID</label><input class="input" value="1784********" /></div>
+            <div class="field"><label>Meta Access Token</label><input class="input" type="password" value="token-placeholder" /></div>
+            <div class="field"><label>Threads Account ID</label><input class="input" placeholder="계정 ID 입력" /></div>
+            <div class="field"><label>Threads Access Token</label><input class="input" type="password" placeholder="토큰 입력" /></div>
+            <div class="field"><label>Webflow Site ID</label><input class="input" value="site_********" /></div>
+            <div class="field"><label>Webflow API Token</label><input class="input" type="password" value="token-placeholder" /></div>
+            <div class="field full"><a class="button primary" href="#check-result">저장 후 연결 점검</a></div>
+          </div>
+        </section>
+        <section data-tab-panel="webflow" hidden class="panel">
+          <div class="panel-head"><h2>Webflow CMS 필드 매핑</h2><span class="badge ok">완료</span></div>
+          <div class="panel-body"><table class="table"><thead><tr><th>내부 필드</th><th>Webflow 필드</th><th>상태</th></tr></thead><tbody><tr><td>title</td><td>name</td><td><span class="badge ok">확인</span></td></tr><tr><td>body</td><td>post-body</td><td><span class="badge ok">확인</span></td></tr><tr><td>cover_image</td><td>main-image</td><td><span class="badge warn">선택값</span></td></tr></tbody></table></div>
+        </section>
+        <details id="check-result" class="panel" style="margin-top:16px"><summary class="panel-head"><h2>연결 점검 결과</h2><span class="badge warn">확인 필요 2개</span></summary><div class="panel-body"><table class="table"><thead><tr><th>채널</th><th>상태</th><th>다음 액션</th></tr></thead><tbody><tr><td>Instagram</td><td><span class="badge warn">권한 확인 필요</span></td><td>토큰 정보와 계정 타입 확인</td></tr><tr><td>Threads</td><td><span class="badge bad">미연결</span></td><td>토큰 입력 필요</td></tr><tr><td>Webflow</td><td><span class="badge ok">게시 가능</span></td><td>필드 매핑 완료</td></tr></tbody></table></div></details>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

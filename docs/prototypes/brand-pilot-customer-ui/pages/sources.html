@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>소스 - Brand Pilot</title>
+  <link rel="stylesheet" href="../assets/prototype.css" />
+  <script defer src="../assets/prototype.js"></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-badge">BP</span><span>Brand Pilot</span></div>
+      <nav class="nav" aria-label="고객 메뉴">
+        <a href="onboarding.html">온보딩</a><a href="content.html">콘텐츠</a><a href="publish-queue.html">게시 큐</a><a href="sources.html" aria-current="page">소스</a><a href="channels.html">채널</a><a href="brand-settings.html">브랜드 설정</a>
+      </nav>
+    </aside>
+    <main class="main">
+      <header class="topbar"><div><strong>소스 관리</strong><span>자사 URL, 참고 URL, 주제표를 관리합니다.</span></div><span class="badge ok">유효 주제 42개</span></header>
+      <section class="content" data-tabs>
+        <div class="page-head">
+          <div><h1>소스</h1><p>브랜드 콘텐츠의 근거가 되는 URL과 주제표를 등록합니다. 주제표 행은 한 번 사용하면 다시 자동 선택되지 않습니다.</p></div>
+          <div class="actions"><a class="button primary" href="#url-add">URL 추가</a><a class="button" href="#upload" data-tab-target="upload">주제표 업로드</a></div>
+        </div>
+        <div class="tabs">
+          <a class="tab" aria-selected="true" href="#owned" data-tab-target="owned">자사 URL</a>
+          <a class="tab" aria-selected="false" href="#reference" data-tab-target="reference">참고 URL</a>
+          <a class="tab" aria-selected="false" href="#upload" data-tab-target="upload">주제표 업로드</a>
+          <a class="tab" aria-selected="false" href="#topics" data-tab-target="topics">주제 큐</a>
+        </div>
+        <section data-tab-panel="owned" class="panel">
+          <div class="panel-head"><h2>자사 URL</h2><span class="badge ok">5개 활성</span></div>
+          <div class="panel-body">
+            <table class="table">
+              <thead><tr><th>URL</th><th>유형</th><th>마지막 크롤링</th><th>상태</th><th>액션</th></tr></thead>
+              <tbody>
+                <tr><td>https://example.com/service</td><td>서비스 소개</td><td>오늘 09:40</td><td><span class="badge ok">크롤링 완료</span></td><td><a class="button" href="#crawl-status">다시 크롤링</a></td></tr>
+                <tr><td>https://example.com/faq</td><td>FAQ</td><td>어제 18:12</td><td><span class="badge ok">크롤링 완료</span></td><td><a class="button" href="#crawl-status">다시 크롤링</a></td></tr>
+                <tr><td>https://example.com/case</td><td>고객 사례</td><td>오늘 10:12</td><td><span class="badge warn">크롤링 중</span></td><td><span class="button is-disabled" aria-disabled="true">진행 중</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section data-tab-panel="reference" hidden class="panel">
+          <div class="panel-head"><h2>참고 URL</h2><span class="badge info">참고용</span></div>
+          <div class="panel-body grid">
+            <div class="alert info"><strong>사용 원칙</strong><span>외부 URL의 문장을 그대로 쓰지 않고, 브랜드 관점으로 재해석합니다.</span></div>
+            <table class="table"><thead><tr><th>URL</th><th>메모</th><th>상태</th></tr></thead><tbody><tr><td>https://travel.example/report</td><td>해외 가족여행 트렌드</td><td><span class="badge ok">스냅샷 저장</span></td></tr><tr><td>https://youtube.example/video</td><td>유튜브 참고</td><td><span class="badge bad">본문 추출 실패</span></td></tr></tbody></table>
+          </div>
+        </section>
+        <section data-tab-panel="upload" hidden class="grid two">
+          <div class="panel">
+            <div class="panel-head"><h2>CSV/Excel 업로드</h2></div>
+            <div class="panel-body grid">
+              <div class="field"><label>파일</label><input class="input" type="file" /></div>
+              <div class="alert info"><strong>필수 컬럼</strong><span>topic_title, topic_angle 두 컬럼은 반드시 필요합니다.</span></div>
+              <div class="actions"><a class="button" href="../templates/topic-template.csv" download>템플릿 다운로드</a><a class="button primary" href="#upload-result">검증 시작</a></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h2>최근 검증 결과</h2></div>
+            <div class="panel-body">
+              <table class="table"><tbody><tr><th>총 행 수</th><td>48</td></tr><tr><th>유효 행</th><td>42</td></tr><tr><th>중복 행</th><td>3</td></tr><tr><th>필수값 누락</th><td>3</td></tr></tbody></table>
+            </div>
+          </div>
+        </section>
+        <section data-tab-panel="topics" hidden class="panel">
+          <div class="panel-head"><h2>주제 큐</h2><span class="badge info">한 번 사용 후 종료</span></div>
+          <div class="panel-body"><table class="table"><thead><tr><th>주제</th><th>관점</th><th>우선순위</th><th>상태</th></tr></thead><tbody><tr><td>제주 숙소 위치 선택</td><td>가족 여행자 기준</td><td>높음</td><td><span class="badge ok">사용 가능</span></td></tr><tr><td>비 오는 날 제주</td><td>일정 대안</td><td>보통</td><td><span class="badge info">생성 후보</span></td></tr><tr><td>렌터카 동선</td><td>초보자 실수</td><td>높음</td><td><span class="badge neutral">사용 완료</span></td></tr></tbody></table></div>
+        </section>
+        <details id="url-add" class="panel" style="margin-top:16px">
+          <summary class="panel-head"><h2>URL 추가</h2><span class="badge info">필요할 때 열기</span></summary>
+          <div class="panel-body form-grid"><div class="field full"><label>URL</label><input class="input" value="https://example.com/new-page" /></div><div class="field"><label>유형</label><select class="select"><option>자사 URL</option><option>참고 URL</option></select></div><div class="field"><label>카테고리</label><input class="input" value="고객 사례" /></div><div class="field full"><label>메모</label><textarea class="textarea">콘텐츠 생성 시 참고할 맥락을 입력합니다.</textarea></div><div class="field full"><a class="button primary" href="#crawl-status">저장 후 크롤링</a></div></div>
+        </details>
+        <details id="crawl-status" class="panel" style="margin-top:16px">
+          <summary class="panel-head"><h2>크롤링 상태</h2><span class="badge ok">스냅샷 저장</span></summary>
+          <div class="panel-body"><table class="table"><tbody><tr><th>URL</th><td>https://example.com/new-page</td></tr><tr><th>제목</th><td>제주 가족여행 상담 사례</td></tr><tr><th>추출 문단</th><td>18개</td></tr><tr><th>마지막 크롤링</th><td>방금 전</td></tr></tbody></table></div>
+        </details>
+        <details id="upload-result" class="panel" style="margin-top:16px">
+          <summary class="panel-head"><h2>주제표 검증 결과</h2><span class="badge ok">유효 42행</span></summary>
+          <div class="panel-body grid"><table class="table"><tbody><tr><th>총 행 수</th><td>48</td></tr><tr><th>유효 행</th><td>42</td></tr><tr><th>중복 행</th><td>3</td></tr><tr><th>필수값 누락</th><td>3</td></tr></tbody></table><div class="alert warn"><strong>topic_angle 누락</strong><span>7행, 19행, 31행은 관점이 비어 있어 사용 불가로 처리됩니다.</span></div></div>
+        </details>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

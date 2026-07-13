@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>브랜드 설정 - Brand Pilot</title>
+  <link rel="stylesheet" href="../assets/prototype.css" />
+  <script defer src="../assets/prototype.js"></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-badge">BP</span><span>Brand Pilot</span></div>
+      <nav class="nav" aria-label="고객 메뉴">
+        <a href="onboarding.html">온보딩</a><a href="content.html">콘텐츠</a><a href="publish-queue.html">게시 큐</a><a href="sources.html">소스</a><a href="channels.html">채널</a><a href="brand-settings.html" aria-current="page">브랜드 설정</a>
+      </nav>
+    </aside>
+    <main class="main">
+      <header class="topbar"><div><strong>브랜드 설정</strong><span>모든 콘텐츠 생성의 기준값입니다.</span></div><span class="badge ok">저장됨</span></header>
+      <section class="content">
+        <div class="page-head">
+          <div><h1>브랜드 설정</h1><p>브랜드 프로필, 톤앤매너, 금지 표현, CTA를 관리합니다. 이 값은 마스터 초안과 채널별 재가공에 공통으로 사용됩니다.</p></div>
+          <div class="actions"><a class="button" href="brand-settings.html">변경 취소</a><a class="button primary" href="brand-settings.html">저장</a></div>
+        </div>
+        <div class="grid two">
+          <section class="panel">
+            <div class="panel-head"><h2>기본 정보</h2></div>
+            <div class="panel-body form-grid">
+              <div class="field"><label>브랜드명</label><input class="input" value="제주 여행 상담 브랜드" /></div>
+              <div class="field"><label>업종</label><input class="input" value="여행 컨설팅" /></div>
+              <div class="field full"><label>제품/서비스 설명</label><textarea class="textarea">제주 여행 초보자와 가족 여행자를 위한 일정 상담, 숙소/동선 추천, 예약 전 체크리스트를 제공한다.</textarea></div>
+              <div class="field full"><label>핵심 고객</label><textarea class="textarea">아이 동반 가족, 첫 제주 여행자, 렌터카 동선이 익숙하지 않은 고객.</textarea></div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>생성 기준</h2></div>
+            <div class="panel-body form-grid">
+              <div class="field full"><label>톤앤매너</label><textarea class="textarea">친절하지만 과장하지 않는다. 여행 초보자가 바로 이해할 수 있게 구체적으로 설명한다.</textarea></div>
+              <div class="field full"><label>금지 표현</label><textarea class="textarea">무조건, 100% 보장, 최저가 보장, 현지인이 숨긴 비밀</textarea></div>
+              <div class="field full"><label>기본 CTA</label><input class="input" value="내 일정에 맞는 제주 여행 상담을 받아보세요." /></div>
+              <div class="field full"><label>주요 링크</label><input class="input" value="https://example.com/consulting" /></div>
+            </div>
+          </section>
+        </div>
+        <section class="panel" style="margin-top:16px">
+          <div class="panel-head"><h2>자동 승인</h2><span class="badge auto">전체 켜짐</span></div>
+          <div class="panel-body grid">
+            <div class="toggle-row">
+              <div>
+                <strong>브랜드 전체 자동 승인</strong>
+                <p class="muted">켜면 자동 승인 조건을 통과한 콘텐츠가 검토 없이 게시 큐로 들어갑니다. 끄면 모든 채널 결과물이 수동 검토 대상으로 생성됩니다.</p>
+              </div>
+              <label class="switch" for="auto-approval-enabled" aria-label="브랜드 전체 자동 승인">
+                <input id="auto-approval-enabled" type="checkbox" checked />
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+              </label>
+            </div>
+            <div class="alert info"><strong>적용 범위</strong><span>Instagram, Threads, Webflow에 동일하게 적용합니다. MVP에서는 채널마다 다른 예외 설정을 제공하지 않습니다.</span></div>
+            <div class="alert warn"><strong>자동 승인 차단 조건</strong><span>금지 표현, 외부 URL 문장 재사용 위험, 근거 부족, 채널 연결 오류, 이미지 렌더링 실패가 있으면 자동 승인하지 않습니다.</span></div>
+          </div>
+        </section>
+        <section class="panel" style="margin-top:16px">
+          <div class="panel-head"><h2>검증 메시지</h2><span class="badge info">저장 전 확인</span></div>
+          <div class="panel-body grid">
+            <div class="alert ok"><strong>필수값 충족</strong><span>브랜드명, 업종, 핵심 고객, 톤앤매너, 기본 CTA가 입력되어 있습니다.</span></div>
+            <div class="alert warn"><strong>권장 보강</strong><span>고객 사례 URL을 더 추가하면 Webflow 장문 콘텐츠의 근거가 좋아집니다.</span></div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>게시 큐 - Brand Pilot</title>
+  <link rel="stylesheet" href="../assets/prototype.css" />
+  <script defer src="../assets/prototype.js"></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-badge">BP</span><span>Brand Pilot</span></div>
+      <nav class="nav" aria-label="고객 메뉴">
+        <a href="onboarding.html">온보딩</a><a href="content.html">콘텐츠</a><a href="publish-queue.html" aria-current="page">게시 큐</a><a href="sources.html">소스</a><a href="channels.html">채널</a><a href="brand-settings.html">브랜드 설정</a>
+      </nav>
+    </aside>
+    <main class="main">
+      <header class="topbar"><div><strong>오늘 게시 예정</strong><span>채널별 하루 최대 4개, 시간은 서비스 정책으로 배정됩니다.</span></div><span class="badge warn">실패 1개</span></header>
+      <section class="content" data-tabs>
+        <div class="page-head">
+          <div><h1>게시 큐</h1><p>승인된 콘텐츠가 정책 슬롯에 배정됩니다. 사용자는 시간을 직접 바꾸지 않고, 실패 원인과 이월 상태를 확인합니다.</p></div>
+          <div class="actions"><a class="button" href="publish-queue.html">오늘 새로고침</a><a class="button primary" href="#failed" data-tab-target="failed">실패 확인</a></div>
+        </div>
+        <div class="tabs">
+          <a class="tab" aria-selected="true" href="#today" data-tab-target="today">오늘 게시 예정</a>
+          <a class="tab" aria-selected="false" href="#future" data-tab-target="future">예정</a>
+          <a class="tab" aria-selected="false" href="#done" data-tab-target="done">게시 완료</a>
+          <a class="tab" aria-selected="false" href="#failed" data-tab-target="failed">실패</a>
+        </div>
+        <section data-tab-panel="today" class="grid">
+          <div class="panel">
+            <div class="panel-head"><h2>Instagram</h2><span class="badge info">3 / 4 슬롯</span></div>
+            <div class="panel-body slot-grid">
+              <div class="slot"><span class="badge ok">게시 예정</span><p><strong>11:34</strong></p><p>제주 가족여행 숙소 선택법</p><p class="muted small">정방형 카드뉴스 5장</p></div>
+              <div class="slot"><span class="badge ok">게시 예정</span><p><strong>14:26</strong></p><p>비 오는 날 제주 일정</p><p class="muted small">정방형 카드뉴스 4장</p></div>
+              <div class="slot"><span class="badge warn">승인 대기</span><p><strong>17:38</strong></p><p>승인되면 배정</p><p class="muted small">비어 있으면 게시하지 않음</p></div>
+              <div class="slot empty"><span class="badge neutral">비어 있음</span><p><strong>20:23</strong></p><p>승인 콘텐츠 없음</p></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h2>Webflow</h2><span class="badge ok">4 / 4 슬롯</span></div>
+            <div class="panel-body slot-grid">
+              <div class="slot"><span class="badge ok">게시 예정</span><p><strong>11:28</strong></p><p>제주 렌터카 동선 가이드</p></div>
+              <div class="slot"><span class="badge ok">게시 예정</span><p><strong>14:33</strong></p><p>초보 여행자 FAQ</p></div>
+              <div class="slot"><span class="badge ok">게시 예정</span><p><strong>17:24</strong></p><p>아이 동반 여행 준비물</p></div>
+              <div class="slot"><span class="badge ok">이월 배정</span><p><strong>20:36</strong></p><p>어제 승인 콘텐츠</p></div>
+            </div>
+          </div>
+        </section>
+        <section data-tab-panel="future" hidden class="panel"><div class="panel-head"><h2>내일 이후 예정</h2></div><div class="panel-body"><table class="table"><thead><tr><th>날짜</th><th>채널</th><th>콘텐츠</th><th>상태</th></tr></thead><tbody><tr><td>2026-07-06</td><td>Threads</td><td>제주 일정 짜는 기준</td><td><span class="badge info">이월</span></td></tr></tbody></table></div></section>
+        <section data-tab-panel="done" hidden class="panel"><div class="panel-head"><h2>게시 완료</h2><span class="badge ok">오늘 2개</span></div><div class="panel-body"><table class="table"><thead><tr><th>게시 시간</th><th>채널</th><th>콘텐츠</th><th>결과</th></tr></thead><tbody><tr><td>오늘 11:28</td><td>Webflow</td><td>제주 렌터카 동선 가이드</td><td><span class="badge ok">게시 완료</span></td></tr><tr><td>오늘 11:34</td><td>Instagram</td><td>제주 가족여행 숙소 선택법</td><td><span class="badge ok">게시 완료</span></td></tr></tbody></table></div></section>
+        <section data-tab-panel="failed" hidden class="panel"><div class="panel-head"><h2>게시 실패</h2><span class="badge bad">수동 확인 필요</span></div><div class="panel-body"><div class="alert bad"><strong>Instagram 이미지 URL 접근 불가</strong><span>렌더링 결과가 공개 URL로 접근되지 않아 게시 컨테이너 생성이 실패했습니다.</span></div></div></section>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

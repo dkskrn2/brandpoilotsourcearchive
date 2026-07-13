@@ -1,0 +1,31 @@
+{
+  "name": "brand-pilot",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "workers/*"
+  ],
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "scripts": {
+    "dev:api": "npm run dev --workspace @brand-pilot/api",
+    "dev:ui": "npm run dev --workspace @brand-pilot/customer-ui",
+    "dev:worker": "npm run dev --workspace @brand-pilot/image-worker",
+    "worker:once": "npm run run-once --workspace @brand-pilot/image-worker",
+    "worker:control": "npm run control --workspace @brand-pilot/image-worker",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:contract": "node --test scripts/repository-contract.test.mjs",
+    "test:migrations": "node --test scripts/migrations.integration.test.mjs",
+    "test:topic-concurrency": "npm run test:topic-concurrency --workspace @brand-pilot/api",
+    "test:e2e": "npm run e2e --workspace @brand-pilot/customer-ui",
+    "db:migrate": "node scripts/migrate.mjs",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.4"
+  }
+}
