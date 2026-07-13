@@ -213,7 +213,12 @@ const readSnapshot = async (database, brandId) => {
      from pg_index index_data
      join pg_class index_class on index_class.oid = index_data.indexrelid
      where index_data.indrelid = 'jobs'::regclass
-       and index_class.relname in ('jobs_render_output_idx', 'jobs_active_render_output_unique')
+       and index_class.relname in (
+         'jobs_render_output_idx',
+         'jobs_active_render_output_unique',
+         'jobs_threads_text_render_output_idx',
+         'jobs_active_threads_text_render_output_unique'
+       )
      order by index_class.relname`,
   );
   const artifactRows = await database.query(
@@ -262,11 +267,11 @@ const readGroupUpdatedAt = async (database) => {
   return result.rows;
 };
 
-test("fresh and authentic legacy paths converge after migration 018", async (context) => {
+test("fresh and authentic legacy paths converge after migration 019", async (context) => {
   const migrations = await loadMigrations();
   let freshSnapshot;
 
-  await context.test("fresh path executes migrations 001-018", async () => {
+  await context.test("fresh path executes migrations 001-019", async () => {
     freshSnapshot = await withDatabase(async (database) => {
       await runMigrationRange(
         database,
@@ -279,7 +284,7 @@ test("fresh and authentic legacy paths converge after migration 018", async (con
         database,
         migrations,
         "014_instagram_delivery_formats.sql",
-        "018_repair_active_render_job_unique.sql",
+        "019_threads_text_render_jobs.sql",
       );
       const snapshot = await readSnapshot(database, fixture.brandId);
       const migration017 = migrations.find(
@@ -297,7 +302,7 @@ test("fresh and authentic legacy paths converge after migration 018", async (con
   });
 
   await context.test(
-    "legacy path executes the authentic 014 fixture followed by 015 through 018",
+    "legacy path executes the authentic 014 fixture followed by 015 through 019",
     async () => {
       const legacySnapshot = await withDatabase(async (database) => {
         await runMigrationRange(
@@ -312,7 +317,7 @@ test("fresh and authentic legacy paths converge after migration 018", async (con
           database,
           migrations,
           "015_delivery_format_legacy_channels.sql",
-          "018_repair_active_render_job_unique.sql",
+          "019_threads_text_render_jobs.sql",
         );
         return readSnapshot(database, fixture.brandId);
       });
@@ -343,4 +348,9 @@ test("fresh and authentic legacy paths converge after migration 018", async (con
     group_count: 2,
   });
   assert.deepEqual(freshSnapshot.attemptRows, { count: 1 });
+  assert.ok(freshSnapshot.jobsConstraint.includes("threads_text_render"));
+  assert.ok(freshSnapshot.renderIndexes.some(({ name }) => name === "jobs_threads_text_render_output_idx"));
+  assert.ok(freshSnapshot.renderIndexes.some(({ name, is_unique }) => (
+    name === "jobs_active_threads_text_render_output_unique" && is_unique
+  )));
 });

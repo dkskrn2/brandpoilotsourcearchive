@@ -1,8 +1,12 @@
 import "dotenv/config";
-import { createWorkerClient } from "./client.js";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createTextWorkerClient, createWorkerClient } from "./client.js";
+import { createCodexTextGenerator } from "./codexTextRunner.js";
 import { createConfiguredRenderer } from "./renderer.js";
 import { createReelRenderer } from "./reelRenderer.js";
 import { createBlobStorage } from "./storage.js";
+import { runTextOnce } from "./textWorker.js";
 import { runOnce } from "./worker.js";
 
 function required(name: string) {
@@ -14,7 +18,11 @@ function required(name: string) {
 async function main() {
   const mode = process.argv[2] ?? "run-once";
   const workerId = process.env.WORKER_ID ?? `image-worker-${process.pid}`;
-  const client = createWorkerClient({ apiUrl: required("BRAND_PILOT_API_URL"), token: required("WORKER_API_TOKEN") });
+  const apiConfig = { apiUrl: required("BRAND_PILOT_API_URL"), token: required("WORKER_API_TOKEN") };
+  const client = createWorkerClient(apiConfig);
+  const textClient = createTextWorkerClient(apiConfig);
+  const workerRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const textGenerator = createCodexTextGenerator({ rootDir: workerRoot });
   const renderer = createConfiguredRenderer({
     provider: process.env.IMAGE_PROVIDER ?? "command",
     commandTemplate: process.env.IMAGE_RENDER_COMMAND,
@@ -29,6 +37,13 @@ async function main() {
       renderer,
       reelRenderer,
       storage,
+      runTextJob: () => runTextOnce({
+        workerId,
+        client: textClient,
+        generator: textGenerator,
+        heartbeatIntervalMs: Math.max(1000, Number(process.env.HEARTBEAT_INTERVAL_MS ?? "300000")),
+        retryDelayMs: Math.max(1000, Number(process.env.TEXT_RETRY_DELAY_MS ?? process.env.IMAGE_RETRY_DELAY_MS ?? "300000"))
+      }),
       heartbeatIntervalMs: Math.max(1000, Number(process.env.HEARTBEAT_INTERVAL_MS ?? "300000")),
       retryDelayMs: Math.max(1000, Number(process.env.IMAGE_RETRY_DELAY_MS ?? "300000"))
     });

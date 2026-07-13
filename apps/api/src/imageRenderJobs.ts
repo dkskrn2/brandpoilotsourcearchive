@@ -62,7 +62,7 @@ export interface InstagramStoryWorkerResult extends InstagramWorkerResultBase {
 
 export interface InstagramReelWorkerResult extends InstagramWorkerResultBase {
   deliveryFormat: "instagram_reel";
-  promptVersion: "worker-reel.v1";
+  promptVersion: "worker-reel.v3";
   scenes: WorkerPngAsset[];
   cover: WorkerPngFile;
   video: WorkerReelVideo;
@@ -137,7 +137,7 @@ export function buildImageRenderJobPayload(input: {
     case "instagram_story":
       return { ...common, deliveryFormat: input.deliveryFormat, promptVersion: "worker-story.v1" };
     case "instagram_reel":
-      return { ...common, deliveryFormat: input.deliveryFormat, promptVersion: "worker-reel.v1" };
+      return { ...common, deliveryFormat: input.deliveryFormat, promptVersion: "worker-reel.v3" };
   }
 }
 
@@ -379,14 +379,14 @@ export function parseImageRenderJobResult(
   }
 
   const rawScenes = Array.isArray(record.scenes) ? record.scenes : [];
-  if (rawScenes.length < 1 || rawScenes.length > 5) invalid("asset_count_out_of_range");
+  if (rawScenes.length !== 1) invalid("reel_asset_count_invalid");
   const scenes = rawScenes.map((scene, index) => parsePngAsset(scene, index + 1, null, null));
   assertUniqueRoles(scenes);
   if (common.selectedAssetCount !== scenes.length) invalid("selected_asset_count_mismatch");
   return {
     ...common,
     deliveryFormat,
-    promptVersion: "worker-reel.v1",
+    promptVersion: "worker-reel.v3",
     scenes,
     cover: parseCover(record.cover),
     video: parseVideo(record.video),

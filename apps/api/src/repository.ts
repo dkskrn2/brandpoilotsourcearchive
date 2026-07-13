@@ -1,6 +1,5 @@
 ﻿import crypto from "node:crypto";
 import type { Pool } from "pg";
-import { MASTER_DRAFT_PROMPT_SPEC, buildChannelOutputs, buildMasterDraft, buildMasterDraftPrompt, generateMasterDraftWithOpenAI } from "./contentGenerator.js";
 import { decryptCredential, encryptCredential } from "./credentialCrypto.js";
 import { buildPublishedResultsPackage } from "./downloadPackage.js";
 import {
@@ -22,6 +21,7 @@ import {
 } from "./instagramPublisher.js";
 import { crawlSourceUrl, discoverContentUrls, isLikelyContentPage } from "./sourceCrawler.js";
 import { nextRetryAt, scheduledRunKey } from "./sourceCrawlSchedule.js";
+import { buildThreadsRenderJobPayload, parseThreadsRenderJobResult } from "./textRenderJobs.js";
 import { brandPolicyDateKey, dailyTopicCapacity, determineGenerationReadiness, runDailyTopicGeneration } from "./topicPublishGroups.js";
 import type {
   ApiRepository,
@@ -56,6 +56,8 @@ import type {
   SupportRequestDto,
   SupportRequestInput,
   SupportRequestStatus,
+  TextRenderJobCompletionInput,
+  TextRenderJobDto,
   TopicRowDto,
   TopicUploadDto,
   TopicUploadInput
@@ -64,6 +66,16 @@ import type {
 function toIso(value: Date | string | null): string | null {
   if (!value) return null;
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function toDateKey(value: Date | string | null): string | null {
+  if (!value) return null;
+  if (typeof value === "string") {
+    const dateOnly = value.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+    if (dateOnly) return dateOnly;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : kstDateKey(date);
 }
 
 function urlHash(url: string) {
@@ -791,41 +803,17 @@ function buildBrandUiStatus(row: any): BrandUiStatusDto {
 }
 
 
-interface RepositoryOpenAiOptions {
-  enabled?: boolean;
-  apiKey?: string;
-  model?: string;
-  timeoutMs?: number;
-}
-
 interface RepositoryInstagramPublishOptions {
   enabled?: boolean;
 }
 
 interface RepositoryOptions {
-  openAi?: RepositoryOpenAiOptions;
   artifactStorageDir?: string;
   instagramPublish?: RepositoryInstagramPublishOptions;
-  generateMasterDraft?: typeof generateMasterDraftWithOpenAI;
   fetchInstagramImageManifest?: typeof fetchInstagramImageManifest;
   fetchImageAsset?: typeof fetch;
   publishInstagramOutput?: typeof publishInstagramOutputWithMeta;
   publishInstagramCarousel?: typeof publishInstagramCarouselWithMeta;
-}
-
-function positiveMilliseconds(value: unknown, fallback: number) {
-  const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? number : fallback;
-}
-
-function resolveOpenAiOptions(options?: RepositoryOptions) {
-  const configuredTimeout = positiveMilliseconds(process.env.OPENAI_REQUEST_TIMEOUT_MS, 30000);
-  return {
-    enabled: options?.openAi?.enabled ?? process.env.OPENAI_LLM_ENABLED === "true",
-    apiKey: options?.openAi?.apiKey ?? process.env.OPENAI_API_KEY ?? "",
-    model: options?.openAi?.model ?? process.env.OPENAI_MODEL ?? "gpt-5.4-mini",
-    timeoutMs: options?.openAi?.timeoutMs ?? configuredTimeout
-  };
 }
 
 function resolveInstagramPublishOptions(options?: RepositoryOptions) {
@@ -870,9 +858,7 @@ async function fetchInstagramImageManifest(manifestUrl: string, fetchImpl = fetc
 }
 
 export function createRepository(pool: Pool, options: RepositoryOptions = {}): ApiRepository {
-  const openAi = resolveOpenAiOptions(options);
   const instagramPublish = resolveInstagramPublishOptions(options);
-  const generateMasterDraft = options.generateMasterDraft ?? generateMasterDraftWithOpenAI;
   const fetchInstagramManifest = options.fetchInstagramImageManifest ?? fetchInstagramImageManifest;
   const fetchImageAsset = options.fetchImageAsset ?? fetch;
   const publishInstagramCarousel = options.publishInstagramCarousel ?? publishInstagramCarouselWithMeta;
@@ -927,6 +913,43 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
        values ($1, $2, $3, $4, $5, 'queued', $6)
        on conflict (channel_output_id) where job_type in ('instagram_feed_render', 'instagram_story_render', 'instagram_reel_render') and status in ('queued', 'running') do nothing`,
       [jobId, input.workspaceId, input.brandId, input.channelOutputId, jobType, JSON.stringify(payload)]
+    );
+  }
+
+  async function createThreadsRenderJob(client: Pick<Pool, "query">, input: {
+    workspaceId: string;
+    brandId: string;
+    channelOutputId: string;
+    topic: {
+      title: string;
+      angle: string;
+      targetCustomer: string | null;
+      region: string | null;
+      season: string | null;
+      notes: string | null;
+    };
+    brand: Record<string, unknown>;
+    crawlContentUrl: string | null;
+    referenceUrl: string | null;
+  }) {
+    const payload = buildThreadsRenderJobPayload({
+      topic: input.topic,
+      brand: {
+        name: String(input.brand.brand_name ?? ""),
+        industry: nullableText(input.brand.industry),
+        primaryCustomer: nullableText(input.brand.primary_customer),
+        description: nullableText(input.brand.description),
+        tone: nullableText(input.brand.tone),
+        brandColor: nullableText(input.brand.brand_color)
+      },
+      crawlContentUrl: input.crawlContentUrl,
+      referenceUrl: input.referenceUrl
+    });
+    await client.query(
+      `insert into jobs (id, workspace_id, brand_id, channel_output_id, job_type, status, payload_json)
+       values ($1, $2, $3, $4, 'threads_text_render', 'queued', $5)
+       on conflict (channel_output_id) where job_type = 'threads_text_render' and status in ('queued', 'running') do nothing`,
+      [crypto.randomUUID(), input.workspaceId, input.brandId, input.channelOutputId, JSON.stringify(payload)]
     );
   }
 
@@ -1826,6 +1849,15 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
              where id = $1`,
             [outputId]
           );
+          const resetGroup = await client.query(
+            `update topic_publish_groups
+             set status = 'waiting', slot_date = null, slot_number = null,
+                 scheduled_for = null, updated_at = now()
+             where id = $1 and status <> 'publishing'
+             returning id`,
+            [output.topic_publish_group_id]
+          );
+          if (!resetGroup.rowCount) throw new Error("content_output_regeneration_publish_in_progress");
           const deliveryFormat = output.delivery_format as InstagramDeliveryFormat;
           if (![
             "instagram_feed_carousel",
@@ -2003,7 +2035,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         status: row.status,
         approvalType: row.approval_type,
         topicPublishGroupId: row.topic_publish_group_id ?? null,
-        slotDate: row.slot_date ? String(row.slot_date).slice(0, 10) : null,
+        slotDate: toDateKey(row.slot_date),
         slotNumber: row.slot_number === null || row.slot_number === undefined ? null : Number(row.slot_number),
         scheduledFor: toIso(row.scheduled_for),
         lastError: row.last_error,
@@ -2605,7 +2637,6 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
 
     async generateContent(brandId, now = new Date()) {
       const client = await pool.connect();
-      const autoQueueIds: string[] = [];
       try {
         await client.query("begin");
         const brandResult = await client.query(
@@ -2860,30 +2891,6 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           };
           }
         }
-        const draftInput = {
-          brandProfile: {
-            name: brand.brand_name,
-            industry: brand.industry,
-            primaryCustomer: brand.primary_customer,
-            serviceDescription: brand.description,
-            tone: brand.tone
-          },
-          ...(topic
-            ? {
-                topicMaterial: {
-                  topicTitle: topic.topic_title,
-                  topicAngle: topic.topic_angle,
-                  targetCustomer: topic.target_customer ?? null,
-                  region: topic.region ?? null,
-                  season: topic.season ?? null,
-                  referenceUrl: topic.reference_url ?? null,
-                  notes: topic.notes ?? null
-                }
-              }
-            : {}),
-          sourceMaterials
-        };
-        const draftPrompt = buildMasterDraftPrompt(draftInput);
         if (!contentTopicId) {
           const contentTopic = await client.query(
             `insert into content_topics (
@@ -2914,66 +2921,6 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         );
         const topicPublishGroupId = publishGroup.rows[0]?.id;
         if (!topicPublishGroupId) throw new Error("topic_publish_group_not_created");
-        const localRequestMetadata = {
-          api: MASTER_DRAFT_PROMPT_SPEC.api,
-          responseName: MASTER_DRAFT_PROMPT_SPEC.responseName,
-          prompt: draftPrompt,
-          schema: MASTER_DRAFT_PROMPT_SPEC.schema
-        };
-        let provider = "local";
-        let model = "rule-based";
-        let draft = buildMasterDraft(draftInput);
-        let inputTokens = 0;
-        let outputTokens = 0;
-        let requestMetadata: Record<string, unknown> = localRequestMetadata;
-        let responseMetadata: Record<string, unknown> = { draft };
-        if (openAi.enabled && openAi.apiKey) {
-          provider = "openai";
-          model = openAi.model;
-          try {
-            const generated = await generateMasterDraft({
-              apiKey: openAi.apiKey,
-              model: openAi.model,
-              timeoutMs: openAi.timeoutMs,
-              input: draftInput
-            });
-            draft = generated.draft;
-            inputTokens = generated.usage.inputTokens;
-            outputTokens = generated.usage.outputTokens;
-            requestMetadata = generated.requestMetadata;
-            responseMetadata = generated.responseMetadata;
-          } catch (error) {
-            const message = error instanceof Error ? error.message : "openai_generation_failed";
-            await client.query(
-              `insert into llm_runs (
-                 workspace_id, brand_id, content_topic_id, purpose, provider, model,
-                 prompt_version, status, input_tokens, output_tokens, request_metadata, response_metadata, error_message, finished_at
-               )
-               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())`,
-              [
-                brand.workspace_id,
-                brandId,
-                contentTopicId,
-                "master_draft",
-                provider,
-                model,
-                MASTER_DRAFT_PROMPT_SPEC.id,
-                "failed",
-                0,
-                0,
-                JSON.stringify(localRequestMetadata),
-                JSON.stringify({}),
-                message
-              ]
-            );
-            provider = "local";
-            model = "rule-based";
-            inputTokens = 0;
-            outputTokens = 0;
-            requestMetadata = localRequestMetadata;
-            responseMetadata = { draft, fallbackFrom: "openai_failure", errorMessage: message };
-          }
-        }
         if (topic) {
           await client.query("update topic_rows set status = 'used', used_at = now() where id = $1", [topic.id]);
         }
@@ -2989,32 +2936,23 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             brand.workspace_id,
             brandId,
             contentTopicId,
-            MASTER_DRAFT_PROMPT_SPEC.id,
-            JSON.stringify(draft),
+            "source.direct.v1",
+            JSON.stringify({
+              title: topic?.topic_title ?? selectedTopic?.title ?? "크롤링 소스 기반 콘텐츠",
+              angle: topic?.topic_angle ?? selectedTopic?.angle ?? "source_url",
+              representativeUrl: typeof sourceContext.representativeUrl === "string"
+                ? sourceContext.representativeUrl
+                : topic?.reference_url ?? selectedTopic?.reference_url ?? null,
+              source: sourceContext.source ?? "topic_table"
+            }),
             JSON.stringify(sourceSnapshotIds)
           ]
         );
-        await client.query(
-          `insert into llm_runs (
-             workspace_id, brand_id, content_topic_id, purpose, provider, model,
-             prompt_version, status, input_tokens, output_tokens, request_metadata, response_metadata, error_message, finished_at
-           )
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, null, now())`,
-          [
-            brand.workspace_id,
-            brandId,
-            contentTopicId,
-            "master_draft",
-            provider,
-            model,
-            MASTER_DRAFT_PROMPT_SPEC.id,
-            "succeeded",
-            inputTokens,
-            outputTokens,
-            JSON.stringify(requestMetadata),
-            JSON.stringify(responseMetadata)
-          ]
-        );
+        const outputTitle = topic?.topic_title ?? selectedTopic?.title ?? "크롤링 소스 기반 콘텐츠";
+        const outputAngle = topic?.topic_angle ?? selectedTopic?.angle ?? "source_url";
+        const representativeUrl = typeof sourceContext.representativeUrl === "string"
+          ? sourceContext.representativeUrl
+          : topic?.reference_url ?? selectedTopic?.reference_url ?? null;
         const outputs: Array<{
           channel: "instagram" | "threads";
           deliveryFormat: InstagramDeliveryFormat | "threads_text";
@@ -3026,18 +2964,20 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           sourceSummary: string;
           blockReasons: string[];
         }> = [];
-        const sourceSummary = draft.supportingEvidence[0] || "브랜드 프로필과 소스 자료를 기반으로 생성했습니다.";
+        const sourceSummary = representativeUrl
+          ? `대표 URL: ${representativeUrl}`
+          : "주제와 브랜드 정보를 워커에 전달합니다.";
         if (readiness.instagramFormat) {
           outputs.push({
             channel: "instagram",
             deliveryFormat: readiness.instagramFormat,
             status: "auto_approval_blocked",
-            title: draft.title,
-            previewTitle: draft.title,
+            title: outputTitle,
+            previewTitle: outputTitle,
             previewBody: "작업자 아티팩트 생성 대기 중",
             outputJson: {
               deliveryFormat: readiness.instagramFormat,
-              topic: { title: draft.title, angle: draft.contentTheme },
+              topic: { title: outputTitle, angle: outputAngle },
               artifactStatus: "pending"
             },
             sourceSummary,
@@ -3045,16 +2985,20 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           });
         }
         if (readiness.threads) {
-          const threadOutput = buildChannelOutputs({
-            brandName: brand.brand_name,
-            defaultCta: brand.default_cta,
-            masterDraft: draft
-          })[0];
           outputs.push({
-            ...threadOutput,
             channel: "threads",
             deliveryFormat: "threads_text",
-            status: brand.auto_approval_enabled ? "auto_approved" : "pending_review"
+            status: "auto_approval_blocked",
+            title: outputTitle,
+            previewTitle: outputTitle,
+            previewBody: "Threads 콘텐츠 생성 대기 중",
+            outputJson: {
+              deliveryFormat: "threads_text",
+              topic: { title: outputTitle, angle: outputAngle },
+              artifactStatus: "pending"
+            },
+            sourceSummary,
+            blockReasons: ["threads_content_pending"]
           });
         }
         for (const output of outputs) {
@@ -3083,8 +3027,6 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             ]
           );
           if (output.channel === "instagram" && inserted.rows[0]?.id) {
-            const topicTitle = topic?.topic_title ?? selectedTopic?.title ?? draft.title;
-            const topicAngle = topic?.topic_angle ?? selectedTopic?.angle ?? draft.contentTheme;
             await createImageRenderJob(client as any, {
               workspaceId: brand.workspace_id,
               brandId,
@@ -3092,8 +3034,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
               channelOutputId: inserted.rows[0].id,
               deliveryFormat: output.deliveryFormat as InstagramDeliveryFormat,
               topic: {
-                title: topicTitle,
-                angle: topicAngle,
+                title: outputTitle,
+                angle: outputAngle,
                 targetCustomer: topic?.target_customer ?? null,
                 region: topic?.region ?? null,
                 season: topic?.season ?? null,
@@ -3112,34 +3054,25 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
               [brandId, output.deliveryFormat]
             );
           }
-          if (output.status === "auto_approved") {
-            const channelResult = await client.query(
-              "select id from brand_channels where brand_id = $1 and channel = $2 and deleted_at is null",
-              [brandId, output.channel]
-            );
-            if (channelResult.rowCount) {
-              const queued = await client.query(
-                 `insert into publish_queue (
-                    workspace_id, brand_id, channel_output_id, topic_publish_group_id, brand_channel_id, channel, approval_type, idempotency_key
-                  )
-                  values ($1, $2, $3, $4, $5, $6, 'auto', $7)
-                  on conflict (channel_output_id) do nothing
-                  returning id`,
-                [
-                  brand.workspace_id,
-                  brandId,
-                  inserted.rows[0].id,
-                  topicPublishGroupId,
-                  channelResult.rows[0].id,
-                  output.channel,
-                  `auto:${inserted.rows[0].id}`
-                ]
-              );
-              const queueId = queued.rows[0]?.id;
-              if (queueId) {
-                autoQueueIds.push(queueId);
-              }
-            }
+          if (output.channel === "threads" && inserted.rows[0]?.id) {
+            await createThreadsRenderJob(client as any, {
+              workspaceId: brand.workspace_id,
+              brandId,
+              channelOutputId: inserted.rows[0].id,
+              topic: {
+                title: outputTitle,
+                angle: outputAngle,
+                targetCustomer: topic?.target_customer ?? null,
+                region: topic?.region ?? null,
+                season: topic?.season ?? null,
+                notes: topic?.notes ?? null
+              },
+              brand,
+              crawlContentUrl: typeof sourceContext.representativeUrl === "string"
+                ? sourceContext.representativeUrl
+                : null,
+              referenceUrl: topic?.reference_url ?? selectedTopic?.reference_url ?? null
+            });
           }
         }
         await client.query("commit");
@@ -3251,9 +3184,10 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
              and slot_number is not null`,
           [brandId, kstDateKey(now)]
         );
-        const occupiedSlotKeys = new Set<string>(occupied.rows.map(
-          (row) => `${String(row.slot_date).slice(0, 10)}:${row.slot_number}`
-        ));
+        const occupiedSlotKeys = new Set<string>(occupied.rows.flatMap((row) => {
+          const slotDate = toDateKey(row.slot_date);
+          return slotDate ? [`${slotDate}:${row.slot_number}`] : [];
+        }));
         const readyGroups = await client.query(
           `select id
            from topic_publish_groups
@@ -3563,6 +3497,152 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         [jobId, input.workerId, input.leaseToken, input.error.slice(0, 2000), input.retryable, retryAfterMs]
       );
       if (!result.rowCount) throw new Error("image_render_job_lease_invalid");
+      return { id: result.rows[0].id, status: result.rows[0].status };
+    },
+
+    async claimTextRenderJob(workerId) {
+      const result = await pool.query(
+        `with candidate as (
+           select id from jobs
+           where job_type = 'threads_text_render'
+             and attempt_count < max_attempts and run_at <= now()
+             and (status = 'queued' or (status = 'running' and locked_until < now()))
+           order by priority desc, created_at asc for update skip locked limit 1
+         )
+         update jobs job
+         set status = 'running', locked_by = $1, locked_until = now() + interval '15 minutes',
+             lease_token = gen_random_uuid(), attempt_count = attempt_count + 1,
+             started_at = coalesce(started_at, now()), updated_at = now()
+         from candidate where job.id = candidate.id
+         returning job.id, job.workspace_id, job.brand_id, job.channel_output_id, job.lease_token, job.payload_json, job.attempt_count`,
+        [workerId]
+      );
+      if (!result.rowCount) return null;
+      const row = result.rows[0];
+      return {
+        id: row.id,
+        workspaceId: row.workspace_id,
+        brandId: row.brand_id,
+        channelOutputId: row.channel_output_id,
+        leaseToken: row.lease_token,
+        payload: row.payload_json,
+        attemptCount: Number(row.attempt_count)
+      } satisfies TextRenderJobDto;
+    },
+
+    async heartbeatTextRenderJob(jobId, workerId, leaseToken) {
+      const result = await pool.query(
+        `update jobs set locked_until = now() + interval '15 minutes', updated_at = now()
+         where id = $1 and job_type = 'threads_text_render' and status = 'running'
+           and locked_by = $2 and lease_token = $3::uuid and locked_until > now()
+         returning id, status`,
+        [jobId, workerId, leaseToken]
+      );
+      if (!result.rowCount) throw new Error("text_render_job_lease_invalid");
+      return { id: result.rows[0].id, status: result.rows[0].status };
+    },
+
+    async completeTextRenderJob(jobId, input: TextRenderJobCompletionInput) {
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const job = await client.query(
+          `select job.id, job.workspace_id, job.brand_id, job.channel_output_id,
+                  co.status as output_status, tpg.id as topic_publish_group_id,
+                  bc.id as brand_channel_id, bp.auto_approval_enabled
+           from jobs job
+           join channel_outputs co on co.id = job.channel_output_id and co.channel = 'threads'
+           join topic_publish_groups tpg on tpg.content_topic_id = co.content_topic_id
+           join brand_channels bc on bc.brand_id = co.brand_id and bc.channel = 'threads' and bc.deleted_at is null
+           join brand_profiles bp on bp.brand_id = co.brand_id
+           where job.id = $1 and job.job_type = 'threads_text_render' and job.status = 'running'
+             and job.locked_by = $2 and job.lease_token = $3::uuid and job.locked_until > now()
+           for update of job, co`,
+          [jobId, input.workerId, input.leaseToken]
+        );
+        if (!job.rowCount) throw new Error("text_render_job_lease_invalid");
+        const row = job.rows[0];
+        const rendered = parseThreadsRenderJobResult(input.result, {
+          jobId,
+          channelOutputId: row.channel_output_id
+        });
+        const outputStatus = nullableText(row.output_status) ?? "auto_approval_blocked";
+        const nextOutputStatus = outputStatus === "auto_approval_blocked"
+          ? row.auto_approval_enabled ? "auto_approved" : "pending_review"
+          : outputStatus;
+        const outputJson = {
+          deliveryFormat: "threads_text",
+          artifactStatus: "ready",
+          text: rendered.text,
+          sourceMode: rendered.sourceMode,
+          fetchStatus: rendered.fetchStatus,
+          model: rendered.model
+        };
+        await client.query(
+          `update channel_outputs
+           set title = $1, preview_title = $1, preview_body = $2, output_json = $3::jsonb,
+               status = $4,
+               approved_at = case when status = 'auto_approval_blocked' and $4 = 'auto_approved' then now() else approved_at end,
+               block_reasons = coalesce(block_reasons, '[]'::jsonb) - 'threads_content_pending',
+               updated_at = now()
+           where id = $5`,
+          [rendered.title, rendered.text, JSON.stringify(outputJson), nextOutputStatus, row.channel_output_id]
+        );
+        const approvalType = outputStatus === "approved"
+          ? "manual"
+          : outputStatus === "auto_approval_blocked" && row.auto_approval_enabled
+            ? "auto"
+            : null;
+        if (approvalType) {
+          await client.query(
+            `insert into publish_queue (
+               workspace_id, brand_id, channel_output_id, topic_publish_group_id, brand_channel_id, channel, approval_type, idempotency_key
+             )
+             values ($1, $2, $3, $4, $5, 'threads', $6, $7)
+             on conflict (channel_output_id) do nothing`,
+            [
+              row.workspace_id,
+              row.brand_id,
+              row.channel_output_id,
+              row.topic_publish_group_id,
+              row.brand_channel_id,
+              approvalType,
+              `${approvalType}:${row.channel_output_id}`
+            ]
+          );
+        }
+        await client.query(
+          `update jobs
+           set status = 'succeeded', result_json = $2, locked_by = null, locked_until = null,
+               lease_token = null, finished_at = now(), updated_at = now()
+           where id = $1`,
+          [jobId, JSON.stringify(rendered)]
+        );
+        await client.query("commit");
+        return { id: jobId, status: "succeeded" };
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async failTextRenderJob(jobId, input) {
+      const retryAfterMs = input.retryable ? Math.max(1000, Math.min(input.retryAfterMs, 60 * 60 * 1000)) : 0;
+      const result = await pool.query(
+        `update jobs
+         set status = case when $5::boolean and attempt_count < max_attempts then 'queued' else 'failed' end,
+             run_at = case when $5::boolean and attempt_count < max_attempts then now() + ($6::bigint * interval '1 millisecond') else run_at end,
+             locked_by = null, locked_until = null, lease_token = null, last_error = $4,
+             finished_at = case when $5::boolean and attempt_count < max_attempts then null else now() end,
+             updated_at = now()
+         where id = $1 and job_type = 'threads_text_render'
+           and status = 'running' and locked_by = $2 and lease_token = $3::uuid
+         returning id, status`,
+        [jobId, input.workerId, input.leaseToken, input.error.slice(0, 2000), input.retryable, retryAfterMs]
+      );
+      if (!result.rowCount) throw new Error("text_render_job_lease_invalid");
       return { id: result.rows[0].id, status: result.rows[0].status };
     },
 

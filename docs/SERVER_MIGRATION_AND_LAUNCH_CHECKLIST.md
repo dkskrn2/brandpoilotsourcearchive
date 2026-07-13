@@ -40,10 +40,6 @@ KAKAO_CLIENT_SECRET=<only-if-enabled-in-kakao>
 KAKAO_REDIRECT_URI=https://api.example.com/auth/kakao/callback
 AUTH_FRONTEND_URL=https://app.example.com
 
-OPENAI_LLM_ENABLED=true
-OPENAI_API_KEY=<server-only-key>
-OPENAI_MODEL=gpt-5.4-mini
-OPENAI_REQUEST_TIMEOUT_MS=500000
 
 INSTAGRAM_PUBLISH_ENABLED=true
 META_GRAPH_VERSION=v23.0

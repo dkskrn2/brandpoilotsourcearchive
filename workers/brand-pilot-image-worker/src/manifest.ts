@@ -35,7 +35,7 @@ export interface ValidatedStoryManifest extends ValidatedWorkerManifestBase {
 
 export interface ValidatedReelManifest extends ValidatedWorkerManifestBase {
   deliveryFormat: "instagram_reel";
-  promptVersion: "worker-reel.v1";
+  promptVersion: "worker-reel.v3";
   scenes: WorkerManifestAsset[];
   caption: string;
   hashtags: string[];
@@ -75,7 +75,7 @@ function promptVersionFor(deliveryFormat: InstagramDeliveryFormat): WorkerPrompt
   switch (deliveryFormat) {
     case "instagram_feed_carousel": return "worker-card.v4";
     case "instagram_story": return "worker-story.v1";
-    case "instagram_reel": return "worker-reel.v1";
+    case "instagram_reel": return "worker-reel.v3";
   }
 }
 
@@ -200,6 +200,9 @@ export function parseWorkerManifest(
   if (deliveryFormat === "instagram_story" && rawAssets.length !== 1) {
     invalid("story_asset_count_invalid");
   }
+  if (deliveryFormat === "instagram_reel" && rawAssets.length !== 1) {
+    invalid("reel_asset_count_invalid");
+  }
   if (rawAssets.length < 1 || rawAssets.length > maxImages || rawAssets.length > 5) {
     invalid("asset_count_out_of_range");
   }
@@ -242,7 +245,7 @@ export function parseWorkerManifest(
   return {
     ...common,
     deliveryFormat,
-    promptVersion: "worker-reel.v1",
+    promptVersion: "worker-reel.v3",
     caption: parseCaption(record),
     hashtags: parseHashtags(record),
     scenes: assets

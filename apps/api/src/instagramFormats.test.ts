@@ -40,7 +40,7 @@ describe("instagram format mappings", () => {
   it.each([
     ["instagram_feed_carousel", "worker-card.v4"],
     ["instagram_story", "worker-story.v1"],
-    ["instagram_reel", "worker-reel.v1"]
+    ["instagram_reel", "worker-reel.v3"]
   ] as const)("maps %s to prompt version %s", (deliveryFormat, promptVersion) => {
     expect(instagramPromptVersions[deliveryFormat]).toBe(promptVersion);
     expect(deliveryFormatToPromptVersion(deliveryFormat)).toBe(promptVersion);
@@ -301,7 +301,7 @@ describe("shared delivery type contracts", () => {
     expectTypeOf<StoryPayload["deliveryFormat"]>().toEqualTypeOf<"instagram_story">();
     expectTypeOf<StoryPayload["promptVersion"]>().toEqualTypeOf<"worker-story.v1">();
     expectTypeOf<ReelPayload["deliveryFormat"]>().toEqualTypeOf<"instagram_reel">();
-    expectTypeOf<ReelPayload["promptVersion"]>().toEqualTypeOf<"worker-reel.v1">();
+    expectTypeOf<ReelPayload["promptVersion"]>().toEqualTypeOf<"worker-reel.v3">();
     expectTypeOf<ImageRenderJobPayload["maxImages"]>().toEqualTypeOf<5>();
   });
 });

@@ -24,6 +24,15 @@ function run(command, args) {
   return result.stdout;
 }
 
+function runWithOutput(command, args) {
+  const result = spawnSync(command, args, { shell: false, encoding: "utf8", windowsHide: true });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`${command} failed (${result.status ?? "unknown"}): ${result.stderr.trim()}`);
+  }
+  return { stdout: result.stdout, stderr: result.stderr };
+}
+
 const python = process.env.PYTHON ?? "python";
 const scriptPath = fileURLToPath(new URL("./render-reel.py", import.meta.url));
 
@@ -37,9 +46,10 @@ async function main() {
   const manifestPath = path.join(workDir, "content.json");
   const outputPath = path.join(workDir, "reel.mp4");
   const coverPath = path.join(workDir, "cover.png");
+  const audioPath = path.join(workDir, "mixkit-relaxation-05.mp3");
   try {
     await mkdir(inputDir);
-    const colors = ["red", "green", "blue"];
+    const colors = ["red"];
     for (let index = 0; index < colors.length; index += 1) {
       run("ffmpeg", [
         "-hide_banner", "-loglevel", "error", "-y",
@@ -50,9 +60,16 @@ async function main() {
     }
     await writeFile(manifestPath, JSON.stringify({
       deliveryFormat: "instagram_reel",
-      selectedAssetCount: 3,
+      selectedAssetCount: 1,
       scenes: colors.map((color, index) => ({ index: index + 1, role: color }))
     }, null, 2));
+
+    const audioResponse = await fetch("https://assets.mixkit.co/music/749/749.mp3");
+    assert.equal(audioResponse.ok, true, `Mixkit download failed with ${audioResponse.status}`);
+    assert.match(audioResponse.headers.get("content-type") ?? "", /^audio\/(mpeg|mp3)(?:;|$)/i);
+    const audioBytes = Buffer.from(await audioResponse.arrayBuffer());
+    assert.ok(audioBytes.length >= 1_024, "Downloaded Mixkit track is unexpectedly small");
+    await writeFile(audioPath, audioBytes);
 
     run(python, [
       scriptPath,
@@ -60,8 +77,11 @@ async function main() {
       "--manifest", manifestPath,
       "--output", outputPath,
       "--cover", coverPath,
-      "--seconds-per-scene", "3",
+      "--audio", audioPath,
+      "--seconds-per-scene", "7",
       "--fade-seconds", "0.25",
+      "--audio-volume", "0.12",
+      "--audio-fade-seconds", "0.5",
       "--fps", "30"
     ]);
 
@@ -76,8 +96,16 @@ async function main() {
     assert.equal(video.codec_name, "h264");
     assert.equal(audio.codec_name, "aac");
     assert.equal(fpsNumerator / fpsDenominator, 30);
-    assert.ok(Math.abs(Number(probe.format.duration) - 8.5) <= 0.20);
-    process.stdout.write("Reel verification passed: 1080x1920 h264/aac 30fps, 3 scenes.\n");
+    assert.ok(Math.abs(Number(probe.format.duration) - 7) <= 0.20);
+
+    const volumeProbe = runWithOutput("ffmpeg", [
+      "-hide_banner", "-i", outputPath,
+      "-map", "0:a:0", "-af", "volumedetect",
+      "-f", "null", "-"
+    ]);
+    const maxVolume = /max_volume:\s*(-?(?:\d+(?:\.\d+)?|inf))\s*dB/i.exec(volumeProbe.stderr)?.[1];
+    assert.ok(maxVolume && maxVolume.toLowerCase() !== "-inf", "Reel audio is silent");
+    process.stdout.write("Reel verification passed: 1080x1920 h264/aac 30fps, 1 scene, real BGM.\n");
   } finally {
     await rm(workDir, { recursive: true, force: true });
   }

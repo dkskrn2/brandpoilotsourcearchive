@@ -20,7 +20,7 @@ function jobFor(
     ? "worker-card.v4"
     : deliveryFormat === "instagram_story"
       ? "worker-story.v1"
-      : "worker-reel.v1";
+      : "worker-reel.v3";
   return {
     id: "job-1",
     leaseToken: "lease-1",
@@ -121,21 +121,20 @@ describe("configured image renderer", () => {
     const directory = await outputDirectory();
     await Promise.all([
       writeFile(path.join(directory, "scene-01.png"), await png(1024, 1536)),
-      writeFile(path.join(directory, "scene-02.png"), await png(1024, 1536)),
       writeFile(path.join(directory, "content.json"), JSON.stringify({
         deliveryFormat: "instagram_reel",
-        promptVersion: "worker-reel.v1",
-        selectedAssetCount: 2,
+        promptVersion: "worker-reel.v3",
+        selectedAssetCount: 1,
         caption: "first paragraph\n\nsecond paragraph",
         hashtags,
-        scenes: [asset(1, 1920), asset(2, 1920)]
+        scenes: [asset(1, 1920)]
       }))
     ]);
 
     const rendered = await loadRenderedPackage(jobFor("instagram_reel"), directory);
 
-    expect(rendered.manifest.selectedAssetCount).toBe(2);
-    expect(rendered.images).toHaveLength(2);
+    expect(rendered.manifest.selectedAssetCount).toBe(1);
+    expect(rendered.images).toHaveLength(1);
     expect(rendered.images.every((image) => image.width === 1024 && image.height === 1536)).toBe(true);
   });
 

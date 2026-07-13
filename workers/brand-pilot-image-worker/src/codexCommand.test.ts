@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildCodexExecArguments, resolveCodexInvocation } from "./codexCommand.mjs";
+import { buildCodexExecArguments, buildCodexTextExecArguments, resolveCodexInvocation } from "./codexCommand.mjs";
 
 describe("resolveCodexInvocation", () => {
   it("uses the global npm Codex entrypoint on Windows instead of a later extension executable", () => {
@@ -34,5 +34,14 @@ describe("resolveCodexInvocation", () => {
     expect(args.at(-1)).toBe("-");
     expect(args).toContain("--json");
     expect(args.join(" ")).not.toContain("creative brief");
+  });
+
+  it("runs Threads text in a read-only sandbox without enabling image generation", () => {
+    const args = buildCodexTextExecArguments({ rootDir: "C:\\worker" });
+
+    expect(args).toContain("--json");
+    expect(args).toContain("read-only");
+    expect(args.at(-1)).toBe("-");
+    expect(args).not.toContain("image_generation");
   });
 });

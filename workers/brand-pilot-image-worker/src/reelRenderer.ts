@@ -3,10 +3,13 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { fetchReelMusic, type PreparedReelMusic } from "./reelMusic.js";
 import type { ReelRenderer, RenderedReelMedia } from "./worker.js";
 
-const secondsPerScene = 3;
+const secondsPerScene = 7;
 const fadeSeconds = 0.25;
+const audioVolume = 0.12;
+const audioFadeSeconds = 0.5;
 const reelFps = 30;
 const durationTolerance = 0.20;
 
@@ -21,6 +24,7 @@ export interface ReelProbe {
 
 type RunPython = (executable: string, args: readonly string[]) => Promise<void>;
 type Probe = (executable: string, args: readonly string[]) => Promise<ReelProbe>;
+type PrepareMusic = (jobId: string, workDir: string) => Promise<PreparedReelMusic>;
 
 interface ProcessOutput {
   stdout: string;
@@ -84,7 +88,7 @@ const defaultProbe: Probe = async (executable, args) => {
 };
 
 function validateScenes(input: Parameters<ReelRenderer["render"]>[0]) {
-  if (input.scenes.length < 1 || input.scenes.length > 5) {
+  if (input.scenes.length !== 1) {
     throw new Error("invalid_reel_scene_count");
   }
   if (
@@ -129,13 +133,15 @@ export function createReelRenderer({
   ffprobeExecutable = "ffprobe",
   scriptPath = fileURLToPath(new URL("../scripts/render-reel.py", import.meta.url)),
   runPython = defaultRunPython,
-  probe = defaultProbe
+  probe = defaultProbe,
+  prepareMusic = fetchReelMusic
 }: {
   pythonExecutable?: string;
   ffprobeExecutable?: string;
   scriptPath?: string;
   runPython?: RunPython;
   probe?: Probe;
+  prepareMusic?: PrepareMusic;
 } = {}): ReelRenderer {
   return {
     async render(input): Promise<RenderedReelMedia> {
@@ -152,14 +158,18 @@ export function createReelRenderer({
           scene.bytes
         )));
         await writeFile(manifestPath, JSON.stringify(input.manifest, null, 2), "utf8");
+        const music = await prepareMusic(input.job.id, workDir);
         await runPython(pythonExecutable, [
           scriptPath,
           "--input-dir", inputDir,
           "--manifest", manifestPath,
           "--output", outputPath,
           "--cover", coverPath,
+          "--audio", music.filePath,
           "--seconds-per-scene", String(secondsPerScene),
           "--fade-seconds", String(fadeSeconds),
+          "--audio-volume", String(audioVolume),
+          "--audio-fade-seconds", String(audioFadeSeconds),
           "--fps", String(reelFps)
         ]);
 

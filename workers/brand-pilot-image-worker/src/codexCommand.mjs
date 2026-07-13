@@ -29,3 +29,16 @@ export function buildCodexExecArguments({ rootDir }) {
     "-"
   ];
 }
+
+export function buildCodexTextExecArguments({ rootDir }) {
+  return [
+    "--ask-for-approval", "never",
+    "exec",
+    "--skip-git-repo-check",
+    "--ephemeral",
+    "--json",
+    "--sandbox", "read-only",
+    "-C", rootDir,
+    "-"
+  ];
+}

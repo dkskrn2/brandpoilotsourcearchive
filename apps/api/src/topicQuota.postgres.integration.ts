@@ -10,13 +10,13 @@ const sameNow = new Date("2026-07-13T01:00:00.000Z");
 const policyDate = "2026-07-13";
 const migrationsDirectory = fileURLToPath(new URL("../../../db/migrations/", import.meta.url));
 
-async function applyMigrations001Through017(client: PoolClient) {
+async function applyMigrations(client: PoolClient) {
   const migrationFiles = (await readdir(migrationsDirectory))
-    .filter((file) => /^\d{3}_.+\.sql$/.test(file) && file.slice(0, 3) <= "017")
+    .filter((file) => /^\d{3}_.+\.sql$/.test(file) && file.slice(0, 3) <= "019")
     .sort();
   assert.equal(migrationFiles[0], "001_initial_schema.sql");
-  assert.equal(migrationFiles.at(-1), "017_preserve_topic_publish_group_status.sql");
-  assert.equal(migrationFiles.length, 17);
+  assert.equal(migrationFiles.at(-1), "019_threads_text_render_jobs.sql");
+  assert.equal(migrationFiles.length, 19);
 
   for (const file of migrationFiles) {
     await client.query("begin");
@@ -113,24 +113,6 @@ async function seedConcurrencyFixture(pool: Pool) {
   return { brandId, topicRowIds };
 }
 
-function generatedDraft() {
-  return {
-    draft: {
-      title: "Concurrent quota topic",
-      contentTheme: "Quota locking",
-      coreMessage: "Only one fourth topic may be generated.",
-      targetAudience: "families",
-      customerProblem: "Concurrent generation can exceed a daily policy limit.",
-      keyPoints: ["Serialize quota checks per brand."],
-      supportingEvidence: ["Disposable PostgreSQL concurrency fixture."]
-    },
-    responseId: "test-response",
-    usage: { inputTokens: 1, outputTokens: 1 },
-    requestMetadata: { source: "topic-quota-postgres-test" },
-    responseMetadata: { source: "topic-quota-postgres-test" }
-  };
-}
-
 async function observeBrandLockWait(pool: Pool, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -150,15 +132,16 @@ async function observeBrandLockWait(pool: Pool, timeoutMs = 5_000) {
   return false;
 }
 
-function repositoryPool(pool: Pool, removeBrandLock: boolean) {
-  if (!removeBrandLock) return pool;
+function repositoryPool(pool: Pool, removeBrandLock: boolean, beforeSourceMetadataInsert: () => Promise<void>) {
   return {
     query: pool.query.bind(pool),
     async connect() {
       const client = await pool.connect();
       return {
-        query(sql: string, values?: unknown[]) {
-          return client.query(sql.replace(/\s+for update of b\b/i, ""), values);
+        async query(sql: string, values?: unknown[]) {
+          if (sql.includes("insert into master_drafts")) await beforeSourceMetadataInsert();
+          const querySql = removeBrandLock ? sql.replace(/\s+for update of b\b/i, "") : sql;
+          return client.query(querySql, values);
         },
         release() {
           client.release();
@@ -170,35 +153,31 @@ function repositoryPool(pool: Pool, removeBrandLock: boolean) {
 
 async function runConcurrencyAssertions(pool: Pool, removeBrandLock: boolean) {
   const fixture = await seedConcurrencyFixture(pool);
-  let draftCallCount = 0;
-  let markFirstDraftStarted!: () => void;
-  let releaseFirstDraft!: () => void;
-  const firstDraftStarted = new Promise<void>((resolve) => {
-    markFirstDraftStarted = resolve;
+  let metadataInsertCount = 0;
+  let markFirstMetadataInsertStarted!: () => void;
+  let releaseFirstMetadataInsert!: () => void;
+  const firstMetadataInsertStarted = new Promise<void>((resolve) => {
+    markFirstMetadataInsertStarted = resolve;
   });
-  const firstDraftRelease = new Promise<void>((resolve) => {
-    releaseFirstDraft = resolve;
+  const firstMetadataInsertRelease = new Promise<void>((resolve) => {
+    releaseFirstMetadataInsert = resolve;
   });
-  const repository = createRepository(repositoryPool(pool, removeBrandLock) as Pool, {
-    openAi: { enabled: true, apiKey: "test-key", model: "test-model" },
-    generateMasterDraft: async () => {
-      draftCallCount += 1;
-      if (draftCallCount === 1) {
-        markFirstDraftStarted();
-        await firstDraftRelease;
+  const repository = createRepository(repositoryPool(pool, removeBrandLock, async () => {
+      metadataInsertCount += 1;
+      if (metadataInsertCount === 1) {
+        markFirstMetadataInsertStarted();
+        await firstMetadataInsertRelease;
       }
-      return generatedDraft();
-    }
-  });
+  }) as Pool);
 
   const first = repository.generateContent(fixture.brandId, sameNow);
-  await firstDraftStarted;
+  await firstMetadataInsertStarted;
   const second = repository.generateContent(fixture.brandId, sameNow);
   let lockWaitObserved = false;
   try {
     lockWaitObserved = await observeBrandLockWait(pool);
   } finally {
-    releaseFirstDraft();
+    releaseFirstMetadataInsert();
   }
   const results = await Promise.all([first, second]);
   const generatedToday = await pool.query<{ count: number }>(
@@ -215,7 +194,7 @@ async function runConcurrencyAssertions(pool: Pool, removeBrandLock: boolean) {
   );
   assert.deepEqual(results.map((result) => result.processed).sort(), [0, 1]);
   assert.equal(results.find((result) => result.processed === 0)?.reason, "daily_topic_limit");
-  assert.equal(draftCallCount, 1, "the capped call must stop before LLM generation");
+  assert.equal(metadataInsertCount, 1, "the capped call must stop before source metadata creation");
   assert.equal(lockWaitObserved, true, "second PostgreSQL backend must wait on the brand FOR UPDATE lock");
 
   const selectedTopics = await pool.query<{ count: number }>(
@@ -257,7 +236,7 @@ async function main() {
     try {
       const migrationClient = await pool.connect();
       try {
-        await applyMigrations001Through017(migrationClient);
+        await applyMigrations(migrationClient);
       } finally {
         migrationClient.release();
       }

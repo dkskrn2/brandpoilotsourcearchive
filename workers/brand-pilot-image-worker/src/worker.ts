@@ -77,6 +77,11 @@ export interface ImageStorage {
   upload(job: ClaimedImageJob, rendered: RenderedInstagramPackage): Promise<{ manifestUrl: string }>;
 }
 
+export type WorkerRunResult =
+  | { status: "idle" }
+  | { status: "completed"; jobId: string }
+  | { status: "failed"; jobId: string };
+
 function maxImagesFor(job: ClaimedImageJob) {
   const maxImages = Number(job.payload.maxImages);
   if (!Number.isInteger(maxImages) || maxImages < 1 || maxImages > 5) throw new Error("image_render_max_images_invalid");
@@ -110,7 +115,7 @@ function formatFor(job: ClaimedImageJob) {
   ) || (
     deliveryFormat === "instagram_story" && promptVersion === "worker-story.v1"
   ) || (
-    deliveryFormat === "instagram_reel" && promptVersion === "worker-reel.v1"
+    deliveryFormat === "instagram_reel" && promptVersion === "worker-reel.v3"
   );
   if (!valid) throw new Error("image_job_format_contract_invalid");
   return { deliveryFormat, promptVersion } as {
@@ -230,6 +235,7 @@ export async function runOnce({
   reelRenderer,
   readSource = readRepresentativeSource,
   buildPrompt = buildWorkerPrompt,
+  runTextJob,
   heartbeatIntervalMs = 5 * 60 * 1000,
   retryDelayMs = 5 * 60 * 1000
 }: {
@@ -240,11 +246,12 @@ export async function runOnce({
   reelRenderer?: ReelRenderer;
   readSource?: (url: string | null | undefined) => Promise<SourceReadResult>;
   buildPrompt?: typeof buildWorkerPrompt;
+  runTextJob?: () => Promise<WorkerRunResult>;
   heartbeatIntervalMs?: number;
   retryDelayMs?: number;
-}): Promise<{ status: "idle" } | { status: "completed"; jobId: string } | { status: "failed"; jobId: string }> {
+}): Promise<WorkerRunResult> {
   const job = await client.claim(workerId);
-  if (!job) return { status: "idle" };
+  if (!job) return runTextJob ? await runTextJob() : { status: "idle" };
   const stopHeartbeat = startHeartbeat({ job, workerId, client, heartbeatIntervalMs });
   try {
     const maxImages = maxImagesFor(job);

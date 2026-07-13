@@ -27,8 +27,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cover", type=Path, required=True)
+    parser.add_argument("--audio", type=Path, required=True)
     parser.add_argument("--seconds-per-scene", type=positive_number, required=True)
     parser.add_argument("--fade-seconds", type=positive_number, required=True)
+    parser.add_argument("--audio-volume", type=positive_number, required=True)
+    parser.add_argument("--audio-fade-seconds", type=positive_number, required=True)
     parser.add_argument("--fps", type=positive_integer, required=True)
     return parser.parse_args()
 
@@ -49,8 +52,11 @@ def main() -> None:
         scenes = manifest["scenes"]
     except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
         fail(f"Invalid Reel manifest: {error}")
-    if not isinstance(scenes, list) or not 1 <= len(scenes) <= 5:
-        fail("Invalid Reel manifest: expected 1-5 scenes.")
+    if not isinstance(scenes, list) or len(scenes) != 1:
+        fail("Invalid Reel manifest: expected exactly 1 scene.")
+
+    if not args.audio.is_file() or args.audio.stat().st_size == 0:
+        fail(f"Missing Reel audio: {args.audio}")
 
     scene_paths = []
     for offset, scene in enumerate(scenes, start=1):
@@ -69,10 +75,7 @@ def main() -> None:
     command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
     for scene_path in scene_paths:
         command.extend(["-loop", "1", "-t", str(args.seconds_per_scene), "-i", str(scene_path)])
-    command.extend([
-        "-f", "lavfi", "-t", str(duration), "-i",
-        "anullsrc=channel_layout=stereo:sample_rate=48000"
-    ])
+    command.extend(["-stream_loop", "-1", "-i", str(args.audio)])
 
     filters = []
     for index in range(len(scene_paths)):
@@ -91,10 +94,18 @@ def main() -> None:
         )
         video_label = output_label
 
+    audio_index = len(scene_paths)
+    audio_fade_out_start = max(0, duration - args.audio_fade_seconds)
+    filters.append(
+        f"[{audio_index}:a]volume={args.audio_volume},atrim=duration={duration},"
+        f"asetpts=PTS-STARTPTS,afade=t=in:st=0:d={args.audio_fade_seconds},"
+        f"afade=t=out:st={audio_fade_out_start}:d={args.audio_fade_seconds}[aout]"
+    )
+
     command.extend([
         "-filter_complex", ";".join(filters),
         "-map", f"[{video_label}]",
-        "-map", f"{len(scene_paths)}:a:0",
+        "-map", "[aout]",
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
         "-r", str(args.fps),

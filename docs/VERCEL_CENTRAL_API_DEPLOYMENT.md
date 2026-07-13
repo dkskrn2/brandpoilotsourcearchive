@@ -29,10 +29,6 @@ Add these values to the Vercel project for Production and Preview when Preview d
 | `SOURCE_CRAWL_DISCOVERY_LIMIT` | Yes | URL당 발견 문서 수, 기본값 `20` |
 | `SOURCE_CRAWL_TIME_BUDGET_MS` | Yes | 호출당 실행 시간 제한, 기본값 `45000` |
 | `CREDENTIAL_ENCRYPTION_KEY` | Yes | Generate once; changing it invalidates stored encrypted channel credentials |
-| `OPENAI_LLM_ENABLED` | Yes | `true` when draft generation is enabled |
-| `OPENAI_API_KEY` | Conditional | Required when `OPENAI_LLM_ENABLED=true` |
-| `OPENAI_MODEL` | Yes | Current draft model name |
-| `OPENAI_REQUEST_TIMEOUT_MS` | No | Current value is `500000` |
 | `INSTAGRAM_PUBLISH_ENABLED` | Yes | `true` for real Meta publishing |
 | `META_GRAPH_VERSION` | Yes | Current supported Graph API version |
 | `BRAND_PILOT_DEV_BRAND_ID` | Pilot only | Current pilot brand UUID |

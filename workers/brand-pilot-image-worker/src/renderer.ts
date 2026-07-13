@@ -130,7 +130,7 @@ export function createFixtureRenderer(): ImageRenderer {
         ? "worker-card.v4" as const
         : deliveryFormat === "instagram_story"
           ? "worker-story.v1" as const
-          : "worker-reel.v1" as const;
+          : "worker-reel.v3" as const;
       const asset = { index: 1, role: "hook", embeddedText: "test asset", width: 1080, height };
       const rawManifest = deliveryFormat === "instagram_feed_carousel"
         ? {

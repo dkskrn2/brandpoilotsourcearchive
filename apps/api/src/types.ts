@@ -476,7 +476,7 @@ export interface InstagramStoryRenderJobPayload extends ImageRenderJobPayloadBas
 
 export interface InstagramReelRenderJobPayload extends ImageRenderJobPayloadBase {
   deliveryFormat: "instagram_reel";
-  promptVersion: "worker-reel.v1";
+  promptVersion: "worker-reel.v3";
 }
 
 export type ImageRenderJobPayload =
@@ -498,6 +498,22 @@ export interface ImageRenderJobCompletionInput {
   workerId: string;
   leaseToken: string;
   manifestUrl: string;
+}
+
+export interface TextRenderJobDto {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  channelOutputId: string;
+  leaseToken: string;
+  payload: import("./textRenderJobs.js").ThreadsRenderJobPayload;
+  attemptCount: number;
+}
+
+export interface TextRenderJobCompletionInput {
+  workerId: string;
+  leaseToken: string;
+  result: unknown;
 }
 
 export interface ApiRepository {
@@ -543,6 +559,16 @@ export interface ApiRepository {
   heartbeatImageRenderJob(jobId: string, workerId: string, leaseToken: string): Promise<{ id: string; status: string }>;
   completeImageRenderJob(jobId: string, input: ImageRenderJobCompletionInput): Promise<{ id: string; status: string; artifactId: string }>;
   failImageRenderJob(jobId: string, input: {
+    workerId: string;
+    leaseToken: string;
+    error: string;
+    retryable: boolean;
+    retryAfterMs: number;
+  }): Promise<{ id: string; status: string }>;
+  claimTextRenderJob(workerId: string): Promise<TextRenderJobDto | null>;
+  heartbeatTextRenderJob(jobId: string, workerId: string, leaseToken: string): Promise<{ id: string; status: string }>;
+  completeTextRenderJob(jobId: string, input: TextRenderJobCompletionInput): Promise<{ id: string; status: string }>;
+  failTextRenderJob(jobId: string, input: {
     workerId: string;
     leaseToken: string;
     error: string;

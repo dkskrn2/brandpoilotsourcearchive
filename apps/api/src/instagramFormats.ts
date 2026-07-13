@@ -30,7 +30,7 @@ const deliveryFormatsByRenderJobType = {
 export const instagramPromptVersions = {
   instagram_feed_carousel: "worker-card.v4",
   instagram_story: "worker-story.v1",
-  instagram_reel: "worker-reel.v1"
+  instagram_reel: "worker-reel.v3"
 } as const satisfies Record<InstagramDeliveryFormat, string>;
 
 export type InstagramPromptVersion = (typeof instagramPromptVersions)[InstagramDeliveryFormat];

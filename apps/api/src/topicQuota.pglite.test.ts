@@ -151,6 +151,24 @@ async function createMinimalGenerationSchema(database: PGlite) {
       block_reasons jsonb not null,
       approved_at timestamptz null
     );
+    create table jobs (
+      id text primary key,
+      workspace_id text not null,
+      brand_id text not null,
+      channel_output_id bigint not null,
+      job_type text not null,
+      status text not null,
+      payload_json jsonb not null,
+      priority int not null default 0,
+      attempt_count int not null default 0,
+      max_attempts int not null default 3,
+      run_at timestamptz not null default now(),
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    );
+    create unique index jobs_threads_text_active_unique
+      on jobs (channel_output_id)
+      where job_type = 'threads_text_render' and status in ('queued', 'running');
   `);
 }
 

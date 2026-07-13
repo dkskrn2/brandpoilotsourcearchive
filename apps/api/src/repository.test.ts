@@ -199,9 +199,11 @@ describe("Task 4 transactional topic generation", () => {
     expect(instagramJson).not.toContain('"extracted_text"');
     expect(instagramJson).not.toContain('"summary"');
     const queues = fixture.statements.filter(({ sql }) => sql.includes("insert into publish_queue"));
-    expect(queues).toHaveLength(1);
-    expect(queues[0].values).toContain("output-threads");
-    expect(queues[0].values).toContain("publish-group-1");
+    expect(queues).toHaveLength(0);
+    const jobs = fixture.statements.filter(({ sql }) => sql.includes("insert into jobs"));
+    expect(jobs).toHaveLength(2);
+    expect(jobs.some(({ values }) => values.includes("instagram_feed_render"))).toBe(true);
+    expect(jobs.some(({ sql }) => sql.includes("threads_text_render"))).toBe(true);
   });
 
   it("omits central crawl snapshot fields and text from the render payload", async () => {
@@ -1255,11 +1257,21 @@ describe("repository", () => {
 
     expect(result).toMatchObject({ processed: 1, created: 2, failed: 0 });
     expect(insertedChannels).toEqual(["instagram", "threads"]);
-    expect(masterDraftValues).toContain("draft.master.v1");
+    expect(masterDraftValues).toContain("source.direct.v1");
+    expect(JSON.parse(String(masterDraftValues?.[4]))).toMatchObject({
+      title: "Jeju food route",
+      angle: "local-first itinerary",
+      representativeUrl: "https://example.com/topic-reference",
+      source: "topic_table"
+    });
     expect(JSON.parse(String(contentTopicValues?.[5]))).toEqual({ source: "topic_table", topicRowId: "topic-row-1" });
     expect(sourceSnapshotQueries).toHaveLength(0);
-    expect(llmRunValues.some((values) => values.includes("master_draft") && values.includes("local") && values.includes("rule-based") && values.includes("draft.master.v1") && values.includes("succeeded"))).toBe(true);
-    expect(query).toHaveBeenCalledWith(expect.stringContaining("insert into publish_queue"), expect.any(Array));
+    expect(llmRunValues).toHaveLength(0);
+    expect(query).not.toHaveBeenCalledWith(expect.stringContaining("insert into publish_queue"), expect.any(Array));
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("'threads_text_render'"),
+      expect.arrayContaining(["workspace-1", "brand-1", "output-threads"])
+    );
   });
 
   it("does not queue an approved Instagram output before its worker artifact exists", async () => {
@@ -1392,7 +1404,7 @@ describe("repository", () => {
   it("generates content from crawled source snapshots when no topic rows are uploaded", async () => {
     const insertedChannels: string[] = [];
     let contentTopicValues: unknown[] | undefined;
-    let draftInput: unknown;
+    let imageJobPayload: Record<string, unknown> | undefined;
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       if (sql.trim() === "begin" || sql.trim() === "commit" || sql.trim() === "rollback") {
         return { rowCount: 0, rows: [] };
@@ -1428,6 +1440,7 @@ describe("repository", () => {
               content_hash: "hash-1",
               source_type: "owned",
               content_url: "https://brand.example.com/service",
+              representative_url: "https://brand.example.com/service",
               content: "Owned service page says family travelers need compact Jeju routes."
             },
             {
@@ -1446,36 +1459,20 @@ describe("repository", () => {
         return { rowCount: 1, rows: [{ id: "content-topic-1" }] };
       }
       if (sql.includes("insert into master_drafts")) return { rowCount: 1, rows: [{ id: "master-draft-1" }] };
-      if (sql.includes("insert into llm_runs")) return { rowCount: 1, rows: [{ id: "llm-run-1" }] };
       if (sql.includes("insert into channel_outputs")) {
         insertedChannels.push(String(values?.[4]));
         return { rowCount: 1, rows: [{ id: `output-${values?.[4]}` }] };
+      }
+      if (sql.includes("insert into jobs")) {
+        imageJobPayload = JSON.parse(String(values?.[5]));
+        return { rowCount: 1, rows: [] };
       }
       if (sql.includes("select id from brand_channels")) {
         return { rowCount: 1, rows: [{ id: `channel-${values?.[1]}` }] };
       }
       return { rowCount: 1, rows: [] };
     });
-    const repository = createRepository(fakePoolWithClient(query) as any, {
-      openAi: { enabled: true, apiKey: "sk-test", model: "gpt-test" },
-      generateMasterDraft: async ({ input }: { input: unknown }) => {
-        draftInput = input;
-        return {
-          draft: {
-            title: "제주 가족 동선 설계",
-            contentTheme: "제주 가족 여행 동선",
-            coreMessage: "가족 여행은 이동 동선을 짧게 잡아야 한다.",
-            targetAudience: "가족 여행자",
-            customerProblem: "아이와 함께 이동할 때 긴 동선이 부담스럽다.",
-            keyPoints: ["숙소 권역을 기준으로 일정을 묶는다."],
-            supportingEvidence: ["Owned service page says family travelers need compact Jeju routes."]
-          },
-          usage: { inputTokens: 1, outputTokens: 1 },
-          requestMetadata: {},
-          responseMetadata: {}
-        };
-      }
-    } as any);
+    const repository = createRepository(fakePoolWithClient(query) as any);
 
     const result = await repository.generateContent("brand-1");
 
@@ -1488,23 +1485,21 @@ describe("repository", () => {
       sourceContentItemId: "content-item-1",
       sourceSnapshotId: "snapshot-1",
       contentUrl: "https://brand.example.com/service",
+      representativeUrl: "https://brand.example.com/service",
       contentHash: "hash-1"
     });
-    expect(draftInput).toMatchObject({
-      sourceMaterials: [{
-        sourceType: "owned",
-        contentUrl: "https://brand.example.com/service",
-        content: "Owned service page says family travelers need compact Jeju routes."
-      }]
+    expect(imageJobPayload).toMatchObject({
+      representativeUrl: "https://brand.example.com/service",
+      topic: { title: "크롤링 소스 기반 콘텐츠", angle: "source_url" }
     });
-    expect((draftInput as any).sourceMaterials).toHaveLength(1);
+    expect(query).not.toHaveBeenCalledWith(expect.stringContaining("insert into llm_runs"), expect.any(Array));
     expect(query).not.toHaveBeenCalledWith(expect.stringContaining("update topic_rows"), expect.any(Array));
   });
 
   it("generates the oldest selected source content topic before looking for new snapshots", async () => {
     const now = new Date("2026-07-13T01:00:00.000Z");
     const statusUpdates: unknown[][] = [];
-    let draftInput: unknown;
+    let imageJobPayload: Record<string, unknown> | undefined;
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       if (sql.trim() === "begin" || sql.trim() === "commit" || sql.trim() === "rollback") {
         return { rowCount: 0, rows: [] };
@@ -1561,6 +1556,7 @@ describe("repository", () => {
             content_hash: "hash-1",
             source_type: "owned",
             content_url: "https://brand.example.com/service",
+            representative_url: "https://brand.example.com/service",
             content: "Owned service page says family travelers need compact Jeju routes."
           }]
         };
@@ -1574,51 +1570,33 @@ describe("repository", () => {
         return { rowCount: 1, rows: [] };
       }
       if (sql.includes("insert into master_drafts")) return { rowCount: 1, rows: [{ id: "master-draft-1" }] };
-      if (sql.includes("insert into llm_runs")) return { rowCount: 1, rows: [{ id: "llm-run-1" }] };
       if (sql.includes("insert into channel_outputs")) return { rowCount: 1, rows: [{ id: "output-instagram" }] };
+      if (sql.includes("insert into jobs")) {
+        imageJobPayload = JSON.parse(String(values?.[5]));
+        return { rowCount: 1, rows: [] };
+      }
       if (sql.includes("select id from brand_channels")) return { rowCount: 1, rows: [{ id: "channel-instagram" }] };
       return { rowCount: 1, rows: [] };
     });
-    const repository = createRepository(fakePoolWithClient(query) as any, {
-      openAi: { enabled: true, apiKey: "sk-test", model: "gpt-test" },
-      generateMasterDraft: async ({ input }: { input: unknown }) => {
-        draftInput = input;
-        return {
-          draft: {
-            title: "제주 가족 동선 설계",
-            contentTheme: "제주 가족 여행 동선",
-            coreMessage: "가족 여행은 이동 동선을 짧게 잡아야 한다.",
-            targetAudience: "가족 여행자",
-            customerProblem: "아이와 함께 이동할 때 긴 동선이 부담스럽다.",
-            keyPoints: ["숙소 권역을 기준으로 일정을 묶는다."],
-            supportingEvidence: ["Owned service page says family travelers need compact Jeju routes."]
-          },
-          usage: { inputTokens: 1, outputTokens: 1 },
-          requestMetadata: {},
-          responseMetadata: {}
-        };
-      }
-    } as any);
+    const repository = createRepository(fakePoolWithClient(query) as any);
 
     const result = await repository.generateContent("brand-1", now);
 
     expect(result).toMatchObject({ processed: 1, created: 1, failed: 0 });
     expect(query).toHaveBeenCalledWith(expect.stringContaining("from content_topics ct"), ["brand-1"]);
     expect(statusUpdates).toEqual([["content-topic-1", "instagram_feed_carousel"], ["content-topic-1", now]]);
-    expect(draftInput).toMatchObject({
-      sourceMaterials: [{
-        sourceType: "owned",
-        contentUrl: "https://brand.example.com/service",
-        content: "Owned service page says family travelers need compact Jeju routes."
-      }]
+    expect(imageJobPayload).toMatchObject({
+      representativeUrl: "https://brand.example.com/service",
+      topic: { title: "크롤링 기사 제목", angle: "source_url" }
     });
     expect(query).not.toHaveBeenCalledWith(expect.stringContaining("insert into content_topics"), expect.any(Array));
   });
 
 
-  it("stores OpenAI master draft metadata when LLM generation is enabled", async () => {
+  it("stores source-direct metadata and ignores legacy central OpenAI options", async () => {
     let masterDraftValues: unknown[] | undefined;
     const llmRunValues: unknown[][] = [];
+    let legacyGeneratorCalled = false;
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       if (sql.trim() === "begin" || sql.trim() === "commit" || sql.trim() === "rollback") return { rowCount: 0, rows: [] };
       const policyResult = task4GenerationPolicyResult(sql);
@@ -1645,29 +1623,23 @@ describe("repository", () => {
     });
     const repository = createRepository(fakePoolWithClient(query) as any, {
       openAi: { apiKey: "sk-test", model: "gpt-5.5", enabled: true },
-      generateMasterDraft: async () => ({
-        draft: {
-          coreMessage: "제주 식도락 동선은 짧고 명확해야 한다.",
-          title: "제주 식도락 동선 설계",
-          contentTheme: "제주 식도락 여행 동선",
-          targetAudience: "first-time travelers",
-          customerProblem: "초행 여행자는 이동 시간을 예측하기 어렵다.",
-          keyPoints: ["숙소 주변 권역을 중심으로 일정을 압축한다."],
-          supportingEvidence: ["Owned FAQ says visitors need short routes."]
-        },
-        responseId: "resp_123",
-        usage: { inputTokens: 120, outputTokens: 80 },
-        requestMetadata: { api: "openai.responses" },
-        responseMetadata: { responseId: "resp_123" }
-      })
+      generateMasterDraft: async () => {
+        legacyGeneratorCalled = true;
+        throw new Error("legacy_generator_must_not_run");
+      }
     } as any);
 
     const result = await repository.generateContent("brand-1");
 
     expect(result).toMatchObject({ processed: 1, created: 2, failed: 0 });
-    expect(masterDraftValues).toContain("draft.master.v1");
-    expect(JSON.parse(String(masterDraftValues?.[4]))).toMatchObject({ coreMessage: "제주 식도락 동선은 짧고 명확해야 한다." });
-    expect(llmRunValues.some((values) => values.includes("master_draft") && values.includes("openai") && values.includes("gpt-5.5") && values.includes("draft.master.v1") && values.includes("succeeded") && values.includes(120) && values.includes(80))).toBe(true);
+    expect(masterDraftValues).toContain("source.direct.v1");
+    expect(JSON.parse(String(masterDraftValues?.[4]))).toMatchObject({
+      title: "Jeju food route",
+      angle: "local-first itinerary",
+      source: "topic_table"
+    });
+    expect(legacyGeneratorCalled).toBe(false);
+    expect(llmRunValues).toHaveLength(0);
   });
 
   it("generates channel outputs only for connected channels", async () => {
@@ -1705,6 +1677,7 @@ describe("repository", () => {
     let storageArtifactValues: unknown[] | undefined;
     let renderedOutputValues: unknown[] | undefined;
     let imageJobPayload: Record<string, unknown> | undefined;
+    let threadsJobPayload: Record<string, unknown> | undefined;
     const llmRunValues: unknown[][] = [];
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       if (sql.trim() === "begin" || sql.trim() === "commit" || sql.trim() === "rollback") return { rowCount: 0, rows: [] };
@@ -1735,8 +1708,12 @@ describe("repository", () => {
       }
       if (sql.includes("insert into channel_outputs")) return { rowCount: 1, rows: [{ id: `output-${values?.[4]}` }] };
       if (sql.includes("insert into jobs")) {
-        expect(values?.[4]).toBe("instagram_feed_render");
-        imageJobPayload = JSON.parse(String(values?.[5]));
+        if (sql.includes("'threads_text_render'")) {
+          threadsJobPayload = JSON.parse(String(values?.[4]));
+        } else {
+          expect(values?.[4]).toBe("instagram_feed_render");
+          imageJobPayload = JSON.parse(String(values?.[5]));
+        }
         return { rowCount: 1, rows: [] };
       }
       if (sql.includes("insert into storage_artifacts")) {
@@ -1779,6 +1756,16 @@ describe("repository", () => {
       /^brands\/brand-1\/topics\/content-topic-1\/instagram_feed_carousel\/[0-9a-f-]+$/
     );
     expect(imageJobPayload).not.toHaveProperty("slides");
+    expect(threadsJobPayload).toMatchObject({
+      deliveryFormat: "threads_text",
+      promptVersion: "worker-threads.v1",
+      representativeUrl: null,
+      topic: {
+        title: "Jeju family stay",
+        angle: "location-first checklist",
+        targetCustomer: "family travelers"
+      }
+    });
     expect(llmRunValues.some((values) => values.includes("channel_output") && values.includes("gpt-image-2"))).toBe(false);
   });
 
@@ -1815,9 +1802,10 @@ describe("repository", () => {
     expect(query).toHaveBeenCalledWith(expect.stringContaining("insert into jobs"), expect.any(Array));
   });
 
-  it("logs a failed llm_run and continues with local fallback when OpenAI master draft generation fails", async () => {
+  it("does not call the legacy OpenAI generator or write llm_runs", async () => {
     const llmRunValues: unknown[][] = [];
     const topicUpdates: unknown[][] = [];
+    let legacyGeneratorCalled = false;
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       if (sql.trim() === "begin" || sql.trim() === "commit" || sql.trim() === "rollback") return { rowCount: 0, rows: [] };
       const policyResult = task4GenerationPolicyResult(sql);
@@ -1836,21 +1824,26 @@ describe("repository", () => {
         llmRunValues.push(values ?? []);
         return { rowCount: 1, rows: [{ id: "llm-run-1" }] };
       }
+      if (sql.includes("insert into channel_outputs")) {
+        return { rowCount: 1, rows: [{ id: `output-${values?.[4]}` }] };
+      }
+      if (sql.includes("insert into jobs")) return { rowCount: 1, rows: [] };
       if (sql.includes("update topic_rows")) topicUpdates.push(values ?? []);
       return { rowCount: 1, rows: [] };
     });
     const repository = createRepository(fakePoolWithClient(query) as any, {
       openAi: { apiKey: "sk-test", model: "gpt-5.5", enabled: true },
       generateMasterDraft: async () => {
-        throw new Error("openai_response_failed:404:model_not_found");
+        legacyGeneratorCalled = true;
+        throw new Error("legacy_generator_must_not_run");
       }
     } as any);
 
     const result = await repository.generateContent("brand-1");
 
     expect(result).toMatchObject({ processed: 1, created: 2, failed: 0 });
-    expect(llmRunValues.some((values) => values.includes("failed") && values.includes("openai_response_failed:404:model_not_found"))).toBe(true);
-    expect(llmRunValues.some((values) => values.includes("succeeded") && values.includes("local") && values.includes("rule-based"))).toBe(true);
+    expect(legacyGeneratorCalled).toBe(false);
+    expect(llmRunValues).toHaveLength(0);
     expect(topicUpdates.some((values) => values.includes("topic-row-1"))).toBe(true);
     expect(query).toHaveBeenCalledWith(expect.stringContaining("insert into master_drafts"), expect.any(Array));
   });
@@ -1919,7 +1912,7 @@ describe("repository", () => {
   });
 
   describe("Task 11 topic publish group scheduling", () => {
-    function schedulingFixture(groupIds: string[], occupied: Array<{ slot_date: string; slot_number: number }> = []) {
+    function schedulingFixture(groupIds: string[], occupied: Array<{ slot_date: string | Date; slot_number: number }> = []) {
       const statements: Array<{ sql: string; values: unknown[] }> = [];
       const query = vi.fn(async (sql: string, values?: unknown[]) => {
         statements.push({ sql, values: values ?? [] });
@@ -1972,6 +1965,21 @@ describe("repository", () => {
         ["2026-07-13", 1], ["2026-07-13", 2], ["2026-07-13", 3], ["2026-07-13", 4], ["2026-07-14", 1]
       ]);
       expect(fixture.statements.filter(({ sql }) => sql.includes("update publish_queue") && sql.includes("topic_publish_group_id"))).toHaveLength(5);
+    });
+
+    it("normalizes PostgreSQL Date slot values before selecting the next slot", async () => {
+      const fixture = schedulingFixture(
+        ["publish-group-1"],
+        [{ slot_date: new Date("2026-07-13T15:00:00.000Z"), slot_number: 1 }]
+      );
+      const repository = createRepository(fakePoolWithClient(fixture.query) as any);
+
+      await repository.schedulePublishQueue("brand-1", new Date("2026-07-13T12:30:00.000Z"));
+
+      const groupUpdate = fixture.statements.find(({ sql }) => (
+        sql.includes("update topic_publish_groups") && sql.includes("status = 'scheduled'")
+      ));
+      expect(groupUpdate?.values.slice(1, 3)).toEqual(["2026-07-14", 2]);
     });
 
     it("makes pending outputs wait while rejected and terminal failures do not block approved siblings", async () => {

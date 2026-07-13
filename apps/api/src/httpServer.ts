@@ -836,5 +836,86 @@ export function createServer(
     });
   });
 
+  app.post<{ Body: Record<string, unknown> }>("/worker/text-jobs/claim", async (request, reply) => {
+    try {
+      assertWorkerAuthentication(request.headers.authorization);
+    } catch (error) {
+      reply.code(error instanceof Error && error.message === "worker_api_not_configured" ? 503 : 401);
+      return { error: error instanceof Error ? error.message : "worker_api_unauthorized" };
+    }
+    if (typeof request.body?.workerId !== "string" || request.body.workerId.trim().length === 0) {
+      reply.code(400);
+      return { error: "worker_id_required" };
+    }
+    const job = await repository.claimTextRenderJob(request.body.workerId.trim());
+    if (!job) {
+      reply.code(204);
+      return reply.send();
+    }
+    return job;
+  });
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>("/worker/text-jobs/:jobId/heartbeat", async (request, reply) => {
+    try {
+      assertWorkerAuthentication(request.headers.authorization);
+    } catch (error) {
+      reply.code(error instanceof Error && error.message === "worker_api_not_configured" ? 503 : 401);
+      return { error: error instanceof Error ? error.message : "worker_api_unauthorized" };
+    }
+    if (typeof request.body?.workerId !== "string" || typeof request.body?.leaseToken !== "string") {
+      reply.code(400);
+      return { error: "worker_id_and_lease_token_required" };
+    }
+    return repository.heartbeatTextRenderJob(request.params.jobId, request.body.workerId, request.body.leaseToken);
+  });
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>("/worker/text-jobs/:jobId/complete", async (request, reply) => {
+    try {
+      assertWorkerAuthentication(request.headers.authorization);
+    } catch (error) {
+      reply.code(error instanceof Error && error.message === "worker_api_not_configured" ? 503 : 401);
+      return { error: error instanceof Error ? error.message : "worker_api_unauthorized" };
+    }
+    if (
+      typeof request.body?.workerId !== "string"
+      || typeof request.body?.leaseToken !== "string"
+      || !isObject(request.body?.result)
+    ) {
+      reply.code(400);
+      return { error: "worker_completion_fields_required" };
+    }
+    return repository.completeTextRenderJob(request.params.jobId, {
+      workerId: request.body.workerId,
+      leaseToken: request.body.leaseToken,
+      result: request.body.result
+    });
+  });
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>("/worker/text-jobs/:jobId/fail", async (request, reply) => {
+    try {
+      assertWorkerAuthentication(request.headers.authorization);
+    } catch (error) {
+      reply.code(error instanceof Error && error.message === "worker_api_not_configured" ? 503 : 401);
+      return { error: error instanceof Error ? error.message : "worker_api_unauthorized" };
+    }
+    if (
+      typeof request.body?.workerId !== "string"
+      || typeof request.body?.leaseToken !== "string"
+      || typeof request.body?.error !== "string"
+      || typeof request.body?.retryable !== "boolean"
+      || typeof request.body?.retryAfterMs !== "number"
+    ) {
+      reply.code(400);
+      return { error: "worker_failure_fields_required" };
+    }
+    return repository.failTextRenderJob(request.params.jobId, {
+      workerId: request.body.workerId,
+      leaseToken: request.body.leaseToken,
+      error: request.body.error,
+      retryable: request.body.retryable,
+      retryAfterMs: request.body.retryAfterMs
+    });
+  });
+
   return app;
 }

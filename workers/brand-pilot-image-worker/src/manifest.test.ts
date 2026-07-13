@@ -39,7 +39,7 @@ function story(count = 1) {
 function reel(count: number) {
   return {
     deliveryFormat: "instagram_reel",
-    promptVersion: "worker-reel.v1",
+    promptVersion: "worker-reel.v3",
     selectedAssetCount: count,
     caption: "릴 첫 문단입니다.\n\n릴 두 번째 문단입니다.",
     hashtags,
@@ -67,18 +67,18 @@ describe("parseWorkerManifest", () => {
     expect(result.validation).toEqual({ passed: true });
   });
 
-  it.each([2, 5])("accepts a %i-scene reel", (count) => {
-    const result = parseWorkerManifest(reel(count));
+  it("accepts exactly one Reel image", () => {
+    const result = parseWorkerManifest(reel(1));
 
     expect(result.deliveryFormat).toBe("instagram_reel");
-    expect(result.selectedAssetCount).toBe(count);
-    expect(result.assets).toHaveLength(count);
+    expect(result.selectedAssetCount).toBe(1);
+    expect(result.assets).toHaveLength(1);
     expect(result.validation).toEqual({ passed: true });
   });
 
   it.each([
     [feed(6), "asset_count_out_of_range"],
-    [reel(6), "asset_count_out_of_range"],
+    [reel(2), "reel_asset_count_invalid"],
     [story(2), "story_asset_count_invalid"]
   ])("rejects an invalid per-format count", (manifest, error) => {
     expect(() => parseWorkerManifest(manifest)).toThrow(error);
@@ -107,9 +107,9 @@ describe("parseWorkerManifest", () => {
   });
 
   it("rejects duplicate normalized embedded text", () => {
-    const manifest = reel(2);
-    manifest.scenes[0].embeddedText = "한 번만 쓸 메시지";
-    manifest.scenes[1].embeddedText = "  한 번만   쓸 메시지  ";
+    const manifest = feed(3);
+    manifest.cards[0].embeddedText = "한 번만 쓸 메시지";
+    manifest.cards[1].embeddedText = "  한 번만   쓸 메시지  ";
 
     expect(() => parseWorkerManifest(manifest)).toThrow("asset_text_duplicate");
   });
@@ -128,8 +128,8 @@ describe("parseWorkerManifest", () => {
     byRole.cards[0].embeddedText = "브랜드 사이트";
     expect(() => parseWorkerManifest(byRole)).toThrow("asset_final_cta_only");
 
-    const byText = reel(2);
-    byText.scenes[1].embeddedText = "자세히 확인하기";
+    const byText = reel(1);
+    byText.scenes[0].embeddedText = "자세히 확인하기";
     expect(() => parseWorkerManifest(byText)).toThrow("asset_final_cta_only");
   });
 
@@ -155,10 +155,10 @@ describe("parseWorkerManifest", () => {
 
   it("requires nonempty captions and exactly five unique valid hashtags for feed and reel", () => {
     expect(() => parseWorkerManifest({ ...feed(1), caption: " " })).toThrow("image_manifest_caption_required");
-    expect(() => parseWorkerManifest({ ...reel(2), hashtags: hashtags.slice(0, 4) })).toThrow("image_manifest_hashtags_invalid");
+    expect(() => parseWorkerManifest({ ...reel(1), hashtags: hashtags.slice(0, 4) })).toThrow("image_manifest_hashtags_invalid");
     expect(() => parseWorkerManifest({ ...feed(1), hashtags: ["#One", "#one", "#three", "#four", "#five"] }))
       .toThrow("image_manifest_hashtags_invalid");
-    expect(() => parseWorkerManifest({ ...reel(2), hashtags: ["#one", "not-a-tag", "#three", "#four", "#five"] }))
+    expect(() => parseWorkerManifest({ ...reel(1), hashtags: ["#one", "not-a-tag", "#three", "#four", "#five"] }))
       .toThrow("image_manifest_hashtags_invalid");
   });
 

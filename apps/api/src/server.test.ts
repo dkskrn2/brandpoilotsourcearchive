@@ -314,7 +314,11 @@ function createRepository(): ApiRepository {
     claimImageRenderJob: vi.fn(async () => null),
     heartbeatImageRenderJob: vi.fn(async (id) => ({ id, status: "running" })),
     completeImageRenderJob: vi.fn(async (id) => ({ id, status: "succeeded", artifactId: "artifact-1" })),
-    failImageRenderJob: vi.fn(async (id) => ({ id, status: "queued" }))
+    failImageRenderJob: vi.fn(async (id) => ({ id, status: "queued" })),
+    claimTextRenderJob: vi.fn(async () => null),
+    heartbeatTextRenderJob: vi.fn(async (id) => ({ id, status: "running" })),
+    completeTextRenderJob: vi.fn(async (id) => ({ id, status: "succeeded" })),
+    failTextRenderJob: vi.fn(async (id) => ({ id, status: "queued" }))
   };
 }
 

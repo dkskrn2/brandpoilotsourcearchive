@@ -26,7 +26,7 @@ function job(deliveryFormat: "instagram_feed_carousel" | "instagram_story" | "in
         ? "worker-card.v4"
         : deliveryFormat === "instagram_story"
           ? "worker-story.v1"
-          : "worker-reel.v1",
+          : "worker-reel.v3",
       representativeUrl: "https://source.example.com/article",
       maxImages: 5
     }
@@ -172,7 +172,7 @@ describe("Blob image storage", () => {
     const rendered = {
       manifest: parseWorkerManifest({
         deliveryFormat: "instagram_reel",
-        promptVersion: "worker-reel.v1",
+        promptVersion: "worker-reel.v3",
         selectedAssetCount: 1,
         caption: "first paragraph\n\nsecond paragraph",
         hashtags,

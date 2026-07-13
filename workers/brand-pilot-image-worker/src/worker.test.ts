@@ -25,7 +25,7 @@ function claimedJob(
         ? "worker-card.v4"
         : deliveryFormat === "instagram_story"
           ? "worker-story.v1"
-          : "worker-reel.v1",
+          : "worker-reel.v3",
       representativeUrl: "https://source.example/article",
       maxImages: 5,
       topic: {
@@ -100,16 +100,13 @@ function reelPackage(): RenderedInstagramPackage {
   return {
     manifest: parseWorkerManifest({
       deliveryFormat: "instagram_reel",
-      promptVersion: "worker-reel.v1",
-      selectedAssetCount: 2,
+      promptVersion: "worker-reel.v3",
+      selectedAssetCount: 1,
       caption: "first paragraph\n\nsecond paragraph",
       hashtags,
-      scenes: [asset(1, 1920), asset(2, 1920)]
+      scenes: [asset(1, 1920)]
     }),
-    images: [
-      { index: 1, bytes: Buffer.from("one"), mimeType: "image/png", width: 1080, height: 1920 },
-      { index: 2, bytes: Buffer.from("two"), mimeType: "image/png", width: 1080, height: 1920 }
-    ]
+    images: [{ index: 1, bytes: Buffer.from("one"), mimeType: "image/png", width: 1080, height: 1920 }]
   };
 }
 
@@ -145,6 +142,36 @@ function deferred<T>() {
 }
 
 describe("image worker", () => {
+  it("claims one Threads job only after the image queue is idle", async () => {
+    const client = workerClient(null as unknown as ClaimedImageJob);
+    const runTextJob = vi.fn(async () => ({ status: "completed" as const, jobId: "text-job-1" }));
+    const renderer = { renderJob: vi.fn(async () => feedPackage()) };
+    const storage = { upload: vi.fn(async () => ({ manifestUrl: "unused" })) };
+
+    await expect(runOnce({ workerId: "worker-1", client, renderer, storage, runTextJob }))
+      .resolves.toEqual({ status: "completed", jobId: "text-job-1" });
+    expect(runTextJob).toHaveBeenCalledTimes(1);
+    expect(renderer.renderJob).not.toHaveBeenCalled();
+  });
+
+  it("does not claim a Threads job while an image job is available", async () => {
+    const client = workerClient();
+    const runTextJob = vi.fn(async () => ({ status: "idle" as const }));
+    const renderer = { renderJob: vi.fn(async () => feedPackage()) };
+    const storage = { upload: vi.fn(async () => ({ manifestUrl: "https://blob.example.com/manifest.json" })) };
+
+    await runOnce({
+      workerId: "worker-1",
+      client,
+      renderer,
+      storage,
+      readSource: vi.fn(async () => fetchedSource),
+      runTextJob
+    });
+
+    expect(runTextJob).not.toHaveBeenCalled();
+  });
+
   it("reads source context, builds the prompt, renders the validated feed count, uploads, and completes with the lease", async () => {
     const client = workerClient();
     const rendered = feedPackage();
@@ -218,7 +245,7 @@ describe("image worker", () => {
     expect(reelRenderer.render).not.toHaveBeenCalled();
   });
 
-  it("invokes the injected Reel renderer after validating one to five vertical scenes", async () => {
+  it("invokes the injected Reel renderer after validating one vertical image", async () => {
     const job = claimedJob("instagram_reel");
     const client = workerClient(job);
     const rendered = reelPackage();
@@ -239,7 +266,7 @@ describe("image worker", () => {
     expect(reelRenderer.render).toHaveBeenCalledWith(expect.objectContaining({
       job: expect.objectContaining({ id: "job-1" }),
       scenes: rendered.images,
-      manifest: expect.objectContaining({ deliveryFormat: "instagram_reel", selectedAssetCount: 2 })
+      manifest: expect.objectContaining({ deliveryFormat: "instagram_reel", selectedAssetCount: 1 })
     }));
     expect(storage.upload).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ reel: media }));
   });

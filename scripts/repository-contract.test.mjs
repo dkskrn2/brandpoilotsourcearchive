@@ -213,7 +213,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션은 001부터 018까지 정확한 이름으로 존재한다", async () => {
+test("데이터베이스 마이그레이션은 001부터 019까지 정확한 이름으로 존재한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -236,7 +236,19 @@ test("데이터베이스 마이그레이션은 001부터 018까지 정확한 이
     "016_repair_topic_publish_group_schedule.sql",
     "017_preserve_topic_publish_group_status.sql",
     "018_repair_active_render_job_unique.sql",
+    "019_threads_text_render_jobs.sql",
   ]);
+});
+
+test("Threads 텍스트 워커 마이그레이션은 작업 유형과 활성 작업 중복 방지를 정의한다", async () => {
+  const migration = await readFile(
+    "db/migrations/019_threads_text_render_jobs.sql",
+    "utf8",
+  );
+
+  assert.match(migration, /'threads_text_render'/);
+  assert.match(migration, /create unique index[\s\S]*on jobs\(channel_output_id\)/i);
+  assert.match(migration, /status in \('queued', 'running'\)/i);
 });
 
 test("활성 이미지 렌더 작업 보정은 중복 작업을 종료한 뒤 부분 고유 인덱스를 복구한다", async () => {

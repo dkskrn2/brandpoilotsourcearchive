@@ -1,22 +1,22 @@
 ---
 name: image-render
-description: Generate one complete Brand Pilot card-news job as one to five separate PNG images with the built-in image_gen tool.
+description: 내장 image_gen 도구로 Brand Pilot 이미지 작업 하나를 완성된 PNG 이미지 1장부터 5장으로 생성합니다.
 ---
 
-# Image Render
+# 이미지 렌더링
 
-Use this skill only for a Brand Pilot image-render job.
+이 스킬은 Brand Pilot 이미지 렌더링 작업에만 사용하세요.
 
-1. Do not edit source files, configuration files, or environment files.
-2. Do not read, print, rotate, or transmit secrets.
-3. Do not access databases, Supabase, Meta, Vercel, or the central API.
-4. Read the supplied creative brief and delivery format. Feed may use one to five cards, Story uses exactly one asset, and Reel may use one to five scenes.
-5. Use the built-in `image_gen` tool separately for each selected asset, in order, within the same Codex task.
-6. Match the native PNG canvas to the delivery format: Feed is exactly 1:1 at 1080x1080; Story and every Reel scene are exactly 9:16 at 1080x1920. Never generate 2:3 or 4:5 and never rely on cropping, padding, stretching, or later aspect-ratio conversion.
-7. Generate exactly the selected number of complete PNG images. Never combine multiple cards, scenes, panels, or a collage in one image.
-8. Do not use external image APIs, API keys, or fallback generators.
-9. A successful run saves each image under `$CODEX_HOME/generated_images/`; the wrapper moves them to the worker output directory.
-10. Before generating images, decide the final Instagram title, a caption with two to four readable paragraphs separated by blank lines, exactly five unique hashtags, and card-by-card headline/body copy. Keep hashtags out of the caption field and use that copy as the text basis for the corresponding image.
-11. After all images are generated, return only JSON with `title`, `caption`, `hashtags`, and sequential `slides` (`index`, `role`, `headline`, `body`). The number of slides must exactly match the generated PNG count.
-12. If image generation fails, stop immediately and return the failure. Do not retry with altered prompts.
-13. Do not use `자세히 확인하기`, `더 알아보기`, `문의하기`, `상담 신청`, `지금 확인`, CTA labels, or CTA buttons in the caption or any generated card.
+1. 소스 파일, 설정 파일 또는 환경 파일을 수정하지 마세요.
+2. 비밀 정보를 읽거나 출력하거나 교체하거나 전송하지 마세요.
+3. 데이터베이스, Supabase, Meta, Vercel 또는 중앙 API에 접근하지 마세요.
+4. 제공된 콘텐츠 기획과 게시 형식을 읽으세요. 피드는 1장부터 5장, 스토리는 정확히 1장, 릴스는 정확히 1장의 정보 이미지를 사용합니다. 릴스 이미지의 레이아웃은 주제와 원문에 맞게 자율적으로 결정하세요.
+5. 같은 Codex 작업 안에서 선택한 이미지마다 내장 `image_gen` 도구를 순서대로 개별 호출하세요.
+6. 기본 PNG 캔버스를 게시 형식에 맞추세요. 피드는 정확히 1:1의 1080x1080이고, 스토리와 모든 릴스 장면은 정확히 9:16의 1080x1920입니다. 2:3이나 4:5를 생성하지 말고 크롭, 여백 추가, 늘이기 또는 후속 화면 비율 변환에 의존하지 마세요.
+7. 선택한 개수만큼 완성된 PNG 이미지를 정확히 생성하세요. 피드의 여러 카드를 한 파일로 합치지 마세요. 릴스 한 장 안의 정보 구성 방식은 자유롭게 결정하세요.
+8. 외부 이미지 API, API 키 또는 대체 이미지 생성기를 사용하지 마세요.
+9. 작업에 성공하면 각 이미지는 `$CODEX_HOME/generated_images/` 아래에 저장되며 래퍼가 워커 출력 디렉터리로 이동합니다.
+10. 이미지를 생성하기 전에 형식별 프롬프트에서 요구한 제목, 캡션, 해시태그 및 이미지별 문구를 결정하세요. 해시태그는 caption 필드에 넣지 말고 해당 문구를 각 이미지의 텍스트 기준으로 사용하세요.
+11. 모든 이미지를 생성한 다음 형식별 프롬프트에서 제시한 JSON 구조만 반환하세요. selectedAssetCount와 형식별 이미지 배열의 개수는 생성한 PNG 수와 정확히 같아야 합니다.
+12. 이미지 생성에 실패하면 즉시 중단하고 실패를 반환하세요. 변경된 프롬프트로 다시 시도하지 마세요.
+13. 캡션이나 생성 이미지에 `자세히 확인하기`, `더 알아보기`, `문의하기`, `상담 신청`, `지금 확인` 같은 CTA 문구나 CTA 버튼을 사용하지 마세요.

@@ -185,7 +185,7 @@ describe("image worker completion", () => {
     const clientQuery = vi.fn(async (sql: string) => {
       if (["begin", "commit", "rollback"].includes(sql.trim())) return { rowCount: 0, rows: [] };
       if (sql.includes("from jobs")) {
-        return { rowCount: 1, rows: [runningJobRow("instagram_reel", "worker-reel.v1")] };
+        return { rowCount: 1, rows: [runningJobRow("instagram_reel", "worker-reel.v3")] };
       }
       return { rowCount: 1, rows: [] };
     });
@@ -197,7 +197,7 @@ describe("image worker completion", () => {
         jobId: "job-1",
         channelOutputId: "output-1",
         deliveryFormat: "instagram_reel",
-        promptVersion: "worker-reel.v1",
+        promptVersion: "worker-reel.v3",
         sourceMode: "direct_url",
         fetchStatus: "fetched",
         selectedAssetCount: 1,
@@ -272,10 +272,15 @@ describe("image worker completion", () => {
 
     const reviewEventIndex = clientQuery.mock.calls.findIndex(([sql]) => String(sql).includes("insert into review_events"));
     const regeneratedStatusIndex = clientQuery.mock.calls.findIndex(([sql]) => String(sql).includes("set status = 'regenerated'"));
+    const groupResetIndex = clientQuery.mock.calls.findIndex(([sql]) => (
+      String(sql).includes("update topic_publish_groups") && String(sql).includes("status = 'waiting'")
+    ));
     const outputInsertIndex = clientQuery.mock.calls.findIndex(([sql]) => String(sql).includes("insert into channel_outputs"));
     expect(reviewEventIndex).toBeGreaterThan(-1);
     expect(regeneratedStatusIndex).toBeGreaterThan(reviewEventIndex);
-    expect(outputInsertIndex).toBeGreaterThan(regeneratedStatusIndex);
+    expect(groupResetIndex).toBeGreaterThan(regeneratedStatusIndex);
+    expect(outputInsertIndex).toBeGreaterThan(groupResetIndex);
+    expect(clientQuery.mock.calls[groupResetIndex]?.[1]).toEqual(["group-1"]);
     expect(clientQuery.mock.calls[reviewEventIndex]?.[1]).toEqual([
       "workspace-1", "brand-1", "output-1", "regenerate_requested", null
     ]);

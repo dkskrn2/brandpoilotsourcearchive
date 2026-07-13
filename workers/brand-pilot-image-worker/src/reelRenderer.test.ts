@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { parseWorkerManifest } from "./manifest.js";
+import type { PreparedReelMusic } from "./reelMusic.js";
 import { createReelRenderer, type ReelProbe } from "./reelRenderer.js";
 import type { ReelRenderInput, RenderedImage } from "./worker.js";
 
@@ -17,7 +18,7 @@ function scene(index: number): RenderedImage {
   };
 }
 
-function inputFor(count = 3): ReelRenderInput {
+function inputFor(count = 1): ReelRenderInput {
   const scenes = Array.from({ length: count }, (_, index) => scene(index + 1));
   return {
     job: {
@@ -30,7 +31,7 @@ function inputFor(count = 3): ReelRenderInput {
     scenes,
     manifest: parseWorkerManifest({
       deliveryFormat: "instagram_reel",
-      promptVersion: "worker-reel.v1",
+      promptVersion: "worker-reel.v3",
       selectedAssetCount: count,
       caption: "first paragraph\n\nsecond paragraph",
       hashtags,
@@ -45,14 +46,14 @@ function inputFor(count = 3): ReelRenderInput {
   };
 }
 
-function validProbe(sceneCount = 3): ReelProbe {
+function validProbe(sceneCount = 1): ReelProbe {
   return {
     width: 1080,
     height: 1920,
     videoCodec: "h264",
     audioCodec: "aac",
     fps: 30,
-    duration: 3 * sceneCount - 0.25 * (sceneCount - 1)
+    duration: 7 * sceneCount - 0.25 * (sceneCount - 1)
   };
 }
 
@@ -65,13 +66,17 @@ function rendererFixture({
   coverBytes?: Buffer;
   videoBytes?: Buffer;
 } = {}) {
+  const prepareMusic = vi.fn(async (_jobId: string, workDir: string): Promise<PreparedReelMusic> => ({
+    track: { id: "mixkit-curiosity", title: "Curiosity", url: "https://assets.mixkit.co/music/480/480.mp3" },
+    filePath: path.join(workDir, "mixkit-curiosity.mp3")
+  }));
   const runPython = vi.fn(async (_executable: string, args: readonly string[]) => {
     const valueAfter = (flag: string) => args[args.indexOf(flag) + 1];
     await writeFile(valueAfter("--cover"), coverBytes);
     await writeFile(valueAfter("--output"), videoBytes);
   });
   const probe = vi.fn(async () => probeResult);
-  return { renderer: createReelRenderer({ runPython, probe }), runPython, probe };
+  return { renderer: createReelRenderer({ runPython, probe, prepareMusic }), runPython, probe, prepareMusic };
 }
 
 describe("Reel renderer", () => {
@@ -82,34 +87,42 @@ describe("Reel renderer", () => {
       const valueAfter = (flag: string) => args[args.indexOf(flag) + 1];
       writtenManifest = JSON.parse(await readFile(valueAfter("--manifest"), "utf8"));
       await expect(readFile(path.join(valueAfter("--input-dir"), "scene-01.png"))).resolves.toEqual(Buffer.from("png-1"));
-      await expect(readFile(path.join(valueAfter("--input-dir"), "scene-03.png"))).resolves.toEqual(Buffer.from("png-3"));
       await writeFile(valueAfter("--cover"), Buffer.from("cover"));
       await writeFile(valueAfter("--output"), Buffer.from("video"));
     });
     const probe = vi.fn(async () => validProbe());
+    const prepareMusic = vi.fn(async (_jobId: string, workDir: string): Promise<PreparedReelMusic> => ({
+      track: { id: "mixkit-relaxation-05", title: "Relaxation 05", url: "https://assets.mixkit.co/music/749/749.mp3" },
+      filePath: path.join(workDir, "music.mp3")
+    }));
     const renderer = createReelRenderer({
       pythonExecutable: "python-custom",
       ffprobeExecutable: "ffprobe-custom",
       scriptPath,
       runPython,
-      probe
+      probe,
+      prepareMusic
     });
 
     const result = await renderer.render(inputFor());
 
     expect(writtenManifest).toMatchObject({
       deliveryFormat: "instagram_reel",
-      selectedAssetCount: 3,
-      scenes: [{ index: 1 }, { index: 2 }, { index: 3 }]
+      selectedAssetCount: 1,
+      scenes: [{ index: 1 }]
     });
+    expect(prepareMusic).toHaveBeenCalledWith("job-1", expect.stringMatching(/brand-pilot-reel-/));
     expect(runPython).toHaveBeenCalledWith("python-custom", [
       scriptPath,
       "--input-dir", expect.any(String),
       "--manifest", expect.stringMatching(/content\.json$/),
       "--output", expect.stringMatching(/reel\.mp4$/),
       "--cover", expect.stringMatching(/cover\.png$/),
-      "--seconds-per-scene", "3",
+      "--audio", expect.stringMatching(/music\.mp3$/),
+      "--seconds-per-scene", "7",
       "--fade-seconds", "0.25",
+      "--audio-volume", "0.12",
+      "--audio-fade-seconds", "0.5",
       "--fps", "30"
     ]);
     expect(probe).toHaveBeenCalledWith("ffprobe-custom", [
@@ -129,12 +142,23 @@ describe("Reel renderer", () => {
     });
   });
 
-  it.each([0, 6])("rejects %i scenes before starting Python", async (count) => {
+  it.each([0, 2])("rejects %i scenes before downloading music or starting Python", async (count) => {
     const { renderer, runPython } = rendererFixture({ probeResult: validProbe(count) });
-    const input = inputFor(count === 0 ? 1 : 5);
-    input.scenes = count === 0 ? [] : [...input.scenes, scene(6)];
+    const input = inputFor(1);
+    input.scenes = count === 0 ? [] : [...input.scenes, scene(2)];
 
     await expect(renderer.render(input)).rejects.toThrow("invalid_reel_scene_count");
+    expect(runPython).not.toHaveBeenCalled();
+  });
+
+  it("fails before Python when BGM preparation fails", async () => {
+    const runPython = vi.fn();
+    const prepareMusic = vi.fn(async () => {
+      throw new Error("invalid_reel_music_file");
+    });
+    const renderer = createReelRenderer({ runPython, prepareMusic });
+
+    await expect(renderer.render(inputFor(1))).rejects.toThrow("invalid_reel_music_file");
     expect(runPython).not.toHaveBeenCalled();
   });
 

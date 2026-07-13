@@ -70,7 +70,7 @@ describe("image render job contract", () => {
   it.each([
     ["instagram_feed_carousel", "worker-card.v4"],
     ["instagram_story", "worker-story.v1"],
-    ["instagram_reel", "worker-reel.v1"]
+    ["instagram_reel", "worker-reel.v3"]
   ] as const)("creates the minimal %s payload", (deliveryFormat, promptVersion) => {
     const payload = buildImageRenderJobPayload({
       deliveryFormat,
@@ -131,15 +131,12 @@ describe("image render job contract", () => {
     });
   });
 
-  it("accepts vertical Reel scenes, cover, and H.264/AAC MP4", () => {
+  it("accepts one vertical Reel scene, cover, and H.264/AAC MP4", () => {
     const result = parseImageRenderJobResult({
-      ...commonResult(2),
+      ...commonResult(1),
       deliveryFormat: "instagram_reel",
-      promptVersion: "worker-reel.v1",
-      scenes: [
-        pngAsset(1, "hook", 941, 1672, "scene-01.png"),
-        pngAsset(2, "proof", 941, 1672, "scene-02.png")
-      ],
+      promptVersion: "worker-reel.v3",
+      scenes: [pngAsset(1, "information", 941, 1672, "scene-01.png")],
       cover: {
         url: "https://blob.example.com/rendered-content/instagram/brand-1/output-1/job-1/cover.png",
         mimeType: "image/png",
@@ -159,7 +156,7 @@ describe("image render job contract", () => {
 
     expect(result).toMatchObject({
       deliveryFormat: "instagram_reel",
-      selectedAssetCount: 2,
+      selectedAssetCount: 1,
       video: { videoCodec: "h264", audioCodec: "aac", fps: 30 }
     });
   });
@@ -167,16 +164,40 @@ describe("image render job contract", () => {
   it("rejects a reel result without video and cover", () => {
     expect(() => parseImageRenderJobResult({
       deliveryFormat: "instagram_reel",
-      promptVersion: "worker-reel.v1",
+      promptVersion: "worker-reel.v3",
       sourceMode: "direct_url",
       fetchStatus: "fetched",
-      selectedAssetCount: 2,
+      selectedAssetCount: 1,
       validation: { passed: true },
-      scenes: [
-        { url: "https://blob.example.com/1.png", role: "hook" },
-        { url: "https://blob.example.com/2.png", role: "proof" }
-      ]
+      scenes: [{ url: "https://blob.example.com/1.png", role: "information" }]
     })).toThrow("reel_video_required");
+  });
+
+  it("rejects a reel result with more than one information image", () => {
+    expect(() => parseImageRenderJobResult({
+      ...commonResult(2),
+      deliveryFormat: "instagram_reel",
+      promptVersion: "worker-reel.v3",
+      scenes: [
+        pngAsset(1, "summary", 941, 1672, "scene-01.png"),
+        pngAsset(2, "details", 941, 1672, "scene-02.png")
+      ],
+      cover: {
+        url: "https://blob.example.com/rendered-content/instagram/brand-1/output-1/job-1/cover.png",
+        mimeType: "image/png",
+        width: 1080,
+        height: 1920
+      },
+      video: {
+        url: "https://blob.example.com/rendered-content/instagram/brand-1/output-1/job-1/reel.mp4",
+        mimeType: "video/mp4",
+        width: 1080,
+        height: 1920,
+        videoCodec: "h264",
+        audioCodec: "aac",
+        fps: 30
+      }
+    })).toThrow("reel_asset_count_invalid");
   });
 
   it("rejects more than five carousel cards", () => {
