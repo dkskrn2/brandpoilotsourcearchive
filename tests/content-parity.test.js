@@ -79,6 +79,13 @@ test("Brand Pilot has a first-class product route and navigation entry", () => {
   assert.match(read("app/globals.css"), /prefers-reduced-motion: no-preference/);
 });
 
+test("Brand Pilot FAQ questions are not constrained by the legacy numbered grid", () => {
+  const styles = read("app/globals.css");
+  const productSummaryRule = styles.match(/\.brand-pilot-product \.bp-faq summary \{([^}]*)\}/)?.[1] ?? "";
+
+  assert.match(productSummaryRule, /display:\s*block;/, "product FAQ questions must use the full summary width");
+});
+
 test("contact inquiries are stored in PostgreSQL without a Google Apps Script dependency", () => {
   const route = read("app/api/contact/route.ts");
   const database = read("lib/content-db.ts");

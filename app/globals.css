@@ -3764,6 +3764,7 @@ body:has(> .admin-page) {
 
 .brand-pilot-product .bp-faq summary {
   position: relative;
+  display: block;
   padding: 25px 44px 25px 0;
   color: var(--bp-ink);
   cursor: pointer;
