@@ -96,6 +96,7 @@ export default function Home() {
         </div>
       </section>
 
+      {/* 제품별 가격 정책 확정 전까지 가격 관련 섹션을 숨깁니다.
       <section className="studio-commercial">
         <div className="studio-commercial__statement">
           <h2>초기 비용은 낮추고,<br />성과는 함께 키웁니다.</h2>
@@ -125,6 +126,7 @@ export default function Home() {
           <article><strong>규모 확장과 자동화</strong><span>별도 협의</span><p>반복 업무 자동화, 거래량 확장, 사내 운영 체계 연결</p></article>
         </div>
       </section>
+      */}
 
       <section className="studio-final-cta">
         <h2>어디가 막혔는지 알면,<br />무엇부터 바꿀지도 선명해집니다.</h2>

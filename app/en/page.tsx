@@ -91,6 +91,7 @@ export default function EnglishHomePage() {
         </div>
       </section>
 
+      {/* Pricing varies by product. Keep these sections hidden until the pricing model is finalized.
       <section className="studio-commercial">
         <div className="studio-commercial__statement">
           <h2>Start with less upfront.<br />Grow the upside together.</h2>
@@ -112,6 +113,7 @@ export default function EnglishHomePage() {
           <article><strong>Scale and automate</strong><span>Scoped separately</span><p>Workflow automation, higher transaction volume, and integration with internal operations</p></article>
         </div>
       </section>
+      */}
 
       <section className="studio-final-cta">
         <h2>Once the break is visible,<br />the first change becomes clear.</h2>

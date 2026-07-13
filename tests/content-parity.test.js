@@ -20,6 +20,8 @@ test("marketing and legal pages are native React without legacy HTML runtime dep
   for (const content of ["2.4배", "38% 감소", "3배", "2,000만원 이상", "500만원부터", "현황 구조 점검", "개선과 확장"]) {
     assert.match(homeRoute, new RegExp(content), `home must preserve ${content}`);
   }
+  assert.match(homeRoute, /가격 관련 섹션을 숨깁니다\.[\s\S]*studio-commercial[\s\S]*studio-growth[\s\S]*\*\//);
+  assert.match(read("app/en/page.tsx"), /Pricing varies by product\.[\s\S]*studio-commercial[\s\S]*studio-growth[\s\S]*\*\//);
 
   const serviceIndex = read("app/service/page.tsx");
   for (const href of ["service-research", "service-analytics", "service-design", "service-consulting", "service-writing", "service-startup", "brandpilot"]) {
