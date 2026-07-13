@@ -32,8 +32,6 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
     minute: "2-digit",
     timeZone: "Asia/Seoul"
   }).format(new Date(value));
-  const inquiryPlanLabel = { seed: "Seed", "series-a": "Series A", "series-b": "Series B" } as const;
-
   return (
     <main className="admin-page">
       <AdminSidebar />
@@ -116,11 +114,10 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
             ) : inquiries.length ? (
               <div className="admin-table-wrap">
                 <table className="admin-inquiry-table">
-                  <thead><tr><th>신청자</th><th>플랜</th><th>사이트</th><th>문의 내용</th><th>접수</th></tr></thead>
+                  <thead><tr><th>신청자</th><th>사이트</th><th>문의 내용</th><th>접수</th></tr></thead>
                   <tbody>{inquiries.map((inquiry) => (
                     <tr key={inquiry.id}>
                       <td><strong>{inquiry.name}</strong><small>{inquiry.phone}</small></td>
-                      <td>{inquiryPlanLabel[inquiry.plan]}</td>
                       <td>{inquiry.site ? <a href={inquiry.site} target="_blank" rel="noreferrer">사이트 보기</a> : "—"}</td>
                       <td className="admin-inquiry-message">{inquiry.message || "—"}</td>
                       <td>{formatInquiryDate(inquiry.createdAt)}</td>

@@ -39,12 +39,12 @@ export type ContactInquiry = {
   phone: string;
   site: string;
   message: string;
-  plan: "seed" | "series-a" | "series-b";
+  plan: "seed" | "series-a" | "series-b" | null;
   agreed: boolean;
   createdAt: string;
 };
 
-export type ContactInquiryInput = Omit<ContactInquiry, "id" | "createdAt">;
+export type ContactInquiryInput = Omit<ContactInquiry, "id" | "createdAt" | "plan">;
 
 type ArticleRow = {
   id: number;
@@ -182,11 +182,12 @@ async function ensureSchema() {
         phone TEXT NOT NULL,
         site TEXT NOT NULL DEFAULT '',
         message TEXT NOT NULL DEFAULT '',
-        plan TEXT NOT NULL CHECK (plan IN ('seed', 'series-a', 'series-b')),
+        plan TEXT CHECK (plan IN ('seed', 'series-a', 'series-b')),
         agreed BOOLEAN NOT NULL DEFAULT TRUE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `;
+    await sql`ALTER TABLE contact_inquiries ALTER COLUMN plan DROP NOT NULL`;
     await sql`CREATE INDEX IF NOT EXISTS idx_contact_inquiries_created_at ON contact_inquiries(created_at DESC)`;
 
     for (const article of contentArticles) {
@@ -464,8 +465,8 @@ export async function createContactInquiry(input: ContactInquiryInput) {
   await ensureSchema();
   const sql = getSql();
   const rows = await sql<{ id: number }[]>`
-    INSERT INTO contact_inquiries (name, phone, site, message, plan, agreed)
-    VALUES (${input.name}, ${input.phone}, ${input.site}, ${input.message}, ${input.plan}, ${input.agreed})
+    INSERT INTO contact_inquiries (name, phone, site, message, agreed)
+    VALUES (${input.name}, ${input.phone}, ${input.site}, ${input.message}, ${input.agreed})
     RETURNING id
   `;
   return Number(rows[0].id);

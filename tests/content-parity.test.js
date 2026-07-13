@@ -46,11 +46,13 @@ test("marketing and legal pages are native React without legacy HTML runtime dep
   assert.match(serviceRoute, /slug === "brandpilot"/);
 });
 
-test("contact migration preserves the six original field names", () => {
+test("contact form collects only the five fields needed for consultation", () => {
   const source = read("components/contact-form.tsx");
-  for (const field of ["name_company", "phone", "site_url", "plan", "message", "agree_privacy"]) {
+  for (const field of ["name_company", "phone", "site_url", "message", "agree_privacy"]) {
     assert.match(source, new RegExp(`name=\\"${field}\\"`), `${field} must be preserved`);
   }
+  assert.doesNotMatch(source, /name="plan"|contact_plan|플랜/);
+  assert.doesNotMatch(read("app/api/contact/route.ts"), /allowedPlans|payload\.plan/);
 });
 
 test("Brand Pilot has a first-class product route and navigation entry", () => {
@@ -84,8 +86,10 @@ test("contact inquiries are stored in PostgreSQL without a Google Apps Script de
   assert.match(route, /Missing DATABASE_URL/);
   assert.doesNotMatch(route, /GAS_WEBAPP_URL|google\.com\/macros/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS contact_inquiries/);
+  assert.match(database, /ALTER TABLE contact_inquiries ALTER COLUMN plan DROP NOT NULL/);
   assert.match(database, /listContactInquiries/);
   assert.match(admin, /상담 문의/);
+  assert.doesNotMatch(admin, /<th>플랜<\/th>|inquiryPlanLabel/);
 });
 
 test("work migration keeps 22 projects with exactly one category each", () => {

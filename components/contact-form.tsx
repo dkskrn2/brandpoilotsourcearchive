@@ -4,12 +4,9 @@ import { FormEvent, useState } from "react";
 import Link from "next/link";
 import { ChartLineUp, Lightbulb, PhoneCall } from "@phosphor-icons/react";
 
-const plans = new Set(["seed", "series-a", "series-b"]);
-
-export function ContactForm({ initialPlan = "" }: { initialPlan?: string }) {
+export function ContactForm() {
   const [status, setStatus] = useState<{ message: string; error: boolean }>({ message: "", error: false });
   const [submitting, setSubmitting] = useState(false);
-  const selectedPlan = plans.has(initialPlan) ? initialPlan : "";
 
   const sanitize = (value: string, type: "text" | "phone" | "url" = "text") => {
     let next = value.replace(/[?&=]/g, "");
@@ -29,7 +26,6 @@ export function ContactForm({ initialPlan = "" }: { initialPlan?: string }) {
       name: String(formData.get("name_company") ?? "").trim(),
       phone: String(formData.get("phone") ?? "").trim(),
       site: String(formData.get("site_url") ?? "").trim(),
-      plan: String(formData.get("plan") ?? "").trim(),
       message: String(formData.get("message") ?? "").trim(),
       agree: formData.get("agree_privacy") ? "Y" : "N",
       websiteTrap: String(formData.get("website") ?? "")
@@ -82,15 +78,6 @@ export function ContactForm({ initialPlan = "" }: { initialPlan?: string }) {
             <label htmlFor="contact_site_url">운영 중인 사이트 URL (선택)</label>
             <input id="contact_site_url" name="site_url" type="url" placeholder="https://example.com" autoComplete="url" onInput={(event) => { event.currentTarget.value = sanitize(event.currentTarget.value, "url"); }} />
             <small>사전 분석에 활용됩니다.</small>
-          </div>
-          <div className="form-field">
-            <label htmlFor="contact_plan">플랜</label>
-            <select id="contact_plan" name="plan" defaultValue={selectedPlan} required>
-              <option value="" disabled>선택해 주세요</option>
-              <option value="seed">Seed</option>
-              <option value="series-a">Series A</option>
-              <option value="series-b">Series B</option>
-            </select>
           </div>
           <div className="form-field">
             <label htmlFor="contact_message">현재 가장 고민되는 지점 (선택)</label>

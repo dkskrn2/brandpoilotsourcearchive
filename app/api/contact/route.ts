@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import { createContactInquiry, isDatabaseConfigured } from "@/lib/content-db";
 
-const allowedPlans = new Set(["seed", "series-a", "series-b"]);
-
 function text(value: unknown, maxLength: number) {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
 }
@@ -35,10 +33,9 @@ export async function POST(request: Request) {
     phone: text(payload.phone, 30).replace(/\D/g, ""),
     site: text(payload.site, 500),
     message: text(payload.message, 3000),
-    plan: text(payload.plan, 30),
     agree: text(payload.agree, 1)
   };
-  if (!data.name || !/^\d{7,20}$/.test(data.phone) || !allowedPlans.has(data.plan) || data.agree !== "Y" || !validHttpUrl(data.site)) {
+  if (!data.name || !/^\d{7,20}$/.test(data.phone) || data.agree !== "Y" || !validHttpUrl(data.site)) {
     return NextResponse.json({ ok: false, error: "Invalid form data" }, { status: 400 });
   }
 
@@ -48,7 +45,6 @@ export async function POST(request: Request) {
       phone: data.phone,
       site: data.site,
       message: data.message,
-      plan: data.plan as "seed" | "series-a" | "series-b",
       agreed: true
     });
   } catch {
