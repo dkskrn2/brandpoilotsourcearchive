@@ -3145,7 +3145,7 @@ body:has(> .admin-page) {
 .admin-content-panel th { padding: 14px 18px; background: #f8f9fb; color: #778194; font-size: .67rem; font-weight: 800; text-align: left; }
 .admin-content-panel td { padding: 17px 18px; border-top: 1px solid #edf0f4; color: #526075; font-size: .76rem; }
 .admin-panel-count { color: #697489; font-size: .74rem; }
-.admin-inquiry-table td small { display: block; margin-top: 4px; color: #8b95a5; font-size: .68rem; }
+.admin-inquiry-table td .admin-inquiry-mobile-contact { display: none; margin-top: 5px; font-size: .68rem; }
 .admin-inquiry-table td a { color: #2457d6; font-weight: 800; }
 .admin-inquiry-message { min-width: 260px; max-width: 420px; white-space: normal; line-height: 1.55; }
 .admin-content-panel tbody tr:first-child td { border-top: 0; }
@@ -3279,6 +3279,7 @@ body:has(> .admin-page) {
   .admin-content-panel td:nth-child(n + 2) { display: none; }
   .admin-content-panel td:first-child { padding: 18px 14px; }
   .admin-content-panel tbody tr + tr td:first-child { border-top: 1px solid #edf0f4; }
+  .admin-inquiry-table td .admin-inquiry-mobile-contact { display: inline-flex; }
   .admin-title-cell { min-width: 0; }
   .admin-title-cell strong,
   .admin-title-cell small { max-width: 100%; }

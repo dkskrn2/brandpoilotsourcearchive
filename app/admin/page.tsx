@@ -114,10 +114,11 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
             ) : inquiries.length ? (
               <div className="admin-table-wrap">
                 <table className="admin-inquiry-table">
-                  <thead><tr><th>신청자</th><th>사이트</th><th>문의 내용</th><th>접수</th></tr></thead>
+                  <thead><tr><th>신청자</th><th>연락처</th><th>사이트</th><th>문의 내용</th><th>접수</th></tr></thead>
                   <tbody>{inquiries.map((inquiry) => (
                     <tr key={inquiry.id}>
-                      <td><strong>{inquiry.name}</strong><small>{inquiry.phone}</small></td>
+                      <td><strong>{inquiry.name}</strong><a className="admin-inquiry-mobile-contact" href={`tel:${inquiry.phone}`}>{inquiry.phone}</a></td>
+                      <td><a href={`tel:${inquiry.phone}`}>{inquiry.phone}</a></td>
                       <td>{inquiry.site ? <a href={inquiry.site} target="_blank" rel="noreferrer">사이트 보기</a> : "—"}</td>
                       <td className="admin-inquiry-message">{inquiry.message || "—"}</td>
                       <td>{formatInquiryDate(inquiry.createdAt)}</td>

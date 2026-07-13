@@ -89,6 +89,8 @@ test("contact inquiries are stored in PostgreSQL without a Google Apps Script de
   assert.match(database, /ALTER TABLE contact_inquiries ALTER COLUMN plan DROP NOT NULL/);
   assert.match(database, /listContactInquiries/);
   assert.match(admin, /상담 문의/);
+  assert.match(admin, /<th>연락처<\/th>/);
+  assert.equal((admin.match(/href=\{`tel:\$\{inquiry\.phone\}`\}/g) || []).length, 2);
   assert.doesNotMatch(admin, /<th>플랜<\/th>|inquiryPlanLabel/);
 });
 
