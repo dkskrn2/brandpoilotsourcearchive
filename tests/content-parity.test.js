@@ -219,6 +219,33 @@ test("admin article form uses the local Naver SmartEditor adapter safely", () =>
   assert.ok(fs.existsSync(path.join(root, "public/vendor/smarteditor2/js/service/HuskyEZCreator.js")));
 });
 
+test("admin article categories come from one controlled list", () => {
+  const form = read("components/admin-article-form.tsx");
+  const actions = read("app/admin/actions.ts");
+  const categories = read("lib/content-categories.ts");
+
+  assert.match(form, /CONTENT_CATEGORIES\.map/);
+  assert.match(form, /<select name="category" required/);
+  assert.doesNotMatch(form, /<input name="category"/);
+  assert.match(actions, /isContentCategory\(input\.category\)/);
+
+  for (const category of [
+    "Brand Strategy",
+    "Growth Strategy",
+    "Lifecycle Marketing",
+    "Marketing Measurement",
+    "Brand Case Study",
+    "Product Case Study",
+    "Digital Transformation",
+    "Growth Operations",
+    "UX Research",
+    "Data Analytics",
+    "Content Operations"
+  ]) {
+    assert.match(categories, new RegExp(`"${category}"`));
+  }
+});
+
 test("article saves return to the content list after a single pending submission", () => {
   const actions = read("app/admin/actions.ts");
   const submitButton = read("components/admin-pending-submit-button.tsx");

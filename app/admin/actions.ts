@@ -12,6 +12,7 @@ import {
   type ArticleStatus
 } from "@/lib/content-db";
 import { articleTextContent, sanitizeArticleHtml } from "@/lib/content-html";
+import { isContentCategory } from "@/lib/content-categories";
 import { requireAdminSession } from "@/lib/admin-auth";
 
 function value(formData: FormData, name: string) {
@@ -35,6 +36,7 @@ function parseArticleInput(formData: FormData): ArticleInput {
 
   const required = Object.entries(input).filter(([key, fieldValue]) => !fieldValue && key !== "image" && key !== "imageAlt").map(([key]) => key);
   if (required.length) throw new Error(`필수 항목을 입력해주세요: ${required.join(", ")}`);
+  if (!isContentCategory(input.category)) throw new Error("등록된 카테고리를 선택해주세요.");
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.slug)) throw new Error("슬러그는 영문 소문자, 숫자, 하이픈만 사용할 수 있습니다.");
   if (input.image && !isAllowedImageSource(input.image)) {
     throw new Error("대표 이미지는 관리자에서 업로드한 파일만 사용할 수 있습니다.");
