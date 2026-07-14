@@ -154,11 +154,11 @@ test("seed articles provide long-form guidance with linked primary sources", () 
   const contentHtml = read("lib/content-html.ts");
   const database = read("lib/content-db.ts");
 
-  assert.equal((contentData.match(/title: "참고 자료(?:와 해석 범위)?"/g) || []).length, 11);
+  assert.equal((contentData.match(/title: "참고 자료(?:와 해석 범위)?"/g) || []).length, 12);
   assert.ok((contentData.match(/\]\(https:\/\//g) || []).length >= 40, "articles must cite enough external sources");
-  assert.equal((contentData.match(/readingTime: "(?:18|20)분"/g) || []).length, 11);
+  assert.equal((contentData.match(/readingTime: "(?:18|20)분"/g) || []).length, 12);
   assert.ok((contentData.match(/table: \{/g) || []).length >= 23, "articles must include worked comparison tables");
-  assert.equal((contentData.match(/quote: "/g) || []).length, 11, "every article must establish a clear editorial thesis");
+  assert.equal((contentData.match(/quote: "/g) || []).length, 12, "every article must establish a clear editorial thesis");
   const articleStarts = [...contentData.matchAll(/    slug: "([^"]+)"/g)];
   for (let index = 0; index < articleStarts.length; index += 1) {
     const start = articleStarts[index].index;
@@ -193,7 +193,8 @@ test("every seed article has a dedicated optimized editorial image", () => {
     "content-operations-v1.webp",
     "brand-positioning-choice-v1.webp",
     "customer-lifecycle-retention-v1.webp",
-    "brand-marketing-incrementality-v1.webp"
+    "brand-marketing-incrementality-v1.webp",
+    "july-vat-filing-guide-v1.webp"
   ];
 
   for (const asset of assets) {

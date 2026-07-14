@@ -10,6 +10,7 @@ All notable changes to this project are documented in this file.
 - Added an article-end consultation call to action that guides readers directly to the contact page.
 - Added a dedicated Product navigation item and Brand Pilot product page with product, FAQ, and breadcrumb structured data.
 - Added a separate Brand Pilot pricing page with quote-based plans, scope comparison, FAQs, and a direct entry point from the product page.
+- Added a July 2026 VAT-filing guide for self-employed business owners, including a practical seven-day preparation schedule and National Tax Service references.
 - Added content database synchronization and SQL generation scripts for keeping published articles aligned with source content.
 
 ### Changed
