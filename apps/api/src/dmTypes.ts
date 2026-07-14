@@ -1,10 +1,29 @@
 export type DmDecision = "answer" | "fallback" | "ignore" | "error";
+export type DmReasonCode =
+  | "direct_faq"
+  | "wiki_answer"
+  | "restricted_action"
+  | "complaint"
+  | "knowledge_gap"
+  | "low_confidence"
+  | "processing_error"
+  | "system_event";
+export type DmAttentionType =
+  | "restricted_action"
+  | "complaint"
+  | "knowledge_gap"
+  | "delivery_unknown"
+  | "processing_error";
+export type DmJobRoute = "fixed_fallback" | "knowledge" | "ignore";
 
 export interface DmWorkerResult {
   decision: DmDecision;
   answer: string | null;
   wikiChunkIds: string[];
+  knowledgeEntryId: string | null;
   confidence: number | null;
+  reasonCode: DmReasonCode;
+  needsAttention: boolean;
   reason: string;
 }
 
@@ -32,24 +51,73 @@ export function parseDmWorkerResult(value: unknown): DmWorkerResult {
   )
     ? candidate.wikiChunkIds
     : (() => { throw new Error("dm_wiki_chunk_ids_invalid"); })();
+  const knowledgeEntryId = candidate.knowledgeEntryId === null || (
+    typeof candidate.knowledgeEntryId === "string" && uuidPattern.test(candidate.knowledgeEntryId)
+  )
+    ? candidate.knowledgeEntryId
+    : (() => { throw new Error("dm_knowledge_entry_id_invalid"); })();
   const confidence = candidate.confidence === null || (
     typeof candidate.confidence === "number" && Number.isFinite(candidate.confidence) && candidate.confidence >= 0 && candidate.confidence <= 1
   )
     ? candidate.confidence
     : (() => { throw new Error("dm_confidence_invalid"); })();
+  const reasonCode = candidate.reasonCode;
+  if (
+    reasonCode !== "direct_faq"
+    && reasonCode !== "wiki_answer"
+    && reasonCode !== "restricted_action"
+    && reasonCode !== "complaint"
+    && reasonCode !== "knowledge_gap"
+    && reasonCode !== "low_confidence"
+    && reasonCode !== "processing_error"
+    && reasonCode !== "system_event"
+  ) {
+    throw new Error("dm_reason_code_invalid");
+  }
+  if (typeof candidate.needsAttention !== "boolean") {
+    throw new Error("dm_needs_attention_invalid");
+  }
+  const needsAttention = candidate.needsAttention;
+
+  if (decision === "answer" && reasonCode === "direct_faq") {
+    if (wikiChunkIds.length > 0 || knowledgeEntryId === null) throw new Error("dm_direct_faq_source_invalid");
+    const answer = candidate.answer === null ? null : requiredString(candidate.answer, "dm_answer_required");
+    return {
+      decision,
+      answer,
+      wikiChunkIds,
+      knowledgeEntryId,
+      confidence,
+      reasonCode,
+      needsAttention,
+      reason,
+    };
+  }
 
   if (decision === "answer") {
-    if (wikiChunkIds.length === 0) throw new Error("dm_answer_sources_required");
+    if (wikiChunkIds.length === 0 && knowledgeEntryId === null) throw new Error("dm_answer_sources_required");
     return {
       decision,
       answer: requiredString(candidate.answer, "dm_answer_required"),
       wikiChunkIds,
+      knowledgeEntryId,
       confidence,
+      reasonCode,
+      needsAttention,
       reason,
     };
   }
 
   if (candidate.answer !== null) throw new Error("dm_non_answer_must_not_include_answer");
-  if (wikiChunkIds.length > 0) throw new Error("dm_non_answer_must_not_include_sources");
-  return { decision, answer: null, wikiChunkIds, confidence, reason };
+  if (wikiChunkIds.length > 0 || knowledgeEntryId !== null) throw new Error("dm_non_answer_must_not_include_sources");
+  return {
+    decision,
+    answer: null,
+    wikiChunkIds,
+    knowledgeEntryId,
+    confidence,
+    reasonCode,
+    needsAttention,
+    reason,
+  };
 }

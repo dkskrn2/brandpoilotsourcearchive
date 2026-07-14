@@ -37,6 +37,23 @@ export type ReviewStatus =
 export type OnboardingStatus = "completed" | "needs_attention" | "pending";
 export type SupportRequestCategory = "bug" | "feature" | "channel" | "account" | "other";
 export type SupportRequestStatus = "new" | "in_progress" | "resolved";
+export type DmDecision = "answer" | "fallback" | "ignore" | "error";
+export type DmReasonCode =
+  | "direct_faq"
+  | "wiki_answer"
+  | "restricted_action"
+  | "complaint"
+  | "knowledge_gap"
+  | "low_confidence"
+  | "processing_error"
+  | "system_event";
+export type DmAttentionType =
+  | "restricted_action"
+  | "complaint"
+  | "knowledge_gap"
+  | "delivery_unknown"
+  | "processing_error";
+export type DmJobRoute = "fixed_fallback" | "knowledge" | "ignore";
 
 export interface BrandOnboardingStep {
   id: string;
@@ -120,6 +137,7 @@ export interface ChannelConnection {
 
 export interface KnowledgeImport {
   id: string;
+  entryType: "faq" | "product";
   fileName: string;
   status: "processing" | "succeeded" | "failed";
   totalRows: number;
@@ -128,6 +146,12 @@ export interface KnowledgeImport {
   invalidRows: number;
   updatedRows: number;
   createdAt: string;
+}
+
+export interface KnowledgeImportInput {
+  entryType?: "faq" | "product";
+  fileName: string;
+  fileBase64: string;
 }
 
 export interface InstagramDmSettings {
@@ -146,8 +170,93 @@ export interface InstagramDmHistory {
   direction: "inbound" | "outbound";
   messageType: string;
   body: string | null;
-  decision: string | null;
+  decision: DmDecision | null;
   createdAt: string;
+}
+
+export type DmConversationFilter = "all" | "attention" | "complaint" | "unanswered" | "error";
+export type DmAutomationStatus = "active" | "paused";
+export type DmAttentionStatus = "none" | "open" | "resolved";
+
+export interface DmParticipant {
+  instagramScopedId: string;
+  displayName: string | null;
+  username: string | null;
+  profileImageUrl: string | null;
+}
+
+export interface DmConversationSummary {
+  id: string;
+  participant: DmParticipant;
+  lastMessage: {
+    body: string | null;
+    direction: "inbound" | "outbound";
+    createdAt: string;
+  } | null;
+  automationStatus: DmAutomationStatus;
+  attentionStatus: DmAttentionStatus;
+  openAttentionTypes: DmAttentionType[];
+  unreadCount: number;
+}
+
+export interface DmConversationPage {
+  items: DmConversationSummary[];
+  nextCursor: string | null;
+}
+
+export interface DmConversationMessage {
+  id: string;
+  direction: "inbound" | "outbound";
+  messageType: string;
+  body: string | null;
+  decision: DmDecision | null;
+  reasonCode: DmReasonCode | null;
+  sourceLabel: string | null;
+  confidence: number | null;
+  deliveryStatus: "prepared" | "sending" | "sent" | "unknown" | "failed" | null;
+  createdAt: string;
+}
+
+export interface DmAttentionItem {
+  id: string;
+  conversationId: string;
+  type: DmAttentionType;
+  status: "open" | "resolved";
+  originalMessage: string | null;
+  reason: string | null;
+  autoReplyStatus: "sent" | "not_sent" | "unknown" | null;
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+export interface DmConversationDetail extends DmConversationSummary {
+  messages: DmConversationMessage[];
+  attentionItems: DmAttentionItem[];
+}
+
+export interface WikiVersionSummary {
+  id: string;
+  status: "building" | "active" | "failed";
+  version: number | string;
+  sourceCount: number;
+  documentCount: number;
+  knowledgeEntryCount: number;
+  chunkCount: number;
+  activatedAt: string | null;
+  failedAt: string | null;
+  errorMessage: string | null;
+}
+
+export interface WikiStatus {
+  activeVersion: WikiVersionSummary | null;
+  latestFailedVersion: WikiVersionSummary | null;
+  importStats: {
+    total: number;
+    succeeded: number;
+    failed: number;
+    faqRows: number;
+    productRows: number;
+  };
 }
 
 export interface ChannelConnectionRequest {

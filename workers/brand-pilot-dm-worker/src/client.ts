@@ -5,7 +5,39 @@ export interface ClaimedDmJob {
   workspaceId: string;
   brandId: string;
   leaseToken: string;
-  payload: { conversationId: string; senderId: string; messageId: string; question: string };
+  payload: {
+    conversationId: string;
+    senderId: string;
+    messageId: string;
+    question: string;
+    route: "fixed_fallback" | "knowledge" | "ignore";
+    policyReasonCode:
+      | "direct_faq"
+      | "wiki_answer"
+      | "restricted_action"
+      | "complaint"
+      | "knowledge_gap"
+      | "low_confidence"
+      | "processing_error"
+      | "system_event";
+    exactFaqId?: string | null;
+    forceAttentionType:
+      | "restricted_action"
+      | "complaint"
+      | "knowledge_gap"
+      | "delivery_unknown"
+      | "processing_error"
+      | null;
+  };
+  attemptCount: number;
+}
+
+export interface ClaimedDmProfileJob {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  leaseToken: string;
+  payload: { conversationId: string; senderId: string };
   attemptCount: number;
 }
 
@@ -40,6 +72,16 @@ export function createDmWorkerClient({ apiUrl, token, fetchImpl = fetch }: {
     },
     heartbeatWorker(workerId: string) {
       return request("/worker/dm-jobs/heartbeat", { workerId });
+    },
+    async claimProfile(workerId: string) {
+      const response = await request("/workers/dm/profile-jobs/claim", { workerId });
+      return response.status === 204 ? null : await response.json() as ClaimedDmProfileJob;
+    },
+    runProfile(jobId: string, workerId: string, leaseToken: string) {
+      return request(`/workers/dm/profile-jobs/${jobId}/run`, { workerId, leaseToken });
+    },
+    failProfile(jobId: string, workerId: string, leaseToken: string, error: string, retryable: boolean, retryAfterMs: number) {
+      return request(`/workers/dm/profile-jobs/${jobId}/fail`, { workerId, leaseToken, error, retryable, retryAfterMs });
     },
   };
 }

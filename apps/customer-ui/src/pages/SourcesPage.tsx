@@ -5,7 +5,7 @@ import { Badge } from "../components/ui/Badge";
 import { EmptyState } from "../components/ui/EmptyState";
 import { Tabs } from "../components/ui/Tabs";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
-import type { BadgeVariant, KnowledgeImport, SourceCrawlRun, SourceSnapshot, SourceUrl, TopicRow, TopicUploadSummary } from "../types";
+import type { BadgeVariant, SourceCrawlRun, SourceSnapshot, SourceUrl, TopicRow, TopicUploadSummary } from "../types";
 
 const topicStatusMeta: Record<TopicRow["status"], { label: string; variant: BadgeVariant }> = {
   uploaded: { label: "생성 후보", variant: "info" },
@@ -83,15 +83,6 @@ async function readTopicCsvFile(file: File) {
   } catch {
     return decodeText(buffer, "euc-kr");
   }
-}
-
-async function fileToBase64(file: File) {
-  const bytes = new Uint8Array(await readFileArrayBuffer(file));
-  let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-  }
-  return btoa(binary);
 }
 
 interface EditingSource {
@@ -325,8 +316,6 @@ export function SourcesPage() {
   const [csvText, setCsvText] = useState("");
   const [topicFileName, setTopicFileName] = useState("topics.csv");
   const [uploadSummary, setUploadSummary] = useState<TopicUploadSummary | null>(null);
-  const [faqFile, setFaqFile] = useState<File | null>(null);
-  const [knowledgeImports, setKnowledgeImports] = useState<KnowledgeImport[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [editingSource, setEditingSource] = useState<EditingSource | null>(null);
 
@@ -348,10 +337,6 @@ export function SourcesPage() {
   async function refreshTopicRows() {
     const rows = await api.listTopicRows(DEMO_BRAND_ID);
     setTopicRows(rows);
-  }
-
-  async function refreshKnowledgeImports() {
-    setKnowledgeImports(await api.listKnowledgeImports(DEMO_BRAND_ID));
   }
 
   useEffect(() => {
@@ -390,11 +375,6 @@ export function SourcesPage() {
       .catch(() => {
         if (!ignore) setTopicRows([]);
       });
-    api.listKnowledgeImports(DEMO_BRAND_ID).then((imports) => {
-      if (!ignore) setKnowledgeImports(imports);
-    }).catch(() => {
-      if (!ignore) setKnowledgeImports([]);
-    });
     return () => {
       ignore = true;
     };
@@ -526,26 +506,6 @@ export function SourcesPage() {
     }
   }
 
-  async function uploadFaq() {
-    if (!faqFile) return;
-    try {
-      const result = await api.importFaq(DEMO_BRAND_ID, { fileName: faqFile.name, fileBase64: await fileToBase64(faqFile) });
-      setNotice(`FAQ 반영 완료: 유효 ${result.validRows}행, 중복 ${result.duplicateRows}행, 오류 ${result.invalidRows}행`);
-      await refreshKnowledgeImports();
-    } catch {
-      setNotice("FAQ 업로드에 실패했습니다. question, answer 헤더가 있는 CSV/XLSX 파일인지 확인하세요.");
-    }
-  }
-
-  async function refreshWiki() {
-    try {
-      await api.refreshWiki(DEMO_BRAND_ID);
-      setNotice("Wiki 갱신 작업을 등록했습니다. 워커가 FAQ와 자사 URL 크롤링 자료를 반영합니다.");
-    } catch {
-      setNotice("Wiki 갱신 작업을 등록하지 못했습니다.");
-    }
-  }
-
   return (
     <section className="content">
       <PageHeader
@@ -642,24 +602,6 @@ export function SourcesPage() {
                       중복과 오류 행은 저장되지만 자동 생성 후보에서는 제외합니다.
                     </Alert>
                   ) : null}
-                </div>
-              </section>
-            )
-          },
-          {
-            id: "faq-wiki",
-            label: "FAQ 및 Wiki",
-            content: (
-              <section className="panel">
-                <div className="panel-head"><h2>FAQ 및 Wiki</h2><Badge variant="info">CSV / XLSX</Badge></div>
-                <div className="panel-body grid">
-                  <div className="actions">
-                    <input type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" aria-label="FAQ 파일" onChange={(event) => setFaqFile(event.target.files?.[0] ?? null)} />
-                    <button className="button primary" type="button" onClick={uploadFaq} disabled={!faqFile}>FAQ 업로드</button>
-                    <button className="button" type="button" onClick={refreshWiki}>Wiki 다시 만들기</button>
-                  </div>
-                  <span className="muted">{faqFile ? `선택 파일: ${faqFile.name}` : "질문(question), 답변(answer) 열을 포함한 FAQ 파일을 업로드하세요."}</span>
-                  {knowledgeImports.length === 0 ? <EmptyState title="업로드된 FAQ가 없습니다" description="FAQ와 자사 URL의 최신 크롤링 결과만 DM 자동답변 Wiki에 반영됩니다." /> : <table className="table"><thead><tr><th>파일</th><th>반영</th><th>오류</th><th>시간</th></tr></thead><tbody>{knowledgeImports.map((item) => <tr key={item.id}><td>{item.fileName}</td><td>{item.updatedRows}행</td><td>{item.invalidRows}행</td><td>{new Date(item.createdAt).toLocaleString("ko-KR")}</td></tr>)}</tbody></table>}
                 </div>
               </section>
             )

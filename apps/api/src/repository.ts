@@ -11,7 +11,9 @@ import {
 } from "./imageRenderJobs.js";
 import { formatInstagramCaption } from "./instagramCaption.js";
 import { evaluateInstagramStoryCapability, sanitizeInstagramCapabilityMetadata } from "./instagramCapabilities.js";
-import { sendInstagramDirectMessage } from "./instagramMessaging.js";
+import { dmFixedMessages, inspectDmAnswer, routeDmMessage } from "./dmPolicy.js";
+import { classifyInstagramDmSendError, sendInstagramDirectMessage } from "./instagramMessaging.js";
+import { fetchInstagramMessagingProfile } from "./instagramLoginGraph.js";
 import { deliveryFormatToRenderJobType } from "./instagramFormats.js";
 import { kstDateKey, nextAvailablePolicySlot } from "./publishSchedule.js";
 import { classifyMetaGraphPublishError } from "./metaGraph.js";
@@ -24,7 +26,7 @@ import { crawlSourceUrl, discoverContentUrls, isLikelyContentPage } from "./sour
 import { nextRetryAt, scheduledRunKey } from "./sourceCrawlSchedule.js";
 import { buildThreadsRenderJobPayload, parseThreadsRenderJobResult } from "./textRenderJobs.js";
 import { brandPolicyDateKey, dailyTopicCapacity, determineGenerationReadiness, runDailyTopicGeneration } from "./topicPublishGroups.js";
-import { parseFaqUpload } from "./faqImport.js";
+import { parseKnowledgeUpload } from "./knowledgeImport.js";
 import type {
   ApiRepository,
   AutomaticCrawlResult,
@@ -40,6 +42,13 @@ import type {
   ContentOutputDto,
   CredentialInput,
   DailyGenerationRunResult,
+  DmAttentionItemDto,
+  DmConversationDetailDto,
+  DmConversationFilter,
+  DmConversationPageDto,
+  DmConversationSummaryDto,
+  DmProfileRefreshJobDto,
+  DmProfileRefreshJobInput,
   DmReplyJobCompletionInput,
   DmReplyJobDto,
   ImageRenderJobCompletionInput,
@@ -70,12 +79,74 @@ import type {
   TextRenderJobDto,
   TopicRowDto,
   TopicUploadDto,
-  TopicUploadInput
+  TopicUploadInput,
+  WikiStatusDto
 } from "./types.js";
 
 function toIso(value: Date | string | null): string | null {
   if (!value) return null;
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function dmParticipantFallback(externalId: string) {
+  return `사용자-${externalId.slice(-6)}`;
+}
+
+function decodeDmCursor(cursor: string | undefined) {
+  if (!cursor) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, unknown>;
+    if (typeof parsed.lastMessageAt !== "string" || Number.isNaN(Date.parse(parsed.lastMessageAt)) || typeof parsed.id !== "string") {
+      throw new Error("dm_cursor_invalid");
+    }
+    return { lastMessageAt: parsed.lastMessageAt, id: parsed.id };
+  } catch {
+    throw new Error("dm_cursor_invalid");
+  }
+}
+
+function encodeDmCursor(row: Record<string, unknown>) {
+  return Buffer.from(JSON.stringify({
+    lastMessageAt: toIso(row.last_message_at as Date | string),
+    id: String(row.id),
+  }), "utf8").toString("base64url");
+}
+
+function mapDmConversationSummary(row: Record<string, any>): DmConversationSummaryDto {
+  const externalId = String(row.external_participant_id);
+  return {
+    id: String(row.id),
+    participant: {
+      instagramScopedId: externalId,
+      displayName: row.participant_name ?? row.participant_username ?? dmParticipantFallback(externalId),
+      username: row.participant_username ?? null,
+      profileImageUrl: row.participant_profile_url ?? null,
+    },
+    lastMessage: row.last_message_created_at ? {
+      body: row.last_message_body ?? null,
+      direction: row.last_message_direction,
+      createdAt: toIso(row.last_message_created_at)!,
+    } : null,
+    automationStatus: row.automation_status,
+    attentionStatus: row.attention_status,
+    openAttentionTypes: Array.isArray(row.open_attention_types) ? row.open_attention_types : [],
+    unreadCount: Number(row.unread_count ?? 0),
+  };
+}
+
+function mapDmAttentionItem(row: Record<string, any>): DmAttentionItemDto {
+  const deliveryStatus = row.auto_reply_delivery_status;
+  return {
+    id: String(row.id),
+    conversationId: String(row.conversation_id),
+    type: row.attention_type,
+    status: row.status,
+    originalMessage: row.original_message ?? null,
+    reason: row.detail_json?.reason ?? row.detail_json?.error ?? row.reason_code ?? null,
+    autoReplyStatus: deliveryStatus === "sent" ? "sent" : deliveryStatus ? "unknown" : "not_sent",
+    createdAt: toIso(row.created_at)!,
+    resolvedAt: toIso(row.resolved_at),
+  };
 }
 
 function toDateKey(value: Date | string | null): string | null {
@@ -363,6 +434,7 @@ function mapKnowledgeImport(row: any): KnowledgeImportDto {
   const result = sourceContextObject(row.result_json);
   return {
     id: row.id,
+    entryType: result.entryType === "product" ? "product" : "faq",
     fileName: row.file_name,
     status: row.status,
     totalRows: Number(result.totalRows ?? 0),
@@ -854,6 +926,7 @@ interface RepositoryOptions {
   publishInstagramOutput?: typeof publishInstagramOutputWithMeta;
   publishInstagramCarousel?: typeof publishInstagramCarouselWithMeta;
   sendInstagramDirectMessage?: typeof sendInstagramDirectMessage;
+  fetchInstagramMessagingProfile?: typeof fetchInstagramMessagingProfile;
 }
 
 function resolveInstagramPublishOptions(options?: RepositoryOptions) {
@@ -903,6 +976,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
   const fetchImageAsset = options.fetchImageAsset ?? fetch;
   const publishInstagramCarousel = options.publishInstagramCarousel ?? publishInstagramCarouselWithMeta;
   const sendDm = options.sendInstagramDirectMessage ?? sendInstagramDirectMessage;
+  const fetchDmProfile = options.fetchInstagramMessagingProfile ?? fetchInstagramMessagingProfile;
   const publishInstagramOutput = options.publishInstagramOutput ?? (
     options.publishInstagramCarousel
       ? async (input: InstagramPublishInput) => input.deliveryFormat === "instagram_feed_carousel"
@@ -3317,20 +3391,66 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     },
 
     async claimDmReplyJob(workerId) {
-      const result = await pool.query(
-        `with candidate as (
-           select id from jobs
-           where job_type = 'instagram_dm_reply'
-             and attempt_count < max_attempts and run_at <= now()
-             and (status = 'queued' or (status = 'running' and locked_until < now()))
-           order by priority desc, created_at asc for update skip locked limit 1
+      await pool.query(
+        `with recovered as (
+           update dm_delivery_attempts attempt
+           set status = 'unknown', error = 'worker_lease_expired', updated_at = now()
+           from jobs job
+           where attempt.job_id = job.id
+             and attempt.status = 'sending'
+             and job.status = 'running'
+             and job.locked_until < now()
+           returning attempt.id, attempt.workspace_id, attempt.brand_id, attempt.conversation_id,
+                     attempt.job_id, job.payload_json
+         ), attention as (
+           insert into dm_attention_items (
+             workspace_id, brand_id, conversation_id, trigger_message_id, trigger_turn_id,
+             attention_type, reason_code, detail_json
+           )
+           select workspace_id, brand_id, conversation_id,
+                  (payload_json->>'messageId')::uuid, (payload_json->>'turnId')::uuid,
+                  'delivery_unknown', 'processing_error', jsonb_build_object('error', 'worker_lease_expired')
+           from recovered
+           returning conversation_id
+         ), paused as (
+           update instagram_dm_conversations conversation
+           set automation_status = 'paused', attention_status = 'open', updated_at = now()
+           where conversation.id in (select conversation_id from attention)
+           returning conversation.id
          )
          update jobs job
-         set status = 'running', locked_by = $1, locked_until = now() + interval '30 seconds',
-             lease_token = gen_random_uuid(), attempt_count = attempt_count + 1,
-             started_at = coalesce(started_at, now()), updated_at = now()
-         from candidate where job.id = candidate.id
-         returning job.id, job.workspace_id, job.brand_id, job.lease_token, job.payload_json, job.attempt_count`,
+         set status = 'failed', last_error = 'dm_delivery_unknown', finished_at = now(),
+             locked_by = null, locked_until = null, lease_token = null, updated_at = now()
+         from recovered
+         where job.id = recovered.job_id`,
+      );
+      const result = await pool.query(
+        `with candidate as (
+           select job.id from jobs job
+           where job.job_type = 'instagram_dm_reply'
+             and job.attempt_count < job.max_attempts and job.run_at <= now()
+             and (job.status = 'queued' or (job.status = 'running' and job.locked_until < now()))
+           order by priority desc, created_at asc for update skip locked limit 1
+         ), claimed as (
+           update jobs job
+           set status = 'running', locked_by = $1, locked_until = now() + interval '30 seconds',
+               lease_token = gen_random_uuid(), attempt_count = attempt_count + 1,
+               started_at = coalesce(started_at, now()), updated_at = now()
+           from candidate where job.id = candidate.id
+           returning job.id, job.workspace_id, job.brand_id, job.lease_token, job.payload_json, job.attempt_count
+         ), marked_turn as (
+           update dm_turns turn
+           set status = 'processing', closed_at = coalesce(turn.closed_at, now()), updated_at = now()
+           from claimed
+           where turn.id = (claimed.payload_json->>'turnId')::uuid
+           returning turn.id, turn.aggregated_text
+         )
+         select claimed.id, claimed.workspace_id, claimed.brand_id, claimed.lease_token,
+                jsonb_set(claimed.payload_json, '{question}', to_jsonb(marked_turn.aggregated_text), true) as payload_json,
+                claimed.attempt_count
+         from claimed
+         join dm_turns turn on turn.id = (claimed.payload_json->>'turnId')::uuid
+         join marked_turn on marked_turn.id = turn.id`,
         [workerId],
       );
       if (!result.rowCount) return null;
@@ -3359,77 +3479,241 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
 
     async completeDmReplyJob(jobId, input: DmReplyJobCompletionInput) {
       const client = await pool.connect();
+      let prepared: {
+        attemptId: string;
+        workspaceId: string;
+        brandId: string;
+        conversationId: string;
+        brandChannelId: string;
+        turnId: string;
+        triggerMessageId: string;
+        recipientId: string;
+        externalAccountId: string;
+        accessToken: string;
+        body: string;
+        result: DmReplyJobCompletionInput["result"];
+        attentionType: "restricted_action" | "complaint" | "knowledge_gap" | "processing_error" | null;
+      } | null = null;
       try {
         await client.query("begin");
         const job = await client.query(
-          `select job.id, job.workspace_id, job.brand_id, job.payload_json,
+          `select job.id, job.workspace_id, job.brand_id, job.payload_json, job.status as job_status,
+                  job.locked_by, job.lease_token::text, (job.locked_until > now()) as locked_until_valid,
                   conversation.id as conversation_id, conversation.brand_channel_id,
                   channel.external_account_id, credential.encrypted_payload, credential.auth_mode,
-                  settings.fallback_message, settings.error_message
+                  settings.error_message, attempt.id as attempt_id, attempt.status as attempt_status,
+                  attempt.decision as attempt_decision
            from jobs job
            join instagram_dm_conversations conversation on conversation.id = (job.payload_json->>'conversationId')::uuid
            join brand_channels channel on channel.id = conversation.brand_channel_id
            join channel_credentials credential on credential.brand_channel_id = channel.id
              and credential.status = 'active' and credential.revoked_at is null
            join instagram_dm_settings settings on settings.brand_id = job.brand_id
-           where job.id = $1 and job.job_type = 'instagram_dm_reply' and job.status = 'running'
-             and job.locked_by = $2 and job.lease_token = $3::uuid and job.locked_until > now()
+           left join dm_delivery_attempts attempt on attempt.job_id = job.id
+           where job.id = $1 and job.job_type = 'instagram_dm_reply'
            for update of job`,
-          [jobId, input.workerId, input.leaseToken],
+          [jobId],
         );
         if (!job.rowCount) throw new Error("dm_reply_job_lease_invalid");
         const row = job.rows[0];
-        if (input.result.decision === "answer") {
+        const terminalAttempt = row.attempt_status === "sent" || row.attempt_status === "unknown" || row.attempt_status === "failed" || row.attempt_status === "sending";
+        if (terminalAttempt) {
+          await client.query("commit");
+          client.release();
+          return {
+            id: jobId,
+            status: row.attempt_status === "sent" ? "succeeded" : "failed",
+            decision: row.attempt_decision ?? (row.payload_json.route === "fixed_fallback" ? "fallback" : input.result.decision),
+          };
+        }
+        if (row.job_status !== "running" || row.locked_by !== input.workerId || row.lease_token !== input.leaseToken || !row.locked_until_valid) {
+          throw new Error("dm_reply_job_lease_invalid");
+        }
+
+        const policyReasonCode = row.payload_json.policyReasonCode;
+        let effectiveResult: DmReplyJobCompletionInput["result"];
+        if (row.payload_json.route === "fixed_fallback") {
+          const fixedReason = policyReasonCode === "complaint"
+            ? "complaint"
+            : policyReasonCode === "knowledge_gap"
+              ? "knowledge_gap"
+              : "restricted_action";
+          effectiveResult = {
+            decision: "fallback", answer: null, wikiChunkIds: [], knowledgeEntryId: null,
+            confidence: null, reasonCode: fixedReason,
+            needsAttention: true,
+            reason: `server_policy:${policyReasonCode}`,
+          };
+        } else if (input.result.decision === "answer" && input.result.reasonCode === "direct_faq") {
+          const entry = await client.query(
+            `select id, answer from knowledge_entries
+             where id = $1 and workspace_id = $2 and brand_id = $3
+               and entry_type = 'faq' and enabled and direct_reply_enabled`,
+            [input.result.knowledgeEntryId, row.workspace_id, row.brand_id],
+          );
+          if (!entry.rowCount) throw new Error("dm_knowledge_entry_not_owned");
+          effectiveResult = inspectDmAnswer({ ...input.result, answer: entry.rows[0].answer });
+        } else {
+          effectiveResult = inspectDmAnswer(input.result);
+        }
+        if (effectiveResult.decision === "answer") {
           const sources = await client.query(
             `select id from wiki_chunks where brand_id = $1 and enabled and id = any($2::uuid[])`,
-            [row.brand_id, input.result.wikiChunkIds],
+            [row.brand_id, effectiveResult.wikiChunkIds],
           );
-          if (sources.rowCount !== input.result.wikiChunkIds.length) throw new Error("dm_wiki_chunk_not_owned");
+          if (sources.rowCount !== effectiveResult.wikiChunkIds.length) throw new Error("dm_wiki_chunk_not_owned");
+          if (effectiveResult.knowledgeEntryId && effectiveResult.reasonCode !== "direct_faq") {
+            const entry = await client.query(
+              `select id from knowledge_entries where id = $1 and brand_id = $2 and enabled`,
+              [effectiveResult.knowledgeEntryId, row.brand_id],
+            );
+            if (!entry.rowCount) throw new Error("dm_knowledge_entry_not_owned");
+          }
         }
-        const text = input.result.decision === "answer"
-          ? input.result.answer
-          : input.result.decision === "fallback"
-            ? row.fallback_message
-            : input.result.decision === "error"
+        const fallbackReason = effectiveResult.reasonCode === "complaint"
+          ? "complaint"
+          : effectiveResult.reasonCode === "restricted_action"
+            ? "restricted_action"
+            : "knowledge_gap";
+        const text = effectiveResult.decision === "answer"
+          ? effectiveResult.answer
+          : effectiveResult.decision === "fallback"
+            ? dmFixedMessages[fallbackReason]
+            : effectiveResult.decision === "error"
               ? row.error_message
               : null;
-        let externalMessageId: string | null = null;
-        if (text) {
-          if (row.auth_mode !== "instagram_login") throw new Error("instagram_dm_auth_mode_required");
+        if (!text) {
+          await client.query(
+            `update jobs set status = 'succeeded', result_json = $2::jsonb, locked_by = null,
+               locked_until = null, lease_token = null, finished_at = now(), updated_at = now() where id = $1`,
+            [jobId, JSON.stringify(effectiveResult)],
+          );
+          await client.query("update dm_turns set status = 'completed', updated_at = now() where id = $1", [row.payload_json.turnId]);
+          await client.query("commit");
+          client.release();
+          return { id: jobId, status: "succeeded", decision: effectiveResult.decision };
+        }
+        if (row.auth_mode !== "instagram_login") throw new Error("instagram_dm_auth_mode_required");
+        const attempt = await client.query(
+          `insert into dm_delivery_attempts (
+             workspace_id, brand_id, conversation_id, job_id, dedupe_key, recipient_id,
+             body, decision, reason_code, status
+           ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'prepared')
+           on conflict (job_id) do nothing returning id, status`,
+          [row.workspace_id, row.brand_id, row.conversation_id, jobId, `dm:${jobId}`, row.payload_json.senderId, text, effectiveResult.decision, effectiveResult.reasonCode],
+        );
+        const attemptId = attempt.rows[0]?.id ?? row.attempt_id;
+        if (!attemptId) throw new Error("dm_delivery_attempt_missing");
+        const attentionType = row.payload_json.forceAttentionType
+          ?? (effectiveResult.reasonCode === "complaint" ? "complaint"
+            : effectiveResult.reasonCode === "restricted_action" ? "restricted_action"
+              : effectiveResult.decision === "fallback" ? "knowledge_gap"
+                : effectiveResult.decision === "error" || effectiveResult.needsAttention ? "processing_error" : null);
+        prepared = {
+          attemptId, workspaceId: row.workspace_id, brandId: row.brand_id,
+          conversationId: row.conversation_id, brandChannelId: row.brand_channel_id,
+          turnId: row.payload_json.turnId, triggerMessageId: row.payload_json.messageId,
+          recipientId: row.payload_json.senderId, externalAccountId: row.external_account_id,
+          accessToken: decryptCredential(row.encrypted_payload), body: text,
+          result: effectiveResult, attentionType,
+        };
+        await client.query("commit");
+      } catch (error) {
+        try {
+          await client.query("rollback");
+        } finally {
+          client.release();
+        }
+        throw error;
+      }
+
+      try {
+        if (!prepared) throw new Error("dm_delivery_not_prepared");
+        const sending = await pool.query(
+          `update dm_delivery_attempts set status = 'sending', sending_at = now(), updated_at = now()
+           where id = $1 and status = 'prepared' returning id`,
+          [prepared.attemptId],
+        );
+        if (!sending.rowCount) return { id: jobId, status: "failed", decision: prepared.result.decision };
+        let externalMessageId: string;
+        try {
           const sent = await sendDm({
-            accessToken: decryptCredential(row.encrypted_payload),
-            instagramBusinessAccountId: row.external_account_id,
-            recipientId: row.payload_json.senderId,
-            text,
+            accessToken: prepared.accessToken,
+            instagramBusinessAccountId: prepared.externalAccountId,
+            recipientId: prepared.recipientId,
+            text: prepared.body,
           });
           externalMessageId = sent.externalMessageId;
+        } catch (error) {
+          const classification = classifyInstagramDmSendError(error);
+          await client.query("begin");
           await client.query(
-            `insert into instagram_dm_messages (
-               workspace_id, brand_id, brand_channel_id, conversation_id, external_message_id,
-               direction, message_type, body, raw_payload
-             ) values ($1, $2, $3, $4, $5, 'outbound', 'text', $6, $7::jsonb)
-             on conflict (brand_channel_id, external_message_id) do nothing`,
-            [row.workspace_id, row.brand_id, row.brand_channel_id, row.conversation_id, externalMessageId, text, JSON.stringify({ decision: input.result.decision, reason: input.result.reason })],
+            `update dm_delivery_attempts set status = '${classification.status}', error = $2, updated_at = now()
+             where id = $1 and status = 'sending' returning id`,
+            [prepared.attemptId, classification.errorCode],
           );
-        }
-        if (input.result.decision === "fallback" || input.result.decision === "error") {
           await client.query(
-            `insert into unanswered_questions (workspace_id, brand_id, conversation_id, instagram_dm_message_id, question, reason)
-             values ($1, $2, $3, $4::uuid, $5, $6)`,
-            [row.workspace_id, row.brand_id, row.conversation_id, row.payload_json.messageId, row.payload_json.question, input.result.reason],
+            `update jobs set status = 'failed', last_error = $2, locked_by = null, locked_until = null,
+               lease_token = null, finished_at = now(), updated_at = now() where id = $1`,
+            [jobId, classification.errorCode],
           );
+          await client.query("update dm_turns set status = 'completed', updated_at = now() where id = $1", [prepared.turnId]);
+          if (classification.status === "unknown") {
+            await client.query(
+              `insert into dm_attention_items (
+                 workspace_id, brand_id, conversation_id, trigger_message_id, trigger_turn_id,
+                 attention_type, reason_code, detail_json
+               ) values ($1, $2, $3, $4, $5, 'delivery_unknown', 'processing_error', $6::jsonb)`,
+              [prepared.workspaceId, prepared.brandId, prepared.conversationId, prepared.triggerMessageId, prepared.turnId, JSON.stringify({ error: classification.errorCode })],
+            );
+            await client.query(
+              `update instagram_dm_conversations set automation_status = 'paused', attention_status = 'open', updated_at = now()
+               where id = $1`,
+              [prepared.conversationId],
+            );
+          }
+          await client.query("commit");
+          return { id: jobId, status: "failed", decision: prepared.result.decision };
         }
+
+        await client.query("begin");
         await client.query(
-          `update jobs
-           set status = 'succeeded', result_json = $2::jsonb, locked_by = null, locked_until = null,
-               lease_token = null, finished_at = now(), updated_at = now()
-           where id = $1`,
-          [jobId, JSON.stringify({ ...input.result, externalMessageId })],
+          `update dm_delivery_attempts set status = 'sent', provider_message_id = $2, sent_at = now(), updated_at = now()
+           where id = $1 and status = 'sending' returning id`,
+          [prepared.attemptId, externalMessageId],
         );
+        await client.query(
+          `insert into instagram_dm_messages (
+             workspace_id, brand_id, brand_channel_id, conversation_id, turn_id, external_message_id,
+             direction, message_type, body, raw_payload, decision, reason_code, delivery_attempt_id
+           ) values ($1, $2, $3, $4, $5, $6, 'outbound', 'text', $7, '{}'::jsonb, $8, $9, $10)
+           on conflict (brand_channel_id, external_message_id) do nothing`,
+          [prepared.workspaceId, prepared.brandId, prepared.brandChannelId, prepared.conversationId, prepared.turnId, externalMessageId, prepared.body, prepared.result.decision, prepared.result.reasonCode, prepared.attemptId],
+        );
+        await client.query(
+          `update jobs set status = 'succeeded', result_json = $2::jsonb, locked_by = null, locked_until = null,
+             lease_token = null, finished_at = now(), updated_at = now() where id = $1`,
+          [jobId, JSON.stringify({ ...prepared.result, externalMessageId })],
+        );
+        await client.query("update dm_turns set status = 'completed', updated_at = now() where id = $1", [prepared.turnId]);
+        if (prepared.attentionType) {
+          await client.query(
+            `insert into dm_attention_items (
+               workspace_id, brand_id, conversation_id, trigger_message_id, trigger_turn_id,
+               attention_type, reason_code, detail_json
+             ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
+            [prepared.workspaceId, prepared.brandId, prepared.conversationId, prepared.triggerMessageId, prepared.turnId, prepared.attentionType, prepared.result.reasonCode, JSON.stringify({ reason: prepared.result.reason })],
+          );
+          await client.query(
+            `update instagram_dm_conversations set automation_status = 'paused', attention_status = 'open', updated_at = now()
+             where id = $1`,
+            [prepared.conversationId],
+          );
+        }
         await client.query("commit");
-        return { id: jobId, status: "succeeded", decision: input.result.decision };
+        return { id: jobId, status: "succeeded", decision: prepared.result.decision };
       } catch (error) {
-        await client.query("rollback");
+        await client.query("rollback").catch(() => undefined);
         throw error;
       } finally {
         client.release();
@@ -3451,6 +3735,99 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         [jobId, input.workerId, input.leaseToken, input.error.slice(0, 2000), input.retryable, retryAfterMs],
       );
       if (!result.rowCount) throw new Error("dm_reply_job_lease_invalid");
+      return { id: result.rows[0].id, status: result.rows[0].status };
+    },
+
+    async claimDmProfileRefreshJob(workerId) {
+      const result = await pool.query(
+        `with candidate as (
+           select id from jobs
+           where job_type = 'instagram_dm_profile_refresh'
+             and attempt_count < max_attempts and run_at <= now()
+             and (status = 'queued' or (status = 'running' and locked_until < now()))
+           order by priority desc, created_at asc for update skip locked limit 1
+         )
+         update jobs job
+         set status = 'running', locked_by = $1, locked_until = now() + interval '30 seconds',
+             lease_token = gen_random_uuid(), attempt_count = attempt_count + 1,
+             started_at = coalesce(started_at, now()), updated_at = now()
+         from candidate where job.id = candidate.id
+         returning job.id, job.workspace_id, job.brand_id, job.lease_token, job.payload_json, job.attempt_count`,
+        [workerId],
+      );
+      if (!result.rowCount) return null;
+      const row = result.rows[0];
+      return {
+        id: row.id,
+        workspaceId: row.workspace_id,
+        brandId: row.brand_id,
+        leaseToken: row.lease_token,
+        payload: row.payload_json,
+        attemptCount: Number(row.attempt_count),
+      } satisfies DmProfileRefreshJobDto;
+    },
+
+    async runDmProfileRefreshJob(jobId, input: DmProfileRefreshJobInput) {
+      const claimed = await pool.query(
+        `select job.workspace_id, job.brand_id, job.payload_json,
+                credential.encrypted_payload
+         from jobs job
+         join instagram_dm_conversations conversation
+           on conversation.id = (job.payload_json->>'conversationId')::uuid
+          and conversation.workspace_id = job.workspace_id and conversation.brand_id = job.brand_id
+         join brand_channels channel on channel.id = conversation.brand_channel_id
+         join channel_credentials credential on credential.brand_channel_id = channel.id
+          and credential.status = 'active' and credential.revoked_at is null
+         where job.id = $1 and job.job_type = 'instagram_dm_profile_refresh'
+           and job.status = 'running' and job.locked_by = $2
+           and job.lease_token = $3::uuid and job.locked_until > now()`,
+        [jobId, input.workerId, input.leaseToken],
+      );
+      if (!claimed.rowCount) throw new Error("dm_profile_job_lease_invalid");
+      const row = claimed.rows[0];
+      const profile = await fetchDmProfile({
+        accessToken: decryptCredential(row.encrypted_payload),
+        senderId: row.payload_json.senderId,
+      });
+      const completed = await pool.query(
+        `with updated_profile as (
+           update instagram_dm_conversations
+           set participant_name = $4, participant_username = $5,
+               participant_profile_url = $6, profile_fetched_at = now(), updated_at = now()
+           where id = ($7::jsonb->>'conversationId')::uuid
+             and workspace_id = $8 and brand_id = $9
+           returning id
+         )
+         update jobs
+         set status = 'succeeded', result_json = jsonb_build_object('profileRefreshed', true),
+             locked_by = null, locked_until = null, lease_token = null,
+             finished_at = now(), updated_at = now()
+         where id = $1 and job_type = 'instagram_dm_profile_refresh'
+           and status = 'running' and locked_by = $2 and lease_token = $3::uuid
+           and exists (select 1 from updated_profile)
+         returning id, status`,
+        [jobId, input.workerId, input.leaseToken, profile.name, profile.username, profile.profilePictureUrl,
+          JSON.stringify(row.payload_json), row.workspace_id, row.brand_id],
+      );
+      if (!completed.rowCount) throw new Error("dm_profile_job_lease_invalid");
+      return { id: completed.rows[0].id, status: completed.rows[0].status };
+    },
+
+    async failDmProfileRefreshJob(jobId, input) {
+      const retryAfterMs = input.retryable ? Math.max(1000, Math.min(input.retryAfterMs, 60 * 60 * 1000)) : 0;
+      const result = await pool.query(
+        `update jobs
+         set status = case when $5::boolean and attempt_count < max_attempts then 'queued' else 'failed' end,
+             run_at = case when $5::boolean and attempt_count < max_attempts then now() + ($6::bigint * interval '1 millisecond') else run_at end,
+             locked_by = null, locked_until = null, lease_token = null, last_error = $4,
+             finished_at = case when $5::boolean and attempt_count < max_attempts then null else now() end,
+             updated_at = now()
+         where id = $1 and job_type = 'instagram_dm_profile_refresh' and status = 'running'
+           and locked_by = $2 and lease_token = $3::uuid
+         returning id, status`,
+        [jobId, input.workerId, input.leaseToken, input.error.slice(0, 2000), input.retryable, retryAfterMs],
+      );
+      if (!result.rowCount) throw new Error("dm_profile_job_lease_invalid");
       return { id: result.rows[0].id, status: result.rows[0].status };
     },
 
@@ -3841,12 +4218,14 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     },
 
     async createKnowledgeImport(brandId, input: KnowledgeImportInput) {
-      const parsed = await parseFaqUpload({
+      const entryType = input.entryType ?? "faq";
+      const parsed = await parseKnowledgeUpload({
+        entryType,
         fileName: input.fileName,
         bytes: decodeBase64Upload(input.fileBase64),
       });
       const finalRows = new Map<string, typeof parsed.validRows[number]>();
-      for (const row of parsed.validRows) finalRows.set(row.normalizedQuestion, row);
+      for (const row of parsed.validRows) finalRows.set(row.normalizedKey, row);
       const uniqueRows = [...finalRows.values()];
       const client = await pool.connect();
       try {
@@ -3858,6 +4237,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         if (!brand.rowCount) throw new Error("brand_not_found");
         const workspaceId = brand.rows[0].workspace_id;
         const resultJson = {
+          entryType,
           totalRows: parsed.rows.length,
           validRows: parsed.validRows.length,
           duplicateRows: parsed.validRows.length - uniqueRows.length,
@@ -3879,27 +4259,44 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         for (const row of uniqueRows) {
           await client.query(
             `insert into knowledge_entries (
-               workspace_id, brand_id, normalized_question, question, answer, category, keywords, priority, enabled, last_import_id
-             ) values ($1, $2, $3, $4, $5, $6, $7::text[], $8, $9, $10)
+               workspace_id, brand_id, entry_type, normalized_question, question, answer,
+               title, content, category, keywords, aliases, structured_data,
+               priority, direct_reply_enabled, enabled, last_import_id
+             ) values (
+               $1, $2, $3, $4, $5, $6,
+               $7, $8, $9, $10::text[], $11::text[], $12::jsonb,
+               $13, $14, true, $15
+             )
              on conflict (brand_id, normalized_question) do update
-             set question = excluded.question,
+             set entry_type = excluded.entry_type,
+                 question = excluded.question,
                  answer = excluded.answer,
+                 title = excluded.title,
+                 content = excluded.content,
                  category = excluded.category,
                  keywords = excluded.keywords,
+                 aliases = excluded.aliases,
+                 structured_data = excluded.structured_data,
                  priority = excluded.priority,
+                 direct_reply_enabled = excluded.direct_reply_enabled,
                  enabled = excluded.enabled,
                  last_import_id = excluded.last_import_id,
                  updated_at = now()`,
             [
               workspaceId,
               brandId,
-              row.normalizedQuestion,
+              row.entryType,
+              row.normalizedKey,
               row.question,
               row.answer,
+              row.title,
+              row.content,
               row.category,
               row.keywords,
+              row.aliases,
+              JSON.stringify(row.structuredData),
               row.priority,
-              row.enabled,
+              row.directReplyEnabled,
               imported.rows[0].id,
             ],
           );
@@ -3907,12 +4304,12 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         if (uniqueRows.length > 0) {
           await client.query(
             `insert into jobs (workspace_id, brand_id, job_type, status, payload_json, dedupe_key)
-             values ($1, $2, 'wiki_refresh', 'queued', $3::jsonb, $2)
+             values ($1::uuid, $2::uuid, 'wiki_refresh', 'queued', $3::jsonb, $2::text)
              on conflict (job_type, dedupe_key)
              where job_type = 'wiki_refresh' and dedupe_key is not null and status in ('queued', 'running')
              do update set payload_json = excluded.payload_json, run_at = now(), updated_at = now()
              returning id, status`,
-            [workspaceId, brandId, JSON.stringify({ trigger: "faq_import", importId: imported.rows[0].id })],
+            [workspaceId, brandId, JSON.stringify({ trigger: "knowledge_import", entryType, importId: imported.rows[0].id })],
           );
         }
         await client.query("commit");
@@ -3945,7 +4342,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       if (!brand.rowCount) throw new Error("brand_not_found");
       const result = await pool.query(
         `insert into jobs (workspace_id, brand_id, job_type, status, payload_json, dedupe_key)
-         values ($1, $2, 'wiki_refresh', 'queued', $3::jsonb, $2)
+         values ($1::uuid, $2::uuid, 'wiki_refresh', 'queued', $3::jsonb, $2::text)
          on conflict (job_type, dedupe_key)
          where job_type = 'wiki_refresh' and dedupe_key is not null and status in ('queued', 'running')
          do update set payload_json = excluded.payload_json, run_at = now(), updated_at = now()
@@ -4062,8 +4459,25 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
            ) values ($1, $2, $3, $4, now())
            on conflict (brand_channel_id, external_participant_id) do update
            set last_message_at = excluded.last_message_at, updated_at = now()
-           returning id`,
+           returning id, automation_status, profile_fetched_at`,
           [channelRow.workspace_id, channelRow.brand_id, channelRow.id, input.senderId],
+        );
+        await client.query(
+          `insert into jobs (workspace_id, brand_id, job_type, status, payload_json, dedupe_key)
+           select $1, $2, 'instagram_dm_profile_refresh', 'queued', $3::jsonb, $4
+           where $5::timestamptz is null
+              or $5::timestamptz < now() - ($6::double precision * interval '1 hour')
+           on conflict (job_type, dedupe_key)
+           where job_type = 'instagram_dm_profile_refresh' and dedupe_key is not null and status in ('queued', 'running')
+           do nothing`,
+          [
+            channelRow.workspace_id,
+            channelRow.brand_id,
+            JSON.stringify({ conversationId: conversation.rows[0].id, senderId: input.senderId }),
+            conversation.rows[0].id,
+            conversation.rows[0].profile_fetched_at,
+            Math.max(1, Number(process.env.DM_PROFILE_REFRESH_AFTER_HOURS ?? 24)),
+          ],
         );
         const messageType = input.text ? "text" : "unsupported_media";
         const message = await client.query(
@@ -4088,9 +4502,44 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           await client.query("commit");
           return { status: "duplicate", brandId: channelRow.brand_id, conversationId: conversation.rows[0].id, jobId: null };
         }
+        await client.query(
+          `update instagram_dm_conversations
+           set unread_count = unread_count + 1, updated_at = now()
+           where id = $1`,
+          [conversation.rows[0].id],
+        );
         if (!input.text) {
           await client.query("commit");
-          return { status: "unsupported_media", brandId: channelRow.brand_id, conversationId: conversation.rows[0].id, jobId: null };
+          return {
+            status: conversation.rows[0].automation_status === "paused" ? "paused" : "unsupported_media",
+            brandId: channelRow.brand_id,
+            conversationId: conversation.rows[0].id,
+            jobId: null,
+          };
+        }
+        await client.query(
+          `update dm_turns
+           set status = 'queued', closed_at = coalesce(closed_at, now()), updated_at = now()
+           where conversation_id = $1 and status = 'collecting' and closes_at <= now()`,
+          [conversation.rows[0].id],
+        );
+        const turn = await client.query(
+          `insert into dm_turns (workspace_id, brand_id, conversation_id, aggregated_text, closes_at)
+           values ($1, $2, $3, $4, now() + interval '3 seconds')
+           on conflict (conversation_id) where status = 'collecting'
+           do update set aggregated_text = dm_turns.aggregated_text || E'\\n' || excluded.aggregated_text,
+                         closes_at = now() + interval '3 seconds', updated_at = now()
+           where dm_turns.closes_at > now()
+           returning id, aggregated_text`,
+          [channelRow.workspace_id, channelRow.brand_id, conversation.rows[0].id, input.text],
+        );
+        await client.query(
+          `update instagram_dm_messages set turn_id = $2 where id = $1`,
+          [message.rows[0].id, turn.rows[0].id],
+        );
+        if (conversation.rows[0].automation_status === "paused") {
+          await client.query("commit");
+          return { status: "paused", brandId: channelRow.brand_id, conversationId: conversation.rows[0].id, jobId: null };
         }
         const settings = await client.query(
           `select enabled from instagram_dm_settings where brand_id = $1 for update`,
@@ -4100,18 +4549,40 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           await client.query("commit");
           return { status: "disabled", brandId: channelRow.brand_id, conversationId: conversation.rows[0].id, jobId: null };
         }
-        const wiki = await client.query(
-          `select exists(
-             select 1
-             from wiki_chunks chunk
-             join wiki_documents document on document.id = chunk.wiki_document_id
-             where chunk.brand_id = $1 and chunk.enabled and document.is_active
-           ) as ready`,
-          [channelRow.brand_id],
-        );
-        if (!wiki.rows[0]?.ready) {
-          await client.query("commit");
-          return { status: "wiki_not_ready", brandId: channelRow.brand_id, conversationId: conversation.rows[0].id, jobId: null };
+        const policy = routeDmMessage(turn.rows[0].aggregated_text);
+        let jobRoute = policy.route;
+        let jobReasonCode = policy.reasonCode;
+        let forceAttentionType = policy.forceAttentionType;
+        let exactFaqId: string | null = null;
+        let exactFaqConflict: string | null = null;
+        if (policy.route === "knowledge") {
+          const exactFaq = await client.query(
+            `select knowledge_entry_id, conflict_marker
+             from find_direct_faq_exact($1, $2, $3)`,
+            [channelRow.workspace_id, channelRow.brand_id, turn.rows[0].aggregated_text],
+          );
+          exactFaqId = exactFaq.rows[0]?.knowledge_entry_id ?? null;
+          exactFaqConflict = exactFaq.rows[0]?.conflict_marker ?? null;
+          if (exactFaqConflict) {
+            jobRoute = "fixed_fallback";
+            jobReasonCode = "knowledge_gap";
+            forceAttentionType = "knowledge_gap";
+            exactFaqId = null;
+          } else if (!exactFaqId) {
+            const wiki = await client.query(
+              `select exists(
+                 select 1
+                 from wiki_chunks chunk
+                 join wiki_documents document on document.id = chunk.wiki_document_id
+                 where chunk.brand_id = $1 and chunk.enabled and document.is_active
+               ) as ready`,
+              [channelRow.brand_id],
+            );
+            if (!wiki.rows[0]?.ready) {
+              await client.query("commit");
+              return { status: "wiki_not_ready", brandId: channelRow.brand_id, conversationId: conversation.rows[0].id, jobId: null };
+            }
+          }
         }
         const limits = await client.query(
           `select
@@ -4127,12 +4598,41 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           await client.query("commit");
           return { status: "rate_limited", brandId: channelRow.brand_id, conversationId: conversation.rows[0].id, jobId: null };
         }
+        if (exactFaqConflict) {
+          await client.query(
+            `insert into dm_attention_items (
+               workspace_id, brand_id, conversation_id, trigger_message_id, trigger_turn_id,
+               attention_type, reason_code, detail_json
+             ) values ($1, $2, $3, $4, $5, 'knowledge_gap', 'knowledge_gap', $6::jsonb)`,
+            [
+              channelRow.workspace_id,
+              channelRow.brand_id,
+              conversation.rows[0].id,
+              message.rows[0].id,
+              turn.rows[0].id,
+              JSON.stringify({ reason: exactFaqConflict }),
+            ],
+          );
+          await client.query(
+            `update instagram_dm_conversations
+             set automation_status = 'paused', attention_status = 'open', updated_at = now()
+             where id = $1`,
+            [conversation.rows[0].id],
+          );
+        }
         const job = await client.query(
           `insert into jobs (workspace_id, brand_id, job_type, status, run_at, payload_json, dedupe_key)
            values ($1, $2, 'instagram_dm_reply', 'queued', now() + interval '3 seconds', $3::jsonb, $4)
            on conflict (job_type, dedupe_key)
            where job_type = 'instagram_dm_reply' and dedupe_key is not null and status in ('queued', 'running')
-           do update set payload_json = excluded.payload_json,
+           do update set payload_json = case
+               when jobs.payload_json->>'route' = 'fixed_fallback' then
+                 jobs.payload_json || jsonb_build_object(
+                   'messageId', excluded.payload_json->>'messageId',
+                   'question', excluded.payload_json->>'question'
+                 )
+               else excluded.payload_json
+             end,
              run_at = case when jobs.status = 'queued' then excluded.run_at else jobs.run_at end,
              updated_at = now()
            returning id`,
@@ -4141,11 +4641,16 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             channelRow.brand_id,
             JSON.stringify({
               conversationId: conversation.rows[0].id,
+              turnId: turn.rows[0].id,
               senderId: input.senderId,
               messageId: message.rows[0].id,
-              question: input.text,
+              question: turn.rows[0].aggregated_text,
+              route: jobRoute,
+              policyReasonCode: jobReasonCode,
+              forceAttentionType,
+              ...(exactFaqId ? { exactFaqId } : {}),
             }),
-            conversation.rows[0].id,
+            turn.rows[0].id,
           ],
         );
         await client.query("commit");
@@ -4156,6 +4661,238 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       } finally {
         client.release();
       }
+    },
+
+    async listDmConversations(brandId, input: { filter: DmConversationFilter; cursor?: string; limit: number }) {
+      const cursor = decodeDmCursor(input.cursor);
+      const limit = Math.max(1, Math.min(input.limit, 100));
+      const result = await pool.query(
+        `select conversation.id, conversation.external_participant_id,
+                conversation.participant_name, conversation.participant_username,
+                conversation.participant_profile_url, conversation.last_message_at,
+                conversation.automation_status, conversation.attention_status, conversation.unread_count,
+                last_message.body as last_message_body,
+                last_message.direction as last_message_direction,
+                last_message.created_at as last_message_created_at,
+                coalesce(attention.open_attention_types, '{}'::text[]) as open_attention_types
+         from instagram_dm_conversations conversation
+         left join lateral (
+           select message.body, message.direction, message.created_at
+           from instagram_dm_messages message
+           where message.conversation_id = conversation.id
+           order by message.created_at desc, message.id desc
+           limit 1
+         ) last_message on true
+         left join lateral (
+           select array_agg(distinct item.attention_type order by item.attention_type) as open_attention_types
+           from dm_attention_items item
+           where item.conversation_id = conversation.id and item.status = 'open'
+         ) attention on true
+         where conversation.brand_id = $1
+           and ($2::timestamptz is null or (conversation.last_message_at, conversation.id) < ($2::timestamptz, $3::uuid))
+           and (
+             $4::text = 'all'
+             or ($4 = 'attention' and exists (
+               select 1 from dm_attention_items item where item.conversation_id = conversation.id and item.status = 'open'
+             ))
+             or ($4 = 'complaint' and exists (
+               select 1 from dm_attention_items item where item.conversation_id = conversation.id and item.status = 'open' and item.attention_type = 'complaint'
+             ))
+             or ($4 = 'unanswered' and (
+               exists (select 1 from dm_attention_items item where item.conversation_id = conversation.id and item.status = 'open' and item.attention_type = 'knowledge_gap')
+               or exists (select 1 from unanswered_questions question where question.conversation_id = conversation.id and question.resolved_at is null)
+             ))
+             or ($4 = 'error' and exists (
+               select 1 from dm_attention_items item where item.conversation_id = conversation.id and item.status = 'open'
+                 and item.attention_type in ('delivery_unknown', 'processing_error')
+             ))
+           )
+         order by conversation.last_message_at desc, conversation.id desc
+         limit $5`,
+        [brandId, cursor?.lastMessageAt ?? null, cursor?.id ?? null, input.filter, limit + 1],
+      );
+      const hasMore = result.rows.length > limit;
+      const visibleRows = hasMore ? result.rows.slice(0, limit) : result.rows;
+      return {
+        items: visibleRows.map(mapDmConversationSummary),
+        nextCursor: hasMore ? encodeDmCursor(visibleRows[visibleRows.length - 1]) : null,
+      } satisfies DmConversationPageDto;
+    },
+
+    async getDmConversation(brandId, conversationId) {
+      const conversation = await pool.query(
+        `select conversation.id, conversation.external_participant_id,
+                conversation.participant_name, conversation.participant_username,
+                conversation.participant_profile_url, conversation.last_message_at,
+                conversation.automation_status, conversation.attention_status, conversation.unread_count,
+                last_message.body as last_message_body,
+                last_message.direction as last_message_direction,
+                last_message.created_at as last_message_created_at,
+                coalesce(attention.open_attention_types, '{}'::text[]) as open_attention_types
+         from instagram_dm_conversations conversation
+         left join lateral (
+           select message.body, message.direction, message.created_at
+           from instagram_dm_messages message
+           where message.conversation_id = conversation.id
+           order by message.created_at desc, message.id desc limit 1
+         ) last_message on true
+         left join lateral (
+           select array_agg(distinct item.attention_type order by item.attention_type) as open_attention_types
+           from dm_attention_items item where item.conversation_id = conversation.id and item.status = 'open'
+         ) attention on true
+         where conversation.id = $1 and conversation.brand_id = $2`,
+        [conversationId, brandId],
+      );
+      if (!conversation.rowCount) throw new Error("dm_conversation_not_found");
+
+      const messages = await pool.query(
+        `select message.id, message.direction, message.message_type, message.body,
+                message.decision, message.reason_code, message.created_at,
+                attempt.status as delivery_status,
+                nullif(job.result_json->>'confidence', '')::double precision as confidence
+         from instagram_dm_messages message
+         left join dm_delivery_attempts attempt on attempt.id = message.delivery_attempt_id
+         left join jobs job on job.id = attempt.job_id
+         where message.conversation_id = $1 and message.brand_id = $2
+         order by message.created_at asc, message.id asc`,
+        [conversationId, brandId],
+      );
+      const attention = await pool.query(
+        `select item.*, trigger.body as original_message, delivery.status as auto_reply_delivery_status
+         from dm_attention_items item
+         left join instagram_dm_messages trigger on trigger.id = item.trigger_message_id
+         left join lateral (
+           select attempt.status
+           from jobs job
+           join dm_delivery_attempts attempt on attempt.job_id = job.id
+           where item.trigger_turn_id is not null and job.payload_json->>'turnId' = item.trigger_turn_id::text
+           order by attempt.created_at desc limit 1
+         ) delivery on true
+         where item.conversation_id = $1 and item.brand_id = $2
+         order by item.created_at desc, item.id desc`,
+        [conversationId, brandId],
+      );
+      return {
+        ...mapDmConversationSummary(conversation.rows[0]),
+        messages: messages.rows.map((row) => ({
+          id: String(row.id),
+          direction: row.direction,
+          messageType: row.message_type,
+          body: row.body ?? null,
+          decision: row.decision ?? null,
+          reasonCode: row.reason_code ?? null,
+          sourceLabel: row.reason_code === "direct_faq" ? "FAQ" : row.reason_code === "wiki_answer" ? "Wiki" : null,
+          confidence: row.confidence === null || row.confidence === undefined ? null : Number(row.confidence),
+          deliveryStatus: row.delivery_status ?? null,
+          createdAt: toIso(row.created_at)!,
+        })),
+        attentionItems: attention.rows.map(mapDmAttentionItem),
+      } satisfies DmConversationDetailDto;
+    },
+
+    async listDmAttentionItems(brandId, type) {
+      const result = await pool.query(
+        `select item.*, trigger.body as original_message, delivery.status as auto_reply_delivery_status
+         from dm_attention_items item
+         left join instagram_dm_messages trigger on trigger.id = item.trigger_message_id
+         left join lateral (
+           select attempt.status
+           from jobs job
+           join dm_delivery_attempts attempt on attempt.job_id = job.id
+           where item.trigger_turn_id is not null and job.payload_json->>'turnId' = item.trigger_turn_id::text
+           order by attempt.created_at desc limit 1
+         ) delivery on true
+         where item.brand_id = $1 and item.status = 'open'
+           and ($2::text is null or item.attention_type = $2)
+         order by item.created_at desc, item.id desc`,
+        [brandId, type ?? null],
+      );
+      return result.rows.map(mapDmAttentionItem);
+    },
+
+    async resolveDmAttentionItem(attentionId) {
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const target = await client.query(
+          `select id, conversation_id from dm_attention_items where id = $1 for update`,
+          [attentionId],
+        );
+        if (!target.rowCount) throw new Error("dm_attention_item_not_found");
+        const conversationId = target.rows[0].conversation_id;
+        await client.query(
+          `update dm_attention_items
+           set status = 'resolved', resolved_at = now(), updated_at = now()
+           where conversation_id = $1 and status = 'open'`,
+          [conversationId],
+        );
+        const open = await client.query(
+          `select count(*)::integer as count from dm_attention_items where conversation_id = $1 and status = 'open'`,
+          [conversationId],
+        );
+        if (Number(open.rows[0].count) !== 0) throw new Error("dm_attention_resolution_incomplete");
+        await client.query(
+          `update instagram_dm_conversations
+           set automation_status = 'active', attention_status = 'resolved', unread_count = 0, updated_at = now()
+           where id = $1`,
+          [conversationId],
+        );
+        await client.query("commit");
+        return { conversationId: String(conversationId), automationStatus: "active", attentionStatus: "resolved" } as const;
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async getWikiStatus(brandId) {
+      const versions = await pool.query(
+        `select version.id, version.status, version.source_count, version.document_count, version.chunk_count,
+                version.activated_at, version.completed_at as failed_at, version.error_message, version.created_at,
+                (select count(*)::integer from wiki_documents document
+                 where document.wiki_version_id = version.id and document.knowledge_entry_id is not null) as knowledge_entry_count
+         from wiki_versions version
+         where version.brand_id = $1 and version.status in ('active', 'failed')
+         order by case when version.status = 'active' then 0 else 1 end, version.created_at desc`,
+        [brandId],
+      );
+      const imports = await pool.query(
+        `select count(*)::integer as total,
+                count(*) filter (where status = 'succeeded')::integer as succeeded,
+                count(*) filter (where status = 'failed')::integer as failed,
+                coalesce(sum(case when result_json->>'entryType' = 'faq' then (result_json->>'validRows')::integer else 0 end), 0)::integer as faq_rows,
+                coalesce(sum(case when result_json->>'entryType' = 'product' then (result_json->>'validRows')::integer else 0 end), 0)::integer as product_rows
+         from knowledge_imports where brand_id = $1`,
+        [brandId],
+      );
+      const mapVersion = (row: Record<string, any> | undefined) => row ? ({
+        id: String(row.id),
+        status: row.status,
+        version: toIso(row.created_at)!,
+        sourceCount: Number(row.source_count ?? 0),
+        documentCount: Number(row.document_count ?? 0),
+        knowledgeEntryCount: Number(row.knowledge_entry_count ?? 0),
+        chunkCount: Number(row.chunk_count ?? 0),
+        activatedAt: toIso(row.activated_at),
+        failedAt: row.status === "failed" ? toIso(row.failed_at) : null,
+        errorMessage: row.error_message ?? null,
+      }) : null;
+      const active = versions.rows.find((row) => row.status === "active");
+      const failed = versions.rows.find((row) => row.status === "failed");
+      const stats = imports.rows[0] ?? {};
+      return {
+        activeVersion: mapVersion(active),
+        latestFailedVersion: mapVersion(failed),
+        importStats: {
+          total: Number(stats.total ?? 0),
+          succeeded: Number(stats.succeeded ?? 0),
+          failed: Number(stats.failed ?? 0),
+          faqRows: Number(stats.faq_rows ?? 0),
+          productRows: Number(stats.product_rows ?? 0),
+        },
+      } satisfies WikiStatusDto;
     },
 
     async createTopicUpload(brandId, input: TopicUploadInput) {

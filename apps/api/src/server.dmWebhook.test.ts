@@ -57,7 +57,21 @@ describe("Instagram DM webhook routes", () => {
       payload: raw,
     });
     expect(valid.statusCode).toBe(200);
-    expect(valid.json()).toEqual({ ok: true, received: 1 });
+    expect(valid.json()).toEqual({ ok: true, received: 1, outcomes: ["queued"] });
     expect(receive).toHaveBeenCalledWith(expect.objectContaining({ messageId: "mid-1", senderId: "sender-1" }));
+  });
+
+  it("exposes authenticated profile claim/run/fail worker hooks", async () => {
+    const repository = {
+      health: vi.fn(async () => ({ database: "ok" as const })),
+      claimDmProfileRefreshJob: vi.fn(async () => ({ id: "job-1", leaseToken: "lease-1" })),
+      runDmProfileRefreshJob: vi.fn(async () => ({ id: "job-1", status: "succeeded" })),
+      failDmProfileRefreshJob: vi.fn(async () => ({ id: "job-1", status: "failed" })),
+    } as any;
+    const app = createServer({ repository, workerApiToken: "worker-token", logger: false });
+    const headers = { authorization: "Bearer worker-token", "content-type": "application/json" };
+    expect((await app.inject({ method: "POST", url: "/workers/dm/profile-jobs/claim", headers, payload: { workerId: "worker-1" } })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: "/workers/dm/profile-jobs/job-1/run", headers, payload: { workerId: "worker-1", leaseToken: "lease-1" } })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: "/workers/dm/profile-jobs/job-1/fail", headers, payload: { workerId: "worker-1", leaseToken: "lease-1", error: "failed", retryable: false, retryAfterMs: 0 } })).statusCode).toBe(200);
   });
 });

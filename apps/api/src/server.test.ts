@@ -301,6 +301,7 @@ function createRepository(): ApiRepository {
     })),
     createKnowledgeImport: vi.fn(async (_brandId, body) => ({
       id: "knowledge-import-1",
+      entryType: body.entryType ?? "faq",
       fileName: body.fileName,
       status: "succeeded" as const,
       totalRows: 2,
@@ -316,6 +317,21 @@ function createRepository(): ApiRepository {
     getInstagramDmSettings: vi.fn(async () => ({ brandId, enabled: false, fallbackMessage: "담당자가 확인 후 안내드리겠습니다.", errorMessage: "잠시 후 다시 문의해 주세요.", wikiReady: false, messagePermissionReady: false, webhookStatus: "unchecked" as const, workerStatus: "unknown" as const })),
     updateInstagramDmSettings: vi.fn(async (_brandId, input) => ({ brandId, enabled: input.enabled ?? false, fallbackMessage: input.fallbackMessage ?? "담당자가 확인 후 안내드리겠습니다.", errorMessage: input.errorMessage ?? "잠시 후 다시 문의해 주세요.", wikiReady: true, messagePermissionReady: true, webhookStatus: "connected" as const, workerStatus: "online" as const })),
     listInstagramDmHistory: vi.fn(async () => []),
+    listDmConversations: vi.fn(async () => ({ items: [], nextCursor: null })),
+    getDmConversation: vi.fn(async (_brandId, conversationId) => ({
+      id: conversationId,
+      participant: { instagramScopedId: "participant-1", displayName: "사용자-pant-1", username: null, profileImageUrl: null },
+      lastMessage: null,
+      automationStatus: "active" as const,
+      attentionStatus: "none" as const,
+      openAttentionTypes: [],
+      unreadCount: 0,
+      messages: [],
+      attentionItems: [],
+    })),
+    listDmAttentionItems: vi.fn(async () => []),
+    resolveDmAttentionItem: vi.fn(async () => ({ conversationId: "conversation-1", automationStatus: "active" as const, attentionStatus: "resolved" as const })),
+    getWikiStatus: vi.fn(async () => ({ activeVersion: null, latestFailedVersion: null, importStats: { total: 0, succeeded: 0, failed: 0, faqRows: 0, productRows: 0 } })),
     crawlSources: vi.fn(async () => ({ processed: 2, created: 2, updated: 2, failed: 0 })),
     generateContent: vi.fn(async () => ({ processed: 1, created: 3, updated: 1, failed: 0 })),
     runDailyGeneration: vi.fn(async () => ({ brandsSelected: 1, runsStarted: 1, processed: 1, created: 3, updated: 1, failed: 0, status: "succeeded" as const })),
@@ -340,11 +356,62 @@ function createRepository(): ApiRepository {
     heartbeatDmReplyJob: vi.fn(async (id) => ({ id, status: "running" })),
     completeDmReplyJob: vi.fn(async (id, input) => ({ id, status: "succeeded", decision: input.result.decision })),
     failDmReplyJob: vi.fn(async (id) => ({ id, status: "queued" })),
+    claimDmProfileRefreshJob: vi.fn(async () => null),
+    runDmProfileRefreshJob: vi.fn(async (id) => ({ id, status: "succeeded" })),
+    failDmProfileRefreshJob: vi.fn(async (id) => ({ id, status: "failed" })),
     heartbeatDmWorker: vi.fn(async (workerId) => ({ workerId }))
   };
 }
 
 describe("API server", () => {
+  it("sets a cross-site compatible session cookie after Kakao login on Vercel", async () => {
+    const previousVercel = process.env.VERCEL;
+    process.env.VERCEL = "1";
+    const kakaoAuth = {
+      createOrLoadUser: vi.fn(async () => ({ userId: "user-1" })),
+      createSession: vi.fn(async () => "session-token")
+    };
+    const app = createServer({
+      repository: createRepository(),
+      kakaoAuth: kakaoAuth as any,
+      kakao: {
+        restApiKey: "kakao-rest-api-key",
+        redirectUri: "https://api.example.com/auth/kakao/callback",
+        frontendUrl: "http://localhost:5173"
+      },
+      logger: false
+    });
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: "access-token" }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 1234, properties: { nickname: "Tester" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      })));
+
+    try {
+      const login = await app.inject({ method: "GET", url: "/auth/kakao/login" });
+      const state = new URL(String(login.headers.location)).searchParams.get("state");
+      const stateCookie = String(login.headers["set-cookie"]).split(";", 1)[0];
+      const callback = await app.inject({
+        method: "GET",
+        url: `/auth/kakao/callback?code=test-code&state=${encodeURIComponent(state!)}`,
+        headers: { cookie: stateCookie }
+      });
+      const cookies = callback.headers["set-cookie"] as string[];
+      const sessionCookie = cookies.find((value) => value.startsWith("bp_session="));
+
+      expect(callback.statusCode).toBe(302);
+      expect(sessionCookie).toContain("SameSite=None");
+      expect(sessionCookie).toContain("Secure");
+    } finally {
+      if (previousVercel === undefined) delete process.env.VERCEL;
+      else process.env.VERCEL = previousVercel;
+    }
+  });
+
   it("accepts a valid Kakao state from an earlier concurrent login attempt", async () => {
     const app = createServer({
       repository: createRepository(),
@@ -978,7 +1045,7 @@ describe("API server", () => {
       },
       logger: false,
     });
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
       if (url === "https://api.instagram.com/oauth/access_token") {
         return new Response(JSON.stringify({ access_token: "short-lived-token", expires_in: 3600 }), { status: 200 });
       }
@@ -988,8 +1055,12 @@ describe("API server", () => {
       if (url.startsWith("https://graph.instagram.com/v23.0/me")) {
         return new Response(JSON.stringify({ id: "17890000000000000", username: "growthline352" }), { status: 200 });
       }
+      if (url.startsWith("https://graph.instagram.com/v23.0/17890000000000000/subscribed_apps")) {
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      }
       return new Response(JSON.stringify({ error: { message: "unexpected_url" } }), { status: 400 });
-    }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
     const start = await app.inject({ method: "GET", url: "/auth/meta/start" });
     expect(start.statusCode).toBe(302);
@@ -1007,6 +1078,12 @@ describe("API server", () => {
 
     expect(callback.statusCode).toBe(302);
     expect(callback.headers.location).toBe("http://localhost:5173/channels?instagram=connected");
+    const subscriptionCall = fetchMock.mock.calls.find(([url]) => url.includes("/subscribed_apps"));
+    expect(subscriptionCall?.[0]).toContain("subscribed_fields=messages%2Cmessaging_postbacks");
+    expect(subscriptionCall?.[1]).toMatchObject({
+      method: "POST",
+      headers: { authorization: "Bearer long-lived-token" },
+    });
     expect(repository.saveChannelCredentials).toHaveBeenCalledWith(
       "00000000-0000-4000-8000-000000000100",
       "instagram",
@@ -1225,8 +1302,57 @@ describe("API server", () => {
     });
 
     expect(response.statusCode).toBe(201);
-    expect(response.json()).toMatchObject({ fileName: "faq.csv", status: "succeeded" });
-    expect(repository.createKnowledgeImport).toHaveBeenCalledWith(brandId, expect.objectContaining({ fileName: "faq.csv" }));
+    expect(response.json()).toMatchObject({ entryType: "faq", fileName: "faq.csv", status: "succeeded" });
+    expect(repository.createKnowledgeImport).toHaveBeenCalledWith(brandId, expect.objectContaining({ entryType: "faq", fileName: "faq.csv" }));
+  });
+
+  it("imports product data when entryType is product", async () => {
+    const repository = createRepository();
+    const app = createServer({ repository });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/knowledge-imports`,
+      payload: {
+        entryType: "product",
+        fileName: "products.csv",
+        fileBase64: Buffer.from("name,description\nMug,Stoneware").toString("base64")
+      }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({ entryType: "product", fileName: "products.csv" });
+    expect(repository.createKnowledgeImport).toHaveBeenCalledWith(brandId, expect.objectContaining({ entryType: "product" }));
+  });
+
+  it("rejects unsupported knowledge import entry types", async () => {
+    const repository = createRepository();
+    const app = createServer({ repository });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/knowledge-imports`,
+      payload: { entryType: "policy", fileName: "policy.csv", fileBase64: "YQ==" }
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "knowledge_import_entry_type_invalid" });
+    expect(repository.createKnowledgeImport).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when the knowledge import parser rejects a malformed file", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.createKnowledgeImport).mockRejectedValueOnce(new Error("knowledge_upload_invalid_file"));
+    const app = createServer({ repository });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/knowledge-imports`,
+      payload: { fileName: "faq.csv", fileBase64: "YQ==" }
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "knowledge_upload_invalid_file" });
   });
 
   it("lists topic rows with an optional status filter", async () => {

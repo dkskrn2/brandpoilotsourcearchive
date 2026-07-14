@@ -12,7 +12,12 @@ import type {
   InstagramFormatSettingsInput,
   InstagramDmHistory,
   InstagramDmSettings,
+  DmAttentionItem,
+  DmConversationDetail,
+  DmConversationFilter,
+  DmConversationPage,
   KnowledgeImport,
+  KnowledgeImportInput,
   PipelineRunResult,
   PublishSlot,
   PublishResult,
@@ -24,7 +29,8 @@ import type {
   SupportRequestCategory,
   SupportRequestStatus,
   TopicRow,
-  TopicUploadSummary
+  TopicUploadSummary,
+  WikiStatus
 } from "../types";
 
 export let DEMO_BRAND_ID = "00000000-0000-4000-8000-000000000100";
@@ -329,10 +335,16 @@ export function apiClient(options: ApiClientOptions = {}) {
       const query = status ? `?${new URLSearchParams({ status }).toString()}` : "";
       return request<TopicRow[]>(fetcher, `${baseUrl}/brands/${brandId}/topic-rows${query}`, { method: "GET" });
     },
-    importFaq(brandId: string, payload: { fileName: string; fileBase64: string }) {
+    importKnowledge(brandId: string, payload: KnowledgeImportInput) {
       return request<KnowledgeImport>(fetcher, `${baseUrl}/brands/${brandId}/knowledge-imports`, {
         method: "POST",
         body: JSON.stringify(payload),
+      });
+    },
+    importFaq(brandId: string, payload: { fileName: string; fileBase64: string }) {
+      return request<KnowledgeImport>(fetcher, `${baseUrl}/brands/${brandId}/knowledge-imports`, {
+        method: "POST",
+        body: JSON.stringify({ ...payload, entryType: "faq" }),
       });
     },
     listKnowledgeImports(brandId: string) {
@@ -349,6 +361,34 @@ export function apiClient(options: ApiClientOptions = {}) {
     },
     listInstagramDmHistory(brandId: string) {
       return request<InstagramDmHistory[]>(fetcher, `${baseUrl}/brands/${brandId}/instagram-dm/history`, { method: "GET" });
+    },
+    listDmConversations(
+      brandId: string,
+      options: { filter?: DmConversationFilter; cursor?: string; limit?: number } = {}
+    ) {
+      const params = new URLSearchParams();
+      if (options.filter && options.filter !== "all") params.set("filter", options.filter);
+      if (options.cursor) params.set("cursor", options.cursor);
+      if (options.limit) params.set("limit", String(options.limit));
+      const query = params.size > 0 ? `?${params.toString()}` : "";
+      return request<DmConversationPage>(fetcher, `${baseUrl}/brands/${brandId}/dm/conversations${query}`, { method: "GET" });
+    },
+    getDmConversation(brandId: string, conversationId: string) {
+      return request<DmConversationDetail>(fetcher, `${baseUrl}/brands/${brandId}/dm/conversations/${conversationId}`, { method: "GET" });
+    },
+    listDmAttentionItems(brandId: string, type?: DmAttentionItem["type"]) {
+      const query = type ? `?${new URLSearchParams({ type }).toString()}` : "";
+      return request<DmAttentionItem[]>(fetcher, `${baseUrl}/brands/${brandId}/dm/attention-items${query}`, { method: "GET" });
+    },
+    resolveDmAttentionItem(attentionId: string) {
+      return request<{ conversationId: string; automationStatus: "active"; attentionStatus: "resolved" }>(
+        fetcher,
+        `${baseUrl}/dm/attention-items/${attentionId}`,
+        { method: "PATCH", body: JSON.stringify({ status: "resolved" }) }
+      );
+    },
+    getWikiStatus(brandId: string) {
+      return request<WikiStatus>(fetcher, `${baseUrl}/brands/${brandId}/wiki/status`, { method: "GET" });
     },
     crawlSources(brandId: string) {
       return request<PipelineRunResult>(fetcher, `${baseUrl}/brands/${brandId}/sources/crawl`, { method: "POST" });

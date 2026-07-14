@@ -11,12 +11,30 @@ export interface InstagramDmSendResult {
   externalMessageId: string;
 }
 
+export interface InstagramDmSendErrorClassification {
+  status: "failed" | "unknown";
+  errorCode: string;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
 function isTransientMetaError(error: unknown) {
   return error instanceof MetaGraphRequestError && (error.status === 429 || error.status >= 500);
+}
+
+export function classifyInstagramDmSendError(error: unknown): InstagramDmSendErrorClassification {
+  if (error instanceof MetaGraphRequestError) {
+    return { status: "failed", errorCode: `meta_graph_${error.status}` };
+  }
+  const record = asRecord(error);
+  const code = typeof record?.code === "string" ? record.code.toLowerCase() : null;
+  const message = error instanceof Error ? error.message : "instagram_dm_send_failed";
+  return {
+    status: "unknown",
+    errorCode: code ? `instagram_dm_${code}` : message.slice(0, 200),
+  };
 }
 
 export async function sendInstagramDirectMessage(

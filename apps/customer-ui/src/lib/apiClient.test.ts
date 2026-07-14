@@ -73,6 +73,40 @@ describe("apiClient", () => {
     expect(init.headers).not.toHaveProperty("content-type");
   });
 
+  it("uses the DM operations endpoints and filter query", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const href = String(url);
+      if (href.includes("/dm/conversations?")) return new Response(JSON.stringify({ items: [], nextCursor: null }), { status: 200 });
+      if (href.endsWith("/dm/conversations/conversation-1")) return new Response(JSON.stringify({ id: "conversation-1", messages: [], attentionItems: [] }), { status: 200 });
+      if (href.endsWith("/dm/attention-items/attention-1") && init?.method === "PATCH") return new Response(JSON.stringify({ conversationId: "conversation-1", automationStatus: "active", attentionStatus: "resolved" }), { status: 200 });
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await client.listDmConversations("brand-1", { filter: "attention", limit: 20 });
+    await client.getDmConversation("brand-1", "conversation-1");
+    await client.resolveDmAttentionItem("attention-1");
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/brands/brand-1/dm/conversations?filter=attention&limit=20", expect.objectContaining({ method: "GET" }));
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/brands/brand-1/dm/conversations/conversation-1", expect.objectContaining({ method: "GET" }));
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/dm/attention-items/attention-1", expect.objectContaining({ method: "PATCH", body: JSON.stringify({ status: "resolved" }) }));
+  });
+
+  it("sends the knowledge entry type and reads Wiki status", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const href = String(url);
+      if (href.endsWith("/wiki/status")) return new Response(JSON.stringify({ activeVersion: null, latestFailedVersion: null, importStats: { total: 0, succeeded: 0, failed: 0, faqRows: 0, productRows: 0 } }), { status: 200 });
+      return new Response(JSON.stringify({ id: "import-1", entryType: "product" }), { status: 200 });
+    });
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await client.importKnowledge("brand-1", { entryType: "product", fileName: "products.csv", fileBase64: "YQ==" });
+    await client.getWikiStatus("brand-1");
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/brands/brand-1/knowledge-imports", expect.objectContaining({ body: JSON.stringify({ entryType: "product", fileName: "products.csv", fileBase64: "YQ==" }) }));
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/brands/brand-1/wiki/status", expect.objectContaining({ method: "GET" }));
+  });
+
   it("creates sources, reviews content, reads queue, and uploads topic csv", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const href = String(url);

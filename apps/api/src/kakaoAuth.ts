@@ -143,7 +143,7 @@ export function createKakaoAuthStore(pool: Pool) {
       );
       return Boolean(result.rowCount);
     },
-    async canAccessResource(userId: string, table: "source_urls" | "content_outputs" | "publish_queue" | "support_requests", resourceId: string) {
+    async canAccessResource(userId: string, table: "source_urls" | "content_outputs" | "publish_queue" | "support_requests" | "dm_attention_items", resourceId: string) {
       const result = await pool.query(
         `select 1 from ${table} resource join workspace_members wm on wm.workspace_id = resource.workspace_id
          where resource.id = $1 and wm.user_id = $2 and wm.status = 'active' and wm.deleted_at is null`,

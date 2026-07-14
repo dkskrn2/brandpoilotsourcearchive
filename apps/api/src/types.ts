@@ -1,4 +1,5 @@
 import type { DeliveryFormat, InstagramDeliveryFormat } from "./instagramFormats.js";
+import type { DmAttentionType, DmDecision, DmJobRoute, DmReasonCode } from "./dmTypes.js";
 
 export type {
   DeliveryFormat,
@@ -6,6 +7,7 @@ export type {
   InstagramPromptVersion,
   InstagramRenderJobType
 } from "./instagramFormats.js";
+export type { DmAttentionType, DmDecision, DmJobRoute, DmReasonCode } from "./dmTypes.js";
 
 export type Channel = "instagram" | "threads" | "tiktok" | "youtube" | "x";
 export type ChannelStatus =
@@ -35,6 +37,7 @@ export interface InstagramDmSettingsDto {
 
 export interface KnowledgeImportDto {
   id: string;
+  entryType: "faq" | "product";
   fileName: string;
   status: "processing" | "succeeded" | "failed";
   totalRows: number;
@@ -46,6 +49,7 @@ export interface KnowledgeImportDto {
 }
 
 export interface KnowledgeImportInput {
+  entryType?: "faq" | "product";
   fileName: string;
   fileBase64: string;
 }
@@ -566,7 +570,7 @@ export interface InstagramWebhookMessageInput {
   rawPayload: Record<string, unknown>;
 }
 
-export type InstagramWebhookReceiveStatus = "unknown_recipient" | "ignored" | "duplicate" | "disabled" | "wiki_not_ready" | "rate_limited" | "queued" | "unsupported_media";
+export type InstagramWebhookReceiveStatus = "unknown_recipient" | "ignored" | "duplicate" | "disabled" | "paused" | "wiki_not_ready" | "rate_limited" | "queued" | "unsupported_media";
 
 export interface InstagramWebhookReceiveResult {
   status: InstagramWebhookReceiveStatus;
@@ -577,9 +581,14 @@ export interface InstagramWebhookReceiveResult {
 
 export interface DmReplyJobPayload {
   conversationId: string;
+  turnId: string;
   senderId: string;
   messageId: string;
+  route: DmJobRoute;
+  policyReasonCode: DmReasonCode;
+  forceAttentionType: DmAttentionType | null;
   question: string;
+  exactFaqId?: string | null;
 }
 
 export interface DmReplyJobDto {
@@ -597,13 +606,103 @@ export interface DmReplyJobCompletionInput {
   result: import("./dmTypes.js").DmWorkerResult;
 }
 
+export interface DmProfileRefreshJobDto {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  leaseToken: string;
+  payload: {
+    conversationId: string;
+    senderId: string;
+  };
+  attemptCount: number;
+}
+
+export interface DmProfileRefreshJobInput {
+  workerId: string;
+  leaseToken: string;
+}
+
 export interface InstagramDmHistoryDto {
   id: string;
   direction: "inbound" | "outbound";
   messageType: string;
   body: string | null;
-  decision: string | null;
+  decision: DmDecision | null;
   createdAt: string;
+}
+
+export type DmConversationFilter = "all" | "attention" | "complaint" | "unanswered" | "error";
+
+export interface DmParticipantDto {
+  instagramScopedId: string;
+  displayName: string | null;
+  username: string | null;
+  profileImageUrl: string | null;
+}
+
+export interface DmConversationSummaryDto {
+  id: string;
+  participant: DmParticipantDto;
+  lastMessage: { body: string | null; direction: "inbound" | "outbound"; createdAt: string } | null;
+  automationStatus: "active" | "paused";
+  attentionStatus: "none" | "open" | "resolved";
+  openAttentionTypes: DmAttentionType[];
+  unreadCount: number;
+}
+
+export interface DmConversationPageDto {
+  items: DmConversationSummaryDto[];
+  nextCursor: string | null;
+}
+
+export interface DmConversationDetailMessageDto {
+  id: string;
+  direction: "inbound" | "outbound";
+  messageType: string;
+  body: string | null;
+  decision: DmDecision | null;
+  reasonCode: DmReasonCode | null;
+  sourceLabel: string | null;
+  confidence: number | null;
+  deliveryStatus: "prepared" | "sending" | "sent" | "unknown" | "failed" | null;
+  createdAt: string;
+}
+
+export interface DmAttentionItemDto {
+  id: string;
+  conversationId: string;
+  type: DmAttentionType;
+  status: "open" | "resolved";
+  originalMessage: string | null;
+  reason: string | null;
+  autoReplyStatus: "sent" | "not_sent" | "unknown" | null;
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+export interface DmConversationDetailDto extends DmConversationSummaryDto {
+  messages: DmConversationDetailMessageDto[];
+  attentionItems: DmAttentionItemDto[];
+}
+
+export interface WikiVersionSummaryDto {
+  id: string;
+  status: "building" | "active" | "failed";
+  version: number | string;
+  sourceCount: number;
+  documentCount: number;
+  knowledgeEntryCount: number;
+  chunkCount: number;
+  activatedAt: string | null;
+  failedAt: string | null;
+  errorMessage: string | null;
+}
+
+export interface WikiStatusDto {
+  activeVersion: WikiVersionSummaryDto | null;
+  latestFailedVersion: WikiVersionSummaryDto | null;
+  importStats: { total: number; succeeded: number; failed: number; faqRows: number; productRows: number };
 }
 
 export interface ApiRepository {
@@ -642,6 +741,11 @@ export interface ApiRepository {
   getInstagramDmSettings(brandId: string): Promise<InstagramDmSettingsDto>;
   updateInstagramDmSettings(brandId: string, input: Partial<Pick<InstagramDmSettingsDto, "enabled" | "fallbackMessage" | "errorMessage">>): Promise<InstagramDmSettingsDto>;
   listInstagramDmHistory(brandId: string): Promise<InstagramDmHistoryDto[]>;
+  listDmConversations(brandId: string, input: { filter: DmConversationFilter; cursor?: string; limit: number }): Promise<DmConversationPageDto>;
+  getDmConversation(brandId: string, conversationId: string): Promise<DmConversationDetailDto>;
+  listDmAttentionItems(brandId: string, type?: DmAttentionType): Promise<DmAttentionItemDto[]>;
+  resolveDmAttentionItem(attentionId: string): Promise<{ conversationId: string; automationStatus: "active"; attentionStatus: "resolved" }>;
+  getWikiStatus(brandId: string): Promise<WikiStatusDto>;
   listTopicRows(brandId: string, status?: string): Promise<TopicRowDto[]>;
   crawlSources(brandId: string): Promise<PipelineRunResult>;
   crawlSingleSource(brandId: string, sourceId: string, trigger: SourceCrawlTrigger): Promise<SourceCrawlRunDto>;
@@ -676,6 +780,15 @@ export interface ApiRepository {
   heartbeatDmReplyJob(jobId: string, workerId: string, leaseToken: string): Promise<{ id: string; status: string }>;
   completeDmReplyJob(jobId: string, input: DmReplyJobCompletionInput): Promise<{ id: string; status: string; decision: import("./dmTypes.js").DmDecision }>;
   failDmReplyJob(jobId: string, input: {
+    workerId: string;
+    leaseToken: string;
+    error: string;
+    retryable: boolean;
+    retryAfterMs: number;
+  }): Promise<{ id: string; status: string }>;
+  claimDmProfileRefreshJob(workerId: string): Promise<DmProfileRefreshJobDto | null>;
+  runDmProfileRefreshJob(jobId: string, input: DmProfileRefreshJobInput): Promise<{ id: string; status: string }>;
+  failDmProfileRefreshJob(jobId: string, input: {
     workerId: string;
     leaseToken: string;
     error: string;

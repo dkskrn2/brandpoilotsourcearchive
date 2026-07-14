@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { sendInstagramDirectMessage } from "./instagramMessaging.js";
+import { MetaGraphRequestError } from "./metaGraph.js";
+import { classifyInstagramDmSendError, sendInstagramDirectMessage } from "./instagramMessaging.js";
 
 describe("Instagram messaging", () => {
   it("sends a text message through the Instagram Login Graph host", async () => {
@@ -18,5 +19,20 @@ describe("Instagram messaging", () => {
       recipientId: "sender-1",
       text: "안녕하세요",
     }, { graphVersion: "v23.0", fetchImpl })).resolves.toEqual({ externalMessageId: "outbound-1" });
+  });
+
+  it("classifies a clear provider 4xx as failed", () => {
+    expect(classifyInstagramDmSendError(new MetaGraphRequestError({ status: 400, code: 100 }))).toEqual({
+      status: "failed",
+      errorCode: "meta_graph_400",
+    });
+  });
+
+  it.each([
+    new TypeError("fetch failed"),
+    Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
+    new Error("instagram_dm_message_id_missing"),
+  ])("classifies an ambiguous post-call failure as unknown", (error) => {
+    expect(classifyInstagramDmSendError(error)).toEqual({ status: "unknown", errorCode: expect.any(String) });
   });
 });

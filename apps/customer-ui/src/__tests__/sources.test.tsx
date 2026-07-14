@@ -152,6 +152,7 @@ describe("SourcesPage", () => {
     expect(screen.getByRole("tab", { name: "주제표 업로드" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "소스 큐" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "주제 큐" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "FAQ 및 Wiki" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "전체 크롤링" })).toBeInTheDocument();
     expect(await screen.findByRole("columnheader", { name: "소스 구분" })).toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "제목" })).not.toBeInTheDocument();
@@ -353,4 +354,3 @@ describe("SourcesPage", () => {
     expect(await screen.findByRole("button", { name: "다시 활성화 https://api.example.com" })).toBeVisible();
   });
 });
-

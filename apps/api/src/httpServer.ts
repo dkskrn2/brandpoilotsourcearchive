@@ -7,11 +7,11 @@ import type { FastifyInstance } from "fastify";
 import { instagramFormats } from "./instagramFormats.js";
 import { sanitizeInstagramCapabilityMetadata } from "./instagramCapabilities.js";
 import { resolveInstagramConnection } from "./metaGraph.js";
-import { buildInstagramLoginAuthorizeUrl, exchangeInstagramLoginCode, instagramLoginScopes, resolveInstagramLoginConnection } from "./instagramLoginGraph.js";
+import { buildInstagramLoginAuthorizeUrl, exchangeInstagramLoginCode, instagramLoginScopes, resolveInstagramLoginConnection, subscribeInstagramMessagingWebhooks } from "./instagramLoginGraph.js";
 import { parseInstagramMessagingEvents, verifyInstagramSignature } from "./instagramWebhook.js";
 import { parseDmWorkerResult } from "./dmTypes.js";
 import { StoryCapabilityRequiredError } from "./repository.js";
-import type { ApiRepository, Channel, InstagramDeliveryFormat, InstagramFormatSettingsInput, SourceType, SupportRequestCategory, SupportRequestStatus } from "./types.js";
+import type { ApiRepository, Channel, DmAttentionType, DmConversationFilter, InstagramDeliveryFormat, InstagramFormatSettingsInput, SourceType, SupportRequestCategory, SupportRequestStatus } from "./types.js";
 import { createKakaoAuthStore, type KakaoProfile } from "./kakaoAuth.js";
 
 const channels = new Set(["instagram", "threads", "tiktok", "youtube", "x"]);
@@ -19,6 +19,8 @@ const sourceTypes = new Set(["owned", "reference"]);
 const supportRequestCategories = new Set(["bug", "feature", "channel", "account", "other"]);
 const supportRequestStatuses = new Set(["new", "in_progress", "resolved"]);
 const topicRowStatuses = new Set(["uploaded", "queued", "used", "skipped", "invalid", "failed", "disabled"]);
+const dmConversationFilters = new Set<DmConversationFilter>(["all", "attention", "complaint", "unanswered", "error"]);
+const dmAttentionTypes = new Set<DmAttentionType>(["restricted_action", "complaint", "knowledge_gap", "delivery_unknown", "processing_error"]);
 const instagramFormatSet = new Set<string>(instagramFormats);
 const defaultDevBrandId = "00000000-0000-4000-8000-000000000100";
 const maxBrandProfileShortFieldLength = 30;
@@ -142,8 +144,13 @@ function readCookie(header: string | undefined, name: string) {
   return header?.split(";").map((item) => item.trim()).find((item) => item.startsWith(`${name}=`))?.slice(name.length + 1) ?? null;
 }
 
-function cookie(name: string, value: string, maxAge: number, secure = false) {
-  return `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
+function cookie(name: string, value: string, maxAge: number, secure = false, sameSite: "Lax" | "None" = "Lax") {
+  return `${name}=${value}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
+}
+
+function sessionCookie(value: string, maxAge: number) {
+  const secure = process.env.VERCEL === "1";
+  return cookie("bp_session", value, maxAge, secure, secure ? "None" : "Lax");
 }
 
 function kakaoStateCookieName(state: string) {
@@ -199,7 +206,7 @@ export function createServer(
       reply.code(404).send({ error: message });
       return;
     }
-    if (message === "topic_upload_invalid_csv" || message === "faq_upload_invalid_file") {
+    if (message === "topic_upload_invalid_csv" || message === "faq_upload_invalid_file" || message === "knowledge_upload_invalid_file") {
       reply.code(400).send({ error: message });
       return;
     }
@@ -212,6 +219,10 @@ export function createServer(
       return;
     }
     if (message === "source_reference_limit_exceeded") {
+      reply.code(400).send({ error: message });
+      return;
+    }
+    if (message === "dm_cursor_invalid") {
       reply.code(400).send({ error: message });
       return;
     }
@@ -238,7 +249,7 @@ export function createServer(
   });
 
   app.addHook("preHandler", async (request, reply) => {
-    if (!kakaoAuth || request.url.startsWith("/health") || request.url.startsWith("/auth/") || request.url.startsWith("/webhooks/") || request.url.startsWith("/worker/") || request.url.startsWith("/internal/cron/")) return;
+    if (!kakaoAuth || request.url.startsWith("/health") || request.url.startsWith("/auth/") || request.url.startsWith("/webhooks/") || request.url.startsWith("/worker/") || request.url.startsWith("/workers/") || request.url.startsWith("/internal/cron/")) return;
     const token = readCookie(request.headers.cookie, "bp_session");
     const session = token ? await kakaoAuth.getSession(token) : null;
     if (!session) {
@@ -258,6 +269,8 @@ export function createServer(
             ? await kakaoAuth.canAccessResource(session.userId, "publish_queue", params.queueId)
             : params.requestId
               ? await kakaoAuth.canAccessResource(session.userId, "support_requests", params.requestId)
+            : params.attentionId
+              ? await kakaoAuth.canAccessResource(session.userId, "dm_attention_items", params.attentionId)
             : route === "/health";
     if (!permitted) {
       reply.code(403).send({ error: "workspace_access_denied" });
@@ -303,8 +316,18 @@ export function createServer(
         return { error: "webhook_signature_invalid" };
       }
       const events = parseInstagramMessagingEvents(request.body);
-      for (const event of events) await repository.receiveInstagramWebhookMessage(event);
-      return { ok: true, received: events.length };
+      const outcomes: string[] = [];
+      for (const event of events) {
+        const result = await repository.receiveInstagramWebhookMessage(event);
+        outcomes.push(result.status);
+      }
+      request.log.info({
+        event: "instagram_webhook_processed",
+        received: events.length,
+        outcomes,
+        recipientIds: [...new Set(events.map((event) => event.recipientId))],
+      }, "instagram_webhook_processed");
+      return { ok: true, received: events.length, outcomes };
     });
   });
 
@@ -403,14 +426,14 @@ export function createServer(
     const profile: KakaoProfile = { subject: String(profilePayload.id), nickname: typeof properties.nickname === "string" ? properties.nickname : null, email: typeof account.email === "string" ? account.email : null };
     const session = await kakaoAuth.createOrLoadUser(profile);
     const sessionToken = await kakaoAuth.createSession(session.userId);
-    reply.header("set-cookie", [cookie("bp_session", sessionToken, 60 * 60 * 24 * 7, process.env.VERCEL === "1"), clearStateCookie]);
+    reply.header("set-cookie", [sessionCookie(sessionToken, 60 * 60 * 24 * 7), clearStateCookie]);
     return reply.redirect(`${kakao.frontendUrl}/onboarding`);
   });
 
   app.post("/auth/logout", async (request, reply) => {
     const token = readCookie(request.headers.cookie, "bp_session");
     if (token && kakaoAuth) await kakaoAuth.revokeSession(token);
-    reply.header("set-cookie", cookie("bp_session", "", 0, process.env.VERCEL === "1"));
+    reply.header("set-cookie", sessionCookie("", 0));
     return { ok: true };
   });
 
@@ -470,6 +493,10 @@ export function createServer(
         redirectUri: instagramLogin.redirectUri,
       });
       const connection = await resolveInstagramLoginConnection({ accessToken: token.accessToken });
+      await subscribeInstagramMessagingWebhooks({
+        accessToken: token.accessToken,
+        instagramBusinessAccountId: connection.instagramBusinessAccountId,
+      });
       const accountLabel = connection.instagramUsername
         ? `@${connection.instagramUsername}`
         : "Instagram professional account";
@@ -871,6 +898,11 @@ export function createServer(
   });
 
   app.post<{ Params: { brandId: string }; Body: Record<string, unknown> }>("/brands/:brandId/knowledge-imports", async (request, reply) => {
+    const entryType = request.body?.entryType ?? "faq";
+    if (entryType !== "faq" && entryType !== "product") {
+      reply.code(400);
+      return { error: "knowledge_import_entry_type_invalid" };
+    }
     if (
       typeof request.body?.fileName !== "string" ||
       request.body.fileName.trim().length === 0 ||
@@ -881,6 +913,7 @@ export function createServer(
       return { error: "faq_upload_file_required" };
     }
     const imported = await repository.createKnowledgeImport(request.params.brandId, {
+      entryType,
       fileName: request.body.fileName,
       fileBase64: request.body.fileBase64,
     });
@@ -896,6 +929,61 @@ export function createServer(
     const job = await repository.enqueueWikiRefresh(request.params.brandId);
     reply.code(202);
     return job;
+  });
+
+  app.get<{
+    Params: { brandId: string };
+    Querystring: { filter?: string; cursor?: string; limit?: string };
+  }>("/brands/:brandId/dm/conversations", async (request, reply) => {
+    const filter = request.query.filter ?? "all";
+    const limit = request.query.limit === undefined ? 20 : Number(request.query.limit);
+    if (!dmConversationFilters.has(filter as DmConversationFilter) || !Number.isInteger(limit) || limit < 1 || limit > 100) {
+      reply.code(400);
+      return { error: "dm_conversation_query_invalid" };
+    }
+    return repository.listDmConversations(request.params.brandId, {
+      filter: filter as DmConversationFilter,
+      cursor: request.query.cursor,
+      limit,
+    });
+  });
+
+  app.get<{ Params: { brandId: string; conversationId: string } }>(
+    "/brands/:brandId/dm/conversations/:conversationId",
+    async (request, reply) => {
+      if (!uuidPattern.test(request.params.conversationId)) {
+        reply.code(400);
+        return { error: "dm_conversation_id_invalid" };
+      }
+      return repository.getDmConversation(request.params.brandId, request.params.conversationId);
+    },
+  );
+
+  app.get<{
+    Params: { brandId: string };
+    Querystring: { type?: string };
+  }>("/brands/:brandId/dm/attention-items", async (request, reply) => {
+    const type = request.query.type;
+    if (type && !dmAttentionTypes.has(type as DmAttentionType)) {
+      reply.code(400);
+      return { error: "dm_attention_type_invalid" };
+    }
+    return repository.listDmAttentionItems(request.params.brandId, type as DmAttentionType | undefined);
+  });
+
+  app.patch<{
+    Params: { attentionId: string };
+    Body: Record<string, unknown>;
+  }>("/dm/attention-items/:attentionId", async (request, reply) => {
+    if (!uuidPattern.test(request.params.attentionId) || request.body?.status !== "resolved") {
+      reply.code(400);
+      return { error: "dm_attention_resolution_invalid" };
+    }
+    return repository.resolveDmAttentionItem(request.params.attentionId);
+  });
+
+  app.get<{ Params: { brandId: string } }>("/brands/:brandId/wiki/status", async (request) => {
+    return repository.getWikiStatus(request.params.brandId);
   });
 
   app.get<{ Params: { brandId: string }; Querystring: { status?: string } }>("/brands/:brandId/topic-rows", async (request, reply) => {
@@ -1205,6 +1293,68 @@ export function createServer(
       return { error: "worker_id_required" };
     }
     return repository.heartbeatDmWorker(request.body.workerId.trim());
+  });
+
+  app.post<{ Body: Record<string, unknown> }>("/workers/dm/profile-jobs/claim", async (request, reply) => {
+    try {
+      assertWorkerAuthentication(request.headers.authorization);
+    } catch (error) {
+      reply.code(error instanceof Error && error.message === "worker_api_not_configured" ? 503 : 401);
+      return { error: error instanceof Error ? error.message : "worker_api_unauthorized" };
+    }
+    if (typeof request.body?.workerId !== "string" || !request.body.workerId.trim()) {
+      reply.code(400);
+      return { error: "worker_id_required" };
+    }
+    const job = await repository.claimDmProfileRefreshJob(request.body.workerId.trim());
+    if (!job) {
+      reply.code(204);
+      return reply.send();
+    }
+    return job;
+  });
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>("/workers/dm/profile-jobs/:jobId/run", async (request, reply) => {
+    try {
+      assertWorkerAuthentication(request.headers.authorization);
+    } catch (error) {
+      reply.code(error instanceof Error && error.message === "worker_api_not_configured" ? 503 : 401);
+      return { error: error instanceof Error ? error.message : "worker_api_unauthorized" };
+    }
+    if (typeof request.body?.workerId !== "string" || typeof request.body?.leaseToken !== "string") {
+      reply.code(400);
+      return { error: "worker_id_and_lease_token_required" };
+    }
+    return repository.runDmProfileRefreshJob(request.params.jobId, {
+      workerId: request.body.workerId,
+      leaseToken: request.body.leaseToken,
+    });
+  });
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>("/workers/dm/profile-jobs/:jobId/fail", async (request, reply) => {
+    try {
+      assertWorkerAuthentication(request.headers.authorization);
+    } catch (error) {
+      reply.code(error instanceof Error && error.message === "worker_api_not_configured" ? 503 : 401);
+      return { error: error instanceof Error ? error.message : "worker_api_unauthorized" };
+    }
+    if (
+      typeof request.body?.workerId !== "string"
+      || typeof request.body?.leaseToken !== "string"
+      || typeof request.body?.error !== "string"
+      || typeof request.body?.retryable !== "boolean"
+      || typeof request.body?.retryAfterMs !== "number"
+    ) {
+      reply.code(400);
+      return { error: "worker_failure_fields_required" };
+    }
+    return repository.failDmProfileRefreshJob(request.params.jobId, {
+      workerId: request.body.workerId,
+      leaseToken: request.body.leaseToken,
+      error: request.body.error,
+      retryable: request.body.retryable,
+      retryAfterMs: request.body.retryAfterMs,
+    });
   });
 
   return app;

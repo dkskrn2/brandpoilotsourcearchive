@@ -54,6 +54,16 @@ afterEach(() => {
 async function renderChannelsPage(apiOverrides: Partial<Record<string, ReturnType<typeof vi.fn>>> = {}) {
   const api = {
     listChannels: vi.fn(async () => apiChannels),
+    getInstagramDmSettings: vi.fn(async () => ({
+      brandId: "brand-1",
+      enabled: false,
+      fallbackMessage: "담당자가 확인하겠습니다.",
+      errorMessage: "잠시 후 다시 문의해 주세요.",
+      wikiReady: true,
+      messagePermissionReady: true,
+      webhookStatus: "connected",
+      workerStatus: "online"
+    })),
     getChannelConnectionRequest: vi.fn(),
     updateChannelConnectionRequest: vi.fn(),
     checkChannel: vi.fn(async (_brandId: string, type: ChannelType) => apiChannels.find((channel) => channel.type === type)),
@@ -100,7 +110,7 @@ describe("ChannelsPage", () => {
     const link = await screen.findByRole("link", { name: /Meta/ });
     expect(link).toHaveAttribute(
       "href",
-      "https://www.danbammsg.co.kr/api/auth/meta/start?dev_redirect=http%3A%2F%2Flocalhost%3A4000%2Fauth%2Fmeta%2Fdev-complete"
+      "http://localhost:4000/auth/meta/start"
     );
     expect(screen.queryByRole("button", { name: "연결 확인" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "전체 연결 확인" })).not.toBeInTheDocument();

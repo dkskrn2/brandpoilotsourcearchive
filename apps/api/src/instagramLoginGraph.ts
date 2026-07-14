@@ -11,6 +11,12 @@ export interface InstagramLoginConnection {
   instagramUsername: string | null;
 }
 
+export interface InstagramMessagingProfile {
+  name: string | null;
+  username: string;
+  profilePictureUrl: string | null;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
@@ -50,19 +56,68 @@ export async function resolveInstagramLoginConnection({
   graphVersion?: string;
 }): Promise<InstagramLoginConnection> {
   const url = new URL(`https://graph.instagram.com/${graphVersion}/me`);
-  url.searchParams.set("fields", "id,username");
+  url.searchParams.set("fields", "id,user_id,username");
   url.searchParams.set("access_token", accessToken);
   const payload = asRecord(await readJson(await fetchImpl(url.toString(), { method: "GET" })));
-  const accountId = typeof payload?.id === "string"
-    ? payload.id
-    : typeof payload?.user_id === "string"
-      ? payload.user_id
+  const accountId = typeof payload?.user_id === "string"
+    ? payload.user_id
+    : typeof payload?.id === "string"
+      ? payload.id
       : null;
   if (!accountId) throw new Error("meta_instagram_business_account_not_found");
   return {
     instagramBusinessAccountId: accountId,
     instagramUsername: typeof payload?.username === "string" ? payload.username : null,
   };
+}
+
+export async function fetchInstagramMessagingProfile({
+  accessToken,
+  senderId,
+  fetchImpl = fetch,
+  graphVersion = process.env.META_GRAPH_VERSION || "v23.0",
+}: {
+  accessToken: string;
+  senderId: string;
+  fetchImpl?: typeof fetch;
+  graphVersion?: string;
+}): Promise<InstagramMessagingProfile> {
+  const url = new URL(`https://graph.instagram.com/${graphVersion}/${encodeURIComponent(senderId)}`);
+  url.searchParams.set("fields", "name,username,profile_pic");
+  const payload = asRecord(await readJson(await fetchImpl(url.toString(), {
+    method: "GET",
+    headers: { authorization: `Bearer ${accessToken}` },
+  })));
+  const suffix = senderId.slice(-6) || senderId;
+  return {
+    name: typeof payload?.name === "string" && payload.name.trim() ? payload.name.trim() : null,
+    username: typeof payload?.username === "string" && payload.username.trim()
+      ? payload.username.trim()
+      : `사용자-${suffix}`,
+    profilePictureUrl: typeof payload?.profile_pic === "string" && payload.profile_pic.trim()
+      ? payload.profile_pic.trim()
+      : null,
+  };
+}
+
+export async function subscribeInstagramMessagingWebhooks({
+  accessToken,
+  instagramBusinessAccountId,
+  fetchImpl = fetch,
+  graphVersion = process.env.META_GRAPH_VERSION || "v23.0",
+}: {
+  accessToken: string;
+  instagramBusinessAccountId: string;
+  fetchImpl?: typeof fetch;
+  graphVersion?: string;
+}) {
+  const url = new URL(`https://graph.instagram.com/${graphVersion}/${encodeURIComponent(instagramBusinessAccountId)}/subscribed_apps`);
+  url.searchParams.set("subscribed_fields", "messages,messaging_postbacks");
+  const payload = asRecord(await readJson(await fetchImpl(url.toString(), {
+    method: "POST",
+    headers: { authorization: `Bearer ${accessToken}` },
+  })));
+  if (payload?.success !== true) throw new Error("instagram_webhook_subscription_failed");
 }
 
 export async function exchangeInstagramLoginCode({
