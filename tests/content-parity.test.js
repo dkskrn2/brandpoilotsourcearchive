@@ -274,6 +274,24 @@ test("admin article form uses the local Naver SmartEditor adapter safely", () =>
   assert.ok(fs.existsSync(path.join(root, "public/vendor/smarteditor2/js/service/HuskyEZCreator.js")));
 });
 
+test("admin analytics uses the GA4 Data API without exposing service credentials", () => {
+  const analytics = read("lib/google-analytics.ts");
+  const analyticsPage = read("app/admin/analytics/page.tsx");
+  const sidebar = read("components/admin-sidebar.tsx");
+  const contactForm = read("components/contact-form.tsx");
+
+  assert.match(analytics, /analyticsdata\.googleapis\.com\/v1beta\/properties/);
+  assert.match(analytics, /GA4_PROPERTY_ID/);
+  assert.match(analytics, /GA4_SERVICE_ACCOUNT_PRIVATE_KEY/);
+  assert.match(analytics, /analytics\.readonly/);
+  assert.match(analyticsPage, /getAnalyticsDashboard/);
+  assert.match(analyticsPage, /상위 페이지/);
+  assert.match(analyticsPage, /유입 채널/);
+  assert.match(sidebar, /href="\/admin\/analytics"/);
+  assert.match(contactForm, /generate_lead/);
+  assert.doesNotMatch(analyticsPage, /GA4_SERVICE_ACCOUNT_PRIVATE_KEY/);
+});
+
 test("admin article categories come from one controlled list", () => {
   const form = read("components/admin-article-form.tsx");
   const actions = read("app/admin/actions.ts");

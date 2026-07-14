@@ -40,6 +40,9 @@ export function ContactForm({ locale = "ko" }: { locale?: "ko" | "en" }) {
         body: JSON.stringify(payload)
       });
       if (!response.ok) throw new Error("Submit failed");
+      if (typeof window.gtag === "function") {
+        window.gtag("event", "generate_lead", { form_name: "contact_consultation", locale });
+      }
       setStatus({ message: english ? "Your enquiry has been submitted. We will review it and get back to you shortly." : "제출이 완료되었습니다. 빠르게 확인 후 연락드리겠습니다.", error: false });
       form.reset();
     } catch {
@@ -100,4 +103,10 @@ export function ContactForm({ locale = "ko" }: { locale?: "ko" | "en" }) {
       </section>
     </main>
   );
+}
+
+declare global {
+  interface Window {
+    gtag?: (command: "event", eventName: string, parameters?: Record<string, string>) => void;
+  }
 }

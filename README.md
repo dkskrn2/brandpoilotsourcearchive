@@ -18,6 +18,9 @@ Next.js 기반 GROWTHLINE 사이트와 PostgreSQL 관리자입니다. 공개 사
 | `BLOB_STORE_ID` + `VERCEL_OIDC_TOKEN` | 이미지 업로드 | Vercel Blob 연결 시 자동 주입 |
 | `BLOB_READ_WRITE_TOKEN` | 로컬 선택 | 로컬 개발에서 Blob 업로드를 테스트할 때만 사용 |
 | `NEXT_PUBLIC_GA_MEASUREMENT_ID` | 선택 | GA4 측정 ID (`G-...`) |
+| `GA4_PROPERTY_ID` | 분석 대시보드 | 숫자로 된 GA4 Property ID |
+| `GA4_SERVICE_ACCOUNT_EMAIL` | 분석 대시보드 | GA4 속성에 뷰어 권한을 받은 Google Cloud 서비스 계정 이메일 |
+| `GA4_SERVICE_ACCOUNT_PRIVATE_KEY` | 분석 대시보드 | 해당 서비스 계정의 PEM 개인 키 |
 
 `ADMIN_SESSION_SECRET` 예시 생성 명령:
 
