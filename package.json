@@ -14,6 +14,8 @@
     "dev:ui": "npm run dev --workspace @brand-pilot/customer-ui",
     "dev:worker": "npm run dev --workspace @brand-pilot/image-worker",
     "worker:once": "npm run run-once --workspace @brand-pilot/image-worker",
+    "dev:dm-worker": "npm run dev --workspace @brand-pilot/dm-worker",
+    "dm-worker:once": "npm run once --workspace @brand-pilot/dm-worker",
     "worker:control": "npm run control --workspace @brand-pilot/image-worker",
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
