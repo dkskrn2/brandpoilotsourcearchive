@@ -28,9 +28,9 @@ export const metadata: Metadata = {
 
 export default async function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   const locale = (await headers()).get(SITE_LOCALE_HEADER) === "en" ? "en" : "ko";
-  return <html lang={locale} className={notoSansKr.variable}><body>
+  return <html lang={locale} className={notoSansKr.variable}><head><GoogleAnalytics /></head><body>
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(organizationJsonLd) }} />
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(websiteJsonLd) }} />
-    <SiteHeader />{children}<SiteFooter /><GoogleAnalytics />
+    <SiteHeader />{children}<SiteFooter />
   </body></html>;
 }
