@@ -104,14 +104,16 @@ export async function getMetaGraphJson({
   path,
   params,
   fetchImpl,
-  graphVersion
+  graphVersion,
+  host = "graph.facebook.com"
 }: {
   path: string;
   params: Record<string, string>;
   fetchImpl: typeof fetch;
   graphVersion: string;
+  host?: "graph.facebook.com" | "graph.instagram.com";
 }) {
-  const url = new URL(`https://graph.facebook.com/${graphVersion}/${path.replace(/^\//, "")}`);
+  const url = new URL(`https://${host}/${graphVersion}/${path.replace(/^\//, "")}`);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
   return readGraphResponse(await fetchImpl(url.toString(), { method: "GET" }));
 }
@@ -120,14 +122,16 @@ export async function postMetaGraphForm({
   path,
   body,
   fetchImpl,
-  graphVersion
+  graphVersion,
+  host = "graph.facebook.com"
 }: {
   path: string;
   body: Record<string, string>;
   fetchImpl: typeof fetch;
   graphVersion: string;
+  host?: "graph.facebook.com" | "graph.instagram.com";
 }) {
-  const url = `https://graph.facebook.com/${graphVersion}/${path.replace(/^\//, "")}`;
+  const url = `https://${host}/${graphVersion}/${path.replace(/^\//, "")}`;
   return readGraphResponse(await fetchImpl(url, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },

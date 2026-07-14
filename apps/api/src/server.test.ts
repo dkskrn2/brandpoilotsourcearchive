@@ -957,6 +957,59 @@ describe("API server", () => {
     );
   });
 
+  it("connects an Instagram Login account with a state-validated OAuth callback", async () => {
+    const repository = createRepository();
+    const app = createServer({
+      repository,
+      instagramLogin: {
+        appId: "instagram-app-id",
+        appSecret: "instagram-app-secret",
+        redirectUri: "http://localhost:4000/auth/meta/callback",
+        frontendUrl: "http://localhost:5173",
+      },
+      logger: false,
+    });
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url === "https://api.instagram.com/oauth/access_token") {
+        return new Response(JSON.stringify({ access_token: "short-lived-token", expires_in: 3600 }), { status: 200 });
+      }
+      if (url.startsWith("https://graph.instagram.com/access_token")) {
+        return new Response(JSON.stringify({ access_token: "long-lived-token", expires_in: 5_184_000 }), { status: 200 });
+      }
+      if (url.startsWith("https://graph.instagram.com/v23.0/me")) {
+        return new Response(JSON.stringify({ id: "17890000000000000", username: "growthline352" }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ error: { message: "unexpected_url" } }), { status: 400 });
+    }));
+
+    const start = await app.inject({ method: "GET", url: "/auth/meta/start" });
+    expect(start.statusCode).toBe(302);
+    const authorizeUrl = new URL(start.headers.location ?? "");
+    expect(authorizeUrl.hostname).toBe("www.instagram.com");
+    expect(authorizeUrl.searchParams.get("scope")).toContain("instagram_business_manage_messages");
+    const state = authorizeUrl.searchParams.get("state");
+    const stateCookie = String(start.headers["set-cookie"]);
+
+    const callback = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?code=oauth-code&state=${state}`,
+      headers: { cookie: stateCookie },
+    });
+
+    expect(callback.statusCode).toBe(302);
+    expect(callback.headers.location).toBe("http://localhost:5173/channels?instagram=connected");
+    expect(repository.saveChannelCredentials).toHaveBeenCalledWith(
+      "00000000-0000-4000-8000-000000000100",
+      "instagram",
+      expect.objectContaining({
+        accountLabel: "@growthline352",
+        authMode: "instagram_login",
+        externalAccountId: "17890000000000000",
+        secretValue: "long-lived-token",
+      }),
+    );
+  });
+
   it("rejects Meta OAuth dev completion without an access token", async () => {
     const app = createServer({ repository: createRepository() });
 

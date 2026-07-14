@@ -1,11 +1,12 @@
 import cors from "@fastify/cors";
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import Fastify, { LogController } from "fastify";
 import type { FastifyLoggerOptions } from "fastify/types/logger";
 import type { FastifyInstance } from "fastify";
 import { instagramFormats } from "./instagramFormats.js";
 import { sanitizeInstagramCapabilityMetadata } from "./instagramCapabilities.js";
 import { resolveInstagramConnection } from "./metaGraph.js";
+import { buildInstagramLoginAuthorizeUrl, exchangeInstagramLoginCode, instagramLoginScopes, resolveInstagramLoginConnection } from "./instagramLoginGraph.js";
 import { StoryCapabilityRequiredError } from "./repository.js";
 import type { ApiRepository, Channel, InstagramDeliveryFormat, InstagramFormatSettingsInput, SourceType, SupportRequestCategory, SupportRequestStatus } from "./types.js";
 import { createKakaoAuthStore, type KakaoProfile } from "./kakaoAuth.js";
@@ -19,6 +20,7 @@ const instagramFormatSet = new Set<string>(instagramFormats);
 const defaultDevBrandId = "00000000-0000-4000-8000-000000000100";
 const maxBrandProfileShortFieldLength = 30;
 const kakaoStateCookiePrefix = "bp_kakao_state_";
+const instagramLoginStateCookie = "bp_instagram_login_state";
 const uuidPattern = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 
 interface CreateServerOptions {
@@ -27,6 +29,7 @@ interface CreateServerOptions {
   cronSecret?: string;
   kakaoAuth?: ReturnType<typeof createKakaoAuthStore>;
   kakao?: { restApiKey: string; clientSecret?: string; redirectUri: string; frontendUrl: string };
+  instagramLogin?: { appId: string; appSecret: string; redirectUri: string; frontendUrl: string };
   logger?: boolean | FastifyLoggerOptions;
 }
 
@@ -177,7 +180,7 @@ export function createFastifyOptions(logger?: boolean | FastifyLoggerOptions) {
 }
 
 export function createServer(
-  { repository, workerApiToken, cronSecret, kakaoAuth, kakao, logger }: CreateServerOptions,
+  { repository, workerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, logger }: CreateServerOptions,
   app: FastifyInstance = Fastify(createFastifyOptions(logger))
 ) {
   void app.register(cors, { origin: true, credentials: true, methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] });
@@ -369,6 +372,86 @@ export function createServer(
     return { ok: true };
   });
 
+  app.get("/auth/meta/start", async (request, reply) => {
+    if (!instagramLogin?.appId || !instagramLogin.appSecret || !instagramLogin.redirectUri) {
+      reply.code(503);
+      return { error: "instagram_login_not_configured" };
+    }
+    if (kakaoAuth) {
+      const token = readCookie(request.headers.cookie, "bp_session");
+      const session = token ? await kakaoAuth.getSession(token) : null;
+      if (!session) {
+        reply.code(401);
+        return { error: "authentication_required" };
+      }
+    }
+    const state = randomUUID();
+    reply.header("set-cookie", cookie(instagramLoginStateCookie, state, 10 * 60, process.env.VERCEL === "1"));
+    return reply.redirect(buildInstagramLoginAuthorizeUrl({
+      appId: instagramLogin.appId,
+      redirectUri: instagramLogin.redirectUri,
+      state,
+    }));
+  });
+
+  app.get<{
+    Querystring: { code?: string; state?: string; error?: string; error_description?: string };
+  }>("/auth/meta/callback", async (request, reply) => {
+    const clearState = cookie(instagramLoginStateCookie, "", 0, process.env.VERCEL === "1");
+    if (!instagramLogin?.appId || !instagramLogin.appSecret || !instagramLogin.redirectUri) {
+      reply.header("set-cookie", clearState).code(503);
+      return { error: "instagram_login_not_configured" };
+    }
+    if (request.query.error) {
+      reply.header("set-cookie", clearState).code(400);
+      return { error: request.query.error, errorDescription: request.query.error_description ?? null };
+    }
+    if (!request.query.code || request.query.state !== readCookie(request.headers.cookie, instagramLoginStateCookie)) {
+      reply.header("set-cookie", clearState).code(400);
+      return { error: "meta_oauth_state_invalid" };
+    }
+    let brandId = process.env.BRAND_PILOT_DEV_BRAND_ID ?? defaultDevBrandId;
+    if (kakaoAuth) {
+      const token = readCookie(request.headers.cookie, "bp_session");
+      const session = token ? await kakaoAuth.getSession(token) : null;
+      if (!session) {
+        reply.header("set-cookie", clearState).code(401);
+        return { error: "authentication_required" };
+      }
+      brandId = session.brandId;
+    }
+    try {
+      const token = await exchangeInstagramLoginCode({
+        code: request.query.code,
+        appId: instagramLogin.appId,
+        appSecret: instagramLogin.appSecret,
+        redirectUri: instagramLogin.redirectUri,
+      });
+      const connection = await resolveInstagramLoginConnection({ accessToken: token.accessToken });
+      const accountLabel = connection.instagramUsername
+        ? `@${connection.instagramUsername}`
+        : "Instagram professional account";
+      await repository.saveChannelCredentials(brandId, "instagram", {
+        accountLabel,
+        connectionStatus: "connected",
+        credentialType: "oauth",
+        externalAccountId: connection.instagramBusinessAccountId,
+        expiresAt: token.expiresIn ? new Date(Date.now() + token.expiresIn * 1000).toISOString() : null,
+        maskedDisplay: tokenPreview(token.accessToken),
+        provider: "meta",
+        scopes: [...instagramLoginScopes],
+        secretValue: token.accessToken,
+        authMode: "instagram_login",
+      });
+      reply.header("set-cookie", clearState);
+      return reply.redirect(`${instagramLogin.frontendUrl}/channels?instagram=connected`);
+    } catch (error) {
+      request.log.warn({ event: "instagram_login_callback_failed", errorCode: safeInternalErrorCode(error) }, "instagram_login_callback_failed");
+      reply.header("set-cookie", clearState).code(400);
+      return { error: "meta_instagram_connection_failed" };
+    }
+  });
+
   app.get<{
     Querystring: {
       access_token?: string;
@@ -381,6 +464,10 @@ export function createServer(
       token_type?: string;
     }
   }>("/auth/meta/dev-complete", async (request, reply) => {
+    if (process.env.VERCEL === "1") {
+      reply.code(404);
+      return { error: "not_found" };
+    }
     if (request.query.status === "error" || request.query.error) {
       reply.code(400);
       return {
@@ -441,7 +528,8 @@ export function createServer(
       maskedDisplay,
       provider: "meta",
       scopes,
-      secretValue: credentialToken
+      secretValue: credentialToken,
+      authMode: "facebook_login"
     });
 
     reply.type("text/html; charset=utf-8");

@@ -1006,7 +1006,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                co.delivery_format, co.output_json,
                sa.public_url as rendered_manifest_url,
                bc.external_account_id,
-               cc.id as credential_id, cc.encrypted_payload,
+               cc.id as credential_id, cc.encrypted_payload, cc.auth_mode,
                bcf.capability_status, bcf.capability_metadata,
                coalesce((select max(pa.attempt_number) from publish_attempts pa where pa.publish_queue_id = pq.id), 0) + 1 as attempt_number
          from claimed pq
@@ -1058,9 +1058,13 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         if (manifestDeliveryFormat && manifestDeliveryFormat !== deliveryFormat) {
           throw new Error("instagram_manifest_delivery_format_mismatch");
         }
+        const graphHost: "graph.facebook.com" | "graph.instagram.com" = queue.auth_mode === "instagram_login"
+          ? "graph.instagram.com"
+          : "graph.facebook.com";
         const baseInput = {
           accessToken: decryptCredential(queue.encrypted_payload),
-          instagramBusinessAccountId: queue.external_account_id
+          instagramBusinessAccountId: queue.external_account_id,
+          graphHost
         };
         let publishInput: InstagramPublishInput;
         let assetCount: number;
@@ -1681,9 +1685,9 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         await client.query(
           `insert into channel_credentials (
              workspace_id, brand_id, brand_channel_id, provider, credential_type, encrypted_payload,
-             masked_display, scopes, expires_at, status
+             masked_display, scopes, expires_at, status, auth_mode
            )
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active')
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', $10)
            returning id`,
           [
             brandChannel.workspace_id,
@@ -1694,7 +1698,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             encryptCredential(input.secretValue),
             input.maskedDisplay ?? null,
             input.scopes ?? [],
-            input.expiresAt ?? null
+            input.expiresAt ?? null,
+            input.authMode ?? "facebook_login"
           ]
         );
         await client.query(

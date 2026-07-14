@@ -22,6 +22,12 @@ const app = createServer(
       clientSecret: process.env.KAKAO_CLIENT_SECRET,
       redirectUri: process.env.KAKAO_REDIRECT_URI ?? "",
       frontendUrl: process.env.AUTH_FRONTEND_URL ?? "http://localhost:5173"
+    },
+    instagramLogin: {
+      appId: process.env.META_APP_ID ?? "",
+      appSecret: process.env.META_APP_SECRET ?? "",
+      redirectUri: process.env.META_OAUTH_REDIRECT_URI ?? "",
+      frontendUrl: process.env.AUTH_FRONTEND_URL ?? "http://localhost:5173"
     }
   },
   Fastify(createFastifyOptions())

@@ -275,6 +275,7 @@ export interface CredentialInput {
   credentialType?: "oauth" | "api_token";
   scopes?: string[];
   expiresAt?: string | null;
+  authMode?: "facebook_login" | "instagram_login";
 }
 
 export interface ContentOutputDto {
