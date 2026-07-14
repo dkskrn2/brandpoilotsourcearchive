@@ -1,19 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "fastify",
-  "regions": ["bom1"],
-  "crons": [
-    {
-      "path": "/internal/cron/source-crawl",
-      "schedule": "*/15 * * * *"
-    },
-    {
-      "path": "/internal/cron/daily-generation",
-      "schedule": "0 1 * * *"
-    },
-    {
-      "path": "/internal/cron/publish-due",
-      "schedule": "*/5 * * * *"
-    }
-  ]
+  "regions": ["bom1"]
 }
