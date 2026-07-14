@@ -61,6 +61,7 @@ function errorMessage(error: unknown, fallback: string) {
 
 function refreshContent(slug?: string) {
   revalidatePath("/admin");
+  revalidatePath("/admin/content");
   revalidatePath("/content");
   revalidatePath("/sitemap.xml");
   if (slug) revalidatePath(`/content/${slug}`);
@@ -74,13 +75,13 @@ export async function createArticleAction(formData: FormData) {
     redirect(`/admin/content/new?error=${encodeURIComponent(errorMessage(error, "저장하지 못했습니다."))}`);
   }
   refreshContent();
-  redirect(`/admin?notice=${encodeURIComponent("콘텐츠를 저장했습니다.")}#content`);
+  redirect(`/admin/content?notice=${encodeURIComponent("콘텐츠를 저장했습니다.")}`);
 }
 
 export async function updateArticleAction(id: number, formData: FormData) {
   await requireAdminSession(`/admin/content/${id}`);
   const previous = await getArticleById(id);
-  if (!previous) redirect("/admin?error=not-found");
+  if (!previous) redirect("/admin/content?error=not-found");
   let input: ArticleInput;
   try {
     input = parseArticleInput(formData);
@@ -90,11 +91,11 @@ export async function updateArticleAction(id: number, formData: FormData) {
   }
   refreshContent(previous.slug);
   refreshContent(input.slug);
-  redirect(`/admin?notice=${encodeURIComponent("수정 사항을 저장했습니다.")}#content`);
+  redirect(`/admin/content?notice=${encodeURIComponent("수정 사항을 저장했습니다.")}`);
 }
 
 export async function toggleArticleStatusAction(id: number, formData: FormData) {
-  await requireAdminSession("/admin");
+  await requireAdminSession("/admin/content");
   const article = await getArticleById(id);
   if (!article) return;
   const status = value(formData, "status") as ArticleStatus;
@@ -106,8 +107,8 @@ export async function toggleArticleStatusAction(id: number, formData: FormData) 
 export async function deleteArticleAction(id: number) {
   await requireAdminSession(`/admin/content/${id}`);
   const article = await getArticleById(id);
-  if (!article) redirect("/admin");
+  if (!article) redirect("/admin/content");
   await deleteArticle(id);
   refreshContent(article.slug);
-  redirect(`/admin?notice=${encodeURIComponent("콘텐츠를 삭제했습니다.")}`);
+  redirect(`/admin/content?notice=${encodeURIComponent("콘텐츠를 삭제했습니다.")}`);
 }

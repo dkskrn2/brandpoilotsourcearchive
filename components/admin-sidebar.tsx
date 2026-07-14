@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Article, ChartBar, ChatCircleDots, Gear, House, SignOut, SquaresFour } from "@phosphor-icons/react/dist/ssr";
 import { logoutAdminAction } from "@/app/admin/auth-actions";
 
-export function AdminSidebar({ active = "dashboard" }: { active?: "dashboard" | "content" | "analytics" }) {
+export function AdminSidebar({ active = "dashboard" }: { active?: "dashboard" | "content" | "inquiries" | "analytics" }) {
   return (
     <aside className="admin-sidebar">
       <div className="admin-brand">
@@ -14,10 +14,12 @@ export function AdminSidebar({ active = "dashboard" }: { active?: "dashboard" | 
         <Link className={active === "dashboard" ? "is-active" : ""} href="/admin" aria-current={active === "dashboard" ? "page" : undefined}>
           <SquaresFour aria-hidden size={20} weight={active === "dashboard" ? "fill" : "regular"} /><span>대시보드</span>
         </Link>
-        <Link className={active === "content" ? "is-active" : ""} href="/admin#content" aria-current={active === "content" ? "page" : undefined}>
+        <Link className={active === "content" ? "is-active" : ""} href="/admin/content" aria-current={active === "content" ? "page" : undefined}>
           <Article aria-hidden size={20} weight={active === "content" ? "fill" : "regular"} /><span>콘텐츠</span>
         </Link>
-        <Link href="/admin#inquiries"><ChatCircleDots aria-hidden size={20} /><span>상담 문의</span></Link>
+        <Link className={active === "inquiries" ? "is-active" : ""} href="/admin/inquiries" aria-current={active === "inquiries" ? "page" : undefined}>
+          <ChatCircleDots aria-hidden size={20} weight={active === "inquiries" ? "fill" : "regular"} /><span>상담 문의</span>
+        </Link>
         <Link className={active === "analytics" ? "is-active" : ""} href="/admin/analytics" aria-current={active === "analytics" ? "page" : undefined}>
           <ChartBar aria-hidden size={20} weight={active === "analytics" ? "fill" : "regular"} /><span>분석</span>
         </Link>

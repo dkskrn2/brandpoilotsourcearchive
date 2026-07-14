@@ -1,9 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowSquareOut, Article, FileText, MagnifyingGlass, NotePencil, Plus } from "@phosphor-icons/react/dist/ssr";
-import { toggleArticleStatusAction } from "@/app/admin/actions";
+import { ArrowRight, ArrowSquareOut, Article, ChatCircleDots, FileText } from "@phosphor-icons/react/dist/ssr";
 import { AdminSidebar } from "@/components/admin-sidebar";
-import { formatPublishedDate, getContentStats, isDatabaseConfigured, listArticles, listContactInquiries } from "@/lib/content-db";
+import { getContentStats, isDatabaseConfigured, listContactInquiries } from "@/lib/content-db";
 import { requireAdminSession } from "@/lib/admin-auth";
 
 export const metadata: Metadata = {
@@ -14,24 +13,10 @@ export const metadata: Metadata = {
 
 export const dynamic = "force-dynamic";
 
-export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
+export default async function AdminPage() {
   await requireAdminSession("/admin");
-  const { q, status, notice, error } = await searchParams;
-  const query = typeof q === "string" ? q : "";
-  const selectedStatus = status === "draft" || status === "published" ? status : undefined;
   const databaseConfigured = isDatabaseConfigured();
-  const [articles, stats, inquiries] = await Promise.all([
-    listArticles({ query, status: selectedStatus }),
-    getContentStats(),
-    listContactInquiries()
-  ]);
-  const formatInquiryDate = (value: string) => new Intl.DateTimeFormat("ko-KR", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "Asia/Seoul"
-  }).format(new Date(value));
+  const [stats, inquiries] = await Promise.all([getContentStats(), listContactInquiries()]);
   return (
     <main className="admin-page">
       <AdminSidebar />
@@ -43,14 +28,9 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
 
         <div className="admin-canvas">
           <div className="admin-heading">
-            <div><p>대시보드</p><h1>콘텐츠 운영 현황</h1><span>등록된 글과 발행 상태를 한곳에서 관리합니다.</span></div>
-            {databaseConfigured
-              ? <Link className="admin-create-button" href="/admin/content/new"><Plus aria-hidden size={18} weight="bold" /> 새 글 작성</Link>
-              : <span className="admin-create-button is-disabled"><Plus aria-hidden size={18} weight="bold" /> DB 설정 필요</span>}
+            <div><p>대시보드</p><h1>운영 현황</h1><span>콘텐츠 발행과 상담 접수를 별도 화면에서 관리합니다.</span></div>
           </div>
 
-          {notice && <p className="admin-form-message" role="status">{notice}</p>}
-          {error && <p className="admin-form-message is-error" role="alert">{error === "database" ? "DATABASE_URL을 설정한 뒤 다시 시도해 주세요." : "요청을 처리하지 못했습니다."}</p>}
           {!databaseConfigured && <p className="admin-form-message is-error" role="alert">현재 시드 콘텐츠를 읽기 전용으로 표시합니다. Vercel에 DATABASE_URL을 설정하면 관리 기능이 활성화됩니다.</p>}
 
           <section className="admin-stats" aria-label="콘텐츠 요약">
@@ -60,76 +40,17 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
             <article><span>카테고리</span><strong>{stats.categories}</strong><small>사용 중인 분류</small></article>
           </section>
 
-          <section className="admin-content-panel" id="content">
-            <div className="admin-panel-head">
-              <div><h2>콘텐츠 목록</h2><p>검색, 편집, 게시 전환과 삭제를 관리합니다.</p></div>
-              <form className="admin-search" action="/admin">
-                <label><MagnifyingGlass aria-hidden size={18} /><input type="search" name="q" aria-label="콘텐츠 검색" placeholder="제목 검색" defaultValue={query} /></label>
-                <select name="status" aria-label="게시 상태" defaultValue={selectedStatus ?? ""}><option value="">전체 상태</option><option value="published">게시 중</option><option value="draft">임시 저장</option></select>
-                <button type="submit">검색</button>
-              </form>
-            </div>
-
-            {articles.length ? (
-              <div className="admin-table-wrap">
-                <table>
-                  <thead><tr><th>제목</th><th>카테고리</th><th>상태</th><th>게시일</th><th><span className="sr-only">관리</span></th></tr></thead>
-                  <tbody>
-                    {articles.map((article) => {
-                      const nextStatus = article.status === "published" ? "draft" : "published";
-                      const statusAction = toggleArticleStatusAction.bind(null, article.id);
-                      return (
-                        <tr key={article.id}>
-                          <td>
-                            <div className="admin-title-cell"><span><FileText aria-hidden size={19} /></span><div><strong>{article.title}</strong><small>/content/{article.slug}</small></div></div>
-                            <div className="admin-mobile-row-actions">
-                              <span>{article.category}</span>
-                              <span>{formatPublishedDate(article.publishedAt)}</span>
-                              <form action={statusAction}><input type="hidden" name="status" value={nextStatus} /><button className={`admin-status admin-status--${article.status}`} type="submit" disabled={!databaseConfigured}>{article.status === "published" ? "게시 중" : "임시 저장"}</button></form>
-                              <Link className="admin-mobile-edit-link" href={`/admin/content/${article.id}`}><NotePencil aria-hidden size={17} /> 편집</Link>
-                            </div>
-                          </td>
-                          <td>{article.category}</td>
-                          <td><form action={statusAction}><input type="hidden" name="status" value={nextStatus} /><button className={`admin-status admin-status--${article.status}`} type="submit" title={article.status === "published" ? "임시 저장으로 전환" : "게시로 전환"} disabled={!databaseConfigured}>{article.status === "published" ? "게시 중" : "임시 저장"}</button></form></td>
-                          <td>{formatPublishedDate(article.publishedAt)}</td>
-                          <td><Link className="admin-edit-link" href={`/admin/content/${article.id}`} aria-label={`${article.title} 편집`}><NotePencil aria-hidden size={19} /></Link></td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="admin-list-empty"><Article aria-hidden size={30} /><strong>조건에 맞는 콘텐츠가 없습니다.</strong><p>검색어를 바꾸거나 새 콘텐츠를 작성해보세요.</p></div>
-            )}
-          </section>
-
-          <section className="admin-content-panel" id="inquiries">
-            <div className="admin-panel-head">
-              <div><h2>상담 문의</h2><p>홈페이지에서 접수된 최근 문의를 확인합니다.</p></div>
-              <strong className="admin-panel-count">최근 {inquiries.length}건</strong>
-            </div>
-            {!databaseConfigured ? (
-              <div className="admin-list-empty"><Article aria-hidden size={30} /><strong>DATABASE_URL을 설정하면 상담 문의가 여기에 저장됩니다.</strong></div>
-            ) : inquiries.length ? (
-              <div className="admin-table-wrap">
-                <table className="admin-inquiry-table">
-                  <thead><tr><th>신청자</th><th>연락처</th><th>이메일</th><th>사이트</th><th>문의 내용</th><th>접수</th></tr></thead>
-                  <tbody>{inquiries.map((inquiry) => (
-                    <tr key={inquiry.id}>
-                      <td><strong>{inquiry.name}</strong><a className="admin-inquiry-mobile-contact" href={`tel:${inquiry.phone}`}>{inquiry.phone}</a>{inquiry.email ? <a className="admin-inquiry-mobile-contact" href={`mailto:${inquiry.email}`}>{inquiry.email}</a> : null}</td>
-                      <td><a href={`tel:${inquiry.phone}`}>{inquiry.phone}</a></td>
-                      <td>{inquiry.email ? <a href={`mailto:${inquiry.email}`}>{inquiry.email}</a> : "—"}</td>
-                      <td>{inquiry.site ? <a href={inquiry.site} target="_blank" rel="noreferrer">사이트 보기</a> : "—"}</td>
-                      <td className="admin-inquiry-message">{inquiry.message || "—"}</td>
-                      <td>{formatInquiryDate(inquiry.createdAt)}</td>
-                    </tr>
-                  ))}</tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="admin-list-empty"><Article aria-hidden size={30} /><strong>아직 접수된 상담 문의가 없습니다.</strong><p>문의가 접수되면 이 목록에 바로 표시됩니다.</p></div>
-            )}
+          <section className="admin-dashboard-shortcuts" aria-label="운영 바로가기">
+            <Link href="/admin/content">
+              <span><FileText aria-hidden size={24} weight="duotone" /></span>
+              <div><strong>콘텐츠 관리</strong><p>목록을 검색하고, 새 글 작성·편집·게시 상태를 관리합니다.</p></div>
+              <ArrowRight aria-hidden size={20} />
+            </Link>
+            <Link href="/admin/inquiries">
+              <span><ChatCircleDots aria-hidden size={24} weight="duotone" /></span>
+              <div><strong>상담 문의</strong><p>홈페이지에서 접수된 상담 요청을 확인하고 바로 연락할 수 있습니다.</p><small>최근 {inquiries.length}건</small></div>
+              <ArrowRight aria-hidden size={20} />
+            </Link>
           </section>
 
           <section className="admin-empty-preview">
