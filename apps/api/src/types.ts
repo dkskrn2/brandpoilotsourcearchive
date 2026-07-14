@@ -553,6 +553,47 @@ export interface TextRenderJobCompletionInput {
   result: unknown;
 }
 
+export interface InstagramWebhookMessageInput {
+  recipientId: string;
+  senderId: string;
+  messageId: string;
+  text: string | null;
+  isEcho: boolean;
+  timestamp: number | null;
+  rawPayload: Record<string, unknown>;
+}
+
+export type InstagramWebhookReceiveStatus = "unknown_recipient" | "ignored" | "duplicate" | "disabled" | "wiki_not_ready" | "rate_limited" | "queued" | "unsupported_media";
+
+export interface InstagramWebhookReceiveResult {
+  status: InstagramWebhookReceiveStatus;
+  brandId: string | null;
+  conversationId: string | null;
+  jobId: string | null;
+}
+
+export interface DmReplyJobPayload {
+  conversationId: string;
+  senderId: string;
+  messageId: string;
+  question: string;
+}
+
+export interface DmReplyJobDto {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  leaseToken: string;
+  payload: DmReplyJobPayload;
+  attemptCount: number;
+}
+
+export interface DmReplyJobCompletionInput {
+  workerId: string;
+  leaseToken: string;
+  result: import("./dmTypes.js").DmWorkerResult;
+}
+
 export interface ApiRepository {
   health(): Promise<{ database: "ok" }>;
   getBillingSummary(brandId: string): Promise<BillingSummaryDto>;
@@ -585,6 +626,7 @@ export interface ApiRepository {
   createKnowledgeImport(brandId: string, input: KnowledgeImportInput): Promise<KnowledgeImportDto>;
   listKnowledgeImports(brandId: string): Promise<KnowledgeImportDto[]>;
   enqueueWikiRefresh(brandId: string): Promise<{ id: string; status: string }>;
+  receiveInstagramWebhookMessage(input: InstagramWebhookMessageInput): Promise<InstagramWebhookReceiveResult>;
   listTopicRows(brandId: string, status?: string): Promise<TopicRowDto[]>;
   crawlSources(brandId: string): Promise<PipelineRunResult>;
   crawlSingleSource(brandId: string, sourceId: string, trigger: SourceCrawlTrigger): Promise<SourceCrawlRunDto>;
@@ -615,4 +657,15 @@ export interface ApiRepository {
     retryable: boolean;
     retryAfterMs: number;
   }): Promise<{ id: string; status: string }>;
+  claimDmReplyJob(workerId: string): Promise<DmReplyJobDto | null>;
+  heartbeatDmReplyJob(jobId: string, workerId: string, leaseToken: string): Promise<{ id: string; status: string }>;
+  completeDmReplyJob(jobId: string, input: DmReplyJobCompletionInput): Promise<{ id: string; status: string; decision: import("./dmTypes.js").DmDecision }>;
+  failDmReplyJob(jobId: string, input: {
+    workerId: string;
+    leaseToken: string;
+    error: string;
+    retryable: boolean;
+    retryAfterMs: number;
+  }): Promise<{ id: string; status: string }>;
+  heartbeatDmWorker(workerId: string): Promise<{ workerId: string }>;
 }

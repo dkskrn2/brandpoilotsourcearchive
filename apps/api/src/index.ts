@@ -28,6 +28,10 @@ const app = createServer(
       appSecret: process.env.META_APP_SECRET ?? "",
       redirectUri: process.env.META_OAUTH_REDIRECT_URI ?? "",
       frontendUrl: process.env.AUTH_FRONTEND_URL ?? "http://localhost:5173"
+    },
+    metaWebhook: {
+      appSecret: process.env.META_APP_SECRET ?? "",
+      verifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN ?? ""
     }
   },
   Fastify(createFastifyOptions())

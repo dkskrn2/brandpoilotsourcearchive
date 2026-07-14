@@ -312,6 +312,7 @@ function createRepository(): ApiRepository {
     })),
     listKnowledgeImports: vi.fn(async () => []),
     enqueueWikiRefresh: vi.fn(async () => ({ id: "wiki-job-1", status: "queued" })),
+    receiveInstagramWebhookMessage: vi.fn(async () => ({ status: "queued" as const, brandId, conversationId: "conversation-1", jobId: "dm-job-1" })),
     crawlSources: vi.fn(async () => ({ processed: 2, created: 2, updated: 2, failed: 0 })),
     generateContent: vi.fn(async () => ({ processed: 1, created: 3, updated: 1, failed: 0 })),
     runDailyGeneration: vi.fn(async () => ({ brandsSelected: 1, runsStarted: 1, processed: 1, created: 3, updated: 1, failed: 0, status: "succeeded" as const })),
@@ -331,7 +332,12 @@ function createRepository(): ApiRepository {
     claimTextRenderJob: vi.fn(async () => null),
     heartbeatTextRenderJob: vi.fn(async (id) => ({ id, status: "running" })),
     completeTextRenderJob: vi.fn(async (id) => ({ id, status: "succeeded" })),
-    failTextRenderJob: vi.fn(async (id) => ({ id, status: "queued" }))
+    failTextRenderJob: vi.fn(async (id) => ({ id, status: "queued" })),
+    claimDmReplyJob: vi.fn(async () => null),
+    heartbeatDmReplyJob: vi.fn(async (id) => ({ id, status: "running" })),
+    completeDmReplyJob: vi.fn(async (id, input) => ({ id, status: "succeeded", decision: input.result.decision })),
+    failDmReplyJob: vi.fn(async (id) => ({ id, status: "queued" })),
+    heartbeatDmWorker: vi.fn(async (workerId) => ({ workerId }))
   };
 }
 

@@ -1,0 +1,61 @@
+import { MetaGraphRequestError, postMetaGraphForm } from "./metaGraph.js";
+
+export interface InstagramDmSendInput {
+  accessToken: string;
+  instagramBusinessAccountId: string;
+  recipientId: string;
+  text: string;
+}
+
+export interface InstagramDmSendResult {
+  externalMessageId: string;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function isTransientMetaError(error: unknown) {
+  return error instanceof MetaGraphRequestError && (error.status === 429 || error.status >= 500);
+}
+
+export async function sendInstagramDirectMessage(
+  input: InstagramDmSendInput,
+  dependencies: {
+    graphVersion?: string;
+    fetchImpl?: typeof fetch;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<InstagramDmSendResult> {
+  const graphVersion = dependencies.graphVersion ?? process.env.META_GRAPH_VERSION ?? "v23.0";
+  const fetchImpl = dependencies.fetchImpl ?? fetch;
+  const sleep = dependencies.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const request = () => postMetaGraphForm({
+    path: `/${input.instagramBusinessAccountId}/messages`,
+    body: {
+      recipient: JSON.stringify({ id: input.recipientId }),
+      message: JSON.stringify({ text: input.text }),
+      access_token: input.accessToken,
+    },
+    fetchImpl,
+    graphVersion,
+    host: "graph.instagram.com",
+  });
+
+  let payload: unknown;
+  try {
+    payload = await request();
+  } catch (error) {
+    if (!isTransientMetaError(error)) throw error;
+    await sleep(250);
+    payload = await request();
+  }
+  const record = asRecord(payload);
+  const externalMessageId = typeof record?.message_id === "string"
+    ? record.message_id
+    : typeof record?.id === "string"
+      ? record.id
+      : null;
+  if (!externalMessageId) throw new Error("instagram_dm_message_id_missing");
+  return { externalMessageId };
+}

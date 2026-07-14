@@ -1,12 +1,15 @@
 import cors from "@fastify/cors";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import Fastify, { LogController } from "fastify";
+import rawBody from "fastify-raw-body";
 import type { FastifyLoggerOptions } from "fastify/types/logger";
 import type { FastifyInstance } from "fastify";
 import { instagramFormats } from "./instagramFormats.js";
 import { sanitizeInstagramCapabilityMetadata } from "./instagramCapabilities.js";
 import { resolveInstagramConnection } from "./metaGraph.js";
 import { buildInstagramLoginAuthorizeUrl, exchangeInstagramLoginCode, instagramLoginScopes, resolveInstagramLoginConnection } from "./instagramLoginGraph.js";
+import { parseInstagramMessagingEvents, verifyInstagramSignature } from "./instagramWebhook.js";
+import { parseDmWorkerResult } from "./dmTypes.js";
 import { StoryCapabilityRequiredError } from "./repository.js";
 import type { ApiRepository, Channel, InstagramDeliveryFormat, InstagramFormatSettingsInput, SourceType, SupportRequestCategory, SupportRequestStatus } from "./types.js";
 import { createKakaoAuthStore, type KakaoProfile } from "./kakaoAuth.js";
@@ -30,6 +33,7 @@ interface CreateServerOptions {
   kakaoAuth?: ReturnType<typeof createKakaoAuthStore>;
   kakao?: { restApiKey: string; clientSecret?: string; redirectUri: string; frontendUrl: string };
   instagramLogin?: { appId: string; appSecret: string; redirectUri: string; frontendUrl: string };
+  metaWebhook?: { appSecret: string; verifyToken: string };
   logger?: boolean | FastifyLoggerOptions;
 }
 
@@ -180,7 +184,7 @@ export function createFastifyOptions(logger?: boolean | FastifyLoggerOptions) {
 }
 
 export function createServer(
-  { repository, workerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, logger }: CreateServerOptions,
+  { repository, workerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, metaWebhook, logger }: CreateServerOptions,
   app: FastifyInstance = Fastify(createFastifyOptions(logger))
 ) {
   void app.register(cors, { origin: true, credentials: true, methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] });
@@ -234,7 +238,7 @@ export function createServer(
   });
 
   app.addHook("preHandler", async (request, reply) => {
-    if (!kakaoAuth || request.url.startsWith("/health") || request.url.startsWith("/auth/") || request.url.startsWith("/worker/") || request.url.startsWith("/internal/cron/")) return;
+    if (!kakaoAuth || request.url.startsWith("/health") || request.url.startsWith("/auth/") || request.url.startsWith("/webhooks/") || request.url.startsWith("/worker/") || request.url.startsWith("/internal/cron/")) return;
     const token = readCookie(request.headers.cookie, "bp_session");
     const session = token ? await kakaoAuth.getSession(token) : null;
     if (!session) {
@@ -264,6 +268,44 @@ export function createServer(
   app.get("/health", async () => {
     const health = await repository.health();
     return { ok: true, database: health.database };
+  });
+
+  app.register(async (webhookApp) => {
+    await webhookApp.register(rawBody, { field: "rawBody", global: false, encoding: false, runFirst: true });
+
+    webhookApp.get<{
+      Querystring: { "hub.mode"?: string; "hub.verify_token"?: string; "hub.challenge"?: string };
+    }>("/webhooks/meta/instagram", async (request, reply) => {
+      if (
+        !metaWebhook?.verifyToken
+        || request.query["hub.mode"] !== "subscribe"
+        || request.query["hub.verify_token"] !== metaWebhook.verifyToken
+        || !request.query["hub.challenge"]
+      ) {
+        reply.code(403);
+        return { error: "webhook_verification_failed" };
+      }
+      reply.type("text/plain");
+      return request.query["hub.challenge"];
+    });
+
+    webhookApp.post<{ Body: unknown }>("/webhooks/meta/instagram", { config: { rawBody: true } }, async (request, reply) => {
+      if (!metaWebhook?.appSecret) {
+        reply.code(503);
+        return { error: "webhook_not_configured" };
+      }
+      const signature = Array.isArray(request.headers["x-hub-signature-256"])
+        ? request.headers["x-hub-signature-256"][0]
+        : request.headers["x-hub-signature-256"];
+      const raw = request.rawBody;
+      if (!Buffer.isBuffer(raw) || !verifyInstagramSignature(raw, signature, metaWebhook.appSecret)) {
+        reply.code(403);
+        return { error: "webhook_signature_invalid" };
+      }
+      const events = parseInstagramMessagingEvents(request.body);
+      for (const event of events) await repository.receiveInstagramWebhookMessage(event);
+      return { ok: true, received: events.length };
+    });
   });
 
   app.get("/internal/cron/source-crawl", async (request, reply) => {
@@ -1031,6 +1073,105 @@ export function createServer(
       retryable: request.body.retryable,
       retryAfterMs: request.body.retryAfterMs
     });
+  });
+
+  app.post<{ Body: Record<string, unknown> }>("/worker/dm-jobs/claim", async (request, reply) => {
+    try {
+      assertWorkerAuthentication(request.headers.authorization);
+    } catch (error) {
+      reply.code(error instanceof Error && error.message === "worker_api_not_configured" ? 503 : 401);
+      return { error: error instanceof Error ? error.message : "worker_api_unauthorized" };
+    }
+    if (typeof request.body?.workerId !== "string" || request.body.workerId.trim().length === 0) {
+      reply.code(400);
+      return { error: "worker_id_required" };
+    }
+    const job = await repository.claimDmReplyJob(request.body.workerId.trim());
+    if (!job) {
+      reply.code(204);
+      return reply.send();
+    }
+    return job;
+  });
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>("/worker/dm-jobs/:jobId/heartbeat", async (request, reply) => {
+    try {
+      assertWorkerAuthentication(request.headers.authorization);
+    } catch (error) {
+      reply.code(error instanceof Error && error.message === "worker_api_not_configured" ? 503 : 401);
+      return { error: error instanceof Error ? error.message : "worker_api_unauthorized" };
+    }
+    if (typeof request.body?.workerId !== "string" || typeof request.body?.leaseToken !== "string") {
+      reply.code(400);
+      return { error: "worker_id_and_lease_token_required" };
+    }
+    return repository.heartbeatDmReplyJob(request.params.jobId, request.body.workerId, request.body.leaseToken);
+  });
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>("/worker/dm-jobs/:jobId/complete", async (request, reply) => {
+    try {
+      assertWorkerAuthentication(request.headers.authorization);
+    } catch (error) {
+      reply.code(error instanceof Error && error.message === "worker_api_not_configured" ? 503 : 401);
+      return { error: error instanceof Error ? error.message : "worker_api_unauthorized" };
+    }
+    if (typeof request.body?.workerId !== "string" || typeof request.body?.leaseToken !== "string") {
+      reply.code(400);
+      return { error: "worker_completion_fields_required" };
+    }
+    try {
+      return await repository.completeDmReplyJob(request.params.jobId, {
+        workerId: request.body.workerId,
+        leaseToken: request.body.leaseToken,
+        result: parseDmWorkerResult(request.body.result),
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("dm_")) {
+        reply.code(400);
+        return { error: error.message };
+      }
+      throw error;
+    }
+  });
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>("/worker/dm-jobs/:jobId/fail", async (request, reply) => {
+    try {
+      assertWorkerAuthentication(request.headers.authorization);
+    } catch (error) {
+      reply.code(error instanceof Error && error.message === "worker_api_not_configured" ? 503 : 401);
+      return { error: error instanceof Error ? error.message : "worker_api_unauthorized" };
+    }
+    if (
+      typeof request.body?.workerId !== "string"
+      || typeof request.body?.leaseToken !== "string"
+      || typeof request.body?.error !== "string"
+      || typeof request.body?.retryable !== "boolean"
+      || typeof request.body?.retryAfterMs !== "number"
+    ) {
+      reply.code(400);
+      return { error: "worker_failure_fields_required" };
+    }
+    return repository.failDmReplyJob(request.params.jobId, {
+      workerId: request.body.workerId,
+      leaseToken: request.body.leaseToken,
+      error: request.body.error,
+      retryable: request.body.retryable,
+      retryAfterMs: request.body.retryAfterMs,
+    });
+  });
+
+  app.post<{ Body: Record<string, unknown> }>("/worker/dm-jobs/heartbeat", async (request, reply) => {
+    try {
+      assertWorkerAuthentication(request.headers.authorization);
+    } catch (error) {
+      reply.code(error instanceof Error && error.message === "worker_api_not_configured" ? 503 : 401);
+      return { error: error instanceof Error ? error.message : "worker_api_unauthorized" };
+    }
+    if (typeof request.body?.workerId !== "string" || request.body.workerId.trim().length === 0) {
+      reply.code(400);
+      return { error: "worker_id_required" };
+    }
+    return repository.heartbeatDmWorker(request.body.workerId.trim());
   });
 
   return app;

@@ -11,6 +11,7 @@ import {
 } from "./imageRenderJobs.js";
 import { formatInstagramCaption } from "./instagramCaption.js";
 import { evaluateInstagramStoryCapability, sanitizeInstagramCapabilityMetadata } from "./instagramCapabilities.js";
+import { sendInstagramDirectMessage } from "./instagramMessaging.js";
 import { deliveryFormatToRenderJobType } from "./instagramFormats.js";
 import { kstDateKey, nextAvailablePolicySlot } from "./publishSchedule.js";
 import { classifyMetaGraphPublishError } from "./metaGraph.js";
@@ -39,11 +40,15 @@ import type {
   ContentOutputDto,
   CredentialInput,
   DailyGenerationRunResult,
+  DmReplyJobCompletionInput,
+  DmReplyJobDto,
   ImageRenderJobCompletionInput,
   ImageRenderJobDto,
   InstagramDeliveryFormat,
   InstagramFormatSettingsDto,
   InstagramFormatSettingsInput,
+  InstagramWebhookMessageInput,
+  InstagramWebhookReceiveResult,
   KnowledgeImportDto,
   KnowledgeImportInput,
   PublishQueueDto,
@@ -846,6 +851,7 @@ interface RepositoryOptions {
   fetchImageAsset?: typeof fetch;
   publishInstagramOutput?: typeof publishInstagramOutputWithMeta;
   publishInstagramCarousel?: typeof publishInstagramCarouselWithMeta;
+  sendInstagramDirectMessage?: typeof sendInstagramDirectMessage;
 }
 
 function resolveInstagramPublishOptions(options?: RepositoryOptions) {
@@ -894,6 +900,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
   const fetchInstagramManifest = options.fetchInstagramImageManifest ?? fetchInstagramImageManifest;
   const fetchImageAsset = options.fetchImageAsset ?? fetch;
   const publishInstagramCarousel = options.publishInstagramCarousel ?? publishInstagramCarouselWithMeta;
+  const sendDm = options.sendInstagramDirectMessage ?? sendInstagramDirectMessage;
   const publishInstagramOutput = options.publishInstagramOutput ?? (
     options.publishInstagramCarousel
       ? async (input: InstagramPublishInput) => input.deliveryFormat === "instagram_feed_carousel"
@@ -3307,6 +3314,154 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       return publishQueueItemInternal(queueId);
     },
 
+    async claimDmReplyJob(workerId) {
+      const result = await pool.query(
+        `with candidate as (
+           select id from jobs
+           where job_type = 'instagram_dm_reply'
+             and attempt_count < max_attempts and run_at <= now()
+             and (status = 'queued' or (status = 'running' and locked_until < now()))
+           order by priority desc, created_at asc for update skip locked limit 1
+         )
+         update jobs job
+         set status = 'running', locked_by = $1, locked_until = now() + interval '30 seconds',
+             lease_token = gen_random_uuid(), attempt_count = attempt_count + 1,
+             started_at = coalesce(started_at, now()), updated_at = now()
+         from candidate where job.id = candidate.id
+         returning job.id, job.workspace_id, job.brand_id, job.lease_token, job.payload_json, job.attempt_count`,
+        [workerId],
+      );
+      if (!result.rowCount) return null;
+      const row = result.rows[0];
+      return {
+        id: row.id,
+        workspaceId: row.workspace_id,
+        brandId: row.brand_id,
+        leaseToken: row.lease_token,
+        payload: row.payload_json,
+        attemptCount: Number(row.attempt_count),
+      } satisfies DmReplyJobDto;
+    },
+
+    async heartbeatDmReplyJob(jobId, workerId, leaseToken) {
+      const result = await pool.query(
+        `update jobs set locked_until = now() + interval '30 seconds', updated_at = now()
+         where id = $1 and job_type = 'instagram_dm_reply' and status = 'running'
+           and locked_by = $2 and lease_token = $3::uuid and locked_until > now()
+         returning id, status`,
+        [jobId, workerId, leaseToken],
+      );
+      if (!result.rowCount) throw new Error("dm_reply_job_lease_invalid");
+      return { id: result.rows[0].id, status: result.rows[0].status };
+    },
+
+    async completeDmReplyJob(jobId, input: DmReplyJobCompletionInput) {
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const job = await client.query(
+          `select job.id, job.workspace_id, job.brand_id, job.payload_json,
+                  conversation.id as conversation_id, conversation.brand_channel_id,
+                  channel.external_account_id, credential.encrypted_payload, credential.auth_mode,
+                  settings.fallback_message, settings.error_message
+           from jobs job
+           join instagram_dm_conversations conversation on conversation.id = (job.payload_json->>'conversationId')::uuid
+           join brand_channels channel on channel.id = conversation.brand_channel_id
+           join channel_credentials credential on credential.brand_channel_id = channel.id
+             and credential.status = 'active' and credential.revoked_at is null
+           join instagram_dm_settings settings on settings.brand_id = job.brand_id
+           where job.id = $1 and job.job_type = 'instagram_dm_reply' and job.status = 'running'
+             and job.locked_by = $2 and job.lease_token = $3::uuid and job.locked_until > now()
+           for update of job`,
+          [jobId, input.workerId, input.leaseToken],
+        );
+        if (!job.rowCount) throw new Error("dm_reply_job_lease_invalid");
+        const row = job.rows[0];
+        if (input.result.decision === "answer") {
+          const sources = await client.query(
+            `select id from wiki_chunks where brand_id = $1 and enabled and id = any($2::uuid[])`,
+            [row.brand_id, input.result.wikiChunkIds],
+          );
+          if (sources.rowCount !== input.result.wikiChunkIds.length) throw new Error("dm_wiki_chunk_not_owned");
+        }
+        const text = input.result.decision === "answer"
+          ? input.result.answer
+          : input.result.decision === "fallback"
+            ? row.fallback_message
+            : input.result.decision === "error"
+              ? row.error_message
+              : null;
+        let externalMessageId: string | null = null;
+        if (text) {
+          if (row.auth_mode !== "instagram_login") throw new Error("instagram_dm_auth_mode_required");
+          const sent = await sendDm({
+            accessToken: decryptCredential(row.encrypted_payload),
+            instagramBusinessAccountId: row.external_account_id,
+            recipientId: row.payload_json.senderId,
+            text,
+          });
+          externalMessageId = sent.externalMessageId;
+          await client.query(
+            `insert into instagram_dm_messages (
+               workspace_id, brand_id, brand_channel_id, conversation_id, external_message_id,
+               direction, message_type, body, raw_payload
+             ) values ($1, $2, $3, $4, $5, 'outbound', 'text', $6, $7::jsonb)
+             on conflict (brand_channel_id, external_message_id) do nothing`,
+            [row.workspace_id, row.brand_id, row.brand_channel_id, row.conversation_id, externalMessageId, text, JSON.stringify({ decision: input.result.decision, reason: input.result.reason })],
+          );
+        }
+        if (input.result.decision === "fallback" || input.result.decision === "error") {
+          await client.query(
+            `insert into unanswered_questions (workspace_id, brand_id, conversation_id, instagram_dm_message_id, question, reason)
+             values ($1, $2, $3, $4::uuid, $5, $6)`,
+            [row.workspace_id, row.brand_id, row.conversation_id, row.payload_json.messageId, row.payload_json.question, input.result.reason],
+          );
+        }
+        await client.query(
+          `update jobs
+           set status = 'succeeded', result_json = $2::jsonb, locked_by = null, locked_until = null,
+               lease_token = null, finished_at = now(), updated_at = now()
+           where id = $1`,
+          [jobId, JSON.stringify({ ...input.result, externalMessageId })],
+        );
+        await client.query("commit");
+        return { id: jobId, status: "succeeded", decision: input.result.decision };
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async failDmReplyJob(jobId, input) {
+      const retryAfterMs = input.retryable ? Math.max(1000, Math.min(input.retryAfterMs, 60 * 60 * 1000)) : 0;
+      const result = await pool.query(
+        `update jobs
+         set status = case when $5::boolean and attempt_count < max_attempts then 'queued' else 'failed' end,
+             run_at = case when $5::boolean and attempt_count < max_attempts then now() + ($6::bigint * interval '1 millisecond') else run_at end,
+             locked_by = null, locked_until = null, lease_token = null, last_error = $4,
+             finished_at = case when $5::boolean and attempt_count < max_attempts then null else now() end,
+             updated_at = now()
+         where id = $1 and job_type = 'instagram_dm_reply' and status = 'running'
+           and locked_by = $2 and lease_token = $3::uuid
+         returning id, status`,
+        [jobId, input.workerId, input.leaseToken, input.error.slice(0, 2000), input.retryable, retryAfterMs],
+      );
+      if (!result.rowCount) throw new Error("dm_reply_job_lease_invalid");
+      return { id: result.rows[0].id, status: result.rows[0].status };
+    },
+
+    async heartbeatDmWorker(workerId) {
+      await pool.query(
+        `insert into worker_instances (worker_id, worker_type, last_heartbeat_at)
+         values ($1, 'dm', now())
+         on conflict (worker_id) do update set worker_type = 'dm', last_heartbeat_at = now(), updated_at = now()`,
+        [workerId],
+      );
+      return { workerId };
+    },
+
     async claimImageRenderJob(workerId) {
       const result = await pool.query(
         `with candidate as (
@@ -3796,6 +3951,135 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         [brand.rows[0].workspace_id, brandId, JSON.stringify({ trigger: "manual" })],
       );
       return { id: result.rows[0].id, status: result.rows[0].status };
+    },
+
+    async receiveInstagramWebhookMessage(input: InstagramWebhookMessageInput): Promise<InstagramWebhookReceiveResult> {
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const channel = await client.query(
+          `select channel.id, channel.workspace_id, channel.brand_id
+           from brand_channels channel
+           join channel_credentials credential
+             on credential.brand_channel_id = channel.id
+            and credential.status = 'active'
+            and credential.revoked_at is null
+           where channel.channel = 'instagram'
+             and channel.deleted_at is null
+             and channel.external_account_id = $1
+           limit 1
+           for update of channel`,
+          [input.recipientId],
+        );
+        if (!channel.rowCount) {
+          await client.query("commit");
+          return { status: "unknown_recipient", brandId: null, conversationId: null, jobId: null };
+        }
+        const channelRow = channel.rows[0];
+        if (input.isEcho || input.senderId === input.recipientId) {
+          await client.query("commit");
+          return { status: "ignored", brandId: channelRow.brand_id, conversationId: null, jobId: null };
+        }
+        const conversation = await client.query(
+          `insert into instagram_dm_conversations (
+             workspace_id, brand_id, brand_channel_id, external_participant_id, last_message_at
+           ) values ($1, $2, $3, $4, now())
+           on conflict (brand_channel_id, external_participant_id) do update
+           set last_message_at = excluded.last_message_at, updated_at = now()
+           returning id`,
+          [channelRow.workspace_id, channelRow.brand_id, channelRow.id, input.senderId],
+        );
+        const messageType = input.text ? "text" : "unsupported_media";
+        const message = await client.query(
+          `insert into instagram_dm_messages (
+             workspace_id, brand_id, brand_channel_id, conversation_id, external_message_id,
+             direction, message_type, body, raw_payload
+           ) values ($1, $2, $3, $4, $5, 'inbound', $6, $7, $8::jsonb)
+           on conflict (brand_channel_id, external_message_id) do nothing
+           returning id`,
+          [
+            channelRow.workspace_id,
+            channelRow.brand_id,
+            channelRow.id,
+            conversation.rows[0].id,
+            input.messageId,
+            messageType,
+            input.text,
+            JSON.stringify(input.rawPayload),
+          ],
+        );
+        if (!message.rowCount) {
+          await client.query("commit");
+          return { status: "duplicate", brandId: channelRow.brand_id, conversationId: conversation.rows[0].id, jobId: null };
+        }
+        if (!input.text) {
+          await client.query("commit");
+          return { status: "unsupported_media", brandId: channelRow.brand_id, conversationId: conversation.rows[0].id, jobId: null };
+        }
+        const settings = await client.query(
+          `select enabled from instagram_dm_settings where brand_id = $1 for update`,
+          [channelRow.brand_id],
+        );
+        if (!settings.rowCount || !settings.rows[0].enabled) {
+          await client.query("commit");
+          return { status: "disabled", brandId: channelRow.brand_id, conversationId: conversation.rows[0].id, jobId: null };
+        }
+        const wiki = await client.query(
+          `select exists(
+             select 1
+             from wiki_chunks chunk
+             join wiki_documents document on document.id = chunk.wiki_document_id
+             where chunk.brand_id = $1 and chunk.enabled and document.is_active
+           ) as ready`,
+          [channelRow.brand_id],
+        );
+        if (!wiki.rows[0]?.ready) {
+          await client.query("commit");
+          return { status: "wiki_not_ready", brandId: channelRow.brand_id, conversationId: conversation.rows[0].id, jobId: null };
+        }
+        const limits = await client.query(
+          `select
+             count(*) filter (where conversation_id = $1) as participant_count,
+             count(*) as brand_count
+           from instagram_dm_messages
+           where brand_id = $2
+             and direction = 'inbound'
+             and created_at >= (date_trunc('day', now() at time zone 'Asia/Seoul') at time zone 'Asia/Seoul')`,
+          [conversation.rows[0].id, channelRow.brand_id],
+        );
+        if (Number(limits.rows[0]?.participant_count ?? 0) > 20 || Number(limits.rows[0]?.brand_count ?? 0) > 500) {
+          await client.query("commit");
+          return { status: "rate_limited", brandId: channelRow.brand_id, conversationId: conversation.rows[0].id, jobId: null };
+        }
+        const job = await client.query(
+          `insert into jobs (workspace_id, brand_id, job_type, status, run_at, payload_json, dedupe_key)
+           values ($1, $2, 'instagram_dm_reply', 'queued', now() + interval '3 seconds', $3::jsonb, $4)
+           on conflict (job_type, dedupe_key)
+           where job_type = 'instagram_dm_reply' and dedupe_key is not null and status in ('queued', 'running')
+           do update set payload_json = excluded.payload_json,
+             run_at = case when jobs.status = 'queued' then excluded.run_at else jobs.run_at end,
+             updated_at = now()
+           returning id`,
+          [
+            channelRow.workspace_id,
+            channelRow.brand_id,
+            JSON.stringify({
+              conversationId: conversation.rows[0].id,
+              senderId: input.senderId,
+              messageId: message.rows[0].id,
+              question: input.text,
+            }),
+            conversation.rows[0].id,
+          ],
+        );
+        await client.query("commit");
+        return { status: "queued", brandId: channelRow.brand_id, conversationId: conversation.rows[0].id, jobId: job.rows[0].id };
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
     },
 
     async createTopicUpload(brandId, input: TopicUploadInput) {
