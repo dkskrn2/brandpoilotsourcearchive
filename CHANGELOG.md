@@ -15,6 +15,7 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- Refined the Brand Pilot pricing page with three operational plans, grouped scope comparison, responsive table guidance, and a streamlined consultation path.
 - Expanded the content renderer with sanitized tables, quotations, source sections, and long-form article components for a more useful reading experience.
 - Simplified the content hub so visitors see the article list immediately without the introductory hero section.
 - Improved site-wide SEO and AEO settings, including metadata, canonical URLs, robots rules, sitemap coverage, and JSON-LD schemas.
