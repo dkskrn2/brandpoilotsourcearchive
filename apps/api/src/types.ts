@@ -20,6 +20,36 @@ export type SourceType = "owned" | "reference";
 export type SupportRequestCategory = "bug" | "feature" | "channel" | "account" | "other";
 export type SupportRequestStatus = "new" | "in_progress" | "resolved";
 
+export type DmWorkerStatus = "online" | "worker_offline" | "unknown";
+
+export interface InstagramDmSettingsDto {
+  enabled: boolean;
+  fallbackMessage: string;
+  errorMessage: string;
+  webhookStatus: "connected" | "needs_attention" | "unchecked";
+  workerStatus: DmWorkerStatus;
+}
+
+export interface KnowledgeImportDto {
+  id: string;
+  fileName: string;
+  status: "processing" | "succeeded" | "failed";
+  totalRows: number;
+  validRows: number;
+  invalidRows: number;
+  updatedRows: number;
+  createdAt: string;
+}
+
+export interface DmConversationMessageDto {
+  id: string;
+  conversationId: string;
+  direction: "inbound" | "outbound";
+  messageType: "text" | "unsupported_media" | "system";
+  body: string | null;
+  createdAt: string;
+}
+
 export interface BrandProfileDto {
   id: string;
   brandId: string;

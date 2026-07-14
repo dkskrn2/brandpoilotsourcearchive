@@ -29,6 +29,7 @@ const withDatabase = async (callback) => {
 const runMigrationRange = async (database, migrations, firstId, lastId) => {
   for (const migration of migrations) {
     if (migration.id >= firstId && migration.id <= lastId) {
+      if (migration.sql.startsWith("-- requires: pgvector")) continue;
       await database.exec(migration.sql);
     }
   }
@@ -353,4 +354,28 @@ test("fresh and authentic legacy paths converge after migration 019", async (con
   assert.ok(freshSnapshot.renderIndexes.some(({ name, is_unique }) => (
     name === "jobs_active_threads_text_render_output_unique" && is_unique
   )));
+});
+
+test("DM Wiki core migration runs in PGlite and pgvector migration is explicitly deferred", async () => {
+  const migrations = await loadMigrations();
+  const coreMigration = migrations.find((migration) => migration.id === "020_dm_wiki_core.sql");
+  const vectorMigration = migrations.find((migration) => migration.id === "021_dm_wiki_pgvector.sql");
+
+  assert.ok(coreMigration);
+  assert.ok(vectorMigration);
+  assert.match(vectorMigration.sql, /^-- requires: pgvector/);
+  assert.match(vectorMigration.sql, /vector\(1536\)/);
+  assert.match(vectorMigration.sql, /using hnsw/);
+  assert.match(vectorMigration.sql, /search_brand_wiki/);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(database, migrations, "001_initial_schema.sql", "020_dm_wiki_core.sql");
+    const tables = await database.query(
+      "select table_name from information_schema.tables where table_schema = 'public' and table_name in ('knowledge_imports', 'knowledge_entries', 'wiki_documents', 'wiki_chunks', 'instagram_dm_settings', 'instagram_dm_conversations', 'instagram_dm_messages', 'unanswered_questions', 'worker_instances') order by table_name",
+    );
+    assert.equal(tables.rows.length, 9);
+    const jobsConstraint = await readConstraintValues(database, "jobs", "jobs_type_check");
+    assert.ok(jobsConstraint.includes("wiki_refresh"));
+    assert.ok(jobsConstraint.includes("instagram_dm_reply"));
+  });
 });
