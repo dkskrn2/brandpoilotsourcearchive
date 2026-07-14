@@ -42,6 +42,7 @@ npm run dev
 
 - `/content`는 7월 운영 계획과 실제 브랜드 성장 사례를 포함한 장문 콘텐츠를 바로 보여줍니다. 각 글의 마지막 상담 안내는 `/contact`로 연결됩니다.
 - `/product`는 현재 제공 중인 Brand Pilot의 기능과 운영 흐름을 설명합니다. 기존 `/service/brandpilot` 주소는 이 경로로 영구 이동합니다.
+- `/product/pricing`은 Brand Pilot의 도입 플랜, 견적 기준, 공통 제공 범위와 자주 묻는 질문을 안내합니다.
 - 콘텐츠와 제품 페이지는 검색·답변 엔진이 이해할 수 있도록 canonical URL, 사이트맵, breadcrumb, BlogPosting, SoftwareApplication 구조화 데이터를 제공합니다.
 
 ## 콘텐츠 DB 동기화

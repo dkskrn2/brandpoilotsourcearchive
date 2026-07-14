@@ -365,6 +365,7 @@ test("English marketing routes use locale detection, persistent switching, and r
   const proxy = read("proxy.ts");
   const layout = read("app/layout.tsx");
   const header = read("components/site-header.tsx");
+  const i18n = read("lib/i18n.ts");
   const sitemap = read("app/sitemap.ts");
   const englishHome = read("app/en/page.tsx");
   const englishService = read("app/en/service/page.tsx");
@@ -378,6 +379,7 @@ test("English marketing routes use locale detection, persistent switching, and r
   assert.match(layout, /<html lang=\{locale\}/);
   assert.match(header, /SITE_LOCALE_COOKIE/);
   assert.match(header, /Content \(KO\)/);
+  assert.match(i18n, /koreanPath === "\/product\/pricing"\) return "\/en\/product"/, "Korean-only pricing must switch to the existing English product page");
   assert.match(sitemap, /"\/en\/product"/);
   assert.match(sitemap, /"\/en\/contact"/);
 

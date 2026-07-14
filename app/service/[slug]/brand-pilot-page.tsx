@@ -106,7 +106,7 @@ export function BrandPilotPage() {
             <p className="bp-lead">자료 수집부터 초안, 카드뉴스, 검수, Instagram 게시까지 한 흐름으로 관리합니다.</p>
             <div className="bp-actions">
               <Link className="button" href="/contact">도입 상담하기</Link>
-              <a className="bp-text-link" href="#workflow">제품 흐름 보기 <ArrowRight aria-hidden size={18} /></a>
+              <Link className="bp-text-link" href="/product/pricing">요금제 보기 <ArrowRight aria-hidden size={18} /></Link>
             </div>
           </div>
 

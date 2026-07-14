@@ -12,6 +12,7 @@ const routes = [
   "/service/service-writing",
   "/service/service-startup",
   "/product",
+  "/product/pricing",
   "/work",
   "/content",
   "/contact",
