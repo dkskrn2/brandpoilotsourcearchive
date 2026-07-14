@@ -39,6 +39,16 @@ export function createDmWorkerDb(connectionString: string) {
       );
       return result.rows as Array<{ source_kind: "faq" | "owned_snapshot"; source_id: string; title: string; content: string; content_hash: string }>;
     },
+    async getExistingEmbeddings(brandId: string, contentHashes: string[]) {
+      if (!contentHashes.length) return [];
+      const result = await pool.query(
+        `select content_hash, embedding::text as embedding, embedding_model, embedding_version
+         from wiki_chunks
+         where brand_id = $1::uuid and enabled = true and content_hash = any($2::text[])`,
+        [brandId, contentHashes],
+      );
+      return result.rows as Array<{ content_hash: string; embedding: string; embedding_model: string; embedding_version: string }>;
+    },
     async replaceWiki(workspaceId: string, brandId: string, documents: unknown[]) {
       await pool.query("select replace_wiki_refresh_result($1::uuid, $2::uuid, $3::jsonb)", [workspaceId, brandId, JSON.stringify(documents)]);
     },

@@ -15,7 +15,7 @@
 ### 2.1 포함
 
 - Instagram Professional 계정 DM Webhook 수신
-- `instagram_manage_messages` 권한 확인과 재연결
+- `instagram_business_manage_messages` 권한 확인과 재연결
 - Instagram 계정별 챗봇 활성화 ON/OFF
 - FAQ CSV/Excel 일괄 업로드
 - 기존 `owned` 자사 URL과 최신 성공 크롤링 스냅샷 재사용

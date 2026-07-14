@@ -36,6 +36,7 @@ npm install
 ```powershell
 Copy-Item apps/api/.env.example apps/api/.env
 Copy-Item workers/brand-pilot-image-worker/.env.example workers/brand-pilot-image-worker/.env
+Copy-Item workers/brand-pilot-dm-worker/.env.example workers/brand-pilot-dm-worker/.env
 ```
 
 실제 `.env` 파일과 비밀값은 커밋하지 마세요. 비밀값을 소스 코드, 문서, 이슈, 로그에 붙여 넣지 말고 배포 환경의 비밀 관리 기능을 사용하세요. 필요한 변수와 역할은 각 `.env.example`에 정의되어 있습니다.
@@ -80,6 +81,16 @@ npm run worker:control
 ```
 
 워커를 전용 PC에 설치하거나 제어 앱을 사용할 때는 [워커 README](workers/brand-pilot-image-worker/README.md)와 [이미지 워커 설정](docs/IMAGE_WORKER_SETUP.md)을 따르세요.
+
+Instagram DM 자동답변 워커는 이미지 워커와 별도 PC 또는 별도 프로세스에서 실행합니다. `DM_WORKER_DATABASE_URL`은 Wiki 검색과 갱신에만 쓰며 Meta access token은 넣지 않습니다.
+
+```powershell
+# 작업 큐를 계속 폴링
+npm run dev:dm-worker
+
+# DM 작업과 Wiki 갱신 작업을 한 번만 처리
+npm run dm-worker:once
+```
 
 ## 검사와 빌드
 
@@ -167,8 +178,9 @@ npm run verify:reel --workspace @brand-pilot/image-worker
 
 실제 런타임이 읽는 환경 변수는 다음과 같습니다. 값은 `.env` 또는 배포 비밀 저장소에만 두고 문서에 기록하지 않습니다.
 
-- 중앙 API: `SUPABASE_DATABASE_URL`, `DATABASE_URL`, `WORKER_API_TOKEN`, `CRON_SECRET`, `LOCAL_SCHEDULER_ENABLED`, `SOURCE_CRAWL_BATCH_SIZE`, `SOURCE_CRAWL_DISCOVERY_LIMIT`, `SOURCE_CRAWL_TIME_BUDGET_MS`, `CREDENTIAL_ENCRYPTION_KEY`, `INSTAGRAM_PUBLISH_ENABLED`, `META_GRAPH_VERSION`, `KAKAO_REST_API_KEY`, `KAKAO_CLIENT_SECRET`, `KAKAO_REDIRECT_URI`, `AUTH_FRONTEND_URL`, `BRAND_PILOT_DEV_BRAND_ID`, `PORT`, `HOST`, `NODE_ENV`, `VERCEL`
+- 중앙 API: `SUPABASE_DATABASE_URL`, `DATABASE_URL`, `WORKER_API_TOKEN`, `CRON_SECRET`, `LOCAL_SCHEDULER_ENABLED`, `SOURCE_CRAWL_BATCH_SIZE`, `SOURCE_CRAWL_DISCOVERY_LIMIT`, `SOURCE_CRAWL_TIME_BUDGET_MS`, `CREDENTIAL_ENCRYPTION_KEY`, `INSTAGRAM_PUBLISH_ENABLED`, `META_GRAPH_VERSION`, `META_APP_ID`, `META_APP_SECRET`, `META_OAUTH_REDIRECT_URI`, `META_WEBHOOK_VERIFY_TOKEN`, `KAKAO_REST_API_KEY`, `KAKAO_CLIENT_SECRET`, `KAKAO_REDIRECT_URI`, `AUTH_FRONTEND_URL`, `BRAND_PILOT_DEV_BRAND_ID`, `PORT`, `HOST`, `NODE_ENV`, `VERCEL`
 - 이미지 워커: `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, `WORKER_ID`, `BLOB_READ_WRITE_TOKEN`, `IMAGE_PROVIDER`, `IMAGE_RENDER_COMMAND`, `IMAGE_MODEL`, `IMAGE_RETRY_DELAY_MS`, `POLL_INTERVAL_MS`, `HEARTBEAT_INTERVAL_MS`, `WORKER_CONTROL_PORT`, `PYTHON`, `CODEX_HOME`, `CODEX_COMMAND`, `APPDATA`, `NODE_ENV`
+- DM 워커: `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, `DM_WORKER_DATABASE_URL`, `WORKER_ID`, `POLL_INTERVAL_MS`, `DM_CLI_TIMEOUT_MS`, `OPENAI_API_KEY`, `OPENAI_EMBEDDING_MODEL`
 
 Rollout 기준은 Feed 활성 유지, Story capability 확인 후 활성화, Reel은 Python/FFmpeg와 비공개 계정 E2E 통과 후 활성화 순서입니다. 고객에게 Meta access token 입력을 요구하지 않으며, OAuth로 획득한 credential은 중앙 API가 암호화 저장합니다.
 
@@ -189,6 +201,7 @@ Rollout 기준은 Feed 활성 유지, Story capability 확인 후 활성화, Ree
 - [Vercel 중앙 API 배포](docs/VERCEL_CENTRAL_API_DEPLOYMENT.md)
 - [이미지 워커 설정](docs/IMAGE_WORKER_SETUP.md)
 - [이미지 워커 README](workers/brand-pilot-image-worker/README.md)
+- [Instagram DM 자동응답 설계](docs/superpowers/specs/2026-07-14-instagram-dm-ai-auto-reply-design.md)
 
 ## 산출물과 백업
 
