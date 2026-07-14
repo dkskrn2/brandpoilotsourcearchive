@@ -9,6 +9,7 @@ const navItems: NavItem[] = [
   { label: "게시 관리", path: "/publish-queue" },
   { label: "소스", path: "/sources" },
   { label: "채널", path: "/channels" },
+  { label: "DM 자동답변", path: "/dm-automation" },
   { label: "브랜드 설정", path: "/brand-settings" },
   { label: "결제 및 구독", path: "/billing" },
   { label: "고객센터", path: "/support" },

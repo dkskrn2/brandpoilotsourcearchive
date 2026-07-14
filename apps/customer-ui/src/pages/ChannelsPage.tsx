@@ -3,8 +3,9 @@ import { PageHeader } from "../components/layout/PageHeader";
 import { Alert } from "../components/ui/Alert";
 import { Badge } from "../components/ui/Badge";
 import { EmptyState } from "../components/ui/EmptyState";
+import { Switch } from "../components/ui/Switch";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
-import type { ChannelConnection, ChannelStatus } from "../types";
+import type { ChannelConnection, ChannelStatus, InstagramDmSettings } from "../types";
 
 const statusLabels: Record<ChannelStatus, string> = {
   connected: "연결됨",
@@ -29,12 +30,7 @@ function alertVariantFor(status: ChannelStatus) {
 }
 
 function metaOauthStartUrl() {
-  const startUrl = new URL(import.meta.env.VITE_META_OAUTH_START_URL ?? "https://www.danbammsg.co.kr/api/auth/meta/start");
-  startUrl.searchParams.set(
-    "dev_redirect",
-    import.meta.env.VITE_META_OAUTH_DEV_REDIRECT_URL ?? "http://localhost:4000/auth/meta/dev-complete"
-  );
-  return startUrl.toString();
+  return import.meta.env.VITE_META_OAUTH_START_URL ?? `${import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000"}/auth/meta/start`;
 }
 
 function channelAction(channel: ChannelConnection) {
@@ -51,6 +47,7 @@ function channelAction(channel: ChannelConnection) {
 export function ChannelsPage() {
   const [connectionCards, setConnectionCards] = useState<ChannelConnection[]>([]);
   const [apiNotice, setApiNotice] = useState<string | null>(null);
+  const [dmSettings, setDmSettings] = useState<InstagramDmSettings | null>(null);
 
   const attentionCount = connectionCards.filter((channel) => channel.status !== "connected").length;
   const connectionStatusBadge = connectionCards.length === 0
@@ -77,6 +74,20 @@ export function ChannelsPage() {
       ignore = true;
     };
   }, []);
+
+  useEffect(() => {
+    api.getInstagramDmSettings(DEMO_BRAND_ID).then(setDmSettings).catch(() => setDmSettings(null));
+  }, []);
+
+  async function toggleDm(enabled: boolean) {
+    if (!dmSettings) return;
+    try {
+      setDmSettings(await api.updateInstagramDmSettings(DEMO_BRAND_ID, { enabled }));
+      setApiNotice(null);
+    } catch {
+      setApiNotice("DM 자동답변을 켜지 못했습니다. Wiki, 메시지 권한, 워커 상태를 먼저 확인하세요.");
+    }
+  }
 
   return (
     <section className="content">
@@ -137,6 +148,21 @@ export function ChannelsPage() {
                 {channel.alertBody}
               </Alert>
             ))}
+        </div>
+      </section>
+
+      <section className="panel" style={{ marginTop: 16 }}>
+        <div className="panel-head"><h2>Instagram DM 자동답변</h2>{dmSettings ? <Switch label="DM 자동답변" checked={dmSettings.enabled} onChange={toggleDm} /> : null}</div>
+        <div className="panel-body grid">
+          {!dmSettings ? <EmptyState title="DM 상태를 불러올 수 없습니다" description="API 연결 후 메시지 권한과 Wiki 상태를 확인할 수 있습니다." /> : <>
+            <div className="actions">
+              <Badge variant={dmSettings.wikiReady ? "ok" : "warn"}>Wiki {dmSettings.wikiReady ? "준비됨" : "필요"}</Badge>
+              <Badge variant={dmSettings.messagePermissionReady ? "ok" : "warn"}>메시지 권한 {dmSettings.messagePermissionReady ? "확인됨" : "필요"}</Badge>
+              <Badge variant={dmSettings.workerStatus === "online" ? "ok" : "warn"}>워커 {dmSettings.workerStatus === "online" ? "온라인" : "오프라인"}</Badge>
+            </div>
+            {!dmSettings.wikiReady || !dmSettings.messagePermissionReady || dmSettings.workerStatus !== "online" ? <Alert title="자동답변을 켤 수 없습니다" variant="warn">FAQ/Wiki, Instagram 메시지 권한, DM 워커 상태를 모두 준비한 후 활성화할 수 있습니다.</Alert> : null}
+            <p className="muted">근거가 부족하거나 처리 오류가 나면 고정 안내문을 발송하고, 처리 이력에 남깁니다.</p>
+          </>}
         </div>
       </section>
     </section>

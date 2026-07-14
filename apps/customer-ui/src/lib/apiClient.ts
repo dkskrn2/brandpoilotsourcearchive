@@ -10,6 +10,9 @@ import type {
   InstagramDeliveryFormat,
   InstagramFormatSettings,
   InstagramFormatSettingsInput,
+  InstagramDmHistory,
+  InstagramDmSettings,
+  KnowledgeImport,
   PipelineRunResult,
   PublishSlot,
   PublishResult,
@@ -325,6 +328,27 @@ export function apiClient(options: ApiClientOptions = {}) {
     listTopicRows(brandId: string, status?: TopicRow["status"]) {
       const query = status ? `?${new URLSearchParams({ status }).toString()}` : "";
       return request<TopicRow[]>(fetcher, `${baseUrl}/brands/${brandId}/topic-rows${query}`, { method: "GET" });
+    },
+    importFaq(brandId: string, payload: { fileName: string; fileBase64: string }) {
+      return request<KnowledgeImport>(fetcher, `${baseUrl}/brands/${brandId}/knowledge-imports`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    },
+    listKnowledgeImports(brandId: string) {
+      return request<KnowledgeImport[]>(fetcher, `${baseUrl}/brands/${brandId}/knowledge-imports`, { method: "GET" });
+    },
+    refreshWiki(brandId: string) {
+      return request<{ id: string; status: string }>(fetcher, `${baseUrl}/brands/${brandId}/wiki/refresh`, { method: "POST" });
+    },
+    getInstagramDmSettings(brandId: string) {
+      return request<InstagramDmSettings>(fetcher, `${baseUrl}/brands/${brandId}/instagram-dm/settings`, { method: "GET" });
+    },
+    updateInstagramDmSettings(brandId: string, payload: Partial<Pick<InstagramDmSettings, "enabled" | "fallbackMessage" | "errorMessage">>) {
+      return request<InstagramDmSettings>(fetcher, `${baseUrl}/brands/${brandId}/instagram-dm/settings`, { method: "PUT", body: JSON.stringify(payload) });
+    },
+    listInstagramDmHistory(brandId: string) {
+      return request<InstagramDmHistory[]>(fetcher, `${baseUrl}/brands/${brandId}/instagram-dm/history`, { method: "GET" });
     },
     crawlSources(brandId: string) {
       return request<PipelineRunResult>(fetcher, `${baseUrl}/brands/${brandId}/sources/crawl`, { method: "POST" });

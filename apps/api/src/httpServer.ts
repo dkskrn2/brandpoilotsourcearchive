@@ -807,6 +807,39 @@ export function createServer(
     return repository.checkChannel(request.params.brandId, channel);
   });
 
+  app.get<{ Params: { brandId: string } }>("/brands/:brandId/instagram-dm/settings", async (request) => {
+    return repository.getInstagramDmSettings(request.params.brandId);
+  });
+
+  app.put<{ Params: { brandId: string }; Body: Record<string, unknown> }>("/brands/:brandId/instagram-dm/settings", async (request, reply) => {
+    const body = request.body;
+    if (
+      (body.enabled !== undefined && typeof body.enabled !== "boolean")
+      || (body.fallbackMessage !== undefined && typeof body.fallbackMessage !== "string")
+      || (body.errorMessage !== undefined && typeof body.errorMessage !== "string")
+    ) {
+      reply.code(400);
+      return { error: "invalid_dm_settings" };
+    }
+    try {
+      return await repository.updateInstagramDmSettings(request.params.brandId, {
+        enabled: body.enabled as boolean | undefined,
+        fallbackMessage: body.fallbackMessage as string | undefined,
+        errorMessage: body.errorMessage as string | undefined,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "dm_activation_blocked") {
+        reply.code(409);
+        return { error: error.message };
+      }
+      throw error;
+    }
+  });
+
+  app.get<{ Params: { brandId: string } }>("/brands/:brandId/instagram-dm/history", async (request) => {
+    return repository.listInstagramDmHistory(request.params.brandId);
+  });
+
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/content-outputs", async (request) => {
     return repository.listContentOutputs(request.params.brandId);
   });

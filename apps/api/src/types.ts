@@ -23,9 +23,12 @@ export type SupportRequestStatus = "new" | "in_progress" | "resolved";
 export type DmWorkerStatus = "online" | "worker_offline" | "unknown";
 
 export interface InstagramDmSettingsDto {
+  brandId: string;
   enabled: boolean;
   fallbackMessage: string;
   errorMessage: string;
+  wikiReady: boolean;
+  messagePermissionReady: boolean;
   webhookStatus: "connected" | "needs_attention" | "unchecked";
   workerStatus: DmWorkerStatus;
 }
@@ -594,6 +597,15 @@ export interface DmReplyJobCompletionInput {
   result: import("./dmTypes.js").DmWorkerResult;
 }
 
+export interface InstagramDmHistoryDto {
+  id: string;
+  direction: "inbound" | "outbound";
+  messageType: string;
+  body: string | null;
+  decision: string | null;
+  createdAt: string;
+}
+
 export interface ApiRepository {
   health(): Promise<{ database: "ok" }>;
   getBillingSummary(brandId: string): Promise<BillingSummaryDto>;
@@ -627,6 +639,9 @@ export interface ApiRepository {
   listKnowledgeImports(brandId: string): Promise<KnowledgeImportDto[]>;
   enqueueWikiRefresh(brandId: string): Promise<{ id: string; status: string }>;
   receiveInstagramWebhookMessage(input: InstagramWebhookMessageInput): Promise<InstagramWebhookReceiveResult>;
+  getInstagramDmSettings(brandId: string): Promise<InstagramDmSettingsDto>;
+  updateInstagramDmSettings(brandId: string, input: Partial<Pick<InstagramDmSettingsDto, "enabled" | "fallbackMessage" | "errorMessage">>): Promise<InstagramDmSettingsDto>;
+  listInstagramDmHistory(brandId: string): Promise<InstagramDmHistoryDto[]>;
   listTopicRows(brandId: string, status?: string): Promise<TopicRowDto[]>;
   crawlSources(brandId: string): Promise<PipelineRunResult>;
   crawlSingleSource(brandId: string, sourceId: string, trigger: SourceCrawlTrigger): Promise<SourceCrawlRunDto>;

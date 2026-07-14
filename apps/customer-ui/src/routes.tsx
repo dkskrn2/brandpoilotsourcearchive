@@ -10,6 +10,7 @@ import { PublishQueuePage } from "./pages/PublishQueuePage";
 import { SourcesPage } from "./pages/SourcesPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SupportPage } from "./pages/SupportPage";
+import { DmAutomationPage } from "./pages/DmAutomationPage";
 
 export const router = createBrowserRouter(
   [
@@ -24,6 +25,7 @@ export const router = createBrowserRouter(
         { path: "publish-queue", element: <PublishQueuePage /> },
         { path: "sources", element: <SourcesPage /> },
         { path: "channels", element: <ChannelsPage /> },
+        { path: "dm-automation", element: <DmAutomationPage /> },
         { path: "billing", element: <BillingPage /> },
         { path: "admin/channels", element: <AdminChannelsPage /> },
         { path: "support", element: <SupportPage /> },

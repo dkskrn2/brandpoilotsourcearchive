@@ -45,6 +45,8 @@ import type {
   ImageRenderJobCompletionInput,
   ImageRenderJobDto,
   InstagramDeliveryFormat,
+  InstagramDmHistoryDto,
+  InstagramDmSettingsDto,
   InstagramFormatSettingsDto,
   InstagramFormatSettingsInput,
   InstagramWebhookMessageInput,
@@ -3951,6 +3953,80 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         [brand.rows[0].workspace_id, brandId, JSON.stringify({ trigger: "manual" })],
       );
       return { id: result.rows[0].id, status: result.rows[0].status };
+    },
+
+    async getInstagramDmSettings(brandId) {
+      const result = await pool.query(
+        `select settings.enabled, settings.fallback_message, settings.error_message,
+                exists(
+                  select 1 from wiki_chunks chunk
+                  join wiki_documents document on document.id = chunk.wiki_document_id
+                  where chunk.brand_id = brand.id and chunk.enabled and document.is_active
+                ) as wiki_ready,
+                exists(
+                  select 1 from brand_channels channel
+                  join channel_credentials credential on credential.brand_channel_id = channel.id
+                  where channel.brand_id = brand.id and channel.channel = 'instagram' and channel.deleted_at is null
+                    and credential.status = 'active' and credential.revoked_at is null
+                    and credential.auth_mode = 'instagram_login'
+                    and 'instagram_business_manage_messages' = any(credential.scopes)
+                ) as message_permission_ready,
+                (select bool_or(last_heartbeat_at > now() - interval '30 seconds') from worker_instances where worker_type = 'dm') as worker_online
+         from brands brand
+         left join instagram_dm_settings settings on settings.brand_id = brand.id
+         where brand.id = $1 and brand.deleted_at is null`,
+        [brandId],
+      );
+      if (!result.rowCount) throw new Error("brand_not_found");
+      const row = result.rows[0];
+      return {
+        brandId,
+        enabled: Boolean(row.enabled),
+        fallbackMessage: row.fallback_message ?? "현재 확인 가능한 안내 자료가 부족합니다. 담당자가 확인 후 안내드리겠습니다.",
+        errorMessage: row.error_message ?? "답변을 준비하는 중 문제가 발생했습니다. 잠시 후 다시 문의해 주세요.",
+        wikiReady: Boolean(row.wiki_ready),
+        messagePermissionReady: Boolean(row.message_permission_ready),
+        webhookStatus: "unchecked",
+        workerStatus: row.worker_online === true ? "online" : row.worker_online === false ? "worker_offline" : "unknown",
+      } satisfies InstagramDmSettingsDto;
+    },
+
+    async updateInstagramDmSettings(brandId, input) {
+      const current = await this.getInstagramDmSettings(brandId);
+      const enabled = input.enabled ?? current.enabled;
+      if (enabled && (!current.wikiReady || !current.messagePermissionReady || current.workerStatus !== "online")) {
+        throw new Error("dm_activation_blocked");
+      }
+      const brand = await pool.query("select workspace_id from brands where id = $1 and deleted_at is null", [brandId]);
+      if (!brand.rowCount) throw new Error("brand_not_found");
+      await pool.query(
+        `insert into instagram_dm_settings (workspace_id, brand_id, enabled, fallback_message, error_message)
+         values ($1, $2, $3, $4, $5)
+         on conflict (brand_id) do update set enabled = excluded.enabled,
+           fallback_message = excluded.fallback_message, error_message = excluded.error_message, updated_at = now()`,
+        [brand.rows[0].workspace_id, brandId, enabled, input.fallbackMessage?.trim() || current.fallbackMessage, input.errorMessage?.trim() || current.errorMessage],
+      );
+      return this.getInstagramDmSettings(brandId);
+    },
+
+    async listInstagramDmHistory(brandId) {
+      const result = await pool.query(
+        `select message.id, message.direction, message.message_type, message.body,
+                message.raw_payload->>'decision' as decision, message.created_at
+         from instagram_dm_messages message
+         where message.brand_id = $1
+         order by message.created_at desc
+         limit 50`,
+        [brandId],
+      );
+      return result.rows.map((row) => ({
+        id: row.id,
+        direction: row.direction,
+        messageType: row.message_type,
+        body: row.body,
+        decision: row.decision ?? null,
+        createdAt: toIso(row.created_at)!,
+      })) as InstagramDmHistoryDto[];
     },
 
     async receiveInstagramWebhookMessage(input: InstagramWebhookMessageInput): Promise<InstagramWebhookReceiveResult> {

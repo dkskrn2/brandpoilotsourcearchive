@@ -360,16 +360,18 @@ test("DM Wiki core migration runs in PGlite and pgvector migration is explicitly
   const migrations = await loadMigrations();
   const coreMigration = migrations.find((migration) => migration.id === "020_dm_wiki_core.sql");
   const vectorMigration = migrations.find((migration) => migration.id === "021_dm_wiki_pgvector.sql");
+  const instagramLoginMigration = migrations.find((migration) => migration.id === "022_instagram_login_auth_mode.sql");
 
   assert.ok(coreMigration);
   assert.ok(vectorMigration);
+  assert.ok(instagramLoginMigration);
   assert.match(vectorMigration.sql, /^-- requires: pgvector/);
   assert.match(vectorMigration.sql, /vector\(1536\)/);
   assert.match(vectorMigration.sql, /using hnsw/);
   assert.match(vectorMigration.sql, /search_brand_wiki/);
 
   await withDatabase(async (database) => {
-    await runMigrationRange(database, migrations, "001_initial_schema.sql", "020_dm_wiki_core.sql");
+    await runMigrationRange(database, migrations, "001_initial_schema.sql", "022_instagram_login_auth_mode.sql");
     const tables = await database.query(
       "select table_name from information_schema.tables where table_schema = 'public' and table_name in ('knowledge_imports', 'knowledge_entries', 'wiki_documents', 'wiki_chunks', 'instagram_dm_settings', 'instagram_dm_conversations', 'instagram_dm_messages', 'unanswered_questions', 'worker_instances') order by table_name",
     );
@@ -377,5 +379,7 @@ test("DM Wiki core migration runs in PGlite and pgvector migration is explicitly
     const jobsConstraint = await readConstraintValues(database, "jobs", "jobs_type_check");
     assert.ok(jobsConstraint.includes("wiki_refresh"));
     assert.ok(jobsConstraint.includes("instagram_dm_reply"));
+    const authMode = await database.query("select column_name from information_schema.columns where table_name = 'channel_credentials' and column_name = 'auth_mode'");
+    assert.equal(authMode.rows.length, 1);
   });
 });

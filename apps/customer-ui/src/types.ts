@@ -118,6 +118,38 @@ export interface ChannelConnection {
   alertBody?: string;
 }
 
+export interface KnowledgeImport {
+  id: string;
+  fileName: string;
+  status: "processing" | "succeeded" | "failed";
+  totalRows: number;
+  validRows: number;
+  duplicateRows: number;
+  invalidRows: number;
+  updatedRows: number;
+  createdAt: string;
+}
+
+export interface InstagramDmSettings {
+  brandId: string;
+  enabled: boolean;
+  fallbackMessage: string;
+  errorMessage: string;
+  wikiReady: boolean;
+  messagePermissionReady: boolean;
+  webhookStatus: "connected" | "needs_attention" | "unchecked";
+  workerStatus: "online" | "worker_offline" | "unknown";
+}
+
+export interface InstagramDmHistory {
+  id: string;
+  direction: "inbound" | "outbound";
+  messageType: string;
+  body: string | null;
+  decision: string | null;
+  createdAt: string;
+}
+
 export interface ChannelConnectionRequest {
   id: string | null;
   brandId: string;
