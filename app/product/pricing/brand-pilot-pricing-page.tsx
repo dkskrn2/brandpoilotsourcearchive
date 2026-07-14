@@ -1,11 +1,7 @@
-import Image from "next/image";
 import Link from "next/link";
 import {
   ArrowRight,
-  Buildings,
-  CalendarDots,
   Check,
-  FlowArrow,
   ShieldCheck,
   UsersThree
 } from "@phosphor-icons/react/dist/ssr";
@@ -42,12 +38,6 @@ const plans = [
     features: ["복수 브랜드의 자료와 기준 관리", "승인 단계와 책임 범위 설계", "운영 리포트와 개선 흐름", "채널과 시스템 연동 범위 검토"],
     cta: "확장 운영 상담"
   }
-] as const;
-
-const pricingFactors = [
-  { icon: Buildings, number: "01", title: "운영할 브랜드", body: "브랜드 수와 브랜드별 말투, 금지 표현, 자료 구조를 함께 확인합니다." },
-  { icon: CalendarDots, number: "02", title: "월간 발행 범위", body: "콘텐츠 수, 카드뉴스 구성, 검토와 게시 일정을 기준으로 운영량을 정합니다." },
-  { icon: FlowArrow, number: "03", title: "승인과 연동 범위", body: "담당자 수, 승인 단계, 게시 채널과 별도 시스템 연동 필요 여부를 검토합니다." }
 ] as const;
 
 const comparisonGroups = [
@@ -184,51 +174,6 @@ export function BrandPilotPricingPage() {
             </table>
           </div>
           <p className="bpp-comparison__note">최종 제공 범위, 결제 주기와 환불 조건은 견적서, 신청 화면 또는 계약서에서 확정합니다.</p>
-        </div>
-      </section>
-
-      <section className="bpp-section bpp-factors" aria-labelledby="factor-title">
-        <div className="bpp-shell">
-          <header className="bpp-section__head">
-            <h2 id="factor-title">견적은 세 가지<br />운영 범위로 정합니다.</h2>
-            <p>같은 기능을 묶어 판매하기보다, 실제 운영량과 협업 방식에 맞춰 시작 범위를 함께 정합니다.</p>
-          </header>
-          <div className="bpp-factors__list">
-            {pricingFactors.map(({ icon: Icon, number, title, body }) => (
-              <article key={title}>
-                <span>{number}</span>
-                <Icon aria-hidden size={28} weight="duotone" />
-                <h3>{title}</h3>
-                <p>{body}</p>
-              </article>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="bpp-section bpp-included">
-        <div className="bpp-shell bpp-included__grid">
-          <div>
-            <h2>어떤 플랜이든<br />운영의 중심은 같습니다.</h2>
-            <p>자료와 브랜드 기준을 먼저 정하고, 사람이 검토한 콘텐츠만 게시 흐름으로 보냅니다.</p>
-            <ul>
-              <li><Check aria-hidden size={18} weight="bold" />근거 자료를 분리해 관리</li>
-              <li><Check aria-hidden size={18} weight="bold" />브랜드 기준을 초안에 적용</li>
-              <li><Check aria-hidden size={18} weight="bold" />카드뉴스와 문구를 함께 검토</li>
-              <li><Check aria-hidden size={18} weight="bold" />승인 결과와 게시 상태를 기록</li>
-            </ul>
-            <Link className="bpp-text-link" href="/product">제품 소개 보기 <ArrowRight aria-hidden size={18} /></Link>
-          </div>
-          <figure>
-            <Image
-              src="/images/product/brand-pilot-workflow-v1.webp"
-              alt="자료 수집, 콘텐츠 초안, 검토 승인과 Instagram 게시를 연결한 Brand Pilot 화면"
-              width={1536}
-              height={1024}
-              sizes="(max-width: 960px) calc(100vw - 40px), 52vw"
-              priority
-            />
-          </figure>
         </div>
       </section>
 
