@@ -36,9 +36,15 @@ export interface KnowledgeImportDto {
   status: "processing" | "succeeded" | "failed";
   totalRows: number;
   validRows: number;
+  duplicateRows: number;
   invalidRows: number;
   updatedRows: number;
   createdAt: string;
+}
+
+export interface KnowledgeImportInput {
+  fileName: string;
+  fileBase64: string;
 }
 
 export interface DmConversationMessageDto {
@@ -575,6 +581,9 @@ export interface ApiRepository {
   listPublishResults(brandId: string): Promise<PublishResultDto[]>;
   downloadPublishedResults(brandId: string): Promise<DownloadPackageDto>;
   createTopicUpload(brandId: string, input: TopicUploadInput): Promise<TopicUploadDto>;
+  createKnowledgeImport(brandId: string, input: KnowledgeImportInput): Promise<KnowledgeImportDto>;
+  listKnowledgeImports(brandId: string): Promise<KnowledgeImportDto[]>;
+  enqueueWikiRefresh(brandId: string): Promise<{ id: string; status: string }>;
   listTopicRows(brandId: string, status?: string): Promise<TopicRowDto[]>;
   crawlSources(brandId: string): Promise<PipelineRunResult>;
   crawlSingleSource(brandId: string, sourceId: string, trigger: SourceCrawlTrigger): Promise<SourceCrawlRunDto>;

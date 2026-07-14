@@ -192,7 +192,7 @@ export function createServer(
       reply.code(404).send({ error: message });
       return;
     }
-    if (message === "topic_upload_invalid_csv") {
+    if (message === "topic_upload_invalid_csv" || message === "faq_upload_invalid_file") {
       reply.code(400).send({ error: message });
       return;
     }
@@ -705,6 +705,34 @@ export function createServer(
     });
     reply.code(201);
     return upload;
+  });
+
+  app.post<{ Params: { brandId: string }; Body: Record<string, unknown> }>("/brands/:brandId/knowledge-imports", async (request, reply) => {
+    if (
+      typeof request.body?.fileName !== "string" ||
+      request.body.fileName.trim().length === 0 ||
+      typeof request.body.fileBase64 !== "string" ||
+      request.body.fileBase64.trim().length === 0
+    ) {
+      reply.code(400);
+      return { error: "faq_upload_file_required" };
+    }
+    const imported = await repository.createKnowledgeImport(request.params.brandId, {
+      fileName: request.body.fileName,
+      fileBase64: request.body.fileBase64,
+    });
+    reply.code(201);
+    return imported;
+  });
+
+  app.get<{ Params: { brandId: string } }>("/brands/:brandId/knowledge-imports", async (request) => {
+    return repository.listKnowledgeImports(request.params.brandId);
+  });
+
+  app.post<{ Params: { brandId: string } }>("/brands/:brandId/wiki/refresh", async (request, reply) => {
+    const job = await repository.enqueueWikiRefresh(request.params.brandId);
+    reply.code(202);
+    return job;
   });
 
   app.get<{ Params: { brandId: string }; Querystring: { status?: string } }>("/brands/:brandId/topic-rows", async (request, reply) => {

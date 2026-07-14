@@ -23,6 +23,7 @@ import { crawlSourceUrl, discoverContentUrls, isLikelyContentPage } from "./sour
 import { nextRetryAt, scheduledRunKey } from "./sourceCrawlSchedule.js";
 import { buildThreadsRenderJobPayload, parseThreadsRenderJobResult } from "./textRenderJobs.js";
 import { brandPolicyDateKey, dailyTopicCapacity, determineGenerationReadiness, runDailyTopicGeneration } from "./topicPublishGroups.js";
+import { parseFaqUpload } from "./faqImport.js";
 import type {
   ApiRepository,
   AutomaticCrawlResult,
@@ -43,6 +44,8 @@ import type {
   InstagramDeliveryFormat,
   InstagramFormatSettingsDto,
   InstagramFormatSettingsInput,
+  KnowledgeImportDto,
+  KnowledgeImportInput,
   PublishQueueDto,
   PublishResultDto,
   PipelineRunResult,
@@ -347,6 +350,35 @@ function mapProfile(row: any): BrandProfileDto {
     mainLink: row.main_link ?? "",
     autoApprovalEnabled: row.auto_approval_enabled ?? false
   };
+}
+
+function mapKnowledgeImport(row: any): KnowledgeImportDto {
+  const result = sourceContextObject(row.result_json);
+  return {
+    id: row.id,
+    fileName: row.file_name,
+    status: row.status,
+    totalRows: Number(result.totalRows ?? 0),
+    validRows: Number(result.validRows ?? 0),
+    duplicateRows: Number(result.duplicateRows ?? 0),
+    invalidRows: Number(result.invalidRows ?? 0),
+    updatedRows: Number(result.updatedRows ?? 0),
+    createdAt: toIso(row.created_at) ?? new Date(0).toISOString(),
+  };
+}
+
+function decodeBase64Upload(value: string) {
+  const normalized = value.replace(/\s+/g, "");
+  const maxBase64Length = Math.ceil((1024 * 1024) / 3) * 4 + 4;
+  if (
+    !normalized ||
+    normalized.length > maxBase64Length ||
+    !/^[a-z0-9+/]*={0,2}$/i.test(normalized) ||
+    normalized.length % 4 !== 0
+  ) {
+    throw new Error("faq_upload_invalid_file");
+  }
+  return Buffer.from(normalized, "base64");
 }
 
 function mapChannel(row: any): ChannelDto {
@@ -3646,6 +3678,121 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       return { id: result.rows[0].id, status: result.rows[0].status };
     },
 
+    async createKnowledgeImport(brandId, input: KnowledgeImportInput) {
+      const parsed = await parseFaqUpload({
+        fileName: input.fileName,
+        bytes: decodeBase64Upload(input.fileBase64),
+      });
+      const finalRows = new Map<string, typeof parsed.validRows[number]>();
+      for (const row of parsed.validRows) finalRows.set(row.normalizedQuestion, row);
+      const uniqueRows = [...finalRows.values()];
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const brand = await client.query(
+          "select workspace_id from brands where id = $1 and deleted_at is null",
+          [brandId],
+        );
+        if (!brand.rowCount) throw new Error("brand_not_found");
+        const workspaceId = brand.rows[0].workspace_id;
+        const resultJson = {
+          totalRows: parsed.rows.length,
+          validRows: parsed.validRows.length,
+          duplicateRows: parsed.validRows.length - uniqueRows.length,
+          invalidRows: parsed.invalidRows.length,
+          updatedRows: uniqueRows.length,
+        };
+        const imported = await client.query(
+          `insert into knowledge_imports (workspace_id, brand_id, file_name, source_rows, result_json, status)
+           values ($1, $2, $3, $4::jsonb, $5::jsonb, 'succeeded')
+           returning id, file_name, status, result_json, created_at`,
+          [
+            workspaceId,
+            brandId,
+            input.fileName.trim(),
+            JSON.stringify(parsed.rows),
+            JSON.stringify(resultJson),
+          ],
+        );
+        for (const row of uniqueRows) {
+          await client.query(
+            `insert into knowledge_entries (
+               workspace_id, brand_id, normalized_question, question, answer, category, keywords, priority, enabled, last_import_id
+             ) values ($1, $2, $3, $4, $5, $6, $7::text[], $8, $9, $10)
+             on conflict (brand_id, normalized_question) do update
+             set question = excluded.question,
+                 answer = excluded.answer,
+                 category = excluded.category,
+                 keywords = excluded.keywords,
+                 priority = excluded.priority,
+                 enabled = excluded.enabled,
+                 last_import_id = excluded.last_import_id,
+                 updated_at = now()`,
+            [
+              workspaceId,
+              brandId,
+              row.normalizedQuestion,
+              row.question,
+              row.answer,
+              row.category,
+              row.keywords,
+              row.priority,
+              row.enabled,
+              imported.rows[0].id,
+            ],
+          );
+        }
+        if (uniqueRows.length > 0) {
+          await client.query(
+            `insert into jobs (workspace_id, brand_id, job_type, status, payload_json, dedupe_key)
+             values ($1, $2, 'wiki_refresh', 'queued', $3::jsonb, $2)
+             on conflict (job_type, dedupe_key)
+             where job_type = 'wiki_refresh' and dedupe_key is not null and status in ('queued', 'running')
+             do update set payload_json = excluded.payload_json, run_at = now(), updated_at = now()
+             returning id, status`,
+            [workspaceId, brandId, JSON.stringify({ trigger: "faq_import", importId: imported.rows[0].id })],
+          );
+        }
+        await client.query("commit");
+        return mapKnowledgeImport(imported.rows[0]);
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async listKnowledgeImports(brandId) {
+      const result = await pool.query(
+        `select id, file_name, status, result_json, created_at
+         from knowledge_imports
+         where brand_id = $1
+         order by created_at desc
+         limit 20`,
+        [brandId],
+      );
+      return result.rows.map(mapKnowledgeImport);
+    },
+
+    async enqueueWikiRefresh(brandId) {
+      const brand = await pool.query(
+        "select workspace_id from brands where id = $1 and deleted_at is null",
+        [brandId],
+      );
+      if (!brand.rowCount) throw new Error("brand_not_found");
+      const result = await pool.query(
+        `insert into jobs (workspace_id, brand_id, job_type, status, payload_json, dedupe_key)
+         values ($1, $2, 'wiki_refresh', 'queued', $3::jsonb, $2)
+         on conflict (job_type, dedupe_key)
+         where job_type = 'wiki_refresh' and dedupe_key is not null and status in ('queued', 'running')
+         do update set payload_json = excluded.payload_json, run_at = now(), updated_at = now()
+         returning id, status`,
+        [brand.rows[0].workspace_id, brandId, JSON.stringify({ trigger: "manual" })],
+      );
+      return { id: result.rows[0].id, status: result.rows[0].status };
+    },
+
     async createTopicUpload(brandId, input: TopicUploadInput) {
       const rows = parseTopicCsv(input);
       const topicKeys = [...new Set(rows.map((row) => row.topicKey).filter((key) => key !== "::"))];
@@ -3738,6 +3885,3 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     }
   };
 }
-
-
-

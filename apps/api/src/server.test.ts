@@ -299,6 +299,19 @@ function createRepository(): ApiRepository {
       duplicateRows: 0,
       invalidRows: 1
     })),
+    createKnowledgeImport: vi.fn(async (_brandId, body) => ({
+      id: "knowledge-import-1",
+      fileName: body.fileName,
+      status: "succeeded" as const,
+      totalRows: 2,
+      validRows: 2,
+      duplicateRows: 0,
+      invalidRows: 0,
+      updatedRows: 2,
+      createdAt: "2026-07-14T00:00:00.000Z"
+    })),
+    listKnowledgeImports: vi.fn(async () => []),
+    enqueueWikiRefresh: vi.fn(async () => ({ id: "wiki-job-1", status: "queued" })),
     crawlSources: vi.fn(async () => ({ processed: 2, created: 2, updated: 2, failed: 0 })),
     generateContent: vi.fn(async () => ({ processed: 1, created: 3, updated: 1, failed: 0 })),
     runDailyGeneration: vi.fn(async () => ({ brandsSelected: 1, runsStarted: 1, processed: 1, created: 3, updated: 1, failed: 0, status: "succeeded" as const })),
@@ -1134,6 +1147,24 @@ describe("API server", () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ error: "topic_upload_invalid_csv" });
+  });
+
+  it("imports FAQ data from a base64 file body", async () => {
+    const repository = createRepository();
+    const app = createServer({ repository });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/knowledge-imports`,
+      payload: {
+        fileName: "faq.csv",
+        fileBase64: Buffer.from("question,answer\n운영 시간,09-18\n").toString("base64")
+      }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({ fileName: "faq.csv", status: "succeeded" });
+    expect(repository.createKnowledgeImport).toHaveBeenCalledWith(brandId, expect.objectContaining({ fileName: "faq.csv" }));
   });
 
   it("lists topic rows with an optional status filter", async () => {
