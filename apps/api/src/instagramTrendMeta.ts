@@ -22,6 +22,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stableError(error: unknown): Error {
   if (error instanceof MetaGraphRequestError) {
+    if (error.status === 429 || error.status >= 500) {
+      return new Error("instagram_trend_fetch_failed");
+    }
     if (error.status === 401 || error.code === 102 || error.code === 190) {
       return new Error("instagram_reconnect_required");
     }
@@ -66,7 +69,7 @@ export async function fetchInstagramHashtagTopMedia({
   }
 
   const topMediaPayload = await fetchGraphJson(
-    `/${metaHashtagId}/top_media`,
+    `/${encodeURIComponent(metaHashtagId)}/top_media`,
     {
       user_id: instagramBusinessAccountId,
       fields: TOP_MEDIA_FIELDS,

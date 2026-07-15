@@ -114,6 +114,27 @@ describe("fetchInstagramHashtagTopMedia", () => {
     await expect(fetchInstagramHashtagTopMedia({ ...input, fetchImpl })).rejects.toThrow("instagram_trend_fetch_failed");
   });
 
+  it.each([
+    [429, 190],
+    [500, 102],
+    [503, 10]
+  ])("prioritizes retryable status %s over Meta error code %s", async (status, code) => {
+    const { fetchImpl } = fetchQueue(new MetaGraphRequestError({ status, code }));
+    await expect(fetchInstagramHashtagTopMedia({ ...input, fetchImpl })).rejects.toThrow("instagram_trend_fetch_failed");
+  });
+
+  it("encodes the Meta hashtag ID before placing it in the Graph path", async () => {
+    const { calls, fetchImpl } = fetchQueue(
+      jsonResponse({ data: [{ id: "tag/with?reserved#chars" }] }),
+      jsonResponse({ data: [] })
+    );
+
+    await fetchInstagramHashtagTopMedia({ ...input, fetchImpl });
+
+    const topMedia = new URL(calls[1]!);
+    expect(topMedia.pathname).toBe("/v99.0/tag%2Fwith%3Freserved%23chars/top_media");
+  });
+
   it("maps second-response authentication and permission errors", async () => {
     for (const [error, expected] of [
       [new MetaGraphRequestError({ status: 401 }), "instagram_reconnect_required"],
