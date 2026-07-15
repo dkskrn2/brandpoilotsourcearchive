@@ -20,7 +20,12 @@ test.beforeEach(async ({ page }) => {
     const pathname = requestUrl.pathname;
     const isApiRequest = requestUrl.port === "4000" || pathname.startsWith("/api/");
     if (!isApiRequest) return route.continue();
-    const common = { headers: { "access-control-allow-origin": "http://localhost:5173", "access-control-allow-credentials": "true" } };
+    const common = {
+      headers: {
+        "access-control-allow-origin": route.request().headers().origin ?? "http://127.0.0.1:5273",
+        "access-control-allow-credentials": "true"
+      }
+    };
     if (pathname.endsWith("/auth/me")) {
       return route.fulfill({ ...common, json: {
         user: { id: "user-e2e", displayName: "E2E", email: "e2e@example.com" },
@@ -32,6 +37,7 @@ test.beforeEach(async ({ page }) => {
       return route.fulfill({ ...common, json: {
         brandId: "brand-e2e",
         brandName: "E2E Brand",
+        logoUrl: null,
         lastGeneratedAt: null,
         navigation: { onboardingRemaining: 0, contentReview: 0, publishIssues: 0, channelIssues: 0 },
         onboarding: {
@@ -44,8 +50,11 @@ test.beforeEach(async ({ page }) => {
     }
     if (pathname.endsWith("/profile")) {
       return route.fulfill({ ...common, json: {
+        id: "profile-e2e",
+        brandId: "brand-e2e",
         name: "E2E Brand",
-        industry: "정보통신업",
+        primaryCategory: { code: "it", name: "IT·디지털" },
+        subcategories: [],
         primaryCustomer: "기업 실무 담당자",
         description: "E2E brand profile",
         tone: "명확하게",

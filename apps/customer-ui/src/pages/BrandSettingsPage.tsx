@@ -60,6 +60,15 @@ function normalizeFormatSettings(settings: InstagramFormatSettings) {
   return { ...settings, formats: formats as BrandContentFormat[] };
 }
 
+function normalizeBrandProfile(profile: BrandProfile): BrandProfile {
+  return {
+    ...profile,
+    primaryCategory: profile.primaryCategory ?? null,
+    subcategories: Array.isArray(profile.subcategories) ? profile.subcategories : [],
+    logoUrl: profile.logoUrl ?? null
+  };
+}
+
 function formatSettingsMatch(left: InstagramFormatSettings, right: InstagramFormatSettings) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
@@ -118,10 +127,11 @@ export function BrandSettingsPage() {
       .then(() => api.getBrandProfile(DEMO_BRAND_ID))
       .then((profile) => {
         if (ignore) return;
-        setSavedProfile(profile);
-        setDraftProfile(profile);
+        const normalizedProfile = normalizeBrandProfile(profile);
+        setSavedProfile(normalizedProfile);
+        setDraftProfile(normalizedProfile);
         setPrimaryCustomerEntryMode(
-          profile.primaryCustomer && !primaryCustomerOptions.includes(profile.primaryCustomer) ? "custom" : "select"
+          normalizedProfile.primaryCustomer && !primaryCustomerOptions.includes(normalizedProfile.primaryCustomer) ? "custom" : "select"
         );
         setProfileLoadError(null);
       })
@@ -286,8 +296,9 @@ export function BrandSettingsPage() {
         ? api.updateInstagramFormats(DEMO_BRAND_ID, formatInput)
         : Promise.resolve(savedFormats);
       const [saved, updatedFormats] = await Promise.all([profileRequest, formatRequest]);
-      setSavedProfile(saved);
-      setDraftProfile(saved);
+      const normalizedProfile = normalizeBrandProfile(saved);
+      setSavedProfile(normalizedProfile);
+      setDraftProfile(normalizedProfile);
       if (updatedFormats) {
         const normalized = normalizeFormatSettings(updatedFormats);
         setSavedFormats(normalized);

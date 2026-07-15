@@ -79,7 +79,7 @@ describe("ContentPage", () => {
     await renderContentPage();
 
     expect(await screen.findByRole("heading", { name: "콘텐츠 검토" })).toBeVisible();
-    expect(screen.getByText("제주 가족 여행 카드뉴스")).toBeVisible();
+    expect(await screen.findByText("제주 가족 여행 카드뉴스")).toBeVisible();
     expect(screen.getByText("외부 참고 URL 의존도가 높습니다.")).toBeVisible();
     expect(screen.getAllByText(/Instagram/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Story/).length).toBeGreaterThan(0);

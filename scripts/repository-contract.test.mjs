@@ -217,7 +217,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션은 001부터 019까지 정확한 이름으로 존재한다", async () => {
+test("데이터베이스 마이그레이션은 001부터 029까지 정확한 이름으로 존재한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -241,6 +241,16 @@ test("데이터베이스 마이그레이션은 001부터 019까지 정확한 이
     "017_preserve_topic_publish_group_status.sql",
     "018_repair_active_render_job_unique.sql",
     "019_threads_text_render_jobs.sql",
+    "020_dm_wiki_core.sql",
+    "021_dm_wiki_pgvector.sql",
+    "022_instagram_login_auth_mode.sql",
+    "023_wiki_include_disabled_owned_sources.sql",
+    "024_wiki_index_all_owned_pages.sql",
+    "025_dm_conversation_operations.sql",
+    "026_wiki_versions_and_knowledge_items.sql",
+    "027_wiki_search_v2.sql",
+    "028_brand_profile_logo.sql",
+    "029_instagram_hashtag_trends.sql",
   ]);
 });
 
@@ -464,13 +474,9 @@ test("발행 그룹 상태 보존 마이그레이션은 최종 상태를 한 파
   );
 });
 
-test("자동 크롤링 마이그레이션과 Vercel Cron을 등록한다", async () => {
+test("자동 크롤링은 지원하지 않는 Vercel Cron 대신 외부 또는 로컬 스케줄러를 사용한다", async () => {
   const vercel = await readJson("apps/api/vercel.json");
-  assert.deepEqual(vercel.crons, [
-    { path: "/internal/cron/source-crawl", schedule: "*/15 * * * *" },
-    { path: "/internal/cron/daily-generation", schedule: "0 1 * * *" },
-    { path: "/internal/cron/publish-due", schedule: "*/5 * * * *" },
-  ]);
+  assert.equal(vercel.crons, undefined);
 
   const envExample = await readFile("apps/api/.env.example", "utf8");
   assert.match(envExample, /^CRON_SECRET=$/m);
