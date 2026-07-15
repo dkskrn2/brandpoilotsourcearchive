@@ -59,7 +59,7 @@ export function classifyInstagramTrendKind(mediaType: string, permalink: string)
   if (mediaType === "VIDEO") {
     try {
       const pathname = new URL(permalink).pathname;
-      if (pathname.startsWith("/reel/") && pathname.slice("/reel/".length).split("/")[0]) return "reel";
+      if (/^\/reel\/[^/]+\/?$/.test(pathname)) return "reel";
     } catch {
       // Invalid permalinks are ordinary video media.
     }
@@ -84,7 +84,9 @@ function safeMetadata(value: Record<string, unknown>): Record<string, unknown> {
 }
 
 function count(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : null;
+  return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0
+    ? value
+    : null;
 }
 
 function childPreview(item: Record<string, unknown>): string | null {
@@ -92,7 +94,10 @@ function childPreview(item: Record<string, unknown>): string | null {
   for (const child of children) {
     if (isRecord(child) && nonEmptyString(child.media_url)) return child.media_url;
   }
-  return nonEmptyString(item.thumbnail_url) ? item.thumbnail_url : null;
+  for (const child of children) {
+    if (isRecord(child) && nonEmptyString(child.thumbnail_url)) return child.thumbnail_url;
+  }
+  return null;
 }
 
 export function mapMetaTopMedia(payload: unknown): NormalizedInstagramTrendMedia[] {
@@ -100,7 +105,8 @@ export function mapMetaTopMedia(payload: unknown): NormalizedInstagramTrendMedia
   const result: NormalizedInstagramTrendMedia[] = [];
   const ids = new Set<string>();
   for (const value of payload.data) {
-    if (result.length >= 50 || !isRecord(value)) break;
+    if (result.length >= 50) break;
+    if (!isRecord(value)) continue;
     const mediaType = value.media_type;
     if (!nonEmptyString(value.id) || !MEDIA_TYPES.includes(mediaType as InstagramMediaType) || !nonEmptyString(value.permalink)) continue;
     if (ids.has(value.id)) continue;

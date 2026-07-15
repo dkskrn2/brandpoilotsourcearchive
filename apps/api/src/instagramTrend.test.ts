@@ -39,6 +39,7 @@ describe("classifyInstagramTrendKind", () => {
     expect(classifyInstagramTrendKind("IMAGE", "https://instagram.com/p/abc")).toBe("image");
     expect(classifyInstagramTrendKind("CAROUSEL_ALBUM", "https://instagram.com/p/abc")).toBe("carousel");
     expect(classifyInstagramTrendKind("VIDEO", "https://instagram.com/reel/abc123/?x=1")).toBe("reel");
+    expect(classifyInstagramTrendKind("VIDEO", "https://instagram.com/reel/abc123/extra")).toBe("video");
     expect(classifyInstagramTrendKind("VIDEO", "https://instagram.com/reels/abc123")).toBe("video");
     expect(classifyInstagramTrendKind("VIDEO", "not a url")).toBe("video");
   });
@@ -67,7 +68,7 @@ describe("mapMetaTopMedia", () => {
         previewUrl: "https://cdn/1.jpg",
         permalink: "https://instagram.com/p/1",
         postedAt: "2026-07-14T00:00:00Z",
-        likeCount: 3,
+        likeCount: null,
         commentsCount: null,
         kind: "image",
         metaRank: 1,
@@ -115,6 +116,39 @@ describe("mapMetaTopMedia", () => {
     expect(result).toHaveLength(50);
     expect(result.at(-1)?.instagramMediaId).toBe("49");
     expect(result.at(-1)?.metaRank).toBe(50);
+  });
+
+  it("continues after a non-record row", () => {
+    expect(mapMetaTopMedia({
+      data: [null, { id: "after", media_type: "IMAGE", permalink: "https://instagram.com/p/after" }]
+    })).toHaveLength(1);
+  });
+
+  it("uses a child thumbnail when no child has a media URL", () => {
+    const [media] = mapMetaTopMedia({
+      data: [{
+        id: "carousel-thumbnail",
+        media_type: "CAROUSEL_ALBUM",
+        permalink: "https://instagram.com/p/carousel-thumbnail",
+        media_url: "https://cdn/top-level.jpg",
+        children: { data: [{ thumbnail_url: "https://cdn/child-thumbnail.jpg" }] }
+      }]
+    });
+    expect(media?.previewUrl).toBe("https://cdn/child-thumbnail.jpg");
+  });
+
+  it("falls back to top-level media instead of top-level thumbnail", () => {
+    const [media] = mapMetaTopMedia({
+      data: [{
+        id: "carousel-media",
+        media_type: "CAROUSEL_ALBUM",
+        permalink: "https://instagram.com/p/carousel-media",
+        media_url: "https://cdn/top-level.jpg",
+        thumbnail_url: "https://cdn/top-level-thumbnail.jpg",
+        children: { data: [{}] }
+      }]
+    });
+    expect(media?.previewUrl).toBe("https://cdn/top-level.jpg");
   });
 
   it("safely handles unknown payloads and invalid rows", () => {
