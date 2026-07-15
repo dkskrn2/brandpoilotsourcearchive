@@ -540,13 +540,18 @@ test("029 creates the category catalog and Instagram trend cache", async () => {
       "brand_trend_saved_media_brand_id_trend_media_id_key",
       "brand_trend_saved_media_source_url_id_key",
       "brand_trend_searches_brand_id_hashtag_id_key",
+      "brand_trend_searches_search_count_check",
       "content_categories_code_key",
       "content_subcategories_category_id_code_key",
       "instagram_trend_account_hashtags_channel_hashtag_unique",
       "instagram_trend_hashtag_media_hashtag_id_meta_rank_key",
+      "instagram_trend_hashtag_media_meta_rank_check",
       "instagram_trend_hashtag_media_pkey",
       "instagram_trend_hashtags_normalized_tag_key",
+      "instagram_trend_media_comments_count_check",
       "instagram_trend_media_instagram_media_id_key",
+      "instagram_trend_media_like_count_check",
+      "instagram_trend_media_media_type_check",
       "instagram_trend_media_raw_metadata_object_check",
     ];
     const constraints = await database.query(
@@ -641,6 +646,29 @@ test("029 creates the category catalog and Instagram trend cache", async () => {
       ),
       /brand_profile_subcategories_mode_check/,
     );
+    await assert.rejects(
+      database.query(
+        `insert into brand_profile_subcategories
+           (workspace_id, brand_id, brand_profile_id, custom_name, custom_key)
+         values ($1, $2, $3, '   ', 'blank')`,
+        [fixtureRow.workspace_id, fixtureRow.brand_id, fixtureRow.profile_id],
+      ),
+      /brand_profile_subcategories_custom_name_check/,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into brand_profile_subcategories
+           (workspace_id, brand_id, brand_profile_id, custom_name, custom_key)
+         values ($1, $2, $3, $4, 'too-long')`,
+        [
+          fixtureRow.workspace_id,
+          fixtureRow.brand_id,
+          fixtureRow.profile_id,
+          "x".repeat(31),
+        ],
+      ),
+      /brand_profile_subcategories_custom_name_check/,
+    );
 
     const hashtag = await database.query(
       `insert into instagram_trend_hashtags (normalized_tag, display_tag)
@@ -651,6 +679,30 @@ test("029 creates the category catalog and Instagram trend cache", async () => {
          (instagram_media_id, media_type, permalink, last_fetched_at)
        values ('meta-media-1', 'IMAGE', 'https://instagram.com/p/1', now())
        returning id`,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into instagram_trend_media
+           (instagram_media_id, media_type, permalink, last_fetched_at)
+         values ('meta-invalid-type', 'STORY', 'https://instagram.com/p/type', now())`,
+      ),
+      /instagram_trend_media_media_type_check/,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into instagram_trend_media
+           (instagram_media_id, media_type, permalink, like_count, last_fetched_at)
+         values ('meta-negative-likes', 'IMAGE', 'https://instagram.com/p/likes', -1, now())`,
+      ),
+      /instagram_trend_media_like_count_check/,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into instagram_trend_media
+           (instagram_media_id, media_type, permalink, comments_count, last_fetched_at)
+         values ('meta-negative-comments', 'IMAGE', 'https://instagram.com/p/comments', -1, now())`,
+      ),
+      /instagram_trend_media_comments_count_check/,
     );
     await assert.rejects(
       database.query(
@@ -682,8 +734,46 @@ test("029 creates the category catalog and Instagram trend cache", async () => {
       ),
       /instagram_trend_hashtag_media_hashtag_id_meta_rank_key/,
     );
+    for (const invalidRank of [0, 51]) {
+      await assert.rejects(
+        database.query(
+          `insert into instagram_trend_hashtag_media
+             (hashtag_id, media_id, meta_rank, first_seen_at, last_seen_at)
+           values ($1, $2, $3, now(), now())`,
+          [hashtag.rows[0].id, secondMedia.rows[0].id, invalidRank],
+        ),
+        /instagram_trend_hashtag_media_meta_rank_check/,
+      );
+    }
+
+    for (const invalidSearchCount of [0, -1]) {
+      await assert.rejects(
+        database.query(
+          `insert into brand_trend_searches
+             (workspace_id, brand_id, hashtag_id, last_searched_at, search_count)
+           values ($1, $2, $3, now(), $4)`,
+          [
+            fixtureRow.workspace_id,
+            fixtureRow.brand_id,
+            hashtag.rows[0].id,
+            invalidSearchCount,
+          ],
+        ),
+        /brand_trend_searches_search_count_check/,
+      );
+    }
 
     const schemaSmokeSql = await readFile("db/smoke/001_schema_smoke.sql", "utf8");
+    for (const constraint of [
+      "instagram_trend_media_like_count_check",
+      "instagram_trend_media_comments_count_check",
+      "instagram_trend_hashtag_media_meta_rank_check",
+      "brand_trend_searches_search_count_check",
+      "instagram_trend_media_media_type_check",
+      "brand_profile_subcategories_custom_name_check",
+    ]) {
+      assert.match(schemaSmokeSql, new RegExp(`'${constraint}'`));
+    }
     await database.exec(schemaSmokeSql);
   });
 });
