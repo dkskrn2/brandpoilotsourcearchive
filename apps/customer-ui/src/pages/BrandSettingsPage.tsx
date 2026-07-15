@@ -9,46 +9,12 @@ import { api, DEMO_BRAND_ID } from "../lib/apiClient";
 import type {
   BrandContentFormat,
   BrandProfile,
+  BrandProfileInput,
+  ContentCategory,
   InstagramDeliveryFormat,
   InstagramFormatSettings,
   InstagramFormatSettingsInput
 } from "../types";
-
-const emptyBrandProfile: BrandProfile = {
-  name: "",
-  industry: "",
-  primaryCustomer: "",
-  description: "",
-  tone: "",
-  defaultCta: "",
-  mainLink: "",
-  autoApprovalEnabled: true,
-  logoUrl: null
-};
-
-const industryOptions = [
-  "농업, 임업 및 어업",
-  "광업",
-  "제조업",
-  "전기, 가스, 증기 및 공기조절 공급업",
-  "수도, 하수 및 폐기물 처리, 원료 재생업",
-  "건설업",
-  "도매 및 소매업",
-  "운수 및 창고업",
-  "숙박 및 음식점업",
-  "정보통신업",
-  "금융 및 보험업",
-  "부동산업",
-  "전문, 과학 및 기술 서비스업",
-  "사업시설 관리, 사업 지원 및 임대 서비스업",
-  "공공행정, 국방 및 사회보장 행정",
-  "교육 서비스업",
-  "보건업 및 사회복지 서비스업",
-  "예술, 스포츠 및 여가관련 서비스업",
-  "협회 및 단체, 수리 및 기타 개인 서비스업",
-  "가구 내 고용 및 자가소비 생산활동",
-  "국제 및 외국기관"
-];
 
 const primaryCustomerOptions = [
   "신규 창업자",
@@ -107,7 +73,7 @@ function saveFailureMessage(error: unknown) {
     return "현재 계정으로 이 브랜드를 수정할 수 없습니다. 로그인 계정을 확인하세요.";
   }
   if (message.includes("400:brand_profile_field_too_long")) {
-    return "업종과 핵심 고객은 각각 30자 이내로 입력하세요.";
+    return "직접 입력한 세부 분야는 30자 이내로 입력하세요.";
   }
   if (message.includes("400:invalid_brand_color")) {
     return "브랜드 주색은 30자 이내로 입력하세요.";
@@ -127,10 +93,11 @@ export function BrandSettingsPage() {
   const [areFormatsLoading, setAreFormatsLoading] = useState(true);
   const [profileLoadError, setProfileLoadError] = useState<string | null>(null);
   const [formatLoadError, setFormatLoadError] = useState<string | null>(null);
+  const [categories, setCategories] = useState<ContentCategory[]>([]);
+  const [categoryLoadError, setCategoryLoadError] = useState<string | null>(null);
   const [showSavedBadge, setShowSavedBadge] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [apiNotice, setApiNotice] = useState<string | null>(null);
-  const [industryEntryMode, setIndustryEntryMode] = useState<"select" | "custom">("select");
   const [primaryCustomerEntryMode, setPrimaryCustomerEntryMode] = useState<"select" | "custom">("select");
   const hasUnsavedChanges = Boolean(
     savedProfile && draftProfile && !profilesMatch(savedProfile, draftProfile)
@@ -139,10 +106,11 @@ export function BrandSettingsPage() {
   );
   const hasRequiredFields = Boolean(
     draftProfile?.name.trim()
-    && draftProfile.industry.trim()
+    && draftProfile.primaryCategory?.code
     && draftProfile.primaryCustomer.trim()
     && draftProfile.description.trim()
   );
+  const selectedCategory = categories.find((category) => category.code === draftProfile?.primaryCategory?.code);
 
   useEffect(() => {
     let ignore = false;
@@ -152,7 +120,6 @@ export function BrandSettingsPage() {
         if (ignore) return;
         setSavedProfile(profile);
         setDraftProfile(profile);
-        setIndustryEntryMode(profile.industry && !industryOptions.includes(profile.industry) ? "custom" : "select");
         setPrimaryCustomerEntryMode(
           profile.primaryCustomer && !primaryCustomerOptions.includes(profile.primaryCustomer) ? "custom" : "select"
         );
@@ -180,6 +147,16 @@ export function BrandSettingsPage() {
       })
       .finally(() => {
         if (!ignore) setAreFormatsLoading(false);
+      });
+    Promise.resolve()
+      .then(() => api.listContentCategories())
+      .then((loadedCategories) => {
+        if (ignore) return;
+        setCategories(loadedCategories);
+        setCategoryLoadError(null);
+      })
+      .catch(() => {
+        if (!ignore) setCategoryLoadError("대표 분야를 불러오지 못했습니다.");
       });
     return () => {
       ignore = true;
@@ -212,23 +189,12 @@ export function BrandSettingsPage() {
   function cancelChanges() {
     if (savedProfile) {
       setDraftProfile(savedProfile);
-      setIndustryEntryMode(savedProfile.industry && !industryOptions.includes(savedProfile.industry) ? "custom" : "select");
       setPrimaryCustomerEntryMode(
         savedProfile.primaryCustomer && !primaryCustomerOptions.includes(savedProfile.primaryCustomer) ? "custom" : "select"
       );
     }
     if (savedFormats) setDraftFormats(savedFormats);
     setShowSavedBadge(false);
-  }
-
-  function selectIndustry(value: string) {
-    if (value === customOptionValue) {
-      setIndustryEntryMode("custom");
-      if (draftProfile && industryOptions.includes(draftProfile.industry)) updateDraftProfile("industry", "");
-      return;
-    }
-    setIndustryEntryMode("select");
-    updateDraftProfile("industry", value);
   }
 
   function selectPrimaryCustomer(value: string) {
@@ -241,13 +207,74 @@ export function BrandSettingsPage() {
     updateDraftProfile("primaryCustomer", value);
   }
 
+  function updateSubcategories(subcategories: BrandProfile["subcategories"]) {
+    updateDraftProfile("subcategories", subcategories);
+  }
+
+  function selectCategory(code: string) {
+    if (!draftProfile) return;
+    const incompatible = draftProfile.subcategories.filter(
+      (subcategory) => subcategory.type === "system" && !categories.find((category) => category.code === code)?.subcategories.some((candidate) => candidate.code === subcategory.code)
+    );
+    if (incompatible.length > 0 && !window.confirm(`현재 선택한 세부 분야 ${incompatible.length}개가 새 대표 분야와 맞지 않습니다. 제거할까요?`)) return;
+    updateDraftProfile("primaryCategory", categories.find((category) => category.code === code) ? { code, name: categories.find((category) => category.code === code)!.name } : null);
+    updateSubcategories(draftProfile.subcategories.filter((subcategory) => !incompatible.includes(subcategory)));
+  }
+
+  function toggleSystemSubcategory(code: string, name: string) {
+    if (!draftProfile) return;
+    const current = draftProfile.subcategories;
+    const selected = current.some((subcategory) => subcategory.type === "system" && subcategory.code === code);
+    if (selected) {
+      updateSubcategories(current.filter((subcategory) => !(subcategory.type === "system" && subcategory.code === code)));
+    } else if (current.length < 5) {
+      updateSubcategories([...current, { type: "system", code, name }]);
+    }
+  }
+
+  function addCustomSubcategory() {
+    if (!draftProfile) return;
+    const input = document.querySelector<HTMLInputElement>("[aria-label='직접 입력 세부 분야']");
+    const value = input?.value ?? "";
+    const normalized = value.normalize("NFKC").trim().toLocaleLowerCase();
+    if (Array.from(value.normalize("NFKC").trim()).length > 30) {
+      setApiNotice("직접 입력한 세부 분야는 30자 이내로 입력하세요.");
+      return;
+    }
+    if (!normalized) return;
+    if (draftProfile.subcategories.some((subcategory) => subcategory.name.normalize("NFKC").trim().toLocaleLowerCase() === normalized)) {
+      setApiNotice("이미 선택한 세부 분야입니다.");
+      return;
+    }
+    if (draftProfile.subcategories.length >= 5) {
+      setApiNotice("세부 분야는 최대 5개까지 선택할 수 있습니다.");
+      return;
+    }
+    updateSubcategories([...draftProfile.subcategories, { type: "custom", code: null, name: value.normalize("NFKC").trim() }]);
+    input!.value = "";
+    setApiNotice(null);
+  }
+
   async function saveChanges() {
     if (!draftProfile || !savedProfile) return;
     setIsSaving(true);
     try {
+      const profileInput: BrandProfileInput = {
+        name: draftProfile.name,
+        primaryCategoryCode: draftProfile.primaryCategory?.code ?? null,
+        subcategories: draftProfile.subcategories.map((subcategory) => subcategory.type === "system"
+          ? { type: "system", code: subcategory.code! }
+          : { type: "custom", name: subcategory.name }),
+        primaryCustomer: draftProfile.primaryCustomer,
+        description: draftProfile.description,
+        tone: draftProfile.tone,
+        defaultCta: draftProfile.defaultCta,
+        mainLink: draftProfile.mainLink,
+        autoApprovalEnabled: draftProfile.autoApprovalEnabled
+      };
       const profileRequest = profilesMatch(savedProfile, draftProfile)
         ? Promise.resolve(savedProfile)
-        : api.updateBrandProfile(DEMO_BRAND_ID, draftProfile);
+        : api.updateBrandProfile(DEMO_BRAND_ID, profileInput);
       const formatInput: InstagramFormatSettingsInput | null = draftFormats ? {
         brandColor: draftFormats.brandColor?.trim() || null,
         formats: fixedFormatOrder.map((format) => ({
@@ -297,6 +324,7 @@ export function BrandSettingsPage() {
         <div role="status" className="muted" style={{ marginBottom: 16 }}>브랜드 설정을 불러오는 중입니다.</div>
       ) : null}
       {profileLoadError ? <Alert title="API 상태" variant="warn">{profileLoadError}</Alert> : null}
+      {categoryLoadError ? <Alert title="대표 분야" variant="warn">{categoryLoadError}</Alert> : null}
       {formatLoadError ? <Alert title="Instagram 형식" variant="warn">{formatLoadError}</Alert> : null}
       {apiNotice ? <Alert title="API 상태" variant="warn">{apiNotice}</Alert> : null}
 
@@ -321,29 +349,53 @@ export function BrandSettingsPage() {
                 onChange={(event) => updateDraftProfile("name", event.currentTarget.value)}
               />
             </Field>
-            <Field label="업종" required>
+            <Field label="대표 분야" required>
               <select
-                aria-label="업종 선택"
+                aria-label="대표 분야 선택"
                 required
-                value={industryEntryMode === "custom" ? customOptionValue : draftProfile.industry}
-                onChange={(event) => selectIndustry(event.currentTarget.value)}
+                value={draftProfile.primaryCategory?.code ?? ""}
+                onChange={(event) => selectCategory(event.currentTarget.value)}
               >
-                <option value="">업종을 선택하세요</option>
-                {industryOptions.map((industry) => (
-                  <option key={industry} value={industry}>{industry}</option>
+                <option value="">대표 분야를 선택하세요.</option>
+                {categories.map((category) => (
+                  <option key={category.code} value={category.code}>{category.name}</option>
                 ))}
-                <option value={customOptionValue}>직접 입력</option>
               </select>
-              {industryEntryMode === "custom" ? (
-                <input
-                  aria-label="업종 직접 입력"
-                  maxLength={30}
-                  required
-                  placeholder="예: 여행 상담 서비스"
-                  value={draftProfile.industry}
-                  onChange={(event) => updateDraftProfile("industry", event.currentTarget.value)}
-                />
-              ) : null}
+              <div className="subcategory-section" aria-label="세부 분야">
+                <div className="subcategory-section__head">
+                  <strong>세부 분야</strong>
+                  <span>선택 {draftProfile.subcategories.length}/5</span>
+                </div>
+                <div className="subcategory-grid">
+                  {(selectedCategory?.subcategories ?? []).map((subcategory) => {
+                    const checked = draftProfile.subcategories.some((candidate) => candidate.type === "system" && candidate.code === subcategory.code);
+                    return (
+                      <label className="subcategory-option" key={subcategory.code}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={!checked && draftProfile.subcategories.length >= 5}
+                          onChange={() => toggleSystemSubcategory(subcategory.code, subcategory.name)}
+                        />
+                        <span>{subcategory.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="subcategory-custom-row">
+                  <input aria-label="직접 입력 세부 분야" placeholder="세부 분야 직접 입력" disabled={draftProfile.subcategories.length >= 5} />
+                  <button className="button" type="button" aria-label="세부 분야 추가" onClick={addCustomSubcategory} disabled={draftProfile.subcategories.length >= 5}>추가</button>
+                </div>
+                {draftProfile.subcategories.length > 0 ? (
+                  <div className="subcategory-chips" aria-label="선택한 세부 분야">
+                    {draftProfile.subcategories.map((subcategory) => (
+                      <button className="subcategory-chip" type="button" key={`${subcategory.type}-${subcategory.code ?? subcategory.name}`} onClick={() => subcategory.type === "system" ? toggleSystemSubcategory(subcategory.code!, subcategory.name) : updateSubcategories(draftProfile.subcategories.filter((candidate) => candidate !== subcategory))}>
+                        {subcategory.name}<span aria-hidden="true">×</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
             </Field>
             <Field label="핵심 고객" required>
               <select
@@ -503,11 +555,11 @@ export function BrandSettingsPage() {
         <div className="panel-body grid">
           {hasRequiredFields ? (
             <Alert title="필수값 충족" variant="ok">
-              브랜드명, 업종, 핵심 고객, 서비스 설명이 입력되어 있습니다.
+              브랜드명, 대표 분야, 핵심 고객, 서비스 설명이 입력되어 있습니다.
             </Alert>
           ) : (
             <Alert title="필수값 확인 필요" variant="warn">
-              브랜드명, 업종, 핵심 고객, 서비스 설명을 모두 입력하세요.
+              브랜드명, 대표 분야, 핵심 고객, 서비스 설명을 모두 입력하세요.
             </Alert>
           )}
           <Alert title="권장 보강" variant="warn">

@@ -8,8 +8,11 @@ import { SidebarBrandProfile } from "../components/layout/SidebarBrandProfile";
 import type { BrandProfile } from "../types";
 
 const profile: BrandProfile = {
+  id: "profile-1",
+  brandId: "brand-1",
   name: "그로스라인",
-  industry: "서비스",
+  primaryCategory: { code: "service", name: "서비스" },
+  subcategories: [],
   primaryCustomer: "사업자",
   description: "설명",
   tone: "담백한 톤",

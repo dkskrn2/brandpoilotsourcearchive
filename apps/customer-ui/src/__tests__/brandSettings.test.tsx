@@ -1,11 +1,14 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BrandProfile, InstagramFormatSettings } from "../types";
+import type { BrandProfile, ContentCategory, InstagramFormatSettings } from "../types";
 
 const apiProfile: BrandProfile = {
+  id: "profile-1",
+  brandId: "brand-1",
   name: "API 브랜드",
-  industry: "여행 서비스",
+  primaryCategory: { code: "travel", name: "여행·관광" },
+  subcategories: [{ type: "system", code: "domestic", name: "국내 여행" }, { type: "custom", code: null, name: "가족 여행" }],
   primaryCustomer: "처음 여행을 준비하는 고객",
   description: "API에서 내려온 브랜드 설명",
   tone: "담백한 전문가 톤",
@@ -14,6 +17,24 @@ const apiProfile: BrandProfile = {
   autoApprovalEnabled: true,
   logoUrl: "https://cdn.example.com/logo.png"
 };
+
+const apiCategories: ContentCategory[] = [
+  {
+    code: "travel",
+    name: "여행·관광",
+    recommendedHashtags: [],
+    subcategories: [
+      { code: "domestic", name: "국내 여행" },
+      { code: "outbound", name: "해외 여행" }
+    ]
+  },
+  {
+    code: "food",
+    name: "음식·외식",
+    recommendedHashtags: [],
+    subcategories: [{ code: "restaurant", name: "레스토랑" }]
+  }
+];
 
 const apiInstagramFormats: InstagramFormatSettings = {
   brandId: "brand-1",
@@ -58,7 +79,8 @@ afterEach(() => {
 async function renderBrandSettingsPage(apiOverrides: Partial<Record<string, ReturnType<typeof vi.fn>>> = {}) {
   const api = {
     getBrandProfile: vi.fn(async () => apiProfile),
-    updateBrandProfile: vi.fn(async (_brandId: string, profile: BrandProfile) => profile),
+    updateBrandProfile: vi.fn(async (_brandId: string, profile: BrandProfile) => ({ ...apiProfile, ...profile })),
+    listContentCategories: vi.fn(async () => apiCategories),
     getInstagramFormats: vi.fn(async () => apiInstagramFormats),
     updateInstagramFormats: vi.fn(async (_brandId: string, settings: InstagramFormatSettings) => ({
       ...apiInstagramFormats,
@@ -86,21 +108,20 @@ describe("BrandSettingsPage", () => {
     await renderBrandSettingsPage();
 
     expect(await screen.findByDisplayValue("API 브랜드")).toBeVisible();
-    expect(screen.getByLabelText("업종 직접 입력")).toHaveValue("여행 서비스");
+    expect(screen.getByLabelText("대표 분야 선택")).toHaveValue("travel");
     expect(screen.getByLabelText("핵심 고객 직접 입력")).toHaveValue("처음 여행을 준비하는 고객");
     expect(screen.queryByDisplayValue("제주 여행 상담 브랜드")).not.toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "브랜드 전체 자동 승인" })).toBeChecked();
     expect(screen.queryByText("채널별 자동 승인")).not.toBeInTheDocument();
   });
 
-  it("provides industry and target-customer selects with 30-character custom inputs", async () => {
+  it("loads categories independently and shows only the selected category subcategories", async () => {
     await renderBrandSettingsPage();
 
-    const industrySelect = await screen.findByLabelText("업종 선택");
-    expect(industrySelect.tagName).toBe("SELECT");
-    expect(screen.getByRole("option", { name: "정보통신업" })).toBeInTheDocument();
-    expect(screen.getAllByRole("option", { name: "직접 입력" })).toHaveLength(2);
-    expect(screen.getByLabelText("업종 직접 입력")).toHaveAttribute("maxlength", "30");
+    const categorySelect = await screen.findByLabelText("대표 분야 선택");
+    expect(categorySelect.tagName).toBe("SELECT");
+    expect(within(screen.getByLabelText("세부 분야").querySelector(".subcategory-grid") as HTMLElement).getByText("국내 여행")).toBeInTheDocument();
+    expect(screen.queryByText("레스토랑")).not.toBeInTheDocument();
     expect(screen.getByLabelText("핵심 고객 선택")).toBeInTheDocument();
     expect(screen.getByLabelText("핵심 고객 직접 입력")).toHaveAttribute("maxlength", "30");
   });
@@ -175,7 +196,7 @@ describe("BrandSettingsPage", () => {
 
     const requiredFields = [
       await screen.findByLabelText("브랜드명"),
-      screen.getByLabelText("업종 선택"),
+      screen.getByLabelText("대표 분야 선택"),
       screen.getByLabelText("핵심 고객 선택"),
       screen.getByLabelText("제품/서비스 설명")
     ];
@@ -191,6 +212,44 @@ describe("BrandSettingsPage", () => {
     optionalFields.forEach((field) => {
       expect(within(field.closest("label") as HTMLElement).queryByText("필수 입력")).not.toBeInTheDocument();
     });
+  });
+
+  it("enforces five selections and normalizes duplicate custom names", async () => {
+    await renderBrandSettingsPage();
+    const custom = await screen.findByLabelText("직접 입력 세부 분야");
+    const add = screen.getByRole("button", { name: "세부 분야 추가" });
+    await userEvent.type(custom, "  가족 여행  ");
+    await userEvent.click(add);
+    expect(await screen.findByText("이미 선택한 세부 분야입니다.")).toBeVisible();
+    await userEvent.clear(custom);
+    await userEvent.type(custom, "가".repeat(31));
+    await userEvent.click(add);
+    expect(screen.getByText("직접 입력한 세부 분야는 30자 이내로 입력하세요.")).toBeVisible();
+  });
+
+  it("confirms incompatible system selections while retaining custom selections", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await renderBrandSettingsPage();
+    await userEvent.selectOptions(await screen.findByLabelText("대표 분야 선택"), "food");
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("1개"));
+    expect(screen.getByText("가족 여행")).toBeInTheDocument();
+    expect(screen.queryByText("국내 여행")).not.toBeInTheDocument();
+    confirm.mockRestore();
+  });
+
+  it("saves an explicit category payload without industry", async () => {
+    const api = await renderBrandSettingsPage();
+    await userEvent.clear(await screen.findByLabelText("브랜드명"));
+    await userEvent.type(screen.getByLabelText("브랜드명"), "변경 브랜드");
+    await userEvent.click(await screen.findByRole("button", { name: "저장" }));
+    expect(api.updateBrandProfile).toHaveBeenCalledWith("brand-1", expect.objectContaining({
+      primaryCategoryCode: "travel",
+      subcategories: [
+        { type: "system", code: "domestic" },
+        { type: "custom", name: "가족 여행" }
+      ]
+    }));
+    expect(api.updateBrandProfile.mock.calls[0][1]).not.toHaveProperty("industry");
   });
 
   it("shows API failure state without sample brand data", async () => {
