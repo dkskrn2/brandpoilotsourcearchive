@@ -2,6 +2,70 @@ import { describe, expect, it, vi } from "vitest";
 import { apiClient } from "./apiClient";
 
 describe("apiClient", () => {
+  it("calls all Instagram trend endpoints with encoded queries, exact bodies, and credentials", async () => {
+    const trendPage = {
+      hashtag: { id: "hashtag-1", displayTag: "#콘텐츠 마케팅", normalizedTag: "콘텐츠 마케팅" },
+      source: "meta",
+      refreshed: true,
+      refreshedAt: "2026-07-15T00:00:00.000Z",
+      lastErrorCode: null,
+      page: 2,
+      pageSize: 20,
+      total: 0,
+      items: []
+    };
+    const responses = [
+      [{ code: "marketing", name: "마케팅", recommendedHashtags: [], subcategories: [] }],
+      trendPage,
+      trendPage,
+      [{ hashtagId: "hashtag-1", displayTag: "#콘텐츠 마케팅", isFavorite: false, lastSearchedAt: "2026-07-15T00:00:00.000Z", searchCount: 1 }],
+      { hashtagId: "hashtag-1", isFavorite: true },
+      { source: { id: "source-1" }, alreadySaved: false }
+    ];
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(responses.shift()), { status: 200 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await client.listContentCategories();
+    await client.getInstagramTrends("brand-1", {
+      hashtag: "#콘텐츠 마케팅",
+      type: "reel",
+      sort: "likes",
+      page: 2
+    });
+    await client.searchInstagramTrends("brand-1", "#콘텐츠 마케팅");
+    await client.listInstagramTrendSearches("brand-1");
+    await client.setInstagramTrendFavorite("brand-1", "hashtag-1", true);
+    await client.saveInstagramTrendSource("brand-1", "media-1");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "http://api.test/content-categories", expect.objectContaining({
+      method: "GET",
+      credentials: "include"
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://api.test/brands/brand-1/instagram-trends?hashtag=%23%EC%BD%98%ED%85%90%EC%B8%A0+%EB%A7%88%EC%BC%80%ED%8C%85&type=reel&sort=likes&page=2",
+      expect.objectContaining({ method: "GET", credentials: "include" })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "http://api.test/brands/brand-1/instagram-trends/search", expect.objectContaining({
+      method: "POST",
+      credentials: "include",
+      body: JSON.stringify({ hashtag: "#콘텐츠 마케팅" })
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "http://api.test/brands/brand-1/instagram-trend-searches", expect.objectContaining({
+      method: "GET",
+      credentials: "include"
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(5, "http://api.test/brands/brand-1/instagram-trend-searches/hashtag-1/favorite", expect.objectContaining({
+      method: "PUT",
+      credentials: "include",
+      body: JSON.stringify({ isFavorite: true })
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(6, "http://api.test/brands/brand-1/instagram-trends/media-1/save-source", expect.objectContaining({
+      method: "POST",
+      credentials: "include"
+    }));
+  });
+
   it("fetches a normalized artifact for one publish queue item", async () => {
     const artifact = {
       queueId: "queue-1",

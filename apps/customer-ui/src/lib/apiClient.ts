@@ -1,15 +1,22 @@
 import type {
   BrandProfile,
+  BrandProfileInput,
   BrandUiStatus,
   BillingSummary,
   ChannelConnection,
   ChannelConnectionRequest,
   ChannelType,
   ContentOutput,
+  ContentCategory,
   BrandContentFormat,
   InstagramDeliveryFormat,
   InstagramFormatSettings,
   InstagramFormatSettingsInput,
+  InstagramTrendFavoriteInput,
+  InstagramTrendListInput,
+  InstagramTrendPage,
+  InstagramTrendSaveSource,
+  InstagramTrendSearchHistory,
   InstagramDmHistory,
   InstagramDmSettings,
   DmAttentionItem,
@@ -203,13 +210,44 @@ export function apiClient(options: ApiClientOptions = {}) {
     getBrandUiStatus(brandId: string) {
       return request<BrandUiStatus>(fetcher, `${baseUrl}/brands/${brandId}/ui-status`, { method: "GET" });
     },
+    listContentCategories() {
+      return request<ContentCategory[]>(fetcher, `${baseUrl}/content-categories`, { method: "GET" });
+    },
+    getInstagramTrends(brandId: string, input: InstagramTrendListInput) {
+      const query = new URLSearchParams({
+        hashtag: input.hashtag,
+        type: input.type,
+        sort: input.sort,
+        page: String(input.page)
+      });
+      return request<InstagramTrendPage>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trends?${query.toString()}`, { method: "GET" });
+    },
+    searchInstagramTrends(brandId: string, hashtag: string) {
+      return request<InstagramTrendPage>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trends/search`, {
+        method: "POST",
+        body: JSON.stringify({ hashtag })
+      });
+    },
+    listInstagramTrendSearches(brandId: string) {
+      return request<InstagramTrendSearchHistory[]>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trend-searches`, { method: "GET" });
+    },
+    setInstagramTrendFavorite(brandId: string, hashtagId: string, isFavorite: InstagramTrendFavoriteInput["isFavorite"]) {
+      return request<{ hashtagId: string; isFavorite: boolean }>(
+        fetcher,
+        `${baseUrl}/brands/${brandId}/instagram-trend-searches/${hashtagId}/favorite`,
+        { method: "PUT", body: JSON.stringify({ isFavorite }) }
+      );
+    },
+    saveInstagramTrendSource(brandId: string, mediaId: string) {
+      return request<InstagramTrendSaveSource>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trends/${mediaId}/save-source`, { method: "POST" });
+    },
     getBillingSummary(brandId: string) {
       return request<BillingSummary>(fetcher, `${baseUrl}/brands/${brandId}/billing/summary`, { method: "GET" });
     },
     getBrandProfile(brandId: string) {
       return request<BrandProfile>(fetcher, `${baseUrl}/brands/${brandId}/profile`, { method: "GET" });
     },
-    updateBrandProfile(brandId: string, profile: Partial<BrandProfile>) {
+    updateBrandProfile(brandId: string, profile: BrandProfileInput) {
       return request<BrandProfile>(fetcher, `${baseUrl}/brands/${brandId}/profile`, {
         method: "PUT",
         body: JSON.stringify(profile)

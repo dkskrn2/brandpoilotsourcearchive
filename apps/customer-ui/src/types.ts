@@ -91,8 +91,11 @@ export interface NavItem {
 }
 
 export interface BrandProfile {
+  id: string;
+  brandId: string;
   name: string;
-  industry: string;
+  primaryCategory: BrandPrimaryCategory | null;
+  subcategories: BrandSubcategory[];
   primaryCustomer: string;
   description: string;
   tone: string;
@@ -100,6 +103,18 @@ export interface BrandProfile {
   mainLink: string;
   autoApprovalEnabled: boolean;
   logoUrl: string | null;
+}
+
+export interface BrandProfileInput {
+  name?: string;
+  primaryCategoryCode?: string;
+  subcategories?: BrandSubcategoryInput[];
+  primaryCustomer?: string;
+  description?: string;
+  tone?: string;
+  defaultCta?: string;
+  mainLink?: string;
+  autoApprovalEnabled?: boolean;
 }
 
 export interface BrandSubcategory {
