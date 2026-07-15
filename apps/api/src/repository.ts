@@ -26,6 +26,7 @@ import {
 } from "./instagramPublisher.js";
 import { crawlSourceUrl, discoverContentUrls, isLikelyContentPage } from "./sourceCrawler.js";
 import { nextRetryAt, scheduledRunKey } from "./sourceCrawlSchedule.js";
+import { hashSourceUrl } from "./sourceUrl.js";
 import { buildThreadsRenderJobPayload, parseThreadsRenderJobResult } from "./textRenderJobs.js";
 import { brandPolicyDateKey, dailyTopicCapacity, determineGenerationReadiness, runDailyTopicGeneration } from "./topicPublishGroups.js";
 import { parseKnowledgeUpload } from "./knowledgeImport.js";
@@ -160,10 +161,6 @@ function toDateKey(value: Date | string | null): string | null {
   }
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime()) ? null : kstDateKey(date);
-}
-
-function urlHash(url: string) {
-  return crypto.createHash("sha256").update(url.trim().toLowerCase()).digest("hex");
 }
 
 function normalizeDomain(url: string) {
@@ -1661,7 +1658,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         `insert into source_urls (workspace_id, brand_id, source_type, url, url_hash, domain, status)
          values ($1, $2, $3, $4, $5, $6, 'active')
          returning id, brand_id, source_type, url, title, status, enabled, last_crawled_at, last_error`,
-        [brand.rows[0].workspace_id, brandId, input.sourceType, normalizedUrl, urlHash(normalizedUrl), normalizeDomain(normalizedUrl)]
+        [brand.rows[0].workspace_id, brandId, input.sourceType, normalizedUrl, hashSourceUrl(normalizedUrl), normalizeDomain(normalizedUrl)]
       );
       return mapSource(result.rows[0]);
     },
@@ -1699,7 +1696,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
              last_error = case when $6 = true or $3 is not null then null else last_error end
          where id = $1 and deleted_at is null
          returning id, brand_id, source_type, url, title, status, enabled, last_crawled_at, last_error`,
-        [sourceId, input.sourceType ?? null, normalizedUrl, normalizedUrl ? urlHash(normalizedUrl) : null, normalizedUrl ? normalizeDomain(normalizedUrl) : null, input.enabled ?? null]
+        [sourceId, input.sourceType ?? null, normalizedUrl, normalizedUrl ? hashSourceUrl(normalizedUrl) : null, normalizedUrl ? normalizeDomain(normalizedUrl) : null, input.enabled ?? null]
       );
       if (!result.rowCount) throw new Error("source_not_found");
       return mapSource(result.rows[0]);
@@ -2715,7 +2712,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                   source.workspace_id,
                   source.brand_id,
                   source.id,
-                  urlHash(discoveredUrl.url),
+                  hashSourceUrl(discoveredUrl.url),
                   discoveredUrl.url,
                   normalizeDomain(discoveredUrl.url),
                   discoveredUrl.discoveryMethod,

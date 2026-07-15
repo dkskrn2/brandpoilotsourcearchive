@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { isFreshInstagramTrendCache, normalizeInstagramHashtag } from "./instagramTrend.js";
 import type { FetchInstagramHashtagTopMediaResult, FetchInstagramHashtagTopMediaInput } from "./instagramTrendMeta.js";
+import { hashSourceUrl } from "./sourceUrl.js";
 import type {
   ContentCategoryDto,
   InstagramTrendFavoriteInput,
@@ -29,10 +30,6 @@ function iso(value: Date | string | null | undefined): string | null {
   if (!value) return null;
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
-}
-
-function sourceUrlHash(url: string): string {
-  return crypto.createHash("sha256").update(url.trim().toLowerCase()).digest("hex");
 }
 
 function textHash(value: string): string {
@@ -467,7 +464,7 @@ export function createInstagramTrendRepository(input: {
       );
       if (!selected.rowCount) throw new Error("instagram_trend_media_not_found");
       const item = selected.rows[0];
-      const hash = sourceUrlHash(item.permalink);
+      const hash = hashSourceUrl(item.permalink);
       let sourceResult = await client.query(
         `select id, brand_id, source_type, url, title, status, enabled, last_crawled_at, last_error
          from source_urls

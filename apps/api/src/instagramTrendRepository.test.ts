@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createInstagramTrendRepository } from "./instagramTrendRepository";
+import { hashSourceUrl } from "./sourceUrl";
 
 type Result = { rowCount: number; rows: Array<Record<string, any>> };
 
@@ -53,7 +54,17 @@ const media = {
   is_saved: false,
 };
 
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+}
+
 describe("createInstagramTrendRepository", () => {
+  it("uses the canonical source URL hash contract", () => {
+    expect(hashSourceUrl("  HTTPS://EXAMPLE.COM/path  ")).toBe("5faa4bf4918ff56562141cc328545ec8f7b6dd27470cbdf4a7487593b3e83738");
+  });
+
   it("lists active categories in configured order with active children only", async () => {
     const fixture = poolWith((sql) => {
       expect(sql).toContain("where category.active = true");
@@ -125,6 +136,91 @@ describe("createInstagramTrendRepository", () => {
     const page = await repository.searchInstagramTrends("brand-1", { hashtag: "마케팅" });
     expect(fetchTopMedia).not.toHaveBeenCalled();
     expect(page.refreshed).toBe(false);
+  });
+
+  it("coordinates two overlapping stale searches so exactly one calls Meta", async () => {
+    const fetchStarted = deferred();
+    const allowFetch = deferred();
+    const refreshCommitted = deferred();
+    let lockOwner: number | null = null;
+    let refreshedAt: Date | null = new Date(now.getTime() - 25 * 60 * 60 * 1000);
+    let nextClientId = 0;
+
+    function createClient() {
+      const clientId = ++nextClientId;
+      let refreshPending = false;
+      return {
+        release: vi.fn(),
+        query: vi.fn(async (sql: string) => {
+          const normalizedSql = sql.trim().toLowerCase();
+          if (normalizedSql === "begin") return result();
+          if (normalizedSql === "rollback") return result();
+          if (normalizedSql === "commit") {
+            if (refreshPending) {
+              refreshedAt = now;
+              lockOwner = null;
+              refreshCommitted.resolve();
+            }
+            return result();
+          }
+          if (sql.includes("join brand_channels channel")) return result([connected]);
+          if (sql.includes("from instagram_trend_hashtags") && sql.includes("normalized_tag")) {
+            return result([{ ...hashtag, last_refreshed_at: refreshedAt }]);
+          }
+          if (sql.includes("pg_try_advisory_xact_lock")) {
+            if (lockOwner === null) {
+              lockOwner = clientId;
+              return result([{ locked: true }]);
+            }
+            return result([{ locked: lockOwner === clientId }]);
+          }
+          if (sql.includes("as quota_count")) return result([{ quota_count: 0, current_active: false }]);
+          if (sql.includes("insert into instagram_trend_media")) return result([{ id: "media-1" }]);
+          if (sql.includes("delete from instagram_trend_hashtag_media")) return result();
+          if (sql.includes("insert into instagram_trend_hashtag_media")) return result();
+          if (sql.includes("update instagram_trend_hashtags")) { refreshPending = true; return result(); }
+          if (sql.includes("insert into instagram_trend_account_hashtags")) return result();
+          if (sql.includes("insert into brand_trend_searches")) return result();
+          if (sql.includes("count(*)::int as total")) return result([{ total: 1 }]);
+          if (sql.includes("from instagram_trend_hashtag_media relation")) return result([media]);
+          throw new Error(`unexpected query: ${sql}`);
+        }),
+      };
+    }
+
+    const pool = { connect: vi.fn(async () => createClient()), query: vi.fn() } as any;
+    const fetchTopMedia = vi.fn(async () => {
+      fetchStarted.resolve();
+      await allowFetch.promise;
+      return {
+        metaHashtagId: "meta-tag-1",
+        media: [{
+          instagramMediaId: "ig-media-1", username: "creator", caption: "caption", mediaType: "IMAGE" as const,
+          mediaUrl: media.media_url, previewUrl: media.preview_url, permalink: media.permalink,
+          postedAt: now.toISOString(), likeCount: 10, commentsCount: 2, kind: "image" as const,
+          metaRank: 1, rawMetadata: {},
+        }],
+      };
+    });
+    const repository = createInstagramTrendRepository({
+      pool,
+      decryptCredential: () => "token",
+      fetchTopMedia,
+      now: () => now,
+      sleep: async () => {
+        allowFetch.resolve();
+        await refreshCommitted.promise;
+      },
+    });
+
+    const first = repository.searchInstagramTrends("brand-1", { hashtag: "마케팅" });
+    await fetchStarted.promise;
+    const second = repository.searchInstagramTrends("brand-2", { hashtag: "마케팅" });
+    const [firstPage, secondPage] = await Promise.all([first, second]);
+
+    expect(fetchTopMedia).toHaveBeenCalledTimes(1);
+    expect(firstPage.source).toBe("meta");
+    expect(secondPage.source).toBe("cache");
   });
 
   it("replaces current ranks transactionally after a successful Meta refresh", async () => {
