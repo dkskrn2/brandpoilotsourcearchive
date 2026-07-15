@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { InstagramTrendMediaKind } from "./types.js";
 import {
   classifyInstagramTrendKind,
   isFreshInstagramTrendCache,
   mapMetaTopMedia,
-  normalizeInstagramHashtag
+  normalizeInstagramHashtag,
+  type InstagramMediaType
 } from "./instagramTrend";
 
 describe("normalizeInstagramHashtag", () => {
@@ -17,7 +19,10 @@ describe("normalizeInstagramHashtag", () => {
     expect(normalizeInstagramHashtag(input)).toEqual(expected);
   });
 
-  it.each(["", "#", "##tag", "tag name", "tag🙂", "tag/tag", "tag#other", "a".repeat(101)])(
+  it.each([
+    "", "#", "##tag", "tag name", "tag🙂", "tag/tag", "tag#other", "a".repeat(101),
+    "тег", "وسم", "İ", "İ".repeat(100)
+  ])(
     "rejects invalid hashtag %j",
     (input) => expect(() => normalizeInstagramHashtag(input)).toThrow("invalid_hashtag")
   );
@@ -37,10 +42,17 @@ describe("isFreshInstagramTrendCache", () => {
 });
 
 describe("classifyInstagramTrendKind", () => {
+  it("uses the exported media type and canonical trend kind", () => {
+    expectTypeOf(classifyInstagramTrendKind).parameter(0).toEqualTypeOf<InstagramMediaType>();
+    expectTypeOf(classifyInstagramTrendKind).returns.toEqualTypeOf<InstagramTrendMediaKind>();
+  });
+
   it("classifies image, carousel, reels, and other video media", () => {
     expect(classifyInstagramTrendKind("IMAGE", "https://instagram.com/p/abc")).toBe("image");
     expect(classifyInstagramTrendKind("CAROUSEL_ALBUM", "https://instagram.com/p/abc")).toBe("carousel");
     expect(classifyInstagramTrendKind("VIDEO", "https://instagram.com/reel/abc123/?x=1")).toBe("reel");
+    expect(classifyInstagramTrendKind("VIDEO", "https://www.instagram.com/reel/abc123/")).toBe("reel");
+    expect(classifyInstagramTrendKind("VIDEO", "https://evil.example/reel/abc123")).toBe("video");
     expect(classifyInstagramTrendKind("VIDEO", "https://instagram.com/reel/abc123/extra")).toBe("video");
     expect(classifyInstagramTrendKind("VIDEO", "https://instagram.com/reels/abc123")).toBe("video");
     expect(classifyInstagramTrendKind("VIDEO", "not a url")).toBe("video");

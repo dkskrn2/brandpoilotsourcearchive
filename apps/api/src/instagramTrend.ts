@@ -1,8 +1,10 @@
+import type { InstagramTrendMediaKind } from "./types.js";
+
 const INSTAGRAM_TREND_TTL_MS = 24 * 60 * 60 * 1000;
 const MEDIA_TYPES = ["IMAGE", "CAROUSEL_ALBUM", "VIDEO"] as const;
+const HASHTAG_PATTERN = /^(?:[_\p{Nd}]|(?=\p{L})[\p{Script=Latin}\p{Script=Hangul}])+$/u;
 
-type InstagramMediaType = typeof MEDIA_TYPES[number];
-export type InstagramTrendKind = "image" | "carousel" | "reel" | "video";
+export type InstagramMediaType = typeof MEDIA_TYPES[number];
 
 export interface NormalizedInstagramTrendMedia {
   instagramMediaId: string;
@@ -15,7 +17,7 @@ export interface NormalizedInstagramTrendMedia {
   postedAt: string | null;
   likeCount: number | null;
   commentsCount: number | null;
-  kind: InstagramTrendKind;
+  kind: InstagramTrendMediaKind;
   metaRank: number;
   rawMetadata: Record<string, unknown>;
 }
@@ -32,12 +34,10 @@ export function normalizeInstagramHashtag(input: unknown): { displayTag: string;
   if (typeof input !== "string") throw new Error("invalid_hashtag");
   let displayTag = input.trim().normalize("NFKC");
   if (displayTag.startsWith("#")) displayTag = displayTag.slice(1);
-  if (
-    displayTag.length === 0 ||
-    Array.from(displayTag).length > 100 ||
-    !/^[_\p{L}\p{Nd}]+$/u.test(displayTag)
-  ) throw new Error("invalid_hashtag");
-  return { displayTag, normalizedTag: displayTag.toLocaleLowerCase("und") };
+  const normalizedTag = displayTag.toLocaleLowerCase("und");
+  const isValid = (value: string) => Array.from(value).length <= 100 && HASHTAG_PATTERN.test(value);
+  if (!isValid(displayTag) || !isValid(normalizedTag)) throw new Error("invalid_hashtag");
+  return { displayTag, normalizedTag };
 }
 
 export function isFreshInstagramTrendCache(
@@ -53,13 +53,19 @@ export function isFreshInstagramTrendCache(
     && nowTime >= refreshedTime && nowTime - refreshedTime < ttlMs;
 }
 
-export function classifyInstagramTrendKind(mediaType: string, permalink: string): InstagramTrendKind {
+export function classifyInstagramTrendKind(
+  mediaType: InstagramMediaType,
+  permalink: string
+): InstagramTrendMediaKind {
   if (mediaType === "IMAGE") return "image";
   if (mediaType === "CAROUSEL_ALBUM") return "carousel";
   if (mediaType === "VIDEO") {
     try {
-      const pathname = new URL(permalink).pathname;
-      if (/^\/reel\/[^/]+\/?$/.test(pathname)) return "reel";
+      const url = new URL(permalink);
+      if (
+        (url.hostname === "instagram.com" || url.hostname === "www.instagram.com")
+        && /^\/reel\/[^/]+\/?$/.test(url.pathname)
+      ) return "reel";
     } catch {
       // Invalid permalinks are ordinary video media.
     }
