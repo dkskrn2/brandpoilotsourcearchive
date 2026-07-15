@@ -1848,4 +1848,24 @@ describe("API server", () => {
       items: []
     });
   });
+
+  it("preserves the requested page in an empty hashtag-not-found trend response", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.listInstagramTrends).mockRejectedValue(new Error("instagram_hashtag_not_found"));
+    const app = createServer({ repository, logger: false });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/instagram-trends?hashtag=%23없는태그&page=2`
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      hashtag: { id: "", displayTag: "없는태그", normalizedTag: "없는태그" },
+      page: 2,
+      pageSize: 20,
+      total: 0,
+      items: []
+    });
+  });
 });

@@ -233,7 +233,7 @@ function requiredHashtag(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-function emptyInstagramTrendPage(hashtag: string): InstagramTrendPageDto {
+function emptyInstagramTrendPage(hashtag: string, page = 1): InstagramTrendPageDto {
   const normalized = normalizeInstagramHashtag(hashtag);
   return {
     hashtag: { id: "", displayTag: normalized.displayTag, normalizedTag: normalized.normalizedTag },
@@ -241,7 +241,7 @@ function emptyInstagramTrendPage(hashtag: string): InstagramTrendPageDto {
     refreshed: false,
     refreshedAt: null,
     lastErrorCode: "instagram_hashtag_not_found",
-    page: 1,
+    page,
     pageSize: 20,
     total: 0,
     items: []
@@ -251,14 +251,15 @@ function emptyInstagramTrendPage(hashtag: string): InstagramTrendPageDto {
 async function instagramTrendResponse<T>(
   reply: FastifyReply,
   operation: () => Promise<T>,
-  hashtag?: string
+  hashtag?: string,
+  page = 1
 ): Promise<T | InstagramTrendPageDto | { error: string }> {
   try {
     return await operation();
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";
     if (message === "instagram_hashtag_not_found" && hashtag) {
-      return emptyInstagramTrendPage(hashtag);
+      return emptyInstagramTrendPage(hashtag, page);
     }
     const mapped = instagramTrendHttpErrors[message];
     if (!mapped || message === "instagram_hashtag_not_found") throw error;
@@ -784,7 +785,8 @@ export function createServer(
         sort: sort as InstagramTrendSort,
         page
       }),
-      hashtag
+      hashtag,
+      page
     );
   });
 
