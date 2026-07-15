@@ -16,7 +16,7 @@ const topic = {
 
 const brand = {
   name: "제주 여행 연구소",
-  industry: "여행 상담",
+  categoryContext: "여행·관광 / 여행 상담",
   primaryCustomer: "제주 가족 여행자",
   description: "제주 일정과 숙소 동선을 상담합니다.",
   tone: "친절하지만 과장 없는 전문가 톤",

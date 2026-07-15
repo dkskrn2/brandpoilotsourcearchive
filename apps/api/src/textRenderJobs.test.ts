@@ -12,7 +12,7 @@ const topic = {
 
 const brand = {
   name: "Growth Line",
-  industry: "마케팅",
+  categoryContext: "비즈니스·전문 서비스 / 마케팅 컨설팅",
   primaryCustomer: "사업자",
   description: "콘텐츠 자동화 서비스",
   tone: "명확함",

@@ -11,7 +11,7 @@ import { buildInstagramLoginAuthorizeUrl, exchangeInstagramLoginCode, instagramL
 import { parseInstagramMessagingEvents, verifyInstagramSignature } from "./instagramWebhook.js";
 import { parseDmWorkerResult } from "./dmTypes.js";
 import { StoryCapabilityRequiredError } from "./repository.js";
-import type { ApiRepository, Channel, DmAttentionType, DmConversationFilter, InstagramDeliveryFormat, InstagramFormatSettingsInput, SourceType, SupportRequestCategory, SupportRequestStatus } from "./types.js";
+import type { ApiRepository, BrandProfileInput, Channel, DmAttentionType, DmConversationFilter, InstagramDeliveryFormat, InstagramFormatSettingsInput, SourceType, SupportRequestCategory, SupportRequestStatus } from "./types.js";
 import { createKakaoAuthStore, type KakaoProfile } from "./kakaoAuth.js";
 import { brandLogoRequestBodyLimit, type BrandLogoService } from "./brandLogo.js";
 
@@ -69,9 +69,48 @@ function optionalString(value: unknown) {
 }
 
 function hasOverlongBrandProfileShortField(value: Record<string, unknown>) {
-  return [value.industry, value.primaryCustomer].some(
+  return [value.primaryCustomer].some(
     (field) => typeof field === "string" && field.length > maxBrandProfileShortFieldLength
   );
+}
+
+function validateBrandProfileInput(value: Record<string, unknown>):
+  | { input: BrandProfileInput; error?: never }
+  | { input?: never; error: string } {
+  if (Object.prototype.hasOwnProperty.call(value, "industry")) return { error: "industry_not_supported" };
+  if (hasOverlongBrandProfileShortField(value)) return { error: "brand_profile_field_too_long" };
+  const input: BrandProfileInput = {};
+  for (const key of ["name", "primaryCustomer", "description", "tone", "defaultCta", "mainLink"] as const) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      if (typeof value[key] !== "string") return { error: "invalid_body" };
+      input[key] = value[key];
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "autoApprovalEnabled")) {
+    if (typeof value.autoApprovalEnabled !== "boolean") return { error: "invalid_body" };
+    input.autoApprovalEnabled = value.autoApprovalEnabled;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "primaryCategoryCode")) {
+    if (typeof value.primaryCategoryCode !== "string" || !value.primaryCategoryCode.trim()) {
+      return { error: "invalid_primary_category" };
+    }
+    input.primaryCategoryCode = value.primaryCategoryCode.trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "subcategories")) {
+    if (!Array.isArray(value.subcategories)) return { error: "invalid_subcategory" };
+    input.subcategories = [];
+    for (const item of value.subcategories) {
+      if (!isObject(item)) return { error: "invalid_subcategory" };
+      if (item.type === "system" && typeof item.code === "string" && item.code.trim()) {
+        input.subcategories.push({ type: "system", code: item.code.trim() });
+      } else if (item.type === "custom" && typeof item.name === "string") {
+        input.subcategories.push({ type: "custom", name: item.name });
+      } else {
+        return { error: "invalid_subcategory" };
+      }
+    }
+  }
+  return { input };
 }
 
 function validateInstagramFormatSettings(value: unknown):
@@ -236,6 +275,17 @@ export function createServer(
       return;
     }
     if (message === "brand_color_too_long") {
+      reply.code(400).send({ error: message });
+      return;
+    }
+    if ([
+      "invalid_primary_category",
+      "invalid_subcategory",
+      "subcategory_category_mismatch",
+      "too_many_subcategories",
+      "duplicate_subcategory",
+      "brand_subcategory_too_long"
+    ].includes(message)) {
       reply.code(400).send({ error: message });
       return;
     }
@@ -661,11 +711,12 @@ export function createServer(
       reply.code(400);
       return { error: "invalid_body" };
     }
-    if (hasOverlongBrandProfileShortField(request.body)) {
+    const validated = validateBrandProfileInput(request.body);
+    if (validated.error) {
       reply.code(400);
-      return { error: "brand_profile_field_too_long" };
+      return { error: validated.error };
     }
-    return repository.updateBrandProfile(request.params.brandId, request.body);
+    return repository.updateBrandProfile(request.params.brandId, validated.input!);
   });
 
   app.post<{ Params: { brandId: string }; Body: Record<string, unknown> }>(

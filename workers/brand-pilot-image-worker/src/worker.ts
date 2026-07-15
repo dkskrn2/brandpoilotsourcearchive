@@ -149,7 +149,7 @@ function promptInputFor(
     },
     brand: {
       name: requiredText(brand, "name"),
-      industry: nullableText(brand, "industry"),
+      categoryContext: nullableText(brand, "categoryContext"),
       primaryCustomer: nullableText(brand, "primaryCustomer"),
       description: nullableText(brand, "description"),
       tone: nullableText(brand, "tone"),

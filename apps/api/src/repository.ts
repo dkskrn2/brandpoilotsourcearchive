@@ -27,6 +27,7 @@ import {
 import { crawlSourceUrl, discoverContentUrls, isLikelyContentPage } from "./sourceCrawler.js";
 import { nextRetryAt, scheduledRunKey } from "./sourceCrawlSchedule.js";
 import { hashSourceUrl } from "./sourceUrl.js";
+import { formatBrandCategoryContext, normalizeCustomSubcategory } from "./brandCategory.js";
 import { buildThreadsRenderJobPayload, parseThreadsRenderJobResult } from "./textRenderJobs.js";
 import { brandPolicyDateKey, dailyTopicCapacity, determineGenerationReadiness, runDailyTopicGeneration } from "./topicPublishGroups.js";
 import { parseKnowledgeUpload } from "./knowledgeImport.js";
@@ -415,12 +416,27 @@ function parseTopicCsv(input: TopicUploadInput) {
   });
 }
 
+function categoryProfileFromRow(row: any) {
+  const subcategories = Array.isArray(row.subcategories) ? row.subcategories : [];
+  return {
+    primaryCategory: row.category_code && row.category_name
+      ? { code: String(row.category_code), name: String(row.category_name) }
+      : null,
+    subcategories: subcategories.map((item: any) => ({
+      type: item.type === "custom" ? "custom" as const : "system" as const,
+      code: item.type === "custom" ? null : item.code ?? null,
+      name: String(item.name ?? "")
+    }))
+  };
+}
+
 function mapProfile(row: any): BrandProfileDto {
+  const category = categoryProfileFromRow(row);
   return {
     id: row.profile_id,
     brandId: row.brand_id,
     name: row.brand_name,
-    industry: row.industry ?? "",
+    ...category,
     primaryCustomer: row.primary_customer ?? "",
     description: row.description ?? "",
     tone: row.tone ?? "",
@@ -821,7 +837,7 @@ function doneStatus(done: boolean, fallback: "needs_attention" | "pending" = "ne
 function buildBrandUiStatus(row: any): BrandUiStatusDto {
   const brandProfileDone = Boolean(
     row.brand_name &&
-    row.industry &&
+    row.primary_category_id &&
     row.primary_customer &&
     row.description
   );
@@ -837,7 +853,7 @@ function buildBrandUiStatus(row: any): BrandUiStatusDto {
     {
       id: "brand-profile",
       title: "브랜드 정보",
-      description: "브랜드명, 업종, 고객, 서비스 설명을 입력합니다.",
+      description: "브랜드명, 대표 분야, 고객, 서비스 설명을 입력합니다.",
       actionLabel: "설정",
       path: "/brand-settings",
       status: doneStatus(brandProfileDone)
@@ -1104,7 +1120,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         topic: input.topic,
         brand: {
           name: String(input.brand.brand_name ?? ""),
-          industry: nullableText(input.brand.industry),
+          categoryContext: formatBrandCategoryContext(categoryProfileFromRow(input.brand)),
           primaryCustomer: nullableText(input.brand.primary_customer),
           description: nullableText(input.brand.description),
           tone: nullableText(input.brand.tone),
@@ -1145,7 +1161,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       topic: input.topic,
       brand: {
         name: String(input.brand.brand_name ?? ""),
-        industry: nullableText(input.brand.industry),
+        categoryContext: formatBrandCategoryContext(categoryProfileFromRow(input.brand)),
         primaryCustomer: nullableText(input.brand.primary_customer),
         description: nullableText(input.brand.description),
         tone: nullableText(input.brand.tone),
@@ -1415,7 +1431,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       const result = await pool.query(
         `select b.id as brand_id,
                 b.name as brand_name,
-                bp.industry,
+                bp.primary_category_id,
                 bp.primary_customer,
                 bp.description,
                 bp.tone,
@@ -1444,10 +1460,27 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
 
     async getBrandProfile(brandId) {
       const result = await pool.query(
-        `select bp.id as profile_id, b.id as brand_id, b.name as brand_name, bp.industry, bp.primary_customer,
-                bp.description, bp.tone, bp.default_cta, bp.main_link, bp.auto_approval_enabled, bp.logo_url
+        `select bp.id as profile_id, bp.workspace_id, b.id as brand_id, b.name as brand_name,
+                category.code as category_code, category.name as category_name,
+                bp.description, bp.primary_customer, bp.tone, bp.default_cta, bp.main_link,
+                bp.auto_approval_enabled, bp.logo_url,
+                coalesce((
+                  select jsonb_agg(
+                    jsonb_build_object(
+                      'type', case when selected.subcategory_id is null then 'custom' else 'system' end,
+                      'code', subcategory.code,
+                      'name', coalesce(subcategory.name, selected.custom_name),
+                      'createdAt', selected.created_at
+                    )
+                    order by selected.created_at, coalesce(subcategory.name, selected.custom_name), selected.id
+                  )
+                  from brand_profile_subcategories selected
+                  left join content_subcategories subcategory on subcategory.id = selected.subcategory_id
+                  where selected.brand_profile_id = bp.id
+                ), '[]'::jsonb) as subcategories
          from brands b
          join brand_profiles bp on bp.brand_id = b.id
+         left join content_categories category on category.id = bp.primary_category_id
          where b.id = $1 and b.deleted_at is null`,
         [brandId]
       );
@@ -1459,12 +1492,86 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       const client = await pool.connect();
       try {
         await client.query("begin");
+        const locked = await client.query(
+          `select bp.id as profile_id, bp.workspace_id, bp.brand_id, bp.primary_category_id
+           from brand_profiles bp
+           join brands b on b.id = bp.brand_id and b.deleted_at is null
+           where bp.brand_id = $1
+           for update of bp`,
+          [brandId]
+        );
+        if (!locked.rowCount) throw new Error("brand_profile_not_found");
+        const profile = locked.rows[0];
+        let primaryCategoryId = profile.primary_category_id as string | null;
+        if (input.primaryCategoryCode !== undefined) {
+          const category = await client.query(
+            `select id, code, name from content_categories where code = $1 and active = true`,
+            [input.primaryCategoryCode]
+          );
+          if (!category.rowCount) throw new Error("invalid_primary_category");
+          primaryCategoryId = category.rows[0].id;
+        }
+
+        if (input.subcategories !== undefined) {
+          if (!primaryCategoryId) throw new Error("invalid_primary_category");
+          if (input.subcategories.length > 5) throw new Error("too_many_subcategories");
+          const systemInputs = input.subcategories.filter((item) => item.type === "system");
+          const customInputs = input.subcategories.filter((item) => item.type === "custom");
+          const normalizedCustom = customInputs.map((item) => normalizeCustomSubcategory(item.name));
+          if (normalizedCustom.some((item) => item.name.length < 1 || Array.from(item.name).length > 30)) {
+            throw new Error("brand_subcategory_too_long");
+          }
+          const customKeys = normalizedCustom.map((item) => item.key);
+          if (new Set(customKeys).size !== customKeys.length) throw new Error("duplicate_subcategory");
+
+          const systemCodes = systemInputs.map((item) => item.code);
+          if (new Set(systemCodes).size !== systemCodes.length) throw new Error("duplicate_subcategory");
+          let systemRows: any[] = [];
+          if (systemCodes.length > 0) {
+            const system = await client.query(
+              `select id, category_id, code, name
+               from content_subcategories
+               where code = any($1::text[]) and active = true`,
+              [systemCodes]
+            );
+            systemRows = system.rows;
+            if (new Set(systemRows.map((row) => row.code)).size !== new Set(systemCodes).size) {
+              throw new Error("invalid_subcategory");
+            }
+            if (systemRows.some((row) => row.category_id !== primaryCategoryId)) {
+              throw new Error("subcategory_category_mismatch");
+            }
+          }
+          const displayKeys = [
+            ...systemRows.map((row) => String(row.name).normalize("NFKC").trim().toLocaleLowerCase("ko-KR")),
+            ...customKeys
+          ];
+          if (new Set(displayKeys).size !== displayKeys.length) throw new Error("duplicate_subcategory");
+
+          await client.query(`delete from brand_profile_subcategories where brand_profile_id = $1`, [profile.profile_id]);
+          for (const row of systemRows) {
+            await client.query(
+              `insert into brand_profile_subcategories
+                 (workspace_id, brand_id, brand_profile_id, subcategory_id)
+               values ($1, $2, $3, $4)`,
+              [profile.workspace_id, brandId, profile.profile_id, row.id]
+            );
+          }
+          for (const item of normalizedCustom) {
+            await client.query(
+              `insert into brand_profile_subcategories
+                 (workspace_id, brand_id, brand_profile_id, custom_name, custom_key)
+               values ($1, $2, $3, $4, $5)`,
+              [profile.workspace_id, brandId, profile.profile_id, item.name, item.key]
+            );
+          }
+        }
         if (input.name !== undefined) {
           await client.query("update brands set name = $2 where id = $1", [brandId, input.name]);
         }
         await client.query(
           `update brand_profiles
-           set industry = coalesce($2, industry),
+           set primary_category_id = $2,
                primary_customer = coalesce($3, primary_customer),
                description = coalesce($4, description),
                tone = coalesce($5, tone),
@@ -1474,7 +1581,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
            where brand_id = $1`,
           [
             brandId,
-            input.industry,
+            primaryCategoryId,
             input.primaryCustomer,
             input.description,
             input.tone,
@@ -2028,7 +2135,16 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                        channel, delivery_format, title, output_json, source_summary, rendered_artifact_id
            )
              select updated.*, bc.id as brand_channel_id, tpg.id as topic_publish_group_id,
-                    b.name as brand_name, bp.industry, bp.primary_customer, bp.description, bp.tone, bp.brand_color,
+                    b.name as brand_name, category.code as category_code, category.name as category_name,
+                    coalesce((select jsonb_agg(jsonb_build_object(
+                      'type', case when selected.subcategory_id is null then 'custom' else 'system' end,
+                      'code', subcategory.code,
+                      'name', coalesce(subcategory.name, selected.custom_name)
+                    ) order by selected.created_at, coalesce(subcategory.name, selected.custom_name), selected.id)
+                    from brand_profile_subcategories selected
+                    left join content_subcategories subcategory on subcategory.id = selected.subcategory_id
+                    where selected.brand_profile_id = bp.id), '[]'::jsonb) as subcategories,
+                    bp.primary_customer, bp.description, bp.tone, bp.brand_color,
                     md.draft_json, ct.title as topic_title, ct.angle as topic_angle,
                     tr.target_customer, tr.region, tr.season, tr.reference_url, tr.notes,
                     (
@@ -2046,6 +2162,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             join brand_channels bc on bc.brand_id = updated.brand_id and bc.channel = updated.channel and bc.deleted_at is null
             join topic_publish_groups tpg on tpg.content_topic_id = updated.content_topic_id
             join brand_profiles bp on bp.brand_id = updated.brand_id
+            left join content_categories category on category.id = bp.primary_category_id
             join master_drafts md on md.id = updated.master_draft_id
             join content_topics ct on ct.id = updated.content_topic_id
             left join topic_rows tr on tr.id = ct.topic_row_id`,
@@ -2905,10 +3022,20 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       try {
         await client.query("begin");
         const brandResult = await client.query(
-          `select b.workspace_id, b.name as brand_name, b.timezone, bp.industry, bp.primary_customer,
-                  bp.description, bp.tone, bp.default_cta, bp.auto_approval_enabled, bp.brand_color
+          `select b.workspace_id, b.name as brand_name, b.timezone,
+                  category.code as category_code, category.name as category_name,
+                  coalesce((select jsonb_agg(jsonb_build_object(
+                    'type', case when selected.subcategory_id is null then 'custom' else 'system' end,
+                    'code', subcategory.code,
+                    'name', coalesce(subcategory.name, selected.custom_name)
+                  ) order by selected.created_at, coalesce(subcategory.name, selected.custom_name), selected.id)
+                  from brand_profile_subcategories selected
+                  left join content_subcategories subcategory on subcategory.id = selected.subcategory_id
+                  where selected.brand_profile_id = bp.id), '[]'::jsonb) as subcategories,
+                  bp.primary_customer, bp.description, bp.tone, bp.default_cta, bp.auto_approval_enabled, bp.brand_color
            from brands b
            join brand_profiles bp on bp.brand_id = b.id
+           left join content_categories category on category.id = bp.primary_category_id
            where b.id = $1 and b.deleted_at is null
            for update of b`,
           [brandId]

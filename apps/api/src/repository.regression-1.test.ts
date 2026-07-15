@@ -56,7 +56,12 @@ describe("repository regressions", () => {
         profile_id: "profile-1",
         brand_id: "brand-1",
         brand_name: "Brand",
-        industry: null,
+        category_code: "business_professional",
+        category_name: "비즈니스·전문 서비스",
+        subcategories: [
+          { type: "system", code: "marketing_consulting", name: "마케팅 컨설팅", createdAt: "2026-01-01" },
+          { type: "custom", code: null, name: "세일즈 메시지 설계", createdAt: "2026-01-02" }
+        ],
         primary_customer: null,
         description: null,
         tone: null,
@@ -68,7 +73,11 @@ describe("repository regressions", () => {
     const repository = createRepository({ query } as any);
 
     await expect(repository.getBrandProfile("brand-1")).resolves.toMatchObject({
-      industry: "",
+      primaryCategory: { code: "business_professional", name: "비즈니스·전문 서비스" },
+      subcategories: [
+        { type: "system", code: "marketing_consulting", name: "마케팅 컨설팅" },
+        { type: "custom", code: null, name: "세일즈 메시지 설계" }
+      ],
       primaryCustomer: "",
       description: "",
       tone: "",
@@ -83,7 +92,7 @@ describe("repository regressions", () => {
       rows: [{
         brand_id: "brand-1",
         brand_name: "Brand",
-        industry: "여행",
+        primary_category_id: "category-1",
         primary_customer: "가족 여행자",
         description: "여행 상담",
         tone: "전문가",
@@ -115,7 +124,7 @@ describe("repository regressions", () => {
       rows: [{
         brand_id: "brand-1",
         brand_name: "Brand",
-        industry: "여행",
+        primary_category_id: "category-1",
         primary_customer: "가족 여행자",
         description: "여행 상담",
         tone: null,

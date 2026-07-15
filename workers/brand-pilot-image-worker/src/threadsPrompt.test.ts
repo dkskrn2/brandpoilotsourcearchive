@@ -15,7 +15,7 @@ const payload = {
   },
   brand: {
     name: "브랜드",
-    industry: "헤어 케어",
+    categoryContext: "뷰티·화장품 / 헤어 케어",
     primaryCustomer: "30대 직장인",
     description: "차분한 생활 관리 정보를 제공한다",
     tone: "담백하고 친근하게",
@@ -80,7 +80,7 @@ describe("Threads prompt", () => {
       },
       brand: {
         ...payload.brand,
-        industry: null,
+        categoryContext: null,
         primaryCustomer: null,
         description: null,
         tone: null,
@@ -90,5 +90,10 @@ describe("Threads prompt", () => {
 
     expect(parsed.topic.targetCustomer).toBeNull();
     expect(parsed.brand.brandColor).toBeNull();
+  });
+
+  it("keeps legacy queued jobs readable when categoryContext is absent", () => {
+    const { categoryContext: _removed, ...legacyBrand } = payload.brand;
+    expect(parseThreadsTextPayload({ ...payload, brand: legacyBrand }).brand.categoryContext).toBeNull();
   });
 });

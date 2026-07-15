@@ -67,7 +67,8 @@ export interface BrandProfileDto {
   id: string;
   brandId: string;
   name: string;
-  industry: string;
+  primaryCategory: BrandPrimaryCategoryDto | null;
+  subcategories: BrandSubcategoryDto[];
   primaryCustomer: string;
   description: string;
   tone: string;
@@ -79,7 +80,8 @@ export interface BrandProfileDto {
 
 export interface BrandProfileInput {
   name?: string;
-  industry?: string;
+  primaryCategoryCode?: string;
+  subcategories?: BrandSubcategoryInput[];
   primaryCustomer?: string;
   description?: string;
   tone?: string;
@@ -593,7 +595,7 @@ export interface ImageRenderJobTopicContext {
 
 export interface ImageRenderJobBrandContext {
   name: string;
-  industry: string | null;
+  categoryContext?: string | null;
   primaryCustomer: string | null;
   description: string | null;
   tone: string | null;

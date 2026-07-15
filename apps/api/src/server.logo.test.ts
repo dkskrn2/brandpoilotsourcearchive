@@ -6,7 +6,7 @@ const brandId = "11111111-1111-1111-1111-111111111111";
 describe("brand logo HTTP API", () => {
   it("uploads a logo through the dedicated service", async () => {
     const upload = vi.fn(async () => ({
-      id: "profile-1", brandId, name: "브랜드", industry: "서비스", primaryCustomer: "사업자",
+      id: "profile-1", brandId, name: "브랜드", primaryCategory: null, subcategories: [], primaryCustomer: "사업자",
       description: "설명", tone: "", defaultCta: "", mainLink: "", autoApprovalEnabled: true,
       logoUrl: "https://cdn.example.com/logo.png"
     }));
@@ -52,7 +52,7 @@ describe("brand logo HTTP API", () => {
 
   it("accepts the base64 request size needed for a logo larger than Fastify's default limit", async () => {
     const upload = vi.fn(async () => ({
-      id: "profile-1", brandId, name: "브랜드", industry: "서비스", primaryCustomer: "사업자",
+      id: "profile-1", brandId, name: "브랜드", primaryCategory: null, subcategories: [], primaryCustomer: "사업자",
       description: "설명", tone: "", defaultCta: "", mainLink: "", autoApprovalEnabled: true,
       logoUrl: "https://cdn.example.com/logo.png"
     }));

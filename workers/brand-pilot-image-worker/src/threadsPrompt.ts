@@ -13,7 +13,7 @@ export interface ThreadsTextPayload {
   };
   brand: {
     name: string;
-    industry: string | null;
+    categoryContext: string | null;
     primaryCustomer: string | null;
     description: string | null;
     tone: string | null;
@@ -44,6 +44,10 @@ function nullableText(record: Record<string, unknown>, key: string) {
   return value.trim() || null;
 }
 
+function optionalNullableText(record: Record<string, unknown>, key: string) {
+  return record[key] === undefined ? null : nullableText(record, key);
+}
+
 export function parseThreadsTextPayload(value: unknown): ThreadsTextPayload {
   const payload = requiredRecord(value, "payload");
   if (payload.deliveryFormat !== "threads_text" || payload.promptVersion !== "worker-threads.v1") {
@@ -69,7 +73,7 @@ export function parseThreadsTextPayload(value: unknown): ThreadsTextPayload {
     },
     brand: {
       name: requiredText(brand, "name"),
-      industry: nullableText(brand, "industry"),
+      categoryContext: optionalNullableText(brand, "categoryContext"),
       primaryCustomer: nullableText(brand, "primaryCustomer"),
       description: nullableText(brand, "description"),
       tone: nullableText(brand, "tone"),

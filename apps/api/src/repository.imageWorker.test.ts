@@ -267,7 +267,9 @@ describe("image worker completion", () => {
             brand_channel_id: "channel-1",
             topic_publish_group_id: "group-1",
             brand_name: "Brand",
-            industry: "travel",
+            category_code: "travel_tourism",
+            category_name: "여행·관광",
+            subcategories: [{ type: "system", code: "travel_consulting", name: "여행 상담" }],
             primary_customer: "families",
             description: "travel planning",
             tone: "clear",
@@ -317,7 +319,8 @@ describe("image worker completion", () => {
     expect(payload).toMatchObject({
       deliveryFormat: "instagram_story",
       promptVersion: "worker-story.v1",
-      representativeUrl: "https://reference.example.com/story"
+      representativeUrl: "https://reference.example.com/story",
+      brand: { categoryContext: "여행·관광 / 여행 상담" }
     });
   });
 });

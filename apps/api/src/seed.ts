@@ -58,11 +58,11 @@ async function seed() {
 
     await client.query(
       `insert into brand_profiles (
-         workspace_id, brand_id, industry, primary_customer, description, tone,
+         workspace_id, brand_id, primary_category_id, primary_customer, description, tone,
          forbidden_terms, default_cta, main_link, auto_approval_enabled
        )
        values (
-         $1, $2, '여행 서비스', '일본 여행을 처음 준비하는 20-40대',
+         $1, $2, (select id from content_categories where code = 'travel_tourism'), '일본 여행을 처음 준비하는 20-40대',
          '제주와 일본 여행 일정을 상담하고 숙소, 이동, 예산 정보를 정리해주는 여행 브랜드입니다.',
          '친절하지만 과장하지 않는 전문가 톤', '[]'::jsonb, '무료 상담 신청하기', 'https://example.com', true
        )

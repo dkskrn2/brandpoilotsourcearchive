@@ -12,7 +12,7 @@ const commonInput = {
   },
   brand: {
     name: "여행연구소",
-    industry: "travel",
+    categoryContext: "여행·관광 / 여행 상담",
     primaryCustomer: "가족 여행객",
     description: "현실적인 여행 계획을 돕는 브랜드",
     tone: "명확하고 차분함",

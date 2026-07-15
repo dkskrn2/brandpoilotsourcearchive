@@ -322,7 +322,7 @@ describe("repository", () => {
       rows: [{
         brand_id: "brand-1",
         brand_name: "Learning Brand",
-        industry: "education",
+        primary_category_id: "category-education",
         primary_customer: "small business owners",
         description: "Content operations brand",
         tone: "professional",
@@ -1717,7 +1717,9 @@ describe("repository", () => {
         return { rowCount: 1, rows: [{
           workspace_id: "workspace-1",
           brand_name: "Jeju Pilot",
-          industry: "여행 상담",
+          category_code: "travel_tourism",
+          category_name: "여행·관광",
+          subcategories: [{ type: "system", code: "travel_consulting", name: "여행 상담" }],
           primary_customer: "제주 가족 여행자",
           description: "제주 일정과 숙소 동선을 상담합니다.",
           tone: "친절하지만 과장 없는 전문가 톤",
@@ -1777,6 +1779,7 @@ describe("repository", () => {
       },
       brand: {
         name: "Jeju Pilot",
+        categoryContext: "여행·관광 / 여행 상담",
         description: "제주 일정과 숙소 동선을 상담합니다."
       }
     });
@@ -1794,7 +1797,8 @@ describe("repository", () => {
         title: "Jeju family stay",
         angle: "location-first checklist",
         targetCustomer: "family travelers"
-      }
+      },
+      brand: { categoryContext: "여행·관광 / 여행 상담" }
     });
     expect(llmRunValues.some((values) => values.includes("channel_output") && values.includes("gpt-image-2"))).toBe(false);
   });
@@ -3275,4 +3279,3 @@ describe("repository", () => {
     expect(statements.at(-1)?.trim()).toBe("rollback");
   });
 });
-

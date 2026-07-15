@@ -56,7 +56,8 @@ function createRepository(): ApiRepository {
       id: "profile-1",
       brandId,
       name: "제주 여행 상담 브랜드",
-      industry: "여행 서비스",
+      primaryCategory: { code: "travel_tourism", name: "여행·관광" },
+      subcategories: [],
       primaryCustomer: "일본 여행을 처음 준비하는 20-40대",
       description: "여행 상담 브랜드",
       tone: "친절한 전문가",
@@ -69,7 +70,12 @@ function createRepository(): ApiRepository {
       id: "profile-1",
       brandId,
       name: body.name ?? "제주 여행 상담 브랜드",
-      industry: body.industry ?? "여행 서비스",
+      primaryCategory: body.primaryCategoryCode
+        ? { code: body.primaryCategoryCode, name: "비즈니스·전문 서비스" }
+        : { code: "travel_tourism", name: "여행·관광" },
+      subcategories: body.subcategories?.map((item: { type: "system"; code: string } | { type: "custom"; name: string }) => item.type === "system"
+        ? { type: "system" as const, code: item.code, name: "마케팅 컨설팅" }
+        : { type: "custom" as const, code: null, name: item.name }) ?? [],
       primaryCustomer: body.primaryCustomer ?? "일본 여행을 처음 준비하는 20-40대",
       description: body.description ?? "여행 상담 브랜드",
       tone: body.tone ?? "친절한 전문가",
@@ -663,19 +669,60 @@ describe("API server", () => {
     expect(repository.updateBrandProfile).toHaveBeenCalledWith(brandId, { name: "새 브랜드", autoApprovalEnabled: true });
   });
 
-  it("rejects an industry or primary customer longer than 30 characters", async () => {
+  it("rejects legacy industry and an overlong primary customer", async () => {
     const repository = createRepository();
     const app = createServer({ repository });
 
     const response = await app.inject({
       method: "PUT",
       url: `/brands/${brandId}/profile`,
-      payload: { industry: "가".repeat(31), primaryCustomer: "나".repeat(31) }
+      payload: { primaryCustomer: "나".repeat(31) }
     });
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: "brand_profile_field_too_long" });
     expect(repository.updateBrandProfile).not.toHaveBeenCalled();
+  });
+
+  it("rejects the legacy industry field", async () => {
+    const repository = createRepository();
+    const app = createServer({ repository });
+    const response = await app.inject({
+      method: "PUT",
+      url: `/brands/${brandId}/profile`,
+      payload: { industry: "여행" }
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "industry_not_supported" });
+    expect(repository.updateBrandProfile).not.toHaveBeenCalled();
+  });
+
+  it("accepts representative and detailed category selections", async () => {
+    const repository = createRepository();
+    const app = createServer({ repository });
+    const payload = {
+      primaryCategoryCode: "business_professional",
+      subcategories: [
+        { type: "system", code: "marketing_consulting" },
+        { type: "custom", name: "세일즈 메시지 설계" }
+      ]
+    };
+    const response = await app.inject({ method: "PUT", url: `/brands/${brandId}/profile`, payload });
+    expect(response.statusCode).toBe(200);
+    expect(repository.updateBrandProfile).toHaveBeenCalledWith(brandId, payload);
+  });
+
+  it("maps stable category validation failures to 400", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.updateBrandProfile).mockRejectedValueOnce(new Error("invalid_primary_category"));
+    const app = createServer({ repository });
+    const response = await app.inject({
+      method: "PUT",
+      url: `/brands/${brandId}/profile`,
+      payload: { primaryCategoryCode: "missing" }
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "invalid_primary_category" });
   });
 
   it("lists Instagram format settings in repository order", async () => {

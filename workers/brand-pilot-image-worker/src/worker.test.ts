@@ -38,7 +38,7 @@ function claimedJob(
       },
       brand: {
         name: "Brand",
-        industry: null,
+        categoryContext: null,
         primaryCustomer: null,
         description: null,
         tone: null,

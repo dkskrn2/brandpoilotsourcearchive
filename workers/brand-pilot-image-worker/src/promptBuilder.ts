@@ -21,7 +21,7 @@ export interface WorkerPromptTopic {
 
 export interface WorkerPromptBrand {
   name: string;
-  industry: string | null;
+  categoryContext: string | null;
   primaryCustomer: string | null;
   description: string | null;
   tone: string | null;

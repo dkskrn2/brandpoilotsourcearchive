@@ -2,7 +2,7 @@ export const INSTAGRAM_CARD_IMAGE_PROMPT_VERSION = "instagram.card-image.v3";
 
 export interface InstagramCardImageContext {
   brandProfile: {
-    industry: string | null;
+    categoryContext: string | null;
     serviceDescription: string | null;
     primaryCustomer: string | null;
     tone: string | null;
@@ -56,7 +56,7 @@ export function buildInstagramCardImagePrompt(context: InstagramCardImageContext
     "워터마크, UI 크롬, 가짜 앱 화면, QR 코드, 읽기 어려운 작은 텍스트를 넣지 마세요.",
     "",
     "[브랜드 맥락]",
-    `- 업종: ${text(brandProfile.industry)}`,
+    `- 분야: ${text(brandProfile.categoryContext)}`,
     `- 서비스 설명: ${text(brandProfile.serviceDescription)}`,
     `- 주요 고객: ${text(brandProfile.primaryCustomer)}`,
     `- 톤: ${text(brandProfile.tone)}`,
