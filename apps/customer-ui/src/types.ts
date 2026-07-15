@@ -102,6 +102,89 @@ export interface BrandProfile {
   logoUrl: string | null;
 }
 
+export interface BrandSubcategory {
+  type: "system" | "custom";
+  code: string | null;
+  name: string;
+}
+
+export type BrandSubcategoryInput =
+  | { type: "system"; code: string }
+  | { type: "custom"; name: string };
+
+export interface BrandPrimaryCategory {
+  code: string;
+  name: string;
+}
+
+export interface ContentCategory {
+  code: string;
+  name: string;
+  recommendedHashtags: string[];
+  subcategories: Array<{ code: string; name: string }>;
+}
+
+export type InstagramTrendMediaKind = "reel" | "video" | "image" | "carousel";
+export type InstagramTrendSort = "meta" | "likes" | "comments";
+export type InstagramTrendMediaTypeFilter = "all" | InstagramTrendMediaKind;
+
+export interface InstagramTrendMedia {
+  id: string;
+  instagramMediaId: string;
+  username: string | null;
+  caption: string | null;
+  kind: InstagramTrendMediaKind;
+  mediaUrl: string | null;
+  previewUrl: string | null;
+  permalink: string;
+  postedAt: string | null;
+  likeCount: number | null;
+  commentsCount: number | null;
+  metaRank: number;
+  refreshedAt: string;
+  isSaved: boolean;
+}
+
+export interface InstagramTrendPage {
+  hashtag: { id: string; displayTag: string; normalizedTag: string };
+  source: "cache" | "meta";
+  refreshed: boolean;
+  refreshedAt: string | null;
+  lastErrorCode: string | null;
+  page: number;
+  pageSize: 20;
+  total: number;
+  items: InstagramTrendMedia[];
+}
+
+export interface InstagramTrendSearchHistory {
+  hashtagId: string;
+  displayTag: string;
+  isFavorite: boolean;
+  lastSearchedAt: string;
+  searchCount: number;
+}
+
+export interface InstagramTrendListInput {
+  hashtag: string;
+  type: InstagramTrendMediaTypeFilter;
+  sort: InstagramTrendSort;
+  page: number;
+}
+
+export interface InstagramTrendSearchInput {
+  hashtag: string;
+}
+
+export interface InstagramTrendFavoriteInput {
+  isFavorite: boolean;
+}
+
+export interface InstagramTrendSaveSource {
+  source: SourceUrl;
+  alreadySaved: boolean;
+}
+
 export interface BrandContentFormat {
   format: InstagramDeliveryFormat;
   enabled: boolean;

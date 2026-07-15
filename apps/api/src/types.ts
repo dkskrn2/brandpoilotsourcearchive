@@ -88,6 +88,89 @@ export interface BrandProfileInput {
   autoApprovalEnabled?: boolean;
 }
 
+export interface BrandSubcategoryDto {
+  type: "system" | "custom";
+  code: string | null;
+  name: string;
+}
+
+export type BrandSubcategoryInput =
+  | { type: "system"; code: string }
+  | { type: "custom"; name: string };
+
+export interface BrandPrimaryCategoryDto {
+  code: string;
+  name: string;
+}
+
+export interface ContentCategoryDto {
+  code: string;
+  name: string;
+  recommendedHashtags: string[];
+  subcategories: Array<{ code: string; name: string }>;
+}
+
+export type InstagramTrendMediaKind = "reel" | "video" | "image" | "carousel";
+export type InstagramTrendSort = "meta" | "likes" | "comments";
+export type InstagramTrendMediaTypeFilter = "all" | InstagramTrendMediaKind;
+
+export interface InstagramTrendMediaDto {
+  id: string;
+  instagramMediaId: string;
+  username: string | null;
+  caption: string | null;
+  kind: InstagramTrendMediaKind;
+  mediaUrl: string | null;
+  previewUrl: string | null;
+  permalink: string;
+  postedAt: string | null;
+  likeCount: number | null;
+  commentsCount: number | null;
+  metaRank: number;
+  refreshedAt: string;
+  isSaved: boolean;
+}
+
+export interface InstagramTrendPageDto {
+  hashtag: { id: string; displayTag: string; normalizedTag: string };
+  source: "cache" | "meta";
+  refreshed: boolean;
+  refreshedAt: string | null;
+  lastErrorCode: string | null;
+  page: number;
+  pageSize: 20;
+  total: number;
+  items: InstagramTrendMediaDto[];
+}
+
+export interface InstagramTrendSearchHistoryDto {
+  hashtagId: string;
+  displayTag: string;
+  isFavorite: boolean;
+  lastSearchedAt: string;
+  searchCount: number;
+}
+
+export interface InstagramTrendListInput {
+  hashtag: string;
+  type: InstagramTrendMediaTypeFilter;
+  sort: InstagramTrendSort;
+  page: number;
+}
+
+export interface InstagramTrendSearchInput {
+  hashtag: string;
+}
+
+export interface InstagramTrendFavoriteInput {
+  isFavorite: boolean;
+}
+
+export interface InstagramTrendSaveSourceDto {
+  source: SourceDto;
+  alreadySaved: boolean;
+}
+
 export type InstagramCapabilityStatus =
   | "available"
   | "unavailable"
