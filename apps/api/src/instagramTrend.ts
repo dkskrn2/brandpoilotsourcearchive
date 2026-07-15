@@ -35,8 +35,11 @@ export function normalizeInstagramHashtag(input: unknown): { displayTag: string;
   let displayTag = input.trim().normalize("NFKC");
   if (displayTag.startsWith("#")) displayTag = displayTag.slice(1);
   const normalizedTag = displayTag.toLocaleLowerCase("und");
-  const isValid = (value: string) => Array.from(value).length <= 100 && HASHTAG_PATTERN.test(value);
-  if (!isValid(displayTag) || !isValid(normalizedTag)) throw new Error("invalid_hashtag");
+  const displayTagIsValid = Array.from(displayTag).length <= 100 && HASHTAG_PATTERN.test(displayTag);
+  const normalizedTagLength = Array.from(normalizedTag).length;
+  if (!displayTagIsValid || normalizedTagLength === 0 || normalizedTagLength > 100) {
+    throw new Error("invalid_hashtag");
+  }
   return { displayTag, normalizedTag };
 }
 

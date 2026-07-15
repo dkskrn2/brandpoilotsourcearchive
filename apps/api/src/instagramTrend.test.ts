@@ -19,9 +19,16 @@ describe("normalizeInstagramHashtag", () => {
     expect(normalizeInstagramHashtag(input)).toEqual(expected);
   });
 
+  it.each([1, 50])("accepts %i dotted capital I characters within the normalized key limit", (count) => {
+    expect(normalizeInstagramHashtag("İ".repeat(count))).toEqual({
+      displayTag: "İ".repeat(count),
+      normalizedTag: "i\u0307".repeat(count)
+    });
+  });
+
   it.each([
     "", "#", "##tag", "tag name", "tag🙂", "tag/tag", "tag#other", "a".repeat(101),
-    "тег", "وسم", "İ", "İ".repeat(100)
+    "тег", "وسم", "İ".repeat(51), "İ".repeat(100)
   ])(
     "rejects invalid hashtag %j",
     (input) => expect(() => normalizeInstagramHashtag(input)).toThrow("invalid_hashtag")
