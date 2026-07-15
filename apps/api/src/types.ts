@@ -815,6 +815,12 @@ export interface WikiStatusDto {
 
 export interface ApiRepository {
   health(): Promise<{ database: "ok" }>;
+  listContentCategories(): Promise<ContentCategoryDto[]>;
+  listInstagramTrends(brandId: string, input: InstagramTrendListInput): Promise<InstagramTrendPageDto>;
+  searchInstagramTrends(brandId: string, input: InstagramTrendSearchInput): Promise<InstagramTrendPageDto>;
+  listInstagramTrendSearches(brandId: string): Promise<InstagramTrendSearchHistoryDto[]>;
+  setInstagramTrendFavorite(brandId: string, hashtagId: string, input: InstagramTrendFavoriteInput): Promise<{ hashtagId: string; isFavorite: boolean }>;
+  saveInstagramTrendSource(brandId: string, mediaId: string): Promise<InstagramTrendSaveSourceDto>;
   getBillingSummary(brandId: string): Promise<BillingSummaryDto>;
   getBrandUiStatus(brandId: string): Promise<BrandUiStatusDto>;
   getBrandProfile(brandId: string): Promise<BrandProfileDto>;

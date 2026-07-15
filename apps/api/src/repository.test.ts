@@ -269,6 +269,36 @@ function connectedChannelRows(...channels: Array<"instagram" | "threads">) {
   return { rowCount: channels.length, rows: channels.map((channel) => ({ channel })) };
 }
 
+describe("Instagram trend repository delegation", () => {
+  it("delegates category reads through the focused repository", async () => {
+    const query = vi.fn(async (sql: string) => {
+      expect(sql).toContain("from content_categories category");
+      return {
+        rowCount: 1,
+        rows: [{
+          code: "business_professional",
+          name: "비즈니스·전문 서비스",
+          recommended_hashtags: ["마케팅"],
+          subcategories: [{ code: "content_operations", name: "콘텐츠 운영" }],
+        }],
+      };
+    });
+    const fetchTopMedia = vi.fn();
+    const repository = createRepository({ query } as any, {
+      fetchInstagramHashtagTopMedia: fetchTopMedia as any,
+      trendNow: () => new Date("2026-07-15T00:00:00.000Z"),
+    }) as any;
+
+    await expect(repository.listContentCategories()).resolves.toEqual([{
+      code: "business_professional",
+      name: "비즈니스·전문 서비스",
+      recommendedHashtags: ["마케팅"],
+      subcategories: [{ code: "content_operations", name: "콘텐츠 운영" }],
+    }]);
+    expect(fetchTopMedia).not.toHaveBeenCalled();
+  });
+});
+
 function task4GenerationPolicyResult(sql: string) {
   if (sql.includes("from brand_content_formats") && sql.includes("for update")) {
     return { rowCount: 1, rows: [{ format: "instagram_feed_carousel" }] };
@@ -3245,5 +3275,4 @@ describe("repository", () => {
     expect(statements.at(-1)?.trim()).toBe("rollback");
   });
 });
-
 

@@ -12,6 +12,12 @@ afterEach(() => {
 function createRepository(): ApiRepository {
   return {
     health: vi.fn(async () => ({ database: "ok" as const })),
+    listContentCategories: vi.fn(async () => []),
+    listInstagramTrends: vi.fn(async () => { throw new Error("not_implemented"); }),
+    searchInstagramTrends: vi.fn(async () => { throw new Error("not_implemented"); }),
+    listInstagramTrendSearches: vi.fn(async () => []),
+    setInstagramTrendFavorite: vi.fn(async (_brandId, hashtagId, input) => ({ hashtagId, isFavorite: input.isFavorite })),
+    saveInstagramTrendSource: vi.fn(async () => { throw new Error("not_implemented"); }),
     getBillingSummary: vi.fn(async () => ({
       configured: false,
       subscription: {

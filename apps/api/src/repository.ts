@@ -14,6 +14,8 @@ import { evaluateInstagramStoryCapability, sanitizeInstagramCapabilityMetadata }
 import { dmFixedMessages, inspectDmAnswer, routeDmMessage } from "./dmPolicy.js";
 import { classifyInstagramDmSendError, sendInstagramDirectMessage } from "./instagramMessaging.js";
 import { fetchInstagramMessagingProfile } from "./instagramLoginGraph.js";
+import { fetchInstagramHashtagTopMedia } from "./instagramTrendMeta.js";
+import { createInstagramTrendRepository } from "./instagramTrendRepository.js";
 import { deliveryFormatToRenderJobType } from "./instagramFormats.js";
 import { kstDateKey, nextAvailablePolicySlot } from "./publishSchedule.js";
 import { classifyMetaGraphPublishError } from "./metaGraph.js";
@@ -936,6 +938,8 @@ interface RepositoryOptions {
   publishInstagramCarousel?: typeof publishInstagramCarouselWithMeta;
   sendInstagramDirectMessage?: typeof sendInstagramDirectMessage;
   fetchInstagramMessagingProfile?: typeof fetchInstagramMessagingProfile;
+  fetchInstagramHashtagTopMedia?: typeof fetchInstagramHashtagTopMedia;
+  trendNow?: () => Date;
 }
 
 function resolvePublishArtifactAllowedOrigins(options?: RepositoryOptions) {
@@ -1008,6 +1012,12 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
   const publishInstagramCarousel = options.publishInstagramCarousel ?? publishInstagramCarouselWithMeta;
   const sendDm = options.sendInstagramDirectMessage ?? sendInstagramDirectMessage;
   const fetchDmProfile = options.fetchInstagramMessagingProfile ?? fetchInstagramMessagingProfile;
+  const instagramTrendRepository = createInstagramTrendRepository({
+    pool,
+    decryptCredential,
+    fetchTopMedia: options.fetchInstagramHashtagTopMedia ?? fetchInstagramHashtagTopMedia,
+    now: options.trendNow,
+  });
   const publishInstagramOutput = options.publishInstagramOutput ?? (
     options.publishInstagramCarousel
       ? async (input: InstagramPublishInput) => input.deliveryFormat === "instagram_feed_carousel"
@@ -1373,6 +1383,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
   }
 
   return {
+    ...instagramTrendRepository,
     async health() {
       await pool.query("select 1");
       return { database: "ok" };
