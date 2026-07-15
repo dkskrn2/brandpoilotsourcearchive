@@ -10,7 +10,9 @@ describe("normalizeInstagramHashtag", () => {
   it.each([
     ["  #Brand_Name  ", { displayTag: "Brand_Name", normalizedTag: "brand_name" }],
     ["#브랜드", { displayTag: "브랜드", normalizedTag: "브랜드" }],
-    ["＃ＦＯＯ", { displayTag: "FOO", normalizedTag: "foo" }]
+    ["＃ＦＯＯ", { displayTag: "FOO", normalizedTag: "foo" }],
+    ["123", { displayTag: "123", normalizedTag: "123" }],
+    ["가".repeat(100), { displayTag: "가".repeat(100), normalizedTag: "가".repeat(100) }]
   ])("normalizes %s", (input, expected) => {
     expect(normalizeInstagramHashtag(input)).toEqual(expected);
   });
@@ -149,6 +151,51 @@ describe("mapMetaTopMedia", () => {
       }]
     });
     expect(media?.previewUrl).toBe("https://cdn/top-level.jpg");
+  });
+
+  it("retains valid nonnegative integer counts", () => {
+    const [media] = mapMetaTopMedia({
+      data: [{
+        id: "counts",
+        media_type: "IMAGE",
+        permalink: "https://instagram.com/p/counts",
+        like_count: 0,
+        comments_count: 42
+      }]
+    });
+    expect(media?.likeCount).toBe(0);
+    expect(media?.commentsCount).toBe(42);
+  });
+
+  it("skips rows with missing or blank permalinks", () => {
+    expect(mapMetaTopMedia({
+      data: [
+        { id: "missing", media_type: "IMAGE" },
+        { id: "blank", media_type: "IMAGE", permalink: "   " }
+      ]
+    })).toEqual([]);
+  });
+
+  it("retains representative raw metadata without mutating input", () => {
+    const payload = {
+      data: [{
+        id: "raw",
+        media_type: "CAROUSEL_ALBUM",
+        permalink: "https://instagram.com/p/raw",
+        caption: "source caption",
+        children: { data: [{ id: "child", media_url: "https://cdn/child.jpg" }] }
+      }]
+    };
+    const original = structuredClone(payload);
+
+    const [media] = mapMetaTopMedia(payload);
+
+    expect(media?.rawMetadata).toEqual(expect.objectContaining({
+      id: "raw",
+      caption: "source caption",
+      children: { data: [{ id: "child", media_url: "https://cdn/child.jpg" }] }
+    }));
+    expect(payload).toEqual(original);
   });
 
   it("safely handles unknown payloads and invalid rows", () => {
