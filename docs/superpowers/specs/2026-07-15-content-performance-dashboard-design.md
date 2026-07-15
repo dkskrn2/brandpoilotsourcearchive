@@ -19,7 +19,7 @@
 | 로그인 후 첫 화면 | `/dashboard` |
 | 집계 기간 | 최근 30일 단일 기준 |
 | 성과 수집 | 매일 새벽 3시(KST) |
-| 지원 채널 구조 | Instagram, Threads, Webflow, X, LinkedIn, YouTube, TikTok 공통 구조 |
+| 지원 채널 구조 | 현재 채널 카탈로그(Instagram, Threads, X, LinkedIn, YouTube, TikTok) 공통 구조 |
 | 인증 전 채널 | `연결 전` 표시, 샘플 데이터 금지 |
 | 공통 성과 지표 | 발행 콘텐츠 수, 조회·노출 수 |
 | 다음 콘텐츠 제안 | 제외 |
@@ -151,8 +151,8 @@
 ## 6. 수집 아키텍처
 
 ```text
-매일 03:00 KST
-  -> 중앙 스케줄러가 연결된 브랜드·채널 조회
+로컬 중앙 API가 실행 중일 때 매일 03:00 KST
+  -> API 내부 로컬 스케줄러가 연결된 브랜드·채널 조회
   -> 채널별 performance sync run 생성
   -> 최근 30일 발행 완료 콘텐츠 조회
   -> 채널 성과 어댑터 호출
@@ -176,6 +176,10 @@ collectPerformance({ brandChannel, publishedItems })
 - 한 콘텐츠 실패가 같은 채널의 나머지 콘텐츠 수집을 중단하지 않는다.
 - OAuth 또는 개발자 설정이 없는 채널은 외부 호출 없이 `not_configured`로 기록한다.
 - 샘플, 임의 수치, 이전 하드코딩 값은 생성하지 않는다.
+- Vercel Cron은 사용하지 않는다.
+- 기존 `LOCAL_SCHEDULER_ENABLED=true` API 프로세스에 성과 수집 틱을 추가하며 별도 스케줄러 프로세스를 만들지 않는다.
+- API가 03:00 KST에 꺼져 있었더라도 같은 KST 날짜에 성공 또는 부분 성공 실행 이력이 없으면 재시작 후 한 번 보충 실행한다.
+- `brand_id + channel_type + KST 실행 날짜`를 실행 고유 키로 사용해 여러 틱과 서버 재시작이 같은 작업을 중복 생성하지 못하게 한다.
 
 ## 7. API
 
