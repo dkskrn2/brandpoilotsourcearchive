@@ -11,6 +11,7 @@ import { SourcesPage } from "./pages/SourcesPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SupportPage } from "./pages/SupportPage";
 import { DmAutomationPage } from "./pages/DmAutomationPage";
+import { InstagramTrendsPage } from "./pages/InstagramTrendsPage";
 
 export const router = createBrowserRouter(
   [
@@ -24,6 +25,7 @@ export const router = createBrowserRouter(
         { path: "content", element: <ContentPage /> },
         { path: "publish-queue", element: <PublishQueuePage /> },
         { path: "sources", element: <SourcesPage /> },
+        { path: "instagram-trends", element: <InstagramTrendsPage /> },
         { path: "channels", element: <ChannelsPage /> },
         { path: "dm-automation", element: <DmAutomationPage /> },
         { path: "billing", element: <BillingPage /> },

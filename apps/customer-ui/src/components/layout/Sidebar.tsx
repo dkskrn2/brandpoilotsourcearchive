@@ -11,6 +11,7 @@ const navItems: NavItem[] = [
   { label: "콘텐츠 검토", path: "/content" },
   { label: "게시 관리", path: "/publish-queue" },
   { label: "소스", path: "/sources" },
+  { label: "트렌드 탐색", path: "/instagram-trends" },
   { label: "채널", path: "/channels" },
   { label: "DM 자동답변", path: "/dm-automation" },
   { label: "브랜드 설정", path: "/brand-settings" },

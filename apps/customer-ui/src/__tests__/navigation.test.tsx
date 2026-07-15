@@ -41,6 +41,7 @@ describe("AppShell navigation", () => {
     expect(screen.getByRole("link", { name: /콘텐츠 검토/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /게시 관리/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /소스/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /트렌드 탐색/ })).toHaveAttribute("href", "/instagram-trends");
     expect(screen.getByRole("link", { name: /^채널$/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "브랜드 설정" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "결제 및 구독" })).toHaveAttribute(
