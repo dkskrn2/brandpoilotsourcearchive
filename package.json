@@ -24,6 +24,7 @@
     "test:migrations": "node --test scripts/migrations.integration.test.mjs",
     "test:topic-concurrency": "npm run test:topic-concurrency --workspace @brand-pilot/api",
     "test:e2e": "npm run e2e --workspace @brand-pilot/customer-ui",
+    "env:check": "node scripts/check-local-env.mjs",
     "db:migrate": "node scripts/migrate.mjs",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down"
