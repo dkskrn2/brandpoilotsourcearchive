@@ -80,7 +80,7 @@ export interface BrandProfileDto {
 
 export interface BrandProfileInput {
   name?: string;
-  primaryCategoryCode?: string;
+  primaryCategoryCode?: string | null;
   subcategories?: BrandSubcategoryInput[];
   primaryCustomer?: string;
   description?: string;
@@ -821,7 +821,7 @@ export interface ApiRepository {
   listInstagramTrends(brandId: string, input: InstagramTrendListInput): Promise<InstagramTrendPageDto>;
   searchInstagramTrends(brandId: string, input: InstagramTrendSearchInput): Promise<InstagramTrendPageDto>;
   listInstagramTrendSearches(brandId: string): Promise<InstagramTrendSearchHistoryDto[]>;
-  setInstagramTrendFavorite(brandId: string, hashtagId: string, input: InstagramTrendFavoriteInput): Promise<{ hashtagId: string; isFavorite: boolean }>;
+  setInstagramTrendFavorite(brandId: string, hashtagId: string, input: InstagramTrendFavoriteInput): Promise<InstagramTrendSearchHistoryDto>;
   saveInstagramTrendSource(brandId: string, mediaId: string): Promise<InstagramTrendSaveSourceDto>;
   getBillingSummary(brandId: string): Promise<BillingSummaryDto>;
   getBrandUiStatus(brandId: string): Promise<BrandUiStatusDto>;

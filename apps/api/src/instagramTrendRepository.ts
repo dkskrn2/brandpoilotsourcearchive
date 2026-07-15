@@ -432,14 +432,25 @@ export function createInstagramTrendRepository(input: {
 
   async function setInstagramTrendFavorite(brandId: string, hashtagId: string, favorite: InstagramTrendFavoriteInput) {
     const updated = await input.pool.query(
-      `update brand_trend_searches
+      `update brand_trend_searches search
        set is_favorite = $3
-       where brand_id = $1 and hashtag_id = $2
-       returning hashtag_id`,
+       from instagram_trend_hashtags hashtag
+       where search.brand_id = $1
+         and search.hashtag_id = $2
+         and hashtag.id = search.hashtag_id
+       returning search.hashtag_id, hashtag.display_tag, search.is_favorite,
+                 search.last_searched_at, search.search_count`,
       [brandId, hashtagId, favorite.isFavorite],
     );
     if (!updated.rowCount) throw new Error("instagram_trend_not_found");
-    return { hashtagId, isFavorite: favorite.isFavorite };
+    const row = updated.rows[0];
+    return {
+      hashtagId: String(row.hashtag_id),
+      displayTag: String(row.display_tag),
+      isFavorite: Boolean(row.is_favorite),
+      lastSearchedAt: iso(row.last_searched_at)!,
+      searchCount: Number(row.search_count),
+    };
   }
 
   async function saveInstagramTrendSource(brandId: string, mediaId: string): Promise<InstagramTrendSaveSourceDto> {

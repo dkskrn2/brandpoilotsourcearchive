@@ -112,6 +112,29 @@ describe("brand profile content categories", () => {
     expect(update?.values[1]).toBe("existing-category");
   });
 
+  it("clears the primary category and all selections when primaryCategoryCode is null", async () => {
+    const statements: Array<{ sql: string; values: unknown[] }> = [];
+    const clearedProfileRow = { ...profileRow, category_code: null, category_name: null, subcategories: [] };
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      statements.push({ sql, values: values ?? [] });
+      if (["begin", "commit", "rollback"].includes(sql.trim())) return { rowCount: 0, rows: [] };
+      if (sql.includes("for update")) return { rowCount: 1, rows: [{ ...profileRow, primary_category_id: "existing-category" }] };
+      if (sql.includes("select bp.id as profile_id")) return { rowCount: 1, rows: [clearedProfileRow] };
+      return { rowCount: 1, rows: [] };
+    });
+
+    const result = await createRepository(poolFor(query) as any).updateBrandProfile("brand-1", {
+      primaryCategoryCode: null
+    });
+
+    expect(statements.some(({ sql }) => sql.includes("from content_categories") && sql.includes("where code"))).toBe(false);
+    expect(statements.some(({ sql }) => sql.includes("delete from brand_profile_subcategories"))).toBe(true);
+    const update = statements.find(({ sql }) => sql.includes("update brand_profiles"));
+    expect(update?.values[1]).toBeNull();
+    expect(result.primaryCategory).toBeNull();
+    expect(result.subcategories).toEqual([]);
+  });
+
   it.each([
     ["invalid_primary_category", { primaryCategoryCode: "missing" }],
     ["too_many_subcategories", { subcategories: Array.from({ length: 6 }, (_, index) => ({ type: "custom" as const, name: `custom-${index}` })) }],

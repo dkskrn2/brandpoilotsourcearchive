@@ -232,7 +232,7 @@ export function apiClient(options: ApiClientOptions = {}) {
       return request<InstagramTrendSearchHistory[]>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trend-searches`, { method: "GET" });
     },
     setInstagramTrendFavorite(brandId: string, hashtagId: string, isFavorite: InstagramTrendFavoriteInput["isFavorite"]) {
-      return request<{ hashtagId: string; isFavorite: boolean }>(
+      return request<InstagramTrendSearchHistory>(
         fetcher,
         `${baseUrl}/brands/${brandId}/instagram-trend-searches/${hashtagId}/favorite`,
         { method: "PUT", body: JSON.stringify({ isFavorite }) }

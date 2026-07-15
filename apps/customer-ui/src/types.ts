@@ -107,7 +107,7 @@ export interface BrandProfile {
 
 export interface BrandProfileInput {
   name?: string;
-  primaryCategoryCode?: string;
+  primaryCategoryCode?: string | null;
   subcategories?: BrandSubcategoryInput[];
   primaryCustomer?: string;
   description?: string;

@@ -103,10 +103,10 @@ function validateBrandProfileInput(value: Record<string, unknown>):
     input.autoApprovalEnabled = value.autoApprovalEnabled;
   }
   if (Object.prototype.hasOwnProperty.call(value, "primaryCategoryCode")) {
-    if (typeof value.primaryCategoryCode !== "string" || !value.primaryCategoryCode.trim()) {
+    if (value.primaryCategoryCode !== null && (typeof value.primaryCategoryCode !== "string" || !value.primaryCategoryCode.trim())) {
       return { error: "invalid_primary_category" };
     }
-    input.primaryCategoryCode = value.primaryCategoryCode.trim();
+    input.primaryCategoryCode = value.primaryCategoryCode === null ? null : value.primaryCategoryCode.trim();
   }
   if (Object.prototype.hasOwnProperty.call(value, "subcategories")) {
     if (!Array.isArray(value.subcategories)) return { error: "invalid_subcategory" };

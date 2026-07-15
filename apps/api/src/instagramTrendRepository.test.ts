@@ -378,12 +378,24 @@ describe("createInstagramTrendRepository", () => {
       expect(sql).toContain("brand_id = $1");
       expect(values[0]).toBe("brand-2");
       if (sql.includes("select search.hashtag_id")) return result([]);
-      if (sql.includes("update brand_trend_searches")) return result([{ hashtag_id: "hashtag-1" }]);
+      if (sql.includes("update brand_trend_searches")) return result([{
+        hashtag_id: "hashtag-1",
+        display_tag: "마케팅",
+        is_favorite: true,
+        last_searched_at: now,
+        search_count: 3,
+      }]);
       return result();
     });
     const repository = createInstagramTrendRepository({ pool: fixture.pool, decryptCredential: String, fetchTopMedia: vi.fn() as any });
     await repository.listInstagramTrendSearches("brand-2");
-    await repository.setInstagramTrendFavorite("brand-2", "hashtag-1", { isFavorite: true });
+    await expect(repository.setInstagramTrendFavorite("brand-2", "hashtag-1", { isFavorite: true })).resolves.toEqual({
+      hashtagId: "hashtag-1",
+      displayTag: "마케팅",
+      isFavorite: true,
+      lastSearchedAt: now.toISOString(),
+      searchCount: 3,
+    });
   });
 
   it("creates one reference source and snapshot and returns it on duplicate save", async () => {

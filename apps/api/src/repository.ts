@@ -1504,17 +1504,21 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         const profile = locked.rows[0];
         let primaryCategoryId = profile.primary_category_id as string | null;
         if (input.primaryCategoryCode !== undefined) {
-          const category = await client.query(
-            `select id, code, name from content_categories where code = $1 and active = true`,
-            [input.primaryCategoryCode]
-          );
-          if (!category.rowCount) throw new Error("invalid_primary_category");
-          primaryCategoryId = category.rows[0].id;
+          if (input.primaryCategoryCode === null) {
+            primaryCategoryId = null;
+          } else {
+            const category = await client.query(
+              `select id, code, name from content_categories where code = $1 and active = true`,
+              [input.primaryCategoryCode]
+            );
+            if (!category.rowCount) throw new Error("invalid_primary_category");
+            primaryCategoryId = category.rows[0].id;
+          }
         }
 
         if (input.subcategories !== undefined || input.primaryCategoryCode !== undefined) {
           const selectedSubcategories = input.subcategories ?? [];
-          if (!primaryCategoryId) throw new Error("invalid_primary_category");
+          if (!primaryCategoryId && selectedSubcategories.length > 0) throw new Error("invalid_primary_category");
           if (selectedSubcategories.length > 5) throw new Error("too_many_subcategories");
           const systemInputs = selectedSubcategories.filter((item) => item.type === "system");
           const customInputs = selectedSubcategories.filter((item) => item.type === "custom");

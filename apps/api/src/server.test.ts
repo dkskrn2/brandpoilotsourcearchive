@@ -43,7 +43,13 @@ function createRepository(): ApiRepository {
     listInstagramTrends: vi.fn(async () => { throw new Error("not_implemented"); }),
     searchInstagramTrends: vi.fn(async () => { throw new Error("not_implemented"); }),
     listInstagramTrendSearches: vi.fn(async () => []),
-    setInstagramTrendFavorite: vi.fn(async (_brandId, hashtagId, input) => ({ hashtagId, isFavorite: input.isFavorite })),
+    setInstagramTrendFavorite: vi.fn(async (_brandId, hashtagId, input) => ({
+      hashtagId,
+      displayTag: "마케팅",
+      isFavorite: input.isFavorite,
+      lastSearchedAt: "2026-07-15T00:00:00.000Z",
+      searchCount: 1
+    })),
     saveInstagramTrendSource: vi.fn(async () => { throw new Error("not_implemented"); }),
     getBillingSummary: vi.fn(async () => ({
       configured: false,
@@ -97,9 +103,11 @@ function createRepository(): ApiRepository {
       id: "profile-1",
       brandId,
       name: body.name ?? "제주 여행 상담 브랜드",
-      primaryCategory: body.primaryCategoryCode
-        ? { code: body.primaryCategoryCode, name: "비즈니스·전문 서비스" }
-        : { code: "travel_tourism", name: "여행·관광" },
+      primaryCategory: body.primaryCategoryCode === null
+        ? null
+        : body.primaryCategoryCode
+          ? { code: body.primaryCategoryCode, name: "비즈니스·전문 서비스" }
+          : { code: "travel_tourism", name: "여행·관광" },
       subcategories: body.subcategories?.map((item: { type: "system"; code: string } | { type: "custom"; name: string }) => item.type === "system"
         ? { type: "system" as const, code: item.code, name: "마케팅 컨설팅" }
         : { type: "custom" as const, code: null, name: item.name }) ?? [],
@@ -737,6 +745,18 @@ describe("API server", () => {
     const response = await app.inject({ method: "PUT", url: `/brands/${brandId}/profile`, payload });
     expect(response.statusCode).toBe(200);
     expect(repository.updateBrandProfile).toHaveBeenCalledWith(brandId, payload);
+  });
+
+  it("accepts null to clear the representative category", async () => {
+    const repository = createRepository();
+    const app = createServer({ repository });
+    const response = await app.inject({
+      method: "PUT",
+      url: `/brands/${brandId}/profile`,
+      payload: { primaryCategoryCode: null }
+    });
+    expect(response.statusCode).toBe(200);
+    expect(repository.updateBrandProfile).toHaveBeenCalledWith(brandId, { primaryCategoryCode: null });
   });
 
   it("maps stable category validation failures to 400", async () => {
