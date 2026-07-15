@@ -395,6 +395,29 @@ export interface PublishResultDto {
   channels: PublishResultChannelDto[];
 }
 
+export type PublishArtifactKind = "image_gallery" | "image" | "video" | "html" | "text" | "unknown";
+
+export interface PublishArtifactAssetDto {
+  url: string;
+  fileName: string;
+  mimeType: string;
+  width: number | null;
+  height: number | null;
+}
+
+export interface PublishArtifactDescriptorDto {
+  kind: PublishArtifactKind;
+  deliveryFormat: string | null;
+  assets: PublishArtifactAssetDto[];
+  posterUrl: string | null;
+  html: string | null;
+  text: string | null;
+}
+
+export interface PublishArtifactDto extends PublishArtifactDescriptorDto {
+  queueId: string;
+}
+
 export interface DownloadPackageDto {
   fileName: string;
   mimeType: "application/zip";
@@ -735,6 +758,8 @@ export interface ApiRepository {
   listPublishQueue(brandId: string): Promise<PublishQueueDto[]>;
   listPublishResults(brandId: string): Promise<PublishResultDto[]>;
   downloadPublishedResults(brandId: string): Promise<DownloadPackageDto>;
+  getPublishArtifact(queueId: string): Promise<PublishArtifactDto>;
+  downloadPublishResult(queueId: string): Promise<DownloadPackageDto>;
   createTopicUpload(brandId: string, input: TopicUploadInput): Promise<TopicUploadDto>;
   createKnowledgeImport(brandId: string, input: KnowledgeImportInput): Promise<KnowledgeImportDto>;
   listKnowledgeImports(brandId: string): Promise<KnowledgeImportDto[]>;

@@ -19,6 +19,7 @@ import type {
   KnowledgeImport,
   KnowledgeImportInput,
   PipelineRunResult,
+  PublishArtifact,
   PublishSlot,
   PublishResult,
   SourceSnapshot,
@@ -114,7 +115,14 @@ async function request<T>(fetcher: typeof fetch, url: string, init: RequestInit)
 async function requestBlob(fetcher: typeof fetch, url: string, init: RequestInit): Promise<{ blob: Blob; fileName: string }> {
   const response = await fetcher(url, { ...init, credentials: "include" });
   if (!response.ok) {
-    throw new Error(`API request failed: ${response.status}`);
+    let errorCode: string | null = null;
+    try {
+      const payload = await response.clone().json();
+      errorCode = typeof payload?.error === "string" ? payload.error : null;
+    } catch {
+      errorCode = null;
+    }
+    throw new Error(errorCode ? `API request failed: ${response.status}:${errorCode}` : `API request failed: ${response.status}`);
   }
   return {
     blob: await response.blob(),
@@ -330,6 +338,12 @@ export function apiClient(options: ApiClientOptions = {}) {
     },
     listPublishResults(brandId: string) {
       return request<PublishResult[]>(fetcher, `${baseUrl}/brands/${brandId}/publish-results`, { method: "GET" });
+    },
+    getPublishArtifact(queueId: string) {
+      return request<PublishArtifact>(fetcher, `${baseUrl}/publish-queue/${queueId}/artifacts`, { method: "GET" });
+    },
+    downloadPublishResult(queueId: string) {
+      return requestBlob(fetcher, `${baseUrl}/publish-queue/${queueId}/download`, { method: "GET" });
     },
     downloadPublishedResults(brandId: string) {
       return requestBlob(fetcher, `${baseUrl}/brands/${brandId}/publish-queue/download`, { method: "GET" });

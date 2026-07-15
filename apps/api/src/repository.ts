@@ -1,7 +1,7 @@
 ﻿import crypto from "node:crypto";
 import type { Pool } from "pg";
 import { decryptCredential, encryptCredential } from "./credentialCrypto.js";
-import { buildPublishedResultsPackage } from "./downloadPackage.js";
+import { buildPublishedResultsPackage, fetchRemoteBuffer, type PublishedResultRecord } from "./downloadPackage.js";
 import {
   buildImageRenderJobPayload,
   isImageRenderJobResultValidationError,
@@ -27,6 +27,7 @@ import { nextRetryAt, scheduledRunKey } from "./sourceCrawlSchedule.js";
 import { buildThreadsRenderJobPayload, parseThreadsRenderJobResult } from "./textRenderJobs.js";
 import { brandPolicyDateKey, dailyTopicCapacity, determineGenerationReadiness, runDailyTopicGeneration } from "./topicPublishGroups.js";
 import { parseKnowledgeUpload } from "./knowledgeImport.js";
+import { normalizePublishArtifact } from "./publishArtifacts.js";
 import type {
   ApiRepository,
   AutomaticCrawlResult,
@@ -922,6 +923,11 @@ interface RepositoryInstagramPublishOptions {
 
 interface RepositoryOptions {
   artifactStorageDir?: string;
+  fetchPublishArtifact?: typeof fetch;
+  publishArtifactFetchTimeoutMs?: number;
+  publishArtifactMaxBytes?: number;
+  publishAssetMaxBytes?: number;
+  publishArtifactAllowedOrigins?: readonly string[];
   instagramPublish?: RepositoryInstagramPublishOptions;
   imageRenderCooldownMs?: number;
   fetchInstagramImageManifest?: typeof fetchInstagramImageManifest;
@@ -930,6 +936,16 @@ interface RepositoryOptions {
   publishInstagramCarousel?: typeof publishInstagramCarouselWithMeta;
   sendInstagramDirectMessage?: typeof sendInstagramDirectMessage;
   fetchInstagramMessagingProfile?: typeof fetchInstagramMessagingProfile;
+}
+
+function resolvePublishArtifactAllowedOrigins(options?: RepositoryOptions) {
+  const configured = options?.publishArtifactAllowedOrigins
+    ?? (process.env.PUBLISH_ARTIFACT_ALLOWED_ORIGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+  const values = [...configured];
+  if (process.env.SUPABASE_URL) values.push(process.env.SUPABASE_URL);
+  return [...new Set(values.flatMap((value) => {
+    try { return [new URL(value).origin]; } catch { return []; }
+  }))];
 }
 
 function resolveInstagramPublishOptions(options?: RepositoryOptions) {
@@ -984,6 +1000,11 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
   const imageRenderCooldownMs = resolveImageRenderCooldownMs(options);
   const fetchInstagramManifest = options.fetchInstagramImageManifest ?? fetchInstagramImageManifest;
   const fetchImageAsset = options.fetchImageAsset ?? fetch;
+  const fetchPublishArtifact = options.fetchPublishArtifact ?? fetch;
+  const publishArtifactFetchTimeoutMs = Math.max(1, Math.min(options.publishArtifactFetchTimeoutMs ?? 5_000, 30_000));
+  const publishArtifactMaxBytes = Math.max(1, options.publishArtifactMaxBytes ?? 2 * 1024 * 1024);
+  const publishAssetMaxBytes = Math.max(1, options.publishAssetMaxBytes ?? 100 * 1024 * 1024);
+  const publishArtifactAllowedOrigins = resolvePublishArtifactAllowedOrigins(options);
   const publishInstagramCarousel = options.publishInstagramCarousel ?? publishInstagramCarouselWithMeta;
   const sendDm = options.sendInstagramDirectMessage ?? sendInstagramDirectMessage;
   const fetchDmProfile = options.fetchInstagramMessagingProfile ?? fetchInstagramMessagingProfile;
@@ -994,6 +1015,62 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         : publishInstagramOutputWithMeta(input)
       : publishInstagramOutputWithMeta
   );
+
+  async function findPublishResultRecord(queueId: string) {
+    const result = await pool.query(
+      `select pq.id,
+              pq.channel,
+              pq.published_at,
+              co.title,
+              co.delivery_format,
+              co.preview_title,
+              co.preview_body,
+              co.source_summary,
+              co.output_json,
+              sa.public_url as artifact_public_url,
+              sa.bucket as artifact_bucket,
+              sa.path as artifact_path,
+              latest_attempt.external_url
+       from publish_queue pq
+       join channel_outputs co on co.id = pq.channel_output_id
+       left join storage_artifacts sa on sa.id = co.rendered_artifact_id
+       left join lateral (
+         select pa.external_url
+         from publish_attempts pa
+         where pa.publish_queue_id = pq.id
+         order by pa.finished_at desc nulls last, pa.created_at desc
+         limit 1
+       ) latest_attempt on true
+       where pq.id = $1`,
+      [queueId]
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("publish_queue_not_found");
+    return row;
+  }
+
+  function publishedResultRecord(row: any): PublishedResultRecord {
+    return {
+      id: row.id,
+      channel: row.channel,
+      publishedAt: row.published_at,
+      title: row.title,
+      previewTitle: row.preview_title,
+      previewBody: row.preview_body,
+      sourceSummary: row.source_summary,
+      outputJson: row.output_json,
+      artifactPublicUrl: row.artifact_public_url,
+      artifactBucket: row.artifact_bucket,
+      artifactPath: row.artifact_path,
+      externalUrl: row.external_url
+    };
+  }
+
+  function outputWithDeliveryFormat(row: any) {
+    const output = recordValue(row.output_json);
+    if (!row.delivery_format || output.deliveryFormat || output.delivery_format) return row.output_json;
+    return { ...output, deliveryFormat: row.delivery_format };
+  }
 
   async function createImageRenderJob(client: Pick<Pool, "query">, input: {
     workspaceId: string;
@@ -2277,7 +2354,56 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         artifactBucket: row.artifact_bucket,
         artifactPath: row.artifact_path,
         externalUrl: row.external_url
-      })), { storageDir: options.artifactStorageDir ?? process.env.GENERATED_ASSET_DIR ?? "storage" });
+      })), {
+        storageDir: options.artifactStorageDir ?? process.env.GENERATED_ASSET_DIR ?? "storage",
+        fetchImpl: fetchPublishArtifact,
+        fetchTimeoutMs: publishArtifactFetchTimeoutMs,
+        maxRemoteManifestBytes: publishArtifactMaxBytes,
+        maxRemoteFileBytes: publishAssetMaxBytes,
+        allowedRemoteOrigins: publishArtifactAllowedOrigins
+      });
+    },
+
+    async getPublishArtifact(queueId) {
+      const row = await findPublishResultRecord(queueId);
+      let manifest: unknown = null;
+      if (row.artifact_public_url) {
+        try {
+          const buffer = await fetchRemoteBuffer(row.artifact_public_url, {
+            fetchImpl: fetchPublishArtifact,
+            timeoutMs: publishArtifactFetchTimeoutMs,
+            maxBytes: publishArtifactMaxBytes,
+            allowedOrigins: publishArtifactAllowedOrigins
+          });
+          manifest = JSON.parse(buffer.toString("utf8"));
+        } catch {
+          throw new Error("publish_artifact_manifest_unavailable");
+        }
+      }
+      return {
+        queueId: row.id,
+        ...normalizePublishArtifact({
+          manifest,
+          outputJson: outputWithDeliveryFormat(row),
+          fallbackTitle: row.preview_title ?? row.title ?? "Result",
+          manifestUrl: row.artifact_public_url,
+          allowedRemoteOrigins: publishArtifactAllowedOrigins
+        })
+      };
+    },
+
+    async downloadPublishResult(queueId) {
+      const row = await findPublishResultRecord(queueId);
+      const packageResult = await buildPublishedResultsPackage([publishedResultRecord(row)], {
+        storageDir: options.artifactStorageDir ?? process.env.GENERATED_ASSET_DIR ?? "storage",
+        fetchImpl: fetchPublishArtifact,
+        fetchTimeoutMs: publishArtifactFetchTimeoutMs,
+        maxRemoteManifestBytes: publishArtifactMaxBytes,
+        maxRemoteFileBytes: publishAssetMaxBytes,
+        allowedRemoteOrigins: publishArtifactAllowedOrigins
+      });
+      const safeQueueId = queueId.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "result";
+      return { ...packageResult, fileName: `brand-pilot-publish-result-${safeQueueId}.zip` };
     },
 
     async listTopicRows(brandId, status) {

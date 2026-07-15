@@ -72,7 +72,6 @@ export function TopicPublishGroup({
             const label = formatLabel(item);
             const meta = statusMeta[item.slot.status];
             const error = item.slot.lastError ?? item.resultChannel?.lastError;
-            const artifactUrl = item.resultChannel?.artifactPublicUrl;
             const externalUrl = item.resultChannel?.externalUrl;
             const canOpenDetail = item.slot.status === "published" && item.result && item.resultChannel;
             const isPreGeneration = item.slot.approvalType === "empty";
@@ -95,7 +94,6 @@ export function TopicPublishGroup({
                 </div>
                 {error ? <div className="row-meta">{error}</div> : null}
                 <div className="actions">
-                  {artifactUrl ? <a className="button" href={artifactUrl} target="_blank" rel="noreferrer">결과물 다운로드</a> : null}
                   {externalUrl ? <a className="button" href={externalUrl} target="_blank" rel="noreferrer">게시물 열기</a> : null}
                 </div>
               </div>

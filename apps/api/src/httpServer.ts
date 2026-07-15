@@ -251,6 +251,10 @@ export function createServer(
       reply.code(502).send({ error: message });
       return;
     }
+    if (message === "publish_artifact_manifest_unavailable") {
+      reply.code(502).send({ error: message });
+      return;
+    }
     if (error instanceof StoryCapabilityRequiredError || message === "story_capability_required") {
       reply.code(409).send({ error: "story_capability_required" });
       return;
@@ -1064,6 +1068,19 @@ export function createServer(
 
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/publish-queue/download", async (request, reply) => {
     const packageResult = await repository.downloadPublishedResults(request.params.brandId);
+    reply
+      .header("content-type", packageResult.mimeType)
+      .header("content-disposition", `attachment; filename="${packageResult.fileName}"`)
+      .header("x-published-result-count", String(packageResult.itemCount));
+    return reply.send(packageResult.buffer);
+  });
+
+  app.get<{ Params: { queueId: string } }>("/publish-queue/:queueId/artifacts", async (request) => {
+    return repository.getPublishArtifact(request.params.queueId);
+  });
+
+  app.get<{ Params: { queueId: string } }>("/publish-queue/:queueId/download", async (request, reply) => {
+    const packageResult = await repository.downloadPublishResult(request.params.queueId);
     reply
       .header("content-type", packageResult.mimeType)
       .header("content-disposition", `attachment; filename="${packageResult.fileName}"`)

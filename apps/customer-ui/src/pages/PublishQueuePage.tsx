@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
+import { Download, ExternalLink, RotateCcw, X } from "lucide-react";
 import { PageHeader } from "../components/layout/PageHeader";
+import { PublishArtifactPreview } from "../components/publish/PublishArtifactPreview";
 import { Alert } from "../components/ui/Alert";
 import { Badge } from "../components/ui/Badge";
 import { EmptyState } from "../components/ui/EmptyState";
 import { TopicPublishGroup, type TopicPublishGroupModel } from "../components/publish/TopicPublishGroup";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
-import type { BadgeVariant, ChannelType, ContentOutput, PublishResult, PublishResultChannel, PublishSlot, ReviewStatus } from "../types";
+import type { BadgeVariant, ChannelType, ContentOutput, PublishArtifact, PublishResult, PublishResultChannel, PublishSlot, ReviewStatus } from "../types";
 
 const channelLabels: Record<ChannelType, string> = {
   instagram: "Instagram",
@@ -519,42 +521,194 @@ function PublishResultDialog({
   onClose: () => void;
 }) {
   const meta = resultStatusMeta[channel.status];
+  const [artifact, setArtifact] = useState<PublishArtifact | null>(null);
+  const [artifactLoading, setArtifactLoading] = useState(true);
+  const [artifactError, setArtifactError] = useState(false);
+  const [artifactReloadKey, setArtifactReloadKey] = useState(0);
+  const [downloadLoading, setDownloadLoading] = useState(false);
+  const [downloadMessage, setDownloadMessage] = useState<{ text: string; error: boolean } | null>(null);
+
+  useEffect(() => {
+    let ignore = false;
+    setArtifact(null);
+    setArtifactLoading(true);
+    setArtifactError(false);
+
+    api.getPublishArtifact(channel.queueId)
+      .then((nextArtifact) => {
+        if (!ignore) setArtifact(nextArtifact);
+      })
+      .catch(() => {
+        if (!ignore) setArtifactError(true);
+      })
+      .finally(() => {
+        if (!ignore) setArtifactLoading(false);
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [channel.queueId, artifactReloadKey]);
+
+  const formatLabels: Record<string, string> = {
+    instagram_feed_carousel: "카드뉴스",
+    instagram_story: "스토리",
+    instagram_reel: "Reel",
+    threads_text: "텍스트",
+    tiktok_video: "영상",
+    youtube_video: "영상",
+    x_post: "텍스트",
+    image_gallery: "카드뉴스",
+    image: "이미지",
+    video: "영상",
+    html: "HTML",
+    text: "텍스트",
+    unknown: "알 수 없음"
+  };
+  const formatLabel = artifact ? formatLabels[artifact.deliveryFormat ?? artifact.kind] ?? artifact.deliveryFormat ?? "알 수 없음" : null;
+  const externalPostId = channel.externalPostId?.split("/").filter(Boolean).at(-1) ?? null;
+  const sourceSummary = channel.sourceSummary ?? result.sourceDetail;
+
+  async function downloadResult() {
+    setDownloadLoading(true);
+    setDownloadMessage(null);
+    try {
+      const download = await api.downloadPublishResult(channel.queueId);
+      const objectUrl = URL.createObjectURL(download.blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = download.fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+      setDownloadMessage({ text: "게시 결과 저장을 시작했습니다.", error: false });
+    } catch (error) {
+      const entitlementRequired = error instanceof Error && error.message.includes("download_entitlement_required");
+      setDownloadMessage({
+        text: entitlementRequired
+          ? "이 결과를 저장하려면 다운로드 권한이 필요합니다. 결제 페이지에서 이용 권한을 확인하세요."
+          : "게시 결과 저장에 실패했습니다. 잠시 후 다시 시도하세요.",
+        error: true
+      });
+    } finally {
+      setDownloadLoading(false);
+    }
+  }
+
   return (
     <div className="modal-backdrop">
-      <section className="modal-panel" role="dialog" aria-modal="true" aria-label="업로드 콘텐츠 상세">
-        <div className="panel-head">
+      <section className="modal-panel publish-result-dialog" role="dialog" aria-modal="true" aria-label="업로드 콘텐츠 상세">
+        <header className="publish-result-dialog__header">
           <div>
-            <h2>업로드 콘텐츠 상세</h2>
-            <div className="row-meta">{result.title} · {channelLabels[channel.channel]}</div>
+            <h2>{result.title}</h2>
+            <div className="row-meta">
+              {channelLabels[channel.channel]}{formatLabel ? ` · ${formatLabel}` : ""}
+            </div>
+          </div>
+          <div className="publish-result-dialog__header-actions">
+            <Badge variant={meta.variant}>{meta.label}</Badge>
+            <button className="button publish-result-dialog__close" type="button" onClick={onClose} aria-label="닫기" title="닫기">
+              <X size={18} aria-hidden="true" />
+            </button>
+          </div>
+        </header>
+
+        <div className="publish-result-dialog__body publish-result-dialog__scroll">
+          <section className="publish-result-dialog__preview" aria-label="게시 결과 미리보기">
+            {artifactLoading ? (
+              <div className="publish-result-dialog__state" role="status">결과물을 불러오는 중입니다.</div>
+            ) : artifactError ? (
+              <div className="publish-result-dialog__state" role="alert">
+                <strong>결과물을 불러오지 못했습니다.</strong>
+                {channel.previewTitle ? <div>{channel.previewTitle}</div> : null}
+                {channel.previewBody ? <p>{channel.previewBody}</p> : null}
+                <button className="button" type="button" onClick={() => setArtifactReloadKey((key) => key + 1)}>
+                  <RotateCcw size={16} aria-hidden="true" />
+                  다시 시도
+                </button>
+              </div>
+            ) : artifact ? (
+              <PublishArtifactPreview artifact={artifact} />
+            ) : null}
+          </section>
+
+          <aside className="publish-result-dialog__metadata" aria-label="업로드 정보">
+            <h3>업로드 정보</h3>
+            <dl>
+              <div>
+                <dt>채널</dt>
+                <dd>{channelLabels[channel.channel]}</dd>
+              </div>
+              {formatLabel ? (
+                <div>
+                  <dt>콘텐츠 형식</dt>
+                  <dd>{formatLabel}</dd>
+                </div>
+              ) : null}
+              <div>
+                <dt>게시 상태</dt>
+                <dd><Badge variant={meta.variant}>{meta.label}</Badge></dd>
+              </div>
+              {channel.publishedAt ? (
+                <div>
+                  <dt>게시 시각</dt>
+                  <dd>{formatDateTime(channel.publishedAt)}</dd>
+                </div>
+              ) : null}
+              {channel.failedAt ? (
+                <div>
+                  <dt>실패 시각</dt>
+                  <dd>{formatDateTime(channel.failedAt)}</dd>
+                </div>
+              ) : null}
+              {externalPostId ? (
+                <div>
+                  <dt>외부 게시 ID</dt>
+                  <dd>{externalPostId}</dd>
+                </div>
+              ) : null}
+              {channel.externalUrl ? (
+                <div>
+                  <dt>외부 게시 URL</dt>
+                  <dd><a href={channel.externalUrl} target="_blank" rel="noreferrer">원본 URL 열기</a></dd>
+                </div>
+              ) : null}
+              {sourceSummary ? (
+                <div>
+                  <dt>생성 근거</dt>
+                  <dd>{sourceSummary}</dd>
+                </div>
+              ) : null}
+              {channel.lastError ? (
+                <div>
+                  <dt>오류 사유</dt>
+                  <dd>{channel.lastError}</dd>
+                </div>
+              ) : null}
+            </dl>
+          </aside>
+        </div>
+
+        <footer className="publish-result-dialog__footer">
+          <div className="publish-result-dialog__feedback" aria-live="polite">
+            {downloadMessage ? (
+              <span className={downloadMessage.error ? "is-error" : ""}>{downloadMessage.text}</span>
+            ) : null}
           </div>
           <div className="actions">
-            <Badge variant={meta.variant}>{meta.label}</Badge>
-            <button className="button" type="button" onClick={onClose}>닫기</button>
+            {channel.externalUrl ? (
+              <a className="button" href={channel.externalUrl} target="_blank" rel="noreferrer">
+                <ExternalLink size={16} aria-hidden="true" />
+                원본 게시물 열기
+              </a>
+            ) : null}
+            <button className="button primary" type="button" onClick={() => void downloadResult()} disabled={downloadLoading}>
+              <Download size={16} aria-hidden="true" />
+              {downloadLoading ? "저장 중..." : "저장"}
+            </button>
           </div>
-        </div>
-        <div className="panel-body grid">
-          <div className="grid two">
-            <section className="preview">
-              <strong>{channel.previewTitle ?? channel.title}</strong>
-              {channel.previewBody ? <p>{channel.previewBody}</p> : <p className="muted">저장된 미리보기 본문이 없습니다.</p>}
-              {channel.artifactPublicUrl ? (
-                <div className="row-meta">{channel.artifactPublicUrl}</div>
-              ) : null}
-            </section>
-            <section className="preview">
-              <strong>업로드 정보</strong>
-              <div className="row-meta">게시 시각: {channel.publishedAt ?? "-"}</div>
-              <div className="row-meta">실패 시각: {channel.failedAt ?? "-"}</div>
-              <div className="row-meta">외부 게시 ID: <span>{channel.externalPostId?.split("/").filter(Boolean).at(-1) ?? "-"}</span></div>
-              <div className="row-meta">오류: <span>{channel.lastError ?? "-"}</span></div>
-              <div className="row-meta">생성 근거: {channel.sourceSummary ?? result.sourceDetail ?? "-"}</div>
-            </section>
-          </div>
-          <section className="preview">
-            <strong>저장된 채널 출력</strong>
-            <pre className="json-preview">{JSON.stringify(channel.outputJson, null, 2)}</pre>
-          </section>
-        </div>
+        </footer>
       </section>
     </div>
   );

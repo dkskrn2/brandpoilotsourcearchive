@@ -2,6 +2,56 @@ import { describe, expect, it, vi } from "vitest";
 import { apiClient } from "./apiClient";
 
 describe("apiClient", () => {
+  it("fetches a normalized artifact for one publish queue item", async () => {
+    const artifact = {
+      queueId: "queue-1",
+      kind: "image_gallery",
+      deliveryFormat: "instagram_feed_carousel",
+      assets: [{ url: "https://cdn.test/card-01.png", fileName: "card-01.png", mimeType: "image/png", width: 1080, height: 1080 }],
+      posterUrl: null,
+      html: null,
+      text: null
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(artifact), { status: 200 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    await expect(client.getPublishArtifact("queue-1")).resolves.toEqual(artifact);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/publish-queue/queue-1/artifacts",
+      expect.objectContaining({ method: "GET" })
+    );
+  });
+
+  it("downloads one publish result and preserves its ZIP filename", async () => {
+    const fetchMock = vi.fn(async () => new Response("queue zip", {
+      status: 200,
+      headers: {
+        "content-type": "application/zip",
+        "content-disposition": "attachment; filename*=UTF-8''queue-1-result.zip"
+      }
+    }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const download = await client.downloadPublishResult("queue-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/publish-queue/queue-1/download",
+      expect.objectContaining({ method: "GET", credentials: "include" })
+    );
+    expect(download.fileName).toBe("queue-1-result.zip");
+    expect(await download.blob.text()).toBe("queue zip");
+  });
+
+  it("preserves entitlement error codes from publish result downloads", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "download_entitlement_required" }), {
+      status: 403,
+      headers: { "content-type": "application/json" }
+    }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    await expect(client.downloadPublishResult("queue-1")).rejects.toThrow("download_entitlement_required");
+  });
+
   it("fetches a brand profile from the API", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ name: "API 브랜드" }), { status: 200 }));
     const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock });

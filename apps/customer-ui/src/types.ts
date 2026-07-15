@@ -462,6 +462,26 @@ export interface PublishResult {
   channels: PublishResultChannel[];
 }
 
+export type PublishArtifactKind = "image_gallery" | "image" | "video" | "html" | "text" | "unknown";
+
+export interface PublishArtifactAsset {
+  url: string;
+  fileName: string | null;
+  mimeType: string | null;
+  width: number | null;
+  height: number | null;
+}
+
+export interface PublishArtifact {
+  queueId: string;
+  kind: PublishArtifactKind;
+  deliveryFormat: string | null;
+  assets: PublishArtifactAsset[];
+  posterUrl: string | null;
+  html: string | null;
+  text: string | null;
+}
+
 export interface TopicUploadSummary {
   id: string;
   fileName: string;

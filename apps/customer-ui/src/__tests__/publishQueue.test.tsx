@@ -1,7 +1,10 @@
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ContentOutput, PublishResult, PublishSlot } from "../types";
+import { readFileSync } from "node:fs";
+import type { ContentOutput, PublishArtifact, PublishResult, PublishSlot } from "../types";
+
+const prototypeCss = readFileSync("src/styles/prototype.css", "utf8");
 
 const queueRows: PublishSlot[] = [
   {
@@ -204,6 +207,28 @@ const publishResults: PublishResult[] = [{
   }]
 }];
 
+const imageArtifact: PublishArtifact = {
+  queueId: "queue-instagram",
+  kind: "image_gallery",
+  deliveryFormat: "instagram_feed_carousel",
+  assets: [{
+    url: "https://cdn.example.com/card-01.png",
+    fileName: "card-01.png",
+    mimeType: "image/png",
+    width: 1080,
+    height: 1080
+  }, {
+    url: "https://cdn.example.com/card-02.png",
+    fileName: "card-02.png",
+    mimeType: "image/png",
+    width: 1080,
+    height: 1080
+  }],
+  posterUrl: null,
+  html: null,
+  text: null
+};
+
 const preLlmQueueRows: PublishSlot[] = [{
   id: "topic:content-topic-1",
   channel: "instagram",
@@ -236,6 +261,11 @@ async function renderPublishQueuePage(apiOverrides: Partial<Record<string, Retur
     generateContent: vi.fn(async () => ({ processed: 1, created: 3, updated: 1, failed: 0 })),
     listPublishQueue: vi.fn(async () => []),
     listPublishResults: vi.fn(async () => []),
+    getPublishArtifact: vi.fn(async () => imageArtifact),
+    downloadPublishResult: vi.fn(async () => ({
+      fileName: "queue-result.zip",
+      blob: new Blob(["queue-zip-content"], { type: "application/zip" })
+    })),
     downloadPublishedResults: vi.fn(async () => ({
       fileName: "brand-pilot-published-results.zip",
       blob: new Blob(["zip-content"], { type: "application/zip" })
@@ -270,10 +300,7 @@ describe("PublishQueuePage", () => {
     expect(within(table).getByText("게시 완료")).toBeVisible();
     expect(within(table).getByText("실패")).toBeVisible();
     expect(screen.getByText("Threads access token expired")).toBeVisible();
-    expect(screen.getByRole("link", { name: "결과물 다운로드" })).toHaveAttribute(
-      "href",
-      "https://cdn.example.com/instagram/manifest.json"
-    );
+    expect(screen.queryByRole("link", { name: "결과물 다운로드" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "게시물 열기" })).toHaveAttribute(
       "href",
       "https://instagram.com/reel/ig-post-1"
@@ -342,24 +369,172 @@ describe("PublishQueuePage", () => {
     expect(screen.getByText("외부 참고 URL 의존도가 높습니다.")).toBeVisible();
   });
 
-  it("shows completed channel results in a modal and disables pending statuses", async () => {
-    await renderPublishQueuePage({ listPublishResults: vi.fn(async () => publishResults) });
+  it("loads the actual artifact and displays only populated upload metadata", async () => {
+    const api = await renderPublishQueuePage({ listPublishResults: vi.fn(async () => publishResults) });
 
     expect(await screen.findByText("제주 가족 숙소 카드뉴스")).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "Instagram 성공" }));
-    expect(screen.getByRole("dialog", { name: "업로드 콘텐츠 상세" })).toBeVisible();
-    expect(screen.getByText("캡션 내용")).toBeVisible();
-    expect(screen.getByText("https://cdn.example.com/instagram/manifest.json")).toBeVisible();
-    expect(screen.getByText("ig-post-1")).toBeVisible();
+    const dialog = screen.getByRole("dialog", { name: "업로드 콘텐츠 상세" });
+    expect(dialog).toBeVisible();
+    expect(await within(dialog).findByRole("img", { name: "card-01.png" })).toBeVisible();
+    expect(api.getPublishArtifact).toHaveBeenCalledWith("queue-instagram");
+    expect(within(dialog).queryByText("저장된 채널 출력")).not.toBeInTheDocument();
+    expect(within(dialog).getByText("Instagram")).toBeVisible();
+    expect(within(dialog).getByText("카드뉴스")).toBeVisible();
+    expect(within(dialog).getByText("ig-post-1")).toBeVisible();
+    expect(within(dialog).getByText("자사 FAQ 요약")).toBeVisible();
+    expect(within(dialog).queryByText("실패 시각")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("오류 사유")).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("link", { name: "원본 게시물 열기" })).toHaveAttribute(
+      "href",
+      "https://instagram.com/reel/ig-post-1"
+    );
 
     await userEvent.click(screen.getByRole("button", { name: "닫기" }));
     await userEvent.click(screen.getByRole("button", { name: "Threads 실패" }));
     expect(screen.getByRole("dialog", { name: "업로드 콘텐츠 상세" })).toBeVisible();
-    expect(screen.getByText("token expired")).toBeVisible();
+    expect(await screen.findByText("token expired")).toBeVisible();
 
     await userEvent.click(screen.getByRole("button", { name: "닫기" }));
     expect(screen.getByRole("button", { name: "Instagram 게시 대기" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Threads 게시 중" })).toBeDisabled();
+  });
+
+  it("shows artifact loading and retryable error states", async () => {
+    let resolveArtifact: ((value: PublishArtifact) => void) | undefined;
+    const getPublishArtifact = vi.fn()
+      .mockImplementationOnce(() => new Promise<PublishArtifact>((resolve) => {
+        resolveArtifact = resolve;
+      }))
+      .mockRejectedValueOnce(new Error("manifest_invalid"))
+      .mockResolvedValueOnce(imageArtifact);
+    await renderPublishQueuePage({
+      listPublishResults: vi.fn(async () => publishResults),
+      getPublishArtifact
+    });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Instagram 성공" }));
+    expect(screen.getByText("결과물을 불러오는 중입니다.")).toBeVisible();
+    await act(async () => resolveArtifact?.(imageArtifact));
+    expect(await screen.findByRole("img", { name: "card-01.png" })).toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: "닫기" }));
+    await userEvent.click(screen.getByRole("button", { name: "Instagram 성공" }));
+    expect(await screen.findByText("결과물을 불러오지 못했습니다.")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "다시 시도" }));
+    expect(await screen.findByRole("img", { name: "card-01.png" })).toBeVisible();
+    expect(getPublishArtifact).toHaveBeenCalledTimes(3);
+  });
+
+  it("downloads the selected queue ZIP from the dialog", async () => {
+    const downloadPublishResult = vi.fn(async () => ({
+      fileName: "queue-instagram.zip",
+      blob: new Blob(["queue zip"], { type: "application/zip" })
+    }));
+    const createObjectURL = vi.fn(() => "blob:queue-result");
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const api = await renderPublishQueuePage({
+      listPublishResults: vi.fn(async () => publishResults),
+      downloadPublishResult
+    });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Instagram 성공" }));
+    await userEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    expect(api.downloadPublishResult).toHaveBeenCalledWith("queue-instagram");
+    expect(createObjectURL).toHaveBeenCalled();
+    expect(clickSpy).toHaveBeenCalled();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:queue-result");
+    expect(screen.getByText("게시 결과 저장을 시작했습니다.")).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "업로드 콘텐츠 상세" })).toBeVisible();
+  });
+
+  it("keeps the dialog open and reports ordinary download failures", async () => {
+    await renderPublishQueuePage({
+      listPublishResults: vi.fn(async () => publishResults),
+      downloadPublishResult: vi.fn(async () => {
+        throw new Error("network_down");
+      })
+    });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Instagram 성공" }));
+    await userEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    expect(await screen.findByText("게시 결과 저장에 실패했습니다. 잠시 후 다시 시도하세요.")).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "업로드 콘텐츠 상세" })).toBeVisible();
+  });
+
+  it("shows an entitlement-ready notice for future 403 download responses", async () => {
+    await renderPublishQueuePage({
+      listPublishResults: vi.fn(async () => publishResults),
+      downloadPublishResult: vi.fn(async () => {
+        throw new Error("API request failed: 403:download_entitlement_required");
+      })
+    });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Instagram 성공" }));
+    await userEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    expect(await screen.findByText("이 결과를 저장하려면 다운로드 권한이 필요합니다. 결제 페이지에서 이용 권한을 확인하세요.")).toBeVisible();
+  });
+
+  it("keeps Save available when a video preview fails to load", async () => {
+    const videoArtifact: PublishArtifact = {
+      queueId: "queue-instagram",
+      kind: "video",
+      deliveryFormat: "instagram_reel",
+      assets: [{
+        url: "https://cdn.example.com/result.mp4",
+        fileName: "result.mp4",
+        mimeType: "video/mp4",
+        width: 1080,
+        height: 1920
+      }],
+      posterUrl: null,
+      html: null,
+      text: null
+    };
+    await renderPublishQueuePage({
+      listPublishResults: vi.fn(async () => publishResults),
+      getPublishArtifact: vi.fn(async () => videoArtifact)
+    });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Instagram 성공" }));
+    const preview = await screen.findByTestId("publish-artifact-preview");
+    fireEvent.error(preview.querySelector("video") as HTMLVideoElement);
+
+    expect(screen.getByText("동영상을 재생할 수 없습니다. 결과 파일을 저장해 확인하세요.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "저장" })).toBeEnabled();
+  });
+
+  it("keeps long upload metadata inside the dialog scroll body", async () => {
+    const longSourceSummary = Array.from({ length: 80 }, (_, index) => `생성 근거 ${index + 1}`).join("\n");
+    const resultsWithLongMetadata: PublishResult[] = [{
+      ...publishResults[0],
+      channels: publishResults[0].channels.map((channel) => ({ ...channel, sourceSummary: longSourceSummary }))
+    }];
+    await renderPublishQueuePage({ listPublishResults: vi.fn(async () => resultsWithLongMetadata) });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Instagram 성공" }));
+    const dialog = screen.getByRole("dialog", { name: "업로드 콘텐츠 상세" });
+    const scrollBody = dialog.querySelector(".publish-result-dialog__body");
+    const metadata = within(dialog).getByLabelText("업로드 정보");
+
+    expect(scrollBody).toHaveClass("publish-result-dialog__scroll");
+    expect(metadata).toHaveTextContent("생성 근거 1");
+    expect(metadata).toHaveTextContent("생성 근거 80");
+  });
+
+  it("defines a responsive single-column publish result body", () => {
+    const responsiveRules = prototypeCss.slice(
+      prototypeCss.indexOf("@media (max-width: 980px)"),
+      prototypeCss.indexOf("@media (max-width: 720px)")
+    );
+
+    expect(responsiveRules).toContain(".publish-result-dialog__body { grid-template-columns: 1fr; }");
   });
 
   it("shows pre-LLM source queue items as waiting rows without generated channel output", async () => {

@@ -2265,6 +2265,148 @@ describe("repository", () => {
     }
   });
 
+  it("loads and normalizes a queue artifact from the trusted storage URL", async () => {
+    const query = vi.fn(async (_sql: string, values?: unknown[]) => {
+      expect(values).toEqual(["queue-1"]);
+      return {
+        rowCount: 1,
+        rows: [{
+          id: "queue-1",
+          channel: "instagram",
+          published_at: new Date("2026-07-07T11:30:00.000Z"),
+          title: "Jeju family stay",
+          preview_title: "제주 가족 숙소 카드뉴스",
+          preview_body: "위치 먼저 확인하세요.",
+          source_summary: "Owned FAQ summary",
+          output_json: { manifestUrl: "https://untrusted.example/manifest.json" },
+          artifact_public_url: "https://trusted.example/manifest.json",
+          artifact_bucket: "rendered-content",
+          artifact_path: "instagram/brand-1/output-1/manifest.json",
+          external_url: "https://instagram.com/p/mock"
+        }]
+      };
+    });
+    const fetchPublishArtifact = vi.fn(async () => new Response(JSON.stringify({
+      deliveryFormat: "instagram_feed_carousel",
+      cards: [
+        { url: "https://trusted.example/card-01.png", mimeType: "image/png", width: 1080, height: 1080 },
+        { url: "https://trusted.example/card-02.png", mimeType: "image/png", width: 1080, height: 1080 }
+      ]
+    }), { headers: { "content-type": "application/json" } }));
+    const repository = createRepository({ query } as any, {
+      fetchPublishArtifact,
+      publishArtifactFetchTimeoutMs: 250,
+      publishArtifactAllowedOrigins: ["https://trusted.example"]
+    } as any);
+
+    await expect(repository.getPublishArtifact("queue-1")).resolves.toMatchObject({
+      queueId: "queue-1",
+      kind: "image_gallery",
+      deliveryFormat: "instagram_feed_carousel",
+      assets: [{ url: "https://trusted.example/card-01.png" }, { url: "https://trusted.example/card-02.png" }]
+    });
+    expect(fetchPublishArtifact).toHaveBeenCalledWith(
+      "https://trusted.example/manifest.json",
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
+  });
+
+  it.each([
+    ["fetch failure", async () => new Response("missing", { status: 404 })],
+    ["invalid JSON", async () => new Response("not-json")]
+  ])("surfaces a manifest error on %s", async (_case, fetchPublishArtifact) => {
+    const query = vi.fn(async () => ({
+      rowCount: 1,
+      rows: [{
+        id: "queue-1",
+        channel: "threads",
+        published_at: null,
+        title: "Text update",
+        preview_title: null,
+        preview_body: "Preview fallback",
+        source_summary: null,
+        output_json: { deliveryFormat: "threads_text", body: "Published body" },
+        artifact_public_url: "https://trusted.example/missing.json",
+        artifact_bucket: null,
+        artifact_path: null,
+        external_url: null
+      }]
+    }));
+    const repository = createRepository({ query } as any, {
+      fetchPublishArtifact: vi.fn(fetchPublishArtifact),
+      publishArtifactAllowedOrigins: ["https://trusted.example"]
+    } as any);
+
+    await expect(repository.getPublishArtifact("queue-1")).rejects.toThrow("publish_artifact_manifest_unavailable");
+  });
+
+  it("falls back to output JSON when no stored manifest URL exists", async () => {
+    const query = vi.fn(async () => ({
+      rowCount: 1,
+      rows: [{
+        id: "queue-1",
+        channel: "threads",
+        published_at: null,
+        title: "Text update",
+        delivery_format: "threads_text",
+        preview_title: null,
+        preview_body: "Preview fallback",
+        source_summary: null,
+        output_json: { body: "Published body" },
+        artifact_public_url: null,
+        artifact_bucket: null,
+        artifact_path: null,
+        external_url: null
+      }]
+    }));
+    const repository = createRepository({ query } as any);
+
+    await expect(repository.getPublishArtifact("queue-1")).resolves.toMatchObject({
+      queueId: "queue-1",
+      kind: "text",
+      text: "Published body"
+    });
+  });
+
+  it("reports a missing queue result from artifact and download lookups", async () => {
+    const repository = createRepository({ query: vi.fn(async () => ({ rowCount: 0, rows: [] })) } as any);
+
+    await expect(repository.getPublishArtifact("missing")).rejects.toThrow("publish_queue_not_found");
+    await expect(repository.downloadPublishResult("missing")).rejects.toThrow("publish_queue_not_found");
+  });
+
+  it("packages only the requested queue result", async () => {
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      expect(sql).toContain("where pq.id = $1");
+      expect(values).toEqual(["queue-1"]);
+      return {
+        rowCount: 1,
+        rows: [{
+          id: "queue-1",
+          channel: "threads",
+          published_at: new Date("2026-07-07T11:30:00.000Z"),
+          title: "Selected result",
+          preview_title: null,
+          preview_body: "Only this result",
+          source_summary: "Selected source",
+          output_json: { body: "Only this result" },
+          artifact_public_url: null,
+          artifact_bucket: null,
+          artifact_path: null,
+          external_url: "https://threads.example/selected"
+        }]
+      };
+    });
+    const repository = createRepository({ query } as any);
+
+    const packageResult = await repository.downloadPublishResult("queue-1");
+
+    expect(packageResult.itemCount).toBe(1);
+    expect(packageResult.fileName).toContain("queue-1");
+    expect(packageResult.buffer.includes(Buffer.from("Selected result"))).toBe(true);
+    expect(packageResult.buffer.includes(Buffer.from("other-queue"))).toBe(false);
+  });
+
   it("groups publish results by content and preserves per-channel success and failure details", async () => {
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       expect(values).toEqual(["brand-1"]);
@@ -3103,8 +3245,5 @@ describe("repository", () => {
     expect(statements.at(-1)?.trim()).toBe("rollback");
   });
 });
-
-
-
 
 

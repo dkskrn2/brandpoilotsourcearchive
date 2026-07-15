@@ -346,6 +346,27 @@ function createRepository(): ApiRepository {
       buffer: Buffer.from("PK"),
       itemCount: 1
     })),
+    getPublishArtifact: vi.fn(async (queueId) => ({
+      queueId,
+      kind: "image_gallery" as const,
+      deliveryFormat: "instagram_feed_carousel",
+      assets: [{
+        url: "https://cdn.example.com/card-01.png",
+        fileName: "card-01.png",
+        mimeType: "image/png",
+        width: 1080,
+        height: 1080
+      }],
+      posterUrl: null,
+      html: null,
+      text: null
+    })),
+    downloadPublishResult: vi.fn(async () => ({
+      fileName: "queue-1.zip",
+      mimeType: "application/zip" as const,
+      buffer: Buffer.from("PK-queue-1"),
+      itemCount: 1
+    })),
     publishQueueItem: vi.fn(async (queueId) => ({ id: queueId, status: "published", publishedUrl: "mock://instagram/queue-1" })),
     claimImageRenderJob: vi.fn(async () => null),
     heartbeatImageRenderJob: vi.fn(async (id) => ({ id, status: "running" })),
@@ -1439,5 +1460,84 @@ describe("API server", () => {
     expect(response.headers["x-published-result-count"]).toBe("1");
     expect(response.rawPayload).toEqual(Buffer.from("PK"));
     expect(repository.downloadPublishedResults).toHaveBeenCalledWith(brandId);
+  });
+
+  it("returns normalized artifacts for one publish queue result", async () => {
+    const repository = createRepository();
+    const app = createServer({ repository });
+
+    const response = await app.inject({ method: "GET", url: "/publish-queue/queue-1/artifacts" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      queueId: "queue-1",
+      kind: "image_gallery",
+      assets: [{ url: "https://cdn.example.com/card-01.png" }]
+    });
+    expect(repository.getPublishArtifact).toHaveBeenCalledWith("queue-1");
+  });
+
+  it("downloads one publish queue result as a zip package", async () => {
+    const repository = createRepository();
+    const app = createServer({ repository });
+
+    const response = await app.inject({ method: "GET", url: "/publish-queue/queue-1/download" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("application/zip");
+    expect(response.headers["content-disposition"]).toContain("queue-1.zip");
+    expect(response.headers["x-published-result-count"]).toBe("1");
+    expect(response.rawPayload).toEqual(Buffer.from("PK-queue-1"));
+    expect(repository.downloadPublishResult).toHaveBeenCalledWith("queue-1");
+  });
+
+  it("returns 404 when a publish queue result does not exist", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.getPublishArtifact).mockRejectedValue(new Error("publish_queue_not_found"));
+    vi.mocked(repository.downloadPublishResult).mockRejectedValue(new Error("publish_queue_not_found"));
+    const app = createServer({ repository });
+
+    const artifactResponse = await app.inject({ method: "GET", url: "/publish-queue/missing/artifacts" });
+    const downloadResponse = await app.inject({ method: "GET", url: "/publish-queue/missing/download" });
+
+    expect(artifactResponse.statusCode).toBe(404);
+    expect(artifactResponse.json()).toEqual({ error: "publish_queue_not_found" });
+    expect(downloadResponse.statusCode).toBe(404);
+    expect(downloadResponse.json()).toEqual({ error: "publish_queue_not_found" });
+  });
+
+  it("returns a retryable manifest error from the artifact route", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.getPublishArtifact).mockRejectedValue(new Error("publish_artifact_manifest_unavailable"));
+    const app = createServer({ repository });
+
+    const response = await app.inject({ method: "GET", url: "/publish-queue/queue-1/artifacts" });
+
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toEqual({ error: "publish_artifact_manifest_unavailable" });
+  });
+
+  it("denies cross-workspace access to both queue result routes", async () => {
+    const repository = createRepository();
+    const kakaoAuth = {
+      getSession: vi.fn(async () => ({ userId: "user-1" })),
+      canAccessBrand: vi.fn(async () => true),
+      canAccessResource: vi.fn(async () => false)
+    } as any;
+    const app = createServer({ repository, kakaoAuth, logger: false });
+    const request = { method: "GET" as const, headers: { cookie: "bp_session=session-token" } };
+
+    const artifactResponse = await app.inject({ ...request, url: "/publish-queue/queue-foreign/artifacts" });
+    const downloadResponse = await app.inject({ ...request, url: "/publish-queue/queue-foreign/download" });
+
+    expect(artifactResponse.statusCode).toBe(403);
+    expect(artifactResponse.json()).toEqual({ error: "workspace_access_denied" });
+    expect(downloadResponse.statusCode).toBe(403);
+    expect(downloadResponse.json()).toEqual({ error: "workspace_access_denied" });
+    expect(kakaoAuth.canAccessResource).toHaveBeenCalledTimes(2);
+    expect(kakaoAuth.canAccessResource).toHaveBeenNthCalledWith(1, "user-1", "publish_queue", "queue-foreign");
+    expect(kakaoAuth.canAccessResource).toHaveBeenNthCalledWith(2, "user-1", "publish_queue", "queue-foreign");
+    expect(repository.getPublishArtifact).not.toHaveBeenCalled();
+    expect(repository.downloadPublishResult).not.toHaveBeenCalled();
   });
 });
