@@ -1,6 +1,6 @@
 import cors from "@fastify/cors";
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import Fastify, { LogController } from "fastify";
+import Fastify, { LogController, type FastifyReply } from "fastify";
 import rawBody from "fastify-raw-body";
 import type { FastifyLoggerOptions } from "fastify/types/logger";
 import type { FastifyInstance } from "fastify";
@@ -10,8 +10,9 @@ import { resolveInstagramConnection } from "./metaGraph.js";
 import { buildInstagramLoginAuthorizeUrl, exchangeInstagramLoginCode, instagramLoginScopes, resolveInstagramLoginConnection, subscribeInstagramMessagingWebhooks } from "./instagramLoginGraph.js";
 import { parseInstagramMessagingEvents, verifyInstagramSignature } from "./instagramWebhook.js";
 import { parseDmWorkerResult } from "./dmTypes.js";
+import { normalizeInstagramHashtag } from "./instagramTrend.js";
 import { StoryCapabilityRequiredError } from "./repository.js";
-import type { ApiRepository, BrandProfileInput, Channel, DmAttentionType, DmConversationFilter, InstagramDeliveryFormat, InstagramFormatSettingsInput, SourceType, SupportRequestCategory, SupportRequestStatus } from "./types.js";
+import type { ApiRepository, BrandProfileInput, Channel, DmAttentionType, DmConversationFilter, InstagramDeliveryFormat, InstagramFormatSettingsInput, InstagramTrendMediaTypeFilter, InstagramTrendPageDto, InstagramTrendSort, SourceType, SupportRequestCategory, SupportRequestStatus } from "./types.js";
 import { createKakaoAuthStore, type KakaoProfile } from "./kakaoAuth.js";
 import { brandLogoRequestBodyLimit, type BrandLogoService } from "./brandLogo.js";
 
@@ -23,6 +24,17 @@ const topicRowStatuses = new Set(["uploaded", "queued", "used", "skipped", "inva
 const dmConversationFilters = new Set<DmConversationFilter>(["all", "attention", "complaint", "unanswered", "error"]);
 const dmAttentionTypes = new Set<DmAttentionType>(["restricted_action", "complaint", "knowledge_gap", "delivery_unknown", "processing_error"]);
 const instagramFormatSet = new Set<string>(instagramFormats);
+const instagramTrendMediaTypes = new Set<InstagramTrendMediaTypeFilter>(["all", "reel", "video", "image", "carousel"]);
+const instagramTrendSorts = new Set<InstagramTrendSort>(["meta", "likes", "comments"]);
+const instagramTrendHttpErrors: Record<string, [number, string]> = {
+  invalid_hashtag: [400, "invalid_hashtag"],
+  instagram_connection_required: [409, "instagram_connection_required"],
+  instagram_reconnect_required: [409, "instagram_reconnect_required"],
+  instagram_permission_required: [409, "instagram_permission_required"],
+  hashtag_search_limit_reached: [429, "hashtag_search_limit_reached"],
+  instagram_trend_fetch_failed: [502, "instagram_trend_fetch_failed"],
+  instagram_hashtag_not_found: [200, "instagram_hashtag_not_found"]
+};
 const defaultDevBrandId = "00000000-0000-4000-8000-000000000100";
 const maxBrandProfileShortFieldLength = 30;
 const kakaoStateCookiePrefix = "bp_kakao_state_";
@@ -217,6 +229,44 @@ function safeInternalErrorCode(error: unknown) {
   return match?.[1] ?? "unclassified_error";
 }
 
+function requiredHashtag(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function emptyInstagramTrendPage(hashtag: string): InstagramTrendPageDto {
+  const normalized = normalizeInstagramHashtag(hashtag);
+  return {
+    hashtag: { id: "", displayTag: normalized.displayTag, normalizedTag: normalized.normalizedTag },
+    source: "meta",
+    refreshed: false,
+    refreshedAt: null,
+    lastErrorCode: "instagram_hashtag_not_found",
+    page: 1,
+    pageSize: 20,
+    total: 0,
+    items: []
+  };
+}
+
+async function instagramTrendResponse<T>(
+  reply: FastifyReply,
+  operation: () => Promise<T>,
+  hashtag?: string
+): Promise<T | InstagramTrendPageDto | { error: string }> {
+  try {
+    return await operation();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown_error";
+    if (message === "instagram_hashtag_not_found" && hashtag) {
+      return emptyInstagramTrendPage(hashtag);
+    }
+    const mapped = instagramTrendHttpErrors[message];
+    if (!mapped || message === "instagram_hashtag_not_found") throw error;
+    reply.code(mapped[0]);
+    return { error: mapped[1] };
+  }
+}
+
 function matchesBearerSecret(header: string | undefined, secret: string | undefined) {
   if (!secret || !header?.startsWith("Bearer ")) return false;
   const candidate = Buffer.from(header.slice("Bearer ".length));
@@ -346,7 +396,7 @@ export function createServer(
               ? await kakaoAuth.canAccessResource(session.userId, "support_requests", params.requestId)
             : params.attentionId
               ? await kakaoAuth.canAccessResource(session.userId, "dm_attention_items", params.attentionId)
-            : route === "/health";
+            : route === "/health" || route === "/content-categories";
     if (!permitted) {
       reply.code(403).send({ error: "workspace_access_denied" });
       return reply;
@@ -696,6 +746,91 @@ export function createServer(
 
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/ui-status", async (request) => {
     return repository.getBrandUiStatus(request.params.brandId);
+  });
+
+  app.get("/content-categories", async () => {
+    return repository.listContentCategories();
+  });
+
+  app.get<{
+    Params: { brandId: string };
+    Querystring: { hashtag?: unknown; type?: unknown; sort?: unknown; page?: unknown };
+  }>("/brands/:brandId/instagram-trends", async (request, reply) => {
+    const hashtag = requiredHashtag(request.query.hashtag);
+    if (!hashtag) {
+      reply.code(400);
+      return { error: "invalid_hashtag" };
+    }
+    const type = request.query.type === undefined ? "all" : request.query.type;
+    if (typeof type !== "string" || !instagramTrendMediaTypes.has(type as InstagramTrendMediaTypeFilter)) {
+      reply.code(400);
+      return { error: "invalid_instagram_trend_type" };
+    }
+    const sort = request.query.sort === undefined ? "meta" : request.query.sort;
+    if (typeof sort !== "string" || !instagramTrendSorts.has(sort as InstagramTrendSort)) {
+      reply.code(400);
+      return { error: "invalid_instagram_trend_sort" };
+    }
+    const page = request.query.page === undefined ? 1 : Number(request.query.page);
+    if (!Number.isInteger(page) || page < 1) {
+      reply.code(400);
+      return { error: "invalid_instagram_trend_page" };
+    }
+    return instagramTrendResponse(
+      reply,
+      () => repository.listInstagramTrends(request.params.brandId, {
+        hashtag,
+        type: type as InstagramTrendMediaTypeFilter,
+        sort: sort as InstagramTrendSort,
+        page
+      }),
+      hashtag
+    );
+  });
+
+  app.post<{
+    Params: { brandId: string };
+    Body: Record<string, unknown>;
+  }>("/brands/:brandId/instagram-trends/search", async (request, reply) => {
+    const hashtag = isObject(request.body) ? requiredHashtag(request.body.hashtag) : null;
+    if (!hashtag) {
+      reply.code(400);
+      return { error: "invalid_hashtag" };
+    }
+    return instagramTrendResponse(
+      reply,
+      () => repository.searchInstagramTrends(request.params.brandId, { hashtag }),
+      hashtag
+    );
+  });
+
+  app.get<{ Params: { brandId: string } }>("/brands/:brandId/instagram-trend-searches", async (request) => {
+    return repository.listInstagramTrendSearches(request.params.brandId);
+  });
+
+  app.put<{
+    Params: { brandId: string; hashtagId: string };
+    Body: Record<string, unknown>;
+  }>("/brands/:brandId/instagram-trend-searches/:hashtagId/favorite", async (request, reply) => {
+    if (!isObject(request.body) || typeof request.body.isFavorite !== "boolean") {
+      reply.code(400);
+      return { error: "invalid_is_favorite" };
+    }
+    return instagramTrendResponse(
+      reply,
+      () => repository.setInstagramTrendFavorite(request.params.brandId, request.params.hashtagId, {
+        isFavorite: request.body.isFavorite as boolean
+      })
+    );
+  });
+
+  app.post<{
+    Params: { brandId: string; mediaId: string };
+  }>("/brands/:brandId/instagram-trends/:mediaId/save-source", async (request, reply) => {
+    return instagramTrendResponse(
+      reply,
+      () => repository.saveInstagramTrendSource(request.params.brandId, request.params.mediaId)
+    );
   });
 
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/billing/summary", async (request) => {

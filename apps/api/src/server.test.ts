@@ -1,9 +1,36 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "./httpServer";
 import { StoryCapabilityRequiredError } from "./repository";
-import type { ApiRepository, InstagramFormatSettingsInput, PublishResultDto, SourceSnapshotDto } from "./types";
+import type { ApiRepository, InstagramFormatSettingsInput, InstagramTrendPageDto, PublishResultDto, SourceSnapshotDto } from "./types";
 
 const brandId = "11111111-1111-1111-1111-111111111111";
+
+const instagramTrendPage: InstagramTrendPageDto = {
+  hashtag: { id: "hashtag-1", displayTag: "콘텐츠마케팅", normalizedTag: "콘텐츠마케팅" },
+  source: "meta",
+  refreshed: true,
+  refreshedAt: "2026-07-15T01:00:00.000Z",
+  lastErrorCode: null,
+  page: 1,
+  pageSize: 20,
+  total: 1,
+  items: [{
+    id: "media-1",
+    instagramMediaId: "instagram-media-1",
+    username: "creator",
+    caption: "caption",
+    kind: "reel",
+    mediaUrl: "https://cdn.example.com/reel.mp4",
+    previewUrl: "https://cdn.example.com/preview.jpg",
+    permalink: "https://www.instagram.com/reel/example/",
+    postedAt: "2026-07-14T01:00:00.000Z",
+    likeCount: 100,
+    commentsCount: 10,
+    metaRank: 1,
+    refreshedAt: "2026-07-15T01:00:00.000Z",
+    isSaved: false
+  }]
+};
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -1592,5 +1619,233 @@ describe("API server", () => {
     expect(kakaoAuth.canAccessResource).toHaveBeenNthCalledWith(2, "user-1", "publish_queue", "queue-foreign");
     expect(repository.getPublishArtifact).not.toHaveBeenCalled();
     expect(repository.downloadPublishResult).not.toHaveBeenCalled();
+  });
+
+  it("lists content categories for an authenticated user without requiring brand access", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.listContentCategories).mockResolvedValue([{
+      code: "business_professional",
+      name: "비즈니스·전문 서비스",
+      recommendedHashtags: ["마케팅"],
+      subcategories: [{ code: "marketing_consulting", name: "마케팅 컨설팅" }]
+    }]);
+    const kakaoAuth = {
+      getSession: vi.fn(async () => ({ userId: "user-1" })),
+      canAccessBrand: vi.fn(async () => false),
+      canAccessResource: vi.fn(async () => false)
+    } as any;
+    const app = createServer({ repository, kakaoAuth, logger: false });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/content-categories",
+      headers: { cookie: "bp_session=session-token" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual([expect.objectContaining({ code: "business_professional" })]);
+    expect(repository.listContentCategories).toHaveBeenCalledTimes(1);
+    expect(kakaoAuth.canAccessBrand).not.toHaveBeenCalled();
+  });
+
+  it("exposes all Instagram trend routes with their exact repository contracts", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.listInstagramTrends).mockResolvedValue(instagramTrendPage);
+    vi.mocked(repository.searchInstagramTrends).mockResolvedValue(instagramTrendPage);
+    vi.mocked(repository.listInstagramTrendSearches).mockResolvedValue([{
+      hashtagId: "hashtag-1",
+      displayTag: "콘텐츠마케팅",
+      isFavorite: false,
+      lastSearchedAt: "2026-07-15T01:00:00.000Z",
+      searchCount: 2
+    }]);
+    vi.mocked(repository.saveInstagramTrendSource).mockResolvedValue({
+      source: {
+        id: "source-1",
+        brandId,
+        sourceType: "reference",
+        url: "https://www.instagram.com/reel/example/",
+        title: "Instagram @creator",
+        status: "active",
+        enabled: true,
+        lastCrawledAt: null,
+        lastError: null
+      },
+      alreadySaved: false
+    });
+    const app = createServer({ repository, logger: false });
+
+    const listed = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/instagram-trends?hashtag=%23콘텐츠마케팅&type=reel&sort=likes&page=2`
+    });
+    const searched = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/instagram-trends/search`,
+      payload: { hashtag: "콘텐츠마케팅" }
+    });
+    const history = await app.inject({ method: "GET", url: `/brands/${brandId}/instagram-trend-searches` });
+    const favorite = await app.inject({
+      method: "PUT",
+      url: `/brands/${brandId}/instagram-trend-searches/hashtag-1/favorite`,
+      payload: { isFavorite: true }
+    });
+    const saved = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/instagram-trends/media-1/save-source`
+    });
+
+    expect(listed.statusCode).toBe(200);
+    expect(searched.statusCode).toBe(200);
+    expect(history.statusCode).toBe(200);
+    expect(favorite.statusCode).toBe(200);
+    expect(saved.statusCode).toBe(200);
+    expect(repository.listInstagramTrends).toHaveBeenCalledWith(brandId, {
+      hashtag: "#콘텐츠마케팅",
+      type: "reel",
+      sort: "likes",
+      page: 2
+    });
+    expect(repository.searchInstagramTrends).toHaveBeenCalledWith(brandId, { hashtag: "콘텐츠마케팅" });
+    expect(repository.listInstagramTrendSearches).toHaveBeenCalledWith(brandId);
+    expect(repository.setInstagramTrendFavorite).toHaveBeenCalledWith(brandId, "hashtag-1", { isFavorite: true });
+    expect(repository.saveInstagramTrendSource).toHaveBeenCalledWith(brandId, "media-1");
+  });
+
+  it.each([
+    [`/brands/${brandId}/instagram-trends`, "GET", undefined, "invalid_hashtag"],
+    [`/brands/${brandId}/instagram-trends?hashtag=test&type=story`, "GET", undefined, "invalid_instagram_trend_type"],
+    [`/brands/${brandId}/instagram-trends?hashtag=test&sort=views`, "GET", undefined, "invalid_instagram_trend_sort"],
+    [`/brands/${brandId}/instagram-trends?hashtag=test&page=0`, "GET", undefined, "invalid_instagram_trend_page"],
+    [`/brands/${brandId}/instagram-trends?hashtag=test&page=1.5`, "GET", undefined, "invalid_instagram_trend_page"],
+    [`/brands/${brandId}/instagram-trends/search`, "POST", {}, "invalid_hashtag"],
+    [`/brands/${brandId}/instagram-trends/search`, "POST", { hashtag: 123 }, "invalid_hashtag"],
+    [`/brands/${brandId}/instagram-trend-searches/hashtag-1/favorite`, "PUT", {}, "invalid_is_favorite"],
+    [`/brands/${brandId}/instagram-trend-searches/hashtag-1/favorite`, "PUT", { isFavorite: "yes" }, "invalid_is_favorite"]
+  ])("validates Instagram trend request boundaries for %s", async (url, method, payload, error) => {
+    const repository = createRepository();
+    const app = createServer({ repository, logger: false });
+
+    const response = await app.inject({ method: method as "GET" | "POST" | "PUT", url, payload });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error });
+    expect(repository.listInstagramTrends).not.toHaveBeenCalled();
+    expect(repository.searchInstagramTrends).not.toHaveBeenCalled();
+    expect(repository.setInstagramTrendFavorite).not.toHaveBeenCalled();
+  });
+
+  it("applies default type, sort, and page values when listing Instagram trends", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.listInstagramTrends).mockResolvedValue(instagramTrendPage);
+    const app = createServer({ repository, logger: false });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/instagram-trends?hashtag=콘텐츠마케팅`
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.listInstagramTrends).toHaveBeenCalledWith(brandId, {
+      hashtag: "콘텐츠마케팅",
+      type: "all",
+      sort: "meta",
+      page: 1
+    });
+  });
+
+  it.each([
+    ["GET", "/content-categories"],
+    ["GET", `/brands/${brandId}/instagram-trends?hashtag=test`],
+    ["POST", `/brands/${brandId}/instagram-trends/search`],
+    ["GET", `/brands/${brandId}/instagram-trend-searches`],
+    ["PUT", `/brands/${brandId}/instagram-trend-searches/hashtag-1/favorite`],
+    ["POST", `/brands/${brandId}/instagram-trends/media-1/save-source`]
+  ])("requires authentication for %s %s", async (method, url) => {
+    const repository = createRepository();
+    const kakaoAuth = { getSession: vi.fn(async () => null) } as any;
+    const app = createServer({ repository, kakaoAuth, logger: false });
+
+    const response = await app.inject({
+      method: method as "GET" | "POST" | "PUT",
+      url,
+      payload: method === "POST" ? { hashtag: "test" } : method === "PUT" ? { isFavorite: true } : undefined
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: "authentication_required" });
+  });
+
+  it.each([
+    ["GET", `/brands/${brandId}/instagram-trends?hashtag=test`],
+    ["POST", `/brands/${brandId}/instagram-trends/search`],
+    ["GET", `/brands/${brandId}/instagram-trend-searches`],
+    ["PUT", `/brands/${brandId}/instagram-trend-searches/hashtag-1/favorite`],
+    ["POST", `/brands/${brandId}/instagram-trends/media-1/save-source`]
+  ])("denies cross-workspace Instagram trend access for %s %s", async (method, url) => {
+    const repository = createRepository();
+    const kakaoAuth = {
+      getSession: vi.fn(async () => ({ userId: "user-1" })),
+      canAccessBrand: vi.fn(async () => false),
+      canAccessResource: vi.fn(async () => false)
+    } as any;
+    const app = createServer({ repository, kakaoAuth, logger: false });
+
+    const response = await app.inject({
+      method: method as "GET" | "POST" | "PUT",
+      url,
+      headers: { cookie: "bp_session=session-token" },
+      payload: method === "POST" ? { hashtag: "test" } : method === "PUT" ? { isFavorite: true } : undefined
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: "workspace_access_denied" });
+  });
+
+  it.each([
+    ["invalid_hashtag", 400],
+    ["instagram_connection_required", 409],
+    ["instagram_reconnect_required", 409],
+    ["instagram_permission_required", 409],
+    ["hashtag_search_limit_reached", 429],
+    ["instagram_trend_fetch_failed", 502]
+  ])("maps Instagram trend domain error %s to HTTP %i", async (domainError, statusCode) => {
+    const repository = createRepository();
+    vi.mocked(repository.searchInstagramTrends).mockRejectedValue(new Error(domainError));
+    const app = createServer({ repository, logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/instagram-trends/search`,
+      payload: { hashtag: "콘텐츠마케팅" }
+    });
+
+    expect(response.statusCode).toBe(statusCode);
+    expect(response.json()).toEqual({ error: domainError });
+  });
+
+  it("returns a normal empty trend page when Meta cannot find the hashtag", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.searchInstagramTrends).mockRejectedValue(new Error("instagram_hashtag_not_found"));
+    const app = createServer({ repository, logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/instagram-trends/search`,
+      payload: { hashtag: "#없는태그" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      hashtag: { id: "", displayTag: "없는태그", normalizedTag: "없는태그" },
+      source: "meta",
+      refreshed: false,
+      refreshedAt: null,
+      lastErrorCode: "instagram_hashtag_not_found",
+      page: 1,
+      pageSize: 20,
+      total: 0,
+      items: []
+    });
   });
 });
