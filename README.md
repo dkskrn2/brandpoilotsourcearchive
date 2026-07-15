@@ -207,6 +207,13 @@ Rollout 기준은 Feed 활성 유지, Story capability 확인 후 활성화, Ree
 - [이미지 워커 README](workers/brand-pilot-image-worker/README.md)
 - [Instagram DM 자동응답 설계](docs/superpowers/specs/2026-07-14-instagram-dm-ai-auto-reply-design.md)
 - [Instagram DM 운영 런북](docs/operations/instagram-dm-operations-runbook.md)
+- [Instagram 해시태그 트렌드 운영 런북](docs/operations/INSTAGRAM_HASHTAG_TRENDS.md)
+
+Instagram 해시태그 트렌드의 인증된 로컬 smoke 실행:
+
+```powershell
+npm run smoke:instagram-trends
+```
 
 ## 산출물과 백업
 

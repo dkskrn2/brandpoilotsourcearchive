@@ -493,3 +493,54 @@ test("각 워크스페이스 패키지는 개별 package-lock.json을 두지 않
     ),
   );
 });
+
+test("Instagram 해시태그 운영 문서는 Meta 출시 전제와 제한된 롤백을 명시한다", async () => {
+  const operations = await readFile(
+    "docs/operations/INSTAGRAM_HASHTAG_TRENDS.md",
+    "utf8",
+  );
+  for (const required of [
+    "Instagram Public Content Access",
+    "Advanced Access",
+    "connected Professional Instagram account",
+    "rolling seven-day 30 unique hashtag limit",
+    "no access token in browser/network responses",
+    "disable only the sidebar/route",
+    "category data",
+  ]) {
+    assert.match(operations, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+  }
+});
+
+test("Instagram trend smoke 계약은 비밀값 없는 순차 호출과 재귀 JSON 검사를 정의한다", async () => {
+  const smoke = await readFile("scripts/instagram-trend-smoke.mjs", "utf8");
+  for (const variable of [
+    "BRAND_PILOT_API_URL",
+    "BRAND_PILOT_SESSION_COOKIE",
+    "BRAND_PILOT_SMOKE_BRAND_ID",
+    "BRAND_PILOT_SMOKE_HASHTAG",
+  ]) {
+    assert.match(smoke, new RegExp(`process\\.env\\.${variable}`));
+  }
+  assert.match(smoke, /items\.length\s*<=\s*50/);
+  assert.match(smoke, /secondSearch\.source,\s*["']cache["']/);
+  assert.match(smoke, /secondSearch\.refreshed,\s*false/);
+  assert.match(smoke, /secondSave\.alreadySaved,\s*true/);
+  assert.match(smoke, /(?:token|secret|credential)/i);
+  assert.match(smoke, /Object\.entries\s*\(/);
+  assert.match(smoke, /HEAD|GET/);
+
+  const search = smoke.indexOf("/instagram-trends/search");
+  const page = smoke.indexOf("/instagram-trends?", search);
+  const save = smoke.indexOf("/save-source", page);
+  assert.ok(search >= 0 && page > search && save > page);
+  assert.match(smoke, /method:\s*["']POST["']/g);
+});
+
+test("루트 패키지는 Instagram trend smoke 명령을 정의한다", async () => {
+  const packageJson = await readJson("package.json");
+  assert.equal(
+    packageJson.scripts["smoke:instagram-trends"],
+    "node scripts/instagram-trend-smoke.mjs",
+  );
+});
