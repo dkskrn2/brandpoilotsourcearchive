@@ -124,6 +124,15 @@ compareExact(results, "DM worker database URL", [
   { name: "dm-worker DM_WORKER_DATABASE_URL", value: get(envs.dmWorker, "DM_WORKER_DATABASE_URL") }
 ]);
 
+for (const key of ["META_APP_ID", "META_APP_SECRET"]) {
+  addResult(
+    results,
+    isSet(get(envs.api, key)),
+    `api ${key}`,
+    isSet(get(envs.api, key)) ? "set" : `missing: api ${key}`
+  );
+}
+
 for (const [key, label] of [
   ["KAKAO_REDIRECT_URI", "Kakao redirect URI"],
   ["META_OAUTH_REDIRECT_URI", "Meta redirect URI"]
