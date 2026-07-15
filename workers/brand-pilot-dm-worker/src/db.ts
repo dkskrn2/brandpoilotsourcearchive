@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Pool, type PoolConfig } from "pg";
 import type { ClaimedWikiBuildItem, WikiBuildDocument, WikiBuildSource } from "./wikiRefresh.js";
 
 export interface WikiSearchChunk {
@@ -19,8 +19,17 @@ export interface ConversationHistoryItem {
   body: string | null;
 }
 
+export function resolveDmPoolConfig(connectionString: string): PoolConfig {
+  const url = new URL(connectionString);
+  if (url.hostname.endsWith(".supabase.com")) {
+    url.searchParams.delete("sslmode");
+    return { connectionString: url.toString(), ssl: { rejectUnauthorized: false } };
+  }
+  return { connectionString };
+}
+
 export function createDmWorkerDb(connectionString: string) {
-  const pool = new Pool({ connectionString });
+  const pool = new Pool(resolveDmPoolConfig(connectionString));
   return {
     async claimWikiBuildItem(workerId: string, versions: {
       curatorPromptVersion: string;
