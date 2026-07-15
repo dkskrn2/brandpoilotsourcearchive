@@ -312,7 +312,7 @@ export function BrandSettingsPage() {
           <>
             {hasUnsavedChanges ? <Badge variant="warn">변경사항 있음</Badge> : null}
             {showSavedBadge && !hasUnsavedChanges ? <Badge variant="ok">저장됨</Badge> : null}
-            <button className="button" type="button" onClick={cancelChanges}>변경 취소</button>
+            <button className="button" type="button" onClick={cancelChanges} disabled={isSaving}>변경 취소</button>
             <button className="button primary" type="button" onClick={saveChanges} disabled={isSaving || !draftProfile}>
               {isSaving ? "저장 중" : "저장"}
             </button>
@@ -338,12 +338,13 @@ export function BrandSettingsPage() {
             <Badge variant={hasRequiredFields ? "ok" : "warn"}>{hasRequiredFields ? "필수 입력 완료" : "필수 입력 필요"}</Badge>
           </div>
           <div className="panel-body brand-profile-layout">
-            <BrandLogoEditor profile={draftProfile} onProfileChange={mergeLogoProfile} />
+            <BrandLogoEditor profile={draftProfile} onProfileChange={mergeLogoProfile} disabled={isSaving} />
             <div className="form-grid brand-profile-fields">
             <Field label="브랜드명" required>
               <input
                 aria-label="브랜드명"
                 required
+                disabled={isSaving}
                 placeholder="예: 제주의 하루 여행 상담"
                 value={draftProfile.name}
                 onChange={(event) => updateDraftProfile("name", event.currentTarget.value)}
@@ -353,6 +354,7 @@ export function BrandSettingsPage() {
               <select
                 aria-label="대표 분야 선택"
                 required
+                disabled={isSaving}
                 value={draftProfile.primaryCategory?.code ?? ""}
                 onChange={(event) => selectCategory(event.currentTarget.value)}
               >
@@ -374,7 +376,7 @@ export function BrandSettingsPage() {
                         <input
                           type="checkbox"
                           checked={checked}
-                          disabled={!checked && draftProfile.subcategories.length >= 5}
+                          disabled={isSaving || (!checked && draftProfile.subcategories.length >= 5)}
                           onChange={() => toggleSystemSubcategory(subcategory.code, subcategory.name)}
                         />
                         <span>{subcategory.name}</span>
@@ -383,13 +385,13 @@ export function BrandSettingsPage() {
                   })}
                 </div>
                 <div className="subcategory-custom-row">
-                  <input aria-label="직접 입력 세부 분야" placeholder="세부 분야 직접 입력" disabled={draftProfile.subcategories.length >= 5} />
-                  <button className="button" type="button" aria-label="세부 분야 추가" onClick={addCustomSubcategory} disabled={draftProfile.subcategories.length >= 5}>추가</button>
+                  <input aria-label="직접 입력 세부 분야" placeholder="세부 분야 직접 입력" disabled={isSaving || draftProfile.subcategories.length >= 5} />
+                  <button className="button" type="button" aria-label="세부 분야 추가" onClick={addCustomSubcategory} disabled={isSaving || draftProfile.subcategories.length >= 5}>추가</button>
                 </div>
                 {draftProfile.subcategories.length > 0 ? (
                   <div className="subcategory-chips" aria-label="선택한 세부 분야">
                     {draftProfile.subcategories.map((subcategory) => (
-                      <button className="subcategory-chip" type="button" key={`${subcategory.type}-${subcategory.code ?? subcategory.name}`} onClick={() => subcategory.type === "system" ? toggleSystemSubcategory(subcategory.code!, subcategory.name) : updateSubcategories(draftProfile.subcategories.filter((candidate) => candidate !== subcategory))}>
+                      <button className="subcategory-chip" type="button" key={`${subcategory.type}-${subcategory.code ?? subcategory.name}`} aria-label={`${subcategory.name} 제거`} disabled={isSaving} onClick={() => subcategory.type === "system" ? toggleSystemSubcategory(subcategory.code!, subcategory.name) : updateSubcategories(draftProfile.subcategories.filter((candidate) => candidate !== subcategory))}>
                         {subcategory.name}<span aria-hidden="true">×</span>
                       </button>
                     ))}
@@ -401,6 +403,7 @@ export function BrandSettingsPage() {
               <select
                 aria-label="핵심 고객 선택"
                 required
+                disabled={isSaving}
                 value={primaryCustomerEntryMode === "custom" ? customOptionValue : draftProfile.primaryCustomer}
                 onChange={(event) => selectPrimaryCustomer(event.currentTarget.value)}
               >
@@ -415,6 +418,7 @@ export function BrandSettingsPage() {
                   aria-label="핵심 고객 직접 입력"
                   maxLength={30}
                   required
+                  disabled={isSaving}
                   placeholder="예: 제주 여행을 처음 준비하는 가족"
                   value={draftProfile.primaryCustomer}
                   onChange={(event) => updateDraftProfile("primaryCustomer", event.currentTarget.value)}
@@ -425,6 +429,7 @@ export function BrandSettingsPage() {
               <textarea
                 aria-label="제품/서비스 설명"
                 required
+                disabled={isSaving}
                 placeholder="예: 제주 일정과 숙소 동선을 1:1로 상담해주는 여행 계획 서비스"
                 value={draftProfile.description}
                 onChange={(event) => updateDraftProfile("description", event.currentTarget.value)}
@@ -444,6 +449,7 @@ export function BrandSettingsPage() {
               <textarea
                 placeholder="예: 친절하고 과장 없는 전문가 톤"
                 value={draftProfile.tone}
+                disabled={isSaving}
                 onChange={(event) => updateDraftProfile("tone", event.currentTarget.value)}
               />
             </Field>
@@ -451,6 +457,7 @@ export function BrandSettingsPage() {
               <input
                 placeholder="예: 무료 상담 신청하기"
                 value={draftProfile.defaultCta}
+                disabled={isSaving}
                 onChange={(event) => updateDraftProfile("defaultCta", event.currentTarget.value)}
               />
             </Field>
@@ -458,6 +465,7 @@ export function BrandSettingsPage() {
               <input
                 placeholder="예: https://brand.example.com"
                 value={draftProfile.mainLink}
+                disabled={isSaving}
                 onChange={(event) => updateDraftProfile("mainLink", event.currentTarget.value)}
               />
             </Field>
@@ -480,6 +488,7 @@ export function BrandSettingsPage() {
                     aria-label="브랜드 주색"
                     maxLength={30}
                     placeholder="예: 파란색 또는 #2563EB"
+                    disabled={isSaving}
                     value={draftFormats.brandColor ?? ""}
                     onChange={(event) => updateBrandColor(event.currentTarget.value)}
                   />
@@ -497,12 +506,13 @@ export function BrandSettingsPage() {
                         ) : null}
                       </div>
                       <fieldset
-                        disabled={storyUnavailable}
+                        disabled={storyUnavailable || isSaving}
                         style={{ minWidth: 0, margin: 0, padding: 0, border: 0 }}
                       >
                         <Switch
                           label={meta.label}
                           checked={format.enabled}
+                          disabled={isSaving}
                           onChange={(checked) => updateDraftFormat(format.format, checked)}
                         />
                       </fieldset>
@@ -535,6 +545,7 @@ export function BrandSettingsPage() {
             <Switch
               label="브랜드 전체 자동 승인"
               checked={draftProfile.autoApprovalEnabled}
+              disabled={isSaving}
               onChange={(checked) => updateDraftProfile("autoApprovalEnabled", checked)}
             />
           </div>

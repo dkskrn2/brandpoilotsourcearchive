@@ -13,6 +13,7 @@ interface BrandLogoEditorProps {
   onProfileChange: (profile: BrandProfile) => void;
   client?: BrandLogoClient;
   brandId?: string;
+  disabled?: boolean;
 }
 
 function fileBase64(file: File) {
@@ -43,7 +44,8 @@ export function BrandLogoEditor({
   profile,
   onProfileChange,
   client = api,
-  brandId = DEMO_BRAND_ID
+  brandId = DEMO_BRAND_ID,
+  disabled = false
 }: BrandLogoEditorProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isWorking, setIsWorking] = useState(false);
@@ -91,7 +93,7 @@ export function BrandLogoEditor({
     <div className="brand-logo-editor">
       <BrandLogo brandName={profile.name} logoUrl={profile.logoUrl} className="brand-logo-editor-preview" />
       <div className="brand-logo-editor-actions">
-        <label className={`button${isWorking ? " is-disabled" : ""}`}>
+        <label className={`button${isWorking || disabled ? " is-disabled" : ""}`}>
           {isWorking ? "처리 중" : profile.logoUrl ? "이미지 변경" : "이미지 등록"}
           <input
             ref={inputRef}
@@ -99,7 +101,7 @@ export function BrandLogoEditor({
             type="file"
             aria-label="로고 이미지 선택"
             accept="image/png,image/jpeg,image/webp"
-            disabled={isWorking}
+            disabled={isWorking || disabled}
             onChange={(event) => {
               const file = event.currentTarget.files?.[0];
               if (file) void upload(file);
@@ -107,7 +109,7 @@ export function BrandLogoEditor({
           />
         </label>
         {profile.logoUrl ? (
-          <button className="button danger" type="button" disabled={isWorking} onClick={() => void remove()}>
+          <button className="button danger" type="button" disabled={isWorking || disabled} onClick={() => void remove()}>
             로고 삭제
           </button>
         ) : null}
@@ -117,4 +119,3 @@ export function BrandLogoEditor({
     </div>
   );
 }
-

@@ -252,6 +252,38 @@ describe("BrandSettingsPage", () => {
     expect(api.updateBrandProfile.mock.calls[0][1]).not.toHaveProperty("industry");
   });
 
+  it("disables all editable controls while a profile save is pending", async () => {
+    const updateBrandProfile = vi.fn(() => new Promise<BrandProfile>(() => {}));
+    await renderBrandSettingsPage({ updateBrandProfile });
+    const nameInput = await screen.findByLabelText("브랜드명");
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, "저장 중 브랜드");
+    await userEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    expect(nameInput).toBeDisabled();
+    expect(screen.getByLabelText("대표 분야 선택")).toBeDisabled();
+    expect(screen.getByLabelText("핵심 고객 선택")).toBeDisabled();
+    expect(screen.getByLabelText("제품/서비스 설명")).toBeDisabled();
+    expect(screen.getByLabelText("톤앤매너")).toBeDisabled();
+    expect(screen.getByLabelText("기본 CTA")).toBeDisabled();
+    expect(screen.getByLabelText("주요 링크")).toBeDisabled();
+    expect(screen.getByLabelText("직접 입력 세부 분야")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "세부 분야 추가" })).toBeDisabled();
+    expect(screen.getByLabelText("브랜드 주색")).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "Card News" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "브랜드 전체 자동 승인" })).toBeDisabled();
+    expect(screen.getByLabelText("로고 이미지 선택")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "로고 삭제" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "변경 취소" })).toBeDisabled();
+  });
+
+  it("gives every subcategory chip a named remove action", async () => {
+    await renderBrandSettingsPage();
+
+    expect(await screen.findByRole("button", { name: "국내 여행 제거" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "가족 여행 제거" })).toBeInTheDocument();
+  });
+
   it("shows API failure state without sample brand data", async () => {
     await renderBrandSettingsPage({
       getBrandProfile: vi.fn(async () => {

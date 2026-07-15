@@ -3,9 +3,10 @@ interface SwitchProps {
   checked?: boolean;
   defaultChecked?: boolean;
   onChange?: (checked: boolean) => void;
+  disabled?: boolean;
 }
 
-export function Switch({ label, checked, defaultChecked = false, onChange }: SwitchProps) {
+export function Switch({ label, checked, defaultChecked = false, onChange, disabled = false }: SwitchProps) {
   return (
     <label className="switch" aria-label={label}>
       <input
@@ -13,6 +14,7 @@ export function Switch({ label, checked, defaultChecked = false, onChange }: Swi
         type="checkbox"
         checked={checked}
         defaultChecked={checked === undefined ? defaultChecked : undefined}
+        disabled={disabled}
         onChange={(event) => onChange?.(event.currentTarget.checked)}
       />
       <span className="switch-track">
