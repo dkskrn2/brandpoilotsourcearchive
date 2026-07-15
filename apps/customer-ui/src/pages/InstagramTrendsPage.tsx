@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "../components/layout/PageHeader";
 import { TrendMediaCard } from "../components/trends/TrendMediaCard";
 import { TrendMediaDetailDialog } from "../components/trends/TrendMediaDetailDialog";
@@ -60,6 +60,7 @@ function isInstagramConnected(channels: ChannelConnection[]) {
 }
 
 export function InstagramTrendsPage() {
+  const resultRequestId = useRef(0);
   const [channels, setChannels] = useState<ChannelConnection[]>([]);
   const [categories, setCategories] = useState<ContentCategory[]>([]);
   const [selectedMedia, setSelectedMedia] = useState<InstagramTrendMedia | null>(null);
@@ -87,12 +88,20 @@ export function InstagramTrendsPage() {
   const visibleItems = useMemo(() => view.result?.items.slice(0, 20) ?? [], [view.result]);
   const hasNextPage = Boolean(view.result && view.result.page * 20 < view.result.total);
 
-  async function loadPage(hashtag: string, pageNumber: number, type = view.type, sort = view.sort) {
+  async function loadPage(
+    hashtag: string,
+    pageNumber: number,
+    type = view.type,
+    sort = view.sort,
+    requestId = ++resultRequestId.current
+  ) {
     try {
       const result = await api.getInstagramTrends(DEMO_BRAND_ID, { hashtag, type, sort, page: pageNumber });
+      if (requestId !== resultRequestId.current) return null;
       setView((current) => ({ ...current, page: pageNumber, result, error: result.lastErrorCode ? trendErrorCopy[errorCode(new Error(result.lastErrorCode))] : null }));
       return result;
     } catch (error) {
+      if (requestId !== resultRequestId.current) return null;
       setView((current) => ({ ...current, error: trendErrorCopy[errorCode(error)] }));
       return null;
     }
@@ -104,32 +113,39 @@ export function InstagramTrendsPage() {
       setView((current) => ({ ...current, error: trendErrorCopy.invalid_hashtag }));
       return;
     }
+    const requestId = ++resultRequestId.current;
     setView((current) => ({ ...current, submittedHashtag: hashtag, page: 1, isSearching: true, error: null }));
-    const cached = await loadPage(hashtag, 1);
+    const cached = await loadPage(hashtag, 1, view.type, view.sort, requestId);
+    if (requestId !== resultRequestId.current) return;
     try {
       const refreshed = await api.searchInstagramTrends(DEMO_BRAND_ID, hashtag);
+      if (requestId !== resultRequestId.current) return;
       setView((current) => ({ ...current, result: refreshed, page: 1, error: refreshed.lastErrorCode ? trendErrorCopy[errorCode(new Error(refreshed.lastErrorCode))] : null }));
       api.listInstagramTrendSearches(DEMO_BRAND_ID).then((items) => setView((current) => ({ ...current, histories: items }))).catch(() => undefined);
     } catch (error) {
+      if (requestId !== resultRequestId.current) return;
       setView((current) => ({ ...current, result: cached ?? current.result, error: trendErrorCopy[errorCode(error)] }));
     } finally {
-      setView((current) => ({ ...current, isSearching: false }));
+      if (requestId === resultRequestId.current) setView((current) => ({ ...current, isSearching: false }));
     }
   }
 
   async function changeFilter(type: InstagramTrendMediaTypeFilter) {
-    setView((current) => ({ ...current, type, page: 1 }));
-    if (view.submittedHashtag) await loadPage(view.submittedHashtag, 1, type, view.sort);
+    const requestId = ++resultRequestId.current;
+    setView((current) => ({ ...current, type, page: 1, isSearching: false }));
+    if (view.submittedHashtag) await loadPage(view.submittedHashtag, 1, type, view.sort, requestId);
   }
 
   async function changeSort(sort: InstagramTrendSort) {
-    setView((current) => ({ ...current, sort, page: 1 }));
-    if (view.submittedHashtag) await loadPage(view.submittedHashtag, 1, view.type, sort);
+    const requestId = ++resultRequestId.current;
+    setView((current) => ({ ...current, sort, page: 1, isSearching: false }));
+    if (view.submittedHashtag) await loadPage(view.submittedHashtag, 1, view.type, sort, requestId);
   }
 
   async function nextPage() {
     if (!view.submittedHashtag || !hasNextPage) return;
-    await loadPage(view.submittedHashtag, view.page + 1);
+    const requestId = ++resultRequestId.current;
+    await loadPage(view.submittedHashtag, view.page + 1, view.type, view.sort, requestId);
   }
 
   return (

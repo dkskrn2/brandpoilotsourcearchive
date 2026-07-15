@@ -357,6 +357,7 @@ a { color: inherit; text-decoration: none; }
 .trend-detail-dialog__copy dt { color: var(--muted); font-size: 12px; font-weight: 700; }
 .trend-detail-dialog__copy dd { margin: 0; overflow-wrap: anywhere; }
 .trend-detail-dialog__footer { border-top: 1px solid var(--line); }
+.trend-detail-dialog__error { color: var(--danger); font-size: 13px; margin-right: auto; }
 
 .panel {
   border: 1px solid var(--line);

@@ -172,6 +172,30 @@ describe("InstagramTrendsPage", () => {
     expect(api.getInstagramTrends).toHaveBeenCalledWith("brand-1", expect.objectContaining({ type: "reel", sort: "comments" }));
   });
 
+  it("does not let an older filter response replace the latest selection", async () => {
+    let resolveImage: ((result: InstagramTrendPage) => void) | undefined;
+    let resolveReel: ((result: InstagramTrendPage) => void) | undefined;
+    const seeded = page([media(1)]);
+    const getInstagramTrends = vi.fn(async (_brandId: string, query: { type: string }) => {
+      if (query.type === "image") return new Promise<InstagramTrendPage>((resolve) => { resolveImage = resolve; });
+      if (query.type === "reel") return new Promise<InstagramTrendPage>((resolve) => { resolveReel = resolve; });
+      return seeded;
+    });
+    await renderTrendPage({ getInstagramTrends, searchInstagramTrends: vi.fn(async () => seeded) });
+    await userEvent.type(await screen.findByRole("textbox", { name: "해시태그" }), "여행콘텐츠");
+    await userEvent.click(screen.getByRole("button", { name: "검색" }));
+    await screen.findByText("@creator1");
+
+    await userEvent.click(screen.getByRole("button", { name: "이미지" }));
+    await userEvent.click(screen.getByRole("button", { name: "릴스" }));
+    await act(async () => resolveReel?.(page([media(3, { kind: "reel" })])));
+    expect(await screen.findByText("@creator3")).toBeVisible();
+    await act(async () => resolveImage?.(page([media(2, { kind: "image" })])));
+
+    expect(screen.getByText("@creator3")).toBeVisible();
+    expect(screen.queryByText("@creator2")).not.toBeInTheDocument();
+  });
+
   it("shows 20 client rows and requests the next page from the database", async () => {
     const firstPage = page(Array.from({ length: 21 }, (_, index) => media(index + 1)), { total: 21 });
     const secondPage = page([media(22)], { page: 2, total: 22 });
@@ -207,6 +231,44 @@ describe("InstagramTrendsPage", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "참고 소스로 저장" }));
     expect(await within(dialog).findByRole("button", { name: "저장됨" })).toBeDisabled();
     expect(api.saveInstagramTrendSource).toHaveBeenCalledWith("brand-1", "media-1");
+  });
+
+  it("shows a retryable error when saving a source fails", async () => {
+    const item = media(1);
+    await renderTrendPage({
+      getInstagramTrends: vi.fn(async () => page([item])),
+      searchInstagramTrends: vi.fn(async () => page([item])),
+      saveInstagramTrendSource: vi.fn(async () => { throw new Error("network_error"); })
+    });
+    await userEvent.type(await screen.findByRole("textbox", { name: "해시태그" }), "여행콘텐츠");
+    await userEvent.click(screen.getByRole("button", { name: "검색" }));
+    await userEvent.click(await screen.findByRole("button", { name: "상세 보기 @creator1" }));
+    const dialog = screen.getByRole("dialog", { name: "Instagram 트렌드 상세" });
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "참고 소스로 저장" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("참고 소스로 저장하지 못했습니다. 다시 시도하세요.");
+    expect(within(dialog).getByRole("button", { name: "참고 소스로 저장" })).toBeEnabled();
+  });
+
+  it("keeps keyboard focus inside the detail dialog and restores it on close", async () => {
+    const item = media(1);
+    await renderTrendPage({
+      getInstagramTrends: vi.fn(async () => page([item])),
+      searchInstagramTrends: vi.fn(async () => page([item]))
+    });
+    await userEvent.type(await screen.findByRole("textbox", { name: "해시태그" }), "여행콘텐츠");
+    await userEvent.click(screen.getByRole("button", { name: "검색" }));
+    const card = await screen.findByRole("button", { name: "상세 보기 @creator1" });
+    await userEvent.click(card);
+    const dialog = screen.getByRole("dialog", { name: "Instagram 트렌드 상세" });
+    const saveButton = within(dialog).getByRole("button", { name: "참고 소스로 저장" });
+    saveButton.focus();
+
+    await userEvent.tab();
+    expect(within(dialog).getByRole("button", { name: "닫기" })).toHaveFocus();
+    await userEvent.click(within(dialog).getByRole("button", { name: "닫기" }));
+    expect(card).toHaveFocus();
   });
 
   it("falls back when media fails or is expired", async () => {

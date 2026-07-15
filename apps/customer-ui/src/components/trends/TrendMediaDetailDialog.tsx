@@ -18,29 +18,64 @@ export function TrendMediaDetailDialog({
   onClose: () => void;
   onSave: () => Promise<{ alreadySaved: boolean }>;
 }) {
+  const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
   const [previewFailed, setPreviewFailed] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(media.isSaved);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const isVideo = media.kind === "video" || media.kind === "reel";
   const previewUrl = media.previewUrl ?? media.mediaUrl;
+  onCloseRef.current = onClose;
 
   useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     closeRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        ) ?? []
+      );
+      if (focusable.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previousFocus?.focus();
+    };
+  }, []);
 
   async function saveSource() {
     if (saved || isSaving) return;
     setIsSaving(true);
+    setSaveError(null);
     try {
-      const result = await onSave();
+      await onSave();
       setSaved(true);
-      if (result.alreadySaved) setSaved(true);
+    } catch {
+      setSaveError("참고 소스로 저장하지 못했습니다. 다시 시도하세요.");
     } finally {
       setIsSaving(false);
     }
@@ -48,7 +83,7 @@ export function TrendMediaDetailDialog({
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
-      <section className="modal-panel trend-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="trend-detail-title">
+      <section ref={dialogRef} className="modal-panel trend-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="trend-detail-title">
         <header className="trend-detail-dialog__header">
           <div>
             <h2 id="trend-detail-title">Instagram 트렌드 상세</h2>
@@ -81,6 +116,7 @@ export function TrendMediaDetailDialog({
           </div>
         </div>
         <footer className="trend-detail-dialog__footer">
+          {saveError ? <span className="trend-detail-dialog__error" role="alert">{saveError}</span> : null}
           <a className="button" href={media.permalink} target="_blank" rel="noreferrer">Instagram에서 보기</a>
           <button className="button primary" type="button" disabled={saved || isSaving} onClick={saveSource}>
             {saved ? "저장됨" : isSaving ? "저장 중..." : "참고 소스로 저장"}
