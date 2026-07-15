@@ -581,3 +581,22 @@ test("Instagram trend smoke는 비-2xx secret payload를 출력하지 않는다"
     await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   }
 });
+
+test("Instagram trend smoke는 세션 쿠키를 비보안 원격 API로 보내지 않는다", async () => {
+  await assert.rejects(
+    execFileAsync(process.execPath, ["scripts/instagram-trend-smoke.mjs"], {
+      env: {
+        ...process.env,
+        BRAND_PILOT_API_URL: "http://example.com",
+        BRAND_PILOT_SESSION_COOKIE: "bp_session=must-not-be-sent",
+        BRAND_PILOT_SMOKE_BRAND_ID: "brand-smoke",
+        BRAND_PILOT_SMOKE_HASHTAG: "콘텐츠마케팅",
+      },
+    }),
+    (error) => {
+      assert.match(error.stderr, /invalid_environment: BRAND_PILOT_API_URL/);
+      assert.doesNotMatch(error.stderr, /must-not-be-sent/);
+      return true;
+    },
+  );
+});

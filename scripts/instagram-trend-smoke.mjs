@@ -19,7 +19,22 @@ function getEnvironment() {
   if (missing.length > 0) {
     throw new Error(`missing_environment: ${missing.join(", ")}`);
   }
+  config.BRAND_PILOT_API_URL = validateApiBaseUrl(config.BRAND_PILOT_API_URL);
   return config;
+}
+
+function validateApiBaseUrl(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("invalid_environment: BRAND_PILOT_API_URL");
+  }
+  const isLoopback = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(url.hostname);
+  if ((url.protocol !== "https:" && !(url.protocol === "http:" && isLoopback)) || url.username || url.password) {
+    throw new Error("invalid_environment: BRAND_PILOT_API_URL");
+  }
+  return url.toString();
 }
 
 function assertSafeJson(value, path = "$", seen = new WeakSet()) {
@@ -64,6 +79,7 @@ async function apiRequest(config, path, options = {}) {
   try {
     response = await fetch(apiUrl(config.BRAND_PILOT_API_URL, path), {
       method,
+      redirect: "error",
       headers: {
         accept: "application/json",
         cookie: config.BRAND_PILOT_SESSION_COOKIE,
