@@ -308,6 +308,10 @@ export function createInstagramTrendRepository(input: {
         return pageFor(brandId, hashtagRow, { hashtag: search.hashtag, type: "all", sort: "meta", page: 1 }, "cache", false, client);
       }
 
+      await client.query(
+        `select pg_advisory_xact_lock(hashtextextended($1, 0)) as locked`,
+        [`instagram-trend-quota:${connection.brand_channel_id}`],
+      );
       const cutoff = new Date(searchedAt.getTime() - QUOTA_WINDOW_MS);
       const quota = await client.query(
         `select

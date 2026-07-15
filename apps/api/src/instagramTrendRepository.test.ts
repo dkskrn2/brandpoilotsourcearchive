@@ -106,6 +106,7 @@ describe("createInstagramTrendRepository", () => {
       if (sql.includes("from instagram_trend_hashtags") && sql.includes("normalized_tag")) return result([stale]);
       if (sql.includes("insert into instagram_trend_hashtags")) return result([stale]);
       if (sql.includes("pg_try_advisory_xact_lock")) return result([{ locked: true }]);
+      if (sql.includes("pg_advisory_xact_lock")) return result([{ locked: true }]);
       if (sql.includes("as quota_count")) return result([{ quota_count: 30, current_active: false }]);
       throw new Error(`unexpected query: ${sql}`);
     });
@@ -174,6 +175,7 @@ describe("createInstagramTrendRepository", () => {
             }
             return result([{ locked: lockOwner === clientId }]);
           }
+          if (sql.includes("pg_advisory_xact_lock")) return result([{ locked: true }]);
           if (sql.includes("as quota_count")) return result([{ quota_count: 0, current_active: false }]);
           if (sql.includes("insert into instagram_trend_media")) return result([{ id: "media-1" }]);
           if (sql.includes("delete from instagram_trend_hashtag_media")) return result();
@@ -223,6 +225,103 @@ describe("createInstagramTrendRepository", () => {
     expect(secondPage.source).toBe("cache");
   });
 
+  it("serializes quota checks for distinct hashtags at the 30th-slot boundary", async () => {
+    const firstFetchStarted = deferred();
+    const secondFetchStarted = deferred();
+    const allowFirstFetch = deferred();
+    const quotaWaiters: Array<{ clientId: number; resolve: () => void }> = [];
+    const activeHashtags = new Set(Array.from({ length: 29 }, (_, index) => `existing-${index}`));
+    let quotaLockOwner: number | null = null;
+    let nextClientId = 0;
+
+    function releaseQuotaLock(clientId: number) {
+      if (quotaLockOwner !== clientId) return;
+      const next = quotaWaiters.shift();
+      quotaLockOwner = next?.clientId ?? null;
+      next?.resolve();
+    }
+
+    function createClient() {
+      const clientId = ++nextClientId;
+      let pendingQuotaHashtag: string | null = null;
+      return {
+        release: vi.fn(),
+        query: vi.fn(async (sql: string, values: unknown[] = []) => {
+          const normalizedSql = sql.trim().toLowerCase();
+          if (normalizedSql === "begin") return result();
+          if (normalizedSql === "commit") {
+            if (pendingQuotaHashtag) activeHashtags.add(pendingQuotaHashtag);
+            releaseQuotaLock(clientId);
+            return result();
+          }
+          if (normalizedSql === "rollback") {
+            releaseQuotaLock(clientId);
+            return result();
+          }
+          if (sql.includes("join brand_channels channel")) return result([connected]);
+          if (sql.includes("from instagram_trend_hashtags") && sql.includes("normalized_tag")) {
+            const tag = String(values[0]);
+            return result([{ ...hashtag, id: `hashtag-${tag}`, display_tag: tag, normalized_tag: tag, last_refreshed_at: null }]);
+          }
+          if (sql.includes("pg_try_advisory_xact_lock")) return result([{ locked: true }]);
+          if (sql.includes("pg_advisory_xact_lock") && !sql.includes("pg_try")) {
+            if (quotaLockOwner === null || quotaLockOwner === clientId) {
+              quotaLockOwner = clientId;
+              return result([{ locked: true }]);
+            }
+            await new Promise<void>((resolve) => quotaWaiters.push({ clientId, resolve }));
+            return result([{ locked: true }]);
+          }
+          if (sql.includes("as quota_count")) return result([{ quota_count: activeHashtags.size, current_active: false }]);
+          if (sql.includes("delete from instagram_trend_hashtag_media")) return result();
+          if (sql.includes("update instagram_trend_hashtags")) return result();
+          if (sql.includes("insert into instagram_trend_account_hashtags")) {
+            pendingQuotaHashtag = String(values[3]);
+            return result();
+          }
+          if (sql.includes("insert into brand_trend_searches")) return result();
+          if (sql.includes("count(*)::int as total")) return result([{ total: 0 }]);
+          if (sql.includes("from instagram_trend_hashtag_media relation")) return result();
+          throw new Error(`unexpected query: ${sql}`);
+        }),
+      };
+    }
+
+    let fetchCount = 0;
+    const fetchTopMedia = vi.fn(async () => {
+      fetchCount += 1;
+      if (fetchCount === 1) {
+        firstFetchStarted.resolve();
+        await allowFirstFetch.promise;
+      } else {
+        secondFetchStarted.resolve();
+      }
+      return { metaHashtagId: `meta-${fetchCount}`, media: [] };
+    });
+    const repository = createInstagramTrendRepository({
+      pool: { connect: vi.fn(async () => createClient()), query: vi.fn() } as any,
+      decryptCredential: () => "token",
+      fetchTopMedia,
+      now: () => now,
+    });
+
+    const first = repository.searchInstagramTrends("brand-1", { hashtag: "마케팅" });
+    await firstFetchStarted.promise;
+    const second = repository.searchInstagramTrends("brand-1", { hashtag: "브랜딩" });
+    const earlySecondFetch = await Promise.race([
+      secondFetchStarted.promise.then(() => "called" as const),
+      new Promise<"blocked">((resolve) => setImmediate(() => resolve("blocked"))),
+    ]);
+    allowFirstFetch.resolve();
+    const settled = await Promise.allSettled([first, second]);
+
+    expect(earlySecondFetch).toBe("blocked");
+    expect(fetchTopMedia).toHaveBeenCalledTimes(1);
+    expect(settled[0].status).toBe("fulfilled");
+    expect(settled[1]).toMatchObject({ status: "rejected", reason: new Error("hashtag_search_limit_reached") });
+    expect(activeHashtags.size).toBe(30);
+  });
+
   it("replaces current ranks transactionally after a successful Meta refresh", async () => {
     const stale = { ...hashtag, last_refreshed_at: null };
     const fixture = poolWith((sql) => {
@@ -230,6 +329,7 @@ describe("createInstagramTrendRepository", () => {
       if (sql.includes("from instagram_trend_hashtags") && sql.includes("normalized_tag")) return result([stale]);
       if (sql.includes("insert into instagram_trend_hashtags")) return result([stale]);
       if (sql.includes("pg_try_advisory_xact_lock")) return result([{ locked: true }]);
+      if (sql.includes("pg_advisory_xact_lock")) return result([{ locked: true }]);
       if (sql.includes("as quota_count")) return result([{ quota_count: 0, current_active: false }]);
       if (sql.includes("insert into instagram_trend_media")) return result([{ id: "media-1" }]);
       if (sql.includes("delete from instagram_trend_hashtag_media")) return result();
@@ -260,6 +360,7 @@ describe("createInstagramTrendRepository", () => {
       if (sql.includes("from instagram_trend_hashtags") && sql.includes("normalized_tag")) return result([stale]);
       if (sql.includes("insert into instagram_trend_hashtags")) return result([stale]);
       if (sql.includes("pg_try_advisory_xact_lock")) return result([{ locked: true }]);
+      if (sql.includes("pg_advisory_xact_lock")) return result([{ locked: true }]);
       if (sql.includes("as quota_count")) return result([{ quota_count: 0, current_active: false }]);
       if (sql.includes("set last_error_code")) return result();
       throw new Error(`unexpected query: ${sql}`);
