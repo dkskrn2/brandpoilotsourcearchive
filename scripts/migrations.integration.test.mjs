@@ -29,7 +29,10 @@ const withDatabase = async (callback) => {
 const runMigrationRange = async (database, migrations, firstId, lastId) => {
   for (const migration of migrations) {
     if (migration.id >= firstId && migration.id <= lastId) {
-      if (migration.sql.startsWith("-- requires: pgvector")) continue;
+      if (
+        migration.sql.startsWith("-- requires: pgvector")
+        || migration.id === "027_wiki_search_v2.sql"
+      ) continue;
       await database.exec(migration.sql);
     }
   }
@@ -408,5 +411,279 @@ test("brand profile logo migration adds nullable storage columns and remains ide
       { column_name: "logo_storage_path", is_nullable: "YES" },
       { column_name: "logo_url", is_nullable: "YES" },
     ]);
+  });
+});
+
+test("029 creates the category catalog and Instagram trend cache", async () => {
+  const migrations = await loadMigrations();
+  const migration029 = migrations.find(
+    (migration) => migration.id === "029_instagram_hashtag_trends.sql",
+  );
+
+  assert.ok(migration029, "missing migration 029_instagram_hashtag_trends.sql");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "028_brand_profile_logo.sql",
+    );
+
+    const legacyProfiles = [];
+    for (const industry of ["금융 및 보험업", "서비스", "여행 서비스"]) {
+      const workspace = await database.query(
+        "insert into workspaces (name, slug) values ($1, $2) returning id",
+        [`Legacy ${industry}`, `legacy-${randomUUID()}`],
+      );
+      const brand = await database.query(
+        "insert into brands (workspace_id, name) values ($1, $2) returning id",
+        [workspace.rows[0].id, `Legacy ${industry}`],
+      );
+      const profile = await database.query(
+        "insert into brand_profiles (workspace_id, brand_id, industry) values ($1, $2, $3) returning id",
+        [workspace.rows[0].id, brand.rows[0].id, industry],
+      );
+      legacyProfiles.push({ id: profile.rows[0].id, industry });
+    }
+
+    await database.exec(migration029.sql);
+
+    const counts = await database.query(`
+      select
+        (select count(*)::int from content_categories where active) as categories,
+        (select count(*)::int from content_subcategories where active) as subcategories,
+        (select count(*)::int from content_category_hashtags where active) as hashtags
+    `);
+    assert.deepEqual(counts.rows[0], {
+      categories: 15,
+      subcategories: 105,
+      hashtags: 45,
+    });
+
+    const invalidSeedDistribution = await database.query(`
+      select category.code
+      from content_categories category
+      left join content_subcategories subcategory
+        on subcategory.category_id = category.id and subcategory.active
+      left join content_category_hashtags hashtag
+        on hashtag.category_id = category.id and hashtag.active
+      where category.active
+      group by category.code
+      having count(distinct subcategory.id) <> 7
+        or count(distinct hashtag.id) <> 3
+    `);
+    assert.deepEqual(invalidSeedDistribution.rows, []);
+
+    const columns = await database.query(`
+      select column_name
+      from information_schema.columns
+      where table_name = 'brand_profiles'
+        and column_name in ('industry', 'primary_category_id')
+      order by column_name
+    `);
+    assert.deepEqual(
+      columns.rows.map((row) => row.column_name),
+      ["industry", "primary_category_id"],
+    );
+
+    const expectedTables = [
+      "brand_profile_subcategories",
+      "brand_trend_saved_media",
+      "brand_trend_searches",
+      "content_categories",
+      "content_category_hashtags",
+      "content_subcategories",
+      "instagram_trend_account_hashtags",
+      "instagram_trend_hashtag_media",
+      "instagram_trend_hashtags",
+      "instagram_trend_media",
+    ];
+    const tables = await database.query(
+      `select table_name
+       from information_schema.tables
+       where table_schema = 'public'
+         and table_name = any($1::text[])
+       order by table_name`,
+      [expectedTables],
+    );
+    assert.deepEqual(
+      tables.rows.map((row) => row.table_name),
+      expectedTables,
+    );
+
+    const expectedIndexes = [
+      "brand_profile_subcategories_brand_idx",
+      "brand_profile_subcategories_custom_unique",
+      "brand_profile_subcategories_system_unique",
+      "brand_trend_saved_media_brand_idx",
+      "brand_trend_searches_brand_searched_idx",
+      "content_category_hashtags_unique",
+      "instagram_trend_account_hashtags_channel_quota_idx",
+    ];
+    const indexes = await database.query(
+      `select indexname
+       from pg_indexes
+       where schemaname = 'public'
+         and indexname = any($1::text[])
+       order by indexname`,
+      [expectedIndexes],
+    );
+    assert.deepEqual(
+      indexes.rows.map((row) => row.indexname),
+      expectedIndexes,
+    );
+
+    const expectedConstraints = [
+      "brand_profile_subcategories_custom_name_check",
+      "brand_profile_subcategories_mode_check",
+      "brand_trend_saved_media_brand_id_trend_media_id_key",
+      "brand_trend_saved_media_source_url_id_key",
+      "brand_trend_searches_brand_id_hashtag_id_key",
+      "content_categories_code_key",
+      "content_subcategories_category_id_code_key",
+      "instagram_trend_account_hashtags_channel_hashtag_unique",
+      "instagram_trend_hashtag_media_hashtag_id_meta_rank_key",
+      "instagram_trend_hashtag_media_pkey",
+      "instagram_trend_hashtags_normalized_tag_key",
+      "instagram_trend_media_instagram_media_id_key",
+      "instagram_trend_media_raw_metadata_object_check",
+    ];
+    const constraints = await database.query(
+      `select conname
+       from pg_constraint
+       where conname = any($1::text[])
+       order by conname`,
+      [expectedConstraints],
+    );
+    assert.deepEqual(
+      constraints.rows.map((row) => row.conname),
+      expectedConstraints,
+    );
+
+    const backfill = await database.query(
+      `select profile.industry, category.code as category_code
+       from brand_profiles profile
+       left join content_categories category on category.id = profile.primary_category_id
+       where profile.id = any($1::uuid[])
+       order by profile.industry`,
+      [legacyProfiles.map((profile) => profile.id)],
+    );
+    assert.deepEqual(backfill.rows, [
+      { industry: "금융 및 보험업", category_code: "finance_insurance" },
+      { industry: "서비스", category_code: null },
+      { industry: "여행 서비스", category_code: null },
+    ]);
+
+    const fixture = await database.query(`
+      with workspace as (
+        insert into workspaces (name, slug)
+        values ('Trend Test', 'trend-test-${randomUUID()}')
+        returning id
+      ), brand as (
+        insert into brands (workspace_id, name)
+        select id, 'Trend Test' from workspace
+        returning id, workspace_id
+      ), profile as (
+        insert into brand_profiles (workspace_id, brand_id)
+        select workspace_id, id from brand
+        returning id, workspace_id, brand_id
+      )
+      select profile.id as profile_id,
+             profile.workspace_id,
+             profile.brand_id,
+             subcategory.id as subcategory_id
+      from profile
+      cross join content_subcategories subcategory
+      order by subcategory.sort_order, subcategory.id
+      limit 1
+    `);
+    const fixtureRow = fixture.rows[0];
+
+    await database.query(
+      `insert into brand_profile_subcategories
+         (workspace_id, brand_id, brand_profile_id, subcategory_id)
+       values ($1, $2, $3, $4)`,
+      [
+        fixtureRow.workspace_id,
+        fixtureRow.brand_id,
+        fixtureRow.profile_id,
+        fixtureRow.subcategory_id,
+      ],
+    );
+    await database.query(
+      `insert into brand_profile_subcategories
+         (workspace_id, brand_id, brand_profile_id, custom_name, custom_key)
+       values ($1, $2, $3, '직접 입력', '직접 입력')`,
+      [fixtureRow.workspace_id, fixtureRow.brand_id, fixtureRow.profile_id],
+    );
+
+    await assert.rejects(
+      database.query(
+        `insert into brand_profile_subcategories
+           (workspace_id, brand_id, brand_profile_id, subcategory_id, custom_name, custom_key)
+         values ($1, $2, $3, $4, '잘못된 입력', '잘못된 입력')`,
+        [
+          fixtureRow.workspace_id,
+          fixtureRow.brand_id,
+          fixtureRow.profile_id,
+          fixtureRow.subcategory_id,
+        ],
+      ),
+      /brand_profile_subcategories_mode_check/,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into brand_profile_subcategories
+           (workspace_id, brand_id, brand_profile_id)
+         values ($1, $2, $3)`,
+        [fixtureRow.workspace_id, fixtureRow.brand_id, fixtureRow.profile_id],
+      ),
+      /brand_profile_subcategories_mode_check/,
+    );
+
+    const hashtag = await database.query(
+      `insert into instagram_trend_hashtags (normalized_tag, display_tag)
+       values ('trendtest', 'trendtest') returning id`,
+    );
+    const firstMedia = await database.query(
+      `insert into instagram_trend_media
+         (instagram_media_id, media_type, permalink, last_fetched_at)
+       values ('meta-media-1', 'IMAGE', 'https://instagram.com/p/1', now())
+       returning id`,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into instagram_trend_media
+           (instagram_media_id, media_type, permalink, last_fetched_at)
+         values ('meta-media-1', 'VIDEO', 'https://instagram.com/p/duplicate', now())`,
+      ),
+      /instagram_trend_media_instagram_media_id_key/,
+    );
+
+    const secondMedia = await database.query(
+      `insert into instagram_trend_media
+         (instagram_media_id, media_type, permalink, last_fetched_at)
+       values ('meta-media-2', 'VIDEO', 'https://instagram.com/p/2', now())
+       returning id`,
+    );
+    await database.query(
+      `insert into instagram_trend_hashtag_media
+         (hashtag_id, media_id, meta_rank, first_seen_at, last_seen_at)
+       values ($1, $2, 1, now(), now())`,
+      [hashtag.rows[0].id, firstMedia.rows[0].id],
+    );
+    await assert.rejects(
+      database.query(
+        `insert into instagram_trend_hashtag_media
+           (hashtag_id, media_id, meta_rank, first_seen_at, last_seen_at)
+         values ($1, $2, 1, now(), now())`,
+        [hashtag.rows[0].id, secondMedia.rows[0].id],
+      ),
+      /instagram_trend_hashtag_media_hashtag_id_meta_rank_key/,
+    );
+
+    const schemaSmokeSql = await readFile("db/smoke/001_schema_smoke.sql", "utf8");
+    await database.exec(schemaSmokeSql);
   });
 });

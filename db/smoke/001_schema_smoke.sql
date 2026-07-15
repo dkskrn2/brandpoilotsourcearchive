@@ -27,7 +27,17 @@ declare
     'publish_attempts',
     'support_requests',
     'audit_events',
-    'source_crawl_runs'
+    'source_crawl_runs',
+    'content_categories',
+    'content_subcategories',
+    'content_category_hashtags',
+    'brand_profile_subcategories',
+    'instagram_trend_hashtags',
+    'instagram_trend_media',
+    'instagram_trend_hashtag_media',
+    'brand_trend_searches',
+    'instagram_trend_account_hashtags',
+    'brand_trend_saved_media'
   ];
   expected_table text;
   missing_table_count int;
@@ -43,7 +53,14 @@ declare
     'publish_queue_idempotency_key_unique',
     'source_crawl_runs_run_key_unique',
     'source_crawl_runs_one_running_per_source_unique',
-    'source_crawl_runs_retry_due_idx'
+    'source_crawl_runs_retry_due_idx',
+    'content_category_hashtags_unique',
+    'brand_profile_subcategories_system_unique',
+    'brand_profile_subcategories_custom_unique',
+    'brand_profile_subcategories_brand_idx',
+    'brand_trend_searches_brand_searched_idx',
+    'instagram_trend_account_hashtags_channel_quota_idx',
+    'brand_trend_saved_media_brand_idx'
   ];
   index_name text;
   missing_index_count int;
@@ -58,10 +75,26 @@ declare
     'channel_outputs_status_check',
     'jobs_status_check',
     'publish_queue_status_check',
-    'support_requests_status_check'
+    'support_requests_status_check',
+    'brand_profiles_primary_category_id_fkey',
+    'content_categories_code_key',
+    'content_subcategories_category_id_code_key',
+    'brand_profile_subcategories_mode_check',
+    'brand_profile_subcategories_custom_name_check',
+    'instagram_trend_media_media_type_check',
+    'instagram_trend_media_raw_metadata_object_check',
+    'instagram_trend_hashtags_normalized_tag_key',
+    'instagram_trend_media_instagram_media_id_key',
+    'instagram_trend_hashtag_media_pkey',
+    'instagram_trend_hashtag_media_hashtag_id_meta_rank_key',
+    'brand_trend_searches_brand_id_hashtag_id_key',
+    'instagram_trend_account_hashtags_channel_hashtag_unique',
+    'brand_trend_saved_media_brand_id_trend_media_id_key',
+    'brand_trend_saved_media_source_url_id_key'
   ];
   constraint_name text;
   missing_constraint_count int;
+  missing_column_count int;
 begin
   foreach expected_table in array expected_tables loop
     select count(*)
@@ -97,6 +130,17 @@ begin
       raise exception 'Missing expected constraint: %', constraint_name;
     end if;
   end loop;
+
+  select count(*)
+  into missing_column_count
+  from information_schema.columns
+  where table_schema = 'public'
+    and table_name = 'brand_profiles'
+    and column_name = 'primary_category_id';
+
+  if missing_column_count = 0 then
+    raise exception 'Missing expected column: brand_profiles.primary_category_id';
+  end if;
 end;
 $$;
 
