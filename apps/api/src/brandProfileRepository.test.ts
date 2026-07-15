@@ -75,6 +75,43 @@ describe("brand profile content categories", () => {
     expect(statements.join("\n")).not.toMatch(/\bindustry\b/);
   });
 
+  it("clears prior category relationships when only primaryCategoryCode is supplied", async () => {
+    const statements: Array<{ sql: string; values: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      statements.push({ sql, values: values ?? [] });
+      if (["begin", "commit", "rollback"].includes(sql.trim())) return { rowCount: 0, rows: [] };
+      if (sql.includes("for update")) return { rowCount: 1, rows: [{ ...profileRow, primary_category_id: "old-category" }] };
+      if (sql.includes("from content_categories")) return { rowCount: 1, rows: [{ id: "new-category" }] };
+      if (sql.includes("select bp.id as profile_id")) return { rowCount: 1, rows: [profileRow] };
+      return { rowCount: 1, rows: [] };
+    });
+
+    await createRepository(poolFor(query) as any).updateBrandProfile("brand-1", {
+      primaryCategoryCode: "business_professional"
+    });
+
+    expect(statements.some(({ sql }) => sql.includes("delete from brand_profile_subcategories"))).toBe(true);
+    expect(statements.some(({ sql }) => sql.includes("insert into brand_profile_subcategories"))).toBe(false);
+  });
+
+  it("preserves category and selections when neither category field is supplied", async () => {
+    const statements: Array<{ sql: string; values: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      statements.push({ sql, values: values ?? [] });
+      if (["begin", "commit", "rollback"].includes(sql.trim())) return { rowCount: 0, rows: [] };
+      if (sql.includes("for update")) return { rowCount: 1, rows: [{ ...profileRow, primary_category_id: "existing-category" }] };
+      if (sql.includes("select bp.id as profile_id")) return { rowCount: 1, rows: [profileRow] };
+      return { rowCount: 1, rows: [] };
+    });
+
+    await createRepository(poolFor(query) as any).updateBrandProfile("brand-1", { tone: "차분함" });
+
+    expect(statements.some(({ sql }) => sql.includes("delete from brand_profile_subcategories"))).toBe(false);
+    expect(statements.some(({ sql }) => sql.includes("insert into brand_profile_subcategories"))).toBe(false);
+    const update = statements.find(({ sql }) => sql.includes("update brand_profiles"));
+    expect(update?.values[1]).toBe("existing-category");
+  });
+
   it.each([
     ["invalid_primary_category", { primaryCategoryCode: "missing" }],
     ["too_many_subcategories", { subcategories: Array.from({ length: 6 }, (_, index) => ({ type: "custom" as const, name: `custom-${index}` })) }],

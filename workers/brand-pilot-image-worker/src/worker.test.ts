@@ -205,6 +205,31 @@ describe("image worker", () => {
     });
   });
 
+  it("maps a legacy image job without categoryContext to 미설정 without reading industry", async () => {
+    const job = claimedJob();
+    delete (job.payload.brand as Record<string, unknown>).categoryContext;
+    (job.payload.brand as Record<string, unknown>).industry = "legacy travel";
+    const client = workerClient(job);
+    let renderedJob: ClaimedImageJob | undefined;
+    const renderer = { renderJob: vi.fn(async (preparedJob: ClaimedImageJob) => {
+      renderedJob = preparedJob;
+      return feedPackage();
+    }) };
+    const storage = { upload: vi.fn(async () => ({ manifestUrl: "https://blob.example.com/manifest.json" })) };
+
+    await runOnce({
+      workerId: "worker-1",
+      client,
+      renderer,
+      storage,
+      readSource: vi.fn(async () => fetchedSource)
+    });
+
+    const prompt = String(renderedJob?.payload.prompt);
+    expect(prompt).toContain('"categoryContext": "미설정"');
+    expect(prompt).not.toContain("legacy travel");
+  });
+
   it("continues rendering when the representative URL is unavailable", async () => {
     const client = workerClient();
     const renderer = { renderJob: vi.fn(async () => feedPackage()) };

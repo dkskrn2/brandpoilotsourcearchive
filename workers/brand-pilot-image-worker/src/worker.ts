@@ -149,7 +149,7 @@ function promptInputFor(
     },
     brand: {
       name: requiredText(brand, "name"),
-      categoryContext: nullableText(brand, "categoryContext"),
+      categoryContext: nullableText(brand, "categoryContext") ?? "미설정",
       primaryCustomer: nullableText(brand, "primaryCustomer"),
       description: nullableText(brand, "description"),
       tone: nullableText(brand, "tone"),

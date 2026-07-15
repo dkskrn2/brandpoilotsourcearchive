@@ -1512,11 +1512,12 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           primaryCategoryId = category.rows[0].id;
         }
 
-        if (input.subcategories !== undefined) {
+        if (input.subcategories !== undefined || input.primaryCategoryCode !== undefined) {
+          const selectedSubcategories = input.subcategories ?? [];
           if (!primaryCategoryId) throw new Error("invalid_primary_category");
-          if (input.subcategories.length > 5) throw new Error("too_many_subcategories");
-          const systemInputs = input.subcategories.filter((item) => item.type === "system");
-          const customInputs = input.subcategories.filter((item) => item.type === "custom");
+          if (selectedSubcategories.length > 5) throw new Error("too_many_subcategories");
+          const systemInputs = selectedSubcategories.filter((item) => item.type === "system");
+          const customInputs = selectedSubcategories.filter((item) => item.type === "custom");
           const normalizedCustom = customInputs.map((item) => normalizeCustomSubcategory(item.name));
           if (normalizedCustom.some((item) => item.name.length < 1 || Array.from(item.name).length > 30)) {
             throw new Error("brand_subcategory_too_long");
