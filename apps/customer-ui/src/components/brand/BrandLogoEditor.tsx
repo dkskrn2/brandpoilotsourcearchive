@@ -91,6 +91,10 @@ export function BrandLogoEditor({
 
   return (
     <div className="brand-logo-editor">
+      <div className="brand-logo-editor-heading">
+        <strong>브랜드 이미지</strong>
+        <span>선택 입력</span>
+      </div>
       <BrandLogo brandName={profile.name} logoUrl={profile.logoUrl} className="brand-logo-editor-preview" />
       <div className="brand-logo-editor-actions">
         <label className={`button${isWorking || disabled ? " is-disabled" : ""}`}>
@@ -114,7 +118,7 @@ export function BrandLogoEditor({
           </button>
         ) : null}
       </div>
-      <p className="brand-logo-editor-help">PNG, JPEG, WebP · 최대 2MB · 정사각형 권장</p>
+      <p className="brand-logo-editor-help">등록하지 않아도 시작할 수 있습니다. PNG, JPEG, WebP · 최대 2MB · 정사각형 권장</p>
       {error ? <p className="brand-logo-editor-error" role="alert">{error}</p> : null}
     </div>
   );

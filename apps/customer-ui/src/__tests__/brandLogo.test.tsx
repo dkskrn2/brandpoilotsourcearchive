@@ -49,6 +49,14 @@ describe("SidebarBrandProfile", () => {
 });
 
 describe("BrandLogoEditor", () => {
+  it("marks brand image as optional", () => {
+    render(<BrandLogoEditor profile={{ ...profile, logoUrl: null }} onProfileChange={vi.fn()} />);
+
+    expect(screen.getByText("브랜드 이미지")).toBeVisible();
+    expect(screen.getByText("선택 입력")).toBeVisible();
+    expect(screen.getByText(/등록하지 않아도 시작할 수 있습니다/)).toBeVisible();
+  });
+
   it("uploads a supported image immediately and returns the updated profile", async () => {
     const updated = { ...profile, logoUrl: "https://cdn.example.com/new.png" };
     const client = {
