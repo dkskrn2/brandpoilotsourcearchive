@@ -535,15 +535,22 @@ test("029 creates the category catalog and Instagram trend cache", async () => {
     );
 
     const expectedConstraints = [
+      "brand_channels_tenant_identity_unique",
       "brand_profile_subcategories_custom_name_check",
       "brand_profile_subcategories_mode_check",
+      "brand_profile_subcategories_profile_owner_fkey",
+      "brand_profiles_tenant_identity_unique",
       "brand_trend_saved_media_brand_id_trend_media_id_key",
+      "brand_trend_saved_media_source_owner_fkey",
       "brand_trend_saved_media_source_url_id_key",
       "brand_trend_searches_brand_id_hashtag_id_key",
+      "brand_trend_searches_brand_owner_fkey",
       "brand_trend_searches_search_count_check",
+      "brands_tenant_identity_unique",
       "content_categories_code_key",
       "content_subcategories_category_id_code_key",
       "instagram_trend_account_hashtags_channel_hashtag_unique",
+      "instagram_trend_account_hashtags_channel_owner_fkey",
       "instagram_trend_hashtag_media_hashtag_id_meta_rank_key",
       "instagram_trend_hashtag_media_meta_rank_check",
       "instagram_trend_hashtag_media_pkey",
@@ -553,6 +560,7 @@ test("029 creates the category catalog and Instagram trend cache", async () => {
       "instagram_trend_media_like_count_check",
       "instagram_trend_media_media_type_check",
       "instagram_trend_media_raw_metadata_object_check",
+      "source_urls_tenant_identity_unique",
     ];
     const constraints = await database.query(
       `select conname
@@ -604,6 +612,51 @@ test("029 creates the category catalog and Instagram trend cache", async () => {
       limit 1
     `);
     const fixtureRow = fixture.rows[0];
+
+    const otherWorkspace = await database.query(
+      "insert into workspaces (name, slug) values ('Other Tenant', $1) returning id",
+      [`other-tenant-${randomUUID()}`],
+    );
+    const otherBrand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Other Brand') returning id",
+      [otherWorkspace.rows[0].id],
+    );
+    const otherProfile = await database.query(
+      `insert into brand_profiles (workspace_id, brand_id)
+       values ($1, $2) returning id`,
+      [otherWorkspace.rows[0].id, otherBrand.rows[0].id],
+    );
+    const otherChannel = await database.query(
+      `insert into brand_channels (workspace_id, brand_id, channel)
+       values ($1, $2, 'instagram') returning id`,
+      [otherWorkspace.rows[0].id, otherBrand.rows[0].id],
+    );
+    const otherSource = await database.query(
+      `insert into source_urls
+         (workspace_id, brand_id, source_type, url, url_hash)
+       values ($1, $2, 'reference', $3, $4) returning id`,
+      [
+        otherWorkspace.rows[0].id,
+        otherBrand.rows[0].id,
+        `https://example.com/${randomUUID()}`,
+        randomUUID(),
+      ],
+    );
+
+    await assert.rejects(
+      database.query(
+        `insert into brand_profile_subcategories
+           (workspace_id, brand_id, brand_profile_id, subcategory_id)
+         values ($1, $2, $3, $4)`,
+        [
+          fixtureRow.workspace_id,
+          fixtureRow.brand_id,
+          otherProfile.rows[0].id,
+          fixtureRow.subcategory_id,
+        ],
+      ),
+      /brand_profile_subcategories_profile_owner_fkey/,
+    );
 
     await database.query(
       `insert into brand_profile_subcategories
@@ -679,6 +732,48 @@ test("029 creates the category catalog and Instagram trend cache", async () => {
          (instagram_media_id, media_type, permalink, last_fetched_at)
        values ('meta-media-1', 'IMAGE', 'https://instagram.com/p/1', now())
        returning id`,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into brand_trend_searches
+           (workspace_id, brand_id, hashtag_id, last_searched_at)
+         values ($1, $2, $3, now())`,
+        [
+          fixtureRow.workspace_id,
+          otherBrand.rows[0].id,
+          hashtag.rows[0].id,
+        ],
+      ),
+      /brand_trend_searches_brand_owner_fkey/,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into instagram_trend_account_hashtags
+           (workspace_id, brand_id, brand_channel_id, hashtag_id,
+            quota_window_started_at, last_meta_queried_at)
+         values ($1, $2, $3, $4, now(), now())`,
+        [
+          fixtureRow.workspace_id,
+          fixtureRow.brand_id,
+          otherChannel.rows[0].id,
+          hashtag.rows[0].id,
+        ],
+      ),
+      /instagram_trend_account_hashtags_channel_owner_fkey/,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into brand_trend_saved_media
+           (workspace_id, brand_id, trend_media_id, source_url_id)
+         values ($1, $2, $3, $4)`,
+        [
+          fixtureRow.workspace_id,
+          fixtureRow.brand_id,
+          firstMedia.rows[0].id,
+          otherSource.rows[0].id,
+        ],
+      ),
+      /brand_trend_saved_media_source_owner_fkey/,
     );
     await assert.rejects(
       database.query(
@@ -776,4 +871,37 @@ test("029 creates the category catalog and Instagram trend cache", async () => {
     }
     await database.exec(schemaSmokeSql);
   });
+});
+
+test("029 remains inside the migration runner transaction", async () => {
+  const migrations = await loadMigrations();
+  const initialMigration = migrations.find(
+    (migration) => migration.id === "001_initial_schema.sql",
+  );
+  const migration029 = migrations.find(
+    (migration) => migration.id === "029_instagram_hashtag_trends.sql",
+  );
+
+  assert.ok(initialMigration);
+  assert.ok(migration029);
+
+  await withDatabase(async (database) => {
+    await database.exec(initialMigration.sql);
+    await database.exec("begin");
+    await database.exec(migration029.sql);
+
+    const insideTransaction = await database.query(
+      "select to_regclass('public.content_categories')::text as relation",
+    );
+    assert.equal(insideTransaction.rows[0].relation, "content_categories");
+
+    await database.exec("rollback");
+
+    const afterRollback = await database.query(
+      "select to_regclass('public.content_categories')::text as relation",
+    );
+    assert.equal(afterRollback.rows[0].relation, null);
+  });
+
+  assert.doesNotMatch(migration029.sql, /^\s*(?:begin|commit)\s*;/im);
 });

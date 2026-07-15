@@ -76,11 +76,16 @@ declare
     'jobs_status_check',
     'publish_queue_status_check',
     'support_requests_status_check',
+    'brands_tenant_identity_unique',
+    'brand_profiles_tenant_identity_unique',
+    'brand_channels_tenant_identity_unique',
+    'source_urls_tenant_identity_unique',
     'brand_profiles_primary_category_id_fkey',
     'content_categories_code_key',
     'content_subcategories_category_id_code_key',
     'brand_profile_subcategories_mode_check',
     'brand_profile_subcategories_custom_name_check',
+    'brand_profile_subcategories_profile_owner_fkey',
     'instagram_trend_media_media_type_check',
     'instagram_trend_media_like_count_check',
     'instagram_trend_media_comments_count_check',
@@ -92,9 +97,12 @@ declare
     'instagram_trend_hashtag_media_meta_rank_check',
     'brand_trend_searches_brand_id_hashtag_id_key',
     'brand_trend_searches_search_count_check',
+    'brand_trend_searches_brand_owner_fkey',
     'instagram_trend_account_hashtags_channel_hashtag_unique',
+    'instagram_trend_account_hashtags_channel_owner_fkey',
     'brand_trend_saved_media_brand_id_trend_media_id_key',
-    'brand_trend_saved_media_source_url_id_key'
+    'brand_trend_saved_media_source_url_id_key',
+    'brand_trend_saved_media_source_owner_fkey'
   ];
   constraint_name text;
   missing_constraint_count int;

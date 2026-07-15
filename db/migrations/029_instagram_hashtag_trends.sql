@@ -1,5 +1,3 @@
-begin;
-
 create table content_categories (
   id uuid primary key default gen_random_uuid(),
   code text not null unique,
@@ -43,11 +41,27 @@ create unique index content_category_hashtags_unique
 alter table brand_profiles
   add column primary_category_id uuid null references content_categories(id);
 
+alter table brands
+  add constraint brands_tenant_identity_unique
+    unique (id, workspace_id);
+
+alter table brand_profiles
+  add constraint brand_profiles_tenant_identity_unique
+    unique (id, workspace_id, brand_id);
+
+alter table brand_channels
+  add constraint brand_channels_tenant_identity_unique
+    unique (id, workspace_id, brand_id);
+
+alter table source_urls
+  add constraint source_urls_tenant_identity_unique
+    unique (id, workspace_id, brand_id);
+
 create table brand_profile_subcategories (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id),
   brand_id uuid not null references brands(id) on delete cascade,
-  brand_profile_id uuid not null references brand_profiles(id) on delete cascade,
+  brand_profile_id uuid not null,
   subcategory_id uuid null references content_subcategories(id),
   custom_name text null,
   custom_key text null,
@@ -59,7 +73,11 @@ create table brand_profile_subcategories (
   ),
   constraint brand_profile_subcategories_custom_name_check check (
     custom_name is null or char_length(btrim(custom_name)) between 1 and 30
-  )
+  ),
+  constraint brand_profile_subcategories_profile_owner_fkey
+    foreign key (brand_profile_id, workspace_id, brand_id)
+    references brand_profiles(id, workspace_id, brand_id)
+    on delete cascade
 );
 
 create unique index brand_profile_subcategories_system_unique
@@ -114,12 +132,16 @@ create table instagram_trend_hashtag_media (
 create table brand_trend_searches (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id),
-  brand_id uuid not null references brands(id) on delete cascade,
+  brand_id uuid not null,
   hashtag_id uuid not null references instagram_trend_hashtags(id) on delete cascade,
   is_favorite boolean not null default false,
   last_searched_at timestamptz not null,
   search_count integer not null default 1 check (search_count > 0),
-  unique (brand_id, hashtag_id)
+  unique (brand_id, hashtag_id),
+  constraint brand_trend_searches_brand_owner_fkey
+    foreign key (brand_id, workspace_id)
+    references brands(id, workspace_id)
+    on delete cascade
 );
 
 create index brand_trend_searches_brand_searched_idx
@@ -129,12 +151,16 @@ create table instagram_trend_account_hashtags (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id),
   brand_id uuid not null references brands(id) on delete cascade,
-  brand_channel_id uuid not null references brand_channels(id) on delete cascade,
+  brand_channel_id uuid not null,
   hashtag_id uuid not null references instagram_trend_hashtags(id) on delete cascade,
   quota_window_started_at timestamptz not null,
   last_meta_queried_at timestamptz not null,
   constraint instagram_trend_account_hashtags_channel_hashtag_unique
-    unique (brand_channel_id, hashtag_id)
+    unique (brand_channel_id, hashtag_id),
+  constraint instagram_trend_account_hashtags_channel_owner_fkey
+    foreign key (brand_channel_id, workspace_id, brand_id)
+    references brand_channels(id, workspace_id, brand_id)
+    on delete cascade
 );
 
 create index instagram_trend_account_hashtags_channel_quota_idx
@@ -145,10 +171,14 @@ create table brand_trend_saved_media (
   workspace_id uuid not null references workspaces(id),
   brand_id uuid not null references brands(id) on delete cascade,
   trend_media_id uuid not null references instagram_trend_media(id) on delete cascade,
-  source_url_id uuid not null references source_urls(id) on delete cascade,
+  source_url_id uuid not null,
   created_at timestamptz not null default now(),
   unique (brand_id, trend_media_id),
-  unique (source_url_id)
+  unique (source_url_id),
+  constraint brand_trend_saved_media_source_owner_fkey
+    foreign key (source_url_id, workspace_id, brand_id)
+    references source_urls(id, workspace_id, brand_id)
+    on delete cascade
 );
 
 create index brand_trend_saved_media_brand_idx
@@ -400,5 +430,3 @@ for each row execute function set_updated_at();
 create trigger instagram_trend_media_set_updated_at
 before update on instagram_trend_media
 for each row execute function set_updated_at();
-
-commit;
