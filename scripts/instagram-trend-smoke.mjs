@@ -53,8 +53,7 @@ async function readJsonResponse(response, method, path) {
   }
   assertSafeJson(payload);
   if (!response.ok) {
-    const errorCode = typeof payload?.error === "string" ? payload.error : "unknown_error";
-    throw new Error(`request_failed: ${method} ${path} status=${response.status} error=${errorCode}`);
+    throw new Error(`request_failed: ${method} status=${response.status}`);
   }
   return payload;
 }

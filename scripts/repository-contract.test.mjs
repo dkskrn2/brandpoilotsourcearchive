@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { access, readFile, readdir } from "node:fs/promises";
+import { createServer } from "node:http";
+import { promisify } from "node:util";
 import { test } from "node:test";
 
+const execFileAsync = promisify(execFile);
 const readJson = async (path) => JSON.parse(await readFile(path, "utf8"));
 
 const extractAddedCheckConstraintBody = (sql, table, constraint) => {
@@ -543,4 +547,37 @@ test("루트 패키지는 Instagram trend smoke 명령을 정의한다", async (
     packageJson.scripts["smoke:instagram-trends"],
     "node scripts/instagram-trend-smoke.mjs",
   );
+});
+
+test("Instagram trend smoke는 비-2xx secret payload를 출력하지 않는다", async () => {
+  const secret = "server-secret-must-not-escape";
+  const server = createServer((_request, response) => {
+    response.writeHead(500, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: secret }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    await assert.rejects(
+      execFileAsync(process.execPath, ["scripts/instagram-trend-smoke.mjs"], {
+        env: {
+          ...process.env,
+          BRAND_PILOT_API_URL: `http://127.0.0.1:${address.port}`,
+          BRAND_PILOT_SESSION_COOKIE: "bp_session=contract-test",
+          BRAND_PILOT_SMOKE_BRAND_ID: "brand-1",
+          BRAND_PILOT_SMOKE_HASHTAG: "contract-test",
+        },
+      }),
+      (error) => {
+        const output = `${error.stdout ?? ""}\n${error.stderr ?? ""}`;
+        assert.doesNotMatch(output, new RegExp(secret));
+        assert.match(output, /request_failed: POST status=500/);
+        return true;
+      },
+    );
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
 });
