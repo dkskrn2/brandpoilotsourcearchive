@@ -164,7 +164,46 @@ describe("Wiki build item worker", () => {
     }));
   });
 
-  it("fails the building version when owned-source curation fails", async () => {
+  it("falls back to source-only guide chunks when owned-source curation times out", async () => {
+    const claimed = { ...item, source_kind: "owned_snapshot" as const };
+    const db = wikiDb({
+      claimWikiBuildItem: vi.fn(async () => claimed),
+      getWikiBuildSource: vi.fn(async () => ({
+        source_kind: "owned_snapshot" as const,
+        source_id: "source-1",
+        title: "배송 안내",
+        content: "배송 정책에 대한 충분히 긴 원문입니다. ".repeat(12),
+        content_hash: "snapshot-hash",
+        aliases: [],
+        keywords: [],
+        structured_data: {},
+        source_url: "https://example.com/shipping",
+      })),
+    });
+
+    const embed = vi.fn(async () => [0.1]);
+    await expect(runWikiBuildItemOnce({
+      ...baseInput,
+      curatorTimeoutMs: 30_000,
+      db,
+      embed,
+      runCodex: vi.fn(async () => { throw new Error("codex_timeout"); }),
+    })).resolves.toMatchObject({ status: "completed", itemId: "item-1" });
+
+    expect(db.failWikiBuildItem).not.toHaveBeenCalled();
+    expect(embed).toHaveBeenCalled();
+    expect(db.completeWikiBuildItem).toHaveBeenCalledWith(claimed, expect.objectContaining({
+      normalized_json: {
+        units: [expect.objectContaining({
+          unitType: "guide_section",
+          title: "배송 안내",
+          sourceQuote: expect.stringContaining("배송 정책"),
+        })],
+      },
+    }));
+  });
+
+  it("still fails the building version for an unexpected curation error", async () => {
     const claimed = { ...item, source_kind: "owned_snapshot" as const };
     const db = wikiDb({
       claimWikiBuildItem: vi.fn(async () => claimed),
@@ -183,13 +222,12 @@ describe("Wiki build item worker", () => {
 
     await expect(runWikiBuildItemOnce({
       ...baseInput,
-      curatorTimeoutMs: 30_000,
       db,
       embed: vi.fn(),
-      runCodex: vi.fn(async () => { throw new Error("codex_timeout"); }),
+      runCodex: vi.fn(async () => { throw new Error("curator_result_shape_invalid"); }),
     })).resolves.toEqual({ status: "failed", itemId: "item-1" });
 
     expect(db.completeWikiBuildItem).not.toHaveBeenCalled();
-    expect(db.failWikiBuildItem).toHaveBeenCalledWith(claimed, "codex_timeout");
+    expect(db.failWikiBuildItem).toHaveBeenCalledWith(claimed, "curator_result_shape_invalid");
   });
 });

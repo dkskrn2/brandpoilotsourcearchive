@@ -7,13 +7,20 @@ import { createFastifyOptions, createServer } from "./httpServer.js";
 import { createServerlessHandler } from "./serverlessHandler.js";
 import { createKakaoAuthStore } from "./kakaoAuth.js";
 import { startLocalScheduler } from "./scheduler.js";
+import { createBrandLogoService, createPostgresBrandLogoStore, createSupabaseBrandLogoStorage } from "./brandLogo.js";
 
 const port = Number(process.env.PORT ?? 4000);
 const host = resolveServerHost();
 const pool = createPool();
+const repository = createRepository(pool);
+const brandLogoService = createBrandLogoService({
+  storage: createSupabaseBrandLogoStorage(),
+  store: createPostgresBrandLogoStore(pool, (brandId) => repository.getBrandProfile(brandId))
+});
 const app = createServer(
   {
-    repository: createRepository(pool),
+    repository,
+    brandLogoService,
     workerApiToken: process.env.WORKER_API_TOKEN,
     cronSecret: process.env.CRON_SECRET,
     kakaoAuth: createKakaoAuthStore(pool),
@@ -42,7 +49,7 @@ if (!process.env.VERCEL) {
   try {
     await app.listen({ port, host });
     if (process.env.LOCAL_SCHEDULER_ENABLED === "true") {
-      startLocalScheduler(createRepository(pool));
+      startLocalScheduler(repository);
       console.log("Brand Pilot local scheduler enabled");
     }
     console.log(`Brand Pilot API listening on http://${host}:${port}`);

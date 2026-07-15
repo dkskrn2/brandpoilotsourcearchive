@@ -9,6 +9,7 @@ import type { BrandUiStatus } from "../types";
 const completeStatus: BrandUiStatus = {
   brandId: "brand-1",
   brandName: "API 브랜드",
+  logoUrl: "https://cdn.example.com/logo.png",
   lastGeneratedAt: null,
   navigation: {
     onboardingRemaining: 0,
@@ -41,10 +42,15 @@ describe("AppShell navigation", () => {
     expect(screen.getByRole("link", { name: /게시 관리/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /소스/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /^채널$/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /브랜드 설정/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "브랜드 설정" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "결제 및 구독" })).toHaveAttribute(
+      "href",
+      "https://www.danbammsg.co.kr/product/pricing"
+    );
     expect(screen.getByRole("link", { name: /고객센터/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /관리자 채널/ })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /대시보드/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "API 브랜드 브랜드 설정 열기" })).toHaveAttribute("href", "/brand-settings");
   });
 
   it("renders shell counters from brand UI status", () => {
@@ -53,6 +59,7 @@ describe("AppShell navigation", () => {
         <BrandStatusProvider initialStatus={{
           brandId: "brand-1",
           brandName: "API 브랜드",
+          logoUrl: null,
           lastGeneratedAt: "2026-07-06T01:00:00.000Z",
           navigation: {
             onboardingRemaining: 2,
@@ -73,7 +80,7 @@ describe("AppShell navigation", () => {
       </MemoryRouter>
     );
 
-    expect(screen.getByText("API 브랜드")).toBeInTheDocument();
+    expect(screen.getAllByText("API 브랜드")).toHaveLength(2);
     expect(screen.getByText("2개 항목 필요")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "로그아웃" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /온보딩\s*2/ })).toBeInTheDocument();

@@ -1,10 +1,18 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthGate } from "../lib/auth";
 import { LoginPage } from "../pages/LoginPage";
 
 describe("authentication redirects", () => {
+  beforeEach(() => {
+    vi.stubEnv("VITE_API_BASE_URL", "http://localhost:4000");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("redirects an anonymous visitor to Danbam", async () => {
     const redirect = vi.fn();
 

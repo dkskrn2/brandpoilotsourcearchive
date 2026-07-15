@@ -100,6 +100,7 @@ function deliveryFixture(
     if (sql.includes("insert into instagram_dm_messages")) events.push("outbound");
     if (sql.includes("insert into dm_attention_items")) events.push("attention");
     if (sql.includes("automation_status = 'paused'")) events.push("paused");
+    if (sql.includes("attention_status = 'open'") && !sql.includes("automation_status = 'paused'")) events.push("attention-open");
     if (sql.includes("update jobs") && sql.includes("status = 'succeeded'")) {
       jobStatus = "succeeded";
       events.push("job-succeeded");
@@ -140,9 +141,10 @@ describe("DM delivery lifecycle", () => {
       "outbound",
       "job-succeeded",
       "attention",
-      "paused",
+      "attention-open",
       "commit",
     ]);
+    expect(fixture.events).not.toContain("paused");
     await expect(fixture.repository.completeDmReplyJob("job-1", completion)).resolves.toMatchObject({ status: "succeeded" });
 
     expect(fixture.sendInstagramDirectMessage).toHaveBeenCalledTimes(1);
@@ -175,6 +177,15 @@ describe("DM delivery lifecycle", () => {
     }));
     const outbound = fixture.statements.find((statement) => statement.sql.includes("insert into instagram_dm_messages"));
     expect(outbound?.values).toEqual(expect.arrayContaining(["knowledge_gap"]));
+    expect(fixture.events).toContain("paused");
+  });
+
+  it("keeps complaint conversations paused for operator review", async () => {
+    const fixture = deliveryFixture(async () => ({ externalMessageId: "outbound-1" }), "complaint");
+
+    await fixture.repository.completeDmReplyJob("job-1", completion);
+
+    expect(fixture.events).toEqual(expect.arrayContaining(["attention", "paused"]));
   });
 
   it("releases the acquired client when a duplicate completion sees a terminal attempt", async () => {

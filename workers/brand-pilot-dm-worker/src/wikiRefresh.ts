@@ -89,6 +89,25 @@ function directUnit(source: WikiBuildSource): CuratedKnowledgeUnit {
   };
 }
 
+function sourceOnlyGuideUnit(title: string, content: string): CuratedKnowledgeUnit {
+  return {
+    unitType: "guide_section",
+    title,
+    content,
+    keywords: [],
+    aliases: [],
+    sourceQuote: content.slice(0, 300),
+    validFrom: null,
+    validUntil: null,
+    structuredData: {},
+  };
+}
+
+function canUseSourceOnlyFallback(error: unknown) {
+  return error instanceof Error
+    && (error.message === "codex_timeout" || error.message === "curator_source_quote_missing");
+}
+
 function unitContents(unit: CuratedKnowledgeUnit) {
   if (unit.unitType !== "guide_section" || unit.content.length <= chunkSize) return [unit.content.trim()];
   const chunks: string[] = [];
@@ -152,14 +171,19 @@ export async function runWikiBuildItemOnce({
         return { status: "completed" as const, itemId: item.id, chunkCount: 0, activated: completion.activated };
       }
       content = normalized;
-      units = await curateKnowledge({
-        normalizedSource: normalized,
-        sourceTitle: source.title,
-        sourceStructuredData: source.structured_data,
-        runtimeDirectory,
-        timeoutMs: curatorTimeoutMs,
-        runCodex,
-      });
+      try {
+        units = await curateKnowledge({
+          normalizedSource: normalized,
+          sourceTitle: source.title,
+          sourceStructuredData: source.structured_data,
+          runtimeDirectory,
+          timeoutMs: curatorTimeoutMs,
+          runCodex,
+        });
+      } catch (error) {
+        if (!canUseSourceOnlyFallback(error)) throw error;
+        units = [sourceOnlyGuideUnit(source.title, normalized)];
+      }
     } else {
       units = [directUnit(source)];
     }

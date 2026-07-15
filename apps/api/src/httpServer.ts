@@ -13,6 +13,7 @@ import { parseDmWorkerResult } from "./dmTypes.js";
 import { StoryCapabilityRequiredError } from "./repository.js";
 import type { ApiRepository, Channel, DmAttentionType, DmConversationFilter, InstagramDeliveryFormat, InstagramFormatSettingsInput, SourceType, SupportRequestCategory, SupportRequestStatus } from "./types.js";
 import { createKakaoAuthStore, type KakaoProfile } from "./kakaoAuth.js";
+import { brandLogoRequestBodyLimit, type BrandLogoService } from "./brandLogo.js";
 
 const channels = new Set(["instagram", "threads", "tiktok", "youtube", "x"]);
 const sourceTypes = new Set(["owned", "reference"]);
@@ -36,6 +37,7 @@ interface CreateServerOptions {
   kakao?: { restApiKey: string; clientSecret?: string; redirectUri: string; frontendUrl: string };
   instagramLogin?: { appId: string; appSecret: string; redirectUri: string; frontendUrl: string };
   metaWebhook?: { appSecret: string; verifyToken: string };
+  brandLogoService?: BrandLogoService;
   logger?: boolean | FastifyLoggerOptions;
 }
 
@@ -191,13 +193,20 @@ export function createFastifyOptions(logger?: boolean | FastifyLoggerOptions) {
 }
 
 export function createServer(
-  { repository, workerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, metaWebhook, logger }: CreateServerOptions,
+  { repository, workerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, metaWebhook, brandLogoService, logger }: CreateServerOptions,
   app: FastifyInstance = Fastify(createFastifyOptions(logger))
 ) {
   void app.register(cors, { origin: true, credentials: true, methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] });
 
   app.setErrorHandler((error, request, reply) => {
     const message = error instanceof Error ? error.message : "unknown_error";
+    if ((error as { code?: string }).code === "FST_ERR_CTP_BODY_TOO_LARGE") {
+      const errorCode = request.routeOptions.url === "/brands/:brandId/logo"
+        ? "brand_logo_request_too_large"
+        : "request_body_too_large";
+      reply.code(413).send({ error: errorCode });
+      return;
+    }
     if (message === "invalid_channel") {
       reply.code(400).send({ error: "invalid_channel" });
       return;
@@ -228,6 +237,18 @@ export function createServer(
     }
     if (message === "brand_color_too_long") {
       reply.code(400).send({ error: message });
+      return;
+    }
+    if (["brand_logo_invalid_file", "brand_logo_unsupported_type", "brand_logo_file_too_large"].includes(message)) {
+      reply.code(400).send({ error: message });
+      return;
+    }
+    if (message === "brand_logo_storage_not_configured") {
+      reply.code(503).send({ error: message });
+      return;
+    }
+    if (["brand_logo_storage_upload_failed", "brand_logo_storage_delete_failed"].includes(message)) {
+      reply.code(502).send({ error: message });
       return;
     }
     if (error instanceof StoryCapabilityRequiredError || message === "story_capability_required") {
@@ -641,6 +662,31 @@ export function createServer(
       return { error: "brand_profile_field_too_long" };
     }
     return repository.updateBrandProfile(request.params.brandId, request.body);
+  });
+
+  app.post<{ Params: { brandId: string }; Body: Record<string, unknown> }>(
+    "/brands/:brandId/logo",
+    { bodyLimit: brandLogoRequestBodyLimit },
+    async (request, reply) => {
+    if (!isObject(request.body)
+      || typeof request.body.fileName !== "string"
+      || typeof request.body.mimeType !== "string"
+      || typeof request.body.fileBase64 !== "string") {
+      reply.code(400);
+      return { error: "invalid_body" };
+    }
+    if (!brandLogoService) throw new Error("brand_logo_storage_not_configured");
+    return brandLogoService.upload(request.params.brandId, {
+      fileName: request.body.fileName,
+      mimeType: request.body.mimeType,
+      fileBase64: request.body.fileBase64
+    });
+    }
+  );
+
+  app.delete<{ Params: { brandId: string } }>("/brands/:brandId/logo", async (request) => {
+    if (!brandLogoService) throw new Error("brand_logo_storage_not_configured");
+    return brandLogoService.remove(request.params.brandId);
   });
 
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/instagram-formats", async (request) => {

@@ -74,6 +74,7 @@ export interface BrandProfileDto {
   defaultCta: string;
   mainLink: string;
   autoApprovalEnabled: boolean;
+  logoUrl: string | null;
 }
 
 export interface BrandProfileInput {
@@ -131,6 +132,7 @@ export interface OnboardingStepDto {
 export interface BrandUiStatusDto {
   brandId: string;
   brandName: string;
+  logoUrl: string | null;
   lastGeneratedAt: string | null;
   navigation: {
     onboardingRemaining: number;

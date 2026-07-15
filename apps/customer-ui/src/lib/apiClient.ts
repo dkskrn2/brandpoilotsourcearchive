@@ -207,6 +207,15 @@ export function apiClient(options: ApiClientOptions = {}) {
         body: JSON.stringify(profile)
       });
     },
+    uploadBrandLogo(brandId: string, payload: { fileName: string; mimeType: string; fileBase64: string }) {
+      return request<BrandProfile>(fetcher, `${baseUrl}/brands/${brandId}/logo`, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+    },
+    deleteBrandLogo(brandId: string) {
+      return request<BrandProfile>(fetcher, `${baseUrl}/brands/${brandId}/logo`, { method: "DELETE" });
+    },
     getInstagramFormats(brandId: string) {
       return request<InstagramFormatSettings>(fetcher, `${baseUrl}/brands/${brandId}/instagram-formats`, { method: "GET" });
     },

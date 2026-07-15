@@ -426,7 +426,8 @@ function mapProfile(row: any): BrandProfileDto {
     tone: row.tone ?? "",
     defaultCta: row.default_cta ?? "",
     mainLink: row.main_link ?? "",
-    autoApprovalEnabled: row.auto_approval_enabled ?? false
+    autoApprovalEnabled: row.auto_approval_enabled ?? false,
+    logoUrl: row.logo_url ?? null
   };
 }
 
@@ -897,6 +898,7 @@ function buildBrandUiStatus(row: any): BrandUiStatusDto {
   return {
     brandId: row.brand_id,
     brandName: row.brand_name,
+    logoUrl: row.logo_url ?? null,
     lastGeneratedAt: toIso(row.last_generated_at),
     navigation: {
       onboardingRemaining: remainingCount,
@@ -921,6 +923,7 @@ interface RepositoryInstagramPublishOptions {
 interface RepositoryOptions {
   artifactStorageDir?: string;
   instagramPublish?: RepositoryInstagramPublishOptions;
+  imageRenderCooldownMs?: number;
   fetchInstagramImageManifest?: typeof fetchInstagramImageManifest;
   fetchImageAsset?: typeof fetch;
   publishInstagramOutput?: typeof publishInstagramOutputWithMeta;
@@ -933,6 +936,12 @@ function resolveInstagramPublishOptions(options?: RepositoryOptions) {
   return {
     enabled: options?.instagramPublish?.enabled ?? process.env.INSTAGRAM_PUBLISH_ENABLED === "true"
   };
+}
+
+function resolveImageRenderCooldownMs(options?: RepositoryOptions) {
+  const configured = options?.imageRenderCooldownMs ?? Number(process.env.IMAGE_JOB_COOLDOWN_MS ?? "60000");
+  if (!Number.isFinite(configured)) return 60_000;
+  return Math.max(0, Math.min(Math.floor(configured), 60 * 60 * 1000));
 }
 
 function extractManifestImageUrls(manifest: unknown) {
@@ -972,6 +981,7 @@ async function fetchInstagramImageManifest(manifestUrl: string, fetchImpl = fetc
 
 export function createRepository(pool: Pool, options: RepositoryOptions = {}): ApiRepository {
   const instagramPublish = resolveInstagramPublishOptions(options);
+  const imageRenderCooldownMs = resolveImageRenderCooldownMs(options);
   const fetchInstagramManifest = options.fetchInstagramImageManifest ?? fetchInstagramImageManifest;
   const fetchImageAsset = options.fetchImageAsset ?? fetch;
   const publishInstagramCarousel = options.publishInstagramCarousel ?? publishInstagramCarouselWithMeta;
@@ -1327,6 +1337,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                 bp.default_cta,
                 bp.main_link,
                 bp.auto_approval_enabled,
+                bp.logo_url,
                 (select count(*) from source_urls su where su.brand_id = b.id and su.source_type = 'owned' and su.enabled = true and su.deleted_at is null) as owned_source_count,
                 (select count(*) from source_urls su where su.brand_id = b.id and su.source_type = 'reference' and su.enabled = true and su.deleted_at is null) as reference_source_count,
                 (select count(*) from topic_rows tr where tr.brand_id = b.id and tr.status in ('uploaded', 'queued', 'used')) as topic_row_count,
@@ -1349,7 +1360,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     async getBrandProfile(brandId) {
       const result = await pool.query(
         `select bp.id as profile_id, b.id as brand_id, b.name as brand_name, bp.industry, bp.primary_customer,
-                bp.description, bp.tone, bp.default_cta, bp.main_link, bp.auto_approval_enabled
+                bp.description, bp.tone, bp.default_cta, bp.main_link, bp.auto_approval_enabled, bp.logo_url
          from brands b
          join brand_profiles bp on bp.brand_id = b.id
          where b.id = $1 and b.deleted_at is null`,
@@ -3704,11 +3715,19 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
              ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
             [prepared.workspaceId, prepared.brandId, prepared.conversationId, prepared.triggerMessageId, prepared.turnId, prepared.attentionType, prepared.result.reasonCode, JSON.stringify({ reason: prepared.result.reason })],
           );
-          await client.query(
-            `update instagram_dm_conversations set automation_status = 'paused', attention_status = 'open', updated_at = now()
-             where id = $1`,
-            [prepared.conversationId],
-          );
+          if (prepared.attentionType === "restricted_action") {
+            await client.query(
+              `update instagram_dm_conversations set attention_status = 'open', updated_at = now()
+               where id = $1`,
+              [prepared.conversationId],
+            );
+          } else {
+            await client.query(
+              `update instagram_dm_conversations set automation_status = 'paused', attention_status = 'open', updated_at = now()
+               where id = $1`,
+              [prepared.conversationId],
+            );
+          }
         }
         await client.query("commit");
         return { id: jobId, status: "succeeded", decision: prepared.result.decision };
@@ -3842,33 +3861,58 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     },
 
     async claimImageRenderJob(workerId) {
-      const result = await pool.query(
-        `with candidate as (
-           select id from jobs
-           where job_type in ('instagram_feed_render', 'instagram_story_render', 'instagram_reel_render')
-             and attempt_count < max_attempts and run_at <= now()
-             and (status = 'queued' or (status = 'running' and locked_until < now()))
-           order by priority desc, created_at asc for update skip locked limit 1
-         )
-         update jobs job
-         set status = 'running', locked_by = $1, locked_until = now() + interval '15 minutes',
-             lease_token = gen_random_uuid(), attempt_count = attempt_count + 1,
-             started_at = coalesce(started_at, now()), updated_at = now()
-         from candidate where job.id = candidate.id
-         returning job.id, job.workspace_id, job.brand_id, job.channel_output_id, job.lease_token, job.payload_json, job.attempt_count`,
-        [workerId]
-      );
-      if (!result.rowCount) return null;
-      const row = result.rows[0];
-      return {
-        id: row.id,
-        workspaceId: row.workspace_id,
-        brandId: row.brand_id,
-        channelOutputId: row.channel_output_id,
-        leaseToken: row.lease_token,
-        payload: row.payload_json,
-        attemptCount: Number(row.attempt_count)
-      } satisfies ImageRenderJobDto;
+      const client = await pool.connect();
+      let transactionClosed = false;
+      try {
+        await client.query("begin");
+        await client.query("select pg_advisory_xact_lock($1, $2)", [4242, 1]);
+        const result = await client.query(
+          `with candidate as (
+             select queued.id from jobs queued
+             where queued.job_type in ('instagram_feed_render', 'instagram_story_render', 'instagram_reel_render')
+               and queued.attempt_count < queued.max_attempts and queued.run_at <= now()
+               and (queued.status = 'queued' or (queued.status = 'running' and queued.locked_until < now()))
+               and not exists (
+                 select 1 from jobs active
+                 where active.job_type in ('instagram_feed_render', 'instagram_story_render', 'instagram_reel_render')
+                   and active.status = 'running' and active.locked_until >= now()
+               )
+               and not exists (
+                 select 1 from jobs recent
+                 where recent.job_type in ('instagram_feed_render', 'instagram_story_render', 'instagram_reel_render')
+                   and recent.attempt_count > 0
+                   and recent.status in ('queued', 'succeeded', 'failed')
+                   and recent.updated_at > now() - ($2::bigint * interval '1 millisecond')
+               )
+             order by queued.priority desc, queued.created_at asc for update of queued skip locked limit 1
+           )
+           update jobs job
+           set status = 'running', locked_by = $1, locked_until = now() + interval '15 minutes',
+               lease_token = gen_random_uuid(), attempt_count = attempt_count + 1,
+               started_at = coalesce(started_at, now()), updated_at = now()
+           from candidate where job.id = candidate.id
+           returning job.id, job.workspace_id, job.brand_id, job.channel_output_id, job.lease_token, job.payload_json, job.attempt_count`,
+          [workerId, imageRenderCooldownMs]
+        );
+        await client.query("commit");
+        transactionClosed = true;
+        if (!result.rowCount) return null;
+        const row = result.rows[0];
+        return {
+          id: row.id,
+          workspaceId: row.workspace_id,
+          brandId: row.brand_id,
+          channelOutputId: row.channel_output_id,
+          leaseToken: row.lease_token,
+          payload: row.payload_json,
+          attemptCount: Number(row.attempt_count)
+        } satisfies ImageRenderJobDto;
+      } catch (error) {
+        if (!transactionClosed) await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
     },
 
     async heartbeatImageRenderJob(jobId, workerId, leaseToken) {
@@ -4032,7 +4076,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           );
         }
         await client.query(
-          `update jobs set status = 'succeeded', result_json = $2, locked_until = null, finished_at = now(), updated_at = now()
+          `update jobs set status = 'succeeded', result_json = $2, last_error = null,
+               locked_until = null, finished_at = now(), updated_at = now()
            where id = $1`,
           [jobId, JSON.stringify({
             manifestUrl: input.manifestUrl,

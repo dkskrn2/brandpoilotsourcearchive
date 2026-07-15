@@ -383,3 +383,30 @@ test("DM Wiki core migration runs in PGlite and pgvector migration is explicitly
     assert.equal(authMode.rows.length, 1);
   });
 });
+
+test("brand profile logo migration adds nullable storage columns and remains idempotent", async () => {
+  const migrations = await loadMigrations();
+  const initialMigration = migrations.find((migration) => migration.id === "001_initial_schema.sql");
+  const logoMigration = migrations.find((migration) => migration.id === "028_brand_profile_logo.sql");
+
+  assert.ok(initialMigration);
+  assert.ok(logoMigration);
+
+  await withDatabase(async (database) => {
+    await database.exec(initialMigration.sql);
+    await database.exec(logoMigration.sql);
+    await database.exec(logoMigration.sql);
+
+    const columns = await database.query(
+      `select column_name, is_nullable
+       from information_schema.columns
+       where table_name = 'brand_profiles'
+         and column_name in ('logo_url', 'logo_storage_path')
+       order by column_name`,
+    );
+    assert.deepEqual(columns.rows, [
+      { column_name: "logo_storage_path", is_nullable: "YES" },
+      { column_name: "logo_url", is_nullable: "YES" },
+    ]);
+  });
+});

@@ -12,6 +12,22 @@ describe("apiClient", () => {
     expect(profile).toEqual({ name: "API 브랜드" });
   });
 
+  it("uploads and deletes a brand logo through dedicated endpoints", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ name: "브랜드", logoUrl: "https://cdn/logo.png" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ name: "브랜드", logoUrl: null }), { status: 200 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await client.uploadBrandLogo("brand-1", { fileName: "logo.png", mimeType: "image/png", fileBase64: "abc=" });
+    await client.deleteBrandLogo("brand-1");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "http://api.test/brands/brand-1/logo", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ fileName: "logo.png", mimeType: "image/png", fileBase64: "abc=" })
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "http://api.test/brands/brand-1/logo", expect.objectContaining({ method: "DELETE" }));
+  });
+
   it("fetches brand UI status for shell and onboarding", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       brandId: "brand-1",

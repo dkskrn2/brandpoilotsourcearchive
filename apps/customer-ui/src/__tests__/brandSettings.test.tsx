@@ -11,7 +11,8 @@ const apiProfile: BrandProfile = {
   tone: "담백한 전문가 톤",
   defaultCta: "상담 예약하기",
   mainLink: "https://example.com",
-  autoApprovalEnabled: true
+  autoApprovalEnabled: true,
+  logoUrl: "https://cdn.example.com/logo.png"
 };
 
 const apiInstagramFormats: InstagramFormatSettings = {
@@ -67,6 +68,8 @@ async function renderBrandSettingsPage(apiOverrides: Partial<Record<string, Retu
         enabled: settings.formats.find((candidate) => candidate.format === format.format)?.enabled ?? format.enabled
       }))
     })),
+    uploadBrandLogo: vi.fn(async () => ({ ...apiProfile, logoUrl: "https://cdn.example.com/new-logo.png" })),
+    deleteBrandLogo: vi.fn(async () => ({ ...apiProfile, logoUrl: null })),
     ...apiOverrides
   };
   vi.doMock("../lib/apiClient", () => ({
@@ -244,5 +247,18 @@ describe("BrandSettingsPage", () => {
     expect(nameInput).toHaveValue("브랜드 파일럿 여행");
     expect(toneInput).toHaveValue("담백하고 실무적인 톤");
     expect(ctaInput).toHaveValue("상담 예약하기");
+  });
+
+  it("keeps unsaved text edits when the separately saved logo is deleted", async () => {
+    const api = await renderBrandSettingsPage();
+    const nameInput = await screen.findByLabelText("브랜드명");
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, "저장 전 브랜드명");
+
+    await userEvent.click(screen.getByRole("button", { name: "로고 삭제" }));
+
+    expect(api.deleteBrandLogo).toHaveBeenCalledWith("brand-1");
+    expect(nameInput).toHaveValue("저장 전 브랜드명");
+    expect(screen.getByText("변경사항 있음")).toBeVisible();
   });
 });

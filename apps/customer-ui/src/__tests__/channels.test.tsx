@@ -1,5 +1,5 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelConnection, ChannelType } from "../types";
 
 const apiChannels: ChannelConnection[] = [
@@ -45,8 +45,14 @@ const apiChannels: ChannelConnection[] = [
   }
 ];
 
+beforeEach(() => {
+  vi.stubEnv("VITE_API_BASE_URL", "http://localhost:4000");
+  vi.stubEnv("VITE_META_OAUTH_START_URL", "http://localhost:4000/auth/meta/start");
+});
+
 afterEach(() => {
   cleanup();
+  vi.unstubAllEnvs();
   vi.resetModules();
   vi.clearAllMocks();
 });

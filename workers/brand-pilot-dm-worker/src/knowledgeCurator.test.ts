@@ -55,6 +55,24 @@ describe("knowledge curator", () => {
     }, source, structuredData)).toThrow("curator_source_quote_missing");
   });
 
+  it("retries once with an exact-quote correction when the first quote is not in the source", async () => {
+    const corrected = productUnit();
+    const runCodex = vi.fn()
+      .mockResolvedValueOnce({ units: [productUnit({ sourceQuote: "지금 주문하면 무료 배송됩니다." })] })
+      .mockResolvedValueOnce({ units: [corrected] });
+
+    await expect(curateKnowledge({
+      normalizedSource: source,
+      sourceTitle: "머그컵 안내",
+      sourceStructuredData: structuredData,
+      runtimeDirectory: "runtime",
+      runCodex,
+    })).resolves.toEqual([corrected]);
+
+    expect(runCodex).toHaveBeenCalledTimes(2);
+    expect(runCodex.mock.calls[1]?.[0].prompt).toContain("sourceQuote가 원문의 연속 문자열과 일치하지 않았습니다");
+  });
+
   it.each([
     ["price", "25000"],
     ["currency", "USD"],

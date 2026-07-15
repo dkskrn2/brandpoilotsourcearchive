@@ -140,10 +140,22 @@ export async function curateKnowledge({
   timeoutMs?: number;
   runCodex: (input: { prompt: string; runtimeDirectory: string; timeoutMs: number }) => Promise<unknown>;
 }) {
+  const prompt = buildKnowledgeCuratorPrompt({ normalizedSource, sourceTitle, sourceStructuredData });
   const result = await runCodex({
-    prompt: buildKnowledgeCuratorPrompt({ normalizedSource, sourceTitle, sourceStructuredData }),
+    prompt,
     runtimeDirectory,
     timeoutMs,
   });
-  return validateCuratedKnowledge(result, normalizedSource, sourceStructuredData);
+  try {
+    return validateCuratedKnowledge(result, normalizedSource, sourceStructuredData);
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "curator_source_quote_missing") throw error;
+  }
+
+  const corrected = await runCodex({
+    prompt: `${prompt}\n\n이전 출력의 sourceQuote가 원문의 연속 문자열과 일치하지 않았습니다. 각 sourceQuote를 위 정제된 원문에서 그대로 복사해 다시 출력하세요. 요약, 맞춤법 보정, 문장부호 변경은 금지합니다.`,
+    runtimeDirectory,
+    timeoutMs,
+  });
+  return validateCuratedKnowledge(corrected, normalizedSource, sourceStructuredData);
 }

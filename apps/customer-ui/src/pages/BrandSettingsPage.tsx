@@ -4,6 +4,7 @@ import { Alert } from "../components/ui/Alert";
 import { Badge } from "../components/ui/Badge";
 import { Field } from "../components/ui/Field";
 import { Switch } from "../components/ui/Switch";
+import { BrandLogoEditor } from "../components/brand/BrandLogoEditor";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
 import type {
   BrandContentFormat,
@@ -21,7 +22,8 @@ const emptyBrandProfile: BrandProfile = {
   tone: "",
   defaultCta: "",
   mainLink: "",
-  autoApprovalEnabled: true
+  autoApprovalEnabled: true,
+  logoUrl: null
 };
 
 const industryOptions = [
@@ -189,6 +191,11 @@ export function BrandSettingsPage() {
     setShowSavedBadge(false);
   }
 
+  function mergeLogoProfile(profile: BrandProfile) {
+    setSavedProfile((current) => current ? { ...current, logoUrl: profile.logoUrl } : profile);
+    setDraftProfile((current) => current ? { ...current, logoUrl: profile.logoUrl } : profile);
+  }
+
   function updateDraftFormat(format: InstagramDeliveryFormat, enabled: boolean) {
     setDraftFormats((current) => current ? ({
       ...current,
@@ -302,7 +309,9 @@ export function BrandSettingsPage() {
             <h2>브랜드 프로필</h2>
             <Badge variant={hasRequiredFields ? "ok" : "warn"}>{hasRequiredFields ? "필수 입력 완료" : "필수 입력 필요"}</Badge>
           </div>
-          <div className="panel-body form-grid">
+          <div className="panel-body brand-profile-layout">
+            <BrandLogoEditor profile={draftProfile} onProfileChange={mergeLogoProfile} />
+            <div className="form-grid brand-profile-fields">
             <Field label="브랜드명" required>
               <input
                 aria-label="브랜드명"
@@ -369,6 +378,7 @@ export function BrandSettingsPage() {
                 onChange={(event) => updateDraftProfile("description", event.currentTarget.value)}
               />
             </Field>
+            </div>
           </div>
         </section>
 

@@ -3,6 +3,9 @@ import { isBrandProfileComplete, isBrandSetupPath } from "../../lib/brandSetup";
 import { useBrandStatus } from "../../lib/brandStatus";
 import type { BadgeVariant, NavItem } from "../../types";
 import { Badge } from "../ui/Badge";
+import { SidebarBrandProfile } from "./SidebarBrandProfile";
+
+const pricingUrl = "https://www.danbammsg.co.kr/product/pricing";
 
 const navItems: NavItem[] = [
   { label: "콘텐츠 검토", path: "/content" },
@@ -11,7 +14,7 @@ const navItems: NavItem[] = [
   { label: "채널", path: "/channels" },
   { label: "DM 자동답변", path: "/dm-automation" },
   { label: "브랜드 설정", path: "/brand-settings" },
-  { label: "결제 및 구독", path: "/billing" },
+  { label: "결제 및 구독", path: pricingUrl },
   { label: "고객센터", path: "/support" },
   { label: "관리자 채널", path: "/admin/channels" },
   { label: "온보딩", path: "/onboarding" }
@@ -59,6 +62,14 @@ export function Sidebar() {
               </span>
             );
           }
+          if (item.path.startsWith("https://")) {
+            return (
+              <a key={item.path} href={item.path}>
+                <span>{item.label}</span>
+                {badge ? <Badge variant={badge.variant}>{badge.badge}</Badge> : null}
+              </a>
+            );
+          }
           return (
             <NavLink key={item.path} to={item.path} end={item.path === "/onboarding"}>
               <span>{item.label}</span>
@@ -67,6 +78,10 @@ export function Sidebar() {
           );
         })}
       </nav>
+      <SidebarBrandProfile
+        brandName={status?.brandName ?? "Brand Pilot"}
+        logoUrl={status?.logoUrl ?? null}
+      />
     </aside>
   );
 }

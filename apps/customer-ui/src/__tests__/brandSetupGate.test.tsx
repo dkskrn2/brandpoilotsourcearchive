@@ -9,6 +9,7 @@ import type { BrandUiStatus } from "../types";
 const incompleteStatus: BrandUiStatus = {
   brandId: "brand-1",
   brandName: "내 브랜드",
+  logoUrl: null,
   lastGeneratedAt: null,
   navigation: {
     onboardingRemaining: 3,
@@ -95,7 +96,7 @@ describe("brand setup gating", () => {
     );
 
     expect(screen.getByRole("link", { name: /온보딩/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /브랜드 설정/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "브랜드 설정" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /고객센터/ })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /게시 관리/ })).not.toBeInTheDocument();
     expect(screen.getByText("게시 관리").closest("[aria-disabled='true']")).toBeInTheDocument();

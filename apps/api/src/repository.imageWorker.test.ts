@@ -54,35 +54,55 @@ function runningJobRow(
 
 describe("image worker completion", () => {
   it("claims format-specific Instagram render jobs", async () => {
-    const query = vi.fn(async (_sql: string) => ({
-      rowCount: 1,
-      rows: [{
-        id: "job-1",
-        workspace_id: "workspace-1",
-        brand_id: "brand-1",
-        channel_output_id: "output-1",
-        lease_token: "lease-1",
-        payload_json: {
-          deliveryFormat: "instagram_feed_carousel",
-          promptVersion: "worker-card.v4",
-          topic: { title: "Topic", angle: "Angle", targetCustomer: null, region: null, season: null, notes: null },
-          brand: { name: "Brand", industry: null, primaryCustomer: null, description: null, tone: null, brandColor: null },
-          representativeUrl: null,
-          maxImages: 5
-        },
-        attempt_count: "1"
-      }]
-    }));
-    const repository = createRepository({ query } as any);
+    const query = vi.fn(async (sql: string, _values?: unknown[]) => {
+      if (sql.includes("update jobs job")) return {
+        rowCount: 1,
+        rows: [{
+          id: "job-1",
+          workspace_id: "workspace-1",
+          brand_id: "brand-1",
+          channel_output_id: "output-1",
+          lease_token: "lease-1",
+          payload_json: {
+            deliveryFormat: "instagram_feed_carousel",
+            promptVersion: "worker-card.v4",
+            topic: { title: "Topic", angle: "Angle", targetCustomer: null, region: null, season: null, notes: null },
+            brand: { name: "Brand", industry: null, primaryCustomer: null, description: null, tone: null, brandColor: null },
+            representativeUrl: null,
+            maxImages: 5
+          },
+          attempt_count: "1"
+        }]
+      };
+      return { rowCount: 0, rows: [] };
+    });
+    const release = vi.fn();
+    const repository = createRepository({
+      query: vi.fn(),
+      connect: vi.fn(async () => ({ query, release }))
+    } as any, { imageRenderCooldownMs: 60_000 });
 
     const result = await repository.claimImageRenderJob("worker-1");
 
     expect(result?.id).toBe("job-1");
-    const sql = String(query.mock.calls[0]?.[0]);
+    expect(query.mock.calls.map(([sql]) => String(sql).trim())).toEqual(expect.arrayContaining([
+      "begin",
+      "commit"
+    ]));
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("pg_advisory_xact_lock"))).toBe(true);
+    const sql = String(query.mock.calls.find(([statement]) => String(statement).includes("update jobs job"))?.[0]);
     expect(sql).toContain("instagram_feed_render");
     expect(sql).toContain("instagram_story_render");
     expect(sql).toContain("instagram_reel_render");
+    expect(sql).toContain("active.status = 'running'");
+    expect(sql).toContain("recent.attempt_count > 0");
+    expect(sql).toContain("interval '1 millisecond'");
     expect(sql).not.toContain("job_type = 'instagram_render'");
+    expect(query.mock.calls.find(([statement]) => String(statement).includes("update jobs job"))?.[1]).toEqual([
+      "worker-1",
+      60_000
+    ]);
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("validates and accepts a format-specific feed artifact", async () => {
@@ -124,6 +144,10 @@ describe("image worker completion", () => {
     expect(lockedJobQuery).toContain("for update of job, co");
     const outputUpdate = String(clientQuery.mock.calls.find(([sql]) => String(sql).includes("update channel_outputs"))?.[0]);
     expect(outputUpdate).toContain("block_reasons = coalesce(block_reasons, '[]'::jsonb) - 'instagram_artifact_pending'");
+    const jobCompletion = String(clientQuery.mock.calls.find(([sql]) => (
+      String(sql).includes("update jobs set status = 'succeeded'")
+    ))?.[0]);
+    expect(jobCompletion).toContain("last_error = null");
     expect(poolQuery).not.toHaveBeenCalled();
   });
 

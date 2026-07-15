@@ -194,7 +194,7 @@ describe("instagramPublisher", () => {
       media_type: "REELS",
       video_url: "https://cdn.example.com/reel.mp4",
       caption: "Reel caption",
-      share_to_feed: "false"
+      share_to_feed: "true"
     });
     expect(requests[1]?.url).toContain("/media_publish");
   });

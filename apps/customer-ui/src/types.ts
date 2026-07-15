@@ -67,6 +67,7 @@ export interface BrandOnboardingStep {
 export interface BrandUiStatus {
   brandId: string;
   brandName: string;
+  logoUrl: string | null;
   lastGeneratedAt: string | null;
   navigation: {
     onboardingRemaining: number;
@@ -98,6 +99,7 @@ export interface BrandProfile {
   defaultCta: string;
   mainLink: string;
   autoApprovalEnabled: boolean;
+  logoUrl: string | null;
 }
 
 export interface BrandContentFormat {

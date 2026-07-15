@@ -31,6 +31,7 @@ function createRepository(): ApiRepository {
     getBrandUiStatus: vi.fn(async () => ({
       brandId,
       brandName: "제주 여행 상담 브랜드",
+      logoUrl: null,
       lastGeneratedAt: null,
       navigation: {
         onboardingRemaining: 3,
@@ -55,7 +56,8 @@ function createRepository(): ApiRepository {
       tone: "친절한 전문가",
       defaultCta: "무료 상담 신청하기",
       mainLink: "https://example.com",
-      autoApprovalEnabled: false
+      autoApprovalEnabled: false,
+      logoUrl: null
     })),
     updateBrandProfile: vi.fn(async (_brandId, body) => ({
       id: "profile-1",
@@ -67,7 +69,8 @@ function createRepository(): ApiRepository {
       tone: body.tone ?? "친절한 전문가",
       defaultCta: body.defaultCta ?? "무료 상담 신청하기",
       mainLink: body.mainLink ?? "https://example.com",
-      autoApprovalEnabled: body.autoApprovalEnabled ?? false
+      autoApprovalEnabled: body.autoApprovalEnabled ?? false,
+      logoUrl: null
     })),
     listInstagramFormats: vi.fn(async () => ({
       brandId,
@@ -573,6 +576,7 @@ describe("API server", () => {
     repository.getBrandUiStatus = vi.fn(async () => ({
       brandId,
       brandName: "동적 브랜드",
+      logoUrl: "https://cdn.example.com/logo.png",
       lastGeneratedAt: "2026-07-06T01:00:00.000Z",
       navigation: {
         onboardingRemaining: 2,

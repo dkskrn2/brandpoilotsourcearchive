@@ -216,7 +216,7 @@ export async function publishInstagramOutput(
         media_type: "REELS",
         video_url: input.videoUrl,
         caption: input.caption,
-        share_to_feed: "false"
+        share_to_feed: "true"
       }, deps);
   }
 }

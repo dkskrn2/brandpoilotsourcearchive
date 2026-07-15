@@ -11,6 +11,7 @@ describe("OnboardingPage", () => {
         <BrandStatusProvider initialStatus={{
           brandId: "brand-1",
           brandName: "API 브랜드",
+          logoUrl: null,
           lastGeneratedAt: null,
           navigation: {
             onboardingRemaining: 2,
