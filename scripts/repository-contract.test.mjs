@@ -217,7 +217,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션은 001부터 029까지 정확한 이름으로 존재한다", async () => {
+test("데이터베이스 마이그레이션은 001부터 035까지 정확한 이름으로 존재한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -251,6 +251,12 @@ test("데이터베이스 마이그레이션은 001부터 029까지 정확한 이
     "027_wiki_search_v2.sql",
     "028_brand_profile_logo.sql",
     "029_instagram_hashtag_trends.sql",
+    "030_multichannel_foundation.sql",
+    "031_content_performance_dashboard.sql",
+    "032_compounding_wiki_core.sql",
+    "033_compounding_wiki_pgvector.sql",
+    "034_worker_resource_limits.sql",
+    "035_remove_webflow_and_split_content_status.sql",
   ]);
 });
 

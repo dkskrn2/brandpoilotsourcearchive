@@ -39,6 +39,25 @@ const runMigrationRange = async (database, migrations, firstId, lastId) => {
 };
 
 const insertPublishingFixture = async (database) => {
+  const deliveryFormatColumn = await database.query(`
+    select is_nullable
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'channel_outputs'
+      and column_name = 'delivery_format'
+  `);
+  const deliveryFormatRequired =
+    deliveryFormatColumn.rows[0]?.is_nullable === "NO";
+  const topicPublishGroupColumn = await database.query(`
+    select is_nullable
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'publish_queue'
+      and column_name = 'topic_publish_group_id'
+  `);
+  const topicPublishGroupRequired =
+    topicPublishGroupColumn.rows[0]?.is_nullable === "NO";
+
   const workspace = await database.query(
     "insert into workspaces (name, slug) values ($1, $2) returning id",
     ["Migration Test", `migration-${randomUUID()}`],
@@ -69,6 +88,14 @@ const insertPublishingFixture = async (database) => {
       [workspaceId, brandId, title, `${title} angle`],
     );
     const topicId = topic.rows[0].id;
+    const topicPublishGroupId = topicPublishGroupRequired
+      ? (
+          await database.query(
+            "insert into topic_publish_groups (workspace_id, brand_id, content_topic_id) values ($1, $2, $3) returning id",
+            [workspaceId, brandId, topicId],
+          )
+        ).rows[0].id
+      : null;
     const draft = await database.query(
       "insert into master_drafts (workspace_id, brand_id, content_topic_id, prompt_version) values ($1, $2, $3, $4) returning id",
       [workspaceId, brandId, topicId, "integration-v1"],
@@ -77,34 +104,51 @@ const insertPublishingFixture = async (database) => {
     const queueIds = [];
 
     for (const fixture of queueFixtures) {
-      const output = await database.query(
-        "insert into channel_outputs (workspace_id, brand_id, content_topic_id, master_draft_id, channel, status, title) values ($1, $2, $3, $4, $5, 'approved', $6) returning id",
-        [
-          workspaceId,
-          brandId,
-          topicId,
-          draft.rows[0].id,
-          fixture.channel,
-          `${title} ${fixture.channel}`,
-        ],
+      const outputValues = [
+        workspaceId,
+        brandId,
+        topicId,
+        draft.rows[0].id,
+        fixture.channel,
+        `${title} ${fixture.channel}`,
+      ];
+      const output = deliveryFormatRequired
+        ? await database.query(
+            "insert into channel_outputs (workspace_id, brand_id, content_topic_id, master_draft_id, channel, status, title, delivery_format) values ($1, $2, $3, $4, $5, 'approved', $6, $7) returning id",
+            [
+              ...outputValues,
+              fixture.channel === "instagram"
+                ? "instagram_feed_carousel"
+                : "threads_text",
+            ],
+          )
+        : await database.query(
+            "insert into channel_outputs (workspace_id, brand_id, content_topic_id, master_draft_id, channel, status, title) values ($1, $2, $3, $4, $5, 'approved', $6) returning id",
+            outputValues,
       );
       outputIds.set(fixture.channel, output.rows[0].id);
-      const queue = await database.query(
-        "insert into publish_queue (workspace_id, brand_id, channel_output_id, brand_channel_id, channel, status, approval_type, slot_date, slot_number, scheduled_for, queued_at, idempotency_key) values ($1, $2, $3, $4, $5, $6, 'manual', $7, $8, $9, $10, $11) returning id",
-        [
-          workspaceId,
-          brandId,
-          output.rows[0].id,
-          brandChannels.get(fixture.channel),
-          fixture.channel,
-          fixture.status ?? "scheduled",
-          fixture.slotDate,
-          fixture.slotNumber,
-          fixture.scheduledFor,
-          fixture.queuedAt,
-          `${title}-${fixture.channel}-${randomUUID()}`,
-        ],
-      );
+      const queueValues = [
+        workspaceId,
+        brandId,
+        output.rows[0].id,
+        brandChannels.get(fixture.channel),
+        fixture.channel,
+        fixture.status ?? "scheduled",
+        fixture.slotDate,
+        fixture.slotNumber,
+        fixture.scheduledFor,
+        fixture.queuedAt,
+        `${title}-${fixture.channel}-${randomUUID()}`,
+      ];
+      const queue = topicPublishGroupRequired
+        ? await database.query(
+            "insert into publish_queue (workspace_id, brand_id, channel_output_id, brand_channel_id, channel, status, approval_type, slot_date, slot_number, scheduled_for, queued_at, idempotency_key, topic_publish_group_id) values ($1, $2, $3, $4, $5, $6, 'manual', $7, $8, $9, $10, $11, $12) returning id",
+            [...queueValues, topicPublishGroupId],
+          )
+        : await database.query(
+            "insert into publish_queue (workspace_id, brand_id, channel_output_id, brand_channel_id, channel, status, approval_type, slot_date, slot_number, scheduled_for, queued_at, idempotency_key) values ($1, $2, $3, $4, $5, $6, 'manual', $7, $8, $9, $10, $11) returning id",
+            queueValues,
+          );
       queueIds.push(queue.rows[0].id);
       if (fixture.createPublishAttempt) {
         await database.query(
@@ -152,9 +196,25 @@ const insertPublishingFixture = async (database) => {
     },
   ]);
 
+  const jobsTypeConstraint = await database.query(`
+    select pg_get_constraintdef(oid) as definition
+    from pg_constraint
+    where conrelid = 'jobs'::regclass
+      and conname = 'jobs_type_check'
+  `);
+  const instagramRenderJobType = jobsTypeConstraint.rows[0]?.definition.includes(
+    "'instagram_feed_render'",
+  )
+    ? "instagram_feed_render"
+    : "instagram_render";
   await database.query(
-    "insert into jobs (workspace_id, brand_id, channel_output_id, job_type) values ($1, $2, $3, 'instagram_render')",
-    [workspaceId, brandId, primary.outputIds.get("instagram")],
+    "insert into jobs (workspace_id, brand_id, channel_output_id, job_type) values ($1, $2, $3, $4)",
+    [
+      workspaceId,
+      brandId,
+      primary.outputIds.get("instagram"),
+      instagramRenderJobType,
+    ],
   );
   await database.query(
     "insert into storage_artifacts (workspace_id, brand_id, artifact_type, bucket, path) values ($1, $2, 'rendered_image', $3, $4)",
@@ -166,7 +226,12 @@ const insertPublishingFixture = async (database) => {
     ],
   );
 
-  return { brandId };
+  return {
+    workspaceId,
+    brandId,
+    channelOutputId: primary.outputIds.get("instagram"),
+    publishQueueId: primary.queueIds[0],
+  };
 };
 
 const readConstraintValues = async (database, table, constraint) => {
@@ -414,13 +479,21 @@ test("brand profile logo migration adds nullable storage columns and remains ide
   });
 });
 
-test("029 creates the category catalog and Instagram trend cache", async () => {
+test("029-031 migrations satisfy the expanded schema smoke contract", async () => {
   const migrations = await loadMigrations();
   const migration029 = migrations.find(
     (migration) => migration.id === "029_instagram_hashtag_trends.sql",
   );
+  const migration030 = migrations.find(
+    (migration) => migration.id === "030_multichannel_foundation.sql",
+  );
+  const migration031 = migrations.find(
+    (migration) => migration.id === "031_content_performance_dashboard.sql",
+  );
 
   assert.ok(migration029, "missing migration 029_instagram_hashtag_trends.sql");
+  assert.ok(migration030, "missing migration 030_multichannel_foundation.sql");
+  assert.ok(migration031, "missing migration 031_content_performance_dashboard.sql");
 
   await withDatabase(async (database) => {
     await runMigrationRange(
@@ -858,6 +931,10 @@ test("029 creates the category catalog and Instagram trend cache", async () => {
       );
     }
 
+    await database.exec(migration030.sql);
+    await database.exec(migration030.sql);
+    await database.exec(migration031.sql);
+
     const schemaSmokeSql = await readFile("db/smoke/001_schema_smoke.sql", "utf8");
     for (const constraint of [
       "instagram_trend_media_like_count_check",
@@ -870,6 +947,209 @@ test("029 creates the category catalog and Instagram trend cache", async () => {
       assert.match(schemaSmokeSql, new RegExp(`'${constraint}'`));
     }
     await database.exec(schemaSmokeSql);
+  });
+});
+
+test("031 creates the content performance dashboard schema", async () => {
+  const migrations = await loadMigrations();
+  const migration031 = migrations.find(
+    (migration) => migration.id === "031_content_performance_dashboard.sql",
+  );
+
+  assert.ok(migration031, "missing migration 031_content_performance_dashboard.sql");
+  assert.match(migration031.sql, /create table content_performance_snapshots/i);
+  assert.match(migration031.sql, /unique\s*\(publish_queue_id, snapshot_date\)/i);
+  assert.match(migration031.sql, /create table performance_sync_runs/i);
+  assert.match(migration031.sql, /unique\s*\(brand_id, channel, run_date\)/i);
+  assert.match(migration031.sql, /channel_outputs_performance_identity_unique/i);
+  assert.match(migration031.sql, /publish_queue_performance_identity_unique/i);
+  assert.match(migration031.sql, /content_performance_snapshots_publish_queue_owner_fkey/i);
+  assert.match(migration031.sql, /content_performance_snapshots_channel_output_owner_fkey/i);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "031_content_performance_dashboard.sql",
+    );
+
+    const tables = await database.query(`
+      select table_name
+      from information_schema.tables
+      where table_schema = 'public'
+        and table_name in ('content_performance_snapshots', 'performance_sync_runs')
+      order by table_name
+    `);
+    assert.deepEqual(
+      tables.rows.map((row) => row.table_name),
+      ["content_performance_snapshots", "performance_sync_runs"],
+    );
+
+    const columns = await database.query(`
+      select table_name, column_name, is_nullable
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name in ('content_performance_snapshots', 'performance_sync_runs')
+      order by table_name, column_name
+    `);
+    assert.deepEqual(columns.rows, [
+      { table_name: "content_performance_snapshots", column_name: "brand_id", is_nullable: "NO" },
+      { table_name: "content_performance_snapshots", column_name: "channel", is_nullable: "NO" },
+      { table_name: "content_performance_snapshots", column_name: "channel_output_id", is_nullable: "NO" },
+      { table_name: "content_performance_snapshots", column_name: "collected_at", is_nullable: "NO" },
+      { table_name: "content_performance_snapshots", column_name: "created_at", is_nullable: "NO" },
+      { table_name: "content_performance_snapshots", column_name: "exposure_count", is_nullable: "YES" },
+      { table_name: "content_performance_snapshots", column_name: "external_post_id", is_nullable: "NO" },
+      { table_name: "content_performance_snapshots", column_name: "id", is_nullable: "NO" },
+      { table_name: "content_performance_snapshots", column_name: "publish_queue_id", is_nullable: "NO" },
+      { table_name: "content_performance_snapshots", column_name: "raw_metrics", is_nullable: "NO" },
+      { table_name: "content_performance_snapshots", column_name: "snapshot_date", is_nullable: "NO" },
+      { table_name: "content_performance_snapshots", column_name: "updated_at", is_nullable: "NO" },
+      { table_name: "content_performance_snapshots", column_name: "workspace_id", is_nullable: "NO" },
+      { table_name: "performance_sync_runs", column_name: "brand_id", is_nullable: "NO" },
+      { table_name: "performance_sync_runs", column_name: "channel", is_nullable: "NO" },
+      { table_name: "performance_sync_runs", column_name: "completed_at", is_nullable: "YES" },
+      { table_name: "performance_sync_runs", column_name: "created_at", is_nullable: "NO" },
+      { table_name: "performance_sync_runs", column_name: "error_summary", is_nullable: "YES" },
+      { table_name: "performance_sync_runs", column_name: "failure_count", is_nullable: "NO" },
+      { table_name: "performance_sync_runs", column_name: "id", is_nullable: "NO" },
+      { table_name: "performance_sync_runs", column_name: "run_date", is_nullable: "NO" },
+      { table_name: "performance_sync_runs", column_name: "started_at", is_nullable: "NO" },
+      { table_name: "performance_sync_runs", column_name: "status", is_nullable: "NO" },
+      { table_name: "performance_sync_runs", column_name: "success_count", is_nullable: "NO" },
+      { table_name: "performance_sync_runs", column_name: "target_count", is_nullable: "NO" },
+      { table_name: "performance_sync_runs", column_name: "updated_at", is_nullable: "NO" },
+      { table_name: "performance_sync_runs", column_name: "workspace_id", is_nullable: "NO" },
+    ]);
+
+    const indexColumns = await database.query(`
+      select array_agg(attribute.attname::text order by key.ordinality) as columns
+      from pg_class index_class
+      join pg_index index_data on index_data.indexrelid = index_class.oid
+      cross join lateral unnest(index_data.indkey) with ordinality as key(attnum, ordinality)
+      join pg_attribute attribute
+        on attribute.attrelid = index_data.indrelid
+       and attribute.attnum = key.attnum
+      where index_class.relname = 'content_performance_brand_channel_date_idx'
+      group by index_class.oid
+    `);
+    assert.deepEqual(indexColumns.rows, [
+      { columns: ["brand_id", "channel", "snapshot_date"] },
+    ]);
+
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "content_performance_snapshots",
+        "content_performance_snapshots_channel_check",
+      ),
+      ["instagram", "linkedin", "threads", "tiktok", "webflow", "x", "youtube"],
+    );
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "performance_sync_runs",
+        "performance_sync_runs_channel_check",
+      ),
+      ["instagram", "linkedin", "threads", "tiktok", "webflow", "x", "youtube"],
+    );
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "performance_sync_runs",
+        "performance_sync_runs_status_check",
+      ),
+      ["completed", "failed", "not_configured", "partially_failed", "running"],
+    );
+
+    const exposureConstraint = await database.query(
+      "select pg_get_constraintdef(oid) as definition from pg_constraint where conrelid = 'content_performance_snapshots'::regclass and conname = 'content_performance_snapshots_exposure_count_check'",
+    );
+    assert.equal(exposureConstraint.rows.length, 1);
+    assert.match(exposureConstraint.rows[0].definition, /exposure_count >= 0/);
+
+    const ownershipConstraints = await database.query(`
+      select conname
+      from pg_constraint
+      where conname in (
+        'channel_outputs_performance_identity_unique',
+        'publish_queue_performance_identity_unique',
+        'content_performance_snapshots_publish_queue_owner_fkey',
+        'content_performance_snapshots_channel_output_owner_fkey'
+      )
+      order by conname
+    `);
+    assert.deepEqual(
+      ownershipConstraints.rows.map((row) => row.conname),
+      [
+        "channel_outputs_performance_identity_unique",
+        "content_performance_snapshots_channel_output_owner_fkey",
+        "content_performance_snapshots_publish_queue_owner_fkey",
+        "publish_queue_performance_identity_unique",
+      ],
+    );
+
+    const firstFixture = await insertPublishingFixture(database);
+    const secondFixture = await insertPublishingFixture(database);
+
+    await assert.rejects(
+      database.query(
+        `insert into content_performance_snapshots
+           (workspace_id, brand_id, channel, publish_queue_id, channel_output_id,
+            external_post_id, snapshot_date, raw_metrics, collected_at)
+         values ($1, $2, 'instagram', $3, $4, 'cross-tenant', '2026-07-16', '{}', now())`,
+        [
+          firstFixture.workspaceId,
+          firstFixture.brandId,
+          secondFixture.publishQueueId,
+          secondFixture.channelOutputId,
+        ],
+      ),
+      /content_performance_snapshots_publish_queue_owner_fkey/,
+    );
+
+    await database.query(
+      `update publish_queue
+       set workspace_id = $1,
+           brand_id = $2,
+           brand_channel_id = (
+             select id from brand_channels
+             where brand_id = $2 and channel = 'instagram'
+           )
+       where id = $3`,
+      [
+        firstFixture.workspaceId,
+        firstFixture.brandId,
+        secondFixture.publishQueueId,
+      ],
+    );
+    await assert.rejects(
+      database.query(
+        `insert into content_performance_snapshots
+           (workspace_id, brand_id, channel, publish_queue_id, channel_output_id,
+            external_post_id, snapshot_date, raw_metrics, collected_at)
+         values ($1, $2, 'instagram', $3, $4, 'cross-output', '2026-07-16', '{}', now())`,
+        [
+          firstFixture.workspaceId,
+          firstFixture.brandId,
+          secondFixture.publishQueueId,
+          secondFixture.channelOutputId,
+        ],
+      ),
+      /content_performance_snapshots_channel_output_owner_fkey/,
+    );
+
+    await assert.rejects(
+      database.query(
+        `insert into performance_sync_runs
+           (workspace_id, brand_id, channel, run_date, status,
+            target_count, success_count, failure_count)
+         values ($1, $2, 'instagram', '2026-07-16', 'completed', 2, 2, 1)`,
+        [firstFixture.workspaceId, firstFixture.brandId],
+      ),
+      /performance_sync_runs_counts_check/,
+    );
   });
 });
 
@@ -904,4 +1184,514 @@ test("029 remains inside the migration runner transaction", async () => {
   });
 
   assert.doesNotMatch(migration029.sql, /^\s*(?:begin|commit)\s*;/im);
+});
+
+test("032 creates the brand-scoped compiled Wiki core in PGlite", async () => {
+  const migrations = await loadMigrations();
+  const coreMigration = migrations.find(
+    (migration) => migration.id === "032_compounding_wiki_core.sql",
+  );
+  const vectorMigration = migrations.find(
+    (migration) => migration.id === "033_compounding_wiki_pgvector.sql",
+  );
+
+  assert.ok(coreMigration, "missing migration 032_compounding_wiki_core.sql");
+  assert.ok(vectorMigration, "missing migration 033_compounding_wiki_pgvector.sql");
+  assert.match(vectorMigration.sql, /^-- requires: pgvector/);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "032_compounding_wiki_core.sql",
+    );
+
+    const tables = await database.query(`
+      select table_name
+      from information_schema.tables
+      where table_schema = 'public'
+        and table_name in (
+          'wiki_build_requests', 'wiki_source_units', 'wiki_pages',
+          'wiki_page_sources', 'wiki_page_links', 'wiki_page_chunks',
+          'wiki_compilation_items', 'wiki_retrieval_runs',
+          'wiki_maintenance_runs', 'wiki_issues'
+        )
+      order by table_name
+    `);
+    assert.equal(tables.rows.length, 10);
+
+    const versionColumns = await database.query(`
+      select column_name, is_nullable
+      from information_schema.columns
+      where table_name = 'wiki_versions'
+        and column_name = 'build_stage'
+    `);
+    assert.deepEqual(versionColumns.rows, [
+      { column_name: "build_stage", is_nullable: "YES" },
+    ]);
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "wiki_versions",
+        "wiki_versions_status_check",
+      ),
+      ["active", "building", "failed", "ready", "superseded"],
+    );
+
+    const chunkEmbedding = await database.query(`
+      select column_name
+      from information_schema.columns
+      where table_name = 'wiki_page_chunks'
+        and column_name = 'embedding'
+    `);
+    assert.equal(chunkEmbedding.rows.length, 0);
+
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ('Compiled Wiki', $1) returning id",
+      [`compiled-wiki-${randomUUID()}`],
+    );
+    const firstBrand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'First') returning id",
+      [workspace.rows[0].id],
+    );
+    const secondBrand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Second') returning id",
+      [workspace.rows[0].id],
+    );
+    const version = await database.query(
+      `insert into wiki_versions (workspace_id, brand_id, status, build_stage)
+       values ($1, $2, 'building', 'collecting') returning id`,
+      [workspace.rows[0].id, firstBrand.rows[0].id],
+    );
+
+    await database.query(
+      `insert into wiki_build_requests
+         (workspace_id, brand_id, requested_revision, status, quiet_until)
+       values ($1, $2, 1, 'pending', now())`,
+      [workspace.rows[0].id, firstBrand.rows[0].id],
+    );
+    await assert.rejects(
+      database.query(
+        `insert into wiki_build_requests
+           (workspace_id, brand_id, requested_revision, status, quiet_until)
+         values ($1, $2, 2, 'building', now())`,
+        [workspace.rows[0].id, firstBrand.rows[0].id],
+      ),
+      /wiki_build_requests_brand_active_unique/,
+    );
+
+    await database.query(
+      `insert into wiki_pages
+         (workspace_id, brand_id, wiki_version_id, page_type, stable_key,
+          title, content_json)
+       values ($1, $2, $3, 'brand_overview', 'brand', 'Brand',
+               '{"sections": []}')`,
+      [workspace.rows[0].id, firstBrand.rows[0].id, version.rows[0].id],
+    );
+    await assert.rejects(
+      database.query(
+        `insert into wiki_pages
+           (workspace_id, brand_id, wiki_version_id, page_type, stable_key,
+            title, content_json)
+         values ($1, $2, $3, 'brand_overview', 'brand', 'Duplicate',
+                 '{"sections": []}')`,
+        [workspace.rows[0].id, firstBrand.rows[0].id, version.rows[0].id],
+      ),
+      /wiki_pages_version_stable_key_unique/,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into wiki_pages
+           (workspace_id, brand_id, wiki_version_id, page_type, stable_key,
+            title, content_json)
+         values ($1, $2, $3, 'catalog', 'catalog', 'Wrong owner',
+                 '{"sections": []}')`,
+        [workspace.rows[0].id, secondBrand.rows[0].id, version.rows[0].id],
+      ),
+      /wiki_pages_version_ownership_fk/,
+    );
+
+    await assert.rejects(
+      database.query(
+        `insert into wiki_compilation_items
+           (workspace_id, brand_id, wiki_version_id, item_type, stable_key,
+            idempotency_key, status)
+         values ($1, $2, $3, 'brand_core_pages', 'brand-core',
+                 'version-1:brand-core', 'processing')`,
+        [workspace.rows[0].id, firstBrand.rows[0].id, version.rows[0].id],
+      ),
+      /wiki_compilation_items_lease_check/,
+    );
+  });
+});
+
+test("034 creates expiring cross-process worker resource leases", async () => {
+  const migrations = await loadMigrations();
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "034_worker_resource_limits.sql",
+    );
+
+    const table = await database.query(
+      "select to_regclass('public.worker_resource_leases')::text as relation",
+    );
+    assert.equal(table.rows[0].relation, "worker_resource_leases");
+
+    await database.query(
+      `insert into worker_resource_leases
+         (resource_type, workload_type, worker_id, expires_at)
+       values ('codex_cli', 'dm', 'dm-worker-1', now() + interval '45 seconds')`,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into worker_resource_leases
+           (resource_type, workload_type, worker_id, expires_at)
+         values ('codex_cli', 'dm', 'dm-worker-1', now() + interval '45 seconds')`,
+      ),
+      /worker_resource_leases_resource_type_worker_id_key/,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into worker_resource_leases
+           (resource_type, workload_type, worker_id, expires_at)
+         values ('codex_cli', 'invalid', 'invalid-worker', now() + interval '45 seconds')`,
+      ),
+      /worker_resource_leases_workload_check/,
+    );
+  });
+});
+
+test("035 removes Webflow runtime data and separates pending generation state", async () => {
+  const migrations = await loadMigrations();
+  const migration035 = migrations.find(
+    (migration) =>
+      migration.id === "035_remove_webflow_and_split_content_status.sql",
+  );
+
+  assert.ok(
+    migration035,
+    "missing migration 035_remove_webflow_and_split_content_status.sql",
+  );
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "034_worker_resource_limits.sql",
+    );
+
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ('Webflow Removal', $1) returning id",
+      [`webflow-removal-${randomUUID()}`],
+    );
+    const workspaceId = workspace.rows[0].id;
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Migration Brand') returning id",
+      [workspaceId],
+    );
+    const brandId = brand.rows[0].id;
+    const brandChannels = await database.query(
+      `insert into brand_channels
+         (workspace_id, brand_id, channel, status, account_label)
+       values
+         ($1, $2, 'instagram', 'connected', 'Instagram'),
+         ($1, $2, 'webflow', 'connected', 'Webflow')
+       returning id, channel`,
+      [workspaceId, brandId],
+    );
+    const brandChannelIds = new Map(
+      brandChannels.rows.map((row) => [row.channel, row.id]),
+    );
+
+    const credential = await database.query(
+      `insert into channel_credentials
+         (workspace_id, brand_id, brand_channel_id, provider, credential_type,
+          encrypted_payload)
+       values ($1, $2, $3, 'webflow', 'api_token', 'integration-fixture')
+       returning id`,
+      [workspaceId, brandId, brandChannelIds.get("webflow")],
+    );
+    const topic = await database.query(
+      `insert into content_topics (workspace_id, brand_id, title, angle)
+       values ($1, $2, 'Migration topic', 'Migration angle')
+       returning id`,
+      [workspaceId, brandId],
+    );
+    const topicId = topic.rows[0].id;
+    const publishGroup = await database.query(
+      `insert into topic_publish_groups
+         (workspace_id, brand_id, content_topic_id)
+       values ($1, $2, $3)
+       returning id`,
+      [workspaceId, brandId, topicId],
+    );
+    const draft = await database.query(
+      `insert into master_drafts
+         (workspace_id, brand_id, content_topic_id, prompt_version)
+       values ($1, $2, $3, 'migration-035')
+       returning id`,
+      [workspaceId, brandId, topicId],
+    );
+    const draftId = draft.rows[0].id;
+    const webflowOutput = await database.query(
+      `insert into channel_outputs
+         (workspace_id, brand_id, content_topic_id, master_draft_id, channel,
+          status, title, delivery_format)
+       values ($1, $2, $3, $4, 'webflow', 'approved', 'Webflow output',
+               'webflow_article')
+       returning id`,
+      [workspaceId, brandId, topicId, draftId],
+    );
+    const webflowOutputId = webflowOutput.rows[0].id;
+    const pendingInstagramOutput = await database.query(
+      `insert into channel_outputs
+         (workspace_id, brand_id, content_topic_id, master_draft_id, channel,
+          status, title, delivery_format, output_json, block_reasons)
+       values ($1, $2, $3, $4, 'instagram', 'auto_approval_blocked',
+               'Pending Instagram output', 'instagram_feed_carousel',
+               '{"generationState":"pending","artifactStatus":"pending"}',
+               '["instagram_artifact_pending","policy_violation"]')
+       returning id`,
+      [workspaceId, brandId, topicId, draftId],
+    );
+    const pendingInstagramOutputId = pendingInstagramOutput.rows[0].id;
+
+    const blockedTopic = await database.query(
+      `insert into content_topics (workspace_id, brand_id, title, angle)
+       values ($1, $2, 'Blocked topic', 'Blocked angle')
+       returning id`,
+      [workspaceId, brandId],
+    );
+    const blockedDraft = await database.query(
+      `insert into master_drafts
+         (workspace_id, brand_id, content_topic_id, prompt_version)
+       values ($1, $2, $3, 'migration-035')
+       returning id`,
+      [workspaceId, brandId, blockedTopic.rows[0].id],
+    );
+    const blockedInstagramOutput = await database.query(
+      `insert into channel_outputs
+         (workspace_id, brand_id, content_topic_id, master_draft_id, channel,
+          status, title, delivery_format, output_json, block_reasons)
+       values ($1, $2, $3, $4, 'instagram', 'auto_approval_blocked',
+               'Blocked Instagram output', 'instagram_feed_carousel',
+               '{"generationState":"ready","artifactStatus":"ready"}',
+               '["policy_violation"]')
+       returning id`,
+      [workspaceId, brandId, blockedTopic.rows[0].id, blockedDraft.rows[0].id],
+    );
+
+    const slot = await database.query(
+      `insert into publish_slots
+         (workspace_id, brand_id, channel, slot_number, base_time)
+       values ($1, $2, 'webflow', 1, '09:00')
+       returning id`,
+      [workspaceId, brandId],
+    );
+    const queue = await database.query(
+      `insert into publish_queue
+         (workspace_id, brand_id, channel_output_id, brand_channel_id, channel,
+          status, approval_type, queued_at, idempotency_key,
+          topic_publish_group_id)
+       values ($1, $2, $3, $4, 'webflow', 'published', 'manual', now(), $5, $6)
+       returning id`,
+      [
+        workspaceId,
+        brandId,
+        webflowOutputId,
+        brandChannelIds.get("webflow"),
+        `webflow-${randomUUID()}`,
+        publishGroup.rows[0].id,
+      ],
+    );
+    const queueId = queue.rows[0].id;
+    const attempt = await database.query(
+      `insert into publish_attempts
+         (workspace_id, brand_id, publish_queue_id, attempt_number, status)
+       values ($1, $2, $3, 1, 'succeeded')
+       returning id`,
+      [workspaceId, brandId, queueId],
+    );
+    const job = await database.query(
+      `insert into jobs
+         (workspace_id, brand_id, channel_output_id, job_type, status)
+       values ($1, $2, $3, 'channel_output_generate', 'succeeded')
+       returning id`,
+      [workspaceId, brandId, webflowOutputId],
+    );
+    const reviewEvent = await database.query(
+      `insert into review_events
+         (workspace_id, brand_id, channel_output_id, actor_type, event_type)
+       values ($1, $2, $3, 'system', 'status_changed')
+       returning id`,
+      [workspaceId, brandId, webflowOutputId],
+    );
+    const snapshot = await database.query(
+      `insert into content_performance_snapshots
+         (workspace_id, brand_id, channel, publish_queue_id, channel_output_id,
+          external_post_id, snapshot_date, exposure_count, collected_at)
+       values ($1, $2, 'webflow', $3, $4, 'webflow-post', '2026-07-16', 10, now())
+       returning id`,
+      [workspaceId, brandId, queueId, webflowOutputId],
+    );
+    const syncRun = await database.query(
+      `insert into performance_sync_runs
+         (workspace_id, brand_id, channel, run_date, status, target_count,
+          success_count, failure_count)
+       values ($1, $2, 'webflow', '2026-07-16', 'completed', 1, 1, 0)
+       returning id`,
+      [workspaceId, brandId],
+    );
+
+    await database.exec(migration035.sql);
+
+    for (const [table, id] of [
+      ["content_performance_snapshots", snapshot.rows[0].id],
+      ["performance_sync_runs", syncRun.rows[0].id],
+      ["publish_attempts", attempt.rows[0].id],
+      ["publish_queue", queueId],
+      ["publish_slots", slot.rows[0].id],
+      ["jobs", job.rows[0].id],
+      ["review_events", reviewEvent.rows[0].id],
+      ["channel_outputs", webflowOutputId],
+      ["channel_credentials", credential.rows[0].id],
+      ["brand_channels", brandChannelIds.get("webflow")],
+    ]) {
+      const result = await database.query(
+        `select count(*)::int as count from ${table} where id = $1`,
+        [id],
+      );
+      assert.equal(result.rows[0].count, 0, `${table} Webflow row remains`);
+    }
+
+    const migratedPendingOutput = await database.query(
+      `select status, block_reasons
+       from channel_outputs
+       where id = $1`,
+      [pendingInstagramOutputId],
+    );
+    assert.deepEqual(migratedPendingOutput.rows, [
+      { status: "generating", block_reasons: ["policy_violation"] },
+    ]);
+    const preservedBlockedOutput = await database.query(
+      `select status, block_reasons
+       from channel_outputs
+       where id = $1`,
+      [blockedInstagramOutput.rows[0].id],
+    );
+    assert.deepEqual(preservedBlockedOutput.rows, [
+      {
+        status: "auto_approval_blocked",
+        block_reasons: ["policy_violation"],
+      },
+    ]);
+
+    const defaultTopic = await database.query(
+      `insert into content_topics (workspace_id, brand_id, title, angle)
+       values ($1, $2, 'Default status topic', 'Default status angle')
+       returning id`,
+      [workspaceId, brandId],
+    );
+    const defaultDraft = await database.query(
+      `insert into master_drafts
+         (workspace_id, brand_id, content_topic_id, prompt_version)
+       values ($1, $2, $3, 'migration-035')
+       returning id`,
+      [workspaceId, brandId, defaultTopic.rows[0].id],
+    );
+    const defaultOutput = await database.query(
+      `insert into channel_outputs
+         (workspace_id, brand_id, content_topic_id, master_draft_id, channel,
+          title, delivery_format)
+       values ($1, $2, $3, $4, 'instagram', 'Default status output',
+               'instagram_feed_carousel')
+       returning status`,
+      [workspaceId, brandId, defaultTopic.rows[0].id, defaultDraft.rows[0].id],
+    );
+    assert.equal(defaultOutput.rows[0].status, "generating");
+
+    const supportedChannels = [
+      "instagram",
+      "linkedin",
+      "threads",
+      "tiktok",
+      "x",
+      "youtube",
+    ];
+    for (const [table, constraint] of [
+      ["brand_channels", "brand_channels_channel_check"],
+      ["channel_outputs", "channel_outputs_channel_check"],
+      ["publish_slots", "publish_slots_channel_check"],
+      ["publish_queue", "publish_queue_channel_check"],
+      [
+        "content_performance_snapshots",
+        "content_performance_snapshots_channel_check",
+      ],
+      ["performance_sync_runs", "performance_sync_runs_channel_check"],
+    ]) {
+      assert.deepEqual(
+        await readConstraintValues(database, table, constraint),
+        supportedChannels,
+      );
+    }
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "channel_credentials",
+        "channel_credentials_provider_check",
+      ),
+      ["google", "linkedin", "meta", "tiktok", "x"],
+    );
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "channel_outputs",
+        "channel_outputs_delivery_format_check",
+      ),
+      [
+        "instagram_feed_carousel",
+        "instagram_reel",
+        "instagram_story",
+        "linkedin_post",
+        "threads_text",
+        "tiktok_video",
+        "x_post",
+        "youtube_short",
+        "youtube_video",
+      ],
+    );
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "channel_outputs",
+        "channel_outputs_status_check",
+      ),
+      [
+        "approved",
+        "auto_approval_blocked",
+        "auto_approved",
+        "generating",
+        "generation_failed",
+        "pending_review",
+        "regenerated",
+        "regenerating",
+        "rejected",
+      ],
+    );
+
+    await assert.rejects(
+      database.query(
+        `insert into brand_channels (workspace_id, brand_id, channel)
+         values ($1, $2, 'webflow')`,
+        [workspaceId, brandId],
+      ),
+      /brand_channels_channel_check/,
+    );
+  });
 });
