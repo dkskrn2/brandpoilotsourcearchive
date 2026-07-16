@@ -1,5 +1,5 @@
 ﻿import crypto from "node:crypto";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { decryptCredential, encryptCredential } from "./credentialCrypto.js";
 import { buildPublishedResultsPackage, fetchRemoteBuffer, type PublishedResultRecord } from "./downloadPackage.js";
 import {
@@ -32,6 +32,16 @@ import { buildThreadsRenderJobPayload, parseThreadsRenderJobResult } from "./tex
 import { brandPolicyDateKey, dailyTopicCapacity, determineGenerationReadiness, runDailyTopicGeneration } from "./topicPublishGroups.js";
 import { parseKnowledgeUpload } from "./knowledgeImport.js";
 import { normalizePublishArtifact } from "./publishArtifacts.js";
+import { channelCatalog } from "./channelCatalog.js";
+import { createPublishAdapterRegistry, type PublishAdapterResult } from "./publishAdapters.js";
+import {
+  createPerformanceAdapterRegistry,
+  exposureDelta,
+  isPerformanceSyncDue,
+  performanceRunDate,
+  type PerformanceAdapter,
+  type PerformanceChannel
+} from "./contentPerformance.js";
 import type {
   ApiRepository,
   AutomaticCrawlResult,
@@ -45,8 +55,11 @@ import type {
   ChannelConnectionRequestInput,
   ChannelDto,
   ContentOutputDto,
+  ContentOutputStatus,
   CredentialInput,
   DailyGenerationRunResult,
+  DashboardDto,
+  DeliveryFormat,
   DmAttentionItemDto,
   DmConversationDetailDto,
   DmConversationFilter,
@@ -70,6 +83,7 @@ import type {
   PublishQueueDto,
   PublishResultDto,
   PipelineRunResult,
+  PerformanceSyncStatus,
   SourceCrawlRunDto,
   SourceCrawlRunStatus,
   SourceCrawlTrigger,
@@ -87,6 +101,7 @@ import type {
   TopicUploadInput,
   WikiStatusDto
 } from "./types.js";
+import { resolveWorkerResourceLimits, type WorkerResourceLimits } from "./workerResources.js";
 
 function toIso(value: Date | string | null): string | null {
   if (!value) return null;
@@ -478,10 +493,19 @@ function decodeBase64Upload(value: string) {
 }
 
 function mapChannel(row: any): ChannelDto {
+  const hasActiveCredentials = row.has_active_credentials === undefined
+    ? row.status === "connected"
+    : Boolean(row.has_active_credentials);
+  const status = row.status === "connected" && !hasActiveCredentials ? "not_connected" : row.status;
+  const oauthState = hasActiveCredentials
+    ? status === "connected" ? "connected" : "needs_attention"
+    : status === "not_connected" ? "not_connected" : "needs_attention";
   return {
     channel: row.channel,
-    status: row.status,
-    accountLabel: row.account_label,
+    enabled: Boolean(row.enabled),
+    oauthState,
+    status,
+    accountLabel: row.account_label ?? null,
     lastHealthyAt: toIso(row.last_healthy_at),
     lastPublishedAt: toIso(row.last_published_at),
     lastError: row.last_error
@@ -953,6 +977,15 @@ interface RepositoryOptions {
   fetchInstagramMessagingProfile?: typeof fetchInstagramMessagingProfile;
   fetchInstagramHashtagTopMedia?: typeof fetchInstagramHashtagTopMedia;
   trendNow?: () => Date;
+  performanceAdapters?: Partial<Record<PerformanceChannel, PerformanceAdapter>>;
+  workerResourceLimits?: Pick<WorkerResourceLimits, "total" | "dmReserved">;
+}
+
+function repositoryWorkerResourceLimits(options?: RepositoryOptions) {
+  return resolveWorkerResourceLimits(options?.workerResourceLimits ?? {
+    total: Number(process.env.WORKER_CODEX_MAX_CONCURRENCY ?? "2"),
+    dmReserved: Number(process.env.WORKER_CODEX_DM_RESERVED_SLOTS ?? "1"),
+  });
 }
 
 function resolvePublishArtifactAllowedOrigins(options?: RepositoryOptions) {
@@ -1006,6 +1039,37 @@ function nullableText(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function safeWorkerFailureMessage(value: string) {
+  const sanitized = value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, " ").trim();
+  return (sanitized || "worker_generation_failed").slice(0, 2000);
+}
+
+async function markChannelOutputsGenerationFailed(
+  client: Pick<PoolClient, "query">,
+  channelOutputIds: string[],
+  code: string,
+  message: string
+) {
+  if (channelOutputIds.length === 0) return;
+  await client.query(
+    `update channel_outputs
+     set status = 'generation_failed',
+         output_json = jsonb_set(
+           coalesce(output_json, '{}'::jsonb),
+           '{generationError}',
+           jsonb_build_object('code', $2, 'message', $3, 'failedAt', now()),
+           true
+         ),
+         block_reasons = case
+           when block_reasons ? 'generation_failed' then block_reasons
+           else coalesce(block_reasons, '[]'::jsonb) || '["generation_failed"]'::jsonb
+         end,
+         updated_at = now()
+     where id = any($1::uuid[])`,
+    [channelOutputIds, code, safeWorkerFailureMessage(message)]
+  );
+}
+
 async function fetchInstagramImageManifest(manifestUrl: string, fetchImpl = fetch) {
   const response = await fetchImpl(manifestUrl);
   if (!response.ok) throw new Error(`instagram_manifest_fetch_failed:${response.status}`);
@@ -1015,6 +1079,7 @@ async function fetchInstagramImageManifest(manifestUrl: string, fetchImpl = fetc
 export function createRepository(pool: Pool, options: RepositoryOptions = {}): ApiRepository {
   const instagramPublish = resolveInstagramPublishOptions(options);
   const imageRenderCooldownMs = resolveImageRenderCooldownMs(options);
+  const workerResourceLimits = repositoryWorkerResourceLimits(options);
   const fetchInstagramManifest = options.fetchInstagramImageManifest ?? fetchInstagramImageManifest;
   const fetchImageAsset = options.fetchImageAsset ?? fetch;
   const fetchPublishArtifact = options.fetchPublishArtifact ?? fetch;
@@ -1031,6 +1096,10 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     fetchTopMedia: options.fetchInstagramHashtagTopMedia ?? fetchInstagramHashtagTopMedia,
     now: options.trendNow,
   });
+  const performanceAdapters = {
+    ...createPerformanceAdapterRegistry(),
+    ...options.performanceAdapters
+  };
   const publishInstagramOutput = options.publishInstagramOutput ?? (
     options.publishInstagramCarousel
       ? async (input: InstagramPublishInput) => input.deliveryFormat === "instagram_feed_carousel"
@@ -1229,8 +1298,33 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     let requestMetadata: Record<string, unknown> = { mode: "mock", channel: queue.channel };
     let responseMetadata: Record<string, unknown> = { publishedUrl };
     let externalPublishSucceeded = false;
+    let deferredProviderFailure: Extract<PublishAdapterResult, { status: "blocked" }> | null = null;
 
     try {
+      if (queue.channel !== "instagram") {
+        const adapters = createPublishAdapterRegistry({
+          publishInstagram: async () => {
+            throw new Error("instagram_adapter_boundary_unreachable");
+          }
+        });
+        const adapter = adapters[queue.channel as Channel];
+        if (!adapter) throw new Error("publish_adapter_not_found");
+        const adapterResult = await adapter.publish({
+          channel: queue.channel,
+          credentialState: queue.encrypted_payload && queue.external_account_id ? "connected" : "not_connected",
+          queueId,
+          outputJson: recordValue(queue.output_json)
+        });
+        if (adapterResult.status === "blocked") {
+          deferredProviderFailure = adapterResult;
+          throw new Error(adapterResult.errorCode);
+        }
+        externalPublishSucceeded = true;
+        externalPostId = adapterResult.externalPostId;
+        publishedUrl = adapterResult.externalUrl;
+        requestMetadata = { mode: "provider_adapter", channel: queue.channel };
+        responseMetadata = { publishedUrl, externalPostId };
+      }
       if (queue.channel === "instagram" && instagramPublish.enabled) {
         if (!queue.rendered_manifest_url) throw new Error("instagram_rendered_manifest_required");
         if (!queue.external_account_id) throw new Error("instagram_business_account_id_required");
@@ -1315,32 +1409,12 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         responseMetadata = { publishedUrl, externalPostId };
       }
 
-      const updated = await pool.query(
-        `with completed_attempt as (
-           update publish_attempts
-           set status = 'succeeded',
-               request_metadata = $3,
-               response_metadata = $4,
-               external_post_id = $5,
-               external_url = $6,
-               finished_at = now()
-           where id = $1 and publish_queue_id = $2 and status = 'running'
-           returning id
-         ), completed_queue as (
-           update publish_queue
-           set status = 'published',
-               published_at = now(),
-               last_error = null,
-               updated_at = now()
-           where id = $2 and status = 'publishing' and exists (select 1 from completed_attempt)
-           returning id, status
-         ), updated_channel as (
-           update brand_channels
-           set last_published_at = now(), status = 'connected', last_error = null
-           where brand_id = $7 and channel = $8 and exists (select 1 from completed_queue)
-           returning id
-         )
-         select id, status from completed_queue`,
+      const completedAttempt = await pool.query(
+        `update publish_attempts
+         set status = 'succeeded', request_metadata = $3, response_metadata = $4,
+             external_post_id = $5, external_url = $6, finished_at = coalesce(finished_at, now())
+         where id = $1 and publish_queue_id = $2 and status in ('running', 'succeeded')
+         returning id`,
         [
           queue.attempt_id,
           queueId,
@@ -1348,6 +1422,32 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           JSON.stringify(responseMetadata),
           externalPostId,
           publishedUrl,
+        ],
+      );
+      if (!completedAttempt.rowCount) throw new Error("publish_attempt_checkpoint_failed");
+      const updated = await pool.query(
+        `with completed_queue as (
+           update publish_queue
+           set status = 'published',
+               published_at = now(),
+               last_error = null,
+               updated_at = now()
+           where id = $1 and status in ('publishing', 'published')
+             and exists (
+               select 1 from publish_attempts
+               where id = $2 and publish_queue_id = $1 and status = 'succeeded'
+             )
+           returning id, status
+         ), updated_channel as (
+           update brand_channels
+           set last_published_at = now(), status = 'connected', last_error = null
+           where brand_id = $3 and channel = $4 and exists (select 1 from completed_queue)
+           returning id
+         )
+         select id, status from completed_queue`,
+        [
+          queueId,
+          queue.attempt_id,
           queue.brand_id,
           queue.channel
         ]
@@ -1355,8 +1455,32 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       if (!updated.rowCount) throw new Error("publish_queue_finalize_failed");
       return { id: updated.rows[0].id, status: updated.rows[0].status, publishedUrl };
     } catch (error) {
-      if (!externalPublishSucceeded) {
-        const classification = classifyMetaGraphPublishError(error);
+      if (externalPublishSucceeded) {
+        await pool.query(
+          `with completed_queue as (
+             update publish_queue
+             set status = 'published', published_at = coalesce(published_at, now()),
+                 last_error = null, updated_at = now()
+             where id = $1 and status = 'publishing'
+               and exists (
+                 select 1 from publish_attempts
+                 where id = $2 and publish_queue_id = $1 and status = 'succeeded'
+               )
+             returning id
+           )
+           update brand_channels
+           set last_published_at = now(), status = 'connected', last_error = null
+           where brand_id = $3 and channel = $4 and exists (select 1 from completed_queue)`,
+          [queueId, queue.attempt_id, queue.brand_id, queue.channel],
+        ).catch(() => undefined);
+      } else {
+        const classification = deferredProviderFailure
+          ? {
+              errorCode: deferredProviderFailure.errorCode,
+              retryable: deferredProviderFailure.retryable,
+              channelNeedsAttention: deferredProviderFailure.errorCode === "oauth_required"
+            }
+          : classifyMetaGraphPublishError(error);
         await pool.query(
           `with failed_attempt as (
              update publish_attempts
@@ -1447,7 +1571,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                 (select count(*) from channel_outputs co where co.brand_id = b.id) as content_output_count,
                 (select count(*) from channel_outputs co where co.brand_id = b.id and co.status in ('pending_review', 'auto_approval_blocked', 'regenerating')) as content_review_count,
                 (select count(*) from publish_queue pq where pq.brand_id = b.id and pq.status = 'failed') as publish_issue_count,
-                (select count(*) from brand_channels bc where bc.brand_id = b.id and bc.channel in ('instagram', 'threads', 'tiktok', 'youtube', 'x') and bc.deleted_at is null and bc.status != 'connected') as channel_issue_count,
+                (select count(*) from brand_channels bc where bc.brand_id = b.id and bc.channel in ('instagram', 'threads', 'x', 'linkedin', 'youtube', 'tiktok') and bc.deleted_at is null and bc.status != 'connected') as channel_issue_count,
                 (select max(co.generated_at) from channel_outputs co where co.brand_id = b.id) as last_generated_at
          from brands b
          left join brand_profiles bp on bp.brand_id = b.id
@@ -1830,13 +1954,50 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
 
     async listChannels(brandId) {
       const result = await pool.query(
-        `select channel, status, account_label, last_healthy_at, last_published_at, last_error
-         from brand_channels
-         where brand_id = $1 and channel in ('instagram', 'threads', 'tiktok', 'youtube', 'x') and deleted_at is null
-         order by case channel when 'instagram' then 1 when 'threads' then 2 when 'tiktok' then 3 when 'youtube' then 4 when 'x' then 5 else 6 end`,
+        `select bc.channel, bc.enabled, bc.status, bc.account_label, bc.last_healthy_at, bc.last_published_at, bc.last_error,
+                exists (
+                  select 1
+                  from channel_credentials cc
+                  where cc.brand_channel_id = bc.id
+                    and cc.status = 'active'
+                    and cc.revoked_at is null
+                    and (cc.expires_at is null or cc.expires_at > now())
+                ) as has_active_credentials
+         from brand_channels bc
+         where bc.brand_id = $1 and bc.deleted_at is null`,
         [brandId]
       );
-      return result.rows.map(mapChannel);
+      const rowsByChannel = new Map(result.rows.map((row) => [row.channel, row]));
+      return channelCatalog.map(({ channel }) => mapChannel(rowsByChannel.get(channel) ?? {
+        channel,
+        enabled: false,
+        status: "not_connected",
+        has_active_credentials: false,
+        account_label: null,
+        last_healthy_at: null,
+        last_published_at: null,
+        last_error: null
+      }));
+    },
+
+    async updateChannelEnabled(brandId, channel, enabled) {
+      const result = await pool.query(
+        `update brand_channels bc
+         set enabled = $3
+         where bc.brand_id = $1 and bc.channel = $2 and bc.deleted_at is null
+         returning bc.channel, bc.enabled, bc.status, bc.account_label, bc.last_healthy_at, bc.last_published_at, bc.last_error,
+                   exists (
+                     select 1
+                     from channel_credentials cc
+                     where cc.brand_channel_id = bc.id
+                       and cc.status = 'active'
+                       and cc.revoked_at is null
+                       and (cc.expires_at is null or cc.expires_at > now())
+                   ) as has_active_credentials`,
+        [brandId, channel, enabled]
+      );
+      if (!result.rowCount) throw new Error("channel_not_found");
+      return mapChannel(result.rows[0]);
     },
 
     async getChannelConnectionRequest(brandId) {
@@ -2020,11 +2181,35 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     async checkChannel(brandId, channel: Channel) {
       if (channel !== "instagram") {
         const result = await pool.query(
-          `update brand_channels
-           set status = $3, last_healthy_at = now(), last_error = $4
-           where brand_id = $1 and channel = $2
-           returning channel, status, account_label, last_healthy_at, last_published_at, last_error`,
-          [brandId, channel, "connected", null]
+          `with credential_state as (
+             select exists (
+               select 1
+               from brand_channels bc_inner
+               join channel_credentials cc on cc.brand_channel_id = bc_inner.id
+               where bc_inner.brand_id = $1
+                 and bc_inner.channel = $2
+                 and bc_inner.deleted_at is null
+                 and cc.status = 'active'
+                 and cc.revoked_at is null
+                 and (cc.expires_at is null or cc.expires_at > now())
+             ) as has_active_credentials
+           )
+           update brand_channels bc
+           set status = case
+                 when credential_state.has_active_credentials then 'needs_attention'
+                 when bc.status in ('needs_attention', 'expired', 'insufficient_permissions', 'mapping_required', 'publish_failed') then 'needs_attention'
+                 else 'not_connected'
+               end,
+               last_healthy_at = bc.last_healthy_at,
+               last_error = case
+                 when credential_state.has_active_credentials then 'provider_check_not_implemented'
+                 else coalesce(bc.last_error, 'credential_missing')
+               end
+           from credential_state
+           where bc.brand_id = $1 and bc.channel = $2 and bc.deleted_at is null
+           returning bc.channel, bc.enabled, bc.status, bc.account_label, bc.last_healthy_at, bc.last_published_at, bc.last_error,
+                     credential_state.has_active_credentials`,
+          [brandId, channel]
         );
         if (!result.rowCount) throw new Error("channel_not_found");
         return mapChannel(result.rows[0]);
@@ -2042,12 +2227,12 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           `update brand_channels
            set status = $3, last_error = $4
            where brand_id = $1 and channel = $2
-           returning channel, status, account_label, last_healthy_at, last_published_at, last_error`,
+           returning channel, enabled, status, account_label, last_healthy_at, last_published_at, last_error`,
           [brandId, channel, channelState.status, channelState.lastError]
         );
         if (!result.rowCount) throw new Error("channel_not_found");
         await client.query("commit");
-        return mapChannel(result.rows[0]);
+        return mapChannel({ ...result.rows[0], has_active_credentials: Boolean(context.credential) });
       } catch (error) {
         await client.query("rollback");
         throw error;
@@ -2104,6 +2289,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                 output_json, source_summary, block_reasons, generated_at
          from channel_outputs
          where brand_id = $1
+           and status <> 'regenerated'
          order by generated_at desc`,
         [brandId]
       );
@@ -2126,6 +2312,9 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
 
     async reviewContentOutput(outputId, action, reason) {
       const status = action === "approve" ? "approved" : action === "reject" ? "rejected" : "regenerating";
+      const reviewableStatuses = action === "approve"
+        ? ["pending_review", "auto_approval_blocked"]
+        : ["pending_review", "auto_approval_blocked", "generation_failed"];
       const client = await pool.connect();
       try {
         await client.query("begin");
@@ -2136,6 +2325,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                  approved_at = case when $2 = 'approved' then now() else approved_at end,
                  rejected_at = case when $2 = 'rejected' then now() else rejected_at end
              where id = $1
+               and status = any($3::text[])
              returning id, status, workspace_id, brand_id, content_topic_id, master_draft_id,
                        channel, delivery_format, title, output_json, source_summary, rendered_artifact_id
            )
@@ -2171,10 +2361,17 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             join master_drafts md on md.id = updated.master_draft_id
             join content_topics ct on ct.id = updated.content_topic_id
             left join topic_rows tr on tr.id = ct.topic_row_id`,
-          [outputId, status]
+          [outputId, status, reviewableStatuses]
         );
-        if (!result.rowCount) throw new Error("content_output_not_found");
+        if (!result.rowCount) throw new Error("content_output_not_reviewable");
         const output = result.rows[0];
+        const outputJson = recordValue(output.output_json);
+        if (
+          action === "approve"
+          && (nullableText(outputJson.generationState) === "pending" || nullableText(outputJson.artifactStatus) === "pending")
+        ) {
+          throw new Error("content_output_artifact_not_ready");
+        }
         await client.query(
           `insert into review_events (workspace_id, brand_id, channel_output_id, actor_type, event_type, reason)
            values ($1, $2, $3, 'user', $4, $5)`,
@@ -2222,7 +2419,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                workspace_id, brand_id, content_topic_id, master_draft_id, channel, delivery_format, status,
                title, preview_title, preview_body, output_json, source_summary, block_reasons
              )
-             values ($1, $2, $3, $4, $5, $6, 'auto_approval_blocked', $7, $8, $9, $10, $11, $12)
+             values ($1, $2, $3, $4, $5, $6, 'generating', $7, $8, $9, $10, $11, $12)
              returning id`,
             [
               output.workspace_id,
@@ -2236,7 +2433,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
               "작업자 아티팩트 생성 대기 중",
               JSON.stringify(regeneratedOutputJson),
               output.source_summary,
-              JSON.stringify(["instagram_artifact_pending"])
+              JSON.stringify([])
             ]
           );
           const regeneratedOutputId = regenerated.rows[0]?.id;
@@ -3019,6 +3216,23 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         }
       }
       await enqueueLatestSourceContentTopics(pool, brandId);
+      if (created > 0 && sources.rowCount) {
+        const source = sources.rows[0];
+        await pool.query(
+          `insert into wiki_build_requests (
+             workspace_id, brand_id, requested_revision, status, quiet_until
+           ) values ($1::uuid, $2::uuid, 1, 'pending', now() + interval '2 minutes')
+           on conflict (workspace_id, brand_id)
+           where status in ('pending', 'building')
+           do update set
+             requested_revision = wiki_build_requests.requested_revision + 1,
+             rebuild_requested = wiki_build_requests.rebuild_requested or wiki_build_requests.status = 'building',
+             quiet_until = case when wiki_build_requests.status = 'pending'
+               then now() + interval '2 minutes' else wiki_build_requests.quiet_until end,
+             updated_at = now()`,
+          [source.workspace_id, brandId],
+        );
+      }
       return { processed: sources.rows.length, created, updated, failed };
     },
 
@@ -3047,21 +3261,20 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         );
         if (!brandResult.rowCount) throw new Error("brand_not_found");
         const brand = brandResult.rows[0];
-        const connectedChannelResult = await client.query(
+        const enabledChannelResult = await client.query(
           `select channel
            from brand_channels
            where brand_id = $1
-             and status = 'connected'
              and enabled = true
              and deleted_at is null`,
           [brandId]
         );
-        const connectedChannels = connectedChannelResult.rows
+        const enabledChannels = enabledChannelResult.rows
           .map((row) => row.channel)
-          .filter((channel): channel is Channel => channel === "instagram" || channel === "threads");
+          .filter((channel): channel is Channel => channelCatalog.some((entry) => entry.channel === channel));
         let enabledInstagramFormats: InstagramDeliveryFormat[] = [];
         let lastSelectedInstagramFormat: InstagramDeliveryFormat | null = null;
-        if (connectedChannels.includes("instagram")) {
+        if (enabledChannels.includes("instagram")) {
           await client.query(
             `insert into brand_format_rotation_states (brand_id, workspace_id)
              values ($1, $2)
@@ -3093,7 +3306,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             ? storedFormat
             : null;
         }
-        const readiness = determineGenerationReadiness(connectedChannels, enabledInstagramFormats, lastSelectedInstagramFormat);
+        const readiness = determineGenerationReadiness(enabledChannels, enabledInstagramFormats, lastSelectedInstagramFormat);
         if (!readiness.canProduce) {
           await client.query("commit");
           return { processed: 0, created: 0, updated: 0, failed: 0, reason: "no_producible_channel" };
@@ -3351,9 +3564,9 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           ? sourceContext.representativeUrl
           : topic?.reference_url ?? selectedTopic?.reference_url ?? null;
         const outputs: Array<{
-          channel: "instagram" | "threads";
-          deliveryFormat: InstagramDeliveryFormat | "threads_text";
-          status: "pending_review" | "auto_approved" | "auto_approval_blocked";
+          channel: Channel;
+          deliveryFormat: DeliveryFormat;
+          status: ContentOutputStatus;
           title: string;
           previewTitle: string;
           previewBody: string;
@@ -3364,38 +3577,32 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         const sourceSummary = representativeUrl
           ? `대표 URL: ${representativeUrl}`
           : "주제와 브랜드 정보를 워커에 전달합니다.";
-        if (readiness.instagramFormat) {
+        for (const catalogEntry of channelCatalog) {
+          if (!enabledChannels.includes(catalogEntry.channel)) continue;
+          const deliveryFormat = catalogEntry.channel === "instagram"
+            ? readiness.instagramFormat
+            : catalogEntry.defaultDeliveryFormat;
+          if (!deliveryFormat) continue;
+          const artifactKind = catalogEntry.channel === "instagram" && deliveryFormat === "instagram_reel"
+            ? "video"
+            : catalogEntry.artifactKind;
           outputs.push({
-            channel: "instagram",
-            deliveryFormat: readiness.instagramFormat,
-            status: "auto_approval_blocked",
+            channel: catalogEntry.channel,
+            deliveryFormat,
+            status: "generating",
             title: outputTitle,
             previewTitle: outputTitle,
-            previewBody: "작업자 아티팩트 생성 대기 중",
+            previewBody: `${catalogEntry.label.en} 콘텐츠 생성 대기 중`,
             outputJson: {
-              deliveryFormat: readiness.instagramFormat,
+              deliveryFormat,
               topic: { title: outputTitle, angle: outputAngle },
-              artifactStatus: "pending"
+              representativeUrl,
+              artifactKind,
+              generationState: "pending",
+              channelConstraints: catalogEntry.generationConstraints
             },
             sourceSummary,
-            blockReasons: ["instagram_artifact_pending"]
-          });
-        }
-        if (readiness.threads) {
-          outputs.push({
-            channel: "threads",
-            deliveryFormat: "threads_text",
-            status: "auto_approval_blocked",
-            title: outputTitle,
-            previewTitle: outputTitle,
-            previewBody: "Threads 콘텐츠 생성 대기 중",
-            outputJson: {
-              deliveryFormat: "threads_text",
-              topic: { title: outputTitle, angle: outputAngle },
-              artifactStatus: "pending"
-            },
-            sourceSummary,
-            blockReasons: ["threads_content_pending"]
+            blockReasons: []
           });
         }
         for (const output of outputs) {
@@ -3526,6 +3733,387 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       return aggregate;
     },
 
+    async runDailyPerformanceSync(now = new Date()) {
+      const runDate = performanceRunDate(now);
+      const summary = {
+        runDate,
+        status: "completed" as PerformanceSyncStatus | "not_due",
+        channelsSelected: 0,
+        runsStarted: 0,
+        targetCount: 0,
+        successCount: 0,
+        failureCount: 0
+      };
+      if (!isPerformanceSyncDue(now)) return { ...summary, status: "not_due" as const };
+
+      const channels = await pool.query(
+        `select b.id as brand_id, b.workspace_id, bc.channel,
+                credential.encrypted_payload, credential.auth_mode
+         from brands b
+         join brand_channels bc on bc.brand_id = b.id
+         left join lateral (
+           select cc.encrypted_payload, cc.auth_mode
+           from channel_credentials cc
+           where cc.brand_channel_id = bc.id
+             and cc.status = 'active'
+             and cc.revoked_at is null
+             and (cc.expires_at is null or cc.expires_at > $1)
+           order by cc.updated_at desc, cc.id desc
+           limit 1
+         ) credential on true
+         where b.status = 'active' and b.deleted_at is null
+           and bc.enabled = true and bc.deleted_at is null
+         order by b.id, bc.channel`,
+        [now]
+      );
+      summary.channelsSelected = channels.rows.length;
+      const runStatuses: PerformanceSyncStatus[] = [];
+
+      for (const channelRow of channels.rows) {
+        const channel = channelRow.channel as PerformanceChannel;
+        const claimed = await pool.query(
+          `insert into performance_sync_runs (
+             workspace_id, brand_id, channel, run_date, status, started_at
+           ) values ($1, $2, $3, $4::date, 'running', $5)
+           on conflict (brand_id, channel, run_date) do update
+           set status = 'running', started_at = excluded.started_at, completed_at = null,
+               target_count = 0, success_count = 0, failure_count = 0,
+               error_summary = null, updated_at = excluded.started_at
+           where performance_sync_runs.status = 'running'
+             and performance_sync_runs.started_at <= excluded.started_at - interval '30 minutes'
+           returning id`,
+          [channelRow.workspace_id, channelRow.brand_id, channel, runDate, now]
+        );
+        if (!claimed.rowCount) continue;
+        summary.runsStarted += 1;
+        const runId = claimed.rows[0].id;
+
+        if (!channelRow.encrypted_payload) {
+          await pool.query(
+            `update performance_sync_runs
+             set status = $2, target_count = $3, success_count = $4, failure_count = $5,
+                 error_summary = $6, completed_at = now(), updated_at = now()
+             where id = $1`,
+            [runId, "not_configured", 0, 0, 0, "active_credential_missing"]
+          );
+          runStatuses.push("not_configured");
+          continue;
+        }
+
+        const targets = await pool.query(
+          `select pq.id as publish_queue_id, pq.channel_output_id, latest_attempt.external_post_id
+           from publish_queue pq
+           join channel_outputs co on co.id = pq.channel_output_id
+           join lateral (
+             select pa.external_post_id
+             from publish_attempts pa
+             where pa.publish_queue_id = pq.id
+               and pa.status = 'succeeded'
+               and pa.external_post_id is not null
+             order by pa.finished_at desc nulls last, pa.created_at desc, pa.id desc
+             limit 1
+           ) latest_attempt on true
+           where pq.brand_id = $1 and pq.channel = $2
+             and pq.status = 'published'
+             and pq.published_at >= (($3::date - interval '29 days')::timestamp at time zone 'Asia/Seoul')
+             and pq.published_at < (($3::date + interval '1 day')::timestamp at time zone 'Asia/Seoul')
+           order by pq.published_at asc, pq.id asc`,
+          [channelRow.brand_id, channel, runDate]
+        );
+
+        let accessToken: string | null = null;
+        let credentialError: string | null = null;
+        try {
+          accessToken = decryptCredential(channelRow.encrypted_payload);
+        } catch (error) {
+          credentialError = error instanceof Error ? error.message : "credential_decryption_failed";
+        }
+
+        let successCount = 0;
+        let failureCount = 0;
+        let notConfiguredCount = 0;
+        const errors: string[] = [];
+        for (const target of targets.rows) {
+          try {
+            if (credentialError) throw new Error(credentialError);
+            const result = await performanceAdapters[channel].collect({
+              channel,
+              accessToken,
+              graphHost: channelRow.auth_mode === "instagram_login" ? "graph.instagram.com" : "graph.facebook.com",
+              externalPostId: target.external_post_id
+            });
+            if (result.status === "not_configured") {
+              notConfiguredCount += 1;
+              continue;
+            }
+            if (result.status === "failed") {
+              failureCount += 1;
+              errors.push(result.error ?? "performance_collection_failed");
+              continue;
+            }
+            await pool.query(
+              `insert into content_performance_snapshots (
+                 workspace_id, brand_id, channel, publish_queue_id, channel_output_id,
+                 external_post_id, snapshot_date, exposure_count, raw_metrics, collected_at
+               ) values ($1, $2, $3, $4, $5, $6, $7::date, $8, $9::jsonb, $10)
+               on conflict (publish_queue_id, snapshot_date)
+               do update set exposure_count = excluded.exposure_count,
+                             raw_metrics = excluded.raw_metrics,
+                             collected_at = excluded.collected_at,
+                             updated_at = now()`,
+              [
+                channelRow.workspace_id,
+                channelRow.brand_id,
+                channel,
+                target.publish_queue_id,
+                target.channel_output_id,
+                target.external_post_id,
+                runDate,
+                result.exposureCount,
+                JSON.stringify(result.rawMetrics),
+                now
+              ]
+            );
+            successCount += 1;
+          } catch (error) {
+            failureCount += 1;
+            errors.push(error instanceof Error ? error.message : "performance_collection_failed");
+          }
+        }
+
+        const targetCount = targets.rows.length;
+        const status: PerformanceSyncStatus = failureCount > 0
+          ? successCount > 0 || notConfiguredCount > 0 ? "partially_failed" : "failed"
+          : notConfiguredCount > 0 ? "not_configured" : "completed";
+        const errorSummary = errors.length > 0 ? [...new Set(errors)].join("; ").slice(0, 2000) : null;
+        await pool.query(
+          `update performance_sync_runs
+           set status = $2, target_count = $3, success_count = $4, failure_count = $5,
+               error_summary = $6, completed_at = now(), updated_at = now()
+           where id = $1`,
+          [runId, status, targetCount, successCount, failureCount, errorSummary]
+        );
+        runStatuses.push(status);
+        summary.targetCount += targetCount;
+        summary.successCount += successCount;
+        summary.failureCount += failureCount;
+      }
+
+      summary.status = runStatuses.includes("failed")
+        ? summary.successCount > 0 ? "partially_failed" : "failed"
+        : runStatuses.includes("partially_failed")
+          ? "partially_failed"
+          : runStatuses.length > 0 && runStatuses.every((status) => status === "not_configured")
+            ? "not_configured"
+            : "completed";
+      return summary;
+    },
+
+    async getDashboard(brandId) {
+      const generatedAt = new Date();
+      const runDate = performanceRunDate(generatedAt);
+      const workflowResult = await pool.query(
+        `/* dashboard_workflow */
+         select
+           (select count(*) from topic_rows where brand_id = $1 and status = 'uploaded') as queued_topics,
+           (select count(*) from channel_outputs where brand_id = $1 and status in ('auto_approval_blocked', 'regenerating')) as generating,
+           (select count(*) from channel_outputs where brand_id = $1 and status = 'pending_review') as pending_review,
+           (select count(*) from publish_queue where brand_id = $1 and status in ('scheduled', 'publishing', 'published')) as scheduled_or_published,
+           (select count(*) from channel_outputs where brand_id = $1 and status = 'pending_review') as pending_review_count,
+           (select count(*) from publish_queue where brand_id = $1 and status = 'failed'
+             and coalesce(failed_at, updated_at) >= (($2::date - interval '29 days')::timestamp at time zone 'Asia/Seoul')) as failed_publish_count`,
+        [brandId, runDate]
+      );
+      const publishedResult = await pool.query(
+        `/* dashboard_published_items */
+         select pq.id as publish_queue_id, co.title, pq.channel, co.delivery_format, pq.published_at,
+                latest_snapshot.exposure_count, latest_snapshot.collected_at, latest_attempt.external_url
+         from publish_queue pq
+         join channel_outputs co on co.id = pq.channel_output_id
+         left join lateral (
+           select cps.exposure_count, cps.collected_at
+           from content_performance_snapshots cps
+           where cps.publish_queue_id = pq.id
+             and cps.snapshot_date >= $2::date - 29
+           order by cps.snapshot_date desc, cps.collected_at desc, cps.id desc
+           limit 1
+         ) latest_snapshot on true
+         left join lateral (
+           select pa.external_url
+           from publish_attempts pa
+           where pa.publish_queue_id = pq.id and pa.status = 'succeeded'
+           order by pa.finished_at desc nulls last, pa.created_at desc, pa.id desc
+           limit 1
+         ) latest_attempt on true
+         where pq.brand_id = $1 and pq.status = 'published'
+           and pq.published_at >= (($2::date - interval '29 days')::timestamp at time zone 'Asia/Seoul')
+           and pq.published_at < (($2::date + interval '1 day')::timestamp at time zone 'Asia/Seoul')
+         order by latest_snapshot.exposure_count desc nulls last, pq.published_at desc, pq.id`,
+        [brandId, runDate]
+      );
+      const snapshotsResult = await pool.query(
+        `/* dashboard_snapshots */
+         with window_snapshots as (
+           select publish_queue_id, channel, snapshot_date, exposure_count, collected_at, id
+           from content_performance_snapshots
+           where brand_id = $1 and snapshot_date >= $2::date - 29 and snapshot_date <= $2::date
+         ), boundary_predecessors as (
+           select distinct on (publish_queue_id)
+                  publish_queue_id, channel, snapshot_date, exposure_count, collected_at, id
+           from content_performance_snapshots
+           where brand_id = $1 and snapshot_date < $2::date - 29
+             and publish_queue_id in (select publish_queue_id from window_snapshots)
+           order by publish_queue_id, snapshot_date desc, collected_at desc, id desc
+         )
+         select publish_queue_id, channel, snapshot_date, exposure_count
+         from (
+           select * from boundary_predecessors
+           union all
+           select * from window_snapshots
+         ) dashboard_snapshot_rows
+         order by publish_queue_id, snapshot_date, collected_at, id`,
+        [brandId, runDate]
+      );
+      const channelsResult = await pool.query(
+        `/* dashboard_channels */
+         with recent_published as (
+           select id, channel
+           from publish_queue
+           where brand_id = $1 and status = 'published'
+             and published_at >= (($2::date - interval '29 days')::timestamp at time zone 'Asia/Seoul')
+         ), latest_snapshots as (
+           select distinct on (cps.publish_queue_id)
+                  cps.publish_queue_id, cps.exposure_count, cps.collected_at
+           from content_performance_snapshots cps
+           join recent_published rp on rp.id = cps.publish_queue_id
+           where cps.snapshot_date >= $2::date - 29
+           order by cps.publish_queue_id, cps.snapshot_date desc, cps.collected_at desc, cps.id desc
+         )
+         select bc.channel, bc.status,
+                count(rp.id) as published_count,
+                case when count(ls.publish_queue_id) = 0 then null else sum(ls.exposure_count) end as exposure_count,
+                max(ls.collected_at) as last_collected_at,
+                latest_run.status as sync_status,
+                bc.last_error
+         from brand_channels bc
+         left join recent_published rp on rp.channel = bc.channel
+         left join latest_snapshots ls on ls.publish_queue_id = rp.id
+         left join lateral (
+           select psr.status
+           from performance_sync_runs psr
+           where psr.brand_id = bc.brand_id and psr.channel = bc.channel
+           order by psr.run_date desc, psr.started_at desc, psr.id desc
+           limit 1
+         ) latest_run on true
+         where bc.brand_id = $1 and bc.deleted_at is null
+         group by bc.id, latest_run.status
+         order by bc.channel`,
+        [brandId, runDate]
+      );
+      const attentionResult = await pool.query(
+        `/* dashboard_attention */
+         select 'publish_failed' as type, pq.channel, coalesce(pq.last_error, 'publish_failed') as message
+         from publish_queue pq
+         where pq.brand_id = $1 and pq.status = 'failed'
+           and coalesce(pq.failed_at, pq.updated_at) >= (($2::date - interval '29 days')::timestamp at time zone 'Asia/Seoul')
+         union all
+         select 'channel_error', bc.channel, coalesce(bc.last_error, bc.status) as message
+         from brand_channels bc
+         where bc.brand_id = $1 and bc.deleted_at is null
+           and bc.status in ('needs_attention', 'expired', 'insufficient_permissions', 'mapping_required', 'publish_failed')
+         union all
+         select 'sync_failed', psr.channel, coalesce(psr.error_summary, psr.status) as message
+         from performance_sync_runs psr
+         where psr.brand_id = $1 and psr.run_date >= $2::date - 29
+           and psr.status in ('failed', 'partially_failed')
+         union all
+         select 'stale_sync', bc.channel, 'performance_sync_stale'
+         from brand_channels bc
+         where bc.brand_id = $1 and bc.enabled = true and bc.deleted_at is null
+           and not exists (
+             select 1 from performance_sync_runs psr
+             where psr.brand_id = bc.brand_id and psr.channel = bc.channel
+               and psr.run_date >= $2::date - 1 and psr.status <> 'running'
+           )`,
+        [brandId, runDate]
+      );
+
+      const workflow = workflowResult.rows[0] ?? {};
+      const numberOrNull = (value: unknown) => value === null || value === undefined ? null : Number(value);
+      const windowStart = new Date(`${runDate}T00:00:00.000Z`);
+      windowStart.setUTCDate(windowStart.getUTCDate() - 29);
+      const windowStartDate = windowStart.toISOString().slice(0, 10);
+      const dailyByDate = new Map<string, Partial<Record<Channel, number>>>();
+      const previousByQueue = new Map<string, number | null>();
+      for (const row of snapshotsResult.rows) {
+        const queueId = String(row.publish_queue_id);
+        const current = numberOrNull(row.exposure_count);
+        if (!previousByQueue.has(queueId)) {
+          previousByQueue.set(queueId, current);
+          continue;
+        }
+        const delta = exposureDelta(current, previousByQueue.get(queueId) ?? null);
+        previousByQueue.set(queueId, current);
+        if (delta === null) continue;
+        const date = toDateKey(row.snapshot_date);
+        if (!date || date < windowStartDate || date > runDate) continue;
+        const channel = row.channel as Channel;
+        const channels = dailyByDate.get(date) ?? {};
+        channels[channel] = (channels[channel] ?? 0) + delta;
+        dailyByDate.set(date, channels);
+      }
+
+      const collectedDates = publishedResult.rows
+        .map((row) => toIso(row.collected_at))
+        .filter((value): value is string => value !== null);
+      const exposureValues = publishedResult.rows
+        .map((row) => numberOrNull(row.exposure_count))
+        .filter((value): value is number => value !== null);
+      const dashboard: DashboardDto = {
+        period: "30d",
+        generatedAt: generatedAt.toISOString(),
+        lastCollectedAt: collectedDates.sort().at(-1) ?? null,
+        summary: {
+          publishedCount: publishedResult.rows.length,
+          exposureCount: exposureValues.length > 0 ? exposureValues.reduce((sum, value) => sum + value, 0) : null,
+          pendingReviewCount: countFromDb(workflow.pending_review_count),
+          failedPublishCount: countFromDb(workflow.failed_publish_count)
+        },
+        workflow: {
+          queuedTopics: countFromDb(workflow.queued_topics),
+          generating: countFromDb(workflow.generating),
+          pendingReview: countFromDb(workflow.pending_review),
+          scheduledOrPublished: countFromDb(workflow.scheduled_or_published)
+        },
+        dailyExposure: [...dailyByDate.entries()]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([date, channels]) => ({ date, channels })),
+        channelPerformance: channelsResult.rows.map((row) => ({
+          channel: row.channel as Channel,
+          connectionStatus: row.status,
+          publishedCount: countFromDb(row.published_count),
+          exposureCount: numberOrNull(row.exposure_count),
+          lastCollectedAt: toIso(row.last_collected_at),
+          syncStatus: row.sync_status ?? null
+        })),
+        topContents: publishedResult.rows.slice(0, 10).map((row) => ({
+          publishQueueId: String(row.publish_queue_id),
+          title: String(row.title),
+          channel: row.channel as Channel,
+          deliveryFormat: row.delivery_format ?? null,
+          publishedAt: toIso(row.published_at)!,
+          exposureCount: numberOrNull(row.exposure_count),
+          externalUrl: row.external_url ?? null
+        })),
+        attentionItems: attentionResult.rows.map((row) => ({
+          type: row.type,
+          channel: row.channel ?? null,
+          message: String(row.message)
+        }))
+      };
+      return dashboard;
+    },
+
     async schedulePublishQueue(brandId, now = new Date()) {
       const client = await pool.connect();
       try {
@@ -3633,6 +4221,45 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     },
 
     async runDuePublishing(now = new Date()) {
+      await pool.query(
+        `with recovered as (
+           update publish_queue pq
+           set status = 'published', published_at = coalesce(
+                 pq.published_at,
+                 (select max(pa.finished_at) from publish_attempts pa where pa.publish_queue_id = pq.id and pa.status = 'succeeded'),
+                 now()
+               ),
+               last_error = null, updated_at = now()
+           where pq.status = 'publishing'
+             and exists (
+               select 1 from publish_attempts pa
+               where pa.publish_queue_id = pq.id and pa.status = 'succeeded'
+             )
+           returning pq.id, pq.brand_id, pq.channel
+         ), recovered_channels as (
+           update brand_channels channel
+           set last_published_at = now(), status = 'connected', last_error = null
+           from recovered
+           where channel.brand_id = recovered.brand_id and channel.channel = recovered.channel
+           returning channel.id
+         ), abandoned as (
+           update publish_queue pq
+           set status = 'failed', failed_at = now(), last_error = 'publish_delivery_unknown', updated_at = now()
+           where pq.status = 'publishing'
+             and pq.publishing_started_at < now() - interval '30 minutes'
+             and not exists (
+               select 1 from publish_attempts pa
+               where pa.publish_queue_id = pq.id and pa.status = 'succeeded'
+             )
+             and pq.id not in (select id from recovered)
+           returning pq.id
+         )
+         update publish_attempts pa
+         set status = 'failed', error_code = 'publish_delivery_unknown',
+             error_message = 'publish_delivery_unknown', finished_at = now()
+         where pa.status = 'running'
+           and pa.publish_queue_id in (select id from abandoned)`,
+      );
       const brands = await pool.query("select id from brands where status = 'active' and deleted_at is null");
       let processed = 0;
       let created = 0;
@@ -3665,6 +4292,45 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
 
     async publishQueueItem(queueId) {
       return publishQueueItemInternal(queueId);
+    },
+
+    async retryPublishQueueItem(queueId) {
+      const result = await pool.query(
+        `with target as (
+           select pq.id, pq.topic_publish_group_id,
+                  tpg.status as group_status, tpg.slot_date, tpg.slot_number, tpg.scheduled_for
+           from publish_queue pq
+           join topic_publish_groups tpg on tpg.id = pq.topic_publish_group_id
+           where pq.id = $1 and pq.status = 'failed'
+             and pq.last_error in ('oauth_required', 'provider_not_implemented')
+           for update of pq, tpg
+         ), retried as (
+           update publish_queue pq
+           set status = case
+                 when target.group_status in ('scheduled', 'partially_published')
+                   and target.scheduled_for is not null then 'scheduled'
+                 else 'queued'
+               end,
+               slot_date = case when target.group_status in ('scheduled', 'partially_published') then target.slot_date else null end,
+               slot_number = case when target.group_status in ('scheduled', 'partially_published') then target.slot_number else null end,
+               scheduled_for = case when target.group_status in ('scheduled', 'partially_published') then target.scheduled_for else null end,
+               failed_at = null, publishing_started_at = null, last_error = null, updated_at = now()
+           from target
+           where pq.id = target.id
+           returning pq.id, pq.status, pq.topic_publish_group_id
+         ), reset_group as (
+           update topic_publish_groups tpg
+           set status = 'waiting', slot_date = null, slot_number = null,
+               scheduled_for = null, updated_at = now()
+           from retried
+           where tpg.id = retried.topic_publish_group_id and retried.status = 'queued'
+           returning tpg.id
+         )
+         select id, status from retried`,
+        [queueId]
+      );
+      if (!result.rowCount) throw new Error("publish_queue_not_retryable");
+      return { id: result.rows[0].id, status: result.rows[0].status as "queued" | "scheduled" };
     },
 
     async claimDmReplyJob(workerId) {
@@ -3701,12 +4367,23 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
          from recovered
          where job.id = recovered.job_id`,
       );
-      const result = await pool.query(
-        `with candidate as (
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        await client.query("select pg_advisory_xact_lock($1, $2)", [4242, 2]);
+        const result = await client.query(
+          `with candidate as (
            select job.id from jobs job
            where job.job_type = 'instagram_dm_reply'
              and job.attempt_count < job.max_attempts and job.run_at <= now()
              and (job.status = 'queued' or (job.status = 'running' and job.locked_until < now()))
+             and not exists (
+               select 1 from jobs active
+               where active.job_type = 'instagram_dm_reply'
+                 and active.brand_id = job.brand_id
+                 and active.status = 'running'
+                 and active.locked_until >= now()
+             )
            order by priority desc, created_at asc for update skip locked limit 1
          ), claimed as (
            update jobs job
@@ -3728,18 +4405,25 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
          from claimed
          join dm_turns turn on turn.id = (claimed.payload_json->>'turnId')::uuid
          join marked_turn on marked_turn.id = turn.id`,
-        [workerId],
-      );
-      if (!result.rowCount) return null;
-      const row = result.rows[0];
-      return {
-        id: row.id,
-        workspaceId: row.workspace_id,
-        brandId: row.brand_id,
-        leaseToken: row.lease_token,
-        payload: row.payload_json,
-        attemptCount: Number(row.attempt_count),
-      } satisfies DmReplyJobDto;
+          [workerId],
+        );
+        await client.query("commit");
+        if (!result.rowCount) return null;
+        const row = result.rows[0];
+        return {
+          id: row.id,
+          workspaceId: row.workspace_id,
+          brandId: row.brand_id,
+          leaseToken: row.lease_token,
+          payload: row.payload_json,
+          attemptCount: Number(row.attempt_count),
+        } satisfies DmReplyJobDto;
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
     },
 
     async heartbeatDmReplyJob(jobId, workerId, leaseToken) {
@@ -3833,12 +4517,40 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         } else {
           effectiveResult = inspectDmAnswer(input.result);
         }
+        let verifiedDestinationLinks: Array<{ label: string; url: string }> = [];
         if (effectiveResult.decision === "answer") {
-          const sources = await client.query(
-            `select id from wiki_chunks where brand_id = $1 and enabled and id = any($2::uuid[])`,
-            [row.brand_id, effectiveResult.wikiChunkIds],
-          );
-          if (sources.rowCount !== effectiveResult.wikiChunkIds.length) throw new Error("dm_wiki_chunk_not_owned");
+          if (effectiveResult.wikiChunkIds.length) {
+            const sources = await client.query(
+              `select chunk.id
+               from wiki_page_chunks chunk
+               join wiki_versions version on version.id = chunk.wiki_version_id
+               where chunk.workspace_id = $1 and chunk.brand_id = $2
+                 and version.status = 'active' and chunk.enabled
+                 and chunk.id = any($3::uuid[])`,
+              [row.workspace_id, row.brand_id, effectiveResult.wikiChunkIds],
+            );
+            if (sources.rowCount !== effectiveResult.wikiChunkIds.length) throw new Error("dm_wiki_chunk_not_owned");
+          }
+          const destinationUrlIds = effectiveResult.destinationUrlIds ?? [];
+          if (destinationUrlIds.length) {
+            const destinations = await client.query(
+              `select source.id, coalesce(page.title, unit.title) as label, source.destination_url as url
+               from wiki_page_sources source
+               join wiki_pages page on page.id = source.wiki_page_id
+               join wiki_source_units unit on unit.id = source.wiki_source_unit_id
+               join wiki_versions version on version.id = source.wiki_version_id
+               where source.workspace_id = $1 and source.brand_id = $2
+                 and version.status = 'active' and source.destination_url is not null
+                 and source.id = any($3::uuid[])
+               order by array_position($3::uuid[], source.id)`,
+              [row.workspace_id, row.brand_id, destinationUrlIds],
+            );
+            if (destinations.rowCount !== destinationUrlIds.length) throw new Error("dm_destination_url_not_owned");
+            verifiedDestinationLinks = destinations.rows.map((destination) => ({
+              label: destination.label,
+              url: destination.url,
+            }));
+          }
           if (effectiveResult.knowledgeEntryId && effectiveResult.reasonCode !== "direct_faq") {
             const entry = await client.query(
               `select id from knowledge_entries where id = $1 and brand_id = $2 and enabled`,
@@ -3853,7 +4565,10 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             ? "restricted_action"
             : "knowledge_gap";
         const text = effectiveResult.decision === "answer"
-          ? effectiveResult.answer
+          ? [
+            effectiveResult.answer,
+            ...verifiedDestinationLinks.map((link) => `${link.label}\n${link.url}`),
+          ].filter(Boolean).join("\n\n")
           : effectiveResult.decision === "fallback"
             ? dmFixedMessages[fallbackReason]
             : effectiveResult.decision === "error"
@@ -3981,7 +4696,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
              ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
             [prepared.workspaceId, prepared.brandId, prepared.conversationId, prepared.triggerMessageId, prepared.turnId, prepared.attentionType, prepared.result.reasonCode, JSON.stringify({ reason: prepared.result.reason })],
           );
-          if (prepared.attentionType === "restricted_action") {
+          if (prepared.attentionType === "restricted_action" || prepared.attentionType === "knowledge_gap") {
             await client.query(
               `update instagram_dm_conversations set attention_status = 'open', updated_at = now()
                where id = $1`,
@@ -4126,12 +4841,99 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       return { workerId };
     },
 
+    async acquireWorkerResourceLease(resourceType, workerId, workload) {
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        await client.query("select pg_advisory_xact_lock($1, $2)", [4242, 99]);
+        await client.query(
+          `delete from worker_resource_leases where resource_type = $1 and expires_at <= now()`,
+          [resourceType],
+        );
+        const result = await client.query(
+          `with active as (
+             select workload_type
+             from worker_resource_leases
+             where resource_type = $1 and expires_at > now()
+           ), capacity as (
+             select count(*)::integer as active_total,
+                    count(*) filter (where workload_type <> 'dm')::integer as active_non_dm
+             from active
+           )
+           insert into worker_resource_leases (
+             resource_type, worker_id, workload_type, expires_at
+           )
+           select $1, $2, $3, now() + interval '45 seconds'
+           from capacity
+           where active_total < $4
+             and ($3 = 'dm' or active_non_dm < $5)
+           on conflict (resource_type, worker_id) do nothing
+           returning id, lease_token, expires_at`,
+          [resourceType, workerId, workload, workerResourceLimits.total, workerResourceLimits.nonDm],
+        );
+        await client.query("commit");
+        if (!result.rowCount) return null;
+        return {
+          id: result.rows[0].id,
+          leaseToken: result.rows[0].lease_token,
+          expiresAt: toIso(result.rows[0].expires_at)!,
+        };
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async heartbeatWorkerResourceLease(id, workerId, leaseToken) {
+      const result = await pool.query(
+        `update worker_resource_leases
+         set expires_at = now() + interval '45 seconds', updated_at = now()
+         where id = $1::uuid and worker_id = $2 and lease_token = $3::uuid and expires_at > now()
+         returning id, lease_token, expires_at`,
+        [id, workerId, leaseToken],
+      );
+      if (!result.rowCount) throw new Error("worker_resource_lease_invalid");
+      return {
+        id: result.rows[0].id,
+        leaseToken: result.rows[0].lease_token,
+        expiresAt: toIso(result.rows[0].expires_at)!,
+      };
+    },
+
+    async releaseWorkerResourceLease(id, workerId, leaseToken) {
+      const result = await pool.query(
+        `delete from worker_resource_leases
+         where id = $1::uuid and worker_id = $2 and lease_token = $3::uuid
+         returning id`,
+        [id, workerId, leaseToken],
+      );
+      if (!result.rowCount) throw new Error("worker_resource_lease_invalid");
+      return { id: result.rows[0].id };
+    },
+
     async claimImageRenderJob(workerId) {
       const client = await pool.connect();
       let transactionClosed = false;
       try {
         await client.query("begin");
         await client.query("select pg_advisory_xact_lock($1, $2)", [4242, 1]);
+        const exhausted = await client.query(
+          `update jobs
+           set status = 'failed', last_error = 'image_render_job_attempts_exhausted',
+               locked_by = null, locked_until = null, lease_token = null,
+               finished_at = now(), updated_at = now()
+           where job_type in ('instagram_feed_render', 'instagram_story_render', 'instagram_reel_render')
+             and status = 'running' and locked_until < now() and attempt_count >= max_attempts
+           returning channel_output_id`,
+        );
+        await markChannelOutputsGenerationFailed(
+          client,
+          exhausted.rows.map((row) => String(row.channel_output_id)),
+          "image_render_job_attempts_exhausted",
+          "image_render_job_attempts_exhausted"
+        );
         const result = await client.query(
           `with candidate as (
              select queued.id from jobs queued
@@ -4240,12 +5042,19 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           });
         } catch (error) {
           if (!isImageRenderJobResultValidationError(error)) throw error;
+          const errorMessage = safeWorkerFailureMessage(error.message);
           await client.query(
             `update jobs
              set status = 'failed', last_error = $2, locked_by = null, locked_until = null,
                  lease_token = null, finished_at = now(), updated_at = now()
              where id = $1`,
-            [jobId, error.message]
+            [jobId, errorMessage]
+          );
+          await markChannelOutputsGenerationFailed(
+            client,
+            [row.channel_output_id],
+            "image_render_validation_failed",
+            errorMessage
           );
           await client.query("commit");
           transactionClosed = true;
@@ -4260,6 +5069,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         const commonOutput = {
           ...recordValue(row.output_json),
           deliveryFormat: manifest.deliveryFormat,
+          generationState: "completed",
           artifactStatus: "ready",
           sourceMode: manifest.sourceMode,
           fetchStatus: manifest.fetchStatus,
@@ -4270,8 +5080,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         let title = manifest.title ?? nullableText(row.output_title) ?? "";
         let previewTitle = title;
         let previewBody: string;
-        const outputStatus = nullableText(row.output_status) ?? "auto_approval_blocked";
-        const nextOutputStatus = outputStatus === "auto_approval_blocked"
+        const outputStatus = nullableText(row.output_status) ?? "generating";
+        const nextOutputStatus = outputStatus === "generating"
           ? row.auto_approval_enabled ? "auto_approved" : "pending_review"
           : outputStatus;
         switch (manifest.deliveryFormat) {
@@ -4304,8 +5114,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           `update channel_outputs
            set title = $1, preview_title = $2, preview_body = $3, output_json = $4::jsonb,
                rendered_artifact_id = $5, status = $6,
-               approved_at = case when status = 'auto_approval_blocked' and $6 = 'auto_approved' then now() else approved_at end,
-               block_reasons = coalesce(block_reasons, '[]'::jsonb) - 'instagram_artifact_pending',
+               approved_at = case when status = 'generating' and $6 = 'auto_approved' then now() else approved_at end,
+               block_reasons = coalesce(block_reasons, '[]'::jsonb),
                updated_at = now()
           where id = $7`,
           [
@@ -4320,7 +5130,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         );
         const approvalType = outputStatus === "approved"
           ? "manual"
-          : outputStatus === "auto_approval_blocked" && row.auto_approval_enabled
+          : outputStatus === "generating" && row.auto_approval_enabled
             ? "auto"
             : null;
         if (approvalType) {
@@ -4366,50 +5176,94 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
 
     async failImageRenderJob(jobId, input) {
       const retryAfterMs = input.retryable ? Math.max(1000, Math.min(input.retryAfterMs, 60 * 60 * 1000)) : 0;
-      const result = await pool.query(
-        `update jobs
-         set status = case when $5::boolean and attempt_count < max_attempts then 'queued' else 'failed' end,
-             run_at = case when $5::boolean and attempt_count < max_attempts then now() + ($6::bigint * interval '1 millisecond') else run_at end,
-             locked_by = null, locked_until = null, lease_token = null, last_error = $4,
-             finished_at = case when $5::boolean and attempt_count < max_attempts then null else now() end,
-             updated_at = now()
-         where id = $1 and job_type in ('instagram_feed_render', 'instagram_story_render', 'instagram_reel_render')
-           and status = 'running' and locked_by = $2 and lease_token = $3::uuid
-         returning id, status`,
-        [jobId, input.workerId, input.leaseToken, input.error.slice(0, 2000), input.retryable, retryAfterMs]
-      );
-      if (!result.rowCount) throw new Error("image_render_job_lease_invalid");
-      return { id: result.rows[0].id, status: result.rows[0].status };
+      const errorMessage = safeWorkerFailureMessage(input.error);
+      const client = await pool.connect();
+      let transactionClosed = false;
+      try {
+        await client.query("begin");
+        const result = await client.query(
+          `update jobs
+           set status = case when $5::boolean and attempt_count < max_attempts then 'queued' else 'failed' end,
+               run_at = case when $5::boolean and attempt_count < max_attempts then now() + ($6::bigint * interval '1 millisecond') else run_at end,
+               locked_by = null, locked_until = null, lease_token = null, last_error = $4,
+               finished_at = case when $5::boolean and attempt_count < max_attempts then null else now() end,
+               updated_at = now()
+           where id = $1 and job_type in ('instagram_feed_render', 'instagram_story_render', 'instagram_reel_render')
+             and status = 'running' and locked_by = $2 and lease_token = $3::uuid and locked_until > now()
+           returning id, status, channel_output_id`,
+          [jobId, input.workerId, input.leaseToken, errorMessage, input.retryable, retryAfterMs]
+        );
+        if (!result.rowCount) throw new Error("image_render_job_lease_invalid");
+        const row = result.rows[0];
+        if (row.status === "failed") {
+          await markChannelOutputsGenerationFailed(client, [row.channel_output_id], "image_render_failed", errorMessage);
+        }
+        await client.query("commit");
+        transactionClosed = true;
+        return { id: row.id, status: row.status };
+      } catch (error) {
+        if (!transactionClosed) await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
     },
 
     async claimTextRenderJob(workerId) {
-      const result = await pool.query(
-        `with candidate as (
-           select id from jobs
+      const client = await pool.connect();
+      let transactionClosed = false;
+      try {
+        await client.query("begin");
+        const exhausted = await client.query(
+          `update jobs
+           set status = 'failed', last_error = 'text_render_job_attempts_exhausted',
+               locked_by = null, locked_until = null, lease_token = null,
+               finished_at = now(), updated_at = now()
            where job_type = 'threads_text_render'
-             and attempt_count < max_attempts and run_at <= now()
-             and (status = 'queued' or (status = 'running' and locked_until < now()))
-           order by priority desc, created_at asc for update skip locked limit 1
-         )
-         update jobs job
-         set status = 'running', locked_by = $1, locked_until = now() + interval '15 minutes',
-             lease_token = gen_random_uuid(), attempt_count = attempt_count + 1,
-             started_at = coalesce(started_at, now()), updated_at = now()
-         from candidate where job.id = candidate.id
-         returning job.id, job.workspace_id, job.brand_id, job.channel_output_id, job.lease_token, job.payload_json, job.attempt_count`,
-        [workerId]
-      );
-      if (!result.rowCount) return null;
-      const row = result.rows[0];
-      return {
-        id: row.id,
-        workspaceId: row.workspace_id,
-        brandId: row.brand_id,
-        channelOutputId: row.channel_output_id,
-        leaseToken: row.lease_token,
-        payload: row.payload_json,
-        attemptCount: Number(row.attempt_count)
-      } satisfies TextRenderJobDto;
+             and status = 'running' and locked_until < now() and attempt_count >= max_attempts
+           returning channel_output_id`
+        );
+        await markChannelOutputsGenerationFailed(
+          client,
+          exhausted.rows.map((row) => String(row.channel_output_id)),
+          "text_render_job_attempts_exhausted",
+          "text_render_job_attempts_exhausted"
+        );
+        const result = await client.query(
+          `with candidate as (
+             select id from jobs
+             where job_type = 'threads_text_render'
+               and attempt_count < max_attempts and run_at <= now()
+               and (status = 'queued' or (status = 'running' and locked_until < now()))
+             order by priority desc, created_at asc for update skip locked limit 1
+           )
+           update jobs job
+           set status = 'running', locked_by = $1, locked_until = now() + interval '15 minutes',
+               lease_token = gen_random_uuid(), attempt_count = attempt_count + 1,
+               started_at = coalesce(started_at, now()), updated_at = now()
+           from candidate where job.id = candidate.id
+           returning job.id, job.workspace_id, job.brand_id, job.channel_output_id, job.lease_token, job.payload_json, job.attempt_count`,
+          [workerId]
+        );
+        await client.query("commit");
+        transactionClosed = true;
+        if (!result.rowCount) return null;
+        const row = result.rows[0];
+        return {
+          id: row.id,
+          workspaceId: row.workspace_id,
+          brandId: row.brand_id,
+          channelOutputId: row.channel_output_id,
+          leaseToken: row.lease_token,
+          payload: row.payload_json,
+          attemptCount: Number(row.attempt_count)
+        } satisfies TextRenderJobDto;
+      } catch (error) {
+        if (!transactionClosed) await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
     },
 
     async heartbeatTextRenderJob(jobId, workerId, leaseToken) {
@@ -4448,8 +5302,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           jobId,
           channelOutputId: row.channel_output_id
         });
-        const outputStatus = nullableText(row.output_status) ?? "auto_approval_blocked";
-        const nextOutputStatus = outputStatus === "auto_approval_blocked"
+        const outputStatus = nullableText(row.output_status) ?? "generating";
+        const nextOutputStatus = outputStatus === "generating"
           ? row.auto_approval_enabled ? "auto_approved" : "pending_review"
           : outputStatus;
         const outputJson = {
@@ -4464,15 +5318,15 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           `update channel_outputs
            set title = $1, preview_title = $1, preview_body = $2, output_json = $3::jsonb,
                status = $4,
-               approved_at = case when status = 'auto_approval_blocked' and $4 = 'auto_approved' then now() else approved_at end,
-               block_reasons = coalesce(block_reasons, '[]'::jsonb) - 'threads_content_pending',
+               approved_at = case when status = 'generating' and $4 = 'auto_approved' then now() else approved_at end,
+               block_reasons = coalesce(block_reasons, '[]'::jsonb),
                updated_at = now()
            where id = $5`,
           [rendered.title, rendered.text, JSON.stringify(outputJson), nextOutputStatus, row.channel_output_id]
         );
         const approvalType = outputStatus === "approved"
           ? "manual"
-          : outputStatus === "auto_approval_blocked" && row.auto_approval_enabled
+          : outputStatus === "generating" && row.auto_approval_enabled
             ? "auto"
             : null;
         if (approvalType) {
@@ -4512,20 +5366,37 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
 
     async failTextRenderJob(jobId, input) {
       const retryAfterMs = input.retryable ? Math.max(1000, Math.min(input.retryAfterMs, 60 * 60 * 1000)) : 0;
-      const result = await pool.query(
-        `update jobs
-         set status = case when $5::boolean and attempt_count < max_attempts then 'queued' else 'failed' end,
-             run_at = case when $5::boolean and attempt_count < max_attempts then now() + ($6::bigint * interval '1 millisecond') else run_at end,
-             locked_by = null, locked_until = null, lease_token = null, last_error = $4,
-             finished_at = case when $5::boolean and attempt_count < max_attempts then null else now() end,
-             updated_at = now()
-         where id = $1 and job_type = 'threads_text_render'
-           and status = 'running' and locked_by = $2 and lease_token = $3::uuid
-         returning id, status`,
-        [jobId, input.workerId, input.leaseToken, input.error.slice(0, 2000), input.retryable, retryAfterMs]
-      );
-      if (!result.rowCount) throw new Error("text_render_job_lease_invalid");
-      return { id: result.rows[0].id, status: result.rows[0].status };
+      const errorMessage = safeWorkerFailureMessage(input.error);
+      const client = await pool.connect();
+      let transactionClosed = false;
+      try {
+        await client.query("begin");
+        const result = await client.query(
+          `update jobs
+           set status = case when $5::boolean and attempt_count < max_attempts then 'queued' else 'failed' end,
+               run_at = case when $5::boolean and attempt_count < max_attempts then now() + ($6::bigint * interval '1 millisecond') else run_at end,
+               locked_by = null, locked_until = null, lease_token = null, last_error = $4,
+               finished_at = case when $5::boolean and attempt_count < max_attempts then null else now() end,
+               updated_at = now()
+           where id = $1 and job_type = 'threads_text_render'
+             and status = 'running' and locked_by = $2 and lease_token = $3::uuid and locked_until > now()
+           returning id, status, channel_output_id`,
+          [jobId, input.workerId, input.leaseToken, errorMessage, input.retryable, retryAfterMs]
+        );
+        if (!result.rowCount) throw new Error("text_render_job_lease_invalid");
+        const row = result.rows[0];
+        if (row.status === "failed") {
+          await markChannelOutputsGenerationFailed(client, [row.channel_output_id], "text_render_failed", errorMessage);
+        }
+        await client.query("commit");
+        transactionClosed = true;
+        return { id: row.id, status: row.status };
+      } catch (error) {
+        if (!transactionClosed) await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
     },
 
     async createKnowledgeImport(brandId, input: KnowledgeImportInput) {
@@ -4614,13 +5485,19 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         }
         if (uniqueRows.length > 0) {
           await client.query(
-            `insert into jobs (workspace_id, brand_id, job_type, status, payload_json, dedupe_key)
-             values ($1::uuid, $2::uuid, 'wiki_refresh', 'queued', $3::jsonb, $2::text)
-             on conflict (job_type, dedupe_key)
-             where job_type = 'wiki_refresh' and dedupe_key is not null and status in ('queued', 'running')
-             do update set payload_json = excluded.payload_json, run_at = now(), updated_at = now()
+            `insert into wiki_build_requests (
+               workspace_id, brand_id, requested_revision, status, quiet_until
+             ) values ($1::uuid, $2::uuid, 1, 'pending', now() + interval '2 minutes')
+             on conflict (workspace_id, brand_id)
+             where status in ('pending', 'building')
+             do update set
+               requested_revision = wiki_build_requests.requested_revision + 1,
+               rebuild_requested = wiki_build_requests.rebuild_requested or wiki_build_requests.status = 'building',
+               quiet_until = case when wiki_build_requests.status = 'pending'
+                 then now() + interval '2 minutes' else wiki_build_requests.quiet_until end,
+               updated_at = now()
              returning id, status`,
-            [workspaceId, brandId, JSON.stringify({ trigger: "knowledge_import", entryType, importId: imported.rows[0].id })],
+            [workspaceId, brandId],
           );
         }
         await client.query("commit");
@@ -4652,13 +5529,17 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       );
       if (!brand.rowCount) throw new Error("brand_not_found");
       const result = await pool.query(
-        `insert into jobs (workspace_id, brand_id, job_type, status, payload_json, dedupe_key)
-         values ($1::uuid, $2::uuid, 'wiki_refresh', 'queued', $3::jsonb, $2::text)
-         on conflict (job_type, dedupe_key)
-         where job_type = 'wiki_refresh' and dedupe_key is not null and status in ('queued', 'running')
-         do update set payload_json = excluded.payload_json, run_at = now(), updated_at = now()
+        `insert into wiki_build_requests (
+           workspace_id, brand_id, requested_revision, status, quiet_until
+         ) values ($1::uuid, $2::uuid, 1, 'pending', now())
+         on conflict (workspace_id, brand_id)
+         where status in ('pending', 'building')
+         do update set
+           requested_revision = wiki_build_requests.requested_revision + 1,
+           rebuild_requested = wiki_build_requests.rebuild_requested or wiki_build_requests.status = 'building',
+           quiet_until = now(), updated_at = now()
          returning id, status`,
-        [brand.rows[0].workspace_id, brandId, JSON.stringify({ trigger: "manual" })],
+        [brand.rows[0].workspace_id, brandId],
       );
       return { id: result.rows[0].id, status: result.rows[0].status };
     },
@@ -4667,9 +5548,10 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       const result = await pool.query(
         `select settings.enabled, settings.fallback_message, settings.error_message,
                 exists(
-                  select 1 from wiki_chunks chunk
-                  join wiki_documents document on document.id = chunk.wiki_document_id
-                  where chunk.brand_id = brand.id and chunk.enabled and document.is_active
+                  select 1 from wiki_versions version
+                  join wiki_page_chunks chunk on chunk.wiki_version_id = version.id
+                  where version.brand_id = brand.id and version.status = 'active'
+                    and chunk.enabled and chunk.embedding is not null
                 ) as wiki_ready,
                 exists(
                   select 1 from brand_channels channel
@@ -4744,18 +5626,19 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         const channel = await client.query(
           `select channel.id, channel.workspace_id, channel.brand_id
            from brand_channels channel
-           join channel_credentials credential
-             on credential.brand_channel_id = channel.id
-            and credential.status = 'active'
-            and credential.revoked_at is null
            where channel.channel = 'instagram'
              and channel.deleted_at is null
              and channel.external_account_id = $1
-           limit 1
+             and exists (
+               select 1 from channel_credentials credential
+               where credential.brand_channel_id = channel.id
+                 and credential.status = 'active'
+                 and credential.revoked_at is null
+             )
            for update of channel`,
           [input.recipientId],
         );
-        if (!channel.rowCount) {
+        if (channel.rowCount !== 1) {
           await client.query("commit");
           return { status: "unknown_recipient", brandId: null, conversationId: null, jobId: null };
         }
@@ -4883,9 +5766,10 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             const wiki = await client.query(
               `select exists(
                  select 1
-                 from wiki_chunks chunk
-                 join wiki_documents document on document.id = chunk.wiki_document_id
-                 where chunk.brand_id = $1 and chunk.enabled and document.is_active
+                 from wiki_versions version
+                 join wiki_page_chunks chunk on chunk.wiki_version_id = version.id
+                 where version.brand_id = $1 and version.status = 'active'
+                   and chunk.enabled and chunk.embedding is not null
                ) as ready`,
               [channelRow.brand_id],
             );
@@ -4926,7 +5810,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           );
           await client.query(
             `update instagram_dm_conversations
-             set automation_status = 'paused', attention_status = 'open', updated_at = now()
+             set attention_status = 'open', updated_at = now()
              where id = $1`,
             [conversation.rows[0].id],
           );
@@ -5160,13 +6044,18 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
 
     async getWikiStatus(brandId) {
       const versions = await pool.query(
-        `select version.id, version.status, version.source_count, version.document_count, version.chunk_count,
+        `select version.id, version.status, version.build_stage, version.source_count, version.document_count, version.chunk_count,
                 version.activated_at, version.completed_at as failed_at, version.error_message, version.created_at,
-                (select count(*)::integer from wiki_documents document
-                 where document.wiki_version_id = version.id and document.knowledge_entry_id is not null) as knowledge_entry_count
+                ((select count(*)::integer from wiki_source_units unit where unit.wiki_version_id = version.id)
+                  + (select count(*)::integer from wiki_documents document
+                     where document.wiki_version_id = version.id and document.knowledge_entry_id is not null))
+                  as knowledge_entry_count
          from wiki_versions version
-         where version.brand_id = $1 and version.status in ('active', 'failed')
-         order by case when version.status = 'active' then 0 else 1 end, version.created_at desc`,
+         where version.brand_id = $1 and version.status in ('building', 'ready', 'active', 'failed')
+         order by case
+           when version.status in ('building', 'ready') then 0
+           when version.status = 'active' then 1
+           else 2 end, version.created_at desc`,
         [brandId],
       );
       const imports = await pool.query(
@@ -5181,6 +6070,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       const mapVersion = (row: Record<string, any> | undefined) => row ? ({
         id: String(row.id),
         status: row.status,
+        buildStage: row.build_stage ?? null,
         version: toIso(row.created_at)!,
         sourceCount: Number(row.source_count ?? 0),
         documentCount: Number(row.document_count ?? 0),
@@ -5191,10 +6081,12 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         errorMessage: row.error_message ?? null,
       }) : null;
       const active = versions.rows.find((row) => row.status === "active");
+      const current = versions.rows.find((row) => row.status === "building" || row.status === "ready");
       const failed = versions.rows.find((row) => row.status === "failed");
       const stats = imports.rows[0] ?? {};
       return {
         activeVersion: mapVersion(active),
+        currentVersion: mapVersion(current),
         latestFailedVersion: mapVersion(failed),
         importStats: {
           total: Number(stats.total ?? 0),

@@ -6,6 +6,17 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+type SqlCall = [sql: string, values?: unknown[]];
+
+function findSqlCall(calls: ReadonlyArray<readonly unknown[]>, predicate: (sql: string) => boolean): SqlCall | undefined {
+  for (const [sql, values] of calls) {
+    if (typeof sql === "string" && predicate(sql)) {
+      return [sql, Array.isArray(values) ? values : undefined];
+    }
+  }
+  return undefined;
+}
+
 const task3TestNow = new Date("2026-07-13T00:00:00.000Z");
 const oneDayMs = 24 * 60 * 60 * 1000;
 
@@ -24,7 +35,7 @@ afterEach(() => {
 
 describe("Task 4 transactional topic generation", () => {
   function generationQuery(options: {
-    channels?: Array<"instagram" | "threads">;
+    channels?: Array<"instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok">;
     enabledFormats?: string[];
     lastSelectedFormat?: string | null;
     dailyTopicCount?: number;
@@ -171,33 +182,65 @@ describe("Task 4 transactional topic generation", () => {
     expect(fixture.statements.some(({ sql }) => sql.includes("insert into topic_publish_groups"))).toBe(false);
   });
 
-  it("creates one waiting group and format-specific outputs without a central Instagram storyboard", async () => {
+  it("creates one generating output for every enabled channel without requiring OAuth", async () => {
     const fixture = generationQuery({
-      channels: ["instagram", "threads"],
+      channels: ["instagram", "threads", "x", "linkedin", "youtube", "tiktok"],
       enabledFormats: ["instagram_feed_carousel"],
       autoApprovalEnabled: true
     });
 
     const result = await createRepository(fakePoolWithClient(fixture.query) as any).generateContent("brand-1");
 
-    expect(result).toMatchObject({ processed: 1, created: 2 });
+    expect(result).toMatchObject({ processed: 1, created: 6 });
     const groups = fixture.statements.filter(({ sql }) => sql.includes("insert into topic_publish_groups"));
     expect(groups).toHaveLength(1);
     expect(groups[0].sql).toContain("'waiting'");
     const outputs = fixture.statements.filter(({ sql }) => sql.includes("insert into channel_outputs"));
     expect(outputs.map(({ values }) => [values[4], values[5]])).toEqual([
       ["instagram", "instagram_feed_carousel"],
-      ["threads", "threads_text"]
+      ["threads", "threads_text"],
+      ["x", "x_post"],
+      ["linkedin", "linkedin_post"],
+      ["youtube", "youtube_short"],
+      ["tiktok", "tiktok_video"]
     ]);
-    const instagramJson = JSON.stringify(outputs[0].values);
-    expect(instagramJson).not.toContain('"slides"');
-    expect(instagramJson).not.toContain('"cards"');
-    expect(instagramJson).not.toContain('"scenes"');
-    expect(instagramJson).not.toContain('"assetCount"');
-    expect(instagramJson).not.toContain('"storyboard"');
-    expect(instagramJson).not.toContain('"raw_text"');
-    expect(instagramJson).not.toContain('"extracted_text"');
-    expect(instagramJson).not.toContain('"summary"');
+    const expectedContracts = [
+      ["instagram_feed_carousel", "image"],
+      ["threads_text", "text"],
+      ["x_post", "text"],
+      ["linkedin_post", "text"],
+      ["youtube_short", "video"],
+      ["tiktok_video", "video"]
+    ];
+    outputs.forEach(({ values }, index) => {
+      expect(values[6]).toBe("generating");
+      expect(JSON.parse(String(values[10]))).toEqual({
+        deliveryFormat: expectedContracts[index][0],
+        topic: { title: "Jeju family route", angle: "location-first checklist" },
+        representativeUrl: "https://example.com/reference",
+        artifactKind: expectedContracts[index][1],
+        generationState: "pending",
+        channelConstraints: expect.any(Object)
+      });
+      expect(JSON.parse(String(values[12]))).toEqual([]);
+    });
+    const constraintsByFormat = new Map(
+      outputs.map(({ values }) => {
+        const outputJson = JSON.parse(String(values[10])) as {
+          deliveryFormat: string;
+          channelConstraints: Record<string, unknown>;
+        };
+        return [outputJson.deliveryFormat, outputJson.channelConstraints];
+      })
+    );
+    expect(constraintsByFormat.get("x_post")).toEqual({ maxCharacters: 280 });
+    expect(constraintsByFormat.get("linkedin_post")).toEqual({ maxCharacters: 3000 });
+    expect(constraintsByFormat.get("youtube_short")).toEqual({ aspectRatio: "9:16", maxDurationSeconds: 180 });
+    expect(constraintsByFormat.get("tiktok_video")).toEqual({ aspectRatio: "9:16", maxDurationSeconds: 180 });
+    const serializedOutputs = JSON.stringify(outputs.map(({ values }) => values[10]));
+    for (const forbidden of ["storyboard", "slides", "cards", "scenes", "assetCount", "raw_text", "extracted_text", "summary"]) {
+      expect(serializedOutputs).not.toContain(`"${forbidden}"`);
+    }
     const queues = fixture.statements.filter(({ sql }) => sql.includes("insert into publish_queue"));
     expect(queues).toHaveLength(0);
     const jobs = fixture.statements.filter(({ sql }) => sql.includes("insert into jobs"));
@@ -262,16 +305,16 @@ function fakePoolWithClient(query: ReturnType<typeof vi.fn>) {
 }
 
 function isConnectedChannelQuery(sql: string) {
-  return sql.includes("from brand_channels") && sql.includes("status = 'connected'");
+  return sql.includes("from brand_channels") && sql.includes("enabled = true") && !sql.includes("status = 'connected'");
 }
 
-function connectedChannelRows(...channels: Array<"instagram" | "threads">) {
+function connectedChannelRows(...channels: Array<"instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok">) {
   return { rowCount: channels.length, rows: channels.map((channel) => ({ channel })) };
 }
 
 describe("Instagram trend repository delegation", () => {
   it("delegates category reads through the focused repository", async () => {
-    const query = vi.fn(async (sql: string) => {
+    const query = vi.fn(async (sql: string, _values?: unknown[]) => {
       expect(sql).toContain("from content_categories category");
       return {
         rowCount: 1,
@@ -548,7 +591,7 @@ describe("repository", () => {
   });
 
   it("creates a publish queue row when a content output is approved", async () => {
-    const query = vi.fn(async (sql: string) => {
+    const query = vi.fn(async (sql: string, _values?: unknown[]) => {
       if (sql.trimStart().startsWith("with updated as")) {
         return {
           rowCount: 1,
@@ -569,7 +612,78 @@ describe("repository", () => {
 
     await repository.reviewContentOutput("output-1", "approve");
 
+    expect(query.mock.calls.find(([sql]) => String(sql).trimStart().startsWith("with updated as"))?.[0])
+      .toContain("status = any($3::text[])");
+    expect(findSqlCall(query.mock.calls, (sql) => sql.trimStart().startsWith("with updated as"))?.[1]?.[2])
+      .toEqual(["pending_review", "auto_approval_blocked"]);
     expect(query).toHaveBeenCalledWith(expect.stringContaining("insert into publish_queue"), expect.any(Array));
+  });
+
+  it.each(["reject", "regenerate"] as const)("allows %s for terminal generation failures", async (action) => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.trimStart().startsWith("with updated as")) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: "output-1",
+            status: action === "reject" ? "rejected" : "regenerating",
+            workspace_id: "workspace-1",
+            brand_id: "brand-1",
+            channel: "x"
+          }]
+        };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+    const repository = createRepository(fakePoolWithClient(query) as any);
+
+    await repository.reviewContentOutput("output-1", action);
+
+    const reviewUpdate = findSqlCall(query.mock.calls, (sql) => sql.trimStart().startsWith("with updated as"));
+    expect(reviewUpdate?.[1]?.[2]).toEqual([
+      "pending_review",
+      "auto_approval_blocked",
+      "generation_failed"
+    ]);
+  });
+
+  it("rejects a repeated review after the output has left a reviewable state", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.trimStart().startsWith("with updated as")) return { rowCount: 0, rows: [] };
+      return { rowCount: 1, rows: [] };
+    });
+    const repository = createRepository(fakePoolWithClient(query) as any);
+
+    await expect(repository.reviewContentOutput("output-1", "approve"))
+      .rejects.toThrow("content_output_not_reviewable");
+    expect(query).not.toHaveBeenCalledWith(expect.stringContaining("insert into review_events"), expect.any(Array));
+  });
+
+  it("rejects approval while a channel artifact is still pending", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.trimStart().startsWith("with updated as")) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: "output-pending-1",
+            status: "approved",
+            workspace_id: "workspace-1",
+            brand_id: "brand-1",
+            channel: "youtube",
+            brand_channel_id: "brand-channel-youtube",
+            topic_publish_group_id: "publish-group-1",
+            output_json: { generationState: "pending", artifactKind: "video" }
+          }]
+        };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+    const repository = createRepository(fakePoolWithClient(query) as any);
+
+    await expect(repository.reviewContentOutput("output-pending-1", "approve"))
+      .rejects.toThrow("content_output_artifact_not_ready");
+    expect(query).not.toHaveBeenCalledWith(expect.stringContaining("insert into publish_queue"), expect.any(Array));
+    expect(query).toHaveBeenCalledWith("rollback");
   });
 
   it("skips topic rows that duplicate existing brand topic rows", async () => {
@@ -1910,6 +2024,7 @@ describe("repository", () => {
     })]);
     expect(query).toHaveBeenCalledWith(expect.stringContaining("delivery_format"), ["brand-1"]);
     expect(query).toHaveBeenCalledWith(expect.stringContaining("output_json"), ["brand-1"]);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("status <> 'regenerated'"), ["brand-1"]);
   });
 
   it("schedules queued publish items and publishes one mock item", async () => {
@@ -1943,6 +2058,101 @@ describe("repository", () => {
 
     expect(await repository.schedulePublishQueue("brand-1")).toMatchObject({ processed: 1, updated: 1 });
     expect(await repository.publishQueueItem("queue-1")).toMatchObject({ id: "queue-1", status: "published", publishedUrl: "mock://instagram/output-1" });
+  });
+
+  it("reconciles successful and abandoned publishing rows before claiming new work", async () => {
+    const statements: string[] = [];
+    const query = vi.fn(async (sql: string) => {
+      statements.push(sql);
+      if (sql.includes("select id from brands")) return { rowCount: 0, rows: [] };
+      if (sql.includes("select id from publish_queue")) return { rowCount: 0, rows: [] };
+      return { rowCount: 0, rows: [] };
+    });
+    const repository = createRepository({ query } as any);
+
+    await expect(repository.runDuePublishing()).resolves.toEqual({ processed: 0, created: 0, updated: 0, failed: 0 });
+
+    expect(statements[0]).toContain("pa.status = 'succeeded'");
+    expect(statements[0]).toContain("publish_delivery_unknown");
+    expect(statements[0]).toContain("interval '30 minutes'");
+  });
+
+  it("does not mark deferred provider channels as mock-published", async () => {
+    const statements: Array<{ sql: string; values: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      statements.push({ sql, values: values ?? [] });
+      if (sql.includes("with selected as") && sql.includes("from publish_queue pq")) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: "queue-x-1",
+            workspace_id: "workspace-1",
+            brand_id: "brand-1",
+            channel: "x",
+            channel_output_id: "output-x-1",
+            output_json: { text: "hello" },
+            attempt_id: "attempt-x-1"
+          }]
+        };
+      }
+      if (sql.includes("with failed_attempt as")) return { rowCount: 1, rows: [{ id: "queue-x-1" }] };
+      return { rowCount: 0, rows: [] };
+    });
+    const repository = createRepository({ query } as any);
+
+    await expect(repository.publishQueueItem("queue-x-1")).rejects.toThrow("oauth_required");
+    const failed = statements.find(({ sql }) => sql.includes("with failed_attempt as"));
+    expect(failed?.values).toContain("oauth_required");
+    expect(statements.some(({ sql }) => sql.includes("set status = 'published'"))).toBe(false);
+  });
+
+  it("returns deferred provider failures to the queue on explicit retry", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("update publish_queue") && sql.includes("provider_not_implemented")) {
+        return { rowCount: 1, rows: [{ id: "queue-x-1", status: "queued" }] };
+      }
+      return { rowCount: 0, rows: [] };
+    });
+    const repository = createRepository({ query } as any);
+
+    await expect(repository.retryPublishQueueItem("queue-x-1")).resolves.toEqual({
+      id: "queue-x-1",
+      status: "queued"
+    });
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("update topic_publish_groups"),
+      ["queue-x-1"]
+    );
+  });
+
+  it("does not report deferred providers healthy from stored credentials alone", async () => {
+    let checkSql = "";
+    const query = vi.fn(async (sql: string) => {
+      checkSql = sql;
+      return {
+        rowCount: 1,
+        rows: [{
+          channel: "x",
+          enabled: true,
+          status: "needs_attention",
+          account_label: "@brand",
+          last_healthy_at: null,
+          last_published_at: null,
+          last_error: "provider_check_not_implemented",
+          has_active_credentials: true
+        }]
+      };
+    });
+    const repository = createRepository({ query } as any);
+
+    await expect(repository.checkChannel("brand-1", "x")).resolves.toMatchObject({
+      channel: "x",
+      status: "needs_attention",
+      oauthState: "needs_attention",
+      lastError: "provider_check_not_implemented"
+    });
+    expect(checkSql).toContain("provider_check_not_implemented");
+    expect(checkSql).not.toContain("has_active_credentials then 'connected'");
   });
 
   describe("Task 11 topic publish group scheduling", () => {
@@ -2082,10 +2292,14 @@ describe("repository", () => {
         publishAttempts.push(values ?? []);
         return { rowCount: 1, rows: [] };
       }
+      if (sql.includes("update publish_attempts") && sql.includes("external_post_id = $5")) {
+        publishAttempts.push(values ?? []);
+        return { rowCount: 1, rows: [{ id: "attempt-1" }] };
+      }
       if (sql.includes("set status = 'published'")) {
         queueUpdates.push(values ?? []);
         publishAttempts.push(values ?? []);
-        return { rowCount: 1, rows: [{ id: values?.[1] ?? "queue-1", status: "published" }] };
+        return { rowCount: 1, rows: [{ id: "queue-1", status: "published" }] };
       }
       if (sql.includes("update brand_channels")) channelUpdates.push(values ?? []);
       return { rowCount: 1, rows: [] };
@@ -3277,5 +3491,282 @@ describe("repository", () => {
     })).rejects.toBe(databaseError);
 
     expect(statements.at(-1)?.trim()).toBe("rollback");
+  });
+});
+
+describe("content performance repository", () => {
+  it("does not start a daily sync before 03:00 KST", async () => {
+    const query = vi.fn();
+    const repository = createRepository({ query } as any);
+
+    await expect(repository.runDailyPerformanceSync(new Date("2026-07-15T17:59:00.000Z"))).resolves.toEqual({
+      runDate: "2026-07-16",
+      status: "not_due",
+      channelsSelected: 0,
+      runsStarted: 0,
+      targetCount: 0,
+      successCount: 0,
+      failureCount: 0
+    });
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("reclaims a stale running daily sync after a worker crashes", async () => {
+    const now = new Date("2026-07-15T18:00:00.000Z");
+    const staleStartedAt = new Date("2026-07-15T17:29:59.999Z");
+    let claimSql = "";
+    const query = vi.fn(async (sql: string, values: unknown[] = []) => {
+      if (sql.includes("from brands b") && sql.includes("brand_channels")) {
+        return { rowCount: 1, rows: [{ brand_id: "brand-1", workspace_id: "workspace-1", channel: "instagram", encrypted_payload: encryptCredential("access-token"), auth_mode: "facebook_login" }] };
+      }
+      if (sql.includes("insert into performance_sync_runs")) {
+        claimSql = sql;
+        const leaseExpired = staleStartedAt.getTime() <= (values[4] as Date).getTime() - 30 * 60 * 1000;
+        const canAtomicallyReclaim = sql.includes("do update")
+          && sql.includes("performance_sync_runs.status = 'running'")
+          && sql.includes("performance_sync_runs.started_at <= excluded.started_at - interval '30 minutes'");
+        return canAtomicallyReclaim && leaseExpired
+          ? { rowCount: 1, rows: [{ id: "stale-run-1" }] }
+          : { rowCount: 0, rows: [] };
+      }
+      if (sql.includes("from publish_queue pq") && sql.includes("external_post_id")) return { rowCount: 0, rows: [] };
+      if (sql.includes("update performance_sync_runs")) return { rowCount: 1, rows: [] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const repository = createRepository({ query } as any);
+
+    await expect(repository.runDailyPerformanceSync(now)).resolves.toMatchObject({
+      status: "completed",
+      channelsSelected: 1,
+      runsStarted: 1
+    });
+    expect(claimSql).toContain("returning id");
+  });
+
+  it("suppresses a fresh running daily sync claim", async () => {
+    const collect = vi.fn();
+    let claimSql = "";
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("from brands b") && sql.includes("brand_channels")) {
+        return { rowCount: 1, rows: [{ brand_id: "brand-1", workspace_id: "workspace-1", channel: "instagram", encrypted_payload: "token" }] };
+      }
+      if (sql.includes("insert into performance_sync_runs")) {
+        claimSql = sql;
+        return { rowCount: 0, rows: [] };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const repository = createRepository({ query } as any, {
+      performanceAdapters: { instagram: { collect } }
+    } as any);
+
+    await expect(repository.runDailyPerformanceSync(new Date("2026-07-15T18:00:00.000Z"))).resolves.toMatchObject({
+      status: "completed",
+      channelsSelected: 1,
+      runsStarted: 0
+    });
+    expect(collect).not.toHaveBeenCalled();
+    expect(claimSql).toContain("performance_sync_runs.status = 'running'");
+    expect(claimSql).toContain("performance_sync_runs.started_at <= excluded.started_at - interval '30 minutes'");
+  });
+
+  it("continues after one item fails and records a partially failed run", async () => {
+    const collect = vi.fn()
+      .mockRejectedValueOnce(new Error("provider_timeout"))
+      .mockResolvedValueOnce({ status: "collected", exposureCount: 120, rawMetrics: { views: 120 } });
+    const statements: Array<{ sql: string; values: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, values: unknown[] = []) => {
+      statements.push({ sql, values });
+      if (sql.includes("from brands b") && sql.includes("brand_channels")) {
+        return { rowCount: 1, rows: [{ brand_id: "brand-1", workspace_id: "workspace-1", channel: "instagram", encrypted_payload: encryptCredential("access-token"), auth_mode: "facebook_login" }] };
+      }
+      if (sql.includes("insert into performance_sync_runs")) return { rowCount: 1, rows: [{ id: "run-1" }] };
+      if (sql.includes("from publish_queue pq") && sql.includes("external_post_id")) {
+        return {
+          rowCount: 2,
+          rows: [
+            { publish_queue_id: "queue-1", channel_output_id: "output-1", external_post_id: "post-1" },
+            { publish_queue_id: "queue-2", channel_output_id: "output-2", external_post_id: "post-2" }
+          ]
+        };
+      }
+      if (sql.includes("insert into content_performance_snapshots")) return { rowCount: 1, rows: [] };
+      if (sql.includes("update performance_sync_runs")) return { rowCount: 1, rows: [] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const repository = createRepository({ query } as any, {
+      performanceAdapters: { instagram: { collect } }
+    } as any);
+
+    await expect(repository.runDailyPerformanceSync(new Date("2026-07-15T18:00:00.000Z"))).resolves.toMatchObject({
+      status: "partially_failed",
+      runsStarted: 1,
+      targetCount: 2,
+      successCount: 1,
+      failureCount: 1
+    });
+    expect(collect).toHaveBeenCalledTimes(2);
+    const snapshotWrites = statements.filter(({ sql }) => sql.includes("insert into content_performance_snapshots"));
+    expect(snapshotWrites).toHaveLength(1);
+    expect(snapshotWrites[0].sql).toContain("on conflict (publish_queue_id, snapshot_date)");
+    expect(statements.find(({ sql }) => sql.includes("update performance_sync_runs"))?.values).toEqual([
+      "run-1", "partially_failed", 2, 1, 1, "provider_timeout"
+    ]);
+  });
+
+  it("marks a claimed channel not configured when its adapter is deferred", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("from brands b") && sql.includes("brand_channels")) {
+        return { rowCount: 1, rows: [{ brand_id: "brand-1", workspace_id: "workspace-1", channel: "threads", encrypted_payload: encryptCredential("access-token") }] };
+      }
+      if (sql.includes("insert into performance_sync_runs")) return { rowCount: 1, rows: [{ id: "run-1" }] };
+      if (sql.includes("from publish_queue pq") && sql.includes("external_post_id")) {
+        return { rowCount: 1, rows: [{ publish_queue_id: "queue-1", channel_output_id: "output-1", external_post_id: "post-1" }] };
+      }
+      if (sql.includes("update performance_sync_runs")) return { rowCount: 1, rows: [] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const repository = createRepository({ query } as any);
+
+    await expect(repository.runDailyPerformanceSync(new Date("2026-07-15T18:00:00.000Z"))).resolves.toMatchObject({
+      status: "not_configured",
+      targetCount: 1,
+      successCount: 0,
+      failureCount: 0
+    });
+  });
+
+  it("uses latest snapshots for totals and excludes each content's first daily sample", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("dashboard_workflow")) {
+        return { rowCount: 1, rows: [{ queued_topics: "3", generating: "2", pending_review: "4", scheduled_or_published: "5", pending_review_count: "4", failed_publish_count: "1" }] };
+      }
+      if (sql.includes("dashboard_published_items")) {
+        return {
+          rowCount: 2,
+          rows: [
+            { publish_queue_id: "queue-1", title: "First", channel: "instagram", delivery_format: "instagram_feed_single", published_at: new Date("2026-07-14T03:00:00Z"), exposure_count: "150", collected_at: new Date("2026-07-16T03:10:00Z"), external_url: "https://example.com/1" },
+            { publish_queue_id: "queue-2", title: "Second", channel: "instagram", delivery_format: "instagram_feed_single", published_at: new Date("2026-07-13T03:00:00Z"), exposure_count: "80", collected_at: new Date("2026-07-16T03:11:00Z"), external_url: null }
+          ]
+        };
+      }
+      if (sql.includes("dashboard_snapshots")) {
+        return {
+          rowCount: 5,
+          rows: [
+            { publish_queue_id: "queue-1", channel: "instagram", snapshot_date: "2026-07-14", exposure_count: "100" },
+            { publish_queue_id: "queue-1", channel: "instagram", snapshot_date: "2026-07-15", exposure_count: "140" },
+            { publish_queue_id: "queue-1", channel: "instagram", snapshot_date: "2026-07-16", exposure_count: "130" },
+            { publish_queue_id: "queue-2", channel: "instagram", snapshot_date: "2026-07-15", exposure_count: "50" },
+            { publish_queue_id: "queue-2", channel: "instagram", snapshot_date: "2026-07-16", exposure_count: "80" }
+          ]
+        };
+      }
+      if (sql.includes("dashboard_channels")) {
+        return { rowCount: 1, rows: [{ channel: "instagram", status: "connected", published_count: "2", exposure_count: "230", last_collected_at: new Date("2026-07-16T03:11:00Z"), sync_status: "completed", last_error: null }] };
+      }
+      if (sql.includes("dashboard_attention")) return { rowCount: 0, rows: [] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const repository = createRepository({ query } as any);
+
+    const dashboard = await repository.getDashboard("brand-1");
+
+    expect(dashboard.summary).toEqual({ publishedCount: 2, exposureCount: 230, pendingReviewCount: 4, failedPublishCount: 1 });
+    expect(dashboard.dailyExposure).toEqual([
+      { date: "2026-07-15", channels: { instagram: 40 } },
+      { date: "2026-07-16", channels: { instagram: 30 } }
+    ]);
+    expect(dashboard.topContents.map((item) => item.exposureCount)).toEqual([150, 80]);
+    expect(dashboard.lastCollectedAt).toBe("2026-07-16T03:11:00.000Z");
+  });
+
+  it("uses each content's true predecessor at the 30-day boundary without emitting its date", async () => {
+    let snapshotsSql = "";
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("dashboard_workflow")) {
+        return { rowCount: 1, rows: [{ queued_topics: "0", generating: "0", pending_review: "0", scheduled_or_published: "1", pending_review_count: "0", failed_publish_count: "0" }] };
+      }
+      if (sql.includes("dashboard_published_items")) {
+        return {
+          rowCount: 1,
+          rows: [{ publish_queue_id: "queue-1", title: "Boundary", channel: "instagram", delivery_format: "instagram_feed_single", published_at: new Date("2026-06-17T03:00:00Z"), exposure_count: "130", collected_at: new Date("2026-07-16T03:10:00Z"), external_url: null }]
+        };
+      }
+      if (sql.includes("dashboard_snapshots")) {
+        snapshotsSql = sql;
+        return {
+          rowCount: 3,
+          rows: [
+            { publish_queue_id: "queue-1", channel: "instagram", snapshot_date: "2026-06-16", exposure_count: "100" },
+            { publish_queue_id: "queue-1", channel: "instagram", snapshot_date: "2026-06-17", exposure_count: "125" },
+            { publish_queue_id: "queue-1", channel: "instagram", snapshot_date: "2026-07-16", exposure_count: "130" }
+          ]
+        };
+      }
+      if (sql.includes("dashboard_channels")) return { rowCount: 0, rows: [] };
+      if (sql.includes("dashboard_attention")) return { rowCount: 0, rows: [] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const repository = createRepository({ query } as any);
+
+    const dashboard = await repository.getDashboard("brand-1");
+
+    expect(snapshotsSql).toContain("distinct on (publish_queue_id)");
+    expect(snapshotsSql).toContain("snapshot_date < $2::date - 29");
+    expect(dashboard.dailyExposure).toEqual([
+      { date: "2026-06-17", channels: { instagram: 25 } },
+      { date: "2026-07-16", channels: { instagram: 5 } }
+    ]);
+    expect(dashboard.dailyExposure.some(({ date }) => date === "2026-06-16")).toBe(false);
+  });
+
+  it("preserves null for unavailable exposure while retaining measured zero", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("dashboard_workflow")) {
+        return { rowCount: 1, rows: [{ queued_topics: "0", generating: "0", pending_review: "0", scheduled_or_published: "2", pending_review_count: "0", failed_publish_count: "0" }] };
+      }
+      if (sql.includes("dashboard_published_items")) {
+        return {
+          rowCount: 2,
+          rows: [
+            { publish_queue_id: "queue-null", title: "Unavailable", channel: "instagram", delivery_format: "instagram_feed_single", published_at: new Date("2026-07-15T03:00:00Z"), exposure_count: null, collected_at: null, external_url: null },
+            { publish_queue_id: "queue-zero", title: "Measured zero", channel: "threads", delivery_format: "threads_text", published_at: new Date("2026-07-15T04:00:00Z"), exposure_count: "0", collected_at: new Date("2026-07-16T03:10:00Z"), external_url: null }
+          ]
+        };
+      }
+      if (sql.includes("dashboard_snapshots")) {
+        return {
+          rowCount: 4,
+          rows: [
+            { publish_queue_id: "queue-null", channel: "instagram", snapshot_date: "2026-07-15", exposure_count: null },
+            { publish_queue_id: "queue-null", channel: "instagram", snapshot_date: "2026-07-16", exposure_count: "10" },
+            { publish_queue_id: "queue-zero", channel: "threads", snapshot_date: "2026-07-15", exposure_count: "0" },
+            { publish_queue_id: "queue-zero", channel: "threads", snapshot_date: "2026-07-16", exposure_count: "0" }
+          ]
+        };
+      }
+      if (sql.includes("dashboard_channels")) {
+        return {
+          rowCount: 2,
+          rows: [
+            { channel: "instagram", status: "connected", published_count: "1", exposure_count: null, last_collected_at: null, sync_status: null },
+            { channel: "threads", status: "connected", published_count: "1", exposure_count: "0", last_collected_at: new Date("2026-07-16T03:10:00Z"), sync_status: "completed" }
+          ]
+        };
+      }
+      if (sql.includes("dashboard_attention")) return { rowCount: 0, rows: [] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const repository = createRepository({ query } as any);
+
+    const dashboard = await repository.getDashboard("brand-1");
+
+    expect(dashboard.summary.exposureCount).toBe(0);
+    expect(dashboard.topContents.map(({ exposureCount }) => exposureCount)).toEqual([null, 0]);
+    expect(dashboard.channelPerformance.map(({ exposureCount }) => exposureCount)).toEqual([null, 0]);
+    expect(dashboard.dailyExposure).toEqual([
+      { date: "2026-07-16", channels: { threads: 0 } }
+    ]);
   });
 });

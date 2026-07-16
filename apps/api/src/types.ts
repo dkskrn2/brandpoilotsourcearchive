@@ -439,13 +439,24 @@ export interface CredentialInput {
   authMode?: "facebook_login" | "instagram_login";
 }
 
+export type ContentOutputStatus =
+  | "generating"
+  | "generation_failed"
+  | "pending_review"
+  | "auto_approval_blocked"
+  | "approved"
+  | "auto_approved"
+  | "rejected"
+  | "regenerating"
+  | "regenerated";
+
 export interface ContentOutputDto {
   id: string;
   contentId: string;
   title: string;
   channel: Channel;
   deliveryFormat: DeliveryFormat;
-  status: string;
+  status: ContentOutputStatus;
   previewTitle: string | null;
   previewBody: string | null;
   sourceSummary: string | null;

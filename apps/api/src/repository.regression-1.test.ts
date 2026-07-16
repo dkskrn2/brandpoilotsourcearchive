@@ -49,6 +49,38 @@ describe("repository regressions", () => {
     expect(statusQuery).not.toContain("'regenerated'");
   });
 
+  it("counts channel issues across exactly the six runtime channels", async () => {
+    let statusQuery = "";
+    const query = vi.fn(async (sql: string) => {
+      statusQuery = sql;
+      return {
+        rowCount: 1,
+        rows: [{
+          brand_id: "brand-1",
+          brand_name: "Brand",
+          auto_approval_enabled: false,
+          owned_source_count: "0",
+          reference_source_count: "0",
+          topic_row_count: "0",
+          instagram_status: "not_connected",
+          threads_status: "not_connected",
+          content_output_count: "0",
+          content_review_count: "0",
+          publish_issue_count: "0",
+          channel_issue_count: "0",
+          last_generated_at: null
+        }]
+      };
+    });
+    const repository = createRepository({ query } as any);
+
+    await repository.getBrandUiStatus("brand-1");
+
+    expect(statusQuery).toContain(
+      "bc.channel in ('instagram', 'threads', 'x', 'linkedin', 'youtube', 'tiktok')"
+    );
+  });
+
   it("normalizes nullable profile text fields for the customer form contract", async () => {
     const query = vi.fn(async () => ({
       rowCount: 1,
@@ -148,7 +180,7 @@ describe("repository regressions", () => {
     expect(status.onboarding.steps.find((step) => step.id === "brand-profile")?.status).toBe("completed");
   });
 
-  it("blocks Instagram auto approval until the image worker artifact exists", async () => {
+  it("keeps Instagram generating until the image worker artifact exists", async () => {
     const outputStatuses: string[] = [];
     const queueInserts: unknown[][] = [];
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
@@ -166,7 +198,7 @@ describe("repository regressions", () => {
           }]
         };
       }
-      if (sql.includes("from brand_channels") && sql.includes("status = 'connected'")) {
+      if (sql.includes("from brand_channels") && sql.includes("enabled = true")) {
         return connectedInstagram();
       }
       if (sql.includes("from brand_content_formats") && sql.includes("for update")) {
@@ -208,10 +240,6 @@ describe("repository regressions", () => {
         outputStatuses.push(String(values?.[6]));
         return { rowCount: 1, rows: [{ id: "output-instagram" }] };
       }
-      if (sql.includes("update channel_outputs") && sql.includes("auto_approval_blocked")) {
-        outputStatuses.push("auto_approval_blocked");
-        return { rowCount: 1, rows: [] };
-      }
       if (sql.includes("select id from brand_channels")) {
         return { rowCount: 1, rows: [{ id: "channel-instagram" }] };
       }
@@ -225,7 +253,7 @@ describe("repository regressions", () => {
 
     await repository.generateContent("brand-1");
 
-    expect(outputStatuses).toContain("auto_approval_blocked");
+    expect(outputStatuses).toEqual(["generating"]);
     expect(queueInserts).toHaveLength(0);
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining("insert into jobs"),
