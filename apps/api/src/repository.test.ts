@@ -621,6 +621,12 @@ describe("repository", () => {
 
   it.each(["reject", "regenerate"] as const)("allows %s for terminal generation failures", async (action) => {
     const query = vi.fn(async (sql: string) => {
+      if (sql.includes("select channel from channel_outputs")) {
+        return {
+          rowCount: 1,
+          rows: [{ channel: "instagram", delivery_format: "instagram_feed_carousel" }]
+        };
+      }
       if (sql.trimStart().startsWith("with updated as")) {
         return {
           rowCount: 1,
@@ -629,9 +635,13 @@ describe("repository", () => {
             status: action === "reject" ? "rejected" : "regenerating",
             workspace_id: "workspace-1",
             brand_id: "brand-1",
-            channel: "x"
+            channel: action === "reject" ? "x" : "instagram",
+            delivery_format: action === "regenerate" ? "instagram_feed_carousel" : null
           }]
         };
+      }
+      if (sql.includes("insert into channel_outputs")) {
+        return { rowCount: 1, rows: [{ id: "output-regenerated" }] };
       }
       return { rowCount: 1, rows: [] };
     });
@@ -645,6 +655,18 @@ describe("repository", () => {
       "auto_approval_blocked",
       "generation_failed"
     ]);
+  });
+
+  it("treats a missing regeneration capability row as not reviewable", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("select channel from channel_outputs")) return { rowCount: 1, rows: [] };
+      return { rowCount: 0, rows: [] };
+    });
+    const repository = createRepository(fakePoolWithClient(query) as any);
+
+    await expect(repository.reviewContentOutput("output-1", "regenerate"))
+      .rejects.toThrow("content_output_not_reviewable");
+    expect(query.mock.calls.some(([sql]) => String(sql).trimStart().startsWith("with updated as"))).toBe(false);
   });
 
   it("rejects a repeated review after the output has left a reviewable state", async () => {

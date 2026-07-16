@@ -306,6 +306,12 @@ describe("image worker completion", () => {
   it("regenerates only the existing Story delivery format", async () => {
     const clientQuery = vi.fn(async (sql: string, _values?: unknown[]) => {
       if (["begin", "commit", "rollback"].includes(sql.trim())) return { rowCount: 0, rows: [] };
+      if (sql.includes("select channel from channel_outputs")) {
+        return {
+          rowCount: 1,
+          rows: [{ channel: "instagram", delivery_format: "instagram_story" }]
+        };
+      }
       if (sql.trimStart().startsWith("with updated as")) {
         return {
           rowCount: 1,

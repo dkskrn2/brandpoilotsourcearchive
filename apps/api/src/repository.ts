@@ -2335,8 +2335,9 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
              for update`,
             [outputId, reviewableStatuses]
           );
-          if (!capability.rowCount) throw new Error("content_output_not_reviewable");
-          if (capability.rows[0].channel !== "instagram" && capability.rows[0].channel !== "threads") {
+          const capabilityRow = capability.rows[0];
+          if (!capability.rowCount || !capabilityRow) throw new Error("content_output_not_reviewable");
+          if (capabilityRow.channel !== "instagram" && capabilityRow.channel !== "threads") {
             throw new Error("content_output_regeneration_not_supported");
           }
         }
