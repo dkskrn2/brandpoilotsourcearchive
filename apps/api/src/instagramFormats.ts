@@ -11,7 +11,9 @@ export type DeliveryFormat =
   | "threads_text"
   | "tiktok_video"
   | "youtube_video"
-  | "x_post";
+  | "youtube_short"
+  | "x_post"
+  | "linkedin_post";
 
 const renderJobTypes = {
   instagram_feed_carousel: "instagram_feed_render",

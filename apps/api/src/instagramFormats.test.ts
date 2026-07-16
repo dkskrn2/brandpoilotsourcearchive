@@ -109,7 +109,7 @@ describe("chooseNextInstagramFormat", () => {
 });
 
 describe("shared delivery type contracts", () => {
-  it("is exactly the seven DB-supported delivery formats", () => {
+  it("is exactly the nine runtime-supported delivery formats", () => {
     const formats = [
       "instagram_feed_carousel",
       "instagram_story",
@@ -117,10 +117,12 @@ describe("shared delivery type contracts", () => {
       "threads_text",
       "tiktok_video",
       "youtube_video",
-      "x_post"
+      "youtube_short",
+      "x_post",
+      "linkedin_post"
     ] as const satisfies readonly DeliveryFormat[];
 
-    expect(formats).toHaveLength(7);
+    expect(formats).toHaveLength(9);
     expectTypeOf<DeliveryFormat>().toEqualTypeOf<
       | "instagram_feed_carousel"
       | "instagram_story"
@@ -128,7 +130,9 @@ describe("shared delivery type contracts", () => {
       | "threads_text"
       | "tiktok_video"
       | "youtube_video"
+      | "youtube_short"
       | "x_post"
+      | "linkedin_post"
     >();
     expectTypeOf<InstagramDeliveryFormat>().toEqualTypeOf<(typeof instagramFormats)[number]>();
     expectTypeOf<InstagramRenderJobType>().toEqualTypeOf<
@@ -203,10 +207,12 @@ describe("shared delivery type contracts", () => {
       { channel: "threads", deliveryFormat: "threads_text" },
       { channel: "tiktok", deliveryFormat: "tiktok_video" },
       { channel: "youtube", deliveryFormat: "youtube_video" },
-      { channel: "x", deliveryFormat: "x_post" }
+      { channel: "youtube", deliveryFormat: "youtube_short" },
+      { channel: "x", deliveryFormat: "x_post" },
+      { channel: "linkedin", deliveryFormat: "linkedin_post" }
     ] as const satisfies readonly OutputPair[];
 
-    expect(validPairs).toHaveLength(7);
+    expect(validPairs).toHaveLength(9);
     expectTypeOf<TopicPublishGroupOutputDto["deliveryFormat"]>().toEqualTypeOf<DeliveryFormat>();
   });
 
@@ -242,8 +248,9 @@ describe("shared delivery type contracts", () => {
         })
       | (ExpectedOutputBase & { channel: "threads"; deliveryFormat: "threads_text" })
       | (ExpectedOutputBase & { channel: "tiktok"; deliveryFormat: "tiktok_video" })
-      | (ExpectedOutputBase & { channel: "youtube"; deliveryFormat: "youtube_video" })
-      | (ExpectedOutputBase & { channel: "x"; deliveryFormat: "x_post" });
+      | (ExpectedOutputBase & { channel: "youtube"; deliveryFormat: "youtube_video" | "youtube_short" })
+      | (ExpectedOutputBase & { channel: "x"; deliveryFormat: "x_post" })
+      | (ExpectedOutputBase & { channel: "linkedin"; deliveryFormat: "linkedin_post" });
     type ExpectedGroup = {
       id: string;
       brandId: string;

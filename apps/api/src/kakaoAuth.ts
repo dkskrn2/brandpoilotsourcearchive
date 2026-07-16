@@ -37,7 +37,7 @@ function mapAuthSession(row: Record<string, unknown>): AuthSession {
   };
 }
 
-async function ensureCoreBrandChannels(
+async function ensureBrandChannels(
   queryable: Pick<Pool, "query">,
   input: { workspaceId: string; brandId: string }
 ) {
@@ -45,7 +45,11 @@ async function ensureCoreBrandChannels(
     `insert into brand_channels (workspace_id, brand_id, channel, status, account_label, enabled)
      values
        ($1, $2, 'instagram', 'not_connected', '연결 전', true),
-       ($1, $2, 'threads', 'not_connected', '연결 전', true)
+       ($1, $2, 'threads', 'not_connected', '연결 전', true),
+       ($1, $2, 'x', 'not_connected', '연결 전', false),
+       ($1, $2, 'linkedin', 'not_connected', '연결 전', false),
+       ($1, $2, 'youtube', 'not_connected', '연결 전', false),
+       ($1, $2, 'tiktok', 'not_connected', '연결 전', false)
      on conflict (brand_id, channel) where deleted_at is null do nothing`,
     [input.workspaceId, input.brandId]
   );
@@ -95,7 +99,7 @@ export function createKakaoAuthStore(pool: Pool) {
           "insert into brand_profiles (workspace_id, brand_id, auto_approval_enabled) values ($1, $2, true)",
           [workspaceId, brand.rows[0].id]
         );
-        await ensureCoreBrandChannels(client as Pick<Pool, "query">, { workspaceId, brandId: brand.rows[0].id });
+        await ensureBrandChannels(client as Pick<Pool, "query">, { workspaceId, brandId: brand.rows[0].id });
         await client.query("commit");
         return {
           userId,

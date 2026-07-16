@@ -1,15 +1,23 @@
-import type { DeliveryFormat, InstagramDeliveryFormat } from "./instagramFormats.js";
+import type { InstagramDeliveryFormat } from "./instagramFormats.js";
 import type { DmAttentionType, DmDecision, DmJobRoute, DmReasonCode } from "./dmTypes.js";
 
 export type {
-  DeliveryFormat,
   InstagramDeliveryFormat,
   InstagramPromptVersion,
   InstagramRenderJobType
 } from "./instagramFormats.js";
 export type { DmAttentionType, DmDecision, DmJobRoute, DmReasonCode } from "./dmTypes.js";
 
-export type Channel = "instagram" | "threads" | "tiktok" | "youtube" | "x";
+export type DeliveryFormat =
+  | InstagramDeliveryFormat
+  | "threads_text"
+  | "tiktok_video"
+  | "youtube_video"
+  | "youtube_short"
+  | "x_post"
+  | "linkedin_post";
+export type Channel = "instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok";
+export type ChannelOAuthState = "connected" | "not_connected" | "needs_attention";
 export type ChannelStatus =
   | "not_connected"
   | "connected"
@@ -269,13 +277,72 @@ export interface SourceUpdateInput {
   enabled?: boolean;
 }
 
-export interface ChannelDto {
+export interface ChannelStateDto {
   channel: Channel;
   status: string;
   accountLabel: string | null;
   lastHealthyAt: string | null;
   lastPublishedAt: string | null;
   lastError: string | null;
+}
+
+export interface ChannelDto extends ChannelStateDto {
+  enabled: boolean;
+  oauthState: ChannelOAuthState;
+  status: ChannelStatus;
+}
+
+export type PerformanceSyncStatus = "completed" | "partially_failed" | "failed" | "not_configured";
+
+export interface PerformanceSyncSummaryDto {
+  runDate: string;
+  status: PerformanceSyncStatus | "not_due";
+  channelsSelected: number;
+  runsStarted: number;
+  targetCount: number;
+  successCount: number;
+  failureCount: number;
+}
+
+export interface DashboardDto {
+  period: "30d";
+  generatedAt: string;
+  lastCollectedAt: string | null;
+  summary: {
+    publishedCount: number;
+    exposureCount: number | null;
+    pendingReviewCount: number;
+    failedPublishCount: number;
+  };
+  workflow: {
+    queuedTopics: number;
+    generating: number;
+    pendingReview: number;
+    scheduledOrPublished: number;
+  };
+  dailyExposure: Array<{ date: string; channels: Partial<Record<Channel, number>> }>;
+  channelPerformance: Array<{
+    channel: Channel;
+    connectionStatus: ChannelStatus;
+    publishedCount: number;
+    exposureCount: number | null;
+    lastCollectedAt: string | null;
+    syncStatus: PerformanceSyncStatus | "running" | null;
+  }>;
+  topContents: Array<{
+    publishQueueId: string;
+    title: string;
+    channel: Channel;
+    deliveryFormat: DeliveryFormat | null;
+    publishedAt: string;
+    exposureCount: number | null;
+    externalUrl: string | null;
+  }>;
+  attentionItems: Array<{
+    type: "publish_failed" | "channel_error" | "sync_failed" | "stale_sync";
+    channel: Channel | null;
+    message: string;
+  }>;
 }
 
 export interface ChannelConnectionRequestDto {
@@ -432,11 +499,15 @@ export type TopicPublishGroupOutputDto =
     })
   | (TopicPublishGroupOutputBaseDto & {
       channel: "youtube";
-      deliveryFormat: "youtube_video";
+      deliveryFormat: "youtube_video" | "youtube_short";
     })
   | (TopicPublishGroupOutputBaseDto & {
       channel: "x";
       deliveryFormat: "x_post";
+    })
+  | (TopicPublishGroupOutputBaseDto & {
+      channel: "linkedin";
+      deliveryFormat: "linkedin_post";
     });
 
 export interface TopicPublishGroupDto {
@@ -798,7 +869,8 @@ export interface DmConversationDetailDto extends DmConversationSummaryDto {
 
 export interface WikiVersionSummaryDto {
   id: string;
-  status: "building" | "active" | "failed";
+  status: "building" | "ready" | "active" | "failed" | "superseded";
+  buildStage?: "collecting" | "compiling" | "embedding" | "validating" | null;
   version: number | string;
   sourceCount: number;
   documentCount: number;
@@ -811,6 +883,7 @@ export interface WikiVersionSummaryDto {
 
 export interface WikiStatusDto {
   activeVersion: WikiVersionSummaryDto | null;
+  currentVersion?: WikiVersionSummaryDto | null;
   latestFailedVersion: WikiVersionSummaryDto | null;
   importStats: { total: number; succeeded: number; failed: number; faqRows: number; productRows: number };
 }
@@ -837,6 +910,7 @@ export interface ApiRepository {
   updateSource(sourceId: string, input: SourceUpdateInput): Promise<SourceDto>;
   deleteSource(sourceId: string): Promise<{ id: string }>;
   listChannels(brandId: string): Promise<ChannelDto[]>;
+  updateChannelEnabled(brandId: string, channel: Channel, enabled: boolean): Promise<ChannelDto>;
   getChannelConnectionRequest(brandId: string): Promise<ChannelConnectionRequestDto>;
   updateChannelConnectionRequest(brandId: string, input: ChannelConnectionRequestInput): Promise<ChannelConnectionRequestDto>;
   saveChannelCredentials(brandId: string, channel: Channel, input: CredentialInput): Promise<ChannelDto>;
@@ -871,9 +945,12 @@ export interface ApiRepository {
   listSourceCrawlRuns(brandId: string): Promise<SourceCrawlRunDto[]>;
   generateContent(brandId: string, now?: Date): Promise<PipelineRunResult>;
   runDailyGeneration(now?: Date): Promise<DailyGenerationRunResult>;
+  runDailyPerformanceSync(now?: Date): Promise<PerformanceSyncSummaryDto>;
+  getDashboard(brandId: string): Promise<DashboardDto>;
   schedulePublishQueue(brandId: string, now?: Date): Promise<PipelineRunResult>;
   runDuePublishing(now?: Date): Promise<PipelineRunResult>;
   publishQueueItem(queueId: string): Promise<{ id: string; status: string; publishedUrl: string | null }>;
+  retryPublishQueueItem(queueId: string): Promise<{ id: string; status: "queued" | "scheduled" }>;
   claimImageRenderJob(workerId: string): Promise<ImageRenderJobDto | null>;
   heartbeatImageRenderJob(jobId: string, workerId: string, leaseToken: string): Promise<{ id: string; status: string }>;
   completeImageRenderJob(jobId: string, input: ImageRenderJobCompletionInput): Promise<{ id: string; status: string; artifactId: string }>;
@@ -914,4 +991,17 @@ export interface ApiRepository {
     retryAfterMs: number;
   }): Promise<{ id: string; status: string }>;
   heartbeatDmWorker(workerId: string): Promise<{ workerId: string }>;
+  acquireWorkerResourceLease(
+    resourceType: import("./workerResources.js").WorkerResourceType,
+    workerId: string,
+    workload: import("./workerResources.js").WorkerResourceWorkload,
+  ): Promise<WorkerResourceLeaseDto | null>;
+  heartbeatWorkerResourceLease(id: string, workerId: string, leaseToken: string): Promise<WorkerResourceLeaseDto>;
+  releaseWorkerResourceLease(id: string, workerId: string, leaseToken: string): Promise<{ id: string }>;
+}
+
+export interface WorkerResourceLeaseDto {
+  id: string;
+  leaseToken: string;
+  expiresAt: string;
 }

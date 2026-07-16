@@ -23,7 +23,7 @@ function createPool(query: ReturnType<typeof vi.fn>) {
 }
 
 describe("createKakaoAuthStore", () => {
-  it("creates only core channel rows when creating a new user brand", async () => {
+  it("creates all supported channel rows when creating a new user brand", async () => {
     const calls: string[] = [];
     const query = vi.fn(async (sql: string) => {
       calls.push(sql);
@@ -40,9 +40,10 @@ describe("createKakaoAuthStore", () => {
     const channelInsert = calls.find((sql) => sql.includes("insert into brand_channels"));
     expect(channelInsert).toContain("'instagram'");
     expect(channelInsert).toContain("'threads'");
-    expect(channelInsert).not.toContain("'tiktok'");
-    expect(channelInsert).not.toContain("'youtube'");
-    expect(channelInsert).not.toContain("'x'");
+    expect(channelInsert).toContain("'x'");
+    expect(channelInsert).toContain("'linkedin'");
+    expect(channelInsert).toContain("'youtube'");
+    expect(channelInsert).toContain("'tiktok'");
     expect(channelInsert).not.toContain("'webflow'");
   });
 
