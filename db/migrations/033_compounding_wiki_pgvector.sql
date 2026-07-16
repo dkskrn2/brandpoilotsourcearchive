@@ -149,23 +149,24 @@ begin
   elsif exists (
     select 1
     from wiki_pages page
-    cross join lateral jsonb_array_elements(page.content_json -> 'sections') section
+    cross join lateral jsonb_array_elements(page.content_json -> 'sections') as section(value)
     where page.wiki_version_id = p_wiki_version_id
-      and (
-        jsonb_typeof(section -> 'sourceUnitIds') <> 'array'
-        or jsonb_array_length(section -> 'sourceUnitIds') = 0
-        or exists (
+      and case
+        when jsonb_typeof(section.value) is distinct from 'object' then true
+        when jsonb_typeof(section.value -> 'sourceUnitIds') is distinct from 'array' then true
+        when jsonb_array_length(section.value -> 'sourceUnitIds') = 0 then true
+        else exists (
           select 1
-          from jsonb_array_elements_text(section -> 'sourceUnitIds') listed_source(source_unit_id)
+          from jsonb_array_elements_text(section.value -> 'sourceUnitIds') listed_source(source_unit_id)
           where not exists (
             select 1
             from wiki_page_sources source
             where source.wiki_page_id = page.id
-              and source.section_key = section ->> 'sectionKey'
+              and source.section_key = section.value ->> 'sectionKey'
               and source.wiki_source_unit_id::text = listed_source.source_unit_id
           )
         )
-      )
+      end
   ) then
     failure_reason := 'wiki_page_sources_missing';
   elsif exists (
@@ -179,6 +180,14 @@ begin
           and chunk.enabled
           and chunk.embedding is not null
       )
+  ) then
+    failure_reason := 'wiki_page_chunks_missing';
+  elsif exists (
+    select 1
+    from wiki_page_chunks chunk
+    where chunk.wiki_version_id = p_wiki_version_id
+      and chunk.enabled
+      and chunk.embedding is null
   ) then
     failure_reason := 'wiki_page_chunks_missing';
   end if;

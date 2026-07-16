@@ -965,6 +965,7 @@ test("031 creates the content performance dashboard schema", async () => {
   assert.match(migration031.sql, /publish_queue_performance_identity_unique/i);
   assert.match(migration031.sql, /content_performance_snapshots_publish_queue_owner_fkey/i);
   assert.match(migration031.sql, /content_performance_snapshots_channel_output_owner_fkey/i);
+  assert.match(migration031.sql, /performance_sync_runs_brand_owner_fkey/i);
 
   await withDatabase(async (database) => {
     await runMigrationRange(
@@ -1076,7 +1077,8 @@ test("031 creates the content performance dashboard schema", async () => {
         'channel_outputs_performance_identity_unique',
         'publish_queue_performance_identity_unique',
         'content_performance_snapshots_publish_queue_owner_fkey',
-        'content_performance_snapshots_channel_output_owner_fkey'
+        'content_performance_snapshots_channel_output_owner_fkey',
+        'performance_sync_runs_brand_owner_fkey'
       )
       order by conname
     `);
@@ -1086,12 +1088,23 @@ test("031 creates the content performance dashboard schema", async () => {
         "channel_outputs_performance_identity_unique",
         "content_performance_snapshots_channel_output_owner_fkey",
         "content_performance_snapshots_publish_queue_owner_fkey",
+        "performance_sync_runs_brand_owner_fkey",
         "publish_queue_performance_identity_unique",
       ],
     );
 
     const firstFixture = await insertPublishingFixture(database);
     const secondFixture = await insertPublishingFixture(database);
+
+    await assert.rejects(
+      database.query(
+        `insert into performance_sync_runs
+           (workspace_id, brand_id, channel, run_date, status)
+         values ($1, $2, 'instagram', '2026-07-17', 'running')`,
+        [firstFixture.workspaceId, secondFixture.brandId],
+      ),
+      /performance_sync_runs_brand_owner_fkey/,
+    );
 
     await assert.rejects(
       database.query(
@@ -1326,6 +1339,31 @@ test("032 creates the brand-scoped compiled Wiki core in PGlite", async () => {
   });
 });
 
+test("033 activation structurally rejects malformed citations and incomplete embeddings", async () => {
+  const migrations = await loadMigrations();
+  const vectorMigration = migrations.find(
+    (migration) => migration.id === "033_compounding_wiki_pgvector.sql",
+  );
+
+  assert.ok(vectorMigration, "missing migration 033_compounding_wiki_pgvector.sql");
+  assert.match(
+    vectorMigration.sql,
+    /jsonb_typeof\(section\.value\)\s+is distinct from 'object'/i,
+  );
+  assert.match(
+    vectorMigration.sql,
+    /jsonb_typeof\(section\.value\s*->\s*'sourceUnitIds'\)\s+is distinct from 'array'/i,
+  );
+  assert.match(
+    vectorMigration.sql,
+    /when\s+jsonb_array_length\(section\.value\s*->\s*'sourceUnitIds'\)\s*=\s*0\s+then true/i,
+  );
+  assert.match(
+    vectorMigration.sql,
+    /from wiki_page_chunks chunk\s+where chunk\.wiki_version_id = p_wiki_version_id\s+and chunk\.enabled\s+and chunk\.embedding is null/i,
+  );
+});
+
 test("034 creates expiring cross-process worker resource leases", async () => {
   const migrations = await loadMigrations();
 
@@ -1549,6 +1587,7 @@ test("035 removes Webflow runtime data and separates pending generation state", 
       [workspaceId, brandId],
     );
 
+    await database.exec(migration035.sql);
     await database.exec(migration035.sql);
 
     for (const [table, id] of [
