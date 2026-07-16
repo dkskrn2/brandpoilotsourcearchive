@@ -121,6 +121,35 @@ const reviewOutputs: ContentOutput[] = [{
   previewTitle: "차단 미리보기",
   previewBody: "Threads 본문",
   blockReasons: ["외부 참고 URL 의존도가 높습니다."]
+}, {
+  id: "output-generating",
+  contentId: "master-generating",
+  title: "생성 중인 X 콘텐츠",
+  channel: "x",
+  status: "generating" as ContentOutput["status"],
+  topicId: "topic-3",
+  generatedAt: "2026-07-08T01:10:00.000Z",
+  sourceSummary: "주제 정보",
+  previewTitle: "생성 중",
+  previewBody: ""
+}, {
+  id: "output-generation-failed",
+  contentId: "master-generation-failed",
+  title: "생성 실패한 LinkedIn 콘텐츠",
+  channel: "linkedin",
+  status: "generation_failed" as ContentOutput["status"],
+  topicId: "topic-4",
+  generatedAt: "2026-07-08T01:15:00.000Z",
+  sourceSummary: "자사 서비스 페이지",
+  previewTitle: "생성 실패",
+  previewBody: "",
+  outputJson: {
+    generationError: {
+      code: "text_render_failed",
+      message: "provider token=secret-value",
+      failedAt: "2026-07-08T01:16:00.000Z"
+    }
+  }
 }];
 
 const publishResults: PublishResult[] = [{
@@ -286,6 +315,25 @@ async function renderPublishQueuePage(apiOverrides: Partial<Record<string, Retur
 }
 
 describe("PublishQueuePage", () => {
+  it("shows publish states for every channel present in a result", async () => {
+    const channels = (["instagram", "threads", "x", "linkedin", "youtube", "tiktok"] as const).map((channel, index) => ({
+      ...publishResults[1].channels[0],
+      queueId: `queue-${channel}`,
+      channelOutputId: `output-${channel}`,
+      channel,
+      status: "queued" as const,
+      title: `${channel} output`,
+      outputJson: { deliveryFormat: ["instagram_feed_carousel", "threads_text", "x_post", "linkedin_post", "youtube_short", "tiktok_video"][index] }
+    }));
+    await renderPublishQueuePage({
+      listPublishResults: vi.fn(async () => [{ ...publishResults[1], contentId: "master-six", channels }])
+    });
+
+    for (const label of ["Instagram", "Threads", "X", "LinkedIn", "YouTube", "TikTok"]) {
+      expect(await screen.findByRole("button", { name: `${label} 게시 대기` })).toBeVisible();
+    }
+  });
+
   it("shows one scheduled time per topic and independent child channel formats", async () => {
     await renderPublishQueuePage({
       listPublishQueue: vi.fn(async () => groupedQueueRows),
@@ -367,6 +415,63 @@ describe("PublishQueuePage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "검토 필요" }));
     expect(screen.getByText("외부 참고 URL 의존도가 높습니다.")).toBeVisible();
+  });
+
+  it("renders generation lifecycle rows with only API-valid actions", async () => {
+    await renderPublishQueuePage({ listContentOutputs: vi.fn(async () => reviewOutputs) });
+
+    const table = await screen.findByRole("table", { name: "게시 관리 통합 목록" });
+    const generating = within(table).getByRole("row", { name: /생성 중인 X 콘텐츠/ });
+    expect(within(generating).getByText("X 생성 중")).toBeVisible();
+    expect(within(generating).queryByRole("button", { name: /승인|재생성|거절/ })).not.toBeInTheDocument();
+
+    const failed = within(table).getByRole("row", { name: /생성 실패한 LinkedIn 콘텐츠/ });
+    expect(within(failed).getByText("LinkedIn 생성 실패")).toBeVisible();
+    expect(within(failed).getByText("콘텐츠 생성에 실패했습니다. 재생성하거나 거절해 주세요.")).toBeVisible();
+    expect(within(failed).queryByText(/secret-value/)).not.toBeInTheDocument();
+    expect(within(failed).queryByRole("button", { name: /^승인$/ })).not.toBeInTheDocument();
+    expect(within(failed).queryByRole("button", { name: "재생성" })).not.toBeInTheDocument();
+    expect(within(failed).getByRole("button", { name: "거절" })).toBeVisible();
+  });
+
+  it("classifies rejected and generating outputs as generating when none are actionable", async () => {
+    const mixedOutputs: ContentOutput[] = [{
+      ...reviewOutputs[0],
+      id: "output-rejected-mixed",
+      contentId: "master-mixed",
+      title: "혼합 생성 상태",
+      status: "rejected"
+    }, {
+      ...reviewOutputs[0],
+      id: "output-generating-mixed",
+      contentId: "master-mixed",
+      title: "혼합 생성 상태",
+      channel: "threads",
+      status: "generating"
+    }];
+    await renderPublishQueuePage({ listContentOutputs: vi.fn(async () => mixedOutputs) });
+
+    const row = await screen.findByRole("row", { name: /혼합 생성 상태/ });
+    expect(within(row).getAllByRole("cell")[0]).toHaveTextContent("생성 중");
+    expect(within(row).queryByRole("button", { name: /승인|재생성|거절/ })).not.toBeInTheDocument();
+  });
+
+  it("disables grouped actions while a review request is pending", async () => {
+    let resolveReview: ((value: { id: string; status: ContentOutput["status"] }) => void) | undefined;
+    await renderPublishQueuePage({
+      listContentOutputs: vi.fn(async () => [reviewOutputs[0]]),
+      reviewContentOutput: vi.fn(() => new Promise((resolve) => { resolveReview = resolve; }))
+    });
+    const row = await screen.findByRole("row", { name: /검토할 인스타 콘텐츠/ });
+
+    await userEvent.click(within(row).getByRole("button", { name: "승인" }));
+
+    expect(within(row).getByRole("button", { name: "승인" })).toBeDisabled();
+    expect(within(row).getByRole("button", { name: "재생성" })).toBeDisabled();
+    expect(within(row).getByRole("button", { name: "거절" })).toBeDisabled();
+
+    await act(async () => resolveReview?.({ id: "output-review", status: "approved" }));
+    expect(await screen.findByText("게시 관리 목록에 등록했습니다.")).toBeVisible();
   });
 
   it("loads the actual artifact and displays only populated upload metadata", async () => {

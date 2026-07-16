@@ -1,6 +1,27 @@
 import { Badge } from "../ui/Badge";
 import type { BadgeVariant, PublishResult, PublishResultChannel, PublishSlot } from "../../types";
 
+const channelLabels: Record<PublishSlot["channel"], string> = {
+  instagram: "Instagram",
+  threads: "Threads",
+  x: "X",
+  linkedin: "LinkedIn",
+  youtube: "YouTube",
+  tiktok: "TikTok"
+};
+
+const deliveryFormatLabels: Record<string, string> = {
+  instagram_feed_carousel: "카드뉴스",
+  instagram_story: "스토리",
+  instagram_reel: "Reel",
+  threads_text: "텍스트",
+  x_post: "게시물",
+  linkedin_post: "게시물",
+  youtube_video: "영상",
+  youtube_short: "Short",
+  tiktok_video: "영상"
+};
+
 export interface TopicPublishGroupItem {
   slot: PublishSlot;
   result: PublishResult | null;
@@ -28,12 +49,12 @@ const statusMeta: Record<PublishSlot["status"], { label: string; variant: BadgeV
 
 function formatLabel(item: TopicPublishGroupItem) {
   const deliveryFormat = item.resultChannel?.outputJson?.deliveryFormat;
-  if (deliveryFormat === "instagram_reel") return "Instagram · Reel";
-  if (deliveryFormat === "instagram_story") return "Instagram · 스토리";
-  if (deliveryFormat === "instagram_feed_carousel") return "Instagram · 카드뉴스";
-  if (item.slot.channel === "instagram") return "Instagram · 카드뉴스";
-  if (item.slot.channel === "threads") return "Threads · 텍스트";
-  return item.slot.channel;
+  const format = typeof deliveryFormat === "string" ? deliveryFormatLabels[deliveryFormat] : null;
+  const fallback = item.slot.channel === "instagram" ? "카드뉴스"
+    : item.slot.channel === "threads" ? "텍스트"
+    : item.slot.channel === "x" || item.slot.channel === "linkedin" ? "게시물"
+    : "영상";
+  return `${channelLabels[item.slot.channel]} · ${format ?? fallback}`;
 }
 
 function formatScheduledAt(value: string | null) {
@@ -79,7 +100,7 @@ export function TopicPublishGroup({
               <div className="preview" key={item.slot.id}>
                 <div className="panel-head">
                   {isPreGeneration ? (
-                    <button type="button" className="button is-disabled" disabled>{item.slot.channel === "instagram" ? "Instagram" : "Threads"} 생성 전</button>
+                    <button type="button" className="button is-disabled" disabled>{channelLabels[item.slot.channel]} 생성 전</button>
                   ) : canOpenDetail ? (
                     <button
                       type="button"

@@ -1039,6 +1039,16 @@ function nullableText(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function dashboardAttentionMessage(type: DashboardDto["attentionItems"][number]["type"]) {
+  const messages: Record<DashboardDto["attentionItems"][number]["type"], string> = {
+    publish_failed: "게시 처리에 실패했습니다. 채널 연결과 게시 설정을 확인해 주세요.",
+    channel_error: "채널 연결 상태를 확인해 주세요.",
+    sync_failed: "채널 성과 일부를 수집하지 못했습니다.",
+    stale_sync: "채널 성과 수집 상태를 확인해 주세요."
+  };
+  return messages[type];
+}
+
 function safeWorkerFailureMessage(value: string) {
   const sanitized = value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, " ").trim();
   return (sanitized || "worker_generation_failed").slice(0, 2000);
@@ -1568,8 +1578,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                 (select count(*) from topic_rows tr where tr.brand_id = b.id and tr.status in ('uploaded', 'queued', 'used')) as topic_row_count,
                 coalesce((select bc.status from brand_channels bc where bc.brand_id = b.id and bc.channel = 'instagram' and bc.deleted_at is null limit 1), 'not_connected') as instagram_status,
                 coalesce((select bc.status from brand_channels bc where bc.brand_id = b.id and bc.channel = 'threads' and bc.deleted_at is null limit 1), 'not_connected') as threads_status,
-                (select count(*) from channel_outputs co where co.brand_id = b.id) as content_output_count,
-                (select count(*) from channel_outputs co where co.brand_id = b.id and co.status in ('pending_review', 'auto_approval_blocked', 'regenerating')) as content_review_count,
+                (select count(*) from channel_outputs co where co.brand_id = b.id and co.status <> 'regenerated') as content_output_count,
+                (select count(*) from channel_outputs co where co.brand_id = b.id and co.status in ('pending_review', 'auto_approval_blocked', 'generation_failed')) as content_review_count,
                 (select count(*) from publish_queue pq where pq.brand_id = b.id and pq.status = 'failed') as publish_issue_count,
                 (select count(*) from brand_channels bc where bc.brand_id = b.id and bc.channel in ('instagram', 'threads', 'x', 'linkedin', 'youtube', 'tiktok') and bc.deleted_at is null and bc.status != 'connected') as channel_issue_count,
                 (select max(co.generated_at) from channel_outputs co where co.brand_id = b.id) as last_generated_at
@@ -2318,6 +2328,18 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       const client = await pool.connect();
       try {
         await client.query("begin");
+        if (action === "regenerate") {
+          const capability = await client.query(
+            `select channel from channel_outputs
+             where id = $1 and status = any($2::text[])
+             for update`,
+            [outputId, reviewableStatuses]
+          );
+          if (!capability.rowCount) throw new Error("content_output_not_reviewable");
+          if (capability.rows[0].channel !== "instagram" && capability.rows[0].channel !== "threads") {
+            throw new Error("content_output_regeneration_not_supported");
+          }
+        }
         const result = await client.query(
           `with updated as (
              update channel_outputs
@@ -2377,7 +2399,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
            values ($1, $2, $3, 'user', $4, $5)`,
           [output.workspace_id, output.brand_id, outputId, action === "approve" ? "approved" : action === "reject" ? "rejected" : "regenerate_requested", reason ?? null]
         );
-        if (action === "regenerate" && output.channel === "instagram") {
+        if (action === "regenerate") {
           await client.query(
             `update channel_outputs
              set status = 'regenerated', updated_at = now()
@@ -2393,14 +2415,6 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             [output.topic_publish_group_id]
           );
           if (!resetGroup.rowCount) throw new Error("content_output_regeneration_publish_in_progress");
-          const deliveryFormat = output.delivery_format as InstagramDeliveryFormat;
-          if (![
-            "instagram_feed_carousel",
-            "instagram_story",
-            "instagram_reel"
-          ].includes(deliveryFormat)) {
-            throw new Error("instagram_delivery_format_invalid");
-          }
           const draft = recordValue(output.draft_json);
           const topicTitle = nullableText(output.topic_title)
             ?? nullableText(draft.title)
@@ -2409,53 +2423,100 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           const topicAngle = nullableText(output.topic_angle)
             ?? nullableText(draft.contentTheme)
             ?? topicTitle;
-          const regeneratedOutputJson = {
-            deliveryFormat,
-            topic: { title: topicTitle, angle: topicAngle },
-            artifactStatus: "pending"
+          const topicContext = {
+            title: topicTitle,
+            angle: topicAngle,
+            targetCustomer: nullableText(output.target_customer),
+            region: nullableText(output.region),
+            season: nullableText(output.season),
+            notes: nullableText(output.notes)
           };
-          const regenerated = await client.query(
-            `insert into channel_outputs (
-               workspace_id, brand_id, content_topic_id, master_draft_id, channel, delivery_format, status,
-               title, preview_title, preview_body, output_json, source_summary, block_reasons
-             )
-             values ($1, $2, $3, $4, $5, $6, 'generating', $7, $8, $9, $10, $11, $12)
-             returning id`,
-            [
-              output.workspace_id,
-              output.brand_id,
-              output.content_topic_id,
-              output.master_draft_id,
-              output.channel,
+          if (output.channel === "instagram") {
+            const deliveryFormat = output.delivery_format as InstagramDeliveryFormat;
+            if (!["instagram_feed_carousel", "instagram_story", "instagram_reel"].includes(deliveryFormat)) {
+              throw new Error("instagram_delivery_format_invalid");
+            }
+            const regenerated = await client.query(
+              `insert into channel_outputs (
+                 workspace_id, brand_id, content_topic_id, master_draft_id, channel, delivery_format, status,
+                 title, preview_title, preview_body, output_json, source_summary, block_reasons
+               )
+               values ($1, $2, $3, $4, $5, $6, 'generating', $7, $8, $9, $10, $11, $12)
+               returning id`,
+              [
+                output.workspace_id,
+                output.brand_id,
+                output.content_topic_id,
+                output.master_draft_id,
+                output.channel,
+                deliveryFormat,
+                output.title,
+                output.title,
+                "작업자 아티팩트 생성 대기 중",
+                JSON.stringify({ deliveryFormat, topic: { title: topicTitle, angle: topicAngle }, artifactStatus: "pending" }),
+                output.source_summary,
+                JSON.stringify([])
+              ]
+            );
+            const regeneratedOutputId = regenerated.rows[0]?.id;
+            if (!regeneratedOutputId) throw new Error("content_output_regeneration_failed");
+            await createImageRenderJob(client as any, {
+              workspaceId: output.workspace_id,
+              brandId: output.brand_id,
+              contentTopicId: output.content_topic_id,
+              channelOutputId: regeneratedOutputId,
               deliveryFormat,
-              output.title,
-              output.title,
-              "작업자 아티팩트 생성 대기 중",
-              JSON.stringify(regeneratedOutputJson),
-              output.source_summary,
-              JSON.stringify([])
-            ]
-          );
-          const regeneratedOutputId = regenerated.rows[0]?.id;
-          if (!regeneratedOutputId) throw new Error("content_output_regeneration_failed");
-          await createImageRenderJob(client as any, {
-            workspaceId: output.workspace_id,
-            brandId: output.brand_id,
-            contentTopicId: output.content_topic_id,
-            channelOutputId: regeneratedOutputId,
-            deliveryFormat,
-            topic: {
-              title: topicTitle,
-              angle: topicAngle,
-              targetCustomer: nullableText(output.target_customer),
-              region: nullableText(output.region),
-              season: nullableText(output.season),
-              notes: nullableText(output.notes)
-            },
-            brand: output,
-            crawlContentUrl: nullableText(output.crawl_content_url),
-            referenceUrl: nullableText(output.reference_url)
-          });
+              topic: topicContext,
+              brand: output,
+              crawlContentUrl: nullableText(output.crawl_content_url),
+              referenceUrl: nullableText(output.reference_url)
+            });
+          } else {
+            const threadsCatalog = channelCatalog.find((entry) => entry.channel === "threads")!;
+            const representativeUrl = nullableText(outputJson.representativeUrl)
+              ?? nullableText(output.crawl_content_url)
+              ?? nullableText(output.reference_url);
+            const regenerated = await client.query(
+              `insert into channel_outputs (
+                 workspace_id, brand_id, content_topic_id, master_draft_id, channel, delivery_format, status,
+                 title, preview_title, preview_body, output_json, source_summary, block_reasons
+               )
+               values ($1, $2, $3, $4, $5, $6, 'generating', $7, $8, $9, $10, $11, $12)
+               returning id`,
+              [
+                output.workspace_id,
+                output.brand_id,
+                output.content_topic_id,
+                output.master_draft_id,
+                "threads",
+                "threads_text",
+                output.title,
+                output.title,
+                "Threads 콘텐츠 생성 대기 중",
+                JSON.stringify({
+                  deliveryFormat: "threads_text",
+                  topic: { title: topicTitle, angle: topicAngle },
+                  representativeUrl,
+                  artifactKind: "text",
+                  generationState: "pending",
+                  channelConstraints: threadsCatalog.generationConstraints
+                }),
+                output.source_summary,
+                JSON.stringify([])
+              ]
+            );
+            const regeneratedOutputId = regenerated.rows[0]?.id;
+            if (!regeneratedOutputId) throw new Error("content_output_regeneration_failed");
+            await createThreadsRenderJob(client as any, {
+              workspaceId: output.workspace_id,
+              brandId: output.brand_id,
+              channelOutputId: regeneratedOutputId,
+              topic: topicContext,
+              brand: output,
+              crawlContentUrl: nullableText(output.crawl_content_url),
+              referenceUrl: nullableText(output.reference_url)
+            });
+          }
         }
         if (action === "approve" && (output.channel !== "instagram" || output.rendered_artifact_id)) {
           await client.query(
@@ -3916,10 +3977,12 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         `/* dashboard_workflow */
          select
            (select count(*) from topic_rows where brand_id = $1 and status = 'uploaded') as queued_topics,
-           (select count(*) from channel_outputs where brand_id = $1 and status in ('auto_approval_blocked', 'regenerating')) as generating,
-           (select count(*) from channel_outputs where brand_id = $1 and status = 'pending_review') as pending_review,
-           (select count(*) from publish_queue where brand_id = $1 and status in ('scheduled', 'publishing', 'published')) as scheduled_or_published,
-           (select count(*) from channel_outputs where brand_id = $1 and status = 'pending_review') as pending_review_count,
+           (select count(*) from channel_outputs where brand_id = $1 and status in ('generating', 'regenerating')) as generating,
+           (select count(*) from channel_outputs where brand_id = $1 and status in ('pending_review', 'auto_approval_blocked', 'generation_failed')) as pending_review,
+           (select count(*) from publish_queue where brand_id = $1 and status in ('scheduled', 'publishing', 'published')
+             and coalesce(published_at, scheduled_for, updated_at) >= (($2::date - interval '29 days')::timestamp at time zone 'Asia/Seoul')
+             and coalesce(published_at, scheduled_for, updated_at) < (($2::date + interval '1 day')::timestamp at time zone 'Asia/Seoul')) as scheduled_or_published,
+           (select count(*) from channel_outputs where brand_id = $1 and status in ('pending_review', 'auto_approval_blocked', 'generation_failed')) as pending_review_count,
            (select count(*) from publish_queue where brand_id = $1 and status = 'failed'
              and coalesce(failed_at, updated_at) >= (($2::date - interval '29 days')::timestamp at time zone 'Asia/Seoul')) as failed_publish_count`,
         [brandId, runDate]
@@ -4012,22 +4075,22 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       );
       const attentionResult = await pool.query(
         `/* dashboard_attention */
-         select 'publish_failed' as type, pq.channel, coalesce(pq.last_error, 'publish_failed') as message
+         select 'publish_failed' as type, pq.channel
          from publish_queue pq
          where pq.brand_id = $1 and pq.status = 'failed'
            and coalesce(pq.failed_at, pq.updated_at) >= (($2::date - interval '29 days')::timestamp at time zone 'Asia/Seoul')
          union all
-         select 'channel_error', bc.channel, coalesce(bc.last_error, bc.status) as message
+         select 'channel_error', bc.channel
          from brand_channels bc
          where bc.brand_id = $1 and bc.deleted_at is null
            and bc.status in ('needs_attention', 'expired', 'insufficient_permissions', 'mapping_required', 'publish_failed')
          union all
-         select 'sync_failed', psr.channel, coalesce(psr.error_summary, psr.status) as message
+         select 'sync_failed', psr.channel
          from performance_sync_runs psr
          where psr.brand_id = $1 and psr.run_date >= $2::date - 29
            and psr.status in ('failed', 'partially_failed')
          union all
-         select 'stale_sync', bc.channel, 'performance_sync_stale'
+         select 'stale_sync', bc.channel
          from brand_channels bc
          where bc.brand_id = $1 and bc.enabled = true and bc.deleted_at is null
            and not exists (
@@ -4108,7 +4171,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         attentionItems: attentionResult.rows.map((row) => ({
           type: row.type,
           channel: row.channel ?? null,
-          message: String(row.message)
+          message: dashboardAttentionMessage(row.type)
         }))
       };
       return dashboard;

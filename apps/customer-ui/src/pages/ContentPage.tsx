@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "../components/layout/PageHeader";
 import { Alert } from "../components/ui/Alert";
 import { Badge } from "../components/ui/Badge";
@@ -21,6 +21,7 @@ const channelLabels: Record<ChannelType, string> = {
   threads: "Threads",
   tiktok: "TikTok",
   youtube: "YouTube",
+  linkedin: "LinkedIn",
   x: "X"
 };
 
@@ -29,6 +30,7 @@ const legacyFormatByChannel: Record<ChannelType, DeliveryFormat> = {
   threads: "threads_text",
   tiktok: "tiktok_video",
   youtube: "youtube_video",
+  linkedin: "linkedin_post",
   x: "x_post"
 };
 
@@ -39,6 +41,8 @@ const formatLabels: Record<DeliveryFormat, string> = {
   threads_text: "Threads",
   tiktok_video: "TikTok Video",
   youtube_video: "YouTube Video",
+  youtube_short: "YouTube Short",
+  linkedin_post: "LinkedIn Post",
   x_post: "X Post"
 };
 
@@ -49,6 +53,8 @@ const sourceModeLabels: Record<ContentSourceMode, string> = {
 };
 
 const reviewMeta: Record<ReviewStatus, { label: string; variant: BadgeVariant }> = {
+  generating: { label: "생성 중", variant: "info" },
+  generation_failed: { label: "생성 실패", variant: "bad" },
   pending_review: { label: "검토 필요", variant: "warn" },
   approved: { label: "승인됨", variant: "ok" },
   auto_approved: { label: "자동 승인", variant: "ok" },
@@ -57,12 +63,35 @@ const reviewMeta: Record<ReviewStatus, { label: string; variant: BadgeVariant }>
   rejected: { label: "거절됨", variant: "neutral" }
 };
 
+const unknownReviewMeta: { label: string; variant: BadgeVariant } = {
+  label: "상태 확인 필요",
+  variant: "neutral"
+};
+
 function formatGeneratedAt(value: string) {
   return new Date(value).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-function canReview(status: ReviewStatus) {
-  return status === "pending_review" || status === "auto_approval_blocked";
+function canApprove(output: ContentOutput) {
+  const generationState = output.outputJson?.generationState;
+  const artifactStatus = output.outputJson?.artifactStatus;
+  return (output.status === "pending_review" || output.status === "auto_approval_blocked")
+    && generationState !== "pending"
+    && artifactStatus !== "pending";
+}
+
+function canReject(output: ContentOutput) {
+  return output.status === "pending_review"
+    || output.status === "auto_approval_blocked"
+    || output.status === "generation_failed";
+}
+
+function canRegenerate(output: ContentOutput) {
+  return (output.channel === "instagram" || output.channel === "threads") && canReject(output);
+}
+
+function visibleBlockReasons(output: ContentOutput) {
+  return (output.blockReasons ?? []).filter((reason) => reason !== "generation_failed");
 }
 
 function deliveryFormatFor(output: ContentOutput) {
@@ -86,7 +115,13 @@ function OutputPreview({ output }: { output: ContentOutput }) {
       />
     );
   }
-  if (deliveryFormat === "instagram_reel") {
+  if (
+    deliveryFormat === "instagram_reel"
+    || deliveryFormat === "youtube_video"
+    || deliveryFormat === "youtube_short"
+    || deliveryFormat === "tiktok_video"
+    || output.outputJson?.video
+  ) {
     return (
       <ReelVideoPreview
         src={output.previewVideoUrl ?? output.outputJson?.video?.url ?? null}
@@ -109,6 +144,8 @@ export function ContentPage() {
   const [loadStatus, setLoadStatus] = useState<"loading" | "ready" | "error">("loading");
   const [notice, setNotice] = useState<{ message: string; variant: "ok" | "warn" } | null>(null);
   const [regenerationReasons, setRegenerationReasons] = useState<Record<string, string>>({});
+  const reviewingOutputIdsRef = useRef(new Set<string>());
+  const [reviewingOutputIds, setReviewingOutputIds] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     let ignore = false;
@@ -128,6 +165,9 @@ export function ContentPage() {
   const reviewOutputs = useMemo(() => outputs, [outputs]);
 
   async function review(output: ContentOutput, action: "approve" | "reject" | "regenerate") {
+    if (reviewingOutputIdsRef.current.has(output.id)) return;
+    reviewingOutputIdsRef.current.add(output.id);
+    setReviewingOutputIds((current) => new Set(current).add(output.id));
     const reason = action === "regenerate" ? regenerationReasons[output.id]?.trim() || undefined : undefined;
     try {
       const result = await api.reviewContentOutput(output.id, action, reason);
@@ -142,6 +182,13 @@ export function ContentPage() {
       });
     } catch {
       setNotice({ message: "검토 결과를 저장하지 못했습니다. API 상태를 확인한 뒤 다시 시도하세요.", variant: "warn" });
+    } finally {
+      reviewingOutputIdsRef.current.delete(output.id);
+      setReviewingOutputIds((current) => {
+        const next = new Set(current);
+        next.delete(output.id);
+        return next;
+      });
     }
   }
 
@@ -158,9 +205,14 @@ export function ContentPage() {
       ) : loadStatus === "ready" ? (
         <div className="content-review-list">
           {reviewOutputs.map((output) => {
-            const meta = reviewMeta[output.status];
+            const meta = reviewMeta[output.status] ?? unknownReviewMeta;
             const deliveryFormat = deliveryFormatFor(output);
             const sourceMode = sourceModeFor(output);
+            const blockReasons = visibleBlockReasons(output);
+            const showApprove = canApprove(output);
+            const showRegenerate = canRegenerate(output);
+            const showReject = canReject(output);
+            const isReviewing = reviewingOutputIds.has(output.id);
             return (
               <article className="panel content-review-item" key={output.id}>
                 <div className="panel-head">
@@ -181,17 +233,22 @@ export function ContentPage() {
                       <strong>생성 근거</strong>
                       <p>{output.sourceSummary || "저장된 생성 근거가 없습니다."}</p>
                     </section>
-                    {output.blockReasons && output.blockReasons.length > 0 ? <Alert title="자동 승인 차단 사유" variant="warn">{output.blockReasons.join(" ")}</Alert> : null}
-                    {canReview(output.status) ? (
+                    {blockReasons.length > 0 ? <Alert title="자동 승인 차단 사유" variant="warn">{blockReasons.join(" ")}</Alert> : null}
+                    {output.status === "generation_failed" ? (
+                      <Alert title="생성 실패" variant="warn">콘텐츠 생성에 실패했습니다. 재생성하거나 거절해 주세요.</Alert>
+                    ) : null}
+                    {showApprove || showRegenerate || showReject ? (
                       <div className="grid">
-                        <label className="field">
-                          <span>재생성 요청</span>
-                          <input aria-label={`${channelLabels[output.channel]} ${formatLabels[deliveryFormat]} 재생성 사유`} value={regenerationReasons[output.id] ?? ""} onChange={(event) => setRegenerationReasons((current) => ({ ...current, [output.id]: event.target.value }))} placeholder="예: 광고 느낌을 줄이고 더 전문적으로" />
-                        </label>
+                        {showRegenerate ? (
+                          <label className="field">
+                            <span>재생성 요청</span>
+                            <input aria-label={`${channelLabels[output.channel]} ${formatLabels[deliveryFormat]} 재생성 사유`} value={regenerationReasons[output.id] ?? ""} onChange={(event) => setRegenerationReasons((current) => ({ ...current, [output.id]: event.target.value }))} placeholder="예: 광고 느낌을 줄이고 더 전문적으로" />
+                          </label>
+                        ) : null}
                         <div className="actions">
-                          <button className="button primary" type="button" onClick={() => void review(output, "approve")}>승인 {formatLabels[deliveryFormat]}</button>
-                          <button className="button" type="button" onClick={() => void review(output, "regenerate")}>재생성</button>
-                          <button className="button danger" type="button" onClick={() => void review(output, "reject")}>거절</button>
+                          {showApprove ? <button className="button primary" type="button" disabled={isReviewing} onClick={() => void review(output, "approve")}>승인 {formatLabels[deliveryFormat]}</button> : null}
+                          {showRegenerate ? <button className="button" type="button" disabled={isReviewing} onClick={() => void review(output, "regenerate")}>재생성</button> : null}
+                          {showReject ? <button className="button danger" type="button" disabled={isReviewing} onClick={() => void review(output, "reject")}>거절</button> : null}
                         </div>
                       </div>
                     ) : null}

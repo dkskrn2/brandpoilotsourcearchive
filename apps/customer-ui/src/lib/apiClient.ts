@@ -23,6 +23,7 @@ import type {
   DmConversationDetail,
   DmConversationFilter,
   DmConversationPage,
+  Dashboard,
   KnowledgeImport,
   KnowledgeImportInput,
   PipelineRunResult,
@@ -61,6 +62,8 @@ export interface AuthSession {
 
 interface ApiChannel {
   channel: ChannelType;
+  enabled: boolean;
+  oauthState: ChannelConnection["oauthState"];
   status: ChannelConnection["status"];
   accountLabel: string | null;
   lastHealthyAt: string | null;
@@ -154,6 +157,7 @@ function mapChannel(channel: ApiChannel): ChannelConnection {
   const labels: Record<ChannelType, string> = {
     instagram: "Instagram",
     threads: "Threads",
+    linkedin: "LinkedIn",
     tiktok: "TikTok",
     youtube: "YouTube",
     x: "X"
@@ -161,6 +165,8 @@ function mapChannel(channel: ApiChannel): ChannelConnection {
   return {
     type: channel.channel,
     label: labels[channel.channel],
+    enabled: channel.enabled,
+    oauthState: channel.oauthState,
     status: channel.status,
     accountLabel: channel.accountLabel ?? "연결 전",
     lastHealthyAt: channel.lastHealthyAt ?? "-",
@@ -209,6 +215,9 @@ export function apiClient(options: ApiClientOptions = {}) {
     },
     getBrandUiStatus(brandId: string) {
       return request<BrandUiStatus>(fetcher, `${baseUrl}/brands/${brandId}/ui-status`, { method: "GET" });
+    },
+    getDashboard(brandId: string) {
+      return request<Dashboard>(fetcher, `${baseUrl}/brands/${brandId}/dashboard?period=30d`, { method: "GET" });
     },
     listContentCategories() {
       return request<ContentCategory[]>(fetcher, `${baseUrl}/content-categories`, { method: "GET" });
@@ -306,6 +315,12 @@ export function apiClient(options: ApiClientOptions = {}) {
     async listChannels(brandId: string) {
       const channels = await request<ApiChannel[]>(fetcher, `${baseUrl}/brands/${brandId}/channels`, { method: "GET" });
       return channels.map(mapChannel);
+    },
+    updateChannelEnabled(brandId: string, channel: ChannelType, enabled: boolean) {
+      return request<ApiChannel>(fetcher, `${baseUrl}/brands/${brandId}/channels/${channel}`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled })
+      }).then(mapChannel);
     },
     getChannelConnectionRequest(brandId: string) {
       return request<ChannelConnectionRequest>(fetcher, `${baseUrl}/brands/${brandId}/channel-connection-request`, { method: "GET" });

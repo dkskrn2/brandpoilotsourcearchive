@@ -18,7 +18,7 @@ function connectedInstagram() {
 }
 
 describe("repository regressions", () => {
-  it("counts regenerating outputs as content requiring review", async () => {
+  it("counts only active review lifecycle outputs in the sidebar", async () => {
     let statusQuery = "";
     const query = vi.fn(async (sql: string) => {
       statusQuery = sql;
@@ -45,8 +45,9 @@ describe("repository regressions", () => {
 
     await repository.getBrandUiStatus("brand-1");
 
-    expect(statusQuery).toContain("'regenerating'");
-    expect(statusQuery).not.toContain("'regenerated'");
+    expect(statusQuery).toContain("co.status <> 'regenerated'");
+    expect(statusQuery).toContain("co.status in ('pending_review', 'auto_approval_blocked', 'generation_failed')");
+    expect(statusQuery.match(/content_review_count/)?.[0]).toBe("content_review_count");
   });
 
   it("counts channel issues across exactly the six runtime channels", async () => {
@@ -79,6 +80,162 @@ describe("repository regressions", () => {
     expect(statusQuery).toContain(
       "bc.channel in ('instagram', 'threads', 'x', 'linkedin', 'youtube', 'tiktok')"
     );
+  });
+
+  it("counts generating and review dashboard states by the API lifecycle", async () => {
+    let workflowQuery = "";
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("dashboard_workflow")) {
+        workflowQuery = sql;
+        return {
+          rowCount: 1,
+          rows: [{
+            queued_topics: "0",
+            generating: "0",
+            pending_review: "0",
+            scheduled_or_published: "0",
+            pending_review_count: "0",
+            failed_publish_count: "0"
+          }]
+        };
+      }
+      return { rowCount: 0, rows: [] };
+    });
+    const repository = createRepository({ query } as any);
+
+    await repository.getDashboard("brand-1");
+
+    expect(workflowQuery).toContain("status in ('generating', 'regenerating')) as generating");
+    expect(workflowQuery).toContain("status in ('pending_review', 'auto_approval_blocked', 'generation_failed')) as pending_review");
+    expect(workflowQuery).toContain("status in ('pending_review', 'auto_approval_blocked', 'generation_failed')) as pending_review_count");
+    expect(workflowQuery).not.toContain("'regenerated'");
+  });
+
+  it("limits scheduled or published dashboard workflow counts to the recent 30-day window", async () => {
+    let workflowQuery = "";
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("dashboard_workflow")) {
+        workflowQuery = sql;
+        return { rowCount: 1, rows: [{}] };
+      }
+      return { rowCount: 0, rows: [] };
+    });
+    const repository = createRepository({ query } as any);
+
+    await repository.getDashboard("brand-1");
+
+    expect(workflowQuery).toContain("coalesce(published_at, scheduled_for, updated_at) >= (($2::date - interval '29 days')::timestamp at time zone 'Asia/Seoul')");
+    expect(workflowQuery).toContain("coalesce(published_at, scheduled_for, updated_at) < (($2::date + interval '1 day')::timestamp at time zone 'Asia/Seoul')");
+  });
+
+  it("maps dashboard attention diagnostics to fixed customer-safe messages", async () => {
+    const rawDiagnostic = "provider token=secret-value upstream stack trace";
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("dashboard_workflow")) return { rowCount: 1, rows: [{}] };
+      if (sql.includes("dashboard_attention")) {
+        return {
+          rowCount: 4,
+          rows: [
+            { type: "publish_failed", channel: "instagram", message: rawDiagnostic },
+            { type: "channel_error", channel: "threads", message: rawDiagnostic },
+            { type: "sync_failed", channel: "linkedin", message: rawDiagnostic },
+            { type: "stale_sync", channel: "youtube", message: rawDiagnostic }
+          ]
+        };
+      }
+      return { rowCount: 0, rows: [] };
+    });
+    const repository = createRepository({ query } as any);
+
+    const dashboard = await repository.getDashboard("brand-1");
+
+    expect(dashboard.attentionItems).toEqual([
+      { type: "publish_failed", channel: "instagram", message: "게시 처리에 실패했습니다. 채널 연결과 게시 설정을 확인해 주세요." },
+      { type: "channel_error", channel: "threads", message: "채널 연결 상태를 확인해 주세요." },
+      { type: "sync_failed", channel: "linkedin", message: "채널 성과 일부를 수집하지 못했습니다." },
+      { type: "stale_sync", channel: "youtube", message: "채널 성과 수집 상태를 확인해 주세요." }
+    ]);
+    expect(JSON.stringify(dashboard)).not.toContain(rawDiagnostic);
+  });
+
+  it("regenerates Threads through a replacement output and text render job", async () => {
+    const statements: Array<{ sql: string; values?: unknown[] }> = [];
+    const outputRow = {
+      id: "output-threads-old",
+      status: "regenerating",
+      workspace_id: "workspace-1",
+      brand_id: "brand-1",
+      content_topic_id: "topic-1",
+      master_draft_id: "draft-1",
+      channel: "threads",
+      delivery_format: "threads_text",
+      title: "Threads title",
+      output_json: { deliveryFormat: "threads_text", representativeUrl: "https://brand.example/source" },
+      source_summary: "Brand source",
+      rendered_artifact_id: null,
+      brand_channel_id: "brand-channel-threads",
+      topic_publish_group_id: "group-1",
+      brand_name: "Brand",
+      category_code: "business",
+      category_name: "Business",
+      subcategories: [],
+      primary_customer: "Operators",
+      description: "Brand description",
+      tone: "Professional",
+      brand_color: "#112233",
+      draft_json: {},
+      topic_title: "Topic title",
+      topic_angle: "Topic angle",
+      target_customer: "Operators",
+      region: null,
+      season: null,
+      reference_url: "https://reference.example/post",
+      notes: "Keep concise",
+      crawl_content_url: "https://brand.example/source"
+    };
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      statements.push({ sql, values });
+      if (sql.trim() === "begin" || sql.trim() === "commit" || sql.trim() === "rollback") return { rowCount: 0, rows: [] };
+      if (sql.includes("select channel from channel_outputs")) return { rowCount: 1, rows: [{ channel: "threads" }] };
+      if (sql.trimStart().startsWith("with updated as")) return { rowCount: 1, rows: [outputRow] };
+      if (sql.includes("update topic_publish_groups")) return { rowCount: 1, rows: [{ id: "group-1" }] };
+      if (sql.includes("insert into channel_outputs")) return { rowCount: 1, rows: [{ id: "output-threads-new" }] };
+      return { rowCount: 1, rows: [] };
+    });
+    const repository = createRepository(fakePoolWithClient(query) as any);
+
+    await repository.reviewContentOutput("output-threads-old", "regenerate", "Try again");
+
+    expect(statements.some(({ sql }) => sql.includes("set status = 'regenerated'"))).toBe(true);
+    expect(statements.find(({ sql }) => sql.includes("update topic_publish_groups"))?.sql).toContain("status <> 'publishing'");
+    const replacement = statements.find(({ sql }) => sql.includes("insert into channel_outputs"));
+    expect(replacement?.values?.[4]).toBe("threads");
+    expect(replacement?.values?.[5]).toBe("threads_text");
+    expect(JSON.parse(String(replacement?.values?.[9]))).toMatchObject({
+      deliveryFormat: "threads_text",
+      artifactKind: "text",
+      generationState: "pending"
+    });
+    const job = statements.find(({ sql }) => sql.includes("threads_text_render"));
+    expect(job?.values?.[3]).toBe("output-threads-new");
+    expect(JSON.parse(String(job?.values?.[4]))).toMatchObject({ topic: { title: "Topic title", angle: "Topic angle" } });
+  });
+
+  it("rejects unsupported regeneration before mutating output state or writing an event", async () => {
+    const statements: string[] = [];
+    const query = vi.fn(async (sql: string) => {
+      statements.push(sql);
+      if (sql.includes("select channel from channel_outputs")) return { rowCount: 1, rows: [{ channel: "x" }] };
+      return { rowCount: 0, rows: [] };
+    });
+    const repository = createRepository(fakePoolWithClient(query) as any);
+
+    await expect(repository.reviewContentOutput("output-x", "regenerate"))
+      .rejects.toThrow("content_output_regeneration_not_supported");
+
+    expect(statements.some((sql) => sql.trimStart().startsWith("with updated as"))).toBe(false);
+    expect(statements.some((sql) => sql.includes("insert into review_events"))).toBe(false);
+    expect(statements.some((sql) => sql.includes("set status = 'regenerated'"))).toBe(false);
   });
 
   it("normalizes nullable profile text fields for the customer form contract", async () => {

@@ -1,6 +1,6 @@
 export type BadgeVariant = "neutral" | "info" | "ok" | "warn" | "bad" | "auto";
 
-export type ChannelType = "instagram" | "threads" | "tiktok" | "youtube" | "x";
+export type ChannelType = "instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok";
 
 export type InstagramDeliveryFormat =
   | "instagram_feed_carousel"
@@ -12,6 +12,8 @@ export type DeliveryFormat =
   | "threads_text"
   | "tiktok_video"
   | "youtube_video"
+  | "youtube_short"
+  | "linkedin_post"
   | "x_post";
 
 export type InstagramCapabilityStatus = "available" | "unavailable" | "unchecked" | "needs_attention";
@@ -26,7 +28,53 @@ export type ChannelStatus =
   | "mapping_required"
   | "publish_failed";
 
+export interface Dashboard {
+  period: "30d";
+  generatedAt: string;
+  lastCollectedAt: string | null;
+  summary: {
+    publishedCount: number;
+    exposureCount: number | null;
+    pendingReviewCount: number;
+    failedPublishCount: number;
+  };
+  workflow: {
+    queuedTopics: number;
+    generating: number;
+    pendingReview: number;
+    scheduledOrPublished: number;
+  };
+  dailyExposure: Array<{
+    date: string;
+    channels: Partial<Record<ChannelType, number>>;
+  }>;
+  channelPerformance: Array<{
+    channel: ChannelType;
+    connectionStatus: ChannelStatus;
+    publishedCount: number;
+    exposureCount: number | null;
+    lastCollectedAt: string | null;
+    syncStatus: string | null;
+  }>;
+  topContents: Array<{
+    publishQueueId: string;
+    title: string;
+    channel: ChannelType;
+    deliveryFormat: DeliveryFormat | null;
+    publishedAt: string;
+    exposureCount: number | null;
+    externalUrl: string | null;
+  }>;
+  attentionItems: Array<{
+    type: "publish_failed" | "channel_error" | "sync_failed" | "stale_sync";
+    channel: ChannelType | null;
+    message: string;
+  }>;
+}
+
 export type ReviewStatus =
+  | "generating"
+  | "generation_failed"
   | "pending_review"
   | "approved"
   | "auto_approved"
@@ -227,6 +275,8 @@ export interface InstagramFormatSettingsInput {
 export interface ChannelConnection {
   type: ChannelType;
   label: string;
+  enabled: boolean;
+  oauthState: "connected" | "not_connected" | "needs_attention";
   status: ChannelStatus;
   accountLabel: string;
   lastHealthyAt: string;
@@ -336,7 +386,8 @@ export interface DmConversationDetail extends DmConversationSummary {
 
 export interface WikiVersionSummary {
   id: string;
-  status: "building" | "active" | "failed";
+  status: "building" | "ready" | "active" | "failed" | "superseded";
+  buildStage?: "collecting" | "compiling" | "embedding" | "validating" | null;
   version: number | string;
   sourceCount: number;
   documentCount: number;
@@ -349,6 +400,7 @@ export interface WikiVersionSummary {
 
 export interface WikiStatus {
   activeVersion: WikiVersionSummary | null;
+  currentVersion?: WikiVersionSummary | null;
   latestFailedVersion: WikiVersionSummary | null;
   importStats: {
     total: number;
@@ -445,6 +497,11 @@ export interface ContentOutputJson extends Record<string, unknown> {
   scenes?: ContentImageAsset[];
   cover?: ContentImageAsset;
   video?: ContentVideoAsset;
+  generationError?: {
+    code?: string;
+    message?: string;
+    failedAt?: string;
+  };
 }
 
 export interface ContentOutput {

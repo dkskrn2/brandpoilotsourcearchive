@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Download, ExternalLink, RotateCcw, X } from "lucide-react";
 import { PageHeader } from "../components/layout/PageHeader";
 import { PublishArtifactPreview } from "../components/publish/PublishArtifactPreview";
@@ -14,8 +14,15 @@ const channelLabels: Record<ChannelType, string> = {
   threads: "Threads",
   tiktok: "TikTok",
   youtube: "YouTube",
+  linkedin: "LinkedIn",
   x: "X"
 };
+
+const channelOrder: ChannelType[] = ["instagram", "threads", "x", "linkedin", "youtube", "tiktok"];
+
+function sortChannels<T extends { channel: ChannelType }>(channels: T[]) {
+  return [...channels].sort((left, right) => channelOrder.indexOf(left.channel) - channelOrder.indexOf(right.channel));
+}
 
 const resultStatusMeta: Record<PublishResultChannel["status"], { label: string; variant: BadgeVariant; clickable: boolean }> = {
   queued: { label: "게시 대기", variant: "neutral", clickable: false },
@@ -28,12 +35,19 @@ const resultStatusMeta: Record<PublishResultChannel["status"], { label: string; 
 };
 
 const reviewStatusMeta: Record<ReviewStatus, { label: string; variant: BadgeVariant }> = {
+  generating: { label: "생성 중", variant: "info" },
+  generation_failed: { label: "생성 실패", variant: "bad" },
   pending_review: { label: "검토 필요", variant: "warn" },
   approved: { label: "승인됨", variant: "ok" },
   auto_approved: { label: "자동 승인", variant: "ok" },
   auto_approval_blocked: { label: "자동 승인 차단", variant: "bad" },
   regenerating: { label: "재생성 중", variant: "info" },
   rejected: { label: "거절됨", variant: "neutral" }
+};
+
+const unknownReviewMeta: { label: string; variant: BadgeVariant } = {
+  label: "상태 확인 필요",
+  variant: "neutral"
 };
 
 const sourceTypeLabels: Record<PublishResult["sourceType"], string> = {
@@ -45,6 +59,7 @@ const sourceTypeLabels: Record<PublishResult["sourceType"], string> = {
 
 const filters = [
   { id: "all", label: "전체" },
+  { id: "generating", label: "생성 중" },
   { id: "needs_review", label: "검토 필요" },
   { id: "queued", label: "대기" },
   { id: "publish_queued", label: "게시 대기" },
@@ -64,7 +79,7 @@ interface ReviewManagementRow {
   contentId: string;
   title: string;
   generatedAt: string;
-  status: "needs_review" | "rejected";
+  status: "generating" | "needs_review" | "rejected";
   outputs: ContentOutput[];
   sourceSummary: string;
   blockReasons: string[];
@@ -125,10 +140,6 @@ function uniqueText(values: Array<string | null | undefined>) {
   return Array.from(new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))));
 }
 
-function channelForResult(result: PublishResult, channel: ChannelType) {
-  return result.channels.find((item) => item.channel === channel);
-}
-
 function statusForPublishResult(result: PublishResult): PublishManagementRow["status"] {
   const statuses = result.channels.map((item) => item.status);
 
@@ -142,6 +153,7 @@ function statusForPublishResult(result: PublishResult): PublishManagementRow["st
 function statusLabel(row: ManagementRow) {
   const labels: Record<ManagementStatus, string> = {
     needs_review: "검토 필요",
+    generating: "생성 중",
     queued: "대기",
     publish_queued: "게시 대기",
     scheduled: "예약",
@@ -156,6 +168,7 @@ function statusLabel(row: ManagementRow) {
 function statusVariant(row: ManagementRow): BadgeVariant {
   const variants: Record<ManagementStatus, BadgeVariant> = {
     needs_review: "warn",
+    generating: "info",
     queued: "neutral",
     publish_queued: "neutral",
     scheduled: "info",
@@ -168,7 +181,14 @@ function statusVariant(row: ManagementRow): BadgeVariant {
 }
 
 function buildReviewRows(outputs: ContentOutput[]): ReviewManagementRow[] {
-  const visibleStatuses = new Set<ReviewStatus>(["pending_review", "auto_approval_blocked", "regenerating", "rejected"]);
+  const visibleStatuses = new Set<ReviewStatus>([
+    "generating",
+    "generation_failed",
+    "pending_review",
+    "auto_approval_blocked",
+    "regenerating",
+    "rejected"
+  ]);
   const groups = new Map<string, ContentOutput[]>();
 
   for (const output of outputs) {
@@ -179,17 +199,23 @@ function buildReviewRows(outputs: ContentOutput[]): ReviewManagementRow[] {
 
   return Array.from(groups.entries()).map(([contentId, groupedOutputs]) => {
     const firstOutput = groupedOutputs[0];
-    const allRejected = groupedOutputs.every((output) => output.status === "rejected");
+    const hasActionable = groupedOutputs.some((output) => (
+      output.status === "pending_review"
+      || output.status === "auto_approval_blocked"
+      || output.status === "generation_failed"
+    ));
+    const hasGenerating = groupedOutputs.some((output) => output.status === "generating" || output.status === "regenerating");
     return {
       kind: "review",
       id: `review-${contentId}`,
       contentId,
       title: firstOutput.title,
       generatedAt: firstOutput.generatedAt,
-      status: allRejected ? "rejected" : "needs_review",
+      status: hasActionable ? "needs_review" : hasGenerating ? "generating" : "rejected",
       outputs: groupedOutputs,
       sourceSummary: uniqueText(groupedOutputs.map((output) => output.sourceSummary)).join(" | "),
       blockReasons: uniqueText(groupedOutputs.flatMap((output) => output.blockReasons ?? []))
+        .filter((reason) => reason !== "generation_failed")
     };
   });
 }
@@ -300,15 +326,14 @@ function ResultStatusButton({
   );
 }
 
-function WaitingChannelButtons({ renderStatus }: { renderStatus?: string | null }) {
+function WaitingChannelButtons({ slot }: { slot: PublishSlot }) {
+  const { renderStatus } = slot;
   const instagramLabel = renderStatus === "running" ? "이미지 생성 중" : renderStatus === "failed" ? "이미지 생성 실패" : renderStatus === "succeeded" ? "게시 준비 완료" : renderStatus === "queued" ? "이미지 생성 대기" : "생성 전";
   return (
     <div className="actions">
-      {(["instagram", "threads"] as ChannelType[]).map((channel) => (
-        <button key={channel} type="button" className="button is-disabled" disabled>
-          {channelLabels[channel]} {channel === "instagram" ? instagramLabel : "생성 전"}
-        </button>
-      ))}
+      <button type="button" className="button is-disabled" disabled>
+        {channelLabels[slot.channel]} {slot.channel === "instagram" ? instagramLabel : "생성 전"}
+      </button>
     </div>
   );
 }
@@ -317,7 +342,7 @@ function ReviewChannelBadges({ outputs }: { outputs: ContentOutput[] }) {
   return (
     <div className="actions">
       {outputs.map((output) => {
-        const meta = reviewStatusMeta[output.status];
+        const meta = reviewStatusMeta[output.status] ?? unknownReviewMeta;
         return (
           <Badge key={output.id} variant={meta.variant}>
             {channelLabels[output.channel]} {meta.label}
@@ -326,6 +351,22 @@ function ReviewChannelBadges({ outputs }: { outputs: ContentOutput[] }) {
       })}
     </div>
   );
+}
+
+function outputsForReviewAction(outputs: ContentOutput[], action: "approve" | "reject" | "regenerate") {
+  if (action === "approve") {
+    return outputs.filter((output) => (
+      output.status === "pending_review" || output.status === "auto_approval_blocked"
+    ) && output.outputJson?.generationState !== "pending" && output.outputJson?.artifactStatus !== "pending");
+  }
+  const reviewable = outputs.filter((output) => (
+    output.status === "pending_review"
+    || output.status === "auto_approval_blocked"
+    || output.status === "generation_failed"
+  ));
+  return action === "regenerate"
+    ? reviewable.filter((output) => output.channel === "instagram" || output.channel === "threads")
+    : reviewable;
 }
 
 function PublishChannelButtons({
@@ -337,8 +378,8 @@ function PublishChannelButtons({
 }) {
   return (
     <div className="actions">
-      {(["instagram", "threads"] as ChannelType[]).map((channel) => {
-        const resultChannel = channelForResult(result, channel);
+      {sortChannels(result.channels).map((resultChannel) => {
+        const channel = resultChannel.channel;
         return (
           <ResultStatusButton
             key={`${result.contentId}-${channel}`}
@@ -357,13 +398,15 @@ function ManagementTable({
   activeFilter,
   onFilterChange,
   onSelectResult,
-  onReviewGroup
+  onReviewGroup,
+  reviewingOutputIds
 }: {
   rows: ManagementRow[];
   activeFilter: ManagementFilterId;
   onFilterChange: (filter: ManagementFilterId) => void;
   onSelectResult: (result: PublishResult, channel: PublishResultChannel) => void;
   onReviewGroup: (outputs: ContentOutput[], action: "approve" | "reject" | "regenerate", message: string) => void;
+  reviewingOutputIds: ReadonlySet<string>;
 }) {
   const filteredRows = activeFilter === "all" ? rows : rows.filter((row) => row.status === activeFilter);
 
@@ -417,7 +460,7 @@ function ManagementTable({
                     {row.kind === "publish" ? (
                       <PublishChannelButtons result={row.result} onSelect={onSelectResult} />
                     ) : row.kind === "waiting" ? (
-                      <WaitingChannelButtons renderStatus={row.slot.renderStatus} />
+                      <WaitingChannelButtons slot={row.slot} />
                     ) : (
                       <ReviewChannelBadges outputs={row.outputs} />
                     )}
@@ -469,35 +512,53 @@ function ManagementTable({
                         {row.blockReasons.map((reason) => (
                           <div className="row-meta" key={`${row.id}-${reason}`}>{reason}</div>
                         ))}
+                        {row.outputs.some((output) => output.status === "generation_failed") ? (
+                          <div className="row-meta">콘텐츠 생성에 실패했습니다. 재생성하거나 거절해 주세요.</div>
+                        ) : null}
                       </>
                     )}
                   </td>
                   <td>
-                    {row.kind === "review" && row.status === "needs_review" ? (
-                      <div className="actions">
+                    {row.kind === "review" && row.status === "needs_review" ? (() => {
+                      const approvableOutputs = outputsForReviewAction(row.outputs, "approve");
+                      const regeneratableOutputs = outputsForReviewAction(row.outputs, "regenerate");
+                      const rejectableOutputs = outputsForReviewAction(row.outputs, "reject");
+                      const reviewPending = row.outputs.some((output) => reviewingOutputIds.has(output.id));
+                      return approvableOutputs.length > 0 || regeneratableOutputs.length > 0 || rejectableOutputs.length > 0 ? (
+                        <div className="actions">
+                        {approvableOutputs.length > 0 ? (
                         <button
                           className="button primary"
                           type="button"
-                          onClick={() => onReviewGroup(row.outputs, "approve", "게시 관리 목록에 등록했습니다.")}
+                          disabled={reviewPending}
+                          onClick={() => onReviewGroup(approvableOutputs, "approve", "게시 관리 목록에 등록했습니다.")}
                         >
-                          {row.outputs.some((output) => output.status === "auto_approval_blocked") ? "수동 승인" : "승인"}
+                          {approvableOutputs.some((output) => output.status === "auto_approval_blocked") ? "수동 승인" : "승인"}
                         </button>
+                        ) : null}
+                        {regeneratableOutputs.length > 0 ? (
                         <button
                           className="button"
                           type="button"
-                          onClick={() => onReviewGroup(row.outputs, "regenerate", "재생성 요청을 접수했습니다.")}
+                          disabled={reviewPending}
+                          onClick={() => onReviewGroup(regeneratableOutputs, "regenerate", "재생성 요청을 접수했습니다.")}
                         >
                           재생성
                         </button>
+                        ) : null}
+                        {rejectableOutputs.length > 0 ? (
                         <button
                           className="button danger"
                           type="button"
-                          onClick={() => onReviewGroup(row.outputs, "reject", "콘텐츠를 거절했습니다.")}
+                          disabled={reviewPending}
+                          onClick={() => onReviewGroup(rejectableOutputs, "reject", "콘텐츠를 거절했습니다.")}
                         >
                           거절
                         </button>
+                        ) : null}
                       </div>
-                    ) : (
+                      ) : <span className="row-meta">-</span>;
+                    })() : (
                       <span className="row-meta">-</span>
                     )}
                   </td>
@@ -557,6 +618,8 @@ function PublishResultDialog({
     threads_text: "텍스트",
     tiktok_video: "영상",
     youtube_video: "영상",
+    youtube_short: "Short",
+    linkedin_post: "게시물",
     x_post: "텍스트",
     image_gallery: "카드뉴스",
     image: "이미지",
@@ -703,7 +766,12 @@ function PublishResultDialog({
                 원본 게시물 열기
               </a>
             ) : null}
-            <button className="button primary" type="button" onClick={() => void downloadResult()} disabled={downloadLoading}>
+            <button
+              className="button primary"
+              type="button"
+              onClick={() => void downloadResult()}
+              disabled={downloadLoading || artifactLoading || artifactError || !artifact}
+            >
               <Download size={16} aria-hidden="true" />
               {downloadLoading ? "저장 중..." : "저장"}
             </button>
@@ -721,6 +789,8 @@ export function PublishQueuePage() {
   const [activeFilter, setActiveFilter] = useState<ManagementFilterId>("all");
   const [notice, setNotice] = useState<string | null>(null);
   const [selectedResult, setSelectedResult] = useState<{ result: PublishResult; channel: PublishResultChannel } | null>(null);
+  const reviewingOutputIdsRef = useRef(new Set<string>());
+  const [reviewingOutputIds, setReviewingOutputIds] = useState<Set<string>>(() => new Set());
 
   const publishedRows = useMemo(() => queueRows.filter((row) => row.status === "published"), [queueRows]);
   const managementRows = useMemo(() => {
@@ -839,8 +909,11 @@ export function PublishQueuePage() {
   }
 
   async function reviewOutputGroup(outputs: ContentOutput[], action: "approve" | "reject" | "regenerate", message: string) {
+    const outputIds = outputs.map((output) => output.id);
+    if (outputIds.some((outputId) => reviewingOutputIdsRef.current.has(outputId))) return;
+    outputIds.forEach((outputId) => reviewingOutputIdsRef.current.add(outputId));
+    setReviewingOutputIds((current) => new Set([...current, ...outputIds]));
     try {
-      const outputIds = outputs.map((output) => output.id);
       const nextStatus: ReviewStatus = action === "approve" ? "approved" : action === "reject" ? "rejected" : "regenerating";
       await Promise.all(outputIds.map((outputId) => api.reviewContentOutput(outputId, action)));
       setContentOutputs((currentOutputs) => currentOutputs.map((output) => (
@@ -855,6 +928,13 @@ export function PublishQueuePage() {
         regenerate: "재생성 요청"
       };
       setNotice(`${actionLabels[action]} 처리에 실패했습니다. API 상태를 확인하세요.`);
+    } finally {
+      outputIds.forEach((outputId) => reviewingOutputIdsRef.current.delete(outputId));
+      setReviewingOutputIds((current) => {
+        const next = new Set(current);
+        outputIds.forEach((outputId) => next.delete(outputId));
+        return next;
+      });
     }
   }
 
@@ -887,6 +967,7 @@ export function PublishQueuePage() {
         onFilterChange={setActiveFilter}
         onSelectResult={(result, channel) => setSelectedResult({ result, channel })}
         onReviewGroup={(outputs, action, message) => void reviewOutputGroup(outputs, action, message)}
+        reviewingOutputIds={reviewingOutputIds}
       />
 
       {selectedResult ? (

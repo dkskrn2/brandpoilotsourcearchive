@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ContentOutput } from "../types";
@@ -50,6 +50,83 @@ const outputs: ContentOutput[] = [
     previewVideoUrl: "https://cdn.example.com/reel.mp4",
     previewPosterUrl: "https://cdn.example.com/cover.png",
     durationSeconds: 8.5
+  },
+  {
+    id: "output-linkedin",
+    contentId: "content-2",
+    title: "LinkedIn 전문 인사이트",
+    channel: "linkedin",
+    deliveryFormat: "linkedin_post",
+    sourceMode: "direct_url",
+    status: "pending_review",
+    topicId: "topic-2",
+    generatedAt: "2026-07-13T01:00:00.000Z",
+    sourceSummary: "자사 서비스 페이지",
+    previewTitle: "고객 이탈을 줄이는 콘텐츠 운영",
+    previewBody: "LinkedIn 본문"
+  },
+  {
+    id: "output-youtube",
+    contentId: "content-3",
+    title: "YouTube Shorts",
+    channel: "youtube",
+    deliveryFormat: "youtube_short",
+    sourceMode: "direct_url",
+    status: "pending_review",
+    topicId: "topic-3",
+    generatedAt: "2026-07-13T01:00:00.000Z",
+    sourceSummary: "자사 서비스 페이지",
+    previewTitle: "콘텐츠 운영 핵심",
+    previewBody: "YouTube Shorts 설명"
+  },
+  {
+    id: "output-generating",
+    contentId: "content-4",
+    title: "생성 중인 X 콘텐츠",
+    channel: "x",
+    deliveryFormat: "x_post",
+    sourceMode: "topic_only",
+    status: "generating" as ContentOutput["status"],
+    topicId: "topic-4",
+    generatedAt: "2026-07-13T01:00:00.000Z",
+    sourceSummary: "주제 정보",
+    previewTitle: "생성 중",
+    previewBody: ""
+  },
+  {
+    id: "output-generation-failed",
+    contentId: "content-5",
+    title: "생성 실패한 Threads 콘텐츠",
+    channel: "threads",
+    deliveryFormat: "threads_text",
+    sourceMode: "direct_url",
+    status: "generation_failed" as ContentOutput["status"],
+    topicId: "topic-5",
+    generatedAt: "2026-07-13T01:00:00.000Z",
+    sourceSummary: "자사 FAQ",
+    previewTitle: "생성 실패",
+    previewBody: "",
+    outputJson: {
+      generationError: {
+        code: "text_render_failed",
+        message: "provider token=secret-value",
+        failedAt: "2026-07-13T01:01:00.000Z"
+      }
+    }
+  },
+  {
+    id: "output-x-generation-failed",
+    contentId: "content-6",
+    title: "생성 실패한 X 콘텐츠",
+    channel: "x",
+    deliveryFormat: "x_post",
+    sourceMode: "direct_url",
+    status: "generation_failed",
+    topicId: "topic-6",
+    generatedAt: "2026-07-13T01:00:00.000Z",
+    sourceSummary: "자사 FAQ",
+    previewTitle: "생성 실패",
+    previewBody: ""
   }
 ];
 
@@ -83,6 +160,8 @@ describe("ContentPage", () => {
     expect(screen.getByText("외부 참고 URL 의존도가 높습니다.")).toBeVisible();
     expect(screen.getAllByText(/Instagram/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Story/).length).toBeGreaterThan(0);
+    expect(screen.getByText("LinkedIn Post")).toBeVisible();
+    expect(screen.getByText("YouTube Short")).toBeVisible();
   });
 
   it("renders feed, Story, and Reel previews with format and source metadata", async () => {
@@ -98,8 +177,8 @@ describe("ContentPage", () => {
     expect(reel).toHaveAttribute("preload", "metadata");
     expect(reel).toHaveAttribute("poster", "https://cdn.example.com/cover.png");
     expect(screen.getByText("길이 0:09")).toBeVisible();
-    expect(screen.getByText("직접 URL")).toBeVisible();
-    expect(screen.getByText("주제 정보")).toBeVisible();
+    expect(screen.getAllByText("직접 URL").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("주제 정보").length).toBeGreaterThan(0);
     expect(screen.getByText("URL 사용 불가")).toBeVisible();
   });
 
@@ -136,5 +215,60 @@ describe("ContentPage", () => {
     expect(await screen.findByText(/콘텐츠 검토 목록을 불러오지 못했습니다/)).toBeVisible();
     expect(screen.queryByText("검토할 콘텐츠가 없습니다")).not.toBeInTheDocument();
     expect(screen.queryByText("제주 가족 여행 카드뉴스")).not.toBeInTheDocument();
+  });
+
+  it("renders an unknown output status without crashing the review page", async () => {
+    await renderContentPage({
+      listContentOutputs: vi.fn(async () => [{
+        ...outputs[0],
+        id: "output-unknown-status",
+        status: "future_status" as ContentOutput["status"]
+      }])
+    });
+
+    expect(await screen.findByRole("heading", { name: "콘텐츠 검토" })).toBeVisible();
+    expect(screen.getByText("상태 확인 필요")).toBeVisible();
+  });
+
+  it("renders generation lifecycle badges and only API-valid actions", async () => {
+    await renderContentPage();
+
+    const generating = (await screen.findByRole("heading", { name: "생성 중인 X 콘텐츠" })).closest("article") as HTMLElement;
+    expect(within(generating).getAllByText("생성 중").length).toBeGreaterThan(0);
+    expect(within(generating).queryByRole("button", { name: /승인|재생성|거절/ })).not.toBeInTheDocument();
+
+    const failed = screen.getByRole("heading", { name: "생성 실패한 Threads 콘텐츠" }).closest("article") as HTMLElement;
+    expect(within(failed).getAllByText("생성 실패").length).toBeGreaterThan(0);
+    expect(within(failed).getByText("콘텐츠 생성에 실패했습니다. 재생성하거나 거절해 주세요.")).toBeVisible();
+    expect(within(failed).queryByText(/secret-value/)).not.toBeInTheDocument();
+    expect(within(failed).queryByRole("button", { name: /^승인/ })).not.toBeInTheDocument();
+    expect(within(failed).getByRole("button", { name: "재생성" })).toBeVisible();
+    expect(within(failed).getByRole("button", { name: "거절" })).toBeVisible();
+
+    const unsupported = screen.getByRole("heading", { name: "생성 실패한 X 콘텐츠" }).closest("article") as HTMLElement;
+    expect(within(unsupported).queryByRole("button", { name: "재생성" })).not.toBeInTheDocument();
+    expect(within(unsupported).getByRole("button", { name: "거절" })).toBeVisible();
+
+    const pending = screen.getByRole("heading", { name: "제주 가족 여행 카드뉴스" }).closest("article") as HTMLElement;
+    expect(within(pending).getByRole("button", { name: "승인 Card News" })).toBeVisible();
+    expect(within(pending).getByRole("button", { name: "재생성" })).toBeVisible();
+    expect(within(pending).getByRole("button", { name: "거절" })).toBeVisible();
+  });
+
+  it("disables an output's actions while its review request is pending", async () => {
+    let resolveReview: ((value: { id: string; status: ContentOutput["status"] }) => void) | undefined;
+    await renderContentPage({
+      reviewContentOutput: vi.fn(() => new Promise((resolve) => { resolveReview = resolve; }))
+    });
+    const article = (await screen.findByRole("heading", { name: "제주 가족 여행 카드뉴스" })).closest("article") as HTMLElement;
+
+    await userEvent.click(within(article).getByRole("button", { name: "승인 Card News" }));
+
+    expect(within(article).getByRole("button", { name: "승인 Card News" })).toBeDisabled();
+    expect(within(article).getByRole("button", { name: "재생성" })).toBeDisabled();
+    expect(within(article).getByRole("button", { name: "거절" })).toBeDisabled();
+
+    await act(async () => resolveReview?.({ id: "output-feed", status: "approved" }));
+    expect(await within(article).findByText("승인됨")).toBeVisible();
   });
 });
