@@ -965,7 +965,8 @@ test("031 creates the content performance dashboard schema", async () => {
   assert.match(migration031.sql, /publish_queue_performance_identity_unique/i);
   assert.match(migration031.sql, /content_performance_snapshots_publish_queue_owner_fkey/i);
   assert.match(migration031.sql, /content_performance_snapshots_channel_output_owner_fkey/i);
-  assert.match(migration031.sql, /performance_sync_runs_brand_owner_fkey/i);
+  assert.match(migration031.sql, /brand_id uuid not null references brands\(id\)/i);
+  assert.doesNotMatch(migration031.sql, /performance_sync_runs_brand_owner_fkey/i);
 
   await withDatabase(async (database) => {
     await runMigrationRange(
@@ -1077,8 +1078,7 @@ test("031 creates the content performance dashboard schema", async () => {
         'channel_outputs_performance_identity_unique',
         'publish_queue_performance_identity_unique',
         'content_performance_snapshots_publish_queue_owner_fkey',
-        'content_performance_snapshots_channel_output_owner_fkey',
-        'performance_sync_runs_brand_owner_fkey'
+        'content_performance_snapshots_channel_output_owner_fkey'
       )
       order by conname
     `);
@@ -1088,23 +1088,12 @@ test("031 creates the content performance dashboard schema", async () => {
         "channel_outputs_performance_identity_unique",
         "content_performance_snapshots_channel_output_owner_fkey",
         "content_performance_snapshots_publish_queue_owner_fkey",
-        "performance_sync_runs_brand_owner_fkey",
         "publish_queue_performance_identity_unique",
       ],
     );
 
     const firstFixture = await insertPublishingFixture(database);
     const secondFixture = await insertPublishingFixture(database);
-
-    await assert.rejects(
-      database.query(
-        `insert into performance_sync_runs
-           (workspace_id, brand_id, channel, run_date, status)
-         values ($1, $2, 'instagram', '2026-07-17', 'running')`,
-        [firstFixture.workspaceId, secondFixture.brandId],
-      ),
-      /performance_sync_runs_brand_owner_fkey/,
-    );
 
     await assert.rejects(
       database.query(
@@ -1211,6 +1200,12 @@ test("032 creates the brand-scoped compiled Wiki core in PGlite", async () => {
   assert.ok(coreMigration, "missing migration 032_compounding_wiki_core.sql");
   assert.ok(vectorMigration, "missing migration 033_compounding_wiki_pgvector.sql");
   assert.match(vectorMigration.sql, /^-- requires: pgvector/);
+  assert.match(
+    vectorMigration.sql,
+    /jsonb_typeof\(section -> 'sourceUnitIds'\) <> 'array'/i,
+  );
+  assert.doesNotMatch(vectorMigration.sql, /section\.value/);
+  assert.doesNotMatch(vectorMigration.sql, /chunk\.embedding is null/);
 
   await withDatabase(async (database) => {
     await runMigrationRange(
@@ -1339,29 +1334,109 @@ test("032 creates the brand-scoped compiled Wiki core in PGlite", async () => {
   });
 });
 
-test("033 activation structurally rejects malformed citations and incomplete embeddings", async () => {
+test("036 hardens performance ownership and compiled Wiki activation", async () => {
   const migrations = await loadMigrations();
-  const vectorMigration = migrations.find(
-    (migration) => migration.id === "033_compounding_wiki_pgvector.sql",
+  const hardeningMigration = migrations.find(
+    (migration) =>
+      migration.id === "036_harden_performance_and_wiki_activation.sql",
   );
 
-  assert.ok(vectorMigration, "missing migration 033_compounding_wiki_pgvector.sql");
+  assert.ok(
+    hardeningMigration,
+    "missing migration 036_harden_performance_and_wiki_activation.sql",
+  );
   assert.match(
-    vectorMigration.sql,
+    hardeningMigration.sql,
+    /drop constraint if exists performance_sync_runs_brand_id_fkey/i,
+  );
+  assert.match(
+    hardeningMigration.sql,
+    /foreign key \(brand_id, workspace_id\)\s+references brands\(id, workspace_id\)[\s\S]*not valid/i,
+  );
+  assert.match(
+    hardeningMigration.sql,
+    /validate constraint performance_sync_runs_brand_owner_fkey/i,
+  );
+  assert.match(
+    hardeningMigration.sql,
     /jsonb_typeof\(section\.value\)\s+is distinct from 'object'/i,
   );
   assert.match(
-    vectorMigration.sql,
+    hardeningMigration.sql,
     /jsonb_typeof\(section\.value\s*->\s*'sourceUnitIds'\)\s+is distinct from 'array'/i,
   );
   assert.match(
-    vectorMigration.sql,
+    hardeningMigration.sql,
     /when\s+jsonb_array_length\(section\.value\s*->\s*'sourceUnitIds'\)\s*=\s*0\s+then true/i,
   );
   assert.match(
-    vectorMigration.sql,
+    hardeningMigration.sql,
     /from wiki_page_chunks chunk\s+where chunk\.wiki_version_id = p_wiki_version_id\s+and chunk\.enabled\s+and chunk\.embedding is null/i,
   );
+
+  const activationStart = hardeningMigration.sql.indexOf(
+    "create or replace function activate_compiled_wiki_version",
+  );
+  assert.ok(activationStart > 0);
+  const ownershipSql = hardeningMigration.sql.slice(0, activationStart);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "035_remove_webflow_and_split_content_status.sql",
+    );
+
+    const firstWorkspace = await database.query(
+      "insert into workspaces (name, slug) values ('First Tenant', $1) returning id",
+      [`first-tenant-${randomUUID()}`],
+    );
+    const firstBrand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'First Brand') returning id",
+      [firstWorkspace.rows[0].id],
+    );
+    const secondWorkspace = await database.query(
+      "insert into workspaces (name, slug) values ('Second Tenant', $1) returning id",
+      [`second-tenant-${randomUUID()}`],
+    );
+    const secondBrand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Second Brand') returning id",
+      [secondWorkspace.rows[0].id],
+    );
+
+    await database.exec("begin");
+    await database.query(
+      `insert into performance_sync_runs
+         (workspace_id, brand_id, channel, run_date, status)
+       values ($1, $2, 'instagram', '2026-07-17', 'running')`,
+      [firstWorkspace.rows[0].id, secondBrand.rows[0].id],
+    );
+    await assert.rejects(
+      database.exec(ownershipSql),
+      /performance_sync_runs_brand_owner_fkey/,
+    );
+    await database.exec("rollback");
+
+    await database.exec(ownershipSql);
+    await database.exec(ownershipSql);
+
+    await assert.rejects(
+      database.query(
+        `insert into performance_sync_runs
+           (workspace_id, brand_id, channel, run_date, status)
+         values ($1, $2, 'instagram', '2026-07-17', 'running')`,
+        [firstWorkspace.rows[0].id, secondBrand.rows[0].id],
+      ),
+      /performance_sync_runs_brand_owner_fkey/,
+    );
+    await database.query(
+      `insert into performance_sync_runs
+         (workspace_id, brand_id, channel, run_date, status)
+       values ($1, $2, 'instagram', '2026-07-17', 'running')`,
+      [firstWorkspace.rows[0].id, firstBrand.rows[0].id],
+    );
+  });
 });
 
 test("034 creates expiring cross-process worker resource leases", async () => {

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { access, readFile, readdir } from "node:fs/promises";
 import { createServer } from "node:http";
 import { promisify } from "node:util";
@@ -217,7 +218,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션은 001부터 035까지 정확한 이름으로 존재한다", async () => {
+test("데이터베이스 마이그레이션은 001부터 036까지 정확한 이름으로 존재한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -257,7 +258,26 @@ test("데이터베이스 마이그레이션은 001부터 035까지 정확한 이
     "033_compounding_wiki_pgvector.sql",
     "034_worker_resource_limits.sql",
     "035_remove_webflow_and_split_content_status.sql",
+    "036_harden_performance_and_wiki_activation.sql",
   ]);
+});
+
+test("적용된 031과 033 마이그레이션은 원본 체크섬을 유지한다", async () => {
+  const expectedChecksums = new Map([
+    [
+      "db/migrations/031_content_performance_dashboard.sql",
+      "8517fe3cfe469065387c9e20d5165a9daa6932ba4a0ef3d19c0c53b5e5c0a015",
+    ],
+    [
+      "db/migrations/033_compounding_wiki_pgvector.sql",
+      "9cd196aad1b9dcc1e7b1bbd5d47c16343cd04e5652f5ca376ff16eb5d8dd405b",
+    ],
+  ]);
+
+  for (const [path, expectedChecksum] of expectedChecksums) {
+    const migration = await readFile(path);
+    assert.equal(createHash("sha256").update(migration).digest("hex"), expectedChecksum);
+  }
 });
 
 test("Threads 텍스트 워커 마이그레이션은 작업 유형과 활성 작업 중복 방지를 정의한다", async () => {

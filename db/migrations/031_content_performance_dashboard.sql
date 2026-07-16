@@ -46,7 +46,7 @@ create index content_performance_brand_channel_date_idx
 create table performance_sync_runs (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id),
-  brand_id uuid not null,
+  brand_id uuid not null references brands(id),
   channel text not null,
   run_date date not null,
   status text not null,
@@ -58,9 +58,6 @@ create table performance_sync_runs (
   completed_at timestamptz null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint performance_sync_runs_brand_owner_fkey
-    foreign key (brand_id, workspace_id)
-    references brands(id, workspace_id) on delete cascade,
   constraint performance_sync_runs_channel_check check (
     channel in ('instagram', 'threads', 'x', 'linkedin', 'youtube', 'tiktok', 'webflow')
   ),
