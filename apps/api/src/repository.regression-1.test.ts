@@ -204,8 +204,9 @@ describe("repository regressions", () => {
     });
     const repository = createRepository(fakePoolWithClient(query) as any);
 
-    await repository.reviewContentOutput("output-threads-old", "regenerate", "Try again");
+    const result = await repository.reviewContentOutput("output-threads-old", "regenerate", "Try again");
 
+    expect(result).toEqual({ id: "output-threads-new", status: "generating" });
     expect(statements.some(({ sql }) => sql.includes("set status = 'regenerated'"))).toBe(true);
     expect(statements.find(({ sql }) => sql.includes("update topic_publish_groups"))?.sql).toContain("status <> 'publishing'");
     const replacement = statements.find(({ sql }) => sql.includes("insert into channel_outputs"));

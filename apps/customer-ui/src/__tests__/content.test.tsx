@@ -193,7 +193,18 @@ describe("ContentPage", () => {
   });
 
   it("regenerates the current output without replacing its delivery format", async () => {
-    const api = await renderContentPage();
+    const replacement = {
+      ...outputs[1],
+      id: "output-story-replacement",
+      status: "generating" as const
+    };
+    const listContentOutputs = vi.fn()
+      .mockResolvedValueOnce(outputs)
+      .mockResolvedValueOnce([outputs[0], replacement, ...outputs.slice(2)]);
+    const api = await renderContentPage({
+      listContentOutputs,
+      reviewContentOutput: vi.fn(async () => ({ id: replacement.id, status: replacement.status }))
+    });
     const storyHeading = await screen.findByRole("heading", { name: "제주 가족 여행 Story" });
     const storyArticle = storyHeading.closest("article") as HTMLElement;
 
@@ -201,8 +212,25 @@ describe("ContentPage", () => {
     await userEvent.click(within(storyArticle).getByRole("button", { name: "재생성" }));
 
     expect(api.reviewContentOutput).toHaveBeenCalledWith("output-story", "regenerate", "문구를 간결하게");
-    expect(storyArticle).toHaveTextContent("Story");
-    expect(await screen.findByText("재생성 중")).toBeVisible();
+    expect(listContentOutputs).toHaveBeenCalledTimes(2);
+    const replacementArticle = (await screen.findByRole("heading", { name: "제주 가족 여행 Story" })).closest("article") as HTMLElement;
+    expect(within(replacementArticle).getByText("생성 중")).toBeVisible();
+  });
+
+  it("keeps a successful regeneration when only the list refresh fails", async () => {
+    const listContentOutputs = vi.fn()
+      .mockResolvedValueOnce(outputs)
+      .mockRejectedValueOnce(new Error("refresh_failed"));
+    await renderContentPage({
+      listContentOutputs,
+      reviewContentOutput: vi.fn(async () => ({ id: "output-story-replacement", status: "generating" }))
+    });
+    const storyArticle = (await screen.findByRole("heading", { name: "제주 가족 여행 Story" })).closest("article") as HTMLElement;
+
+    await userEvent.click(within(storyArticle).getByRole("button", { name: "재생성" }));
+
+    expect(await screen.findByText(/재생성 요청은 접수했지만 목록을 새로고침하지 못했습니다/)).toBeVisible();
+    expect(screen.queryByText(/검토 결과를 저장하지 못했습니다/)).not.toBeInTheDocument();
   });
 
   it("shows an API error without an empty or sample content fallback", async () => {

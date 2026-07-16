@@ -1809,3 +1809,19 @@ test("035 removes Webflow runtime data and separates pending generation state", 
     );
   });
 });
+
+test("037 fails orphaned or terminal generation outputs instead of leaving them pending", async () => {
+  const migration = await readFile("db/migrations/037_repair_orphaned_generation_outputs.sql", "utf8");
+  assert.match(migration, /status = 'generation_failed'/i);
+  assert.match(migration, /not exists[\s\S]*from jobs/i);
+  assert.match(migration, /status in \('failed', 'cancelled'\)/i);
+  assert.match(migration, /generation_adapter_not_configured/i);
+});
+
+test("038 closes expired generation jobs that exhausted their retry budget", async () => {
+  const migration = await readFile("db/migrations/038_fail_exhausted_generation_jobs.sql", "utf8");
+  assert.match(migration, /locked_until < now\(\)/i);
+  assert.match(migration, /attempt_count >= max_attempts/i);
+  assert.match(migration, /update jobs/i);
+  assert.match(migration, /status = 'generation_failed'/i);
+});

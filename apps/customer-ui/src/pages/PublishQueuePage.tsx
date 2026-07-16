@@ -914,13 +914,26 @@ export function PublishQueuePage() {
     outputIds.forEach((outputId) => reviewingOutputIdsRef.current.add(outputId));
     setReviewingOutputIds((current) => new Set([...current, ...outputIds]));
     try {
-      const nextStatus: ReviewStatus = action === "approve" ? "approved" : action === "reject" ? "rejected" : "regenerating";
-      await Promise.all(outputIds.map((outputId) => api.reviewContentOutput(outputId, action)));
-      setContentOutputs((currentOutputs) => currentOutputs.map((output) => (
-        outputIds.includes(output.id) ? { ...output, status: nextStatus } : output
-      )));
-      await Promise.all([refreshQueue(), refreshPublishResults()]);
-      setNotice(message);
+      const results = await Promise.allSettled(outputIds.map((outputId) => api.reviewContentOutput(outputId, action)));
+      const successfulResults = new Map(results.flatMap((result, index) => result.status === "fulfilled"
+        ? [[outputIds[index], result.value] as const]
+        : []));
+      setContentOutputs((currentOutputs) => currentOutputs.map((output) => {
+        const result = successfulResults.get(output.id);
+        return result ? { ...output, id: result.id, status: result.status } : output;
+      }));
+      const failedCount = results.filter((result) => result.status === "rejected").length;
+      let refreshFailed = false;
+      try {
+        await Promise.all([refreshContentOutputs(), refreshQueue(), refreshPublishResults()]);
+      } catch {
+        refreshFailed = true;
+      }
+      setNotice(failedCount > 0
+        ? `일부 검토 결과를 저장하지 못했습니다. 성공 ${outputIds.length - failedCount}개, 실패 ${failedCount}개입니다.`
+        : refreshFailed
+          ? "검토 결과는 저장했지만 목록을 새로고침하지 못했습니다. 잠시 후 다시 확인하세요."
+          : message);
     } catch {
       const actionLabels = {
         approve: "승인",

@@ -171,15 +171,26 @@ export function ContentPage() {
     const reason = action === "regenerate" ? regenerationReasons[output.id]?.trim() || undefined : undefined;
     try {
       const result = await api.reviewContentOutput(output.id, action, reason);
-      setOutputs((current) => current.map((candidate) => candidate.id === output.id ? { ...candidate, status: result.status } : candidate));
-      setNotice({
-        message: action === "approve"
-          ? "승인한 콘텐츠를 게시 정책 큐에 등록했습니다."
-          : action === "reject"
-            ? "콘텐츠를 거절했습니다."
-            : "재생성 요청을 접수했습니다.",
-        variant: "ok"
-      });
+      if (action === "regenerate") {
+        setOutputs((current) => current.map((candidate) => candidate.id === output.id
+          ? { ...candidate, id: result.id, status: result.status }
+          : candidate));
+        try {
+          const rows = await api.listContentOutputs(DEMO_BRAND_ID);
+          setOutputs(rows);
+          setNotice({ message: "재생성 요청을 접수했습니다.", variant: "ok" });
+        } catch {
+          setNotice({ message: "재생성 요청은 접수했지만 목록을 새로고침하지 못했습니다. 잠시 후 다시 확인하세요.", variant: "warn" });
+        }
+      } else {
+        setOutputs((current) => current.map((candidate) => candidate.id === output.id ? { ...candidate, status: result.status } : candidate));
+        setNotice({
+          message: action === "approve"
+            ? "승인한 콘텐츠를 게시 정책 큐에 등록했습니다."
+            : "콘텐츠를 거절했습니다.",
+          variant: "ok"
+        });
+      }
     } catch {
       setNotice({ message: "검토 결과를 저장하지 못했습니다. API 상태를 확인한 뒤 다시 시도하세요.", variant: "warn" });
     } finally {

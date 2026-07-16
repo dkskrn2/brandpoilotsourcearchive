@@ -13,6 +13,7 @@ export interface ChannelCatalogEntry {
     credentialType: "oauth";
   };
   generationConstraints: Readonly<Record<string, string | number>>;
+  generationReady: boolean;
   displayOrder: number;
 }
 
@@ -24,6 +25,7 @@ export const channelCatalog = [
     artifactKind: "image",
     oauth: { provider: "meta", credentialType: "oauth" },
     generationConstraints: { maxAssetCount: 5, squareWidth: 1080, squareHeight: 1080 },
+    generationReady: true,
     displayOrder: 1
   },
   {
@@ -33,6 +35,7 @@ export const channelCatalog = [
     artifactKind: "text",
     oauth: { provider: "meta", credentialType: "oauth" },
     generationConstraints: { maxCharacters: 500 },
+    generationReady: true,
     displayOrder: 2
   },
   {
@@ -42,6 +45,7 @@ export const channelCatalog = [
     artifactKind: "text",
     oauth: { provider: "x", credentialType: "oauth" },
     generationConstraints: { maxCharacters: 280 },
+    generationReady: false,
     displayOrder: 3
   },
   {
@@ -51,6 +55,7 @@ export const channelCatalog = [
     artifactKind: "text",
     oauth: { provider: "linkedin", credentialType: "oauth" },
     generationConstraints: { maxCharacters: 3000 },
+    generationReady: false,
     displayOrder: 4
   },
   {
@@ -60,6 +65,7 @@ export const channelCatalog = [
     artifactKind: "video",
     oauth: { provider: "google", credentialType: "oauth" },
     generationConstraints: { aspectRatio: "9:16", maxDurationSeconds: 180 },
+    generationReady: false,
     displayOrder: 5
   },
   {
@@ -69,6 +75,7 @@ export const channelCatalog = [
     artifactKind: "video",
     oauth: { provider: "tiktok", credentialType: "oauth" },
     generationConstraints: { aspectRatio: "9:16", maxDurationSeconds: 180 },
+    generationReady: false,
     displayOrder: 6
   }
 ] as const satisfies readonly ChannelCatalogEntry[];

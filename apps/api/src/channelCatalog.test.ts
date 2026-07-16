@@ -51,6 +51,13 @@ describe("channel catalog", () => {
       })
     ]));
   });
+
+  it("marks only channels with an implemented generation worker as ready", () => {
+    expect(channelCatalog.filter((entry) => entry.generationReady).map((entry) => entry.channel)).toEqual([
+      "instagram",
+      "threads"
+    ]);
+  });
 });
 
 describe("channel repository", () => {

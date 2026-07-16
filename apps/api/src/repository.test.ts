@@ -182,7 +182,7 @@ describe("Task 4 transactional topic generation", () => {
     expect(fixture.statements.some(({ sql }) => sql.includes("insert into topic_publish_groups"))).toBe(false);
   });
 
-  it("creates one generating output for every enabled channel without requiring OAuth", async () => {
+  it("creates outputs for every enabled channel and exposes generation readiness", async () => {
     const fixture = generationQuery({
       channels: ["instagram", "threads", "x", "linkedin", "youtube", "tiktok"],
       enabledFormats: ["instagram_feed_carousel"],
@@ -191,7 +191,7 @@ describe("Task 4 transactional topic generation", () => {
 
     const result = await createRepository(fakePoolWithClient(fixture.query) as any).generateContent("brand-1");
 
-    expect(result).toMatchObject({ processed: 1, created: 6 });
+    expect(result).toMatchObject({ processed: 1, created: 6, failed: 4 });
     const groups = fixture.statements.filter(({ sql }) => sql.includes("insert into topic_publish_groups"));
     expect(groups).toHaveLength(1);
     expect(groups[0].sql).toContain("'waiting'");
@@ -213,16 +213,17 @@ describe("Task 4 transactional topic generation", () => {
       ["tiktok_video", "video"]
     ];
     outputs.forEach(({ values }, index) => {
-      expect(values[6]).toBe("generating");
-      expect(JSON.parse(String(values[10]))).toEqual({
+      const generationReady = index < 2;
+      expect(values[6]).toBe(generationReady ? "generating" : "generation_failed");
+      expect(JSON.parse(String(values[10]))).toMatchObject({
         deliveryFormat: expectedContracts[index][0],
         topic: { title: "Jeju family route", angle: "location-first checklist" },
         representativeUrl: "https://example.com/reference",
         artifactKind: expectedContracts[index][1],
-        generationState: "pending",
+        generationState: generationReady ? "pending" : "failed",
         channelConstraints: expect.any(Object)
       });
-      expect(JSON.parse(String(values[12]))).toEqual([]);
+      expect(JSON.parse(String(values[12]))).toEqual(generationReady ? [] : ["generation_adapter_not_configured"]);
     });
     const constraintsByFormat = new Map(
       outputs.map(({ values }) => {
@@ -1837,6 +1838,37 @@ describe("repository", () => {
 
     expect(result).toMatchObject({ processed: 1, created: 1, failed: 0 });
     expect(insertedChannels).toEqual(["instagram"]);
+  });
+
+  it("records channels without a generation worker as failed instead of leaving them generating", async () => {
+    let insertedValues: unknown[] | undefined;
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      if (sql.trim() === "begin" || sql.trim() === "commit" || sql.trim() === "rollback") return { rowCount: 0, rows: [] };
+      const policyResult = task4GenerationPolicyResult(sql);
+      if (policyResult) return policyResult;
+      if (sql.includes("from brands b") && sql.includes("join brand_profiles")) {
+        return { rowCount: 1, rows: [{ workspace_id: "workspace-1", brand_name: "Brand", auto_approval_enabled: false }] };
+      }
+      if (isConnectedChannelQuery(sql)) return connectedChannelRows("threads", "x");
+      if (sql.includes("from topic_rows") && sql.includes("for update skip locked")) {
+        return { rowCount: 1, rows: [{ id: "topic-row-1", topic_title: "Topic", topic_angle: "Angle" }] };
+      }
+      if (sql.includes("from source_snapshots")) return { rowCount: 0, rows: [] };
+      if (sql.includes("insert into content_topics")) return { rowCount: 1, rows: [{ id: "content-topic-1" }] };
+      if (sql.includes("insert into master_drafts")) return { rowCount: 1, rows: [{ id: "master-draft-1" }] };
+      if (sql.includes("insert into channel_outputs")) {
+        insertedValues = values;
+        return { rowCount: 1, rows: [{ id: "output-x" }] };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+
+    const result = await createRepository(fakePoolWithClient(query) as any).generateContent("brand-1");
+
+    expect(result).toMatchObject({ processed: 1, created: 2, failed: 1 });
+    expect(insertedValues?.[6]).toBe("generation_failed");
+    expect(JSON.parse(String(insertedValues?.[10]))).toMatchObject({ generationState: "failed" });
+    expect(JSON.parse(String(insertedValues?.[12]))).toContain("generation_adapter_not_configured");
   });
 
   it("creates an Instagram render job instead of generating images in the API", async () => {

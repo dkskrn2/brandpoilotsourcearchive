@@ -474,6 +474,40 @@ describe("PublishQueuePage", () => {
     expect(await screen.findByText("게시 관리 목록에 등록했습니다.")).toBeVisible();
   });
 
+  it("refreshes server state when only part of a grouped review succeeds", async () => {
+    const groupedOutputs = [
+      { ...reviewOutputs[0], contentId: "master-partial", title: "부분 처리 검토" },
+      { ...reviewOutputs[1], contentId: "master-partial", title: "부분 처리 검토" }
+    ];
+    const listContentOutputs = vi.fn()
+      .mockResolvedValueOnce(groupedOutputs)
+      .mockResolvedValueOnce([{ ...groupedOutputs[1], status: "auto_approval_blocked" }]);
+    const reviewContentOutput = vi.fn(async (outputId: string) => {
+      if (outputId === "output-blocked") throw new Error("temporary_failure");
+      return { id: outputId, status: "approved" };
+    });
+    await renderPublishQueuePage({ listContentOutputs, reviewContentOutput });
+
+    const row = await screen.findByRole("row", { name: /부분 처리 검토/ });
+    await userEvent.click(within(row).getByRole("button", { name: "수동 승인" }));
+
+    expect(listContentOutputs).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText(/일부 검토 결과를 저장하지 못했습니다/)).toBeVisible();
+  });
+
+  it("does not report a saved group review as failed when only refresh fails", async () => {
+    const listContentOutputs = vi.fn()
+      .mockResolvedValueOnce([reviewOutputs[0]])
+      .mockRejectedValueOnce(new Error("refresh_failed"));
+    await renderPublishQueuePage({ listContentOutputs });
+    const row = await screen.findByRole("row", { name: /검토할 인스타 콘텐츠/ });
+
+    await userEvent.click(within(row).getByRole("button", { name: "승인" }));
+
+    expect(await screen.findByText(/검토 결과는 저장했지만 목록을 새로고침하지 못했습니다/)).toBeVisible();
+    expect(screen.queryByText(/^승인 처리에 실패했습니다/)).not.toBeInTheDocument();
+  });
+
   it("loads the actual artifact and displays only populated upload metadata", async () => {
     const api = await renderPublishQueuePage({ listPublishResults: vi.fn(async () => publishResults) });
 

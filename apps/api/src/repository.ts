@@ -2389,6 +2389,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         if (!result.rowCount) throw new Error("content_output_not_reviewable");
         const output = result.rows[0];
         const outputJson = recordValue(output.output_json);
+        let response = { id: output.id as string, status: output.status as string };
         if (
           action === "approve"
           && (nullableText(outputJson.generationState) === "pending" || nullableText(outputJson.artifactStatus) === "pending")
@@ -2461,6 +2462,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             );
             const regeneratedOutputId = regenerated.rows[0]?.id;
             if (!regeneratedOutputId) throw new Error("content_output_regeneration_failed");
+            response = { id: regeneratedOutputId, status: "generating" };
             await createImageRenderJob(client as any, {
               workspaceId: output.workspace_id,
               brandId: output.brand_id,
@@ -2508,6 +2510,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             );
             const regeneratedOutputId = regenerated.rows[0]?.id;
             if (!regeneratedOutputId) throw new Error("content_output_regeneration_failed");
+            response = { id: regeneratedOutputId, status: "generating" };
             await createThreadsRenderJob(client as any, {
               workspaceId: output.workspace_id,
               brandId: output.brand_id,
@@ -2538,7 +2541,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           );
         }
         await client.query("commit");
-        return { id: output.id, status: output.status };
+        return response;
       } catch (error) {
         await client.query("rollback");
         throw error;
@@ -3368,7 +3371,10 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             ? storedFormat
             : null;
         }
-        const readiness = determineGenerationReadiness(enabledChannels, enabledInstagramFormats, lastSelectedInstagramFormat);
+        const generationReadyChannels = enabledChannels.filter((channel) =>
+          channelCatalog.some((entry) => entry.channel === channel && entry.generationReady)
+        );
+        const readiness = determineGenerationReadiness(generationReadyChannels, enabledInstagramFormats, lastSelectedInstagramFormat);
         if (!readiness.canProduce) {
           await client.query("commit");
           return { processed: 0, created: 0, updated: 0, failed: 0, reason: "no_producible_channel" };
@@ -3648,10 +3654,11 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           const artifactKind = catalogEntry.channel === "instagram" && deliveryFormat === "instagram_reel"
             ? "video"
             : catalogEntry.artifactKind;
+          const generationReady = catalogEntry.generationReady;
           outputs.push({
             channel: catalogEntry.channel,
             deliveryFormat,
-            status: "generating",
+            status: generationReady ? "generating" : "generation_failed",
             title: outputTitle,
             previewTitle: outputTitle,
             previewBody: `${catalogEntry.label.en} 콘텐츠 생성 대기 중`,
@@ -3660,11 +3667,18 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
               topic: { title: outputTitle, angle: outputAngle },
               representativeUrl,
               artifactKind,
-              generationState: "pending",
+              generationState: generationReady ? "pending" : "failed",
+              ...(!generationReady ? {
+                generationError: {
+                  code: "generation_adapter_not_configured",
+                  message: "이 채널의 콘텐츠 생성 기능은 아직 준비되지 않았습니다.",
+                  failedAt: now.toISOString()
+                }
+              } : {}),
               channelConstraints: catalogEntry.generationConstraints
             },
             sourceSummary,
-            blockReasons: []
+            blockReasons: generationReady ? [] : ["generation_adapter_not_configured"]
           });
         }
         for (const output of outputs) {
@@ -3742,7 +3756,12 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           }
         }
         await client.query("commit");
-        return { processed: 1, created: outputs.length, updated: 1, failed: 0 };
+        return {
+          processed: 1,
+          created: outputs.length,
+          updated: 1,
+          failed: outputs.filter((output) => output.status === "generation_failed").length
+        };
       } catch (error) {
         await client.query("rollback");
         throw error;
