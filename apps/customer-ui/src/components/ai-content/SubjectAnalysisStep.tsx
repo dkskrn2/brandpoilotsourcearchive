@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Image, Link2, LoaderCircle, Package, RefreshCw } from "lucide-react";
 import type { AiContentBrandContext, AiContentDraft, AiContentGateway, SubjectAnalysis, SubjectType } from "../../features/ai-content/types";
 
@@ -9,7 +9,7 @@ interface Props {
   analysis: SubjectAnalysis | null;
   onSubjectType(value: SubjectType): void;
   onSubjectInput(value: Partial<AiContentDraft["subjectInput"]>): void;
-  onAnalysis(value: SubjectAnalysis): void;
+  onAnalysis(value: SubjectAnalysis | null): void;
   onSelectImage(imageId: string): void;
 }
 
@@ -40,6 +40,12 @@ export function SubjectAnalysisStep({ brandId, gateway, draft, analysis, onSubje
   const [contextLoading, setContextLoading] = useState(true);
   const [runStatus, setRunStatus] = useState<RunStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  const cacheRequestVersion = useRef(0);
+  const onAnalysisRef = useRef(onAnalysis);
+
+  useEffect(() => {
+    onAnalysisRef.current = onAnalysis;
+  }, [onAnalysis]);
 
   useEffect(() => {
     let active = true;
@@ -54,12 +60,37 @@ export function SubjectAnalysisStep({ brandId, gateway, draft, analysis, onSubje
   const sourceUrl = draft.subjectType === "service" ? context?.ownedUrl ?? "" : draft.subjectInput.sourceUrl;
   const readyToAnalyze = Boolean(sourceUrl.trim());
 
+  useEffect(() => {
+    const requestVersion = ++cacheRequestVersion.current;
+    const subjectType = draft.subjectType;
+    const normalizedSourceUrl = sourceUrl.trim();
+    if (!subjectType || !normalizedSourceUrl) return;
+
+    const timeoutId = window.setTimeout(() => {
+      void gateway.getCachedSubjectAnalysis(brandId, subjectType, normalizedSourceUrl)
+        .then((cached) => {
+          if (cacheRequestVersion.current !== requestVersion) return;
+          if (!cached || (cached.status !== "ready" && cached.status !== "partial")) return;
+          onAnalysisRef.current(cached);
+          setError(null);
+          setRunStatus("success");
+        })
+        .catch(() => undefined);
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      if (cacheRequestVersion.current === requestVersion) cacheRequestVersion.current += 1;
+    };
+  }, [brandId, draft.subjectType, gateway, sourceUrl]);
+
   async function run(force = false) {
     if (!draft.subjectType || !sourceUrl.trim()) {
       setError(draft.subjectType === "service" ? "브랜드 설정에 본사 URL을 먼저 등록해 주세요." : "공개 제품 페이지 URL을 입력해 주세요.");
       setRunStatus("failure");
       return;
     }
+    cacheRequestVersion.current += 1;
     setRunStatus("loading");
     setError(null);
     try {
@@ -70,8 +101,9 @@ export function SubjectAnalysisStep({ brandId, gateway, draft, analysis, onSubje
         idempotencyKey: crypto.randomUUID(),
         force,
       };
-      let current = force ? await gateway.reanalyzeSubject(brandId, analysis?.id ?? "", input.idempotencyKey) : await gateway.getCachedSubjectAnalysis(brandId, draft.subjectType, sourceUrl);
-      if (!current) current = await gateway.requestSubjectAnalysis(brandId, input);
+      let current = force
+        ? await gateway.reanalyzeSubject(brandId, analysis?.id ?? "", input.idempotencyKey)
+        : await gateway.requestSubjectAnalysis(brandId, input);
       for (let attempt = 0; attempt < 30 && !terminalStatuses.has(current.status); attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 300));
         current = await gateway.getSubjectAnalysis(brandId, current.id);
