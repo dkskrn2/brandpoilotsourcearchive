@@ -1,0 +1,67 @@
+import { describe, expect, it, vi } from "vitest";
+import { buildContentGenerationInput, parseContentGenerationInputV2 } from "./aiContentGenerationInput.js";
+import type { SubjectAnalysisRecord } from "./aiContentSubjectRepository.js";
+
+const analysis: SubjectAnalysisRecord = {
+  id: "analysis-1", workspaceId: "workspace-1", brandId: "brand-1", subjectType: "product" as const,
+  sourceUrl: "https://example.com/product", normalizedUrl: "https://example.com/product",
+  input: { name: "상품", promotion: "", description: "상품 설명" }, status: "ready" as const,
+  facts: [{ key: "name", value: "상품", sourceUrl: "https://example.com/product" }], structuredData: {}, research: { voc: [] },
+  targets: [{ id: "target-1", name: "실용적인 고객", traits: ["바쁜 사람"], painPoints: ["시간 부족"], purchaseMotivations: ["간편함"], uspEvidence: [] }, { id: "target-2", name: "비교 고객", traits: [], painPoints: [], purchaseMotivations: [], uspEvidence: [] }, { id: "target-3", name: "관심 고객", traits: [], painPoints: [], purchaseMotivations: [], uspEvidence: [] }],
+  appealsByTarget: { "target-1": [{ id: "appeal-1", targetId: "target-1", title: "빠른 시작", description: "쉽게 시작", evidenceType: "product_fact" as const, connectionReason: "상품 근거", sources: [] }] },
+  selectedImageId: "image-1", images: [{ id: "image-1", analysisId: "analysis-1", sourceUrl: "https://example.com/product.png", storageUrl: "https://blob.example/product.png", storagePath: "subjects/1.png", width: 1024, height: 1024, mimeType: "image/png", altText: "상품", role: "product" as const, selectionScore: 1, createdAt: "2026-07-20T00:00:00.000Z" }],
+  analysisVersion: 2, idempotencyKey: "analysis-key", leasedBy: null, leaseToken: null, leaseExpiresAt: null, attemptCount: 1, availableAt: "2026-07-20T00:00:00.000Z", errorCode: null, errorMessage: null, supersededAt: null, createdAt: "2026-07-20T00:00:00.000Z", updatedAt: "2026-07-20T00:00:00.000Z", completedAt: "2026-07-20T00:00:00.000Z",
+};
+
+function deps(overrides: Record<string, unknown> = {}) {
+  return {
+    getBrandContext: vi.fn(async () => ({ ready: true, brandName: "Growthline", ownedUrl: "https://example.com", sourceStatus: "crawled", lastCrawledAt: null, wikiVersionId: "wiki-1", wikiUpdatedAt: null, summary: "브랜드", pageCount: 1, context: { brand: { name: "Growthline", brandColor: "#0057B8" } } })),
+    getSubjectAnalysis: vi.fn(async () => analysis),
+    getReferences: vi.fn(async ({ referenceIds }: { referenceIds: string[] }) => referenceIds.map((id) => ({ id, source: "saved_trend" as const, title: id, url: `https://instagram.com/${id}`, previewUrl: null, metrics: {}, checkedAt: null }))),
+    getAttachments: vi.fn(async () => [{ id: "attachment-1", generationId: "generation-1", role: "visual_reference" as const, fileName: "ref.png", mimeType: "image/png", sizeBytes: 10, checksum: "a", storageUrl: "https://blob.example/ref.png", storagePath: "generation/ref.png", createdAt: "2026-07-20T00:00:00.000Z" }]),
+    ...overrides,
+  };
+}
+
+function generation(draft: Record<string, unknown> = {}) {
+  return { id: "generation-1", workspaceId: "workspace-1", brandId: "brand-1", type: "card_news" as const, draft: {
+    subjectAnalysisId: "analysis-1", selectedSubjectImageIds: ["image-1"], selectedTarget: analysis.targets[0], selectedAppeal: analysis.appealsByTarget["target-1"][0], referenceIds: ["ref-2", "ref-1"],
+    brief: { selectedColor: "#0F766E", aspectRatio: "1:1", outputCount: 2, outputDirections: ["정보를 쉽게 전달"] }, ...draft,
+  } };
+}
+
+describe("content-generation-input.v2", () => {
+  it("freezes one target, one connected appeal, selected images, references, and edited color", async () => {
+    const envelope = await buildContentGenerationInput(deps(), generation(), { outputCount: 2 });
+    expect(envelope.contractVersion).toBe("content-generation-input.v2");
+    expect(envelope.message.target.id).toBe("target-1");
+    expect(envelope.message.appeal.targetId).toBe("target-1");
+    expect(envelope.creativeDirection.selectedColor).toBe("#0F766E");
+    expect(envelope.references.map((item) => item.id)).toEqual(["ref-2", "ref-1"]);
+    expect(envelope.subject.selectedImages.map((item) => item.id)).toEqual(["image-1"]);
+    expect(envelope.attachments[0].role).toBe("visual_reference");
+  });
+
+  it("allows partial analysis but rejects non-terminal analysis", async () => {
+    const partial = { ...analysis, status: "partial" as const };
+    await expect(buildContentGenerationInput(deps({ getSubjectAnalysis: vi.fn(async () => partial) }), generation())).resolves.toMatchObject({ subject: { analysisVersion: 2 } });
+    await expect(buildContentGenerationInput(deps({ getSubjectAnalysis: vi.fn(async () => ({ ...analysis, status: "researching" as const })) }), generation())).rejects.toThrow("ai_content_subject_analysis_not_ready");
+  });
+
+  it("requires a product image and a connected appeal before usage can be touched", async () => {
+    await expect(buildContentGenerationInput(deps({ getAttachments: vi.fn(async () => []), getSubjectAnalysis: vi.fn(async () => ({ ...analysis, selectedImageId: null, images: [] })) }), generation({ selectedSubjectImageIds: [] }))).rejects.toThrow("ai_content_subject_image_required");
+    await expect(buildContentGenerationInput(deps(), generation({ selectedAppeal: { ...analysis.appealsByTarget["target-1"][0], targetId: "target-2" } }))).rejects.toThrow("ai_content_appeal_target_mismatch");
+  });
+
+  it("reuses and validates an immutable snapshot without consulting newer analysis", async () => {
+    const first = await buildContentGenerationInput(deps(), generation(), { outputCount: 1 });
+    const newer = { ...analysis, analysisVersion: 99, status: "failed" as const };
+    const snapshot = await buildContentGenerationInput(deps({ getSubjectAnalysis: vi.fn(async () => newer) }), generation({ subjectAnalysisId: "analysis-2" }), { existingSnapshot: first });
+    expect(snapshot.subject.analysisVersion).toBe(2);
+    expect(parseContentGenerationInputV2(snapshot).creativeDirection.outputCount).toBe(1);
+  });
+
+  it("rejects a snapshot with a mismatched target and appeal", () => {
+    expect(() => parseContentGenerationInputV2({ contractVersion: "content-generation-input.v2", contentType: "card_news", subject: { analysisId: "a", analysisVersion: 1, type: "product", sourceUrl: "https://example.com", facts: [], research: {}, selectedImages: [] }, message: { target: { id: "target-1", name: "타깃" }, appeal: { id: "appeal-1", targetId: "target-2", title: "소구점" }, qualityBrief: {} }, creativeDirection: { prompts: [], brandColor: "#0057B8", selectedColor: "#0057B8", aspectRatio: "1:1", outputCount: 1 }, brandContext: {}, references: [], attachments: [] })).toThrow("ai_content_appeal_target_mismatch");
+  });
+});
