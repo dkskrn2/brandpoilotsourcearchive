@@ -1825,3 +1825,86 @@ test("038 closes expired generation jobs that exhausted their retry budget", asy
   assert.match(migration, /update jobs/i);
   assert.match(migration, /status = 'generation_failed'/i);
 });
+
+test("051 scopes v2 subject pipelines to AI content generations", async () => {
+  const migrations = await loadMigrations();
+  const migration051 = migrations.find(
+    (migration) => migration.id === "051_ai_content_subject_pipeline_v2.sql",
+  );
+  assert.ok(migration051, "051 subject pipeline v2 migration must exist");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "051_ai_content_subject_pipeline_v2.sql",
+    );
+
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ($1, $2) returning id",
+      ["Subject Pipeline V2", `subject-pipeline-v2-${randomUUID()}`],
+    );
+    const workspaceId = workspace.rows[0].id;
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, $2) returning id",
+      [workspaceId, "Subject Pipeline V2 Brand"],
+    );
+    const brandId = brand.rows[0].id;
+
+    const createGeneration = async (key) => (
+      await database.query(
+        `insert into ai_content_generations
+           (workspace_id, brand_id, type, title, status, analysis_idempotency_key)
+         values ($1, $2, 'card_news', 'Subject pipeline', 'draft', $3)
+         returning id`,
+        [workspaceId, brandId, key],
+      )
+    ).rows[0].id;
+    const firstGenerationId = await createGeneration(`generation-${randomUUID()}`);
+    const secondGenerationId = await createGeneration(`generation-${randomUUID()}`);
+
+    const legacy = await database.query(
+      `insert into ai_content_subject_analyses
+         (workspace_id, brand_id, subject_type, source_url, normalized_url,
+          status, idempotency_key)
+       values ($1, $2, 'product', 'https://example.com/legacy',
+               'https://example.com/legacy', 'ready', $3)
+       returning generation_id, contract_version, attachment_ids_json,
+                 analysis_result_json`,
+      [workspaceId, brandId, `legacy-${randomUUID()}`],
+    );
+    assert.deepEqual(legacy.rows, [{
+      generation_id: null,
+      contract_version: "subject-analysis.v1",
+      attachment_ids_json: [],
+      analysis_result_json: {},
+    }]);
+
+    const insertV2 = (generationId, key) => database.query(
+      `insert into ai_content_subject_analyses
+         (workspace_id, brand_id, generation_id, contract_version,
+          subject_type, source_url, normalized_url, status, idempotency_key)
+       values ($1, $2, $3, 'subject-analysis.v2', 'product',
+               'https://example.com/shared-product',
+               'https://example.com/shared-product', 'queued', $4)
+       returning id`,
+      [workspaceId, brandId, generationId, key],
+    );
+
+    const firstAnalysis = await insertV2(firstGenerationId, `v2-${randomUUID()}`);
+    await insertV2(secondGenerationId, `v2-${randomUUID()}`);
+    await assert.rejects(
+      insertV2(firstGenerationId, `duplicate-${randomUUID()}`),
+      /ai_content_subject_generation_active_uq/,
+    );
+
+    await database.query("delete from ai_content_generations where id = $1", [firstGenerationId]);
+    const cascaded = await database.query(
+      "select id from ai_content_subject_analyses where id = $1",
+      [firstAnalysis.rows[0].id],
+    );
+    assert.equal(cascaded.rows.length, 0);
+  });
+});
+

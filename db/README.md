@@ -52,3 +52,16 @@ This removes the local database volume.
 docker compose down -v
 docker compose up -d postgres
 ```
+
+## Subject Pipeline V2
+
+`051_ai_content_subject_pipeline_v2.sql` keeps legacy `subject-analysis.v1`
+rows and URL caching intact while adding generation-scoped
+`subject-analysis.v2` rows. V2 rows belong to an `ai_content_generations`
+record, are deleted with that generation, and never share the legacy URL
+cache across generations.
+
+V2 evidence can be supplied by an optional HTTPS URL, up to 10 generation
+attachments, or manual name/description input. Pipeline statuses are
+`queued`, `extracting`, `analyzing`, `generating_appeals`, `ready`, `partial`,
+and `failed`; the legacy `researching` status remains valid for v1 records.

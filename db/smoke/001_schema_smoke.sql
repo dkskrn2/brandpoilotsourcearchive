@@ -167,3 +167,115 @@ where trigger_schema = 'public'
   and trigger_name like '%_set_updated_at';
 
 select 'schema smoke check passed' as result;
+
+begin;
+
+do $$
+declare
+  pipeline_workspace_id uuid;
+  pipeline_brand_id uuid;
+  pipeline_generation_id uuid;
+  pipeline_analysis_id uuid;
+  pipeline_column_count integer;
+  pipeline_index_count integer;
+begin
+  if not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ai_content_subject_analyses'
+      and column_name = 'generation_id'
+  ) then
+    return;
+  end if;
+
+  select count(*)
+  into pipeline_column_count
+  from information_schema.columns
+  where table_schema = 'public'
+    and table_name = 'ai_content_subject_analyses'
+    and column_name in (
+      'generation_id',
+      'contract_version',
+      'attachment_ids_json',
+      'analysis_result_json'
+    );
+
+  if pipeline_column_count != 4 then
+    raise exception 'Missing subject pipeline v2 columns';
+  end if;
+
+  select count(*)
+  into pipeline_index_count
+  from pg_indexes
+  where schemaname = 'public'
+    and indexname in (
+      'ai_content_subject_legacy_active_cache_uq',
+      'ai_content_subject_generation_active_uq',
+      'ai_content_subject_generation_idx'
+    );
+
+  if pipeline_index_count != 3 then
+    raise exception 'Missing subject pipeline v2 indexes';
+  end if;
+
+  insert into workspaces (name, slug)
+  values (
+    'Subject pipeline v2 smoke',
+    'subject-pipeline-v2-smoke-' || gen_random_uuid()::text
+  )
+  returning id into pipeline_workspace_id;
+
+  insert into brands (workspace_id, name)
+  values (pipeline_workspace_id, 'Subject pipeline v2 smoke brand')
+  returning id into pipeline_brand_id;
+
+  insert into ai_content_generations
+    (workspace_id, brand_id, type, title, status, analysis_idempotency_key)
+  values
+    (pipeline_workspace_id, pipeline_brand_id, 'card_news',
+     'Subject pipeline v2 smoke generation', 'draft',
+     'subject-pipeline-v2-smoke')
+  returning id into pipeline_generation_id;
+
+  insert into ai_content_subject_analyses
+    (workspace_id, brand_id, generation_id, contract_version, subject_type,
+     source_url, normalized_url, attachment_ids_json, analysis_result_json,
+     status, idempotency_key)
+  values
+    (pipeline_workspace_id, pipeline_brand_id, pipeline_generation_id,
+     'subject-analysis.v2', 'product', null, null,
+     jsonb_build_array(gen_random_uuid()), '{}'::jsonb, 'analyzing',
+     'subject-pipeline-v2-smoke')
+  returning id into pipeline_analysis_id;
+
+  begin
+    insert into ai_content_subject_analyses
+      (workspace_id, brand_id, generation_id, contract_version, subject_type,
+       source_url, normalized_url, status, idempotency_key)
+    values
+      (pipeline_workspace_id, pipeline_brand_id, pipeline_generation_id,
+       'subject-analysis.v2', 'product', null, null, 'queued',
+       'subject-pipeline-v2-smoke-duplicate');
+    raise exception 'Duplicate active generation subject pipeline was accepted';
+  exception
+    when unique_violation then null;
+  end;
+
+  delete from ai_content_generations
+  where id = pipeline_generation_id;
+
+  if exists (
+    select 1
+    from ai_content_subject_analyses
+    where id = pipeline_analysis_id
+  ) then
+    raise exception 'Subject pipeline generation cascade failed';
+  end if;
+end;
+$$;
+
+rollback;
+
+select 'subject pipeline v2 smoke check passed' as result;
+

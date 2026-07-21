@@ -1,13 +1,79 @@
 import { describe, expect, it } from "vitest";
 import {
   parseCreateSubjectAnalysisInput,
+  parseCreateSubjectPipelineInput,
   parseReanalyzeSubjectAnalysisInput,
+  parseSubjectAnalysisInputV2,
+  parseSubjectAnalysisResultV2,
+  parseSubjectAppealInputV2,
+  parseSubjectAppealResultV2,
   parseSubjectAnalysisInput,
   parseSubjectAnalysisResult,
   parseSubjectAnalysisSelectionInput,
   parseSubjectWorkerClaimInput,
   parseSubjectWorkerLeaseInput,
 } from "./aiContentSubjectContracts.js";
+
+const generationId = "22222222-2222-4222-8222-222222222222";
+const attachmentId = "33333333-3333-4333-8333-333333333333";
+
+function validPipelineInput() {
+  return {
+    generationId,
+    subjectType: "product" as const,
+    sourceUrl: null,
+    attachmentIds: [attachmentId],
+    manualInput: { name: "Product", promotionOrTerms: "", description: "" },
+    idempotencyKey: "subject-pipeline-1",
+  };
+}
+
+function validAnalysisResultV2() {
+  return {
+    contractVersion: "subject-analysis-result.v2" as const,
+    phase: "analysis" as const,
+    subjectType: "product" as const,
+    summary: "A source-backed product analysis.",
+    verifiedFacts: [{
+      claim: "The product is available in blue.",
+      support: "The attached catalog lists blue as an option.",
+      sourceUrl: `attachment://${attachmentId}`,
+    }],
+    voc: [{
+      quoteSummary: "Buyers want clear sizing information.",
+      context: "Public buyer discussion.",
+      sourceUrl: "https://research.example.com/voc",
+    }],
+    alternatives: [{
+      name: "Alternative A",
+      strengths: ["Widely available"],
+      limitations: ["Fewer colors"],
+      sourceUrls: ["https://research.example.com/alternatives"],
+    }],
+    barriers: [{
+      barrier: "Unclear fit",
+      evidence: "Buyers ask for exact dimensions.",
+      sourceUrls: ["https://research.example.com/barriers"],
+    }],
+    productProfile: { category: "Apparel", features: ["Blue color option"] },
+    serviceProfile: null,
+    serviceSubtype: null,
+    sourceGaps: ["Long-term durability is not documented."],
+  };
+}
+
+function validAppealResultV2() {
+  const targets = ["target-1", "target-2", "target-3"].map((id) => target(id));
+  return {
+    contractVersion: "subject-appeal-result.v2" as const,
+    phase: "appeal" as const,
+    targets,
+    appealsByTarget: Object.fromEntries(targets.map(({ id }) => [id, [
+      appeal(`${id}-appeal-1`, id),
+      appeal(`${id}-appeal-2`, id),
+    ]])),
+  };
+}
 
 const target = (id: string) => ({
   id,
@@ -83,6 +149,45 @@ function validWorkerInput() {
 }
 
 describe("subject-analysis customer inputs", () => {
+  it("accepts a generation-scoped product pipeline with optional URL and attachments", () => {
+    expect(parseCreateSubjectPipelineInput({
+      generationId,
+      subjectType: "product",
+      sourceUrl: null,
+      attachmentIds: [attachmentId],
+      manualInput: { name: "Product", promotionOrTerms: "", description: "" },
+      idempotencyKey: "subject-pipeline-1",
+    })).toMatchObject({ subjectType: "product", sourceUrl: null });
+  });
+
+  it("rejects a v2 pipeline without URL, attachments, name, or description", () => {
+    expect(() => parseCreateSubjectPipelineInput({
+      generationId,
+      subjectType: "service",
+      sourceUrl: null,
+      attachmentIds: [],
+      manualInput: { name: "", promotionOrTerms: "", description: "" },
+      idempotencyKey: "subject-pipeline-empty",
+    })).toThrow("subject_analysis_evidence_required");
+  });
+
+  it("requires strict, unique UUID attachment inputs for v2", () => {
+    expect(() => parseCreateSubjectPipelineInput({ ...validPipelineInput(), unknown: true }))
+      .toThrow("subject_analysis_pipeline_input_invalid");
+    expect(() => parseCreateSubjectPipelineInput({
+      ...validPipelineInput(),
+      attachmentIds: [attachmentId, attachmentId],
+    })).toThrow("subject_analysis_attachment_ids_invalid");
+    expect(() => parseCreateSubjectPipelineInput({
+      ...validPipelineInput(),
+      attachmentIds: ["not-a-uuid"],
+    })).toThrow("subject_analysis_attachment_ids_invalid");
+    expect(() => parseCreateSubjectPipelineInput({
+      ...validPipelineInput(),
+      sourceUrl: "http://example.com/product",
+    })).toThrow("subject_analysis_source_url_invalid");
+  });
+
   it("normalizes manual input and defaults force to false", () => {
     expect(parseCreateSubjectAnalysisInput({
       subjectType: "service",
@@ -136,6 +241,67 @@ describe("subject-analysis customer inputs", () => {
       .toEqual({ workerId: "worker-1", leaseToken: "lease-1", leaseSeconds: 60 });
     expect(() => parseSubjectWorkerLeaseInput({ workerId: "worker-1", leaseToken: "lease-1", leaseSeconds: 10 }))
       .toThrow("subject_analysis_lease_seconds_invalid");
+  });
+});
+
+describe("subject-analysis.v2 worker contracts", () => {
+  const sourcePriority = ["manual_input", "attachments", "source_url", "brand_context", "public_research"] as const;
+  const analysisInput = () => ({
+    contractVersion: "subject-analysis.v2",
+    phase: "analysis",
+    brandContext: { brand: { name: "Example Brand" }, audiences: [{ name: "Careful buyers" }] },
+    subject: {
+      type: "product",
+      sourceUrl: null,
+      attachmentIds: [attachmentId],
+      manualInput: { name: "Product", promotionOrTerms: "", description: "Description" },
+    },
+    extracted: {
+      documents: [{ attachmentId, fileName: "catalog.pdf", mimeType: "application/pdf", text: "Catalog text" }],
+      images: [{ attachmentId, sourceUrl: `attachment://${attachmentId}`, storageUrl: "https://blob.example.com/product.png", mimeType: "image/png", altText: "Product" }],
+      sourcePage: null,
+      sourceGaps: [],
+    },
+    sourcePriority: [...sourcePriority],
+  });
+
+  it("strictly parses analysis and appeal phase inputs", () => {
+    expect(parseSubjectAnalysisInputV2(analysisInput())).toMatchObject({
+      contractVersion: "subject-analysis.v2",
+      phase: "analysis",
+      subject: { attachmentIds: [attachmentId] },
+    });
+    expect(parseSubjectAppealInputV2({
+      contractVersion: "subject-analysis.v2",
+      phase: "appeal",
+      brandContext: analysisInput().brandContext,
+      subject: analysisInput().subject,
+      analysisResult: validAnalysisResultV2(),
+      sourcePriority: [...sourcePriority],
+    })).toMatchObject({ phase: "appeal", analysisResult: { subjectType: "product" } });
+    expect(() => parseSubjectAnalysisInputV2({ ...analysisInput(), unknown: true }))
+      .toThrow("subject_analysis_input_v2_invalid");
+  });
+
+  it("requires the matching product or service analysis profile", () => {
+    expect(parseSubjectAnalysisResultV2(validAnalysisResultV2())).toMatchObject({
+      subjectType: "product",
+      productProfile: { category: "Apparel" },
+    });
+    expect(() => parseSubjectAnalysisResultV2({
+      ...validAnalysisResultV2(),
+      subjectType: "service",
+      productProfile: null,
+      serviceProfile: { deliveryModel: "Advisory" },
+      serviceSubtype: "not-a-subtype",
+    })).toThrow("subject_analysis_service_subtype_invalid");
+  });
+
+  it("requires exactly three targets and at least two appeals per target", () => {
+    expect(parseSubjectAppealResultV2(validAppealResultV2()).targets).toHaveLength(3);
+    const result = validAppealResultV2();
+    result.appealsByTarget["target-1"] = [appeal("only-one", "target-1")];
+    expect(() => parseSubjectAppealResultV2(result)).toThrow("subject_analysis_appeals_minimum_invalid");
   });
 });
 
