@@ -1,4 +1,4 @@
-import type { SubjectAnalysisJob, SubjectAnalysisResult, SubjectWorkerClient } from "./contracts.js";
+import type { SubjectWorkerClient, SubjectWorkerJob, SubjectWorkerResult } from "./contracts.js";
 
 export class SubjectAnalysisApiError extends Error {
   readonly retryable: boolean;
@@ -11,7 +11,17 @@ export class SubjectAnalysisApiError extends Error {
   }
 }
 
-export function createClient(apiUrl: string, token: string, fetchImpl: typeof fetch = fetch, timeoutMs = 15_000): SubjectWorkerClient {
+function completionMatchesJob(job: SubjectWorkerJob, result: SubjectWorkerResult): boolean {
+  if (job.contractVersion === "subject-analysis.v1") {
+    return result.contractVersion === "subject-analysis-result.v1";
+  }
+  if (job.phase === "analysis") {
+    return result.contractVersion === "subject-analysis-result.v2" && result.phase === "analysis";
+  }
+  return result.contractVersion === "subject-appeal-result.v2" && result.phase === "appeal";
+}
+
+export function createClient(apiUrl: string, token: string, fetchImpl: typeof fetch = fetch, timeoutMs = 300_000): SubjectWorkerClient {
   const base = apiUrl.replace(/\/+$/, "");
   async function request(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     let response: Response;
@@ -35,12 +45,15 @@ export function createClient(apiUrl: string, token: string, fetchImpl: typeof fe
   return {
     async claim(workerId, leaseSeconds) {
       const payload = await request("/worker/ai-content-subject-analyses/claim", { workerId, leaseSeconds });
-      return (payload.job ?? null) as SubjectAnalysisJob | null;
+      return (payload.job ?? null) as SubjectWorkerJob | null;
     },
     async heartbeat(job, leaseSeconds) {
       await request(`/worker/ai-content-subject-analyses/${job.analysisId}/heartbeat`, { workerId: job.workerId, leaseToken: job.leaseToken, leaseSeconds });
     },
-    async complete(job, result: SubjectAnalysisResult, leaseSeconds) {
+    async complete(job, result, leaseSeconds) {
+      if (!completionMatchesJob(job, result)) {
+        throw new SubjectAnalysisApiError("subject_analysis_completion_phase_mismatch", 400);
+      }
       await request(`/worker/ai-content-subject-analyses/${job.analysisId}/complete`, { workerId: job.workerId, leaseToken: job.leaseToken, leaseSeconds, result });
     },
     async fail(job, input) {

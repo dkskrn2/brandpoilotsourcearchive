@@ -1,13 +1,22 @@
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { SubjectAnalysisJob, SubjectAnalysisResult, SubjectWorkerClient } from "./contracts.js";
+import {
+  parseSubjectAppealResultV2,
+  SubjectAppealContractError,
+  type SubjectWorkerClient,
+  type SubjectWorkerJob,
+  type SubjectWorkerResult,
+} from "./contracts.js";
 import { SubjectAnalysisApiError } from "./client.js";
-import { buildSubjectAnalysisPrompt } from "./promptBuilder.js";
-import { parseSubjectAnalysisResult, SubjectAnalysisContractError } from "./result.js";
+import { buildSubjectPrompt } from "./promptBuilder.js";
+import { parseSubjectAnalysisResult, parseSubjectAnalysisResultV2, SubjectAnalysisContractError } from "./result.js";
+import { terminateProcessTree } from "@brand-pilot/worker-runtime";
 
-export interface SubjectAnalysisRunner { run(job: SubjectAnalysisJob): Promise<SubjectAnalysisResult>; }
+export { terminateProcessTree } from "@brand-pilot/worker-runtime";
+
+export interface SubjectAnalysisRunner { run(job: SubjectWorkerJob): Promise<SubjectWorkerResult>; }
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -44,36 +53,21 @@ export function createCodexRunner({
       const runtimeSkillDirectory = path.join(workDir, ".agents", "skills", "subject-analysis");
       await mkdir(runtimeSkillDirectory, { recursive: true });
       await copyFile(skillPath, path.join(runtimeSkillDirectory, "SKILL.md"));
-      await writeFile(jobFile, `${buildSubjectAnalysisPrompt(job)}\n`, "utf8");
+      await writeFile(jobFile, `${buildSubjectPrompt(job)}\n`, "utf8");
       await spawnProcess(process.execPath, [scriptPath, `--job-file=${jobFile}`, `--output-file=${outputFile}`, `--runtime-dir=${workDir}`], timeoutMs, buildSubjectAnalysisChildEnv(process.env));
-      return parseSubjectAnalysisResult(JSON.parse(await readFile(outputFile, "utf8")));
+      const output: unknown = JSON.parse(await readFile(outputFile, "utf8"));
+      if (job.contractVersion === "subject-analysis.v1") return parseSubjectAnalysisResult(output);
+      if (job.phase === "analysis") {
+        return parseSubjectAnalysisResultV2(output, {
+          expectedSubjectType: job.subject.type,
+          allowedAttachmentIds: job.subject.attachmentIds,
+        });
+      }
+      return parseSubjectAppealResultV2(output);
     } finally {
       await rm(workDir, { recursive: true, force: true });
     }
   } };
-}
-
-type TreeTerminationDependencies = {
-  platform?: NodeJS.Platform;
-  execFileImpl?: typeof execFile;
-  killImpl?: typeof process.kill;
-};
-
-export async function terminateProcessTree(child: Pick<ChildProcess, "pid" | "kill">, dependencies: TreeTerminationDependencies = {}): Promise<void> {
-  if (!child.pid) return;
-  const platform = dependencies.platform ?? process.platform;
-  if (platform === "win32") {
-    const execFileImpl = dependencies.execFileImpl ?? execFile;
-    await new Promise<void>((resolve) => {
-      execFileImpl("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true }, () => resolve());
-    });
-    return;
-  }
-  try {
-    (dependencies.killImpl ?? process.kill)(-child.pid, "SIGKILL");
-  } catch {
-    child.kill("SIGKILL");
-  }
 }
 
 const BunlessSpawn: SpawnFunction = async (command, args, timeoutMs, env) => {
@@ -94,7 +88,7 @@ const BunlessSpawn: SpawnFunction = async (command, args, timeoutMs, env) => {
   });
 };
 
-export async function processSubjectAnalysisJob({ client, runner, job, leaseSeconds, heartbeatMs = 30_000 }: { client: SubjectWorkerClient; runner: SubjectAnalysisRunner; job: SubjectAnalysisJob; leaseSeconds: number; heartbeatMs?: number }): Promise<{ status: "completed" | "failed"; analysisId: string }> {
+export async function processSubjectAnalysisJob({ client, runner, job, leaseSeconds, heartbeatMs = 30_000 }: { client: SubjectWorkerClient; runner: SubjectAnalysisRunner; job: SubjectWorkerJob; leaseSeconds: number; heartbeatMs?: number }): Promise<{ status: "completed" | "failed"; analysisId: string }> {
   let heartbeatInFlight = false;
   const heartbeat = setInterval(() => {
     if (heartbeatInFlight) return;
@@ -106,7 +100,9 @@ export async function processSubjectAnalysisJob({ client, runner, job, leaseSeco
     await client.complete(job, result, leaseSeconds);
     return { status: "completed", analysisId: job.analysisId };
   } catch (error) {
-    const retryable = !(error instanceof SubjectAnalysisContractError) && (!(error instanceof SubjectAnalysisApiError) || error.retryable);
+    const retryable = !(error instanceof SubjectAnalysisContractError)
+      && !(error instanceof SubjectAppealContractError)
+      && (!(error instanceof SubjectAnalysisApiError) || error.retryable);
     const message = error instanceof Error ? error.message : String(error);
     await client.fail(job, { errorCode: message.split(":")[0].slice(0, 120), errorMessage: message.slice(0, 2_000), retryable, leaseSeconds });
     return { status: "failed", analysisId: job.analysisId };

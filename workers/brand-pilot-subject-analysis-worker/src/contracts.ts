@@ -160,6 +160,32 @@ export interface SubjectAnalysisResultV2 {
   sourceGaps: string[];
 }
 
+export interface SubjectAppealInputV2 {
+  contractVersion: "subject-analysis.v2";
+  phase: "appeal";
+  brandContext: Record<string, unknown>;
+  subject: SubjectAnalysisInputV2["subject"];
+  analysisResult: SubjectAnalysisResultV2;
+  sourcePriority: SubjectAnalysisInputV2["sourcePriority"];
+}
+
+export interface SubjectAppealJobV2 extends SubjectAppealInputV2 {
+  analysisId: string;
+  workerId: string;
+  leaseToken: string;
+  leaseExpiresAt: string;
+}
+
+export interface SubjectAppealResultV2 {
+  contractVersion: "subject-appeal-result.v2";
+  phase: "appeal";
+  targets: [SubjectTarget, SubjectTarget, SubjectTarget];
+  appealsByTarget: Record<string, SubjectAppeal[]>;
+}
+
+export type SubjectWorkerJob = SubjectAnalysisJob | SubjectAnalysisJobV2 | SubjectAppealJobV2;
+export type SubjectWorkerResult = SubjectAnalysisResult | SubjectAnalysisResultV2 | SubjectAppealResultV2;
+
 const PROMPT_INPUT_LIMITS = {
   documents: 10,
   images: 10,
@@ -264,9 +290,194 @@ export function projectSubjectAnalysisPromptInput(job: SubjectAnalysisJobV2): Re
   };
 }
 
+export function projectSubjectAppealPromptInput(job: SubjectAppealJobV2): Record<string, unknown> {
+  const attachmentIds = Array.isArray(job.subject?.attachmentIds) ? job.subject.attachmentIds : [];
+  const sourceGaps = Array.isArray(job.analysisResult?.sourceGaps) ? job.analysisResult.sourceGaps : [];
+  return {
+    brandContext: boundedRecord(job.brandContext),
+    subject: {
+      type: job.subject?.type,
+      sourceUrl: job.subject?.sourceUrl === null ? null : clipped(job.subject?.sourceUrl, 2_048),
+      attachmentIds: attachmentIds.slice(0, 10).map((value) => clipped(value, 36)),
+      manualInput: {
+        name: clipped(job.subject?.manualInput?.name, 200),
+        promotionOrTerms: clipped(job.subject?.manualInput?.promotionOrTerms, 500),
+        description: clipped(job.subject?.manualInput?.description, 2_000),
+      },
+    },
+    analysisResult: {
+      ...boundedRecord(job.analysisResult),
+      sourceGaps: sourceGaps.slice(0, PROMPT_INPUT_LIMITS.sourceGaps).map((value) => clipped(value, 500)),
+    },
+    sourcePriority: ["manual_input", "attachments", "source_url", "brand_context", "public_research"],
+  };
+}
+
+export class SubjectAppealContractError extends Error {
+  readonly retryable = false;
+  constructor(message: string) {
+    super(message);
+    this.name = "SubjectAppealContractError";
+  }
+}
+
+const appealFail = (code: string): never => { throw new SubjectAppealContractError(code); };
+const appealRecord = (value: unknown, code: string): Record<string, unknown> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) appealFail(code);
+  return value as Record<string, unknown>;
+};
+const exactAppealRecord = (value: unknown, keys: readonly string[], code: string): Record<string, unknown> => {
+  const source = appealRecord(value, code);
+  if (Object.keys(source).some((key) => !keys.includes(key))) appealFail(code);
+  return source;
+};
+const appealText = (value: unknown, code: string, max = 2_000): string => {
+  const text = typeof value === "string" ? value : appealFail(code);
+  const normalized = text.trim();
+  if (!normalized || normalized.length > max) appealFail(code);
+  return normalized;
+};
+const appealHttps = (value: unknown, code: string): string => {
+  const url = appealText(value, code, 2_048);
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password) appealFail(code);
+  } catch {
+    appealFail(code);
+  }
+  return url;
+};
+const appealStrings = (value: unknown, code: string): string[] => {
+  const items = Array.isArray(value) ? value : appealFail(code);
+  if (items.length > 50) appealFail(code);
+  return items.map((item: unknown) => appealText(item, code));
+};
+const appealList = <T>(
+  value: unknown,
+  code: string,
+  parse: (item: unknown) => T,
+  max = 50,
+): T[] => {
+  const items = Array.isArray(value) ? value : appealFail(code);
+  if (items.length > max) appealFail(code);
+  return items.map(parse);
+};
+
+function assertAppealResultBudget(value: unknown): void {
+  const budget = { nodes: 0, characters: 0 };
+  const visit = (current: unknown, depth: number): void => {
+    budget.nodes += 1;
+    if (budget.nodes > 2_000 || depth > 20) appealFail("subject_appeal_v2_payload_limit_exceeded");
+    if (typeof current === "string") {
+      budget.characters += current.length;
+    } else if (Array.isArray(current)) {
+      for (const item of current) visit(item, depth + 1);
+    } else if (current && typeof current === "object") {
+      for (const key of Reflect.ownKeys(current)) {
+        if (typeof key !== "string") continue;
+        budget.characters += key.length;
+        const descriptor = Object.getOwnPropertyDescriptor(current, key);
+        if (descriptor && "value" in descriptor) visit(descriptor.value, depth + 1);
+      }
+    }
+    if (budget.characters > 100_000) appealFail("subject_appeal_v2_payload_limit_exceeded");
+  };
+  visit(value, 0);
+}
+
+function parseAppealEvidence(value: unknown): { claim: string; support: string; sourceUrl: string } {
+  const source = exactAppealRecord(value, ["claim", "support", "sourceUrl"], "subject_analysis_evidence_invalid");
+  return {
+    claim: appealText(source.claim, "subject_analysis_evidence_invalid"),
+    support: appealText(source.support, "subject_analysis_evidence_invalid"),
+    sourceUrl: appealHttps(source.sourceUrl, "subject_analysis_source_url_invalid"),
+  };
+}
+
+function parseAppealTarget(value: unknown): SubjectTarget {
+  const source = exactAppealRecord(
+    value,
+    ["id", "name", "traits", "painPoints", "purchaseMotivations", "uspEvidence"],
+    "subject_analysis_target_invalid",
+  );
+  return {
+    id: appealText(source.id, "subject_analysis_target_invalid", 200),
+    name: appealText(source.name, "subject_analysis_target_invalid", 200),
+    traits: appealStrings(source.traits, "subject_analysis_target_invalid"),
+    painPoints: appealStrings(source.painPoints, "subject_analysis_target_invalid"),
+    purchaseMotivations: appealStrings(source.purchaseMotivations, "subject_analysis_target_invalid"),
+    uspEvidence: appealList(source.uspEvidence, "subject_analysis_target_invalid", parseAppealEvidence, 20),
+  };
+}
+
+function parseAppealItem(value: unknown): SubjectAppeal {
+  const source = exactAppealRecord(
+    value,
+    ["id", "targetId", "title", "description", "evidenceType", "connectionReason", "sources"],
+    "subject_analysis_appeal_invalid",
+  );
+  if (source.evidenceType !== "product_fact" && source.evidenceType !== "public_research"
+    && source.evidenceType !== "manual_input") appealFail("subject_analysis_appeal_invalid");
+  const evidenceType = source.evidenceType as SubjectEvidenceType;
+  const sources = appealList(source.sources, "subject_analysis_appeal_sources_invalid", (item) => {
+    const entry = exactAppealRecord(item, ["title", "url"], "subject_analysis_appeal_sources_invalid");
+    return {
+      title: appealText(entry.title, "subject_analysis_appeal_sources_invalid", 500),
+      url: appealHttps(entry.url, "subject_analysis_appeal_sources_invalid"),
+    };
+  }, 20);
+  if (source.evidenceType === "public_research" && sources.length === 0) {
+    appealFail("subject_analysis_appeal_sources_invalid");
+  }
+  return {
+    id: appealText(source.id, "subject_analysis_appeal_invalid", 200),
+    targetId: appealText(source.targetId, "subject_analysis_appeal_invalid", 200),
+    title: appealText(source.title, "subject_analysis_appeal_invalid", 500),
+    description: appealText(source.description, "subject_analysis_appeal_invalid"),
+    evidenceType,
+    connectionReason: appealText(source.connectionReason, "subject_analysis_appeal_invalid"),
+    sources,
+  };
+}
+
+export function parseSubjectAppealResultV2(value: unknown): SubjectAppealResultV2 {
+  assertAppealResultBudget(value);
+  const source = exactAppealRecord(
+    value,
+    ["contractVersion", "phase", "targets", "appealsByTarget"],
+    "subject_appeal_result_v2_invalid",
+  );
+  if (source.contractVersion !== "subject-appeal-result.v2") appealFail("subject_analysis_result_version_invalid");
+  if (source.phase !== "appeal") appealFail("subject_analysis_phase_invalid");
+  const rawTargets = Array.isArray(source.targets) ? source.targets : appealFail("subject_analysis_targets_invalid");
+  if (rawTargets.length !== 3) appealFail("subject_analysis_targets_invalid");
+  const targets = rawTargets.map(parseAppealTarget) as [SubjectTarget, SubjectTarget, SubjectTarget];
+  const targetIds = new Set(targets.map(({ id }) => id));
+  if (targetIds.size !== 3) appealFail("subject_analysis_target_id_duplicate");
+
+  const rawAppeals = appealRecord(source.appealsByTarget, "subject_analysis_appeals_invalid");
+  if (Object.keys(rawAppeals).length !== 3
+    || Object.keys(rawAppeals).some((targetId) => !targetIds.has(targetId))) {
+    appealFail("subject_analysis_appeals_target_invalid");
+  }
+  const appealsByTarget: Record<string, SubjectAppeal[]> = {};
+  const appealIds = new Set<string>();
+  for (const targetId of targetIds) {
+    const appeals = appealList(rawAppeals[targetId], "subject_analysis_appeals_invalid", parseAppealItem, 20);
+    if (appeals.length < 2) appealFail("subject_analysis_appeals_minimum_invalid");
+    for (const parsed of appeals) {
+      if (parsed.targetId !== targetId) appealFail("subject_analysis_appeals_target_invalid");
+      if (appealIds.has(parsed.id)) appealFail("subject_analysis_appeal_id_duplicate");
+      appealIds.add(parsed.id);
+    }
+    appealsByTarget[targetId] = appeals;
+  }
+  return { contractVersion: "subject-appeal-result.v2", phase: "appeal", targets, appealsByTarget };
+}
+
 export interface SubjectWorkerClient {
-  claim(workerId: string, leaseSeconds: number): Promise<SubjectAnalysisJob | null>;
-  heartbeat(job: SubjectAnalysisJob, leaseSeconds: number): Promise<void>;
-  complete(job: SubjectAnalysisJob, result: SubjectAnalysisResult, leaseSeconds: number): Promise<void>;
-  fail(job: SubjectAnalysisJob, input: { errorCode: string; errorMessage: string; retryable: boolean; leaseSeconds: number }): Promise<void>;
+  claim(workerId: string, leaseSeconds: number): Promise<SubjectWorkerJob | null>;
+  heartbeat(job: SubjectWorkerJob, leaseSeconds: number): Promise<void>;
+  complete(job: SubjectWorkerJob, result: SubjectWorkerResult, leaseSeconds: number): Promise<void>;
+  fail(job: SubjectWorkerJob, input: { errorCode: string; errorMessage: string; retryable: boolean; leaseSeconds: number }): Promise<void>;
 }

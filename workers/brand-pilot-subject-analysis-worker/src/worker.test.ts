@@ -2,7 +2,14 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SubjectAnalysisJob, SubjectAnalysisResult, SubjectWorkerClient } from "./contracts.js";
+import type {
+  SubjectAnalysisJob,
+  SubjectAnalysisJobV2,
+  SubjectAnalysisResult,
+  SubjectAppealJobV2,
+  SubjectAppealResultV2,
+  SubjectWorkerClient,
+} from "./contracts.js";
 import { SubjectAnalysisApiError } from "./client.js";
 import { buildSubjectAnalysisChildEnv, createCodexRunner, processSubjectAnalysisJob, runSubjectAnalysisOnce, terminateProcessTree, type SubjectAnalysisRunner } from "./worker.js";
 import { SubjectAnalysisContractError } from "./result.js";
@@ -15,6 +22,8 @@ const job: SubjectAnalysisJob = {
   researchPolicy: { publicWebSearch: true, allowedPurposes: ["voc", "alternatives", "market_context"], requireSourceUrl: true },
 };
 const result = { contractVersion: "subject-analysis-result.v1" } as SubjectAnalysisResult;
+const attachmentId = "123e4567-e89b-42d3-a456-426614174000";
+const foreignAttachmentId = "123e4567-e89b-42d3-a456-426614174001";
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -30,6 +39,102 @@ function validResult() {
 
 function client(overrides: Partial<SubjectWorkerClient> = {}): SubjectWorkerClient {
   return { claim: vi.fn(async () => job), heartbeat: vi.fn(async () => undefined), complete: vi.fn(async () => undefined), fail: vi.fn(async () => undefined), ...overrides };
+}
+
+function analysisJobV2(type: "product" | "service" = "product"): SubjectAnalysisJobV2 {
+  return {
+    analysisId: "analysis-v2",
+    workerId: "worker-1",
+    leaseToken: "lease-v2",
+    leaseExpiresAt: "2026-07-22T00:03:00.000Z",
+    contractVersion: "subject-analysis.v2",
+    phase: "analysis",
+    brandContext: { name: "브랜드" },
+    subject: {
+      type,
+      sourceUrl: `https://example.com/${type}`,
+      attachmentIds: [attachmentId],
+      manualInput: { name: "대상", promotionOrTerms: "", description: "설명" },
+    },
+    extracted: { documents: [], images: [], sourcePage: null, sourceGaps: [] },
+    sourcePriority: ["manual_input", "attachments", "source_url", "brand_context", "public_research"],
+  };
+}
+
+function validAnalysisResultV2(sourceAttachmentId = attachmentId) {
+  return {
+    contractVersion: "subject-analysis-result.v2" as const,
+    phase: "analysis" as const,
+    subjectType: "product" as const,
+    summary: "제품 분석",
+    verifiedFacts: [{ claim: "소재", support: "첨부 확인", sourceUrl: `attachment://${sourceAttachmentId}` }],
+    voc: [],
+    alternatives: [],
+    barriers: [],
+    productProfile: {
+      name: "정리함",
+      category: "생활용품",
+      specifications: ["중형"],
+      materials: ["재생 플라스틱"],
+      options: ["파란색"],
+      price: "직접 입력 가격",
+      discountsAndPromotions: [],
+      shipping: [],
+      returns: [],
+      functions: [{ function: "분리 수납", benefit: "정리 편의", purchaseReason: "반복 정리" }],
+      useContexts: ["책상"],
+      purchaseBarriers: ["크기"],
+      reviewPatterns: { recurringSatisfaction: [], recurringComplaints: [] },
+      productImageCandidates: [],
+      detailImageCandidates: [],
+    },
+    serviceProfile: null,
+    serviceSubtype: null,
+    sourceGaps: [],
+  };
+}
+
+function appealJobV2(): SubjectAppealJobV2 {
+  const analysisJob = analysisJobV2();
+  return {
+    analysisId: analysisJob.analysisId,
+    workerId: analysisJob.workerId,
+    leaseToken: analysisJob.leaseToken,
+    leaseExpiresAt: analysisJob.leaseExpiresAt,
+    contractVersion: "subject-analysis.v2",
+    phase: "appeal",
+    brandContext: analysisJob.brandContext,
+    subject: analysisJob.subject,
+    analysisResult: validAnalysisResultV2(),
+    sourcePriority: analysisJob.sourcePriority,
+  };
+}
+
+function validAppealResultV2(): SubjectAppealResultV2 {
+  const target = (id: string) => ({ id, name: id, traits: ["특성"], painPoints: ["문제"], purchaseMotivations: ["동기"], uspEvidence: [{ claim: "근거", support: "설명", sourceUrl: "https://example.com/evidence" }] });
+  const appeal = (id: string, targetId: string) => ({ id, targetId, title: id, description: "설명", evidenceType: "product_fact" as const, connectionReason: "연결", sources: [{ title: "근거", url: "https://example.com/evidence" }] });
+  return {
+    contractVersion: "subject-appeal-result.v2",
+    phase: "appeal",
+    targets: [target("t1"), target("t2"), target("t3")],
+    appealsByTarget: {
+      t1: [appeal("a1", "t1"), appeal("a2", "t1")],
+      t2: [appeal("a3", "t2"), appeal("a4", "t2")],
+      t3: [appeal("a5", "t3"), appeal("a6", "t3")],
+    },
+  };
+}
+
+async function runnerWithOutput(output: unknown) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "subject-analysis-worker-v2-"));
+  temporaryDirectories.push(root);
+  const skillPath = path.join(root, "SKILL.md");
+  await writeFile(skillPath, "# subject-analysis runtime skill\n", "utf8");
+  const spawnProcess = vi.fn(async (_command: string, args: string[]) => {
+    const outputFile = args.find((arg) => arg.startsWith("--output-file="))!.slice("--output-file=".length);
+    await writeFile(outputFile, JSON.stringify(output), "utf8");
+  });
+  return createCodexRunner({ runtimeRoot: path.join(root, "runtime"), skillPath, spawnProcess });
 }
 
 describe("subject analysis worker", () => {
@@ -78,6 +183,32 @@ describe("subject analysis worker", () => {
     });
     const runner = createCodexRunner({ runtimeRoot: path.join(root, "runtime"), skillPath, spawnProcess });
     await expect(runner.run(job)).resolves.toMatchObject({ contractVersion: "subject-analysis-result.v1" });
+  });
+
+  it("parses v2 analysis output with the job subject type", async () => {
+    const runner = await runnerWithOutput({
+      ...validAnalysisResultV2(),
+      subjectType: "service",
+      productProfile: null,
+      serviceProfile: {},
+      serviceSubtype: "other_service",
+    });
+
+    await expect(runner.run(analysisJobV2("product"))).rejects.toThrow("subject_analysis_subject_type_mismatch");
+  });
+
+  it("allows only job attachment IDs in v2 analysis output", async () => {
+    const runner = await runnerWithOutput(validAnalysisResultV2(foreignAttachmentId));
+
+    await expect(runner.run(analysisJobV2())).rejects.toThrow("subject_analysis_attachment_not_allowed");
+  });
+
+  it("uses the strict appeal result parser for appeal jobs", async () => {
+    const output = validAppealResultV2();
+    output.appealsByTarget.t3[0].id = "a1";
+    const runner = await runnerWithOutput(output);
+
+    await expect(runner.run(appealJobV2())).rejects.toThrow("subject_analysis_appeal_id_duplicate");
   });
 
   it("does not overlap heartbeat requests", async () => {
