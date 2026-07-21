@@ -11,6 +11,7 @@ import type {
   AiGenerationOutput,
   GenerationAttachment,
   GenerationBrief,
+  LegacySubjectAnalysisInput,
   SubjectAnalysis,
   SubjectAnalysisInput,
   SubjectAppeal,
@@ -144,6 +145,12 @@ function mapSubjectAnalysis(value: ApiSubjectAnalysis): SubjectAnalysis {
   };
 }
 
+function isSubjectAnalysisInputV2(input: SubjectAnalysisInput | LegacySubjectAnalysisInput): input is SubjectAnalysisInput {
+  return typeof (input as Partial<SubjectAnalysisInput>).generationId === "string"
+    && Array.isArray((input as Partial<SubjectAnalysisInput>).attachmentIds)
+    && "promotionOrTerms" in input.manualInput;
+}
+
 async function fileBytes(file: File) {
   if (typeof file.arrayBuffer === "function") return file.arrayBuffer();
   return new Promise<ArrayBuffer>((resolve, reject) => {
@@ -237,7 +244,8 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
         throw error;
       }
     },
-    async requestSubjectAnalysis(brandId, input: SubjectAnalysisInput<string | null>) {
+    async requestSubjectAnalysis(brandId, input: SubjectAnalysisInput | LegacySubjectAnalysisInput) {
+      if (!isSubjectAnalysisInputV2(input)) throw new Error("subject_analysis_v2_input_required");
       return mapSubjectAnalysis(await client.requestJson<ApiSubjectAnalysis>(`/brands/${brandId}/ai-content/subject-analyses`, { method: "POST", body: JSON.stringify({ contractVersion: "subject-analysis.v2", ...input }) }));
     },
     async getSubjectAnalysis(brandId, analysisId) {

@@ -181,16 +181,21 @@ export interface AiContentDraft {
   secondaryAppeals: AppealSnapshot[];
 }
 
-export interface SubjectAnalysisInput<TSourceUrl extends string | null = any> {
-  generationId?: string;
+export interface SubjectAnalysisInput {
+  generationId: string;
   subjectType: SubjectType;
-  sourceUrl: TSourceUrl;
-  attachmentIds?: string[];
-  manualInput:
-    | { name: string; promotionOrTerms: string; promotion?: string; description: string }
-    | { name: string; promotion: string; promotionOrTerms?: string; description: string };
+  sourceUrl: string | null;
+  attachmentIds: string[];
+  manualInput: { name: string; promotionOrTerms: string; description: string };
   idempotencyKey: string;
-  /** @deprecated v1 mock and restore compatibility only. New requests never send this field. */
+}
+
+/** @deprecated Test-double compatibility for pre-v2 callers. The HTTP gateway rejects this shape. */
+export interface LegacySubjectAnalysisInput {
+  subjectType: SubjectType;
+  sourceUrl: string;
+  manualInput: { name: string; promotion: string; description: string };
+  idempotencyKey: string;
   force?: boolean;
 }
 
@@ -254,7 +259,7 @@ export interface AiContentGateway {
   }): Promise<{ outputId: string; publishGroupId: string; targets: AiContentPublishTargetResult[] }>;
   listChannels(brandId: string): Promise<ChannelConnection[]>;
   getCachedSubjectAnalysis(brandId: string, subjectType: SubjectType, sourceUrl: string): Promise<SubjectAnalysis | null>;
-  requestSubjectAnalysis(brandId: string, input: SubjectAnalysisInput<string | null>): Promise<SubjectAnalysis>;
+  requestSubjectAnalysis(brandId: string, input: SubjectAnalysisInput | LegacySubjectAnalysisInput): Promise<SubjectAnalysis>;
   getSubjectAnalysis(brandId: string, analysisId: string): Promise<SubjectAnalysis>;
   reanalyzeSubject(brandId: string, analysisId: string, idempotencyKey: string): Promise<SubjectAnalysis>;
   selectSubjectImage(brandId: string, analysisId: string, imageId: string): Promise<SubjectAnalysis>;

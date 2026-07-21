@@ -1,8 +1,8 @@
 import { webcrypto } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { apiClient } from "../../lib/apiClient";
 import { createAiContentApiGateway } from "./aiContentApiGateway";
-import type { AiContentDraft } from "./types";
+import type { AiContentDraft, SubjectAnalysisInput } from "./types";
 
 const draft: AiContentDraft = {
   type: "card_news",
@@ -44,6 +44,21 @@ function clientWith(requestJson: ReturnType<typeof vi.fn>) {
 }
 
 describe("createAiContentApiGateway", () => {
+  it("keeps the subject analysis input identical to the v2 customer contract", () => {
+    expectTypeOf<SubjectAnalysisInput>().toEqualTypeOf<{
+      generationId: string;
+      subjectType: "product" | "service";
+      sourceUrl: string | null;
+      attachmentIds: string[];
+      manualInput: {
+        name: string;
+        promotionOrTerms: string;
+        description: string;
+      };
+      idempotencyKey: string;
+    }>();
+  });
+
   it("normalizes terminal generation statuses to wizard step 5", async () => {
     const requestJson = vi.fn(async () => generation("completed"));
     const gateway = createAiContentApiGateway(clientWith(requestJson));
@@ -189,6 +204,19 @@ describe("createAiContentApiGateway", () => {
         }),
       }),
     );
+  });
+
+  it("rejects legacy-shaped subject requests before calling the API", async () => {
+    const requestJson = vi.fn();
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await expect(gateway.requestSubjectAnalysis("brand-1", {
+      subjectType: "product",
+      sourceUrl: "https://example.com/product",
+      manualInput: { name: "제품", promotion: "할인", description: "설명" },
+      idempotencyKey: "legacy-request",
+    } as never)).rejects.toThrow("subject_analysis_v2_input_required");
+    expect(requestJson).not.toHaveBeenCalled();
   });
 
   it("normalizes legacy drafts and omits secondary appeals from new writes", async () => {

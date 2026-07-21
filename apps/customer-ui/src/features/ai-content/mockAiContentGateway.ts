@@ -6,6 +6,7 @@ import type {
   AiContentUsage,
   AiGenerationOutput,
   GenerationBrief,
+  LegacySubjectAnalysisInput,
   AppealPreset,
   AudiencePreset,
   SubjectAnalysis,
@@ -177,6 +178,7 @@ const references: AiContentReference[] = [
 ];
 
 function deterministicSubjectAnalysis(brandId: string, input: SubjectAnalysisInput, version = 1): SubjectAnalysis {
+  const sourceUrl = input.sourceUrl ?? "";
   const analysisId = `subject-analysis-${brandId}-${input.subjectType}`;
   const targets = [1, 2, 3].map((index) => ({
     id: `target-${index}`,
@@ -184,7 +186,7 @@ function deterministicSubjectAnalysis(brandId: string, input: SubjectAnalysisInp
     traits: [`${index}번 추천 타깃의 생활 맥락`],
     painPoints: [`${index}번 타깃이 해결하려는 문제`],
     purchaseMotivations: [`${index}번 타깃의 선택 동기`],
-    uspEvidence: [{ claim: "확인 가능한 핵심 특징", support: "분석 입력과 브랜드 정보에서 확인", sourceUrl: input.sourceUrl }],
+    uspEvidence: [{ claim: "확인 가능한 핵심 특징", support: "분석 입력과 브랜드 정보에서 확인", sourceUrl }],
   })) as SubjectAnalysis["targets"];
   const appealsByTarget = Object.fromEntries(targets.map((target, targetIndex) => [target.id, [1, 2].map((appealIndex) => ({
     id: `${target.id}-appeal-${appealIndex}`,
@@ -193,30 +195,46 @@ function deterministicSubjectAnalysis(brandId: string, input: SubjectAnalysisInp
     description: "제품·서비스의 확인 가능한 이점을 고객 상황과 연결합니다.",
     evidenceType: "product_fact" as const,
     connectionReason: `${target.name}의 문제와 직접 연결됩니다.`,
-    sources: [{ title: "입력한 페이지", url: input.sourceUrl }],
+    sources: [{ title: "입력한 페이지", url: sourceUrl }],
   }))]));
   return {
     id: analysisId,
     workspaceId: "workspace-demo",
     brandId,
     subjectType: input.subjectType,
-    sourceUrl: input.sourceUrl,
-    normalizedUrl: input.sourceUrl.replace(/#.*$/, ""),
+    sourceUrl,
+    normalizedUrl: sourceUrl.replace(/#.*$/, ""),
     input: { ...input.manualInput },
     status: "ready",
-    facts: [{ key: "입력 유형", value: input.subjectType === "product" ? "제품" : "서비스", sourceUrl: input.sourceUrl }],
+    facts: [{ key: "입력 유형", value: input.subjectType === "product" ? "제품" : "서비스", sourceUrl }],
     structuredData: { name: input.manualInput.name || "분석 대상" },
     research: { summary: "결정론적 목 데이터" },
     targets,
     appealsByTarget,
     selectedImageId: "subject-image-1",
-    images: [{ id: "subject-image-1", analysisId, sourceUrl: input.sourceUrl, storageUrl: "https://blob.example.com/subject-image-1.png", storagePath: `subjects/${analysisId}/1.png`, width: 1024, height: 1024, mimeType: "image/png", altText: "대표 이미지", role: input.subjectType, selectionScore: 1, createdAt: "2026-07-20T00:00:00.000Z" }],
+    images: [{ id: "subject-image-1", analysisId, sourceUrl, storageUrl: "https://blob.example.com/subject-image-1.png", storagePath: `subjects/${analysisId}/1.png`, width: 1024, height: 1024, mimeType: "image/png", altText: "대표 이미지", role: input.subjectType, selectionScore: 1, createdAt: "2026-07-20T00:00:00.000Z" }],
     analysisVersion: version,
     errorCode: null,
     errorMessage: null,
     createdAt: "2026-07-20T00:00:00.000Z",
     updatedAt: "2026-07-20T00:00:00.000Z",
     completedAt: "2026-07-20T00:00:00.000Z",
+  };
+}
+
+function normalizeMockSubjectAnalysisInput(input: SubjectAnalysisInput | LegacySubjectAnalysisInput): SubjectAnalysisInput {
+  if ("generationId" in input) return input;
+  return {
+    generationId: "00000000-0000-4000-8000-000000000001",
+    subjectType: input.subjectType,
+    sourceUrl: input.sourceUrl,
+    attachmentIds: [],
+    manualInput: {
+      name: input.manualInput.name,
+      promotionOrTerms: input.manualInput.promotion,
+      description: input.manualInput.description,
+    },
+    idempotencyKey: input.idempotencyKey,
   };
 }
 
@@ -343,8 +361,8 @@ export function createMockAiContentGateway(): AiContentGateway {
     async requestSubjectAnalysis(brandId, input) {
       const key = `${brandId}:${input.subjectType}:${input.sourceUrl}`;
       const existing = subjectRows.get(key);
-      if (existing && !input.force) return copy(existing);
-      const next = deterministicSubjectAnalysis(brandId, input, existing ? existing.analysisVersion + 1 : 1);
+      if (existing && !("force" in input && input.force)) return copy(existing);
+      const next = deterministicSubjectAnalysis(brandId, normalizeMockSubjectAnalysisInput(input), existing ? existing.analysisVersion + 1 : 1);
       subjectRows.set(key, next);
       return copy(next);
     },
@@ -355,7 +373,21 @@ export function createMockAiContentGateway(): AiContentGateway {
     },
     async reanalyzeSubject(brandId, analysisId, idempotencyKey) {
       const analysis = await this.getSubjectAnalysis(brandId, analysisId);
-      return this.requestSubjectAnalysis(brandId, { subjectType: analysis.subjectType, sourceUrl: analysis.sourceUrl, manualInput: analysis.input, idempotencyKey, force: true });
+      const input: SubjectAnalysisInput = {
+        generationId: analysis.generationId ?? "00000000-0000-4000-8000-000000000001",
+        subjectType: analysis.subjectType,
+        sourceUrl: analysis.sourceUrl || null,
+        attachmentIds: [],
+        manualInput: {
+          name: analysis.input.name,
+          promotionOrTerms: analysis.input.promotionOrTerms ?? analysis.input.promotion ?? "",
+          description: analysis.input.description,
+        },
+        idempotencyKey,
+      };
+      const next = deterministicSubjectAnalysis(brandId, input, analysis.analysisVersion + 1);
+      subjectRows.set(`${brandId}:${input.subjectType}:${input.sourceUrl}`, next);
+      return copy(next);
     },
     async selectSubjectImage(brandId, analysisId, imageId) {
       const analysis = await this.getSubjectAnalysis(brandId, analysisId);
