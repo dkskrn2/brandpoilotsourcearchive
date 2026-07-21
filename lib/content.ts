@@ -28,6 +28,365 @@ export type ContentArticle = {
   sections: ContentSection[];
 };
 
+type BrandSuccessStoryConfig = {
+  slug: string;
+  brand: string;
+  title: string;
+  summary: string;
+  focus: string;
+  customerMoment: string;
+  mechanism: string;
+  operatingDecision: string;
+  risk: string;
+  pilot: string;
+  signals: string;
+  sources: string[];
+};
+
+function createBrandSuccessStory(config: BrandSuccessStoryConfig): ContentArticle {
+  const { slug, brand, title, summary, focus, customerMoment, mechanism, operatingDecision, risk, pilot, signals, sources } = config;
+
+  return {
+    slug,
+    category: "Brand Case Study",
+    title,
+    summary,
+    publishedAt: "2026.07.15",
+    readingTime: "18분",
+    image: "",
+    imageAlt: `${brand}의 ${focus} 운영 방식을 설명하는 사례 이미지`,
+    introduction: `${brand}의 사례는 눈에 띄는 캠페인 하나를 복제하는 이야기가 아닙니다. ${customerMoment}처럼 고객이 실제로 망설이거나 다음 행동을 정하는 순간에, ${mechanism}을 제품·정책·운영의 한 묶음으로 연결한 방식에 가깝습니다. 이 글은 공개된 자료를 바탕으로 그 구조를 분해하고, 작은 브랜드가 같은 원리를 더 작은 범위에서 시험하는 방법을 정리합니다. 특정 수치나 결과를 다른 사업의 성과 보장으로 읽기보다, 고객의 불확실성을 어떤 운영 결정으로 줄였는지에 집중해 보세요.`,
+    sections: [
+      {
+        title: `${brand} 사례의 핵심은 ${focus}을 말이 아니라 고객의 다음 행동으로 만든 데 있습니다`,
+        paragraphs: [
+          `${customerMoment}에는 고객이 제품의 기능보다 "지금 이 선택을 해도 괜찮은가"를 먼저 판단합니다. 이때 브랜드가 좋은 문구만 더하면 관심은 생겨도 행동으로 이어지기 어렵습니다. ${brand} 사례에서 볼 수 있는 출발점은 고객이 결정을 미루는 이유를 한 문장으로 좁히고, 그 이유를 해소하는 장면을 서비스 흐름 안에 배치하는 것입니다. 고객이 보게 되는 정보, 확인하는 기준, 문제가 생겼을 때 받을 도움, 다음에 다시 돌아올 이유가 따로 놀지 않도록 설계해야 합니다.`,
+          `${brand}의 접근을 성공담으로 과장할 필요는 없습니다. 더 중요한 것은 ${mechanism}이 브랜드의 약속을 실제 경험으로 번역한다는 점입니다. 고객은 광고를 본 뒤에도 비교하고, 동료에게 묻고, 결제 직전에 다시 망설입니다. 따라서 한 번의 노출보다 망설임이 생기는 각 지점에 어떤 증거와 선택지를 둘지를 정해야 합니다. 브랜드 경험은 캠페인 종료 시점이 아니라 고객이 다음 행동을 끝낼 때 비로소 검증됩니다.`
+        ],
+        quote: `${brand}에서 가져와야 할 것은 겉모습이 아니라, 고객의 불확실성을 한 번에 없애려 하지 않고 다음 행동마다 줄여 나가는 운영 원리입니다.`,
+        points: [
+          `고객 순간: ${customerMoment}`,
+          `작동 장치: ${mechanism}`,
+          `운영 결정: ${operatingDecision}`,
+          `보호해야 할 위험: ${risk}`
+        ]
+      },
+      {
+        title: "고객이 느끼는 가치와 회사가 관리하는 운영 신호를 같은 흐름에 둡니다",
+        paragraphs: [
+          `좋은 사례는 고객용 화면과 내부 운영표가 서로 다른 이야기를 하지 않습니다. 고객에게는 이해하기 쉬운 약속과 다음 단계가 보이고, 팀에는 그 약속이 지켜졌는지 확인할 수 있는 상태값과 예외 처리 기준이 남습니다. ${brand}의 방식도 ${operatingDecision}이라는 선택을 통해 고객 경험과 운영 실행을 묶어 둡니다. 이 연결이 없으면 마케팅은 기대를 키우고 운영은 그 기대를 뒤늦게 수습하는 구조가 됩니다.`,
+          `작은 팀은 복잡한 시스템부터 만들 필요가 없습니다. 고객이 처음 보는 안내, 완료로 간주하는 조건, 도움이 필요할 때의 경로, 담당자가 확인할 한 줄의 기록만 먼저 맞추면 됩니다. 이후 문의·취소·재방문 같은 실제 기록을 보면서 약속이 과한지, 안내가 부족한지, 혹은 처리 시간이 문제인지 구분합니다. 고객 목소리와 운영 기록이 같은 문제를 가리킬 때에만 다음 개선으로 넘어가는 편이 안전합니다.`
+        ],
+        table: {
+          caption: `${brand} 사례를 운영 흐름으로 읽는 네 가지 질문`,
+          headers: ["고객 단계", "고객이 확인하려는 것", "팀이 남길 신호", "다음 결정"],
+          rows: [
+            ["처음 탐색", "내 상황에 맞는지", "유입 맥락·질문 유형", "안내와 선택지 조정"],
+            ["비교·결정", "믿을 근거가 있는지", "반복되는 망설임·이탈 이유", "증거와 조건 보강"],
+            ["이용·완료", "약속이 지켜졌는지", "완료율·지원 요청·예외", "운영 병목 제거"],
+            ["재방문·추천", "다시 쓸 이유가 있는지", "재이용·공유·불만 맥락", "다음 관계 설계"]
+          ]
+        }
+      },
+      {
+        title: "성장 장치에는 늘 운영 범위와 예외 처리 기준이 함께 있어야 합니다",
+        paragraphs: [
+          `${mechanism}은 고객에게 편리하게 보일수록 회사에는 더 많은 예외를 만들 수 있습니다. 그래서 좋은 운영은 제공 범위를 숨기지 않습니다. 누구에게 적용되는지, 무엇을 보장하는지, 어떤 경우에는 다른 경로가 필요한지, 문제가 생기면 누가 언제 판단하는지를 미리 정합니다. 조건을 밝히는 일은 전환을 낮추기 위한 장벽이 아니라, 잘못된 기대 때문에 무너지는 경험을 막는 장치입니다.`,
+          `특히 ${risk}은 초기 파일럿에서 반드시 관찰해야 합니다. 모든 고객에게 똑같이 제공하기보다 한 고객군·한 채널·한 업무 시간대에만 먼저 적용해 보세요. 이때 "반응이 좋다"는 말보다 실제 완료와 지원 부담이 함께 좋아졌는지를 봐야 합니다. 한쪽만 좋아졌다면 고객에게는 편리하지만 팀에는 지속 불가능한 설계일 수 있습니다.`
+        ],
+        points: [
+          "적용 대상과 제외 대상을 고객에게 보이게 적습니다.",
+          "정상 흐름보다 취소·변경·오류 같은 예외 흐름을 먼저 적습니다.",
+          "담당자 재량이 필요한 순간과 자동으로 처리해도 되는 순간을 분리합니다.",
+          "할인·보상보다 문제 원인을 기록해 다음 운영 규칙으로 남깁니다."
+        ]
+      },
+      {
+        title: "작은 브랜드는 브랜드 전체를 바꾸지 말고 한 장면을 파일럿으로 선택합니다",
+        paragraphs: [
+          `이 사례를 그대로 대형 프로그램으로 확장할 필요는 없습니다. 첫 실험은 ${pilot}처럼 고객에게 보이는 결과가 분명하고, 팀이 직접 통제할 수 있는 장면이어야 합니다. 파일럿의 목표는 "브랜드가 좋아 보이는가"가 아니라 고객이 다음 행동을 더 쉽게 끝내는가를 확인하는 것입니다. 따라서 시작 전에는 현재 완료율, 자주 묻는 질문, 처리 시간, 재방문 신호 중 두세 개만 기준값으로 남깁니다.`,
+          `실험 동안에는 새 기능을 계속 더하지 않습니다. 한 번에 하나의 가설만 바꾸고, 고객이 실제로 어디에서 멈췄는지 짧은 메모를 남깁니다. 종료 후에는 기대한 변화, 예상하지 못한 부작용, 유지에 필요한 인력과 비용을 한 장에 정리합니다. 이 문서가 있어야 다음 달에 범위를 늘릴지, 문구만 고칠지, 아예 중단할지를 감으로 결정하지 않게 됩니다.`
+        ],
+        table: {
+          caption: "4주 파일럿의 최소 운영 리듬",
+          headers: ["주차", "해야 할 일", "확인할 증거", "결정"],
+          rows: [
+            ["1주차", "고객 순간과 완료 조건 고정", "최근 문의·이탈 사례", "범위와 제외 기준 확정"],
+            ["2주차", "한 채널에서 안내와 운영 시작", "완료·지원 요청 기록", "초기 마찰 수정"],
+            ["3주차", "예외 흐름과 담당자 부담 점검", "처리 시간·반복 문제", "자동화 또는 범위 조정"],
+            ["4주차", "고객 피드백과 수치 복기", signals, "확대·수정·중단 결정"]
+          ]
+        }
+      },
+      {
+        title: "성과는 유명한 결과가 아니라 재현 가능한 선택 규칙으로 남겨야 합니다",
+        paragraphs: [
+          `브랜드 사례를 읽을 때 가장 흔한 실수는 눈에 띄는 결과를 원인으로 착각하는 것입니다. 공개된 성장 수치나 인지도는 여러 제품 변화, 시장 환경, 유통, 투자, 시간의 누적이 겹친 결과일 수 있습니다. 그래서 이 글도 ${brand}의 공개 자료를 특정 성과의 단일 원인으로 해석하지 않습니다. 대신 고객이 어떤 선택을 쉽게 하게 됐는지, 그 선택을 뒷받침한 운영 장치가 무엇이었는지를 분리해 봅니다.`,
+          `우리 팀에 남겨야 할 것은 한 줄짜리 규칙입니다. 예를 들어 고객이 비교를 멈추는 증거가 부족하면 기능을 추가하기 전에 기준과 사례를 보여 준다, 지원 요청이 반복되면 FAQ를 늘리기 전에 서비스 조건을 다시 쓴다처럼 말입니다. 이런 규칙은 다음 캠페인, 제품 개선, 고객 응대에도 재사용됩니다. 사례 연구의 가치는 비슷해 보이는 디자인을 따라 하는 데 있지 않고, 다음 결정을 더 선명하게 만드는 데 있습니다.`
+        ]
+      },
+      {
+        title: "발행 전 체크리스트: 이 사례가 우리 고객의 실제 문제와 닿아 있는가",
+        paragraphs: [
+          `사례를 콘텐츠나 내부 제안서에 활용하기 전에는 유사성부터 검토해야 합니다. 고객이 처한 상황, 구매 주기, 서비스 제공 방식, 팀의 운영 여력 중 무엇이 같은지와 다른지를 적어 보세요. 업종이 같다는 사실만으로 적용 가능성이 생기지 않습니다. 반대로 업종이 달라도 고객의 망설임과 운영 제약이 비슷하다면 더 유용한 통찰이 될 수 있습니다.`,
+          `마지막으로 출처의 날짜와 적용 조건을 다시 확인합니다. 브랜드의 프로그램·정책·혜택은 변경될 수 있고 지역에 따라 다르게 운영될 수 있습니다. 이 글의 목적은 공개 자료를 바탕으로 한 실무적 해석이며, 해당 브랜드의 현재 정책이나 성과를 보증하지 않습니다. 실제 실행에는 고객 인터뷰와 운영 데이터로 별도 검증이 필요합니다.`
+        ],
+        points: [
+          "우리 고객의 결정 순간이 사례의 고객 순간과 실제로 같은가",
+          "약속을 지킬 운영 인력·시간·정책 범위가 있는가",
+          "고객 가치 지표와 팀 부담 지표를 함께 볼 수 있는가",
+          "확대 전에 중단하거나 되돌릴 조건을 합의했는가"
+        ]
+      },
+      {
+        title: "참고 자료와 해석 범위",
+        paragraphs: [
+          `이 글은 ${brand}이 공개한 프로그램·도움말·투자자 또는 교육 자료를 바탕으로 ${focus}의 운영 원리를 해석했습니다. 서비스 조건과 제공 범위는 수시로 바뀔 수 있으므로 실행 전 최신 원문을 확인하세요. 아래 링크는 사례의 맥락을 확인하기 위한 출발점이며, 본문은 독립적인 실무 해석입니다.`
+        ],
+        points: sources
+      }
+    ]
+  };
+}
+
+const brandSuccessStories: ContentArticle[] = [
+  createBrandSuccessStory({ slug: "airbnb-host-guest-trust-system", brand: "Airbnb", title: "Airbnb는 신뢰를 어떻게 예약 화면 밖의 운영 시스템으로 만들었을까요?", summary: "Airbnb의 리뷰·메시지·규칙·보호 장치를 통해, 양면 플랫폼이 고객의 불확실성을 단계별로 줄이는 방법을 살펴봅니다.", focus: "호스트와 게스트 사이의 신뢰 설계", customerMoment: "낯선 사람의 공간을 예약하거나 낯선 사람을 내 공간에 맞이하기로 결정할 때", mechanism: "프로필·후기·메시지·하우스 룰·보호 및 지원 경로를 예약 전후 흐름에 연결하는 것", operatingDecision: "거래의 양쪽 참여자가 서로에게 기대할 수 있는 기준과 문제가 생겼을 때의 대응 경로를 공개한 것", risk: "안전과 품질에 대한 기대를 넓게 만들고도 개별 호스트·지역·상황별 예외를 충분히 안내하지 못하는 위험", pilot: "첫 상담 예약 또는 첫 거래 전에 고객과 제공자가 서로 확인해야 할 네 가지 정보를 한 화면에 정리하는 실험", signals: "예약 완료율, 취소 사유, 분쟁·지원 요청, 다음 거래 의향", sources: ["[Airbnb: How Airbnb builds trust between hosts and guests](https://www.airbnb.com/help/article/4)", "[Airbnb Resource Center: How Airbnb protects hosts](https://www.airbnb.com/resources/hosting-homes/a/how-airbnb-protects-hosts-5)", "[Airbnb: Ground rules and safety requirements](https://www.airbnb.com/help/article/3855)"] }),
+  createBrandSuccessStory({ slug: "costco-membership-assortment-trust", brand: "Costco", title: "Costco는 멤버십을 어떻게 ‘다시 비교하지 않아도 되는’ 신뢰로 만들었을까요?", summary: "Costco의 멤버십·선별된 상품 구성·반복 구매 구조를 통해, 가격 약속을 운영 원칙으로 유지하는 방법을 정리합니다.", focus: "멤버십과 상품 구성으로 만드는 가격 신뢰", customerMoment: "회원비를 내고도 이곳에서 반복 구매할 이유가 있는지 판단할 때", mechanism: "회원 가치, 제한된 상품 선택, 품질·가격 기대, 매장 경험을 하나의 반복 구매 약속으로 정렬하는 것", operatingDecision: "모든 선택지를 늘리기보다 회원이 다시 방문할 이유가 되는 상품·가격·운영 기준을 우선 관리한 것", risk: "가격 메시지만 강하고 재고·상품 품질·환불 경험이 그 약속을 따라가지 못하는 위험", pilot: "단골 고객이 자주 사는 핵심 품목 10개에 대해 가격·재고·대체 안내 기준을 고정하는 실험", signals: "핵심 품목 재구매, 품절 문의, 가격 관련 불만, 회원 갱신·재방문 의향", sources: ["[Costco Investor Relations: Annual reports and proxy statements](https://investor.costco.com/financials/annual-reports-and-proxy-statements/default.aspx)", "[Costco: Membership](https://www.costco.com/membership.html)", "[Costco: Our values](https://www.costco.com/our-values.html)"] }),
+  createBrandSuccessStory({ slug: "dyson-demo-to-purchase-journey", brand: "Dyson", title: "Dyson은 복잡한 제품 설명을 어떻게 ‘직접 이해하는 경험’으로 바꿨을까요?", summary: "Dyson의 제품 시연과 문제 해결 중심 설명을 바탕으로, 고관여 제품이 기능을 구매 이유로 바꾸는 과정을 살펴봅니다.", focus: "고관여 제품의 시연 기반 구매 경험", customerMoment: "가격이 높은 제품이 내 생활의 문제를 실제로 해결할지 비교할 때", mechanism: "기술 설명을 고객이 보는 문제·직접 확인할 수 있는 결과·사용 후 관리 정보로 번역하는 것", operatingDecision: "스펙을 나열하기보다 고객이 제품을 이해하고 써 볼 수 있는 접점을 판매 흐름의 핵심으로 둔 것", risk: "시연은 인상적이지만 집에서의 사용 조건·관리 부담·호환성 안내가 부족해 기대가 어긋나는 위험", pilot: "상담 또는 상세 페이지에서 고객의 대표 문제 하나를 고르게 하고 전후 차이를 보여 주는 데모 실험", signals: "상세 페이지 체류 후 문의, 데모 후 구매 전환, 반품 이유, 사용 초기 지원 요청", sources: ["[Dyson: Our company](https://www.dyson.com/inside-dyson/our-company)", "[Dyson: Discover technology](https://www.dyson.com/discover)", "[Dyson: Support](https://www.dyson.com/support)"] }),
+  createBrandSuccessStory({ slug: "lululemon-ambassador-community-loop", brand: "lululemon", title: "lululemon은 지역 커뮤니티를 어떻게 매장 밖의 브랜드 경험으로 만들었을까요?", summary: "lululemon의 앰배서더와 지역 활동을 바탕으로, 커뮤니티를 홍보 채널이 아니라 반복 참여 구조로 설계하는 방법을 다룹니다.", focus: "지역 커뮤니티와 앰배서더의 반복 참여 구조", customerMoment: "제품을 사기 전에 이 브랜드가 내가 속하고 싶은 생활 방식과 닿아 있는지 느낄 때", mechanism: "지역 리더·활동·매장·디지털 안내를 연결해 고객이 참여하고 관계를 이어 갈 이유를 만드는 것", operatingDecision: "팔로워 수가 아니라 지역에서 신뢰를 만들 수 있는 사람과 고객 경험의 품질을 중심으로 관계를 운영한 것", risk: "커뮤니티가 일회성 행사나 특정 인물의 영향력에만 의존해 브랜드 약속과 멀어지는 위험", pilot: "한 지역에서 월 1회 고객 참여 모임을 열고, 신청·참여·후속 안내를 한 흐름으로 관리하는 실험", signals: "재참여율, 동반 참가, 행사 후 매장·사이트 방문, 운영자와 참가자의 피드백", sources: ["[lululemon: Ambassador program](https://info.lululemon.com/community/ambassadors)", "[lululemon: Community](https://info.lululemon.com/community)", "[lululemon Investor Relations](https://investor.lululemon.com/)"] }),
+  createBrandSuccessStory({ slug: "zappos-service-recovery-brand-trust", brand: "Zappos", title: "Zappos는 고객 지원을 어떻게 브랜드 약속을 증명하는 순간으로 만들었을까요?", summary: "Zappos의 고객 중심 문화와 지원 경험을 출발점으로, 서비스 회복이 신뢰를 만드는 운영 방식이 되는 조건을 정리합니다.", focus: "고객 지원과 서비스 회복으로 만드는 신뢰", customerMoment: "주문·배송·반품 과정에서 문제가 생겼을 때 이 회사가 책임 있게 해결할지 판단할 때", mechanism: "정책 문구, 상담 권한, 배송·반품 안내, 사후 확인을 하나의 문제 해결 경험으로 잇는 것", operatingDecision: "지원팀을 비용 센터로만 보지 않고 고객 약속을 지키는 현장으로 두며, 문제 기록을 운영 개선에 다시 쓰는 것", risk: "친절한 응대에 의존하면서 원인이 되는 재고·배송·정책 문제를 고치지 못하는 위험", pilot: "가장 자주 발생하는 고객 문제 하나에 대해 접수부터 해결 후 확인까지의 서비스 회복 시나리오를 만드는 실험", signals: "첫 응답 시간, 재문의율, 해결 후 만족도, 같은 유형의 재발 건수", sources: ["[Zappos: About Zappos](https://www.zappos.com/c/about-zappos)", "[Zappos Insights: Customer service](https://www.zapposinsights.com/about/customer-service)", "[Zappos Insights: Company culture](https://www.zapposinsights.com/about/culture)"] }),
+  createBrandSuccessStory({ slug: "shopify-partner-ecosystem-growth", brand: "Shopify", title: "Shopify는 파트너 생태계를 어떻게 고객 성공과 함께 커지는 경로로 만들었을까요?", summary: "Shopify의 앱·테마·에이전시 파트너 구조를 통해, 외부 생태계를 고객 가치와 품질 기준으로 연결하는 방법을 설명합니다.", focus: "파트너 생태계와 고객 성공의 연결", customerMoment: "기본 제품만으로는 해결되지 않는 문제를 믿을 만한 외부 전문가·도구와 함께 해결하려 할 때", mechanism: "파트너의 제작·추천·교육·수익 기회를 고객의 도입과 성장 흐름에 연결하는 것", operatingDecision: "파트너 수를 늘리는 것보다 고객이 신뢰할 수 있는 품질 기준·지원 자료·역할 분담을 함께 운영한 것", risk: "파트너가 늘어나는 속도에 비해 품질·보안·고객 지원 책임의 경계가 불명확해지는 위험", pilot: "고객이 자주 요청하는 보완 업무 한 가지에 대해 검증된 외부 파트너 또는 템플릿을 추천하는 실험", signals: "추천 후 도입 완료, 고객 지원 이관 건수, 파트너 품질 피드백, 재구매·계약 연장", sources: ["[Shopify Help Center: About the Shopify Partner Program](https://help.shopify.com/en/partners/partner-program/about)", "[Shopify: Partner program](https://www.shopify.com/partners)", "[Shopify Help Center: Shopify Partners](https://help.shopify.com/en/partners/index)"] }),
+  createBrandSuccessStory({ slug: "slack-team-activation-onboarding", brand: "Slack", title: "Slack은 개인 가입을 어떻게 팀의 첫 협업 경험으로 연결했을까요?", summary: "Slack의 온보딩과 협업 구조를 바탕으로, B2B 제품이 개인 사용을 팀 활성화로 이어 가는 방법을 살펴봅니다.", focus: "개인 온보딩에서 팀 활성화로 이어지는 협업 경험", customerMoment: "한 사람이 도구를 써 보고 동료에게 함께 쓰자고 제안할지 판단할 때", mechanism: "첫 메시지·채널·초대·알림 설정·팀의 반복 업무를 짧은 시간 안에 연결하는 것", operatingDecision: "가입 수보다 팀이 함께 첫 가치를 확인하는 시점과 그 이후의 사용 맥락을 핵심으로 관리한 것", risk: "초대 수만 늘고 채널 구조·업무 규칙·알림 피로가 정리되지 않아 초기 사용이 멈추는 위험", pilot: "신규 고객 팀이 첫 주에 완료해야 할 협업 과업 하나를 정하고, 초대부터 완료 확인까지 안내하는 실험", signals: "첫 팀 과업 완료, 초대 후 활성 사용자, 첫 주 메시지·채널 사용, 지원 요청 유형", sources: ["[Slack Help Center: Getting started for new Slack users](https://slack.com/help/articles/218080037-Getting-started-for-new-Slack-users)", "[Slack: Resources](https://slack.com/resources)", "[Salesforce Investor Relations](https://investor.salesforce.com/)"] }),
+  createBrandSuccessStory({ slug: "dropbox-referral-growth-loop", brand: "Dropbox", title: "Dropbox는 추천을 어떻게 ‘초대할수록 더 편해지는’ 제품 경험으로 만들었을까요?", summary: "Dropbox의 추천 프로그램과 공유 기능을 바탕으로, 인센티브가 고객 가치와 자연스럽게 맞물리는 조건을 정리합니다.", focus: "추천과 공유가 제품 가치로 돌아오는 성장 루프", customerMoment: "혼자 쓰는 도구를 동료·친구와 함께 써야 더 편해지는 순간", mechanism: "초대 행동과 저장 공간·공유·협업 같은 실제 제품 가치를 맞물리게 하는 것", operatingDecision: "광고성 추천 문구보다 고객이 협업을 완료하려면 자연스럽게 생기는 초대 상황을 제품 흐름 안에 둔 것", risk: "보상만 남고 초대받은 사람이 제품의 첫 가치를 경험하지 못해 저품질 가입이 쌓이는 위험", pilot: "기존 고객이 동료를 초대해야만 완료되는 공동 작업 한 가지에, 양쪽의 첫 성공을 돕는 안내를 추가하는 실험", signals: "초대 수보다 초대받은 고객의 첫 행동, 공동 작업 완료, 보상 비용, 30일 유지율", sources: ["[Dropbox Help Center: Referral bonuses](https://help.dropbox.com/account-settings/referrals-bonuses)", "[Dropbox: Product overview](https://www.dropbox.com/features)", "[Dropbox Investor Relations](https://investors.dropbox.com/)"] }),
+  createBrandSuccessStory({ slug: "hubspot-content-to-demand-system", brand: "HubSpot", title: "HubSpot은 콘텐츠를 어떻게 ‘읽고 끝나는 글’이 아닌 수요 형성 시스템으로 만들었을까요?", summary: "HubSpot의 교육·도구·콘텐츠 자산을 바탕으로, 고객 문제 해결형 콘텐츠가 신뢰와 전환으로 이어지는 구조를 다룹니다.", focus: "교육 콘텐츠에서 수요 형성으로 이어지는 운영", customerMoment: "아직 구매할 준비는 없지만 문제를 이해하고 해결 방법을 찾기 시작할 때", mechanism: "가이드·교육·템플릿·도구·상담 전환을 고객의 문제 해결 순서에 맞춰 연결하는 것", operatingDecision: "조회 수만 보지 않고 콘텐츠가 고객의 다음 질문과 다음 행동을 얼마나 선명하게 만드는지 기준으로 운영한 것", risk: "발행량은 많지만 독자의 문제 단계·근거·다음 행동이 맞지 않아 콘텐츠가 단순 트래픽으로 끝나는 위험", pilot: "상담에서 반복되는 질문 하나를 기준으로 가이드, 체크리스트, 15분 진단 제안을 한 묶음으로 만드는 실험", signals: "검색 유입 이후 스크롤·다운로드, 재방문, 상담 전환, 상담에서 언급되는 콘텐츠", sources: ["[HubSpot Academy: Content marketing](https://academy.hubspot.com/courses/content-marketing)", "[HubSpot: Marketing resources](https://www.hubspot.com/resources)", "[HubSpot Investor Relations](https://investors.hubspot.com/)"] }),
+  createBrandSuccessStory({ slug: "nike-run-club-community-journey", brand: "Nike Run Club", title: "Nike Run Club은 달리기 기록을 어떻게 혼자 시작해도 이어지는 여정으로 만들었을까요?", summary: "Nike Run Club의 가이드 런과 커뮤니티 요소를 바탕으로, 운동·학습 서비스가 목표와 관계를 함께 설계하는 방법을 살펴봅니다.", focus: "개인 목표와 커뮤니티를 잇는 운동 여정", customerMoment: "운동을 시작했지만 혼자 계속할 자신이 없어 다음 운동을 미루려 할 때", mechanism: "기록·가이드·목표·공유·지역 또는 디지털 커뮤니티를 다음 운동의 이유로 연결하는 것", operatingDecision: "경쟁 순위보다 각 사용자가 자신의 출발점에 맞는 다음 행동을 찾도록 돕는 콘텐츠와 루틴을 운영한 것", risk: "연속 기록이나 비교가 동기보다 부담이 되어 초보 고객을 밀어내는 위험", pilot: "고객의 첫 목표 하나에 맞춰 4회짜리 가이드와 완료 후 짧은 회고·다음 일정 제안을 제공하는 실험", signals: "첫 4회 완료, 다음 주 재참여, 목표 난이도 조정 요청, 긍정·부담 피드백", sources: ["[Nike: Nike Run Club app](https://www.nike.com/nrc-app)", "[Nike: Community](https://www.nike.com/community)", "[Nike Investor Relations](https://investors.nike.com/)"] })
+];
+
+type OperationsArticleConfig = {
+  slug: string;
+  category: string;
+  title: string;
+  summary: string;
+  focus: string;
+  customerMoment: string;
+  diagnosis: string;
+  operatingRule: string;
+  mistake: string;
+  pilot: string;
+  signals: string;
+  sources: string[];
+};
+
+function createOperationsArticle(config: OperationsArticleConfig): ContentArticle {
+  const { slug, category, title, summary, focus, customerMoment, diagnosis, operatingRule, mistake, pilot, signals, sources } = config;
+  return {
+    slug,
+    category,
+    title,
+    summary,
+    publishedAt: "2026.07.18",
+    readingTime: "18분",
+    image: "",
+    imageAlt: `${focus}을 운영하는 소상공인 실무 가이드`,
+    introduction: `${focus}은 한 번의 홍보로 해결되지 않습니다. ${customerMoment}처럼 고객이 실제로 결정을 멈추는 지점을 확인하고, 안내·응대·기록·후속 행동을 한 흐름으로 연결해야 합니다. 이 글은 작은 팀이 바로 적용할 수 있도록 진단 질문, 운영 기준, 4주 파일럿, 측정 방식까지 정리한 실무 가이드입니다.`,
+    sections: [
+      {
+        title: `${focus}의 출발점은 더 많은 일을 하는 것이 아니라 고객이 멈추는 이유를 좁히는 일입니다`,
+        paragraphs: [
+          `${customerMoment}에 고객은 가격이나 기능 하나만 보는 것이 아닙니다. 내 상황에 맞는지, 지금 진행해도 되는지, 문제가 생기면 누가 도와주는지, 다음 단계가 복잡하지 않은지를 한꺼번에 판단합니다. 그래서 먼저 ${diagnosis}을 확인해야 합니다. 결과 수치가 낮다는 사실만으로 광고·할인·새 기능을 먼저 늘리면 원인을 가린 채 비용만 커질 수 있습니다.`,
+          `좋은 운영은 고객의 질문과 팀의 기록을 같은 문장으로 묶습니다. 고객이 무엇을 기대하는지, 실제로 어디에서 멈췄는지, 담당자가 어떤 예외를 처리했는지를 한 줄씩 남겨 보세요. 같은 문제가 반복될 때에만 안내를 고치고, 정책을 바꾸고, 자동화를 검토합니다. 이렇게 하면 감각적인 개선 요청을 검증 가능한 운영 문제로 바꿀 수 있습니다.`
+        ],
+        quote: `${focus}은 캠페인 주제가 아니라 고객이 다음 행동을 끝낼 수 있게 만드는 운영 약속입니다.`,
+        points: [
+          `고객 순간: ${customerMoment}`,
+          `먼저 확인할 진단: ${diagnosis}`,
+          `운영 원칙: ${operatingRule}`,
+          `피해야 할 실수: ${mistake}`
+        ]
+      },
+      {
+        title: "수치와 고객 언어를 함께 보면 실제 병목이 보입니다",
+        paragraphs: [
+          `한 가지 지표만 보면 잘못된 해석을 하기 쉽습니다. 방문이 적다면 발견되기 어려운 문제일 수 있지만, 방문은 충분한데 문의가 적다면 신뢰·이해·행동 요청의 문제일 수 있습니다. 문의가 많아도 계약이나 예약이 이어지지 않는다면 가격보다 응대 속도·조건·후속 안내를 먼저 봐야 합니다. 숫자는 어디에서 멈췄는지, 고객 언어는 왜 멈췄는지를 알려 줍니다.`,
+          `${operatingRule}이라는 기준은 팀이 일관되게 판단할 수 있도록 돕습니다. 담당자가 바뀌어도 같은 고객에게 비슷한 품질의 안내가 나가고, 예외가 생겼을 때 무엇을 기록해야 하는지 분명해집니다. 고객을 획일적으로 대하는 규칙이 아니라, 중요한 약속을 빠뜨리지 않기 위한 최소한의 운영 장치로 만드세요.`
+        ],
+        table: {
+          caption: "병목을 구분하는 최소 진단표",
+          headers: ["관찰", "가능한 원인", "추가로 확인할 기록", "먼저 할 일"],
+          rows: [
+            ["유입은 있는데 다음 행동이 적음", "이해·신뢰·요청 문구 부족", "스크롤·클릭·자주 묻는 질문", "안내와 증거 한 가지 보강"],
+            ["문의는 많지만 완료가 적음", "응대·조건·후속 흐름의 마찰", "첫 응답 시간·이탈 사유", "응대 기준과 다음 단계 고정"],
+            ["한 번 이용하고 끝남", "첫 경험 뒤 관계 설계 부족", "재방문·재구매·불만 메모", "후속 메시지와 가치 제안 점검"],
+            ["팀의 처리 부담이 큼", "예외 기준과 역할 분담 부재", "재문의·수작업·처리 시간", "반복 문제의 기준 문서화"]
+          ]
+        }
+      },
+      {
+        title: "운영 기준은 고객에게 보이는 안내와 팀 내부의 처리 기준을 함께 바꿉니다",
+        paragraphs: [
+          `고객에게는 한 번에 이해되는 안내가 필요하고, 팀에는 누락 없이 처리할 기준이 필요합니다. 둘 중 하나만 갖추면 오래가지 못합니다. 안내가 좋아도 담당자가 내용을 확인하지 못하면 약속이 깨지고, 내부 프로세스가 좋아도 고객이 이해하지 못하면 문의와 이탈이 늘어납니다. 따라서 고객용 문장과 내부 체크리스트를 같은 날에 함께 고치는 편이 좋습니다.`,
+          `특히 ${mistake}은 많은 소상공인 팀에서 반복됩니다. 문제를 해결하려는 의도로 예외를 계속 허용하면 고객에게는 기준이 보이지 않고, 팀에는 말로만 전해지는 업무가 쌓입니다. 예외는 금지할 대상이 아니라 기록할 대상입니다. 어떤 고객에게, 어떤 이유로, 누구의 판단으로 예외를 적용했는지 남기면 다음에 정책으로 바꿀 문제와 개별 배려로 남길 문제를 분리할 수 있습니다.`
+        ],
+        points: [
+          "고객이 완료해야 할 다음 행동을 한 문장으로 씁니다.",
+          "기본 조건·소요 시간·변경 가능 범위를 같은 화면에 둡니다.",
+          "첫 응답, 확인, 완료, 후속 안내의 담당자를 구분합니다.",
+          "예외 사례는 매주 모아 안내·정책·상품 중 무엇을 고칠지 결정합니다."
+        ]
+      },
+      {
+        title: "4주 파일럿으로 효과와 운영 부담을 함께 검증합니다",
+        paragraphs: [
+          `처음부터 전 고객에게 적용하지 마세요. ${pilot}처럼 범위가 작고 고객의 다음 행동이 분명한 장면을 골라야 합니다. 시작 전에 현재 상태를 기록하고, 파일럿 중에는 한 가지 변화만 적용합니다. 안내 문구, 응대 속도, 혜택, 자동화 도구를 동시에 바꾸면 무엇이 효과를 냈는지 알 수 없습니다.`,
+          `파일럿의 성공은 전환만으로 판단하지 않습니다. 고객이 더 쉽게 끝냈는지와 팀이 더 안정적으로 운영할 수 있는지를 같이 봅니다. 문의가 줄어도 고객이 포기한 것일 수 있고, 전환이 올라도 담당자의 야근으로 만든 결과일 수 있습니다. 따라서 완료·만족·재방문 같은 고객 신호와 처리 시간·재문의·오류 같은 보호 신호를 함께 기록합니다.`
+        ],
+        table: {
+          caption: "4주 운영 파일럿 일정",
+          headers: ["주차", "실행", "확인할 신호", "결정"],
+          rows: [
+            ["1주차", "문제와 대상 고객 고정", "최근 사례·기준값", "제외 기준 설정"],
+            ["2주차", "한 채널·한 흐름에서 적용", "완료·지원 요청", "초기 마찰 수정"],
+            ["3주차", "예외와 처리 부담 점검", "재문의·처리 시간", "기준 보완"],
+            ["4주차", "결과와 고객 피드백 복기", signals, "확대·수정·중단"]
+          ]
+        }
+      },
+      {
+        title: "측정은 보고서가 아니라 다음 결정을 위한 최소 증거여야 합니다",
+        paragraphs: [
+          `${signals}을 한 화면에 모으되, 숫자가 말하는 사실과 팀의 해석을 분리해 기록하세요. 예를 들어 예약 완료율이 올랐다는 것은 사실이지만, 안내 문구가 원인이었다는 것은 아직 가설입니다. 같은 기간의 유입 구성, 가격 변경, 담당자 변경, 계절성 같은 요인을 함께 확인해야 합니다.`,
+          `매주 회의에서는 지표를 모두 읽지 말고 예외 세 가지만 봅니다. 예상보다 크게 좋아진 곳, 악화된 곳, 고객 말과 숫자가 충돌하는 곳입니다. 이 세 가지가 다음 주에 무엇을 유지하고 무엇을 바꿀지 알려 줍니다. 작은 팀의 분석은 복잡한 대시보드보다 실제 결정을 늦추지 않는 기록에서 시작됩니다.`
+        ]
+      },
+      {
+        title: "실행 전 체크리스트",
+        paragraphs: [
+          `이 글의 방법은 바로 쓸 수 있지만, 업종·고객군·법적 조건·운영 인력에 따라 적용 범위를 조정해야 합니다. 먼저 한 고객군과 한 업무 흐름에서 검증하고, 고객에게 한 약속을 실제로 지킬 수 있는지 확인하세요. 더 많은 기능과 메시지를 추가하기 전에 현재 경험의 빈칸 하나를 메우는 편이 더 빠른 성과로 이어집니다.`,
+          `자료의 목적은 정답을 제공하는 것이 아니라 다음 실험의 범위를 선명하게 만드는 것입니다. 고객의 상황과 거래 조건을 직접 확인하고, 필요한 경우 세무·법률·개인정보·플랫폼 정책 분야의 전문가와 함께 검토하세요.`
+        ],
+        points: [
+          "한 번에 바꿀 고객군·채널·흐름을 정했는가",
+          "고객 가치 지표와 팀 부담 지표를 함께 정했는가",
+          "예외가 생길 때 고객에게 안내할 기준이 있는가",
+          "파일럿 뒤 확대·수정·중단을 결정할 날짜가 있는가"
+        ]
+      },
+      {
+        title: "참고 자료와 해석 범위",
+        paragraphs: [`이 글은 ${focus}과 관련된 공개 가이드 및 운영 원칙을 실무 관점에서 재구성했습니다. 아래 자료는 출발점이며, 플랫폼 기능·정책·법적 의무는 국가와 시점에 따라 달라질 수 있습니다. 실제 적용 전 최신 원문과 사업 조건을 확인하세요.`],
+        points: sources
+      }
+    ]
+  };
+}
+
+const practicalOperationsArticles: ContentArticle[] = [
+  createOperationsArticle({ slug: "google-business-profile-local-search-playbook", category: "Growth Operations", title: "구글 비즈니스 프로필, 등록보다 ‘방문 전 신뢰’를 설계해야 하는 이유", summary: "로컬 검색에서 고객이 매장·서비스를 비교하는 순간을 기준으로, 정보·사진·리뷰·문의 흐름을 운영하는 방법을 정리합니다.", focus: "구글 비즈니스 프로필을 통한 로컬 검색 신뢰", customerMoment: "고객이 지도에서 여러 매장과 서비스를 비교하다 방문 또는 문의를 결정할 때", diagnosis: "프로필 조회, 길찾기·전화·웹사이트 클릭, 리뷰 내용, 반복 질문이 어디에서 어긋나는지", operatingRule: "기본 정보와 실제 운영 상태가 항상 같고, 고객 질문은 다음 업데이트의 근거로 남긴다", mistake: "키워드를 반복하거나 정보가 오래된 채 리뷰 답글만 늘리는 것", pilot: "한 달 동안 영업시간·서비스 범위·사진·자주 묻는 질문을 주 1회 점검하고 모든 리뷰에 사실 기반으로 응답하는 실험", signals: "프로필 행동, 길찾기·전화 클릭, 리뷰 주제, 문의 전환", sources: ["[Google Business Profile Help: Improve your local ranking](https://support.google.com/business/answer/7091)", "[Google Business Profile Help: Manage reviews](https://support.google.com/business/answer/3474122)", "[Google Search Central: Local business structured data](https://developers.google.com/search/docs/appearance/structured-data/local-business)"] }),
+  createOperationsArticle({ slug: "reservation-no-show-reduction-system", category: "Growth Operations", title: "노쇼를 줄이는 가장 현실적인 방법: 예약 전후의 불확실성부터 없애세요", summary: "예약을 받은 뒤 고객이 빠지지 않도록, 확인·변경·리마인드·대기 고객 운영을 하나의 흐름으로 설계하는 방법입니다.", focus: "예약 노쇼를 줄이는 확인과 변경 운영", customerMoment: "예약을 했지만 일정·비용·준비물·변경 방법이 불분명해 방문을 미루거나 잊어버릴 때", diagnosis: "예약 완료부터 방문 전날까지 고객이 확인하지 못한 정보와 취소·노쇼 사유", operatingRule: "예약 확인은 한 번의 알림이 아니라 조건·준비·변경 경로를 고객이 다시 확인하게 하는 흐름이다", mistake: "노쇼를 막기 위해 경고성 메시지나 과도한 위약금만 먼저 강화하는 것", pilot: "한 서비스에 예약 직후·전날·당일의 세 단계 확인 메시지와 간단한 변경 링크를 적용하는 실험", signals: "예약 대비 방문, 변경 시점, 노쇼 사유, 빈 자리 재판매율", sources: ["[Google Calendar Help: Appointment schedules](https://support.google.com/calendar/answer/11608416)", "[Square Appointments: Help Center](https://squareup.com/help/us/en/topic/534-appointments)", "[FTC: Truth in advertising](https://www.ftc.gov/business-guidance/advertising-marketing)" ] }),
+  createOperationsArticle({ slug: "price-increase-customer-communication", category: "Brand Strategy", title: "가격을 올릴 때 고객이 떠나는 이유는 금액보다 ‘설명 없는 변화’입니다", summary: "가격 조정 전후에 고객이 확인해야 할 가치·적용 시점·기존 고객 조건을 명확히 전달하는 운영 가이드입니다.", focus: "가격 조정 커뮤니케이션과 고객 신뢰", customerMoment: "기존 고객이 결제 또는 재구매 직전에 이전과 달라진 가격을 발견할 때", diagnosis: "가격 인상 자체보다 어떤 고객이 언제 어떤 경로에서 놀라는지와 문의 맥락", operatingRule: "가격 변경은 공지 한 줄이 아니라 가치·적용일·대상·선택지를 함께 설명하는 약속이다", mistake: "가격표만 교체하고 기존 고객의 갱신·예약·견적 조건을 뒤늦게 안내하는 것", pilot: "한 상품의 가격 변경 전에 기존 고객용 안내와 신규 고객용 가격 페이지를 분리해 2주간 문의를 기록하는 실험", signals: "가격 관련 문의, 견적·예약 이탈, 기존 고객 유지, 할인 요청 유형", sources: ["[FTC: Pricing and advertising](https://www.ftc.gov/business-guidance/advertising-marketing)", "[Shopify: Pricing strategy resources](https://www.shopify.com/blog/pricing-strategy)", "[Harvard Business Review: Pricing](https://hbr.org/topic/pricing)" ] }),
+  createOperationsArticle({ slug: "consultation-lead-response-system", category: "Growth Strategy", title: "상담 문의가 매출이 되려면: 첫 답장보다 다음 약속이 중요합니다", summary: "상담 문의의 맥락을 놓치지 않고, 응답 시간·자격 확인·다음 약속·후속 기록을 설계하는 방법을 다룹니다.", focus: "상담 문의를 다음 약속으로 연결하는 응대 시스템", customerMoment: "고객이 문의를 남긴 뒤 이 업체가 내 문제를 이해하고 빠르게 도와줄지 판단할 때", diagnosis: "첫 응답 시간, 문의 유형별 이탈, 다음 약속 설정률, 상담 뒤 미응답의 이유", operatingRule: "첫 답장은 모든 정보를 보내는 메시지가 아니라 고객 맥락을 확인하고 다음 행동을 합의하는 메시지다", mistake: "긴 회사 소개나 가격표를 먼저 보내고 고객의 상황과 결정 시점을 묻지 않는 것", pilot: "문의 유형 세 가지에 대해 15분 내 첫 답장, 확인 질문 두 개, 다음 약속 링크를 표준화하는 실험", signals: "첫 응답 시간, 약속 설정률, 상담 참석, 계약·구매 전환", sources: ["[HubSpot: Sales follow-up resources](https://blog.hubspot.com/sales/sales-follow-up)", "[Google Analytics: Generate lead event](https://support.google.com/analytics/answer/9267735)", "[HubSpot Academy: Inbound sales](https://academy.hubspot.com/courses/inbound-sales)" ] }),
+  createOperationsArticle({ slug: "repeat-customer-referral-loop", category: "Lifecycle Marketing", title: "재방문과 추천은 할인보다 ‘다시 소개할 이유’에서 시작됩니다", summary: "기존 고객의 만족을 재방문·소개·후기 행동으로 연결할 때 필요한 타이밍과 운영 기준을 정리합니다.", focus: "재방문 고객과 추천을 만드는 관계 운영", customerMoment: "고객이 이용을 마친 뒤 만족했지만 다시 찾거나 지인에게 소개할 계기가 없을 때", diagnosis: "첫 이용 이후 고객이 실제로 얻은 결과, 재방문 주기, 후기·소개가 나오는 순간", operatingRule: "후속 메시지는 할인 알림이 아니라 고객이 이미 얻은 가치를 확인하고 다음 필요를 돕는 안내여야 한다", mistake: "모든 고객에게 같은 쿠폰을 반복 발송해 가격만 기다리게 만드는 것", pilot: "이용 완료 3일 뒤 결과 확인 메시지와 30일 뒤 상황별 재방문 제안을 분리해 보내는 실험", signals: "재방문율, 소개 유입, 후기 작성, 쿠폰 사용 뒤 유지율", sources: ["[Google Business Profile Help: Reviews](https://support.google.com/business/answer/3474122)", "[Mailchimp: Customer retention resources](https://mailchimp.com/marketing-glossary/customer-retention/)", "[Shopify: Customer loyalty resources](https://www.shopify.com/blog/customer-loyalty)" ] }),
+  createOperationsArticle({ slug: "service-menu-simplification", category: "Brand Strategy", title: "서비스 메뉴가 많을수록 선택은 쉬워지지 않습니다: 고객의 결정 순서로 다시 묶는 법", summary: "상품·서비스 구성을 고객의 문제와 선택 기준에 맞춰 단순화하고, 상담과 가격 안내를 함께 개선하는 방법입니다.", focus: "서비스 메뉴 단순화와 선택 기준 설계", customerMoment: "고객이 여러 서비스 이름과 가격표를 보지만 내게 맞는 선택을 고르지 못할 때", diagnosis: "상담에서 반복되는 비교 질문, 자주 선택되는 조합, 거의 팔리지 않는 항목, 견적 이탈", operatingRule: "메뉴는 회사의 업무 분류가 아니라 고객이 해결하려는 문제와 결정 순서로 보여 준다", mistake: "모든 서비스를 동등하게 나열하고 차이를 상담사 설명에만 맡기는 것", pilot: "기존 서비스 목록을 고객 상황 세 가지와 추천 경로 세 가지로 재구성해 상담 전환을 비교하는 실험", signals: "메뉴 페이지 다음 행동, 상담에서의 비교 질문, 견적 작성 시간, 대표 상품 전환", sources: ["[Nielsen Norman Group: Choice overload](https://www.nngroup.com/articles/choice-overload/)", "[Google Search Central: Product structured data](https://developers.google.com/search/docs/appearance/structured-data/product)", "[Shopify: Product bundling](https://www.shopify.com/blog/product-bundles)" ] }),
+  createOperationsArticle({ slug: "seasonal-demand-calendar", category: "Growth Operations", title: "성수기 마케팅은 시작일이 아니라 준비 신호를 먼저 정해야 합니다", summary: "계절·기념일·지역 행사에 맞춰 고객 수요와 운영 여력을 함께 반영하는 성수기 캘린더 운영법입니다.", focus: "성수기 수요를 준비하는 운영 캘린더", customerMoment: "고객이 특정 시즌에만 필요한 서비스를 찾는데, 정보·재고·예약 가능 여부가 준비되지 않았을 때", diagnosis: "지난 시즌의 유입 시점, 문의 급증일, 품절·대기·취소 기록, 팀의 처리 한계", operatingRule: "시즌 캠페인은 날짜에 맞춰 시작하는 일이 아니라 수요 신호보다 먼저 정보와 운영 범위를 준비하는 일이다", mistake: "할인 일정만 정하고 재고·예약·응대 인력을 마지막에 맞추는 것", pilot: "다음 시즌의 핵심 고객 질문과 운영 한계를 한 달 전부터 주 단위로 점검하는 캘린더 실험", signals: "시즌별 유입, 예약·구매 완료, 품절·대기, 고객 지원 부담", sources: ["[Google Trends](https://trends.google.com/)", "[Google Business Profile Help: Special hours](https://support.google.com/business/answer/6303076)", "[Shopify: Seasonal marketing](https://www.shopify.com/blog/seasonal-marketing)" ] }),
+  createOperationsArticle({ slug: "customer-data-consent-ledger", category: "Growth Operations", title: "고객 데이터는 많이 모으는 것보다 ‘왜 받았는지’가 먼저입니다", summary: "문의·예약·구매 과정에서 받은 고객 정보를 목적·동의·보관·삭제 기준으로 운영하는 최소 체계를 안내합니다.", focus: "고객 데이터 동의와 보관 기준", customerMoment: "고객이 상담·예약·구매를 위해 개인정보를 제공하면서 어떤 목적으로 어떻게 쓰이는지 확인할 때", diagnosis: "수집하는 항목, 이용 목적, 동의 방식, 보관 위치, 접근 권한, 삭제 요청 경로", operatingRule: "필요한 정보만 목적과 기간을 밝히고, 고객 요청이 오면 찾고 설명하고 삭제할 수 있어야 한다", mistake: "마케팅 편의를 위해 모든 연락처를 한 목록에 모으고 동의 맥락을 남기지 않는 것", pilot: "현재 쓰는 문의·예약 양식 하나의 수집 항목과 동의 문구, 보관 위치를 표로 정리하는 실험", signals: "동의 누락, 접근 권한 수, 삭제·정정 요청 처리 시간, 불필요한 항목 수", sources: ["[개인정보보호위원회](https://www.pipc.go.kr/)", "[KISA 개인정보보호 포털](https://privacy.kisa.or.kr/)", "[Google Analytics: Data controls](https://support.google.com/analytics/topic/2919631)" ] }),
+  createOperationsArticle({ slug: "weekly-cash-flow-control", category: "Growth Operations", title: "매출이 있어도 불안한 이유: 자영업자는 주간 현금흐름을 따로 봐야 합니다", summary: "매출·입금·고정비·변동비·세금 준비금을 분리해 매주 의사결정에 쓰는 현금흐름 점검 가이드입니다.", focus: "주간 현금흐름 점검과 의사결정", customerMoment: "매출은 보이지만 결제일·세금·재고 비용이 겹쳐 다음 주 자금이 불안할 때", diagnosis: "매출 발생일과 입금일의 차이, 고정 지출일, 변동비, 세금 준비금, 미수금", operatingRule: "매출 보고와 현금흐름 표를 분리하고, 다음 4주에 실제로 나갈 돈을 먼저 본다", mistake: "통장 잔액이나 월 매출만 보고 광고·재고·인력 지출을 결정하는 것", pilot: "매주 같은 요일에 4주 예상 입출금과 세금 적립액을 갱신하는 30분 점검 실험", signals: "4주 현금 잔액, 예정 대비 실제 입출금, 미수금, 세금 준비금", sources: ["[국세청 홈택스](https://www.hometax.go.kr/)", "[중소벤처기업부](https://www.mss.go.kr/)", "[금융감독원 금융소비자정보포털 파인](https://fine.fss.or.kr/)" ] }),
+  createOperationsArticle({ slug: "customer-question-content-system", category: "Content Operations", title: "고객 질문을 콘텐츠로 바꾸면 상담 시간이 줄고 검색 신뢰가 쌓입니다", summary: "반복 문의를 글감으로 수집하고, 검색·상담·후속 안내에서 재사용 가능한 콘텐츠로 만드는 운영 체계를 설명합니다.", focus: "고객 질문 기반 콘텐츠 운영", customerMoment: "고객이 구매 또는 상담 전에 같은 불안을 검색하거나 여러 번 문의할 때", diagnosis: "상담·DM·리뷰에서 반복되는 질문, 검색어, 설명 뒤에도 남는 오해, 전환 직전의 망설임", operatingRule: "콘텐츠는 팀이 하고 싶은 말을 발행하는 일이 아니라 고객이 다음 결정을 내리도록 불확실성을 줄이는 답변 자산이다", mistake: "조회 수가 예상되는 주제만 고르고 실제 상담에서 반복되는 질문을 기록하지 않는 것", pilot: "한 달 동안 반복 질문 10개를 모아 우선순위 상위 2개를 상세 글과 상담 답변 템플릿으로 동시에 만드는 실험", signals: "검색 유입, 글 뒤 상담 질문 변화, 같은 문의의 반복, 콘텐츠를 본 고객의 전환", sources: ["[Google Search Central: Creating helpful content](https://developers.google.com/search/docs/fundamentals/creating-helpful-content)", "[Google Search Central: SEO starter guide](https://developers.google.com/search/docs/fundamentals/seo-starter-guide)", "[Google Analytics: Engagement](https://support.google.com/analytics/topic/9303319)" ] })
+];
+
+const daangnLocalTrustSuccessCase: ContentArticle = {
+  slug: "daangn-local-trust-business-system",
+  category: "Brand Case Study",
+  title: "당근은 동네의 신뢰를 어떻게 지역 사업자의 고객 연결로 바꿨을까요?",
+  summary: "당근의 동네인증·커뮤니티·비즈프로필·채팅·운영 정책을 바탕으로, 지역 사업자가 가까운 고객과 신뢰를 쌓는 구조를 해석합니다.",
+  publishedAt: "2026.07.18",
+  readingTime: "18분",
+  image: "",
+  imageAlt: "동네 생활권 안에서 고객과 가게를 연결하는 지역 비즈니스 운영 구조",
+  introduction: "지역 사업자에게 ‘가까운 고객에게 알린다’는 말은 너무 넓습니다. 생활 반경이 겹친다는 사실만으로 고객이 문의하거나 방문하지는 않기 때문입니다. 당근은 동네인증, 매너온도, 거래·커뮤니티·비즈니스 기능, 공통 운영 정책을 함께 두며 지역 안의 연결이 신뢰를 잃지 않도록 관리해 왔습니다. 이 글은 당근의 현재 공개 자료를 바탕으로, 지역 타기팅 기술 자체보다 고객이 ‘이 동네에서 이 가게를 믿어도 되는가’를 판단하는 흐름을 분해합니다.",
+  sections: [
+    {
+      title: "동네라는 말은 반경이 아니라 고객이 맥락을 이미 이해하는 생활권입니다",
+      paragraphs: [
+        "전국 단위 광고에서는 고객이 브랜드와 상품을 처음부터 해석해야 합니다. 반면 동네 안의 고객은 거리, 이동 시간, 계절, 주거 형태, 주변 시설, 지역 행사처럼 이미 아는 맥락을 갖고 있습니다. 당근의 출발점은 이 맥락을 광고 문구의 장식으로 쓰는 일이 아니라 거래·커뮤니티·생활 정보가 실제로 오가는 공간으로 만든 데 있습니다. 지역 사업자는 그 안에서 ‘우리 가게가 최고다’라고 외치기보다, 특정 동네 고객이 지금 해결하려는 문제와 운영 가능 범위를 분명히 보여 줄 수 있습니다.",
+        "당근이 공개한 서비스 소개에는 동네인증과 매너온도, 게시글 분석을 통한 안전 노력, 이웃 소식·모임·비즈니스 기능이 함께 등장합니다. 이 조합은 한 가지 기능이 신뢰를 만든다는 뜻이 아닙니다. 고객이 누구와 연결되는지, 어떤 약속이 지켜지는지, 문제가 생기면 무엇을 할 수 있는지를 여러 접점에서 확인하게 한다는 뜻에 가깝습니다. 지역 마케팅의 첫 과제는 도달 수를 키우는 것이 아니라 고객이 결정을 미루는 이유를 줄이는 것입니다."
+      ],
+      quote: `당근 사례에서 배울 점은 ‘동네 타기팅’이 아니라, 가까움이 실제 신뢰로 바뀌도록 프로필·대화·규칙·사후 경험을 함께 운영하는 방식입니다.`,
+      points: [
+        "생활권: 고객이 이미 알고 있는 거리·시간·지역 문제를 출발점으로 삼습니다.",
+        "신뢰 신호: 정체성, 후기·평판, 약속, 운영 기준이 여러 화면에서 이어집니다.",
+        "다음 행동: 광고 노출보다 채팅·쿠폰·예약·방문처럼 고객이 끝낼 행동을 정합니다.",
+        "운영 범위: 실제 대응할 수 있는 지역·시간·서비스만 약속합니다."
+      ]
+    },
+    {
+      title: "비즈프로필은 광고 지면이 아니라 고객 질문이 다시 운영으로 돌아오는 접점입니다",
+      paragraphs: [
+        "당근은 가게 소식, 쿠폰, 채팅, 광고 등으로 인근 이웃에게 가게를 알리는 비즈니스 기능을 제공한다고 설명합니다. 최근 비즈프로필 관리자 홈 개편도 단순한 조회 수 확인보다 업종별 관리 활동으로 이어지게 하는 데 초점을 둡니다. 여기서 중요한 것은 프로필을 만든 뒤 광고 예산만 조정하는 일이 아닙니다. 고객이 어떤 메뉴를 묻는지, 어느 시간대에 답장을 기다리는지, 쿠폰 뒤에 어떤 서비스가 다시 선택되는지를 보고 가게의 안내와 운영을 함께 고치는 일입니다.",
+        "작은 가게라면 프로필의 정보와 오프라인 운영이 한 글자라도 어긋나지 않게 만드는 것부터 시작해야 합니다. 영업시간, 예약 가능 여부, 가격의 시작 조건, 주차·방문 조건, 변경·취소 방법을 실제 운영 상태와 맞춥니다. 고객이 채팅으로 다시 묻는 정보는 FAQ가 아니라 프로필의 누락 신호입니다. 같은 질문이 세 번 이상 들어오면 답변을 잘 쓰는 대신 소개 문구·사진·예약 흐름 중 어디에 넣어야 할지 결정합니다."
+      ],
+      table: {
+        caption: "지역 고객 연결을 운영 시스템으로 읽는 방법",
+        headers: ["고객 장면", "고객이 확인하는 것", "가게가 준비할 정보", "남겨야 할 기록"],
+        rows: [
+          ["처음 발견", "우리 동네에서 이용 가능한가", "지역·영업시간·대표 서비스", "노출 뒤 프로필 방문"],
+          ["문의 전 비교", "내 상황에 맞고 믿을 만한가", "가격 시작 조건·사례·후기 맥락", "반복 질문·이탈 이유"],
+          ["채팅·예약", "언제 무엇을 해야 하는가", "응답 기준·예약·변경 방법", "첫 응답·약속 설정"],
+          ["방문 후", "다시 이용하거나 소개할 이유가 있는가", "사후 안내·단골 관리", "재방문·추천·불만"]
+        ]
+      }
+    },
+    {
+      title: "지역 광고의 효율은 도달보다 ‘동네 고객이 끝낸 행동’으로 읽어야 합니다",
+      paragraphs: [
+        "인근 이웃에게 광고를 보여 주는 것과 가게의 매출이 늘어나는 것은 다른 일입니다. 지역 고객은 이동이 쉽지만 선택지도 가깝기 때문에, 광고를 본 뒤 프로필을 확인하고 채팅을 열고 예약하거나 방문까지 끝내는 흐름을 따로 봐야 합니다. 노출과 클릭만 높고 실제 문의가 없으면 고객이 제안의 가치를 이해하지 못했거나, 프로필의 정보가 결정을 끝내기 부족할 수 있습니다. 문의는 많지만 방문이 적다면 응대 시간·예약 조건·가격 설명이 병목일 가능성이 큽니다.",
+        "당근의 2025년 연간 실적 발표는 지역 기반 사업자를 포함한 광고주 기반과 로컬 타기팅 광고 운영을 언급합니다. 그러나 그 수치를 개별 가게의 성과 보장으로 읽으면 안 됩니다. 가게마다 수요의 계절성, 서비스 제공 범위, 고객의 이동 거리, 담당자의 응대 여력이 다릅니다. 작은 팀은 캠페인 하나를 ‘광고 성과’가 아니라 고객 행동과 운영 부담을 함께 측정하는 파일럿으로 취급해야 합니다."
+      ],
+      points: [
+        "도달 지표: 프로필 방문, 광고 반응, 소식 확인을 봅니다.",
+        "고객 가치 지표: 채팅 시작, 예약·방문 완료, 재방문을 봅니다.",
+        "보호 지표: 첫 응답 시간, 예약 변경, 노쇼, 반복 문의를 봅니다.",
+        "판단 규칙: 문의가 늘어도 처리 부담이 감당되지 않으면 범위를 먼저 좁힙니다."
+      ]
+    },
+    {
+      title: "30일 파일럿: 한 동네·한 문제·한 약속으로 시작합니다",
+      paragraphs: [
+        "당근 사례를 복제하려고 여러 지역과 여러 상품을 동시에 열 필요는 없습니다. 먼저 ‘평일 저녁에 근처 직장인이 빠르게 해결하고 싶은 문제’처럼 고객 장면 하나를 고릅니다. 그 다음 그 장면에 맞는 서비스 하나, 고객이 이해할 혜택 하나, 상담 또는 예약의 다음 행동 하나만 둡니다. 광고·프로필·채팅 답변이 모두 같은 약속을 말하도록 정리하면, 무엇이 작동했고 무엇이 혼란을 만들었는지 판단하기 쉬워집니다.",
+        "첫 주에는 기존 문의 20건을 읽어 고객 언어를 모읍니다. 둘째 주에는 프로필의 핵심 정보와 채팅 첫 답장을 바꾸고, 셋째 주에는 예약·방문까지 이어지지 않은 이유를 복기합니다. 넷째 주에는 고객 행동과 팀의 처리 시간을 한 장에 정리해 확대·수정·중단을 결정합니다. 지역 마케팅은 큰 예산보다 한 동네에서 지킬 수 있는 약속을 발견하는 과정이어야 합니다."
+      ],
+      table: {
+        caption: "지역 고객 연결 30일 파일럿",
+        headers: ["주차", "실행", "확인할 증거", "다음 결정"],
+        rows: [
+          ["1주차", "고객 장면과 서비스 하나 고정", "최근 문의·방문 기록", "약속과 제외 범위 설정"],
+          ["2주차", "프로필·소식·첫 답장 정렬", "프로필 방문·채팅 질문", "안내의 빈칸 수정"],
+          ["3주차", "예약·방문·취소 흐름 점검", "완료율·응답 시간·이탈", "운영 기준 보완"],
+          ["4주차", "고객 목소리와 비용 복기", "재방문·소개·팀 부담", "확대·수정·중단"]
+        ]
+      }
+    },
+    {
+      title: "신뢰는 고객 획득 장치이면서 동시에 운영 비용을 줄이는 기준입니다",
+      paragraphs: [
+        "당근은 공통 운영 정책에서 존중·신뢰·프라이버시·안전·커뮤니티를 운영 원칙으로 제시합니다. 이는 플랫폼만의 문제가 아닙니다. 지역 사업자가 고객을 모을 때도 지나친 메시지 발송, 불명확한 가격, 답장 지연, 개인정보의 목적 외 사용은 단기 문의보다 더 큰 신뢰 비용을 만듭니다. 고객에게 친절해 보이는 마케팅과 고객이 안전하다고 느끼는 운영은 같은 방향으로 가야 합니다.",
+        "따라서 지역 고객을 위한 채널을 열기 전에는 경계도 함께 정해야 합니다. 어떤 정보까지 공개할지, 누가 채팅에 답할지, 예약·견적·개인정보를 어디에 기록할지, 악성 문의나 분쟁에는 어떤 절차로 대응할지 문서로 남깁니다. 신뢰는 감성적인 말이 아니라 고객과 팀이 예측할 수 있는 기준에서 생깁니다."
+      ]
+    },
+    {
+      title: "참고 자료와 해석 범위",
+      paragraphs: [
+        "이 글은 당근이 공개한 서비스 소개, 운영 정책, 비즈프로필 관련 보도자료와 실적 자료를 바탕으로 지역 사업자 관점의 운영 원리를 해석했습니다. 당근의 기능·광고 정책·지역별 제공 범위는 달라질 수 있으므로 실제 집행 전 최신 원문과 업종별 조건을 확인해야 합니다. 본문은 당근 또는 당근비즈니스의 공식 추천이나 성과 보장이 아닙니다."
+      ],
+      points: [
+        "[당근 서비스 소개](https://about.daangn.com/service/)",
+        "[당근 공통 운영 정책](https://about.daangn.com/company/pr/archive/%EB%8B%B9%EA%B7%BC-%EA%B1%B4%EA%B0%95%ED%95%9C-%EC%A7%80%EC%97%AD-%EC%BB%A4%EB%AE%A4%EB%8B%88%ED%8B%B0-%EC%97%B0%EA%B2%B0-%EC%9C%84%ED%95%9C-%EA%B3%B5%ED%86%B5-%EC%9A%B4%EC%98%81-%EC%A0%95%EC%B1%85-%EB%B0%9C%ED%91%9C/)",
+        "[당근 비즈프로필 관리자 홈 개편](https://about.daangn.com/company/pr/archive/%EB%8B%B9%EA%B7%BC-%EB%B9%84%EC%A6%88%ED%94%84%EB%A1%9C%ED%95%84-%EA%B4%80%EB%A6%AC%EC%9E%90-%ED%99%88-%EC%A0%84%EB%A9%B4-%EA%B0%9C%ED%8E%B8%EC%9C%BC%EB%A1%9C-%EB%8B%A8%EA%B3%A8%EA%B4%80%EB%A6%AC-%EB%8D%94-%EC%89%AC%EC%9B%8C%EC%A7%84%EB%8B%A4/)",
+        "[당근 2025년 연간 실적 발표](https://about.daangn.com/company/pr/archive/%EB%8B%B9%EA%B7%BC-2025%EB%85%84-%EC%97%B0%EA%B0%84-%EC%8B%A4%EC%A0%81-%EB%B0%9C%ED%91%9C/)"
+      ]
+    }
+  ]
+};
+
 export const contentArticles: ContentArticle[] = [
   {
     slug: "brand-positioning-choice-criteria",
@@ -2713,7 +3072,10 @@ export const contentArticles: ContentArticle[] = [
         ]
       }
     ]
-  }
+  },
+  ...brandSuccessStories,
+  ...practicalOperationsArticles,
+  daangnLocalTrustSuccessCase
 ];
 
 export function getContentArticle(slug: string) {

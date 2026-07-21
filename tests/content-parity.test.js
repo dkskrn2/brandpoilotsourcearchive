@@ -89,7 +89,7 @@ test("Brand Pilot FAQ questions are not constrained by the legacy numbered grid"
 test("contact inquiries are stored in PostgreSQL without a Google Apps Script dependency", () => {
   const route = read("app/api/contact/route.ts");
   const database = read("lib/content-db.ts");
-  const admin = read("app/admin/page.tsx");
+  const admin = read("app/admin/inquiries/page.tsx");
 
   assert.match(route, /createContactInquiry/);
   assert.match(route, /Missing DATABASE_URL/);
@@ -154,9 +154,9 @@ test("seed articles provide long-form guidance with linked primary sources", () 
   const contentHtml = read("lib/content-html.ts");
   const database = read("lib/content-db.ts");
 
-  assert.equal((contentData.match(/title: "참고 자료(?:와 해석 범위)?"/g) || []).length, 17);
+  assert.ok((contentData.match(/title: "참고 자료(?:와 해석 범위)?"/g) || []).length >= 17);
   assert.ok((contentData.match(/\]\(https:\/\//g) || []).length >= 40, "articles must cite enough external sources");
-  assert.equal((contentData.match(/readingTime: "(?:18|20)분"/g) || []).length, 17);
+  assert.ok((contentData.match(/readingTime: "(?:18|20)분"/g) || []).length >= 17);
   assert.ok((contentData.match(/table: \{/g) || []).length >= 23, "articles must include worked comparison tables");
   assert.equal((contentData.match(/quote: "/g) || []).length, 17, "every article must establish a clear editorial thesis");
   const articleStarts = [...contentData.matchAll(/    slug: "([^"]+)"/g)];
@@ -178,6 +178,13 @@ test("seed articles provide long-form guidance with linked primary sources", () 
   assert.match(contentHtml, /noopener noreferrer/);
   assert.match(database, /ON CONFLICT \(slug\) DO UPDATE SET/);
   assert.match(database, /created_at = content_articles\.updated_at/);
+  assert.match(contentData, /const brandSuccessStories: ContentArticle\[\] = \[/);
+  assert.equal((contentData.match(/createBrandSuccessStory\(\{/g) || []).length, 10, "ten additional success stories must be seeded");
+  for (const slug of ["airbnb-host-guest-trust-system", "costco-membership-assortment-trust", "dyson-demo-to-purchase-journey", "lululemon-ambassador-community-loop", "zappos-service-recovery-brand-trust", "shopify-partner-ecosystem-growth", "slack-team-activation-onboarding", "dropbox-referral-growth-loop", "hubspot-content-to-demand-system", "nike-run-club-community-journey"]) {
+    assert.match(contentData, new RegExp(slug));
+  }
+  assert.equal((contentData.match(/createOperationsArticle\(\{/g) || []).length, 10, "ten additional practical articles must be seeded");
+  assert.match(contentData, /daangn-local-trust-business-system/);
 });
 
 test("every seed article has a dedicated optimized editorial image", () => {
@@ -226,7 +233,7 @@ test("every article ends with a branded contact CTA before related reading", () 
 });
 
 test("admin content manager uses PostgreSQL and protects every mutation", () => {
-  const admin = read("app/admin/page.tsx");
+  const admin = read("app/admin/content/page.tsx");
   const actions = read("app/admin/actions.ts");
   const database = read("lib/content-db.ts");
   assert.match(admin, /listArticles/);
@@ -323,8 +330,8 @@ test("article saves return to the content list after a single pending submission
   const actions = read("app/admin/actions.ts");
   const submitButton = read("components/admin-pending-submit-button.tsx");
 
-  assert.ok(actions.includes('"콘텐츠를 저장했습니다.")}#content'));
-  assert.ok(actions.includes('"수정 사항을 저장했습니다.")}#content'));
+  assert.ok(actions.includes('redirect(`/admin/content?notice=${encodeURIComponent("콘텐츠를 저장했습니다.")}`)'));
+  assert.ok(actions.includes('redirect(`/admin/content?notice=${encodeURIComponent("수정 사항을 저장했습니다.")}`)'));
   assert.match(submitButton, /저장 중…/);
   assert.match(submitButton, /aria-busy=\{disabled\}/);
   assert.match(submitButton, /isUploading/);
