@@ -67,6 +67,12 @@ async function createSchema(pool: Pool) {
     create unique index ai_content_subject_generation_active_uq
       on ai_content_subject_analyses (generation_id)
       where generation_id is not null and superseded_at is null;
+    create table ai_content_subject_appeal_regeneration_keys (
+      analysis_id uuid not null references ai_content_subject_analyses(id) on delete cascade,
+      idempotency_key text not null,
+      created_at timestamptz not null default now(),
+      primary key (analysis_id, idempotency_key)
+    );
     create table ai_content_subject_images (
       id uuid primary key,
       analysis_id uuid not null,
@@ -216,5 +222,66 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")("AiContentSubje
     expect(first.id).not.toBe(second.id);
     expect(new Set([first.generationId, second.generationId]))
       .toEqual(new Set([GENERATION_ID, OTHER_GENERATION_ID]));
+  });
+
+  it("serializes concurrent duplicate appeal regeneration keys", async () => {
+    await pool.query("truncate table ai_content_subject_images, ai_content_subject_appeal_regeneration_keys, ai_content_subject_analyses");
+    const analysisResult = {
+      contractVersion: "subject-analysis-result.v2",
+      phase: "analysis",
+      subjectType: "product",
+      summary: "Product analysis",
+      verifiedFacts: [],
+      voc: [],
+      alternatives: [],
+      barriers: [],
+      productProfile: { category: "Productivity" },
+      serviceProfile: null,
+      serviceSubtype: null,
+      sourceGaps: [],
+    };
+    const inserted = await pool.query(
+      `insert into ai_content_subject_analyses
+         (id, workspace_id, brand_id, generation_id, contract_version,
+          subject_type, source_url, normalized_url, input_json,
+          analysis_result_json, status, idempotency_key)
+       values ($1, $2, $3, $4, 'subject-analysis.v2', 'product',
+               'https://example.com/product', 'https://example.com/product',
+               $5::jsonb, $6::jsonb, 'ready', 'original-analysis-request')
+       returning id`,
+      [FIRST_ID, WORKSPACE_ID, BRAND_ID, GENERATION_ID,
+        JSON.stringify({
+          manualInput: { name: "Product", promotionOrTerms: "", description: "Description" },
+          brandContext: { companyOverview: "Acme" },
+        }),
+        JSON.stringify(analysisResult)],
+    );
+    const repository = createAiContentSubjectRepository(pool);
+    const request = {
+      workspaceId: WORKSPACE_ID,
+      brandId: BRAND_ID,
+      analysisId: inserted.rows[0].id as string,
+      idempotencyKey: "appeal-regeneration-concurrent",
+    };
+
+    const [first, duplicate] = await Promise.all([
+      repository.regenerateSubjectAppeals(request),
+      repository.regenerateSubjectAppeals(request),
+    ]);
+
+    expect(first.status).toBe("generating_appeals");
+    expect(duplicate.status).toBe("generating_appeals");
+    const keys = await pool.query(
+      `select idempotency_key
+         from ai_content_subject_appeal_regeneration_keys
+        where analysis_id = $1`,
+      [request.analysisId],
+    );
+    expect(keys.rows).toEqual([{ idempotency_key: request.idempotencyKey }]);
+    const original = await pool.query(
+      "select idempotency_key from ai_content_subject_analyses where id = $1",
+      [request.analysisId],
+    );
+    expect(original.rows[0].idempotency_key).toBe("original-analysis-request");
   });
 });

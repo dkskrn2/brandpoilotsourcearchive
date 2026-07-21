@@ -196,6 +196,10 @@ begin
     raise exception 'Missing subject pipeline v2 columns';
   end if;
 
+  if to_regclass('public.ai_content_subject_appeal_regeneration_keys') is null then
+    raise exception 'Missing subject appeal regeneration key ledger';
+  end if;
+
   select count(*)
   into pipeline_index_count
   from pg_indexes
@@ -240,6 +244,21 @@ begin
      'subject-pipeline-v2-smoke')
   returning id into pipeline_analysis_id;
 
+  insert into ai_content_subject_appeal_regeneration_keys
+    (analysis_id, idempotency_key)
+  values
+    (pipeline_analysis_id, 'subject-pipeline-v2-regenerate');
+
+  begin
+    insert into ai_content_subject_appeal_regeneration_keys
+      (analysis_id, idempotency_key)
+    values
+      (pipeline_analysis_id, 'subject-pipeline-v2-regenerate');
+    raise exception 'Duplicate subject appeal regeneration key was accepted';
+  exception
+    when unique_violation then null;
+  end;
+
   begin
     insert into ai_content_subject_analyses
       (workspace_id, brand_id, generation_id, contract_version, subject_type,
@@ -262,6 +281,14 @@ begin
     where id = pipeline_analysis_id
   ) then
     raise exception 'Subject pipeline generation cascade failed';
+  end if;
+
+  if exists (
+    select 1
+    from ai_content_subject_appeal_regeneration_keys
+    where analysis_id = pipeline_analysis_id
+  ) then
+    raise exception 'Subject appeal regeneration key cascade failed';
   end if;
 end;
 $$;

@@ -51,7 +51,6 @@ export interface SubjectAnalysisRecord extends SubjectBrandScope {
   normalizedUrl: string;
   input: SubjectManualInput & { promotionOrTerms?: string };
   brandContext?: Record<string, unknown>;
-  regenerationIdempotencyKeys?: string[];
   attachmentIds?: string[];
   status: SubjectAnalysisStatus | SubjectPipelineStatus;
   facts: Array<{ key: string; value: string; sourceUrl: string }>;
@@ -130,12 +129,9 @@ export interface SubjectAnalysisRepository {
 
 type Queryable = Pick<PoolClient, "query">;
 
-const REGENERATION_IDEMPOTENCY_HISTORY_LIMIT = 32;
-
 interface SubjectPipelineInputEnvelope {
   manualInput: CreateSubjectPipelineInput["manualInput"];
   brandContext: Record<string, unknown>;
-  regenerationIdempotencyKeys: string[];
 }
 
 const ANALYSIS_COLUMNS = `
@@ -223,9 +219,6 @@ function pipelineInputEnvelope(value: unknown): SubjectPipelineInputEnvelope {
       description: typeof manualInput.description === "string" ? manualInput.description : "",
     },
     brandContext: jsonObject(stored.brandContext),
-    regenerationIdempotencyKeys: jsonArray<unknown>(stored.regenerationIdempotencyKeys)
-      .filter((key): key is string => typeof key === "string")
-      .slice(-REGENERATION_IDEMPOTENCY_HISTORY_LIMIT),
   };
 }
 
@@ -296,7 +289,6 @@ function mapAnalysis(row: Record<string, unknown>, images: SubjectImageRecord[])
     },
     ...(contractVersion === "subject-analysis.v2" ? {
       brandContext: pipelineInput.brandContext,
-      regenerationIdempotencyKeys: pipelineInput.regenerationIdempotencyKeys,
     } : {}),
     attachmentIds: jsonArray(row.attachment_ids_json),
     status: row.status as SubjectAnalysisRecord["status"],
@@ -529,7 +521,6 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
           const storedInput: SubjectPipelineInputEnvelope = {
             manualInput: input.manualInput,
             brandContext: input.brandContext,
-            regenerationIdempotencyKeys: [],
           };
           const inserted = await client.query(
             SUBJECT_PIPELINE_INSERT_SQL,
@@ -868,35 +859,40 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
         if (!row || row.contract_version !== "subject-analysis.v2" || row.superseded_at) {
           throw new Error("subject_analysis_not_found");
         }
-        const storedInput = pipelineInputEnvelope(row.input_json);
-        if (row.idempotency_key === input.idempotencyKey
-          || storedInput.regenerationIdempotencyKeys.includes(input.idempotencyKey)) {
+        const existingKey = await client.query(
+          `select analysis_id
+             from ai_content_subject_appeal_regeneration_keys
+            where analysis_id = $1 and idempotency_key = $2`,
+          [input.analysisId, input.idempotencyKey],
+        );
+        if (existingKey.rowCount) {
           return (await loadAnalysis(client, input.analysisId))!;
         }
         if (row.status !== "ready" && row.status !== "partial") {
           throw new Error("subject_analysis_appeals_regeneration_invalid");
         }
         parseSubjectAnalysisResultV2(jsonObject(row.analysis_result_json));
-        const regenerationIdempotencyKeys = [
-          ...storedInput.regenerationIdempotencyKeys,
-          input.idempotencyKey,
-        ].slice(-REGENERATION_IDEMPOTENCY_HISTORY_LIMIT);
+        const insertedKey = await client.query(
+          `insert into ai_content_subject_appeal_regeneration_keys
+             (analysis_id, idempotency_key)
+           values ($1, $2)
+           on conflict (analysis_id, idempotency_key) do nothing
+           returning analysis_id`,
+          [input.analysisId, input.idempotencyKey],
+        );
+        if (!insertedKey.rowCount) {
+          return (await loadAnalysis(client, input.analysisId))!;
+        }
         await client.query(
           `update ai_content_subject_analyses
               set status = 'generating_appeals',
-                  input_json = jsonb_set(
-                    input_json,
-                    '{regenerationIdempotencyKeys}',
-                    $2::jsonb,
-                    true
-                  ),
                   targets_json = '[]'::jsonb, appeals_json = '{}'::jsonb,
                   leased_by = null, lease_token = null, lease_expires_at = null,
                   attempt_count = 0, available_at = now(),
                   error_code = null, error_message = null, completed_at = null,
                   updated_at = now()
             where id = $1`,
-          [input.analysisId, JSON.stringify(regenerationIdempotencyKeys)],
+          [input.analysisId],
         );
         return (await loadAnalysis(client, input.analysisId))!;
       });

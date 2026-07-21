@@ -110,6 +110,12 @@ async function createSchema(database: PGlite) {
     create unique index ai_content_subject_generation_active_uq
       on ai_content_subject_analyses (generation_id)
       where generation_id is not null and superseded_at is null;
+    create table ai_content_subject_appeal_regeneration_keys (
+      analysis_id uuid not null references ai_content_subject_analyses(id) on delete cascade,
+      idempotency_key text not null,
+      created_at timestamptz not null default now(),
+      primary key (analysis_id, idempotency_key)
+    );
     create table ai_content_subject_images (
       id uuid primary key,
       analysis_id uuid not null,
@@ -633,6 +639,8 @@ describe("createAiContentSubjectRepository", () => {
       manualInput: pipelineRequest().manualInput,
       brandContext: pipelineRequest().brandContext,
     });
+    expect((persistedInput.rows[0] as { input_json: Record<string, unknown> }).input_json)
+      .not.toHaveProperty("regenerationIdempotencyKeys");
 
     const analyzing = await repository.markSubjectExtractionComplete({
       ...lease(extractionClaim),
@@ -830,13 +838,57 @@ describe("createAiContentSubjectRepository", () => {
     });
     expect(retriedOldKey).toMatchObject({ status: "ready", updatedAt: newest.updatedAt });
     const persisted = await database.query(
-      "select input_json from ai_content_subject_analyses where id = $1",
+      "select input_json, idempotency_key from ai_content_subject_analyses where id = $1",
       [ready.id],
     );
-    expect((persisted.rows[0] as { input_json: { regenerationIdempotencyKeys: string[] } })
-      .input_json.regenerationIdempotencyKeys).toEqual([
+    expect((persisted.rows[0] as { input_json: Record<string, unknown> }).input_json)
+      .not.toHaveProperty("regenerationIdempotencyKeys");
+    expect((persisted.rows[0] as { idempotency_key: string }).idempotency_key)
+      .toBe("pipeline-request-1");
+    const keys = await database.query(
+      `select idempotency_key
+         from ai_content_subject_appeal_regeneration_keys
+        where analysis_id = $1
+        order by created_at, idempotency_key`,
+      [ready.id],
+    );
+    expect(keys.rows.map((row) => (row as { idempotency_key: string }).idempotency_key)).toEqual([
       "appeal-regeneration-old",
       "appeal-regeneration-new",
     ]);
+  });
+
+  it("atomically records one ledger key for concurrent duplicate regeneration requests", async () => {
+    await repository.requestSubjectAnalysis(pipelineRequest());
+    const analysisClaim = (await repository.claimSubjectAnalysis({ workerId: "analysis-worker", leaseSeconds: 60 }))!;
+    await repository.markSubjectExtractionComplete({ ...lease(analysisClaim), facts: [], structuredData: {}, images: [] });
+    await repository.completeSubjectAnalysis({ ...lease(analysisClaim), ...analysisResultV2() });
+    const appealClaim = (await repository.claimSubjectAnalysis({ workerId: "appeal-worker", leaseSeconds: 60 }))!;
+    const ready = await repository.completeSubjectAppeals({ ...lease(appealClaim), ...appealResultV2() });
+
+    const [first, duplicate] = await Promise.all([
+      repository.regenerateSubjectAppeals({
+        workspaceId,
+        brandId,
+        analysisId: ready.id,
+        idempotencyKey: "appeal-regeneration-concurrent",
+      }),
+      repository.regenerateSubjectAppeals({
+        workspaceId,
+        brandId,
+        analysisId: ready.id,
+        idempotencyKey: "appeal-regeneration-concurrent",
+      }),
+    ]);
+
+    expect(first.status).toBe("generating_appeals");
+    expect(duplicate.status).toBe("generating_appeals");
+    const keys = await database.query(
+      `select idempotency_key
+         from ai_content_subject_appeal_regeneration_keys
+        where analysis_id = $1`,
+      [ready.id],
+    );
+    expect(keys.rows).toEqual([{ idempotency_key: "appeal-regeneration-concurrent" }]);
   });
 });

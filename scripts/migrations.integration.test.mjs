@@ -1965,6 +1965,90 @@ test("051 can be applied twice", async () => {
   });
 });
 
+test("052 normalizes subject appeal regeneration idempotency keys", async () => {
+  const migrations = await loadMigrations();
+  const migration052 = migrations.find(
+    (migration) => migration.id === "052_ai_content_subject_appeal_regeneration_keys.sql",
+  );
+  assert.ok(migration052, "052 subject appeal regeneration key migration must exist");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "051_ai_content_subject_pipeline_v2.sql",
+    );
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ($1, $2) returning id",
+      ["Subject appeal keys", `subject-appeal-keys-${randomUUID()}`],
+    );
+    const workspaceId = workspace.rows[0].id;
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, $2) returning id",
+      [workspaceId, "Subject appeal key brand"],
+    );
+    const brandId = brand.rows[0].id;
+    const generation = await database.query(
+      `insert into ai_content_generations
+         (workspace_id, brand_id, type, title, status, analysis_idempotency_key)
+       values ($1, $2, 'card_news', 'Subject appeal keys', 'draft', $3)
+       returning id`,
+      [workspaceId, brandId, `generation-${randomUUID()}`],
+    );
+    const analysis = await database.query(
+      `insert into ai_content_subject_analyses
+         (workspace_id, brand_id, generation_id, contract_version,
+          subject_type, input_json, status, idempotency_key)
+       values ($1, $2, $3, 'subject-analysis.v2', 'product', $4::jsonb,
+               'ready', $5)
+       returning id`,
+      [workspaceId, brandId, generation.rows[0].id, JSON.stringify({
+        manualInput: { name: "Product", promotionOrTerms: "", description: "Description" },
+        brandContext: { companyOverview: "Acme" },
+        regenerationIdempotencyKeys: ["legacy-key-1", "legacy-key-2"],
+      }), `analysis-${randomUUID()}`],
+    );
+    const analysisId = analysis.rows[0].id;
+
+    await database.exec(migration052.sql);
+    await database.exec(migration052.sql);
+
+    const keys = await database.query(
+      `select idempotency_key
+         from ai_content_subject_appeal_regeneration_keys
+        where analysis_id = $1
+        order by idempotency_key`,
+      [analysisId],
+    );
+    assert.deepEqual(keys.rows, [
+      { idempotency_key: "legacy-key-1" },
+      { idempotency_key: "legacy-key-2" },
+    ]);
+    const input = await database.query(
+      "select input_json from ai_content_subject_analyses where id = $1",
+      [analysisId],
+    );
+    assert.equal("regenerationIdempotencyKeys" in input.rows[0].input_json, false);
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_subject_appeal_regeneration_keys
+           (analysis_id, idempotency_key)
+         values ($1, 'legacy-key-1')`,
+        [analysisId],
+      ),
+      /ai_content_subject_appeal_regeneration_keys_pkey/,
+    );
+
+    await database.query("delete from ai_content_subject_analyses where id = $1", [analysisId]);
+    const cascaded = await database.query(
+      "select analysis_id from ai_content_subject_appeal_regeneration_keys where analysis_id = $1",
+      [analysisId],
+    );
+    assert.equal(cascaded.rows.length, 0);
+  });
+});
+
 test("subject pipeline v2 smoke fails before migration 051", async () => {
   const migrations = await loadMigrations();
   const schemaSmokeSql = await readFile("db/smoke/001_schema_smoke.sql", "utf8");

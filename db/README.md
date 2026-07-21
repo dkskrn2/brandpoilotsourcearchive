@@ -65,3 +65,8 @@ V2 evidence can be supplied by an optional HTTPS URL, up to 10 generation
 attachments, or manual name/description input. Pipeline statuses are
 `queued`, `extracting`, `analyzing`, `generating_appeals`, `ready`, `partial`,
 and `failed`; the legacy `researching` status remains valid for v1 records.
+
+`052_ai_content_subject_appeal_regeneration_keys.sql` stores appeal
+regeneration idempotency keys in a normalized ledger. Keys remain durable for
+the lifetime of the subject analysis, are unique per analysis, and cascade
+away when the analysis is deleted.
