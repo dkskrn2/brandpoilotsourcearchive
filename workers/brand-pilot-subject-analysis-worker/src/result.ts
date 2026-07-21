@@ -2,8 +2,11 @@ import type {
   ServiceSubtype,
   SubjectAnalysisResult,
   SubjectAnalysisResultV2,
+  SubjectAnalysisResultV2ParseContext,
   SubjectAppeal,
   SubjectEvidenceType,
+  SubjectProductProfileV2,
+  SubjectServiceProfileV2,
   SubjectTarget,
   SubjectType,
 } from "./contracts.js";
@@ -43,80 +46,26 @@ const strings = (value: unknown, code: string, max = 50): string[] => {
   return items.map((item) => stringValue(item, code));
 };
 
-const evidenceUrl = (value: unknown, code = "subject_analysis_source_url_invalid"): string => {
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const uuidValue = (value: unknown, code: string): string => {
+  const id = stringValue(value, code, 36);
+  if (!UUID_PATTERN.test(id)) fail(code);
+  return id.toLowerCase();
+};
+
+const evidenceUrl = (
+  value: unknown,
+  allowedAttachmentIds: ReadonlySet<string>,
+  code = "subject_analysis_source_url_invalid",
+): string => {
   const url = stringValue(value, code, 2048);
   if (url.startsWith("attachment://")) {
-    const attachmentId = url.slice("attachment://".length);
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(attachmentId)) fail(code);
-    return url.toLowerCase();
+    const attachmentId = uuidValue(url.slice("attachment://".length), code);
+    if (!allowedAttachmentIds.has(attachmentId)) fail("subject_analysis_attachment_not_allowed");
+    return `attachment://${attachmentId}`;
   }
   return https(url, code);
 };
-
-interface StructuredJsonBudget {
-  nodes: number;
-  characters: number;
-}
-
-function consumeStructuredBudget(budget: StructuredJsonBudget, characters = 0): void {
-  budget.nodes += 1;
-  budget.characters += characters;
-  if (budget.nodes > 2_000 || budget.characters > 100_000) {
-    fail("subject_analysis_structured_data_limit_exceeded");
-  }
-}
-
-function structuredJson(value: unknown, budget: StructuredJsonBudget, depth = 0): unknown {
-  const invalid = "subject_analysis_structured_data_invalid";
-  const limit = "subject_analysis_structured_data_limit_exceeded";
-  if (depth > 6) fail(limit);
-  consumeStructuredBudget(budget);
-  if (value === null || typeof value === "boolean") return value;
-  if (typeof value === "string") {
-    if (value.length > 10_000) fail(limit);
-    budget.characters += value.length;
-    if (budget.characters > 100_000) fail(limit);
-    return value;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) fail(invalid);
-    return value;
-  }
-  if (Array.isArray(value)) {
-    if (value.length > 100) fail(limit);
-    return value.map((item) => structuredJson(item, budget, depth + 1));
-  }
-  if (!value || typeof value !== "object") fail(invalid);
-  const objectValue = value as object;
-  const prototype = Object.getPrototypeOf(objectValue);
-  if (prototype !== Object.prototype && prototype !== null) fail(invalid);
-  const ownKeys = Reflect.ownKeys(objectValue);
-  if (ownKeys.length > 100) fail(limit);
-  if (ownKeys.some((key) => typeof key !== "string")) fail(invalid);
-  const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-  for (const key of ownKeys as string[]) {
-    if (key.length > 200) fail(limit);
-    if (key === "__proto__" || key === "prototype" || key === "constructor") fail(invalid);
-    budget.characters += key.length;
-    if (budget.characters > 100_000) fail(limit);
-    const descriptor = Object.getOwnPropertyDescriptor(objectValue, key);
-    if (!descriptor?.enumerable || !("value" in descriptor)) fail(invalid);
-    Object.defineProperty(result, key, {
-      value: structuredJson((descriptor as PropertyDescriptor & { value: unknown }).value, budget, depth + 1),
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    });
-  }
-  return result;
-}
-
-function structuredData(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    fail("subject_analysis_structured_data_invalid");
-  }
-  return structuredJson(value, { nodes: 0, characters: 0 }) as Record<string, unknown>;
-}
 
 function assertV2PayloadBudget(value: unknown): void {
   const budget = { nodes: 0, characters: 0 };
@@ -152,6 +101,119 @@ function serviceSubtype(value: unknown): ServiceSubtype {
     fail("subject_analysis_service_subtype_invalid");
   }
   return value as ServiceSubtype;
+}
+
+function parseV2Context(context: SubjectAnalysisResultV2ParseContext): {
+  expectedSubjectType: SubjectType;
+  allowedAttachmentIds: Set<string>;
+} {
+  if (!context || (context.expectedSubjectType !== "product" && context.expectedSubjectType !== "service")
+    || !Array.isArray(context.allowedAttachmentIds) || context.allowedAttachmentIds.length > 20) {
+    fail("subject_analysis_result_context_invalid");
+  }
+  return {
+    expectedSubjectType: context.expectedSubjectType,
+    allowedAttachmentIds: new Set(context.allowedAttachmentIds.map((id) => (
+      uuidValue(id, "subject_analysis_result_context_invalid")
+    ))),
+  };
+}
+
+function profileItems(value: unknown, code: string, max = 20): unknown[] {
+  if (!Array.isArray(value) || value.length > max) fail(code);
+  return value as unknown[];
+}
+
+function imageCandidates(
+  value: unknown,
+  code: string,
+  allowedAttachmentIds: ReadonlySet<string>,
+): Array<{ attachmentId: string; reason: string }> {
+  return profileItems(value, code, 10).map((item) => {
+    const candidate = exact(item, ["attachmentId", "reason"], code);
+    const attachmentId = uuidValue(candidate.attachmentId, code);
+    if (!allowedAttachmentIds.has(attachmentId)) fail("subject_analysis_attachment_not_allowed");
+    return { attachmentId, reason: stringValue(candidate.reason, code, 1_000) };
+  });
+}
+
+function parseProductProfile(
+  value: unknown,
+  allowedAttachmentIds: ReadonlySet<string>,
+): SubjectProductProfileV2 {
+  const code = "subject_analysis_product_profile_invalid";
+  const source = exact(value, [
+    "name", "category", "specifications", "materials", "options", "price",
+    "discountsAndPromotions", "shipping", "returns", "functions", "useContexts",
+    "purchaseBarriers", "reviewPatterns", "productImageCandidates", "detailImageCandidates",
+  ], code);
+  const reviewPatterns = exact(
+    source.reviewPatterns,
+    ["recurringSatisfaction", "recurringComplaints"],
+    code,
+  );
+  return {
+    name: stringValue(source.name, code, 500),
+    category: stringValue(source.category, code, 500),
+    specifications: strings(source.specifications, code, 20),
+    materials: strings(source.materials, code, 20),
+    options: strings(source.options, code, 20),
+    price: stringValue(source.price, code, 500),
+    discountsAndPromotions: strings(source.discountsAndPromotions, code, 20),
+    shipping: strings(source.shipping, code, 20),
+    returns: strings(source.returns, code, 20),
+    functions: profileItems(source.functions, code).map((item) => {
+      const entry = exact(item, ["function", "benefit", "purchaseReason"], code);
+      return {
+        function: stringValue(entry.function, code),
+        benefit: stringValue(entry.benefit, code),
+        purchaseReason: stringValue(entry.purchaseReason, code),
+      };
+    }),
+    useContexts: strings(source.useContexts, code, 20),
+    purchaseBarriers: strings(source.purchaseBarriers, code, 20),
+    reviewPatterns: {
+      recurringSatisfaction: strings(reviewPatterns.recurringSatisfaction, code, 20),
+      recurringComplaints: strings(reviewPatterns.recurringComplaints, code, 20),
+    },
+    productImageCandidates: imageCandidates(source.productImageCandidates, code, allowedAttachmentIds),
+    detailImageCandidates: imageCandidates(source.detailImageCandidates, code, allowedAttachmentIds),
+  };
+}
+
+function parseServiceProfile(value: unknown): SubjectServiceProfileV2 {
+  const code = "subject_analysis_service_profile_invalid";
+  const source = exact(value, [
+    "customerProblem", "currentAlternatives", "deliveryProcess", "deliverables", "users",
+    "buyers", "price", "beforeAfterWorkflow", "afterState", "terms", "support",
+    "trustEvidence", "securityEvidence", "performanceEvidence", "adoptionBarriers",
+  ], code);
+  const workflow = exact(source.beforeAfterWorkflow, ["before", "after"], code);
+  const terms = exact(source.terms, ["contract", "renewal", "cancellation"], code);
+  return {
+    customerProblem: strings(source.customerProblem, code, 20),
+    currentAlternatives: strings(source.currentAlternatives, code, 20),
+    deliveryProcess: strings(source.deliveryProcess, code, 20),
+    deliverables: strings(source.deliverables, code, 20),
+    users: strings(source.users, code, 20),
+    buyers: strings(source.buyers, code, 20),
+    price: stringValue(source.price, code, 500),
+    beforeAfterWorkflow: {
+      before: strings(workflow.before, code, 20),
+      after: strings(workflow.after, code, 20),
+    },
+    afterState: strings(source.afterState, code, 20),
+    terms: {
+      contract: strings(terms.contract, code, 20),
+      renewal: strings(terms.renewal, code, 20),
+      cancellation: strings(terms.cancellation, code, 20),
+    },
+    support: strings(source.support, code, 20),
+    trustEvidence: strings(source.trustEvidence, code, 20),
+    securityEvidence: strings(source.securityEvidence, code, 20),
+    performanceEvidence: strings(source.performanceEvidence, code, 20),
+    adoptionBarriers: strings(source.adoptionBarriers, code, 20),
+  };
 }
 
 function evidence(value: unknown): { claim: string; support: string; sourceUrl: string } {
@@ -215,7 +277,11 @@ export function parseSubjectAnalysisResult(value: unknown): SubjectAnalysisResul
   return { contractVersion: "subject-analysis-result.v1", summary: stringValue(source.summary, "subject_analysis_summary_invalid"), needs, alternatives, voc, usps, targets, appealsByTarget, recommendedImageId, sourceGaps: strings(source.sourceGaps, "subject_analysis_source_gaps_invalid") };
 }
 
-export function parseSubjectAnalysisResultV2(value: unknown): SubjectAnalysisResultV2 {
+export function parseSubjectAnalysisResultV2(
+  value: unknown,
+  context: SubjectAnalysisResultV2ParseContext,
+): SubjectAnalysisResultV2 {
+  const parsedContext = parseV2Context(context);
   assertV2PayloadBudget(value);
   const source = exact(
     value,
@@ -229,6 +295,7 @@ export function parseSubjectAnalysisResultV2(value: unknown): SubjectAnalysisRes
   if (source.contractVersion !== "subject-analysis-result.v2") fail("subject_analysis_result_version_invalid");
   if (source.phase !== "analysis") fail("subject_analysis_phase_invalid");
   const parsedSubjectType = subjectType(source.subjectType);
+  if (parsedSubjectType !== parsedContext.expectedSubjectType) fail("subject_analysis_subject_type_mismatch");
 
   const verifiedFactItems: unknown[] = Array.isArray(source.verifiedFacts)
     ? source.verifiedFacts
@@ -239,7 +306,7 @@ export function parseSubjectAnalysisResultV2(value: unknown): SubjectAnalysisRes
     return {
       claim: stringValue(fact.claim, "subject_analysis_verified_fact_invalid"),
       support: stringValue(fact.support, "subject_analysis_verified_fact_invalid"),
-      sourceUrl: evidenceUrl(fact.sourceUrl),
+      sourceUrl: evidenceUrl(fact.sourceUrl, parsedContext.allowedAttachmentIds),
     };
   });
 
@@ -250,7 +317,7 @@ export function parseSubjectAnalysisResultV2(value: unknown): SubjectAnalysisRes
     return {
       quoteSummary: stringValue(entry.quoteSummary, "subject_analysis_voc_invalid"),
       context: stringValue(entry.context, "subject_analysis_voc_invalid"),
-      sourceUrl: evidenceUrl(entry.sourceUrl),
+      sourceUrl: evidenceUrl(entry.sourceUrl, parsedContext.allowedAttachmentIds),
     };
   });
 
@@ -268,7 +335,7 @@ export function parseSubjectAnalysisResultV2(value: unknown): SubjectAnalysisRes
       name: stringValue(entry.name, "subject_analysis_alternatives_invalid", 500),
       strengths: strings(entry.strengths, "subject_analysis_alternatives_invalid"),
       limitations: strings(entry.limitations, "subject_analysis_alternatives_invalid"),
-      sourceUrls: urls.map((url) => evidenceUrl(url)),
+      sourceUrls: urls.map((url) => evidenceUrl(url, parsedContext.allowedAttachmentIds)),
     };
   });
 
@@ -285,19 +352,21 @@ export function parseSubjectAnalysisResultV2(value: unknown): SubjectAnalysisRes
     return {
       barrier: stringValue(entry.barrier, "subject_analysis_barrier_invalid"),
       evidence: stringValue(entry.evidence, "subject_analysis_barrier_invalid"),
-      sourceUrls: urls.map((url) => evidenceUrl(url)),
+      sourceUrls: urls.map((url) => evidenceUrl(url, parsedContext.allowedAttachmentIds)),
     };
   });
 
-  const productProfile = source.productProfile === null ? null : structuredData(source.productProfile);
-  const serviceProfile = source.serviceProfile === null ? null : structuredData(source.serviceProfile);
+  let productProfile: SubjectProductProfileV2 | null = null;
+  let serviceProfile: SubjectServiceProfileV2 | null = null;
   let parsedSubtype: ServiceSubtype | null = null;
   if (parsedSubjectType === "product") {
-    if (productProfile === null || serviceProfile !== null || source.serviceSubtype !== null) {
+    if (source.productProfile === null || source.serviceProfile !== null || source.serviceSubtype !== null) {
       fail("subject_analysis_product_profile_invalid");
     }
+    productProfile = parseProductProfile(source.productProfile, parsedContext.allowedAttachmentIds);
   } else {
-    if (serviceProfile === null || productProfile !== null) fail("subject_analysis_service_profile_invalid");
+    if (source.serviceProfile === null || source.productProfile !== null) fail("subject_analysis_service_profile_invalid");
+    serviceProfile = parseServiceProfile(source.serviceProfile);
     parsedSubtype = serviceSubtype(source.serviceSubtype);
   }
 
