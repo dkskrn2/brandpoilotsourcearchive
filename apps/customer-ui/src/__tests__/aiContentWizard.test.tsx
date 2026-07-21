@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -22,6 +22,17 @@ async function completeAnalysis(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("AiContentWizardPage", () => {
+  it("orders target and appeal, references, then prompt and generation", () => {
+    renderWizard();
+
+    const steps = within(screen.getByRole("list", { name: "생성 단계" })).getAllByRole("listitem");
+    expect(steps.slice(2).map((step) => step.textContent)).toEqual([
+      "3타깃·소구점",
+      "4레퍼런스",
+      "5프롬프트·생성",
+    ]);
+  });
+
   it("does not analyze when the page is opened", async () => {
     const gateway = createMockAiContentGateway();
     const request = vi.spyOn(gateway, "requestSubjectAnalysis");

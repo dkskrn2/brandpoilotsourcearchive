@@ -71,13 +71,16 @@ export function normalizeAiContentDraft(type: AiContentType, value: ApiGeneratio
   const selectedTarget = source.selectedTarget ?? legacyTarget(source);
   const selectedAppeal = source.selectedAppeal ?? legacyAppeal(source);
   const subjectType = source.subjectType ?? (source.analysisSource === "product_url" ? "product" : source.analysisSource === "owned" ? "service" : null);
+  const appealOverridesByTarget = source.appealOverridesByTarget && typeof source.appealOverridesByTarget === "object"
+    ? Object.fromEntries(Object.entries(source.appealOverridesByTarget).filter((entry): entry is [string, SubjectAppeal[]] => Array.isArray(entry[1])).map(([targetId, appeals]) => [targetId, appeals.map((appeal) => ({ ...appeal, sources: [...appeal.sources] }))]))
+    : {};
   return {
     type: source.type ?? type, subjectType,
     subjectInput,
     subjectAnalysisId: source.subjectAnalysisId ?? null,
     subjectAnalysisVersion: typeof source.subjectAnalysisVersion === "number" ? source.subjectAnalysisVersion : null,
     subjectAttachments: Array.isArray(source.subjectAttachments) ? [...source.subjectAttachments] : [],
-    selectedSubjectImageIds: [...selectedSubjectImageIds], selectedTarget, selectedAppeal,
+    selectedSubjectImageIds: [...selectedSubjectImageIds], selectedTarget, selectedAppeal, appealOverridesByTarget,
     referenceIds: Array.isArray(source.referenceIds) ? [...source.referenceIds] : [], brief: normalizeBrief(source.brief, brandColor),
     analysisSource: source.analysisSource ?? (subjectType === "product" ? "product_url" : subjectType === "service" ? "owned" : null),
     productUrl: subjectInput.sourceUrl, selectedAnalysisImageIds: [...selectedSubjectImageIds],
@@ -93,6 +96,7 @@ function serializeDraft(draft: AiContentDraft): Record<string, unknown> {
     subjectAnalysisId: draft.subjectAnalysisId, subjectAnalysisVersion: draft.subjectAnalysisVersion,
     subjectAttachments: (draft.subjectAttachments ?? []).map(({ file: _file, ...attachment }) => attachment),
     selectedSubjectImageIds: [...draft.selectedSubjectImageIds], selectedTarget: draft.selectedTarget, selectedAppeal: draft.selectedAppeal,
+    appealOverridesByTarget: Object.fromEntries(Object.entries(draft.appealOverridesByTarget).map(([targetId, appeals]) => [targetId, appeals.map((appeal) => ({ ...appeal, sources: [...appeal.sources] }))])),
     referenceIds: [...draft.referenceIds], brief: draft.brief ? { ...draft.brief, attachments: [...draft.brief.attachments], outputDirections: [...draft.brief.outputDirections] } : null,
   };
 }
@@ -250,6 +254,9 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
     },
     async getSubjectAnalysis(brandId, analysisId) {
       return mapSubjectAnalysis(await client.requestJson<ApiSubjectAnalysis>(`/brands/${brandId}/ai-content/subject-analyses/${analysisId}`, { method: "GET" }));
+    },
+    async regenerateSubjectAppeals(brandId, analysisId, idempotencyKey) {
+      return mapSubjectAnalysis(await client.requestJson<ApiSubjectAnalysis>(`/brands/${brandId}/ai-content/subject-analyses/${analysisId}/appeals/regenerate`, { method: "POST", body: JSON.stringify({ idempotencyKey }) }));
     },
     async reanalyzeSubject(brandId, analysisId, idempotencyKey) {
       return mapSubjectAnalysis(await client.requestJson<ApiSubjectAnalysis>(`/brands/${brandId}/ai-content/subject-analyses/${analysisId}/reanalyze`, { method: "POST", body: JSON.stringify({ idempotencyKey }) }));

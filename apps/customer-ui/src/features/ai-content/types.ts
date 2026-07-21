@@ -164,6 +164,7 @@ export interface AiContentDraft {
   selectedSubjectImageIds: string[];
   selectedTarget: SubjectTarget | null;
   selectedAppeal: SubjectAppeal | null;
+  appealOverridesByTarget: Record<string, SubjectAppeal[]>;
   referenceIds: string[];
   brief: GenerationBrief | null;
 
@@ -261,6 +262,7 @@ export interface AiContentGateway {
   getCachedSubjectAnalysis(brandId: string, subjectType: SubjectType, sourceUrl: string): Promise<SubjectAnalysis | null>;
   requestSubjectAnalysis(brandId: string, input: SubjectAnalysisInput | LegacySubjectAnalysisInput): Promise<SubjectAnalysis>;
   getSubjectAnalysis(brandId: string, analysisId: string): Promise<SubjectAnalysis>;
+  regenerateSubjectAppeals(brandId: string, analysisId: string, idempotencyKey: string): Promise<SubjectAnalysis>;
   reanalyzeSubject(brandId: string, analysisId: string, idempotencyKey: string): Promise<SubjectAnalysis>;
   selectSubjectImage(brandId: string, analysisId: string, imageId: string): Promise<SubjectAnalysis>;
 }

@@ -10,6 +10,7 @@ const draft: AiContentDraft = {
   subjectInput: { sourceUrl: "https://example.com/product", name: "제품", promotion: "", description: "" },
   subjectAnalysisId: "analysis-1",
   subjectAnalysisVersion: 1,
+  appealOverridesByTarget: {},
   selectedSubjectImageIds: ["image-1"],
   selectedTarget: null,
   selectedAppeal: null,
@@ -232,10 +233,30 @@ describe("createAiContentApiGateway", () => {
     const normalized = await gateway.getGeneration("brand-1", "generation-legacy");
     expect(normalized.draft.subjectInput.sourceUrl).toBe("https://example.com/legacy");
     expect(normalized.draft.selectedAppeal?.id).toBe("appeal-1");
+    expect(normalized.draft.appealOverridesByTarget).toEqual({});
     await gateway.updateGeneration("brand-1", "generation-1", { draft: { ...draft, secondaryAppeals: [{ id: "ignored" } as never] }, referenceIds: [] });
     const body = JSON.parse(requestJson.mock.calls[1][1].body as string);
     expect(body.draft.secondaryAppeals).toBeUndefined();
     expect(body.draft.subjectAnalysisId).toBe("analysis-1");
+    expect(body.draft.appealOverridesByTarget).toEqual({});
+  });
+
+  it("requests appeal regeneration with an idempotency key", async () => {
+    const requestJson = vi.fn(async () => ({
+      id: "analysis-1",
+      status: "generating_appeals",
+      analysisVersion: 1,
+      targets: [],
+      appealsByTarget: {},
+    }));
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await gateway.regenerateSubjectAppeals("brand-1", "analysis-1", "appeal-regeneration-1");
+
+    expect(requestJson).toHaveBeenCalledWith(
+      "/brands/brand-1/ai-content/subject-analyses/analysis-1/appeals/regenerate",
+      { method: "POST", body: JSON.stringify({ idempotencyKey: "appeal-regeneration-1" }) },
+    );
   });
 
   it("calls the subject analysis cache, request, polling, reanalysis, and image selection APIs", async () => {

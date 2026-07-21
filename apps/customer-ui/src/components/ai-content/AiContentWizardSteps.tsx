@@ -15,7 +15,7 @@ interface Actions {
   setSubjectAnalysis(value: SubjectAnalysis | null): void;
   setSelectedSubjectImages(ids: string[]): void;
   setTarget(value: SubjectTarget | null): void;
-  setAppeal(value: SubjectAppeal | null): void;
+  setAppeal(value: SubjectAppeal | null, override?: { targetId: string; appeals: SubjectAppeal[] | null }): void;
   setReferences(ids: string[]): void;
   reorderReference(from: number, to: number): void;
   setBrief(brief: GenerationBrief): void;
@@ -26,7 +26,7 @@ export const wizardStepNames = ["콘텐츠 유형", "제품·서비스 분석", 
 export function AiContentWizardSteps({ step, draft, actions, gateway, brandId, generationId, analysis, onPrepareAnalysis }: { step: WizardStep; draft: AiContentDraft; actions: Actions; gateway: AiContentGateway; brandId: string; generationId: string | null; analysis: SubjectAnalysis | null; onPrepareAnalysis(): Promise<{ generationId: string; attachments: GenerationAttachment[] }> }) {
   if (step === 1) return <TypeStep draft={draft} setType={actions.setType} />;
   if (step === 2) return <SubjectAnalysisStep brandId={brandId} gateway={gateway} draft={draft} analysis={analysis} onSubjectType={actions.setSubjectType} onSubjectInput={actions.setSubjectInput} onSubjectAttachments={actions.setSubjectAttachments} onPrepareAnalysis={onPrepareAnalysis} onAnalysis={actions.setSubjectAnalysis} />;
-  if (step === 3) return <TargetAppealStep analysis={analysis} draft={draft} onTarget={actions.setTarget} onAppeal={actions.setAppeal} />;
+  if (step === 3) return <TargetAppealStep analysis={analysis} draft={draft} gateway={gateway} brandId={brandId} onTarget={actions.setTarget} onAppeal={actions.setAppeal} onAppealsChange={(targetId, appeals) => actions.setAppeal(draft.selectedAppeal, { targetId, appeals })} onResetAppeals={(targetId) => actions.setAppeal(null, { targetId, appeals: null })} onAnalysis={actions.setSubjectAnalysis} />;
   if (step === 4) return <ReferencesStep draft={draft} actions={actions} gateway={gateway} brandId={brandId} />;
   return <GenerationPromptStep brandId={brandId} gateway={gateway} draft={draft} onBrief={actions.setBrief} generationId={generationId} />;
 }

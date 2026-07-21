@@ -39,6 +39,7 @@ const emptyDraft = (type: AiContentDraft["type"]): AiContentDraft => ({
   selectedSubjectImageIds: [],
   selectedTarget: null,
   selectedAppeal: null,
+  appealOverridesByTarget: {},
   referenceIds: [],
   brief: { purpose: "" as GenerationBrief["purpose"], emphasis: "", cta: "", additionalInstruction: "", selectedColor: "#0057B8", attachments: [], aspectRatio: "1:1", outputCount: 1, outputDirections: [""] },
   analysisSource: "owned",
@@ -369,6 +370,15 @@ export function createMockAiContentGateway(): AiContentGateway {
     async getSubjectAnalysis(brandId, analysisId) {
       const analysis = [...subjectRows.values()].find((item) => item.brandId === brandId && item.id === analysisId);
       if (!analysis) throw new Error("subject_analysis_not_found");
+      return copy(analysis);
+    },
+    async regenerateSubjectAppeals(brandId, analysisId) {
+      const analysis = await this.getSubjectAnalysis(brandId, analysisId);
+      analysis.appealsByTarget = Object.fromEntries(Object.entries(analysis.appealsByTarget).map(([targetId, appeals]) => [
+        targetId,
+        appeals.map((appeal, index) => ({ ...appeal, id: `${targetId}-regenerated-${index + 1}`, title: `${appeal.title} 새 추천` })),
+      ]));
+      subjectRows.set(`${brandId}:${analysis.subjectType}:${analysis.sourceUrl}`, analysis);
       return copy(analysis);
     },
     async reanalyzeSubject(brandId, analysisId, idempotencyKey) {

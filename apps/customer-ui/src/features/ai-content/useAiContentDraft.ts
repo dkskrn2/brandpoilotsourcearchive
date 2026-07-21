@@ -84,6 +84,7 @@ export function createInitialAiContentDraft(initialType: AiContentType | null, b
     selectedSubjectImageIds: [],
     selectedTarget: null,
     selectedAppeal: null,
+    appealOverridesByTarget: {},
     referenceIds: [],
     brief: emptyBrief(brandColor),
     analysisSource: null,
@@ -113,6 +114,7 @@ export function useAiContentDraft(initialType: AiContentType | null, brandColor 
     selectedAnalysisImageIds: [],
     selectedTarget: null,
     selectedAppeal: null,
+    appealOverridesByTarget: {},
     audience: null,
     coreAppeal: null,
     secondaryAppeals: [],
@@ -183,12 +185,44 @@ export function useAiContentDraft(initialType: AiContentType | null, brandColor 
         secondaryAppeals: [],
       };
     }),
-    setAppeal: (selectedAppeal: SubjectAppeal | null) => setDraft((current) => {
+    setAppeal: (requestedAppeal: SubjectAppeal | null, override?: { targetId: string; appeals: SubjectAppeal[] | null }) => setDraft((current) => {
+      const appealOverridesByTarget = { ...current.appealOverridesByTarget };
+      if (override?.appeals === null) delete appealOverridesByTarget[override.targetId];
+      if (override?.appeals) appealOverridesByTarget[override.targetId] = override.appeals.map((appeal) => ({ ...appeal, sources: [...appeal.sources] }));
+      const selectedAppeal = requestedAppeal && override?.appeals
+        ? override.appeals.find((appeal) => appeal.id === requestedAppeal.id) ?? null
+        : requestedAppeal;
       if (selectedAppeal && current.selectedTarget?.id !== selectedAppeal.targetId) return current;
       return {
         ...current,
+        appealOverridesByTarget,
         selectedAppeal: selectedAppeal ? { ...selectedAppeal } : null,
         coreAppeal: legacyAppeal(selectedAppeal),
+        secondaryAppeals: [],
+      };
+    }),
+    setAppealsForTarget: (targetId: string, appeals: SubjectAppeal[]) => setDraft((current) => {
+      const nextAppeals = appeals.map((appeal) => ({ ...appeal, sources: [...appeal.sources] }));
+      const selectedAppeal = current.selectedAppeal?.targetId === targetId
+        ? nextAppeals.find((appeal) => appeal.id === current.selectedAppeal?.id) ?? null
+        : current.selectedAppeal;
+      return {
+        ...current,
+        appealOverridesByTarget: { ...current.appealOverridesByTarget, [targetId]: nextAppeals },
+        selectedAppeal,
+        coreAppeal: legacyAppeal(selectedAppeal),
+        secondaryAppeals: [],
+      };
+    }),
+    clearAppealsForTarget: (targetId: string) => setDraft((current) => {
+      const appealOverridesByTarget = { ...current.appealOverridesByTarget };
+      delete appealOverridesByTarget[targetId];
+      const clearSelection = current.selectedAppeal?.targetId === targetId;
+      return {
+        ...current,
+        appealOverridesByTarget,
+        selectedAppeal: clearSelection ? null : current.selectedAppeal,
+        coreAppeal: clearSelection ? null : current.coreAppeal,
         secondaryAppeals: [],
       };
     }),
