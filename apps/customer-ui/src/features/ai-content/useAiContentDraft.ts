@@ -5,6 +5,7 @@ import type {
   AiContentWizardStep,
   AppealSnapshot,
   AudienceSnapshot,
+  GenerationAttachment,
   GenerationBrief,
   SubjectAnalysis,
   SubjectAppeal,
@@ -79,6 +80,7 @@ export function createInitialAiContentDraft(initialType: AiContentType | null, b
     subjectInput: { sourceUrl: "", name: "", promotion: "", description: "" },
     subjectAnalysisId: null,
     subjectAnalysisVersion: null,
+    subjectAttachments: [],
     selectedSubjectImageIds: [],
     selectedTarget: null,
     selectedAppeal: null,
@@ -103,11 +105,26 @@ export function useAiContentDraft(initialType: AiContentType | null, brandColor 
   const [draft, setDraft] = useState<AiContentDraft>(() => createInitialAiContentDraft(initialType, brandColor));
 
   const patch = (value: Partial<AiContentDraft>) => setDraft((current) => ({ ...current, ...value }));
-  const setSubjectInput = (value: Partial<AiContentDraft["subjectInput"]>) => setDraft((current) => ({
+  const clearSubjectSelection = (current: AiContentDraft) => ({
     ...current,
-    subjectInput: { ...current.subjectInput, ...value },
-    productUrl: value.sourceUrl ?? current.subjectInput.sourceUrl,
-  }));
+    subjectAnalysisId: null,
+    subjectAnalysisVersion: null,
+    selectedSubjectImageIds: [],
+    selectedAnalysisImageIds: [],
+    selectedTarget: null,
+    selectedAppeal: null,
+    audience: null,
+    coreAppeal: null,
+    secondaryAppeals: [],
+  });
+  const setSubjectInput = (value: Partial<AiContentDraft["subjectInput"]>) => {
+    setSubjectAnalysis(null);
+    setDraft((current) => ({
+      ...clearSubjectSelection(current),
+      subjectInput: { ...current.subjectInput, ...value },
+      productUrl: value.sourceUrl ?? current.subjectInput.sourceUrl,
+    }));
+  };
 
   return {
     step,
@@ -124,19 +141,24 @@ export function useAiContentDraft(initialType: AiContentType | null, brandColor 
       if (!value) return;
       setDraft((current) => ({
         ...current,
-        subjectType: value.subjectType,
-        subjectInput: { ...current.subjectInput, ...value.input, sourceUrl: value.sourceUrl },
         subjectAnalysisId: value.id,
         subjectAnalysisVersion: value.analysisVersion,
-        selectedSubjectImageIds: value.selectedImageId ? [value.selectedImageId] : current.selectedSubjectImageIds,
-        selectedAnalysisImageIds: value.selectedImageId ? [value.selectedImageId] : current.selectedAnalysisImageIds,
-        selectedTarget: current.selectedTarget ?? value.targets[0] ?? null,
-        selectedAppeal: current.selectedAppeal ?? (value.targets[0] ? value.appealsByTarget[value.targets[0].id]?.[0] ?? null : null),
       }));
     },
     setType: (type: AiContentType) => patch({ type }),
-    setSubjectType: (subjectType: SubjectType) => patch({ subjectType, analysisSource: subjectType === "product" ? "product_url" : "owned" }),
+    setSubjectType: (subjectType: SubjectType) => {
+      setSubjectAnalysis(null);
+      setDraft((current) => ({
+        ...clearSubjectSelection(current),
+        subjectType,
+        analysisSource: subjectType === "product" ? "product_url" : "owned",
+      }));
+    },
     setSubjectInput,
+    setSubjectAttachments: (subjectAttachments: GenerationAttachment[]) => {
+      setSubjectAnalysis(null);
+      setDraft((current) => ({ ...clearSubjectSelection(current), subjectAttachments: [...subjectAttachments] }));
+    },
     setAnalysisSource: (analysisSource: AiContentDraft["analysisSource"]) => patch({
       analysisSource,
       subjectType: analysisSource === "product_url" ? "product" : analysisSource === "owned" ? "service" : null,

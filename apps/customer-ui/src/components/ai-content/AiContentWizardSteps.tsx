@@ -1,6 +1,6 @@
 import { Image } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { AiContentDraft, AiContentGateway, AiContentReference, AiContentType, GenerationBrief, SubjectAnalysis, SubjectAppeal, SubjectTarget, SubjectType } from "../../features/ai-content/types";
+import type { AiContentDraft, AiContentGateway, AiContentReference, AiContentType, GenerationAttachment, GenerationBrief, SubjectAnalysis, SubjectAppeal, SubjectTarget, SubjectType } from "../../features/ai-content/types";
 import type { WizardStep } from "../../features/ai-content/useAiContentDraft";
 import { GenerationPromptStep } from "./GenerationPromptStep";
 import { ReferencePicker } from "./ReferencePicker";
@@ -11,6 +11,7 @@ interface Actions {
   setType(type: AiContentType): void;
   setSubjectType(type: SubjectType): void;
   setSubjectInput(value: Partial<AiContentDraft["subjectInput"]>): void;
+  setSubjectAttachments(value: GenerationAttachment[]): void;
   setSubjectAnalysis(value: SubjectAnalysis | null): void;
   setSelectedSubjectImages(ids: string[]): void;
   setTarget(value: SubjectTarget | null): void;
@@ -22,9 +23,9 @@ interface Actions {
 
 export const wizardStepNames = ["콘텐츠 유형", "제품·서비스 분석", "타깃·소구점", "레퍼런스", "프롬프트·생성"] as const;
 
-export function AiContentWizardSteps({ step, draft, actions, gateway, brandId, generationId, analysis }: { step: WizardStep; draft: AiContentDraft; actions: Actions; gateway: AiContentGateway; brandId: string; generationId: string | null; analysis: SubjectAnalysis | null }) {
+export function AiContentWizardSteps({ step, draft, actions, gateway, brandId, generationId, analysis, onPrepareAnalysis }: { step: WizardStep; draft: AiContentDraft; actions: Actions; gateway: AiContentGateway; brandId: string; generationId: string | null; analysis: SubjectAnalysis | null; onPrepareAnalysis(): Promise<{ generationId: string; attachments: GenerationAttachment[] }> }) {
   if (step === 1) return <TypeStep draft={draft} setType={actions.setType} />;
-  if (step === 2) return <SubjectAnalysisStep brandId={brandId} gateway={gateway} draft={draft} analysis={analysis} onSubjectType={actions.setSubjectType} onSubjectInput={actions.setSubjectInput} onAnalysis={actions.setSubjectAnalysis} onSelectImage={(imageId) => { actions.setSelectedSubjectImages([imageId]); if (analysis) actions.setSubjectAnalysis({ ...analysis, selectedImageId: imageId }); }} />;
+  if (step === 2) return <SubjectAnalysisStep brandId={brandId} gateway={gateway} draft={draft} analysis={analysis} onSubjectType={actions.setSubjectType} onSubjectInput={actions.setSubjectInput} onSubjectAttachments={actions.setSubjectAttachments} onPrepareAnalysis={onPrepareAnalysis} onAnalysis={actions.setSubjectAnalysis} />;
   if (step === 3) return <TargetAppealStep analysis={analysis} draft={draft} onTarget={actions.setTarget} onAppeal={actions.setAppeal} />;
   if (step === 4) return <ReferencesStep draft={draft} actions={actions} gateway={gateway} brandId={brandId} />;
   return <GenerationPromptStep brandId={brandId} gateway={gateway} draft={draft} onBrief={actions.setBrief} generationId={generationId} />;

@@ -1,11 +1,11 @@
-import type { PublishArtifact } from "../../types";
+import type { ChannelConnection, ChannelType, DeliveryFormat, PublishArtifact } from "../../types";
 
 export type AiContentType = "card_news" | "blog" | "marketing";
 export type AiContentWizardStep = 1 | 2 | 3 | 4 | 5;
 export type AiGenerationStatus = "draft" | "analyzing" | "analysis_ready" | "queued" | "planning" | "generating" | "completed" | "partial_failed" | "failed";
 export type AiOutputStatus = "queued" | "planning" | "generating" | "completed" | "failed";
 export type SubjectType = "product" | "service";
-export type SubjectAnalysisStatus = "queued" | "extracting" | "researching" | "ready" | "partial" | "failed";
+export type SubjectAnalysisStatus = "queued" | "extracting" | "researching" | "analyzing" | "generating_appeals" | "ready" | "partial" | "failed";
 export type SubjectEvidenceType = "product_fact" | "public_research" | "manual_input";
 
 export interface AiContentUsage {
@@ -65,12 +65,16 @@ export interface SubjectAnalysisImage {
 
 export interface SubjectAnalysis {
   id: string;
+  generationId?: string | null;
+  contractVersion?: "subject-analysis.v1" | "subject-analysis.v2";
   workspaceId: string;
   brandId: string;
   subjectType: SubjectType;
   sourceUrl: string;
   normalizedUrl: string;
-  input: { name: string; promotion: string; description: string };
+  input:
+    | { name: string; promotion: string; promotionOrTerms?: string; description: string }
+    | { name: string; promotion?: string; promotionOrTerms: string; description: string };
   status: SubjectAnalysisStatus;
   facts: Array<{ key: string; value: string; sourceUrl: string }>;
   structuredData: Record<string, unknown>;
@@ -85,6 +89,7 @@ export interface SubjectAnalysis {
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
+  sourceGaps?: string[];
 }
 
 export interface AudiencePreset {
@@ -139,7 +144,7 @@ export interface GenerationBrief {
   additionalInstruction: string;
   selectedColor: string;
   attachments: GenerationAttachment[];
-  aspectRatio: "1:1" | "4:5" | "9:16";
+  aspectRatio: "1:1" | "4:5" | "16:9" | "9:16";
   outputCount: 1 | 2 | 3;
   outputDirections: string[];
 }
@@ -155,6 +160,7 @@ export interface AiContentDraft {
   };
   subjectAnalysisId: string | null;
   subjectAnalysisVersion: number | null;
+  subjectAttachments?: GenerationAttachment[];
   selectedSubjectImageIds: string[];
   selectedTarget: SubjectTarget | null;
   selectedAppeal: SubjectAppeal | null;
@@ -175,11 +181,16 @@ export interface AiContentDraft {
   secondaryAppeals: AppealSnapshot[];
 }
 
-export interface SubjectAnalysisInput {
+export interface SubjectAnalysisInput<TSourceUrl extends string | null = any> {
+  generationId?: string;
   subjectType: SubjectType;
-  sourceUrl: string;
-  manualInput: { name: string; promotion: string; description: string };
+  sourceUrl: TSourceUrl;
+  attachmentIds?: string[];
+  manualInput:
+    | { name: string; promotionOrTerms: string; promotion?: string; description: string }
+    | { name: string; promotion: string; promotionOrTerms?: string; description: string };
   idempotencyKey: string;
+  /** @deprecated v1 mock and restore compatibility only. New requests never send this field. */
   force?: boolean;
 }
 
@@ -207,6 +218,19 @@ export interface AiContentGeneration {
   updatedAt: string;
 }
 
+export interface AiContentPublishTargetInput {
+  channel: ChannelType;
+  deliveryFormat: DeliveryFormat;
+}
+
+export interface AiContentPublishTargetResult extends AiContentPublishTargetInput {
+  channelOutputId: string;
+  queueId: string | null;
+  status: "rendering" | "scheduled" | "publishing" | "published" | "failed";
+  publishedUrl: string | null;
+  errorCode: string | null;
+}
+
 export interface AiContentGateway {
   getUsage(brandId: string): Promise<AiContentUsage>;
   getBrandContext(brandId: string): Promise<AiContentBrandContext>;
@@ -224,10 +248,13 @@ export interface AiContentGateway {
   retryOutput(brandId: string, outputId: string, reason: string): Promise<AiGenerationOutput>;
   downloadOutput(brandId: string, outputId: string): Promise<{ blob: Blob; fileName: string }>;
   downloadGeneration(brandId: string, generationId: string, outputIds?: string[]): Promise<{ blob: Blob; fileName: string }>;
-  sendToPublish(brandId: string, outputId: string): Promise<{ publishGroupId: string }>;
-  isInstagramConnected(brandId: string): Promise<boolean>;
+  publishOutput(brandId: string, outputId: string, input: {
+    idempotencyKey: string;
+    targets: AiContentPublishTargetInput[];
+  }): Promise<{ outputId: string; publishGroupId: string; targets: AiContentPublishTargetResult[] }>;
+  listChannels(brandId: string): Promise<ChannelConnection[]>;
   getCachedSubjectAnalysis(brandId: string, subjectType: SubjectType, sourceUrl: string): Promise<SubjectAnalysis | null>;
-  requestSubjectAnalysis(brandId: string, input: SubjectAnalysisInput): Promise<SubjectAnalysis>;
+  requestSubjectAnalysis(brandId: string, input: SubjectAnalysisInput<string | null>): Promise<SubjectAnalysis>;
   getSubjectAnalysis(brandId: string, analysisId: string): Promise<SubjectAnalysis>;
   reanalyzeSubject(brandId: string, analysisId: string, idempotencyKey: string): Promise<SubjectAnalysis>;
   selectSubjectImage(brandId: string, analysisId: string, imageId: string): Promise<SubjectAnalysis>;

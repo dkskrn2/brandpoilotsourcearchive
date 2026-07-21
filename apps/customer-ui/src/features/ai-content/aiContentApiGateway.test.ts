@@ -80,6 +80,31 @@ describe("createAiContentApiGateway", () => {
     await expect(gateway.listGenerations("brand-1")).rejects.toThrow("API request failed: 503");
   });
 
+  it("maps channel API fields before evaluating OAuth publish availability", async () => {
+    const requestJson = vi.fn(async () => [{
+      channel: "instagram",
+      enabled: true,
+      oauthState: "connected",
+      status: "connected",
+      accountLabel: "@growthline352",
+      lastHealthyAt: "2026-07-21T00:00:00.000Z",
+      lastPublishedAt: null,
+      lastError: null,
+    }]);
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await expect(gateway.listChannels("brand-1")).resolves.toEqual([
+      expect.objectContaining({
+        type: "instagram",
+        label: "Instagram",
+        enabled: true,
+        oauthState: "connected",
+        status: "connected",
+        accountLabel: "@growthline352",
+      }),
+    ]);
+  });
+
   it("keeps the requested type on each reference result", async () => {
     const requestJson = vi.fn(async () => [{
       id: "reference-1",
@@ -112,7 +137,7 @@ describe("createAiContentApiGateway", () => {
       mimeType: file.type,
       size: file.size,
       file,
-    })).resolves.toMatchObject({ storagePath: "brands/brand-1/generation-1/product.png" });
+    })).resolves.toMatchObject({ id: "attachment-1", storagePath: "brands/brand-1/generation-1/product.png" });
 
     expect(blobPut).toHaveBeenCalledWith(
       "brands/brand-1/generation-1/product.png",
@@ -123,6 +148,46 @@ describe("createAiContentApiGateway", () => {
       2,
       "/brands/brand-1/ai-content/generations/generation-1/attachments/confirm",
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("requests the generation-scoped v2 subject pipeline contract", async () => {
+    const requestJson = vi.fn(async () => ({
+      id: "analysis-1",
+      generationId: "generation-1",
+      contractVersion: "subject-analysis.v2",
+      status: "extracting",
+      analysisVersion: 1,
+      targets: [],
+      appealsByTarget: {},
+      sourceGaps: [],
+    }));
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    const result = await gateway.requestSubjectAnalysis("brand-1", {
+      generationId: "generation-1",
+      subjectType: "service",
+      sourceUrl: null,
+      attachmentIds: ["attachment-1"],
+      manualInput: { name: "운영 대행", promotionOrTerms: "월 단위", description: "채널 운영" },
+      idempotencyKey: "subject-v2-1",
+    } as never);
+
+    expect(result).toMatchObject({ id: "analysis-1", generationId: "generation-1", status: "extracting" });
+    expect(requestJson).toHaveBeenCalledWith(
+      "/brands/brand-1/ai-content/subject-analyses",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          contractVersion: "subject-analysis.v2",
+          generationId: "generation-1",
+          subjectType: "service",
+          sourceUrl: null,
+          attachmentIds: ["attachment-1"],
+          manualInput: { name: "운영 대행", promotionOrTerms: "월 단위", description: "채널 운영" },
+          idempotencyKey: "subject-v2-1",
+        }),
+      }),
     );
   });
 
@@ -156,7 +221,7 @@ describe("createAiContentApiGateway", () => {
     const gateway = createAiContentApiGateway(clientWith(requestJson));
 
     await gateway.getCachedSubjectAnalysis("brand-1", "product", "https://example.com/product");
-    await gateway.requestSubjectAnalysis("brand-1", { subjectType: "product", sourceUrl: "https://example.com/product", manualInput: { name: "제품", promotion: "", description: "" }, idempotencyKey: "request-1" });
+    await gateway.requestSubjectAnalysis("brand-1", { generationId: "generation-1", subjectType: "product", sourceUrl: "https://example.com/product", attachmentIds: [], manualInput: { name: "제품", promotionOrTerms: "", description: "" }, idempotencyKey: "request-1" });
     await gateway.getSubjectAnalysis("brand-1", "analysis-1");
     await gateway.reanalyzeSubject("brand-1", "analysis-1", "reanalyze-1");
     await gateway.selectSubjectImage("brand-1", "analysis-1", "image-1");

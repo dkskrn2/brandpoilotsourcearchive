@@ -1,5 +1,5 @@
 import { put as putBlob } from "@vercel/blob/client";
-import { apiClient } from "../../lib/apiClient";
+import { apiClient, mapApiChannelConnection, type ApiChannel } from "../../lib/apiClient";
 import type { PublishArtifact, PublishArtifactAsset } from "../../types";
 import type {
   AiContentDraft,
@@ -31,12 +31,14 @@ interface ApiGeneration {
 }
 
 interface ApiSubjectAnalysis {
-  id: string; workspaceId: string; brandId: string; subjectType: SubjectType; sourceUrl: string; normalizedUrl: string;
-  input: { name?: string; promotion?: string; description?: string }; status: SubjectAnalysis["status"];
+  id: string; generationId?: string | null; contractVersion?: "subject-analysis.v1" | "subject-analysis.v2";
+  workspaceId?: string; brandId?: string; subjectType?: SubjectType; sourceUrl?: string; normalizedUrl?: string;
+  input?: { name?: string; promotion?: string; promotionOrTerms?: string; description?: string }; status: SubjectAnalysis["status"];
   facts?: SubjectAnalysis["facts"]; structuredData?: Record<string, unknown>; research?: Record<string, unknown>;
   targets?: SubjectTarget[]; appealsByTarget?: Record<string, SubjectAppeal[]>; selectedImageId?: string | null;
   images?: SubjectAnalysis["images"]; analysisVersion: number; errorCode?: string | null; errorMessage?: string | null;
-  createdAt: string; updatedAt: string; completedAt?: string | null;
+  createdAt?: string; updatedAt?: string; completedAt?: string | null;
+  sourceGaps?: string[];
 }
 
 function normalizeBrief(value: Partial<GenerationBrief> | null | undefined, brandColor = DEFAULT_BRAND_COLOR): GenerationBrief {
@@ -73,6 +75,7 @@ export function normalizeAiContentDraft(type: AiContentType, value: ApiGeneratio
     subjectInput,
     subjectAnalysisId: source.subjectAnalysisId ?? null,
     subjectAnalysisVersion: typeof source.subjectAnalysisVersion === "number" ? source.subjectAnalysisVersion : null,
+    subjectAttachments: Array.isArray(source.subjectAttachments) ? [...source.subjectAttachments] : [],
     selectedSubjectImageIds: [...selectedSubjectImageIds], selectedTarget, selectedAppeal,
     referenceIds: Array.isArray(source.referenceIds) ? [...source.referenceIds] : [], brief: normalizeBrief(source.brief, brandColor),
     analysisSource: source.analysisSource ?? (subjectType === "product" ? "product_url" : subjectType === "service" ? "owned" : null),
@@ -87,6 +90,7 @@ function serializeDraft(draft: AiContentDraft): Record<string, unknown> {
   return {
     type: draft.type, subjectType: draft.subjectType, subjectInput: { ...draft.subjectInput, sourceUrl: draft.subjectInput.sourceUrl || draft.productUrl },
     subjectAnalysisId: draft.subjectAnalysisId, subjectAnalysisVersion: draft.subjectAnalysisVersion,
+    subjectAttachments: (draft.subjectAttachments ?? []).map(({ file: _file, ...attachment }) => attachment),
     selectedSubjectImageIds: [...draft.selectedSubjectImageIds], selectedTarget: draft.selectedTarget, selectedAppeal: draft.selectedAppeal,
     referenceIds: [...draft.referenceIds], brief: draft.brief ? { ...draft.brief, attachments: [...draft.brief.attachments], outputDirections: [...draft.brief.outputDirections] } : null,
   };
@@ -128,13 +132,15 @@ function mapGeneration(value: ApiGeneration): AiContentGeneration {
 function mapSubjectAnalysis(value: ApiSubjectAnalysis): SubjectAnalysis {
   const targets = Array.isArray(value.targets) ? value.targets : [];
   return {
-    id: value.id, workspaceId: value.workspaceId, brandId: value.brandId, subjectType: value.subjectType,
-    sourceUrl: value.sourceUrl, normalizedUrl: value.normalizedUrl,
-    input: { name: value.input?.name ?? "", promotion: value.input?.promotion ?? "", description: value.input?.description ?? "" },
+    id: value.id, generationId: value.generationId ?? null, contractVersion: value.contractVersion,
+    workspaceId: value.workspaceId ?? "", brandId: value.brandId ?? "", subjectType: value.subjectType ?? "product",
+    sourceUrl: value.sourceUrl ?? "", normalizedUrl: value.normalizedUrl ?? "",
+    input: { name: value.input?.name ?? "", promotion: value.input?.promotionOrTerms ?? value.input?.promotion ?? "", description: value.input?.description ?? "" },
     status: value.status, facts: value.facts ?? [], structuredData: value.structuredData ?? {}, research: value.research ?? {},
     targets, appealsByTarget: value.appealsByTarget ?? {}, selectedImageId: value.selectedImageId ?? null,
     images: value.images ?? [], analysisVersion: value.analysisVersion, errorCode: value.errorCode ?? null, errorMessage: value.errorMessage ?? null,
-    createdAt: value.createdAt, updatedAt: value.updatedAt, completedAt: value.completedAt ?? null,
+    createdAt: value.createdAt ?? "", updatedAt: value.updatedAt ?? "", completedAt: value.completedAt ?? null,
+    sourceGaps: value.sourceGaps ?? [],
   };
 }
 
@@ -179,8 +185,8 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
         contentType: attachment.mimeType,
         onUploadProgress: onProgress ? ({ percentage }) => onProgress(percentage) : undefined,
       });
-      await client.requestJson(`/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`, { method: "POST", body: JSON.stringify({ ...metadata, storageUrl: stored.url, storagePath: token.pathname }) });
-      return { ...attachment, file: undefined, storageUrl: stored.url, storagePath: token.pathname };
+      const confirmed = await client.requestJson<{ id: string; storageUrl?: string; storagePath?: string }>(`/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`, { method: "POST", body: JSON.stringify({ ...metadata, storageUrl: stored.url, storagePath: token.pathname }) });
+      return { ...attachment, id: confirmed.id, file: undefined, storageUrl: confirmed.storageUrl ?? stored.url, storagePath: confirmed.storagePath ?? token.pathname };
     },
     listAudiencePresets(brandId) { return client.requestJson(`/brands/${brandId}/ai-content/audiences`, { method: "GET" }); },
     saveAudiencePreset(brandId, input) { return client.requestJson(`/brands/${brandId}/ai-content/audiences`, { method: "POST", body: JSON.stringify(input) }); },
@@ -213,12 +219,15 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
       const query = outputIds?.length ? `?outputIds=${encodeURIComponent(outputIds.join(","))}` : "";
       return client.requestBlob(`/brands/${brandId}/ai-content/generations/${generationId}/download${query}`, { method: "GET" });
     },
-    sendToPublish(brandId, outputId) {
-      return client.requestJson(`/brands/${brandId}/ai-content/outputs/${outputId}/publish`, { method: "POST" });
+    publishOutput(brandId, outputId, input) {
+      return client.requestJson(`/brands/${brandId}/ai-content/outputs/${outputId}/publish`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
     },
-    async isInstagramConnected(brandId) {
-      const channels = await client.requestJson<Array<{ channel?: string; type?: string; status: string; enabled: boolean }>>(`/brands/${brandId}/channels`, { method: "GET" });
-      return channels.some((channel) => (channel.channel ?? channel.type) === "instagram" && channel.enabled && channel.status === "connected");
+    listChannels(brandId) {
+      return client.requestJson<ApiChannel[]>(`/brands/${brandId}/channels`, { method: "GET" })
+        .then((channels) => channels.map(mapApiChannelConnection));
     },
     async getCachedSubjectAnalysis(brandId, subjectType, sourceUrl) {
       try {
@@ -228,8 +237,8 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
         throw error;
       }
     },
-    async requestSubjectAnalysis(brandId, input: SubjectAnalysisInput) {
-      return mapSubjectAnalysis(await client.requestJson<ApiSubjectAnalysis>(`/brands/${brandId}/ai-content/subject-analyses`, { method: "POST", body: JSON.stringify(input) }));
+    async requestSubjectAnalysis(brandId, input: SubjectAnalysisInput<string | null>) {
+      return mapSubjectAnalysis(await client.requestJson<ApiSubjectAnalysis>(`/brands/${brandId}/ai-content/subject-analyses`, { method: "POST", body: JSON.stringify({ contractVersion: "subject-analysis.v2", ...input }) }));
     },
     async getSubjectAnalysis(brandId, analysisId) {
       return mapSubjectAnalysis(await client.requestJson<ApiSubjectAnalysis>(`/brands/${brandId}/ai-content/subject-analyses/${analysisId}`, { method: "GET" }));
