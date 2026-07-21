@@ -331,7 +331,12 @@ describe("AI content worker routes", () => {
           subjectType: "product",
           summary: "Analysis complete",
           verifiedFacts: [], voc: [], alternatives: [], barriers: [],
-          productProfile: { category: "Tools" }, serviceProfile: null, serviceSubtype: null, sourceGaps: [],
+          productProfile: {
+            name: "Tool", category: "Tools", specifications: [], materials: [], options: [], price: "Not verified",
+            discountsAndPromotions: [], shipping: [], returns: [], functions: [], useContexts: [], purchaseBarriers: [],
+            reviewPatterns: { recurringSatisfaction: [], recurringComplaints: [] },
+            productImageCandidates: [], detailImageCandidates: [],
+          }, serviceProfile: null, serviceSubtype: null, sourceGaps: [],
         },
       },
     });

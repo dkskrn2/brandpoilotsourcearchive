@@ -242,7 +242,12 @@ function analysisResultV2(sourceGaps: string[] = []): SubjectAnalysisResultV2 {
     voc: [],
     alternatives: [],
     barriers: [{ barrier: "Setup time", evidence: "Buyers compare setup effort.", sourceUrls: [] }],
-    productProfile: { category: "Productivity" },
+    productProfile: {
+      name: "Widget", category: "Productivity", specifications: [], materials: [], options: [], price: "Not verified",
+      discountsAndPromotions: [], shipping: [], returns: [], functions: [], useContexts: [], purchaseBarriers: [],
+      reviewPatterns: { recurringSatisfaction: [], recurringComplaints: [] },
+      productImageCandidates: [], detailImageCandidates: [],
+    },
     serviceProfile: null,
     serviceSubtype: null,
     sourceGaps,

@@ -18,6 +18,8 @@ export interface AiContentSubjectRuntime {
   archiveImage?: (
     image: SubjectImageArchiveInput & { analysisId: string; workspaceId: string; brandId: string },
   ) => ReturnType<ExtractSubjectPageInput["archiveImage"]>;
+  /** Test override. Production renews at one third of the requested lease duration. */
+  leaseHeartbeatIntervalMs?: number;
 }
 
 export interface SubjectAnalysisWorkerJob extends SubjectAnalysisInputV1 {
@@ -119,6 +121,49 @@ function leaseFields(claim: SubjectAnalysisClaim) {
     workerId: claim.leasedBy,
     leaseToken: claim.leaseToken,
     leaseExpiresAt: claim.leaseExpiresAt,
+  };
+}
+
+async function startPreparationLeaseHeartbeat(
+  repository: SubjectAnalysisRepository,
+  claim: SubjectAnalysisClaim,
+  leaseSeconds: number,
+  intervalOverride?: number,
+): Promise<() => Promise<void>> {
+  const identity = {
+    analysisId: claim.id,
+    workerId: claim.leasedBy,
+    leaseToken: claim.leaseToken,
+    leaseSeconds,
+  };
+  let stopped = false;
+  let inFlight: Promise<void> | null = null;
+  let heartbeatError: Error | null = null;
+  const renew = async () => {
+    if (stopped || inFlight || heartbeatError) return;
+    inFlight = (async () => {
+      try {
+        const alive = await repository.heartbeatSubjectAnalysis(identity);
+        if (!alive) heartbeatError = new Error("subject_analysis_lease_invalid");
+      } catch (error) {
+        heartbeatError = error instanceof Error ? error : new Error("subject_analysis_lease_invalid");
+      } finally {
+        inFlight = null;
+      }
+    })();
+    await inFlight;
+  };
+
+  await renew();
+  if (heartbeatError) throw heartbeatError;
+  const intervalMs = intervalOverride ?? Math.max(1_000, Math.floor((leaseSeconds * 1_000) / 3));
+  const timer = setInterval(() => { void renew(); }, intervalMs);
+  timer.unref?.();
+  return async () => {
+    stopped = true;
+    clearInterval(timer);
+    await inFlight;
+    if (heartbeatError) throw heartbeatError;
   };
 }
 
@@ -284,9 +329,19 @@ export async function claimAndPrepareSubjectAnalysis(
   const claim = await repository.claimSubjectAnalysis(input);
   if (!claim) return null;
   const identity = { analysisId: claim.id, workerId: claim.leasedBy, leaseToken: claim.leaseToken };
+  let stopPreparationHeartbeat: (() => Promise<void>) | null = null;
   try {
     if (claim.contractVersion === "subject-analysis.v2") {
-      return await prepareV2Job(repository, claim, runtime);
+      stopPreparationHeartbeat = await startPreparationLeaseHeartbeat(
+        repository,
+        claim,
+        input.leaseSeconds,
+        runtime.leaseHeartbeatIntervalMs,
+      );
+      const prepared = await prepareV2Job(repository, claim, runtime);
+      await stopPreparationHeartbeat();
+      stopPreparationHeartbeat = null;
+      return prepared;
     }
     let persisted = claim;
     if (claim.status === "extracting") {
@@ -345,6 +400,10 @@ export async function claimAndPrepareSubjectAnalysis(
       },
     };
   } catch (error) {
+    if (stopPreparationHeartbeat) {
+      await stopPreparationHeartbeat().catch(() => undefined);
+      stopPreparationHeartbeat = null;
+    }
     const message = error instanceof Error ? error.message : "subject_analysis_extraction_failed";
     await repository.failSubjectAnalysis({
       ...identity,

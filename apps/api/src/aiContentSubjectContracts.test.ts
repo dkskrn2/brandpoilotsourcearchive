@@ -57,7 +57,23 @@ function validAnalysisResultV2() {
       evidence: "Buyers ask for exact dimensions.",
       sourceUrls: ["https://research.example.com/barriers"],
     }],
-    productProfile: { category: "Apparel", features: ["Blue color option"] },
+    productProfile: {
+      name: "Blue jacket",
+      category: "Apparel",
+      specifications: ["Medium"],
+      materials: ["Cotton"],
+      options: ["Blue"],
+      price: "Not verified",
+      discountsAndPromotions: [],
+      shipping: [],
+      returns: [],
+      functions: [{ function: "Warmth", benefit: "Comfort", purchaseReason: "Documented material" }],
+      useContexts: ["Daily wear"],
+      purchaseBarriers: ["Sizing uncertainty"],
+      reviewPatterns: { recurringSatisfaction: ["Color"], recurringComplaints: ["Sizing"] },
+      productImageCandidates: [{ attachmentId, reason: "Shows the full product" }],
+      detailImageCandidates: [{ attachmentId, reason: "Shows the material" }],
+    },
     serviceProfile: null,
     serviceSubtype: null,
     sourceGaps: ["Long-term durability is not documented."],
@@ -294,9 +310,33 @@ describe("subject-analysis.v2 worker contracts", () => {
       ...validAnalysisResultV2(),
       subjectType: "service",
       productProfile: null,
-      serviceProfile: { deliveryModel: "Advisory" },
+      serviceProfile: {
+        customerProblem: ["Slow onboarding"], currentAlternatives: ["Manual setup"],
+        deliveryProcess: ["Audit", "Setup"], deliverables: ["Configured workspace"],
+        users: ["Operators"], buyers: ["Managers"], price: "Not verified",
+        beforeAfterWorkflow: { before: ["Manual"], after: ["Guided"] }, afterState: ["Faster start"],
+        terms: { contract: [], renewal: [], cancellation: [] }, support: ["Email"],
+        trustEvidence: [], securityEvidence: [], performanceEvidence: [], adoptionBarriers: ["Migration effort"],
+      },
       serviceSubtype: "not-a-subtype",
     }, { ...resultContext, expectedSubjectType: "service" })).toThrow("subject_analysis_service_subtype_invalid");
+  });
+
+  it("rejects incomplete, extra, and foreign product profile data at the API boundary", () => {
+    const incomplete = validAnalysisResultV2();
+    delete (incomplete.productProfile as Partial<typeof incomplete.productProfile>).materials;
+    expect(() => parseSubjectAnalysisResultV2(incomplete, resultContext))
+      .toThrow("subject_analysis_product_profile_invalid");
+
+    const extra = validAnalysisResultV2();
+    (extra.productProfile as Record<string, unknown>).unknown = true;
+    expect(() => parseSubjectAnalysisResultV2(extra, resultContext))
+      .toThrow("subject_analysis_product_profile_invalid");
+
+    const foreign = validAnalysisResultV2();
+    foreign.productProfile.productImageCandidates[0].attachmentId = foreignAttachmentId;
+    expect(() => parseSubjectAnalysisResultV2(foreign, resultContext))
+      .toThrow("subject_analysis_attachment_not_allowed");
   });
 
   it("rejects a subject mismatch and foreign attachment evidence", () => {

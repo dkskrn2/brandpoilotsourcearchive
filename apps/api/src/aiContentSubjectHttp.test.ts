@@ -55,6 +55,7 @@ function setup(claimed: SubjectAnalysisClaim) {
   const imageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   const repository = {
     claimSubjectAnalysis: vi.fn(async () => claimed),
+    heartbeatSubjectAnalysis: vi.fn(async () => true),
     markSubjectExtractionComplete: vi.fn(async (input) => claim({
       ...claimed,
       status: "analyzing",
@@ -184,7 +185,12 @@ describe("subject worker job preparation", () => {
       subjectType: "product" as const,
       summary: "Stored analysis",
       verifiedFacts: [], voc: [], alternatives: [], barriers: [],
-      productProfile: { category: "Tools" }, serviceProfile: null, serviceSubtype: null, sourceGaps: ["missing price"],
+      productProfile: {
+        name: "Tool", category: "Tools", specifications: [], materials: [], options: [], price: "Not verified",
+        discountsAndPromotions: [], shipping: [], returns: [], functions: [], useContexts: [], purchaseBarriers: [],
+        reviewPatterns: { recurringSatisfaction: [], recurringComplaints: [] },
+        productImageCandidates: [], detailImageCandidates: [],
+      }, serviceProfile: null, serviceSubtype: null, sourceGaps: ["missing price"],
     };
     const { repository, fetchBlob, extractPage, archiveImage } = setup(claim({
       status: "generating_appeals",
@@ -210,6 +216,45 @@ describe("subject worker job preparation", () => {
     expect(fetchBlob).not.toHaveBeenCalled();
     expect(repository.listSubjectEvidenceAttachments).not.toHaveBeenCalled();
     expect(repository.markSubjectExtractionComplete).not.toHaveBeenCalled();
+  });
+
+  it("renews the lease while server-side v2 preparation is still running", async () => {
+    const { repository, extractPage, archiveImage } = setup(claim());
+    const fetchBlob = vi.fn(async (url: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 35));
+      const isDocument = url.endsWith("brief.txt");
+      const bytes = isDocument
+        ? Buffer.from("Document evidence", "utf8")
+        : Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      return { bytes, contentType: isDocument ? "text/plain" : "image/png", contentLength: bytes.length };
+    });
+
+    await expect(claimAndPrepareSubjectAnalysis(
+      repository,
+      { workerId: "subject-worker-1", leaseSeconds: 180 },
+      { fetchBlob, extractPage, archiveImage, leaseHeartbeatIntervalMs: 5 },
+    )).resolves.toMatchObject({ contractVersion: "subject-analysis.v2" });
+
+    expect(repository.heartbeatSubjectAnalysis).toHaveBeenCalledWith({
+      analysisId: "analysis-1", workerId: "subject-worker-1", leaseToken: "subject-lease-1", leaseSeconds: 180,
+    });
+    expect(vi.mocked(repository.heartbeatSubjectAnalysis).mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("aborts v2 preparation when the lease cannot be renewed", async () => {
+    const { repository, fetchBlob, extractPage, archiveImage } = setup(claim());
+    vi.mocked(repository.heartbeatSubjectAnalysis).mockResolvedValueOnce(false);
+
+    await expect(claimAndPrepareSubjectAnalysis(
+      repository,
+      { workerId: "subject-worker-1", leaseSeconds: 180 },
+      { fetchBlob, extractPage, archiveImage, leaseHeartbeatIntervalMs: 5 },
+    )).resolves.toBeNull();
+
+    expect(repository.listSubjectEvidenceAttachments).not.toHaveBeenCalled();
+    expect(repository.failSubjectAnalysis).toHaveBeenCalledWith(expect.objectContaining({
+      errorCode: "subject_analysis_lease_invalid",
+    }));
   });
 });
 

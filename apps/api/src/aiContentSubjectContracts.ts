@@ -134,6 +134,42 @@ export interface SubjectAnalysisInputV2 {
   sourcePriority: ["manual_input", "attachments", "source_url", "brand_context", "public_research"];
 }
 
+export interface SubjectProductProfileV2 {
+  name: string;
+  category: string;
+  specifications: string[];
+  materials: string[];
+  options: string[];
+  price: string;
+  discountsAndPromotions: string[];
+  shipping: string[];
+  returns: string[];
+  functions: Array<{ function: string; benefit: string; purchaseReason: string }>;
+  useContexts: string[];
+  purchaseBarriers: string[];
+  reviewPatterns: { recurringSatisfaction: string[]; recurringComplaints: string[] };
+  productImageCandidates: Array<{ attachmentId: string; reason: string }>;
+  detailImageCandidates: Array<{ attachmentId: string; reason: string }>;
+}
+
+export interface SubjectServiceProfileV2 {
+  customerProblem: string[];
+  currentAlternatives: string[];
+  deliveryProcess: string[];
+  deliverables: string[];
+  users: string[];
+  buyers: string[];
+  price: string;
+  beforeAfterWorkflow: { before: string[]; after: string[] };
+  afterState: string[];
+  terms: { contract: string[]; renewal: string[]; cancellation: string[] };
+  support: string[];
+  trustEvidence: string[];
+  securityEvidence: string[];
+  performanceEvidence: string[];
+  adoptionBarriers: string[];
+}
+
 export interface SubjectAnalysisResultV2 {
   contractVersion: "subject-analysis-result.v2";
   phase: "analysis";
@@ -143,8 +179,8 @@ export interface SubjectAnalysisResultV2 {
   voc: Array<{ quoteSummary: string; context: string; sourceUrl: string }>;
   alternatives: Array<{ name: string; strengths: string[]; limitations: string[]; sourceUrls: string[] }>;
   barriers: Array<{ barrier: string; evidence: string; sourceUrls: string[] }>;
-  productProfile: Record<string, unknown> | null;
-  serviceProfile: Record<string, unknown> | null;
+  productProfile: SubjectProductProfileV2 | null;
+  serviceProfile: SubjectServiceProfileV2 | null;
   serviceSubtype: ServiceSubtype | null;
   sourceGaps: string[];
 }
@@ -580,7 +616,7 @@ export function parseSubjectAnalysisResult(value: unknown): SubjectAnalysisResul
   const source = strictObject(value, ["contractVersion", "summary", "needs", "alternatives", "voc", "usps", "targets", "appealsByTarget", "recommendedImageId", "sourceGaps"], "subject_analysis_result_invalid");
   if (source.contractVersion !== "subject-analysis-result.v1") fail("subject_analysis_result_version_invalid");
   if (!Array.isArray(source.targets) || source.targets.length !== 3) fail("subject_analysis_targets_invalid");
-  const targets = source.targets.map(parseTarget) as [SubjectTarget, SubjectTarget, SubjectTarget];
+  const targets = source.targets.map((target) => parseTarget(target)) as [SubjectTarget, SubjectTarget, SubjectTarget];
   const targetIds = new Set(targets.map(({ id }) => id));
   if (targetIds.size !== 3) fail("subject_analysis_target_id_duplicate");
 
@@ -704,6 +740,103 @@ function serviceSubtype(value: unknown): ServiceSubtype {
   return value;
 }
 
+function profileItems(value: unknown, code: string, max = 20): unknown[] {
+  if (!Array.isArray(value) || value.length > max) fail(code);
+  return value;
+}
+
+function profileImageCandidates(
+  value: unknown,
+  code: string,
+  allowedAttachmentIds: ReadonlySet<string>,
+): Array<{ attachmentId: string; reason: string }> {
+  return profileItems(value, code, 10).map((item) => {
+    const candidate = strictObject(item, ["attachmentId", "reason"], code);
+    const attachmentId = uuid(candidate.attachmentId, code);
+    if (!allowedAttachmentIds.has(attachmentId)) fail("subject_analysis_attachment_not_allowed");
+    return { attachmentId, reason: text(candidate.reason, code, 1_000) };
+  });
+}
+
+function parseProductProfile(
+  value: unknown,
+  allowedAttachmentIds: ReadonlySet<string>,
+): SubjectProductProfileV2 {
+  const code = "subject_analysis_product_profile_invalid";
+  const source = strictObject(value, [
+    "name", "category", "specifications", "materials", "options", "price",
+    "discountsAndPromotions", "shipping", "returns", "functions", "useContexts",
+    "purchaseBarriers", "reviewPatterns", "productImageCandidates", "detailImageCandidates",
+  ], code);
+  const reviewPatterns = strictObject(
+    source.reviewPatterns,
+    ["recurringSatisfaction", "recurringComplaints"],
+    code,
+  );
+  return {
+    name: text(source.name, code, 500),
+    category: text(source.category, code, 500),
+    specifications: textList(source.specifications, code, 20),
+    materials: textList(source.materials, code, 20),
+    options: textList(source.options, code, 20),
+    price: text(source.price, code, 500),
+    discountsAndPromotions: textList(source.discountsAndPromotions, code, 20),
+    shipping: textList(source.shipping, code, 20),
+    returns: textList(source.returns, code, 20),
+    functions: profileItems(source.functions, code).map((item) => {
+      const entry = strictObject(item, ["function", "benefit", "purchaseReason"], code);
+      return {
+        function: text(entry.function, code),
+        benefit: text(entry.benefit, code),
+        purchaseReason: text(entry.purchaseReason, code),
+      };
+    }),
+    useContexts: textList(source.useContexts, code, 20),
+    purchaseBarriers: textList(source.purchaseBarriers, code, 20),
+    reviewPatterns: {
+      recurringSatisfaction: textList(reviewPatterns.recurringSatisfaction, code, 20),
+      recurringComplaints: textList(reviewPatterns.recurringComplaints, code, 20),
+    },
+    productImageCandidates: profileImageCandidates(source.productImageCandidates, code, allowedAttachmentIds),
+    detailImageCandidates: profileImageCandidates(source.detailImageCandidates, code, allowedAttachmentIds),
+  };
+}
+
+function parseServiceProfile(value: unknown): SubjectServiceProfileV2 {
+  const code = "subject_analysis_service_profile_invalid";
+  const source = strictObject(value, [
+    "customerProblem", "currentAlternatives", "deliveryProcess", "deliverables", "users",
+    "buyers", "price", "beforeAfterWorkflow", "afterState", "terms", "support",
+    "trustEvidence", "securityEvidence", "performanceEvidence", "adoptionBarriers",
+  ], code);
+  const workflow = strictObject(source.beforeAfterWorkflow, ["before", "after"], code);
+  const terms = strictObject(source.terms, ["contract", "renewal", "cancellation"], code);
+  return {
+    customerProblem: textList(source.customerProblem, code, 20),
+    currentAlternatives: textList(source.currentAlternatives, code, 20),
+    deliveryProcess: textList(source.deliveryProcess, code, 20),
+    deliverables: textList(source.deliverables, code, 20),
+    users: textList(source.users, code, 20),
+    buyers: textList(source.buyers, code, 20),
+    price: text(source.price, code, 500),
+    beforeAfterWorkflow: {
+      before: textList(workflow.before, code, 20),
+      after: textList(workflow.after, code, 20),
+    },
+    afterState: textList(source.afterState, code, 20),
+    terms: {
+      contract: textList(terms.contract, code, 20),
+      renewal: textList(terms.renewal, code, 20),
+      cancellation: textList(terms.cancellation, code, 20),
+    },
+    support: textList(source.support, code, 20),
+    trustEvidence: textList(source.trustEvidence, code, 20),
+    securityEvidence: textList(source.securityEvidence, code, 20),
+    performanceEvidence: textList(source.performanceEvidence, code, 20),
+    adoptionBarriers: textList(source.adoptionBarriers, code, 20),
+  };
+}
+
 export function parseSubjectAnalysisResultV2(
   value: unknown,
   context: SubjectAnalysisResultV2ParseContext,
@@ -769,15 +902,17 @@ export function parseSubjectAnalysisResultV2(
     };
   });
 
-  const productProfile = source.productProfile === null ? null : structuredData(source.productProfile);
-  const serviceProfile = source.serviceProfile === null ? null : structuredData(source.serviceProfile);
+  let productProfile: SubjectProductProfileV2 | null = null;
+  let serviceProfile: SubjectServiceProfileV2 | null = null;
   let parsedSubtype: ServiceSubtype | null = null;
   if (parsedSubjectType === "product") {
-    if (productProfile === null || serviceProfile !== null || source.serviceSubtype !== null) {
+    if (source.productProfile === null || source.serviceProfile !== null || source.serviceSubtype !== null) {
       fail("subject_analysis_product_profile_invalid");
     }
+    productProfile = parseProductProfile(source.productProfile, parsedContext.allowedAttachmentIds);
   } else {
-    if (serviceProfile === null || productProfile !== null) fail("subject_analysis_service_profile_invalid");
+    if (source.serviceProfile === null || source.productProfile !== null) fail("subject_analysis_service_profile_invalid");
+    serviceProfile = parseServiceProfile(source.serviceProfile);
     parsedSubtype = serviceSubtype(source.serviceSubtype);
   }
 
