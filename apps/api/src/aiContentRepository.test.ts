@@ -124,9 +124,12 @@ function createWorkerPool(options: {
   completedOutputs?: number;
   attachmentUrls?: string[];
   manifestAssetUrls?: string[];
+  subjectAnalysisSnapshot?: Record<string, unknown>;
+  qualityBrief?: Record<string, unknown>;
 } = {}) {
   const sql: string[] = [];
   let generation = row("generation-1", options.jobType === "analyze" ? "analyzing" : "generating");
+  let pendingCleanup = false;
   let outputStatus = options.outputStatus ?? "generating";
   const job: Record<string, unknown> = {
     id: "job-1", generation_id: "generation-1", output_id: options.jobType === "analyze" ? null : "output-1",
@@ -138,6 +141,7 @@ function createWorkerPool(options: {
     query: async (query: string, params: unknown[] = []) => {
       sql.push(query);
       if (["BEGIN", "COMMIT", "ROLLBACK"].includes(query)) return { rows: [], rowCount: 0 };
+      if (query.includes("select terminal_generation.id")) return pendingCleanup ? { rows: [{ id: "generation-1" }], rowCount: 1 } : { rows: [], rowCount: 0 };
       if (query.includes("update ai_content_generation_jobs") && query.includes("lease_exhausted")) {
         return options.exhaustedJob
           ? { rows: [{ generation_id: "generation-1", output_id: "output-1", job_type: "generate" }], rowCount: 1 }
@@ -155,7 +159,7 @@ function createWorkerPool(options: {
       if (query.includes("from wiki_versions version")) {
         return { rows: [{ id: "wiki-1", wiki_updated_at: "2026-07-18T00:10:00.000Z", pages: [{ type: "brand_overview", title: "브랜드 개요", summary: "자사 분석", content: "브랜드 근거", structuredData: {} }] }], rowCount: 1 };
       }
-      if (query.includes("select generation.draft_json")) return { rows: [{ draft_json: {}, analysis_json: {}, generation_title: "여름 추천", generation_type: "card_news", output_index: 1, reference_snapshots: [], attachments: [] }], rowCount: 1 };
+      if (query.includes("select generation.draft_json")) return { rows: [{ draft_json: {}, analysis_json: options.qualityBrief ? { qualityBrief: options.qualityBrief } : {}, subject_analysis_snapshot: options.subjectAnalysisSnapshot ?? null, generation_title: "여름 추천", generation_type: "card_news", output_index: 1, reference_snapshots: [], attachments: [] }], rowCount: 1 };
       if (query.includes("set lease_expires_at") && query.includes("last_heartbeat_at")) {
         const valid = job.status === "processing" && job.worker_id === params[1] && job.lease_token === params[2];
         return { rows: valid ? [{ id: job.id }] : [], rowCount: valid ? 1 : 0 };
@@ -247,7 +251,7 @@ function createWorkerPool(options: {
     },
     release: () => undefined,
   };
-  return { connect: async () => client, query: client.query, sql, job };
+  return { connect: async () => client, query: client.query, sql, job, enablePendingCleanup() { pendingCleanup = true; } };
 }
 
 const scope = { workspaceId: "workspace-1", brandId: "brand-1" };
@@ -651,8 +655,11 @@ describe("AI content repository", () => {
 
   it("does not mark attachments deleted when blob deletion fails", async () => {
     const pool = createWorkerPool();
+    const deleteAttachments = vi.fn()
+      .mockRejectedValueOnce(new Error("blob unavailable"))
+      .mockResolvedValueOnce(undefined);
     const repository = createAiContentRepository(pool as never, {
-      deleteAttachments: vi.fn(async () => { throw new Error("blob unavailable"); }),
+      deleteAttachments,
     });
     const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
 
@@ -663,6 +670,12 @@ describe("AI content repository", () => {
     });
 
     expect(pool.sql.join("\n")).not.toContain("deleted_at = now()");
+
+    pool.enablePendingCleanup();
+    await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
+    expect(deleteAttachments).toHaveBeenCalledTimes(2);
+    expect(pool.sql.join("\n")).toContain("select terminal_generation.id");
+    expect(pool.sql.join("\n")).toContain("deleted_at = now()");
   });
 
   it("rejects an analysis result with fewer than two concrete evidence items", async () => {
@@ -720,7 +733,28 @@ describe("AI content repository", () => {
     expect(generation.status).toBe("queued");
     expect(pool.sql.filter((query) => query.includes("insert into ai_content_generation_jobs")).length).toBe(2);
     expect(pool.sql.join("\n")).toContain("jsonb_build_object('generationId', $1::uuid, 'outputId', $2::uuid)");
-    expect(pool.sql.join("\n")).toContain("jsonb_set(subject_analysis_snapshot, '{message,qualityBrief}'");
+    expect(pool.sql.join("\n")).not.toContain("jsonb_set(subject_analysis_snapshot, '{message,qualityBrief}'");
+  });
+
+  it("keeps the stored subject snapshot immutable and overlays the final quality brief only in generate jobs", async () => {
+    const snapshot = {
+      contractVersion: "content-generation-input.v2",
+      contentType: "card_news",
+      brandContext: {},
+      subject: { analysisId: "analysis-1", analysisVersion: 1, analysisContractVersion: "subject-analysis.v1", analysisResult: null, type: "product", sourceUrl: "", facts: [], research: {}, selectedImages: [] },
+      message: { target: { id: "target-1", name: "타깃" }, appeal: { id: "appeal-1", targetId: "target-1", title: "소구점" }, qualityBrief: { hook: "사용자 입력" } },
+      creativeDirection: { prompts: [], brandColor: "", selectedColor: "#0057B8", aspectRatio: "1:1", outputCount: 1 },
+      references: [],
+      attachments: [],
+    };
+    const finalBrief = { version: "content-quality.v1", hook: "최종 편집안" };
+    const pool = createWorkerPool({ subjectAnalysisSnapshot: snapshot, qualityBrief: finalBrief });
+    const repository = createAiContentRepository(pool as never);
+
+    const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
+
+    expect(claimed?.payload.contentGenerationInput).toMatchObject({ message: { qualityBrief: finalBrief } });
+    expect(snapshot.message.qualityBrief).toEqual({ hook: "사용자 입력" });
   });
 
   it("bridges a completed scheduled card-news output into the automatic publish queue", async () => {

@@ -324,7 +324,7 @@ function repositoryMimeType(sourceType: Awaited<ReturnType<typeof loadSubjectEvi
 
 export async function claimAndPrepareSubjectAnalysis(
   repository: ApiRepository & SubjectAnalysisRepository,
-  input: { workerId: string; leaseSeconds: number },
+  input: { workerId: string; leaseSeconds: number; analysisId?: string },
   runtime: AiContentSubjectRuntime = {},
 ): Promise<SubjectWorkerJob | null> {
   const claim = await repository.claimSubjectAnalysis(input);

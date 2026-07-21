@@ -116,7 +116,7 @@ export interface SubjectAnalysisRepository {
   requestSubjectAnalysis(input: SubjectBrandScope & CreateSubjectPipelineRepositoryInput): Promise<SubjectAnalysisRecord>;
   getSubjectAnalysis(input: SubjectBrandScope & { analysisId: string }): Promise<SubjectAnalysisRecord | null>;
   selectSubjectImage(input: SubjectBrandScope & { analysisId: string; imageId: string }): Promise<SubjectAnalysisRecord>;
-  claimSubjectAnalysis(input: { workerId: string; leaseSeconds: number }): Promise<SubjectAnalysisClaim | null>;
+  claimSubjectAnalysis(input: { workerId: string; leaseSeconds: number; analysisId?: string }): Promise<SubjectAnalysisClaim | null>;
   markSubjectExtractionComplete(input: SubjectExtractionCompletion): Promise<SubjectAnalysisClaim>;
   heartbeatSubjectAnalysis(input: SubjectLeaseIdentity & { leaseSeconds: number }): Promise<boolean>;
   completeSubjectAnalysis(input: SubjectLeaseIdentity & (SubjectAnalysisResultV1 | SubjectAnalysisResultV2)): Promise<SubjectAnalysisRecord>;
@@ -166,6 +166,7 @@ export const SUBJECT_ANALYSIS_CLAIM_SQL = `
     select id
       from ai_content_subject_analyses
      where superseded_at is null
+       and ($4::uuid is null or id = $4::uuid)
        and available_at <= now()
        and attempt_count < 3
        and (
@@ -698,7 +699,12 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
           );
         }
         const leaseToken = randomUUID();
-        const result = await client.query(SUBJECT_ANALYSIS_CLAIM_SQL, [input.workerId, leaseToken, input.leaseSeconds]);
+        const result = await client.query(SUBJECT_ANALYSIS_CLAIM_SQL, [
+          input.workerId,
+          leaseToken,
+          input.leaseSeconds,
+          input.analysisId ?? null,
+        ]);
         if (!result.rowCount) return null;
         const row = result.rows[0] as Record<string, unknown>;
         return mapClaim(row, await loadImages(client, String(row.id)));

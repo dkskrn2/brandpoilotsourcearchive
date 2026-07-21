@@ -168,6 +168,24 @@ describe("AI content worker routes", () => {
     await app.close();
   });
 
+  it("forwards an optional analysis id to isolate fixture claims", async () => {
+    const { app, repository } = setup();
+    const analysisId = "10000000-0000-4000-8000-000000000001";
+    const response = await app.inject({
+      method: "POST",
+      url: "/worker/ai-content-subject-analyses/claim",
+      headers: { authorization: "Bearer worker-token" },
+      payload: { workerId: "fixture-worker-1", leaseSeconds: 180, analysisId },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(repository.claimSubjectAnalysis).toHaveBeenCalledWith({
+      workerId: "fixture-worker-1",
+      leaseSeconds: 180,
+      analysisId,
+    });
+    await app.close();
+  });
+
   it("returns persisted extraction data when a researching subject analysis is reclaimed", async () => {
     const { app, repository, extractPage } = setup();
     vi.mocked(repository.claimSubjectAnalysis!).mockResolvedValueOnce({

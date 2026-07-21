@@ -68,6 +68,18 @@ describe("content-generation-input.v2", () => {
     expect(envelope.message.appeal).toEqual(customAppeal);
   });
 
+  it("allows a manually added target when its manually added appeal is present in overrides", async () => {
+    const customTarget = { id: "custom-target-1", name: "직접 입력 타깃", traits: ["직접 입력"], painPoints: ["수동 업무"], purchaseMotivations: ["시간 절약"], uspEvidence: [] };
+    const customAppeal = { ...analysis.appealsByTarget["target-1"][0], id: "custom-appeal-1", targetId: customTarget.id, title: "직접 입력 소구점" };
+    const envelope = await buildContentGenerationInput(deps(), generation({
+      selectedTarget: customTarget,
+      selectedAppeal: customAppeal,
+      appealOverridesByTarget: { [customTarget.id]: [customAppeal] },
+    }));
+
+    expect(envelope.message).toMatchObject({ target: customTarget, appeal: customAppeal });
+  });
+
   it("keeps legacy v1 subject records compatible without a v2 analysis result", async () => {
     const legacy = { ...analysis, contractVersion: "subject-analysis.v1" as const, analysisResult: null };
     const envelope = await buildContentGenerationInput(

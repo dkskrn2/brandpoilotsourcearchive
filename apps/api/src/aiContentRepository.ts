@@ -725,6 +725,22 @@ function collectManifestUrls(rows: Array<Record<string, unknown>>): Set<string> 
   return urls;
 }
 
+function generationInputForWorker(
+  snapshot: unknown,
+  analysisJson: unknown,
+  jobType: unknown,
+): ContentGenerationInputV2 | undefined {
+  if (!snapshot) return undefined;
+  const parsed = parseContentGenerationInputV2(snapshot);
+  if (jobType !== "generate") return parsed;
+  const finalBrief = object(analysisJson).qualityBrief;
+  if (!finalBrief || typeof finalBrief !== "object" || Array.isArray(finalBrief)) return parsed;
+  return {
+    ...parsed,
+    message: { ...parsed.message, qualityBrief: object(finalBrief) },
+  };
+}
+
 async function deleteTerminalGenerationAttachments(
   pool: Pool,
   generation: AiContentGenerationRecord,
@@ -760,6 +776,28 @@ async function deleteTerminalGenerationAttachments(
         and id = any($4::uuid[]) and deleted_at is null`,
     [generation.id, generation.workspaceId, generation.brandId, temporaryAttachments.map((row) => String(row.id))],
   );
+}
+
+async function retryPendingTerminalAttachmentCleanup(
+  pool: Pool,
+  deleteAttachments?: (urls: string[]) => Promise<void>,
+) {
+  if (!deleteAttachments) return;
+  const pending = await pool.query(
+    `select terminal_generation.id
+       from ai_content_generations terminal_generation
+      where terminal_generation.status in ('completed', 'partial_failed', 'failed')
+        and exists (
+          select 1 from ai_content_generation_attachments attachment
+           where attachment.generation_id = terminal_generation.id and attachment.deleted_at is null
+        )
+      order by terminal_generation.completed_at nulls last, terminal_generation.updated_at
+      limit 3`,
+  );
+  for (const row of pending.rows) {
+    const generation = await generationById(pool, String(row.id));
+    await deleteTerminalGenerationAttachments(pool, generation, deleteAttachments);
+  }
 }
 
 export function createAiContentRepository(pool: Pool, options: AiContentRepositoryOptions = {}): AiContentRepository {
@@ -1141,6 +1179,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
     },
 
     async claimAiContentJob(input) {
+      await retryPendingTerminalAttachmentCleanup(pool, options.deleteAttachments).catch(() => undefined);
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
@@ -1264,9 +1303,11 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           references: Array.isArray(contextRow.reference_snapshots) ? contextRow.reference_snapshots : [],
           attachments: Array.isArray(contextRow.attachments) ? contextRow.attachments : [],
           brandContext: brandContext.context,
-          contentGenerationInput: contextRow.subject_analysis_snapshot
-            ? parseContentGenerationInputV2(contextRow.subject_analysis_snapshot)
-            : undefined,
+          contentGenerationInput: generationInputForWorker(
+            contextRow.subject_analysis_snapshot,
+            contextRow.analysis_json,
+            job.job_type,
+          ),
         };
         await client.query("COMMIT");
         return mapJob(job);
@@ -1323,11 +1364,6 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           await client.query(
             `update ai_content_generations
                 set analysis_json = analysis_json || $2::jsonb,
-                    subject_analysis_snapshot = case
-                      when subject_analysis_snapshot->>'contractVersion' = 'content-generation-input.v2'
-                        then jsonb_set(subject_analysis_snapshot, '{message,qualityBrief}', $5::jsonb, true)
-                      else subject_analysis_snapshot
-                    end,
                     status = $3, current_stage = $4,
                     error_code = null, error_message = null, updated_at = now()
               where id = $1`,
@@ -1336,7 +1372,6 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
               JSON.stringify(normalizedAnalysis),
               finalizeGeneration ? "queued" : "analysis_ready",
               finalizeGeneration ? "generation" : "analysis_ready",
-              JSON.stringify(qualityBrief),
             ],
           );
           if (finalizeGeneration) {

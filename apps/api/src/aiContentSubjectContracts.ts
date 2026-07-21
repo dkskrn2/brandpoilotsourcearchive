@@ -44,8 +44,8 @@ export interface CreateSubjectPipelineInput {
 }
 export interface SubjectAnalysisSelectionInput { imageId: string }
 export interface ReanalyzeSubjectAnalysisInput { idempotencyKey: string }
-export interface SubjectWorkerClaimInput { workerId: string; leaseSeconds: number }
-export interface SubjectWorkerLeaseInput extends SubjectWorkerClaimInput { leaseToken: string }
+export interface SubjectWorkerClaimInput { workerId: string; leaseSeconds: number; analysisId?: string }
+export interface SubjectWorkerLeaseInput { workerId: string; leaseSeconds: number; leaseToken: string }
 
 export interface SubjectTarget {
   id: string;
@@ -403,10 +403,13 @@ export function parseReanalyzeSubjectAnalysisInput(value: unknown): ReanalyzeSub
 }
 
 export function parseSubjectWorkerClaimInput(value: unknown): SubjectWorkerClaimInput {
-  const source = strictObject(value, ["workerId", "leaseSeconds"], "subject_analysis_worker_claim_invalid");
+  const source = strictObject(value, ["workerId", "leaseSeconds", "analysisId"], "subject_analysis_worker_claim_invalid");
   return {
     workerId: text(source.workerId, "subject_analysis_worker_id_invalid", 200),
     leaseSeconds: leaseSeconds(source.leaseSeconds),
+    ...(source.analysisId === undefined
+      ? {}
+      : { analysisId: uuid(source.analysisId, "subject_analysis_id_invalid") }),
   };
 }
 

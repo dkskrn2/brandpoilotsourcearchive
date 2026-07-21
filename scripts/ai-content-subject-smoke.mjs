@@ -180,7 +180,11 @@ function appealFixture(subjectType) {
 }
 
 async function claimFixturePhase(expectedAnalysisId, expectedPhase, workerId) {
-  const claimed = await workerRequest("/worker/ai-content-subject-analyses/claim", { workerId, leaseSeconds: 180 });
+  const claimed = await workerRequest("/worker/ai-content-subject-analyses/claim", {
+    workerId,
+    leaseSeconds: 180,
+    analysisId: expectedAnalysisId,
+  });
   assert.ok(claimed?.job, `fixture ${expectedPhase} job was not claimable`);
   assert.equal(claimed.job.analysisId, expectedAnalysisId, "fixture queue contains an earlier subject-analysis job");
   assert.equal(claimed.job.contractVersion, "subject-analysis.v2");

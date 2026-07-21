@@ -403,6 +403,27 @@ describe("createAiContentSubjectRepository", () => {
     expect(claims.filter(Boolean)).toHaveLength(1);
   });
 
+  it("claims only the requested analysis when an analysis id is provided", async () => {
+    const first = await repository.requestSubjectAnalysis(request({
+      sourceUrl: "https://example.com/first",
+      idempotencyKey: "claim-specific-first",
+    }));
+    const second = await repository.requestSubjectAnalysis(request({
+      sourceUrl: "https://example.com/second",
+      idempotencyKey: "claim-specific-second",
+    }));
+
+    const specific = await repository.claimSubjectAnalysis({
+      workerId: "fixture-worker",
+      leaseSeconds: 60,
+      analysisId: second.id,
+    });
+    expect(specific?.id).toBe(second.id);
+
+    const remaining = await repository.claimSubjectAnalysis({ workerId: "regular-worker", leaseSeconds: 60 });
+    expect(remaining?.id).toBe(first.id);
+  });
+
   it("keeps queued, expired extracting, and zero-fact expired researching stages explicit", async () => {
     const analysis = await repository.requestSubjectAnalysis(request({
       subjectType: "service",

@@ -241,7 +241,13 @@ export async function buildContentGenerationInput(
   if (analysis.status !== "ready" && analysis.status !== "partial") fail("ai_content_subject_analysis_not_ready");
 
   const selectedTarget = target(draft.selectedTarget);
-  if (!analysis.targets.some((item) => item.id === selectedTarget.id)) fail("ai_content_target_required");
+  const hasAppealOverride = Boolean(
+    draft.appealOverridesByTarget
+    && typeof draft.appealOverridesByTarget === "object"
+    && !Array.isArray(draft.appealOverridesByTarget)
+    && Object.prototype.hasOwnProperty.call(draft.appealOverridesByTarget, selectedTarget.id),
+  );
+  if (!analysis.targets.some((item) => item.id === selectedTarget.id) && !hasAppealOverride) fail("ai_content_target_required");
   const selectedAppeal = selectedAppealFromDraft(draft, selectedTarget, analysis);
 
   const requestedImageIds = selectedImageIds(draft, analysis);

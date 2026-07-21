@@ -255,6 +255,12 @@ describe("subject-analysis customer inputs", () => {
     expect(parseSubjectAnalysisSelectionInput({ imageId: " image-1 " })).toEqual({ imageId: "image-1" });
     expect(parseReanalyzeSubjectAnalysisInput({ idempotencyKey: " retry-1 " })).toEqual({ idempotencyKey: "retry-1" });
     expect(parseSubjectWorkerClaimInput({ workerId: " worker-1 " })).toEqual({ workerId: "worker-1", leaseSeconds: 180 });
+    expect(parseSubjectWorkerClaimInput({
+      workerId: " worker-1 ",
+      analysisId: attachmentId,
+    })).toEqual({ workerId: "worker-1", leaseSeconds: 180, analysisId: attachmentId });
+    expect(() => parseSubjectWorkerClaimInput({ workerId: "worker-1", analysisId: "analysis-1" }))
+      .toThrow("subject_analysis_id_invalid");
     expect(parseSubjectWorkerLeaseInput({ workerId: " worker-1 ", leaseToken: " lease-1 ", leaseSeconds: 60 }))
       .toEqual({ workerId: "worker-1", leaseToken: "lease-1", leaseSeconds: 60 });
     expect(() => parseSubjectWorkerLeaseInput({ workerId: "worker-1", leaseToken: "lease-1", leaseSeconds: 10 }))
