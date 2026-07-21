@@ -110,9 +110,10 @@ function appealJobV2(): SubjectAppealJobV2 {
   };
 }
 
-function validAppealResultV2(): SubjectAppealResultV2 {
-  const target = (id: string) => ({ id, name: id, traits: ["특성"], painPoints: ["문제"], purchaseMotivations: ["동기"], uspEvidence: [{ claim: "근거", support: "설명", sourceUrl: "https://example.com/evidence" }] });
-  const appeal = (id: string, targetId: string) => ({ id, targetId, title: id, description: "설명", evidenceType: "product_fact" as const, connectionReason: "연결", sources: [{ title: "근거", url: "https://example.com/evidence" }] });
+function validAppealResultV2(evidenceAttachmentId?: string): SubjectAppealResultV2 {
+  const evidenceUrl = evidenceAttachmentId ? `attachment://${evidenceAttachmentId}` : "https://example.com/evidence";
+  const target = (id: string) => ({ id, name: id, traits: ["특성"], painPoints: ["문제"], purchaseMotivations: ["동기"], uspEvidence: [{ claim: "근거", support: "설명", sourceUrl: evidenceUrl }] });
+  const appeal = (id: string, targetId: string) => ({ id, targetId, title: id, description: "설명", evidenceType: "product_fact" as const, connectionReason: "연결", sources: [{ title: "근거", url: evidenceUrl }] });
   return {
     contractVersion: "subject-appeal-result.v2",
     phase: "appeal",
@@ -209,6 +210,14 @@ describe("subject analysis worker", () => {
     const runner = await runnerWithOutput(output);
 
     await expect(runner.run(appealJobV2())).rejects.toThrow("subject_analysis_appeal_id_duplicate");
+  });
+
+  it("passes appeal job attachment IDs to the strict result parser", async () => {
+    const allowedRunner = await runnerWithOutput(validAppealResultV2(attachmentId));
+    await expect(allowedRunner.run(appealJobV2())).resolves.toMatchObject({ phase: "appeal" });
+
+    const foreignRunner = await runnerWithOutput(validAppealResultV2(foreignAttachmentId));
+    await expect(foreignRunner.run(appealJobV2())).rejects.toThrow("subject_analysis_attachment_not_allowed");
   });
 
   it("does not overlap heartbeat requests", async () => {

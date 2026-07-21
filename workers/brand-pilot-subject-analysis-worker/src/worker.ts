@@ -63,7 +63,7 @@ export function createCodexRunner({
           allowedAttachmentIds: job.subject.attachmentIds,
         });
       }
-      return parseSubjectAppealResultV2(output);
+      return parseSubjectAppealResultV2(output, { allowedAttachmentIds: job.subject.attachmentIds });
     } finally {
       await rm(workDir, { recursive: true, force: true });
     }

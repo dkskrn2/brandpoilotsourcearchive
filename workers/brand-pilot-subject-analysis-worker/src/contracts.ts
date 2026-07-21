@@ -183,6 +183,10 @@ export interface SubjectAppealResultV2 {
   appealsByTarget: Record<string, SubjectAppeal[]>;
 }
 
+export interface SubjectAppealResultV2ParseContext {
+  allowedAttachmentIds: readonly string[];
+}
+
 export type SubjectWorkerJob = SubjectAnalysisJob | SubjectAnalysisJobV2 | SubjectAppealJobV2;
 export type SubjectWorkerResult = SubjectAnalysisResult | SubjectAnalysisResultV2 | SubjectAppealResultV2;
 
@@ -347,6 +351,23 @@ const appealHttps = (value: unknown, code: string): string => {
   }
   return url;
 };
+const APPEAL_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const appealUuid = (value: unknown, code: string): string => {
+  const id = appealText(value, code, 36);
+  if (!APPEAL_UUID_PATTERN.test(id)) appealFail(code);
+  return id.toLowerCase();
+};
+const appealEvidenceUrl = (
+  value: unknown,
+  allowedAttachmentIds: ReadonlySet<string>,
+  code: string,
+): string => {
+  const url = appealText(value, code, 2_048);
+  if (!url.startsWith("attachment://")) return appealHttps(url, code);
+  const attachmentId = appealUuid(url.slice("attachment://".length), code);
+  if (!allowedAttachmentIds.has(attachmentId)) appealFail("subject_analysis_attachment_not_allowed");
+  return `attachment://${attachmentId}`;
+};
 const appealStrings = (value: unknown, code: string): string[] => {
   const items = Array.isArray(value) ? value : appealFail(code);
   if (items.length > 50) appealFail(code);
@@ -385,16 +406,19 @@ function assertAppealResultBudget(value: unknown): void {
   visit(value, 0);
 }
 
-function parseAppealEvidence(value: unknown): { claim: string; support: string; sourceUrl: string } {
+function parseAppealEvidence(
+  value: unknown,
+  allowedAttachmentIds: ReadonlySet<string>,
+): { claim: string; support: string; sourceUrl: string } {
   const source = exactAppealRecord(value, ["claim", "support", "sourceUrl"], "subject_analysis_evidence_invalid");
   return {
     claim: appealText(source.claim, "subject_analysis_evidence_invalid"),
     support: appealText(source.support, "subject_analysis_evidence_invalid"),
-    sourceUrl: appealHttps(source.sourceUrl, "subject_analysis_source_url_invalid"),
+    sourceUrl: appealEvidenceUrl(source.sourceUrl, allowedAttachmentIds, "subject_analysis_source_url_invalid"),
   };
 }
 
-function parseAppealTarget(value: unknown): SubjectTarget {
+function parseAppealTarget(value: unknown, allowedAttachmentIds: ReadonlySet<string>): SubjectTarget {
   const source = exactAppealRecord(
     value,
     ["id", "name", "traits", "painPoints", "purchaseMotivations", "uspEvidence"],
@@ -406,11 +430,16 @@ function parseAppealTarget(value: unknown): SubjectTarget {
     traits: appealStrings(source.traits, "subject_analysis_target_invalid"),
     painPoints: appealStrings(source.painPoints, "subject_analysis_target_invalid"),
     purchaseMotivations: appealStrings(source.purchaseMotivations, "subject_analysis_target_invalid"),
-    uspEvidence: appealList(source.uspEvidence, "subject_analysis_target_invalid", parseAppealEvidence, 20),
+    uspEvidence: appealList(
+      source.uspEvidence,
+      "subject_analysis_target_invalid",
+      (item) => parseAppealEvidence(item, allowedAttachmentIds),
+      20,
+    ),
   };
 }
 
-function parseAppealItem(value: unknown): SubjectAppeal {
+function parseAppealItem(value: unknown, allowedAttachmentIds: ReadonlySet<string>): SubjectAppeal {
   const source = exactAppealRecord(
     value,
     ["id", "targetId", "title", "description", "evidenceType", "connectionReason", "sources"],
@@ -423,7 +452,9 @@ function parseAppealItem(value: unknown): SubjectAppeal {
     const entry = exactAppealRecord(item, ["title", "url"], "subject_analysis_appeal_sources_invalid");
     return {
       title: appealText(entry.title, "subject_analysis_appeal_sources_invalid", 500),
-      url: appealHttps(entry.url, "subject_analysis_appeal_sources_invalid"),
+      url: evidenceType === "public_research"
+        ? appealHttps(entry.url, "subject_analysis_appeal_sources_invalid")
+        : appealEvidenceUrl(entry.url, allowedAttachmentIds, "subject_analysis_appeal_sources_invalid"),
     };
   }, 20);
   if (source.evidenceType === "public_research" && sources.length === 0) {
@@ -440,7 +471,16 @@ function parseAppealItem(value: unknown): SubjectAppeal {
   };
 }
 
-export function parseSubjectAppealResultV2(value: unknown): SubjectAppealResultV2 {
+export function parseSubjectAppealResultV2(
+  value: unknown,
+  context: SubjectAppealResultV2ParseContext,
+): SubjectAppealResultV2 {
+  if (!context || !Array.isArray(context.allowedAttachmentIds) || context.allowedAttachmentIds.length > 20) {
+    appealFail("subject_appeal_result_context_invalid");
+  }
+  const allowedAttachmentIds = new Set(context.allowedAttachmentIds.map((id) => (
+    appealUuid(id, "subject_appeal_result_context_invalid")
+  )));
   assertAppealResultBudget(value);
   const source = exactAppealRecord(
     value,
@@ -451,7 +491,7 @@ export function parseSubjectAppealResultV2(value: unknown): SubjectAppealResultV
   if (source.phase !== "appeal") appealFail("subject_analysis_phase_invalid");
   const rawTargets = Array.isArray(source.targets) ? source.targets : appealFail("subject_analysis_targets_invalid");
   if (rawTargets.length !== 3) appealFail("subject_analysis_targets_invalid");
-  const targets = rawTargets.map(parseAppealTarget) as [SubjectTarget, SubjectTarget, SubjectTarget];
+  const targets = rawTargets.map((target) => parseAppealTarget(target, allowedAttachmentIds)) as [SubjectTarget, SubjectTarget, SubjectTarget];
   const targetIds = new Set(targets.map(({ id }) => id));
   if (targetIds.size !== 3) appealFail("subject_analysis_target_id_duplicate");
 
@@ -463,7 +503,12 @@ export function parseSubjectAppealResultV2(value: unknown): SubjectAppealResultV
   const appealsByTarget: Record<string, SubjectAppeal[]> = {};
   const appealIds = new Set<string>();
   for (const targetId of targetIds) {
-    const appeals = appealList(rawAppeals[targetId], "subject_analysis_appeals_invalid", parseAppealItem, 20);
+    const appeals = appealList(
+      rawAppeals[targetId],
+      "subject_analysis_appeals_invalid",
+      (item) => parseAppealItem(item, allowedAttachmentIds),
+      20,
+    );
     if (appeals.length < 2) appealFail("subject_analysis_appeals_minimum_invalid");
     for (const parsed of appeals) {
       if (parsed.targetId !== targetId) appealFail("subject_analysis_appeals_target_invalid");
