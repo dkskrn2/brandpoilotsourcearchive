@@ -710,12 +710,27 @@ async function recalculateGenerationStatus(client: Queryable, generationId: stri
   );
 }
 
-async function deleteCompletedGenerationAttachments(
+function collectManifestUrls(rows: Array<Record<string, unknown>>): Set<string> {
+  const urls = new Set<string>();
+  for (const row of rows) {
+    if (typeof row.manifest_url === "string" && row.manifest_url) urls.add(row.manifest_url);
+    const manifest = object(row.artifact_manifest_json);
+    const assets = Array.isArray(manifest.assets) ? manifest.assets : [];
+    for (const asset of assets) {
+      if (!asset || typeof asset !== "object" || Array.isArray(asset)) continue;
+      const url = (asset as Record<string, unknown>).url;
+      if (typeof url === "string" && url) urls.add(url);
+    }
+  }
+  return urls;
+}
+
+async function deleteTerminalGenerationAttachments(
   pool: Pool,
   generation: AiContentGenerationRecord,
   deleteAttachments?: (urls: string[]) => Promise<void>,
 ) {
-  if (generation.status !== "completed" || !deleteAttachments) return;
+  if (!["completed", "partial_failed", "failed"].includes(generation.status) || !deleteAttachments) return;
   const attachments = await pool.query(
     `select id, storage_url
        from ai_content_generation_attachments
@@ -723,8 +738,18 @@ async function deleteCompletedGenerationAttachments(
     [generation.id, generation.workspaceId, generation.brandId],
   );
   if (!attachments.rowCount) return;
+  const outputs = await pool.query(
+    `select manifest_url, artifact_manifest_json
+       from ai_content_generation_outputs
+      where generation_id = $1 and workspace_id = $2 and brand_id = $3
+        and status = 'completed'`,
+    [generation.id, generation.workspaceId, generation.brandId],
+  );
+  const preservedUrls = collectManifestUrls(outputs.rows as Array<Record<string, unknown>>);
+  const temporaryAttachments = attachments.rows.filter((row) => !preservedUrls.has(String(row.storage_url)));
+  if (!temporaryAttachments.length) return;
   try {
-    await deleteAttachments(attachments.rows.map((row) => String(row.storage_url)));
+    await deleteAttachments(temporaryAttachments.map((row) => String(row.storage_url)));
   } catch {
     return;
   }
@@ -733,7 +758,7 @@ async function deleteCompletedGenerationAttachments(
         set deleted_at = now()
       where generation_id = $1 and workspace_id = $2 and brand_id = $3
         and id = any($4::uuid[]) and deleted_at is null`,
-    [generation.id, generation.workspaceId, generation.brandId, attachments.rows.map((row) => String(row.id))],
+    [generation.id, generation.workspaceId, generation.brandId, temporaryAttachments.map((row) => String(row.id))],
   );
 }
 
@@ -1277,7 +1302,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           if (job.worker_id !== input.workerId || job.lease_token !== input.leaseToken) throw new Error("ai_content_job_lease_invalid");
           const generation = await generationById(client, String(job.generation_id));
           await client.query("COMMIT");
-          await deleteCompletedGenerationAttachments(pool, generation, options.deleteAttachments);
+          await deleteTerminalGenerationAttachments(pool, generation, options.deleteAttachments);
           return generation;
         }
         if (
@@ -1365,7 +1390,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         if (input.jobType === "generate") await recalculateGenerationStatus(client, String(job.generation_id));
         const generation = await generationById(client, String(job.generation_id));
         await client.query("COMMIT");
-        await deleteCompletedGenerationAttachments(pool, generation, options.deleteAttachments);
+        await deleteTerminalGenerationAttachments(pool, generation, options.deleteAttachments);
         return generation;
       } catch (error) {
         await client.query("ROLLBACK");
@@ -1383,6 +1408,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         if (job.status === "failed" || (job.status === "queued" && job.error_code === input.errorCode)) {
           const generation = await generationById(client, String(job.generation_id));
           await client.query("COMMIT");
+          await deleteTerminalGenerationAttachments(pool, generation, options.deleteAttachments);
           return generation;
         }
         if (
@@ -1438,6 +1464,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         }
         const generation = await generationById(client, String(job.generation_id));
         await client.query("COMMIT");
+        await deleteTerminalGenerationAttachments(pool, generation, options.deleteAttachments);
         return generation;
       } catch (error) {
         await client.query("ROLLBACK");

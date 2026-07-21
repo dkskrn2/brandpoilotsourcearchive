@@ -121,6 +121,9 @@ function createWorkerPool(options: {
   linkedChannelOutput?: boolean;
   autoApprovalEnabled?: boolean;
   exhaustedJob?: boolean;
+  completedOutputs?: number;
+  attachmentUrls?: string[];
+  manifestAssetUrls?: string[];
 } = {}) {
   const sql: string[] = [];
   let generation = row("generation-1", options.jobType === "analyze" ? "analyzing" : "generating");
@@ -198,7 +201,7 @@ function createWorkerPool(options: {
         job.status = "succeeded";
         return { rows: [], rowCount: 1 };
       }
-      if (query.includes("count(*)::integer as total")) return { rows: [{ total: options.totalOutputs ?? 1, completed: outputStatus === "completed" ? 1 : 0, failed: outputStatus === "failed" ? 1 : 0 }], rowCount: 1 };
+      if (query.includes("count(*)::integer as total")) return { rows: [{ total: options.totalOutputs ?? 1, completed: options.completedOutputs ?? (outputStatus === "completed" ? 1 : 0), failed: outputStatus === "failed" ? 1 : 0 }], rowCount: 1 };
       if (query.includes("update ai_content_generations") && query.includes("completed_at = case")) {
         generation = { ...generation, status: String(params[1]) };
         return { rows: [], rowCount: 1 };
@@ -225,8 +228,16 @@ function createWorkerPool(options: {
         return { rows: [], rowCount: 1 };
       }
       if (query.includes("from ai_content_generations where id = $1")) return { rows: [generation], rowCount: 1 };
+      if (query.includes("select manifest_url, artifact_manifest_json") && query.includes("from ai_content_generation_outputs")) {
+        const urls = options.manifestAssetUrls ?? [];
+        return {
+          rows: urls.length ? [{ manifest_url: "https://blob.example.com/manifest.json", artifact_manifest_json: { assets: urls.map((url) => ({ url })) } }] : [],
+          rowCount: urls.length ? 1 : 0,
+        };
+      }
       if (query.includes("from ai_content_generation_attachments") && query.includes("deleted_at is null")) {
-        return { rows: [{ id: "attachment-1", storage_url: "https://blob.example.com/reference.png" }], rowCount: 1 };
+        const urls = options.attachmentUrls ?? ["https://blob.example.com/reference.png"];
+        return { rows: urls.map((storage_url, index) => ({ id: `attachment-${index + 1}`, storage_url })), rowCount: urls.length };
       }
       if (query.includes("update ai_content_generation_attachments") && query.includes("deleted_at = now()")) {
         return { rows: [], rowCount: 1 };
@@ -594,6 +605,64 @@ describe("AI content repository", () => {
 
     expect(generation.status).toBe("generating");
     expect(deleteAttachments).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "all outputs fail", poolOptions: { totalOutputs: 1 } },
+    { name: "some outputs fail", poolOptions: { totalOutputs: 2, completedOutputs: 1 } },
+  ])("deletes temporary attachments when $name", async ({ poolOptions }) => {
+    const pool = createWorkerPool(poolOptions);
+    const deleteAttachments = vi.fn(async () => undefined);
+    const repository = createAiContentRepository(pool as never, { deleteAttachments });
+    const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
+
+    const generation = await repository.failAiContentJob({
+      jobId: "job-1",
+      workerId: "card-worker-1",
+      leaseToken: claimed!.leaseToken!,
+      errorCode: "render_failed",
+      errorMessage: "render failed",
+      retryable: false,
+    });
+
+    expect(["failed", "partial_failed"]).toContain(generation.status);
+    expect(deleteAttachments).toHaveBeenCalledWith(["https://blob.example.com/reference.png"]);
+  });
+
+  it("keeps final manifest assets while deleting temporary originals", async () => {
+    const finalUrl = "https://blob.example.com/final-slide.png";
+    const pool = createWorkerPool({
+      attachmentUrls: ["https://blob.example.com/reference.png", finalUrl],
+      manifestAssetUrls: [finalUrl],
+    });
+    const deleteAttachments = vi.fn(async () => undefined);
+    const repository = createAiContentRepository(pool as never, { deleteAttachments });
+    const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
+
+    await repository.completeAiContentJob({
+      jobId: "job-1", workerId: "card-worker-1", leaseToken: claimed!.leaseToken!, skillVersion: "card-news-skill.v3", jobType: "generate",
+      manifestUrl: "https://blob.example.com/manifest.json",
+      manifest: { version: "ai-content.v1", type: "card_news", title: "여름 추천", assets: [{ role: "slide", url: finalUrl, fileName: "slide.png", mimeType: "image/png", width: 1080, height: 1080, index: 1 }], content: { caption: "내용", hashtags: ["여름"], cta: "저장하세요" } },
+    });
+
+    expect(deleteAttachments).toHaveBeenCalledWith(["https://blob.example.com/reference.png"]);
+    expect(pool.sql.join("\n")).toContain("select manifest_url, artifact_manifest_json");
+  });
+
+  it("does not mark attachments deleted when blob deletion fails", async () => {
+    const pool = createWorkerPool();
+    const repository = createAiContentRepository(pool as never, {
+      deleteAttachments: vi.fn(async () => { throw new Error("blob unavailable"); }),
+    });
+    const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
+
+    await repository.completeAiContentJob({
+      jobId: "job-1", workerId: "card-worker-1", leaseToken: claimed!.leaseToken!, skillVersion: "card-news-skill.v3", jobType: "generate",
+      manifestUrl: "https://blob.example.com/manifest.json",
+      manifest: { version: "ai-content.v1", type: "card_news", title: "여름 추천", assets: [{ role: "slide", url: "https://blob.example.com/slide.png", fileName: "slide.png", mimeType: "image/png", width: 1080, height: 1080, index: 1 }], content: { caption: "내용", hashtags: ["여름"], cta: "저장하세요" } },
+    });
+
+    expect(pool.sql.join("\n")).not.toContain("deleted_at = now()");
   });
 
   it("rejects an analysis result with fewer than two concrete evidence items", async () => {
