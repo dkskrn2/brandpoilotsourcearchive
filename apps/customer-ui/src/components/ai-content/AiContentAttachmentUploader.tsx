@@ -27,12 +27,27 @@ const documentMimeTypes = new Set([
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 ]);
 
+const documentMimeByExtension: Record<string, string> = {
+  pdf: "application/pdf",
+  txt: "text/plain",
+  md: "text/markdown",
+  csv: "text/csv",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+};
+
+function normalizedMimeType(role: GenerationAttachment["role"], file: File) {
+  if (role !== "document") return file.type;
+  const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  return documentMimeByExtension[extension] ?? file.type;
+}
+
 function validateFile(role: GenerationAttachment["role"], file: File, attachments: GenerationAttachment[]) {
   const isDocument = role === "document";
-  if (isDocument ? !documentMimeTypes.has(file.type) : !["image/png", "image/jpeg"].includes(file.type)) {
+  const mimeType = normalizedMimeType(role, file);
+  if (isDocument ? !documentMimeTypes.has(mimeType) : !["image/png", "image/jpeg"].includes(mimeType)) {
     return isDocument ? "PDF, TXT, MD, CSV, XLSX 파일만 첨부할 수 있습니다." : "PNG, JPEG 파일만 첨부할 수 있습니다.";
   }
-  const maxBytes = file.type === "application/pdf" || file.type.includes("spreadsheetml") ? 10_000_000 : 5_000_000;
+  const maxBytes = mimeType === "application/pdf" || mimeType.includes("spreadsheetml") ? 10_000_000 : 5_000_000;
   if (file.size > maxBytes) return isDocument ? "문서는 형식에 따라 5~10MB 이하여야 합니다." : "이미지는 5MB 이하여야 합니다.";
   if (attachments.length >= 5) return "첨부 파일은 최대 5개입니다.";
   if (attachments.some((item) => item.fileName === file.name && item.size === file.size)) return "같은 파일이 이미 첨부되어 있습니다.";
@@ -48,10 +63,11 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
     if (!file) return;
     const validationError = validateFile(role, file, attachments);
     if (validationError) return setError(validationError);
+    const mimeType = normalizedMimeType(role, file);
     const localId = `${role}-${file.name}-${file.size}`;
     setError(null);
     if (!generationId) {
-      onChange([...attachments, { id: localId, role, fileName: file.name, mimeType: file.type, size: file.size, file }]);
+      onChange([...attachments, { id: localId, role, fileName: file.name, mimeType, size: file.size, file }]);
       return;
     }
     setProgress((current) => ({ ...current, [localId]: 0 }));
@@ -60,7 +76,7 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
         id: localId,
         role,
         fileName: file.name,
-        mimeType: file.type,
+        mimeType,
         size: file.size,
         file,
       }, (percentage) => setProgress((current) => ({ ...current, [localId]: percentage })));

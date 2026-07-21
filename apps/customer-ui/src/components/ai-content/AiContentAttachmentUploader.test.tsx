@@ -57,6 +57,8 @@ describe("AiContentAttachmentUploader", () => {
       new File(["md"], "brief.md", { type: "text/markdown" }),
       new File(["csv"], "brief.csv", { type: "text/csv" }),
       new File(["xlsx"], "brief.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
+      new File(["md"], "windows.md", { type: "" }),
+      new File(["csv"], "windows.csv", { type: "application/vnd.ms-excel" }),
     ];
 
     for (const file of documents) {
@@ -64,6 +66,8 @@ describe("AiContentAttachmentUploader", () => {
     }
 
     expect(onChange).toHaveBeenCalledTimes(documents.length);
+    expect(onChange).toHaveBeenCalledWith([expect.objectContaining({ fileName: "windows.md", mimeType: "text/markdown" })]);
+    expect(onChange).toHaveBeenCalledWith([expect.objectContaining({ fileName: "windows.csv", mimeType: "text/csv" })]);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
