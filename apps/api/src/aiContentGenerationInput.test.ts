@@ -4,9 +4,15 @@ import type { SubjectAnalysisRecord } from "./aiContentSubjectRepository.js";
 
 const analysis: SubjectAnalysisRecord = {
   id: "analysis-1", workspaceId: "workspace-1", brandId: "brand-1", subjectType: "product" as const,
+  contractVersion: "subject-analysis.v2",
   sourceUrl: "https://example.com/product", normalizedUrl: "https://example.com/product",
   input: { name: "상품", promotion: "", description: "상품 설명" }, status: "ready" as const,
   facts: [{ key: "name", value: "상품", sourceUrl: "https://example.com/product" }], structuredData: {}, research: { voc: [] },
+  analysisResult: {
+    contractVersion: "subject-analysis-result.v2", phase: "analysis", subjectType: "product", summary: "상품 분석",
+    verifiedFacts: [], voc: [], alternatives: [], barriers: [], serviceProfile: null, serviceSubtype: null, sourceGaps: [],
+    productProfile: { name: "상품", category: "생활", specifications: [], materials: [], options: [], price: "", discountsAndPromotions: [], shipping: [], returns: [], functions: [], useContexts: [], purchaseBarriers: [], reviewPatterns: { recurringSatisfaction: [], recurringComplaints: [] }, productImageCandidates: [], detailImageCandidates: [] },
+  },
   targets: [{ id: "target-1", name: "실용적인 고객", traits: ["바쁜 사람"], painPoints: ["시간 부족"], purchaseMotivations: ["간편함"], uspEvidence: [] }, { id: "target-2", name: "비교 고객", traits: [], painPoints: [], purchaseMotivations: [], uspEvidence: [] }, { id: "target-3", name: "관심 고객", traits: [], painPoints: [], purchaseMotivations: [], uspEvidence: [] }],
   appealsByTarget: { "target-1": [{ id: "appeal-1", targetId: "target-1", title: "빠른 시작", description: "쉽게 시작", evidenceType: "product_fact" as const, connectionReason: "상품 근거", sources: [] }] },
   selectedImageId: "image-1", images: [{ id: "image-1", analysisId: "analysis-1", sourceUrl: "https://example.com/product.png", storageUrl: "https://blob.example/product.png", storagePath: "subjects/1.png", width: 1024, height: 1024, mimeType: "image/png", altText: "상품", role: "product" as const, selectionScore: 1, createdAt: "2026-07-20T00:00:00.000Z" }],
@@ -39,7 +45,68 @@ describe("content-generation-input.v2", () => {
     expect(envelope.creativeDirection.selectedColor).toBe("#0F766E");
     expect(envelope.references.map((item) => item.id)).toEqual(["ref-2", "ref-1"]);
     expect(envelope.subject.selectedImages.map((item) => item.id)).toEqual(["image-1"]);
+    expect(envelope.subject.analysisContractVersion).toBe("subject-analysis.v2");
+    expect(envelope.subject.analysisResult).toEqual(analysis.analysisResult);
     expect(envelope.attachments[0].role).toBe("visual_reference");
+    expect(envelope.creativeDirection.prompts).toHaveLength(2);
+    expect(envelope.creativeDirection.prompts[0]).toContain("정보를 쉽게 전달");
+    expect(envelope.creativeDirection.prompts[1]).toContain("결과 2");
+  });
+
+  it("freezes a user-added appeal override instead of requiring the original appeal list", async () => {
+    const customAppeal = {
+      ...analysis.appealsByTarget["target-1"][0],
+      id: "appeal-custom",
+      title: "직접 수정한 소구점",
+      description: "사용자가 확정한 설명",
+    };
+    const envelope = await buildContentGenerationInput(deps(), generation({
+      selectedAppeal: customAppeal,
+      appealOverridesByTarget: { "target-1": [customAppeal] },
+    }));
+
+    expect(envelope.message.appeal).toEqual(customAppeal);
+  });
+
+  it("keeps legacy v1 subject records compatible without a v2 analysis result", async () => {
+    const legacy = { ...analysis, contractVersion: "subject-analysis.v1" as const, analysisResult: null };
+    const envelope = await buildContentGenerationInput(
+      deps({ getSubjectAnalysis: vi.fn(async () => legacy) }),
+      generation(),
+    );
+
+    expect(envelope.subject.analysisContractVersion).toBe("subject-analysis.v1");
+    expect(envelope.subject.analysisResult).toBeNull();
+  });
+
+  it("builds a v2 snapshot from attachments and manual input when no source URL was supplied", async () => {
+    const attachmentOnly = { ...analysis, sourceUrl: "", normalizedUrl: "" };
+    const envelope = await buildContentGenerationInput(
+      deps({ getSubjectAnalysis: vi.fn(async () => attachmentOnly) }),
+      generation(),
+    );
+
+    expect(envelope.subject.sourceUrl).toBe("");
+    expect(envelope.attachments).toHaveLength(1);
+  });
+
+  it("merges global brief fields into each output prompt", async () => {
+    const envelope = await buildContentGenerationInput(deps(), generation({
+      brief: {
+        purpose: "information",
+        emphasis: "휴대성",
+        cta: "제품 확인",
+        additionalInstruction: "가격을 만들지 마세요",
+        selectedColor: "#0F766E",
+        aspectRatio: "1:1",
+        outputCount: 1,
+        outputDirections: ["공감형 질문으로 시작"],
+      },
+    }), { outputCount: 1 });
+
+    expect(envelope.creativeDirection.prompts).toEqual([
+      "공감형 질문으로 시작\npurpose: information\nemphasis: 휴대성\ncta: 제품 확인\nadditionalInstruction: 가격을 만들지 마세요",
+    ]);
   });
 
   it("allows partial analysis but rejects non-terminal analysis", async () => {
@@ -59,6 +126,24 @@ describe("content-generation-input.v2", () => {
     const snapshot = await buildContentGenerationInput(deps({ getSubjectAnalysis: vi.fn(async () => newer) }), generation({ subjectAnalysisId: "analysis-2" }), { existingSnapshot: first });
     expect(snapshot.subject.analysisVersion).toBe(2);
     expect(parseContentGenerationInputV2(snapshot).creativeDirection.outputCount).toBe(1);
+  });
+
+  it("removes analysis-only raw page text from new and reused worker input", async () => {
+    const withRawPageText = {
+      ...analysis,
+      facts: [
+        ...analysis.facts,
+        { key: "visible_text", value: "페이지 원문 전체", sourceUrl: analysis.sourceUrl },
+      ],
+    };
+    const envelope = await buildContentGenerationInput(deps({ getSubjectAnalysis: vi.fn(async () => withRawPageText) }), generation(), { outputCount: 1 });
+    expect(envelope.subject.facts).toEqual(analysis.facts);
+
+    const reparsed = parseContentGenerationInputV2({
+      ...envelope,
+      subject: { ...envelope.subject, facts: withRawPageText.facts },
+    });
+    expect(reparsed.subject.facts).toEqual(analysis.facts);
   });
 
   it("rejects a snapshot with a mismatched target and appeal", () => {
