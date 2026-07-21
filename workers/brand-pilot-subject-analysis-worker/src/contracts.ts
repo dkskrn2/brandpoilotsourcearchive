@@ -1,6 +1,14 @@
 export type SubjectType = "product" | "service";
 export type SubjectImageRole = "product" | "service" | "logo" | "detail" | "unknown";
 export type SubjectEvidenceType = "product_fact" | "public_research" | "manual_input";
+export type ServiceSubtype =
+  | "saas"
+  | "consulting"
+  | "education"
+  | "agency"
+  | "subscription"
+  | "professional"
+  | "other_service";
 
 export interface SubjectTarget {
   id: string;
@@ -56,6 +64,58 @@ export interface SubjectAnalysisResult {
   targets: [SubjectTarget, SubjectTarget, SubjectTarget];
   appealsByTarget: Record<string, SubjectAppeal[]>;
   recommendedImageId: string | null;
+  sourceGaps: string[];
+}
+
+export interface SubjectAnalysisInputV2 {
+  contractVersion: "subject-analysis.v2";
+  phase: "analysis";
+  brandContext: Record<string, unknown>;
+  subject: {
+    type: SubjectType;
+    sourceUrl: string | null;
+    attachmentIds: string[];
+    manualInput: { name: string; promotionOrTerms: string; description: string };
+  };
+  extracted: {
+    documents: Array<{ attachmentId: string; fileName: string; mimeType: string; text: string }>;
+    images: Array<{
+      attachmentId: string;
+      sourceUrl: string;
+      storageUrl: string;
+      mimeType: string;
+      altText: string;
+    }>;
+    sourcePage: {
+      sourceUrl: string;
+      title: string;
+      text: string;
+      structuredData: Record<string, unknown>;
+    } | null;
+    sourceGaps: string[];
+  };
+  sourcePriority: ["manual_input", "attachments", "source_url", "brand_context", "public_research"];
+}
+
+export interface SubjectAnalysisJobV2 extends SubjectAnalysisInputV2 {
+  analysisId: string;
+  workerId: string;
+  leaseToken: string;
+  leaseExpiresAt: string;
+}
+
+export interface SubjectAnalysisResultV2 {
+  contractVersion: "subject-analysis-result.v2";
+  phase: "analysis";
+  subjectType: SubjectType;
+  summary: string;
+  verifiedFacts: Array<{ claim: string; support: string; sourceUrl: string }>;
+  voc: Array<{ quoteSummary: string; context: string; sourceUrl: string }>;
+  alternatives: Array<{ name: string; strengths: string[]; limitations: string[]; sourceUrls: string[] }>;
+  barriers: Array<{ barrier: string; evidence: string; sourceUrls: string[] }>;
+  productProfile: Record<string, unknown> | null;
+  serviceProfile: Record<string, unknown> | null;
+  serviceSubtype: ServiceSubtype | null;
   sourceGaps: string[];
 }
 
