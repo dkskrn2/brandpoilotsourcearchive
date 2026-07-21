@@ -237,7 +237,7 @@ async function prepareV2Job(
 
   let persisted = claim;
   let sourcePage = persistedSourcePage(claim);
-  const sourceGaps = [...evidence.sourceGaps];
+  const sourceGaps = [...new Set([...(claim.sourceGaps ?? []), ...evidence.sourceGaps])];
   if (claim.status === "extracting") {
     let facts: SubjectAnalysisClaim["facts"] = [];
     let structuredData: Record<string, unknown> = {};
@@ -278,6 +278,7 @@ async function prepareV2Job(
       facts,
       structuredData,
       images,
+      sourceGaps,
     });
     sourcePage ??= persistedSourcePage(persisted);
   }

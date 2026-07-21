@@ -107,6 +107,7 @@ export interface SubjectExtractionCompletion extends SubjectLeaseIdentity {
   facts: SubjectAnalysisRecord["facts"];
   structuredData: Record<string, unknown>;
   images: SubjectExtractionImage[];
+  sourceGaps?: string[];
 }
 
 export interface SubjectAnalysisRepository {
@@ -713,9 +714,16 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
         await client.query(
           `update ai_content_subject_analyses
               set facts_json = $2::jsonb, structured_data_json = $3::jsonb,
+                  research_json = research_json || jsonb_build_object('sourceGaps', $5::jsonb),
                   status = $4, error_code = null, error_message = null, updated_at = now()
             where id = $1`,
-          [input.analysisId, JSON.stringify(input.facts), JSON.stringify(input.structuredData), nextStatus],
+          [
+            input.analysisId,
+            JSON.stringify(input.facts),
+            JSON.stringify(input.structuredData),
+            nextStatus,
+            JSON.stringify(input.sourceGaps ?? []),
+          ],
         );
         await client.query("update ai_content_subject_images set deleted_at = now() where analysis_id = $1 and deleted_at is null", [input.analysisId]);
         for (const image of input.images) {
@@ -774,6 +782,12 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
             throw new Error("subject_analysis_contract_mismatch");
           }
           const parsed = parseSubjectAnalysisResultV2(result, v2ResultContext(row));
+          const extractionGaps = jsonArray(jsonObject(row.research_json).sourceGaps)
+            .filter((value): value is string => typeof value === "string");
+          const persistedResult = {
+            ...parsed,
+            sourceGaps: [...new Set([...extractionGaps, ...parsed.sourceGaps])],
+          };
           await client.query(
             `update ai_content_subject_analyses
                 set analysis_result_json = $2::jsonb, status = 'generating_appeals',
@@ -782,7 +796,7 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
                     error_code = null, error_message = null, completed_at = null,
                     updated_at = now()
               where id = $1`,
-            [input.analysisId, JSON.stringify(parsed)],
+            [input.analysisId, JSON.stringify(persistedResult)],
           );
           return (await loadAnalysis(client, input.analysisId))!;
         });

@@ -62,6 +62,7 @@ function setup(claimed: SubjectAnalysisClaim) {
       phase: "analysis",
       facts: input.facts,
       structuredData: input.structuredData,
+      sourceGaps: input.sourceGaps ?? [],
     })),
     failSubjectAnalysis: vi.fn(async () => claimed),
     listSubjectEvidenceAttachments: vi.fn(async () => [
@@ -176,6 +177,36 @@ describe("subject worker job preparation", () => {
     expect(repository.markSubjectExtractionComplete).toHaveBeenCalledWith(expect.objectContaining({
       facts: [], structuredData: {}, images: [],
     }));
+  });
+
+  it("persists a recoverable URL extraction gap so an analyzing retry keeps it", async () => {
+    const claimed = claim({ attachmentIds: [], input: {
+      name: "Widget", promotion: "", promotionOrTerms: "", description: "Manual fallback",
+    } });
+    const { repository, fetchBlob, archiveImage } = setup(claimed);
+    const extractPage = vi.fn(async () => { throw new Error("subject_page_fetch_failed"); });
+
+    const first = await claimAndPrepareSubjectAnalysis(
+      repository,
+      { workerId: "subject-worker-1", leaseSeconds: 180 },
+      { fetchBlob, extractPage, archiveImage },
+    );
+    expect(first).toMatchObject({ extracted: { sourceGaps: ["source_url: subject_page_fetch_failed"] } });
+    expect(repository.markSubjectExtractionComplete).toHaveBeenCalledWith(expect.objectContaining({
+      sourceGaps: ["source_url: subject_page_fetch_failed"],
+    }));
+
+    vi.mocked(repository.claimSubjectAnalysis).mockResolvedValueOnce(claim({
+      status: "analyzing", phase: "analysis", attachmentIds: [],
+      sourceGaps: ["source_url: subject_page_fetch_failed"],
+    }));
+    const retried = await claimAndPrepareSubjectAnalysis(
+      repository,
+      { workerId: "subject-worker-1", leaseSeconds: 180 },
+      { fetchBlob, extractPage, archiveImage },
+    );
+    expect(retried).toMatchObject({ extracted: { sourceGaps: ["source_url: subject_page_fetch_failed"] } });
+    expect(extractPage).toHaveBeenCalledTimes(1);
   });
 
   it("prepares a v2 appeal only from persisted context, subject, and analysis result", async () => {

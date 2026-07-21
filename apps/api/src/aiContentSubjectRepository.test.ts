@@ -653,8 +653,13 @@ describe("createAiContentSubjectRepository", () => {
       facts: [],
       structuredData: {},
       images: [],
+      sourceGaps: ["source_url: subject_page_fetch_failed"],
     });
-    expect(analyzing).toMatchObject({ status: "analyzing", phase: "analysis" });
+    expect(analyzing).toMatchObject({
+      status: "analyzing",
+      phase: "analysis",
+      sourceGaps: ["source_url: subject_page_fetch_failed"],
+    });
 
     const appealQueued = await repository.completeSubjectAnalysis({
       ...lease(extractionClaim),
@@ -662,7 +667,7 @@ describe("createAiContentSubjectRepository", () => {
     });
     expect(appealQueued).toMatchObject({
       status: "generating_appeals",
-      analysisResult: analysisResultV2(),
+      analysisResult: analysisResultV2(["source_url: subject_page_fetch_failed"]),
       attemptCount: 0,
       leasedBy: null,
       leaseToken: null,
@@ -674,10 +679,10 @@ describe("createAiContentSubjectRepository", () => {
 
     const completed = await repository.completeSubjectAppeals({ ...lease(appealClaim), ...appealResultV2() });
     expect(completed).toMatchObject({
-      status: "ready",
+      status: "partial",
       targets: appealResultV2().targets,
       appealsByTarget: appealResultV2().appealsByTarget,
-      analysisResult: analysisResultV2(),
+      analysisResult: analysisResultV2(["source_url: subject_page_fetch_failed"]),
     });
   });
 
