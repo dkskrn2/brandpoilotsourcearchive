@@ -1626,6 +1626,13 @@ export function createServer(
       const scope = aiContentScope(request, request.params.brandId);
       const current = await subjectRepository.getSubjectAnalysis({ ...scope, analysisId: request.params.analysisId });
       if (!current) throw new Error("subject_analysis_not_found");
+      if (current.contractVersion === "subject-analysis.v2") {
+        reply.code(400);
+        return {
+          error: "subject_analysis_v2_reanalyze_unsupported",
+          supportedActions: ["generation_scoped_post", "appeals_regenerate"],
+        };
+      }
       const { idempotencyKey } = parseReanalyzeSubjectAnalysisInput(request.body);
       const analysis = await subjectRepository.requestSubjectAnalysis({
         ...scope,
@@ -1642,11 +1649,13 @@ export function createServer(
 
   app.patch<{ Params: { brandId: string; analysisId: string }; Body: unknown }>(
     "/brands/:brandId/ai-content/subject-analyses/:analysisId/selection",
-    async (request) => subjectRepository.selectSubjectImage({
-      ...aiContentScope(request, request.params.brandId),
-      analysisId: request.params.analysisId,
-      ...parseSubjectAnalysisSelectionInput(request.body),
-    }),
+    async (request) => customerSubjectAnalysisResponse(
+      await subjectRepository.selectSubjectImage({
+        ...aiContentScope(request, request.params.brandId),
+        analysisId: request.params.analysisId,
+        ...parseSubjectAnalysisSelectionInput(request.body),
+      }),
+    ),
   );
 
   app.post<{ Params: { brandId: string }; Body: unknown }>("/brands/:brandId/ai-content/generations", async (request) => {

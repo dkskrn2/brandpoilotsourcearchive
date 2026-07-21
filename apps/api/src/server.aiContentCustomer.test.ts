@@ -482,6 +482,54 @@ describe("AI content customer routes", () => {
     await app.close();
   });
 
+  it("rejects legacy reanalysis for a generation-scoped v2 analysis", async () => {
+    const { app, repository } = setup();
+    vi.mocked(repository.getSubjectAnalysis!).mockResolvedValueOnce(subjectAnalysisV2("ready") as never);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/subject-analyses/${analysisId}/reanalyze`,
+      headers: auth,
+      payload: { idempotencyKey: "subject-v2-reanalyze" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: "subject_analysis_v2_reanalyze_unsupported",
+      supportedActions: ["generation_scoped_post", "appeals_regenerate"],
+    });
+    expect(repository.requestSubjectAnalysis).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("filters internal v2 fields from image selection responses", async () => {
+    const { app, repository } = setup();
+    vi.mocked(repository.selectSubjectImage!).mockResolvedValueOnce(subjectAnalysisV2("ready") as never);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/brands/${brandId}/ai-content/subject-analyses/${analysisId}/selection`,
+      headers: auth,
+      payload: { imageId: "image-1" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      id: analysisId,
+      generationId,
+      contractVersion: "subject-analysis.v2",
+      status: "ready",
+      analysisVersion: 1,
+      targets: [{ id: "target-1", name: "브랜드 담당자" }],
+      appealsByTarget: { "target-1": [{ id: "appeal-1", title: "빠른 시작" }] },
+      sourceGaps: ["가격 근거 부족"],
+    });
+    expect(response.json()).not.toHaveProperty("analysisResult");
+    expect(response.json()).not.toHaveProperty("leasedBy");
+    expect(response.json()).not.toHaveProperty("idempotencyKey");
+    await app.close();
+  });
+
   it("scopes detail, reanalysis, and image selection to the authenticated brand", async () => {
     const { app, repository } = setup();
     const detail = await app.inject({ method: "GET", url: `/brands/${brandId}/ai-content/subject-analyses/${analysisId}`, headers: auth });
