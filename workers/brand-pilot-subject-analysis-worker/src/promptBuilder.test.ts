@@ -23,7 +23,9 @@ describe("subject analysis prompt", () => {
   });
 
   it("dispatches v1 without changing the legacy prompt", () => {
-    expect(buildSubjectPrompt(job)).toBe(buildSubjectAnalysisPrompt(job));
+    const prompt = buildSubjectPrompt(job);
+    expect(prompt).toBe(buildSubjectAnalysisPrompt(job));
+    expect(prompt.split("\n")[0]).toBe("너는 Brand Pilot의 상품·서비스 분석 담당자다.");
   });
 
   it.each([
