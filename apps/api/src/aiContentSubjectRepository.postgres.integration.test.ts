@@ -205,6 +205,7 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")("AiContentSubje
       sourceUrl: "https://example.com/product",
       attachmentIds: [],
       manualInput: { name: "Product", promotionOrTerms: "", description: "Description" },
+      brandContext: { companyOverview: "Acme" },
     };
 
     const [first, second] = await Promise.all([

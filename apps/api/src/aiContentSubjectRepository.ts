@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { Pool, PoolClient } from "pg";
 import {
   type CreateSubjectAnalysisInput,
@@ -20,6 +21,10 @@ import {
 export interface SubjectBrandScope {
   workspaceId: string;
   brandId: string;
+}
+
+export interface CreateSubjectPipelineRepositoryInput extends CreateSubjectPipelineInput {
+  brandContext: Record<string, unknown>;
 }
 
 export interface SubjectImageRecord {
@@ -45,6 +50,8 @@ export interface SubjectAnalysisRecord extends SubjectBrandScope {
   sourceUrl: string;
   normalizedUrl: string;
   input: SubjectManualInput & { promotionOrTerms?: string };
+  brandContext?: Record<string, unknown>;
+  regenerationIdempotencyKeys?: string[];
   attachmentIds?: string[];
   status: SubjectAnalysisStatus | SubjectPipelineStatus;
   facts: Array<{ key: string; value: string; sourceUrl: string }>;
@@ -106,7 +113,7 @@ export interface SubjectExtractionCompletion extends SubjectLeaseIdentity {
 export interface SubjectAnalysisRepository {
   getCachedSubjectAnalysis(input: SubjectBrandScope & { subjectType: SubjectType; sourceUrl: string }): Promise<SubjectAnalysisRecord | null>;
   requestSubjectAnalysis(input: SubjectBrandScope & CreateSubjectAnalysisInput): Promise<SubjectAnalysisRecord>;
-  requestSubjectAnalysis(input: SubjectBrandScope & CreateSubjectPipelineInput): Promise<SubjectAnalysisRecord>;
+  requestSubjectAnalysis(input: SubjectBrandScope & CreateSubjectPipelineRepositoryInput): Promise<SubjectAnalysisRecord>;
   getSubjectAnalysis(input: SubjectBrandScope & { analysisId: string }): Promise<SubjectAnalysisRecord | null>;
   selectSubjectImage(input: SubjectBrandScope & { analysisId: string; imageId: string }): Promise<SubjectAnalysisRecord>;
   claimSubjectAnalysis(input: { workerId: string; leaseSeconds: number }): Promise<SubjectAnalysisClaim | null>;
@@ -122,6 +129,14 @@ export interface SubjectAnalysisRepository {
 }
 
 type Queryable = Pick<PoolClient, "query">;
+
+const REGENERATION_IDEMPOTENCY_HISTORY_LIMIT = 32;
+
+interface SubjectPipelineInputEnvelope {
+  manualInput: CreateSubjectPipelineInput["manualInput"];
+  brandContext: Record<string, unknown>;
+  regenerationIdempotencyKeys: string[];
+}
 
 const ANALYSIS_COLUMNS = `
   id, workspace_id, brand_id, generation_id, contract_version, subject_type,
@@ -197,6 +212,23 @@ function jsonArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? value as T[] : [];
 }
 
+function pipelineInputEnvelope(value: unknown): SubjectPipelineInputEnvelope {
+  const stored = jsonObject(value);
+  const nestedManualInput = jsonObject(stored.manualInput);
+  const manualInput = Object.keys(nestedManualInput).length ? nestedManualInput : stored;
+  return {
+    manualInput: {
+      name: typeof manualInput.name === "string" ? manualInput.name : "",
+      promotionOrTerms: typeof manualInput.promotionOrTerms === "string" ? manualInput.promotionOrTerms : "",
+      description: typeof manualInput.description === "string" ? manualInput.description : "",
+    },
+    brandContext: jsonObject(stored.brandContext),
+    regenerationIdempotencyKeys: jsonArray<unknown>(stored.regenerationIdempotencyKeys)
+      .filter((key): key is string => typeof key === "string")
+      .slice(-REGENERATION_IDEMPOTENCY_HISTORY_LIMIT),
+  };
+}
+
 export function normalizeSubjectUrl(value: string): string {
   let url: URL;
   try { url = new URL(value.trim()); } catch { throw new Error("subject_analysis_source_url_invalid"); }
@@ -232,16 +264,21 @@ function mapImage(row: Record<string, unknown>): SubjectImageRecord {
 }
 
 function mapAnalysis(row: Record<string, unknown>, images: SubjectImageRecord[]): SubjectAnalysisRecord {
-  const input = jsonObject(row.input_json);
   const contractVersion = row.contract_version === "subject-analysis.v2"
     ? "subject-analysis.v2"
     : "subject-analysis.v1";
+  const storedInput = jsonObject(row.input_json);
+  const pipelineInput = pipelineInputEnvelope(storedInput);
+  const input = contractVersion === "subject-analysis.v2" ? pipelineInput.manualInput : storedInput;
   const analysisResultJson = jsonObject(row.analysis_result_json);
   const analysisResult = contractVersion === "subject-analysis.v2" && Object.keys(analysisResultJson).length
     ? analysisResultJson as unknown as SubjectAnalysisResultV2
     : null;
   const research = jsonObject(row.research_json);
   const promotionOrTerms = typeof input.promotionOrTerms === "string" ? input.promotionOrTerms : "";
+  const promotion = contractVersion === "subject-analysis.v2"
+    ? promotionOrTerms
+    : typeof storedInput.promotion === "string" ? storedInput.promotion : "";
   return {
     id: String(row.id),
     workspaceId: String(row.workspace_id),
@@ -253,10 +290,14 @@ function mapAnalysis(row: Record<string, unknown>, images: SubjectImageRecord[])
     normalizedUrl: row.normalized_url === null || row.normalized_url === undefined ? "" : String(row.normalized_url),
     input: {
       name: typeof input.name === "string" ? input.name : "",
-      promotion: typeof input.promotion === "string" ? input.promotion : promotionOrTerms,
+      promotion,
       description: typeof input.description === "string" ? input.description : "",
       ...(contractVersion === "subject-analysis.v2" ? { promotionOrTerms } : {}),
     },
+    ...(contractVersion === "subject-analysis.v2" ? {
+      brandContext: pipelineInput.brandContext,
+      regenerationIdempotencyKeys: pipelineInput.regenerationIdempotencyKeys,
+    } : {}),
     attachmentIds: jsonArray(row.attachment_ids_json),
     status: row.status as SubjectAnalysisRecord["status"],
     facts: jsonArray(row.facts_json),
@@ -454,13 +495,14 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
           );
           const active = activeResult.rows[0] as Record<string, unknown> | undefined;
           if (active) {
-            const storedInput = jsonObject(active.input_json);
+            const storedInput = pipelineInputEnvelope(active.input_json);
             const storedAttachmentIds = jsonArray<string>(active.attachment_ids_json);
             const sameInput = active.subject_type === input.subjectType
               && (active.normalized_url ?? null) === normalizedUrl
-              && storedInput.name === input.manualInput.name
-              && storedInput.promotionOrTerms === input.manualInput.promotionOrTerms
-              && storedInput.description === input.manualInput.description
+              && storedInput.manualInput.name === input.manualInput.name
+              && storedInput.manualInput.promotionOrTerms === input.manualInput.promotionOrTerms
+              && storedInput.manualInput.description === input.manualInput.description
+              && isDeepStrictEqual(storedInput.brandContext, input.brandContext)
               && storedAttachmentIds.length === input.attachmentIds.length
               && storedAttachmentIds.every((id, index) => id === input.attachmentIds[index]);
             if (sameInput) return mapAnalysis(active, await loadImages(client, String(active.id)));
@@ -484,10 +526,15 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
           }
 
           const id = randomUUID();
+          const storedInput: SubjectPipelineInputEnvelope = {
+            manualInput: input.manualInput,
+            brandContext: input.brandContext,
+            regenerationIdempotencyKeys: [],
+          };
           const inserted = await client.query(
             SUBJECT_PIPELINE_INSERT_SQL,
             [id, input.workspaceId, input.brandId, input.generationId, input.subjectType,
-              input.sourceUrl?.trim() ?? null, normalizedUrl, JSON.stringify(input.manualInput),
+              input.sourceUrl?.trim() ?? null, normalizedUrl, JSON.stringify(storedInput),
               JSON.stringify(input.attachmentIds), analysisVersion, input.idempotencyKey],
           );
           if (inserted.rowCount) return mapAnalysis(inserted.rows[0] as Record<string, unknown>, []);
@@ -821,29 +868,35 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
         if (!row || row.contract_version !== "subject-analysis.v2" || row.superseded_at) {
           throw new Error("subject_analysis_not_found");
         }
-        if (row.idempotency_key === input.idempotencyKey) {
+        const storedInput = pipelineInputEnvelope(row.input_json);
+        if (row.idempotency_key === input.idempotencyKey
+          || storedInput.regenerationIdempotencyKeys.includes(input.idempotencyKey)) {
           return (await loadAnalysis(client, input.analysisId))!;
         }
         if (row.status !== "ready" && row.status !== "partial") {
           throw new Error("subject_analysis_appeals_regeneration_invalid");
         }
         parseSubjectAnalysisResultV2(jsonObject(row.analysis_result_json));
-        const duplicateKey = await client.query(
-          `select id from ai_content_subject_analyses
-            where brand_id = $1 and idempotency_key = $2 and id <> $3`,
-          [input.brandId, input.idempotencyKey, input.analysisId],
-        );
-        if (duplicateKey.rowCount) throw new Error("subject_analysis_idempotency_conflict");
+        const regenerationIdempotencyKeys = [
+          ...storedInput.regenerationIdempotencyKeys,
+          input.idempotencyKey,
+        ].slice(-REGENERATION_IDEMPOTENCY_HISTORY_LIMIT);
         await client.query(
           `update ai_content_subject_analyses
-              set status = 'generating_appeals', idempotency_key = $2,
+              set status = 'generating_appeals',
+                  input_json = jsonb_set(
+                    input_json,
+                    '{regenerationIdempotencyKeys}',
+                    $2::jsonb,
+                    true
+                  ),
                   targets_json = '[]'::jsonb, appeals_json = '{}'::jsonb,
                   leased_by = null, lease_token = null, lease_expires_at = null,
                   attempt_count = 0, available_at = now(),
                   error_code = null, error_message = null, completed_at = null,
                   updated_at = now()
             where id = $1`,
-          [input.analysisId, input.idempotencyKey],
+          [input.analysisId, JSON.stringify(regenerationIdempotencyKeys)],
         );
         return (await loadAnalysis(client, input.analysisId))!;
       });

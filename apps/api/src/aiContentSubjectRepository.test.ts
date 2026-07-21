@@ -161,6 +161,13 @@ function pipelineRequest(overrides: Record<string, unknown> = {}) {
     sourceUrl: "https://example.com/products/widget",
     attachmentIds: [attachmentId],
     manualInput: { name: "Widget", promotionOrTerms: "10% off", description: "A useful widget" },
+    brandContext: {
+      companyOverview: "Acme makes workflow tools.",
+      categories: { primary: "Productivity", secondary: ["Operations", "Automation"] },
+      coreTargets: ["Operations managers"],
+      brandColors: ["#123456", "#abcdef"],
+      analysisVersion: 7,
+    },
     idempotencyKey: "pipeline-request-1",
     ...overrides,
   };
@@ -292,6 +299,12 @@ describe("createAiContentSubjectRepository", () => {
     expect(cached.id).toBe(first.id);
     const count = await database.query("select count(*)::int as count from ai_content_subject_analyses");
     expect((count.rows[0] as { count: number }).count).toBe(1);
+    const stored = await database.query(
+      "select input_json from ai_content_subject_analyses where id = $1",
+      [first.id],
+    );
+    expect((stored.rows[0] as { input_json: Record<string, unknown> }).input_json)
+      .toEqual(request().manualInput);
   });
 
   it("forces a new version and supersedes the active entry", async () => {
@@ -606,7 +619,20 @@ describe("createAiContentSubjectRepository", () => {
     });
 
     const extractionClaim = (await repository.claimSubjectAnalysis({ workerId: "analysis-worker", leaseSeconds: 60 }))!;
-    expect(extractionClaim).toMatchObject({ id: queued.id, status: "extracting", phase: "analysis" });
+    expect(extractionClaim).toMatchObject({
+      id: queued.id,
+      status: "extracting",
+      phase: "analysis",
+      brandContext: pipelineRequest().brandContext,
+    });
+    const persistedInput = await database.query(
+      "select input_json from ai_content_subject_analyses where id = $1",
+      [queued.id],
+    );
+    expect((persistedInput.rows[0] as { input_json: Record<string, unknown> }).input_json).toMatchObject({
+      manualInput: pipelineRequest().manualInput,
+      brandContext: pipelineRequest().brandContext,
+    });
 
     const analyzing = await repository.markSubjectExtractionComplete({
       ...lease(extractionClaim),
@@ -680,6 +706,18 @@ describe("createAiContentSubjectRepository", () => {
     expect(prior?.supersededAt).not.toBeNull();
   });
 
+  it("supersedes the active v2 row when only the confirmed brand context changes", async () => {
+    const first = await repository.requestSubjectAnalysis(pipelineRequest());
+    const changed = await repository.requestSubjectAnalysis(pipelineRequest({
+      brandContext: { ...pipelineRequest().brandContext, analysisVersion: 8 },
+      idempotencyKey: "pipeline-brand-context-changed",
+    }));
+
+    expect(changed.id).not.toBe(first.id);
+    expect(changed.analysisVersion).toBe(2);
+    expect(changed.brandContext).toMatchObject({ analysisVersion: 8 });
+  });
+
   it("preserves the analysis result when a retryable appeal failure is requeued", async () => {
     await repository.requestSubjectAnalysis(pipelineRequest());
     const analysisClaim = (await repository.claimSubjectAnalysis({ workerId: "analysis-worker", leaseSeconds: 60 }))!;
@@ -749,6 +787,56 @@ describe("createAiContentSubjectRepository", () => {
       });
       expect(duplicate.id).toBe(regenerated.id);
       expect(duplicate.updatedAt).toBe(regenerated.updatedAt);
+      await expect(repository.regenerateSubjectAppeals({
+        workspaceId,
+        brandId,
+        analysisId: completed.id,
+        idempotencyKey: "appeal-regeneration-new-while-running",
+      })).rejects.toThrow("subject_analysis_appeals_regeneration_invalid");
     },
   );
+
+  it("remembers older regeneration keys after a newer regeneration cycle completes", async () => {
+    await repository.requestSubjectAnalysis(pipelineRequest());
+    const analysisClaim = (await repository.claimSubjectAnalysis({ workerId: "analysis-worker", leaseSeconds: 60 }))!;
+    await repository.markSubjectExtractionComplete({ ...lease(analysisClaim), facts: [], structuredData: {}, images: [] });
+    await repository.completeSubjectAnalysis({ ...lease(analysisClaim), ...analysisResultV2() });
+    const initialAppealClaim = (await repository.claimSubjectAnalysis({ workerId: "appeal-worker", leaseSeconds: 60 }))!;
+    const ready = await repository.completeSubjectAppeals({ ...lease(initialAppealClaim), ...appealResultV2() });
+
+    await repository.regenerateSubjectAppeals({
+      workspaceId,
+      brandId,
+      analysisId: ready.id,
+      idempotencyKey: "appeal-regeneration-old",
+    });
+    const firstRegenerationClaim = (await repository.claimSubjectAnalysis({ workerId: "appeal-worker-2", leaseSeconds: 60 }))!;
+    await repository.completeSubjectAppeals({ ...lease(firstRegenerationClaim), ...appealResultV2() });
+
+    await repository.regenerateSubjectAppeals({
+      workspaceId,
+      brandId,
+      analysisId: ready.id,
+      idempotencyKey: "appeal-regeneration-new",
+    });
+    const secondRegenerationClaim = (await repository.claimSubjectAnalysis({ workerId: "appeal-worker-3", leaseSeconds: 60 }))!;
+    const newest = await repository.completeSubjectAppeals({ ...lease(secondRegenerationClaim), ...appealResultV2() });
+
+    const retriedOldKey = await repository.regenerateSubjectAppeals({
+      workspaceId,
+      brandId,
+      analysisId: ready.id,
+      idempotencyKey: "appeal-regeneration-old",
+    });
+    expect(retriedOldKey).toMatchObject({ status: "ready", updatedAt: newest.updatedAt });
+    const persisted = await database.query(
+      "select input_json from ai_content_subject_analyses where id = $1",
+      [ready.id],
+    );
+    expect((persisted.rows[0] as { input_json: { regenerationIdempotencyKeys: string[] } })
+      .input_json.regenerationIdempotencyKeys).toEqual([
+      "appeal-regeneration-old",
+      "appeal-regeneration-new",
+    ]);
+  });
 });
