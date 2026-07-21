@@ -100,6 +100,8 @@ export interface SubjectAnalysisWorkerLease {
   analysisId: string;
   contractVersion: "subject-analysis.v1" | "subject-analysis.v2";
   phase: "analysis" | "appeal";
+  subjectType: "product" | "service";
+  attachmentIds: string[];
 }
 
 export interface AiContentAttachmentRecord {
@@ -762,7 +764,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
 
     async getSubjectAnalysisWorkerLease(input) {
       const result = await pool.query(
-        `select id, contract_version, status
+        `select id, contract_version, status, subject_type, attachment_ids_json
            from ai_content_subject_analyses
           where id = $1 and leased_by = $2 and lease_token = $3
             and lease_expires_at > now() and superseded_at is null
@@ -777,6 +779,10 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       return {
         analysisId: String(row.id),
         contractVersion,
+        subjectType: row.subject_type as SubjectAnalysisWorkerLease["subjectType"],
+        attachmentIds: Array.isArray(row.attachment_ids_json)
+          ? row.attachment_ids_json.map(String)
+          : [],
         phase: contractVersion === "subject-analysis.v2" && row.status === "generating_appeals"
           ? "appeal"
           : "analysis",

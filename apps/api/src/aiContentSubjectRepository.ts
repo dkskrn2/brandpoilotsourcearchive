@@ -208,6 +208,13 @@ function jsonArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? value as T[] : [];
 }
 
+function v2ResultContext(row: Record<string, unknown>) {
+  return {
+    expectedSubjectType: row.subject_type as SubjectType,
+    allowedAttachmentIds: jsonArray<string>(row.attachment_ids_json),
+  };
+}
+
 function pipelineInputEnvelope(value: unknown): SubjectPipelineInputEnvelope {
   const stored = jsonObject(value);
   const nestedManualInput = jsonObject(stored.manualInput);
@@ -756,7 +763,6 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
     async completeSubjectAnalysis(input) {
       const { analysisId: _analysisId, workerId: _workerId, leaseToken: _leaseToken, ...result } = input;
       if (result.contractVersion === "subject-analysis-result.v2") {
-        const parsed = parseSubjectAnalysisResultV2(result);
         return inTransaction(pool, async (client) => {
           const locked = await client.query(
             "select * from ai_content_subject_analyses where id = $1 for update",
@@ -764,9 +770,10 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
           );
           const row = locked.rows[0] as Record<string, unknown> | undefined;
           assertActiveLease(row, input, ["analyzing"]);
-          if (row.contract_version !== "subject-analysis.v2" || row.subject_type !== parsed.subjectType) {
+          if (row.contract_version !== "subject-analysis.v2") {
             throw new Error("subject_analysis_contract_mismatch");
           }
+          const parsed = parseSubjectAnalysisResultV2(result, v2ResultContext(row));
           await client.query(
             `update ai_content_subject_analyses
                 set analysis_result_json = $2::jsonb, status = 'generating_appeals',
@@ -821,7 +828,6 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
 
     async completeSubjectAppeals(input) {
       const { analysisId: _analysisId, workerId: _workerId, leaseToken: _leaseToken, ...result } = input;
-      const parsed = parseSubjectAppealResultV2(result);
       return inTransaction(pool, async (client) => {
         const locked = await client.query(
           "select * from ai_content_subject_analyses where id = $1 for update",
@@ -832,7 +838,9 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
         if (row.contract_version !== "subject-analysis.v2") {
           throw new Error("subject_analysis_contract_mismatch");
         }
-        const analysisResult = parseSubjectAnalysisResultV2(jsonObject(row.analysis_result_json));
+        const context = v2ResultContext(row);
+        const parsed = parseSubjectAppealResultV2(result, context);
+        const analysisResult = parseSubjectAnalysisResultV2(jsonObject(row.analysis_result_json), context);
         await client.query(
           `update ai_content_subject_analyses
               set targets_json = $2::jsonb, appeals_json = $3::jsonb, status = $4,
@@ -871,7 +879,7 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
         if (row.status !== "ready" && row.status !== "partial") {
           throw new Error("subject_analysis_appeals_regeneration_invalid");
         }
-        parseSubjectAnalysisResultV2(jsonObject(row.analysis_result_json));
+        parseSubjectAnalysisResultV2(jsonObject(row.analysis_result_json), v2ResultContext(row));
         const insertedKey = await client.query(
           `insert into ai_content_subject_appeal_regeneration_keys
              (analysis_id, idempotency_key)

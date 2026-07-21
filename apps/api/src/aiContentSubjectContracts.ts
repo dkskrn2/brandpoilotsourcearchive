@@ -149,6 +149,13 @@ export interface SubjectAnalysisResultV2 {
   sourceGaps: string[];
 }
 
+export interface SubjectAnalysisResultV2ParseContext {
+  expectedSubjectType: SubjectType;
+  allowedAttachmentIds: readonly string[];
+}
+
+export type SubjectAppealResultV2ParseContext = SubjectAnalysisResultV2ParseContext;
+
 export interface SubjectAppealInputV2 {
   contractVersion: "subject-analysis.v2";
   phase: "appeal";
@@ -257,6 +264,26 @@ function evidenceUrl(value: unknown, code = "subject_analysis_source_url_invalid
     return normalized.toLowerCase();
   }
   return httpsUrl(normalized, code);
+}
+
+function resultParseContext(
+  value: SubjectAnalysisResultV2ParseContext,
+  code: string,
+): { expectedSubjectType: SubjectType; allowedAttachmentIds: ReadonlySet<string> } {
+  if (!value || typeof value !== "object") fail(code);
+  return {
+    expectedSubjectType: subjectType(value.expectedSubjectType),
+    allowedAttachmentIds: new Set(attachmentIds(value.allowedAttachmentIds)),
+  };
+}
+
+function scopedEvidenceUrl(value: unknown, allowedAttachmentIds: ReadonlySet<string>, code?: string): string {
+  const parsed = evidenceUrl(value, code);
+  if (parsed.startsWith("attachment://")
+    && !allowedAttachmentIds.has(parsed.slice("attachment://".length))) {
+    fail("subject_analysis_attachment_not_allowed");
+  }
+  return parsed;
 }
 
 function subjectV2(value: unknown): SubjectAnalysisInputV2["subject"] {
@@ -500,27 +527,46 @@ export function parseSubjectAnalysisInput(value: unknown): SubjectAnalysisInputV
   };
 }
 
-function evidence(value: unknown): { claim: string; support: string; sourceUrl: string } {
+function evidence(
+  value: unknown,
+  allowedAttachmentIds?: ReadonlySet<string>,
+): { claim: string; support: string; sourceUrl: string } {
   const source = strictObject(value, ["claim", "support", "sourceUrl"], "subject_analysis_evidence_invalid");
-  return { claim: text(source.claim, "subject_analysis_evidence_invalid"), support: text(source.support, "subject_analysis_evidence_invalid"), sourceUrl: httpsUrl(source.sourceUrl) };
+  return {
+    claim: text(source.claim, "subject_analysis_evidence_invalid"),
+    support: text(source.support, "subject_analysis_evidence_invalid"),
+    sourceUrl: allowedAttachmentIds
+      ? scopedEvidenceUrl(source.sourceUrl, allowedAttachmentIds)
+      : httpsUrl(source.sourceUrl),
+  };
 }
 
-function parseTarget(value: unknown): SubjectTarget {
+function parseTarget(value: unknown, allowedAttachmentIds?: ReadonlySet<string>): SubjectTarget {
   const source = strictObject(value, ["id", "name", "traits", "painPoints", "purchaseMotivations", "uspEvidence"], "subject_analysis_target_invalid");
   return {
     id: text(source.id, "subject_analysis_target_invalid", 200), name: text(source.name, "subject_analysis_target_invalid", 200),
     traits: textList(source.traits, "subject_analysis_target_invalid"), painPoints: textList(source.painPoints, "subject_analysis_target_invalid"),
     purchaseMotivations: textList(source.purchaseMotivations, "subject_analysis_target_invalid"),
-    uspEvidence: list(source.uspEvidence, "subject_analysis_target_invalid", evidence, LIMITS.evidence),
+    uspEvidence: list(
+      source.uspEvidence,
+      "subject_analysis_target_invalid",
+      (item) => evidence(item, allowedAttachmentIds),
+      LIMITS.evidence,
+    ),
   };
 }
 
-function parseAppeal(value: unknown): SubjectAppeal {
+function parseAppeal(value: unknown, allowedAttachmentIds?: ReadonlySet<string>): SubjectAppeal {
   const source = strictObject(value, ["id", "targetId", "title", "description", "evidenceType", "connectionReason", "sources"], "subject_analysis_appeal_invalid");
   if (!isSubjectEvidenceType(source.evidenceType)) fail("subject_analysis_appeal_invalid");
   const sources = list(source.sources, "subject_analysis_appeal_sources_invalid", (item) => {
     const entry = strictObject(item, ["title", "url"], "subject_analysis_appeal_sources_invalid");
-    return { title: text(entry.title, "subject_analysis_appeal_sources_invalid", 500), url: httpsUrl(entry.url) };
+    return {
+      title: text(entry.title, "subject_analysis_appeal_sources_invalid", 500),
+      url: allowedAttachmentIds && source.evidenceType !== "public_research"
+        ? scopedEvidenceUrl(entry.url, allowedAttachmentIds, "subject_analysis_appeal_sources_invalid")
+        : httpsUrl(entry.url, "subject_analysis_appeal_sources_invalid"),
+    };
   }, LIMITS.evidence);
   if (source.evidenceType === "public_research" && sources.length === 0) fail("subject_analysis_appeal_sources_invalid");
   return {
@@ -658,7 +704,11 @@ function serviceSubtype(value: unknown): ServiceSubtype {
   return value;
 }
 
-export function parseSubjectAnalysisResultV2(value: unknown): SubjectAnalysisResultV2 {
+export function parseSubjectAnalysisResultV2(
+  value: unknown,
+  context: SubjectAnalysisResultV2ParseContext,
+): SubjectAnalysisResultV2 {
+  const parsedContext = resultParseContext(context, "subject_analysis_result_context_invalid");
   assertV2PayloadBudget(value);
   const source = strictObject(
     value,
@@ -672,12 +722,15 @@ export function parseSubjectAnalysisResultV2(value: unknown): SubjectAnalysisRes
   if (source.contractVersion !== "subject-analysis-result.v2") fail("subject_analysis_result_version_invalid");
   if (source.phase !== "analysis") fail("subject_analysis_phase_invalid");
   const parsedSubjectType = subjectType(source.subjectType);
+  if (parsedSubjectType !== parsedContext.expectedSubjectType) {
+    fail("subject_analysis_subject_type_mismatch");
+  }
   const verifiedFacts = list(source.verifiedFacts, "subject_analysis_verified_facts_invalid", (item) => {
     const fact = strictObject(item, ["claim", "support", "sourceUrl"], "subject_analysis_verified_fact_invalid");
     return {
       claim: text(fact.claim, "subject_analysis_verified_fact_invalid"),
       support: text(fact.support, "subject_analysis_verified_fact_invalid"),
-      sourceUrl: evidenceUrl(fact.sourceUrl),
+      sourceUrl: scopedEvidenceUrl(fact.sourceUrl, parsedContext.allowedAttachmentIds),
     };
   });
   const voc = list(source.voc, "subject_analysis_voc_invalid", (item) => {
@@ -685,12 +738,16 @@ export function parseSubjectAnalysisResultV2(value: unknown): SubjectAnalysisRes
     return {
       quoteSummary: text(entry.quoteSummary, "subject_analysis_voc_invalid"),
       context: text(entry.context, "subject_analysis_voc_invalid"),
-      sourceUrl: evidenceUrl(entry.sourceUrl),
+      sourceUrl: scopedEvidenceUrl(entry.sourceUrl, parsedContext.allowedAttachmentIds),
     };
   });
   const alternatives = list(source.alternatives, "subject_analysis_alternatives_invalid", (item) => {
     const entry = strictObject(item, ["name", "strengths", "limitations", "sourceUrls"], "subject_analysis_alternatives_invalid");
-    const sourceUrls = list(entry.sourceUrls, "subject_analysis_alternatives_invalid", (url) => evidenceUrl(url));
+    const sourceUrls = list(
+      entry.sourceUrls,
+      "subject_analysis_alternatives_invalid",
+      (url) => scopedEvidenceUrl(url, parsedContext.allowedAttachmentIds),
+    );
     if (sourceUrls.length === 0) fail("subject_analysis_alternatives_invalid");
     return {
       name: text(entry.name, "subject_analysis_alternatives_invalid", 500),
@@ -704,7 +761,11 @@ export function parseSubjectAnalysisResultV2(value: unknown): SubjectAnalysisRes
     return {
       barrier: text(entry.barrier, "subject_analysis_barrier_invalid"),
       evidence: text(entry.evidence, "subject_analysis_barrier_invalid"),
-      sourceUrls: list(entry.sourceUrls, "subject_analysis_barrier_invalid", (url) => evidenceUrl(url)),
+      sourceUrls: list(
+        entry.sourceUrls,
+        "subject_analysis_barrier_invalid",
+        (url) => scopedEvidenceUrl(url, parsedContext.allowedAttachmentIds),
+      ),
     };
   });
 
@@ -745,7 +806,10 @@ export function parseSubjectAppealInputV2(value: unknown): SubjectAppealInputV2 
   if (source.contractVersion !== "subject-analysis.v2") fail("subject_analysis_contract_version_invalid");
   if (source.phase !== "appeal") fail("subject_analysis_phase_invalid");
   const subject = subjectV2(source.subject);
-  const analysisResult = parseSubjectAnalysisResultV2(source.analysisResult);
+  const analysisResult = parseSubjectAnalysisResultV2(source.analysisResult, {
+    expectedSubjectType: subject.type,
+    allowedAttachmentIds: subject.attachmentIds,
+  });
   if (subject.type !== analysisResult.subjectType) fail("subject_analysis_subject_type_mismatch");
   return {
     contractVersion: "subject-analysis.v2",
@@ -757,7 +821,11 @@ export function parseSubjectAppealInputV2(value: unknown): SubjectAppealInputV2 
   };
 }
 
-export function parseSubjectAppealResultV2(value: unknown): SubjectAppealResultV2 {
+export function parseSubjectAppealResultV2(
+  value: unknown,
+  context: SubjectAppealResultV2ParseContext,
+): SubjectAppealResultV2 {
+  const parsedContext = resultParseContext(context, "subject_appeal_result_context_invalid");
   assertV2PayloadBudget(value);
   const source = strictObject(
     value,
@@ -767,7 +835,9 @@ export function parseSubjectAppealResultV2(value: unknown): SubjectAppealResultV
   if (source.contractVersion !== "subject-appeal-result.v2") fail("subject_analysis_result_version_invalid");
   if (source.phase !== "appeal") fail("subject_analysis_phase_invalid");
   if (!Array.isArray(source.targets) || source.targets.length !== 3) fail("subject_analysis_targets_invalid");
-  const targets = source.targets.map(parseTarget) as [SubjectTarget, SubjectTarget, SubjectTarget];
+  const targets = source.targets.map((target) => (
+    parseTarget(target, parsedContext.allowedAttachmentIds)
+  )) as [SubjectTarget, SubjectTarget, SubjectTarget];
   const targetIds = new Set(targets.map(({ id }) => id));
   if (targetIds.size !== 3) fail("subject_analysis_target_id_duplicate");
 
@@ -779,7 +849,12 @@ export function parseSubjectAppealResultV2(value: unknown): SubjectAppealResultV
   const appealsByTarget: Record<string, SubjectAppeal[]> = {};
   const appealIds = new Set<string>();
   for (const targetId of targetIds) {
-    const appeals = list(appealsSource[targetId], "subject_analysis_appeals_invalid", parseAppeal, LIMITS.evidence);
+    const appeals = list(
+      appealsSource[targetId],
+      "subject_analysis_appeals_invalid",
+      (appeal) => parseAppeal(appeal, parsedContext.allowedAttachmentIds),
+      LIMITS.evidence,
+    );
     if (appeals.length < 2) fail("subject_analysis_appeals_minimum_invalid");
     for (const parsed of appeals) {
       if (parsed.targetId !== targetId) fail("subject_analysis_appeals_target_invalid");

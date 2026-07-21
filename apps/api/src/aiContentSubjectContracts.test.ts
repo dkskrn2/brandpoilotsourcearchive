@@ -16,6 +16,8 @@ import {
 
 const generationId = "22222222-2222-4222-8222-222222222222";
 const attachmentId = "33333333-3333-4333-8333-333333333333";
+const foreignAttachmentId = "44444444-4444-4444-8444-444444444444";
+const resultContext = { expectedSubjectType: "product" as const, allowedAttachmentIds: [attachmentId] };
 
 function validPipelineInput() {
   return {
@@ -284,7 +286,7 @@ describe("subject-analysis.v2 worker contracts", () => {
   });
 
   it("requires the matching product or service analysis profile", () => {
-    expect(parseSubjectAnalysisResultV2(validAnalysisResultV2())).toMatchObject({
+    expect(parseSubjectAnalysisResultV2(validAnalysisResultV2(), resultContext)).toMatchObject({
       subjectType: "product",
       productProfile: { category: "Apparel" },
     });
@@ -294,28 +296,52 @@ describe("subject-analysis.v2 worker contracts", () => {
       productProfile: null,
       serviceProfile: { deliveryModel: "Advisory" },
       serviceSubtype: "not-a-subtype",
-    })).toThrow("subject_analysis_service_subtype_invalid");
+    }, { ...resultContext, expectedSubjectType: "service" })).toThrow("subject_analysis_service_subtype_invalid");
+  });
+
+  it("rejects a subject mismatch and foreign attachment evidence", () => {
+    expect(() => parseSubjectAnalysisResultV2(validAnalysisResultV2(), {
+      ...resultContext,
+      expectedSubjectType: "service",
+    })).toThrow("subject_analysis_subject_type_mismatch");
+
+    const foreign = validAnalysisResultV2();
+    foreign.verifiedFacts[0].sourceUrl = `attachment://${foreignAttachmentId}`;
+    expect(() => parseSubjectAnalysisResultV2(foreign, resultContext))
+      .toThrow("subject_analysis_attachment_not_allowed");
   });
 
   it("requires exactly three targets and at least two appeals per target", () => {
-    expect(parseSubjectAppealResultV2(validAppealResultV2()).targets).toHaveLength(3);
+    expect(parseSubjectAppealResultV2(validAppealResultV2(), resultContext).targets).toHaveLength(3);
     const result = validAppealResultV2();
     result.appealsByTarget["target-1"] = [appeal("only-one", "target-1")];
-    expect(() => parseSubjectAppealResultV2(result)).toThrow("subject_analysis_appeals_minimum_invalid");
+    expect(() => parseSubjectAppealResultV2(result, resultContext)).toThrow("subject_analysis_appeals_minimum_invalid");
+  });
+
+  it("allows only lease attachments in appeal evidence", () => {
+    const allowed = validAppealResultV2();
+    allowed.targets[0].uspEvidence[0].sourceUrl = `attachment://${attachmentId}`;
+    expect(parseSubjectAppealResultV2(allowed, resultContext).targets[0].uspEvidence[0].sourceUrl)
+      .toBe(`attachment://${attachmentId}`);
+
+    const foreign = validAppealResultV2();
+    foreign.targets[0].uspEvidence[0].sourceUrl = `attachment://${foreignAttachmentId}`;
+    expect(() => parseSubjectAppealResultV2(foreign, resultContext))
+      .toThrow("subject_analysis_attachment_not_allowed");
   });
 
   it("rejects v2 analysis and appeal results over the aggregate payload budget", () => {
     expect(() => parseSubjectAnalysisResultV2({
       ...validAnalysisResultV2(),
       sourceGaps: Array.from({ length: 50 }, () => "x".repeat(2_000)),
-    })).toThrow("subject_analysis_v2_payload_limit_exceeded");
+    }, resultContext)).toThrow("subject_analysis_v2_payload_limit_exceeded");
 
     const appealResult = validAppealResultV2();
     appealResult.targets = appealResult.targets.map((entry) => ({
       ...entry,
       traits: Array.from({ length: 50 }, () => "x".repeat(1_000)),
     }));
-    expect(() => parseSubjectAppealResultV2(appealResult))
+    expect(() => parseSubjectAppealResultV2(appealResult, resultContext))
       .toThrow("subject_analysis_v2_payload_limit_exceeded");
   });
 });

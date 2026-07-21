@@ -812,7 +812,13 @@ describe("AI content repository", () => {
     ["subject-analysis.v2", "generating_appeals", "appeal"],
   ] as const)("loads the active %s %s worker lease as %s", async (contractVersion, status, phase) => {
     const query = vi.fn(async (_sql: string, _params: unknown[]) => ({
-      rows: [{ id: "analysis-1", contract_version: contractVersion, status }],
+      rows: [{
+        id: "analysis-1",
+        contract_version: contractVersion,
+        status,
+        subject_type: "product",
+        attachment_ids_json: ["33333333-3333-4333-8333-333333333333"],
+      }],
       rowCount: 1,
     }));
     const repository = createAiContentRepository({ query } as never);
@@ -821,7 +827,13 @@ describe("AI content repository", () => {
       analysisId: "analysis-1",
       workerId: "subject-worker-1",
       leaseToken: "subject-lease-1",
-    })).resolves.toEqual({ analysisId: "analysis-1", contractVersion, phase });
+    })).resolves.toEqual({
+      analysisId: "analysis-1",
+      contractVersion,
+      phase,
+      subjectType: "product",
+      attachmentIds: ["33333333-3333-4333-8333-333333333333"],
+    });
 
     const [sql, params] = query.mock.calls[0]!;
     expect(sql).toContain("leased_by = $2");

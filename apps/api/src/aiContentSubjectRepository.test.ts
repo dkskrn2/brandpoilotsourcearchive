@@ -144,6 +144,7 @@ const otherBrandId = "20000000-0000-4000-8000-000000000002";
 const generationId = "50000000-0000-4000-8000-000000000001";
 const otherGenerationId = "50000000-0000-4000-8000-000000000002";
 const attachmentId = "60000000-0000-4000-8000-000000000001";
+const foreignAttachmentId = "60000000-0000-4000-8000-000000000002";
 
 function request(overrides: Record<string, unknown> = {}) {
   return {
@@ -673,6 +674,47 @@ describe("createAiContentSubjectRepository", () => {
       appealsByTarget: appealResultV2().appealsByTarget,
       analysisResult: analysisResultV2(),
     });
+  });
+
+  it.each([
+    ["subject mismatch", { ...analysisResultV2(), subjectType: "service", productProfile: null, serviceProfile: {}, serviceSubtype: "other_service" }],
+    ["foreign attachment", {
+      ...analysisResultV2(),
+      verifiedFacts: [{
+        claim: "Foreign claim",
+        support: "Foreign support",
+        sourceUrl: `attachment://${foreignAttachmentId}`,
+      }],
+    }],
+  ] as const)("rejects v2 analysis completion with %s before persistence", async (_name, result) => {
+    await repository.requestSubjectAnalysis(pipelineRequest());
+    const claim = (await repository.claimSubjectAnalysis({ workerId: "analysis-worker", leaseSeconds: 60 }))!;
+    await repository.markSubjectExtractionComplete({ ...lease(claim), facts: [], structuredData: {}, images: [] });
+
+    await expect(repository.completeSubjectAnalysis({ ...lease(claim), ...result } as never)).rejects.toThrow();
+    const stored = await database.query(
+      "select status, analysis_result_json from ai_content_subject_analyses where id = $1",
+      [claim.id],
+    );
+    expect(stored.rows[0]).toMatchObject({ status: "analyzing", analysis_result_json: null });
+  });
+
+  it("rejects foreign attachment evidence in appeal completion before persistence", async () => {
+    await repository.requestSubjectAnalysis(pipelineRequest());
+    const analysisClaim = (await repository.claimSubjectAnalysis({ workerId: "analysis-worker", leaseSeconds: 60 }))!;
+    await repository.markSubjectExtractionComplete({ ...lease(analysisClaim), facts: [], structuredData: {}, images: [] });
+    await repository.completeSubjectAnalysis({ ...lease(analysisClaim), ...analysisResultV2() });
+    const appealClaim = (await repository.claimSubjectAnalysis({ workerId: "appeal-worker", leaseSeconds: 60 }))!;
+    const result = appealResultV2();
+    result.targets[0].uspEvidence[0].sourceUrl = `attachment://${foreignAttachmentId}`;
+
+    await expect(repository.completeSubjectAppeals({ ...lease(appealClaim), ...result }))
+      .rejects.toThrow("subject_analysis_attachment_not_allowed");
+    const stored = await database.query(
+      "select status, targets_json, appeals_json from ai_content_subject_analyses where id = $1",
+      [appealClaim.id],
+    );
+    expect(stored.rows[0]).toMatchObject({ status: "generating_appeals", targets_json: [], appeals_json: {} });
   });
 
   it("returns the same v2 row for the same generation and idempotency key", async () => {

@@ -59,6 +59,8 @@ function setup() {
       analysisId: "analysis-1",
       contractVersion: "subject-analysis.v1" as const,
       phase: "analysis" as const,
+      subjectType: "product" as const,
+      attachmentIds: [] as string[],
     })),
     completeSubjectAnalysis: vi.fn(async () => ({ id: "analysis-1", status: "ready" })),
     completeSubjectAppeals: vi.fn(async () => ({ id: "analysis-1", status: "ready" })),
@@ -314,6 +316,7 @@ describe("AI content worker routes", () => {
     const { app, repository } = setup();
     vi.mocked(repository.getSubjectAnalysisWorkerLease!).mockResolvedValueOnce({
       analysisId: "analysis-1", contractVersion: "subject-analysis.v2", phase: "analysis",
+      subjectType: "product", attachmentIds: ["33333333-3333-4333-8333-333333333333"],
     });
     const response = await app.inject({
       method: "POST",
@@ -345,6 +348,7 @@ describe("AI content worker routes", () => {
     const { app, repository } = setup();
     vi.mocked(repository.getSubjectAnalysisWorkerLease!).mockResolvedValueOnce({
       analysisId: "analysis-1", contractVersion: "subject-analysis.v2", phase: "appeal",
+      subjectType: "product", attachmentIds: ["33333333-3333-4333-8333-333333333333"],
     });
     const targets = [1, 2, 3].map((index) => ({
       id: `target-${index}`, name: `Target ${index}`, traits: ["practical"], painPoints: ["slow setup"],
@@ -384,6 +388,7 @@ describe("AI content worker routes", () => {
     const { app, repository } = setup();
     vi.mocked(repository.getSubjectAnalysisWorkerLease!).mockResolvedValueOnce({
       analysisId: "analysis-1", contractVersion: "subject-analysis.v2", phase,
+      subjectType: "product", attachmentIds: ["33333333-3333-4333-8333-333333333333"],
     });
     const response = await app.inject({
       method: "POST",
@@ -394,6 +399,41 @@ describe("AI content worker routes", () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: "subject_analysis_completion_phase_mismatch" });
+    expect(repository.completeSubjectAnalysis).not.toHaveBeenCalled();
+    expect(repository.completeSubjectAppeals).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it.each([
+    ["subject mismatch", {
+      contractVersion: "subject-analysis-result.v2", phase: "analysis", subjectType: "service",
+      summary: "Wrong subject", verifiedFacts: [], voc: [], alternatives: [], barriers: [],
+      productProfile: null, serviceProfile: {}, serviceSubtype: "other_service", sourceGaps: [],
+    }],
+    ["foreign attachment", {
+      contractVersion: "subject-analysis-result.v2", phase: "analysis", subjectType: "product",
+      summary: "Foreign evidence",
+      verifiedFacts: [{
+        claim: "Claim", support: "Support",
+        sourceUrl: "attachment://44444444-4444-4444-8444-444444444444",
+      }],
+      voc: [], alternatives: [], barriers: [], productProfile: {}, serviceProfile: null,
+      serviceSubtype: null, sourceGaps: [],
+    }],
+  ] as const)("rejects v2 analysis completion with %s before mutation", async (_name, result) => {
+    const { app, repository } = setup();
+    vi.mocked(repository.getSubjectAnalysisWorkerLease!).mockResolvedValueOnce({
+      analysisId: "analysis-1", contractVersion: "subject-analysis.v2", phase: "analysis",
+      subjectType: "product", attachmentIds: ["33333333-3333-4333-8333-333333333333"],
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/worker/ai-content-subject-analyses/analysis-1/complete",
+      headers: { authorization: "Bearer worker-token" },
+      payload: { workerId: "subject-worker-1", leaseToken: "subject-lease-1", result },
+    });
+
+    expect(response.statusCode).toBe(400);
     expect(repository.completeSubjectAnalysis).not.toHaveBeenCalled();
     expect(repository.completeSubjectAppeals).not.toHaveBeenCalled();
     await app.close();

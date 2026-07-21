@@ -2270,13 +2270,19 @@ export function createServer(
         if (rawResult.contractVersion !== "subject-analysis-result.v2" || rawResult.phase !== "analysis") {
           throw new Error("subject_analysis_completion_phase_mismatch");
         }
-        const result = parseSubjectAnalysisResultV2(rawResult);
+        const result = parseSubjectAnalysisResultV2(rawResult, {
+          expectedSubjectType: activeLease.subjectType,
+          allowedAttachmentIds: activeLease.attachmentIds,
+        });
         return subjectRepository.completeSubjectAnalysis({ ...identity, ...result });
       }
       if (rawResult.contractVersion !== "subject-appeal-result.v2" || rawResult.phase !== "appeal") {
         throw new Error("subject_analysis_completion_phase_mismatch");
       }
-      const result = parseSubjectAppealResultV2(rawResult);
+      const result = parseSubjectAppealResultV2(rawResult, {
+        expectedSubjectType: activeLease.subjectType,
+        allowedAttachmentIds: activeLease.attachmentIds,
+      });
       return subjectRepository.completeSubjectAppeals({ ...identity, ...result });
     },
   );
