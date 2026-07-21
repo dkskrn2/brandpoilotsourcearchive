@@ -48,6 +48,12 @@ describe("v2 analysis prompts", () => {
     expect(prompt).toContain("product-analysis.v2-ko");
     expect(prompt).toContain("기능 → 효익 → 구매 이유");
     expect(prompt).toContain("규격·소재·옵션·배송·환불·사용 상황·구매 장벽");
+    expect(prompt).toContain("가격·할인·프로모션");
+    expect(prompt).toContain("후기의 반복 만족·불만 패턴");
+    expect(prompt).toContain("제품 이미지 후보와 상세 이미지 후보");
+    for (const field of ["price", "discountsAndPromotions", "reviewPatterns", "productImageCandidates", "detailImageCandidates"]) {
+      expect(prompt).toContain(`"${field}"`);
+    }
     expect(prompt).toContain("직접 입력 > 첨부 > URL > 브랜드 > 공개 검색");
     expect(prompt).toContain("공개 웹 검색으로 가격·효능·성과·성능을 확정하지 않는다");
     expect(prompt).toContain("subject-analysis-result.v2");
@@ -62,6 +68,12 @@ describe("v2 analysis prompts", () => {
     expect(prompt).toContain("문제 → 제공 과정 → 이용 후 변화 → 신뢰·도입 부담");
     expect(prompt).toContain("사용자와 구매 결정권자");
     expect(prompt).toContain("계약·갱신·해지·지원·산출물·도입 장벽");
+    expect(prompt).toContain("가격·이용 조건");
+    expect(prompt).toContain("도입 전·후 업무 흐름");
+    expect(prompt).toContain("보안·성과 신뢰 근거");
+    for (const field of ["price", "beforeAfterWorkflow", "securityEvidence", "performanceEvidence"]) {
+      expect(prompt).toContain(`"${field}"`);
+    }
     for (const subtype of ["saas", "consulting", "education", "agency", "subscription", "professional", "other_service"]) {
       expect(prompt).toContain(subtype);
     }
