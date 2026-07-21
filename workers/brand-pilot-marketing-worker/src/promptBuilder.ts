@@ -4,14 +4,16 @@ import { requestedDimensions } from "./manifest.js";
 export const marketingSkillVersion = "marketing-creative-skill.v5";
 
 export function buildPrompt(job: MarketingJob) {
-  const input = job.jobType === "generate" ? parseContentGenerationInput(job.payload) : null;
-  const dimensions = requestedDimensions(job.payload);
+  const input = job.jobType === "generate" ? parseContentGenerationInput(job.payload.contentGenerationInput) : null;
+  const dimensions = requestedDimensions((input ?? job.payload) as unknown as Record<string, unknown>);
   return [
     ".agents/skills/marketing-creative/SKILL.md를 읽고 따르세요.",
     `계약 버전: ${marketingSkillVersion}`,
     `현재 작업 유형: ${job.jobType}`,
     "generate 작업에서는 content-generation-input.v2 봉투만 입력으로 사용하세요.",
+    "subject.analysisResult의 제품·서비스 프로필, subtype, 대안, 장벽과 VOC를 광고 가설의 맥락에 사용하세요.",
     "subject.facts만 제품·서비스의 사실 근거로 사용하세요. subject.research는 출처가 포함된 시장 맥락으로만 사용하세요.",
+    "generate 작업에서는 message.qualityBrief.sourceGaps를 사실 근거가 부족한 금지 주장 목록으로 취급하고, 해당 내용을 사실·혜택·지원 범위로 단정하지 마세요.",
     "message.target 1개와 message.appeal 1개를 그대로 사용하세요. 타깃이나 소구점을 변경·추가하지 마세요.",
     "subject.selectedImages와 attachments의 선택된 제품·사용자 이미지를 반영하되 복제하지 마세요.",
     "references는 정보 위계, 색 대비, 시선 흐름과 표현 방식만 참고하고 문장, 인물, 로고, 고유 그래픽과 구도를 복제하지 마세요.",
@@ -22,7 +24,7 @@ export function buildPrompt(job: MarketingJob) {
     `creative.png는 정확히 ${dimensions.width}x${dimensions.height} PNG로 저장하세요. 요청된 비율에 맞춰 처음부터 구성하고 사후 크롭을 전제로 만들지 마세요.`,
     "이미지에 가짜 버튼, 플랫폼 UI, QR 코드 또는 출처 URL을 그리지 마세요.",
     "AI 광고 문구처럼 모호한 최상급 표현을 반복하지 말고 사람이 쓴 구체적인 한국어를 사용하세요.",
-    "analyze 작업에서는 content-quality.v1 품질 브리프를 먼저 만들고 이미지 없이 analysis.json만 출력하세요.",
+    "analyze 작업에서는 이미지 없이 analysis.json만 출력하세요. JSON은 반드시 {\"qualityBrief\":{\"version\":\"content-quality.v1\",\"hook\":\"...\",\"readerPayoff\":\"...\",\"whyNow\":\"...\",\"specificClaims\":[\"...\",\"...\"],\"evidence\":[{\"claim\":\"...\",\"support\":\"...\",\"sourceUrl\":\"https://...\"},{\"claim\":\"...\",\"support\":\"...\"}],\"sourceGaps\":[]}} 형태여야 하며 evidence는 2개 이상이어야 합니다.",
     "generate 작업에서는 content.json과 요청 크기의 creative.png를 출력하세요.",
     "입력에 qualityBrief가 있으면 hook, readerPayoff, whyNow, specificClaims, evidence를 우선 반영하세요.",
     "작업 데이터(JSON):",

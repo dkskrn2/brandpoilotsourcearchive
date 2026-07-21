@@ -788,8 +788,30 @@ async function retryPendingTerminalAttachmentCleanup(
        from ai_content_generations terminal_generation
       where terminal_generation.status in ('completed', 'partial_failed', 'failed')
         and exists (
-          select 1 from ai_content_generation_attachments attachment
-           where attachment.generation_id = terminal_generation.id and attachment.deleted_at is null
+          select 1
+            from ai_content_generation_attachments attachment
+           where attachment.generation_id = terminal_generation.id
+             and attachment.deleted_at is null
+             and not exists (
+               select 1
+                 from ai_content_generation_outputs output
+                where output.generation_id = terminal_generation.id
+                  and output.status = 'completed'
+                  and (
+                    output.manifest_url = attachment.storage_url
+                    or exists (
+                      select 1
+                        from jsonb_array_elements(
+                          case
+                            when jsonb_typeof(output.artifact_manifest_json->'assets') = 'array'
+                              then output.artifact_manifest_json->'assets'
+                            else '[]'::jsonb
+                          end
+                        ) asset
+                       where asset->>'url' = attachment.storage_url
+                    )
+                  )
+             )
         )
       order by terminal_generation.completed_at nulls last, terminal_generation.updated_at
       limit 3`,

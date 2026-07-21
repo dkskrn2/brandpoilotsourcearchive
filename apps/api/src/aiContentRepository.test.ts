@@ -675,6 +675,7 @@ describe("AI content repository", () => {
     await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
     expect(deleteAttachments).toHaveBeenCalledTimes(2);
     expect(pool.sql.join("\n")).toContain("select terminal_generation.id");
+    expect(pool.sql.join("\n")).toContain("jsonb_array_elements");
     expect(pool.sql.join("\n")).toContain("deleted_at = now()");
   });
 

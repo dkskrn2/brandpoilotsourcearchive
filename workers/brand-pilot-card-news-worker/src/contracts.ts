@@ -11,13 +11,25 @@ export interface AiContentJob {
   leaseToken: string;
 }
 
+export type CardNewsAspectRatio = "1:1" | "4:5" | "16:9" | "9:16";
+
 export interface ContentGenerationInputV2 {
   contractVersion: "content-generation-input.v2";
   contentType: "card_news";
   brandContext: Record<string, unknown>;
-  subject: { facts: unknown[]; research: Record<string, unknown>; selectedImages: Array<{ id: string; url: string; role: string; altText: string }> };
+  subject: {
+    analysisId: string;
+    analysisVersion: number;
+    analysisContractVersion: "subject-analysis.v1" | "subject-analysis.v2";
+    analysisResult: Record<string, unknown> | null;
+    type: "product" | "service";
+    sourceUrl: string;
+    facts: unknown[];
+    research: Record<string, unknown>;
+    selectedImages: Array<{ id: string; url: string; role: string; altText: string }>;
+  };
   message: { target: Record<string, unknown>; appeal: Record<string, unknown>; qualityBrief: Record<string, unknown> };
-  creativeDirection: { prompts: string[]; brandColor: string; selectedColor: string; aspectRatio: string; outputCount: 1 | 2 | 3 };
+  creativeDirection: { prompts: string[]; brandColor: string; selectedColor: string; aspectRatio: CardNewsAspectRatio; outputCount: 1 | 2 | 3 };
   references: unknown[];
   attachments: unknown[];
 }
@@ -30,6 +42,12 @@ const asText = (value: unknown, code: string): string => {
   if (typeof value !== "string" || !value.trim()) throw new Error(code);
   return value;
 };
+const asAspectRatio = (value: unknown): CardNewsAspectRatio => {
+  if (value !== "1:1" && value !== "4:5" && value !== "16:9" && value !== "9:16") {
+    throw new Error("content_generation_aspect_ratio_invalid");
+  }
+  return value;
+};
 
 export function parseContentGenerationInput(value: unknown): ContentGenerationInputV2 {
   const input = asRecord(value, "content_generation_input_invalid");
@@ -40,6 +58,14 @@ export function parseContentGenerationInput(value: unknown): ContentGenerationIn
   const direction = asRecord(input.creativeDirection, "content_generation_direction_invalid");
   if (!Array.isArray(subject.facts)) throw new Error("content_generation_facts_invalid");
   if (!Array.isArray(subject.selectedImages)) throw new Error("content_generation_images_invalid");
+  const analysisVersion = Number(subject.analysisVersion);
+  if (!Number.isInteger(analysisVersion) || analysisVersion < 1) throw new Error("content_generation_analysis_version_invalid");
+  if (subject.analysisContractVersion !== "subject-analysis.v1" && subject.analysisContractVersion !== "subject-analysis.v2") throw new Error("content_generation_analysis_contract_invalid");
+  if (subject.type !== "product" && subject.type !== "service") throw new Error("content_generation_subject_type_invalid");
+  const analysisResult = subject.analysisResult === null
+    ? null
+    : asRecord(subject.analysisResult, "content_generation_analysis_result_invalid");
+  if (subject.analysisContractVersion === "subject-analysis.v2" && !analysisResult) throw new Error("content_generation_analysis_result_invalid");
   const selectedImages = subject.selectedImages.map((value) => {
     const image = asRecord(value, "content_generation_image_invalid");
     return { id: asText(image.id, "content_generation_image_id_invalid"), url: asText(image.url, "content_generation_image_url_invalid"), role: asText(image.role, "content_generation_image_role_invalid"), altText: typeof image.altText === "string" ? image.altText : "" };
@@ -55,12 +81,26 @@ export function parseContentGenerationInput(value: unknown): ContentGenerationIn
   asText(appeal.id, "content_generation_appeal_id_invalid");
   const appealTargetId = asText(appeal.targetId, "content_generation_appeal_target_id_invalid");
   if (appealTargetId !== targetId) throw new Error("content_generation_appeal_target_mismatch");
+  const selectedColor = asText(direction.selectedColor, "content_generation_selected_color_invalid");
+  const brandColor = typeof direction.brandColor === "string" && direction.brandColor.trim()
+    ? direction.brandColor
+    : selectedColor;
   return {
     contractVersion: "content-generation-input.v2", contentType: "card_news",
     brandContext: asRecord(input.brandContext, "content_generation_brand_context_invalid"),
-    subject: { facts: subject.facts, research: asRecord(subject.research, "content_generation_research_invalid"), selectedImages },
+    subject: {
+      analysisId: asText(subject.analysisId, "content_generation_analysis_id_invalid"),
+      analysisVersion,
+      analysisContractVersion: subject.analysisContractVersion,
+      analysisResult,
+      type: subject.type,
+      sourceUrl: typeof subject.sourceUrl === "string" ? subject.sourceUrl : "",
+      facts: subject.facts,
+      research: asRecord(subject.research, "content_generation_research_invalid"),
+      selectedImages,
+    },
     message: { target, appeal, qualityBrief: asRecord(message.qualityBrief, "content_generation_quality_brief_invalid") },
-    creativeDirection: { prompts, brandColor: asText(direction.brandColor, "content_generation_brand_color_invalid"), selectedColor: asText(direction.selectedColor, "content_generation_selected_color_invalid"), aspectRatio: asText(direction.aspectRatio, "content_generation_aspect_ratio_invalid"), outputCount },
+    creativeDirection: { prompts, brandColor, selectedColor, aspectRatio: asAspectRatio(direction.aspectRatio), outputCount },
     references: Array.isArray(input.references) ? input.references : [], attachments: Array.isArray(input.attachments) ? input.attachments : [],
   };
 }
@@ -69,8 +109,8 @@ export interface CardNewsAsset {
   role: "slide";
   fileName: string;
   mimeType: "image/png";
-  width: 1080;
-  height: 1080;
+  width: number;
+  height: number;
   index: number;
   bytes: Buffer;
 }

@@ -749,7 +749,7 @@ describe("createAiContentSubjectRepository", () => {
       "select status, analysis_result_json from ai_content_subject_analyses where id = $1",
       [claim.id],
     );
-    expect(stored.rows[0]).toMatchObject({ status: "analyzing", analysis_result_json: null });
+    expect(stored.rows[0]).toMatchObject({ status: "analyzing", analysis_result_json: {} });
   });
 
   it("rejects foreign attachment evidence in appeal completion before persistence", async () => {
