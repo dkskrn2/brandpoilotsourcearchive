@@ -891,4 +891,46 @@ describe("createAiContentSubjectRepository", () => {
     );
     expect(keys.rows).toEqual([{ idempotency_key: "appeal-regeneration-concurrent" }]);
   });
+
+  it("keeps the last successful appeal snapshot after terminal regeneration failure", async () => {
+    await repository.requestSubjectAnalysis(pipelineRequest());
+    const analysisClaim = (await repository.claimSubjectAnalysis({ workerId: "analysis-worker", leaseSeconds: 60 }))!;
+    await repository.markSubjectExtractionComplete({ ...lease(analysisClaim), facts: [], structuredData: {}, images: [] });
+    const savedAnalysis = analysisResultV2();
+    await repository.completeSubjectAnalysis({ ...lease(analysisClaim), ...savedAnalysis });
+    const initialAppealClaim = (await repository.claimSubjectAnalysis({ workerId: "appeal-worker", leaseSeconds: 60 }))!;
+    const successfulAppeals = appealResultV2();
+    const ready = await repository.completeSubjectAppeals({ ...lease(initialAppealClaim), ...successfulAppeals });
+
+    const regenerating = await repository.regenerateSubjectAppeals({
+      workspaceId,
+      brandId,
+      analysisId: ready.id,
+      idempotencyKey: "appeal-regeneration-terminal-failure",
+    });
+    expect(regenerating).toMatchObject({
+      status: "generating_appeals",
+      targets: successfulAppeals.targets,
+      appealsByTarget: successfulAppeals.appealsByTarget,
+      analysisResult: savedAnalysis,
+    });
+
+    const regenerationClaim = (await repository.claimSubjectAnalysis({
+      workerId: "appeal-regeneration-worker",
+      leaseSeconds: 60,
+    }))!;
+    const failed = await repository.failSubjectAnalysis({
+      ...lease(regenerationClaim),
+      errorCode: "appeal_generation_invalid",
+      errorMessage: "terminal appeal failure",
+      retryable: false,
+    });
+
+    expect(failed).toMatchObject({
+      status: "failed",
+      targets: successfulAppeals.targets,
+      appealsByTarget: successfulAppeals.appealsByTarget,
+      analysisResult: savedAnalysis,
+    });
+  });
 });

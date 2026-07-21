@@ -886,7 +886,6 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
         await client.query(
           `update ai_content_subject_analyses
               set status = 'generating_appeals',
-                  targets_json = '[]'::jsonb, appeals_json = '{}'::jsonb,
                   leased_by = null, lease_token = null, lease_expires_at = null,
                   attempt_count = 0, available_at = now(),
                   error_code = null, error_message = null, completed_at = null,
