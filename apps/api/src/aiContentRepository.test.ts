@@ -755,4 +755,79 @@ describe("AI content repository", () => {
     const repository = createAiContentRepository(pool as never);
     await expect(repository.retryAiContentOutput({ ...scope, outputId: "output-1" })).rejects.toThrow("ai_content_output_not_failed");
   });
+
+  it("lists only live generation-scoped subject evidence with loader metadata", async () => {
+    const query = vi.fn(async (_sql: string, params: unknown[]) => ({
+      rows: [{
+        id: "33333333-3333-4333-8333-333333333333",
+        workspace_id: params[1],
+        brand_id: params[2],
+        generation_id: params[0],
+        role: "document",
+        file_name: "brief.txt",
+        mime_type: "text/plain",
+        size_bytes: 12,
+        checksum: "a".repeat(64),
+        storage_url: "https://blob.example/brief.txt",
+        storage_path: "brands/brand-1/brief.txt",
+        deleted_at: null,
+      }],
+      rowCount: 1,
+    }));
+    const repository = createAiContentRepository({ query } as never);
+
+    await expect(repository.listSubjectEvidenceAttachments({
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      generationId: "generation-1",
+      attachmentIds: ["33333333-3333-4333-8333-333333333333"],
+    })).resolves.toEqual([expect.objectContaining({
+      id: "33333333-3333-4333-8333-333333333333",
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      generationId: "generation-1",
+      deletedAt: null,
+      checksum: "a".repeat(64),
+      storageUrl: "https://blob.example/brief.txt",
+      storagePath: "brands/brand-1/brief.txt",
+    })]);
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(sql).toContain("workspace_id = $2");
+    expect(sql).toContain("brand_id = $3");
+    expect(sql).toContain("generation_id = $1");
+    expect(sql).toContain("id = any($4::uuid[])");
+    expect(sql).toContain("deleted_at is null");
+    expect(params).toEqual([
+      "generation-1",
+      "workspace-1",
+      "brand-1",
+      ["33333333-3333-4333-8333-333333333333"],
+    ]);
+  });
+
+  it.each([
+    ["subject-analysis.v1", "researching", "analysis"],
+    ["subject-analysis.v2", "analyzing", "analysis"],
+    ["subject-analysis.v2", "generating_appeals", "appeal"],
+  ] as const)("loads the active %s %s worker lease as %s", async (contractVersion, status, phase) => {
+    const query = vi.fn(async (_sql: string, _params: unknown[]) => ({
+      rows: [{ id: "analysis-1", contract_version: contractVersion, status }],
+      rowCount: 1,
+    }));
+    const repository = createAiContentRepository({ query } as never);
+
+    await expect(repository.getSubjectAnalysisWorkerLease({
+      analysisId: "analysis-1",
+      workerId: "subject-worker-1",
+      leaseToken: "subject-lease-1",
+    })).resolves.toEqual({ analysisId: "analysis-1", contractVersion, phase });
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(sql).toContain("leased_by = $2");
+    expect(sql).toContain("lease_token = $3");
+    expect(sql).toContain("lease_expires_at > now()");
+    expect(sql).toContain("superseded_at is null");
+    expect(params).toEqual(["analysis-1", "subject-worker-1", "subject-lease-1"]);
+  });
 });

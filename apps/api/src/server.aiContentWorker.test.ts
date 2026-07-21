@@ -55,7 +55,13 @@ function setup() {
       leaseToken: input.leaseToken,
     })),
     heartbeatSubjectAnalysis: vi.fn(async () => true),
+    getSubjectAnalysisWorkerLease: vi.fn(async () => ({
+      analysisId: "analysis-1",
+      contractVersion: "subject-analysis.v1" as const,
+      phase: "analysis" as const,
+    })),
     completeSubjectAnalysis: vi.fn(async () => ({ id: "analysis-1", status: "ready" })),
+    completeSubjectAppeals: vi.fn(async () => ({ id: "analysis-1", status: "ready" })),
     failSubjectAnalysis: vi.fn(async () => ({ id: "analysis-1", status: "queued" })),
     getBrandProfile: vi.fn(async () => ({
       id: "profile-1", brandId: "brand-1", name: "브랜드", primaryCategory: { code: "commerce", name: "커머스" },
@@ -160,6 +166,61 @@ describe("AI content worker routes", () => {
     await app.close();
   });
 
+  it("returns persisted extraction data when a researching subject analysis is reclaimed", async () => {
+    const { app, repository, extractPage } = setup();
+    vi.mocked(repository.claimSubjectAnalysis!).mockResolvedValueOnce({
+      id: "analysis-1",
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      subjectType: "product",
+      sourceUrl: "https://example.com/product",
+      normalizedUrl: "https://example.com/product",
+      input: { name: "제품", promotion: "", description: "설명" },
+      status: "researching",
+      facts: [{ key: "name", value: "저장된 제품", sourceUrl: "https://example.com/product" }],
+      structuredData: { "@type": "Product" },
+      research: {},
+      targets: [],
+      appealsByTarget: {},
+      selectedImageId: null,
+      images: [{
+        id: "image-1", analysisId: "analysis-1", sourceUrl: "https://example.com/product.png",
+        storageUrl: "https://blob.example/product.png", storagePath: "subjects/product.png",
+        width: 1200, height: 1200, mimeType: "image/png", altText: "저장된 제품", role: "product",
+        selectionScore: 1, createdAt: "2026-07-20T00:00:00.000Z",
+      }],
+      leasedBy: "subject-worker-1",
+      leaseToken: "subject-lease-1",
+      leaseExpiresAt: "2026-07-20T00:03:00.000Z",
+      analysisVersion: 1,
+      idempotencyKey: "subject-reclaimed-1",
+      attemptCount: 2,
+      availableAt: "2026-07-20T00:00:00.000Z",
+      errorCode: null,
+      errorMessage: null,
+      supersededAt: null,
+      createdAt: "2026-07-20T00:00:00.000Z",
+      updatedAt: "2026-07-20T00:00:00.000Z",
+      completedAt: null,
+    } as Awaited<ReturnType<NonNullable<ApiRepository["claimSubjectAnalysis"]>>>);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/worker/ai-content-subject-analyses/claim",
+      headers: { authorization: "Bearer worker-token" },
+      payload: { workerId: "subject-worker-1", leaseSeconds: 180 },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(extractPage).not.toHaveBeenCalled();
+    expect(repository.markSubjectExtractionComplete).not.toHaveBeenCalled();
+    expect(response.json().job.extracted).toMatchObject({
+      facts: [{ key: "name", value: "저장된 제품", sourceUrl: "https://example.com/product" }],
+      imageCandidates: [{ id: "image-1", storageUrl: "https://blob.example/product.png" }],
+    });
+    await app.close();
+  });
+
   it("fails the lease and returns no job when extraction fails", async () => {
     const { app, repository, extractPage } = setup();
     extractPage.mockRejectedValueOnce(new Error("subject_page_fetch_failed"));
@@ -246,6 +307,95 @@ describe("AI content worker routes", () => {
     });
     expect(failure.statusCode).toBe(200);
     expect(repository.failSubjectAnalysis).toHaveBeenCalledWith({ analysisId: "analysis-1", ...identity, errorCode: "codex_timeout", errorMessage: "timeout", retryable: true });
+    await app.close();
+  });
+
+  it("dispatches v2 analysis completion from the active leased phase", async () => {
+    const { app, repository } = setup();
+    vi.mocked(repository.getSubjectAnalysisWorkerLease!).mockResolvedValueOnce({
+      analysisId: "analysis-1", contractVersion: "subject-analysis.v2", phase: "analysis",
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/worker/ai-content-subject-analyses/analysis-1/complete",
+      headers: { authorization: "Bearer worker-token" },
+      payload: {
+        workerId: "subject-worker-1",
+        leaseToken: "subject-lease-1",
+        result: {
+          contractVersion: "subject-analysis-result.v2",
+          phase: "analysis",
+          subjectType: "product",
+          summary: "Analysis complete",
+          verifiedFacts: [], voc: [], alternatives: [], barriers: [],
+          productProfile: { category: "Tools" }, serviceProfile: null, serviceSubtype: null, sourceGaps: [],
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.completeSubjectAnalysis).toHaveBeenCalledWith(expect.objectContaining({
+      analysisId: "analysis-1", contractVersion: "subject-analysis-result.v2", phase: "analysis",
+    }));
+    expect(repository.completeSubjectAppeals).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("dispatches v2 appeal completion from the active leased phase", async () => {
+    const { app, repository } = setup();
+    vi.mocked(repository.getSubjectAnalysisWorkerLease!).mockResolvedValueOnce({
+      analysisId: "analysis-1", contractVersion: "subject-analysis.v2", phase: "appeal",
+    });
+    const targets = [1, 2, 3].map((index) => ({
+      id: `target-${index}`, name: `Target ${index}`, traits: ["practical"], painPoints: ["slow setup"],
+      purchaseMotivations: ["save time"], uspEvidence: [],
+    }));
+    const response = await app.inject({
+      method: "POST",
+      url: "/worker/ai-content-subject-analyses/analysis-1/complete",
+      headers: { authorization: "Bearer worker-token" },
+      payload: {
+        workerId: "subject-worker-1",
+        leaseToken: "subject-lease-1",
+        result: {
+          contractVersion: "subject-appeal-result.v2",
+          phase: "appeal",
+          targets,
+          appealsByTarget: Object.fromEntries(targets.map((target) => [target.id, [1, 2].map((index) => ({
+            id: `appeal-${target.id}-${index}`, targetId: target.id, title: `Appeal ${index}`,
+            description: "Save setup time", evidenceType: "product_fact", connectionReason: "Matches need", sources: [],
+          }))])),
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.completeSubjectAppeals).toHaveBeenCalledWith(expect.objectContaining({
+      analysisId: "analysis-1", contractVersion: "subject-appeal-result.v2", phase: "appeal",
+    }));
+    expect(repository.completeSubjectAnalysis).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it.each([
+    ["analysis", { contractVersion: "subject-appeal-result.v2", phase: "appeal" }],
+    ["appeal", { contractVersion: "subject-analysis-result.v2", phase: "analysis" }],
+  ] as const)("rejects a %s lease with a mismatched completion result without mutation", async (phase, result) => {
+    const { app, repository } = setup();
+    vi.mocked(repository.getSubjectAnalysisWorkerLease!).mockResolvedValueOnce({
+      analysisId: "analysis-1", contractVersion: "subject-analysis.v2", phase,
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/worker/ai-content-subject-analyses/analysis-1/complete",
+      headers: { authorization: "Bearer worker-token" },
+      payload: { workerId: "subject-worker-1", leaseToken: "subject-lease-1", result },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "subject_analysis_completion_phase_mismatch" });
+    expect(repository.completeSubjectAnalysis).not.toHaveBeenCalled();
+    expect(repository.completeSubjectAppeals).not.toHaveBeenCalled();
     await app.close();
   });
 });

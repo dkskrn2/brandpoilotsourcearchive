@@ -14,6 +14,7 @@ import { parseAiContentManifest } from "./aiContentManifest.js";
 import { parseContentQualityBrief } from "./contentQualityBrief.js";
 import { buildContentGenerationInput, parseContentGenerationInputV2, type ContentGenerationInputV2 } from "./aiContentGenerationInput.js";
 import { createAiContentSubjectRepository } from "./aiContentSubjectRepository.js";
+import type { LoadSubjectEvidenceInput, SubjectEvidenceAttachment } from "./aiContentSubjectEvidence.js";
 import type { ConfirmedBrandIntelligence } from "./brandIntelligenceProvider.js";
 
 export interface BrandScope {
@@ -95,6 +96,12 @@ export interface SubjectAnalysisBrandContext {
   confirmedAt: string;
 }
 
+export interface SubjectAnalysisWorkerLease {
+  analysisId: string;
+  contractVersion: "subject-analysis.v1" | "subject-analysis.v2";
+  phase: "analysis" | "appeal";
+}
+
 export interface AiContentAttachmentRecord {
   id: string;
   generationId: string;
@@ -171,6 +178,12 @@ export interface SaveAppealInput extends BrandScope {
 export interface AiContentRepository {
   getAiContentBrandContext(input: BrandScope): Promise<AiContentBrandContextRecord>;
   getConfirmedSubjectAnalysisBrandContext(input: BrandScope): Promise<SubjectAnalysisBrandContext>;
+  listSubjectEvidenceAttachments(input: LoadSubjectEvidenceInput): Promise<SubjectEvidenceAttachment[]>;
+  getSubjectAnalysisWorkerLease(input: {
+    analysisId: string;
+    workerId: string;
+    leaseToken: string;
+  }): Promise<SubjectAnalysisWorkerLease | null>;
   createAiContentAnalysis(input: BrandScope & CreateAiContentAnalysisInput): Promise<AiContentGenerationRecord>;
   updateAiContentDraft(input: BrandGenerationScope & UpdateAiContentDraftInput): Promise<AiContentGenerationRecord>;
   startAiContentGeneration(input: BrandGenerationScope & StartAiContentGenerationInput & {
@@ -618,6 +631,23 @@ function mapAttachment(row: Record<string, unknown>): AiContentAttachmentRecord 
   };
 }
 
+function mapSubjectEvidenceAttachment(row: Record<string, unknown>): SubjectEvidenceAttachment {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    brandId: String(row.brand_id),
+    generationId: String(row.generation_id),
+    role: row.role as SubjectEvidenceAttachment["role"],
+    fileName: String(row.file_name),
+    mimeType: String(row.mime_type),
+    sizeBytes: Number(row.size_bytes),
+    checksum: String(row.checksum),
+    storageUrl: String(row.storage_url),
+    storagePath: String(row.storage_path),
+    deletedAt: iso(row.deleted_at),
+  };
+}
+
 function mapJob(row: Record<string, unknown>): AiContentJobRecord {
   return {
     id: String(row.id),
@@ -714,6 +744,43 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
 
     getConfirmedSubjectAnalysisBrandContext(input) {
       return loadConfirmedSubjectAnalysisBrandContext(pool, input, options.brandIntelligenceProvider);
+    },
+
+    async listSubjectEvidenceAttachments(input) {
+      if (input.attachmentIds.length === 0) return [];
+      const result = await pool.query(
+        `select id, workspace_id, brand_id, generation_id, role, file_name, mime_type,
+                size_bytes, checksum, storage_url, storage_path, deleted_at
+           from ai_content_generation_attachments
+          where generation_id = $1 and workspace_id = $2 and brand_id = $3
+            and id = any($4::uuid[]) and deleted_at is null
+          order by created_at, id`,
+        [input.generationId, input.workspaceId, input.brandId, input.attachmentIds],
+      );
+      return result.rows.map((row) => mapSubjectEvidenceAttachment(row as Record<string, unknown>));
+    },
+
+    async getSubjectAnalysisWorkerLease(input) {
+      const result = await pool.query(
+        `select id, contract_version, status
+           from ai_content_subject_analyses
+          where id = $1 and leased_by = $2 and lease_token = $3
+            and lease_expires_at > now() and superseded_at is null
+            and status in ('extracting', 'researching', 'analyzing', 'generating_appeals')`,
+        [input.analysisId, input.workerId, input.leaseToken],
+      );
+      if (!result.rowCount) return null;
+      const row = result.rows[0] as Record<string, unknown>;
+      const contractVersion = row.contract_version === "subject-analysis.v2"
+        ? "subject-analysis.v2"
+        : "subject-analysis.v1";
+      return {
+        analysisId: String(row.id),
+        contractVersion,
+        phase: contractVersion === "subject-analysis.v2" && row.status === "generating_appeals"
+          ? "appeal"
+          : "analysis",
+      };
     },
 
     async createAiContentAnalysis(input) {

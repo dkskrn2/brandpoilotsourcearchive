@@ -14,7 +14,9 @@ import type {
   SaveAppealInput,
   SaveAudienceInput,
   SubjectAnalysisBrandContext,
+  SubjectAnalysisWorkerLease,
 } from "./aiContentRepository.js";
+import type { LoadSubjectEvidenceInput, SubjectEvidenceAttachment } from "./aiContentSubjectEvidence.js";
 import type {
   AiContentType,
   CompleteAiContentJobInput,
@@ -971,6 +973,12 @@ export interface ApiRepository extends Partial<SubjectAnalysisRepositoryV2> {
   health(): Promise<{ database: "ok" }>;
   getAiContentBrandContext(input: BrandScope): Promise<AiContentBrandContextRecord>;
   getConfirmedSubjectAnalysisBrandContext?(input: BrandScope): Promise<SubjectAnalysisBrandContext>;
+  listSubjectEvidenceAttachments?(input: LoadSubjectEvidenceInput): Promise<SubjectEvidenceAttachment[]>;
+  getSubjectAnalysisWorkerLease?(input: {
+    analysisId: string;
+    workerId: string;
+    leaseToken: string;
+  }): Promise<SubjectAnalysisWorkerLease | null>;
   createAiContentAnalysis(input: BrandScope & CreateAiContentAnalysisInput): Promise<AiContentGenerationRecord>;
   updateAiContentDraft(input: BrandGenerationScope & UpdateAiContentDraftInput): Promise<AiContentGenerationRecord>;
   startAiContentGeneration(input: BrandGenerationScope & StartAiContentGenerationInput & { usageDate: string; dailyGenerationLimit: number }): Promise<AiContentGenerationRecord>;

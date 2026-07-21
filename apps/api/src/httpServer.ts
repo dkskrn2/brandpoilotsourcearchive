@@ -41,6 +41,8 @@ import {
   parseCreateSubjectPipelineInput,
   parseReanalyzeSubjectAnalysisInput,
   parseSubjectAnalysisResult,
+  parseSubjectAnalysisResultV2,
+  parseSubjectAppealResultV2,
   parseSubjectAnalysisSelectionInput,
   parseSubjectWorkerClaimInput,
   parseSubjectWorkerLeaseInput,
@@ -2246,8 +2248,36 @@ export function createServer(
         leaseToken: request.body.leaseToken,
         leaseSeconds: request.body.leaseSeconds,
       });
-      const result = parseSubjectAnalysisResult(request.body.result);
-      return subjectRepository.completeSubjectAnalysis({ analysisId: request.params.analysisId, workerId: lease.workerId, leaseToken: lease.leaseToken, ...result });
+      const identity = {
+        analysisId: request.params.analysisId,
+        workerId: lease.workerId,
+        leaseToken: lease.leaseToken,
+      };
+      if (!repository.getSubjectAnalysisWorkerLease) {
+        throw new Error("subject_analysis_worker_lease_repository_not_configured");
+      }
+      const activeLease = await repository.getSubjectAnalysisWorkerLease(identity);
+      if (!activeLease) throw new Error("subject_analysis_lease_invalid");
+      const rawResult = isObject(request.body.result) ? request.body.result : {};
+      if (activeLease.contractVersion === "subject-analysis.v1") {
+        if (rawResult.contractVersion !== "subject-analysis-result.v1") {
+          throw new Error("subject_analysis_completion_phase_mismatch");
+        }
+        const result = parseSubjectAnalysisResult(rawResult);
+        return subjectRepository.completeSubjectAnalysis({ ...identity, ...result });
+      }
+      if (activeLease.phase === "analysis") {
+        if (rawResult.contractVersion !== "subject-analysis-result.v2" || rawResult.phase !== "analysis") {
+          throw new Error("subject_analysis_completion_phase_mismatch");
+        }
+        const result = parseSubjectAnalysisResultV2(rawResult);
+        return subjectRepository.completeSubjectAnalysis({ ...identity, ...result });
+      }
+      if (rawResult.contractVersion !== "subject-appeal-result.v2" || rawResult.phase !== "appeal") {
+        throw new Error("subject_analysis_completion_phase_mismatch");
+      }
+      const result = parseSubjectAppealResultV2(rawResult);
+      return subjectRepository.completeSubjectAppeals({ ...identity, ...result });
     },
   );
 
