@@ -1,6 +1,6 @@
-# Brand Pilot
+# 모종
 
-Brand Pilot은 브랜드 콘텐츠의 수집, 생성, 이미지 렌더링, 검토, 소셜 채널 발행을 한 흐름으로 관리하는 자동화 서비스입니다.
+모종은 브랜드 콘텐츠의 수집, 생성, 이미지 렌더링, 검토, 소셜 채널 발행을 한 흐름으로 관리하는 통합 마케팅 자동화 서비스입니다.
 
 현재는 **내부 파일럿 단계**입니다. 공개 출시 전에 반드시 완료해야 할 보안·운영 항목이 남아 있으므로, 외부 공개나 운영 전환 전에 [공개 출시 전 필수 항목](docs/PRE_LAUNCH_REQUIRED.md)을 확인하세요.
 
@@ -106,6 +106,47 @@ npm run wiki-worker:once
 
 콘텐츠 생성 워커까지 포함한 Codex CLI 동시 실행은 중앙 API의 `worker_resource_leases`로 최대 2개입니다. Wiki와 콘텐츠 생성이 합쳐서 1개를 넘지 못하게 하여 DM용 슬롯 1개를 항상 남깁니다. 이 제한을 사용하려면 `034_worker_resource_limits.sql` 마이그레이션이 적용되어 있어야 합니다.
 
+AI 콘텐츠 스튜디오는 자동 운영 워커와 분리된 유형별 워커를 사용합니다. 각 프로세스는 같은 중앙 `codex_cli/content` lease를 획득하므로 기본 설정에서는 무거운 생성 작업이 동시에 실행되지 않습니다.
+
+```powershell
+# 카드뉴스
+npm run dev:card-news-worker
+npm run card-news-worker:once
+
+# 블로그 HTML과 대표 이미지
+npm run dev:blog-worker
+npm run blog-worker:once
+
+# 마케팅 이미지와 카피
+npm run dev:marketing-worker
+npm run marketing-worker:once
+```
+
+각 워커의 `.env.example`을 같은 디렉터리의 `.env`로 복사하고 `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, `BLOB_READ_WRITE_TOKEN`, 유형별 Codex 명령을 설정합니다. `npm run dev:*`의 사전 검사는 해당 프로세스에 필요한 환경 파일만 확인하므로 UI 실행이 워커 비밀값 때문에 차단되지 않습니다.
+
+실제 산출물 smoke는 로그인 세션 쿠키와 테스트 브랜드를 명시한 뒤 유형별로 실행합니다. 이 명령은 생성까지만 수행하며 Instagram 게시를 자동 실행하지 않습니다.
+
+```powershell
+$env:AI_CONTENT_SMOKE_BRAND_ID='브랜드 UUID'
+$env:AI_CONTENT_SMOKE_COOKIE='bp_session=세션값'
+$env:AI_CONTENT_SMOKE_TYPE='card_news' # blog 또는 marketing
+npm run smoke:ai-content
+```
+
+제품·서비스 v2 분석의 생성 건 귀속과 `analysis` → `appeal` 전환을 빠르게 확인하려면 fixture smoke를 사용합니다. 이 모드는 실제 Codex 호출 대신 계약 fixture로 제품과 서비스 각각 한 건을 검증합니다.
+
+```powershell
+$env:AI_CONTENT_SMOKE_COOKIE='bp_session=세션값'
+$env:AI_CONTENT_SMOKE_WORKER_TOKEN='중앙 API와 같은 WORKER_API_TOKEN'
+npm run smoke:ai-content-subject -- --mode fixture --brand-id '브랜드 UUID'
+```
+
+`--mode real`과 `--url`을 사용하는 기존 live smoke는 공개 페이지, Codex CLI, Object Storage와 v1 읽기 호환 경로를 실제로 확인할 때만 사용합니다. v2는 생성 건 사이에서 URL 캐시를 재사용하거나 전체 `force` 재분석하지 않고, 같은 생성 건의 동일 입력만 멱등 처리합니다. 기존 v1 저장 결과와 캐시 조회는 읽기 호환으로 유지합니다.
+
+분석 워커는 초기에는 한 프로세스만 실행합니다. 이 한 프로세스가 제품·서비스의 `analysis`와 `appeal` phase를 모두 처리하며 `product-analysis.v2-ko`, `service-analysis.v2-ko`, `product-appeal.v2-ko`, `service-appeal.v2-ko` 네 프롬프트를 사용합니다. 평상시에는 `npm run dev:subject-analysis-worker`, 한 작업만 확인할 때는 `npm run subject-analysis-worker:once`를 사용합니다. 워커를 중지할 때는 실행 중인 콘솔에서 `Ctrl+C`를 누르고, 강제 종료된 작업은 lease 만료 후 최대 3회까지 재시도됩니다.
+
+분석 입력 첨부는 PNG/JPEG 이미지 5MB, TXT/Markdown/CSV 문서 5MB, PDF/XLSX 문서 10MB까지 허용합니다. 서버가 MIME, 크기, Blob 메타데이터와 파일 시그니처를 검증합니다. 로컬과 실제 서버는 워커 `.env.example`의 동일한 `SUBJECT_ANALYSIS_*` 변수 계약을 사용하며 값만 환경에 맞게 설정합니다. 세부 정책은 [Subject Analysis Worker README](workers/brand-pilot-subject-analysis-worker/README.md)를 참고하세요.
+
 DM 운영 중 일시정지 대화, 확인 필요 항목, Wiki 실패, 발송 결과 불명확 상태를 처리하는 절차는 [Instagram DM 운영 런북](docs/operations/instagram-dm-operations-runbook.md)을 따릅니다.
 
 ## 검사와 빌드
@@ -207,8 +248,10 @@ npm run verify:reel --workspace @brand-pilot/image-worker
 
 실제 런타임이 읽는 환경 변수는 다음과 같습니다. 값은 `.env` 또는 배포 비밀 저장소에만 두고 문서에 기록하지 않습니다.
 
-- 중앙 API: `SUPABASE_DATABASE_URL`, `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_BRAND_ASSETS_BUCKET`, `PUBLISH_ARTIFACT_ALLOWED_ORIGINS`, `WORKER_API_TOKEN`, `WORKER_CODEX_MAX_CONCURRENCY`, `WORKER_CODEX_DM_RESERVED_SLOTS`, `CRON_SECRET`, `LOCAL_SCHEDULER_ENABLED`, `SOURCE_CRAWL_BATCH_SIZE`, `SOURCE_CRAWL_DISCOVERY_LIMIT`, `SOURCE_CRAWL_TIME_BUDGET_MS`, `CREDENTIAL_ENCRYPTION_KEY`, `INSTAGRAM_PUBLISH_ENABLED`, `IMAGE_JOB_COOLDOWN_MS`, `META_GRAPH_VERSION`, `META_APP_ID`, `META_APP_SECRET`, `META_OAUTH_REDIRECT_URI`, `META_WEBHOOK_VERIFY_TOKEN`, `KAKAO_REST_API_KEY`, `KAKAO_CLIENT_SECRET`, `KAKAO_REDIRECT_URI`, `AUTH_FRONTEND_URL`, `BRAND_PILOT_DEV_BRAND_ID`, `PORT`, `HOST`, `NODE_ENV`, `VERCEL`
+- 중앙 API: `SUPABASE_DATABASE_URL`, `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_BRAND_ASSETS_BUCKET`, `PUBLISH_ARTIFACT_ALLOWED_ORIGINS`, `WORKER_API_TOKEN`, `WORKER_CODEX_MAX_CONCURRENCY`, `WORKER_CODEX_DM_RESERVED_SLOTS`, `CRON_SECRET`, `LOCAL_SCHEDULER_ENABLED`, `SOURCE_CRAWL_BATCH_SIZE`, `SOURCE_CRAWL_DISCOVERY_LIMIT`, `SOURCE_CRAWL_TIME_BUDGET_MS`, `CREDENTIAL_ENCRYPTION_KEY`, `INSTAGRAM_PUBLISH_ENABLED`, `IMAGE_JOB_COOLDOWN_MS`, `META_GRAPH_VERSION`, `META_APP_ID`, `META_APP_SECRET`, `META_OAUTH_REDIRECT_URI`, `META_TRENDS_OAUTH_REDIRECT_URI`, `META_WEBHOOK_VERIFY_TOKEN`, `KAKAO_REST_API_KEY`, `KAKAO_CLIENT_SECRET`, `KAKAO_REDIRECT_URI`, `AUTH_FRONTEND_URL`, `BRAND_PILOT_DEV_BRAND_ID`, `PORT`, `HOST`, `NODE_ENV`, `VERCEL`
+- 고객 UI: `VITE_API_URL`, `VITE_META_TRENDS_CONNECT_URL` (로컬 UI에서 Meta 트렌드 OAuth를 시작할 때 배포된 HTTPS API의 `/auth/meta/trends/start` 사용)
 - 콘텐츠 생성 워커(코드 경로 `brand-pilot-image-worker`): `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, `WORKER_ID`, `WORKER_RESOURCE_POLL_INTERVAL_MS`, `WORKER_RESOURCE_HEARTBEAT_INTERVAL_MS`, `BLOB_READ_WRITE_TOKEN`, `IMAGE_PROVIDER`, `IMAGE_RENDER_COMMAND`, `IMAGE_JOB_TIMEOUT_MS`, `IMAGE_MODEL`, `IMAGE_RETRY_DELAY_MS`, `POLL_INTERVAL_MS`, `HEARTBEAT_INTERVAL_MS`, `WORKER_CONTROL_PORT`, `PYTHON`, `CODEX_HOME`, `CODEX_COMMAND`, `APPDATA`, `NODE_ENV`
+- 제품·서비스 분석 워커: `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, `SUBJECT_ANALYSIS_WORKER_ID`, `SUBJECT_ANALYSIS_POLL_MS`, `SUBJECT_ANALYSIS_LEASE_SECONDS`, `SUBJECT_ANALYSIS_HEARTBEAT_MS`, `SUBJECT_ANALYSIS_API_TIMEOUT_MS`, `SUBJECT_ANALYSIS_CODEX_TIMEOUT_MS`, `SUBJECT_ANALYSIS_CODEX_COMMAND`, `SUBJECT_ANALYSIS_CODEX_MODEL`, `SUBJECT_ANALYSIS_CODEX_REASONING_EFFORT`, `SUBJECT_ANALYSIS_CODEX_FAST_MODE`
 - DM/Wiki 워커: `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, `DM_WORKER_DATABASE_URL`, `WORKER_MODE`, `WORKER_ID`, `POLL_INTERVAL_MS`, `HEARTBEAT_INTERVAL_MS`, `WORKER_RESOURCE_POLL_INTERVAL_MS`, `WORKER_RESOURCE_HEARTBEAT_INTERVAL_MS`, `DM_CLI_TIMEOUT_MS`, `KNOWLEDGE_CURATOR_TIMEOUT_MS`, `WIKI_CODEX_MODEL`, `WIKI_CODEX_TIMEOUT_MS`, `DM_PROFILE_REFRESH_AFTER_HOURS`, `OPENAI_API_KEY`, `OPENAI_EMBEDDING_MODEL`
 
 Rollout 기준은 Feed 활성 유지, Story capability 확인 후 활성화, Reel은 Python/FFmpeg와 비공개 계정 E2E 통과 후 활성화 순서입니다. 고객에게 Meta access token 입력을 요구하지 않으며, OAuth로 획득한 credential은 중앙 API가 암호화 저장합니다.

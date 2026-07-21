@@ -4,6 +4,7 @@ The following items are intentionally deferred during the local pilot. They must
 
 ## Security and access control
 
+- Generate a long random `ADMIN_SERVICE_TOKEN` for the Brand Pilot API and store the same value as `BRAND_PILOT_ADMIN_API_TOKEN` only on the `dkskrn2/main` server. Never expose it through browser-prefixed environment variables, customer UI, or workers. Rotate both values together before launch and after any suspected exposure.
 - Verify the implemented Kakao session and workspace-membership checks with production integration tests. The current `Meta` development callback remains exempt and must not be used as production login.
 - Replace the `/auth/meta/dev-complete` development callback with a production OAuth callback using state validation, PKCE, and server-side session binding.
 - Set `NODE_ENV=production` and a unique `CREDENTIAL_ENCRYPTION_KEY` before storing or using any production channel credential.
@@ -23,6 +24,15 @@ The following items are intentionally deferred during the local pilot. They must
 - Restrict the fixture renderer to automated tests and send worker heartbeats while long rendering commands are running.
 - Implement the actual Threads publisher before marking that channel as published.
 - Add a durable scheduler/worker that triggers scheduled queue rows at `scheduled_for`; the current API only schedules rows and exposes a manual publish endpoint.
+
+### Subject analysis worker launch checks
+
+- Run exactly one `brand-pilot-subject-analysis-worker` process initially. The same process must handle both `analysis` and `appeal` phases with the four pinned prompts: `product-analysis.v2-ko`, `service-analysis.v2-ko`, `product-appeal.v2-ko`, and `service-appeal.v2-ko`.
+- Copy the complete `SUBJECT_ANALYSIS_*` contract from the worker `.env.example` to the server secret store. Local and server deployments must use the same variable names and semantics; only endpoint, token, worker ID, and tuning values may differ.
+- Confirm the central API and worker use the same `WORKER_API_TOKEN`, then run `npm run env:check -- --process=subject-analysis-worker` on the target host.
+- Verify the 900-second lease, 30-second heartbeat, 300-second API timeout, 900-second Codex timeout, and maximum three attempts under process termination and transient network failure. Contract validation failures must remain non-retryable.
+- Verify upload enforcement before launch: PNG/JPEG up to 5 MB; TXT/Markdown/CSV up to 5 MB; PDF/XLSX up to 10 MB. MIME, size, Blob metadata, signature, and generation ownership checks must all remain enabled.
+- Keep `subject-analysis.v1` records readable. New v2 requests must remain generation-scoped with no cross-generation URL-cache reuse; v2 full `force` reanalysis stays disabled and only appeal regeneration is allowed.
 
 ## Input and cost controls
 

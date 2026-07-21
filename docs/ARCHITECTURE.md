@@ -1,4 +1,4 @@
-# Brand Pilot Runtime Architecture
+# 모종 Runtime Architecture
 
 작성일: 2026-07-16  
 상태: Living document  
@@ -6,7 +6,7 @@
 
 ## 1. 문서 역할
 
-이 문서는 Brand Pilot 런타임 구조의 단일 기준 문서다.
+이 문서는 모종 런타임 구조의 단일 기준 문서다.
 
 - 현재 구현과 목표 운영 구조를 구분한다.
 - 서버에서 상시 실행하거나 자원을 사용하는 프로세스를 관리한다.
@@ -22,7 +22,6 @@
 
 현재 처리 범위:
 
-- Instagram 카드뉴스 콘텐츠 생성
 - Instagram Story 콘텐츠 생성
 - Instagram Reel 콘텐츠 생성과 영상 렌더링
 - Threads 텍스트 콘텐츠 생성
@@ -74,7 +73,11 @@ DM Worker Process              Content Generation Worker
 | `apps/api` | 중앙 API와 로컬 스케줄러 | 예약 작업이 API 프로세스와 자원을 공유함 |
 | `apps/customer-ui` | 고객용 React UI | 운영에서는 정적 빌드로 배포해야 함 |
 | `workers/brand-pilot-dm-worker` | 동일 코드에서 `dm` 또는 `wiki` 전용 모드로 실행 | Wiki 빌드와 DM 답변이 별도 프로세스로 분리됨 |
-| `workers/brand-pilot-image-worker` | 콘텐츠 생성, 이미지·영상 렌더링, 텍스트 작업, 업로드 | 디렉터리 이름이 실제 책임보다 좁고 이미지 작업이 지속되면 텍스트 작업이 지연될 수 있음 |
+| `workers/brand-pilot-image-worker` | Instagram Story·Reel, 영상 렌더링, 기존 텍스트 작업, 업로드 | 디렉터리 이름이 실제 책임보다 좁고 이미지 작업이 지속되면 텍스트 작업이 지연될 수 있음 |
+| `workers/brand-pilot-card-news-worker` | 수동 AI 콘텐츠와 매일 자동 운영의 카드뉴스 분석·1~5장 PNG 생성 | Instagram 게시 전송은 중앙 API와 게시 큐가 수행 |
+| `workers/brand-pilot-blog-worker` | AI 콘텐츠 스튜디오 블로그 분석·HTML·대표 PNG 생성 | 외부 CMS 자동 게시는 지원하지 않음 |
+| `workers/brand-pilot-marketing-worker` | AI 콘텐츠 스튜디오 마케팅 이미지·카피 생성 | 생성 결과는 다운로드 중심이며 자동 게시하지 않음 |
+| `workers/brand-pilot-subject-analysis-worker` | 제품·서비스 URL 근거 정리, 공개 웹 리서치, 타깃·소구점 추천 | 사용자 요청이 있을 때만 실행하며 주기적 재분석하지 않음 |
 
 현재 로컬 스케줄러는 중앙 API 내부에서 1분마다 tick을 실행한다.
 
@@ -136,7 +139,10 @@ DM Worker Process              Content Generation Worker
 | 스케줄러·일반 작업 워커 | 1 | 상시 | 낮음~중간 | 예약 게시, 크롤링 진입, 성과 수집, 배치 작업 등록 |
 | DM 전용 워커 | 2 | 상시 | 작업 시 높음 | Wiki 검색, Codex 답변 생성, 중앙 API 완료 보고 |
 | Wiki 전용 워커 | 1 | 상시 저우선순위 또는 야간 | 작업 시 높음 | 정제, 컴파일, 임베딩, 유지보수, 후보 Wiki 검증 |
-| 콘텐츠 생성 워커 | 1 | 상시 폴링 | 가장 높음 | 채널별 텍스트·이미지·영상 콘텐츠 생성과 업로드 |
+| 자동 운영 콘텐츠 워커 | 1 | 상시 폴링 | 가장 높음 | Story·Reel과 채널별 텍스트·영상 콘텐츠 생성 및 업로드 |
+| 카드뉴스 공통 워커 | 1 | 상시 폴링 | 높음 | 수동·자동 카드뉴스의 품질 브리프, 편집안, 1~5장 PNG·캡션 생성 |
+| AI 블로그 워커 | 1 | 필요 시 폴링 | 높음 | 안전한 HTML·메타 정보·대표 PNG 생성 |
+| AI 마케팅 워커 | 1 | 필요 시 폴링 | 높음 | 요청 규격의 이미지와 광고 카피 생성 |
 | PostgreSQL | 1 | 상시 | 중간 | 고객 데이터, 큐, lease, Wiki, 상태, 로그 |
 | 정적 프론트 | 1 배포 | 요청 시 낮음 | 낮음 | 빌드된 React 자산 제공; Vite 개발 서버는 운영에서 사용하지 않음 |
 
@@ -186,7 +192,7 @@ npm run dev:dm-worker:2
 ### 6.3 콘텐츠 생성 워커
 
 - 주제, 대표 URL, 브랜드 설정과 채널 형식을 받아 최종 콘텐츠를 생성한다.
-- 카드뉴스, Story, Reel은 이미지 생성 모델 또는 승인된 생성 명령을 사용한다.
+- Story와 Reel은 이미지 생성 모델 또는 승인된 생성 명령을 사용한다.
 - Reel은 생성 자산을 FFmpeg로 영상화할 수 있다.
 - 텍스트 채널은 채널별 프롬프트와 결과 계약으로 생성한다.
 - 최종 자산과 manifest를 Object Storage에 업로드한다.
@@ -201,6 +207,45 @@ Content Generation Worker
   -> Image Generation Worker
   -> Video Render Worker
 ```
+
+카드뉴스는 수동 AI 콘텐츠와 자동 운영이 같은 `brand-pilot-card-news-worker`를 사용한다. 작업의 `origin`만 `manual` 또는 `scheduled_automation`으로 구분하며, 품질 브리프, 편집안, 이미지 생성 계약은 동일하다. Story와 Reel은 기존 `brand-pilot-image-worker`를 유지한다.
+
+AI 콘텐츠 스튜디오의 나머지 산출물은 계약이 다르므로 별도 워커로 분리한다.
+
+| 워커 | claim 범위 | 산출물 | 결정적 Blob 경로 |
+|---|---|---|---|
+| 카드뉴스(수동·자동 공통) | `card_news` | 1~5 PNG, 캡션, 해시태그 | `brands/{brandId}/ai-content/{generationId}/card_news/{outputId}/` |
+| 블로그 | `blog` | HTML, 대표 PNG, SEO 메타 | `brands/{brandId}/ai-content/{generationId}/blog/{outputId}/` |
+| 마케팅 | `marketing` | 출력별 PNG, headline, body, CTA | `brands/{brandId}/ai-content/{generationId}/marketing/{outputId}/` |
+
+세 AI 콘텐츠 워커와 기존 콘텐츠 생성 워커는 모두 중앙 API의 `codex_cli/content` lease를 사용한다. 기본 콘텐츠 lane 동시성은 1이며 DM 예약 슬롯을 침범하지 않는다. 카드뉴스 공통 워커도 하나만 실행하므로 수동·자동 카드뉴스가 병렬로 이미지 생성되지 않는다. 처리량을 늘릴 때는 중앙 lease 상한과 공급자 rate limit을 함께 조정한다. 작업이 중단되면 `AI_CONTENT_JOB_LEASE_SECONDS` 이후 같은 작업 ID를 다시 claim하고 동일 Blob 경로에 덮어쓴다. API는 manifest 검증이 끝난 결과만 완료 처리한다.
+
+제품·서비스 분석 워커도 초기에는 한 프로세스만 둔다. 하나의 `brand-pilot-subject-analysis-worker`가 별도 프로세스를 늘리지 않고 `analysis`와 `appeal` 두 phase를 순차 처리한다. 입력 유형과 phase에 따라 `product-analysis.v2-ko`, `service-analysis.v2-ko`, `product-appeal.v2-ko`, `service-appeal.v2-ko` 네 프롬프트를 사용한다.
+
+한 번에 하나의 작업만 claim한다. 기본 lease와 Codex timeout은 각각 15분이고 30초마다 heartbeat를 보낸다. 중단된 작업은 lease 만료 후 다시 claim하며, 재시도 가능한 프로세스·네트워크 오류는 최대 3회 시도한다. 계약 검증 오류는 재시도하지 않는다. 운영 모니터링은 `queued` 분석 수, 가장 오래된 작업의 대기 시간, `extracting`·`analyzing`·`generating_appeals` 체류 시간을 기준으로 한다.
+
+v2 분석은 생성 건에 종속되며 다른 생성 건의 같은 URL 결과를 캐시로 재사용하지 않는다. 동일 생성 건·동일 입력의 중복 요청만 멱등 처리한다. v2 전체 `force` 재분석은 지원하지 않고 소구점 재생성만 허용한다. 기존 `subject-analysis.v1` 레코드와 URL 캐시 조회는 과거 상세 화면의 읽기 호환을 위해 유지한다.
+
+분석 첨부는 PNG/JPEG 이미지 5MB, TXT/Markdown/CSV 문서 5MB, PDF/XLSX 문서 10MB까지 허용한다. 중앙 API가 MIME·크기·Blob 메타데이터·파일 시그니처와 생성 건 소유권을 검증한 뒤 추출 결과만 워커에 전달한다.
+
+분석 시 보관한 대표 제품 이미지는 분석 버전의 근거이므로 삭제하지 않는다. 최종 프롬프트 단계에서 사용자가 올린 인물·크기·시각 참고 이미지는 생성 완료 후 삭제 대상으로 처리한다. 공개 웹 검색은 VOC, 대안, 시장 맥락에만 사용하고 모든 주장에 원문 URL을 남긴다. 제품·서비스 사실은 입력 URL 또는 사용자가 직접 입력한 정보만 근거로 쓴다.
+
+실행 명령:
+
+```text
+npm run dev:card-news-worker
+npm run dev:blog-worker
+npm run dev:marketing-worker
+npm run dev:subject-analysis-worker
+```
+
+subject analysis worker는 로컬과 실제 서버에서 동일한 환경 변수 계약을 사용한다. 필수값은 `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`이며, 식별·폴링·lease·heartbeat·API timeout·Codex timeout과 명령/모델 설정은 `SUBJECT_ANALYSIS_*` 변수로만 조정한다. 실제 기준 목록과 기본값은 워커의 `.env.example`과 README를 따른다.
+
+#### AI 콘텐츠 직접 게시
+
+AI 콘텐츠 상세 화면에서 사용자가 결과물별 채널과 게시 유형을 선택하면 중앙 API가 승인된 채널 출력과 게시 큐를 먼저 저장한 뒤, 선택된 큐를 순차적으로 1차 게시한다. 브라우저 요청이 중단되거나 일부 게시만 성공해도 저장된 `scheduled` 큐는 로컬 스케줄러의 `runDuePublishing`이 이어서 처리한다. 별도 게시 워커 프로세스는 두지 않는다.
+
+Instagram 카드뉴스는 이미지 한 장이면 단일 게시물, 두 장 이상이면 캐러셀로 게시하며 스토리는 첫 이미지를 사용한다. 크롭이나 리사이즈는 수행하지 않는다. 외부 OAuth 게시 어댑터가 준비되지 않은 채널은 UI에 표시하되 게시 대상으로 선택할 수 없다.
 
 ### 6.4 스케줄러·일반 작업 워커
 
@@ -353,10 +398,11 @@ DM retrieval logs
 
 `schema_migrations`에 적용된 마이그레이션 파일은 불변이다. 적용 후에는 기존 SQL 파일을 수정·이름 변경·삭제하지 않고, 모든 스키마 또는 데이터 보정은 다음 번호의 새 마이그레이션으로 추가한다. 마이그레이션 러너는 적용 이력의 checksum과 디스크 파일이 다르면 `migration_checksum_mismatch`로 중단한다. 명시적으로 허용된 과거 checksum 호환 항목 외에는 이 규칙에 예외를 두지 않는다.
 
-2026-07-16 기준 최신 마이그레이션:
+현재 주요 마이그레이션:
 
 - `035_remove_webflow_and_split_content_status.sql`: Webflow 런타임 데이터를 물리 삭제하고 지원 채널·delivery format 제약과 `channel_outputs` 생성/검토 상태를 분리한다.
 - `036_harden_performance_and_wiki_activation.sql`: 성과 수집의 tenant 소유권 외래 키를 강화하고 compiled Wiki 활성화 검증을 보강한다.
+- `046_content_quality_learning.sql`: 트렌드 관련성 판정값과 발행 후 24시간·72시간·7일 성과 학습 메타데이터를 저장한다.
 
 ## 11. 확장 단계
 
@@ -429,3 +475,8 @@ DM retrieval logs
 - [공개 출시 전 필수 항목](PRE_LAUNCH_REQUIRED.md)
 - [Instagram DM 운영 런북](operations/instagram-dm-operations-runbook.md)
 - [콘텐츠 생성 워커 설정](IMAGE_WORKER_SETUP.md)
+# Brand intelligence worker
+
+`brand-pilot-brand-intelligence-worker` handles infrequent, user-requested company analysis jobs. The central API securely crawls one owned URL and extracts up to five supported documents before the worker receives normalized evidence. The worker runs Codex CLI with read-only filesystem access and public web search limited to competitor and market-context research. It writes no database rows directly; it completes or fails the leased job through the worker API.
+
+Confirmed results are versioned in `brand_analysis_runs`, synchronized to compatible `brand_profiles` fields, and represented as a non-direct-reply policy knowledge entry so the existing Wiki build and embedding pipeline can consume the same reviewed data. AI content and scheduled content must read only the active confirmed version and must never trigger analysis implicitly.
