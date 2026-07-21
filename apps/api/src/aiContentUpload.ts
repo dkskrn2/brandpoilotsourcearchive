@@ -4,20 +4,30 @@ import type { AttachmentUploadTokenInput, AiContentAttachmentRole } from "./aiCo
 
 export const AI_CONTENT_IMAGE_MAX_BYTES = 5_000_000;
 export const AI_CONTENT_DOCUMENT_MAX_BYTES = 10_000_000;
-const IMAGE_MIME_LIMITS = new Map([
-  ["image/png", AI_CONTENT_IMAGE_MAX_BYTES],
-  ["image/jpeg", AI_CONTENT_IMAGE_MAX_BYTES],
-]);
-const DOCUMENT_MIME_LIMITS = new Map([
-  ["application/pdf", AI_CONTENT_DOCUMENT_MAX_BYTES],
-  ["text/plain", AI_CONTENT_IMAGE_MAX_BYTES],
-  ["text/markdown", AI_CONTENT_IMAGE_MAX_BYTES],
-  ["text/csv", AI_CONTENT_IMAGE_MAX_BYTES],
-  ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", AI_CONTENT_DOCUMENT_MAX_BYTES],
-]);
+type AttachmentMimePolicy = Readonly<Record<string, number>>;
+
+const IMAGE_ATTACHMENT_POLICY: AttachmentMimePolicy = Object.freeze({
+  "image/png": AI_CONTENT_IMAGE_MAX_BYTES,
+  "image/jpeg": AI_CONTENT_IMAGE_MAX_BYTES,
+});
+const DOCUMENT_ATTACHMENT_POLICY: AttachmentMimePolicy = Object.freeze({
+  "application/pdf": AI_CONTENT_DOCUMENT_MAX_BYTES,
+  "text/plain": AI_CONTENT_IMAGE_MAX_BYTES,
+  "text/markdown": AI_CONTENT_IMAGE_MAX_BYTES,
+  "text/csv": AI_CONTENT_IMAGE_MAX_BYTES,
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": AI_CONTENT_DOCUMENT_MAX_BYTES,
+});
+
+export const AI_CONTENT_ATTACHMENT_POLICY: Readonly<Record<AiContentAttachmentRole, AttachmentMimePolicy>> = Object.freeze({
+  product: IMAGE_ATTACHMENT_POLICY,
+  person: IMAGE_ATTACHMENT_POLICY,
+  scale: IMAGE_ATTACHMENT_POLICY,
+  visual_reference: IMAGE_ATTACHMENT_POLICY,
+  document: DOCUMENT_ATTACHMENT_POLICY,
+});
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SHA256 = /^[0-9a-f]{64}$/i;
-const VALID_ROLES = new Set<AiContentAttachmentRole>(["product", "person", "scale", "visual_reference", "document"]);
 
 export interface AiContentAttachmentPolicy {
   role: AiContentAttachmentRole;
@@ -28,6 +38,10 @@ export interface AiContentAttachmentPolicy {
 }
 
 function fail(code: string): never { throw new Error(code); }
+
+function isAttachmentRole(value: string): value is AiContentAttachmentRole {
+  return Object.prototype.hasOwnProperty.call(AI_CONTENT_ATTACHMENT_POLICY, value);
+}
 
 function pathSegment(value: string, code: string) {
   if (!UUID.test(value)) fail(code);
@@ -42,10 +56,9 @@ function safeFileName(fileName: string) {
 }
 
 export function validateAiContentAttachment(input: AiContentAttachmentPolicy): AiContentAttachmentPolicy {
-  if (!VALID_ROLES.has(input.role)) fail("ai_content_attachment_role_invalid");
+  if (!isAttachmentRole(input.role)) fail("ai_content_attachment_role_invalid");
   const mimeType = input.mimeType.trim().toLowerCase();
-  const mimeLimits = input.role === "document" ? DOCUMENT_MIME_LIMITS : IMAGE_MIME_LIMITS;
-  const maximumSizeInBytes = mimeLimits.get(mimeType);
+  const maximumSizeInBytes = AI_CONTENT_ATTACHMENT_POLICY[input.role][mimeType];
   if (maximumSizeInBytes === undefined) fail("ai_content_attachment_role_mime_invalid");
   if (!Number.isSafeInteger(input.sizeBytes) || input.sizeBytes <= 0 || input.sizeBytes > maximumSizeInBytes) fail("ai_content_attachment_size_invalid");
   if (!SHA256.test(input.checksum.trim())) fail("ai_content_attachment_checksum_invalid");
@@ -68,7 +81,7 @@ export async function issueAiContentAttachmentToken(input: { brandId: string; ge
   const attachment = validateAiContentAttachment(input.attachment);
   const pathname = buildAiContentAttachmentPath({ brandId: input.brandId, generationId: input.generationId, checksum: attachment.checksum, fileName: attachment.fileName });
   const generate = options.generateClientToken ?? generateClientTokenFromReadWriteToken;
-  const maximumSizeInBytes = (attachment.role === "document" ? DOCUMENT_MIME_LIMITS : IMAGE_MIME_LIMITS).get(attachment.mimeType)!;
+  const maximumSizeInBytes = AI_CONTENT_ATTACHMENT_POLICY[attachment.role][attachment.mimeType]!;
   const clientToken = await generate({ token: options.token, pathname, allowedContentTypes: [attachment.mimeType], maximumSizeInBytes, addRandomSuffix: false, allowOverwrite: false, validUntil: Date.now() + 10 * 60 * 1000 });
   return { pathname, clientToken };
 }

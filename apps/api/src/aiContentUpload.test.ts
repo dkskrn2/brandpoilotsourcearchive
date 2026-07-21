@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  AI_CONTENT_ATTACHMENT_POLICY,
   buildAiContentAttachmentPath,
   confirmAiContentAttachment,
   issueAiContentAttachmentToken,
@@ -16,6 +17,18 @@ const base = {
 };
 
 describe("AI content attachment upload policy", () => {
+  it("exports the MIME, role, and size policy used by attachment consumers", () => {
+    expect(AI_CONTENT_ATTACHMENT_POLICY.product).toEqual({
+      "image/png": 5_000_000,
+      "image/jpeg": 5_000_000,
+    });
+    expect(AI_CONTENT_ATTACHMENT_POLICY.document).toMatchObject({
+      "application/pdf": 10_000_000,
+      "text/plain": 5_000_000,
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": 10_000_000,
+    });
+  });
+
   it.each([
     ["product", "image/png", 5_000_000, true],
     ["person", "image/jpeg", 5_000_000, true],
