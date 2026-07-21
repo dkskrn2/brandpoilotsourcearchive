@@ -946,7 +946,14 @@ test("029-031 migrations satisfy the expanded schema smoke contract", async () =
     ]) {
       assert.match(schemaSmokeSql, new RegExp(`'${constraint}'`));
     }
-    await database.exec(schemaSmokeSql);
+    const subjectPipelineV2SmokeMarker = "do $$\ndeclare\n  pipeline_workspace_id uuid;";
+    const subjectPipelineV2SmokeStart = schemaSmokeSql.indexOf(subjectPipelineV2SmokeMarker);
+    assert.notEqual(subjectPipelineV2SmokeStart, -1, "missing subject pipeline v2 smoke block");
+    const subjectPipelineV2TransactionStart = schemaSmokeSql.lastIndexOf(
+      "begin;",
+      subjectPipelineV2SmokeStart,
+    );
+    await database.exec(schemaSmokeSql.slice(0, subjectPipelineV2TransactionStart));
   });
 });
 
@@ -1864,6 +1871,37 @@ test("051 scopes v2 subject pipelines to AI content generations", async () => {
     const firstGenerationId = await createGeneration(`generation-${randomUUID()}`);
     const secondGenerationId = await createGeneration(`generation-${randomUUID()}`);
 
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_subject_analyses
+           (workspace_id, brand_id, generation_id, contract_version,
+            subject_type, status, idempotency_key)
+         values ($1, $2, $3, 'subject-analysis.v1', 'product', 'queued', $4)`,
+        [workspaceId, brandId, firstGenerationId, `invalid-v1-scope-${randomUUID()}`],
+      ),
+      /ai_content_subject_analyses_scope_version_check/,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_subject_analyses
+           (workspace_id, brand_id, generation_id, contract_version,
+            subject_type, status, idempotency_key)
+         values ($1, $2, null, 'subject-analysis.v2', 'product', 'queued', $3)`,
+        [workspaceId, brandId, `invalid-v2-scope-${randomUUID()}`],
+      ),
+      /ai_content_subject_analyses_scope_version_check/,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_subject_analyses
+           (workspace_id, brand_id, generation_id, contract_version,
+            subject_type, status, idempotency_key)
+         values ($1, $2, null, 'subject-analysis.v3', 'product', 'queued', $3)`,
+        [workspaceId, brandId, `invalid-version-${randomUUID()}`],
+      ),
+      /ai_content_subject_analyses_(contract_version|scope_version)_check/,
+    );
+
     const legacy = await database.query(
       `insert into ai_content_subject_analyses
          (workspace_id, brand_id, subject_type, source_url, normalized_url,
@@ -1905,6 +1943,46 @@ test("051 scopes v2 subject pipelines to AI content generations", async () => {
       [firstAnalysis.rows[0].id],
     );
     assert.equal(cascaded.rows.length, 0);
+  });
+});
+
+test("051 can be applied twice", async () => {
+  const migrations = await loadMigrations();
+  const migration051 = migrations.find(
+    (migration) => migration.id === "051_ai_content_subject_pipeline_v2.sql",
+  );
+  assert.ok(migration051, "051 subject pipeline v2 migration must exist");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "050_support_request_contact_phone.sql",
+    );
+    await database.exec(migration051.sql);
+    await database.exec(migration051.sql);
+  });
+});
+
+test("subject pipeline v2 smoke fails before migration 051", async () => {
+  const migrations = await loadMigrations();
+  const schemaSmokeSql = await readFile("db/smoke/001_schema_smoke.sql", "utf8");
+  const marker = "do $$\ndeclare\n  pipeline_workspace_id uuid;";
+  const start = schemaSmokeSql.indexOf(marker);
+  assert.notEqual(start, -1, "missing subject pipeline v2 smoke block");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "050_support_request_contact_phone.sql",
+    );
+    await assert.rejects(
+      database.exec(`begin;\n${schemaSmokeSql.slice(start)}`),
+      /Missing subject pipeline v2 columns/,
+    );
   });
 });
 

@@ -179,15 +179,6 @@ declare
   pipeline_column_count integer;
   pipeline_index_count integer;
 begin
-  if not exists (
-    select 1
-    from information_schema.columns
-    where table_schema = 'public'
-      and table_name = 'ai_content_subject_analyses'
-      and column_name = 'generation_id'
-  ) then
-    return;
-  end if;
 
   select count(*)
   into pipeline_column_count
@@ -278,4 +269,3 @@ $$;
 rollback;
 
 select 'subject pipeline v2 smoke check passed' as result;
-

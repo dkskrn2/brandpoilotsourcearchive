@@ -303,6 +303,21 @@ describe("subject-analysis.v2 worker contracts", () => {
     result.appealsByTarget["target-1"] = [appeal("only-one", "target-1")];
     expect(() => parseSubjectAppealResultV2(result)).toThrow("subject_analysis_appeals_minimum_invalid");
   });
+
+  it("rejects v2 analysis and appeal results over the aggregate payload budget", () => {
+    expect(() => parseSubjectAnalysisResultV2({
+      ...validAnalysisResultV2(),
+      sourceGaps: Array.from({ length: 50 }, () => "x".repeat(2_000)),
+    })).toThrow("subject_analysis_v2_payload_limit_exceeded");
+
+    const appealResult = validAppealResultV2();
+    appealResult.targets = appealResult.targets.map((entry) => ({
+      ...entry,
+      traits: Array.from({ length: 50 }, () => "x".repeat(1_000)),
+    }));
+    expect(() => parseSubjectAppealResultV2(appealResult))
+      .toThrow("subject_analysis_v2_payload_limit_exceeded");
+  });
 });
 
 describe("subject-analysis.v1 worker input", () => {

@@ -13,6 +13,7 @@ alter table ai_content_subject_analyses
 alter table ai_content_subject_analyses
   drop constraint if exists ai_content_subject_generation_ownership_fk,
   drop constraint if exists ai_content_subject_analyses_contract_version_check,
+  drop constraint if exists ai_content_subject_analyses_scope_version_check,
   drop constraint if exists ai_content_subject_analyses_attachment_ids_json_array_check,
   drop constraint if exists ai_content_subject_analyses_analysis_result_json_object_check,
   drop constraint if exists ai_content_subject_analyses_status_check,
@@ -25,6 +26,11 @@ alter table ai_content_subject_analyses
     on delete cascade,
   add constraint ai_content_subject_analyses_contract_version_check check (
     contract_version in ('subject-analysis.v1', 'subject-analysis.v2')
+  ),
+  add constraint ai_content_subject_analyses_scope_version_check check (
+    (contract_version = 'subject-analysis.v1' and generation_id is null)
+    or
+    (contract_version = 'subject-analysis.v2' and generation_id is not null)
   ),
   add constraint ai_content_subject_analyses_attachment_ids_json_array_check check (
     jsonb_typeof(attachment_ids_json) = 'array'
@@ -47,11 +53,11 @@ alter table ai_content_subject_analyses
 
 drop index if exists ai_content_subject_active_cache_uq;
 
-create unique index ai_content_subject_legacy_active_cache_uq
+create unique index if not exists ai_content_subject_legacy_active_cache_uq
   on ai_content_subject_analyses (brand_id, subject_type, normalized_url)
   where generation_id is null and superseded_at is null;
 
-create unique index ai_content_subject_legacy_version_uq
+create unique index if not exists ai_content_subject_legacy_version_uq
   on ai_content_subject_analyses (
     brand_id,
     subject_type,
@@ -60,11 +66,11 @@ create unique index ai_content_subject_legacy_version_uq
   )
   where generation_id is null;
 
-create unique index ai_content_subject_generation_active_uq
+create unique index if not exists ai_content_subject_generation_active_uq
   on ai_content_subject_analyses (generation_id)
   where generation_id is not null and superseded_at is null;
 
-create index ai_content_subject_generation_idx
+create index if not exists ai_content_subject_generation_idx
   on ai_content_subject_analyses (generation_id)
   where generation_id is not null;
 

@@ -426,6 +426,28 @@ function structuredData(value: unknown): Record<string, unknown> {
   return structuredJson(value, { nodes: 0, characters: 0 }) as Record<string, unknown>;
 }
 
+function assertV2PayloadBudget(value: unknown): void {
+  const budget = { nodes: 0, characters: 0 };
+  const visit = (current: unknown, depth: number): void => {
+    budget.nodes += 1;
+    if (budget.nodes > 2_000 || depth > 20) fail("subject_analysis_v2_payload_limit_exceeded");
+    if (typeof current === "string") {
+      budget.characters += current.length;
+    } else if (Array.isArray(current)) {
+      for (const item of current) visit(item, depth + 1);
+    } else if (current && typeof current === "object") {
+      for (const key of Reflect.ownKeys(current)) {
+        if (typeof key !== "string") continue;
+        budget.characters += key.length;
+        const descriptor = Object.getOwnPropertyDescriptor(current, key);
+        if (descriptor && "value" in descriptor) visit(descriptor.value, depth + 1);
+      }
+    }
+    if (budget.characters > 100_000) fail("subject_analysis_v2_payload_limit_exceeded");
+  };
+  visit(value, 0);
+}
+
 function isSubjectImageRole(value: unknown): value is "product" | "service" | "logo" | "detail" | "unknown" {
   return typeof value === "string"
     && (value === "product" || value === "service" || value === "logo" || value === "detail" || value === "unknown");
@@ -637,6 +659,7 @@ function serviceSubtype(value: unknown): ServiceSubtype {
 }
 
 export function parseSubjectAnalysisResultV2(value: unknown): SubjectAnalysisResultV2 {
+  assertV2PayloadBudget(value);
   const source = strictObject(
     value,
     [
@@ -735,6 +758,7 @@ export function parseSubjectAppealInputV2(value: unknown): SubjectAppealInputV2 
 }
 
 export function parseSubjectAppealResultV2(value: unknown): SubjectAppealResultV2 {
+  assertV2PayloadBudget(value);
   const source = strictObject(
     value,
     ["contractVersion", "phase", "targets", "appealsByTarget"],
