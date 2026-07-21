@@ -1,5 +1,37 @@
 import type { InstagramDeliveryFormat } from "./instagramFormats.js";
 import type { DmAttentionType, DmDecision, DmJobRoute, DmReasonCode } from "./dmTypes.js";
+import type {
+  AiContentGenerationRecord,
+  AiContentJobRecord,
+  AiContentAttachmentRecord,
+  AiContentReferenceRecord,
+  AiContentUsageRecord,
+  AiContentBrandContextRecord,
+  AppealRecord,
+  AudienceRecord,
+  BrandGenerationScope,
+  BrandScope,
+  SaveAppealInput,
+  SaveAudienceInput,
+  SubjectAnalysisBrandContext,
+} from "./aiContentRepository.js";
+import type {
+  AiContentType,
+  CompleteAiContentJobInput,
+  CreateAiContentAnalysisInput,
+  FailAiContentJobInput,
+  StartAiContentGenerationInput,
+  UpdateAiContentDraftInput,
+} from "./aiContentContracts.js";
+import type {
+  SubjectAnalysisRecord,
+  SubjectAnalysisRepository,
+  SubjectBrandScope,
+} from "./aiContentSubjectRepository.js";
+import type {
+  CreateSubjectAnalysisInput,
+  CreateSubjectPipelineInput,
+} from "./aiContentSubjectContracts.js";
 
 export type {
   InstagramDeliveryFormat,
@@ -10,6 +42,7 @@ export type { DmAttentionType, DmDecision, DmJobRoute, DmReasonCode } from "./dm
 
 export type DeliveryFormat =
   | InstagramDeliveryFormat
+  | "instagram_feed_single"
   | "threads_text"
   | "tiktok_video"
   | "youtube_video"
@@ -179,6 +212,25 @@ export interface InstagramTrendFavoriteInput {
 export interface InstagramTrendSaveSourceDto {
   source: SourceDto;
   alreadySaved: boolean;
+}
+
+export interface InstagramTrendConnectionDto {
+  status: "connected" | "not_connected" | "needs_attention" | "expired";
+  accountLabel: string | null;
+  instagramBusinessAccountId: string | null;
+  scopes: string[];
+  expiresAt: string | null;
+  lastErrorCode: string | null;
+}
+
+export interface InstagramTrendCredentialInput {
+  accountLabel: string | null;
+  accessToken: string;
+  expiresAt: string | null;
+  facebookPageId: string | null;
+  instagramBusinessAccountId: string;
+  maskedDisplay: string;
+  scopes: string[];
 }
 
 export type InstagramCapabilityStatus =
@@ -382,8 +434,11 @@ export interface SupportRequestDto {
   category: SupportRequestCategory;
   title: string;
   message: string;
+  contactPhone: string;
   contactEmail: string | null;
   status: SupportRequestStatus;
+  responseMessage: string | null;
+  respondedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -392,6 +447,7 @@ export interface SupportRequestInput {
   category: SupportRequestCategory;
   title: string;
   message: string;
+  contactPhone: string;
   contactEmail?: string | null;
 }
 
@@ -899,9 +955,51 @@ export interface WikiStatusDto {
   importStats: { total: number; succeeded: number; failed: number; faqRows: number; productRows: number };
 }
 
-export interface ApiRepository {
+export interface SubjectAnalysisRepositoryV2 extends SubjectAnalysisRepository {
+  requestSubjectAnalysis(
+    input: SubjectBrandScope & CreateSubjectAnalysisInput,
+  ): Promise<SubjectAnalysisRecord>;
+  requestSubjectAnalysis(
+    input: SubjectBrandScope & CreateSubjectPipelineInput,
+  ): Promise<SubjectAnalysisRecord>;
+  regenerateSubjectAppeals(
+    input: SubjectBrandScope & { analysisId: string; idempotencyKey: string },
+  ): Promise<SubjectAnalysisRecord>;
+}
+
+export interface ApiRepository extends Partial<SubjectAnalysisRepositoryV2> {
   health(): Promise<{ database: "ok" }>;
+  getAiContentBrandContext(input: BrandScope): Promise<AiContentBrandContextRecord>;
+  getConfirmedSubjectAnalysisBrandContext?(input: BrandScope): Promise<SubjectAnalysisBrandContext>;
+  createAiContentAnalysis(input: BrandScope & CreateAiContentAnalysisInput): Promise<AiContentGenerationRecord>;
+  updateAiContentDraft(input: BrandGenerationScope & UpdateAiContentDraftInput): Promise<AiContentGenerationRecord>;
+  startAiContentGeneration(input: BrandGenerationScope & StartAiContentGenerationInput & { usageDate: string; dailyGenerationLimit: number }): Promise<AiContentGenerationRecord>;
+  listAiContentGenerations(input: BrandScope): Promise<AiContentGenerationRecord[]>;
+  getAiContentGeneration(input: BrandGenerationScope): Promise<AiContentGenerationRecord | null>;
+  listAiContentUsage(input: BrandScope & { usageDate: string }): Promise<AiContentUsageRecord>;
+  listAiContentReferences(input: BrandScope & { type?: AiContentType }): Promise<AiContentReferenceRecord[]>;
+  listBrandAudiences(input: BrandScope): Promise<AudienceRecord[]>;
+  saveBrandAudience(input: SaveAudienceInput): Promise<AudienceRecord>;
+  listBrandAppeals(input: BrandScope): Promise<AppealRecord[]>;
+  saveBrandAppeal(input: SaveAppealInput): Promise<AppealRecord>;
+  confirmAiContentAttachment(input: BrandGenerationScope & import("./aiContentContracts.js").ConfirmAttachmentInput): Promise<AiContentAttachmentRecord>;
+  claimAiContentJob(input: { contentType: AiContentType; workerId: string; leaseSeconds: number }): Promise<AiContentJobRecord | null>;
+  heartbeatAiContentJob(input: { jobId: string; workerId: string; leaseToken: string; leaseSeconds: number }): Promise<boolean>;
+  completeAiContentJob(input: CompleteAiContentJobInput): Promise<AiContentGenerationRecord>;
+  failAiContentJob(input: FailAiContentJobInput): Promise<AiContentGenerationRecord>;
+  retryAiContentOutput(input: BrandScope & { outputId: string }): Promise<AiContentGenerationRecord>;
+  downloadAiContentOutput(input: BrandScope & { outputId: string; usageDate: string; dailyDownloadLimit: number }): Promise<DownloadPackageDto>;
+  downloadAiContentGeneration(input: BrandGenerationScope & { outputIds?: string[]; usageDate: string; dailyDownloadLimit: number }): Promise<DownloadPackageDto>;
+  sendAiContentToPublish(input: BrandScope & { outputId: string }): Promise<{ publishGroupId: string; channelOutputId: string }>;
+  prepareAiContentPublish(
+    input: BrandScope & { outputId: string } & import("./aiContentPublishTargets.js").AiContentPublishRequest,
+  ): Promise<import("./aiContentPublish.js").PreparedAiContentPublishResult>;
+  getAiContentPublishQueueResult(
+    input: BrandScope & { queueId: string },
+  ): Promise<import("./aiContentPublish.js").AiContentPublishTargetResult>;
   listContentCategories(): Promise<ContentCategoryDto[]>;
+  getInstagramTrendConnection(brandId: string): Promise<InstagramTrendConnectionDto>;
+  saveInstagramTrendCredentials(brandId: string, input: InstagramTrendCredentialInput): Promise<InstagramTrendConnectionDto>;
   listInstagramTrends(brandId: string, input: InstagramTrendListInput): Promise<InstagramTrendPageDto>;
   searchInstagramTrends(brandId: string, input: InstagramTrendSearchInput): Promise<InstagramTrendPageDto>;
   listInstagramTrendSearches(brandId: string): Promise<InstagramTrendSearchHistoryDto[]>;
@@ -921,6 +1019,7 @@ export interface ApiRepository {
   updateSource(sourceId: string, input: SourceUpdateInput): Promise<SourceDto>;
   deleteSource(sourceId: string): Promise<{ id: string }>;
   listChannels(brandId: string): Promise<ChannelDto[]>;
+  getInstagramChannelIdentity(brandId: string): Promise<{ externalAccountId: string | null; accountLabel: string | null }>;
   updateChannelEnabled(brandId: string, channel: Channel, enabled: boolean): Promise<ChannelDto>;
   getChannelConnectionRequest(brandId: string): Promise<ChannelConnectionRequestDto>;
   updateChannelConnectionRequest(brandId: string, input: ChannelConnectionRequestInput): Promise<ChannelConnectionRequestDto>;
@@ -929,11 +1028,12 @@ export interface ApiRepository {
   createSupportRequest(brandId: string, input: SupportRequestInput): Promise<SupportRequestDto>;
   listSupportRequests(brandId: string): Promise<SupportRequestDto[]>;
   updateSupportRequestStatus(requestId: string, status: SupportRequestStatus): Promise<SupportRequestDto>;
+  respondToSupportRequest(requestId: string, responseMessage: string): Promise<SupportRequestDto>;
   listContentOutputs(brandId: string): Promise<ContentOutputDto[]>;
   reviewContentOutput(outputId: string, action: "approve" | "reject" | "regenerate", reason?: string): Promise<{ id: string; status: string }>;
   listPublishQueue(brandId: string): Promise<PublishQueueDto[]>;
   listPublishResults(brandId: string): Promise<PublishResultDto[]>;
-  downloadPublishedResults(brandId: string): Promise<DownloadPackageDto>;
+  getContentOutputArtifact(outputId: string): Promise<PublishArtifactDto>;
   getPublishArtifact(queueId: string): Promise<PublishArtifactDto>;
   downloadPublishResult(queueId: string): Promise<DownloadPackageDto>;
   createTopicUpload(brandId: string, input: TopicUploadInput): Promise<TopicUploadDto>;
@@ -946,6 +1046,7 @@ export interface ApiRepository {
   listInstagramDmHistory(brandId: string): Promise<InstagramDmHistoryDto[]>;
   listDmConversations(brandId: string, input: { filter: DmConversationFilter; cursor?: string; limit: number }): Promise<DmConversationPageDto>;
   getDmConversation(brandId: string, conversationId: string): Promise<DmConversationDetailDto>;
+  sendManualDmReply(brandId: string, conversationId: string, body: string): Promise<DmConversationDetailMessageDto>;
   listDmAttentionItems(brandId: string, type?: DmAttentionType): Promise<DmAttentionItemDto[]>;
   resolveDmAttentionItem(attentionId: string): Promise<{ conversationId: string; automationStatus: "active"; attentionStatus: "resolved" }>;
   getWikiStatus(brandId: string): Promise<WikiStatusDto>;

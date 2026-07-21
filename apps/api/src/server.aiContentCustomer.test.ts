@@ -7,20 +7,26 @@ const brandId = "22222222-2222-4222-8222-222222222222";
 const generationId = "33333333-3333-4333-8333-333333333333";
 const outputId = "44444444-4444-4444-8444-444444444444";
 const analysisId = "55555555-5555-4555-8555-555555555555";
+const attachmentId = "66666666-6666-4666-8666-666666666666";
 
 function subjectAnalysis(status: "queued" | "ready" | "partial" = "queued") {
   return {
     id: analysisId,
     workspaceId,
     brandId,
+    generationId: null,
+    contractVersion: "subject-analysis.v1" as const,
     subjectType: "product" as const,
     sourceUrl: "https://example.com/product",
     normalizedUrl: "https://example.com/product",
     input: { name: "제품", promotion: "", description: "설명" },
+    attachmentIds: [],
     status,
     facts: [],
     structuredData: {},
     research: {},
+    analysisResult: null,
+    sourceGaps: [],
     targets: [],
     appealsByTarget: {},
     selectedImageId: null,
@@ -40,6 +46,39 @@ function subjectAnalysis(status: "queued" | "ready" | "partial" = "queued") {
     completedAt: status === "queued" ? null : "2026-07-20T00:01:00.000Z",
   };
 }
+
+function subjectAnalysisV2(status: "queued" | "generating_appeals" | "ready" | "partial" = "queued") {
+  return {
+    ...subjectAnalysis(status === "generating_appeals" ? "queued" : status),
+    generationId,
+    contractVersion: "subject-analysis.v2" as const,
+    attachmentIds: [attachmentId],
+    status,
+    input: { name: "제품", promotionOrTerms: "첫 달 할인", description: "설명" },
+    analysisResult: {
+      contractVersion: "subject-analysis-result.v2",
+      phase: "analysis",
+      summary: "internal summary",
+    },
+    sourceGaps: ["가격 근거 부족"],
+    targets: [{ id: "target-1", name: "브랜드 담당자" }],
+    appealsByTarget: { "target-1": [{ id: "appeal-1", title: "빠른 시작" }] },
+  };
+}
+
+const confirmedSubjectBrandContext = {
+  brandName: "Growthline",
+  companyOverview: "그로스라인 개요",
+  businessDescription: "콘텐츠 운영 서비스",
+  primaryCategory: { code: "marketing", name: "마케팅" },
+  subcategories: [{ code: "content", name: "콘텐츠 마케팅" }],
+  primaryTarget: "중소 브랜드 담당자",
+  differentiators: "확정 정보 재사용",
+  coreAppeal: "반복 입력 감소",
+  brandColor: "#1357d4",
+  brandIntelligenceVersionId: "brand-analysis-1",
+  confirmedAt: "2026-07-21T00:00:00.000Z",
+};
 
 function generation(status = "analyzing") {
   return {
@@ -78,11 +117,30 @@ function setup(allowed = true) {
     retryAiContentOutput: vi.fn(async () => generation("queued")),
     downloadAiContentOutput: vi.fn(async () => ({ fileName: "result.zip", mimeType: "application/zip" as const, buffer: Buffer.from("PK"), itemCount: 1 })),
     downloadAiContentGeneration: vi.fn(async () => ({ fileName: "generation.zip", mimeType: "application/zip" as const, buffer: Buffer.from("PK"), itemCount: 1 })),
-    sendAiContentToPublish: vi.fn(async () => ({ publishGroupId: "publish-group-1", channelOutputId: "channel-output-1" })),
+    prepareAiContentPublish: vi.fn(async () => ({
+      publishGroupId: "publish-group-1",
+      targets: [
+        { channel: "instagram", deliveryFormat: "instagram_feed_carousel", queueId: "queue-feed", status: "scheduled", publishedUrl: null, errorCode: null },
+        { channel: "instagram", deliveryFormat: "instagram_story", queueId: "queue-story", status: "scheduled", publishedUrl: null, errorCode: null },
+      ],
+    })),
+    getAiContentPublishQueueResult: vi.fn(async (input) => ({
+      channel: "instagram" as const,
+      deliveryFormat: "instagram_story" as const,
+      queueId: input.queueId,
+      status: "scheduled" as const,
+      publishedUrl: null,
+      errorCode: "story_capability_required",
+    })),
+    publishQueueItem: vi.fn(async (queueId) => ({ id: queueId, status: "published", publishedUrl: `https://instagram.example/${queueId}` })),
     getCachedSubjectAnalysis: vi.fn(async () => subjectAnalysis("ready")),
-    requestSubjectAnalysis: vi.fn(async () => subjectAnalysis("queued")),
+    requestSubjectAnalysis: vi.fn(async (input) => (
+      "generationId" in input ? subjectAnalysisV2("queued") : subjectAnalysis("queued")
+    )),
     getSubjectAnalysis: vi.fn(async () => subjectAnalysis("ready")),
+    regenerateSubjectAppeals: vi.fn(async () => subjectAnalysisV2("generating_appeals")),
     selectSubjectImage: vi.fn(async () => subjectAnalysis("ready")),
+    getConfirmedSubjectAnalysisBrandContext: vi.fn(async () => confirmedSubjectBrandContext),
   } as unknown as ApiRepository;
   const kakaoAuth = {
     getSession: vi.fn(async () => ({ userId: "user-1", workspaceId, workspaceName: "Workspace", brandId, brandName: "Brand", displayName: "Tester", email: null })),
@@ -190,17 +248,84 @@ describe("AI content customer routes", () => {
     await app.close();
   });
 
-  it("downloads a completed output package and hands card news to publish management", async () => {
+  it("downloads a completed output package and immediately publishes selected targets", async () => {
     const { app, repository } = setup();
     const download = await app.inject({ method: "GET", url: `/brands/${brandId}/ai-content/outputs/${outputId}/download`, headers: auth });
     expect(download.statusCode).toBe(200);
     expect(download.headers["content-type"]).toContain("application/zip");
     expect(repository.downloadAiContentOutput).toHaveBeenCalledWith(expect.objectContaining({ workspaceId, brandId, outputId, dailyDownloadLimit: 20 }));
 
-    const publish = await app.inject({ method: "POST", url: `/brands/${brandId}/ai-content/outputs/${outputId}/publish`, headers: auth });
+    const idempotencyKey = "b4b74082-8a44-46d6-91b6-3e3bd7e26be0";
+    const targets = [
+      { channel: "instagram", deliveryFormat: "instagram_feed_carousel" },
+      { channel: "instagram", deliveryFormat: "instagram_story" },
+    ];
+    vi.mocked(repository.publishQueueItem)
+      .mockResolvedValueOnce({ id: "queue-feed", status: "published", publishedUrl: "https://instagram.example/queue-feed" })
+      .mockRejectedValueOnce(new Error("story_capability_required"));
+    const publish = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/publish`,
+      headers: auth,
+      payload: { idempotencyKey, targets },
+    });
     expect(publish.statusCode).toBe(200);
-    expect(publish.json()).toEqual({ publishGroupId: "publish-group-1", channelOutputId: "channel-output-1" });
-    expect(repository.sendAiContentToPublish).toHaveBeenCalledWith({ workspaceId, brandId, outputId });
+    expect(repository.prepareAiContentPublish).toHaveBeenCalledWith({ workspaceId, brandId, outputId, idempotencyKey, targets });
+    expect(repository.publishQueueItem).toHaveBeenNthCalledWith(1, "queue-feed");
+    expect(repository.publishQueueItem).toHaveBeenNthCalledWith(2, "queue-story");
+    expect(publish.json()).toMatchObject({
+      outputId,
+      targets: [
+        { queueId: "queue-feed", status: "published", publishedUrl: "https://instagram.example/queue-feed" },
+        { queueId: "queue-story", status: "scheduled", errorCode: "story_capability_required" },
+      ],
+    });
+    await app.close();
+  });
+
+  it("returns a rendering reel target without publishing a queue before the video exists", async () => {
+    const { app, repository } = setup();
+    vi.mocked(repository.prepareAiContentPublish).mockResolvedValueOnce({
+      publishGroupId: "publish-group-1",
+      targets: [{
+        channel: "instagram",
+        deliveryFormat: "instagram_reel",
+        channelOutputId: "channel-output-reel",
+        queueId: null,
+        status: "rendering",
+        publishedUrl: null,
+        errorCode: null,
+      }],
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/publish`,
+      headers: auth,
+      payload: {
+        idempotencyKey: "b4b74082-8a44-46d6-91b6-3e3bd7e26be0",
+        targets: [{ channel: "instagram", deliveryFormat: "instagram_reel" }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.publishQueueItem).not.toHaveBeenCalled();
+    expect(response.json()).toMatchObject({
+      targets: [{ deliveryFormat: "instagram_reel", queueId: null, status: "rendering" }],
+    });
+    await app.close();
+  });
+
+  it("rejects an invalid direct-publish request body", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/publish`,
+      headers: auth,
+      payload: { idempotencyKey: "invalid", targets: [] },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(repository.prepareAiContentPublish).not.toHaveBeenCalled();
     await app.close();
   });
 
@@ -249,6 +374,111 @@ describe("AI content customer routes", () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().status).toBe("partial");
+    await app.close();
+  });
+
+  it("accepts a generation-scoped v2 subject analysis with confirmed brand context", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/subject-analyses`,
+      headers: auth,
+      payload: {
+        contractVersion: "subject-analysis.v2",
+        generationId,
+        subjectType: "product",
+        sourceUrl: "https://example.com/product",
+        attachmentIds: [attachmentId],
+        manualInput: { name: "제품", promotionOrTerms: "첫 달 할인", description: "설명" },
+        idempotencyKey: "subject-v2-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(repository.getConfirmedSubjectAnalysisBrandContext).toHaveBeenCalledWith({ workspaceId, brandId });
+    expect(repository.requestSubjectAnalysis).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      contractVersion: "subject-analysis.v2",
+      generationId,
+      subjectType: "product",
+      sourceUrl: "https://example.com/product",
+      attachmentIds: [attachmentId],
+      manualInput: { name: "제품", promotionOrTerms: "첫 달 할인", description: "설명" },
+      idempotencyKey: "subject-v2-1",
+      brandContext: confirmedSubjectBrandContext,
+    });
+    await app.close();
+  });
+
+  it("returns the exact v2 brand-context error before requesting analysis", async () => {
+    const { app, repository } = setup();
+    vi.mocked(repository.getConfirmedSubjectAnalysisBrandContext!)
+      .mockRejectedValueOnce(new Error("subject_analysis_brand_context_required"));
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/subject-analyses`,
+      headers: auth,
+      payload: {
+        contractVersion: "subject-analysis.v2",
+        generationId,
+        subjectType: "service",
+        sourceUrl: null,
+        attachmentIds: [attachmentId],
+        manualInput: { name: "운영 서비스", promotionOrTerms: "", description: "" },
+        idempotencyKey: "subject-v2-context",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "subject_analysis_brand_context_required" });
+    expect(repository.requestSubjectAnalysis).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("returns only UI-required fields for v2 analysis detail", async () => {
+    const { app, repository } = setup();
+    vi.mocked(repository.getSubjectAnalysis!).mockResolvedValueOnce(subjectAnalysisV2("ready") as never);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/ai-content/subject-analyses/${analysisId}`,
+      headers: auth,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      id: analysisId,
+      generationId,
+      contractVersion: "subject-analysis.v2",
+      status: "ready",
+      analysisVersion: 1,
+      targets: [{ id: "target-1", name: "브랜드 담당자" }],
+      appealsByTarget: { "target-1": [{ id: "appeal-1", title: "빠른 시작" }] },
+      sourceGaps: ["가격 근거 부족"],
+    });
+    expect(response.json()).not.toHaveProperty("analysisResult");
+    expect(response.json()).not.toHaveProperty("input");
+    await app.close();
+  });
+
+  it("regenerates appeals in the authenticated brand scope with idempotency", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/subject-analyses/${analysisId}/appeals/regenerate`,
+      headers: auth,
+      payload: { idempotencyKey: "appeals-v2-1" },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(repository.regenerateSubjectAppeals).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      analysisId,
+      idempotencyKey: "appeals-v2-1",
+    });
     await app.close();
   });
 
