@@ -2,11 +2,17 @@ import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import {
   type CreateSubjectAnalysisInput,
+  type CreateSubjectPipelineInput,
+  parseSubjectAnalysisResultV2,
+  parseSubjectAppealResultV2,
   parseSubjectAnalysisResult,
   type SubjectAnalysisResultV1,
+  type SubjectAnalysisResultV2,
   type SubjectAnalysisStatus,
   type SubjectAppeal,
+  type SubjectAppealResultV2,
   type SubjectManualInput,
+  type SubjectPipelineStatus,
   type SubjectTarget,
   type SubjectType,
 } from "./aiContentSubjectContracts.js";
@@ -33,14 +39,19 @@ export interface SubjectImageRecord {
 
 export interface SubjectAnalysisRecord extends SubjectBrandScope {
   id: string;
+  generationId?: string | null;
+  contractVersion?: "subject-analysis.v1" | "subject-analysis.v2";
   subjectType: SubjectType;
   sourceUrl: string;
   normalizedUrl: string;
-  input: SubjectManualInput;
-  status: SubjectAnalysisStatus;
+  input: SubjectManualInput & { promotionOrTerms?: string };
+  attachmentIds?: string[];
+  status: SubjectAnalysisStatus | SubjectPipelineStatus;
   facts: Array<{ key: string; value: string; sourceUrl: string }>;
   structuredData: Record<string, unknown>;
   research: Record<string, unknown>;
+  analysisResult?: SubjectAnalysisResultV2 | null;
+  sourceGaps?: string[];
   targets: SubjectTarget[];
   appealsByTarget: Record<string, SubjectAppeal[]>;
   selectedImageId: string | null;
@@ -64,7 +75,8 @@ export interface SubjectAnalysisClaim extends SubjectAnalysisRecord {
   leasedBy: string;
   leaseToken: string;
   leaseExpiresAt: string;
-  status: "extracting" | "researching";
+  status: "extracting" | "researching" | "analyzing" | "generating_appeals";
+  phase?: "analysis" | "appeal";
 }
 
 export interface SubjectLeaseIdentity {
@@ -94,19 +106,26 @@ export interface SubjectExtractionCompletion extends SubjectLeaseIdentity {
 export interface SubjectAnalysisRepository {
   getCachedSubjectAnalysis(input: SubjectBrandScope & { subjectType: SubjectType; sourceUrl: string }): Promise<SubjectAnalysisRecord | null>;
   requestSubjectAnalysis(input: SubjectBrandScope & CreateSubjectAnalysisInput): Promise<SubjectAnalysisRecord>;
+  requestSubjectAnalysis(input: SubjectBrandScope & CreateSubjectPipelineInput): Promise<SubjectAnalysisRecord>;
   getSubjectAnalysis(input: SubjectBrandScope & { analysisId: string }): Promise<SubjectAnalysisRecord | null>;
   selectSubjectImage(input: SubjectBrandScope & { analysisId: string; imageId: string }): Promise<SubjectAnalysisRecord>;
   claimSubjectAnalysis(input: { workerId: string; leaseSeconds: number }): Promise<SubjectAnalysisClaim | null>;
   markSubjectExtractionComplete(input: SubjectExtractionCompletion): Promise<SubjectAnalysisClaim>;
   heartbeatSubjectAnalysis(input: SubjectLeaseIdentity & { leaseSeconds: number }): Promise<boolean>;
-  completeSubjectAnalysis(input: SubjectLeaseIdentity & SubjectAnalysisResultV1): Promise<SubjectAnalysisRecord>;
+  completeSubjectAnalysis(input: SubjectLeaseIdentity & (SubjectAnalysisResultV1 | SubjectAnalysisResultV2)): Promise<SubjectAnalysisRecord>;
+  completeSubjectAppeals(input: SubjectLeaseIdentity & SubjectAppealResultV2): Promise<SubjectAnalysisRecord>;
+  regenerateSubjectAppeals(input: SubjectBrandScope & {
+    analysisId: string;
+    idempotencyKey: string;
+  }): Promise<SubjectAnalysisRecord>;
   failSubjectAnalysis(input: SubjectLeaseIdentity & { errorCode: string; errorMessage: string; retryable: boolean }): Promise<SubjectAnalysisRecord>;
 }
 
 type Queryable = Pick<PoolClient, "query">;
 
 const ANALYSIS_COLUMNS = `
-  id, workspace_id, brand_id, subject_type, source_url, normalized_url, input_json,
+  id, workspace_id, brand_id, generation_id, contract_version, subject_type,
+  source_url, normalized_url, input_json, attachment_ids_json, analysis_result_json,
   status, facts_json, structured_data_json, research_json, targets_json, appeals_json,
   selected_image_id, analysis_version, idempotency_key, leased_by, lease_token,
   lease_expires_at, attempt_count, available_at, error_code, error_message,
@@ -120,6 +139,16 @@ export const SUBJECT_ANALYSIS_INSERT_SQL = `
   on conflict do nothing
   returning ${ANALYSIS_COLUMNS}`;
 
+export const SUBJECT_PIPELINE_INSERT_SQL = `
+  insert into ai_content_subject_analyses
+    (id, workspace_id, brand_id, generation_id, contract_version, subject_type,
+     source_url, normalized_url, input_json, attachment_ids_json, status,
+     analysis_version, idempotency_key)
+  values ($1, $2, $3, $4, 'subject-analysis.v2', $5, $6, $7,
+          $8::jsonb, $9::jsonb, 'queued', $10, $11)
+  on conflict do nothing
+  returning ${ANALYSIS_COLUMNS}`;
+
 export const SUBJECT_ANALYSIS_CLAIM_SQL = `
   with candidate as (
     select id
@@ -129,7 +158,10 @@ export const SUBJECT_ANALYSIS_CLAIM_SQL = `
        and attempt_count < 3
        and (
          status = 'queued'
-         or (status in ('extracting', 'researching') and (lease_expires_at is null or lease_expires_at <= now()))
+         or (
+           status in ('extracting', 'researching', 'analyzing', 'generating_appeals')
+           and (lease_expires_at is null or lease_expires_at <= now())
+         )
        )
      order by available_at, created_at, id
      for update skip locked
@@ -201,22 +233,37 @@ function mapImage(row: Record<string, unknown>): SubjectImageRecord {
 
 function mapAnalysis(row: Record<string, unknown>, images: SubjectImageRecord[]): SubjectAnalysisRecord {
   const input = jsonObject(row.input_json);
+  const contractVersion = row.contract_version === "subject-analysis.v2"
+    ? "subject-analysis.v2"
+    : "subject-analysis.v1";
+  const analysisResultJson = jsonObject(row.analysis_result_json);
+  const analysisResult = contractVersion === "subject-analysis.v2" && Object.keys(analysisResultJson).length
+    ? analysisResultJson as unknown as SubjectAnalysisResultV2
+    : null;
+  const research = jsonObject(row.research_json);
+  const promotionOrTerms = typeof input.promotionOrTerms === "string" ? input.promotionOrTerms : "";
   return {
     id: String(row.id),
     workspaceId: String(row.workspace_id),
     brandId: String(row.brand_id),
+    generationId: row.generation_id ? String(row.generation_id) : null,
+    contractVersion,
     subjectType: row.subject_type as SubjectType,
-    sourceUrl: String(row.source_url),
-    normalizedUrl: String(row.normalized_url),
+    sourceUrl: row.source_url === null || row.source_url === undefined ? "" : String(row.source_url),
+    normalizedUrl: row.normalized_url === null || row.normalized_url === undefined ? "" : String(row.normalized_url),
     input: {
       name: typeof input.name === "string" ? input.name : "",
-      promotion: typeof input.promotion === "string" ? input.promotion : "",
+      promotion: typeof input.promotion === "string" ? input.promotion : promotionOrTerms,
       description: typeof input.description === "string" ? input.description : "",
+      ...(contractVersion === "subject-analysis.v2" ? { promotionOrTerms } : {}),
     },
-    status: row.status as SubjectAnalysisStatus,
+    attachmentIds: jsonArray(row.attachment_ids_json),
+    status: row.status as SubjectAnalysisRecord["status"],
     facts: jsonArray(row.facts_json),
     structuredData: jsonObject(row.structured_data_json),
-    research: jsonObject(row.research_json),
+    research,
+    analysisResult,
+    sourceGaps: analysisResult?.sourceGaps ?? jsonArray(research.sourceGaps),
     targets: jsonArray(row.targets_json),
     appealsByTarget: jsonObject(row.appeals_json) as Record<string, SubjectAppeal[]>,
     selectedImageId: row.selected_image_id ? String(row.selected_image_id) : null,
@@ -234,6 +281,20 @@ function mapAnalysis(row: Record<string, unknown>, images: SubjectImageRecord[])
     createdAt: iso(row.created_at)!,
     updatedAt: iso(row.updated_at)!,
     completedAt: iso(row.completed_at),
+  };
+}
+
+function mapClaim(row: Record<string, unknown>, images: SubjectImageRecord[]): SubjectAnalysisClaim {
+  const analysis = mapAnalysis(row, images);
+  return {
+    ...analysis,
+    leasedBy: String(row.leased_by),
+    leaseToken: String(row.lease_token),
+    leaseExpiresAt: iso(row.lease_expires_at)!,
+    status: row.status as SubjectAnalysisClaim["status"],
+    phase: row.contract_version === "subject-analysis.v2" && row.status === "generating_appeals"
+      ? "appeal"
+      : "analysis",
   };
 }
 
@@ -255,14 +316,22 @@ async function loadAnalysis(client: Queryable, analysisId: string): Promise<Subj
   return mapAnalysis(result.rows[0] as Record<string, unknown>, await loadImages(client, analysisId));
 }
 
+async function loadClaim(client: Queryable, analysisId: string): Promise<SubjectAnalysisClaim> {
+  const result = await client.query(`select ${ANALYSIS_COLUMNS} from ai_content_subject_analyses where id = $1`, [analysisId]);
+  return mapClaim(
+    result.rows[0] as Record<string, unknown>,
+    await loadImages(client, analysisId),
+  );
+}
+
 function assertActiveLease(
   row: Record<string, unknown> | undefined,
   input: SubjectLeaseIdentity,
-  expectedStatuses: readonly SubjectAnalysisStatus[],
+  expectedStatuses: readonly SubjectAnalysisRecord["status"][],
 ): asserts row is Record<string, unknown> {
   if (
     !row
-    || !expectedStatuses.includes(row.status as SubjectAnalysisStatus)
+    || !expectedStatuses.includes(row.status as SubjectAnalysisRecord["status"])
     || row.superseded_at
     || row.leased_by !== input.workerId
     || String(row.lease_token ?? "") !== input.leaseToken
@@ -279,10 +348,22 @@ async function terminalizeAndRestorePrior(
   errorCode: string,
   errorMessage: string,
 ) {
+  if (row.contract_version === "subject-analysis.v2") {
+    await client.query(
+      `update ai_content_subject_analyses
+          set status = 'failed', leased_by = null, lease_token = null, lease_expires_at = null,
+              error_code = $2, error_message = $3, completed_at = coalesce(completed_at, now()),
+              updated_at = now()
+        where id = $1`,
+      [row.id, errorCode, errorMessage],
+    );
+    return;
+  }
   const prior = await client.query(
     `select id
        from ai_content_subject_analyses
       where workspace_id = $1 and brand_id = $2 and subject_type = $3 and normalized_url = $4
+        and generation_id is null
         and analysis_version < $5 and status in ('ready', 'partial')
       order by analysis_version desc
       limit 1
@@ -329,7 +410,7 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
         `select ${ANALYSIS_COLUMNS}
            from ai_content_subject_analyses
           where workspace_id = $1 and brand_id = $2 and subject_type = $3
-            and normalized_url = $4 and superseded_at is null
+            and normalized_url = $4 and generation_id is null and superseded_at is null
           limit 1`,
         [input.workspaceId, input.brandId, input.subjectType, normalizedUrl],
       );
@@ -340,6 +421,94 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
 
     async requestSubjectAnalysis(input) {
       return inTransaction(pool, async (client) => {
+        if ("generationId" in input) {
+          const generation = await client.query(
+            `select id from ai_content_generations
+              where id = $1 and workspace_id = $2 and brand_id = $3
+              for update`,
+            [input.generationId, input.workspaceId, input.brandId],
+          );
+          if (!generation.rowCount) throw new Error("subject_analysis_generation_not_found");
+
+          const duplicate = await client.query(
+            `select ${ANALYSIS_COLUMNS}
+               from ai_content_subject_analyses
+              where workspace_id = $1 and brand_id = $2 and generation_id = $3
+                and contract_version = 'subject-analysis.v2' and idempotency_key = $4
+              for update`,
+            [input.workspaceId, input.brandId, input.generationId, input.idempotencyKey],
+          );
+          if (duplicate.rowCount) {
+            const row = duplicate.rows[0] as Record<string, unknown>;
+            return mapAnalysis(row, await loadImages(client, String(row.id)));
+          }
+
+          const normalizedUrl = input.sourceUrl ? normalizeSubjectUrl(input.sourceUrl) : null;
+          const activeResult = await client.query(
+            `select ${ANALYSIS_COLUMNS}
+               from ai_content_subject_analyses
+              where workspace_id = $1 and brand_id = $2 and generation_id = $3
+                and contract_version = 'subject-analysis.v2' and superseded_at is null
+              for update`,
+            [input.workspaceId, input.brandId, input.generationId],
+          );
+          const active = activeResult.rows[0] as Record<string, unknown> | undefined;
+          if (active) {
+            const storedInput = jsonObject(active.input_json);
+            const storedAttachmentIds = jsonArray<string>(active.attachment_ids_json);
+            const sameInput = active.subject_type === input.subjectType
+              && (active.normalized_url ?? null) === normalizedUrl
+              && storedInput.name === input.manualInput.name
+              && storedInput.promotionOrTerms === input.manualInput.promotionOrTerms
+              && storedInput.description === input.manualInput.description
+              && storedAttachmentIds.length === input.attachmentIds.length
+              && storedAttachmentIds.every((id, index) => id === input.attachmentIds[index]);
+            if (sameInput) return mapAnalysis(active, await loadImages(client, String(active.id)));
+          }
+
+          const versionResult = await client.query(
+            `select coalesce(max(analysis_version), 0)::integer as version
+               from ai_content_subject_analyses
+              where workspace_id = $1 and brand_id = $2 and generation_id = $3
+                and contract_version = 'subject-analysis.v2'`,
+            [input.workspaceId, input.brandId, input.generationId],
+          );
+          const analysisVersion = Number(versionResult.rows[0]?.version ?? 0) + 1;
+          if (active) {
+            await client.query(
+              `update ai_content_subject_analyses
+                  set superseded_at = now(), updated_at = now()
+                where id = $1 and superseded_at is null`,
+              [active.id],
+            );
+          }
+
+          const id = randomUUID();
+          const inserted = await client.query(
+            SUBJECT_PIPELINE_INSERT_SQL,
+            [id, input.workspaceId, input.brandId, input.generationId, input.subjectType,
+              input.sourceUrl?.trim() ?? null, normalizedUrl, JSON.stringify(input.manualInput),
+              JSON.stringify(input.attachmentIds), analysisVersion, input.idempotencyKey],
+          );
+          if (inserted.rowCount) return mapAnalysis(inserted.rows[0] as Record<string, unknown>, []);
+
+          const conflicted = await client.query(
+            `select ${ANALYSIS_COLUMNS}
+               from ai_content_subject_analyses
+              where workspace_id = $1 and brand_id = $2 and generation_id = $3
+                and contract_version = 'subject-analysis.v2'
+                and (idempotency_key = $4 or superseded_at is null)
+              order by (idempotency_key = $4) desc
+              limit 1`,
+            [input.workspaceId, input.brandId, input.generationId, input.idempotencyKey],
+          );
+          if (conflicted.rowCount) {
+            const row = conflicted.rows[0] as Record<string, unknown>;
+            return mapAnalysis(row, await loadImages(client, String(row.id)));
+          }
+          throw new Error("subject_analysis_create_conflict");
+        }
+
         const brand = await client.query(
           "select id from brands where id = $1 and workspace_id = $2 for update",
           [input.brandId, input.workspaceId],
@@ -350,6 +519,7 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
           `select ${ANALYSIS_COLUMNS}
              from ai_content_subject_analyses
             where workspace_id = $1 and brand_id = $2 and idempotency_key = $3
+              and generation_id is null
             for update`,
           [input.workspaceId, input.brandId, input.idempotencyKey],
         );
@@ -362,7 +532,7 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
           `select ${ANALYSIS_COLUMNS}
              from ai_content_subject_analyses
             where workspace_id = $1 and brand_id = $2 and subject_type = $3
-              and normalized_url = $4 and superseded_at is null
+              and normalized_url = $4 and generation_id is null and superseded_at is null
             for update`,
           [input.workspaceId, input.brandId, input.subjectType, normalizedUrl],
         );
@@ -374,7 +544,8 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
         const versionResult = await client.query(
           `select coalesce(max(analysis_version), 0)::integer as version
              from ai_content_subject_analyses
-            where workspace_id = $1 and brand_id = $2 and subject_type = $3 and normalized_url = $4`,
+            where workspace_id = $1 and brand_id = $2 and subject_type = $3
+              and normalized_url = $4 and generation_id is null`,
           [input.workspaceId, input.brandId, input.subjectType, normalizedUrl],
         );
         const analysisVersion = Number(versionResult.rows[0]?.version ?? 0) + 1;
@@ -398,7 +569,8 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
         const conflictedIdempotency = await client.query(
           `select ${ANALYSIS_COLUMNS}
              from ai_content_subject_analyses
-            where workspace_id = $1 and brand_id = $2 and idempotency_key = $3`,
+            where workspace_id = $1 and brand_id = $2 and idempotency_key = $3
+              and generation_id is null`,
           [input.workspaceId, input.brandId, input.idempotencyKey],
         );
         if (conflictedIdempotency.rowCount) {
@@ -410,7 +582,7 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
           `select ${ANALYSIS_COLUMNS}
              from ai_content_subject_analyses
             where workspace_id = $1 and brand_id = $2 and subject_type = $3
-              and normalized_url = $4 and superseded_at is null
+              and normalized_url = $4 and generation_id is null and superseded_at is null
             limit 1`,
           [input.workspaceId, input.brandId, input.subjectType, normalizedUrl],
         );
@@ -464,7 +636,7 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
             `select *
                from ai_content_subject_analyses
               where superseded_at is null
-                and status in ('extracting', 'researching')
+                and status in ('extracting', 'researching', 'analyzing', 'generating_appeals')
                 and attempt_count >= 3
                 and lease_expires_at is not null and lease_expires_at <= now()
               order by lease_expires_at, created_at, id
@@ -483,7 +655,7 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
         const result = await client.query(SUBJECT_ANALYSIS_CLAIM_SQL, [input.workerId, leaseToken, input.leaseSeconds]);
         if (!result.rowCount) return null;
         const row = result.rows[0] as Record<string, unknown>;
-        return mapAnalysis(row, await loadImages(client, String(row.id))) as SubjectAnalysisClaim;
+        return mapClaim(row, await loadImages(client, String(row.id)));
       });
     },
 
@@ -492,12 +664,13 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
         const locked = await client.query("select * from ai_content_subject_analyses where id = $1 for update", [input.analysisId]);
         const row = locked.rows[0] as Record<string, unknown> | undefined;
         assertActiveLease(row, input, ["extracting"]);
+        const nextStatus = row.contract_version === "subject-analysis.v2" ? "analyzing" : "researching";
         await client.query(
           `update ai_content_subject_analyses
               set facts_json = $2::jsonb, structured_data_json = $3::jsonb,
-                  status = 'researching', error_code = null, error_message = null, updated_at = now()
+                  status = $4, error_code = null, error_message = null, updated_at = now()
             where id = $1`,
-          [input.analysisId, JSON.stringify(input.facts), JSON.stringify(input.structuredData)],
+          [input.analysisId, JSON.stringify(input.facts), JSON.stringify(input.structuredData), nextStatus],
         );
         await client.query("update ai_content_subject_images set deleted_at = now() where analysis_id = $1 and deleted_at is null", [input.analysisId]);
         for (const image of input.images) {
@@ -525,7 +698,7 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
               )`,
           [input.analysisId],
         );
-        return (await loadAnalysis(client, input.analysisId)) as SubjectAnalysisClaim;
+        return loadClaim(client, input.analysisId);
       });
     },
 
@@ -534,7 +707,8 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
         `update ai_content_subject_analyses
             set lease_expires_at = now() + ($4 * interval '1 second'), updated_at = now()
           where id = $1 and leased_by = $2 and lease_token = $3
-            and status in ('extracting', 'researching') and superseded_at is null
+            and status in ('extracting', 'researching', 'analyzing', 'generating_appeals')
+            and superseded_at is null
             and lease_expires_at > now()`,
         [input.analysisId, input.workerId, input.leaseToken, input.leaseSeconds],
       );
@@ -543,6 +717,32 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
 
     async completeSubjectAnalysis(input) {
       const { analysisId: _analysisId, workerId: _workerId, leaseToken: _leaseToken, ...result } = input;
+      if (result.contractVersion === "subject-analysis-result.v2") {
+        const parsed = parseSubjectAnalysisResultV2(result);
+        return inTransaction(pool, async (client) => {
+          const locked = await client.query(
+            "select * from ai_content_subject_analyses where id = $1 for update",
+            [input.analysisId],
+          );
+          const row = locked.rows[0] as Record<string, unknown> | undefined;
+          assertActiveLease(row, input, ["analyzing"]);
+          if (row.contract_version !== "subject-analysis.v2" || row.subject_type !== parsed.subjectType) {
+            throw new Error("subject_analysis_contract_mismatch");
+          }
+          await client.query(
+            `update ai_content_subject_analyses
+                set analysis_result_json = $2::jsonb, status = 'generating_appeals',
+                    leased_by = null, lease_token = null, lease_expires_at = null,
+                    attempt_count = 0, available_at = now(),
+                    error_code = null, error_message = null, completed_at = null,
+                    updated_at = now()
+              where id = $1`,
+            [input.analysisId, JSON.stringify(parsed)],
+          );
+          return (await loadAnalysis(client, input.analysisId))!;
+        });
+      }
+
       const parsed = parseSubjectAnalysisResult(result);
       return inTransaction(pool, async (client) => {
         const locked = await client.query("select * from ai_content_subject_analyses where id = $1 for update", [input.analysisId]);
@@ -581,11 +781,79 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
       });
     },
 
+    async completeSubjectAppeals(input) {
+      const { analysisId: _analysisId, workerId: _workerId, leaseToken: _leaseToken, ...result } = input;
+      const parsed = parseSubjectAppealResultV2(result);
+      return inTransaction(pool, async (client) => {
+        const locked = await client.query(
+          "select * from ai_content_subject_analyses where id = $1 for update",
+          [input.analysisId],
+        );
+        const row = locked.rows[0] as Record<string, unknown> | undefined;
+        assertActiveLease(row, input, ["generating_appeals"]);
+        if (row.contract_version !== "subject-analysis.v2") {
+          throw new Error("subject_analysis_contract_mismatch");
+        }
+        const analysisResult = parseSubjectAnalysisResultV2(jsonObject(row.analysis_result_json));
+        await client.query(
+          `update ai_content_subject_analyses
+              set targets_json = $2::jsonb, appeals_json = $3::jsonb, status = $4,
+                  leased_by = null, lease_token = null, lease_expires_at = null,
+                  error_code = null, error_message = null,
+                  completed_at = coalesce(completed_at, now()), updated_at = now()
+            where id = $1`,
+          [input.analysisId, JSON.stringify(parsed.targets), JSON.stringify(parsed.appealsByTarget),
+            analysisResult.sourceGaps.length ? "partial" : "ready"],
+        );
+        return (await loadAnalysis(client, input.analysisId))!;
+      });
+    },
+
+    async regenerateSubjectAppeals(input) {
+      return inTransaction(pool, async (client) => {
+        const locked = await client.query(
+          `select * from ai_content_subject_analyses
+            where id = $1 and workspace_id = $2 and brand_id = $3
+            for update`,
+          [input.analysisId, input.workspaceId, input.brandId],
+        );
+        const row = locked.rows[0] as Record<string, unknown> | undefined;
+        if (!row || row.contract_version !== "subject-analysis.v2" || row.superseded_at) {
+          throw new Error("subject_analysis_not_found");
+        }
+        if (row.idempotency_key === input.idempotencyKey) {
+          return (await loadAnalysis(client, input.analysisId))!;
+        }
+        if (row.status !== "ready" && row.status !== "partial") {
+          throw new Error("subject_analysis_appeals_regeneration_invalid");
+        }
+        parseSubjectAnalysisResultV2(jsonObject(row.analysis_result_json));
+        const duplicateKey = await client.query(
+          `select id from ai_content_subject_analyses
+            where brand_id = $1 and idempotency_key = $2 and id <> $3`,
+          [input.brandId, input.idempotencyKey, input.analysisId],
+        );
+        if (duplicateKey.rowCount) throw new Error("subject_analysis_idempotency_conflict");
+        await client.query(
+          `update ai_content_subject_analyses
+              set status = 'generating_appeals', idempotency_key = $2,
+                  targets_json = '[]'::jsonb, appeals_json = '{}'::jsonb,
+                  leased_by = null, lease_token = null, lease_expires_at = null,
+                  attempt_count = 0, available_at = now(),
+                  error_code = null, error_message = null, completed_at = null,
+                  updated_at = now()
+            where id = $1`,
+          [input.analysisId, input.idempotencyKey],
+        );
+        return (await loadAnalysis(client, input.analysisId))!;
+      });
+    },
+
     async failSubjectAnalysis(input) {
       return inTransaction(pool, async (client) => {
         const locked = await client.query("select * from ai_content_subject_analyses where id = $1 for update", [input.analysisId]);
         const row = locked.rows[0] as Record<string, unknown> | undefined;
-        assertActiveLease(row, input, ["extracting", "researching"]);
+        assertActiveLease(row, input, ["extracting", "researching", "analyzing", "generating_appeals"]);
         const attemptCount = Number(row.attempt_count);
         const willRetry = input.retryable && attemptCount < 3;
         if (willRetry) {
@@ -596,7 +864,8 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
                     leased_by = null, lease_token = null, lease_expires_at = null,
                     error_code = $4, error_message = $5, updated_at = now()
               where id = $1`,
-            [input.analysisId, row.status === "extracting" ? "queued" : "researching", delaySeconds, input.errorCode, input.errorMessage],
+            [input.analysisId, row.status === "extracting" ? "queued" : row.status,
+              delaySeconds, input.errorCode, input.errorMessage],
           );
           return (await loadAnalysis(client, input.analysisId))!;
         }

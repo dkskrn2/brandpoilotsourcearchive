@@ -8,16 +8,33 @@ const FIRST_ID = "10000000-0000-4000-8000-000000000001";
 const SECOND_ID = "10000000-0000-4000-8000-000000000002";
 const WORKSPACE_ID = "20000000-0000-4000-8000-000000000001";
 const BRAND_ID = "30000000-0000-4000-8000-000000000001";
+const GENERATION_ID = "40000000-0000-4000-8000-000000000001";
+const OTHER_GENERATION_ID = "40000000-0000-4000-8000-000000000002";
 
 async function createSchema(pool: Pool) {
   await pool.query(`
+    create table brands (
+      id uuid primary key,
+      workspace_id uuid not null,
+      unique (id, workspace_id)
+    );
+    create table ai_content_generations (
+      id uuid primary key,
+      workspace_id uuid not null,
+      brand_id uuid not null,
+      unique (id, workspace_id, brand_id)
+    );
     create table ai_content_subject_analyses (
       id uuid primary key,
       workspace_id uuid not null,
       brand_id uuid not null,
       subject_type text not null,
-      source_url text not null,
-      normalized_url text not null,
+      source_url text null,
+      normalized_url text null,
+      generation_id uuid null,
+      contract_version text not null default 'subject-analysis.v1',
+      attachment_ids_json jsonb not null default '[]'::jsonb,
+      analysis_result_json jsonb not null default '{}'::jsonb,
       input_json jsonb not null default '{}'::jsonb,
       status text not null default 'queued',
       facts_json jsonb not null default '[]'::jsonb,
@@ -39,12 +56,17 @@ async function createSchema(pool: Pool) {
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now(),
       completed_at timestamptz null,
-      unique (brand_id, idempotency_key),
-      unique (brand_id, subject_type, normalized_url, analysis_version)
+      unique (brand_id, idempotency_key)
     );
-    create unique index ai_content_subject_active_cache_uq
+    create unique index ai_content_subject_legacy_active_cache_uq
       on ai_content_subject_analyses (brand_id, subject_type, normalized_url)
-      where superseded_at is null;
+      where generation_id is null and superseded_at is null;
+    create unique index ai_content_subject_legacy_version_uq
+      on ai_content_subject_analyses (brand_id, subject_type, normalized_url, analysis_version)
+      where generation_id is null;
+    create unique index ai_content_subject_generation_active_uq
+      on ai_content_subject_analyses (generation_id)
+      where generation_id is not null and superseded_at is null;
     create table ai_content_subject_images (
       id uuid primary key,
       analysis_id uuid not null,
@@ -120,7 +142,13 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")("AiContentSubje
   }, 120_000);
 
   beforeEach(async () => {
-    await pool.query("truncate table ai_content_subject_images, ai_content_subject_analyses");
+    await pool.query("truncate table ai_content_subject_images, ai_content_subject_analyses, ai_content_generations, brands");
+    await pool.query("insert into brands (id, workspace_id) values ($1, $2)", [BRAND_ID, WORKSPACE_ID]);
+    await pool.query(
+      `insert into ai_content_generations (id, workspace_id, brand_id)
+       values ($1, $3, $4), ($2, $3, $4)`,
+      [GENERATION_ID, OTHER_GENERATION_ID, WORKSPACE_ID, BRAND_ID],
+    );
     await seedClaimableRows(pool);
   });
 
@@ -165,5 +193,27 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")("AiContentSubje
     expect(secondClaim).not.toBeNull();
     expect(firstClaim?.id).not.toBe(secondClaim?.id);
     expect(new Set([firstClaim?.id, secondClaim?.id])).toEqual(new Set([FIRST_ID, SECOND_ID]));
+  });
+
+  it("stores the same URL independently for concurrent generation-scoped requests", async () => {
+    await pool.query("truncate table ai_content_subject_images, ai_content_subject_analyses");
+    const repository = createAiContentSubjectRepository(pool);
+    const input = {
+      workspaceId: WORKSPACE_ID,
+      brandId: BRAND_ID,
+      subjectType: "product" as const,
+      sourceUrl: "https://example.com/product",
+      attachmentIds: [],
+      manualInput: { name: "Product", promotionOrTerms: "", description: "Description" },
+    };
+
+    const [first, second] = await Promise.all([
+      repository.requestSubjectAnalysis({ ...input, generationId: GENERATION_ID, idempotencyKey: "generation-1" }),
+      repository.requestSubjectAnalysis({ ...input, generationId: OTHER_GENERATION_ID, idempotencyKey: "generation-2" }),
+    ]);
+
+    expect(first.id).not.toBe(second.id);
+    expect(new Set([first.generationId, second.generationId]))
+      .toEqual(new Set([GENERATION_ID, OTHER_GENERATION_ID]));
   });
 });

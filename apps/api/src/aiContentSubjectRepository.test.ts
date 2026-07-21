@@ -8,7 +8,11 @@ import {
   type SubjectAnalysisClaim,
   type SubjectAnalysisRepository,
 } from "./aiContentSubjectRepository.js";
-import type { SubjectAnalysisResultV1 } from "./aiContentSubjectContracts.js";
+import type {
+  SubjectAnalysisResultV1,
+  SubjectAnalysisResultV2,
+  SubjectAppealResultV2,
+} from "./aiContentSubjectContracts.js";
 
 type QueryResult = { rowCount: number; rows: Record<string, unknown>[] };
 
@@ -54,15 +58,26 @@ async function createSchema(database: PGlite) {
   await database.exec(`
     create table brands (
       id uuid primary key,
-      workspace_id uuid not null
+      workspace_id uuid not null,
+      unique (id, workspace_id)
+    );
+    create table ai_content_generations (
+      id uuid primary key,
+      workspace_id uuid not null,
+      brand_id uuid not null,
+      unique (id, workspace_id, brand_id)
     );
     create table ai_content_subject_analyses (
       id uuid primary key,
       workspace_id uuid not null,
       brand_id uuid not null,
       subject_type text not null,
-      source_url text not null,
-      normalized_url text not null,
+      source_url text null,
+      normalized_url text null,
+      generation_id uuid null,
+      contract_version text not null default 'subject-analysis.v1',
+      attachment_ids_json jsonb not null default '[]'::jsonb,
+      analysis_result_json jsonb not null default '{}'::jsonb,
       input_json jsonb not null default '{}'::jsonb,
       status text not null default 'queued',
       facts_json jsonb not null default '[]'::jsonb,
@@ -84,12 +99,17 @@ async function createSchema(database: PGlite) {
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now(),
       completed_at timestamptz null,
-      unique (brand_id, idempotency_key),
-      unique (brand_id, subject_type, normalized_url, analysis_version)
+      unique (brand_id, idempotency_key)
     );
-    create unique index ai_content_subject_active_cache_uq
+    create unique index ai_content_subject_legacy_active_cache_uq
       on ai_content_subject_analyses (brand_id, subject_type, normalized_url)
-      where superseded_at is null;
+      where generation_id is null and superseded_at is null;
+    create unique index ai_content_subject_legacy_version_uq
+      on ai_content_subject_analyses (brand_id, subject_type, normalized_url, analysis_version)
+      where generation_id is null;
+    create unique index ai_content_subject_generation_active_uq
+      on ai_content_subject_analyses (generation_id)
+      where generation_id is not null and superseded_at is null;
     create table ai_content_subject_images (
       id uuid primary key,
       analysis_id uuid not null,
@@ -115,6 +135,9 @@ const workspaceId = "10000000-0000-4000-8000-000000000001";
 const otherWorkspaceId = "10000000-0000-4000-8000-000000000002";
 const brandId = "20000000-0000-4000-8000-000000000001";
 const otherBrandId = "20000000-0000-4000-8000-000000000002";
+const generationId = "50000000-0000-4000-8000-000000000001";
+const otherGenerationId = "50000000-0000-4000-8000-000000000002";
+const attachmentId = "60000000-0000-4000-8000-000000000001";
 
 function request(overrides: Record<string, unknown> = {}) {
   return {
@@ -125,6 +148,20 @@ function request(overrides: Record<string, unknown> = {}) {
     manualInput: { name: "Widget", promotion: "", description: "A useful widget" },
     idempotencyKey: "request-1",
     force: false,
+    ...overrides,
+  };
+}
+
+function pipelineRequest(overrides: Record<string, unknown> = {}) {
+  return {
+    workspaceId,
+    brandId,
+    generationId,
+    subjectType: "product" as const,
+    sourceUrl: "https://example.com/products/widget",
+    attachmentIds: [attachmentId],
+    manualInput: { name: "Widget", promotionOrTerms: "10% off", description: "A useful widget" },
+    idempotencyKey: "pipeline-request-1",
     ...overrides,
   };
 }
@@ -177,6 +214,52 @@ function result(recommendedImageId: string | null = null, sourceGaps: string[] =
   };
 }
 
+function analysisResultV2(sourceGaps: string[] = []): SubjectAnalysisResultV2 {
+  return {
+    contractVersion: "subject-analysis-result.v2",
+    phase: "analysis",
+    subjectType: "product",
+    summary: "Widget analysis",
+    verifiedFacts: [{
+      claim: "Fast setup",
+      support: "The product guide documents a five minute setup.",
+      sourceUrl: `attachment://${attachmentId}`,
+    }],
+    voc: [],
+    alternatives: [],
+    barriers: [{ barrier: "Setup time", evidence: "Buyers compare setup effort.", sourceUrls: [] }],
+    productProfile: { category: "Productivity" },
+    serviceProfile: null,
+    serviceSubtype: null,
+    sourceGaps,
+  };
+}
+
+function appealResultV2(): SubjectAppealResultV2 {
+  const targets = [1, 2, 3].map((index) => ({
+    id: `pipeline-target-${index}`,
+    name: `Pipeline Target ${index}`,
+    traits: ["practical"],
+    painPoints: ["slow setup"],
+    purchaseMotivations: ["save time"],
+    uspEvidence: [{ claim: "Fast", support: "Documented setup", sourceUrl: "https://example.com/evidence" }],
+  })) as SubjectAppealResultV2["targets"];
+  return {
+    contractVersion: "subject-appeal-result.v2",
+    phase: "appeal",
+    targets,
+    appealsByTarget: Object.fromEntries(targets.map((target) => [target.id, [1, 2].map((index) => ({
+      id: `appeal-${target.id}-${index}`,
+      targetId: target.id,
+      title: `Save time ${index}`,
+      description: "Reduce setup work",
+      evidenceType: "product_fact" as const,
+      connectionReason: "Matches the target need",
+      sources: [{ title: "Guide", url: "https://example.com/guide" }],
+    }))])),
+  };
+}
+
 function lease(claim: SubjectAnalysisClaim) {
   return { analysisId: claim.id, workerId: claim.leasedBy!, leaseToken: claim.leaseToken! };
 }
@@ -189,8 +272,13 @@ describe("createAiContentSubjectRepository", () => {
     database = await PGlite.create();
     await createSchema(database);
     await database.query("insert into brands (id, workspace_id) values ($1, $2)", [brandId, workspaceId]);
+    await database.query(
+      `insert into ai_content_generations (id, workspace_id, brand_id)
+       values ($1, $3, $4), ($2, $3, $4)`,
+      [generationId, otherGenerationId, workspaceId, brandId],
+    );
     repository = createAiContentSubjectRepository(pglitePool(database));
-  });
+  }, 30_000);
 
   afterEach(async () => database.close());
 
@@ -506,4 +594,161 @@ describe("createAiContentSubjectRepository", () => {
     expect(versions.find((row) => row.id === first.id)?.superseded_at).toBeNull();
     expect(versions.find((row) => row.id === forced.id)?.superseded_at).not.toBeNull();
   });
+
+  it("runs a v2 analysis through extraction, analysis, and appeal phases", async () => {
+    const queued = await repository.requestSubjectAnalysis(pipelineRequest());
+    expect(queued).toMatchObject({
+      generationId,
+      contractVersion: "subject-analysis.v2",
+      attachmentIds: [attachmentId],
+      status: "queued",
+      analysisResult: null,
+    });
+
+    const extractionClaim = (await repository.claimSubjectAnalysis({ workerId: "analysis-worker", leaseSeconds: 60 }))!;
+    expect(extractionClaim).toMatchObject({ id: queued.id, status: "extracting", phase: "analysis" });
+
+    const analyzing = await repository.markSubjectExtractionComplete({
+      ...lease(extractionClaim),
+      facts: [],
+      structuredData: {},
+      images: [],
+    });
+    expect(analyzing).toMatchObject({ status: "analyzing", phase: "analysis" });
+
+    const appealQueued = await repository.completeSubjectAnalysis({
+      ...lease(extractionClaim),
+      ...analysisResultV2(),
+    });
+    expect(appealQueued).toMatchObject({
+      status: "generating_appeals",
+      analysisResult: analysisResultV2(),
+      attemptCount: 0,
+      leasedBy: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+    });
+
+    const appealClaim = (await repository.claimSubjectAnalysis({ workerId: "appeal-worker", leaseSeconds: 60 }))!;
+    expect(appealClaim).toMatchObject({ id: queued.id, status: "generating_appeals", phase: "appeal" });
+
+    const completed = await repository.completeSubjectAppeals({ ...lease(appealClaim), ...appealResultV2() });
+    expect(completed).toMatchObject({
+      status: "ready",
+      targets: appealResultV2().targets,
+      appealsByTarget: appealResultV2().appealsByTarget,
+      analysisResult: analysisResultV2(),
+    });
+  });
+
+  it("returns the same v2 row for the same generation and idempotency key", async () => {
+    const first = await repository.requestSubjectAnalysis(pipelineRequest());
+    const duplicate = await repository.requestSubjectAnalysis(pipelineRequest());
+
+    expect(duplicate.id).toBe(first.id);
+    const count = await database.query(
+      "select count(*)::int as count from ai_content_subject_analyses where generation_id = $1",
+      [generationId],
+    );
+    expect((count.rows[0] as { count: number }).count).toBe(1);
+  });
+
+  it("creates separate v2 rows for the same URL in different generations", async () => {
+    const first = await repository.requestSubjectAnalysis(pipelineRequest());
+    const second = await repository.requestSubjectAnalysis(pipelineRequest({
+      generationId: otherGenerationId,
+      idempotencyKey: "pipeline-request-2",
+    }));
+
+    expect(second.id).not.toBe(first.id);
+    expect(second.generationId).toBe(otherGenerationId);
+  });
+
+  it("supersedes the active v2 row when the subject type or input changes", async () => {
+    const first = await repository.requestSubjectAnalysis(pipelineRequest());
+    const changed = await repository.requestSubjectAnalysis(pipelineRequest({
+      subjectType: "service",
+      sourceUrl: null,
+      attachmentIds: [],
+      manualInput: { name: "Widget setup", promotionOrTerms: "Monthly", description: "Managed onboarding" },
+      idempotencyKey: "pipeline-request-changed",
+    }));
+
+    expect(changed).toMatchObject({ generationId, subjectType: "service", analysisVersion: 2 });
+    expect(changed.id).not.toBe(first.id);
+    const prior = await repository.getSubjectAnalysis({ workspaceId, brandId, analysisId: first.id });
+    expect(prior?.supersededAt).not.toBeNull();
+  });
+
+  it("preserves the analysis result when a retryable appeal failure is requeued", async () => {
+    await repository.requestSubjectAnalysis(pipelineRequest());
+    const analysisClaim = (await repository.claimSubjectAnalysis({ workerId: "analysis-worker", leaseSeconds: 60 }))!;
+    await repository.markSubjectExtractionComplete({ ...lease(analysisClaim), facts: [], structuredData: {}, images: [] });
+    await repository.completeSubjectAnalysis({ ...lease(analysisClaim), ...analysisResultV2() });
+    const appealClaim = (await repository.claimSubjectAnalysis({ workerId: "appeal-worker", leaseSeconds: 60 }))!;
+
+    const failed = await repository.failSubjectAnalysis({
+      ...lease(appealClaim),
+      errorCode: "codex_timeout",
+      errorMessage: "temporary",
+      retryable: true,
+    });
+
+    expect(failed).toMatchObject({
+      status: "generating_appeals",
+      analysisResult: analysisResultV2(),
+      leasedBy: null,
+      leaseToken: null,
+    });
+  });
+
+  it.each([
+    { expectedStatus: "ready" as const, sourceGaps: [] },
+    { expectedStatus: "partial" as const, sourceGaps: ["pricing not verified"] },
+  ])("completes v2 appeals as $expectedStatus", async ({ expectedStatus, sourceGaps }) => {
+    await repository.requestSubjectAnalysis(pipelineRequest());
+    const analysisClaim = (await repository.claimSubjectAnalysis({ workerId: "analysis-worker", leaseSeconds: 60 }))!;
+    await repository.markSubjectExtractionComplete({ ...lease(analysisClaim), facts: [], structuredData: {}, images: [] });
+    await repository.completeSubjectAnalysis({ ...lease(analysisClaim), ...analysisResultV2(sourceGaps) });
+    const appealClaim = (await repository.claimSubjectAnalysis({ workerId: "appeal-worker", leaseSeconds: 60 }))!;
+
+    const completed = await repository.completeSubjectAppeals({ ...lease(appealClaim), ...appealResultV2() });
+    expect(completed.status).toBe(expectedStatus);
+  });
+
+  it.each(["ready", "partial"] as const)(
+    "regenerates appeals from %s once per idempotency key while preserving analysis",
+    async (terminalStatus) => {
+      await repository.requestSubjectAnalysis(pipelineRequest());
+      const analysisClaim = (await repository.claimSubjectAnalysis({ workerId: "analysis-worker", leaseSeconds: 60 }))!;
+      await repository.markSubjectExtractionComplete({ ...lease(analysisClaim), facts: [], structuredData: {}, images: [] });
+      const savedAnalysis = analysisResultV2(terminalStatus === "partial" ? ["pricing not verified"] : []);
+      await repository.completeSubjectAnalysis({ ...lease(analysisClaim), ...savedAnalysis });
+      const appealClaim = (await repository.claimSubjectAnalysis({ workerId: "appeal-worker", leaseSeconds: 60 }))!;
+      const completed = await repository.completeSubjectAppeals({ ...lease(appealClaim), ...appealResultV2() });
+      expect(completed.status).toBe(terminalStatus);
+
+      const regenerated = await repository.regenerateSubjectAppeals({
+        workspaceId,
+        brandId,
+        analysisId: completed.id,
+        idempotencyKey: "appeal-regeneration-1",
+      });
+      const duplicate = await repository.regenerateSubjectAppeals({
+        workspaceId,
+        brandId,
+        analysisId: completed.id,
+        idempotencyKey: "appeal-regeneration-1",
+      });
+
+      expect(regenerated).toMatchObject({
+        status: "generating_appeals",
+        analysisResult: savedAnalysis,
+        attemptCount: 0,
+        leasedBy: null,
+      });
+      expect(duplicate.id).toBe(regenerated.id);
+      expect(duplicate.updatedAt).toBe(regenerated.updatedAt);
+    },
+  );
 });
