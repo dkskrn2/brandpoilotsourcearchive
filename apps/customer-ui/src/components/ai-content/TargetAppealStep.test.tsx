@@ -188,4 +188,21 @@ describe("TargetAppealStep", () => {
       appealsByTarget: regenerated.appealsByTarget,
     }));
   });
+
+  it("does not offer server regeneration for a manually added target", async () => {
+    const analysis = await analysisFixture();
+    const customTarget = { id: "custom-target-1", name: "직접 타깃", traits: [], painPoints: ["직접 문제"], purchaseMotivations: [], uspEvidence: [] };
+    renderStep({
+      analysis,
+      draft: {
+        ...selectedDraft(analysis),
+        selectedTarget: customTarget,
+        selectedAppeal: null,
+        appealOverridesByTarget: { [customTarget.id]: [] },
+      },
+    });
+
+    expect(screen.queryByRole("button", { name: "소구점 다시 만들기" })).not.toBeInTheDocument();
+    expect(screen.getByText("직접 타깃의 소구점")).toBeVisible();
+  });
 });
