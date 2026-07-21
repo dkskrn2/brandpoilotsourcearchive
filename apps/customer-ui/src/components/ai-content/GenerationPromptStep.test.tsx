@@ -25,5 +25,7 @@ describe("GenerationPromptStep", () => {
     await user.click(screen.getByRole("button", { name: "첫 지시 전체 적용" }));
     expect(onBrief).toHaveBeenLastCalledWith(expect.objectContaining({ outputDirections: ["문제 상황을 먼저 보여 주세요", "문제 상황을 먼저 보여 주세요", "문제 상황을 먼저 보여 주세요"] }));
     expect(screen.getByLabelText("브랜드 대표 색상")).toHaveValue("#0057b8");
+    expect(screen.getByRole("option", { name: "16:9" })).toBeInTheDocument();
+    expect(screen.queryByText("문서")).not.toBeInTheDocument();
   });
 });
