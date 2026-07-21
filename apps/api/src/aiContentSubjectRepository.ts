@@ -786,7 +786,7 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
             .filter((value): value is string => typeof value === "string");
           const persistedResult = {
             ...parsed,
-            sourceGaps: [...new Set([...extractionGaps, ...parsed.sourceGaps])],
+            sourceGaps: [...new Set([...extractionGaps, ...parsed.sourceGaps])].slice(0, 50),
           };
           await client.query(
             `update ai_content_subject_analyses

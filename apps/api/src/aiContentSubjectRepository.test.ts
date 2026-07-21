@@ -686,6 +686,28 @@ describe("createAiContentSubjectRepository", () => {
     });
   });
 
+  it("caps merged extraction and analysis source gaps at the v2 contract limit", async () => {
+    await repository.requestSubjectAnalysis(pipelineRequest());
+    const claim = (await repository.claimSubjectAnalysis({ workerId: "analysis-worker", leaseSeconds: 60 }))!;
+    const extractionGaps = Array.from({ length: 30 }, (_, index) => `extraction gap ${index + 1}`);
+    const analysisGaps = Array.from({ length: 30 }, (_, index) => `analysis gap ${index + 1}`);
+
+    await repository.markSubjectExtractionComplete({
+      ...lease(claim),
+      facts: [],
+      structuredData: {},
+      images: [],
+      sourceGaps: extractionGaps,
+    });
+    const queued = await repository.completeSubjectAnalysis({
+      ...lease(claim),
+      ...analysisResultV2(analysisGaps),
+    });
+
+    expect(queued.analysisResult?.sourceGaps).toHaveLength(50);
+    expect(queued.analysisResult?.sourceGaps).toEqual([...extractionGaps, ...analysisGaps].slice(0, 50));
+  });
+
   it.each([
     ["subject mismatch", { ...analysisResultV2(), subjectType: "service", productProfile: null, serviceProfile: {}, serviceSubtype: "other_service" }],
     ["foreign attachment", {
