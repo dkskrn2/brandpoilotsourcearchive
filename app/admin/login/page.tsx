@@ -16,6 +16,7 @@ export default async function AdminLoginPage({ searchParams }: { searchParams: P
   const { error, next } = await searchParams;
   const nextPath = typeof next === "string" ? next : "/admin";
   const configured = isAdminConfigured();
+  const configuredUsername = process.env.ADMIN_USERNAME?.trim() ?? "";
 
   return (
     <main className="admin-login-page">
@@ -37,7 +38,7 @@ export default async function AdminLoginPage({ searchParams }: { searchParams: P
           <input type="hidden" name="next" value={nextPath} />
           <label>
             <span>아이디</span>
-            <input name="username" autoComplete="username" required defaultValue="ROOT" disabled={!configured} />
+            <input name="username" autoComplete="username" required defaultValue={configuredUsername} disabled={!configured} />
           </label>
           <label>
             <span>비밀번호</span>
