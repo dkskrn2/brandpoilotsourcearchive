@@ -343,10 +343,11 @@ export function parseImageRenderJobResult(
     const cards = rawCards.map((card, index) => parsePngAsset(
       card,
       index + 1,
-      1080,
-      1080,
+      null,
+      null,
       asRecord(rawSlides[index])?.role
     ));
+    if (cards.some((card) => card.width !== card.height)) invalid("image_asset_dimensions_invalid");
     assertUniqueRoles(cards);
     if (common.selectedAssetCount !== cards.length) invalid("selected_asset_count_mismatch");
     const caption = resultText(record, "caption");

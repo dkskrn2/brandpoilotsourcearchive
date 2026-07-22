@@ -4,11 +4,12 @@ interface SwitchProps {
   defaultChecked?: boolean;
   onChange?: (checked: boolean) => void;
   disabled?: boolean;
+  indeterminate?: boolean;
 }
 
-export function Switch({ label, checked, defaultChecked = false, onChange, disabled = false }: SwitchProps) {
+export function Switch({ label, checked, defaultChecked = false, onChange, disabled = false, indeterminate = false }: SwitchProps) {
   return (
-    <label className="switch" aria-label={label}>
+    <label className="switch" aria-label={label} data-state={indeterminate ? "mixed" : checked ? "on" : "off"}>
       <input
         role="switch"
         type="checkbox"

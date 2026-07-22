@@ -26,16 +26,17 @@ export function brandPolicyDateKey(now: Date, timeZone: string) {
 }
 
 export function determineGenerationReadiness(
-  connectedChannels: readonly Channel[],
+  enabledChannels: readonly Channel[],
   enabledInstagramFormats: readonly InstagramDeliveryFormat[],
   lastSelectedInstagramFormat: InstagramDeliveryFormat | null
 ): GenerationReadiness {
-  const connected = new Set(connectedChannels);
-  const threads = connected.has("threads");
-  const instagramFormat = connected.has("instagram")
+  const enabled = new Set(enabledChannels);
+  const threads = enabled.has("threads");
+  const instagramFormat = enabled.has("instagram")
     ? chooseNextInstagramFormat(enabledInstagramFormats, lastSelectedInstagramFormat)
     : null;
-  return { threads, instagramFormat, canProduce: threads || instagramFormat !== null };
+  const hasNonInstagramChannel = enabledChannels.some((channel) => channel !== "instagram");
+  return { threads, instagramFormat, canProduce: hasNonInstagramChannel || instagramFormat !== null };
 }
 
 export async function runDailyTopicGeneration(

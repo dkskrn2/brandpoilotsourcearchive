@@ -18,6 +18,7 @@ import {
   type WorkerPromptVersion
 } from "./promptBuilder.js";
 import { readRepresentativeSource, type SourceReadResult } from "./sourceReader.js";
+import { requireQualityBrief } from "./qualityBrief.js";
 
 export interface RenderedImage {
   index: number;
@@ -190,7 +191,7 @@ function validateRenderedImages(
 }
 
 function isRetryableImageRenderError(error: unknown, message: string) {
-  return error instanceof WorkerManifestValidationError || /^(codex_image_|image_render_(?:command|content|output)|image_manifest_|image_asset_|asset_|story_asset_|delivery_format_mismatch|prompt_version_mismatch|worker_api_failed:5|blob_upload_failed|image_provider_rate_limited|ffprobe_|reel_|invalid_reel_)/.test(message);
+  return error instanceof WorkerManifestValidationError || /^(codex_image_|image_render_(?:command|content|output)|image_manifest_|image_asset_|asset_|story_asset_|delivery_format_mismatch|prompt_version_mismatch|worker_api_failed:5|blob_upload_failed|image_provider_rate_limited|ffprobe_|reel_|invalid_reel_|content_quality_)/.test(message);
 }
 
 function startHeartbeat({
@@ -276,6 +277,7 @@ export async function runOnce({
     };
     const rendered = await renderer.renderJob(preparedJob);
     const manifest = parseWorkerManifest(rendered.manifest, { maxImages });
+    requireQualityBrief(manifest.qualityBrief);
     const expectedFormat = formatFor(job);
     if (manifest.deliveryFormat !== expectedFormat.deliveryFormat) throw new Error("delivery_format_mismatch");
     if (manifest.promptVersion !== expectedFormat.promptVersion) throw new Error("prompt_version_mismatch");

@@ -17,4 +17,13 @@ describe("formatInstagramCaption", () => {
       ["#브랜딩", "#콘텐츠마케팅", "#사업성장"]
     )).toThrow("instagram_caption_prohibited_cta");
   });
+
+  it("publishes a valid single-paragraph AI caption instead of rejecting the carousel", () => {
+    expect(formatInstagramCaption(
+      "브랜드 자료를 일관된 발행 흐름으로 연결합니다.",
+      ["#Growthline", "#마케팅통합솔루션", "#브랜드콘텐츠", "#콘텐츠운영", "#브랜드전략"]
+    )).toBe(
+      "브랜드 자료를 일관된 발행 흐름으로 연결합니다.\n\n#Growthline #마케팅통합솔루션 #브랜드콘텐츠 #콘텐츠운영 #브랜드전략"
+    );
+  });
 });

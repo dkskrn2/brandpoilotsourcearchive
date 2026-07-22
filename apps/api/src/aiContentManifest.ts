@@ -88,7 +88,7 @@ function parseAsset(value: unknown): AiContentAsset {
   }
 
   const role = source.role;
-  if (!(["slide", "cover", "html", "creative"] as unknown[]).includes(role)) {
+  if (!(["slide", "cover", "inline", "html", "creative"] as unknown[]).includes(role)) {
     fail("ai_content_asset_role_invalid");
   }
   const mimeType = source.mimeType;
@@ -146,6 +146,14 @@ function validateBlogHtml(html: string): void {
   if ((html.match(/<h1\b/gi) ?? []).length !== 1) fail("ai_content_blog_html_h1_count_invalid");
 }
 
+function blogImageAttributes(html: string): Array<{ src: string; alt: string }> {
+  return (html.match(/<img\b[^>]*>/gi) ?? []).map((tag) => {
+    const src = tag.match(/\bsrc\s*=\s*(["'])(.*?)\1/i)?.[2] ?? "";
+    const alt = tag.match(/\balt\s*=\s*(["'])(.*?)\1/i)?.[2] ?? "";
+    return { src: decodeHtmlCharacterReferences(src).trim(), alt: decodeHtmlCharacterReferences(alt).trim() };
+  });
+}
+
 function parseBlogContent(value: unknown): BlogContent {
   const source = object(value, "ai_content_blog_content_invalid");
   const html = text(source.html, "ai_content_blog_html_invalid");
@@ -187,7 +195,12 @@ export function parseAiContentManifest(
     for (const asset of assets) {
       if (asset.role !== "slide") fail("ai_content_card_news_slide_role_invalid");
       if (asset.mimeType !== "image/png") fail("ai_content_card_news_mime_type_invalid");
-      if (asset.width === undefined || asset.height === undefined || asset.width !== asset.height) {
+      if (
+        asset.width === undefined
+        || asset.height === undefined
+        || (requestedDimensions !== undefined
+          && asset.width * requestedDimensions.height !== asset.height * requestedDimensions.width)
+      ) {
         fail("ai_content_card_news_dimensions_invalid");
       }
     }
@@ -196,21 +209,38 @@ export function parseAiContentManifest(
 
   if (type === "blog") {
     const coverAssets = assets.filter((asset) => asset.role === "cover" && asset.mimeType === "image/png");
+    const inlineAssets = assets.filter((asset) => asset.role === "inline" && asset.mimeType === "image/png");
     const htmlAssets = assets.filter((asset) => asset.role === "html" && asset.mimeType === "text/html");
     if (coverAssets.length !== 1) fail("ai_content_blog_cover_asset_required");
     if (htmlAssets.length !== 1) fail("ai_content_blog_html_asset_required");
-    if (assets.length !== 2) fail("ai_content_blog_asset_count_invalid");
-    if (coverAssets[0].width === undefined || coverAssets[0].height === undefined) {
+    if (inlineAssets.length > 5) fail("ai_content_blog_inline_asset_count_invalid");
+    if (assets.length !== inlineAssets.length + 2) fail("ai_content_blog_asset_count_invalid");
+    if (coverAssets[0].width !== 1200 || coverAssets[0].height !== 630) {
       fail("ai_content_blog_cover_dimensions_invalid");
     }
-    return { version: "ai-content.v1", type, title, assets, content: parseBlogContent(source.content) };
+    for (const [index, asset] of inlineAssets.entries()) {
+      if (asset.width !== 1200 || asset.height !== 800) fail("ai_content_blog_inline_dimensions_invalid");
+      if (asset.fileName !== `inline-${String(index + 1).padStart(2, "0")}.png`) {
+        fail("ai_content_blog_inline_asset_sequence_invalid");
+      }
+    }
+    const content = parseBlogContent(source.content);
+    const images = blogImageAttributes(content.html);
+    for (const asset of inlineAssets) {
+      const image = images.find((candidate) => candidate.src === asset.url);
+      if (!image) fail("ai_content_blog_inline_asset_not_referenced");
+      if (image.alt.length < 4 || !/[가-힣]/.test(image.alt)) fail("ai_content_blog_inline_asset_alt_invalid");
+    }
+    return { version: "ai-content.v1", type, title, assets, content };
   }
 
   if (assets.length !== 1 || assets[0].role !== "creative" || assets[0].mimeType !== "image/png") {
     fail("ai_content_marketing_asset_invalid");
   }
-  if (!requestedDimensions) fail("ai_content_marketing_dimensions_required");
-  if (assets[0].width !== requestedDimensions.width || assets[0].height !== requestedDimensions.height) {
+  if (assets[0].width === undefined || assets[0].height === undefined) {
+    fail("ai_content_marketing_dimensions_required");
+  }
+  if (requestedDimensions && (assets[0].width !== requestedDimensions.width || assets[0].height !== requestedDimensions.height)) {
     fail("ai_content_marketing_dimensions_mismatch");
   }
   return { version: "ai-content.v1", type, title, assets, content: parseMarketingContent(source.content) };

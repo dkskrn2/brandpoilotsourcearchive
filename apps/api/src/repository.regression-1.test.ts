@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { encryptCredential } from "./credentialCrypto";
 import { MetaGraphRequestError } from "./metaGraph";
-import { createRepository } from "./repository";
+import { InstagramPublishStageError } from "./instagramPublisher";
+import { createRepository, fetchInstagramImageManifest } from "./repository";
 
 function fakePoolWithClient(query: ReturnType<typeof vi.fn>) {
   return {
@@ -18,6 +19,29 @@ function connectedInstagram() {
 }
 
 describe("repository regressions", () => {
+  it("keeps all three carousel slides after a newly uploaded manifest becomes readable", async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(new Response("not ready", { status: 404 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        assets: [
+          { url: "https://cdn.example.com/slide-1.png", mimeType: "image/png" },
+          { url: "https://cdn.example.com/slide-2.png", mimeType: "image/png" },
+          { url: "https://cdn.example.com/slide-3.png", mimeType: "image/png" },
+        ],
+      }), { status: 200 }));
+    const sleep = vi.fn(async () => undefined);
+
+    await expect(fetchInstagramImageManifest("https://cdn.example.com/manifest.json", fetchImpl as any, { sleep }))
+      .resolves.toMatchObject({
+        assets: [
+          expect.objectContaining({ url: "https://cdn.example.com/slide-1.png" }),
+          expect.objectContaining({ url: "https://cdn.example.com/slide-2.png" }),
+          expect.objectContaining({ url: "https://cdn.example.com/slide-3.png" }),
+        ],
+      });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
   it("counts only active review lifecycle outputs in the sidebar", async () => {
     let statusQuery = "";
     const query = vi.fn(async (sql: string) => {
@@ -282,6 +306,7 @@ describe("repository regressions", () => {
       rows: [{
         brand_id: "brand-1",
         brand_name: "Brand",
+        active_brand_analysis_id: "analysis-1",
         primary_category_id: "category-1",
         primary_customer: "가족 여행자",
         description: "여행 상담",
@@ -305,6 +330,7 @@ describe("repository regressions", () => {
 
     expect(status.onboarding.remainingCount).toBe(0);
     expect(status.onboarding.steps.find((step) => step.id === "owned-url")?.status).toBe("pending");
+    expect(status.onboarding.steps.find((step) => step.id === "owned-url")?.path).toBe("/brand-settings");
     expect(status.onboarding.steps.find((step) => step.id === "threads")?.status).toBe("pending");
   });
 
@@ -314,6 +340,7 @@ describe("repository regressions", () => {
       rows: [{
         brand_id: "brand-1",
         brand_name: "Brand",
+        active_brand_analysis_id: "analysis-1",
         primary_category_id: "category-1",
         primary_customer: "가족 여행자",
         description: "여행 상담",
@@ -336,6 +363,38 @@ describe("repository regressions", () => {
     const status = await repository.getBrandUiStatus("brand-1");
 
     expect(status.onboarding.steps.find((step) => step.id === "brand-profile")?.status).toBe("completed");
+  });
+
+  it("keeps brand setup incomplete when profile text exists without an active analysis", async () => {
+    const query = vi.fn(async () => ({
+      rowCount: 1,
+      rows: [{
+        brand_id: "brand-1",
+        brand_name: "Brand",
+        active_brand_analysis_id: null,
+        primary_category_id: "category-1",
+        primary_customer: "가족 여행자",
+        description: "여행 상담",
+        tone: "전문가",
+        auto_approval_enabled: true,
+        owned_source_count: "1",
+        reference_source_count: "1",
+        topic_row_count: "1",
+        instagram_status: "connected",
+        threads_status: "connected",
+        content_output_count: "1",
+        content_review_count: "0",
+        publish_issue_count: "0",
+        channel_issue_count: "0",
+        last_generated_at: null
+      }]
+    }));
+    const repository = createRepository({ query } as any);
+
+    const status = await repository.getBrandUiStatus("brand-1");
+
+    expect(status.onboarding.steps.find((step) => step.id === "brand-profile")?.status).toBe("needs_attention");
+    expect(status.onboarding.remainingCount).toBe(1);
   });
 
   it("keeps Instagram generating until the image worker artifact exists", async () => {
@@ -413,10 +472,8 @@ describe("repository regressions", () => {
 
     expect(outputStatuses).toEqual(["generating"]);
     expect(queueInserts).toHaveLength(0);
-    expect(query).toHaveBeenCalledWith(
-      expect.stringContaining("insert into jobs"),
-      expect.arrayContaining(["instagram_feed_render"])
-    );
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("insert into ai_content_generation_jobs"))).toBe(true);
+    expect(query.mock.calls.some(([sql, values]) => String(sql).includes("insert into jobs") && Array.isArray(values) && values.includes("instagram_feed_render"))).toBe(false);
   });
 
   it("dispatches repository publication by the channel output delivery format and manifest", async () => {
@@ -495,6 +552,36 @@ describe("repository regressions", () => {
     expect(failureUpdates[0]?.sql).toContain("error_code = $3");
     expect(failureUpdates[0]?.sql).toContain("then 'scheduled'");
     expect(failureUpdates[0]?.values).toEqual(expect.arrayContaining(["meta_rate_limited", true]));
+  });
+
+  it("stores non-sensitive Instagram publish stage metadata", async () => {
+    const failureUpdates: Array<{ sql: string; values?: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      if (sql.includes("from publish_queue pq") && sql.includes("join channel_outputs")) {
+        return { rowCount: 1, rows: [{
+          id: "queue-1", workspace_id: "workspace-1", brand_id: "brand-1", channel: "instagram",
+          channel_output_id: "output-1", delivery_format: "instagram_feed_carousel",
+          output_json: { caption: "첫 문단입니다.\n\n둘째 문단입니다.", hashtags: ["#하나", "#둘", "#셋", "#넷", "#다섯"] },
+          rendered_manifest_url: "https://cdn.example.com/manifest.json", external_account_id: "account-1",
+          encrypted_payload: encryptCredential("meta-token"), credential_id: "credential-1", attempt_id: "attempt-1",
+        }] };
+      }
+      if (sql.includes("failed_attempt")) failureUpdates.push({ sql, values });
+      return { rowCount: 1, rows: [] };
+    });
+    const repository = createRepository({ query } as any, {
+      instagramPublish: { enabled: true },
+      fetchInstagramImageManifest: async () => ({ assets: [{ url: "https://cdn.example.com/slide.png", mimeType: "image/png" }] }),
+      publishInstagramOutput: async () => {
+        throw new InstagramPublishStageError("child_container_create", new MetaGraphRequestError({ status: 400, code: 100, subcode: 2207001 }));
+      },
+    } as any);
+
+    await expect(repository.publishQueueItem("queue-1")).rejects.toThrow("instagram_publish_stage_failed:child_container_create");
+    expect(failureUpdates[0]?.values).toContainEqual(JSON.stringify({
+      stage: "child_container_create", httpStatus: 400, metaCode: 100, metaSubcode: 2207001, retryable: false,
+    }));
+    expect(JSON.stringify(failureUpdates)).not.toContain("meta-token");
   });
 
   it("marks the brand channel needs_attention for token failures without leaking provider details", async () => {

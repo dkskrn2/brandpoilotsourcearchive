@@ -62,6 +62,9 @@ test("restores a running generation after reload and renders every real artifact
   await expect(page.getByText("생성 작업 상태: 생성 중")).toBeVisible();
   allowComplete = true;
   await page.reload();
+  await expect(page.getByRole("img", { name: "카드뉴스 슬라이드 1" })).toBeVisible();
+  await page.getByRole("button", { name: "다음 이미지" }).click();
+  await page.getByRole("button", { name: "다음 이미지" }).click();
   await expect(page.getByRole("img", { name: "카드뉴스 슬라이드 3" })).toBeVisible();
   await expect(page.locator('img[src*="picsum"]')).toHaveCount(0);
 });
@@ -86,7 +89,7 @@ test("publishes selected Instagram feed and story targets without a confirmation
     if (url.pathname.endsWith("/auth/me")) return route.fulfill({ json: { user: { id: "user-e2e", displayName: "E2E" }, workspace: { id: "workspace-e2e", name: "E2E" }, brand: { id: "brand-e2e", name: "E2E Brand" } } });
     if (url.pathname.endsWith("/ui-status")) return route.fulfill({ json: { brandId: "brand-e2e", brandName: "E2E Brand", logoUrl: null, navigation: {}, onboarding: { completedCount: 1, totalCount: 1, remainingCount: 0, steps: [] } } });
     if (url.pathname.endsWith("/ai-content/generations/generation-e2e")) return route.fulfill({ json: generation("completed") });
-    if (url.pathname.endsWith("/channels")) return route.fulfill({ json: [{ type: "instagram", label: "Instagram", enabled: true, oauthState: "connected", status: "connected", accountLabel: "@growthline352", lastHealthyAt: "2026-07-20T00:00:00.000Z", lastPublishedAt: "2026-07-20T00:00:00.000Z" }] });
+    if (url.pathname.endsWith("/channels")) return route.fulfill({ json: [{ channel: "instagram", enabled: true, oauthState: "connected", status: "connected", accountLabel: "@growthline352", lastHealthyAt: "2026-07-20T00:00:00.000Z", lastPublishedAt: "2026-07-20T00:00:00.000Z", lastError: null }] });
     if (url.pathname.endsWith("/ai-content/outputs/output-e2e/publish")) {
       publishBody = route.request().postDataJSON();
       return route.fulfill({ json: {
@@ -105,7 +108,7 @@ test("publishes selected Instagram feed and story targets without a confirmation
   await expect(page.getByText("Threads OAuth 게시 계정 미연결")).toBeVisible();
   await page.getByRole("checkbox", { name: "게시물" }).check();
   await page.getByRole("checkbox", { name: "스토리" }).check();
-  await page.getByRole("button", { name: "선택한 2곳에 지금 게시" }).click();
+  await page.getByRole("button", { name: "선택한 2개 유형 게시" }).click();
 
   await expect(page.getByText("게시 완료")).toBeVisible();
   await expect(page.getByText("게시 대기")).toBeVisible();
@@ -483,7 +486,7 @@ test.describe("product and service subject pipeline", () => {
     await page.keyboard.press("Space");
     await page.getByLabel("추가 설명").fill(config.description!);
     await uploadSubjectFiles(page, config.files!);
-    const attachment = page.locator(".attachment-list li").first();
+    const attachment = page.locator(".file-upload__items li").first();
     await expect(attachment).toBeVisible();
     expect(await attachment.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
 

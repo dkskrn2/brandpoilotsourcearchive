@@ -1,4 +1,5 @@
 ﻿import { cleanup, render, screen } from "@testing-library/react";
+import { act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SourceSnapshot, SourceUrl, TopicRow } from "../types";
@@ -115,18 +116,32 @@ async function renderSourcesPage(apiOverrides: Partial<Record<string, ReturnType
     api
   }));
   const { SourcesPage } = await import("../pages/SourcesPage");
-  render(<SourcesPage />);
+  await act(async () => {
+    render(<SourcesPage />);
+  });
   return api;
 }
 
 describe("SourcesPage", () => {
-  it("shows the initial crawl result after adding a URL", async () => {
-    const api = await renderSourcesPage();
-    await userEvent.type(screen.getByRole("textbox", { name: "자사 URL" }), "https://new.example.com");
-    await userEvent.click(screen.getByRole("button", { name: "URL 추가" }));
+  it("shows a source list skeleton while initial data is loading", async () => {
+    const pending = new Promise<never>(() => undefined);
+    await renderSourcesPage({
+      listSources: vi.fn(() => pending),
+      listSourceSnapshots: vi.fn(() => pending),
+      listSourceCrawlRuns: vi.fn(() => pending),
+      listTopicRows: vi.fn(() => pending)
+    });
 
-    expect(await screen.findByText(/초기 크롤링 완료/)).toBeInTheDocument();
-    expect(api.createSource).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status", { name: "소스 데이터를 불러오는 중입니다." })).toHaveClass("skeleton-list");
+    expect(screen.queryByRole("tab", { name: "참고 URL" })).not.toBeInTheDocument();
+  });
+
+  it("keeps owned URL management out of the source screen", async () => {
+    await renderSourcesPage();
+
+    expect(screen.queryByRole("tab", { name: "자사 URL" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "자사 URL" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "참고 URL" })).toBeInTheDocument();
   });
 
   it("shows recent automatic crawl status", async () => {
@@ -147,7 +162,7 @@ describe("SourcesPage", () => {
     await renderSourcesPage();
 
     expect(screen.getByRole("heading", { name: "소스" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "자사 URL" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "자사 URL" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "참고 URL" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "주제표 업로드" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "소스 큐" })).toBeInTheDocument();
@@ -258,7 +273,7 @@ describe("SourcesPage", () => {
       })
     });
 
-    const input = screen.getByRole("textbox", { name: "자사 URL" });
+    const input = screen.getByRole("textbox", { name: "참고 URL" });
     await userEvent.type(input, "https://local-only.example.com");
     await userEvent.click(screen.getByRole("button", { name: "URL 추가" }));
 
@@ -273,7 +288,7 @@ describe("SourcesPage", () => {
       })
     });
 
-    const input = screen.getByRole("textbox", { name: "자사 URL" });
+    const input = screen.getByRole("textbox", { name: "참고 URL" });
     await userEvent.type(input, "https://api.example.com");
     await userEvent.click(screen.getByRole("button", { name: "URL 추가" }));
 
@@ -287,7 +302,7 @@ describe("SourcesPage", () => {
       })
     });
 
-    const input = screen.getByRole("textbox", { name: "자사 URL" });
+    const input = screen.getByRole("textbox", { name: "참고 URL" });
     await userEvent.type(input, "api.example.com");
     await userEvent.click(screen.getByRole("button", { name: "URL 추가" }));
 
@@ -318,11 +333,11 @@ describe("SourcesPage", () => {
       })
     });
 
-    expect(await screen.findByText("https://api.example.com")).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "삭제 https://api.example.com" }));
+    expect(await screen.findByText("https://news.example.com/travel")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "삭제 https://news.example.com/travel" }));
 
     expect(await screen.findByText(/API 삭제에 실패했습니다/)).toBeVisible();
-    expect(screen.getByText("https://api.example.com")).toBeVisible();
+    expect(screen.getByText("https://news.example.com/travel")).toBeVisible();
   });
 
   it("retries a failed source through the API instead of changing only the screen", async () => {
@@ -334,23 +349,24 @@ describe("SourcesPage", () => {
       nextRetryAt: null, lastError: null
     }));
     await renderSourcesPage({
-      listSources: vi.fn(async () => [{ ...sourceRows[0], status: "crawl_failed", lastError: "source_crawl_failed" }]),
+      listSources: vi.fn(async () => [{ ...sourceRows[1], status: "crawl_failed", lastError: "source_crawl_failed" }]),
       retrySource
     });
 
-    await userEvent.click(await screen.findByRole("button", { name: "재시도 https://api.example.com" }));
+    await userEvent.click(await screen.findByRole("button", { name: "재시도 https://news.example.com/travel" }));
 
-    expect(retrySource).toHaveBeenCalledWith("brand-1", "owned-1");
+    expect(retrySource).toHaveBeenCalledWith("brand-1", "ref-1");
     expect(await screen.findByText(/재크롤링 완료/)).toBeVisible();
   });
 
   it("disables a source through the API and offers re-enabling it", async () => {
-    const updateSource = vi.fn(async () => ({ ...sourceRows[0], enabled: false, status: "disabled" }));
+    const updateSource = vi.fn(async () => ({ ...sourceRows[1], enabled: false, status: "disabled" }));
     await renderSourcesPage({ updateSource });
 
-    await userEvent.click(await screen.findByRole("button", { name: "비활성화 https://api.example.com" }));
+    await userEvent.click(await screen.findByRole("button", { name: "비활성화 https://news.example.com/travel" }));
 
-    expect(updateSource).toHaveBeenCalledWith("owned-1", { enabled: false });
-    expect(await screen.findByRole("button", { name: "다시 활성화 https://api.example.com" })).toBeVisible();
+    expect(updateSource).toHaveBeenCalledWith("ref-1", { enabled: false });
+    expect(await screen.findByRole("button", { name: "다시 활성화 https://news.example.com/travel" })).toBeVisible();
+    expect(screen.getByText("0/10개 활성")).toBeVisible();
   });
 });

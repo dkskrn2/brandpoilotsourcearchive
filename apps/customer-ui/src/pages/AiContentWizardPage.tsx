@@ -8,6 +8,7 @@ import { aiContentApiGateway } from "../features/ai-content/aiContentApiGateway"
 import type { AiContentDraft, AiContentGateway } from "../features/ai-content/types";
 import { useAiContentDraft } from "../features/ai-content/useAiContentDraft";
 import { DEMO_BRAND_ID } from "../lib/apiClient";
+import { useAiContentUsage } from "../features/ai-content/AiContentUsageContext";
 
 function serializableDraft(draft: AiContentDraft): AiContentDraft {
   return {
@@ -25,6 +26,7 @@ export function AiContentWizardPage({ gateway = aiContentApiGateway, brandId = D
   const state = useAiContentDraft(initialType);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const { refresh: refreshUsage } = useAiContentUsage();
   const valid = state.step === 1 ? Boolean(state.draft.type) : state.step === 3 ? Boolean(state.draft.selectedTarget && state.draft.selectedAppeal) : state.step === 5 ? Boolean(state.draft.brief?.purpose) : true;
   const actions = {
     setType: state.setType,
@@ -80,6 +82,7 @@ export function AiContentWizardPage({ gateway = aiContentApiGateway, brandId = D
       const finalDraft = serializableDraft({ ...state.draft, brief: { ...state.draft.brief, attachments: uploadedAttachments } });
       await gateway.updateGeneration(brandId, generation.id, { draft: finalDraft, referenceIds: state.draft.referenceIds });
       await gateway.startGeneration(brandId, generation.id, { idempotencyKey: state.generationIdempotencyKey, outputCount: finalDraft.brief?.outputCount ?? 1 });
+      await refreshUsage();
       navigate(`/ai-content/${generation.id}`);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "ai_content_generation_failed");

@@ -1,4 +1,5 @@
 import { useSearchParams } from "react-router-dom";
+import { ProductBrandLogo } from "../components/brand/ProductBrandLogo";
 
 function apiBaseUrl() {
   return import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
@@ -18,7 +19,7 @@ export function LoginPage() {
   return (
     <main className="login-page">
       <section className="login-panel" aria-labelledby="login-title">
-        <div className="login-brand"><span>BP</span> Brand Pilot</div>
+        <div className="login-brand"><ProductBrandLogo placement="login" /></div>
         <h1 id="login-title">콘텐츠 운영을 시작하세요</h1>
         <p>카카오 계정으로 로그인하면 개인 워크스페이스와 첫 브랜드가 생성됩니다.</p>
         {errorMessage ? <p className="login-error">{errorMessage}</p> : null}

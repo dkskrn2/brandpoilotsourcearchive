@@ -5,6 +5,33 @@ export interface InstagramCarouselPublishResult {
   publishedUrl: string | null;
 }
 
+export type InstagramPublishStage =
+  | "child_container_create"
+  | "child_container_status"
+  | "carousel_container_create"
+  | "carousel_container_status"
+  | "media_publish";
+
+export class InstagramPublishStageError extends Error {
+  readonly stage: InstagramPublishStage;
+  override readonly cause: unknown;
+
+  constructor(stage: InstagramPublishStage, cause: unknown) {
+    super(`instagram_publish_stage_failed:${stage}`, { cause });
+    this.name = "InstagramPublishStageError";
+    this.stage = stage;
+    this.cause = cause;
+  }
+}
+
+async function atPublishStage<T>(stage: InstagramPublishStage, operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    throw new InstagramPublishStageError(stage, error);
+  }
+}
+
 interface InstagramPublishBase {
   accessToken: string;
   instagramBusinessAccountId: string;
@@ -18,6 +45,11 @@ export interface StoredInstagramStoryCapability {
 }
 
 export type InstagramPublishInput = InstagramPublishBase & (
+  | {
+    deliveryFormat: "instagram_feed_single";
+    imageUrl: string;
+    caption: string;
+  }
   | {
     deliveryFormat: "instagram_feed_carousel";
     imageUrls: string[];
@@ -191,6 +223,12 @@ export async function publishInstagramOutput(
 ): Promise<InstagramCarouselPublishResult> {
   const deps = resolveDependencies(dependencies);
   switch (input.deliveryFormat) {
+    case "instagram_feed_single":
+      requirePublicUrl(input.imageUrl);
+      return publishContainer(input, {
+        image_url: input.imageUrl,
+        caption: input.caption,
+      }, deps);
     case "instagram_feed_carousel":
       return publishInstagramCarouselWithMeta({
         ...input,
@@ -249,14 +287,14 @@ export async function publishInstagramCarouselWithMeta({
 
   for (const imageUrl of imageUrls) {
     requirePublicUrl(imageUrl);
-    const childId = await postMetaGraph({
+    const childId = await atPublishStage("child_container_create", () => postMetaGraph({
       path: `/${instagramBusinessAccountId}/media`,
       body: { image_url: imageUrl, is_carousel_item: "true", access_token: accessToken },
       fetchImpl,
       graphVersion,
       graphHost
-    });
-    await waitForMetaContainer({
+    }));
+    await atPublishStage("child_container_status", () => waitForMetaContainer({
       containerId: childId,
       accessToken,
       graphVersion,
@@ -265,11 +303,11 @@ export async function publishInstagramCarouselWithMeta({
       maxAttempts: statusPollAttempts,
       intervalMs: statusPollIntervalMs,
       sleep
-    });
+    }));
     children.push(childId);
   }
 
-  const carouselId = await postMetaGraph({
+  const carouselId = await atPublishStage("carousel_container_create", () => postMetaGraph({
     path: `/${instagramBusinessAccountId}/media`,
     body: {
       media_type: "CAROUSEL",
@@ -280,8 +318,8 @@ export async function publishInstagramCarouselWithMeta({
     fetchImpl,
     graphVersion,
     graphHost
-  });
-  await waitForMetaContainer({
+  }));
+  await atPublishStage("carousel_container_status", () => waitForMetaContainer({
     containerId: carouselId,
     accessToken,
     graphVersion,
@@ -290,14 +328,14 @@ export async function publishInstagramCarouselWithMeta({
     maxAttempts: statusPollAttempts,
     intervalMs: statusPollIntervalMs,
     sleep
-  });
+  }));
 
-  const externalPostId = await postMetaGraph({
+  const externalPostId = await atPublishStage("media_publish", () => postMetaGraph({
     path: `/${instagramBusinessAccountId}/media_publish`,
     body: { creation_id: carouselId, access_token: accessToken },
     fetchImpl,
     graphVersion,
     graphHost
-  });
+  }));
   return { externalPostId, publishedUrl: null };
 }

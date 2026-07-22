@@ -1,11 +1,11 @@
 import { AlertCircle, MessageCircle, UserRound } from "lucide-react";
 import { Badge } from "../ui/Badge";
 import { EmptyState } from "../ui/EmptyState";
+import { InlineSpinner, ListSkeleton } from "../ui/LoadingState";
 import type { DmConversationFilter, DmConversationSummary } from "../../types";
 
 const filters: Array<{ id: DmConversationFilter; label: string }> = [
   { id: "all", label: "전체" },
-  { id: "attention", label: "확인 필요" },
   { id: "complaint", label: "불만" },
   { id: "unanswered", label: "미답변" },
   { id: "error", label: "오류" }
@@ -67,7 +67,7 @@ export function DmConversationList({
         ))}
       </div>
       {error ? <div className="dm-inline-error"><AlertCircle size={16} />{error}</div> : null}
-      {loading ? <p className="dm-list-status">대화를 불러오는 중입니다.</p> : null}
+      {loading ? <ListSkeleton rows={6} columns={1} label="대화 목록을 불러오는 중입니다." /> : null}
       {!loading && !error && conversations.length === 0 ? (
         <EmptyState title="대화가 없습니다" description="선택한 조건에 해당하는 Instagram DM 대화가 없습니다." />
       ) : null}
@@ -102,8 +102,8 @@ export function DmConversationList({
             </button>
           ))}
           {nextCursor ? (
-            <button className="button secondary dm-load-more" type="button" disabled={loadingMore} onClick={onLoadMore}>
-              {loadingMore ? "불러오는 중" : "대화 더 보기"}
+            <button className="button secondary dm-load-more" type="button" aria-label="대화 더 보기" aria-busy={loadingMore} disabled={loadingMore} onClick={onLoadMore}>
+              {loadingMore ? <InlineSpinner label="대화 목록 추가 로딩 중" /> : null} 대화 더 보기
             </button>
           ) : null}
         </div>

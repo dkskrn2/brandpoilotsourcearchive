@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { assertSafeCrawlUrl, crawlSourceUrl, discoverContentUrls, extractPageSnapshot, isLikelyContentPage } from "./sourceCrawler";
+import { assertSafeCrawlUrl, crawlSourceUrl, createPinnedLookup, discoverContentUrls, extractPageSnapshot, isLikelyContentPage } from "./sourceCrawler";
 
 describe("sourceCrawler", () => {
   it("rejects loopback URLs before the crawler fetches them", async () => {
@@ -11,6 +11,26 @@ describe("sourceCrawler", () => {
     await expect(assertSafeCrawlUrl("https://example.com/article", {
       resolveHostname: async () => [{ address: "10.0.0.8" }]
     })).rejects.toThrow("crawl_url_unsafe_address");
+  });
+
+  it("returns pinned DNS records in both single and all-address lookup modes", async () => {
+    const pinnedLookup = createPinnedLookup([
+      { address: "93.184.216.34", family: 4 },
+      { address: "2606:2800:220:1:248:1893:25c8:1946", family: 6 }
+    ]);
+
+    await expect(new Promise((resolve, reject) => pinnedLookup("example.com", { all: true }, (error, addresses) => {
+      if (error) reject(error);
+      else resolve(addresses);
+    }))).resolves.toEqual([
+      { address: "93.184.216.34", family: 4 },
+      { address: "2606:2800:220:1:248:1893:25c8:1946", family: 6 }
+    ]);
+
+    await expect(new Promise((resolve, reject) => pinnedLookup("example.com", { family: 4 }, (error, address, family) => {
+      if (error) reject(error);
+      else resolve({ address, family });
+    }))).resolves.toEqual({ address: "93.184.216.34", family: 4 });
   });
 
   it("extracts title, meta description, and readable text from html", () => {
@@ -196,5 +216,38 @@ describe("sourceCrawler", () => {
     expect(snapshot.httpStatus).toBe(200);
     expect(snapshot.title).toBe("Fetched");
     expect(snapshot.text).toContain("Body");
+  });
+
+  it("rejects a response whose declared size exceeds the crawl limit", async () => {
+    const fetcher = vi.fn(async () => new Response("small", {
+      status: 200,
+      headers: { "content-type": "text/html", "content-length": "100" },
+    }));
+
+    await expect(crawlSourceUrl("https://example.com", {
+      fetcher: fetcher as typeof fetch,
+      resolveHostname: async () => [{ address: "93.184.216.34" }],
+      maxResponseBytes: 10,
+    })).rejects.toThrow("crawl_response_too_large");
+  });
+
+  it("stops reading a streamed response once it exceeds the crawl limit", async () => {
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("123456"));
+        controller.enqueue(new TextEncoder().encode("789012"));
+        controller.close();
+      },
+    });
+    const fetcher = vi.fn(async () => new Response(body, {
+      status: 200,
+      headers: { "content-type": "text/html" },
+    }));
+
+    await expect(crawlSourceUrl("https://example.com", {
+      fetcher: fetcher as typeof fetch,
+      resolveHostname: async () => [{ address: "93.184.216.34" }],
+      maxResponseBytes: 10,
+    })).rejects.toThrow("crawl_response_too_large");
   });
 });

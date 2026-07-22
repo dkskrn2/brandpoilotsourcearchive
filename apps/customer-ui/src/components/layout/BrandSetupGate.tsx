@@ -15,7 +15,7 @@ export function BrandSetupGate() {
   }
 
   if (!isBrandProfileComplete(status)) {
-    return <Navigate to="/brand-settings" replace />;
+    return <Navigate to="/onboarding/brand-intelligence" replace />;
   }
 
   return <Outlet />;

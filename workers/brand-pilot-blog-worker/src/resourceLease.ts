@@ -1,0 +1,3 @@
+import type { BlogClient } from "./contracts.js";
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+export async function withResource<T>(client: BlogClient, workerId: string, task: () => Promise<T>) { let lease: Awaited<ReturnType<BlogClient["acquire"]>> = null; while (!lease) { lease = await client.acquire(workerId); if (!lease) await wait(1_000); } const timer = setInterval(() => void client.heartbeatResource(lease!.id, workerId, lease!.leaseToken).catch(() => undefined), 15_000); try { return await task(); } finally { clearInterval(timer); await Promise.resolve(client.releaseResource(lease.id, workerId, lease.leaseToken)).catch(() => undefined); } }

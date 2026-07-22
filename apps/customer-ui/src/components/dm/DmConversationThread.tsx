@@ -1,6 +1,8 @@
-import { ArrowLeft, CheckCircle2, PauseCircle, UserRound } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ArrowLeft, CheckCircle2, PauseCircle, Send, UserRound } from "lucide-react";
 import { Badge } from "../ui/Badge";
 import { EmptyState } from "../ui/EmptyState";
+import { InlineSpinner, ListSkeleton } from "../ui/LoadingState";
 import type { DmConversationDetail, DmConversationMessage, DmReasonCode } from "../../types";
 
 const reasonLabels: Record<DmReasonCode, string> = {
@@ -23,6 +25,34 @@ function directionLabel(detail: DmConversationDetail, message: DmConversationMes
   return message.direction === "inbound" ? `${user} → @브랜드` : `@브랜드 → ${user}`;
 }
 
+function manualReplyErrorMessage(error: unknown) {
+  const failure = typeof error === "object" && error !== null
+    ? error as { errorCode?: unknown; requestId?: unknown; deliveryStatus?: unknown }
+    : null;
+  const errorCode = typeof failure?.errorCode === "string" ? failure.errorCode : "";
+  const requestId = typeof failure?.requestId === "string" ? failure.requestId : null;
+
+  if (errorCode === "dm_manual_reply_channel_not_ready") {
+    return "Instagram 채널 인증이 준비되지 않았습니다. 채널 연결 상태를 확인해 주세요.";
+  }
+  if (["meta_graph_401", "meta_token_invalid"].includes(errorCode)) {
+    return "Instagram 연결 토큰이 만료되었거나 메시지 권한이 없습니다. 채널을 다시 연결해 주세요.";
+  }
+  if (["meta_graph_403", "meta_permission_denied"].includes(errorCode)) {
+    return "Instagram의 24시간 응답 시간이 지났거나 Meta 앱에 Human Agent 권한이 없습니다. Human Agent 권한을 승인한 뒤 다시 시도해 주세요.";
+  }
+  if (errorCode === "meta_graph_400" || errorCode === "meta_recipient_unavailable") {
+    return "Instagram의 24시간 응답 가능 시간이 지났거나 수신자에게 메시지를 보낼 수 없습니다.";
+  }
+  if (failure?.deliveryStatus === "unknown" || /^meta_graph_5\d\d$/.test(errorCode) || errorCode === "meta_delivery_unknown") {
+    return "Meta 응답을 확인하지 못해 발송 여부가 불명확합니다. 중복 발송을 피하려면 Instagram에서 먼저 확인해 주세요.";
+  }
+  if (errorCode === "meta_graph_429" || errorCode === "meta_temporarily_unavailable") {
+    return "Meta가 일시적으로 요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.";
+  }
+  return `수동 답변 전송 중 알 수 없는 오류가 발생했습니다.${requestId ? ` 요청 ID: ${requestId}` : ""}`;
+}
+
 interface DmConversationThreadProps {
   detail: DmConversationDetail | null;
   loading: boolean;
@@ -30,10 +60,39 @@ interface DmConversationThreadProps {
   resolving: boolean;
   onBack(): void;
   onResolve(attentionId: string): void;
+  onManualReply(body: string): Promise<void>;
 }
 
-export function DmConversationThread({ detail, loading, error, resolving, onBack, onResolve }: DmConversationThreadProps) {
-  if (loading) return <section className="dm-thread dm-thread-centered">대화 내용을 불러오는 중입니다.</section>;
+export function DmConversationThread({ detail, loading, error, resolving, onBack, onResolve, onManualReply }: DmConversationThreadProps) {
+  const [body, setBody] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [sendNotice, setSendNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    setBody("");
+    setSendError(null);
+    setSendNotice(null);
+  }, [detail?.id]);
+
+  async function submitManualReply() {
+    const trimmed = body.trim();
+    if (!trimmed || sending) return;
+    setSending(true);
+    setSendError(null);
+    setSendNotice(null);
+    try {
+      await onManualReply(trimmed);
+      setBody("");
+      setSendNotice("수동 답변을 전송했습니다.");
+    } catch (error) {
+      setSendError(manualReplyErrorMessage(error));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  if (loading) return <section className="dm-thread"><ListSkeleton rows={5} columns={1} label="대화 내용을 불러오는 중입니다." /></section>;
   if (error) return <section className="dm-thread dm-thread-centered dm-error-text">{error}</section>;
   if (!detail) return <section className="dm-thread"><EmptyState title="대화를 선택하세요" description="왼쪽 목록에서 확인할 Instagram DM 대화를 선택하세요." /></section>;
 
@@ -87,6 +146,32 @@ export function DmConversationThread({ detail, loading, error, resolving, onBack
             </div>
           );
         })}
+      </div>
+      <div className="dm-manual-composer">
+        <label htmlFor="dm-manual-reply">수동 답변</label>
+        <div className="dm-manual-composer-row">
+          <textarea
+            id="dm-manual-reply"
+            aria-label="수동 답변"
+            value={body}
+            maxLength={1000}
+            rows={3}
+            placeholder="고객에게 직접 보낼 답변을 입력하세요."
+            onChange={(event) => setBody(event.target.value)}
+          />
+          <button
+            className="button primary"
+            type="button"
+            aria-label="수동 답변 전송"
+            aria-busy={sending}
+            disabled={!body.trim() || sending}
+            onClick={() => void submitManualReply()}
+          >
+            {sending ? <InlineSpinner label="수동 답변 전송 중" /> : <Send size={16} aria-hidden="true" />} 전송
+          </button>
+        </div>
+        {sendNotice ? <p className="notice success" role="status">{sendNotice}</p> : null}
+        {sendError ? <p className="dm-error-text" role="alert">{sendError}</p> : null}
       </div>
     </section>
   );

@@ -1,6 +1,8 @@
-import { FileText, Image, Package, Trash2, User, ZoomIn } from "lucide-react";
-import { useState } from "react";
+import { FileText, Image, Package, User, ZoomIn } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import type { AiContentGateway, GenerationAttachment } from "../../features/ai-content/types";
+import { FileUploadButton } from "../ui/FileUploadButton";
+import { UploadProgress } from "../ui/UploadProgress";
 
 const fields: Array<[GenerationAttachment["role"], string, typeof Package]> = [
   ["product", "제품 이미지", Package],
@@ -57,17 +59,28 @@ function validateFile(role: GenerationAttachment["role"], file: File, attachment
 export function AiContentAttachmentUploader({ gateway, brandId, generationId, attachments, allowedRoles, onChange }: Props) {
   const [progress, setProgress] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
+  const attachmentsRef = useRef(attachments);
 
-  async function upload(role: GenerationAttachment["role"], files: FileList | null) {
-    const file = files?.[0];
+  useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
+
+  function changeAttachments(update: (current: GenerationAttachment[]) => GenerationAttachment[]) {
+    const next = update(attachmentsRef.current);
+    attachmentsRef.current = next;
+    onChange(next);
+  }
+
+  async function upload(role: GenerationAttachment["role"], files: File[]) {
+    const file = files[0];
     if (!file) return;
-    const validationError = validateFile(role, file, attachments);
+    const validationError = validateFile(role, file, attachmentsRef.current);
     if (validationError) return setError(validationError);
     const mimeType = normalizedMimeType(role, file);
     const localId = `${role}-${file.name}-${file.size}`;
     setError(null);
     if (!generationId) {
-      onChange([...attachments, { id: localId, role, fileName: file.name, mimeType, size: file.size, file }]);
+      changeAttachments((current) => [...current, { id: localId, role, fileName: file.name, mimeType, size: file.size, file }]);
       return;
     }
     setProgress((current) => ({ ...current, [localId]: 0 }));
@@ -80,7 +93,7 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
         size: file.size,
         file,
       }, (percentage) => setProgress((current) => ({ ...current, [localId]: percentage })));
-      onChange([...attachments, uploaded]);
+      changeAttachments((current) => [...current, uploaded]);
     } catch {
       setError(`${file.name} 파일을 업로드하지 못했습니다. 다시 시도해 주세요.`);
     } finally {
@@ -94,20 +107,24 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
 
   return <div className="ai-content-attachment-uploader">
     <div className="attachment-grid">
-      {fields.filter(([role]) => !allowedRoles || allowedRoles.includes(role)).map(([role, label, Icon]) => <label key={role}>
-        <Icon size={18} /><span>{label}</span>
-        <input
-          type="file"
+      {fields.filter(([role]) => !allowedRoles || allowedRoles.includes(role)).map(([role, label, Icon]) => <div className="attachment-picker" key={role}>
+        <div className="attachment-picker__label"><Icon size={18} aria-hidden="true" /><span>{label}</span></div>
+        <FileUploadButton
+          inputLabel={label}
+          buttonLabel={`${label} 추가`}
           accept={role === "document" ? ".pdf,.txt,.md,.csv,.xlsx,application/pdf,text/plain,text/markdown,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "image/png,image/jpeg"}
-          onChange={(event) => { void upload(role, event.target.files); event.currentTarget.value = ""; }}
+          items={attachments.filter((item) => item.role === role).map((item) => ({
+            id: item.id,
+            name: item.fileName,
+            size: item.size,
+            status: generationId ? "uploaded" : "selected",
+          }))}
+          onFiles={(files) => void upload(role, files)}
+          onRemove={(id) => changeAttachments((current) => current.filter((item) => item.id !== id))}
         />
-      </label>)}
+      </div>)}
     </div>
     {error ? <p role="alert" className="wizard-error">{error}</p> : null}
-    {Object.entries(progress).map(([id, percentage]) => <div key={id} className="attachment-progress" role="status"><progress max="100" value={percentage} /> 업로드 {Math.round(percentage)}%</div>)}
-    {attachments.length ? <ul className="attachment-list">{attachments.map((item) => <li key={item.id}>
-      <span>{item.fileName}</span><span>업로드 완료</span>
-      <button type="button" className="icon-button" title="첨부 제거" aria-label={`${item.fileName} 첨부 제거`} onClick={() => onChange(attachments.filter((row) => row.id !== item.id))}><Trash2 size={16} /></button>
-    </li>)}</ul> : null}
+    {Object.entries(progress).map(([id, percentage]) => <UploadProgress key={id} value={percentage} label="첨부 파일 업로드" />)}
   </div>;
 }

@@ -5,6 +5,7 @@ export interface InstagramDmSendInput {
   instagramBusinessAccountId: string;
   recipientId: string;
   text: string;
+  tag?: "HUMAN_AGENT";
 }
 
 export interface InstagramDmSendResult {
@@ -20,12 +21,11 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
-function isTransientMetaError(error: unknown) {
-  return error instanceof MetaGraphRequestError && (error.status === 429 || error.status >= 500);
-}
-
 export function classifyInstagramDmSendError(error: unknown): InstagramDmSendErrorClassification {
   if (error instanceof MetaGraphRequestError) {
+    if (error.status >= 500 && error.status <= 599) {
+      return { status: "unknown", errorCode: `meta_graph_${error.status}` };
+    }
     return { status: "failed", errorCode: `meta_graph_${error.status}` };
   }
   const record = asRecord(error);
@@ -42,32 +42,22 @@ export async function sendInstagramDirectMessage(
   dependencies: {
     graphVersion?: string;
     fetchImpl?: typeof fetch;
-    sleep?: (ms: number) => Promise<void>;
   } = {},
 ): Promise<InstagramDmSendResult> {
   const graphVersion = dependencies.graphVersion ?? process.env.META_GRAPH_VERSION ?? "v23.0";
   const fetchImpl = dependencies.fetchImpl ?? fetch;
-  const sleep = dependencies.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const request = () => postMetaGraphForm({
+  const payload = await postMetaGraphForm({
     path: `/${input.instagramBusinessAccountId}/messages`,
     body: {
       recipient: JSON.stringify({ id: input.recipientId }),
       message: JSON.stringify({ text: input.text }),
+      ...(input.tag ? { tag: input.tag } : {}),
       access_token: input.accessToken,
     },
     fetchImpl,
     graphVersion,
     host: "graph.instagram.com",
   });
-
-  let payload: unknown;
-  try {
-    payload = await request();
-  } catch (error) {
-    if (!isTransientMetaError(error)) throw error;
-    await sleep(250);
-    payload = await request();
-  }
   const record = asRecord(payload);
   const externalMessageId = typeof record?.message_id === "string"
     ? record.message_id

@@ -13,6 +13,8 @@ import type {
   InstagramFormatSettings,
   InstagramFormatSettingsInput,
   InstagramTrendFavoriteInput,
+  InstagramTrendConnection,
+  InstagramTrendArchivePage,
   InstagramTrendListInput,
   InstagramTrendPage,
   InstagramTrendSaveSource,
@@ -22,8 +24,10 @@ import type {
   DmAttentionItem,
   DmConversationDetail,
   DmConversationFilter,
+  DmConversationMessage,
   DmConversationPage,
   Dashboard,
+  FeedbackSubmission,
   KnowledgeImport,
   KnowledgeImportInput,
   PipelineRunResult,
@@ -54,13 +58,34 @@ interface ApiClientOptions {
   fetcher?: typeof fetch;
 }
 
+export class ApiRequestError extends Error {
+  readonly status: number;
+  readonly errorCode: string | null;
+  readonly requestId: string | null;
+  readonly deliveryStatus: "failed" | "unknown" | null;
+
+  constructor(input: {
+    status: number;
+    errorCode: string | null;
+    requestId?: string | null;
+    deliveryStatus?: "failed" | "unknown" | null;
+  }) {
+    super(input.errorCode ? `API request failed: ${input.status}:${input.errorCode}` : `API request failed: ${input.status}`);
+    this.name = "ApiRequestError";
+    this.status = input.status;
+    this.errorCode = input.errorCode;
+    this.requestId = input.requestId ?? null;
+    this.deliveryStatus = input.deliveryStatus ?? null;
+  }
+}
+
 export interface AuthSession {
   user: { id: string; displayName: string | null; email: string | null };
   workspace: { id: string; name: string };
   brand: { id: string; name: string };
 }
 
-interface ApiChannel {
+export interface ApiChannel {
   channel: ChannelType;
   enabled: boolean;
   oauthState: ChannelConnection["oauthState"];
@@ -107,13 +132,19 @@ async function request<T>(fetcher: typeof fetch, url: string, init: RequestInit)
   });
   if (!response.ok) {
     let errorCode: string | null = null;
+    let requestId: string | null = null;
+    let deliveryStatus: "failed" | "unknown" | null = null;
     try {
       const payload = await response.clone().json();
       errorCode = typeof payload?.error === "string" ? payload.error : null;
+      requestId = typeof payload?.requestId === "string" ? payload.requestId : null;
+      deliveryStatus = payload?.deliveryStatus === "failed" || payload?.deliveryStatus === "unknown"
+        ? payload.deliveryStatus
+        : null;
     } catch {
       errorCode = null;
     }
-    throw new Error(errorCode ? `API request failed: ${response.status}:${errorCode}` : `API request failed: ${response.status}`);
+    throw new ApiRequestError({ status: response.status, errorCode, requestId, deliveryStatus });
   }
   const payload = await response.json() as T;
   if (init.method !== "GET" && typeof window !== "undefined") {
@@ -153,7 +184,7 @@ function fileNameFromContentDisposition(value: string | null) {
   return value.match(/filename="([^"]+)"/i)?.[1] ?? value.match(/filename=([^;]+)/i)?.[1]?.trim() ?? null;
 }
 
-function mapChannel(channel: ApiChannel): ChannelConnection {
+export function mapApiChannelConnection(channel: ApiChannel): ChannelConnection {
   const labels: Record<ChannelType, string> = {
     instagram: "Instagram",
     threads: "Threads",
@@ -207,6 +238,12 @@ export function apiClient(options: ApiClientOptions = {}) {
       : fetch);
 
   return {
+    requestJson<T>(path: string, init: RequestInit) {
+      return request<T>(fetcher, `${baseUrl}${path}`, init);
+    },
+    requestBlob(path: string, init: RequestInit) {
+      return requestBlob(fetcher, `${baseUrl}${path}`, init);
+    },
     getAuthSession() {
       return request<AuthSession>(fetcher, `${baseUrl}/auth/me`, { method: "GET" });
     },
@@ -221,6 +258,9 @@ export function apiClient(options: ApiClientOptions = {}) {
     },
     listContentCategories() {
       return request<ContentCategory[]>(fetcher, `${baseUrl}/content-categories`, { method: "GET" });
+    },
+    getInstagramTrendConnection(brandId: string) {
+      return request<InstagramTrendConnection>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trends/connection`, { method: "GET" });
     },
     getInstagramTrends(brandId: string, input: InstagramTrendListInput) {
       const query = new URLSearchParams({
@@ -240,6 +280,9 @@ export function apiClient(options: ApiClientOptions = {}) {
     listInstagramTrendSearches(brandId: string) {
       return request<InstagramTrendSearchHistory[]>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trend-searches`, { method: "GET" });
     },
+    deleteInstagramTrendSearch(brandId: string, hashtagId: string) {
+      return request<{ hashtagId: string }>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trend-searches/${hashtagId}`, { method: "DELETE" });
+    },
     setInstagramTrendFavorite(brandId: string, hashtagId: string, isFavorite: InstagramTrendFavoriteInput["isFavorite"]) {
       return request<InstagramTrendSearchHistory>(
         fetcher,
@@ -249,6 +292,13 @@ export function apiClient(options: ApiClientOptions = {}) {
     },
     saveInstagramTrendSource(brandId: string, mediaId: string) {
       return request<InstagramTrendSaveSource>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trends/${mediaId}/save-source`, { method: "POST" });
+    },
+    removeInstagramTrendSource(brandId: string, mediaId: string) {
+      return request<{ mediaId: string; removed: boolean }>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trends/${mediaId}/save-source`, { method: "DELETE" });
+    },
+    listInstagramTrendArchive(brandId: string, input: { page: number; limit: number }) {
+      const query = new URLSearchParams({ page: String(input.page), limit: String(input.limit) });
+      return request<InstagramTrendArchivePage>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trends/archive?${query.toString()}`, { method: "GET" });
     },
     getBillingSummary(brandId: string) {
       return request<BillingSummary>(fetcher, `${baseUrl}/brands/${brandId}/billing/summary`, { method: "GET" });
@@ -314,13 +364,13 @@ export function apiClient(options: ApiClientOptions = {}) {
     },
     async listChannels(brandId: string) {
       const channels = await request<ApiChannel[]>(fetcher, `${baseUrl}/brands/${brandId}/channels`, { method: "GET" });
-      return channels.map(mapChannel);
+      return channels.map(mapApiChannelConnection);
     },
     updateChannelEnabled(brandId: string, channel: ChannelType, enabled: boolean) {
       return request<ApiChannel>(fetcher, `${baseUrl}/brands/${brandId}/channels/${channel}`, {
         method: "PATCH",
         body: JSON.stringify({ enabled })
-      }).then(mapChannel);
+      }).then(mapApiChannelConnection);
     },
     getChannelConnectionRequest(brandId: string) {
       return request<ChannelConnectionRequest>(fetcher, `${baseUrl}/brands/${brandId}/channel-connection-request`, { method: "GET" });
@@ -349,10 +399,10 @@ export function apiClient(options: ApiClientOptions = {}) {
       return request<ApiChannel>(fetcher, `${baseUrl}/brands/${brandId}/channels/${channel}/credentials`, {
         method: "PUT",
         body: JSON.stringify(payload)
-      }).then(mapChannel);
+      }).then(mapApiChannelConnection);
     },
     checkChannel(brandId: string, channel: ChannelType) {
-      return request<ApiChannel>(fetcher, `${baseUrl}/brands/${brandId}/channels/${channel}/check`, { method: "POST" }).then(mapChannel);
+      return request<ApiChannel>(fetcher, `${baseUrl}/brands/${brandId}/channels/${channel}/check`, { method: "POST" }).then(mapApiChannelConnection);
     },
     listSupportRequests(brandId: string) {
       return request<SupportRequest[]>(fetcher, `${baseUrl}/brands/${brandId}/support-requests`, { method: "GET" });
@@ -363,6 +413,7 @@ export function apiClient(options: ApiClientOptions = {}) {
         category: SupportRequestCategory;
         title: string;
         message: string;
+        contactPhone: string;
         contactEmail?: string | null;
       }
     ) {
@@ -377,6 +428,18 @@ export function apiClient(options: ApiClientOptions = {}) {
         body: JSON.stringify({ status })
       });
     },
+    respondToSupportRequest(requestId: string, responseMessage: string) {
+      return request<SupportRequest>(fetcher, `${baseUrl}/support-requests/${requestId}/response`, {
+        method: "POST",
+        body: JSON.stringify({ responseMessage })
+      });
+    },
+    createFeedbackSubmission(brandId: string, message: string) {
+      return request<FeedbackSubmission>(fetcher, `${baseUrl}/brands/${brandId}/feedback`, {
+        method: "POST",
+        body: JSON.stringify({ message })
+      });
+    },
     listContentOutputs(brandId: string) {
       return request<ContentOutput[]>(fetcher, `${baseUrl}/brands/${brandId}/content-outputs`, { method: "GET" });
     },
@@ -385,6 +448,9 @@ export function apiClient(options: ApiClientOptions = {}) {
         method: "POST",
         body: JSON.stringify({ action, reason })
       });
+    },
+    getContentOutputArtifact(outputId: string) {
+      return request<PublishArtifact>(fetcher, `${baseUrl}/content-outputs/${outputId}/artifact`, { method: "GET" });
     },
     listPublishQueue(brandId: string) {
       return request<ApiPublishQueueItem[]>(fetcher, `${baseUrl}/brands/${brandId}/publish-queue`, { method: "GET" }).then((items) => items.map(mapPublishQueueItem));
@@ -397,9 +463,6 @@ export function apiClient(options: ApiClientOptions = {}) {
     },
     downloadPublishResult(queueId: string) {
       return requestBlob(fetcher, `${baseUrl}/publish-queue/${queueId}/download`, { method: "GET" });
-    },
-    downloadPublishedResults(brandId: string) {
-      return requestBlob(fetcher, `${baseUrl}/brands/${brandId}/publish-queue/download`, { method: "GET" });
     },
     createTopicUpload(brandId: string, payload: { fileName: string; csvText: string }) {
       return request<TopicUploadSummary>(fetcher, `${baseUrl}/brands/${brandId}/topic-uploads`, {
@@ -451,6 +514,13 @@ export function apiClient(options: ApiClientOptions = {}) {
     },
     getDmConversation(brandId: string, conversationId: string) {
       return request<DmConversationDetail>(fetcher, `${baseUrl}/brands/${brandId}/dm/conversations/${conversationId}`, { method: "GET" });
+    },
+    sendManualDmReply(brandId: string, conversationId: string, body: string, idempotencyKey = globalThis.crypto.randomUUID()) {
+      return request<DmConversationMessage>(
+        fetcher,
+        `${baseUrl}/brands/${brandId}/dm/conversations/${conversationId}/messages`,
+        { method: "POST", body: JSON.stringify({ body, idempotencyKey }) }
+      );
     },
     listDmAttentionItems(brandId: string, type?: DmAttentionItem["type"]) {
       const query = type ? `?${new URLSearchParams({ type }).toString()}` : "";

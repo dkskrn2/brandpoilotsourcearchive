@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import type { LookupFunction } from "node:net";
+import { Agent } from "undici";
 
 export interface ExtractedSnapshot {
   title: string | null;
@@ -23,9 +25,27 @@ export interface DiscoveredContentUrl {
 
 export interface ResolvedAddress {
   address: string;
+  family?: number;
 }
 
 export type HostnameResolver = (hostname: string) => Promise<ResolvedAddress[]>;
+
+export function createPinnedLookup(addresses: ResolvedAddress[]): LookupFunction {
+  const normalized = addresses.map(({ address, family }) => ({
+    address,
+    family: family ?? isIP(address),
+  }));
+
+  return (_hostname, options, callback) => {
+    if (options.all) {
+      callback(null, normalized);
+      return;
+    }
+    const requestedFamily = typeof options.family === "number" ? options.family : 0;
+    const selected = normalized.find(({ family }) => requestedFamily === 0 || family === requestedFamily) ?? normalized[0];
+    callback(null, selected.address, selected.family);
+  };
+}
 
 function isUnsafeIpv4(address: string): boolean {
   const octets = address.split(".").map(Number);
@@ -95,6 +115,49 @@ export async function assertSafeCrawlUrl(
     throw new Error("crawl_url_unsafe_address");
   }
   return parsed;
+}
+
+async function resolveSafeCrawlTarget(value: string, resolveHostname: HostnameResolver) {
+  const parsed = await assertSafeCrawlUrl(value, { resolveHostname });
+  const addresses = isIP(parsed.hostname)
+    ? [{ address: parsed.hostname, family: isIP(parsed.hostname) }]
+    : await resolveHostname(parsed.hostname);
+  if (addresses.length === 0 || addresses.some(({ address }) => isUnsafeIpAddress(address))) {
+    throw new Error("crawl_url_unsafe_address");
+  }
+  return { parsed, addresses };
+}
+
+async function readBoundedResponse(response: Response, maxResponseBytes: number) {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maxResponseBytes) {
+    throw new Error("crawl_response_too_large");
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxResponseBytes) {
+        await reader.cancel();
+        throw new Error("crawl_response_too_large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const combined = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(combined);
 }
 
 function decodeHtml(value: string) {
@@ -378,38 +441,55 @@ export async function crawlSourceUrl(
   {
     fetcher = fetch,
     timeoutMs = 15000,
-    resolveHostname = defaultResolveHostname
-  }: { fetcher?: typeof fetch; timeoutMs?: number; resolveHostname?: HostnameResolver } = {}
+    resolveHostname = defaultResolveHostname,
+    maxResponseBytes = 2 * 1024 * 1024,
+  }: { fetcher?: typeof fetch; timeoutMs?: number; resolveHostname?: HostnameResolver; maxResponseBytes?: number } = {}
 ): Promise<CrawledSnapshot> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let dispatcher: Agent | null = null;
   try {
-    let target = await assertSafeCrawlUrl(url, { resolveHostname });
+    let targetUrl = url;
+    let target: URL | null = null;
     let response: Response | null = null;
     for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
+      const resolved = await resolveSafeCrawlTarget(targetUrl, resolveHostname);
+      target = resolved.parsed;
+      dispatcher = fetcher === fetch ? new Agent({
+        connect: {
+          lookup: createPinnedLookup(resolved.addresses),
+        },
+      }) : null;
       response = await fetcher(target.toString(), {
         signal: controller.signal,
         redirect: "manual",
         headers: {
           "User-Agent": "BrandPilotMVP/0.1 (+https://github.com/2pow1/Brand_Pilot)",
           Accept: "text/html,application/xhtml+xml"
-        }
-      });
+        },
+        ...(dispatcher ? { dispatcher } : {}),
+      } as RequestInit);
       if (![301, 302, 303, 307, 308].includes(response.status)) break;
       const location = response.headers.get("location");
       if (!location) throw new Error("crawl_redirect_location_required");
-      target = await assertSafeCrawlUrl(new URL(location, target).toString(), { resolveHostname });
+      await response.body?.cancel();
+      await dispatcher?.close();
+      dispatcher = null;
+      targetUrl = new URL(location, target).toString();
       if (redirectCount === 3) throw new Error("crawl_redirect_limit_exceeded");
     }
-    if (!response) throw new Error("crawl_response_missing");
+    if (!response || !target) throw new Error("crawl_response_missing");
     const contentType = response.headers.get("content-type") ?? "";
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     if (contentType && !contentType.includes("text/html") && !contentType.includes("application/xhtml+xml")) {
       throw new Error(`Unsupported content type: ${contentType}`);
     }
-    const rawText = await response.text();
-    return { ...extractPageSnapshot(rawText, target.toString()), httpStatus: response.status, rawText };
+    const rawText = await readBoundedResponse(response, maxResponseBytes);
+    const finalUrl = target.toString();
+    await dispatcher?.close();
+    return { ...extractPageSnapshot(rawText, finalUrl), httpStatus: response.status, rawText };
   } finally {
+    await dispatcher?.close().catch(() => undefined);
     clearTimeout(timeout);
   }
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseDmWorkerResult } from "./dmTypes";
 
 const sourceId = "00000000-0000-4000-8000-000000000001";
+const destinationId = "00000000-0000-4000-8000-000000000002";
 
 describe("DM worker result contract", () => {
   it("accepts an answer only when it has a nonempty answer and a UUID source", () => {
@@ -37,6 +38,19 @@ describe("DM worker result contract", () => {
       needsAttention: false,
       reason: "근거 없음"
     })).toThrow("dm_answer_sources_required");
+  });
+
+  it("accepts at most two destination IDs and rejects model-authored raw URLs", () => {
+    expect(parseDmWorkerResult({
+      decision: "answer", answer: "제품 안내입니다.", wikiChunkIds: [sourceId],
+      destinationUrlIds: [destinationId], knowledgeEntryId: null, confidence: 0.8,
+      reasonCode: "wiki_answer", needsAttention: false, reason: "제품 Wiki",
+    })).toMatchObject({ destinationUrlIds: [destinationId] });
+    expect(() => parseDmWorkerResult({
+      decision: "answer", answer: "https://evil.example 로 이동하세요.", wikiChunkIds: [sourceId],
+      destinationUrlIds: [], knowledgeEntryId: null, confidence: 0.8,
+      reasonCode: "wiki_answer", needsAttention: false, reason: "잘못된 URL",
+    })).toThrow("dm_answer_raw_url_forbidden");
   });
 
   it("accepts the required operational decision fields", () => {

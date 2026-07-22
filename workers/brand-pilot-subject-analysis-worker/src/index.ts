@@ -13,7 +13,8 @@ async function main() {
   if (mode !== "watch" && mode !== "once") throw new Error("subject_analysis_worker_command_invalid");
   const workerId = process.env.SUBJECT_ANALYSIS_WORKER_ID?.trim() || `subject-analysis-${process.pid}`;
   const leaseSeconds = Math.max(30, Math.min(900, Number(process.env.SUBJECT_ANALYSIS_LEASE_SECONDS ?? 900)));
-  const client = createClient(required("BRAND_PILOT_API_URL"), required("WORKER_API_TOKEN"));
+  const apiTimeoutMs = Math.max(15_000, Number(process.env.SUBJECT_ANALYSIS_API_TIMEOUT_MS ?? 300_000));
+  const client = createClient(required("BRAND_PILOT_API_URL"), required("WORKER_API_TOKEN"), fetch, apiTimeoutMs);
   const runner = createCodexRunner({ timeoutMs: Math.max(1_000, Number(process.env.SUBJECT_ANALYSIS_CODEX_TIMEOUT_MS ?? 900_000)) });
   do {
     const result = await runSubjectAnalysisOnce({

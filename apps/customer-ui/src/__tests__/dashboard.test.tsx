@@ -1,7 +1,9 @@
 import { act, cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Dashboard } from "../types";
+import { FeedbackProvider, useFeedback } from "../components/feedback/FeedbackContext";
+import type { Dashboard, PublishArtifact } from "../types";
 
 const dashboard: Dashboard = {
   period: "30d",
@@ -65,13 +67,41 @@ const dashboard: Dashboard = {
   }]
 };
 
-type ApiMock = { getDashboard: ReturnType<typeof vi.fn> };
+const artifact: PublishArtifact = {
+  queueId: "queue-1",
+  kind: "image_gallery",
+  deliveryFormat: "instagram_feed_carousel",
+  assets: [{
+    url: "https://cdn.example.com/card-1.png",
+    fileName: "card-1.png",
+    mimeType: "image/png",
+    width: 1080,
+    height: 1080
+  }],
+  posterUrl: null,
+  html: null,
+  text: null
+};
 
-async function renderDashboardPage(getDashboard: ApiMock["getDashboard"] = vi.fn(async () => dashboard)) {
-  const api = { getDashboard };
+type ApiMock = {
+  getDashboard: ReturnType<typeof vi.fn>;
+  getPublishArtifact: ReturnType<typeof vi.fn>;
+};
+
+async function renderDashboardPage(
+  getDashboard: ApiMock["getDashboard"] = vi.fn(async () => dashboard),
+  getPublishArtifact: ApiMock["getPublishArtifact"] = vi.fn(async () => artifact),
+  openFeedback = vi.fn()
+) {
+  const api = { getDashboard, getPublishArtifact };
   vi.doMock("../lib/apiClient", () => ({ DEMO_BRAND_ID: "brand-1", api }));
+  vi.doMock("../components/feedback/FeedbackContext", () => ({ FeedbackProvider, useFeedback }));
   const { DashboardPage } = await import("../pages/DashboardPage");
-  render(<DashboardPage />);
+  render(
+    <FeedbackProvider onOpenFeedback={openFeedback}>
+      <DashboardPage />
+    </FeedbackProvider>
+  );
   return api;
 }
 
@@ -96,10 +126,42 @@ describe("DashboardPage", () => {
     expect(screen.getByRole("heading", { name: "현재 콘텐츠 운영 흐름" })).toBeVisible();
     expect(screen.getByRole("img", { name: /2026년 7월 15일.*1,280회.*2026년 7월 16일.*1,650회/ })).toBeVisible();
     expect(screen.getByRole("heading", { name: "채널별 성과" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "상위 콘텐츠" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "성과가 좋았던 콘텐츠" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "확인 필요" })).toBeVisible();
     expect(screen.getByText("여름 캠페인 운영 가이드")).toBeVisible();
     expect(api.getDashboard).toHaveBeenCalledWith("brand-1");
+  });
+
+  it("opens shared feedback from the feature suggestion banner", async () => {
+    const user = userEvent.setup();
+    const openFeedback = vi.fn();
+    await renderDashboardPage(undefined, undefined, openFeedback);
+
+    await user.click(await screen.findByRole("button", { name: "기능 제안하기" }));
+
+    expect(openFeedback).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("link", { name: "기능 제안하기" })).not.toBeInTheDocument();
+  });
+
+  it("loads and shows a published artifact only after opening its performance detail", async () => {
+    const user = userEvent.setup();
+    const api = await renderDashboardPage();
+
+    const detailButton = await screen.findByRole("button", { name: "여름 캠페인 운영 가이드 상세 보기" });
+    expect(api.getPublishArtifact).not.toHaveBeenCalled();
+
+    await user.click(detailButton);
+
+    expect(api.getPublishArtifact).toHaveBeenCalledWith("queue-1");
+    const dialog = await screen.findByRole("dialog", { name: "여름 캠페인 운영 가이드" });
+    expect(within(dialog).getByTestId("artifact-primary-image")).toHaveAttribute("src", "https://cdn.example.com/card-1.png");
+    expect(within(dialog).getByText("Instagram")).toBeVisible();
+    expect(within(dialog).getByText("카드뉴스")).toBeVisible();
+    expect(within(dialog).getByText("3,400회")).toBeVisible();
+    expect(within(dialog).getByRole("link", { name: "원본 게시물 보기" })).toHaveAttribute(
+      "href",
+      "https://instagram.com/p/post-1"
+    );
   });
 
   it("renders distinct channel exposure series and only legends channels with data", async () => {
@@ -145,10 +207,22 @@ describe("DashboardPage", () => {
     expect(screen.queryByText(/secret-value|stack trace/i)).not.toBeInTheDocument();
   });
 
+  it("shows the same channel attention only once", async () => {
+    await renderDashboardPage(vi.fn(async () => ({
+      ...dashboard,
+      attentionItems: [
+        ...dashboard.attentionItems,
+        { ...dashboard.attentionItems[0] }
+      ]
+    })));
+
+    expect(await screen.findByRole("heading", { name: "전체 현황" })).toBeVisible();
+    expect(screen.getAllByText("채널 성과 일부를 수집하지 못했습니다.")).toHaveLength(1);
+  });
+
   it("keeps the owned customer UI runtime limited to six channels", () => {
     const runtimeFiles = [
       "src/types.ts",
-      "src/pages/ContentPage.tsx",
       "src/pages/PublishQueuePage.tsx",
       "src/pages/DashboardPage.tsx",
       "src/components/publish/TopicPublishGroup.tsx",
@@ -175,7 +249,7 @@ describe("DashboardPage", () => {
 
     expect(await screen.findByText("표시할 일별 조회·노출 데이터가 없습니다.")).toBeVisible();
     expect(screen.getByText("표시할 채널 성과가 없습니다.")).toBeVisible();
-    expect(screen.getByText("최근 30일에 발행된 콘텐츠가 없습니다.")).toBeVisible();
+    expect(screen.getByText("최근 30일에 성과가 수집된 콘텐츠가 없습니다.")).toBeVisible();
     expect(screen.getByText("현재 확인할 항목이 없습니다.")).toBeVisible();
     expect(screen.getByText(/아직 수집되지 않음/)).toBeVisible();
   });
@@ -184,7 +258,7 @@ describe("DashboardPage", () => {
     let rejectRequest: ((reason: Error) => void) | undefined;
     await renderDashboardPage(vi.fn(() => new Promise((_resolve, reject) => { rejectRequest = reject; })));
 
-    expect(await screen.findByRole("status")).toHaveTextContent("대시보드를 불러오는 중입니다.");
+    expect(await screen.findByRole("status", { name: "대시보드를 불러오는 중입니다." })).toHaveClass("skeleton-page");
     await act(async () => rejectRequest?.(new Error("network_error")));
     expect(await screen.findByRole("alert")).toHaveTextContent("대시보드를 불러오지 못했습니다.");
     expect(screen.getByRole("button", { name: "다시 시도" })).toBeVisible();

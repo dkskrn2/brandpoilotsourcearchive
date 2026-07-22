@@ -1,7 +1,63 @@
 import { describe, expect, it, vi } from "vitest";
-import { publishInstagramCarouselWithMeta, publishInstagramOutput } from "./instagramPublisher";
+import { InstagramPublishStageError, publishInstagramCarouselWithMeta, publishInstagramOutput } from "./instagramPublisher";
 
 describe("instagramPublisher", () => {
+  it.each([
+    [1, "child_container_create"],
+    [2, "child_container_status"],
+    [3, "carousel_container_create"],
+    [4, "carousel_container_status"],
+    [5, "media_publish"],
+  ] as const)("preserves the Meta failure stage at request %s", async (failedCall, expectedStage) => {
+    let call = 0;
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      call += 1;
+      if (call === failedCall) {
+        return new Response(JSON.stringify({ error: { code: 100, error_subcode: 2207001 } }), { status: 400 });
+      }
+      if (init?.method === "GET") return new Response(JSON.stringify({ status_code: "FINISHED" }), { status: 200 });
+      return new Response(JSON.stringify({ id: `container-${call}` }), { status: 200 });
+    });
+
+    const error = await publishInstagramCarouselWithMeta({
+      accessToken: "meta-token",
+      instagramBusinessAccountId: "17890000000000000",
+      imageUrls: ["https://cdn.example.com/slide-1.png"],
+      caption: "게시물",
+      fetchImpl: fetchImpl as any,
+    }).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(InstagramPublishStageError);
+    expect(error).toMatchObject({ stage: expectedStage });
+    expect(error.cause).toMatchObject({ status: 400, code: 100, subcode: 2207001 });
+  });
+
+  it("publishes one generated image as a regular Instagram feed post", async () => {
+    const requests: Array<{ url: string; body: Record<string, string> }> = [];
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "GET") {
+        return new Response(JSON.stringify({ status_code: "FINISHED" }), { status: 200 });
+      }
+      const body = Object.fromEntries(new URLSearchParams(String(init?.body)));
+      requests.push({ url, body });
+      return new Response(JSON.stringify({ id: requests.length === 1 ? "image-container" : "image-post" }), { status: 200 });
+    });
+
+    await expect(publishInstagramOutput({
+      deliveryFormat: "instagram_feed_single",
+      accessToken: "meta-token",
+      instagramBusinessAccountId: "17890000000000000",
+      imageUrl: "https://cdn.example.com/creative.png",
+      caption: "새로운 소식\n\n#브랜드",
+    }, { fetchImpl: fetchImpl as any })).resolves.toEqual({ externalPostId: "image-post", publishedUrl: null });
+
+    expect(requests[0]?.body).toMatchObject({
+      image_url: "https://cdn.example.com/creative.png",
+      caption: "새로운 소식\n\n#브랜드",
+    });
+    expect(requests[0]?.body).not.toHaveProperty("media_type");
+  });
+
   it("publishes generated card images as an Instagram carousel", async () => {
     const requests: Array<{ url: string; body: Record<string, string> }> = [];
     const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
@@ -102,14 +158,19 @@ describe("instagramPublisher", () => {
       return new Response(JSON.stringify({ id: "media-1" }), { status: 200, headers: { "content-type": "application/json" } });
     });
 
-    await expect(publishInstagramCarouselWithMeta({
+    const timeoutError = await publishInstagramCarouselWithMeta({
       accessToken: "meta-token",
       instagramBusinessAccountId: "17890000000000000",
       imageUrls: ["https://cdn.example.com/slide-1.png"],
       caption: "제주 가족여행 숙소 선택법",
       fetchImpl: fetchSpy as any,
       statusPollIntervalMs: 1
-    })).rejects.toThrow("instagram_media_container_timeout");
+    }).catch((error) => error);
+
+    expect(timeoutError).toMatchObject({
+      stage: "child_container_status",
+      cause: expect.objectContaining({ message: "instagram_media_container_timeout" }),
+    });
 
     const statusCalls = fetchSpy.mock.calls.filter((call) => String(call[0]).includes("fields=status_code"));
     expect(statusCalls).toHaveLength(60);

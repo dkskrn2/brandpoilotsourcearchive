@@ -1,6 +1,7 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import type { LookupFunction } from "node:net";
+import { load } from "cheerio";
 import { Agent } from "undici";
 import {
   assertSafeCrawlUrl,
@@ -277,14 +278,9 @@ function canonicalUrl(html: string, finalUrl: string) {
 }
 
 function visibleText(html: string) {
-  const clean = html
-    .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
-    .replace(/<svg\b[\s\S]*?<\/svg>/gi, " ")
-    .replace(/<noscript\b[\s\S]*?<\/noscript>/gi, " ")
-    .replace(/<head\b[\s\S]*?<\/head>/gi, " ")
-    .replace(/<(?:nav|footer|header|aside|form)\b[\s\S]*?<\/(?:nav|footer|header|aside|form)>/gi, " ");
-  return text(clean).slice(0, 20_000);
+  const $ = load(html);
+  $("script, style, svg, noscript, head, nav, footer, header, aside, form").remove();
+  return decodeHtml($("body").text()).replace(/\s+/g, " ").trim().slice(0, 20_000);
 }
 
 function isProductOrService(value: unknown) {
@@ -378,7 +374,7 @@ function imageCandidates(html: string, baseUrl: string, structuredData: Record<s
     const source = typeof value === "string" ? value : value && typeof value === "object" ? (value as Record<string, unknown>).url : null;
     if (typeof source === "string") add(source, { width: null, height: null, altText: "", role: classifyRole("structured", structuredData) });
   }
-  return [...candidates.values()];
+  return [...candidates.values()].slice(0, 6);
 }
 
 function extractedFacts(title: string, description: string, body: string, structuredData: Record<string, unknown>, sourceUrl: string) {

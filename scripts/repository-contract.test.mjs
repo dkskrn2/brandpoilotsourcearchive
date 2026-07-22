@@ -27,6 +27,50 @@ const assertExactSqlValues = (body, expected) => {
   assert.deepEqual(quotedSqlValues(body).sort(), [...expected].sort());
 };
 
+test("AI 콘텐츠 저장소 계약은 중앙 ApiRepository에 모두 노출된다", async () => {
+  const types = await readFile("apps/api/src/types.ts", "utf8");
+  const requiredMethods = [
+    "createAiContentAnalysis",
+    "updateAiContentDraft",
+    "startAiContentGeneration",
+    "listAiContentGenerations",
+    "getAiContentGeneration",
+    "listAiContentUsage",
+    "listAiContentReferences",
+    "listBrandAudiences",
+    "saveBrandAudience",
+    "listBrandAppeals",
+    "saveBrandAppeal",
+    "confirmAiContentAttachment",
+    "claimAiContentJob",
+    "heartbeatAiContentJob",
+    "completeAiContentJob",
+    "failAiContentJob",
+    "retryAiContentOutput",
+    "downloadAiContentOutput",
+    "downloadAiContentGeneration",
+    "sendAiContentToPublish",
+  ];
+
+  for (const method of requiredMethods) {
+    assert.match(types, new RegExp(`\\b${method}\\s*\\(`), `ApiRepository에 필수 ${method} 메서드가 있어야 합니다`);
+  }
+});
+
+test("관리자 API는 별도 namespace와 server-only credential 계약을 사용한다", async () => {
+  const [server, index, envExample, adminTypes] = await Promise.all([
+    readFile("apps/api/src/adminServer.ts", "utf8"),
+    readFile("apps/api/src/index.ts", "utf8"),
+    readFile("apps/api/.env.example", "utf8"),
+    readFile("apps/api/src/adminTypes.ts", "utf8"),
+  ]);
+
+  assert.match(server, /prefix:\s*"\/admin\/v1"/);
+  assert.match(index, /process\.env\.ADMIN_SERVICE_TOKEN/);
+  assert.match(envExample, /^ADMIN_SERVICE_TOKEN=$/m);
+  assert.doesNotMatch(adminTypes, /encryptedPayload|encrypted_payload|secretValue|accessToken|refreshToken/);
+});
+
 const assertDeliveryBackfill = (migration, channel, deliveryFormat) => {
   assert.match(
     migration,
@@ -218,7 +262,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션은 001부터 038까지 정확한 이름으로 존재한다", async () => {
+test("데이터베이스 마이그레이션은 001부터 049까지 정확한 이름으로 존재한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -261,6 +305,17 @@ test("데이터베이스 마이그레이션은 001부터 038까지 정확한 이
     "036_harden_performance_and_wiki_activation.sql",
     "037_repair_orphaned_generation_outputs.sql",
     "038_fail_exhausted_generation_jobs.sql",
+    "039_instagram_trend_connections.sql",
+    "040_restore_support_requests.sql",
+    "041_instagram_trend_page_optional.sql",
+    "042_single_owned_source.sql",
+    "043_support_request_responses.sql",
+    "044_ai_content_studio_runtime.sql",
+    "045_admin_api_foundation.sql",
+    "046_content_quality_learning.sql",
+    "047_ai_content_subject_analysis.sql",
+    "048_ai_content_direct_social_publishing.sql",
+    "049_brand_intelligence_onboarding.sql",
   ]);
 });
 

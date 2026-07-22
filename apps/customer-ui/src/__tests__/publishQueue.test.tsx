@@ -108,7 +108,12 @@ const reviewOutputs: ContentOutput[] = [{
   generatedAt: "2026-07-08T01:00:00.000Z",
   sourceSummary: "자사 FAQ 요약",
   previewTitle: "제주 숙소 선택 기준",
-  previewBody: "캡션 내용"
+  previewBody: "캡션 내용",
+  outputJson: {
+    generationState: "completed",
+    artifactStatus: "ready",
+    deliveryFormat: "instagram_feed_carousel"
+  }
 }, {
   id: "output-blocked",
   contentId: "master-blocked",
@@ -290,14 +295,11 @@ async function renderPublishQueuePage(apiOverrides: Partial<Record<string, Retur
     generateContent: vi.fn(async () => ({ processed: 1, created: 3, updated: 1, failed: 0 })),
     listPublishQueue: vi.fn(async () => []),
     listPublishResults: vi.fn(async () => []),
+    getContentOutputArtifact: vi.fn(async () => ({ ...imageArtifact, queueId: "output-review" })),
     getPublishArtifact: vi.fn(async () => imageArtifact),
     downloadPublishResult: vi.fn(async () => ({
       fileName: "queue-result.zip",
       blob: new Blob(["queue-zip-content"], { type: "application/zip" })
-    })),
-    downloadPublishedResults: vi.fn(async () => ({
-      fileName: "brand-pilot-published-results.zip",
-      blob: new Blob(["zip-content"], { type: "application/zip" })
     })),
     schedulePublishQueue: vi.fn(async () => ({ processed: 2, created: 0, updated: 2, failed: 0 })),
     publishQueueItem: vi.fn(async () => ({ id: "queue-topic", status: "published", publishedUrl: "mock://instagram/queue-topic" })),
@@ -315,6 +317,51 @@ async function renderPublishQueuePage(apiOverrides: Partial<Record<string, Retur
 }
 
 describe("PublishQueuePage", () => {
+  it("renders grouped status filters and a card region", async () => {
+    await renderPublishQueuePage();
+
+    expect(await screen.findByRole("region", { name: "게시 관리 통합 목록" })).toHaveClass(
+      "publish-management-grid"
+    );
+    for (const label of ["전체", "준비 중", "검토 필요", "게시 예정", "완료", "문제"]) {
+      expect(screen.getByRole("button", { name: new RegExp(`^${label} \\d+$`) })).toHaveAttribute(
+        "aria-pressed"
+      );
+    }
+    expect(screen.queryByRole("button", { name: "대기" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "게시 대기" })).not.toBeInTheDocument();
+  });
+
+  it("shows a card skeleton while the initial management data is loading", async () => {
+    const pending = new Promise<never>(() => undefined);
+    await renderPublishQueuePage({
+      listPublishQueue: vi.fn(() => pending),
+      listContentOutputs: vi.fn(() => pending),
+      listPublishResults: vi.fn(() => pending)
+    });
+
+    expect(screen.getByRole("status", { name: "게시 관리 목록을 불러오는 중입니다." })).toHaveClass("skeleton-card-grid");
+    expect(screen.queryByRole("region", { name: "게시 관리 통합 목록" })).not.toBeInTheDocument();
+  });
+
+  it("previews generated review content and labels unfinished content as unavailable", async () => {
+    const api = await renderPublishQueuePage({ listContentOutputs: vi.fn(async () => reviewOutputs) });
+
+    await userEvent.click(await screen.findByRole("button", { name: /^검토 필요 \d+$/ }));
+    const generatedCard = screen.getByRole("article", { name: "검토할 인스타 콘텐츠" });
+    await userEvent.click(within(generatedCard).getByRole("button", { name: "콘텐츠 보기" }));
+
+    const dialog = screen.getByRole("dialog", { name: "생성 콘텐츠 상세" });
+    expect(await within(dialog).findByRole("img", { name: "card-01.png" })).toBeVisible();
+    expect(api.getContentOutputArtifact).toHaveBeenCalledWith("output-review");
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "닫기" }));
+    await userEvent.click(screen.getByRole("button", { name: /^전체 \d+$/ }));
+    const generatingCard = screen.getByRole("article", { name: "생성 중인 X 콘텐츠" });
+    expect(within(generatingCard).getByText("콘텐츠 미생성")).toBeVisible();
+    expect(within(generatingCard).queryByRole("button", { name: "콘텐츠 보기" })).not.toBeInTheDocument();
+  });
+
   it("shows publish states for every channel present in a result", async () => {
     const channels = (["instagram", "threads", "x", "linkedin", "youtube", "tiktok"] as const).map((channel, index) => ({
       ...publishResults[1].channels[0],
@@ -334,6 +381,26 @@ describe("PublishQueuePage", () => {
     }
   });
 
+  it("renders multiple formats for the same channel without duplicate React keys", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const firstChannel = publishResults[1].channels[0];
+    const channels = [
+      { ...firstChannel, queueId: "queue-instagram-feed", channelOutputId: "output-instagram-feed" },
+      { ...firstChannel, queueId: "queue-instagram-reel", channelOutputId: "output-instagram-reel" }
+    ];
+
+    try {
+      await renderPublishQueuePage({
+        listPublishResults: vi.fn(async () => [{ ...publishResults[1], contentId: "master-two-instagram-formats", channels }])
+      });
+
+      expect(await screen.findAllByRole("button", { name: "Instagram 게시 대기" })).toHaveLength(2);
+      expect(consoleError.mock.calls.flat().join(" ")).not.toContain("same key");
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("shows one scheduled time per topic and independent child channel formats", async () => {
     await renderPublishQueuePage({
       listPublishQueue: vi.fn(async () => groupedQueueRows),
@@ -342,11 +409,12 @@ describe("PublishQueuePage", () => {
 
     expect(await screen.findByText("Instagram · Reel")).toBeVisible();
     expect(screen.getByText("Threads · 텍스트")).toBeVisible();
-    expect(screen.getAllByText("7월 14일 11:30")).toHaveLength(1);
+    expect(screen.getByRole("article", { name: "제주 가족 숙소 카드뉴스" })).toHaveTextContent("7월 14일 11:30");
     expect(screen.getAllByText("제주 가족 숙소 카드뉴스")).toHaveLength(1);
-    const table = screen.getByRole("table", { name: "게시 관리 통합 목록" });
-    expect(within(table).getByText("게시 완료")).toBeVisible();
-    expect(within(table).getByText("실패")).toBeVisible();
+    const cards = screen.getByRole("region", { name: "게시 관리 통합 목록" });
+    expect(cards).toHaveClass("publish-management-grid");
+    expect(within(cards).getByText("게시 완료")).toBeVisible();
+    expect(within(cards).getAllByText("실패")).toHaveLength(2);
     expect(screen.getByText("Threads access token expired")).toBeVisible();
     expect(screen.queryByRole("link", { name: "결과물 다운로드" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "게시물 열기" })).toHaveAttribute(
@@ -370,11 +438,12 @@ describe("PublishQueuePage", () => {
   it("keeps legacy rows without a topic group independently keyed", async () => {
     await renderPublishQueuePage({ listPublishQueue: vi.fn(async () => legacyQueueRows) });
 
-    expect(await screen.findAllByText("제주 가족 숙소 카드뉴스")).toHaveLength(2);
-    expect(screen.getAllByText("7월 14일 11:30")).toHaveLength(2);
+    const legacyCards = await screen.findAllByRole("article", { name: "제주 가족 숙소 카드뉴스" });
+    expect(legacyCards).toHaveLength(2);
+    for (const card of legacyCards) expect(card).toHaveTextContent("7월 14일 11:30");
   });
 
-  it("shows one publish queue table instead of channel-separated panels", async () => {
+  it("shows one publish card grid instead of channel-separated panels", async () => {
     await renderPublishQueuePage({
       listContentOutputs: vi.fn(async () => reviewOutputs),
       listPublishQueue: vi.fn(async () => queueRows),
@@ -382,25 +451,40 @@ describe("PublishQueuePage", () => {
     });
 
     expect(screen.getByRole("heading", { name: "게시 관리" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "완료 결과물 다운로드 (1)" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /완료 결과물 다운로드/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "검토 필요" })).not.toBeInTheDocument();
     expect(await screen.findByText("검토할 인스타 콘텐츠")).toBeVisible();
     expect(screen.getByText("차단된 Threads 콘텐츠")).toBeVisible();
     expect(screen.getByText("제주 가족 숙소 카드뉴스")).toBeVisible();
     expect(screen.getByText("게시 대기 상태 콘텐츠")).toBeVisible();
-    expect(screen.getByText("가족 숙소 체크리스트")).toBeVisible();
-    const table = screen.getByRole("table", { name: "게시 관리 통합 목록" });
-    expect(within(table).getByRole("columnheader", { name: "소스 구분" })).toBeInTheDocument();
-    expect(within(table).getByRole("columnheader", { name: "생성 근거" })).toBeInTheDocument();
-    expect(within(table).getByText("주제표+크롤링")).toBeVisible();
-    expect(within(table).getByText("크롤링")).toBeVisible();
-    expect(within(table).getAllByText(/자사 FAQ 요약/).length).toBeGreaterThan(0);
-    expect(within(table).getAllByText("https://brand.example.com/faq").length).toBeGreaterThan(0);
-    expect(within(table).getByRole("button", { name: "Instagram 성공" })).toBeVisible();
-    expect(within(table).getByRole("button", { name: "Threads 실패" })).toBeVisible();
-    expect(within(table).queryByRole("button", { name: /Webflow/ })).not.toBeInTheDocument();
+    const cards = screen.getByRole("region", { name: "게시 관리 통합 목록" });
+    expect(within(cards).getAllByRole("article").length).toBeGreaterThan(0);
+    expect(within(cards).queryByText("https://brand.example.com/faq")).not.toBeInTheDocument();
+    expect(within(cards).getByRole("button", { name: "Instagram 성공" })).toBeVisible();
+    expect(within(cards).getByRole("button", { name: "Threads 실패" })).toBeVisible();
+    expect(within(cards).queryByRole("button", { name: /Webflow/ })).not.toBeInTheDocument();
     expect(screen.queryByText("Instagram 게시 관리 목록이 비어 있습니다")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Instagram" })).not.toBeInTheDocument();
+  });
+
+  it("shows each channel's actual published time on its card", async () => {
+    await renderPublishQueuePage({
+      listPublishQueue: vi.fn(async () => []),
+      listPublishResults: vi.fn(async () => publishResults)
+    });
+
+    const cards = await screen.findByRole("region", { name: "게시 관리 통합 목록" });
+    const publishedCard = within(cards).getByRole("article", { name: "제주 가족 숙소 카드뉴스" });
+    const expectedPublishedAt = new Date("2026-07-08T02:30:00.000Z").toLocaleString("ko-KR", {
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+    expect(within(publishedCard).getByText(`Instagram ${expectedPublishedAt}`)).toBeVisible();
+
+    const queuedCard = within(cards).getByRole("article", { name: "게시 대기 상태 콘텐츠" });
+    expect(within(queuedCard).getByText("-")).toBeVisible();
   });
 
   it("moves content review actions into publish management", async () => {
@@ -413,21 +497,21 @@ describe("PublishQueuePage", () => {
     expect(api.reviewContentOutput).toHaveBeenCalledWith("output-review", "approve");
     expect(await screen.findByText("게시 관리 목록에 등록했습니다.")).toBeVisible();
 
-    await userEvent.click(screen.getByRole("button", { name: "검토 필요" }));
-    expect(screen.getByText("외부 참고 URL 의존도가 높습니다.")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: /^검토 필요 \d+$/ }));
+    expect(screen.getByText("차단된 Threads 콘텐츠")).toBeVisible();
   });
 
   it("renders generation lifecycle rows with only API-valid actions", async () => {
     await renderPublishQueuePage({ listContentOutputs: vi.fn(async () => reviewOutputs) });
 
-    const table = await screen.findByRole("table", { name: "게시 관리 통합 목록" });
-    const generating = within(table).getByRole("row", { name: /생성 중인 X 콘텐츠/ });
+    const cards = await screen.findByRole("region", { name: "게시 관리 통합 목록" });
+    const generating = within(cards).getByRole("article", { name: "생성 중인 X 콘텐츠" });
     expect(within(generating).getByText("X 생성 중")).toBeVisible();
     expect(within(generating).queryByRole("button", { name: /승인|재생성|거절/ })).not.toBeInTheDocument();
 
-    const failed = within(table).getByRole("row", { name: /생성 실패한 LinkedIn 콘텐츠/ });
+    const failed = within(cards).getByRole("article", { name: "생성 실패한 LinkedIn 콘텐츠" });
     expect(within(failed).getByText("LinkedIn 생성 실패")).toBeVisible();
-    expect(within(failed).getByText("콘텐츠 생성에 실패했습니다. 재생성하거나 거절해 주세요.")).toBeVisible();
+    expect(within(failed).getByText("콘텐츠 생성 실패")).toBeVisible();
     expect(within(failed).queryByText(/secret-value/)).not.toBeInTheDocument();
     expect(within(failed).queryByRole("button", { name: /^승인$/ })).not.toBeInTheDocument();
     expect(within(failed).queryByRole("button", { name: "재생성" })).not.toBeInTheDocument();
@@ -451,9 +535,9 @@ describe("PublishQueuePage", () => {
     }];
     await renderPublishQueuePage({ listContentOutputs: vi.fn(async () => mixedOutputs) });
 
-    const row = await screen.findByRole("row", { name: /혼합 생성 상태/ });
-    expect(within(row).getAllByRole("cell")[0]).toHaveTextContent("생성 중");
-    expect(within(row).queryByRole("button", { name: /승인|재생성|거절/ })).not.toBeInTheDocument();
+    const card = await screen.findByRole("article", { name: "혼합 생성 상태" });
+    expect(within(card).getByText("생성 중")).toBeVisible();
+    expect(within(card).queryByRole("button", { name: /승인|재생성|거절/ })).not.toBeInTheDocument();
   });
 
   it("disables grouped actions while a review request is pending", async () => {
@@ -462,7 +546,7 @@ describe("PublishQueuePage", () => {
       listContentOutputs: vi.fn(async () => [reviewOutputs[0]]),
       reviewContentOutput: vi.fn(() => new Promise((resolve) => { resolveReview = resolve; }))
     });
-    const row = await screen.findByRole("row", { name: /검토할 인스타 콘텐츠/ });
+    const row = await screen.findByRole("article", { name: "검토할 인스타 콘텐츠" });
 
     await userEvent.click(within(row).getByRole("button", { name: "승인" }));
 
@@ -488,7 +572,7 @@ describe("PublishQueuePage", () => {
     });
     await renderPublishQueuePage({ listContentOutputs, reviewContentOutput });
 
-    const row = await screen.findByRole("row", { name: /부분 처리 검토/ });
+    const row = await screen.findByRole("article", { name: "부분 처리 검토" });
     await userEvent.click(within(row).getByRole("button", { name: "수동 승인" }));
 
     expect(listContentOutputs).toHaveBeenCalledTimes(2);
@@ -500,7 +584,7 @@ describe("PublishQueuePage", () => {
       .mockResolvedValueOnce([reviewOutputs[0]])
       .mockRejectedValueOnce(new Error("refresh_failed"));
     await renderPublishQueuePage({ listContentOutputs });
-    const row = await screen.findByRole("row", { name: /검토할 인스타 콘텐츠/ });
+    const row = await screen.findByRole("article", { name: "검토할 인스타 콘텐츠" });
 
     await userEvent.click(within(row).getByRole("button", { name: "승인" }));
 
@@ -553,7 +637,7 @@ describe("PublishQueuePage", () => {
     });
 
     await userEvent.click(await screen.findByRole("button", { name: "Instagram 성공" }));
-    expect(screen.getByText("결과물을 불러오는 중입니다.")).toBeVisible();
+    expect(screen.getByRole("status", { name: "결과물을 불러오는 중입니다." })).toHaveClass("skeleton-list");
     await act(async () => resolveArtifact?.(imageArtifact));
     expect(await screen.findByRole("img", { name: "card-01.png" })).toBeVisible();
 
@@ -589,6 +673,21 @@ describe("PublishQueuePage", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:queue-result");
     expect(screen.getByText("게시 결과 저장을 시작했습니다.")).toBeVisible();
     expect(screen.getByRole("dialog", { name: "업로드 콘텐츠 상세" })).toBeVisible();
+  });
+
+  it("keeps the save label stable and shows an inline loader while downloading", async () => {
+    await renderPublishQueuePage({
+      listPublishResults: vi.fn(async () => publishResults),
+      downloadPublishResult: vi.fn(() => new Promise(() => {}))
+    });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Instagram 성공" }));
+    const saveButton = await screen.findByRole("button", { name: "저장" });
+    await userEvent.click(saveButton);
+
+    expect(saveButton).toBeDisabled();
+    expect(saveButton).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByLabelText("게시 결과 저장 중")).toBeVisible();
   });
 
   it("keeps the dialog open and reports ordinary download failures", async () => {
@@ -668,9 +767,10 @@ describe("PublishQueuePage", () => {
   });
 
   it("defines a responsive single-column publish result body", () => {
+    const desktopBreakpoint = prototypeCss.indexOf("@media (max-width: 980px)");
     const responsiveRules = prototypeCss.slice(
-      prototypeCss.indexOf("@media (max-width: 980px)"),
-      prototypeCss.indexOf("@media (max-width: 720px)")
+      desktopBreakpoint,
+      prototypeCss.indexOf("@media (max-width: 720px)", desktopBreakpoint)
     );
 
     expect(responsiveRules).toContain(".publish-result-dialog__body { grid-template-columns: 1fr; }");
@@ -680,11 +780,10 @@ describe("PublishQueuePage", () => {
     await renderPublishQueuePage({ listPublishQueue: vi.fn(async () => preLlmQueueRows) });
 
     expect(await screen.findByText("부동산 지고 주식 뜬다?")).toBeVisible();
-    const table = screen.getByRole("table", { name: "게시 관리 통합 목록" });
-    expect(within(table).getByText("대기")).toBeVisible();
-    expect(within(table).getByText("크롤링 근거")).toBeVisible();
-    expect(within(table).getByText("https://blog.opensurvey.co.kr/article/finance-2026-2/")).toBeVisible();
-    expect(within(table).getByRole("button", { name: "Instagram 생성 전" })).toBeDisabled();
+    const cards = screen.getByRole("region", { name: "게시 관리 통합 목록" });
+    expect(within(cards).getByText("대기")).toBeVisible();
+    expect(within(cards).queryByText("https://blog.opensurvey.co.kr/article/finance-2026-2/")).not.toBeInTheDocument();
+    expect(within(cards).getByRole("button", { name: "Instagram 생성 전" })).toBeDisabled();
     expect(screen.queryByRole("dialog", { name: "업로드 콘텐츠 상세" })).not.toBeInTheDocument();
   });
 
@@ -692,7 +791,7 @@ describe("PublishQueuePage", () => {
     await renderPublishQueuePage({ listPublishResults: vi.fn(async () => publishResults) });
 
     await screen.findByText("게시 대기 상태 콘텐츠");
-    await userEvent.click(screen.getByRole("button", { name: "대기" }));
+    await userEvent.click(screen.getByRole("button", { name: /^준비 중 \d+$/ }));
 
     expect(screen.queryByText("게시 대기 상태 콘텐츠")).not.toBeInTheDocument();
     expect(screen.getByText("게시 관리 목록이 비어 있습니다")).toBeVisible();
@@ -702,49 +801,16 @@ describe("PublishQueuePage", () => {
     await renderPublishQueuePage({ listPublishResults: vi.fn(async () => publishResults) });
 
     await screen.findByText("게시 대기 상태 콘텐츠");
-    expect(screen.getByText("게시 대기")).toBeVisible();
-    const table = screen.getByRole("table", { name: "게시 관리 통합 목록" });
-    expect(within(table).getByRole("button", { name: "Instagram 게시 대기" })).toBeDisabled();
-    expect(within(table).getAllByText("외부 참고 요약")).toHaveLength(1);
+    const cards = screen.getByRole("region", { name: "게시 관리 통합 목록" });
+    expect(within(cards).getByRole("button", { name: "Instagram 게시 대기" })).toBeDisabled();
+    expect(within(cards).queryByText("외부 참고 요약")).not.toBeInTheDocument();
   });
 
-  it("downloads published results in one package", async () => {
-    const downloadPublishedResults = vi.fn(async () => ({
-      fileName: "published-results.zip",
-      blob: new Blob(["zip-content"], { type: "application/zip" })
-    }));
-    const createObjectURL = vi.fn(() => "blob:published-results");
-    const revokeObjectURL = vi.fn();
-    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
-    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
-    const api = await renderPublishQueuePage({
-      listPublishQueue: vi.fn(async () => queueRows),
-      downloadPublishedResults
-    });
-
-    await userEvent.click(await screen.findByRole("button", { name: "완료 결과물 다운로드 (1)" }));
-
-    expect(api.downloadPublishedResults).toHaveBeenCalledWith("brand-1");
-    expect(createObjectURL).toHaveBeenCalled();
-    expect(clickSpy).toHaveBeenCalled();
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:published-results");
-    expect(screen.getByText("발송 완료 결과물 1건 다운로드를 시작했습니다.")).toBeVisible();
-  });
-
-  it("disables result download when there are no published rows", async () => {
-    const unpublishedRows = queueRows.filter((row) => row.status !== "published");
-
-    await renderPublishQueuePage({ listPublishQueue: vi.fn(async () => unpublishedRows) });
-
-    expect(await screen.findByRole("button", { name: "완료 결과물 다운로드 (0)" })).toBeDisabled();
-  });
-
-  it("filters the single table by queue status", async () => {
+  it("filters the card grid by grouped status", async () => {
     await renderPublishQueuePage({ listPublishResults: vi.fn(async () => publishResults) });
 
     await screen.findByText("제주 가족 숙소 카드뉴스");
-    await userEvent.click(screen.getByRole("button", { name: "실패" }));
+    await userEvent.click(screen.getByRole("button", { name: /^문제 \d+$/ }));
 
     expect(screen.getByText("제주 가족 숙소 카드뉴스")).toBeVisible();
     expect(screen.queryByText("게시 대기 상태 콘텐츠")).not.toBeInTheDocument();
@@ -789,7 +855,6 @@ describe("PublishQueuePage", () => {
     }];
     const api = await renderPublishQueuePage({ listPublishQueue: vi.fn(async () => queuedOnly) });
 
-    await screen.findByRole("button", { name: "완료 결과물 다운로드 (0)" });
     await userEvent.click(screen.getByRole("button", { name: "다음 게시 실행" }));
 
     expect(api.publishQueueItem).not.toHaveBeenCalled();

@@ -74,38 +74,53 @@ test.beforeEach(async ({ page }) => {
         formats: [format("instagram_feed_carousel", true, 1), format("instagram_story", false, 2), format("instagram_reel", false, 3)]
       } });
     }
+    if (pathname.endsWith("/dashboard")) {
+      return route.fulfill({ ...common, json: {
+        generatedAt: "2026-07-22T00:00:00.000Z",
+        lastCollectedAt: null,
+        summary: { publishedCount: 0, exposureCount: null, pendingReviewCount: 0, failedPublishCount: 0 },
+        workflow: { queuedTopics: 0, generating: 0, pendingReview: 0, scheduledOrPublished: 0 },
+        dailyExposure: [],
+        channelPerformance: [],
+        topContents: [],
+        attentionItems: []
+      } });
+    }
     return route.fulfill({ ...common, json: [] });
   });
 });
 
 test("customer IA routes are reachable", async ({ page }) => {
-  await page.goto("/onboarding");
+  await page.goto("/dashboard");
   const menu = page.getByRole("navigation", { name: "고객 메뉴" });
-  await expect(page.getByRole("heading", { level: 1, name: /게시 자동화/ })).toBeVisible();
+  const clickMenuLink = async (name: RegExp) => {
+    const openMenu = page.getByRole("button", { name: "전체 메뉴 열기" });
+    if (await openMenu.isVisible()) await openMenu.click();
+    await menu.getByRole("link", { name }).click();
+  };
+  await expect(page.getByRole("heading", { level: 1, name: "전체 현황" })).toBeVisible();
 
-  await menu.getByRole("link", { name: /게시 관리/ }).click();
+  await clickMenuLink(/게시 관리/);
   await expect(page.getByRole("heading", { level: 1, name: "게시 관리" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "게시 목록" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "대기", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "준비 중 0", exact: true })).toBeVisible();
 
-  await menu.getByRole("link", { name: /소스/ }).click();
+  await clickMenuLink(/소스/);
   await expect(page.getByRole("heading", { level: 1, name: "소스" })).toBeVisible();
 
-  await menu.getByRole("link", { name: /^채널/ }).click();
+  await clickMenuLink(/^채널/);
   await expect(page.getByRole("heading", { level: 1, name: "채널 연결" })).toBeVisible();
   await expect(page.getByRole("tab", { name: /자동 승인/ })).toHaveCount(0);
 
-  await menu.getByRole("link", { name: /브랜드 설정/ }).click();
+  await clickMenuLink(/브랜드 설정/);
   await expect(page.getByRole("switch", { name: "브랜드 전체 자동 승인" })).toBeVisible();
 
-  await menu.getByRole("link", { name: /관리자 채널/ }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "관리자 채널" })).toBeVisible();
 });
 
 test("mobile layout has no horizontal overflow", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
 
-  for (const path of ["/onboarding", "/publish-queue", "/sources", "/channels", "/brand-settings", "/admin/channels"]) {
+  for (const path of ["/onboarding", "/publish-queue", "/sources", "/channels", "/brand-settings"]) {
     await page.goto(path);
     const hasOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
     expect(hasOverflow, `${path} should not overflow horizontally`).toBe(false);

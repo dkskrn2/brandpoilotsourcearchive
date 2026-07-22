@@ -35,7 +35,7 @@ export function buildInstagramCardImagePrompt(context: InstagramCardImageContext
   const { brandProfile, masterDraft, instagram } = context;
   return [
     "Instagram 카드뉴스 전체 이미지를 생성하세요.",
-    "정방형 1080x1080 카드여야 합니다.",
+    "가로와 세로가 같은 정방형 PNG 카드여야 합니다.",
     "아래 브랜드 맥락과 콘텐츠 초안을 읽고 가장 적절한 카드뉴스 구성을 먼저 판단하세요.",
     "카드 수는 내용에 맞게 결정하되 최소 1장, 최대 5장으로 제한하세요.",
     "각 카드는 하나의 독립된 PNG 파일로 생성하세요.",

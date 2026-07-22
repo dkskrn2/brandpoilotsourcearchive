@@ -10,5 +10,5 @@ export function isBrandProfileComplete(status: BrandUiStatus | null) {
 }
 
 export function isBrandSetupPath(pathname: string) {
-  return pathname === "/onboarding" || pathname === "/brand-settings" || pathname === "/support";
+  return pathname === "/onboarding/brand-intelligence" || pathname === "/support";
 }

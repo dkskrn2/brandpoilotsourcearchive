@@ -93,10 +93,16 @@ describe("parseAiContentManifest", () => {
       .toThrow("ai_content_card_news_slide_count_invalid");
   });
 
-  it("rejects a non-square card-news slide", () => {
+  it("accepts a card-news slide matching the selected ratio", () => {
     const value = cardManifest();
     value.assets[0].height = 1350;
-    expect(() => parseAiContentManifest("card_news", value))
+    expect(parseAiContentManifest("card_news", value, { width: 4, height: 5 }).assets[0])
+      .toMatchObject({ width: 1080, height: 1350 });
+  });
+
+  it("rejects a card-news slide that differs from the selected ratio", () => {
+    const value = cardManifest();
+    expect(() => parseAiContentManifest("card_news", value, { width: 4, height: 5 }))
       .toThrow("ai_content_card_news_dimensions_invalid");
   });
 
@@ -122,6 +128,79 @@ describe("parseAiContentManifest", () => {
     expect(parseAiContentManifest("blog", validBlog).type).toBe("blog");
     expect(() => parseAiContentManifest("blog", { ...validBlog, assets: validBlog.assets.slice(0, 1) }))
       .toThrow("ai_content_blog_html_asset_required");
+  });
+
+  it("accepts blog body images when the HTML uses their public URLs", () => {
+    const inlineAsset = {
+      role: "inline",
+      url: "https://blob.example/inline-01.png",
+      fileName: "inline-01.png",
+      mimeType: "image/png",
+      width: 1200,
+      height: 800,
+      index: 2,
+    };
+    const htmlAsset = { ...validBlog.assets[1], index: 3 };
+    const value = {
+      ...validBlog,
+      assets: [validBlog.assets[0], inlineAsset, htmlAsset],
+      content: { ...validBlog.content, html: `<article><h1>브랜드 콘텐츠 운영 기준</h1><img src="${inlineAsset.url}" alt="운영 흐름"></article>` },
+    };
+    expect(parseAiContentManifest("blog", value).assets).toHaveLength(3);
+
+    const missingReference = { ...value, content: { ...value.content, html: "<article><h1>제목</h1></article>" } };
+    expect(() => parseAiContentManifest("blog", missingReference)).toThrow("ai_content_blog_inline_asset_not_referenced");
+
+    const invalidAlt = { ...value, content: { ...value.content, html: value.content.html.replace("운영 흐름", "flow") } };
+    expect(() => parseAiContentManifest("blog", invalidAlt)).toThrow("ai_content_blog_inline_asset_alt_invalid");
+  });
+
+  it("accepts five sequential blog inline images and rejects a sixth", () => {
+    const inlineAssets = Array.from({ length: 5 }, (_, index) => ({
+      role: "inline",
+      url: `https://blob.example/inline-${String(index + 1).padStart(2, "0")}.png`,
+      fileName: `inline-${String(index + 1).padStart(2, "0")}.png`,
+      mimeType: "image/png",
+      width: 1200,
+      height: 800,
+      index: index + 2,
+    }));
+    const htmlAsset = { ...validBlog.assets[1], index: 7 };
+    const html = `<article><h1>브랜드 콘텐츠 운영 기준</h1>${inlineAssets.map((asset, index) => `<img src="${asset.url}" alt="${index + 1}단계 운영 흐름 설명">`).join("")}</article>`;
+    const value = { ...validBlog, assets: [validBlog.assets[0], ...inlineAssets, htmlAsset], content: { ...validBlog.content, html } };
+    expect(parseAiContentManifest("blog", value).assets).toHaveLength(7);
+
+    const sixth = { ...inlineAssets[0], url: "https://blob.example/inline-06.png", fileName: "inline-06.png", index: 7 };
+    const sixValue = {
+      ...value,
+      assets: [validBlog.assets[0], ...inlineAssets, sixth, { ...htmlAsset, index: 8 }],
+      content: { ...validBlog.content, html: html.replace("</article>", `<img src="${sixth.url}" alt="6단계 운영 흐름 설명"></article>`) },
+    };
+    expect(() => parseAiContentManifest("blog", sixValue)).toThrow("ai_content_blog_inline_asset_count_invalid");
+  });
+
+  it("requires an exact 1200x630 blog cover and sequential inline filenames", () => {
+    const invalidCover = {
+      ...validBlog,
+      assets: [{ ...validBlog.assets[0], width: 1200, height: 628 }, validBlog.assets[1]],
+    };
+    expect(() => parseAiContentManifest("blog", invalidCover)).toThrow("ai_content_blog_cover_dimensions_invalid");
+
+    const inlineAsset = {
+      role: "inline",
+      url: "https://blob.example/inline-02.png",
+      fileName: "inline-02.png",
+      mimeType: "image/png",
+      width: 1200,
+      height: 800,
+      index: 2,
+    };
+    const invalidSequence = {
+      ...validBlog,
+      assets: [validBlog.assets[0], inlineAsset, { ...validBlog.assets[1], index: 3 }],
+      content: { ...validBlog.content, html: `<article><h1>제목</h1><img src="${inlineAsset.url}" alt="운영 흐름 설명"></article>` },
+    };
+    expect(() => parseAiContentManifest("blog", invalidSequence)).toThrow("ai_content_blog_inline_asset_sequence_invalid");
   });
 
   it("rejects unsafe blog HTML and multiple h1 elements", () => {
@@ -164,6 +243,7 @@ describe("parseAiContentManifest", () => {
   });
 
   it("accepts marketing dimensions and rejects a mismatch", () => {
+    expect(parseAiContentManifest("marketing", validMarketing).type).toBe("marketing");
     expect(parseAiContentManifest("marketing", validMarketing, { width: 1080, height: 1350 }).type).toBe("marketing");
     expect(() => parseAiContentManifest("marketing", validMarketing, { width: 1080, height: 1920 }))
       .toThrow("ai_content_marketing_dimensions_mismatch");

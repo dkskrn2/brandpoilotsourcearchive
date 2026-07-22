@@ -1,10 +1,14 @@
 import { useEffect, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { PageHeader } from "../components/layout/PageHeader";
 import { Alert } from "../components/ui/Alert";
 import { Badge } from "../components/ui/Badge";
 import { Field } from "../components/ui/Field";
 import { Switch } from "../components/ui/Switch";
+import { InlineSpinner, PageSkeleton } from "../components/ui/LoadingState";
 import { BrandLogoEditor } from "../components/brand/BrandLogoEditor";
+import { brandIntelligenceGateway } from "../features/brand-intelligence/brandIntelligenceGateway";
+import type { BrandAnalysis } from "../features/brand-intelligence/types";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
 import type {
   BrandContentFormat,
@@ -27,10 +31,16 @@ const primaryCustomerOptions = [
 ];
 
 const customOptionValue = "__custom__";
+const maxSubcategorySelections = 5;
 const fixedFormatOrder: InstagramDeliveryFormat[] = [
   "instagram_feed_carousel",
   "instagram_story",
   "instagram_reel"
+];
+const displayedFormatOrder: InstagramDeliveryFormat[] = [
+  "instagram_feed_carousel",
+  "instagram_reel",
+  "instagram_story"
 ];
 
 const formatMeta: Record<InstagramDeliveryFormat, { label: string; description: string }> = {
@@ -57,20 +67,46 @@ function normalizeFormatSettings(settings: InstagramFormatSettings) {
   if (formats.some((format) => !format)) {
     throw new Error("instagram_format_settings_incomplete");
   }
-  return { ...settings, formats: formats as BrandContentFormat[] };
+  return {
+    ...settings,
+    formats: (formats as BrandContentFormat[]).map((format) => ({
+      ...format,
+      enabled: format.capabilityStatus === "available" && format.enabled
+    }))
+  };
 }
 
 function normalizeBrandProfile(profile: BrandProfile): BrandProfile {
   return {
     ...profile,
     primaryCategory: profile.primaryCategory ?? null,
-    subcategories: Array.isArray(profile.subcategories) ? profile.subcategories : [],
+    subcategories: Array.isArray(profile.subcategories) ? profile.subcategories.slice(0, maxSubcategorySelections) : [],
     logoUrl: profile.logoUrl ?? null
   };
 }
 
 function formatSettingsMatch(left: InstagramFormatSettings, right: InstagramFormatSettings) {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function changedBrandProfileInput(saved: BrandProfile, draft: BrandProfile): BrandProfileInput {
+  const input: BrandProfileInput = {};
+  if (saved.name !== draft.name) input.name = draft.name;
+  if (saved.primaryCustomer !== draft.primaryCustomer) input.primaryCustomer = draft.primaryCustomer;
+  if (saved.description !== draft.description) input.description = draft.description;
+  if (saved.tone !== draft.tone) input.tone = draft.tone;
+  if (saved.defaultCta !== draft.defaultCta) input.defaultCta = draft.defaultCta;
+  if (saved.mainLink !== draft.mainLink) input.mainLink = draft.mainLink;
+  if (saved.autoApprovalEnabled !== draft.autoApprovalEnabled) input.autoApprovalEnabled = draft.autoApprovalEnabled;
+  if (saved.primaryCategory?.code !== draft.primaryCategory?.code) {
+    input.primaryCategoryCode = draft.primaryCategory?.code ?? null;
+  }
+  if (JSON.stringify(saved.subcategories) !== JSON.stringify(draft.subcategories)) {
+    input.subcategories = draft.subcategories.map((subcategory) => subcategory.type === "system"
+      ? { type: "system", code: subcategory.code! }
+      : { type: "custom", name: subcategory.name });
+  }
+  return input;
 }
 
 function saveFailureMessage(error: unknown) {
@@ -107,6 +143,9 @@ export function BrandSettingsPage() {
   const [showSavedBadge, setShowSavedBadge] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [apiNotice, setApiNotice] = useState<string | null>(null);
+  const [brandIntelligence, setBrandIntelligence] = useState<BrandAnalysis | null>(null);
+  const [ownedSourceUrl, setOwnedSourceUrl] = useState<string | null>(null);
+  const [areInstagramFormatsExpanded, setAreInstagramFormatsExpanded] = useState(true);
   const [primaryCustomerEntryMode, setPrimaryCustomerEntryMode] = useState<"select" | "custom">("select");
   const hasUnsavedChanges = Boolean(
     savedProfile && draftProfile && !profilesMatch(savedProfile, draftProfile)
@@ -120,6 +159,13 @@ export function BrandSettingsPage() {
     && draftProfile.description.trim()
   );
   const selectedCategory = categories.find((category) => category.code === draftProfile?.primaryCategory?.code);
+  const availableFormats = draftFormats?.formats.filter((format) => format.capabilityStatus === "available") ?? [];
+  const enabledAvailableFormatCount = availableFormats.filter((format) => format.enabled).length;
+  const autoApprovalState = enabledAvailableFormatCount === 0
+    ? "off"
+    : enabledAvailableFormatCount === availableFormats.length
+      ? "on"
+      : "mixed";
 
   useEffect(() => {
     let ignore = false;
@@ -173,6 +219,26 @@ export function BrandSettingsPage() {
     };
   }, []);
 
+  useEffect(() => {
+    let ignore = false;
+    Promise.resolve()
+      .then(() => api.listSources(DEMO_BRAND_ID))
+      .then((sources) => {
+        if (!ignore) setOwnedSourceUrl(sources.find((source) => source.sourceType === "owned" && source.enabled)?.url ?? null);
+      })
+      .catch(() => { if (!ignore) setOwnedSourceUrl(null); });
+    return () => { ignore = true; };
+  }, []);
+
+  useEffect(() => {
+    let ignore = false;
+    Promise.resolve()
+      .then(() => brandIntelligenceGateway.getCurrent(DEMO_BRAND_ID))
+      .then((value) => { if (!ignore) setBrandIntelligence(value); })
+      .catch(() => { if (!ignore) setBrandIntelligence(null); });
+    return () => { ignore = true; };
+  }, []);
+
   function updateDraftProfile<K extends keyof BrandProfile>(key: K, value: BrandProfile[K]) {
     setDraftProfile((currentProfile) => currentProfile ? ({ ...currentProfile, [key]: value }) : currentProfile);
     setShowSavedBadge(false);
@@ -184,10 +250,27 @@ export function BrandSettingsPage() {
   }
 
   function updateDraftFormat(format: InstagramDeliveryFormat, enabled: boolean) {
-    setDraftFormats((current) => current ? ({
+    if (!draftFormats) return;
+    const formats = draftFormats.formats.map((candidate) => candidate.format === format ? { ...candidate, enabled } : candidate);
+    setDraftFormats({ ...draftFormats, formats });
+    setDraftProfile((current) => current ? ({
       ...current,
-      formats: current.formats.map((candidate) => candidate.format === format ? { ...candidate, enabled } : candidate)
+      autoApprovalEnabled: formats.some((candidate) => candidate.capabilityStatus === "available" && candidate.enabled)
     }) : current);
+    setShowSavedBadge(false);
+  }
+
+  function toggleAllAutoApprovalFormats() {
+    if (!draftFormats || availableFormats.length === 0) return;
+    const enabled = autoApprovalState !== "on";
+    setDraftFormats({
+      ...draftFormats,
+      formats: draftFormats.formats.map((format) => ({
+        ...format,
+        enabled: format.capabilityStatus === "available" ? enabled : false
+      }))
+    });
+    updateDraftProfile("autoApprovalEnabled", enabled);
     setShowSavedBadge(false);
   }
 
@@ -237,7 +320,7 @@ export function BrandSettingsPage() {
     const selected = current.some((subcategory) => subcategory.type === "system" && subcategory.code === code);
     if (selected) {
       updateSubcategories(current.filter((subcategory) => !(subcategory.type === "system" && subcategory.code === code)));
-    } else if (current.length < 5) {
+    } else if (current.length < maxSubcategorySelections) {
       updateSubcategories([...current, { type: "system", code, name }]);
     }
   }
@@ -256,8 +339,8 @@ export function BrandSettingsPage() {
       setApiNotice("이미 선택한 세부 분야입니다.");
       return;
     }
-    if (draftProfile.subcategories.length >= 5) {
-      setApiNotice("세부 분야는 최대 5개까지 선택할 수 있습니다.");
+    if (draftProfile.subcategories.length >= maxSubcategorySelections) {
+      setApiNotice(`세부 분야는 최대 ${maxSubcategorySelections}개까지 선택할 수 있습니다.`);
       return;
     }
     updateSubcategories([...draftProfile.subcategories, { type: "custom", code: null, name: value.normalize("NFKC").trim() }]);
@@ -269,20 +352,8 @@ export function BrandSettingsPage() {
     if (!draftProfile || !savedProfile) return;
     setIsSaving(true);
     try {
-      const profileInput: BrandProfileInput = {
-        name: draftProfile.name,
-        primaryCategoryCode: draftProfile.primaryCategory?.code ?? null,
-        subcategories: draftProfile.subcategories.map((subcategory) => subcategory.type === "system"
-          ? { type: "system", code: subcategory.code! }
-          : { type: "custom", name: subcategory.name }),
-        primaryCustomer: draftProfile.primaryCustomer,
-        description: draftProfile.description,
-        tone: draftProfile.tone,
-        defaultCta: draftProfile.defaultCta,
-        mainLink: draftProfile.mainLink,
-        autoApprovalEnabled: draftProfile.autoApprovalEnabled
-      };
-      const profileRequest = profilesMatch(savedProfile, draftProfile)
+      const profileInput = changedBrandProfileInput(savedProfile, draftProfile);
+      const profileRequest = Object.keys(profileInput).length === 0
         ? Promise.resolve(savedProfile)
         : api.updateBrandProfile(DEMO_BRAND_ID, profileInput);
       const formatInput: InstagramFormatSettingsInput | null = draftFormats ? {
@@ -324,15 +395,15 @@ export function BrandSettingsPage() {
             {hasUnsavedChanges ? <Badge variant="warn">변경사항 있음</Badge> : null}
             {showSavedBadge && !hasUnsavedChanges ? <Badge variant="ok">저장됨</Badge> : null}
             <button className="button" type="button" onClick={cancelChanges} disabled={isSaving}>변경 취소</button>
-            <button className="button primary" type="button" onClick={saveChanges} disabled={isSaving || !draftProfile}>
-              {isSaving ? "저장 중" : "저장"}
+            <button className="button primary" type="button" aria-label="저장" aria-busy={isSaving} onClick={saveChanges} disabled={isSaving || !draftProfile}>
+              {isSaving ? <InlineSpinner label="브랜드 설정 저장 중" /> : null} 저장
             </button>
           </>
         }
       />
 
       {isProfileLoading || areFormatsLoading ? (
-        <div role="status" className="muted" style={{ marginBottom: 16 }}>브랜드 설정을 불러오는 중입니다.</div>
+        <PageSkeleton label="브랜드 설정을 불러오는 중입니다." />
       ) : null}
       {profileLoadError ? <Alert title="API 상태" variant="warn">{profileLoadError}</Alert> : null}
       {categoryLoadError ? <Alert title="대표 분야" variant="warn">{categoryLoadError}</Alert> : null}
@@ -351,7 +422,7 @@ export function BrandSettingsPage() {
           <div className="panel-body brand-profile-layout">
             <BrandLogoEditor profile={draftProfile} onProfileChange={mergeLogoProfile} disabled={isSaving} />
             <div className="form-grid brand-profile-fields">
-            <Field label="브랜드명" required>
+            <Field label="브랜드명" full required>
               <input
                 aria-label="브랜드명"
                 required
@@ -361,7 +432,19 @@ export function BrandSettingsPage() {
                 onChange={(event) => updateDraftProfile("name", event.currentTarget.value)}
               />
             </Field>
-            <Field label="대표 분야" required>
+            {draftFormats ? (
+              <Field label="브랜드 주색" full>
+                <input
+                  aria-label="브랜드 주색"
+                  maxLength={30}
+                  placeholder="예: 파란색 또는 #2563EB"
+                  disabled={isSaving}
+                  value={draftFormats.brandColor ?? ""}
+                  onChange={(event) => updateBrandColor(event.currentTarget.value)}
+                />
+              </Field>
+            ) : null}
+            <Field label="대표 분야" full required>
               <select
                 aria-label="대표 분야 선택"
                 required
@@ -377,7 +460,7 @@ export function BrandSettingsPage() {
               <div className="subcategory-section" aria-label="세부 분야">
                 <div className="subcategory-section__head">
                   <strong>세부 분야</strong>
-                  <span>선택 {draftProfile.subcategories.length}/5</span>
+                  <span>선택 {draftProfile.subcategories.length}/{maxSubcategorySelections}</span>
                 </div>
                 <div className="subcategory-grid">
                   {(selectedCategory?.subcategories ?? []).map((subcategory) => {
@@ -387,7 +470,7 @@ export function BrandSettingsPage() {
                         <input
                           type="checkbox"
                           checked={checked}
-                          disabled={isSaving || (!checked && draftProfile.subcategories.length >= 5)}
+                          disabled={isSaving || (!checked && draftProfile.subcategories.length >= maxSubcategorySelections)}
                           onChange={() => toggleSystemSubcategory(subcategory.code, subcategory.name)}
                         />
                         <span>{subcategory.name}</span>
@@ -396,8 +479,8 @@ export function BrandSettingsPage() {
                   })}
                 </div>
                 <div className="subcategory-custom-row">
-                  <input aria-label="직접 입력 세부 분야" placeholder="세부 분야 직접 입력" disabled={isSaving || draftProfile.subcategories.length >= 5} />
-                  <button className="button" type="button" aria-label="세부 분야 추가" onClick={addCustomSubcategory} disabled={isSaving || draftProfile.subcategories.length >= 5}>추가</button>
+                  <input aria-label="직접 입력 세부 분야" placeholder="세부 분야 직접 입력" disabled={isSaving || draftProfile.subcategories.length >= maxSubcategorySelections} />
+                  <button className="button" type="button" aria-label="세부 분야 추가" onClick={addCustomSubcategory} disabled={isSaving || draftProfile.subcategories.length >= maxSubcategorySelections}>추가</button>
                 </div>
                 {draftProfile.subcategories.length > 0 ? (
                   <div className="subcategory-chips" aria-label="선택한 세부 분야">
@@ -410,7 +493,7 @@ export function BrandSettingsPage() {
                 ) : null}
               </div>
             </Field>
-            <Field label="핵심 고객" required>
+            <Field label="핵심 고객" full required>
               <select
                 aria-label="핵심 고객 선택"
                 required
@@ -464,7 +547,7 @@ export function BrandSettingsPage() {
                 onChange={(event) => updateDraftProfile("tone", event.currentTarget.value)}
               />
             </Field>
-            <Field label="기본 CTA">
+            <Field label="기본 CTA" full>
               <input
                 placeholder="예: 무료 상담 신청하기"
                 value={draftProfile.defaultCta}
@@ -472,75 +555,17 @@ export function BrandSettingsPage() {
                 onChange={(event) => updateDraftProfile("defaultCta", event.currentTarget.value)}
               />
             </Field>
-            <Field label="주요 링크">
-              <input
-                placeholder="예: https://brand.example.com"
-                value={draftProfile.mainLink}
-                disabled={isSaving}
-                onChange={(event) => updateDraftProfile("mainLink", event.currentTarget.value)}
-              />
-            </Field>
           </div>
         </section>
           </div>
-
-          {draftFormats ? (
-            <section className="panel" style={{ marginTop: 16 }}>
-              <div className="panel-head">
-                <div>
-                  <h2>Instagram 콘텐츠 형식</h2>
-                  <div className="row-meta">고정 순환 순서 · Card News → Story → Reel</div>
-                </div>
-                <Badge variant="info">선택 설정</Badge>
-              </div>
-              <div className="panel-body grid">
-                <Field label="브랜드 주색">
-                  <input
-                    aria-label="브랜드 주색"
-                    maxLength={30}
-                    placeholder="예: 파란색 또는 #2563EB"
-                    disabled={isSaving}
-                    value={draftFormats.brandColor ?? ""}
-                    onChange={(event) => updateBrandColor(event.currentTarget.value)}
-                  />
-                </Field>
-                {draftFormats.formats.map((format) => {
-                  const meta = formatMeta[format.format];
-                  const storyUnavailable = format.format === "instagram_story" && format.capabilityStatus !== "available";
-                  return (
-                    <div className="toggle-row" key={format.format}>
-                      <div>
-                        <strong>{meta.label}</strong>
-                        <p className="muted">{meta.description}</p>
-                        {storyUnavailable ? (
-                          <p className="muted" role="note">Meta 연결 확인이 필요합니다. Story 기능 확인 후 활성화할 수 있습니다.</p>
-                        ) : null}
-                      </div>
-                      <fieldset
-                        disabled={storyUnavailable || isSaving}
-                        style={{ minWidth: 0, margin: 0, padding: 0, border: 0 }}
-                      >
-                        <Switch
-                          label={meta.label}
-                          checked={format.enabled}
-                          disabled={isSaving}
-                          onChange={(checked) => updateDraftFormat(format.format, checked)}
-                        />
-                      </fieldset>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          ) : null}
 
           <section className="panel" style={{ marginTop: 16 }}>
         <div className="panel-head">
           <h2>자동 승인</h2>
           <div className="actions">
             <Badge variant="info">선택 설정</Badge>
-            <Badge variant={draftProfile.autoApprovalEnabled ? "auto" : "neutral"}>
-              {draftProfile.autoApprovalEnabled ? "전체 켜짐" : "전체 꺼짐"}
+            <Badge variant={autoApprovalState === "on" ? "auto" : autoApprovalState === "mixed" ? "info" : "neutral"}>
+              {autoApprovalState === "on" ? "전체 켜짐" : autoApprovalState === "mixed" ? "일부 켜짐" : "전체 꺼짐"}
             </Badge>
           </div>
         </div>
@@ -555,9 +580,10 @@ export function BrandSettingsPage() {
             </div>
             <Switch
               label="브랜드 전체 자동 승인"
-              checked={draftProfile.autoApprovalEnabled}
-              disabled={isSaving}
-              onChange={(checked) => updateDraftProfile("autoApprovalEnabled", checked)}
+              checked={autoApprovalState === "on"}
+              indeterminate={autoApprovalState === "mixed"}
+              disabled={isSaving || availableFormats.length === 0}
+              onChange={toggleAllAutoApprovalFormats}
             />
           </div>
           <Alert title="적용 범위" variant="info">
@@ -566,31 +592,100 @@ export function BrandSettingsPage() {
           <Alert title="자동 승인 차단 조건" variant="warn">
             Instagram 이미지 생성에 실패하면 자동 승인을 차단합니다. 금지 표현과 근거 품질은 수동 검토에서 확인합니다.
           </Alert>
+          {draftFormats ? (
+            <section className="auto-approval-channel" aria-labelledby="instagram-auto-approval-heading">
+              <div className="auto-approval-channel__intro">
+                <h3 id="instagram-auto-approval-heading">Instagram</h3>
+                <p className="muted">Instagram 자동 승인에 사용할 콘텐츠 형식을 선택합니다. 다른 채널의 콘텐츠 형식도 이 영역에 추가됩니다.</p>
+              </div>
+              <div className="instagram-formats-accordion">
+                <div className="instagram-formats-accordion__head">
+                  <div>
+                    <h4 id="instagram-formats-heading">Instagram 콘텐츠 형식</h4>
+                    <div className="row-meta">표시 순서 · Card News → Reel → Story</div>
+                  </div>
+                  <div className="actions">
+                    <Badge variant="info">선택 설정</Badge>
+                    <button
+                      className="icon-button instagram-formats-accordion__trigger"
+                      type="button"
+                      aria-label={`Instagram 콘텐츠 형식 ${areInstagramFormatsExpanded ? "접기" : "펼치기"}`}
+                      aria-expanded={areInstagramFormatsExpanded}
+                      aria-controls="instagram-formats-panel"
+                      title={`Instagram 콘텐츠 형식 ${areInstagramFormatsExpanded ? "접기" : "펼치기"}`}
+                      onClick={() => setAreInstagramFormatsExpanded((expanded) => !expanded)}
+                    >
+                      <ChevronDown aria-hidden="true" size={18} />
+                    </button>
+                  </div>
+                </div>
+                <div
+                  id="instagram-formats-panel"
+                  className="instagram-formats-accordion__body grid"
+                  role="region"
+                  aria-labelledby="instagram-formats-heading"
+                  hidden={!areInstagramFormatsExpanded}
+                >
+                  {displayedFormatOrder.map((formatName) => {
+                    const format = draftFormats.formats.find((candidate) => candidate.format === formatName)!;
+                    const meta = formatMeta[format.format];
+                    const formatUnavailable = format.capabilityStatus !== "available";
+                    return (
+                      <div className="toggle-row" key={format.format}>
+                        <div>
+                          <strong>{meta.label}</strong>
+                          <p className="muted">{meta.description}</p>
+                          {formatUnavailable ? (
+                            <p className="muted" role="note">Meta 연결 확인이 필요합니다. 권한과 {meta.label} 기능 확인 후 활성화할 수 있습니다.</p>
+                          ) : null}
+                        </div>
+                        <fieldset
+                          disabled={formatUnavailable || isSaving}
+                          style={{ minWidth: 0, margin: 0, padding: 0, border: 0 }}
+                        >
+                          <Switch
+                            label={meta.label}
+                            checked={format.enabled}
+                            disabled={isSaving}
+                            onChange={(checked) => updateDraftFormat(format.format, checked)}
+                          />
+                        </fieldset>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </section>
+          ) : null}
         </div>
           </section>
 
-          <section className="panel" style={{ marginTop: 16 }}>
-        <div className="panel-head">
-          <h2>검증 메시지</h2>
-          <Badge variant="info">저장 전 확인</Badge>
-        </div>
-        <div className="panel-body grid">
-          {hasRequiredFields ? (
-            <Alert title="필수값 충족" variant="ok">
-              브랜드명, 대표 분야, 핵심 고객, 서비스 설명이 입력되어 있습니다.
-            </Alert>
-          ) : (
-            <Alert title="필수값 확인 필요" variant="warn">
-              브랜드명, 대표 분야, 핵심 고객, 서비스 설명을 모두 입력하세요.
-            </Alert>
-          )}
-          <Alert title="권장 보강" variant="warn">
-            고객 사례 URL을 추가하면 생성 콘텐츠의 근거가 좋아집니다.
-          </Alert>
-        </div>
-          </section>
         </>
       ) : null}
+      <section className="panel" style={{ marginTop: 16 }}>
+        <div className="panel-head">
+          <div>
+            <h2>확정된 브랜드 정보</h2>
+            <div className="row-meta">자사 자료를 분석하고 확인한 정보입니다. 콘텐츠 생성과 고객 응답에 공통으로 사용됩니다.</div>
+          </div>
+          <a className="button" href="/onboarding/brand-intelligence">
+            {brandIntelligence ? "브랜드 정보 다시 분석" : "브랜드 정보 만들기"}
+          </a>
+        </div>
+        <div className="panel-body">
+          {brandIntelligence?.effectiveResult ? (
+            <dl className="brand-intelligence-summary">
+              <div><dt>대표 URL</dt><dd>{ownedSourceUrl ?? brandIntelligence.input.ownedUrl ?? "첨부 문서로 분석"}</dd></div>
+              <div><dt>기업 개요</dt><dd>{brandIntelligence.effectiveResult.companyOverview}</dd></div>
+              <div><dt>사업 소개</dt><dd>{brandIntelligence.effectiveResult.businessDescription}</dd></div>
+              <div><dt>분야</dt><dd>{[brandIntelligence.effectiveResult.primaryCategory.name, ...brandIntelligence.effectiveResult.subcategories.map((item) => item.name)].filter(Boolean).join(" · ")}</dd></div>
+              <div><dt>핵심 타깃</dt><dd>{brandIntelligence.effectiveResult.primaryTarget}</dd></div>
+              <div><dt>차별점</dt><dd>{brandIntelligence.effectiveResult.differentiators}</dd></div>
+              <div><dt>핵심 소구점</dt><dd>{brandIntelligence.effectiveResult.coreAppeal}</dd></div>
+            </dl>
+          ) : <p className="muted">아직 확정된 브랜드 정보가 없습니다.</p>}
+        </div>
+      </section>
     </section>
   );
 }

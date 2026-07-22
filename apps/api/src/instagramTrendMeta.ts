@@ -1,7 +1,9 @@
 import { getMetaGraphJson, MetaGraphRequestError } from "./metaGraph.js";
 import { mapMetaTopMedia, type NormalizedInstagramTrendMedia } from "./instagramTrend.js";
 
-const TOP_MEDIA_FIELDS = "id,caption,comments_count,like_count,media_type,media_url,permalink,timestamp,username,children{id,media_type,media_url,thumbnail_url,permalink}";
+const TOP_MEDIA_FIELDS = "id,caption,comments_count,like_count,media_type,media_url,permalink,timestamp";
+const TOP_MEDIA_PAGE_LIMIT = 25;
+const TOP_MEDIA_COLLECTION_LIMIT = 150;
 
 export interface FetchInstagramHashtagTopMediaInput {
   accessToken: string;
@@ -18,6 +20,17 @@ export interface FetchInstagramHashtagTopMediaResult {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function pageData(payload: unknown): unknown[] {
+  return isRecord(payload) && Array.isArray(payload.data) ? payload.data : [];
+}
+
+function afterCursor(payload: unknown): string | null {
+  const paging = isRecord(payload) ? payload.paging : null;
+  const cursors = isRecord(paging) ? paging.cursors : null;
+  const after = isRecord(cursors) ? cursors.after : null;
+  return typeof after === "string" && after.length > 0 ? after : null;
 }
 
 function stableError(error: unknown): Error {
@@ -68,17 +81,30 @@ export async function fetchInstagramHashtagTopMedia({
     throw new Error("instagram_hashtag_not_found");
   }
 
-  const topMediaPayload = await fetchGraphJson(
-    `/${encodeURIComponent(metaHashtagId)}/top_media`,
-    {
+  const topMediaPath = `/${encodeURIComponent(metaHashtagId)}/top_media`;
+  const collectedMedia: unknown[] = [];
+  const visitedCursors = new Set<string>();
+  let after: string | null = null;
+
+  while (collectedMedia.length < TOP_MEDIA_COLLECTION_LIMIT) {
+    const params: Record<string, string> = {
       user_id: instagramBusinessAccountId,
       fields: TOP_MEDIA_FIELDS,
-      limit: "50",
+      limit: String(TOP_MEDIA_PAGE_LIMIT),
       access_token: accessToken
-    },
-    fetchImpl,
-    graphVersion
-  );
+    };
+    if (after) params.after = after;
 
-  return { metaHashtagId, media: mapMetaTopMedia(topMediaPayload) };
+    const payload = await fetchGraphJson(topMediaPath, params, fetchImpl, graphVersion);
+    const data = pageData(payload);
+    collectedMedia.push(...data.slice(0, TOP_MEDIA_COLLECTION_LIMIT - collectedMedia.length));
+    if (data.length === 0 || collectedMedia.length >= TOP_MEDIA_COLLECTION_LIMIT) break;
+
+    const nextCursor = afterCursor(payload);
+    if (!nextCursor || visitedCursors.has(nextCursor)) break;
+    visitedCursors.add(nextCursor);
+    after = nextCursor;
+  }
+
+  return { metaHashtagId, media: mapMetaTopMedia({ data: collectedMedia }) };
 }

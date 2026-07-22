@@ -43,6 +43,131 @@ describe("metaGraph", () => {
     });
   });
 
+  it("resolves a connected Instagram account returned by the Facebook Login asset picker", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.includes("/me/accounts")) {
+        return new Response(JSON.stringify({
+          data: [{
+            id: "page-1",
+            name: "Brand Pilot",
+            access_token: "PAGE_TOKEN_123456",
+            connected_instagram_account: {
+              id: "17890000000000000",
+              username: "growthline352"
+            }
+          }]
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+    await expect(resolveInstagramConnection({
+      accessToken: "USER_TOKEN",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })).resolves.toMatchObject({
+      accessToken: "PAGE_TOKEN_123456",
+      instagramBusinessAccountId: "17890000000000000",
+      instagramUsername: "growthline352",
+      pageId: "page-1"
+    });
+  });
+
+  it("checks the selected page directly when the accounts edge omits nested Instagram data", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.includes("/me/accounts")) {
+        return new Response(JSON.stringify({
+          data: [{ id: "page-1", name: "Brand Pilot", access_token: "PAGE_TOKEN_123456" }]
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/page-1?")) {
+        return new Response(JSON.stringify({
+          id: "page-1",
+          instagram_business_account: { id: "17890000000000000", username: "growthline352" }
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+    await expect(resolveInstagramConnection({
+      accessToken: "USER_TOKEN",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })).resolves.toMatchObject({
+      accessToken: "PAGE_TOKEN_123456",
+      instagramBusinessAccountId: "17890000000000000",
+      instagramUsername: "growthline352",
+      pageId: "page-1"
+    });
+    expect(fetchImpl.mock.calls.some(([url]) => String(url).includes("/page-1?"))).toBe(true);
+  });
+
+  it("verifies the already connected brand account when selected page data omits the relationship", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.includes("/me/accounts")) {
+        return new Response(JSON.stringify({
+          data: [{ id: "page-1", name: "Brand Pilot", access_token: "PAGE_TOKEN_123456" }]
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/17890000000000000?")) {
+        if (url.includes("access_token=PAGE_TOKEN_123456")) {
+          return new Response(JSON.stringify({ error: { code: 100 } }), { status: 400 });
+        }
+        return new Response(JSON.stringify({ id: "17890000000000000", username: "growthline352" }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+    await expect(resolveInstagramConnection({
+      accessToken: "USER_TOKEN",
+      expectedInstagramBusinessAccountId: "17890000000000000",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })).resolves.toMatchObject({
+      accessToken: "USER_TOKEN",
+      instagramBusinessAccountId: "17890000000000000",
+      instagramUsername: "growthline352",
+      pageId: "page-1"
+    });
+  });
+
+  it("verifies the already connected Instagram account when the managed page edge is empty", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.includes("/me/accounts")) {
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.includes("/17890000000000000?")) {
+        return new Response(JSON.stringify({ id: "17890000000000000", username: "growthline352" }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      return new Response(JSON.stringify({
+        data: [
+          { permission: "instagram_basic", status: "granted" },
+          { permission: "pages_show_list", status: "granted" },
+          { permission: "pages_read_engagement", status: "granted" }
+        ]
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+    await expect(resolveInstagramConnection({
+      accessToken: "USER_TOKEN",
+      expectedInstagramBusinessAccountId: "17890000000000000",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })).resolves.toEqual({
+      accessToken: "USER_TOKEN",
+      instagramBusinessAccountId: "17890000000000000",
+      instagramUsername: "growthline352",
+      pageId: null,
+      pageName: null,
+      scopes: ["instagram_basic", "pages_show_list", "pages_read_engagement"]
+    });
+  });
+
   it("fails clearly when no page has a connected Instagram business account", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
       data: [{ id: "page-1", name: "Brand Pilot" }]
@@ -65,12 +190,26 @@ describe("metaGraph", () => {
     });
   });
 
-  it.each([
-    [new MetaGraphRequestError({ status: 429 }), "meta_rate_limited"],
-    [new MetaGraphRequestError({ status: 503 }), "meta_server_error"]
-  ])("retries only transient Meta responses", (error, errorCode) => {
+  it("retries only an explicit rate-limit response", () => {
+    const error = new MetaGraphRequestError({ status: 429 });
     expect(classifyMetaGraphPublishError(error)).toEqual({
-      errorCode,
+      errorCode: "meta_rate_limited",
+      retryable: true,
+      channelNeedsAttention: false
+    });
+  });
+
+  it("does not retry an ambiguous 5xx after a publish attempt", () => {
+    expect(classifyMetaGraphPublishError(new MetaGraphRequestError({ status: 503 }))).toEqual({
+      errorCode: "meta_delivery_unknown",
+      retryable: false,
+      channelNeedsAttention: false
+    });
+  });
+
+  it("retries a manifest propagation failure before any provider publish call", () => {
+    expect(classifyMetaGraphPublishError(new Error("instagram_manifest_fetch_failed:404"))).toEqual({
+      errorCode: "instagram_manifest_fetch_failed",
       retryable: true,
       channelNeedsAttention: false
     });

@@ -1,4 +1,5 @@
 import type { DmWorkerResult } from "./worker.js";
+import type { WorkerResourceLease, WorkerResourceWorkload } from "./resourceLease.js";
 
 export interface ClaimedDmJob {
   id: string;
@@ -82,6 +83,16 @@ export function createDmWorkerClient({ apiUrl, token, fetchImpl = fetch }: {
     },
     failProfile(jobId: string, workerId: string, leaseToken: string, error: string, retryable: boolean, retryAfterMs: number) {
       return request(`/workers/dm/profile-jobs/${jobId}/fail`, { workerId, leaseToken, error, retryable, retryAfterMs });
+    },
+    async acquireResource(workerId: string, workload: WorkerResourceWorkload) {
+      const response = await request("/worker/resources/codex-cli/acquire", { workerId, workload });
+      return response.status === 204 ? null : await response.json() as WorkerResourceLease;
+    },
+    heartbeatResource(id: string, workerId: string, leaseToken: string) {
+      return request(`/worker/resources/codex-cli/${id}/heartbeat`, { workerId, leaseToken });
+    },
+    releaseResource(id: string, workerId: string, leaseToken: string) {
+      return request(`/worker/resources/codex-cli/${id}/release`, { workerId, leaseToken });
     },
   };
 }

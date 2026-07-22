@@ -283,6 +283,52 @@ describe("AI content customer routes", () => {
     await app.close();
   });
 
+  it("preserves the provider error code when the failed queue checkpoint has no error yet", async () => {
+    const { app, repository } = setup();
+    vi.mocked(repository.prepareAiContentPublish).mockResolvedValueOnce({
+      publishGroupId: "publish-group-1",
+      targets: [{
+        channel: "instagram",
+        deliveryFormat: "instagram_story",
+        channelOutputId: "channel-output-story",
+        queueId: "queue-story",
+        status: "scheduled",
+        publishedUrl: null,
+        errorCode: null,
+      }],
+    });
+    vi.mocked(repository.publishQueueItem).mockRejectedValueOnce(new Error("instagram_story_publish_failed:media_url_unreachable"));
+    vi.mocked(repository.getAiContentPublishQueueResult).mockResolvedValueOnce({
+      channel: "instagram",
+      deliveryFormat: "instagram_story",
+      channelOutputId: "channel-output-story",
+      queueId: "queue-story",
+      status: "failed",
+      publishedUrl: null,
+      errorCode: null,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/publish`,
+      headers: auth,
+      payload: {
+        idempotencyKey: "b4b74082-8a44-46d6-91b6-3e3bd7e26be0",
+        targets: [{ channel: "instagram", deliveryFormat: "instagram_story" }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      targets: [{
+        queueId: "queue-story",
+        status: "failed",
+        errorCode: "instagram_story_publish_failed",
+      }],
+    });
+    await app.close();
+  });
+
   it("returns a rendering reel target without publishing a queue before the video exists", async () => {
     const { app, repository } = setup();
     vi.mocked(repository.prepareAiContentPublish).mockResolvedValueOnce({

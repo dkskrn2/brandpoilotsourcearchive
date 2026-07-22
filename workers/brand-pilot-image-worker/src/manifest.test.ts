@@ -133,7 +133,7 @@ describe("parseWorkerManifest", () => {
     expect(() => parseWorkerManifest(byText)).toThrow("asset_final_cta_only");
   });
 
-  it("accepts CLI-reported vertical dimensions for Story and Reel while keeping Feed square", () => {
+  it("accepts CLI-reported dimensions while keeping Feed square", () => {
     const verticalStory = story();
     Reflect.deleteProperty(verticalStory.story[0], "width");
     Reflect.deleteProperty(verticalStory.story[0], "height");
@@ -149,6 +149,13 @@ describe("parseWorkerManifest", () => {
     expect(parsedReel.scenes[0]).toMatchObject({ width: 1080, height: 1920 });
 
     const verticalFeed = feed(1);
+    verticalFeed.cards[0].width = 1254;
+    verticalFeed.cards[0].height = 1254;
+    const parsedFeed = parseWorkerManifest(verticalFeed);
+    if (parsedFeed.deliveryFormat !== "instagram_feed_carousel") throw new Error("expected_feed_manifest");
+    expect(parsedFeed.cards[0]).toMatchObject({ width: 1254, height: 1254 });
+
+    verticalFeed.cards[0].width = 1080;
     verticalFeed.cards[0].height = 1920;
     expect(() => parseWorkerManifest(verticalFeed)).toThrow("image_asset_dimensions_invalid");
   });

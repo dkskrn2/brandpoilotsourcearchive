@@ -23,7 +23,8 @@ describe("BrandSettingsPage regression", () => {
           mainLink: "",
           autoApprovalEnabled: false
         })),
-        updateBrandProfile: vi.fn()
+        updateBrandProfile: vi.fn(),
+        listSources: vi.fn(async () => [])
       }
     }));
     const { BrandSettingsPage } = await import("../pages/BrandSettingsPage");
@@ -47,7 +48,8 @@ describe("BrandSettingsPage regression", () => {
           mainLink: "",
           autoApprovalEnabled: false
         })),
-        updateBrandProfile: vi.fn()
+        updateBrandProfile: vi.fn(),
+        listSources: vi.fn(async () => [])
       }
     }));
     const { BrandSettingsPage } = await import("../pages/BrandSettingsPage");

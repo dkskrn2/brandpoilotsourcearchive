@@ -4,8 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx src/index.ts watch",
-    "once": "tsx src/index.ts once",
+    "dev": "tsx src/index.ts watch dm dm-worker-1",
+    "dev:dm": "tsx src/index.ts watch dm dm-worker-1",
+    "dev:dm:1": "tsx src/index.ts watch dm dm-worker-1",
+    "dev:dm:2": "tsx src/index.ts watch dm dm-worker-2",
+    "dev:wiki": "tsx src/index.ts watch wiki wiki-worker-1",
+    "once": "tsx src/index.ts once dm dm-worker-once",
+    "once:dm": "tsx src/index.ts once dm dm-worker-once",
+    "once:wiki": "tsx src/index.ts once wiki wiki-worker-once",
     "build": "tsc --noEmit",
     "test": "vitest run"
   },

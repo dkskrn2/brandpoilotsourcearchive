@@ -46,7 +46,7 @@ const promptVersionByFormat = {
 const formatInstructions: Record<InstagramDeliveryFormat, readonly string[]> = {
   instagram_feed_carousel: [
     "피드 카드는 1장부터 5장 사이에서 필요한 최소 장수를 선택하세요. 기본값처럼 5장을 목표로 하지 마세요.",
-    "각 카드가 서로 다른 의미적 역할과 유용한 내용을 갖도록 1080x1080 PNG 카드를 순서대로 개별 생성하세요.",
+    "각 카드가 서로 다른 의미적 역할과 유용한 내용을 갖도록 가로와 세로가 같은 정방형 PNG 카드를 순서대로 개별 생성하세요.",
     "비어 있지 않고 문단 구분이 명확한 Instagram 캡션과 서로 다른 유효한 해시태그를 정확히 5개 작성하세요.",
     "cards는 { index, role, embeddedText, width, height } 객체의 순서가 있는 배열로 반환하세요."
   ],
@@ -72,13 +72,14 @@ const formatInstructions: Record<InstagramDeliveryFormat, readonly string[]> = {
 };
 
 function manifestShape(format: InstagramDeliveryFormat) {
+  const qualityBrief = '"qualityBrief":{"version":"content-quality.v1","hook":"...","readerPayoff":"...","whyNow":"...","specificClaims":["...","..."],"evidence":[{"claim":"...","support":"구체적인 근거 설명","sourceUrl":null},{"claim":"...","support":"구체적인 근거 설명","sourceUrl":null}],"sourceGaps":[]}';
   switch (format) {
     case "instagram_feed_carousel":
-      return '{"deliveryFormat":"instagram_feed_carousel","promptVersion":"worker-card.v4","selectedAssetCount":1,"caption":"첫 번째 문단\\n\\n두 번째 문단","hashtags":["#태그1","#태그2","#태그3","#태그4","#태그5"],"cards":[{"index":1,"role":"훅","embeddedText":"...","width":1080,"height":1080}]}';
+      return `{"deliveryFormat":"instagram_feed_carousel","promptVersion":"worker-card.v4",${qualityBrief},"selectedAssetCount":1,"caption":"첫 번째 문단\\n\\n두 번째 문단","hashtags":["#태그1","#태그2","#태그3","#태그4","#태그5"],"cards":[{"index":1,"role":"훅","embeddedText":"...","width":1254,"height":1254}]}`;
     case "instagram_story":
-      return '{"deliveryFormat":"instagram_story","promptVersion":"worker-story.v1","selectedAssetCount":1,"story":[{"index":1,"role":"스토리","embeddedText":"...","width":1080,"height":1920}]}';
+      return `{"deliveryFormat":"instagram_story","promptVersion":"worker-story.v1",${qualityBrief},"selectedAssetCount":1,"story":[{"index":1,"role":"스토리","embeddedText":"...","width":1080,"height":1920}]}`;
     case "instagram_reel":
-      return '{"deliveryFormat":"instagram_reel","promptVersion":"worker-reel.v3","selectedAssetCount":1,"caption":"첫 번째 문단\\n\\n두 번째 문단","hashtags":["#태그1","#태그2","#태그3","#태그4","#태그5"],"scenes":[{"index":1,"role":"정보형 릴스","embeddedText":"...","width":1080,"height":1920}]}';
+      return `{"deliveryFormat":"instagram_reel","promptVersion":"worker-reel.v3",${qualityBrief},"selectedAssetCount":1,"caption":"첫 번째 문단\\n\\n두 번째 문단","hashtags":["#태그1","#태그2","#태그3","#태그4","#태그5"],"scenes":[{"index":1,"role":"정보형 릴스","embeddedText":"...","width":1080,"height":1920}]}`;
   }
 }
 
@@ -106,8 +107,14 @@ export function buildWorkerPrompt(input: BuildWorkerPromptInput) {
     '- 어디에도 "자세히 확인하기"라는 문구를 사용하지 마세요.',
     "- 소스 문구를 그대로 복사하지 말고 독창적이고 간결한 문구로 재구성하세요.",
     "- 전달된 URL의 원문을 충분히 확인하세요. 원문이 제공된 경우 제목만 보고 일반론을 작성하지 마세요.",
+    "- 참고 URL이나 출처 URL을 게시 결과에 표시하지 마세요. URL은 내용의 근거로만 사용하세요.",
     "- 원문의 핵심 주장, 논리, 근거, 예시, 단계, 주의사항 등 사용자가 내용을 정확히 이해하는 데 필요한 세부 사항을 상세하고 구체적으로 반영하세요.",
     "- 콘텐츠에는 사용자에게 실질적인 도움, 공감, 저장 가치, 공유 가치 중 하나 이상의 분명한 이유가 있어야 합니다. 막연한 정보 나열로 채우지 마세요.",
+    "- 이미지 생성 도구를 호출하기 전에 content-quality.v1 품질 브리프를 먼저 작성하세요.",
+    "- 품질 브리프에는 hook, readerPayoff, whyNow, specificClaims, evidence, sourceGaps를 포함하세요.",
+    "- evidence에는 원문 또는 제공된 브랜드 정보에서 확인한 구체적인 근거를 최소 2개 넣으세요. 각 항목은 claim, support, 가능한 경우 sourceUrl을 가져야 합니다.",
+    "- 근거가 2개 미만이면 일반론으로 이미지를 만들지 말고 원문을 다시 분석해 품질 브리프를 재작성하세요.",
+    "- 품질 브리프를 완성하고 근거 수를 확인한 뒤에만 image_gen을 호출하세요.",
     "- 읽기 어려울 정도로 작은 글자를 사용하지 마세요.",
     "- 반복되는 훅, 요약 또는 CTA만 있는 채움용 이미지를 추가하지 마세요.",
     "- 소스를 사용할 수 없거나 sourceMode가 topic_only이면 가격, 사양, 결과, 통계, 순위, 보장 또는 현재 사실을 만들어내지 마세요.",

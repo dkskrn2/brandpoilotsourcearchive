@@ -104,7 +104,9 @@ describe("image render job contract", () => {
   });
 
   it("accepts a valid feed result", () => {
-    const result = parseImageRenderJobResult(feedResultWith(2), {
+    const value = feedResultWith(2);
+    value.cards = value.cards.map((card) => ({ ...card, width: 1254, height: 1254 }));
+    const result = parseImageRenderJobResult(value, {
       jobId: "job-1",
       channelOutputId: "output-1",
       deliveryFormat: "instagram_feed_carousel"
@@ -113,6 +115,7 @@ describe("image render job contract", () => {
     expect(result.deliveryFormat).toBe("instagram_feed_carousel");
     if (result.deliveryFormat !== "instagram_feed_carousel") throw new Error("unexpected_format");
     expect(result.cards).toHaveLength(2);
+    expect(result.cards[0]).toMatchObject({ width: 1254, height: 1254 });
     expect(result.hashtags).toEqual(hashtags);
   });
 

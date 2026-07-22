@@ -9,6 +9,18 @@ import {
 } from "./worker.js";
 
 const hashtags = ["#one", "#two", "#three", "#four", "#five"];
+const qualityBrief = {
+  version: "content-quality.v1",
+  hook: "게시가 늦는 이유",
+  readerPayoff: "승인 병목을 찾습니다",
+  whyNow: "발행량 증가",
+  specificClaims: ["담당자 지정", "기한 설정"],
+  evidence: [
+    { claim: "담당자", support: "서비스 페이지의 담당자 운영 설명입니다" },
+    { claim: "기한", support: "FAQ에 명시된 승인 기한 설명입니다" }
+  ],
+  sourceGaps: []
+};
 
 function claimedJob(
   deliveryFormat: "instagram_feed_carousel" | "instagram_story" | "instagram_reel" = "instagram_feed_carousel"
@@ -72,6 +84,7 @@ function feedPackage(): RenderedInstagramPackage {
     manifest: parseWorkerManifest({
       deliveryFormat: "instagram_feed_carousel",
       promptVersion: "worker-card.v4",
+      qualityBrief,
       selectedAssetCount: 2,
       caption: "first paragraph\n\nsecond paragraph",
       hashtags,
@@ -89,6 +102,7 @@ function storyPackage(): RenderedInstagramPackage {
     manifest: parseWorkerManifest({
       deliveryFormat: "instagram_story",
       promptVersion: "worker-story.v1",
+      qualityBrief,
       selectedAssetCount: 1,
       story: [asset(1, 1920)]
     }),
@@ -101,6 +115,7 @@ function reelPackage(): RenderedInstagramPackage {
     manifest: parseWorkerManifest({
       deliveryFormat: "instagram_reel",
       promptVersion: "worker-reel.v3",
+      qualityBrief,
       selectedAssetCount: 1,
       caption: "first paragraph\n\nsecond paragraph",
       hashtags,
@@ -298,7 +313,8 @@ describe("image worker", () => {
 
   it.each([
     ["asset_count_out_of_range", "manifest validation"],
-    ["ffprobe_failed:invalid_stream", "Reel probe"]
+    ["ffprobe_failed:invalid_stream", "Reel probe"],
+    ["content_quality_evidence_insufficient", "quality planning"]
   ])("requeues retryable %s errors", async (message) => {
     const client = workerClient();
     const renderer = { renderJob: vi.fn(async () => { throw new Error(message); }) };

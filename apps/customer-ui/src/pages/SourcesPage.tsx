@@ -3,6 +3,8 @@ import { PageHeader } from "../components/layout/PageHeader";
 import { Alert } from "../components/ui/Alert";
 import { Badge } from "../components/ui/Badge";
 import { EmptyState } from "../components/ui/EmptyState";
+import { FileUploadButton } from "../components/ui/FileUploadButton";
+import { ListSkeleton } from "../components/ui/LoadingState";
 import { Tabs } from "../components/ui/Tabs";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
 import type { BadgeVariant, SourceCrawlRun, SourceSnapshot, SourceUrl, TopicRow, TopicUploadSummary } from "../types";
@@ -142,16 +144,7 @@ function SourceTable({
                 ) : source.url}
               </td>
               <td>
-                {isEditing ? (
-                  <select
-                    aria-label="URL 유형"
-                    value={editingSource.sourceType}
-                    onChange={(event) => onChangeEdit({ ...editingSource, sourceType: event.target.value as SourceUrl["sourceType"] })}
-                  >
-                    <option value="owned">자사 URL</option>
-                    <option value="reference">참고 URL</option>
-                  </select>
-                ) : sourceTypeLabels[source.sourceType]}
+                {sourceTypeLabels[source.sourceType]}
               </td>
               <td>
                 {source.lastError ? <Badge variant="bad">오류</Badge> : source.enabled ? source.status : <Badge variant="neutral">비활성</Badge>}
@@ -311,13 +304,14 @@ export function SourcesPage() {
   const [sourceSnapshots, setSourceSnapshots] = useState<SourceSnapshot[]>([]);
   const [sourceCrawlRuns, setSourceCrawlRuns] = useState<SourceCrawlRun[]>([]);
   const [topicRows, setTopicRows] = useState<TopicRow[]>([]);
-  const [ownedUrl, setOwnedUrl] = useState("");
   const [referenceUrl, setReferenceUrl] = useState("");
   const [csvText, setCsvText] = useState("");
   const [topicFileName, setTopicFileName] = useState("topics.csv");
+  const [selectedTopicFile, setSelectedTopicFile] = useState<File | null>(null);
   const [uploadSummary, setUploadSummary] = useState<TopicUploadSummary | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [editingSource, setEditingSource] = useState<EditingSource | null>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
 
   async function refreshSources() {
     const apiSources = await api.listSources(DEMO_BRAND_ID);
@@ -341,7 +335,7 @@ export function SourcesPage() {
 
   useEffect(() => {
     let ignore = false;
-    api.listSources(DEMO_BRAND_ID)
+    const sourcesRequest = api.listSources(DEMO_BRAND_ID)
       .then((apiSources) => {
         if (!ignore) {
           setSources(apiSources);
@@ -354,35 +348,38 @@ export function SourcesPage() {
           setNotice("API 서버가 응답하지 않아 URL 목록을 불러오지 못했습니다.");
         }
       });
-    api.listSourceSnapshots(DEMO_BRAND_ID)
+    const snapshotsRequest = api.listSourceSnapshots(DEMO_BRAND_ID)
       .then((snapshots) => {
         if (!ignore) setSourceSnapshots(snapshots);
       })
       .catch(() => {
         if (!ignore) setSourceSnapshots([]);
       });
-    api.listSourceCrawlRuns(DEMO_BRAND_ID)
+    const crawlRunsRequest = api.listSourceCrawlRuns(DEMO_BRAND_ID)
       .then((runs) => {
         if (!ignore) setSourceCrawlRuns(runs);
       })
       .catch(() => {
         if (!ignore) setSourceCrawlRuns([]);
       });
-    api.listTopicRows(DEMO_BRAND_ID)
+    const topicRowsRequest = api.listTopicRows(DEMO_BRAND_ID)
       .then((rows) => {
         if (!ignore) setTopicRows(rows);
       })
       .catch(() => {
         if (!ignore) setTopicRows([]);
       });
+    void Promise.allSettled([sourcesRequest, snapshotsRequest, crawlRunsRequest, topicRowsRequest]).then(() => {
+      if (!ignore) setInitialLoading(false);
+    });
     return () => {
       ignore = true;
     };
   }, []);
 
-  const ownedSources = useMemo(() => sources.filter((source) => source.sourceType === "owned"), [sources]);
   const referenceSources = useMemo(() => sources.filter((source) => source.sourceType === "reference"), [sources]);
-  const referenceLimitReached = referenceSources.filter((source) => source.enabled).length >= maxReferenceSourceUrls;
+  const activeReferenceSourceCount = referenceSources.filter((source) => source.enabled).length;
+  const referenceLimitReached = activeReferenceSourceCount >= maxReferenceSourceUrls;
   const uploadHasWarnings = Boolean(uploadSummary && (uploadSummary.duplicateRows > 0 || uploadSummary.invalidRows > 0));
   const sourceQueueCounts = useMemo(() => ({
     total: sourceSnapshots.length,
@@ -414,7 +411,6 @@ export function SourcesPage() {
       setNotice(sourceSaveErrorMessage(error));
       return;
     }
-    if (sourceType === "owned") setOwnedUrl("");
     if (sourceType === "reference") setReferenceUrl("");
   }
 
@@ -475,9 +471,10 @@ export function SourcesPage() {
     }
   }
 
-  async function readTopicFile(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
+  async function readTopicFile(input: ChangeEvent<HTMLInputElement> | File[]) {
+    const file = Array.isArray(input) ? input[0] : input.target.files?.[0];
     if (!file) return;
+    setSelectedTopicFile(file);
     setTopicFileName(file.name);
     setCsvText(await readTopicCsvFile(file));
     setUploadSummary(null);
@@ -510,44 +507,17 @@ export function SourcesPage() {
     <section className="content">
       <PageHeader
         title="소스"
-        description="자사 URL, 참고 URL, 주제표를 관리합니다. 참고 URL은 원문 복제가 아니라 브랜드 관점 재해석의 근거로만 사용합니다."
+        description="참고 URL, 크롤링 기록, 주제표를 관리합니다. 자사 URL은 브랜드 설정에서 관리합니다."
         actions={<button className="button primary" type="button" onClick={crawlAllSources}>전체 크롤링</button>}
       />
 
       {notice ? <Alert title="API 상태" variant="warn">{notice}</Alert> : null}
 
-      <Tabs
-        defaultId="owned"
+      {initialLoading ? (
+        <section className="panel"><div className="panel-body"><ListSkeleton rows={6} columns={4} label="소스 데이터를 불러오는 중입니다." /></div></section>
+      ) : <Tabs
+        defaultId="reference"
         items={[
-          {
-            id: "owned",
-            label: "자사 URL",
-            content: (
-              <section className="panel">
-                <div className="panel-head">
-                  <h2>자사 URL</h2>
-                  <Badge variant="ok">{ownedSources.length}개 활성</Badge>
-                </div>
-                <div className="panel-body grid">
-                  <div className="inline-form">
-                    <input value={ownedUrl} onChange={(event) => setOwnedUrl(event.target.value)} placeholder="https://example.com/service" aria-label="자사 URL" />
-                    <button className="button primary" type="button" onClick={() => addSource("owned", ownedUrl)}>URL 추가</button>
-                  </div>
-                  <SourceTable
-                    sources={ownedSources}
-                    editingSource={editingSource}
-                    onEdit={startEditSource}
-                    onCancelEdit={() => setEditingSource(null)}
-                    onChangeEdit={setEditingSource}
-                    onSave={saveEditedSource}
-                    onDelete={deleteSource}
-                    onRetry={retrySource}
-                    onToggleEnabled={toggleSourceEnabled}
-                  />
-                </div>
-              </section>
-            )
-          },
           {
             id: "reference",
             label: "참고 URL",
@@ -555,7 +525,7 @@ export function SourcesPage() {
               <section className="panel">
                 <div className="panel-head">
                   <h2>참고 URL</h2>
-                  <Badge variant={referenceLimitReached ? "warn" : "info"}>{referenceSources.length}/{maxReferenceSourceUrls}개 활성</Badge>
+                  <Badge variant={referenceLimitReached ? "warn" : "info"}>{activeReferenceSourceCount}/{maxReferenceSourceUrls}개 활성</Badge>
                 </div>
                 <div className="panel-body grid">
                   <Alert title="참고 URL 처리 원칙" variant="warn">원문 문장을 재사용하지 않고, 주장과 관점을 브랜드 콘텐츠로 재해석합니다.</Alert>
@@ -591,7 +561,19 @@ export function SourcesPage() {
                 <div className="panel-body grid">
                   <div className="actions">
                     <a className="button" href="/topic-template.csv">템플릿 다운로드</a>
-                    <input type="file" accept=".csv,text/csv" onChange={readTopicFile} aria-label="주제표 CSV 파일" />
+                    <FileUploadButton
+                      inputLabel="주제표 CSV 파일"
+                      buttonLabel="CSV 파일 선택"
+                      accept=".csv,text/csv"
+                      items={selectedTopicFile ? [{ id: "topic-csv", name: selectedTopicFile.name, size: selectedTopicFile.size, status: "selected" }] : []}
+                      onFiles={(files) => void readTopicFile(files)}
+                      onRemove={() => {
+                        setSelectedTopicFile(null);
+                        setTopicFileName("topics.csv");
+                        setCsvText("");
+                        setUploadSummary(null);
+                      }}
+                    />
                     <button className="button primary" type="button" onClick={uploadTopics}>업로드 반영</button>
                   </div>
                   <textarea value={csvText} onChange={(event) => setCsvText(event.target.value)} rows={8} aria-label="주제표 CSV 내용" placeholder="topic_title,topic_angle,target_customer" />
@@ -648,7 +630,7 @@ export function SourcesPage() {
             )
           }
         ]}
-      />
+      />}
     </section>
   );
 }

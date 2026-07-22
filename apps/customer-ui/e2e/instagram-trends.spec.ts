@@ -87,7 +87,9 @@ test.beforeEach(async ({ page }) => {
     if (pathname.endsWith("/channels")) {
       return route.fulfill({ ...common, json: [{
         channel: "instagram",
+        enabled: true,
         status: "connected",
+        oauthState: "connected",
         accountLabel: "@brandpilot",
         lastHealthyAt: "2026-07-15T01:00:00.000Z",
         lastPublishedAt: null,
@@ -96,6 +98,16 @@ test.beforeEach(async ({ page }) => {
     }
     if (pathname.endsWith("/content-categories")) {
       return route.fulfill({ ...common, json: [{ code: "marketing", name: "마케팅", recommendedHashtags: ["성장마케팅"], subcategories: [] }] });
+    }
+    if (pathname.endsWith("/instagram-trends/connection")) {
+      return route.fulfill({ ...common, json: {
+        status: "connected",
+        accountLabel: "@brandpilot",
+        instagramBusinessAccountId: "ig-e2e",
+        scopes: ["instagram_basic"],
+        expiresAt: null,
+        lastErrorCode: null
+      } });
     }
     if (pathname.endsWith("/instagram-trend-searches")) {
       return route.fulfill({ ...common, json: [] });

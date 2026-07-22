@@ -20,6 +20,7 @@ export interface DmWorkerResult {
   decision: DmDecision;
   answer: string | null;
   wikiChunkIds: string[];
+  destinationUrlIds?: string[];
   knowledgeEntryId: string | null;
   confidence: number | null;
   reasonCode: DmReasonCode;
@@ -56,6 +57,12 @@ export function parseDmWorkerResult(value: unknown): DmWorkerResult {
   )
     ? candidate.knowledgeEntryId
     : (() => { throw new Error("dm_knowledge_entry_id_invalid"); })();
+  const destinationUrlIds = candidate.destinationUrlIds === undefined
+    ? []
+    : Array.isArray(candidate.destinationUrlIds) && candidate.destinationUrlIds.length <= 2
+      && candidate.destinationUrlIds.every((id) => typeof id === "string" && uuidPattern.test(id))
+      ? [...new Set(candidate.destinationUrlIds as string[])]
+      : (() => { throw new Error("dm_destination_url_ids_invalid"); })();
   const confidence = candidate.confidence === null || (
     typeof candidate.confidence === "number" && Number.isFinite(candidate.confidence) && candidate.confidence >= 0 && candidate.confidence <= 1
   )
@@ -80,7 +87,7 @@ export function parseDmWorkerResult(value: unknown): DmWorkerResult {
   const needsAttention = candidate.needsAttention;
 
   if (decision === "answer" && reasonCode === "direct_faq") {
-    if (wikiChunkIds.length > 0 || knowledgeEntryId === null) throw new Error("dm_direct_faq_source_invalid");
+    if (wikiChunkIds.length > 0 || destinationUrlIds.length > 0 || knowledgeEntryId === null) throw new Error("dm_direct_faq_source_invalid");
     const answer = candidate.answer === null ? null : requiredString(candidate.answer, "dm_answer_required");
     return {
       decision,
@@ -96,20 +103,23 @@ export function parseDmWorkerResult(value: unknown): DmWorkerResult {
 
   if (decision === "answer") {
     if (wikiChunkIds.length === 0 && knowledgeEntryId === null) throw new Error("dm_answer_sources_required");
+    const answer = requiredString(candidate.answer, "dm_answer_required");
+    if (/https?:\/\//i.test(answer)) throw new Error("dm_answer_raw_url_forbidden");
     return {
       decision,
-      answer: requiredString(candidate.answer, "dm_answer_required"),
+      answer,
       wikiChunkIds,
       knowledgeEntryId,
       confidence,
       reasonCode,
       needsAttention,
       reason,
+      ...(candidate.destinationUrlIds === undefined ? {} : { destinationUrlIds }),
     };
   }
 
   if (candidate.answer !== null) throw new Error("dm_non_answer_must_not_include_answer");
-  if (wikiChunkIds.length > 0 || knowledgeEntryId !== null) throw new Error("dm_non_answer_must_not_include_sources");
+  if (wikiChunkIds.length > 0 || destinationUrlIds.length > 0 || knowledgeEntryId !== null) throw new Error("dm_non_answer_must_not_include_sources");
   return {
     decision,
     answer: null,

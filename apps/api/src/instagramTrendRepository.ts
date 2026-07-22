@@ -1,11 +1,16 @@
 import crypto from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { isFreshInstagramTrendCache, normalizeInstagramHashtag } from "./instagramTrend.js";
+import { assessInstagramTrendRelevance } from "./instagramTrendRelevance.js";
 import type { FetchInstagramHashtagTopMediaResult, FetchInstagramHashtagTopMediaInput } from "./instagramTrendMeta.js";
 import { hashSourceUrl } from "./sourceUrl.js";
 import type {
   ContentCategoryDto,
   InstagramTrendFavoriteInput,
+  InstagramTrendArchivePageDto,
+  InstagramTrendConnectionDto,
+  InstagramTrendCredentialInput,
+  InstagramTrendDeleteSearchDto,
   InstagramTrendListInput,
   InstagramTrendMediaDto,
   InstagramTrendPageDto,
@@ -114,6 +119,26 @@ async function recordSearch(queryable: Queryable, workspaceId: string, brandId: 
   );
 }
 
+async function loadBrandTrendCategoryTerms(queryable: Queryable, brandId: string): Promise<string[]> {
+  const result = await queryable.query(
+    `/* trend_category_terms */
+     select coalesce(jsonb_agg(distinct terms.term) filter (where terms.term is not null), '[]'::jsonb) as category_terms
+     from brand_profiles profile
+     left join content_categories category on category.id = profile.primary_category_id
+     left join brand_profile_subcategories selected on selected.brand_profile_id = profile.id
+     left join content_subcategories subcategory on subcategory.id = selected.subcategory_id
+     left join content_category_hashtags hashtag
+       on hashtag.category_id = profile.primary_category_id and hashtag.active = true
+     cross join lateral (
+       values (category.name), (subcategory.name), (selected.custom_name), (hashtag.display_tag)
+     ) terms(term)
+     where profile.brand_id = $1`,
+    [brandId],
+  );
+  const terms = result.rows[0]?.category_terms;
+  return Array.isArray(terms) ? terms.map(String) : [];
+}
+
 function sortSql(sort: InstagramTrendListInput["sort"]): string {
   if (sort === "likes") return "media.like_count desc nulls last, relation.meta_rank asc";
   if (sort === "comments") return "media.comments_count desc nulls last, relation.meta_rank asc";
@@ -131,6 +156,7 @@ function typeSql(type: InstagramTrendListInput["type"]): { sql: string; value?: 
 export function createInstagramTrendRepository(input: {
   pool: Pool;
   decryptCredential: (encrypted: string) => string;
+  encryptCredential?: (plainText: string) => string;
   fetchTopMedia: FetchTopMedia;
   now?: () => Date;
   sleep?: (milliseconds: number) => Promise<void>;
@@ -142,8 +168,10 @@ export function createInstagramTrendRepository(input: {
     const connected = await queryable.query(
       `select brand.workspace_id,
               channel.id as brand_channel_id,
-              channel.external_account_id as instagram_business_account_id,
-              credential.encrypted_payload
+              trend.instagram_business_account_id,
+              trend.encrypted_payload,
+              trend.status,
+              trend.expires_at
        from brands brand
        join brand_channels channel
          on channel.brand_id = brand.id
@@ -152,20 +180,105 @@ export function createInstagramTrendRepository(input: {
         and channel.status = 'connected'
         and channel.enabled = true
         and channel.deleted_at is null
-       join channel_credentials credential
-         on credential.brand_channel_id = channel.id
-        and credential.brand_id = brand.id
-        and credential.workspace_id = brand.workspace_id
-        and credential.status = 'active'
-        and credential.revoked_at is null
+       left join instagram_trend_connections trend
+         on trend.brand_channel_id = channel.id
+        and trend.brand_id = brand.id
+        and trend.workspace_id = brand.workspace_id
        where brand.id = $1 and brand.deleted_at is null
-       order by credential.updated_at desc
        limit 1`,
       [brandId],
     );
     const row = connected.rows[0];
-    if (!row || !row.instagram_business_account_id || !row.encrypted_payload) throw new Error("instagram_connection_required");
+    if (!row) throw new Error("instagram_connection_required");
+    if (!row.instagram_business_account_id || !row.encrypted_payload) throw new Error("instagram_trend_connection_required");
+    if (row.status === "expired" || (row.expires_at && new Date(row.expires_at).getTime() <= now().getTime())) {
+      throw new Error("instagram_trend_reconnect_required");
+    }
+    if (row.status !== "connected") throw new Error("instagram_trend_reconnect_required");
     return row;
+  }
+
+  async function getInstagramTrendConnection(brandId: string): Promise<InstagramTrendConnectionDto> {
+    const result = await input.pool.query(
+      `select trend.status,
+              trend.account_label,
+              trend.instagram_business_account_id,
+              trend.scopes,
+              trend.expires_at,
+              trend.last_error_code
+       from brands brand
+       left join instagram_trend_connections trend
+         on trend.brand_id = brand.id
+        and trend.workspace_id = brand.workspace_id
+       where brand.id = $1 and brand.deleted_at is null
+       limit 1`,
+      [brandId],
+    );
+    if (!result.rowCount) throw new Error("brand_not_found");
+    const row = result.rows[0];
+    if (!row.status) {
+      return { status: "not_connected", accountLabel: null, instagramBusinessAccountId: null, scopes: [], expiresAt: null, lastErrorCode: null };
+    }
+    const expired = row.expires_at && new Date(row.expires_at).getTime() <= now().getTime();
+    return {
+      status: expired ? "expired" : row.status,
+      accountLabel: row.account_label ?? null,
+      instagramBusinessAccountId: row.instagram_business_account_id ?? null,
+      scopes: Array.isArray(row.scopes) ? row.scopes.map(String) : [],
+      expiresAt: iso(row.expires_at),
+      lastErrorCode: row.last_error_code ?? null,
+    };
+  }
+
+  async function saveInstagramTrendCredentials(brandId: string, credential: InstagramTrendCredentialInput): Promise<InstagramTrendConnectionDto> {
+    const result = await input.pool.query(
+      `insert into instagram_trend_connections (
+         workspace_id, brand_id, brand_channel_id, encrypted_payload, masked_display, scopes,
+         instagram_business_account_id, facebook_page_id, account_label, expires_at, status,
+         last_error_code, updated_at
+       )
+       select brand.workspace_id, brand.id, channel.id, $2, $3, $4, $5, $6, $7, $8, 'connected', null, now()
+       from brands brand
+       join brand_channels channel
+         on channel.brand_id = brand.id
+        and channel.workspace_id = brand.workspace_id
+        and channel.channel = 'instagram'
+        and channel.deleted_at is null
+       where brand.id = $1 and brand.deleted_at is null
+       on conflict (brand_id) do update
+         set brand_channel_id = excluded.brand_channel_id,
+             encrypted_payload = excluded.encrypted_payload,
+             masked_display = excluded.masked_display,
+             scopes = excluded.scopes,
+             instagram_business_account_id = excluded.instagram_business_account_id,
+             facebook_page_id = excluded.facebook_page_id,
+             account_label = excluded.account_label,
+             expires_at = excluded.expires_at,
+             status = 'connected',
+             last_error_code = null,
+             updated_at = now()
+       returning status, account_label, instagram_business_account_id, scopes, expires_at, last_error_code`,
+      [
+        brandId,
+        (input.encryptCredential ?? String)(credential.accessToken),
+        credential.maskedDisplay,
+        credential.scopes,
+        credential.instagramBusinessAccountId,
+        credential.facebookPageId,
+        credential.accountLabel,
+        credential.expiresAt,
+      ],
+    );
+    if (!result.rowCount) throw new Error("instagram_connection_required");
+    const row = result.rows[0];
+    return {
+      status: "connected",
+      accountLabel: row.account_label ?? null,
+      instagramBusinessAccountId: row.instagram_business_account_id ?? null,
+      scopes: Array.isArray(row.scopes) ? row.scopes.map(String) : [],
+      expiresAt: iso(row.expires_at),
+      lastErrorCode: row.last_error_code ?? null,
+    };
   }
 
   async function pageFor(
@@ -186,7 +299,7 @@ export function createInstagramTrendRepository(input: {
       `select count(*)::int as total
        from instagram_trend_hashtag_media relation
        join instagram_trend_media media on media.id = relation.media_id
-       where relation.hashtag_id = $1 ${filter.sql.replace("$4", "$2")}`,
+       where relation.hashtag_id = $1 and relation.relevance_status = 'relevant' ${filter.sql.replace("$4", "$2")}`,
       filter.value ? [hashtagRow.id, filter.value] : [hashtagRow.id],
     );
     const rows = await queryable.query(
@@ -201,7 +314,7 @@ export function createInstagramTrendRepository(input: {
               ) as is_saved
        from instagram_trend_hashtag_media relation
        join instagram_trend_media media on media.id = relation.media_id
-       where relation.hashtag_id = $2 ${filter.sql}
+       where relation.hashtag_id = $2 and relation.relevance_status = 'relevant' ${filter.sql}
        order by ${sortSql(options.sort)}
        limit $3 offset ${offsetPlaceholder}`,
       [...values, hashtagRow.last_refreshed_at ?? now()],
@@ -266,6 +379,7 @@ export function createInstagramTrendRepository(input: {
     const searchedAt = now();
     const client = await input.pool.connect();
     let transactionOpen = false;
+    let hashtagLockHeld = false;
     let connection: Row;
     let hashtagRow: Row;
     try {
@@ -281,7 +395,7 @@ export function createInstagramTrendRepository(input: {
       }
 
       const lock = await client.query(
-        `select pg_try_advisory_xact_lock(hashtextextended($1, 0)) as locked`,
+        `select pg_try_advisory_lock(hashtextextended($1, 0)) as locked`,
         [`instagram-trend:${normalized.normalizedTag}`],
       );
       if (!lock.rows[0]?.locked) {
@@ -299,6 +413,7 @@ export function createInstagramTrendRepository(input: {
         await recordSearch(client, connection.workspace_id, brandId, hashtagRow.id, searchedAt);
         return pageFor(brandId, hashtagRow, { hashtag: search.hashtag, type: "all", sort: "meta", page: 1 }, "cache", false, client);
       }
+      hashtagLockHeld = true;
 
       hashtagRow = (await loadHashtag(client, normalized.normalizedTag)) ?? hashtagRow;
       if (isFreshInstagramTrendCache(hashtagRow.last_refreshed_at, searchedAt, CACHE_TTL_MS)) {
@@ -335,6 +450,20 @@ export function createInstagramTrendRepository(input: {
         throw new Error("instagram_reconnect_required");
       }
 
+      await client.query(
+        `insert into instagram_trend_account_hashtags (
+           workspace_id, brand_id, brand_channel_id, hashtag_id, quota_window_started_at, last_meta_queried_at
+         ) values ($1,$2,$3,$4,$5,$5)
+         on conflict (brand_channel_id, hashtag_id) do update set
+           quota_window_started_at = case
+             when instagram_trend_account_hashtags.quota_window_started_at > $6
+             then instagram_trend_account_hashtags.quota_window_started_at else excluded.quota_window_started_at end,
+           last_meta_queried_at = excluded.last_meta_queried_at`,
+        [connection.workspace_id, brandId, connection.brand_channel_id, hashtagRow.id, searchedAt, cutoff],
+      );
+      await client.query("commit");
+      transactionOpen = false;
+
       let fetched: FetchInstagramHashtagTopMediaResult;
       try {
         fetched = await input.fetchTopMedia({
@@ -348,36 +477,91 @@ export function createInstagramTrendRepository(input: {
           `update instagram_trend_hashtags set last_error_code = $2 where id = $1`,
           [hashtagRow.id, code],
         );
-        await client.query("commit");
-        transactionOpen = false;
         throw new Error(code);
       }
 
-      const mediaIds = new Map<string, string>();
-      for (const item of fetched.media) {
-        const metadata = { ...item.rawMetadata, _previewUrl: item.previewUrl, _trendKind: item.kind };
-        const mediaResult = await client.query(
+      const categoryTerms = await loadBrandTrendCategoryTerms(client, brandId);
+      const relevanceByMediaId = new Map(fetched.media.map((item) => [
+        item.instagramMediaId,
+        assessInstagramTrendRelevance({
+          hashtag: normalized.displayTag,
+          caption: item.caption,
+          categoryTerms,
+        }),
+      ]));
+
+      const mediaRows = fetched.media.map((item) => {
+        const relevance = relevanceByMediaId.get(item.instagramMediaId)!;
+        const metadata = { ...item.rawMetadata, _previewUrl: item.previewUrl, _trendKind: item.kind, _trendRelevance: relevance };
+        return {
+          instagramMediaId: item.instagramMediaId,
+          username: item.username,
+          caption: item.caption,
+          mediaType: item.mediaType,
+          mediaUrl: item.mediaUrl,
+          permalink: item.permalink,
+          postedAt: item.postedAt,
+          likeCount: item.likeCount,
+          commentsCount: item.commentsCount,
+          rawMetadata: metadata,
+        };
+      });
+      await client.query("begin");
+      transactionOpen = true;
+      if (mediaRows.length) {
+        await client.query(
           `insert into instagram_trend_media (
              instagram_media_id, username, caption, media_type, media_url, permalink, posted_at,
              like_count, comments_count, last_fetched_at, raw_metadata
-           ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)
+           )
+           select item.instagram_media_id, item.username, item.caption, item.media_type, item.media_url,
+                  item.permalink, item.posted_at, item.like_count, item.comments_count, $2, item.raw_metadata
+           from jsonb_to_recordset($1::jsonb) as item(
+             instagram_media_id text, username text, caption text, media_type text, media_url text,
+             permalink text, posted_at timestamptz, like_count integer, comments_count integer, raw_metadata jsonb
+           )
            on conflict (instagram_media_id) do update set
              username = excluded.username, caption = excluded.caption, media_type = excluded.media_type,
              media_url = excluded.media_url, permalink = excluded.permalink, posted_at = excluded.posted_at,
              like_count = excluded.like_count, comments_count = excluded.comments_count,
-             last_fetched_at = excluded.last_fetched_at, raw_metadata = excluded.raw_metadata
-           returning id`,
-          [item.instagramMediaId, item.username, item.caption, item.mediaType, item.mediaUrl, item.permalink,
-            item.postedAt, item.likeCount, item.commentsCount, searchedAt, JSON.stringify(metadata)],
+             last_fetched_at = excluded.last_fetched_at, raw_metadata = excluded.raw_metadata`,
+          [JSON.stringify(mediaRows.map((row) => ({
+            instagram_media_id: row.instagramMediaId,
+            username: row.username,
+            caption: row.caption,
+            media_type: row.mediaType,
+            media_url: row.mediaUrl,
+            permalink: row.permalink,
+            posted_at: row.postedAt,
+            like_count: row.likeCount,
+            comments_count: row.commentsCount,
+            raw_metadata: row.rawMetadata,
+          }))), searchedAt],
         );
-        mediaIds.set(item.instagramMediaId, String(mediaResult.rows[0].id));
       }
       await client.query(`delete from instagram_trend_hashtag_media where hashtag_id = $1`, [hashtagRow.id]);
-      for (const item of fetched.media) {
+      const relevantRows = fetched.media.flatMap((item) => {
+        const relevance = relevanceByMediaId.get(item.instagramMediaId)!;
+        if (!relevance.relevant) return [];
+        return [{
+          instagram_media_id: item.instagramMediaId,
+          meta_rank: item.metaRank,
+          relevance_score: relevance.score,
+          relevance_reason: relevance.reason,
+        }];
+      });
+      if (relevantRows.length) {
         await client.query(
-          `insert into instagram_trend_hashtag_media (hashtag_id, media_id, meta_rank, first_seen_at, last_seen_at)
-           values ($1, $2, $3, $4, $4)`,
-          [hashtagRow.id, mediaIds.get(item.instagramMediaId), item.metaRank, searchedAt],
+          `insert into instagram_trend_hashtag_media (
+             hashtag_id, media_id, meta_rank, first_seen_at, last_seen_at,
+             relevance_score, relevance_status, relevance_reason
+            )
+            select $1, media.id, item.meta_rank, $3, $3, item.relevance_score, 'relevant', item.relevance_reason
+            from jsonb_to_recordset($2::jsonb) as item(
+              instagram_media_id text, meta_rank integer, relevance_score double precision, relevance_reason text
+            )
+            join instagram_trend_media media on media.instagram_media_id = item.instagram_media_id`,
+          [hashtagRow.id, JSON.stringify(relevantRows), searchedAt],
         );
       }
       await client.query(
@@ -385,17 +569,6 @@ export function createInstagramTrendRepository(input: {
          set meta_hashtag_id = $2, last_refreshed_at = $3, last_error_code = null
          where id = $1`,
         [hashtagRow.id, fetched.metaHashtagId, searchedAt],
-      );
-      await client.query(
-        `insert into instagram_trend_account_hashtags (
-           workspace_id, brand_id, brand_channel_id, hashtag_id, quota_window_started_at, last_meta_queried_at
-         ) values ($1,$2,$3,$4,$5,$5)
-         on conflict (brand_channel_id, hashtag_id) do update set
-           quota_window_started_at = case
-             when instagram_trend_account_hashtags.quota_window_started_at > $6
-             then instagram_trend_account_hashtags.quota_window_started_at else excluded.quota_window_started_at end,
-           last_meta_queried_at = excluded.last_meta_queried_at`,
-        [connection.workspace_id, brandId, connection.brand_channel_id, hashtagRow.id, searchedAt, cutoff],
       );
       await recordSearch(client, connection.workspace_id, brandId, hashtagRow.id, searchedAt);
       await client.query("commit");
@@ -408,6 +581,11 @@ export function createInstagramTrendRepository(input: {
       }
       throw error;
     } finally {
+      if (hashtagLockHeld) {
+        try {
+          await client.query(`select pg_advisory_unlock(hashtextextended($1, 0))`, [`instagram-trend:${normalized.normalizedTag}`]);
+        } catch { /* connection release also clears session locks */ }
+      }
       client.release();
     }
   }
@@ -451,6 +629,17 @@ export function createInstagramTrendRepository(input: {
       lastSearchedAt: iso(row.last_searched_at)!,
       searchCount: Number(row.search_count),
     };
+  }
+
+  async function deleteInstagramTrendSearch(brandId: string, hashtagId: string): Promise<InstagramTrendDeleteSearchDto> {
+    const deleted = await input.pool.query(
+      `delete from brand_trend_searches
+       where brand_id = $1 and hashtag_id = $2
+       returning hashtag_id`,
+      [brandId, hashtagId],
+    );
+    if (!deleted.rowCount) throw new Error("instagram_trend_not_found");
+    return { hashtagId: String(deleted.rows[0].hashtag_id) };
   }
 
   async function saveInstagramTrendSource(brandId: string, mediaId: string): Promise<InstagramTrendSaveSourceDto> {
@@ -545,12 +734,67 @@ export function createInstagramTrendRepository(input: {
     }
   }
 
+  async function removeInstagramTrendSource(brandId: string, mediaId: string) {
+    const deleted = await input.pool.query(
+      `delete from brand_trend_saved_media
+       where brand_id = $1 and trend_media_id = $2
+       returning trend_media_id`,
+      [brandId, mediaId],
+    );
+    return { mediaId, removed: Boolean(deleted.rowCount) };
+  }
+
+  async function listInstagramTrendArchive(
+    brandId: string,
+    options: { page: number; limit: number },
+  ): Promise<InstagramTrendArchivePageDto> {
+    const page = Number.isSafeInteger(options.page) && options.page > 0 ? options.page : 1;
+    const limit = Number.isSafeInteger(options.limit) && options.limit > 0 ? Math.min(options.limit, 100) : 30;
+    const offset = (page - 1) * limit;
+    const totalResult = await input.pool.query(
+      `select count(*)::int as total
+       from brand_trend_saved_media saved
+       where saved.brand_id = $1`,
+      [brandId],
+    );
+    const rows = await input.pool.query(
+      `select media.*,
+              0 as meta_rank,
+              saved.created_at as refreshed_at,
+              saved.created_at as saved_at,
+              true as is_saved,
+              media.raw_metadata->>'_previewUrl' as preview_url,
+              media.raw_metadata->>'_trendKind' as kind
+       from brand_trend_saved_media saved
+       join instagram_trend_media media on media.id = saved.trend_media_id
+       join source_urls source
+         on source.id = saved.source_url_id
+        and source.brand_id = saved.brand_id
+        and source.deleted_at is null
+       where saved.brand_id = $1
+       order by saved.created_at desc
+       limit $2 offset $3`,
+      [brandId, limit, offset],
+    );
+    return {
+      items: rows.rows.map((row) => ({ ...mapMedia(row), savedAt: iso(row.saved_at)! })),
+      page,
+      limit,
+      total: Number(totalResult.rows[0]?.total ?? 0),
+    };
+  }
+
   return {
+    getInstagramTrendConnection,
+    saveInstagramTrendCredentials,
     listContentCategories,
     listInstagramTrends,
     searchInstagramTrends,
     listInstagramTrendSearches,
+    deleteInstagramTrendSearch,
     setInstagramTrendFavorite,
     saveInstagramTrendSource,
+    removeInstagramTrendSource,
+    listInstagramTrendArchive,
   };
 }

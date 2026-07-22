@@ -1,4 +1,4 @@
-# Brand Pilot Image Worker
+# 모종 Image Worker
 
 This directory is intentionally self-contained. Copy this entire directory to the image-worker PC. Do not copy the central API, Supabase credentials, or Meta credentials.
 
@@ -21,6 +21,7 @@ WORKER_ID=image-worker-pc-1
 BLOB_READ_WRITE_TOKEN=valid-read-write-token-for-brandpilot-Blob-store
 IMAGE_PROVIDER=command
 IMAGE_RENDER_COMMAND=node scripts/run-codex-image-render.mjs --job "{{jobFile}}" --output "{{outputDir}}"
+IMAGE_JOB_TIMEOUT_MS=1200000
 IMAGE_MODEL=codex-imagegen
 ```
 

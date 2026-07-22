@@ -95,6 +95,26 @@ describe("configured image renderer", () => {
       .rejects.toThrow("image_render_output_aspect_ratio_invalid");
   });
 
+  it("preserves a square feed image without resizing", async () => {
+    const directory = await outputDirectory();
+    await Promise.all([
+      writeFile(path.join(directory, "card-01.png"), await png(1254, 1254)),
+      writeFile(path.join(directory, "content.json"), JSON.stringify({
+        deliveryFormat: "instagram_feed_carousel",
+        promptVersion: "worker-card.v4",
+        selectedAssetCount: 1,
+        caption: "first paragraph\n\nsecond paragraph",
+        hashtags,
+        cards: [{ ...asset(1, 1080), width: 1254, height: 1254 }]
+      }))
+    ]);
+
+    const rendered = await loadRenderedPackage(jobFor("instagram_feed_carousel"), directory);
+
+    expect(rendered.images[0]).toMatchObject({ width: 1254, height: 1254 });
+    await expect(sharp(rendered.images[0].bytes).metadata()).resolves.toMatchObject({ width: 1254, height: 1254 });
+  });
+
   it("loads the actual Story asset count and deterministic story.png name from the validated manifest", async () => {
     const directory = await outputDirectory();
     await writeFile(path.join(directory, "story.png"), await png(1024, 1536));

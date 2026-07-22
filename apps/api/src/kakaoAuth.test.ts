@@ -25,11 +25,11 @@ function createPool(query: ReturnType<typeof vi.fn>) {
 describe("createKakaoAuthStore", () => {
   it("creates all supported channel rows when creating a new user brand", async () => {
     const calls: string[] = [];
-    const query = vi.fn(async (sql: string) => {
+    const query = vi.fn(async (sql: string, params?: unknown[]) => {
       calls.push(sql);
       if (sql.includes("from user_identities")) return { rowCount: 0, rows: [] };
       if (sql.includes("insert into app_users")) return { rowCount: 1, rows: [{ id: "user-1", display_name: "사용자", email: "user@example.com" }] };
-      if (sql.includes("insert into workspaces")) return { rowCount: 1, rows: [{ id: "workspace-1", name: "사용자 Brand Pilot" }] };
+      if (sql.includes("insert into workspaces")) return { rowCount: 1, rows: [{ id: "workspace-1", name: String(params?.[0]) }] };
       if (sql.includes("insert into brands")) return { rowCount: 1, rows: [{ id: "brand-1", name: "내 브랜드" }] };
       return { rowCount: 1, rows: [] };
     });
@@ -38,6 +38,8 @@ describe("createKakaoAuthStore", () => {
     await store.createOrLoadUser({ subject: "kakao-1", nickname: "사용자", email: "user@example.com" });
 
     const channelInsert = calls.find((sql) => sql.includes("insert into brand_channels"));
+    const workspaceInsert = query.mock.calls.find(([sql]) => sql.includes("insert into workspaces"));
+    expect(workspaceInsert?.[1]?.[0]).toBe("사용자의 모종");
     expect(channelInsert).toContain("'instagram'");
     expect(channelInsert).toContain("'threads'");
     expect(channelInsert).toContain("'x'");
@@ -73,5 +75,16 @@ describe("createKakaoAuthStore", () => {
     await store.getSession("session-token");
 
     expect(calls.some((sql) => sql.includes("insert into brand_channels"))).toBe(false);
+  });
+
+  it("authorizes a content output against the channel_outputs table", async () => {
+    const query = vi.fn(async (_sql: string, _params?: unknown[]) => ({ rowCount: 1, rows: [{ '?column?': 1 }] }));
+    const store = createKakaoAuthStore({ query } as any);
+
+    await store.canAccessResource("user-1", "content_outputs", "output-1");
+
+    expect(query).toHaveBeenCalledOnce();
+    expect(String(query.mock.calls[0]?.[0])).toContain("from channel_outputs resource");
+    expect(String(query.mock.calls[0]?.[0])).not.toContain("from content_outputs resource");
   });
 });

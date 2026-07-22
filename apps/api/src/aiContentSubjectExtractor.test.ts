@@ -104,7 +104,28 @@ describe("extractSubjectPage", () => {
     expect(archiveImage).toHaveBeenCalledTimes(3);
   });
 
-  it("caps page-discovered image sources at 20 after deduplication", async () => {
+  it("extracts visible copy without leaking JSON-like HTML attributes", async () => {
+    const fetchImpl = vi.fn(async () => htmlResponse(`
+      <main data-product='{"comparison":"a > b","nested":{"label":"internal"}}'>
+        <h1>휴대용 업무 마우스</h1>
+        <p>조용한 공간에서도 편하게 사용합니다.</p>
+      </main>`));
+
+    const result = await extractSubjectPage({
+      url: "https://example.com/product",
+      fetchImpl: fetchImpl as typeof fetch,
+      resolveHost: publicDns,
+      archiveImage: vi.fn(),
+    });
+
+    expect(result.facts).toContainEqual({
+      key: "visible_text",
+      value: "휴대용 업무 마우스 조용한 공간에서도 편하게 사용합니다.",
+      sourceUrl: "https://example.com/product",
+    });
+  });
+
+  it("archives at most six page-discovered image sources after deduplication", async () => {
     const images = Array.from({ length: 24 }, (_, index) => `<img src="/image-${index}.jpg"><img src="/image-${index}.jpg">`).join("");
     const fetchImpl = vi.fn(async (input: string | URL | Request) => String(input).endsWith("/page")
       ? htmlResponse(`<main>${images}</main>`)
@@ -113,8 +134,8 @@ describe("extractSubjectPage", () => {
 
     const result = await extractSubjectPage({ url: "https://example.com/page", fetcher: fetchImpl as typeof fetch, resolveHostname: publicDns, archiveImage });
 
-    expect(result.images).toHaveLength(20);
-    expect(archiveImage).toHaveBeenCalledTimes(20);
+    expect(result.images).toHaveLength(6);
+    expect(archiveImage).toHaveBeenCalledTimes(6);
   });
 
   it("revalidates redirects and rejects a redirect target resolving to a private address", async () => {

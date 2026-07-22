@@ -5,6 +5,49 @@ import { BrandStatusProvider } from "../lib/brandStatus";
 import { OnboardingPage } from "../pages/OnboardingPage";
 
 describe("OnboardingPage", () => {
+  it("shows a page skeleton while the onboarding status is pending", () => {
+    render(
+      <MemoryRouter>
+        <BrandStatusProvider client={{ getBrandUiStatus: () => new Promise(() => {}) }}>
+          <OnboardingPage />
+        </BrandStatusProvider>
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole("status", { name: "온보딩 상태를 불러오는 중입니다." })).toHaveClass("skeleton-page");
+  });
+
+  it("distinguishes completed required setup from optional pending steps", () => {
+    render(
+      <MemoryRouter>
+        <BrandStatusProvider initialStatus={{
+          brandId: "brand-1",
+          brandName: "API 브랜드",
+          logoUrl: null,
+          lastGeneratedAt: null,
+          navigation: {
+            onboardingRemaining: 0,
+            contentReview: 0,
+            publishIssues: 0,
+            channelIssues: 0
+          },
+          onboarding: {
+            completedCount: 6,
+            totalCount: 7,
+            remainingCount: 0,
+            steps: [
+              { id: "threads", title: "Threads 연결", description: "선택 연결", actionLabel: "연결", path: "/channels", status: "pending" }
+            ]
+          }
+        }}>
+          <OnboardingPage />
+        </BrandStatusProvider>
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText("필수 항목은 모두 완료됐습니다. 선택 항목 1개는 나중에 연결할 수 있습니다.")).toBeInTheDocument();
+  });
+
   it("shows every checklist item included in the API progress count", () => {
     render(
       <MemoryRouter>

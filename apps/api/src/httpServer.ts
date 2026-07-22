@@ -82,6 +82,7 @@ const instagramTrendHttpErrors: Record<string, [number, string]> = {
   instagram_permission_required: [409, "instagram_permission_required"],
   hashtag_search_limit_reached: [429, "hashtag_search_limit_reached"],
   instagram_trend_fetch_failed: [502, "instagram_trend_fetch_failed"],
+  instagram_trend_not_found: [404, "instagram_trend_not_found"],
   instagram_hashtag_not_found: [200, "instagram_hashtag_not_found"]
 };
 const defaultDevBrandId = "00000000-0000-4000-8000-000000000100";
@@ -462,6 +463,23 @@ export function createServer(
     }
     if (message === "dm_cursor_invalid") {
       reply.code(400).send({ error: message });
+      return;
+    }
+    if (message === "dm_manual_reply_channel_not_ready") {
+      reply.code(409).send({ error: message, deliveryStatus: null, requestId: request.id });
+      return;
+    }
+    if (message === "dm_manual_reply_idempotency_conflict") {
+      reply.code(409).send({ error: message, deliveryStatus: "failed", requestId: request.id });
+      return;
+    }
+    const manualReplyFailure = /^dm_manual_reply_(failed|unknown):(.+)$/.exec(message);
+    if (manualReplyFailure) {
+      reply.code(502).send({
+        error: manualReplyFailure[2],
+        deliveryStatus: manualReplyFailure[1],
+        requestId: request.id,
+      });
       return;
     }
     if (message === "brand_color_too_long") {
@@ -1079,6 +1097,19 @@ export function createServer(
     );
   });
 
+  app.get<{
+    Params: { brandId: string };
+    Querystring: { page?: unknown; limit?: unknown };
+  }>("/brands/:brandId/instagram-trends/archive", async (request, reply) => {
+    const page = request.query.page === undefined ? 1 : Number(request.query.page);
+    const limit = request.query.limit === undefined ? 30 : Number(request.query.limit);
+    if (!Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      reply.code(400);
+      return { error: "invalid_instagram_trend_archive_page" };
+    }
+    return repository.listInstagramTrendArchive(request.params.brandId, { page, limit });
+  });
+
   app.post<{
     Params: { brandId: string };
     Body: Record<string, unknown>;
@@ -1095,8 +1126,24 @@ export function createServer(
     );
   });
 
+  app.delete<{
+    Params: { brandId: string; mediaId: string };
+  }>("/brands/:brandId/instagram-trends/:mediaId/save-source", async (request, reply) => {
+    return instagramTrendResponse(
+      reply,
+      () => repository.removeInstagramTrendSource(request.params.brandId, request.params.mediaId)
+    );
+  });
+
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/instagram-trend-searches", async (request) => {
     return repository.listInstagramTrendSearches(request.params.brandId);
+  });
+
+  app.delete<{ Params: { brandId: string; hashtagId: string } }>("/brands/:brandId/instagram-trend-searches/:hashtagId", async (request, reply) => {
+    return instagramTrendResponse(
+      reply,
+      () => repository.deleteInstagramTrendSearch(request.params.brandId, request.params.hashtagId)
+    );
   });
 
   app.put<{
@@ -1368,6 +1415,23 @@ export function createServer(
       return { error: "support_response_required" };
     }
     return repository.respondToSupportRequest(request.params.requestId, responseMessage);
+  });
+
+  app.post<{ Params: { brandId: string }; Body: Record<string, unknown> }>("/brands/:brandId/feedback", async (request, reply) => {
+    const message = isObject(request.body) && typeof request.body.message === "string"
+      ? request.body.message.trim()
+      : "";
+    if (!message) {
+      reply.code(400);
+      return { error: "feedback_message_required" };
+    }
+    if (message.length > 2000) {
+      reply.code(400);
+      return { error: "feedback_message_too_long" };
+    }
+    const feedback = await repository.createFeedbackSubmission(request.params.brandId, { message });
+    reply.code(201);
+    return feedback;
   });
 
   app.put<{ Params: { brandId: string; channel: string }; Body: Record<string, unknown> }>(
@@ -1765,11 +1829,22 @@ export function createServer(
             publishedUrl: published.publishedUrl,
             errorCode: null,
           });
-        } catch {
-          targets.push(await repository.getAiContentPublishQueueResult({
+        } catch (error) {
+          const storedResult = await repository.getAiContentPublishQueueResult({
             ...scope,
             queueId: target.queueId,
-          }));
+          });
+          const errorCode = storedResult.errorCode ?? safeInternalErrorCode(error);
+          request.log.warn({
+            event: "ai_content_publish_target_failed",
+            requestId: request.id,
+            outputId: request.params.outputId,
+            queueId: target.queueId,
+            channel: target.channel,
+            deliveryFormat: target.deliveryFormat,
+            errorCode,
+          }, "ai_content_publish_target_failed");
+          targets.push({ ...storedResult, errorCode });
         }
       }
       return { outputId: request.params.outputId, publishGroupId: prepared.publishGroupId, targets };
@@ -1991,14 +2066,15 @@ export function createServer(
 
   app.post<{
     Params: { brandId: string; conversationId: string };
-    Body: { body?: unknown };
+    Body: { body?: unknown; idempotencyKey?: unknown };
   }>("/brands/:brandId/dm/conversations/:conversationId/messages", async (request, reply) => {
     const body = typeof request.body?.body === "string" ? request.body.body.trim() : "";
-    if (!uuidPattern.test(request.params.conversationId) || body.length < 1 || body.length > 1000) {
+    const idempotencyKey = typeof request.body?.idempotencyKey === "string" ? request.body.idempotencyKey : "";
+    if (!uuidPattern.test(request.params.conversationId) || !uuidPattern.test(idempotencyKey) || body.length < 1 || body.length > 1000) {
       reply.code(400);
       return { error: "dm_manual_reply_invalid" };
     }
-    return repository.sendManualDmReply(request.params.brandId, request.params.conversationId, body);
+    return repository.sendManualDmReply(request.params.brandId, request.params.conversationId, body, idempotencyKey);
   });
 
   app.get<{

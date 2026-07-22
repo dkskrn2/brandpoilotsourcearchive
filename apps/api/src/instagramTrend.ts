@@ -1,6 +1,7 @@
 import type { InstagramTrendMediaKind } from "./types.js";
 
 const INSTAGRAM_TREND_TTL_MS = 24 * 60 * 60 * 1000;
+const INSTAGRAM_TREND_COLLECTION_LIMIT = 150;
 const MEDIA_TYPES = ["IMAGE", "CAROUSEL_ALBUM", "VIDEO"] as const;
 const HASHTAG_PATTERN = /^(?:[_\p{Nd}]|(?=\p{L})[\p{Script=Latin}\p{Script=Hangul}])+$/u;
 
@@ -114,7 +115,7 @@ export function mapMetaTopMedia(payload: unknown): NormalizedInstagramTrendMedia
   const result: NormalizedInstagramTrendMedia[] = [];
   const ids = new Set<string>();
   for (const value of payload.data) {
-    if (result.length >= 50) break;
+    if (result.length >= INSTAGRAM_TREND_COLLECTION_LIMIT) break;
     if (!isRecord(value)) continue;
     const mediaType = value.media_type;
     if (!nonEmptyString(value.id) || !MEDIA_TYPES.includes(mediaType as InstagramMediaType) || !nonEmptyString(value.permalink)) continue;

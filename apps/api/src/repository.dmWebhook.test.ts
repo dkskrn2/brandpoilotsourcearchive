@@ -30,7 +30,7 @@ describe("Instagram DM webhook repository", () => {
       if (sql.includes("insert into instagram_dm_messages")) return { rowCount: 1, rows: [{ id: "message-1" }] };
       if (sql.includes("insert into dm_turns")) return { rowCount: 1, rows: [{ id: "turn-1", aggregated_text: aggregatedQuestion }] };
       if (sql.includes("from instagram_dm_settings")) return { rowCount: 1, rows: [{ enabled: true }] };
-      if (sql.includes("from wiki_chunks")) return { rowCount: 1, rows: [{ ready: true }] };
+      if (sql.includes("from wiki_versions version")) return { rowCount: 1, rows: [{ ready: true }] };
       if (sql.includes("find_direct_faq_exact")) return { rowCount: 1, rows: [exactFaq] };
       if (sql.includes("count(*) filter")) return { rowCount: 1, rows: [{ participant_count: "1", brand_count: "1" }] };
       if (sql.includes("insert into jobs")) return { rowCount: 1, rows: [{ id: "dm-job-1" }] };
@@ -39,6 +39,31 @@ describe("Instagram DM webhook repository", () => {
     const repository = createRepository({ query, connect: vi.fn(async () => ({ query, release: vi.fn() })) } as any);
     return { aggregatedQuestion, query, repository, statements };
   }
+
+  it("does not assign a DM when the same Instagram account belongs to multiple brands", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (["begin", "commit", "rollback"].includes(sql.trim())) return { rowCount: 0, rows: [] };
+      if (sql.includes("from brand_channels channel")) {
+        return {
+          rowCount: 2,
+          rows: [
+            { id: "channel-1", workspace_id: "workspace-1", brand_id: "brand-1" },
+            { id: "channel-2", workspace_id: "workspace-2", brand_id: "brand-2" },
+          ],
+        };
+      }
+      return { rowCount: 0, rows: [] };
+    });
+    const repository = createRepository({ query, connect: vi.fn(async () => ({ query, release: vi.fn() })) } as any);
+
+    await expect(repository.receiveInstagramWebhookMessage(webhookInput())).resolves.toEqual({
+      status: "unknown_recipient",
+      brandId: null,
+      conversationId: null,
+      jobId: null,
+    });
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("insert into instagram_dm_conversations"))).toBe(false);
+  });
 
   it("adds a unique exact FAQ ID to an active knowledge job using the aggregated question", async () => {
     const exactFaqId = "00000000-0000-4000-8000-000000000003";
@@ -57,7 +82,7 @@ describe("Instagram DM webhook repository", () => {
     });
   });
 
-  it("pauses and queues one fixed knowledge-gap fallback for an exact FAQ conflict", async () => {
+  it("opens attention and queues one fixed knowledge-gap fallback without pausing the conversation", async () => {
     const fixture = activeKnowledgeFixture({ knowledge_entry_id: null, conflict_marker: "knowledge_conflict" });
 
     await expect(fixture.repository.receiveInstagramWebhookMessage(webhookInput("mid-1", "제주도도 같나요?")))
@@ -71,8 +96,10 @@ describe("Instagram DM webhook repository", () => {
     ]);
     expect(attention[0]?.sql).toContain("'knowledge_gap', 'knowledge_gap'");
     const pauses = fixture.statements.filter((statement) => statement.sql.includes("automation_status = 'paused'"));
-    expect(pauses).toHaveLength(1);
-    expect(pauses[0]?.values).toEqual(["conversation-1"]);
+    expect(pauses).toHaveLength(0);
+    const attentionUpdates = fixture.statements.filter((statement) => statement.sql.includes("attention_status = 'open'"));
+    expect(attentionUpdates).toHaveLength(1);
+    expect(attentionUpdates[0]?.values).toEqual(["conversation-1"]);
     const jobs = fixture.statements.filter((statement) => isDmReplyJobInsert(statement.sql));
     expect(jobs).toHaveLength(1);
     expect(JSON.parse(String(jobs[0]?.values[2]))).toMatchObject({
@@ -121,7 +148,7 @@ describe("Instagram DM webhook repository", () => {
         return { rowCount: 1, rows: [{ id: "turn-1", aggregated_text: aggregatedText }] };
       }
       if (sql.includes("from instagram_dm_settings")) return { rowCount: 1, rows: [{ enabled: true }] };
-      if (sql.includes("from wiki_chunks")) return { rowCount: 1, rows: [{ ready: true }] };
+      if (sql.includes("from wiki_versions version")) return { rowCount: 1, rows: [{ ready: true }] };
       if (sql.includes("count(*) filter")) return { rowCount: 1, rows: [{ participant_count: "1", brand_count: "1" }] };
       if (sql.includes("insert into jobs")) return { rowCount: 1, rows: [{ id: "dm-job-1" }] };
       return { rowCount: 0, rows: [] };
@@ -200,7 +227,7 @@ describe("Instagram DM webhook repository", () => {
         return { rowCount: 1, rows: [{ id: `turn-${turnSequence}`, aggregated_text: aggregatedText }] };
       }
       if (sql.includes("from instagram_dm_settings")) return { rowCount: 1, rows: [{ enabled: true }] };
-      if (sql.includes("from wiki_chunks")) return { rowCount: 1, rows: [{ ready: true }] };
+      if (sql.includes("from wiki_versions version")) return { rowCount: 1, rows: [{ ready: true }] };
       if (sql.includes("count(*) filter")) return { rowCount: 1, rows: [{ participant_count: "1", brand_count: "1" }] };
       if (sql.includes("insert into jobs")) return { rowCount: 1, rows: [{ id: `dm-job-${turnSequence}` }] };
       return { rowCount: 0, rows: [] };
@@ -284,7 +311,10 @@ describe("Instagram DM webhook repository", () => {
       };
       return { rowCount: 0, rows: [] };
     });
-    const repository = createRepository({ query, connect: vi.fn() } as any);
+    const repository = createRepository({
+      query,
+      connect: vi.fn(async () => ({ query, release: vi.fn() })),
+    } as any);
 
     await expect(repository.claimDmReplyJob("worker-1")).resolves.toMatchObject({
       payload: { turnId: "turn-1", question: "첫 문장\n둘째 문장" },

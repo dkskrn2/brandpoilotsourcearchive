@@ -353,9 +353,32 @@ export function createMockAiContentGateway(): AiContentGateway {
     },
     async downloadOutput(_brandId, outputId) { return { blob: new Blob([outputId], { type: "application/zip" }), fileName: `${outputId}.zip` }; },
     async downloadGeneration(_brandId, generationId) { return { blob: new Blob([generationId], { type: "application/zip" }), fileName: `${generationId}.zip` }; },
-    async sendToPublish(_brandId, outputId) { return { publishGroupId: `publish-${outputId}` }; },
-    async isInstagramConnected() { return true; }
-    ,
+    async publishOutput(_brandId, outputId, input) {
+      return {
+        outputId,
+        publishGroupId: `publish-${outputId}`,
+        targets: input.targets.map((target, index) => ({
+          ...target,
+          channelOutputId: `channel-output-${outputId}-${index}`,
+          queueId: `queue-${outputId}-${index}`,
+          status: "published" as const,
+          publishedUrl: `https://example.com/published/${outputId}/${index}`,
+          errorCode: null,
+        })),
+      };
+    },
+    async listChannels() {
+      return [{
+        type: "instagram" as const,
+        label: "Instagram",
+        enabled: true,
+        oauthState: "connected" as const,
+        status: "connected" as const,
+        accountLabel: "@growthline352",
+        lastHealthyAt: "2026-07-20T00:00:00.000Z",
+        lastPublishedAt: "2026-07-20T00:00:00.000Z",
+      }];
+    },
     async getCachedSubjectAnalysis(brandId, subjectType, sourceUrl) {
       return copy(subjectRows.get(`${brandId}:${subjectType}:${sourceUrl}`) ?? null);
     },

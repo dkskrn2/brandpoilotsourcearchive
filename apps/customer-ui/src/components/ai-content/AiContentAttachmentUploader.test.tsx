@@ -19,6 +19,8 @@ describe("AiContentAttachmentUploader", () => {
     render(<AiContentAttachmentUploader gateway={api} brandId="brand-1" generationId="generation-1" attachments={[]} onChange={onChange} />);
 
     const file = new File(["image"], "product.png", { type: "image/png" });
+    expect(screen.getByRole("button", { name: "제품 이미지 추가" })).toBeVisible();
+    expect(screen.getByLabelText("제품 이미지")).toHaveClass("visually-hidden");
     fireEvent.change(screen.getByLabelText("제품 이미지"), { target: { files: [file] } });
 
     await waitFor(() => expect(api.uploadAttachment).toHaveBeenCalledWith("brand-1", "generation-1", expect.objectContaining({ fileName: "product.png" }), expect.any(Function)));
@@ -36,9 +38,55 @@ describe("AiContentAttachmentUploader", () => {
     expect(api.uploadAttachment).not.toHaveBeenCalled();
   });
 
+  it("keeps both attachments when parallel uploads finish out of order", async () => {
+    const uploads = new Map<string, (attachment: Parameters<AiContentGateway["uploadAttachment"]>[2]) => void>();
+    const api = {
+      uploadAttachment: vi.fn(async (_brandId, _generationId, attachment) => new Promise<typeof attachment>((resolve) => {
+        uploads.set(attachment.fileName, resolve);
+      })),
+    } as unknown as AiContentGateway;
+    const onChange = vi.fn();
+    render(<AiContentAttachmentUploader gateway={api} brandId="brand-1" generationId="generation-1" attachments={[]} onChange={onChange} />);
+
+    fireEvent.change(screen.getByLabelText("제품 이미지"), {
+      target: { files: [new File(["product"], "product.png", { type: "image/png" })] },
+    });
+    fireEvent.change(screen.getByLabelText("인물 이미지"), {
+      target: { files: [new File(["person"], "person.png", { type: "image/png" })] },
+    });
+
+    await waitFor(() => expect(uploads.size).toBe(2));
+    uploads.get("person.png")?.({
+      id: "person-uploaded",
+      role: "person",
+      fileName: "person.png",
+      mimeType: "image/png",
+      size: 6,
+      storagePath: "stored/person.png",
+      storageUrl: "https://blob.example/person.png",
+    });
+    await waitFor(() => expect(onChange).toHaveBeenLastCalledWith([
+      expect.objectContaining({ fileName: "person.png" }),
+    ]));
+
+    uploads.get("product.png")?.({
+      id: "product-uploaded",
+      role: "product",
+      fileName: "product.png",
+      mimeType: "image/png",
+      size: 7,
+      storagePath: "stored/product.png",
+      storageUrl: "https://blob.example/product.png",
+    });
+    await waitFor(() => expect(onChange).toHaveBeenLastCalledWith([
+      expect.objectContaining({ fileName: "person.png" }),
+      expect.objectContaining({ fileName: "product.png" }),
+    ]));
+  });
+
   it("shows only allowed roles and accepts every analysis document format locally", async () => {
     const onChange = vi.fn();
-    render(<AiContentAttachmentUploader
+    const view = render(<AiContentAttachmentUploader
       gateway={gateway()}
       brandId="brand-1"
       generationId={null}
@@ -63,6 +111,14 @@ describe("AiContentAttachmentUploader", () => {
 
     for (const file of documents) {
       fireEvent.change(screen.getByLabelText("문서"), { target: { files: [file] } });
+      view.rerender(<AiContentAttachmentUploader
+        gateway={gateway()}
+        brandId="brand-1"
+        generationId={null}
+        attachments={[]}
+        onChange={onChange}
+        {...({ allowedRoles: ["document"] } as object)}
+      />);
     }
 
     expect(onChange).toHaveBeenCalledTimes(documents.length);

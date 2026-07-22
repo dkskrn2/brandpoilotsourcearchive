@@ -30,10 +30,10 @@ function fetchQueue(...responses: Array<Response | Error>) {
 }
 
 describe("fetchInstagramHashtagTopMedia", () => {
-  it("performs the exact lookup and top-media requests without following paging", async () => {
+  it("performs the exact lookup and top-media request", async () => {
     const { calls, fetchImpl } = fetchQueue(
       jsonResponse({ data: [{ id: "hashtag-1" }] }),
-      jsonResponse({ data: [], paging: { next: "https://should-not-be-called" } })
+      jsonResponse({ data: [] })
     );
 
     const result = await fetchInstagramHashtagTopMedia({ ...input, fetchImpl });
@@ -53,10 +53,37 @@ describe("fetchInstagramHashtagTopMedia", () => {
     expect(topMedia.origin + topMedia.pathname).toBe("https://graph.facebook.com/v99.0/hashtag-1/top_media");
     expect(Object.fromEntries(topMedia.searchParams)).toEqual({
       user_id: "ig-business-1",
-      fields: "id,caption,comments_count,like_count,media_type,media_url,permalink,timestamp,username,children{id,media_type,media_url,thumbnail_url,permalink}",
-      limit: "50",
+      fields: "id,caption,comments_count,like_count,media_type,media_url,permalink,timestamp",
+      limit: "25",
       access_token: accessToken
     });
+  });
+
+  it("follows cursor pagination and stops after 150 mixed media results", async () => {
+    const mediaPage = (start: number) => Array.from({ length: 25 }, (_, offset) => ({
+      id: `media-${start + offset}`,
+      media_type: offset % 3 === 0 ? "VIDEO" : offset % 3 === 1 ? "IMAGE" : "CAROUSEL_ALBUM",
+      permalink: offset % 3 === 0
+        ? `https://www.instagram.com/reel/${start + offset}/`
+        : `https://www.instagram.com/p/${start + offset}/`
+    }));
+    const { calls, fetchImpl } = fetchQueue(
+      jsonResponse({ data: [{ id: "hashtag-1" }] }),
+      jsonResponse({ data: mediaPage(0), paging: { cursors: { after: "cursor-1" } } }),
+      jsonResponse({ data: mediaPage(25), paging: { cursors: { after: "cursor-2" } } }),
+      jsonResponse({ data: mediaPage(50), paging: { cursors: { after: "cursor-3" } } }),
+      jsonResponse({ data: mediaPage(75), paging: { cursors: { after: "cursor-4" } } }),
+      jsonResponse({ data: mediaPage(100), paging: { cursors: { after: "cursor-5" } } }),
+      jsonResponse({ data: mediaPage(125), paging: { cursors: { after: "cursor-6" } } })
+    );
+
+    const result = await fetchInstagramHashtagTopMedia({ ...input, fetchImpl });
+
+    expect(result.media).toHaveLength(150);
+    expect(result.media.at(-1)?.metaRank).toBe(150);
+    expect(calls).toHaveLength(7);
+    expect(new URL(calls[2]!).searchParams.get("after")).toBe("cursor-1");
+    expect(new URL(calls[6]!).searchParams.get("after")).toBe("cursor-5");
   });
 
   it("maps top-media data through the Instagram trend mapper", async () => {

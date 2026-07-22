@@ -27,6 +27,7 @@ export function TrendMediaDetailDialog({
   const [saveError, setSaveError] = useState<string | null>(null);
   const isVideo = media.kind === "video" || media.kind === "reel";
   const previewUrl = media.previewUrl ?? media.mediaUrl;
+  const authorLabel = media.username ? `@${media.username}` : "Instagram 인기 콘텐츠";
   onCloseRef.current = onClose;
 
   useEffect(() => {
@@ -87,7 +88,7 @@ export function TrendMediaDetailDialog({
         <header className="trend-detail-dialog__header">
           <div>
             <h2 id="trend-detail-title">Instagram 트렌드 상세</h2>
-            <p className="muted">@{media.username ?? "알 수 없음"} · {kindLabels[media.kind]}</p>
+            <p className="muted">{authorLabel} · {kindLabels[media.kind]}</p>
           </div>
           <button ref={closeRef} className="button trend-detail-dialog__close" type="button" aria-label="닫기" onClick={onClose}>
             <X size={18} aria-hidden="true" />
@@ -103,7 +104,7 @@ export function TrendMediaDetailDialog({
             ) : isVideo ? (
               <video src={media.mediaUrl ?? previewUrl} poster={media.previewUrl ?? undefined} preload="metadata" muted playsInline onError={() => setPreviewFailed(true)} />
             ) : (
-              <img src={previewUrl} alt={`@${media.username ?? "알 수 없음"} 미디어 원본`} loading="lazy" onError={() => setPreviewFailed(true)} />
+              <img src={previewUrl} alt={`${authorLabel} 미디어 원본`} loading="lazy" onError={() => setPreviewFailed(true)} />
             )}
           </div>
           <div className="trend-detail-dialog__copy">

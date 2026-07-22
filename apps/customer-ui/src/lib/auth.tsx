@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { api, setActiveBrandId, type AuthSession } from "./apiClient";
 
 export const DANBAM_LOGIN_URL = "https://www.danbammsg.co.kr/";
@@ -38,21 +38,29 @@ export function AuthGate({
   loadSession?: SessionLoader;
   redirect?: Redirect;
 }) {
-  const [state, setState] = useState<"loading" | "authenticated" | "anonymous">("loading");
+  const [state, setState] = useState<"loading" | "authenticated" | "anonymous" | "unavailable">("loading");
   const [session, setSession] = useState<AuthSession | null>(null);
 
-  useEffect(() => {
+  const refreshSession = useCallback(() => {
     if (import.meta.env.MODE === "test" && loadSession === defaultSessionLoader) {
       setState("authenticated");
       return;
     }
 
+    setState("loading");
     void loadSession().then((nextSession) => {
       setSession(nextSession);
       setActiveBrandId(nextSession.brand.id);
       setState("authenticated");
-    }).catch(() => setState("anonymous"));
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : "";
+      setState(/API request failed:\s*401\b/.test(message) ? "anonymous" : "unavailable");
+    });
   }, [loadSession]);
+
+  useEffect(() => {
+    refreshSession();
+  }, [refreshSession]);
 
   async function logout() {
     try {
@@ -65,6 +73,17 @@ export function AuthGate({
 
   if (state === "loading") return <main className="login-page">로그인 정보를 확인하고 있습니다.</main>;
   if (state === "anonymous") return <ExternalRedirect redirect={redirect} />;
+  if (state === "unavailable") {
+    return (
+      <main className="login-page">
+        <section className="login-card">
+          <h1>로그인 상태를 확인할 수 없습니다.</h1>
+          <p>API 서버 연결이 일시적으로 불안정합니다. 로그인 정보는 삭제되지 않았습니다.</p>
+          <button type="button" onClick={refreshSession}>다시 확인</button>
+        </section>
+      </main>
+    );
+  }
   return <AuthContext.Provider value={{ ready: true, session, logout }}>{children}</AuthContext.Provider>;
 }
 

@@ -53,6 +53,22 @@ function directFaqCompletionFixture(entry: { id: string; answer: string } | null
 }
 
 describe("DM Wiki repository", () => {
+  it("does not claim a second DM job for the same brand", async () => {
+    const statements: string[] = [];
+    const query = vi.fn(async (sql: string) => {
+      statements.push(sql);
+      return { rowCount: 0, rows: [] };
+    });
+    const repository = createRepository(fakePool(query) as any);
+
+    await repository.claimDmReplyJob("dm-worker-2");
+
+    const claim = statements.find((sql) => sql.includes("with candidate as") && sql.includes("instagram_dm_reply"));
+    expect(claim).toContain("active.brand_id = job.brand_id");
+    expect(claim).toContain("active.status = 'running'");
+    expect(statements.some((sql) => sql.includes("pg_advisory_xact_lock"))).toBe(true);
+  });
+
   it("resolves a direct FAQ answer from the owned enabled entry and ignores worker answer text", async () => {
     const fixture = directFaqCompletionFixture({ id: directFaqId, answer: "평일 9시부터 18시까지 운영합니다." });
     const result = parseDmWorkerResult({
@@ -90,7 +106,7 @@ describe("DM Wiki repository", () => {
     expect(fixture.sendInstagramDirectMessage).not.toHaveBeenCalled();
   });
 
-  it("upserts only the final valid duplicate FAQ row and queues one refresh job", async () => {
+  it("upserts only the final valid duplicate FAQ row and coalesces one Wiki build request", async () => {
     const statements: Array<{ sql: string; values: unknown[] }> = [];
     const query = vi.fn(async (sql: string, values: unknown[] = []) => {
       statements.push({ sql, values });
@@ -106,7 +122,7 @@ describe("DM Wiki repository", () => {
           created_at: new Date("2026-07-14T00:00:00.000Z"),
         }],
       };
-      if (sql.includes("insert into jobs")) return { rowCount: 1, rows: [{ id: "job-1", status: "queued" }] };
+      if (sql.includes("insert into wiki_build_requests")) return { rowCount: 1, rows: [{ id: "request-1", status: "pending" }] };
       return { rowCount: 1, rows: [] };
     });
     const repository = createRepository(fakePool(query) as any);
@@ -121,14 +137,13 @@ describe("DM Wiki repository", () => {
     expect(entryInsert?.values).toContain("10-19");
     expect(entryInsert?.values).not.toContain("09-18");
     expect(entryInsert?.sql).toContain("on conflict (brand_id, normalized_question)");
-    const jobInsert = statements.find((statement) => statement.sql.includes("insert into jobs"));
-    expect(jobInsert?.sql).toContain("'wiki_refresh'");
-    expect(jobInsert?.sql).toContain("$2::uuid");
-    expect(jobInsert?.sql).toContain("$2::text");
-    expect(jobInsert?.values).toContain("brand-1");
+    const buildRequest = statements.find((statement) => statement.sql.includes("insert into wiki_build_requests"));
+    expect(buildRequest?.sql).toContain("requested_revision");
+    expect(buildRequest?.sql).toContain("interval '2 minutes'");
+    expect(buildRequest?.values).toContain("brand-1");
   });
 
-  it("upserts products by a brand-scoped product key and queues refresh without checking DM settings", async () => {
+  it("upserts products by a brand-scoped product key and coalesces a build without checking DM settings", async () => {
     const statements: Array<{ sql: string; values: unknown[] }> = [];
     const query = vi.fn(async (sql: string, values: unknown[] = []) => {
       statements.push({ sql, values });
@@ -144,7 +159,7 @@ describe("DM Wiki repository", () => {
           created_at: new Date("2026-07-14T00:00:00.000Z"),
         }],
       };
-      if (sql.includes("insert into jobs")) return { rowCount: 1, rows: [{ id: "job-2", status: "queued" }] };
+      if (sql.includes("insert into wiki_build_requests")) return { rowCount: 1, rows: [{ id: "request-2", status: "pending" }] };
       return { rowCount: 1, rows: [] };
     });
     const repository = createRepository(fakePool(query) as any);
@@ -172,10 +187,10 @@ describe("DM Wiki repository", () => {
       sku: "MUG-2",
     }));
     expect(statements.some((statement) => statement.sql.includes("instagram_dm_settings"))).toBe(false);
-    expect(statements.find((statement) => statement.sql.includes("insert into jobs"))?.values).toContain("brand-1");
+    expect(statements.find((statement) => statement.sql.includes("insert into wiki_build_requests"))?.values).toContain("brand-1");
   });
 
-  it("queues a manual Wiki refresh with explicit UUID and text casts for the shared brand parameter", async () => {
+  it("queues a manual Wiki refresh immediately in the coalesced request table", async () => {
     const statements: Array<{ sql: string; values: unknown[] }> = [];
     const query = vi.fn(async (sql: string, values: unknown[] = []) => {
       statements.push({ sql, values });
@@ -188,8 +203,9 @@ describe("DM Wiki repository", () => {
 
     await repository.enqueueWikiRefresh("brand-1");
 
-    const jobInsert = statements.find((statement) => statement.sql.includes("insert into jobs"));
-    expect(jobInsert?.sql).toContain("$2::uuid");
-    expect(jobInsert?.sql).toContain("$2::text");
+    const buildRequest = statements.find((statement) => statement.sql.includes("insert into wiki_build_requests"));
+    expect(buildRequest?.sql).toContain("$2::uuid");
+    expect(buildRequest?.sql).toContain("quiet_until");
+    expect(buildRequest?.sql).toContain("now()");
   });
 });

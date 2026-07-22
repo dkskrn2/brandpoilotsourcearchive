@@ -75,7 +75,15 @@ async function createMinimalGenerationSchema(database: PGlite) {
       tone text null,
       default_cta text null,
       auto_approval_enabled boolean not null default false,
-      brand_color text null
+      brand_color text null,
+      active_brand_analysis_id text null
+    );
+    create table brand_analysis_runs (
+      id text primary key,
+      status text not null,
+      is_active boolean not null default false,
+      result_json jsonb null,
+      edited_result_json jsonb null
     );
     create table brand_profile_subcategories (
       id text primary key,
@@ -91,6 +99,13 @@ async function createMinimalGenerationSchema(database: PGlite) {
       status text not null,
       enabled boolean not null default true,
       deleted_at timestamptz null
+    );
+    create table channel_credentials (
+      id text primary key,
+      brand_channel_id text not null,
+      status text not null,
+      revoked_at timestamptz null,
+      expires_at timestamptz null
     );
     create table topic_rows (
       id text primary key,
@@ -205,6 +220,10 @@ async function seedQuotaFixture(database: PGlite) {
   await database.query(
     "insert into brand_channels (id, brand_id, channel, status, enabled) values ($1, $2, 'threads', 'connected', true)",
     ["threads-channel", "brand-1"]
+  );
+  await database.query(
+    "insert into channel_credentials (id, brand_channel_id, status) values ($1, $2, 'active')",
+    ["threads-credential", "threads-channel"]
   );
   await database.query(
     `insert into topic_rows (id, brand_id, topic_title, topic_angle, target_customer, status)

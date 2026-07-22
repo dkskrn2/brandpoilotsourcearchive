@@ -44,6 +44,7 @@ describe("Threads prompt", () => {
     expect(prompt).toContain("원문 문장을 그대로 복제");
     expect(prompt).toContain("과도한 해시태그");
     expect(prompt).toContain("CTA");
+    expect(prompt).toContain("참고 URL이나 출처 URL을 게시 결과에 표시하지 마세요");
     expect(prompt).toContain("image_gen");
     expect(prompt).toContain('"sourceText": "검증된 링크 본문"');
     expect(prompt).toContain('"name": "브랜드"');

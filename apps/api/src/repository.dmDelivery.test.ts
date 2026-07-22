@@ -177,7 +177,8 @@ describe("DM delivery lifecycle", () => {
     }));
     const outbound = fixture.statements.find((statement) => statement.sql.includes("insert into instagram_dm_messages"));
     expect(outbound?.values).toEqual(expect.arrayContaining(["knowledge_gap"]));
-    expect(fixture.events).toContain("paused");
+    expect(fixture.events).toContain("attention-open");
+    expect(fixture.events).not.toContain("paused");
   });
 
   it("keeps complaint conversations paused for operator review", async () => {
@@ -211,7 +212,10 @@ describe("DM delivery lifecycle", () => {
       queries.push(sql);
       return { rowCount: 0, rows: [] };
     });
-    const repository = createRepository({ query, connect: vi.fn() } as any);
+    const repository = createRepository({
+      query,
+      connect: vi.fn(async () => ({ query, release: vi.fn() })),
+    } as any);
 
     await expect(repository.claimDmReplyJob("worker-1")).resolves.toBeNull();
     expect(queries[0]).toContain("attempt.status = 'sending'");

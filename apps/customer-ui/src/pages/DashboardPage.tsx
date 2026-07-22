@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ExternalLink, RefreshCw } from "lucide-react";
+import { AlertTriangle, ExternalLink, RefreshCw, X } from "lucide-react";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
-import type { ChannelStatus, ChannelType, Dashboard } from "../types";
+import { PageSkeleton } from "../components/ui/LoadingState";
+import { PageGuideButton } from "../components/layout/PageHeader";
+import { ChannelLogo } from "../components/channels/ChannelLogo";
+import { PublishArtifactPreview } from "../components/publish/PublishArtifactPreview";
+import { FeatureSuggestionBanner } from "../components/feedback/FeatureSuggestionBanner";
+import type { ChannelStatus, ChannelType, Dashboard, PublishArtifact } from "../types";
 
 const channelLabels: Record<ChannelType, string> = {
   instagram: "Instagram",
@@ -76,6 +81,100 @@ function attentionMessage(type: Dashboard["attentionItems"][number]["type"]) {
     stale_sync: "채널 성과 수집 상태를 확인해 주세요."
   };
   return messages[type];
+}
+
+function uniqueAttentionItems(items: Dashboard["attentionItems"]) {
+  const seen = new Set<string>();
+  return (items ?? []).filter((item) => {
+    const key = `${item.type}:${item.channel ?? "all"}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+type PerformanceContent = Dashboard["topContents"][number];
+
+function DashboardPerformanceDialog({ content, onClose }: { content: PerformanceContent; onClose: () => void }) {
+  const [artifact, setArtifact] = useState<PublishArtifact | null>(null);
+  const [artifactError, setArtifactError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let ignore = false;
+    setArtifact(null);
+    setArtifactError(false);
+    api.getPublishArtifact(content.publishQueueId)
+      .then((result) => { if (!ignore) setArtifact(result); })
+      .catch(() => { if (!ignore) setArtifactError(true); });
+    return () => { ignore = true; };
+  }, [content.publishQueueId, reloadKey]);
+
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section
+        className="modal-panel publish-result-dialog dashboard-performance-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="dashboard-performance-dialog-title"
+      >
+        <header className="publish-result-dialog__header">
+          <div>
+            <h2 id="dashboard-performance-dialog-title">{content.title}</h2>
+            <small>{channelLabels[content.channel]} 게시 성과</small>
+          </div>
+          <button className="button secondary publish-result-dialog__close" type="button" onClick={onClose} aria-label="닫기" title="닫기">
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="publish-result-dialog__body">
+          <div className="publish-result-dialog__preview publish-result-dialog__scroll">
+            {artifact ? <PublishArtifactPreview artifact={artifact} /> : artifactError ? (
+              <div className="publish-result-dialog__state" role="alert">
+                <p>결과물을 불러오지 못했습니다.</p>
+                <button className="button secondary" type="button" onClick={() => setReloadKey((value) => value + 1)}>
+                  <RefreshCw size={16} aria-hidden="true" /> 다시 시도
+                </button>
+              </div>
+            ) : (
+              <div className="publish-result-dialog__state" role="status" aria-label="성과 콘텐츠를 불러오는 중입니다.">
+                <span className="spinner" aria-hidden="true" />
+                <p>결과물을 불러오는 중입니다.</p>
+              </div>
+            )}
+          </div>
+
+          <aside className="publish-result-dialog__metadata publish-result-dialog__scroll" aria-label="게시 정보">
+            <h3>게시 정보</h3>
+            <dl>
+              <div><dt>채널</dt><dd className="channel-identity"><ChannelLogo channel={content.channel} decorative size={18} /><span>{channelLabels[content.channel]}</span></dd></div>
+              <div><dt>게시 유형</dt><dd>{content.deliveryFormat ? formatLabels[content.deliveryFormat] ?? content.deliveryFormat : "-"}</dd></div>
+              <div><dt>게시일</dt><dd>{formatDate(content.publishedAt)}</dd></div>
+              <div><dt>조회·노출</dt><dd><strong>{exposure(content.exposureCount)}</strong></dd></div>
+            </dl>
+          </aside>
+        </div>
+
+        <footer className="publish-result-dialog__footer">
+          <span className="publish-result-dialog__feedback">최근 수집된 성과 기준</span>
+          {content.externalUrl ? (
+            <a className="button primary" href={content.externalUrl} target="_blank" rel="noreferrer">
+              <ExternalLink size={16} aria-hidden="true" /> 원본 게시물 보기
+            </a>
+          ) : null}
+        </footer>
+      </section>
+    </div>
+  );
 }
 
 function DailyExposureChart({ rows }: { rows: Dashboard["dailyExposure"] }) {
@@ -159,6 +258,8 @@ function DailyExposureChart({ rows }: { rows: Dashboard["dailyExposure"] }) {
 }
 
 function DashboardContent({ dashboard }: { dashboard: Dashboard }) {
+  const [selectedContent, setSelectedContent] = useState<PerformanceContent | null>(null);
+  const attentionItems = uniqueAttentionItems(dashboard.attentionItems);
   const summary = [
     { label: "발행 완료", value: count(dashboard.summary.publishedCount) },
     { label: "조회·노출", value: exposure(dashboard.summary.exposureCount) },
@@ -174,12 +275,12 @@ function DashboardContent({ dashboard }: { dashboard: Dashboard }) {
 
   return (
     <>
-      <header className="dashboard-head">
+      <header className="dashboard-head" data-guide="page-header">
         <div>
           <h1>전체 현황</h1>
           <p>최근 30일 · {formatDate(dashboard.generatedAt)} 기준</p>
         </div>
-        <span className="dashboard-collected">성과 {lastCollected(dashboard.lastCollectedAt)}</span>
+        <div className="actions"><span className="dashboard-collected">성과 {lastCollected(dashboard.lastCollectedAt)}</span><PageGuideButton /></div>
       </header>
 
       <section className="dashboard-summary" aria-label="최근 30일 요약">
@@ -237,7 +338,7 @@ function DashboardContent({ dashboard }: { dashboard: Dashboard }) {
                     const disconnected = item.connectionStatus === "not_connected";
                     return (
                       <tr key={item.channel}>
-                        <th scope="row">{channelLabels[item.channel]}</th>
+                        <th scope="row"><span className="channel-identity"><ChannelLogo channel={item.channel} decorative size={18} /><span>{channelLabels[item.channel]}</span></span></th>
                         <td><span className={`dashboard-status is-${item.connectionStatus}`}>{connectionLabels[item.connectionStatus]}</span></td>
                         <td>{disconnected ? "-" : count(item.publishedCount)}</td>
                         <td>
@@ -255,27 +356,24 @@ function DashboardContent({ dashboard }: { dashboard: Dashboard }) {
 
         <section className="dashboard-section" aria-labelledby="dashboard-top-title">
           <div className="dashboard-section__head">
-            <h2 id="dashboard-top-title">상위 콘텐츠</h2>
+            <h2 id="dashboard-top-title">성과가 좋았던 콘텐츠</h2>
           </div>
           {dashboard.topContents.length > 0 ? (
             <ol className="dashboard-top-list">
               {dashboard.topContents.map((item, index) => (
                 <li key={item.publishQueueId}>
-                  <span className="dashboard-top-list__rank">{index + 1}</span>
-                  <div>
-                    <strong>{item.title}</strong>
-                    <small>{channelLabels[item.channel]}{item.deliveryFormat ? ` · ${formatLabels[item.deliveryFormat] ?? item.deliveryFormat}` : ""} · {formatDate(item.publishedAt)}</small>
-                  </div>
-                  <span className="dashboard-top-list__exposure">{exposure(item.exposureCount)}</span>
-                  {item.externalUrl ? (
-                    <a href={item.externalUrl} target="_blank" rel="noreferrer" aria-label={`${item.title} 원본 열기`} title="원본 열기">
-                      <ExternalLink size={16} aria-hidden="true" />
-                    </a>
-                  ) : null}
+                  <button type="button" className="dashboard-top-list__button" onClick={() => setSelectedContent(item)} aria-label={`${item.title} 상세 보기`}>
+                    <span className="dashboard-top-list__rank">{index + 1}</span>
+                    <span className="dashboard-top-list__content">
+                      <strong>{item.title}</strong>
+                      <small className="channel-identity"><ChannelLogo channel={item.channel} decorative size={16} /><span>{channelLabels[item.channel]}{item.deliveryFormat ? ` · ${formatLabels[item.deliveryFormat] ?? item.deliveryFormat}` : ""} · {formatDate(item.publishedAt)}</span></small>
+                    </span>
+                    <span className="dashboard-top-list__exposure">{exposure(item.exposureCount)}</span>
+                  </button>
                 </li>
               ))}
             </ol>
-          ) : <div className="dashboard-empty">최근 30일에 발행된 콘텐츠가 없습니다.</div>}
+          ) : <div className="dashboard-empty">최근 30일에 성과가 수집된 콘텐츠가 없습니다.</div>}
         </section>
       </div>
 
@@ -283,13 +381,13 @@ function DashboardContent({ dashboard }: { dashboard: Dashboard }) {
         <div className="dashboard-section__head">
           <h2 id="dashboard-attention-title">확인 필요</h2>
         </div>
-        {dashboard.attentionItems.length > 0 ? (
+        {attentionItems.length > 0 ? (
           <ul>
-            {dashboard.attentionItems.map((item, index) => (
-              <li key={`${item.type}-${item.channel ?? "all"}-${index}`}>
+            {attentionItems.map((item) => (
+              <li key={`${item.type}-${item.channel ?? "all"}`}>
                 <AlertTriangle size={18} aria-hidden="true" />
                 <div>
-                  {item.channel ? <strong>{channelLabels[item.channel]}</strong> : null}
+                  {item.channel ? <strong className="channel-identity"><ChannelLogo channel={item.channel} decorative size={18} /><span>{channelLabels[item.channel]}</span></strong> : null}
                   <span>{attentionMessage(item.type)}</span>
                 </div>
               </li>
@@ -297,6 +395,10 @@ function DashboardContent({ dashboard }: { dashboard: Dashboard }) {
           </ul>
         ) : <div className="dashboard-empty">현재 확인할 항목이 없습니다.</div>}
       </section>
+
+      <FeatureSuggestionBanner />
+
+      {selectedContent ? <DashboardPerformanceDialog content={selectedContent} onClose={() => setSelectedContent(null)} /> : null}
     </>
   );
 }
@@ -323,7 +425,7 @@ export function DashboardPage() {
   }, [dashboard, error]);
 
   if (state === "loading") {
-    return <section className="content dashboard-page"><div className="dashboard-page-state" role="status">대시보드를 불러오는 중입니다.</div></section>;
+    return <section className="content dashboard-page"><PageSkeleton label="대시보드를 불러오는 중입니다." /></section>;
   }
   if (state === "error" || !dashboard) {
     return (

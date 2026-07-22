@@ -168,7 +168,7 @@ Skill은 다음만 담당한다.
 - `automation_status`: `active | paused`
 - `attention_status`: `none | open | resolved`
 
-`restricted_action`, `complaint`, `knowledge_gap`, `delivery_unknown`, `processing_error`가 발생하면 다음과 같이 변경한다.
+`complaint`, `delivery_unknown`, `processing_error`가 발생하면 다음과 같이 변경한다.
 
 ```text
 automation_status = paused
@@ -176,6 +176,8 @@ attention_status = open
 ```
 
 트리거가 된 첫 메시지에는 고정 fallback 또는 오류 안내를 한 번 발송한 뒤 세션을 일시정지한다. 일시정지 중 들어온 추가 DM은 모두 저장하고 대화의 미확인 수를 갱신하지만, 새 자동답변 작업과 반복 고정 안내는 만들지 않는다.
+
+`restricted_action`, `knowledge_gap`은 `attention_status = open`만 적용한다. 고정 fallback과 확인 필요 기록은 남기되 대화 자동응답은 유지하여 이후의 정상 질문을 계속 처리한다.
 
 담당자가 확인 완료를 누르면 해당 대화의 모든 열린 확인 필요 항목을 해결 처리한다. 서버가 열린 항목이 없음을 다시 확인한 뒤에만 자동응답을 활성화한다. 일부 항목만 해결된 상태에서는 재개하지 않는다.
 
@@ -365,7 +367,8 @@ POST  /brands/:brandId/wiki/refresh
 세션:
 
 - 연속 메시지가 하나의 turn으로 묶인다.
-- 확인 필요 발생 시 해당 세션만 일시정지된다.
+- 불만, 발송 결과 불명확, 처리 오류가 발생하면 해당 세션만 일시정지된다.
+- 제한 요청과 지식 부족은 확인 필요로 표시하되 세션을 일시정지하지 않는다.
 - 일시정지된 세션은 추가 자동답변을 만들지 않는다.
 - 일시정지 중 추가 DM은 저장되지만 고정 안내를 반복 발송하지 않는다.
 - 모든 열린 확인 필요 항목의 확인 완료 후에만 자동응답이 재개된다.
@@ -417,5 +420,6 @@ UI:
 - DM worker는 DM 답변, 발신자 프로필 갱신, Wiki 갱신 순서로 한 번에 하나의 작업을 처리한다.
 - 프로필 조회와 Meta credential 복호화는 중앙 API에서만 수행한다.
 - 새 Wiki가 실패해도 직전 활성 Wiki를 계속 사용한다.
-- 제한 요청, 불만, 지식 부족, 발송 결과 불명확은 확인 필요 항목으로 남기고 필요 시 대화를 일시정지한다.
+- 제한 요청과 지식 부족은 확인 필요 항목으로 남기되 자동응답을 유지한다.
+- 불만, 발송 결과 불명확, 처리 오류는 확인 필요 항목으로 남기고 대화를 일시정지한다.
 - 운영 절차와 재개 조건은 `docs/operations/instagram-dm-operations-runbook.md`를 단일 기준으로 사용한다.

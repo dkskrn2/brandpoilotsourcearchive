@@ -24,7 +24,7 @@ export const channelCatalog = [
     defaultDeliveryFormat: "instagram_feed_carousel",
     artifactKind: "image",
     oauth: { provider: "meta", credentialType: "oauth" },
-    generationConstraints: { maxAssetCount: 5, squareWidth: 1080, squareHeight: 1080 },
+    generationConstraints: { maxAssetCount: 5, aspectRatio: "1:1" },
     generationReady: true,
     displayOrder: 1
   },

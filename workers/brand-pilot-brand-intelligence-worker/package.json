@@ -1,0 +1,22 @@
+{
+  "name": "@brand-pilot/brand-intelligence-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts watch",
+    "run-once": "tsx src/index.ts once",
+    "build": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@brand-pilot/worker-runtime": "0.1.0",
+    "dotenv": "^17.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.10"
+  }
+}

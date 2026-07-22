@@ -1,6 +1,6 @@
 import { normalizeWhitespace } from "./knowledgeNormalizer.js";
 
-const unitTypes = ["faq", "product", "policy", "fact", "guide_section"] as const;
+const unitTypes = ["faq", "product", "service", "policy", "fact", "guide_section"] as const;
 const protectedProductFields = ["price", "currency", "productUrl", "sku"] as const;
 const topLevelKeys = ["units"];
 const unitKeys = [
@@ -122,7 +122,7 @@ export function buildKnowledgeCuratorPrompt(input: {
   sourceTitle: string;
   sourceStructuredData?: StructuredData;
 }) {
-  return `당신은 브랜드 지식 원문을 검색 가능한 원자 단위로 정리하는 담당자입니다. 반드시 $knowledge-curator Skill을 사용하세요. 정제된 원문에 명시된 사실만 사용하고 추측, 보정, 최신화하지 마세요. 아래 필드만 가진 strict JSON 객체를 출력하고 설명, Markdown, 코드 펜스는 출력하지 마세요.\n\n원문 제목:\n${input.sourceTitle}\n\n원문 structuredData:\n${JSON.stringify(input.sourceStructuredData ?? {})}\n\n정제된 원문:\n${input.normalizedSource}\n\n출력 계약:\n{"units":[{"unitType":"faq|product|policy|fact|guide_section","title":"string","content":"string","keywords":["string"],"aliases":["string"],"sourceQuote":"정제된 원문에 공백 정규화 후 그대로 존재하는 인용","validFrom":"YYYY-MM-DD|null","validUntil":"YYYY-MM-DD|null","structuredData":{"key":"string|number|null"}}]}\n\nJSON만 출력하세요.`;
+  return `당신은 브랜드 지식 원문을 검색 가능한 원자 단위로 정리하는 담당자입니다. 반드시 $knowledge-curator Skill을 사용하세요. 정제된 원문에 명시된 사실만 사용하고 추측, 보정, 최신화하지 마세요. 아래 필드만 가진 strict JSON 객체를 출력하고 설명, Markdown, 코드 펜스는 출력하지 마세요.\n\n원문 제목:\n${input.sourceTitle}\n\n원문 structuredData:\n${JSON.stringify(input.sourceStructuredData ?? {})}\n\n정제된 원문:\n${input.normalizedSource}\n\n출력 계약:\n{"units":[{"unitType":"faq|product|service|policy|fact|guide_section","title":"string","content":"string","keywords":["string"],"aliases":["string"],"sourceQuote":"정제된 원문에 공백 정규화 후 그대로 존재하는 인용","validFrom":"YYYY-MM-DD|null","validUntil":"YYYY-MM-DD|null","structuredData":{"key":"string|number|null"}}]}\n\nJSON만 출력하세요.`;
 }
 
 export async function curateKnowledge({

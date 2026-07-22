@@ -1,6 +1,7 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { BrandAnalysis } from "../features/brand-intelligence/types";
 import type { BrandProfile, ContentCategory, InstagramFormatSettings } from "../types";
 
 const apiProfile: BrandProfile = {
@@ -70,6 +71,33 @@ const apiInstagramFormats: InstagramFormatSettings = {
   ]
 };
 
+const confirmedBrandIntelligence: BrandAnalysis = {
+  id: "analysis-1",
+  brandId: "brand-1",
+  status: "confirmed",
+  input: { ownedUrl: "https://brand.example.com", uploadIds: [] },
+  result: null,
+  editedResult: null,
+  effectiveResult: {
+    contractVersion: "brand-intelligence-result.v1",
+    companyOverview: "회사 개요",
+    businessDescription: "사업 소개",
+    primaryCategory: { code: "travel", name: "여행·관광" },
+    subcategories: [{ code: "domestic", name: "국내 여행" }],
+    primaryTarget: "처음 여행을 준비하는 고객",
+    differentiators: "차별점",
+    coreAppeal: "소구점",
+    competitors: [],
+    evidence: [],
+    sourceGaps: []
+  },
+  errorCode: null,
+  errorMessage: null,
+  createdAt: "2026-07-21T00:00:00.000Z",
+  updatedAt: "2026-07-21T00:00:00.000Z",
+  confirmedAt: "2026-07-21T00:00:00.000Z"
+};
+
 afterEach(() => {
   cleanup();
   vi.resetModules();
@@ -92,11 +120,27 @@ async function renderBrandSettingsPage(apiOverrides: Partial<Record<string, Retu
     })),
     uploadBrandLogo: vi.fn(async () => ({ ...apiProfile, logoUrl: "https://cdn.example.com/new-logo.png" })),
     deleteBrandLogo: vi.fn(async () => ({ ...apiProfile, logoUrl: null })),
+    listSources: vi.fn(async () => [{
+      id: "owned-1",
+      brandId: "brand-1",
+      sourceType: "owned" as const,
+      url: "https://brand.example.com",
+      title: "Brand home",
+      status: "active",
+      enabled: true,
+      lastCrawledAt: null,
+      lastError: null
+    }]),
     ...apiOverrides
   };
   vi.doMock("../lib/apiClient", () => ({
     DEMO_BRAND_ID: "brand-1",
     api
+  }));
+  vi.doMock("../features/brand-intelligence/brandIntelligenceGateway", () => ({
+    brandIntelligenceGateway: {
+      getCurrent: vi.fn(async () => confirmedBrandIntelligence)
+    }
   }));
   const { BrandSettingsPage } = await import("../pages/BrandSettingsPage");
   render(<BrandSettingsPage />);
@@ -104,6 +148,27 @@ async function renderBrandSettingsPage(apiOverrides: Partial<Record<string, Retu
 }
 
 describe("BrandSettingsPage", () => {
+  it("shows a page skeleton while the required settings are pending", async () => {
+    await renderBrandSettingsPage({
+      getBrandProfile: vi.fn(() => new Promise(() => {})),
+      getInstagramFormats: vi.fn(() => new Promise(() => {}))
+    });
+
+    expect(screen.getByRole("status", { name: "브랜드 설정을 불러오는 중입니다." })).toHaveClass("skeleton-page");
+  });
+
+  it("shows the confirmed owned URL without a separate URL editor", async () => {
+    const api = await renderBrandSettingsPage();
+
+    expect(await screen.findByRole("heading", { name: "확정된 브랜드 정보" })).toBeVisible();
+    expect(screen.getByText("대표 URL")).toBeVisible();
+    expect(await screen.findByText("https://brand.example.com")).toBeVisible();
+    expect(screen.queryByRole("textbox", { name: "자사 URL" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "자사 URL 추가" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("주요 링크")).not.toBeInTheDocument();
+    expect(api).not.toHaveProperty("createSource");
+  });
+
   it("loads brand profile from the API instead of sample data", async () => {
     await renderBrandSettingsPage();
 
@@ -111,8 +176,10 @@ describe("BrandSettingsPage", () => {
     expect(screen.getByLabelText("대표 분야 선택")).toHaveValue("travel");
     expect(screen.getByLabelText("핵심 고객 직접 입력")).toHaveValue("처음 여행을 준비하는 고객");
     expect(screen.queryByDisplayValue("제주 여행 상담 브랜드")).not.toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "브랜드 전체 자동 승인" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "브랜드 전체 자동 승인" })).not.toBeChecked();
+    expect(screen.getByLabelText("브랜드 전체 자동 승인")).toHaveAttribute("data-state", "mixed");
     expect(screen.queryByText("채널별 자동 승인")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "검증 메시지" })).not.toBeInTheDocument();
   });
 
   it("loads categories independently and shows only the selected category subcategories", async () => {
@@ -134,6 +201,168 @@ describe("BrandSettingsPage", () => {
     expect(screen.getByPlaceholderText("예: 친절하고 과장 없는 전문가 톤")).toBeInTheDocument();
   });
 
+  it("keeps the brand name, primary category, and primary customer in full-width rows", async () => {
+    await renderBrandSettingsPage();
+
+    const brandNameField = (await screen.findByLabelText("브랜드명")).closest("label");
+    const categoryField = screen.getByLabelText("대표 분야 선택").closest("label");
+    const customerField = screen.getByLabelText("핵심 고객 선택").closest("label");
+
+    expect(brandNameField).not.toBeNull();
+    expect(categoryField).not.toBeNull();
+    expect(customerField).not.toBeNull();
+    expect(brandNameField).toHaveClass("field", "full");
+    expect(categoryField).toHaveClass("field", "full");
+    expect(customerField).toHaveClass("field", "full");
+    expect(brandNameField!.compareDocumentPosition(categoryField!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(categoryField!.compareDocumentPosition(customerField!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("orders settings sections and keeps the brand color in the profile", async () => {
+    await renderBrandSettingsPage();
+
+    const headings = [
+      await screen.findByRole("heading", { name: "브랜드 프로필" }),
+      screen.getByRole("heading", { name: "생성 기준" }),
+      screen.getByRole("heading", { name: "자동 승인" }),
+      screen.getByRole("heading", { name: "Instagram 콘텐츠 형식" }),
+      screen.getByRole("heading", { name: "확정된 브랜드 정보" })
+    ];
+    headings.slice(0, -1).forEach((heading, index) => {
+      expect(heading.compareDocumentPosition(headings[index + 1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    const profileSection = headings[0].closest("section");
+    const instagramSection = headings[3].closest("section");
+    expect(profileSection).not.toBeNull();
+    expect(instagramSection).not.toBeNull();
+    expect(within(profileSection!).getByLabelText("브랜드 주색")).toBeVisible();
+    expect(within(instagramSection!).queryByLabelText("브랜드 주색")).not.toBeInTheDocument();
+  });
+
+  it("shows Instagram formats in an accessible open accordion ordered Card News, Reel, Story", async () => {
+    await renderBrandSettingsPage();
+
+    const trigger = await screen.findByRole("button", { name: /Instagram 콘텐츠 형식/ });
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    const panelId = trigger.getAttribute("aria-controls");
+    expect(panelId).toBeTruthy();
+    const panel = document.getElementById(panelId!);
+    expect(panel).not.toBeNull();
+    expect(panel).not.toHaveAttribute("hidden");
+
+    const cardNews = within(panel!).getByRole("switch", { name: "Card News" });
+    const reel = within(panel!).getByRole("switch", { name: "Reel" });
+    const story = within(panel!).getByRole("switch", { name: "Story" });
+    expect(cardNews.compareDocumentPosition(reel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(reel.compareDocumentPosition(story) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await userEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(panel).toHaveAttribute("hidden");
+  });
+
+  it("nests Instagram content formats inside the auto-approval section", async () => {
+    await renderBrandSettingsPage();
+
+    const autoApprovalSection = (await screen.findByRole("heading", { name: "자동 승인" })).closest("section");
+    expect(autoApprovalSection).not.toBeNull();
+    expect(within(autoApprovalSection!).getByRole("heading", { name: "Instagram" })).toBeVisible();
+    expect(within(autoApprovalSection!).getByRole("heading", { name: "Instagram 콘텐츠 형식" })).toBeVisible();
+    expect(within(autoApprovalSection!).getByText(/다른 채널의 콘텐츠 형식도 이 영역에 추가됩니다/)).toBeVisible();
+  });
+
+  it("shows a partial master state and enables every available Instagram format when clicked", async () => {
+    await renderBrandSettingsPage();
+
+    const master = await screen.findByRole("switch", { name: "브랜드 전체 자동 승인" });
+    expect(screen.getByText("일부 켜짐")).toBeVisible();
+    expect(screen.getByLabelText("브랜드 전체 자동 승인")).toHaveAttribute("data-state", "mixed");
+
+    await userEvent.click(master);
+
+    expect(screen.getByRole("switch", { name: "Card News" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Reel" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Story" })).not.toBeChecked();
+    expect(screen.getByText("전체 켜짐")).toBeVisible();
+  });
+
+  it("turns every Instagram format off with the master switch", async () => {
+    await renderBrandSettingsPage({
+      getInstagramFormats: vi.fn(async () => ({
+        ...apiInstagramFormats,
+        formats: apiInstagramFormats.formats.map((format) => ({
+          ...format,
+          enabled: format.capabilityStatus === "available"
+        }))
+      }))
+    });
+
+    await userEvent.click(await screen.findByRole("switch", { name: "브랜드 전체 자동 승인" }));
+
+    expect(screen.getByRole("switch", { name: "Card News" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Reel" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Story" })).not.toBeChecked();
+    expect(screen.getByText("전체 꺼짐")).toBeVisible();
+  });
+
+  it("saves an auto-approval change without resending unchanged analyzed profile fields", async () => {
+    const api = await renderBrandSettingsPage({
+      getBrandProfile: vi.fn(async () => ({
+        ...apiProfile,
+        primaryCustomer: "브랜드 분석에서 생성되어 기존 직접 입력 제한보다 긴 핵심 고객 설명입니다. 자동 승인만 저장할 때 다시 검증하면 안 됩니다."
+      })),
+      getInstagramFormats: vi.fn(async () => ({
+        ...apiInstagramFormats,
+        formats: apiInstagramFormats.formats.map((format) => ({
+          ...format,
+          enabled: format.capabilityStatus === "available"
+        }))
+      }))
+    });
+
+    await userEvent.click(await screen.findByRole("switch", { name: "브랜드 전체 자동 승인" }));
+    await userEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    expect(api.updateBrandProfile).toHaveBeenCalledWith("brand-1", { autoApprovalEnabled: false });
+    expect(await screen.findByText("저장됨")).toBeVisible();
+  });
+
+  it("keeps unavailable formats off when the master switch enables available formats", async () => {
+    await renderBrandSettingsPage({
+      getBrandProfile: vi.fn(async () => ({ ...apiProfile, autoApprovalEnabled: false })),
+      getInstagramFormats: vi.fn(async () => ({
+        ...apiInstagramFormats,
+        formats: apiInstagramFormats.formats.map((format) => format.format === "instagram_feed_carousel"
+          ? { ...format, enabled: false, capabilityStatus: "needs_attention" as const }
+          : { ...format, enabled: false })
+      }))
+    });
+
+    await userEvent.click(await screen.findByRole("switch", { name: "브랜드 전체 자동 승인" }));
+
+    expect(screen.getByRole("switch", { name: "Card News" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Card News" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "Reel" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Story" })).not.toBeChecked();
+  });
+
+  it("normalizes legacy subcategory data to the five-selection limit", async () => {
+    await renderBrandSettingsPage({
+      getBrandProfile: vi.fn(async () => ({
+        ...apiProfile,
+        subcategories: Array.from({ length: 6 }, (_, index) => ({
+          type: "custom" as const,
+          code: null,
+          name: `세부 분야 ${index + 1}`
+        }))
+      }))
+    });
+
+    expect(await screen.findByText("선택 5/5")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "세부 분야 6 제거" })).not.toBeInTheDocument();
+  });
+
   it("saves one brand color and global instagram format switches in fixed rotation order", async () => {
     const api = await renderBrandSettingsPage();
 
@@ -151,7 +380,7 @@ describe("BrandSettingsPage", () => {
         { format: "instagram_reel", enabled: true }
       ]
     });
-    expect(screen.getByText(/Card News → Story → Reel/)).toBeVisible();
+    expect(screen.getByText(/Card News → Reel → Story/)).toBeVisible();
   });
 
   it("shows why Story cannot be enabled", async () => {
@@ -206,8 +435,7 @@ describe("BrandSettingsPage", () => {
 
     const optionalFields = [
       screen.getByLabelText("톤앤매너"),
-      screen.getByLabelText("기본 CTA"),
-      screen.getByLabelText("주요 링크")
+      screen.getByLabelText("기본 CTA")
     ];
     optionalFields.forEach((field) => {
       expect(within(field.closest("label") as HTMLElement).queryByText("필수 입력")).not.toBeInTheDocument();
@@ -238,14 +466,15 @@ describe("BrandSettingsPage", () => {
   });
 
   it("saves an explicit category payload without industry", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     const api = await renderBrandSettingsPage();
     await userEvent.clear(await screen.findByLabelText("브랜드명"));
     await userEvent.type(screen.getByLabelText("브랜드명"), "변경 브랜드");
+    await userEvent.selectOptions(screen.getByLabelText("대표 분야 선택"), "food");
     await userEvent.click(await screen.findByRole("button", { name: "저장" }));
     expect(api.updateBrandProfile).toHaveBeenCalledWith("brand-1", expect.objectContaining({
-      primaryCategoryCode: "travel",
+      primaryCategoryCode: "food",
       subcategories: [
-        { type: "system", code: "domestic" },
         { type: "custom", name: "가족 여행" }
       ]
     }));
@@ -260,13 +489,14 @@ describe("BrandSettingsPage", () => {
     await userEvent.type(nameInput, "저장 중 브랜드");
     await userEvent.click(screen.getByRole("button", { name: "저장" }));
 
+    expect(screen.getByRole("button", { name: "저장" })).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByLabelText("브랜드 설정 저장 중")).toBeVisible();
     expect(nameInput).toBeDisabled();
     expect(screen.getByLabelText("대표 분야 선택")).toBeDisabled();
     expect(screen.getByLabelText("핵심 고객 선택")).toBeDisabled();
     expect(screen.getByLabelText("제품/서비스 설명")).toBeDisabled();
     expect(screen.getByLabelText("톤앤매너")).toBeDisabled();
     expect(screen.getByLabelText("기본 CTA")).toBeDisabled();
-    expect(screen.getByLabelText("주요 링크")).toBeDisabled();
     expect(screen.getByLabelText("직접 입력 세부 분야")).toBeDisabled();
     expect(screen.getByRole("button", { name: "세부 분야 추가" })).toBeDisabled();
     expect(screen.getByLabelText("브랜드 주색")).toBeDisabled();

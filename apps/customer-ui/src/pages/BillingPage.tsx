@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Alert } from "../components/ui/Alert";
 import { Badge } from "../components/ui/Badge";
 import { PageHeader } from "../components/layout/PageHeader";
+import { PageSkeleton } from "../components/ui/LoadingState";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
 import type { BillingSummary } from "../types";
 
@@ -62,7 +63,7 @@ export function BillingPage() {
       />
 
       {error ? <Alert title="결제 정보" variant="bad">{error}</Alert> : null}
-      {!summary && !error ? <p className="muted">결제 정보를 확인하고 있습니다.</p> : null}
+      {!summary && !error ? <PageSkeleton label="결제 정보를 불러오는 중입니다." /> : null}
 
       {summary ? (
         <div className="billing-sheet">
@@ -72,7 +73,7 @@ export function BillingPage() {
             </div>
             <div className="billing-plan-row">
               <div>
-                <strong>{summary.subscription.planName ?? "Brand Pilot 월 구독"}</strong>
+                <strong>{summary.subscription.planName ?? "모종 월 구독"}</strong>
                 <span>{formatAmount(summary.subscription.monthlyAmount)}</span>
                 {summary.subscription.nextBillingAt ? <small>다음 결제일 {formatDate(summary.subscription.nextBillingAt)}</small> : null}
               </div>
@@ -142,7 +143,7 @@ export function BillingPage() {
               </div>
             )}
             <p className="billing-security-note">
-              카드번호, 유효기간, CVC는 토스페이먼츠에서 직접 입력하며 Brand Pilot에 저장하지 않습니다.
+              카드번호, 유효기간, CVC는 토스페이먼츠에서 직접 입력하며 모종에 저장하지 않습니다.
             </p>
           </section>
         </div>

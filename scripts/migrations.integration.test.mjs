@@ -2070,3 +2070,823 @@ test("subject pipeline v2 smoke fails before migration 051", async () => {
   });
 });
 
+test("039 stores Facebook Login credentials separately for Instagram trends", async () => {
+  const migration = await readFile("db/migrations/039_instagram_trend_connections.sql", "utf8");
+  assert.match(migration, /create table instagram_trend_connections/i);
+  assert.match(migration, /unique \(brand_id\)/i);
+  assert.match(migration, /references brand_channels/i);
+  assert.doesNotMatch(migration, /alter table channel_credentials/i);
+});
+
+test("044 creates the tenant-safe AI content studio runtime schema", async () => {
+  const migrations = await loadMigrations();
+  const migration044 = migrations.find(
+    (migration) => migration.id === "044_ai_content_studio_runtime.sql",
+  );
+
+  assert.ok(migration044);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "044_ai_content_studio_runtime.sql",
+    );
+
+    const runtimeTables = [
+      "ai_content_generations",
+      "ai_content_generation_outputs",
+      "ai_content_generation_attachments",
+      "ai_content_generation_jobs",
+      "ai_content_generation_references",
+      "ai_content_usage_ledger",
+      "brand_audiences",
+      "brand_appeals",
+    ];
+
+    for (const tableName of runtimeTables) {
+      const result = await database.query(
+        "select to_regclass($1) as table_name",
+        [`public.${tableName}`],
+      );
+      assert.equal(result.rows[0].table_name, tableName);
+    }
+
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "ai_content_generations",
+        "ai_content_generations_type_check",
+      ),
+      ["blog", "card_news", "marketing"],
+    );
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "ai_content_generations",
+        "ai_content_generations_status_check",
+      ),
+      [
+        "analysis_ready",
+        "analyzing",
+        "completed",
+        "draft",
+        "failed",
+        "generating",
+        "partial_failed",
+        "planning",
+        "queued",
+      ],
+    );
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "ai_content_generation_outputs",
+        "ai_content_generation_outputs_status_check",
+      ),
+      ["completed", "failed", "generating", "planning", "queued"],
+    );
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "ai_content_generation_attachments",
+        "ai_content_generation_attachments_role_check",
+      ),
+      ["document", "person", "product", "scale", "visual_reference"],
+    );
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "ai_content_generation_jobs",
+        "ai_content_generation_jobs_type_check",
+      ),
+      ["analyze", "generate"],
+    );
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "ai_content_generation_jobs",
+        "ai_content_generation_jobs_content_type_check",
+      ),
+      ["blog", "card_news", "marketing"],
+    );
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "ai_content_generation_jobs",
+        "ai_content_generation_jobs_status_check",
+      ),
+      ["failed", "processing", "queued", "succeeded"],
+    );
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "ai_content_usage_ledger",
+        "ai_content_usage_ledger_type_check",
+      ),
+      ["generation", "new_download", "reversal"],
+    );
+
+    const uuidColumns = await database.query(`
+      select table_name, column_name
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name in (
+          'ai_content_generations',
+          'ai_content_generation_outputs',
+          'ai_content_generation_attachments',
+          'ai_content_generation_jobs',
+          'ai_content_generation_references',
+          'ai_content_usage_ledger',
+          'brand_audiences',
+          'brand_appeals'
+        )
+        and (column_name = 'id' or column_name like '%\\_id' escape '\\')
+        and column_name != 'worker_id'
+        and data_type != 'uuid'
+    `);
+    assert.deepEqual(uuidColumns.rows, []);
+
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ($1, $2) returning id",
+      ["AI Content Migration", `ai-content-${randomUUID()}`],
+    );
+    const workspaceId = workspace.rows[0].id;
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, $2) returning id",
+      [workspaceId, "AI Content Brand"],
+    );
+    const brandId = brand.rows[0].id;
+    const otherWorkspace = await database.query(
+      "insert into workspaces (name, slug) values ($1, $2) returning id",
+      ["Other AI Content Migration", `other-ai-content-${randomUUID()}`],
+    );
+    const otherWorkspaceId = otherWorkspace.rows[0].id;
+    const otherBrand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, $2) returning id",
+      [otherWorkspaceId, "Other AI Content Brand"],
+    );
+    const otherBrandId = otherBrand.rows[0].id;
+
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_generations
+           (workspace_id, brand_id, type, title, status,
+            analysis_idempotency_key)
+         values ($1, $2, 'video', 'Invalid type', 'draft', $3)`,
+        [workspaceId, brandId, `analysis-${randomUUID()}`],
+      ),
+      /ai_content_generations_type_check/,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_generations
+           (workspace_id, brand_id, type, title, status,
+            analysis_idempotency_key)
+         values ($1, $2, 'card_news', 'Wrong owner', 'draft', $3)`,
+        [otherWorkspaceId, brandId, `analysis-${randomUUID()}`],
+      ),
+      /ai_content_generations_brand_ownership_fk/,
+    );
+
+    const analysisKey = `analysis-${randomUUID()}`;
+    const generationKey = `generation-${randomUUID()}`;
+    const generation = await database.query(
+      `insert into ai_content_generations
+         (workspace_id, brand_id, type, title, status,
+          analysis_idempotency_key, generation_idempotency_key)
+       values ($1, $2, 'card_news', 'Runtime generation', 'queued', $3, $4)
+       returning id`,
+      [workspaceId, brandId, analysisKey, generationKey],
+    );
+    const generationId = generation.rows[0].id;
+
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_generations
+           (workspace_id, brand_id, type, title, status,
+            analysis_idempotency_key)
+         values ($1, $2, 'blog', 'Duplicate analysis', 'draft', $3)`,
+        [workspaceId, brandId, analysisKey],
+      ),
+      /ai_content_generations_brand_analysis_key_unique/,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_generations
+           (workspace_id, brand_id, type, title, status,
+            analysis_idempotency_key, generation_idempotency_key)
+         values ($1, $2, 'marketing', 'Duplicate generation', 'draft', $3, $4)`,
+        [workspaceId, brandId, `analysis-${randomUUID()}`, generationKey],
+      ),
+      /uq_ai_content_generation_key/,
+    );
+
+    const output = await database.query(
+      `insert into ai_content_generation_outputs
+         (workspace_id, brand_id, generation_id, output_index, title, status)
+       values ($1, $2, $3, 1, 'Runtime output', 'queued')
+       returning id`,
+      [workspaceId, brandId, generationId],
+    );
+    const outputId = output.rows[0].id;
+
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_generation_outputs
+           (workspace_id, brand_id, generation_id, output_index, title, status)
+         values ($1, $2, $3, 1, 'Duplicate output', 'queued')`,
+        [workspaceId, brandId, generationId],
+      ),
+      /ai_content_generation_outputs_generation_index_unique/,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_generation_outputs
+           (workspace_id, brand_id, generation_id, output_index, title, status)
+         values ($1, $2, $3, 2, 'Wrong output owner', 'queued')`,
+        [otherWorkspaceId, otherBrandId, generationId],
+      ),
+      /ai_content_generation_outputs_generation_ownership_fk/,
+    );
+
+    const secondGeneration = await database.query(
+      `insert into ai_content_generations
+         (workspace_id, brand_id, type, title, status,
+          analysis_idempotency_key)
+       values ($1, $2, 'card_news', 'Second runtime generation', 'queued', $3)
+       returning id`,
+      [workspaceId, brandId, `analysis-${randomUUID()}`],
+    );
+    const secondGenerationId = secondGeneration.rows[0].id;
+    const secondOutput = await database.query(
+      `insert into ai_content_generation_outputs
+         (workspace_id, brand_id, generation_id, output_index, title, status)
+       values ($1, $2, $3, 1, 'Second runtime output', 'queued')
+       returning id`,
+      [workspaceId, brandId, secondGenerationId],
+    );
+    const secondOutputId = secondOutput.rows[0].id;
+
+    await database.query(
+      `insert into ai_content_generation_jobs
+         (workspace_id, brand_id, generation_id, job_type, content_type, status)
+       values ($1, $2, $3, 'analyze', 'card_news', 'queued')`,
+      [workspaceId, brandId, generationId],
+    );
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_generation_jobs
+           (workspace_id, brand_id, generation_id, job_type, content_type, status)
+         values ($1, $2, $3, 'analyze', 'card_news', 'processing')`,
+        [workspaceId, brandId, generationId],
+      ),
+      /uq_ai_content_active_analyze_job/,
+    );
+
+    await database.query(
+      `insert into ai_content_generation_jobs
+         (workspace_id, brand_id, generation_id, output_id, job_type,
+          content_type, status)
+       values ($1, $2, $3, $4, 'generate', 'card_news', 'queued')`,
+      [workspaceId, brandId, generationId, outputId],
+    );
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_generation_jobs
+           (workspace_id, brand_id, generation_id, output_id, job_type,
+            content_type, status)
+         values ($1, $2, $3, $4, 'generate', 'card_news', 'processing')`,
+        [workspaceId, brandId, generationId, outputId],
+      ),
+      /uq_ai_content_active_generate_job/,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_generation_jobs
+           (workspace_id, brand_id, generation_id, output_id, job_type,
+            content_type, status)
+         values ($1, $2, $3, $4, 'generate', 'card_news', 'failed')`,
+        [otherWorkspaceId, otherBrandId, generationId, outputId],
+      ),
+      /ai_content_generation_jobs_generation_ownership_fk/,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_generation_jobs
+           (workspace_id, brand_id, generation_id, output_id, job_type,
+            content_type, status)
+         values ($1, $2, $3, $4, 'generate', 'card_news', 'failed')`,
+        [workspaceId, brandId, generationId, secondOutputId],
+      ),
+      /ai_content_generation_jobs_output_ownership_fk/,
+    );
+
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_usage_ledger
+           (workspace_id, brand_id, generation_id, output_id, usage_type,
+            quantity, usage_date, idempotency_key)
+         values ($1, $2, $3, $4, 'preview', 1, current_date, $5)`,
+        [workspaceId, brandId, generationId, outputId, `usage-${randomUUID()}`],
+      ),
+      /ai_content_usage_ledger_type_check/,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_usage_ledger
+           (workspace_id, brand_id, generation_id, output_id, usage_type,
+            quantity, usage_date, idempotency_key)
+         values ($1, $2, $3, $4, 'new_download', 1, current_date, $5)`,
+        [
+          workspaceId,
+          brandId,
+          generationId,
+          secondOutputId,
+          `usage-${randomUUID()}`,
+        ],
+      ),
+      /ai_content_usage_ledger_output_ownership_fk/,
+    );
+
+    const indexes = await database.query(`
+      select indexname, indexdef
+      from pg_indexes
+      where schemaname = 'public'
+        and indexname in (
+          'uq_ai_content_generation_key',
+          'uq_ai_content_active_analyze_job',
+          'uq_ai_content_active_generate_job',
+          'ai_content_generation_jobs_claim_idx',
+          'ai_content_usage_ledger_idempotency_unique'
+        )
+      order by indexname
+    `);
+    assert.deepEqual(
+      indexes.rows.map(({ indexname }) => indexname),
+      [
+        "ai_content_generation_jobs_claim_idx",
+        "ai_content_usage_ledger_idempotency_unique",
+        "uq_ai_content_active_analyze_job",
+        "uq_ai_content_active_generate_job",
+        "uq_ai_content_generation_key",
+      ],
+    );
+    assert.match(
+      indexes.rows.find(({ indexname }) =>
+        indexname === "ai_content_generation_jobs_claim_idx"
+      ).indexdef,
+      /\(content_type, status, available_at, created_at\)/i,
+    );
+
+    const channelOutputLink = await database.query(`
+      select data_type, is_nullable
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'channel_outputs'
+        and column_name = 'ai_content_generation_output_id'
+    `);
+    assert.deepEqual(channelOutputLink.rows, [
+      { data_type: "uuid", is_nullable: "YES" },
+    ]);
+  });
+});
+
+test("046 stores trend relevance and content performance learning milestones", async () => {
+  const migrations = await loadMigrations();
+  await withDatabase(async (database) => {
+    await runMigrationRange(database, migrations, "001_initial_schema.sql", "046_content_quality_learning.sql");
+
+    const columns = await database.query(`
+      select table_name, column_name, is_nullable
+      from information_schema.columns
+      where table_schema = 'public'
+        and (
+          (table_name = 'instagram_trend_hashtag_media'
+            and column_name in ('relevance_score', 'relevance_status', 'relevance_reason'))
+          or
+          (table_name = 'content_performance_snapshots'
+            and column_name in ('measurement_window', 'content_features'))
+        )
+      order by table_name, column_name
+    `);
+    assert.deepEqual(columns.rows, [
+      { table_name: "content_performance_snapshots", column_name: "content_features", is_nullable: "NO" },
+      { table_name: "content_performance_snapshots", column_name: "measurement_window", is_nullable: "YES" },
+      { table_name: "instagram_trend_hashtag_media", column_name: "relevance_reason", is_nullable: "YES" },
+      { table_name: "instagram_trend_hashtag_media", column_name: "relevance_score", is_nullable: "NO" },
+      { table_name: "instagram_trend_hashtag_media", column_name: "relevance_status", is_nullable: "NO" },
+    ]);
+
+    const indexes = await database.query(`
+      select indexname
+      from pg_indexes
+      where schemaname = 'public'
+        and indexname in (
+          'instagram_trend_hashtag_media_relevant_idx',
+          'content_performance_snapshot_milestone_unique'
+        )
+      order by indexname
+    `);
+    assert.deepEqual(indexes.rows.map(({ indexname }) => indexname), [
+      "content_performance_snapshot_milestone_unique",
+      "instagram_trend_hashtag_media_relevant_idx",
+    ]);
+
+    const constraints = await database.query(`
+      select conname, pg_get_constraintdef(oid) as definition
+      from pg_constraint
+      where conname in (
+        'content_performance_snapshots_measurement_window_check',
+        'content_performance_snapshots_content_features_object_check',
+        'instagram_trend_hashtag_media_relevance_score_check',
+        'instagram_trend_hashtag_media_relevance_status_check'
+      )
+      order by conname
+    `);
+    assert.deepEqual(constraints.rows.map(({ conname }) => conname), [
+      "content_performance_snapshots_content_features_object_check",
+      "content_performance_snapshots_measurement_window_check",
+      "instagram_trend_hashtag_media_relevance_score_check",
+      "instagram_trend_hashtag_media_relevance_status_check",
+    ]);
+    assert.match(
+      constraints.rows.find(({ conname }) =>
+        conname === "content_performance_snapshots_measurement_window_check"
+      ).definition,
+      /24h.*72h.*7d/i,
+    );
+  });
+});
+
+test("047 creates tenant-safe cached subject analyses and archived images", async () => {
+  const migrations = await loadMigrations();
+  const migration047 = migrations.find(
+    (migration) => migration.id === "047_ai_content_subject_analysis.sql",
+  );
+  assert.ok(migration047, "047 subject analysis migration must exist");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "047_ai_content_subject_analysis.sql",
+    );
+
+    const tables = await database.query(`
+      select table_name
+      from information_schema.tables
+      where table_schema = 'public'
+        and table_name in (
+          'ai_content_subject_analyses',
+          'ai_content_subject_images'
+        )
+      order by table_name
+    `);
+    assert.deepEqual(tables.rows.map(({ table_name }) => table_name), [
+      "ai_content_subject_analyses",
+      "ai_content_subject_images",
+    ]);
+
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "ai_content_subject_analyses",
+        "ai_content_subject_analyses_subject_type_check",
+      ),
+      ["product", "service"],
+    );
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "ai_content_subject_analyses",
+        "ai_content_subject_analyses_status_check",
+      ),
+      ["extracting", "failed", "partial", "queued", "ready", "researching"],
+    );
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "ai_content_subject_images",
+        "ai_content_subject_images_role_check",
+      ),
+      ["detail", "logo", "product", "service", "unknown"],
+    );
+
+    const jsonConstraints = await database.query(`
+      select conname
+      from pg_constraint
+      where conname in (
+        'ai_content_subject_analyses_input_json_object_check',
+        'ai_content_subject_analyses_facts_json_array_check',
+        'ai_content_subject_analyses_structured_data_json_object_check',
+        'ai_content_subject_analyses_research_json_object_check',
+        'ai_content_subject_analyses_targets_json_array_check',
+        'ai_content_subject_analyses_appeals_json_object_check',
+        'ai_content_generations_subject_analysis_snapshot_object_check'
+      )
+      order by conname
+    `);
+    assert.equal(jsonConstraints.rows.length, 7);
+
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ($1, $2) returning id",
+      ["Subject Analysis", `subject-analysis-${randomUUID()}`],
+    );
+    const workspaceId = workspace.rows[0].id;
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, $2) returning id",
+      [workspaceId, "Subject Analysis Brand"],
+    );
+    const brandId = brand.rows[0].id;
+    const otherWorkspace = await database.query(
+      "insert into workspaces (name, slug) values ($1, $2) returning id",
+      ["Other Subject Analysis", `other-subject-analysis-${randomUUID()}`],
+    );
+    const otherWorkspaceId = otherWorkspace.rows[0].id;
+    const otherBrand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, $2) returning id",
+      [otherWorkspaceId, "Other Subject Analysis Brand"],
+    );
+    const otherBrandId = otherBrand.rows[0].id;
+
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_subject_analyses
+           (workspace_id, brand_id, subject_type, source_url, normalized_url,
+            status, idempotency_key)
+         values ($1, $2, 'product', 'https://example.com/a',
+                 'https://example.com/a', 'queued', $3)`,
+        [otherWorkspaceId, brandId, `wrong-owner-${randomUUID()}`],
+      ),
+      /ai_content_subject_analyses_brand_ownership_fk/,
+    );
+
+    const analysisKey = `analysis-${randomUUID()}`;
+    const analysis = await database.query(
+      `insert into ai_content_subject_analyses
+         (workspace_id, brand_id, subject_type, source_url, normalized_url,
+          status, idempotency_key, leased_by, lease_token, lease_expires_at)
+       values ($1, $2, 'product', 'https://example.com/product?utm_source=test',
+               'https://example.com/product', 'queued', $3, 'worker-1', $4,
+               now() + interval '5 minutes')
+       returning id, analysis_version`,
+      [workspaceId, brandId, analysisKey, randomUUID()],
+    );
+    const analysisId = analysis.rows[0].id;
+    assert.equal(analysis.rows[0].analysis_version, 1);
+
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_subject_analyses
+           (workspace_id, brand_id, subject_type, source_url, normalized_url,
+            status, idempotency_key)
+         values ($1, $2, 'service', 'https://example.com/service',
+                 'https://example.com/service', 'queued', $3)`,
+        [workspaceId, brandId, analysisKey],
+      ),
+      /ai_content_subject_analyses_brand_idempotency_key_unique/,
+    );
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_subject_analyses
+           (workspace_id, brand_id, subject_type, source_url, normalized_url,
+            status, idempotency_key, analysis_version)
+         values ($1, $2, 'product', 'https://example.com/product',
+                 'https://example.com/product', 'researching', $3, 2)`,
+        [workspaceId, brandId, `active-cache-${randomUUID()}`],
+      ),
+      /ai_content_subject_active_cache_uq/,
+    );
+
+    const image = await database.query(
+      `insert into ai_content_subject_images
+         (analysis_id, workspace_id, brand_id, source_url, storage_url,
+          storage_path, width, height, mime_type, alt_text, role,
+          selection_score)
+       values ($1, $2, $3, 'https://cdn.example.com/product.jpg',
+               'https://storage.example.com/product.jpg',
+               'subject-analysis/product.jpg', 1200, 1200, 'image/jpeg',
+               'Product front view', 'product', 0.95)
+       returning id`,
+      [analysisId, workspaceId, brandId],
+    );
+    const imageId = image.rows[0].id;
+    await database.query(
+      `update ai_content_subject_analyses
+       set selected_image_id = $1
+       where id = $2`,
+      [imageId, analysisId],
+    );
+
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_subject_images
+           (analysis_id, workspace_id, brand_id, source_url, storage_url,
+            storage_path, mime_type, role)
+         values ($1, $2, $3, 'https://cdn.example.com/wrong.jpg',
+                 'https://storage.example.com/wrong.jpg',
+                 'subject-analysis/wrong.jpg', 'image/jpeg', 'unknown')`,
+        [analysisId, otherWorkspaceId, otherBrandId],
+      ),
+      /ai_content_subject_images_analysis_ownership_fk/,
+    );
+
+    const otherAnalysis = await database.query(
+      `insert into ai_content_subject_analyses
+         (workspace_id, brand_id, subject_type, source_url, normalized_url,
+          status, idempotency_key)
+       values ($1, $2, 'service', 'https://example.com/other-service',
+               'https://example.com/other-service', 'ready', $3)
+       returning id`,
+      [workspaceId, brandId, `other-analysis-${randomUUID()}`],
+    );
+    await assert.rejects(
+      database.query(
+        `update ai_content_subject_analyses
+         set selected_image_id = $1
+         where id = $2`,
+        [imageId, otherAnalysis.rows[0].id],
+      ),
+      /ai_content_subject_selected_image_fk/,
+    );
+
+    const indexes = await database.query(`
+      select indexname, indexdef
+      from pg_indexes
+      where schemaname = 'public'
+        and indexname in (
+          'ai_content_subject_active_cache_uq',
+          'ai_content_subject_claim_idx',
+          'ai_content_subject_analyses_workspace_idx',
+          'ai_content_subject_images_workspace_idx',
+          'ai_content_subject_images_brand_workspace_idx',
+          'ai_content_subject_images_analysis_ownership_idx'
+        )
+      order by indexname
+    `);
+    assert.deepEqual(indexes.rows.map(({ indexname }) => indexname), [
+      "ai_content_subject_active_cache_uq",
+      "ai_content_subject_analyses_workspace_idx",
+      "ai_content_subject_claim_idx",
+      "ai_content_subject_images_analysis_ownership_idx",
+      "ai_content_subject_images_brand_workspace_idx",
+      "ai_content_subject_images_workspace_idx",
+    ]);
+    assert.match(
+      indexes.rows.find(({ indexname }) =>
+        indexname === "ai_content_subject_active_cache_uq"
+      ).indexdef,
+      /\(brand_id, subject_type, normalized_url\).*superseded_at is null/i,
+    );
+    assert.match(
+      indexes.rows.find(({ indexname }) =>
+        indexname === "ai_content_subject_claim_idx"
+      ).indexdef,
+      /\(available_at, created_at\).*status.*queued.*extracting.*researching/i,
+    );
+
+    const snapshotColumn = await database.query(`
+      select data_type, is_nullable
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'ai_content_generations'
+        and column_name = 'subject_analysis_snapshot'
+    `);
+    assert.deepEqual(snapshotColumn.rows, [
+      { data_type: "jsonb", is_nullable: "YES" },
+    ]);
+  });
+});
+
+test("048 allows one AI content output to publish to multiple channel formats", async () => {
+  const migrations = await loadMigrations();
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "048_ai_content_direct_social_publishing.sql",
+    );
+
+    const indexes = await database.query(`
+      select indexname, indexdef
+      from pg_indexes
+      where schemaname = 'public'
+        and indexname in (
+          'uq_channel_outputs_ai_content_generation_target',
+          'channel_outputs_current_master_channel_format_unique'
+        )
+      order by indexname
+    `);
+    assert.equal(indexes.rows.length, 2);
+    const definitions = indexes.rows.map(({ indexdef }) => indexdef).join("\n");
+    assert.match(definitions, /ai_content_generation_output_id, channel, delivery_format/i);
+    assert.match(definitions, /master_draft_id, channel, delivery_format/i);
+
+    const deliveryFormats = await readConstraintValues(
+      database,
+      "channel_outputs",
+      "channel_outputs_delivery_format_check",
+    );
+    assert.ok(deliveryFormats.includes("instagram_feed_single"));
+  });
+});
+
+test("049 creates tenant-safe versioned brand intelligence analyses", async () => {
+  const migrations = await loadMigrations();
+  const migration049 = migrations.find(
+    (migration) => migration.id === "049_brand_intelligence_onboarding.sql",
+  );
+  assert.ok(migration049, "049 brand intelligence migration must exist");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "049_brand_intelligence_onboarding.sql",
+    );
+
+    const tables = await database.query(`
+      select table_name
+      from information_schema.tables
+      where table_schema = 'public'
+        and table_name in ('brand_analysis_runs', 'brand_analysis_uploads')
+      order by table_name
+    `);
+    assert.deepEqual(tables.rows.map(({ table_name }) => table_name), [
+      "brand_analysis_runs",
+      "brand_analysis_uploads",
+    ]);
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "brand_analysis_runs",
+        "brand_analysis_runs_status_check",
+      ),
+      ["analyzing", "confirmed", "extracting", "failed", "queued", "review_ready"],
+    );
+
+    const activeColumn = await database.query(`
+      select data_type, is_nullable
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'brand_profiles'
+        and column_name = 'active_brand_analysis_id'
+    `);
+    assert.deepEqual(activeColumn.rows, [{ data_type: "uuid", is_nullable: "YES" }]);
+
+    const indexes = await database.query(`
+      select indexname
+      from pg_indexes
+      where schemaname = 'public'
+        and indexname in (
+          'brand_analysis_runs_one_active_per_brand_uq',
+          'brand_analysis_runs_claim_idx'
+        )
+      order by indexname
+    `);
+    assert.deepEqual(indexes.rows.map(({ indexname }) => indexname), [
+      "brand_analysis_runs_claim_idx",
+      "brand_analysis_runs_one_active_per_brand_uq",
+    ]);
+
+  });
+});
+
+test("050 stores normalized support request mobile phone numbers", async () => {
+  const migrations = await loadMigrations();
+  const migration050 = migrations.find(
+    (migration) => migration.id === "050_support_request_contact_phone.sql",
+  );
+  assert.ok(migration050, "050 support request contact phone migration must exist");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "050_support_request_contact_phone.sql",
+    );
+
+    const columns = await database.query(`
+      select data_type, is_nullable
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'support_requests'
+        and column_name = 'contact_phone'
+    `);
+    assert.deepEqual(columns.rows, [{ data_type: "text", is_nullable: "YES" }]);
+
+    const constraints = await database.query(`
+      select pg_get_constraintdef(oid) as definition
+      from pg_constraint
+      where conname = 'support_requests_contact_phone_format'
+    `);
+    assert.equal(constraints.rows.length, 1);
+    assert.match(constraints.rows[0].definition, /010-/);
+  });
+});

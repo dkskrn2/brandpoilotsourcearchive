@@ -101,7 +101,7 @@ describe("channel repository", () => {
     ]);
     expect(channels[0]).toMatchObject({ enabled: true, oauthState: "connected" });
     expect(channels[4]).toMatchObject({
-      enabled: true,
+      enabled: false,
       oauthState: "not_connected",
       status: "not_connected"
     });

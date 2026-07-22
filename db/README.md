@@ -1,4 +1,4 @@
-# Brand Pilot Database
+# 모종 Database
 
 Supabase를 기본 운영 데이터베이스로 사용합니다. Docker Compose 기반 로컬 PostgreSQL 16은 선택 사항이며 개발 및 스키마 테스트 용도로만 사용합니다.
 
@@ -70,3 +70,11 @@ and `failed`; the legacy `researching` status remains valid for v1 records.
 regeneration idempotency keys in a normalized ledger. Keys remain durable for
 the lifetime of the subject analysis, are unique per analysis, and cascade
 away when the analysis is deleted.
+
+## Manual DM Delivery Audit
+
+`053_dm_manual_delivery_audit.sql` extends `dm_delivery_attempts` to cover
+manual replies. Existing worker deliveries remain `origin = 'auto'` and keep a
+required `job_id`; manual attempts use `origin = 'manual'`, a nullable
+`job_id`, and the client UUID as `dedupe_key`. Both paths retain the existing
+`prepared`, `sending`, `sent`, `failed`, and `unknown` delivery states.

@@ -46,7 +46,7 @@ describe("buildWorkerPrompt", () => {
 
     expect(prompt).toContain("worker-card.v4");
     expect(prompt).toContain("1장부터 5장 사이에서 필요한 최소 장수");
-    expect(prompt).toContain("1080x1080");
+    expect(prompt).toContain("가로와 세로가 같은 정방형 PNG");
     expect(prompt).toContain("서로 다른 의미적 역할");
     expect(prompt).toContain("문단 구분이 명확한");
     expect(prompt).toContain("서로 다른 유효한 해시태그를 정확히 5개");
@@ -94,6 +94,7 @@ describe("buildWorkerPrompt", () => {
     expect(prompt).toContain("소스 문구를 그대로 복사하지 말고");
     expect(prompt).toContain("읽기 어려울 정도로 작은 글자");
     expect(prompt).toContain("반복되는 훅, 요약 또는 CTA만 있는 채움용 이미지");
+    expect(prompt).toContain("참고 URL이나 출처 URL을 게시 결과에 표시하지 마세요");
   });
 
   it("uses the restricted fact policy without a source", () => {
@@ -148,6 +149,9 @@ describe("buildWorkerPrompt", () => {
       expect(prompt).toContain("제목만 보고 일반론을 작성하지 마세요");
       expect(prompt).toContain("실질적인 도움, 공감, 저장 가치, 공유 가치");
       expect(prompt).toContain("하나 이상의 분명한 이유");
+      expect(prompt).toContain("content-quality.v1");
+      expect(prompt).toContain("이미지 생성 도구를 호출하기 전에");
+      expect(prompt).toContain("구체적인 근거를 최소 2개");
     }
   });
 

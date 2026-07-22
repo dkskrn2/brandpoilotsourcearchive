@@ -101,12 +101,16 @@ export async function loadRenderedPackage(
   const images = await Promise.all(manifest.assets.map(async (asset): Promise<RenderedImage> => {
     const source = await readFile(path.join(outputDir, outputName(deliveryFormat, asset.index)));
     if (deliveryFormat === "instagram_feed_carousel") {
+      const preserved = await preserveRenderedPng(source);
+      if (preserved.width !== preserved.height || preserved.width !== asset.width || preserved.height !== asset.height) {
+        throw new Error("image_render_output_aspect_ratio_invalid");
+      }
       return {
         index: asset.index,
-        bytes: await normalizeRenderedPng(source, { width: 1080, height: 1080 }),
+        bytes: preserved.bytes,
         mimeType: "image/png",
-        width: 1080,
-        height: 1080
+        width: preserved.width,
+        height: preserved.height
       };
     }
     const preserved = await preserveRenderedPng(source);
@@ -132,20 +136,34 @@ export function createFixtureRenderer(): ImageRenderer {
           ? "worker-story.v1" as const
           : "worker-reel.v3" as const;
       const asset = { index: 1, role: "hook", embeddedText: "test asset", width: 1080, height };
+      const qualityBrief = {
+        version: "content-quality.v1",
+        hook: "테스트 훅",
+        readerPayoff: "테스트 효용",
+        whyNow: "테스트 시점",
+        specificClaims: ["주장 하나", "주장 둘"],
+        evidence: [
+          { claim: "근거 하나", support: "테스트에 사용하는 구체적인 첫 번째 근거" },
+          { claim: "근거 둘", support: "테스트에 사용하는 구체적인 두 번째 근거" }
+        ],
+        sourceGaps: []
+      };
       const rawManifest = deliveryFormat === "instagram_feed_carousel"
         ? {
             deliveryFormat,
             promptVersion,
+            qualityBrief,
             selectedAssetCount: 1,
             caption: "fixture first paragraph\n\nfixture second paragraph",
             hashtags: ["#test1", "#test2", "#test3", "#test4", "#test5"],
             cards: [asset]
           }
         : deliveryFormat === "instagram_story"
-          ? { deliveryFormat, promptVersion, selectedAssetCount: 1, story: [asset] }
+          ? { deliveryFormat, promptVersion, qualityBrief, selectedAssetCount: 1, story: [asset] }
           : {
               deliveryFormat,
               promptVersion,
+              qualityBrief,
               selectedAssetCount: 1,
               caption: "fixture first paragraph\n\nfixture second paragraph",
               hashtags: ["#test1", "#test2", "#test3", "#test4", "#test5"],
@@ -171,10 +189,12 @@ export function createFixtureRenderer(): ImageRenderer {
 export function createConfiguredRenderer({
   provider,
   commandTemplate,
+  commandTimeoutMs,
   nodeEnv
 }: {
   provider: string;
   commandTemplate?: string;
+  commandTimeoutMs?: number;
   nodeEnv?: string;
 }): ImageRenderer {
   if (provider === "fixture") {
@@ -183,10 +203,10 @@ export function createConfiguredRenderer({
   }
   if (provider !== "command") throw new Error("image_provider_unsupported");
   if (!commandTemplate) throw new Error("IMAGE_RENDER_COMMAND_required");
-  return createCommandRenderer(commandTemplate);
+  return createCommandRenderer(commandTemplate, commandTimeoutMs);
 }
 
-export function createCommandRenderer(commandTemplate: string): ImageRenderer {
+export function createCommandRenderer(commandTemplate: string, commandTimeoutMs = 20 * 60_000): ImageRenderer {
   return {
     async renderJob(job: ClaimedImageJob): Promise<RenderedInstagramPackage> {
       const workDir = await mkdtemp(path.join(os.tmpdir(), "brand-pilot-image-job-"));
@@ -198,8 +218,21 @@ export function createCommandRenderer(commandTemplate: string): ImageRenderer {
         const command = commandTemplate.replaceAll("{{jobFile}}", jobFile).replaceAll("{{outputDir}}", outputDir);
         await new Promise<void>((resolve, reject) => {
           const child = spawn(command, { shell: true, stdio: "inherit" });
-          child.once("error", reject);
-          child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`image_render_command_failed:${code ?? "unknown"}`)));
+          let settled = false;
+          const finish = (error?: Error) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            error ? reject(error) : resolve();
+          };
+          const timeout = setTimeout(() => {
+            child.kill();
+            finish(new Error("image_render_command_timeout"));
+          }, commandTimeoutMs);
+          child.once("error", (error) => finish(error));
+          child.once("exit", (code) => code === 0
+            ? finish()
+            : finish(new Error(`image_render_command_failed:${code ?? "unknown"}`)));
         });
         return await loadRenderedPackage(job, outputDir);
       } finally {

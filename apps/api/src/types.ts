@@ -188,12 +188,23 @@ export interface InstagramTrendPageDto {
   items: InstagramTrendMediaDto[];
 }
 
+export interface InstagramTrendArchivePageDto {
+  items: Array<InstagramTrendMediaDto & { savedAt: string }>;
+  page: number;
+  limit: number;
+  total: number;
+}
+
 export interface InstagramTrendSearchHistoryDto {
   hashtagId: string;
   displayTag: string;
   isFavorite: boolean;
   lastSearchedAt: string;
   searchCount: number;
+}
+
+export interface InstagramTrendDeleteSearchDto {
+  hashtagId: string;
 }
 
 export interface InstagramTrendListInput {
@@ -214,6 +225,11 @@ export interface InstagramTrendFavoriteInput {
 export interface InstagramTrendSaveSourceDto {
   source: SourceDto;
   alreadySaved: boolean;
+}
+
+export interface InstagramTrendRemoveSourceDto {
+  mediaId: string;
+  removed: boolean;
 }
 
 export interface InstagramTrendConnectionDto {
@@ -451,6 +467,22 @@ export interface SupportRequestInput {
   message: string;
   contactPhone: string;
   contactEmail?: string | null;
+}
+
+export type FeedbackSubmissionStatus = "new" | "reviewed" | "archived";
+
+export interface FeedbackSubmissionDto {
+  id: string;
+  brandId: string;
+  workspaceId: string;
+  message: string;
+  status: FeedbackSubmissionStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FeedbackSubmissionInput {
+  message: string;
 }
 
 export interface BillingSummaryDto {
@@ -1011,8 +1043,11 @@ export interface ApiRepository extends Partial<SubjectAnalysisRepositoryV2> {
   listInstagramTrends(brandId: string, input: InstagramTrendListInput): Promise<InstagramTrendPageDto>;
   searchInstagramTrends(brandId: string, input: InstagramTrendSearchInput): Promise<InstagramTrendPageDto>;
   listInstagramTrendSearches(brandId: string): Promise<InstagramTrendSearchHistoryDto[]>;
+  deleteInstagramTrendSearch(brandId: string, hashtagId: string): Promise<InstagramTrendDeleteSearchDto>;
+  listInstagramTrendArchive(brandId: string, input: { page: number; limit: number }): Promise<InstagramTrendArchivePageDto>;
   setInstagramTrendFavorite(brandId: string, hashtagId: string, input: InstagramTrendFavoriteInput): Promise<InstagramTrendSearchHistoryDto>;
   saveInstagramTrendSource(brandId: string, mediaId: string): Promise<InstagramTrendSaveSourceDto>;
+  removeInstagramTrendSource(brandId: string, mediaId: string): Promise<InstagramTrendRemoveSourceDto>;
   getBillingSummary(brandId: string): Promise<BillingSummaryDto>;
   getBrandUiStatus(brandId: string): Promise<BrandUiStatusDto>;
   getBrandProfile(brandId: string): Promise<BrandProfileDto>;
@@ -1037,6 +1072,7 @@ export interface ApiRepository extends Partial<SubjectAnalysisRepositoryV2> {
   listSupportRequests(brandId: string): Promise<SupportRequestDto[]>;
   updateSupportRequestStatus(requestId: string, status: SupportRequestStatus): Promise<SupportRequestDto>;
   respondToSupportRequest(requestId: string, responseMessage: string): Promise<SupportRequestDto>;
+  createFeedbackSubmission(brandId: string, input: FeedbackSubmissionInput): Promise<FeedbackSubmissionDto>;
   listContentOutputs(brandId: string): Promise<ContentOutputDto[]>;
   reviewContentOutput(outputId: string, action: "approve" | "reject" | "regenerate", reason?: string): Promise<{ id: string; status: string }>;
   listPublishQueue(brandId: string): Promise<PublishQueueDto[]>;
@@ -1054,7 +1090,7 @@ export interface ApiRepository extends Partial<SubjectAnalysisRepositoryV2> {
   listInstagramDmHistory(brandId: string): Promise<InstagramDmHistoryDto[]>;
   listDmConversations(brandId: string, input: { filter: DmConversationFilter; cursor?: string; limit: number }): Promise<DmConversationPageDto>;
   getDmConversation(brandId: string, conversationId: string): Promise<DmConversationDetailDto>;
-  sendManualDmReply(brandId: string, conversationId: string, body: string): Promise<DmConversationDetailMessageDto>;
+  sendManualDmReply(brandId: string, conversationId: string, body: string, idempotencyKey: string): Promise<DmConversationDetailMessageDto>;
   listDmAttentionItems(brandId: string, type?: DmAttentionType): Promise<DmAttentionItemDto[]>;
   resolveDmAttentionItem(attentionId: string): Promise<{ conversationId: string; automationStatus: "active"; attentionStatus: "resolved" }>;
   getWikiStatus(brandId: string): Promise<WikiStatusDto>;

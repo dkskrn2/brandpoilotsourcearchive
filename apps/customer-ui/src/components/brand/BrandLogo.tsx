@@ -8,7 +8,7 @@ interface BrandLogoProps {
 
 function brandInitials(brandName: string) {
   const normalized = brandName.trim();
-  if (!normalized) return "BP";
+  if (!normalized) return "모종";
   const words = normalized.split(/\s+/);
   if (words.length > 1) return words.slice(0, 2).map((word) => word[0]).join("");
   return normalized.slice(0, 2);
@@ -31,4 +31,3 @@ export function BrandLogo({ brandName, logoUrl, className = "" }: BrandLogoProps
     </span>
   );
 }
-

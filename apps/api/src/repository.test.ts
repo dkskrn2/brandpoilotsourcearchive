@@ -2,9 +2,6 @@
 import { encryptCredential } from "./credentialCrypto";
 import { afterEach } from "vitest";
 import { createRepository } from "./repository";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 
 type SqlCall = [sql: string, values?: unknown[]];
 
@@ -149,11 +146,17 @@ describe("Task 4 transactional topic generation", () => {
     expect(rotationLock).toBeDefined();
     expect(contentInsert?.values).toContain(expected);
     expect(rotationUpdate?.values).toContain(expected);
-    const jobInsert = fixture.statements.find(({ sql }) => sql.includes("insert into jobs"));
-    expect(jobInsert?.values).toContain(expected === "instagram_feed_carousel"
-      ? "instagram_feed_render"
-      : expected === "instagram_story" ? "instagram_story_render" : "instagram_reel_render");
-    expect(jobInsert?.sql).not.toContain("instagram_render");
+    const legacyJobs = fixture.statements.filter(({ sql }) => sql.includes("insert into jobs"));
+    if (expected === "instagram_feed_carousel") {
+      expect(legacyJobs.some(({ values }) => values.includes("instagram_feed_render"))).toBe(false);
+      expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generations"))).toBe(true);
+      expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generation_outputs"))).toBe(true);
+      expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generation_jobs"))).toBe(true);
+    } else {
+      expect(legacyJobs.some(({ values }) => values.includes(
+        expected === "instagram_story" ? "instagram_story_render" : "instagram_reel_render"
+      ))).toBe(true);
+    }
   });
 
   it("creates a Threads-only topic without changing the Instagram cursor", async () => {
@@ -245,12 +248,13 @@ describe("Task 4 transactional topic generation", () => {
     const queues = fixture.statements.filter(({ sql }) => sql.includes("insert into publish_queue"));
     expect(queues).toHaveLength(0);
     const jobs = fixture.statements.filter(({ sql }) => sql.includes("insert into jobs"));
-    expect(jobs).toHaveLength(2);
-    expect(jobs.some(({ values }) => values.includes("instagram_feed_render"))).toBe(true);
+    expect(jobs).toHaveLength(1);
+    expect(jobs.some(({ values }) => values.includes("instagram_feed_render"))).toBe(false);
     expect(jobs.some(({ sql }) => sql.includes("threads_text_render"))).toBe(true);
+    expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generation_jobs"))).toBe(true);
   });
 
-  it("omits central crawl snapshot fields and text from the render payload", async () => {
+  it("passes source evidence through the shared card-news contract without legacy render fields", async () => {
     const fixture = generationQuery({ channels: ["instagram"], enabledFormats: ["instagram_feed_carousel"] });
     fixture.query.mockImplementation((async (sql: string, values?: unknown[]) => {
       const base = generationQuery({ channels: ["instagram"], enabledFormats: ["instagram_feed_carousel"] });
@@ -276,12 +280,11 @@ describe("Task 4 transactional topic generation", () => {
 
     await createRepository(fakePoolWithClient(fixture.query) as any).generateContent("brand-1");
 
-    const job = fixture.statements.find(({ sql }) => sql.includes("insert into jobs"));
-    const payload = JSON.stringify(job?.values);
-    expect(payload).not.toContain("SECRET RAW SNAPSHOT");
+    const generation = fixture.statements.find(({ sql }) => sql.includes("insert into ai_content_generations"));
+    const payload = String(generation?.values[6]);
+    expect(payload).toContain("SECRET RAW SNAPSHOT");
     expect(payload).not.toContain("raw_text");
     expect(payload).not.toContain("extracted_text");
-    expect(payload).not.toContain('"summary"');
     expect(payload).not.toContain('"storyboard"');
     expect(payload).not.toContain('"slides"');
     expect(payload).not.toContain('"cards"');
@@ -306,7 +309,10 @@ function fakePoolWithClient(query: ReturnType<typeof vi.fn>) {
 }
 
 function isConnectedChannelQuery(sql: string) {
-  return sql.includes("from brand_channels") && sql.includes("enabled = true") && !sql.includes("status = 'connected'");
+  return sql.includes("from brand_channels")
+    && sql.includes("enabled = true")
+    && sql.includes("status = 'connected'")
+    && sql.includes("from channel_credentials");
 }
 
 function connectedChannelRows(...channels: Array<"instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok">) {
@@ -373,6 +379,7 @@ describe("repository", () => {
         default_cta: "Request consultation",
         main_link: "https://example.com",
         auto_approval_enabled: true,
+        active_brand_analysis_id: "analysis-1",
         owned_source_count: "1",
         reference_source_count: "1",
         topic_row_count: "3",
@@ -404,6 +411,35 @@ describe("repository", () => {
     expect(status.onboarding.steps.find((step: any) => step.id === "instagram")).toMatchObject({
       status: "needs_attention"
     });
+  });
+
+  it("requires a confirmed brand analysis even when legacy profile fields are filled", async () => {
+    const query = vi.fn(async () => ({
+      rowCount: 1,
+      rows: [{
+        brand_id: "brand-1",
+        brand_name: "Legacy Brand",
+        primary_category_id: "category-education",
+        primary_customer: "small business owners",
+        description: "Legacy profile description",
+        active_brand_analysis_id: null,
+        owned_source_count: "0",
+        reference_source_count: "0",
+        topic_row_count: "0",
+        instagram_status: "not_connected",
+        threads_status: "not_connected",
+        content_output_count: "0",
+        content_review_count: "0",
+        publish_issue_count: "0",
+        channel_issue_count: "0",
+        last_generated_at: null,
+      }],
+    }));
+    const repository = createRepository({ query } as any) as any;
+
+    const status = await repository.getBrandUiStatus("brand-1");
+
+    expect(status.onboarding.steps.find((step: any) => step.id === "brand-profile")).toMatchObject({ status: "needs_attention" });
   });
 
   it("encrypts channel credentials before inserting them", async () => {
@@ -530,8 +566,11 @@ describe("repository", () => {
             category: values?.[2],
             title: values?.[3],
             message: values?.[4],
-            contact_email: values?.[5],
+            contact_phone: values?.[5],
+            contact_email: values?.[6],
             status: "new",
+            response_message: null,
+            responded_at: null,
             created_at: "2026-07-11T00:00:00.000Z",
             updated_at: "2026-07-11T00:00:00.000Z"
           }]
@@ -547,14 +586,18 @@ describe("repository", () => {
             category: "bug",
             title: "채널 연결 오류",
             message: "인스타 연결이 실패합니다.",
+            contact_phone: "010-1234-5678",
             contact_email: "user@example.com",
             status: "new",
+            response_message: null,
+            responded_at: null,
             created_at: "2026-07-11T00:00:00.000Z",
             updated_at: "2026-07-11T00:00:00.000Z"
           }]
         };
       }
       if (sql.includes("update support_requests")) {
+        const isResponse = sql.includes("response_message = $2");
         return {
           rowCount: 1,
           rows: [{
@@ -564,8 +607,11 @@ describe("repository", () => {
             category: "bug",
             title: "채널 연결 오류",
             message: "인스타 연결이 실패합니다.",
+            contact_phone: "010-1234-5678",
             contact_email: "user@example.com",
-            status: values?.[1],
+            status: isResponse ? "resolved" : values?.[1],
+            response_message: isResponse ? values?.[1] : null,
+            responded_at: isResponse ? "2026-07-11T00:10:00.000Z" : null,
             created_at: "2026-07-11T00:00:00.000Z",
             updated_at: "2026-07-11T00:05:00.000Z"
           }]
@@ -579,16 +625,64 @@ describe("repository", () => {
       category: "bug",
       title: "채널 연결 오류",
       message: "인스타 연결이 실패합니다.",
+      contactPhone: "010-1234-5678",
       contactEmail: "user@example.com"
     });
     const list = await repository.listSupportRequests("brand-1");
     const updated = await repository.updateSupportRequestStatus("support-1", "in_progress");
+    const responded = await repository.respondToSupportRequest("support-1", "Meta 연결을 초기화했습니다.");
 
-    expect(created).toMatchObject({ id: "support-1", status: "new", contactEmail: "user@example.com" });
+    expect(created).toMatchObject({ id: "support-1", status: "new", contactPhone: "010-1234-5678", contactEmail: "user@example.com" });
     expect(list).toEqual([expect.objectContaining({ id: "support-1", title: "채널 연결 오류" })]);
     expect(updated).toMatchObject({ id: "support-1", status: "in_progress" });
+    expect(responded).toMatchObject({
+      id: "support-1",
+      status: "resolved",
+      responseMessage: "Meta 연결을 초기화했습니다."
+    });
     expect(queries.some((entry) => entry.sql.includes("insert into support_requests"))).toBe(true);
     expect(queries.some((entry) => entry.sql.includes("update support_requests"))).toBe(true);
+  });
+
+  it("stores feedback separately from support requests", async () => {
+    const queries: Array<{ sql: string; values?: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      queries.push({ sql, values });
+      if (sql.includes("select workspace_id from brands")) {
+        return { rowCount: 1, rows: [{ workspace_id: "workspace-1" }] };
+      }
+      if (sql.includes("insert into feedback_submissions")) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: "feedback-1",
+            brand_id: values?.[1],
+            workspace_id: values?.[0],
+            message: values?.[2],
+            status: "new",
+            created_at: "2026-07-22T08:00:00.000Z",
+            updated_at: "2026-07-22T08:00:00.000Z"
+          }]
+        };
+      }
+      return { rowCount: 0, rows: [] };
+    });
+    const repository = createRepository({ query } as any) as any;
+
+    const created = await repository.createFeedbackSubmission("brand-1", { message: "  개선 의견  " });
+
+    expect(created).toEqual({
+      id: "feedback-1",
+      brandId: "brand-1",
+      workspaceId: "workspace-1",
+      message: "개선 의견",
+      status: "new",
+      createdAt: "2026-07-22T08:00:00.000Z",
+      updatedAt: "2026-07-22T08:00:00.000Z"
+    });
+    expect(queries.find((entry) => entry.sql.includes("insert into feedback_submissions"))?.values)
+      .toEqual(["workspace-1", "brand-1", "개선 의견"]);
+    expect(queries.some((entry) => entry.sql.includes("support_requests"))).toBe(false);
   });
 
   it("creates a publish queue row when a content output is approved", async () => {
@@ -656,6 +750,32 @@ describe("repository", () => {
       "auto_approval_blocked",
       "generation_failed"
     ]);
+  });
+
+  it("reuses the original source snapshot when regenerating card news", async () => {
+    const statements: Array<{ sql: string; values: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, values: unknown[] = []) => {
+      statements.push({ sql, values });
+      if (sql.includes("select channel from channel_outputs")) {
+        return { rowCount: 1, rows: [{ channel: "instagram" }] };
+      }
+      if (sql.trimStart().startsWith("with updated as")) {
+        return { rowCount: 1, rows: [{
+          id: "output-1", status: "regenerating", workspace_id: "workspace-1", brand_id: "brand-1",
+          content_topic_id: "topic-1", master_draft_id: "draft-1", channel: "instagram",
+          delivery_format: "instagram_feed_carousel", title: "제목", output_json: {}, source_summary: "근거",
+          topic_publish_group_id: "group-1", brand_name: "브랜드", primary_customer: "고객",
+          topic_title: "주제", topic_angle: "각도", source_materials: [{ sourceType: "owned", contentUrl: "https://brand.example/source", content: "ORIGINAL SOURCE EVIDENCE" }],
+        }] };
+      }
+      if (sql.includes("insert into channel_outputs")) return { rowCount: 1, rows: [{ id: "output-regenerated" }] };
+      return { rowCount: 1, rows: [] };
+    });
+
+    await createRepository(fakePoolWithClient(query) as any).reviewContentOutput("output-1", "regenerate");
+
+    const generation = statements.find(({ sql }) => sql.includes("insert into ai_content_generations"));
+    expect(String(generation?.values[6])).toContain("ORIGINAL SOURCE EVIDENCE");
   });
 
   it("treats a missing regeneration capability row as not reviewable", async () => {
@@ -976,6 +1096,8 @@ describe("repository", () => {
 
     await repository.crawlDueSources(new Date("2026-07-12T00:00:00.000Z"));
 
+    const staleRunQuery = query.mock.calls.find(([sql]) => String(sql).includes("crawl_run_stale"));
+    expect(staleRunQuery?.[0]).toContain("interval '10 minutes'");
     const dueQuery = query.mock.calls.find(([sql]) => String(sql).includes("interval '72 hours'"));
     expect(dueQuery?.[0]).toContain("limit $2");
   });
@@ -1337,6 +1459,35 @@ describe("repository", () => {
     expect(query).not.toHaveBeenCalledWith(expect.stringContaining("insert into source_urls"), expect.any(Array));
   });
 
+  it("rejects creating a second owned source URL for the same brand", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("select workspace_id from brands")) {
+        return { rowCount: 1, rows: [{ workspace_id: "workspace-1" }] };
+      }
+      if (sql.includes("count(*)") && sql.includes("source_type = 'owned'")) {
+        return { rowCount: 1, rows: [{ count: "1" }] };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+    const repository = createRepository({ query } as any);
+
+    await expect(repository.createSource("brand-1", { sourceType: "owned", url: "https://second.example.com" }))
+      .rejects.toThrow("source_owned_limit_exceeded");
+    expect(query).not.toHaveBeenCalledWith(expect.stringContaining("insert into source_urls"), expect.any(Array));
+  });
+
+  it("rejects enabling a channel without active authentication", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("update brand_channels")) return { rowCount: 0, rows: [] };
+      if (sql.includes("select 1 from brand_channels")) return { rowCount: 1, rows: [{ exists: 1 }] };
+      return { rowCount: 0, rows: [] };
+    });
+    const repository = createRepository({ query } as any);
+
+    await expect(repository.updateChannelEnabled("brand-1", "instagram", true))
+      .rejects.toThrow("channel_authentication_required");
+  });
+
   it("rejects changing an owned source to reference when ten other reference URLs already exist", async () => {
     const query = vi.fn(async (sql: string) => {
       if (sql.includes("select brand_id from source_urls")) {
@@ -1571,7 +1722,7 @@ describe("repository", () => {
   it("generates content from crawled source snapshots when no topic rows are uploaded", async () => {
     const insertedChannels: string[] = [];
     let contentTopicValues: unknown[] | undefined;
-    let imageJobPayload: Record<string, unknown> | undefined;
+    let cardNewsInput: Record<string, any> | undefined;
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       if (sql.trim() === "begin" || sql.trim() === "commit" || sql.trim() === "rollback") {
         return { rowCount: 0, rows: [] };
@@ -1630,10 +1781,7 @@ describe("repository", () => {
         insertedChannels.push(String(values?.[4]));
         return { rowCount: 1, rows: [{ id: `output-${values?.[4]}` }] };
       }
-      if (sql.includes("insert into jobs")) {
-        imageJobPayload = JSON.parse(String(values?.[5]));
-        return { rowCount: 1, rows: [] };
-      }
+      if (sql.includes("insert into ai_content_generations")) cardNewsInput = JSON.parse(String(values?.[6]));
       if (sql.includes("select id from brand_channels")) {
         return { rowCount: 1, rows: [{ id: `channel-${values?.[1]}` }] };
       }
@@ -1655,9 +1803,11 @@ describe("repository", () => {
       representativeUrl: "https://brand.example.com/service",
       contentHash: "hash-1"
     });
-    expect(imageJobPayload).toMatchObject({
-      representativeUrl: "https://brand.example.com/service",
-      topic: { title: "크롤링 소스 기반 콘텐츠", angle: "source_url" }
+    expect(cardNewsInput).toMatchObject({
+      subject: {
+        sourceUrl: "https://brand.example.com/service",
+        research: { topic: { title: "크롤링 소스 기반 콘텐츠", angle: "source_url" } }
+      }
     });
     expect(query).not.toHaveBeenCalledWith(expect.stringContaining("insert into llm_runs"), expect.any(Array));
     expect(query).not.toHaveBeenCalledWith(expect.stringContaining("update topic_rows"), expect.any(Array));
@@ -1666,7 +1816,7 @@ describe("repository", () => {
   it("generates the oldest selected source content topic before looking for new snapshots", async () => {
     const now = new Date("2026-07-13T01:00:00.000Z");
     const statusUpdates: unknown[][] = [];
-    let imageJobPayload: Record<string, unknown> | undefined;
+    let cardNewsInput: Record<string, any> | undefined;
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       if (sql.trim() === "begin" || sql.trim() === "commit" || sql.trim() === "rollback") {
         return { rowCount: 0, rows: [] };
@@ -1738,10 +1888,7 @@ describe("repository", () => {
       }
       if (sql.includes("insert into master_drafts")) return { rowCount: 1, rows: [{ id: "master-draft-1" }] };
       if (sql.includes("insert into channel_outputs")) return { rowCount: 1, rows: [{ id: "output-instagram" }] };
-      if (sql.includes("insert into jobs")) {
-        imageJobPayload = JSON.parse(String(values?.[5]));
-        return { rowCount: 1, rows: [] };
-      }
+      if (sql.includes("insert into ai_content_generations")) cardNewsInput = JSON.parse(String(values?.[6]));
       if (sql.includes("select id from brand_channels")) return { rowCount: 1, rows: [{ id: "channel-instagram" }] };
       return { rowCount: 1, rows: [] };
     });
@@ -1752,9 +1899,11 @@ describe("repository", () => {
     expect(result).toMatchObject({ processed: 1, created: 1, failed: 0 });
     expect(query).toHaveBeenCalledWith(expect.stringContaining("from content_topics ct"), ["brand-1"]);
     expect(statusUpdates).toEqual([["content-topic-1", "instagram_feed_carousel"], ["content-topic-1", now]]);
-    expect(imageJobPayload).toMatchObject({
-      representativeUrl: "https://brand.example.com/service",
-      topic: { title: "크롤링 기사 제목", angle: "source_url" }
+    expect(cardNewsInput).toMatchObject({
+      subject: {
+        sourceUrl: "https://brand.example.com/service",
+        research: { topic: { title: "크롤링 기사 제목", angle: "source_url" } }
+      }
     });
     expect(query).not.toHaveBeenCalledWith(expect.stringContaining("insert into content_topics"), expect.any(Array));
   });
@@ -1871,10 +2020,10 @@ describe("repository", () => {
     expect(JSON.parse(String(insertedValues?.[12]))).toContain("generation_adapter_not_configured");
   });
 
-  it("creates an Instagram render job instead of generating images in the API", async () => {
+  it("creates a shared card-news job and keeps Threads on its existing worker", async () => {
     let storageArtifactValues: unknown[] | undefined;
     let renderedOutputValues: unknown[] | undefined;
-    let imageJobPayload: Record<string, unknown> | undefined;
+    let cardNewsInput: Record<string, any> | undefined;
     let threadsJobPayload: Record<string, unknown> | undefined;
     const llmRunValues: unknown[][] = [];
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
@@ -1910,12 +2059,10 @@ describe("repository", () => {
       if (sql.includes("insert into jobs")) {
         if (sql.includes("'threads_text_render'")) {
           threadsJobPayload = JSON.parse(String(values?.[4]));
-        } else {
-          expect(values?.[4]).toBe("instagram_feed_render");
-          imageJobPayload = JSON.parse(String(values?.[5]));
         }
         return { rowCount: 1, rows: [] };
       }
+      if (sql.includes("insert into ai_content_generations")) cardNewsInput = JSON.parse(String(values?.[6]));
       if (sql.includes("insert into storage_artifacts")) {
         storageArtifactValues = values;
         return { rowCount: 1, rows: [{ id: "artifact-1" }] };
@@ -1933,30 +2080,13 @@ describe("repository", () => {
     expect(result).toMatchObject({ processed: 1, created: 2, updated: 1, failed: 0 });
     expect(storageArtifactValues).toBeUndefined();
     expect(renderedOutputValues).toBeUndefined();
-    expect(query).toHaveBeenCalledWith(expect.stringContaining("insert into jobs"), expect.arrayContaining(["workspace-1", "brand-1", "output-instagram"]));
-    expect(imageJobPayload).toMatchObject({
-      deliveryFormat: "instagram_feed_carousel",
-      promptVersion: "worker-card.v4",
-      maxImages: 5,
-      contentTopicId: "content-topic-1",
-      representativeUrl: null,
-      topic: {
-        title: "Jeju family stay",
-        angle: "location-first checklist",
-        targetCustomer: "family travelers"
-      },
-      brand: {
-        name: "Jeju Pilot",
-        categoryContext: "여행·관광 / 여행 상담",
-        description: "제주 일정과 숙소 동선을 상담합니다."
-      }
+    expect(query.mock.calls.some(([sql, values]) => String(sql).includes("insert into jobs") && (values as unknown[])?.includes("instagram_feed_render"))).toBe(false);
+    expect(cardNewsInput).toMatchObject({
+      contentType: "card_news",
+      subject: { research: { topic: { title: "Jeju family stay", angle: "location-first checklist" } } },
+      message: { target: { name: "family travelers" } },
+      brandContext: { context: { brand: { name: "Jeju Pilot", categoryContext: "여행·관광 / 여행 상담" } } }
     });
-    expect(imageJobPayload).not.toHaveProperty("prompt");
-    expect(imageJobPayload).not.toHaveProperty("outputFormat");
-    expect(imageJobPayload?.storagePrefix).toMatch(
-      /^brands\/brand-1\/topics\/content-topic-1\/instagram_feed_carousel\/[0-9a-f-]+$/
-    );
-    expect(imageJobPayload).not.toHaveProperty("slides");
     expect(threadsJobPayload).toMatchObject({
       deliveryFormat: "threads_text",
       promptVersion: "worker-threads.v1",
@@ -2001,7 +2131,7 @@ describe("repository", () => {
 
     expect(result).toMatchObject({ processed: 1, created: 1, updated: 1, failed: 0 });
     expect(storageArtifactValues).toBeUndefined();
-    expect(query).toHaveBeenCalledWith(expect.stringContaining("insert into jobs"), expect.any(Array));
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("insert into ai_content_generation_jobs"), expect.any(Array));
   });
 
   it("does not call the legacy OpenAI generator or write llm_runs", async () => {
@@ -2516,57 +2646,6 @@ describe("repository", () => {
     await expect(repository.listPublishQueue("brand-1")).resolves.toEqual([]);
   });
 
-  it("packages published queue results for bulk download", async () => {
-    const storageDir = await mkdtemp(path.join(os.tmpdir(), "brand-pilot-download-"));
-    const artifactDir = path.join(storageDir, "rendered-content", "instagram", "brand-1", "output-1");
-    await mkdir(artifactDir, { recursive: true });
-    await writeFile(path.join(artifactDir, "slide-01.png"), Buffer.from("image-one"));
-    await writeFile(path.join(artifactDir, "manifest.json"), JSON.stringify({
-      images: [{ path: "rendered-content/instagram/brand-1/output-1/slide-01.png" }]
-    }));
-    const query = vi.fn(async () => ({
-      rowCount: 1,
-      rows: [{
-        id: "queue-1",
-        channel: "instagram",
-        published_at: new Date("2026-07-07T11:30:00.000Z"),
-        title: "Jeju family stay",
-        preview_title: "제주 가족 숙소 카드뉴스",
-        preview_body: "위치 먼저 확인하세요.",
-        source_summary: "Owned FAQ says family travelers need short routes.",
-        output_json: {
-          caption: "제주 가족 숙소는 위치부터 확인하세요.",
-          hashtags: ["#제주여행", "#가족여행"],
-          slides: [{ title: "위치 먼저" }]
-        },
-        artifact_public_url: "https://cdn.example.com/rendered-content/instagram/brand-1/output-1/manifest.json",
-        artifact_bucket: "rendered-content",
-        artifact_path: "instagram/brand-1/output-1/manifest.json",
-        external_url: "https://instagram.com/p/mock"
-      }]
-    }));
-    const repository = createRepository({ query } as any, { artifactStorageDir: storageDir });
-
-    try {
-      const packageResult = await repository.downloadPublishedResults("brand-1");
-
-      expect(query).toHaveBeenCalledWith(expect.stringContaining("pq.status = 'published'"), ["brand-1"]);
-      expect(packageResult).toMatchObject({
-        fileName: expect.stringMatching(/^brand-pilot-published-results-\d{4}-\d{2}-\d{2}\.zip$/),
-        mimeType: "application/zip",
-        itemCount: 1
-      });
-      expect(packageResult.buffer.subarray(0, 2).toString("utf8")).toBe("PK");
-      expect(packageResult.buffer.includes(Buffer.from("published-summary.csv"))).toBe(true);
-      expect(packageResult.buffer.includes(Buffer.from("instagram/jeju-family-stay-queue-1/caption.txt"))).toBe(true);
-      expect(packageResult.buffer.includes(Buffer.from("instagram/jeju-family-stay-queue-1/images/slide-01.png"))).toBe(true);
-      expect(packageResult.buffer.includes(Buffer.from("제주 가족 숙소는 위치부터 확인하세요."))).toBe(true);
-      expect(packageResult.buffer.includes(Buffer.from("image-one"))).toBe(true);
-    } finally {
-      await rm(storageDir, { recursive: true, force: true });
-    }
-  });
-
   it("loads and normalizes a queue artifact from the trusted storage URL", async () => {
     const query = vi.fn(async (_sql: string, values?: unknown[]) => {
       expect(values).toEqual(["queue-1"]);
@@ -2611,6 +2690,54 @@ describe("repository", () => {
       "https://trusted.example/manifest.json",
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
+  });
+
+  it("loads a generated content output artifact before it enters the publish queue", async () => {
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      expect(sql).toContain("from channel_outputs co");
+      expect(sql).not.toContain("join publish_queue");
+      expect(values).toEqual(["output-1"]);
+      return {
+        rowCount: 1,
+        rows: [{
+          id: "output-1",
+          title: "Review content",
+          delivery_format: "threads_text",
+          preview_title: "Review title",
+          preview_body: "Review fallback",
+          output_json: { generationState: "completed", artifactStatus: "ready", body: "검토할 본문" },
+          artifact_public_url: null
+        }]
+      };
+    });
+    const repository = createRepository({ query } as any);
+
+    await expect(repository.getContentOutputArtifact("output-1")).resolves.toMatchObject({
+      queueId: "output-1",
+      kind: "text",
+      deliveryFormat: "threads_text",
+      text: "검토할 본문"
+    });
+  });
+
+  it("rejects a content output artifact that is still being generated", async () => {
+    const repository = createRepository({
+      query: vi.fn(async () => ({
+        rowCount: 1,
+        rows: [{
+          id: "output-pending",
+          title: "Pending",
+          delivery_format: "instagram_feed_carousel",
+          preview_title: null,
+          preview_body: null,
+          output_json: { generationState: "pending", artifactStatus: "pending" },
+          artifact_public_url: null
+        }]
+      }))
+    } as any);
+
+    await expect(repository.getContentOutputArtifact("output-pending"))
+      .rejects.toThrow("content_output_artifact_not_ready");
   });
 
   it.each([
@@ -3639,8 +3766,24 @@ describe("content performance repository", () => {
         return {
           rowCount: 2,
           rows: [
-            { publish_queue_id: "queue-1", channel_output_id: "output-1", external_post_id: "post-1" },
-            { publish_queue_id: "queue-2", channel_output_id: "output-2", external_post_id: "post-2" }
+            { publish_queue_id: "queue-1", channel_output_id: "output-1", external_post_id: "post-1", delivery_format: "instagram_reel" },
+            {
+              publish_queue_id: "queue-2",
+              channel_output_id: "output-2",
+              external_post_id: "post-2",
+              delivery_format: "instagram_story",
+              published_at: new Date("2026-07-14T18:00:00.000Z"),
+              captured_windows: [],
+              output_json: {
+                deliveryFormat: "instagram_story",
+                topic: { title: "승인 병목", angle: "체크리스트" },
+                qualityBrief: {
+                  hook: "게시가 늦는 이유",
+                  specificClaims: ["담당자 지정", "기한 설정"],
+                  evidence: [{}, {}],
+                },
+              },
+            }
           ]
         };
       }
@@ -3660,9 +3803,18 @@ describe("content performance repository", () => {
       failureCount: 1
     });
     expect(collect).toHaveBeenCalledTimes(2);
+    expect(collect).toHaveBeenNthCalledWith(1, expect.objectContaining({ deliveryFormat: "instagram_reel" }));
+    expect(collect).toHaveBeenNthCalledWith(2, expect.objectContaining({ deliveryFormat: "instagram_story" }));
     const snapshotWrites = statements.filter(({ sql }) => sql.includes("insert into content_performance_snapshots"));
     expect(snapshotWrites).toHaveLength(1);
     expect(snapshotWrites[0].sql).toContain("on conflict (publish_queue_id, snapshot_date)");
+    expect(snapshotWrites[0].values[10]).toBe("24h");
+    expect(JSON.parse(String(snapshotWrites[0].values[11]))).toMatchObject({
+      deliveryFormat: "instagram_story",
+      topicTitle: "승인 병목",
+      hook: "게시가 늦는 이유",
+      evidenceCount: 2,
+    });
     expect(statements.find(({ sql }) => sql.includes("update performance_sync_runs"))?.values).toEqual([
       "run-1", "partially_failed", 2, 1, 1, "provider_timeout"
     ]);
@@ -3769,13 +3921,13 @@ describe("content performance repository", () => {
     expect(snapshotsSql).toContain("distinct on (publish_queue_id)");
     expect(snapshotsSql).toContain("snapshot_date < $2::date - 29");
     expect(dashboard.dailyExposure).toEqual([
-      { date: "2026-06-17", channels: { instagram: 25 } },
       { date: "2026-07-16", channels: { instagram: 5 } }
     ]);
     expect(dashboard.dailyExposure.some(({ date }) => date === "2026-06-16")).toBe(false);
+    expect(dashboard.dailyExposure.some(({ date }) => date === "2026-06-17")).toBe(false);
   });
 
-  it("preserves null for unavailable exposure while retaining measured zero", async () => {
+  it("excludes unmeasured content from rankings while retaining measured zero", async () => {
     const query = vi.fn(async (sql: string) => {
       if (sql.includes("dashboard_workflow")) {
         return { rowCount: 1, rows: [{ queued_topics: "0", generating: "0", pending_review: "0", scheduled_or_published: "2", pending_review_count: "0", failed_publish_count: "0" }] };
@@ -3817,7 +3969,9 @@ describe("content performance repository", () => {
     const dashboard = await repository.getDashboard("brand-1");
 
     expect(dashboard.summary.exposureCount).toBe(0);
-    expect(dashboard.topContents.map(({ exposureCount }) => exposureCount)).toEqual([null, 0]);
+    expect(dashboard.topContents.map(({ publishQueueId, exposureCount }) => ({ publishQueueId, exposureCount }))).toEqual([
+      { publishQueueId: "queue-zero", exposureCount: 0 }
+    ]);
     expect(dashboard.channelPerformance.map(({ exposureCount }) => exposureCount)).toEqual([null, 0]);
     expect(dashboard.dailyExposure).toEqual([
       { date: "2026-07-16", channels: { threads: 0 } }

@@ -9,6 +9,7 @@ export type InstagramDeliveryFormat =
 
 export type DeliveryFormat =
   | InstagramDeliveryFormat
+  | "instagram_feed_single"
   | "threads_text"
   | "tiktok_video"
   | "youtube_video"
@@ -220,6 +221,13 @@ export interface InstagramTrendPage {
   items: InstagramTrendMedia[];
 }
 
+export interface InstagramTrendArchivePage {
+  items: Array<InstagramTrendMedia & { savedAt: string }>;
+  page: number;
+  limit: number;
+  total: number;
+}
+
 export interface InstagramTrendSearchHistory {
   hashtagId: string;
   displayTag: string;
@@ -246,6 +254,20 @@ export interface InstagramTrendFavoriteInput {
 export interface InstagramTrendSaveSource {
   source: SourceUrl;
   alreadySaved: boolean;
+}
+
+export interface InstagramTrendRemoveSource {
+  mediaId: string;
+  removed: boolean;
+}
+
+export interface InstagramTrendConnection {
+  status: "connected" | "not_connected" | "needs_attention" | "expired";
+  accountLabel: string | null;
+  instagramBusinessAccountId: string | null;
+  scopes: string[];
+  expiresAt: string | null;
+  lastErrorCode: string | null;
 }
 
 export interface BrandContentFormat {
@@ -435,8 +457,21 @@ export interface SupportRequest {
   category: SupportRequestCategory;
   title: string;
   message: string;
+  contactPhone: string;
   contactEmail: string | null;
   status: SupportRequestStatus;
+  responseMessage: string | null;
+  respondedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FeedbackSubmission {
+  id: string;
+  brandId: string;
+  workspaceId: string;
+  message: string;
+  status: "new" | "reviewed" | "archived";
   createdAt: string;
   updatedAt: string;
 }

@@ -87,7 +87,7 @@ export function createKakaoAuthStore(pool: Pool) {
         await client.query("insert into user_identities (user_id, provider, provider_subject) values ($1, 'kakao', $2)", [userId, profile.subject]);
         const workspace = await client.query(
           `insert into workspaces (name, slug, created_by_user_id) values ($1, $2, $3) returning id, name`,
-          [`${profile.nickname || "새 사용자"}의 Brand Pilot`, workspaceSlug(), userId]
+          [`${profile.nickname || "새 사용자"}의 모종`, workspaceSlug(), userId]
         );
         const workspaceId = workspace.rows[0].id;
         await client.query("insert into workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')", [workspaceId, userId]);
@@ -148,8 +148,9 @@ export function createKakaoAuthStore(pool: Pool) {
       return Boolean(result.rowCount);
     },
     async canAccessResource(userId: string, table: "source_urls" | "content_outputs" | "publish_queue" | "support_requests" | "dm_attention_items", resourceId: string) {
+      const resourceTable = table === "content_outputs" ? "channel_outputs" : table;
       const result = await pool.query(
-        `select 1 from ${table} resource join workspace_members wm on wm.workspace_id = resource.workspace_id
+        `select 1 from ${resourceTable} resource join workspace_members wm on wm.workspace_id = resource.workspace_id
          where resource.id = $1 and wm.user_id = $2 and wm.status = 'active' and wm.deleted_at is null`,
         [resourceId, userId]
       );

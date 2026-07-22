@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { DmAttentionPanel } from "../components/dm/DmAttentionPanel";
 import { DmConversationList } from "../components/dm/DmConversationList";
 import { DmConversationThread } from "../components/dm/DmConversationThread";
 import { DmKnowledgePanel } from "../components/dm/DmKnowledgePanel";
@@ -8,7 +7,6 @@ import { Tabs } from "../components/ui/Tabs";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
 import type {
   DmAttentionItem,
-  DmAttentionType,
   DmConversationDetail,
   DmConversationFilter,
   DmConversationSummary,
@@ -45,10 +43,6 @@ export function DmAutomationPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [conversationError, setConversationError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
-  const [attentionFilter, setAttentionFilter] = useState<DmAttentionType | "all">("all");
-  const [attentionItems, setAttentionItems] = useState<DmAttentionItem[]>([]);
-  const [attentionLoading, setAttentionLoading] = useState(false);
-  const [attentionError, setAttentionError] = useState<string | null>(null);
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [imports, setImports] = useState<KnowledgeImport[]>([]);
   const [wikiStatus, setWikiStatus] = useState<WikiStatus | null>(null);
@@ -100,19 +94,6 @@ export function DmAutomationPage() {
     }
   }
 
-  async function loadAttention(type = attentionFilter) {
-    setAttentionLoading(true);
-    setAttentionError(null);
-    try {
-      setAttentionItems(await api.listDmAttentionItems(DEMO_BRAND_ID, type === "all" ? undefined : type));
-    } catch {
-      setAttentionItems([]);
-      setAttentionError("확인 필요 항목을 불러오지 못했습니다.");
-    } finally {
-      setAttentionLoading(false);
-    }
-  }
-
   async function loadKnowledge() {
     setKnowledgeLoading(true);
     setKnowledgeError(null);
@@ -140,25 +121,28 @@ export function DmAutomationPage() {
     void loadConversations(filter);
   }
 
-  function changeAttentionFilter(filter: DmAttentionType | "all") {
-    setAttentionFilter(filter);
-    void loadAttention(filter);
-  }
-
   async function resolveAttention(item: DmAttentionItem) {
     setResolvingId(item.id);
     try {
       await api.resolveDmAttentionItem(item.id);
       await Promise.all([
-        loadAttention(attentionFilter),
         loadConversations(conversationFilter),
         selectedId === item.conversationId ? loadConversation(item.conversationId) : Promise.resolve()
       ]);
     } catch {
-      setAttentionError("확인 완료 상태를 저장하지 못했습니다.");
+      setDetailError("확인 완료 상태를 저장하지 못했습니다.");
     } finally {
       setResolvingId(null);
     }
+  }
+
+  async function sendManualReply(body: string) {
+    if (!selectedId) return;
+    await api.sendManualDmReply(DEMO_BRAND_ID, selectedId, body);
+    await Promise.all([
+      loadConversation(selectedId),
+      loadConversations(conversationFilter)
+    ]);
   }
 
   async function uploadKnowledge(entryType: "faq" | "product", file: File) {
@@ -192,13 +176,12 @@ export function DmAutomationPage() {
 
   return (
     <section className="content dm-automation-page">
-      <PageHeader title="DM 자동답변" description="Instagram DM 대화와 담당자 확인 항목, 자동답변 지식을 관리합니다." />
+      <PageHeader title="DM 자동답변" description="Instagram DM 대화, 수동 답변, 자동답변 지식을 관리합니다." />
       <Tabs
         defaultId="conversations"
         activeId={section}
         onChange={(next) => {
           setSection(next);
-          if (next === "attention") void loadAttention(attentionFilter);
           if (next === "knowledge") void loadKnowledge();
         }}
         items={[
@@ -213,18 +196,13 @@ export function DmAutomationPage() {
                 <DmConversationThread detail={detail} loading={detailLoading} error={detailError} resolving={Boolean(resolvingId)} onBack={() => { setSelectedId(null); setDetail(null); }} onResolve={(attentionId) => {
                   const item = detail?.attentionItems.find((candidate) => candidate.id === attentionId);
                   if (item) void resolveAttention(item);
-                }} />
+                }} onManualReply={sendManualReply} />
               </div>
             )
           },
           {
-            id: "attention",
-            label: "확인 필요",
-            content: <DmAttentionPanel items={attentionItems} filter={attentionFilter} loading={attentionLoading} error={attentionError} resolvingId={resolvingId} onFilterChange={changeAttentionFilter} onResolve={(item) => void resolveAttention(item)} />
-          },
-          {
             id: "knowledge",
-            label: "지식 데이터",
+            label: "자사 정보",
             content: <DmKnowledgePanel imports={imports} wikiStatus={wikiStatus} loading={knowledgeLoading} error={knowledgeError} uploading={uploading} refreshing={refreshing} notice={knowledgeNotice} onUpload={(type, file) => void uploadKnowledge(type, file)} onRefresh={() => void refreshWiki()} />
           }
         ]}

@@ -90,6 +90,18 @@ describe("knowledge curator", () => {
     }, source, structuredData)).toThrow("curator_unit_shape_invalid");
   });
 
+  it("accepts service units found in an owned source", () => {
+    expect(validateCuratedKnowledge({
+      units: [productUnit({
+        unitType: "service",
+        title: "콘텐츠 운영 대행",
+        structuredData: {},
+      })],
+    }, source)).toEqual([
+      expect.objectContaining({ unitType: "service", title: "콘텐츠 운영 대행" }),
+    ]);
+  });
+
   it("ships guardrails for quote fidelity and protected product fields", async () => {
     const skill = await readFile(
       path.resolve("runtime/.agents/skills/knowledge-curator/SKILL.md"),

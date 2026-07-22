@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createPerformanceAdapterRegistry,
+  contentPerformanceFeatures,
   exposureDelta,
   isPerformanceSyncDue,
+  performanceMilestone,
   performanceRunDate,
 } from "./contentPerformance.js";
 
@@ -35,6 +37,45 @@ describe("exposureDelta", () => {
     [null, null],
   ] as const)("returns null when either snapshot is unavailable", (current, previous) => {
     expect(exposureDelta(current, previous)).toBeNull();
+  });
+});
+
+describe("performance learning metadata", () => {
+  it.each([
+    [24, "24h"],
+    [47, "24h"],
+    [72, "72h"],
+    [119, "72h"],
+    [168, "7d"],
+    [240, null],
+  ] as const)("maps age %sh to milestone %s", (hours, expected) => {
+    expect(performanceMilestone(
+      new Date("2026-07-01T00:00:00.000Z"),
+      new Date(Date.parse("2026-07-01T00:00:00.000Z") + hours * 60 * 60 * 1000),
+    )).toBe(expected);
+  });
+
+  it("extracts stable generation features without copying the full output", () => {
+    expect(contentPerformanceFeatures({
+      deliveryFormat: "instagram_feed_carousel",
+      topic: { title: "승인 병목 해결", angle: "실무 체크리스트" },
+      qualityBrief: {
+        version: "content-quality.v1",
+        hook: "게시가 늦는 진짜 이유",
+        readerPayoff: "승인 병목을 찾는다",
+        whyNow: "발행량 증가",
+        specificClaims: ["담당자 지정", "기한 설정"],
+        evidence: [{ claim: "A", support: "근거 A" }, { claim: "B", support: "근거 B" }],
+        sourceGaps: [],
+      },
+    }, "instagram_feed_carousel")).toEqual({
+      deliveryFormat: "instagram_feed_carousel",
+      topicTitle: "승인 병목 해결",
+      topicAngle: "실무 체크리스트",
+      hook: "게시가 늦는 진짜 이유",
+      evidenceCount: 2,
+      claimCount: 2,
+    });
   });
 });
 
@@ -126,6 +167,40 @@ describe("performance adapter registry", () => {
       error: "instagram_insights_request_failed:400",
     });
     expect(JSON.stringify(result)).not.toContain("SECRET_TOKEN");
+  });
+
+  it("records unavailable media as collected when Meta no longer exposes the object", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      error: { message: "Unsupported get request", code: 100, error_subcode: 33 },
+    }), { status: 400 }));
+    const registry = createPerformanceAdapterRegistry({ fetchImpl: fetchImpl as unknown as typeof fetch });
+
+    await expect(registry.instagram.collect({
+      channel: "instagram",
+      accessToken: "SECRET_TOKEN",
+      deliveryFormat: "instagram_reel",
+      externalPostId: "media-1",
+    })).resolves.toEqual({
+      status: "collected",
+      exposureCount: null,
+      rawMetrics: { availability: "unavailable" },
+    });
+  });
+
+  it("records an expired Story with no views metric as collected without data", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ data: [] }), { status: 200 }));
+    const registry = createPerformanceAdapterRegistry({ fetchImpl: fetchImpl as unknown as typeof fetch });
+
+    await expect(registry.instagram.collect({
+      channel: "instagram",
+      accessToken: "SECRET_TOKEN",
+      deliveryFormat: "instagram_story",
+      externalPostId: "media-1",
+    })).resolves.toEqual({
+      status: "collected",
+      exposureCount: null,
+      rawMetrics: { availability: "unavailable" },
+    });
   });
 
   it("sanitizes tokens echoed in successful raw metrics", async () => {

@@ -5,6 +5,7 @@ export type PerformanceChannel = Channel;
 export interface PerformanceCollectRequest {
   channel: PerformanceChannel;
   accessToken: string | null;
+  deliveryFormat?: string | null;
   graphHost?: "graph.facebook.com" | "graph.instagram.com";
   externalPostId: string;
 }
@@ -61,6 +62,32 @@ export function exposureDelta(current: number | null, previous: number | null): 
   return Math.max(0, current - previous);
 }
 
+export type PerformanceMilestone = "24h" | "72h" | "7d";
+
+export function performanceMilestone(publishedAt: Date, collectedAt: Date): PerformanceMilestone | null {
+  const ageHours = (collectedAt.getTime() - publishedAt.getTime()) / (60 * 60 * 1000);
+  if (ageHours >= 24 && ageHours < 48) return "24h";
+  if (ageHours >= 72 && ageHours < 120) return "72h";
+  if (ageHours >= 168 && ageHours < 216) return "7d";
+  return null;
+}
+
+export function contentPerformanceFeatures(output: unknown, deliveryFormat: string | null | undefined) {
+  const record = asRecord(output) ?? {};
+  const topic = asRecord(record.topic) ?? {};
+  const brief = asRecord(record.qualityBrief) ?? {};
+  const evidence = Array.isArray(brief.evidence) ? brief.evidence : [];
+  const claims = Array.isArray(brief.specificClaims) ? brief.specificClaims : [];
+  return {
+    deliveryFormat: typeof record.deliveryFormat === "string" ? record.deliveryFormat : deliveryFormat ?? null,
+    topicTitle: typeof topic.title === "string" ? topic.title : null,
+    topicAngle: typeof topic.angle === "string" ? topic.angle : null,
+    hook: typeof brief.hook === "string" ? brief.hook : null,
+    evidenceCount: evidence.length,
+    claimCount: claims.length,
+  };
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -109,6 +136,15 @@ function notConfigured(): PerformanceCollectResult {
   return { status: "not_configured", exposureCount: null, rawMetrics: {} };
 }
 
+function unavailable(): PerformanceCollectResult {
+  return { status: "collected", exposureCount: null, rawMetrics: { availability: "unavailable" } };
+}
+
+function isUnavailableMetaObject(payload: unknown) {
+  const error = asRecord(asRecord(payload)?.error);
+  return error?.code === 100 && error.error_subcode === 33;
+}
+
 function createInstagramAdapter({
   fetchImpl,
   apiVersion,
@@ -136,10 +172,12 @@ function createInstagramAdapter({
         });
         const payload: unknown = await response.json().catch(() => ({}));
         if (!response.ok) {
+          if (isUnavailableMetaObject(payload)) return unavailable();
           return failed(`instagram_insights_request_failed:${response.status}`);
         }
 
         const exposureCount = parseViews(payload);
+        if (exposureCount === null && request.deliveryFormat === "instagram_story") return unavailable();
         if (exposureCount === null) return failed("instagram_insights_invalid_views");
 
         const rawMetrics = sanitizeRawValue(payload, request.accessToken);

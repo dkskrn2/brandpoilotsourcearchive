@@ -147,6 +147,10 @@ function createZipArchive(entries: ZipEntry[]) {
   return Buffer.concat([...fileChunks, ...centralChunks, endOfCentralDirectory]);
 }
 
+export function createZipBuffer(entries: Array<{ name: string; data: Buffer }>) {
+  return createZipArchive(entries);
+}
+
 function uniqueEntryName(name: string, names: Set<string>) {
   if (!names.has(name)) return name;
   const extension = path.posix.extname(name);

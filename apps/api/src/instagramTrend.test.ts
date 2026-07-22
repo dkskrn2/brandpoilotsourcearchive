@@ -129,14 +129,14 @@ describe("mapMetaTopMedia", () => {
     expect(payload).toEqual(original);
   });
 
-  it("limits output to the first 50 valid unique rows", () => {
-    const data = Array.from({ length: 51 }, (_, index) => ({
+  it("limits output to the first 150 valid unique rows", () => {
+    const data = Array.from({ length: 151 }, (_, index) => ({
       id: String(index), media_type: "IMAGE", permalink: `https://instagram.com/p/${index}`
     }));
     const result = mapMetaTopMedia({ data });
-    expect(result).toHaveLength(50);
-    expect(result.at(-1)?.instagramMediaId).toBe("49");
-    expect(result.at(-1)?.metaRank).toBe(50);
+    expect(result).toHaveLength(150);
+    expect(result.at(-1)?.instagramMediaId).toBe("149");
+    expect(result.at(-1)?.metaRank).toBe(150);
   });
 
   it("continues after a non-record row", () => {

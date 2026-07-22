@@ -3,6 +3,7 @@ import { Database, FileSpreadsheet, RefreshCw, Upload } from "lucide-react";
 import { Alert } from "../ui/Alert";
 import { Badge } from "../ui/Badge";
 import { EmptyState } from "../ui/EmptyState";
+import { InlineSpinner, ListSkeleton } from "../ui/LoadingState";
 import type { KnowledgeImport, WikiStatus } from "../../types";
 
 interface DmKnowledgePanelProps {
@@ -32,7 +33,9 @@ function UploadRow({ entryType, busy, onUpload }: { entryType: "faq" | "product"
       <div><strong>{label} 데이터</strong><span>CSV 또는 XLSX 파일을 추가하면 다음 Wiki 빌드에 반영됩니다.</span></div>
       <div className="actions">
         <a className="button" href={template} download>{label} 템플릿</a>
-        <label className={`button primary${busy ? " is-disabled" : ""}`} htmlFor={inputId}><Upload size={16} /> {busy ? "업로드 중" : "파일 업로드"}</label>
+        <label className={`button primary${busy ? " is-disabled" : ""}`} htmlFor={inputId} aria-label={`${label} 파일 업로드`} aria-busy={busy}>
+          {busy ? <InlineSpinner label={`${label} 파일 업로드 중`} /> : <Upload size={16} aria-hidden="true" />} 파일 업로드
+        </label>
         <input id={inputId} className="visually-hidden" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={busy} onChange={handleFile} aria-label={`${label} 파일`} />
       </div>
     </div>
@@ -41,12 +44,15 @@ function UploadRow({ entryType, busy, onUpload }: { entryType: "faq" | "product"
 
 export function DmKnowledgePanel({ imports, wikiStatus, loading, error, uploading, refreshing, notice, onUpload, onRefresh }: DmKnowledgePanelProps) {
   const active = wikiStatus?.activeVersion ?? null;
+  const current = wikiStatus?.currentVersion ?? null;
   const failed = wikiStatus?.latestFailedVersion ?? null;
   return (
     <section className="dm-knowledge-panel">
       <div className="dm-section-toolbar">
         <div><h2>지식 데이터</h2><p>FAQ, 제품 데이터와 자사 URL을 정리해 DM 답변 근거로 사용합니다.</p></div>
-        <button className="button primary" type="button" onClick={onRefresh} disabled={refreshing}><RefreshCw size={16} /> {refreshing ? "등록 중" : "Wiki 다시 만들기"}</button>
+        <button className="button primary" type="button" aria-label="Wiki 다시 만들기" aria-busy={refreshing} onClick={onRefresh} disabled={refreshing}>
+          {refreshing ? <InlineSpinner label="Wiki 재생성 요청 중" /> : <RefreshCw size={16} aria-hidden="true" />} Wiki 다시 만들기
+        </button>
       </div>
       {error ? <Alert title="API 상태" variant="warn">{error}</Alert> : null}
       {notice ? <Alert title="처리 결과" variant="ok">{notice}</Alert> : null}
@@ -54,7 +60,7 @@ export function DmKnowledgePanel({ imports, wikiStatus, loading, error, uploadin
         <UploadRow entryType="faq" busy={uploading === "faq"} onUpload={(file) => onUpload("faq", file)} />
         <UploadRow entryType="product" busy={uploading === "product"} onUpload={(file) => onUpload("product", file)} />
       </div>
-      {loading ? <p className="dm-list-status">Wiki 상태를 불러오는 중입니다.</p> : null}
+      {loading ? <ListSkeleton rows={3} columns={4} label="Wiki 상태를 불러오는 중입니다." /> : null}
       {!loading && !error ? (
         <div className="dm-wiki-status">
           <div className="dm-wiki-version">
@@ -62,6 +68,7 @@ export function DmKnowledgePanel({ imports, wikiStatus, loading, error, uploadin
             {active ? <div className="dm-stat-grid"><div><span>소스</span><strong>{active.sourceCount}</strong></div><div><span>문서</span><strong>{active.documentCount}</strong></div><div><span>지식 단위</span><strong>{active.knowledgeEntryCount}</strong></div><div><span>Chunk</span><strong>{active.chunkCount}</strong></div></div> : null}
             {active?.activatedAt ? <span className="muted small">마지막 활성화 {new Date(active.activatedAt).toLocaleString("ko-KR")}</span> : null}
           </div>
+          {current ? <Alert title={`Wiki ${current.status === "ready" ? "검증 대기" : "생성 중"} · 버전 ${current.version}`} variant="info">{current.status === "ready" ? "컴파일과 임베딩이 끝났습니다. 기준 질문 검증 후 활성화할 수 있습니다." : `현재 단계: ${current.buildStage ?? "준비 중"}`}</Alert> : null}
           {failed ? <Alert title={`최근 Wiki 빌드 실패 · 버전 ${failed.version}`} variant="warn">기존 활성 버전은 계속 사용됩니다. {failed.errorMessage || "오류 원인을 확인한 뒤 다시 만들어 주세요."}</Alert> : null}
         </div>
       ) : null}

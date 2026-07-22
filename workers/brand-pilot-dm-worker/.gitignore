@@ -1,3 +1,11 @@
 .env
 runtime/*
 !runtime/.gitkeep
+!runtime/.agents/
+runtime/.agents/*
+!runtime/.agents/skills/
+runtime/.agents/skills/*
+!runtime/.agents/skills/wiki-compiler/
+!runtime/.agents/skills/wiki-compiler/SKILL.md
+!runtime/.agents/skills/wiki-linter/
+!runtime/.agents/skills/wiki-linter/SKILL.md

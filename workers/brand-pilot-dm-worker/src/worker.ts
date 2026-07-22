@@ -1,5 +1,5 @@
 import type { ClaimedDmJob } from "./client.js";
-import type { WikiSearchChunk } from "./db.js";
+import type { CompiledWikiSearchPacket } from "./compiledWikiTypes.js";
 import { createEmbedding } from "./embeddings.js";
 import { buildDmPrompt } from "./prompts.js";
 
@@ -17,6 +17,7 @@ export type DmWorkerResult = {
   decision: "answer" | "fallback" | "ignore" | "error";
   answer: string | null;
   wikiChunkIds: string[];
+  destinationUrlIds?: string[];
   knowledgeEntryId: string | null;
   confidence: number | null;
   reasonCode: DmReasonCode;
@@ -33,8 +34,17 @@ export interface DmWorkerClient {
 }
 
 export interface DmWorkerDb {
-  searchWiki(workspaceId: string, brandId: string, question: string, embedding: number[]): Promise<WikiSearchChunk[]>;
+  searchCompiledWiki(workspaceId: string, brandId: string, question: string, embedding: number[]): Promise<CompiledWikiSearchPacket | null>;
   conversationHistory(workspaceId: string, brandId: string, conversationId: string): Promise<Array<{ direction: string; body: string | null }>>;
+  recordCompiledWikiRetrieval?(input: {
+    workspaceId: string;
+    brandId: string;
+    question: string;
+    packet: CompiledWikiSearchPacket | null;
+    result: DmWorkerResult;
+    retrievalLatencyMs: number;
+    totalLatencyMs: number;
+  }): Promise<void>;
 }
 
 export async function runWorkerCycle<
@@ -59,32 +69,12 @@ export async function runWorkerCycle<
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-function unitInterval(name: string, value: string | undefined, fallback: number) {
-  if (value === undefined || !value.trim()) return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) throw new Error(`${name}_invalid`);
-  return parsed;
-}
-
-export function readDirectFaqThresholds(env: Record<string, string | undefined>) {
-  const similarity = env.DM_DIRECT_FAQ_MIN_SIMILARITY ?? env.DM_DIRECT_FAQ_SIMILARITY_THRESHOLD;
-  const margin = env.DM_DIRECT_FAQ_MIN_MARGIN ?? env.DM_DIRECT_FAQ_MARGIN_THRESHOLD;
-  return {
-    similarity: unitInterval(
-      "DM_DIRECT_FAQ_MIN_SIMILARITY",
-      similarity,
-      0.88,
-    ),
-    margin: unitInterval("DM_DIRECT_FAQ_MIN_MARGIN", margin, 0.05),
-  };
-}
-
 function requiredString(value: unknown, errorCode: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(errorCode);
   return value.trim();
 }
 
-export function validateResult(value: unknown): DmWorkerResult {
+export function validateResult(value: unknown, packet?: CompiledWikiSearchPacket): DmWorkerResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("dm_result_invalid");
   }
@@ -106,6 +96,12 @@ export function validateResult(value: unknown): DmWorkerResult {
   )
     ? candidate.knowledgeEntryId
     : (() => { throw new Error("dm_knowledge_entry_id_invalid"); })();
+  const destinationUrlIds = candidate.destinationUrlIds === undefined
+    ? []
+    : Array.isArray(candidate.destinationUrlIds) && candidate.destinationUrlIds.length <= 2
+      && candidate.destinationUrlIds.every((id) => typeof id === "string" && uuidPattern.test(id))
+      ? [...new Set(candidate.destinationUrlIds as string[])]
+      : (() => { throw new Error("dm_destination_url_ids_invalid"); })();
   const confidence = candidate.confidence === null || (
     typeof candidate.confidence === "number"
     && Number.isFinite(candidate.confidence)
@@ -135,20 +131,29 @@ export function validateResult(value: unknown): DmWorkerResult {
     if (wikiChunkIds.length === 0 && knowledgeEntryId === null) {
       throw new Error("dm_answer_sources_required");
     }
+    if (packet) {
+      const allowedChunks = new Set(packet.chunks.map((chunk) => chunk.chunkId));
+      const allowedUrls = new Set(packet.destinationUrls.map((entry) => entry.id));
+      if (wikiChunkIds.some((id) => !allowedChunks.has(id))) throw new Error("dm_wiki_chunk_not_provided");
+      if (destinationUrlIds.some((id) => !allowedUrls.has(id))) throw new Error("dm_destination_url_not_provided");
+    }
+    const answer = requiredString(candidate.answer, "dm_answer_required");
+    if (/https?:\/\//i.test(answer)) throw new Error("dm_answer_raw_url_forbidden");
     return {
       decision,
-      answer: requiredString(candidate.answer, "dm_answer_required"),
+      answer,
       wikiChunkIds,
       knowledgeEntryId,
       confidence,
       reasonCode,
       needsAttention: candidate.needsAttention,
       reason,
+      ...(candidate.destinationUrlIds === undefined ? {} : { destinationUrlIds }),
     };
   }
 
   if (candidate.answer !== null) throw new Error("dm_non_answer_must_not_include_answer");
-  if (wikiChunkIds.length > 0 || knowledgeEntryId !== null) {
+  if (wikiChunkIds.length > 0 || knowledgeEntryId !== null || destinationUrlIds.length > 0) {
     throw new Error("dm_non_answer_must_not_include_sources");
   }
   return {
@@ -196,11 +201,11 @@ export async function runDmWorkerOnce({
   db,
   apiKey,
   embeddingModel = "text-embedding-3-small",
-  directFaqSimilarityThreshold = 0.88,
-  directFaqMarginThreshold = 0.05,
   runtimeDirectory,
   timeoutMs = 10_000,
   embed = createEmbedding,
+  withCodexLease,
+  heartbeatIntervalMs = 5_000,
   runCodex,
 }: {
   workerId: string;
@@ -208,16 +213,29 @@ export async function runDmWorkerOnce({
   db: DmWorkerDb;
   apiKey: string;
   embeddingModel?: string;
-  directFaqSimilarityThreshold?: number;
-  directFaqMarginThreshold?: number;
   runtimeDirectory: string;
   timeoutMs?: number;
   embed?: typeof createEmbedding;
+  withCodexLease?: <T>(task: () => Promise<T>, onWait: () => Promise<unknown>) => Promise<T>;
+  heartbeatIntervalMs?: number;
   runCodex: (input: { prompt: string; runtimeDirectory: string; timeoutMs: number }) => Promise<unknown>;
 }) {
   await api.heartbeatWorker(workerId);
   const job = await api.claim(workerId);
   if (!job) return { status: "idle" as const };
+  let stopped = false;
+  let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
+  const heartbeat = () => api.heartbeat(job.id, workerId, job.leaseToken);
+  const scheduleHeartbeat = () => {
+    heartbeatTimer = setTimeout(() => {
+      if (stopped) return;
+      void heartbeat().catch(() => undefined).finally(() => {
+        if (!stopped) scheduleHeartbeat();
+      });
+    }, Math.max(1_000, Math.min(heartbeatIntervalMs, 10_000)));
+  };
+  scheduleHeartbeat();
+  const startedAt = Date.now();
   try {
     if (job.payload.route === "fixed_fallback") {
       const result = fixedFallbackResult(job.payload.policyReasonCode);
@@ -228,45 +246,56 @@ export async function runDmWorkerOnce({
     if (job.payload.exactFaqId) {
       const result = directFaqResult(job.payload.exactFaqId, 1, "payload_exact_faq");
       await api.complete(job.id, workerId, job.leaseToken, result);
+      void db.recordCompiledWikiRetrieval?.({
+        workspaceId: job.workspaceId,
+        brandId: job.brandId,
+        question: job.payload.question,
+        packet: null,
+        result,
+        retrievalLatencyMs: 0,
+        totalLatencyMs: Date.now() - startedAt,
+      }).catch((error) => console.error("wiki_retrieval_telemetry_failed", error));
       return { status: "completed" as const, jobId: job.id, decision: result.decision };
     }
 
+    const retrievalStartedAt = Date.now();
     const embedding = await embed({ text: job.payload.question, apiKey, model: embeddingModel });
-    const chunks = await db.searchWiki(job.workspaceId, job.brandId, job.payload.question, embedding);
-    if (chunks.length === 0) {
+    const packet = await db.searchCompiledWiki(job.workspaceId, job.brandId, job.payload.question, embedding);
+    const retrievalLatencyMs = Date.now() - retrievalStartedAt;
+    if (!packet || (!packet.brandCore && packet.chunks.length === 0)) {
       const result = fixedFallbackResult("knowledge_gap");
       result.reason = "wiki_no_basis";
       await api.complete(job.id, workerId, job.leaseToken, result);
-      return { status: "completed" as const, jobId: job.id, decision: result.decision };
-    }
-
-    const top = chunks[0];
-    const secondSimilarity = chunks[1]?.cosineSimilarity ?? 0;
-    if (
-      top.sourceKind === "faq"
-      && top.directAnswer !== null
-      && top.knowledgeEntryId !== null
-      && top.cosineSimilarity >= directFaqSimilarityThreshold
-      && top.cosineSimilarity - secondSimilarity >= directFaqMarginThreshold
-    ) {
-      const result = directFaqResult(top.knowledgeEntryId, top.cosineSimilarity, "embedding_direct_faq");
-      await api.complete(job.id, workerId, job.leaseToken, result);
+      void db.recordCompiledWikiRetrieval?.({
+        workspaceId: job.workspaceId, brandId: job.brandId, question: job.payload.question,
+        packet, result, retrievalLatencyMs, totalLatencyMs: Date.now() - startedAt,
+      }).catch((error) => console.error("wiki_retrieval_telemetry_failed", error));
       return { status: "completed" as const, jobId: job.id, decision: result.decision };
     }
 
     const history = await db.conversationHistory(job.workspaceId, job.brandId, job.payload.conversationId);
-    const rawResult = await runCodex({
-      prompt: buildDmPrompt({ question: job.payload.question, history, chunks }),
-      runtimeDirectory,
-      timeoutMs,
-    });
-    const result = validateResult(rawResult);
+    const executeCodex = () => runCodex({
+        prompt: buildDmPrompt({ question: job.payload.question, history, packet }),
+        runtimeDirectory,
+        timeoutMs,
+      });
+    const rawResult = withCodexLease
+      ? await withCodexLease(executeCodex, heartbeat)
+      : await executeCodex();
+    const result = validateResult(rawResult, packet);
     await api.complete(job.id, workerId, job.leaseToken, result);
+    void db.recordCompiledWikiRetrieval?.({
+      workspaceId: job.workspaceId, brandId: job.brandId, question: job.payload.question,
+      packet, result, retrievalLatencyMs, totalLatencyMs: Date.now() - startedAt,
+    }).catch((error) => console.error("wiki_retrieval_telemetry_failed", error));
     return { status: "completed" as const, jobId: job.id, decision: result.decision };
   } catch (error) {
     const message = error instanceof Error ? error.message : "dm_worker_unknown_error";
     const retryable = message === "fetch failed" || /^(codex_timeout|embedding_request_failed:5|worker_api_failed:5)/.test(message);
     await api.fail(job.id, workerId, job.leaseToken, message, retryable, retryable ? 5_000 : 0);
     return { status: "failed" as const, jobId: job.id };
+  } finally {
+    stopped = true;
+    if (heartbeatTimer) clearTimeout(heartbeatTimer);
   }
 }
