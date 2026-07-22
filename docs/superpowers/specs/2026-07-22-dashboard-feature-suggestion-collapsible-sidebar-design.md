@@ -1,49 +1,50 @@
-# Dashboard feature suggestion and collapsible sidebar design
+# 대시보드 기능 제안과 접이식 사이드바 설계
 
-## Goal
+## 목표
 
-Add a persistent, icon-based desktop sidebar collapse control and a dashboard feature-suggestion banner that opens Customer Support with the feature category already selected.
+데스크톱 사이드바에 메뉴 아이콘과 접기 기능을 추가하고, 사용자가 원하는 기능을 제안할 수 있는 배너를 대시보드에 추가한다. 기능 제안 배너를 누르면 고객센터의 문의 유형이 `기능 건의`로 선택된 상태로 이동해야 한다.
 
-## Scope
+## 작업 범위
 
-- Add a Lucide icon to every customer sidebar destination.
-- Allow only the desktop sidebar to switch between the existing 248 px width and a compact 72 px icon rail.
-- Persist the desktop preference in browser local storage and restore it on the next page load.
-- Keep the mobile full-menu layout expanded and unchanged.
-- Add a feature-suggestion banner near the bottom of the dashboard content.
-- Route the banner to `/support?category=feature#support-request-form`.
-- Initialize the support category as `feature`, move to the form, and preserve normal support-page behavior for all other entries.
+- 고객용 사이드바의 모든 이동 메뉴에 Lucide 아이콘을 추가한다.
+- 데스크톱 사이드바만 기존 248px 너비와 72px 아이콘 전용 너비 사이에서 전환할 수 있게 한다.
+- 데스크톱 사이드바의 접기 상태를 브라우저 로컬 저장소에 저장하고 다음 접속이나 새로고침 때 복원한다.
+- 모바일 전체 메뉴는 기존처럼 펼쳐진 구조를 유지한다.
+- 대시보드 콘텐츠 하단에 기능 제안 배너를 추가한다.
+- 배너는 `/support?category=feature#support-request-form`으로 이동한다.
+- 고객센터에서 문의 유형을 `기능 건의`로 자동 선택하고 문의 작성 영역으로 이동한다.
+- 다른 경로로 고객센터에 들어왔을 때는 기존 동작을 유지한다.
 
-## Interaction design
+## 화면과 동작
 
-The sidebar header contains an accessible toggle using the panel-close/panel-open icon. Expanded mode retains the current logo, group headings, text labels, badges, help copy, and brand profile. Collapsed mode displays destination icons, active styling, compact badges, and icon-only help/profile controls. Every icon-only control exposes an `aria-label` and native tooltip text.
+사이드바 상단에 패널 닫기·열기 아이콘을 사용하는 접기 버튼을 배치한다. 펼친 상태에서는 현재 로고, 메뉴 그룹명, 메뉴명, 상태 배지, 도움말 설명과 브랜드 프로필을 그대로 표시한다. 접은 상태에서는 메뉴 아이콘, 현재 메뉴 강조, 축약된 상태 배지, 아이콘 형태의 도움말과 브랜드 프로필만 표시한다. 아이콘만 보이는 모든 조작 요소에는 `aria-label`과 기본 툴팁을 제공한다.
 
-The dashboard banner uses the existing blue product palette, a lightbulb icon, one sentence inviting suggestions, and a primary `기능 제안하기` link. It is visually secondary to dashboard operational cards and remains usable on mobile.
+대시보드 배너는 기존 파란색 제품 색상 체계를 사용한다. 전구 아이콘, 기능 제안을 요청하는 짧은 문장, `기능 제안하기` 기본 버튼으로 구성한다. 운영 현황 카드보다 시각적 우선순위가 낮아야 하며 모바일에서도 버튼과 문구가 겹치지 않아야 한다.
 
-## State and data flow
+## 상태와 데이터 흐름
 
-`AppShell` owns the desktop collapsed state because it controls both the sidebar and main grid. It reads a versioned local-storage key defensively, falls back to expanded mode, and writes only after a user toggle. The state is passed to `Sidebar`; no server data or API change is required.
+`AppShell`이 사이드바와 본문 그리드를 함께 제어하므로 데스크톱 접기 상태도 `AppShell`에서 관리한다. 버전이 포함된 로컬 저장소 키를 안전하게 읽고, 값이 없거나 잘못된 경우 펼친 상태를 기본값으로 사용한다. 사용자가 접기 버튼을 누른 뒤에만 상태를 저장한다. 이 상태를 `Sidebar`에 전달하며 서버 데이터나 API는 변경하지 않는다.
 
-`SupportPage` derives its initial category from the `category` query parameter. Only the supported `feature` value is preselected for this entry point; unknown values fall back to the existing empty selection. The form section has a stable anchor and is scrolled into view after navigation.
+`SupportPage`는 `category` 검색 매개변수에서 최초 문의 유형을 결정한다. 기능 제안 진입점에서 사용하는 `feature` 값만 자동 선택 대상으로 인정하고, 알 수 없는 값은 기존처럼 선택되지 않은 상태로 처리한다. 문의 작성 영역에 고정 앵커를 추가하고 화면 이동 후 해당 영역이 보이도록 스크롤한다.
 
-## Accessibility and responsive behavior
+## 접근성과 반응형 동작
 
-- The collapse button reports `aria-expanded` and a descriptive Korean label.
-- Collapsed navigation links retain accessible names even when visible text is hidden.
-- Keyboard focus styling remains visible.
-- Desktop grid width follows the sidebar state without overlaying content.
-- At the existing mobile breakpoint, the persistent desktop state does not alter the mobile drawer.
+- 접기 버튼은 `aria-expanded`와 명확한 한글 접근성 이름을 제공한다.
+- 사이드바가 접혀 메뉴명이 화면에서 숨겨져도 링크의 접근성 이름은 유지한다.
+- 키보드 초점 표시를 계속 제공한다.
+- 데스크톱 본문 너비는 사이드바 상태에 맞춰 변경되며 사이드바와 겹치지 않는다.
+- 기존 모바일 분기점에서는 저장된 데스크톱 접기 상태가 모바일 메뉴에 영향을 주지 않는다.
 
-## Verification
+## 검증 기준
 
-- Component test: all visible navigation destinations render icons and retain accessible link names.
-- Component test: toggling collapse changes the desktop state and persists it across a remount.
-- Component test: `/support?category=feature` preselects `기능 건의`; a normal `/support` visit remains unselected.
-- Dashboard test: the feature-suggestion link has the expected destination.
-- Browser test: desktop expand/collapse, reload persistence, active route, dashboard banner navigation, selected support category, and mobile menu behavior.
+- 컴포넌트 테스트: 표시되는 모든 이동 메뉴에 아이콘이 있고 링크의 접근성 이름이 유지된다.
+- 컴포넌트 테스트: 접기 버튼을 누르면 데스크톱 상태가 변경되고 컴포넌트를 다시 열어도 저장 상태가 복원된다.
+- 컴포넌트 테스트: `/support?category=feature`에서는 `기능 건의`가 선택되고 일반 `/support`에서는 선택되지 않는다.
+- 대시보드 테스트: 기능 제안 링크가 지정된 고객센터 주소를 사용한다.
+- 브라우저 테스트: 데스크톱 접기·펼치기, 새로고침 후 상태 유지, 현재 메뉴 표시, 배너 이동, 고객센터 문의 유형 선택, 모바일 메뉴 동작을 확인한다.
 
-## Out of scope
+## 제외 범위
 
-- Hover-to-expand behavior.
-- Per-user server-side sidebar preferences.
-- Redesigning dashboard cards, customer-support history, or the mobile navigation hierarchy.
+- 마우스를 올렸을 때 자동으로 펼치는 동작
+- 사용자 계정별 서버 저장 방식의 사이드바 설정
+- 대시보드 카드, 고객센터 문의 내역 또는 모바일 메뉴 구조의 전면 재설계
