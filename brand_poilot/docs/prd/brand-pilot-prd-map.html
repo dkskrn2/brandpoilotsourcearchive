@@ -1,0 +1,1144 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Brand Pilot 제품 구조와 기능 보존 지도</title>
+  <style>
+    :root {
+      --ink: #172126;
+      --muted: #66737a;
+      --line: #dce3e0;
+      --paper: #f6f7f3;
+      --card: #ffffff;
+      --brand: #ff5b35;
+      --brand-soft: #fff0e9;
+      --navy: #243c48;
+      --mint: #dff3e9;
+      --blue: #e8f0ff;
+      --yellow: #fff2bf;
+      --pink: #f9e7ef;
+      --shadow: 0 18px 42px rgba(37, 49, 53, .08);
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 0%, rgba(255, 91, 53, .10), transparent 27rem),
+        radial-gradient(circle at 100% 16%, rgba(57, 126, 112, .08), transparent 30rem),
+        var(--paper);
+      font-family: Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", system-ui, sans-serif;
+      line-height: 1.55;
+    }
+
+    button, select { font: inherit; }
+
+    .page {
+      width: min(1440px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 36px 0 80px;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--brand);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .hero {
+      overflow: hidden;
+      position: relative;
+      padding: clamp(28px, 5vw, 64px);
+      border: 1px solid rgba(255, 255, 255, .65);
+      border-radius: 30px;
+      color: white;
+      background:
+        linear-gradient(120deg, rgba(255,255,255,.06), transparent 45%),
+        var(--navy);
+      box-shadow: var(--shadow);
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      right: -90px;
+      bottom: -130px;
+      width: 360px;
+      height: 360px;
+      border: 64px solid rgba(255, 91, 53, .8);
+      border-radius: 50%;
+    }
+
+    .hero > * { position: relative; z-index: 1; }
+
+    .hero h1 {
+      max-width: 980px;
+      margin: 0;
+      font-size: clamp(34px, 6vw, 76px);
+      line-height: 1.03;
+      letter-spacing: -.055em;
+    }
+
+    .hero .summary {
+      max-width: 900px;
+      margin: 24px 0 0;
+      color: #dfe9e8;
+      font-size: clamp(16px, 2vw, 21px);
+    }
+
+    .hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px;
+      margin-top: 32px;
+    }
+
+    .hero-meta span {
+      padding: 8px 12px;
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 999px;
+      background: rgba(255,255,255,.08);
+      color: #edf4f3;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .doc-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px;
+      margin-top: 14px;
+    }
+
+    .doc-links a {
+      padding: 8px 12px;
+      border-radius: 10px;
+      color: white;
+      background: var(--brand);
+      font-size: 12px;
+      font-weight: 850;
+      text-decoration: none;
+    }
+
+    .doc-links a:last-child {
+      color: var(--ink);
+      background: white;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 18px 0 56px;
+    }
+
+    .stat {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255,255,255,.78);
+      backdrop-filter: blur(12px);
+    }
+
+    .stat strong {
+      display: block;
+      font-size: 30px;
+      letter-spacing: -.04em;
+    }
+
+    .stat span { color: var(--muted); font-size: 13px; }
+
+    section { margin-top: 72px; }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(0, .72fr) minmax(320px, 1fr);
+      gap: 36px;
+      align-items: end;
+      margin-bottom: 24px;
+    }
+
+    .section-head h2 {
+      margin: 0;
+      font-size: clamp(28px, 4vw, 48px);
+      line-height: 1.08;
+      letter-spacing: -.045em;
+    }
+
+    .section-head p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .foundation {
+      padding: 26px;
+      border: 2px solid var(--brand);
+      border-radius: 24px;
+      background: linear-gradient(125deg, var(--brand-soft), white 60%);
+      box-shadow: var(--shadow);
+    }
+
+    .foundation-header {
+      display: flex;
+      gap: 18px;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .foundation h3 { margin: 0; font-size: 28px; letter-spacing: -.035em; }
+    .foundation p { max-width: 760px; margin: 7px 0 0; color: #6c4a3f; }
+
+    .label {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      color: #8a2e17;
+      background: #ffd6c8;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .foundation-grid {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 9px;
+      margin-top: 22px;
+    }
+
+    .foundation-grid div {
+      min-height: 86px;
+      padding: 13px;
+      border: 1px solid rgba(255,91,53,.22);
+      border-radius: 14px;
+      background: rgba(255,255,255,.78);
+      font-size: 13px;
+      font-weight: 750;
+    }
+
+    .foundation-grid small {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    .loop {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      position: relative;
+      margin-top: 18px;
+    }
+
+    .loop-card {
+      position: relative;
+      min-height: 190px;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: white;
+      box-shadow: 0 10px 28px rgba(37,49,53,.05);
+    }
+
+    .loop-card:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      top: 50%;
+      right: -22px;
+      z-index: 3;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      color: white;
+      background: var(--navy);
+      display: grid;
+      place-items: center;
+      transform: translateY(-50%);
+      font-weight: 900;
+    }
+
+    .loop-index {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 11px;
+      color: white;
+      background: var(--navy);
+      font-weight: 900;
+    }
+
+    .loop-card h3 { margin: 17px 0 7px; font-size: 20px; }
+    .loop-card p { margin: 0; color: var(--muted); font-size: 14px; }
+
+    .return {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+      margin: 14px auto 0;
+      padding: 11px;
+      border: 1px dashed #7ea399;
+      border-radius: 14px;
+      color: #315f55;
+      background: var(--mint);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .service-grid {
+      display: grid;
+      grid-template-columns: 1.3fr .85fr .85fr;
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .service-card {
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: white;
+    }
+
+    .service-card.primary { background: var(--blue); border-color: #c8d8f3; }
+    .service-card.platform { background: #eef0f2; }
+    .service-card h3 { margin: 0 0 6px; font-size: 19px; }
+    .service-card p { margin: 0; color: var(--muted); font-size: 14px; }
+
+    .wizard {
+      padding: 26px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: white;
+      box-shadow: var(--shadow);
+    }
+
+    .wizard-flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 22px;
+    }
+
+    .wizard-step {
+      min-height: 154px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #f9faf8;
+    }
+
+    .wizard-step strong {
+      display: block;
+      margin: 11px 0 6px;
+      line-height: 1.3;
+    }
+
+    .wizard-step p { margin: 0; color: var(--muted); font-size: 12px; }
+
+    .wizard-step.focus {
+      border: 2px solid var(--brand);
+      background: var(--brand-soft);
+      transform: translateY(-6px);
+      box-shadow: 0 12px 24px rgba(255,91,53,.13);
+    }
+
+    .wizard-step .number {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: .1em;
+    }
+
+    .one-time-note {
+      margin: 18px 0 0;
+      padding: 14px 16px;
+      border-left: 5px solid var(--brand);
+      border-radius: 8px 14px 14px 8px;
+      background: #fff8f5;
+      color: #713c2d;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .taxonomy {
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: white;
+    }
+
+    .taxonomy.info { border-top: 6px solid #3b72c4; }
+    .taxonomy.marketing { border-top: 6px solid var(--brand); }
+    .taxonomy h3 { margin: 0; font-size: 24px; }
+    .taxonomy > p { color: var(--muted); }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 16px;
+    }
+
+    .chip {
+      padding: 7px 10px;
+      border-radius: 999px;
+      color: #3c4a4f;
+      background: #eef2f0;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .reference-grid {
+      display: grid;
+      grid-template-columns: 1.15fr .85fr;
+      gap: 14px;
+    }
+
+    .reference-card {
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: white;
+    }
+
+    .reference-card h3 { margin: 0 0 12px; font-size: 22px; }
+    .reference-card ul { margin: 0; padding-left: 20px; color: var(--muted); }
+    .reference-card li + li { margin-top: 7px; }
+
+    .trust {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .trust div {
+      padding: 16px;
+      border-radius: 14px;
+      background: #f6f8f7;
+    }
+
+    .trust strong { display: block; margin-bottom: 5px; font-size: 13px; }
+    .trust span { color: var(--muted); font-size: 12px; }
+
+    .feature-board {
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: rgba(255,255,255,.88);
+      box-shadow: var(--shadow);
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      padding: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .toolbar label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .toolbar select {
+      min-height: 40px;
+      padding: 0 34px 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      color: var(--ink);
+      background: white;
+    }
+
+    .toolbar .result-count {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .legend {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      padding: 18px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfa;
+    }
+
+    .legend strong { display: block; margin-bottom: 7px; font-size: 12px; }
+    .legend p { margin: 0; color: var(--muted); font-size: 11px; }
+
+    .feature-groups { padding: 18px; }
+
+    .feature-group + .feature-group { margin-top: 26px; }
+
+    .feature-group-head {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .feature-group-head h3 { margin: 0; font-size: 20px; }
+    .feature-group-head span { color: var(--muted); font-size: 12px; }
+
+    .feature-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .feature {
+      padding: 15px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: white;
+    }
+
+    .feature h4 { margin: 0 0 9px; font-size: 14px; }
+
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+
+    .badge {
+      display: inline-flex;
+      padding: 4px 7px;
+      border-radius: 7px;
+      font-size: 10px;
+      font-weight: 850;
+    }
+
+    .badge.impl { background: var(--blue); color: #315c99; }
+    .badge.activation { background: var(--yellow); color: #705b12; }
+    .badge.change { background: var(--mint); color: #285f50; }
+    .badge.hide { background: var(--pink); color: #873b5d; }
+
+    .empty {
+      padding: 40px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .excluded {
+      padding: 28px;
+      border-radius: 24px;
+      color: #f7fbfa;
+      background: #283238;
+    }
+
+    .excluded h3 { margin: 0; font-size: 25px; }
+    .excluded p { max-width: 920px; color: #bdc9c8; }
+    .excluded .chip { color: #dce6e4; background: rgba(255,255,255,.09); }
+
+    .decision {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .decision > div {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: white;
+    }
+
+    .decision h3 { margin: 0 0 8px; font-size: 18px; }
+    .decision p { margin: 0; color: var(--muted); font-size: 14px; }
+
+    footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      margin-top: 60px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    @media (max-width: 1100px) {
+      .foundation-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .loop { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .loop-card::after { display: none !important; }
+      .wizard-flow { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .service-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 760px) {
+      .page { width: min(100% - 22px, 1440px); padding-top: 12px; }
+      .hero { border-radius: 22px; padding: 26px 22px; }
+      .hero::after { display: none; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .section-head { grid-template-columns: 1fr; gap: 12px; }
+      .foundation-header { display: block; }
+      .foundation .label { margin-top: 12px; }
+      .foundation-grid,
+      .loop,
+      .wizard-flow,
+      .two-col,
+      .reference-grid,
+      .trust,
+      .feature-list,
+      .legend,
+      .decision { grid-template-columns: 1fr; }
+      .wizard-step.focus { transform: none; }
+      .toolbar .result-count { width: 100%; margin: 4px 0 0; }
+      footer { display: block; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <p class="eyebrow">Brand Pilot · Product Direction</p>
+      <h1>브랜드 지식에서 시작해<br>콘텐츠·게시·응대·학습으로</h1>
+      <p class="summary">
+        브랜드 정보를 한 번 정리하면 시장과 참고 브랜드를 분석해 정보성·마케팅성 콘텐츠를 지속적으로 제안·제작하고,
+        게시와 Instagram DM 고객응대, 성과 학습까지 연결하는 브랜드 운영 시스템입니다.
+      </p>
+      <div class="hero-meta">
+        <span>2026-07-24 승인 방향</span>
+        <span>기존 기능 보존 우선</span>
+        <span>정적 콘텐츠 범위</span>
+        <span>레퍼런스·아바타 1회 선택</span>
+      </div>
+      <nav class="doc-links" aria-label="관련 문서">
+        <a href="brand-pilot-feature-preservation-ledger.md">상세 기능 보존표</a>
+        <a href="../superpowers/specs/2026-07-24-brand-reference-content-operating-system-design.md">마스터 설계 문서</a>
+      </nav>
+    </header>
+
+    <div class="stats">
+      <div class="stat"><strong id="moduleCount">8</strong><span>제품·운영 모듈</span></div>
+      <div class="stat"><strong id="featureCount">0</strong><span>압축 기능 묶음</span></div>
+      <div class="stat"><strong>90±</strong><span>상세 기능 보존 항목</span></div>
+      <div class="stat"><strong>1회</strong><span>생성 중 레퍼런스 선택</span></div>
+    </div>
+
+    <section>
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Operating Model</p>
+          <h2>단계가 아니라 기반과 순환</h2>
+        </div>
+        <p>
+          브랜드 센터는 “1단계”가 아닙니다. 콘텐츠 생성, Instagram 고객응대, 성과 개선이 함께 참조하는 공통 기반입니다.
+          실제 마케팅 흐름만 탐색 → 제작 → 게시 → 학습으로 순환합니다.
+        </p>
+      </div>
+
+      <div class="foundation">
+        <div class="foundation-header">
+          <div>
+            <h3>브랜드 센터</h3>
+            <p>AI가 원본을 분석해 초안을 채우고, 사용자가 검토·수정·승인한 정보만 실행 기준이 됩니다.</p>
+          </div>
+          <span class="label">모든 AI 기능의 공통 기반</span>
+        </div>
+        <div class="foundation-grid">
+          <div>원본 자료<small>URL·문서·이미지·SNS</small></div>
+          <div>AI 브랜드 분석<small>근거·신뢰도·정보 공백</small></div>
+          <div>승인 Brand Core<small>사실·타깃·차별점</small></div>
+          <div>방향성·실행 규칙<small>메시지·톤·CTA·금지</small></div>
+          <div>제품·서비스<small>사실·효익·근거·자산</small></div>
+          <div>공유 Wiki<small>FAQ·정책·상세 지식</small></div>
+          <div>모델·아바타<small>정적 콘텐츠용 재사용 자산</small></div>
+        </div>
+      </div>
+
+      <div class="loop">
+        <article class="loop-card">
+          <span class="loop-index">1</span>
+          <h3>탐색·레퍼런스</h3>
+          <p>트렌드, 참고 브랜드와 콘텐츠를 수집·분석해 검색 가능한 레퍼런스로 보관합니다.</p>
+        </article>
+        <article class="loop-card">
+          <span class="loop-index">2</span>
+          <h3>기획·콘텐츠 제작</h3>
+          <p>정보성·마케팅성 목적, 타깃, 전략, 형식을 정하고 정적 콘텐츠를 생성합니다.</p>
+        </article>
+        <article class="loop-card">
+          <span class="loop-index">3</span>
+          <h3>검토·게시</h3>
+          <p>브랜드 규칙과 사실을 검사하고 실제 지원되는 채널에 안전하게 게시합니다.</p>
+        </article>
+        <article class="loop-card">
+          <span class="loop-index">4</span>
+          <h3>성과·학습</h3>
+          <p>전략·형식·후크·소구점의 성과를 비교해 다음 콘텐츠 제안을 개선합니다.</p>
+        </article>
+      </div>
+      <div class="return">↩ 성과와 최근 사용 이력이 다음 콘텐츠 제안으로 돌아갑니다</div>
+
+      <div class="service-grid">
+        <article class="service-card primary">
+          <h3>Instagram 고객응대 ↔ Wiki 개선</h3>
+          <p>Brand Core·제품·Wiki에 근거해 자동답변하고, 지식이 부족한 질문은 사람 확인과 Wiki 개선 후보로 돌립니다.</p>
+        </article>
+        <article class="service-card">
+          <h3>지원·계정</h3>
+          <p>고객센터, 피드백 팝업, 화면 도움말, 로그인과 사용량을 관리합니다.</p>
+        </article>
+        <article class="service-card platform">
+          <h3>관리자·운영</h3>
+          <p>채널, 게시 복구, 워커, 감사 로그, 배포와 복원을 운영합니다.</p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Creation Flow</p>
+          <h2>선택은 한 번, 추천은 계속</h2>
+        </div>
+        <p>
+          앞 단계의 선택은 레퍼런스 추천을 정교하게 만들지만 사용자가 여러 화면에서 같은 자료를 반복 선택하지는 않습니다.
+          현재 위저드의 STEP 4 단일 선택 구조를 보존하고 아바타와 역할 지정을 그 화면에 합칩니다.
+        </p>
+      </div>
+
+      <div class="wizard">
+        <div class="wizard-flow">
+          <article class="wizard-step">
+            <span class="number">STEP 1</span>
+            <strong>콘텐츠 방향</strong>
+            <p>정보성·마케팅성, 목적, 제작 형식</p>
+          </article>
+          <article class="wizard-step">
+            <span class="number">STEP 2</span>
+            <strong>주제·제품 분석</strong>
+            <p>주제, Wiki, 제품·서비스, 근거 자료</p>
+          </article>
+          <article class="wizard-step">
+            <span class="number">STEP 3</span>
+            <strong>타깃·소구점·전략</strong>
+            <p>타깃 최대 3개, 소구점, 메시지 전략 제안</p>
+          </article>
+          <article class="wizard-step focus">
+            <span class="number">STEP 4 · ONE TIME</span>
+            <strong>레퍼런스·아바타</strong>
+            <p>레퍼런스 0~5개, 역할, 아바타 0~1개</p>
+          </article>
+          <article class="wizard-step">
+            <span class="number">STEP 5</span>
+            <strong>Brief·생성</strong>
+            <p>추가 지시, CTA, 색상, 비율, 결과 수</p>
+          </article>
+        </div>
+        <p class="one-time-note">
+          확정 원칙: 생성 과정에서 레퍼런스·아바타 선택 화면은 정확히 한 번만 등장합니다.
+          선택하지 않고 Brand Core·제품·Wiki만으로 생성하는 것도 허용합니다.
+        </p>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Content Taxonomy</p>
+          <h2>목적, 전략, 형식을 분리</h2>
+        </div>
+        <p>
+          `정보성/마케팅성`은 콘텐츠 계열, 문제 해결·후기·USP 등은 메시지 전략,
+          카드뉴스·블로그·단일 이미지는 제작 형식입니다. 카피는 모든 결과물의 출력 구조입니다.
+        </p>
+      </div>
+      <div class="two-col">
+        <article class="taxonomy info">
+          <h3>정보성 콘텐츠</h3>
+          <p>고객이 이해하고 판단하는 데 도움을 주며 신뢰와 저장 가치를 만듭니다.</p>
+          <div class="chips">
+            <span class="chip">문제 해결·사용법</span>
+            <span class="chip">비교·선택 가이드</span>
+            <span class="chip">FAQ·오해 해소</span>
+            <span class="chip">트렌드·시장 인사이트</span>
+            <span class="chip">사례·데이터</span>
+          </div>
+        </article>
+        <article class="taxonomy marketing">
+          <h3>마케팅성 콘텐츠</h3>
+          <p>제품·서비스의 검증된 효익을 특정 고객과 상황에 연결해 행동을 유도합니다.</p>
+          <div class="chips">
+            <span class="chip">고객 문제·사용 상황</span>
+            <span class="chip">효익·USP</span>
+            <span class="chip">후기·신뢰</span>
+            <span class="chip">대안 비교</span>
+            <span class="chip">프로모션·CTA</span>
+            <span class="chip">브랜드 스토리</span>
+          </div>
+        </article>
+      </div>
+      <div class="decision">
+        <div>
+          <h3>현재 제작 형식</h3>
+          <p>카드뉴스 · 블로그 · 단일 이미지 · 채널용 텍스트</p>
+        </div>
+        <div>
+          <h3>공통 카피 구조</h3>
+          <p>Hook · 핵심 주장/인사이트 · 근거 · 본문 · CTA · 캡션 · 해시태그</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Reference System</p>
+          <h2>검색 가능한 영감, 분리된 사실</h2>
+        </div>
+        <p>
+          SNIPIT형 탐색의 장점은 참고하되 거대한 광고 데이터베이스로 확장하지 않습니다.
+          저장한 브랜드와 콘텐츠를 Brand Pilot의 생성 흐름에 바로 사용할 수 있는 정도로 단순화합니다.
+        </p>
+      </div>
+      <div class="reference-grid">
+        <article class="reference-card">
+          <h3>레퍼런스 보관함</h3>
+          <ul>
+            <li>저장한 브랜드와 개별 콘텐츠</li>
+            <li>Instagram 트렌드와 외부 URL</li>
+            <li>자사 성과 우수 콘텐츠와 이전 생성 자료</li>
+            <li>직접 업로드 이미지, 제품 이미지, 모델·아바타</li>
+            <li>전체 · 저장 브랜드 · 저장 콘텐츠 · 최근 사용 · 즐겨찾기 보기</li>
+          </ul>
+          <div class="chips">
+            <span class="chip">AI 추천</span>
+            <span class="chip">브랜드별</span>
+            <span class="chip">전략별</span>
+            <span class="chip">보관함</span>
+            <span class="chip">최근 사용</span>
+            <span class="chip">직접 추가</span>
+          </div>
+        </article>
+        <article class="reference-card">
+          <h3>모델·아바타 보관함</h3>
+          <ul>
+            <li>이름과 대표 이미지</li>
+            <li>추가 참고 이미지 1~5장</li>
+            <li>외형·스타일 설명</li>
+            <li>기본 아바타와 활성·비활성</li>
+            <li>기존 선택 · 업로드 후 저장 · 이번 생성만 · 사용 안 함</li>
+          </ul>
+        </article>
+      </div>
+      <div class="trust">
+        <div>
+          <strong>사실 컨텍스트</strong>
+          <span>승인 Brand Core + 승인 제품·서비스 + 활성 Wiki</span>
+        </div>
+        <div>
+          <strong>창작 참고 컨텍스트</strong>
+          <span>참고 브랜드 + 트렌드 + 외부 URL + 자사 우수 콘텐츠</span>
+        </div>
+        <div>
+          <strong>시각 자산 컨텍스트</strong>
+          <span>제품 이미지 + 브랜드 이미지 + 선택한 아바타</span>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Feature Ledger</p>
+          <h2>현재 코드와 목표 제품을 함께 보기</h2>
+        </div>
+        <p>
+          각 기능은 구현 상태, 운영 활성화, 이번 변경 판단을 따로 표시합니다.
+          “코드가 있음”, “첫 배포에서 켜짐”, “사용자에게 노출함”은 서로 다른 사실입니다.
+        </p>
+      </div>
+      <div class="feature-board">
+        <div class="toolbar">
+          <label for="moduleFilter">모듈</label>
+          <select id="moduleFilter">
+            <option value="all">전체 모듈</option>
+          </select>
+          <label for="changeFilter">변경 판단</label>
+          <select id="changeFilter">
+            <option value="all">전체 판단</option>
+            <option value="preserve">유지</option>
+            <option value="move">이동·재분류</option>
+            <option value="enhance">고도화</option>
+            <option value="new">신규</option>
+            <option value="hide">사용자 화면 제외</option>
+          </select>
+          <span class="result-count" id="resultCount"></span>
+        </div>
+        <div class="legend">
+          <div>
+            <strong>1. 구현 상태</strong>
+            <p>구현 완료 · 부분 구현 · 신규 설계 · 기술 기반만 존재</p>
+          </div>
+          <div>
+            <strong>2. 운영 활성화</strong>
+            <p>사용 중 · 외부 설정 필요 · 첫 배포 비활성 · 구현 후 활성</p>
+          </div>
+          <div>
+            <strong>3. 변경 판단</strong>
+            <p>유지 · 이동 · 고도화 · 신규 · 사용자 화면 제외</p>
+          </div>
+        </div>
+        <div class="feature-groups" id="featureGroups"></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="excluded">
+        <h3>현재 제품 범위에서 제외</h3>
+        <p>
+          아래 항목은 지금 만들지 않습니다. 기존 저장소에 관련 기술 기반이 있다면 삭제하지 않고 휴면 상태로 보존하되,
+          메뉴·자동 제안·생성 형식에서 현재 지원 기능처럼 노출하지 않습니다.
+        </p>
+        <div class="chips" id="exclusions"></div>
+      </div>
+      <div class="decision">
+        <div>
+          <h3>`/archive` 명칭 보정</h3>
+          <p>현재는 생성 콘텐츠 보관함이 아니라 Instagram 트렌드 북마크입니다. 생성 결과 목록과 레퍼런스 보관함을 분리합니다.</p>
+        </div>
+        <div>
+          <h3>채널 능력 보정</h3>
+          <p>6개 채널 카탈로그와 실제 API 게시 능력을 분리합니다. 현재 실제 퍼블리셔는 Instagram 중심입니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <span>Brand Pilot product map · design baseline before implementation planning</span>
+      <span>상세 기준: brand-pilot-feature-preservation-ledger.md</span>
+    </footer>
+  </main>
+
+  <script>
+    const modules = [
+      { id: "brand", title: "브랜드 센터" },
+      { id: "discover", title: "탐색·레퍼런스" },
+      { id: "create", title: "기획·콘텐츠 제작" },
+      { id: "publish", title: "검토·게시" },
+      { id: "engage", title: "Instagram 고객응대" },
+      { id: "learn", title: "성과·학습" },
+      { id: "support", title: "지원·계정" },
+      { id: "operate", title: "관리자·운영" }
+    ];
+
+    const stateLabels = {
+      implementation: {
+        implemented: "구현 완료",
+        partial: "부분 구현",
+        planned: "신규 설계",
+        dormant: "기술 기반만 존재"
+      },
+      activation: {
+        active: "사용 중",
+        external_setup: "외부 설정 필요",
+        first_deploy_off: "첫 배포 비활성",
+        after_build: "구현 후 활성",
+        not_applicable: "해당 없음"
+      },
+      change: {
+        preserve: "유지",
+        move: "이동·재분류",
+        enhance: "고도화",
+        new: "신규",
+        hide: "사용자 화면 제외"
+      }
+    };
+
+    const features = [
+      ["brand", "로그인·온보딩·브랜드 준비 게이트", "implemented", "external_setup", "preserve"],
+      ["brand", "원본 자료·근거와 AI 브랜드 분석", "implemented", "active", "enhance"],
+      ["brand", "사용자 검토·승인 Brand Core", "partial", "active", "enhance"],
+      ["brand", "톤·금지 문구·CTA·자동 승인 실행 규칙", "implemented", "active", "move"],
+      ["brand", "브랜드 방향성과 콘텐츠 운영 전략", "planned", "after_build", "new"],
+      ["brand", "제품·서비스 보관함", "partial", "active", "enhance"],
+      ["brand", "Wiki·FAQ·정책 지식", "implemented", "first_deploy_off", "move"],
+      ["brand", "모델·아바타 보관함", "planned", "after_build", "new"],
+
+      ["discover", "소스·크롤링·주제 파일 처리", "implemented", "active", "preserve"],
+      ["discover", "Instagram 트렌드 검색·관련도·검색 이력", "implemented", "external_setup", "preserve"],
+      ["discover", "트렌드·참고 콘텐츠 보관함", "implemented", "external_setup", "move"],
+      ["discover", "참고 브랜드 등록·콘텐츠 수집", "planned", "external_setup", "new"],
+      ["discover", "브랜드·콘텐츠 패턴 분석", "planned", "after_build", "new"],
+      ["discover", "통합 레퍼런스 보관함", "partial", "active", "enhance"],
+      ["discover", "자사 우수 콘텐츠·외부 URL 추천", "partial", "active", "enhance"],
+
+      ["create", "정보성·마케팅성 콘텐츠 계열", "planned", "after_build", "enhance"],
+      ["create", "메시지 전략 최대 3안 제안", "planned", "after_build", "new"],
+      ["create", "주제·제품·서비스 분석", "implemented", "first_deploy_off", "preserve"],
+      ["create", "타깃 3종·타깃별 소구점", "implemented", "first_deploy_off", "preserve"],
+      ["create", "카드뉴스·블로그·단일 이미지·채널 텍스트", "implemented", "first_deploy_off", "move"],
+      ["create", "레퍼런스·아바타 한 번 선택", "partial", "active", "enhance"],
+      ["create", "생성 당시 근거·레퍼런스 스냅샷", "implemented", "active", "enhance"],
+      ["create", "생성·변형·미리보기·다운로드", "implemented", "first_deploy_off", "preserve"],
+      ["create", "일일 콘텐츠 제안·자동 생성", "partial", "first_deploy_off", "enhance"],
+      ["create", "Reel·영상 사용자 제작", "dormant", "not_applicable", "hide"],
+
+      ["publish", "채널 연결과 실제 게시 가능 상태", "partial", "external_setup", "enhance"],
+      ["publish", "승인·거절·재생성·자동 승인 정책", "implemented", "active", "preserve"],
+      ["publish", "게시 큐·예약·재시도·전송 불명 복구", "implemented", "first_deploy_off", "preserve"],
+      ["publish", "Instagram 정적 피드·캐러셀·스토리", "implemented", "first_deploy_off", "preserve"],
+      ["publish", "Threads 텍스트 준비", "partial", "external_setup", "enhance"],
+
+      ["engage", "Instagram 연결·Webhook·서명·중복 방지", "implemented", "external_setup", "preserve"],
+      ["engage", "DM 준비도·자동답변 ON/OFF", "implemented", "first_deploy_off", "enhance"],
+      ["engage", "FAQ·Brand Core·Wiki·제품 기반 답변", "implemented", "first_deploy_off", "preserve"],
+      ["engage", "금지 요청 차단·사람 전환·중지·재개", "implemented", "first_deploy_off", "preserve"],
+      ["engage", "대화함·수동답변·전송 상태·감사 이력", "implemented", "first_deploy_off", "preserve"],
+
+      ["learn", "운영 대시보드", "implemented", "active", "move"],
+      ["learn", "콘텐츠 성과와 24h·72h·7d 스냅샷", "implemented", "first_deploy_off", "preserve"],
+      ["learn", "전략·형식·후크·소구점 성과 비교", "partial", "first_deploy_off", "enhance"],
+      ["learn", "DM 지식 공백을 Wiki 개선 후보로 연결", "partial", "first_deploy_off", "enhance"],
+      ["learn", "성과 기반 다음 콘텐츠 추천", "planned", "after_build", "new"],
+
+      ["support", "고객센터·답변·피드백 팝업·화면 도움말", "implemented", "active", "preserve"],
+      ["support", "로그인·세션·Kakao 연결", "implemented", "external_setup", "preserve"],
+      ["support", "사용량·결제 진입", "partial", "external_setup", "preserve"],
+
+      ["operate", "관리자 브랜드·채널·게시 복구 콘솔", "implemented", "external_setup", "preserve"],
+      ["operate", "DM·Wiki·워커·감사 로그 모니터링", "implemented", "first_deploy_off", "preserve"],
+      ["operate", "API 준비도·인증·보안 경계", "partial", "external_setup", "enhance"],
+      ["operate", "Docker·HTTPS·배포·롤백·복구", "implemented", "external_setup", "preserve"]
+    ];
+
+    const scopeExclusions = [
+      "Reel·동영상 생성",
+      "동영상 Story 생성",
+      "YouTube Shorts·TikTok 영상 제작",
+      "AI 아바타 생성·얼굴 교체·음성 복제",
+      "크리에이터·인플루언서 마켓플레이스",
+      "전 세계 광고 데이터베이스",
+      "실시간 대규모 경쟁사 감시",
+      "기간성 오퍼 보관함",
+      "복잡한 팀 보드·승인 댓글",
+      "댓글→DM·스토리 반응 자동화",
+      "광고 매체비 집행·자동 최적화",
+      "범용 이미지·영상 편집기"
+    ];
+
+    const moduleFilter = document.querySelector("#moduleFilter");
+    const changeFilter = document.querySelector("#changeFilter");
+    const featureGroups = document.querySelector("#featureGroups");
+    const resultCount = document.querySelector("#resultCount");
+
+    modules.forEach((module) => {
+      const option = document.createElement("option");
+      option.value = module.id;
+      option.textContent = module.title;
+      moduleFilter.appendChild(option);
+    });
+
+    document.querySelector("#moduleCount").textContent = modules.length;
+    document.querySelector("#featureCount").textContent = features.length;
+
+    const exclusionRoot = document.querySelector("#exclusions");
+    scopeExclusions.forEach((name) => {
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      chip.textContent = name;
+      exclusionRoot.appendChild(chip);
+    });
+
+    function renderFeatures() {
+      const moduleValue = moduleFilter.value;
+      const changeValue = changeFilter.value;
+      const visible = features.filter(([moduleId, , , , change]) => {
+        return (moduleValue === "all" || moduleValue === moduleId)
+          && (changeValue === "all" || changeValue === change);
+      });
+
+      featureGroups.replaceChildren();
+      resultCount.textContent = `${visible.length}개 기능 묶음`;
+
+      if (!visible.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "선택한 조건에 해당하는 기능이 없습니다.";
+        featureGroups.appendChild(empty);
+        return;
+      }
+
+      modules.forEach((module) => {
+        const rows = visible.filter(([moduleId]) => moduleId === module.id);
+        if (!rows.length) return;
+
+        const group = document.createElement("section");
+        group.className = "feature-group";
+
+        const head = document.createElement("div");
+        head.className = "feature-group-head";
+        const title = document.createElement("h3");
+        title.textContent = module.title;
+        const count = document.createElement("span");
+        count.textContent = `${rows.length}개`;
+        head.append(title, count);
+
+        const list = document.createElement("div");
+        list.className = "feature-list";
+
+        rows.forEach(([, name, implementation, activation, change]) => {
+          const item = document.createElement("article");
+          item.className = "feature";
+          const itemTitle = document.createElement("h4");
+          itemTitle.textContent = name;
+
+          const badges = document.createElement("div");
+          badges.className = "badges";
+
+          const implBadge = document.createElement("span");
+          implBadge.className = "badge impl";
+          implBadge.textContent = stateLabels.implementation[implementation];
+
+          const activationBadge = document.createElement("span");
+          activationBadge.className = "badge activation";
+          activationBadge.textContent = stateLabels.activation[activation];
+
+          const changeBadge = document.createElement("span");
+          changeBadge.className = `badge ${change === "hide" ? "hide" : "change"}`;
+          changeBadge.textContent = stateLabels.change[change];
+
+          badges.append(implBadge, activationBadge, changeBadge);
+          item.append(itemTitle, badges);
+          list.appendChild(item);
+        });
+
+        group.append(head, list);
+        featureGroups.appendChild(group);
+      });
+    }
+
+    moduleFilter.addEventListener("change", renderFeatures);
+    changeFilter.addEventListener("change", renderFeatures);
+    renderFeatures();
+  </script>
+</body>
+</html>

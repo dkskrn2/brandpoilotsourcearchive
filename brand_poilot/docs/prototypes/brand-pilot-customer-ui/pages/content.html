@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>콘텐츠 - Brand Pilot</title>
+  <link rel="stylesheet" href="../assets/prototype.css" />
+  <script defer src="../assets/prototype.js"></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-badge">BP</span><span>Brand Pilot</span></div>
+      <nav class="nav" aria-label="고객 메뉴">
+        <a href="onboarding.html">온보딩</a><a href="content.html" aria-current="page">콘텐츠</a><a href="publish-queue.html">게시 큐</a><a href="sources.html">소스</a><a href="channels.html">채널</a><a href="brand-settings.html">브랜드 설정</a>
+      </nav>
+    </aside>
+    <main class="main">
+      <header class="topbar"><div><strong>콘텐츠 검토</strong><span>승인된 콘텐츠만 게시 큐에 들어갑니다.</span></div><span class="badge info">검토 필요 5개</span></header>
+      <section class="content" data-tabs>
+        <div class="page-head">
+          <div><h1>콘텐츠</h1><p>하나의 주제에서 생성된 채널별 결과물을 검토합니다. 직접 수정은 제공하지 않고 승인, 재생성, 거절만 제공합니다.</p></div>
+          <div class="actions"><a class="button" href="#history">재생성 이력</a><a class="button primary" href="publish-queue.html">선택 승인</a></div>
+        </div>
+        <div class="tabs">
+          <a class="tab" aria-selected="true" href="#review" data-tab-target="review">검토 필요</a>
+          <a class="tab" aria-selected="false" href="#auto" data-tab-target="auto">자동 승인</a>
+          <a class="tab" aria-selected="false" href="#blocked" data-tab-target="blocked">자동 승인 차단</a>
+          <a class="tab" aria-selected="false" href="#regen" data-tab-target="regen">재생성 중</a>
+          <a class="tab" aria-selected="false" href="#rejected" data-tab-target="rejected">거절됨</a>
+        </div>
+        <section data-tab-panel="review" class="grid two">
+          <div class="panel">
+            <div class="panel-head"><h2>검토 목록</h2><span class="badge warn">5</span></div>
+            <div class="panel-body list">
+              <article class="row-card selected"><div class="row-top"><p class="row-title">제주 가족여행 숙소 선택법</p><span class="badge info">Instagram 카드뉴스</span></div><div class="row-meta">정방형 1:1 슬라이드 5장 · 주제표 18행 · 자사 URL 2개 사용 · 오늘 10:03 생성</div></article>
+              <article class="row-card"><div class="row-top"><p class="row-title">비 오는 날 제주 일정 짜는 방법</p><span class="badge info">Threads</span></div><div class="row-meta">주제표 21행 · 참고 URL 1개 사용</div></article>
+              <article class="row-card"><div class="row-top"><p class="row-title">첫 제주 여행자가 놓치는 이동 시간</p><span class="badge info">Webflow</span></div><div class="row-meta">주제표 22행 · 브랜드 FAQ 사용</div></article>
+            </div>
+          </div>
+          <aside class="panel">
+            <div class="panel-head"><h2>미리보기</h2><span class="badge warn">수동 승인 필요</span></div>
+            <div class="panel-body grid">
+              <div class="square-carousel-preview" aria-label="Instagram 정방형 카드뉴스 미리보기">
+                <div class="square-slide">숙소 위치가<br />여행 만족도를<br />바꿉니다</div>
+                <div class="slide-strip"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span></div>
+                <p class="muted small">Instagram 카드뉴스 · 1080 x 1080 정방형 슬라이드</p>
+              </div>
+              <div class="alert info"><strong>생성 근거</strong><span>자사 FAQ, 숙소 추천 페이지, 주제표의 target_customer 값을 사용했습니다.</span></div>
+              <div class="actions"><a class="button primary" href="publish-queue.html">승인</a><a class="button" href="#regen" data-tab-target="regen">재생성</a><a class="button danger" href="#rejected" data-tab-target="rejected">거절</a></div>
+            </div>
+          </aside>
+        </section>
+        <section data-tab-panel="auto" hidden class="panel">
+          <div class="panel-head"><h2>자동 승인 콘텐츠</h2><span class="badge auto">정책 통과</span></div>
+          <div class="panel-body">
+            <table class="table"><thead><tr><th>주제</th><th>채널</th><th>승인 근거</th><th>큐 상태</th></tr></thead><tbody><tr><td>여행 전 체크리스트</td><td>Webflow</td><td>브랜드 URL만 사용, 금지 표현 없음</td><td><span class="badge ok">큐 등록</span></td></tr></tbody></table>
+          </div>
+        </section>
+        <section data-tab-panel="blocked" hidden class="panel">
+          <div class="panel-head"><h2>자동 승인 차단</h2><span class="badge bad">2</span></div>
+          <div class="panel-body grid">
+            <div class="alert bad"><strong>외부 URL 의존도 높음</strong><span>본문 주장 대부분이 외부 참고 URL에서 나와 수동 검토가 필요합니다.</span></div>
+            <div class="alert warn"><strong>Instagram 정방형 이미지 누락</strong><span>1:1 카드뉴스 렌더링 JSON은 생성됐지만 공개 이미지 URL 업로드가 실패했습니다.</span></div>
+          </div>
+        </section>
+        <section data-tab-panel="regen" hidden class="panel"><div class="panel-head"><h2>재생성 중</h2><span class="badge warn">1개 진행</span></div><div class="panel-body"><table class="table"><thead><tr><th>주제</th><th>채널</th><th>요청 사유</th><th>상태</th></tr></thead><tbody><tr><td>비 오는 날 제주 일정</td><td>Instagram</td><td>광고 느낌 줄이고 초보자 기준으로</td><td><span class="badge warn">재생성 중</span></td></tr></tbody></table></div></section>
+        <section data-tab-panel="rejected" hidden class="empty-state"><div><h3>거절된 콘텐츠가 없습니다</h3><p>거절된 결과물은 게시 큐에 들어가지 않습니다.</p></div></section>
+        <section id="history" class="panel" style="margin-top:16px"><div class="panel-head"><h2>재생성 이력</h2><span class="badge info">최근 2건</span></div><div class="panel-body"><table class="table"><thead><tr><th>시간</th><th>주제</th><th>채널</th><th>요청 사유</th><th>상태</th></tr></thead><tbody><tr><td>오늘 10:18</td><td>비 오는 날 제주 일정</td><td>Instagram</td><td>광고 느낌 줄이기</td><td><span class="badge warn">진행 중</span></td></tr><tr><td>어제 16:22</td><td>숙소 위치 선택법</td><td>Webflow</td><td>더 전문적으로</td><td><span class="badge ok">완료</span></td></tr></tbody></table></div></section>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

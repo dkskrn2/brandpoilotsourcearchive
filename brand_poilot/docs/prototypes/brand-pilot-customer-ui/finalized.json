@@ -1,0 +1,24 @@
+{
+  "name": "Brand Pilot Customer UI Prototype",
+  "status": "consolidated-page-set",
+  "entry": "index.html",
+  "legacyEntry": "finalized.html",
+  "assets": [
+    "assets/prototype.css",
+    "assets/prototype.js"
+  ],
+  "pages": [
+    "pages/onboarding.html",
+    "pages/content.html",
+    "pages/publish-queue.html",
+    "pages/sources.html",
+    "pages/channels.html",
+    "pages/brand-settings.html"
+  ],
+  "downloads": [
+    "templates/topic-template.csv"
+  ],
+  "reactApp": "apps/customer-ui",
+  "sourcePrototype": "docs/prototypes/brand-pilot-customer-ui",
+  "conversionStatus": "implemented"
+}

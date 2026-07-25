@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "intent", "singleSubject", "readerQuestion", "corePromise", "slides", "cta", "excludedTopics", "referenceUses"],
+  "properties": {
+    "version": { "type": "string", "const": "editorial-plan.v1" },
+    "intent": { "enum": ["information", "how_to", "checklist", "comparison", "news", "update", "case_study", "promotion", "product_intro", "service_intro", "opinion"] },
+    "singleSubject": { "type": "string", "minLength": 1 },
+    "readerQuestion": { "type": "string", "minLength": 1 },
+    "corePromise": { "type": "string", "minLength": 1 },
+    "slides": {
+      "type": "array", "minItems": 1, "maxItems": 5,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["index", "role", "headline", "keyMessage", "evidenceIds"],
+        "properties": {
+          "index": { "type": "integer", "minimum": 1, "maximum": 5 },
+          "role": { "type": "string", "minLength": 1 },
+          "headline": { "type": "string", "minLength": 1 },
+          "keyMessage": { "type": "string", "minLength": 1 },
+          "evidenceIds": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+        }
+      }
+    },
+    "cta": { "type": ["string", "null"] },
+    "excludedTopics": { "type": "array", "items": { "type": "string" } },
+    "referenceUses": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["referenceId", "usage"],
+        "properties": { "referenceId": { "type": "string", "minLength": 1 }, "usage": { "type": "string", "minLength": 1 } }
+      }
+    }
+  }
+}

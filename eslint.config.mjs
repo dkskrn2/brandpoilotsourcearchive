@@ -14,6 +14,7 @@ export default defineConfig([
     "api/**",
     "lib/**",
     "tests/**",
+    "brand_poilot/**",
     "*.html",
     "service/**"
   ])

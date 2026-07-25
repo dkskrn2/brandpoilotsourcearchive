@@ -1,0 +1,27 @@
+{
+  "name": "@brand-pilot/image-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts watch",
+    "run-once": "tsx src/index.ts run-once",
+    "control": "tsx src/control/index.ts",
+    "build": "tsc --noEmit",
+    "test": "vitest run",
+    "verify:reel": "node scripts/verify-reel.mjs"
+  },
+  "dependencies": {
+    "@vercel/blob": "^2.6.1",
+    "cheerio": "^1.2.0",
+    "dotenv": "^17.2.3",
+    "ipaddr.js": "^2.4.0",
+    "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.9"
+  }
+}

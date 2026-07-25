@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+DEPLOY_SOURCE_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=lib.sh
+source "$SCRIPT_DIR/lib.sh"
+
+ROOT="${BRAND_PILOT_ROOT:-/opt/brand-pilot}"
+READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-120}"
+[[ $# -eq 3 && "$2" == "--phase" ]] || fail "usage_deploy_manifest_phase"
+MANIFEST="$1"
+PHASE="$3"
+[[ "$PHASE" == "canary" ]] || fail "use_promote_for_production"
+
+for command_name in cmp docker flock install mktemp sha256sum sync; do
+  require_command "$command_name"
+done
+
+mkdir -p -- "$ROOT/releases" "$ROOT/state"
+exec 9>"$ROOT/state/deploy.lock"
+flock -n 9 || fail "deploy_lock_busy"
+reconcile_transition_or_fail "$ROOT" "$READY_TIMEOUT_SECONDS"
+
+validate_release_manifest "$MANIFEST"
+RELEASE_SHA="${RELEASE_MANIFEST[RELEASE_SHA]}"
+CANDIDATE_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
+RELEASE_DIR="$ROOT/releases/$RELEASE_SHA"
+
+CURRENT_SHA=""
+CURRENT_API_IMAGE="$CANDIDATE_API_IMAGE"
+CURRENT_CANARY_HOST=""
+CURRENT_PRIMARY_HOST=""
+if load_optional_state_sha "$ROOT/state/current" CURRENT_SHA; then
+  validate_release_directory "$ROOT/releases/$CURRENT_SHA"
+  CURRENT_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
+  CURRENT_CANARY_HOST="${RELEASE_MANIFEST[CANARY_HOST]}"
+  CURRENT_PRIMARY_HOST="${RELEASE_MANIFEST[PRIMARY_HOST]}"
+fi
+
+PREVIOUS_CANDIDATE_SHA=""
+PREVIOUS_CANDIDATE_API_IMAGE=""
+PREVIOUS_CANDIDATE_HOST=""
+PREVIOUS_CANDIDATE_PRIMARY_HOST=""
+if load_optional_state_sha "$ROOT/state/candidate" PREVIOUS_CANDIDATE_SHA; then
+  validate_release_directory "$ROOT/releases/$PREVIOUS_CANDIDATE_SHA"
+  PREVIOUS_CANDIDATE_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
+  PREVIOUS_CANDIDATE_HOST="${RELEASE_MANIFEST[CANARY_HOST]}"
+  PREVIOUS_CANDIDATE_PRIMARY_HOST="${RELEASE_MANIFEST[PRIMARY_HOST]}"
+fi
+
+if [[ -e "$RELEASE_DIR" || -L "$RELEASE_DIR" ]]; then
+  validate_release_directory "$RELEASE_DIR"
+  cmp -s -- "$MANIFEST" "$RELEASE_DIR/release.env" || fail "immutable_release_manifest_mismatch"
+else
+  STAGING_DIR="$(mktemp -d "$ROOT/releases/.${RELEASE_SHA}.tmp.XXXXXX")"
+  cleanup_staging() {
+    rm -rf -- "$STAGING_DIR"
+  }
+  trap cleanup_staging EXIT
+  install -m 0644 "$DEPLOY_SOURCE_DIR/compose.production.yml" "$STAGING_DIR/compose.production.yml"
+  install -m 0644 "$DEPLOY_SOURCE_DIR/Caddyfile" "$STAGING_DIR/Caddyfile"
+  install -m 0644 "$DEPLOY_SOURCE_DIR/Caddyfile.canary" "$STAGING_DIR/Caddyfile.canary"
+  install -d -m 0755 "$STAGING_DIR/scripts"
+  install -m 0755 "$DEPLOY_SOURCE_DIR"/scripts/*.sh "$STAGING_DIR/scripts/"
+  install -m 0600 "$MANIFEST" "$STAGING_DIR/release.env"
+  install -m 0600 "${MANIFEST}.sha256" "$STAGING_DIR/release.env.sha256"
+  generate_release_integrity "$STAGING_DIR"
+  mv -- "$STAGING_DIR" "$RELEASE_DIR"
+  trap - EXIT
+fi
+
+validate_release_directory "$RELEASE_DIR"
+CANDIDATE_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
+CANDIDATE_CANARY_HOST="${RELEASE_MANIFEST[CANARY_HOST]}"
+CANDIDATE_PRIMARY_HOST="${RELEASE_MANIFEST[PRIMARY_HOST]}"
+if [[ -n "$CURRENT_SHA" ]]; then
+  require_matching_host_pair \
+    "$CURRENT_CANARY_HOST" "$CURRENT_PRIMARY_HOST" \
+    "$CANDIDATE_CANARY_HOST" "$CANDIDATE_PRIMARY_HOST"
+fi
+if [[ -n "$PREVIOUS_CANDIDATE_SHA" ]]; then
+  require_matching_host_pair \
+    "$PREVIOUS_CANDIDATE_HOST" "$PREVIOUS_CANDIDATE_PRIMARY_HOST" \
+    "$CANDIDATE_CANARY_HOST" "$CANDIDATE_PRIMARY_HOST"
+fi
+export PRIMARY_API_IMAGE="$CURRENT_API_IMAGE"
+export CANDIDATE_API_IMAGE
+export CADDY_IMAGE="${RELEASE_MANIFEST[CADDY_IMAGE]}"
+
+START_CADDY=false
+if [[ -z "$CURRENT_SHA" && -z "$PREVIOUS_CANDIDATE_SHA" ]]; then
+  START_CADDY=true
+  export CADDYFILE_PATH="$RELEASE_DIR/Caddyfile.canary"
+else
+  export CADDYFILE_PATH="$RELEASE_DIR/Caddyfile"
+fi
+PREFLIGHT="${PREFLIGHT_SCRIPT:-$RELEASE_DIR/scripts/preflight.sh}"
+BRAND_PILOT_PARENT_LOCK_FD=9 "$PREFLIGHT" "$RELEASE_DIR/release.env"
+compose=(docker compose -p brand-pilot -f "$RELEASE_DIR/compose.production.yml" --env-file "$RELEASE_DIR/release.env")
+"${compose[@]}" config --quiet >/dev/null
+if [[ "$START_CADDY" == "true" ]]; then
+  "${compose[@]}" pull api-canary caddy
+else
+  "${compose[@]}" pull api-canary
+fi
+
+OCI_REVISION="$(docker image inspect \
+  --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+  "$CANDIDATE_API_IMAGE")"
+[[ "$OCI_REVISION" == "$RELEASE_SHA" ]] || fail "api_image_revision_mismatch"
+
+state_value_or_none "$ROOT/state/current" TRANSITION_CURRENT
+state_value_or_none "$ROOT/state/candidate" TRANSITION_CANDIDATE
+state_value_or_none "$ROOT/state/previous" TRANSITION_PREVIOUS
+prepared_state_flag "$ROOT/state/prepared" TRANSITION_PREPARED
+begin_transition "$ROOT" "deploy" "canary" "runtime_mutation" \
+  "$TRANSITION_CURRENT" "$TRANSITION_CANDIDATE" "$TRANSITION_PREVIOUS" \
+  "$TRANSITION_PREPARED" "$RELEASE_SHA"
+
+CANDIDATE_ATTEMPTED=false
+CADDY_ATTEMPTED=false
+recover_failed_candidate() {
+  local exit_code="$?"
+  trap - EXIT
+  if [[ "$exit_code" -ne 0 ]]; then
+    reconcile_transition_or_fail "$ROOT" "$READY_TIMEOUT_SECONDS"
+  fi
+  exit "$exit_code"
+}
+trap recover_failed_candidate EXIT
+
+CANDIDATE_ATTEMPTED=true
+"${compose[@]}" up -d --no-deps --pull never --wait --wait-timeout "$READY_TIMEOUT_SECONDS" api-canary
+if [[ "$START_CADDY" == "true" ]]; then
+  CADDY_ATTEMPTED=true
+  "${compose[@]}" up -d --no-deps --pull never caddy
+fi
+wait_for_url "https://${RELEASE_MANIFEST[CANARY_HOST]}/ready" "$READY_TIMEOUT_SECONDS" ||
+  fail "external_readiness_failed"
+remove_state_file "$ROOT/state/prepared"
+atomic_write_state "$ROOT/state/candidate" "${RELEASE_SHA}"$'\n'
+load_required_state_sha "$ROOT/state/candidate" COMMITTED_CANDIDATE_SHA
+[[ "$COMMITTED_CANDIDATE_SHA" == "$RELEASE_SHA" ]] || fail "state_commit_mismatch"
+remove_state_file "$ROOT/state/transition.journal"
+
+trap - EXIT
+status_ok "deployment"

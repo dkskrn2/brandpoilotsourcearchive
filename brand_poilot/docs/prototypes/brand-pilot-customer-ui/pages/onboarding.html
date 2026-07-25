@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>온보딩 - Brand Pilot</title>
+  <link rel="stylesheet" href="../assets/prototype.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-badge">BP</span><span>Brand Pilot</span></div>
+      <nav class="nav" aria-label="고객 메뉴">
+        <a href="onboarding.html" aria-current="page">온보딩</a>
+        <a href="content.html">콘텐츠</a>
+        <a href="publish-queue.html">게시 큐</a>
+        <a href="sources.html">소스</a>
+        <a href="channels.html">채널</a>
+        <a href="brand-settings.html">브랜드 설정</a>
+      </nav>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div><strong>제주 여행 상담 브랜드</strong><span>마지막 생성: 오늘 10:02</span></div>
+        <span class="badge warn">3개 항목 필요</span>
+      </header>
+      <section class="content">
+        <div class="page-head">
+          <div>
+            <h1>게시 자동화를 시작하려면 3개만 해결하세요</h1>
+            <p>현재 막힌 항목은 Instagram 권한 확인, Threads 연결, 첫 콘텐츠 생성입니다.</p>
+          </div>
+          <div class="actions">
+            <a class="button primary" href="brand-settings.html">브랜드 설정</a>
+            <a class="button" href="sources.html">URL 추가</a>
+          </div>
+        </div>
+        <div class="grid two">
+          <section class="panel">
+            <div class="panel-head"><h2>온보딩 체크리스트</h2><span class="badge info">6 / 9 완료</span></div>
+            <div class="panel-body checklist">
+              <div class="check-item"><span class="check-dot">!</span><div><strong>Instagram 연결</strong><div class="muted small">권한 확인이 필요합니다. 토큰은 저장되어 있으나 게시 권한 검증 전입니다.</div></div><a class="button" href="channels.html">확인</a></div>
+              <div class="check-item"><span class="check-dot">!</span><div><strong>Threads 연결</strong><div class="muted small">계정 토큰을 입력해야 합니다.</div></div><a class="button" href="channels.html">연결</a></div>
+              <div class="check-item"><span class="check-dot">·</span><div><strong>첫 콘텐츠 생성</strong><div class="muted small">필수 채널 연결 확인 후 요청할 수 있습니다.</div></div><span class="button is-disabled" aria-disabled="true">생성 요청</span></div>
+              <div class="check-item"><span class="check-dot">·</span><div><strong>첫 승인 및 게시</strong><div class="muted small">검토함에서 승인하면 정책 슬롯에 자동 배정됩니다.</div></div><a class="button" href="content.html">검토함</a></div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h3>완료된 항목</h3><span class="badge ok">6개 완료</span></div>
+            <div class="panel-body grid">
+              <p><strong>브랜드 정보, 자사 URL, 참고 URL, 주제표, Webflow 연결</strong>은 준비됐습니다.</p>
+              <div class="actions"><a class="button" href="brand-settings.html">브랜드 설정</a><a class="button" href="sources.html">소스 관리</a></div>
+            </div>
+          </section>
+          <aside class="grid">
+            <section class="panel">
+              <div class="panel-head"><h3>현재 차단 사유</h3><span class="badge warn">확인 필요</span></div>
+              <div class="panel-body grid">
+                <div class="alert warn"><strong>Instagram 게시 권한 미확인</strong><span>Meta 앱 권한과 연결 계정 타입을 확인해야 자동 승인 및 게시 대상에 포함됩니다.</span></div>
+                <div class="alert info"><strong>자동 승인 기본값</strong><span>초기에는 Webflow만 자동 승인 허용, Instagram과 Threads는 수동 승인으로 시작합니다.</span></div>
+              </div>
+            </section>
+            <section class="panel">
+              <div class="panel-head"><h3>다음 실행</h3></div>
+              <div class="panel-body">
+                <p><strong>콘텐츠 생성 배치</strong><br><span class="muted">매일 오전 10시</span></p>
+                <p><strong>게시 슬롯</strong><br><span class="muted">11:30, 14:30, 17:30, 20:30 기준 임의 지터</span></p>
+              </div>
+            </section>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

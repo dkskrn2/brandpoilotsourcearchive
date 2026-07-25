@@ -1,0 +1,15 @@
+{$CANARY_HOST} {
+  tls {$ACME_EMAIL}
+  encode zstd gzip
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "strict-origin-when-cross-origin"
+  }
+  reverse_proxy api-canary:4000 {
+    health_uri /ready
+    health_interval 10s
+    health_timeout 3s
+  }
+}

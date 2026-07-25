@@ -1,0 +1,13 @@
+**/.env
+**/.env.*
+!**/.env.example
+**/node_modules
+**/dist
+**/.vercel
+**/.git
+**/coverage
+**/playwright-report
+**/test-results
+**/*.log
+pnpm-lock.yaml
+docs/prototypes

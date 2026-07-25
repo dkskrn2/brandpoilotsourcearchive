@@ -1,0 +1,134 @@
+name: Publish Brand Pilot server images
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "brand_poilot/**"
+      - ".github/workflows/publish-brand-pilot-server-images.yml"
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  API_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-api
+
+jobs:
+  verify:
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.23.1
+          cache: npm
+          cache-dependency-path: brand_poilot/package-lock.json
+
+      - name: Install
+        working-directory: brand_poilot
+        run: npm ci
+
+      - name: Verify
+        working-directory: brand_poilot
+        run: |
+          npm run test:contract
+          node --test scripts/migrationRunner.test.mjs
+          npm run test:migrations
+          npm run test --workspace @brand-pilot/api
+          npm run test --workspace @brand-pilot/dm-worker
+          npm run build --workspace @brand-pilot/api
+          shellcheck deploy/scripts/*.sh
+          npm run test:deployment
+
+  publish:
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image name
+        id: image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          image="${REGISTRY}/${API_IMAGE_NAME,,}"
+          [[ "$image" =~ ^ghcr\.io/[a-z0-9._/-]+$ ]]
+          [[ "$image" != *$'\n'* && "$image" != *$'\r'* ]]
+          printf 'name=%s\n' "$image" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push API
+        id: api
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: brand_poilot
+          file: brand_poilot/apps/api/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Create release manifest
+        working-directory: brand_poilot
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          API_IMAGE: ${{ steps.image.outputs.name }}
+          API_DIGEST: ${{ steps.api.outputs.digest }}
+        run: |
+          set -Eeuo pipefail
+          caddy_line="$(cat deploy/caddy-image.env)"
+          [[ "$(wc -l < deploy/caddy-image.env)" -eq 1 ]]
+          [[ "$caddy_line" == 'CADDY_IMAGE=docker.io/library/caddy@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648' ]]
+          source deploy/caddy-image.env
+
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$API_IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+$ ]]
+          [[ "$API_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$CADDY_IMAGE" =~ ^docker\.io/library/caddy@sha256:[0-9a-f]{64}$ ]]
+          for value in "$RELEASE_SHA" "$API_IMAGE" "$API_DIGEST" "$CADDY_IMAGE"; do
+            [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]]
+          done
+
+          {
+            printf 'RELEASE_SCHEMA=1\n'
+            printf 'RELEASE_SHA=%s\n' "$RELEASE_SHA"
+            printf 'API_IMAGE=%s@%s\n' "$API_IMAGE" "$API_DIGEST"
+            printf 'CADDY_IMAGE=%s\n' "$CADDY_IMAGE"
+            printf 'CANARY_HOST=canary-api.danbammsg.co.kr\n'
+            printf 'PRIMARY_HOST=api.danbammsg.co.kr\n'
+            printf 'ACME_EMAIL=ops@danbammsg.co.kr\n'
+            printf 'API_ENV_FILE=/opt/brand-pilot/shared/env/api.env\n'
+          } > release.env
+          sha256sum release.env > release.env.sha256
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: brand-pilot-api-release-${{ github.sha }}
+          path: |
+            brand_poilot/release.env
+            brand_poilot/release.env.sha256
+          if-no-files-found: error
+          retention-days: 30

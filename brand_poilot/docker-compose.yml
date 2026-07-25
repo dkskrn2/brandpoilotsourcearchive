@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: brand-pilot-postgres
+    environment:
+      POSTGRES_DB: brand_pilot
+      POSTGRES_USER: brand_pilot
+      POSTGRES_PASSWORD: brand_pilot_dev
+    ports:
+      - "54329:5432"
+    volumes:
+      - brand_pilot_postgres_data:/var/lib/postgresql/data
+      - ./db/migrations:/migrations:ro
+      - ./db/smoke:/smoke:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brand_pilot -d brand_pilot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  brand_pilot_postgres_data:
