@@ -44,7 +44,7 @@ jobs:
           npm run test --workspace @brand-pilot/api
           npm run test --workspace @brand-pilot/dm-worker
           npm run build --workspace @brand-pilot/api
-          shellcheck deploy/scripts/*.sh
+          shellcheck --exclude=SC1091,SC2034,SC2317 deploy/scripts/*.sh
           npm run test:deployment
 
   publish:

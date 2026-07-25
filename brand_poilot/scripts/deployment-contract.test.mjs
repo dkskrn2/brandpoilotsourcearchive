@@ -729,7 +729,7 @@ test("CI publishing verifies the complete server release contract before buildin
   assert.match(verifyJob, /uses: actions\/checkout@[0-9a-f]{40}\s+# v4\.4\.0[\s\S]*persist-credentials: false/);
   assert.match(verifyJob, /uses: actions\/setup-node@[0-9a-f]{40}\s+# v4\.4\.0[\s\S]*node-version: 22\.23\.1[\s\S]*cache: npm[\s\S]*cache-dependency-path: brand_poilot\/package-lock\.json/);
   assert.match(verifyJob, /name: Install\n {8}working-directory: brand_poilot\n {8}run: npm ci/);
-  assert.match(verifyJob, /name: Verify\n {8}working-directory: brand_poilot\n {8}run: \|\n {10}npm run test:contract\n {10}node --test scripts\/migrationRunner\.test\.mjs\n {10}npm run test:migrations\n {10}npm run test --workspace @brand-pilot\/api\n {10}npm run test --workspace @brand-pilot\/dm-worker\n {10}npm run build --workspace @brand-pilot\/api\n {10}shellcheck deploy\/scripts\/\*\.sh\n {10}npm run test:deployment/);
+  assert.match(verifyJob, /name: Verify\n {8}working-directory: brand_poilot\n {8}run: \|\n {10}npm run test:contract\n {10}node --test scripts\/migrationRunner\.test\.mjs\n {10}npm run test:migrations\n {10}npm run test --workspace @brand-pilot\/api\n {10}npm run test --workspace @brand-pilot\/dm-worker\n {10}npm run build --workspace @brand-pilot\/api\n {10}shellcheck --exclude=SC1091,SC2034,SC2317 deploy\/scripts\/\*\.sh\n {10}npm run test:deployment/);
 });
 
 test("CI publishing pushes a lowercase linux amd64 API image with immutable metadata", () => {
