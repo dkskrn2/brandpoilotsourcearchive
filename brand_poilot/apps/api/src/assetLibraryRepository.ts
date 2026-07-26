@@ -837,40 +837,90 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
       let cancelled = 0;
       for (const row of candidates.rows) {
         const sessionId = String(row.id);
-        const prefix = String(row.storage_path_prefix);
         const avatarId = String(row.avatar_id);
-        const expectedPrefix = `brands/${row.brand_id}/asset-library/avatars/${avatarId}/${sessionId}/`;
+        let cleanupRow = row;
+        let prefix = String(row.storage_path_prefix);
+        let expectedPrefix = `brands/${row.brand_id}/asset-library/avatars/${avatarId}/${sessionId}/`;
         try {
           if (prefix !== expectedPrefix) throw new Error("asset_library_upload_path_mismatch");
           if (!row.receipt_status) {
-            await transaction(pool, async (client) => {
+            const acquired = await transaction(pool, async (client) => {
+              // Explicit cancellation takes these locks in the same order. Avatar creation only
+              // takes the session lock and never waits on the advisory lock, avoiding a cycle.
               await client.query(
-                `update reference_upload_sessions set cancelled_at=coalesce(cancelled_at,now())
-                  where id=$1 and workspace_id=$2 and brand_id=$3`,
+                "select pg_advisory_xact_lock(hashtextextended($1,0))",
+                [sessionId],
+              );
+              const receipt = await client.query(
+                `select session_id from avatar_upload_cancellation_receipts
+                  where session_id=$1 for update`,
+                [sessionId],
+              );
+              if (receipt.rowCount) return null;
+              const session = await client.query(
+                `select * from reference_upload_sessions
+                  where id=$1 and workspace_id=$2 and brand_id=$3 for update`,
                 [sessionId, row.workspace_id, row.brand_id],
               );
-              await client.query(
+              // A creator that locked this session before expiry may consume it while this
+              // transaction waits. A disappeared row means creation won and is a no-op.
+              if (Number(session.rowCount ?? 0) !== 1) return null;
+              const fresh = session.rows[0];
+              if (fresh.cancelled_at || new Date(fresh.expires_at).getTime() > Date.now()) return null;
+              const freshPrefix = String(fresh.storage_path_prefix);
+              const freshExpectedPrefix =
+                `brands/${fresh.brand_id}/asset-library/avatars/${avatarId}/${sessionId}/`;
+              if (freshPrefix !== freshExpectedPrefix) {
+                throw new Error("asset_library_upload_path_mismatch");
+              }
+              const transitioned = await client.query(
+                `update reference_upload_sessions set cancelled_at=now()
+                  where id=$1 and workspace_id=$2 and brand_id=$3
+                    and cancelled_at is null and expires_at <= now()
+                  returning *`,
+                [sessionId, fresh.workspace_id, fresh.brand_id],
+              );
+              if (Number(transitioned.rowCount ?? 0) !== 1) return null;
+              const cancelledSession = transitioned.rows[0] ?? fresh;
+              const inserted = await client.query(
                 `insert into avatar_upload_cancellation_receipts(
                   session_id,workspace_id,brand_id,avatar_id,created_by_user_id,storage_path,
                   storage_path_prefix,token_expires_at,status,next_attempt_at,reason
                 ) values($1,$2,$3,$4,$5,$6,$7,$8,'pending',now(),'expired')
-                on conflict(session_id) do nothing`,
-                [sessionId, row.workspace_id, row.brand_id, avatarId, row.created_by_user_id,
-                  row.storage_path ?? null, prefix, row.expires_at],
+                on conflict(session_id) do nothing returning session_id`,
+                [sessionId, cancelledSession.workspace_id, cancelledSession.brand_id, avatarId,
+                  cancelledSession.created_by_user_id, cancelledSession.storage_path ?? null,
+                  freshPrefix, cancelledSession.expires_at],
               );
+              if (Number(inserted.rowCount ?? 0) !== 1) return null;
+              return {
+                ...row,
+                workspace_id: cancelledSession.workspace_id,
+                brand_id: cancelledSession.brand_id,
+                created_by_user_id: cancelledSession.created_by_user_id,
+                storage_path_prefix: freshPrefix,
+                storage_path: cancelledSession.storage_path ?? null,
+                expires_at: cancelledSession.expires_at,
+              };
             });
+            if (!acquired) continue;
+            cleanupRow = acquired;
+            prefix = String(acquired.storage_path_prefix);
+            expectedPrefix =
+              `brands/${acquired.brand_id}/asset-library/avatars/${avatarId}/${sessionId}/`;
+            if (prefix !== expectedPrefix) throw new Error("asset_library_upload_path_mismatch");
           }
-          await cleanupBlobs(prefix, row.storage_path ? String(row.storage_path) : undefined);
+          await cleanupBlobs(prefix, cleanupRow.storage_path ? String(cleanupRow.storage_path) : undefined);
           await transaction(pool, async (client) => {
             await client.query(
               `delete from storage_artifacts
                 where workspace_id=$1 and brand_id=$2 and path like $3 and deleted_at is null`,
-              [row.workspace_id, row.brand_id, `${prefix}%`],
+              [cleanupRow.workspace_id, cleanupRow.brand_id, `${prefix}%`],
             );
             await client.query(
               `delete from reference_upload_sessions
                 where id=$1 and workspace_id=$2 and brand_id=$3`,
-              [sessionId, row.workspace_id, row.brand_id],
+              [sessionId, cleanupRow.workspace_id, cleanupRow.brand_id],
             );
             await client.query(
               `update avatar_upload_cancellation_receipts

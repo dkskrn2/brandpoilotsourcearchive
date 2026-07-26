@@ -23,6 +23,14 @@ function member(sql: string, role = "member") {
   return sql.includes("from workspace_members") ? { rows: [{ role }] } : null;
 }
 
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
 describe("asset library repository", () => {
   it("locks the avatar row and rejects a concurrent sixth image", async () => {
     const fake = fakePool((sql) => {
@@ -444,7 +452,20 @@ describe("asset library repository", () => {
           id, workspace_id: scope.workspaceId, brand_id: scope.brandId,
           created_by_user_id: scope.actorUserId, storage_path_prefix: prefix(id),
           storage_path: `${prefix(id)}${checksum}-face.webp`,
+          expires_at: new Date(Date.now() - 1), cancelled_at: null,
         }] };
+      }
+      if (sql.includes("update reference_upload_sessions") && sql.includes("returning")) {
+        const id = String(values[0]);
+        return { rows: [{
+          id, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+          created_by_user_id: scope.actorUserId, storage_path_prefix: prefix(id),
+          storage_path: `${prefix(id)}${checksum}-face.webp`,
+          expires_at: new Date(Date.now() - 1), cancelled_at: new Date(),
+        }] };
+      }
+      if (sql.includes("insert into avatar_upload_cancellation_receipts")) {
+        return { rows: [{ session_id: values[0] }] };
       }
       if (sql.includes("from storage_artifacts")) return { rows: [] };
       return {};
@@ -461,15 +482,195 @@ describe("asset library repository", () => {
     expect(fake.query.mock.calls[0]?.[1]).toEqual([2]);
   });
 
+  it("does not create a receipt or clean blobs when the expiry transition affects zero rows", async () => {
+    const prefix = `brands/${scope.brandId}/asset-library/avatars/${avatarId}/${imageId}/`;
+    let receiptInserted = false;
+    const fake = fakePool((sql) => {
+      if (sql.includes("left join avatar_upload_cancellation_receipts")) return { rows: [{
+        id: imageId, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+        created_by_user_id: scope.actorUserId, storage_path_prefix: prefix,
+        storage_path: `${prefix}${checksum}-face.webp`,
+        expires_at: new Date(Date.now() - 1), receipt_status: null, avatar_id: avatarId,
+      }] };
+      if (sql.includes("from avatar_upload_cancellation_receipts") && sql.includes("for update")) {
+        return { rows: [] };
+      }
+      if (sql.includes("from reference_upload_sessions") && sql.includes("for update")) {
+        return { rows: [{
+          id: imageId, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+          created_by_user_id: scope.actorUserId, storage_path_prefix: prefix,
+          storage_path: `${prefix}${checksum}-face.webp`,
+          expires_at: new Date(Date.now() - 1), cancelled_at: null,
+        }] };
+      }
+      if (sql.includes("update reference_upload_sessions") && sql.includes("returning")) {
+        return { rowCount: 0 };
+      }
+      if (sql.includes("insert into avatar_upload_cancellation_receipts")) receiptInserted = true;
+      return {};
+    });
+    const cleanupBlobs = vi.fn(async () => undefined);
+
+    await expect(createAssetLibraryRepository(fake.pool).cleanupExpiredAvatarUploads(cleanupBlobs, 1))
+      .resolves.toEqual({ scanned: 1, cancelled: 0, failed: [] });
+    expect(receiptInserted).toBe(false);
+    expect(cleanupBlobs).not.toHaveBeenCalled();
+  });
+
+  it("preserves a created avatar when its locked session expires before the sweep acquires it", async () => {
+    const prefix = `brands/${scope.brandId}/asset-library/avatars/${avatarId}/${imageId}/`;
+    const storagePath = `${prefix}${checksum}-face.webp`;
+    const session = {
+      id: imageId, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+      created_by_user_id: scope.actorUserId, storage_path_prefix: prefix, storage_path: storagePath,
+      expected_mime_type: "image/webp", expected_size_bytes: 100, expected_checksum: checksum,
+      confirmed_at: new Date(500), expires_at: new Date(2_000), cancelled_at: null,
+    };
+    const artifact = {
+      id: "artifact-1", path: storagePath,
+      public_url: `https://store.blob.vercel-storage.com/${storagePath}`,
+      mime_type: "image/webp", byte_size: 100, checksum,
+      created_by_user_id: scope.actorUserId,
+    };
+    const createValidated = deferred();
+    const allowCreateCommit = deferred();
+    const sweepWaitingForSession = deferred();
+    const createReleasedSession = deferred();
+    const cleanupCalled = deferred<"cleanup">();
+    let sessionExists = true;
+    let receiptInserted = false;
+    let connectionCount = 0;
+    let avatarImageInserted = false;
+
+    const makeClient = (connection: number) => ({
+      query: vi.fn(async (rawSql: string, values: unknown[] = []) => {
+        const sql = rawSql.replace(/\s+/g, " ").trim();
+        const access = member(sql);
+        if (access) return { rows: access.rows, rowCount: access.rows.length };
+        if (connection === 1 && sql.includes("id=any($1::uuid[])") && sql.includes("for update")) {
+          return { rows: [session], rowCount: 1 };
+        }
+        if (connection === 1 && sql.includes("from storage_artifacts") && sql.includes("path like any")) {
+          createValidated.resolve();
+          await allowCreateCommit.promise;
+          return { rows: [artifact], rowCount: 1 };
+        }
+        if (connection === 1 && sql.includes("insert into brand_avatars")) {
+          return { rows: [{ id: values[0] }], rowCount: 1 };
+        }
+        if (connection === 1 && sql.includes("insert into brand_avatar_images")) {
+          avatarImageInserted = true;
+          return { rows: [], rowCount: 1 };
+        }
+        if (connection === 1 && sql.includes("delete from reference_upload_sessions")) {
+          sessionExists = false;
+          return { rows: [], rowCount: 1 };
+        }
+        if (connection === 1 && sql.includes("from brand_avatars avatar")) {
+          return { rows: [{
+            id: avatarId, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+            name: "모델", description: "", is_default: false, status: "active",
+            created_by_user_id: scope.actorUserId, created_at: new Date(), updated_at: new Date(),
+            images: [artifact],
+          }], rowCount: 1 };
+        }
+        if (connection === 1 && sql === "commit") {
+          createReleasedSession.resolve();
+          return { rows: [], rowCount: 0 };
+        }
+        if (connection === 2 && sql.includes("from avatar_upload_cancellation_receipts")
+          && sql.includes("for update")) {
+          return { rows: [], rowCount: 0 };
+        }
+        if (connection === 2 && sql.includes("from reference_upload_sessions")
+          && sql.includes("for update")) {
+          sweepWaitingForSession.resolve();
+          await createReleasedSession.promise;
+          return { rows: sessionExists ? [session] : [], rowCount: sessionExists ? 1 : 0 };
+        }
+        if (sql.includes("insert into avatar_upload_cancellation_receipts")) receiptInserted = true;
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    });
+    const pool = {
+      query: vi.fn(async (rawSql: string) => {
+        const sql = rawSql.replace(/\s+/g, " ").trim();
+        if (sql.includes("left join avatar_upload_cancellation_receipts")) {
+          return {
+            rows: [{
+              ...session, expires_at: new Date(2_000), receipt_status: null, avatar_id: avatarId,
+            }],
+            rowCount: 1,
+          };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      connect: vi.fn(async () => makeClient(++connectionCount)),
+    };
+    const cleanupBlobs = vi.fn(async () => {
+      cleanupCalled.resolve("cleanup");
+    });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const repository = createAssetLibraryRepository(pool as never);
+
+    const creating = repository.createAvatar(scope, {
+      avatarId, name: "모델", description: "", imageSessionIds: [imageId],
+      representativeSessionId: imageId,
+    });
+    await createValidated.promise;
+    clock.mockReturnValue(3_000);
+    const sweeping = repository.cleanupExpiredAvatarUploads(cleanupBlobs, 1);
+
+    try {
+      const firstEvent = await Promise.race([
+        sweepWaitingForSession.promise.then(() => "waiting_on_create_lock" as const),
+        cleanupCalled.promise,
+      ]);
+      expect(firstEvent).toBe("waiting_on_create_lock");
+    } finally {
+      allowCreateCommit.resolve();
+    }
+
+    const [created, swept] = await Promise.all([creating, sweeping]);
+    expect(created.id).toBe(avatarId);
+    expect(swept).toEqual({ scanned: 1, cancelled: 0, failed: [] });
+    expect(avatarImageInserted).toBe(true);
+    expect(sessionExists).toBe(false);
+    expect(receiptInserted).toBe(false);
+    expect(cleanupBlobs).not.toHaveBeenCalled();
+    clock.mockRestore();
+  });
+
   it("uses the exact legacy reservation prefix when file and storage paths are null", async () => {
     const prefix = `brands/${scope.brandId}/asset-library/avatars/${avatarId}/${imageId}/`;
-    const fake = fakePool((sql) => {
+    const fake = fakePool((sql, values) => {
       if (sql.includes("left join avatar_upload_cancellation_receipts")) return { rows: [{
         id: imageId, workspace_id: scope.workspaceId, brand_id: scope.brandId,
         created_by_user_id: scope.actorUserId, storage_path_prefix: prefix,
         storage_path: null, file_name: null, expires_at: new Date(Date.now() - 1),
         receipt_status: null, avatar_id: avatarId,
       }] };
+      if (sql.includes("from avatar_upload_cancellation_receipts") && sql.includes("for update")) {
+        return { rows: [] };
+      }
+      if (sql.includes("from reference_upload_sessions") && sql.includes("for update")) {
+        return { rows: [{
+          id: imageId, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+          created_by_user_id: scope.actorUserId, storage_path_prefix: prefix,
+          storage_path: null, expires_at: new Date(Date.now() - 1), cancelled_at: null,
+        }] };
+      }
+      if (sql.includes("update reference_upload_sessions") && sql.includes("returning")) {
+        return { rows: [{
+          id: imageId, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+          created_by_user_id: scope.actorUserId, storage_path_prefix: prefix,
+          storage_path: null, expires_at: new Date(Date.now() - 1), cancelled_at: new Date(),
+        }] };
+      }
+      if (sql.includes("insert into avatar_upload_cancellation_receipts")) {
+        return { rows: [{ session_id: values[0] }] };
+      }
       return {};
     });
     const cleanupBlobs = vi.fn(async () => undefined);
@@ -482,7 +683,7 @@ describe("asset library repository", () => {
       `00000000-0000-4000-8${String(index).padStart(3, "0")}-${String(index).padStart(12, "0")}`);
     const healthy = "99999999-9999-4999-8999-999999999999";
     let selection = 0;
-    const fake = fakePool((sql) => {
+    const fake = fakePool((sql, values) => {
       if (sql.includes("left join avatar_upload_cancellation_receipts")) {
         selection += 1;
         const ids = selection === 1 ? oldIds : [healthy];
@@ -492,6 +693,30 @@ describe("asset library repository", () => {
           storage_path_prefix: `brands/${scope.brandId}/asset-library/avatars/${avatarId}/${id}/`,
           expires_at: new Date(Date.now() - 1), receipt_status: null, avatar_id: avatarId,
         })) };
+      }
+      if (sql.includes("from avatar_upload_cancellation_receipts") && sql.includes("for update")) {
+        return { rows: [] };
+      }
+      if (sql.includes("from reference_upload_sessions") && sql.includes("for update")) {
+        const id = String(values[0]);
+        return { rows: [{
+          id, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+          created_by_user_id: scope.actorUserId,
+          storage_path_prefix: `brands/${scope.brandId}/asset-library/avatars/${avatarId}/${id}/`,
+          storage_path: null, expires_at: new Date(Date.now() - 1), cancelled_at: null,
+        }] };
+      }
+      if (sql.includes("update reference_upload_sessions") && sql.includes("returning")) {
+        const id = String(values[0]);
+        return { rows: [{
+          id, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+          created_by_user_id: scope.actorUserId,
+          storage_path_prefix: `brands/${scope.brandId}/asset-library/avatars/${avatarId}/${id}/`,
+          storage_path: null, expires_at: new Date(Date.now() - 1), cancelled_at: new Date(),
+        }] };
+      }
+      if (sql.includes("insert into avatar_upload_cancellation_receipts")) {
+        return { rows: [{ session_id: values[0] }] };
       }
       return {};
     });
