@@ -141,7 +141,7 @@
 - 복합 FK 대상 테이블에는 대응하는 `UNIQUE(id, workspace_id, brand_id)`를 먼저 둔다.
 - 생성·수정·승인·보관 repository에는 `actorUserId`를 전달하고 owner/admin 권한과 `created_by_user_id`, `approved_by_user_id`, `approved_at` 감사 정보를 남긴다.
 - active pointer는 동일 transaction에서 row를 잠근 뒤 approved 버전만 가리키게 하고 동시 승인 invariant를 테스트한다.
-- 각 055–058 migration task는 `scripts/repository-contract.test.mjs`의 정확한 migration 목록과 schema smoke를 같은 커밋에서 갱신한다.
+- 각 055–059 migration task는 `scripts/repository-contract.test.mjs`의 정확한 migration 목록과 schema smoke를 같은 커밋에서 갱신한다.
 - 삭제는 기본적으로 soft delete 또는 `active` 상태 변경을 사용한다.
 - API 응답은 새 필드를 추가하되 기존 필드를 최소 한 릴리스 동안 유지한다.
 

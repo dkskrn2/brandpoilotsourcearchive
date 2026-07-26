@@ -40,6 +40,7 @@ npm run test --workspace @brand-pilot/customer-ui -- instagramTrends.test.tsx ar
 **Files:**
 
 - Create: `db/migrations/056_product_service_library.sql`
+- Create: `db/migrations/057_wiki_source_kinds.sql`
 - Modify: `scripts/migrations.integration.test.mjs`
 - Modify: `scripts/repository-contract.test.mjs`
 - Create: `apps/api/src/productLibraryRepository.pglite.test.ts`
@@ -91,9 +92,9 @@ create table product_service_versions (
 - [ ] 기간성 오퍼, 시작일, 종료일 테이블은 만들지 않는다.
 - [ ] 기존 `ai_content_subject_analyses`는 자동 백필하지 않는다. 사용자가 `보관함에 저장`한 분석만 item으로 승격한다.
 - [ ] 기존 `knowledge_entries(entry_type='product')`는 누락 없이 승인된 product/service item과 version으로 idempotent backfill하고 provenance mapping을 남긴다. legacy product row는 읽기 전용 projection/inactive source로 표시해 두 군데에서 편집되지 않게 한다.
-- [ ] Wiki 직접 입력을 위해 `knowledge_entries.last_import_id`를 nullable로 전환하고 `origin`, `provenance_json`, `status`, `created_by_user_id`, `approved_by_user_id`, `approved_at`을 추가한다. source/document/build unit 제약과 worker union에는 `product_service`, `service`, `guide`를 같은 migration에서 일관되게 추가한다.
+- [ ] Wiki 직접 입력을 위해 `knowledge_entries.last_import_id`를 nullable로 전환하고 `origin`, `provenance_json`, `status`, `created_by_user_id`, `approved_by_user_id`, `approved_at`을 추가한다. 이미 배포 가능한 상태로 고정된 056은 수정하지 않고, source/document/build unit 제약과 worker union의 `product_service`, `service`, `guide` 보강은 후속 057 migration에서 일관되게 추가한다.
 - [ ] migration test에 기존 product knowledge backfill과 재실행, 다른 브랜드 asset 연결 거절, archive 보존, version uniqueness, 동시 승인 invariant를 추가한다.
-- [ ] 이 task 안에서 repository-contract의 migration 목록과 schema smoke를 056까지 갱신한다.
+- [ ] 이 task 안에서 repository-contract의 migration 목록과 schema smoke를 057까지 갱신한다.
 - [ ] 실행:
 
 ```bash
@@ -165,7 +166,7 @@ npm run build --workspace @brand-pilot/api
 - [ ] 구현 커밋:
 
 ```bash
-git add db/migrations/056_product_service_library.sql apps/api/src/productLibrary* apps/api/src/server.productLibraryCustomer.test.ts apps/api/src/brandCenterHttp.ts apps/api/src/server.brandCenterCustomer.test.ts apps/api/src/httpServer.ts scripts/migrations.integration.test.mjs scripts/repository-contract.test.mjs
+git add db/migrations/056_product_service_library.sql db/migrations/057_wiki_source_kinds.sql apps/api/src/productLibrary* apps/api/src/server.productLibraryCustomer.test.ts apps/api/src/brandCenterHttp.ts apps/api/src/server.brandCenterCustomer.test.ts apps/api/src/httpServer.ts scripts/migrations.integration.test.mjs scripts/repository-contract.test.mjs
 git commit -m "feat(libraries): add reusable product and service records"
 ```
 
@@ -224,7 +225,7 @@ git commit -m "feat(libraries): add managed wiki sources"
 
 **Files:**
 
-- Create: `db/migrations/057_avatar_and_reference_libraries.sql`
+- Create: `db/migrations/058_avatar_and_reference_libraries.sql`
 - Modify: `scripts/migrations.integration.test.mjs`
 - Modify: `scripts/repository-contract.test.mjs`
 - Create: `apps/api/src/assetLibraryRepository.pglite.test.ts`
@@ -273,7 +274,7 @@ create unique index brand_avatars_one_default
 - [ ] `saved trend + linked source URL = reference item 1개`를 migration fixture로 고정한다.
 - [ ] 원본 행은 삭제하거나 소유권을 이동하지 않는다.
 - [ ] reference archive/enable과 legacy source URL active/quota 상태는 한 transaction에서 동기화한다.
-- [ ] 057 migration의 빈 DB, 기존 fixture upgrade, idempotent backfill, cross-tenant FK, concurrent default/avatar count와 repository-contract 목록/schema smoke를 같은 task에서 검증한다.
+- [ ] 058 migration의 빈 DB, 기존 fixture upgrade, idempotent backfill, cross-tenant FK, concurrent default/avatar count와 repository-contract 목록/schema smoke를 같은 task에서 검증한다.
 - [ ] 실행:
 
 ```bash
@@ -327,7 +328,7 @@ npm run test --workspace @brand-pilot/api -- assetLibraryRepository.pglite.test.
 - [ ] 업로드는 총 생성 첨부 제한과 별도로 library asset 제한을 적용하고 거절 파일 때문에 정상 파일을 삭제하지 않는다.
 - [ ] avatar image 추가 transaction은 avatar row를 잠가 동시 업로드에서도 5장을 넘기지 않는다.
 - [ ] create/edit는 active member actor를 기록하고 default/archive는 owner/admin 권한을 확인한다. reference origin은 같은 workspace/brand의 row만 연결한다.
-- [ ] 057 적용과 함께 `GET /brand-center`의 `avatars` 상태를 실제 repository 집계로 확장한다.
+- [ ] 058 적용과 함께 `GET /brand-center`의 `avatars` 상태를 실제 repository 집계로 확장한다.
 - [ ] 레퍼런스의 pattern은 사실 근거 endpoint에서 반환하지 않는다.
 - [ ] Meta/current adapter가 author·profile image를 반환하지 않으면 이름이나 이미지를 추측하지 않고 source link와 `프로필 미리보기 없음` 상태를 반환한다.
 - [ ] 테스트에 동시 5장 초과, 2개 default, upload nonce replay/path 위조/MIME 위조, 중복 origin, 10 URL 초과, member archive 거절/admin 허용, 브랜드 격리, archive를 포함한다.
@@ -343,7 +344,7 @@ npm run build --workspace @brand-pilot/api
 - [ ] 구현 커밋:
 
 ```bash
-git add db/migrations/057_avatar_and_reference_libraries.sql apps/api/src/assetLibrary* apps/api/src/server.assetLibraryCustomer.test.ts apps/api/src/brandCenterHttp.ts apps/api/src/server.brandCenterCustomer.test.ts apps/api/src/httpServer.ts apps/api/src/aiContentUpload.ts scripts/migrations.integration.test.mjs scripts/repository-contract.test.mjs
+git add db/migrations/058_avatar_and_reference_libraries.sql apps/api/src/assetLibrary* apps/api/src/server.assetLibraryCustomer.test.ts apps/api/src/brandCenterHttp.ts apps/api/src/server.brandCenterCustomer.test.ts apps/api/src/httpServer.ts apps/api/src/aiContentUpload.ts scripts/migrations.integration.test.mjs scripts/repository-contract.test.mjs
 git commit -m "feat(libraries): add avatar and reference libraries"
 ```
 

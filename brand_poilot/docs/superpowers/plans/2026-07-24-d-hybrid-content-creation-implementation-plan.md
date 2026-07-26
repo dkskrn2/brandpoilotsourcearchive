@@ -42,7 +42,7 @@ npm run test --workspace @brand-pilot/customer-ui -- useAiContentDraft.test.ts a
 
 **Files:**
 
-- Create: `db/migrations/058_content_orchestration.sql`
+- Create: `db/migrations/059_content_orchestration.sql`
 - Modify: `scripts/migrations.integration.test.mjs`
 - Modify: `scripts/repository-contract.test.mjs`
 - Create: `apps/api/src/contentOrchestrationRepository.pglite.test.ts`
@@ -71,7 +71,7 @@ alter table ai_content_generations
 - [ ] `ai_content_generation_references`에 nullable `reference_item_id`와 `roles_json`을 추가한다.
 - [ ] roles는 `planning | copy_pattern | visual_composition` 중 1개 이상, 최대 3개를 repository에서 검증한다.
 - [ ] 먼저 기존 generation별 reference 개수를 감사한다. 역사 데이터는 자르거나 migration을 실패시키지 않고, `reference_item_id is not null`인 신규 canonical row와 신규 API 요청에만 position 1–5와 한 generation 내 reference item 중복 금지를 강제한다.
-- [ ] migration 057에서 추가한 `source_urls.content_purpose`와 `reference_items.content_purpose`를 기존 crawler query와 generation recommendation query가 사용하도록 인덱스·repository 계약을 검증한다.
+- [ ] migration 058에서 추가한 `source_urls.content_purpose`와 `reference_items.content_purpose`를 기존 crawler query와 generation recommendation query가 사용하도록 인덱스·repository 계약을 검증한다.
 - [ ] AI 구현안을 검토 가능한 독립 자원으로 저장한다.
 
 ```sql
@@ -116,7 +116,7 @@ create table ai_content_proposals (
 - [ ] product service FK와 avatar snapshot은 같은 brand의 승인/활성 원본에서 시작했는지 start transaction에서 검증한다.
 - [ ] 기존 retry snapshot은 백필 후에도 그대로 parse된다.
 - [ ] draft/archived/cross-brand library ID와 승인되지 않은 Core/product/Wiki 버전을 거절하고 retry가 현재 active 데이터를 재조회하지 않는 invariant를 테스트한다.
-- [ ] 058 migration의 빈 DB, 기존 fixture upgrade, idempotent backfill, cross-tenant FK, 동시 proposal select/start와 repository-contract 목록/schema smoke를 같은 task에서 검증한다.
+- [ ] 059 migration의 빈 DB, 기존 fixture upgrade, idempotent backfill, cross-tenant FK, 동시 proposal select/start와 repository-contract 목록/schema smoke를 같은 task에서 검증한다.
 - [ ] 실행:
 
 ```bash
@@ -320,7 +320,7 @@ npm run build --workspace @brand-pilot/api
 - [ ] 구현 커밋:
 
 ```bash
-git add db/migrations/058_content_orchestration.sql apps/api/src/contentOrchestration* apps/api/src/contentProposalJobs* apps/api/src/server.contentProposalWorker.test.ts apps/api/src/aiContentContracts.ts apps/api/src/aiContentGenerationInput* apps/api/src/aiContentRepository* apps/api/src/httpServer.ts apps/api/src/server.aiContentCustomer.test.ts apps/api/src/aiContentManifest.ts scripts/migrations.integration.test.mjs scripts/repository-contract.test.mjs
+git add db/migrations/059_content_orchestration.sql apps/api/src/contentOrchestration* apps/api/src/contentProposalJobs* apps/api/src/server.contentProposalWorker.test.ts apps/api/src/aiContentContracts.ts apps/api/src/aiContentGenerationInput* apps/api/src/aiContentRepository* apps/api/src/httpServer.ts apps/api/src/server.aiContentCustomer.test.ts apps/api/src/aiContentManifest.ts scripts/migrations.integration.test.mjs scripts/repository-contract.test.mjs
 git commit -m "feat(content): add content family orchestration"
 ```
 

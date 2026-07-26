@@ -4,10 +4,12 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
-import { loadMigrations } from "./migrationRunner.mjs";
+import { loadMigrations, runMigrationsWithClient } from "./migrationRunner.mjs";
 
 const legacyInstagramDeliveryChecksum =
   "7e45bc297cf35128368700b49f34974690d699198e465ecfb608ac9922cb1882";
+const originalProductServiceLibraryChecksum =
+  "3b3c9f6887d3f396c106a4a95cea6e4aa321c5dac0784c16a45fe2356a2b1b74";
 const legacyInstagramDeliverySql = await readFile(
   "scripts/fixtures/014_instagram_delivery_formats.legacy.sql",
   "utf8",
@@ -37,6 +39,19 @@ const runMigrationRange = async (database, migrations, firstId, lastId) => {
     }
   }
 };
+
+const createPgliteMigrationClient = (database) => ({
+  async query(sql, parameters = []) {
+    const normalized = sql.trim().toLowerCase();
+    if (normalized.startsWith("select pg_advisory_lock")) return { rows: [{ pg_advisory_lock: null }] };
+    if (normalized.startsWith("select pg_advisory_unlock")) return { rows: [{ pg_advisory_unlock: null }] };
+    if (parameters.length || normalized.startsWith("select ")) {
+      return database.query(sql, parameters);
+    }
+    await database.exec(sql);
+    return { rows: [], rowCount: 0 };
+  },
+});
 
 const insertPublishingFixture = async (database) => {
   const deliveryFormatColumn = await database.query(`
@@ -3066,12 +3081,131 @@ test("056 backfills legacy product knowledge into one approved reusable product"
   });
 });
 
-test("056 upgrades existing Wiki rows and accepts every source kind idempotently", async () => {
+test("migration runner upgrades the original 056 state to Wiki source kinds in 057", async () => {
+  const migrations = await loadMigrations();
+  const migration056 = migrations.find(
+    (migration) => migration.id === "056_product_service_library.sql",
+  );
+  const migration057 = migrations.find(
+    (migration) => migration.id === "057_wiki_source_kinds.sql",
+  );
+  assert.equal(
+    migration056?.checksum,
+    originalProductServiceLibraryChecksum,
+    "committed migration 056 must remain byte-for-byte stable",
+  );
+  assert.ok(migration057, "057 Wiki source kinds migration must exist");
+  const runnableMigrations = migrations.filter(
+    (migration) => !migration.sql.startsWith("-- requires: pgvector")
+      && migration.id !== "027_wiki_search_v2.sql",
+  );
+  const through056 = runnableMigrations.filter(
+    (migration) => migration.id <= "056_product_service_library.sql",
+  );
+  const sourceKinds = [
+    "faq",
+    "product",
+    "product_service",
+    "service",
+    "policy",
+    "guide",
+    "owned_snapshot",
+  ].sort();
+
+  await withDatabase(async (database) => {
+    const client = createPgliteMigrationClient(database);
+    const initial = await runMigrationsWithClient({
+      client,
+      migrations: through056,
+    });
+    assert.equal(initial.pending.at(-1), "056_product_service_library.sql");
+
+    const stored056 = await database.query(
+      "select checksum from schema_migrations where id = '056_product_service_library.sql'",
+    );
+    assert.equal(stored056.rows[0].checksum, originalProductServiceLibraryChecksum);
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "wiki_build_items",
+        "wiki_build_items_source_kind_check",
+      ),
+      ["faq", "owned_snapshot", "policy", "product"],
+    );
+    const beforeColumn = await database.query(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = 'wiki_documents'
+         and column_name = 'product_service_id'`,
+    );
+    assert.equal(beforeColumn.rows.length, 0);
+
+    const upgraded = await runMigrationsWithClient({
+      client,
+      migrations: runnableMigrations,
+    });
+    assert.deepEqual(upgraded.pending, ["057_wiki_source_kinds.sql"]);
+
+    for (const [table, constraint] of [
+      ["wiki_build_items", "wiki_build_items_source_kind_check"],
+      ["wiki_documents", "wiki_documents_source_kind_check"],
+      ["wiki_source_units", "wiki_source_units_source_kind_check"],
+    ]) {
+      assert.deepEqual(
+        await readConstraintValues(database, table, constraint),
+        sourceKinds,
+      );
+    }
+    const column = await database.query(
+      `select is_nullable from information_schema.columns
+       where table_schema = 'public' and table_name = 'wiki_documents'
+         and column_name = 'product_service_id'`,
+    );
+    assert.deepEqual(column.rows, [{ is_nullable: "YES" }]);
+    const foreignKey = await database.query(
+      `select pg_get_constraintdef(oid) as definition
+       from pg_constraint
+       where conrelid = 'wiki_documents'::regclass
+         and conname = 'wiki_documents_product_service_ownership_fk'`,
+    );
+    assert.match(
+      foreignKey.rows[0].definition,
+      /FOREIGN KEY \(product_service_id, workspace_id, brand_id\).*product_services\(id, workspace_id, brand_id\)/,
+    );
+    const index = await database.query(
+      `select indexname from pg_indexes
+       where schemaname = 'public'
+         and indexname = 'wiki_documents_version_product_service_unique'`,
+    );
+    assert.equal(index.rows.length, 1);
+    const history = await database.query(
+      `select id, checksum from schema_migrations
+       where id in ('056_product_service_library.sql', '057_wiki_source_kinds.sql')
+       order by id`,
+    );
+    assert.equal(history.rows.length, 2);
+    assert.deepEqual(history.rows[0], {
+      id: "056_product_service_library.sql",
+      checksum: originalProductServiceLibraryChecksum,
+    });
+
+    const repeated = await runMigrationsWithClient({
+      client,
+      migrations: runnableMigrations,
+    });
+    assert.deepEqual(repeated.pending, []);
+  });
+});
+
+test("057 upgrades existing Wiki rows and accepts every source kind idempotently", async () => {
   const migrations = await loadMigrations();
   const migration056 = migrations.find(
     (migration) => migration.id === "056_product_service_library.sql",
   );
   assert.ok(migration056, "056 product service migration must exist");
+  const migration057 = migrations.find(
+    (migration) => migration.id === "057_wiki_source_kinds.sql",
+  );
+  assert.ok(migration057, "057 Wiki source kinds migration must exist");
   const sourceKinds = [
     "faq",
     "product",
@@ -3148,7 +3282,8 @@ test("056 upgrades existing Wiki rows and accepts every source kind idempotently
     );
 
     await database.exec(migration056.sql);
-    await database.exec(migration056.sql);
+    await database.exec(migration057.sql);
+    await database.exec(migration057.sql);
 
     for (const [table, constraint] of [
       ["wiki_build_items", "wiki_build_items_source_kind_check"],

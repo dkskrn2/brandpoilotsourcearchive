@@ -262,7 +262,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션은 001부터 056까지 정확한 이름으로 존재한다", async () => {
+test("데이터베이스 마이그레이션은 001부터 057까지 정확한 이름으로 존재한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -323,12 +323,13 @@ test("데이터베이스 마이그레이션은 001부터 056까지 정확한 이
     "054_feedback_submissions.sql",
     "055_brand_core_and_rules.sql",
     "056_product_service_library.sql",
+    "057_wiki_source_kinds.sql",
   ]);
 });
 
-test("056은 Wiki source kind를 schema와 API/worker 계약 전체에서 일치시킨다", async () => {
+test("057은 Wiki source kind를 schema와 API/worker 계약 전체에서 일치시킨다", async () => {
   const [migration, apiWiki, wikiRefresh, compiledTypes, compiledSource] = await Promise.all([
-    readFile("db/migrations/056_product_service_library.sql", "utf8"),
+    readFile("db/migrations/057_wiki_source_kinds.sql", "utf8"),
     readFile("apps/api/src/wiki.ts", "utf8"),
     readFile("workers/brand-pilot-dm-worker/src/wikiRefresh.ts", "utf8"),
     readFile("workers/brand-pilot-dm-worker/src/compiledWikiTypes.ts", "utf8"),
@@ -363,7 +364,7 @@ test("056은 Wiki source kind를 schema와 API/worker 계약 전체에서 일치
   ]) {
     assert.ok(
       source.includes(`export type WikiSourceKind = ${expectedUnion};`),
-      `${name} WikiSourceKind must match migration 056`,
+      `${name} WikiSourceKind must match migration 057`,
     );
   }
   assert.match(compiledTypes, /export function parseWikiSourceKind/);

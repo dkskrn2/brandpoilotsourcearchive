@@ -2244,7 +2244,7 @@ migration과 rollout 원칙:
 
 | 이전 계획 초안 | canonical 계약 | 호환·전환 규칙 |
 |---|---|---|
-| `reference_patterns` mutable row | `reference_analysis_runs` + immutable `reference_pattern_versions` + `reference_tag_assignments` | 057 초안을 그대로 구현하지 않고 058 owner가 새 구조로 작성 |
+| `reference_patterns` mutable row | `reference_analysis_runs` + immutable `reference_pattern_versions` + `reference_tag_assignments` | 058 초안을 그대로 구현하지 않고 059 owner가 새 구조로 작성 |
 | 기존 `ContentProposalRequestV1` | 이 문서 15.2의 bounded snapshot 계약 | ID 목록만 넘기는 초안을 폐기하고 실제 version/hash/trust snapshot을 저장 |
 | 기존 `ContentProposalV1` | 이 문서 15.4 + `ApprovedProposalVersionV1` | AI 원안과 사용자 승인 기준선을 분리 |
 | `ContentOrchestrationV1` | `GenerationBriefV1` | DB/API canonical start input은 Brief이며 old orchestration을 별도 source of truth로 저장하지 않음 |
@@ -2261,27 +2261,28 @@ migration과 rollout 원칙:
 | 번호 | 내용 | owner |
 |---|---|---|
 | 055 | Brand Core, Rule Set, onboarding optional decision, transactional outbox | Brand Center |
-| 056 | 제품·서비스 version, Wiki source kind 보강, owned content source·purpose·summary | Libraries |
-| 057 | 아바타, 외부 저장 브랜드/source, stable reference item | Libraries |
-| 058 | reference snapshot, usage policy, taxonomy/tag, discovery candidate, analysis run/pattern/index version | Libraries |
-| 059 | proposal batch, approved proposal version, GenerationBrief, create idempotency record | Content Creation |
-| 060 | prompt definition/run manifest, quality/evaluation result, 공통 run audit | D Program |
+| 056 | 제품·서비스 version, owned content source·purpose·summary | Libraries |
+| 057 | Wiki source kind와 document/build/source unit 제약 보강 | Libraries |
+| 058 | 아바타, 외부 저장 브랜드/source, stable reference item | Libraries |
+| 059 | reference snapshot, usage policy, taxonomy/tag, discovery candidate, analysis run/pattern/index version | Libraries |
+| 060 | proposal batch, approved proposal version, GenerationBrief, create idempotency record | Content Creation |
+| 061 | prompt definition/run manifest, quality/evaluation result, 공통 run audit | D Program |
 
-- 기존 content migration `058_content_orchestration.sql` 초안은 구현하지 않고 059로 재작성한다.
+- 기존 content migration `058_content_orchestration.sql` 초안은 구현하지 않고 060으로 재작성한다.
 - migration은 additive-first이며 번호 owner를 Program registry에서 검사한다.
 - 숫자 순서는 FK/schema 의존 순서다. feature를 켜는 순서는 아래 실행 순서를 따른다.
-- 기존 Wiki/DM migration 032·033·036을 다시 만들지 않고 056·060에서 필요한 additive column/index만 보강한다.
+- 기존 Wiki/DM migration 032·033·036을 다시 만들지 않고 056·057·061에서 필요한 additive column/index만 보강한다.
 
 ### 29.4 feature flag와 fallback
 
 | flag | 기본값 | 켜기 조건 | off/kill-switch 동작 |
 |---|---|---|---|
 | `ONBOARDING_V2_GATE` | off | Core backfill·draft review·status API ready | 기존 gate/UI |
-| `REFERENCE_DISCOVERY_V2` | off | 057·058, adapter, ACL test ready | 기존 trend/reference 화면 |
+| `REFERENCE_DISCOVERY_V2` | off | 058·059, adapter, ACL test ready | 기존 trend/reference 화면 |
 | `REFERENCE_ANALYSIS_V1` | off | worker heartbeat·schema/eval ready | 분석 CTA 숨김, 기존 metadata만 |
 | `REFERENCE_NIGHTLY_SYNC` | off | 내부 수동 run/cost/rate-limit 검증 | scheduler enqueue 중지 |
 | `CONTENT_PROPOSAL_V1` | off | source summary·proposal worker ready | 기존 콘텐츠 입력 흐름 |
-| `GENERATION_BRIEF_V1` | off | 059, adapter, preservation test ready | 기존 generation start path |
+| `GENERATION_BRIEF_V1` | off | 060, adapter, preservation test ready | 기존 generation start path |
 | `CONTENT_QUALITY_GATE_MODE` | `off` | observe metric 안정 후 `observe`, 승인 뒤 `enforce` | publish 차단하지 않고 기존 검사만 |
 | `DM_PINNED_WIKI_CONTEXT` | off | active Wiki pinning·fallback regression ready | 기존 DM path |
 
@@ -2310,7 +2311,7 @@ CONTENT_PROPOSAL_V1
 ```text
 Ubuntu pre-D baseline 확인
 → repo-local visual research index
-→ additive migration 055~060 dry-run
+→ additive migration 055~061 dry-run
 → prompt/runtime foundation
 → Brand Core suggestion·onboarding v2
 → product/owned source·reference schema
