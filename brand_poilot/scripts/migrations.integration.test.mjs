@@ -3003,6 +3003,69 @@ test("055 backfills tenant-safe approved brand core and rules without mutating c
   });
 });
 
+test("056 backfills legacy product knowledge into one approved reusable product", async () => {
+  const migrations = await loadMigrations();
+  const migration056 = migrations.find(
+    (migration) => migration.id === "056_product_service_library.sql",
+  );
+  assert.ok(migration056, "056 product service migration must exist");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "055_brand_core_and_rules.sql",
+    );
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ('Products', $1) returning id",
+      [`products-${randomUUID()}`],
+    );
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Product Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    const knowledgeImport = await database.query(
+      `insert into knowledge_imports (
+         workspace_id, brand_id, file_name, source_rows, result_json, status
+       ) values ($1, $2, 'products.csv', '[]', '{}', 'succeeded') returning id`,
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+    const legacy = await database.query(
+      `insert into knowledge_entries (
+         workspace_id, brand_id, normalized_question, entry_type, title, content,
+         structured_data, last_import_id
+       ) values (
+         $1, $2, 'legacy-product', 'product', '기존 제품', '기존 설명',
+         '{"features":["기능"]}', $3
+       ) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, knowledgeImport.rows[0].id],
+    );
+
+    await database.exec(migration056.sql);
+    await database.exec(migration056.sql);
+
+    const items = await database.query(
+      `select item.id, item.active_version_id, version.profile_json, version.status
+         from product_services item
+         join product_service_versions version on version.id = item.active_version_id
+        where item.brand_id = $1`,
+      [brand.rows[0].id],
+    );
+    assert.equal(items.rows.length, 1);
+    assert.equal(items.rows[0].status, "approved");
+    assert.equal(items.rows[0].profile_json.contractVersion, "product-service.v1");
+    assert.deepEqual(items.rows[0].profile_json.features, ["기능"]);
+
+    const projection = await database.query(
+      "select status, provenance_json from knowledge_entries where id = $1",
+      [legacy.rows[0].id],
+    );
+    assert.equal(projection.rows[0].status, "legacy_projection");
+    assert.equal(projection.rows[0].provenance_json.productServiceId, items.rows[0].id);
+  });
+});
+
 test("050 stores normalized support request mobile phone numbers", async () => {
   const migrations = await loadMigrations();
   const migration050 = migrations.find(
