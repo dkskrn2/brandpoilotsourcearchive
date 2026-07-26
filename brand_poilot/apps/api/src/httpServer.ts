@@ -138,6 +138,11 @@ function aiContentScope(request: FastifyRequest, brandId: string) {
   return { workspaceId, brandId };
 }
 
+function aiContentActorUserId(request: FastifyRequest): string | null {
+  const session = (request as { aiContentSession?: AuthSession }).aiContentSession;
+  return session?.userId ?? process.env.BRAND_PILOT_DEV_USER_ID ?? null;
+}
+
 function positiveLimit(value: number | undefined, fallback: number) {
   return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : fallback;
 }
@@ -1599,6 +1604,7 @@ export function createServer(
       return brandIntelligenceRepository.confirmBrandAnalysis({
         ...aiContentScope(request, request.params.brandId),
         analysisId: request.params.analysisId,
+        actorUserId: aiContentActorUserId(request),
       });
     },
   );

@@ -1,5 +1,6 @@
 import type { InstagramDeliveryFormat } from "./instagramFormats.js";
 import type { DmAttentionType, DmDecision, DmJobRoute, DmReasonCode } from "./dmTypes.js";
+import type { BrandCoreRepository } from "./brandCoreRepository.js";
 import type {
   AiContentGenerationRecord,
   AiContentJobRecord,
@@ -1001,7 +1002,9 @@ export interface SubjectAnalysisRepositoryV2 extends SubjectAnalysisRepository {
   ): Promise<SubjectAnalysisRecord>;
 }
 
-export interface ApiRepository extends Partial<SubjectAnalysisRepositoryV2> {
+export interface ApiRepository
+  extends Partial<SubjectAnalysisRepositoryV2>,
+    Partial<BrandCoreRepository> {
   health(): Promise<{ database: "ok" }>;
   getAiContentBrandContext(input: BrandScope): Promise<AiContentBrandContextRecord>;
   getConfirmedSubjectAnalysisBrandContext?(input: BrandScope): Promise<SubjectAnalysisBrandContext>;

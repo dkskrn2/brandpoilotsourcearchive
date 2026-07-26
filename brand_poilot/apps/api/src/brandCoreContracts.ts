@@ -69,7 +69,7 @@ export interface BrandCoreDraftMapping {
   needsReview: BrandCoreFieldPath[];
 }
 
-const FIELD_PATHS: readonly BrandCoreFieldPath[] = [
+export const BRAND_CORE_FIELD_PATHS: readonly BrandCoreFieldPath[] = [
   "summary.oneLine",
   "summary.description",
   "audiences",
@@ -228,7 +228,7 @@ export function parseBrandEvidence(value: unknown): BrandEvidenceItem[] {
       ["fieldPath", "sourceType", "sourceId", "sourceUrl", "excerpt", "confidence"],
       path,
     );
-    if (!FIELD_PATHS.includes(evidence.fieldPath as BrandCoreFieldPath)) invalid(`${path}.fieldPath`);
+    if (!BRAND_CORE_FIELD_PATHS.includes(evidence.fieldPath as BrandCoreFieldPath)) invalid(`${path}.fieldPath`);
     if (!SOURCE_TYPES.includes(evidence.sourceType as BrandEvidenceSource)) invalid(`${path}.sourceType`);
     if (
       evidence.confidence !== null
@@ -272,7 +272,7 @@ export function parseBrandReviewState(value: unknown): BrandReviewState {
   const source = object(value, "reviewState");
   const result: BrandReviewState = {};
   for (const [fieldPath, rawReview] of Object.entries(source)) {
-    if (!FIELD_PATHS.includes(fieldPath as BrandCoreFieldPath)) invalid(`reviewState.${fieldPath}`);
+    if (!BRAND_CORE_FIELD_PATHS.includes(fieldPath as BrandCoreFieldPath)) invalid(`reviewState.${fieldPath}`);
     const review = strictObject(
       rawReview,
       ["decision", "reviewerUserId", "reviewedAt"],
@@ -428,7 +428,7 @@ export function mapAnalysisToBrandCoreDraft(
     }),
   );
 
-  const needsReview = FIELD_PATHS.filter((path) => {
+  const needsReview = BRAND_CORE_FIELD_PATHS.filter((path) => {
     if (path === "summary.oneLine") return !core.summary.oneLine;
     if (path === "summary.description") return !core.summary.description;
     if (path === "audiences") {
@@ -446,7 +446,7 @@ export function mapAnalysisToBrandCoreDraft(
   });
 
   const reviewState = Object.fromEntries(
-    FIELD_PATHS.map((fieldPath) => [
+    BRAND_CORE_FIELD_PATHS.map((fieldPath) => [
       fieldPath,
       { decision: "ai_suggested", reviewerUserId: null, reviewedAt: null },
     ]),
