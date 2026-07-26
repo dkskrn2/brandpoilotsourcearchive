@@ -810,7 +810,9 @@ export function createServer(
       reply.code(401);
       return { error: "cron_unauthorized" };
     }
-    if (!repository.cleanupExpiredAvatarUploads || !assetLibraryUpload) {
+    if (!repository.cleanupExpiredAvatarUploads
+      || !repository.cleanupExpiredReferenceUploads
+      || !assetLibraryUpload) {
       throw new Error("asset_library_not_configured");
     }
     const { cleanupAssetLibraryUploadPrefix } = await import("./assetLibraryUpload.js");
@@ -823,6 +825,16 @@ export function createServer(
     );
     if (result.failed.length) {
       request.log.error({ event: "avatar_upload_cleanup_partial_failure", ...result });
+    }
+    const referenceResult = await repository.cleanupExpiredReferenceUploads(
+      (storagePathPrefix, storagePath) => cleanupAssetLibraryUploadPrefix(storagePathPrefix, storagePath, {
+        token: assetLibraryUpload.readWriteToken,
+        deleteBlob: assetLibraryUpload.deleteBlob,
+        listBlobs: assetLibraryUpload.listBlobs,
+      }),
+    );
+    if (referenceResult.failed.length) {
+      request.log.error({ event: "reference_upload_cleanup_partial_failure", ...referenceResult });
     }
     return result;
   });

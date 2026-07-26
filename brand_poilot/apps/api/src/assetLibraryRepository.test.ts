@@ -1117,9 +1117,59 @@ describe("asset library repository", () => {
     }, {});
     const listSql = fake.query.mock.calls.map(([sql]) => String(sql)).find((sql) =>
       sql.includes("from reference_items item") && !sql.includes("brand_trend_saved_media"));
-    expect(listSql).not.toContain("reference_patterns");
+    expect(listSql).not.toContain("observations");
+    expect(listSql).not.toContain("interpretation");
+    expect(listSql).not.toContain("select item.*");
+    expect(listSql).toContain("jsonb_build_object");
+    expect(listSql).toContain("patternAvailable");
     expect(fake.query.mock.calls.some(([sql]) =>
       String(sql).includes("brand_trend_saved_media") && String(sql).includes("instagram_trend_media"),
     )).toBe(true);
+    const brandItemsSql = fake.query.mock.calls.map(([sql]) => String(sql)).find((sql) =>
+      sql.includes("brand_trend_saved_media") && sql.includes("instagram_trend_media"));
+    expect(brandItemsSql).not.toContain("select item.*");
+    expect(brandItemsSql).toContain("patternAvailable");
+  });
+
+  it("loads a tenant-scoped reference detail without mutating its stored snapshot", async () => {
+    const row = {
+      id: imageId, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+      kind: "external_url", content_purpose: "both", origin: "example.com",
+      title: "Crawled title", preview_url: "https://cdn.example.com/og.webp",
+      source_url: "https://example.com/article", format: "url",
+      metadata: { description: "legacy description" }, is_favorite: false,
+      archived_at: null, reference_brand_id: null, created_at: new Date(), updated_at: new Date(),
+      detail_description: "Latest summary", detail_body: "Latest extracted body",
+      snapshot_id: "snapshot-1", snapshot_fetched_at: new Date(),
+      snapshot_metadata: { ogImage: "https://cdn.example.com/og.webp" },
+    };
+    const fake = fakePool((sql) => {
+      if (sql.includes("from reference_items item") && sql.includes("source_snapshots")) {
+        return { rows: [row] };
+      }
+      return {};
+    });
+
+    const detail = await createAssetLibraryRepository(fake.pool).getReference({
+      workspaceId: scope.workspaceId,
+      brandId: scope.brandId,
+      referenceId: imageId,
+    });
+    expect(detail).toMatchObject({
+      id: imageId,
+      title: "Crawled title",
+      sourceUrl: "https://example.com/article",
+      description: "Latest summary",
+      body: "Latest extracted body",
+      snapshot: {
+        id: "snapshot-1",
+        metadata: { ogImage: "https://cdn.example.com/og.webp" },
+      },
+    });
+    const [query, values] = fake.query.mock.calls[0] ?? [];
+    expect(String(query)).toContain("item.workspace_id=$2");
+    expect(String(query)).toContain("item.brand_id=$3");
+    expect(values).toEqual([imageId, scope.workspaceId, scope.brandId]);
+    expect(fake.query.mock.calls.some(([sql]) => /^\s*update\b/i.test(String(sql)))).toBe(false);
   });
 });

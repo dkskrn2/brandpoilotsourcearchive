@@ -34,6 +34,7 @@ function setup(overrides: Partial<ApiRepository> = {}) {
     setDefaultAvatar: vi.fn(async () => ({ ...avatar, isDefault: true })),
     archiveAvatar: vi.fn(async () => undefined), summarizeAvatars: vi.fn(async () => ({ active: 1, defaultAvatarId: null })),
     listReferences: vi.fn(async () => []), addReferenceUrl: vi.fn(async () => ({ id: referenceId })),
+    getReference: vi.fn(async () => ({ id: referenceId, title: "Real detail" })),
     setReferenceFavorite: vi.fn(async () => ({ id: referenceId })), archiveReference: vi.fn(async () => undefined),
     getReferencePattern: vi.fn(async () => ({ observations: ["강한 대비"] })),
     createUploadSession: vi.fn(async (_scope, kind) => ({
@@ -58,6 +59,13 @@ function setup(overrides: Partial<ApiRepository> = {}) {
       immediateCleanup: "succeeded" as const,
     })),
     cleanupExpiredAvatarUploads: vi.fn(async () => ({ scanned: 0, cancelled: 0, failed: [] })),
+    cancelReferenceUpload: vi.fn(async () => ({
+      status: "cleanup_pending" as const,
+      immediateCleanup: "succeeded" as const,
+    })),
+    cleanupExpiredReferenceUploads: vi.fn(async () => ({
+      scanned: 0, cancelled: 0, preserved: 0, failed: [],
+    })),
     confirmReferenceUpload: vi.fn(async () => ({ id: referenceId })),
     listReferenceBrands: vi.fn(async () => []), createReferenceBrand: vi.fn(async () => ({ id: referenceId })),
     createReferenceBrandFromTrend: vi.fn(async () => ({ id: referenceId })),
@@ -183,13 +191,32 @@ describe("asset library customer routes", () => {
     await app.close();
   });
 
-  it("runs abandoned avatar cleanup only through the authenticated cron route", async () => {
+  it("cancels a reference upload with authenticated tenant and actor scope", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/brands/${brandId}/references/upload-sessions/${sessionId}`,
+      headers: auth,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ status: "cleanup_pending", immediateCleanup: "succeeded" });
+    expect(repository.cancelReferenceUpload).toHaveBeenCalledWith(
+      { workspaceId, brandId, actorUserId: userId, sessionId },
+      expect.any(Function),
+    );
+    await app.close();
+  });
+
+  it("runs abandoned avatar and reference cleanup only through the authenticated cron route", async () => {
     const cleanupExpiredAvatarUploads = vi.fn(async () => ({
       scanned: 2,
       cancelled: 1,
       failed: [{ sessionId, error: "asset_library_blob_delete_failed" }],
     }));
-    const { app } = setup({ cleanupExpiredAvatarUploads });
+    const cleanupExpiredReferenceUploads = vi.fn(async () => ({
+      scanned: 1, cancelled: 1, preserved: 0, failed: [],
+    }));
+    const { app } = setup({ cleanupExpiredAvatarUploads, cleanupExpiredReferenceUploads });
     expect((await app.inject({
       method: "GET", url: "/internal/cron/avatar-upload-cleanup",
     })).statusCode).toBe(401);
@@ -204,6 +231,7 @@ describe("asset library customer routes", () => {
       failed: [{ sessionId, error: "asset_library_blob_delete_failed" }],
     });
     expect(cleanupExpiredAvatarUploads).toHaveBeenCalledWith(expect.any(Function));
+    expect(cleanupExpiredReferenceUploads).toHaveBeenCalledWith(expect.any(Function));
     await app.close();
   });
 
@@ -295,6 +323,11 @@ describe("asset library customer routes", () => {
       origin: "acme", favorite: true, recent: 30,
     });
     expect(listed.json()).toEqual([]);
+    const detail = await app.inject({
+      method: "GET", url: `/brands/${brandId}/references/${referenceId}`, headers: auth,
+    });
+    expect(detail.json()).toEqual({ id: referenceId, title: "Real detail" });
+    expect(repository.getReference).toHaveBeenCalledWith({ workspaceId, brandId, referenceId });
     const pattern = await app.inject({
       method: "GET", url: `/brands/${brandId}/references/${referenceId}/pattern`, headers: auth,
     });

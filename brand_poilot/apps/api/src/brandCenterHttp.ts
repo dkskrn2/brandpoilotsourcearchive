@@ -599,6 +599,39 @@ export function registerBrandCenterRoutes(
     async (request) => uploadToken(request as never, "reference"),
   );
 
+  app.delete<{ Params: { brandId: string; sessionId: string } }>(
+    "/brands/:brandId/references/upload-sessions/:sessionId",
+    async (request) => {
+      if (!repository.cancelReferenceUpload) throw new Error("asset_library_not_configured");
+      if (!options.assetLibraryUpload) throw new Error("asset_library_upload_storage_not_configured");
+      return repository.cancelReferenceUpload(
+        {
+          ...options.scope(request, request.params.brandId),
+          actorUserId: requireActor(options, request),
+          sessionId: request.params.sessionId,
+        },
+        (storagePathPrefix, storagePath) => cleanupAssetLibraryUploadPrefix(storagePathPrefix, storagePath, {
+          token: options.assetLibraryUpload!.readWriteToken,
+          deleteBlob: options.assetLibraryUpload!.deleteBlob,
+          listBlobs: options.assetLibraryUpload!.listBlobs,
+        }),
+      );
+    },
+  );
+
+  app.get<{ Params: { brandId: string; referenceId: string } }>(
+    "/brands/:brandId/references/:referenceId",
+    async (request) => {
+      if (!repository.getReference) throw new Error("asset_library_not_configured");
+      const value = await repository.getReference({
+        ...options.scope(request, request.params.brandId),
+        referenceId: request.params.referenceId,
+      });
+      if (!value) throw new Error("reference_not_found");
+      return value;
+    },
+  );
+
   app.post<{ Params: { brandId: string }; Body: unknown }>(
     "/brands/:brandId/references/confirm",
     async (request, reply) => {

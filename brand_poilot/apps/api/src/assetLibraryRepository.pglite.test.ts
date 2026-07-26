@@ -326,4 +326,74 @@ describe("avatar and reference library PostgreSQL contract", () => {
     expect(canonical.rows[0]?.item_count).toBe(1);
     expect(canonical.rows[0]?.active_count).toBeGreaterThanOrEqual(1);
   });
+
+  it("keeps list rows lightweight and lazy-loads the latest successful real snapshot", async () => {
+    const db = database as PGlite;
+    const repository = createAssetLibraryRepository(repositoryPool(db));
+    const source = await db.query<{ id: string }>(
+      `insert into source_urls (
+         workspace_id,brand_id,source_type,url,url_hash,domain,title,meta_description,status,
+         enabled,content_purpose
+       ) values($1,$2,'reference',$3,$4,'snapshot.example','Stored source title',
+         'Stored source description','crawl_failed',false,'both') returning id`,
+      [workspaceId, brandId, "https://snapshot.example/article", `snapshot-${Date.now()}`],
+    );
+    const inserted = await db.query<{ id: string }>(
+      `insert into reference_items (
+         workspace_id,brand_id,kind,content_purpose,origin,title,source_url,format,metadata,
+         source_url_id,created_by_user_id
+       ) values($1,$2,'external_url','both','snapshot.example','Stored title',$3,'url',
+         $4::jsonb,$5,$6) returning id`,
+      [
+        workspaceId,
+        brandId,
+        "https://snapshot.example/article",
+        JSON.stringify({ description: "Legacy retained description", caption: "must not be listed" }),
+        source.rows[0].id,
+        actorId,
+      ],
+    );
+    await db.query(
+      `insert into source_snapshots (
+         workspace_id,brand_id,source_url_id,status,fetched_at,extracted_title,
+         extracted_text,summary,metadata
+       ) values
+       ($1,$2,$3,'succeeded',now()-interval '2 hours','Old title','Old body','Old summary','{}'),
+       ($1,$2,$3,'succeeded',now()-interval '1 hour','Latest real title','Latest body',
+         'Latest summary',$4::jsonb),
+       ($1,$2,$3,'failed',now(),'Failed title',null,null,'{}')`,
+      [
+        workspaceId,
+        brandId,
+        source.rows[0].id,
+        JSON.stringify({ ogImage: "https://cdn.example.com/latest-og.webp", crawler: "brand-pilot-api" }),
+      ],
+    );
+
+    const listed = await repository.listReferences({ workspaceId, brandId }, { origin: "snapshot.example" });
+    const summary = listed.find((item) => item.id === inserted.rows[0].id);
+    expect(summary).toMatchObject({
+      title: "Latest real title",
+      previewUrl: "https://cdn.example.com/latest-og.webp",
+      metadata: { patternAvailable: false },
+    });
+    expect(summary?.metadata).not.toHaveProperty("caption");
+    expect(summary?.metadata).not.toHaveProperty("description");
+
+    const detail = await repository.getReference({
+      workspaceId,
+      brandId,
+      referenceId: inserted.rows[0].id,
+    });
+    expect(detail).toMatchObject({
+      title: "Latest real title",
+      sourceUrl: "https://snapshot.example/article",
+      previewUrl: "https://cdn.example.com/latest-og.webp",
+      description: "Latest summary",
+      body: "Latest body",
+      snapshot: {
+        metadata: { ogImage: "https://cdn.example.com/latest-og.webp", crawler: "brand-pilot-api" },
+      },
+    });
+  });
 });

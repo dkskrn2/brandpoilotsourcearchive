@@ -57,6 +57,15 @@ export interface ReferenceItem extends BrandScope {
   createdAt: string;
   updatedAt: string;
 }
+export interface ReferenceDetail extends ReferenceItem {
+  description: string | null;
+  body: string | null;
+  snapshot: {
+    id: string;
+    fetchedAt: string;
+    metadata: Record<string, unknown>;
+  } | null;
+}
 export interface ReferenceBrand extends BrandScope {
   id: string;
   platform: string;
@@ -79,6 +88,7 @@ export interface AssetLibraryRepository {
   archiveAvatar(scope: BrandScope & { actorUserId: string; avatarId: string }): Promise<void>;
   summarizeAvatars(scope: BrandScope): Promise<{ active: number; defaultAvatarId: string | null }>;
   listReferences(scope: BrandScope, filters: ReferenceFilters): Promise<ReferenceItem[]>;
+  getReference(scope: BrandScope & { referenceId: string }): Promise<ReferenceDetail | null>;
   addReferenceUrl(scope: BrandScope & { actorUserId: string }, input: ReferenceUrlInput): Promise<ReferenceItem>;
   setReferenceFavorite(scope: BrandScope & { actorUserId: string; referenceId: string }, favorite: boolean): Promise<ReferenceItem>;
   archiveReference(scope: BrandScope & { actorUserId: string; referenceId: string }): Promise<void>;
@@ -158,6 +168,20 @@ function reference(row: Record<string, unknown>): ReferenceItem {
     archivedAt: row.archived_at ? iso(row.archived_at) : null,
     referenceBrandId: row.reference_brand_id ? String(row.reference_brand_id) : null,
     createdAt: iso(row.created_at), updatedAt: iso(row.updated_at),
+  };
+}
+function referenceDetail(row: Record<string, unknown>): ReferenceDetail {
+  return {
+    ...reference(row),
+    description: row.detail_description ? String(row.detail_description) : null,
+    body: row.detail_body ? String(row.detail_body) : null,
+    snapshot: row.snapshot_id
+      ? {
+        id: String(row.snapshot_id),
+        fetchedAt: iso(row.snapshot_fetched_at),
+        metadata: json(row.snapshot_metadata, {}),
+      }
+      : null,
   };
 }
 function refBrand(row: Record<string, unknown>): ReferenceBrand {
@@ -526,10 +550,98 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
       if (filters.favorite !== undefined) add("item.is_favorite=?", filters.favorite);
       if (filters.recent) add("item.created_at >= now() - (?::int * interval '1 day')", filters.recent);
       const result = await pool.query(
-        `select item.* from reference_items item where ${where.join(" and ")} order by item.created_at desc`,
+        `select
+          item.id,item.workspace_id,item.brand_id,item.kind,item.content_purpose,item.origin,
+          coalesce(nullif(latest_snapshot.extracted_title,''),item.title) title,
+          coalesce(
+            nullif(latest_snapshot.metadata->>'ogImage',''),
+            nullif(latest_snapshot.metadata->>'image',''),
+            item.preview_url
+          ) preview_url,
+          item.source_url,item.format,item.is_favorite,item.archived_at,item.reference_brand_id,
+          item.created_at,item.updated_at,
+          jsonb_strip_nulls(jsonb_build_object(
+            'patternAvailable',exists(
+              select 1 from reference_patterns pattern
+              where pattern.reference_item_id=item.id
+                and pattern.workspace_id=item.workspace_id
+                and pattern.brand_id=item.brand_id
+            ),
+            'fileName',case when item.kind='upload' then item.metadata->>'fileName' end,
+            'mimeType',case when item.kind='upload' then artifact.mime_type end,
+            'sizeBytes',case when item.kind='upload' then artifact.byte_size end
+          )) metadata
+          from reference_items item
+          left join storage_artifacts artifact
+            on artifact.id=item.storage_artifact_id
+           and artifact.workspace_id=item.workspace_id
+           and artifact.brand_id=item.brand_id
+          left join lateral (
+            select snapshot.extracted_title,snapshot.metadata
+            from source_snapshots snapshot
+            where snapshot.source_url_id=item.source_url_id
+              and snapshot.workspace_id=item.workspace_id
+              and snapshot.brand_id=item.brand_id
+              and snapshot.status='succeeded'
+            order by snapshot.fetched_at desc,snapshot.id desc
+            limit 1
+          ) latest_snapshot on item.source_url_id is not null
+          where ${where.join(" and ")}
+          order by item.created_at desc`,
         values,
       );
       return result.rows.map((row) => reference(row as Record<string, unknown>));
+    },
+    async getReference(scope) {
+      const result = await pool.query(
+        `select
+          item.id,item.workspace_id,item.brand_id,item.kind,item.content_purpose,item.origin,
+          coalesce(nullif(latest_snapshot.extracted_title,''),item.title) title,
+          coalesce(
+            nullif(latest_snapshot.metadata->>'ogImage',''),
+            nullif(latest_snapshot.metadata->>'image',''),
+            item.preview_url
+          ) preview_url,
+          item.source_url,item.format,item.metadata,item.is_favorite,item.archived_at,
+          item.reference_brand_id,item.created_at,item.updated_at,
+          coalesce(
+            nullif(latest_snapshot.summary,''),
+            nullif(latest_snapshot.extracted_text,''),
+            nullif(item.metadata->>'description',''),
+            nullif(source.meta_description,'')
+          ) detail_description,
+          coalesce(
+            nullif(latest_snapshot.extracted_text,''),
+            nullif(item.metadata->>'caption',''),
+            nullif(item.metadata->>'body',''),
+            nullif(item.metadata->>'description','')
+          ) detail_body,
+          latest_snapshot.id snapshot_id,
+          latest_snapshot.fetched_at snapshot_fetched_at,
+          latest_snapshot.metadata snapshot_metadata
+          from reference_items item
+          left join source_urls source
+            on source.id=item.source_url_id
+           and source.workspace_id=item.workspace_id
+           and source.brand_id=item.brand_id
+          left join lateral (
+            select snapshot.id,snapshot.fetched_at,snapshot.extracted_title,
+              snapshot.extracted_text,snapshot.summary,snapshot.metadata
+            from source_snapshots snapshot
+            where snapshot.source_url_id=item.source_url_id
+              and snapshot.workspace_id=item.workspace_id
+              and snapshot.brand_id=item.brand_id
+              and snapshot.status='succeeded'
+            order by snapshot.fetched_at desc,snapshot.id desc
+            limit 1
+          ) latest_snapshot on item.source_url_id is not null
+          where item.id=$1 and item.workspace_id=$2 and item.brand_id=$3
+            and item.archived_at is null`,
+        [scope.referenceId, scope.workspaceId, scope.brandId],
+      );
+      return result.rowCount
+        ? referenceDetail(result.rows[0] as Record<string, unknown>)
+        : null;
     },
     async addReferenceUrl(scope, raw) {
       const input = parseReferenceUrlInput(raw);
@@ -1308,7 +1420,19 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
       );
       if (!brand.rowCount) throw new Error("reference_brand_not_found");
       const result = await pool.query(
-        `select item.* from reference_items item
+        `select
+          item.id,item.workspace_id,item.brand_id,item.kind,item.content_purpose,item.origin,
+          left(item.title,160) title,item.preview_url,item.source_url,item.format,
+          item.is_favorite,item.archived_at,item.reference_brand_id,item.created_at,item.updated_at,
+          jsonb_strip_nulls(jsonb_build_object(
+            'patternAvailable',exists(
+              select 1 from reference_patterns pattern
+              where pattern.reference_item_id=item.id
+                and pattern.workspace_id=item.workspace_id
+                and pattern.brand_id=item.brand_id
+            )
+          )) metadata
+          from reference_items item
           join brand_trend_saved_media saved
             on saved.id=item.saved_trend_id and saved.workspace_id=item.workspace_id and saved.brand_id=item.brand_id
           join instagram_trend_media media on media.id=saved.trend_media_id
