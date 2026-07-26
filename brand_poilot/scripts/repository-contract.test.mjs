@@ -353,8 +353,12 @@ test("058은 avatar와 typed-origin reference library 계약을 정의한다", a
   assert.doesNotMatch(migration, /\b(likeness|consent)\b/i);
   assert.match(migration, /brand_avatar_images_mime_type_check[\s\S]*'image\/png'[\s\S]*'image\/jpeg'[\s\S]*'image\/webp'/i);
   assert.match(migration, /brand_avatar_images_size_check[\s\S]*5242880/i);
+  assert.match(migration, /create\s+table\s+if\s+not\s+exists\s+brand_avatars\s*\([\s\S]*?created_by_user_id\s+uuid\s+not\s+null/i);
+  assert.match(migration, /create\s+table\s+if\s+not\s+exists\s+brand_avatar_images\s*\([\s\S]*?created_by_user_id\s+uuid\s+not\s+null/i);
   assert.match(migration, /brand_avatars_one_active_default/i);
   assert.match(migration, /brand_avatar_images_one_representative/i);
+  assert.match(migration, /create\s+(?:or\s+replace\s+)?function[\s\S]*brand_avatar[\s\S]*image_count[\s\S]*representative_count/i);
+  assert.match(migration, /create\s+constraint\s+trigger[\s\S]*deferrable\s+initially\s+deferred/i);
   assert.match(migration, /reference_items_saved_trend_origin_unique/i);
   assert.match(migration, /insert\s+into\s+reference_item_source_url_provenance/i);
   assert.match(migration, /from\s+brand_trend_saved_media/i);

@@ -58,7 +58,7 @@ create table if not exists brand_avatars (
   is_default boolean not null default false,
   status text not null default 'active'
     check (status in ('active', 'archived')),
-  created_by_user_id uuid null,
+  created_by_user_id uuid not null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint brand_avatars_brand_ownership_fk
@@ -90,7 +90,7 @@ create table if not exists brand_avatar_images (
   mime_type text not null,
   size_bytes bigint not null,
   checksum text not null,
-  created_by_user_id uuid null,
+  created_by_user_id uuid not null,
   created_at timestamptz not null default now(),
   constraint brand_avatar_images_position_check
     check (position between 1 and 5),
@@ -117,6 +117,78 @@ create table if not exists brand_avatar_images (
 create unique index if not exists brand_avatar_images_one_representative
   on brand_avatar_images (avatar_id)
   where is_representative;
+
+create or replace function assert_brand_avatar_image_commit_state(
+  target_avatar_id uuid
+)
+returns void
+language plpgsql
+as $$
+declare
+  image_count integer;
+  representative_count integer;
+begin
+  if target_avatar_id is null or not exists (
+    select 1 from brand_avatars avatar where avatar.id = target_avatar_id
+  ) then
+    return;
+  end if;
+
+  select
+    count(*)::integer,
+    count(*) filter (where image.is_representative)::integer
+  into image_count, representative_count
+  from brand_avatar_images image
+  where image.avatar_id = target_avatar_id;
+
+  if image_count not between 1 and 5 or representative_count <> 1 then
+    raise exception using
+      errcode = '23514',
+      message = 'brand_avatar_image_commit_state_invalid',
+      constraint = 'brand_avatar_images_commit_state_check';
+  end if;
+end;
+$$;
+
+create or replace function check_brand_avatar_image_commit_state_from_avatar()
+returns trigger
+language plpgsql
+as $$
+begin
+  perform assert_brand_avatar_image_commit_state(new.id);
+  return null;
+end;
+$$;
+
+create or replace function check_brand_avatar_image_commit_state_from_image()
+returns trigger
+language plpgsql
+as $$
+begin
+  if tg_op in ('INSERT', 'UPDATE') then
+    perform assert_brand_avatar_image_commit_state(new.avatar_id);
+  end if;
+  if tg_op = 'DELETE'
+     or (tg_op = 'UPDATE' and old.avatar_id <> new.avatar_id) then
+    perform assert_brand_avatar_image_commit_state(old.avatar_id);
+  end if;
+  return null;
+end;
+$$;
+
+drop trigger if exists brand_avatars_image_commit_state on brand_avatars;
+create constraint trigger brand_avatars_image_commit_state
+after insert or update on brand_avatars
+deferrable initially deferred
+for each row
+execute function check_brand_avatar_image_commit_state_from_avatar();
+
+drop trigger if exists brand_avatar_images_commit_state on brand_avatar_images;
+create constraint trigger brand_avatar_images_commit_state
+after insert or update or delete on brand_avatar_images
+deferrable initially deferred
+for each row
+execute function check_brand_avatar_image_commit_state_from_image();
 
 create table if not exists reference_brands (
   id uuid primary key default gen_random_uuid(),

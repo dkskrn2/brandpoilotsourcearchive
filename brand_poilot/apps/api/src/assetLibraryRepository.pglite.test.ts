@@ -10,6 +10,67 @@ const workspaceId = "21000000-0000-4000-8000-000000000001";
 const brandId = "22000000-0000-4000-8000-000000000002";
 const actorId = "23000000-0000-4000-8000-000000000003";
 
+const transactionCommits = async (
+  db: PGlite,
+  operation: () => Promise<void>,
+): Promise<boolean> => {
+  await db.exec("begin");
+  try {
+    await operation();
+    await db.exec("commit");
+    return true;
+  } catch {
+    await db.exec("rollback").catch(() => undefined);
+    return false;
+  }
+};
+
+const stageAvatar = async (
+  db: PGlite,
+  input: {
+    id: string;
+    name: string;
+    imageCount: number;
+    representativePosition: number | null;
+    isDefault?: boolean;
+    avatarCreator?: string | null;
+    imageCreator?: string | null;
+  },
+) => {
+  await db.query(
+    `insert into brand_avatars (
+       id, workspace_id, brand_id, name, is_default, created_by_user_id
+     ) values ($1, $2, $3, $4, $5, $6)`,
+    [
+      input.id,
+      workspaceId,
+      brandId,
+      input.name,
+      input.isDefault ?? false,
+      input.avatarCreator === undefined ? actorId : input.avatarCreator,
+    ],
+  );
+  for (let position = 1; position <= input.imageCount; position += 1) {
+    await db.query(
+      `insert into brand_avatar_images (
+         workspace_id, brand_id, avatar_id, position, is_representative,
+         storage_url, storage_path, mime_type, size_bytes, checksum, created_by_user_id
+       ) values ($1, $2, $3, $4, $5, $6, $7, 'image/webp', 1024, $8, $9)`,
+      [
+        workspaceId,
+        brandId,
+        input.id,
+        position,
+        position === input.representativePosition,
+        `https://cdn.example.com/${input.id}-${position}.webp`,
+        `avatars/${input.id}-${position}.webp`,
+        String(position).repeat(64),
+        input.imageCreator === undefined ? actorId : input.imageCreator,
+      ],
+    );
+  }
+};
+
 beforeAll(async () => {
   database = await PGlite.create({ extensions: { pgcrypto } });
   const directory = resolve(process.cwd(), "../../db/migrations");
@@ -36,56 +97,148 @@ afterAll(async () => {
 });
 
 describe("avatar and reference library PostgreSQL contract", () => {
-  it("serializes competing active defaults and caps image positions at five", async () => {
+  it("requires a valid workspace actor for avatars and avatar images", async () => {
     const db = database as PGlite;
-    const defaults = await Promise.allSettled([
-      db.query(
-        `insert into brand_avatars (
-           workspace_id, brand_id, name, is_default, created_by_user_id
-         ) values ($1, $2, 'Primary', true, $3) returning id`,
-        [workspaceId, brandId, actorId],
-      ),
-      db.query(
-        `insert into brand_avatars (
-           workspace_id, brand_id, name, is_default, created_by_user_id
-         ) values ($1, $2, 'Competing', true, $3) returning id`,
-        [workspaceId, brandId, actorId],
-      ),
-    ]);
-    expect(defaults.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    expect(defaults.filter((result) => result.status === "rejected")).toHaveLength(1);
-
-    const avatar = await db.query<{ id: string }>(
-      "select id from brand_avatars where workspace_id = $1 and brand_id = $2",
-      [workspaceId, brandId],
+    const columns = await db.query<{ table_name: string; is_nullable: string }>(
+      `select table_name, is_nullable
+         from information_schema.columns
+        where table_schema = 'public'
+          and table_name in ('brand_avatars', 'brand_avatar_images')
+          and column_name = 'created_by_user_id'
+        order by table_name`,
     );
-    for (let position = 1; position <= 5; position += 1) {
-      await db.query(
-        `insert into brand_avatar_images (
-           workspace_id, brand_id, avatar_id, position, is_representative,
-           storage_url, storage_path, mime_type, size_bytes, checksum, created_by_user_id
-         ) values ($1, $2, $3, $4, $5, $6, $7, 'image/webp', 1024, $8, $9)`,
-        [
-          workspaceId,
-          brandId,
-          avatar.rows[0].id,
-          position,
-          position === 1,
-          `https://cdn.example.com/avatar-${position}.webp`,
-          `avatars/avatar-${position}.webp`,
-          String(position).repeat(64),
-          actorId,
-        ],
-      );
+    expect(columns.rows).toEqual([
+      { table_name: "brand_avatar_images", is_nullable: "NO" },
+      { table_name: "brand_avatars", is_nullable: "NO" },
+    ]);
+
+    const nullAvatarId = "24000000-0000-4000-8000-000000000004";
+    const nullAvatarCommitted = await transactionCommits(db, async () => {
+      await stageAvatar(db, {
+        id: nullAvatarId,
+        name: "Missing avatar actor",
+        imageCount: 1,
+        representativePosition: 1,
+        avatarCreator: null,
+      });
+    });
+    if (nullAvatarCommitted) {
+      await db.query("delete from brand_avatars where id = $1", [nullAvatarId]);
     }
-    await expect(db.query(
-      `insert into brand_avatar_images (
-         workspace_id, brand_id, avatar_id, position, is_representative,
-         storage_url, storage_path, mime_type, size_bytes, checksum, created_by_user_id
-       ) values ($1, $2, $3, 6, false, 'https://cdn.example.com/avatar-6.webp',
-         'avatars/avatar-6.webp', 'image/webp', 1024, $4, $5)`,
-      [workspaceId, brandId, avatar.rows[0].id, "6".repeat(64), actorId],
-    )).rejects.toThrow();
+    expect(nullAvatarCommitted).toBe(false);
+
+    const nullImageId = "25000000-0000-4000-8000-000000000005";
+    const nullImageCommitted = await transactionCommits(db, async () => {
+      await stageAvatar(db, {
+        id: nullImageId,
+        name: "Missing image actor",
+        imageCount: 1,
+        representativePosition: 1,
+        imageCreator: null,
+      });
+    });
+    if (nullImageCommitted) {
+      await db.query("delete from brand_avatars where id = $1", [nullImageId]);
+    }
+    expect(nullImageCommitted).toBe(false);
+  });
+
+  it("validates one-to-five images and exactly one representative at transaction commit", async () => {
+    const db = database as PGlite;
+    const zeroImageId = "26000000-0000-4000-8000-000000000006";
+    const zeroImagesCommitted = await transactionCommits(db, async () => {
+      await stageAvatar(db, {
+        id: zeroImageId,
+        name: "No images",
+        imageCount: 0,
+        representativePosition: null,
+      });
+    });
+    if (zeroImagesCommitted) {
+      await db.query("delete from brand_avatars where id = $1", [zeroImageId]);
+    }
+    expect(zeroImagesCommitted).toBe(false);
+
+    const noRepresentativeId = "27000000-0000-4000-8000-000000000007";
+    const noRepresentativeCommitted = await transactionCommits(db, async () => {
+      await stageAvatar(db, {
+        id: noRepresentativeId,
+        name: "No representative",
+        imageCount: 2,
+        representativePosition: null,
+      });
+    });
+    if (noRepresentativeCommitted) {
+      await db.query("delete from brand_avatars where id = $1", [noRepresentativeId]);
+    }
+    expect(noRepresentativeCommitted).toBe(false);
+
+    const tooManyId = "28000000-0000-4000-8000-000000000008";
+    const tooManyCommitted = await transactionCommits(db, async () => {
+      await stageAvatar(db, {
+        id: tooManyId,
+        name: "Too many images",
+        imageCount: 6,
+        representativePosition: 1,
+      });
+    });
+    expect(tooManyCommitted).toBe(false);
+
+    const validId = "29000000-0000-4000-8000-000000000009";
+    const validCommitted = await transactionCommits(db, async () => {
+      await stageAvatar(db, {
+        id: validId,
+        name: "Valid avatar",
+        imageCount: 5,
+        representativePosition: 1,
+      });
+    });
+    expect(validCommitted).toBe(true);
+
+    const representativeDeleteCommitted = await transactionCommits(db, async () => {
+      await db.query(
+        "delete from brand_avatar_images where avatar_id = $1 and is_representative",
+        [validId],
+      );
+    });
+    expect(representativeDeleteCommitted).toBe(false);
+    const retainedRepresentative = await db.query<{ count: number }>(
+      `select count(*)::int as count
+         from brand_avatar_images
+        where avatar_id = $1 and is_representative`,
+      [validId],
+    );
+    expect(retainedRepresentative.rows[0]?.count).toBe(1);
+
+    const cascadeDeleteCommitted = await transactionCommits(db, async () => {
+      await db.query("delete from brand_avatars where id = $1", [validId]);
+    });
+    expect(cascadeDeleteCommitted).toBe(true);
+  });
+
+  it("keeps the active default unique across valid avatar transactions", async () => {
+    const db = database as PGlite;
+    const primaryCommitted = await transactionCommits(db, async () => {
+      await stageAvatar(db, {
+        id: "2a000000-0000-4000-8000-00000000000a",
+        name: "Primary",
+        imageCount: 1,
+        representativePosition: 1,
+        isDefault: true,
+      });
+    });
+    expect(primaryCommitted).toBe(true);
+
+    const competingCommitted = await transactionCommits(db, async () => {
+      await stageAvatar(db, {
+        id: "2b000000-0000-4000-8000-00000000000b",
+        name: "Competing",
+        imageCount: 1,
+        representativePosition: 1,
+        isDefault: true,
+      });
+    });
+    expect(competingCommitted).toBe(false);
   });
 
   it("deduplicates typed origins and rejects invalid image metadata", async () => {

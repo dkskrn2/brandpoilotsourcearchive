@@ -3525,18 +3525,13 @@ test("058 backfills one canonical trend item plus unlinked active reference URLs
       [brand.rows[0].id],
     ));
 
+    await database.exec("begin");
     const avatar = await database.query(
       `insert into brand_avatars (
          workspace_id, brand_id, name, is_default, created_by_user_id
        ) values ($1, $2, 'Founder', true, $3) returning id`,
       [workspace.rows[0].id, brand.rows[0].id, actor.rows[0].id],
     );
-    await assert.rejects(database.query(
-      `insert into brand_avatars (
-         workspace_id, brand_id, name, is_default, created_by_user_id
-       ) values ($1, $2, 'Duplicate default', true, $3)`,
-      [workspace.rows[0].id, brand.rows[0].id, actor.rows[0].id],
-    ));
     await database.query(
       `insert into brand_avatar_images (
          workspace_id, brand_id, avatar_id, position, is_representative,
@@ -3551,6 +3546,13 @@ test("058 backfills one canonical trend item plus unlinked active reference URLs
         actor.rows[0].id,
       ],
     );
+    await database.exec("commit");
+    await assert.rejects(database.query(
+      `insert into brand_avatars (
+         workspace_id, brand_id, name, is_default, created_by_user_id
+       ) values ($1, $2, 'Duplicate default', true, $3)`,
+      [workspace.rows[0].id, brand.rows[0].id, actor.rows[0].id],
+    ));
     await assert.rejects(database.query(
       `insert into brand_avatar_images (
          workspace_id, brand_id, avatar_id, position, is_representative,
