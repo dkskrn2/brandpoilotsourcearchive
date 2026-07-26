@@ -1760,14 +1760,71 @@ describe("API server", () => {
       logger: false,
     });
 
+    const start = await app.inject({ method: "GET", url: "/auth/meta/start" });
+    const state = new URL(start.headers.location ?? "").searchParams.get("state");
     const callback = await app.inject({
       method: "GET",
-      url: "/auth/meta/callback?error=access_denied&error_description=SECRET_PROVIDER_TEXT",
+      url: `/auth/meta/callback?error=access_denied&error_description=SECRET_PROVIDER_TEXT&state=${state}`,
+      headers: { cookie: String(start.headers["set-cookie"]) },
     });
 
     expect(callback.statusCode).toBe(302);
     expect(callback.headers.location).toBe("http://localhost:5173/channels?instagram=cancelled");
     expect(callback.headers.location).not.toContain("SECRET_PROVIDER_TEXT");
+    expect(String(callback.headers["set-cookie"])).toContain("bp_instagram_login_state=");
+    expect(String(callback.headers["set-cookie"])).toContain("Max-Age=0");
+  });
+
+  it("does not let a forged provider error consume a legitimate state and rejects replay after valid denial", async () => {
+    const app = createServer({
+      repository: createRepository(),
+      instagramLogin: {
+        appId: "instagram-app-id",
+        appSecret: "instagram-app-secret",
+        redirectUri: "http://localhost:4000/auth/meta/callback",
+        frontendUrl: "http://localhost:5173",
+      },
+      logger: false,
+    });
+    const start = await app.inject({ method: "GET", url: "/auth/meta/start" });
+    const state = new URL(start.headers.location ?? "").searchParams.get("state");
+    const stateCookie = String(start.headers["set-cookie"]);
+    expect(stateCookie).toContain("HttpOnly");
+
+    for (const forgedUrl of [
+      "/auth/meta/callback?error=access_denied&error_description=SECRET_MISSING_STATE",
+      "/auth/meta/callback?error=access_denied&error_description=SECRET_MISMATCHED_STATE&state=forged-state",
+    ]) {
+      const forged = await app.inject({
+        method: "GET",
+        url: forgedUrl,
+        headers: { cookie: stateCookie },
+      });
+
+      expect(forged.statusCode).toBe(302);
+      expect(forged.headers.location).toBe(
+        "http://localhost:5173/channels?instagram=failed&reason=invalid_callback",
+      );
+      expect(forged.headers.location).not.toContain("SECRET");
+      expect(forged.headers["set-cookie"]).toBeUndefined();
+    }
+
+    const denied = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?error=access_denied&state=${state}`,
+      headers: { cookie: stateCookie },
+    });
+    expect(denied.headers.location).toBe("http://localhost:5173/channels?instagram=cancelled");
+    expect(String(denied.headers["set-cookie"])).toContain("Max-Age=0");
+
+    const replayed = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?error=access_denied&state=${state}`,
+    });
+    expect(replayed.headers.location).toBe(
+      "http://localhost:5173/channels?instagram=failed&reason=invalid_callback",
+    );
+    expect(replayed.headers["set-cookie"]).toBeUndefined();
   });
 
   it.each([

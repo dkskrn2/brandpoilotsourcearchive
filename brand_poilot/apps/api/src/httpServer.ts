@@ -1,5 +1,5 @@
 import cors from "@fastify/cors";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import Fastify, { LogController, type FastifyReply } from "fastify";
 import rawBody from "fastify-raw-body";
 import type { FastifyLoggerOptions } from "fastify/types/logger";
@@ -359,6 +359,13 @@ function readCookie(header: string | undefined, name: string) {
 
 function cookie(name: string, value: string, maxAge: number, secure = false, sameSite: "Lax" | "None" = "Lax") {
   return `${name}=${value}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
+}
+
+function matchesOpaqueSecret(candidate: string | null | undefined, expected: string | null | undefined) {
+  if (!candidate || !expected) return false;
+  const candidateDigest = createHash("sha256").update(candidate).digest();
+  const expectedDigest = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(candidateDigest, expectedDigest);
 }
 
 function sessionCookie(value: string, maxAge: number, secure: boolean) {
@@ -990,12 +997,19 @@ export function createServer(
       reply.header("set-cookie", clearState).code(503);
       return { error: "instagram_login_not_configured" };
     }
+    const storedState = readCookie(request.headers.cookie, instagramLoginStateCookie);
+    if (!matchesOpaqueSecret(request.query.state, storedState)) {
+      return reply.redirect(instagramLoginCallbackUrl(
+        instagramLogin.frontendUrl,
+        "failed",
+        "invalid_callback",
+      ));
+    }
+    reply.header("set-cookie", clearState);
     if (request.query.error) {
-      reply.header("set-cookie", clearState);
       return reply.redirect(instagramLoginCallbackUrl(instagramLogin.frontendUrl, "cancelled"));
     }
-    if (!request.query.code || request.query.state !== readCookie(request.headers.cookie, instagramLoginStateCookie)) {
-      reply.header("set-cookie", clearState);
+    if (!request.query.code) {
       return reply.redirect(instagramLoginCallbackUrl(
         instagramLogin.frontendUrl,
         "failed",
@@ -1007,7 +1021,6 @@ export function createServer(
       const token = readCookie(request.headers.cookie, "bp_session");
       const session = token ? await kakaoAuth.getSession(token) : null;
       if (!session) {
-        reply.header("set-cookie", clearState);
         return reply.redirect(instagramLoginCallbackUrl(
           instagramLogin.frontendUrl,
           "failed",
@@ -1046,11 +1059,9 @@ export function createServer(
         secretValue: token.accessToken,
         authMode: "instagram_login",
       });
-      reply.header("set-cookie", clearState);
       return reply.redirect(instagramLoginCallbackUrl(instagramLogin.frontendUrl, "connected"));
     } catch (error) {
       request.log.warn({ event: "instagram_login_callback_failed", errorCode: safeInternalErrorCode(error) }, "instagram_login_callback_failed");
-      reply.header("set-cookie", clearState);
       return reply.redirect(instagramLoginCallbackUrl(
         instagramLogin.frontendUrl,
         "failed",

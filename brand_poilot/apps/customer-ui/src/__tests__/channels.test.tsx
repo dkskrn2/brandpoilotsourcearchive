@@ -204,11 +204,22 @@ describe("ChannelsPage", () => {
   });
 
   it.each([
-    ["?instagram=connected", { channel: "instagram", outcome: "success", reason: null }],
-    ["?instagram=cancelled", { channel: "instagram", outcome: "cancelled", reason: null }],
+    [
+      "?instagram=connected&reason=campaign",
+      { channel: "instagram", outcome: "success", reason: null, consumedKeys: ["instagram"] }
+    ],
+    [
+      "?instagram=cancelled&reason=campaign",
+      { channel: "instagram", outcome: "cancelled", reason: null, consumedKeys: ["instagram"] }
+    ],
     [
       "?instagram=failed&reason=insufficient_permissions",
-      { channel: "instagram", outcome: "failed", reason: "insufficient_permissions" }
+      {
+        channel: "instagram",
+        outcome: "failed",
+        reason: "insufficient_permissions",
+        consumedKeys: ["instagram", "reason"]
+      }
     ]
   ] as const)("normalizes an external OAuth callback query %s", (search, expected) => {
     expect(parseChannelConnectionCallback(search)).toEqual(expected);
@@ -217,31 +228,35 @@ describe("ChannelsPage", () => {
   it.each([
     [
       "success",
-      "?keep=1&instagram=connected#connection",
+      "?keep=1&instagram=connected&reason=campaign#connection",
       "status",
       "Instagram 연결 완료",
-      "Instagram 계정 연결이 완료되었습니다."
+      "Instagram 계정 연결이 완료되었습니다.",
+      "?keep=1&reason=campaign"
     ],
     [
       "cancelled",
-      "?keep=1&instagram=cancelled#connection",
+      "?keep=1&instagram=cancelled&reason=campaign#connection",
       "status",
       "Instagram 연결 취소",
-      "Instagram 계정 연결이 취소되었습니다."
+      "Instagram 계정 연결이 취소되었습니다.",
+      "?keep=1&reason=campaign"
     ],
     [
       "failed",
-      "?keep=1&instagram=failed&reason=account_mapping_failed#connection",
+      "?keep=1&instagram=failed&reason=account_mapping_failed&campaign=summer#connection",
       "alert",
       "Instagram 연결 실패",
-      "Instagram 전문 계정을 확인하지 못했습니다."
+      "Instagram 전문 계정을 확인하지 못했습니다.",
+      "?keep=1&campaign=summer"
     ]
   ] as const)("renders and consumes the %s OAuth callback once", async (
     _outcome,
     location,
     role,
     title,
-    message
+    message,
+    expectedSearch
   ) => {
     window.history.replaceState({ preserved: true }, "", `/channels${location}`);
 
@@ -251,7 +266,7 @@ describe("ChannelsPage", () => {
     expect(notice).toHaveTextContent(title);
     expect(notice).toHaveTextContent(message);
     expect(window.location.pathname).toBe("/channels");
-    expect(window.location.search).toBe("?keep=1");
+    expect(window.location.search).toBe(expectedSearch);
     expect(window.location.hash).toBe("#connection");
     expect(window.history.state).toEqual({ preserved: true });
 

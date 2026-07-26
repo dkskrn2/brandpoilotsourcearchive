@@ -125,8 +125,9 @@ export function ChannelsPage() {
   useEffect(() => {
     if (!connectionCallback) return;
     const url = new URL(window.location.href);
-    url.searchParams.delete("instagram");
-    url.searchParams.delete("reason");
+    for (const key of connectionCallback.consumedKeys) {
+      url.searchParams.delete(key);
+    }
     window.history.replaceState(
       window.history.state,
       "",

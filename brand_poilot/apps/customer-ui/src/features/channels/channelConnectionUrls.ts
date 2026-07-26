@@ -4,6 +4,7 @@ export interface ChannelConnectionCallback {
   channel: "instagram";
   outcome: "success" | "cancelled" | "failed";
   reason: ChannelConnectionFailureReason | null;
+  consumedKeys: readonly ("instagram" | "reason")[];
 }
 
 export type ChannelConnectionFailureReason =
@@ -33,10 +34,20 @@ export function parseChannelConnectionCallback(search: string): ChannelConnectio
   const query = new URLSearchParams(search);
   const result = query.get("instagram");
   if (result === "connected") {
-    return { channel: "instagram", outcome: "success", reason: null };
+    return {
+      channel: "instagram",
+      outcome: "success",
+      reason: null,
+      consumedKeys: ["instagram"]
+    };
   }
   if (result === "cancelled") {
-    return { channel: "instagram", outcome: "cancelled", reason: null };
+    return {
+      channel: "instagram",
+      outcome: "cancelled",
+      reason: null,
+      consumedKeys: ["instagram"]
+    };
   }
   if (result === "failed") {
     const reason = query.get("reason");
@@ -45,7 +56,8 @@ export function parseChannelConnectionCallback(search: string): ChannelConnectio
       outcome: "failed",
       reason: channelConnectionFailureReasons.has(reason as ChannelConnectionFailureReason)
         ? reason as ChannelConnectionFailureReason
-        : "connection_failed"
+        : "connection_failed",
+      consumedKeys: ["instagram", "reason"]
     };
   }
   return null;
