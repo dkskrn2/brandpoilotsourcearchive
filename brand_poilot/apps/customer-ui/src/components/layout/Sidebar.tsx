@@ -1,73 +1,23 @@
 import {
-  Bookmark,
   CircleHelp,
-  CreditCard,
-  Database,
-  Headphones,
-  LayoutDashboard,
-  MessageCircleReply,
   MessageSquareText,
   PanelLeftClose,
   PanelLeftOpen,
-  ScanSearch,
-  Send,
-  Settings2,
-  Share2,
-  Sparkles,
-  TrendingUp,
   X,
-  type LucideIcon,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
+import {
+  customerNavigation,
+  onboardingNavigationItem,
+} from "../../features/navigation/navigationModel";
 import { isBrandProfileComplete, isBrandSetupPath } from "../../lib/brandSetup";
 import { useBrandStatus } from "../../lib/brandStatus";
-import type { BadgeVariant, NavItem } from "../../types";
+import type { BadgeVariant } from "../../types";
 import { Badge } from "../ui/Badge";
 import { ProductBrandLogo } from "../brand/ProductBrandLogo";
 import { SidebarBrandProfile } from "./SidebarBrandProfile";
 import { useHelp } from "../help/HelpContext";
 import { useFeedback } from "../feedback/FeedbackContext";
-
-const pricingUrl = "https://www.danbammsg.co.kr/product/pricing";
-
-interface NavGroup {
-  id: string;
-  label: string;
-  items: Array<NavItem & { icon: LucideIcon }>;
-}
-
-const navGroups: NavGroup[] = [
-  { id: "overview", label: "개요", items: [{ label: "대시보드", path: "/dashboard", icon: LayoutDashboard }] },
-  {
-    id: "content",
-    label: "콘텐츠 운영",
-    items: [
-      { label: "AI 콘텐츠 생성", path: "/ai-content", icon: Sparkles },
-      { label: "소스", path: "/sources", icon: Database },
-      { label: "아카이브", path: "/archive", icon: Bookmark },
-      { label: "트렌드 탐색", path: "/instagram-trends", icon: TrendingUp },
-      { label: "게시 관리", path: "/publish-queue", icon: Send }
-    ]
-  },
-  {
-    id: "channels",
-    label: "채널·고객",
-    items: [
-      { label: "채널", path: "/channels", icon: Share2 },
-      { label: "DM 자동답변", path: "/dm-automation", icon: MessageCircleReply }
-    ]
-  },
-  {
-    id: "settings",
-    label: "설정·지원",
-    items: [
-      { label: "브랜드 설정", path: "/brand-settings", icon: Settings2 },
-      { label: "결제 및 구독", path: pricingUrl, icon: CreditCard },
-      { label: "고객센터", path: "/support", icon: Headphones }
-    ]
-  },
-  { id: "onboarding", label: "시작 준비", items: [{ label: "브랜드 분석", path: "/onboarding/brand-intelligence", icon: ScanSearch }] }
-];
 
 function badgeForPath(path: string, status: ReturnType<typeof useBrandStatus>["status"]): { badge: string; variant: BadgeVariant } | null {
   if (!status) return null;
@@ -100,7 +50,15 @@ export function Sidebar({
   const help = useHelp();
   const feedback = useFeedback();
   const brandProfileComplete = isBrandProfileComplete(status);
-  const visibleNavGroups = navGroups
+  const navigationGroups = [
+    ...customerNavigation,
+    {
+      id: "onboarding",
+      label: "시작 준비",
+      items: [onboardingNavigationItem],
+    },
+  ];
+  const visibleNavGroups = navigationGroups
     .map((group) => ({
       ...group,
       items: group.items.filter((item) => {

@@ -107,11 +107,11 @@ describe("AppShell navigation", () => {
     expect(screen.getByRole("link", { name: /대시보드/ })).toHaveAttribute("href", "/dashboard");
     expect(screen.queryByRole("link", { name: /콘텐츠 검토/ })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /게시 관리/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /소스/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /아카이브/ })).toHaveAttribute("href", "/archive");
+    expect(screen.getByRole("link", { name: /원본 자료/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /레퍼런스 보관함/ })).toHaveAttribute("href", "/archive");
     expect(screen.getByRole("link", { name: /트렌드 탐색/ })).toHaveAttribute("href", "/instagram-trends");
     expect(screen.getByRole("link", { name: /^채널$/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "브랜드 설정" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "브랜드 센터" })).toHaveAttribute("href", "/brand-settings");
     expect(screen.getByRole("link", { name: "결제 및 구독" })).toHaveAttribute(
       "href",
       "https://www.danbammsg.co.kr/product/pricing"
@@ -121,24 +121,28 @@ describe("AppShell navigation", () => {
     expect(screen.getByRole("link", { name: "API 브랜드 브랜드 설정 열기" })).toHaveAttribute("href", "/brand-settings");
 
     const overview = screen.getByRole("region", { name: "개요" });
-    const contentOperations = screen.getByRole("region", { name: "콘텐츠 운영" });
+    const brand = screen.getByRole("region", { name: "브랜드" });
+    const contentOperations = screen.getByRole("region", { name: "콘텐츠" });
     const channelCustomers = screen.getByRole("region", { name: "채널·고객" });
     const settingsSupport = screen.getByRole("region", { name: "설정·지원" });
     expect(within(overview).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual(["대시보드"]);
-    expect(within(contentOperations).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual([
-      "AI 콘텐츠 생성", "소스", "아카이브", "트렌드 탐색", "게시 관리"
+    expect(within(brand).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual([
+      "브랜드 센터", "원본 자료", "트렌드 탐색", "레퍼런스 보관함"
     ]);
-    expect(within(channelCustomers).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual(["채널", "DM 자동답변"]);
+    expect(within(contentOperations).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual([
+      "콘텐츠 생성", "게시 관리"
+    ]);
+    expect(within(channelCustomers).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual(["채널", "Instagram 고객응대"]);
     expect(within(settingsSupport).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual([
-      "브랜드 설정", "결제 및 구독", "고객센터"
+      "결제 및 구독", "고객센터"
     ]);
 
     const nav = screen.getByRole("navigation", { name: "고객 메뉴" });
     const links = within(nav).getAllByRole("link");
     expect(links.every((link) => link.querySelector("[data-nav-icon]"))).toBe(true);
     expect(links[0]).toHaveTextContent("대시보드");
-    expect(links[1]).toHaveTextContent("AI 콘텐츠 생성");
-    expect(links[1]).toHaveAttribute("href", "/ai-content");
+    expect(links[1]).toHaveTextContent("브랜드 센터");
+    expect(links[1]).toHaveAttribute("href", "/brand-settings");
   });
 
   it("persists the collapsed desktop sidebar across remounts", () => {
