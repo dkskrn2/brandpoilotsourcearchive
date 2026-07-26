@@ -463,7 +463,18 @@ export function createServer(
       });
       return;
     }
+    if (message.startsWith("product_service_validation_failed:")) {
+      reply.code(400).send({
+        error: "product_service_validation_failed",
+        field: message.slice("product_service_validation_failed:".length),
+      });
+      return;
+    }
     if (message === "brand_core_approval_forbidden" || message === "brand_core_access_forbidden") {
+      reply.code(403).send({ error: message });
+      return;
+    }
+    if (message === "product_service_approval_forbidden" || message === "product_service_access_forbidden") {
       reply.code(403).send({ error: message });
       return;
     }
@@ -476,7 +487,7 @@ export function createServer(
       reply.code(409).send({ error: message });
       return;
     }
-    if (message === "brand_center_not_configured") {
+    if (message === "brand_center_not_configured" || message === "product_library_not_configured") {
       reply.code(503).send({ error: message });
       return;
     }

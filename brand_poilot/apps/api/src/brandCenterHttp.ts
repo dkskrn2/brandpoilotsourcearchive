@@ -8,6 +8,7 @@ import {
 } from "./brandCoreContracts.js";
 import type { BrandIntelligenceRepository } from "./brandIntelligenceRepository.js";
 import type { ApiRepository } from "./types.js";
+import { parseProductServiceProfile } from "./productLibraryContracts.js";
 
 interface BrandCenterRouteOptions {
   repository: ApiRepository;
@@ -54,11 +55,12 @@ export function registerBrandCenterRoutes(
       throw new Error("brand_center_not_configured");
     }
     const scope = options.scope(request, request.params.brandId);
-    const [active, versions, activeRules, analysis] = await Promise.all([
+    const [active, versions, activeRules, analysis, products] = await Promise.all([
       repository.getActive(scope),
       repository.listVersions(scope),
       repository.getActiveRules(scope),
       options.brandIntelligenceRepository?.getCurrentBrandIntelligence(scope) ?? Promise.resolve(null),
+      repository.summarizeProductServices?.(scope) ?? Promise.resolve(null),
     ]);
     const draft = versions.find((item) => item.status === "draft");
     const hasSource = Boolean(analysis?.input.ownedUrl || analysis?.input.uploadIds.length);
@@ -67,7 +69,13 @@ export function registerBrandCenterRoutes(
       analysis: { state: analysis?.status ?? "empty" },
       brandCore: { state: active ? "approved" : draft ? "review_required" : "empty" },
       rules: { state: activeRules ? "approved" : "empty" },
-      products: { state: "unavailable" },
+      products: products
+        ? {
+            state: products.drafts > 0 ? "review_required" : products.active > 0 ? "approved" : "empty",
+            activeCount: products.active,
+            draftCount: products.drafts,
+          }
+        : { state: "unavailable" },
       wiki: { state: "unavailable" },
       avatars: { state: "unavailable" },
     };
@@ -210,6 +218,92 @@ export function registerBrandCenterRoutes(
         actorUserId: requireActor(options, request),
         ruleSetId: request.params.ruleSetId,
       });
+    },
+  );
+
+  app.get<{ Params: { brandId: string }; Querystring: { include?: string } }>(
+    "/brands/:brandId/product-services",
+    async (request) => {
+      if (!repository.listProductServices) throw new Error("product_library_not_configured");
+      const include = request.query.include?.split(",").map((value) => value.trim()).filter(Boolean) ?? [];
+      return repository.listProductServices(options.scope(request, request.params.brandId), include);
+    },
+  );
+
+  app.post<{ Params: { brandId: string }; Body: unknown }>(
+    "/brands/:brandId/product-services",
+    async (request, reply) => {
+      if (!repository.createProductService) throw new Error("product_library_not_configured");
+      const created = await repository.createProductService(
+        { ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request) },
+        parseProductServiceProfile(request.body),
+      );
+      reply.code(201);
+      return created;
+    },
+  );
+
+  app.post<{ Params: { brandId: string; analysisId: string } }>(
+    "/brands/:brandId/product-services/from-analysis/:analysisId",
+    async (request, reply) => {
+      if (!repository.createProductServiceFromAnalysis) throw new Error("product_library_not_configured");
+      const created = await repository.createProductServiceFromAnalysis({
+        ...options.scope(request, request.params.brandId),
+        actorUserId: requireActor(options, request),
+        analysisId: request.params.analysisId,
+      });
+      reply.code(201);
+      return created;
+    },
+  );
+
+  app.get<{ Params: { brandId: string; itemId: string } }>(
+    "/brands/:brandId/product-services/:itemId",
+    async (request) => {
+      if (!repository.getProductService) throw new Error("product_library_not_configured");
+      const result = await repository.getProductService({
+        ...options.scope(request, request.params.brandId),
+        itemId: request.params.itemId,
+      });
+      if (!result) throw new Error("product_service_not_found");
+      return result;
+    },
+  );
+
+  app.patch<{ Params: { brandId: string; itemId: string }; Body: unknown }>(
+    "/brands/:brandId/product-services/:itemId/draft",
+    async (request) => {
+      if (!repository.updateProductServiceDraft) throw new Error("product_library_not_configured");
+      return repository.updateProductServiceDraft(
+        { ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request), itemId: request.params.itemId },
+        parseProductServiceProfile(request.body),
+      );
+    },
+  );
+
+  app.post<{ Params: { brandId: string; itemId: string } }>(
+    "/brands/:brandId/product-services/:itemId/approve",
+    async (request) => {
+      if (!repository.approveProductService) throw new Error("product_library_not_configured");
+      return repository.approveProductService({
+        ...options.scope(request, request.params.brandId),
+        actorUserId: requireActor(options, request),
+        itemId: request.params.itemId,
+      });
+    },
+  );
+
+  app.post<{ Params: { brandId: string; itemId: string } }>(
+    "/brands/:brandId/product-services/:itemId/archive",
+    async (request, reply) => {
+      if (!repository.archiveProductService) throw new Error("product_library_not_configured");
+      await repository.archiveProductService({
+        ...options.scope(request, request.params.brandId),
+        actorUserId: requireActor(options, request),
+        itemId: request.params.itemId,
+      });
+      reply.code(204);
+      return reply.send();
     },
   );
 }

@@ -24,6 +24,7 @@ import { enqueueAutomatedCardNews } from "./automatedCardNews.js";
 import { createBrandIntelligenceRepository } from "./brandIntelligenceRepository.js";
 import { createBrandIntelligenceProvider } from "./brandIntelligenceProvider.js";
 import { createBrandCoreRepository } from "./brandCoreRepository.js";
+import { createProductLibraryRepository } from "./productLibraryRepository.js";
 import { deliveryFormatToRenderJobType } from "./instagramFormats.js";
 import { kstDateKey, nextAvailablePolicySlot } from "./publishSchedule.js";
 import { MetaGraphRequestError, classifyMetaGraphPublishError } from "./metaGraph.js";
@@ -1195,6 +1196,7 @@ export async function fetchInstagramImageManifest(
 export function createRepository(pool: Pool, options: RepositoryOptions = {}): ApiRepository {
   const subjectAnalysis = createAiContentSubjectRepository(pool);
   const brandCore = createBrandCoreRepository(pool);
+  const productLibrary = createProductLibraryRepository(pool);
   const brandIntelligenceProvider = createBrandIntelligenceProvider(createBrandIntelligenceRepository(pool));
   const aiContent = createAiContentRepository(pool, {
     deleteAttachments: options.deleteAiContentAttachments,
@@ -1693,6 +1695,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
   return {
     ...subjectAnalysis,
     ...brandCore,
+    ...productLibrary,
     ...instagramTrendRepository,
     ...aiContent,
     ...aiContentDownload,
