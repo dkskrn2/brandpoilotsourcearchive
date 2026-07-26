@@ -82,6 +82,13 @@ async function renderPage(path = "/brand-center?tab=understanding&section=core")
     updateWikiItem: vi.fn(),
     listWikiIssues: vi.fn(async () => []),
     resolveWikiIssue: vi.fn(),
+    listAvatars: vi.fn(async () => []),
+    createAvatar: vi.fn(),
+    updateAvatar: vi.fn(),
+    uploadAvatarImage: vi.fn(),
+    deleteAvatarImage: vi.fn(),
+    setDefaultAvatar: vi.fn(),
+    archiveAvatar: vi.fn(),
   };
   vi.doMock("../features/libraries/libraryGateway", async (importOriginal) => ({
     ...await importOriginal<typeof import("../features/libraries/libraryGateway")>(),
@@ -98,13 +105,13 @@ async function renderPage(path = "/brand-center?tab=understanding&section=core")
 }
 
 describe("BrandCenterPage", () => {
-  it("shows the approved core and enables the product and Wiki libraries", async () => {
+  it("shows the approved core and enables the product, Wiki, and avatar libraries", async () => {
     await renderPage();
     expect(await screen.findByRole("heading", { name: "브랜드 센터" })).toBeInTheDocument();
     expect(screen.getByDisplayValue("브랜드 운영을 단순하게")).toBeDisabled();
     expect(screen.getByRole("button", { name: "제품·서비스" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Wiki" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "모델·아바타 준비 중" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "모델·아바타" })).toBeEnabled();
   });
 
   it("creates a new draft without replacing the approved version", async () => {

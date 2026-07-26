@@ -1,3 +1,4 @@
+import { put as putBlob } from "@vercel/blob/client";
 import { ApiRequestError, apiClient } from "../../lib/apiClient";
 
 export interface ProductServiceProfile {
@@ -88,6 +89,39 @@ export interface WikiIssue {
   resolvedAt: string | null;
 }
 
+export interface AvatarImage {
+  id: string;
+  position: number;
+  representative: boolean;
+  storagePath: string;
+  storageUrl: string;
+  mimeType: string;
+  sizeBytes: number;
+  checksum: string;
+}
+
+export interface Avatar {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  name: string;
+  description: string;
+  isDefault: boolean;
+  status: "active" | "archived";
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+  images: AvatarImage[];
+}
+
+export interface CreateAvatarInput {
+  avatarId: string;
+  name: string;
+  description: string;
+  imageSessionIds: string[];
+  representativeSessionId: string;
+}
+
 export interface CreateWikiItemInput {
   contractVersion: "wiki-item.v1";
   itemType: ManualWikiItemType;
@@ -119,6 +153,8 @@ export type LibraryErrorKind =
 const unavailableCodes = new Set([
   "product_library_not_configured",
   "wiki_management_not_configured",
+  "asset_library_not_configured",
+  "asset_library_upload_storage_not_configured",
   "brand_center_not_configured",
 ]);
 
@@ -141,7 +177,22 @@ export function classifyLibraryError(
 
 type Client = Pick<ReturnType<typeof apiClient>, "requestJson">;
 
-export function createLibraryGateway(client: Client = apiClient()) {
+async function fileBytes(file: File) {
+  if (typeof file.arrayBuffer === "function") return file.arrayBuffer();
+  return new Promise<ArrayBuffer>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("avatar_file_read_failed"));
+    reader.onload = () => resolve(reader.result as ArrayBuffer);
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+async function sha256(file: File) {
+  const digest = await crypto.subtle.digest("SHA-256", await fileBytes(file));
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+export function createLibraryGateway(client: Client = apiClient(), blobPut: typeof putBlob = putBlob) {
   return {
     listProductServices(brandId: string) {
       return client.requestJson<ProductServiceItem[]>(`/brands/${brandId}/product-services`, { method: "GET" });
@@ -201,6 +252,79 @@ export function createLibraryGateway(client: Client = apiClient()) {
       return client.requestJson<WikiIssue>(`/brands/${brandId}/wiki/issues/${issueId}/resolve`, {
         method: "POST",
         body: JSON.stringify(input),
+      });
+    },
+    listAvatars(brandId: string) {
+      return client.requestJson<Avatar[]>(`/brands/${brandId}/avatars`, { method: "GET" });
+    },
+    createAvatar(brandId: string, input: CreateAvatarInput) {
+      return client.requestJson<Avatar>(`/brands/${brandId}/avatars`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+    },
+    updateAvatar(brandId: string, avatarId: string, input: Pick<CreateAvatarInput, "name" | "description">) {
+      return client.requestJson<Avatar>(`/brands/${brandId}/avatars/${avatarId}`, {
+        method: "PATCH",
+        body: JSON.stringify(input),
+      });
+    },
+    async uploadAvatarImage(
+      brandId: string,
+      avatarId: string,
+      file: File,
+      onProgress: (value: number) => void = () => undefined,
+    ) {
+      const metadata = {
+        fileName: file.name,
+        mimeType: file.type.toLowerCase(),
+        sizeBytes: file.size,
+        checksum: await sha256(file),
+      };
+      onProgress(10);
+      const token = await client.requestJson<{
+        pathname: string;
+        clientToken: string;
+        sessionId: string;
+        nonce: string;
+        expiresAt: string;
+      }>(`/brands/${brandId}/avatars/${avatarId}/images/upload-token`, {
+        method: "POST",
+        body: JSON.stringify(metadata),
+      });
+      const stored = await blobPut(token.pathname, file, {
+        access: "public",
+        token: token.clientToken,
+        contentType: metadata.mimeType,
+      });
+      onProgress(70);
+      await client.requestJson(`/brands/${brandId}/avatars/${avatarId}/images/confirm`, {
+        method: "POST",
+        body: JSON.stringify({
+          ...metadata,
+          sessionId: token.sessionId,
+          nonce: token.nonce,
+          storagePath: token.pathname,
+          storageUrl: stored.url,
+          representative: false,
+        }),
+      });
+      onProgress(100);
+      return { sessionId: token.sessionId };
+    },
+    deleteAvatarImage(brandId: string, avatarId: string, imageId: string) {
+      return client.requestJson<void>(`/brands/${brandId}/avatars/${avatarId}/images/${imageId}`, {
+        method: "DELETE",
+      });
+    },
+    setDefaultAvatar(brandId: string, avatarId: string) {
+      return client.requestJson<Avatar>(`/brands/${brandId}/avatars/${avatarId}/default`, {
+        method: "POST",
+      });
+    },
+    archiveAvatar(brandId: string, avatarId: string) {
+      return client.requestJson<void>(`/brands/${brandId}/avatars/${avatarId}/archive`, {
+        method: "POST",
       });
     },
   };

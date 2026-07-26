@@ -87,10 +87,86 @@ describe("library gateway", () => {
     );
   });
 
+  it("uses the reserved avatar lifecycle and staged upload session endpoints", async () => {
+    const token = {
+      pathname: "brands/brand-1/asset-library/avatars/avatar-1/session-1/checksum-face.png",
+      clientToken: "client-token",
+      sessionId: "session-1",
+      nonce: "nonce-1",
+      expiresAt: "2026-07-27T01:00:00.000Z",
+    };
+    const requestJson = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(token)
+      .mockResolvedValueOnce({ status: "staged", avatarId: "avatar-1", sessionId: "session-1" })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce(undefined);
+    const blobPut = vi.fn(async () => ({ url: `https://store.blob.vercel-storage.com/${token.pathname}` }));
+    const gateway = createLibraryGateway({ requestJson } as never, blobPut as never);
+    const file = new File(["image"], "face.png", { type: "image/png" });
+    const progress = vi.fn();
+
+    await gateway.listAvatars("brand-1");
+    const staged = await gateway.uploadAvatarImage("brand-1", "avatar-1", file, progress);
+    await gateway.createAvatar("brand-1", {
+      avatarId: "avatar-1",
+      name: "민지",
+      description: "",
+      imageSessionIds: [staged.sessionId],
+      representativeSessionId: staged.sessionId,
+    });
+    await gateway.setDefaultAvatar("brand-1", "avatar-1");
+    await gateway.archiveAvatar("brand-1", "avatar-1");
+
+    expect(requestJson).toHaveBeenNthCalledWith(1, "/brands/brand-1/avatars", { method: "GET" });
+    expect(requestJson).toHaveBeenNthCalledWith(
+      2,
+      "/brands/brand-1/avatars/avatar-1/images/upload-token",
+      {
+        method: "POST",
+        body: expect.stringContaining('"fileName":"face.png"'),
+      },
+    );
+    expect(blobPut).toHaveBeenCalledWith(
+      token.pathname,
+      file,
+      expect.objectContaining({ token: "client-token", contentType: "image/png" }),
+    );
+    expect(requestJson).toHaveBeenNthCalledWith(
+      3,
+      "/brands/brand-1/avatars/avatar-1/images/confirm",
+      {
+        method: "POST",
+        body: expect.stringContaining('"sessionId":"session-1"'),
+      },
+    );
+    expect(requestJson).toHaveBeenNthCalledWith(
+      4,
+      "/brands/brand-1/avatars",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(requestJson).toHaveBeenNthCalledWith(
+      5,
+      "/brands/brand-1/avatars/avatar-1/default",
+      { method: "POST" },
+    );
+    expect(requestJson).toHaveBeenNthCalledWith(
+      6,
+      "/brands/brand-1/avatars/avatar-1/archive",
+      { method: "POST" },
+    );
+    expect(progress).toHaveBeenCalledWith(100);
+  });
+
   it("classifies deployment-order, scoped lookup, and retryable failures stably", () => {
     expect(classifyLibraryError(new ApiRequestError({
       status: 500,
       errorCode: "wiki_management_not_configured",
+    }))).toBe("unavailable");
+    expect(classifyLibraryError(new ApiRequestError({
+      status: 500,
+      errorCode: "asset_library_not_configured",
     }))).toBe("unavailable");
     expect(classifyLibraryError(new ApiRequestError({
       status: 404,

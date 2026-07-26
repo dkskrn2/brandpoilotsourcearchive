@@ -6,6 +6,7 @@ import { BrandCenterHeader } from "../components/brand-center/BrandCenterHeader"
 import { BrandCoreReviewPanel } from "../components/brand-center/BrandCoreReviewPanel";
 import { BrandReadinessJourney } from "../components/brand-center/BrandReadinessJourney";
 import { BrandRulesPanel } from "../components/brand-center/BrandRulesPanel";
+import { AvatarLibraryPanel } from "../components/brand-center/AvatarLibraryPanel";
 import { ProductServiceLibraryPanel } from "../components/brand-center/ProductServiceLibraryPanel";
 import { SourceLibraryPanel } from "../components/brand-center/SourceLibraryPanel";
 import { WikiLibraryPanel } from "../components/brand-center/WikiLibraryPanel";
@@ -21,7 +22,7 @@ import type {
 import { DEMO_BRAND_ID } from "../lib/apiClient";
 
 type UnderstandingSection = "sources" | "analysis" | "core" | "rules" | "versions";
-type BrandCenterTab = "understanding" | "products" | "wiki";
+type BrandCenterTab = "understanding" | "products" | "wiki" | "avatars";
 const canonicalUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const sections: Array<{ id: UnderstandingSection; label: string }> = [
@@ -57,7 +58,7 @@ export function BrandCenterPage() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const requestedTab = params.get("tab");
-  const tab: BrandCenterTab = requestedTab === "products" || requestedTab === "wiki"
+  const tab: BrandCenterTab = requestedTab === "products" || requestedTab === "wiki" || requestedTab === "avatars"
     ? requestedTab
     : "understanding";
   const requestedSection = params.get("section");
@@ -108,7 +109,7 @@ export function BrandCenterPage() {
       const next = new URLSearchParams(params);
       next.delete("analysis");
       setParams(next, { replace: true });
-    } else if (!["understanding", "products", "wiki"].includes(requestedTab ?? "") || (tab === "understanding" && !requestedSection)) {
+    } else if (!["understanding", "products", "wiki", "avatars"].includes(requestedTab ?? "") || (tab === "understanding" && !requestedSection)) {
       const next = new URLSearchParams(params);
       next.set("tab", tab);
       if (tab === "understanding") next.set("section", section);
@@ -282,7 +283,7 @@ export function BrandCenterPage() {
         <button className={tab === "understanding" ? "is-active" : ""} type="button" onClick={() => selectTab("understanding")}>브랜드 이해</button>
         <button className={tab === "products" ? "is-active" : ""} type="button" onClick={() => selectTab("products")}>제품·서비스</button>
         <button className={tab === "wiki" ? "is-active" : ""} type="button" onClick={() => selectTab("wiki")}>Wiki</button>
-        <button type="button" disabled aria-label="모델·아바타 준비 중">모델·아바타 <small>준비 중</small></button>
+        <button className={tab === "avatars" ? "is-active" : ""} type="button" onClick={() => selectTab("avatars")}>모델·아바타</button>
       </nav>
       {tab === "understanding" ? <nav className="brand-center-subnav" aria-label="브랜드 이해 세부 영역">
         {sections.map((item) => (
@@ -352,6 +353,7 @@ export function BrandCenterPage() {
           setParams(next, { replace: true });
         }}
       /> : null}
+      {tab === "avatars" ? <AvatarLibraryPanel brandId={DEMO_BRAND_ID} /> : null}
     </section>
   );
 }
