@@ -77,6 +77,25 @@ describe("AppShell navigation", () => {
     expect(openButton).toHaveFocus();
   });
 
+  it("shows the current page and keeps the account menu keyboard accessible", () => {
+    render(
+      <MemoryRouter initialEntries={["/ai-content"]}>
+        <AppShell><div>페이지 내용</div></AppShell>
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole("heading", { name: "콘텐츠 생성" })).toBeInTheDocument();
+    const accountTrigger = screen.getByRole("button", { name: "모종 계정 메뉴 열기" });
+    fireEvent.click(accountTrigger);
+    expect(accountTrigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "로그아웃" })).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(accountTrigger).toHaveFocus();
+  });
+
   it("shows a global scroll-to-top button after scrolling and returns smoothly to the top", () => {
     const scrollTo = vi.fn();
     Object.defineProperty(window, "scrollY", { configurable: true, value: 500 });
@@ -236,9 +255,10 @@ describe("AppShell navigation", () => {
       </MemoryRouter>
     );
 
-    expect(screen.getAllByText("API 브랜드")).toHaveLength(2);
+    expect(screen.getAllByText("API 브랜드")).toHaveLength(3);
     expect(screen.getByText("2개 항목 필요")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "로그아웃" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "API 브랜드 계정 메뉴 열기" }));
+    expect(screen.getByRole("menuitem", { name: "로그아웃" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /브랜드 분석\s*2/ })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "시작 준비" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /콘텐츠 검토/ })).not.toBeInTheDocument();

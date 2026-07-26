@@ -78,6 +78,83 @@
   background: rgb(255 253 250 / 92%);
 }
 
+.topbar-page-context {
+  min-width: 0;
+}
+
+.topbar-page-title {
+  margin: 0;
+  color: var(--bp-color-ink);
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.topbar-page-context > span {
+  display: block;
+  max-width: 42vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-page-context > span strong {
+  display: inline;
+  color: var(--bp-color-ink-muted);
+}
+
+.topbar-account {
+  position: relative;
+}
+
+.topbar-account-trigger {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid var(--bp-color-line);
+  border-radius: var(--bp-radius-pill);
+  color: var(--bp-color-ink);
+  background: var(--bp-color-surface);
+  cursor: pointer;
+}
+
+.topbar-account-trigger:hover,
+.topbar-account-trigger[aria-expanded="true"] {
+  border-color: var(--bp-color-primary);
+  background: var(--bp-color-primary-soft);
+}
+
+.topbar-account-menu {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 156px;
+  padding: 6px;
+  border: 1px solid var(--bp-color-line);
+  border-radius: var(--bp-radius-md);
+  background: var(--bp-color-surface);
+  box-shadow: var(--bp-shadow-md);
+}
+
+.topbar-account-menu button {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--bp-radius-sm);
+  text-align: left;
+  color: var(--bp-color-ink);
+  background: transparent;
+  cursor: pointer;
+}
+
+.topbar-account-menu button:hover,
+.topbar-account-menu button:focus-visible {
+  background: var(--bp-color-primary-soft);
+}
+
 .content {
   width: min(1180px, calc(100vw - var(--bp-sidebar-width) - 56px));
 }
@@ -110,6 +187,10 @@
   .topbar-actions {
     gap: 6px;
   }
+
+  .topbar-account-trigger span {
+    display: none;
+  }
 }
 
 @media (max-width: 470px) {
@@ -119,6 +200,11 @@
 
   .topbar-brand-status > div:last-child {
     min-width: 0;
+  }
+
+  .topbar-page-context > span,
+  .topbar-actions > .badge {
+    display: none;
   }
 }
 

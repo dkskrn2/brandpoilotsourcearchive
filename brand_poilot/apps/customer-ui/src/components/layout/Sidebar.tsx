@@ -76,7 +76,7 @@ export function Sidebar({
           <ProductBrandLogo placement="sidebar" />
         </div>
         {variant === "mobile" ? (
-          <button className="mobile-menu-close" type="button" aria-label="전체 메뉴 닫기" onClick={onClose} autoFocus>
+          <button className="mobile-menu-close" type="button" aria-label="전체 메뉴 닫기" onClick={onClose}>
             <X size={24} aria-hidden="true" />
           </button>
         ) : (
