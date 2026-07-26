@@ -97,6 +97,36 @@ describe("brand center customer routes", () => {
     await app.close();
   });
 
+  it("reports the actual compiled Wiki aggregate", async () => {
+    const summarizeWiki = vi.fn(async () => ({
+      state: "stale" as const,
+      activeVersionId: "77777777-7777-4777-8777-777777777777",
+      lastBuiltAt: "2026-07-26T02:00:00.000Z",
+      buildStatus: "stale" as const,
+      itemCount: 4,
+      issueCount: 2,
+    }));
+    const { app } = setup({ summarizeWiki });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/brand-center`,
+      headers: auth,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().wiki).toEqual({
+      state: "stale",
+      activeVersionId: "77777777-7777-4777-8777-777777777777",
+      lastBuiltAt: "2026-07-26T02:00:00.000Z",
+      buildStatus: "stale",
+      itemCount: 4,
+      issueCount: 2,
+    });
+    expect(summarizeWiki).toHaveBeenCalledWith({ workspaceId, brandId });
+    await app.close();
+  });
+
   it("creates and updates a draft with authenticated actor and concurrency token", async () => {
     const { app, repository } = setup();
     const created = await app.inject({

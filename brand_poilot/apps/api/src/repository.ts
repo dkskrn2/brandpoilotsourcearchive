@@ -116,6 +116,15 @@ import type {
   TopicUploadInput,
   WikiStatusDto
 } from "./types.js";
+import type {
+  CreateWikiItemInput,
+  ResolveWikiIssueInput,
+  UpdateWikiItemInput,
+  WikiManagementBuildStatus,
+  WikiManagementIssue,
+  WikiManagementItem,
+  WikiManagementSummary,
+} from "./wikiManagementContracts.js";
 import { resolveWorkerResourceLimits, type WorkerResourceLimits } from "./workerResources.js";
 
 function toIso(value: Date | string | null): string | null {
@@ -470,6 +479,112 @@ function mapKnowledgeImport(row: any): KnowledgeImportDto {
     updatedRows: Number(result.updatedRows ?? 0),
     createdAt: toIso(row.created_at) ?? new Date(0).toISOString(),
   };
+}
+
+function jsonObject(value: unknown): Record<string, unknown> {
+  if (!value) return {};
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function mapWikiManagementItem(row: Record<string, any>): WikiManagementItem {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    brandId: String(row.brand_id),
+    itemType: row.item_type,
+    title: String(row.title),
+    content: String(row.content),
+    status: row.status,
+    origin: row.origin,
+    provenance: jsonObject(row.provenance_json),
+    createdByUserId: row.created_by_user_id ? String(row.created_by_user_id) : null,
+    approvedByUserId: row.approved_by_user_id ? String(row.approved_by_user_id) : null,
+    approvedAt: toIso(row.approved_at),
+    sourceKind: row.source_kind,
+    sourceId: String(row.source_id),
+    activeVersionId: row.active_version_id ? String(row.active_version_id) : null,
+    lastBuiltAt: toIso(row.last_built_at),
+    buildStatus: row.build_status as WikiManagementBuildStatus,
+  };
+}
+
+function mapWikiManagementIssue(row: Record<string, any>): WikiManagementIssue {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    brandId: String(row.brand_id),
+    issueType: String(row.issue_type),
+    severity: row.severity,
+    status: row.status,
+    question: row.question === null || row.question === undefined ? null : String(row.question),
+    detail: jsonObject(row.detail_json),
+    sourceKind: row.source_kind ?? null,
+    sourceId: row.source_id ? String(row.source_id) : null,
+    activeVersionId: row.active_version_id ? String(row.active_version_id) : null,
+    lastBuiltAt: toIso(row.last_built_at),
+    buildStatus: row.build_status as WikiManagementBuildStatus,
+    resolvedAt: toIso(row.resolved_at),
+  };
+}
+
+function wikiNormalizedKey(input: CreateWikiItemInput) {
+  const title = input.title.normalize("NFKC").trim().toLocaleLowerCase("ko-KR").replace(/\s+/g, " ");
+  return input.itemType === "faq" ? title : `manual:${input.itemType}:${title}`;
+}
+
+async function requireWikiMember(
+  client: Pick<PoolClient, "query">,
+  scope: { workspaceId: string; brandId: string; actorUserId: string },
+  permission: "author" | "approve" | "resolve" = "author",
+) {
+  const membership = await client.query(
+    `select member.role
+       from workspace_members member
+      where member.workspace_id = $1::uuid and member.user_id = $2::uuid
+        and member.status = 'active'
+        and exists (
+          select 1 from brands
+           where id = $3::uuid and workspace_id = $1::uuid and deleted_at is null
+        )`,
+    [scope.workspaceId, scope.actorUserId, scope.brandId],
+  );
+  if (!membership.rowCount) throw new Error("wiki_item_access_forbidden");
+  if (!["owner", "admin"].includes(String(membership.rows[0].role))) {
+    if (permission === "approve") throw new Error("wiki_item_approval_forbidden");
+    if (permission === "resolve") throw new Error("wiki_issue_resolution_forbidden");
+  }
+}
+
+async function enqueueManagedWikiBuild(
+  client: Pick<PoolClient, "query">,
+  workspaceId: string,
+  brandId: string,
+) {
+  return client.query(
+    `insert into wiki_build_requests (
+       workspace_id, brand_id, requested_revision, status, quiet_until
+     ) values ($1::uuid, $2::uuid, 1, 'pending', now())
+     on conflict (workspace_id, brand_id)
+     where status in ('pending', 'building')
+     do update set
+       requested_revision = wiki_build_requests.requested_revision + 1,
+       rebuild_requested = wiki_build_requests.rebuild_requested or wiki_build_requests.status = 'building',
+       quiet_until = case when wiki_build_requests.status = 'pending'
+         then now() else wiki_build_requests.quiet_until end,
+       updated_at = now()
+     returning id, status`,
+    [workspaceId, brandId],
+  );
 }
 
 function decodeBase64Upload(value: string) {
@@ -5818,6 +5933,386 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       } finally {
         client.release();
       }
+    },
+
+    async listWikiItems(scope) {
+      const result = await pool.query(
+        `with active_version as (
+           select id, activated_at
+             from wiki_versions
+            where workspace_id = $1::uuid and brand_id = $2::uuid and status = 'active'
+            order by activated_at desc nulls last limit 1
+         ), latest_build as (
+           select status
+             from wiki_build_requests
+            where workspace_id = $1::uuid and brand_id = $2::uuid
+            order by created_at desc limit 1
+         ), sources as (
+           select entry.id, entry.workspace_id, entry.brand_id,
+                  coalesce(nullif(entry.structured_data->>'managementItemType', ''), entry.entry_type) as item_type,
+                  coalesce(nullif(entry.title, ''), entry.question) as title,
+                  coalesce(nullif(entry.content, ''), entry.answer) as content,
+                  case when entry.status = 'archived' or not entry.enabled then 'inactive' else entry.status end as status,
+                  case when entry.origin = 'manual' then 'manual' else 'import' end as origin,
+                  entry.provenance_json, entry.created_by_user_id, entry.approved_by_user_id, entry.approved_at,
+                  entry.entry_type as source_kind, entry.id as source_id
+             from knowledge_entries entry
+            where entry.workspace_id = $1::uuid and entry.brand_id = $2::uuid
+              and entry.entry_type in ('faq', 'policy', 'guide')
+              and entry.status <> 'legacy_projection'
+           union all
+           select item.id, item.workspace_id, item.brand_id, item.kind,
+                  item.display_name,
+                  coalesce(active.profile_json->>'description', item.display_name),
+                  'read_only', 'product_service', '{}'::jsonb, null::uuid,
+                  active.approved_by_user_id, active.approved_at,
+                  'product_service', item.id
+             from product_services item
+             join product_service_versions active
+               on active.id = item.active_version_id
+              and active.workspace_id = item.workspace_id
+              and active.brand_id = item.brand_id
+              and active.status = 'approved'
+            where item.workspace_id = $1::uuid and item.brand_id = $2::uuid
+              and item.status = 'active'
+         )
+         select sources.*,
+                included.wiki_version_id as active_version_id,
+                case when included.wiki_version_id is not null then version.activated_at end as last_built_at,
+                case
+                  when sources.status = 'draft' then 'draft'
+                  when sources.status = 'inactive' then 'inactive'
+                  when latest.status in ('pending', 'building') then latest.status
+                  when latest.status = 'failed' and included.wiki_version_id is not null then 'stale'
+                  when latest.status = 'failed' then 'failed'
+                  when included.wiki_version_id is not null then 'active'
+                  else 'pending'
+                end as build_status
+           from sources
+           left join active_version version on true
+           left join latest_build latest on true
+           left join lateral (
+             select unit.wiki_version_id
+               from wiki_source_units unit
+              where unit.wiki_version_id = version.id
+                and unit.source_kind = sources.source_kind
+                and unit.source_id = sources.source_id
+              limit 1
+           ) included on true
+          order by case when sources.source_kind = 'product_service' then 0 else 1 end,
+                   sources.title, sources.id`,
+        [scope.workspaceId, scope.brandId],
+      );
+      return result.rows.map((row) => mapWikiManagementItem(row as Record<string, any>));
+    },
+
+    async createWikiItem(scope, input) {
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        await requireWikiMember(client, scope);
+        const entryType = input.itemType === "how_to" ? "guide" : input.itemType;
+        const structuredData = input.itemType === "how_to"
+          ? { managementItemType: "how_to" }
+          : {};
+        const created = await client.query(
+          `insert into knowledge_entries (
+             workspace_id, brand_id, entry_type, normalized_question,
+             question, answer, title, content, structured_data,
+             direct_reply_enabled, enabled, last_import_id,
+             origin, provenance_json, status, created_by_user_id
+           ) values (
+             $1::uuid, $2::uuid, $3, $4,
+             case when $3 = 'faq' then $5 end,
+             case when $3 = 'faq' then $6 end,
+             $5, $6, $7::jsonb,
+             $3 = 'faq', false, null,
+             'manual', $8::jsonb, 'draft', $9::uuid
+           )
+           returning id, workspace_id, brand_id,
+                     coalesce(nullif(structured_data->>'managementItemType', ''), entry_type) as item_type,
+                     title, content, status, origin, provenance_json,
+                     created_by_user_id, approved_by_user_id, approved_at,
+                     entry_type as source_kind, id as source_id,
+                     null::uuid as active_version_id, null::timestamptz as last_built_at,
+                     'draft'::text as build_status`,
+          [
+            scope.workspaceId,
+            scope.brandId,
+            entryType,
+            wikiNormalizedKey(input),
+            input.title,
+            input.content,
+            JSON.stringify(structuredData),
+            JSON.stringify(input.provenance),
+            scope.actorUserId,
+          ],
+        );
+        await client.query("commit");
+        return mapWikiManagementItem(created.rows[0] as Record<string, any>);
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async updateWikiItem(scope, input) {
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const approval = input.status === "active" || input.status === "inactive";
+        await requireWikiMember(client, scope, approval ? "approve" : "author");
+        const targetStatus = input.status ?? "draft";
+        const updated = await client.query(
+          `update knowledge_entries
+              set title = coalesce($5, title),
+                  content = coalesce($6, content),
+                  question = case when entry_type = 'faq' then coalesce($5, question) else question end,
+                  answer = case when entry_type = 'faq' then coalesce($6, answer) else answer end,
+                  normalized_question = case
+                    when $5 is null then normalized_question
+                    when entry_type = 'faq' then lower(regexp_replace(normalize($5, NFKC), '\\s+', ' ', 'g'))
+                    else normalized_question
+                  end,
+                  status = case
+                    when $7 = 'active' then 'active'
+                    when $7 = 'inactive' then 'archived'
+                    else 'draft'
+                  end,
+                  enabled = $7 = 'active',
+                  approved_by_user_id = case when $7 = 'active' then $4::uuid else null end,
+                  approved_at = case when $7 = 'active' then now() else null end,
+                  provenance_json = case
+                    when $7 = 'inactive' then provenance_json || jsonb_build_object(
+                      'deactivatedByUserId', $4::text,
+                      'deactivatedAt', now()
+                    )
+                    when $7 = 'active' then provenance_json
+                      - 'deactivatedByUserId' - 'deactivatedAt'
+                    else provenance_json
+                  end,
+                  updated_at = now()
+            where id = $1::uuid and workspace_id = $2::uuid and brand_id = $3::uuid
+              and origin = 'manual'
+              and ($7 in ('active', 'inactive') or status = 'draft')
+          returning id, workspace_id, brand_id,
+                    coalesce(nullif(structured_data->>'managementItemType', ''), entry_type) as item_type,
+                    title, content,
+                    case when status = 'archived' then 'inactive' else status end as status,
+                    origin, provenance_json, created_by_user_id, approved_by_user_id, approved_at,
+                    entry_type as source_kind, id as source_id,
+                    null::uuid as active_version_id, null::timestamptz as last_built_at,
+                    case
+                      when status = 'draft' then 'draft'
+                      when status = 'archived' then 'inactive'
+                      else 'pending'
+                    end as build_status`,
+          [
+            scope.itemId,
+            scope.workspaceId,
+            scope.brandId,
+            scope.actorUserId,
+            input.title ?? null,
+            input.content ?? null,
+            targetStatus,
+          ],
+        );
+        if (!updated.rowCount) throw new Error("wiki_item_not_found");
+        if (approval) await enqueueManagedWikiBuild(client, scope.workspaceId, scope.brandId);
+        await client.query("commit");
+        return mapWikiManagementItem(updated.rows[0] as Record<string, any>);
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async listWikiIssues(scope) {
+      const result = await pool.query(
+        `select issue.id, issue.workspace_id, issue.brand_id, issue.issue_type,
+                issue.severity,
+                case
+                  when issue.status = 'open'
+                   and issue.detail_json ? 'resolutionSourceId' then 'pending_build'
+                  else issue.status
+                end as status,
+                issue.question, issue.detail_json,
+                issue.detail_json->>'resolutionSourceKind' as source_kind,
+                issue.detail_json->>'resolutionSourceId' as source_id,
+                active.id as active_version_id, active.activated_at as last_built_at,
+                case
+                  when build.status in ('pending', 'building') then build.status
+                  when build.status = 'failed' and active.id is not null then 'stale'
+                  when build.status = 'failed' then 'failed'
+                  when active.id is not null then 'active'
+                  else 'pending'
+                end as build_status,
+                issue.resolved_at
+           from wiki_issues issue
+           left join lateral (
+             select id, activated_at from wiki_versions
+              where workspace_id = issue.workspace_id and brand_id = issue.brand_id
+                and status = 'active'
+              order by activated_at desc nulls last limit 1
+           ) active on true
+           left join lateral (
+             select status from wiki_build_requests
+              where workspace_id = issue.workspace_id and brand_id = issue.brand_id
+              order by created_at desc limit 1
+           ) build on true
+          where issue.workspace_id = $1::uuid and issue.brand_id = $2::uuid
+          order by case issue.status when 'open' then 0 else 1 end, issue.created_at desc`,
+        [scope.workspaceId, scope.brandId],
+      );
+      return result.rows.map((row) => mapWikiManagementIssue(row as Record<string, any>));
+    },
+
+    async resolveWikiIssue(scope, input) {
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        await requireWikiMember(client, scope, "resolve");
+        const issue = await client.query(
+          `select id, detail_json, status
+             from wiki_issues
+            where id = $1::uuid and workspace_id = $2::uuid and brand_id = $3::uuid
+            for update`,
+          [scope.issueId, scope.workspaceId, scope.brandId],
+        );
+        if (!issue.rowCount) throw new Error("wiki_issue_not_found");
+        if (issue.rows[0].status !== "open") throw new Error("wiki_issue_not_open");
+        const source = input.sourceKind === "product_service"
+          ? await client.query(
+              `select item.id as source_id
+                 from product_services item
+                where item.id = $1::uuid and item.workspace_id = $2::uuid and item.brand_id = $3::uuid`,
+              [input.sourceId, scope.workspaceId, scope.brandId],
+            )
+          : input.sourceKind === "owned_snapshot"
+            ? await client.query(
+                `select snapshot.id as source_id
+                   from source_snapshots snapshot
+                  where snapshot.id = $1::uuid and snapshot.workspace_id = $2::uuid
+                    and snapshot.brand_id = $3::uuid and snapshot.status = 'succeeded'`,
+                [input.sourceId, scope.workspaceId, scope.brandId],
+              )
+            : await client.query(
+                `select entry.id as source_id
+                   from knowledge_entries entry
+                  where entry.id = $1::uuid and entry.workspace_id = $2::uuid
+                    and entry.brand_id = $3::uuid and entry.entry_type = $4
+                    and entry.status <> 'legacy_projection'`,
+                [input.sourceId, scope.workspaceId, scope.brandId, input.sourceKind],
+              );
+        if (!source.rowCount) throw new Error("wiki_issue_source_not_found");
+        const resolved = await client.query(
+          `with changed as (
+             update wiki_issues
+                set detail_json = detail_json || jsonb_build_object(
+                      'resolutionSourceKind', $4::text,
+                      'resolutionSourceId', $5::text,
+                      'resolutionRequestedByUserId', $6::text,
+                      'resolutionRequestedAt', now()
+                    ),
+                    updated_at = now()
+              where id = $1::uuid and workspace_id = $2::uuid and brand_id = $3::uuid
+          returning *
+           )
+           select changed.id, changed.workspace_id, changed.brand_id, changed.issue_type,
+                  changed.severity, 'pending_build'::text as status,
+                  changed.question, changed.detail_json,
+                  changed.detail_json->>'resolutionSourceKind' as source_kind,
+                  changed.detail_json->>'resolutionSourceId' as source_id,
+                  active.id as active_version_id, active.activated_at as last_built_at,
+                  'pending'::text as build_status, changed.resolved_at
+             from changed
+             left join lateral (
+               select id, activated_at from wiki_versions
+                where workspace_id = changed.workspace_id and brand_id = changed.brand_id
+                  and status = 'active'
+                order by activated_at desc nulls last limit 1
+             ) active on true`,
+          [
+            scope.issueId,
+            scope.workspaceId,
+            scope.brandId,
+            input.sourceKind,
+            input.sourceId,
+            scope.actorUserId,
+          ],
+        );
+        await enqueueManagedWikiBuild(client, scope.workspaceId, scope.brandId);
+        await client.query("commit");
+        return mapWikiManagementIssue(resolved.rows[0] as Record<string, any>);
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async summarizeWiki(scope) {
+      const result = await pool.query(
+        `select active.id as active_version_id, active.activated_at as last_built_at,
+                build.status as request_status,
+                (select count(*)::integer
+                   from knowledge_entries entry
+                  where entry.workspace_id = $1::uuid and entry.brand_id = $2::uuid
+                    and entry.entry_type in ('faq', 'policy', 'guide')
+                    and entry.status <> 'legacy_projection') as item_count,
+                (select count(*)::integer
+                   from wiki_issues issue
+                  where issue.workspace_id = $1::uuid and issue.brand_id = $2::uuid
+                    and issue.status = 'open') as issue_count,
+                exists(
+                  select 1 from knowledge_entries entry
+                   where entry.workspace_id = $1::uuid and entry.brand_id = $2::uuid
+                     and entry.status = 'draft'
+                ) as has_draft
+           from (select 1) seed
+           left join lateral (
+             select id, activated_at from wiki_versions
+              where workspace_id = $1::uuid and brand_id = $2::uuid and status = 'active'
+              order by activated_at desc nulls last limit 1
+           ) active on true
+           left join lateral (
+             select status from wiki_build_requests
+              where workspace_id = $1::uuid and brand_id = $2::uuid
+              order by created_at desc limit 1
+           ) build on true`,
+        [scope.workspaceId, scope.brandId],
+      );
+      const row = result.rows[0] ?? {};
+      const activeVersionId = row.active_version_id ? String(row.active_version_id) : null;
+      const requestStatus = row.request_status as string | undefined;
+      const buildStatus: WikiManagementBuildStatus =
+        requestStatus === "pending" || requestStatus === "building"
+          ? requestStatus
+          : requestStatus === "failed"
+            ? activeVersionId ? "stale" : "failed"
+            : activeVersionId
+              ? "active"
+              : row.has_draft ? "draft"
+                : Number(row.item_count ?? 0) > 0 ? "pending" : "idle";
+      const state: WikiManagementSummary["state"] =
+        buildStatus === "stale" ? "stale"
+          : buildStatus === "failed" ? "failed"
+            : buildStatus === "building" || buildStatus === "pending" ? "building"
+              : buildStatus === "active" ? "active"
+                : buildStatus === "draft" ? "draft" : "empty";
+      return {
+        state,
+        activeVersionId,
+        lastBuiltAt: toIso(row.last_built_at),
+        buildStatus,
+        itemCount: Number(row.item_count ?? 0),
+        issueCount: Number(row.issue_count ?? 0),
+      };
     },
 
     async createKnowledgeImport(brandId, input: KnowledgeImportInput) {

@@ -241,7 +241,8 @@ export function createDmWorkerDb(connectionString: string, options: DmPoolOption
                  select entry.entry_type as source_kind, entry.id as source_id
                  from knowledge_entries entry
                  where entry.workspace_id = $1::uuid and entry.brand_id = $2::uuid
-                   and entry.enabled and entry.status <> 'legacy_projection'
+                   and entry.entry_type in ('faq', 'policy', 'guide')
+                   and entry.enabled and entry.status in ('approved', 'active')
                  union all
                  select 'product_service' as source_kind, item.id as source_id
                  from product_services item
@@ -308,7 +309,8 @@ export function createDmWorkerDb(connectionString: string, options: DmPoolOption
                 entry.aliases, entry.keywords, entry.structured_data, null::text as source_url
          from knowledge_entries entry
          where entry.id = $1::uuid and entry.workspace_id = $2::uuid and entry.brand_id = $3::uuid
-           and entry.entry_type = $4 and entry.enabled and entry.status <> 'legacy_projection'
+           and entry.entry_type in ('faq', 'policy', 'guide')
+           and entry.entry_type = $4 and entry.enabled and entry.status in ('approved', 'active')
          union all
          select 'product_service', item.id, item.display_name,
                 coalesce(active.profile_json->>'description', item.display_name),
@@ -991,6 +993,34 @@ export function createDmWorkerDb(connectionString: string, options: DmPoolOption
                completed_at = now(), updated_at = now()
            where id = $1::uuid and status = 'building'`,
           [item.wikiVersionId],
+        );
+        const activation = await client.query(
+          "select activate_compiled_wiki_version($1::uuid) as activated",
+          [item.wikiVersionId],
+        );
+        if (activation.rows[0]?.activated !== true) throw new Error("wiki_activation_failed");
+        await client.query(
+          `update wiki_issues issue
+              set status = 'resolved',
+                  resolved_at = now(),
+                  detail_json = issue.detail_json || jsonb_build_object(
+                    'resolutionActiveVersionId', $1::text
+                  ),
+                  updated_at = now()
+            where issue.workspace_id = $2::uuid and issue.brand_id = $3::uuid
+              and issue.status = 'open'
+              and issue.detail_json ? 'resolutionSourceKind'
+              and issue.detail_json ? 'resolutionSourceId'
+              and exists (
+                select 1
+                  from wiki_source_units unit
+                 where unit.wiki_version_id = $1::uuid
+                   and unit.workspace_id = issue.workspace_id
+                   and unit.brand_id = issue.brand_id
+                   and unit.source_kind = issue.detail_json->>'resolutionSourceKind'
+                   and unit.source_id::text = issue.detail_json->>'resolutionSourceId'
+              )`,
+          [item.wikiVersionId, item.workspaceId, item.brandId],
         );
         await client.query(
           `update wiki_build_requests

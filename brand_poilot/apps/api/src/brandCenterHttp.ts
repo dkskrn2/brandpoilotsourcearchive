@@ -9,6 +9,11 @@ import {
 import type { BrandIntelligenceRepository } from "./brandIntelligenceRepository.js";
 import type { ApiRepository } from "./types.js";
 import { parseProductServiceProfile } from "./productLibraryContracts.js";
+import {
+  parseCreateWikiItem,
+  parseResolveWikiIssue,
+  parseUpdateWikiItem,
+} from "./wikiManagementContracts.js";
 
 interface BrandCenterRouteOptions {
   repository: ApiRepository;
@@ -55,12 +60,13 @@ export function registerBrandCenterRoutes(
       throw new Error("brand_center_not_configured");
     }
     const scope = options.scope(request, request.params.brandId);
-    const [active, versions, activeRules, analysis, products] = await Promise.all([
+    const [active, versions, activeRules, analysis, products, wiki] = await Promise.all([
       repository.getActive(scope),
       repository.listVersions(scope),
       repository.getActiveRules(scope),
       options.brandIntelligenceRepository?.getCurrentBrandIntelligence(scope) ?? Promise.resolve(null),
       repository.summarizeProductServices?.(scope) ?? Promise.resolve(null),
+      repository.summarizeWiki?.(scope) ?? Promise.resolve(null),
     ]);
     const draft = versions.find((item) => item.status === "draft");
     const hasSource = Boolean(analysis?.input.ownedUrl || analysis?.input.uploadIds.length);
@@ -76,7 +82,7 @@ export function registerBrandCenterRoutes(
             draftCount: products.drafts,
           }
         : { state: "unavailable" },
-      wiki: { state: "unavailable" },
+      wiki: wiki ?? { state: "unavailable" },
       avatars: { state: "unavailable" },
     };
   });
@@ -304,6 +310,68 @@ export function registerBrandCenterRoutes(
       });
       reply.code(204);
       return reply.send();
+    },
+  );
+
+  app.get<{ Params: { brandId: string } }>(
+    "/brands/:brandId/wiki/items",
+    async (request) => {
+      if (!repository.listWikiItems) throw new Error("wiki_management_not_configured");
+      return repository.listWikiItems(options.scope(request, request.params.brandId));
+    },
+  );
+
+  app.post<{ Params: { brandId: string }; Body: unknown }>(
+    "/brands/:brandId/wiki/items",
+    async (request, reply) => {
+      if (!repository.createWikiItem) throw new Error("wiki_management_not_configured");
+      const created = await repository.createWikiItem(
+        {
+          ...options.scope(request, request.params.brandId),
+          actorUserId: requireActor(options, request),
+        },
+        parseCreateWikiItem(request.body),
+      );
+      reply.code(201);
+      return created;
+    },
+  );
+
+  app.patch<{ Params: { brandId: string; itemId: string }; Body: unknown }>(
+    "/brands/:brandId/wiki/items/:itemId",
+    async (request) => {
+      if (!repository.updateWikiItem) throw new Error("wiki_management_not_configured");
+      return repository.updateWikiItem(
+        {
+          ...options.scope(request, request.params.brandId),
+          actorUserId: requireActor(options, request),
+          itemId: request.params.itemId,
+        },
+        parseUpdateWikiItem(request.body),
+      );
+    },
+  );
+
+  app.get<{ Params: { brandId: string } }>(
+    "/brands/:brandId/wiki/issues",
+    async (request) => {
+      if (!repository.listWikiIssues) throw new Error("wiki_management_not_configured");
+      return repository.listWikiIssues(options.scope(request, request.params.brandId));
+    },
+  );
+
+  app.post<{ Params: { brandId: string; issueId: string }; Body: unknown }>(
+    "/brands/:brandId/wiki/issues/:issueId/resolve",
+    async (request) => {
+      if (!repository.resolveWikiIssue) throw new Error("wiki_management_not_configured");
+      return repository.resolveWikiIssue(
+        {
+          ...options.scope(request, request.params.brandId),
+          actorUserId: requireActor(options, request),
+          issueId: request.params.issueId,
+        },
+        parseResolveWikiIssue(request.body),
+      );
     },
   );
 }

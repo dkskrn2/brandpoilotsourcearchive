@@ -478,17 +478,29 @@ export function createServer(
       reply.code(403).send({ error: message });
       return;
     }
+    if (message === "wiki_item_approval_forbidden" || message === "wiki_item_access_forbidden"
+      || message === "wiki_issue_resolution_forbidden") {
+      reply.code(403).send({ error: message });
+      return;
+    }
     if ([
       "brand_core_not_draft",
       "brand_core_version_conflict",
       "brand_rules_not_draft",
       "brand_rules_version_conflict",
+      "wiki_issue_not_open",
     ].includes(message)) {
       reply.code(409).send({ error: message });
       return;
     }
-    if (message === "brand_center_not_configured" || message === "product_library_not_configured") {
+    if (message === "brand_center_not_configured" || message === "product_library_not_configured"
+      || message === "wiki_management_not_configured") {
       reply.code(503).send({ error: message });
+      return;
+    }
+    if (message.startsWith("wiki_item_validation_failed:") || message.startsWith("wiki_issue_validation_failed:")) {
+      const separator = message.indexOf(":");
+      reply.code(400).send({ error: message.slice(0, separator), field: message.slice(separator + 1) });
       return;
     }
     if (message.endsWith("_not_found")) {
