@@ -729,11 +729,22 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
       await transaction(pool, async (client) => {
         await requireMember(client, scope, true);
         const locked = await client.query(
-          `select id,kind,source_url_id from reference_items
+          `select id,kind,source_url_id,saved_trend_id from reference_items
             where id=$1 and workspace_id=$2 and brand_id=$3 and archived_at is null for update`,
           [scope.referenceId, scope.workspaceId, scope.brandId],
         );
         if (!locked.rowCount) throw new Error("reference_not_found");
+        const item = locked.rows[0];
+        if (item.saved_trend_id) {
+          const archived = await client.query(
+            "select archive_brand_trend_saved_reference($1,$2) as reference_item_id",
+            [item.saved_trend_id, scope.actorUserId],
+          );
+          if (String(archived.rows[0]?.reference_item_id ?? "") !== scope.referenceId) {
+            throw new Error("reference_not_found");
+          }
+          return;
+        }
         const result = await client.query(
           `update reference_items set archived_at=now(),
             metadata=metadata || jsonb_build_object('archivedByUserId',$1::text)
@@ -741,7 +752,6 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
           [scope.actorUserId, scope.referenceId, scope.workspaceId, scope.brandId],
         );
         if (!result.rowCount) throw new Error("reference_not_found");
-        const item = locked.rows[0];
         if (item.source_url_id && ["external_url", "saved_content"].includes(String(item.kind))) {
           await client.query(
             `update source_urls set enabled=false,status='disabled',disabled_at=coalesce(disabled_at,now())

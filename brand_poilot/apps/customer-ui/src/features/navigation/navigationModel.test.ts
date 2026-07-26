@@ -19,8 +19,7 @@ describe("D hybrid customer navigation model", () => {
     expect(paths).toEqual([
       "/dashboard",
       "/brand-center",
-      "/instagram-trends",
-      "/archive",
+      "/references",
       "/ai-content",
       "/publish-queue",
       "/channels",
@@ -29,7 +28,7 @@ describe("D hybrid customer navigation model", () => {
       "/support"
     ]);
     expect(paths).toContain("/brand-center");
-    expect(paths).not.toContain("/references");
+    expect(paths).toContain("/references");
     expect(paths).not.toContain("/performance");
     expect(paths).not.toContain("/ai-content/library");
   });
