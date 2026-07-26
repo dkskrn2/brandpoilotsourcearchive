@@ -262,7 +262,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션 registry는 avatar upload lifecycle 062를 포함한다", async () => {
+test("데이터베이스 마이그레이션 registry는 avatar upload lifecycle 063까지 포함한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -331,12 +331,21 @@ test("데이터베이스 마이그레이션 registry는 avatar upload lifecycle 
     ...reservedProgramMigrations,
     "061_avatar_image_checksum_uniqueness.sql",
     "062_avatar_upload_cancellation.sql",
+    "063_avatar_upload_finalization.sql",
   ]);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("059_")).length <= 1);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("060_")).length <= 1);
   if (reservedProgramMigrations.some((file) => file.startsWith("060_"))) {
     assert.ok(reservedProgramMigrations.includes("060_content_orchestration.sql"));
   }
+});
+
+test("063 keeps cancelled sessions pending through token expiry and schedules fair retries", async () => {
+  const migration = await readFile("db/migrations/063_avatar_upload_finalization.sql", "utf8");
+  assert.match(migration, /reference_upload_sessions[\s\S]*cancelled_at/i);
+  assert.match(migration, /avatar_upload_cancellation_receipts[\s\S]*token_expires_at/i);
+  assert.match(migration, /avatar_upload_cancellation_receipts[\s\S]*next_attempt_at/i);
+  assert.match(migration, /status[\s\S]*pending[\s\S]*completed/i);
 });
 
 test("062는 exact-path avatar cancellation receipt와 expiry cleanup index를 정의한다", async () => {

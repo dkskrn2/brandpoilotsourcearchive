@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client";
-import { del, get } from "@vercel/blob";
+import { del, get, list } from "@vercel/blob";
 import { parseAssetUploadInput, type AssetUploadInput } from "./assetLibraryContracts.js";
 
 export type AssetLibraryUploadKind = "avatar" | "reference";
@@ -114,6 +114,7 @@ export interface AssetLibraryBlobOptions {
 export interface AssetLibraryDeleteOptions {
   token: string;
   deleteBlob?: typeof del;
+  listBlobs?: typeof list;
 }
 
 export async function deleteAssetLibraryBlob(
@@ -131,12 +132,59 @@ export async function deleteAssetLibraryBlob(
   }
 }
 
+export async function cleanupAssetLibraryUploadPrefix(
+  storagePathPrefix: string,
+  storagePath: string | undefined,
+  options: AssetLibraryDeleteOptions,
+): Promise<void> {
+  const uuidPart = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+  const scopedAvatarPrefix = new RegExp(
+    `^brands/${uuidPart}/asset-library/avatars/${uuidPart}/${uuidPart}/$`,
+    "i",
+  );
+  if (!scopedAvatarPrefix.test(storagePathPrefix)
+    || (storagePath !== undefined && !storagePath.startsWith(storagePathPrefix))) {
+    fail("asset_library_upload_path_mismatch");
+  }
+  if (!options.token.trim()) fail("asset_library_upload_storage_not_configured");
+  const remove = options.deleteBlob ?? del;
+  const find = options.listBlobs ?? list;
+  try {
+    if (storagePath) {
+      await remove(storagePath, { token: options.token, abortSignal: AbortSignal.timeout(15_000) });
+    }
+    let cursor: string | undefined;
+    do {
+      const page = await find({
+        token: options.token,
+        prefix: storagePathPrefix,
+        limit: 1_000,
+        ...(cursor ? { cursor } : {}),
+        abortSignal: AbortSignal.timeout(15_000),
+      });
+      const paths = page.blobs.map((blob) => blob.pathname);
+      if (paths.some((pathname) => !pathname.startsWith(storagePathPrefix))) {
+        fail("asset_library_upload_path_mismatch");
+      }
+      if (paths.length) {
+        await remove(paths, { token: options.token, abortSignal: AbortSignal.timeout(15_000) });
+      }
+      if (page.hasMore && !page.cursor) fail("asset_library_blob_delete_failed");
+      cursor = page.hasMore ? page.cursor : undefined;
+    } while (cursor);
+  } catch (error) {
+    if (error instanceof Error && error.message === "asset_library_upload_path_mismatch") throw error;
+    fail("asset_library_blob_delete_failed");
+  }
+}
+
 export async function issueAssetLibraryUploadToken(input: {
   brandId: string;
   sessionId: string;
   avatarId?: string;
   kind: AssetLibraryUploadKind;
   upload: AssetUploadInput;
+  expiresAt?: string;
 }, options: {
   token: string;
   generateClientToken?: typeof generateClientTokenFromReadWriteToken;
@@ -152,7 +200,7 @@ export async function issueAssetLibraryUploadToken(input: {
     maximumSizeInBytes: policy[input.kind][upload.mimeType as keyof typeof policy[typeof input.kind]],
     addRandomSuffix: false,
     allowOverwrite: false,
-    validUntil: Date.now() + 10 * 60 * 1000,
+    validUntil: input.expiresAt ? new Date(input.expiresAt).getTime() : Date.now() + 10 * 60 * 1000,
   });
   return { pathname, clientToken };
 }

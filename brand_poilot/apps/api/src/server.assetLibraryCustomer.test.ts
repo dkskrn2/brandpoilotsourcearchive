@@ -53,7 +53,10 @@ function setup(overrides: Partial<ApiRepository> = {}) {
       expiresAt: new Date(Date.now() + 60_000).toISOString(), confirmedAt: null,
     })),
     confirmAvatarUpload: vi.fn(async () => ({ status: "staged" as const, avatarId, sessionId })),
-    cancelAvatarUpload: vi.fn(async () => ({ status: "cancelled" as const })),
+    cancelAvatarUpload: vi.fn(async () => ({
+      status: "cleanup_pending" as const,
+      immediateCleanup: "succeeded" as const,
+    })),
     cleanupExpiredAvatarUploads: vi.fn(async () => ({ scanned: 0, cancelled: 0, failed: [] })),
     confirmReferenceUpload: vi.fn(async () => ({ id: referenceId })),
     listReferenceBrands: vi.fn(async () => []), createReferenceBrand: vi.fn(async () => ({ id: referenceId })),
@@ -83,12 +86,16 @@ function setup(overrides: Partial<ApiRepository> = {}) {
   }));
   const generateClientToken = vi.fn(async () => "client-token");
   const deleteBlob = vi.fn(async () => undefined);
+  const listBlobs = vi.fn(async () => ({ blobs: [], hasMore: false }));
   return {
     app: createServer({
       repository, kakaoAuth, logger: false, cronSecret: "cron-secret",
-      assetLibraryUpload: { readWriteToken: "rw-token", getBlob, generateClientToken, deleteBlob },
+      assetLibraryUpload: {
+        readWriteToken: "rw-token", getBlob, generateClientToken, deleteBlob,
+        listBlobs: listBlobs as never,
+      },
     }),
-    repository, getBlob, deleteBlob,
+    repository, getBlob, deleteBlob, listBlobs,
   };
 }
 
@@ -164,13 +171,14 @@ describe("asset library customer routes", () => {
       headers: auth,
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ status: "cancelled" });
+    expect(response.json()).toEqual({ status: "cleanup_pending", immediateCleanup: "succeeded" });
     expect(repository.cancelAvatarUpload).toHaveBeenCalledWith(
       { workspaceId, brandId, actorUserId: userId, avatarId, sessionId },
       expect.any(Function),
     );
     const cleanup = (repository.cancelAvatarUpload as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
-    await cleanup(uploaded.storagePath);
+    const prefix = `brands/${brandId}/asset-library/avatars/${avatarId}/${sessionId}/`;
+    await cleanup(prefix, uploaded.storagePath);
     expect(deleteBlob).toHaveBeenCalledWith(uploaded.storagePath, expect.objectContaining({ token: "rw-token" }));
     await app.close();
   });

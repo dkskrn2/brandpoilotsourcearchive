@@ -122,6 +122,7 @@ interface CreateServerOptions {
     generateClientToken?: import("./assetLibraryUpload.js").AssetLibraryTokenOptions["generateClientToken"];
     getBlob?: import("./assetLibraryUpload.js").AssetLibraryBlobOptions["getBlob"];
     deleteBlob?: import("./assetLibraryUpload.js").AssetLibraryDeleteOptions["deleteBlob"];
+    listBlobs?: import("./assetLibraryUpload.js").AssetLibraryDeleteOptions["listBlobs"];
   };
   aiContentLimits?: { dailyGenerationLimit: number; dailyDownloadLimit: number };
   subjectAnalysis?: AiContentSubjectRuntime;
@@ -812,11 +813,12 @@ export function createServer(
     if (!repository.cleanupExpiredAvatarUploads || !assetLibraryUpload) {
       throw new Error("asset_library_not_configured");
     }
-    const { deleteAssetLibraryBlob } = await import("./assetLibraryUpload.js");
+    const { cleanupAssetLibraryUploadPrefix } = await import("./assetLibraryUpload.js");
     const result = await repository.cleanupExpiredAvatarUploads(
-      (storagePath) => deleteAssetLibraryBlob(storagePath, {
+      (storagePathPrefix, storagePath) => cleanupAssetLibraryUploadPrefix(storagePathPrefix, storagePath, {
         token: assetLibraryUpload.readWriteToken,
         deleteBlob: assetLibraryUpload.deleteBlob,
+        listBlobs: assetLibraryUpload.listBlobs,
       }),
     );
     if (result.failed.length) {

@@ -26,7 +26,7 @@ import {
 } from "./assetLibraryContracts.js";
 import {
   confirmAssetLibraryUpload,
-  deleteAssetLibraryBlob,
+  cleanupAssetLibraryUploadPrefix,
   issueAssetLibraryUploadToken,
   validateAssetLibraryUpload,
   type AssetLibraryUploadKind,
@@ -42,6 +42,7 @@ interface BrandCenterRouteOptions {
     generateClientToken?: Parameters<typeof issueAssetLibraryUploadToken>[1]["generateClientToken"];
     getBlob?: Parameters<typeof confirmAssetLibraryUpload>[1]["getBlob"];
     deleteBlob?: import("./assetLibraryUpload.js").AssetLibraryDeleteOptions["deleteBlob"];
+    listBlobs?: import("./assetLibraryUpload.js").AssetLibraryDeleteOptions["listBlobs"];
   };
 }
 
@@ -480,7 +481,7 @@ export function registerBrandCenterRoutes(
     );
     const token = await issueAssetLibraryUploadToken({
       brandId: request.params.brandId, avatarId,
-      sessionId: session.id, kind, upload,
+      sessionId: session.id, kind, upload, expiresAt: session.expiresAt,
     }, {
       token: options.assetLibraryUpload.readWriteToken,
       generateClientToken: options.assetLibraryUpload.generateClientToken,
@@ -505,9 +506,10 @@ export function registerBrandCenterRoutes(
           avatarId: request.params.avatarId,
           sessionId: request.params.sessionId,
         },
-        (storagePath) => deleteAssetLibraryBlob(storagePath, {
+        (storagePathPrefix, storagePath) => cleanupAssetLibraryUploadPrefix(storagePathPrefix, storagePath, {
           token: options.assetLibraryUpload!.readWriteToken,
           deleteBlob: options.assetLibraryUpload!.deleteBlob,
+          listBlobs: options.assetLibraryUpload!.listBlobs,
         }),
       );
     },

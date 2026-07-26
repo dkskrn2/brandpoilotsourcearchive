@@ -91,11 +91,14 @@ export interface AssetLibraryRepository {
   ): Promise<{ status: "staged"; avatarId: string; sessionId: string } | { status: "attached"; avatar: Avatar }>;
   cancelAvatarUpload(
     scope: BrandScope & { actorUserId: string; avatarId: string; sessionId: string },
-    deleteBlob: (storagePath: string) => Promise<void>,
+    cleanupBlobs: (storagePathPrefix: string, storagePath?: string) => Promise<void>,
     reason?: "user" | "expired",
-  ): Promise<{ status: "cancelled" | "already_cancelled" }>;
+  ): Promise<
+    { status: "cleanup_pending"; immediateCleanup: "succeeded" | "retry_scheduled" | "already_pending" }
+    | { status: "already_cancelled" }
+  >;
   cleanupExpiredAvatarUploads(
-    deleteBlob: (storagePath: string) => Promise<void>,
+    cleanupBlobs: (storagePathPrefix: string, storagePath?: string) => Promise<void>,
     limit?: number,
   ): Promise<{ scanned: number; cancelled: number; failed: Array<{ sessionId: string; error: string }> }>;
   confirmReferenceUpload(scope: BrandScope & { actorUserId: string; sessionId: string }, upload: ConfirmedAssetLibraryUpload): Promise<ReferenceItem>;
@@ -269,6 +272,7 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
     if (String(session.rows[0].created_by_user_id) !== scope.actorUserId) {
       throw new Error("asset_library_upload_actor_mismatch");
     }
+    if (session.rows[0].cancelled_at) throw new Error("asset_library_upload_cancelled");
     if (session.rows[0].confirmed_at) throw new Error("asset_library_upload_replayed");
     if (new Date(session.rows[0].expires_at).getTime() <= Date.now()) throw new Error("asset_library_upload_expired");
     return session.rows[0] as Record<string, unknown>;
@@ -334,6 +338,7 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
           if (String(row.created_by_user_id) !== scope.actorUserId) {
             throw new Error("asset_library_upload_actor_mismatch");
           }
+          if (row.cancelled_at) throw new Error("asset_library_upload_cancelled");
           const prefix = `brands/${scope.brandId}/asset-library/avatars/${input.avatarId}/${id}/`;
           if (String(row.storage_path_prefix) !== prefix) throw new Error("asset_library_upload_path_mismatch");
           if (!row.confirmed_at) throw new Error("asset_library_upload_not_confirmed");
@@ -663,7 +668,8 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
     },
     async getUploadSession(scope, fileName) {
       const result = await pool.query(
-        `select * from reference_upload_sessions where id=$1 and workspace_id=$2 and brand_id=$3`,
+        `select * from reference_upload_sessions
+          where id=$1 and workspace_id=$2 and brand_id=$3 and cancelled_at is null`,
         [scope.sessionId, scope.workspaceId, scope.brandId],
       );
       if (!result.rowCount) return null;
@@ -715,8 +721,8 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
         return { status: "attached", avatar: (await getAvatar(scope, client))! };
       });
     },
-    async cancelAvatarUpload(scope, deleteBlob, reason = "user") {
-      return transaction(pool, async (client) => {
+    async cancelAvatarUpload(scope, cleanupBlobs, reason = "user") {
+      const pending = await transaction(pool, async (client) => {
         if (reason === "user") await requireMember(client, scope);
         await client.query(
           "select pg_advisory_xact_lock(hashtextextended($1,0))",
@@ -733,7 +739,9 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
             || String(row.avatar_id) !== scope.avatarId || String(row.created_by_user_id) !== scope.actorUserId) {
             throw new Error("asset_library_upload_session_not_found");
           }
-          return { status: "already_cancelled" };
+          return row.status === "completed"
+            ? { status: "already_cancelled" as const }
+            : { status: "cleanup_pending" as const, immediateCleanup: "already_pending" as const };
         }
         const session = await client.query(
           `select * from reference_upload_sessions
@@ -758,51 +766,131 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
         const storagePath = artifact.rowCount
           ? String(artifact.rows[0].path)
           : String(row.storage_path ?? "");
-        if (!storagePath || !storagePath.startsWith(expectedPrefix)) {
-          throw new Error("asset_library_upload_artifact_not_found");
+        if (storagePath && !storagePath.startsWith(expectedPrefix)) {
+          throw new Error("asset_library_upload_path_mismatch");
         }
-        await deleteBlob(storagePath);
         await client.query(
-          `delete from storage_artifacts
-            where workspace_id=$1 and brand_id=$2 and path=$3 and deleted_at is null`,
-          [scope.workspaceId, scope.brandId, storagePath],
-        );
-        await client.query(
-          `delete from reference_upload_sessions
-            where id=$1 and workspace_id=$2 and brand_id=$3`,
+          `update reference_upload_sessions set cancelled_at=now()
+            where id=$1 and workspace_id=$2 and brand_id=$3 and cancelled_at is null`,
           [scope.sessionId, scope.workspaceId, scope.brandId],
         );
         await client.query(
           `insert into avatar_upload_cancellation_receipts(
-            session_id,workspace_id,brand_id,avatar_id,created_by_user_id,storage_path,reason
-          ) values($1,$2,$3,$4,$5,$6,$7)`,
+            session_id,workspace_id,brand_id,avatar_id,created_by_user_id,storage_path,
+            storage_path_prefix,token_expires_at,status,next_attempt_at,reason
+          ) values($1,$2,$3,$4,$5,$6,$7,$8,'pending',$8 + interval '1 minute',$9)`,
           [scope.sessionId, scope.workspaceId, scope.brandId, scope.avatarId,
-            scope.actorUserId, storagePath, reason],
+            scope.actorUserId, storagePath || null, expectedPrefix, row.expires_at, reason],
         );
-        return { status: "cancelled" };
+        return {
+          status: "cleanup_pending" as const,
+          immediateCleanup: "succeeded" as const,
+          storagePathPrefix: expectedPrefix,
+          storagePath: storagePath || undefined,
+        };
       });
+      if (pending.status === "already_cancelled" || pending.immediateCleanup === "already_pending") {
+        return pending;
+      }
+      try {
+        await cleanupBlobs(pending.storagePathPrefix, pending.storagePath);
+        return { status: "cleanup_pending", immediateCleanup: "succeeded" };
+      } catch (error) {
+        await pool.query(
+          `update avatar_upload_cancellation_receipts
+            set last_error=$2
+            where session_id=$1 and status='pending'`,
+          [scope.sessionId, error instanceof Error ? error.message : "unknown"],
+        );
+        return { status: "cleanup_pending", immediateCleanup: "retry_scheduled" };
+      }
     },
-    async cleanupExpiredAvatarUploads(deleteBlob, limit = 100) {
+    async cleanupExpiredAvatarUploads(cleanupBlobs, limit = 100) {
       const candidates = await pool.query(
-        `select id,workspace_id,brand_id,created_by_user_id,storage_path_prefix
-          from reference_upload_sessions
-          where expires_at <= now() and storage_path_prefix like '%/asset-library/avatars/%'
-          order by expires_at,id limit $1`,
+        `select * from (
+          select coalesce(session.id,receipt.session_id) id,
+            coalesce(session.workspace_id,receipt.workspace_id) workspace_id,
+            coalesce(session.brand_id,receipt.brand_id) brand_id,
+            coalesce(session.created_by_user_id,receipt.created_by_user_id) created_by_user_id,
+            coalesce(session.storage_path_prefix,receipt.storage_path_prefix) storage_path_prefix,
+            coalesce(session.storage_path,receipt.storage_path) storage_path,
+            receipt.token_expires_at expires_at,
+            receipt.status receipt_status,receipt.avatar_id
+          from avatar_upload_cancellation_receipts receipt
+          left join reference_upload_sessions session
+            on session.id=receipt.session_id
+          where receipt.status='pending' and receipt.token_expires_at <= now()
+            and receipt.next_attempt_at <= now()
+          union all
+          select session.id,session.workspace_id,session.brand_id,session.created_by_user_id,
+            session.storage_path_prefix,session.storage_path,session.expires_at,
+            null::text receipt_status,
+            split_part(split_part(session.storage_path_prefix,'/avatars/',2),'/',1)::uuid avatar_id
+          from reference_upload_sessions session
+          left join avatar_upload_cancellation_receipts receipt on receipt.session_id=session.id
+          where receipt.session_id is null and session.expires_at <= now()
+            and session.storage_path_prefix like '%/asset-library/avatars/%'
+        ) candidate order by expires_at,id limit $1`,
         [Math.max(1, Math.min(limit, 500))],
       );
       const failed: Array<{ sessionId: string; error: string }> = [];
       let cancelled = 0;
       for (const row of candidates.rows) {
-        const parts = String(row.storage_path_prefix).split("/avatars/")[1]?.split("/") ?? [];
+        const sessionId = String(row.id);
+        const prefix = String(row.storage_path_prefix);
+        const avatarId = String(row.avatar_id);
+        const expectedPrefix = `brands/${row.brand_id}/asset-library/avatars/${avatarId}/${sessionId}/`;
         try {
-          await this.cancelAvatarUpload({
-            workspaceId: String(row.workspace_id), brandId: String(row.brand_id),
-            actorUserId: String(row.created_by_user_id), avatarId: parts[0] ?? "",
-            sessionId: String(row.id),
-          }, deleteBlob, "expired");
+          if (prefix !== expectedPrefix) throw new Error("asset_library_upload_path_mismatch");
+          if (!row.receipt_status) {
+            await transaction(pool, async (client) => {
+              await client.query(
+                `update reference_upload_sessions set cancelled_at=coalesce(cancelled_at,now())
+                  where id=$1 and workspace_id=$2 and brand_id=$3`,
+                [sessionId, row.workspace_id, row.brand_id],
+              );
+              await client.query(
+                `insert into avatar_upload_cancellation_receipts(
+                  session_id,workspace_id,brand_id,avatar_id,created_by_user_id,storage_path,
+                  storage_path_prefix,token_expires_at,status,next_attempt_at,reason
+                ) values($1,$2,$3,$4,$5,$6,$7,$8,'pending',now(),'expired')
+                on conflict(session_id) do nothing`,
+                [sessionId, row.workspace_id, row.brand_id, avatarId, row.created_by_user_id,
+                  row.storage_path ?? null, prefix, row.expires_at],
+              );
+            });
+          }
+          await cleanupBlobs(prefix, row.storage_path ? String(row.storage_path) : undefined);
+          await transaction(pool, async (client) => {
+            await client.query(
+              `delete from storage_artifacts
+                where workspace_id=$1 and brand_id=$2 and path like $3 and deleted_at is null`,
+              [row.workspace_id, row.brand_id, `${prefix}%`],
+            );
+            await client.query(
+              `delete from reference_upload_sessions
+                where id=$1 and workspace_id=$2 and brand_id=$3`,
+              [sessionId, row.workspace_id, row.brand_id],
+            );
+            await client.query(
+              `update avatar_upload_cancellation_receipts
+                set status='completed',completed_at=now(),last_error=null
+                where session_id=$1 and status='pending'`,
+              [sessionId],
+            );
+          });
           cancelled += 1;
         } catch (error) {
-          failed.push({ sessionId: String(row.id), error: error instanceof Error ? error.message : "unknown" });
+          const message = error instanceof Error ? error.message : "unknown";
+          await pool.query(
+            `update avatar_upload_cancellation_receipts
+              set attempt_count=attempt_count+1,last_error=$2,
+                next_attempt_at=now() + make_interval(secs =>
+                  least(3600,30 * power(2,least(attempt_count,7)))::integer)
+              where session_id=$1 and status='pending'`,
+            [sessionId, message],
+          );
+          failed.push({ sessionId, error: message });
         }
       }
       return { scanned: candidates.rows.length, cancelled, failed };

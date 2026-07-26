@@ -3698,7 +3698,7 @@ test("061 deterministically removes legacy duplicate avatar bytes and prevents n
   });
 });
 
-test("migration runner records forward-only 061 and 062 without changing the applied 058 checksum", async () => {
+test("migration runner records forward-only 061 through 063 without changing the applied 058 checksum", async () => {
   const migrations = await loadMigrations();
   const runnableMigrations = migrations.filter(
     (migration) => !migration.sql.startsWith("-- requires: pgvector")
@@ -3724,16 +3724,18 @@ test("migration runner records forward-only 061 and 062 without changing the app
       client,
       migrations: runnableMigrations,
     });
-    assert.deepEqual(upgraded.pending.slice(-2), [
+    assert.deepEqual(upgraded.pending.slice(-3), [
       "061_avatar_image_checksum_uniqueness.sql",
       "062_avatar_upload_cancellation.sql",
+      "063_avatar_upload_finalization.sql",
     ]);
     const recorded = await database.query(
-      "select id, checksum from schema_migrations where id in ($1, $2, $3) order by id",
+      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4) order by id",
       [
         "058_avatar_and_reference_libraries.sql",
         "061_avatar_image_checksum_uniqueness.sql",
         "062_avatar_upload_cancellation.sql",
+        "063_avatar_upload_finalization.sql",
       ],
     );
     assert.deepEqual(recorded.rows, [
@@ -3749,12 +3751,103 @@ test("migration runner records forward-only 061 and 062 without changing the app
         id: "062_avatar_upload_cancellation.sql",
         checksum: migrations.find((migration) => migration.id === "062_avatar_upload_cancellation.sql")?.checksum,
       },
+      {
+        id: "063_avatar_upload_finalization.sql",
+        checksum: migrations.find((migration) => migration.id === "063_avatar_upload_finalization.sql")?.checksum,
+      },
     ]);
     const repeated = await runMigrationsWithClient({
       client,
       migrations: runnableMigrations,
     });
     assert.deepEqual(repeated.pending, []);
+  });
+});
+
+test("063 upgrades pathless pre-062 sessions and backoff lets a newer cleanup enter the batch", async () => {
+  const migrations = await loadMigrations();
+  const migration062 = migrations.find((migration) => migration.id === "062_avatar_upload_cancellation.sql");
+  const migration063 = migrations.find((migration) => migration.id === "063_avatar_upload_finalization.sql");
+  assert.ok(migration062);
+  assert.ok(migration063);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "061_avatar_image_checksum_uniqueness.sql",
+    );
+    const actor = await database.query(
+      "insert into app_users(email) values($1) returning id",
+      [`avatar-cleanup-${randomUUID()}@example.com`],
+    );
+    const workspace = await database.query(
+      "insert into workspaces(name,slug) values('Avatar cleanup',$1) returning id",
+      [`avatar-cleanup-${randomUUID()}`],
+    );
+    await database.query(
+      "insert into workspace_members(workspace_id,user_id,role) values($1,$2,'owner')",
+      [workspace.rows[0].id, actor.rows[0].id],
+    );
+    const brand = await database.query(
+      "insert into brands(workspace_id,name) values($1,'Cleanup Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    const avatarId = randomUUID();
+    const sessionIds = Array.from({ length: 101 }, () => randomUUID());
+    for (const [index, sessionId] of sessionIds.entries()) {
+      await database.query(
+        `insert into reference_upload_sessions(
+          id,nonce,workspace_id,brand_id,storage_path_prefix,expected_mime_type,
+          expected_size_bytes,expected_checksum,expires_at,created_by_user_id,created_at
+        ) values($1,$2,$3,$4,$5,'image/webp',100,$6,
+          now()-interval '10 minutes',$7,now()-interval '20 minutes')`,
+        [
+          sessionId,
+          `legacy-cleanup-${index}-${randomUUID()}`,
+          workspace.rows[0].id,
+          brand.rows[0].id,
+          `brands/${brand.rows[0].id}/asset-library/avatars/${avatarId}/${sessionId}/`,
+          String(index).padStart(64, "0"),
+          actor.rows[0].id,
+        ],
+      );
+    }
+
+    await database.exec(migration062.sql);
+    const upgradedLegacy = await database.query(
+      "select file_name,storage_path from reference_upload_sessions where id=$1",
+      [sessionIds[0]],
+    );
+    assert.deepEqual(upgradedLegacy.rows, [{ file_name: null, storage_path: null }]);
+    await database.exec(migration063.sql);
+
+    for (const sessionId of sessionIds.slice(0, 100)) {
+      await database.query(
+        `insert into avatar_upload_cancellation_receipts(
+          session_id,workspace_id,brand_id,avatar_id,created_by_user_id,storage_path,
+          storage_path_prefix,token_expires_at,status,next_attempt_at,attempt_count,last_error,reason
+        ) select id,workspace_id,brand_id,$2,created_by_user_id,null,storage_path_prefix,
+          expires_at,'pending',now()+interval '1 hour',1,'provider unavailable','expired'
+          from reference_upload_sessions where id=$1`,
+        [sessionId, avatarId],
+      );
+    }
+    const eligible = await database.query(
+      `select session.id
+        from reference_upload_sessions session
+        left join avatar_upload_cancellation_receipts receipt on receipt.session_id=session.id
+        where session.expires_at <= now()
+          and (
+            receipt.session_id is null
+            or (receipt.status='pending' and receipt.token_expires_at <= now()
+              and receipt.next_attempt_at <= now())
+          )
+        order by session.expires_at,session.id
+        limit 100`,
+    );
+    assert.deepEqual(eligible.rows, [{ id: sessionIds[100] }]);
   });
 });
 

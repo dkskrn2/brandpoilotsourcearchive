@@ -61,7 +61,9 @@ function gateway(overrides: Record<string, unknown> = {}) {
     updateAvatar: vi.fn(async () => avatar),
     hashAvatarImage: vi.fn(async (file: File) => `${file.name}:${file.size}`),
     uploadAvatarImage: vi.fn(async () => ({ sessionId: firstSessionId })),
-    cancelAvatarUpload: vi.fn(async () => ({ status: "cancelled" as const })),
+    cancelAvatarUpload: vi.fn(async () => ({
+      status: "cleanup_pending" as const, immediateCleanup: "succeeded" as const,
+    })),
     deleteAvatarImage: vi.fn(async () => undefined),
     setDefaultAvatar: vi.fn(async () => avatar),
     archiveAvatar: vi.fn(async () => undefined),
@@ -208,7 +210,9 @@ describe("AvatarLibraryPanel", () => {
   });
 
   it("cancels a failed staged session before retrying with a new upload", async () => {
-    const cancelAvatarUpload = vi.fn(async () => ({ status: "cancelled" as const }));
+    const cancelAvatarUpload = vi.fn(async () => ({
+      status: "cleanup_pending" as const, immediateCleanup: "succeeded" as const,
+    }));
     const uploadAvatarImage = vi.fn()
       .mockImplementationOnce((_brandId, _avatarId, _file, options) => {
         options.onSession(firstSessionId);
@@ -263,7 +267,9 @@ describe("AvatarLibraryPanel", () => {
   });
 
   it("cancels the staged server session when an uploaded file is removed", async () => {
-    const cancelAvatarUpload = vi.fn(async () => ({ status: "cancelled" as const }));
+    const cancelAvatarUpload = vi.fn(async () => ({
+      status: "cleanup_pending" as const, immediateCleanup: "succeeded" as const,
+    }));
     const api = gateway({ listAvatars: vi.fn(async () => []), cancelAvatarUpload });
     render(<AvatarLibraryPanel brandId="brand-1" gateway={api as never} />);
     await userEvent.click(await screen.findByRole("button", { name: "아바타 등록" }));
@@ -311,7 +317,9 @@ describe("AvatarLibraryPanel", () => {
   });
 
   it("cancels all staged sessions before closing the dialog", async () => {
-    const cancelAvatarUpload = vi.fn(async () => ({ status: "cancelled" as const }));
+    const cancelAvatarUpload = vi.fn(async () => ({
+      status: "cleanup_pending" as const, immediateCleanup: "succeeded" as const,
+    }));
     const api = gateway({ listAvatars: vi.fn(async () => []), cancelAvatarUpload });
     render(<AvatarLibraryPanel brandId="brand-1" gateway={api as never} />);
     await userEvent.click(await screen.findByRole("button", { name: "아바타 등록" }));

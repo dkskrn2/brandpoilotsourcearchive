@@ -340,7 +340,10 @@ export function createLibraryGateway(client: Client = apiClient(), blobPut: type
       return { sessionId: token.sessionId };
     },
     cancelAvatarUpload(brandId: string, avatarId: string, sessionId: string) {
-      return client.requestJson<{ status: "cancelled" | "already_cancelled" }>(
+      return client.requestJson<
+        { status: "cleanup_pending"; immediateCleanup: "succeeded" | "retry_scheduled" | "already_pending" }
+        | { status: "already_cancelled" }
+      >(
         `/brands/${brandId}/avatars/${avatarId}/images/upload-sessions/${sessionId}`,
         { method: "DELETE" },
       );

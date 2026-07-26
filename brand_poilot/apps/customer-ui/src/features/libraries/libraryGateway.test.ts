@@ -159,6 +159,18 @@ describe("library gateway", () => {
     expect(progress).toHaveBeenCalledWith(100);
   });
 
+  it("reports avatar cancellation as cleanup-pending until token expiry", async () => {
+    const pending = { status: "cleanup_pending" as const, immediateCleanup: "retry_scheduled" as const };
+    const requestJson = vi.fn(async () => pending);
+    const gateway = createLibraryGateway({ requestJson } as never);
+    await expect(gateway.cancelAvatarUpload("brand-1", "avatar-1", "session-1"))
+      .resolves.toEqual(pending);
+    expect(requestJson).toHaveBeenCalledWith(
+      "/brands/brand-1/avatars/avatar-1/images/upload-sessions/session-1",
+      { method: "DELETE" },
+    );
+  });
+
   it("classifies deployment-order, scoped lookup, and retryable failures stably", () => {
     expect(classifyLibraryError(new ApiRequestError({
       status: 500,
