@@ -1,0 +1,133 @@
+.app {
+  grid-template-columns: var(--bp-sidebar-width) minmax(0, 1fr);
+  background: var(--bp-color-canvas);
+}
+
+.app--sidebar-collapsed {
+  grid-template-columns: var(--bp-sidebar-collapsed-width) minmax(0, 1fr);
+}
+
+.sidebar {
+  border-color: rgb(255 255 255 / 10%);
+  color: #f5faf7;
+  background: var(--bp-color-sidebar);
+}
+
+.sidebar .nav {
+  color: #d8e5df;
+}
+
+.sidebar .nav-group-label {
+  color: #9fb8ad;
+}
+
+.sidebar .nav a,
+.sidebar .nav-disabled {
+  min-height: 44px;
+  border-radius: var(--bp-radius-sm);
+}
+
+.sidebar .nav a:hover {
+  color: #fff;
+  background: var(--bp-color-sidebar-raised);
+}
+
+.sidebar .nav a[aria-current="page"] {
+  color: #fff;
+  background: var(--bp-color-primary-strong);
+}
+
+.sidebar-collapse-button,
+.sidebar-help-button,
+.sidebar-feedback-button,
+.sidebar-brand-profile {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.sidebar-collapse-button,
+.sidebar-help-button,
+.sidebar-feedback-button {
+  color: #e9f2ee;
+  border-color: rgb(255 255 255 / 14%);
+  background: transparent;
+  cursor: pointer;
+}
+
+.sidebar-help-button:hover,
+.sidebar-feedback-button:hover,
+.sidebar-brand-profile:hover {
+  color: #fff;
+  border-color: rgb(255 255 255 / 24%);
+  background: var(--bp-color-sidebar-raised);
+}
+
+.sidebar-help-button small,
+.sidebar-feedback-button small,
+.sidebar-brand-copy small {
+  color: #a9beb5;
+}
+
+.sidebar-brand-copy strong {
+  color: #fff;
+}
+
+.topbar {
+  min-height: var(--bp-topbar-height);
+  border-color: var(--bp-color-line);
+  background: rgb(255 253 250 / 92%);
+}
+
+.content {
+  width: min(1180px, calc(100vw - var(--bp-sidebar-width) - 56px));
+}
+
+.app--sidebar-collapsed .content {
+  width: min(1180px, calc(100vw - var(--bp-sidebar-collapsed-width) - 56px));
+}
+
+@media (max-width: 1080px) {
+  .app,
+  .app--sidebar-collapsed {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar--desktop {
+    display: none;
+  }
+
+  .content,
+  .app--sidebar-collapsed .content {
+    width: 100%;
+  }
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    padding-inline: 16px;
+  }
+
+  .topbar-actions {
+    gap: 6px;
+  }
+}
+
+@media (max-width: 470px) {
+  .content {
+    padding-inline: 14px;
+  }
+
+  .topbar-brand-status > div:last-child {
+    min-width: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
