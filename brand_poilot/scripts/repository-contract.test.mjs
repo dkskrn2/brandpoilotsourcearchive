@@ -262,7 +262,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션은 001부터 057까지 정확한 이름으로 존재한다", async () => {
+test("데이터베이스 마이그레이션은 001부터 058까지 정확한 이름으로 존재한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -324,7 +324,42 @@ test("데이터베이스 마이그레이션은 001부터 057까지 정확한 이
     "055_brand_core_and_rules.sql",
     "056_product_service_library.sql",
     "057_wiki_source_kinds.sql",
+    "058_avatar_and_reference_libraries.sql",
   ]);
+});
+
+test("058은 avatar와 typed-origin reference library 계약을 정의한다", async () => {
+  const migration = await readFile(
+    "db/migrations/058_avatar_and_reference_libraries.sql",
+    "utf8",
+  );
+
+  for (const table of [
+    "brand_avatars",
+    "brand_avatar_images",
+    "reference_brands",
+    "reference_items",
+    "reference_item_source_url_provenance",
+    "reference_upload_sessions",
+    "reference_patterns",
+  ]) {
+    assert.match(migration, new RegExp(`create\\s+table\\s+if\\s+not\\s+exists\\s+${table}\\b`, "i"));
+  }
+
+  assert.match(migration, /kind\s+in\s*\(\s*'saved_brand',\s*'saved_content',\s*'trend',\s*'external_url',\s*'upload',\s*'owned_performance'\s*\)/i);
+  assert.match(migration, /content_purpose\s+in\s*\(\s*'informational',\s*'marketing',\s*'both'\s*\)/i);
+  assert.match(migration, /num_nonnulls\s*\(\s*reference_brand_id,\s*source_url_id,\s*saved_trend_id,\s*channel_output_id,\s*storage_artifact_id\s*\)\s*=\s*1/i);
+  assert.doesNotMatch(migration, /\borigin_id\s+uuid\b/i);
+  assert.doesNotMatch(migration, /\b(likeness|consent)\b/i);
+  assert.match(migration, /brand_avatar_images_mime_type_check[\s\S]*'image\/png'[\s\S]*'image\/jpeg'[\s\S]*'image\/webp'/i);
+  assert.match(migration, /brand_avatar_images_size_check[\s\S]*5242880/i);
+  assert.match(migration, /brand_avatars_one_active_default/i);
+  assert.match(migration, /brand_avatar_images_one_representative/i);
+  assert.match(migration, /reference_items_saved_trend_origin_unique/i);
+  assert.match(migration, /insert\s+into\s+reference_item_source_url_provenance/i);
+  assert.match(migration, /from\s+brand_trend_saved_media/i);
+  assert.match(migration, /source_type\s*=\s*'reference'/i);
+  assert.match(migration, /not\s+exists\s*\([\s\S]*brand_trend_saved_media/i);
 });
 
 test("057은 Wiki source kind를 schema와 API/worker 계약 전체에서 일치시킨다", async () => {
@@ -371,7 +406,7 @@ test("057은 Wiki source kind를 schema와 API/worker 계약 전체에서 일치
   assert.match(compiledSource, /directWikiUnitType\(source\)/);
 });
 
-test("적용된 031과 033 마이그레이션은 원본 체크섬을 유지한다", async () => {
+test("적용된 기존 마이그레이션은 원본 체크섬을 유지한다", async () => {
   const expectedChecksums = new Map([
     [
       "db/migrations/031_content_performance_dashboard.sql",
@@ -380,6 +415,18 @@ test("적용된 031과 033 마이그레이션은 원본 체크섬을 유지한�
     [
       "db/migrations/033_compounding_wiki_pgvector.sql",
       "9cd196aad1b9dcc1e7b1bbd5d47c16343cd04e5652f5ca376ff16eb5d8dd405b",
+    ],
+    [
+      "db/migrations/055_brand_core_and_rules.sql",
+      "0e5159e9c0f7ad031fabfeb2ed7973cbb1c670e8b64bf723419031a0f4ab311b",
+    ],
+    [
+      "db/migrations/056_product_service_library.sql",
+      "3b3c9f6887d3f396c106a4a95cea6e4aa321c5dac0784c16a45fe2356a2b1b74",
+    ],
+    [
+      "db/migrations/057_wiki_source_kinds.sql",
+      "77773df7091ae962faf1de4d073d7819ba34a991d23d1d4e1d6d4bb1958f2aaa",
     ],
   ]);
 

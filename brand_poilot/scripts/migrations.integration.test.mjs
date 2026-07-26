@@ -3097,7 +3097,8 @@ test("migration runner upgrades the original 056 state to Wiki source kinds in 0
   assert.ok(migration057, "057 Wiki source kinds migration must exist");
   const runnableMigrations = migrations.filter(
     (migration) => !migration.sql.startsWith("-- requires: pgvector")
-      && migration.id !== "027_wiki_search_v2.sql",
+      && migration.id !== "027_wiki_search_v2.sql"
+      && migration.id <= "057_wiki_source_kinds.sql",
   );
   const through056 = runnableMigrations.filter(
     (migration) => migration.id <= "056_product_service_library.sql",
@@ -3400,6 +3401,238 @@ test("057 upgrades existing Wiki rows and accepts every source kind idempotently
       insertedKinds.rows.map((row) => row.source_kind),
       ["guide", "product_service", "service"],
     );
+  });
+});
+
+test("058 backfills one canonical trend item plus unlinked active reference URLs idempotently", async () => {
+  const migrations = await loadMigrations();
+  const migration058 = migrations.find(
+    (migration) => migration.id === "058_avatar_and_reference_libraries.sql",
+  );
+  assert.ok(migration058, "058 avatar and reference libraries migration must exist");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "057_wiki_source_kinds.sql",
+    );
+    const actor = await database.query(
+      "insert into app_users (email) values ($1) returning id",
+      [`libraries-${randomUUID()}@example.com`],
+    );
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ('Libraries', $1) returning id",
+      [`libraries-${randomUUID()}`],
+    );
+    await database.query(
+      "insert into workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')",
+      [workspace.rows[0].id, actor.rows[0].id],
+    );
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Library Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    const otherBrand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Other Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    const linkedSource = await database.query(
+      `insert into source_urls (
+         workspace_id, brand_id, source_type, url, url_hash, status, enabled
+       ) values ($1, $2, 'reference', 'https://example.com/trend', $3, 'crawled', true)
+       returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, `trend-${randomUUID()}`],
+    );
+    const standaloneSource = await database.query(
+      `insert into source_urls (
+         workspace_id, brand_id, source_type, url, url_hash, title, status, enabled
+       ) values ($1, $2, 'reference', 'https://example.com/standalone', $3,
+         'Standalone', 'active', true)
+       returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, `standalone-${randomUUID()}`],
+    );
+    await database.query(
+      `insert into source_urls (
+         workspace_id, brand_id, source_type, url, url_hash, status, enabled
+       ) values ($1, $2, 'owned', 'https://example.com/owned', $3, 'active', true)`,
+      [workspace.rows[0].id, brand.rows[0].id, `owned-${randomUUID()}`],
+    );
+    const media = await database.query(
+      `insert into instagram_trend_media (
+         instagram_media_id, username, caption, media_type, media_url, permalink,
+         last_fetched_at
+       ) values ($1, 'real_creator', 'Legacy trend', 'IMAGE',
+         'https://cdn.example.com/trend.webp', 'https://instagram.com/p/legacy', now())
+       returning id`,
+      [`media-${randomUUID()}`],
+    );
+    const saved = await database.query(
+      `insert into brand_trend_saved_media (
+         workspace_id, brand_id, trend_media_id, source_url_id
+       ) values ($1, $2, $3, $4) returning id`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        media.rows[0].id,
+        linkedSource.rows[0].id,
+      ],
+    );
+
+    await database.exec(migration058.sql);
+    await database.exec(migration058.sql);
+
+    const items = await database.query(
+      `select kind, saved_trend_id, source_url_id, content_purpose, source_url
+         from reference_items
+        where brand_id = $1
+        order by kind`,
+      [brand.rows[0].id],
+    );
+    assert.deepEqual(items.rows, [
+      {
+        kind: "external_url",
+        saved_trend_id: null,
+        source_url_id: standaloneSource.rows[0].id,
+        content_purpose: "both",
+        source_url: "https://example.com/standalone",
+      },
+      {
+        kind: "trend",
+        saved_trend_id: saved.rows[0].id,
+        source_url_id: null,
+        content_purpose: "both",
+        source_url: "https://example.com/trend",
+      },
+    ]);
+    const provenance = await database.query(
+      `select source_url_id
+         from reference_item_source_url_provenance
+        where workspace_id = $1 and brand_id = $2`,
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+    assert.deepEqual(provenance.rows, [{ source_url_id: linkedSource.rows[0].id }]);
+    const purposes = await database.query(
+      "select source_type, content_purpose from source_urls where brand_id = $1 order by source_type, url",
+      [brand.rows[0].id],
+    );
+    assert.ok(purposes.rows.every((row) => row.content_purpose === "both"));
+    await assert.rejects(database.query(
+      `update source_urls
+          set content_purpose = 'marketing'
+        where brand_id = $1 and source_type = 'owned'`,
+      [brand.rows[0].id],
+    ));
+
+    const avatar = await database.query(
+      `insert into brand_avatars (
+         workspace_id, brand_id, name, is_default, created_by_user_id
+       ) values ($1, $2, 'Founder', true, $3) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, actor.rows[0].id],
+    );
+    await assert.rejects(database.query(
+      `insert into brand_avatars (
+         workspace_id, brand_id, name, is_default, created_by_user_id
+       ) values ($1, $2, 'Duplicate default', true, $3)`,
+      [workspace.rows[0].id, brand.rows[0].id, actor.rows[0].id],
+    ));
+    await database.query(
+      `insert into brand_avatar_images (
+         workspace_id, brand_id, avatar_id, position, is_representative,
+         storage_url, storage_path, mime_type, size_bytes, checksum, created_by_user_id
+       ) values ($1, $2, $3, 1, true, 'https://cdn.example.com/avatar.webp',
+         'avatars/avatar.webp', 'image/webp', 1024, $4, $5)`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        avatar.rows[0].id,
+        "a".repeat(64),
+        actor.rows[0].id,
+      ],
+    );
+    await assert.rejects(database.query(
+      `insert into brand_avatar_images (
+         workspace_id, brand_id, avatar_id, position, is_representative,
+         storage_url, storage_path, mime_type, size_bytes, checksum, created_by_user_id
+       ) values ($1, $2, $3, 2, true, 'https://cdn.example.com/avatar-2.webp',
+         'avatars/avatar-2.webp', 'image/webp', 1024, $4, $5)`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        avatar.rows[0].id,
+        "b".repeat(64),
+        actor.rows[0].id,
+      ],
+    ));
+    await assert.rejects(database.query(
+      `insert into brand_avatar_images (
+         workspace_id, brand_id, avatar_id, position, is_representative,
+         storage_url, storage_path, mime_type, size_bytes, checksum, created_by_user_id
+       ) values ($1, $2, $3, 2, false, 'https://cdn.example.com/cross.webp',
+         'avatars/cross.webp', 'image/webp', 1024, $4, $5)`,
+      [
+        workspace.rows[0].id,
+        otherBrand.rows[0].id,
+        avatar.rows[0].id,
+        "c".repeat(64),
+        actor.rows[0].id,
+      ],
+    ));
+    await assert.rejects(database.query(
+      `insert into reference_items (
+         workspace_id, brand_id, kind, source_url_id, saved_trend_id, created_by_user_id
+       ) values ($1, $2, 'trend', $3, $4, $5)`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        standaloneSource.rows[0].id,
+        saved.rows[0].id,
+        actor.rows[0].id,
+      ],
+    ));
+    await assert.rejects(database.query(
+      `insert into reference_items (
+         workspace_id, brand_id, kind, source_url_id, created_by_user_id
+       ) values ($1, $2, 'external_url', $3, $4)`,
+      [
+        workspace.rows[0].id,
+        otherBrand.rows[0].id,
+        standaloneSource.rows[0].id,
+        actor.rows[0].id,
+      ],
+    ));
+  });
+});
+
+test("migration runner leaves only canonical 058 pending after original history through 057", async () => {
+  const migrations = await loadMigrations();
+  const runnableMigrations = migrations.filter(
+    (migration) => !migration.sql.startsWith("-- requires: pgvector")
+      && migration.id !== "027_wiki_search_v2.sql",
+  );
+  const through057 = runnableMigrations.filter(
+    (migration) => migration.id <= "057_wiki_source_kinds.sql",
+  );
+
+  await withDatabase(async (database) => {
+    const client = createPgliteMigrationClient(database);
+    await runMigrationsWithClient({ client, migrations: through057 });
+    const before = await database.query(
+      "select id, checksum from schema_migrations order by id desc limit 1",
+    );
+    assert.equal(before.rows[0].id, "057_wiki_source_kinds.sql");
+
+    const upgraded = await runMigrationsWithClient({
+      client,
+      migrations: runnableMigrations,
+    });
+    assert.deepEqual(upgraded.pending, ["058_avatar_and_reference_libraries.sql"]);
+    const repeated = await runMigrationsWithClient({
+      client,
+      migrations: runnableMigrations,
+    });
+    assert.deepEqual(repeated.pending, []);
   });
 });
 
