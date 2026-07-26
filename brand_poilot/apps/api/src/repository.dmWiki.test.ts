@@ -216,6 +216,72 @@ describe("DM Wiki repository", () => {
     expect(statements.some((statement) => statement.sql.includes("insert into wiki_build_requests"))).toBe(true);
   });
 
+  it.each([
+    {
+      label: "unapproved canonical product",
+      sourceKind: "product_service" as const,
+      sourceId: "00000000-0000-4000-8000-000000000021",
+      eligible(sql: string) {
+        return sql.includes("join product_service_versions active")
+          && sql.includes("active.status = 'approved'")
+          && sql.includes("item.status = 'active'");
+      },
+    },
+    {
+      label: "disabled manual FAQ",
+      sourceKind: "faq" as const,
+      sourceId: directFaqId,
+      eligible(sql: string) {
+        return sql.includes("entry.entry_type in ('faq', 'policy', 'guide')")
+          && sql.includes("entry.enabled")
+          && sql.includes("entry.status in ('approved', 'active')");
+      },
+    },
+    {
+      label: "superseded owned snapshot",
+      sourceKind: "owned_snapshot" as const,
+      sourceId: "00000000-0000-4000-8000-000000000022",
+      eligible(sql: string) {
+        return sql.includes("get_wiki_refresh_sources");
+      },
+    },
+  ])("rejects a $label that the next worker build cannot collect", async ({ sourceKind, sourceId, eligible }) => {
+    const statements: Array<{ sql: string; values: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, values: unknown[] = []) => {
+      statements.push({ sql, values });
+      if (["begin", "commit", "rollback"].includes(sql.trim())) return { rowCount: 0, rows: [] };
+      if (sql.includes("from workspace_members")) return { rowCount: 1, rows: [{ role: "admin" }] };
+      if (sql.includes("from wiki_issues") && sql.includes("for update")) {
+        return { rowCount: 1, rows: [{ id: "issue-1", detail_json: {}, status: "open" }] };
+      }
+      if (sql.includes("from product_services item")
+        || sql.includes("from knowledge_entries entry")
+        || sql.includes("from source_snapshots snapshot")
+        || sql.includes("get_wiki_refresh_sources")) {
+        return eligible(sql)
+          ? { rowCount: 0, rows: [] }
+          : { rowCount: 1, rows: [{ source_id: sourceId }] };
+      }
+      if (sql.includes("update wiki_issues")) return {
+        rowCount: 1,
+        rows: [{
+          id: "issue-1", workspace_id: "workspace-1", brand_id: "brand-1",
+          issue_type: "knowledge_gap", severity: "warning", status: "pending_build",
+          question: "질문", detail_json: {}, source_kind: sourceKind, source_id: sourceId,
+          active_version_id: null, last_built_at: null, build_status: "pending", resolved_at: null,
+        }],
+      };
+      return { rowCount: 1, rows: [{ id: "request-1", status: "pending" }] };
+    });
+    const repository = createRepository(fakePool(query) as any);
+
+    await expect(repository.resolveWikiIssue!(
+      { workspaceId: "workspace-1", brandId: "brand-1", actorUserId: "admin-1", issueId: "issue-1" },
+      { sourceKind, sourceId },
+    )).rejects.toThrow("wiki_issue_source_ineligible");
+    expect(statements.some((statement) => statement.sql.includes("insert into wiki_build_requests"))).toBe(false);
+  });
+
   it("records the admin who deactivates an approved manual source", async () => {
     const statements: Array<{ sql: string; values: unknown[] }> = [];
     const query = vi.fn(async (sql: string, values: unknown[] = []) => {
@@ -336,6 +402,31 @@ describe("DM Wiki repository", () => {
     const listSql = String(query.mock.calls[0]?.[0]);
     expect(listSql).toContain("order by case when sources.source_kind = 'product_service' then 0");
     expect(listSql).not.toContain("entry.entry_type in ('product', 'service'");
+  });
+
+  it("counts active approved canonical products in the Wiki aggregate without legacy projections", async () => {
+    const query = vi.fn(async (_sql: string) => ({
+      rowCount: 1,
+      rows: [{
+        active_version_id: null,
+        last_built_at: null,
+        request_status: null,
+        item_count: 1,
+        issue_count: 0,
+        has_draft: false,
+      }],
+    }));
+    const repository = createRepository(fakePool(query) as any);
+
+    await expect(repository.summarizeWiki!({ workspaceId: "workspace-1", brandId: "brand-1" }))
+      .resolves.toMatchObject({ state: "building", buildStatus: "pending", itemCount: 1 });
+
+    const summarySql = String(query.mock.calls[0]?.[0]);
+    expect(summarySql).toContain("from product_services item");
+    expect(summarySql).toContain("join product_service_versions active");
+    expect(summarySql).toContain("active.status = 'approved'");
+    expect(summarySql).toContain("item.status = 'active'");
+    expect(summarySql).toContain("entry.status <> 'legacy_projection'");
   });
 
   it("reports an empty Wiki aggregate as idle instead of building", async () => {

@@ -62,9 +62,65 @@ describe("product library repository", () => {
     const approved = await repository.approveProductService({ workspaceId, brandId, actorUserId: ownerId, itemId: first.id });
     expect(approved.activeVersion?.status).toBe("approved");
     expect((await repository.listProductServices({ workspaceId, brandId })).map((item) => item.id)).toContain(first.id);
+    const approvedBuild = await database.query<{ requested_revision: number; status: string }>(
+      "select requested_revision, status from wiki_build_requests where workspace_id = $1 and brand_id = $2",
+      [workspaceId, brandId],
+    );
+    expect(approvedBuild.rows).toEqual([{ requested_revision: 1, status: "pending" }]);
 
     await repository.archiveProductService({ workspaceId, brandId, actorUserId: ownerId, itemId: first.id });
     expect(await repository.listProductServices({ workspaceId, brandId })).toEqual([]);
     expect((await repository.listProductServices({ workspaceId, brandId }, ["archived"]))[0]?.status).toBe("archived");
+    const archivedBuild = await database.query<{ requested_revision: number; status: string }>(
+      "select requested_revision, status from wiki_build_requests where workspace_id = $1 and brand_id = $2",
+      [workspaceId, brandId],
+    );
+    expect(archivedBuild.rows).toEqual([{ requested_revision: 2, status: "pending" }]);
+  });
+
+  it("rolls back approval when its Wiki enqueue fails", async () => {
+    const repository = createProductLibraryRepository(pool(database));
+    const itemId = "26000000-0000-4000-8000-000000000006";
+    const versionId = "27000000-0000-4000-8000-000000000007";
+    await database.exec(`
+      insert into product_services(id,workspace_id,brand_id,kind,display_name)
+      values ('${itemId}','${workspaceId}','${brandId}','service','롤백 서비스');
+      insert into product_service_versions(
+        id,workspace_id,brand_id,product_service_id,version,status,profile_json,created_by_user_id
+      ) values (
+        '${versionId}','${workspaceId}','${brandId}','${itemId}',1,'draft',
+        '{"contractVersion":"product-service.v1","name":"롤백 서비스","kind":"service","description":"","features":[],"benefits":[],"cautions":[],"audiences":[],"appealsByTarget":{},"evergreenPurchaseInfo":"","sourceUrls":[]}',
+        '${ownerId}'
+      );
+      create or replace function reject_product_wiki_enqueue()
+      returns trigger language plpgsql as $$
+      begin
+        raise exception 'forced_wiki_enqueue_failure';
+      end;
+      $$;
+      create trigger reject_product_wiki_enqueue_trigger
+      before insert or update on wiki_build_requests
+      for each row execute function reject_product_wiki_enqueue();
+    `);
+
+    await expect(repository.approveProductService({
+      workspaceId,
+      brandId,
+      actorUserId: ownerId,
+      itemId,
+    })).rejects.toThrow("forced_wiki_enqueue_failure");
+
+    const state = await database.query<{ active_version_id: string | null; version_status: string }>(
+      `select item.active_version_id, version.status as version_status
+         from product_services item
+         join product_service_versions version on version.product_service_id = item.id
+        where item.id = $1`,
+      [itemId],
+    );
+    expect(state.rows).toEqual([{ active_version_id: null, version_status: "draft" }]);
+    await database.exec(`
+      drop trigger reject_product_wiki_enqueue_trigger on wiki_build_requests;
+      drop function reject_product_wiki_enqueue();
+    `);
   });
 });

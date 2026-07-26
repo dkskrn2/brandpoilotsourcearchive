@@ -206,6 +206,25 @@ describe("Wiki management customer routes", () => {
     await app.close();
   });
 
+  it("returns a conflict when the resolution source cannot enter the next build", async () => {
+    const { app } = setup({
+      repository: {
+        resolveWikiIssue: vi.fn(async () => {
+          throw new Error("wiki_issue_source_ineligible");
+        }),
+      } as Partial<ApiRepository>,
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/wiki/issues/${issueId}/resolve`,
+      headers: auth,
+      payload: { sourceKind: "faq", sourceId: itemId },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "wiki_issue_source_ineligible" });
+    await app.close();
+  });
+
   it("does not call the repository for another tenant", async () => {
     const { app, repository } = setup({ canAccessBrand: false });
     const response = await app.inject({

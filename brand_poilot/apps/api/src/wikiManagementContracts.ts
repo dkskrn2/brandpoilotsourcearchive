@@ -17,8 +17,15 @@ export interface UpdateWikiItemInput {
   status?: WikiItemStatusChange;
 }
 
+export type ResolvableWikiSourceKind =
+  | "faq"
+  | "policy"
+  | "guide"
+  | "product_service"
+  | "owned_snapshot";
+
 export interface ResolveWikiIssueInput {
-  sourceKind: Exclude<WikiSourceKind, "product">;
+  sourceKind: ResolvableWikiSourceKind;
   sourceId: string;
 }
 
@@ -103,6 +110,13 @@ export interface WikiManagementRepository {
 
 const itemTypes = new Set<ManualWikiItemType>(["faq", "policy", "how_to", "guide"]);
 const statuses = new Set<WikiItemStatusChange>(["draft", "active", "inactive"]);
+const resolvableSourceKinds = new Set<WikiSourceKind>([
+  "faq",
+  "policy",
+  "guide",
+  "product_service",
+  "owned_snapshot",
+]);
 const uuidPattern = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 
 function record(value: unknown, code: string): Record<string, unknown> {
@@ -160,9 +174,11 @@ export function parseResolveWikiIssue(value: unknown): ResolveWikiIssueInput {
   } catch {
     throw new Error("wiki_issue_validation_failed:sourceKind");
   }
-  if (sourceKind === "product") throw new Error("wiki_issue_validation_failed:sourceKind");
+  if (!resolvableSourceKinds.has(sourceKind)) {
+    throw new Error("wiki_issue_validation_failed:sourceKind");
+  }
   if (typeof input.sourceId !== "string" || !uuidPattern.test(input.sourceId)) {
     throw new Error("wiki_issue_validation_failed:sourceId");
   }
-  return { sourceKind, sourceId: input.sourceId };
+  return { sourceKind: sourceKind as ResolvableWikiSourceKind, sourceId: input.sourceId };
 }

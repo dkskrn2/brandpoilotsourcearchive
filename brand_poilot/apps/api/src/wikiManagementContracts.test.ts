@@ -65,5 +65,9 @@ describe("Wiki management contracts", () => {
       sourceKind: "owned_snapshot",
       sourceId: "not-a-uuid",
     })).toThrow("wiki_issue_validation_failed:sourceId");
+    expect(() => parseResolveWikiIssue({
+      sourceKind: "service",
+      sourceId: "44444444-4444-4444-8444-444444444444",
+    })).toThrow("wiki_issue_validation_failed:sourceKind");
   });
 });

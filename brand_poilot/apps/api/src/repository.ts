@@ -6189,15 +6189,21 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           ? await client.query(
               `select item.id as source_id
                  from product_services item
-                where item.id = $1::uuid and item.workspace_id = $2::uuid and item.brand_id = $3::uuid`,
+                 join product_service_versions active
+                   on active.id = item.active_version_id
+                  and active.workspace_id = item.workspace_id
+                  and active.brand_id = item.brand_id
+                  and active.status = 'approved'
+                where item.id = $1::uuid and item.workspace_id = $2::uuid and item.brand_id = $3::uuid
+                  and item.status = 'active'`,
               [input.sourceId, scope.workspaceId, scope.brandId],
             )
           : input.sourceKind === "owned_snapshot"
             ? await client.query(
-                `select snapshot.id as source_id
-                   from source_snapshots snapshot
-                  where snapshot.id = $1::uuid and snapshot.workspace_id = $2::uuid
-                    and snapshot.brand_id = $3::uuid and snapshot.status = 'succeeded'`,
+                `select refresh.source_id
+                   from get_wiki_refresh_sources($2::uuid, $3::uuid) refresh
+                  where refresh.source_kind = 'owned_snapshot'
+                    and refresh.source_id = $1::uuid`,
                 [input.sourceId, scope.workspaceId, scope.brandId],
               )
             : await client.query(
@@ -6205,10 +6211,12 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                    from knowledge_entries entry
                   where entry.id = $1::uuid and entry.workspace_id = $2::uuid
                     and entry.brand_id = $3::uuid and entry.entry_type = $4
-                    and entry.status <> 'legacy_projection'`,
+                    and entry.entry_type in ('faq', 'policy', 'guide')
+                    and entry.enabled
+                    and entry.status in ('approved', 'active')`,
                 [input.sourceId, scope.workspaceId, scope.brandId, input.sourceKind],
               );
-        if (!source.rowCount) throw new Error("wiki_issue_source_not_found");
+        if (!source.rowCount) throw new Error("wiki_issue_source_ineligible");
         const resolved = await client.query(
           `with changed as (
              update wiki_issues
@@ -6260,11 +6268,21 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       const result = await pool.query(
         `select active.id as active_version_id, active.activated_at as last_built_at,
                 build.status as request_status,
-                (select count(*)::integer
-                   from knowledge_entries entry
-                  where entry.workspace_id = $1::uuid and entry.brand_id = $2::uuid
-                    and entry.entry_type in ('faq', 'policy', 'guide')
-                    and entry.status <> 'legacy_projection') as item_count,
+                ((select count(*)
+                    from knowledge_entries entry
+                   where entry.workspace_id = $1::uuid and entry.brand_id = $2::uuid
+                     and entry.entry_type in ('faq', 'policy', 'guide')
+                     and entry.status <> 'legacy_projection')
+                 +
+                 (select count(*)
+                    from product_services item
+                    join product_service_versions active
+                      on active.id = item.active_version_id
+                     and active.workspace_id = item.workspace_id
+                     and active.brand_id = item.brand_id
+                     and active.status = 'approved'
+                   where item.workspace_id = $1::uuid and item.brand_id = $2::uuid
+                     and item.status = 'active'))::integer as item_count,
                 (select count(*)::integer
                    from wiki_issues issue
                   where issue.workspace_id = $1::uuid and issue.brand_id = $2::uuid

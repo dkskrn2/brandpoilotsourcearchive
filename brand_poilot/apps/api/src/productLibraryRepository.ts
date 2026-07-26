@@ -93,6 +93,23 @@ async function tx<T>(pool: Pool, action: (client: PoolClient) => Promise<T>) {
   catch (error) { await client.query("rollback"); throw error; } finally { client.release(); }
 }
 
+async function enqueueWikiBuild(client: Pick<PoolClient, "query">, scope: BrandScope) {
+  await client.query(
+    `insert into wiki_build_requests (
+       workspace_id, brand_id, requested_revision, status, quiet_until
+     ) values ($1::uuid, $2::uuid, 1, 'pending', now())
+     on conflict (workspace_id, brand_id)
+     where status in ('pending', 'building')
+     do update set
+       requested_revision = wiki_build_requests.requested_revision + 1,
+       rebuild_requested = wiki_build_requests.rebuild_requested or wiki_build_requests.status = 'building',
+       quiet_until = case when wiki_build_requests.status = 'pending'
+         then now() else wiki_build_requests.quiet_until end,
+       updated_at = now()`,
+    [scope.workspaceId, scope.brandId],
+  );
+}
+
 export function createProductLibraryRepository(pool: Pool): ProductLibraryRepository {
   async function get(scope: BrandScope & { itemId: string }, client: Pick<Pool, "query"> = pool) {
     const result = await client.query(`${selectItem} where item.id=$1 and item.workspace_id=$2 and item.brand_id=$3`, [scope.itemId, scope.workspaceId, scope.brandId]);
@@ -197,6 +214,7 @@ export function createProductLibraryRepository(pool: Pool): ProductLibraryReposi
         await client.query(`update product_service_versions set status='superseded' where product_service_id=$1 and workspace_id=$2 and brand_id=$3 and status='approved'`, [scope.itemId, scope.workspaceId, scope.brandId]);
         await client.query(`update product_service_versions set status='approved',approved_by_user_id=$1,approved_at=now() where id=$2`, [scope.actorUserId, draft.rows[0].id]);
         await client.query(`update product_services set active_version_id=$1,status='active' where id=$2`, [draft.rows[0].id, scope.itemId]);
+        await enqueueWikiBuild(client, scope);
         return (await get(scope, client))!;
       });
     },
@@ -205,6 +223,7 @@ export function createProductLibraryRepository(pool: Pool): ProductLibraryReposi
         await member(client, scope, true);
         const result = await client.query(`update product_services set status='archived' where id=$1 and workspace_id=$2 and brand_id=$3`, [scope.itemId, scope.workspaceId, scope.brandId]);
         if (!result.rowCount) throw new Error("product_service_not_found");
+        await enqueueWikiBuild(client, scope);
       });
     },
     async summarizeProductServices(scope) {

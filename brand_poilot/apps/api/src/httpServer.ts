@@ -489,6 +489,7 @@ export function createServer(
       "brand_rules_not_draft",
       "brand_rules_version_conflict",
       "wiki_issue_not_open",
+      "wiki_issue_source_ineligible",
     ].includes(message)) {
       reply.code(409).send({ error: message });
       return;
