@@ -230,20 +230,18 @@ export function WikiLibraryPanel({
       : items.filter((item) => item.itemType === filter);
   const selected = items.find((item) => item.id === selectedId) ?? null;
 
-  if (loading) return <ListSkeleton rows={5} columns={2} label="Wiki 보관함을 불러오는 중입니다." />;
-  if (errorKind === "unavailable") {
-    return <Alert title="Wiki 관리 배포 순서 안내" variant="info">
-      서버의 Wiki 관리 API 배포가 먼저 필요합니다. API 배포 후 다시 확인하면 기존 Wiki와 개선 항목이 표시됩니다.
-      <button className="button" type="button" onClick={() => void load()}>다시 확인</button>
-    </Alert>;
-  }
-
   return <div className="wiki-library-workspace">
-    {routeError ? <Alert title="개선 항목을 열 수 없습니다" variant="warn">
+    {loading ? <ListSkeleton rows={5} columns={2} label="Wiki 보관함을 불러오는 중입니다." /> : errorKind === "unavailable" ? (
+      <Alert title="Wiki 관리 배포 순서 안내" variant="info">
+        서버의 Wiki 관리 API 배포가 먼저 필요합니다. API 배포 후 다시 확인하면 기존 Wiki와 개선 항목이 표시됩니다.
+        <button className="button" type="button" onClick={() => void load()}>다시 확인</button>
+      </Alert>
+    ) : <>
+      {routeError ? <Alert title="개선 항목을 열 수 없습니다" variant="warn">
       {routeError}<button className="button" type="button" onClick={() => { setFilter("issues"); setRouteError(null); issueListHeadingRef.current?.focus(); }}>지식 개선함 보기</button>
-    </Alert> : null}
-    {errorKind ? <Alert title="Wiki를 불러오지 못했습니다" variant="warn">연결 상태를 확인한 뒤 다시 시도해 주세요.<button className="button" type="button" onClick={() => void load()}>다시 시도</button></Alert> : null}
-    <div className="library-filter-bar" role="group" aria-label="Wiki 필터">
+      </Alert> : null}
+      {errorKind ? <Alert title="Wiki를 불러오지 못했습니다" variant="warn">연결 상태를 확인한 뒤 다시 시도해 주세요.<button className="button" type="button" onClick={() => void load()}>다시 시도</button></Alert> : null}
+      <div className="library-filter-bar" role="group" aria-label="Wiki 필터">
       {([
         ["all", "전체"],
         ["faq", "FAQ"],
@@ -252,8 +250,8 @@ export function WikiLibraryPanel({
         ["guide", "가이드"],
         ["issues", "지식 개선함"],
       ] as Array<[Filter, string]>).map(([value, label]) => <button className={filter === value ? "is-active" : ""} type="button" key={value} aria-pressed={filter === value} onClick={() => { setFilter(value); setCreating(false); setSelectedId(null); }}>{label}</button>)}
-    </div>
-    <section className="library-split">
+      </div>
+      <section className="library-split">
       <aside className="library-list" aria-label="Wiki 목록">
         <header><div><h2 ref={issueListHeadingRef} tabIndex={-1}>{filter === "issues" ? "지식 개선함" : "Wiki 항목"}</h2><p>활성 항목만 다음 Wiki 버전에 반영됩니다.</p></div>{filter !== "issues" ? <button className="button primary" type="button" onClick={() => { setCreating(true); setSelectedId(null); }}>새 Wiki 항목</button> : null}</header>
         {filter === "issues" ? (
@@ -279,7 +277,8 @@ export function WikiLibraryPanel({
           {issueError ? <Alert title="연결하지 못했습니다" variant="warn">{issueError}</Alert> : null}
         </div>}
       </section> : <WikiItemEditor brandId={brandId} gateway={gateway} item={selected} creating={creating} onSaved={acceptSaved} onCancelCreate={() => setCreating(false)} />}
-    </section>
+      </section>
+    </>}
     <section className="wiki-import-preserved" aria-label="기존 지식 가져오기">
       <DmKnowledgePanel
         imports={imports}

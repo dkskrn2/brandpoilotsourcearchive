@@ -180,7 +180,9 @@ const references: AiContentReference[] = [
 
 function deterministicSubjectAnalysis(brandId: string, input: SubjectAnalysisInput, version = 1): SubjectAnalysis {
   const sourceUrl = input.sourceUrl ?? "";
-  const analysisId = `subject-analysis-${brandId}-${input.subjectType}`;
+  const analysisId = input.subjectType === "product"
+    ? "00000000-0000-4000-8000-000000000401"
+    : "00000000-0000-4000-8000-000000000402";
   const targets = [1, 2, 3].map((index) => ({
     id: `target-${index}`,
     name: `${index === 1 ? "시간이 부족한" : index === 2 ? "비교 후 결정하는" : "처음 시작하는"} ${input.subjectType === "product" ? "제품 고객" : "서비스 고객"}`,

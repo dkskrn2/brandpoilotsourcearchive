@@ -1,7 +1,8 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
+import { useState } from "react";
 import { ApiRequestError } from "../lib/apiClient";
 import { ProductServiceLibraryPanel } from "../components/brand-center/ProductServiceLibraryPanel";
 
@@ -41,6 +42,19 @@ const draftItem = {
   activeVersion: null,
   draft: draftVersion,
 };
+
+const analysisIdA = "00000000-0000-4000-8000-000000000401";
+const analysisIdB = "00000000-0000-4000-8000-000000000402";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, resolve, reject };
+}
 
 afterEach(() => cleanup());
 
@@ -98,11 +112,11 @@ describe("ProductServiceLibraryPanel", () => {
     renderPanel(<ProductServiceLibraryPanel
       brandId="brand-1"
       gateway={api as never}
-      initialAnalysisId="subject-analysis-real"
+      initialAnalysisId={analysisIdA}
       onAnalysisConsumed={onAnalysisConsumed}
     />);
 
-    await waitFor(() => expect(api.createProductServiceFromAnalysis).toHaveBeenCalledWith("brand-1", "subject-analysis-real"));
+    await waitFor(() => expect(api.createProductServiceFromAnalysis).toHaveBeenCalledWith("brand-1", analysisIdA));
     expect(onAnalysisConsumed).toHaveBeenCalled();
     expect(screen.getByText(draftItem.id)).toBeVisible();
     await userEvent.clear(screen.getByRole("textbox", { name: "설명" }));
@@ -140,5 +154,50 @@ describe("ProductServiceLibraryPanel", () => {
     />);
 
     expect(await screen.findByText(/서버의 제품·서비스 라이브러리 배포가 먼저 필요합니다/)).toBeVisible();
+  });
+
+  it("suppresses rapid retries for the same in-flight analysis", async () => {
+    const retry = deferred<typeof draftItem>();
+    const createProductServiceFromAnalysis = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary"))
+      .mockImplementationOnce(() => retry.promise);
+    const api = gateway({ createProductServiceFromAnalysis });
+    renderPanel(<ProductServiceLibraryPanel brandId="brand-1" gateway={api as never} initialAnalysisId={analysisIdA} />);
+
+    const retryButton = await screen.findByRole("button", { name: "다시 시도" });
+    await userEvent.click(retryButton);
+    expect(retryButton).toBeDisabled();
+    await userEvent.click(retryButton);
+    expect(createProductServiceFromAnalysis).toHaveBeenCalledTimes(2);
+    retry.resolve(draftItem);
+  });
+
+  it("ignores a stale late failure after a newer analysis succeeds", async () => {
+    const first = deferred<typeof draftItem>();
+    const createProductServiceFromAnalysis = vi.fn((_brandId: string, analysisId: string) => (
+      analysisId === analysisIdA ? first.promise : Promise.resolve(draftItem)
+    ));
+    const api = gateway({ createProductServiceFromAnalysis });
+
+    function RaceHarness() {
+      const [analysisId, setAnalysisId] = useState(analysisIdA);
+      return <>
+        <button type="button" onClick={() => setAnalysisId(analysisIdB)}>새 분석으로 전환</button>
+        <ProductServiceLibraryPanel brandId="brand-1" gateway={api as never} initialAnalysisId={analysisId} />
+      </>;
+    }
+
+    renderPanel(<RaceHarness />);
+    await waitFor(() => expect(createProductServiceFromAnalysis).toHaveBeenCalledWith("brand-1", analysisIdA));
+    await userEvent.click(screen.getByRole("button", { name: "새 분석으로 전환" }));
+    await waitFor(() => expect(createProductServiceFromAnalysis).toHaveBeenCalledWith("brand-1", analysisIdB));
+    expect(await screen.findByText(draftItem.id)).toBeVisible();
+
+    await act(async () => {
+      first.reject(new Error("late failure"));
+      await first.promise.catch(() => undefined);
+    });
+    expect(screen.queryByText(/분석 결과를 가져오지 못했습니다/)).not.toBeInTheDocument();
+    expect(createProductServiceFromAnalysis).toHaveBeenCalledTimes(2);
   });
 });

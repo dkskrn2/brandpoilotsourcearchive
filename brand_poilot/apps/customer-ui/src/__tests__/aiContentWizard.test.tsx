@@ -105,7 +105,7 @@ describe("AiContentWizardPage", () => {
     await user.click(screen.getByRole("button", { name: "분석하고 소구점 만들기" }));
 
     expect(await screen.findByText(/제품 보관함 복귀/)).toHaveTextContent(
-      "?tab=products&analysis=subject-analysis-brand-demo-product",
+      "?tab=products&analysis=00000000-0000-4000-8000-000000000401",
     );
   });
 

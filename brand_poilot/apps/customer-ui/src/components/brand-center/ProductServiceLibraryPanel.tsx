@@ -33,6 +33,8 @@ export function ProductServiceLibraryPanel({
   const [handoffError, setHandoffError] = useState<string | null>(null);
   const [analysisImporting, setAnalysisImporting] = useState(false);
   const consumedAnalysisId = useRef<string | null>(null);
+  const inFlightAnalysisIds = useRef(new Set<string>());
+  const activeRequestToken = useRef(0);
 
   async function load() {
     setLoading(true);
@@ -52,23 +54,33 @@ export function ProductServiceLibraryPanel({
   useEffect(() => { void load(); }, [brandId]);
 
   async function consumeAnalysis(analysisId: string) {
-    consumedAnalysisId.current = analysisId;
+    if (inFlightAnalysisIds.current.has(analysisId)) return;
+    const requestToken = ++activeRequestToken.current;
+    inFlightAnalysisIds.current.add(analysisId);
     setAnalysisImporting(true);
-    setHandoffError(null);
     try {
       const saved = await gateway.createProductServiceFromAnalysis(brandId, analysisId);
+      if (requestToken !== activeRequestToken.current) return;
+      consumedAnalysisId.current = analysisId;
+      setHandoffError(null);
       acceptSaved(saved);
       onAnalysisConsumed?.();
     } catch {
-      consumedAnalysisId.current = null;
+      if (requestToken !== activeRequestToken.current) return;
       setHandoffError("완료된 분석을 제품·서비스 초안으로 가져오지 못했습니다. 다시 시도해 주세요.");
     } finally {
-      setAnalysisImporting(false);
+      inFlightAnalysisIds.current.delete(analysisId);
+      if (requestToken === activeRequestToken.current) setAnalysisImporting(false);
     }
   }
 
   useEffect(() => {
-    if (loading || !initialAnalysisId || consumedAnalysisId.current === initialAnalysisId) return;
+    if (
+      loading
+      || !initialAnalysisId
+      || consumedAnalysisId.current === initialAnalysisId
+      || inFlightAnalysisIds.current.has(initialAnalysisId)
+    ) return;
     void consumeAnalysis(initialAnalysisId);
   }, [initialAnalysisId, loading]);
 
@@ -93,7 +105,7 @@ export function ProductServiceLibraryPanel({
       <header><div><h2>제품·서비스</h2><p>승인된 정보만 콘텐츠와 DM에서 사용됩니다.</p></div><button className="button primary" type="button" onClick={() => { setCreating(true); setSelectedId(null); }}>새 제품·서비스</button></header>
       {error ? <Alert title="목록을 불러오지 못했습니다" variant="warn">연결 상태를 확인한 뒤 다시 시도해 주세요.<button className="button" type="button" onClick={() => void load()}>다시 시도</button></Alert> : null}
       {analysisImporting ? <Alert title="분석 결과 반영 중" variant="info">완료된 AI 분석으로 제품·서비스 초안을 만들고 있습니다.</Alert> : null}
-      {handoffError ? <Alert title="분석 결과를 가져오지 못했습니다" variant="warn">{handoffError}{initialAnalysisId ? <button className="button" type="button" onClick={() => void consumeAnalysis(initialAnalysisId)}>다시 시도</button> : null}</Alert> : null}
+      {handoffError ? <Alert title="분석 결과를 가져오지 못했습니다" variant="warn">{handoffError}{initialAnalysisId ? <button className="button" type="button" disabled={analysisImporting} onClick={() => void consumeAnalysis(initialAnalysisId)}>다시 시도</button> : null}</Alert> : null}
       {!error && items.length === 0 ? <EmptyState title="저장된 제품·서비스가 없습니다" description="AI 분석 또는 직접 입력으로 첫 초안을 만드세요." /> : null}
       <ul>
         {items.map((item) => <li key={item.id}>

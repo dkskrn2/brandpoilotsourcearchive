@@ -215,5 +215,7 @@ describe("WikiLibraryPanel", () => {
 
     expect(await screen.findByText(/서버의 Wiki 관리 API 배포가 먼저 필요합니다/)).toBeVisible();
     expect(screen.getByRole("button", { name: "다시 확인" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "FAQ 템플릿" })).toHaveAttribute("href", "/faq-template.csv");
+    expect(screen.getByRole("button", { name: "Wiki 다시 만들기" })).toBeVisible();
   });
 });

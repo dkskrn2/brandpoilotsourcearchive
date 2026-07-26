@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 
 const active = {
   id: "core-1",
@@ -37,7 +37,12 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-async function renderPage() {
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location">{location.search}</output>;
+}
+
+async function renderPage(path = "/brand-center?tab=understanding&section=core") {
   const gateway = {
     getSummary: vi.fn(async () => ({
       source: { state: "ready" },
@@ -64,13 +69,32 @@ async function renderPage() {
     DEMO_BRAND_ID: "brand-1",
     api: { listSources: vi.fn(async () => []) },
   }));
+  const libraryApi = {
+    listProductServices: vi.fn(async () => []),
+    getProductService: vi.fn(),
+    createProductService: vi.fn(),
+    createProductServiceFromAnalysis: vi.fn(),
+    updateProductServiceDraft: vi.fn(),
+    approveProductService: vi.fn(),
+    archiveProductService: vi.fn(),
+    listWikiItems: vi.fn(async () => []),
+    createWikiItem: vi.fn(),
+    updateWikiItem: vi.fn(),
+    listWikiIssues: vi.fn(async () => []),
+    resolveWikiIssue: vi.fn(),
+  };
+  vi.doMock("../features/libraries/libraryGateway", async (importOriginal) => ({
+    ...await importOriginal<typeof import("../features/libraries/libraryGateway")>(),
+    libraryGateway: libraryApi,
+  }));
   const { BrandCenterPage } = await import("../pages/BrandCenterPage");
   render(
-    <MemoryRouter initialEntries={["/brand-center?tab=understanding&section=core"]}>
+    <MemoryRouter initialEntries={[path]}>
       <BrandCenterPage />
+      <LocationProbe />
     </MemoryRouter>,
   );
-  return gateway;
+  return { gateway, libraryApi };
 }
 
 describe("BrandCenterPage", () => {
@@ -84,9 +108,16 @@ describe("BrandCenterPage", () => {
   });
 
   it("creates a new draft without replacing the approved version", async () => {
-    const gateway = await renderPage();
+    const { gateway } = await renderPage();
     await userEvent.click(await screen.findByRole("button", { name: "변경 검토" }));
     await waitFor(() => expect(gateway.createCoreDraft).toHaveBeenCalledWith("brand-1", {}));
     expect(screen.getByText("승인된 버전은 유지되고 새 초안에서 변경을 검토합니다.")).toBeInTheDocument();
+  });
+
+  it("clears a malformed analysis query without calling the mutation", async () => {
+    const { libraryApi } = await renderPage("/brand-center?tab=products&analysis=not-a-uuid");
+
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("?tab=products"));
+    expect(libraryApi.createProductServiceFromAnalysis).not.toHaveBeenCalled();
   });
 });

@@ -22,6 +22,7 @@ import { DEMO_BRAND_ID } from "../lib/apiClient";
 
 type UnderstandingSection = "sources" | "analysis" | "core" | "rules" | "versions";
 type BrandCenterTab = "understanding" | "products" | "wiki";
+const canonicalUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const sections: Array<{ id: UnderstandingSection; label: string }> = [
   { id: "sources", label: "원본 자료" },
@@ -60,6 +61,10 @@ export function BrandCenterPage() {
     ? requestedTab
     : "understanding";
   const requestedSection = params.get("section");
+  const requestedAnalysisId = params.get("analysis");
+  const analysisId = requestedAnalysisId && canonicalUuidPattern.test(requestedAnalysisId)
+    ? requestedAnalysisId
+    : null;
   const section = sections.some((item) => item.id === requestedSection)
     ? requestedSection as UnderstandingSection
     : "core";
@@ -99,7 +104,11 @@ export function BrandCenterPage() {
   }
 
   useEffect(() => {
-    if (!["understanding", "products", "wiki"].includes(requestedTab ?? "") || (tab === "understanding" && !requestedSection)) {
+    if (requestedAnalysisId && !analysisId) {
+      const next = new URLSearchParams(params);
+      next.delete("analysis");
+      setParams(next, { replace: true });
+    } else if (!["understanding", "products", "wiki"].includes(requestedTab ?? "") || (tab === "understanding" && !requestedSection)) {
       const next = new URLSearchParams(params);
       next.set("tab", tab);
       if (tab === "understanding") next.set("section", section);
@@ -327,7 +336,7 @@ export function BrandCenterPage() {
       {tab === "products" ? <ProductServiceLibraryPanel
         brandId={DEMO_BRAND_ID}
         initialItemId={params.get("item")}
-        initialAnalysisId={params.get("analysis")}
+        initialAnalysisId={analysisId}
         onAnalysisConsumed={() => {
           const next = new URLSearchParams(params);
           next.delete("analysis");
