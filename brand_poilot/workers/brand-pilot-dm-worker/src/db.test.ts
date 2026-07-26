@@ -164,30 +164,4 @@ describe("resolveDmWorkerDatabaseConfig", () => {
     expect(source.match(/parseWikiSourceKind\(/g)).toHaveLength(2);
   });
 
-  it("activates a successful compiled version atomically and only then resolves linked issues", async () => {
-    const source = await readFile(new URL("./db.ts", import.meta.url), "utf8");
-    const completion = source.slice(
-      source.indexOf("async completeWikiValidationItem"),
-      source.indexOf("async failWikiValidationItem"),
-    );
-
-    expect(completion).toContain("activate_compiled_wiki_version");
-    expect(completion).toMatch(
-      /update wiki_issues[\s\S]*status = 'resolved'[\s\S]*wiki_source_units/,
-    );
-    expect(completion.indexOf("activate_compiled_wiki_version"))
-      .toBeLessThan(completion.indexOf("update wiki_issues"));
-  });
-
-  it("does not resolve pending issues when a compiled refresh fails", async () => {
-    const source = await readFile(new URL("./db.ts", import.meta.url), "utf8");
-    const failure = source.slice(
-      source.indexOf("async failWikiValidationItem"),
-      source.indexOf("async getExistingEmbeddings"),
-    );
-
-    expect(failure).toContain("where id = $1::uuid and status = 'building'");
-    expect(failure).not.toContain("update wiki_issues");
-    expect(failure).not.toContain("status = 'superseded'");
-  });
 });

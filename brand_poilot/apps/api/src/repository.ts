@@ -5952,7 +5952,11 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                   coalesce(nullif(entry.structured_data->>'managementItemType', ''), entry.entry_type) as item_type,
                   coalesce(nullif(entry.title, ''), entry.question) as title,
                   coalesce(nullif(entry.content, ''), entry.answer) as content,
-                  case when entry.status = 'archived' or not entry.enabled then 'inactive' else entry.status end as status,
+                  case
+                    when entry.status = 'draft' then 'draft'
+                    when entry.status = 'archived' or not entry.enabled then 'inactive'
+                    else entry.status
+                  end as status,
                   case when entry.origin = 'manual' then 'manual' else 'import' end as origin,
                   entry.provenance_json, entry.created_by_user_id, entry.approved_by_user_id, entry.approved_at,
                   entry.entry_type as source_kind, entry.id as source_id
