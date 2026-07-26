@@ -1,11 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ExternalLink, RefreshCw, X } from "lucide-react";
+import { Link } from "react-router-dom";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
 import { PageSkeleton } from "../components/ui/LoadingState";
+import { FocusTrap } from "../components/ui/FocusTrap";
 import { PageGuideButton } from "../components/layout/PageHeader";
 import { ChannelLogo } from "../components/channels/ChannelLogo";
 import { PublishArtifactPreview } from "../components/publish/PublishArtifactPreview";
 import { FeatureSuggestionBanner } from "../components/feedback/FeatureSuggestionBanner";
+import { DashboardKpiGrid } from "../components/dashboard/DashboardKpiGrid";
+import { DashboardPriorityList } from "../components/dashboard/DashboardPriorityList";
+import { DashboardUsageCard } from "../components/dashboard/DashboardUsageCard";
+import { DashboardPerformancePanel } from "../components/dashboard/DashboardPerformancePanel";
+import { createDashboardViewModel } from "../features/dashboard/dashboardViewModel";
+import { useBrandStatus } from "../lib/brandStatus";
+import { useAiContentUsage } from "../features/ai-content/AiContentUsageContext";
 import type { ChannelStatus, ChannelType, Dashboard, PublishArtifact } from "../types";
 
 const channelLabels: Record<ChannelType, string> = {
@@ -120,7 +129,9 @@ function DashboardPerformanceDialog({ content, onClose }: { content: Performance
 
   return (
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section
+      <FocusTrap
+        active
+        initialFocusSelector=".publish-result-dialog__close"
         className="modal-panel publish-result-dialog dashboard-performance-dialog"
         role="dialog"
         aria-modal="true"
@@ -172,7 +183,7 @@ function DashboardPerformanceDialog({ content, onClose }: { content: Performance
             </a>
           ) : null}
         </footer>
-      </section>
+      </FocusTrap>
     </div>
   );
 }
@@ -259,57 +270,43 @@ function DailyExposureChart({ rows }: { rows: Dashboard["dailyExposure"] }) {
 
 function DashboardContent({ dashboard }: { dashboard: Dashboard }) {
   const [selectedContent, setSelectedContent] = useState<PerformanceContent | null>(null);
+  const performanceTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const { status: brandStatus } = useBrandStatus();
+  const { usage } = useAiContentUsage();
+  const viewModel = useMemo(
+    () => createDashboardViewModel({ dashboard, brandStatus, usage }),
+    [brandStatus, dashboard, usage],
+  );
   const attentionItems = uniqueAttentionItems(dashboard.attentionItems);
-  const summary = [
-    { label: "발행 완료", value: count(dashboard.summary.publishedCount) },
-    { label: "조회·노출", value: exposure(dashboard.summary.exposureCount) },
-    { label: "검토 필요", value: count(dashboard.summary.pendingReviewCount) },
-    { label: "게시 실패", value: count(dashboard.summary.failedPublishCount), tone: dashboard.summary.failedPublishCount > 0 ? "danger" : undefined }
-  ];
-  const workflow = [
-    { label: "대기 주제", value: dashboard.workflow.queuedTopics },
-    { label: "생성 중", value: dashboard.workflow.generating },
-    { label: "검토 대기", value: dashboard.workflow.pendingReview },
-    { label: "예약·발행", value: dashboard.workflow.scheduledOrPublished }
-  ];
+
+  function closePerformanceDialog() {
+    setSelectedContent(null);
+    performanceTriggerRef.current?.focus();
+  }
 
   return (
     <>
       <header className="dashboard-head" data-guide="page-header">
         <div>
-          <h1>전체 현황</h1>
+          <h1>오늘의 운영 현황</h1>
           <p>최근 30일 · {formatDate(dashboard.generatedAt)} 기준</p>
         </div>
-        <div className="actions"><span className="dashboard-collected">성과 {lastCollected(dashboard.lastCollectedAt)}</span><PageGuideButton /></div>
+        <div className="actions dashboard-head-actions">
+          <span className="dashboard-collected">성과 {lastCollected(dashboard.lastCollectedAt)}</span>
+          <Link className="button secondary" to="/brand-settings">브랜드 검토하기</Link>
+          <Link className="button primary" to="/ai-content/new">콘텐츠 만들기</Link>
+          <PageGuideButton />
+        </div>
       </header>
 
-      <section className="dashboard-summary" aria-label="최근 30일 요약">
-        {summary.map((item) => (
-          <article className={`dashboard-metric${item.tone ? ` is-${item.tone}` : ""}`} key={item.label}>
-            <span>{item.label}</span>
-            <strong>{item.value}</strong>
-          </article>
-        ))}
-      </section>
+      <DashboardKpiGrid items={viewModel.kpis} />
 
-      <section className="dashboard-section" aria-labelledby="dashboard-workflow-title">
-        <div className="dashboard-section__head">
-          <div>
-            <h2 id="dashboard-workflow-title">현재 콘텐츠 운영 흐름</h2>
-            <p>주제 등록부터 예약·발행까지의 현재 작업 수입니다.</p>
-          </div>
-        </div>
-        <ol className="dashboard-workflow">
-          {workflow.map((item, index) => (
-            <li key={item.label}>
-              <span className="dashboard-workflow__index">{index + 1}</span>
-              <span>{item.label}</span>
-              <strong>{count(item.value)}</strong>
-            </li>
-          ))}
-        </ol>
-      </section>
+      <div className="dashboard-operations-grid">
+        <DashboardPriorityList items={viewModel.priorities} />
+        <DashboardUsageCard usage={viewModel.usage} />
+      </div>
 
+      <DashboardPerformancePanel>
       <section className="dashboard-section" aria-labelledby="dashboard-chart-title">
         <div className="dashboard-section__head">
           <div>
@@ -362,7 +359,15 @@ function DashboardContent({ dashboard }: { dashboard: Dashboard }) {
             <ol className="dashboard-top-list">
               {dashboard.topContents.map((item, index) => (
                 <li key={item.publishQueueId}>
-                  <button type="button" className="dashboard-top-list__button" onClick={() => setSelectedContent(item)} aria-label={`${item.title} 상세 보기`}>
+                  <button
+                    type="button"
+                    className="dashboard-top-list__button"
+                    onClick={(event) => {
+                      performanceTriggerRef.current = event.currentTarget;
+                      setSelectedContent(item);
+                    }}
+                    aria-label={`${item.title} 상세 보기`}
+                  >
                     <span className="dashboard-top-list__rank">{index + 1}</span>
                     <span className="dashboard-top-list__content">
                       <strong>{item.title}</strong>
@@ -395,10 +400,11 @@ function DashboardContent({ dashboard }: { dashboard: Dashboard }) {
           </ul>
         ) : <div className="dashboard-empty">현재 확인할 항목이 없습니다.</div>}
       </section>
+      </DashboardPerformancePanel>
 
       <FeatureSuggestionBanner />
 
-      {selectedContent ? <DashboardPerformanceDialog content={selectedContent} onClose={() => setSelectedContent(null)} /> : null}
+      {selectedContent ? <DashboardPerformanceDialog content={selectedContent} onClose={closePerformanceDialog} /> : null}
     </>
   );
 }

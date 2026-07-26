@@ -73,6 +73,31 @@ export interface Dashboard {
   }>;
 }
 
+export type DashboardPriorityKind =
+  | "brand_review"
+  | "content_review"
+  | "publish_failure"
+  | "channel_attention"
+  | "dm_attention";
+
+export interface DashboardPriority {
+  kind: DashboardPriorityKind;
+  severity: "critical" | "warning" | "info";
+  count: number;
+  title: string;
+  description: string;
+  href: string;
+  actionLabel: string;
+}
+
+export interface DashboardKpi {
+  label: string;
+  value: number | null;
+  unit: "건" | "회";
+  description: string;
+  tone?: "danger";
+}
+
 export type ReviewStatus =
   | "generating"
   | "generation_failed"
