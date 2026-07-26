@@ -127,6 +127,27 @@ describe("brand center customer routes", () => {
     await app.close();
   });
 
+  it("reports the actual avatar library aggregate", async () => {
+    const summarizeAvatars = vi.fn(async () => ({
+      active: 3,
+      defaultAvatarId: "88888888-8888-4888-8888-888888888888",
+    }));
+    const { app } = setup({ summarizeAvatars });
+    const response = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/brand-center`,
+      headers: auth,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().avatars).toEqual({
+      state: "ready",
+      activeCount: 3,
+      defaultAvatarId: "88888888-8888-4888-8888-888888888888",
+    });
+    expect(summarizeAvatars).toHaveBeenCalledWith({ workspaceId, brandId });
+    await app.close();
+  });
+
   it("creates and updates a draft with authenticated actor and concurrency token", async () => {
     const { app, repository } = setup();
     const created = await app.inject({

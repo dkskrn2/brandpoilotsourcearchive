@@ -14,12 +14,33 @@ import {
   parseResolveWikiIssue,
   parseUpdateWikiItem,
 } from "./wikiManagementContracts.js";
+import {
+  parseAssetUploadInput,
+  parseAvatarInput,
+  parseCreateAvatarInput,
+  parseBooleanAction,
+  parseReferenceBrandInput,
+  parseReferenceFilters,
+  parseReferenceUrlInput,
+  parseReservedAvatarId,
+} from "./assetLibraryContracts.js";
+import {
+  confirmAssetLibraryUpload,
+  issueAssetLibraryUploadToken,
+  validateAssetLibraryUpload,
+  type AssetLibraryUploadKind,
+} from "./assetLibraryUpload.js";
 
 interface BrandCenterRouteOptions {
   repository: ApiRepository;
   brandIntelligenceRepository?: BrandIntelligenceRepository;
   scope(request: FastifyRequest, brandId: string): { workspaceId: string; brandId: string };
   actorUserId(request: FastifyRequest): string | null;
+  assetLibraryUpload?: {
+    readWriteToken: string;
+    generateClientToken?: Parameters<typeof issueAssetLibraryUploadToken>[1]["generateClientToken"];
+    headBlob?: Parameters<typeof confirmAssetLibraryUpload>[1]["headBlob"];
+  };
 }
 
 function record(value: unknown, code = "brand_core_validation_failed:root"): Record<string, unknown> {
@@ -49,6 +70,18 @@ function ifMatch(request: FastifyRequest, body: Record<string, unknown>): string
   return normalized;
 }
 
+function confirmBody(value: unknown) {
+  const row = record(value, "asset_upload_validation_failed:root");
+  const upload = parseAssetUploadInput({
+    fileName: row.fileName, mimeType: row.mimeType, sizeBytes: row.sizeBytes, checksum: row.checksum,
+  });
+  if (typeof row.sessionId !== "string" || typeof row.nonce !== "string"
+    || typeof row.storagePath !== "string" || typeof row.storageUrl !== "string") {
+    throw new Error("asset_upload_validation_failed:confirm");
+  }
+  return { row, upload, sessionId: row.sessionId, nonce: row.nonce, storagePath: row.storagePath, storageUrl: row.storageUrl };
+}
+
 export function registerBrandCenterRoutes(
   app: FastifyInstance,
   options: BrandCenterRouteOptions,
@@ -60,13 +93,14 @@ export function registerBrandCenterRoutes(
       throw new Error("brand_center_not_configured");
     }
     const scope = options.scope(request, request.params.brandId);
-    const [active, versions, activeRules, analysis, products, wiki] = await Promise.all([
+    const [active, versions, activeRules, analysis, products, wiki, avatars] = await Promise.all([
       repository.getActive(scope),
       repository.listVersions(scope),
       repository.getActiveRules(scope),
       options.brandIntelligenceRepository?.getCurrentBrandIntelligence(scope) ?? Promise.resolve(null),
       repository.summarizeProductServices?.(scope) ?? Promise.resolve(null),
       repository.summarizeWiki?.(scope) ?? Promise.resolve(null),
+      repository.summarizeAvatars?.(scope) ?? Promise.resolve(null),
     ]);
     const draft = versions.find((item) => item.status === "draft");
     const hasSource = Boolean(analysis?.input.ownedUrl || analysis?.input.uploadIds.length);
@@ -83,7 +117,13 @@ export function registerBrandCenterRoutes(
           }
         : { state: "unavailable" },
       wiki: wiki ?? { state: "unavailable" },
-      avatars: { state: "unavailable" },
+      avatars: avatars
+        ? {
+            state: avatars.active > 0 ? "ready" : "empty",
+            activeCount: avatars.active,
+            defaultAvatarId: avatars.defaultAvatarId,
+          }
+        : { state: "unavailable" },
     };
   });
 
@@ -372,6 +412,263 @@ export function registerBrandCenterRoutes(
         },
         parseResolveWikiIssue(request.body),
       );
+    },
+  );
+
+  app.get<{ Params: { brandId: string }; Querystring: { include?: string } }>(
+    "/brands/:brandId/avatars",
+    async (request) => {
+      if (!repository.listAvatars) throw new Error("asset_library_not_configured");
+      return repository.listAvatars(
+        options.scope(request, request.params.brandId),
+        request.query.include?.split(",").includes("archived") ?? false,
+      );
+    },
+  );
+
+  app.post<{ Params: { brandId: string }; Body: unknown }>(
+    "/brands/:brandId/avatars",
+    async (request, reply) => {
+      if (!repository.createAvatar) throw new Error("asset_library_not_configured");
+      const created = await repository.createAvatar(
+        { ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request) },
+        parseCreateAvatarInput(request.body),
+      );
+      reply.code(201);
+      return created;
+    },
+  );
+
+  app.get<{ Params: { brandId: string; avatarId: string } }>(
+    "/brands/:brandId/avatars/:avatarId",
+    async (request) => {
+      if (!repository.getAvatar) throw new Error("asset_library_not_configured");
+      const value = await repository.getAvatar({
+        ...options.scope(request, request.params.brandId), avatarId: request.params.avatarId,
+      });
+      if (!value) throw new Error("avatar_not_found");
+      return value;
+    },
+  );
+
+  app.patch<{ Params: { brandId: string; avatarId: string }; Body: unknown }>(
+    "/brands/:brandId/avatars/:avatarId",
+    async (request) => {
+      if (!repository.updateAvatar) throw new Error("asset_library_not_configured");
+      return repository.updateAvatar(
+        { ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request), avatarId: request.params.avatarId },
+        parseAvatarInput(request.body),
+      );
+    },
+  );
+
+  const uploadToken = async (
+    request: FastifyRequest<{ Params: { brandId: string; avatarId?: string }; Body: unknown }>,
+    kind: AssetLibraryUploadKind,
+  ) => {
+    if (!repository.createUploadSession) throw new Error("asset_library_not_configured");
+    if (!options.assetLibraryUpload) throw new Error("asset_library_upload_storage_not_configured");
+    const avatarId = kind === "avatar" ? parseReservedAvatarId(request.params.avatarId) : undefined;
+    const upload = validateAssetLibraryUpload(kind, parseAssetUploadInput(request.body));
+    const session = await repository.createUploadSession(
+      { ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request) },
+      kind,
+      upload,
+      avatarId,
+    );
+    const token = await issueAssetLibraryUploadToken({
+      brandId: request.params.brandId, avatarId,
+      sessionId: session.id, kind, upload,
+    }, {
+      token: options.assetLibraryUpload.readWriteToken,
+      generateClientToken: options.assetLibraryUpload.generateClientToken,
+    });
+    return { ...token, sessionId: session.id, nonce: session.nonce, expiresAt: session.expiresAt };
+  };
+
+  app.post<{ Params: { brandId: string; avatarId: string }; Body: unknown }>(
+    "/brands/:brandId/avatars/:avatarId/images/upload-token",
+    async (request) => uploadToken(request, "avatar"),
+  );
+
+  app.post<{ Params: { brandId: string; avatarId: string }; Body: unknown }>(
+    "/brands/:brandId/avatars/:avatarId/images/confirm",
+    async (request) => {
+      if (!repository.getUploadSession || !repository.confirmAvatarUpload) throw new Error("asset_library_not_configured");
+      if (!options.assetLibraryUpload) throw new Error("asset_library_upload_storage_not_configured");
+      const parsed = confirmBody(request.body);
+      const scope = options.scope(request, request.params.brandId);
+      const session = await repository.getUploadSession({ ...scope, sessionId: parsed.sessionId }, parsed.upload.fileName);
+      if (!session || session.kind !== "avatar" || session.avatarId !== request.params.avatarId) {
+        throw new Error("asset_library_upload_session_not_found");
+      }
+      const confirmed = await confirmAssetLibraryUpload({
+        session, nonce: parsed.nonce, storagePath: parsed.storagePath, storageUrl: parsed.storageUrl,
+        mimeType: parsed.upload.mimeType, sizeBytes: parsed.upload.sizeBytes, checksum: parsed.upload.checksum,
+      }, { token: options.assetLibraryUpload.readWriteToken, headBlob: options.assetLibraryUpload.headBlob });
+      const representative = parsed.row.representative === true;
+      return repository.confirmAvatarUpload(
+        { ...scope, actorUserId: requireActor(options, request), avatarId: request.params.avatarId, sessionId: parsed.sessionId },
+        { ...confirmed, representative },
+      );
+    },
+  );
+
+  app.delete<{ Params: { brandId: string; avatarId: string; imageId: string } }>(
+    "/brands/:brandId/avatars/:avatarId/images/:imageId",
+    async (request, reply) => {
+      if (!repository.deleteAvatarImage) throw new Error("asset_library_not_configured");
+      await repository.deleteAvatarImage({
+        ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request),
+        avatarId: request.params.avatarId, imageId: request.params.imageId,
+      });
+      reply.code(204);
+      return reply.send();
+    },
+  );
+
+  app.post<{ Params: { brandId: string; avatarId: string } }>(
+    "/brands/:brandId/avatars/:avatarId/default",
+    async (request) => {
+      if (!repository.setDefaultAvatar) throw new Error("asset_library_not_configured");
+      return repository.setDefaultAvatar({
+        ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request), avatarId: request.params.avatarId,
+      });
+    },
+  );
+
+  app.post<{ Params: { brandId: string; avatarId: string } }>(
+    "/brands/:brandId/avatars/:avatarId/archive",
+    async (request, reply) => {
+      if (!repository.archiveAvatar) throw new Error("asset_library_not_configured");
+      await repository.archiveAvatar({
+        ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request), avatarId: request.params.avatarId,
+      });
+      reply.code(204);
+      return reply.send();
+    },
+  );
+
+  app.get<{ Params: { brandId: string }; Querystring: Record<string, unknown> }>(
+    "/brands/:brandId/references",
+    async (request) => {
+      if (!repository.listReferences) throw new Error("asset_library_not_configured");
+      return repository.listReferences(options.scope(request, request.params.brandId), parseReferenceFilters(request.query));
+    },
+  );
+
+  app.post<{ Params: { brandId: string }; Body: unknown }>(
+    "/brands/:brandId/references/url",
+    async (request, reply) => {
+      if (!repository.addReferenceUrl) throw new Error("asset_library_not_configured");
+      const value = await repository.addReferenceUrl(
+        { ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request) },
+        parseReferenceUrlInput(request.body),
+      );
+      reply.code(201);
+      return value;
+    },
+  );
+
+  app.post<{ Params: { brandId: string }; Body: unknown }>(
+    "/brands/:brandId/references/upload-token",
+    async (request) => uploadToken(request as never, "reference"),
+  );
+
+  app.post<{ Params: { brandId: string }; Body: unknown }>(
+    "/brands/:brandId/references/confirm",
+    async (request, reply) => {
+      if (!repository.getUploadSession || !repository.confirmReferenceUpload) throw new Error("asset_library_not_configured");
+      if (!options.assetLibraryUpload) throw new Error("asset_library_upload_storage_not_configured");
+      const parsed = confirmBody(request.body);
+      const scope = options.scope(request, request.params.brandId);
+      const session = await repository.getUploadSession({ ...scope, sessionId: parsed.sessionId }, parsed.upload.fileName);
+      if (!session || session.kind !== "reference") throw new Error("asset_library_upload_session_not_found");
+      const confirmed = await confirmAssetLibraryUpload({
+        session, nonce: parsed.nonce, storagePath: parsed.storagePath, storageUrl: parsed.storageUrl,
+        mimeType: parsed.upload.mimeType, sizeBytes: parsed.upload.sizeBytes, checksum: parsed.upload.checksum,
+      }, { token: options.assetLibraryUpload.readWriteToken, headBlob: options.assetLibraryUpload.headBlob });
+      const value = await repository.confirmReferenceUpload(
+        { ...scope, actorUserId: requireActor(options, request), sessionId: parsed.sessionId },
+        confirmed,
+      );
+      reply.code(201);
+      return value;
+    },
+  );
+
+  app.post<{ Params: { brandId: string; referenceId: string }; Body: unknown }>(
+    "/brands/:brandId/references/:referenceId/favorite",
+    async (request) => {
+      if (!repository.setReferenceFavorite) throw new Error("asset_library_not_configured");
+      return repository.setReferenceFavorite(
+        { ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request), referenceId: request.params.referenceId },
+        parseBooleanAction(request.body, "favorite"),
+      );
+    },
+  );
+
+  app.post<{ Params: { brandId: string; referenceId: string } }>(
+    "/brands/:brandId/references/:referenceId/archive",
+    async (request, reply) => {
+      if (!repository.archiveReference) throw new Error("asset_library_not_configured");
+      await repository.archiveReference({
+        ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request), referenceId: request.params.referenceId,
+      });
+      reply.code(204);
+      return reply.send();
+    },
+  );
+
+  app.get<{ Params: { brandId: string; referenceId: string } }>(
+    "/brands/:brandId/references/:referenceId/pattern",
+    async (request) => {
+      if (!repository.getReferencePattern) throw new Error("asset_library_not_configured");
+      const value = await repository.getReferencePattern({
+        ...options.scope(request, request.params.brandId), referenceId: request.params.referenceId,
+      });
+      if (!value) throw new Error("reference_pattern_not_found");
+      return value;
+    },
+  );
+
+  app.get<{ Params: { brandId: string } }>("/brands/:brandId/reference-brands", async (request) => {
+    if (!repository.listReferenceBrands) throw new Error("asset_library_not_configured");
+    return repository.listReferenceBrands(options.scope(request, request.params.brandId));
+  });
+
+  app.post<{ Params: { brandId: string }; Body: unknown }>(
+    "/brands/:brandId/reference-brands",
+    async (request, reply) => {
+      if (!repository.createReferenceBrand) throw new Error("asset_library_not_configured");
+      const value = await repository.createReferenceBrand(
+        { ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request) },
+        parseReferenceBrandInput(request.body),
+      );
+      reply.code(201);
+      return value;
+    },
+  );
+
+  app.post<{ Params: { brandId: string; mediaId: string } }>(
+    "/brands/:brandId/reference-brands/from-trend-media/:mediaId",
+    async (request, reply) => {
+      if (!repository.createReferenceBrandFromTrend) throw new Error("asset_library_not_configured");
+      const value = await repository.createReferenceBrandFromTrend({
+        ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request), mediaId: request.params.mediaId,
+      });
+      reply.code(201);
+      return value;
+    },
+  );
+
+  app.get<{ Params: { brandId: string; referenceBrandId: string } }>(
+    "/brands/:brandId/reference-brands/:referenceBrandId/items",
+    async (request) => {
+      if (!repository.listReferenceBrandItems) throw new Error("asset_library_not_configured");
+      return repository.listReferenceBrandItems({
+        ...options.scope(request, request.params.brandId), referenceBrandId: request.params.referenceBrandId,
+      });
     },
   );
 }

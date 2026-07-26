@@ -117,6 +117,11 @@ interface CreateServerOptions {
     generateClientToken?: AiContentTokenOptions["generateClientToken"];
     headBlob?: import("./aiContentUpload.js").AiContentBlobVerificationOptions["headBlob"];
   };
+  assetLibraryUpload?: {
+    readWriteToken: string;
+    generateClientToken?: import("./assetLibraryUpload.js").AssetLibraryTokenOptions["generateClientToken"];
+    headBlob?: import("./assetLibraryUpload.js").AssetLibraryBlobOptions["headBlob"];
+  };
   aiContentLimits?: { dailyGenerationLimit: number; dailyDownloadLimit: number };
   subjectAnalysis?: AiContentSubjectRuntime;
   brandIntelligenceRepository?: BrandIntelligenceRepository;
@@ -423,7 +428,7 @@ export function createFastifyOptions(logger?: boolean | FastifyLoggerOptions) {
 }
 
 export function createServer(
-  { repository, workerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, brandIntelligence, runtimePolicy, logger }: CreateServerOptions,
+  { repository, workerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, brandIntelligence, runtimePolicy, logger }: CreateServerOptions,
   app: FastifyInstance = Fastify(createFastifyOptions(logger))
 ) {
   const httpPolicy: ApiHttpRuntimePolicy = runtimePolicy ?? {
@@ -468,6 +473,31 @@ export function createServer(
         error: "product_service_validation_failed",
         field: message.slice("product_service_validation_failed:".length),
       });
+      return;
+    }
+    if (message.startsWith("avatar_validation_failed:")
+      || message.startsWith("reference_validation_failed:")
+      || message.startsWith("reference_filter_invalid:")
+      || message.startsWith("reference_brand_validation_failed:")
+      || message.startsWith("asset_upload_validation_failed:")) {
+      const separator = message.indexOf(":");
+      reply.code(400).send({ error: message.slice(0, separator), field: message.slice(separator + 1) });
+      return;
+    }
+    if (message === "asset_library_admin_required" || message === "asset_library_access_forbidden") {
+      reply.code(403).send({ error: message });
+      return;
+    }
+    if (message === "asset_library_not_configured" || message === "asset_library_upload_storage_not_configured") {
+      reply.code(503).send({ error: message });
+      return;
+    }
+    if (message.startsWith("asset_library_upload_") || message === "avatar_image_limit_exceeded"
+      || message === "avatar_image_minimum_required" || message === "reference_origin_duplicate"
+      || message === "reference_brand_author_unavailable") {
+      const conflict = message === "asset_library_upload_replayed" || message === "reference_origin_duplicate"
+        || message === "avatar_image_limit_exceeded" || message === "avatar_image_minimum_required";
+      reply.code(conflict ? 409 : 400).send({ error: message });
       return;
     }
     if (message === "brand_core_approval_forbidden" || message === "brand_core_access_forbidden") {
@@ -1632,6 +1662,7 @@ export function createServer(
     brandIntelligenceRepository,
     scope: aiContentScope,
     actorUserId: aiContentActorUserId,
+    assetLibraryUpload,
   });
 
   app.get<{ Params: { brandId: string } }>(

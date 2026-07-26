@@ -69,6 +69,9 @@ const serverOptions: Parameters<typeof createServer>[0] & {
     aiContentUpload: {
       readWriteToken: blobReadWriteToken
     },
+    assetLibraryUpload: {
+      readWriteToken: blobReadWriteToken
+    },
     aiContentLimits: {
       dailyGenerationLimit: Number(process.env.AI_CONTENT_DAILY_GENERATION_LIMIT ?? 10),
       dailyDownloadLimit: Number(process.env.AI_CONTENT_DAILY_DOWNLOAD_LIMIT ?? 20)

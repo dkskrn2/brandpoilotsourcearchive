@@ -1,0 +1,177 @@
+import { timingSafeEqual } from "node:crypto";
+import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client";
+import { head, type HeadBlobResult } from "@vercel/blob";
+import { parseAssetUploadInput, type AssetUploadInput } from "./assetLibraryContracts.js";
+
+export type AssetLibraryUploadKind = "avatar" | "reference";
+export const ASSET_LIBRARY_AVATAR_POLICY = Object.freeze({
+  "image/png": 5 * 1024 * 1024,
+  "image/jpeg": 5 * 1024 * 1024,
+  "image/webp": 5 * 1024 * 1024,
+});
+export const ASSET_LIBRARY_REFERENCE_POLICY = Object.freeze({
+  ...ASSET_LIBRARY_AVATAR_POLICY,
+  "application/pdf": 10 * 1024 * 1024,
+  "text/plain": 5 * 1024 * 1024,
+  "text/markdown": 5 * 1024 * 1024,
+  "text/csv": 5 * 1024 * 1024,
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": 10 * 1024 * 1024,
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": 10 * 1024 * 1024,
+});
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const policy = {
+  avatar: ASSET_LIBRARY_AVATAR_POLICY,
+  reference: ASSET_LIBRARY_REFERENCE_POLICY,
+} as const;
+
+function fail(code: string): never { throw new Error(code); }
+function uuid(value: string): string {
+  if (!UUID.test(value)) fail("asset_library_upload_scope_invalid");
+  return value.toLowerCase();
+}
+function equal(left: string, right: string): boolean {
+  const a = Buffer.from(left);
+  const b = Buffer.from(right);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+export function validateAssetLibraryUpload(
+  kind: AssetLibraryUploadKind,
+  value: AssetUploadInput,
+): AssetUploadInput {
+  const upload = parseAssetUploadInput(value);
+  const maximum = policy[kind][upload.mimeType as keyof typeof policy[typeof kind]];
+  if (maximum === undefined) fail("asset_library_upload_mime_invalid");
+  if (upload.sizeBytes > maximum) fail("asset_library_upload_size_invalid");
+  return upload;
+}
+
+export function buildAssetLibraryPath(input: {
+  brandId: string;
+  avatarId?: string;
+  sessionId: string;
+  kind: AssetLibraryUploadKind;
+  checksum: string;
+  fileName: string;
+}): string {
+  const upload = parseAssetUploadInput({
+    fileName: input.fileName,
+    mimeType: "image/png",
+    sizeBytes: 1,
+    checksum: input.checksum,
+  });
+  const namespace = input.kind === "avatar" ? "avatars" : "references";
+  const target = input.kind === "avatar"
+    ? `${uuid(input.avatarId ?? "")}/${uuid(input.sessionId)}`
+    : uuid(input.sessionId);
+  return `brands/${uuid(input.brandId)}/asset-library/${namespace}/${target}/${upload.checksum}-${upload.fileName.replace(/ +/g, "-")}`;
+}
+
+export interface AssetLibraryUploadSession {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  kind: AssetLibraryUploadKind;
+  avatarId?: string | null;
+  nonce: string;
+  fileName: string;
+  storagePathPrefix: string;
+  expectedMimeType: string;
+  expectedSizeBytes: number;
+  expectedChecksum: string;
+  expiresAt: string;
+  confirmedAt: string | null;
+}
+export interface AssetLibraryTokenOptions {
+  token: string;
+  generateClientToken?: typeof generateClientTokenFromReadWriteToken;
+}
+export interface AssetLibraryBlobOptions {
+  token: string;
+  headBlob?: typeof head;
+  now?: Date;
+}
+
+export async function issueAssetLibraryUploadToken(input: {
+  brandId: string;
+  sessionId: string;
+  avatarId?: string;
+  kind: AssetLibraryUploadKind;
+  upload: AssetUploadInput;
+}, options: {
+  token: string;
+  generateClientToken?: typeof generateClientTokenFromReadWriteToken;
+}): Promise<{ pathname: string; clientToken: string }> {
+  if (!options.token.trim()) fail("asset_library_upload_storage_not_configured");
+  const upload = validateAssetLibraryUpload(input.kind, input.upload);
+  const pathname = buildAssetLibraryPath({ ...input, ...upload });
+  const generate = options.generateClientToken ?? generateClientTokenFromReadWriteToken;
+  const clientToken = await generate({
+    token: options.token,
+    pathname,
+    allowedContentTypes: [upload.mimeType],
+    maximumSizeInBytes: policy[input.kind][upload.mimeType as keyof typeof policy[typeof input.kind]],
+    addRandomSuffix: false,
+    allowOverwrite: false,
+    validUntil: Date.now() + 10 * 60 * 1000,
+  });
+  return { pathname, clientToken };
+}
+
+export interface ConfirmedAssetLibraryUpload extends AssetUploadInput {
+  storagePath: string;
+  storageUrl: string;
+}
+
+export async function confirmAssetLibraryUpload(input: {
+  session: AssetLibraryUploadSession;
+  nonce: string;
+  storagePath: string;
+  storageUrl: string;
+  mimeType: string;
+  sizeBytes: number;
+  checksum: string;
+}, options: AssetLibraryBlobOptions): Promise<ConfirmedAssetLibraryUpload> {
+  const now = options.now ?? new Date();
+  if (input.session.confirmedAt) fail("asset_library_upload_replayed");
+  if (!equal(input.session.nonce, input.nonce)) fail("asset_library_upload_nonce_mismatch");
+  if (new Date(input.session.expiresAt).getTime() <= now.getTime()) fail("asset_library_upload_expired");
+  const expected = validateAssetLibraryUpload(input.session.kind, {
+    fileName: input.session.fileName,
+    mimeType: input.session.expectedMimeType,
+    sizeBytes: input.session.expectedSizeBytes,
+    checksum: input.session.expectedChecksum,
+  });
+  const expectedPath = buildAssetLibraryPath({
+    brandId: input.session.brandId,
+    avatarId: input.session.avatarId ?? undefined,
+    sessionId: input.session.id,
+    kind: input.session.kind,
+    checksum: expected.checksum,
+    fileName: expected.fileName,
+  });
+  if (!expectedPath.startsWith(input.session.storagePathPrefix) || input.storagePath !== expectedPath) {
+    fail("asset_library_upload_path_mismatch");
+  }
+  if (input.mimeType.trim().toLowerCase() !== expected.mimeType) fail("asset_library_upload_mime_mismatch");
+  if (input.sizeBytes !== expected.sizeBytes) fail("asset_library_upload_size_mismatch");
+  if (!equal(input.checksum.toLowerCase(), expected.checksum)) fail("asset_library_upload_checksum_mismatch");
+  let url: URL;
+  try { url = new URL(input.storageUrl); } catch { fail("asset_library_upload_url_invalid"); }
+  let path: string;
+  try { path = decodeURIComponent(url.pathname).replace(/^\//, ""); } catch { fail("asset_library_upload_url_invalid"); }
+  if (url.protocol !== "https:"
+    || !(url.hostname === "blob.vercel-storage.com" || url.hostname.endsWith(".blob.vercel-storage.com"))
+    || path !== expectedPath) {
+    fail("asset_library_upload_url_mismatch");
+  }
+  if (!options.token.trim()) fail("asset_library_upload_storage_not_configured");
+  let metadata: HeadBlobResult;
+  try { metadata = await (options.headBlob ?? head)(input.storageUrl, { token: options.token }); }
+  catch { fail("asset_library_upload_blob_unavailable"); }
+  if (metadata.pathname !== expectedPath) fail("asset_library_upload_path_mismatch");
+  if (metadata.contentType.toLowerCase() !== expected.mimeType) fail("asset_library_upload_mime_mismatch");
+  if (metadata.size !== expected.sizeBytes) fail("asset_library_upload_size_mismatch");
+  return { ...expected, storagePath: expectedPath, storageUrl: input.storageUrl };
+}
