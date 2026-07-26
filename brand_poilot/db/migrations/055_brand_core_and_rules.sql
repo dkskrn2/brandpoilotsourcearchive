@@ -152,8 +152,44 @@ select
   run.id,
   1,
   'approved',
-  coalesce(run.edited_result_json, run.result_json),
-  run.evidence_json,
+  jsonb_build_object(
+    'contractVersion', 'brand-core.v1',
+    'summary', jsonb_build_object(
+      'oneLine', coalesce(effective.result->>'coreAppeal', effective.result->>'businessDescription', ''),
+      'description', coalesce(
+        effective.result->>'businessDescription',
+        effective.result->>'companyOverview',
+        ''
+      )
+    ),
+    'audiences', case
+      when nullif(trim(effective.result->>'primaryTarget'), '') is null then '[]'::jsonb
+      else jsonb_build_array(jsonb_build_object(
+        'name', effective.result->>'primaryTarget',
+        'problem', '',
+        'desiredOutcome', ''
+      ))
+    end,
+    'valueProposition', jsonb_build_object(
+      'primary', coalesce(effective.result->>'coreAppeal', ''),
+      'differentiators', case
+        when nullif(trim(effective.result->>'differentiators'), '') is null then '[]'::jsonb
+        else jsonb_build_array(effective.result->>'differentiators')
+      end,
+      'proofPoints', '[]'::jsonb
+    ),
+    'messaging', jsonb_build_object(
+      'appeals', case
+        when nullif(trim(effective.result->>'coreAppeal'), '') is null then '[]'::jsonb
+        else jsonb_build_array(effective.result->>'coreAppeal')
+      end,
+      'tone', '[]'::jsonb,
+      'preferredPhrases', '[]'::jsonb,
+      'brandDirection', coalesce(effective.result->>'differentiators', ''),
+      'priorityMessages', '[]'::jsonb
+    )
+  ),
+  coalesce(mapped_evidence.items, '[]'::jsonb),
   '{}'::jsonb,
   'migration',
   coalesce(run.confirmed_at, run.updated_at, now()),
@@ -163,6 +199,37 @@ from brand_analysis_runs run
 join brand_profiles profile
   on profile.workspace_id = run.workspace_id
  and profile.brand_id = run.brand_id
+cross join lateral (
+  select coalesce(run.edited_result_json, run.result_json) as result
+) effective
+left join lateral (
+  select jsonb_agg(jsonb_build_object(
+    'fieldPath', case evidence->>'field'
+      when 'companyOverview' then 'summary.description'
+      when 'businessDescription' then 'summary.description'
+      when 'primaryTarget' then 'audiences'
+      when 'differentiators' then 'valueProposition.differentiators'
+      when 'coreAppeal' then 'valueProposition.primary'
+    end,
+    'sourceType', case
+      when evidence->>'sourceId' = 'owned-url' then 'owned_url'
+      when nullif(evidence->>'sourceUrl', '') is not null then 'public_web'
+      else 'analysis'
+    end,
+    'sourceId', evidence->>'sourceId',
+    'sourceUrl', evidence->'sourceUrl',
+    'excerpt', evidence->>'claim',
+    'confidence', null
+  )) as items
+  from jsonb_array_elements(coalesce(effective.result->'evidence', '[]'::jsonb)) evidence
+  where evidence->>'field' in (
+    'companyOverview',
+    'businessDescription',
+    'primaryTarget',
+    'differentiators',
+    'coreAppeal'
+  )
+) mapped_evidence on true
 where run.status = 'confirmed'
   and run.is_active
   and coalesce(run.edited_result_json, run.result_json) is not null
@@ -192,13 +259,21 @@ select
   1,
   'approved',
   jsonb_build_object(
+    'contractVersion', 'brand-rules.v1',
     'requiredPhrases', '[]'::jsonb,
     'forbiddenPhrases', profile.forbidden_terms,
     'exaggerationRules', '[]'::jsonb,
-    'ctaRules', jsonb_build_object('defaultCta', profile.default_cta),
+    'ctaRules', jsonb_build_object('defaultCta', profile.default_cta, 'allowed', '[]'::jsonb),
     'channelRules', '{}'::jsonb,
-    'designRules', '{}'::jsonb,
-    'autoApprovalRules', jsonb_build_object('enabled', profile.auto_approval_enabled)
+    'designRules', jsonb_build_object(
+      'colors', '[]'::jsonb,
+      'fonts', '[]'::jsonb,
+      'notes', '[]'::jsonb
+    ),
+    'autoApprovalRules', jsonb_build_object(
+      'enabled', profile.auto_approval_enabled,
+      'conditions', '[]'::jsonb
+    )
   ),
   'migration',
   now(),

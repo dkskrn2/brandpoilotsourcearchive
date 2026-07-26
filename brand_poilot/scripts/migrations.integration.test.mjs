@@ -2907,7 +2907,7 @@ test("055 backfills tenant-safe approved brand core and rules without mutating c
        ) values (
          $1, $2, 'confirmed', '{}'::jsonb, '[{"sourceId":"owned"}]'::jsonb,
          '{"primaryTarget":"AI 고객","businessDescription":"AI 설명"}'::jsonb,
-         '{"primaryTarget":"사용자 고객","businessDescription":"사용자 설명"}'::jsonb,
+         '{"primaryTarget":"사용자 고객","businessDescription":"사용자 설명","evidence":[{"field":"businessDescription","claim":"사용자 설명","sourceId":"owned-url","sourceUrl":"https://example.com/about"}]}'::jsonb,
          'confirmed-1', true, now()
        ) returning id, result_json, edited_result_json`,
       [workspace.rows[0].id, firstBrand.rows[0].id],
@@ -2946,8 +2946,16 @@ test("055 backfills tenant-safe approved brand core and rules without mutating c
     assert.equal(core.rows[0].source_analysis_id, analysis.rows[0].id);
     assert.equal(core.rows[0].version, 1);
     assert.equal(core.rows[0].status, "approved");
-    assert.equal(core.rows[0].core_json.primaryTarget, "사용자 고객");
-    assert.deepEqual(core.rows[0].evidence_json, [{ sourceId: "owned" }]);
+    assert.equal(core.rows[0].core_json.contractVersion, "brand-core.v1");
+    assert.equal(core.rows[0].core_json.audiences[0].name, "사용자 고객");
+    assert.deepEqual(core.rows[0].evidence_json, [{
+      fieldPath: "summary.description",
+      sourceType: "owned_url",
+      sourceId: "owned-url",
+      sourceUrl: "https://example.com/about",
+      excerpt: "사용자 설명",
+      confidence: null,
+    }]);
     assert.equal(core.rows[0].created_by, "migration");
 
     const profile = await database.query(
