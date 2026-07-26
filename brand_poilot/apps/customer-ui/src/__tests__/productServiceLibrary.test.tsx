@@ -78,17 +78,32 @@ describe("ProductServiceLibraryPanel", () => {
     expect(within(usage).getByText("DM 사용 불가")).toBeVisible();
   });
 
-  it("imports a real completed analysis, exposes the stable ID, then allows edit and approval", async () => {
+  it("starts the existing analysis flow without asking the user for an internal ID", async () => {
     const api = gateway();
     renderPanel(<ProductServiceLibraryPanel brandId="brand-1" gateway={api as never} />);
     await screen.findByRole("button", { name: /콘텐츠 운영/ });
 
     await userEvent.click(screen.getByRole("button", { name: "새 제품·서비스" }));
-    expect(screen.getByRole("link", { name: "AI 분석 열기" })).toHaveAttribute("href", "/ai-content/new");
-    await userEvent.type(screen.getByRole("textbox", { name: "완료된 분석 ID" }), "analysis-real");
-    await userEvent.click(screen.getByRole("button", { name: "분석 결과로 초안 만들기" }));
+    expect(screen.getByRole("link", { name: "AI 분석 열기" })).toHaveAttribute(
+      "href",
+      "/ai-content/new?type=card_news&returnTo=product-library",
+    );
+    expect(screen.queryByRole("textbox", { name: "완료된 분석 ID" })).not.toBeInTheDocument();
+    expect(screen.getByText(/분석이 완료되면 이 보관함으로 자동으로 돌아옵니다/)).toBeVisible();
+  });
 
-    await waitFor(() => expect(api.createProductServiceFromAnalysis).toHaveBeenCalledWith("brand-1", "analysis-real"));
+  it("automatically consumes the completed analysis return, then allows edit and approval", async () => {
+    const api = gateway();
+    const onAnalysisConsumed = vi.fn();
+    renderPanel(<ProductServiceLibraryPanel
+      brandId="brand-1"
+      gateway={api as never}
+      initialAnalysisId="subject-analysis-real"
+      onAnalysisConsumed={onAnalysisConsumed}
+    />);
+
+    await waitFor(() => expect(api.createProductServiceFromAnalysis).toHaveBeenCalledWith("brand-1", "subject-analysis-real"));
+    expect(onAnalysisConsumed).toHaveBeenCalled();
     expect(screen.getByText(draftItem.id)).toBeVisible();
     await userEvent.clear(screen.getByRole("textbox", { name: "설명" }));
     await userEvent.type(screen.getByRole("textbox", { name: "설명" }), "검토 후 수정한 설명");
@@ -115,5 +130,15 @@ describe("ProductServiceLibraryPanel", () => {
 
     expect(await screen.findByText(/서버의 제품·서비스 라이브러리 배포가 먼저 필요합니다/)).toBeVisible();
     expect(screen.getByRole("button", { name: "다시 확인" })).toBeVisible();
+  });
+
+  it("shows deployment guidance when an older server returns 404 for the list route", async () => {
+    const missingRoute = new ApiRequestError({ status: 404, errorCode: null });
+    renderPanel(<ProductServiceLibraryPanel
+      brandId="brand-1"
+      gateway={gateway({ listProductServices: vi.fn(async () => { throw missingRoute; }) }) as never}
+    />);
+
+    expect(await screen.findByText(/서버의 제품·서비스 라이브러리 배포가 먼저 필요합니다/)).toBeVisible();
   });
 });

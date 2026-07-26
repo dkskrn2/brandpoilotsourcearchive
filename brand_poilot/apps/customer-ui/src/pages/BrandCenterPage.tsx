@@ -324,7 +324,16 @@ export function BrandCenterPage() {
           </ol>
         </div></section>
       )}
-      {tab === "products" ? <ProductServiceLibraryPanel brandId={DEMO_BRAND_ID} initialItemId={params.get("item")} /> : null}
+      {tab === "products" ? <ProductServiceLibraryPanel
+        brandId={DEMO_BRAND_ID}
+        initialItemId={params.get("item")}
+        initialAnalysisId={params.get("analysis")}
+        onAnalysisConsumed={() => {
+          const next = new URLSearchParams(params);
+          next.delete("analysis");
+          setParams(next, { replace: true });
+        }}
+      /> : null}
       {tab === "wiki" ? <WikiLibraryPanel
         brandId={DEMO_BRAND_ID}
         initialIssueId={params.get("issue")}

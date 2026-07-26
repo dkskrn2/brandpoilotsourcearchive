@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import { Alert } from "../ui/Alert";
 import { InlineSpinner } from "../ui/LoadingState";
 import {
-  classifyLibraryError,
   type LibraryGateway,
   type ProductServiceItem,
   type ProductServiceProfile,
@@ -47,7 +46,6 @@ export function ProductServiceEditor({
   const version = item?.draft ?? item?.activeVersion ?? null;
   const [profile, setProfile] = useState<ProductServiceProfile>(() => version?.profile ?? emptyProfile());
   const [mode, setMode] = useState<"analysis" | "manual">("analysis");
-  const [analysisId, setAnalysisId] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,24 +58,6 @@ export function ProductServiceEditor({
 
   const approved = Boolean(item?.activeVersion);
   const editable = creating || Boolean(item?.draft);
-
-  async function importAnalysis() {
-    if (!analysisId.trim()) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const saved = await gateway.createProductServiceFromAnalysis(brandId, analysisId.trim());
-      onSaved(saved);
-      setNotice(`분석 결과를 초안으로 저장했습니다. 항목 ID: ${saved.id}`);
-    } catch (cause) {
-      const kind = classifyLibraryError(cause);
-      setError(kind === "not_found"
-        ? "완료된 분석을 찾을 수 없습니다. 분석 화면에서 ID와 완료 상태를 확인해 주세요."
-        : "분석 결과를 초안으로 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.");
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function save() {
     if (!profile.name.trim()) {
@@ -121,14 +101,10 @@ export function ProductServiceEditor({
         <button className="button" type="button" onClick={onCancelCreate}>취소</button>
       </header>
       <Alert title="실제 분석 흐름" variant="info">
-        URL·문서·이미지 또는 직접 입력은 기존 subject analysis에서 처리합니다. 분석이 끝난 뒤 표시되는 분석 ID로 이 보관함 초안을 만듭니다.
+        URL·문서·이미지 또는 직접 입력은 기존 subject analysis에서 처리합니다. 분석이 완료되면 이 보관함으로 자동으로 돌아옵니다.
       </Alert>
       <div className="library-analysis-actions">
-        <Link className="button primary" to="/ai-content/new">AI 분석 열기</Link>
-        <label>완료된 분석 ID<input aria-label="완료된 분석 ID" value={analysisId} onChange={(event) => setAnalysisId(event.target.value)} /></label>
-        <button className="button" type="button" disabled={!analysisId.trim() || busy} onClick={() => void importAnalysis()}>
-          {busy ? <InlineSpinner label="분석 결과 가져오는 중" /> : null}분석 결과로 초안 만들기
-        </button>
+        <Link className="button primary" to="/ai-content/new?type=card_news&returnTo=product-library">AI 분석 열기</Link>
       </div>
       <button className="button quiet" type="button" onClick={() => setMode("manual")}>AI 없이 직접 입력</button>
       {error ? <Alert title="가져오지 못했습니다" variant="warn">{error}</Alert> : null}

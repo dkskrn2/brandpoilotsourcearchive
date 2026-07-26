@@ -122,9 +122,13 @@ const unavailableCodes = new Set([
   "brand_center_not_configured",
 ]);
 
-export function classifyLibraryError(error: unknown): LibraryErrorKind {
+export function classifyLibraryError(
+  error: unknown,
+  target: "collection" | "item" = "item",
+): LibraryErrorKind {
   if (error instanceof ApiRequestError) {
     if (error.errorCode && unavailableCodes.has(error.errorCode)) return "unavailable";
+    if (error.status === 404 && target === "collection") return "unavailable";
     if (error.status === 404 || error.errorCode?.endsWith("_not_found")) return "not_found";
     if (error.status === 401 || error.status === 403 || error.errorCode?.includes("forbidden")) return "forbidden";
     if (error.status === 409 || error.errorCode?.includes("conflict")) return "conflict";

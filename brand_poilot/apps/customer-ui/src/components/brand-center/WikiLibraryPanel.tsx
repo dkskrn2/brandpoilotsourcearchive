@@ -116,7 +116,7 @@ export function WikiLibraryPanel({
     } catch (cause) {
       setItems([]);
       setIssues([]);
-      setErrorKind(classifyLibraryError(cause));
+      setErrorKind(classifyLibraryError(cause, "collection"));
     } finally {
       setLoading(false);
     }

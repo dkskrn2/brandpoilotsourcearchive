@@ -23,6 +23,7 @@ export function AiContentWizardPage({ gateway = aiContentApiGateway, brandId = D
   const navigate = useNavigate();
   const queryType = params.get("type");
   const initialType = (["card_news", "blog", "marketing"] as const).includes(queryType as AiContentType) ? queryType as AiContentType : null;
+  const returnToProductLibrary = params.get("returnTo") === "product-library";
   const state = useAiContentDraft(initialType);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -94,7 +95,15 @@ export function AiContentWizardPage({ gateway = aiContentApiGateway, brandId = D
   return <div className="content ai-content-wizard">
     <header className="wizard-header" data-guide="page-header"><div><p>AI 콘텐츠 스튜디오</p><h1>새 AI 콘텐츠</h1></div><div className="wizard-header-actions"><div className="wizard-step-current"><strong>{state.step} / 5</strong><span>{wizardStepNames[state.step - 1]}</span></div><PageGuideButton /></div></header>
     <ol className="wizard-progress" aria-label="생성 단계">{wizardStepNames.map((name, index) => <li key={name} aria-current={state.step === index + 1 ? "step" : undefined}><span>{index + 1}</span>{name}</li>)}</ol>
-    <div className="wizard-workspace"><AiContentWizardSteps step={state.step} draft={state.draft} actions={{ ...actions, setSubjectAnalysis: (value) => { state.setSubjectAnalysis(value); if (value && (value.status === "ready" || value.status === "partial")) state.setStep(3); } }} gateway={gateway} brandId={brandId} generationId={state.generationId} analysis={state.subjectAnalysis} onPrepareAnalysis={prepareAnalysis} /></div>
+    <div className="wizard-workspace"><AiContentWizardSteps step={state.step} draft={state.draft} actions={{ ...actions, setSubjectAnalysis: (value) => {
+      state.setSubjectAnalysis(value);
+      if (!value || (value.status !== "ready" && value.status !== "partial")) return;
+      if (returnToProductLibrary) {
+        navigate(`/brand-center?${new URLSearchParams({ tab: "products", analysis: value.id }).toString()}`);
+        return;
+      }
+      state.setStep(3);
+    } }} gateway={gateway} brandId={brandId} generationId={state.generationId} analysis={state.subjectAnalysis} onPrepareAnalysis={prepareAnalysis} /></div>
     {submitError ? <p className="wizard-error" role="alert">콘텐츠 생성을 시작하지 못했습니다. 다시 시도해 주세요.</p> : null}
     <footer className="wizard-actions">{state.step > 1 ? <button type="button" className="button" onClick={state.goBack}><ChevronLeft size={17} />이전</button> : <span />}{state.step === 2 ? <span /> : state.step < 5 ? <button type="button" className="button primary" disabled={!valid} onClick={state.goNext}>다음<ChevronRight size={17} /></button> : <button type="button" className="button primary" disabled={!valid || submitting} onClick={() => void generate()}>{submitting ? <LoaderCircle className="inline-spinner" size={17} /> : <Sparkles size={17} />}{submitting ? "생성 요청 중" : "생성 시작"}</button>}</footer>
   </div>;

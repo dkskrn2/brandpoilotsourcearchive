@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AiContentWizardPage } from "../pages/AiContentWizardPage";
 import { createMockAiContentGateway } from "../features/ai-content/mockAiContentGateway";
@@ -9,8 +9,13 @@ import type { AiContentGateway } from "../features/ai-content/types";
 
 afterEach(cleanup);
 
+function ReturnLocation() {
+  const location = useLocation();
+  return <p>제품 보관함 복귀 {location.search}</p>;
+}
+
 function renderWizard(path = "/ai-content/new?type=card_news", gateway: AiContentGateway = createMockAiContentGateway()) {
-  return render(<MemoryRouter initialEntries={[path]}><Routes><Route path="/ai-content/new" element={<AiContentWizardPage gateway={gateway} brandId="brand-demo" />} /><Route path="/ai-content/:generationId" element={<p>생성 상세 화면</p>} /></Routes></MemoryRouter>);
+  return render(<MemoryRouter initialEntries={[path]}><Routes><Route path="/ai-content/new" element={<AiContentWizardPage gateway={gateway} brandId="brand-demo" />} /><Route path="/ai-content/:generationId" element={<p>생성 상세 화면</p>} /><Route path="/brand-center" element={<ReturnLocation />} /></Routes></MemoryRouter>);
 }
 
 async function completeAnalysis(user: ReturnType<typeof userEvent.setup>) {
@@ -88,6 +93,20 @@ describe("AiContentWizardPage", () => {
     expect(screen.getByText("1개만 선택")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "다음" }));
     expect(screen.getByText("참고할 콘텐츠를 선택하세요")).toBeVisible();
+  });
+
+  it("returns a completed real analysis to the product library without exposing its ID to the user", async () => {
+    const user = userEvent.setup();
+    renderWizard("/ai-content/new?type=card_news&returnTo=product-library");
+
+    await user.click(screen.getByRole("button", { name: "다음" }));
+    await user.click(screen.getByRole("radio", { name: "제품" }));
+    await user.type(screen.getByLabelText("제품·서비스 URL (선택)"), "https://example.com/product");
+    await user.click(screen.getByRole("button", { name: "분석하고 소구점 만들기" }));
+
+    expect(await screen.findByText(/제품 보관함 복귀/)).toHaveTextContent(
+      "?tab=products&analysis=subject-analysis-brand-demo-product",
+    );
   });
 
   it("passes two ordered references, one appeal, color, attachments, and two outputs to generation", async () => {

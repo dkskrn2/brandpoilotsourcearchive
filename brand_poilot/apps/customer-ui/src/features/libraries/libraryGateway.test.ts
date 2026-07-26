@@ -102,4 +102,15 @@ describe("library gateway", () => {
     }))).toBe("forbidden");
     expect(classifyLibraryError(new TypeError("Failed to fetch"))).toBe("retryable");
   });
+
+  it("treats a missing legacy list route as unavailable without hiding true item 404s", () => {
+    expect(classifyLibraryError(new ApiRequestError({
+      status: 404,
+      errorCode: null,
+    }), "collection")).toBe("unavailable");
+    expect(classifyLibraryError(new ApiRequestError({
+      status: 404,
+      errorCode: "product_service_not_found",
+    }), "item")).toBe("not_found");
+  });
 });
