@@ -49,6 +49,50 @@ beforeAll(async () => {
     if (sql.startsWith("-- requires: pgvector") || file === "027_wiki_search_v2.sql") continue;
     await database.exec(sql);
   }
+  // PGlite has no pgvector extension. This domain and deterministic search
+  // function replace only that external boundary; worker orchestration,
+  // persistence, validation, activation, and retrieval repository SQL stay real.
+  await database.exec(`
+    create domain vector as text;
+    alter table wiki_page_chunks add column embedding vector null;
+    create function search_brand_compiled_wiki(
+      p_workspace_id uuid,
+      p_brand_id uuid,
+      p_wiki_version_id uuid,
+      p_query_embedding vector,
+      p_query_text text,
+      p_limit integer default 3
+    )
+    returns table(
+      page_chunk_id uuid,
+      wiki_page_id uuid,
+      page_type text,
+      title text,
+      content text,
+      source_link_ids uuid[],
+      cosine_similarity double precision,
+      keyword_match double precision,
+      rrf_score double precision
+    )
+    language sql stable as $$
+      select chunk.id,page.id,page.page_type,page.title,chunk.content,
+             coalesce(array_agg(distinct source.id) filter(where source.id is not null),'{}'::uuid[]),
+             1::double precision,
+             case when chunk.content ilike concat('%',p_query_text,'%') then 1 else 0 end::double precision,
+             1::double precision
+        from wiki_page_chunks chunk
+        join wiki_pages page on page.id=chunk.wiki_page_id
+        left join wiki_page_sources source on source.wiki_page_id=page.id
+       where chunk.workspace_id=p_workspace_id and chunk.brand_id=p_brand_id
+         and chunk.wiki_version_id=p_wiki_version_id and chunk.enabled
+         and chunk.embedding is not null
+       group by chunk.id,page.id
+       order by
+         case when chunk.content ilike '%배송%' then 0 else 1 end,
+         page.stable_key,chunk.chunk_index
+       limit p_limit
+    $$;
+  `);
   pool = pglitePool(database);
   await database.exec(`
     insert into app_users(id,email) values
@@ -136,6 +180,18 @@ describe("library reuse and trust boundaries", () => {
   });
 
   it("adds and activates a Wiki item, preserves its active version, and exposes only trusted DM sources", async () => {
+    const [
+      workerDatabaseModule,
+      sourceWorkerModule,
+      compilationWorkerModule,
+      finalizeWorkerModule,
+    ] = await Promise.all([
+      import("../../../workers/brand-pilot-dm-worker/src/db.js"),
+      import("../../../workers/brand-pilot-dm-worker/src/compiledWikiSource.js"),
+      import("../../../workers/brand-pilot-dm-worker/src/compiledWikiWorker.js"),
+      import("../../../workers/brand-pilot-dm-worker/src/compiledWikiFinalize.js"),
+    ]);
+    const workerDatabase = workerDatabaseModule.createDmWorkerDbFromPool(pool);
     const repository = createRepository(pool);
     const item = await repository.createWikiItem!(
       { workspaceId, brandId: primaryBrandId, actorUserId: memberId },
@@ -158,29 +214,82 @@ describe("library reuse and trust boundaries", () => {
     const refresh = await repository.enqueueWikiRefresh(primaryBrandId);
     expect(refresh.status).toBe("pending");
 
+    const sourceResults: Array<{ status: string }> = [];
+    while (true) {
+      const sourceResult = await sourceWorkerModule.runCompiledWikiSourceItemOnce({
+        workerId: "library-trust-source-worker",
+        db: workerDatabase,
+        curatorPromptVersion: "library-trust.v1",
+        embeddingModel: "deterministic-vector",
+        embeddingVersion: "v1",
+        runtimeDirectory: process.cwd(),
+        runCodex: async () => { throw new Error("direct_sources_must_not_call_codex"); },
+      });
+      if (sourceResult.status === "idle") break;
+      expect(sourceResult.status).toBe("completed");
+      sourceResults.push(sourceResult);
+    }
+    expect(sourceResults.length).toBeGreaterThanOrEqual(1);
+    expect(sourceResults.at(-1)).toMatchObject({ collectionComplete: true });
+
+    const deterministicCompiler = async ({ prompt }: { prompt: string }) => {
+      const encoded = prompt.match(/입력:\n(.+)\n\n출력 계약:/s)?.[1];
+      if (!encoded) throw new Error("deterministic_compiler_input_missing");
+      const input = JSON.parse(encoded) as {
+        pageType: string;
+        stableKey: string;
+        requiredLinkedStableKeys: string[];
+        sourceUnits: Array<{ id: string; title: string; content: string; hasDestinationUrl: boolean }>;
+      };
+      const sources = input.sourceUnits.map((source) => source.id);
+      return {
+        pageType: input.pageType,
+        stableKey: input.stableKey,
+        title: input.pageType === "brand_overview" ? "브랜드 안내" : input.sourceUnits[0].title,
+        summary: input.sourceUnits[0].content,
+        sections: [{
+          sectionKey: "verified",
+          heading: "검증된 안내",
+          body: input.sourceUnits[0].content,
+          sourceUnitIds: sources,
+          destinationUrlId: input.sourceUnits.find((source) => source.hasDestinationUrl)?.id ?? null,
+        }],
+        links: input.requiredLinkedStableKeys.map((targetStableKey) => ({
+          targetStableKey,
+          relation: "contains",
+        })),
+      };
+    };
+    const compiled: Array<{ status: string }> = [];
+    while (true) {
+      const result = await compilationWorkerModule.runWikiCompilationItemOnce({
+        workerId: "library-trust-compiler",
+        db: workerDatabase,
+        runtimeDirectory: process.cwd(),
+        timeoutMs: 1_000,
+        runCodex: deterministicCompiler,
+      });
+      if (result.status === "idle") break;
+      compiled.push(result);
+      expect(result.status).toBe("completed");
+    }
+    expect(compiled.length).toBeGreaterThanOrEqual(3);
+
+    const finalized = await finalizeWorkerModule.runWikiFinalizeOnce({
+      workerId: "library-trust-finalizer",
+      db: workerDatabase,
+      apiKey: "deterministic",
+      embeddingModel: "deterministic-vector",
+      embeddingVersion: "v1",
+      embed: async () => Array.from({ length: 1536 }, () => 0.01),
+    });
+    expect(finalized).toMatchObject({ status: "ready" });
     const version = await database.query<{ id: string }>(
-      `insert into wiki_versions(workspace_id,brand_id,status,activated_at)
-       values($1,$2,'active',now()) returning id`,
+      `select id from wiki_versions
+        where workspace_id=$1 and brand_id=$2 and status='active'`,
       [workspaceId, primaryBrandId],
     );
-    await database.query(
-      `insert into wiki_source_units(
-         workspace_id,brand_id,wiki_version_id,source_kind,source_id,unit_type,stable_key,
-         title,content,content_hash,source_quote
-       ) values($1,$2,$3,'faq',$4,'faq','shipping-start',$5,$6,md5($6),$6)`,
-      [
-        workspaceId,
-        primaryBrandId,
-        version.rows[0].id,
-        item.id,
-        "배송은 언제 시작하나요?",
-        "영업일 기준 이틀 안에 시작합니다.",
-      ],
-    );
-    await database.query(
-      "update wiki_build_requests set status='succeeded',completed_at=now() where id=$1",
-      [refresh.id],
-    );
+    expect(version.rows).toHaveLength(1);
 
     const managed = await repository.listWikiItems!({ workspaceId, brandId: primaryBrandId });
     expect(managed.find((candidate) => candidate.id === item.id)).toMatchObject({
@@ -192,7 +301,24 @@ describe("library reuse and trust boundaries", () => {
        where workspace_id=$1 and brand_id=$2 and wiki_version_id=$3`,
       [workspaceId, primaryBrandId, version.rows[0].id],
     );
-    expect(dmSources.rows).toEqual([{ source_kind: "faq", source_id: item.id }]);
+    expect(dmSources.rows).toEqual(expect.arrayContaining([
+      { source_kind: "faq", source_id: item.id },
+    ]));
+    expect(dmSources.rows.every((source) =>
+      ["faq", "product_service"].includes(source.source_kind))).toBe(true);
+    const dmResult = await workerDatabase.searchCompiledWiki(
+      workspaceId,
+      primaryBrandId,
+      "배송은 언제 시작하나요?",
+      Array.from({ length: 1536 }, () => 0.01),
+    );
+    expect(dmResult).toMatchObject({
+      wikiVersionId: version.rows[0].id,
+      chunks: expect.arrayContaining([expect.objectContaining({
+        pageType: "faq",
+        content: expect.stringContaining("영업일 기준 이틀"),
+      })]),
+    });
   });
 
   it("keeps two avatar images and their representative snapshot after default/archive", async () => {
@@ -303,6 +429,41 @@ describe("library reuse and trust boundaries", () => {
       actorUserId: memberId,
       referenceId,
     })).rejects.toThrow("asset_library_admin_required");
+
+    await database.exec(`
+      create function reject_saved_trend_delete() returns trigger language plpgsql as $$
+      begin
+        raise exception 'forced_saved_trend_delete_failure';
+      end;
+      $$;
+      create trigger reject_saved_trend_delete_trigger
+      before delete on brand_trend_saved_media
+      for each row execute function reject_saved_trend_delete();
+    `);
+    await expect(assets.archiveReference({
+      workspaceId,
+      brandId: primaryBrandId,
+      actorUserId: ownerId,
+      referenceId,
+    })).rejects.toThrow("forced_saved_trend_delete_failure");
+    expect(await trends.listInstagramTrendArchive(primaryBrandId, { page: 1, limit: 10 }))
+      .toMatchObject({ total: 1, items: [expect.objectContaining({ id: mediaId })] });
+    const rolledBack = await database.query<{ archived: boolean; enabled: boolean; saved_count: number }>(
+      `select item.archived_at is not null archived,source.enabled,
+              (select count(*)::int from brand_trend_saved_media saved
+                where saved.id=$2) saved_count
+         from reference_items item
+         join reference_item_source_url_provenance provenance on provenance.reference_item_id=item.id
+         join source_urls source on source.id=provenance.source_url_id
+        where item.id=$1`,
+      [referenceId, canonical.rows[0].saved_trend_id],
+    );
+    expect(rolledBack.rows).toEqual([{ archived: false, enabled: true, saved_count: 1 }]);
+    await database.exec(`
+      drop trigger reject_saved_trend_delete_trigger on brand_trend_saved_media;
+      drop function reject_saved_trend_delete();
+    `);
+
     await assets.archiveReference({
       workspaceId,
       brandId: primaryBrandId,
@@ -310,25 +471,53 @@ describe("library reuse and trust boundaries", () => {
       referenceId,
     });
     const archived = await database.query<{
-      item_count: number;
       archived: boolean;
       enabled: boolean;
       status: string;
+      saved_count: number;
     }>(
-      `select count(*) over()::int item_count,item.archived_at is not null archived,
-              source.enabled,source.status
+      `select item.archived_at is not null archived,source.enabled,source.status,
+              (select count(*)::int from brand_trend_saved_media saved
+                where saved.id=$2) saved_count
          from reference_items item
          join reference_item_source_url_provenance provenance on provenance.reference_item_id=item.id
          join source_urls source on source.id=provenance.source_url_id
         where item.id=$1`,
-      [referenceId],
+      [referenceId, canonical.rows[0].saved_trend_id],
     );
     expect(archived.rows).toEqual([{
-      item_count: 1,
       archived: true,
       enabled: false,
       status: "disabled",
+      saved_count: 0,
     }]);
+    expect(await trends.listInstagramTrendArchive(primaryBrandId, { page: 1, limit: 10 }))
+      .toMatchObject({ total: 0, items: [] });
+
+    const resaved = await trends.saveInstagramTrendSource(primaryBrandId, mediaId, ownerId);
+    expect(resaved.alreadySaved).toBe(false);
+    expect(await trends.listInstagramTrendArchive(primaryBrandId, { page: 1, limit: 10 }))
+      .toMatchObject({ total: 1, items: [expect.objectContaining({ id: mediaId })] });
+    const reactivated = await database.query<{
+      id: string;
+      saved_trend_id: string;
+      archived: boolean;
+      enabled: boolean;
+    }>(
+      `select item.id,item.saved_trend_id,item.archived_at is not null archived,source.enabled
+         from reference_items item
+         join reference_item_source_url_provenance provenance on provenance.reference_item_id=item.id
+         join source_urls source on source.id=provenance.source_url_id
+        where item.brand_id=$1 and item.metadata->>'instagramMediaId'='ig-library-trust'`,
+      [primaryBrandId],
+    );
+    expect(reactivated.rows).toEqual([{
+      id: referenceId,
+      saved_trend_id: expect.any(String),
+      archived: false,
+      enabled: true,
+    }]);
+    expect(reactivated.rows[0].saved_trend_id).not.toBe(canonical.rows[0].saved_trend_id);
   });
 
   it("blocks cross-brand origins/upload prefixes and keeps unsupported external claims out of product and DM facts", async () => {

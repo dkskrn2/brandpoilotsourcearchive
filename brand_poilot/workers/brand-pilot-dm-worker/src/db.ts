@@ -143,6 +143,12 @@ export function resolveDmPoolConfig(
 
 export function createDmWorkerDb(connectionString: string, options: DmPoolOptions = {}) {
   const pool = new Pool(resolveDmPoolConfig(connectionString, options));
+  return createDmWorkerDbFromPool(pool);
+}
+
+type DmWorkerPool = Pick<Pool, "query" | "connect"> & { end?: Pool["end"] };
+
+export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
   return {
     async claimWikiBuildItem(workerId: string, versions: {
       curatorPromptVersion: string;
@@ -1546,6 +1552,6 @@ export function createDmWorkerDb(connectionString: string, options: DmPoolOption
       );
       return result.rows as ConversationHistoryItem[];
     },
-    async close() { await pool.end(); },
+    async close() { await pool.end?.(); },
   };
 }

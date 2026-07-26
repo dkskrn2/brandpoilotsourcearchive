@@ -743,6 +743,13 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
           if (String(archived.rows[0]?.reference_item_id ?? "") !== scope.referenceId) {
             throw new Error("reference_not_found");
           }
+          const removed = await client.query(
+            `delete from brand_trend_saved_media
+              where id=$1 and workspace_id=$2 and brand_id=$3
+              returning id`,
+            [item.saved_trend_id, scope.workspaceId, scope.brandId],
+          );
+          if (!removed.rowCount) throw new Error("reference_not_found");
           return;
         }
         const result = await client.query(

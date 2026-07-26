@@ -9,6 +9,10 @@ import { createServer } from "../../api/src/httpServer";
 import { createKakaoAuthStore } from "../../api/src/kakaoAuth";
 import { createInstagramTrendRepository } from "../../api/src/instagramTrendRepository";
 import { createRepository } from "../../api/src/repository";
+import { runWikiFinalizeOnce } from "../../../workers/brand-pilot-dm-worker/src/compiledWikiFinalize";
+import { runCompiledWikiSourceItemOnce } from "../../../workers/brand-pilot-dm-worker/src/compiledWikiSource";
+import { runWikiCompilationItemOnce } from "../../../workers/brand-pilot-dm-worker/src/compiledWikiWorker";
+import { createDmWorkerDbFromPool } from "../../../workers/brand-pilot-dm-worker/src/db";
 
 type QueryResult = { rowCount: number; rows: Record<string, unknown>[] };
 
@@ -37,6 +41,8 @@ const ids = {
   hashtag: "85000000-0000-4000-8000-000000000005",
   media: "86000000-0000-4000-8000-000000000006",
   avatar: "87000000-0000-4000-8000-000000000007",
+  avatarSessionOne: "88000000-0000-4000-8000-000000000008",
+  avatarSessionTwo: "89000000-0000-4000-8000-000000000009",
 };
 
 let database: PGlite;
@@ -44,6 +50,35 @@ let api: FastifyInstance;
 let apiOrigin: string;
 let sessionToken: string;
 let stableReferenceId: string;
+let workerDatabase: ReturnType<typeof createDmWorkerDbFromPool>;
+
+async function deterministicWikiCompiler({ prompt }: { prompt: string }) {
+  const encoded = prompt.match(/입력:\n(.+)\n\n출력 계약:/s)?.[1];
+  if (!encoded) throw new Error("deterministic_compiler_input_missing");
+  const input = JSON.parse(encoded) as {
+    pageType: string;
+    stableKey: string;
+    requiredLinkedStableKeys: string[];
+    sourceUnits: Array<{ id: string; title: string; content: string; hasDestinationUrl: boolean }>;
+  };
+  return {
+    pageType: input.pageType,
+    stableKey: input.stableKey,
+    title: input.pageType === "brand_overview" ? "브랜드 안내" : input.sourceUnits[0].title,
+    summary: input.sourceUnits[0].content,
+    sections: [{
+      sectionKey: "verified",
+      heading: "검증된 안내",
+      body: input.sourceUnits[0].content,
+      sourceUnitIds: input.sourceUnits.map((source) => source.id),
+      destinationUrlId: input.sourceUnits.find((source) => source.hasDestinationUrl)?.id ?? null,
+    }],
+    links: input.requiredLinkedStableKeys.map((targetStableKey) => ({
+      targetStableKey,
+      relation: "contains",
+    })),
+  };
+}
 
 async function installRealApi(page: Page) {
   await page.addInitScript(() => {
@@ -69,7 +104,12 @@ test.beforeAll(async () => {
     if (sql.startsWith("-- requires: pgvector") || file === "027_wiki_search_v2.sql") continue;
     await database.exec(sql);
   }
+  await database.exec(`
+    create domain vector as text;
+    alter table wiki_page_chunks add column embedding vector null;
+  `);
   const pool = pglitePool(database);
+  workerDatabase = createDmWorkerDbFromPool(pool);
   await database.exec(`
     insert into app_users(id,email,display_name)
     values ('${ids.owner}','libraries-e2e@example.com','라이브러리 소유자');
@@ -117,18 +157,33 @@ test.beforeAll(async () => {
     values ('${ids.hashtag}','${ids.media}',1,now(),now());
     insert into brand_trend_searches(workspace_id,brand_id,hashtag_id,last_searched_at)
     values ('${ids.workspace}','${ids.brand}','${ids.hashtag}',now());
-    insert into brand_avatars(id,workspace_id,brand_id,name,description,created_by_user_id)
-    values ('${ids.avatar}','${ids.workspace}','${ids.brand}','E2E 모델','두 이미지 자산','${ids.owner}');
-    insert into brand_avatar_images(
-      workspace_id,brand_id,avatar_id,position,is_representative,storage_url,storage_path,
-      mime_type,size_bytes,checksum,created_by_user_id
+    insert into reference_upload_sessions(
+      id,nonce,workspace_id,brand_id,storage_path_prefix,file_name,storage_path,
+      expected_mime_type,expected_size_bytes,expected_checksum,expires_at,confirmed_at,created_by_user_id
     ) values
-      ('${ids.workspace}','${ids.brand}','${ids.avatar}',1,true,
+      ('${ids.avatarSessionOne}','avatar-session-one-nonce',
+       '${ids.workspace}','${ids.brand}',
+       'brands/${ids.brand}/asset-library/avatars/${ids.avatar}/${ids.avatarSessionOne}/',
+       'one.webp',
+       'brands/${ids.brand}/asset-library/avatars/${ids.avatar}/${ids.avatarSessionOne}/one.webp',
+       'image/webp',1024,'${"3".repeat(64)}',now()+interval '1 hour',now(),'${ids.owner}'),
+      ('${ids.avatarSessionTwo}','avatar-session-two-nonce',
+       '${ids.workspace}','${ids.brand}',
+       'brands/${ids.brand}/asset-library/avatars/${ids.avatar}/${ids.avatarSessionTwo}/',
+       'two.webp',
+       'brands/${ids.brand}/asset-library/avatars/${ids.avatar}/${ids.avatarSessionTwo}/two.webp',
+       'image/webp',2048,'${"4".repeat(64)}',now()+interval '1 hour',now(),'${ids.owner}');
+    insert into storage_artifacts(
+      workspace_id,brand_id,artifact_type,bucket,path,public_url,mime_type,byte_size,checksum,created_by_user_id
+    ) values
+      ('${ids.workspace}','${ids.brand}','brand_asset','e2e',
+       'brands/${ids.brand}/asset-library/avatars/${ids.avatar}/${ids.avatarSessionOne}/one.webp',
        'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=',
-       'avatars/e2e/one.webp','image/webp',1024,'${"3".repeat(64)}','${ids.owner}'),
-      ('${ids.workspace}','${ids.brand}','${ids.avatar}',2,false,
+       'image/webp',1024,'${"3".repeat(64)}','${ids.owner}'),
+      ('${ids.workspace}','${ids.brand}','brand_asset','e2e',
+       'brands/${ids.brand}/asset-library/avatars/${ids.avatar}/${ids.avatarSessionTwo}/two.webp',
        'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=',
-       'avatars/e2e/two.webp','image/webp',2048,'${"4".repeat(64)}','${ids.owner}');
+       'image/webp',2048,'${"4".repeat(64)}','${ids.owner}');
   `);
   const trends = createInstagramTrendRepository({
     pool,
@@ -204,7 +259,7 @@ test("analysis becomes an approved reusable product with a stable content-select
   await expect(page.locator(".stable-item-id")).toHaveText(stableId!);
 });
 
-test("manual Wiki item reaches active-version UI after refresh/build fixture completion", async ({ page }) => {
+test("manual Wiki item reaches active-version UI through the real Wiki worker", async ({ page }) => {
   await page.goto("/brand-center?tab=wiki");
   await page.getByRole("button", { name: "새 Wiki 항목" }).click();
   await page.getByLabel("Wiki 제목").fill("E2E 배송 안내");
@@ -222,28 +277,79 @@ test("manual Wiki item reaches active-version UI after refresh/build fixture com
   await page.getByRole("button", { name: "활성화" }).click();
   await expect(page.getByText("활성화하고 Wiki 빌드를 요청했습니다.")).toBeVisible();
 
+  while (true) {
+    const source = await runCompiledWikiSourceItemOnce({
+      workerId: "libraries-e2e-source",
+      db: workerDatabase,
+      curatorPromptVersion: "libraries-e2e.v1",
+      embeddingModel: "deterministic-vector",
+      embeddingVersion: "v1",
+      runtimeDirectory: process.cwd(),
+      runCodex: async () => { throw new Error("direct_sources_must_not_call_codex"); },
+    });
+    if (source.status === "idle") break;
+    expect(source.status).toBe("completed");
+  }
+  while (true) {
+    const compilation = await runWikiCompilationItemOnce({
+      workerId: "libraries-e2e-compiler",
+      db: workerDatabase,
+      runtimeDirectory: process.cwd(),
+      timeoutMs: 1_000,
+      runCodex: deterministicWikiCompiler,
+    });
+    if (compilation.status === "idle") break;
+    expect(compilation.status).toBe("completed");
+  }
+  const finalized = await runWikiFinalizeOnce({
+    workerId: "libraries-e2e-finalizer",
+    db: workerDatabase,
+    apiKey: "deterministic",
+    embeddingModel: "deterministic-vector",
+    embeddingVersion: "v1",
+    embed: async () => Array.from({ length: 1536 }, () => 0.01),
+  });
+  expect(finalized.status).toBe("ready");
   const version = await database.query<{ id: string }>(
-    `insert into wiki_versions(workspace_id,brand_id,status,activated_at)
-     values($1,$2,'active',now()) returning id`,
+    "select id from wiki_versions where workspace_id=$1 and brand_id=$2 and status='active'",
     [ids.workspace, ids.brand],
   );
-  await database.query(
-    `insert into wiki_source_units(
-       workspace_id,brand_id,wiki_version_id,source_kind,source_id,unit_type,stable_key,
-       title,content,content_hash,source_quote
-     ) values($1,$2,$3,'faq',$4,'faq','e2e-shipping',$5,$6,md5($6),$6)`,
-    [ids.workspace, ids.brand, version.rows[0].id, itemId, "E2E 배송 안내", "영업일 기준 이틀 안에 시작합니다."],
-  );
-  await database.query(
-    "update wiki_build_requests set status='succeeded',completed_at=now() where workspace_id=$1 and brand_id=$2",
-    [ids.workspace, ids.brand],
-  );
+  expect(version.rows).toHaveLength(1);
   await page.reload();
   await page.getByRole("button", { name: /E2E 배송 안내/ }).click();
   await expect(page.locator(".wiki-build-state")).toContainText(`active · 마지막 성공 ${version.rows[0].id}`);
 });
 
 test("two-image avatar becomes default and archives without deleting its snapshot assets", async ({ page }) => {
+  await page.goto("http://localhost:5273/brand-center?tab=avatars");
+  const registration = await page.evaluate(async (input) => {
+    const response = await fetch(`http://localhost:4000/brands/${input.brandId}/avatars`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        avatarId: input.avatarId,
+        name: "E2E 모델",
+        description: "두 이미지 자산",
+        imageSessionIds: [input.firstSessionId, input.secondSessionId],
+        representativeSessionId: input.secondSessionId,
+      }),
+    });
+    return { status: response.status, body: await response.json() };
+  }, {
+    brandId: ids.brand,
+    avatarId: ids.avatar,
+    firstSessionId: ids.avatarSessionOne,
+    secondSessionId: ids.avatarSessionTwo,
+  });
+  expect(registration.status, JSON.stringify(registration.body)).toBe(201);
+  expect(registration.body).toMatchObject({
+    id: ids.avatar,
+    images: [
+      expect.objectContaining({ representative: false }),
+      expect.objectContaining({ representative: true }),
+    ],
+  });
   await page.goto("/brand-center?tab=avatars");
   const card = page.getByRole("article", { name: "E2E 모델" });
   await expect(card.getByText("이미지 2장")).toBeVisible();
@@ -285,4 +391,37 @@ test("saved trend opens one patterned canonical reference under its stable ID", 
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("첫 문장에 핵심 제시");
   await expect(dialog).toContainText("표현 복제 금지");
+  await dialog.getByRole("button", { name: "닫기" }).click();
+
+  await page.goto("/archive");
+  await expect(page.getByText("저장한 콘텐츠 1개")).toBeVisible();
+  const archived = await page.evaluate(async ({ brandId, referenceId }) => {
+    const response = await fetch(
+      `http://localhost:4000/brands/${brandId}/references/${referenceId}/archive`,
+      { method: "POST", credentials: "include" },
+    );
+    return response.status;
+  }, { brandId: ids.brand, referenceId: stableReferenceId });
+  expect(archived).toBe(204);
+  await page.reload();
+  await expect(page.getByText("저장한 트렌드가 없습니다.")).toBeVisible();
+
+  const resaved = await page.evaluate(async ({ brandId, mediaId }) => {
+    const response = await fetch(
+      `http://localhost:4000/brands/${brandId}/instagram-trends/${mediaId}/save-source`,
+      { method: "POST", credentials: "include" },
+    );
+    return { status: response.status, body: await response.json() };
+  }, { brandId: ids.brand, mediaId: ids.media });
+  expect(resaved).toMatchObject({ status: 200, body: { alreadySaved: false } });
+  await page.reload();
+  await expect(page.getByText("저장한 콘텐츠 1개")).toBeVisible();
+  const canonical = await database.query<{ id: string; count: number }>(
+    `select min(id::text) id,count(*)::int count
+       from reference_items
+      where brand_id=$1 and metadata->>'instagramMediaId'='ig-libraries-e2e'
+      group by brand_id`,
+    [ids.brand],
+  );
+  expect(canonical.rows).toEqual([{ id: stableReferenceId, count: 1 }]);
 });
