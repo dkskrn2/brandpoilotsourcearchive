@@ -43,7 +43,7 @@ export function SourceLibraryPanel() {
                 </li>
               ))}
             </ul>}
-        <button className="button" type="button" disabled>레퍼런스 보관함 준비 중</button>
+        <a className="button" href="/references?view=external-urls">외부 레퍼런스 URL 관리</a>
       </div>
     </section>
   );

@@ -26,6 +26,17 @@ describe("통합형 도움말", () => {
     expect(guideForPath("/ai-content/generation-1")?.id).toBe("ai-content-result");
   });
 
+  it("레퍼런스 view query에 맞는 동적 안내와 외부 URL 제한을 제공한다", () => {
+    const external = guideForPath("/references?view=external-urls");
+    const trends = guideForPath("/references?view=trends");
+
+    expect(external?.id).toBe("references-external-urls");
+    expect(external?.title).toContain("외부 URL");
+    expect(external?.sections.flatMap((section) => section.items).join(" ")).toContain("최대 10개");
+    expect(trends?.id).toBe("references-trends");
+    expect(trends?.summary).toContain("공개 해시태그");
+  });
+
   it("현재 화면 가이드와 OAuth 체크리스트를 서랍에 표시한다", () => {
     render(<MemoryRouter initialEntries={["/channels"]}><HelpProvider><HelpHarness /></HelpProvider></MemoryRouter>);
 

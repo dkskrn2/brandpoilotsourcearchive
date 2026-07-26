@@ -1,5 +1,4 @@
 import {
-  Bookmark,
   CreditCard,
   Headphones,
   LayoutDashboard,
@@ -9,7 +8,7 @@ import {
   Settings2,
   Share2,
   Sparkles,
-  TrendingUp,
+  Library,
   type LucideIcon,
 } from "lucide-react";
 
@@ -36,8 +35,7 @@ export const customerNavigation: CustomerNavigationGroup[] = [
     label: "브랜드",
     items: [
       { label: "브랜드 센터", path: "/brand-center", icon: Settings2 },
-      { label: "트렌드 탐색", path: "/instagram-trends", icon: TrendingUp },
-      { label: "레퍼런스 보관함", path: "/archive", icon: Bookmark },
+      { label: "레퍼런스", path: "/references", icon: Library },
     ],
   },
   {

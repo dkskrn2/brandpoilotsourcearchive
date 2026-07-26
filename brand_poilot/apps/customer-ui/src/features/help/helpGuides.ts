@@ -73,6 +73,18 @@ export const helpGuides: HelpGuide[] = [
     tour: [pageHeaderStep("채널별 생성 결과와 게시 작업을 하나의 목록으로 관리합니다."), { selector: ".queue-filters", title: "게시 상태 선택", description: "준비 중, 검토 필요, 게시 예정, 완료, 문제 중 확인할 상태를 선택합니다." }, { selector: ".publish-management-grid", title: "콘텐츠와 게시 정보", description: "카드별로 결과물, 채널, 게시 일시, 현재 상태와 가능한 작업을 확인합니다." }]
   },
   {
+    id: "references",
+    path: "/references",
+    title: "레퍼런스",
+    summary: "저장한 실제 콘텐츠, 공개 해시태그 트렌드, 외부 URL과 공개 브랜드 출처를 한곳에서 확인합니다.",
+    sections: [{ title: "자료를 저장하고 확인하기", items: [
+      "카드에는 저장된 출처, 저장 시각, 형식, 용도와 실제 snapshot 미리보기만 먼저 표시하고 상세 정보는 항목을 열 때 확인합니다.",
+      "외부 URL은 정보성, 마케팅성 또는 둘 다 용도를 지정하며 활성 항목 기준 최대 10개까지 등록합니다.",
+      "패턴 분석은 저장된 분석이 있을 때만 관찰 사실과 AI 해석을 구분해 표시하고, 아직 생성되지 않은 분석은 사용할 수 없음으로 표시합니다.",
+    ] }],
+    tour: [pageHeaderStep("실제 저장 자료와 공개 Instagram 해시태그 탐색을 보기별로 전환합니다."), { selector: ".reference-view-nav", title: "레퍼런스 보기", description: "저장한 브랜드, 콘텐츠, 트렌드, 외부 URL, 최근 사용과 즐겨찾기 보기를 선택합니다." }, { selector: ".reference-card-grid", title: "저장된 snapshot", description: "실제 저장된 미리보기와 metadata를 확인하고 상세에서 원본 링크와 분석 가능 여부를 확인합니다." }]
+  },
+  {
     id: "sources",
     path: "/sources",
     title: "소스",
@@ -158,5 +170,28 @@ function matchesGuidePath(pattern: string, pathname: string) {
 }
 
 export function guideForPath(pathname: string) {
-  return helpGuides.find((guide) => matchesGuidePath(guide.path, pathname)) ?? null;
+  const [rawPathname, rawSearch = ""] = pathname.split("?", 2);
+  const guide = helpGuides.find((item) => matchesGuidePath(item.path, rawPathname)) ?? null;
+  if (guide?.id !== "references") return guide;
+  const view = new URLSearchParams(rawSearch).get("view") || "all";
+  const labels: Record<string, string> = {
+    all: "전체",
+    "saved-brands": "저장한 브랜드",
+    "saved-content": "저장한 콘텐츠",
+    trends: "트렌드 탐색",
+    "saved-trends": "저장한 트렌드",
+    "external-urls": "외부 URL",
+    recent: "최근 사용",
+    favorites: "즐겨찾기",
+    add: "직접 추가",
+  };
+  const key = labels[view] ? view : "all";
+  return {
+    ...guide,
+    id: `references-${key}`,
+    title: `레퍼런스 · ${labels[key]}`,
+    summary: key === "trends"
+      ? "Meta 연결을 사용해 공개 해시태그 결과를 확인하고 실제 콘텐츠만 레퍼런스로 저장합니다."
+      : guide.summary,
+  };
 }

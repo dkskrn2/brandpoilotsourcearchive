@@ -8,6 +8,7 @@ import "./styles/prototype.css";
 import "./styles/shell.css";
 import "./styles/dashboard.css";
 import "./styles/brand-center.css";
+import "./styles/references.css";
 
 const canonicalUrl = canonicalLocalDevUrl(window.location);
 

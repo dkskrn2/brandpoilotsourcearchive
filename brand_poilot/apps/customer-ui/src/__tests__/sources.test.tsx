@@ -123,6 +123,18 @@ async function renderSourcesPage(apiOverrides: Partial<Record<string, ReturnType
 }
 
 describe("SourcesPage", () => {
+  it("links the Brand Center source panel to the canonical external URL view", async () => {
+    await renderSourcesPage();
+    cleanup();
+    const { SourceLibraryPanel } = await import("../components/brand-center/SourceLibraryPanel");
+    render(<SourceLibraryPanel />);
+
+    expect(await screen.findByRole("link", { name: "외부 레퍼런스 URL 관리" })).toHaveAttribute(
+      "href",
+      "/references?view=external-urls",
+    );
+  });
+
   it("shows a source list skeleton while initial data is loading", async () => {
     const pending = new Promise<never>(() => undefined);
     await renderSourcesPage({

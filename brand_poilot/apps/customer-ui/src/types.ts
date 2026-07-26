@@ -628,6 +628,49 @@ export interface SourceCreateResult {
   initialCrawl: SourceCrawlRun;
 }
 
+export type ReferenceContentPurpose = "informational" | "marketing" | "both";
+
+export interface ReferenceItem {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  kind: "saved_brand" | "saved_content" | "trend" | "external_url" | "upload" | "owned_content" | string;
+  contentPurpose: ReferenceContentPurpose;
+  origin: string;
+  title: string;
+  previewUrl: string | null;
+  sourceUrl: string | null;
+  format: string | null;
+  metadata: Record<string, unknown>;
+  favorite: boolean;
+  archivedAt: string | null;
+  referenceBrandId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReferencePattern {
+  observations: string[];
+  interpretation: string;
+  applicationIdeas: string[];
+  doNotCopy: string[];
+  confidence: number;
+  analysisVersion: string;
+  updatedAt: string;
+}
+
+export interface ReferenceBrand {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  platform: string;
+  handle: string;
+  displayName: string;
+  publicSourceUrl: string;
+  profileSnapshot: Record<string, unknown>;
+  previewUrl: string | null;
+}
+
 export interface PublishSlot {
   id: string;
   channel: ChannelType;

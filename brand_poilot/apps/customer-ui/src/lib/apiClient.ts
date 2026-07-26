@@ -34,6 +34,10 @@ import type {
   PublishArtifact,
   PublishSlot,
   PublishResult,
+  ReferenceBrand,
+  ReferenceContentPurpose,
+  ReferenceItem,
+  ReferencePattern,
   SourceSnapshot,
   SourceCrawlRun,
   SourceCreateResult,
@@ -146,7 +150,7 @@ async function request<T>(fetcher: typeof fetch, url: string, init: RequestInit)
     }
     throw new ApiRequestError({ status: response.status, errorCode, requestId, deliveryStatus });
   }
-  const payload = await response.json() as T;
+  const payload = response.status === 204 ? undefined as T : await response.json() as T;
   if (init.method !== "GET" && typeof window !== "undefined") {
     window.dispatchEvent(new Event(BRAND_STATUS_CHANGED_EVENT));
   }
@@ -343,6 +347,76 @@ export function apiClient(options: ApiClientOptions = {}) {
     },
     listSourceCrawlRuns(brandId: string) {
       return request<SourceCrawlRun[]>(fetcher, `${baseUrl}/brands/${brandId}/source-crawl-runs`, { method: "GET" });
+    },
+    listReferences(
+      brandId: string,
+      filters: {
+        kind?: string;
+        contentFamily?: string;
+        strategy?: string;
+        format?: string;
+        origin?: string;
+        favorite?: boolean;
+        recent?: number;
+      } = {},
+    ) {
+      const query = new URLSearchParams();
+      for (const [key, value] of Object.entries(filters)) {
+        if (value !== undefined && value !== "") query.set(key, String(value));
+      }
+      const suffix = query.size ? `?${query.toString()}` : "";
+      return request<ReferenceItem[]>(fetcher, `${baseUrl}/brands/${brandId}/references${suffix}`, { method: "GET" });
+    },
+    addReferenceUrl(
+      brandId: string,
+      payload: { url: string; title: string; contentPurpose: ReferenceContentPurpose },
+    ) {
+      return request<ReferenceItem>(fetcher, `${baseUrl}/brands/${brandId}/references/url`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    },
+    setReferenceFavorite(brandId: string, referenceId: string, favorite: boolean) {
+      return request<ReferenceItem>(fetcher, `${baseUrl}/brands/${brandId}/references/${referenceId}/favorite`, {
+        method: "POST",
+        body: JSON.stringify({ favorite }),
+      });
+    },
+    archiveReference(brandId: string, referenceId: string) {
+      return request<void>(fetcher, `${baseUrl}/brands/${brandId}/references/${referenceId}/archive`, {
+        method: "POST",
+      });
+    },
+    getReferencePattern(brandId: string, referenceId: string) {
+      return request<ReferencePattern>(fetcher, `${baseUrl}/brands/${brandId}/references/${referenceId}/pattern`, {
+        method: "GET",
+      });
+    },
+    listReferenceBrands(brandId: string) {
+      return request<ReferenceBrand[]>(fetcher, `${baseUrl}/brands/${brandId}/reference-brands`, { method: "GET" });
+    },
+    createReferenceBrand(
+      brandId: string,
+      payload: { platform: string; handle: string; publicSourceUrl: string },
+    ) {
+      return request<ReferenceBrand>(fetcher, `${baseUrl}/brands/${brandId}/reference-brands`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    },
+    createReferenceBrandFromTrend(brandId: string, mediaId: string) {
+      return request<ReferenceBrand>(
+        fetcher,
+        `${baseUrl}/brands/${brandId}/reference-brands/from-trend-media/${mediaId}`,
+        { method: "POST" },
+      );
+    },
+    listReferenceBrandItems(brandId: string, referenceBrandId: string) {
+      return request<ReferenceItem[]>(
+        fetcher,
+        `${baseUrl}/brands/${brandId}/reference-brands/${referenceBrandId}/items`,
+        { method: "GET" },
+      );
     },
     createSource(brandId: string, payload: { sourceType: SourceUrl["sourceType"]; url: string }) {
       return request<SourceCreateResult>(fetcher, `${baseUrl}/brands/${brandId}/sources`, {

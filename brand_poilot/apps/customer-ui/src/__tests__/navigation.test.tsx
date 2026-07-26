@@ -127,8 +127,9 @@ describe("AppShell navigation", () => {
     expect(screen.queryByRole("link", { name: /콘텐츠 검토/ })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /게시 관리/ })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /^원본 자료$/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /레퍼런스 보관함/ })).toHaveAttribute("href", "/archive");
-    expect(screen.getByRole("link", { name: /트렌드 탐색/ })).toHaveAttribute("href", "/instagram-trends");
+    expect(screen.getByRole("link", { name: "레퍼런스" })).toHaveAttribute("href", "/references");
+    expect(screen.queryByRole("link", { name: /레퍼런스 보관함/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /트렌드 탐색/ })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /^채널$/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "브랜드 센터" })).toHaveAttribute("href", "/brand-center");
     expect(screen.getByRole("link", { name: "결제 및 구독" })).toHaveAttribute(
@@ -146,7 +147,7 @@ describe("AppShell navigation", () => {
     const settingsSupport = screen.getByRole("region", { name: "설정·지원" });
     expect(within(overview).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual(["대시보드"]);
     expect(within(brand).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual([
-      "브랜드 센터", "트렌드 탐색", "레퍼런스 보관함"
+      "브랜드 센터", "레퍼런스"
     ]);
     expect(within(contentOperations).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual([
       "콘텐츠 생성", "게시 관리"
@@ -216,6 +217,7 @@ describe("AppShell navigation", () => {
     expect(appRoute?.children?.find((route) => route.path === "ai-content")).toBeTruthy();
     expect(appRoute?.children?.find((route) => route.path === "ai-content/new")).toBeTruthy();
     expect(appRoute?.children?.find((route) => route.path === "ai-content/:generationId")).toBeTruthy();
+    expect(appRoute?.children?.find((route) => route.path === "references")).toBeTruthy();
     expect(appRoute?.children?.find((route) => route.path === "archive")).toBeTruthy();
     expect(appRoute?.children?.find((route) => route.path === "admin/channels")).toBeFalsy();
   });

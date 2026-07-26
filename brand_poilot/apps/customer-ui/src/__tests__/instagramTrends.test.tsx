@@ -92,11 +92,16 @@ async function renderTrendPage(overrides: Partial<ApiMock> = {}) {
       },
       alreadySaved: false
     })),
+    createReferenceBrandFromTrend: vi.fn(async () => ({
+      id: "reference-brand-1",
+      handle: "creator1",
+      displayName: "creator1",
+    })),
     ...overrides
   };
   vi.doMock("../lib/apiClient", () => ({ DEMO_BRAND_ID: "brand-1", api }));
-  const { InstagramTrendsPage } = await import("../pages/InstagramTrendsPage");
-  render(<InstagramTrendsPage />);
+  const { InstagramTrendExplorerPanel } = await import("../components/references/InstagramTrendExplorerPanel");
+  render(<InstagramTrendExplorerPanel />);
   return api;
 }
 
@@ -108,7 +113,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("InstagramTrendsPage", () => {
+describe("InstagramTrendExplorerPanel", () => {
   it("shows a page skeleton while channel and trend connection state is loading", async () => {
     const pending = new Promise<never>(() => undefined);
     await renderTrendPage({
@@ -513,6 +518,22 @@ describe("InstagramTrendsPage", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "참고 소스로 저장" }));
     expect(await within(dialog).findByRole("button", { name: "저장됨" })).toBeDisabled();
     expect(api.saveInstagramTrendSource).toHaveBeenCalledWith("brand-1", "media-1");
+  });
+
+  it("saves an actual trend author as a public reference brand", async () => {
+    const item = media(1);
+    const api = await renderTrendPage({
+      getInstagramTrends: vi.fn(async () => page([item])),
+      searchInstagramTrends: vi.fn(async () => page([item])),
+    });
+    await userEvent.type(await screen.findByRole("textbox", { name: "해시태그" }), "여행콘텐츠");
+    await userEvent.click(screen.getByRole("button", { name: "검색" }));
+    await userEvent.click(await screen.findByRole("button", { name: "상세 보기 @creator1" }));
+
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "작성자 저장" }));
+
+    expect(api.createReferenceBrandFromTrend).toHaveBeenCalledWith("brand-1", "media-1");
+    expect(await within(screen.getByRole("dialog")).findByRole("button", { name: "작성자 저장됨" })).toBeDisabled();
   });
 
   it("does not present a fabricated author when Meta omits the username", async () => {
