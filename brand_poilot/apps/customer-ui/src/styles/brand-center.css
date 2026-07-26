@@ -256,6 +256,196 @@
   border-radius: 12px;
 }
 
+.library-split {
+  display: grid;
+  grid-template-columns: minmax(260px, .8fr) minmax(0, 1.6fr);
+  min-height: 560px;
+  overflow: hidden;
+  border: 1px solid var(--bp-color-line);
+  border-radius: 18px;
+  background: var(--bp-color-paper);
+}
+
+.library-list {
+  padding: 20px;
+  border-right: 1px solid var(--bp-color-line);
+  background: color-mix(in srgb, var(--bp-color-paper) 94%, var(--bp-color-primary));
+}
+
+.library-list > header,
+.library-editor-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.library-list h2,
+.library-editor h2 {
+  margin: 0;
+}
+
+.library-list p,
+.library-editor p {
+  color: var(--bp-color-muted);
+}
+
+.library-list ul {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.library-list li button {
+  display: grid;
+  width: 100%;
+  gap: 5px;
+  padding: 14px;
+  border: 1px solid var(--bp-color-line);
+  border-radius: 12px;
+  background: var(--bp-color-paper);
+  color: var(--bp-color-ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+.library-list li button span {
+  color: var(--bp-color-muted);
+  font-size: 12px;
+}
+
+.library-list li button.is-selected {
+  border-color: var(--bp-color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bp-color-primary) 12%, transparent);
+}
+
+.library-editor {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  min-width: 0;
+  padding: 28px;
+}
+
+.library-editor-empty {
+  align-content: center;
+  text-align: center;
+}
+
+.stable-item-id {
+  display: block;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+  color: var(--bp-color-muted);
+  font-size: 12px;
+}
+
+.library-usage,
+.wiki-issue-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.library-usage span,
+.wiki-build-state,
+.wiki-issue-meta > * {
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bp-color-human-review) 12%, transparent);
+  color: var(--bp-color-human-review);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.library-usage span.is-ready,
+.wiki-build-state.is-active {
+  background: color-mix(in srgb, var(--bp-color-primary) 12%, transparent);
+  color: var(--bp-color-primary);
+}
+
+.wiki-build-state {
+  display: inline-block;
+  margin-top: 10px;
+}
+
+.wiki-build-state.is-failed {
+  background: color-mix(in srgb, var(--bp-color-danger) 12%, transparent);
+  color: var(--bp-color-danger);
+}
+
+.library-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.library-form label,
+.library-analysis-actions label {
+  display: grid;
+  gap: 8px;
+  color: var(--bp-color-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.library-form textarea {
+  min-height: 100px;
+}
+
+.library-form .is-wide {
+  grid-column: 1 / -1;
+}
+
+.library-analysis-actions {
+  display: grid;
+  gap: 12px;
+}
+
+.library-analysis-actions .button {
+  justify-self: start;
+}
+
+.library-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.library-filter-bar button {
+  padding: 9px 13px;
+  border: 1px solid var(--bp-color-line);
+  border-radius: 999px;
+  background: var(--bp-color-paper);
+  color: var(--bp-color-muted);
+  cursor: pointer;
+}
+
+.library-filter-bar button.is-active {
+  border-color: var(--bp-color-primary);
+  color: var(--bp-color-primary);
+  font-weight: 700;
+}
+
+.wiki-library-workspace {
+  display: grid;
+  gap: 20px;
+}
+
+.wiki-issue-detail:focus {
+  outline: 3px solid color-mix(in srgb, var(--bp-color-primary) 40%, transparent);
+  outline-offset: -3px;
+}
+
+.wiki-import-preserved {
+  padding: 20px;
+  border: 1px solid var(--bp-color-line);
+  border-radius: 18px;
+  background: var(--bp-color-paper);
+}
+
 @media (max-width: 800px) {
   .brand-center-header {
     flex-direction: column;
@@ -275,7 +465,17 @@
   }
 
   .brand-core-form,
-  .brand-rules-form {
+  .brand-rules-form,
+  .library-form {
     grid-template-columns: 1fr;
+  }
+
+  .library-split {
+    grid-template-columns: 1fr;
+  }
+
+  .library-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--bp-color-line);
   }
 }

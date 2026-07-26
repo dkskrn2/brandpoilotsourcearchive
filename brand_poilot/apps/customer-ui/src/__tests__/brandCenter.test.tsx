@@ -59,7 +59,8 @@ async function renderPage() {
   vi.doMock("../features/brand-center/brandCenterGateway", () => ({
     brandCenterGateway: gateway,
   }));
-  vi.doMock("../lib/apiClient", () => ({
+  vi.doMock("../lib/apiClient", async (importOriginal) => ({
+    ...await importOriginal<typeof import("../lib/apiClient")>(),
     DEMO_BRAND_ID: "brand-1",
     api: { listSources: vi.fn(async () => []) },
   }));
@@ -73,12 +74,12 @@ async function renderPage() {
 }
 
 describe("BrandCenterPage", () => {
-  it("shows the approved core separately from future unavailable libraries", async () => {
+  it("shows the approved core and enables the product and Wiki libraries", async () => {
     await renderPage();
     expect(await screen.findByRole("heading", { name: "브랜드 센터" })).toBeInTheDocument();
     expect(screen.getByDisplayValue("브랜드 운영을 단순하게")).toBeDisabled();
-    expect(screen.getByRole("button", { name: "제품·서비스 준비 중" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Wiki 준비 중" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "제품·서비스" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Wiki" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "모델·아바타 준비 중" })).toBeDisabled();
   });
 

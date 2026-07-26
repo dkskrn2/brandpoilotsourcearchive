@@ -6,7 +6,9 @@ import { BrandCenterHeader } from "../components/brand-center/BrandCenterHeader"
 import { BrandCoreReviewPanel } from "../components/brand-center/BrandCoreReviewPanel";
 import { BrandReadinessJourney } from "../components/brand-center/BrandReadinessJourney";
 import { BrandRulesPanel } from "../components/brand-center/BrandRulesPanel";
+import { ProductServiceLibraryPanel } from "../components/brand-center/ProductServiceLibraryPanel";
 import { SourceLibraryPanel } from "../components/brand-center/SourceLibraryPanel";
+import { WikiLibraryPanel } from "../components/brand-center/WikiLibraryPanel";
 import { brandCenterGateway } from "../features/brand-center/brandCenterGateway";
 import type {
   BrandCenterSummary,
@@ -19,6 +21,7 @@ import type {
 import { DEMO_BRAND_ID } from "../lib/apiClient";
 
 type UnderstandingSection = "sources" | "analysis" | "core" | "rules" | "versions";
+type BrandCenterTab = "understanding" | "products" | "wiki";
 
 const sections: Array<{ id: UnderstandingSection; label: string }> = [
   { id: "sources", label: "원본 자료" },
@@ -52,6 +55,10 @@ function readiness(summary: BrandCenterSummary | null) {
 export function BrandCenterPage() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
+  const requestedTab = params.get("tab");
+  const tab: BrandCenterTab = requestedTab === "products" || requestedTab === "wiki"
+    ? requestedTab
+    : "understanding";
   const requestedSection = params.get("section");
   const section = sections.some((item) => item.id === requestedSection)
     ? requestedSection as UnderstandingSection
@@ -92,10 +99,10 @@ export function BrandCenterPage() {
   }
 
   useEffect(() => {
-    if (params.get("tab") !== "understanding" || !requestedSection) {
+    if (!["understanding", "products", "wiki"].includes(requestedTab ?? "") || (tab === "understanding" && !requestedSection)) {
       const next = new URLSearchParams(params);
-      next.set("tab", "understanding");
-      next.set("section", section);
+      next.set("tab", tab);
+      if (tab === "understanding") next.set("section", section);
       setParams(next, { replace: true });
     }
     void load();
@@ -118,6 +125,20 @@ export function BrandCenterPage() {
     const next = new URLSearchParams(params);
     next.set("tab", "understanding");
     next.set("section", nextSection);
+    setParams(next);
+  }
+
+  function selectTab(nextTab: BrandCenterTab) {
+    if (tab === "understanding" && dirty && !window.confirm("저장하지 않은 변경이 있습니다. 이동할까요?")) return;
+    const next = new URLSearchParams(params);
+    next.set("tab", nextTab);
+    if (nextTab === "understanding") {
+      next.set("section", section);
+    } else {
+      next.delete("section");
+    }
+    if (nextTab !== "wiki") next.delete("issue");
+    if (nextTab !== "products") next.delete("item");
     setParams(next);
   }
 
@@ -249,12 +270,12 @@ export function BrandCenterPage() {
       {error && <Alert title="작업을 완료하지 못했습니다" variant="bad">{error}<button className="button" type="button" onClick={load}>다시 시도</button></Alert>}
 
       <nav className="brand-center-tabs" aria-label="브랜드 센터 영역">
-        <button className="is-active" type="button">브랜드 이해</button>
-        <button type="button" disabled aria-label="제품·서비스 준비 중">제품·서비스 <small>준비 중</small></button>
-        <button type="button" disabled aria-label="Wiki 준비 중">Wiki <small>준비 중</small></button>
+        <button className={tab === "understanding" ? "is-active" : ""} type="button" onClick={() => selectTab("understanding")}>브랜드 이해</button>
+        <button className={tab === "products" ? "is-active" : ""} type="button" onClick={() => selectTab("products")}>제품·서비스</button>
+        <button className={tab === "wiki" ? "is-active" : ""} type="button" onClick={() => selectTab("wiki")}>Wiki</button>
         <button type="button" disabled aria-label="모델·아바타 준비 중">모델·아바타 <small>준비 중</small></button>
       </nav>
-      <nav className="brand-center-subnav" aria-label="브랜드 이해 세부 영역">
+      {tab === "understanding" ? <nav className="brand-center-subnav" aria-label="브랜드 이해 세부 영역">
         {sections.map((item) => (
           <button
             className={section === item.id ? "is-active" : ""}
@@ -265,19 +286,19 @@ export function BrandCenterPage() {
             {item.label}
           </button>
         ))}
-      </nav>
+      </nav> : null}
 
-      {section === "sources" && (
+      {tab === "understanding" && section === "sources" && (
         <SourceLibraryPanel />
       )}
-      {section === "analysis" && (
+      {tab === "understanding" && section === "analysis" && (
         <section className="panel"><div className="panel-body brand-center-empty">
           <h2>AI 분석</h2>
           <p>재분석 결과는 새 초안으로만 저장되며 현재 승인된 Brand Core를 덮어쓰지 않습니다.</p>
           <Link className="button primary" to="/onboarding/brand-intelligence?from=brand-center">AI 분석 열기</Link>
         </div></section>
       )}
-      {section === "core" && visibleVersion && (
+      {tab === "understanding" && section === "core" && visibleVersion && (
         <BrandCoreReviewPanel
           version={workspace?.draft && draftCore ? { ...workspace.draft, core: draftCore } : visibleVersion}
           saving={saving}
@@ -286,15 +307,15 @@ export function BrandCenterPage() {
           onApprove={approveCore}
         />
       )}
-      {section === "core" && !visibleVersion && (
+      {tab === "understanding" && section === "core" && !visibleVersion && (
         <section className="panel"><div className="panel-body brand-center-empty">
           <h2>Brand Core가 없습니다</h2>
           <p>원본 자료를 분석하고 AI 제안값을 검토하면 첫 Brand Core를 만들 수 있습니다.</p>
           <Link className="button primary" to="/onboarding/brand-intelligence">브랜드 분석 시작</Link>
         </div></section>
       )}
-      {section === "rules" && <BrandRulesPanel rules={rules} saving={saving} onChange={setRules} onSave={saveRules} onApprove={approveRules} />}
-      {section === "versions" && (
+      {tab === "understanding" && section === "rules" && <BrandRulesPanel rules={rules} saving={saving} onChange={setRules} onSave={saveRules} onApprove={approveRules} />}
+      {tab === "understanding" && section === "versions" && (
         <section className="panel"><div className="panel-header"><h2>버전 이력</h2></div><div className="panel-body">
           <ol className="brand-version-list">
             {(workspace?.versions ?? []).map((item: BrandCoreVersion) => (
@@ -303,6 +324,16 @@ export function BrandCenterPage() {
           </ol>
         </div></section>
       )}
+      {tab === "products" ? <ProductServiceLibraryPanel brandId={DEMO_BRAND_ID} initialItemId={params.get("item")} /> : null}
+      {tab === "wiki" ? <WikiLibraryPanel
+        brandId={DEMO_BRAND_ID}
+        initialIssueId={params.get("issue")}
+        onCloseIssue={() => {
+          const next = new URLSearchParams(params);
+          next.delete("issue");
+          setParams(next, { replace: true });
+        }}
+      /> : null}
     </section>
   );
 }
