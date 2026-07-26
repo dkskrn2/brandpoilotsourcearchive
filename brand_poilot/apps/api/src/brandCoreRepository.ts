@@ -76,6 +76,7 @@ export interface BrandCoreRepository {
     scope: BrandScope & { actorUserId: string; versionId: string },
   ): Promise<BrandCoreVersion>;
   getActiveRules(scope: BrandScope): Promise<BrandRuleSet | null>;
+  listRuleSets(scope: BrandScope): Promise<BrandRuleSet[]>;
   saveRuleDraft(
     scope: BrandScope & { actorUserId: string },
     input: BrandRulesV1,
@@ -386,6 +387,17 @@ export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
         [scope.workspaceId, scope.brandId],
       );
       return result.rowCount ? mapRule(result.rows[0] as Record<string, unknown>) : null;
+    },
+
+    async listRuleSets(scope) {
+      const result = await pool.query(
+        `select ${ruleColumns}
+           from brand_rule_sets
+          where workspace_id = $1 and brand_id = $2
+          order by version desc`,
+        [scope.workspaceId, scope.brandId],
+      );
+      return result.rows.map((row) => mapRule(row as Record<string, unknown>));
     },
 
     async saveRuleDraft(scope, input) {

@@ -62,6 +62,7 @@ import {
   verifyBrandAnalysisUpload,
 } from "./brandAnalysisUpload.js";
 import { claimAndPrepareBrandAnalysis, type BrandIntelligenceRuntime } from "./brandIntelligenceHttp.js";
+import { registerBrandCenterRoutes } from "./brandCenterHttp.js";
 import type { ApiHttpRuntimePolicy } from "./runtimeConfig.js";
 
 export type { ApiHttpRuntimePolicy } from "./runtimeConfig.js";
@@ -453,6 +454,30 @@ export function createServer(
     }
     if (message === "publishing_disabled") {
       reply.code(503).send({ error: "publishing_disabled" });
+      return;
+    }
+    if (message.startsWith("brand_core_validation_failed:")) {
+      reply.code(400).send({
+        error: "brand_core_validation_failed",
+        field: message.slice("brand_core_validation_failed:".length),
+      });
+      return;
+    }
+    if (message === "brand_core_approval_forbidden" || message === "brand_core_access_forbidden") {
+      reply.code(403).send({ error: message });
+      return;
+    }
+    if ([
+      "brand_core_not_draft",
+      "brand_core_version_conflict",
+      "brand_rules_not_draft",
+      "brand_rules_version_conflict",
+    ].includes(message)) {
+      reply.code(409).send({ error: message });
+      return;
+    }
+    if (message === "brand_center_not_configured") {
+      reply.code(503).send({ error: message });
       return;
     }
     if (message.endsWith("_not_found")) {
@@ -1548,6 +1573,13 @@ export function createServer(
       return analysis;
     },
   );
+
+  registerBrandCenterRoutes(app, {
+    repository,
+    brandIntelligenceRepository,
+    scope: aiContentScope,
+    actorUserId: aiContentActorUserId,
+  });
 
   app.get<{ Params: { brandId: string } }>(
     "/brands/:brandId/brand-intelligence",
