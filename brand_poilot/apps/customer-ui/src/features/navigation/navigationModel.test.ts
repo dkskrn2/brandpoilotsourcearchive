@@ -18,8 +18,7 @@ describe("D hybrid customer navigation model", () => {
     const paths = customerNavigation.flatMap((group) => group.items.map((item) => item.path));
     expect(paths).toEqual([
       "/dashboard",
-      "/brand-settings",
-      "/sources",
+      "/brand-center",
       "/instagram-trends",
       "/archive",
       "/ai-content",
@@ -29,7 +28,7 @@ describe("D hybrid customer navigation model", () => {
       "https://www.danbammsg.co.kr/product/pricing",
       "/support"
     ]);
-    expect(paths).not.toContain("/brand-center");
+    expect(paths).toContain("/brand-center");
     expect(paths).not.toContain("/references");
     expect(paths).not.toContain("/performance");
     expect(paths).not.toContain("/ai-content/library");
@@ -38,7 +37,7 @@ describe("D hybrid customer navigation model", () => {
   it("keeps the incomplete-brand recovery destination separate", () => {
     expect(onboardingNavigationItem).toMatchObject({
       label: "브랜드 분석",
-      path: "/onboarding/brand-intelligence"
+      path: "/brand-center?tab=understanding&section=sources"
     });
   });
 

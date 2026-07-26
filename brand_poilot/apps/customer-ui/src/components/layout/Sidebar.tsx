@@ -24,7 +24,7 @@ function badgeForPath(path: string, status: ReturnType<typeof useBrandStatus>["s
   const publishQueueCount = status.navigation.publishIssues;
   const publishQueueVariant: BadgeVariant = "bad";
   const counts: Record<string, { value: number; variant: BadgeVariant }> = {
-    "/onboarding/brand-intelligence": { value: status.navigation.onboardingRemaining, variant: "warn" },
+    [onboardingNavigationItem.path]: { value: status.navigation.onboardingRemaining, variant: "warn" },
     "/publish-queue": { value: publishQueueCount, variant: publishQueueVariant },
     "/channels": { value: status.navigation.channelIssues, variant: "bad" }
   };
@@ -62,7 +62,7 @@ export function Sidebar({
     .map((group) => ({
       ...group,
       items: group.items.filter((item) => {
-        if (item.path !== "/onboarding/brand-intelligence") return true;
+        if (item.path !== onboardingNavigationItem.path) return true;
         if (!status) return true;
         return status.navigation.onboardingRemaining > 0 || status.onboarding.remainingCount > 0;
       })
@@ -123,7 +123,7 @@ export function Sidebar({
                     );
                   }
                   return (
-                    <NavLink key={item.path} to={item.path} end={item.path === "/onboarding/brand-intelligence"} onClick={onNavigate} title={collapsed ? item.label : undefined} aria-label={collapsed ? item.label : undefined}>
+                    <NavLink key={item.path} to={item.path} end={item.path === onboardingNavigationItem.path} onClick={onNavigate} title={collapsed ? item.label : undefined} aria-label={collapsed ? item.label : undefined}>
                       <Icon size={18} aria-hidden="true" data-nav-icon />
                       <span className="nav-item-label">{item.label}</span>
                       {badge ? <Badge variant={badge.variant}>{badge.badge}</Badge> : null}

@@ -85,7 +85,7 @@ export function createDashboardViewModel({
       count: brandStatus.navigation.onboardingRemaining,
       title: "브랜드 정보 검토",
       description: "AI가 정리한 브랜드 정보를 확인해 주세요.",
-      href: "/brand-settings",
+      href: "/brand-center?tab=understanding&section=core",
       actionLabel: "브랜드 검토",
     });
   }

@@ -7,6 +7,7 @@ import "./styles/tokens.css";
 import "./styles/prototype.css";
 import "./styles/shell.css";
 import "./styles/dashboard.css";
+import "./styles/brand-center.css";
 
 const canonicalUrl = canonicalLocalDevUrl(window.location);
 

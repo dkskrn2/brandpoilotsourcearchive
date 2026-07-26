@@ -1,7 +1,6 @@
 import {
   Bookmark,
   CreditCard,
-  Database,
   Headphones,
   LayoutDashboard,
   MessageCircleReply,
@@ -36,8 +35,7 @@ export const customerNavigation: CustomerNavigationGroup[] = [
     id: "brand",
     label: "브랜드",
     items: [
-      { label: "브랜드 센터", path: "/brand-settings", icon: Settings2 },
-      { label: "원본 자료", path: "/sources", icon: Database },
+      { label: "브랜드 센터", path: "/brand-center", icon: Settings2 },
       { label: "트렌드 탐색", path: "/instagram-trends", icon: TrendingUp },
       { label: "레퍼런스 보관함", path: "/archive", icon: Bookmark },
     ],
@@ -78,7 +76,7 @@ export const customerNavigation: CustomerNavigationGroup[] = [
 
 export const onboardingNavigationItem: CustomerNavigationItem = {
   label: "브랜드 분석",
-  path: "/onboarding/brand-intelligence",
+  path: "/brand-center?tab=understanding&section=sources",
   icon: ScanSearch,
 };
 

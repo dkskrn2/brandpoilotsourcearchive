@@ -6,6 +6,7 @@ import { EmptyState } from "../components/ui/EmptyState";
 import { FileUploadButton } from "../components/ui/FileUploadButton";
 import { ListSkeleton } from "../components/ui/LoadingState";
 import { Tabs } from "../components/ui/Tabs";
+import { useSourceWorkspace } from "../features/sources/useSourceWorkspace";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
 import type { BadgeVariant, SourceCrawlRun, SourceSnapshot, SourceUrl, TopicRow, TopicUploadSummary } from "../types";
 
@@ -300,9 +301,13 @@ function TopicQueueTable({ rows }: { rows: TopicRow[] }) {
 }
 
 export function SourcesPage() {
-  const [sources, setSources] = useState<SourceUrl[]>([]);
-  const [sourceSnapshots, setSourceSnapshots] = useState<SourceSnapshot[]>([]);
-  const [sourceCrawlRuns, setSourceCrawlRuns] = useState<SourceCrawlRun[]>([]);
+  const sourceWorkspace = useSourceWorkspace();
+  const {
+    sources,
+    snapshots: sourceSnapshots,
+    crawlRuns: sourceCrawlRuns,
+    loading: initialLoading,
+  } = sourceWorkspace;
   const [topicRows, setTopicRows] = useState<TopicRow[]>([]);
   const [referenceUrl, setReferenceUrl] = useState("");
   const [csvText, setCsvText] = useState("");
@@ -311,22 +316,6 @@ export function SourcesPage() {
   const [uploadSummary, setUploadSummary] = useState<TopicUploadSummary | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [editingSource, setEditingSource] = useState<EditingSource | null>(null);
-  const [initialLoading, setInitialLoading] = useState(true);
-
-  async function refreshSources() {
-    const apiSources = await api.listSources(DEMO_BRAND_ID);
-    setSources(apiSources);
-  }
-
-  async function refreshSourceSnapshots() {
-    const snapshots = await api.listSourceSnapshots(DEMO_BRAND_ID);
-    setSourceSnapshots(snapshots);
-  }
-
-  async function refreshSourceCrawlRuns() {
-    const runs = await api.listSourceCrawlRuns(DEMO_BRAND_ID);
-    setSourceCrawlRuns(runs);
-  }
 
   async function refreshTopicRows() {
     const rows = await api.listTopicRows(DEMO_BRAND_ID);
@@ -335,33 +324,6 @@ export function SourcesPage() {
 
   useEffect(() => {
     let ignore = false;
-    const sourcesRequest = api.listSources(DEMO_BRAND_ID)
-      .then((apiSources) => {
-        if (!ignore) {
-          setSources(apiSources);
-          setNotice(null);
-        }
-      })
-      .catch(() => {
-        if (!ignore) {
-          setSources([]);
-          setNotice("API 서버가 응답하지 않아 URL 목록을 불러오지 못했습니다.");
-        }
-      });
-    const snapshotsRequest = api.listSourceSnapshots(DEMO_BRAND_ID)
-      .then((snapshots) => {
-        if (!ignore) setSourceSnapshots(snapshots);
-      })
-      .catch(() => {
-        if (!ignore) setSourceSnapshots([]);
-      });
-    const crawlRunsRequest = api.listSourceCrawlRuns(DEMO_BRAND_ID)
-      .then((runs) => {
-        if (!ignore) setSourceCrawlRuns(runs);
-      })
-      .catch(() => {
-        if (!ignore) setSourceCrawlRuns([]);
-      });
     const topicRowsRequest = api.listTopicRows(DEMO_BRAND_ID)
       .then((rows) => {
         if (!ignore) setTopicRows(rows);
@@ -369,9 +331,7 @@ export function SourcesPage() {
       .catch(() => {
         if (!ignore) setTopicRows([]);
       });
-    void Promise.allSettled([sourcesRequest, snapshotsRequest, crawlRunsRequest, topicRowsRequest]).then(() => {
-      if (!ignore) setInitialLoading(false);
-    });
+    void topicRowsRequest;
     return () => {
       ignore = true;
     };
@@ -400,17 +360,7 @@ export function SourcesPage() {
       setNotice(referenceSourceLimitMessage);
       return;
     }
-    try {
-      const created = await api.createSource(DEMO_BRAND_ID, { sourceType, url: normalizedUrl });
-      setSources((currentSources) => [created.source, ...currentSources]);
-      setSourceCrawlRuns((currentRuns) => [created.initialCrawl, ...currentRuns]);
-      setNotice(created.initialCrawl.status === "succeeded"
-        ? `초기 크롤링 완료: 새 콘텐츠 ${created.initialCrawl.created}개`
-        : `URL은 저장했지만 초기 크롤링에 실패했습니다. 재시도 예정입니다.`);
-    } catch (error) {
-      setNotice(sourceSaveErrorMessage(error));
-      return;
-    }
+    if (!(await sourceWorkspace.add(sourceType, normalizedUrl))) return;
     if (sourceType === "reference") setReferenceUrl("");
   }
 
@@ -425,50 +375,28 @@ export function SourcesPage() {
       setNotice(referenceSourceLimitMessage);
       return;
     }
-    try {
-      const updated = await api.updateSource(editingSource.id, {
-        sourceType: editingSource.sourceType,
-        url: editingSource.url.trim()
-      });
-      setSources((currentSources) => currentSources.map((source) => source.id === updated.id ? updated : source));
-      setEditingSource(null);
-      setNotice(null);
-    } catch (error) {
-      setNotice(sourceSaveErrorMessage(error));
-    }
+    const saved = await sourceWorkspace.update(editingSource.id, {
+      sourceType: editingSource.sourceType,
+      url: editingSource.url.trim()
+    });
+    if (!saved) return;
+    setEditingSource(null);
+    setNotice(null);
   }
 
   async function deleteSource(source: SourceUrl) {
     if (!window.confirm(`${source.url}을 삭제할까요?`)) return;
-    try {
-      await api.deleteSource(source.id);
-      setSources((currentSources) => currentSources.filter((item) => item.id !== source.id));
-      if (editingSource?.id === source.id) setEditingSource(null);
-      setNotice(null);
-    } catch {
-      setNotice("API 삭제에 실패했습니다. API 상태를 확인하세요.");
-    }
+    if (!(await sourceWorkspace.remove(source))) return;
+    if (editingSource?.id === source.id) setEditingSource(null);
+    setNotice(null);
   }
 
   async function retrySource(source: SourceUrl) {
-    try {
-      const run = await api.retrySource(DEMO_BRAND_ID, source.id);
-      setSourceCrawlRuns((currentRuns) => [run, ...currentRuns]);
-      await Promise.all([refreshSources(), refreshSourceSnapshots()]);
-      setNotice(run.status === "succeeded" ? `재크롤링 완료: 새 콘텐츠 ${run.created}개` : "재크롤링을 실행했지만 일부 URL을 처리하지 못했습니다.");
-    } catch {
-      setNotice("재크롤링을 시작하지 못했습니다. URL 응답 상태와 API 연결을 확인하세요.");
-    }
+    await sourceWorkspace.retry(source);
   }
 
   async function toggleSourceEnabled(source: SourceUrl) {
-    try {
-      const updated = await api.updateSource(source.id, { enabled: !source.enabled });
-      setSources((currentSources) => currentSources.map((candidate) => candidate.id === updated.id ? updated : candidate));
-      setNotice(updated.enabled ? "URL을 다시 활성화했습니다." : "URL을 비활성화했습니다. 자동 크롤링과 콘텐츠 생성에서 제외됩니다.");
-    } catch {
-      setNotice("URL 상태를 저장하지 못했습니다. API 상태를 확인하세요.");
-    }
+    await sourceWorkspace.update(source.id, { enabled: !source.enabled });
   }
 
   async function readTopicFile(input: ChangeEvent<HTMLInputElement> | File[]) {
@@ -494,13 +422,7 @@ export function SourcesPage() {
   }
 
   async function crawlAllSources() {
-    try {
-      const result = await api.crawlSources(DEMO_BRAND_ID);
-      setNotice(`크롤링 완료: 처리 ${result.processed}개, 성공 ${result.created}개, 실패 ${result.failed}개`);
-      await Promise.all([refreshSources(), refreshSourceSnapshots(), refreshSourceCrawlRuns()]);
-    } catch {
-      setNotice("크롤링 실행에 실패했습니다. API 서버와 URL 응답 상태를 확인하세요.");
-    }
+    await sourceWorkspace.crawlAll();
   }
 
   return (
@@ -511,7 +433,7 @@ export function SourcesPage() {
         actions={<button className="button primary" type="button" onClick={crawlAllSources}>전체 크롤링</button>}
       />
 
-      {notice ? <Alert title="API 상태" variant="warn">{notice}</Alert> : null}
+      {notice || sourceWorkspace.notice ? <Alert title="API 상태" variant="warn">{notice ?? sourceWorkspace.notice}</Alert> : null}
 
       {initialLoading ? (
         <section className="panel"><div className="panel-body"><ListSkeleton rows={6} columns={4} label="소스 데이터를 불러오는 중입니다." /></div></section>

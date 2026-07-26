@@ -108,6 +108,14 @@ export const helpGuides: HelpGuide[] = [
     tour: [pageHeaderStep("연결된 Instagram 계정의 DM과 브랜드별 답변 근거를 함께 관리합니다."), { selector: ".dm-conversation-list", title: "고객별 대화", description: "최근 메시지, 미확인 여부와 자동응답 중지 상태를 확인하고 대화를 선택합니다." }, { selector: ".dm-thread", title: "답변 이력과 수동 답변", description: "수신·자동 발신 기록을 확인하고 필요한 경우 담당자가 직접 답변합니다." }, { selector: ".dm-knowledge-panel", title: "자동답변용 자사 정보", description: "FAQ·제품 자료를 등록하고 Wiki 생성 상태와 반영된 자료 수를 확인합니다." }]
   },
   {
+    id: "brand-center",
+    path: "/brand-center",
+    title: "브랜드 센터",
+    summary: "원본 자료에서 AI 분석, 사용자 검토와 실행 규칙까지 브랜드 운영의 공통 기준을 관리합니다.",
+    sections: [{ title: "승인 데이터 관리", items: ["AI 재분석은 새 초안만 만들고 현재 승인된 Brand Core를 유지합니다.", "AI 제안값과 근거를 확인하고 수정한 뒤 승인하면 콘텐츠 생성과 고객 응답의 공통 기준으로 사용됩니다.", "제품·서비스, Wiki, 모델·아바타 보관함은 후속 단계에서 활성화되며 현재는 준비 상태를 명시합니다."] }],
+    tour: [pageHeaderStep("브랜드 준비도와 마지막 승인 시각을 확인하고 새 분석 또는 변경 검토를 시작합니다."), { selector: ".brand-readiness-journey", title: "브랜드 준비 과정", description: "원본 자료, AI 분석, 사용자 검토, 실행 규칙의 완료 상태를 확인합니다." }, { selector: ".brand-center-subnav", title: "브랜드 이해 영역", description: "원본 자료부터 승인 이력까지 필요한 영역을 선택합니다." }]
+  },
+  {
     id: "brand-settings",
     path: "/brand-settings",
     title: "브랜드 설정",

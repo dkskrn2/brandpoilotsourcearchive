@@ -125,7 +125,10 @@ describe("DashboardPage", () => {
     expect(await screen.findByRole("heading", { name: "오늘의 운영 현황" })).toBeVisible();
     expect(screen.getByText("최근 30일 · 2026. 7. 16. 기준")).toBeVisible();
     expect(screen.getByRole("link", { name: "콘텐츠 만들기" })).toHaveAttribute("href", "/ai-content/new");
-    expect(screen.getByRole("link", { name: "브랜드 검토하기" })).toHaveAttribute("href", "/brand-settings");
+    expect(screen.getByRole("link", { name: "브랜드 검토하기" })).toHaveAttribute(
+      "href",
+      "/brand-center?tab=understanding&section=core",
+    );
     const summary = screen.getByLabelText("최근 30일 요약");
     expect(within(summary).getByText("발행 완료")).toBeVisible();
     expect(within(summary).getByText("12건")).toBeVisible();
