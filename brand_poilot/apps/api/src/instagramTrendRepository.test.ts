@@ -542,18 +542,26 @@ describe("createInstagramTrendRepository", () => {
     expect(fixture.statements).toHaveLength(1);
   });
 
-  it("removes only the brand-scoped saved-media relation and is idempotent", async () => {
+  it("archives the canonical reference before deleting the brand-scoped saved relation and is idempotent", async () => {
     let removed = false;
     const fixture = poolWith((sql, values) => {
-      expect(sql).toContain("delete from brand_trend_saved_media");
-      expect(sql).toContain("brand_id = $1");
-      expect(sql).toContain("trend_media_id = $2");
-      expect(sql).not.toContain("source_urls");
-      expect(sql).not.toContain("source_snapshots");
-      expect(values).toEqual(["brand-2", "media-1"]);
-      if (removed) return result();
-      removed = true;
-      return result([{ trend_media_id: "media-1" }]);
+      if (sql.includes("select id") && sql.includes("from brand_trend_saved_media")) {
+        expect(values).toEqual(["brand-2", "media-1"]);
+        return removed ? result() : result([{ id: "saved-1" }]);
+      }
+      if (sql.includes("archive_brand_trend_saved_reference")) {
+        expect(values).toEqual(["saved-1", null]);
+        return result([{ reference_item_id: "reference-1" }]);
+      }
+      if (sql.includes("delete from brand_trend_saved_media")) {
+        expect(sql).toContain("brand_id = $2");
+        expect(sql).toContain("trend_media_id = $3");
+        expect(sql).not.toContain("source_snapshots");
+        expect(values).toEqual(["saved-1", "brand-2", "media-1"]);
+        removed = true;
+        return result([{ trend_media_id: "media-1" }]);
+      }
+      throw new Error(`unexpected query: ${sql}`);
     });
     const repository = createInstagramTrendRepository({ pool: fixture.pool, decryptCredential: String, fetchTopMedia: vi.fn() as any });
 
@@ -569,11 +577,16 @@ describe("createInstagramTrendRepository", () => {
       if (sql.includes("from instagram_trend_media") && sql.includes("for update")) return result([{ ...media, id: "media-1" }]);
       if (sql.includes("from source_urls") && sql.includes("url_hash")) return result(sourceCreated ? [{ id: "source-1", brand_id: "brand-1", source_type: "reference", url: media.permalink, title: media.caption, status: "crawled", enabled: true, last_crawled_at: now, last_error: null }] : []);
       if (sql.includes("insert into source_urls")) { sourceCreated = true; return result([{ id: "source-1" }]); }
+      if (sql.includes("update source_urls") && sql.includes("disabled_at = null")) {
+        return result([{ id: "source-1", brand_id: "brand-1", source_type: "reference", url: media.permalink, title: media.caption, status: "crawled", enabled: true, last_crawled_at: now, last_error: null }]);
+      }
       if (sql.includes("insert into brand_trend_saved_media")) {
         if (saved) return result();
         saved = true;
         return result([{ id: "saved-1" }]);
       }
+      if (sql.includes("select id") && sql.includes("from brand_trend_saved_media")) return result([{ id: "saved-1" }]);
+      if (sql.includes("upsert_brand_trend_saved_reference")) return result([{ reference_item_id: "reference-1" }]);
       if (sql.includes("insert into source_snapshots")) return result([{ id: "snapshot-1" }]);
       if (sql.includes("select id, brand_id, source_type")) return result([{ id: "source-1", brand_id: "brand-1", source_type: "reference", url: media.permalink, title: media.caption, status: "crawled", enabled: true, last_crawled_at: now, last_error: null }]);
       throw new Error(`unexpected query: ${sql}`);

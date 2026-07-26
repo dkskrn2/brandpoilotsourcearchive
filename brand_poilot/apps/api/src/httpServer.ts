@@ -1232,7 +1232,11 @@ export function createServer(
   }>("/brands/:brandId/instagram-trends/:mediaId/save-source", async (request, reply) => {
     return instagramTrendResponse(
       reply,
-      () => repository.removeInstagramTrendSource(request.params.brandId, request.params.mediaId)
+      () => repository.removeInstagramTrendSource(
+        request.params.brandId,
+        request.params.mediaId,
+        aiContentActorUserId(request),
+      )
     );
   });
 
@@ -1268,7 +1272,11 @@ export function createServer(
   }>("/brands/:brandId/instagram-trends/:mediaId/save-source", async (request, reply) => {
     return instagramTrendResponse(
       reply,
-      () => repository.saveInstagramTrendSource(request.params.brandId, request.params.mediaId)
+      () => repository.saveInstagramTrendSource(
+        request.params.brandId,
+        request.params.mediaId,
+        aiContentActorUserId(request),
+      )
     );
   });
 

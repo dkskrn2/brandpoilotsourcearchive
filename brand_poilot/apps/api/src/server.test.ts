@@ -2512,8 +2512,8 @@ describe("API server", () => {
     expect(repository.listInstagramTrendSearches).toHaveBeenCalledWith(brandId);
     expect(repository.deleteInstagramTrendSearch).toHaveBeenCalledWith(brandId, "hashtag-1");
     expect(repository.setInstagramTrendFavorite).toHaveBeenCalledWith(brandId, "hashtag-1", { isFavorite: true });
-    expect(repository.saveInstagramTrendSource).toHaveBeenCalledWith(brandId, "media-1");
-    expect(repository.removeInstagramTrendSource).toHaveBeenCalledWith(brandId, "media-1");
+    expect(repository.saveInstagramTrendSource).toHaveBeenCalledWith(brandId, "media-1", null);
+    expect(repository.removeInstagramTrendSource).toHaveBeenCalledWith(brandId, "media-1", null);
   });
 
   it("returns the paged brand trend archive", async () => {

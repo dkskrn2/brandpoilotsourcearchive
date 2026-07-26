@@ -1053,8 +1053,8 @@ export interface ApiRepository
   deleteInstagramTrendSearch(brandId: string, hashtagId: string): Promise<InstagramTrendDeleteSearchDto>;
   listInstagramTrendArchive(brandId: string, input: { page: number; limit: number }): Promise<InstagramTrendArchivePageDto>;
   setInstagramTrendFavorite(brandId: string, hashtagId: string, input: InstagramTrendFavoriteInput): Promise<InstagramTrendSearchHistoryDto>;
-  saveInstagramTrendSource(brandId: string, mediaId: string): Promise<InstagramTrendSaveSourceDto>;
-  removeInstagramTrendSource(brandId: string, mediaId: string): Promise<InstagramTrendRemoveSourceDto>;
+  saveInstagramTrendSource(brandId: string, mediaId: string, actorUserId?: string | null): Promise<InstagramTrendSaveSourceDto>;
+  removeInstagramTrendSource(brandId: string, mediaId: string, actorUserId?: string | null): Promise<InstagramTrendRemoveSourceDto>;
   getBillingSummary(brandId: string): Promise<BillingSummaryDto>;
   getBrandUiStatus(brandId: string): Promise<BrandUiStatusDto>;
   getBrandProfile(brandId: string): Promise<BrandProfileDto>;
