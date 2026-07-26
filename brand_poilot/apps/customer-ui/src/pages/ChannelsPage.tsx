@@ -8,7 +8,11 @@ import { PageSkeleton } from "../components/ui/LoadingState";
 import { ChannelConnectionGuideDialog } from "../components/channels/ChannelConnectionGuideDialog";
 import { ChannelLogo } from "../components/channels/ChannelLogo";
 import { channelGuides } from "../features/channels/channelGuides";
-import { channelConnectionUrl } from "../features/channels/channelConnectionUrls";
+import {
+  channelConnectionUrl,
+  parseChannelConnectionCallback,
+  type ChannelConnectionCallback
+} from "../features/channels/channelConnectionUrls";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
 import type { ChannelConnection, ChannelStatus, InstagramDmSettings } from "../types";
 
@@ -46,6 +50,39 @@ function channelAction(channel: ChannelConnection) {
   );
 }
 
+function connectionCallbackNotice(callback: ChannelConnectionCallback) {
+  if (callback.outcome === "success") {
+    return {
+      title: "Instagram 연결 완료",
+      message: "Instagram 계정 연결이 완료되었습니다.",
+      role: "status" as const,
+      variant: "ok" as const
+    };
+  }
+  if (callback.outcome === "cancelled") {
+    return {
+      title: "Instagram 연결 취소",
+      message: "Instagram 계정 연결이 취소되었습니다. 다시 시도할 수 있습니다.",
+      role: "status" as const,
+      variant: "warn" as const
+    };
+  }
+  const messages = {
+    account_mapping_failed: "Instagram 전문 계정을 확인하지 못했습니다.",
+    authentication_required: "로그인 세션을 확인한 뒤 Instagram 연결을 다시 시도해 주세요.",
+    connection_failed: "Instagram 연결을 완료하지 못했습니다.",
+    insufficient_permissions: "Instagram 게시 권한을 모두 승인한 뒤 다시 시도해 주세요.",
+    invalid_callback: "Instagram 연결 요청이 만료되었거나 유효하지 않습니다.",
+    token_exchange_failed: "Instagram 인증 정보를 확인하지 못했습니다."
+  };
+  return {
+    title: "Instagram 연결 실패",
+    message: messages[callback.reason ?? "connection_failed"],
+    role: "alert" as const,
+    variant: "bad" as const
+  };
+}
+
 export function ChannelsPage() {
   const [connectionCards, setConnectionCards] = useState<ChannelConnection[]>([]);
   const [channelsLoading, setChannelsLoading] = useState(true);
@@ -53,6 +90,8 @@ export function ChannelsPage() {
   const [dmSettings, setDmSettings] = useState<InstagramDmSettings | null>(null);
   const [updatingChannel, setUpdatingChannel] = useState<ChannelConnection["type"] | null>(null);
   const [guideChannel, setGuideChannel] = useState<ChannelConnection["type"] | null>(null);
+  const [connectionCallback] = useState(() => parseChannelConnectionCallback(window.location.search));
+  const callbackNotice = connectionCallback ? connectionCallbackNotice(connectionCallback) : null;
 
   const attentionCount = connectionCards.filter((channel) => channel.status !== "connected").length;
   const connectionStatusBadge = connectionCards.length === 0
@@ -82,6 +121,18 @@ export function ChannelsPage() {
       ignore = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!connectionCallback) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("instagram");
+    url.searchParams.delete("reason");
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${url.pathname}${url.search}${url.hash}`
+    );
+  }, [connectionCallback]);
 
   useEffect(() => {
     api.getInstagramDmSettings(DEMO_BRAND_ID).then(setDmSettings).catch(() => setDmSettings(null));
@@ -120,6 +171,18 @@ export function ChannelsPage() {
         title="채널 연결"
         description="자동 업로드에 사용할 외부 채널을 연결합니다. Meta 권한은 고객 계정으로 직접 승인합니다."
       />
+
+      {callbackNotice ? (
+        <section className="panel" style={{ marginBottom: 16 }}>
+          <div className="panel-body">
+            <div role={callbackNotice.role} aria-label={callbackNotice.title}>
+              <Alert title={callbackNotice.title} variant={callbackNotice.variant}>
+                {callbackNotice.message}
+              </Alert>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       {channelsLoading ? <PageSkeleton label="채널 연결 상태를 불러오는 중입니다." /> : null}
 

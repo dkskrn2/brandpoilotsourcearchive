@@ -102,6 +102,24 @@ const contentTypeByWorkerSlug = {
   marketing: "marketing",
 } as const;
 
+type InstagramLoginCallbackFailureReason =
+  | "account_mapping_failed"
+  | "authentication_required"
+  | "connection_failed"
+  | "invalid_callback"
+  | "token_exchange_failed";
+
+function instagramLoginCallbackUrl(
+  frontendUrl: string,
+  outcome: "connected" | "cancelled" | "failed",
+  reason?: InstagramLoginCallbackFailureReason,
+) {
+  const url = new URL("/channels", frontendUrl);
+  url.searchParams.set("instagram", outcome);
+  if (outcome === "failed") url.searchParams.set("reason", reason ?? "connection_failed");
+  return url.toString();
+}
+
 interface CreateServerOptions {
   repository: ApiRepository;
   workerApiToken?: string;
@@ -973,23 +991,32 @@ export function createServer(
       return { error: "instagram_login_not_configured" };
     }
     if (request.query.error) {
-      reply.header("set-cookie", clearState).code(400);
-      return { error: request.query.error, errorDescription: request.query.error_description ?? null };
+      reply.header("set-cookie", clearState);
+      return reply.redirect(instagramLoginCallbackUrl(instagramLogin.frontendUrl, "cancelled"));
     }
     if (!request.query.code || request.query.state !== readCookie(request.headers.cookie, instagramLoginStateCookie)) {
-      reply.header("set-cookie", clearState).code(400);
-      return { error: "meta_oauth_state_invalid" };
+      reply.header("set-cookie", clearState);
+      return reply.redirect(instagramLoginCallbackUrl(
+        instagramLogin.frontendUrl,
+        "failed",
+        "invalid_callback",
+      ));
     }
     let brandId = process.env.BRAND_PILOT_DEV_BRAND_ID ?? defaultDevBrandId;
     if (kakaoAuth) {
       const token = readCookie(request.headers.cookie, "bp_session");
       const session = token ? await kakaoAuth.getSession(token) : null;
       if (!session) {
-        reply.header("set-cookie", clearState).code(401);
-        return { error: "authentication_required" };
+        reply.header("set-cookie", clearState);
+        return reply.redirect(instagramLoginCallbackUrl(
+          instagramLogin.frontendUrl,
+          "failed",
+          "authentication_required",
+        ));
       }
       brandId = session.brandId;
     }
+    let failureReason: InstagramLoginCallbackFailureReason = "token_exchange_failed";
     try {
       const token = await exchangeInstagramLoginCode({
         code: request.query.code,
@@ -997,7 +1024,9 @@ export function createServer(
         appSecret: instagramLogin.appSecret,
         redirectUri: instagramLogin.redirectUri,
       });
+      failureReason = "account_mapping_failed";
       const connection = await resolveInstagramLoginConnection({ accessToken: token.accessToken });
+      failureReason = "connection_failed";
       await subscribeInstagramMessagingWebhooks({
         accessToken: token.accessToken,
         instagramBusinessAccountId: connection.instagramBusinessAccountId,
@@ -1018,11 +1047,15 @@ export function createServer(
         authMode: "instagram_login",
       });
       reply.header("set-cookie", clearState);
-      return reply.redirect(`${instagramLogin.frontendUrl}/channels?instagram=connected`);
+      return reply.redirect(instagramLoginCallbackUrl(instagramLogin.frontendUrl, "connected"));
     } catch (error) {
       request.log.warn({ event: "instagram_login_callback_failed", errorCode: safeInternalErrorCode(error) }, "instagram_login_callback_failed");
-      reply.header("set-cookie", clearState).code(400);
-      return { error: "meta_instagram_connection_failed" };
+      reply.header("set-cookie", clearState);
+      return reply.redirect(instagramLoginCallbackUrl(
+        instagramLogin.frontendUrl,
+        "failed",
+        failureReason,
+      ));
     }
   });
 

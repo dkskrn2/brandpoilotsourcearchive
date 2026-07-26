@@ -1748,6 +1748,101 @@ describe("API server", () => {
     );
   });
 
+  it("redirects an Instagram provider denial to a canonical cancellation without leaking provider text", async () => {
+    const app = createServer({
+      repository: createRepository(),
+      instagramLogin: {
+        appId: "instagram-app-id",
+        appSecret: "instagram-app-secret",
+        redirectUri: "http://localhost:4000/auth/meta/callback",
+        frontendUrl: "http://localhost:5173",
+      },
+      logger: false,
+    });
+
+    const callback = await app.inject({
+      method: "GET",
+      url: "/auth/meta/callback?error=access_denied&error_description=SECRET_PROVIDER_TEXT",
+    });
+
+    expect(callback.statusCode).toBe(302);
+    expect(callback.headers.location).toBe("http://localhost:5173/channels?instagram=cancelled");
+    expect(callback.headers.location).not.toContain("SECRET_PROVIDER_TEXT");
+  });
+
+  it.each([
+    {
+      name: "token exchange",
+      reason: "token_exchange_failed",
+      fetchImpl: async () => new Response(JSON.stringify({
+        error: { message: "SECRET_EXCHANGE_DETAIL" },
+      }), { status: 400 }),
+    },
+    {
+      name: "professional account mapping",
+      reason: "account_mapping_failed",
+      fetchImpl: async (url: string) => {
+        if (url === "https://api.instagram.com/oauth/access_token") {
+          return new Response(JSON.stringify({ access_token: "short-token" }));
+        }
+        if (url.startsWith("https://graph.instagram.com/access_token")) {
+          return new Response(JSON.stringify({ access_token: "long-token" }));
+        }
+        return new Response(JSON.stringify({ username: "missing-id", detail: "SECRET_MAPPING_DETAIL" }));
+      },
+    },
+    {
+      name: "internal credential persistence",
+      reason: "connection_failed",
+      fetchImpl: async (url: string) => {
+        if (url === "https://api.instagram.com/oauth/access_token") {
+          return new Response(JSON.stringify({ access_token: "short-token" }));
+        }
+        if (url.startsWith("https://graph.instagram.com/access_token")) {
+          return new Response(JSON.stringify({ access_token: "long-token" }));
+        }
+        if (url.includes("/subscribed_apps")) {
+          return new Response(JSON.stringify({ success: true }));
+        }
+        return new Response(JSON.stringify({
+          id: "professional-account-1",
+          username: "brand",
+        }));
+      },
+      saveFails: true,
+    },
+  ])("redirects an Instagram $name failure with an allowlisted reason", async ({ reason, fetchImpl, saveFails }) => {
+    const repository = createRepository();
+    if (saveFails) {
+      vi.mocked(repository.saveChannelCredentials).mockRejectedValueOnce(new Error("SECRET_DATABASE_DETAIL"));
+    }
+    const app = createServer({
+      repository,
+      instagramLogin: {
+        appId: "instagram-app-id",
+        appSecret: "instagram-app-secret",
+        redirectUri: "http://localhost:4000/auth/meta/callback",
+        frontendUrl: "http://localhost:5173",
+      },
+      logger: false,
+    });
+    vi.stubGlobal("fetch", vi.fn(fetchImpl));
+    const start = await app.inject({ method: "GET", url: "/auth/meta/start" });
+    const state = new URL(start.headers.location ?? "").searchParams.get("state");
+
+    const callback = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?code=oauth-code&state=${state}`,
+      headers: { cookie: String(start.headers["set-cookie"]) },
+    });
+
+    expect(callback.statusCode).toBe(302);
+    expect(callback.headers.location).toBe(
+      `http://localhost:5173/channels?instagram=failed&reason=${reason}`,
+    );
+    expect(callback.headers.location).not.toContain("SECRET");
+  });
+
   it("connects Facebook Login for trends without replacing Instagram Login credentials", async () => {
     const repository = createRepository();
     const app = createServer({

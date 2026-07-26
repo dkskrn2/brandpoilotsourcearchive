@@ -143,6 +143,6 @@ describe("AiContentGenerationPage", () => {
     expect(previewImage.compareDocumentPosition(publishRegion) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(publishRegion).getByRole("checkbox", { name: "게시물" })).toBeEnabled();
     expect(within(publishRegion).getByRole("checkbox", { name: "스토리" })).toBeEnabled();
-    expect(within(publishRegion).getByRole("checkbox", { name: "릴스" })).toBeEnabled();
+    expect(within(publishRegion).queryByRole("checkbox", { name: "릴스" })).not.toBeInTheDocument();
   });
 });

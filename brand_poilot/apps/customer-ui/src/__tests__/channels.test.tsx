@@ -73,6 +73,7 @@ const apiChannels: ChannelConnection[] = [
 beforeEach(() => {
   vi.stubEnv("VITE_API_BASE_URL", "http://localhost:4000");
   vi.stubEnv("VITE_META_OAUTH_START_URL", "http://localhost:4000/auth/meta/start");
+  window.history.replaceState({}, "", "/channels");
 });
 
 afterEach(() => {
@@ -211,6 +212,52 @@ describe("ChannelsPage", () => {
     ]
   ] as const)("normalizes an external OAuth callback query %s", (search, expected) => {
     expect(parseChannelConnectionCallback(search)).toEqual(expected);
+  });
+
+  it.each([
+    [
+      "success",
+      "?keep=1&instagram=connected#connection",
+      "status",
+      "Instagram 연결 완료",
+      "Instagram 계정 연결이 완료되었습니다."
+    ],
+    [
+      "cancelled",
+      "?keep=1&instagram=cancelled#connection",
+      "status",
+      "Instagram 연결 취소",
+      "Instagram 계정 연결이 취소되었습니다."
+    ],
+    [
+      "failed",
+      "?keep=1&instagram=failed&reason=account_mapping_failed#connection",
+      "alert",
+      "Instagram 연결 실패",
+      "Instagram 전문 계정을 확인하지 못했습니다."
+    ]
+  ] as const)("renders and consumes the %s OAuth callback once", async (
+    _outcome,
+    location,
+    role,
+    title,
+    message
+  ) => {
+    window.history.replaceState({ preserved: true }, "", `/channels${location}`);
+
+    await renderChannelsPage();
+
+    const notice = await screen.findByRole(role, { name: title });
+    expect(notice).toHaveTextContent(title);
+    expect(notice).toHaveTextContent(message);
+    expect(window.location.pathname).toBe("/channels");
+    expect(window.location.search).toBe("?keep=1");
+    expect(window.location.hash).toBe("#connection");
+    expect(window.history.state).toEqual({ preserved: true });
+
+    cleanup();
+    await renderChannelsPage();
+    expect(screen.queryByText(title)).not.toBeInTheDocument();
   });
 
   it("closes the channel guide with Escape", async () => {

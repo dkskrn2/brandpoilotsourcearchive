@@ -16,7 +16,7 @@ const channels: ChannelConnection[] = [{
 }];
 
 describe("AiContentPublishPanel", () => {
-  it("submits selected feed, story, and reel without a confirmation dialog", async () => {
+  it("submits selected feed and static Story without exposing Reel generation", async () => {
     const user = userEvent.setup();
     const onPublish = vi.fn(async () => undefined);
     render(<AiContentPublishPanel type="card_news" assetCount={3} channels={channels} publishing={false} results={[]} onPublish={onPublish} />);
@@ -25,15 +25,15 @@ describe("AiContentPublishPanel", () => {
     expect(screen.getByText("Threads OAuth 게시 계정 미연결")).toBeVisible();
     await user.click(screen.getByRole("checkbox", { name: "게시물" }));
     await user.click(screen.getByRole("checkbox", { name: "스토리" }));
-    await user.click(screen.getByRole("checkbox", { name: "릴스" }));
-    const publishButton = screen.getByRole("button", { name: "선택한 3개 유형 게시" });
+    expect(screen.queryByRole("checkbox", { name: "릴스" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/세로형 영상으로 변환/)).not.toBeInTheDocument();
+    const publishButton = screen.getByRole("button", { name: "선택한 2개 유형 게시" });
     await user.click(publishButton);
 
     expect(onPublish).toHaveBeenCalledOnce();
     expect(onPublish).toHaveBeenCalledWith([
       { channel: "instagram", deliveryFormat: "instagram_feed_carousel" },
       { channel: "instagram", deliveryFormat: "instagram_story" },
-      { channel: "instagram", deliveryFormat: "instagram_reel" },
     ]);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });

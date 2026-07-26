@@ -3,8 +3,25 @@ import type { ChannelType } from "../../types";
 export interface ChannelConnectionCallback {
   channel: "instagram";
   outcome: "success" | "cancelled" | "failed";
-  reason: string | null;
+  reason: ChannelConnectionFailureReason | null;
 }
+
+export type ChannelConnectionFailureReason =
+  | "account_mapping_failed"
+  | "authentication_required"
+  | "connection_failed"
+  | "insufficient_permissions"
+  | "invalid_callback"
+  | "token_exchange_failed";
+
+const channelConnectionFailureReasons = new Set<ChannelConnectionFailureReason>([
+  "account_mapping_failed",
+  "authentication_required",
+  "connection_failed",
+  "insufficient_permissions",
+  "invalid_callback",
+  "token_exchange_failed"
+]);
 
 export function channelConnectionUrl(channel: ChannelType) {
   if (channel !== "instagram") return null;
@@ -22,7 +39,14 @@ export function parseChannelConnectionCallback(search: string): ChannelConnectio
     return { channel: "instagram", outcome: "cancelled", reason: null };
   }
   if (result === "failed") {
-    return { channel: "instagram", outcome: "failed", reason: query.get("reason") };
+    const reason = query.get("reason");
+    return {
+      channel: "instagram",
+      outcome: "failed",
+      reason: channelConnectionFailureReasons.has(reason as ChannelConnectionFailureReason)
+        ? reason as ChannelConnectionFailureReason
+        : "connection_failed"
+    };
   }
   return null;
 }
