@@ -2268,7 +2268,7 @@ migration과 rollout 원칙:
 | 060 | proposal batch, approved proposal version, GenerationBrief, create idempotency record | Content Creation |
 | 061 | prompt definition/run manifest, quality/evaluation result, 공통 run audit | D Program |
 
-- 기존 content migration `058_content_orchestration.sql` 초안은 구현하지 않고 060으로 재작성한다.
+- 기존 `058_content_orchestration.sql` 초안과 중간 계획의 `059_content_orchestration.sql` 이름은 사용하지 않고, canonical migration은 `060_content_orchestration.sql`로 작성한다.
 - migration은 additive-first이며 번호 owner를 Program registry에서 검사한다.
 - 숫자 순서는 FK/schema 의존 순서다. feature를 켜는 순서는 아래 실행 순서를 따른다.
 - 기존 Wiki/DM migration 032·033·036을 다시 만들지 않고 056·057·061에서 필요한 additive column/index만 보강한다.

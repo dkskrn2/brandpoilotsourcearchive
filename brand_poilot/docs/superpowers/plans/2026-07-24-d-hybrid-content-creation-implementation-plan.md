@@ -42,7 +42,7 @@ npm run test --workspace @brand-pilot/customer-ui -- useAiContentDraft.test.ts a
 
 **Files:**
 
-- Create: `db/migrations/059_content_orchestration.sql`
+- Create: `db/migrations/060_content_orchestration.sql`
 - Modify: `scripts/migrations.integration.test.mjs`
 - Modify: `scripts/repository-contract.test.mjs`
 - Create: `apps/api/src/contentOrchestrationRepository.pglite.test.ts`
@@ -116,7 +116,7 @@ create table ai_content_proposals (
 - [ ] product service FK와 avatar snapshot은 같은 brand의 승인/활성 원본에서 시작했는지 start transaction에서 검증한다.
 - [ ] 기존 retry snapshot은 백필 후에도 그대로 parse된다.
 - [ ] draft/archived/cross-brand library ID와 승인되지 않은 Core/product/Wiki 버전을 거절하고 retry가 현재 active 데이터를 재조회하지 않는 invariant를 테스트한다.
-- [ ] 059 migration의 빈 DB, 기존 fixture upgrade, idempotent backfill, cross-tenant FK, 동시 proposal select/start와 repository-contract 목록/schema smoke를 같은 task에서 검증한다.
+- [ ] 060 migration의 빈 DB, 기존 fixture upgrade, idempotent backfill, cross-tenant FK, 동시 proposal select/start와 repository-contract 목록/schema smoke를 같은 task에서 검증한다.
 - [ ] 실행:
 
 ```bash
@@ -320,7 +320,7 @@ npm run build --workspace @brand-pilot/api
 - [ ] 구현 커밋:
 
 ```bash
-git add db/migrations/059_content_orchestration.sql apps/api/src/contentOrchestration* apps/api/src/contentProposalJobs* apps/api/src/server.contentProposalWorker.test.ts apps/api/src/aiContentContracts.ts apps/api/src/aiContentGenerationInput* apps/api/src/aiContentRepository* apps/api/src/httpServer.ts apps/api/src/server.aiContentCustomer.test.ts apps/api/src/aiContentManifest.ts scripts/migrations.integration.test.mjs scripts/repository-contract.test.mjs
+git add db/migrations/060_content_orchestration.sql apps/api/src/contentOrchestration* apps/api/src/contentProposalJobs* apps/api/src/server.contentProposalWorker.test.ts apps/api/src/aiContentContracts.ts apps/api/src/aiContentGenerationInput* apps/api/src/aiContentRepository* apps/api/src/httpServer.ts apps/api/src/server.aiContentCustomer.test.ts apps/api/src/aiContentManifest.ts scripts/migrations.integration.test.mjs scripts/repository-contract.test.mjs
 git commit -m "feat(content): add content family orchestration"
 ```
 
