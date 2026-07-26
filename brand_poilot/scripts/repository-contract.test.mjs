@@ -262,7 +262,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션은 001부터 054까지 정확한 이름으로 존재한다", async () => {
+test("데이터베이스 마이그레이션은 001부터 055까지 정확한 이름으로 존재한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -321,6 +321,7 @@ test("데이터베이스 마이그레이션은 001부터 054까지 정확한 이
     "052_ai_content_subject_appeal_regeneration_keys.sql",
     "053_dm_manual_delivery_audit.sql",
     "054_feedback_submissions.sql",
+    "055_brand_core_and_rules.sql",
   ]);
 });
 

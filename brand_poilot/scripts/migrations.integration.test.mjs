@@ -2857,6 +2857,144 @@ test("049 creates tenant-safe versioned brand intelligence analyses", async () =
   });
 });
 
+test("055 backfills tenant-safe approved brand core and rules without mutating confirmed analyses", async () => {
+  const migrations = await loadMigrations();
+  const migration055 = migrations.find(
+    (migration) => migration.id === "055_brand_core_and_rules.sql",
+  );
+  assert.ok(migration055, "055 brand core migration must exist");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "054_feedback_submissions.sql",
+    );
+
+    const user = await database.query(
+      "insert into app_users (email) values ($1) returning id",
+      [`brand-core-${randomUUID()}@example.com`],
+    );
+    const workspace = await database.query(
+      "insert into workspaces (name, slug, created_by_user_id) values ('Brand Core', $1, $2) returning id",
+      [`brand-core-${randomUUID()}`, user.rows[0].id],
+    );
+    await database.query(
+      "insert into workspace_members (workspace_id, user_id, role, status) values ($1, $2, 'owner', 'active')",
+      [workspace.rows[0].id, user.rows[0].id],
+    );
+    const firstBrand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'First Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    const secondBrand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Second Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    await database.query(
+      `insert into brand_profiles (
+         workspace_id, brand_id, forbidden_terms, default_cta, auto_approval_enabled
+       ) values
+       ($1, $2, '["금지 표현"]'::jsonb, '지금 확인하기', true),
+       ($1, $3, '[]'::jsonb, null, false)`,
+      [workspace.rows[0].id, firstBrand.rows[0].id, secondBrand.rows[0].id],
+    );
+    const analysis = await database.query(
+      `insert into brand_analysis_runs (
+         workspace_id, brand_id, status, input_json, evidence_json, result_json,
+         edited_result_json, idempotency_key, is_active, confirmed_at
+       ) values (
+         $1, $2, 'confirmed', '{}'::jsonb, '[{"sourceId":"owned"}]'::jsonb,
+         '{"primaryTarget":"AI 고객","businessDescription":"AI 설명"}'::jsonb,
+         '{"primaryTarget":"사용자 고객","businessDescription":"사용자 설명"}'::jsonb,
+         'confirmed-1', true, now()
+       ) returning id, result_json, edited_result_json`,
+      [workspace.rows[0].id, firstBrand.rows[0].id],
+    );
+    await database.query(
+      "update brand_profiles set active_brand_analysis_id = $1 where brand_id = $2",
+      [analysis.rows[0].id, firstBrand.rows[0].id],
+    );
+    const knowledgeImport = await database.query(
+      `insert into knowledge_imports (
+         workspace_id, brand_id, file_name, source_rows, result_json, status
+       ) values ($1, $2, 'legacy.json', '[]'::jsonb, '{}'::jsonb, 'succeeded') returning id`,
+      [workspace.rows[0].id, firstBrand.rows[0].id],
+    );
+    await database.query(
+      `insert into knowledge_entries (
+         workspace_id, brand_id, normalized_question, entry_type, title, content,
+         structured_data, direct_reply_enabled, enabled, last_import_id
+       ) values (
+         $1, $2, '__confirmed_brand_intelligence__', 'policy', 'Legacy', 'Legacy projection',
+         '{}'::jsonb, false, true, $3
+       )`,
+      [workspace.rows[0].id, firstBrand.rows[0].id, knowledgeImport.rows[0].id],
+    );
+
+    await database.exec(migration055.sql);
+    await database.exec(migration055.sql);
+
+    const core = await database.query(
+      `select id, source_analysis_id, version, status, core_json, evidence_json, created_by
+         from brand_core_versions
+        where workspace_id = $1 and brand_id = $2`,
+      [workspace.rows[0].id, firstBrand.rows[0].id],
+    );
+    assert.equal(core.rows.length, 1);
+    assert.equal(core.rows[0].source_analysis_id, analysis.rows[0].id);
+    assert.equal(core.rows[0].version, 1);
+    assert.equal(core.rows[0].status, "approved");
+    assert.equal(core.rows[0].core_json.primaryTarget, "사용자 고객");
+    assert.deepEqual(core.rows[0].evidence_json, [{ sourceId: "owned" }]);
+    assert.equal(core.rows[0].created_by, "migration");
+
+    const profile = await database.query(
+      `select active_brand_analysis_id, active_brand_core_id, active_brand_rule_set_id
+         from brand_profiles where brand_id = $1`,
+      [firstBrand.rows[0].id],
+    );
+    assert.equal(profile.rows[0].active_brand_analysis_id, analysis.rows[0].id);
+    assert.equal(profile.rows[0].active_brand_core_id, core.rows[0].id);
+    assert.ok(profile.rows[0].active_brand_rule_set_id);
+
+    const rules = await database.query(
+      "select status, rules_json from brand_rule_sets where brand_id = $1",
+      [firstBrand.rows[0].id],
+    );
+    assert.equal(rules.rows.length, 1);
+    assert.equal(rules.rows[0].status, "approved");
+    assert.deepEqual(rules.rows[0].rules_json.forbiddenPhrases, ["금지 표현"]);
+    assert.equal(rules.rows[0].rules_json.ctaRules.defaultCta, "지금 확인하기");
+
+    const legacy = await database.query(
+      `select enabled, direct_reply_enabled, structured_data
+         from knowledge_entries
+        where brand_id = $1 and normalized_question = '__confirmed_brand_intelligence__'`,
+      [firstBrand.rows[0].id],
+    );
+    assert.equal(legacy.rows[0].enabled, false);
+    assert.equal(legacy.rows[0].direct_reply_enabled, false);
+    assert.equal(legacy.rows[0].structured_data.legacyProjection, true);
+
+    await assert.rejects(
+      database.query(
+        "update brand_profiles set active_brand_core_id = $1 where brand_id = $2",
+        [core.rows[0].id, secondBrand.rows[0].id],
+      ),
+    );
+    const unchanged = await database.query(
+      "select result_json, edited_result_json from brand_analysis_runs where id = $1",
+      [analysis.rows[0].id],
+    );
+    assert.deepEqual(unchanged.rows[0], {
+      result_json: analysis.rows[0].result_json,
+      edited_result_json: analysis.rows[0].edited_result_json,
+    });
+  });
+});
+
 test("050 stores normalized support request mobile phone numbers", async () => {
   const migrations = await loadMigrations();
   const migration050 = migrations.find(
