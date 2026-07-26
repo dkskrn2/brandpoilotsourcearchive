@@ -6,6 +6,35 @@ import type { ApiRepository, InstagramFormatSettingsInput, InstagramTrendPageDto
 
 const brandId = "11111111-1111-1111-1111-111111111111";
 
+function setCookieValues(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  return typeof value === "string" ? [value] : [];
+}
+
+function requestCookieHeader(value: unknown) {
+  return setCookieValues(value).map((item) => item.split(";", 1)[0]).join("; ");
+}
+
+const oauthSessionA = {
+  userId: "user-a",
+  displayName: "User A",
+  email: "a@example.com",
+  workspaceId: "workspace-a",
+  workspaceName: "Workspace A",
+  brandId: "brand-a",
+  brandName: "Brand A",
+};
+
+const oauthSessionB = {
+  userId: "user-b",
+  displayName: "User B",
+  email: "b@example.com",
+  workspaceId: "workspace-b",
+  workspaceName: "Workspace B",
+  brandId: "brand-b",
+  brandName: "Brand B",
+};
+
 const instagramTrendPage: InstagramTrendPageDto = {
   hashtag: { id: "hashtag-1", displayTag: "콘텐츠마케팅", normalizedTag: "콘텐츠마케팅" },
   source: "meta",
@@ -1720,7 +1749,7 @@ describe("API server", () => {
     expect(authorizeUrl.hostname).toBe("www.instagram.com");
     expect(authorizeUrl.searchParams.get("scope")).toContain("instagram_business_manage_messages");
     const state = authorizeUrl.searchParams.get("state");
-    const stateCookie = String(start.headers["set-cookie"]);
+    const stateCookie = requestCookieHeader(start.headers["set-cookie"]);
 
     const callback = await app.inject({
       method: "GET",
@@ -1748,6 +1777,233 @@ describe("API server", () => {
     );
   });
 
+  it("binds pending Instagram OAuth to the initiating session and clears it on logout", async () => {
+    const kakaoAuth = {
+      getSession: vi.fn(async (token: string) => token === "session-a" ? oauthSessionA : null),
+      canAccessBrand: vi.fn(async () => true),
+      revokeSession: vi.fn(async () => undefined),
+    };
+    const app = createServer({
+      repository: createRepository(),
+      kakaoAuth: kakaoAuth as any,
+      instagramLogin: {
+        appId: "instagram-app-id",
+        appSecret: "instagram-app-secret",
+        redirectUri: "https://api.example/auth/meta/callback",
+        frontendUrl: "https://app.example",
+      },
+      runtimePolicy: {
+        cookieSecure: true,
+        corsAllowedOrigins: ["https://app.example"],
+        devAuthEnabled: false,
+      },
+      logger: false,
+    });
+
+    const start = await app.inject({
+      method: "GET",
+      url: "/auth/meta/start",
+      headers: { cookie: "bp_session=session-a" },
+    });
+    const pendingCookies = setCookieValues(start.headers["set-cookie"]);
+    expect(pendingCookies.some((item) => item.startsWith("bp_instagram_login_state="))).toBe(true);
+    expect(pendingCookies.some((item) => item.startsWith("bp_instagram_login_binding="))).toBe(true);
+    expect(pendingCookies.every((item) => item.includes("HttpOnly") && item.includes("Secure"))).toBe(true);
+    expect(requestCookieHeader(start.headers["set-cookie"])).not.toMatch(/user-a|workspace-a|brand-a/);
+    expect(kakaoAuth.canAccessBrand).toHaveBeenCalledWith("user-a", "brand-a");
+
+    const logout = await app.inject({
+      method: "POST",
+      url: "/auth/logout",
+      headers: {
+        cookie: `bp_session=session-a; ${requestCookieHeader(start.headers["set-cookie"])}`,
+      },
+    });
+    const cleared = setCookieValues(logout.headers["set-cookie"]);
+    for (const name of ["bp_session", "bp_instagram_login_state", "bp_instagram_login_binding"]) {
+      expect(cleared.find((item) => item.startsWith(`${name}=`))).toContain("Max-Age=0");
+    }
+    expect(kakaoAuth.revokeSession).toHaveBeenCalledWith("session-a");
+  });
+
+  it("rejects an Instagram callback after the browser session changes from tenant A to tenant B", async () => {
+    const repository = createRepository();
+    const kakaoAuth = {
+      getSession: vi.fn(async (token: string) => token === "session-a" ? oauthSessionA : oauthSessionB),
+      canAccessBrand: vi.fn(async () => true),
+    };
+    const app = createServer({
+      repository,
+      kakaoAuth: kakaoAuth as any,
+      instagramLogin: {
+        appId: "instagram-app-id",
+        appSecret: "instagram-app-secret",
+        redirectUri: "https://api.example/auth/meta/callback",
+        frontendUrl: "https://app.example",
+      },
+      logger: false,
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const start = await app.inject({
+      method: "GET",
+      url: "/auth/meta/start",
+      headers: { cookie: "bp_session=session-a" },
+    });
+    const state = new URL(start.headers.location ?? "").searchParams.get("state");
+
+    const callback = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?code=oauth-code&state=${state}`,
+      headers: {
+        cookie: `bp_session=session-b; ${requestCookieHeader(start.headers["set-cookie"])}`,
+      },
+    });
+
+    expect(callback.headers.location).toBe(
+      "https://app.example/channels?instagram=failed&reason=invalid_callback",
+    );
+    expect(setCookieValues(callback.headers["set-cookie"]).map((item) => item.split("=", 1)[0])).toEqual([
+      "bp_instagram_login_state",
+      "bp_instagram_login_binding",
+    ]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(repository.saveChannelCredentials).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "the same user switches brands",
+      callbackSession: {
+        ...oauthSessionA,
+        brandId: "brand-b",
+        brandName: "Brand B",
+      },
+      callbackAccess: true,
+    },
+    {
+      name: "the initiating user loses brand membership",
+      callbackSession: oauthSessionA,
+      callbackAccess: false,
+    },
+  ])("rejects the Instagram callback when $name", async ({ callbackSession, callbackAccess }) => {
+    const repository = createRepository();
+    const kakaoAuth = {
+      getSession: vi.fn()
+        .mockResolvedValueOnce(oauthSessionA)
+        .mockResolvedValueOnce(callbackSession),
+      canAccessBrand: vi.fn()
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(callbackAccess),
+    };
+    const app = createServer({
+      repository,
+      kakaoAuth: kakaoAuth as any,
+      instagramLogin: {
+        appId: "instagram-app-id",
+        appSecret: "instagram-app-secret",
+        redirectUri: "https://api.example/auth/meta/callback",
+        frontendUrl: "https://app.example",
+      },
+      logger: false,
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const start = await app.inject({
+      method: "GET",
+      url: "/auth/meta/start",
+      headers: { cookie: "bp_session=session-a" },
+    });
+    const state = new URL(start.headers.location ?? "").searchParams.get("state");
+
+    const callback = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?code=oauth-code&state=${state}`,
+      headers: {
+        cookie: `bp_session=session-a; ${requestCookieHeader(start.headers["set-cookie"])}`,
+      },
+    });
+
+    expect(callback.headers.location).toBe(
+      "https://app.example/channels?instagram=failed&reason=invalid_callback",
+    );
+    expect(setCookieValues(callback.headers["set-cookie"]).map((item) => item.split("=", 1)[0])).toEqual([
+      "bp_instagram_login_state",
+      "bp_instagram_login_binding",
+    ]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(repository.saveChannelCredentials).not.toHaveBeenCalled();
+  });
+
+  it("completes a session-bound Instagram callback for tenant A once", async () => {
+    const repository = createRepository();
+    const kakaoAuth = {
+      getSession: vi.fn(async (token: string) => token === "session-a" ? oauthSessionA : null),
+      canAccessBrand: vi.fn(async (userId: string, requestedBrandId: string) => (
+        userId === oauthSessionA.userId && requestedBrandId === oauthSessionA.brandId
+      )),
+    };
+    const app = createServer({
+      repository,
+      kakaoAuth: kakaoAuth as any,
+      instagramLogin: {
+        appId: "instagram-app-id",
+        appSecret: "instagram-app-secret",
+        redirectUri: "https://api.example/auth/meta/callback",
+        frontendUrl: "https://app.example",
+      },
+      logger: false,
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "https://api.instagram.com/oauth/access_token") {
+        return new Response(JSON.stringify({ access_token: "short-token" }));
+      }
+      if (url.startsWith("https://graph.instagram.com/access_token")) {
+        return new Response(JSON.stringify({ access_token: "long-token" }));
+      }
+      if (url.includes("/subscribed_apps")) {
+        return new Response(JSON.stringify({ success: true }));
+      }
+      return new Response(JSON.stringify({
+        id: "professional-account-a",
+        username: "brand-a",
+      }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const start = await app.inject({
+      method: "GET",
+      url: "/auth/meta/start",
+      headers: { cookie: "bp_session=session-a" },
+    });
+    const state = new URL(start.headers.location ?? "").searchParams.get("state");
+
+    const callback = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?code=oauth-code&state=${state}`,
+      headers: {
+        cookie: `bp_session=session-a; ${requestCookieHeader(start.headers["set-cookie"])}`,
+      },
+    });
+
+    expect(callback.headers.location).toBe("https://app.example/channels?instagram=connected");
+    expect(repository.saveChannelCredentials).toHaveBeenCalledWith(
+      "brand-a",
+      "instagram",
+      expect.objectContaining({ externalAccountId: "professional-account-a" }),
+    );
+    const fetchCount = fetchMock.mock.calls.length;
+    const replay = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?code=oauth-code&state=${state}`,
+      headers: { cookie: "bp_session=session-a" },
+    });
+    expect(replay.headers.location).toBe(
+      "https://app.example/channels?instagram=failed&reason=invalid_callback",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(fetchCount);
+    expect(repository.saveChannelCredentials).toHaveBeenCalledOnce();
+  });
+
   it("redirects an Instagram provider denial to a canonical cancellation without leaking provider text", async () => {
     const app = createServer({
       repository: createRepository(),
@@ -1765,7 +2021,7 @@ describe("API server", () => {
     const callback = await app.inject({
       method: "GET",
       url: `/auth/meta/callback?error=access_denied&error_description=SECRET_PROVIDER_TEXT&state=${state}`,
-      headers: { cookie: String(start.headers["set-cookie"]) },
+      headers: { cookie: requestCookieHeader(start.headers["set-cookie"]) },
     });
 
     expect(callback.statusCode).toBe(302);
@@ -1788,8 +2044,9 @@ describe("API server", () => {
     });
     const start = await app.inject({ method: "GET", url: "/auth/meta/start" });
     const state = new URL(start.headers.location ?? "").searchParams.get("state");
-    const stateCookie = String(start.headers["set-cookie"]);
-    expect(stateCookie).toContain("HttpOnly");
+    const pendingCookies = setCookieValues(start.headers["set-cookie"]);
+    expect(pendingCookies.every((item) => item.includes("HttpOnly"))).toBe(true);
+    const stateCookie = requestCookieHeader(start.headers["set-cookie"]);
 
     for (const forgedUrl of [
       "/auth/meta/callback?error=access_denied&error_description=SECRET_MISSING_STATE",
@@ -1808,6 +2065,20 @@ describe("API server", () => {
       expect(forged.headers.location).not.toContain("SECRET");
       expect(forged.headers["set-cookie"]).toBeUndefined();
     }
+
+    const bindingCookie = pendingCookies
+      .find((item) => item.startsWith("bp_instagram_login_binding="))
+      ?.split(";", 1)[0];
+    expect(bindingCookie).toBeDefined();
+    const forgedBinding = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?error=access_denied&state=${state}`,
+      headers: { cookie: stateCookie.replace(bindingCookie!, `${bindingCookie!}x`) },
+    });
+    expect(forgedBinding.headers.location).toBe(
+      "http://localhost:5173/channels?instagram=failed&reason=invalid_callback",
+    );
+    expect(forgedBinding.headers["set-cookie"]).toBeUndefined();
 
     const denied = await app.inject({
       method: "GET",
@@ -1890,7 +2161,7 @@ describe("API server", () => {
     const callback = await app.inject({
       method: "GET",
       url: `/auth/meta/callback?code=oauth-code&state=${state}`,
-      headers: { cookie: String(start.headers["set-cookie"]) },
+      headers: { cookie: requestCookieHeader(start.headers["set-cookie"]) },
     });
 
     expect(callback.statusCode).toBe(302);

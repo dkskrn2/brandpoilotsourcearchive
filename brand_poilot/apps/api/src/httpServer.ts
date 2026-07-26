@@ -1,5 +1,5 @@
 import cors from "@fastify/cors";
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import Fastify, { LogController, type FastifyReply } from "fastify";
 import rawBody from "fastify-raw-body";
 import type { FastifyLoggerOptions } from "fastify/types/logger";
@@ -93,6 +93,7 @@ const defaultDevBrandId = "00000000-0000-4000-8000-000000000100";
 const maxBrandProfileShortFieldLength = 30;
 const kakaoStateCookiePrefix = "bp_kakao_state_";
 const instagramLoginStateCookie = "bp_instagram_login_state";
+const instagramLoginBindingCookie = "bp_instagram_login_binding";
 const instagramTrendStateCookie = "bp_instagram_trend_state";
 const uuidPattern = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const workerResourceWorkloads = new Set(["dm", "wiki", "content"]);
@@ -156,6 +157,79 @@ interface CreateServerOptions {
 }
 
 type AuthSession = Awaited<ReturnType<NonNullable<CreateServerOptions["kakaoAuth"]>["getSession"]>>;
+
+interface InstagramLoginBinding {
+  version: 1;
+  mode: "session" | "development";
+  stateDigest: string;
+  sessionDigest: string | null;
+  identityDigest: string;
+}
+
+function keyedDigest(secret: string, label: string, value: string) {
+  return createHmac("sha256", secret).update(`${label}\0${value}`).digest("base64url");
+}
+
+function instagramLoginIdentity(session: NonNullable<AuthSession>) {
+  return `${session.userId}\0${session.workspaceId}\0${session.brandId}`;
+}
+
+function encodeInstagramLoginBinding(input: {
+  appSecret: string;
+  state: string;
+  sessionToken: string | null;
+  session: AuthSession;
+  developmentBrandId: string;
+}) {
+  const binding: InstagramLoginBinding = {
+    version: 1,
+    mode: input.session ? "session" : "development",
+    stateDigest: keyedDigest(input.appSecret, "state", input.state),
+    sessionDigest: input.sessionToken
+      ? keyedDigest(input.appSecret, "session", input.sessionToken)
+      : null,
+    identityDigest: keyedDigest(
+      input.appSecret,
+      "identity",
+      input.session
+        ? instagramLoginIdentity(input.session)
+        : `development\0${input.developmentBrandId}`,
+    ),
+  };
+  const payload = Buffer.from(JSON.stringify(binding)).toString("base64url");
+  const signature = keyedDigest(input.appSecret, "binding", payload);
+  return `${payload}.${signature}`;
+}
+
+function decodeInstagramLoginBinding(value: string | null, appSecret: string): InstagramLoginBinding | null {
+  if (!value) return null;
+  const parts = value.split(".");
+  if (parts.length !== 2) return null;
+  const [payload, signature] = parts;
+  if (!matchesOpaqueSecret(signature, keyedDigest(appSecret, "binding", payload))) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Partial<InstagramLoginBinding>;
+    if (
+      parsed.version !== 1
+      || (parsed.mode !== "session" && parsed.mode !== "development")
+      || typeof parsed.stateDigest !== "string"
+      || (typeof parsed.sessionDigest !== "string" && parsed.sessionDigest !== null)
+      || typeof parsed.identityDigest !== "string"
+    ) {
+      return null;
+    }
+    return parsed as InstagramLoginBinding;
+  } catch {
+    return null;
+  }
+}
+
+function clearInstagramLoginCookies(secure: boolean) {
+  return [
+    cookie(instagramLoginStateCookie, "", 0, secure),
+    cookie(instagramLoginBindingCookie, "", 0, secure),
+  ];
+}
 
 function aiContentScope(request: FastifyRequest, brandId: string) {
   const session = (request as { aiContentSession?: AuthSession }).aiContentSession;
@@ -963,7 +1037,10 @@ export function createServer(
   app.post("/auth/logout", async (request, reply) => {
     const token = readCookie(request.headers.cookie, "bp_session");
     if (token && kakaoAuth) await kakaoAuth.revokeSession(token);
-    reply.header("set-cookie", sessionCookie("", 0, httpPolicy.cookieSecure));
+    reply.header("set-cookie", [
+      sessionCookie("", 0, httpPolicy.cookieSecure),
+      ...clearInstagramLoginCookies(httpPolicy.cookieSecure),
+    ]);
     return { ok: true };
   });
 
@@ -972,16 +1049,29 @@ export function createServer(
       reply.code(503);
       return { error: "instagram_login_not_configured" };
     }
+    const state = randomUUID();
+    let session: AuthSession = null;
+    let sessionToken: string | null = null;
+    const developmentBrandId = process.env.BRAND_PILOT_DEV_BRAND_ID ?? defaultDevBrandId;
     if (kakaoAuth) {
-      const token = readCookie(request.headers.cookie, "bp_session");
-      const session = token ? await kakaoAuth.getSession(token) : null;
-      if (!session) {
+      sessionToken = readCookie(request.headers.cookie, "bp_session");
+      session = sessionToken ? await kakaoAuth.getSession(sessionToken) : null;
+      if (!session || !await kakaoAuth.canAccessBrand(session.userId, session.brandId)) {
         reply.code(401);
         return { error: "authentication_required" };
       }
     }
-    const state = randomUUID();
-    reply.header("set-cookie", cookie(instagramLoginStateCookie, state, 10 * 60, httpPolicy.cookieSecure));
+    const binding = encodeInstagramLoginBinding({
+      appSecret: instagramLogin.appSecret,
+      state,
+      sessionToken,
+      session,
+      developmentBrandId,
+    });
+    reply.header("set-cookie", [
+      cookie(instagramLoginStateCookie, state, 10 * 60, httpPolicy.cookieSecure),
+      cookie(instagramLoginBindingCookie, binding, 10 * 60, httpPolicy.cookieSecure),
+    ]);
     return reply.redirect(buildInstagramLoginAuthorizeUrl({
       appId: instagramLogin.appId,
       redirectUri: instagramLogin.redirectUri,
@@ -992,9 +1082,9 @@ export function createServer(
   app.get<{
     Querystring: { code?: string; state?: string; error?: string; error_description?: string };
   }>("/auth/meta/callback", async (request, reply) => {
-    const clearState = cookie(instagramLoginStateCookie, "", 0, httpPolicy.cookieSecure);
+    const clearPending = clearInstagramLoginCookies(httpPolicy.cookieSecure);
     if (!instagramLogin?.appId || !instagramLogin.appSecret || !instagramLogin.redirectUri) {
-      reply.header("set-cookie", clearState).code(503);
+      reply.header("set-cookie", clearPending).code(503);
       return { error: "instagram_login_not_configured" };
     }
     const storedState = readCookie(request.headers.cookie, instagramLoginStateCookie);
@@ -1005,7 +1095,71 @@ export function createServer(
         "invalid_callback",
       ));
     }
-    reply.header("set-cookie", clearState);
+    const binding = decodeInstagramLoginBinding(
+      readCookie(request.headers.cookie, instagramLoginBindingCookie),
+      instagramLogin.appSecret,
+    );
+    if (
+      !binding
+      || !matchesOpaqueSecret(
+        binding.stateDigest,
+        keyedDigest(instagramLogin.appSecret, "state", request.query.state!),
+      )
+    ) {
+      return reply.redirect(instagramLoginCallbackUrl(
+        instagramLogin.frontendUrl,
+        "failed",
+        "invalid_callback",
+      ));
+    }
+    let brandId = process.env.BRAND_PILOT_DEV_BRAND_ID ?? defaultDevBrandId;
+    if (kakaoAuth) {
+      const currentSessionToken = readCookie(request.headers.cookie, "bp_session");
+      const currentSession = currentSessionToken
+        ? await kakaoAuth.getSession(currentSessionToken)
+        : null;
+      const sessionMatches = binding.mode === "session"
+        && currentSession
+        && matchesOpaqueSecret(
+          binding.sessionDigest,
+          keyedDigest(instagramLogin.appSecret, "session", currentSessionToken!),
+        )
+        && matchesOpaqueSecret(
+          binding.identityDigest,
+          keyedDigest(
+            instagramLogin.appSecret,
+            "identity",
+            instagramLoginIdentity(currentSession),
+          ),
+        );
+      const authorized = sessionMatches
+        ? await kakaoAuth.canAccessBrand(currentSession.userId, currentSession.brandId)
+        : false;
+      if (!sessionMatches || !authorized) {
+        reply.header("set-cookie", clearPending);
+        return reply.redirect(instagramLoginCallbackUrl(
+          instagramLogin.frontendUrl,
+          "failed",
+          "invalid_callback",
+        ));
+      }
+      brandId = currentSession.brandId;
+    } else {
+      const developmentMatches = binding.mode === "development"
+        && binding.sessionDigest === null
+        && matchesOpaqueSecret(
+          binding.identityDigest,
+          keyedDigest(instagramLogin.appSecret, "identity", `development\0${brandId}`),
+        );
+      if (!developmentMatches) {
+        return reply.redirect(instagramLoginCallbackUrl(
+          instagramLogin.frontendUrl,
+          "failed",
+          "invalid_callback",
+        ));
+      }
+    }
+    reply.header("set-cookie", clearPending);
     if (request.query.error) {
       return reply.redirect(instagramLoginCallbackUrl(instagramLogin.frontendUrl, "cancelled"));
     }
@@ -1015,19 +1169,6 @@ export function createServer(
         "failed",
         "invalid_callback",
       ));
-    }
-    let brandId = process.env.BRAND_PILOT_DEV_BRAND_ID ?? defaultDevBrandId;
-    if (kakaoAuth) {
-      const token = readCookie(request.headers.cookie, "bp_session");
-      const session = token ? await kakaoAuth.getSession(token) : null;
-      if (!session) {
-        return reply.redirect(instagramLoginCallbackUrl(
-          instagramLogin.frontendUrl,
-          "failed",
-          "authentication_required",
-        ));
-      }
-      brandId = session.brandId;
     }
     let failureReason: InstagramLoginCallbackFailureReason = "token_exchange_failed";
     try {
