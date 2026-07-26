@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { evaluateInstagramStoryCapability } from "./instagramCapabilities";
+import {
+  buildInstagramLoginAuthorizeUrl,
+  resolveInstagramLoginConnection
+} from "./instagramLoginGraph";
 
 const baseInput = {
   channelStatus: "connected",
@@ -32,6 +36,12 @@ describe("evaluateInstagramStoryCapability", () => {
       reason: "professional_account_required"
     },
     {
+      name: "a professional account ID contains only whitespace",
+      input: { externalAccountId: "   " },
+      status: "needs_attention",
+      reason: "professional_account_required"
+    },
+    {
       name: "a credential is missing",
       input: { credentialStatus: null },
       status: "needs_attention",
@@ -46,6 +56,12 @@ describe("evaluateInstagramStoryCapability", () => {
     {
       name: "an active credential is expired",
       input: { credentialExpiresAt: "2026-07-12T23:59:59.000Z" },
+      status: "needs_attention",
+      reason: "credential_expired"
+    },
+    {
+      name: "an active credential expires exactly at the evaluation time",
+      input: { credentialExpiresAt: "2026-07-13T00:00:00.000Z" },
       status: "needs_attention",
       reason: "credential_expired"
     },
@@ -143,6 +159,33 @@ describe("evaluateInstagramStoryCapability", () => {
         scopesVerified: true,
         verifiedCredentialId: "credential-1"
       }
+    });
+  });
+
+  it("keeps Instagram OAuth permissions and professional account mapping explicit", async () => {
+    const authorizeUrl = new URL(buildInstagramLoginAuthorizeUrl({
+      appId: "app-1",
+      redirectUri: "https://api.example/auth/meta/callback",
+      state: "state-1"
+    }));
+    expect(authorizeUrl.searchParams.get("scope")?.split(",")).toEqual([
+      "instagram_business_basic",
+      "instagram_business_content_publish",
+      "instagram_business_manage_messages"
+    ]);
+
+    const fetchImpl = async () => new Response(JSON.stringify({
+      id: "app-scoped-profile",
+      user_id: "professional-account-1",
+      username: "brand"
+    }));
+    await expect(resolveInstagramLoginConnection({
+      accessToken: "token",
+      graphVersion: "v23.0",
+      fetchImpl
+    })).resolves.toEqual({
+      instagramBusinessAccountId: "professional-account-1",
+      instagramUsername: "brand"
     });
   });
 

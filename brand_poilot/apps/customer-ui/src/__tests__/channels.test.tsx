@@ -1,6 +1,10 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  channelConnectionUrl,
+  parseChannelConnectionCallback
+} from "../features/channels/channelConnectionUrls";
 import type { ChannelConnection, ChannelType } from "../types";
 
 const apiChannels: ChannelConnection[] = [
@@ -132,6 +136,19 @@ describe("ChannelsPage", () => {
     expect(api.getChannelConnectionRequest).not.toHaveBeenCalled();
   });
 
+  it("keeps all six catalog channels without implying publish support for planned providers", async () => {
+    await renderChannelsPage();
+
+    for (const label of ["Instagram", "Threads", "X", "LinkedIn", "YouTube", "TikTok"]) {
+      expect(await screen.findByRole("heading", { name: label })).toBeVisible();
+    }
+    expect(channelConnectionUrl("instagram")).toBe("http://localhost:4000/auth/meta/start");
+    for (const channel of ["threads", "x", "linkedin", "youtube", "tiktok"] as const) {
+      expect(channelConnectionUrl(channel)).toBeNull();
+    }
+    expect(screen.getAllByRole("button", { name: "연결 준비 중" })).toHaveLength(5);
+  });
+
   it("keeps credential and manual request fields out of the customer channel page", async () => {
     await renderChannelsPage();
     await screen.findByText("Meta OAuth");
@@ -174,6 +191,26 @@ describe("ChannelsPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "YouTube 연결 가이드" }));
     expect(screen.getByRole("dialog", { name: "YouTube 연결 가이드" })).toBeVisible();
     expect(screen.getByText(/YouTube 채널을 먼저 생성/)).toBeVisible();
+  });
+
+  it("preserves static Instagram Story publishing without a video or Reel generation action", async () => {
+    await renderChannelsPage();
+    await userEvent.click(await screen.findByRole("button", { name: "Instagram 연결 가이드" }));
+
+    expect(screen.getByText(/피드 카드뉴스, 스토리와 릴스를 연결 계정에 게시/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: /(?:영상|Reel|릴스).*(?:생성|제작)/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /(?:영상|Reel|릴스).*(?:생성|제작)/i })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["?instagram=connected", { channel: "instagram", outcome: "success", reason: null }],
+    ["?instagram=cancelled", { channel: "instagram", outcome: "cancelled", reason: null }],
+    [
+      "?instagram=failed&reason=insufficient_permissions",
+      { channel: "instagram", outcome: "failed", reason: "insufficient_permissions" }
+    ]
+  ] as const)("normalizes an external OAuth callback query %s", (search, expected) => {
+    expect(parseChannelConnectionCallback(search)).toEqual(expected);
   });
 
   it("closes the channel guide with Escape", async () => {

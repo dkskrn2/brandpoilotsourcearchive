@@ -1,7 +1,28 @@
 import type { ChannelType } from "../../types";
 
+export interface ChannelConnectionCallback {
+  channel: "instagram";
+  outcome: "success" | "cancelled" | "failed";
+  reason: string | null;
+}
+
 export function channelConnectionUrl(channel: ChannelType) {
   if (channel !== "instagram") return null;
   return import.meta.env.VITE_META_OAUTH_START_URL
     ?? `${import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000"}/auth/meta/start`;
+}
+
+export function parseChannelConnectionCallback(search: string): ChannelConnectionCallback | null {
+  const query = new URLSearchParams(search);
+  const result = query.get("instagram");
+  if (result === "connected") {
+    return { channel: "instagram", outcome: "success", reason: null };
+  }
+  if (result === "cancelled") {
+    return { channel: "instagram", outcome: "cancelled", reason: null };
+  }
+  if (result === "failed") {
+    return { channel: "instagram", outcome: "failed", reason: query.get("reason") };
+  }
+  return null;
 }
