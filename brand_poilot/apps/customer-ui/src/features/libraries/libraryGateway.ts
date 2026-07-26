@@ -1,5 +1,6 @@
 import { put as putBlob } from "@vercel/blob/client";
 import { ApiRequestError, apiClient } from "../../lib/apiClient";
+import type { ReferenceItem } from "../../types";
 
 export interface ProductServiceProfile {
   contractVersion: "product-service.v1";
@@ -204,6 +205,26 @@ async function sha256(file: File, signal?: AbortSignal, onProgress: (value: numb
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
+export const REFERENCE_UPLOAD_POLICY = Object.freeze({
+  "image/png": 5 * 1024 * 1024,
+  "image/jpeg": 5 * 1024 * 1024,
+  "image/webp": 5 * 1024 * 1024,
+  "application/pdf": 10 * 1024 * 1024,
+  "text/plain": 5 * 1024 * 1024,
+  "text/markdown": 5 * 1024 * 1024,
+  "text/csv": 5 * 1024 * 1024,
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": 10 * 1024 * 1024,
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": 10 * 1024 * 1024,
+});
+
+function validateReferenceFile(file: File) {
+  const mimeType = file.type.toLowerCase();
+  const maximum = REFERENCE_UPLOAD_POLICY[mimeType as keyof typeof REFERENCE_UPLOAD_POLICY];
+  if (maximum === undefined) throw new Error("reference_upload_mime_invalid");
+  if (file.size <= 0 || file.size > maximum) throw new Error("reference_upload_size_invalid");
+  return mimeType;
+}
+
 export function createLibraryGateway(client: Client = apiClient(), blobPut: typeof putBlob = putBlob) {
   return {
     listProductServices(brandId: string) {
@@ -345,6 +366,72 @@ export function createLibraryGateway(client: Client = apiClient(), blobPut: type
         | { status: "already_cancelled" }
       >(
         `/brands/${brandId}/avatars/${avatarId}/images/upload-sessions/${sessionId}`,
+        { method: "DELETE" },
+      );
+    },
+    hashReferenceFile(file: File, signal?: AbortSignal, onProgress?: (value: number) => void) {
+      validateReferenceFile(file);
+      return sha256(file, signal, onProgress);
+    },
+    async uploadReferenceFile(
+      brandId: string,
+      file: File,
+      options: {
+        checksum?: string;
+        signal?: AbortSignal;
+        onProgress?: (value: number) => void;
+        onSession?: (sessionId: string) => void;
+      } = {},
+    ) {
+      const mimeType = validateReferenceFile(file);
+      const onProgress = options.onProgress ?? (() => undefined);
+      const metadata = {
+        fileName: file.name,
+        mimeType,
+        sizeBytes: file.size,
+        checksum: options.checksum ?? await sha256(file, options.signal),
+      };
+      onProgress(10);
+      const token = await client.requestJson<{
+        pathname: string;
+        clientToken: string;
+        sessionId: string;
+        nonce: string;
+        expiresAt: string;
+      }>(`/brands/${brandId}/references/upload-token`, {
+        method: "POST",
+        body: JSON.stringify(metadata),
+        ...(options.signal ? { signal: options.signal } : {}),
+      });
+      options.onSession?.(token.sessionId);
+      const stored = await blobPut(token.pathname, file, {
+        access: "public",
+        token: token.clientToken,
+        contentType: metadata.mimeType,
+        abortSignal: options.signal,
+        onUploadProgress: ({ percentage }) => onProgress(10 + Math.round(percentage * 0.6)),
+      });
+      onProgress(70);
+      const reference = await client.requestJson<ReferenceItem>(`/brands/${brandId}/references/confirm`, {
+        method: "POST",
+        body: JSON.stringify({
+          ...metadata,
+          sessionId: token.sessionId,
+          nonce: token.nonce,
+          storagePath: token.pathname,
+          storageUrl: stored.url,
+        }),
+        ...(options.signal ? { signal: options.signal } : {}),
+      });
+      onProgress(100);
+      return { sessionId: token.sessionId, reference };
+    },
+    cancelReferenceUpload(brandId: string, sessionId: string) {
+      return client.requestJson<
+        { status: "cleanup_pending"; immediateCleanup: "succeeded" | "retry_scheduled" | "already_pending" }
+        | { status: "already_cancelled" }
+      >(
+        `/brands/${brandId}/references/upload-sessions/${sessionId}`,
         { method: "DELETE" },
       );
     },

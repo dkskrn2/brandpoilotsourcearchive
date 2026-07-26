@@ -59,7 +59,12 @@ export function ReferenceCard({
         >
           <Heart size={18} fill={item.favorite ? "currentColor" : "none"} aria-hidden="true" />
         </button>
-      ) : null}
+      ) : (
+        <span className="reference-card__favorite-state">
+          <Heart size={16} fill={item.favorite ? "currentColor" : "none"} aria-hidden="true" />
+          {item.favorite ? "즐겨찾기됨" : "즐겨찾기 아님"}
+        </span>
+      )}
     </article>
   );
 }

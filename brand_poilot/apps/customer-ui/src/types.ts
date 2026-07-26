@@ -649,6 +649,16 @@ export interface ReferenceItem {
   updatedAt: string;
 }
 
+export interface ReferenceDetail extends ReferenceItem {
+  description: string | null;
+  body: string | null;
+  snapshot: {
+    id: string;
+    fetchedAt: string;
+    metadata: Record<string, unknown>;
+  } | null;
+}
+
 export interface ReferencePattern {
   observations: string[];
   interpretation: string;

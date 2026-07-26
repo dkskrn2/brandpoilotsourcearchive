@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ReferenceBrand, ReferenceItem } from "../../types";
+import type { ReferenceBrand, ReferenceDetail, ReferenceItem, ReferencePattern } from "../../types";
 import { api, DEMO_BRAND_ID } from "../../lib/apiClient";
 import { Alert } from "../ui/Alert";
 import { EmptyState } from "../ui/EmptyState";
@@ -25,6 +25,14 @@ export function SavedReferenceBrandsPanel() {
   const loadItems = useCallback(
     (referenceBrandId: string): Promise<ReferenceItem[]> =>
       api.listReferenceBrandItems(DEMO_BRAND_ID, referenceBrandId),
+    [],
+  );
+  const loadDetail = useCallback(
+    (referenceId: string): Promise<ReferenceDetail> => api.getReference(DEMO_BRAND_ID, referenceId),
+    [],
+  );
+  const loadPattern = useCallback(
+    (referenceId: string): Promise<ReferencePattern> => api.getReferencePattern(DEMO_BRAND_ID, referenceId),
     [],
   );
 
@@ -87,7 +95,15 @@ export function SavedReferenceBrandsPanel() {
           </button>
         ))}</div> : null}
       </div>
-      {selected ? <ReferenceBrandDetailDialog brand={selected} onClose={() => setSelected(null)} loadItems={loadItems} /> : null}
+      {selected ? (
+        <ReferenceBrandDetailDialog
+          brand={selected}
+          onClose={() => setSelected(null)}
+          loadItems={loadItems}
+          loadDetail={loadDetail}
+          loadPattern={loadPattern}
+        />
+      ) : null}
     </section>
   );
 }

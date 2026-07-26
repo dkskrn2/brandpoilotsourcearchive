@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, DEMO_BRAND_ID } from "../../lib/apiClient";
-import type { ReferenceContentPurpose, ReferenceItem, ReferencePattern } from "../../types";
+import type { ReferenceContentPurpose, ReferenceDetail, ReferenceItem, ReferencePattern } from "../../types";
 import { Alert } from "../ui/Alert";
 import { EmptyState } from "../ui/EmptyState";
 import { ListSkeleton } from "../ui/LoadingState";
@@ -58,6 +58,10 @@ export function ExternalUrlsPanel() {
     (referenceId: string): Promise<ReferencePattern> => api.getReferencePattern(DEMO_BRAND_ID, referenceId),
     [],
   );
+  const loadDetail = useCallback(
+    (referenceId: string): Promise<ReferenceDetail> => api.getReference(DEMO_BRAND_ID, referenceId),
+    [],
+  );
 
   async function archive(item: ReferenceItem) {
     if (!window.confirm(`${item.title} 외부 URL을 삭제할까요?`)) return;
@@ -101,7 +105,7 @@ export function ExternalUrlsPanel() {
           </div>
         ))}</div> : null}
       </div>
-      {selected ? <ReferenceDetailDialog item={selected} onClose={() => setSelected(null)} loadPattern={loadPattern} /> : null}
+      {selected ? <ReferenceDetailDialog item={selected} onClose={() => setSelected(null)} loadDetail={loadDetail} loadPattern={loadPattern} /> : null}
     </section>
   );
 }

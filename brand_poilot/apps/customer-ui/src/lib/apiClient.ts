@@ -35,6 +35,7 @@ import type {
   PublishSlot,
   PublishResult,
   ReferenceBrand,
+  ReferenceDetail,
   ReferenceContentPurpose,
   ReferenceItem,
   ReferencePattern,
@@ -366,6 +367,13 @@ export function apiClient(options: ApiClientOptions = {}) {
       }
       const suffix = query.size ? `?${query.toString()}` : "";
       return request<ReferenceItem[]>(fetcher, `${baseUrl}/brands/${brandId}/references${suffix}`, { method: "GET" });
+    },
+    getReference(brandId: string, referenceId: string) {
+      return request<ReferenceDetail>(
+        fetcher,
+        `${baseUrl}/brands/${brandId}/references/${referenceId}`,
+        { method: "GET" },
+      );
     },
     addReferenceUrl(
       brandId: string,

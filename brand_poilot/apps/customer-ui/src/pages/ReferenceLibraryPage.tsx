@@ -12,8 +12,10 @@ import { Alert } from "../components/ui/Alert";
 import { EmptyState } from "../components/ui/EmptyState";
 import { ListSkeleton } from "../components/ui/LoadingState";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
-import type { ReferenceContentPurpose, ReferenceItem, ReferencePattern } from "../types";
+import type { ReferenceContentPurpose, ReferenceDetail, ReferenceItem, ReferencePattern } from "../types";
 import type { InstagramTrendMediaTypeFilter, InstagramTrendSort } from "../types";
+import { libraryGateway } from "../features/libraries/libraryGateway";
+import { ReferenceUploadDialog } from "../components/references/ReferenceUploadDialog";
 
 function ReferenceCollection({ view }: { view: "all" | "saved-content" | "recent" | "favorites" }) {
   const [items, setItems] = useState<ReferenceItem[] | null>(null);
@@ -46,6 +48,10 @@ function ReferenceCollection({ view }: { view: "all" | "saved-content" | "recent
     (referenceId: string): Promise<ReferencePattern> => api.getReferencePattern(DEMO_BRAND_ID, referenceId),
     [],
   );
+  const loadDetail = useCallback(
+    (referenceId: string): Promise<ReferenceDetail> => api.getReference(DEMO_BRAND_ID, referenceId),
+    [],
+  );
 
   async function toggleFavorite(item: ReferenceItem) {
     try {
@@ -74,21 +80,27 @@ function ReferenceCollection({ view }: { view: "all" | "saved-content" | "recent
           <ReferenceCard key={item.id} item={item} onSelect={setSelected} onFavorite={(entry) => void toggleFavorite(entry)} />
         ))}</div> : null}
       </div>
-      {selected ? <ReferenceDetailDialog item={selected} onClose={() => setSelected(null)} loadPattern={loadPattern} /> : null}
+      {selected ? <ReferenceDetailDialog item={selected} onClose={() => setSelected(null)} loadDetail={loadDetail} loadPattern={loadPattern} /> : null}
     </section>
   );
 }
 
 function DirectReferenceAddPanel() {
+  const [open, setOpen] = useState(false);
   return (
     <section className="panel">
       <div className="panel-head"><h2>직접 추가</h2></div>
       <div className="panel-body">
-        <Alert title="직접 업로드" variant="info">
-          파일 업로드 세션은 지원되지만 이 화면의 업로드 검증·진행 UI는 아직 연결되지 않았습니다.
-          외부 URL은 외부 URL 보기에서 등록할 수 있습니다.
-        </Alert>
+        <p className="muted">파일 내용 확인 후 안전한 업로드 세션으로 보관합니다. 진행 중인 파일을 제거하면 예약된 업로드도 정리합니다.</p>
+        <button className="button primary" type="button" onClick={() => setOpen(true)}>파일 업로드</button>
       </div>
+      {open ? (
+        <ReferenceUploadDialog
+          brandId={DEMO_BRAND_ID}
+          gateway={libraryGateway}
+          onClose={() => setOpen(false)}
+        />
+      ) : null}
     </section>
   );
 }

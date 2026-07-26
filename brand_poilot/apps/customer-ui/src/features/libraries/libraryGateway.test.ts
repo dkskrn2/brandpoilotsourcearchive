@@ -171,6 +171,75 @@ describe("library gateway", () => {
     );
   });
 
+  it("uploads and confirms a reference through its independent session lifecycle", async () => {
+    const token = {
+      pathname: "brands/brand-1/asset-library/references/session-1/checksum-brief.pdf",
+      clientToken: "client-token",
+      sessionId: "session-1",
+      nonce: "nonce-1",
+      expiresAt: "2026-07-27T01:00:00.000Z",
+    };
+    const confirmed = { id: "reference-1", kind: "upload", title: "brief.pdf" };
+    const requestJson = vi.fn()
+      .mockResolvedValueOnce(token)
+      .mockResolvedValueOnce(confirmed)
+      .mockResolvedValueOnce({ status: "cleanup_pending", immediateCleanup: "succeeded" });
+    const blobPut = vi.fn(async () => ({
+      url: `https://store.blob.vercel-storage.com/${token.pathname}`,
+    }));
+    const gateway = createLibraryGateway({ requestJson } as never, blobPut as never);
+    const file = new File(["real reference bytes"], "brief.pdf", { type: "application/pdf" });
+    const progress = vi.fn();
+    const onSession = vi.fn();
+
+    const result = await gateway.uploadReferenceFile("brand-1", file, {
+      checksum: "a".repeat(64),
+      onProgress: progress,
+      onSession,
+    });
+    await gateway.cancelReferenceUpload("brand-1", "session-1");
+
+    expect(onSession).toHaveBeenCalledWith("session-1");
+    expect(requestJson).toHaveBeenNthCalledWith(
+      1,
+      "/brands/brand-1/references/upload-token",
+      {
+        method: "POST",
+        body: expect.stringContaining('"mimeType":"application/pdf"'),
+      },
+    );
+    expect(blobPut).toHaveBeenCalledWith(
+      token.pathname,
+      file,
+      expect.objectContaining({ token: "client-token", contentType: "application/pdf" }),
+    );
+    expect(requestJson).toHaveBeenNthCalledWith(
+      2,
+      "/brands/brand-1/references/confirm",
+      {
+        method: "POST",
+        body: expect.stringContaining('"sessionId":"session-1"'),
+      },
+    );
+    expect(requestJson).toHaveBeenNthCalledWith(
+      3,
+      "/brands/brand-1/references/upload-sessions/session-1",
+      { method: "DELETE" },
+    );
+    expect(progress).toHaveBeenCalledWith(100);
+    expect(result).toEqual({ sessionId: "session-1", reference: confirmed });
+  });
+
+  it("rejects unsupported reference types before requesting a token", async () => {
+    const requestJson = vi.fn();
+    const gateway = createLibraryGateway({ requestJson } as never);
+    const html = new File(["<html>"], "page.html", { type: "text/html" });
+
+    await expect(gateway.uploadReferenceFile("brand-1", html))
+      .rejects.toThrow("reference_upload_mime_invalid");
+    expect(requestJson).not.toHaveBeenCalled();
+  });
+
   it("classifies deployment-order, scoped lookup, and retryable failures stably", () => {
     expect(classifyLibraryError(new ApiRequestError({
       status: 500,
