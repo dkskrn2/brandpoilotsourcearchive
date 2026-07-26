@@ -2,6 +2,7 @@ export interface ApiHttpRuntimePolicy {
   cookieSecure: boolean;
   corsAllowedOrigins: readonly string[];
   devAuthEnabled: boolean;
+  previewFrontendOrigin?: string;
 }
 
 export interface ApiRuntimeConfig {
@@ -36,6 +37,7 @@ const productionRequiredKeys = [
 ] as const;
 
 const productionFrontendOrigin = "https://app.danbammsg.co.kr";
+const productionPreviewFrontendOrigin = "https://staging-app.danbammsg.co.kr";
 const productionCorsOrigins = new Set([
   productionFrontendOrigin,
   "https://www.danbammsg.co.kr",
@@ -86,13 +88,19 @@ function parseOrigin(value: string, key: string, production: boolean) {
   return url.origin;
 }
 
-function parseCorsOrigins(value: string | undefined, production: boolean) {
+function parseCorsOrigins(
+  value: string | undefined,
+  production: boolean,
+  previewFrontendOrigin?: string,
+) {
   const origins = (value ?? "")
     .split(",")
     .map((origin) => origin.trim())
     .filter(Boolean)
     .map((origin) => parseOrigin(origin, "CORS_ALLOWED_ORIGINS", production));
-  if (production && origins.some((origin) => !productionCorsOrigins.has(origin))) {
+  const allowedProductionOrigins = new Set(productionCorsOrigins);
+  if (previewFrontendOrigin) allowedProductionOrigins.add(previewFrontendOrigin);
+  if (production && origins.some((origin) => !allowedProductionOrigins.has(origin))) {
     return invalid("CORS_ALLOWED_ORIGINS");
   }
   return [...new Set(origins)];
@@ -130,7 +138,25 @@ export function loadApiRuntimeConfig(
     ? parseOrigin(env.AUTH_FRONTEND_URL!, "AUTH_FRONTEND_URL", true)
     : undefined;
   if (production && frontendOrigin !== productionFrontendOrigin) invalid("AUTH_FRONTEND_URL");
-  const corsAllowedOrigins = parseCorsOrigins(env.CORS_ALLOWED_ORIGINS, production);
+  const previewFrontendOrigin = env.AUTH_PREVIEW_FRONTEND_URL?.trim()
+    ? parseOrigin(
+      env.AUTH_PREVIEW_FRONTEND_URL.trim(),
+      "AUTH_PREVIEW_FRONTEND_URL",
+      production,
+    )
+    : undefined;
+  if (
+    production
+    && previewFrontendOrigin
+    && previewFrontendOrigin !== productionPreviewFrontendOrigin
+  ) {
+    invalid("AUTH_PREVIEW_FRONTEND_URL");
+  }
+  const corsAllowedOrigins = parseCorsOrigins(
+    env.CORS_ALLOWED_ORIGINS,
+    production,
+    previewFrontendOrigin,
+  );
 
   if (production) {
     if (!cookieSecure) invalid("COOKIE_SECURE");
@@ -141,6 +167,12 @@ export function loadApiRuntimeConfig(
     if (!corsAllowedOrigins.includes(frontendOrigin!)) {
       invalid("AUTH_FRONTEND_URL");
     }
+    if (
+      previewFrontendOrigin
+      && !corsAllowedOrigins.includes(previewFrontendOrigin)
+    ) {
+      invalid("AUTH_PREVIEW_FRONTEND_URL");
+    }
   }
 
   const caCertificate = decodeCaCertificate(env.DB_SSL_CA_BASE64);
@@ -149,6 +181,7 @@ export function loadApiRuntimeConfig(
       cookieSecure,
       corsAllowedOrigins,
       devAuthEnabled,
+      ...(previewFrontendOrigin ? { previewFrontendOrigin } : {}),
     },
     db: {
       max: parsePositiveInteger(env.DB_POOL_MAX, "DB_POOL_MAX", 3, 10),

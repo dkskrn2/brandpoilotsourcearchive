@@ -59,4 +59,15 @@ describe("authentication redirects", () => {
       "http://localhost:4000/auth/kakao/login"
     );
   });
+
+  it("selects the configured preview destination without putting a URL in the login request", () => {
+    vi.stubEnv("VITE_AUTH_DESTINATION", "preview");
+
+    render(<MemoryRouter><LoginPage /></MemoryRouter>);
+
+    expect(screen.getByRole("link", { name: /카카오로 시작하기/ })).toHaveAttribute(
+      "href",
+      "http://localhost:4000/auth/kakao/login?destination=preview"
+    );
+  });
 });

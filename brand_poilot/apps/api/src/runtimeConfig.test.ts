@@ -70,6 +70,41 @@ describe("loadApiRuntimeConfig", () => {
     expect(() => loadApiRuntimeConfig(env)).toThrow("AUTH_FRONTEND_URL");
   });
 
+  it("allows one exact Danbam preview origin when it is explicitly configured", () => {
+    const env = validProductionEnv();
+    env.AUTH_PREVIEW_FRONTEND_URL = "https://staging-app.danbammsg.co.kr";
+    env.CORS_ALLOWED_ORIGINS = `${env.CORS_ALLOWED_ORIGINS},${env.AUTH_PREVIEW_FRONTEND_URL}`;
+
+    expect(loadApiRuntimeConfig(env).http).toEqual({
+      cookieSecure: true,
+      corsAllowedOrigins: [
+        "https://app.danbammsg.co.kr",
+        "https://www.danbammsg.co.kr",
+        "https://staging-app.danbammsg.co.kr",
+      ],
+      devAuthEnabled: false,
+      previewFrontendOrigin: "https://staging-app.danbammsg.co.kr",
+    });
+  });
+
+  it.each([
+    "https://brand-pilot-git-feature.example.vercel.app",
+    "https://staging-app.danbammsg.co.kr:8443",
+  ])("rejects an unsafe production preview origin: %s", (origin) => {
+    const env = validProductionEnv();
+    env.AUTH_PREVIEW_FRONTEND_URL = origin;
+    env.CORS_ALLOWED_ORIGINS = `${env.CORS_ALLOWED_ORIGINS},${origin}`;
+
+    expect(() => loadApiRuntimeConfig(env)).toThrow("AUTH_PREVIEW_FRONTEND_URL");
+  });
+
+  it("rejects a configured preview origin when it is missing from CORS", () => {
+    const env = validProductionEnv();
+    env.AUTH_PREVIEW_FRONTEND_URL = "https://staging-app.danbammsg.co.kr";
+
+    expect(() => loadApiRuntimeConfig(env)).toThrow("AUTH_PREVIEW_FRONTEND_URL");
+  });
+
   it("rejects production COOKIE_SECURE other than true", () => {
     const env = validProductionEnv();
     env.COOKIE_SECURE = "false";

@@ -765,13 +765,29 @@ export function createServer(
     return { user: { id: session.userId, displayName: session.displayName, email: session.email }, workspace: { id: session.workspaceId, name: session.workspaceName }, brand: { id: session.brandId, name: session.brandName } };
   });
 
-  app.get("/auth/kakao/login", async (request, reply) => {
+  app.get<{ Querystring: { destination?: string } }>("/auth/kakao/login", async (request, reply) => {
     if (!kakao?.restApiKey || !kakao.redirectUri) {
       reply.code(503);
       return { error: "kakao_auth_not_configured" };
     }
+    const destination = request.query.destination ?? "primary";
+    if (
+      (destination !== "primary" && destination !== "preview")
+      || (destination === "preview" && !httpPolicy.previewFrontendOrigin)
+    ) {
+      reply.code(400);
+      return { error: "kakao_login_destination_invalid" };
+    }
     const state = crypto.randomUUID();
-    reply.header("set-cookie", cookie(`${kakaoStateCookiePrefix}${state}`, "1", 600, httpPolicy.cookieSecure));
+    reply.header(
+      "set-cookie",
+      cookie(
+        `${kakaoStateCookiePrefix}${state}`,
+        destination === "preview" ? "preview" : "1",
+        600,
+        httpPolicy.cookieSecure,
+      ),
+    );
     const url = new URL("https://kauth.kakao.com/oauth/authorize");
     url.searchParams.set("response_type", "code");
     url.searchParams.set("client_id", kakao.restApiKey);
@@ -781,20 +797,25 @@ export function createServer(
   });
 
   app.get<{ Querystring: { code?: string; state?: string; error?: string } }>("/auth/kakao/callback", async (request, reply) => {
-    const frontendUrl = kakao?.frontendUrl ?? "http://localhost:5173";
+    const primaryFrontendUrl = kakao?.frontendUrl ?? "http://localhost:5173";
     if (!kakaoAuth || !kakao?.restApiKey || !kakao.redirectUri) {
       request.log.warn({ event: "kakao_callback_failed", reason: "configuration_missing" }, "kakao_callback_failed");
-      return reply.redirect(`${frontendUrl}/login?error=kakao_configuration_missing`);
+      return reply.redirect(`${primaryFrontendUrl}/login?error=kakao_configuration_missing`);
     }
+    const stateCookieName = request.query.state ? kakaoStateCookieName(request.query.state) : null;
+    const stateCookie = stateCookieName ? readCookie(request.headers.cookie, stateCookieName) : null;
+    const frontendUrl = stateCookie === "preview" && httpPolicy.previewFrontendOrigin
+      ? httpPolicy.previewFrontendOrigin
+      : primaryFrontendUrl;
     if (request.query.error || !request.query.code) {
       request.log.warn({ event: "kakao_callback_failed", reason: "authorization_denied", kakaoError: request.query.error ?? null }, "kakao_callback_failed");
       return reply.redirect(`${frontendUrl}/login?error=kakao_authorization_denied`);
     }
-    const stateCookieName = request.query.state ? kakaoStateCookieName(request.query.state) : null;
-    const stateCookie = stateCookieName ? readCookie(request.headers.cookie, stateCookieName) : null;
     // Supports an in-flight login initiated before the per-attempt cookie rollout.
     const legacyStateMatches = request.query.state !== undefined && readCookie(request.headers.cookie, "bp_kakao_state") === request.query.state;
-    if (!request.query.state || (stateCookie !== "1" && !legacyStateMatches)) {
+    const stateCookieMatches = stateCookie === "1"
+      || (stateCookie === "preview" && Boolean(httpPolicy.previewFrontendOrigin));
+    if (!request.query.state || (!stateCookieMatches && !legacyStateMatches)) {
       request.log.warn({ event: "kakao_callback_failed", reason: "state_mismatch" }, "kakao_callback_failed");
       return reply.redirect(`${frontendUrl}/login?error=kakao_state_mismatch`);
     }
@@ -811,7 +832,7 @@ export function createServer(
     if (!tokenResponse.ok || typeof tokenPayload.access_token !== "string") {
       request.log.warn({ event: "kakao_callback_failed", reason: "token_exchange_failed", status: tokenResponse.status }, "kakao_callback_failed");
       reply.header("set-cookie", clearStateCookie);
-      return reply.redirect(`${kakao.frontendUrl}/login?error=kakao_token_exchange_failed`);
+      return reply.redirect(`${frontendUrl}/login?error=kakao_token_exchange_failed`);
     }
     const profileResponse = await fetch("https://kapi.kakao.com/v2/user/me", { headers: { authorization: `Bearer ${tokenPayload.access_token}` } });
     const profilePayload = await profileResponse.json() as Record<string, unknown>;
@@ -820,13 +841,13 @@ export function createServer(
     if (!profileResponse.ok || (typeof profilePayload.id !== "number" && typeof profilePayload.id !== "string")) {
       request.log.warn({ event: "kakao_callback_failed", reason: "profile_fetch_failed", status: profileResponse.status }, "kakao_callback_failed");
       reply.header("set-cookie", clearStateCookie);
-      return reply.redirect(`${kakao.frontendUrl}/login?error=kakao_profile_fetch_failed`);
+      return reply.redirect(`${frontendUrl}/login?error=kakao_profile_fetch_failed`);
     }
     const profile: KakaoProfile = { subject: String(profilePayload.id), nickname: typeof properties.nickname === "string" ? properties.nickname : null, email: typeof account.email === "string" ? account.email : null };
     const session = await kakaoAuth.createOrLoadUser(profile);
     const sessionToken = await kakaoAuth.createSession(session.userId);
     reply.header("set-cookie", [sessionCookie(sessionToken, 60 * 60 * 24 * 7, httpPolicy.cookieSecure), clearStateCookie]);
-    return reply.redirect(`${kakao.frontendUrl}/onboarding`);
+    return reply.redirect(`${frontendUrl}/onboarding`);
   });
 
   app.post("/auth/logout", async (request, reply) => {

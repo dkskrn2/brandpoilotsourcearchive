@@ -713,6 +713,85 @@ describe("API server", () => {
     expect(cookies.find((value) => value.startsWith("bp_kakao_state_"))).toContain("Secure");
   });
 
+  it("returns a preview login to the exact configured preview origin", async () => {
+    const kakaoAuth = {
+      createOrLoadUser: vi.fn(async () => ({ userId: "user-1" })),
+      createSession: vi.fn(async () => "session-token"),
+    };
+    const app = createServer({
+      repository: createRepository(),
+      kakaoAuth: kakaoAuth as any,
+      kakao: {
+        restApiKey: "kakao-rest-api-key",
+        redirectUri: "https://api.danbammsg.co.kr/auth/kakao/callback",
+        frontendUrl: "https://app.danbammsg.co.kr",
+      },
+      runtimePolicy: {
+        cookieSecure: true,
+        corsAllowedOrigins: [
+          "https://app.danbammsg.co.kr",
+          "https://staging-app.danbammsg.co.kr",
+        ],
+        devAuthEnabled: false,
+        previewFrontendOrigin: "https://staging-app.danbammsg.co.kr",
+      },
+      logger: false,
+    });
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: "access-token" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 1234, properties: { nickname: "Tester" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })));
+
+    const login = await app.inject({
+      method: "GET",
+      url: "/auth/kakao/login?destination=preview",
+    });
+    const state = new URL(String(login.headers.location)).searchParams.get("state");
+    const stateCookie = String(login.headers["set-cookie"]).split(";", 1)[0];
+    const callback = await app.inject({
+      method: "GET",
+      url: `/auth/kakao/callback?code=test-code&state=${encodeURIComponent(state!)}`,
+      headers: { cookie: stateCookie },
+    });
+
+    expect(login.statusCode).toBe(302);
+    expect(stateCookie).toMatch(/^bp_kakao_state_[0-9a-f-]+=preview$/i);
+    expect(callback.statusCode).toBe(302);
+    expect(callback.headers.location).toBe("https://staging-app.danbammsg.co.kr/onboarding");
+  });
+
+  it("rejects an unknown Kakao login destination", async () => {
+    const app = createServer({
+      repository: createRepository(),
+      kakao: {
+        restApiKey: "kakao-rest-api-key",
+        redirectUri: "https://api.danbammsg.co.kr/auth/kakao/callback",
+        frontendUrl: "https://app.danbammsg.co.kr",
+      },
+      runtimePolicy: {
+        cookieSecure: true,
+        corsAllowedOrigins: ["https://app.danbammsg.co.kr"],
+        devAuthEnabled: false,
+      },
+      logger: false,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/auth/kakao/login?destination=https%3A%2F%2Fevil.example",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "kakao_login_destination_invalid" });
+    expect(response.headers.location).toBeUndefined();
+    expect(response.headers["set-cookie"]).toBeUndefined();
+  });
+
   it("accepts a valid Kakao state from an earlier concurrent login attempt", async () => {
     const app = createServer({
       repository: createRepository(),

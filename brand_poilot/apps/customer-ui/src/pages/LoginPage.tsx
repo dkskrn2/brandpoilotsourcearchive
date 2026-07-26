@@ -5,6 +5,11 @@ function apiBaseUrl() {
   return import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
 }
 
+function kakaoLoginUrl() {
+  const destination = import.meta.env.VITE_AUTH_DESTINATION;
+  return `${apiBaseUrl()}/auth/kakao/login${destination === "preview" ? "?destination=preview" : ""}`;
+}
+
 export function LoginPage() {
   const [params] = useSearchParams();
   const error = params.get("error");
@@ -23,7 +28,7 @@ export function LoginPage() {
         <h1 id="login-title">콘텐츠 운영을 시작하세요</h1>
         <p>카카오 계정으로 로그인하면 개인 워크스페이스와 첫 브랜드가 생성됩니다.</p>
         {errorMessage ? <p className="login-error">{errorMessage}</p> : null}
-        <a className="kakao-login" href={`${apiBaseUrl()}/auth/kakao/login`}>
+        <a className="kakao-login" href={kakaoLoginUrl()}>
           <span aria-hidden="true">K</span> 카카오로 시작하기
         </a>
       </section>

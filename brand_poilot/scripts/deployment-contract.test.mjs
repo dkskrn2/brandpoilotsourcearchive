@@ -21,6 +21,7 @@ import { test } from "node:test";
 const read = (path) => readFileSync(path, "utf8");
 const publishWorkflowPath = "../.github/workflows/publish-brand-pilot-server-images.yml";
 const ubuntuRunbookPath = "docs/operations/UBUNTU_DEPLOYMENT.md";
+const previewAuthRunbookPath = "docs/operations/VERCEL_PREVIEW_AUTH.md";
 const ubuntuBootstrapPath = "deploy/scripts/bootstrap-ubuntu.sh";
 const deploymentArtifacts = [
   ".dockerignore",
@@ -167,6 +168,24 @@ test("production deployment artifacts exist", () => {
     0,
     `missing deployment artifacts:\n${missing.map((path) => `- ${path}`).join("\n")}`,
   );
+});
+
+test("preview auth runbook uses one stable origin and an opaque OAuth destination", () => {
+  assert.equal(existsSync(previewAuthRunbookPath), true, "preview auth runbook is missing");
+  const runbook = read(previewAuthRunbookPath);
+  for (const phrase of [
+    "https://staging-app.danbammsg.co.kr",
+    "AUTH_PREVIEW_FRONTEND_URL=https://staging-app.danbammsg.co.kr",
+    "VITE_API_BASE_URL=https://api.danbammsg.co.kr",
+    "VITE_AUTH_DESTINATION=preview",
+    "destination=preview",
+    "CORS_ALLOWED_ORIGINS=https://app.danbammsg.co.kr,https://www.danbammsg.co.kr,https://staging-app.danbammsg.co.kr",
+    "Do not use a generated `*.vercel.app` URL",
+    "Do not attach the stable alias to an unreviewed pull request",
+    "No Ubuntu host or Vercel project is changed by this repository commit",
+  ]) {
+    assert.ok(runbook.includes(phrase), `preview auth runbook missing: ${phrase}`);
+  }
 });
 
 test("Ubuntu runbook fixes the API-only scope and stable public integration URLs", () => {
