@@ -546,8 +546,18 @@ describe("createInstagramTrendRepository", () => {
     let removed = false;
     const fixture = poolWith((sql, values) => {
       if (sql.includes("select id") && sql.includes("from brand_trend_saved_media")) {
-        expect(values).toEqual(["brand-2", "media-1"]);
+        if (!sql.includes("for update")) {
+          expect(values).toEqual(["brand-2", "media-1"]);
+          return removed ? result() : result([{
+            id: "saved-1", workspace_id: "workspace-1", source_url_id: "source-1",
+          }]);
+        }
+        expect(values).toEqual(["saved-1", "workspace-1", "brand-2", "media-1", "source-1"]);
         return removed ? result() : result([{ id: "saved-1" }]);
+      }
+      if (sql.includes("from source_urls") && sql.includes("for update")) {
+        expect(values).toEqual(["source-1", "workspace-1", "brand-2"]);
+        return result([{ id: "source-1" }]);
       }
       if (sql.includes("archive_brand_trend_saved_reference")) {
         expect(values).toEqual(["saved-1", null]);
@@ -567,6 +577,11 @@ describe("createInstagramTrendRepository", () => {
 
     await expect(repository.removeInstagramTrendSource("brand-2", "media-1")).resolves.toEqual({ mediaId: "media-1", removed: true });
     await expect(repository.removeInstagramTrendSource("brand-2", "media-1")).resolves.toEqual({ mediaId: "media-1", removed: false });
+    const locks = fixture.statements
+      .map(({ sql }) => sql.replace(/\s+/g, " ").trim())
+      .filter((sql) => sql.includes("for update"));
+    expect(locks[0]).toContain("source_urls");
+    expect(locks[1]).toContain("brand_trend_saved_media");
   });
 
   it("creates one reference source and snapshot and returns it on duplicate save", async () => {

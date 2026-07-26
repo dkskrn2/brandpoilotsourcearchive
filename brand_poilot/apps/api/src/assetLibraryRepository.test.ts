@@ -1021,6 +1021,9 @@ describe("asset library repository", () => {
       if (sql.includes("count(*)") && sql.includes("source_urls")) {
         return { rows: [{ count: sourceEnabled ? 10 : 9 }] };
       }
+      if (sql.includes("from source_urls") && sql.includes("for update")) {
+        return { rows: [{ id: sourceId }] };
+      }
       if (sql.includes("from source_urls") && sql.includes("url_hash")) return { rows: [{ id: sourceId }] };
       if (sql.includes("from reference_items") && sql.includes("source_url_id")) return { rows: [row()] };
       if (sql.includes("update source_urls") && sql.includes("enabled=true")) {
@@ -1061,8 +1064,11 @@ describe("asset library repository", () => {
           workspace_id: scope.workspaceId, brand_id: scope.brandId,
         }] };
       }
-      if (sql.includes("from brand_trend_saved_media") && sql.includes("for update")) {
-        return { rows: [{ id: savedId }] };
+      if (sql.includes("from brand_trend_saved_media")) {
+        return { rows: [{ id: savedId, source_url_id: avatarId }] };
+      }
+      if (sql.includes("from source_urls") && sql.includes("for update")) {
+        return { rows: [{ id: avatarId }] };
       }
       if (sql.includes("archive_brand_trend_saved_reference")) {
         return { rows: [{ reference_item_id: imageId }] };
@@ -1088,8 +1094,11 @@ describe("asset library repository", () => {
           id: imageId, kind: "trend", source_url_id: null, saved_trend_id: savedId,
         }] };
       }
-      if (sql.includes("from brand_trend_saved_media") && sql.includes("for update")) {
-        return { rows: [{ id: savedId }] };
+      if (sql.includes("from brand_trend_saved_media")) {
+        return { rows: [{ id: savedId, source_url_id: avatarId }] };
+      }
+      if (sql.includes("from source_urls") && sql.includes("for update")) {
+        return { rows: [{ id: avatarId }] };
       }
       if (sql.includes("from reference_items") && sql.includes("for update")) {
         return { rows: [{
@@ -1110,11 +1119,14 @@ describe("asset library repository", () => {
     const rowLocks = fake.query.mock.calls
       .map(([sql]) => String(sql).replace(/\s+/g, " ").trim())
       .filter((sql) => sql.includes("for update") && (
-        sql.includes("brand_trend_saved_media") || sql.includes("reference_items")
+        sql.includes("source_urls")
+        || sql.includes("brand_trend_saved_media")
+        || sql.includes("reference_items")
       ));
-    expect(rowLocks).toHaveLength(2);
-    expect(rowLocks[0]).toContain("brand_trend_saved_media");
-    expect(rowLocks[1]).toContain("reference_items");
+    expect(rowLocks).toHaveLength(3);
+    expect(rowLocks[0]).toContain("source_urls");
+    expect(rowLocks[1]).toContain("brand_trend_saved_media");
+    expect(rowLocks[2]).toContain("reference_items");
   });
 
   it.each(["remove", "resave"] as const)(
@@ -1129,7 +1141,7 @@ describe("asset library repository", () => {
     const bothRequested = deferred();
     let nextClientId = 0;
 
-    async function acquire(key: "saved" | "reference", clientId: number) {
+    async function acquire(key: "source" | "saved" | "reference", clientId: number) {
       if (!firstRequests.has(clientId)) {
         firstRequests.add(clientId);
         if (firstRequests.size === 2) bothRequested.resolve();
@@ -1192,6 +1204,7 @@ describe("asset library repository", () => {
               };
             }
             if (sql.includes("from source_urls") && sql.includes("url_hash")) {
+              await acquire("source", clientId);
               return {
                 rows: [{
                   id: avatarId,
@@ -1208,6 +1221,7 @@ describe("asset library repository", () => {
               };
             }
             if (sql.includes("update source_urls") && sql.includes("enabled = true")) {
+              await acquire("source", clientId);
               state.sourceEnabled = true;
               return {
                 rows: [{
@@ -1237,7 +1251,25 @@ describe("asset library repository", () => {
                 ? { rows: [], rowCount: 0 }
                 : { rows: [{ id: imageId, kind: "trend", source_url_id: null, saved_trend_id: savedId }], rowCount: 1 };
             }
-            if (sql.includes("from brand_trend_saved_media") && sql.includes("for update")) {
+            if (sql.startsWith("select") && sql.includes("from brand_trend_saved_media")
+              && !sql.includes("for update")) {
+              return state.saved
+                ? {
+                  rows: [{
+                    id: savedId,
+                    workspace_id: scope.workspaceId,
+                    source_url_id: avatarId,
+                  }],
+                  rowCount: 1,
+                }
+                : { rows: [], rowCount: 0 };
+            }
+            if (sql.includes("from source_urls") && sql.includes("for update")) {
+              await acquire("source", clientId);
+              return { rows: [{ id: avatarId }], rowCount: 1 };
+            }
+            if (sql.startsWith("select") && sql.includes("from brand_trend_saved_media")
+              && sql.includes("for update")) {
               await acquire("saved", clientId);
               return state.saved
                 ? { rows: [{ id: savedId }], rowCount: 1 }
@@ -1250,6 +1282,7 @@ describe("asset library repository", () => {
                 : { rows: [], rowCount: 0 };
             }
             if (sql.includes("archive_brand_trend_saved_reference")) {
+              await acquire("source", clientId);
               await acquire("saved", clientId);
               await acquire("reference", clientId);
               if (!state.saved) return { rows: [{ reference_item_id: null }], rowCount: 1 };
@@ -1258,6 +1291,7 @@ describe("asset library repository", () => {
               return { rows: [{ reference_item_id: imageId }], rowCount: 1 };
             }
             if (sql.includes("upsert_brand_trend_saved_reference")) {
+              await acquire("source", clientId);
               await acquire("saved", clientId);
               await acquire("reference", clientId);
               if (!state.saved) return { rows: [{ reference_item_id: null }], rowCount: 1 };

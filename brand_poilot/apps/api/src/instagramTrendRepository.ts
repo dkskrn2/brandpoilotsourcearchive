@@ -776,12 +776,33 @@ export function createInstagramTrendRepository(input: {
     const client = await input.pool.connect();
     try {
       await client.query("begin");
+      const candidate = await client.query(
+        `select id,workspace_id,source_url_id
+         from brand_trend_saved_media
+         where brand_id = $1 and trend_media_id = $2
+        `,
+        [brandId, mediaId],
+      );
+      if (!candidate.rowCount) {
+        await client.query("commit");
+        return { mediaId, removed: false };
+      }
+      const identity = candidate.rows[0];
+      const source = await client.query(
+        `select id from source_urls
+         where id = $1 and workspace_id = $2 and brand_id = $3
+           and source_type = 'reference' and deleted_at is null
+         for update`,
+        [identity.source_url_id, identity.workspace_id, brandId],
+      );
+      if (!source.rowCount) throw new Error("instagram_trend_source_remove_failed");
       const saved = await client.query(
         `select id
          from brand_trend_saved_media
-         where brand_id = $1 and trend_media_id = $2
+         where id = $1 and workspace_id = $2 and brand_id = $3
+           and trend_media_id = $4 and source_url_id = $5
          for update`,
-        [brandId, mediaId],
+        [identity.id, identity.workspace_id, brandId, mediaId, identity.source_url_id],
       );
       if (!saved.rowCount) {
         await client.query("commit");

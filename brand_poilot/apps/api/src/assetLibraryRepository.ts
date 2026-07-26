@@ -736,11 +736,28 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
         if (!candidate.rowCount) throw new Error("reference_not_found");
         const savedTrendId = candidate.rows[0].saved_trend_id;
         if (savedTrendId) {
+          const savedIdentity = await client.query(
+            `select id,source_url_id from brand_trend_saved_media
+              where id=$1 and workspace_id=$2 and brand_id=$3`,
+            [savedTrendId, scope.workspaceId, scope.brandId],
+          );
+          if (!savedIdentity.rowCount || !savedIdentity.rows[0].source_url_id) {
+            throw new Error("reference_not_found");
+          }
+          const sourceUrlId = savedIdentity.rows[0].source_url_id;
+          const source = await client.query(
+            `select id from source_urls
+              where id=$1 and workspace_id=$2 and brand_id=$3
+                and source_type='reference' and deleted_at is null
+              for update`,
+            [sourceUrlId, scope.workspaceId, scope.brandId],
+          );
+          if (!source.rowCount) throw new Error("reference_not_found");
           const saved = await client.query(
             `select id from brand_trend_saved_media
-              where id=$1 and workspace_id=$2 and brand_id=$3
+              where id=$1 and workspace_id=$2 and brand_id=$3 and source_url_id=$4
               for update`,
-            [savedTrendId, scope.workspaceId, scope.brandId],
+            [savedTrendId, scope.workspaceId, scope.brandId, sourceUrlId],
           );
           if (!saved.rowCount) throw new Error("reference_not_found");
           const locked = await client.query(
@@ -767,13 +784,27 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
           if (!removed.rowCount) throw new Error("reference_not_found");
           return;
         }
+        const sourceUrlId = candidate.rows[0].source_url_id;
+        if (sourceUrlId) {
+          const source = await client.query(
+            `select id from source_urls
+              where id=$1 and workspace_id=$2 and brand_id=$3
+                and source_type='reference' and deleted_at is null
+              for update`,
+            [sourceUrlId, scope.workspaceId, scope.brandId],
+          );
+          if (!source.rowCount) throw new Error("reference_not_found");
+        }
         const locked = await client.query(
           `select id,kind,source_url_id,saved_trend_id from reference_items
             where id=$1 and workspace_id=$2 and brand_id=$3 and archived_at is null
             for update`,
           [scope.referenceId, scope.workspaceId, scope.brandId],
         );
-        if (!locked.rowCount || locked.rows[0].saved_trend_id) throw new Error("reference_not_found");
+        if (!locked.rowCount || locked.rows[0].saved_trend_id
+          || String(locked.rows[0].source_url_id ?? "") !== String(sourceUrlId ?? "")) {
+          throw new Error("reference_not_found");
+        }
         const item = locked.rows[0];
         const result = await client.query(
           `update reference_items set archived_at=now(),
