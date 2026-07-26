@@ -33,7 +33,7 @@ export function SiteHeader() {
           <Link href={path("/work")}>Work</Link>
           <Link href="/content" lang={english ? "ko" : undefined}>{english ? "Content (KO)" : "Content"}</Link>
           <a className="language-switch" href={switchHref} hrefLang={switchLocale} onClick={rememberLocale}>{english ? "KO" : "EN"}</a>
-          <button className="site-login" type="button" disabled>{labels.login}</button>
+          <a className="site-login" href="https://app.danbammsg.co.kr/login">{labels.login}</a>
           <Link className="button button--small" href={path("/contact")}>{labels.contact}</Link>
         </nav>
         <details className="mobile-menu">
@@ -44,7 +44,7 @@ export function SiteHeader() {
             <Link href={path("/work")}>Work</Link>
             <Link href="/content" lang={english ? "ko" : undefined}>{english ? "Content (KO)" : "Content"}</Link>
             <a className="language-switch" href={switchHref} hrefLang={switchLocale} onClick={rememberLocale}>{english ? "한국어로 보기" : "View in English"}</a>
-            <button className="site-login" type="button" disabled>{labels.login}</button>
+            <a className="site-login" href="https://app.danbammsg.co.kr/login">{labels.login}</a>
             <Link href={path("/contact")}>{labels.contact}</Link>
           </nav>
         </details>

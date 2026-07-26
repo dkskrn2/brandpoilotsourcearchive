@@ -351,12 +351,13 @@ test("article images are optional and only accepted from local assets or Vercel 
   assert.match(imageRoute, /access: "private"/);
 });
 
-test("public header keeps customer login disabled and separate from administrator login", () => {
+test("public header links desktop and mobile login controls to Brand Pilot", () => {
   const header = read("components/site-header.tsx");
   const styles = read("app/globals.css");
   assert.equal((header.match(/className="site-login"/g) || []).length, 2);
-  assert.equal((header.match(/disabled>\{labels\.login\}/g) || []).length, 2);
-  assert.doesNotMatch(header, /href="\/login"/);
+  assert.equal((header.match(/href="https:\/\/app\.danbammsg\.co\.kr\/login"/g) || []).length, 2);
+  assert.doesNotMatch(header, /disabled>\{labels\.login\}/);
+  assert.doesNotMatch(header, /target="_blank"/);
   assert.match(styles, /\.mobile-menu nav \.site-login/, "mobile login must use the same menu-row layout as mobile links");
 });
 
