@@ -156,6 +156,79 @@ describe("brand intelligence repository", () => {
     expect(String((knowledge.rows[0] as { content: string }).content)).toContain("수정한 고객");
   });
 
+  it("keeps the confirmed edited result active when a later analysis completes", async () => {
+    const repository = createBrandIntelligenceRepository(pglitePool(database));
+    const first = await prepareAnalysis(repository, {
+      ownedUrl: "https://example.com",
+      idempotencyKey: "confirmed-analysis",
+    });
+    await repository.updateBrandAnalysisDraft({
+      workspaceId,
+      brandId,
+      analysisId: first.id,
+      editedResult: result("사용자 확정 고객"),
+    });
+    await repository.confirmBrandAnalysis({ workspaceId, brandId, analysisId: first.id });
+
+    const second = await repository.requestBrandAnalysis({
+      workspaceId,
+      brandId,
+      ownedUrl: "https://example.com/new",
+      uploadIds: [],
+      idempotencyKey: "later-analysis",
+    });
+    const claim = await repository.claimBrandAnalysis({ workerId: "worker-2", leaseSeconds: 60 });
+    await repository.completeBrandAnalysis({
+      analysisId: second.id,
+      workerId: "worker-2",
+      leaseToken: claim!.leaseToken,
+      evidence: [],
+      result: result("재분석 제안 고객"),
+    });
+
+    const current = await repository.getCurrentBrandIntelligence({ workspaceId, brandId });
+    expect(current).toMatchObject({
+      id: first.id,
+      status: "confirmed",
+      isActive: true,
+      effectiveResult: { primaryTarget: "사용자 확정 고객" },
+    });
+    const rows = await database.query(
+      `select id, result_json, edited_result_json, is_active
+         from brand_analysis_runs
+        where brand_id = $1
+        order by created_at`,
+      [brandId],
+    );
+    expect(rows.rows).toEqual([
+      expect.objectContaining({
+        id: first.id,
+        result_json: expect.objectContaining({ primaryTarget: "초기 고객" }),
+        edited_result_json: expect.objectContaining({ primaryTarget: "사용자 확정 고객" }),
+        is_active: true,
+      }),
+      expect.objectContaining({
+        id: second.id,
+        result_json: expect.objectContaining({ primaryTarget: "재분석 제안 고객" }),
+        edited_result_json: null,
+        is_active: false,
+      }),
+    ]);
+    const profile = await database.query(
+      "select primary_customer, active_brand_analysis_id from brand_profiles where brand_id = $1",
+      [brandId],
+    );
+    expect(profile.rows[0]).toMatchObject({
+      primary_customer: "사용자 확정 고객",
+      active_brand_analysis_id: first.id,
+    });
+    const builds = await database.query(
+      "select count(*)::int as count from wiki_build_requests where brand_id = $1",
+      [brandId],
+    );
+    expect((builds.rows[0] as { count: number }).count).toBe(1);
+  });
+
   it("rejects edits before analysis and isolates brand reads", async () => {
     const repository = createBrandIntelligenceRepository(pglitePool(database));
     const requested = await repository.requestBrandAnalysis({
