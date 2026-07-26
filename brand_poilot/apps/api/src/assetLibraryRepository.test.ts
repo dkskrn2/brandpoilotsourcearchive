@@ -276,6 +276,156 @@ describe("asset library repository", () => {
     expect(fake.query.mock.calls.some(([sql]) => String(sql).includes("insert into brand_avatar_images"))).toBe(false);
   });
 
+  it("cancels a staged upload atomically and records an idempotency receipt", async () => {
+    const prefix = `brands/${scope.brandId}/asset-library/avatars/${avatarId}/${imageId}/`;
+    const storagePath = `${prefix}${checksum}-face.webp`;
+    const fake = fakePool((sql) => {
+      const access = member(sql);
+      if (access) return access;
+      if (sql.includes("from avatar_upload_cancellation_receipts")) return { rows: [] };
+      if (sql.includes("from reference_upload_sessions")) return { rows: [{
+        id: imageId, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+        created_by_user_id: scope.actorUserId, storage_path_prefix: prefix, storage_path: storagePath,
+      }] };
+      if (sql.includes("from storage_artifacts")) return { rows: [{ id: "artifact-1", path: storagePath }] };
+      return {};
+    });
+    const deleteBlob = vi.fn(async () => undefined);
+    await expect(createAssetLibraryRepository(fake.pool).cancelAvatarUpload(
+      { ...scope, avatarId, sessionId: imageId }, deleteBlob,
+    )).resolves.toEqual({ status: "cancelled" });
+    expect(deleteBlob).toHaveBeenCalledWith(storagePath);
+    const statements = fake.query.mock.calls.map(([sql]) => String(sql));
+    expect(statements.some((sql) => sql.includes("pg_advisory_xact_lock"))).toBe(true);
+    expect(statements.some((sql) => sql.includes("delete from storage_artifacts"))).toBe(true);
+    expect(statements.some((sql) => sql.includes("delete from reference_upload_sessions"))).toBe(true);
+    expect(statements.some((sql) => sql.includes("insert into avatar_upload_cancellation_receipts"))).toBe(true);
+  });
+
+  it("rolls back cancellation when blob deletion fails so cleanup remains retriable", async () => {
+    const prefix = `brands/${scope.brandId}/asset-library/avatars/${avatarId}/${imageId}/`;
+    const storagePath = `${prefix}${checksum}-face.webp`;
+    const fake = fakePool((sql) => {
+      const access = member(sql);
+      if (access) return access;
+      if (sql.includes("from avatar_upload_cancellation_receipts")) return { rows: [] };
+      if (sql.includes("from reference_upload_sessions")) return { rows: [{
+        id: imageId, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+        created_by_user_id: scope.actorUserId, storage_path_prefix: prefix, storage_path: storagePath,
+      }] };
+      if (sql.includes("from storage_artifacts")) return { rows: [] };
+      return {};
+    });
+    await expect(createAssetLibraryRepository(fake.pool).cancelAvatarUpload(
+      { ...scope, avatarId, sessionId: imageId },
+      async () => { throw new Error("asset_library_blob_delete_failed"); },
+    )).rejects.toThrow("asset_library_blob_delete_failed");
+    expect(fake.query.mock.calls.some(([sql]) => String(sql).startsWith("rollback"))).toBe(true);
+    expect(fake.query.mock.calls.some(([sql]) => String(sql).includes("delete from reference_upload_sessions"))).toBe(false);
+  });
+
+  it("recovers when provider deletion succeeds but the database commit fails", async () => {
+    const prefix = `brands/${scope.brandId}/asset-library/avatars/${avatarId}/${imageId}/`;
+    const storagePath = `${prefix}${checksum}-face.webp`;
+    let commitAttempts = 0;
+    const fake = fakePool((sql) => {
+      const access = member(sql);
+      if (access) return access;
+      if (sql === "commit" && commitAttempts++ === 0) throw new Error("database_commit_failed");
+      if (sql.includes("from avatar_upload_cancellation_receipts")) return { rows: [] };
+      if (sql.includes("from reference_upload_sessions")) return { rows: [{
+        id: imageId, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+        created_by_user_id: scope.actorUserId, storage_path_prefix: prefix, storage_path: storagePath,
+      }] };
+      if (sql.includes("from storage_artifacts")) return { rows: [] };
+      return {};
+    });
+    const deleteBlob = vi.fn(async () => undefined);
+    const repository = createAssetLibraryRepository(fake.pool);
+    await expect(repository.cancelAvatarUpload(
+      { ...scope, avatarId, sessionId: imageId }, deleteBlob,
+    )).rejects.toThrow("database_commit_failed");
+    await expect(repository.cancelAvatarUpload(
+      { ...scope, avatarId, sessionId: imageId }, deleteBlob,
+    )).resolves.toEqual({ status: "cancelled" });
+    expect(deleteBlob).toHaveBeenCalledTimes(2);
+    expect(fake.query.mock.calls.filter(([sql]) => String(sql) === "rollback")).toHaveLength(1);
+  });
+
+  it("returns an actor-scoped cancellation receipt without deleting the blob twice", async () => {
+    const deleteBlob = vi.fn(async () => undefined);
+    const fake = fakePool((sql) => {
+      const access = member(sql);
+      if (access) return access;
+      if (sql.includes("from avatar_upload_cancellation_receipts")) return { rows: [{
+        session_id: imageId, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+        avatar_id: avatarId, created_by_user_id: scope.actorUserId,
+      }] };
+      return {};
+    });
+    await expect(createAssetLibraryRepository(fake.pool).cancelAvatarUpload(
+      { ...scope, avatarId, sessionId: imageId }, deleteBlob,
+    )).resolves.toEqual({ status: "already_cancelled" });
+    expect(deleteBlob).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["consumed", null, "asset_library_upload_session_not_found"],
+    ["foreign actor", "99999999-9999-4999-8999-999999999999", "asset_library_upload_actor_mismatch"],
+  ])("rejects %s upload cancellation without touching storage", async (_label, actor, expected) => {
+    const prefix = `brands/${scope.brandId}/asset-library/avatars/${avatarId}/${imageId}/`;
+    const fake = fakePool((sql) => {
+      const access = member(sql);
+      if (access) return access;
+      if (sql.includes("from avatar_upload_cancellation_receipts")) return { rows: [] };
+      if (sql.includes("from reference_upload_sessions")) {
+        return actor ? { rows: [{
+          id: imageId, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+          created_by_user_id: actor, storage_path_prefix: prefix,
+        }] } : { rows: [] };
+      }
+      return {};
+    });
+    const deleteBlob = vi.fn(async () => undefined);
+    await expect(createAssetLibraryRepository(fake.pool).cancelAvatarUpload(
+      { ...scope, avatarId, sessionId: imageId }, deleteBlob,
+    )).rejects.toThrow(expected);
+    expect(deleteBlob).not.toHaveBeenCalled();
+  });
+
+  it("sweeps only expired avatar sessions and reports retriable cleanup failures", async () => {
+    const first = imageId;
+    const second = "66666666-6666-4666-8666-666666666666";
+    const prefix = (id: string) => `brands/${scope.brandId}/asset-library/avatars/${avatarId}/${id}/`;
+    const fake = fakePool((sql, values) => {
+      if (sql.includes("where expires_at <= now()")) return { rows: [first, second].map((id) => ({
+        id, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+        created_by_user_id: scope.actorUserId, storage_path_prefix: prefix(id),
+      })) };
+      if (sql.includes("from avatar_upload_cancellation_receipts")) return { rows: [] };
+      if (sql.includes("from reference_upload_sessions")) {
+        const id = String(values[0]);
+        return { rows: [{
+          id, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+          created_by_user_id: scope.actorUserId, storage_path_prefix: prefix(id),
+          storage_path: `${prefix(id)}${checksum}-face.webp`,
+        }] };
+      }
+      if (sql.includes("from storage_artifacts")) return { rows: [] };
+      return {};
+    });
+    const deleteBlob = vi.fn(async (path: string) => {
+      if (path.includes(second)) throw new Error("asset_library_blob_delete_failed");
+    });
+    const result = await createAssetLibraryRepository(fake.pool).cleanupExpiredAvatarUploads(deleteBlob, 2);
+    expect(result).toEqual({
+      scanned: 2,
+      cancelled: 1,
+      failed: [{ sessionId: second, error: "asset_library_blob_delete_failed" }],
+    });
+    expect(fake.query.mock.calls[0]?.[1]).toEqual([2]);
+  });
+
   it("rolls back an existing-avatar duplicate without consuming its upload session", async () => {
     const prefix = `brands/${scope.brandId}/asset-library/avatars/${avatarId}/${imageId}/`;
     const fake = fakePool((sql) => {

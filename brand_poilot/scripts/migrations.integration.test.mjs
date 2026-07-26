@@ -3698,7 +3698,7 @@ test("061 deterministically removes legacy duplicate avatar bytes and prevents n
   });
 });
 
-test("migration runner records forward-only 061 without changing the applied 058 checksum", async () => {
+test("migration runner records forward-only 061 and 062 without changing the applied 058 checksum", async () => {
   const migrations = await loadMigrations();
   const runnableMigrations = migrations.filter(
     (migration) => !migration.sql.startsWith("-- requires: pgvector")
@@ -3724,14 +3724,17 @@ test("migration runner records forward-only 061 without changing the applied 058
       client,
       migrations: runnableMigrations,
     });
-    assert.equal(upgraded.pending.at(-1), "061_avatar_image_checksum_uniqueness.sql");
-    assert.deepEqual(
-      upgraded.pending.filter((id) => id === "061_avatar_image_checksum_uniqueness.sql"),
-      ["061_avatar_image_checksum_uniqueness.sql"],
-    );
+    assert.deepEqual(upgraded.pending.slice(-2), [
+      "061_avatar_image_checksum_uniqueness.sql",
+      "062_avatar_upload_cancellation.sql",
+    ]);
     const recorded = await database.query(
-      "select id, checksum from schema_migrations where id in ($1, $2) order by id",
-      ["058_avatar_and_reference_libraries.sql", "061_avatar_image_checksum_uniqueness.sql"],
+      "select id, checksum from schema_migrations where id in ($1, $2, $3) order by id",
+      [
+        "058_avatar_and_reference_libraries.sql",
+        "061_avatar_image_checksum_uniqueness.sql",
+        "062_avatar_upload_cancellation.sql",
+      ],
     );
     assert.deepEqual(recorded.rows, [
       {
@@ -3741,6 +3744,10 @@ test("migration runner records forward-only 061 without changing the applied 058
       {
         id: "061_avatar_image_checksum_uniqueness.sql",
         checksum: migrations.find((migration) => migration.id === "061_avatar_image_checksum_uniqueness.sql")?.checksum,
+      },
+      {
+        id: "062_avatar_upload_cancellation.sql",
+        checksum: migrations.find((migration) => migration.id === "062_avatar_upload_cancellation.sql")?.checksum,
       },
     ]);
     const repeated = await runMigrationsWithClient({

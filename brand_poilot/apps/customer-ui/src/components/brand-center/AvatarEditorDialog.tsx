@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { X } from "lucide-react";
 import type {
   Avatar,
@@ -7,6 +7,7 @@ import type {
 import { FocusTrap } from "../ui/FocusTrap";
 import {
   AvatarImageUploader,
+  type AvatarImageUploaderHandle,
   type StagedAvatarImage,
 } from "./AvatarImageUploader";
 
@@ -26,6 +27,7 @@ export function AvatarEditorDialog({ brandId, gateway, returnFocus, onClose, onS
   const [representativeId, setRepresentativeId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const uploaderRef = useRef<AvatarImageUploaderHandle>(null);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -58,6 +60,7 @@ export function AvatarEditorDialog({ brandId, gateway, returnFocus, onClose, onS
         imageSessionIds: uploaded.map((image) => image.sessionId!),
         representativeSessionId: representative.sessionId,
       });
+      uploaderRef.current?.markCommitted();
       setSaving(false);
       onSaved(saved);
       onClose();
@@ -67,12 +70,25 @@ export function AvatarEditorDialog({ brandId, gateway, returnFocus, onClose, onS
     }
   }
 
+  async function requestClose() {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    const cleaned = await uploaderRef.current?.cancelAll();
+    setSaving(false);
+    if (cleaned === false) {
+      setError("업로드 정리를 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+      return;
+    }
+    onClose();
+  }
+
   return (
     <div
       className="modal-backdrop"
       role="presentation"
       onMouseDown={(event) => {
-        if (event.currentTarget === event.target && !saving) onClose();
+        if (event.currentTarget === event.target && !saving) void requestClose();
       }}
     >
       <FocusTrap
@@ -85,7 +101,7 @@ export function AvatarEditorDialog({ brandId, gateway, returnFocus, onClose, onS
         onKeyDown={(event) => {
           if (event.key === "Escape" && !saving) {
             event.preventDefault();
-            onClose();
+            void requestClose();
           }
         }}
       >
@@ -100,7 +116,7 @@ export function AvatarEditorDialog({ brandId, gateway, returnFocus, onClose, onS
               type="button"
               aria-label="아바타 등록 닫기"
               disabled={saving}
-              onClick={onClose}
+              onClick={() => void requestClose()}
             >
               <X size={18} aria-hidden="true" />
             </button>
@@ -128,6 +144,7 @@ export function AvatarEditorDialog({ brandId, gateway, returnFocus, onClose, onS
             <fieldset disabled={saving}>
               <legend>이미지</legend>
               <AvatarImageUploader
+                ref={uploaderRef}
                 brandId={brandId}
                 avatarId={avatarId}
                 gateway={gateway}
@@ -140,7 +157,7 @@ export function AvatarEditorDialog({ brandId, gateway, returnFocus, onClose, onS
             {error ? <p className="field-error" role="alert">{error}</p> : null}
           </div>
           <footer className="avatar-editor-footer">
-            <button className="button" type="button" disabled={saving} onClick={onClose}>취소</button>
+            <button className="button" type="button" disabled={saving} onClick={() => void requestClose()}>취소</button>
             <button className="button primary" type="submit" disabled={saving}>
               {saving ? "저장 중…" : "아바타 저장"}
             </button>

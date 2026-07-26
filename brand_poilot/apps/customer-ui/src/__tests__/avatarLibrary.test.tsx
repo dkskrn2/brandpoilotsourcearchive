@@ -59,7 +59,9 @@ function gateway(overrides: Record<string, unknown> = {}) {
     listAvatars: vi.fn(async () => [avatar]),
     createAvatar: vi.fn(async () => avatar),
     updateAvatar: vi.fn(async () => avatar),
+    hashAvatarImage: vi.fn(async (file: File) => `${file.name}:${file.size}`),
     uploadAvatarImage: vi.fn(async () => ({ sessionId: firstSessionId })),
+    cancelAvatarUpload: vi.fn(async () => ({ status: "cancelled" as const })),
     deleteAvatarImage: vi.fn(async () => undefined),
     setDefaultAvatar: vi.fn(async () => avatar),
     archiveAvatar: vi.fn(async () => undefined),
@@ -173,7 +175,7 @@ describe("AvatarLibraryPanel", () => {
     await userEvent.upload(input, duplicate);
     await waitFor(() => expect(uploadAvatarImage).toHaveBeenCalledOnce());
     await userEvent.upload(input, duplicate);
-    expect(screen.getByText("이미 추가한 이미지입니다.")).toBeVisible();
+    expect(screen.getByText("이미 추가한 이미지와 내용이 같습니다.")).toBeVisible();
     expect(uploadAvatarImage).toHaveBeenCalledOnce();
   });
 
@@ -181,8 +183,8 @@ describe("AvatarLibraryPanel", () => {
     const retry = deferred<{ sessionId: string }>();
     const uploadAvatarImage = vi.fn()
       .mockRejectedValueOnce(new Error("offline"))
-      .mockImplementationOnce((_brandId, _avatarId, _file, onProgress) => {
-        onProgress(42);
+      .mockImplementationOnce((_brandId, _avatarId, _file, options) => {
+        options.onProgress(42);
         return retry.promise;
       });
     const api = gateway({ listAvatars: vi.fn(async () => []), uploadAvatarImage });
@@ -203,6 +205,122 @@ describe("AvatarLibraryPanel", () => {
     await act(async () => retry.resolve({ sessionId: firstSessionId }));
     expect(await screen.findByText("업로드 완료")).toBeVisible();
     expect(uploadAvatarImage).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels a failed staged session before retrying with a new upload", async () => {
+    const cancelAvatarUpload = vi.fn(async () => ({ status: "cancelled" as const }));
+    const uploadAvatarImage = vi.fn()
+      .mockImplementationOnce((_brandId, _avatarId, _file, options) => {
+        options.onSession(firstSessionId);
+        return Promise.reject(new Error("offline"));
+      })
+      .mockResolvedValueOnce({ sessionId: secondSessionId });
+    const api = gateway({
+      listAvatars: vi.fn(async () => []),
+      uploadAvatarImage,
+      cancelAvatarUpload,
+    });
+    render(<AvatarLibraryPanel brandId="brand-1" gateway={api as never} />);
+    await userEvent.click(await screen.findByRole("button", { name: "아바타 등록" }));
+    await userEvent.upload(screen.getByLabelText("아바타 이미지 선택"),
+      new File(["face"], "retry-session.png", { type: "image/png" }));
+    await screen.findByText("업로드하지 못했습니다.");
+    await userEvent.click(screen.getByRole("button", { name: "retry-session.png 다시 업로드" }));
+    await waitFor(() => expect(cancelAvatarUpload).toHaveBeenCalledWith(
+      "brand-1", expect.any(String), firstSessionId,
+    ));
+    await waitFor(() => expect(uploadAvatarImage).toHaveBeenCalledTimes(2));
+    expect(cancelAvatarUpload.mock.invocationCallOrder[0])
+      .toBeLessThan(uploadAvatarImage.mock.invocationCallOrder[1]);
+  });
+
+  it("hashes every file before upload and rejects identical bytes despite different metadata", async () => {
+    const firstHash = deferred<string>();
+    const secondHash = deferred<string>();
+    const hashAvatarImage = vi.fn()
+      .mockReturnValueOnce(firstHash.promise)
+      .mockReturnValueOnce(secondHash.promise);
+    const uploadAvatarImage = vi.fn(async () => ({ sessionId: firstSessionId }));
+    const api = gateway({
+      listAvatars: vi.fn(async () => []),
+      hashAvatarImage,
+      uploadAvatarImage,
+    });
+    render(<AvatarLibraryPanel brandId="brand-1" gateway={api as never} />);
+    await userEvent.click(await screen.findByRole("button", { name: "아바타 등록" }));
+    await userEvent.upload(screen.getByLabelText("아바타 이미지 선택"), [
+      new File(["same bytes"], "front.png", { type: "image/png", lastModified: 1 }),
+      new File(["same bytes"], "renamed.webp", { type: "image/webp", lastModified: 99 }),
+    ]);
+
+    expect(uploadAvatarImage).not.toHaveBeenCalled();
+    await act(async () => firstHash.resolve("same-checksum"));
+    expect(uploadAvatarImage).not.toHaveBeenCalled();
+    await act(async () => secondHash.resolve("same-checksum"));
+
+    await waitFor(() => expect(uploadAvatarImage).toHaveBeenCalledOnce());
+    expect(screen.getByText("이미 추가한 이미지와 내용이 같습니다.")).toBeVisible();
+  });
+
+  it("cancels the staged server session when an uploaded file is removed", async () => {
+    const cancelAvatarUpload = vi.fn(async () => ({ status: "cancelled" as const }));
+    const api = gateway({ listAvatars: vi.fn(async () => []), cancelAvatarUpload });
+    render(<AvatarLibraryPanel brandId="brand-1" gateway={api as never} />);
+    await userEvent.click(await screen.findByRole("button", { name: "아바타 등록" }));
+    await userEvent.upload(screen.getByLabelText("아바타 이미지 선택"),
+      new File(["face"], "face.png", { type: "image/png" }));
+    await screen.findByText("업로드 완료");
+    await userEvent.click(screen.getByRole("button", { name: /face.png.*제거|face.png.*삭제/ }));
+    await waitFor(() => expect(cancelAvatarUpload).toHaveBeenCalledWith(
+      "brand-1", expect.stringMatching(/^[0-9a-f-]{36}$/), firstSessionId,
+    ));
+  });
+
+  it("shows hashing errors without uploading and aborts hashing when unmounted", async () => {
+    const uploadAvatarImage = vi.fn();
+    const rejected = gateway({
+      listAvatars: vi.fn(async () => []),
+      hashAvatarImage: vi.fn(async () => { throw new Error("read failed"); }),
+      uploadAvatarImage,
+    });
+    const firstRender = render(<AvatarLibraryPanel brandId="brand-1" gateway={rejected as never} />);
+    await userEvent.click(await screen.findByRole("button", { name: "아바타 등록" }));
+    await userEvent.upload(screen.getByLabelText("아바타 이미지 선택"),
+      new File(["face"], "broken.png", { type: "image/png" }));
+    expect(await screen.findByText("이미지 내용을 확인하지 못했습니다.")).toBeVisible();
+    expect(uploadAvatarImage).not.toHaveBeenCalled();
+    firstRender.unmount();
+
+    let hashingSignal: AbortSignal | undefined;
+    const pending = gateway({
+      listAvatars: vi.fn(async () => []),
+      hashAvatarImage: vi.fn((_file: File, signal: AbortSignal) => {
+        hashingSignal = signal;
+        return new Promise<string>(() => undefined);
+      }),
+      uploadAvatarImage,
+    });
+    const secondRender = render(<AvatarLibraryPanel brandId="brand-1" gateway={pending as never} />);
+    await userEvent.click(await screen.findByRole("button", { name: "아바타 등록" }));
+    await userEvent.upload(screen.getByLabelText("아바타 이미지 선택"),
+      new File(["face"], "pending.png", { type: "image/png" }));
+    await waitFor(() => expect(hashingSignal).toBeDefined());
+    secondRender.unmount();
+    expect(hashingSignal?.aborted).toBe(true);
+    expect(uploadAvatarImage).not.toHaveBeenCalled();
+  });
+
+  it("cancels all staged sessions before closing the dialog", async () => {
+    const cancelAvatarUpload = vi.fn(async () => ({ status: "cancelled" as const }));
+    const api = gateway({ listAvatars: vi.fn(async () => []), cancelAvatarUpload });
+    render(<AvatarLibraryPanel brandId="brand-1" gateway={api as never} />);
+    await userEvent.click(await screen.findByRole("button", { name: "아바타 등록" }));
+    await userEvent.upload(screen.getByLabelText("아바타 이미지 선택"),
+      new File(["face"], "dialog.png", { type: "image/png" }));
+    await screen.findByText("업로드 완료");
+    await userEvent.click(screen.getByRole("button", { name: "취소" }));
+    await waitFor(() => expect(cancelAvatarUpload).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("dialog", { name: "아바타 등록" })).not.toBeInTheDocument();
   });
 
   it("traps focus, closes on Escape, and restores focus to the opener", async () => {

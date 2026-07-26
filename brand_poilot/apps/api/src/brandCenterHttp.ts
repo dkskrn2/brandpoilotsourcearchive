@@ -26,6 +26,7 @@ import {
 } from "./assetLibraryContracts.js";
 import {
   confirmAssetLibraryUpload,
+  deleteAssetLibraryBlob,
   issueAssetLibraryUploadToken,
   validateAssetLibraryUpload,
   type AssetLibraryUploadKind,
@@ -40,6 +41,7 @@ interface BrandCenterRouteOptions {
     readWriteToken: string;
     generateClientToken?: Parameters<typeof issueAssetLibraryUploadToken>[1]["generateClientToken"];
     getBlob?: Parameters<typeof confirmAssetLibraryUpload>[1]["getBlob"];
+    deleteBlob?: import("./assetLibraryUpload.js").AssetLibraryDeleteOptions["deleteBlob"];
   };
 }
 
@@ -489,6 +491,26 @@ export function registerBrandCenterRoutes(
   app.post<{ Params: { brandId: string; avatarId: string }; Body: unknown }>(
     "/brands/:brandId/avatars/:avatarId/images/upload-token",
     async (request) => uploadToken(request, "avatar"),
+  );
+
+  app.delete<{ Params: { brandId: string; avatarId: string; sessionId: string } }>(
+    "/brands/:brandId/avatars/:avatarId/images/upload-sessions/:sessionId",
+    async (request) => {
+      if (!repository.cancelAvatarUpload) throw new Error("asset_library_not_configured");
+      if (!options.assetLibraryUpload) throw new Error("asset_library_upload_storage_not_configured");
+      return repository.cancelAvatarUpload(
+        {
+          ...options.scope(request, request.params.brandId),
+          actorUserId: requireActor(options, request),
+          avatarId: request.params.avatarId,
+          sessionId: request.params.sessionId,
+        },
+        (storagePath) => deleteAssetLibraryBlob(storagePath, {
+          token: options.assetLibraryUpload!.readWriteToken,
+          deleteBlob: options.assetLibraryUpload!.deleteBlob,
+        }),
+      );
+    },
   );
 
   app.post<{ Params: { brandId: string; avatarId: string }; Body: unknown }>(

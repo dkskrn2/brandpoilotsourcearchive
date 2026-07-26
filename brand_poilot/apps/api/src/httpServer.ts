@@ -121,6 +121,7 @@ interface CreateServerOptions {
     readWriteToken: string;
     generateClientToken?: import("./assetLibraryUpload.js").AssetLibraryTokenOptions["generateClientToken"];
     getBlob?: import("./assetLibraryUpload.js").AssetLibraryBlobOptions["getBlob"];
+    deleteBlob?: import("./assetLibraryUpload.js").AssetLibraryDeleteOptions["deleteBlob"];
   };
   aiContentLimits?: { dailyGenerationLimit: number; dailyDownloadLimit: number };
   subjectAnalysis?: AiContentSubjectRuntime;
@@ -492,6 +493,10 @@ export function createServer(
       reply.code(503).send({ error: message });
       return;
     }
+    if (message === "asset_library_blob_delete_failed") {
+      reply.code(503).send({ error: message });
+      return;
+    }
     if (message.startsWith("asset_library_upload_") || message === "avatar_image_limit_exceeded"
       || message === "avatar_image_minimum_required" || message === "avatar_image_duplicate"
       || message === "reference_origin_duplicate"
@@ -797,6 +802,27 @@ export function createServer(
       return { error: "cron_unauthorized" };
     }
     return repository.runDuePublishing(new Date());
+  });
+
+  app.get("/internal/cron/avatar-upload-cleanup", async (request, reply) => {
+    if (!matchesBearerSecret(request.headers.authorization, cronSecret)) {
+      reply.code(401);
+      return { error: "cron_unauthorized" };
+    }
+    if (!repository.cleanupExpiredAvatarUploads || !assetLibraryUpload) {
+      throw new Error("asset_library_not_configured");
+    }
+    const { deleteAssetLibraryBlob } = await import("./assetLibraryUpload.js");
+    const result = await repository.cleanupExpiredAvatarUploads(
+      (storagePath) => deleteAssetLibraryBlob(storagePath, {
+        token: assetLibraryUpload.readWriteToken,
+        deleteBlob: assetLibraryUpload.deleteBlob,
+      }),
+    );
+    if (result.failed.length) {
+      request.log.error({ event: "avatar_upload_cleanup_partial_failure", ...result });
+    }
+    return result;
   });
 
   app.get("/auth/me", async (request, reply) => {

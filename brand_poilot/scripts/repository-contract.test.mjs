@@ -262,7 +262,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션 registry는 checksum hardening 061을 포함한다", async () => {
+test("데이터베이스 마이그레이션 registry는 avatar upload lifecycle 062를 포함한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -330,12 +330,22 @@ test("데이터베이스 마이그레이션 registry는 checksum hardening 061�
     "058_avatar_and_reference_libraries.sql",
     ...reservedProgramMigrations,
     "061_avatar_image_checksum_uniqueness.sql",
+    "062_avatar_upload_cancellation.sql",
   ]);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("059_")).length <= 1);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("060_")).length <= 1);
   if (reservedProgramMigrations.some((file) => file.startsWith("060_"))) {
     assert.ok(reservedProgramMigrations.includes("060_content_orchestration.sql"));
   }
+});
+
+test("062는 exact-path avatar cancellation receipt와 expiry cleanup index를 정의한다", async () => {
+  const migration = await readFile("db/migrations/062_avatar_upload_cancellation.sql", "utf8");
+  assert.match(migration, /add\s+column\s+if\s+not\s+exists\s+storage_path\s+text/i);
+  assert.match(migration, /create\s+table\s+if\s+not\s+exists\s+avatar_upload_cancellation_receipts/i);
+  assert.match(migration, /session_id\s+uuid\s+primary\s+key/i);
+  assert.match(migration, /reason\s+text\s+not\s+null\s+check\s*\(\s*reason\s+in\s*\(\s*'user',\s*'expired'\s*\)/i);
+  assert.match(migration, /reference_upload_sessions_avatar_expiry_cleanup_idx/i);
 });
 
 test("058은 avatar와 typed-origin reference library 계약을 정의한다", async () => {

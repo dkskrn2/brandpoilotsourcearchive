@@ -89,6 +89,15 @@ export interface AssetLibraryRepository {
     scope: BrandScope & { actorUserId: string; avatarId: string; sessionId: string },
     upload: AvatarImageInput,
   ): Promise<{ status: "staged"; avatarId: string; sessionId: string } | { status: "attached"; avatar: Avatar }>;
+  cancelAvatarUpload(
+    scope: BrandScope & { actorUserId: string; avatarId: string; sessionId: string },
+    deleteBlob: (storagePath: string) => Promise<void>,
+    reason?: "user" | "expired",
+  ): Promise<{ status: "cancelled" | "already_cancelled" }>;
+  cleanupExpiredAvatarUploads(
+    deleteBlob: (storagePath: string) => Promise<void>,
+    limit?: number,
+  ): Promise<{ scanned: number; cancelled: number; failed: Array<{ sessionId: string; error: string }> }>;
   confirmReferenceUpload(scope: BrandScope & { actorUserId: string; sessionId: string }, upload: ConfirmedAssetLibraryUpload): Promise<ReferenceItem>;
   listReferenceBrands(scope: BrandScope): Promise<ReferenceBrand[]>;
   createReferenceBrand(scope: BrandScope & { actorUserId: string }, input: ReferenceBrandInput): Promise<ReferenceBrand>;
@@ -637,10 +646,11 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
         await client.query(
           `insert into reference_upload_sessions(
             id,nonce,workspace_id,brand_id,storage_path_prefix,expected_mime_type,
-            expected_size_bytes,expected_checksum,expires_at,created_by_user_id
-          ) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+            expected_size_bytes,expected_checksum,expires_at,created_by_user_id,file_name,storage_path
+          ) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
           [id, nonce, scope.workspaceId, scope.brandId, storagePathPrefix, upload.mimeType,
-            upload.sizeBytes, upload.checksum, expiresAt, scope.actorUserId],
+            upload.sizeBytes, upload.checksum, expiresAt, scope.actorUserId, upload.fileName,
+            `${storagePathPrefix}${upload.checksum}-${upload.fileName.replace(/ +/g, "-")}`],
         );
         return {
           id, nonce, workspaceId: scope.workspaceId, brandId: scope.brandId, kind,
@@ -664,7 +674,7 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
         avatarId: String(row.storage_path_prefix).includes("/avatars/")
           ? String(row.storage_path_prefix).split("/avatars/")[1]?.split("/")[0] ?? null
           : null,
-        fileName, storagePathPrefix: String(row.storage_path_prefix),
+        fileName: row.file_name ? String(row.file_name) : fileName, storagePathPrefix: String(row.storage_path_prefix),
         expectedMimeType: String(row.expected_mime_type), expectedSizeBytes: Number(row.expected_size_bytes),
         expectedChecksum: String(row.expected_checksum), expiresAt: iso(row.expires_at),
         confirmedAt: row.confirmed_at ? iso(row.confirmed_at) : null,
@@ -704,6 +714,98 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
         );
         return { status: "attached", avatar: (await getAvatar(scope, client))! };
       });
+    },
+    async cancelAvatarUpload(scope, deleteBlob, reason = "user") {
+      return transaction(pool, async (client) => {
+        if (reason === "user") await requireMember(client, scope);
+        await client.query(
+          "select pg_advisory_xact_lock(hashtextextended($1,0))",
+          [scope.sessionId],
+        );
+        const receipt = await client.query(
+          `select * from avatar_upload_cancellation_receipts
+            where session_id=$1 for update`,
+          [scope.sessionId],
+        );
+        if (receipt.rowCount) {
+          const row = receipt.rows[0];
+          if (String(row.workspace_id) !== scope.workspaceId || String(row.brand_id) !== scope.brandId
+            || String(row.avatar_id) !== scope.avatarId || String(row.created_by_user_id) !== scope.actorUserId) {
+            throw new Error("asset_library_upload_session_not_found");
+          }
+          return { status: "already_cancelled" };
+        }
+        const session = await client.query(
+          `select * from reference_upload_sessions
+            where id=$1 and workspace_id=$2 and brand_id=$3 for update`,
+          [scope.sessionId, scope.workspaceId, scope.brandId],
+        );
+        if (!session.rowCount) throw new Error("asset_library_upload_session_not_found");
+        const row = session.rows[0];
+        if (String(row.created_by_user_id) !== scope.actorUserId) {
+          throw new Error("asset_library_upload_actor_mismatch");
+        }
+        const expectedPrefix = `brands/${scope.brandId}/asset-library/avatars/${scope.avatarId}/${scope.sessionId}/`;
+        if (String(row.storage_path_prefix) !== expectedPrefix) {
+          throw new Error("asset_library_upload_session_not_found");
+        }
+        const artifact = await client.query(
+          `select id,path from storage_artifacts
+            where workspace_id=$1 and brand_id=$2 and deleted_at is null and path like $3
+            for update`,
+          [scope.workspaceId, scope.brandId, `${expectedPrefix}%`],
+        );
+        const storagePath = artifact.rowCount
+          ? String(artifact.rows[0].path)
+          : String(row.storage_path ?? "");
+        if (!storagePath || !storagePath.startsWith(expectedPrefix)) {
+          throw new Error("asset_library_upload_artifact_not_found");
+        }
+        await deleteBlob(storagePath);
+        await client.query(
+          `delete from storage_artifacts
+            where workspace_id=$1 and brand_id=$2 and path=$3 and deleted_at is null`,
+          [scope.workspaceId, scope.brandId, storagePath],
+        );
+        await client.query(
+          `delete from reference_upload_sessions
+            where id=$1 and workspace_id=$2 and brand_id=$3`,
+          [scope.sessionId, scope.workspaceId, scope.brandId],
+        );
+        await client.query(
+          `insert into avatar_upload_cancellation_receipts(
+            session_id,workspace_id,brand_id,avatar_id,created_by_user_id,storage_path,reason
+          ) values($1,$2,$3,$4,$5,$6,$7)`,
+          [scope.sessionId, scope.workspaceId, scope.brandId, scope.avatarId,
+            scope.actorUserId, storagePath, reason],
+        );
+        return { status: "cancelled" };
+      });
+    },
+    async cleanupExpiredAvatarUploads(deleteBlob, limit = 100) {
+      const candidates = await pool.query(
+        `select id,workspace_id,brand_id,created_by_user_id,storage_path_prefix
+          from reference_upload_sessions
+          where expires_at <= now() and storage_path_prefix like '%/asset-library/avatars/%'
+          order by expires_at,id limit $1`,
+        [Math.max(1, Math.min(limit, 500))],
+      );
+      const failed: Array<{ sessionId: string; error: string }> = [];
+      let cancelled = 0;
+      for (const row of candidates.rows) {
+        const parts = String(row.storage_path_prefix).split("/avatars/")[1]?.split("/") ?? [];
+        try {
+          await this.cancelAvatarUpload({
+            workspaceId: String(row.workspace_id), brandId: String(row.brand_id),
+            actorUserId: String(row.created_by_user_id), avatarId: parts[0] ?? "",
+            sessionId: String(row.id),
+          }, deleteBlob, "expired");
+          cancelled += 1;
+        } catch (error) {
+          failed.push({ sessionId: String(row.id), error: error instanceof Error ? error.message : "unknown" });
+        }
+      }
+      return { scanned: candidates.rows.length, cancelled, failed };
     },
     async confirmReferenceUpload(scope, upload) {
       return transaction(pool, async (client) => {

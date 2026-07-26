@@ -53,6 +53,8 @@ function setup(overrides: Partial<ApiRepository> = {}) {
       expiresAt: new Date(Date.now() + 60_000).toISOString(), confirmedAt: null,
     })),
     confirmAvatarUpload: vi.fn(async () => ({ status: "staged" as const, avatarId, sessionId })),
+    cancelAvatarUpload: vi.fn(async () => ({ status: "cancelled" as const })),
+    cleanupExpiredAvatarUploads: vi.fn(async () => ({ scanned: 0, cancelled: 0, failed: [] })),
     confirmReferenceUpload: vi.fn(async () => ({ id: referenceId })),
     listReferenceBrands: vi.fn(async () => []), createReferenceBrand: vi.fn(async () => ({ id: referenceId })),
     createReferenceBrandFromTrend: vi.fn(async () => ({ id: referenceId })),
@@ -80,12 +82,13 @@ function setup(overrides: Partial<ApiRepository> = {}) {
     },
   }));
   const generateClientToken = vi.fn(async () => "client-token");
+  const deleteBlob = vi.fn(async () => undefined);
   return {
     app: createServer({
-      repository, kakaoAuth, logger: false,
-      assetLibraryUpload: { readWriteToken: "rw-token", getBlob, generateClientToken },
+      repository, kakaoAuth, logger: false, cronSecret: "cron-secret",
+      assetLibraryUpload: { readWriteToken: "rw-token", getBlob, generateClientToken, deleteBlob },
     }),
-    repository, getBlob,
+    repository, getBlob, deleteBlob,
   };
 }
 
@@ -150,6 +153,49 @@ describe("asset library customer routes", () => {
       { workspaceId, brandId, actorUserId: userId, avatarId, sessionId },
       { ...uploaded, representative: false },
     );
+    await app.close();
+  });
+
+  it("cancels an avatar upload with authenticated tenant, actor, and reserved-avatar scope", async () => {
+    const { app, repository, deleteBlob } = setup();
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/brands/${brandId}/avatars/${avatarId}/images/upload-sessions/${sessionId}`,
+      headers: auth,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ status: "cancelled" });
+    expect(repository.cancelAvatarUpload).toHaveBeenCalledWith(
+      { workspaceId, brandId, actorUserId: userId, avatarId, sessionId },
+      expect.any(Function),
+    );
+    const cleanup = (repository.cancelAvatarUpload as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
+    await cleanup(uploaded.storagePath);
+    expect(deleteBlob).toHaveBeenCalledWith(uploaded.storagePath, expect.objectContaining({ token: "rw-token" }));
+    await app.close();
+  });
+
+  it("runs abandoned avatar cleanup only through the authenticated cron route", async () => {
+    const cleanupExpiredAvatarUploads = vi.fn(async () => ({
+      scanned: 2,
+      cancelled: 1,
+      failed: [{ sessionId, error: "asset_library_blob_delete_failed" }],
+    }));
+    const { app } = setup({ cleanupExpiredAvatarUploads });
+    expect((await app.inject({
+      method: "GET", url: "/internal/cron/avatar-upload-cleanup",
+    })).statusCode).toBe(401);
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/cron/avatar-upload-cleanup",
+      headers: { authorization: "Bearer cron-secret" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      scanned: 2, cancelled: 1,
+      failed: [{ sessionId, error: "asset_library_blob_delete_failed" }],
+    });
+    expect(cleanupExpiredAvatarUploads).toHaveBeenCalledWith(expect.any(Function));
     await app.close();
   });
 

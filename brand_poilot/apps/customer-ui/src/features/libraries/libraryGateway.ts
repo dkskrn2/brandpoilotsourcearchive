@@ -177,18 +177,30 @@ export function classifyLibraryError(
 
 type Client = Pick<ReturnType<typeof apiClient>, "requestJson">;
 
-async function fileBytes(file: File) {
-  if (typeof file.arrayBuffer === "function") return file.arrayBuffer();
+async function fileBytes(file: File, signal?: AbortSignal, onProgress: (value: number) => void = () => undefined) {
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   return new Promise<ArrayBuffer>((resolve, reject) => {
     const reader = new FileReader();
+    const abort = () => reader.abort();
+    signal?.addEventListener("abort", abort, { once: true });
     reader.onerror = () => reject(reader.error ?? new Error("avatar_file_read_failed"));
-    reader.onload = () => resolve(reader.result as ArrayBuffer);
+    reader.onabort = () => reject(new DOMException("Aborted", "AbortError"));
+    reader.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) onProgress(Math.round((event.loaded / event.total) * 90));
+    };
+    reader.onload = () => {
+      signal?.removeEventListener("abort", abort);
+      resolve(reader.result as ArrayBuffer);
+    };
     reader.readAsArrayBuffer(file);
   });
 }
 
-async function sha256(file: File) {
-  const digest = await crypto.subtle.digest("SHA-256", await fileBytes(file));
+async function sha256(file: File, signal?: AbortSignal, onProgress: (value: number) => void = () => undefined) {
+  onProgress(0);
+  const digest = await crypto.subtle.digest("SHA-256", await fileBytes(file, signal, onProgress));
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  onProgress(100);
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
@@ -269,17 +281,27 @@ export function createLibraryGateway(client: Client = apiClient(), blobPut: type
         body: JSON.stringify(input),
       });
     },
+    hashAvatarImage(file: File, signal?: AbortSignal, onProgress?: (value: number) => void) {
+      return sha256(file, signal, onProgress);
+    },
     async uploadAvatarImage(
       brandId: string,
       avatarId: string,
       file: File,
-      onProgress: (value: number) => void = () => undefined,
+      options: ((value: number) => void) | {
+        checksum?: string;
+        signal?: AbortSignal;
+        onProgress?: (value: number) => void;
+        onSession?: (sessionId: string) => void;
+      } = () => undefined,
     ) {
+      const config = typeof options === "function" ? { onProgress: options } : options;
+      const onProgress = config.onProgress ?? (() => undefined);
       const metadata = {
         fileName: file.name,
         mimeType: file.type.toLowerCase(),
         sizeBytes: file.size,
-        checksum: await sha256(file),
+        checksum: config.checksum ?? await sha256(file, config.signal),
       };
       onProgress(10);
       const token = await client.requestJson<{
@@ -291,11 +313,15 @@ export function createLibraryGateway(client: Client = apiClient(), blobPut: type
       }>(`/brands/${brandId}/avatars/${avatarId}/images/upload-token`, {
         method: "POST",
         body: JSON.stringify(metadata),
+        ...(config.signal ? { signal: config.signal } : {}),
       });
+      config.onSession?.(token.sessionId);
       const stored = await blobPut(token.pathname, file, {
         access: "public",
         token: token.clientToken,
         contentType: metadata.mimeType,
+        abortSignal: config.signal,
+        onUploadProgress: ({ percentage }) => onProgress(10 + Math.round(percentage * 0.6)),
       });
       onProgress(70);
       await client.requestJson(`/brands/${brandId}/avatars/${avatarId}/images/confirm`, {
@@ -308,9 +334,16 @@ export function createLibraryGateway(client: Client = apiClient(), blobPut: type
           storageUrl: stored.url,
           representative: false,
         }),
+        ...(config.signal ? { signal: config.signal } : {}),
       });
       onProgress(100);
       return { sessionId: token.sessionId };
+    },
+    cancelAvatarUpload(brandId: string, avatarId: string, sessionId: string) {
+      return client.requestJson<{ status: "cancelled" | "already_cancelled" }>(
+        `/brands/${brandId}/avatars/${avatarId}/images/upload-sessions/${sessionId}`,
+        { method: "DELETE" },
+      );
     },
     deleteAvatarImage(brandId: string, avatarId: string, imageId: string) {
       return client.requestJson<void>(`/brands/${brandId}/avatars/${avatarId}/images/${imageId}`, {

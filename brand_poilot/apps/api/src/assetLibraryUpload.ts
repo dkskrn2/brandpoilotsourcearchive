@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client";
-import { get } from "@vercel/blob";
+import { del, get } from "@vercel/blob";
 import { parseAssetUploadInput, type AssetUploadInput } from "./assetLibraryContracts.js";
 
 export type AssetLibraryUploadKind = "avatar" | "reference";
@@ -109,6 +109,26 @@ export interface AssetLibraryBlobOptions {
   token: string;
   getBlob?: typeof get;
   now?: Date;
+}
+
+export interface AssetLibraryDeleteOptions {
+  token: string;
+  deleteBlob?: typeof del;
+}
+
+export async function deleteAssetLibraryBlob(
+  storagePath: string,
+  options: AssetLibraryDeleteOptions,
+): Promise<void> {
+  if (!options.token.trim()) fail("asset_library_upload_storage_not_configured");
+  try {
+    await (options.deleteBlob ?? del)(storagePath, {
+      token: options.token,
+      abortSignal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    fail("asset_library_blob_delete_failed");
+  }
 }
 
 export async function issueAssetLibraryUploadToken(input: {
