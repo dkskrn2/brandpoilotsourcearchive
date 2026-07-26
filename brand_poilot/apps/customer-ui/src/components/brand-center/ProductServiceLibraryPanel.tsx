@@ -35,6 +35,16 @@ export function ProductServiceLibraryPanel({
   const consumedAnalysisId = useRef<string | null>(null);
   const inFlightAnalysisIds = useRef(new Set<string>());
   const activeRequestToken = useRef(0);
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      activeRequestToken.current += 1;
+      inFlightAnalysisIds.current.clear();
+    };
+  }, []);
 
   async function load() {
     setLoading(true);
@@ -54,23 +64,25 @@ export function ProductServiceLibraryPanel({
   useEffect(() => { void load(); }, [brandId]);
 
   async function consumeAnalysis(analysisId: string) {
-    if (inFlightAnalysisIds.current.has(analysisId)) return;
+    if (!mounted.current || inFlightAnalysisIds.current.has(analysisId)) return;
     const requestToken = ++activeRequestToken.current;
     inFlightAnalysisIds.current.add(analysisId);
     setAnalysisImporting(true);
     try {
       const saved = await gateway.createProductServiceFromAnalysis(brandId, analysisId);
-      if (requestToken !== activeRequestToken.current) return;
+      if (!mounted.current || requestToken !== activeRequestToken.current) return;
       consumedAnalysisId.current = analysisId;
       setHandoffError(null);
       acceptSaved(saved);
       onAnalysisConsumed?.();
     } catch {
-      if (requestToken !== activeRequestToken.current) return;
+      if (!mounted.current || requestToken !== activeRequestToken.current) return;
       setHandoffError("완료된 분석을 제품·서비스 초안으로 가져오지 못했습니다. 다시 시도해 주세요.");
     } finally {
-      inFlightAnalysisIds.current.delete(analysisId);
-      if (requestToken === activeRequestToken.current) setAnalysisImporting(false);
+      if (mounted.current) {
+        inFlightAnalysisIds.current.delete(analysisId);
+        if (requestToken === activeRequestToken.current) setAnalysisImporting(false);
+      }
     }
   }
 

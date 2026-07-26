@@ -200,4 +200,40 @@ describe("ProductServiceLibraryPanel", () => {
     expect(screen.queryByText(/분석 결과를 가져오지 못했습니다/)).not.toBeInTheDocument();
     expect(createProductServiceFromAnalysis).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["resolve", "reject"] as const)(
+    "ignores a pending analysis import that %s after unmount",
+    async (outcome) => {
+      const pendingImport = deferred<typeof draftItem>();
+      const restoreParentUrl = vi.fn();
+      const api = gateway({
+        createProductServiceFromAnalysis: vi.fn(() => pendingImport.promise),
+      });
+
+      const { unmount } = renderPanel(
+        <ProductServiceLibraryPanel
+          brandId="brand-1"
+          gateway={api as never}
+          initialAnalysisId={analysisIdA}
+          onAnalysisConsumed={restoreParentUrl}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(api.createProductServiceFromAnalysis).toHaveBeenCalledWith("brand-1", analysisIdA),
+      );
+      unmount();
+
+      await act(async () => {
+        if (outcome === "resolve") {
+          pendingImport.resolve(draftItem);
+        } else {
+          pendingImport.reject(new Error("late import failure"));
+        }
+        await pendingImport.promise.catch(() => undefined);
+      });
+
+      expect(restoreParentUrl).not.toHaveBeenCalled();
+    },
+  );
 });
