@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   ASSET_LIBRARY_REFERENCE_POLICY,
@@ -10,6 +11,34 @@ import {
 const brandId = "22222222-2222-4222-8222-222222222222";
 const sessionId = "44444444-4444-4444-8444-444444444444";
 const checksum = "a".repeat(64);
+
+function sha256(bytes: Uint8Array) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function blobResult(pathname: string, contentType: string, bytes: Uint8Array) {
+  return {
+    statusCode: 200 as const,
+    stream: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    }),
+    headers: new Headers(),
+    blob: {
+      url: `https://store.blob.vercel-storage.com/${pathname}`,
+      downloadUrl: `https://store.blob.vercel-storage.com/${pathname}?download=1`,
+      pathname,
+      contentType,
+      size: bytes.length,
+      contentDisposition: "inline",
+      cacheControl: "public, max-age=0",
+      uploadedAt: new Date(),
+      etag: "etag",
+    },
+  };
+}
 
 describe("asset library uploads", () => {
   it("uses a dedicated namespace and avatar policy", async () => {
@@ -73,11 +102,92 @@ describe("asset library uploads", () => {
     };
     await expect(confirmAssetLibraryUpload(
       { ...base, ...override, session: { ...base.session, ...("confirmedAt" in override || "expiresAt" in override ? override : {}) } },
-      { token: "rw-token", headBlob: vi.fn(async () => ({
-        url: base.storageUrl, downloadUrl: base.storageUrl, pathname: expectedPath,
-        size: 500, uploadedAt: new Date(), contentType: "application/pdf", contentDisposition: "inline",
-        cacheControl: "public, max-age=0", etag: "etag",
-      })) },
+      { token: "rw-token", getBlob: vi.fn(async () => null) },
     )).rejects.toThrow(error);
+  });
+
+  it("hashes trusted provider bytes fetched by scoped pathname", async () => {
+    const bytes = Buffer.from("trusted-reference");
+    const actualChecksum = sha256(bytes);
+    const expectedPath = buildAssetLibraryPath({
+      brandId, sessionId, kind: "reference", checksum: actualChecksum, fileName: "brief.txt",
+    });
+    const getBlob = vi.fn(async () => blobResult(expectedPath, "text/plain", bytes));
+    const confirmed = await confirmAssetLibraryUpload({
+      session: {
+        id: sessionId, workspaceId: "11111111-1111-4111-8111-111111111111", brandId,
+        kind: "reference", nonce: "valid-nonce-123456", fileName: "brief.txt",
+        expectedMimeType: "text/plain", expectedSizeBytes: bytes.length,
+        expectedChecksum: actualChecksum,
+        storagePathPrefix: `brands/${brandId}/asset-library/references/${sessionId}/`,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(), confirmedAt: null,
+      },
+      nonce: "valid-nonce-123456", storagePath: expectedPath,
+      storageUrl: `https://store.blob.vercel-storage.com/${expectedPath}`,
+      mimeType: "text/plain", sizeBytes: bytes.length, checksum: actualChecksum,
+    }, { token: "rw-token", getBlob });
+    expect(confirmed.checksum).toBe(actualChecksum);
+    expect(getBlob).toHaveBeenCalledWith(expectedPath, expect.objectContaining({
+      token: "rw-token", access: "public", useCache: false,
+    }));
+  });
+
+  it("rejects same-size and same-MIME bytes with a different SHA-256", async () => {
+    const expectedBytes = Buffer.from("good");
+    const actualBytes = Buffer.from("evil");
+    const expectedChecksum = sha256(expectedBytes);
+    const expectedPath = buildAssetLibraryPath({
+      brandId, sessionId, kind: "reference", checksum: expectedChecksum, fileName: "brief.txt",
+    });
+    await expect(confirmAssetLibraryUpload({
+      session: {
+        id: sessionId, workspaceId: "11111111-1111-4111-8111-111111111111", brandId,
+        kind: "reference", nonce: "valid-nonce-123456", fileName: "brief.txt",
+        expectedMimeType: "text/plain", expectedSizeBytes: actualBytes.length,
+        expectedChecksum,
+        storagePathPrefix: `brands/${brandId}/asset-library/references/${sessionId}/`,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(), confirmedAt: null,
+      },
+      nonce: "valid-nonce-123456", storagePath: expectedPath,
+      storageUrl: `https://store.blob.vercel-storage.com/${expectedPath}`,
+      mimeType: "text/plain", sizeBytes: actualBytes.length, checksum: expectedChecksum,
+    }, {
+      token: "rw-token",
+      getBlob: vi.fn(async () => blobResult(expectedPath, "text/plain", actualBytes)),
+    })).rejects.toThrow("asset_library_upload_checksum_mismatch");
+  });
+
+  it("rejects provider size metadata before reading the stream", async () => {
+    const expectedBytes = Buffer.from("good");
+    const expectedChecksum = sha256(expectedBytes);
+    const expectedPath = buildAssetLibraryPath({
+      brandId, sessionId, kind: "reference", checksum: expectedChecksum, fileName: "brief.txt",
+    });
+    let readerAccessed = false;
+    const result = blobResult(expectedPath, "text/plain", expectedBytes);
+    result.blob.size += 1;
+    result.stream = {
+      getReader() {
+        readerAccessed = true;
+        throw new Error("must_not_read");
+      },
+    } as never;
+    await expect(confirmAssetLibraryUpload({
+      session: {
+        id: sessionId, workspaceId: "11111111-1111-4111-8111-111111111111", brandId,
+        kind: "reference", nonce: "valid-nonce-123456", fileName: "brief.txt",
+        expectedMimeType: "text/plain", expectedSizeBytes: expectedBytes.length,
+        expectedChecksum,
+        storagePathPrefix: `brands/${brandId}/asset-library/references/${sessionId}/`,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(), confirmedAt: null,
+      },
+      nonce: "valid-nonce-123456", storagePath: expectedPath,
+      storageUrl: `https://store.blob.vercel-storage.com/${expectedPath}`,
+      mimeType: "text/plain", sizeBytes: expectedBytes.length, checksum: expectedChecksum,
+    }, {
+      token: "rw-token",
+      getBlob: vi.fn(async () => result),
+    })).rejects.toThrow("asset_library_upload_size_mismatch");
+    expect(readerAccessed).toBe(false);
   });
 });

@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Pool } from "pg";
+import { createAssetLibraryRepository } from "./assetLibraryRepository.js";
 
 let database: PGlite | undefined;
 
@@ -69,6 +71,20 @@ const stageAvatar = async (
       ],
     );
   }
+};
+
+const repositoryPool = (db: PGlite) => {
+  const query = async (sql: string, values: unknown[] = []) => {
+    const result = await db.query(sql, values);
+    return {
+      ...result,
+      rowCount: result.rows.length || result.affectedRows,
+    };
+  };
+  return {
+    query,
+    connect: async () => ({ query, release() {} }),
+  } as unknown as Pool;
 };
 
 beforeAll(async () => {
@@ -268,5 +284,46 @@ describe("avatar and reference library PostgreSQL contract", () => {
        ) values ($1, $2, 'external_url', $3)`,
       [workspaceId, brandId, actorId],
     )).rejects.toThrow();
+  });
+
+  it("frees active URL quota on archive and restores one canonical item", async () => {
+    const db = database as PGlite;
+    const repository = createAssetLibraryRepository(repositoryPool(db));
+    const scope = { workspaceId, brandId, actorUserId: actorId };
+    const url = "https://example.com/archive-and-restore";
+    const created = await repository.addReferenceUrl(scope, {
+      url,
+      title: "Archive and restore",
+      contentPurpose: "both",
+    });
+
+    await repository.archiveReference({ ...scope, referenceId: created.id });
+    const archived = await db.query<{ enabled: boolean; status: string }>(
+      `select source.enabled,source.status
+         from reference_items item join source_urls source on source.id=item.source_url_id
+        where item.id=$1`,
+      [created.id],
+    );
+    expect(archived.rows[0]).toEqual({ enabled: false, status: "disabled" });
+
+    const restored = await repository.addReferenceUrl(scope, {
+      url,
+      title: "Archive and restore",
+      contentPurpose: "both",
+    });
+    expect(restored.id).toBe(created.id);
+    const canonical = await db.query<{ item_count: number; active_count: number }>(
+      `select
+         (select count(*)::int from reference_items where source_url_id=source.id) item_count,
+         (select count(*)::int from source_urls active
+           where active.workspace_id=$1 and active.brand_id=$2 and active.source_type='reference'
+             and active.enabled and active.status<>'disabled' and active.deleted_at is null) active_count
+       from source_urls source where source.id=(
+         select source_url_id from reference_items where id=$3
+       )`,
+      [workspaceId, brandId, created.id],
+    );
+    expect(canonical.rows[0]?.item_count).toBe(1);
+    expect(canonical.rows[0]?.active_count).toBeGreaterThanOrEqual(1);
   });
 });

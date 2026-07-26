@@ -214,6 +214,86 @@ describe("asset library repository", () => {
     })).rejects.toThrow("source_reference_limit_exceeded");
   });
 
+  it("archives a canonical URL source, frees quota, and restores the same item on re-add", async () => {
+    const referenceId = "88888888-8888-4888-8888-888888888888";
+    const sourceId = "99999999-9999-4999-8999-999999999999";
+    let archived = false;
+    let sourceEnabled = true;
+    const row = () => ({
+      id: referenceId, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+      kind: "external_url", content_purpose: "both", origin: "example.com",
+      title: "Example", preview_url: null, source_url: "https://example.com/a",
+      format: "url", metadata: {}, is_favorite: false,
+      archived_at: archived ? new Date() : null, reference_brand_id: null,
+      source_url_id: sourceId, created_at: new Date(), updated_at: new Date(),
+    });
+    const fake = fakePool((sql) => {
+      const access = member(sql, "admin");
+      if (access) return access;
+      if (sql.includes("from reference_items") && sql.includes("for update")) {
+        return { rows: [row()] };
+      }
+      if (sql.includes("update reference_items") && sql.includes("archived_at=now()")) {
+        archived = true;
+        return { rowCount: 1 };
+      }
+      if (sql.includes("update source_urls") && sql.includes("enabled=false")) {
+        sourceEnabled = false;
+        return { rowCount: 1 };
+      }
+      if (sql.includes("from brands") && sql.includes("for update")) return { rows: [{ id: scope.brandId }] };
+      if (sql.includes("count(*)") && sql.includes("source_urls")) {
+        return { rows: [{ count: sourceEnabled ? 10 : 9 }] };
+      }
+      if (sql.includes("from source_urls") && sql.includes("url_hash")) return { rows: [{ id: sourceId }] };
+      if (sql.includes("from reference_items") && sql.includes("source_url_id")) return { rows: [row()] };
+      if (sql.includes("update source_urls") && sql.includes("enabled=true")) {
+        sourceEnabled = true;
+        return { rowCount: 1 };
+      }
+      if (sql.includes("update reference_items") && sql.includes("archived_at=null")) {
+        archived = false;
+        return { rows: [row()] };
+      }
+      return {};
+    });
+    const repository = createAssetLibraryRepository(fake.pool);
+
+    await repository.archiveReference({ ...scope, referenceId });
+    expect(sourceEnabled).toBe(false);
+
+    const restored = await repository.addReferenceUrl(scope, {
+      url: "https://example.com/a", title: "Example", contentPurpose: "both",
+    });
+    expect(restored.id).toBe(referenceId);
+    expect(sourceEnabled).toBe(true);
+    expect(archived).toBe(false);
+    expect(fake.query.mock.calls.filter(([sql]) =>
+      String(sql).includes("insert into reference_items"),
+    )).toHaveLength(0);
+  });
+
+  it("does not disable source URLs when archiving a saved trend projection", async () => {
+    const fake = fakePool((sql) => {
+      const access = member(sql, "admin");
+      if (access) return access;
+      if (sql.includes("from reference_items") && sql.includes("for update")) {
+        return { rows: [{
+          id: imageId, kind: "trend", source_url_id: null,
+          workspace_id: scope.workspaceId, brand_id: scope.brandId,
+        }] };
+      }
+      if (sql.includes("update reference_items")) return { rowCount: 1 };
+      return {};
+    });
+    await createAssetLibraryRepository(fake.pool).archiveReference({
+      ...scope, referenceId: imageId,
+    });
+    expect(fake.query.mock.calls.some(([sql]) =>
+      String(sql).includes("update source_urls"),
+    )).toBe(false);
+  });
+
   it("rejects duplicate origins and scopes every origin lookup to workspace and brand", async () => {
     const fake = fakePool((sql) => {
       const access = member(sql);

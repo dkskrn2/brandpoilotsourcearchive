@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { createServer } from "./httpServer.js";
 import type { ApiRepository } from "./types.js";
@@ -8,7 +9,8 @@ const userId = "33333333-3333-4333-8333-333333333333";
 const avatarId = "44444444-4444-4444-8444-444444444444";
 const referenceId = "55555555-5555-4555-8555-555555555555";
 const sessionId = "66666666-6666-4666-8666-666666666666";
-const checksum = "a".repeat(64);
+const uploadBytes = Buffer.alloc(100, 7);
+const checksum = createHash("sha256").update(uploadBytes).digest("hex");
 const auth = { cookie: "bp_session=session-1" };
 const uploaded = {
   fileName: "face.webp", mimeType: "image/webp", sizeBytes: 100, checksum,
@@ -61,18 +63,29 @@ function setup(overrides: Partial<ApiRepository> = {}) {
     getSession: vi.fn(async () => ({ userId, workspaceId, workspaceName: "W", brandId, brandName: "B", displayName: "T", email: null })),
     canAccessBrand: vi.fn(async () => true),
   } as never;
-  const headBlob = vi.fn(async () => ({
-    url: uploaded.storageUrl, downloadUrl: uploaded.storageUrl, pathname: uploaded.storagePath,
-    size: 100, uploadedAt: new Date(), contentType: "image/webp", contentDisposition: "inline",
-    cacheControl: "public, max-age=0", etag: "etag",
+  const getBlob = vi.fn(async () => ({
+    statusCode: 200 as const,
+    stream: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(uploadBytes);
+        controller.close();
+      },
+    }),
+    headers: new Headers(),
+    blob: {
+      url: uploaded.storageUrl, downloadUrl: `${uploaded.storageUrl}?download=1`,
+      pathname: uploaded.storagePath, size: uploadBytes.length,
+      uploadedAt: new Date(), contentType: "image/webp", contentDisposition: "inline",
+      cacheControl: "public, max-age=0", etag: "etag",
+    },
   }));
   const generateClientToken = vi.fn(async () => "client-token");
   return {
     app: createServer({
       repository, kakaoAuth, logger: false,
-      assetLibraryUpload: { readWriteToken: "rw-token", headBlob, generateClientToken },
+      assetLibraryUpload: { readWriteToken: "rw-token", getBlob, generateClientToken },
     }),
-    repository, headBlob,
+    repository, getBlob,
   };
 }
 

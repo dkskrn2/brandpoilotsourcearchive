@@ -1,6 +1,6 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client";
-import { head, type HeadBlobResult } from "@vercel/blob";
+import { get } from "@vercel/blob";
 import { parseAssetUploadInput, type AssetUploadInput } from "./assetLibraryContracts.js";
 
 export type AssetLibraryUploadKind = "avatar" | "reference";
@@ -89,7 +89,7 @@ export interface AssetLibraryTokenOptions {
 }
 export interface AssetLibraryBlobOptions {
   token: string;
-  headBlob?: typeof head;
+  getBlob?: typeof get;
   now?: Date;
 }
 
@@ -167,11 +167,38 @@ export async function confirmAssetLibraryUpload(input: {
     fail("asset_library_upload_url_mismatch");
   }
   if (!options.token.trim()) fail("asset_library_upload_storage_not_configured");
-  let metadata: HeadBlobResult;
-  try { metadata = await (options.headBlob ?? head)(input.storageUrl, { token: options.token }); }
+  let downloaded: Awaited<ReturnType<typeof get>>;
+  try {
+    downloaded = await (options.getBlob ?? get)(expectedPath, {
+      token: options.token,
+      access: "public",
+      useCache: false,
+      abortSignal: AbortSignal.timeout(15_000),
+    });
+  }
   catch { fail("asset_library_upload_blob_unavailable"); }
-  if (metadata.pathname !== expectedPath) fail("asset_library_upload_path_mismatch");
-  if (metadata.contentType.toLowerCase() !== expected.mimeType) fail("asset_library_upload_mime_mismatch");
-  if (metadata.size !== expected.sizeBytes) fail("asset_library_upload_size_mismatch");
+  if (!downloaded || downloaded.statusCode !== 200) fail("asset_library_upload_blob_unavailable");
+  if (downloaded.blob.pathname !== expectedPath) fail("asset_library_upload_path_mismatch");
+  if (downloaded.blob.contentType.toLowerCase() !== expected.mimeType) fail("asset_library_upload_mime_mismatch");
+  if (downloaded.blob.size !== expected.sizeBytes) fail("asset_library_upload_size_mismatch");
+  const hash = createHash("sha256");
+  const reader = downloaded.stream.getReader();
+  let actualSize = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      actualSize += chunk.value.byteLength;
+      if (actualSize > expected.sizeBytes) fail("asset_library_upload_size_mismatch");
+      hash.update(chunk.value);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("asset_library_upload_")) throw error;
+    fail("asset_library_upload_blob_unavailable");
+  } finally {
+    reader.releaseLock();
+  }
+  if (actualSize !== expected.sizeBytes) fail("asset_library_upload_size_mismatch");
+  if (!equal(hash.digest("hex"), expected.checksum)) fail("asset_library_upload_checksum_mismatch");
   return { ...expected, storagePath: expectedPath, storageUrl: input.storageUrl };
 }

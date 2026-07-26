@@ -39,7 +39,7 @@ interface BrandCenterRouteOptions {
   assetLibraryUpload?: {
     readWriteToken: string;
     generateClientToken?: Parameters<typeof issueAssetLibraryUploadToken>[1]["generateClientToken"];
-    headBlob?: Parameters<typeof confirmAssetLibraryUpload>[1]["headBlob"];
+    getBlob?: Parameters<typeof confirmAssetLibraryUpload>[1]["getBlob"];
   };
 }
 
@@ -505,7 +505,7 @@ export function registerBrandCenterRoutes(
       const confirmed = await confirmAssetLibraryUpload({
         session, nonce: parsed.nonce, storagePath: parsed.storagePath, storageUrl: parsed.storageUrl,
         mimeType: parsed.upload.mimeType, sizeBytes: parsed.upload.sizeBytes, checksum: parsed.upload.checksum,
-      }, { token: options.assetLibraryUpload.readWriteToken, headBlob: options.assetLibraryUpload.headBlob });
+      }, { token: options.assetLibraryUpload.readWriteToken, getBlob: options.assetLibraryUpload.getBlob });
       const representative = parsed.row.representative === true;
       return repository.confirmAvatarUpload(
         { ...scope, actorUserId: requireActor(options, request), avatarId: request.params.avatarId, sessionId: parsed.sessionId },
@@ -587,7 +587,7 @@ export function registerBrandCenterRoutes(
       const confirmed = await confirmAssetLibraryUpload({
         session, nonce: parsed.nonce, storagePath: parsed.storagePath, storageUrl: parsed.storageUrl,
         mimeType: parsed.upload.mimeType, sizeBytes: parsed.upload.sizeBytes, checksum: parsed.upload.checksum,
-      }, { token: options.assetLibraryUpload.readWriteToken, headBlob: options.assetLibraryUpload.headBlob });
+      }, { token: options.assetLibraryUpload.readWriteToken, getBlob: options.assetLibraryUpload.getBlob });
       const value = await repository.confirmReferenceUpload(
         { ...scope, actorUserId: requireActor(options, request), sessionId: parsed.sessionId },
         confirmed,

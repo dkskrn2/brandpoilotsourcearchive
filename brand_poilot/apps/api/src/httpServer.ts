@@ -120,7 +120,7 @@ interface CreateServerOptions {
   assetLibraryUpload?: {
     readWriteToken: string;
     generateClientToken?: import("./assetLibraryUpload.js").AssetLibraryTokenOptions["generateClientToken"];
-    headBlob?: import("./assetLibraryUpload.js").AssetLibraryBlobOptions["headBlob"];
+    getBlob?: import("./assetLibraryUpload.js").AssetLibraryBlobOptions["getBlob"];
   };
   aiContentLimits?: { dailyGenerationLimit: number; dailyDownloadLimit: number };
   subjectAnalysis?: AiContentSubjectRuntime;

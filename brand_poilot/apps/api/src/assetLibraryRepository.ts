@@ -501,15 +501,30 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
         );
         if (source.rowCount) {
           const duplicate = await client.query(
-            `select id from reference_items where source_url_id=$1 and workspace_id=$2 and brand_id=$3`,
+            `select * from reference_items
+              where source_url_id=$1 and workspace_id=$2 and brand_id=$3 for update`,
             [source.rows[0].id, scope.workspaceId, scope.brandId],
           );
-          if (duplicate.rowCount) throw new Error("reference_origin_duplicate");
           await client.query(
-            `update source_urls set enabled=true,status='active',disabled_at=null,content_purpose=$1
-              where id=$2 and workspace_id=$3 and brand_id=$4`,
-            [input.contentPurpose, source.rows[0].id, scope.workspaceId, scope.brandId],
+            `update source_urls set enabled=true,status='active',disabled_at=null,content_purpose=$1,
+              url=$2,domain=$3,title=$4
+              where id=$5 and workspace_id=$6 and brand_id=$7`,
+            [input.contentPurpose, normalized, normalizeSourceDomain(normalized), input.title || normalized,
+              source.rows[0].id, scope.workspaceId, scope.brandId],
           );
+          if (duplicate.rowCount) {
+            if (!duplicate.rows[0].archived_at) throw new Error("reference_origin_duplicate");
+            const restored = await client.query(
+              `update reference_items set archived_at=null,content_purpose=$1,origin=$2,title=$3,
+                source_url=$4,format='url',
+                metadata=metadata || $5::jsonb || jsonb_build_object('restoredByUserId',$6::text)
+                where id=$7 and workspace_id=$8 and brand_id=$9 returning *`,
+              [input.contentPurpose, normalizeSourceDomain(normalized), input.title || normalized, normalized,
+                JSON.stringify({ domain: normalizeSourceDomain(normalized) }), scope.actorUserId,
+                duplicate.rows[0].id, scope.workspaceId, scope.brandId],
+            );
+            return reference(restored.rows[0] as Record<string, unknown>);
+          }
         } else {
           source = await client.query(
             `insert into source_urls(
@@ -547,6 +562,12 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
     async archiveReference(scope) {
       await transaction(pool, async (client) => {
         await requireMember(client, scope, true);
+        const locked = await client.query(
+          `select id,kind,source_url_id from reference_items
+            where id=$1 and workspace_id=$2 and brand_id=$3 and archived_at is null for update`,
+          [scope.referenceId, scope.workspaceId, scope.brandId],
+        );
+        if (!locked.rowCount) throw new Error("reference_not_found");
         const result = await client.query(
           `update reference_items set archived_at=now(),
             metadata=metadata || jsonb_build_object('archivedByUserId',$1::text)
@@ -554,6 +575,15 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
           [scope.actorUserId, scope.referenceId, scope.workspaceId, scope.brandId],
         );
         if (!result.rowCount) throw new Error("reference_not_found");
+        const item = locked.rows[0];
+        if (item.source_url_id && ["external_url", "saved_content"].includes(String(item.kind))) {
+          await client.query(
+            `update source_urls set enabled=false,status='disabled',disabled_at=coalesce(disabled_at,now())
+              where id=$1 and workspace_id=$2 and brand_id=$3 and source_type='reference'
+                and deleted_at is null`,
+            [item.source_url_id, scope.workspaceId, scope.brandId],
+          );
+        }
       });
     },
     async getReferencePattern(scope) {
