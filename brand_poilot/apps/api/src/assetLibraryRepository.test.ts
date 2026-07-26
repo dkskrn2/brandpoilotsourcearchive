@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAssetLibraryRepository } from "./assetLibraryRepository.js";
+import { createInstagramTrendRepository } from "./instagramTrendRepository.js";
 
 const scope = {
   workspaceId: "11111111-1111-4111-8111-111111111111",
@@ -1049,16 +1050,24 @@ describe("asset library repository", () => {
   });
 
   it("does not disable source URLs when archiving a saved trend projection", async () => {
+    const savedId = "66666666-6666-4666-8666-666666666666";
     const fake = fakePool((sql) => {
       const access = member(sql, "admin");
       if (access) return access;
-      if (sql.includes("from reference_items") && sql.includes("for update")) {
+      if (sql.includes("from reference_items")) {
         return { rows: [{
           id: imageId, kind: "trend", source_url_id: null,
+          saved_trend_id: savedId,
           workspace_id: scope.workspaceId, brand_id: scope.brandId,
         }] };
       }
-      if (sql.includes("update reference_items")) return { rowCount: 1 };
+      if (sql.includes("from brand_trend_saved_media") && sql.includes("for update")) {
+        return { rows: [{ id: savedId }] };
+      }
+      if (sql.includes("archive_brand_trend_saved_reference")) {
+        return { rows: [{ reference_item_id: imageId }] };
+      }
+      if (sql.includes("delete from brand_trend_saved_media")) return { rows: [{ id: savedId }] };
       return {};
     });
     await createAssetLibraryRepository(fake.pool).archiveReference({
@@ -1067,6 +1076,236 @@ describe("asset library repository", () => {
     expect(fake.query.mock.calls.some(([sql]) =>
       String(sql).includes("update source_urls"),
     )).toBe(false);
+  });
+
+  it("locks a saved trend row before its canonical reference during archive", async () => {
+    const savedId = "66666666-6666-4666-8666-666666666666";
+    const fake = fakePool((sql) => {
+      const access = member(sql, "admin");
+      if (access) return access;
+      if (sql.includes("from reference_items") && !sql.includes("for update")) {
+        return { rows: [{
+          id: imageId, kind: "trend", source_url_id: null, saved_trend_id: savedId,
+        }] };
+      }
+      if (sql.includes("from brand_trend_saved_media") && sql.includes("for update")) {
+        return { rows: [{ id: savedId }] };
+      }
+      if (sql.includes("from reference_items") && sql.includes("for update")) {
+        return { rows: [{
+          id: imageId, kind: "trend", source_url_id: null, saved_trend_id: savedId,
+        }] };
+      }
+      if (sql.includes("archive_brand_trend_saved_reference")) {
+        return { rows: [{ reference_item_id: imageId }] };
+      }
+      if (sql.includes("delete from brand_trend_saved_media")) return { rows: [{ id: savedId }] };
+      return {};
+    });
+
+    await createAssetLibraryRepository(fake.pool).archiveReference({
+      ...scope, referenceId: imageId,
+    });
+
+    const rowLocks = fake.query.mock.calls
+      .map(([sql]) => String(sql).replace(/\s+/g, " ").trim())
+      .filter((sql) => sql.includes("for update") && (
+        sql.includes("brand_trend_saved_media") || sql.includes("reference_items")
+      ));
+    expect(rowLocks).toHaveLength(2);
+    expect(rowLocks[0]).toContain("brand_trend_saved_media");
+    expect(rowLocks[1]).toContain("reference_items");
+  });
+
+  it.each(["remove", "resave"] as const)(
+    "serializes canonical archive with legacy %s without a lock cycle",
+    async (legacyOperation) => {
+    const savedId = "66666666-6666-4666-8666-666666666666";
+    const state = { saved: true, archived: false, sourceEnabled: true };
+    const owners = new Map<string, number>();
+    const held = new Map<number, Set<string>>();
+    const waiters = new Map<string, Array<() => void>>();
+    const firstRequests = new Set<number>();
+    const bothRequested = deferred();
+    let nextClientId = 0;
+
+    async function acquire(key: "saved" | "reference", clientId: number) {
+      if (!firstRequests.has(clientId)) {
+        firstRequests.add(clientId);
+        if (firstRequests.size === 2) bothRequested.resolve();
+        await bothRequested.promise;
+      }
+      while (owners.has(key) && owners.get(key) !== clientId) {
+        await new Promise<void>((resolve) => {
+          waiters.set(key, [...(waiters.get(key) ?? []), resolve]);
+        });
+      }
+      owners.set(key, clientId);
+      held.set(clientId, new Set([...(held.get(clientId) ?? []), key]));
+    }
+
+    function release(clientId: number) {
+      for (const key of held.get(clientId) ?? []) {
+        if (owners.get(key) === clientId) owners.delete(key);
+        for (const wake of waiters.get(key) ?? []) wake();
+        waiters.delete(key);
+      }
+      held.delete(clientId);
+    }
+
+    const pool = {
+      async connect() {
+        const clientId = ++nextClientId;
+        return {
+          async query(rawSql: string) {
+            const sql = rawSql.replace(/\s+/g, " ").trim();
+            if (["begin", "rollback"].includes(sql)) {
+              if (sql === "rollback") release(clientId);
+              return { rows: [], rowCount: 0 };
+            }
+            if (sql === "commit") {
+              release(clientId);
+              return { rows: [], rowCount: 0 };
+            }
+            if (sql.includes("from workspace_members")) {
+              return { rows: [{ role: "admin" }], rowCount: 1 };
+            }
+            if (sql.includes("select workspace_id from brands")) {
+              return { rows: [{ workspace_id: scope.workspaceId }], rowCount: 1 };
+            }
+            if (sql.includes("from instagram_trend_media media")) {
+              return {
+                rows: [{
+                  id: imageId,
+                  instagram_media_id: "ig-lock-order",
+                  username: "creator",
+                  caption: "lock order",
+                  media_type: "IMAGE",
+                  media_url: "https://cdn.example.com/lock.webp",
+                  permalink: "https://www.instagram.com/p/lock-order/",
+                  posted_at: new Date(),
+                  like_count: 1,
+                  comments_count: 0,
+                  raw_metadata: {},
+                }],
+                rowCount: 1,
+              };
+            }
+            if (sql.includes("from source_urls") && sql.includes("url_hash")) {
+              return {
+                rows: [{
+                  id: avatarId,
+                  brand_id: scope.brandId,
+                  source_type: "reference",
+                  url: "https://www.instagram.com/p/lock-order/",
+                  title: "lock order",
+                  status: state.sourceEnabled ? "crawled" : "disabled",
+                  enabled: state.sourceEnabled,
+                  last_crawled_at: new Date(),
+                  last_error: null,
+                }],
+                rowCount: 1,
+              };
+            }
+            if (sql.includes("update source_urls") && sql.includes("enabled = true")) {
+              state.sourceEnabled = true;
+              return {
+                rows: [{
+                  id: avatarId,
+                  brand_id: scope.brandId,
+                  source_type: "reference",
+                  url: "https://www.instagram.com/p/lock-order/",
+                  title: "lock order",
+                  status: "crawled",
+                  enabled: true,
+                  last_crawled_at: new Date(),
+                  last_error: null,
+                }],
+                rowCount: 1,
+              };
+            }
+            if (sql.includes("insert into brand_trend_saved_media")) {
+              return state.saved
+                ? { rows: [], rowCount: 0 }
+                : (() => {
+                  state.saved = true;
+                  return { rows: [{ id: savedId }], rowCount: 1 };
+                })();
+            }
+            if (sql.includes("from reference_items") && !sql.includes("for update")) {
+              return state.archived
+                ? { rows: [], rowCount: 0 }
+                : { rows: [{ id: imageId, kind: "trend", source_url_id: null, saved_trend_id: savedId }], rowCount: 1 };
+            }
+            if (sql.includes("from brand_trend_saved_media") && sql.includes("for update")) {
+              await acquire("saved", clientId);
+              return state.saved
+                ? { rows: [{ id: savedId }], rowCount: 1 }
+                : { rows: [], rowCount: 0 };
+            }
+            if (sql.includes("from reference_items") && sql.includes("for update")) {
+              await acquire("reference", clientId);
+              return !state.archived && state.saved
+                ? { rows: [{ id: imageId, kind: "trend", source_url_id: null, saved_trend_id: savedId }], rowCount: 1 }
+                : { rows: [], rowCount: 0 };
+            }
+            if (sql.includes("archive_brand_trend_saved_reference")) {
+              await acquire("saved", clientId);
+              await acquire("reference", clientId);
+              if (!state.saved) return { rows: [{ reference_item_id: null }], rowCount: 1 };
+              state.archived = true;
+              state.sourceEnabled = false;
+              return { rows: [{ reference_item_id: imageId }], rowCount: 1 };
+            }
+            if (sql.includes("upsert_brand_trend_saved_reference")) {
+              await acquire("saved", clientId);
+              await acquire("reference", clientId);
+              if (!state.saved) return { rows: [{ reference_item_id: null }], rowCount: 1 };
+              state.archived = false;
+              state.sourceEnabled = true;
+              return { rows: [{ reference_item_id: imageId }], rowCount: 1 };
+            }
+            if (sql.includes("insert into source_snapshots")) {
+              return { rows: [{ id: "snapshot-1" }], rowCount: 1 };
+            }
+            if (sql.includes("delete from brand_trend_saved_media")) {
+              const existed = state.saved;
+              state.saved = false;
+              return existed
+                ? { rows: [{ id: savedId, trend_media_id: imageId }], rowCount: 1 }
+                : { rows: [], rowCount: 0 };
+            }
+            throw new Error(`unexpected query: ${sql}`);
+          },
+          release() {},
+        };
+      },
+    };
+    const assets = createAssetLibraryRepository(pool as never);
+    const trends = createInstagramTrendRepository({
+      pool: pool as never,
+      decryptCredential: String,
+      fetchTopMedia: vi.fn() as never,
+    });
+
+    const legacyPromise = legacyOperation === "remove"
+      ? trends.removeInstagramTrendSource(scope.brandId, imageId, scope.actorUserId)
+      : trends.saveInstagramTrendSource(scope.brandId, imageId, scope.actorUserId);
+    const settled = await Promise.race([
+      Promise.allSettled([
+        assets.archiveReference({ ...scope, referenceId: imageId }),
+        legacyPromise,
+      ]),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("lock_order_deadlock")), 1_000)),
+    ]);
+
+    expect(settled.some((result) => result.status === "fulfilled")).toBe(true);
+    expect(settled.filter((result) => result.status === "rejected").every((result) =>
+      /reference_not_found|instagram_trend_source_save_failed/.test(
+        String((result as PromiseRejectedResult).reason),
+      ))).toBe(true);
+    expect(state).toEqual({ saved: false, archived: true, sourceEnabled: false });
   });
 
   it("rejects duplicate origins and scopes every origin lookup to workspace and brand", async () => {

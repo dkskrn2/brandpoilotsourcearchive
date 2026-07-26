@@ -728,17 +728,32 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
     async archiveReference(scope) {
       await transaction(pool, async (client) => {
         await requireMember(client, scope, true);
-        const locked = await client.query(
+        const candidate = await client.query(
           `select id,kind,source_url_id,saved_trend_id from reference_items
-            where id=$1 and workspace_id=$2 and brand_id=$3 and archived_at is null for update`,
+            where id=$1 and workspace_id=$2 and brand_id=$3 and archived_at is null`,
           [scope.referenceId, scope.workspaceId, scope.brandId],
         );
-        if (!locked.rowCount) throw new Error("reference_not_found");
-        const item = locked.rows[0];
-        if (item.saved_trend_id) {
+        if (!candidate.rowCount) throw new Error("reference_not_found");
+        const savedTrendId = candidate.rows[0].saved_trend_id;
+        if (savedTrendId) {
+          const saved = await client.query(
+            `select id from brand_trend_saved_media
+              where id=$1 and workspace_id=$2 and brand_id=$3
+              for update`,
+            [savedTrendId, scope.workspaceId, scope.brandId],
+          );
+          if (!saved.rowCount) throw new Error("reference_not_found");
+          const locked = await client.query(
+            `select id,kind,source_url_id,saved_trend_id from reference_items
+              where id=$1 and workspace_id=$2 and brand_id=$3
+                and saved_trend_id=$4 and archived_at is null
+              for update`,
+            [scope.referenceId, scope.workspaceId, scope.brandId, savedTrendId],
+          );
+          if (!locked.rowCount) throw new Error("reference_not_found");
           const archived = await client.query(
             "select archive_brand_trend_saved_reference($1,$2) as reference_item_id",
-            [item.saved_trend_id, scope.actorUserId],
+            [savedTrendId, scope.actorUserId],
           );
           if (String(archived.rows[0]?.reference_item_id ?? "") !== scope.referenceId) {
             throw new Error("reference_not_found");
@@ -747,11 +762,19 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
             `delete from brand_trend_saved_media
               where id=$1 and workspace_id=$2 and brand_id=$3
               returning id`,
-            [item.saved_trend_id, scope.workspaceId, scope.brandId],
+            [savedTrendId, scope.workspaceId, scope.brandId],
           );
           if (!removed.rowCount) throw new Error("reference_not_found");
           return;
         }
+        const locked = await client.query(
+          `select id,kind,source_url_id,saved_trend_id from reference_items
+            where id=$1 and workspace_id=$2 and brand_id=$3 and archived_at is null
+            for update`,
+          [scope.referenceId, scope.workspaceId, scope.brandId],
+        );
+        if (!locked.rowCount || locked.rows[0].saved_trend_id) throw new Error("reference_not_found");
+        const item = locked.rows[0];
         const result = await client.query(
           `update reference_items set archived_at=now(),
             metadata=metadata || jsonb_build_object('archivedByUserId',$1::text)
