@@ -493,10 +493,12 @@ export function createServer(
       return;
     }
     if (message.startsWith("asset_library_upload_") || message === "avatar_image_limit_exceeded"
-      || message === "avatar_image_minimum_required" || message === "reference_origin_duplicate"
+      || message === "avatar_image_minimum_required" || message === "avatar_image_duplicate"
+      || message === "reference_origin_duplicate"
       || message === "reference_brand_author_unavailable") {
       const conflict = message === "asset_library_upload_replayed" || message === "reference_origin_duplicate"
-        || message === "avatar_image_limit_exceeded" || message === "avatar_image_minimum_required";
+        || message === "avatar_image_limit_exceeded" || message === "avatar_image_minimum_required"
+        || message === "avatar_image_duplicate";
       reply.code(conflict ? 409 : 400).send({ error: message });
       return;
     }

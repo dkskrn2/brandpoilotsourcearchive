@@ -153,6 +153,53 @@ describe("asset library customer routes", () => {
     await app.close();
   });
 
+  it("maps duplicate avatar image bytes to a stable conflict response", async () => {
+    const { app } = setup({
+      createAvatar: vi.fn(async () => {
+        throw new Error("avatar_image_duplicate");
+      }),
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/avatars`,
+      headers: auth,
+      payload: {
+        avatarId,
+        name: "중복 모델",
+        description: "",
+        imageSessionIds: [sessionId],
+        representativeSessionId: sessionId,
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "avatar_image_duplicate" });
+    await app.close();
+  });
+
+  it("maps an existing-avatar duplicate confirmation to the same stable conflict response", async () => {
+    const { app } = setup({
+      confirmAvatarUpload: vi.fn(async () => {
+        throw new Error("avatar_image_duplicate");
+      }),
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/avatars/${avatarId}/images/confirm`,
+      headers: auth,
+      payload: {
+        sessionId,
+        nonce: "valid-nonce-123456",
+        ...uploaded,
+        representative: false,
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "avatar_image_duplicate" });
+    await app.close();
+  });
+
   it("does not persist a caller Blob hostname that differs from the provider canonical URL", async () => {
     const { app, repository } = setup();
     const response = await app.inject({

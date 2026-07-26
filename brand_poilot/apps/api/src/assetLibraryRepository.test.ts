@@ -73,9 +73,68 @@ describe("asset library repository", () => {
     expect(insert?.[1]?.[3]).toBe(2);
   });
 
+  it("rejects a duplicate checksum before adding an image and rolls back", async () => {
+    const fake = fakePool((sql) => {
+      const access = member(sql);
+      if (access) return access;
+      if (sql.includes("from brand_avatars") && sql.includes("for update")) return { rows: [{ id: avatarId }] };
+      if (sql.includes("from brand_avatar_images") && sql.includes("checksum")) return { rows: [{ id: imageId }] };
+      return {};
+    });
+
+    await expect(createAssetLibraryRepository(fake.pool).addAvatarImage(
+      { ...scope, avatarId },
+      {
+        fileName: "duplicate.webp",
+        storagePath: `brands/${scope.brandId}/asset-library/avatars/x/${checksum}-duplicate.webp`,
+        storageUrl: "https://store.blob.vercel-storage.com/duplicate.webp",
+        mimeType: "image/webp",
+        sizeBytes: 100,
+        checksum,
+        representative: false,
+      },
+    )).rejects.toThrow("avatar_image_duplicate");
+
+    expect(fake.query.mock.calls.some(([sql]) => String(sql).includes("generate_series"))).toBe(false);
+    expect(fake.query.mock.calls.some(([sql]) => String(sql).includes("insert into brand_avatar_images"))).toBe(false);
+    expect(fake.query.mock.calls.some(([sql]) => String(sql).startsWith("rollback"))).toBe(true);
+  });
+
+  it("maps the database uniqueness race to the stable duplicate domain error", async () => {
+    const fake = fakePool((sql) => {
+      const access = member(sql);
+      if (access) return access;
+      if (sql.includes("from brand_avatars") && sql.includes("for update")) return { rows: [{ id: avatarId }] };
+      if (sql.includes("from brand_avatar_images") && sql.includes("checksum=$4")) return { rows: [] };
+      if (sql.includes("generate_series")) return { rows: [{ position: 2 }] };
+      if (sql.includes("insert into brand_avatar_images")) {
+        throw Object.assign(new Error("duplicate key"), {
+          code: "23505",
+          constraint: "brand_avatar_images_avatar_checksum_unique",
+        });
+      }
+      return {};
+    });
+
+    await expect(createAssetLibraryRepository(fake.pool).addAvatarImage(
+      { ...scope, avatarId },
+      {
+        fileName: "racing.webp",
+        storagePath: `brands/${scope.brandId}/asset-library/avatars/x/${checksum}-racing.webp`,
+        storageUrl: "https://store.blob.vercel-storage.com/racing.webp",
+        mimeType: "image/webp",
+        sizeBytes: 100,
+        checksum,
+        representative: false,
+      },
+    )).rejects.toThrow("avatar_image_duplicate");
+    expect(fake.query.mock.calls.some(([sql]) => String(sql).startsWith("rollback"))).toBe(true);
+  });
+
   it("atomically creates a reserved avatar from confirmed same-actor sessions", async () => {
     const first = "66666666-6666-4666-8666-666666666666";
     const second = "77777777-7777-4777-8777-777777777777";
+    const checksums = new Map([[first, checksum], [second, "b".repeat(64)]]);
     const prefix = (sessionId: string) =>
       `brands/${scope.brandId}/asset-library/avatars/${avatarId}/${sessionId}/`;
     const fake = fakePool((sql, values) => {
@@ -86,14 +145,14 @@ describe("asset library repository", () => {
           id, workspace_id: scope.workspaceId, brand_id: scope.brandId,
           created_by_user_id: scope.actorUserId, storage_path_prefix: prefix(id),
           expected_mime_type: "image/webp", expected_size_bytes: 100,
-          expected_checksum: checksum, confirmed_at: new Date(), expires_at: new Date(Date.now() + 60_000),
+          expected_checksum: checksums.get(id), confirmed_at: new Date(), expires_at: new Date(Date.now() + 60_000),
         })) };
       }
       if (sql.includes("from storage_artifacts") && sql.includes("path like")) {
         return { rows: [first, second].map((id, index) => ({
-          id: `artifact-${index}`, path: `${prefix(id)}${checksum}-${index}.webp`,
-          public_url: `https://store.blob.vercel-storage.com/${prefix(id)}${checksum}-${index}.webp`,
-          mime_type: "image/webp", byte_size: 100, checksum,
+          id: `artifact-${index}`, path: `${prefix(id)}${checksums.get(id)}-${index}.webp`,
+          public_url: `https://store.blob.vercel-storage.com/${prefix(id)}${checksums.get(id)}-${index}.webp`,
+          mime_type: "image/webp", byte_size: 100, checksum: checksums.get(id),
           created_by_user_id: scope.actorUserId,
         })) };
       }
@@ -115,6 +174,56 @@ describe("asset library repository", () => {
     expect(fake.query.mock.calls.some(([sql]) =>
       String(sql).includes("delete from reference_upload_sessions") && String(sql).includes("id = any"),
     )).toBe(true);
+  });
+
+  it("rejects duplicate-byte staged sessions without creating an avatar or consuming sessions", async () => {
+    const first = "66666666-6666-4666-8666-666666666666";
+    const second = "77777777-7777-4777-8777-777777777777";
+    const prefix = (sessionId: string) =>
+      `brands/${scope.brandId}/asset-library/avatars/${avatarId}/${sessionId}/`;
+    const fake = fakePool((sql) => {
+      const access = member(sql);
+      if (access) return access;
+      if (sql.includes("from reference_upload_sessions") && sql.includes("for update")) {
+        return { rows: [first, second].map((id) => ({
+          id,
+          workspace_id: scope.workspaceId,
+          brand_id: scope.brandId,
+          created_by_user_id: scope.actorUserId,
+          storage_path_prefix: prefix(id),
+          expected_mime_type: "image/webp",
+          expected_size_bytes: 100,
+          expected_checksum: checksum,
+          confirmed_at: new Date(),
+          expires_at: new Date(Date.now() + 60_000),
+        })) };
+      }
+      if (sql.includes("from storage_artifacts") && sql.includes("path like")) {
+        return { rows: [first, second].map((id, index) => ({
+          id: `artifact-${index}`,
+          path: `${prefix(id)}${checksum}-${index}.webp`,
+          public_url: `https://store.blob.vercel-storage.com/${prefix(id)}${checksum}-${index}.webp`,
+          mime_type: "image/webp",
+          byte_size: 100,
+          checksum,
+          created_by_user_id: scope.actorUserId,
+        })) };
+      }
+      return {};
+    });
+
+    await expect(createAssetLibraryRepository(fake.pool).createAvatar(scope, {
+      avatarId,
+      name: "중복 모델",
+      description: "",
+      imageSessionIds: [first, second],
+      representativeSessionId: first,
+    })).rejects.toThrow("avatar_image_duplicate");
+
+    expect(fake.query.mock.calls.some(([sql]) => String(sql).includes("insert into brand_avatars"))).toBe(false);
+    expect(fake.query.mock.calls.some(([sql]) => String(sql).includes("insert into brand_avatar_images"))).toBe(false);
+    expect(fake.query.mock.calls.some(([sql]) => String(sql).includes("delete from reference_upload_sessions"))).toBe(false);
+    expect(fake.query.mock.calls.some(([sql]) => String(sql).startsWith("rollback"))).toBe(true);
   });
 
   it.each([
@@ -165,6 +274,50 @@ describe("asset library repository", () => {
     expect(result).toEqual({ status: "staged", avatarId, sessionId: imageId });
     expect(fake.query.mock.calls.some(([sql]) => String(sql).includes("insert into storage_artifacts"))).toBe(true);
     expect(fake.query.mock.calls.some(([sql]) => String(sql).includes("insert into brand_avatar_images"))).toBe(false);
+  });
+
+  it("rolls back an existing-avatar duplicate without consuming its upload session", async () => {
+    const prefix = `brands/${scope.brandId}/asset-library/avatars/${avatarId}/${imageId}/`;
+    const fake = fakePool((sql) => {
+      const access = member(sql);
+      if (access) return access;
+      if (sql.includes("from reference_upload_sessions")) return { rows: [{
+        id: imageId,
+        workspace_id: scope.workspaceId,
+        brand_id: scope.brandId,
+        created_by_user_id: scope.actorUserId,
+        storage_path_prefix: prefix,
+        confirmed_at: null,
+        expires_at: new Date(Date.now() + 60_000),
+      }] };
+      if (sql.includes("from brand_avatars") && sql.includes("for update")) return { rows: [{ id: avatarId }] };
+      if (sql.includes("from brand_avatar_images") && sql.includes("checksum=$4")) {
+        return { rows: [{ id: "existing-image" }] };
+      }
+      return {};
+    });
+
+    await expect(createAssetLibraryRepository(fake.pool).confirmAvatarUpload(
+      { ...scope, avatarId, sessionId: imageId },
+      {
+        fileName: "duplicate.webp",
+        storagePath: `${prefix}${checksum}-duplicate.webp`,
+        storageUrl: `https://store.blob.vercel-storage.com/${prefix}${checksum}-duplicate.webp`,
+        mimeType: "image/webp",
+        sizeBytes: 100,
+        checksum,
+        representative: false,
+      },
+    )).rejects.toThrow("avatar_image_duplicate");
+
+    expect(fake.query.mock.calls.some(([sql]) => String(sql).includes("insert into brand_avatar_images"))).toBe(false);
+    expect(fake.query.mock.calls.some(([sql]) =>
+      String(sql).includes("update reference_upload_sessions set confirmed_at"),
+    )).toBe(false);
+    expect(fake.query.mock.calls.some(([sql]) =>
+      String(sql).includes("delete from reference_upload_sessions"),
+    )).toBe(false);
+    expect(fake.query.mock.calls.some(([sql]) => String(sql).startsWith("rollback"))).toBe(true);
   });
 
   it("serializes default changes and keeps exactly one active default", async () => {

@@ -3607,29 +3607,142 @@ test("058 backfills one canonical trend item plus unlinked active reference URLs
   });
 });
 
-test("migration runner leaves only canonical 058 pending after original history through 057", async () => {
+test("061 deterministically removes legacy duplicate avatar bytes and prevents new duplicates", async () => {
+  const migrations = await loadMigrations();
+  const migration061 = migrations.find(
+    (migration) => migration.id === "061_avatar_image_checksum_uniqueness.sql",
+  );
+  assert.ok(migration061, "061 avatar image checksum uniqueness migration must exist");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "058_avatar_and_reference_libraries.sql",
+    );
+    const actor = await database.query(
+      "insert into app_users (email) values ($1) returning id",
+      [`avatar-checksum-${randomUUID()}@example.com`],
+    );
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ('Avatar checksum', $1) returning id",
+      [`avatar-checksum-${randomUUID()}`],
+    );
+    await database.query(
+      "insert into workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')",
+      [workspace.rows[0].id, actor.rows[0].id],
+    );
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Checksum Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    await database.exec("begin");
+    const avatar = await database.query(
+      `insert into brand_avatars (workspace_id, brand_id, name, created_by_user_id)
+       values ($1, $2, 'Legacy duplicate', $3) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, actor.rows[0].id],
+    );
+    const firstImageId = randomUUID();
+    const representativeImageId = randomUUID();
+    const duplicateChecksum = "d".repeat(64);
+    await database.query(
+      `insert into brand_avatar_images (
+         id, workspace_id, brand_id, avatar_id, position, is_representative,
+         storage_url, storage_path, mime_type, size_bytes, checksum, created_by_user_id
+       ) values
+       ($1, $2, $3, $4, 1, false, 'https://cdn.example.com/legacy-first.webp',
+        'avatars/legacy-first.webp', 'image/webp', 100, $5, $6),
+       ($7, $2, $3, $4, 2, true, 'https://cdn.example.com/legacy-representative.webp',
+        'avatars/legacy-representative.webp', 'image/webp', 100, $5, $6)`,
+      [
+        firstImageId,
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        avatar.rows[0].id,
+        duplicateChecksum,
+        actor.rows[0].id,
+        representativeImageId,
+      ],
+    );
+    await database.exec("commit");
+
+    await database.exec(migration061.sql);
+    await database.exec(migration061.sql);
+
+    const retained = await database.query(
+      `select id, position, is_representative
+         from brand_avatar_images
+        where avatar_id = $1`,
+      [avatar.rows[0].id],
+    );
+    assert.deepEqual(retained.rows, [{
+      id: representativeImageId,
+      position: 1,
+      is_representative: true,
+    }]);
+    await assert.rejects(database.query(
+      `insert into brand_avatar_images (
+         workspace_id, brand_id, avatar_id, position, is_representative,
+         storage_url, storage_path, mime_type, size_bytes, checksum, created_by_user_id
+       ) values ($1, $2, $3, 1, false, 'https://cdn.example.com/new-duplicate.webp',
+         'avatars/new-duplicate.webp', 'image/webp', 100, $4, $5)`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        avatar.rows[0].id,
+        duplicateChecksum,
+        actor.rows[0].id,
+      ],
+    ));
+  });
+});
+
+test("migration runner records forward-only 061 without changing the applied 058 checksum", async () => {
   const migrations = await loadMigrations();
   const runnableMigrations = migrations.filter(
     (migration) => !migration.sql.startsWith("-- requires: pgvector")
       && migration.id !== "027_wiki_search_v2.sql",
   );
-  const through057 = runnableMigrations.filter(
-    (migration) => migration.id <= "057_wiki_source_kinds.sql",
+  const through058 = runnableMigrations.filter(
+    (migration) => migration.id <= "058_avatar_and_reference_libraries.sql",
   );
 
   await withDatabase(async (database) => {
     const client = createPgliteMigrationClient(database);
-    await runMigrationsWithClient({ client, migrations: through057 });
+    await runMigrationsWithClient({ client, migrations: through058 });
     const before = await database.query(
       "select id, checksum from schema_migrations order by id desc limit 1",
     );
-    assert.equal(before.rows[0].id, "057_wiki_source_kinds.sql");
+    assert.equal(before.rows[0].id, "058_avatar_and_reference_libraries.sql");
+    assert.equal(
+      before.rows[0].checksum,
+      migrations.find((migration) => migration.id === "058_avatar_and_reference_libraries.sql")?.checksum,
+    );
 
     const upgraded = await runMigrationsWithClient({
       client,
       migrations: runnableMigrations,
     });
-    assert.deepEqual(upgraded.pending, ["058_avatar_and_reference_libraries.sql"]);
+    assert.equal(upgraded.pending.at(-1), "061_avatar_image_checksum_uniqueness.sql");
+    assert.deepEqual(
+      upgraded.pending.filter((id) => id === "061_avatar_image_checksum_uniqueness.sql"),
+      ["061_avatar_image_checksum_uniqueness.sql"],
+    );
+    const recorded = await database.query(
+      "select id, checksum from schema_migrations where id in ($1, $2) order by id",
+      ["058_avatar_and_reference_libraries.sql", "061_avatar_image_checksum_uniqueness.sql"],
+    );
+    assert.deepEqual(recorded.rows, [
+      {
+        id: "058_avatar_and_reference_libraries.sql",
+        checksum: migrations.find((migration) => migration.id === "058_avatar_and_reference_libraries.sql")?.checksum,
+      },
+      {
+        id: "061_avatar_image_checksum_uniqueness.sql",
+        checksum: migrations.find((migration) => migration.id === "061_avatar_image_checksum_uniqueness.sql")?.checksum,
+      },
+    ]);
     const repeated = await runMigrationsWithClient({
       client,
       migrations: runnableMigrations,

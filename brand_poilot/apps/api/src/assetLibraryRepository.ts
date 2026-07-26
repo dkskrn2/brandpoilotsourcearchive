@@ -150,6 +150,16 @@ async function transaction<T>(pool: Pool, action: (client: PoolClient) => Promis
     return result;
   } catch (error) {
     await client.query("rollback");
+    if (
+      error
+      && typeof error === "object"
+      && "code" in error
+      && error.code === "23505"
+      && "constraint" in error
+      && error.constraint === "brand_avatar_images_avatar_checksum_unique"
+    ) {
+      throw new Error("avatar_image_duplicate");
+    }
     throw error;
   } finally {
     client.release();
@@ -201,6 +211,13 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
       [scope.avatarId, scope.workspaceId, scope.brandId],
     );
     if (!locked.rowCount) throw new Error("avatar_not_found");
+    const duplicate = await client.query(
+      `select id from brand_avatar_images
+        where avatar_id=$1 and workspace_id=$2 and brand_id=$3 and checksum=$4
+        limit 1`,
+      [scope.avatarId, scope.workspaceId, scope.brandId, value.checksum],
+    );
+    if (duplicate.rowCount) throw new Error("avatar_image_duplicate");
     const available = await client.query(
       `select coalesce((
          select candidate from generate_series(1,5) candidate
@@ -343,6 +360,12 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
           if (String(artifact.checksum) !== String(row.expected_checksum)) {
             throw new Error("asset_library_upload_checksum_mismatch");
           }
+        }
+        const canonicalChecksums = input.imageSessionIds.map(
+          (sessionId) => String(bySession.get(sessionId)?.checksum).toLowerCase(),
+        );
+        if (new Set(canonicalChecksums).size !== canonicalChecksums.length) {
+          throw new Error("avatar_image_duplicate");
         }
         const created = await client.query(
           `insert into brand_avatars(id,workspace_id,brand_id,name,description,created_by_user_id)

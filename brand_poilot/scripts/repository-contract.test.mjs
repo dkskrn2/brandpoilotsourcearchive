@@ -262,10 +262,13 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션은 001부터 058까지 정확한 이름으로 존재한다", async () => {
+test("데이터베이스 마이그레이션 registry는 checksum hardening 061을 포함한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
+  const reservedProgramMigrations = migrationFiles.filter(
+    (file) => file.startsWith("059_") || file.startsWith("060_"),
+  );
   assert.deepEqual(migrationFiles, [
     "001_initial_schema.sql",
     "002_source_content_items.sql",
@@ -325,7 +328,14 @@ test("데이터베이스 마이그레이션은 001부터 058까지 정확한 이
     "056_product_service_library.sql",
     "057_wiki_source_kinds.sql",
     "058_avatar_and_reference_libraries.sql",
+    ...reservedProgramMigrations,
+    "061_avatar_image_checksum_uniqueness.sql",
   ]);
+  assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("059_")).length <= 1);
+  assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("060_")).length <= 1);
+  if (reservedProgramMigrations.some((file) => file.startsWith("060_"))) {
+    assert.ok(reservedProgramMigrations.includes("060_content_orchestration.sql"));
+  }
 });
 
 test("058은 avatar와 typed-origin reference library 계약을 정의한다", async () => {
@@ -364,6 +374,29 @@ test("058은 avatar와 typed-origin reference library 계약을 정의한다", a
   assert.match(migration, /from\s+brand_trend_saved_media/i);
   assert.match(migration, /source_type\s*=\s*'reference'/i);
   assert.match(migration, /not\s+exists\s*\([\s\S]*brand_trend_saved_media/i);
+});
+
+test("061은 대표 이미지를 우선 보존하고 avatar별 checksum 중복을 차단한다", async () => {
+  const [migration, programRegistry] = await Promise.all([
+    readFile("db/migrations/061_avatar_image_checksum_uniqueness.sql", "utf8"),
+    readFile(
+      "docs/superpowers/specs/2026-07-25-d-hybrid-internal-ai-reference-onboarding-design.md",
+      "utf8",
+    ),
+  ]);
+
+  assert.match(programRegistry, /\|\s*059\s*\|\s*reference snapshot,\s*usage policy,[^|]+\|\s*Libraries\s*\|/i);
+  assert.match(programRegistry, /\|\s*060\s*\|\s*proposal batch,[^|]+GenerationBrief[^|]+\|\s*Content Creation\s*\|/i);
+  assert.match(migration, /depends\s+on:\s+058_avatar_and_reference_libraries\.sql\s+only/i);
+  assert.match(migration, /array_agg\s*\(\s*id\s+order\s+by\s+is_representative\s+desc,\s*position\s+asc,\s*created_at\s+asc,\s*id\s+asc\s*\)/i);
+  assert.match(migration, /min\s*\(\s*position\s*\)\s+as\s+retained_position/i);
+  assert.match(migration, /delete\s+from\s+brand_avatar_images[\s\S]*image\.id\s*<>\s*survivor\.survivor_id/i);
+  assert.match(migration, /update\s+brand_avatar_images[\s\S]*set\s+position\s*=\s*survivor\.retained_position/i);
+  assert.match(migration, /set\s+constraints\s+brand_avatar_images_commit_state\s+immediate/i);
+  assert.match(
+    migration,
+    /create\s+unique\s+index\s+if\s+not\s+exists\s+brand_avatar_images_avatar_checksum_unique\s+on\s+brand_avatar_images\s*\(\s*avatar_id,\s*checksum\s*\)/i,
+  );
 });
 
 test("057은 Wiki source kind를 schema와 API/worker 계약 전체에서 일치시킨다", async () => {
