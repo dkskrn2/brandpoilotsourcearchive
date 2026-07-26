@@ -142,7 +142,11 @@ export async function cleanupAssetLibraryUploadPrefix(
     `^brands/${uuidPart}/asset-library/avatars/${uuidPart}/${uuidPart}/$`,
     "i",
   );
-  if (!scopedAvatarPrefix.test(storagePathPrefix)
+  const scopedReferencePrefix = new RegExp(
+    `^brands/${uuidPart}/asset-library/references/${uuidPart}/$`,
+    "i",
+  );
+  if (!(scopedAvatarPrefix.test(storagePathPrefix) || scopedReferencePrefix.test(storagePathPrefix))
     || (storagePath !== undefined && !storagePath.startsWith(storagePathPrefix))) {
     fail("asset_library_upload_path_mismatch");
   }

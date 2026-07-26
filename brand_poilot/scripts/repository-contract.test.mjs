@@ -332,6 +332,7 @@ test("데이터베이스 마이그레이션 registry는 avatar upload lifecycle 
     "061_avatar_image_checksum_uniqueness.sql",
     "062_avatar_upload_cancellation.sql",
     "063_avatar_upload_finalization.sql",
+    "064_reference_upload_finalization.sql",
   ]);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("059_")).length <= 1);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("060_")).length <= 1);
@@ -346,6 +347,22 @@ test("063 keeps cancelled sessions pending through token expiry and schedules fa
   assert.match(migration, /avatar_upload_cancellation_receipts[\s\S]*token_expires_at/i);
   assert.match(migration, /avatar_upload_cancellation_receipts[\s\S]*next_attempt_at/i);
   assert.match(migration, /status[\s\S]*pending[\s\S]*completed/i);
+});
+
+test("064 defines an independently scoped and fairly retried reference upload finalizer", async () => {
+  const migration = await readFile("db/migrations/064_reference_upload_finalization.sql", "utf8");
+  assert.match(migration, /create\s+table\s+if\s+not\s+exists\s+reference_upload_cancellation_receipts/i);
+  for (const column of [
+    "session_id", "workspace_id", "brand_id", "created_by_user_id",
+    "storage_path", "storage_path_prefix", "token_expires_at", "status",
+    "next_attempt_at", "attempt_count", "last_error",
+  ]) {
+    assert.match(migration, new RegExp(`\\b${column}\\b`, "i"));
+  }
+  assert.match(migration, /reason[\s\S]*'user'[\s\S]*'expired'/i);
+  assert.match(migration, /reference_upload_cancellation_receipts_due_idx/i);
+  assert.match(migration, /where\s+status\s*=\s*'pending'/i);
+  assert.doesNotMatch(migration, /\bavatar_id\b/i);
 });
 
 test("062는 exact-path avatar cancellation receipt와 expiry cleanup index를 정의한다", async () => {

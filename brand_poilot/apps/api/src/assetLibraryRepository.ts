@@ -101,6 +101,23 @@ export interface AssetLibraryRepository {
     cleanupBlobs: (storagePathPrefix: string, storagePath?: string) => Promise<void>,
     limit?: number,
   ): Promise<{ scanned: number; cancelled: number; failed: Array<{ sessionId: string; error: string }> }>;
+  cancelReferenceUpload(
+    scope: BrandScope & { actorUserId: string; sessionId: string },
+    cleanupBlobs: (storagePathPrefix: string, storagePath?: string) => Promise<void>,
+    reason?: "user" | "expired",
+  ): Promise<
+    { status: "cleanup_pending"; immediateCleanup: "succeeded" | "retry_scheduled" | "already_pending" }
+    | { status: "already_cancelled" }
+  >;
+  cleanupExpiredReferenceUploads(
+    cleanupBlobs: (storagePathPrefix: string, storagePath?: string) => Promise<void>,
+    limit?: number,
+  ): Promise<{
+    scanned: number;
+    cancelled: number;
+    preserved: number;
+    failed: Array<{ sessionId: string; error: string }>;
+  }>;
   confirmReferenceUpload(scope: BrandScope & { actorUserId: string; sessionId: string }, upload: ConfirmedAssetLibraryUpload): Promise<ReferenceItem>;
   listReferenceBrands(scope: BrandScope): Promise<ReferenceBrand[]>;
   createReferenceBrand(scope: BrandScope & { actorUserId: string }, input: ReferenceBrandInput): Promise<ReferenceBrand>;
@@ -945,9 +962,283 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
       }
       return { scanned: candidates.rows.length, cancelled, failed };
     },
+    async cancelReferenceUpload(scope, cleanupBlobs, reason = "user") {
+      const pending = await transaction(pool, async (client) => {
+        if (reason === "user") await requireMember(client, scope);
+        await client.query(
+          "select pg_advisory_xact_lock(hashtextextended($1,0))",
+          [scope.sessionId],
+        );
+        const receipt = await client.query(
+          `select * from reference_upload_cancellation_receipts
+            where session_id=$1 for update`,
+          [scope.sessionId],
+        );
+        if (receipt.rowCount) {
+          const row = receipt.rows[0];
+          if (String(row.workspace_id) !== scope.workspaceId || String(row.brand_id) !== scope.brandId
+            || String(row.created_by_user_id) !== scope.actorUserId) {
+            throw new Error("asset_library_upload_session_not_found");
+          }
+          return row.status === "completed"
+            ? { terminal: true as const }
+            : { existing: true as const };
+        }
+        const session = await client.query(
+          `select * from reference_upload_sessions
+            where id=$1 and workspace_id=$2 and brand_id=$3 for update`,
+          [scope.sessionId, scope.workspaceId, scope.brandId],
+        );
+        if (!session.rowCount) throw new Error("asset_library_upload_session_not_found");
+        const row = session.rows[0];
+        if (String(row.created_by_user_id) !== scope.actorUserId) {
+          throw new Error("asset_library_upload_actor_mismatch");
+        }
+        const expectedPrefix =
+          `brands/${scope.brandId}/asset-library/references/${scope.sessionId}/`;
+        if (String(row.storage_path_prefix) !== expectedPrefix) {
+          throw new Error("asset_library_upload_session_not_found");
+        }
+        const storagePath = row.storage_path ? String(row.storage_path) : undefined;
+        if (storagePath && !storagePath.startsWith(expectedPrefix)) {
+          throw new Error("asset_library_upload_path_mismatch");
+        }
+        const transitioned = await client.query(
+          `update reference_upload_sessions set cancelled_at=coalesce(cancelled_at,now())
+            where id=$1 and workspace_id=$2 and brand_id=$3
+              and confirmed_at is null returning *`,
+          [scope.sessionId, scope.workspaceId, scope.brandId],
+        );
+        if (Number(transitioned.rowCount ?? 0) !== 1) {
+          throw new Error("asset_library_upload_session_not_found");
+        }
+        await client.query(
+          `insert into reference_upload_cancellation_receipts(
+            session_id,workspace_id,brand_id,created_by_user_id,storage_path,
+            storage_path_prefix,token_expires_at,reason,status,next_attempt_at
+          ) values($1,$2,$3,$4,$5,$6,$7,$8,'pending',
+            greatest($7::timestamptz + interval '1 minute',now()))
+          on conflict(session_id) do nothing`,
+          [scope.sessionId, scope.workspaceId, scope.brandId, scope.actorUserId,
+            storagePath ?? null, expectedPrefix, row.expires_at, reason],
+        );
+        return { existing: false as const, prefix: expectedPrefix, storagePath };
+      });
+      if ("terminal" in pending) return { status: "already_cancelled" };
+      if (pending.existing) {
+        return { status: "cleanup_pending", immediateCleanup: "already_pending" };
+      }
+      try {
+        await cleanupBlobs(pending.prefix, pending.storagePath);
+        return { status: "cleanup_pending", immediateCleanup: "succeeded" };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "unknown";
+        await pool.query(
+          `update reference_upload_cancellation_receipts
+            set attempt_count=attempt_count+1,last_error=$2
+            where session_id=$1 and status='pending'`,
+          [scope.sessionId, message],
+        );
+        return { status: "cleanup_pending", immediateCleanup: "retry_scheduled" };
+      }
+    },
+    async cleanupExpiredReferenceUploads(cleanupBlobs, limit = 100) {
+      const candidates = await pool.query(
+        `select session.*,receipt.status receipt_status
+          from reference_upload_sessions session
+          left join reference_upload_cancellation_receipts receipt
+            on receipt.session_id=session.id
+          where session.storage_path_prefix like '%/asset-library/references/%'
+            and (
+              (receipt.status='pending' and receipt.next_attempt_at <= now()
+                and receipt.token_expires_at < now())
+              or (receipt.session_id is null and session.cancelled_at is null
+                and session.confirmed_at is null and session.expires_at <= now())
+            )
+          order by coalesce(receipt.next_attempt_at,session.expires_at),session.id
+          limit $1`,
+        [Math.max(1, Math.min(limit, 500))],
+      );
+      const failed: Array<{ sessionId: string; error: string }> = [];
+      let cancelled = 0;
+      let preserved = 0;
+      for (const candidate of candidates.rows) {
+        const sessionId = String(candidate.id);
+        const expectedPrefix =
+          `brands/${candidate.brand_id}/asset-library/references/${sessionId}/`;
+        try {
+          if (String(candidate.storage_path_prefix) !== expectedPrefix) {
+            throw new Error("asset_library_upload_path_mismatch");
+          }
+          let row = candidate;
+          if (candidate.receipt_status) {
+            const leased = await transaction(pool, async (client) => {
+              await client.query(
+                "select pg_advisory_xact_lock(hashtextextended($1,0))",
+                [sessionId],
+              );
+              const receipt = await client.query(
+                `select * from reference_upload_cancellation_receipts
+                  where session_id=$1 and workspace_id=$2 and brand_id=$3
+                    and status='pending' and token_expires_at < now()
+                    and next_attempt_at <= now()
+                  for update`,
+                [sessionId, candidate.workspace_id, candidate.brand_id],
+              );
+              if (Number(receipt.rowCount ?? 0) !== 1) return null;
+              const session = await client.query(
+                `select * from reference_upload_sessions
+                  where id=$1 and workspace_id=$2 and brand_id=$3 for update`,
+                [sessionId, candidate.workspace_id, candidate.brand_id],
+              );
+              if (Number(session.rowCount ?? 0) !== 1) {
+                await client.query(
+                  `update reference_upload_cancellation_receipts
+                    set status='completed',completed_at=now(),last_error=null
+                    where session_id=$1 and status='pending'`,
+                  [sessionId],
+                );
+                return null;
+              }
+              const claimed = await client.query(
+                `update reference_upload_cancellation_receipts
+                  set next_attempt_at=now()+interval '5 minutes'
+                  where session_id=$1 and status='pending'
+                  returning *`,
+                [sessionId],
+              );
+              if (Number(claimed.rowCount ?? 0) !== 1) return null;
+              return { ...session.rows[0], receipt_status: "pending" };
+            });
+            if (!leased) continue;
+            row = leased;
+          } else {
+            const acquired = await transaction(pool, async (client) => {
+              await client.query(
+                "select pg_advisory_xact_lock(hashtextextended($1,0))",
+                [sessionId],
+              );
+              const receipt = await client.query(
+                `select session_id from reference_upload_cancellation_receipts
+                  where session_id=$1 for update`,
+                [sessionId],
+              );
+              if (receipt.rowCount) return null;
+              const session = await client.query(
+                `select * from reference_upload_sessions
+                  where id=$1 and workspace_id=$2 and brand_id=$3 for update`,
+                [sessionId, candidate.workspace_id, candidate.brand_id],
+              );
+              if (Number(session.rowCount ?? 0) !== 1) return null;
+              const fresh = session.rows[0];
+              if (fresh.cancelled_at || fresh.confirmed_at
+                || new Date(fresh.expires_at).getTime() > Date.now()) return null;
+              if (String(fresh.storage_path_prefix) !== expectedPrefix) {
+                throw new Error("asset_library_upload_path_mismatch");
+              }
+              const transitioned = await client.query(
+                `update reference_upload_sessions set cancelled_at=now()
+                  where id=$1 and workspace_id=$2 and brand_id=$3
+                    and cancelled_at is null and confirmed_at is null and expires_at <= now()
+                  returning *`,
+                [sessionId, fresh.workspace_id, fresh.brand_id],
+              );
+              if (Number(transitioned.rowCount ?? 0) !== 1) return null;
+              const cancelledSession = transitioned.rows[0] ?? fresh;
+              const inserted = await client.query(
+                `insert into reference_upload_cancellation_receipts(
+                  session_id,workspace_id,brand_id,created_by_user_id,storage_path,
+                  storage_path_prefix,token_expires_at,reason,status,next_attempt_at
+                ) values($1,$2,$3,$4,$5,$6,$7,'expired','pending',
+                  greatest($7::timestamptz + interval '1 minute',now()))
+                on conflict(session_id) do nothing returning session_id`,
+                [sessionId, cancelledSession.workspace_id, cancelledSession.brand_id,
+                  cancelledSession.created_by_user_id, cancelledSession.storage_path ?? null,
+                  expectedPrefix, cancelledSession.expires_at],
+              );
+              if (Number(inserted.rowCount ?? 0) !== 1) return null;
+              return { ...candidate, ...cancelledSession, receipt_status: "pending" };
+            });
+            if (!acquired) continue;
+            row = acquired;
+            // A newly expired reservation enters the one-minute late-upload grace.
+            continue;
+          }
+          const consumed = await pool.query(
+            `select item.id from reference_items item
+              join storage_artifacts artifact
+                on artifact.id=item.storage_artifact_id
+               and artifact.workspace_id=item.workspace_id
+               and artifact.brand_id=item.brand_id
+              where item.workspace_id=$1 and item.brand_id=$2
+                and item.archived_at is null and artifact.deleted_at is null
+                and artifact.path like $3
+              limit 1`,
+            [row.workspace_id, row.brand_id, `${expectedPrefix}%`],
+          );
+          if (consumed.rowCount) {
+            await transaction(pool, async (client) => {
+              await client.query(
+                `delete from reference_upload_sessions
+                  where id=$1 and workspace_id=$2 and brand_id=$3`,
+                [sessionId, row.workspace_id, row.brand_id],
+              );
+              await client.query(
+                `update reference_upload_cancellation_receipts
+                  set status='completed',completed_at=now(),last_error=null
+                  where session_id=$1 and status='pending'`,
+                [sessionId],
+              );
+            });
+            preserved += 1;
+            continue;
+          }
+          await cleanupBlobs(
+            expectedPrefix,
+            row.storage_path ? String(row.storage_path) : undefined,
+          );
+          await transaction(pool, async (client) => {
+            await client.query(
+              `delete from storage_artifacts
+                where workspace_id=$1 and brand_id=$2 and path like $3
+                  and deleted_at is null`,
+              [row.workspace_id, row.brand_id, `${expectedPrefix}%`],
+            );
+            await client.query(
+              `delete from reference_upload_sessions
+                where id=$1 and workspace_id=$2 and brand_id=$3`,
+              [sessionId, row.workspace_id, row.brand_id],
+            );
+            await client.query(
+              `update reference_upload_cancellation_receipts
+                set status='completed',completed_at=now(),last_error=null
+                where session_id=$1 and status='pending'`,
+              [sessionId],
+            );
+          });
+          cancelled += 1;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "unknown";
+          await pool.query(
+            `update reference_upload_cancellation_receipts
+              set attempt_count=attempt_count+1,last_error=$2,
+                next_attempt_at=now() + make_interval(secs =>
+                  least(3600,30 * power(2,least(attempt_count,7)))::integer)
+              where session_id=$1 and status='pending'`,
+            [sessionId, message],
+          );
+          failed.push({ sessionId, error: message });
+        }
+      }
+      return { scanned: candidates.rows.length, cancelled, preserved, failed };
+    },
     async confirmReferenceUpload(scope, upload) {
       return transaction(pool, async (client) => {
         await requireMember(client, scope);
+        await client.query(
+          "select pg_advisory_xact_lock(hashtextextended($1,0))",
+          [scope.sessionId],
+        );
         await consumeSession(client, scope);
         const artifact = await client.query(
           `insert into storage_artifacts(

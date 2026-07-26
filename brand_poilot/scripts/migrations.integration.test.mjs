@@ -3698,7 +3698,7 @@ test("061 deterministically removes legacy duplicate avatar bytes and prevents n
   });
 });
 
-test("migration runner records forward-only 061 through 063 without changing the applied 058 checksum", async () => {
+test("migration runner records forward-only 061 through 064 without changing the applied 058 checksum", async () => {
   const migrations = await loadMigrations();
   const runnableMigrations = migrations.filter(
     (migration) => !migration.sql.startsWith("-- requires: pgvector")
@@ -3724,18 +3724,20 @@ test("migration runner records forward-only 061 through 063 without changing the
       client,
       migrations: runnableMigrations,
     });
-    assert.deepEqual(upgraded.pending.slice(-3), [
+    assert.deepEqual(upgraded.pending.slice(-4), [
       "061_avatar_image_checksum_uniqueness.sql",
       "062_avatar_upload_cancellation.sql",
       "063_avatar_upload_finalization.sql",
+      "064_reference_upload_finalization.sql",
     ]);
     const recorded = await database.query(
-      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4) order by id",
+      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4, $5) order by id",
       [
         "058_avatar_and_reference_libraries.sql",
         "061_avatar_image_checksum_uniqueness.sql",
         "062_avatar_upload_cancellation.sql",
         "063_avatar_upload_finalization.sql",
+        "064_reference_upload_finalization.sql",
       ],
     );
     assert.deepEqual(recorded.rows, [
@@ -3755,12 +3757,51 @@ test("migration runner records forward-only 061 through 063 without changing the
         id: "063_avatar_upload_finalization.sql",
         checksum: migrations.find((migration) => migration.id === "063_avatar_upload_finalization.sql")?.checksum,
       },
+      {
+        id: "064_reference_upload_finalization.sql",
+        checksum: migrations.find((migration) => migration.id === "064_reference_upload_finalization.sql")?.checksum,
+      },
     ]);
     const repeated = await runMigrationsWithClient({
       client,
       migrations: runnableMigrations,
     });
     assert.deepEqual(repeated.pending, []);
+  });
+});
+
+test("064 keeps reference upload cancellation identity separate from avatar receipts", async () => {
+  const migrations = await loadMigrations();
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "064_reference_upload_finalization.sql",
+    );
+    const columns = await database.query(
+      `select column_name,is_nullable
+        from information_schema.columns
+        where table_schema='public'
+          and table_name='reference_upload_cancellation_receipts'
+        order by ordinal_position`,
+    );
+    const byName = new Map(columns.rows.map((row) => [row.column_name, row.is_nullable]));
+    for (const required of [
+      "session_id", "workspace_id", "brand_id", "created_by_user_id",
+      "storage_path_prefix", "token_expires_at", "status", "next_attempt_at",
+    ]) {
+      assert.equal(byName.get(required), "NO");
+    }
+    assert.equal(byName.get("storage_path"), "YES");
+    assert.equal(byName.has("avatar_id"), false);
+    const dueIndex = await database.query(
+      `select indexdef from pg_indexes
+        where schemaname='public'
+          and indexname='reference_upload_cancellation_receipts_due_idx'`,
+    );
+    assert.equal(dueIndex.rows.length, 1);
+    assert.match(dueIndex.rows[0].indexdef, /WHERE \(status = 'pending'::text\)/i);
   });
 });
 

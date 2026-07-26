@@ -76,6 +76,27 @@ describe("asset library uploads", () => {
     expect(listBlobs).toHaveBeenCalledWith(expect.objectContaining({ prefix }));
   });
 
+  it("cleans only an exact reference session reservation prefix", async () => {
+    const prefix = `brands/${brandId}/asset-library/references/${sessionId}/`;
+    const pathname = `${prefix}${checksum}-brief.pdf`;
+    const deleteBlob = vi.fn(async () => undefined);
+    const listBlobs = vi.fn(async () => ({ blobs: [], hasMore: false }));
+
+    await expect(cleanupAssetLibraryUploadPrefix(prefix, pathname, {
+      token: "rw-token",
+      deleteBlob: deleteBlob as never,
+      listBlobs: listBlobs as never,
+    })).resolves.toBeUndefined();
+    expect(deleteBlob).toHaveBeenCalledWith(pathname, expect.any(Object));
+    expect(listBlobs).toHaveBeenCalledWith(expect.objectContaining({ prefix }));
+
+    await expect(cleanupAssetLibraryUploadPrefix(
+      `brands/${brandId}/asset-library/references/`,
+      undefined,
+      { token: "rw-token", deleteBlob: deleteBlob as never, listBlobs: listBlobs as never },
+    )).rejects.toThrow("asset_library_upload_path_mismatch");
+  });
+
   it("never deletes a provider listing result outside the reserved session prefix", async () => {
     const avatarId = "33333333-3333-4333-8333-333333333333";
     const prefix = `brands/${brandId}/asset-library/avatars/${avatarId}/${sessionId}/`;
