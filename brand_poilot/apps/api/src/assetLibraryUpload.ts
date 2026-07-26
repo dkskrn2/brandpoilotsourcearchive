@@ -35,6 +35,24 @@ function equal(left: string, right: string): boolean {
   const b = Buffer.from(right);
   return a.length === b.length && timingSafeEqual(a, b);
 }
+function trustedBlobUrl(value: unknown, expectedPath: string, code: string): string {
+  if (typeof value !== "string" || !value) fail(code);
+  let url: URL;
+  try { url = new URL(value); } catch { fail(code); }
+  let path: string;
+  try { path = decodeURIComponent(url.pathname).replace(/^\//, ""); } catch { fail(code); }
+  if (
+    url.protocol !== "https:"
+    || !(url.hostname === "blob.vercel-storage.com" || url.hostname.endsWith(".blob.vercel-storage.com"))
+    || url.username
+    || url.password
+    || url.port
+    || url.search
+    || url.hash
+    || path !== expectedPath
+  ) fail(code);
+  return value;
+}
 
 export function validateAssetLibraryUpload(
   kind: AssetLibraryUploadKind,
@@ -157,15 +175,7 @@ export async function confirmAssetLibraryUpload(input: {
   if (input.mimeType.trim().toLowerCase() !== expected.mimeType) fail("asset_library_upload_mime_mismatch");
   if (input.sizeBytes !== expected.sizeBytes) fail("asset_library_upload_size_mismatch");
   if (!equal(input.checksum.toLowerCase(), expected.checksum)) fail("asset_library_upload_checksum_mismatch");
-  let url: URL;
-  try { url = new URL(input.storageUrl); } catch { fail("asset_library_upload_url_invalid"); }
-  let path: string;
-  try { path = decodeURIComponent(url.pathname).replace(/^\//, ""); } catch { fail("asset_library_upload_url_invalid"); }
-  if (url.protocol !== "https:"
-    || !(url.hostname === "blob.vercel-storage.com" || url.hostname.endsWith(".blob.vercel-storage.com"))
-    || path !== expectedPath) {
-    fail("asset_library_upload_url_mismatch");
-  }
+  trustedBlobUrl(input.storageUrl, expectedPath, "asset_library_upload_url_mismatch");
   if (!options.token.trim()) fail("asset_library_upload_storage_not_configured");
   let downloaded: Awaited<ReturnType<typeof get>>;
   try {
@@ -179,6 +189,12 @@ export async function confirmAssetLibraryUpload(input: {
   catch { fail("asset_library_upload_blob_unavailable"); }
   if (!downloaded || downloaded.statusCode !== 200) fail("asset_library_upload_blob_unavailable");
   if (downloaded.blob.pathname !== expectedPath) fail("asset_library_upload_path_mismatch");
+  const canonicalStorageUrl = trustedBlobUrl(
+    downloaded.blob.url,
+    expectedPath,
+    "asset_library_upload_url_mismatch",
+  );
+  if (input.storageUrl !== canonicalStorageUrl) fail("asset_library_upload_url_mismatch");
   if (downloaded.blob.contentType.toLowerCase() !== expected.mimeType) fail("asset_library_upload_mime_mismatch");
   if (downloaded.blob.size !== expected.sizeBytes) fail("asset_library_upload_size_mismatch");
   const hash = createHash("sha256");
@@ -200,5 +216,5 @@ export async function confirmAssetLibraryUpload(input: {
   }
   if (actualSize !== expected.sizeBytes) fail("asset_library_upload_size_mismatch");
   if (!equal(hash.digest("hex"), expected.checksum)) fail("asset_library_upload_checksum_mismatch");
-  return { ...expected, storagePath: expectedPath, storageUrl: input.storageUrl };
+  return { ...expected, storagePath: expectedPath, storageUrl: canonicalStorageUrl };
 }

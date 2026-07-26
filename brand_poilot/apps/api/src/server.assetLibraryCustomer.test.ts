@@ -153,6 +153,22 @@ describe("asset library customer routes", () => {
     await app.close();
   });
 
+  it("does not persist a caller Blob hostname that differs from the provider canonical URL", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST", url: `/brands/${brandId}/avatars/${avatarId}/images/confirm`, headers: auth,
+      payload: {
+        sessionId, nonce: "valid-nonce-123456", ...uploaded,
+        storageUrl: `https://attacker.blob.vercel-storage.com/${uploaded.storagePath}`,
+        representative: false,
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "asset_library_upload_url_mismatch" });
+    expect(repository.confirmAvatarUpload).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("rejects an invalid reserved avatar ID before creating an upload session", async () => {
     const { app, repository } = setup();
     const response = await app.inject({

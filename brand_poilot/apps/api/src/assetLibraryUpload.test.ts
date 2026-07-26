@@ -127,9 +127,64 @@ describe("asset library uploads", () => {
       mimeType: "text/plain", sizeBytes: bytes.length, checksum: actualChecksum,
     }, { token: "rw-token", getBlob });
     expect(confirmed.checksum).toBe(actualChecksum);
+    expect(confirmed.storageUrl).toBe(`https://store.blob.vercel-storage.com/${expectedPath}`);
     expect(getBlob).toHaveBeenCalledWith(expectedPath, expect.objectContaining({
       token: "rw-token", access: "public", useCache: false,
     }));
+  });
+
+  it("rejects an attacker Blob hostname even when it submits the expected pathname", async () => {
+    const bytes = Buffer.from("trusted-reference");
+    const actualChecksum = sha256(bytes);
+    const expectedPath = buildAssetLibraryPath({
+      brandId, sessionId, kind: "reference", checksum: actualChecksum, fileName: "brief.txt",
+    });
+    await expect(confirmAssetLibraryUpload({
+      session: {
+        id: sessionId, workspaceId: "11111111-1111-4111-8111-111111111111", brandId,
+        kind: "reference", nonce: "valid-nonce-123456", fileName: "brief.txt",
+        expectedMimeType: "text/plain", expectedSizeBytes: bytes.length,
+        expectedChecksum: actualChecksum,
+        storagePathPrefix: `brands/${brandId}/asset-library/references/${sessionId}/`,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(), confirmedAt: null,
+      },
+      nonce: "valid-nonce-123456", storagePath: expectedPath,
+      storageUrl: `https://attacker.blob.vercel-storage.com/${expectedPath}`,
+      mimeType: "text/plain", sizeBytes: bytes.length, checksum: actualChecksum,
+    }, {
+      token: "rw-token",
+      getBlob: vi.fn(async () => blobResult(expectedPath, "text/plain", bytes)),
+    })).rejects.toThrow("asset_library_upload_url_mismatch");
+  });
+
+  it.each([
+    ["missing", ""],
+    ["unsafe host", "https://evil.example.com/placeholder"],
+    ["wrong path", "https://store.blob.vercel-storage.com/wrong/path"],
+  ])("rejects a %s provider canonical URL", async (_label, providerUrl) => {
+    const bytes = Buffer.from("trusted-reference");
+    const actualChecksum = sha256(bytes);
+    const expectedPath = buildAssetLibraryPath({
+      brandId, sessionId, kind: "reference", checksum: actualChecksum, fileName: "brief.txt",
+    });
+    const result = blobResult(expectedPath, "text/plain", bytes);
+    result.blob.url = providerUrl;
+    await expect(confirmAssetLibraryUpload({
+      session: {
+        id: sessionId, workspaceId: "11111111-1111-4111-8111-111111111111", brandId,
+        kind: "reference", nonce: "valid-nonce-123456", fileName: "brief.txt",
+        expectedMimeType: "text/plain", expectedSizeBytes: bytes.length,
+        expectedChecksum: actualChecksum,
+        storagePathPrefix: `brands/${brandId}/asset-library/references/${sessionId}/`,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(), confirmedAt: null,
+      },
+      nonce: "valid-nonce-123456", storagePath: expectedPath,
+      storageUrl: `https://store.blob.vercel-storage.com/${expectedPath}`,
+      mimeType: "text/plain", sizeBytes: bytes.length, checksum: actualChecksum,
+    }, {
+      token: "rw-token",
+      getBlob: vi.fn(async () => result),
+    })).rejects.toThrow("asset_library_upload_url_mismatch");
   });
 
   it("rejects same-size and same-MIME bytes with a different SHA-256", async () => {
