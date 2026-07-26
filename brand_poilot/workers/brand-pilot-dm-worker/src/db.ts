@@ -4,8 +4,11 @@ import type {
   FinalizedWikiChunk,
   WikiPageForFinalization,
 } from "./compiledWikiFinalize.js";
-import type { CompiledWikiSourceUnit } from "./compiledWikiTypes.js";
-import type { CompiledWikiSearchPacket } from "./compiledWikiTypes.js";
+import {
+  parseWikiSourceKind,
+  type CompiledWikiSearchPacket,
+  type CompiledWikiSourceUnit,
+} from "./compiledWikiTypes.js";
 
 const offeringQuestionPattern = /(제품|상품|서비스|제공|판매|구매|도입|상세\s*정보|자세한\s*정보|어디(?:서|에서)?\s*확인|무엇을\s*(?:하|제공)|뭘\s*(?:하|제공))/i;
 const offeringLocationQuestionPattern = /(어디(?:서|에서)?\s*(?:확인|보|찾)|자세한\s*(?:제품|상품|서비스)?\s*정보|상세\s*(?:제품|상품|서비스)?\s*정보)/i;
@@ -47,6 +50,20 @@ export interface WikiSearchChunk {
 export interface ConversationHistoryItem {
   direction: string;
   body: string | null;
+}
+
+function claimedWikiBuildItem(row: Record<string, unknown>): ClaimedWikiBuildItem {
+  return {
+    ...row,
+    source_kind: parseWikiSourceKind(row.source_kind),
+  } as ClaimedWikiBuildItem;
+}
+
+function wikiBuildSource(row: Record<string, unknown>): WikiBuildSource {
+  return {
+    ...row,
+    source_kind: parseWikiSourceKind(row.source_kind),
+  } as WikiBuildSource;
 }
 
 function removeSslQueryOverrides(url: URL) {
@@ -223,7 +240,18 @@ export function createDmWorkerDb(connectionString: string, options: DmPoolOption
                from (
                  select entry.entry_type as source_kind, entry.id as source_id
                  from knowledge_entries entry
-                 where entry.workspace_id = $1::uuid and entry.brand_id = $2::uuid and entry.enabled
+                 where entry.workspace_id = $1::uuid and entry.brand_id = $2::uuid
+                   and entry.enabled and entry.status <> 'legacy_projection'
+                 union all
+                 select 'product_service' as source_kind, item.id as source_id
+                 from product_services item
+                 join product_service_versions active
+                   on active.id = item.active_version_id
+                  and active.workspace_id = item.workspace_id
+                  and active.brand_id = item.brand_id
+                  and active.status = 'approved'
+                 where item.workspace_id = $1::uuid and item.brand_id = $2::uuid
+                   and item.status = 'active'
                  union all
                  select refresh.source_kind, refresh.source_id
                  from get_wiki_refresh_sources($1::uuid, $2::uuid) refresh
@@ -258,7 +286,7 @@ export function createDmWorkerDb(connectionString: string, options: DmPoolOption
           }
         }
         await client.query("commit");
-        return claimed.rowCount ? claimed.rows[0] as ClaimedWikiBuildItem : null;
+        return claimed.rowCount ? claimedWikiBuildItem(claimed.rows[0]) : null;
       } catch (error) {
         await client.query("rollback");
         throw error;
@@ -280,7 +308,26 @@ export function createDmWorkerDb(connectionString: string, options: DmPoolOption
                 entry.aliases, entry.keywords, entry.structured_data, null::text as source_url
          from knowledge_entries entry
          where entry.id = $1::uuid and entry.workspace_id = $2::uuid and entry.brand_id = $3::uuid
-           and entry.entry_type = $4 and entry.enabled
+           and entry.entry_type = $4 and entry.enabled and entry.status <> 'legacy_projection'
+         union all
+         select 'product_service', item.id, item.display_name,
+                coalesce(active.profile_json->>'description', item.display_name),
+                md5(active.profile_json::text),
+                '{}'::text[], '{}'::text[],
+                jsonb_strip_nulls(jsonb_build_object(
+                  'kind', item.kind,
+                  'sku', active.profile_json->>'sku',
+                  'productUrl', active.profile_json->>'productUrl'
+                )),
+                active.profile_json->'sourceUrls'->>0
+         from product_services item
+         join product_service_versions active
+           on active.id = item.active_version_id
+          and active.workspace_id = item.workspace_id
+          and active.brand_id = item.brand_id
+          and active.status = 'approved'
+         where item.id = $1::uuid and item.workspace_id = $2::uuid and item.brand_id = $3::uuid
+           and $4 = 'product_service' and item.status = 'active'
          union all
          select 'owned_snapshot', snapshot.id,
                 coalesce(snapshot.extracted_title, content_item.title, source.title, source.url),
@@ -297,7 +344,7 @@ export function createDmWorkerDb(connectionString: string, options: DmPoolOption
         [item.source_id, item.workspace_id, item.brand_id, item.source_kind],
       );
       if (!result.rowCount) throw new Error("wiki_build_source_not_found");
-      return result.rows[0] as WikiBuildSource;
+      return wikiBuildSource(result.rows[0]);
     },
     async completeWikiSourceItem(
       item: ClaimedWikiBuildItem,
@@ -391,7 +438,7 @@ export function createDmWorkerDb(connectionString: string, options: DmPoolOption
                  from wiki_source_units unit
                  where unit.wiki_version_id = $1::uuid and unit.unit_type in ('product', 'service')
                    and (
-                     unit.source_kind = 'product'
+                     unit.source_kind in ('product', 'product_service', 'service')
                      or (
                        unit.source_kind = 'owned_snapshot'
                        and unit.source_url is not null
@@ -800,7 +847,7 @@ export function createDmWorkerDb(connectionString: string, options: DmPoolOption
                    select 1 from wiki_page_sources source
                    where source.wiki_page_id = page.id
                      and (
-                       source.source_kind = 'product'
+                       source.source_kind in ('product', 'product_service', 'service')
                        or (
                          source.source_kind = 'owned_snapshot'
                          and source.source_url is not null
@@ -1035,11 +1082,13 @@ export function createDmWorkerDb(connectionString: string, options: DmPoolOption
           const inserted = await client.query(
             `insert into wiki_documents (
                workspace_id, brand_id, wiki_version_id, source_kind,
-               knowledge_entry_id, source_snapshot_id, title, content, content_hash,
+               knowledge_entry_id, product_service_id, source_snapshot_id,
+               title, content, content_hash,
                is_active, normalized_json, source_url, refreshed_at
              ) values (
                $1::uuid, $2::uuid, $3::uuid, $4,
-               case when $4 in ('faq', 'product', 'policy') then $5::uuid end,
+               case when $4 in ('faq', 'product', 'service', 'policy', 'guide') then $5::uuid end,
+               case when $4 = 'product_service' then $5::uuid end,
                case when $4 = 'owned_snapshot' then $5::uuid end,
                $6, $7, $8, false, $9::jsonb, $10, now()
              ) returning id`,
@@ -1186,7 +1235,7 @@ export function createDmWorkerDb(connectionString: string, options: DmPoolOption
                select 1 from wiki_page_sources source
                where source.wiki_page_id = page.id
                  and (
-                   source.source_kind = 'product'
+                   source.source_kind in ('product', 'product_service', 'service')
                    or (
                      source.source_kind = 'owned_snapshot'
                      and source.source_url is not null
@@ -1197,7 +1246,9 @@ export function createDmWorkerDb(connectionString: string, options: DmPoolOption
            order by
              case when $7::boolean and exists (
                select 1 from wiki_page_sources source
-               where source.wiki_page_id = page.id and source.source_kind = 'product'
+               where source.wiki_page_id = page.id
+                 and source.source_kind in ('product', 'product_service')
+                 and page.page_type = 'product'
              ) then 0 else 1 end,
              case when $6::boolean then coalesce((
                select min(length(source.destination_url))

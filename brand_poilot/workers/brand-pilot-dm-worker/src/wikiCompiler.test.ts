@@ -113,6 +113,26 @@ describe("Wiki compiler", () => {
       .toEqual(["product:sku:bp-001"]);
   });
 
+  it("treats canonical product-service and direct service sources as brand offerings", () => {
+    const groups = createWikiCompilationGroups([
+      { id: "canonical-service", ...sourceUnit({
+        sourceKind: "product_service",
+        unitType: "service",
+        stableKey: "service:canonical",
+        structuredData: {},
+      }) },
+      { id: "direct-service", ...sourceUnit({
+        sourceKind: "service",
+        unitType: "service",
+        stableKey: "service:direct",
+        structuredData: {},
+      }) },
+    ]);
+
+    expect(groups.filter((group) => group.pageType === "service").map((group) => group.stableKey))
+      .toEqual(["service:canonical", "service:direct"]);
+  });
+
   it("calls Codex once with only the selected page group and renders validated Markdown", async () => {
     const group = {
       pageType: "product" as const,

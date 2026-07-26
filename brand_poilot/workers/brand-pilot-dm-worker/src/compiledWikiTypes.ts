@@ -1,7 +1,38 @@
 import crypto from "node:crypto";
 import type { CuratedKnowledgeUnit } from "./knowledgeCurator.js";
 
-export type WikiSourceKind = "faq" | "product" | "policy" | "owned_snapshot";
+export type WikiSourceKind = "faq" | "product" | "product_service" | "service" | "policy" | "guide" | "owned_snapshot";
+
+const wikiSourceKinds = new Set<WikiSourceKind>([
+  "faq",
+  "product",
+  "product_service",
+  "service",
+  "policy",
+  "guide",
+  "owned_snapshot",
+]);
+
+export function parseWikiSourceKind(value: unknown): WikiSourceKind {
+  if (typeof value !== "string" || !wikiSourceKinds.has(value as WikiSourceKind)) {
+    throw new Error("wiki_source_kind_invalid");
+  }
+  return value as WikiSourceKind;
+}
+
+export function directWikiUnitType(source: {
+  source_kind: WikiSourceKind;
+  structured_data: Record<string, string | number | null>;
+}): CuratedKnowledgeUnit["unitType"] {
+  if (source.source_kind === "guide") return "guide_section";
+  if (source.source_kind === "product_service") {
+    return source.structured_data.kind === "service" ? "service" : "product";
+  }
+  if (source.source_kind === "owned_snapshot") {
+    throw new Error("wiki_direct_source_kind_invalid");
+  }
+  return source.source_kind;
+}
 
 export interface CompiledWikiSourceUnit {
   sourceKind: WikiSourceKind;

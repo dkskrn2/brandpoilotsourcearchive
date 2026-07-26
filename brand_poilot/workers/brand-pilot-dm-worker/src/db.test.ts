@@ -143,4 +143,22 @@ describe("resolveDmWorkerDatabaseConfig", () => {
 
     expect(example).toMatch(/^DB_SSL_CA_BASE64=$/m);
   });
+
+  it("collects approved product-service records and parses every source-kind row", async () => {
+    const source = await readFile(new URL("./db.ts", import.meta.url), "utf8");
+
+    expect(source).toMatch(
+      /select 'product_service' as source_kind, item\.id as source_id[\s\S]*from product_services item[\s\S]*join product_service_versions active/,
+    );
+    expect(source).toMatch(/entry\.status <> 'legacy_projection'/);
+    expect(source).toMatch(
+      /case when \$4 in \('faq', 'product', 'service', 'policy', 'guide'\) then \$5::uuid end/,
+    );
+    expect(source).toMatch(
+      /case when \$4 = 'product_service' then \$5::uuid end/,
+    );
+    expect(source.match(/source_kind in \('product', 'product_service', 'service'\)/g))
+      .toHaveLength(3);
+    expect(source.match(/parseWikiSourceKind\(/g)).toHaveLength(2);
+  });
 });

@@ -53,6 +53,46 @@ describe("compiled Wiki source collection", () => {
     })]);
   });
 
+  it.each([
+    ["service", {}, "service"],
+    ["guide", {}, "guide_section"],
+    ["product_service", { kind: "service" }, "service"],
+  ] as const)("normalizes the %s direct source kind", async (
+    sourceKind,
+    structuredData,
+    expectedUnitType,
+  ) => {
+    const claimed = { ...item, source_kind: sourceKind };
+    const repository = db({
+      claimWikiBuildItem: vi.fn(async () => claimed),
+      getWikiBuildSource: vi.fn(async () => ({
+        source_kind: sourceKind,
+        source_id: claimed.source_id,
+        title: "Brand Pilot",
+        content: "브랜드 콘텐츠 생성 서비스입니다.",
+        content_hash: "source-hash",
+        aliases: [],
+        keywords: ["콘텐츠"],
+        structured_data: structuredData,
+        source_url: null,
+      })),
+    });
+
+    await runCompiledWikiSourceItemOnce({
+      workerId: "worker-1",
+      db: repository,
+      curatorPromptVersion: "curator-v1",
+      embeddingModel: "text-embedding-3-small",
+      embeddingVersion: "v1",
+      runtimeDirectory: "runtime",
+      runCodex: vi.fn(),
+    });
+
+    expect(repository.completeWikiSourceItem).toHaveBeenCalledWith(claimed, [
+      expect.objectContaining({ sourceKind, unitType: expectedUnitType }),
+    ]);
+  });
+
   it("curates an owned source and stores canonical source URLs", async () => {
     const ownedItem = { ...item, source_kind: "owned_snapshot" as const };
     const repository = db({

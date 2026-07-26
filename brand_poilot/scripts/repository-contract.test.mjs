@@ -326,6 +326,50 @@ test("데이터베이스 마이그레이션은 001부터 056까지 정확한 이
   ]);
 });
 
+test("056은 Wiki source kind를 schema와 API/worker 계약 전체에서 일치시킨다", async () => {
+  const [migration, apiWiki, wikiRefresh, compiledTypes, compiledSource] = await Promise.all([
+    readFile("db/migrations/056_product_service_library.sql", "utf8"),
+    readFile("apps/api/src/wiki.ts", "utf8"),
+    readFile("workers/brand-pilot-dm-worker/src/wikiRefresh.ts", "utf8"),
+    readFile("workers/brand-pilot-dm-worker/src/compiledWikiTypes.ts", "utf8"),
+    readFile("workers/brand-pilot-dm-worker/src/compiledWikiSource.ts", "utf8"),
+  ]);
+  const sourceKinds = [
+    "faq",
+    "product",
+    "product_service",
+    "service",
+    "policy",
+    "guide",
+    "owned_snapshot",
+  ];
+
+  for (const [table, constraint] of [
+    ["wiki_build_items", "wiki_build_items_source_kind_check"],
+    ["wiki_documents", "wiki_documents_source_kind_check"],
+    ["wiki_source_units", "wiki_source_units_source_kind_check"],
+  ]) {
+    assertExactSqlValues(
+      extractAddedCheckConstraintBody(migration, table, constraint),
+      sourceKinds,
+    );
+  }
+
+  const expectedUnion = sourceKinds.map((kind) => `"${kind}"`).join(" | ");
+  for (const [name, source] of [
+    ["API Wiki", apiWiki],
+    ["Wiki refresh worker", wikiRefresh],
+    ["compiled Wiki worker", compiledTypes],
+  ]) {
+    assert.ok(
+      source.includes(`export type WikiSourceKind = ${expectedUnion};`),
+      `${name} WikiSourceKind must match migration 056`,
+    );
+  }
+  assert.match(compiledTypes, /export function parseWikiSourceKind/);
+  assert.match(compiledSource, /directWikiUnitType\(source\)/);
+});
+
 test("적용된 031과 033 마이그레이션은 원본 체크섬을 유지한다", async () => {
   const expectedChecksums = new Map([
     [

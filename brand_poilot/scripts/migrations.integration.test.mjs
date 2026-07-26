@@ -3066,6 +3066,208 @@ test("056 backfills legacy product knowledge into one approved reusable product"
   });
 });
 
+test("056 upgrades existing Wiki rows and accepts every source kind idempotently", async () => {
+  const migrations = await loadMigrations();
+  const migration056 = migrations.find(
+    (migration) => migration.id === "056_product_service_library.sql",
+  );
+  assert.ok(migration056, "056 product service migration must exist");
+  const sourceKinds = [
+    "faq",
+    "product",
+    "product_service",
+    "service",
+    "policy",
+    "guide",
+    "owned_snapshot",
+  ].sort();
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "055_brand_core_and_rules.sql",
+    );
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ('Wiki Upgrade', $1) returning id",
+      [`wiki-upgrade-${randomUUID()}`],
+    );
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Wiki Upgrade Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    const knowledgeImport = await database.query(
+      `insert into knowledge_imports (
+         workspace_id, brand_id, file_name, source_rows, result_json, status
+       ) values ($1, $2, 'wiki.csv', '[]', '{}', 'succeeded') returning id`,
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+    const existingEntry = await database.query(
+      `insert into knowledge_entries (
+         workspace_id, brand_id, normalized_question, question, answer, entry_type,
+         title, content, last_import_id
+       ) values ($1, $2, 'existing-faq', '기존 질문', '기존 답변', 'faq',
+         '기존 질문', '기존 답변', $3) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, knowledgeImport.rows[0].id],
+    );
+    const legacyProduct = await database.query(
+      `insert into knowledge_entries (
+         workspace_id, brand_id, normalized_question, entry_type, title, content,
+         last_import_id
+       ) values ($1, $2, 'existing-product', 'product', '기존 제품', '기존 제품 설명',
+         $3) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, knowledgeImport.rows[0].id],
+    );
+    const version = await database.query(
+      `insert into wiki_versions (workspace_id, brand_id, status, build_stage)
+       values ($1, $2, 'building', 'collecting') returning id`,
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+    const existingBuildItem = await database.query(
+      `insert into wiki_build_items (
+         workspace_id, brand_id, wiki_version_id, source_kind, source_id
+       ) values ($1, $2, $3, 'faq', $4) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, version.rows[0].id, existingEntry.rows[0].id],
+    );
+    const existingDocument = await database.query(
+      `insert into wiki_documents (
+         workspace_id, brand_id, wiki_version_id, source_kind, knowledge_entry_id,
+         title, content, content_hash, is_active
+       ) values ($1, $2, $3, 'faq', $4, '기존 질문', '기존 답변', 'existing-document', false)
+       returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, version.rows[0].id, existingEntry.rows[0].id],
+    );
+    const existingUnit = await database.query(
+      `insert into wiki_source_units (
+         workspace_id, brand_id, wiki_version_id, source_kind, source_id,
+         unit_type, stable_key, title, content, content_hash, source_quote
+       ) values ($1, $2, $3, 'faq', $4, 'faq', 'faq:existing',
+         '기존 질문', '기존 답변', 'existing-unit', '기존 답변') returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, version.rows[0].id, existingEntry.rows[0].id],
+    );
+
+    await database.exec(migration056.sql);
+    await database.exec(migration056.sql);
+
+    for (const [table, constraint] of [
+      ["wiki_build_items", "wiki_build_items_source_kind_check"],
+      ["wiki_documents", "wiki_documents_source_kind_check"],
+      ["wiki_source_units", "wiki_source_units_source_kind_check"],
+    ]) {
+      assert.deepEqual(
+        await readConstraintValues(database, table, constraint),
+        sourceKinds,
+      );
+    }
+
+    const preserved = await database.query(
+      `select
+         exists(select 1 from wiki_build_items where id = $1) as build_item,
+         exists(select 1 from wiki_documents where id = $2) as document,
+         exists(select 1 from wiki_source_units where id = $3) as source_unit`,
+      [existingBuildItem.rows[0].id, existingDocument.rows[0].id, existingUnit.rows[0].id],
+    );
+    assert.deepEqual(preserved.rows[0], {
+      build_item: true,
+      document: true,
+      source_unit: true,
+    });
+
+    const directEntries = await database.query(
+      `insert into knowledge_entries (
+         workspace_id, brand_id, normalized_question, entry_type, title, content,
+         last_import_id, origin
+       ) values
+         ($1, $2, 'service-entry', 'service', '서비스', '서비스 설명', null, 'manual'),
+         ($1, $2, 'guide-entry', 'guide', '가이드', '가이드 설명', null, 'manual')
+       returning id, entry_type`,
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+    const entryIds = new Map(directEntries.rows.map((row) => [row.entry_type, row.id]));
+    const productService = await database.query(
+      `select product_service_id as id
+         from product_service_legacy_mappings
+        where knowledge_entry_id = $1`,
+      [legacyProduct.rows[0].id],
+    );
+    assert.equal(productService.rows.length, 1);
+
+    for (const [sourceKind, sourceId, unitType] of [
+      ["product_service", productService.rows[0].id, "product"],
+      ["service", entryIds.get("service"), "service"],
+      ["guide", entryIds.get("guide"), "guide_section"],
+    ]) {
+      await database.query(
+        `insert into wiki_build_items (
+           workspace_id, brand_id, wiki_version_id, source_kind, source_id
+         ) values ($1, $2, $3, $4, $5)`,
+        [workspace.rows[0].id, brand.rows[0].id, version.rows[0].id, sourceKind, sourceId],
+      );
+      await database.query(
+        `insert into wiki_source_units (
+           workspace_id, brand_id, wiki_version_id, source_kind, source_id,
+           unit_type, stable_key, title, content, content_hash, source_quote
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $9)`,
+        [
+          workspace.rows[0].id,
+          brand.rows[0].id,
+          version.rows[0].id,
+          sourceKind,
+          sourceId,
+          unitType,
+          `${sourceKind}:new`,
+          `${sourceKind} title`,
+          `${sourceKind} content`,
+          `${sourceKind}-hash`,
+        ],
+      );
+    }
+
+    await database.query(
+      `insert into wiki_documents (
+         workspace_id, brand_id, wiki_version_id, source_kind, knowledge_entry_id,
+         title, content, content_hash, is_active
+       ) values
+         ($1, $2, $3, 'service', $4, '서비스', '서비스 설명', 'service-document', false),
+         ($1, $2, $3, 'guide', $5, '가이드', '가이드 설명', 'guide-document', false)`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        version.rows[0].id,
+        entryIds.get("service"),
+        entryIds.get("guide"),
+      ],
+    );
+    await database.query(
+      `insert into wiki_documents (
+         workspace_id, brand_id, wiki_version_id, source_kind, product_service_id,
+         title, content, content_hash, is_active
+       ) values ($1, $2, $3, 'product_service', $4,
+         '기존 제품', '기존 제품 설명', 'product-service-document', false)`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        version.rows[0].id,
+        productService.rows[0].id,
+      ],
+    );
+
+    const insertedKinds = await database.query(
+      `select distinct source_kind
+         from wiki_source_units
+        where wiki_version_id = $1
+          and source_kind in ('product_service', 'service', 'guide')
+        order by source_kind`,
+      [version.rows[0].id],
+    );
+    assert.deepEqual(
+      insertedKinds.rows.map((row) => row.source_kind),
+      ["guide", "product_service", "service"],
+    );
+  });
+});
+
 test("050 stores normalized support request mobile phone numbers", async () => {
   const migrations = await loadMigrations();
   const migration050 = migrations.find(

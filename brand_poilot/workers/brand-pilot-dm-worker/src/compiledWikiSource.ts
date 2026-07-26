@@ -1,4 +1,8 @@
-import { buildCompiledSourceUnits, type CompiledWikiSourceUnit } from "./compiledWikiTypes.js";
+import {
+  buildCompiledSourceUnits,
+  directWikiUnitType,
+  type CompiledWikiSourceUnit,
+} from "./compiledWikiTypes.js";
 import { curateKnowledge, type CuratedKnowledgeUnit } from "./knowledgeCurator.js";
 import { normalizeKnowledgeSource } from "./knowledgeNormalizer.js";
 import type { ClaimedWikiBuildItem, WikiBuildSource } from "./wikiRefresh.js";
@@ -19,7 +23,7 @@ export interface CompiledWikiSourceDb {
 
 function directUnit(source: WikiBuildSource): CuratedKnowledgeUnit {
   return {
-    unitType: source.source_kind as "faq" | "product" | "policy",
+    unitType: directWikiUnitType(source),
     title: source.title,
     content: source.content,
     keywords: source.keywords,
