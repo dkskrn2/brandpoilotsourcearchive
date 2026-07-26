@@ -86,6 +86,15 @@ test.beforeEach(async ({ page }) => {
         attentionItems: []
       } });
     }
+    if (pathname.endsWith("/ai-content/usage")) {
+      return route.fulfill({ ...common, json: {
+        generationUsed: 2,
+        generationLimit: 10,
+        newDownloadUsed: 4,
+        newDownloadLimit: 20,
+        resetsAt: "2026-07-23T00:00:00+09:00"
+      } });
+    }
     return route.fulfill({ ...common, json: [] });
   });
 });
@@ -98,21 +107,21 @@ test("customer IA routes are reachable", async ({ page }) => {
     if (await openMenu.isVisible()) await openMenu.click();
     await menu.getByRole("link", { name }).click();
   };
-  await expect(page.getByRole("heading", { level: 1, name: "전체 현황" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "오늘의 운영 현황" })).toBeVisible();
 
   await clickMenuLink(/게시 관리/);
   await expect(page.getByRole("heading", { level: 1, name: "게시 관리" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "게시 목록" })).toBeVisible();
   await expect(page.getByRole("button", { name: "준비 중 0", exact: true })).toBeVisible();
 
-  await clickMenuLink(/소스/);
+  await clickMenuLink(/원본 자료/);
   await expect(page.getByRole("heading", { level: 1, name: "소스" })).toBeVisible();
 
   await clickMenuLink(/^채널/);
   await expect(page.getByRole("heading", { level: 1, name: "채널 연결" })).toBeVisible();
   await expect(page.getByRole("tab", { name: /자동 승인/ })).toHaveCount(0);
 
-  await clickMenuLink(/브랜드 설정/);
+  await clickMenuLink(/브랜드 센터/);
   await expect(page.getByRole("switch", { name: "브랜드 전체 자동 승인" })).toBeVisible();
 
 });

@@ -84,7 +84,7 @@ describe("AppShell navigation", () => {
       </MemoryRouter>
     );
 
-    expect(screen.getByRole("heading", { name: "콘텐츠 생성" })).toBeInTheDocument();
+    expect(within(screen.getByRole("banner")).getByText("콘텐츠 생성")).toHaveClass("topbar-page-title");
     const accountTrigger = screen.getByRole("button", { name: "모종 계정 메뉴 열기" });
     fireEvent.click(accountTrigger);
     expect(accountTrigger).toHaveAttribute("aria-expanded", "true");

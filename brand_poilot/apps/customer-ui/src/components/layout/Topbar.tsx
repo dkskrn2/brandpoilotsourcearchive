@@ -85,7 +85,7 @@ export function Topbar({
           </button>
         ) : null}
         <div className="topbar-page-context">
-          <h1 className="topbar-page-title">{pageTitle}</h1>
+          <p className="topbar-page-title">{pageTitle}</p>
           <span><strong>{brandName}</strong> · {error && !status ? "API 연결 필요" : formatLastGenerated(status?.lastGeneratedAt ?? null).replace("마지막 생성: ", "")}</span>
         </div>
       </div>
