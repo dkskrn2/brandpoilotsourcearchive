@@ -87,6 +87,31 @@ describe("channelCapabilityOptionsForFormat", () => {
       },
     ]);
   });
+
+  it("distinguishes unavailable generation from an unsupported format", () => {
+    const plannedLinkedIn = capability(
+      "linkedin",
+      ["blog"],
+      {
+        catalogStatus: "planned",
+        canGenerate: false,
+        readiness: "not_supported",
+        reasonCode: "provider_not_implemented",
+      },
+    );
+
+    expect(channelCapabilityOptionsForFormat(
+      [plannedLinkedIn],
+      "blog",
+    )[0]).toMatchObject({
+      supported: false,
+      disabledReason: "이 채널의 콘텐츠 생성 기능은 아직 준비 중입니다.",
+      resolutionLink: {
+        href: "/channels",
+        label: "채널 설정에서 지원 범위 확인",
+      },
+    });
+  });
 });
 
 describe("createChannelCapabilityGateway", () => {
@@ -128,8 +153,10 @@ describe("createChannelCapabilityGateway", () => {
     const request = vi.fn(async () => [instagram]);
     const gateway = createChannelCapabilityGateway(request);
 
-    const state = await gateway.load("brand-1");
+    const loadResult = await gateway.load("brand-1");
+    const state = gateway.getState();
 
+    expect(loadResult).toBeUndefined();
     expect(state).toEqual({
       status: "ready",
       capabilities: [instagram],
@@ -139,7 +166,6 @@ describe("createChannelCapabilityGateway", () => {
         generationStartAllowed: true,
       },
     });
-    expect(gateway.getState()).toBe(state);
   });
 
   it("returns a retryable failure policy that permits draft saves but forbids generation", async () => {
@@ -148,7 +174,8 @@ describe("createChannelCapabilityGateway", () => {
       throw error;
     });
 
-    const state = await gateway.load("brand-1");
+    await gateway.load("brand-1");
+    const state = gateway.getState();
 
     expect(state).toEqual({
       status: "failure",
@@ -160,7 +187,6 @@ describe("createChannelCapabilityGateway", () => {
         generationStartAllowed: false,
       },
     });
-    expect(gateway.getState()).toBe(state);
   });
 
   it("aborts the previous request when a newer load starts", async () => {
@@ -198,7 +224,8 @@ describe("createChannelCapabilityGateway", () => {
     const firstLoad = gateway.load("brand-1");
     const secondLoad = gateway.load("brand-2");
     second.resolve([currentThreads]);
-    const currentState = await secondLoad;
+    await secondLoad;
+    const currentState = gateway.getState();
     first.resolve([oldInstagram]);
     const staleResult = await firstLoad;
 
@@ -206,8 +233,32 @@ describe("createChannelCapabilityGateway", () => {
       status: "ready",
       capabilities: [currentThreads],
     });
-    expect(staleResult).toBe(currentState);
+    expect(staleResult).toBeUndefined();
     expect(gateway.getState()).toBe(currentState);
+  });
+
+  it("ignores a stale late rejection even when the requester ignores AbortSignal", async () => {
+    const first = deferred<ChannelCapability[]>();
+    const second = deferred<ChannelCapability[]>();
+    const request = vi.fn()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const gateway = createChannelCapabilityGateway(request);
+    const currentThreads = capability("threads", ["channel_text"]);
+
+    const staleLoad = gateway.load("brand-A");
+    const currentLoad = gateway.load("brand-B");
+    second.resolve([currentThreads]);
+    await currentLoad;
+    const currentState = gateway.getState();
+    first.reject(new Error("late brand-A failure"));
+
+    await expect(staleLoad).resolves.toBeUndefined();
+    expect(gateway.getState()).toBe(currentState);
+    expect(currentState).toMatchObject({
+      status: "ready",
+      capabilities: [currentThreads],
+    });
   });
 
   it("cancels the active request without converting AbortError into API failure", async () => {
@@ -235,8 +286,21 @@ describe("createChannelCapabilityGateway", () => {
         generationStartAllowed: false,
       },
     });
-    expect(loadResult).toBe(cancelledState);
+    expect(loadResult).toBeUndefined();
     expect(gateway.getState()).toBe(cancelledState);
+  });
+
+  it("keeps cancellation authoritative when the requester ignores AbortSignal", async () => {
+    const pending = deferred<ChannelCapability[]>();
+    const gateway = createChannelCapabilityGateway(() => pending.promise);
+    const load = gateway.load("brand-1");
+
+    const cancelledState = gateway.cancel();
+    pending.resolve([capability("instagram", ["card_news"])]);
+
+    await expect(load).resolves.toBeUndefined();
+    expect(gateway.getState()).toBe(cancelledState);
+    expect(cancelledState.status).toBe("idle");
   });
 
   it("requests the brand capability endpoint with the request signal by default", async () => {
@@ -252,7 +316,8 @@ describe("createChannelCapabilityGateway", () => {
 
     try {
       const gateway = createChannelCapabilityGateway();
-      await expect(gateway.load("brand 1")).resolves.toMatchObject({
+      await expect(gateway.load("brand 1")).resolves.toBeUndefined();
+      expect(gateway.getState()).toMatchObject({
         status: "ready",
         capabilities: [instagram],
       });
@@ -267,5 +332,68 @@ describe("createChannelCapabilityGateway", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it.each([
+    [
+      "a non-2xx response",
+      () => new Response("service unavailable", { status: 503 }),
+    ],
+    [
+      "invalid JSON",
+      () => new Response("{", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ],
+    [
+      "a non-array payload",
+      () => new Response(JSON.stringify({ capabilities: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ],
+    [
+      "an array containing an invalid capability",
+      () => new Response(JSON.stringify([{ channel: "instagram" }]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ],
+  ])("keeps generation blocked when the default request receives %s", async (
+    _case,
+    response,
+  ) => {
+    vi.stubGlobal("fetch", vi.fn(async () => response()));
+
+    try {
+      const gateway = createChannelCapabilityGateway();
+      await gateway.load("brand-1");
+
+      expect(gateway.getState()).toMatchObject({
+        status: "failure",
+        capabilities: [],
+        policy: {
+          retryAllowed: true,
+          existingDraftMayBeSaved: true,
+          generationStartAllowed: false,
+        },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not abort a request controller after that request has settled", async () => {
+    let requestSignal!: AbortSignal;
+    const gateway = createChannelCapabilityGateway(async (_brandId, signal) => {
+      requestSignal = signal;
+      return [];
+    });
+
+    await gateway.load("brand-1");
+    gateway.cancel();
+
+    expect(requestSignal.aborted).toBe(false);
   });
 });

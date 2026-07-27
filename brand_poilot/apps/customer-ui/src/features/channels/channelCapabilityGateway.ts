@@ -76,6 +76,65 @@ const failurePolicy: ChannelCapabilityPolicy = {
   generationStartAllowed: false,
 };
 
+function isOneOf(value: unknown, allowed: readonly string[]) {
+  return typeof value === "string" && allowed.includes(value);
+}
+
+function isChannelCapability(value: unknown): value is ChannelCapability {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return isOneOf(candidate.channel, [
+    "instagram",
+    "threads",
+    "x",
+    "linkedin",
+    "youtube",
+    "tiktok",
+  ])
+    && isOneOf(candidate.catalogStatus, ["available", "planned"])
+    && isOneOf(candidate.connectionStatus, [
+      "connected",
+      "not_connected",
+      "needs_attention",
+      "expired",
+      "insufficient_permissions",
+      "mapping_required",
+      "publish_failed",
+    ])
+    && typeof candidate.canGenerate === "boolean"
+    && Array.isArray(candidate.generationFormats)
+    && candidate.generationFormats.every((format) => isOneOf(format, [
+      "card_news",
+      "blog",
+      "single_image",
+      "channel_text",
+    ]))
+    && Array.isArray(candidate.exportModes)
+    && candidate.exportModes.every((mode) => isOneOf(mode, ["image", "html", "text"]))
+    && Array.isArray(candidate.publishModes)
+    && candidate.publishModes.every((mode) => isOneOf(mode, [
+      "instagram_feed_carousel",
+      "instagram_story",
+      "instagram_reel",
+      "instagram_feed_single",
+      "threads_text",
+      "tiktok_video",
+      "youtube_video",
+      "youtube_short",
+      "linkedin_post",
+      "x_post",
+    ]))
+    && isOneOf(candidate.readiness, [
+      "ready",
+      "needs_connection",
+      "needs_permission",
+      "not_supported",
+    ])
+    && (candidate.reasonCode === null || typeof candidate.reasonCode === "string");
+}
+
 async function requestChannelCapabilities(
   brandId: string,
   signal: AbortSignal,
@@ -92,7 +151,11 @@ async function requestChannelCapabilities(
   if (!response.ok) {
     throw new Error(`Channel capability request failed: ${response.status}`);
   }
-  return response.json() as Promise<ChannelCapability[]>;
+  const payload: unknown = await response.json();
+  if (!Array.isArray(payload) || !payload.every(isChannelCapability)) {
+    throw new Error("Channel capability response was invalid");
+  }
+  return payload;
 }
 
 function supportsFormat(
@@ -102,9 +165,28 @@ function supportsFormat(
   return capability.canGenerate && capability.generationFormats.includes(format);
 }
 
+function disabledReasonForFormat(
+  capability: ChannelCapability,
+  format: ChannelContentFormat,
+) {
+  if (!capability.generationFormats.includes(format)) {
+    return "선택한 콘텐츠 형식은 이 채널에서 지원되지 않습니다.";
+  }
+  if (capability.catalogStatus === "planned") {
+    return "이 채널의 콘텐츠 생성 기능은 아직 준비 중입니다.";
+  }
+  if (capability.readiness === "needs_connection") {
+    return "콘텐츠 생성을 사용하려면 먼저 채널을 연결해 주세요.";
+  }
+  if (capability.readiness === "needs_permission") {
+    return "콘텐츠 생성을 사용하려면 채널 권한을 확인해 주세요.";
+  }
+  return "이 채널의 콘텐츠 생성 기능을 현재 사용할 수 없습니다.";
+}
+
 export function supportedChannelsForFormat(
   capabilities: ChannelCapability[],
-  format: "card_news" | "blog" | "single_image" | "channel_text",
+  format: ChannelContentFormat,
 ): ChannelCapability[] {
   return capabilities.filter((capability) => supportsFormat(capability, format));
 }
@@ -120,7 +202,7 @@ export function channelCapabilityOptionsForFormat(
       supported,
       disabledReason: supported
         ? null
-        : "선택한 콘텐츠 형식은 이 채널에서 지원되지 않습니다.",
+        : disabledReasonForFormat(capability, format),
       resolutionLink: supported
         ? null
         : {
@@ -157,7 +239,7 @@ export function createChannelCapabilityGateway(
       };
       return state;
     },
-    async load(brandId: string) {
+    async load(brandId: string): Promise<void> {
       activeController?.abort();
       const controller = new AbortController();
       const requestId = ++activeRequestId;
@@ -170,7 +252,7 @@ export function createChannelCapabilityGateway(
       try {
         const capabilities = await request(brandId, controller.signal);
         if (requestId !== activeRequestId) {
-          return state;
+          return;
         }
         state = {
           status: "ready",
@@ -179,7 +261,7 @@ export function createChannelCapabilityGateway(
         };
       } catch (error) {
         if (requestId !== activeRequestId) {
-          return state;
+          return;
         }
         state = {
           status: "failure",
@@ -187,8 +269,11 @@ export function createChannelCapabilityGateway(
           error,
           policy: failurePolicy,
         };
+      } finally {
+        if (requestId === activeRequestId) {
+          activeController = null;
+        }
       }
-      return state;
     },
   };
 }
