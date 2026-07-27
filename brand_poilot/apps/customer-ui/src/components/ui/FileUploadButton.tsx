@@ -1,11 +1,11 @@
-import { Trash2, Upload } from "lucide-react";
+import { RotateCcw, Trash2, Upload } from "lucide-react";
 import { useId, useRef } from "react";
 
 export interface FileUploadItem {
   id: string;
   name: string;
   size: number;
-  status?: "selected" | "uploading" | "uploaded";
+  status?: "selected" | "uploading" | "uploaded" | "failed";
 }
 
 interface FileUploadButtonProps {
@@ -17,6 +17,7 @@ interface FileUploadButtonProps {
   items?: FileUploadItem[];
   onFiles(files: File[]): void;
   onRemove?(id: string): void;
+  onRetry?(id: string): void;
 }
 
 function formatFileSize(size: number) {
@@ -29,9 +30,10 @@ const statusLabels: Record<NonNullable<FileUploadItem["status"]>, string> = {
   selected: "선택됨",
   uploading: "업로드 중",
   uploaded: "업로드 완료",
+  failed: "업로드 실패",
 };
 
-export function FileUploadButton({ inputLabel, buttonLabel, accept, multiple = false, disabled = false, items = [], onFiles, onRemove }: FileUploadButtonProps) {
+export function FileUploadButton({ inputLabel, buttonLabel, accept, multiple = false, disabled = false, items = [], onFiles, onRemove, onRetry }: FileUploadButtonProps) {
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -82,6 +84,18 @@ export function FileUploadButton({ inputLabel, buttonLabel, accept, multiple = f
                 {formatFileSize(item.size)}
                 {item.status ? ` · ${statusLabels[item.status]}` : ""}
               </span>
+              {onRetry && item.status === "failed" ? (
+                <button
+                  type="button"
+                  className="icon-button file-upload__retry"
+                  aria-label={`${item.name} 다시 업로드`}
+                  title="다시 업로드"
+                  disabled={disabled}
+                  onClick={() => onRetry(item.id)}
+                >
+                  <RotateCcw size={15} aria-hidden="true" />
+                </button>
+              ) : null}
               {onRemove ? (
                 <button
                   type="button"

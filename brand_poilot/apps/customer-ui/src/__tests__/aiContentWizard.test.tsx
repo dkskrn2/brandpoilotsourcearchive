@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AiContentWizardPage } from "../pages/AiContentWizardPage";
 import { createMockAiContentGateway } from "../features/ai-content/mockAiContentGateway";
 import type { AiContentGateway } from "../features/ai-content/types";
+import { ApiRequestError } from "../lib/apiClient";
 
 afterEach(cleanup);
 
@@ -79,6 +80,7 @@ describe("AiContentWizardPage", () => {
 
     expect(await screen.findByText("3 / 5")).toBeVisible();
     expect(calls).toEqual(["create", "upload:product", "upload:document", "patch", "request"]);
+    expect(vi.mocked(gateway.createAnalysis).mock.calls[0][1].draft.subjectAttachments).toEqual([]);
     expect(update).toHaveBeenCalledWith("brand-demo", expect.any(String), expect.objectContaining({
       draft: expect.objectContaining({ subjectAttachments: [expect.objectContaining({ id: "server-product" }), expect.objectContaining({ id: "server-document" })] }),
     }));
@@ -252,5 +254,59 @@ describe("AiContentWizardPage", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("첨부 파일은 최대 5개입니다.");
     expect(uploadAttachment).toHaveBeenCalledTimes(5);
+  });
+
+  it("keeps a failed final-step file local and disables generation until retry succeeds", async () => {
+    const user = userEvent.setup();
+    const gateway = createMockAiContentGateway();
+    vi.spyOn(gateway, "uploadAttachment").mockRejectedValue(
+      new ApiRequestError({ status: 503, errorCode: "ai_content_attachment_storage_unavailable" }),
+    );
+    renderWizard("/ai-content/new?type=marketing", gateway);
+    await completeAnalysis(user);
+    await user.click(screen.getByRole("radio", { name: /시간이 부족한/ }));
+    await user.click(screen.getByRole("radio", { name: /1-1 타깃에 맞는 소구점/ }));
+    await user.click(screen.getByRole("button", { name: "다음" }));
+    await user.click(screen.getByRole("button", { name: "다음" }));
+    await user.selectOptions(screen.getByLabelText("콘텐츠 목적"), "sales");
+
+    await user.upload(
+      screen.getByLabelText("인물 이미지"),
+      new File(["person"], "failed-person.png", { type: "image/png" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("현재 파일은 유지됩니다. 다시 시도해 주세요.");
+    expect(screen.getByRole("button", { name: "failed-person.png 다시 업로드" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "생성 시작" })).toBeDisabled();
+  });
+
+  it("marks a failed subject upload for an explicit fresh-session retry before analysis", async () => {
+    const user = userEvent.setup();
+    const gateway = createMockAiContentGateway();
+    const uploadAttachment = vi.spyOn(gateway, "uploadAttachment")
+      .mockRejectedValueOnce(new ApiRequestError({ status: 503, errorCode: "ai_content_attachment_storage_unavailable" }))
+      .mockImplementationOnce(async (_brandId, _generationId, attachment) => ({
+        ...attachment,
+        id: "server-product",
+        file: undefined,
+        storageUrl: "https://blob.example/product.png",
+        storagePath: "fresh-session/product.png",
+        uploadStatus: "confirmed",
+      }));
+    const requestAnalysis = vi.spyOn(gateway, "requestSubjectAnalysis");
+    renderWizard("/ai-content/new?type=card_news", gateway);
+    await user.click(screen.getByRole("button", { name: "다음" }));
+    await user.click(screen.getByRole("radio", { name: "제품" }));
+    await user.upload(screen.getByLabelText("제품 이미지"), new File(["image"], "product.png", { type: "image/png" }));
+
+    await user.click(screen.getByRole("button", { name: "분석하고 소구점 만들기" }));
+
+    expect(await screen.findByRole("button", { name: "product.png 다시 업로드" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "분석하고 소구점 만들기" })).toBeDisabled();
+    expect(requestAnalysis).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "product.png 다시 업로드" }));
+    await waitFor(() => expect(uploadAttachment).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("button", { name: "분석하고 소구점 만들기" })).toBeEnabled();
   });
 });

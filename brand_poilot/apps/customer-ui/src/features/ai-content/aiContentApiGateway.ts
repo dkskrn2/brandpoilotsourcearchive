@@ -1,5 +1,5 @@
 import { put as putBlob } from "@vercel/blob/client";
-import { apiClient, mapApiChannelConnection, type ApiChannel } from "../../lib/apiClient";
+import { ApiRequestError, apiClient, mapApiChannelConnection, type ApiChannel } from "../../lib/apiClient";
 import type { PublishArtifact, PublishArtifactAsset } from "../../types";
 import type {
   AiContentDraft,
@@ -42,11 +42,27 @@ interface ApiSubjectAnalysis {
   sourceGaps?: string[];
 }
 
+function confirmedServerAttachments(value: GenerationAttachment[] | null | undefined) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((attachment) => typeof attachment.storageUrl === "string" && typeof attachment.storagePath === "string")
+    .map((attachment) => ({
+      id: attachment.id,
+      role: attachment.role,
+      fileName: attachment.fileName,
+      mimeType: attachment.mimeType,
+      size: attachment.size,
+      storageUrl: attachment.storageUrl,
+      storagePath: attachment.storagePath,
+      uploadStatus: "confirmed" as const,
+    }));
+}
+
 function normalizeBrief(value: Partial<GenerationBrief> | null | undefined, brandColor = DEFAULT_BRAND_COLOR): GenerationBrief {
   return {
     purpose: value?.purpose ?? ("" as GenerationBrief["purpose"]), emphasis: value?.emphasis ?? "", cta: value?.cta ?? "",
     additionalInstruction: value?.additionalInstruction ?? "", selectedColor: value?.selectedColor ?? brandColor,
-    attachments: Array.isArray(value?.attachments) ? value.attachments : [], aspectRatio: value?.aspectRatio ?? "1:1",
+    attachments: confirmedServerAttachments(value?.attachments), aspectRatio: value?.aspectRatio ?? "1:1",
     outputCount: value?.outputCount ?? 1, outputDirections: Array.isArray(value?.outputDirections) ? value.outputDirections : [""],
   };
 }
@@ -79,7 +95,7 @@ export function normalizeAiContentDraft(type: AiContentType, value: ApiGeneratio
     subjectInput,
     subjectAnalysisId: source.subjectAnalysisId ?? null,
     subjectAnalysisVersion: typeof source.subjectAnalysisVersion === "number" ? source.subjectAnalysisVersion : null,
-    subjectAttachments: Array.isArray(source.subjectAttachments) ? [...source.subjectAttachments] : [],
+    subjectAttachments: confirmedServerAttachments(source.subjectAttachments),
     selectedSubjectImageIds: [...selectedSubjectImageIds], selectedTarget, selectedAppeal, appealOverridesByTarget,
     referenceIds: Array.isArray(source.referenceIds) ? [...source.referenceIds] : [], brief: normalizeBrief(source.brief, brandColor),
     analysisSource: source.analysisSource ?? (subjectType === "product" ? "product_url" : subjectType === "service" ? "owned" : null),
@@ -90,14 +106,33 @@ export function normalizeAiContentDraft(type: AiContentType, value: ApiGeneratio
   };
 }
 
+function serializableAttachment(attachment: GenerationAttachment) {
+  const confirmed = attachment.uploadStatus === "confirmed"
+    || (attachment.uploadStatus === undefined && Boolean(attachment.storagePath && attachment.storageUrl));
+  if (!confirmed || !attachment.storagePath || !attachment.storageUrl) return null;
+  return {
+    id: attachment.id,
+    role: attachment.role,
+    fileName: attachment.fileName,
+    mimeType: attachment.mimeType,
+    size: attachment.size,
+    storageUrl: attachment.storageUrl,
+    storagePath: attachment.storagePath,
+  };
+}
+
+function serializableAttachments(attachments: GenerationAttachment[]) {
+  return attachments.map(serializableAttachment).filter((attachment) => attachment !== null);
+}
+
 function serializeDraft(draft: AiContentDraft): Record<string, unknown> {
   return {
     type: draft.type, subjectType: draft.subjectType, subjectInput: { ...draft.subjectInput, sourceUrl: draft.subjectInput.sourceUrl || draft.productUrl },
     subjectAnalysisId: draft.subjectAnalysisId, subjectAnalysisVersion: draft.subjectAnalysisVersion,
-    subjectAttachments: (draft.subjectAttachments ?? []).map(({ file: _file, ...attachment }) => attachment),
+    subjectAttachments: serializableAttachments(draft.subjectAttachments ?? []),
     selectedSubjectImageIds: [...draft.selectedSubjectImageIds], selectedTarget: draft.selectedTarget, selectedAppeal: draft.selectedAppeal,
     appealOverridesByTarget: Object.fromEntries(Object.entries(draft.appealOverridesByTarget).map(([targetId, appeals]) => [targetId, appeals.map((appeal) => ({ ...appeal, sources: [...appeal.sources] }))])),
-    referenceIds: [...draft.referenceIds], brief: draft.brief ? { ...draft.brief, attachments: [...draft.brief.attachments], outputDirections: [...draft.brief.outputDirections] } : null,
+    referenceIds: [...draft.referenceIds], brief: draft.brief ? { ...draft.brief, attachments: serializableAttachments(draft.brief.attachments), outputDirections: [...draft.brief.outputDirections] } : null,
   };
 }
 
@@ -170,6 +205,26 @@ async function sha256(file: File) {
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
+interface LegacyAttachmentToken {
+  pathname: string;
+  clientToken: string;
+}
+
+interface SessionAttachmentToken extends LegacyAttachmentToken {
+  sessionId: string;
+  nonce: string;
+}
+
+function isSessionAttachmentToken(token: LegacyAttachmentToken | SessionAttachmentToken): token is SessionAttachmentToken {
+  return typeof (token as Partial<SessionAttachmentToken>).sessionId === "string"
+    && typeof (token as Partial<SessionAttachmentToken>).nonce === "string";
+}
+
+function shouldRetryConfirm(error: unknown) {
+  if (!(error instanceof ApiRequestError)) return true;
+  return error.status >= 500 || error.deliveryStatus === "unknown";
+}
+
 export function createAiContentApiGateway(client = apiClient(), blobPut: typeof putBlob = putBlob): AiContentGateway {
   return {
     async getUsage(brandId) {
@@ -189,15 +244,39 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
       if (!attachment.file) throw new Error("ai_content_attachment_file_required");
       const checksum = await sha256(attachment.file);
       const metadata = { role: attachment.role, fileName: attachment.fileName, mimeType: attachment.mimeType, sizeBytes: attachment.size, checksum };
-      const token = await client.requestJson<{ pathname: string; clientToken: string }>(`/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`, { method: "POST", body: JSON.stringify(metadata) });
-      const stored = await blobPut(token.pathname, attachment.file, {
-        access: "public",
-        token: token.clientToken,
-        contentType: attachment.mimeType,
-        onUploadProgress: onProgress ? ({ percentage }) => onProgress(percentage) : undefined,
-      });
-      const confirmed = await client.requestJson<{ id: string; storageUrl?: string; storagePath?: string }>(`/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`, { method: "POST", body: JSON.stringify({ ...metadata, storageUrl: stored.url, storagePath: token.pathname }) });
-      return { ...attachment, id: confirmed.id, file: undefined, storageUrl: confirmed.storageUrl ?? stored.url, storagePath: confirmed.storagePath ?? token.pathname };
+      const token = await client.requestJson<LegacyAttachmentToken | SessionAttachmentToken>(`/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`, { method: "POST", body: JSON.stringify(metadata) });
+      let stored: Awaited<ReturnType<typeof blobPut>>;
+      try {
+        stored = await blobPut(token.pathname, attachment.file, {
+          access: "public",
+          token: token.clientToken,
+          contentType: attachment.mimeType,
+          onUploadProgress: onProgress ? ({ percentage }) => onProgress(percentage) : undefined,
+        });
+      } catch (error) {
+        if (isSessionAttachmentToken(token)) {
+          await client.requestJson(
+            `/brands/${brandId}/ai-content/generations/${generationId}/attachments/cancel`,
+            { method: "POST", body: JSON.stringify({ sessionId: token.sessionId, nonce: token.nonce }) },
+          ).catch(() => undefined);
+        }
+        throw error;
+      }
+      const confirmBody = isSessionAttachmentToken(token)
+        ? JSON.stringify({ sessionId: token.sessionId, nonce: token.nonce })
+        : JSON.stringify({ ...metadata, storageUrl: stored.url, storagePath: token.pathname });
+      const confirm = () => client.requestJson<{ id: string; storageUrl?: string; storagePath?: string }>(
+        `/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`,
+        { method: "POST", body: confirmBody },
+      );
+      let confirmed;
+      try {
+        confirmed = await confirm();
+      } catch (error) {
+        if (!isSessionAttachmentToken(token) || !shouldRetryConfirm(error)) throw error;
+        confirmed = await confirm();
+      }
+      return { ...attachment, id: confirmed.id, file: undefined, storageUrl: confirmed.storageUrl ?? stored.url, storagePath: confirmed.storagePath ?? token.pathname, uploadStatus: "confirmed" };
     },
     async removeAttachment(brandId, generationId, attachmentId) {
       await client.requestJson(

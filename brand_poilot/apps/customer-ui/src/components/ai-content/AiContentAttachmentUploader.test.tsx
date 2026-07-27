@@ -1,17 +1,38 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { AiContentGateway } from "../../features/ai-content/types";
 import { ApiRequestError } from "../../lib/apiClient";
 import { AiContentAttachmentUploader } from "./AiContentAttachmentUploader";
 
-function gateway() {
+function gateway(overrides: Partial<AiContentGateway> = {}) {
   return {
     uploadAttachment: vi.fn(async (_brandId, _generationId, attachment, onProgress) => {
       onProgress?.(100);
       return { ...attachment, file: undefined, storagePath: "stored/product.png", storageUrl: "https://blob.example/product.png" };
     }),
     removeAttachment: vi.fn(async () => undefined),
+    ...overrides,
   } as unknown as AiContentGateway;
+}
+
+function renderControlled(api: AiContentGateway, initial: Parameters<typeof AiContentAttachmentUploader>[0]["attachments"] = []) {
+  const onChange = vi.fn();
+  function Harness() {
+    const [attachments, setAttachments] = useState(initial);
+    return <AiContentAttachmentUploader
+      gateway={api}
+      brandId="brand-1"
+      generationId="generation-1"
+      attachments={attachments}
+      onChange={(next) => {
+        onChange(next);
+        setAttachments(next);
+      }}
+    />;
+  }
+  return { onChange, view: render(<Harness />) };
 }
 
 describe("AiContentAttachmentUploader", () => {
@@ -68,7 +89,8 @@ describe("AiContentAttachmentUploader", () => {
       storageUrl: "https://blob.example/person.png",
     });
     await waitFor(() => expect(onChange).toHaveBeenLastCalledWith([
-      expect.objectContaining({ fileName: "person.png" }),
+      expect.objectContaining({ fileName: "product.png", uploadStatus: "pending" }),
+      expect.objectContaining({ fileName: "person.png", uploadStatus: "confirmed" }),
     ]));
 
     uploads.get("product.png")?.({
@@ -126,6 +148,21 @@ describe("AiContentAttachmentUploader", () => {
     await waitFor(() => expect(onChange).toHaveBeenCalled());
   });
 
+  it("allows exactly five concurrent local reservations before rejecting the sixth", async () => {
+    const api = gateway({
+      uploadAttachment: vi.fn(async (..._args: Parameters<AiContentGateway["uploadAttachment"]>) => new Promise<Awaited<ReturnType<AiContentGateway["uploadAttachment"]>>>(() => undefined)),
+    });
+    renderControlled(api);
+    const input = screen.getByLabelText("제품 이미지");
+
+    for (let index = 1; index <= 6; index += 1) {
+      await userEvent.upload(input, new File([`image-${index}`], `product-${index}.png`, { type: "image/png" }));
+    }
+
+    expect(api.uploadAttachment).toHaveBeenCalledTimes(5);
+    expect(await screen.findByRole("alert")).toHaveTextContent("첨부 파일은 최대 5개입니다.");
+  });
+
   it("shows the five-file message for an API attachment limit error", async () => {
     const api = {
       uploadAttachment: vi.fn(async () => {
@@ -139,6 +176,58 @@ describe("AiContentAttachmentUploader", () => {
     });
 
     expect(await screen.findByRole("alert")).toHaveTextContent("첨부 파일은 최대 5개입니다.");
+  });
+
+  it.each([
+    ["ai_content_upload_session_expired", "업로드 시간이 만료되었습니다. 파일을 다시 선택해 주세요."],
+    ["ai_content_attachments_locked", "첨부가 잠겼습니다. 새 콘텐츠 생성을 시작해 주세요."],
+    ["ai_content_attachment_storage_unavailable", "저장소 연결이 원활하지 않습니다. 현재 파일은 유지됩니다. 다시 시도해 주세요."],
+  ])("keeps the failed file and maps %s guidance", async (errorCode, message) => {
+    const api = gateway({
+      uploadAttachment: vi.fn(async () => {
+        throw new ApiRequestError({ status: 503, errorCode });
+      }),
+    });
+    const { onChange } = renderControlled(api);
+
+    const file = new File(["image"], "product.png", { type: "image/png" });
+    await userEvent.upload(screen.getByLabelText("제품 이미지"), file);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(onChange).toHaveBeenLastCalledWith([
+      expect.objectContaining({ file, fileName: "product.png", uploadStatus: "failed" }),
+    ]);
+    expect(screen.getByText("product.png")).toBeVisible();
+    expect(screen.getByRole("button", { name: "product.png 다시 업로드" })).toBeVisible();
+  });
+
+  it("rejects an active duplicate but retries a failed same file with a fresh gateway call", async () => {
+    const api = gateway({
+      uploadAttachment: vi.fn()
+        .mockRejectedValueOnce(new ApiRequestError({ status: 503, errorCode: "ai_content_attachment_storage_unavailable" }))
+        .mockResolvedValueOnce({
+          id: "server-product",
+          role: "product",
+          fileName: "product.png",
+          mimeType: "image/png",
+          size: 5,
+          storageUrl: "https://blob.example/product.png",
+          storagePath: "fresh-session/product.png",
+          uploadStatus: "confirmed",
+        }),
+    });
+    const { onChange } = renderControlled(api);
+    const file = new File(["image"], "product.png", { type: "image/png" });
+
+    await userEvent.upload(screen.getByLabelText("제품 이미지"), file);
+    await userEvent.click(await screen.findByRole("button", { name: "product.png 다시 업로드" }));
+    await waitFor(() => expect(api.uploadAttachment).toHaveBeenCalledTimes(2));
+    expect(onChange).toHaveBeenLastCalledWith([expect.objectContaining({ id: "server-product", uploadStatus: "confirmed" })]);
+
+    await userEvent.upload(screen.getByLabelText("제품 이미지"), file);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("같은 파일이 이미 첨부되어 있습니다.");
+    expect(api.uploadAttachment).toHaveBeenCalledTimes(2);
   });
 
   it("awaits confirmed removal before replacing the fifth attachment", async () => {

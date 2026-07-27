@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockAiContentGateway } from "../../features/ai-content/mockAiContentGateway";
 import { createInitialAiContentDraft, useAiContentDraft } from "../../features/ai-content/useAiContentDraft";
 import type { SubjectAnalysis } from "../../features/ai-content/types";
+import { ApiRequestError } from "../../lib/apiClient";
 import { SubjectAnalysisStep } from "./SubjectAnalysisStep";
 
 afterEach(() => {
@@ -72,6 +73,40 @@ describe("SubjectAnalysisStep", () => {
     expect(screen.getByText("제품·서비스 이미지")).toBeVisible();
     expect(screen.getByText("설명 문서")).toBeVisible();
     expect(screen.getByRole("button", { name: "분석하고 소구점 만들기" })).toBeEnabled();
+  });
+
+  it("disables analysis while an attachment upload is pending or failed", () => {
+    const draft = {
+      ...createInitialAiContentDraft("card_news"),
+      subjectType: "product" as const,
+      subjectInput: { sourceUrl: "", name: "제품", promotion: "", description: "" },
+      subjectAttachments: [{
+        id: "local-1",
+        role: "product" as const,
+        fileName: "product.png",
+        mimeType: "image/png",
+        size: 5,
+        file: new File(["image"], "product.png", { type: "image/png" }),
+        uploadStatus: "failed" as const,
+      }],
+    };
+    renderStep({ draft });
+
+    expect(screen.getByRole("button", { name: "분석하고 소구점 만들기" })).toBeDisabled();
+  });
+
+  it("maps a server in-progress race to finish-or-retry guidance without clearing inputs", async () => {
+    const gateway = createMockAiContentGateway();
+    vi.spyOn(gateway, "requestSubjectAnalysis").mockRejectedValue(
+      new ApiRequestError({ status: 409, errorCode: "ai_content_attachment_upload_in_progress" }),
+    );
+    const { props } = renderStep({ gateway });
+
+    await userEvent.click(screen.getByRole("button", { name: "분석하고 소구점 만들기" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("첨부 파일 업로드를 완료하거나 실패한 파일을 다시 시도해 주세요.");
+    expect(screen.getByLabelText("제품 또는 서비스 이름")).toHaveValue("서비스");
+    expect(props.onAnalysis).not.toHaveBeenCalled();
   });
 
   it("does not call the v1 cache or render analysis facts, VOC, targets, or a result panel", async () => {

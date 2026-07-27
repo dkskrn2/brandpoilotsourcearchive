@@ -69,6 +69,24 @@ describe("FileUploadButton", () => {
     await userEvent.click(screen.getByRole("button", { name: "product.png 삭제" }));
     expect(onRemove).toHaveBeenCalledWith("asset-1");
   });
+
+  it("announces a failed upload and exposes an accessible retry control", async () => {
+    const onRetry = vi.fn();
+    render(
+      <FileUploadButton
+        inputLabel="이미지 선택"
+        buttonLabel="이미지 추가"
+        accept="image/png"
+        items={[{ id: "asset-1", name: "product.png", size: 1536, status: "failed" }]}
+        onFiles={vi.fn()}
+        onRetry={onRetry}
+      />,
+    );
+
+    expect(screen.getByText(/업로드 실패/)).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "product.png 다시 업로드" }));
+    expect(onRetry).toHaveBeenCalledWith("asset-1");
+  });
 });
 
 describe("UploadProgress", () => {

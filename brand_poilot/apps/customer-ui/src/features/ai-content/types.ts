@@ -135,6 +135,7 @@ export interface GenerationAttachment {
   file?: File;
   storageUrl?: string;
   storagePath?: string;
+  uploadStatus?: "pending" | "failed" | "confirmed";
 }
 
 export interface GenerationBrief {

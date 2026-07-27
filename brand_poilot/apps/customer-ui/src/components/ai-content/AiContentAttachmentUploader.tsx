@@ -1,7 +1,7 @@
 import { FileText, Image, Package, User, ZoomIn } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { AiContentGateway, GenerationAttachment } from "../../features/ai-content/types";
-import { ApiRequestError } from "../../lib/apiClient";
+import { attachmentErrorGuidance } from "../../features/ai-content/attachmentErrors";
 import { FileUploadButton } from "../ui/FileUploadButton";
 import { UploadProgress } from "../ui/UploadProgress";
 
@@ -54,7 +54,7 @@ function validateFile(role: GenerationAttachment["role"], file: File, attachment
   const maxBytes = mimeType === "application/pdf" || mimeType.includes("spreadsheetml") ? 10_000_000 : 5_000_000;
   if (file.size > maxBytes) return isDocument ? "문서는 형식에 따라 5~10MB 이하여야 합니다." : "이미지는 5MB 이하여야 합니다.";
   if (attachmentCount >= 5) return "첨부 파일은 최대 5개입니다.";
-  if (attachments.some((item) => item.fileName === file.name && item.size === file.size)) return "같은 파일이 이미 첨부되어 있습니다.";
+  if (attachments.some((item) => item.uploadStatus !== "failed" && item.fileName === file.name && item.size === file.size)) return "같은 파일이 이미 첨부되어 있습니다.";
   return null;
 }
 
@@ -62,64 +62,89 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
   const [progress, setProgress] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
   const attachmentsRef = useRef(attachments);
-  const pendingUploadCountRef = useRef(0);
+  const mountedRef = useRef(true);
 
   useEffect(() => {
     attachmentsRef.current = attachments;
   }, [attachments]);
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
 
   function changeAttachments(update: (current: GenerationAttachment[]) => GenerationAttachment[]) {
+    if (!mountedRef.current) return;
     const next = update(attachmentsRef.current);
     attachmentsRef.current = next;
     onChange(next);
+  }
+
+  async function uploadAttachment(local: GenerationAttachment) {
+    if (!generationId || !local.file) return;
+    if (mountedRef.current) setProgress((current) => ({ ...current, [local.id]: 0 }));
+    try {
+      const uploaded = await gateway.uploadAttachment(brandId, generationId, local, (percentage) => {
+        if (mountedRef.current) setProgress((current) => ({ ...current, [local.id]: percentage }));
+      });
+      changeAttachments((current) => [
+        ...current.filter((item) => item.id !== local.id),
+        { ...uploaded, uploadStatus: "confirmed" },
+      ]);
+    } catch (cause) {
+      changeAttachments((current) => current.map((item) => item.id === local.id
+        ? { ...item, file: local.file, uploadStatus: "failed" }
+        : item));
+      if (mountedRef.current) setError(attachmentErrorGuidance(cause, local.fileName));
+    } finally {
+      if (mountedRef.current) {
+        setProgress((current) => {
+          const next = { ...current };
+          delete next[local.id];
+          return next;
+        });
+      }
+    }
   }
 
   async function upload(role: GenerationAttachment["role"], files: File[]) {
     const file = files[0];
     if (!file) return;
     const attachmentCount = totalAttachmentCount === undefined
-      ? attachmentsRef.current.length
+      ? attachmentsRef.current.filter((item) => item.uploadStatus !== "failed").length
       : totalAttachmentCount + attachmentsRef.current.length - attachments.length;
     const validationError = validateFile(
       role,
       file,
       attachmentsRef.current,
-      attachmentCount + pendingUploadCountRef.current,
+      attachmentCount,
     );
     if (validationError) return setError(validationError);
     const mimeType = normalizedMimeType(role, file);
-    const localId = `${role}-${file.name}-${file.size}`;
+    const localId = `${role}-${file.name}-${file.size}-${crypto.randomUUID()}`;
+    const local: GenerationAttachment = {
+      id: localId,
+      role,
+      fileName: file.name,
+      mimeType,
+      size: file.size,
+      file,
+      uploadStatus: generationId ? "pending" : undefined,
+    };
     setError(null);
     if (!generationId) {
-      changeAttachments((current) => [...current, { id: localId, role, fileName: file.name, mimeType, size: file.size, file }]);
+      changeAttachments((current) => [...current, local]);
       return;
     }
-    pendingUploadCountRef.current += 1;
-    setProgress((current) => ({ ...current, [localId]: 0 }));
-    try {
-      const uploaded = await gateway.uploadAttachment(brandId, generationId, {
-        id: localId,
-        role,
-        fileName: file.name,
-        mimeType,
-        size: file.size,
-        file,
-      }, (percentage) => setProgress((current) => ({ ...current, [localId]: percentage })));
-      changeAttachments((current) => [...current, uploaded]);
-    } catch (cause) {
-      setError(
-        cause instanceof ApiRequestError && cause.errorCode === "ai_content_attachment_limit_exceeded"
-          ? "첨부 파일은 최대 5개입니다."
-          : `${file.name} 파일을 업로드하지 못했습니다. 다시 시도해 주세요.`,
-      );
-    } finally {
-      pendingUploadCountRef.current = Math.max(0, pendingUploadCountRef.current - 1);
-      setProgress((current) => {
-        const next = { ...current };
-        delete next[localId];
-        return next;
-      });
-    }
+    changeAttachments((current) => [...current, local]);
+    await uploadAttachment(local);
+  }
+
+  async function retry(attachmentId: string) {
+    const attachment = attachmentsRef.current.find((item) => item.id === attachmentId);
+    if (!attachment?.file || attachment.uploadStatus !== "failed") return;
+    setError(null);
+    const pending = { ...attachment, uploadStatus: "pending" as const };
+    changeAttachments((current) => current.map((item) => item.id === attachmentId ? pending : item));
+    await uploadAttachment(pending);
   }
 
   async function remove(attachmentId: string) {
@@ -149,10 +174,17 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
             id: item.id,
             name: item.fileName,
             size: item.size,
-            status: generationId ? "uploaded" : "selected",
+            status: item.uploadStatus === "failed"
+              ? "failed"
+              : item.uploadStatus === "pending"
+                ? "uploading"
+                : item.uploadStatus === "confirmed" || generationId
+                  ? "uploaded"
+                  : "selected",
           }))}
           onFiles={(files) => void upload(role, files)}
           onRemove={(id) => void remove(id)}
+          onRetry={(id) => void retry(id)}
         />
       </div>)}
     </div>

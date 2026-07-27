@@ -9,13 +9,36 @@ import type { AiContentDraft, AiContentGateway } from "../features/ai-content/ty
 import { useAiContentDraft } from "../features/ai-content/useAiContentDraft";
 import { DEMO_BRAND_ID } from "../lib/apiClient";
 import { useAiContentUsage } from "../features/ai-content/AiContentUsageContext";
+import { attachmentLifecycleGuidance } from "../features/ai-content/attachmentErrors";
+
+function serializableAttachments(attachments: GenerationAttachment[]) {
+  return attachments.flatMap((attachment) => {
+    const confirmed = attachment.uploadStatus === "confirmed"
+      || (attachment.uploadStatus === undefined && Boolean(attachment.storagePath && attachment.storageUrl));
+    if (!confirmed || !attachment.storagePath || !attachment.storageUrl) return [];
+    return [{
+      id: attachment.id,
+      role: attachment.role,
+      fileName: attachment.fileName,
+      mimeType: attachment.mimeType,
+      size: attachment.size,
+      storageUrl: attachment.storageUrl,
+      storagePath: attachment.storagePath,
+    }];
+  });
+}
 
 function serializableDraft(draft: AiContentDraft): AiContentDraft {
   return {
     ...draft,
-    subjectAttachments: (draft.subjectAttachments ?? []).map(({ file: _file, ...attachment }) => attachment),
-    brief: draft.brief ? { ...draft.brief, attachments: draft.brief.attachments.map(({ file: _file, ...attachment }) => attachment) } : null,
+    subjectAttachments: serializableAttachments(draft.subjectAttachments ?? []),
+    brief: draft.brief ? { ...draft.brief, attachments: serializableAttachments(draft.brief.attachments) } : null,
   };
+}
+
+function hasUnresolvedAttachments(draft: AiContentDraft) {
+  return [...(draft.subjectAttachments ?? []), ...(draft.brief?.attachments ?? [])]
+    .some((attachment) => attachment.uploadStatus === "pending" || attachment.uploadStatus === "failed");
 }
 
 export function AiContentWizardPage({ gateway = aiContentApiGateway, brandId = DEMO_BRAND_ID }: { gateway?: AiContentGateway; brandId?: string }) {
@@ -28,7 +51,7 @@ export function AiContentWizardPage({ gateway = aiContentApiGateway, brandId = D
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const { refresh: refreshUsage } = useAiContentUsage();
-  const valid = state.step === 1 ? Boolean(state.draft.type) : state.step === 3 ? Boolean(state.draft.selectedTarget && state.draft.selectedAppeal) : state.step === 5 ? Boolean(state.draft.brief?.purpose) : true;
+  const valid = state.step === 1 ? Boolean(state.draft.type) : state.step === 3 ? Boolean(state.draft.selectedTarget && state.draft.selectedAppeal) : state.step === 5 ? Boolean(state.draft.brief?.purpose) && !hasUnresolvedAttachments(state.draft) : true;
   const actions = {
     setType: state.setType,
     setSubjectType: state.setSubjectType,
@@ -53,12 +76,23 @@ export function AiContentWizardPage({ gateway = aiContentApiGateway, brandId = D
       idempotencyKey: state.analysisIdempotencyKey,
     });
     if (!state.generationId) state.setGenerationId(generation.id);
-    const uploadedAttachments = await Promise.all((state.draft.subjectAttachments ?? []).map(async (attachment) => {
+    const pendingAttachments = (state.draft.subjectAttachments ?? []).map((attachment) => (
+      attachment.file && !attachment.storageUrl
+        ? { ...attachment, uploadStatus: "pending" as const }
+        : attachment
+    ));
+    state.setSubjectAttachments(pendingAttachments);
+    const uploadResults = await Promise.allSettled(pendingAttachments.map(async (attachment) => {
       if (!attachment.file || attachment.storageUrl) return attachment;
       return gateway.uploadAttachment(brandId, generation.id, attachment);
     }));
+    const uploadedAttachments = uploadResults.map((result, index) => result.status === "fulfilled"
+      ? { ...result.value, file: undefined, uploadStatus: "confirmed" as const }
+      : { ...pendingAttachments[index]!, uploadStatus: "failed" as const });
     const finalDraft = serializableDraft({ ...state.draft, subjectAttachments: uploadedAttachments });
     state.setSubjectAttachments(uploadedAttachments);
+    const failedUpload = uploadResults.find((result) => result.status === "rejected");
+    if (failedUpload?.status === "rejected") throw failedUpload.reason;
     await gateway.updateGeneration(brandId, generation.id, { draft: finalDraft, referenceIds: state.draft.referenceIds });
     return { generationId: generation.id, attachments: uploadedAttachments };
   }
@@ -86,7 +120,7 @@ export function AiContentWizardPage({ gateway = aiContentApiGateway, brandId = D
       await refreshUsage();
       navigate(`/ai-content/${generation.id}`);
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : "ai_content_generation_failed");
+      setSubmitError(attachmentLifecycleGuidance(error) ?? "콘텐츠 생성을 시작하지 못했습니다. 다시 시도해 주세요.");
     } finally {
       setSubmitting(false);
     }
@@ -104,7 +138,7 @@ export function AiContentWizardPage({ gateway = aiContentApiGateway, brandId = D
       }
       state.setStep(3);
     } }} gateway={gateway} brandId={brandId} generationId={state.generationId} analysis={state.subjectAnalysis} onPrepareAnalysis={prepareAnalysis} /></div>
-    {submitError ? <p className="wizard-error" role="alert">콘텐츠 생성을 시작하지 못했습니다. 다시 시도해 주세요.</p> : null}
+    {submitError ? <p className="wizard-error" role="alert">{submitError}</p> : null}
     <footer className="wizard-actions">{state.step > 1 ? <button type="button" className="button" onClick={state.goBack}><ChevronLeft size={17} />이전</button> : <span />}{state.step === 2 ? <span /> : state.step < 5 ? <button type="button" className="button primary" disabled={!valid} onClick={state.goNext}>다음<ChevronRight size={17} /></button> : <button type="button" className="button primary" disabled={!valid || submitting} onClick={() => void generate()}>{submitting ? <LoaderCircle className="inline-spinner" size={17} /> : <Sparkles size={17} />}{submitting ? "생성 요청 중" : "생성 시작"}</button>}</footer>
   </div>;
 }

@@ -7,6 +7,7 @@ import type {
   SubjectAnalysis,
   SubjectType,
 } from "../../features/ai-content/types";
+import { attachmentLifecycleGuidance } from "../../features/ai-content/attachmentErrors";
 import { AiContentAttachmentUploader } from "./AiContentAttachmentUploader";
 
 interface Props {
@@ -47,12 +48,16 @@ export function SubjectAnalysisStep({
   const [pipelineStatus, setPipelineStatus] = useState<SubjectAnalysis["status"]>("extracting");
   const [error, setError] = useState<string | null>(null);
   const attachments = draft.subjectAttachments ?? [];
+  const attachmentUploadBlocked = attachments.some(
+    (attachment) => attachment.uploadStatus === "pending" || attachment.uploadStatus === "failed",
+  );
   const readyToAnalyze = Boolean(
     draft.subjectType
       && (draft.subjectInput.sourceUrl.trim()
         || draft.subjectInput.name.trim()
         || draft.subjectInput.description.trim()
-        || attachments.length),
+        || attachments.length)
+      && !attachmentUploadBlocked,
   );
 
   async function run() {
@@ -91,7 +96,7 @@ export function SubjectAnalysisStep({
       setError(current.errorMessage ?? "분석을 완료하지 못했습니다.");
       setRunStatus("failure");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "분석을 완료하지 못했습니다.");
+      setError(attachmentLifecycleGuidance(cause) ?? (cause instanceof Error ? cause.message : "분석을 완료하지 못했습니다."));
       setRunStatus("failure");
     }
   }

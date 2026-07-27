@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GenerationPromptStep } from "./GenerationPromptStep";
 import { createMockAiContentGateway } from "../../features/ai-content/mockAiContentGateway";
 import { createInitialAiContentDraft } from "../../features/ai-content/useAiContentDraft";
+import { ApiRequestError } from "../../lib/apiClient";
 
 afterEach(cleanup);
 
@@ -27,5 +28,32 @@ describe("GenerationPromptStep", () => {
     expect(screen.getByLabelText("브랜드 대표 색상")).toHaveValue("#0057b8");
     expect(screen.getByRole("option", { name: "16:9" })).toBeInTheDocument();
     expect(screen.queryByText("문서")).not.toBeInTheDocument();
+  });
+
+  it("renders locked guidance and retains a failed prompt attachment for retry", async () => {
+    const gateway = createMockAiContentGateway();
+    vi.spyOn(gateway, "uploadAttachment").mockRejectedValue(
+      new ApiRequestError({ status: 409, errorCode: "ai_content_attachments_locked" }),
+    );
+    function Harness() {
+      const [draft, setDraft] = useState(createInitialAiContentDraft("marketing"));
+      return <GenerationPromptStep
+        brandId="brand-demo"
+        gateway={gateway}
+        draft={draft}
+        onBrief={(brief) => setDraft((current) => ({ ...current, brief }))}
+        generationId="generation-1"
+      />;
+    }
+    render(<Harness />);
+
+    await userEvent.upload(
+      screen.getByLabelText("제품 이미지"),
+      new File(["image"], "locked.png", { type: "image/png" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("첨부가 잠겼습니다. 새 콘텐츠 생성을 시작해 주세요.");
+    expect(screen.getByText("locked.png")).toBeVisible();
+    expect(screen.getByRole("button", { name: "locked.png 다시 업로드" })).toBeVisible();
   });
 });
