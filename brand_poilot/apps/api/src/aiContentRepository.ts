@@ -1625,6 +1625,33 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         const output = outputResult.rows[0] as Record<string, unknown> | undefined;
         if (!output) throw new Error("ai_content_output_not_found");
         if (output.status !== "failed") throw new Error("ai_content_output_not_failed");
+        const previousGenerateJob = await client.query(
+          `select payload_json
+             from ai_content_generation_jobs
+            where output_id = $1 and workspace_id = $2 and brand_id = $3
+              and job_type = 'generate'
+            order by created_at desc, id desc
+            for update
+            limit 1`,
+          [input.outputId, input.workspaceId, input.brandId],
+        );
+        const previousPayload = object(previousGenerateJob.rows[0]?.payload_json);
+        let retryPayload = previousPayload.contentGenerationInput
+          ? previousPayload
+          : null;
+        if (!retryPayload) {
+          const legacySnapshot = await client.query(
+            `select generation_input_snapshot
+               from ai_content_generations
+              where id = $1 and workspace_id = $2 and brand_id = $3`,
+            [output.generation_id, input.workspaceId, input.brandId],
+          );
+          retryPayload = {
+            generationId: output.generation_id,
+            outputId: input.outputId,
+            contentGenerationInput: object(legacySnapshot.rows[0]?.generation_input_snapshot),
+          };
+        }
         await client.query(
           `update ai_content_generation_outputs
               set status = 'queued', failure_code = null, failure_message = null, completed_at = null, updated_at = now()
@@ -1634,12 +1661,15 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         await client.query(
           `insert into ai_content_generation_jobs
              (generation_id, output_id, workspace_id, brand_id, job_type, content_type, status, payload_json)
-           values ($1, $2, $3, $4, 'generate', $5, 'queued', jsonb_build_object(
-             'generationId', $1::uuid,
-             'outputId', $2::uuid,
-             'contentGenerationInput', coalesce((select generation_input_snapshot from ai_content_generations where id = $1), '{}'::jsonb)
-           ))`,
-          [output.generation_id, input.outputId, input.workspaceId, input.brandId, output.type],
+           values ($1, $2, $3, $4, 'generate', $5, 'queued', $6::jsonb)`,
+          [
+            output.generation_id,
+            input.outputId,
+            input.workspaceId,
+            input.brandId,
+            output.type,
+            JSON.stringify(retryPayload),
+          ],
         );
         await client.query(
           `update ai_content_generations

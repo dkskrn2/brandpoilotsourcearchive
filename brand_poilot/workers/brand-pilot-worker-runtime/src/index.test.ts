@@ -146,4 +146,36 @@ describe("worker runtime", () => {
       vi.useRealTimers();
     }
   });
+
+  it("lets an earlier terminal 404 outrank the deadline when another provider request ignores abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const snapshots = [1, 2].map((index) => ({
+        id: `attachment-${index}`,
+        generationId: "generation-1",
+        role: "document",
+        fileName: `${index}.pdf`,
+        mimeType: "application/pdf",
+        sizeBytes: 42,
+        checksum: "a".repeat(64),
+        storageUrl: `https://blob.example/${index}.pdf`,
+        storagePath: `generation/${index}.pdf`,
+        createdAt: `2026-07-27T00:00:0${index}.000Z`,
+      }));
+      const pending = preflightAttachmentSnapshots(snapshots, {
+        head: async (path) => {
+          if (path.endsWith("1.pdf")) {
+            throw Object.assign(new Error("not found"), { status: 404 });
+          }
+          return new Promise(() => {});
+        },
+      });
+      const rejection = expect(pending).rejects.toThrow("ai_content_attachment_blob_unavailable");
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

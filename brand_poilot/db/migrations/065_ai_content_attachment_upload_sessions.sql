@@ -461,7 +461,16 @@ update ai_content_generation_jobs job
 set payload_json = jsonb_set(
       job.payload_json,
       '{contentGenerationInput}',
-      generation.generation_input_snapshot -> 'contentGenerationInput',
+      case
+        when job.job_type = 'analyze'
+          then generation.generation_input_snapshot
+        else jsonb_set(
+          generation.generation_input_snapshot,
+          '{message,qualityBrief}',
+          coalesce(generation.analysis_json -> 'qualityBrief', '{}'::jsonb),
+          true
+        )
+      end,
       true
     ),
     updated_at = now()
@@ -470,9 +479,7 @@ where generation.id = job.generation_id
   and generation.workspace_id = job.workspace_id
   and generation.brand_id = job.brand_id
   and job.status in ('queued', 'processing')
-  and jsonb_typeof(
-    generation.generation_input_snapshot -> 'contentGenerationInput'
-  ) is not null;
+  and jsonb_typeof(generation.generation_input_snapshot) = 'object';
 
 with requested_attachments as (
   select

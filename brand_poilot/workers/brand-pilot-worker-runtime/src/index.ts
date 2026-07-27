@@ -91,15 +91,17 @@ export async function preflightAttachmentSnapshots(
   }
 
   const controller = new AbortController();
+  const outcomes: Array<"available" | "terminal" | "transient" | undefined> =
+    Array.from({ length: snapshots.length });
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_resolve, reject) => {
+  const deadline = new Promise<"deadline">((resolve) => {
     timeout = setTimeout(() => {
       controller.abort();
-      reject(new Error("ai_content_attachment_storage_unavailable"));
+      resolve("deadline");
     }, dependencies.timeoutMs ?? ATTACHMENT_PREFLIGHT_TIMEOUT_MS);
   });
   try {
-    const outcomes = snapshots.map(async (snapshot) => {
+    const operations = snapshots.map(async (snapshot, index) => {
       try {
         const metadata = await dependencies.head(snapshot.storagePath, { abortSignal: controller.signal });
         if (metadata && typeof metadata === "object") {
@@ -110,19 +112,23 @@ export async function preflightAttachmentSnapshots(
               && source.contentType.split(";", 1)[0]!.trim().toLowerCase()
                 !== snapshot.mimeType.split(";", 1)[0]!.trim().toLowerCase())
           ) {
-            return "terminal" as const;
+            outcomes[index] = "terminal";
+            return;
           }
         }
-        return "available" as const;
+        outcomes[index] = "available";
       } catch (error) {
-        return isNotFound(error) ? "terminal" as const : "transient" as const;
+        outcomes[index] = isNotFound(error) ? "terminal" : "transient";
       }
     });
-    const settled = await Promise.race([Promise.all(outcomes), deadline]);
-    if (settled.some((outcome) => outcome === "terminal")) {
+    const completion = await Promise.race([
+      Promise.all(operations).then(() => "complete" as const),
+      deadline,
+    ]);
+    if (outcomes.some((outcome) => outcome === "terminal")) {
       throw new Error("ai_content_attachment_blob_unavailable");
     }
-    if (settled.some((outcome) => outcome === "transient")) {
+    if (completion === "deadline" || outcomes.some((outcome) => outcome === "transient")) {
       throw new Error("ai_content_attachment_storage_unavailable");
     }
     return snapshots;

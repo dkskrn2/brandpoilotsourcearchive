@@ -5079,7 +5079,7 @@ test("065 backfills snapshots, sessions, missing IDs, retention, and durable del
       "select payload_json from ai_content_generation_jobs where generation_id=$1",
       [active.rows[0].id],
     );
-    assert.deepEqual(job.rows[0].payload_json.contentGenerationInput, terminalSnapshot.contentGenerationInput);
+    assert.deepEqual(job.rows[0].payload_json.contentGenerationInput, terminalSnapshot);
     const analysis = await database.query(
       "select input_json from ai_content_subject_analyses where generation_id=$1",
       [active.rows[0].id],

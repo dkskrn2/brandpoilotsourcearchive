@@ -198,6 +198,7 @@ function createWorkerPool(options: {
   manifestAssetUrls?: string[];
   subjectAnalysisSnapshot?: Record<string, unknown>;
   qualityBrief?: Record<string, unknown>;
+  priorGeneratePayload?: Record<string, unknown>;
 } = {}) {
   const sql: string[] = [];
   const generatedJobPayloads: unknown[] = [];
@@ -240,8 +241,23 @@ function createWorkerPool(options: {
         const valid = job.status === "processing" && job.worker_id === params[1] && job.lease_token === params[2];
         return { rows: valid ? [{ id: job.id }] : [], rowCount: valid ? 1 : 0 };
       }
+      if (
+        query.includes("from ai_content_generation_jobs")
+        && query.includes("output_id = $1")
+        && query.includes("job_type = 'generate'")
+      ) {
+        return options.priorGeneratePayload
+          ? { rows: [{ payload_json: structuredClone(options.priorGeneratePayload) }], rowCount: 1 }
+          : { rows: [], rowCount: 0 };
+      }
       if (query.includes("select * from ai_content_generation_jobs")) return { rows: [{ ...job }], rowCount: 1 };
       if (query.includes("as generation_input_snapshot") && query.includes("from ai_content_generations")) {
+        return {
+          rows: [{ generation_input_snapshot: options.subjectAnalysisSnapshot ?? contentGenerationInputV2Fixture }],
+          rowCount: 1,
+        };
+      }
+      if (query.includes("select generation_input_snapshot") && query.includes("from ai_content_generations")) {
         return {
           rows: [{ generation_input_snapshot: options.subjectAnalysisSnapshot ?? contentGenerationInputV2Fixture }],
           rowCount: 1,
@@ -310,7 +326,17 @@ function createWorkerPool(options: {
       }
       if (query.includes("insert into ai_content_generation_jobs")) {
         if (query.includes("'generate'")) {
-          generatedJobPayloads.push(params[5] ? JSON.parse(String(params[5])) : undefined);
+          const payload = params[5]
+            ? JSON.parse(String(params[5]))
+            : {
+                generationId: params[0],
+                outputId: params[1],
+                contentGenerationInput: structuredClone(
+                  options.subjectAnalysisSnapshot ?? contentGenerationInputV2Fixture,
+                ),
+              };
+          generatedJobPayloads.push(payload);
+          Object.assign(job, { payload_json: payload, status: "queued" });
         }
         return { rows: [], rowCount: 1 };
       }
@@ -1069,8 +1095,19 @@ describe("AI content repository", () => {
   });
 
   it("reuses the stored content-generation-input.v2 snapshot when retrying a failed output", async () => {
-    const snapshot = structuredClone(contentGenerationInputV2Fixture);
-    const pool = createWorkerPool({ outputStatus: "failed", subjectAnalysisSnapshot: snapshot });
+    const generationSnapshot = structuredClone(contentGenerationInputV2Fixture);
+    const finalizedSnapshot = structuredClone(contentGenerationInputV2Fixture);
+    finalizedSnapshot.message.qualityBrief = { hook: "최초 확정 quality brief" };
+    const priorPayload = {
+      generationId: "generation-1",
+      outputId: "output-1",
+      contentGenerationInput: finalizedSnapshot,
+    };
+    const pool = createWorkerPool({
+      outputStatus: "failed",
+      subjectAnalysisSnapshot: generationSnapshot,
+      priorGeneratePayload: priorPayload,
+    });
     const repository = createAiContentRepository(pool as never);
 
     await expect(repository.retryAiContentOutput({ ...scope, outputId: "output-1" }))
@@ -1081,10 +1118,26 @@ describe("AI content repository", () => {
       leaseSeconds: 180,
     });
 
-    expect(claimed?.payload.contentGenerationInput).toEqual(snapshot);
-    expect(pool.sql.join("\n")).toContain(
-      "'contentGenerationInput', coalesce((select generation_input_snapshot from ai_content_generations where id = $1), '{}'::jsonb)",
-    );
+    expect(claimed?.payload).toEqual(priorPayload);
+    expect(pool.generatedJobPayloads.at(-1)).toEqual(priorPayload);
+  });
+
+  it("uses the generation snapshot only as an explicit legacy retry fallback", async () => {
+    const legacySnapshot = structuredClone(contentGenerationInputV2Fixture);
+    const pool = createWorkerPool({
+      outputStatus: "failed",
+      subjectAnalysisSnapshot: legacySnapshot,
+    });
+    const repository = createAiContentRepository(pool as never);
+
+    await repository.retryAiContentOutput({ ...scope, outputId: "output-1" });
+
+    expect(pool.generatedJobPayloads.at(-1)).toEqual({
+      generationId: "generation-1",
+      outputId: "output-1",
+      contentGenerationInput: legacySnapshot,
+    });
+    expect(pool.sql.join("\n")).toContain("select generation_input_snapshot");
   });
 
   it("lists only live generation-scoped subject evidence with loader metadata", async () => {

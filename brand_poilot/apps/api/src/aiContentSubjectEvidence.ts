@@ -18,6 +18,7 @@ const SHA256 = /^[0-9a-f]{64}$/i;
 const TEXT_MIME_TYPES = new Set(["text/plain", "text/markdown", "text/csv"]);
 const SOURCE_GAP_CODES = new Set([
   "subject_analysis_attachment_fetch_failed",
+  "subject_analysis_attachment_not_found",
   "subject_analysis_attachment_mime_mismatch",
   "subject_analysis_attachment_size_mismatch",
   "subject_analysis_attachment_checksum_mismatch",
@@ -107,7 +108,9 @@ function preflightFailure(error: unknown): "terminal" | "transient" {
     if (status === 404 || source.code === "BlobNotFound" || source.code === "not_found") return "terminal";
   }
   const message = error instanceof Error ? error.message : String(error);
-  return /(?:404|not[ _-]?found)/i.test(message) ? "terminal" : "transient";
+  return /(?:^|\b)(?:404|not[ _-]?found)(?:\b|$)/i.test(message)
+    ? "terminal"
+    : "transient";
 }
 
 async function preflightSnapshot(
@@ -116,20 +119,22 @@ async function preflightSnapshot(
   signal: AbortSignal,
 ): Promise<void> {
   const controller = new AbortController();
+  const outcomes: Array<"available" | "terminal" | "transient" | undefined> =
+    Array.from({ length: attachments.length });
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  let rejectDeadline: ((error: Error) => void) | undefined;
+  let resolveDeadline: (() => void) | undefined;
   const abortFromOperation = () => {
-    rejectDeadline?.(new Error("ai_content_attachment_storage_unavailable"));
     controller.abort();
+    resolveDeadline?.();
   };
-  const deadline = new Promise<never>((_resolve, reject) => {
-    rejectDeadline = reject;
+  const deadline = new Promise<"deadline">((resolve) => {
+    resolveDeadline = () => resolve("deadline");
     signal.addEventListener("abort", abortFromOperation, { once: true });
     timeout = setTimeout(abortFromOperation, SUBJECT_EVIDENCE_PREFLIGHT_TIMEOUT_MS);
   });
   try {
-    const outcomes = await Promise.race([
-      Promise.all(attachments.map(async (attachment) => {
+    const completion = await Promise.race([
+      Promise.all(attachments.map(async (attachment, index) => {
         try {
           const metadata = await headBlob(attachment.storagePath, { signal: controller.signal });
           if (metadata && typeof metadata === "object") {
@@ -138,19 +143,22 @@ async function preflightSnapshot(
               (typeof source.size === "number" && source.size !== attachment.sizeBytes)
               || (typeof source.contentType === "string"
                 && mimeType(source.contentType) !== mimeType(attachment.mimeType))
-            ) return "terminal" as const;
+            ) {
+              outcomes[index] = "terminal";
+              return;
+            }
           }
-          return "available" as const;
+          outcomes[index] = "available";
         } catch (error) {
-          return preflightFailure(error);
+          outcomes[index] = preflightFailure(error);
         }
-      })),
+      })).then(() => "complete" as const),
       deadline,
     ]);
     if (outcomes.some((outcome) => outcome === "terminal")) {
       fail("ai_content_attachment_blob_unavailable");
     }
-    if (outcomes.some((outcome) => outcome === "transient")) {
+    if (completion === "deadline" || outcomes.some((outcome) => outcome === "transient")) {
       fail("ai_content_attachment_storage_unavailable");
     }
   } finally {
@@ -322,7 +330,10 @@ async function fetchAttachment(
       }),
       deadline,
     ]);
-  } catch {
+  } catch (error) {
+    if (preflightFailure(error) === "terminal") {
+      fail("subject_analysis_attachment_not_found");
+    }
     fail("subject_analysis_attachment_fetch_failed");
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
@@ -413,6 +424,7 @@ async function loadSubjectEvidenceWithinDeadline(
         const code = failureCode(error);
         if (
           code === "subject_analysis_attachment_mime_mismatch"
+          || code === "subject_analysis_attachment_not_found"
           || code === "subject_analysis_attachment_size_mismatch"
           || code === "subject_analysis_attachment_checksum_mismatch"
           || code === "subject_analysis_attachment_content_invalid"

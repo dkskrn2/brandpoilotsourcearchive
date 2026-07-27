@@ -243,6 +243,96 @@ describe("generation-scoped subject evidence", () => {
     expect(signals[0]?.aborted).toBe(true);
   });
 
+  it("lets an earlier terminal HEAD 404 outrank timeout when another request ignores abort", async () => {
+    vi.useFakeTimers();
+    const rows = [
+      attachment(),
+      attachment({
+        id: attachmentIds.second,
+        fileName: "hung.txt",
+        storageUrl: "https://blob.example.com/hung.txt",
+        storagePath: "attachments/hung.txt",
+      }),
+    ];
+    const pending = loadSubjectEvidence(
+      {
+        ...scope,
+        attachmentIds: rows.map(({ id }) => id),
+        attachmentSnapshot: rows,
+        attachmentSnapshotMissingIds: [],
+      },
+      {
+        fetchBlob: vi.fn(),
+        headBlob: async (storagePath) => {
+          if (storagePath.endsWith("facts.txt")) {
+            throw Object.assign(new Error("not found"), { status: 404 });
+          }
+          return new Promise(() => {});
+        },
+      },
+    );
+    const rejection = expect(pending).rejects.toThrow("ai_content_attachment_blob_unavailable");
+
+    await vi.advanceTimersByTimeAsync(SUBJECT_EVIDENCE_PREFLIGHT_TIMEOUT_MS);
+    await rejection;
+  });
+
+  it("classifies GET not-found as terminal after a successful HEAD preflight", async () => {
+    const row = attachment();
+    await expect(loadSubjectEvidence(
+      {
+        ...scope,
+        attachmentIds: [row.id],
+        attachmentSnapshot: [row],
+        attachmentSnapshotMissingIds: [],
+      },
+      {
+        headBlob: async () => ({ size: row.sizeBytes, contentType: row.mimeType }),
+        fetchBlob: async () => {
+          throw Object.assign(new Error("blob not found"), { status: 404 });
+        },
+      },
+    )).rejects.toThrow("ai_content_attachment_blob_unavailable");
+  });
+
+  it("classifies GET provider 5xx as transient after a successful HEAD preflight", async () => {
+    const row = attachment();
+    await expect(loadSubjectEvidence(
+      {
+        ...scope,
+        attachmentIds: [row.id],
+        attachmentSnapshot: [row],
+        attachmentSnapshotMissingIds: [],
+      },
+      {
+        headBlob: async () => ({ size: row.sizeBytes, contentType: row.mimeType }),
+        fetchBlob: async () => {
+          throw Object.assign(new Error("provider unavailable"), { status: 503 });
+        },
+      },
+    )).rejects.toThrow("ai_content_attachment_storage_unavailable");
+  });
+
+  it("classifies GET DNS ENOTFOUND as transient after a successful HEAD preflight", async () => {
+    const row = attachment();
+    await expect(loadSubjectEvidence(
+      {
+        ...scope,
+        attachmentIds: [row.id],
+        attachmentSnapshot: [row],
+        attachmentSnapshotMissingIds: [],
+      },
+      {
+        headBlob: async () => ({ size: row.sizeBytes, contentType: row.mimeType }),
+        fetchBlob: async () => {
+          throw Object.assign(new Error("getaddrinfo ENOTFOUND blob.example.com"), {
+            code: "ENOTFOUND",
+          });
+        },
+      },
+    )).rejects.toThrow("ai_content_attachment_storage_unavailable");
+  });
+
   it("requires every requested ID to resolve as non-deleted in the exact scope", async () => {
     const listAttachments = vi.fn(async () => [
       attachment(),
