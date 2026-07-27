@@ -176,22 +176,59 @@ function assertMutable(generation: Record<string, unknown>) {
   if (generation.attachments_locked_at) throw new Error("ai_content_attachments_locked");
 }
 
+function connectionError(error: unknown): Error {
+  return error instanceof Error ? error : new Error("database_transaction_connection_failed");
+}
+
+async function bestEffortRollback(client: Queryable): Promise<Error | undefined> {
+  try {
+    await client.query("ROLLBACK");
+    return undefined;
+  } catch (error) {
+    return connectionError(error);
+  }
+}
+
 async function inTransaction<T>(pool: Pool, operation: (client: Queryable) => Promise<T>): Promise<T> {
   const client = await pool.connect();
+  let releaseError: Error | undefined;
   try {
-    await client.query("BEGIN");
-    const result = await operation(client);
-    await client.query("COMMIT");
-    return result;
-  } catch (error) {
-    if (error instanceof CommitAndThrow) {
-      await client.query("COMMIT");
-      throw error.publicError;
+    try {
+      await client.query("BEGIN");
+    } catch (error) {
+      releaseError = connectionError(error);
+      throw error;
     }
-    await client.query("ROLLBACK");
-    throw error;
+
+    let result: T;
+    try {
+      result = await operation(client);
+    } catch (primaryError) {
+      if (primaryError instanceof CommitAndThrow) {
+        try {
+          await client.query("COMMIT");
+        } catch (commitError) {
+          releaseError = connectionError(commitError);
+          releaseError = await bestEffortRollback(client) ?? releaseError;
+          throw commitError;
+        }
+        throw primaryError.publicError;
+      }
+      const rollbackError = await bestEffortRollback(client);
+      if (rollbackError) releaseError = rollbackError;
+      throw primaryError;
+    }
+
+    try {
+      await client.query("COMMIT");
+    } catch (commitError) {
+      releaseError = connectionError(commitError);
+      releaseError = await bestEffortRollback(client) ?? releaseError;
+      throw commitError;
+    }
+    return result;
   } finally {
-    client.release();
+    client.release(releaseError);
   }
 }
 

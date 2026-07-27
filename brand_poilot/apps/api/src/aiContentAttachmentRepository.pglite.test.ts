@@ -85,7 +85,7 @@ describe("AI content attachment lifecycle in PostgreSQL", () => {
 
   afterAll(async () => database.close());
 
-  it("counts pending reservations and confirmed live attachments toward five", async () => {
+  it("counts two confirmed attachments plus three pending reservations toward five", async () => {
     const repository = createAiContentAttachmentRepository(pglitePool(database));
     const attachment = {
       role: "product" as const,
@@ -96,13 +96,29 @@ describe("AI content attachment lifecycle in PostgreSQL", () => {
     };
     const sessions = [];
     for (let index = 0; index < 5; index += 1) {
-      sessions.push(await repository.createAiContentUploadSession({
+      const session = await repository.createAiContentUploadSession({
         workspaceId: WORKSPACE_ID,
         brandId: BRAND_ID,
         generationId: GENERATION_ID,
         createdByUserId: USER_ID,
         attachment: { ...attachment, fileName: `product-${index}.png` },
-      }));
+      });
+      sessions.push(session);
+      if (index < 2) {
+        await repository.confirmAiContentUploadSession({
+          workspaceId: WORKSPACE_ID,
+          brandId: BRAND_ID,
+          generationId: GENERATION_ID,
+          createdByUserId: USER_ID,
+          sessionId: session.id,
+          nonce: session.nonce,
+        }, async (stored) => ({
+          storagePath: stored.storagePath,
+          storageUrl: `https://test.public.blob.vercel-storage.com/${stored.storagePath}`,
+          mimeType: stored.mimeType,
+          sizeBytes: stored.sizeBytes,
+        }));
+      }
     }
 
     expect(sessions).toHaveLength(5);

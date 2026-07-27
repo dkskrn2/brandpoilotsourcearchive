@@ -22,7 +22,6 @@ import { fetchInstagramMessagingProfile } from "./instagramLoginGraph.js";
 import { fetchInstagramHashtagTopMedia } from "./instagramTrendMeta.js";
 import { createInstagramTrendRepository } from "./instagramTrendRepository.js";
 import { createAiContentRepository } from "./aiContentRepository.js";
-import { createAiContentAttachmentRepository } from "./aiContentAttachmentRepository.js";
 import { createAiContentDownloadRepository } from "./aiContentDownload.js";
 import { createAiContentPublishRepository } from "./aiContentPublish.js";
 import { createAiContentSubjectRepository } from "./aiContentSubjectRepository.js";
@@ -1338,7 +1337,6 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     deleteAttachments: options.deleteAiContentAttachments,
     brandIntelligenceProvider,
   });
-  const aiContentAttachments = createAiContentAttachmentRepository(pool);
   const aiContentDownload = createAiContentDownloadRepository(pool, { fetchImpl: options.fetchPublishArtifact ?? fetch });
   const aiContentPublish = createAiContentPublishRepository(pool);
   const instagramPublish = resolveInstagramPublishOptions(options);
@@ -1880,7 +1878,6 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     ...assetLibrary,
     ...instagramTrendRepository,
     ...aiContent,
-    ...aiContentAttachments,
     ...aiContentDownload,
     async prepareAiContentPublish(input) {
       if (!instagramPublish.enabled) throw new Error("publishing_disabled");
