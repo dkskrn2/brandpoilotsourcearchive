@@ -96,28 +96,26 @@ async function insertLiveUploadSession(pool: Pool, input: {
       input.path,
     ],
   );
-  return new Date(result.rows[0].token_expires_at as string | Date).toISOString();
+  return {
+    token: input.nonce,
+    storagePath: input.path,
+    tokenExpiresAt: new Date(result.rows[0].token_expires_at as string | Date).toISOString(),
+  };
 }
 
-async function providerUploadWhileSessionIsLive(
-  pool: Pool,
-  input: { sessionId: string; path: string },
+function providerUploadWithIssuedGrant(
+  grant: { token: string; storagePath: string; tokenExpiresAt: string },
+  request: { token: string; path: string },
   providerObjects: Set<string>,
 ) {
-  const session = await pool.query(
-    `select storage_path, token_expires_at > clock_timestamp() as token_live
-       from ai_content_attachment_upload_sessions
-      where id = $1`,
-    [input.sessionId],
-  );
   if (
-    !session.rowCount
-    || session.rows[0].storage_path !== input.path
-    || session.rows[0].token_live !== true
+    grant.token !== request.token
+    || grant.storagePath !== request.path
+    || Date.now() >= Date.parse(grant.tokenExpiresAt)
   ) {
     throw new Error("provider_upload_token_not_live");
   }
-  providerObjects.add(input.path);
+  providerObjects.add(request.path);
 }
 
 async function waitUntilDatabaseTime(pool: Pool, timestamp: string) {
@@ -391,27 +389,26 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
 
     it("uses the generation cascade trigger and fences a provider object until token expiry", async () => {
       const sessionId = "50000000-0000-4000-8000-000000000015";
+      const issuedToken = "60000000-0000-4000-8000-000000000016";
       const path = "gc/racing.png";
       const providerObjects = new Set<string>();
-      const tokenExpiresAt = await insertLiveUploadSession(pool, {
+      const uploadGrant = await insertLiveUploadSession(pool, {
         id: sessionId,
         generationId: GENERATION_ID,
         workspaceId: WORKSPACE_ID,
         brandId: BRAND_ID,
         userId: USER_ID,
-        nonce: "60000000-0000-4000-8000-000000000016",
+        nonce: issuedToken,
         path,
-        expiresInSeconds: 2,
+        expiresInSeconds: 3,
       });
-      await providerUploadWhileSessionIsLive(pool, { sessionId, path }, providerObjects);
-      expect(providerObjects.has(path)).toBe(true);
 
       await pool.query("delete from ai_content_generations where id = $1", [GENERATION_ID]);
       const triggered = await pool.query(
         `select id, storage_path, reason, next_attempt_at, next_attempt_at >= $2::timestamptz as due_not_early
-           from ai_content_attachment_deletion_jobs
+          from ai_content_attachment_deletion_jobs
           where workspace_id = $1 and storage_path = $3`,
-        [WORKSPACE_ID, tokenExpiresAt, path],
+        [WORKSPACE_ID, uploadGrant.tokenExpiresAt, path],
       );
       expect(triggered.rows).toEqual([expect.objectContaining({
         storage_path: path,
@@ -428,7 +425,14 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         ...BUDGET,
       })).resolves.toEqual([]);
 
-      await waitUntilDatabaseTime(pool, tokenExpiresAt);
+      expect((await pool.query(
+        "select count(*)::integer as count from ai_content_attachment_upload_sessions where id = $1",
+        [sessionId],
+      )).rows[0].count).toBe(0);
+      providerUploadWithIssuedGrant(uploadGrant, { token: issuedToken, path }, providerObjects);
+      expect(providerObjects.has(path)).toBe(true);
+
+      await waitUntilDatabaseTime(pool, uploadGrant.tokenExpiresAt);
 
       const [claim] = await repository.claimAiContentAttachmentDeletionJobs({
         workerId: "gc-after-expiry",
@@ -480,7 +484,7 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
          ) values ($1, $2, $3, 'card_news', 'Workspace cascade', 'draft', 'workspace-cascade')`,
         [generationId, workspaceId, brandId],
       );
-      const tokenExpiresAt = await insertLiveUploadSession(pool, {
+      const uploadGrant = await insertLiveUploadSession(pool, {
         id: sessionId,
         generationId,
         workspaceId,
@@ -496,9 +500,9 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       const triggered = await pool.query(
         `select storage_path, reason, next_attempt_at,
                 next_attempt_at >= $2::timestamptz as due_not_early
-           from ai_content_attachment_deletion_jobs
+          from ai_content_attachment_deletion_jobs
           where workspace_id = $1 and storage_path = $3`,
-        [workspaceId, tokenExpiresAt, path],
+        [workspaceId, uploadGrant.tokenExpiresAt, path],
       );
       expect(triggered.rows).toEqual([{
         storage_path: path,
