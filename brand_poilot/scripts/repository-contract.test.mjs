@@ -374,6 +374,18 @@ test("065 defines the parent-independent AI attachment lifecycle contract", asyn
     migration,
     /create unique index ai_content_attachment_upload_sessions_storage_path_uq[\s\S]*where not is_legacy_backfill/i,
   );
+  assert.match(
+    migration,
+    /create table ai_content_attachment_storage_path_guards[\s\S]*storage_path text primary key/i,
+  );
+  assert.match(
+    migration,
+    /insert into ai_content_attachment_storage_path_guards[\s\S]*on conflict \(storage_path\) do update/i,
+  );
+  assert.match(
+    migration,
+    /nonlegacy_session_count = 0[\s\S]*excluded\.nonlegacy_session_count = 0[\s\S]*legacy_session_count = 0/i,
+  );
   assert.match(migration, /deferrable\s+initially\s+deferred[\s\S]*on delete no action/i);
   assert.match(migration, /created_by_user_id is not null[\s\S]*is_legacy_backfill[\s\S]*confirmed_attachment_id is not null/i);
   assert.match(migration, /before delete[\s\S]*ai_content_generation_attachments/i);

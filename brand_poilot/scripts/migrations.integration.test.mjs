@@ -3907,7 +3907,8 @@ const attachmentLifecycleCatalog = async (database) => {
          'ai_content_generations',
          'ai_content_generation_attachments',
          'ai_content_attachment_upload_sessions',
-         'ai_content_attachment_deletion_jobs'
+         'ai_content_attachment_deletion_jobs',
+         'ai_content_attachment_storage_path_guards'
        )
      order by table_name, ordinal_position
   `);
@@ -3920,7 +3921,8 @@ const attachmentLifecycleCatalog = async (database) => {
        'ai_content_generations'::regclass,
        'ai_content_generation_attachments'::regclass,
        'ai_content_attachment_upload_sessions'::regclass,
-       'ai_content_attachment_deletion_jobs'::regclass
+       'ai_content_attachment_deletion_jobs'::regclass,
+       'ai_content_attachment_storage_path_guards'::regclass
      )
      order by table_name, conname
   `);
@@ -3932,7 +3934,8 @@ const attachmentLifecycleCatalog = async (database) => {
          'ai_content_generations',
          'ai_content_generation_attachments',
          'ai_content_attachment_upload_sessions',
-         'ai_content_attachment_deletion_jobs'
+         'ai_content_attachment_deletion_jobs',
+         'ai_content_attachment_storage_path_guards'
        )
      order by tablename, indexname
   `);
@@ -4053,12 +4056,17 @@ const attachmentLifecycleRowState = async (database, fixture) => {
             storage_url,storage_path,reason,status
        from ai_content_attachment_deletion_jobs order by id`,
   );
+  const pathGuards = await database.query(
+    `select storage_path,legacy_session_count,nonlegacy_session_count
+       from ai_content_attachment_storage_path_guards order by storage_path`,
+  );
   return {
     sessions: sessions.rows,
     attachments: attachments.rows,
     generations: generations.rows,
     analyses: analyses.rows,
     deletionJobs: deletionJobs.rows,
+    pathGuards: pathGuards.rows,
   };
 };
 
@@ -4245,6 +4253,137 @@ test("065 enforces nonlegacy actor, state, and storage path semantics", async ()
   });
 });
 
+test("065 rejects a nonlegacy session that reuses a truthful legacy storage path", async () => {
+  const migrations = await loadMigrations();
+  const migration065 = migrations.find(
+    (migration) => migration.id === "065_ai_content_attachment_upload_sessions.sql",
+  );
+  assert.ok(migration065);
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "064_reference_upload_finalization.sql",
+    );
+    const identity = await createAttachmentLifecycleIdentity(database, "cross-boundary-path");
+    const storagePath = "generation/truthful-legacy-path.pdf";
+    await database.query(
+      `insert into ai_content_generation_attachments(
+         generation_id,workspace_id,brand_id,role,file_name,mime_type,size_bytes,
+         checksum,storage_url,storage_path
+       ) values($1,$2,$3,'document','legacy.pdf','application/pdf',100,$4,
+         'https://cdn.example.com/legacy.pdf',$5)`,
+      [
+        identity.generationId,
+        identity.workspaceId,
+        identity.brandId,
+        "1".repeat(64),
+        storagePath,
+      ],
+    );
+    await database.exec(migration065.sql);
+
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_attachment_upload_sessions(
+           generation_id,workspace_id,brand_id,created_by_user_id,nonce,role,file_name,
+           expected_mime_type,expected_size_bytes,expected_checksum,storage_path,
+           token_expires_at,created_at
+         ) values($1,$2,$3,$4,$5,'document','new.pdf','application/pdf',100,$6,$7,
+           now()+interval '10 minutes',now())`,
+        [
+          identity.generationId,
+          identity.workspaceId,
+          identity.brandId,
+          identity.actorId,
+          randomUUID(),
+          "2".repeat(64),
+          storagePath,
+        ],
+      ),
+      (error) => {
+        assert.equal(error.code, "23505");
+        assert.doesNotMatch(error.message, new RegExp(storagePath));
+        return true;
+      },
+    );
+  });
+});
+
+test("065 serializes attachment path reservations through a per-path guard row", async () => {
+  const migrations = await loadMigrations();
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "065_ai_content_attachment_upload_sessions.sql",
+    );
+    const guardTable = await database.query(
+      "select to_regclass('public.ai_content_attachment_storage_path_guards')::text as name",
+    );
+    assert.deepEqual(guardTable.rows, [{
+      name: "ai_content_attachment_storage_path_guards",
+    }]);
+    const primaryKey = await database.query(
+      `select pg_get_constraintdef(oid) as definition
+         from pg_constraint
+        where conrelid='ai_content_attachment_storage_path_guards'::regclass
+          and contype='p'`,
+    );
+    assert.deepEqual(primaryKey.rows, [{
+      definition: "PRIMARY KEY (storage_path)",
+    }]);
+    const triggerFunctions = await database.query(
+      `select trigger_name,action_timing,event_manipulation,action_statement
+         from information_schema.triggers
+        where event_object_schema='public'
+          and event_object_table='ai_content_attachment_upload_sessions'
+          and trigger_name in (
+            'ai_content_attachment_upload_sessions_reserve_storage_path',
+            'ai_content_attachment_upload_sessions_release_storage_path'
+          )
+        order by trigger_name`,
+    );
+    assert.deepEqual(
+      triggerFunctions.rows.map((row) => ({
+        trigger_name: row.trigger_name,
+        action_timing: row.action_timing,
+        event_manipulation: row.event_manipulation,
+      })),
+      [
+        {
+          trigger_name: "ai_content_attachment_upload_sessions_release_storage_path",
+          action_timing: "AFTER",
+          event_manipulation: "DELETE",
+        },
+        {
+          trigger_name: "ai_content_attachment_upload_sessions_reserve_storage_path",
+          action_timing: "AFTER",
+          event_manipulation: "INSERT",
+        },
+      ],
+    );
+    const reservationFunction = await database.query(
+      `select pg_get_functiondef(p.oid) as definition
+         from pg_proc p
+         join pg_namespace n on n.oid=p.pronamespace
+        where n.nspname='public'
+          and p.proname='reserve_ai_content_attachment_storage_path'`,
+    );
+    assert.equal(reservationFunction.rows.length, 1);
+    assert.match(
+      reservationFunction.rows[0].definition,
+      /insert into ai_content_attachment_storage_path_guards[\s\S]*on conflict \(storage_path\) do update/i,
+    );
+    assert.match(
+      reservationFunction.rows[0].definition,
+      /nonlegacy_session_count = 0[\s\S]*excluded\.nonlegacy_session_count = 0[\s\S]*legacy_session_count = 0/i,
+    );
+  });
+});
+
 test("065 defers circular confirmation links until commit and rejects cross-tenant links", async () => {
   const migrations = await loadMigrations();
   await withDatabase(async (database) => {
@@ -4408,6 +4547,11 @@ test("065 deleting every unconfirmed session state creates expiry-safe parent-in
         new Date(job.next_attempt_at) >= new Date(expiries.get(job.upload_session_id)),
       );
     }
+    const staleGuards = await database.query(
+      `select count(*)::integer as count
+         from ai_content_attachment_storage_path_guards`,
+    );
+    assert.deepEqual(staleGuards.rows, [{ count: 0 }]);
   });
 });
 
@@ -4526,6 +4670,13 @@ test("065 workspace cascade preserves cleanup for a nonlegacy pending session", 
     assert.ok(
       new Date(jobs.rows[0].next_attempt_at) >= new Date(inserted.rows[0].token_expires_at),
     );
+    const staleGuard = await database.query(
+      `select storage_path
+         from ai_content_attachment_storage_path_guards
+        where storage_path=$1`,
+      [storagePath],
+    );
+    assert.equal(staleGuard.rows.length, 0);
   });
 });
 

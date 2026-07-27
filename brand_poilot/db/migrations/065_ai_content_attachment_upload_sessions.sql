@@ -170,6 +170,89 @@ create index ai_content_upload_sessions_generation_reservation_idx
   on ai_content_attachment_upload_sessions (generation_id, status, created_at, id)
   where status = 'pending';
 
+create table ai_content_attachment_storage_path_guards (
+  storage_path text primary key,
+  legacy_session_count bigint not null default 0,
+  nonlegacy_session_count integer not null default 0,
+  constraint ai_content_attachment_storage_path_guards_counts_check check (
+    legacy_session_count >= 0
+    and nonlegacy_session_count between 0 and 1
+  )
+);
+
+create function reserve_ai_content_attachment_storage_path()
+returns trigger
+language plpgsql
+as $$
+declare
+  reserved_path text;
+begin
+  insert into ai_content_attachment_storage_path_guards (
+    storage_path,
+    legacy_session_count,
+    nonlegacy_session_count
+  )
+  values (
+    new.storage_path,
+    case when new.is_legacy_backfill then 1 else 0 end,
+    case when new.is_legacy_backfill then 0 else 1 end
+  )
+  on conflict (storage_path) do update
+  set legacy_session_count =
+        ai_content_attachment_storage_path_guards.legacy_session_count
+        + excluded.legacy_session_count,
+      nonlegacy_session_count =
+        ai_content_attachment_storage_path_guards.nonlegacy_session_count
+        + excluded.nonlegacy_session_count
+  where ai_content_attachment_storage_path_guards.nonlegacy_session_count = 0
+    and (
+      excluded.nonlegacy_session_count = 0
+      or ai_content_attachment_storage_path_guards.legacy_session_count = 0
+    )
+  returning storage_path into reserved_path;
+
+  if reserved_path is null then
+    raise unique_violation
+      using constraint =
+        'ai_content_attachment_upload_sessions_storage_path_collision',
+        message = 'ai_content_attachment_upload_session_storage_path_conflict';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger ai_content_attachment_upload_sessions_reserve_storage_path
+after insert on ai_content_attachment_upload_sessions
+for each row
+execute function reserve_ai_content_attachment_storage_path();
+
+create function release_ai_content_attachment_storage_path()
+returns trigger
+language plpgsql
+as $$
+begin
+  update ai_content_attachment_storage_path_guards
+  set legacy_session_count =
+        legacy_session_count
+        - case when old.is_legacy_backfill then 1 else 0 end,
+      nonlegacy_session_count =
+        nonlegacy_session_count
+        - case when old.is_legacy_backfill then 0 else 1 end
+  where storage_path = old.storage_path;
+
+  delete from ai_content_attachment_storage_path_guards
+  where storage_path = old.storage_path
+    and legacy_session_count = 0
+    and nonlegacy_session_count = 0;
+  return old;
+end;
+$$;
+
+create trigger ai_content_attachment_upload_sessions_release_storage_path
+after delete on ai_content_attachment_upload_sessions
+for each row
+execute function release_ai_content_attachment_storage_path();
+
 alter table ai_content_generation_attachments
   add column upload_session_id uuid null,
   add column deletion_reason text null,
