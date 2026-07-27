@@ -2,10 +2,11 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  channelConnectionAction,
   channelConnectionUrl,
   parseChannelConnectionCallback
 } from "../features/channels/channelConnectionUrls";
-import type { ChannelConnection, ChannelType } from "../types";
+import type { ChannelCapability, ChannelConnection, ChannelType } from "../types";
 
 const apiChannels: ChannelConnection[] = [
   {
@@ -70,6 +71,42 @@ const apiChannels: ChannelConnection[] = [
   }
 ];
 
+const apiCapabilities: ChannelCapability[] = [
+  {
+    channel: "instagram",
+    catalogStatus: "available",
+    connectionStatus: "connected",
+    canGenerate: true,
+    generationFormats: ["card_news", "single_image"],
+    exportModes: ["image", "html"],
+    publishModes: ["instagram_feed_carousel", "instagram_story"],
+    readiness: "ready",
+    reasonCode: null,
+  },
+  ...(["threads", "x", "linkedin"] as const).map((channel): ChannelCapability => ({
+    channel,
+    catalogStatus: "planned",
+    connectionStatus: "not_connected",
+    canGenerate: true,
+    generationFormats: ["channel_text"],
+    exportModes: ["text"],
+    publishModes: [],
+    readiness: "not_supported",
+    reasonCode: "publishing_not_supported",
+  })),
+  ...(["youtube", "tiktok"] as const).map((channel): ChannelCapability => ({
+    channel,
+    catalogStatus: "planned",
+    connectionStatus: "not_connected",
+    canGenerate: false,
+    generationFormats: [],
+    exportModes: [],
+    publishModes: [],
+    readiness: "not_supported",
+    reasonCode: "video_generation_out_of_scope",
+  })),
+];
+
 beforeEach(() => {
   vi.stubEnv("VITE_API_BASE_URL", "http://localhost:4000");
   vi.stubEnv("VITE_META_OAUTH_START_URL", "http://localhost:4000/auth/meta/start");
@@ -86,6 +123,7 @@ afterEach(() => {
 async function renderChannelsPage(apiOverrides: Partial<Record<string, ReturnType<typeof vi.fn>>> = {}) {
   const api = {
     listChannels: vi.fn(async () => apiChannels),
+    getChannelCapabilities: vi.fn(async () => apiCapabilities),
     getInstagramDmSettings: vi.fn(async () => ({
       brandId: "brand-1",
       enabled: false,
@@ -122,6 +160,18 @@ describe("ChannelsPage", () => {
     expect(screen.queryByText("연결 상태를 불러올 수 없습니다")).not.toBeInTheDocument();
   });
 
+  it("renders four independent capability rows for every catalog channel", async () => {
+    await renderChannelsPage();
+
+    expect(await screen.findAllByText("계정 연결")).toHaveLength(6);
+    expect(screen.getAllByText("콘텐츠 생성/변환")).toHaveLength(6);
+    expect(screen.getAllByText("파일·텍스트 내보내기")).toHaveLength(6);
+    expect(screen.getAllByText("API 실제 게시")).toHaveLength(6);
+    expect(screen.getByText("정적 Story", { exact: false })).toBeVisible();
+    expect(screen.getAllByText("지원 준비 중")).toHaveLength(5);
+    expect(screen.getAllByText("현재 영상 콘텐츠 생성은 제공하지 않습니다.")).toHaveLength(2);
+  });
+
   it("shows channel connection status from the API without the request tab", async () => {
     const api = await renderChannelsPage();
 
@@ -148,6 +198,16 @@ describe("ChannelsPage", () => {
       expect(channelConnectionUrl(channel)).toBeNull();
     }
     expect(screen.getAllByRole("button", { name: "연결 준비 중" })).toHaveLength(5);
+    expect(channelConnectionAction("instagram", true)).toEqual({
+      kind: "oauth",
+      href: "http://localhost:4000/auth/meta/start",
+      label: "Meta 다시 연결",
+    });
+    expect(channelConnectionAction("x", false)).toEqual({
+      kind: "guide",
+      href: null,
+      label: "연결 준비 중",
+    });
   });
 
   it("keeps credential and manual request fields out of the customer channel page", async () => {
@@ -192,6 +252,8 @@ describe("ChannelsPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "YouTube 연결 가이드" }));
     expect(screen.getByRole("dialog", { name: "YouTube 연결 가이드" })).toBeVisible();
     expect(screen.getByText(/YouTube 채널을 먼저 생성/)).toBeVisible();
+    expect(screen.getByRole("heading", { name: "현재 지원 범위" })).toBeVisible();
+    expect(screen.getByText("현재 영상 콘텐츠 생성과 API 자동 게시는 제공하지 않습니다.")).toBeVisible();
   });
 
   it("preserves static Instagram Story publishing without a video or Reel generation action", async () => {
@@ -285,6 +347,28 @@ describe("ChannelsPage", () => {
     expect(screen.queryByRole("dialog", { name: "Threads 연결 가이드" })).not.toBeInTheDocument();
   });
 
+  it("traps focus inside the guide and restores it to the trigger", async () => {
+    await renderChannelsPage();
+    await screen.findByText("Meta OAuth");
+    const trigger = screen.getByRole("button", { name: "Instagram 연결 가이드" });
+
+    await userEvent.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "Instagram 연결 가이드" });
+    const closeButton = screen.getByRole("button", { name: "연결 가이드 닫기" });
+    const confirmButton = screen.getByRole("button", { name: "확인" });
+    expect(closeButton).toHaveFocus();
+
+    confirmButton.focus();
+    await userEvent.tab();
+    expect(closeButton).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(confirmButton).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+    expect(dialog).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
   it("allows activation only after the channel is authenticated", async () => {
     const api = await renderChannelsPage();
 
@@ -312,5 +396,21 @@ describe("ChannelsPage", () => {
 
     expect(await screen.findByText("연결 상태를 불러올 수 없습니다")).toBeVisible();
     expect(screen.getByText(/API 서버가 응답하지 않아/)).toBeVisible();
+  });
+
+  it("shows an honest capability error and retries without catalog success fallback", async () => {
+    const getChannelCapabilities = vi.fn()
+      .mockRejectedValueOnce(new Error("api_down"))
+      .mockResolvedValueOnce(apiCapabilities);
+    const api = await renderChannelsPage({ getChannelCapabilities });
+
+    expect(await screen.findByRole("alert", { name: "채널 지원 범위를 불러오지 못했습니다" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Instagram" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "다시 시도" }));
+
+    expect(await screen.findByRole("heading", { name: "Instagram" })).toBeVisible();
+    expect(getChannelCapabilities).toHaveBeenCalledTimes(2);
+    expect(api.listChannels).toHaveBeenCalledTimes(2);
   });
 });

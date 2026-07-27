@@ -2,6 +2,28 @@ import { describe, expect, it, vi } from "vitest";
 import { apiClient } from "./apiClient";
 
 describe("apiClient", () => {
+  it("requests the authoritative channel capability aggregate", async () => {
+    const response = [{
+      channel: "instagram",
+      catalogStatus: "available",
+      connectionStatus: "connected",
+      canGenerate: true,
+      generationFormats: ["card_news"],
+      exportModes: ["image"],
+      publishModes: ["instagram_feed_carousel"],
+      readiness: "ready",
+      reasonCode: null,
+    }];
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(response), { status: 200 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await expect(client.getChannelCapabilities("brand-1")).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/brands/brand-1/channels/capabilities",
+      expect.objectContaining({ method: "GET", credentials: "include" }),
+    );
+  });
+
   it("submits feedback to its dedicated brand endpoint", async () => {
     const response = {
       id: "feedback-1",

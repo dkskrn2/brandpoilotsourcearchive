@@ -25,6 +25,7 @@ export interface ChannelConnectionGuide {
   label: string;
   serviceStatus: "available" | "preparing";
   summary: string;
+  capabilitySummary?: string;
   prerequisites: readonly string[];
   accountSetup: readonly ChannelGuideSetupSection[];
   oauthSteps: readonly string[];
@@ -184,6 +185,7 @@ export const channelGuides: Record<ChannelType, ChannelConnectionGuide> = {
     label: "YouTube",
     serviceStatus: "preparing",
     summary: "게시할 YouTube 채널을 선택하고 Google OAuth에서 동영상 업로드 권한을 승인합니다.",
+    capabilitySummary: "현재 영상 콘텐츠 생성과 API 자동 게시는 제공하지 않습니다.",
     prerequisites: ["Google 계정뿐 아니라 실제 YouTube 채널이 필요합니다.", "YouTube 채널이 없다면 YouTube에서 채널을 먼저 생성해야 합니다.", "여러 채널 또는 브랜드 계정을 관리한다면 게시할 채널을 미리 확인합니다."],
     accountSetup: [
       { title: "YouTube 채널 생성", steps: ["YouTube에 Google 계정으로 로그인합니다.", "프로필 메뉴에서 채널 만들기를 선택합니다.", "개인 채널 또는 조직에서 관리할 브랜드 채널의 이름을 정하고 생성을 완료합니다.", "YouTube Studio에 들어가 해당 채널로 업로드가 가능한지 확인합니다."] }

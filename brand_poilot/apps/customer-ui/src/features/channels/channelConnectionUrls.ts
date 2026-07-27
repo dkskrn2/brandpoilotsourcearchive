@@ -30,6 +30,21 @@ export function channelConnectionUrl(channel: ChannelType) {
     ?? `${import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000"}/auth/meta/start`;
 }
 
+export function channelConnectionAction(channel: ChannelType, connected: boolean) {
+  const href = channelConnectionUrl(channel);
+  return href
+    ? {
+      kind: "oauth" as const,
+      href,
+      label: connected ? "Meta 다시 연결" : "Meta OAuth 연결",
+    }
+    : {
+      kind: "guide" as const,
+      href: null,
+      label: "연결 준비 중",
+    };
+}
+
 export function parseChannelConnectionCallback(search: string): ChannelConnectionCallback | null {
   const query = new URLSearchParams(search);
   const result = query.get("instagram");

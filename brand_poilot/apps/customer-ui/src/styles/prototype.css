@@ -1392,6 +1392,22 @@ details.panel > summary.panel-head::-webkit-details-marker {
 
 .channel-card-actions { align-items: stretch; }
 .channel-card-actions .button { flex: 1; }
+.channel-capability-grid { align-items: stretch; }
+.channel-capability-card { min-width: 0; }
+.channel-capability-card .panel-head { align-items: flex-start; }
+.channel-capability-list { display: grid; gap: 0; margin: 0; }
+.channel-capability-row {
+  display: grid;
+  grid-template-columns: minmax(110px, .8fr) minmax(0, 1.2fr);
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.channel-capability-row:first-child { padding-top: 0; }
+.channel-capability-row:last-child { padding-bottom: 0; border-bottom: 0; }
+.channel-capability-row dt { font-size: 13px; font-weight: 800; }
+.channel-capability-row dd { display: grid; justify-items: start; gap: 7px; min-width: 0; margin: 0; }
+.channel-capability-row dd .small { line-height: 1.45; overflow-wrap: anywhere; }
 
 .channel-guide-dialog {
   display: grid;
@@ -1445,6 +1461,10 @@ details.panel > summary.panel-head::-webkit-details-marker {
 .channel-guide-links .button { display: inline-flex; align-items: center; gap: 6px; }
 
 @media (max-width: 720px) {
+  .channel-capability-card .panel-head { align-items: center; }
+  .channel-capability-row { grid-template-columns: 1fr; gap: 7px; }
+  .channel-capability-row dd { grid-template-columns: auto minmax(0, 1fr); align-items: center; }
+  .channel-card-actions { flex-direction: column; }
   .channel-guide-dialog { height: 100%; max-height: 100%; border-radius: 0; }
   .channel-guide-dialog__header,
   .channel-guide-dialog__footer { padding: 16px; }

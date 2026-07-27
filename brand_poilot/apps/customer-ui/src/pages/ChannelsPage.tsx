@@ -9,28 +9,18 @@ import { ChannelConnectionGuideDialog } from "../components/channels/ChannelConn
 import { ChannelLogo } from "../components/channels/ChannelLogo";
 import { channelGuides } from "../features/channels/channelGuides";
 import {
-  channelConnectionUrl,
+  channelConnectionAction,
   parseChannelConnectionCallback,
   type ChannelConnectionCallback
 } from "../features/channels/channelConnectionUrls";
+import { channelCapabilityViewModel } from "../features/channels/channelCapabilityViewModel";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
-import type { ChannelConnection, ChannelStatus, InstagramDmSettings } from "../types";
-
-const statusLabels: Record<ChannelStatus, string> = {
-  connected: "연결됨",
-  not_connected: "미연결",
-  needs_attention: "확인 필요",
-  expired: "만료",
-  insufficient_permissions: "권한 부족",
-  mapping_required: "매핑 필요",
-  publish_failed: "게시 실패"
-};
-
-function badgeFor(status: ChannelStatus) {
-  if (status === "connected") return "ok";
-  if (status === "not_connected" || status === "publish_failed") return "bad";
-  return "warn";
-}
+import type {
+  ChannelCapability,
+  ChannelConnection,
+  ChannelStatus,
+  InstagramDmSettings,
+} from "../types";
 
 function alertVariantFor(status: ChannelStatus) {
   if (status === "connected") return "ok";
@@ -38,14 +28,14 @@ function alertVariantFor(status: ChannelStatus) {
   return "warn";
 }
 
-function channelAction(channel: ChannelConnection) {
-  const url = channelConnectionUrl(channel.type);
-  if (!url) {
-    return <button className="button is-disabled" type="button" disabled>연결 준비 중</button>;
+function channelAction(channel: ChannelConnection | null, capability: ChannelCapability) {
+  const action = channelConnectionAction(capability.channel, channel?.oauthState === "connected");
+  if (action.kind === "guide") {
+    return <button className="button is-disabled" type="button" disabled>{action.label}</button>;
   }
   return (
-    <a className="button primary" href={url} data-guide="meta-oauth">
-      {channel.oauthState === "connected" ? "Meta 다시 연결" : "Meta OAuth 연결"}
+    <a className="button primary" href={action.href} data-guide="meta-oauth">
+      {action.label}
     </a>
   );
 }
@@ -85,7 +75,10 @@ function connectionCallbackNotice(callback: ChannelConnectionCallback) {
 
 export function ChannelsPage() {
   const [connectionCards, setConnectionCards] = useState<ChannelConnection[]>([]);
+  const [capabilities, setCapabilities] = useState<ChannelCapability[]>([]);
   const [channelsLoading, setChannelsLoading] = useState(true);
+  const [channelsLoadError, setChannelsLoadError] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [apiNotice, setApiNotice] = useState<string | null>(null);
   const [dmSettings, setDmSettings] = useState<InstagramDmSettings | null>(null);
   const [updatingChannel, setUpdatingChannel] = useState<ChannelConnection["type"] | null>(null);
@@ -93,8 +86,11 @@ export function ChannelsPage() {
   const [connectionCallback] = useState(() => parseChannelConnectionCallback(window.location.search));
   const callbackNotice = connectionCallback ? connectionCallbackNotice(connectionCallback) : null;
 
-  const attentionCount = connectionCards.filter((channel) => channel.status !== "connected").length;
-  const connectionStatusBadge = connectionCards.length === 0
+  const attentionCount = capabilities.filter(
+    (capability) => capability.catalogStatus === "planned"
+      || capability.connectionStatus !== "connected",
+  ).length;
+  const connectionStatusBadge = capabilities.length === 0
     ? { label: "상태 없음", variant: "neutral" as const }
     : {
       label: attentionCount === 0 ? "모두 연결됨" : `${attentionCount}개 미연결`,
@@ -103,16 +99,24 @@ export function ChannelsPage() {
 
   useEffect(() => {
     let ignore = false;
-    api.listChannels(DEMO_BRAND_ID)
-      .then((apiChannels) => {
+    setChannelsLoading(true);
+    setChannelsLoadError(false);
+    Promise.all([
+      api.listChannels(DEMO_BRAND_ID),
+      api.getChannelCapabilities(DEMO_BRAND_ID),
+    ])
+      .then(([apiChannels, apiCapabilities]) => {
         if (ignore) return;
         setConnectionCards(apiChannels);
+        setCapabilities(apiCapabilities);
+        setChannelsLoadError(false);
         setApiNotice(null);
       })
       .catch(() => {
         if (ignore) return;
         setConnectionCards([]);
-        setApiNotice("API 서버가 응답하지 않아 채널 연결 상태를 불러오지 못했습니다.");
+        setCapabilities([]);
+        setChannelsLoadError(true);
       })
       .finally(() => {
         if (!ignore) setChannelsLoading(false);
@@ -120,7 +124,7 @@ export function ChannelsPage() {
     return () => {
       ignore = true;
     };
-  }, []);
+  }, [loadAttempt]);
 
   useEffect(() => {
     if (!connectionCallback) return;
@@ -195,49 +199,72 @@ export function ChannelsPage() {
         </section>
       ) : null}
 
-      {!channelsLoading ? <><div className="grid three" data-guide="channel-list">
-        {connectionCards.length === 0 ? (
-          <section className="panel" style={{ gridColumn: "1 / -1" }}>
-            <div className="panel-body">
-              <EmptyState
-                title="연결 상태를 불러올 수 없습니다"
-                description="API 서버가 응답하면 Instagram, Threads, TikTok, YouTube, X 연결 상태가 여기에 표시됩니다."
-              />
+      {!channelsLoading && channelsLoadError ? (
+        <section className="panel" style={{ marginBottom: 16 }}>
+          <div className="panel-body grid" role="alert" aria-label="채널 지원 범위를 불러오지 못했습니다">
+            <Alert title="채널 지원 범위를 불러오지 못했습니다" variant="bad">
+              API에서 현재 연결·생성·내보내기·게시 가능 범위를 확인하지 못했습니다. 지원 상태를 임의로 표시하지 않습니다.
+            </Alert>
+            <EmptyState
+              title="연결 상태를 불러올 수 없습니다"
+              description="API 서버가 응답하지 않아 현재 지원 상태를 표시할 수 없습니다."
+            />
+            <div className="actions">
+              <button className="button primary" type="button" onClick={() => setLoadAttempt((value) => value + 1)}>다시 시도</button>
             </div>
-          </section>
-        ) : connectionCards.map((channel) => (
-          <article className="panel" key={channel.type}>
+          </div>
+        </section>
+      ) : null}
+
+      {!channelsLoading && !channelsLoadError ? <><div className="grid three channel-capability-grid" data-guide="channel-list">
+        {capabilities.map((capability) => {
+          const channel = connectionCards.find((item) => item.type === capability.channel) ?? null;
+          const view = channelCapabilityViewModel(capability, channel);
+          const canActivate = capability.catalogStatus === "available"
+            && capability.connectionStatus === "connected"
+            && channel?.oauthState === "connected";
+          return (
+          <article className="panel channel-capability-card" key={capability.channel}>
             <div className="panel-head">
-              <h2 className="channel-identity"><ChannelLogo channel={channel.type} decorative size={22} /><span>{channel.label}</span></h2>
+              <h2 className="channel-identity"><ChannelLogo channel={capability.channel} decorative size={22} /><span>{view.label}</span></h2>
               <div className="actions">
-                <Badge variant={badgeFor(channel.status)}>{statusLabels[channel.status]}</Badge>
+                <Badge variant={view.rows[0].tone}>{view.rows[0].state}</Badge>
                 <Switch
-                  label={`${channel.label} 채널 활성화`}
-                  checked={channel.enabled && channel.status === "connected" && channel.oauthState === "connected"}
-                  disabled={updatingChannel === channel.type || channel.status !== "connected" || channel.oauthState !== "connected"}
-                  onChange={(enabled) => void toggleChannel(channel, enabled)}
+                  label={`${view.label} 채널 활성화`}
+                  checked={Boolean(channel?.enabled && canActivate)}
+                  disabled={!channel || updatingChannel === capability.channel || !canActivate}
+                  onChange={(enabled) => { if (channel) void toggleChannel(channel, enabled); }}
                 />
               </div>
             </div>
             <div className="panel-body grid">
-              <p>연결 계정: <strong>{channel.accountLabel}</strong></p>
-              <p className="muted">마지막 정상 확인: {channel.lastHealthyAt ?? "-"}</p>
-              <p className="muted">마지막 게시 성공: {channel.lastPublishedAt ?? "-"}</p>
-              {channel.alertTitle ? (
+              <dl className="channel-capability-list">
+                {view.rows.map((row) => (
+                  <div className="channel-capability-row" key={row.key}>
+                    <dt>{row.label}</dt>
+                    <dd>
+                      <Badge variant={row.tone}>{row.state}</Badge>
+                      <span className="muted small">{row.detail}</span>
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+              {channel?.alertTitle ? (
                 <Alert title={channel.alertTitle} variant={alertVariantFor(channel.status)}>
                   {channel.alertBody}
                 </Alert>
               ) : null}
-              {channel.status !== "connected" || channel.oauthState !== "connected" ? <p className="muted small">인증 후 활성화할 수 있습니다.</p> : null}
+              {!canActivate ? <p className="muted small">인증 후 활성화할 수 있습니다.</p> : null}
               <div className="actions channel-card-actions">
-                <button className="button" type="button" aria-label={`${channel.label} 연결 가이드`} onClick={() => setGuideChannel(channel.type)}>
+                <button className="button" type="button" aria-label={`${view.label} 연결 가이드`} onClick={() => setGuideChannel(capability.channel)}>
                   연결 가이드
                 </button>
-                {channelAction(channel)}
+                {channelAction(channel, capability)}
               </div>
             </div>
           </article>
-        ))}
+          );
+        })}
       </div>
 
       <section id="check-result" className="panel" style={{ marginTop: 16 }} data-guide="channel-status">

@@ -3,6 +3,7 @@ import type {
   BrandProfileInput,
   BrandUiStatus,
   BillingSummary,
+  ChannelCapability,
   ChannelConnection,
   ChannelConnectionRequest,
   ChannelType,
@@ -447,6 +448,13 @@ export function apiClient(options: ApiClientOptions = {}) {
     async listChannels(brandId: string) {
       const channels = await request<ApiChannel[]>(fetcher, `${baseUrl}/brands/${brandId}/channels`, { method: "GET" });
       return channels.map(mapApiChannelConnection);
+    },
+    getChannelCapabilities(brandId: string) {
+      return request<ChannelCapability[]>(
+        fetcher,
+        `${baseUrl}/brands/${brandId}/channels/capabilities`,
+        { method: "GET" },
+      );
     },
     updateChannelEnabled(brandId: string, channel: ChannelType, enabled: boolean) {
       return request<ApiChannel>(fetcher, `${baseUrl}/brands/${brandId}/channels/${channel}`, {
