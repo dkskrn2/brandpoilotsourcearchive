@@ -1,6 +1,6 @@
 import "dotenv/config";
 import Fastify from "fastify";
-import { put as putBlob } from "@vercel/blob";
+import { del as deleteBlob, put as putBlob } from "@vercel/blob";
 import { createPool } from "./db.js";
 import { createRepository } from "./repository.js";
 import { resolveServerHost } from "./runtime.js";
@@ -66,6 +66,10 @@ const serverOptions: Parameters<typeof createServer>[0] & {
     aiContentUpload: {
       readWriteToken: blobReadWriteToken,
       uploadSessionsEnabled: runtimeConfig.aiContentAttachmentUploadSessionsEnabled,
+    },
+    aiContentAttachmentGc: {
+      deleteBlob: (urlOrPath, { abortSignal }) =>
+        deleteBlob(urlOrPath, { token: blobReadWriteToken, abortSignal }),
     },
     assetLibraryUpload: {
       readWriteToken: blobReadWriteToken

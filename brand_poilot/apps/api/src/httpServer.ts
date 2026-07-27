@@ -15,6 +15,12 @@ import { normalizeInstagramHashtag } from "./instagramTrend.js";
 import { StoryCapabilityRequiredError } from "./repository.js";
 import type { ApiRepository, BrandProfileInput, Channel, DmAttentionType, DmConversationFilter, InstagramDeliveryFormat, InstagramFormatSettingsInput, InstagramTrendMediaTypeFilter, InstagramTrendPageDto, InstagramTrendSort, SourceType, SubjectAnalysisRepositoryV2, SupportRequestCategory, SupportRequestStatus } from "./types.js";
 import type { AiContentAttachmentLifecycleRepository } from "./aiContentAttachmentRepository.js";
+import {
+  runAiContentAttachmentGc,
+  type DeleteAiContentAttachmentBlob,
+  type AiContentAttachmentGcRunResult,
+} from "./aiContentAttachmentGc.js";
+import type { AiContentAttachmentGcRepository } from "./aiContentAttachmentGcRepository.js";
 import { createKakaoAuthStore, type KakaoProfile } from "./kakaoAuth.js";
 import { brandLogoRequestBodyLimit, type BrandLogoService } from "./brandLogo.js";
 import { channelNames } from "./channelCatalog.js";
@@ -145,6 +151,11 @@ interface CreateServerOptions {
     uploadSessionsEnabled?: boolean;
     generateClientToken?: AiContentTokenOptions["generateClientToken"];
     headBlob?: import("./aiContentUpload.js").AiContentBlobVerificationOptions["headBlob"];
+  };
+  aiContentAttachmentGc?: {
+    deleteBlob: DeleteAiContentAttachmentBlob;
+    workerId?: string;
+    runGc?: typeof runAiContentAttachmentGc;
   };
   assetLibraryUpload?: {
     readWriteToken: string;
@@ -301,6 +312,56 @@ function requireAiContentUploadRouteRepository(
     throw new Error("ai_content_upload_repository_not_configured");
   }
   return repository as ApiRepository & AiContentUploadRouteRepository;
+}
+
+const aiContentAttachmentGcRepositoryMethods = [
+  "prepareAiContentAttachmentGc",
+  "claimAiContentAttachmentDeletionJobs",
+  "beginAiContentAttachmentDeletionAttempt",
+  "releaseUnstartedAiContentAttachmentDeletions",
+  "completeAiContentAttachmentDeletion",
+  "failAiContentAttachmentDeletion",
+  "getAiContentAttachmentGcMetrics",
+] as const satisfies readonly (keyof AiContentAttachmentGcRepository)[];
+
+function asAiContentAttachmentGcRepository(
+  repository: ApiRepository,
+): AiContentAttachmentGcRepository | null {
+  const source = repository as unknown as Record<string, unknown>;
+  return aiContentAttachmentGcRepositoryMethods.every((method) => typeof source[method] === "function")
+    ? repository as ApiRepository & AiContentAttachmentGcRepository
+    : null;
+}
+
+function safeAiContentAttachmentGcResult(
+  result: AiContentAttachmentGcRunResult,
+): AiContentAttachmentGcRunResult {
+  return {
+    sessions: {
+      scanned: result.sessions.scanned,
+      claimed: result.sessions.claimed,
+      confirmed: result.sessions.confirmed,
+      expired: result.sessions.expired,
+    },
+    deletions: {
+      claimed: result.deletions.claimed,
+      started: result.deletions.started,
+      succeeded: result.deletions.succeeded,
+      failed: result.deletions.failed,
+      retried: result.deletions.retried,
+      releasedUnstarted: result.deletions.releasedUnstarted,
+    },
+    leasesReclaimed: result.leasesReclaimed,
+    eligibleQueueDepth: result.eligibleQueueDepth,
+    oldestEligiblePendingAgeSeconds: result.oldestEligiblePendingAgeSeconds,
+    heldJobCount: result.heldJobCount,
+    oldestHeldAgeSeconds: result.oldestHeldAgeSeconds,
+    holdReasonCounts: { ...result.holdReasonCounts },
+    attemptCountBuckets: { ...result.attemptCountBuckets },
+    deadLetterCount: result.deadLetterCount,
+    durationMs: result.durationMs,
+    providerErrorCategories: { ...result.providerErrorCategories },
+  };
 }
 
 function asChannel(value: string): Channel {
@@ -580,7 +641,7 @@ export function createFastifyOptions(logger?: boolean | FastifyLoggerOptions) {
 }
 
 export function createServer(
-  { repository, workerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, brandIntelligence, runtimePolicy, logger }: CreateServerOptions,
+  { repository, workerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, aiContentAttachmentGc, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, brandIntelligence, runtimePolicy, logger }: CreateServerOptions,
   app: FastifyInstance = Fastify(createFastifyOptions(logger))
 ) {
   const aiContentAttachmentRepository = aiContentUpload
@@ -1009,6 +1070,36 @@ export function createServer(
     if (referenceResult.failed.length) {
       request.log.error({ event: "reference_upload_cleanup_partial_failure", ...referenceResult });
     }
+    return result;
+  });
+
+  app.post("/internal/cron/ai-content-attachment-gc", async (request, reply) => {
+    if (!matchesBearerSecret(request.headers.authorization, cronSecret)) {
+      reply.code(401);
+      return { error: "cron_unauthorized" };
+    }
+    const gcRepository = asAiContentAttachmentGcRepository(repository);
+    if (!aiContentAttachmentGc || !gcRepository) {
+      reply.code(503);
+      return { error: "ai_content_attachment_gc_not_configured" };
+    }
+    const body = (request.body ?? {}) as { batchSize?: unknown };
+    if (
+      body.batchSize !== undefined
+      && (!Number.isInteger(body.batchSize) || Number(body.batchSize) < 1 || Number(body.batchSize) > 100)
+    ) {
+      reply.code(400);
+      return { error: "ai_content_attachment_gc_batch_size_invalid" };
+    }
+    const unsafeResult: AiContentAttachmentGcRunResult = await (
+      aiContentAttachmentGc.runGc ?? runAiContentAttachmentGc
+    )(gcRepository, {
+      workerId: aiContentAttachmentGc.workerId ?? "api-cron",
+      batchSize: body.batchSize === undefined ? 25 : Number(body.batchSize),
+      deleteBlob: aiContentAttachmentGc.deleteBlob,
+    });
+    const result = safeAiContentAttachmentGcResult(unsafeResult);
+    request.log.info({ event: "ai_content_attachment_gc_completed", ...result });
     return result;
   });
 
