@@ -89,7 +89,7 @@ async function createSchema(database: PGlite) {
       workspace_id uuid not null,
       brand_id uuid not null,
       status text not null,
-      expires_at timestamptz not null
+      token_expires_at timestamptz not null
     );
     create table ai_content_subject_analyses (
       id uuid primary key,
@@ -756,7 +756,7 @@ describe("createAiContentSubjectRepository", () => {
   it("rejects a subject request while a non-expired upload reservation is active", async () => {
     await database.query(
       `insert into ai_content_attachment_upload_sessions
-         (id, generation_id, workspace_id, brand_id, status, expires_at)
+         (id, generation_id, workspace_id, brand_id, status, token_expires_at)
        values ('70000000-0000-4000-8000-000000000001', $1, $2, $3, 'pending', now() + interval '5 minutes')`,
       [generationId, workspaceId, brandId],
     );

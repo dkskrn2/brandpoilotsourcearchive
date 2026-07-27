@@ -493,6 +493,7 @@ snapshots as (
       jsonb_agg(
         jsonb_build_object(
           'id', attachment.id,
+          'generationId', attachment.generation_id,
           'role', attachment.role,
           'fileName', attachment.file_name,
           'mimeType', attachment.mime_type,
@@ -500,7 +501,10 @@ snapshots as (
           'checksum', attachment.checksum,
           'storageUrl', attachment.storage_url,
           'storagePath', attachment.storage_path,
-          'deletedAt', attachment.deleted_at
+          'createdAt', to_char(
+            attachment.created_at at time zone 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+          )
         )
         order by requested.position
       ) filter (where attachment.id is not null),

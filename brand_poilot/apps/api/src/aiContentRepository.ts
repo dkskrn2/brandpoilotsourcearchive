@@ -992,17 +992,27 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
     },
 
     async startAiContentGeneration(input) {
+      const initial = await scopedGeneration(pool, input);
+      if (!initial) throw new Error("ai_content_generation_not_found");
+      if (initial.generation_idempotency_key === input.idempotencyKey) {
+        return mapGeneration(initial);
+      }
+      if (initial.status !== "analysis_ready") {
+        throw new Error("ai_content_generation_not_analysis_ready");
+      }
+      const initialDraft = object(initial.draft_json);
+      const initiallyUsesOwnedContext = initialDraft.analysisSource === "owned";
+      const confirmedBrandIntelligence = initiallyUsesOwnedContext && options.brandIntelligenceProvider
+        ? await options.brandIntelligenceProvider.getConfirmed(input)
+        : undefined;
+      const transactionBrandIntelligenceProvider = initiallyUsesOwnedContext && options.brandIntelligenceProvider
+        ? {
+            getConfirmed: async () => confirmedBrandIntelligence ?? null,
+          }
+        : undefined;
       const client = await pool.connect();
       let transactionOpen = false;
       try {
-        const confirmedBrandIntelligence = options.brandIntelligenceProvider
-          ? await options.brandIntelligenceProvider.getConfirmed(input)
-          : undefined;
-        const transactionBrandIntelligenceProvider = options.brandIntelligenceProvider
-          ? {
-              getConfirmed: async () => confirmedBrandIntelligence ?? null,
-            }
-          : undefined;
         await client.query("BEGIN");
         transactionOpen = true;
         const current = await scopedGeneration(client, input, true);
@@ -1012,11 +1022,14 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           return mapGeneration(current);
         }
         if (current.status !== "analysis_ready") throw new Error("ai_content_generation_not_analysis_ready");
+        if (JSON.stringify(object(current.draft_json)) !== JSON.stringify(initialDraft)) {
+          throw new Error("ai_content_generation_start_conflict");
+        }
         const pendingUpload = await client.query(
           `select id
              from ai_content_attachment_upload_sessions
             where generation_id = $1 and workspace_id = $2 and brand_id = $3
-              and status = 'pending' and expires_at > statement_timestamp()
+              and status = 'pending' and token_expires_at > statement_timestamp()
             limit 1`,
           [input.generationId, input.workspaceId, input.brandId],
         );

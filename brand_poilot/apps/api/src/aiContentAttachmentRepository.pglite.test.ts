@@ -5,6 +5,7 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAiContentAttachmentRepository } from "./aiContentAttachmentRepository.js";
 import { createAiContentRepository } from "./aiContentRepository.js";
+import { createAiContentSubjectRepository } from "./aiContentSubjectRepository.js";
 import type { Pool } from "pg";
 
 const WORKSPACE_ID = "10000000-0000-4000-8000-000000000001";
@@ -84,6 +85,70 @@ describe("AI content attachment lifecycle in PostgreSQL", () => {
   });
 
   afterAll(async () => database.close());
+
+  it("keeps attachments unlocked after a subject snapshot so a later prompt upload can be reserved", async () => {
+    const pool = pglitePool(database);
+    const attachmentRepository = createAiContentAttachmentRepository(pool);
+    const firstSession = await attachmentRepository.createAiContentUploadSession({
+      workspaceId: WORKSPACE_ID,
+      brandId: BRAND_ID,
+      generationId: GENERATION_ID,
+      createdByUserId: USER_ID,
+      attachment: {
+        role: "document",
+        fileName: "subject.txt",
+        mimeType: "text/plain",
+        sizeBytes: 7,
+        checksum: "a".repeat(64),
+      },
+    });
+    const firstAttachment = await attachmentRepository.confirmAiContentUploadSession({
+      workspaceId: WORKSPACE_ID,
+      brandId: BRAND_ID,
+      generationId: GENERATION_ID,
+      createdByUserId: USER_ID,
+      sessionId: firstSession.id,
+      nonce: firstSession.nonce,
+    }, async (stored) => ({
+      storagePath: stored.storagePath,
+      storageUrl: `https://test.public.blob.vercel-storage.com/${stored.storagePath}`,
+      mimeType: stored.mimeType,
+      sizeBytes: stored.sizeBytes,
+    }));
+
+    const subjectRepository = createAiContentSubjectRepository(pool);
+    await subjectRepository.requestSubjectAnalysis({
+      workspaceId: WORKSPACE_ID,
+      brandId: BRAND_ID,
+      generationId: GENERATION_ID,
+      subjectType: "product",
+      sourceUrl: null,
+      attachmentIds: [firstAttachment.id],
+      manualInput: { name: "상품", promotionOrTerms: "", description: "" },
+      brandContext: {},
+      idempotencyKey: "subject-snapshot-before-prompt-upload",
+    });
+
+    const generation = await database.query(
+      "select attachments_locked_at from ai_content_generations where id=$1",
+      [GENERATION_ID],
+    );
+    expect((generation.rows[0] as { attachments_locked_at: unknown } | undefined)?.attachments_locked_at)
+      .toBeNull();
+    await expect(attachmentRepository.createAiContentUploadSession({
+      workspaceId: WORKSPACE_ID,
+      brandId: BRAND_ID,
+      generationId: GENERATION_ID,
+      createdByUserId: USER_ID,
+      attachment: {
+        role: "visual_reference",
+        fileName: "prompt.png",
+        mimeType: "image/png",
+        sizeBytes: 10,
+        checksum: "b".repeat(64),
+      },
+    })).resolves.toMatchObject({ status: "pending", fileName: "prompt.png" });
+  });
 
   it("counts two confirmed attachments plus three pending reservations toward five", async () => {
     const repository = createAiContentAttachmentRepository(pglitePool(database));

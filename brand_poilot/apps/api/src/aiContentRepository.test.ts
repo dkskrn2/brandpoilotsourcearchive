@@ -170,6 +170,18 @@ function createPool(options: {
     get analyzeJobInsertCount() { return analyzeJobInsertCount; },
     get referenceSnapshots() { return referenceSnapshots; },
     setGenerationStatus(status: string) { generation = { ...generation, status }; },
+    setGenerationDraft(draft: Record<string, unknown>) {
+      generation = {
+        ...generation,
+        draft_json: {
+          ...draft,
+          productUrl: typeof draft.productUrl === "string" ? draft.productUrl : "",
+        },
+      };
+    },
+    setGenerationIdempotencyKey(idempotencyKey: string | null) {
+      generation = { ...generation, generation_idempotency_key: idempotencyKey };
+    },
   };
 }
 
@@ -689,6 +701,53 @@ describe("AI content repository", () => {
     })).rejects.toThrow("brand_intelligence_required");
 
     expect(transactionWasOpen).toBe(false);
+  });
+
+  it("returns an idempotent owned replay without calling a throwing provider", async () => {
+    const pool = createPool();
+    const getConfirmed = vi.fn(async () => {
+      throw new Error("provider_unavailable");
+    });
+    const repository = createAiContentRepository(pool as never, {
+      brandIntelligenceProvider: { getConfirmed },
+    });
+    pool.setGenerationStatus("analyzing");
+    pool.setGenerationDraft({ analysisSource: "owned" });
+    pool.setGenerationIdempotencyKey("existing-generation");
+
+    await expect(repository.startAiContentGeneration({
+      ...scope,
+      generationId: "generation-1",
+      idempotencyKey: "existing-generation",
+      outputCount: 1,
+      usageDate: "2026-07-18",
+      dailyGenerationLimit: 10,
+    })).resolves.toMatchObject({ id: "generation-1", status: "analyzing" });
+
+    expect(getConfirmed).not.toHaveBeenCalled();
+  });
+
+  it("starts a non-owned generation without calling the configured provider", async () => {
+    const pool = createPool();
+    const getConfirmed = vi.fn(async () => {
+      throw new Error("provider_unavailable");
+    });
+    const repository = createAiContentRepository(pool as never, {
+      brandIntelligenceProvider: { getConfirmed },
+    });
+    pool.setGenerationStatus("analysis_ready");
+    pool.setGenerationDraft({ analysisSource: "manual" });
+
+    await expect(repository.startAiContentGeneration({
+      ...scope,
+      generationId: "generation-1",
+      idempotencyKey: "non-owned-generation",
+      outputCount: 1,
+      usageDate: "2026-07-18",
+      dailyGenerationLimit: 10,
+    })).resolves.toMatchObject({ id: "generation-1", status: "analyzing" });
+
+    expect(getConfirmed).not.toHaveBeenCalled();
   });
 
   it("claims only the requested content type with a recoverable lease", async () => {

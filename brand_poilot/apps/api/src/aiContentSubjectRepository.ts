@@ -484,7 +484,7 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
             `select id
                from ai_content_attachment_upload_sessions
               where generation_id = $1 and workspace_id = $2 and brand_id = $3
-                and status = 'pending' and expires_at > statement_timestamp()
+                and status = 'pending' and token_expires_at > statement_timestamp()
               limit 1`,
             [input.generationId, input.workspaceId, input.brandId],
           );
