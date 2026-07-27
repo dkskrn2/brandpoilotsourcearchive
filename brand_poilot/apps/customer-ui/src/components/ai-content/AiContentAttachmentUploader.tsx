@@ -64,8 +64,11 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
   const [error, setError] = useState<{ message: string; action: AttachmentLifecycleAction } | null>(null);
   const mountedRef = useRef(true);
 
-  useEffect(() => () => {
-    mountedRef.current = false;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
 
   function changeAttachments(update: (current: GenerationAttachment[]) => GenerationAttachment[]) {

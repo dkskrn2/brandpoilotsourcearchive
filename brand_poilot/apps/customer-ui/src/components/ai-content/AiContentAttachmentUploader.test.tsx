@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { StrictMode, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { AiContentGateway, GenerationAttachment, GenerationAttachmentUpdate } from "../../features/ai-content/types";
 import { ApiRequestError } from "../../lib/apiClient";
@@ -43,6 +43,65 @@ function renderControlled(api: AiContentGateway, initial: Parameters<typeof AiCo
 }
 
 describe("AiContentAttachmentUploader", () => {
+  it("uploads through pending and confirmed state under React StrictMode", async () => {
+    let resolveUpload: ((attachment: GenerationAttachment) => void) | undefined;
+    const api = gateway({
+      uploadAttachment: vi.fn(async () => new Promise<GenerationAttachment>((resolve) => {
+        resolveUpload = resolve;
+      })),
+    });
+    function Harness() {
+      const [attachments, setAttachments] = useState<GenerationAttachment[]>([]);
+      return <AiContentAttachmentUploader
+        gateway={api}
+        brandId="brand-1"
+        generationId="generation-1"
+        attachments={attachments}
+        allowedRoles={["product"]}
+        onChange={(update) => setAttachments((current) => applyAttachmentUpdate(current, update))}
+      />;
+    }
+    render(<StrictMode><Harness /></StrictMode>);
+
+    await userEvent.upload(screen.getByLabelText("제품 이미지"), new File(["image"], "strict.png", { type: "image/png" }));
+    expect(await screen.findByText("strict.png")).toBeVisible();
+    expect(screen.getByText(/업로드 중/)).toBeVisible();
+    expect(api.uploadAttachment).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      resolveUpload?.({
+        id: "strict-server", role: "product", fileName: "strict.png", mimeType: "image/png", size: 5,
+        storagePath: "stored/strict.png", storageUrl: "https://blob/strict.png",
+      });
+    });
+    expect(await screen.findByText(/업로드 완료/)).toBeVisible();
+  });
+
+  it("ignores an upload completion after a real unmount", async () => {
+    let resolveUpload: ((attachment: GenerationAttachment) => void) | undefined;
+    const api = gateway({
+      uploadAttachment: vi.fn(async () => new Promise<GenerationAttachment>((resolve) => {
+        resolveUpload = resolve;
+      })),
+    });
+    const onChange = vi.fn();
+    const view = render(<AiContentAttachmentUploader
+      gateway={api} brandId="brand-1" generationId="generation-1"
+      attachments={[]} allowedRoles={["product"]} onChange={onChange}
+    />);
+
+    await userEvent.upload(screen.getByLabelText("제품 이미지"), new File(["image"], "unmounted.png", { type: "image/png" }));
+    expect(onChange).toHaveBeenCalledOnce();
+    view.unmount();
+    await act(async () => {
+      resolveUpload?.({
+        id: "unmounted-server", role: "product", fileName: "unmounted.png", mimeType: "image/png", size: 5,
+        storagePath: "stored/unmounted.png", storageUrl: "https://blob/unmounted.png",
+      });
+    });
+    expect(onChange).toHaveBeenCalledOnce();
+  });
+
   it("guards selection, retry, and removal callbacks while disabled and restores them when enabled", async () => {
     const api = gateway();
     const failed = {
