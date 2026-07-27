@@ -28,6 +28,7 @@ interface ApiOutput {
 interface ApiGeneration {
   id: string; brandId: string; type: AiContentType; title: string; status: AiContentGeneration["status"];
   currentStage: string | null; draft: Partial<AiContentDraft> | null; analysis: Record<string, unknown>; outputs?: ApiOutput[];
+  attachmentsLockedAt?: string | null; terminalAt?: string | null; retryableUntil?: string | null;
   createdAt: string; updatedAt: string;
 }
 
@@ -165,6 +166,9 @@ function mapGeneration(value: ApiGeneration): AiContentGeneration {
     id: value.id, brandId: value.brandId, title: value.title, type: value.type, status: value.status,
     currentStep: stepByStatus[value.status], draft: normalizeAiContentDraft(value.type, value.draft), analysis: value.analysis,
     outputs: (value.outputs ?? []).map((output) => ({ id: output.id, generationId: output.generationId, title: output.title ?? `결과 ${output.outputIndex}`, status: output.status, artifact: outputArtifact(value.type, output), failureReason: output.failureMessage ?? output.failureCode, downloadedAt: output.downloadedAt })),
+    attachmentsLockedAt: value.attachmentsLockedAt ?? null,
+    terminalAt: value.terminalAt ?? null,
+    retryableUntil: value.retryableUntil ?? null,
     createdAt: value.createdAt, updatedAt: value.updatedAt,
   };
 }

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { Badge } from "../ui/Badge";
 import type {
   AiContentGeneration,
@@ -69,6 +70,21 @@ function isOutputDownloadComplete(status: import("../../features/ai-content/type
   return status === "completed";
 }
 
+function retryRetentionState(retryableUntil: string | null) {
+  if (retryableUntil === null) return { expired: false, deadline: null };
+  const deadline = Date.parse(retryableUntil);
+  if (!Number.isFinite(deadline)) return { expired: false, deadline: null };
+  return { expired: Date.now() >= deadline, deadline };
+}
+
+function localizedRetryDeadline(deadline: number) {
+  return new Intl.DateTimeFormat("ko-KR", {
+    dateStyle: "long",
+    timeStyle: "short",
+    timeZone: "Asia/Seoul",
+  }).format(deadline);
+}
+
 export function AiGenerationOutputList({
   generation,
   downloadedKeys,
@@ -85,6 +101,7 @@ export function AiGenerationOutputList({
   const [retryReason, setRetryReason] = useState<Record<string, string>>({});
   const completedCount = generation.outputs.filter((output) => output.status === "completed").length;
   const type = generation.type;
+  const retryRetention = retryRetentionState(generation.retryableUntil);
 
   return (
     <section className="ai-generation-output-list" aria-labelledby="ai-generation-result-title">
@@ -155,9 +172,20 @@ export function AiGenerationOutputList({
               })()}
             </div>
 
-            {output.status === "failed" ? (
+            {output.status === "failed" && retryRetention.expired ? (
+              <div className="ai-generation-output-list__retry-expired" role="status">
+                <p>첨부파일 보관 기간이 만료되어 이 결과를 다시 생성할 수 없습니다.</p>
+                <p className="small muted">새 콘텐츠 생성 후 파일을 다시 업로드해 주세요.</p>
+                <Link className="button" to="/ai-content/new">새 콘텐츠 생성</Link>
+              </div>
+            ) : output.status === "failed" ? (
               <div className="ai-generation-output-list__retry">
                 <label htmlFor={`retry-reason-${output.id}`}>다시 생성 사유</label>
+                {retryRetention.deadline !== null ? (
+                  <p className="small muted">
+                    다시 생성 가능 기한: {localizedRetryDeadline(retryRetention.deadline)}
+                  </p>
+                ) : null}
                 <div className="ai-generation-output-list__retry-actions">
                   <input
                     id={`retry-reason-${output.id}`}

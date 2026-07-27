@@ -119,6 +119,54 @@ test("publishes selected Instagram feed and story targets without a confirmation
   ] });
 });
 
+test("attachment retry retention blocks an expired failed output without sending retry", async ({ page }) => {
+  let retryRequests = 0;
+  const expired = {
+    ...generation("completed"),
+    status: "partial_failed",
+    attachmentsLockedAt: "2026-07-01T00:00:00.000Z",
+    terminalAt: "2026-07-02T00:00:00.000Z",
+    retryableUntil: "2026-07-17T00:00:00.000Z",
+    outputs: [{
+      ...generation("completed").outputs[0],
+      status: "failed",
+      content: {},
+      manifest: {},
+      manifestUrl: null,
+      failureCode: "image_generation_failed",
+      failureMessage: "이미지 생성 실패",
+    }],
+  };
+  await page.addInitScript((session) => {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof Request ? input.url : String(input), window.location.href);
+      if (url.pathname.endsWith("/auth/me")) return new Response(JSON.stringify(session), { status: 200, headers: { "content-type": "application/json" } });
+      return originalFetch(input, init);
+    };
+  }, authSession);
+  await page.route("**/*", async (route) => {
+    const url = new URL(route.request().url());
+    const isApi = url.port === "4000" || url.pathname.startsWith("/api/");
+    if (!isApi) return route.continue();
+    if (url.pathname.endsWith("/auth/me")) return route.fulfill({ json: authSession });
+    if (url.pathname.endsWith("/ui-status")) return route.fulfill({ json: readyUiStatus });
+    if (url.pathname.endsWith("/channels")) return route.fulfill({ json: [] });
+    if (url.pathname.endsWith("/ai-content/generations/generation-e2e")) return route.fulfill({ json: expired });
+    if (url.pathname.endsWith("/ai-content/outputs/output-e2e/retry")) {
+      retryRequests += 1;
+      return route.fulfill({ status: 410, json: { error: "ai_content_attachment_retention_expired" } });
+    }
+    return route.fulfill({ json: [] });
+  });
+
+  await page.goto("/ai-content/generation-e2e");
+  await expect(page.getByText(/첨부파일 보관 기간이 만료/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /결과 1 다시 생성/ })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "새 콘텐츠 생성" })).toBeVisible();
+  expect(retryRequests).toBe(0);
+});
+
 type ContentType = "card_news" | "blog" | "marketing";
 type SubjectType = "product" | "service";
 

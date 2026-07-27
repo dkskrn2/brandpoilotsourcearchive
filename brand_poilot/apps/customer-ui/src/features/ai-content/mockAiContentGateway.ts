@@ -75,6 +75,7 @@ const jobs: AiContentGeneration[] = [
     currentStep: 5,
     draft: emptyDraft("card_news"),
     outputs: [{ id: "output-generating", generationId: "generation-generating", title: "카드뉴스", status: "generating", artifact: null, failureReason: null, downloadedAt: null }],
+    attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-18T06:30:00.000Z",
     updatedAt: "2026-07-18T06:34:00.000Z"
   },
@@ -87,6 +88,7 @@ const jobs: AiContentGeneration[] = [
     currentStep: 3,
     draft: emptyDraft("marketing"),
     outputs: [{ id: "output-marketing-planning", generationId: "generation-planning", title: "시안 후보", status: "queued", artifact: null, failureReason: null, downloadedAt: null }],
+    attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-18T03:20:00.000Z",
     updatedAt: "2026-07-18T03:40:00.000Z"
   },
@@ -99,6 +101,7 @@ const jobs: AiContentGeneration[] = [
     currentStep: 5,
     draft: emptyDraft("blog"),
     outputs: [{ id: "output-blog", generationId: "generation-completed", title: "운영 가이드", status: "completed", artifact: artifact("output-blog", "html"), failureReason: null, downloadedAt: null }],
+    attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-17T02:00:00.000Z",
     updatedAt: "2026-07-17T02:08:00.000Z"
   },
@@ -121,6 +124,7 @@ const jobs: AiContentGeneration[] = [
         downloadedAt: null
       }
     ],
+    attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-17T01:00:00.000Z",
     updatedAt: "2026-07-17T01:17:00.000Z"
   },
@@ -136,6 +140,7 @@ const jobs: AiContentGeneration[] = [
       { id: "output-marketing-1", generationId: "generation-partial", title: "혜택 강조형", status: "completed", artifact: artifact("output-marketing-1", "image"), failureReason: null, downloadedAt: null },
       { id: "output-marketing-2", generationId: "generation-partial", title: "문제 해결형", status: "failed", artifact: null, failureReason: "이미지 생성 실패", downloadedAt: null }
     ],
+    attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-16T04:00:00.000Z",
     updatedAt: "2026-07-16T04:06:00.000Z"
   },
@@ -148,6 +153,7 @@ const jobs: AiContentGeneration[] = [
     currentStep: 4,
     draft: emptyDraft("blog"),
     outputs: [{ id: "output-failed", generationId: "generation-failed", title: "실패 결과", status: "failed", artifact: null, failureReason: "내부 분석 데이터 오류", downloadedAt: null }],
+    attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-15T12:00:00.000Z",
     updatedAt: "2026-07-15T12:04:00.000Z"
   }
@@ -295,6 +301,9 @@ export function createMockAiContentGateway(): AiContentGateway {
           evidence: [input.draft.productUrl || "등록된 자사 정보"]
         },
         outputs: [],
+        attachmentsLockedAt: null,
+        terminalAt: null,
+        retryableUntil: null,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };

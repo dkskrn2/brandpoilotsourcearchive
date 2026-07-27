@@ -83,6 +83,36 @@ describe("createAiContentApiGateway", () => {
     expect(result.currentStep).toBe(5);
   });
 
+  it("maps attachment lifecycle timestamps without changing existing generation fields", async () => {
+    const requestJson = vi.fn(async () => ({
+      ...generation("partial_failed"),
+      attachmentsLockedAt: "2026-07-18T01:00:00.000Z",
+      terminalAt: "2026-07-18T02:00:00.000Z",
+      retryableUntil: "2026-08-02T02:00:00.000Z",
+    }));
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await expect(gateway.getGeneration("brand-1", "generation-1")).resolves.toMatchObject({
+      status: "partial_failed",
+      currentStep: 5,
+      attachmentsLockedAt: "2026-07-18T01:00:00.000Z",
+      terminalAt: "2026-07-18T02:00:00.000Z",
+      retryableUntil: "2026-08-02T02:00:00.000Z",
+    });
+  });
+
+  it("maps missing legacy lifecycle timestamps to null", async () => {
+    const requestJson = vi.fn(async () => generation("failed"));
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await expect(gateway.getGeneration("brand-1", "generation-1")).resolves.toMatchObject({
+      status: "failed",
+      attachmentsLockedAt: null,
+      terminalAt: null,
+      retryableUntil: null,
+    });
+  });
+
   it("rehydrates only confirmed server attachment records", async () => {
     const confirmed = {
       id: "attachment-1",

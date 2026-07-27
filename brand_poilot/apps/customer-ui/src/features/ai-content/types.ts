@@ -232,6 +232,9 @@ export interface AiContentGeneration {
   draft: AiContentDraft;
   analysis?: Record<string, unknown>;
   outputs: AiGenerationOutput[];
+  attachmentsLockedAt: string | null;
+  terminalAt: string | null;
+  retryableUntil: string | null;
   createdAt: string;
   updatedAt: string;
 }

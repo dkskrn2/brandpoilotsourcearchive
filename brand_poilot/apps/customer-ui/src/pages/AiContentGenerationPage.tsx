@@ -11,7 +11,7 @@ import type {
   AiContentPublishTargetInput,
   AiContentPublishTargetResult,
 } from "../features/ai-content/types";
-import { DEMO_BRAND_ID } from "../lib/apiClient";
+import { ApiRequestError, DEMO_BRAND_ID } from "../lib/apiClient";
 import type { ChannelConnection } from "../types";
 import { useAiContentUsage } from "../features/ai-content/AiContentUsageContext";
 
@@ -127,6 +127,7 @@ export function AiContentGenerationPage({
 
   async function retryOutput(outputId: string, reason: string) {
     try {
+      setActionError(null);
       setRetryingOutputId(outputId);
       const nextOutput = await gateway.retryOutput(brandId, outputId, reason);
       setGeneration((current) => {
@@ -142,6 +143,16 @@ export function AiContentGenerationPage({
         next.add(nextOutput.id);
         return next;
       });
+    } catch (err: unknown) {
+      if (err instanceof ApiRequestError
+        && err.status === 410
+        && err.errorCode === "ai_content_attachment_retention_expired") {
+        setGeneration((current) => current
+          ? { ...current, retryableUntil: new Date(Date.now()).toISOString() }
+          : current);
+        return;
+      }
+      setActionError(err instanceof Error ? err.message : "결과를 다시 생성하지 못했습니다.");
     } finally {
       setRetryingOutputId(null);
     }

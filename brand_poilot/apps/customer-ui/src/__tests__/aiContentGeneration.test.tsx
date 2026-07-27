@@ -10,9 +10,14 @@ import { ApiRequestError } from "../lib/apiClient";
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
-function renderGeneration(generationId: string, instagramConnected = false) {
+function renderGeneration(
+  generationId: string,
+  instagramConnected = false,
+  configureGateway?: (gateway: ReturnType<typeof createMockAiContentGateway>) => void,
+) {
   vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
   const gateway = createMockAiContentGateway();
   const connectedChannels: ChannelConnection[] = instagramConnected ? [{
@@ -27,6 +32,7 @@ function renderGeneration(generationId: string, instagramConnected = false) {
   }] : [];
   gateway.listChannels = vi.fn(async () => connectedChannels);
   gateway.publishOutput = vi.fn(gateway.publishOutput);
+  configureGateway?.(gateway);
   const view = render(
     <MemoryRouter initialEntries={[`/ai-content/${generationId}`]}>
       <Routes>
@@ -77,6 +83,98 @@ describe("AiContentGenerationPage", () => {
     expect(await within(failedOutputRow).findByText("대기")).toBeVisible();
     expect(within(failedOutputRow).queryByRole("button", { name: /결과 2 다시 생성/ })).not.toBeInTheDocument();
     expect(within(failedOutputRow).queryByText("실패 사유: 이미지 생성 실패")).not.toBeInTheDocument();
+  });
+
+  it("shows the localized retry deadline and form before attachment retention expires", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-20T00:00:00.000Z"));
+    renderGeneration("generation-partial", false, (gateway) => {
+      const getGeneration = gateway.getGeneration.bind(gateway);
+      gateway.getGeneration = vi.fn(async (brandId, generationId) => ({
+        ...await getGeneration(brandId, generationId),
+        retryableUntil: "2026-07-21T00:00:00.000Z",
+      }));
+    });
+
+    expect(await screen.findByText(/다시 생성 가능 기한: 2026년 7월 21일 오전 9:00/)).toBeVisible();
+    expect(screen.getByRole("button", { name: /결과 2 다시 생성/ })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["exact deadline", "2026-07-21T00:00:00.000Z"],
+    ["after deadline", "2026-07-20T23:59:59.999Z"],
+  ])("removes retry at %s and requires a new generation with file re-upload", async (_label, retryableUntil) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-21T00:00:00.000Z"));
+    renderGeneration("generation-partial", false, (gateway) => {
+      const getGeneration = gateway.getGeneration.bind(gateway);
+      gateway.getGeneration = vi.fn(async (brandId, generationId) => ({
+        ...await getGeneration(brandId, generationId),
+        retryableUntil,
+      }));
+    });
+
+    expect(await screen.findByText(/첨부파일 보관 기간이 만료/)).toBeVisible();
+    expect(screen.getByRole("link", { name: "새 콘텐츠 생성" })).toHaveAttribute("href", "/ai-content/new");
+    expect(screen.getByText(/파일을 다시 업로드/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: /결과 2 다시 생성/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps the legacy retry form when the API has no retention timestamp", async () => {
+    renderGeneration("generation-partial");
+
+    expect(await screen.findByRole("button", { name: /결과 2 다시 생성/ })).toBeInTheDocument();
+    expect(screen.queryByText(/첨부파일 보관 기간이 만료/)).not.toBeInTheDocument();
+  });
+
+  it("converges a stale retry after API 410 while preserving completed output actions", async () => {
+    const user = userEvent.setup();
+    const { gateway } = renderGeneration("generation-partial", true, (configuredGateway) => {
+      const getGeneration = configuredGateway.getGeneration.bind(configuredGateway);
+      configuredGateway.getGeneration = vi.fn(async (brandId, generationId) => {
+        const result = await getGeneration(brandId, generationId);
+        return {
+          ...result,
+          outputs: result.outputs.map((output, index) => index === 0 && output.artifact
+            ? {
+                ...output,
+                artifact: {
+                  ...output.artifact,
+                  assets: [{
+                    role: "asset",
+                    url: "https://assets.test/completed.png",
+                    fileName: "completed.png",
+                    mimeType: "image/png",
+                    width: 1080,
+                    height: 1080,
+                  }],
+                },
+              }
+            : output),
+        };
+      });
+      configuredGateway.retryOutput = vi.fn(async () => {
+        throw new ApiRequestError({
+          status: 410,
+          errorCode: "ai_content_attachment_retention_expired",
+        });
+      });
+    });
+
+    const rows = await screen.findAllByRole("listitem");
+    const failedRow = rows[1];
+    const publishSelection = screen.getByRole("checkbox", { name: "게시물" });
+    await user.click(publishSelection);
+    await user.type(within(failedRow).getByLabelText("문제 해결형 다시 생성 사유"), "다시 생성");
+    await user.click(within(failedRow).getByRole("button", { name: /결과 2 다시 생성/ }));
+
+    expect(await within(failedRow).findByText(/첨부파일 보관 기간이 만료/)).toBeVisible();
+    expect(within(failedRow).queryByRole("button", { name: /결과 2 다시 생성/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "혜택 강조형 결과 ZIP 다운로드" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "전체 ZIP" })).toBeEnabled();
+    expect(publishSelection).toBeChecked();
+    expect(screen.getByRole("button", { name: "선택한 1개 유형 게시" })).toBeEnabled();
+    expect(gateway.retryOutput).toHaveBeenCalledTimes(1);
   });
 
   it("shows blog/download-only contracts", async () => {
