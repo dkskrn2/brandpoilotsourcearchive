@@ -16,6 +16,8 @@ function row(id: string, status = "analyzing") {
     generation_input_snapshot: null,
     subject_analysis_snapshot: null,
     attachments_locked_at: null as string | null,
+    terminal_at: null as string | null,
+    retryable_until: null as string | null,
     error_code: null,
     error_message: null,
     created_at: "2026-07-18T00:00:00.000Z",
@@ -199,6 +201,9 @@ function createWorkerPool(options: {
   subjectAnalysisSnapshot?: Record<string, unknown>;
   qualityBrief?: Record<string, unknown>;
   priorGeneratePayload?: Record<string, unknown>;
+  retryable?: boolean;
+  retryBoundary?: "before" | "equal" | "after";
+  deletionStatus?: "deleting" | "deleted" | null;
 } = {}) {
   const sql: string[] = [];
   const generatedJobPayloads: unknown[] = [];
@@ -248,6 +253,27 @@ function createWorkerPool(options: {
       ) {
         return options.priorGeneratePayload
           ? { rows: [{ payload_json: structuredClone(options.priorGeneratePayload) }], rowCount: 1 }
+          : { rows: [], rowCount: 0 };
+      }
+      if (query.includes("from ai_content_generations") && query.includes("retryable_until > statement_timestamp()")) {
+        const retryable = options.retryBoundary
+          ? options.retryBoundary === "before"
+          : options.retryable ?? true;
+        return {
+          rows: [{
+            ...generation,
+            terminal_at: "2026-07-18T00:00:00.000Z",
+            retryable_until: options.retryBoundary === "after"
+              ? "2026-08-01T23:59:59.999Z"
+              : "2026-08-02T00:00:00.000Z",
+            retryable,
+          }],
+          rowCount: 1,
+        };
+      }
+      if (query.includes("from ai_content_attachment_deletion_jobs") && query.includes("for update")) {
+        return options.deletionStatus
+          ? { rows: [{ status: options.deletionStatus }], rowCount: 1 }
           : { rows: [], rowCount: 0 };
       }
       if (query.includes("select * from ai_content_generation_jobs")) return { rows: [{ ...job }], rowCount: 1 };
@@ -319,6 +345,16 @@ function createWorkerPool(options: {
       if (query.includes("update ai_content_generation_outputs") && query.includes("failure_code")) {
         outputStatus = String(params[1]);
         return { rows: [], rowCount: 1 };
+      }
+      if (
+        query.includes("select generation_id")
+        && query.includes("from ai_content_generation_outputs")
+        && !query.includes("for update")
+      ) {
+        return {
+          rows: [{ generation_id: "generation-1" }],
+          rowCount: 1,
+        };
       }
       if (query.includes("from ai_content_generation_outputs output") && query.includes("for update of output")) {
         return { rows: [{ id: "output-1", generation_id: "generation-1", workspace_id: "workspace-1", brand_id: "brand-1", status: outputStatus, type: "card_news" }], rowCount: 1 };
@@ -417,6 +453,46 @@ const contentGenerationInputV2Fixture = {
 };
 
 describe("AI content repository", () => {
+  it("returns only public lifecycle fields and never exposes the immutable input snapshot", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("from ai_content_generation_outputs")) {
+        return { rows: [], rowCount: 0 };
+      }
+      return {
+        rows: [{
+          ...row("generation-1", "failed"),
+          attachments_locked_at: "2026-07-18T01:00:00.000Z",
+          terminal_at: "2026-07-18T02:00:00.000Z",
+          retryable_until: "2026-08-02T02:00:00.000Z",
+          generation_input_snapshot: {
+            brandContext: { secret: "internal" },
+            attachments: [{
+              storagePath: "private/path.png",
+              storageUrl: "https://blob.example.com/private/path.png",
+            }],
+          },
+          subject_analysis_snapshot: {
+            brandContext: { secret: "internal" },
+          },
+        }],
+        rowCount: 1,
+      };
+    });
+    const repository = createAiContentRepository({ query } as never);
+
+    const [generation] = await repository.listAiContentGenerations(scope);
+
+    expect(generation).toMatchObject({
+      attachmentsLockedAt: "2026-07-18T01:00:00.000Z",
+      terminalAt: "2026-07-18T02:00:00.000Z",
+      retryableUntil: "2026-08-02T02:00:00.000Z",
+    });
+    expect(generation).not.toHaveProperty("generationInputSnapshot");
+    expect(generation).not.toHaveProperty("subjectAnalysisSnapshot");
+    expect(JSON.stringify(generation)).not.toContain("private/path.png");
+    expect(JSON.stringify(generation)).not.toContain("brandContext");
+  });
+
   it("returns source URL ids for blog references so they can be snapshotted later", async () => {
     const pool = createPool();
     const repository = createAiContentRepository(pool as never);
@@ -813,7 +889,7 @@ describe("AI content repository", () => {
     expect(first.status).toBe("completed");
   });
 
-  it("deletes temporary attachments after every output completes", async () => {
+  it("retains temporary attachments after every output completes", async () => {
     const pool = createWorkerPool();
     const deleteAttachments = vi.fn(async () => undefined);
     const repository = createAiContentRepository(pool as never, { deleteAttachments });
@@ -825,9 +901,8 @@ describe("AI content repository", () => {
       manifest: { version: "ai-content.v1", type: "card_news", title: "여름 추천", assets: [{ role: "slide", url: "https://blob.example.com/slide.png", fileName: "slide.png", mimeType: "image/png", width: 1080, height: 1080, index: 1 }], content: { caption: "내용", hashtags: ["여름"], cta: "저장하세요" } },
     });
 
-    expect(deleteAttachments).toHaveBeenCalledWith(["https://blob.example.com/reference.png"]);
-    expect(pool.sql.join("\n")).toContain("update ai_content_generation_attachments");
-    expect(pool.sql.join("\n")).toContain("deleted_at = now()");
+    expect(deleteAttachments).not.toHaveBeenCalled();
+    expect(pool.sql.join("\n")).not.toContain("deleted_at = now()");
   });
 
   it("keeps temporary attachments while another output is pending", async () => {
@@ -849,7 +924,7 @@ describe("AI content repository", () => {
   it.each([
     { name: "all outputs fail", poolOptions: { totalOutputs: 1 } },
     { name: "some outputs fail", poolOptions: { totalOutputs: 2, completedOutputs: 1 } },
-  ])("deletes temporary attachments when $name", async ({ poolOptions }) => {
+  ])("retains temporary attachments when $name", async ({ poolOptions }) => {
     const pool = createWorkerPool(poolOptions);
     const deleteAttachments = vi.fn(async () => undefined);
     const repository = createAiContentRepository(pool as never, { deleteAttachments });
@@ -865,10 +940,10 @@ describe("AI content repository", () => {
     });
 
     expect(["failed", "partial_failed"]).toContain(generation.status);
-    expect(deleteAttachments).toHaveBeenCalledWith(["https://blob.example.com/reference.png"]);
+    expect(deleteAttachments).not.toHaveBeenCalled();
   });
 
-  it("keeps final manifest assets while deleting temporary originals", async () => {
+  it("does not perform provider deletion while final manifest assets are recorded", async () => {
     const finalUrl = "https://blob.example.com/final-slide.png";
     const pool = createWorkerPool({
       attachmentUrls: ["https://blob.example.com/reference.png", finalUrl],
@@ -884,11 +959,11 @@ describe("AI content repository", () => {
       manifest: { version: "ai-content.v1", type: "card_news", title: "여름 추천", assets: [{ role: "slide", url: finalUrl, fileName: "slide.png", mimeType: "image/png", width: 1080, height: 1080, index: 1 }], content: { caption: "내용", hashtags: ["여름"], cta: "저장하세요" } },
     });
 
-    expect(deleteAttachments).toHaveBeenCalledWith(["https://blob.example.com/reference.png"]);
-    expect(pool.sql.join("\n")).toContain("select manifest_url, artifact_manifest_json");
+    expect(deleteAttachments).not.toHaveBeenCalled();
+    expect(pool.sql.join("\n")).not.toContain("select manifest_url, artifact_manifest_json");
   });
 
-  it("does not mark attachments deleted when blob deletion fails", async () => {
+  it("does not invoke the legacy terminal cleanup retry path", async () => {
     const pool = createWorkerPool();
     const deleteAttachments = vi.fn()
       .mockRejectedValueOnce(new Error("blob unavailable"))
@@ -908,10 +983,10 @@ describe("AI content repository", () => {
 
     pool.enablePendingCleanup();
     await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
-    expect(deleteAttachments).toHaveBeenCalledTimes(2);
-    expect(pool.sql.join("\n")).toContain("select terminal_generation.id");
-    expect(pool.sql.join("\n")).toContain("jsonb_array_elements");
-    expect(pool.sql.join("\n")).toContain("deleted_at = now()");
+    expect(deleteAttachments).not.toHaveBeenCalled();
+    expect(pool.sql.join("\n")).not.toContain("select terminal_generation.id");
+    expect(pool.sql.join("\n")).not.toContain("jsonb_array_elements");
+    expect(pool.sql.join("\n")).not.toContain("deleted_at = now()");
   });
 
   it("rejects an analysis result with fewer than two concrete evidence items", async () => {
@@ -1091,10 +1166,222 @@ describe("AI content repository", () => {
     expect(pool.sql.join("\n")).toContain("status = 'generation_failed'");
   });
 
+  it("records the exact 15-day retention window on every generation terminal transition", async () => {
+    const completed = createWorkerPool({ totalOutputs: 1 });
+    const completedRepository = createAiContentRepository(completed as never);
+    const completedClaim = await completedRepository.claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-1",
+      leaseSeconds: 180,
+    });
+    await completedRepository.completeAiContentJob({
+      jobId: "job-1",
+      workerId: "card-worker-1",
+      leaseToken: completedClaim!.leaseToken!,
+      skillVersion: "card-news-skill.v5",
+      jobType: "generate",
+      manifestUrl: "https://blob.example.com/manifest.json",
+      manifest: {
+        version: "ai-content.v1",
+        type: "card_news",
+        title: "완료",
+        assets: [{
+          role: "slide",
+          url: "https://blob.example.com/slide.png",
+          fileName: "slide.png",
+          mimeType: "image/png",
+          width: 1080,
+          height: 1080,
+          index: 1,
+        }],
+        content: { caption: "내용", hashtags: ["완료"], cta: "저장하세요" },
+      },
+    });
+
+    const failed = createWorkerPool({ totalOutputs: 2, completedOutputs: 1 });
+    const failedRepository = createAiContentRepository(failed as never);
+    const failedClaim = await failedRepository.claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-1",
+      leaseSeconds: 180,
+    });
+    await failedRepository.failAiContentJob({
+      jobId: "job-1",
+      workerId: "card-worker-1",
+      leaseToken: failedClaim!.leaseToken!,
+      errorCode: "generation_failed",
+      errorMessage: "failed",
+      retryable: false,
+    });
+
+    for (const statements of [completed.sql.join("\n"), failed.sql.join("\n")]) {
+      expect(statements).toContain("terminal_at = case");
+      expect(statements).toContain("retryable_until = case");
+      expect(statements).toContain("interval '15 days'");
+      expect(statements).toContain("status not in ('completed','partial_failed','failed')");
+    }
+  });
+
+  it("records retention for non-retryable analysis failure and exhausted leases", async () => {
+    const analysis = createWorkerPool({ jobType: "analyze" });
+    const analysisRepository = createAiContentRepository(analysis as never);
+    const claim = await analysisRepository.claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-1",
+      leaseSeconds: 180,
+    });
+    await analysisRepository.failAiContentJob({
+      jobId: "job-1",
+      workerId: "card-worker-1",
+      leaseToken: claim!.leaseToken!,
+      errorCode: "analysis_failed",
+      errorMessage: "failed",
+      retryable: false,
+    });
+    const exhausted = createWorkerPool({ exhaustedJob: true });
+    await createAiContentRepository(exhausted as never).claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-1",
+      leaseSeconds: 180,
+    });
+
+    for (const statements of [analysis.sql.join("\n"), exhausted.sql.join("\n")]) {
+      expect(statements).toContain("terminal_at");
+      expect(statements).toContain("retryable_until");
+      expect(statements).toContain("interval '15 days'");
+    }
+  });
+
   it("only retries failed outputs", async () => {
     const pool = createWorkerPool({ outputStatus: "completed" });
     const repository = createAiContentRepository(pool as never);
     await expect(repository.retryAiContentOutput({ ...scope, outputId: "output-1" })).rejects.toThrow("ai_content_output_not_failed");
+  });
+
+  it("uses the strict DB-time retention boundary before, at, and after expiry", async () => {
+    const before = createWorkerPool({
+      outputStatus: "failed",
+      retryBoundary: "before",
+      priorGeneratePayload: {
+        generationId: "generation-1",
+        outputId: "output-1",
+        contentGenerationInput: contentGenerationInputV2Fixture,
+      },
+    });
+    await expect(createAiContentRepository(before as never).retryAiContentOutput({
+      ...scope,
+      outputId: "output-1",
+    })).resolves.toMatchObject({ status: "queued" });
+
+    for (const retryBoundary of ["equal", "after"] as const) {
+      const pool = createWorkerPool({ outputStatus: "failed", retryBoundary });
+      const repository = createAiContentRepository(pool as never);
+      await expect(repository.retryAiContentOutput({ ...scope, outputId: "output-1" }))
+        .rejects.toThrow("ai_content_attachment_retention_expired");
+    }
+  });
+
+  it("locks generation then output then deletion jobs and rejects a committed deletion", async () => {
+    const pool = createWorkerPool({
+      outputStatus: "failed",
+      retryable: true,
+      deletionStatus: "deleting",
+      priorGeneratePayload: {
+        generationId: "generation-1",
+        outputId: "output-1",
+        contentGenerationInput: {
+          ...contentGenerationInputV2Fixture,
+          attachments: [{
+            id: "attachment-1",
+            role: "product",
+            fileName: "product.png",
+            mimeType: "image/png",
+            sizeBytes: 100,
+            checksum: "a".repeat(64),
+            storageUrl: "https://blob.example.com/product.png",
+            storagePath: "retained/product.png",
+          }],
+        },
+      },
+    });
+    const repository = createAiContentRepository(pool as never);
+
+    await expect(repository.retryAiContentOutput({ ...scope, outputId: "output-1" }))
+      .rejects.toThrow("ai_content_attachment_retention_expired");
+    const statements = pool.sql;
+    const generationLock = statements.findIndex((sql) =>
+      sql.includes("from ai_content_generations") && sql.includes("for update"));
+    const outputLock = statements.findIndex((sql) =>
+      sql.includes("from ai_content_generation_outputs") && sql.includes("for update"));
+    const deletionLock = statements.findIndex((sql) =>
+      sql.includes("from ai_content_attachment_deletion_jobs") && sql.includes("for update"));
+    expect(generationLock).toBeGreaterThanOrEqual(0);
+    expect(outputLock).toBeGreaterThan(generationLock);
+    expect(deletionLock).toBeGreaterThan(outputLock);
+  });
+
+  it("keeps retry job creation and its snapshot hold inside one transaction", async () => {
+    const pool = createWorkerPool({
+      outputStatus: "failed",
+      retryable: true,
+      priorGeneratePayload: {
+        outputId: "output-1",
+        generationId: "generation-1",
+        contentGenerationInput: contentGenerationInputV2Fixture,
+      },
+    });
+    await createAiContentRepository(pool as never).retryAiContentOutput({
+      ...scope,
+      outputId: "output-1",
+    });
+
+    const begin = pool.sql.indexOf("BEGIN");
+    const insert = pool.sql.findIndex((sql) =>
+      sql.includes("insert into ai_content_generation_jobs") && sql.includes("'generate'"));
+    const commit = pool.sql.indexOf("COMMIT");
+    expect(begin).toBeGreaterThanOrEqual(0);
+    expect(insert).toBeGreaterThan(begin);
+    expect(commit).toBeGreaterThan(insert);
+    expect(pool.generatedJobPayloads.at(-1)).toEqual({
+      outputId: "output-1",
+      generationId: "generation-1",
+      contentGenerationInput: contentGenerationInputV2Fixture,
+    });
+  });
+
+  it("never immediately deletes retained attachment blobs on terminal completion", async () => {
+    const pool = createWorkerPool();
+    const deleteAttachments = vi.fn(async () => undefined);
+    const repository = createAiContentRepository(pool as never, { deleteAttachments });
+    const claimed = await repository.claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-1",
+      leaseSeconds: 180,
+    });
+    await repository.completeAiContentJob({
+      jobId: "job-1",
+      workerId: "card-worker-1",
+      leaseToken: claimed!.leaseToken!,
+      skillVersion: "card-news-skill.v5",
+      jobType: "generate",
+      manifestUrl: "https://blob.example.com/manifest.json",
+      manifest: {
+        version: "ai-content.v1",
+        type: "card_news",
+        title: "완료",
+        assets: [{
+          role: "slide",
+          url: "https://blob.example.com/slide.png",
+          fileName: "slide.png",
+          mimeType: "image/png",
+          width: 1080,
+          height: 1080,
+          index: 1,
+        }],
+        content: { caption: "내용", hashtags: ["완료"], cta: "저장하세요" },
+      },
+    });
+    expect(deleteAttachments).not.toHaveBeenCalled();
   });
 
   it("reuses the stored content-generation-input.v2 snapshot when retrying a failed output", async () => {

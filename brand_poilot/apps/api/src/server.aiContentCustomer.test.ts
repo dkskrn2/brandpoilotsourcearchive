@@ -104,6 +104,9 @@ function generation(
     createdAt: "2026-07-18T00:00:00.000Z",
     updatedAt: "2026-07-18T00:00:00.000Z",
     completedAt: null,
+    attachmentsLockedAt: null,
+    terminalAt: null,
+    retryableUntil: null,
   };
 }
 
@@ -855,6 +858,25 @@ describe("AI content customer routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual(retriedRecord);
     expect(repository.retryAiContentOutput).toHaveBeenCalledWith({ workspaceId, brandId, outputId: fixtureOutputId });
+    await app.close();
+  });
+
+  it("returns HTTP 410 when output retry attachment retention has expired", async () => {
+    const { app, repository } = setup();
+    vi.mocked(repository.retryAiContentOutput).mockRejectedValueOnce(
+      new Error("ai_content_attachment_retention_expired"),
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/retry`,
+      headers: auth,
+    });
+
+    expect(response.statusCode).toBe(410);
+    expect(response.json()).toEqual({
+      error: "ai_content_attachment_retention_expired",
+    });
     await app.close();
   });
 

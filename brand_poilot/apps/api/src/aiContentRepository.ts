@@ -47,7 +47,9 @@ export interface AiContentGenerationRecord {
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
-  subjectAnalysisSnapshot?: ContentGenerationInputV2;
+  attachmentsLockedAt: string | null;
+  terminalAt: string | null;
+  retryableUntil: string | null;
   outputs?: AiContentOutputRecord[];
 }
 
@@ -498,7 +500,9 @@ function mapGeneration(row: Record<string, unknown>): AiContentGenerationRecord 
     title: String(row.title), status: String(row.status), currentStage: row.current_stage ? String(row.current_stage) : null,
     draft: object(row.draft_json), analysis: object(row.analysis_json), errorCode: row.error_code ? String(row.error_code) : null,
     errorMessage: row.error_message ? String(row.error_message) : null, createdAt: iso(row.created_at)!, updatedAt: iso(row.updated_at)!, completedAt: iso(row.completed_at),
-    subjectAnalysisSnapshot: row.subject_analysis_snapshot ? parseContentGenerationInputV2(row.subject_analysis_snapshot) : undefined,
+    attachmentsLockedAt: iso(row.attachments_locked_at),
+    terminalAt: iso(row.terminal_at),
+    retryableUntil: iso(row.retryable_until),
   };
 }
 
@@ -529,7 +533,7 @@ async function scopedGeneration(client: Queryable, input: BrandGenerationScope, 
   const result = await client.query(
     `select id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
             generation_idempotency_key, subject_analysis_snapshot, generation_input_snapshot, attachments_locked_at,
-            error_code, error_message, created_at, updated_at, completed_at
+            terminal_at, retryable_until, error_code, error_message, created_at, updated_at, completed_at
        from ai_content_generations
       where id = $1 and workspace_id = $2 and brand_id = $3${lock ? " for update" : ""}`,
     [input.generationId, input.workspaceId, input.brandId],
@@ -680,6 +684,7 @@ function mapJob(row: Record<string, unknown>): AiContentJobRecord {
 async function generationById(client: Queryable, generationId: string) {
   const result = await client.query(
     `select id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
+            attachments_locked_at, terminal_at, retryable_until,
             error_code, error_message, created_at, updated_at, completed_at
        from ai_content_generations where id = $1`,
     [generationId],
@@ -711,25 +716,20 @@ async function recalculateGenerationStatus(client: Queryable, generationId: stri
     `update ai_content_generations
         set status = $2, current_stage = $3,
             completed_at = case when $4 then coalesce(completed_at, now()) else null end,
+            terminal_at = case
+              when $4::boolean and status not in ('completed','partial_failed','failed')
+                then statement_timestamp()
+              else terminal_at
+            end,
+            retryable_until = case
+              when $4::boolean and status not in ('completed','partial_failed','failed')
+                then statement_timestamp() + interval '15 days'
+              else retryable_until
+            end,
             updated_at = now()
       where id = $1`,
     [generationId, status, terminal ? "completed" : "generation", terminal],
   );
-}
-
-function collectManifestUrls(rows: Array<Record<string, unknown>>): Set<string> {
-  const urls = new Set<string>();
-  for (const row of rows) {
-    if (typeof row.manifest_url === "string" && row.manifest_url) urls.add(row.manifest_url);
-    const manifest = object(row.artifact_manifest_json);
-    const assets = Array.isArray(manifest.assets) ? manifest.assets : [];
-    for (const asset of assets) {
-      if (!asset || typeof asset !== "object" || Array.isArray(asset)) continue;
-      const url = (asset as Record<string, unknown>).url;
-      if (typeof url === "string" && url) urls.add(url);
-    }
-  }
-  return urls;
 }
 
 function generationInputForWorker(
@@ -746,87 +746,6 @@ function generationInputForWorker(
     ...parsed,
     message: { ...parsed.message, qualityBrief: object(finalBrief) },
   };
-}
-
-async function deleteTerminalGenerationAttachments(
-  pool: Pool,
-  generation: AiContentGenerationRecord,
-  deleteAttachments?: (urls: string[]) => Promise<void>,
-) {
-  if (!["completed", "partial_failed", "failed"].includes(generation.status) || !deleteAttachments) return;
-  const attachments = await pool.query(
-    `select id, storage_url
-       from ai_content_generation_attachments
-      where generation_id = $1 and workspace_id = $2 and brand_id = $3 and deleted_at is null`,
-    [generation.id, generation.workspaceId, generation.brandId],
-  );
-  if (!attachments.rowCount) return;
-  const outputs = await pool.query(
-    `select manifest_url, artifact_manifest_json
-       from ai_content_generation_outputs
-      where generation_id = $1 and workspace_id = $2 and brand_id = $3
-        and status = 'completed'`,
-    [generation.id, generation.workspaceId, generation.brandId],
-  );
-  const preservedUrls = collectManifestUrls(outputs.rows as Array<Record<string, unknown>>);
-  const temporaryAttachments = attachments.rows.filter((row) => !preservedUrls.has(String(row.storage_url)));
-  if (!temporaryAttachments.length) return;
-  try {
-    await deleteAttachments(temporaryAttachments.map((row) => String(row.storage_url)));
-  } catch {
-    return;
-  }
-  await pool.query(
-    `update ai_content_generation_attachments
-        set deleted_at = now()
-      where generation_id = $1 and workspace_id = $2 and brand_id = $3
-        and id = any($4::uuid[]) and deleted_at is null`,
-    [generation.id, generation.workspaceId, generation.brandId, temporaryAttachments.map((row) => String(row.id))],
-  );
-}
-
-async function retryPendingTerminalAttachmentCleanup(
-  pool: Pool,
-  deleteAttachments?: (urls: string[]) => Promise<void>,
-) {
-  if (!deleteAttachments) return;
-  const pending = await pool.query(
-    `select terminal_generation.id
-       from ai_content_generations terminal_generation
-      where terminal_generation.status in ('completed', 'partial_failed', 'failed')
-        and exists (
-          select 1
-            from ai_content_generation_attachments attachment
-           where attachment.generation_id = terminal_generation.id
-             and attachment.deleted_at is null
-             and not exists (
-               select 1
-                 from ai_content_generation_outputs output
-                where output.generation_id = terminal_generation.id
-                  and output.status = 'completed'
-                  and (
-                    output.manifest_url = attachment.storage_url
-                    or exists (
-                      select 1
-                        from jsonb_array_elements(
-                          case
-                            when jsonb_typeof(output.artifact_manifest_json->'assets') = 'array'
-                              then output.artifact_manifest_json->'assets'
-                            else '[]'::jsonb
-                          end
-                        ) asset
-                       where asset->>'url' = attachment.storage_url
-                    )
-                  )
-             )
-        )
-      order by terminal_generation.completed_at nulls last, terminal_generation.updated_at
-      limit 3`,
-  );
-  for (const row of pending.rows) {
-    const generation = await generationById(pool, String(row.id));
-    await deleteTerminalGenerationAttachments(pool, generation, deleteAttachments);
-  }
 }
 
 export function createAiContentRepository(pool: Pool, options: AiContentRepositoryOptions = {}): AiContentRepository {
@@ -889,6 +808,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         await client.query("BEGIN");
         const existing = await client.query(
     `select id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json, generation_idempotency_key,
+                  attachments_locked_at, terminal_at, retryable_until,
                   error_code, error_message, created_at, updated_at, completed_at
              from ai_content_generations
             where workspace_id = $1 and brand_id = $2 and analysis_idempotency_key = $3
@@ -929,6 +849,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
            values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9)
            on conflict (brand_id, analysis_idempotency_key) do nothing
            returning id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
+                     attachments_locked_at, terminal_at, retryable_until,
                      error_code, error_message, created_at, updated_at, completed_at`,
           [input.workspaceId, input.brandId, input.type, input.title, initialStatus, initialStage, JSON.stringify(draft), JSON.stringify(initialAnalysis), input.idempotencyKey],
         );
@@ -936,6 +857,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         if (!generation) {
           const conflicted = await client.query(
             `select id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
+                    attachments_locked_at, terminal_at, retryable_until,
                     error_code, error_message, created_at, updated_at, completed_at
                from ai_content_generations where workspace_id = $1 and brand_id = $2 and analysis_idempotency_key = $3`,
             [input.workspaceId, input.brandId, input.idempotencyKey],
@@ -980,6 +902,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           `update ai_content_generations set draft_json = $4::jsonb, updated_at = now()
             where id = $1 and workspace_id = $2 and brand_id = $3
             returning id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
+                      attachments_locked_at, terminal_at, retryable_until,
                       error_code, error_message, created_at, updated_at, completed_at`,
           [input.generationId, input.workspaceId, input.brandId, JSON.stringify({ ...object(input.draft), origin: "manual" })],
         );
@@ -1073,7 +996,10 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
               getReferences: (scope) => loadGenerationReferences(client, scope),
               getAttachments: (scope) => loadGenerationAttachments(client, scope),
             },
-            mapGeneration(current),
+            {
+              ...mapGeneration(current),
+              subjectAnalysisSnapshot: current.subject_analysis_snapshot,
+            },
             {
               outputCount: input.outputCount,
               ...(current.generation_input_snapshot
@@ -1093,6 +1019,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
                   attachments_locked_at = statement_timestamp(), updated_at = now()
             where id = $1 and workspace_id = $2 and brand_id = $3 and status = 'analysis_ready'
             returning id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
+                      attachments_locked_at, terminal_at, retryable_until,
                       error_code, error_message, created_at, updated_at, completed_at`,
           [input.generationId, input.workspaceId, input.brandId, input.idempotencyKey, waitForOwnedContext ? "owned_context" : "analysis", generationInput ? JSON.stringify(generationInput) : null],
         );
@@ -1147,6 +1074,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
     async listAiContentGenerations(input) {
       const result = await pool.query(
         `select id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
+                attachments_locked_at, terminal_at, retryable_until,
                 error_code, error_message, created_at, updated_at, completed_at
            from ai_content_generations
           where workspace_id = $1 and brand_id = $2
@@ -1250,7 +1178,6 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
     },
 
     async claimAiContentJob(input) {
-      await retryPendingTerminalAttachmentCleanup(pool, options.deleteAttachments).catch(() => undefined);
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
@@ -1267,7 +1194,17 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             await client.query(
               `update ai_content_generations
                   set status = 'failed', error_code = 'ai_content_job_lease_exhausted',
-                      error_message = 'Worker lease expired after the final attempt', updated_at = now()
+                      error_message = 'Worker lease expired after the final attempt',
+                      terminal_at = case
+                        when status not in ('completed','partial_failed','failed') then statement_timestamp()
+                        else terminal_at
+                      end,
+                      retryable_until = case
+                        when status not in ('completed','partial_failed','failed')
+                          then statement_timestamp() + interval '15 days'
+                        else retryable_until
+                      end,
+                      updated_at = now()
                 where id = $1`,
               [expired.generation_id],
             );
@@ -1419,7 +1356,6 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           if (job.worker_id !== input.workerId || job.lease_token !== input.leaseToken) throw new Error("ai_content_job_lease_invalid");
           const generation = await generationById(client, String(job.generation_id));
           await client.query("COMMIT");
-          await deleteTerminalGenerationAttachments(pool, generation, options.deleteAttachments);
           return generation;
         }
         if (
@@ -1528,7 +1464,6 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         if (input.jobType === "generate") await recalculateGenerationStatus(client, String(job.generation_id));
         const generation = await generationById(client, String(job.generation_id));
         await client.query("COMMIT");
-        await deleteTerminalGenerationAttachments(pool, generation, options.deleteAttachments);
         return generation;
       } catch (error) {
         await client.query("ROLLBACK");
@@ -1546,7 +1481,6 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         if (job.status === "failed" || (job.status === "queued" && job.error_code === input.errorCode)) {
           const generation = await generationById(client, String(job.generation_id));
           await client.query("COMMIT");
-          await deleteTerminalGenerationAttachments(pool, generation, options.deleteAttachments);
           return generation;
         }
         if (
@@ -1571,9 +1505,20 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         if (job.job_type === "analyze") {
           await client.query(
             `update ai_content_generations
-                set status = $2, current_stage = 'analysis', error_code = $3, error_message = $4, updated_at = now()
+                set status = $2, current_stage = 'analysis', error_code = $3, error_message = $4,
+                    terminal_at = case
+                      when not $5::boolean and status not in ('completed','partial_failed','failed')
+                        then statement_timestamp()
+                      else terminal_at
+                    end,
+                    retryable_until = case
+                      when not $5::boolean and status not in ('completed','partial_failed','failed')
+                        then statement_timestamp() + interval '15 days'
+                      else retryable_until
+                    end,
+                    updated_at = now()
               where id = $1`,
-            [job.generation_id, willRetry ? "analyzing" : "failed", input.errorCode, input.errorMessage],
+            [job.generation_id, willRetry ? "analyzing" : "failed", input.errorCode, input.errorMessage, willRetry],
           );
         } else {
           await client.query(
@@ -1602,7 +1547,6 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         }
         const generation = await generationById(client, String(job.generation_id));
         await client.query("COMMIT");
-        await deleteTerminalGenerationAttachments(pool, generation, options.deleteAttachments);
         return generation;
       } catch (error) {
         await client.query("ROLLBACK");
@@ -1614,22 +1558,43 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        const outputScope = await client.query(
+          `select generation_id
+             from ai_content_generation_outputs
+            where id = $1 and workspace_id = $2 and brand_id = $3`,
+          [input.outputId, input.workspaceId, input.brandId],
+        );
+        if (!outputScope.rowCount) throw new Error("ai_content_output_not_found");
+        const generationId = String(outputScope.rows[0]?.generation_id);
+        const generationResult = await client.query(
+          `select id, retryable_until,
+                  retryable_until > statement_timestamp() as retryable
+             from ai_content_generations
+            where id = $1 and workspace_id = $2 and brand_id = $3
+            for update`,
+          [generationId, input.workspaceId, input.brandId],
+        );
+        if (!generationResult.rowCount) throw new Error("ai_content_output_not_found");
         const outputResult = await client.query(
           `select output.*, generation.type
              from ai_content_generation_outputs output
              join ai_content_generations generation on generation.id = output.generation_id
             where output.id = $1 and output.workspace_id = $2 and output.brand_id = $3
+              and output.generation_id = $4
             for update of output`,
-          [input.outputId, input.workspaceId, input.brandId],
+          [input.outputId, input.workspaceId, input.brandId, generationId],
         );
         const output = outputResult.rows[0] as Record<string, unknown> | undefined;
         if (!output) throw new Error("ai_content_output_not_found");
         if (output.status !== "failed") throw new Error("ai_content_output_not_failed");
+        if (generationResult.rows[0]?.retryable !== true) {
+          throw new Error("ai_content_attachment_retention_expired");
+        }
         const previousGenerateJob = await client.query(
           `select payload_json
              from ai_content_generation_jobs
             where output_id = $1 and workspace_id = $2 and brand_id = $3
-              and job_type = 'generate'
+              and job_type = 'generate' and status = 'failed'
             order by created_at desc, id desc
             for update
             limit 1`,
@@ -1655,6 +1620,29 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
               "generate",
             ) ?? {},
           };
+        }
+        const contentGenerationInput = object(retryPayload.contentGenerationInput);
+        const attachments = Array.isArray(contentGenerationInput.attachments)
+          ? contentGenerationInput.attachments
+          : [];
+        const snapshotPaths = attachments.flatMap((attachment) => {
+          const storagePath = object(attachment).storagePath;
+          return typeof storagePath === "string" && storagePath ? [storagePath] : [];
+        });
+        if (snapshotPaths.length) {
+          const committedDeletion = await client.query(
+            `select id, status
+               from ai_content_attachment_deletion_jobs
+              where workspace_id = $1
+                and storage_path = any($2::text[])
+                and status in ('deleting', 'deleted')
+              order by storage_path, id
+              for update`,
+            [input.workspaceId, snapshotPaths],
+          );
+          if (committedDeletion.rowCount) {
+            throw new Error("ai_content_attachment_retention_expired");
+          }
         }
         await client.query(
           `update ai_content_generation_outputs

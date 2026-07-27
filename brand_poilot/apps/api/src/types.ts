@@ -19,6 +19,8 @@ import type {
   SubjectAnalysisBrandContext,
   SubjectAnalysisWorkerLease,
 } from "./aiContentRepository.js";
+
+export type AiContentGenerationDto = AiContentGenerationRecord;
 import type { LoadSubjectEvidenceInput, SubjectEvidenceAttachment } from "./aiContentSubjectEvidence.js";
 import type {
   AiContentType,
