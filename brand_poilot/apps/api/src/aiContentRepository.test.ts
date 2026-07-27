@@ -259,7 +259,10 @@ function createWorkerPool(options: {
       }
       if (query.includes("select generation_input_snapshot") && query.includes("from ai_content_generations")) {
         return {
-          rows: [{ generation_input_snapshot: options.subjectAnalysisSnapshot ?? contentGenerationInputV2Fixture }],
+          rows: [{
+            generation_input_snapshot: options.subjectAnalysisSnapshot ?? contentGenerationInputV2Fixture,
+            analysis_json: options.qualityBrief ? { qualityBrief: options.qualityBrief } : {},
+          }],
           rowCount: 1,
         };
       }
@@ -1122,11 +1125,13 @@ describe("AI content repository", () => {
     expect(pool.generatedJobPayloads.at(-1)).toEqual(priorPayload);
   });
 
-  it("uses the generation snapshot only as an explicit legacy retry fallback", async () => {
+  it("synthesizes the finalized worker input only for the explicit legacy retry fallback", async () => {
     const legacySnapshot = structuredClone(contentGenerationInputV2Fixture);
+    const finalQualityBrief = { hook: "legacy finalized quality brief", sourceGaps: [] };
     const pool = createWorkerPool({
       outputStatus: "failed",
       subjectAnalysisSnapshot: legacySnapshot,
+      qualityBrief: finalQualityBrief,
     });
     const repository = createAiContentRepository(pool as never);
 
@@ -1135,9 +1140,15 @@ describe("AI content repository", () => {
     expect(pool.generatedJobPayloads.at(-1)).toEqual({
       generationId: "generation-1",
       outputId: "output-1",
-      contentGenerationInput: legacySnapshot,
+      contentGenerationInput: {
+        ...legacySnapshot,
+        message: {
+          ...legacySnapshot.message,
+          qualityBrief: finalQualityBrief,
+        },
+      },
     });
-    expect(pool.sql.join("\n")).toContain("select generation_input_snapshot");
+    expect(pool.sql.join("\n")).toContain("generation_input_snapshot, analysis_json");
   });
 
   it("lists only live generation-scoped subject evidence with loader metadata", async () => {

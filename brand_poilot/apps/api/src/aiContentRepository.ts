@@ -1641,7 +1641,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           : null;
         if (!retryPayload) {
           const legacySnapshot = await client.query(
-            `select generation_input_snapshot
+            `select generation_input_snapshot, analysis_json
                from ai_content_generations
               where id = $1 and workspace_id = $2 and brand_id = $3`,
             [output.generation_id, input.workspaceId, input.brandId],
@@ -1649,7 +1649,11 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           retryPayload = {
             generationId: output.generation_id,
             outputId: input.outputId,
-            contentGenerationInput: object(legacySnapshot.rows[0]?.generation_input_snapshot),
+            contentGenerationInput: generationInputForWorker(
+              legacySnapshot.rows[0]?.generation_input_snapshot,
+              legacySnapshot.rows[0]?.analysis_json,
+              "generate",
+            ) ?? {},
           };
         }
         await client.query(

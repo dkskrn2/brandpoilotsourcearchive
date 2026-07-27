@@ -67,7 +67,11 @@ export async function fetchSubjectEvidenceBlob(
   const response = await fetchImpl(url, { signal: limits.signal });
   if (!response.ok) {
     await cancelBody(response);
-    throw new Error("subject_analysis_attachment_fetch_failed");
+    throw Object.assign(new Error("subject_analysis_attachment_fetch_failed"), {
+      status: response.status,
+      statusCode: response.status,
+      ...(response.status === 404 ? { code: "BlobNotFound" } : {}),
+    });
   }
   const declaredValue = response.headers.get("content-length");
   const declaredLength = declaredValue === null ? null : Number(declaredValue);

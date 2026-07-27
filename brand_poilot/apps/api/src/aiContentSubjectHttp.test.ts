@@ -4,6 +4,7 @@ import {
   claimAndPrepareSubjectAnalysis,
   fetchSubjectEvidenceBlob,
 } from "./aiContentSubjectHttp.js";
+import { loadSubjectEvidence } from "./aiContentSubjectEvidence.js";
 import type { ApiRepository } from "./types.js";
 import type { SubjectAnalysisClaim, SubjectAnalysisRepository } from "./aiContentSubjectRepository.js";
 
@@ -345,4 +346,45 @@ describe("subject evidence HTTP fetch", () => {
       streamed as typeof fetch,
     )).rejects.toThrow("subject_analysis_attachment_size_mismatch");
   });
+
+  it.each([
+    ["404", async () => new Response("missing", { status: 404 }), "ai_content_attachment_blob_unavailable"],
+    ["500", async () => new Response("unavailable", { status: 500 }), "ai_content_attachment_storage_unavailable"],
+    ["network", async () => {
+      throw Object.assign(new Error("socket unavailable"), { code: "ECONNRESET" });
+    }, "ai_content_attachment_storage_unavailable"],
+  ] as const)(
+    "preserves production fetch %s classification through loadSubjectEvidence",
+    async (_label, fetchImpl, expectedCode) => {
+      const bytes = Buffer.from("facts");
+      const attachment = {
+        id: "44444444-4444-4444-8444-444444444444",
+        generationId: "33333333-3333-4333-8333-333333333333",
+        role: "document" as const,
+        fileName: "facts.txt",
+        mimeType: "text/plain",
+        sizeBytes: bytes.length,
+        checksum: sha256(bytes),
+        storageUrl: "https://blob.example/facts.txt",
+        storagePath: "attachments/facts.txt",
+        createdAt: "2026-07-21T00:00:00.000Z",
+      };
+
+      await expect(loadSubjectEvidence({
+        workspaceId: "11111111-1111-4111-8111-111111111111",
+        brandId: "22222222-2222-4222-8222-222222222222",
+        generationId: attachment.generationId,
+        attachmentIds: [attachment.id],
+        attachmentSnapshot: [attachment],
+        attachmentSnapshotMissingIds: [],
+      }, {
+        headBlob: async () => ({ size: bytes.length, contentType: "text/plain" }),
+        fetchBlob: (url, limits) => fetchSubjectEvidenceBlob(
+          url,
+          limits,
+          fetchImpl as typeof fetch,
+        ),
+      })).rejects.toThrow(expectedCode);
+    },
+  );
 });

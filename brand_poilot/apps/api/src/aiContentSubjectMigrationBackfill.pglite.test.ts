@@ -42,6 +42,7 @@ describe("migration 065 subject attachment snapshot backfill", () => {
   const attachmentId = randomUUID();
   const analysisId = randomUUID();
   const outputId = randomUUID();
+  const retryOutputId = randomUUID();
   const bytes = Buffer.from("legacy attachment");
   const checksum = createHash("sha256").update(bytes).digest("hex");
   const legacyQualityBrief = { hook: "migration-finalized-hook", sourceGaps: [] };
@@ -61,8 +62,8 @@ describe("migration 065 subject attachment snapshot backfill", () => {
       selectedImages: [],
     },
     message: {
-      target: { id: "target-1" },
-      appeal: { id: "appeal-1", targetId: "target-1" },
+      target: { id: "target-1", name: "Legacy target" },
+      appeal: { id: "appeal-1", targetId: "target-1", title: "Legacy appeal" },
       qualityBrief: { hook: "pre-analysis-hook" },
     },
     creativeDirection: {
@@ -98,7 +99,7 @@ describe("migration 065 subject attachment snapshot backfill", () => {
     await database.query(
       `insert into ai_content_generations(
          id,workspace_id,brand_id,type,title,status,analysis_idempotency_key
-       ) values($1,$2,$3,'blog','Backfill contract','analysis_ready',$4)`,
+       ) values($1,$2,$3,'card_news','Backfill contract','analysis_ready',$4)`,
       [generationId, workspaceId, brandId, `generation-${generationId}`],
     );
     await database.query(
@@ -138,6 +139,19 @@ describe("migration 065 subject attachment snapshot backfill", () => {
        ) values($1,$2,$3,$4,'generate','card_news','queued',
          '{"generationId":"legacy","outputId":"legacy"}')`,
       [generationId, outputId, workspaceId, brandId],
+    );
+    await database.query(
+      `insert into ai_content_generation_outputs(
+         id,generation_id,workspace_id,brand_id,output_index,status,failure_code,failure_message
+       ) values($1,$2,$3,$4,2,'failed','legacy_failure','legacy failed output')`,
+      [retryOutputId, generationId, workspaceId, brandId],
+    );
+    await database.query(
+      `insert into ai_content_generation_jobs(
+         generation_id,output_id,workspace_id,brand_id,job_type,content_type,status,payload_json
+       ) values($1,$2,$3,$4,'generate','card_news','failed',
+         '{"generationId":"legacy","outputId":"legacy"}')`,
+      [generationId, retryOutputId, workspaceId, brandId],
     );
 
     await database.exec(
@@ -199,6 +213,33 @@ describe("migration 065 subject attachment snapshot backfill", () => {
       message: { qualityBrief: legacyQualityBrief },
     });
 
+    const { parseContentGenerationInput } = await import(
+      "../../../workers/brand-pilot-card-news-worker/src/contracts.js"
+    );
+    expect(() => parseContentGenerationInput(claim?.payload.contentGenerationInput)).not.toThrow();
+  });
+
+  it("retries a pre-065 failed generate job with the finalized worker quality brief", async () => {
+    await database.query(
+      "update ai_content_generation_jobs set status='succeeded' where output_id=$1",
+      [outputId],
+    );
+    const repository = createAiContentRepository(pglitePool(database));
+    await repository.retryAiContentOutput({
+      workspaceId,
+      brandId,
+      outputId: retryOutputId,
+    });
+    const claim = await repository.claimAiContentJob({
+      contentType: "card_news",
+      workerId: "migration-retry-worker",
+      leaseSeconds: 60,
+    });
+
+    expect(claim?.payload.contentGenerationInput).toMatchObject({
+      contractVersion: "content-generation-input.v2",
+      message: { qualityBrief: legacyQualityBrief },
+    });
     const { parseContentGenerationInput } = await import(
       "../../../workers/brand-pilot-card-news-worker/src/contracts.js"
     );
