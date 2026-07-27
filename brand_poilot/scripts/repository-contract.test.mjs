@@ -386,6 +386,26 @@ test("065 defines the parent-independent AI attachment lifecycle contract", asyn
     migration,
     /nonlegacy_session_count = 0[\s\S]*excluded\.nonlegacy_session_count = 0[\s\S]*legacy_session_count = 0/i,
   );
+  assert.match(
+    migration,
+    /ai_content_attachment_upload_sessions_generation_fk_idx[\s\S]*generation_id[\s\S]*workspace_id[\s\S]*brand_id/i,
+  );
+  assert.match(
+    migration,
+    /ai_content_attachment_upload_sessions_actor_fk_idx[\s\S]*workspace_id, created_by_user_id[\s\S]*where created_by_user_id is not null/i,
+  );
+  assert.match(
+    migration,
+    /old\.status <> 'pending'[\s\S]*confirmed_attachment_id[\s\S]*last_error_code[\s\S]*is_legacy_backfill[\s\S]*transition_invalid/i,
+  );
+  assert.doesNotMatch(
+    migration,
+    /old\.status <> 'pending'[\s\S]*new\.storage_url is distinct from old\.storage_url[\s\S]*transition_invalid/i,
+  );
+  assert.match(
+    migration,
+    /atomic schema change and data backfill[\s\S]*Operations must approve row counts[\s\S]*maintenance window/i,
+  );
   assert.match(migration, /deferrable\s+initially\s+deferred[\s\S]*on delete no action/i);
   assert.match(migration, /created_by_user_id is not null[\s\S]*is_legacy_backfill[\s\S]*confirmed_attachment_id is not null/i);
   assert.match(migration, /before delete[\s\S]*ai_content_generation_attachments/i);

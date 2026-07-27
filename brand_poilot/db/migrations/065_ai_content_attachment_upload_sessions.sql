@@ -1,5 +1,9 @@
 begin;
 
+-- This migration is an atomic schema change and data backfill. Before applying
+-- it on Ubuntu/production, Operations must approve row counts, expected runtime,
+-- and a maintenance window; this migration does not claim an online rollout.
+
 alter table ai_content_generations
   add column attachments_locked_at timestamptz null,
   add column generation_input_snapshot jsonb null,
@@ -153,6 +157,17 @@ create table ai_content_attachment_upload_sessions (
 
 create unique index ai_content_attachment_upload_sessions_nonce_uq
   on ai_content_attachment_upload_sessions (nonce);
+
+create index ai_content_attachment_upload_sessions_generation_fk_idx
+  on ai_content_attachment_upload_sessions (
+    generation_id,
+    workspace_id,
+    brand_id
+  );
+
+create index ai_content_attachment_upload_sessions_actor_fk_idx
+  on ai_content_attachment_upload_sessions (workspace_id, created_by_user_id)
+  where created_by_user_id is not null;
 
 create unique index ai_content_attachment_upload_sessions_storage_path_uq
   on ai_content_attachment_upload_sessions (storage_path)
@@ -568,6 +583,36 @@ create trigger ai_content_attachment_upload_sessions_immutable_metadata
 before update on ai_content_attachment_upload_sessions
 for each row
 execute function ai_content_attachment_upload_sessions_immutable_metadata();
+
+create function enforce_ai_content_attachment_upload_session_transition()
+returns trigger
+language plpgsql
+as $$
+begin
+  if old.status <> 'pending'
+    and (
+      new.status is distinct from old.status
+      or new.confirmed_at is distinct from old.confirmed_at
+      or new.cancelled_at is distinct from old.cancelled_at
+      or new.expired_at is distinct from old.expired_at
+      or new.failed_at is distinct from old.failed_at
+      or new.confirmed_attachment_id
+        is distinct from old.confirmed_attachment_id
+      or new.last_error_code is distinct from old.last_error_code
+      or new.is_legacy_backfill is distinct from old.is_legacy_backfill
+    )
+  then
+    raise exception
+      'ai_content_attachment_upload_session_transition_invalid';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger ai_content_attachment_upload_sessions_enforce_transition
+before update on ai_content_attachment_upload_sessions
+for each row
+execute function enforce_ai_content_attachment_upload_session_transition();
 
 create trigger ai_content_attachment_upload_sessions_set_updated_at
 before update on ai_content_attachment_upload_sessions

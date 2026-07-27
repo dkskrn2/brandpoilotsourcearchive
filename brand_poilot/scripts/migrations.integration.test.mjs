@@ -4253,6 +4253,176 @@ test("065 enforces nonlegacy actor, state, and storage path semantics", async ()
   });
 });
 
+test("065 makes every terminal upload-session lifecycle irreversible", async () => {
+  const migrations = await loadMigrations();
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "065_ai_content_attachment_upload_sessions.sql",
+    );
+    const identity = await createAttachmentLifecycleIdentity(database, "terminal-transitions");
+    const terminalSessions = new Map();
+    for (const state of [
+      { status: "cancelled", timestampColumn: "cancelled_at", error: null },
+      { status: "expired", timestampColumn: "expired_at", error: null },
+      { status: "failed", timestampColumn: "failed_at", error: "provider_failed" },
+    ]) {
+      const inserted = await database.query(
+        `insert into ai_content_attachment_upload_sessions(
+           generation_id,workspace_id,brand_id,created_by_user_id,nonce,role,file_name,
+           expected_mime_type,expected_size_bytes,expected_checksum,storage_path,status,
+           token_expires_at,created_at,last_error_code,${state.timestampColumn}
+         ) values($1,$2,$3,$4,$5,'document',$6,'application/pdf',100,$7,$8,$9,
+           now()+interval '10 minutes',now(),$10,now()) returning id`,
+        [
+          identity.generationId,
+          identity.workspaceId,
+          identity.brandId,
+          identity.actorId,
+          randomUUID(),
+          `${state.status}.pdf`,
+          "3".repeat(64),
+          `generation/${randomUUID()}/${state.status}.pdf`,
+          state.status,
+          state.error,
+        ],
+      );
+      terminalSessions.set(state.status, inserted.rows[0].id);
+    }
+
+    const confirmedSession = await database.query(
+      `insert into ai_content_attachment_upload_sessions(
+         generation_id,workspace_id,brand_id,created_by_user_id,nonce,role,file_name,
+         expected_mime_type,expected_size_bytes,expected_checksum,storage_path,
+         token_expires_at,created_at
+       ) values($1,$2,$3,$4,$5,'document','confirmed.pdf','application/pdf',100,$6,$7,
+         now()+interval '10 minutes',now()) returning id`,
+      [
+        identity.generationId,
+        identity.workspaceId,
+        identity.brandId,
+        identity.actorId,
+        randomUUID(),
+        "4".repeat(64),
+        `generation/${randomUUID()}/confirmed.pdf`,
+      ],
+    );
+    const confirmedAttachmentId = randomUUID();
+    await database.exec("begin");
+    await database.query(
+      `insert into ai_content_generation_attachments(
+         id,generation_id,workspace_id,brand_id,role,file_name,mime_type,size_bytes,
+         checksum,storage_url,storage_path,upload_session_id
+       ) values($1,$2,$3,$4,'document','confirmed.pdf','application/pdf',100,$5,
+         'https://cdn.example.com/confirmed.pdf',$6,$7)`,
+      [
+        confirmedAttachmentId,
+        identity.generationId,
+        identity.workspaceId,
+        identity.brandId,
+        "4".repeat(64),
+        `generation/${randomUUID()}/confirmed-attachment.pdf`,
+        confirmedSession.rows[0].id,
+      ],
+    );
+    await database.query(
+      `update ai_content_attachment_upload_sessions
+          set status='confirmed',confirmed_at=now(),confirmed_attachment_id=$2,
+              storage_url='https://cdn.example.com/confirmed.pdf'
+        where id=$1`,
+      [confirmedSession.rows[0].id, confirmedAttachmentId],
+    );
+    await database.exec("commit");
+    terminalSessions.set("confirmed", confirmedSession.rows[0].id);
+
+    const terminalRewrites = new Map([
+      ["cancelled", "status='expired',cancelled_at=null,expired_at=now()"],
+      ["expired", "status='failed',expired_at=null,failed_at=now(),last_error_code='provider_failed'"],
+      ["failed", "status='cancelled',failed_at=null,last_error_code=null,cancelled_at=now()"],
+      ["confirmed", "status='cancelled',confirmed_at=null,confirmed_attachment_id=null,cancelled_at=now()"],
+    ]);
+    for (const [status, sessionId] of terminalSessions) {
+      await assert.rejects(
+        database.query(
+          `update ai_content_attachment_upload_sessions
+              set status='pending',confirmed_at=null,cancelled_at=null,expired_at=null,
+                  failed_at=null,confirmed_attachment_id=null,last_error_code=null
+            where id=$1`,
+          [sessionId],
+        ),
+        /transition_invalid/i,
+      );
+      await assert.rejects(
+        database.query(
+          `update ai_content_attachment_upload_sessions
+              set ${terminalRewrites.get(status)}
+            where id=$1`,
+          [sessionId],
+        ),
+        /transition_invalid/i,
+      );
+      await database.query(
+        `update ai_content_attachment_upload_sessions
+            set status=status,updated_at=updated_at
+          where id=$1`,
+        [sessionId],
+      );
+    }
+
+    const replacementAttachmentId = randomUUID();
+    await database.query(
+      `insert into ai_content_generation_attachments(
+         id,generation_id,workspace_id,brand_id,role,file_name,mime_type,size_bytes,
+         checksum,storage_url,storage_path
+       ) values($1,$2,$3,$4,'document','replacement.pdf','application/pdf',100,$5,
+         'https://cdn.example.com/replacement.pdf',$6)`,
+      [
+        replacementAttachmentId,
+        identity.generationId,
+        identity.workspaceId,
+        identity.brandId,
+        "5".repeat(64),
+        `generation/${randomUUID()}/replacement.pdf`,
+      ],
+    );
+    await assert.rejects(
+      database.query(
+        `update ai_content_attachment_upload_sessions
+            set confirmed_attachment_id=$2
+          where id=$1`,
+        [confirmedSession.rows[0].id, replacementAttachmentId],
+      ),
+      /transition_invalid/i,
+    );
+
+    const pendingToCancelled = await database.query(
+      `insert into ai_content_attachment_upload_sessions(
+         generation_id,workspace_id,brand_id,created_by_user_id,nonce,role,file_name,
+         expected_mime_type,expected_size_bytes,expected_checksum,storage_path,
+         token_expires_at,created_at
+       ) values($1,$2,$3,$4,$5,'document','pending.pdf','application/pdf',100,$6,$7,
+         now()+interval '10 minutes',now()) returning id`,
+      [
+        identity.generationId,
+        identity.workspaceId,
+        identity.brandId,
+        identity.actorId,
+        randomUUID(),
+        "6".repeat(64),
+        `generation/${randomUUID()}/pending.pdf`,
+      ],
+    );
+    await database.query(
+      `update ai_content_attachment_upload_sessions
+          set status='cancelled',cancelled_at=now()
+        where id=$1`,
+      [pendingToCancelled.rows[0].id],
+    );
+  });
+});
+
 test("065 rejects a nonlegacy session that reuses a truthful legacy storage path", async () => {
   const migrations = await loadMigrations();
   const migration065 = migrations.find(
@@ -4724,6 +4894,8 @@ test("065 fresh and through-064 upgrade paths converge on the attachment lifecyc
   for (const index of [
     "ai_content_attachment_upload_sessions_nonce_uq",
     "ai_content_attachment_upload_sessions_storage_path_uq",
+    "ai_content_attachment_upload_sessions_generation_fk_idx",
+    "ai_content_attachment_upload_sessions_actor_fk_idx",
     "ai_content_attachment_upload_sessions_pending_expiry_idx",
     "ai_content_upload_sessions_generation_reservation_idx",
     "ai_content_attachment_deletion_jobs_due_idx",
@@ -4746,6 +4918,21 @@ test("065 fresh and through-064 upgrade paths converge on the attachment lifecyc
     (entry) => entry.indexname === "ai_content_attachment_upload_sessions_storage_path_uq",
   );
   assert.match(storagePathIndex?.indexdef ?? "", /WHERE \(NOT is_legacy_backfill\)/i);
+  const generationForeignKeyIndex = freshCatalog.indexes.find(
+    (entry) =>
+      entry.indexname === "ai_content_attachment_upload_sessions_generation_fk_idx",
+  );
+  assert.match(
+    generationForeignKeyIndex?.indexdef ?? "",
+    /\(generation_id, workspace_id, brand_id\)$/i,
+  );
+  const actorForeignKeyIndex = freshCatalog.indexes.find(
+    (entry) => entry.indexname === "ai_content_attachment_upload_sessions_actor_fk_idx",
+  );
+  assert.match(
+    actorForeignKeyIndex?.indexdef ?? "",
+    /\(workspace_id, created_by_user_id\) WHERE \(created_by_user_id IS NOT NULL\)/i,
+  );
   assert.equal(
     freshCatalog.constraints.some(
       (entry) =>
