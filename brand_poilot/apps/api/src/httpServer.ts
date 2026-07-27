@@ -36,8 +36,9 @@ import { parseAiContentPublishRequest } from "./aiContentPublishTargets.js";
 import {
   confirmAiContentAttachment,
   AI_CONTENT_ATTACHMENT_POLICY,
-  issueAiContentAttachmentToken,
+  issueValidatedAiContentAttachmentToken,
   issueAiContentUploadSessionToken,
+  validateAiContentAttachment,
   verifyAiContentAttachmentBlob,
   verifyAiContentUploadSessionBlob,
   type AiContentTokenOptions,
@@ -2361,7 +2362,9 @@ export function createServer(
       const brandId = parseAiContentBrandId(request.params.brandId);
       const generationId = parseAiContentGenerationId(request.params.generationId);
       const scope = aiContentScope(request, brandId);
-      const attachment = parseAttachmentUploadTokenInput(request.body);
+      const attachment = validateAiContentAttachment(
+        parseAttachmentUploadTokenInput(request.body),
+      );
       const tokenOptions = {
         token: aiContentUpload?.readWriteToken ?? "",
         generateClientToken: aiContentUpload?.generateClientToken,
@@ -2370,7 +2373,7 @@ export function createServer(
         // Legacy issuance cannot reserve capacity before the provider call. An abandoned
         // Blob is therefore undiscoverable until upload-session issuance is enabled.
         await repository.assertAiContentAttachmentUploadMutable!({ ...scope, generationId });
-        return issueAiContentAttachmentToken({
+        return issueValidatedAiContentAttachmentToken({
           brandId,
           generationId,
           attachment,

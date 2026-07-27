@@ -433,6 +433,81 @@ describe("AI content customer routes", () => {
     await app.close();
   });
 
+  it.each([
+    [
+      "invalid checksum",
+      { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "not-a-sha256" },
+      "ai_content_attachment_checksum_invalid",
+    ],
+    [
+      "oversize image",
+      { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 5_000_001, checksum: "a".repeat(64) },
+      "ai_content_attachment_size_invalid",
+    ],
+    [
+      "oversize document",
+      { role: "document", fileName: "brief.pdf", mimeType: "application/pdf", sizeBytes: 10_000_001, checksum: "a".repeat(64) },
+      "ai_content_attachment_size_invalid",
+    ],
+    [
+      "unsupported role",
+      { role: "avatar", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) },
+      "ai_content_attachment_role_invalid",
+    ],
+    [
+      "role and MIME mismatch",
+      { role: "product", fileName: "brief.pdf", mimeType: "application/pdf", sizeBytes: 100, checksum: "a".repeat(64) },
+      "ai_content_attachment_role_mime_invalid",
+    ],
+    [
+      "unsafe filename",
+      { role: "product", fileName: "../product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) },
+      "ai_content_attachment_file_name_invalid",
+    ],
+  ])("rejects enabled session metadata before reservation: %s", async (_caseName, attachment, errorCode) => {
+    const { app, repository, generateClientToken } = setup(true, { uploadSessionsEnabled: true });
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+      headers: auth,
+      payload: attachment,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: errorCode });
+    expect(repository.createAiContentUploadSession).not.toHaveBeenCalled();
+    expect(generateClientToken).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("normalizes enabled session metadata before reservation", async () => {
+    const { app, repository } = setup(true, { uploadSessionsEnabled: true });
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+      headers: auth,
+      payload: {
+        role: "product",
+        fileName: " product image.png ",
+        mimeType: " IMAGE/PNG ",
+        sizeBytes: 100,
+        checksum: ` ${"A".repeat(64)} `,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.createAiContentUploadSession).toHaveBeenCalledWith(expect.objectContaining({
+      attachment: {
+        role: "product",
+        fileName: "product-image.png",
+        mimeType: "image/png",
+        sizeBytes: 100,
+        checksum: "a".repeat(64),
+      },
+    }));
+    await app.close();
+  });
+
   it("marks an enabled session failed while preserving provider outage mapping", async () => {
     const { app, repository, generateClientToken } = setup(true, { uploadSessionsEnabled: true });
     generateClientToken.mockRejectedValueOnce(new Error("provider secret must not leak"));

@@ -120,8 +120,15 @@ export interface AiContentUploadSessionBlobVerificationOptions extends AiContent
 }
 
 export async function issueAiContentAttachmentToken(input: { brandId: string; generationId: string; attachment: AttachmentUploadTokenInput }, options: AiContentTokenOptions): Promise<AiContentAttachmentTokenResult> {
+  return issueValidatedAiContentAttachmentToken({
+    ...input,
+    attachment: validateAiContentAttachment(input.attachment),
+  }, options);
+}
+
+export async function issueValidatedAiContentAttachmentToken(input: { brandId: string; generationId: string; attachment: AiContentAttachmentPolicy }, options: AiContentTokenOptions): Promise<AiContentAttachmentTokenResult> {
   if (!options.token.trim()) fail("ai_content_attachment_storage_not_configured");
-  const attachment = validateAiContentAttachment(input.attachment);
+  const attachment = input.attachment;
   const pathname = buildAiContentAttachmentPath({ brandId: input.brandId, generationId: input.generationId, checksum: attachment.checksum, fileName: attachment.fileName });
   const generate = options.generateClientToken ?? generateClientTokenFromReadWriteToken;
   const maximumSizeInBytes = AI_CONTENT_ATTACHMENT_POLICY[attachment.role][attachment.mimeType]!;
