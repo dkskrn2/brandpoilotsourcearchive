@@ -422,4 +422,23 @@ describe("runAiContentAttachmentGc", () => {
       vi.useRealTimers();
     }
   });
+
+  it("reports actual monotonic elapsed time instead of clamping the duration metric", async () => {
+    let now = 0;
+    const repo = repository({
+      prepareAiContentAttachmentGc: vi.fn(async () => {
+        now = 50_250;
+        return {
+          sessionsScanned: 0, sessionsClaimed: 0, sessionsConfirmed: 0,
+          sessionsExpired: 0, jobsCreated: 0, leasesReclaimed: 0,
+        };
+      }),
+    });
+    const result = await runAiContentAttachmentGc(repo, {
+      workerId: "gc-worker",
+      deleteBlob: vi.fn(),
+      monotonicNow: () => now,
+    });
+    expect(result.durationMs).toBe(50_250);
+  });
 });

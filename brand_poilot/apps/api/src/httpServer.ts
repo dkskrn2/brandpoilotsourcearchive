@@ -364,6 +364,30 @@ function safeAiContentAttachmentGcResult(
   };
 }
 
+export function parseAiContentAttachmentGcRequestBody(
+  value: unknown,
+): { batchSize: number } {
+  if (value === undefined) return { batchSize: 25 };
+  if (
+    value === null
+    || typeof value !== "object"
+    || Array.isArray(value)
+    || Object.getPrototypeOf(value) !== Object.prototype
+  ) {
+    throw new Error("ai_content_attachment_gc_request_body_invalid");
+  }
+  const keys = Reflect.ownKeys(value);
+  if (keys.some((key) => key !== "batchSize")) {
+    throw new Error("ai_content_attachment_gc_request_body_invalid");
+  }
+  if (keys.length === 0) return { batchSize: 25 };
+  const { batchSize } = value as { batchSize?: unknown };
+  if (!Number.isInteger(batchSize) || Number(batchSize) < 1 || Number(batchSize) > 100) {
+    throw new Error("ai_content_attachment_gc_batch_size_invalid");
+  }
+  return { batchSize: Number(batchSize) };
+}
+
 function asChannel(value: string): Channel {
   if (!channels.has(value)) {
     throw new Error("invalid_channel");
@@ -1083,19 +1107,27 @@ export function createServer(
       reply.code(503);
       return { error: "ai_content_attachment_gc_not_configured" };
     }
-    const body = (request.body ?? {}) as { batchSize?: unknown };
-    if (
-      body.batchSize !== undefined
-      && (!Number.isInteger(body.batchSize) || Number(body.batchSize) < 1 || Number(body.batchSize) > 100)
-    ) {
+    let body: { batchSize: number };
+    try {
+      body = parseAiContentAttachmentGcRequestBody(request.body);
+    } catch (error) {
       reply.code(400);
-      return { error: "ai_content_attachment_gc_batch_size_invalid" };
+      const code = error instanceof Error
+        && (
+          error.message === "ai_content_attachment_gc_request_body_invalid"
+          || error.message === "ai_content_attachment_gc_batch_size_invalid"
+        )
+        ? error.message
+        : "ai_content_attachment_gc_request_body_invalid";
+      return {
+        error: code,
+      };
     }
     const unsafeResult: AiContentAttachmentGcRunResult = await (
       aiContentAttachmentGc.runGc ?? runAiContentAttachmentGc
     )(gcRepository, {
       workerId: aiContentAttachmentGc.workerId ?? "api-cron",
-      batchSize: body.batchSize === undefined ? 25 : Number(body.batchSize),
+      batchSize: body.batchSize,
       deleteBlob: aiContentAttachmentGc.deleteBlob,
     });
     const result = safeAiContentAttachmentGcResult(unsafeResult);

@@ -341,6 +341,6 @@ export async function runAiContentAttachmentGc(
       // Returning by the absolute runner deadline is more important than optional queue health.
     }
   }
-  result.durationMs = Math.min(budgetMs, Math.max(0, now() - startedAt));
+  result.durationMs = Math.max(0, now() - startedAt);
   return result;
 }

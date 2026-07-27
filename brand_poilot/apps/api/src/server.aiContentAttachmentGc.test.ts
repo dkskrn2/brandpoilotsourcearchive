@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { createServer } from "./httpServer.js";
+import {
+  createServer,
+  parseAiContentAttachmentGcRequestBody,
+} from "./httpServer.js";
 import type { AiContentAttachmentGcRunResult } from "./aiContentAttachmentGc.js";
 
 const result: AiContentAttachmentGcRunResult = {
@@ -41,6 +44,34 @@ function gcRepository(includeUploadLifecycle = false) {
 }
 
 describe("POST /internal/cron/ai-content-attachment-gc", () => {
+  it("accepts only undefined or an exact plain-object body", () => {
+    expect(parseAiContentAttachmentGcRequestBody(undefined)).toEqual({ batchSize: 25 });
+    expect(parseAiContentAttachmentGcRequestBody({})).toEqual({ batchSize: 25 });
+    expect(parseAiContentAttachmentGcRequestBody({ batchSize: 100 })).toEqual({ batchSize: 100 });
+    expect(() => parseAiContentAttachmentGcRequestBody({ batchSize: undefined }))
+      .toThrow("ai_content_attachment_gc_batch_size_invalid");
+
+    class RequestBody {
+      batchSize = 25;
+    }
+    const nullPrototype = Object.assign(Object.create(null) as object, { batchSize: 25 });
+    const inherited = Object.create({ batchSize: 25 }) as object;
+    for (const body of [
+      null,
+      [],
+      "body",
+      25,
+      new RequestBody(),
+      nullPrototype,
+      inherited,
+      { batch_size: 25 },
+      { batchSize: 25, token: "body-secret" },
+    ]) {
+      expect(() => parseAiContentAttachmentGcRequestBody(body))
+        .toThrow("ai_content_attachment_gc_request_body_invalid");
+    }
+  });
+
   it("uses constant-time bearer auth and does not expose the secret", async () => {
     const runGc = vi.fn(async () => result);
     const app = createServer({
@@ -99,6 +130,46 @@ describe("POST /internal/cron/ai-content-attachment-gc", () => {
       expect(response.json()).toEqual({ error: "ai_content_attachment_gc_batch_size_invalid" });
     }
     expect(runGc).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("rejects non-object and unknown-key bodies without calling or leaking to the runner", async () => {
+    const runGc = vi.fn(async () => result);
+    const logLines: string[] = [];
+    const app = createServer({
+      repository: gcRepository(),
+      cronSecret: "secret",
+      aiContentAttachmentGc: { deleteBlob: vi.fn(), runGc },
+      logger: {
+        level: "info",
+        stream: { write: (line: string) => logLines.push(line) },
+      },
+    });
+    for (const input of [
+      { payload: "null", json: true },
+      { payload: [], json: false },
+      { payload: "\"body-secret\"", json: true },
+      { payload: "25", json: true },
+      { payload: { batch_size: 25 }, json: false },
+      { payload: { batchSize: 25, token: "body-secret" }, json: false },
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/internal/cron/ai-content-attachment-gc",
+        headers: {
+          authorization: "Bearer secret",
+          ...(input.json ? { "content-type": "application/json" } : {}),
+        },
+        payload: input.payload,
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({
+        error: "ai_content_attachment_gc_request_body_invalid",
+      });
+      expect(response.body).not.toContain("body-secret");
+    }
+    expect(runGc).not.toHaveBeenCalled();
+    expect(logLines.join("\n")).not.toContain("body-secret");
     await app.close();
   });
 
