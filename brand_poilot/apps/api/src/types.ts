@@ -1070,6 +1070,9 @@ export interface ApiRepository
   updateSource(sourceId: string, input: SourceUpdateInput): Promise<SourceDto>;
   deleteSource(sourceId: string): Promise<{ id: string }>;
   listChannels(brandId: string): Promise<ChannelDto[]>;
+  getInstagramChannelCapabilityContext(
+    brandId: string,
+  ): Promise<import("./channelCapabilities.js").InstagramChannelCapabilityContext>;
   getInstagramChannelIdentity(brandId: string): Promise<{ externalAccountId: string | null; accountLabel: string | null }>;
   updateChannelEnabled(brandId: string, channel: Channel, enabled: boolean): Promise<ChannelDto>;
   getChannelConnectionRequest(brandId: string): Promise<ChannelConnectionRequestDto>;

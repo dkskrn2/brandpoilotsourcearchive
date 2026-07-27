@@ -2294,6 +2294,48 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       }));
     },
 
+    async getInstagramChannelCapabilityContext(brandId) {
+      const result = await pool.query(
+        `select bc.external_account_id,
+                credential.id as credential_id,
+                credential.provider as credential_provider,
+                credential.status as credential_status,
+                credential.expires_at as credential_expires_at,
+                coalesce(credential.scopes, '{}'::text[]) as scopes
+         from brand_channels bc
+         left join lateral (
+           select cc.id, cc.provider, cc.status, cc.expires_at, cc.scopes
+           from channel_credentials cc
+           where cc.brand_channel_id = bc.id
+             and cc.revoked_at is null
+           order by cc.created_at desc
+           limit 1
+         ) credential on true
+         where bc.brand_id = $1
+           and bc.channel = 'instagram'
+           and bc.deleted_at is null
+         limit 1`,
+        [brandId],
+      );
+      const row = result.rows[0];
+      return {
+        externalAccountId: typeof row?.external_account_id === "string"
+          ? row.external_account_id
+          : null,
+        credentialId: typeof row?.credential_id === "string" ? row.credential_id : null,
+        credentialProvider: typeof row?.credential_provider === "string"
+          ? row.credential_provider
+          : null,
+        credentialStatus: typeof row?.credential_status === "string"
+          ? row.credential_status
+          : null,
+        credentialExpiresAt: toIso(row?.credential_expires_at),
+        scopes: Array.isArray(row?.scopes)
+          ? row.scopes.filter((scope: unknown): scope is string => typeof scope === "string")
+          : [],
+      };
+    },
+
     async getInstagramChannelIdentity(brandId) {
       const result = await pool.query(
         `select external_account_id, account_label

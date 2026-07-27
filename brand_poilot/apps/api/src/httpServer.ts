@@ -1683,9 +1683,11 @@ export function createServer(
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/channels/capabilities", async (request) => {
     const channels = await repository.listChannels(request.params.brandId);
     const instagramSettings = await repository.listInstagramFormats(request.params.brandId);
+    const instagramContext = await repository.getInstagramChannelCapabilityContext(request.params.brandId);
     return buildChannelCapabilities({
       channels,
       instagramFormats: instagramSettings.formats,
+      instagramContext,
     });
   });
 

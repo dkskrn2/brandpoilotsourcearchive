@@ -314,6 +314,14 @@ function createRepository(): ApiRepository {
     })),
     deleteSource: vi.fn(async (sourceId) => ({ id: sourceId })),
     listChannels: vi.fn(async () => []),
+    getInstagramChannelCapabilityContext: vi.fn(async () => ({
+      externalAccountId: null,
+      credentialId: null,
+      credentialProvider: null,
+      credentialStatus: null,
+      credentialExpiresAt: null,
+      scopes: [],
+    })),
     updateChannelEnabled: vi.fn(async (_brandId, channel, enabled) => ({
       channel,
       enabled,

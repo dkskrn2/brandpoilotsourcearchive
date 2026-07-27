@@ -34,37 +34,102 @@ export interface InstagramStoryCapabilityResult {
 }
 
 export type InstagramChannelReadiness =
-  | { readiness: "ready"; reasonCode: null }
-  | { readiness: "needs_connection"; reasonCode: "channel_not_connected" }
+  | { connectionStatus: "connected"; readiness: "ready"; reasonCode: null }
   | {
+    connectionStatus: "not_connected";
+    readiness: "needs_connection";
+    reasonCode: "channel_not_connected";
+  }
+  | {
+    connectionStatus: Exclude<ChannelStatus, "connected" | "not_connected">;
     readiness: "needs_permission";
     reasonCode:
-      | "channel_needs_attention"
       | "credential_expired"
+      | "credential_invalid"
       | "missing_required_scopes"
       | "professional_account_required"
-      | "publish_failed";
+      | "provider_not_supported";
   };
 
+export interface AuthoritativeInstagramChannelInput {
+  externalAccountId: string | null;
+  credentialId: string | null;
+  credentialProvider: string | null;
+  credentialStatus: string | null;
+  credentialExpiresAt: Date | string | null;
+  scopes: readonly string[];
+  now?: Date;
+}
+
+const instagramBasicScopeAlternatives = [
+  "instagram_business_basic",
+  "instagram_basic",
+] as const;
+const instagramPublishScopeAlternatives = [
+  "instagram_business_content_publish",
+  "instagram_content_publish",
+] as const;
+
 export function evaluateInstagramChannelReadiness(
-  status: ChannelStatus,
+  input: AuthoritativeInstagramChannelInput,
 ): InstagramChannelReadiness {
-  switch (status) {
-    case "connected":
-      return { readiness: "ready", reasonCode: null };
-    case "not_connected":
-      return { readiness: "needs_connection", reasonCode: "channel_not_connected" };
-    case "expired":
-      return { readiness: "needs_permission", reasonCode: "credential_expired" };
-    case "insufficient_permissions":
-      return { readiness: "needs_permission", reasonCode: "missing_required_scopes" };
-    case "mapping_required":
-      return { readiness: "needs_permission", reasonCode: "professional_account_required" };
-    case "publish_failed":
-      return { readiness: "needs_permission", reasonCode: "publish_failed" };
-    case "needs_attention":
-      return { readiness: "needs_permission", reasonCode: "channel_needs_attention" };
+  if (!input.credentialId || !input.credentialStatus) {
+    return {
+      connectionStatus: "not_connected",
+      readiness: "needs_connection",
+      reasonCode: "channel_not_connected",
+    };
   }
+  if (!input.externalAccountId?.trim()) {
+    return {
+      connectionStatus: "mapping_required",
+      readiness: "needs_permission",
+      reasonCode: "professional_account_required",
+    };
+  }
+  if (input.credentialProvider !== "meta") {
+    return {
+      connectionStatus: "needs_attention",
+      readiness: "needs_permission",
+      reasonCode: "provider_not_supported",
+    };
+  }
+
+  const now = input.now ?? new Date();
+  const expiresAt = input.credentialExpiresAt === null
+    ? null
+    : new Date(input.credentialExpiresAt);
+  const expired = input.credentialStatus === "expired"
+    || (expiresAt !== null
+      && Number.isFinite(expiresAt.getTime())
+      && expiresAt.getTime() <= now.getTime());
+  if (expired) {
+    return {
+      connectionStatus: "expired",
+      readiness: "needs_permission",
+      reasonCode: "credential_expired",
+    };
+  }
+  if (input.credentialStatus !== "active"
+    || (expiresAt !== null && !Number.isFinite(expiresAt.getTime()))) {
+    return {
+      connectionStatus: "needs_attention",
+      readiness: "needs_permission",
+      reasonCode: "credential_invalid",
+    };
+  }
+
+  const scopes = new Set(input.scopes);
+  const hasBasic = instagramBasicScopeAlternatives.some((scope) => scopes.has(scope));
+  const hasPublish = instagramPublishScopeAlternatives.some((scope) => scopes.has(scope));
+  if (!hasBasic || !hasPublish) {
+    return {
+      connectionStatus: "insufficient_permissions",
+      readiness: "needs_permission",
+      reasonCode: "missing_required_scopes",
+    };
+  }
+  return { connectionStatus: "connected", readiness: "ready", reasonCode: null };
 }
 
 function metadataRecord(value: unknown): Record<string, unknown> {

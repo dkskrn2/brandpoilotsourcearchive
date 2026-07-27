@@ -1,9 +1,12 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import type { Pool } from "pg";
 import {
   buildChannelCapabilities,
   type ChannelCapability,
+  type InstagramChannelCapabilityContext,
 } from "./channelCapabilities.js";
 import { createServer } from "./httpServer.js";
+import { createRepository } from "./repository.js";
 import type {
   ApiRepository,
   BrandContentFormatDto,
@@ -56,6 +59,21 @@ const defaultFormats = [
   instagramFormat("instagram_reel", "unchecked"),
 ];
 
+function instagramContext(
+  overrides: Partial<InstagramChannelCapabilityContext> = {},
+): InstagramChannelCapabilityContext {
+  return {
+    externalAccountId: "17890000000000000",
+    credentialId: "credential-1",
+    credentialProvider: "meta",
+    credentialStatus: "active",
+    credentialExpiresAt: "2026-08-01T00:00:00.000Z",
+    scopes: ["instagram_business_basic", "instagram_business_content_publish"],
+    now: new Date("2026-07-27T00:00:00.000Z"),
+    ...overrides,
+  };
+}
+
 describe("channel capability aggregate", () => {
   it("defines the single server and customer capability contract", () => {
     expectTypeOf<ChannelCapability>().toEqualTypeOf<{
@@ -75,6 +93,7 @@ describe("channel capability aggregate", () => {
     const result = buildChannelCapabilities({
       channels: [channel("instagram")],
       instagramFormats: defaultFormats,
+      instagramContext: instagramContext({ credentialId: null, credentialStatus: null, scopes: [] }),
     });
 
     expect(result[0]).toEqual({
@@ -91,15 +110,22 @@ describe("channel capability aggregate", () => {
   });
 
   it.each([
-    ["needs_attention", "channel_needs_attention"],
     ["expired", "credential_expired"],
     ["insufficient_permissions", "missing_required_scopes"],
     ["mapping_required", "professional_account_required"],
-    ["publish_failed", "publish_failed"],
   ] as const)("requires Instagram permission repair for %s", (status, reasonCode) => {
     const result = buildChannelCapabilities({
       channels: [channel("instagram", status)],
       instagramFormats: defaultFormats,
+      instagramContext: instagramContext(
+        status === "expired"
+          ? { credentialExpiresAt: "2026-07-26T23:59:59.000Z" }
+          : status === "insufficient_permissions"
+            ? { scopes: ["instagram_business_basic"] }
+            : status === "mapping_required"
+              ? { externalAccountId: null }
+              : {},
+      ),
     });
 
     expect(result[0]).toMatchObject({
@@ -115,9 +141,17 @@ describe("channel capability aggregate", () => {
       channels: [channel("instagram", "connected")],
       instagramFormats: [
         instagramFormat("instagram_feed_carousel", "available"),
-        instagramFormat("instagram_story", "available"),
+        {
+          ...instagramFormat("instagram_story", "available"),
+          capabilityMetadata: {
+            scopesVerified: true,
+            storyPublishVerified: true,
+            verifiedCredentialId: "credential-1",
+          },
+        },
         instagramFormat("instagram_reel", "available"),
       ],
+      instagramContext: instagramContext(),
     });
 
     expect(result[0]).toMatchObject({
@@ -136,6 +170,7 @@ describe("channel capability aggregate", () => {
     const result = buildChannelCapabilities({
       channels: [channel("instagram", "connected")],
       instagramFormats: defaultFormats,
+      instagramContext: instagramContext(),
     });
 
     expect(result[0]).toMatchObject({
@@ -149,6 +184,7 @@ describe("channel capability aggregate", () => {
     const result = buildChannelCapabilities({
       channels: [channel("threads", "connected")],
       instagramFormats: defaultFormats,
+      instagramContext: instagramContext(),
     });
 
     expect(result[1]).toEqual({
@@ -173,12 +209,14 @@ describe("channel capability aggregate", () => {
         channel("tiktok", "connected"),
       ],
       instagramFormats: defaultFormats,
+      instagramContext: instagramContext(),
     });
 
     expect(result.slice(2)).toEqual([
       expect.objectContaining({
         channel: "x",
         catalogStatus: "planned",
+        connectionStatus: "not_connected",
         publishModes: [],
         readiness: "not_supported",
         reasonCode: "provider_not_implemented",
@@ -186,12 +224,14 @@ describe("channel capability aggregate", () => {
       expect.objectContaining({
         channel: "linkedin",
         catalogStatus: "planned",
+        connectionStatus: "not_connected",
         publishModes: [],
         readiness: "not_supported",
         reasonCode: "provider_not_implemented",
       }),
       expect.objectContaining({
         channel: "youtube",
+        connectionStatus: "not_connected",
         canGenerate: false,
         generationFormats: [],
         publishModes: [],
@@ -200,6 +240,7 @@ describe("channel capability aggregate", () => {
       }),
       expect.objectContaining({
         channel: "tiktok",
+        connectionStatus: "not_connected",
         canGenerate: false,
         generationFormats: [],
         publishModes: [],
@@ -207,6 +248,99 @@ describe("channel capability aggregate", () => {
         reasonCode: "video_generation_out_of_scope",
       }),
     ]);
+  });
+
+  it.each([
+    {
+      name: "the professional account mapping is missing",
+      context: instagramContext({ externalAccountId: null }),
+      reasonCode: "professional_account_required",
+    },
+    {
+      name: "the required content publish scope is missing",
+      context: instagramContext({ scopes: ["instagram_business_basic"] }),
+      reasonCode: "missing_required_scopes",
+    },
+    {
+      name: "the active token has naturally expired",
+      context: instagramContext({ credentialExpiresAt: "2026-07-27T00:00:00.000Z" }),
+      reasonCode: "credential_expired",
+    },
+    {
+      name: "the credential provider is not the implemented Meta adapter",
+      context: instagramContext({ credentialProvider: "other" }),
+      reasonCode: "provider_not_supported",
+    },
+  ])("derives Instagram readiness from authoritative state when $name", ({ context, reasonCode }) => {
+    const result = buildChannelCapabilities({
+      channels: [channel("instagram", "connected")],
+      instagramFormats: defaultFormats,
+      instagramContext: context,
+    });
+
+    expect(result[0]).toMatchObject({
+      publishModes: [],
+      readiness: "needs_permission",
+      reasonCode,
+    });
+  });
+
+  it("requires provider-verified Story permission before exposing static Story publish", () => {
+    const result = buildChannelCapabilities({
+      channels: [channel("instagram", "connected")],
+      instagramFormats: [
+        instagramFormat("instagram_feed_carousel", "available"),
+        {
+          ...instagramFormat("instagram_story", "available"),
+          capabilityMetadata: {
+            scopesVerified: true,
+            storyPublishVerified: true,
+            verifiedCredentialId: "another-credential",
+          },
+        },
+        instagramFormat("instagram_reel", "unchecked"),
+      ],
+      instagramContext: instagramContext(),
+    });
+
+    expect(result[0]?.publishModes).toEqual([
+      "instagram_feed_single",
+      "instagram_feed_carousel",
+    ]);
+  });
+});
+
+describe("authoritative Instagram capability repository context", () => {
+  it("loads account mapping, provider, scopes, token status, and natural expiry data", async () => {
+    const query = vi.fn(async () => ({
+      rowCount: 1,
+      rows: [{
+        external_account_id: "17890000000000000",
+        credential_id: "credential-1",
+        credential_provider: "meta",
+        credential_status: "active",
+        credential_expires_at: new Date("2026-08-01T00:00:00.000Z"),
+        scopes: ["instagram_business_basic", "instagram_business_content_publish"],
+      }],
+    }));
+    const repository = createRepository({ query } as unknown as Pool);
+
+    await expect(repository.getInstagramChannelCapabilityContext(brandId)).resolves.toEqual({
+      externalAccountId: "17890000000000000",
+      credentialId: "credential-1",
+      credentialProvider: "meta",
+      credentialStatus: "active",
+      credentialExpiresAt: "2026-08-01T00:00:00.000Z",
+      scopes: ["instagram_business_basic", "instagram_business_content_publish"],
+    });
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("external_account_id"),
+      [brandId],
+    );
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("channel_credentials"),
+      [brandId],
+    );
   });
 });
 
@@ -219,6 +353,7 @@ describe("GET /brands/:brandId/channels/capabilities", () => {
         brandColor: null,
         formats: defaultFormats,
       })),
+      getInstagramChannelCapabilityContext: vi.fn(async () => instagramContext()),
       ...overrides,
     } as unknown as ApiRepository;
   }
@@ -253,6 +388,7 @@ describe("GET /brands/:brandId/channels/capabilities", () => {
     expect(response.json()).toHaveLength(6);
     expect(apiRepository.listChannels).toHaveBeenCalledWith(brandId);
     expect(apiRepository.listInstagramFormats).toHaveBeenCalledWith(brandId);
+    expect(apiRepository.getInstagramChannelCapabilityContext).toHaveBeenCalledWith(brandId);
     expect(kakaoAuth.canAccessBrand).toHaveBeenCalledWith("user-1", brandId);
   });
 
