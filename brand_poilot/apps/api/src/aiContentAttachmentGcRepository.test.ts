@@ -6,6 +6,8 @@ import {
 
 const BUDGET = { remainingBudgetMs: 5_000, statementTimeoutMs: 2_000 };
 const JOB_ID = "10000000-0000-4000-8000-000000000001";
+const MIGRATION_MD5_JOB_ID = "20c7e25a-93e9-74ec-a342-086e39fa9020";
+const NONSTANDARD_VARIANT_JOB_ID = "20c7e25a-93e9-74ec-7342-086e39fa9020";
 const LEASE = "20000000-0000-4000-8000-000000000002";
 const GENERATION_ID = "30000000-0000-4000-8000-000000000003";
 
@@ -429,6 +431,121 @@ describe("AiContentAttachmentGcRepository", () => {
 
     expect(pool.sql.join("\n")).toContain("status = 'deleting'");
     expect(pool.sql.join("\n")).toContain("lease_token = $2::uuid");
+  });
+
+  it.each([
+    MIGRATION_MD5_JOB_ID,
+    NONSTANDARD_VARIANT_JOB_ID,
+  ])("accepts PostgreSQL UUID job id %s through every post-claim transition", async (jobId) => {
+    const pool = scriptedPool((sql, params) => {
+      if (sql.includes("gc_candidate_jobs")) {
+        return { rows: [{
+          id: jobId,
+          generation_id: null,
+          workspace_id: "40000000-0000-4000-8000-000000000004",
+          brand_id: "50000000-0000-4000-8000-000000000005",
+          next_attempt_at: "2026-07-28T00:00:00.000Z",
+          created_at: "2026-07-28T00:00:00.000Z",
+        }], rowCount: 1 };
+      }
+      if (sql.includes("select job.*") && sql.includes("for update skip locked")) {
+        expect(params?.[0]).toBe(jobId);
+        return { rows: [{
+          id: jobId,
+          workspace_id: "40000000-0000-4000-8000-000000000004",
+          brand_id: "50000000-0000-4000-8000-000000000005",
+          generation_id: GENERATION_ID,
+          attachment_id: null,
+          upload_session_id: null,
+          storage_path: "attachments/migration-job.png",
+          storage_url: "https://blob.example/attachments/migration-job.png",
+          reason: "legacy_deleted",
+          attempt_count: 0,
+          max_attempts: 10,
+        }], rowCount: 1 };
+      }
+      if (sql.includes("set status = 'deleting'")) {
+        expect(params?.[0]).toBe(jobId);
+        return { rows: [{
+          id: jobId,
+          workspace_id: "40000000-0000-4000-8000-000000000004",
+          brand_id: "50000000-0000-4000-8000-000000000005",
+          generation_id: GENERATION_ID,
+          attachment_id: null,
+          upload_session_id: null,
+          storage_path: "attachments/migration-job.png",
+          storage_url: "https://blob.example/attachments/migration-job.png",
+          reason: "legacy_deleted",
+          attempt_count: 0,
+          max_attempts: 10,
+          lease_token: LEASE,
+          lease_expires_at: "2026-07-28T00:02:00.000Z",
+        }], rowCount: 1 };
+      }
+      if (sql.includes("attempt_count = attempt_count + 1")) {
+        expect(params).toEqual([jobId, LEASE]);
+        return { rows: [{ attempt_count: 1 }], rowCount: 1 };
+      }
+      if (sql.includes("released as")) {
+        expect(params).toEqual([[jobId], [LEASE]]);
+        return { rows: [{ released_count: 1 }], rowCount: 1 };
+      }
+      if (sql.includes("set status = 'deleted'")) {
+        expect(params).toEqual([jobId, LEASE]);
+        return { rows: [{ attachment_id: null }], rowCount: 1 };
+      }
+      if (sql.includes("case when")) {
+        expect(params?.slice(0, 2)).toEqual([jobId, LEASE]);
+        return { rows: [{ disposition: "retry", attachment_id: null }], rowCount: 1 };
+      }
+      throw new Error(`unexpected:${sql}`);
+    });
+    const repository = createAiContentAttachmentGcRepository(pool as never, { createId: () => LEASE });
+
+    await expect(repository.claimAiContentAttachmentDeletionJobs({
+      workerId: "gc-migration-job",
+      batchSize: 1,
+      leaseSeconds: 60,
+      ...BUDGET,
+    })).resolves.toEqual([expect.objectContaining({ jobId })]);
+    await expect(repository.beginAiContentAttachmentDeletionAttempt({
+      jobId,
+      leaseToken: LEASE,
+      ...BUDGET,
+    })).resolves.toBe(1);
+    await expect(repository.releaseUnstartedAiContentAttachmentDeletions({
+      claims: [{ jobId, leaseToken: LEASE }],
+      ...BUDGET,
+    })).resolves.toBe(1);
+    await expect(repository.completeAiContentAttachmentDeletion({
+      jobId,
+      leaseToken: LEASE,
+      outcome: "not_found",
+      ...BUDGET,
+    })).resolves.toBe(true);
+    await expect(repository.failAiContentAttachmentDeletion({
+      jobId,
+      leaseToken: LEASE,
+      errorCategory: "transient",
+      errorMessage: "timeout",
+      retryDelaySeconds: 30,
+      ...BUDGET,
+    })).resolves.toBe("retry");
+  });
+
+  it("rejects malformed job ids while keeping lease tokens RFC-strict", async () => {
+    const repository = createAiContentAttachmentGcRepository({} as never);
+
+    await expect(repository.beginAiContentAttachmentDeletionAttempt({
+      jobId: "20c7e25a-93e9-74ec-a342-086e39fa902",
+      leaseToken: LEASE,
+      ...BUDGET,
+    })).rejects.toThrow("ai_content_gc_job_id_invalid");
+    await expect(repository.beginAiContentAttachmentDeletionAttempt({
+      jobId: MIGRATION_MD5_JOB_ID,
+      leaseToken: MIGRATION_MD5_JOB_ID,
+      ...BUDGET,
+    })).rejects.toThrow("ai_content_gc_lease_token_invalid");
   });
 
   it("releases every budget-skipped claim set-wise without consuming attempts", async () => {

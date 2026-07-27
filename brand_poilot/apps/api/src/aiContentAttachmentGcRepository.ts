@@ -79,14 +79,20 @@ interface Options {
   createId?: () => string;
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const RFC_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const POSTGRES_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_BATCH = 250;
 const MAX_LEASE_SECONDS = 15 * 60;
 const MAX_ERROR_CATEGORY = 64;
 const MAX_ERROR_MESSAGE = 512;
 
-function requireUuid(value: string, code: string) {
-  if (!UUID.test(value)) throw new Error(code);
+function requireRfcUuid(value: string, code: string) {
+  if (!RFC_UUID.test(value)) throw new Error(code);
+  return value.toLowerCase();
+}
+
+function requirePostgresUuid(value: string, code: string) {
+  if (!POSTGRES_UUID.test(value)) throw new Error(code);
   return value.toLowerCase();
 }
 
@@ -710,7 +716,7 @@ export function createAiContentAttachmentGcRepository(
           const candidateElapsed = Date.now() - startedAt;
           const candidateBudgetMs = input.remainingBudgetMs - candidateElapsed;
           if (candidateBudgetMs <= 0) break scan;
-          const leaseToken = requireUuid(createId(), "ai_content_gc_lease_token_invalid");
+          const leaseToken = requireRfcUuid(createId(), "ai_content_gc_lease_token_invalid");
           let claim: AiContentAttachmentDeletionClaim | null;
           try {
             claim = await inBudgetTransaction(pool, {
@@ -779,8 +785,8 @@ export function createAiContentAttachmentGcRepository(
     },
 
     async beginAiContentAttachmentDeletionAttempt(input) {
-      const jobId = requireUuid(input.jobId, "ai_content_gc_job_id_invalid");
-      const leaseToken = requireUuid(input.leaseToken, "ai_content_gc_lease_token_invalid");
+      const jobId = requirePostgresUuid(input.jobId, "ai_content_gc_job_id_invalid");
+      const leaseToken = requireRfcUuid(input.leaseToken, "ai_content_gc_lease_token_invalid");
       return inBudgetTransaction(pool, input, async (client) => {
         const result = await client.query(
           `update ai_content_attachment_deletion_jobs
@@ -797,8 +803,8 @@ export function createAiContentAttachmentGcRepository(
     async releaseUnstartedAiContentAttachmentDeletions(input) {
       if (!input.claims.length) return 0;
       if (input.claims.length > MAX_BATCH) throw new Error("ai_content_gc_release_batch_invalid");
-      const jobIds = input.claims.map((claim) => requireUuid(claim.jobId, "ai_content_gc_job_id_invalid"));
-      const leaseTokens = input.claims.map((claim) => requireUuid(claim.leaseToken, "ai_content_gc_lease_token_invalid"));
+      const jobIds = input.claims.map((claim) => requirePostgresUuid(claim.jobId, "ai_content_gc_job_id_invalid"));
+      const leaseTokens = input.claims.map((claim) => requireRfcUuid(claim.leaseToken, "ai_content_gc_lease_token_invalid"));
       return inBudgetTransaction(pool, input, async (client) => {
         const result = await client.query(
           `with claim_pairs as (
@@ -828,8 +834,8 @@ export function createAiContentAttachmentGcRepository(
     },
 
     async completeAiContentAttachmentDeletion(input) {
-      const jobId = requireUuid(input.jobId, "ai_content_gc_job_id_invalid");
-      const leaseToken = requireUuid(input.leaseToken, "ai_content_gc_lease_token_invalid");
+      const jobId = requirePostgresUuid(input.jobId, "ai_content_gc_job_id_invalid");
+      const leaseToken = requireRfcUuid(input.leaseToken, "ai_content_gc_lease_token_invalid");
       if (input.outcome !== "deleted" && input.outcome !== "not_found") {
         throw new Error("ai_content_gc_outcome_invalid");
       }
@@ -858,8 +864,8 @@ export function createAiContentAttachmentGcRepository(
     },
 
     async failAiContentAttachmentDeletion(input) {
-      const jobId = requireUuid(input.jobId, "ai_content_gc_job_id_invalid");
-      const leaseToken = requireUuid(input.leaseToken, "ai_content_gc_lease_token_invalid");
+      const jobId = requirePostgresUuid(input.jobId, "ai_content_gc_job_id_invalid");
+      const leaseToken = requireRfcUuid(input.leaseToken, "ai_content_gc_lease_token_invalid");
       const category = redactAiContentAttachmentGcError(input.errorCategory, MAX_ERROR_CATEGORY)
         .toLowerCase()
         .replace(/[^a-z0-9_:-]/g, "_");

@@ -598,6 +598,7 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         due_not_early: true,
       })]);
       const jobId = String(triggered.rows[0].id);
+      expect(jobId).toBe("58318d28-2cc5-a6dd-3ff2-ed0904ea0264");
 
       const repository = createAiContentAttachmentGcRepository(pool);
       await expect(repository.claimAiContentAttachmentDeletionJobs({
