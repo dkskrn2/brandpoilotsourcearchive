@@ -45,8 +45,6 @@ export function SubjectAnalysisStep({
   const [pipelineStatus, setPipelineStatus] = useState<SubjectAnalysis["status"]>("extracting");
   const [error, setError] = useState<string | null>(null);
   const attachments = draft.subjectAttachments ?? [];
-  const imageAttachments = attachments.filter(({ role }) => role === "product");
-  const documentAttachments = attachments.filter(({ role }) => role === "document");
   const readyToAnalyze = Boolean(
     draft.subjectType
       && (draft.subjectInput.sourceUrl.trim()
@@ -54,13 +52,6 @@ export function SubjectAnalysisStep({
         || draft.subjectInput.description.trim()
         || attachments.length),
   );
-
-  function replaceAttachments(roles: GenerationAttachment["role"][], next: GenerationAttachment[]) {
-    onSubjectAttachments([
-      ...attachments.filter(({ role }) => !roles.includes(role)),
-      ...next,
-    ]);
-  }
 
   async function run() {
     if (!draft.subjectType || !readyToAnalyze) {
@@ -121,11 +112,11 @@ export function SubjectAnalysisStep({
       <div className="analysis-upload-groups">
         <div className="analysis-upload-group">
           <div className="section-heading-inline"><h3><Image size={17} />제품·서비스 이미지</h3><span>PNG, JPEG</span></div>
-          <AiContentAttachmentUploader gateway={gateway} brandId={brandId} generationId={null} attachments={imageAttachments} allowedRoles={["product"]} onChange={(next) => replaceAttachments(["product"], next)} />
+          <AiContentAttachmentUploader gateway={gateway} brandId={brandId} generationId={null} attachments={attachments} allowedRoles={["product"]} onChange={onSubjectAttachments} />
         </div>
         <div className="analysis-upload-group">
           <div className="section-heading-inline"><h3><FileText size={17} />설명 문서</h3><span>PDF, TXT, MD, CSV, XLSX</span></div>
-          <AiContentAttachmentUploader gateway={gateway} brandId={brandId} generationId={null} attachments={documentAttachments} allowedRoles={["document"]} onChange={(next) => replaceAttachments(["document"], next)} />
+          <AiContentAttachmentUploader gateway={gateway} brandId={brandId} generationId={null} attachments={attachments} allowedRoles={["document"]} onChange={onSubjectAttachments} />
         </div>
       </div>
       <div className="wizard-inline-actions"><button type="button" className="button primary" disabled={!readyToAnalyze || runStatus === "loading"} onClick={() => void run()}>{runStatus === "loading" ? <LoaderCircle className="inline-spinner" size={17} /> : <CheckCircle2 size={17} />}분석하고 소구점 만들기</button></div>

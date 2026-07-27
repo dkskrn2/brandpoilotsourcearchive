@@ -21,7 +21,7 @@ function row(id: string, status = "analyzing") {
   };
 }
 
-function createPool(options: { missingReferences?: boolean; generationUsage?: number; wikiReady?: boolean } = {}) {
+function createPool(options: { missingReferences?: boolean; generationUsage?: number; wikiReady?: boolean; attachmentCount?: number } = {}) {
   const commands: string[] = [];
   const sql: string[] = [];
   const referenceSnapshots: Array<Record<string, unknown>> = [];
@@ -96,6 +96,9 @@ function createPool(options: { missingReferences?: boolean; generationUsage?: nu
           }],
           rowCount: 1,
         };
+      }
+      if (query.includes("count(*)::integer as attachment_count") && query.includes("from ai_content_generation_attachments")) {
+        return { rows: [{ attachment_count: options.attachmentCount ?? 0 }], rowCount: 1 };
       }
       return { rows: [], rowCount: 0 };
     },
@@ -261,6 +264,36 @@ const input = {
   title: "여름 추천",
   draft: { productUrl: "https://example.com/product" },
   idempotencyKey: "analysis-key-1",
+};
+const contentGenerationInputV2Fixture = {
+  contractVersion: "content-generation-input.v2" as const,
+  contentType: "card_news" as const,
+  brandContext: {},
+  subject: {
+    analysisId: "analysis-1",
+    analysisVersion: 1,
+    analysisContractVersion: "subject-analysis.v1" as const,
+    analysisResult: null,
+    type: "product" as const,
+    sourceUrl: "",
+    facts: [],
+    research: {},
+    selectedImages: [],
+  },
+  message: {
+    target: { id: "target-1", name: "타깃" },
+    appeal: { id: "appeal-1", targetId: "target-1", title: "소구점" },
+    qualityBrief: { hook: "사용자 입력" },
+  },
+  creativeDirection: {
+    prompts: [],
+    brandColor: "",
+    selectedColor: "#0057B8",
+    aspectRatio: "1:1" as const,
+    outputCount: 1 as const,
+  },
+  references: [],
+  attachments: [],
 };
 
 describe("AI content repository", () => {
@@ -546,6 +579,23 @@ describe("AI content repository", () => {
     expect(pool.sql.join("\n")).toContain("on conflict (generation_id, storage_path) do update");
   });
 
+  it("rejects a sixth active attachment for the same generation", async () => {
+    const pool = createPool({ attachmentCount: 5 });
+    const repository = createAiContentRepository(pool as never);
+
+    await expect(repository.confirmAiContentAttachment({
+      ...scope,
+      generationId: "generation-1",
+      role: "document",
+      fileName: "sixth.md",
+      mimeType: "text/markdown",
+      sizeBytes: 100,
+      checksum: "b".repeat(64),
+      storageUrl: "https://example.public.blob.vercel-storage.com/sixth",
+      storagePath: "brands/brand-1/ai-content/generation-1/attachments/sixth.md",
+    })).rejects.toThrow("ai_content_attachment_limit_exceeded");
+  });
+
   it("claims only the requested content type with a recoverable lease", async () => {
     const pool = createWorkerPool();
     const repository = createAiContentRepository(pool as never);
@@ -738,16 +788,7 @@ describe("AI content repository", () => {
   });
 
   it("keeps the stored subject snapshot immutable and overlays the final quality brief only in generate jobs", async () => {
-    const snapshot = {
-      contractVersion: "content-generation-input.v2",
-      contentType: "card_news",
-      brandContext: {},
-      subject: { analysisId: "analysis-1", analysisVersion: 1, analysisContractVersion: "subject-analysis.v1", analysisResult: null, type: "product", sourceUrl: "", facts: [], research: {}, selectedImages: [] },
-      message: { target: { id: "target-1", name: "타깃" }, appeal: { id: "appeal-1", targetId: "target-1", title: "소구점" }, qualityBrief: { hook: "사용자 입력" } },
-      creativeDirection: { prompts: [], brandColor: "", selectedColor: "#0057B8", aspectRatio: "1:1", outputCount: 1 },
-      references: [],
-      attachments: [],
-    };
+    const snapshot = structuredClone(contentGenerationInputV2Fixture);
     const finalBrief = { version: "content-quality.v1", hook: "최종 편집안" };
     const pool = createWorkerPool({ subjectAnalysisSnapshot: snapshot, qualityBrief: finalBrief });
     const repository = createAiContentRepository(pool as never);
@@ -858,6 +899,25 @@ describe("AI content repository", () => {
     const pool = createWorkerPool({ outputStatus: "completed" });
     const repository = createAiContentRepository(pool as never);
     await expect(repository.retryAiContentOutput({ ...scope, outputId: "output-1" })).rejects.toThrow("ai_content_output_not_failed");
+  });
+
+  it("reuses the stored content-generation-input.v2 snapshot when retrying a failed output", async () => {
+    const snapshot = structuredClone(contentGenerationInputV2Fixture);
+    const pool = createWorkerPool({ outputStatus: "failed", subjectAnalysisSnapshot: snapshot });
+    const repository = createAiContentRepository(pool as never);
+
+    await expect(repository.retryAiContentOutput({ ...scope, outputId: "output-1" }))
+      .resolves.toMatchObject({ id: "generation-1", status: "queued" });
+    const claimed = await repository.claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-1",
+      leaseSeconds: 180,
+    });
+
+    expect(claimed?.payload.contentGenerationInput).toEqual(snapshot);
+    expect(pool.sql.join("\n")).toContain(
+      "'contentGenerationInput', coalesce((select subject_analysis_snapshot from ai_content_generations where id = $1), '{}'::jsonb)",
+    );
   });
 
   it("lists only live generation-scoped subject evidence with loader metadata", async () => {

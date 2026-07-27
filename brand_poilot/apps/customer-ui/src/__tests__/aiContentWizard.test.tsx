@@ -92,7 +92,7 @@ describe("AiContentWizardPage", () => {
     await user.click(screen.getByRole("radio", { name: /1-1 타깃에 맞는 소구점/ }));
     expect(screen.getByText("1개만 선택")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "다음" }));
-    expect(screen.getByText("참고할 콘텐츠를 선택하세요")).toBeVisible();
+    expect(screen.getAllByRole("heading", { name: "참고할 콘텐츠를 선택하세요" })).toHaveLength(1);
   });
 
   it("returns a completed real analysis to the product library without exposing its ID to the user", async () => {
@@ -147,5 +147,68 @@ describe("AiContentWizardPage", () => {
     }));
     expect(startGeneration).toHaveBeenCalledWith("brand-demo", expect.any(String), expect.objectContaining({ outputCount: 2 }));
     expect(createAnalysis).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps additional generation attachments at a total of five", async () => {
+    const user = userEvent.setup();
+    const gateway = createMockAiContentGateway();
+    const uploadAttachment = vi.spyOn(gateway, "uploadAttachment");
+    renderWizard("/ai-content/new?type=marketing", gateway);
+    await completeAnalysis(user);
+    await user.click(screen.getByRole("radio", { name: /시간이 부족한/ }));
+    await user.click(screen.getByRole("radio", { name: /1-1 타깃에 맞는 소구점/ }));
+    await user.click(screen.getByRole("button", { name: "다음" }));
+    await user.click(screen.getByRole("button", { name: "다음" }));
+
+    const personInput = screen.getByLabelText("인물 이미지");
+    for (let index = 1; index <= 6; index += 1) {
+      await user.upload(personInput, new File([`person-${index}`], `person-${index}.png`, { type: "image/png" }));
+    }
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("첨부 파일은 최대 5개입니다.");
+    expect(uploadAttachment).toHaveBeenCalledTimes(5);
+    expect(screen.getAllByText(/^person-\d\.png$/)).toHaveLength(5);
+  });
+
+  it("keeps subject attachments at a total of five across product and document roles", async () => {
+    const user = userEvent.setup();
+    renderWizard();
+    await user.click(screen.getByRole("button", { name: "다음" }));
+    await user.click(screen.getByRole("radio", { name: "제품" }));
+
+    const productInput = screen.getByLabelText("제품 이미지");
+    const documentInput = screen.getByLabelText("문서");
+    for (let index = 1; index <= 3; index += 1) {
+      await user.upload(productInput, new File([`product-${index}`], `product-${index}.png`, { type: "image/png" }));
+      await user.upload(documentInput, new File([`document-${index}`], `document-${index}.md`, { type: "text/markdown" }));
+    }
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("첨부 파일은 최대 5개입니다.");
+    expect(screen.getAllByText(/^(product|document)-\d\.(png|md)$/)).toHaveLength(5);
+  });
+
+  it("shares the five-attachment budget between subject and generation attachments", async () => {
+    const user = userEvent.setup();
+    const gateway = createMockAiContentGateway();
+    const uploadAttachment = vi.spyOn(gateway, "uploadAttachment");
+    renderWizard("/ai-content/new?type=marketing", gateway);
+    await user.click(screen.getByRole("button", { name: "다음" }));
+    await user.click(screen.getByRole("radio", { name: "제품" }));
+    await user.upload(screen.getByLabelText("제품 이미지"), new File(["product"], "product.png", { type: "image/png" }));
+    await user.upload(screen.getByLabelText("문서"), new File(["document"], "document.md", { type: "text/markdown" }));
+    await user.click(screen.getByRole("button", { name: "분석하고 소구점 만들기" }));
+    expect(await screen.findByText("3 / 5")).toBeVisible();
+    await user.click(screen.getByRole("radio", { name: /시간이 부족한/ }));
+    await user.click(screen.getByRole("radio", { name: /1-1 타깃에 맞는 소구점/ }));
+    await user.click(screen.getByRole("button", { name: "다음" }));
+    await user.click(screen.getByRole("button", { name: "다음" }));
+
+    const personInput = screen.getByLabelText("인물 이미지");
+    for (let index = 1; index <= 4; index += 1) {
+      await user.upload(personInput, new File([`person-${index}`], `person-${index}.png`, { type: "image/png" }));
+    }
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("첨부 파일은 최대 5개입니다.");
+    expect(uploadAttachment).toHaveBeenCalledTimes(5);
   });
 });

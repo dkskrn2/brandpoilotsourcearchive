@@ -17,6 +17,7 @@ interface Props {
   brandId: string;
   generationId: string | null;
   attachments: GenerationAttachment[];
+  totalAttachmentCount?: number;
   allowedRoles?: GenerationAttachment["role"][];
   onChange(attachments: GenerationAttachment[]): void;
 }
@@ -43,7 +44,7 @@ function normalizedMimeType(role: GenerationAttachment["role"], file: File) {
   return documentMimeByExtension[extension] ?? file.type;
 }
 
-function validateFile(role: GenerationAttachment["role"], file: File, attachments: GenerationAttachment[]) {
+function validateFile(role: GenerationAttachment["role"], file: File, attachments: GenerationAttachment[], attachmentCount: number) {
   const isDocument = role === "document";
   const mimeType = normalizedMimeType(role, file);
   if (isDocument ? !documentMimeTypes.has(mimeType) : !["image/png", "image/jpeg"].includes(mimeType)) {
@@ -51,12 +52,12 @@ function validateFile(role: GenerationAttachment["role"], file: File, attachment
   }
   const maxBytes = mimeType === "application/pdf" || mimeType.includes("spreadsheetml") ? 10_000_000 : 5_000_000;
   if (file.size > maxBytes) return isDocument ? "문서는 형식에 따라 5~10MB 이하여야 합니다." : "이미지는 5MB 이하여야 합니다.";
-  if (attachments.length >= 5) return "첨부 파일은 최대 5개입니다.";
+  if (attachmentCount >= 5) return "첨부 파일은 최대 5개입니다.";
   if (attachments.some((item) => item.fileName === file.name && item.size === file.size)) return "같은 파일이 이미 첨부되어 있습니다.";
   return null;
 }
 
-export function AiContentAttachmentUploader({ gateway, brandId, generationId, attachments, allowedRoles, onChange }: Props) {
+export function AiContentAttachmentUploader({ gateway, brandId, generationId, attachments, totalAttachmentCount, allowedRoles, onChange }: Props) {
   const [progress, setProgress] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
   const attachmentsRef = useRef(attachments);
@@ -74,7 +75,10 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
   async function upload(role: GenerationAttachment["role"], files: File[]) {
     const file = files[0];
     if (!file) return;
-    const validationError = validateFile(role, file, attachmentsRef.current);
+    const attachmentCount = totalAttachmentCount === undefined
+      ? attachmentsRef.current.length
+      : totalAttachmentCount + attachmentsRef.current.length - attachments.length;
+    const validationError = validateFile(role, file, attachmentsRef.current, attachmentCount);
     if (validationError) return setError(validationError);
     const mimeType = normalizedMimeType(role, file);
     const localId = `${role}-${file.name}-${file.size}`;

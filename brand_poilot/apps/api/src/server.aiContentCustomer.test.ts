@@ -80,16 +80,21 @@ const confirmedSubjectBrandContext = {
   confirmedAt: "2026-07-21T00:00:00.000Z",
 };
 
-function generation(status = "analyzing") {
+function generation(
+  status = "analyzing",
+  type: "card_news" | "blog" | "marketing" = "card_news",
+  title = "여름 추천",
+  draft: Record<string, unknown> = {},
+) {
   return {
     id: generationId,
     workspaceId,
     brandId,
-    type: "card_news" as const,
-    title: "여름 추천",
+    type,
+    title,
     status,
     currentStage: "analysis",
-    draft: {},
+    draft,
     analysis: {},
     errorCode: null,
     errorMessage: null,
@@ -163,18 +168,104 @@ function setup(allowed = true) {
 }
 
 const auth = { cookie: "bp_session=session-1" };
+const generationContractFixtures = [
+  {
+    type: "card_news",
+    title: "여름 추천 카드뉴스",
+    draft: { subjectType: "product", brief: { aspectRatio: "1:1" } },
+    updatedDraft: { subjectType: "product", brief: { aspectRatio: "4:5" } },
+    referenceIds: ["card-reference"],
+    outputCount: 2,
+  },
+  {
+    type: "blog",
+    title: "여름 운영 블로그",
+    draft: { subjectType: "service", brief: { aspectRatio: "16:9" } },
+    updatedDraft: { subjectType: "service", brief: { aspectRatio: "1:1" } },
+    referenceIds: ["blog-reference"],
+    outputCount: 1,
+  },
+  {
+    type: "marketing",
+    title: "여름 프로모션 소재",
+    draft: { subjectType: "product", brief: { aspectRatio: "9:16" } },
+    updatedDraft: { subjectType: "product", brief: { aspectRatio: "1:1" } },
+    referenceIds: ["marketing-reference"],
+    outputCount: 3,
+  },
+] as const;
 
 describe("AI content customer routes", () => {
-  it("creates an analysis in the authenticated workspace and brand scope", async () => {
+  it.each(generationContractFixtures)("locks the $type create, update, start, list, and get contracts", async (fixture) => {
     const { app, repository } = setup();
-    const response = await app.inject({
+    const createdRecord = generation("analyzing", fixture.type, fixture.title, fixture.draft);
+    vi.mocked(repository.createAiContentAnalysis).mockResolvedValueOnce(createdRecord);
+    const create = await app.inject({
       method: "POST",
       url: `/brands/${brandId}/ai-content/generations`,
       headers: auth,
-      payload: { type: "card_news", title: "여름 추천", draft: { productUrl: "https://example.com" }, idempotencyKey: "analysis-1" },
+      payload: { type: fixture.type, title: fixture.title, draft: fixture.draft, idempotencyKey: `${fixture.type}-analysis` },
     });
-    expect(response.statusCode).toBe(200);
-    expect(repository.createAiContentAnalysis).toHaveBeenCalledWith(expect.objectContaining({ workspaceId, brandId, idempotencyKey: "analysis-1" }));
+    expect(create.statusCode).toBe(200);
+    expect(create.json()).toEqual(createdRecord);
+    expect(repository.createAiContentAnalysis).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      type: fixture.type,
+      title: fixture.title,
+      draft: fixture.draft,
+      idempotencyKey: `${fixture.type}-analysis`,
+    });
+
+    const updatedRecord = generation("analysis_ready", fixture.type, fixture.title, fixture.updatedDraft);
+    vi.mocked(repository.updateAiContentDraft).mockResolvedValueOnce(updatedRecord);
+    const update = await app.inject({
+      method: "PATCH",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}`,
+      headers: auth,
+      payload: { draft: fixture.updatedDraft, referenceIds: fixture.referenceIds },
+    });
+    expect(update.statusCode).toBe(200);
+    expect(update.json()).toEqual(updatedRecord);
+    expect(repository.updateAiContentDraft).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      generationId,
+      draft: fixture.updatedDraft,
+      referenceIds: fixture.referenceIds,
+    });
+
+    const startedRecord = generation("queued", fixture.type, fixture.title, fixture.updatedDraft);
+    vi.mocked(repository.startAiContentGeneration).mockResolvedValueOnce(startedRecord);
+    const start = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/generate`,
+      headers: auth,
+      payload: { idempotencyKey: `${fixture.type}-generate`, outputCount: fixture.outputCount },
+    });
+    expect(start.statusCode).toBe(200);
+    expect(start.json()).toEqual(startedRecord);
+    expect(repository.startAiContentGeneration).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      generationId,
+      idempotencyKey: `${fixture.type}-generate`,
+      outputCount: fixture.outputCount,
+      usageDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      dailyGenerationLimit: 10,
+    });
+
+    vi.mocked(repository.listAiContentGenerations).mockResolvedValueOnce([startedRecord]);
+    const list = await app.inject({ method: "GET", url: `/brands/${brandId}/ai-content/generations`, headers: auth });
+    expect(list.statusCode).toBe(200);
+    expect(list.json()).toEqual([startedRecord]);
+    expect(repository.listAiContentGenerations).toHaveBeenCalledWith({ workspaceId, brandId });
+
+    vi.mocked(repository.getAiContentGeneration).mockResolvedValueOnce(startedRecord);
+    const detail = await app.inject({ method: "GET", url: `/brands/${brandId}/ai-content/generations/${generationId}`, headers: auth });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json()).toEqual(startedRecord);
+    expect(repository.getAiContentGeneration).toHaveBeenCalledWith({ workspaceId, brandId, generationId });
     await app.close();
   });
 
@@ -236,15 +327,43 @@ describe("AI content customer routes", () => {
     await app.close();
   });
 
-  it("retries a failed output in the authenticated brand scope", async () => {
+  it("returns the aggregate attachment limit error from direct API confirmation", async () => {
     const { app, repository } = setup();
+    vi.mocked(repository.confirmAiContentAttachment).mockRejectedValueOnce(new Error("ai_content_attachment_limit_exceeded"));
+    const attachment = { role: "product", fileName: "sixth.png", mimeType: "image/png", sizeBytes: 100, checksum: "b".repeat(64) };
+    const tokenResponse = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+      headers: auth,
+      payload: attachment,
+    });
+    const { pathname } = tokenResponse.json();
+
     const response = await app.inject({
       method: "POST",
-      url: `/brands/${brandId}/ai-content/outputs/output-1/retry`,
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`,
+      headers: auth,
+      payload: { ...attachment, storagePath: pathname, storageUrl: `https://test.public.blob.vercel-storage.com/${pathname}` },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "ai_content_attachment_limit_exceeded" });
+    await app.close();
+  });
+
+  it.each(generationContractFixtures)("locks the $type retry contract", async (fixture) => {
+    const { app, repository } = setup();
+    const retriedRecord = generation("queued", fixture.type, fixture.title, fixture.updatedDraft);
+    vi.mocked(repository.retryAiContentOutput).mockResolvedValueOnce(retriedRecord);
+    const fixtureOutputId = `${fixture.type}-output`;
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${fixtureOutputId}/retry`,
       headers: auth,
     });
     expect(response.statusCode).toBe(200);
-    expect(repository.retryAiContentOutput).toHaveBeenCalledWith({ workspaceId, brandId, outputId: "output-1" });
+    expect(response.json()).toEqual(retriedRecord);
+    expect(repository.retryAiContentOutput).toHaveBeenCalledWith({ workspaceId, brandId, outputId: fixtureOutputId });
     await app.close();
   });
 
