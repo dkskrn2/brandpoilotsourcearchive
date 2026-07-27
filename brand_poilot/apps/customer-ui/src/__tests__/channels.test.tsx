@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -83,16 +83,27 @@ const apiCapabilities: ChannelCapability[] = [
     readiness: "ready",
     reasonCode: null,
   },
-  ...(["threads", "x", "linkedin"] as const).map((channel): ChannelCapability => ({
-    channel,
-    catalogStatus: "planned",
+  {
+    channel: "threads",
+    catalogStatus: "available",
     connectionStatus: "not_connected",
     canGenerate: true,
     generationFormats: ["channel_text"],
     exportModes: ["text"],
     publishModes: [],
     readiness: "not_supported",
-    reasonCode: "publishing_not_supported",
+    reasonCode: "provider_not_implemented",
+  },
+  ...(["x", "linkedin"] as const).map((channel): ChannelCapability => ({
+    channel,
+    catalogStatus: "planned",
+    connectionStatus: "not_connected",
+    canGenerate: false,
+    generationFormats: [],
+    exportModes: ["text"],
+    publishModes: [],
+    readiness: "not_supported",
+    reasonCode: "provider_not_implemented",
   })),
   ...(["youtube", "tiktok"] as const).map((channel): ChannelCapability => ({
     channel,
@@ -168,7 +179,9 @@ describe("ChannelsPage", () => {
     expect(screen.getAllByText("파일·텍스트 내보내기")).toHaveLength(6);
     expect(screen.getAllByText("API 실제 게시")).toHaveLength(6);
     expect(screen.getByText("정적 Story", { exact: false })).toBeVisible();
-    expect(screen.getAllByText("지원 준비 중")).toHaveLength(5);
+    expect(screen.getAllByText("지원 준비 중")).toHaveLength(4);
+    expect(screen.getByText("게시 미지원")).toBeVisible();
+    expect(screen.getByText("Threads API 자동 게시는 아직 구현되지 않았습니다.")).toBeVisible();
     expect(screen.getAllByText("현재 영상 콘텐츠 생성은 제공하지 않습니다.")).toHaveLength(2);
   });
 
@@ -412,5 +425,29 @@ describe("ChannelsPage", () => {
     expect(await screen.findByRole("heading", { name: "Instagram" })).toBeVisible();
     expect(getChannelCapabilities).toHaveBeenCalledTimes(2);
     expect(api.listChannels).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows operator guidance instead of Meta reconnect when Instagram publishing is disabled", async () => {
+    await renderChannelsPage({
+      getChannelCapabilities: vi.fn(async () => apiCapabilities.map((capability) => (
+        capability.channel === "instagram"
+          ? {
+            ...capability,
+            publishModes: [],
+            readiness: "not_supported",
+            reasonCode: "publishing_disabled",
+          }
+          : capability
+      ))),
+    });
+
+    const instagramCard = (await screen.findByRole("heading", { name: "Instagram" })).closest("article");
+    expect(instagramCard).not.toBeNull();
+    expect(within(instagramCard!).getAllByText("연결됨")).toHaveLength(2);
+    expect(within(instagramCard!).getByText("게시 중지됨")).toBeVisible();
+    expect(within(instagramCard!).queryByRole("link", { name: "Meta 다시 연결" })).not.toBeInTheDocument();
+
+    await userEvent.click(within(instagramCard!).getByRole("button", { name: "게시 설정 안내" }));
+    expect(screen.getByRole("dialog", { name: "Instagram 연결 가이드" })).toBeVisible();
   });
 });

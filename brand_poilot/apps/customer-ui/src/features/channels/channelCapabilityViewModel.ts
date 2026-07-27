@@ -75,6 +75,7 @@ const connectionReasonLabels: Partial<Record<ChannelStatus | string, string>> = 
   publish_failed: "게시 상태 확인 필요",
   credential_invalid: "인증 정보 확인 필요",
   channel_needs_attention: "인증 정보 확인 필요",
+  provider_not_supported: "지원되지 않는 인증 제공자",
 };
 
 const generationReasonLabels: Record<string, string> = {
@@ -108,11 +109,27 @@ export function channelCapabilityViewModel(
   const exportDetail = capability.exportModes.length > 0
     ? uniqueLabels(capability.exportModes, exportLabels)
     : "내보내기 형식이 준비되지 않았습니다.";
+  const publishReasonDetail = capability.reasonCode === "provider_not_implemented"
+    ? `${channelLabels[capability.channel]} API 자동 게시는 아직 구현되지 않았습니다.`
+    : capability.reasonCode === "publishing_disabled"
+      ? "서비스 운영 설정에서 Instagram API 게시가 비활성화되어 있습니다."
+      : capability.reasonCode === "provider_not_supported"
+        ? "현재 연결된 인증 제공자는 Instagram 게시에 사용할 수 없습니다."
+        : null;
   const publishDetail = planned
     ? "실제 API 게시 연동은 아직 제공하지 않습니다."
     : capability.publishModes.length > 0 && capability.readiness === "ready"
       ? uniqueLabels(capability.publishModes, publishLabels)
-      : connectionReason ?? "연결과 게시 권한을 확인해 주세요.";
+      : publishReasonDetail ?? connectionReason ?? "연결과 게시 권한을 확인해 주세요.";
+  const publishState = planned
+    ? "지원 준비 중"
+    : capability.publishModes.length > 0 && capability.readiness === "ready"
+      ? "게시 가능"
+      : capability.reasonCode === "provider_not_implemented"
+        ? "게시 미지원"
+        : capability.reasonCode === "publishing_disabled"
+          ? "게시 중지됨"
+          : "게시 불가";
 
   return {
     channel: capability.channel,
@@ -143,18 +160,16 @@ export function channelCapabilityViewModel(
       {
         key: "publish",
         label: "API 실제 게시",
-        state: planned
-          ? "지원 준비 중"
-          : capability.publishModes.length > 0 && capability.readiness === "ready"
-            ? "게시 가능"
-            : "게시 불가",
+        state: publishState,
         detail: publishDetail,
         tone: !planned && capability.publishModes.length > 0 && capability.readiness === "ready"
           ? "ok"
           : "warn",
       },
     ],
-    repairAction: capability.channel === "instagram"
+    repairAction: capability.channel === "instagram" && capability.reasonCode === "publishing_disabled"
+      ? { kind: "guide", label: "게시 설정 안내" }
+      : capability.channel === "instagram"
       ? {
         kind: "oauth",
         label: capability.connectionStatus === "not_connected" ? "Meta OAuth 연결" : "Meta 다시 연결",

@@ -109,4 +109,54 @@ describe("channelCapabilityViewModel", () => {
       detail: "현재 영상 콘텐츠 생성은 제공하지 않습니다.",
     });
   });
+
+  it("keeps Threads generation and export available while naming its missing API publisher", () => {
+    const view = channelCapabilityViewModel(capability({
+      channel: "threads",
+      catalogStatus: "available",
+      connectionStatus: "not_connected",
+      canGenerate: true,
+      generationFormats: ["channel_text"],
+      exportModes: ["text"],
+      publishModes: [],
+      readiness: "not_supported",
+      reasonCode: "provider_not_implemented",
+    }), null);
+
+    expect(view.rows[0].state).toBe("미연결");
+    expect(view.rows[1]).toMatchObject({ state: "가능", detail: "채널 텍스트" });
+    expect(view.rows[2]).toMatchObject({ state: "가능", detail: "텍스트" });
+    expect(view.rows[3]).toMatchObject({
+      state: "게시 미지원",
+      detail: "Threads API 자동 게시는 아직 구현되지 않았습니다.",
+    });
+  });
+
+  it("keeps a connected Instagram account connected when publishing is disabled by service settings", () => {
+    const view = channelCapabilityViewModel(capability({
+      publishModes: [],
+      readiness: "not_supported",
+      reasonCode: "publishing_disabled",
+    }), connectedInstagram);
+
+    expect(view.rows[0].state).toBe("연결됨");
+    expect(view.rows[3]).toMatchObject({
+      state: "게시 중지됨",
+      detail: "서비스 운영 설정에서 Instagram API 게시가 비활성화되어 있습니다.",
+    });
+    expect(view.repairAction).toEqual({ kind: "guide", label: "게시 설정 안내" });
+  });
+
+  it("names an unsupported credential provider instead of a generic permission problem", () => {
+    const view = channelCapabilityViewModel(capability({
+      connectionStatus: "needs_attention",
+      publishModes: [],
+      readiness: "needs_permission",
+      reasonCode: "provider_not_supported",
+    }), { ...connectedInstagram, status: "needs_attention" });
+
+    expect(view.rows[0].state).toBe("지원되지 않는 인증 제공자");
+    expect(view.rows[3].detail).toBe("현재 연결된 인증 제공자는 Instagram 게시에 사용할 수 없습니다.");
+    expect(view.repairAction).toEqual({ kind: "oauth", label: "Meta 다시 연결" });
+  });
 });

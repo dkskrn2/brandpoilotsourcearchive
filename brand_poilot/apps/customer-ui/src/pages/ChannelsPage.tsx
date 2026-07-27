@@ -28,7 +28,15 @@ function alertVariantFor(status: ChannelStatus) {
   return "warn";
 }
 
-function channelAction(channel: ChannelConnection | null, capability: ChannelCapability) {
+function channelAction(
+  channel: ChannelConnection | null,
+  capability: ChannelCapability,
+  repairAction: { kind: "oauth" | "guide"; label: string },
+  openGuide: () => void,
+) {
+  if (capability.channel === "instagram" && repairAction.kind === "guide") {
+    return <button className="button primary" type="button" onClick={openGuide}>{repairAction.label}</button>;
+  }
   const action = channelConnectionAction(capability.channel, channel?.oauthState === "connected");
   if (action.kind === "guide") {
     return <button className="button is-disabled" type="button" disabled>{action.label}</button>;
@@ -259,7 +267,7 @@ export function ChannelsPage() {
                 <button className="button" type="button" aria-label={`${view.label} 연결 가이드`} onClick={() => setGuideChannel(capability.channel)}>
                   연결 가이드
                 </button>
-                {channelAction(channel, capability)}
+                {channelAction(channel, capability, view.repairAction, () => setGuideChannel(capability.channel))}
               </div>
             </div>
           </article>
