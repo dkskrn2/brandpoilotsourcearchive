@@ -83,7 +83,7 @@ export interface AiContentAttachmentLifecycleRepository {
       nonce: string;
       createdByUserId: string;
     },
-  ): Promise<void>;
+  ): Promise<{ id: string }>;
   confirmLegacyAiContentAttachment(
     input: BrandGenerationScope & LegacyConfirmAttachmentInput,
   ): Promise<AiContentAttachmentRecord>;
@@ -310,8 +310,8 @@ export function createAiContentAttachmentRepository(
       if (!/^[a-z0-9_]{1,100}$/.test(input.errorCode)) {
         throw new Error("ai_content_upload_error_code_invalid");
       }
-      await inTransaction(pool, async (client) => {
-        assertMutable(await lockGeneration(client, scope));
+      return inTransaction(pool, async (client) => {
+        await lockGeneration(client, scope);
         const result = await client.query(
           `select *, token_expires_at <= statement_timestamp() as is_expired
              from ai_content_attachment_upload_sessions
@@ -464,8 +464,8 @@ export function createAiContentAttachmentRepository(
       const sessionId = requireUuid(input.sessionId, "ai_content_upload_session_id_invalid");
       const actor = requireUuid(input.createdByUserId, "ai_content_actor_user_id_invalid");
       const nonce = requireUuid(input.nonce, "ai_content_upload_nonce_invalid");
-      await inTransaction(pool, async (client) => {
-        assertMutable(await lockGeneration(client, scope));
+      return inTransaction(pool, async (client) => {
+        await lockGeneration(client, scope);
         const result = await client.query(
           `select *, token_expires_at <= statement_timestamp() as is_expired
              from ai_content_attachment_upload_sessions
@@ -499,6 +499,7 @@ export function createAiContentAttachmentRepository(
           [sessionId],
         );
         await scheduleCleanup(client, session, "upload_session_cancelled", "token_expires_at");
+        return { id: sessionId };
       });
     },
 

@@ -1193,58 +1193,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       return mapAppeal(result.rows[0]);
     },
     async confirmAiContentAttachment(input) {
-      const client = await pool.connect();
-      let cleanupRejectedUpload = false;
-      try {
-        await client.query("BEGIN");
-        const generation = await scopedGeneration(client, input, true);
-        if (!generation) throw new Error("ai_content_generation_not_found");
-        const activeSamePath = await client.query(
-          `select id
-             from ai_content_generation_attachments
-            where generation_id = $1 and workspace_id = $2 and brand_id = $3
-              and storage_path = $4 and deleted_at is null`,
-          [input.generationId, input.workspaceId, input.brandId, input.storagePath],
-        );
-        if (!activeSamePath.rowCount) {
-          const count = await client.query(
-            `select count(*)::integer as attachment_count
-               from ai_content_generation_attachments
-              where generation_id = $1 and workspace_id = $2 and brand_id = $3
-                and deleted_at is null`,
-            [input.generationId, input.workspaceId, input.brandId],
-          );
-          if (Number(count.rows[0]?.attachment_count ?? 0) >= 5) {
-            cleanupRejectedUpload = true;
-            throw new Error("ai_content_attachment_limit_exceeded");
-          }
-        }
-        const result = await client.query(
-          `insert into ai_content_generation_attachments
-             (generation_id, workspace_id, brand_id, role, file_name, mime_type, size_bytes, checksum, storage_url, storage_path)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-           on conflict (generation_id, storage_path) do update
-             set role = excluded.role,
-                 file_name = excluded.file_name,
-                 mime_type = excluded.mime_type,
-                 size_bytes = excluded.size_bytes,
-                 checksum = excluded.checksum,
-                 storage_url = excluded.storage_url,
-                 deleted_at = null
-           returning id, generation_id, role, file_name, mime_type, size_bytes, checksum, storage_url, storage_path, created_at`,
-          [input.generationId, input.workspaceId, input.brandId, input.role, input.fileName, input.mimeType, input.sizeBytes, input.checksum, input.storageUrl, input.storagePath],
-        );
-        await client.query("COMMIT");
-        return mapAttachment(result.rows[0]);
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-        if (cleanupRejectedUpload && options.deleteAttachments) {
-          await options.deleteAttachments([input.storageUrl]).catch(() => undefined);
-        }
-      }
+      return attachmentLifecycle.confirmLegacyAiContentAttachment(input);
     },
 
     async claimAiContentJob(input) {

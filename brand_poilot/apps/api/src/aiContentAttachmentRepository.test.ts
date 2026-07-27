@@ -217,4 +217,29 @@ describe("AiContentAttachmentLifecycleRepository", () => {
       vi.useRealTimers();
     }
   });
+
+  it("rejects invalid generation, attachment, and session ids before any SQL", async () => {
+    const pool = scriptedPool([]);
+    const repository = createAiContentAttachmentRepository(pool as never);
+
+    await expect(repository.createAiContentUploadSession({
+      ...SCOPE,
+      generationId: "not-a-generation",
+      createdByUserId: USER_ID,
+      attachment: attachment(),
+    })).rejects.toThrow("ai_content_generation_id_invalid");
+    await expect(repository.removeAiContentAttachment({
+      ...SCOPE,
+      attachmentId: "not-an-attachment",
+    })).rejects.toThrow("ai_content_attachment_id_invalid");
+    await expect(repository.cancelAiContentUploadSession({
+      ...SCOPE,
+      createdByUserId: USER_ID,
+      sessionId: "not-a-session",
+      nonce: "60000000-0000-4000-8000-000000000001",
+    })).rejects.toThrow("ai_content_upload_session_id_invalid");
+
+    expect(pool.commands).toEqual([]);
+    expect(pool.sql).toEqual([]);
+  });
 });
