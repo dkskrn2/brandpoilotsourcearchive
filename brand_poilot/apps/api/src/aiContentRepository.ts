@@ -1482,16 +1482,42 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
     },
 
     async heartbeatAiContentJob(input) {
-      const result = await pool.query(
-        `update ai_content_generation_jobs
-            set lease_expires_at = now() + ($4::text || ' seconds')::interval,
-                last_heartbeat_at = now(), updated_at = now()
-          where id = $1 and status = 'processing' and worker_id = $2 and lease_token = $3
-            and lease_expires_at > clock_timestamp()
-          returning id`,
-        [input.jobId, input.workerId, input.leaseToken, input.leaseSeconds],
-      );
-      return Boolean(result.rowCount);
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const locked = await client.query(
+          `select id
+             from ai_content_generation_jobs
+            where id = $1 and status = 'processing'
+              and worker_id = $2 and lease_token = $3
+            for update`,
+          [input.jobId, input.workerId, input.leaseToken],
+        );
+        if (!locked.rowCount) {
+          await client.query("COMMIT");
+          return false;
+        }
+        const result = await client.query(
+          `update ai_content_generation_jobs
+              set (lease_expires_at, last_heartbeat_at) = (
+                    select heartbeat.at + ($4::text || ' seconds')::interval,
+                           heartbeat.at
+                      from (select clock_timestamp() as at) heartbeat
+                  ),
+                  updated_at = now()
+            where id = $1 and status = 'processing' and worker_id = $2 and lease_token = $3
+              and lease_expires_at > clock_timestamp()
+            returning id`,
+          [input.jobId, input.workerId, input.leaseToken, input.leaseSeconds],
+        );
+        await client.query("COMMIT");
+        return Boolean(result.rowCount);
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
     },
 
     async completeAiContentJob(input) {

@@ -946,5 +946,87 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       }
       },
     );
+
+    it("anchors a heartbeat lease to the actual DB clock after row-lock wait", async () => {
+      const repository = createAiContentRepository(pool);
+      await pool.query(
+        `insert into ai_content_generation_jobs (
+           id, generation_id, workspace_id, brand_id, job_type, content_type,
+           status, payload_json, attempt_count, worker_id, lease_token,
+           lease_expires_at, last_heartbeat_at
+         ) values (
+           $1, $2, $3, $4, 'analyze', 'card_news', 'processing', '{}'::jsonb,
+           1, 'heartbeat-worker', $5, clock_timestamp() + interval '5 seconds',
+           clock_timestamp()
+         )`,
+        [JOB_ID_1, GENERATION_ID, WORKSPACE_ID, BRAND_ID, LEASE_TOKEN],
+      );
+      const gate = await pool.connect();
+      let gateOpen = false;
+      let heartbeat: Promise<boolean> | null = null;
+      try {
+        await gate.query("BEGIN");
+        gateOpen = true;
+        await gate.query(
+          "select id from ai_content_generation_jobs where id = $1 for update",
+          [JOB_ID_1],
+        );
+        heartbeat = repository.heartbeatAiContentJob({
+          jobId: JOB_ID_1,
+          workerId: "heartbeat-worker",
+          leaseToken: LEASE_TOKEN,
+          leaseSeconds: 7,
+        });
+        const heartbeatState = heartbeat.then(
+          () => "completed" as const,
+          () => "rejected" as const,
+        );
+        let observedLockWait = false;
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          const waiting = await gate.query(
+            `select count(*)::integer as count
+               from pg_stat_activity
+              where datname = current_database()
+                and pid <> pg_backend_pid()
+                and wait_event_type = 'Lock'
+                and query like '%worker_id = $2%for update%'`,
+          );
+          if (Number(waiting.rows[0]?.count ?? 0) > 0) {
+            observedLockWait = true;
+            break;
+          }
+          if (await Promise.race([
+            heartbeatState,
+            new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), 20)),
+          ]) !== "waiting") {
+            break;
+          }
+        }
+        expect(observedLockWait).toBe(true);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const releaseClock = await gate.query("select clock_timestamp() as at");
+        const releasedAt = new Date(releaseClock.rows[0]?.at).getTime();
+        await gate.query("COMMIT");
+        gateOpen = false;
+
+        await expect(heartbeat).resolves.toBe(true);
+        const updated = await pool.query(
+          `select last_heartbeat_at, lease_expires_at, clock_timestamp() as observed_at
+             from ai_content_generation_jobs
+            where id = $1`,
+          [JOB_ID_1],
+        );
+        const lastHeartbeatAt = new Date(updated.rows[0]?.last_heartbeat_at).getTime();
+        const leaseExpiresAt = new Date(updated.rows[0]?.lease_expires_at).getTime();
+        const observedAt = new Date(updated.rows[0]?.observed_at).getTime();
+        expect(lastHeartbeatAt).toBeGreaterThanOrEqual(releasedAt);
+        expect(leaseExpiresAt - lastHeartbeatAt).toBe(7_000);
+        expect(leaseExpiresAt).toBeGreaterThan(observedAt);
+      } finally {
+        if (gateOpen) await gate.query("ROLLBACK");
+        gate.release();
+        if (heartbeat) await heartbeat.catch(() => undefined);
+      }
+    });
   },
 );

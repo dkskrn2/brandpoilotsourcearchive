@@ -289,7 +289,18 @@ function createWorkerPool(options: {
         return { rows: [{ id: "wiki-1", wiki_updated_at: "2026-07-18T00:10:00.000Z", pages: [{ type: "brand_overview", title: "브랜드 개요", summary: "자사 분석", content: "브랜드 근거", structuredData: {} }] }], rowCount: 1 };
       }
       if (query.includes("select generation.draft_json")) return { rows: [{ draft_json: {}, analysis_json: options.qualityBrief ? { qualityBrief: options.qualityBrief } : {}, subject_analysis_snapshot: options.subjectAnalysisSnapshot ?? null, generation_title: "여름 추천", generation_type: "card_news", output_index: 1, reference_snapshots: [], attachments: [] }], rowCount: 1 };
-      if (query.includes("set lease_expires_at") && query.includes("last_heartbeat_at")) {
+      if (
+        query.includes("select id")
+        && query.includes("from ai_content_generation_jobs")
+        && query.includes("worker_id = $2")
+        && query.includes("for update")
+      ) {
+        const valid = job.status === "processing"
+          && job.worker_id === params[1]
+          && job.lease_token === params[2];
+        return { rows: valid ? [{ id: job.id }] : [], rowCount: valid ? 1 : 0 };
+      }
+      if (query.includes("set (lease_expires_at, last_heartbeat_at)")) {
         const valid = job.status === "processing" && job.worker_id === params[1] && job.lease_token === params[2];
         return { rows: valid ? [{ id: job.id }] : [], rowCount: valid ? 1 : 0 };
       }
@@ -978,6 +989,30 @@ describe("AI content repository", () => {
     const repository = createAiContentRepository(pool as never);
     await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
     await expect(repository.heartbeatAiContentJob({ jobId: "job-1", workerId: "wrong-worker", leaseToken: "wrong-token", leaseSeconds: 180 })).resolves.toBe(false);
+  });
+
+  it("extends heartbeat timestamps from the actual current DB clock", async () => {
+    const pool = createWorkerPool();
+    const repository = createAiContentRepository(pool as never);
+    const claimed = await repository.claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-1",
+      leaseSeconds: 180,
+    });
+
+    await expect(repository.heartbeatAiContentJob({
+      jobId: "job-1",
+      workerId: "card-worker-1",
+      leaseToken: claimed!.leaseToken!,
+      leaseSeconds: 180,
+    })).resolves.toBe(true);
+    const heartbeatSql = pool.sql.find((sql) =>
+      sql.includes("set (lease_expires_at, last_heartbeat_at)"));
+    expect(heartbeatSql).toContain(
+      "heartbeat.at + ($4::text || ' seconds')::interval",
+    );
+    expect(heartbeatSql).toContain("select clock_timestamp() as at");
+    expect(heartbeatSql).toContain("lease_expires_at > clock_timestamp()");
   });
 
   it.each(["complete", "fail"] as const)(
