@@ -1101,8 +1101,7 @@ describe("AI content repository", () => {
 
   it("retains temporary attachments after every output completes", async () => {
     const pool = createWorkerPool();
-    const deleteAttachments = vi.fn(async () => undefined);
-    const repository = createAiContentRepository(pool as never, { deleteAttachments });
+    const repository = createAiContentRepository(pool as never);
     const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
 
     await repository.completeAiContentJob({
@@ -1111,14 +1110,12 @@ describe("AI content repository", () => {
       manifest: { version: "ai-content.v1", type: "card_news", title: "여름 추천", assets: [{ role: "slide", url: "https://blob.example.com/slide.png", fileName: "slide.png", mimeType: "image/png", width: 1080, height: 1080, index: 1 }], content: { caption: "내용", hashtags: ["여름"], cta: "저장하세요" } },
     });
 
-    expect(deleteAttachments).not.toHaveBeenCalled();
     expect(pool.sql.join("\n")).not.toContain("deleted_at = now()");
   });
 
   it("keeps temporary attachments while another output is pending", async () => {
     const pool = createWorkerPool({ totalOutputs: 2 });
-    const deleteAttachments = vi.fn(async () => undefined);
-    const repository = createAiContentRepository(pool as never, { deleteAttachments });
+    const repository = createAiContentRepository(pool as never);
     const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
 
     const generation = await repository.completeAiContentJob({
@@ -1128,7 +1125,6 @@ describe("AI content repository", () => {
     });
 
     expect(generation.status).toBe("generating");
-    expect(deleteAttachments).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1136,8 +1132,7 @@ describe("AI content repository", () => {
     { name: "some outputs fail", poolOptions: { totalOutputs: 2, completedOutputs: 1 } },
   ])("retains temporary attachments when $name", async ({ poolOptions }) => {
     const pool = createWorkerPool(poolOptions);
-    const deleteAttachments = vi.fn(async () => undefined);
-    const repository = createAiContentRepository(pool as never, { deleteAttachments });
+    const repository = createAiContentRepository(pool as never);
     const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
 
     const generation = await repository.failAiContentJob({
@@ -1158,17 +1153,15 @@ describe("AI content repository", () => {
         Date.parse(generation.retryableUntil!) - Date.parse(generation.terminalAt!),
       ).toBe(15 * 24 * 60 * 60 * 1_000);
     }
-    expect(deleteAttachments).not.toHaveBeenCalled();
   });
 
-  it("does not perform provider deletion while final manifest assets are recorded", async () => {
+  it("does not run the legacy cleanup manifest scan while final assets are recorded", async () => {
     const finalUrl = "https://blob.example.com/final-slide.png";
     const pool = createWorkerPool({
       attachmentUrls: ["https://blob.example.com/reference.png", finalUrl],
       manifestAssetUrls: [finalUrl],
     });
-    const deleteAttachments = vi.fn(async () => undefined);
-    const repository = createAiContentRepository(pool as never, { deleteAttachments });
+    const repository = createAiContentRepository(pool as never);
     const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
 
     await repository.completeAiContentJob({
@@ -1177,18 +1170,12 @@ describe("AI content repository", () => {
       manifest: { version: "ai-content.v1", type: "card_news", title: "여름 추천", assets: [{ role: "slide", url: finalUrl, fileName: "slide.png", mimeType: "image/png", width: 1080, height: 1080, index: 1 }], content: { caption: "내용", hashtags: ["여름"], cta: "저장하세요" } },
     });
 
-    expect(deleteAttachments).not.toHaveBeenCalled();
     expect(pool.sql.join("\n")).not.toContain("select manifest_url, artifact_manifest_json");
   });
 
   it("does not invoke the legacy terminal cleanup retry path", async () => {
     const pool = createWorkerPool();
-    const deleteAttachments = vi.fn()
-      .mockRejectedValueOnce(new Error("blob unavailable"))
-      .mockResolvedValueOnce(undefined);
-    const repository = createAiContentRepository(pool as never, {
-      deleteAttachments,
-    });
+    const repository = createAiContentRepository(pool as never);
     const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
 
     await repository.completeAiContentJob({
@@ -1201,7 +1188,6 @@ describe("AI content repository", () => {
 
     pool.enablePendingCleanup();
     await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
-    expect(deleteAttachments).not.toHaveBeenCalled();
     expect(pool.sql.join("\n")).not.toContain("select terminal_generation.id");
     expect(pool.sql.join("\n")).not.toContain("jsonb_array_elements");
     expect(pool.sql.join("\n")).not.toContain("deleted_at = now()");
@@ -1574,41 +1560,6 @@ describe("AI content repository", () => {
       generationId: "generation-1",
       contentGenerationInput: contentGenerationInputV2Fixture,
     });
-  });
-
-  it("never immediately deletes retained attachment blobs on terminal completion", async () => {
-    const pool = createWorkerPool();
-    const deleteAttachments = vi.fn(async () => undefined);
-    const repository = createAiContentRepository(pool as never, { deleteAttachments });
-    const claimed = await repository.claimAiContentJob({
-      contentType: "card_news",
-      workerId: "card-worker-1",
-      leaseSeconds: 180,
-    });
-    await repository.completeAiContentJob({
-      jobId: "job-1",
-      workerId: "card-worker-1",
-      leaseToken: claimed!.leaseToken!,
-      skillVersion: "card-news-skill.v5",
-      jobType: "generate",
-      manifestUrl: "https://blob.example.com/manifest.json",
-      manifest: {
-        version: "ai-content.v1",
-        type: "card_news",
-        title: "완료",
-        assets: [{
-          role: "slide",
-          url: "https://blob.example.com/slide.png",
-          fileName: "slide.png",
-          mimeType: "image/png",
-          width: 1080,
-          height: 1080,
-          index: 1,
-        }],
-        content: { caption: "내용", hashtags: ["완료"], cta: "저장하세요" },
-      },
-    });
-    expect(deleteAttachments).not.toHaveBeenCalled();
   });
 
   it("reuses the stored content-generation-input.v2 snapshot when retrying a failed output", async () => {

@@ -115,8 +115,111 @@ describe("AiContentAttachmentGcRepository", () => {
       expect(candidate).toContain(fragment);
       expect(lock).toContain(fragment);
     }
-    expect(candidate.indexOf("not exists")).toBeLessThan(candidate.indexOf("order by"));
-    expect(candidate.indexOf("order by")).toBeLessThan(candidate.indexOf("limit"));
+    const candidateWindow = candidate.slice(candidate.indexOf("gc_candidate_jobs as materialized"));
+    expect(candidateWindow.indexOf("not exists")).toBeLessThan(candidateWindow.indexOf("order by"));
+    expect(candidateWindow.indexOf("order by")).toBeLessThan(candidateWindow.indexOf("limit"));
+  });
+
+  it("uses a stable keyset to refill the batch after a concurrent claimant wins the first candidate", async () => {
+    const youngerJob = "10000000-0000-4000-8000-000000000002";
+    let candidateReads = 0;
+    const pool = scriptedPool((sql, params) => {
+      if (sql.includes("gc_candidate_jobs")) {
+        candidateReads += 1;
+        if (candidateReads === 1) {
+          return { rows: [{
+            id: JOB_ID,
+            generation_id: null,
+            workspace_id: "40000000-0000-4000-8000-000000000004",
+            brand_id: "50000000-0000-4000-8000-000000000005",
+            next_attempt_at: "2026-07-28T00:00:00.000Z",
+            created_at: "2026-07-28T00:00:00.000Z",
+          }], rowCount: 1 };
+        }
+        expect(params?.slice(1, 4)).toEqual([
+          "2026-07-28T00:00:00.000Z",
+          "2026-07-28T00:00:00.000Z",
+          JOB_ID,
+        ]);
+        return { rows: [{
+          id: youngerJob,
+          generation_id: null,
+          workspace_id: "40000000-0000-4000-8000-000000000004",
+          brand_id: "50000000-0000-4000-8000-000000000005",
+          next_attempt_at: "2026-07-28T00:00:01.000Z",
+          created_at: "2026-07-28T00:00:01.000Z",
+        }], rowCount: 1 };
+      }
+      if (sql.includes("for update skip locked")) {
+        if (params?.[0] === JOB_ID) return { rows: [], rowCount: 0 };
+        return { rows: [{
+          id: youngerJob,
+          workspace_id: "40000000-0000-4000-8000-000000000004",
+          brand_id: "50000000-0000-4000-8000-000000000005",
+          generation_id: GENERATION_ID,
+          attachment_id: null,
+          upload_session_id: null,
+          storage_path: "attachments/younger.png",
+          storage_url: "https://blob.example/attachments/younger.png",
+          reason: "user_removed",
+          attempt_count: 0,
+          max_attempts: 10,
+        }], rowCount: 1 };
+      }
+      if (sql.includes("set status = 'deleting'")) {
+        return { rows: [{
+          id: youngerJob,
+          workspace_id: "40000000-0000-4000-8000-000000000004",
+          brand_id: "50000000-0000-4000-8000-000000000005",
+          generation_id: GENERATION_ID,
+          attachment_id: null,
+          upload_session_id: null,
+          storage_path: "attachments/younger.png",
+          storage_url: "https://blob.example/attachments/younger.png",
+          reason: "user_removed",
+          attempt_count: 0,
+          max_attempts: 10,
+          lease_token: LEASE,
+          lease_expires_at: "2026-07-28T00:02:00.000Z",
+        }], rowCount: 1 };
+      }
+      throw new Error(`unexpected:${sql}`);
+    });
+    const repository = createAiContentAttachmentGcRepository(pool as never, { createId: () => LEASE });
+
+    await expect(repository.claimAiContentAttachmentDeletionJobs({
+      workerId: "gc-refill",
+      batchSize: 1,
+      leaseSeconds: 60,
+      ...BUDGET,
+    })).resolves.toEqual([expect.objectContaining({ jobId: youngerJob })]);
+    expect(candidateReads).toBe(2);
+    expect(pool.sql.find((sql) => sql.includes("gc_candidate_jobs"))).toMatch(
+      /\(job\.next_attempt_at, job\.created_at, job\.id\)\s*>\s*\(\$2::timestamptz/,
+    );
+  });
+
+  it("dead-letters an expired final-attempt lease and mirrors the attachment summary before scanning", async () => {
+    const pool = scriptedPool((sql) => {
+      if (sql.includes("gc_candidate_jobs")) return { rows: [], rowCount: 0 };
+      throw new Error(`unexpected:${sql}`);
+    });
+    const repository = createAiContentAttachmentGcRepository(pool as never);
+
+    await expect(repository.claimAiContentAttachmentDeletionJobs({
+      workerId: "gc-exhausted",
+      batchSize: 10,
+      leaseSeconds: 60,
+      ...BUDGET,
+    })).resolves.toEqual([]);
+
+    const query = pool.sql.find((sql) => sql.includes("gc_candidate_jobs"))!;
+    expect(query).toContain("exhausted_leases as materialized");
+    expect(query).toContain("attempt_count >= job.max_attempts");
+    expect(query).toContain("job.lease_token = exhausted.lease_token");
+    expect(query).toContain("status = 'dead_letter'");
+    expect(query).toContain("physical_delete_status = 'dead_letter'");
+    expect(query).toContain("job.attempt_count < job.max_attempts");
   });
 
   it("locks a live generation before its deletion job and issues a fresh fenced lease without consuming an attempt", async () => {
@@ -242,6 +345,66 @@ describe("AiContentAttachmentGcRepository", () => {
       ...BUDGET,
     })).resolves.toEqual([expect.objectContaining({ jobId: JOB_ID })]);
     expect(pool.sql).toContain("ROLLBACK");
+  });
+
+  it("returns already committed claims when a keyset refill scan fails", async () => {
+    let candidateReads = 0;
+    const pool = scriptedPool((sql) => {
+      if (sql.includes("gc_candidate_jobs")) {
+        candidateReads += 1;
+        if (candidateReads > 1) throw new Error("refill_scan_failed");
+        return { rows: [{
+          id: JOB_ID,
+          generation_id: null,
+          workspace_id: "40000000-0000-4000-8000-000000000004",
+          brand_id: "50000000-0000-4000-8000-000000000005",
+          next_attempt_at: "2026-07-28T00:00:00.000Z",
+          created_at: "2026-07-28T00:00:00.000Z",
+        }], rowCount: 1 };
+      }
+      if (sql.includes("for update skip locked")) {
+        return { rows: [{
+          id: JOB_ID,
+          workspace_id: "40000000-0000-4000-8000-000000000004",
+          brand_id: "50000000-0000-4000-8000-000000000005",
+          generation_id: GENERATION_ID,
+          attachment_id: null,
+          upload_session_id: null,
+          storage_path: "attachments/first.png",
+          storage_url: "https://blob.example/attachments/first.png",
+          reason: "user_removed",
+          attempt_count: 0,
+          max_attempts: 10,
+        }], rowCount: 1 };
+      }
+      if (sql.includes("set status = 'deleting'")) {
+        return { rows: [{
+          id: JOB_ID,
+          workspace_id: "40000000-0000-4000-8000-000000000004",
+          brand_id: "50000000-0000-4000-8000-000000000005",
+          generation_id: GENERATION_ID,
+          attachment_id: null,
+          upload_session_id: null,
+          storage_path: "attachments/first.png",
+          storage_url: "https://blob.example/attachments/first.png",
+          reason: "user_removed",
+          attempt_count: 0,
+          max_attempts: 10,
+          lease_token: LEASE,
+          lease_expires_at: "2026-07-28T00:02:00.000Z",
+        }], rowCount: 1 };
+      }
+      throw new Error(`unexpected:${sql}`);
+    });
+    const repository = createAiContentAttachmentGcRepository(pool as never, { createId: () => LEASE });
+
+    await expect(repository.claimAiContentAttachmentDeletionJobs({
+      workerId: "gc-refill-failure",
+      batchSize: 2,
+      leaseSeconds: 60,
+      ...BUDGET,
+    })).resolves.toEqual([expect.objectContaining({ jobId: JOB_ID })]);
+    expect(candidateReads).toBe(2);
   });
 
   it("begins an attempt with lease CAS and stale/reclaimed tokens cannot finalize", async () => {
@@ -462,5 +625,52 @@ describe("AiContentAttachmentGcRepository", () => {
     await expect(repository.getAiContentAttachmentGcMetrics(BUDGET)).rejects.toBe(commitError);
     expect(commands.slice(-2)).toEqual(["COMMIT", "ROLLBACK"]);
     expect(release).toHaveBeenCalledWith(commitError);
+  });
+
+  it("recomputes an absolute deadline before every statement and starts no query after exhaustion", async () => {
+    let nowMs = 0;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const statements: Array<{ sql: string; at: number }> = [];
+    const release = vi.fn();
+    const client = {
+      async query(sql: string) {
+        statements.push({ sql, at: nowMs });
+        nowMs += 3;
+        if (sql.includes("gc_candidate_jobs")) {
+          return { rows: [{
+            id: JOB_ID,
+            generation_id: null,
+            workspace_id: "40000000-0000-4000-8000-000000000004",
+            brand_id: "50000000-0000-4000-8000-000000000005",
+            next_attempt_at: "2026-07-28T00:00:00.000Z",
+            created_at: "2026-07-28T00:00:00.000Z",
+          }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      },
+      release,
+    };
+    const repository = createAiContentAttachmentGcRepository({
+      connect: async () => client,
+    } as never, { createId: () => LEASE });
+    try {
+      await expect(repository.claimAiContentAttachmentDeletionJobs({
+        workerId: "gc-deadline",
+        batchSize: 1,
+        leaseSeconds: 60,
+        remainingBudgetMs: 20,
+        statementTimeoutMs: 20,
+      })).rejects.toThrow("ai_content_gc_budget_exhausted");
+
+      expect(statements.some(({ sql }) =>
+        sql.includes("select job.*") && sql.includes("for update skip locked"))).toBe(false);
+      for (const statement of statements.filter(({ sql }) => sql.startsWith("set local statement_timeout"))) {
+        const configured = Number(statement.sql.match(/'(\d+)ms'/)?.[1]);
+        expect(configured).toBeLessThanOrEqual(20 - statement.at);
+      }
+      expect(release).toHaveBeenCalled();
+    } finally {
+      now.mockRestore();
+    }
   });
 });

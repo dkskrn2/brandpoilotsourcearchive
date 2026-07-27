@@ -68,7 +68,12 @@ export interface AiContentAttachmentGcRepository {
   }>;
 }
 
-type Queryable = Pick<PoolClient, "query">;
+interface Queryable {
+  query(
+    sql: string,
+    values?: unknown[],
+  ): Promise<{ rows: any[]; rowCount: number | null }>;
+}
 
 interface Options {
   createId?: () => string;
@@ -161,6 +166,7 @@ async function inBudgetTransaction<T>(
 ): Promise<T> {
   const budget = validateBudget(budgetInput);
   const startedAt = Date.now();
+  const deadlineAt = startedAt + budget.remainingBudgetMs;
   const client = await acquireWithinBudget(pool, budget.remainingBudgetMs);
   let releaseError: Error | undefined;
   let began = false;
@@ -171,14 +177,39 @@ async function inBudgetTransaction<T>(
     }
     await client.query("BEGIN");
     began = true;
-    const remaining = budget.remainingBudgetMs - (Date.now() - startedAt);
-    if (remaining <= 0) throw new Error("ai_content_gc_budget_exhausted");
-    const statementTimeout = Math.max(1, Math.min(budget.statementTimeoutMs, remaining));
-    await client.query(`set local statement_timeout = '${Math.floor(statementTimeout)}ms'`);
-    const result = await operation(client);
-    if (Date.now() - startedAt >= budget.remainingBudgetMs) {
-      throw new Error("ai_content_gc_budget_exhausted");
-    }
+    const setDeadlineTimeout = async () => {
+      const remaining = deadlineAt - Date.now();
+      if (remaining <= 0) throw new Error("ai_content_gc_budget_exhausted");
+      const statementTimeout = Math.max(1, Math.min(budget.statementTimeoutMs, remaining));
+      await client.query(`set local statement_timeout = '${Math.floor(statementTimeout)}ms'`);
+      if (deadlineAt - Date.now() <= 0) throw new Error("ai_content_gc_budget_exhausted");
+    };
+    const budgetedClient: Queryable = {
+      async query(sql: string, values?: unknown[]) {
+        await setDeadlineTimeout();
+        let result: Awaited<ReturnType<Queryable["query"]>>;
+        try {
+          result = await client.query(sql, values);
+        } catch (error) {
+          if (
+            deadlineAt - Date.now() <= 0
+            || (
+              error
+              && typeof error === "object"
+              && "code" in error
+              && error.code === "57014"
+            )
+          ) {
+            throw new Error("ai_content_gc_budget_exhausted");
+          }
+          throw error;
+        }
+        if (deadlineAt - Date.now() <= 0) throw new Error("ai_content_gc_budget_exhausted");
+        return result;
+      },
+    };
+    const result = await operation(budgetedClient);
+    await setDeadlineTimeout();
     committing = true;
     await client.query("COMMIT");
     committing = false;
@@ -224,6 +255,7 @@ function eligibilityPredicate(jobAlias: string) {
   const url = normalizedUrl(`${jobAlias}.storage_url`);
   return `
     ${jobAlias}.next_attempt_at <= now()
+    and ${jobAlias}.attempt_count < ${jobAlias}.max_attempts
     and (
       ${jobAlias}.status in ('pending', 'failed')
       or (${jobAlias}.status = 'deleting' and ${jobAlias}.lease_expires_at <= now())
@@ -461,12 +493,26 @@ export function createAiContentAttachmentGcRepository(
              returning id
            ),
            expired_leases as materialized (
-             select job.id
+             select job.id, job.lease_token, job.attempt_count, job.max_attempts
                from ai_content_attachment_deletion_jobs job
               where job.status = 'deleting' and job.lease_expires_at <= now()
               order by job.lease_expires_at, job.id
               limit $1
               for update skip locked
+           ),
+           dead_lettered_expired as (
+             update ai_content_attachment_deletion_jobs job
+                set status = 'dead_letter', lease_token = null, lease_expires_at = null,
+                    last_error_category = 'lease_exhausted',
+                    last_error_message = 'Deletion lease expired after the final attempt',
+                    updated_at = now()
+               from expired_leases expired
+              where job.id = expired.id
+                and job.lease_token = expired.lease_token
+                and job.status = 'deleting'
+                and job.lease_expires_at <= now()
+                and job.attempt_count >= job.max_attempts
+              returning job.attachment_id
            ),
            reclaimed as (
              update ai_content_attachment_deletion_jobs job
@@ -474,7 +520,9 @@ export function createAiContentAttachmentGcRepository(
                     next_attempt_at = now(), updated_at = now()
                from expired_leases expired
               where job.id = expired.id
+                and job.lease_token = expired.lease_token
                 and job.status = 'deleting' and job.lease_expires_at <= now()
+                and job.attempt_count < job.max_attempts
               returning job.attachment_id
            ),
            reclaimed_attachments as (
@@ -482,6 +530,14 @@ export function createAiContentAttachmentGcRepository(
                 set physical_delete_status = 'pending'
                from reclaimed
               where attachment.id = reclaimed.attachment_id
+              returning attachment.id
+           ),
+           dead_lettered_attachments as (
+             update ai_content_generation_attachments attachment
+                set physical_delete_status = 'dead_letter',
+                    physically_deleted_at = null
+               from dead_lettered_expired
+              where attachment.id = dead_lettered_expired.attachment_id
               returning attachment.id
            )
            select
@@ -517,87 +573,163 @@ export function createAiContentAttachmentGcRepository(
         throw new Error("ai_content_gc_worker_id_invalid");
       }
       const startedAt = Date.now();
-      const candidates = await inBudgetTransaction(pool, input, async (client) => {
-        const result = await client.query(
-           `with gc_candidate_jobs as materialized (
-             select job.id, job.generation_id, job.workspace_id, job.brand_id
-               from ai_content_attachment_deletion_jobs job
-              where ${eligibilityPredicate("job")}
-              order by job.next_attempt_at, job.created_at, job.id
-              limit $1
-           )
-           select id, generation_id, workspace_id, brand_id from gc_candidate_jobs`,
-          [batchSize],
-        );
-        return result.rows as Array<Record<string, unknown>>;
-      });
-
       const claims: AiContentAttachmentDeletionClaim[] = [];
-      for (const candidate of candidates) {
-        if (claims.length >= batchSize) break;
+      let cursor: { nextAttemptAt: string; createdAt: string; id: string } | null = null;
+      scan: while (claims.length < batchSize) {
         const elapsed = Date.now() - startedAt;
         const remainingBudgetMs = input.remainingBudgetMs - elapsed;
         if (remainingBudgetMs <= 0) break;
-        const leaseToken = requireUuid(createId(), "ai_content_gc_lease_token_invalid");
-        let claim: AiContentAttachmentDeletionClaim | null;
+        let candidates: Array<Record<string, unknown>>;
         try {
-          claim = await inBudgetTransaction(pool, {
+          candidates = await inBudgetTransaction(pool, {
             remainingBudgetMs,
             statementTimeoutMs: Math.min(input.statementTimeoutMs, remainingBudgetMs),
           }, async (client) => {
-            if (candidate.generation_id) {
-              const generation = await client.query(
-                `select id from ai_content_generations
-                  where id = $1 and workspace_id = $2 and brand_id = $3
-                  for update`,
-                [candidate.generation_id, candidate.workspace_id, candidate.brand_id],
-              );
-              // A parent may disappear between candidate read and lock. Such a
-              // durable orphan is still claimable by locking only the job.
-              if (!generation.rowCount) {
-                // no-op
-              }
-            }
-            const locked = await client.query(
-              `select job.*
-                 from ai_content_attachment_deletion_jobs job
-                where job.id = $1
-                  and ${eligibilityPredicate("job")}
-                for update skip locked`,
-              [candidate.id],
-            );
-            if (!locked.rowCount) return null;
-            const leased = await client.query(
-              `update ai_content_attachment_deletion_jobs
-                  set status = 'deleting', lease_token = $2::uuid,
-                      lease_expires_at = now() + ($3::text || ' seconds')::interval,
-                      updated_at = now()
-                where id = $1
-                  and (
-                    status in ('pending','failed')
-                    or (status = 'deleting' and lease_expires_at <= now())
-                  )
-                returning *`,
-              [candidate.id, leaseToken, leaseSeconds],
-            );
-            if (!leased.rowCount) return null;
-            const row = leased.rows[0] as Record<string, unknown>;
-            if (row.attachment_id) {
-              await client.query(
-                `update ai_content_generation_attachments
-                    set physical_delete_status = 'deleting',
+            const result = await client.query(
+              `with exhausted_leases as materialized (
+                 select job.id, job.attachment_id, job.lease_token
+                   from ai_content_attachment_deletion_jobs job
+                  where job.status = 'deleting'
+                    and job.lease_expires_at <= now()
+                    and job.attempt_count >= job.max_attempts
+                  order by job.lease_expires_at, job.created_at, job.id
+                  limit $1
+                  for update skip locked
+               ),
+               dead_lettered as (
+                 update ai_content_attachment_deletion_jobs job
+                    set status = 'dead_letter', lease_token = null, lease_expires_at = null,
+                        last_error_category = 'lease_exhausted',
+                        last_error_message = 'Deletion lease expired after the final attempt',
+                        updated_at = now()
+                   from exhausted_leases exhausted
+                  where job.id = exhausted.id
+                    and job.lease_token = exhausted.lease_token
+                    and job.status = 'deleting'
+                    and job.lease_expires_at <= now()
+                    and job.attempt_count >= job.max_attempts
+                  returning job.attachment_id
+               ),
+               mirrored_dead_letters as (
+                 update ai_content_generation_attachments attachment
+                    set physical_delete_status = 'dead_letter',
                         physically_deleted_at = null
-                  where id = $1`,
-                [row.attachment_id],
-              );
-            }
-            return mapClaim(row);
+                   from dead_lettered
+                  where attachment.id = dead_lettered.attachment_id
+                  returning attachment.id
+               ),
+               gc_candidate_jobs as materialized (
+                 select job.id, job.generation_id, job.workspace_id, job.brand_id,
+                        job.next_attempt_at, job.created_at
+                   from ai_content_attachment_deletion_jobs job
+                  where ${eligibilityPredicate("job")}
+                    and (
+                      $2::timestamptz is null
+                      or (job.next_attempt_at, job.created_at, job.id)
+                         > ($2::timestamptz, $3::timestamptz, $4::uuid)
+                    )
+                  order by job.next_attempt_at, job.created_at, job.id
+                  limit $1
+               )
+               select id, generation_id, workspace_id, brand_id, next_attempt_at, created_at
+                 from gc_candidate_jobs`,
+              [
+                batchSize - claims.length,
+                cursor?.nextAttemptAt ?? null,
+                cursor?.createdAt ?? null,
+                cursor?.id ?? null,
+              ],
+            );
+            return result.rows as Array<Record<string, unknown>>;
           });
         } catch (error) {
           if (claims.length === 0) throw error;
           break;
         }
-        if (claim) claims.push(claim);
+        if (candidates.length === 0) break;
+
+        let hasStableCursor = true;
+        for (const candidate of candidates) {
+          if (
+            candidate.next_attempt_at === undefined
+            || candidate.created_at === undefined
+            || candidate.id === undefined
+          ) {
+            hasStableCursor = false;
+          } else {
+            cursor = {
+              nextAttemptAt: iso(candidate.next_attempt_at),
+              createdAt: iso(candidate.created_at),
+              id: String(candidate.id),
+            };
+          }
+          const candidateElapsed = Date.now() - startedAt;
+          const candidateBudgetMs = input.remainingBudgetMs - candidateElapsed;
+          if (candidateBudgetMs <= 0) break scan;
+          const leaseToken = requireUuid(createId(), "ai_content_gc_lease_token_invalid");
+          let claim: AiContentAttachmentDeletionClaim | null;
+          try {
+            claim = await inBudgetTransaction(pool, {
+              remainingBudgetMs: candidateBudgetMs,
+              statementTimeoutMs: Math.min(input.statementTimeoutMs, candidateBudgetMs),
+            }, async (client) => {
+              if (candidate.generation_id) {
+                const generation = await client.query(
+                  `select id from ai_content_generations
+                    where id = $1 and workspace_id = $2 and brand_id = $3
+                    for update`,
+                  [candidate.generation_id, candidate.workspace_id, candidate.brand_id],
+                );
+                // A parent may disappear between candidate read and lock. Such
+                // a durable orphan is still claimable by locking only the job.
+                if (!generation.rowCount) {
+                  // no-op
+                }
+              }
+              const locked = await client.query(
+                `select job.*
+                   from ai_content_attachment_deletion_jobs job
+                  where job.id = $1
+                    and ${eligibilityPredicate("job")}
+                  for update skip locked`,
+                [candidate.id],
+              );
+              if (!locked.rowCount) return null;
+              const leased = await client.query(
+                `update ai_content_attachment_deletion_jobs
+                    set status = 'deleting', lease_token = $2::uuid,
+                        lease_expires_at = now() + ($3::text || ' seconds')::interval,
+                        updated_at = now()
+                  where id = $1
+                    and attempt_count < max_attempts
+                    and (
+                      status in ('pending','failed')
+                      or (status = 'deleting' and lease_expires_at <= now())
+                    )
+                  returning *`,
+                [candidate.id, leaseToken, leaseSeconds],
+              );
+              if (!leased.rowCount) return null;
+              const row = leased.rows[0] as Record<string, unknown>;
+              if (row.attachment_id) {
+                await client.query(
+                  `update ai_content_generation_attachments
+                      set physical_delete_status = 'deleting',
+                          physically_deleted_at = null
+                    where id = $1`,
+                  [row.attachment_id],
+                );
+              }
+              return mapClaim(row);
+            });
+          } catch (error) {
+            if (claims.length === 0) throw error;
+            break scan;
+          }
+          if (claim) claims.push(claim);
+          if (claims.length >= batchSize) break scan;
+        }
+        if (!hasStableCursor) break;
       }
       return claims;
     },

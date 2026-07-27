@@ -207,7 +207,6 @@ export interface AiContentRepository extends AiContentAttachmentLifecycleReposit
 }
 
 interface AiContentRepositoryOptions {
-  deleteAttachments?: (urls: string[]) => Promise<void>;
   brandIntelligenceProvider?: {
     getConfirmed(input: BrandScope): Promise<ConfirmedBrandIntelligence | null>;
   };

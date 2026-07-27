@@ -492,11 +492,10 @@ describe("AI content attachment lifecycle in PostgreSQL", () => {
     })).rejects.toThrow("ai_content_attachments_locked");
   });
 
-  it("routes the public legacy compatibility confirm through reservation limit and never deletes Blob", async () => {
+  it("routes the public legacy compatibility confirm through the reservation limit", async () => {
     const pool = pglitePool(database);
     const lifecycle = createAiContentAttachmentRepository(pool);
-    const deleteAttachments = vi.fn(async () => undefined);
-    const repository = createAiContentRepository(pool, { deleteAttachments });
+    const repository = createAiContentRepository(pool);
     for (let index = 0; index < 5; index += 1) {
       await lifecycle.createAiContentUploadSession({
         workspaceId: WORKSPACE_ID,
@@ -525,14 +524,11 @@ describe("AI content attachment lifecycle in PostgreSQL", () => {
       storageUrl: "https://test.public.blob.vercel-storage.com/legacy/sixth.md",
       storagePath: "legacy/sixth.md",
     })).rejects.toThrow("ai_content_attachment_limit_exceeded");
-    expect(deleteAttachments).not.toHaveBeenCalled();
   });
 
   it("makes the public legacy compatibility confirm obey lock and path immutability", async () => {
     const pool = pglitePool(database);
-    const repository = createAiContentRepository(pool, {
-      deleteAttachments: vi.fn(async () => undefined),
-    });
+    const repository = createAiContentRepository(pool);
     const input = {
       workspaceId: WORKSPACE_ID,
       brandId: BRAND_ID,
