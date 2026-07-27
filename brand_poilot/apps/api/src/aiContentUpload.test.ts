@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { BlobNotFoundError } from "@vercel/blob";
 import {
   parseAiContentAttachmentId,
   parseAiContentGenerationId,
@@ -260,6 +261,19 @@ describe("AI content attachment upload policy", () => {
       abortSignal: new AbortController().signal,
       headBlob,
     })).rejects.toThrow(code);
+  });
+
+  it("classifies the Vercel SDK BlobNotFoundError as blob unavailable", async () => {
+    const headBlob = vi.fn(async () => { throw new BlobNotFoundError(); });
+    await expect(verifyAiContentUploadSessionBlob({
+      storagePath: "db-owned/session.png",
+      mimeType: base.mimeType,
+      sizeBytes: base.sizeBytes,
+    }, {
+      token: "rw-token",
+      abortSignal: new AbortController().signal,
+      headBlob,
+    })).rejects.toThrow("ai_content_attachment_blob_unavailable");
   });
 
   it("rejects provider metadata mismatches for session uploads", async () => {

@@ -1,5 +1,5 @@
 import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client";
-import { head, type HeadBlobResult } from "@vercel/blob";
+import { BlobNotFoundError, head, type HeadBlobResult } from "@vercel/blob";
 import type { AttachmentUploadTokenInput, AiContentAttachmentRole } from "./aiContentContracts.js";
 
 export const AI_CONTENT_IMAGE_MAX_BYTES = 5_000_000;
@@ -254,7 +254,8 @@ export async function verifyAiContentUploadSessionBlob(
       abortSignal: options.abortSignal,
     });
   } catch (error) {
-    if (providerStatus(error) === 404
+    if (error instanceof BlobNotFoundError
+      || providerStatus(error) === 404
       || (error instanceof Error && error.name === "BlobNotFoundError")) {
       fail("ai_content_attachment_blob_unavailable");
     }
