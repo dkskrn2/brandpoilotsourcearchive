@@ -87,6 +87,9 @@ describe("channelCapabilityViewModel", () => {
     });
 
     expect(view.rows[0].state).toBe("연결 준비 중");
+    expect(view.accountLabel).toBe("연결 준비 중");
+    expect(view.rows[0].detail).toBe("연결 준비 중");
+    expect(view.rows[0].detail).not.toContain("@mosong");
     expect(view.rows[3].state).toBe("지원 준비 중");
     expect(view.repairAction).toEqual({ kind: "guide", label: "연결 안내 보기" });
   });

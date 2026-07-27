@@ -194,7 +194,7 @@ describe("ChannelsPage", () => {
     expect(screen.getByRole("heading", { name: "YouTube" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "X" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "LinkedIn" })).toBeVisible();
-    expect(screen.getAllByText("연결 전")).toHaveLength(5);
+    expect(screen.getAllByText("연결 전")).toHaveLength(1);
     expect(screen.getByText("5개 미연결")).toBeVisible();
     expect(screen.queryByRole("tab", { name: "연결 요청" })).not.toBeInTheDocument();
     expect(api.getChannelConnectionRequest).not.toHaveBeenCalled();
@@ -221,6 +221,32 @@ describe("ChannelsPage", () => {
       href: null,
       label: "연결 준비 중",
     });
+  });
+
+  it("ignores stale stored connection labels and alerts for planned channels", async () => {
+    const staleAccountLabel = "@stale-x-account";
+    const staleAlertTitle = "X 연결 오류";
+    await renderChannelsPage({
+      listChannels: vi.fn(async () => apiChannels.map((channel) => (
+        channel.type === "x"
+          ? {
+            ...channel,
+            enabled: true,
+            oauthState: "connected",
+            status: "connected",
+            accountLabel: staleAccountLabel,
+            alertTitle: staleAlertTitle,
+            alertBody: "이전 연결 정보가 남아 있습니다.",
+          }
+          : channel
+      ))),
+    });
+
+    const xCard = (await screen.findByRole("heading", { name: "X" })).closest("article");
+    expect(xCard).not.toBeNull();
+    expect(within(xCard!).getAllByText("연결 준비 중").length).toBeGreaterThan(0);
+    expect(within(xCard!).queryByText(staleAccountLabel)).not.toBeInTheDocument();
+    expect(screen.queryByText(staleAlertTitle)).not.toBeInTheDocument();
   });
 
   it("keeps credential and manual request fields out of the customer channel page", async () => {

@@ -83,6 +83,21 @@ const instagramPublishScopeAlternatives = [
   "instagram_content_publish",
 ] as const;
 
+const instagramStoryScopeAlternatives: Record<
+  (typeof requiredInstagramStoryScopes)[number],
+  readonly string[]
+> = {
+  instagram_basic: instagramBasicScopeAlternatives,
+  instagram_content_publish: instagramPublishScopeAlternatives,
+};
+
+function missingInstagramStoryScopes(scopes: readonly string[]) {
+  const presentScopes = new Set(scopes);
+  return requiredInstagramStoryScopes.filter((requiredScope) => (
+    !instagramStoryScopeAlternatives[requiredScope].some((scope) => presentScopes.has(scope))
+  ));
+}
+
 export function evaluateInstagramChannelReadiness(
   input: AuthoritativeInstagramChannelInput,
 ): InstagramChannelReadiness {
@@ -139,10 +154,7 @@ export function evaluateInstagramChannelReadiness(
     };
   }
 
-  const scopes = new Set(input.scopes);
-  const hasBasic = instagramBasicScopeAlternatives.some((scope) => scopes.has(scope));
-  const hasPublish = instagramPublishScopeAlternatives.some((scope) => scopes.has(scope));
-  if (!hasBasic || !hasPublish) {
+  if (missingInstagramStoryScopes(input.scopes).length > 0) {
     return {
       connectionStatus: "insufficient_permissions",
       readiness: "needs_permission",
@@ -234,7 +246,7 @@ export function evaluateInstagramStoryCapability(
   input: InstagramStoryCapabilityInput
 ): InstagramStoryCapabilityResult {
   const presentScopes = [...new Set(input.scopes.filter((scope) => scope.trim().length > 0))];
-  const missingScopes = requiredInstagramStoryScopes.filter((scope) => !presentScopes.includes(scope));
+  const missingScopes = missingInstagramStoryScopes(presentScopes);
   const professionalAccountPresent = Boolean(input.externalAccountId?.trim());
   const now = input.now ?? new Date();
   const expiresAt = input.credentialExpiresAt === null ? null : new Date(input.credentialExpiresAt);

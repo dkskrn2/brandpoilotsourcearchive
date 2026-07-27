@@ -94,6 +94,9 @@ export function channelCapabilityViewModel(
   connection: ChannelConnection | null,
 ): ChannelCapabilityCardView {
   const planned = capability.catalogStatus === "planned";
+  const accountLabel = planned
+    ? "연결 준비 중"
+    : connection?.accountLabel ?? "연결 전";
   const connectionReason = capability.reasonCode
     ? connectionReasonLabels[capability.reasonCode]
     : null;
@@ -134,13 +137,13 @@ export function channelCapabilityViewModel(
   return {
     channel: capability.channel,
     label: channelLabels[capability.channel],
-    accountLabel: connection?.accountLabel ?? "연결 전",
+    accountLabel,
     rows: [
       {
         key: "connection",
         label: "계정 연결",
         state: connectionState,
-        detail: connection?.accountLabel ?? "연결 전",
+        detail: accountLabel,
         tone: !planned && capability.connectionStatus === "connected" ? "ok" : "warn",
       },
       {

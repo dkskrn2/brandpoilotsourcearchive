@@ -104,6 +104,11 @@ export function ChannelsPage() {
       label: attentionCount === 0 ? "모두 연결됨" : `${attentionCount}개 미연결`,
       variant: attentionCount === 0 ? "ok" as const : "warn" as const
     };
+  const availableCapabilityChannels = new Set(
+    capabilities
+      .filter((capability) => capability.catalogStatus === "available")
+      .map((capability) => capability.channel),
+  );
 
   useEffect(() => {
     let ignore = false;
@@ -257,7 +262,7 @@ export function ChannelsPage() {
                   </div>
                 ))}
               </dl>
-              {channel?.alertTitle ? (
+              {capability.catalogStatus === "available" && channel?.alertTitle ? (
                 <Alert title={channel.alertTitle} variant={alertVariantFor(channel.status)}>
                   {channel.alertBody}
                 </Alert>
@@ -282,7 +287,9 @@ export function ChannelsPage() {
         </div>
         <div className="panel-body grid">
           {connectionCards
-            .filter((channel) => channel.alertTitle)
+            .filter((channel) => (
+              availableCapabilityChannels.has(channel.type) && channel.alertTitle
+            ))
             .map((channel) => (
               <Alert key={channel.type} title={channel.alertTitle ?? channel.label} variant={alertVariantFor(channel.status)}>
                 {channel.alertBody}

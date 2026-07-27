@@ -6,6 +6,8 @@ import {
   type InstagramChannelCapabilityContext,
 } from "./channelCapabilities.js";
 import { createServer } from "./httpServer.js";
+import { evaluateInstagramStoryCapability } from "./instagramCapabilities.js";
+import { instagramLoginScopes } from "./instagramLoginGraph.js";
 import { createRepository } from "./repository.js";
 import type {
   ApiRepository,
@@ -172,6 +174,47 @@ describe("channel capability aggregate", () => {
       ],
     });
     expect(result[0]?.publishModes).not.toContain("instagram_reel");
+  });
+
+  it("exposes verified Story publishing with scopes persisted by Instagram Login", () => {
+    const storyCapability = evaluateInstagramStoryCapability({
+      channelStatus: "connected",
+      externalAccountId: "17890000000000000",
+      credentialId: "credential-1",
+      credentialStatus: "active",
+      credentialExpiresAt: "2026-08-01T00:00:00.000Z",
+      scopes: instagramLoginScopes,
+      apiVersion: "v23.0",
+      capabilityMetadata: {
+        scopesVerified: true,
+        storyPublishVerified: true,
+        verifiedCredentialId: "credential-1",
+      },
+      now: new Date("2026-07-27T00:00:00.000Z"),
+    });
+
+    const result = buildChannelCapabilities({
+      channels: [channel("instagram", "connected")],
+      instagramFormats: [
+        instagramFormat("instagram_feed_carousel", "available"),
+        {
+          ...instagramFormat("instagram_story", storyCapability.status),
+          capabilityMetadata: storyCapability.metadata,
+        },
+        instagramFormat("instagram_reel", "unchecked"),
+      ],
+      instagramContext: instagramContext({ scopes: [...instagramLoginScopes] }),
+    });
+
+    expect(result[0]).toMatchObject({
+      readiness: "ready",
+      reasonCode: null,
+      publishModes: [
+        "instagram_feed_single",
+        "instagram_feed_carousel",
+        "instagram_story",
+      ],
+    });
   });
 
   it("does not expose Story publishing before its permission check succeeds", () => {
