@@ -24,6 +24,7 @@ export interface ChannelCapability {
 }
 
 export interface InstagramChannelCapabilityContext {
+  adapterEnabled: boolean;
   externalAccountId: string | null;
   credentialId: string | null;
   credentialProvider: string | null;

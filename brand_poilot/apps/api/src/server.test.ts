@@ -315,6 +315,7 @@ function createRepository(): ApiRepository {
     deleteSource: vi.fn(async (sourceId) => ({ id: sourceId })),
     listChannels: vi.fn(async () => []),
     getInstagramChannelCapabilityContext: vi.fn(async () => ({
+      adapterEnabled: false,
       externalAccountId: null,
       credentialId: null,
       credentialProvider: null,

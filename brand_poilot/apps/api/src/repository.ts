@@ -2319,6 +2319,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       );
       const row = result.rows[0];
       return {
+        adapterEnabled: instagramPublish.enabled,
         externalAccountId: typeof row?.external_account_id === "string"
           ? row.external_account_id
           : null,

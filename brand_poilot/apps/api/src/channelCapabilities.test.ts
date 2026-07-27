@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { Pool } from "pg";
 import {
   buildChannelCapabilities,
@@ -64,6 +64,7 @@ function instagramContext(
 ): InstagramChannelCapabilityContext {
   return {
     externalAccountId: "17890000000000000",
+    adapterEnabled: true,
     credentialId: "credential-1",
     credentialProvider: "meta",
     credentialStatus: "active",
@@ -73,6 +74,10 @@ function instagramContext(
     ...overrides,
   };
 }
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("channel capability aggregate", () => {
   it("defines the single server and customer capability contract", () => {
@@ -177,6 +182,26 @@ describe("channel capability aggregate", () => {
       publishModes: ["instagram_feed_single", "instagram_feed_carousel"],
       readiness: "ready",
       reasonCode: null,
+    });
+  });
+
+  it("keeps generation and export but disables publishing when the runtime adapter is off", () => {
+    const result = buildChannelCapabilities({
+      channels: [channel("instagram", "connected")],
+      instagramFormats: defaultFormats,
+      instagramContext: instagramContext({ adapterEnabled: false }),
+    });
+
+    expect(result[0]).toEqual({
+      channel: "instagram",
+      catalogStatus: "available",
+      connectionStatus: "connected",
+      canGenerate: true,
+      generationFormats: ["card_news", "single_image"],
+      exportModes: ["image"],
+      publishModes: [],
+      readiness: "not_supported",
+      reasonCode: "publishing_disabled",
     });
   });
 
@@ -323,10 +348,15 @@ describe("authoritative Instagram capability repository context", () => {
         scopes: ["instagram_business_basic", "instagram_business_content_publish"],
       }],
     }));
-    const repository = createRepository({ query } as unknown as Pool);
+    vi.stubEnv("INSTAGRAM_PUBLISH_ENABLED", "true");
+    const repository = createRepository(
+      { query } as unknown as Pool,
+      { instagramPublish: { enabled: false } },
+    );
 
     await expect(repository.getInstagramChannelCapabilityContext(brandId)).resolves.toEqual({
       externalAccountId: "17890000000000000",
+      adapterEnabled: false,
       credentialId: "credential-1",
       credentialProvider: "meta",
       credentialStatus: "active",

@@ -36,6 +36,11 @@ export interface InstagramStoryCapabilityResult {
 export type InstagramChannelReadiness =
   | { connectionStatus: "connected"; readiness: "ready"; reasonCode: null }
   | {
+    connectionStatus: "connected";
+    readiness: "not_supported";
+    reasonCode: "publishing_disabled";
+  }
+  | {
     connectionStatus: "not_connected";
     readiness: "needs_connection";
     reasonCode: "channel_not_connected";
@@ -52,6 +57,7 @@ export type InstagramChannelReadiness =
   };
 
 export interface AuthoritativeInstagramChannelInput {
+  adapterEnabled: boolean;
   externalAccountId: string | null;
   credentialId: string | null;
   credentialProvider: string | null;
@@ -127,6 +133,13 @@ export function evaluateInstagramChannelReadiness(
       connectionStatus: "insufficient_permissions",
       readiness: "needs_permission",
       reasonCode: "missing_required_scopes",
+    };
+  }
+  if (!input.adapterEnabled) {
+    return {
+      connectionStatus: "connected",
+      readiness: "not_supported",
+      reasonCode: "publishing_disabled",
     };
   }
   return { connectionStatus: "connected", readiness: "ready", reasonCode: null };
