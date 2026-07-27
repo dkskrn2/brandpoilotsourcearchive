@@ -213,23 +213,50 @@ function createWorkerPool(options: {
   const job: Record<string, unknown> = {
     id: "job-1", generation_id: "generation-1", output_id: options.jobType === "analyze" ? null : "output-1",
     workspace_id: "workspace-1", brand_id: "brand-1", job_type: options.jobType ?? "generate", content_type: "card_news",
-    status: "queued", payload_json: {
+    status: options.exhaustedJob ? "processing" : "queued", payload_json: {
       ...(options.finalizeGeneration ? { finalizeGeneration: true } : {}),
       contentGenerationInput: structuredClone(options.subjectAnalysisSnapshot ?? contentGenerationInputV2Fixture),
-    }, attempt_count: 0, max_attempts: 3, available_at: new Date("2026-07-18T00:00:00.000Z"),
-    worker_id: null, lease_token: null, lease_expires_at: null,
+    }, attempt_count: options.exhaustedJob ? 3 : 0, max_attempts: 3, available_at: new Date("2026-07-18T00:00:00.000Z"),
+    worker_id: options.exhaustedJob ? "expired-worker" : null,
+    lease_token: options.exhaustedJob ? "expired-token" : null,
+    lease_expires_at: options.exhaustedJob ? new Date("2026-07-17T00:00:00.000Z") : null,
   };
   const client = {
     query: async (query: string, params: unknown[] = []) => {
       sql.push(query);
       if (["BEGIN", "COMMIT", "ROLLBACK"].includes(query)) return { rows: [], rowCount: 0 };
       if (query.includes("select terminal_generation.id")) return pendingCleanup ? { rows: [{ id: "generation-1" }], rowCount: 1 } : { rows: [], rowCount: 0 };
-      if (query.includes("update ai_content_generation_jobs") && query.includes("lease_exhausted")) {
+      if (
+        query.includes("select id")
+        && query.includes("from ai_content_generation_jobs")
+        && query.includes("attempt_count >= max_attempts")
+      ) {
         return options.exhaustedJob
-          ? { rows: [{ generation_id: "generation-1", output_id: "output-1", job_type: "generate" }], rowCount: 1 }
+          ? { rows: [{ id: "job-1" }], rowCount: 1 }
           : { rows: [], rowCount: 0 };
       }
-      if (query.includes("update ai_content_generation_jobs") && query.includes("lease_expired")) return { rows: [], rowCount: 0 };
+      if (
+        query.includes("update ai_content_generation_jobs")
+        && query.includes("ai_content_job_lease_exhausted")
+        && query.includes("where id = $1")
+      ) {
+        Object.assign(job, {
+          status: "failed",
+          worker_id: null,
+          lease_token: null,
+          lease_expires_at: null,
+          error_code: "ai_content_job_lease_exhausted",
+        });
+        return { rows: [], rowCount: 1 };
+      }
+      if (
+        query.includes("select id")
+        && query.includes("from ai_content_generation_jobs")
+        && query.includes("attempt_count < max_attempts")
+        && query.includes("lease_expires_at < transaction_timestamp()")
+      ) {
+        return { rows: [], rowCount: 0 };
+      }
       if (query.includes("with candidate as")) {
         if (job.status !== "queued") return { rows: [], rowCount: 0 };
         Object.assign(job, { status: "processing", worker_id: params[1], lease_token: params[2], lease_expires_at: new Date("2099-07-18T00:03:00.000Z"), attempt_count: Number(job.attempt_count) + 1 });
@@ -255,7 +282,7 @@ function createWorkerPool(options: {
           ? { rows: [{ payload_json: structuredClone(options.priorGeneratePayload) }], rowCount: 1 }
           : { rows: [], rowCount: 0 };
       }
-      if (query.includes("from ai_content_generations") && query.includes("retryable_until > statement_timestamp()")) {
+      if (query.includes("from ai_content_generations") && query.includes("retryable_until > transaction_timestamp()")) {
         const retryable = options.retryBoundary
           ? options.retryBoundary === "before"
           : options.retryable ?? true;
@@ -276,7 +303,42 @@ function createWorkerPool(options: {
           ? { rows: [{ status: options.deletionStatus }], rowCount: 1 }
           : { rows: [], rowCount: 0 };
       }
-      if (query.includes("select * from ai_content_generation_jobs")) return { rows: [{ ...job }], rowCount: 1 };
+      if (
+        query.includes("select generation_id, output_id")
+        && query.includes("from ai_content_generation_jobs")
+        && query.includes("where id = $1")
+      ) {
+        return {
+          rows: [{ generation_id: job.generation_id, output_id: job.output_id }],
+          rowCount: 1,
+        };
+      }
+      if (
+        query.includes("select id")
+        && query.includes("from ai_content_generations")
+        && query.includes("for update")
+      ) {
+        return { rows: [{ id: "generation-1" }], rowCount: 1 };
+      }
+      if (
+        query.includes("select id, generation_id")
+        && query.includes("from ai_content_generation_outputs")
+        && query.includes("for update")
+      ) {
+        return {
+          rows: [{ id: "output-1", generation_id: "generation-1" }],
+          rowCount: 1,
+        };
+      }
+      if (query.includes("select *") && query.includes("from ai_content_generation_jobs")) {
+        return {
+          rows: [{
+            ...job,
+            lease_expired: options.exhaustedJob && job.status === "processing",
+          }],
+          rowCount: 1,
+        };
+      }
       if (query.includes("as generation_input_snapshot") && query.includes("from ai_content_generations")) {
         return {
           rows: [{ generation_input_snapshot: options.subjectAnalysisSnapshot ?? contentGenerationInputV2Fixture }],
@@ -891,6 +953,7 @@ describe("AI content repository", () => {
     const pool = createWorkerPool();
     const repository = createAiContentRepository(pool as never);
     const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
+    const completionSqlStart = pool.sql.length;
     const completion = {
       jobId: "job-1", workerId: "card-worker-1", leaseToken: claimed!.leaseToken!, skillVersion: "card-news-skill.v1", jobType: "generate" as const,
       manifestUrl: "https://blob.example.com/manifest.json",
@@ -904,6 +967,19 @@ describe("AI content repository", () => {
     expect(first.retryableUntil).not.toBeNull();
     expect(second.terminalAt).toBe(first.terminalAt);
     expect(second.retryableUntil).toBe(first.retryableUntil);
+    const completionSql = pool.sql.slice(completionSqlStart);
+    const generationLock = completionSql.findIndex((sql) =>
+      sql.includes("from ai_content_generations") && sql.includes("for update"));
+    const outputLock = completionSql.findIndex((sql) =>
+      sql.includes("from ai_content_generation_outputs") && sql.includes("for update"));
+    const jobLock = completionSql.findIndex((sql) =>
+      sql.includes("from ai_content_generation_jobs") && sql.includes("for update"));
+    const outputAggregate = completionSql.findIndex((sql) =>
+      sql.includes("count(*)::integer as total"));
+    expect(generationLock).toBeGreaterThanOrEqual(0);
+    expect(outputLock).toBeGreaterThan(generationLock);
+    expect(jobLock).toBeGreaterThan(outputLock);
+    expect(outputAggregate).toBeGreaterThan(generationLock);
   });
 
   it("retains temporary attachments after every output completes", async () => {
@@ -1189,6 +1265,15 @@ describe("AI content repository", () => {
     await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
 
     expect(pool.sql.join("\n")).toContain("status = 'generation_failed'");
+    const generationLock = pool.sql.findIndex((sql) =>
+      sql.includes("from ai_content_generations") && sql.includes("for update"));
+    const outputLock = pool.sql.findIndex((sql) =>
+      sql.includes("from ai_content_generation_outputs") && sql.includes("for update"));
+    const jobLock = pool.sql.findIndex((sql) =>
+      sql.includes("from ai_content_generation_jobs") && sql.includes("for update"));
+    expect(generationLock).toBeGreaterThanOrEqual(0);
+    expect(outputLock).toBeGreaterThan(generationLock);
+    expect(jobLock).toBeGreaterThan(outputLock);
   });
 
   it("records the exact 15-day retention window on every generation terminal transition", async () => {

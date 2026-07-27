@@ -693,7 +693,71 @@ async function generationById(client: Queryable, generationId: string) {
   return mapGeneration(result.rows[0]);
 }
 
+async function lockAiContentJobContext(client: Queryable, jobId: string) {
+  const lookup = await client.query(
+    `select generation_id, output_id
+       from ai_content_generation_jobs
+      where id = $1`,
+    [jobId],
+  );
+  const expected = lookup.rows[0] as Record<string, unknown> | undefined;
+  if (!expected) throw new Error("ai_content_job_not_found");
+  const generationId = String(expected.generation_id);
+  const outputId = expected.output_id ? String(expected.output_id) : null;
+
+  const generation = await client.query(
+    `select id
+       from ai_content_generations
+      where id = $1
+      for update`,
+    [generationId],
+  );
+  if (!generation.rowCount) throw new Error("ai_content_job_not_found");
+
+  if (outputId) {
+    const output = await client.query(
+      `select id, generation_id
+         from ai_content_generation_outputs
+        where id = $1
+        for update`,
+      [outputId],
+    );
+    if (
+      !output.rowCount
+      || String(output.rows[0]?.generation_id) !== generationId
+    ) {
+      throw new Error("ai_content_job_not_found");
+    }
+  }
+
+  const locked = await client.query(
+    `select *,
+            lease_expires_at < transaction_timestamp() as lease_expired
+       from ai_content_generation_jobs
+      where id = $1
+      for update`,
+    [jobId],
+  );
+  const job = locked.rows[0] as Record<string, unknown> | undefined;
+  if (
+    !job
+    || String(job.generation_id) !== generationId
+    || (job.output_id ? String(job.output_id) : null) !== outputId
+  ) {
+    throw new Error("ai_content_job_not_found");
+  }
+  return job;
+}
+
 async function recalculateGenerationStatus(client: Queryable, generationId: string) {
+  const generation = await client.query(
+    `select id
+       from ai_content_generations
+      where id = $1
+      for update`,
+    [generationId],
+  );
+  if (!generation.rowCount) throw new Error("ai_content_generation_not_found");
   const counts = await client.query(
     `select count(*)::integer as total,
             count(*) filter (where status = 'completed')::integer as completed,
@@ -1182,15 +1246,33 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       try {
         await client.query("BEGIN");
         const exhausted = await client.query(
-          `update ai_content_generation_jobs
-              set status = 'failed', worker_id = null, lease_token = null, lease_expires_at = null,
-                  error_code = 'ai_content_job_lease_exhausted', error_message = 'Worker lease expired after the final attempt', updated_at = now()
-            where content_type = $1 and status = 'processing' and lease_expires_at < now() and attempt_count >= max_attempts
-          returning generation_id, output_id, job_type`,
+          `select id
+             from ai_content_generation_jobs
+            where content_type = $1 and status = 'processing'
+              and lease_expires_at < transaction_timestamp()
+              and attempt_count >= max_attempts
+            order by generation_id, output_id nulls first, id`,
           [input.contentType],
         );
         for (const expired of exhausted.rows) {
-          if (expired.job_type === "analyze") {
+          const job = await lockAiContentJobContext(client, String(expired.id));
+          if (
+            job.status !== "processing"
+            || !job.lease_expires_at
+            || job.lease_expired !== true
+            || Number(job.attempt_count) < Number(job.max_attempts)
+          ) {
+            continue;
+          }
+          await client.query(
+            `update ai_content_generation_jobs
+                set status = 'failed', worker_id = null, lease_token = null, lease_expires_at = null,
+                    error_code = 'ai_content_job_lease_exhausted',
+                    error_message = 'Worker lease expired after the final attempt', updated_at = now()
+              where id = $1`,
+            [job.id],
+          );
+          if (job.job_type === "analyze") {
             await client.query(
               `update ai_content_generations
                   set status = 'failed', error_code = 'ai_content_job_lease_exhausted',
@@ -1206,7 +1288,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
                       end,
                       updated_at = now()
                 where id = $1`,
-              [expired.generation_id],
+              [job.generation_id],
             );
           } else {
             await client.query(
@@ -1214,25 +1296,46 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
                   set status = 'failed', failure_code = 'ai_content_job_lease_exhausted',
                       failure_message = 'Worker lease expired after the final attempt', updated_at = now()
                 where id = $1`,
-              [expired.output_id],
+              [job.output_id],
             );
-            await recalculateGenerationStatus(client, String(expired.generation_id));
+            await recalculateGenerationStatus(client, String(job.generation_id));
           }
           await markLinkedScheduledCardNewsFailed(
             client,
-            String(expired.generation_id),
-            expired.output_id ? String(expired.output_id) : null,
+            String(job.generation_id),
+            job.output_id ? String(job.output_id) : null,
             "ai_content_job_lease_exhausted",
             "Worker lease expired after the final attempt",
           );
         }
-        await client.query(
-          `update ai_content_generation_jobs
-              set status = 'queued', worker_id = null, lease_token = null, lease_expires_at = null,
-                  available_at = now(), error_code = 'ai_content_job_lease_expired', error_message = null, updated_at = now()
-            where content_type = $1 and status = 'processing' and lease_expires_at < now() and attempt_count < max_attempts`,
+        const retryableExpired = await client.query(
+          `select id
+             from ai_content_generation_jobs
+            where content_type = $1 and status = 'processing'
+              and lease_expires_at < transaction_timestamp()
+              and attempt_count < max_attempts
+            order by generation_id, output_id nulls first, id`,
           [input.contentType],
         );
+        for (const expired of retryableExpired.rows) {
+          const job = await lockAiContentJobContext(client, String(expired.id));
+          if (
+            job.status !== "processing"
+            || !job.lease_expires_at
+            || job.lease_expired !== true
+            || Number(job.attempt_count) >= Number(job.max_attempts)
+          ) {
+            continue;
+          }
+          await client.query(
+            `update ai_content_generation_jobs
+                set status = 'queued', worker_id = null, lease_token = null, lease_expires_at = null,
+                    available_at = now(), error_code = 'ai_content_job_lease_expired',
+                    error_message = null, updated_at = now()
+              where id = $1`,
+            [job.id],
+          );
+        }
         const leaseToken = randomUUID();
         const claimed = await client.query(
           `with candidate as (
@@ -1346,12 +1449,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        const locked = await client.query(
-          "select * from ai_content_generation_jobs where id = $1 for update",
-          [input.jobId],
-        );
-        const job = locked.rows[0] as Record<string, unknown> | undefined;
-        if (!job) throw new Error("ai_content_job_not_found");
+        const job = await lockAiContentJobContext(client, input.jobId);
         if (job.status === "succeeded") {
           if (job.worker_id !== input.workerId || job.lease_token !== input.leaseToken) throw new Error("ai_content_job_lease_invalid");
           const generation = await generationById(client, String(job.generation_id));
@@ -1363,7 +1461,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           || job.worker_id !== input.workerId
           || job.lease_token !== input.leaseToken
           || !job.lease_expires_at
-          || new Date(String(job.lease_expires_at)).getTime() <= Date.now()
+          || job.lease_expired === true
         ) {
           throw new Error("ai_content_job_lease_invalid");
         }
@@ -1475,9 +1573,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        const locked = await client.query("select * from ai_content_generation_jobs where id = $1 for update", [input.jobId]);
-        const job = locked.rows[0] as Record<string, unknown> | undefined;
-        if (!job) throw new Error("ai_content_job_not_found");
+        const job = await lockAiContentJobContext(client, input.jobId);
         if (job.status === "failed" || (job.status === "queued" && job.error_code === input.errorCode)) {
           const generation = await generationById(client, String(job.generation_id));
           await client.query("COMMIT");
@@ -1488,7 +1584,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           || job.worker_id !== input.workerId
           || job.lease_token !== input.leaseToken
           || !job.lease_expires_at
-          || new Date(String(job.lease_expires_at)).getTime() <= Date.now()
+          || job.lease_expired === true
         ) {
           throw new Error("ai_content_job_lease_invalid");
         }
@@ -1568,7 +1664,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         const generationId = String(outputScope.rows[0]?.generation_id);
         const generationResult = await client.query(
           `select id, retryable_until,
-                  retryable_until > statement_timestamp() as retryable
+                  retryable_until > transaction_timestamp() as retryable
              from ai_content_generations
             where id = $1 and workspace_id = $2 and brand_id = $3
             for update`,

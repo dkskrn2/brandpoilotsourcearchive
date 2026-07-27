@@ -13,6 +13,9 @@ const USER_ID = "40000000-0000-4000-8000-000000000001";
 const OUTPUT_ID = "50000000-0000-4000-8000-000000000001";
 const DELETION_JOB_ID = "60000000-0000-4000-8000-000000000001";
 const LEASE_TOKEN = "70000000-0000-4000-8000-000000000001";
+const OUTPUT_ID_2 = "50000000-0000-4000-8000-000000000002";
+const JOB_ID_1 = "a0000000-0000-4000-8000-000000000001";
+const JOB_ID_2 = "a0000000-0000-4000-8000-000000000002";
 
 const RETRY_PAYLOAD = {
   generationId: GENERATION_ID,
@@ -58,6 +61,42 @@ const RETRY_PAYLOAD = {
     }],
   },
 };
+
+function cardManifest(index: number) {
+  return {
+    version: "ai-content.v1" as const,
+    type: "card_news" as const,
+    title: `완료 ${index}`,
+    assets: [{
+      role: "slide" as const,
+      url: `https://test.public.blob.vercel-storage.com/slide-${index}.png`,
+      fileName: `slide-${index}.png`,
+      mimeType: "image/png" as const,
+      width: 1080,
+      height: 1080,
+      index: 1,
+    }],
+    content: { caption: "내용", hashtags: ["완료"], cta: "저장하세요" },
+  };
+}
+
+function poolWithinExistingTransaction(client: {
+  query: Pool["query"];
+}) {
+  const transactionClient = {
+    query: (sql: string, params?: unknown[]) => {
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      return client.query(sql, params);
+    },
+    release: () => undefined,
+  };
+  return {
+    connect: async () => transactionClient,
+    query: transactionClient.query,
+  };
+}
 
 async function applyRealMigrations(pool: Pool) {
   const directory = resolve(process.cwd(), "../../db/migrations");
@@ -210,7 +249,7 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       expect(transitions.rows[0]?.count).toBe(1);
     });
 
-    it("accepts before expiry, preserves semantic payload equality, and rejects equal/after DB-time boundaries", async () => {
+    it("accepts before expiry, preserves semantic payload equality, and rejects an after-expiry DB boundary", async () => {
       const repository = createAiContentRepository(pool);
       const seedFailedOutput = async (retryableUntilSql: string) => {
         await pool.query(
@@ -288,7 +327,6 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       expect(renewedRetryableUntil - renewedTerminalAt).toBe(15 * 24 * 60 * 60 * 1_000);
 
       for (const retryableUntilSql of [
-        "statement_timestamp()",
         "statement_timestamp() - interval '1 microsecond'",
       ]) {
         await pool.query(
@@ -302,6 +340,53 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
           brandId: BRAND_ID,
           outputId: OUTPUT_ID,
         })).rejects.toThrow("ai_content_attachment_retention_expired");
+      }
+    });
+
+    it("rejects exact retry equality against one shared database transaction timestamp", async () => {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(
+          `update ai_content_generations
+              set status = 'failed',
+                  terminal_at = transaction_timestamp() - interval '15 days',
+                  retryable_until = transaction_timestamp()
+            where id = $1`,
+          [GENERATION_ID],
+        );
+        await client.query(
+          `insert into ai_content_generation_outputs (
+             id, generation_id, workspace_id, brand_id, output_index, status
+           ) values ($1, $2, $3, $4, 1, 'failed')`,
+          [OUTPUT_ID, GENERATION_ID, WORKSPACE_ID, BRAND_ID],
+        );
+        await client.query(
+          `insert into ai_content_generation_jobs (
+             generation_id, output_id, workspace_id, brand_id, job_type,
+             content_type, status, payload_json, completed_at
+           ) values ($1, $2, $3, $4, 'generate', 'card_news', 'failed', $5::jsonb, now())`,
+          [GENERATION_ID, OUTPUT_ID, WORKSPACE_ID, BRAND_ID, JSON.stringify(RETRY_PAYLOAD)],
+        );
+        const equality = await client.query(
+          `select retryable_until = transaction_timestamp() as equal
+             from ai_content_generations
+            where id = $1`,
+          [GENERATION_ID],
+        );
+        expect(equality.rows[0]?.equal).toBe(true);
+        const repository = createAiContentRepository(
+          poolWithinExistingTransaction(client) as never,
+        );
+
+        await expect(repository.retryAiContentOutput({
+          workspaceId: WORKSPACE_ID,
+          brandId: BRAND_ID,
+          outputId: OUTPUT_ID,
+        })).rejects.toThrow("ai_content_attachment_retention_expired");
+      } finally {
+        await client.query("ROLLBACK");
+        client.release();
       }
     });
 
@@ -407,7 +492,7 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
               where datname = current_database()
                 and pid <> pg_backend_pid()
                 and wait_event_type = 'Lock'
-                and query like '%retryable_until > statement_timestamp()%'`,
+                and query like '%retryable_until > transaction_timestamp()%'`,
           );
           if (Number(waiting.rows[0]?.count ?? 0) > 0) {
             observedGenerationLockWait = true;
@@ -450,6 +535,213 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         gcClient.release();
         if (retry) await retry.catch(() => undefined);
       }
+    });
+
+    it("serializes two distinct output completions before terminal lifecycle calculation", async () => {
+      const repository = createAiContentRepository(pool);
+      await pool.query(
+        `update ai_content_generations
+            set status = 'generating', terminal_at = null, retryable_until = null
+          where id = $1`,
+        [GENERATION_ID],
+      );
+      await pool.query(
+        `insert into ai_content_generation_outputs (
+           id, generation_id, workspace_id, brand_id, output_index, status
+         ) values
+           ($1, $3, $4, $5, 1, 'generating'),
+           ($2, $3, $4, $5, 2, 'generating')`,
+        [OUTPUT_ID, OUTPUT_ID_2, GENERATION_ID, WORKSPACE_ID, BRAND_ID],
+      );
+      await pool.query(
+        `insert into ai_content_generation_jobs (
+           id, generation_id, output_id, workspace_id, brand_id, job_type,
+           content_type, status, payload_json, attempt_count, worker_id,
+           lease_token, lease_expires_at
+         ) values
+           ($1, $3, $4, $5, $6, 'generate', 'card_news', 'processing',
+            $7::jsonb, 1, 'worker-1', $8, now() + interval '3 minutes'),
+           ($2, $3, $9, $5, $6, 'generate', 'card_news', 'processing',
+            $10::jsonb, 1, 'worker-2', $11, now() + interval '3 minutes')`,
+        [
+          JOB_ID_1,
+          JOB_ID_2,
+          GENERATION_ID,
+          OUTPUT_ID,
+          WORKSPACE_ID,
+          BRAND_ID,
+          JSON.stringify(RETRY_PAYLOAD),
+          "b0000000-0000-4000-8000-000000000001",
+          OUTPUT_ID_2,
+          JSON.stringify({ ...RETRY_PAYLOAD, outputId: OUTPUT_ID_2 }),
+          "b0000000-0000-4000-8000-000000000002",
+        ],
+      );
+
+      const completions = await Promise.all([
+        repository.completeAiContentJob({
+          jobId: JOB_ID_1,
+          workerId: "worker-1",
+          leaseToken: "b0000000-0000-4000-8000-000000000001",
+          skillVersion: "card-news-skill.v5",
+          jobType: "generate",
+          manifestUrl: "https://test.public.blob.vercel-storage.com/manifest-1.json",
+          manifest: cardManifest(1),
+        }),
+        repository.completeAiContentJob({
+          jobId: JOB_ID_2,
+          workerId: "worker-2",
+          leaseToken: "b0000000-0000-4000-8000-000000000002",
+          skillVersion: "card-news-skill.v5",
+          jobType: "generate",
+          manifestUrl: "https://test.public.blob.vercel-storage.com/manifest-2.json",
+          manifest: cardManifest(2),
+        }),
+      ]);
+
+      expect(completions.some((generation) => generation.status === "completed")).toBe(true);
+      const terminal = await pool.query(
+        `select status, terminal_at, retryable_until
+           from ai_content_generations
+          where id = $1`,
+        [GENERATION_ID],
+      );
+      expect(terminal.rows[0]?.status).toBe("completed");
+      const terminalAt = new Date(terminal.rows[0]?.terminal_at).getTime();
+      const retryableUntil = new Date(terminal.rows[0]?.retryable_until).getTime();
+      expect(retryableUntil - terminalAt).toBe(15 * 24 * 60 * 60 * 1_000);
+    });
+
+    it("keeps retry versus worker failure deadlock-free with one valid arbitration outcome", async () => {
+      const repository = createAiContentRepository(pool);
+      await pool.query(
+        `update ai_content_generations
+            set status = 'generating',
+                terminal_at = statement_timestamp(),
+                retryable_until = statement_timestamp() + interval '15 days'
+          where id = $1`,
+        [GENERATION_ID],
+      );
+      await pool.query(
+        `insert into ai_content_generation_outputs (
+           id, generation_id, workspace_id, brand_id, output_index, status
+         ) values ($1, $2, $3, $4, 1, 'generating')`,
+        [OUTPUT_ID, GENERATION_ID, WORKSPACE_ID, BRAND_ID],
+      );
+      await pool.query(
+        `insert into ai_content_generation_jobs (
+           id, generation_id, output_id, workspace_id, brand_id, job_type,
+           content_type, status, payload_json, attempt_count, worker_id,
+           lease_token, lease_expires_at
+         ) values (
+           $1, $2, $3, $4, $5, 'generate', 'card_news', 'processing',
+           $6::jsonb, 1, 'worker-1', $7, now() + interval '3 minutes'
+         )`,
+        [
+          JOB_ID_1,
+          GENERATION_ID,
+          OUTPUT_ID,
+          WORKSPACE_ID,
+          BRAND_ID,
+          JSON.stringify(RETRY_PAYLOAD),
+          LEASE_TOKEN,
+        ],
+      );
+
+      const settled = await Promise.race([
+        Promise.allSettled([
+          repository.failAiContentJob({
+            jobId: JOB_ID_1,
+            workerId: "worker-1",
+            leaseToken: LEASE_TOKEN,
+            errorCode: "render_failed",
+            errorMessage: "failed",
+            retryable: false,
+          }),
+          repository.retryAiContentOutput({
+            workspaceId: WORKSPACE_ID,
+            brandId: BRAND_ID,
+            outputId: OUTPUT_ID,
+          }),
+        ]),
+        new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 5_000)),
+      ]);
+      expect(settled).not.toBe("timeout");
+      expect((settled as PromiseSettledResult<unknown>[]).some(
+        (result) => result.status === "fulfilled",
+      )).toBe(true);
+      const output = await pool.query(
+        "select status from ai_content_generation_outputs where id = $1",
+        [OUTPUT_ID],
+      );
+      expect(["failed", "queued"]).toContain(output.rows[0]?.status);
+    });
+
+    it("keeps retry versus lease exhaustion deadlock-free with one valid arbitration outcome", async () => {
+      const repository = createAiContentRepository(pool);
+      await pool.query(
+        `update ai_content_generations
+            set status = 'generating',
+                terminal_at = statement_timestamp(),
+                retryable_until = statement_timestamp() + interval '15 days'
+          where id = $1`,
+        [GENERATION_ID],
+      );
+      await pool.query(
+        `insert into ai_content_generation_outputs (
+           id, generation_id, workspace_id, brand_id, output_index, status
+         ) values ($1, $2, $3, $4, 1, 'generating')`,
+        [OUTPUT_ID, GENERATION_ID, WORKSPACE_ID, BRAND_ID],
+      );
+      await pool.query(
+        `insert into ai_content_generation_jobs (
+           id, generation_id, output_id, workspace_id, brand_id, job_type,
+           content_type, status, payload_json, attempt_count, max_attempts,
+           worker_id, lease_token, lease_expires_at
+         ) values (
+           $1, $2, $3, $4, $5, 'generate', 'card_news', 'processing',
+           $6::jsonb, 3, 3, 'expired-worker', $7, now() - interval '1 second'
+         )`,
+        [
+          JOB_ID_1,
+          GENERATION_ID,
+          OUTPUT_ID,
+          WORKSPACE_ID,
+          BRAND_ID,
+          JSON.stringify(RETRY_PAYLOAD),
+          LEASE_TOKEN,
+        ],
+      );
+
+      const settled = await Promise.race([
+        Promise.allSettled([
+          repository.claimAiContentJob({
+            contentType: "card_news",
+            workerId: "next-worker",
+            leaseSeconds: 180,
+          }),
+          repository.retryAiContentOutput({
+            workspaceId: WORKSPACE_ID,
+            brandId: BRAND_ID,
+            outputId: OUTPUT_ID,
+          }),
+        ]),
+        new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 5_000)),
+      ]);
+      expect(settled).not.toBe("timeout");
+      const output = await pool.query(
+        "select status from ai_content_generation_outputs where id = $1",
+        [OUTPUT_ID],
+      );
+      expect(["failed", "queued"]).toContain(output.rows[0]?.status);
+      const exhausted = await pool.query(
+        "select status, error_code from ai_content_generation_jobs where id = $1",
+        [JOB_ID_1],
+      );
+      expect(exhausted.rows[0]).toMatchObject({
+        status: "failed",
+        error_code: "ai_content_job_lease_exhausted",
+      });
     });
   },
 );
