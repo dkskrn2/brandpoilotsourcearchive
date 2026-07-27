@@ -246,6 +246,7 @@ export interface AiContentGateway {
   updateGeneration(brandId: string, generationId: string, input: { draft: AiContentDraft; referenceIds: string[] }): Promise<AiContentGeneration>;
   startGeneration(brandId: string, generationId: string, input: { idempotencyKey: string; outputCount: 1 | 2 | 3 }): Promise<AiContentGeneration>;
   uploadAttachment(brandId: string, generationId: string, attachment: GenerationAttachment, onProgress?: (percentage: number) => void): Promise<GenerationAttachment>;
+  removeAttachment(brandId: string, generationId: string, attachmentId: string): Promise<void>;
   listAudiencePresets(brandId: string): Promise<AudiencePreset[]>;
   saveAudiencePreset(brandId: string, input: Omit<AudiencePreset, "id" | "useCount" | "lastUsedAt">): Promise<AudiencePreset>;
   listAppealPresets(brandId: string): Promise<AppealPreset[]>;

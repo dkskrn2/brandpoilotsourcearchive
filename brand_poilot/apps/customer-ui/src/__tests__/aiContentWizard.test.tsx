@@ -95,6 +95,48 @@ describe("AiContentWizardPage", () => {
     expect(screen.getAllByRole("heading", { name: "참고할 콘텐츠를 선택하세요" })).toHaveLength(1);
   });
 
+  it("awaits server removal when revisiting a confirmed subject attachment", async () => {
+    const user = userEvent.setup();
+    const gateway = createMockAiContentGateway();
+    let finishRemoval: (() => void) | undefined;
+    const removeAttachment = vi.spyOn(gateway, "removeAttachment").mockImplementation(async () => new Promise<void>((resolve) => {
+      finishRemoval = resolve;
+    }));
+    renderWizard("/ai-content/new?type=card_news", gateway);
+    await user.click(screen.getByRole("button", { name: "다음" }));
+    await user.click(screen.getByRole("radio", { name: "제품" }));
+    await user.upload(screen.getByLabelText("제품 이미지"), new File(["image"], "product.png", { type: "image/png" }));
+    await user.click(screen.getByRole("button", { name: "분석하고 소구점 만들기" }));
+    expect(await screen.findByText("3 / 5")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "이전" }));
+
+    await user.click(screen.getByRole("button", { name: "product.png 삭제" }));
+    expect(removeAttachment).toHaveBeenCalledWith("brand-demo", expect.any(String), expect.any(String));
+    expect(screen.getByText("product.png")).toBeVisible();
+
+    finishRemoval?.();
+    await waitFor(() => expect(screen.queryByText("product.png")).not.toBeInTheDocument());
+  });
+
+  it("preserves a confirmed subject attachment when revisited server removal fails", async () => {
+    const user = userEvent.setup();
+    const gateway = createMockAiContentGateway();
+    const removeAttachment = vi.spyOn(gateway, "removeAttachment").mockRejectedValueOnce(new Error("network_failed"));
+    renderWizard("/ai-content/new?type=card_news", gateway);
+    await user.click(screen.getByRole("button", { name: "다음" }));
+    await user.click(screen.getByRole("radio", { name: "제품" }));
+    await user.upload(screen.getByLabelText("제품 이미지"), new File(["image"], "product.png", { type: "image/png" }));
+    await user.click(screen.getByRole("button", { name: "분석하고 소구점 만들기" }));
+    expect(await screen.findByText("3 / 5")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "이전" }));
+
+    await user.click(screen.getByRole("button", { name: "product.png 삭제" }));
+
+    expect(removeAttachment).toHaveBeenCalledWith("brand-demo", expect.any(String), expect.any(String));
+    expect(await screen.findByRole("alert")).toHaveTextContent("product.png 파일을 삭제하지 못했습니다. 다시 시도해 주세요.");
+    expect(screen.getByText("product.png")).toBeVisible();
+  });
+
   it("returns a completed real analysis to the product library without exposing its ID to the user", async () => {
     const user = userEvent.setup();
     renderWizard("/ai-content/new?type=card_news&returnTo=product-library");

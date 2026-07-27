@@ -201,6 +201,7 @@ export interface AiContentRepository {
   listBrandAppeals(input: BrandScope): Promise<AppealRecord[]>;
   saveBrandAppeal(input: SaveAppealInput): Promise<AppealRecord>;
   confirmAiContentAttachment(input: BrandGenerationScope & ConfirmAttachmentInput): Promise<AiContentAttachmentRecord>;
+  removeAiContentAttachment(input: BrandGenerationScope & { attachmentId: string }): Promise<{ id: string }>;
   claimAiContentJob(input: { contentType: AiContentType; workerId: string; leaseSeconds: number }): Promise<AiContentJobRecord | null>;
   heartbeatAiContentJob(input: { jobId: string; workerId: string; leaseToken: string; leaseSeconds: number }): Promise<boolean>;
   completeAiContentJob(input: CompleteAiContentJobInput): Promise<AiContentGenerationRecord>;
@@ -1187,19 +1188,30 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
     },
     async confirmAiContentAttachment(input) {
       const client = await pool.connect();
+      let cleanupRejectedUpload = false;
       try {
         await client.query("BEGIN");
         const generation = await scopedGeneration(client, input, true);
         if (!generation) throw new Error("ai_content_generation_not_found");
-        const count = await client.query(
-          `select count(*)::integer as attachment_count
+        const activeSamePath = await client.query(
+          `select id
              from ai_content_generation_attachments
             where generation_id = $1 and workspace_id = $2 and brand_id = $3
-              and deleted_at is null and storage_path <> $4`,
+              and storage_path = $4 and deleted_at is null`,
           [input.generationId, input.workspaceId, input.brandId, input.storagePath],
         );
-        if (Number(count.rows[0]?.attachment_count ?? 0) >= 5) {
-          throw new Error("ai_content_attachment_limit_exceeded");
+        if (!activeSamePath.rowCount) {
+          const count = await client.query(
+            `select count(*)::integer as attachment_count
+               from ai_content_generation_attachments
+              where generation_id = $1 and workspace_id = $2 and brand_id = $3
+                and deleted_at is null`,
+            [input.generationId, input.workspaceId, input.brandId],
+          );
+          if (Number(count.rows[0]?.attachment_count ?? 0) >= 5) {
+            cleanupRejectedUpload = true;
+            throw new Error("ai_content_attachment_limit_exceeded");
+          }
         }
         const result = await client.query(
           `insert into ai_content_generation_attachments
@@ -1220,13 +1232,34 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         return mapAttachment(result.rows[0]);
       } catch (error) {
         await client.query("ROLLBACK");
-        if (
-          error instanceof Error
-          && error.message === "ai_content_attachment_limit_exceeded"
-          && options.deleteAttachments
-        ) {
+        throw error;
+      } finally {
+        client.release();
+        if (cleanupRejectedUpload && options.deleteAttachments) {
           await options.deleteAttachments([input.storageUrl]).catch(() => undefined);
         }
+      }
+    },
+
+    async removeAiContentAttachment(input) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const generation = await scopedGeneration(client, input, true);
+        if (!generation) throw new Error("ai_content_generation_not_found");
+        const removed = await client.query(
+          `update ai_content_generation_attachments
+              set deleted_at = now()
+            where generation_id = $1 and workspace_id = $2 and brand_id = $3
+              and id = $4 and deleted_at is null
+          returning id`,
+          [input.generationId, input.workspaceId, input.brandId, input.attachmentId],
+        );
+        if (!removed.rowCount) throw new Error("ai_content_attachment_not_found");
+        await client.query("COMMIT");
+        return { id: String(removed.rows[0].id) };
+      } catch (error) {
+        await client.query("ROLLBACK");
         throw error;
       } finally {
         client.release();

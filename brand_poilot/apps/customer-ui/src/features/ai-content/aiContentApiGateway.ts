@@ -199,6 +199,12 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
       const confirmed = await client.requestJson<{ id: string; storageUrl?: string; storagePath?: string }>(`/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`, { method: "POST", body: JSON.stringify({ ...metadata, storageUrl: stored.url, storagePath: token.pathname }) });
       return { ...attachment, id: confirmed.id, file: undefined, storageUrl: confirmed.storageUrl ?? stored.url, storagePath: confirmed.storagePath ?? token.pathname };
     },
+    async removeAttachment(brandId, generationId, attachmentId) {
+      await client.requestJson(
+        `/brands/${brandId}/ai-content/generations/${generationId}/attachments/${attachmentId}`,
+        { method: "DELETE" },
+      );
+    },
     listAudiencePresets(brandId) { return client.requestJson(`/brands/${brandId}/ai-content/audiences`, { method: "GET" }); },
     saveAudiencePreset(brandId, input) { return client.requestJson(`/brands/${brandId}/ai-content/audiences`, { method: "POST", body: JSON.stringify(input) }); },
     listAppealPresets(brandId) { return client.requestJson(`/brands/${brandId}/ai-content/appeals`, { method: "GET" }); },

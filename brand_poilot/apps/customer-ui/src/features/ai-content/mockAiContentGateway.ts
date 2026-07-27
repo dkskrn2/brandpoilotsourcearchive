@@ -315,6 +315,7 @@ export function createMockAiContentGateway(): AiContentGateway {
       return copy(generation);
     },
     async uploadAttachment(_brandId, _generationId, attachment) { return copy({ ...attachment, file: undefined, storageUrl: "https://blob.example.com/attachment", storagePath: "attachment" }); },
+    async removeAttachment() {},
     async listAudiencePresets(brandId) {
       return copy(audienceByBrand.get(brandId) ?? []);
     },

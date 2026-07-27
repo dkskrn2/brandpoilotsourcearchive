@@ -47,6 +47,7 @@ function renderStep(overrides: Record<string, unknown> = {}) {
   };
   const props = {
     brandId: "brand-demo",
+    generationId: null,
     gateway,
     draft,
     analysis: null,

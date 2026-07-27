@@ -21,13 +21,21 @@ function row(id: string, status = "analyzing") {
   };
 }
 
-function createPool(options: { missingReferences?: boolean; generationUsage?: number; wikiReady?: boolean; attachmentCount?: number } = {}) {
+function createPool(options: {
+  missingReferences?: boolean;
+  generationUsage?: number;
+  wikiReady?: boolean;
+  attachmentCount?: number;
+  activeAttachmentPaths?: string[];
+  lifecycleEvents?: string[];
+} = {}) {
   const commands: string[] = [];
   const sql: string[] = [];
   const referenceSnapshots: Array<Record<string, unknown>> = [];
   let analyzeJobInsertCount = 0;
   let generation = row("generation-1");
   let analysisCreated = false;
+  let activeAttachmentCount = options.attachmentCount ?? 0;
 
   const client = {
     query: async (query: string, params: unknown[] = []) => {
@@ -80,6 +88,14 @@ function createPool(options: { missingReferences?: boolean; generationUsage?: nu
       if (query.includes("insert into ai_content_generation_outputs")) {
         return { rows: [{ id: `output-${params.at(-1)}` }], rowCount: 1 };
       }
+      if (
+        query.includes("update ai_content_generation_attachments")
+        && query.includes("deleted_at = now()")
+        && query.includes("returning id")
+      ) {
+        activeAttachmentCount = Math.max(0, activeAttachmentCount - 1);
+        return { rows: [{ id: params[3] }], rowCount: 1 };
+      }
       if (query.includes("insert into ai_content_generation_attachments")) {
         return {
           rows: [{
@@ -97,12 +113,21 @@ function createPool(options: { missingReferences?: boolean; generationUsage?: nu
           rowCount: 1,
         };
       }
+      if (
+        query.includes("select id")
+        && query.includes("from ai_content_generation_attachments")
+        && query.includes("storage_path = $4")
+        && query.includes("deleted_at is null")
+      ) {
+        const active = options.activeAttachmentPaths?.includes(String(params[3])) ?? false;
+        return { rows: active ? [{ id: "attachment-1" }] : [], rowCount: active ? 1 : 0 };
+      }
       if (query.includes("count(*)::integer as attachment_count") && query.includes("from ai_content_generation_attachments")) {
-        return { rows: [{ attachment_count: options.attachmentCount ?? 0 }], rowCount: 1 };
+        return { rows: [{ attachment_count: activeAttachmentCount }], rowCount: 1 };
       }
       return { rows: [], rowCount: 0 };
     },
-    release: () => undefined,
+    release: () => { options.lifecycleEvents?.push("release"); },
   };
 
   return {
@@ -605,7 +630,8 @@ describe("AI content repository", () => {
   });
 
   it("keeps an active same-path attachment idempotent at the five-file cap", async () => {
-    const pool = createPool({ attachmentCount: 4 });
+    const storagePath = "brands/brand-1/ai-content/generation-1/attachments/product.png";
+    const pool = createPool({ attachmentCount: 5, activeAttachmentPaths: [storagePath] });
     const repository = createAiContentRepository(pool as never);
     const attachment = {
       ...scope,
@@ -616,11 +642,56 @@ describe("AI content repository", () => {
       sizeBytes: 100,
       checksum: "a".repeat(64),
       storageUrl: "https://example.public.blob.vercel-storage.com/path",
-      storagePath: "brands/brand-1/ai-content/generation-1/attachments/product.png",
+      storagePath,
     };
 
     await expect(repository.confirmAiContentAttachment(attachment)).resolves.toMatchObject({ generationId: "generation-1" });
     await expect(repository.confirmAiContentAttachment(attachment)).resolves.toMatchObject({ generationId: "generation-1" });
+  });
+
+  it("keeps a legacy over-cap active same path without deleting its backing Blob", async () => {
+    const storagePath = "brands/brand-1/ai-content/generation-1/attachments/legacy.png";
+    const deleteAttachments = vi.fn(async () => undefined);
+    const pool = createPool({ attachmentCount: 6, activeAttachmentPaths: [storagePath] });
+    const repository = createAiContentRepository(pool as never, { deleteAttachments });
+
+    await expect(repository.confirmAiContentAttachment({
+      ...scope,
+      generationId: "generation-1",
+      role: "product",
+      fileName: "legacy.png",
+      mimeType: "image/png",
+      sizeBytes: 100,
+      checksum: "a".repeat(64),
+      storageUrl: "https://example.public.blob.vercel-storage.com/legacy",
+      storagePath,
+    })).resolves.toMatchObject({ storagePath });
+
+    expect(deleteAttachments).not.toHaveBeenCalled();
+  });
+
+  it("rejects a distinct path for a legacy over-cap generation and cleans up only the new Blob", async () => {
+    const deleteAttachments = vi.fn(async () => undefined);
+    const pool = createPool({
+      attachmentCount: 6,
+      activeAttachmentPaths: ["brands/brand-1/ai-content/generation-1/attachments/existing.png"],
+    });
+    const repository = createAiContentRepository(pool as never, { deleteAttachments });
+    const newStorageUrl = "https://example.public.blob.vercel-storage.com/new-upload";
+
+    await expect(repository.confirmAiContentAttachment({
+      ...scope,
+      generationId: "generation-1",
+      role: "document",
+      fileName: "new.md",
+      mimeType: "text/markdown",
+      sizeBytes: 100,
+      checksum: "b".repeat(64),
+      storageUrl: newStorageUrl,
+      storagePath: "brands/brand-1/ai-content/generation-1/attachments/new.md",
+    })).rejects.toThrow("ai_content_attachment_limit_exceeded");
+
+    expect(deleteAttachments).toHaveBeenCalledWith([newStorageUrl]);
   });
 
   it("rejects a sixth active attachment for the same generation", async () => {
@@ -677,6 +748,60 @@ describe("AI content repository", () => {
       storagePath: "brands/brand-1/ai-content/generation-1/attachments/sixth.md",
     })).rejects.toThrow("ai_content_attachment_limit_exceeded");
     expect(deleteAttachments).toHaveBeenCalledOnce();
+  });
+
+  it("releases the generation lock before cleaning up a rejected orphan Blob", async () => {
+    const lifecycleEvents: string[] = [];
+    const pool = createPool({ attachmentCount: 5, lifecycleEvents });
+    const repository = createAiContentRepository(pool as never, {
+      deleteAttachments: async () => { lifecycleEvents.push("delete"); },
+    });
+
+    await expect(repository.confirmAiContentAttachment({
+      ...scope,
+      generationId: "generation-1",
+      role: "document",
+      fileName: "sixth.md",
+      mimeType: "text/markdown",
+      sizeBytes: 100,
+      checksum: "b".repeat(64),
+      storageUrl: "https://example.public.blob.vercel-storage.com/sixth",
+      storagePath: "brands/brand-1/ai-content/generation-1/attachments/sixth.md",
+    })).rejects.toThrow("ai_content_attachment_limit_exceeded");
+
+    expect(lifecycleEvents).toEqual(["release", "delete"]);
+  });
+
+  it("soft-deletes only a live scoped attachment and allows its replacement at the cap", async () => {
+    const pool = createPool({ attachmentCount: 5 });
+    const repository = createAiContentRepository(pool as never);
+
+    await expect(repository.removeAiContentAttachment({
+      ...scope,
+      generationId: "generation-1",
+      attachmentId: "attachment-1",
+    })).resolves.toEqual({ id: "attachment-1" });
+
+    const removal = pool.sql.find((query) => query.includes("update ai_content_generation_attachments")) ?? "";
+    expect(removal).toContain("deleted_at = now()");
+    expect(removal).toContain("generation_id = $1");
+    expect(removal).toContain("workspace_id = $2");
+    expect(removal).toContain("brand_id = $3");
+    expect(removal).toContain("id = $4");
+    expect(removal).toContain("deleted_at is null");
+    expect(pool.sql.join("\n")).toContain("from ai_content_generations");
+
+    await expect(repository.confirmAiContentAttachment({
+      ...scope,
+      generationId: "generation-1",
+      role: "document",
+      fileName: "replacement.md",
+      mimeType: "text/markdown",
+      sizeBytes: 100,
+      checksum: "c".repeat(64),
+      storageUrl: "https://example.public.blob.vercel-storage.com/replacement",
+      storagePath: "brands/brand-1/ai-content/generation-1/attachments/replacement.md",
+    })).resolves.toMatchObject({ fileName: "replacement.md" });
   });
 
   it("claims only the requested content type with a recoverable lease", async () => {

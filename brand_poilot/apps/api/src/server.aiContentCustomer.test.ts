@@ -119,6 +119,7 @@ function setup(allowed = true) {
     listBrandAppeals: vi.fn(async () => []),
     saveBrandAppeal: vi.fn(async () => ({ id: "appeal-1", title: "빠른 시작", description: "설정 지원", evidenceType: "benefit" as const, useCount: 0, lastUsedAt: null })),
     confirmAiContentAttachment: vi.fn(async (input) => ({ id: "attachment-1", generationId: input.generationId, role: input.role, fileName: input.fileName, mimeType: input.mimeType, sizeBytes: input.sizeBytes, checksum: input.checksum, storageUrl: input.storageUrl, storagePath: input.storagePath, createdAt: "2026-07-18T00:00:00.000Z" })),
+    removeAiContentAttachment: vi.fn(async (input) => ({ id: input.attachmentId })),
     retryAiContentOutput: vi.fn(async () => generation("queued")),
     downloadAiContentOutput: vi.fn(async () => ({ fileName: "result.zip", mimeType: "application/zip" as const, buffer: Buffer.from("PK"), itemCount: 1 })),
     downloadAiContentGeneration: vi.fn(async () => ({ fileName: "generation.zip", mimeType: "application/zip" as const, buffer: Buffer.from("PK"), itemCount: 1 })),
@@ -348,6 +349,26 @@ describe("AI content customer routes", () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: "ai_content_attachment_limit_exceeded" });
+    await app.close();
+  });
+
+  it("soft-deletes a confirmed attachment through the tenant-scoped generation route", async () => {
+    const { app, repository } = setup();
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/${attachmentId}`,
+      headers: auth,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ id: attachmentId });
+    expect(repository.removeAiContentAttachment).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      generationId,
+      attachmentId,
+    });
     await app.close();
   });
 

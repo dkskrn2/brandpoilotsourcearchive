@@ -9,8 +9,14 @@ const analysis = {
 };
 const image = { id: "image-1", analysis_id: "analysis-1", source_url: "https://example.com/product.png", storage_url: "https://blob.example/product.png", storage_path: "subjects/product.png", width: 1024, height: 1024, mime_type: "image/png", alt_text: "상품", role: "product", selection_score: 1, created_at: "2026-07-20T00:00:00.000Z" };
 
-function poolFor(draft: Record<string, unknown>, snapshot: unknown = null) {
+function poolFor(
+  draft: Record<string, unknown>,
+  snapshot: unknown = null,
+  attachmentRows: Array<Record<string, unknown>> = [],
+) {
   const sql: string[] = [];
+  const storedSnapshots: unknown[] = [];
+  let attachments = attachmentRows.map((row) => ({ ...row }));
   const generation = { id: "generation-1", workspace_id: "workspace-1", brand_id: "brand-1", type: "card_news", title: "상품 콘텐츠", status: "analysis_ready", current_stage: "analysis_ready", draft_json: draft, analysis_json: {}, generation_idempotency_key: null, subject_analysis_snapshot: snapshot, error_code: null, error_message: null, created_at: "2026-07-20T00:00:00.000Z", updated_at: "2026-07-20T00:00:00.000Z", completed_at: null };
   const query = async (text: string, params: unknown[] = []) => {
     sql.push(text);
@@ -19,16 +25,29 @@ function poolFor(draft: Record<string, unknown>, snapshot: unknown = null) {
     if (text.includes("from ai_content_subject_images")) return { rows: [image], rowCount: 1 };
     if (text.includes("select brand.name")) return { rows: [{ name: "Growthline", industry: "마케팅", primary_customer: "운영자", description: "콘텐츠", tone: "명확하게", forbidden_terms: [], default_cta: "문의", main_link: "https://example.com", brand_color: "#0057B8", owned_url: "https://example.com", source_status: "crawled", last_crawled_at: null }], rowCount: 1 };
     if (text.includes("from wiki_versions")) return { rows: [{ id: "wiki-1", wiki_updated_at: null, pages: [{ type: "brand_overview", title: "개요", summary: "브랜드", content: "내용", structuredData: {} }] }], rowCount: 1 };
-    if (text.includes("from ai_content_generation_attachments")) return { rows: [], rowCount: 0 };
+    if (text.includes("update ai_content_generation_attachments") && text.includes("deleted_at = now()")) {
+      const removed = attachments.find((item) => item.id === params[3] && item.deleted_at == null);
+      if (!removed) return { rows: [], rowCount: 0 };
+      attachments = attachments.map((item) => item === removed ? { ...item, deleted_at: new Date() } : item);
+      return { rows: [{ id: removed.id }], rowCount: 1 };
+    }
+    if (text.includes("from ai_content_generation_attachments")) {
+      const active = attachments.filter((item) => item.deleted_at == null);
+      return { rows: active, rowCount: active.length };
+    }
     if (text.includes("from ai_content_generations") && text.includes("subject_analysis_snapshot")) return { rows: [generation], rowCount: 1 };
     if (text.includes("pg_advisory_xact_lock")) return { rows: [{}], rowCount: 1 };
     if (text.includes("from ai_content_usage_ledger")) return { rows: [{ generation_count: 0 }], rowCount: 1 };
-    if (text.includes("update ai_content_generations") && text.includes("subject_analysis_snapshot")) return { rows: [{ ...generation, status: "analyzing", generation_idempotency_key: params[3], subject_analysis_snapshot: params[5] ? JSON.parse(String(params[5])) : snapshot }], rowCount: 1 };
+    if (text.includes("update ai_content_generations") && text.includes("subject_analysis_snapshot")) {
+      const storedSnapshot = params[5] ? JSON.parse(String(params[5])) : snapshot;
+      storedSnapshots.push(storedSnapshot);
+      return { rows: [{ ...generation, status: "analyzing", generation_idempotency_key: params[3], subject_analysis_snapshot: storedSnapshot }], rowCount: 1 };
+    }
     if (text.includes("insert into ai_content_generation_outputs") || text.includes("insert into ai_content_generation_jobs") || text.includes("insert into ai_content_usage_ledger")) return { rows: [], rowCount: 1 };
     return { rows: [], rowCount: 0 };
   };
   const client = { query, release: () => undefined };
-  return { pool: { connect: async () => client, query } as never, sql };
+  return { pool: { connect: async () => client, query } as never, sql, storedSnapshots };
 }
 
 function subjectDraft(overrides: Record<string, unknown> = {}) {
@@ -50,5 +69,43 @@ describe("AI content subject snapshot integration", () => {
     const fake = poolFor(subjectDraft({ subjectAnalysisId: "analysis-new" }), existing);
     await createAiContentRepository(fake.pool).startAiContentGeneration({ workspaceId: "workspace-1", brandId: "brand-1", generationId: "generation-1", idempotencyKey: "generate-2", outputCount: 1, usageDate: "2026-07-20", dailyGenerationLimit: 10 });
     expect(fake.sql.some((item) => item.includes("from ai_content_subject_analyses where id = $1"))).toBe(false);
+  });
+
+  it("excludes a soft-deleted attachment from the worker input snapshot", async () => {
+    const attachmentId = "50000000-0000-4000-8000-000000000001";
+    const fake = poolFor(subjectDraft(), null, [{
+      id: attachmentId,
+      generation_id: "generation-1",
+      workspace_id: "workspace-1",
+      brand_id: "brand-1",
+      role: "document",
+      file_name: "brief.md",
+      mime_type: "text/markdown",
+      size_bytes: 20,
+      checksum: "a".repeat(64),
+      storage_url: "https://blob.example/brief.md",
+      storage_path: "attachments/brief.md",
+      created_at: "2026-07-20T00:00:00.000Z",
+      deleted_at: null,
+    }]);
+    const repository = createAiContentRepository(fake.pool);
+
+    await repository.removeAiContentAttachment({
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      generationId: "generation-1",
+      attachmentId,
+    });
+    await repository.startAiContentGeneration({
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      generationId: "generation-1",
+      idempotencyKey: "generate-after-removal",
+      outputCount: 1,
+      usageDate: "2026-07-20",
+      dailyGenerationLimit: 10,
+    });
+
+    expect(fake.storedSnapshots[0]).toMatchObject({ attachments: [] });
   });
 });

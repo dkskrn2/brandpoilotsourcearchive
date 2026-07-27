@@ -1031,6 +1031,7 @@ export interface ApiRepository
   listBrandAppeals(input: BrandScope): Promise<AppealRecord[]>;
   saveBrandAppeal(input: SaveAppealInput): Promise<AppealRecord>;
   confirmAiContentAttachment(input: BrandGenerationScope & import("./aiContentContracts.js").ConfirmAttachmentInput): Promise<AiContentAttachmentRecord>;
+  removeAiContentAttachment(input: BrandGenerationScope & { attachmentId: string }): Promise<{ id: string }>;
   claimAiContentJob(input: { contentType: AiContentType; workerId: string; leaseSeconds: number }): Promise<AiContentJobRecord | null>;
   heartbeatAiContentJob(input: { jobId: string; workerId: string; leaseToken: string; leaseSeconds: number }): Promise<boolean>;
   completeAiContentJob(input: CompleteAiContentJobInput): Promise<AiContentGenerationRecord>;

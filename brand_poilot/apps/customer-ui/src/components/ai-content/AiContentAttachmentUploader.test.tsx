@@ -10,6 +10,7 @@ function gateway() {
       onProgress?.(100);
       return { ...attachment, file: undefined, storagePath: "stored/product.png", storageUrl: "https://blob.example/product.png" };
     }),
+    removeAttachment: vi.fn(async () => undefined),
   } as unknown as AiContentGateway;
 }
 
@@ -138,6 +139,87 @@ describe("AiContentAttachmentUploader", () => {
     });
 
     expect(await screen.findByRole("alert")).toHaveTextContent("첨부 파일은 최대 5개입니다.");
+  });
+
+  it("awaits confirmed removal before replacing the fifth attachment", async () => {
+    let finishRemoval: (() => void) | undefined;
+    const api = gateway();
+    vi.mocked(api.removeAttachment).mockImplementation(async () => new Promise<void>((resolve) => {
+      finishRemoval = resolve;
+    }));
+    const existing = Array.from({ length: 5 }, (_, index) => ({
+      id: `attachment-${index}`,
+      role: "visual_reference" as const,
+      fileName: `existing-${index}.png`,
+      mimeType: "image/png",
+      size: 10,
+      storagePath: `stored/existing-${index}.png`,
+      storageUrl: `https://blob.example/existing-${index}.png`,
+    }));
+    const onChange = vi.fn();
+    render(<AiContentAttachmentUploader gateway={api} brandId="brand-1" generationId="generation-1" attachments={existing} onChange={onChange} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "existing-0.png 삭제" }));
+    expect(api.removeAttachment).toHaveBeenCalledWith("brand-1", "generation-1", "attachment-0");
+    expect(onChange).not.toHaveBeenCalled();
+
+    finishRemoval?.();
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(existing.slice(1)));
+    fireEvent.change(screen.getByLabelText("제품 이미지"), {
+      target: { files: [new File(["replacement"], "replacement.png", { type: "image/png" })] },
+    });
+
+    await waitFor(() => expect(api.uploadAttachment).toHaveBeenCalledWith(
+      "brand-1",
+      "generation-1",
+      expect.objectContaining({ fileName: "replacement.png" }),
+      expect.any(Function),
+    ));
+    await waitFor(() => expect(onChange).toHaveBeenLastCalledWith([
+      ...existing.slice(1),
+      expect.objectContaining({ fileName: "replacement.png" }),
+    ]));
+  });
+
+  it("preserves a confirmed attachment and shows an error when server removal fails", async () => {
+    const api = gateway();
+    vi.mocked(api.removeAttachment).mockRejectedValueOnce(new Error("network_failed"));
+    const attachment = {
+      id: "attachment-1",
+      role: "document" as const,
+      fileName: "brief.md",
+      mimeType: "text/markdown",
+      size: 10,
+      storagePath: "stored/brief.md",
+      storageUrl: "https://blob.example/brief.md",
+    };
+    const onChange = vi.fn();
+    render(<AiContentAttachmentUploader gateway={api} brandId="brand-1" generationId="generation-1" attachments={[attachment]} onChange={onChange} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "brief.md 삭제" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("brief.md 파일을 삭제하지 못했습니다. 다시 시도해 주세요.");
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByText("brief.md")).toBeVisible();
+  });
+
+  it("removes an unconfirmed local attachment without calling the server", async () => {
+    const api = gateway();
+    const local = {
+      id: "local-1",
+      role: "document" as const,
+      fileName: "local.md",
+      mimeType: "text/markdown",
+      size: 10,
+      file: new File(["local"], "local.md", { type: "text/markdown" }),
+    };
+    const onChange = vi.fn();
+    render(<AiContentAttachmentUploader gateway={api} brandId="brand-1" generationId={null} attachments={[local]} onChange={onChange} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "local.md 삭제" }));
+
+    expect(api.removeAttachment).not.toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledWith([]);
   });
 
   it("shows only allowed roles and accepts every analysis document format locally", async () => {

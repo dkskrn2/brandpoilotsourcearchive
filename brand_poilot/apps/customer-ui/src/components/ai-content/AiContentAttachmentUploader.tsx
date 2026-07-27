@@ -122,6 +122,21 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
     }
   }
 
+  async function remove(attachmentId: string) {
+    const attachment = attachmentsRef.current.find((item) => item.id === attachmentId);
+    if (!attachment) return;
+    setError(null);
+    if (generationId && attachment.storagePath) {
+      try {
+        await gateway.removeAttachment(brandId, generationId, attachment.id);
+      } catch {
+        setError(`${attachment.fileName} 파일을 삭제하지 못했습니다. 다시 시도해 주세요.`);
+        return;
+      }
+    }
+    changeAttachments((current) => current.filter((item) => item.id !== attachmentId));
+  }
+
   return <div className="ai-content-attachment-uploader">
     <div className="attachment-grid">
       {fields.filter(([role]) => !allowedRoles || allowedRoles.includes(role)).map(([role, label, Icon]) => <div className="attachment-picker" key={role}>
@@ -137,7 +152,7 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
             status: generationId ? "uploaded" : "selected",
           }))}
           onFiles={(files) => void upload(role, files)}
-          onRemove={(id) => changeAttachments((current) => current.filter((item) => item.id !== id))}
+          onRemove={(id) => void remove(id)}
         />
       </div>)}
     </div>

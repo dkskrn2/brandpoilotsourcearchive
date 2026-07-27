@@ -83,6 +83,7 @@ function createRepository(): ApiRepository {
     listBrandAppeals: vi.fn(async () => []),
     saveBrandAppeal: vi.fn(async () => { throw new Error("not_implemented"); }),
     confirmAiContentAttachment: vi.fn(async () => { throw new Error("not_implemented"); }),
+    removeAiContentAttachment: vi.fn(async () => { throw new Error("not_implemented"); }),
     claimAiContentJob: vi.fn(async () => null),
     heartbeatAiContentJob: vi.fn(async () => false),
     completeAiContentJob: vi.fn(async () => { throw new Error("not_implemented"); }),

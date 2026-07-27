@@ -167,6 +167,18 @@ describe("createAiContentApiGateway", () => {
     );
   });
 
+  it("removes a confirmed attachment through the generation-scoped endpoint", async () => {
+    const requestJson = vi.fn(async () => ({ id: "attachment-1" }));
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await expect(gateway.removeAttachment("brand-1", "generation-1", "attachment-1")).resolves.toBeUndefined();
+
+    expect(requestJson).toHaveBeenCalledWith(
+      "/brands/brand-1/ai-content/generations/generation-1/attachments/attachment-1",
+      { method: "DELETE" },
+    );
+  });
+
   it("requests the generation-scoped v2 subject pipeline contract", async () => {
     const requestJson = vi.fn(async () => ({
       id: "analysis-1",

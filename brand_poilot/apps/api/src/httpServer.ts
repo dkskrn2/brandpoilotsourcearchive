@@ -2360,6 +2360,15 @@ export function createServer(
     },
   );
 
+  app.delete<{ Params: { brandId: string; generationId: string; attachmentId: string } }>(
+    "/brands/:brandId/ai-content/generations/:generationId/attachments/:attachmentId",
+    async (request) => repository.removeAiContentAttachment({
+      ...aiContentScope(request, request.params.brandId),
+      generationId: request.params.generationId,
+      attachmentId: request.params.attachmentId,
+    }),
+  );
+
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/content-outputs", async (request) => {
     return repository.listContentOutputs(request.params.brandId);
   });

@@ -146,13 +146,13 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")("AI content att
     expect(count.rows[0]?.count).toBe(5);
   });
 
-  it("keeps an active same path idempotent at five attachments", async () => {
-    for (let index = 1; index <= 5; index += 1) {
+  it("keeps an active same path idempotent for a legacy generation over the cap", async () => {
+    for (let index = 1; index <= 6; index += 1) {
       await seedAttachment(pool, attachment(`active-${index}`));
     }
     const repository = createAiContentRepository(pool);
 
-    await expect(repository.confirmAiContentAttachment(attachment("active-5", {
+    await expect(repository.confirmAiContentAttachment(attachment("active-6", {
       role: "person",
       fileName: "updated-person.png",
       checksum: "b".repeat(64),
@@ -162,7 +162,7 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")("AI content att
       "select count(*)::integer as count from ai_content_generation_attachments where generation_id = $1 and deleted_at is null",
       [GENERATION_ID],
     );
-    expect(count.rows[0]?.count).toBe(5);
+    expect(count.rows[0]?.count).toBe(6);
   });
 
   it("resurrects a deleted same path into the fifth active slot with current metadata", async () => {
@@ -203,5 +203,38 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")("AI content att
       checksum: "d".repeat(64),
       deleted_at: null,
     });
+  });
+
+  it("soft-deletes the scoped fifth attachment and accepts a replacement path", async () => {
+    for (let index = 1; index <= 5; index += 1) {
+      await seedAttachment(pool, attachment(`active-${index}`));
+    }
+    const existing = await pool.query(
+      "select id from ai_content_generation_attachments where generation_id = $1 and storage_path = 'active-5'",
+      [GENERATION_ID],
+    );
+    const repository = createAiContentRepository(pool);
+
+    await expect(repository.removeAiContentAttachment({
+      workspaceId: WORKSPACE_ID,
+      brandId: BRAND_ID,
+      generationId: GENERATION_ID,
+      attachmentId: existing.rows[0]?.id,
+    })).resolves.toEqual({ id: existing.rows[0]?.id });
+    await expect(repository.confirmAiContentAttachment(attachment("replacement"))).resolves.toMatchObject({
+      storagePath: "replacement",
+    });
+
+    const active = await pool.query(
+      "select storage_path from ai_content_generation_attachments where generation_id = $1 and deleted_at is null order by storage_path",
+      [GENERATION_ID],
+    );
+    expect(active.rows.map((row) => row.storage_path)).toEqual([
+      "active-1",
+      "active-2",
+      "active-3",
+      "active-4",
+      "replacement",
+    ]);
   });
 });
