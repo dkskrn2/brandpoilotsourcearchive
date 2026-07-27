@@ -69,7 +69,8 @@ create table ai_content_attachment_upload_sessions (
   constraint ai_content_attachment_upload_sessions_actor_fk
     foreign key (workspace_id, created_by_user_id)
     references workspace_members(workspace_id, user_id)
-    on delete restrict,
+    on delete no action
+    deferrable initially deferred,
   constraint ai_content_attachment_upload_sessions_role_check check (
     role in ('product', 'person', 'scale', 'visual_reference', 'document')
   ),
@@ -154,7 +155,8 @@ create unique index ai_content_attachment_upload_sessions_nonce_uq
   on ai_content_attachment_upload_sessions (nonce);
 
 create unique index ai_content_attachment_upload_sessions_storage_path_uq
-  on ai_content_attachment_upload_sessions (storage_path);
+  on ai_content_attachment_upload_sessions (storage_path)
+  where not is_legacy_backfill;
 
 create unique index ai_content_attachment_upload_sessions_attachment_uq
   on ai_content_attachment_upload_sessions (confirmed_attachment_id)
@@ -186,6 +188,13 @@ alter table ai_content_generation_attachments
   ),
   add constraint ai_content_generation_attachments_tenant_identity_unique
     unique (id, workspace_id, brand_id);
+
+alter table ai_content_attachment_upload_sessions
+  add constraint ai_content_attachment_upload_sessions_confirmed_attachment_fk
+    foreign key (confirmed_attachment_id, workspace_id, brand_id)
+    references ai_content_generation_attachments(id, workspace_id, brand_id)
+    on delete no action
+    deferrable initially deferred;
 
 insert into ai_content_attachment_upload_sessions (
   id,
@@ -253,13 +262,6 @@ alter table ai_content_generation_attachments
   add constraint ai_content_generation_attachments_upload_session_fk
     foreign key (upload_session_id, workspace_id, brand_id)
     references ai_content_attachment_upload_sessions(id, workspace_id, brand_id)
-    on delete no action
-    deferrable initially deferred;
-
-alter table ai_content_attachment_upload_sessions
-  add constraint ai_content_attachment_upload_sessions_confirmed_attachment_fk
-    foreign key (confirmed_attachment_id, workspace_id, brand_id)
-    references ai_content_generation_attachments(id, workspace_id, brand_id)
     on delete no action
     deferrable initially deferred;
 

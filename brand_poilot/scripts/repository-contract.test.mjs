@@ -366,6 +366,14 @@ test("065 defines the parent-independent AI attachment lifecycle contract", asyn
   ]) {
     assert.match(migration, new RegExp(`\\b${column}\\b`, "i"));
   }
+  assert.match(
+    migration,
+    /ai_content_attachment_upload_sessions_actor_fk[\s\S]*on delete no action[\s\S]*deferrable initially deferred/i,
+  );
+  assert.match(
+    migration,
+    /create unique index ai_content_attachment_upload_sessions_storage_path_uq[\s\S]*where not is_legacy_backfill/i,
+  );
   assert.match(migration, /deferrable\s+initially\s+deferred[\s\S]*on delete no action/i);
   assert.match(migration, /created_by_user_id is not null[\s\S]*is_legacy_backfill[\s\S]*confirmed_attachment_id is not null/i);
   assert.match(migration, /before delete[\s\S]*ai_content_generation_attachments/i);
