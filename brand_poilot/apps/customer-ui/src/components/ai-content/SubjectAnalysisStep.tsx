@@ -120,11 +120,11 @@ export function SubjectAnalysisStep({
       <div className="analysis-upload-groups">
         <div className="analysis-upload-group">
           <div className="section-heading-inline"><h3><Image size={17} />제품·서비스 이미지</h3><span>PNG, JPEG</span></div>
-          <AiContentAttachmentUploader gateway={gateway} brandId={brandId} generationId={generationId} attachments={attachments} allowedRoles={["product"]} onChange={onSubjectAttachments} />
+          <AiContentAttachmentUploader gateway={gateway} brandId={brandId} generationId={generationId} attachments={attachments} allowedRoles={["product"]} onChange={onSubjectAttachments} disabled={runStatus === "loading"} />
         </div>
         <div className="analysis-upload-group">
           <div className="section-heading-inline"><h3><FileText size={17} />설명 문서</h3><span>PDF, TXT, MD, CSV, XLSX</span></div>
-          <AiContentAttachmentUploader gateway={gateway} brandId={brandId} generationId={generationId} attachments={attachments} allowedRoles={["document"]} onChange={onSubjectAttachments} />
+          <AiContentAttachmentUploader gateway={gateway} brandId={brandId} generationId={generationId} attachments={attachments} allowedRoles={["document"]} onChange={onSubjectAttachments} disabled={runStatus === "loading"} />
         </div>
       </div>
       <div className="wizard-inline-actions"><button type="button" className="button primary" disabled={!readyToAnalyze || runStatus === "loading"} onClick={() => void run()}>{runStatus === "loading" ? <LoaderCircle className="inline-spinner" size={17} /> : <CheckCircle2 size={17} />}분석하고 소구점 만들기</button></div>

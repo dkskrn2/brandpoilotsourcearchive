@@ -137,7 +137,7 @@ export function AiContentWizardPage({ gateway = aiContentApiGateway, brandId = D
         return;
       }
       state.setStep(3);
-    } }} gateway={gateway} brandId={brandId} generationId={state.generationId} analysis={state.subjectAnalysis} onPrepareAnalysis={prepareAnalysis} /></div>
+    } }} gateway={gateway} brandId={brandId} generationId={state.generationId} analysis={state.subjectAnalysis} attachmentControlsDisabled={submitting} onPrepareAnalysis={prepareAnalysis} /></div>
     {submitError ? <p className="wizard-error" role="alert">{submitError}</p> : null}
     <footer className="wizard-actions">{state.step > 1 ? <button type="button" className="button" onClick={state.goBack}><ChevronLeft size={17} />이전</button> : <span />}{state.step === 2 ? <span /> : state.step < 5 ? <button type="button" className="button primary" disabled={!valid} onClick={state.goNext}>다음<ChevronRight size={17} /></button> : <button type="button" className="button primary" disabled={!valid || submitting} onClick={() => void generate()}>{submitting ? <LoaderCircle className="inline-spinner" size={17} /> : <Sparkles size={17} />}{submitting ? "생성 요청 중" : "생성 시작"}</button>}</footer>
   </div>;

@@ -193,6 +193,41 @@ describe("AiContentWizardPage", () => {
     expect(createAnalysis).toHaveBeenCalledTimes(1);
   });
 
+  it("locks prompt attachment controls while generation preparation is pending and restores them after failure", async () => {
+    const user = userEvent.setup();
+    const gateway = createMockAiContentGateway();
+    let rejectGetGeneration: ((reason?: unknown) => void) | undefined;
+    vi.spyOn(gateway, "getGeneration").mockImplementation(async () => new Promise<never>((_resolve, reject) => {
+      rejectGetGeneration = reject;
+    }));
+    const uploadAttachment = vi.spyOn(gateway, "uploadAttachment");
+    const removeAttachment = vi.spyOn(gateway, "removeAttachment");
+    renderWizard("/ai-content/new?type=marketing", gateway);
+    await completeAnalysis(user);
+    await user.click(screen.getByRole("radio", { name: /시간이 부족한/ }));
+    await user.click(screen.getByRole("radio", { name: /1-1 타깃에 맞는 소구점/ }));
+    await user.click(screen.getByRole("button", { name: "다음" }));
+    await user.click(screen.getByRole("button", { name: "다음" }));
+    await user.selectOptions(screen.getByLabelText("콘텐츠 목적"), "sales");
+    await user.upload(screen.getByLabelText("인물 이미지"), new File(["person"], "person.png", { type: "image/png" }));
+    await waitFor(() => expect(screen.getByText(/업로드 완료/)).toBeVisible());
+
+    await user.click(screen.getByRole("button", { name: "생성 시작" }));
+    expect(screen.getByLabelText("인물 이미지")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "person.png 삭제" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("인물 이미지"), {
+      target: { files: [new File(["new"], "new-person.png", { type: "image/png" })] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "person.png 삭제" }));
+    expect(uploadAttachment).toHaveBeenCalledTimes(1);
+    expect(removeAttachment).not.toHaveBeenCalled();
+
+    rejectGetGeneration?.(new Error("get_generation_failed"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("콘텐츠 생성을 시작하지 못했습니다.");
+    expect(screen.getByLabelText("인물 이미지")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "person.png 삭제" })).toBeEnabled();
+  });
+
   it("keeps additional generation attachments at a total of five", async () => {
     const user = userEvent.setup();
     const gateway = createMockAiContentGateway();

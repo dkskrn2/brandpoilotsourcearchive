@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +11,52 @@ import { ApiRequestError } from "../../lib/apiClient";
 afterEach(cleanup);
 
 describe("GenerationPromptStep", () => {
+  it("preserves current prompt and upload state when a delayed brand color arrives", async () => {
+    let resolveBrandContext: ((value: Awaited<ReturnType<ReturnType<typeof createMockAiContentGateway>["getBrandContext"]>>) => void) | undefined;
+    let resolveUpload: ((value: Parameters<ReturnType<typeof createMockAiContentGateway>["uploadAttachment"]>[2]) => void) | undefined;
+    const gateway = createMockAiContentGateway();
+    vi.spyOn(gateway, "getBrandContext").mockImplementation(async () => new Promise((resolve) => {
+      resolveBrandContext = resolve;
+    }));
+    vi.spyOn(gateway, "uploadAttachment").mockImplementation(async (_brandId, _generationId, attachment) => new Promise((resolve) => {
+      resolveUpload = resolve;
+    }));
+    function Harness() {
+      const [draft, setDraft] = useState(createInitialAiContentDraft("marketing"));
+      return <GenerationPromptStep
+        brandId="brand-demo"
+        gateway={gateway}
+        draft={draft}
+        onBrief={(update) => setDraft((current) => ({
+          ...current,
+          brief: typeof update === "function" ? update(current.brief!) : update,
+        }))}
+        generationId="generation-1"
+      />;
+    }
+    render(<Harness />);
+
+    await userEvent.type(screen.getByLabelText("전체 프롬프트"), "최신 프롬프트");
+    await userEvent.upload(screen.getByLabelText("제품 이미지"), new File(["image"], "current.png", { type: "image/png" }));
+    await waitFor(() => expect(gateway.uploadAttachment).toHaveBeenCalledOnce());
+
+    await act(async () => {
+      resolveBrandContext?.({
+        ready: true, brandName: "브랜드", ownedUrl: null, sourceStatus: null, lastCrawledAt: null,
+        wikiVersionId: null, wikiUpdatedAt: null, summary: null, pageCount: 0, brandColor: "#123456",
+      });
+      resolveUpload?.({
+        id: "server-current", role: "product", fileName: "current.png", mimeType: "image/png",
+        size: 5, storagePath: "stored/current.png", storageUrl: "https://blob/current.png",
+      });
+    });
+
+    expect(screen.getByLabelText("전체 프롬프트")).toHaveValue("최신 프롬프트");
+    expect(screen.getByLabelText("브랜드 대표 색상")).toHaveValue("#123456");
+    expect(await screen.findByText("current.png")).toBeVisible();
+    expect(screen.getByText(/업로드 완료/)).toBeVisible();
+  });
+
   it("uses the brand color by default and applies the first prompt to every output", async () => {
     const user = userEvent.setup();
     const onBrief = vi.fn();

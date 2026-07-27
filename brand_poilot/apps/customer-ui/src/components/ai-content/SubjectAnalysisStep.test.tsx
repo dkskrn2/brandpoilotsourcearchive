@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockAiContentGateway } from "../../features/ai-content/mockAiContentGateway";
@@ -63,6 +63,31 @@ function renderStep(overrides: Record<string, unknown> = {}) {
 }
 
 describe("SubjectAnalysisStep", () => {
+  it("locks attachment controls while analysis preparation is pending and restores them after failure", async () => {
+    let rejectPreparation: ((reason?: unknown) => void) | undefined;
+    const draft = {
+      ...createInitialAiContentDraft("card_news"),
+      subjectType: "product" as const,
+      subjectInput: { sourceUrl: "", name: "제품", promotion: "", description: "" },
+      subjectAttachments: [{
+        id: "confirmed-1", role: "product" as const, fileName: "product.png", mimeType: "image/png", size: 5,
+        storagePath: "stored/product.png", storageUrl: "https://blob/product.png", uploadStatus: "confirmed" as const,
+      }],
+    };
+    const onPrepareAnalysis = vi.fn(async () => new Promise<never>((_resolve, reject) => {
+      rejectPreparation = reject;
+    }));
+    renderStep({ draft, generationId: "generation-1", onPrepareAnalysis });
+
+    await userEvent.click(screen.getByRole("button", { name: "분석하고 소구점 만들기" }));
+    expect(screen.getByLabelText("제품 이미지")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "product.png 삭제" })).toBeDisabled();
+
+    rejectPreparation?.(new Error("prepare_failed"));
+    await waitFor(() => expect(screen.getByLabelText("제품 이미지")).toBeEnabled());
+    expect(screen.getByRole("button", { name: "product.png 삭제" })).toBeEnabled();
+  });
+
   it("shows the same optional inputs and analysis attachment groups for services", () => {
     renderStep();
 

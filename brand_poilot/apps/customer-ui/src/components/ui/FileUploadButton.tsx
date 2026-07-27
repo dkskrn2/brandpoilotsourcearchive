@@ -56,7 +56,7 @@ export function FileUploadButton({ inputLabel, buttonLabel, accept, multiple = f
         tabIndex={-1}
         onChange={(event) => {
           const files = Array.from(event.currentTarget.files ?? []);
-          if (files.length > 0) onFiles(files);
+          if (!disabled && files.length > 0) onFiles(files);
           event.currentTarget.value = "";
         }}
       />
@@ -97,7 +97,7 @@ export function FileUploadButton({ inputLabel, buttonLabel, accept, multiple = f
                     aria-label={`${item.name} 다시 업로드`}
                     title="다시 업로드"
                     disabled={disabled}
-                    onClick={() => onRetry(item.id)}
+                    onClick={() => { if (!disabled) onRetry(item.id); }}
                   >
                     <RotateCcw size={15} aria-hidden="true" />
                   </button>
@@ -109,7 +109,7 @@ export function FileUploadButton({ inputLabel, buttonLabel, accept, multiple = f
                     aria-label={`${item.name} 삭제`}
                     title="파일 삭제"
                     disabled={disabled || item.status === "uploading"}
-                    onClick={() => onRemove(item.id)}
+                    onClick={() => { if (!disabled) onRemove(item.id); }}
                   >
                     <Trash2 size={15} aria-hidden="true" />
                   </button>

@@ -20,6 +20,7 @@ interface Props {
   attachments: GenerationAttachment[];
   totalAttachmentCount?: number;
   allowedRoles?: GenerationAttachment["role"][];
+  disabled?: boolean;
   onChange(update: GenerationAttachmentUpdate): void;
 }
 
@@ -58,7 +59,7 @@ function validateFile(role: GenerationAttachment["role"], file: File, attachment
   return null;
 }
 
-export function AiContentAttachmentUploader({ gateway, brandId, generationId, attachments, totalAttachmentCount, allowedRoles, onChange }: Props) {
+export function AiContentAttachmentUploader({ gateway, brandId, generationId, attachments, totalAttachmentCount, allowedRoles, disabled = false, onChange }: Props) {
   const [progress, setProgress] = useState<Record<string, number>>({});
   const [error, setError] = useState<{ message: string; action: AttachmentLifecycleAction } | null>(null);
   const mountedRef = useRef(true);
@@ -118,6 +119,7 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
   }
 
   async function upload(role: GenerationAttachment["role"], files: File[]) {
+    if (disabled) return;
     const file = files[0];
     if (!file) return;
     const failedMatch = attachments.find((item) => (
@@ -167,6 +169,7 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
   }
 
   async function retry(attachmentId: string) {
+    if (disabled) return;
     const attachment = attachments.find((item) => item.id === attachmentId);
     if (!attachment?.file || attachment.uploadStatus !== "failed" || attachment.uploadRetryable === false) return;
     setError(null);
@@ -181,6 +184,7 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
   }
 
   async function remove(attachmentId: string) {
+    if (disabled) return;
     const attachment = attachments.find((item) => item.id === attachmentId);
     if (!attachment) return;
     setError(null);
@@ -206,6 +210,7 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
           inputLabel={label}
           buttonLabel={`${label} 추가`}
           accept={role === "document" ? ".pdf,.txt,.md,.csv,.xlsx,application/pdf,text/plain,text/markdown,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "image/png,image/jpeg"}
+          disabled={disabled}
           items={attachments.filter((item) => item.role === role).map((item) => ({
             id: item.id,
             name: item.fileName,

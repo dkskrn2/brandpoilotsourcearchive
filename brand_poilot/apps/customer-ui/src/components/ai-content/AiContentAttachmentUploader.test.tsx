@@ -43,6 +43,35 @@ function renderControlled(api: AiContentGateway, initial: Parameters<typeof AiCo
 }
 
 describe("AiContentAttachmentUploader", () => {
+  it("guards selection, retry, and removal callbacks while disabled and restores them when enabled", async () => {
+    const api = gateway();
+    const failed = {
+      id: "failed-1", role: "product" as const, fileName: "failed.png", mimeType: "image/png", size: 5,
+      file: new File(["image"], "failed.png", { type: "image/png" }), uploadStatus: "failed" as const,
+      uploadRetryable: true,
+    };
+    const onChange = vi.fn();
+    const view = render(<AiContentAttachmentUploader
+      gateway={api} brandId="brand-1" generationId="generation-1"
+      attachments={[failed]} onChange={onChange} disabled
+    />);
+
+    const input = screen.getByLabelText("제품 이미지");
+    expect(input).toBeDisabled();
+    fireEvent.change(input, { target: { files: [new File(["new"], "new.png", { type: "image/png" })] } });
+    fireEvent.click(screen.getByRole("button", { name: "failed.png 다시 업로드" }));
+    fireEvent.click(screen.getByRole("button", { name: "failed.png 삭제" }));
+    expect(api.uploadAttachment).not.toHaveBeenCalled();
+    expect(api.removeAttachment).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+
+    view.rerender(<AiContentAttachmentUploader
+      gateway={api} brandId="brand-1" generationId="generation-1"
+      attachments={[failed]} onChange={onChange} disabled={false}
+    />);
+    expect(screen.getByLabelText("제품 이미지")).toBeEnabled();
+  });
+
   it("uploads and keeps only the confirmed attachment", async () => {
     const api = gateway();
     const { onChange } = renderControlled(api);
