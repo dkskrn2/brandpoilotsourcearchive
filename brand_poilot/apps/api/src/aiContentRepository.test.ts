@@ -579,6 +579,50 @@ describe("AI content repository", () => {
     expect(pool.sql.join("\n")).toContain("on conflict (generation_id, storage_path) do update");
   });
 
+  it("resurrects a deleted same-path attachment with current validated metadata", async () => {
+    const pool = createPool({ attachmentCount: 4 });
+    const repository = createAiContentRepository(pool as never);
+
+    await repository.confirmAiContentAttachment({
+      ...scope,
+      generationId: "generation-1",
+      role: "document",
+      fileName: "replacement.md",
+      mimeType: "text/markdown",
+      sizeBytes: 321,
+      checksum: "c".repeat(64),
+      storageUrl: "https://example.public.blob.vercel-storage.com/replacement",
+      storagePath: "brands/brand-1/ai-content/generation-1/attachments/reusable",
+    });
+
+    const upsert = pool.sql.find((query) => query.includes("insert into ai_content_generation_attachments")) ?? "";
+    expect(upsert).toContain("role = excluded.role");
+    expect(upsert).toContain("file_name = excluded.file_name");
+    expect(upsert).toContain("mime_type = excluded.mime_type");
+    expect(upsert).toContain("size_bytes = excluded.size_bytes");
+    expect(upsert).toContain("checksum = excluded.checksum");
+    expect(upsert).toContain("deleted_at = null");
+  });
+
+  it("keeps an active same-path attachment idempotent at the five-file cap", async () => {
+    const pool = createPool({ attachmentCount: 4 });
+    const repository = createAiContentRepository(pool as never);
+    const attachment = {
+      ...scope,
+      generationId: "generation-1",
+      role: "product" as const,
+      fileName: "product.png",
+      mimeType: "image/png",
+      sizeBytes: 100,
+      checksum: "a".repeat(64),
+      storageUrl: "https://example.public.blob.vercel-storage.com/path",
+      storagePath: "brands/brand-1/ai-content/generation-1/attachments/product.png",
+    };
+
+    await expect(repository.confirmAiContentAttachment(attachment)).resolves.toMatchObject({ generationId: "generation-1" });
+    await expect(repository.confirmAiContentAttachment(attachment)).resolves.toMatchObject({ generationId: "generation-1" });
+  });
+
   it("rejects a sixth active attachment for the same generation", async () => {
     const pool = createPool({ attachmentCount: 5 });
     const repository = createAiContentRepository(pool as never);
@@ -594,6 +638,45 @@ describe("AI content repository", () => {
       storageUrl: "https://example.public.blob.vercel-storage.com/sixth",
       storagePath: "brands/brand-1/ai-content/generation-1/attachments/sixth.md",
     })).rejects.toThrow("ai_content_attachment_limit_exceeded");
+  });
+
+  it("deletes the verified Blob when a sixth attachment confirmation is rejected", async () => {
+    const pool = createPool({ attachmentCount: 5 });
+    const deleteAttachments = vi.fn(async () => undefined);
+    const repository = createAiContentRepository(pool as never, { deleteAttachments });
+    const storageUrl = "https://example.public.blob.vercel-storage.com/sixth";
+
+    await expect(repository.confirmAiContentAttachment({
+      ...scope,
+      generationId: "generation-1",
+      role: "document",
+      fileName: "sixth.md",
+      mimeType: "text/markdown",
+      sizeBytes: 100,
+      checksum: "b".repeat(64),
+      storageUrl,
+      storagePath: "brands/brand-1/ai-content/generation-1/attachments/sixth.md",
+    })).rejects.toThrow("ai_content_attachment_limit_exceeded");
+    expect(deleteAttachments).toHaveBeenCalledWith([storageUrl]);
+  });
+
+  it("preserves the attachment limit error when orphan cleanup fails", async () => {
+    const pool = createPool({ attachmentCount: 5 });
+    const deleteAttachments = vi.fn(async () => { throw new Error("blob_delete_failed"); });
+    const repository = createAiContentRepository(pool as never, { deleteAttachments });
+
+    await expect(repository.confirmAiContentAttachment({
+      ...scope,
+      generationId: "generation-1",
+      role: "document",
+      fileName: "sixth.md",
+      mimeType: "text/markdown",
+      sizeBytes: 100,
+      checksum: "b".repeat(64),
+      storageUrl: "https://example.public.blob.vercel-storage.com/sixth",
+      storagePath: "brands/brand-1/ai-content/generation-1/attachments/sixth.md",
+    })).rejects.toThrow("ai_content_attachment_limit_exceeded");
+    expect(deleteAttachments).toHaveBeenCalledOnce();
   });
 
   it("claims only the requested content type with a recoverable lease", async () => {

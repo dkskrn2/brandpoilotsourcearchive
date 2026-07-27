@@ -1,6 +1,7 @@
 import { FileText, Image, Package, User, ZoomIn } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { AiContentGateway, GenerationAttachment } from "../../features/ai-content/types";
+import { ApiRequestError } from "../../lib/apiClient";
 import { FileUploadButton } from "../ui/FileUploadButton";
 import { UploadProgress } from "../ui/UploadProgress";
 
@@ -61,6 +62,7 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
   const [progress, setProgress] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
   const attachmentsRef = useRef(attachments);
+  const pendingUploadCountRef = useRef(0);
 
   useEffect(() => {
     attachmentsRef.current = attachments;
@@ -78,7 +80,12 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
     const attachmentCount = totalAttachmentCount === undefined
       ? attachmentsRef.current.length
       : totalAttachmentCount + attachmentsRef.current.length - attachments.length;
-    const validationError = validateFile(role, file, attachmentsRef.current, attachmentCount);
+    const validationError = validateFile(
+      role,
+      file,
+      attachmentsRef.current,
+      attachmentCount + pendingUploadCountRef.current,
+    );
     if (validationError) return setError(validationError);
     const mimeType = normalizedMimeType(role, file);
     const localId = `${role}-${file.name}-${file.size}`;
@@ -87,6 +94,7 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
       changeAttachments((current) => [...current, { id: localId, role, fileName: file.name, mimeType, size: file.size, file }]);
       return;
     }
+    pendingUploadCountRef.current += 1;
     setProgress((current) => ({ ...current, [localId]: 0 }));
     try {
       const uploaded = await gateway.uploadAttachment(brandId, generationId, {
@@ -98,9 +106,14 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
         file,
       }, (percentage) => setProgress((current) => ({ ...current, [localId]: percentage })));
       changeAttachments((current) => [...current, uploaded]);
-    } catch {
-      setError(`${file.name} 파일을 업로드하지 못했습니다. 다시 시도해 주세요.`);
+    } catch (cause) {
+      setError(
+        cause instanceof ApiRequestError && cause.errorCode === "ai_content_attachment_limit_exceeded"
+          ? "첨부 파일은 최대 5개입니다."
+          : `${file.name} 파일을 업로드하지 못했습니다. 다시 시도해 주세요.`,
+      );
     } finally {
+      pendingUploadCountRef.current = Math.max(0, pendingUploadCountRef.current - 1);
       setProgress((current) => {
         const next = { ...current };
         delete next[localId];

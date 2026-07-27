@@ -1206,7 +1206,13 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
              (generation_id, workspace_id, brand_id, role, file_name, mime_type, size_bytes, checksum, storage_url, storage_path)
            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            on conflict (generation_id, storage_path) do update
-             set storage_url = excluded.storage_url
+             set role = excluded.role,
+                 file_name = excluded.file_name,
+                 mime_type = excluded.mime_type,
+                 size_bytes = excluded.size_bytes,
+                 checksum = excluded.checksum,
+                 storage_url = excluded.storage_url,
+                 deleted_at = null
            returning id, generation_id, role, file_name, mime_type, size_bytes, checksum, storage_url, storage_path, created_at`,
           [input.generationId, input.workspaceId, input.brandId, input.role, input.fileName, input.mimeType, input.sizeBytes, input.checksum, input.storageUrl, input.storagePath],
         );
@@ -1214,6 +1220,13 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         return mapAttachment(result.rows[0]);
       } catch (error) {
         await client.query("ROLLBACK");
+        if (
+          error instanceof Error
+          && error.message === "ai_content_attachment_limit_exceeded"
+          && options.deleteAttachments
+        ) {
+          await options.deleteAttachments([input.storageUrl]).catch(() => undefined);
+        }
         throw error;
       } finally {
         client.release();

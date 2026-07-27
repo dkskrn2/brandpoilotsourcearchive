@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { AiContentGateway } from "../../features/ai-content/types";
+import { ApiRequestError } from "../../lib/apiClient";
 import { AiContentAttachmentUploader } from "./AiContentAttachmentUploader";
 
 function gateway() {
@@ -82,6 +83,61 @@ describe("AiContentAttachmentUploader", () => {
       expect.objectContaining({ fileName: "person.png" }),
       expect.objectContaining({ fileName: "product.png" }),
     ]));
+  });
+
+  it("reserves in-flight uploads against the shared five-file limit", async () => {
+    let finishUpload: ((attachment: Parameters<AiContentGateway["uploadAttachment"]>[2]) => void) | undefined;
+    const api = {
+      uploadAttachment: vi.fn(async (_brandId, _generationId, attachment) => new Promise<typeof attachment>((resolve) => {
+        finishUpload = resolve;
+      })),
+    } as unknown as AiContentGateway;
+    const existing = Array.from({ length: 4 }, (_, index) => ({
+      id: `existing-${index}`,
+      role: "visual_reference" as const,
+      fileName: `existing-${index}.png`,
+      mimeType: "image/png",
+      size: 10,
+      storagePath: `stored/existing-${index}.png`,
+      storageUrl: `https://blob.example/existing-${index}.png`,
+    }));
+    const onChange = vi.fn();
+    render(<AiContentAttachmentUploader gateway={api} brandId="brand-1" generationId="generation-1" attachments={existing} onChange={onChange} />);
+
+    fireEvent.change(screen.getByLabelText("제품 이미지"), {
+      target: { files: [new File(["product"], "product.png", { type: "image/png" })] },
+    });
+    fireEvent.change(screen.getByLabelText("인물 이미지"), {
+      target: { files: [new File(["person"], "person.png", { type: "image/png" })] },
+    });
+
+    await waitFor(() => expect(api.uploadAttachment).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole("alert")).toHaveTextContent("첨부 파일은 최대 5개입니다.");
+    finishUpload?.({
+      id: "product-uploaded",
+      role: "product",
+      fileName: "product.png",
+      mimeType: "image/png",
+      size: 7,
+      storagePath: "stored/product.png",
+      storageUrl: "https://blob.example/product.png",
+    });
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+  });
+
+  it("shows the five-file message for an API attachment limit error", async () => {
+    const api = {
+      uploadAttachment: vi.fn(async () => {
+        throw new ApiRequestError({ status: 400, errorCode: "ai_content_attachment_limit_exceeded" });
+      }),
+    } as unknown as AiContentGateway;
+    render(<AiContentAttachmentUploader gateway={api} brandId="brand-1" generationId="generation-1" attachments={[]} onChange={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText("제품 이미지"), {
+      target: { files: [new File(["product"], "product.png", { type: "image/png" })] },
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("첨부 파일은 최대 5개입니다.");
   });
 
   it("shows only allowed roles and accepts every analysis document format locally", async () => {
