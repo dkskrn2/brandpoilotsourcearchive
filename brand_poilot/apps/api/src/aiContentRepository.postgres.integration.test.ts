@@ -354,5 +354,102 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       );
       expect(queued.rows[0]?.count).toBe(0);
     });
+
+    it("makes retry wait for a GC generation lock and lose after deleting commits", async () => {
+      const repository = createAiContentRepository(pool);
+      await pool.query(
+        `update ai_content_generations
+            set status = 'failed',
+                terminal_at = statement_timestamp(),
+                retryable_until = statement_timestamp() + interval '15 days'
+          where id = $1`,
+        [GENERATION_ID],
+      );
+      await pool.query(
+        `insert into ai_content_generation_outputs (
+           id, generation_id, workspace_id, brand_id, output_index, status
+         ) values ($1, $2, $3, $4, 1, 'failed')`,
+        [OUTPUT_ID, GENERATION_ID, WORKSPACE_ID, BRAND_ID],
+      );
+      await pool.query(
+        `insert into ai_content_generation_jobs (
+           generation_id, output_id, workspace_id, brand_id, job_type,
+           content_type, status, payload_json, completed_at
+         ) values ($1, $2, $3, $4, 'generate', 'card_news', 'failed', $5::jsonb, now())`,
+        [GENERATION_ID, OUTPUT_ID, WORKSPACE_ID, BRAND_ID, JSON.stringify(RETRY_PAYLOAD)],
+      );
+
+      const gcClient = await pool.connect();
+      let gcTransactionOpen = false;
+      let retry: Promise<unknown> | null = null;
+      try {
+        await gcClient.query("BEGIN");
+        gcTransactionOpen = true;
+        await gcClient.query(
+          "select id from ai_content_generations where id = $1 for update",
+          [GENERATION_ID],
+        );
+
+        retry = repository.retryAiContentOutput({
+          workspaceId: WORKSPACE_ID,
+          brandId: BRAND_ID,
+          outputId: OUTPUT_ID,
+        });
+        const retryState = retry.then(
+          () => "completed" as const,
+          () => "rejected" as const,
+        );
+        let observedGenerationLockWait = false;
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          const waiting = await gcClient.query(
+            `select count(*)::integer as count
+               from pg_stat_activity
+              where datname = current_database()
+                and pid <> pg_backend_pid()
+                and wait_event_type = 'Lock'
+                and query like '%retryable_until > statement_timestamp()%'`,
+          );
+          if (Number(waiting.rows[0]?.count ?? 0) > 0) {
+            observedGenerationLockWait = true;
+            break;
+          }
+          if (await Promise.race([
+            retryState,
+            new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), 20)),
+          ]) !== "waiting") {
+            break;
+          }
+        }
+        expect(observedGenerationLockWait).toBe(true);
+
+        await gcClient.query(
+          `insert into ai_content_attachment_deletion_jobs (
+             id, workspace_id, brand_id, generation_id, attachment_id,
+             storage_url, storage_path, reason, status, lease_token, lease_expires_at
+           ) values (
+             $1, $2, $3, $4, null,
+             'https://test.public.blob.vercel-storage.com/retained.png',
+             'retained/path.png', 'retention_expired', 'deleting', $5,
+             statement_timestamp() + interval '90 seconds'
+           )`,
+          [DELETION_JOB_ID, WORKSPACE_ID, BRAND_ID, GENERATION_ID, LEASE_TOKEN],
+        );
+        await gcClient.query("COMMIT");
+        gcTransactionOpen = false;
+
+        await expect(retry).rejects.toThrow("ai_content_attachment_retention_expired");
+        const queued = await pool.query(
+          `select count(*)::integer as count
+             from ai_content_generation_jobs
+            where output_id = $1 and status = 'queued'`,
+          [OUTPUT_ID],
+        );
+        expect(queued.rows[0]?.count).toBe(0);
+      } finally {
+        if (gcTransactionOpen) await gcClient.query("ROLLBACK");
+        gcClient.release();
+        if (retry) await retry.catch(() => undefined);
+      }
+    });
   },
 );

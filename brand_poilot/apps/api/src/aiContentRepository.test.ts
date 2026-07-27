@@ -334,7 +334,20 @@ function createWorkerPool(options: {
       }
       if (query.includes("count(*)::integer as total")) return { rows: [{ total: options.totalOutputs ?? 1, completed: options.completedOutputs ?? (outputStatus === "completed" ? 1 : 0), failed: outputStatus === "failed" ? 1 : 0 }], rowCount: 1 };
       if (query.includes("update ai_content_generations") && query.includes("completed_at = case")) {
-        generation = { ...generation, status: String(params[1]) };
+        const wasTerminal = ["completed", "partial_failed", "failed"].includes(
+          String(generation.status),
+        );
+        const becomesTerminal = params[3] === true;
+        generation = {
+          ...generation,
+          status: String(params[1]),
+          ...(becomesTerminal && !wasTerminal
+            ? {
+                terminal_at: "2026-07-18T00:00:00.000Z",
+                retryable_until: "2026-08-02T00:00:00.000Z",
+              }
+            : {}),
+        };
         return { rows: [], rowCount: 1 };
       }
       if (query.includes("update ai_content_generation_jobs") && query.includes("available_at = case")) {
@@ -887,6 +900,10 @@ describe("AI content repository", () => {
     const second = await repository.completeAiContentJob(completion);
     expect(first.id).toBe(second.id);
     expect(first.status).toBe("completed");
+    expect(first.terminalAt).not.toBeNull();
+    expect(first.retryableUntil).not.toBeNull();
+    expect(second.terminalAt).toBe(first.terminalAt);
+    expect(second.retryableUntil).toBe(first.retryableUntil);
   });
 
   it("retains temporary attachments after every output completes", async () => {
@@ -940,6 +957,14 @@ describe("AI content repository", () => {
     });
 
     expect(["failed", "partial_failed"]).toContain(generation.status);
+    if (poolOptions.totalOutputs === 1) {
+      expect(generation.status).toBe("failed");
+      expect(generation.terminalAt).not.toBeNull();
+      expect(generation.retryableUntil).not.toBeNull();
+      expect(
+        Date.parse(generation.retryableUntil!) - Date.parse(generation.terminalAt!),
+      ).toBe(15 * 24 * 60 * 60 * 1_000);
+    }
     expect(deleteAttachments).not.toHaveBeenCalled();
   });
 
