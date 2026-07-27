@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import Fastify, { LogController, type FastifyInstance } from "fastify";
 import { createServer } from "./httpServer.js";
 import type { ApiRepository } from "./types.js";
 
@@ -108,7 +109,11 @@ function generation(
 
 function setup(
   allowed = true,
-  options: { uploadSessionsEnabled?: boolean; actorUserId?: string | null } = {},
+  options: {
+    uploadSessionsEnabled?: boolean;
+    actorUserId?: string | null;
+    app?: FastifyInstance;
+  } = {},
 ) {
   const events: string[] = [];
   const sessionExpiresAt = "2099-07-18T00:10:00.000Z";
@@ -194,7 +199,7 @@ function setup(
   const kakaoAuth = {
     getSession: vi.fn(async () => ({ userId: options.actorUserId ?? (options.actorUserId === null ? null : actorUserId), workspaceId, workspaceName: "Workspace", brandId, brandName: "Brand", displayName: "Tester", email: null })),
     canAccessBrand: vi.fn(async () => allowed),
-  } as never;
+  };
   const generateClientToken = vi.fn(async () => {
     events.push("provider");
     return "upload-token";
@@ -211,7 +216,7 @@ function setup(
   } as never));
   const app = createServer({
     repository,
-    kakaoAuth,
+    kakaoAuth: kakaoAuth as never,
     aiContentUpload: {
       readWriteToken: "rw-token",
       generateClientToken,
@@ -220,8 +225,8 @@ function setup(
     },
     aiContentLimits: { dailyGenerationLimit: 10, dailyDownloadLimit: 20 },
     logger: false,
-  });
-  return { app, repository, generateClientToken, events, sessionExpiresAt };
+  }, options.app);
+  return { app, repository, kakaoAuth, generateClientToken, events, sessionExpiresAt };
 }
 
 const auth = { cookie: "bp_session=session-1" };
@@ -253,6 +258,21 @@ const generationContractFixtures = [
 ] as const;
 
 describe("AI content customer routes", () => {
+  it("fails fast when configured upload routes lack a lifecycle dependency", async () => {
+    const { app, repository } = setup();
+    await app.close();
+    const incompleteRepository: ApiRepository = {
+      ...repository,
+      failAiContentUploadSession: undefined,
+    };
+
+    expect(() => createServer({
+      repository: incompleteRepository,
+      aiContentUpload: { readWriteToken: "rw-token" },
+      logger: false,
+    })).toThrow("ai_content_upload_repository_not_configured");
+  });
+
   it.each(generationContractFixtures)("locks the $type create, update, start, list, and get contracts", async (fixture) => {
     const { app, repository } = setup();
     const createdRecord = generation("analyzing", fixture.type, fixture.title, fixture.draft);
@@ -509,10 +529,28 @@ describe("AI content customer routes", () => {
   });
 
   it("marks an enabled session failed while preserving provider outage mapping", async () => {
-    const { app, repository, generateClientToken } = setup(true, { uploadSessionsEnabled: true });
-    generateClientToken.mockRejectedValueOnce(new Error("provider secret must not leak"));
+    const logger = {
+      level: "warn",
+      fatal: vi.fn(),
+      error: vi.fn(),
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+      trace: vi.fn(),
+      silent: vi.fn(),
+      child: vi.fn(),
+    };
+    logger.child.mockReturnValue(logger);
+    const { app, repository, generateClientToken } = setup(true, {
+      uploadSessionsEnabled: true,
+      app: Fastify({
+        logController: new LogController({ disableRequestLogging: true }),
+        loggerInstance: logger as never,
+      }) as unknown as FastifyInstance,
+    });
+    generateClientToken.mockRejectedValueOnce(new Error("provider-secret-sentinel"));
     vi.mocked(repository.failAiContentUploadSession!).mockRejectedValueOnce(
-      new Error("compensation database failure"),
+      new Error("compensation-secret-sentinel opaque-upload-nonce workspaces/private/path"),
     );
 
     const response = await app.inject({
@@ -532,7 +570,27 @@ describe("AI content customer routes", () => {
       createdByUserId: actorUserId,
       errorCode: "ai_content_attachment_storage_unavailable",
     });
-    expect(response.body).not.toContain("provider secret");
+    const compensationLogs = logger.warn.mock.calls
+      .filter(([fields]) => (fields as Record<string, unknown>).event === "ai_content_upload_session_compensation_failed");
+    const serializedLogs = JSON.stringify(compensationLogs);
+    expect(logger.warn).toHaveBeenCalledOnce();
+    expect(compensationLogs).toHaveLength(1);
+    expect(compensationLogs[0]?.[0]).toMatchObject({
+      event: "ai_content_upload_session_compensation_failed",
+      requestId: expect.any(String),
+      errorCode: "database_compensation_failed",
+    });
+    expect(Object.keys(compensationLogs[0]?.[0] as Record<string, unknown>).sort()).toEqual([
+      "errorCode",
+      "event",
+      "requestId",
+    ]);
+    expect(compensationLogs[0]?.[1]).toBe("ai_content_upload_session_compensation_failed");
+    expect(serializedLogs).not.toContain("provider-secret-sentinel");
+    expect(serializedLogs).not.toContain("compensation-secret-sentinel");
+    expect(serializedLogs).not.toContain("opaque-upload-nonce");
+    expect(serializedLogs).not.toContain("workspaces/private/path");
+    expect(serializedLogs).not.toContain("product.png");
     await app.close();
   });
 
@@ -628,8 +686,8 @@ describe("AI content customer routes", () => {
     await app.close();
   });
 
-  it("cancels an actor-bound upload session with an exact body", async () => {
-    const { app, repository } = setup(true, { uploadSessionsEnabled: true });
+  it.each([false, true])("cancels an actor-bound upload session with an exact body when issuance=%s", async (uploadSessionsEnabled) => {
+    const { app, repository } = setup(true, { uploadSessionsEnabled });
     const response = await app.inject({
       method: "POST",
       url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/cancel`,
@@ -688,6 +746,23 @@ describe("AI content customer routes", () => {
     expect(response.json()).toEqual({ error: errorCode });
     expect(repository.createAiContentUploadSession).not.toHaveBeenCalled();
     expect(repository.cancelAiContentUploadSession).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("rejects a malformed lifecycle brand before the auth database check", async () => {
+    const { app, kakaoAuth } = setup();
+    kakaoAuth.canAccessBrand.mockRejectedValueOnce(
+      new Error("auth-database-sentinel-must-not-run"),
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/not-a-uuid/ai-content/generations/${generationId}/attachments/token`,
+      headers: auth,
+      payload: { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "ai_content_brand_id_invalid" });
+    expect(kakaoAuth.canAccessBrand).not.toHaveBeenCalled();
     await app.close();
   });
 

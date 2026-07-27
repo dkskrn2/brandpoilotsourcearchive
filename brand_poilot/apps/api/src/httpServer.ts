@@ -14,6 +14,7 @@ import { parseDmWorkerResult } from "./dmTypes.js";
 import { normalizeInstagramHashtag } from "./instagramTrend.js";
 import { StoryCapabilityRequiredError } from "./repository.js";
 import type { ApiRepository, BrandProfileInput, Channel, DmAttentionType, DmConversationFilter, InstagramDeliveryFormat, InstagramFormatSettingsInput, InstagramTrendMediaTypeFilter, InstagramTrendPageDto, InstagramTrendSort, SourceType, SubjectAnalysisRepositoryV2, SupportRequestCategory, SupportRequestStatus } from "./types.js";
+import type { AiContentAttachmentLifecycleRepository } from "./aiContentAttachmentRepository.js";
 import { createKakaoAuthStore, type KakaoProfile } from "./kakaoAuth.js";
 import { brandLogoRequestBodyLimit, type BrandLogoService } from "./brandLogo.js";
 import { channelNames } from "./channelCatalog.js";
@@ -165,6 +166,25 @@ interface CreateServerOptions {
   logger?: boolean | FastifyLoggerOptions;
 }
 
+type AiContentUploadRouteRepository = Pick<
+  AiContentAttachmentLifecycleRepository,
+  | "assertAiContentAttachmentUploadMutable"
+  | "createAiContentUploadSession"
+  | "failAiContentUploadSession"
+  | "confirmAiContentUploadSession"
+  | "cancelAiContentUploadSession"
+  | "confirmLegacyAiContentAttachment"
+>;
+
+const aiContentUploadRouteRepositoryMethods = [
+  "assertAiContentAttachmentUploadMutable",
+  "createAiContentUploadSession",
+  "failAiContentUploadSession",
+  "confirmAiContentUploadSession",
+  "cancelAiContentUploadSession",
+  "confirmLegacyAiContentAttachment",
+] as const satisfies readonly (keyof AiContentUploadRouteRepository)[];
+
 type AuthSession = Awaited<ReturnType<NonNullable<CreateServerOptions["kakaoAuth"]>["getSession"]>>;
 
 interface InstagramLoginBinding {
@@ -266,6 +286,21 @@ function parseAiContentBrandId(value: string) {
     throw new Error("ai_content_brand_id_invalid");
   }
   return value.toLowerCase();
+}
+
+async function validateAiContentLifecycleBrand(request: FastifyRequest) {
+  const { brandId } = request.params as { brandId: string };
+  parseAiContentBrandId(brandId);
+}
+
+function requireAiContentUploadRouteRepository(
+  repository: ApiRepository,
+): AiContentUploadRouteRepository {
+  const source = repository as unknown as Record<string, unknown>;
+  if (aiContentUploadRouteRepositoryMethods.some((method) => typeof source[method] !== "function")) {
+    throw new Error("ai_content_upload_repository_not_configured");
+  }
+  return repository as ApiRepository & AiContentUploadRouteRepository;
 }
 
 function asChannel(value: string): Channel {
@@ -548,6 +583,9 @@ export function createServer(
   { repository, workerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, brandIntelligence, runtimePolicy, logger }: CreateServerOptions,
   app: FastifyInstance = Fastify(createFastifyOptions(logger))
 ) {
+  const aiContentAttachmentRepository = aiContentUpload
+    ? requireAiContentUploadRouteRepository(repository)
+    : null;
   const httpPolicy: ApiHttpRuntimePolicy = runtimePolicy ?? {
     cookieSecure: false,
     corsAllowedOrigins: [],
@@ -2356,8 +2394,10 @@ export function createServer(
     });
   });
 
+  if (aiContentAttachmentRepository) {
   app.post<{ Params: { brandId: string; generationId: string }; Body: unknown }>(
     "/brands/:brandId/ai-content/generations/:generationId/attachments/token",
+    { preValidation: validateAiContentLifecycleBrand },
     async (request) => {
       const brandId = parseAiContentBrandId(request.params.brandId);
       const generationId = parseAiContentGenerationId(request.params.generationId);
@@ -2372,7 +2412,7 @@ export function createServer(
       if (!aiContentUpload?.uploadSessionsEnabled) {
         // Legacy issuance cannot reserve capacity before the provider call. An abandoned
         // Blob is therefore undiscoverable until upload-session issuance is enabled.
-        await repository.assertAiContentAttachmentUploadMutable!({ ...scope, generationId });
+        await aiContentAttachmentRepository.assertAiContentAttachmentUploadMutable({ ...scope, generationId });
         return issueValidatedAiContentAttachmentToken({
           brandId,
           generationId,
@@ -2381,7 +2421,7 @@ export function createServer(
       }
       const createdByUserId = aiContentActorUserId(request);
       if (!createdByUserId) throw new Error("authentication_required");
-      const session = await repository.createAiContentUploadSession!({
+      const session = await aiContentAttachmentRepository.createAiContentUploadSession({
         ...scope,
         generationId,
         createdByUserId,
@@ -2407,13 +2447,21 @@ export function createServer(
         const errorCode = error instanceof Error
           ? error.message
           : "ai_content_attachment_storage_unavailable";
-        await repository.failAiContentUploadSession!({
-          ...scope,
-          generationId,
-          sessionId: session.id,
-          createdByUserId,
-          errorCode,
-        }).catch(() => undefined);
+        try {
+          await aiContentAttachmentRepository.failAiContentUploadSession({
+            ...scope,
+            generationId,
+            sessionId: session.id,
+            createdByUserId,
+            errorCode,
+          });
+        } catch {
+          request.log.warn({
+            event: "ai_content_upload_session_compensation_failed",
+            requestId: request.id,
+            errorCode: "database_compensation_failed",
+          }, "ai_content_upload_session_compensation_failed");
+        }
         throw error;
       }
     },
@@ -2421,6 +2469,7 @@ export function createServer(
 
   app.post<{ Params: { brandId: string; generationId: string }; Body: unknown }>(
     "/brands/:brandId/ai-content/generations/:generationId/attachments/confirm",
+    { preValidation: validateAiContentLifecycleBrand },
     async (request) => {
       const brandId = parseAiContentBrandId(request.params.brandId);
       const generationId = parseAiContentGenerationId(request.params.generationId);
@@ -2429,7 +2478,7 @@ export function createServer(
       if ("sessionId" in parsed) {
         const createdByUserId = aiContentActorUserId(request);
         if (!createdByUserId) throw new Error("authentication_required");
-        return repository.confirmAiContentUploadSession!({
+        return aiContentAttachmentRepository.confirmAiContentUploadSession({
           ...scope,
           generationId,
           sessionId: parsed.sessionId,
@@ -2454,12 +2503,13 @@ export function createServer(
         token: aiContentUpload?.readWriteToken ?? "",
         headBlob: aiContentUpload?.headBlob,
       });
-      return repository.confirmLegacyAiContentAttachment!({ ...scope, generationId, ...verified });
+      return aiContentAttachmentRepository.confirmLegacyAiContentAttachment({ ...scope, generationId, ...verified });
     },
   );
 
   app.post<{ Params: { brandId: string; generationId: string }; Body: unknown }>(
     "/brands/:brandId/ai-content/generations/:generationId/attachments/cancel",
+    { preValidation: validateAiContentLifecycleBrand },
     async (request) => {
       const brandId = parseAiContentBrandId(request.params.brandId);
       const generationId = parseAiContentGenerationId(request.params.generationId);
@@ -2467,7 +2517,7 @@ export function createServer(
       const createdByUserId = aiContentActorUserId(request);
       if (!createdByUserId) throw new Error("authentication_required");
       const parsed = parseCancelUploadSessionInput(request.body);
-      return repository.cancelAiContentUploadSession!({
+      return aiContentAttachmentRepository.cancelAiContentUploadSession({
         ...scope,
         generationId,
         sessionId: parsed.sessionId,
@@ -2476,9 +2526,11 @@ export function createServer(
       });
     },
   );
+  }
 
   app.delete<{ Params: { brandId: string; generationId: string; attachmentId: string } }>(
     "/brands/:brandId/ai-content/generations/:generationId/attachments/:attachmentId",
+    { preValidation: validateAiContentLifecycleBrand },
     async (request) => {
       const brandId = parseAiContentBrandId(request.params.brandId);
       return repository.removeAiContentAttachment({
