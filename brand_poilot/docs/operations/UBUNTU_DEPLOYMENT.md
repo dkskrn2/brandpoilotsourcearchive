@@ -56,6 +56,7 @@ The fixed first-move controls are:
 ```text
 LOCAL_SCHEDULER_ENABLED=false
 INSTAGRAM_PUBLISH_ENABLED=false
+AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED=false
 DEV_AUTH_ENABLED=false
 DB_POOL_MAX=3
 ```
@@ -307,6 +308,7 @@ META_APP_SECRET META_OAUTH_REDIRECT_URI META_TRENDS_OAUTH_REDIRECT_URI
 META_WEBHOOK_VERIFY_TOKEN DM_PROFILE_REFRESH_AFTER_HOURS KAKAO_REST_API_KEY
 KAKAO_CLIENT_SECRET KAKAO_REDIRECT_URI BRAND_PILOT_DEV_BRAND_ID
 BRAND_PILOT_DEV_WORKSPACE_ID BLOB_READ_WRITE_TOKEN
+AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED
 AI_CONTENT_DAILY_GENERATION_LIMIT AI_CONTENT_DAILY_DOWNLOAD_LIMIT
 PUBLISH_ARTIFACT_ALLOWED_ORIGINS
 ```
@@ -320,6 +322,7 @@ DEV_AUTH_ENABLED=false
 DB_POOL_MAX=3
 LOCAL_SCHEDULER_ENABLED=false
 INSTAGRAM_PUBLISH_ENABLED=false
+AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED=false
 ```
 
 Keep the original `CREDENTIAL_ENCRYPTION_KEY`. Set `DB_SSL_CA_BASE64` only when
@@ -768,6 +771,7 @@ Record evidence that:
 - Services are `api-primary`, `api-canary`, and `caddy`.
 - Only TCP 80/443 are publicly bound by this stack.
 - `LOCAL_SCHEDULER_ENABLED=false`, `INSTAGRAM_PUBLISH_ENABLED=false`,
+  `AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED=false`,
   `DEV_AUTH_ENABLED=false`, and DB pool maximum is 3.
 - No database migration, worker, scheduler, or publication ran.
 - The evidence explicitly records no database migration.
@@ -782,3 +786,57 @@ canary verification, `--prepare`, DNS confirmation,
 `--commit --dns-cutover-confirmed`, and rollback workflow. Worker deployment
 remains a **future worker plan** covering DM1, DM2, Wiki, leases, graceful
 shutdown, and its own canary. Do not add workers to this API cutover.
+
+## 11. AI content attachment lifecycle dark launch
+
+The first rollout keeps
+`AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED=false` in the reviewed
+mode-0600 source file, and both `api-canary` and `api-primary` force that same
+safe value. Preflight accepts only the exact lowercase value `false`. Record
+this pass/fail result in the final evidence without printing the resolved
+environment.
+
+The authenticated internal endpoint
+`/internal/cron/ai-content-attachment-gc` is implemented-but-not-scheduled.
+This release adds no cron call, systemd service/timer, or local scheduler
+registration. Endpoint scheduling, alert-rule activation, and
+`AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED=true` each require a later
+Operations/rollout approval.
+
+While the flag is OFF, abandoned legacy uploads remain undiscoverable because
+the legacy token flow creates no upload-session row. The abandoned-upload
+discoverability guarantee begins only after approved upload-session issuance
+and a full legacy-token TTL drain. Do not claim that dark launch alone closes
+this residual risk.
+
+Each approved future GC invocation emits a bounded
+`ai_content_attachment_gc_completed` record. Its metric fields include
+`sessions` scanned/claimed/confirmed/expired, `deletions`
+claimed/started/succeeded/failed/retried/releasedUnstarted,
+`leasesReclaimed`, `eligibleQueueDepth`,
+`oldestEligiblePendingAgeSeconds`, `heldJobCount`, `oldestHeldAgeSeconds`,
+`holdReasonCounts`, `attemptCountBuckets`, `deadLetterCount`, `durationMs`,
+and `providerErrorCategories`. Never record Blob tokens, nonces, signed URLs,
+or secret values.
+
+Alert-rule wiring and activation are explicitly deferred until GC scheduling
+is approved. At that later Operations gate, alert on any of:
+
+- `deadLetterCount` greater than zero;
+- `oldestEligiblePendingAgeSeconds` greater than 86,400 seconds (24 hours);
+- any provider failure repeated for five consecutive scheduled runs.
+
+For a threshold breach, keep issuance OFF or pause its activation, retain the
+deletion obligations, capture only redacted run IDs and metric fields, inspect
+the held-reason and attempt buckets, correct provider authorization or
+availability, then run one explicitly approved bounded GC request. Do not
+discard or manually mark jobs deleted. A dead letter requires named operator
+ownership and evidence that the Blob was deleted or is already not found
+before reconciliation.
+
+Migration 065 is forward-only and is not rolled back. Application rollback is
+flag OFF; cleanup obligations remain and must still converge through the later
+approved GC operation. Activation evidence must therefore show the migration
+is present, canary and primary remain healthy, the issuance flag change was
+approved, the legacy-token TTL fully drained, and all three alert thresholds
+and response ownership are active.

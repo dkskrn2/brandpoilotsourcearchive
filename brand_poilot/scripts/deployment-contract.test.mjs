@@ -679,6 +679,111 @@ test("release manifests are parsed without source or eval and preflight is fail-
   assert.match(preflight, /config --quiet/);
 });
 
+test("the first attachment lifecycle rollout is forced off and remains unscheduled", () => {
+  const flag = "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED";
+  const envExample = read("deploy/env/api.env.example");
+  const compose = read("deploy/compose.production.yml");
+  const services = assertComposeTopology(compose);
+  const preflight = read("deploy/scripts/preflight.sh");
+  const runbook = read(ubuntuRunbookPath);
+  const normalizedRunbook = runbook.replace(/\s+/g, " ");
+  const ledger = read("docs/prd/brand-pilot-feature-preservation-ledger.md");
+
+  assert.equal(
+    envExample.match(new RegExp(`^${flag}=false$`, "gm"))?.length,
+    1,
+    "reviewed API env example must contain one exact false attachment-session flag",
+  );
+  for (const service of ["api-primary", "api-canary"]) {
+    assert.match(
+      services.get(service).text,
+      new RegExp(`^\\s+${flag}:\\s+["']false["']\\s*$`, "m"),
+      `${service} must force the attachment-session flag false`,
+    );
+  }
+  assert.match(
+    preflight,
+    new RegExp(`require_exact_false\\s+"${flag}"\\s+"\\$API_ENV_FILE"`),
+  );
+  assert.ok(
+    runbook.match(new RegExp(`${flag}=false`, "g"))?.length >= 4,
+    "runbook must retain the flag in fixed controls, safe values, final evidence, and dark-launch checks",
+  );
+
+  for (const phrase of [
+    `${flag}=false`,
+    "/internal/cron/ai-content-attachment-gc",
+    "implemented-but-not-scheduled",
+    "later Operations/rollout approval",
+    "full legacy-token TTL drain",
+    "oldestEligiblePendingAgeSeconds",
+    "deadLetterCount",
+    "five consecutive scheduled runs",
+    "forward-only",
+    "flag OFF",
+    "cleanup obligations remain",
+  ]) {
+    assert.ok(normalizedRunbook.includes(phrase), `Ubuntu runbook missing: ${phrase}`);
+  }
+  for (const phrase of [
+    "콘텐츠 첨부 총 5개",
+    "PNG/JPEG 각 5MB",
+    "활성 중복 경고",
+    "fresh upload attempt",
+    "immutable worker snapshot",
+    "15-day retry boundary",
+    "draft preservation on storage failure",
+    "npm run test:deployment",
+  ]) {
+    assert.ok(ledger.includes(phrase), `preservation ledger missing: ${phrase}`);
+  }
+
+  for (const path of deploymentScripts) {
+    assert.doesNotMatch(
+      read(path),
+      /\/internal\/cron\/ai-content-attachment-gc/,
+      `${path} must not invoke attachment GC`,
+    );
+  }
+  assert.doesNotMatch(
+    compose,
+    /(?:systemd|\.service\b|\.timer\b|AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED:\s*["']?true)/i,
+  );
+  assert.doesNotMatch(
+    envExample,
+    /^AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED=true$/m,
+  );
+  const trackedOperationalFiles = spawnSync(
+    "git",
+    ["ls-files", "-z", "--", "apps/api/.env.example", "deploy"],
+    { cwd: process.cwd(), encoding: "utf8" },
+  );
+  assert.equal(trackedOperationalFiles.status, 0, trackedOperationalFiles.stderr);
+  const operationalPaths = trackedOperationalFiles.stdout.split("\0").filter(Boolean);
+  const trackedWorkflowFiles = spawnSync(
+    "git",
+    ["ls-files", "-z", "--", ":(top).github"],
+    { cwd: process.cwd(), encoding: "utf8" },
+  );
+  assert.equal(trackedWorkflowFiles.status, 0, trackedWorkflowFiles.stderr);
+  const workflowPaths = trackedWorkflowFiles.stdout
+    .split("\0")
+    .filter(Boolean)
+    .map((path) => resolve(path));
+  for (const path of [...operationalPaths, ...workflowPaths]) {
+    assert.doesNotMatch(
+      read(path),
+      /AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED(?:=|:\s*)["']?true["']?/,
+      `${path} must not enable attachment-session issuance`,
+    );
+  }
+  assert.equal(
+    operationalPaths.some((path) => /\.(?:service|timer)$/.test(path)),
+    false,
+    "first rollout must not check in an attachment lifecycle systemd unit",
+  );
+});
+
 test("canary verification and promotion keep bounded explicit contracts", () => {
   const verify = read("deploy/scripts/verify-canary.sh");
   const promote = read("deploy/scripts/promote.sh");

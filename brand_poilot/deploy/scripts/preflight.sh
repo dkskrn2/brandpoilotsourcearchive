@@ -105,6 +105,7 @@ require_exact_false() {
 
 require_exact_false "LOCAL_SCHEDULER_ENABLED" "$API_ENV_FILE"
 require_exact_false "INSTAGRAM_PUBLISH_ENABLED" "$API_ENV_FILE"
+require_exact_false "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED" "$API_ENV_FILE"
 status_ok "release_sha"
 status_ok "api_image_digest"
 status_ok "caddy_image_digest"
