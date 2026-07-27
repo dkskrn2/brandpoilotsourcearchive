@@ -222,6 +222,7 @@ function isSessionAttachmentToken(token: LegacyAttachmentToken | SessionAttachme
 
 function shouldRetryConfirm(error: unknown) {
   if (!(error instanceof ApiRequestError)) return true;
+  if (error.status >= 400 && error.status < 500) return false;
   return error.status >= 500 || error.deliveryStatus === "unknown";
 }
 

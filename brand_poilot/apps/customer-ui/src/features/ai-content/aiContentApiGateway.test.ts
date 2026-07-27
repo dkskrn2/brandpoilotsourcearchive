@@ -260,6 +260,25 @@ describe("createAiContentApiGateway", () => {
     expect(requestJson).toHaveBeenCalledTimes(2);
   });
 
+  it.each([409, 422])("does not retry an explicit %i confirm even when delivery status is unknown", async (status) => {
+    if (!globalThis.crypto?.subtle) Object.defineProperty(globalThis, "crypto", { value: webcrypto });
+    const rejection = new ApiRequestError({
+      status,
+      errorCode: "ai_content_upload_confirmation_conflict",
+      deliveryStatus: "unknown",
+    });
+    const requestJson = vi.fn()
+      .mockResolvedValueOnce({ sessionId: "session-1", nonce: "nonce-1", pathname: "attempts/session-1/product.png", clientToken: "client-token" })
+      .mockRejectedValueOnce(rejection);
+    const blobPut = vi.fn(async () => ({ url: "https://blob.example/product.png" }));
+    const gateway = createAiContentApiGateway(clientWith(requestJson), blobPut as never);
+
+    await expect(gateway.uploadAttachment("brand-1", "generation-1", localAttachment())).rejects.toBe(rejection);
+
+    expect(blobPut).toHaveBeenCalledTimes(1);
+    expect(requestJson).toHaveBeenCalledTimes(2);
+  });
+
   it("best-effort cancels a v2 session after a definite Blob put failure and preserves the original error", async () => {
     if (!globalThis.crypto?.subtle) Object.defineProperty(globalThis, "crypto", { value: webcrypto });
     const storageError = new Error("blob put failed");
@@ -318,6 +337,54 @@ describe("createAiContentApiGateway", () => {
       storagePath: "confirmed/product.png",
     }]);
     expect(body.draft.brief.attachments).toEqual(body.draft.subjectAttachments);
+    expect(requestBody).not.toContain("must-not-leak");
+  });
+
+  it("updates a generation with only exact confirmed server attachments", async () => {
+    const requestJson = vi.fn(async (..._args: [string, { body?: string }]) => generation());
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+    const confirmed = {
+      ...localAttachment(),
+      id: "attachment-1",
+      file: undefined,
+      storageUrl: "https://blob.example/product.png",
+      storagePath: "confirmed/product.png",
+      uploadStatus: "confirmed" as const,
+      sessionId: "must-not-leak",
+      nonce: "must-not-leak",
+    };
+    const localDraft = {
+      ...draft,
+      subjectAttachments: [
+        localAttachment(),
+        { ...localAttachment(), id: "failed-1", uploadStatus: "failed" as const },
+        confirmed,
+      ],
+      brief: {
+        ...draft.brief!,
+        attachments: [confirmed, localAttachment()],
+      },
+    };
+
+    await gateway.updateGeneration("brand-1", "generation-1", {
+      draft: localDraft,
+      referenceIds: [],
+    });
+
+    const requestBody = requestJson.mock.calls[0]?.[1].body ?? "";
+    const body = JSON.parse(requestBody);
+    const exactConfirmed = {
+      id: "attachment-1",
+      role: "product",
+      fileName: "product.png",
+      mimeType: "image/png",
+      size: 5,
+      storageUrl: "https://blob.example/product.png",
+      storagePath: "confirmed/product.png",
+    };
+    expect(body.draft.subjectAttachments).toEqual([exactConfirmed]);
+    expect(body.draft.brief.attachments).toEqual([exactConfirmed]);
+    expect(requestBody).not.toContain("uploadStatus");
     expect(requestBody).not.toContain("must-not-leak");
   });
 

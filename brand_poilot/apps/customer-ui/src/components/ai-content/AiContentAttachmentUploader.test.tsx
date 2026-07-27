@@ -230,6 +230,31 @@ describe("AiContentAttachmentUploader", () => {
     expect(api.uploadAttachment).toHaveBeenCalledTimes(2);
   });
 
+  it("starts a fresh upload attempt after the visible same file is fully removed", async () => {
+    const file = new File(["image"], "product.png", { type: "image/png" });
+    const api = gateway();
+    const { onChange } = renderControlled(api, [{
+      id: "attachment-1",
+      role: "product",
+      fileName: file.name,
+      mimeType: file.type,
+      size: file.size,
+      storageUrl: "https://blob.example/product.png",
+      storagePath: "confirmed/product.png",
+      uploadStatus: "confirmed",
+    }]);
+
+    await userEvent.click(screen.getByRole("button", { name: "product.png 삭제" }));
+    await waitFor(() => expect(screen.queryByText("product.png")).not.toBeInTheDocument());
+    await userEvent.upload(screen.getByLabelText("제품 이미지"), file);
+
+    expect(api.removeAttachment).toHaveBeenCalledWith("brand-1", "generation-1", "attachment-1");
+    expect(api.uploadAttachment).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenLastCalledWith([
+      expect.objectContaining({ fileName: "product.png", uploadStatus: "confirmed" }),
+    ]);
+  });
+
   it("awaits confirmed removal before replacing the fifth attachment", async () => {
     let finishRemoval: (() => void) | undefined;
     const api = gateway();
