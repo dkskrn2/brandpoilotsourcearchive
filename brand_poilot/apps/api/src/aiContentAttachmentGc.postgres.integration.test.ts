@@ -1,6 +1,5 @@
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -59,6 +58,74 @@ async function insertJob(pool: Pool, input: {
       input.nextOffset ?? "-1 second",
       input.createdOffset ?? "-1 minute",
     ],
+  );
+}
+
+async function insertLiveUploadSession(pool: Pool, input: {
+  id: string;
+  generationId: string;
+  workspaceId: string;
+  brandId: string;
+  userId: string;
+  nonce: string;
+  path: string;
+  expiresInSeconds: number;
+}) {
+  const result = await pool.query(
+    `with boundary as (
+       select clock_timestamp() + ($8::text || ' seconds')::interval as token_expires_at
+     )
+     insert into ai_content_attachment_upload_sessions (
+       id, generation_id, workspace_id, brand_id, created_by_user_id, nonce,
+       role, file_name, expected_mime_type, expected_size_bytes, expected_checksum,
+       storage_path, status, created_at, token_expires_at
+     )
+     select $1, $2, $3, $4, $5, $6, 'product', 'racing.png', 'image/png', 10, $7,
+            $9, 'pending', token_expires_at - interval '10 minutes', token_expires_at
+       from boundary
+     returning token_expires_at`,
+    [
+      input.id,
+      input.generationId,
+      input.workspaceId,
+      input.brandId,
+      input.userId,
+      input.nonce,
+      "b".repeat(64),
+      input.expiresInSeconds,
+      input.path,
+    ],
+  );
+  return new Date(result.rows[0].token_expires_at as string | Date).toISOString();
+}
+
+async function providerUploadWhileSessionIsLive(
+  pool: Pool,
+  input: { sessionId: string; path: string },
+  providerObjects: Set<string>,
+) {
+  const session = await pool.query(
+    `select storage_path, token_expires_at > clock_timestamp() as token_live
+       from ai_content_attachment_upload_sessions
+      where id = $1`,
+    [input.sessionId],
+  );
+  if (
+    !session.rowCount
+    || session.rows[0].storage_path !== input.path
+    || session.rows[0].token_live !== true
+  ) {
+    throw new Error("provider_upload_token_not_live");
+  }
+  providerObjects.add(input.path);
+}
+
+async function waitUntilDatabaseTime(pool: Pool, timestamp: string) {
+  await pool.query(
+    `select pg_sleep(
+       greatest(0, extract(epoch from ($1::timestamptz - clock_timestamp()))) + 0.05
+     )`,
+    [timestamp],
   );
 }
 
@@ -322,36 +389,37 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       expect(released?.storagePath).toBe("gc/held.png");
     });
 
-    it("keeps a live-token cascade obligation unclaimable until expiry, then claims the orphan", async () => {
+    it("uses the generation cascade trigger and fences a provider object until token expiry", async () => {
       const sessionId = "50000000-0000-4000-8000-000000000015";
-      const jobId = "70000000-0000-4000-8000-000000000015";
-      await pool.query(
-        `insert into ai_content_attachment_upload_sessions (
-           id, generation_id, workspace_id, brand_id, created_by_user_id, nonce,
-           role, file_name, expected_mime_type, expected_size_bytes, expected_checksum,
-           storage_path, status, created_at, token_expires_at
-         ) values (
-           $1, $2, $3, $4, $5, $6, 'product', 'racing.png', 'image/png', 10, $7,
-           'gc/racing.png', 'pending',
-           now() - interval '9 minutes 59 seconds', now() + interval '1 second'
-         )`,
-        [
-          sessionId,
-          GENERATION_ID,
-          WORKSPACE_ID,
-          BRAND_ID,
-          USER_ID,
-          "60000000-0000-4000-8000-000000000016",
-          "b".repeat(64),
-        ],
+      const path = "gc/racing.png";
+      const providerObjects = new Set<string>();
+      const tokenExpiresAt = await insertLiveUploadSession(pool, {
+        id: sessionId,
+        generationId: GENERATION_ID,
+        workspaceId: WORKSPACE_ID,
+        brandId: BRAND_ID,
+        userId: USER_ID,
+        nonce: "60000000-0000-4000-8000-000000000016",
+        path,
+        expiresInSeconds: 2,
+      });
+      await providerUploadWhileSessionIsLive(pool, { sessionId, path }, providerObjects);
+      expect(providerObjects.has(path)).toBe(true);
+
+      await pool.query("delete from ai_content_generations where id = $1", [GENERATION_ID]);
+      const triggered = await pool.query(
+        `select id, storage_path, reason, next_attempt_at, next_attempt_at >= $2::timestamptz as due_not_early
+           from ai_content_attachment_deletion_jobs
+          where workspace_id = $1 and storage_path = $3`,
+        [WORKSPACE_ID, tokenExpiresAt, path],
       );
-      await pool.query(
-        `insert into ai_content_attachment_deletion_jobs (
-           id, workspace_id, brand_id, generation_id, upload_session_id,
-           storage_path, reason, next_attempt_at
-         ) values ($1, $2, $3, $4, $5, 'gc/racing.png', 'generation_cascade', now() + interval '1 second')`,
-        [jobId, WORKSPACE_ID, BRAND_ID, GENERATION_ID, sessionId],
-      );
+      expect(triggered.rows).toEqual([expect.objectContaining({
+        storage_path: path,
+        reason: "upload_session_pending",
+        due_not_early: true,
+      })]);
+      const jobId = String(triggered.rows[0].id);
+
       const repository = createAiContentAttachmentGcRepository(pool);
       await expect(repository.claimAiContentAttachmentDeletionJobs({
         workerId: "gc-before-expiry",
@@ -360,11 +428,7 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         ...BUDGET,
       })).resolves.toEqual([]);
 
-      // A provider upload may complete while the signed token is still valid.
-      let providerObjectExists = true;
-      expect(providerObjectExists).toBe(true);
-      await pool.query("delete from ai_content_generations where id = $1", [GENERATION_ID]);
-      await delay(1_100);
+      await waitUntilDatabaseTime(pool, tokenExpiresAt);
 
       const [claim] = await repository.claimAiContentAttachmentDeletionJobs({
         workerId: "gc-after-expiry",
@@ -373,8 +437,82 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         ...BUDGET,
       });
       expect(claim?.jobId).toBe(jobId);
-      providerObjectExists = false;
-      expect(providerObjectExists).toBe(false);
+      expect(claim?.storagePath).toBe(path);
+      await expect(repository.beginAiContentAttachmentDeletionAttempt({
+        jobId,
+        leaseToken: claim!.leaseToken,
+        ...BUDGET,
+      })).resolves.toBe(1);
+      expect(providerObjects.delete(claim!.storagePath)).toBe(true);
+      await expect(repository.completeAiContentAttachmentDeletion({
+        jobId,
+        leaseToken: claim!.leaseToken,
+        outcome: "deleted",
+        ...BUDGET,
+      })).resolves.toBe(true);
+      expect(providerObjects.has(path)).toBe(false);
+    });
+
+    it("uses the workspace cascade trigger and preserves the live-token due boundary", async () => {
+      const workspaceId = "21000000-0000-4000-8000-000000000021";
+      const brandId = "31000000-0000-4000-8000-000000000031";
+      const generationId = "41000000-0000-4000-8000-000000000041";
+      const sessionId = "51000000-0000-4000-8000-000000000051";
+      const path = "gc/workspace-cascade.png";
+      await pool.query(
+        `insert into workspaces (id, name, slug, created_by_user_id)
+         values ($1, 'Disposable GC Workspace', 'disposable-gc-workspace', $2)`,
+        [workspaceId, USER_ID],
+      );
+      await pool.query(
+        `insert into workspace_members (workspace_id, user_id, role)
+         values ($1, $2, 'owner')`,
+        [workspaceId, USER_ID],
+      );
+      await pool.query(
+        `insert into brands (id, workspace_id, name, created_by_user_id)
+         values ($1, $2, 'Disposable GC Brand', $3)`,
+        [brandId, workspaceId, USER_ID],
+      );
+      await pool.query(
+        `insert into ai_content_generations (
+           id, workspace_id, brand_id, type, title, status, analysis_idempotency_key
+         ) values ($1, $2, $3, 'card_news', 'Workspace cascade', 'draft', 'workspace-cascade')`,
+        [generationId, workspaceId, brandId],
+      );
+      const tokenExpiresAt = await insertLiveUploadSession(pool, {
+        id: sessionId,
+        generationId,
+        workspaceId,
+        brandId,
+        userId: USER_ID,
+        nonce: "61000000-0000-4000-8000-000000000061",
+        path,
+        expiresInSeconds: 300,
+      });
+
+      await pool.query("delete from workspaces where id = $1", [workspaceId]);
+
+      const triggered = await pool.query(
+        `select storage_path, reason, next_attempt_at,
+                next_attempt_at >= $2::timestamptz as due_not_early
+           from ai_content_attachment_deletion_jobs
+          where workspace_id = $1 and storage_path = $3`,
+        [workspaceId, tokenExpiresAt, path],
+      );
+      expect(triggered.rows).toEqual([{
+        storage_path: path,
+        reason: "upload_session_pending",
+        next_attempt_at: expect.any(Date),
+        due_not_early: true,
+      }]);
+      const repository = createAiContentAttachmentGcRepository(pool);
+      await expect(repository.claimAiContentAttachmentDeletionJobs({
+        workerId: "gc-workspace-before-expiry",
+        batchSize: 1,
+        leaseSeconds: 60,
+        ...BUDGET,
+      })).resolves.toEqual([]);
     });
   },
 );
