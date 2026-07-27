@@ -517,8 +517,8 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
            artifact_manifest_json, manifest_url
          ) values (
            $1, $2, $3, $4, 1, 'completed',
-           jsonb_build_object('assets', jsonb_build_array(jsonb_build_object('url', $5))),
-           $5
+           jsonb_build_object('assets', jsonb_build_array(jsonb_build_object('url', $5::text))),
+           $5::text
          )`,
         [
           "90000000-0000-4000-8000-000000000009",

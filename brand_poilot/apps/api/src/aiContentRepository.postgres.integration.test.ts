@@ -127,6 +127,35 @@ function upload(fileName: string) {
   };
 }
 
+async function observeBackendBlockedBy(
+  pool: Pool,
+  blockerPid: number,
+  operationState: Promise<"completed" | "rejected">,
+  timeoutMs = 5_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const blocked = await pool.query(
+      `select exists (
+         select 1
+           from pg_stat_activity
+          where datname = current_database()
+            and pid <> $1
+            and $1 = any(pg_blocking_pids(pid))
+       ) as blocked`,
+      [blockerPid],
+    );
+    if (blocked.rows[0]?.blocked === true) return true;
+    if (await Promise.race([
+      operationState,
+      new Promise<"poll">((resolve) => setTimeout(() => resolve("poll"), 20)),
+    ]) !== "poll") {
+      return false;
+    }
+  }
+  return false;
+}
+
 describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
   "AI content attachment lifecycle on PostgreSQL 16 real migrations",
   () => {
@@ -332,7 +361,7 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         await pool.query(
           `truncate table ai_content_attachment_deletion_jobs,
                           ai_content_generation_outputs,
-                          ai_content_generation_jobs`,
+                          ai_content_generation_jobs cascade`,
         );
         await seedFailedOutput(retryableUntilSql);
         await expect(repository.retryAiContentOutput({
@@ -474,6 +503,9 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
           "select id from ai_content_generations where id = $1 for update",
           [GENERATION_ID],
         );
+        const blockerPid = Number((await gcClient.query(
+          "select pg_backend_pid() as pid",
+        )).rows[0]?.pid);
 
         retry = repository.retryAiContentOutput({
           workspaceId: WORKSPACE_ID,
@@ -484,27 +516,11 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
           () => "completed" as const,
           () => "rejected" as const,
         );
-        let observedGenerationLockWait = false;
-        for (let attempt = 0; attempt < 100; attempt += 1) {
-          const waiting = await gcClient.query(
-            `select count(*)::integer as count
-               from pg_stat_activity
-              where datname = current_database()
-                and pid <> pg_backend_pid()
-                and wait_event_type = 'Lock'
-                and query like '%retryable_until > transaction_timestamp()%'`,
-          );
-          if (Number(waiting.rows[0]?.count ?? 0) > 0) {
-            observedGenerationLockWait = true;
-            break;
-          }
-          if (await Promise.race([
-            retryState,
-            new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), 20)),
-          ]) !== "waiting") {
-            break;
-          }
-        }
+        const observedGenerationLockWait = await observeBackendBlockedBy(
+          pool,
+          blockerPid,
+          retryState,
+        );
         expect(observedGenerationLockWait).toBe(true);
 
         await gcClient.query(
@@ -872,6 +888,9 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
           "select id from ai_content_generations where id = $1 for update",
           [GENERATION_ID],
         );
+        const blockerPid = Number((await gate.query(
+          "select pg_backend_pid() as pid",
+        )).rows[0]?.pid);
         completion = operation === "complete"
           ? repository.completeAiContentJob({
               jobId: JOB_ID_1,
@@ -894,27 +913,11 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
           () => "completed" as const,
           () => "rejected" as const,
         );
-        let observedLockWait = false;
-        for (let attempt = 0; attempt < 100; attempt += 1) {
-          const waiting = await gate.query(
-            `select count(*)::integer as count
-               from pg_stat_activity
-              where datname = current_database()
-                and pid <> pg_backend_pid()
-                and wait_event_type = 'Lock'
-                and query like '%from ai_content_generations%for update%'`,
-          );
-          if (Number(waiting.rows[0]?.count ?? 0) > 0) {
-            observedLockWait = true;
-            break;
-          }
-          if (await Promise.race([
-            completionState,
-            new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), 20)),
-          ]) !== "waiting") {
-            break;
-          }
-        }
+        const observedLockWait = await observeBackendBlockedBy(
+          pool,
+          blockerPid,
+          completionState,
+        );
         expect(observedLockWait).toBe(true);
         for (;;) {
           const expired = await gate.query(
@@ -971,6 +974,9 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
           "select id from ai_content_generation_jobs where id = $1 for update",
           [JOB_ID_1],
         );
+        const blockerPid = Number((await gate.query(
+          "select pg_backend_pid() as pid",
+        )).rows[0]?.pid);
         heartbeat = repository.heartbeatAiContentJob({
           jobId: JOB_ID_1,
           workerId: "heartbeat-worker",
@@ -981,29 +987,12 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
           () => "completed" as const,
           () => "rejected" as const,
         );
-        let observedLockWait = false;
-        for (let attempt = 0; attempt < 100; attempt += 1) {
-          const waiting = await gate.query(
-            `select count(*)::integer as count
-               from pg_stat_activity
-              where datname = current_database()
-                and pid <> pg_backend_pid()
-                and wait_event_type = 'Lock'
-                and query like '%worker_id = $2%for update%'`,
-          );
-          if (Number(waiting.rows[0]?.count ?? 0) > 0) {
-            observedLockWait = true;
-            break;
-          }
-          if (await Promise.race([
-            heartbeatState,
-            new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), 20)),
-          ]) !== "waiting") {
-            break;
-          }
-        }
+        const observedLockWait = await observeBackendBlockedBy(
+          pool,
+          blockerPid,
+          heartbeatState,
+        );
         expect(observedLockWait).toBe(true);
-        await new Promise((resolve) => setTimeout(resolve, 200));
         const releaseClock = await gate.query("select clock_timestamp() as at");
         const releasedAt = new Date(releaseClock.rows[0]?.at).getTime();
         await gate.query("COMMIT");

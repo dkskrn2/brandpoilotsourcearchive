@@ -158,7 +158,7 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")("AiContentSubje
   });
 
   it("stores the same URL independently for concurrent generation-scoped requests", async () => {
-    await pool.query("truncate table ai_content_subject_images, ai_content_subject_analyses");
+    await pool.query("truncate table ai_content_subject_images, ai_content_subject_analyses cascade");
     const repository = createAiContentSubjectRepository(pool);
     const input = {
       workspaceId: WORKSPACE_ID,
@@ -181,7 +181,7 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")("AiContentSubje
   });
 
   it("serializes concurrent duplicate appeal regeneration keys", async () => {
-    await pool.query("truncate table ai_content_subject_images, ai_content_subject_appeal_regeneration_keys, ai_content_subject_analyses");
+    await pool.query("truncate table ai_content_subject_images, ai_content_subject_appeal_regeneration_keys, ai_content_subject_analyses cascade");
     const analysisResult = {
       contractVersion: "subject-analysis-result.v2",
       phase: "analysis",
@@ -191,7 +191,23 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")("AiContentSubje
       voc: [],
       alternatives: [],
       barriers: [],
-      productProfile: { category: "Productivity" },
+      productProfile: {
+        name: "Product",
+        category: "Productivity",
+        specifications: [],
+        materials: [],
+        options: [],
+        price: "Not verified",
+        discountsAndPromotions: [],
+        shipping: [],
+        returns: [],
+        functions: [],
+        useContexts: [],
+        purchaseBarriers: [],
+        reviewPatterns: { recurringSatisfaction: [], recurringComplaints: [] },
+        productImageCandidates: [],
+        detailImageCandidates: [],
+      },
       serviceProfile: null,
       serviceSubtype: null,
       sourceGaps: [],
