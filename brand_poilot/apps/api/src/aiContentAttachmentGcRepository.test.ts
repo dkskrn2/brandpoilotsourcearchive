@@ -486,7 +486,7 @@ describe("AiContentAttachmentGcRepository", () => {
       jobId: JOB_ID,
       leaseToken: LEASE,
       errorCategory: "transient",
-      errorMessage: "provider timeout access_token=persisted-secret",
+      errorMessage: 'provider timeout {"access_token":"persisted-secret"}',
       retryDelaySeconds: 13,
       ...BUDGET,
     })).resolves.toBe("retry");
@@ -504,7 +504,7 @@ describe("AiContentAttachmentGcRepository", () => {
     expect(query).toContain("$3 in ('authorization','authentication','permanent')");
     expect(query).toContain("'dead_letter'");
     const firstFailure = pool.params[pool.sql.findIndex((sql) => sql.includes("case when"))];
-    expect(firstFailure?.[3]).toBe("provider timeout access_token=[REDACTED]");
+    expect(firstFailure?.[3]).toBe('provider timeout {"access_token":"[REDACTED]"}');
   });
 
   it("reports eligible and held queues separately using the same hold predicate", async () => {
@@ -575,7 +575,35 @@ describe("AiContentAttachmentGcRepository", () => {
   });
 
   it.each([
+    ['{"access_token":"supersecret"}', '{"access_token":"[REDACTED]"}'],
+    ['{ "refreshToken" : "secret" }', '{ "refreshToken" : "[REDACTED]" }'],
+    ['{"authorization":"Bearer secret"}', '{"authorization":"[REDACTED]"}'],
+    ['{\n  "access_token" : "secret-value"\n}', '{\n  "access_token" : "[REDACTED]"\n}'],
+    ['{"access_token":"secret\\\"escaped-value"}', '{"access_token":"[REDACTED]"}'],
+    [
+      '{"access_token":"secret","message":"keep this diagnostic"}',
+      '{"access_token":"[REDACTED]","message":"keep this diagnostic"}',
+    ],
+    ["access_token = 'secret value'", "access_token = '[REDACTED]'"],
+    ['nonce: "abc 123"', 'nonce: "[REDACTED]"'],
+    ["token was abc123", "token was [REDACTED]"],
+    ["token rejected: abc123", "token rejected: [REDACTED]"],
+  ])("redacts quoted or diagnostic credential value in %s", (message, expected) => {
+    expect(redactAiContentAttachmentGcError(message)).toBe(expected);
+  });
+
+  it("bounds a long escaped quoted credential without consuming adjacent diagnostics", () => {
+    const message = `{"access_token":"${"part\\\"".repeat(2_000)}secret"} status=failed`;
+    const redacted = redactAiContentAttachmentGcError(message, 80);
+
+    expect(redacted).toBe('{"access_token":"[REDACTED]"} status=failed');
+    expect(redacted.length).toBeLessThanOrEqual(80);
+  });
+
+  it.each([
     "upload token expired after provider timeout",
+    "token was rejected",
+    "token rejected by provider",
     "auth request failed before provider call",
     "client secret rotation failed",
     "authentication request timed out",

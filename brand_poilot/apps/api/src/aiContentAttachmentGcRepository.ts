@@ -239,6 +239,24 @@ export function redactAiContentAttachmentGcError(value: unknown, maximum = MAX_E
   const diagnosticWord =
     String.raw`(?:expired|invalid|missing|required|request|rotation|verification|failed|failure|unavailable|rejected|timeout|timed|mismatch|not|was|is|has|could)`;
   return raw
+    // The quoted scalar alternatives are disjoint (escape or non-quote), so
+    // escaped provider payloads are consumed without a backtracking wildcard.
+    .replace(
+      new RegExp(`("(?:${credentialKey})"\\s*:\\s*)"(?:\\\\.|[^"\\\\])*"`, "gi"),
+      '$1"[REDACTED]"',
+    )
+    .replace(
+      new RegExp(`('(?:${credentialKey})'\\s*:\\s*)'(?:\\\\.|[^'\\\\])*'`, "gi"),
+      "$1'[REDACTED]'",
+    )
+    .replace(
+      new RegExp(`\\b(${credentialKey})(\\s*[:=]\\s*)"(?:\\\\.|[^"\\\\])*"`, "gi"),
+      '$1$2"[REDACTED]"',
+    )
+    .replace(
+      new RegExp(`\\b(${credentialKey})(\\s*[:=]\\s*)'(?:\\\\.|[^'\\\\])*'`, "gi"),
+      "$1$2'[REDACTED]'",
+    )
     .replace(/\b(https?:\/\/[^\s?#]+)\?[^\s#]*/gi, "$1?[REDACTED]")
     .replace(
       /\b(Authorization)(\s*[:=]\s*)(?:(?:Bearer|Basic|Digest)\s+)?[^\s,;]+/gi,
@@ -250,11 +268,19 @@ export function redactAiContentAttachmentGcError(value: unknown, maximum = MAX_E
       "$1[REDACTED]",
     )
     .replace(
-      new RegExp(`\\b(${credentialKey})(\\s*[:=]\\s*)[^\\s,;&]+`, "gi"),
+      new RegExp(`\\b(${credentialKey})(\\s+${diagnosticWord}\\s*[:=]\\s*)[^\\s,;]+`, "gi"),
       "$1$2[REDACTED]",
     )
     .replace(
-      new RegExp(`\\b(${credentialKey})(\\s+)(?!${diagnosticWord}\\b)[^\\s,;]+`, "gi"),
+      new RegExp(`\\b(${credentialKey})(\\s+(?:was|is)\\s+)(?!${diagnosticWord}\\b)[^\\s,;]+`, "gi"),
+      "$1$2[REDACTED]",
+    )
+    .replace(
+      new RegExp(`\\b(${credentialKey})(\\s*[:=]\\s*)(?!["'])[^\\s,;&]+`, "gi"),
+      "$1$2[REDACTED]",
+    )
+    .replace(
+      new RegExp(`\\b(${credentialKey})(\\s+)(?!${diagnosticWord}\\b|[:=])[^\\s,;]+`, "gi"),
       "$1$2[REDACTED]",
     )
     .slice(0, Math.max(1, maximum));
