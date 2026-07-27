@@ -5,8 +5,9 @@ import type {
   AiContentWizardStep,
   AppealSnapshot,
   AudienceSnapshot,
-  GenerationAttachment,
+  GenerationAttachmentUpdate,
   GenerationBrief,
+  GenerationBriefUpdate,
   SubjectAnalysis,
   SubjectAppeal,
   SubjectTarget,
@@ -157,9 +158,14 @@ export function useAiContentDraft(initialType: AiContentType | null, brandColor 
       }));
     },
     setSubjectInput,
-    setSubjectAttachments: (subjectAttachments: GenerationAttachment[]) => {
+    setSubjectAttachments: (update: GenerationAttachmentUpdate) => {
       setSubjectAnalysis(null);
-      setDraft((current) => ({ ...clearSubjectSelection(current), subjectAttachments: [...subjectAttachments] }));
+      setDraft((current) => {
+        const subjectAttachments = typeof update === "function"
+          ? update(current.subjectAttachments ?? [])
+          : update;
+        return { ...clearSubjectSelection(current), subjectAttachments: [...subjectAttachments] };
+      });
     },
     setAnalysisSource: (analysisSource: AiContentDraft["analysisSource"]) => patch({
       analysisSource,
@@ -257,7 +263,19 @@ export function useAiContentDraft(initialType: AiContentType | null, brandColor 
       referenceIds.splice(to, 0, moved);
       return { ...current, referenceIds };
     }),
-    setBrief: (brief: GenerationBrief) => patch({ brief: { ...brief, attachments: [...brief.attachments], outputDirections: [...brief.outputDirections] } }),
+    setBrief: (update: GenerationBriefUpdate) => setDraft((current) => {
+      const brief = typeof update === "function"
+        ? update(current.brief ?? emptyBrief(brandColor))
+        : update;
+      return {
+        ...current,
+        brief: {
+          ...brief,
+          attachments: [...brief.attachments],
+          outputDirections: [...brief.outputDirections],
+        },
+      };
+    }),
     setSelectedColor: (selectedColor: string) => setDraft((current) => ({ ...current, brief: { ...(current.brief ?? emptyBrief(brandColor)), selectedColor } })),
     goNext: () => setStep((current) => Math.min(5, current + 1) as WizardStep),
     goBack: () => setStep((current) => Math.max(1, current - 1) as WizardStep),

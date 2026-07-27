@@ -120,7 +120,7 @@ export function AiContentWizardPage({ gateway = aiContentApiGateway, brandId = D
       await refreshUsage();
       navigate(`/ai-content/${generation.id}`);
     } catch (error) {
-      setSubmitError(attachmentLifecycleGuidance(error) ?? "콘텐츠 생성을 시작하지 못했습니다. 다시 시도해 주세요.");
+      setSubmitError(attachmentLifecycleGuidance(error)?.message ?? "콘텐츠 생성을 시작하지 못했습니다. 다시 시도해 주세요.");
     } finally {
       setSubmitting(false);
     }

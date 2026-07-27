@@ -21,4 +21,14 @@ describe("attachmentErrorGuidance", () => {
   it("does not misclassify an unrelated error as a lifecycle error", () => {
     expect(attachmentLifecycleGuidance(new Error("network_failed"))).toBeNull();
   });
+
+  it.each([
+    ["ai_content_attachments_locked", "new_generation", false],
+    ["ai_content_upload_session_expired", "reselect", false],
+    ["ai_content_attachment_storage_unavailable", "retry", true],
+  ] as const)("classifies %s with its allowed action", (errorCode, action, retryable) => {
+    expect(attachmentLifecycleGuidance(new ApiRequestError({ status: 409, errorCode }))).toEqual(
+      expect.objectContaining({ action, retryable }),
+    );
+  });
 });

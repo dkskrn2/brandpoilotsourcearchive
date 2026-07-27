@@ -6,6 +6,7 @@ export interface FileUploadItem {
   name: string;
   size: number;
   status?: "selected" | "uploading" | "uploaded" | "failed";
+  retryable?: boolean;
 }
 
 interface FileUploadButtonProps {
@@ -80,34 +81,40 @@ export function FileUploadButton({ inputLabel, buttonLabel, accept, multiple = f
           {items.map((item) => (
             <li key={item.id}>
               <span className="file-upload__name" title={item.name}>{item.name}</span>
-              <span className="file-upload__meta">
+              <span
+                className="file-upload__meta"
+                role={item.status === "failed" ? "status" : undefined}
+                aria-live={item.status === "failed" ? "polite" : undefined}
+              >
                 {formatFileSize(item.size)}
                 {item.status ? ` · ${statusLabels[item.status]}` : ""}
               </span>
-              {onRetry && item.status === "failed" ? (
-                <button
-                  type="button"
-                  className="icon-button file-upload__retry"
-                  aria-label={`${item.name} 다시 업로드`}
-                  title="다시 업로드"
-                  disabled={disabled}
-                  onClick={() => onRetry(item.id)}
-                >
-                  <RotateCcw size={15} aria-hidden="true" />
-                </button>
-              ) : null}
-              {onRemove ? (
-                <button
-                  type="button"
-                  className="icon-button file-upload__remove"
-                  aria-label={`${item.name} 삭제`}
-                  title="파일 삭제"
-                  disabled={disabled || item.status === "uploading"}
-                  onClick={() => onRemove(item.id)}
-                >
-                  <Trash2 size={15} aria-hidden="true" />
-                </button>
-              ) : null}
+              {onRetry || onRemove ? <span className="file-upload__actions">
+                {onRetry && item.status === "failed" && item.retryable !== false ? (
+                  <button
+                    type="button"
+                    className="icon-button file-upload__retry"
+                    aria-label={`${item.name} 다시 업로드`}
+                    title="다시 업로드"
+                    disabled={disabled}
+                    onClick={() => onRetry(item.id)}
+                  >
+                    <RotateCcw size={15} aria-hidden="true" />
+                  </button>
+                ) : null}
+                {onRemove ? (
+                  <button
+                    type="button"
+                    className="icon-button file-upload__remove"
+                    aria-label={`${item.name} 삭제`}
+                    title="파일 삭제"
+                    disabled={disabled || item.status === "uploading"}
+                    onClick={() => onRemove(item.id)}
+                  >
+                    <Trash2 size={15} aria-hidden="true" />
+                  </button>
+                ) : null}
+              </span> : null}
             </li>
           ))}
         </ul>

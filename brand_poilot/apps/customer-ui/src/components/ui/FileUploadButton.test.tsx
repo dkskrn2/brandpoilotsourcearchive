@@ -84,6 +84,9 @@ describe("FileUploadButton", () => {
     );
 
     expect(screen.getByText(/업로드 실패/)).toBeVisible();
+    expect(screen.getByText(/업로드 실패/)).toHaveAttribute("role", "status");
+    expect(screen.getByText(/업로드 실패/)).toHaveAttribute("aria-live", "polite");
+    expect(screen.getByRole("button", { name: "product.png 다시 업로드" }).parentElement).toHaveClass("file-upload__actions");
     await userEvent.click(screen.getByRole("button", { name: "product.png 다시 업로드" }));
     expect(onRetry).toHaveBeenCalledWith("asset-1");
   });

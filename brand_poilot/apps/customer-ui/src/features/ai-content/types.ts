@@ -136,7 +136,14 @@ export interface GenerationAttachment {
   storageUrl?: string;
   storagePath?: string;
   uploadStatus?: "pending" | "failed" | "confirmed";
+  uploadAction?: AttachmentLifecycleAction;
+  uploadRetryable?: boolean;
 }
+
+export type AttachmentLifecycleAction = "retry" | "reselect" | "new_generation" | "none";
+export type GenerationAttachmentUpdate =
+  | GenerationAttachment[]
+  | ((current: GenerationAttachment[]) => GenerationAttachment[]);
 
 export interface GenerationBrief {
   purpose: "sales" | "awareness" | "information" | "event";
@@ -149,6 +156,10 @@ export interface GenerationBrief {
   outputCount: 1 | 2 | 3;
   outputDirections: string[];
 }
+
+export type GenerationBriefUpdate =
+  | GenerationBrief
+  | ((current: GenerationBrief) => GenerationBrief);
 
 export interface AiContentDraft {
   type: AiContentType | null;

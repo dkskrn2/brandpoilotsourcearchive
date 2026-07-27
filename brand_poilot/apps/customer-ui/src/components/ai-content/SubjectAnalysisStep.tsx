@@ -4,6 +4,7 @@ import type {
   AiContentDraft,
   AiContentGateway,
   GenerationAttachment,
+  GenerationAttachmentUpdate,
   SubjectAnalysis,
   SubjectType,
 } from "../../features/ai-content/types";
@@ -18,7 +19,7 @@ interface Props {
   analysis: SubjectAnalysis | null;
   onSubjectType(value: SubjectType): void;
   onSubjectInput(value: Partial<AiContentDraft["subjectInput"]>): void;
-  onSubjectAttachments(value: GenerationAttachment[]): void;
+  onSubjectAttachments(update: GenerationAttachmentUpdate): void;
   onPrepareAnalysis(): Promise<{ generationId: string; attachments: GenerationAttachment[] }>;
   onAnalysis(value: SubjectAnalysis): void;
 }
@@ -96,7 +97,7 @@ export function SubjectAnalysisStep({
       setError(current.errorMessage ?? "분석을 완료하지 못했습니다.");
       setRunStatus("failure");
     } catch (cause) {
-      setError(attachmentLifecycleGuidance(cause) ?? (cause instanceof Error ? cause.message : "분석을 완료하지 못했습니다."));
+      setError(attachmentLifecycleGuidance(cause)?.message ?? (cause instanceof Error ? cause.message : "분석을 완료하지 못했습니다."));
       setRunStatus("failure");
     }
   }

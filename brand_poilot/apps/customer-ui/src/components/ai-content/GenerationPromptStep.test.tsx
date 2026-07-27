@@ -17,7 +17,17 @@ describe("GenerationPromptStep", () => {
     const gateway = createMockAiContentGateway();
     function Harness() {
       const [draft, setDraft] = useState(createInitialAiContentDraft("marketing"));
-      return <GenerationPromptStep brandId="brand-demo" gateway={gateway} draft={draft} onBrief={(brief) => { onBrief(brief); setDraft((current) => ({ ...current, brief })); }} generationId={null} />;
+      return <GenerationPromptStep
+        brandId="brand-demo"
+        gateway={gateway}
+        draft={draft}
+        onBrief={(update) => setDraft((current) => {
+          const brief = typeof update === "function" ? update(current.brief!) : update;
+          onBrief(brief);
+          return { ...current, brief };
+        })}
+        generationId={null}
+      />;
     }
     render(<Harness />);
     await user.selectOptions(screen.getByLabelText("생성 결과 수"), "3");
@@ -41,7 +51,10 @@ describe("GenerationPromptStep", () => {
         brandId="brand-demo"
         gateway={gateway}
         draft={draft}
-        onBrief={(brief) => setDraft((current) => ({ ...current, brief }))}
+        onBrief={(update) => setDraft((current) => ({
+          ...current,
+          brief: typeof update === "function" ? update(current.brief!) : update,
+        }))}
         generationId="generation-1"
       />;
     }
@@ -54,6 +67,7 @@ describe("GenerationPromptStep", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("첨부가 잠겼습니다. 새 콘텐츠 생성을 시작해 주세요.");
     expect(screen.getByText("locked.png")).toBeVisible();
-    expect(screen.getByRole("button", { name: "locked.png 다시 업로드" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "locked.png 다시 업로드" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "새 콘텐츠 생성" })).toHaveAttribute("href", "/ai-content/new");
   });
 });

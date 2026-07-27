@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
-import type { AiContentGateway } from "../../features/ai-content/types";
+import type { AiContentGateway, GenerationAttachment, GenerationAttachmentUpdate } from "../../features/ai-content/types";
 import { ApiRequestError } from "../../lib/apiClient";
 import { AiContentAttachmentUploader } from "./AiContentAttachmentUploader";
 
@@ -17,6 +17,10 @@ function gateway(overrides: Partial<AiContentGateway> = {}) {
   } as unknown as AiContentGateway;
 }
 
+function applyAttachmentUpdate(current: GenerationAttachment[], update: GenerationAttachmentUpdate) {
+  return typeof update === "function" ? update(current) : update;
+}
+
 function renderControlled(api: AiContentGateway, initial: Parameters<typeof AiContentAttachmentUploader>[0]["attachments"] = []) {
   const onChange = vi.fn();
   function Harness() {
@@ -26,9 +30,12 @@ function renderControlled(api: AiContentGateway, initial: Parameters<typeof AiCo
       brandId="brand-1"
       generationId="generation-1"
       attachments={attachments}
-      onChange={(next) => {
-        onChange(next);
-        setAttachments(next);
+      onChange={(update) => {
+        setAttachments((current) => {
+          const next = applyAttachmentUpdate(current, update);
+          onChange(next);
+          return next;
+        });
       }}
     />;
   }
@@ -38,8 +45,7 @@ function renderControlled(api: AiContentGateway, initial: Parameters<typeof AiCo
 describe("AiContentAttachmentUploader", () => {
   it("uploads and keeps only the confirmed attachment", async () => {
     const api = gateway();
-    const onChange = vi.fn();
-    render(<AiContentAttachmentUploader gateway={api} brandId="brand-1" generationId="generation-1" attachments={[]} onChange={onChange} />);
+    const { onChange } = renderControlled(api);
 
     const file = new File(["image"], "product.png", { type: "image/png" });
     expect(screen.getByRole("button", { name: "제품 이미지 추가" })).toBeVisible();
@@ -68,8 +74,7 @@ describe("AiContentAttachmentUploader", () => {
         uploads.set(attachment.fileName, resolve);
       })),
     } as unknown as AiContentGateway;
-    const onChange = vi.fn();
-    render(<AiContentAttachmentUploader gateway={api} brandId="brand-1" generationId="generation-1" attachments={[]} onChange={onChange} />);
+    const { onChange } = renderControlled(api);
 
     fireEvent.change(screen.getByLabelText("제품 이미지"), {
       target: { files: [new File(["product"], "product.png", { type: "image/png" })] },
@@ -103,9 +108,35 @@ describe("AiContentAttachmentUploader", () => {
       storageUrl: "https://blob.example/product.png",
     });
     await waitFor(() => expect(onChange).toHaveBeenLastCalledWith([
-      expect.objectContaining({ fileName: "person.png" }),
       expect.objectContaining({ fileName: "product.png" }),
+      expect.objectContaining({ fileName: "person.png" }),
     ]));
+  });
+
+  it("atomically merges same-tick completions from separate role uploaders", async () => {
+    const completions = new Map<string, (attachment: any) => void>();
+    const api = gateway({
+      uploadAttachment: vi.fn(async (_brandId, _generationId, attachment) => new Promise<GenerationAttachment>((resolve) => {
+        completions.set(attachment.fileName, resolve);
+      })),
+    });
+    function Harness() {
+      const [attachments, setAttachments] = useState<Parameters<typeof AiContentAttachmentUploader>[0]["attachments"]>([]);
+      const onChange = (update: any) => setAttachments((current) => typeof update === "function" ? update(current) : update);
+      return <>
+        <AiContentAttachmentUploader gateway={api} brandId="brand-1" generationId="generation-1" attachments={attachments} allowedRoles={["product"]} onChange={onChange} />
+        <AiContentAttachmentUploader gateway={api} brandId="brand-1" generationId="generation-1" attachments={attachments} allowedRoles={["document"]} onChange={onChange} />
+      </>;
+    }
+    render(<Harness />);
+    await userEvent.upload(screen.getByLabelText("제품 이미지"), new File(["p"], "product.png", { type: "image/png" }));
+    await userEvent.upload(screen.getByLabelText("문서"), new File(["d"], "brief.md", { type: "text/markdown" }));
+    await waitFor(() => expect(completions.size).toBe(2));
+    completions.get("product.png")?.({ id: "product-server", role: "product", fileName: "product.png", mimeType: "image/png", size: 1, storageUrl: "https://blob/p", storagePath: "p" });
+    completions.get("brief.md")?.({ id: "document-server", role: "document", fileName: "brief.md", mimeType: "text/markdown", size: 1, storageUrl: "https://blob/d", storagePath: "d" });
+    await waitFor(() => expect(screen.getByText("product.png")).toBeVisible());
+    expect(screen.getByText("brief.md")).toBeVisible();
+    expect(screen.queryByText("업로드 중")).not.toBeInTheDocument();
   });
 
   it("reserves in-flight uploads against the shared five-file limit", async () => {
@@ -124,8 +155,7 @@ describe("AiContentAttachmentUploader", () => {
       storagePath: `stored/existing-${index}.png`,
       storageUrl: `https://blob.example/existing-${index}.png`,
     }));
-    const onChange = vi.fn();
-    render(<AiContentAttachmentUploader gateway={api} brandId="brand-1" generationId="generation-1" attachments={existing} onChange={onChange} />);
+    const { onChange } = renderControlled(api, existing);
 
     fireEvent.change(screen.getByLabelText("제품 이미지"), {
       target: { files: [new File(["product"], "product.png", { type: "image/png" })] },
@@ -179,10 +209,10 @@ describe("AiContentAttachmentUploader", () => {
   });
 
   it.each([
-    ["ai_content_upload_session_expired", "업로드 시간이 만료되었습니다. 파일을 다시 선택해 주세요."],
-    ["ai_content_attachments_locked", "첨부가 잠겼습니다. 새 콘텐츠 생성을 시작해 주세요."],
-    ["ai_content_attachment_storage_unavailable", "저장소 연결이 원활하지 않습니다. 현재 파일은 유지됩니다. 다시 시도해 주세요."],
-  ])("keeps the failed file and maps %s guidance", async (errorCode, message) => {
+    ["ai_content_upload_session_expired", "업로드 시간이 만료되었습니다. 파일을 다시 선택해 주세요.", false],
+    ["ai_content_attachments_locked", "첨부가 잠겼습니다. 새 콘텐츠 생성을 시작해 주세요.", false],
+    ["ai_content_attachment_storage_unavailable", "저장소 연결이 원활하지 않습니다. 현재 파일은 유지됩니다. 다시 시도해 주세요.", true],
+  ])("keeps the failed file and maps %s guidance", async (errorCode, message, retryable) => {
     const api = gateway({
       uploadAttachment: vi.fn(async () => {
         throw new ApiRequestError({ status: 503, errorCode });
@@ -198,7 +228,39 @@ describe("AiContentAttachmentUploader", () => {
       expect.objectContaining({ file, fileName: "product.png", uploadStatus: "failed" }),
     ]);
     expect(screen.getByText("product.png")).toBeVisible();
-    expect(screen.getByRole("button", { name: "product.png 다시 업로드" })).toBeVisible();
+    if (retryable) expect(screen.getByRole("button", { name: "product.png 다시 업로드" })).toBeVisible();
+    else expect(screen.queryByRole("button", { name: "product.png 다시 업로드" })).not.toBeInTheDocument();
+    if (errorCode === "ai_content_attachments_locked") {
+      expect(screen.getByRole("link", { name: "새 콘텐츠 생성" })).toHaveAttribute("href", "/ai-content/new");
+    }
+  });
+
+  it("counts failed visible Files toward the five-item memory bound", async () => {
+    const failed = Array.from({ length: 5 }, (_, index) => ({
+      id: `failed-${index}`, role: "product" as const, fileName: `failed-${index}.png`,
+      mimeType: "image/png", size: 5,
+      file: new File(["image"], `failed-${index}.png`, { type: "image/png" }),
+      uploadStatus: "failed" as const,
+    }));
+    const api = gateway();
+    renderControlled(api, failed);
+    await userEvent.upload(screen.getByLabelText("제품 이미지"), new File(["new"], "new.png", { type: "image/png" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("첨부 파일은 최대 5개입니다.");
+    expect(api.uploadAttachment).not.toHaveBeenCalled();
+    expect(screen.getAllByText(/^failed-\d\.png$/)).toHaveLength(5);
+  });
+
+  it("reselecting the same failed file replaces its row and starts a fresh gateway session", async () => {
+    const file = new File(["image"], "product.png", { type: "image/png" });
+    const api = gateway();
+    renderControlled(api, [{
+      id: "failed-original", role: "product", fileName: file.name, mimeType: file.type,
+      size: file.size, file, uploadStatus: "failed",
+    }]);
+    await userEvent.upload(screen.getByLabelText("제품 이미지"), file);
+    expect(api.uploadAttachment).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "product.png 다시 업로드" })).not.toBeInTheDocument();
+    expect(screen.getAllByText("product.png")).toHaveLength(1);
   });
 
   it("rejects an active duplicate but retries a failed same file with a fresh gateway call", async () => {
@@ -270,8 +332,7 @@ describe("AiContentAttachmentUploader", () => {
       storagePath: `stored/existing-${index}.png`,
       storageUrl: `https://blob.example/existing-${index}.png`,
     }));
-    const onChange = vi.fn();
-    render(<AiContentAttachmentUploader gateway={api} brandId="brand-1" generationId="generation-1" attachments={existing} onChange={onChange} />);
+    const { onChange } = renderControlled(api, existing);
 
     fireEvent.click(screen.getByRole("button", { name: "existing-0.png 삭제" }));
     expect(api.removeAttachment).toHaveBeenCalledWith("brand-1", "generation-1", "attachment-0");
@@ -327,17 +388,17 @@ describe("AiContentAttachmentUploader", () => {
       size: 10,
       file: new File(["local"], "local.md", { type: "text/markdown" }),
     };
-    const onChange = vi.fn();
+    const onChange = vi.fn((update: GenerationAttachmentUpdate) => applyAttachmentUpdate([local], update));
     render(<AiContentAttachmentUploader gateway={api} brandId="brand-1" generationId={null} attachments={[local]} onChange={onChange} />);
 
     fireEvent.click(screen.getByRole("button", { name: "local.md 삭제" }));
 
     expect(api.removeAttachment).not.toHaveBeenCalled();
-    expect(onChange).toHaveBeenCalledWith([]);
+    expect(applyAttachmentUpdate([local], onChange.mock.calls[0][0])).toEqual([]);
   });
 
   it("shows only allowed roles and accepts every analysis document format locally", async () => {
-    const onChange = vi.fn();
+    const onChange = vi.fn((update: GenerationAttachmentUpdate) => applyAttachmentUpdate([], update));
     const view = render(<AiContentAttachmentUploader
       gateway={gateway()}
       brandId="brand-1"
@@ -374,8 +435,14 @@ describe("AiContentAttachmentUploader", () => {
     }
 
     expect(onChange).toHaveBeenCalledTimes(documents.length);
-    expect(onChange).toHaveBeenCalledWith([expect.objectContaining({ fileName: "windows.md", mimeType: "text/markdown" })]);
-    expect(onChange).toHaveBeenCalledWith([expect.objectContaining({ fileName: "windows.csv", mimeType: "text/csv" })]);
+    expect(onChange.mock.calls.some(([update]) => (
+      applyAttachmentUpdate([], update)[0]?.fileName === "windows.md"
+      && applyAttachmentUpdate([], update)[0]?.mimeType === "text/markdown"
+    ))).toBe(true);
+    expect(onChange.mock.calls.some(([update]) => (
+      applyAttachmentUpdate([], update)[0]?.fileName === "windows.csv"
+      && applyAttachmentUpdate([], update)[0]?.mimeType === "text/csv"
+    ))).toBe(true);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

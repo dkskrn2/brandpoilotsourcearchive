@@ -2170,10 +2170,12 @@ details.panel > summary.panel-head::-webkit-details-marker {
 .file-upload__picker:focus-visible { outline: 3px solid rgba(37, 99, 235, .24); outline-offset: 2px; }
 .file-upload__picker.is-disabled { color: #98a2b3; background: #f2f4f7; cursor: not-allowed; }
 .file-upload__items { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.file-upload__items li { display: grid; grid-template-columns: minmax(0, 1fr) auto 30px; align-items: center; gap: 8px; min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-alt); }
+.file-upload__items li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-alt); }
 .file-upload__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-upload__meta { color: var(--muted); font-size: 11px; white-space: nowrap; }
-.file-upload__remove { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 5px; color: var(--muted); background: transparent; cursor: pointer; }
+.file-upload__actions { display: flex; align-items: center; gap: 2px; }
+.file-upload__retry, .file-upload__remove { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 5px; color: var(--muted); background: transparent; cursor: pointer; }
+.file-upload__retry:hover { color: var(--primary); background: var(--info-bg); }
 .file-upload__remove:hover { color: var(--danger); background: var(--danger-bg); }
 .upload-progress { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; }
 .upload-progress__track { height: 7px; overflow: hidden; border-radius: 7px; background: #e4e7ec; }
