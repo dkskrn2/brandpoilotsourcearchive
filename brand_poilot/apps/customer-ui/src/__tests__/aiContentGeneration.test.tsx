@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -98,6 +98,79 @@ describe("AiContentGenerationPage", () => {
 
     expect(await screen.findByText(/다시 생성 가능 기한: 2026년 7월 21일 오전 9:00/)).toBeVisible();
     expect(screen.getByRole("button", { name: /결과 2 다시 생성/ })).toBeInTheDocument();
+  });
+
+  it("automatically removes retry exactly at the mounted deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-20T00:00:00.000Z"));
+    const view = renderGeneration("generation-partial", false, (gateway) => {
+      const getGeneration = gateway.getGeneration.bind(gateway);
+      gateway.getGeneration = vi.fn(async (brandId, generationId) => ({
+        ...await getGeneration(brandId, generationId),
+        retryableUntil: "2026-07-20T00:00:01.000Z",
+      }));
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("button", { name: /결과 2 다시 생성/ })).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(999);
+    });
+    expect(screen.getByRole("button", { name: /결과 2 다시 생성/ })).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(screen.queryByRole("button", { name: /결과 2 다시 생성/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/첨부파일 보관 기간이 만료/)).toBeVisible();
+
+    view.unmount();
+  });
+
+  it("caps a distant deadline timer and cancels the pending timer on unmount", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-20T00:00:00.000Z"));
+    const setTimeoutSpy = vi.spyOn(window, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(window, "clearTimeout");
+    const view = renderGeneration("generation-partial", false, (gateway) => {
+      const getGeneration = gateway.getGeneration.bind(gateway);
+      gateway.getGeneration = vi.fn(async (brandId, generationId) => ({
+        ...await getGeneration(brandId, generationId),
+        retryableUntil: "2026-08-20T00:00:00.000Z",
+      }));
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 2_147_483_647);
+    const pendingTimer = setTimeoutSpy.mock.results.at(-1)?.value;
+    view.unmount();
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(pendingTimer);
+  });
+
+  it.each([null, "not-an-iso-timestamp"])("does not arm a deadline timer for %s retention", async (retryableUntil) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-20T00:00:00.000Z"));
+    const setTimeoutSpy = vi.spyOn(window, "setTimeout");
+    renderGeneration("generation-partial", false, (gateway) => {
+      const getGeneration = gateway.getGeneration.bind(gateway);
+      gateway.getGeneration = vi.fn(async (brandId, generationId) => ({
+        ...await getGeneration(brandId, generationId),
+        retryableUntil,
+      }));
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("button", { name: /결과 2 다시 생성/ })).toBeInTheDocument();
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
   });
 
   it.each([

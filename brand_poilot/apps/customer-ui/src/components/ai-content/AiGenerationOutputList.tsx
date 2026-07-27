@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "../ui/Badge";
 import type {
@@ -70,11 +70,43 @@ function isOutputDownloadComplete(status: import("../../features/ai-content/type
   return status === "completed";
 }
 
-function retryRetentionState(retryableUntil: string | null) {
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
+function retryRetentionState(retryableUntil: string | null, now: number) {
   if (retryableUntil === null) return { expired: false, deadline: null };
   const deadline = Date.parse(retryableUntil);
   if (!Number.isFinite(deadline)) return { expired: false, deadline: null };
-  return { expired: Date.now() >= deadline, deadline };
+  return { expired: now >= deadline, deadline };
+}
+
+function useRetryRetentionState(retryableUntil: string | null) {
+  const [, setClockTick] = useState(0);
+  const parsed = retryRetentionState(retryableUntil, Date.now());
+  const deadline = parsed.deadline;
+
+  useEffect(() => {
+    if (deadline === null || Date.now() >= deadline) return;
+    let active = true;
+    let timer: number | undefined;
+
+    const arm = () => {
+      if (!active) return;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        setClockTick((current) => current + 1);
+        return;
+      }
+      timer = window.setTimeout(arm, Math.min(remaining, MAX_TIMEOUT_MS));
+    };
+
+    arm();
+    return () => {
+      active = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [deadline]);
+
+  return retryRetentionState(retryableUntil, Date.now());
 }
 
 function localizedRetryDeadline(deadline: number) {
@@ -101,7 +133,7 @@ export function AiGenerationOutputList({
   const [retryReason, setRetryReason] = useState<Record<string, string>>({});
   const completedCount = generation.outputs.filter((output) => output.status === "completed").length;
   const type = generation.type;
-  const retryRetention = retryRetentionState(generation.retryableUntil);
+  const retryRetention = useRetryRetentionState(generation.retryableUntil);
 
   return (
     <section className="ai-generation-output-list" aria-labelledby="ai-generation-result-title">
