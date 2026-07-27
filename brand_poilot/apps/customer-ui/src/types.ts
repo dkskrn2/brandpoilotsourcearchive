@@ -29,6 +29,18 @@ export type ChannelStatus =
   | "mapping_required"
   | "publish_failed";
 
+export interface ChannelCapability {
+  channel: ChannelType;
+  catalogStatus: "available" | "planned";
+  connectionStatus: ChannelStatus;
+  canGenerate: boolean;
+  generationFormats: Array<"card_news" | "blog" | "single_image" | "channel_text">;
+  exportModes: Array<"image" | "html" | "text">;
+  publishModes: DeliveryFormat[];
+  readiness: "ready" | "needs_connection" | "needs_permission" | "not_supported";
+  reasonCode: string | null;
+}
+
 export interface Dashboard {
   period: "30d";
   generatedAt: string;

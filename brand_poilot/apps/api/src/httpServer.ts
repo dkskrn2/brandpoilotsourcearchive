@@ -17,6 +17,7 @@ import type { ApiRepository, BrandProfileInput, Channel, DmAttentionType, DmConv
 import { createKakaoAuthStore, type KakaoProfile } from "./kakaoAuth.js";
 import { brandLogoRequestBodyLimit, type BrandLogoService } from "./brandLogo.js";
 import { channelNames } from "./channelCatalog.js";
+import { buildChannelCapabilities } from "./channelCapabilities.js";
 import {
   parseAttachmentUploadTokenInput,
   parseConfirmAttachmentInput,
@@ -1677,6 +1678,15 @@ export function createServer(
 
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/channels", async (request) => {
     return repository.listChannels(request.params.brandId);
+  });
+
+  app.get<{ Params: { brandId: string } }>("/brands/:brandId/channels/capabilities", async (request) => {
+    const channels = await repository.listChannels(request.params.brandId);
+    const instagramSettings = await repository.listInstagramFormats(request.params.brandId);
+    return buildChannelCapabilities({
+      channels,
+      instagramFormats: instagramSettings.formats,
+    });
   });
 
   app.patch<{ Params: { brandId: string; channel: string }; Body: unknown }>(

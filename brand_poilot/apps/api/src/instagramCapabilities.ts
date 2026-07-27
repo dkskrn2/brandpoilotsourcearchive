@@ -1,4 +1,4 @@
-import type { InstagramCapabilityStatus } from "./types.js";
+import type { ChannelStatus, InstagramCapabilityStatus } from "./types.js";
 
 export const requiredInstagramStoryScopes = [
   "instagram_basic",
@@ -31,6 +31,40 @@ export interface InstagramStoryCapabilityResult {
     scopesVerified: boolean;
     verifiedCredentialId: string | null;
   };
+}
+
+export type InstagramChannelReadiness =
+  | { readiness: "ready"; reasonCode: null }
+  | { readiness: "needs_connection"; reasonCode: "channel_not_connected" }
+  | {
+    readiness: "needs_permission";
+    reasonCode:
+      | "channel_needs_attention"
+      | "credential_expired"
+      | "missing_required_scopes"
+      | "professional_account_required"
+      | "publish_failed";
+  };
+
+export function evaluateInstagramChannelReadiness(
+  status: ChannelStatus,
+): InstagramChannelReadiness {
+  switch (status) {
+    case "connected":
+      return { readiness: "ready", reasonCode: null };
+    case "not_connected":
+      return { readiness: "needs_connection", reasonCode: "channel_not_connected" };
+    case "expired":
+      return { readiness: "needs_permission", reasonCode: "credential_expired" };
+    case "insufficient_permissions":
+      return { readiness: "needs_permission", reasonCode: "missing_required_scopes" };
+    case "mapping_required":
+      return { readiness: "needs_permission", reasonCode: "professional_account_required" };
+    case "publish_failed":
+      return { readiness: "needs_permission", reasonCode: "publish_failed" };
+    case "needs_attention":
+      return { readiness: "needs_permission", reasonCode: "channel_needs_attention" };
+  }
 }
 
 function metadataRecord(value: unknown): Record<string, unknown> {
