@@ -22,6 +22,7 @@ import { fetchInstagramMessagingProfile } from "./instagramLoginGraph.js";
 import { fetchInstagramHashtagTopMedia } from "./instagramTrendMeta.js";
 import { createInstagramTrendRepository } from "./instagramTrendRepository.js";
 import { createAiContentRepository } from "./aiContentRepository.js";
+import { createAiContentAttachmentGcRepository } from "./aiContentAttachmentGcRepository.js";
 import { createAiContentDownloadRepository } from "./aiContentDownload.js";
 import { createAiContentPublishRepository } from "./aiContentPublish.js";
 import { createAiContentSubjectRepository } from "./aiContentSubjectRepository.js";
@@ -1135,7 +1136,6 @@ interface RepositoryOptions {
   trendNow?: () => Date;
   performanceAdapters?: Partial<Record<PerformanceChannel, PerformanceAdapter>>;
   workerResourceLimits?: Pick<WorkerResourceLimits, "total" | "dmReserved">;
-  deleteAiContentAttachments?: (urls: string[]) => Promise<void>;
 }
 
 function repositoryWorkerResourceLimits(options?: RepositoryOptions) {
@@ -1334,9 +1334,9 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
   const assetLibrary = createAssetLibraryRepository(pool);
   const brandIntelligenceProvider = createBrandIntelligenceProvider(createBrandIntelligenceRepository(pool));
   const aiContent = createAiContentRepository(pool, {
-    deleteAttachments: options.deleteAiContentAttachments,
     brandIntelligenceProvider,
   });
+  const aiContentAttachmentGc = createAiContentAttachmentGcRepository(pool);
   const aiContentDownload = createAiContentDownloadRepository(pool, { fetchImpl: options.fetchPublishArtifact ?? fetch });
   const aiContentPublish = createAiContentPublishRepository(pool);
   const instagramPublish = resolveInstagramPublishOptions(options);
@@ -1878,6 +1878,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     ...assetLibrary,
     ...instagramTrendRepository,
     ...aiContent,
+    ...aiContentAttachmentGc,
     ...aiContentDownload,
     async prepareAiContentPublish(input) {
       if (!instagramPublish.enabled) throw new Error("publishing_disabled");

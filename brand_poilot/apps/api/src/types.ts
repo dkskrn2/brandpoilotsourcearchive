@@ -1012,7 +1012,8 @@ export interface ApiRepository
     Partial<ProductLibraryRepository>,
     Partial<WikiManagementRepository>,
     Partial<import("./assetLibraryRepository.js").AssetLibraryRepository>,
-    Partial<import("./aiContentAttachmentRepository.js").AiContentAttachmentLifecycleRepository> {
+    Partial<import("./aiContentAttachmentRepository.js").AiContentAttachmentLifecycleRepository>,
+    Partial<import("./aiContentAttachmentGcRepository.js").AiContentAttachmentGcRepository> {
   health(): Promise<{ database: "ok" }>;
   getAiContentBrandContext(input: BrandScope): Promise<AiContentBrandContextRecord>;
   getConfirmedSubjectAnalysisBrandContext?(input: BrandScope): Promise<SubjectAnalysisBrandContext>;

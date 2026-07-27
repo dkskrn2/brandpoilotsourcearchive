@@ -39,6 +39,7 @@ describe("migration 065 subject attachment snapshot backfill", () => {
   const workspaceId = randomUUID();
   const brandId = randomUUID();
   const generationId = randomUUID();
+  const retryGenerationId = randomUUID();
   const attachmentId = randomUUID();
   const analysisId = randomUUID();
   const outputId = randomUUID();
@@ -99,8 +100,17 @@ describe("migration 065 subject attachment snapshot backfill", () => {
     await database.query(
       `insert into ai_content_generations(
          id,workspace_id,brand_id,type,title,status,analysis_idempotency_key
-       ) values($1,$2,$3,'card_news','Backfill contract','analysis_ready',$4)`,
-      [generationId, workspaceId, brandId, `generation-${generationId}`],
+       ) values
+         ($1,$3,$4,'card_news','Backfill contract','analysis_ready',$5),
+         ($2,$3,$4,'card_news','Retry backfill contract','failed',$6)`,
+      [
+        generationId,
+        retryGenerationId,
+        workspaceId,
+        brandId,
+        `generation-${generationId}`,
+        `generation-${retryGenerationId}`,
+      ],
     );
     await database.query(
       `insert into ai_content_generation_attachments(
@@ -124,8 +134,13 @@ describe("migration 065 subject attachment snapshot backfill", () => {
       `update ai_content_generations
           set subject_analysis_snapshot=$2::jsonb,
               analysis_json=jsonb_build_object('qualityBrief',$3::jsonb)
-        where id=$1`,
-      [generationId, JSON.stringify(generationSnapshot), JSON.stringify(legacyQualityBrief)],
+        where id in ($1, $4)`,
+      [
+        generationId,
+        JSON.stringify(generationSnapshot),
+        JSON.stringify(legacyQualityBrief),
+        retryGenerationId,
+      ],
     );
     await database.query(
       `insert into ai_content_generation_outputs(
@@ -144,14 +159,14 @@ describe("migration 065 subject attachment snapshot backfill", () => {
       `insert into ai_content_generation_outputs(
          id,generation_id,workspace_id,brand_id,output_index,status,failure_code,failure_message
        ) values($1,$2,$3,$4,2,'failed','legacy_failure','legacy failed output')`,
-      [retryOutputId, generationId, workspaceId, brandId],
+      [retryOutputId, retryGenerationId, workspaceId, brandId],
     );
     await database.query(
       `insert into ai_content_generation_jobs(
          generation_id,output_id,workspace_id,brand_id,job_type,content_type,status,payload_json
        ) values($1,$2,$3,$4,'generate','card_news','failed',
          '{"generationId":"legacy","outputId":"legacy"}')`,
-      [generationId, retryOutputId, workspaceId, brandId],
+      [retryGenerationId, retryOutputId, workspaceId, brandId],
     );
 
     await database.exec(

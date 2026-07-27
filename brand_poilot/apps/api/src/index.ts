@@ -1,6 +1,6 @@
 import "dotenv/config";
 import Fastify from "fastify";
-import { del as deleteBlob, put as putBlob } from "@vercel/blob";
+import { put as putBlob } from "@vercel/blob";
 import { createPool } from "./db.js";
 import { createRepository } from "./repository.js";
 import { resolveServerHost } from "./runtime.js";
@@ -24,9 +24,6 @@ const repository = createRepository(pool, {
   instagramPublish: {
     enabled: runtimeConfig.instagramPublishEnabled,
   },
-  deleteAiContentAttachments: blobReadWriteToken
-    ? (urls) => deleteBlob(urls, { token: blobReadWriteToken })
-    : undefined,
 });
 const adminRepository = createAdminRepository(pool);
 const brandIntelligenceRepository = createBrandIntelligenceRepository(pool);

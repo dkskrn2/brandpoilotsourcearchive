@@ -1,0 +1,380 @@
+import { readFile, readdir } from "node:fs/promises";
+import { resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { Pool } from "pg";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { createAiContentAttachmentGcRepository } from "./aiContentAttachmentGcRepository.js";
+
+const USER_ID = "10000000-0000-4000-8000-000000000001";
+const WORKSPACE_ID = "20000000-0000-4000-8000-000000000002";
+const BRAND_ID = "30000000-0000-4000-8000-000000000003";
+const GENERATION_ID = "40000000-0000-4000-8000-000000000004";
+const OTHER_GENERATION_ID = "40000000-0000-4000-8000-000000000005";
+const BUDGET = { remainingBudgetMs: 10_000, statementTimeoutMs: 5_000 };
+
+async function createSchema(pool: Pool) {
+  const directory = resolve(process.cwd(), "../../db/migrations");
+  const skippedVectorMigrations = new Set([
+    "021_dm_wiki_pgvector.sql",
+    "027_wiki_search_v2.sql",
+    "033_compounding_wiki_pgvector.sql",
+  ]);
+  for (const file of (await readdir(directory)).filter((name) => name.endsWith(".sql")).sort()) {
+    if (skippedVectorMigrations.has(file)) continue;
+    await pool.query(await readFile(resolve(directory, file), "utf8"));
+  }
+}
+
+async function insertJob(pool: Pool, input: {
+  id: string;
+  generationId?: string;
+  path: string;
+  url?: string;
+  createdOffset?: string;
+  status?: "pending" | "failed" | "deleting";
+  leaseToken?: string;
+  leaseOffset?: string;
+  nextOffset?: string;
+}) {
+  await pool.query(
+    `insert into ai_content_attachment_deletion_jobs (
+       id, workspace_id, brand_id, generation_id, storage_url, storage_path,
+       reason, status, lease_token, lease_expires_at, next_attempt_at, created_at
+     ) values (
+       $1, $2, $3, $4, $5, $6, 'integration_test', $7,
+       $8::uuid, case when $8::uuid is null then null else now() + $9::interval end,
+       now() + $10::interval, now() + $11::interval
+     )`,
+    [
+      input.id,
+      WORKSPACE_ID,
+      BRAND_ID,
+      input.generationId ?? GENERATION_ID,
+      input.url ?? `https://blob.example/${input.path}`,
+      input.path,
+      input.status ?? "pending",
+      input.leaseToken ?? null,
+      input.leaseOffset ?? "-1 second",
+      input.nextOffset ?? "-1 second",
+      input.createdOffset ?? "-1 minute",
+    ],
+  );
+}
+
+describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
+  "AiContentAttachmentGcRepository PostgreSQL",
+  () => {
+    let container: StartedPostgreSqlContainer | null = null;
+    let pool: Pool;
+
+    beforeAll(async () => {
+      container = await new PostgreSqlContainer("postgres:16-alpine")
+        .withDatabase("brand_pilot_attachment_gc")
+        .withUsername("brand_pilot")
+        .withPassword("brand_pilot")
+        .start();
+      pool = new Pool({ connectionString: container.getConnectionUri(), max: 8 });
+      await createSchema(pool);
+      await pool.query("insert into app_users (id, email) values ($1, 'attachment-gc@example.com')", [USER_ID]);
+      await pool.query(
+        `insert into workspaces (id, name, slug, created_by_user_id)
+         values ($1, 'Attachment GC', 'attachment-gc', $2)`,
+        [WORKSPACE_ID, USER_ID],
+      );
+      await pool.query(
+        `insert into workspace_members (workspace_id, user_id, role)
+         values ($1, $2, 'owner')`,
+        [WORKSPACE_ID, USER_ID],
+      );
+      await pool.query(
+        `insert into brands (id, workspace_id, name, created_by_user_id)
+         values ($1, $2, 'Attachment GC Brand', $3)`,
+        [BRAND_ID, WORKSPACE_ID, USER_ID],
+      );
+    }, 120_000);
+
+    beforeEach(async () => {
+      await pool.query(
+        `truncate table ai_content_attachment_deletion_jobs,
+                        ai_content_generation_jobs,
+                        ai_content_subject_analyses,
+                        ai_content_generation_attachments,
+                        ai_content_attachment_upload_sessions,
+                        ai_content_generation_outputs,
+                        ai_content_generations cascade`,
+      );
+      await pool.query(
+        `insert into ai_content_generations (
+           id, workspace_id, brand_id, type, title, status, analysis_idempotency_key
+         ) values
+           ($1, $3, $4, 'card_news', 'First', 'draft', 'gc-first'),
+           ($2, $3, $4, 'card_news', 'Second', 'draft', 'gc-second')`,
+        [GENERATION_ID, OTHER_GENERATION_ID, WORKSPACE_ID, BRAND_ID],
+      );
+    });
+
+    afterAll(async () => {
+      try {
+        await pool?.end();
+      } finally {
+        await container?.stop();
+      }
+    }, 120_000);
+
+    it("prepares expired sessions and logical or terminal attachment obligations idempotently", async () => {
+      const sessionId = "50000000-0000-4000-8000-000000000005";
+      await pool.query(
+        `insert into ai_content_attachment_upload_sessions (
+           id, generation_id, workspace_id, brand_id, created_by_user_id, nonce,
+           role, file_name, expected_mime_type, expected_size_bytes, expected_checksum,
+           storage_path, status, created_at, token_expires_at
+         ) values (
+           $1, $2, $3, $4, $5, $6, 'product', 'late.png', 'image/png', 10, $7,
+           'gc/expired.png', 'pending', now() - interval '20 minutes', now() - interval '10 minutes'
+         )`,
+        [
+          sessionId,
+          GENERATION_ID,
+          WORKSPACE_ID,
+          BRAND_ID,
+          USER_ID,
+          "60000000-0000-4000-8000-000000000006",
+          "a".repeat(64),
+        ],
+      );
+      const repository = createAiContentAttachmentGcRepository(pool);
+
+      const first = await repository.prepareAiContentAttachmentGc({ limit: 20, ...BUDGET });
+      const duplicate = await repository.prepareAiContentAttachmentGc({ limit: 20, ...BUDGET });
+
+      expect(first.sessionsExpired).toBe(1);
+      expect(first.jobsCreated).toBe(1);
+      expect(duplicate.jobsCreated).toBe(0);
+      const jobs = await pool.query(
+        "select status, next_attempt_at <= now() as due from ai_content_attachment_deletion_jobs where upload_session_id = $1",
+        [sessionId],
+      );
+      expect(jobs.rows).toEqual([{ status: "pending", due: true }]);
+    });
+
+    it("returns distinct jobs to concurrent callers using SKIP LOCKED", async () => {
+      await insertJob(pool, { id: "70000000-0000-4000-8000-000000000007", path: "gc/first.png", createdOffset: "-2 minutes" });
+      await insertJob(pool, { id: "70000000-0000-4000-8000-000000000008", path: "gc/second.png", createdOffset: "-1 minute" });
+      const repository = createAiContentAttachmentGcRepository(pool);
+
+      const [first, second] = await Promise.all([
+        repository.claimAiContentAttachmentDeletionJobs({ workerId: "gc-1", batchSize: 1, leaseSeconds: 60, ...BUDGET }),
+        repository.claimAiContentAttachmentDeletionJobs({ workerId: "gc-2", batchSize: 1, leaseSeconds: 60, ...BUDGET }),
+      ]);
+
+      expect(first).toHaveLength(1);
+      expect(second).toHaveLength(1);
+      expect(first[0]?.jobId).not.toBe(second[0]?.jobId);
+    });
+
+    it("reclaims expired leases with a fresh token and fences the stale owner", async () => {
+      const jobId = "70000000-0000-4000-8000-000000000009";
+      const staleToken = "80000000-0000-4000-8000-000000000008";
+      await insertJob(pool, {
+        id: jobId,
+        path: "gc/reclaimed.png",
+        status: "deleting",
+        leaseToken: staleToken,
+        leaseOffset: "-1 second",
+      });
+      const repository = createAiContentAttachmentGcRepository(pool);
+
+      const [claim] = await repository.claimAiContentAttachmentDeletionJobs({
+        workerId: "gc-reclaimer",
+        batchSize: 1,
+        leaseSeconds: 60,
+        ...BUDGET,
+      });
+
+      expect(claim?.leaseToken).not.toBe(staleToken);
+      await expect(repository.completeAiContentAttachmentDeletion({
+        jobId,
+        leaseToken: staleToken,
+        outcome: "deleted",
+        ...BUDGET,
+      })).resolves.toBe(false);
+      await expect(repository.beginAiContentAttachmentDeletionAttempt({
+        jobId,
+        leaseToken: claim!.leaseToken,
+        ...BUDGET,
+      })).resolves.toBe(1);
+      await expect(repository.completeAiContentAttachmentDeletion({
+        jobId,
+        leaseToken: claim!.leaseToken,
+        outcome: "not_found",
+        ...BUDGET,
+      })).resolves.toBe(true);
+    });
+
+    it("releases unstarted claims without attempts and retries failures from database time", async () => {
+      const jobId = "70000000-0000-4000-8000-000000000010";
+      await insertJob(pool, { id: jobId, path: "gc/budget.png" });
+      const repository = createAiContentAttachmentGcRepository(pool);
+      const [claim] = await repository.claimAiContentAttachmentDeletionJobs({
+        workerId: "gc-budget",
+        batchSize: 1,
+        leaseSeconds: 60,
+        ...BUDGET,
+      });
+
+      await expect(repository.releaseUnstartedAiContentAttachmentDeletions({
+        claims: [{ jobId, leaseToken: claim!.leaseToken }],
+        ...BUDGET,
+      })).resolves.toBe(1);
+      expect((await pool.query(
+        "select status, attempt_count from ai_content_attachment_deletion_jobs where id = $1",
+        [jobId],
+      )).rows[0]).toEqual({ status: "pending", attempt_count: 0 });
+
+      const [retryClaim] = await repository.claimAiContentAttachmentDeletionJobs({
+        workerId: "gc-retry",
+        batchSize: 1,
+        leaseSeconds: 60,
+        ...BUDGET,
+      });
+      await repository.beginAiContentAttachmentDeletionAttempt({
+        jobId,
+        leaseToken: retryClaim!.leaseToken,
+        ...BUDGET,
+      });
+      await expect(repository.failAiContentAttachmentDeletion({
+        jobId,
+        leaseToken: retryClaim!.leaseToken,
+        errorCategory: "transient",
+        errorMessage: "provider timeout Authorization: Bearer hidden",
+        retryDelaySeconds: 30,
+        ...BUDGET,
+      })).resolves.toBe("retry");
+      const failed = (await pool.query(
+        `select status, attempt_count,
+                next_attempt_at between now() + interval '25 seconds' and now() + interval '35 seconds' as db_scheduled,
+                last_error_message
+           from ai_content_attachment_deletion_jobs where id = $1`,
+        [jobId],
+      )).rows[0];
+      expect(failed).toMatchObject({ status: "failed", attempt_count: 1, db_scheduled: true });
+      expect(failed.last_error_message).not.toContain("hidden");
+    });
+
+    it("filters an older completed-artifact hold before LIMIT while exposing held metrics", async () => {
+      const heldUrl = "https://blob.example/gc/held.png?token=old";
+      await pool.query(
+        `insert into ai_content_generation_outputs (
+           id, generation_id, workspace_id, brand_id, output_index, status,
+           artifact_manifest_json, manifest_url
+         ) values (
+           $1, $2, $3, $4, 1, 'completed',
+           jsonb_build_object('assets', jsonb_build_array(jsonb_build_object('url', $5))),
+           $5
+         )`,
+        [
+          "90000000-0000-4000-8000-000000000009",
+          GENERATION_ID,
+          WORKSPACE_ID,
+          BRAND_ID,
+          heldUrl,
+        ],
+      );
+      await insertJob(pool, {
+        id: "70000000-0000-4000-8000-000000000011",
+        path: "gc/held.png",
+        url: "https://blob.example/gc/held.png?token=new",
+        createdOffset: "-10 minutes",
+      });
+      await insertJob(pool, {
+        id: "70000000-0000-4000-8000-000000000012",
+        generationId: OTHER_GENERATION_ID,
+        path: "gc/eligible.png",
+        createdOffset: "-1 minute",
+      });
+      const repository = createAiContentAttachmentGcRepository(pool);
+
+      const [claim] = await repository.claimAiContentAttachmentDeletionJobs({
+        workerId: "gc-fair",
+        batchSize: 1,
+        leaseSeconds: 60,
+        ...BUDGET,
+      });
+      expect(claim?.storagePath).toBe("gc/eligible.png");
+      const metrics = await repository.getAiContentAttachmentGcMetrics(BUDGET);
+      expect(metrics.heldJobCount).toBe(1);
+      expect(metrics.holdReasonCounts.artifact_reference).toBe(1);
+
+      await pool.query(
+        `update ai_content_generation_outputs
+            set manifest_url = 'https://generated.example/manifest.json',
+                artifact_manifest_json = '{"assets":[]}'::jsonb
+          where generation_id = $1`,
+        [GENERATION_ID],
+      );
+      const [released] = await repository.claimAiContentAttachmentDeletionJobs({
+        workerId: "gc-after-promotion",
+        batchSize: 1,
+        leaseSeconds: 60,
+        ...BUDGET,
+      });
+      expect(released?.storagePath).toBe("gc/held.png");
+    });
+
+    it("keeps a live-token cascade obligation unclaimable until expiry, then claims the orphan", async () => {
+      const sessionId = "50000000-0000-4000-8000-000000000015";
+      const jobId = "70000000-0000-4000-8000-000000000015";
+      await pool.query(
+        `insert into ai_content_attachment_upload_sessions (
+           id, generation_id, workspace_id, brand_id, created_by_user_id, nonce,
+           role, file_name, expected_mime_type, expected_size_bytes, expected_checksum,
+           storage_path, status, created_at, token_expires_at
+         ) values (
+           $1, $2, $3, $4, $5, $6, 'product', 'racing.png', 'image/png', 10, $7,
+           'gc/racing.png', 'pending',
+           now() - interval '9 minutes 59 seconds', now() + interval '1 second'
+         )`,
+        [
+          sessionId,
+          GENERATION_ID,
+          WORKSPACE_ID,
+          BRAND_ID,
+          USER_ID,
+          "60000000-0000-4000-8000-000000000016",
+          "b".repeat(64),
+        ],
+      );
+      await pool.query(
+        `insert into ai_content_attachment_deletion_jobs (
+           id, workspace_id, brand_id, generation_id, upload_session_id,
+           storage_path, reason, next_attempt_at
+         ) values ($1, $2, $3, $4, $5, 'gc/racing.png', 'generation_cascade', now() + interval '1 second')`,
+        [jobId, WORKSPACE_ID, BRAND_ID, GENERATION_ID, sessionId],
+      );
+      const repository = createAiContentAttachmentGcRepository(pool);
+      await expect(repository.claimAiContentAttachmentDeletionJobs({
+        workerId: "gc-before-expiry",
+        batchSize: 1,
+        leaseSeconds: 60,
+        ...BUDGET,
+      })).resolves.toEqual([]);
+
+      // A provider upload may complete while the signed token is still valid.
+      let providerObjectExists = true;
+      expect(providerObjectExists).toBe(true);
+      await pool.query("delete from ai_content_generations where id = $1", [GENERATION_ID]);
+      await delay(1_100);
+
+      const [claim] = await repository.claimAiContentAttachmentDeletionJobs({
+        workerId: "gc-after-expiry",
+        batchSize: 1,
+        leaseSeconds: 60,
+        ...BUDGET,
+      });
+      expect(claim?.jobId).toBe(jobId);
+      providerObjectExists = false;
+      expect(providerObjectExists).toBe(false);
+    });
+  },
+);
