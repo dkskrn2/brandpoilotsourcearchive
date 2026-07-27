@@ -3,7 +3,10 @@ import {
   type ChannelExportMode,
   type ChannelGenerationFormat,
 } from "./channelCatalog.js";
-import { evaluateInstagramChannelReadiness } from "./instagramCapabilities.js";
+import {
+  evaluateInstagramChannelReadiness,
+  isVerifiedInstagramStoryCapability,
+} from "./instagramCapabilities.js";
 import type {
   BrandContentFormatDto,
   ChannelDto,
@@ -25,11 +28,14 @@ export interface ChannelCapability {
 
 export interface InstagramChannelCapabilityContext {
   adapterEnabled: boolean;
+  channelStatus: ChannelStatus | null;
+  channelLastError: string | null;
   externalAccountId: string | null;
   credentialId: string | null;
   credentialProvider: string | null;
   credentialStatus: string | null;
   credentialExpiresAt: Date | string | null;
+  hasCredentialPayload: boolean;
   scopes: string[];
   now?: Date;
 }
@@ -59,10 +65,11 @@ export function buildChannelCapabilities(
   const channelsByName = new Map(input.channels.map((item) => [item.channel, item]));
   const storyAvailable = input.instagramFormats.some(
     (item) => item.format === "instagram_story"
-      && item.capabilityStatus === "available"
-      && item.capabilityMetadata.scopesVerified === true
-      && item.capabilityMetadata.storyPublishVerified === true
-      && item.capabilityMetadata.verifiedCredentialId === input.instagramContext.credentialId,
+      && isVerifiedInstagramStoryCapability({
+        capabilityStatus: item.capabilityStatus,
+        capabilityMetadata: item.capabilityMetadata,
+        credentialId: input.instagramContext.credentialId,
+      }),
   );
 
   return channelCatalog.map((catalog) => {

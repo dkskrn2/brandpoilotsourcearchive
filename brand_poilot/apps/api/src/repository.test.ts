@@ -2296,6 +2296,113 @@ describe("repository", () => {
     expect(publishInstagramOutput).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "a naturally expired credential",
+      row: { credential_expires_at: new Date("2020-01-01T00:00:00.000Z") },
+      reason: "credential_expired",
+    },
+    {
+      name: "a credential missing content-publish scope",
+      row: { credential_scopes: ["instagram_business_basic"] },
+      reason: "missing_required_scopes",
+    },
+    {
+      name: "a credential for an unsupported provider",
+      row: { credential_provider: "x" },
+      reason: "provider_not_supported",
+    },
+    {
+      name: "a channel without an active credential",
+      row: {
+        credential_id: null,
+        credential_provider: null,
+        credential_status: null,
+        credential_expires_at: null,
+        credential_scopes: [],
+        encrypted_payload: null,
+      },
+      reason: "channel_not_connected",
+    },
+    {
+      name: "a current channel token failure",
+      row: { channel_status: "needs_attention", channel_last_error: "meta_token_invalid" },
+      reason: "meta_token_invalid",
+    },
+    {
+      name: "a current channel permission failure",
+      row: { channel_status: "needs_attention", channel_last_error: "meta_permission_denied" },
+      reason: "meta_permission_denied",
+    },
+    {
+      name: "an unverified Story credential",
+      row: {
+        delivery_format: "instagram_story",
+        capability_status: "available",
+        capability_metadata: {
+          verifiedCredentialId: "different-credential",
+          storyPublishVerifiedAt: "2026-07-20T00:00:00.000Z",
+        },
+      },
+      reason: "story_capability_required",
+      channelNeedsAttention: false,
+    },
+  ])("fails $name before invoking the Meta adapter", async ({
+    row,
+    reason,
+    channelNeedsAttention = true,
+  }) => {
+    const statements: Array<{ sql: string; values: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      statements.push({ sql, values: values ?? [] });
+      if (sql.includes("with selected as") && sql.includes("from publish_queue pq")) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: "queue-1",
+            workspace_id: "workspace-1",
+            brand_id: "brand-1",
+            channel: "instagram",
+            channel_output_id: "output-1",
+            delivery_format: "instagram_feed_carousel",
+            output_json: { caption: "hello" },
+            rendered_manifest_url: "https://cdn.example.com/manifest.json",
+            channel_status: "connected",
+            channel_last_error: null,
+            external_account_id: "17890000000000000",
+            credential_id: "credential-1",
+            credential_provider: "meta",
+            credential_status: "active",
+            credential_expires_at: new Date("2099-01-01T00:00:00.000Z"),
+            credential_scopes: ["instagram_business_basic", "instagram_business_content_publish"],
+            encrypted_payload: encryptCredential("meta-token"),
+            auth_mode: "instagram_login",
+            attempt_id: "attempt-1",
+            ...row,
+          }],
+        };
+      }
+      if (sql.includes("with failed_attempt as")) {
+        return { rowCount: 1, rows: [{ id: "queue-1" }] };
+      }
+      return { rowCount: 0, rows: [] };
+    });
+    const publishInstagramOutput = vi.fn();
+    const fetchInstagramImageManifest = vi.fn();
+    const repository = createRepository({ query } as any, {
+      instagramPublish: { enabled: true },
+      publishInstagramOutput,
+      fetchInstagramImageManifest,
+    });
+
+    await expect(repository.publishQueueItem("queue-1")).rejects.toThrow(reason);
+    expect(publishInstagramOutput).not.toHaveBeenCalled();
+    expect(fetchInstagramImageManifest).not.toHaveBeenCalled();
+    const failure = statements.find(({ sql }) => sql.includes("with failed_attempt as"));
+    expect(failure?.values).toContain(reason);
+    expect(failure?.values).toContain(channelNeedsAttention);
+  });
+
   it("rejects publication retry without querying when publication is disabled", async () => {
     const query = vi.fn();
     const repository = createRepository({ query } as any, { instagramPublish: { enabled: false } });
@@ -2538,8 +2645,16 @@ describe("repository", () => {
             },
             attempt_count: "0",
             rendered_manifest_url: "https://cdn.example.com/rendered-content/instagram/brand-1/output-1/manifest.json",
+            channel_status: "connected",
+            channel_last_error: null,
             external_account_id: "17890000000000000",
+            credential_id: "credential-1",
+            credential_provider: "meta",
+            credential_status: "active",
+            credential_expires_at: new Date("2099-01-01T00:00:00.000Z"),
+            credential_scopes: ["instagram_business_basic", "instagram_business_content_publish"],
             encrypted_payload: encryptCredential("meta-token"),
+            auth_mode: "instagram_login",
             attempt_id: "attempt-1"
           }]
         };

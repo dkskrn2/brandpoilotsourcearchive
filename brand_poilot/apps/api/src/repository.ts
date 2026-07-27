@@ -10,7 +10,12 @@ import {
   type InstagramWorkerJobResult
 } from "./imageRenderJobs.js";
 import { formatInstagramCaption } from "./instagramCaption.js";
-import { evaluateInstagramStoryCapability, sanitizeInstagramCapabilityMetadata } from "./instagramCapabilities.js";
+import {
+  evaluateInstagramChannelReadiness,
+  evaluateInstagramStoryCapability,
+  isVerifiedInstagramStoryCapability,
+  sanitizeInstagramCapabilityMetadata,
+} from "./instagramCapabilities.js";
 import { dmFixedMessages, inspectDmAnswer, routeDmMessage } from "./dmPolicy.js";
 import { classifyInstagramDmSendError, sendInstagramDirectMessage } from "./instagramMessaging.js";
 import { fetchInstagramMessagingProfile } from "./instagramLoginGraph.js";
@@ -67,6 +72,7 @@ import type {
   ChannelConnectionRequestDto,
   ChannelConnectionRequestInput,
   ChannelDto,
+  ChannelStatus,
   ContentOutputDto,
   ContentOutputStatus,
   CredentialInput,
@@ -205,6 +211,18 @@ function toDateKey(value: Date | string | null): string | null {
 }
 
 const maxReferenceSourceUrls = 10;
+const instagramReadinessFailureCodes = new Set([
+  "channel_not_connected",
+  "channel_needs_attention",
+  "credential_expired",
+  "credential_invalid",
+  "meta_permission_denied",
+  "meta_token_invalid",
+  "missing_required_scopes",
+  "professional_account_required",
+  "provider_not_supported",
+  "publish_failed",
+]);
 
 type Queryable = {
   query(sql: string, values?: unknown[]): Promise<any>;
@@ -1533,15 +1551,25 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
          select pq.id, pq.workspace_id, pq.brand_id, pq.channel, pq.channel_output_id,
                co.delivery_format, co.output_json,
                sa.public_url as rendered_manifest_url,
+               bc.status as channel_status, bc.last_error as channel_last_error,
                bc.external_account_id,
-               cc.id as credential_id, cc.encrypted_payload, cc.auth_mode,
+               cc.id as credential_id, cc.provider as credential_provider,
+               cc.status as credential_status, cc.expires_at as credential_expires_at,
+               cc.scopes as credential_scopes, cc.encrypted_payload, cc.auth_mode,
                bcf.capability_status, bcf.capability_metadata,
                coalesce((select max(pa.attempt_number) from publish_attempts pa where pa.publish_queue_id = pq.id), 0) + 1 as attempt_number
          from claimed pq
          join channel_outputs co on co.id = pq.channel_output_id
          left join storage_artifacts sa on sa.id = co.rendered_artifact_id
          left join brand_channels bc on bc.brand_id = pq.brand_id and bc.channel = pq.channel and bc.deleted_at is null
-         left join channel_credentials cc on cc.brand_channel_id = bc.id and cc.status = 'active' and cc.revoked_at is null
+         left join lateral (
+           select current_credential.*
+           from channel_credentials current_credential
+           where current_credential.brand_channel_id = bc.id
+             and current_credential.revoked_at is null
+           order by current_credential.created_at desc
+           limit 1
+         ) cc on true
          left join brand_content_formats bcf on bcf.brand_id = pq.brand_id and bcf.format = co.delivery_format
        ), attempt as (
          insert into publish_attempts (
@@ -1592,11 +1620,6 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         responseMetadata = { publishedUrl, externalPostId };
       }
       if (queue.channel === "instagram" && instagramPublish.enabled) {
-        if (!queue.rendered_manifest_url) throw new Error("instagram_rendered_manifest_required");
-        if (!queue.external_account_id) throw new Error("instagram_business_account_id_required");
-        if (!queue.encrypted_payload) throw new Error("instagram_access_token_required");
-        const manifest = await fetchInstagramManifest(queue.rendered_manifest_url);
-        const manifestRecord = recordValue(manifest);
         const deliveryFormat = nullableText(queue.delivery_format)
           ?? nullableText(queue.output_json?.deliveryFormat)
           ?? "instagram_feed_carousel";
@@ -1608,6 +1631,35 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         ) {
           throw new Error("instagram_manifest_delivery_format_mismatch");
         }
+        const readiness = evaluateInstagramChannelReadiness({
+          adapterEnabled: instagramPublish.enabled,
+          channelStatus: nullableText(queue.channel_status) as ChannelStatus | null,
+          channelLastError: nullableText(queue.channel_last_error),
+          externalAccountId: nullableText(queue.external_account_id),
+          credentialId: nullableText(queue.credential_id),
+          credentialProvider: nullableText(queue.credential_provider),
+          credentialStatus: nullableText(queue.credential_status),
+          credentialExpiresAt: queue.credential_expires_at instanceof Date
+            || typeof queue.credential_expires_at === "string"
+            ? queue.credential_expires_at
+            : null,
+          hasCredentialPayload: typeof queue.encrypted_payload === "string"
+            && queue.encrypted_payload.length > 0,
+          scopes: Array.isArray(queue.credential_scopes)
+            ? queue.credential_scopes.filter((scope: unknown): scope is string => typeof scope === "string")
+            : [],
+        });
+        if (readiness.readiness !== "ready") throw new Error(readiness.reasonCode);
+        if (deliveryFormat === "instagram_story" && !isVerifiedInstagramStoryCapability({
+          capabilityStatus: queue.capability_status,
+          capabilityMetadata: recordValue(queue.capability_metadata),
+          credentialId: nullableText(queue.credential_id),
+        })) {
+          throw new Error("story_capability_required");
+        }
+        if (!queue.rendered_manifest_url) throw new Error("instagram_rendered_manifest_required");
+        const manifest = await fetchInstagramManifest(queue.rendered_manifest_url);
+        const manifestRecord = recordValue(manifest);
         const manifestDeliveryFormat = nullableText(manifestRecord.deliveryFormat);
         if (manifestDeliveryFormat && manifestDeliveryFormat !== deliveryFormat) {
           throw new Error("instagram_manifest_delivery_format_mismatch");
@@ -1754,11 +1806,21 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         ).catch(() => undefined);
       } else {
         const providerError = error instanceof InstagramPublishStageError ? error.cause : error;
+        const readinessFailureCode = error instanceof Error
+          && instagramReadinessFailureCodes.has(error.message)
+          ? error.message
+          : null;
         const classification = deferredProviderFailure
           ? {
               errorCode: deferredProviderFailure.errorCode,
               retryable: deferredProviderFailure.retryable,
               channelNeedsAttention: deferredProviderFailure.errorCode === "oauth_required"
+            }
+          : readinessFailureCode
+            ? {
+              errorCode: readinessFailureCode,
+              retryable: false,
+              channelNeedsAttention: true,
             }
           : classifyMetaGraphPublishError(providerError);
         const responseMetadata = error instanceof InstagramPublishStageError
@@ -2296,15 +2358,18 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
 
     async getInstagramChannelCapabilityContext(brandId) {
       const result = await pool.query(
-        `select bc.external_account_id,
+        `select bc.status as channel_status,
+                bc.last_error as channel_last_error,
+                bc.external_account_id,
                 credential.id as credential_id,
                 credential.provider as credential_provider,
                 credential.status as credential_status,
                 credential.expires_at as credential_expires_at,
+                (credential.encrypted_payload is not null and credential.encrypted_payload <> '') as has_credential_payload,
                 coalesce(credential.scopes, '{}'::text[]) as scopes
          from brand_channels bc
          left join lateral (
-           select cc.id, cc.provider, cc.status, cc.expires_at, cc.scopes
+           select cc.id, cc.provider, cc.status, cc.expires_at, cc.scopes, cc.encrypted_payload
            from channel_credentials cc
            where cc.brand_channel_id = bc.id
              and cc.revoked_at is null
@@ -2320,6 +2385,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       const row = result.rows[0];
       return {
         adapterEnabled: instagramPublish.enabled,
+        channelStatus: typeof row?.channel_status === "string" ? row.channel_status : null,
+        channelLastError: typeof row?.channel_last_error === "string" ? row.channel_last_error : null,
         externalAccountId: typeof row?.external_account_id === "string"
           ? row.external_account_id
           : null,
@@ -2331,6 +2398,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           ? row.credential_status
           : null,
         credentialExpiresAt: toIso(row?.credential_expires_at),
+        hasCredentialPayload: row?.has_credential_payload === true,
         scopes: Array.isArray(row?.scopes)
           ? row.scopes.filter((scope: unknown): scope is string => typeof scope === "string")
           : [],

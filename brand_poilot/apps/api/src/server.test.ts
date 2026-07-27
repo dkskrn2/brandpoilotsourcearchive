@@ -316,11 +316,14 @@ function createRepository(): ApiRepository {
     listChannels: vi.fn(async () => []),
     getInstagramChannelCapabilityContext: vi.fn(async () => ({
       adapterEnabled: false,
+      channelStatus: "not_connected" as const,
+      channelLastError: null,
       externalAccountId: null,
       credentialId: null,
       credentialProvider: null,
       credentialStatus: null,
       credentialExpiresAt: null,
+      hasCredentialPayload: false,
       scopes: [],
     })),
     updateChannelEnabled: vi.fn(async (_brandId, channel, enabled) => ({

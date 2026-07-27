@@ -65,10 +65,13 @@ function instagramContext(
   return {
     externalAccountId: "17890000000000000",
     adapterEnabled: true,
+    channelStatus: "connected",
+    channelLastError: null,
     credentialId: "credential-1",
     credentialProvider: "meta",
     credentialStatus: "active",
     credentialExpiresAt: "2026-08-01T00:00:00.000Z",
+    hasCredentialPayload: true,
     scopes: ["instagram_business_basic", "instagram_business_content_publish"],
     now: new Date("2026-07-27T00:00:00.000Z"),
     ...overrides,
@@ -333,6 +336,44 @@ describe("channel capability aggregate", () => {
       "instagram_feed_carousel",
     ]);
   });
+
+  it.each([
+    ["meta_token_invalid", "meta_token_invalid"],
+    ["meta_permission_denied", "meta_permission_denied"],
+  ] as const)("blocks a current provider failure recorded as %s", (lastError, reasonCode) => {
+    const result = buildChannelCapabilities({
+      channels: [channel("instagram", "needs_attention")],
+      instagramFormats: defaultFormats,
+      instagramContext: instagramContext({
+        channelStatus: "needs_attention",
+        channelLastError: lastError,
+      }),
+    });
+
+    expect(result[0]).toMatchObject({
+      connectionStatus: "needs_attention",
+      publishModes: [],
+      readiness: "needs_permission",
+      reasonCode,
+    });
+  });
+
+  it("does not let a stale error block a newly connected current channel record", () => {
+    const result = buildChannelCapabilities({
+      channels: [channel("instagram", "connected")],
+      instagramFormats: defaultFormats,
+      instagramContext: instagramContext({
+        channelStatus: "connected",
+        channelLastError: "meta_token_invalid",
+      }),
+    });
+
+    expect(result[0]).toMatchObject({
+      connectionStatus: "connected",
+      readiness: "ready",
+      reasonCode: null,
+    });
+  });
 });
 
 describe("authoritative Instagram capability repository context", () => {
@@ -340,11 +381,14 @@ describe("authoritative Instagram capability repository context", () => {
     const query = vi.fn(async () => ({
       rowCount: 1,
       rows: [{
+        channel_status: "connected",
+        channel_last_error: null,
         external_account_id: "17890000000000000",
         credential_id: "credential-1",
         credential_provider: "meta",
         credential_status: "active",
         credential_expires_at: new Date("2026-08-01T00:00:00.000Z"),
+        has_credential_payload: true,
         scopes: ["instagram_business_basic", "instagram_business_content_publish"],
       }],
     }));
@@ -357,10 +401,13 @@ describe("authoritative Instagram capability repository context", () => {
     await expect(repository.getInstagramChannelCapabilityContext(brandId)).resolves.toEqual({
       externalAccountId: "17890000000000000",
       adapterEnabled: false,
+      channelStatus: "connected",
+      channelLastError: null,
       credentialId: "credential-1",
       credentialProvider: "meta",
       credentialStatus: "active",
       credentialExpiresAt: "2026-08-01T00:00:00.000Z",
+      hasCredentialPayload: true,
       scopes: ["instagram_business_basic", "instagram_business_content_publish"],
     });
     expect(query).toHaveBeenCalledWith(

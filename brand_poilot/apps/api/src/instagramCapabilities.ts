@@ -49,20 +49,27 @@ export type InstagramChannelReadiness =
     connectionStatus: Exclude<ChannelStatus, "connected" | "not_connected">;
     readiness: "needs_permission";
     reasonCode:
+      | "channel_needs_attention"
       | "credential_expired"
       | "credential_invalid"
+      | "meta_permission_denied"
+      | "meta_token_invalid"
       | "missing_required_scopes"
       | "professional_account_required"
-      | "provider_not_supported";
+      | "provider_not_supported"
+      | "publish_failed";
   };
 
 export interface AuthoritativeInstagramChannelInput {
   adapterEnabled: boolean;
+  channelStatus: ChannelStatus | null;
+  channelLastError: string | null;
   externalAccountId: string | null;
   credentialId: string | null;
   credentialProvider: string | null;
   credentialStatus: string | null;
   credentialExpiresAt: Date | string | null;
+  hasCredentialPayload: boolean;
   scopes: readonly string[];
   now?: Date;
 }
@@ -84,6 +91,13 @@ export function evaluateInstagramChannelReadiness(
       connectionStatus: "not_connected",
       readiness: "needs_connection",
       reasonCode: "channel_not_connected",
+    };
+  }
+  if (!input.hasCredentialPayload) {
+    return {
+      connectionStatus: "needs_attention",
+      readiness: "needs_permission",
+      reasonCode: "credential_invalid",
     };
   }
   if (!input.externalAccountId?.trim()) {
@@ -135,6 +149,33 @@ export function evaluateInstagramChannelReadiness(
       reasonCode: "missing_required_scopes",
     };
   }
+  if (input.channelStatus !== "connected") {
+    if (input.channelStatus === "not_connected" || input.channelStatus === null) {
+      return {
+        connectionStatus: "not_connected",
+        readiness: "needs_connection",
+        reasonCode: "channel_not_connected",
+      };
+    }
+    const reasonCode = input.channelStatus === "expired"
+      ? "credential_expired"
+      : input.channelStatus === "insufficient_permissions"
+        ? "missing_required_scopes"
+        : input.channelStatus === "mapping_required"
+          ? "professional_account_required"
+          : input.channelStatus === "publish_failed"
+            ? "publish_failed"
+            : input.channelLastError === "meta_token_invalid"
+              ? "meta_token_invalid"
+              : input.channelLastError === "meta_permission_denied"
+                ? "meta_permission_denied"
+                : "channel_needs_attention";
+    return {
+      connectionStatus: input.channelStatus,
+      readiness: "needs_permission",
+      reasonCode,
+    };
+  }
   if (!input.adapterEnabled) {
     return {
       connectionStatus: "connected",
@@ -143,6 +184,19 @@ export function evaluateInstagramChannelReadiness(
     };
   }
   return { connectionStatus: "connected", readiness: "ready", reasonCode: null };
+}
+
+export function isVerifiedInstagramStoryCapability(input: {
+  capabilityStatus: unknown;
+  capabilityMetadata: Record<string, unknown>;
+  credentialId: string | null;
+}) {
+  return input.capabilityStatus === "available"
+    && input.capabilityMetadata.scopesVerified === true
+    && input.capabilityMetadata.storyPublishVerified === true
+    && typeof input.capabilityMetadata.verifiedCredentialId === "string"
+    && input.credentialId !== null
+    && input.capabilityMetadata.verifiedCredentialId === input.credentialId;
 }
 
 function metadataRecord(value: unknown): Record<string, unknown> {
