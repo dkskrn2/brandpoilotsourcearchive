@@ -81,20 +81,20 @@ export function classifyAiContentAttachmentDeletionError(error: unknown): Provid
   const status = providerStatus(error);
   const code = providerCode(error);
   if (
-    error instanceof BlobNotFoundError
-    || status === 404
-    || code.includes("blobnotfound")
-    || code.includes("not_found")
-  ) {
-    return { kind: "success", category: "not_found" };
-  }
-  if (
     error instanceof BlobAccessError
     || status === 401
     || status === 403
     || /access.?denied|unauthori|forbidden/.test(code)
   ) {
     return { kind: "dead_letter", category: "authorization" };
+  }
+  if (
+    error instanceof BlobNotFoundError
+    || status === 404
+    || code.includes("blobnotfound")
+    || code.includes("not_found")
+  ) {
+    return { kind: "success", category: "not_found" };
   }
   if (error instanceof BlobServiceRateLimited || status === 429) {
     return { kind: "retry", category: "rate_limit" };
@@ -183,6 +183,7 @@ export async function runAiContentAttachmentGc(
     providerErrorCategories: {},
   };
   const unstarted = new Map<string, AiContentAttachmentDeletionClaim>();
+  let stopClaiming = false;
 
   const preparation = await dbCall((budget) =>
     repository.prepareAiContentAttachmentGc({ limit: batchSize, ...budget }));
@@ -206,9 +207,13 @@ export async function runAiContentAttachmentGc(
           ...budget,
         }));
     } catch {
+      stopClaiming = true;
       return;
     }
-    if (attemptCount === null) return;
+    if (attemptCount === null) {
+      stopClaiming = true;
+      return;
+    }
     unstarted.delete(current.jobId);
     result.deletions.started += 1;
 
@@ -298,7 +303,8 @@ export async function runAiContentAttachmentGc(
   };
 
   while (
-    result.deletions.claimed < batchSize
+    !stopClaiming
+    && result.deletions.claimed < batchSize
     && remaining() > cleanupReserveMs + dbStatementTimeoutMaxMs
   ) {
     const claimSize = Math.min(concurrency, batchSize - result.deletions.claimed);

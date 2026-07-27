@@ -241,6 +241,7 @@ describe("runAiContentAttachmentGc", () => {
   it.each([
     [{ status: 404 }, { kind: "success", category: "not_found" }],
     [{ code: "BlobNotFound" }, { kind: "success", category: "not_found" }],
+    [{ status: 403, code: "BlobNotFound" }, { kind: "dead_letter", category: "authorization" }],
     [{ status: 429 }, { kind: "retry", category: "rate_limit" }],
     [{ status: 503 }, { kind: "retry", category: "service" }],
     [{ code: "ECONNRESET" }, { kind: "retry", category: "network" }],
@@ -259,6 +260,10 @@ describe("runAiContentAttachmentGc", () => {
     [new BlobServiceNotAvailable(), { kind: "retry", category: "service" }],
     [new BlobRequestAbortedError(), { kind: "retry", category: "timeout" }],
     [new BlobAccessError(), { kind: "dead_letter", category: "authorization" }],
+    [
+      Object.assign(new BlobAccessError(), { code: "BlobNotFound" }),
+      { kind: "dead_letter", category: "authorization" },
+    ],
   ])("classifies Vercel Blob SDK failure %#", (error, expected) => {
     expect(classifyAiContentAttachmentDeletionError(error)).toEqual(expected);
   });
@@ -336,5 +341,85 @@ describe("runAiContentAttachmentGc", () => {
     expect(repo.failAiContentAttachmentDeletion).toHaveBeenCalledWith(
       expect.objectContaining({ retryDelaySeconds: 3_600 }),
     );
+  });
+
+  it.each(["null", "throw"] as const)(
+    "stops claiming after an unstarted begin returns %s and bulk releases once",
+    async (mode) => {
+      const firstChunk = Array.from({ length: 4 }, (_, index) => claim(index + 1));
+      const repo = repository({
+        claimAiContentAttachmentDeletionJobs: vi.fn()
+          .mockResolvedValueOnce(firstChunk)
+          .mockResolvedValueOnce(Array.from({ length: 4 }, (_, index) => claim(index + 5)))
+          .mockResolvedValue([]),
+        beginAiContentAttachmentDeletionAttempt: mode === "null"
+          ? vi.fn(async () => null)
+          : vi.fn(async () => { throw new Error("database unavailable"); }),
+      });
+
+      const result = await runAiContentAttachmentGc(repo, {
+        workerId: "gc-worker",
+        batchSize: 100,
+        concurrency: 4,
+        deleteBlob: vi.fn(),
+      });
+
+      expect(repo.claimAiContentAttachmentDeletionJobs).toHaveBeenCalledOnce();
+      expect(repo.beginAiContentAttachmentDeletionAttempt).toHaveBeenCalledTimes(4);
+      expect(repo.releaseUnstartedAiContentAttachmentDeletions).toHaveBeenCalledOnce();
+      expect(repo.releaseUnstartedAiContentAttachmentDeletions).toHaveBeenCalledWith(
+        expect.objectContaining({
+          claims: firstChunk.map(({ jobId, leaseToken }) => ({ jobId, leaseToken })),
+        }),
+      );
+      expect(result.deletions.claimed).toBe(4);
+      expect(result.deletions.releasedUnstarted).toBe(4);
+    },
+  );
+
+  it("returns by 45 seconds when the single bulk release hangs and observes its late rejection", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => unhandled.push(error);
+    process.on("unhandledRejection", onUnhandled);
+    let rejectRelease!: (error: unknown) => void;
+    const hungRelease = new Promise<number>((_resolve, reject) => {
+      rejectRelease = reject;
+    });
+    try {
+      const firstChunk = Array.from({ length: 4 }, (_, index) => claim(index + 1));
+      const repo = repository({
+        claimAiContentAttachmentDeletionJobs: vi.fn(async () => {
+          vi.setSystemTime(44_000);
+          return firstChunk;
+        }),
+        beginAiContentAttachmentDeletionAttempt: vi.fn(async () => null),
+        releaseUnstartedAiContentAttachmentDeletions: vi.fn(async () => hungRelease),
+      });
+
+      const run = runAiContentAttachmentGc(repo, {
+        workerId: "gc-worker",
+        batchSize: 100,
+        concurrency: 4,
+        deleteBlob: vi.fn(),
+        monotonicNow: () => Date.now(),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(repo.releaseUnstartedAiContentAttachmentDeletions).toHaveBeenCalledOnce();
+      expect(repo.beginAiContentAttachmentDeletionAttempt).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_001);
+      const result = await run;
+      expect(result.durationMs).toBe(45_000);
+      expect(result.deletions.releasedUnstarted).toBe(0);
+
+      rejectRelease(new Error("late release failure token=secret"));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      vi.useRealTimers();
+    }
   });
 });
