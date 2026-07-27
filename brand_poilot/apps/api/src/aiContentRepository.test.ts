@@ -207,6 +207,7 @@ function createWorkerPool(options: {
 } = {}) {
   const sql: string[] = [];
   const generatedJobPayloads: unknown[] = [];
+  let leaseAtBoundary = false;
   let generation = row("generation-1", options.jobType === "analyze" ? "analyzing" : "generating");
   let pendingCleanup = false;
   let outputStatus = options.outputStatus ?? "generating";
@@ -253,13 +254,32 @@ function createWorkerPool(options: {
         query.includes("select id")
         && query.includes("from ai_content_generation_jobs")
         && query.includes("attempt_count < max_attempts")
-        && query.includes("lease_expires_at < transaction_timestamp()")
+        && query.includes("lease_expires_at <= clock_timestamp()")
       ) {
         return { rows: [], rowCount: 0 };
       }
-      if (query.includes("with candidate as")) {
+      if (
+        query.includes("select job.id")
+        && query.includes("from ai_content_generation_jobs job")
+        && query.includes("limit 25")
+      ) {
+        return job.status === "queued"
+          ? { rows: [{ id: job.id }], rowCount: 1 }
+          : { rows: [], rowCount: 0 };
+      }
+      if (
+        query.includes("update ai_content_generation_jobs")
+        && query.includes("status = 'processing'")
+        && query.includes("returning *")
+      ) {
         if (job.status !== "queued") return { rows: [], rowCount: 0 };
-        Object.assign(job, { status: "processing", worker_id: params[1], lease_token: params[2], lease_expires_at: new Date("2099-07-18T00:03:00.000Z"), attempt_count: Number(job.attempt_count) + 1 });
+        Object.assign(job, {
+          status: "processing",
+          worker_id: params[1],
+          lease_token: params[2],
+          lease_expires_at: new Date("2099-07-18T00:03:00.000Z"),
+          attempt_count: Number(job.attempt_count) + 1,
+        });
         return { rows: [{ ...job }], rowCount: 1 };
       }
       if (query.includes("from brands brand")) {
@@ -334,7 +354,9 @@ function createWorkerPool(options: {
         return {
           rows: [{
             ...job,
-            lease_expired: options.exhaustedJob && job.status === "processing",
+            lease_expired: leaseAtBoundary
+              || (options.exhaustedJob && job.status === "processing"),
+            available: true,
           }],
           rowCount: 1,
         };
@@ -484,6 +506,7 @@ function createWorkerPool(options: {
     sql,
     job,
     generatedJobPayloads,
+    expireLeaseAtBoundary() { leaseAtBoundary = true; },
     enablePendingCleanup() { pendingCleanup = true; },
   };
 }
@@ -936,7 +959,15 @@ describe("AI content repository", () => {
     const job = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
     expect(job).toMatchObject({ id: "job-1", contentType: "card_news", status: "processing", workerId: "card-worker-1" });
     expect(job?.payload.contentGenerationInput).toEqual(contentGenerationInputV2Fixture);
-    expect(pool.sql.join("\n")).toContain("for update skip locked");
+    const generationLock = pool.sql.findIndex((sql) =>
+      sql.includes("from ai_content_generations") && sql.includes("for update"));
+    const outputLock = pool.sql.findIndex((sql) =>
+      sql.includes("from ai_content_generation_outputs") && sql.includes("for update"));
+    const jobLock = pool.sql.findIndex((sql) =>
+      sql.includes("from ai_content_generation_jobs") && sql.includes("for update"));
+    expect(generationLock).toBeGreaterThanOrEqual(0);
+    expect(outputLock).toBeGreaterThan(generationLock);
+    expect(jobLock).toBeGreaterThan(outputLock);
     expect(pool.sql.join("\n")).toContain("content_type = $1");
     expect(pool.sql.join("\n")).not.toContain("select generation.draft_json");
     expect(pool.sql.join("\n")).not.toContain("from brands brand");
@@ -948,6 +979,57 @@ describe("AI content repository", () => {
     await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
     await expect(repository.heartbeatAiContentJob({ jobId: "job-1", workerId: "wrong-worker", leaseToken: "wrong-token", leaseSeconds: 180 })).resolves.toBe(false);
   });
+
+  it.each(["complete", "fail"] as const)(
+    "rejects %s when the lease equals the current DB clock after locks are acquired",
+    async (operation) => {
+    const pool = createWorkerPool();
+    const repository = createAiContentRepository(pool as never);
+    const claimed = await repository.claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-1",
+      leaseSeconds: 180,
+    });
+    pool.expireLeaseAtBoundary();
+
+    const result = operation === "complete"
+      ? repository.completeAiContentJob({
+          jobId: "job-1",
+          workerId: "card-worker-1",
+          leaseToken: claimed!.leaseToken!,
+          skillVersion: "card-news-skill.v1",
+          jobType: "generate",
+          manifestUrl: "https://blob.example.com/manifest.json",
+          manifest: {
+            version: "ai-content.v1",
+            type: "card_news",
+            title: "여름 추천",
+            assets: [{
+              role: "slide",
+              url: "https://blob.example.com/slide.png",
+              fileName: "slide.png",
+              mimeType: "image/png",
+              width: 1080,
+              height: 1080,
+              index: 1,
+            }],
+            content: { caption: "내용", hashtags: ["여름"], cta: "저장하세요" },
+          },
+        })
+      : repository.failAiContentJob({
+          jobId: "job-1",
+          workerId: "card-worker-1",
+          leaseToken: claimed!.leaseToken!,
+          errorCode: "equal_boundary",
+          errorMessage: "equal",
+          retryable: false,
+        });
+    await expect(result).rejects.toThrow("ai_content_job_lease_invalid");
+    expect(pool.sql.join("\n")).toContain(
+      "lease_expires_at <= clock_timestamp() as lease_expired",
+    );
+    },
+  );
 
   it("completes a generated manifest idempotently", async () => {
     const pool = createWorkerPool();

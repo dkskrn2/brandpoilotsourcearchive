@@ -732,7 +732,8 @@ async function lockAiContentJobContext(client: Queryable, jobId: string) {
 
   const locked = await client.query(
     `select *,
-            lease_expires_at < transaction_timestamp() as lease_expired
+            lease_expires_at <= clock_timestamp() as lease_expired,
+            available_at <= clock_timestamp() as available
        from ai_content_generation_jobs
       where id = $1
       for update`,
@@ -1249,7 +1250,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           `select id
              from ai_content_generation_jobs
             where content_type = $1 and status = 'processing'
-              and lease_expires_at < transaction_timestamp()
+              and lease_expires_at <= clock_timestamp()
               and attempt_count >= max_attempts
             order by generation_id, output_id nulls first, id`,
           [input.contentType],
@@ -1312,7 +1313,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           `select id
              from ai_content_generation_jobs
             where content_type = $1 and status = 'processing'
-              and lease_expires_at < transaction_timestamp()
+              and lease_expires_at <= clock_timestamp()
               and attempt_count < max_attempts
             order by generation_id, output_id nulls first, id`,
           [input.contentType],
@@ -1336,43 +1337,90 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             [job.id],
           );
         }
-        const leaseToken = randomUUID();
-        const claimed = await client.query(
-          `with candidate as (
-             select job.id from ai_content_generation_jobs job
-              where job.content_type = $1 and job.status = 'queued' and job.available_at <= now() and job.attempt_count < job.max_attempts
-                and (
-                  coalesce((job.payload_json->>'waitForOwnedContext')::boolean, false) = false
-                  or exists (
-                    select 1
-                      from wiki_versions version
-                     where version.workspace_id = job.workspace_id and version.brand_id = job.brand_id
-                       and version.status = 'active'
-                       and exists (
-                         select 1 from wiki_pages page
-                          where page.wiki_version_id = version.id and page.workspace_id = job.workspace_id
-                            and page.brand_id = job.brand_id and page.is_active
-                       )
-                  )
+        const candidates = await client.query(
+          `select job.id
+             from ai_content_generation_jobs job
+            where job.content_type = $1
+              and job.status = 'queued'
+              and job.available_at <= clock_timestamp()
+              and job.attempt_count < job.max_attempts
+              and (
+                coalesce((job.payload_json->>'waitForOwnedContext')::boolean, false) = false
+                or exists (
+                  select 1
+                    from wiki_versions version
+                   where version.workspace_id = job.workspace_id
+                     and version.brand_id = job.brand_id
+                     and version.status = 'active'
+                     and exists (
+                       select 1
+                         from wiki_pages page
+                        where page.wiki_version_id = version.id
+                          and page.workspace_id = job.workspace_id
+                          and page.brand_id = job.brand_id
+                          and page.is_active
+                     )
                 )
-              order by available_at, created_at
-              for update skip locked
-              limit 1
-           )
-           update ai_content_generation_jobs job
-              set status = 'processing', worker_id = $2, lease_token = $3,
-                  lease_expires_at = now() + ($4::text || ' seconds')::interval,
-                  last_heartbeat_at = now(), attempt_count = attempt_count + 1,
-                  error_code = null, error_message = null, updated_at = now()
-             from candidate where job.id = candidate.id
-           returning job.*`,
-          [input.contentType, input.workerId, leaseToken, input.leaseSeconds],
+              )
+            order by job.available_at, job.created_at, job.id
+            limit 25`,
+          [input.contentType],
         );
-        if (!claimed.rowCount) {
+        let job: Record<string, unknown> | null = null;
+        const leaseToken = randomUUID();
+        for (const candidate of candidates.rows) {
+          const lockedJob = await lockAiContentJobContext(client, String(candidate.id));
+          if (
+            lockedJob.content_type !== input.contentType
+            || lockedJob.status !== "queued"
+            || lockedJob.available !== true
+            || Number(lockedJob.attempt_count) >= Number(lockedJob.max_attempts)
+          ) {
+            continue;
+          }
+          if (object(lockedJob.payload_json).waitForOwnedContext === true) {
+            const ready = await client.query(
+              `select exists (
+                 select 1
+                   from wiki_versions version
+                  where version.workspace_id = $1
+                    and version.brand_id = $2
+                    and version.status = 'active'
+                    and exists (
+                      select 1
+                        from wiki_pages page
+                       where page.wiki_version_id = version.id
+                         and page.workspace_id = version.workspace_id
+                         and page.brand_id = version.brand_id
+                         and page.is_active
+                    )
+               ) as ready`,
+              [lockedJob.workspace_id, lockedJob.brand_id],
+            );
+            if (ready.rows[0]?.ready !== true) continue;
+          }
+          const claimed = await client.query(
+            `update ai_content_generation_jobs
+                set status = 'processing', worker_id = $2, lease_token = $3,
+                    lease_expires_at = clock_timestamp() + ($4::text || ' seconds')::interval,
+                    last_heartbeat_at = clock_timestamp(), attempt_count = attempt_count + 1,
+                    error_code = null, error_message = null, updated_at = now()
+              where id = $1
+                and status = 'queued'
+                and available_at <= clock_timestamp()
+                and attempt_count < max_attempts
+            returning *`,
+            [lockedJob.id, input.workerId, leaseToken, input.leaseSeconds],
+          );
+          if (claimed.rowCount) {
+            job = claimed.rows[0] as Record<string, unknown>;
+            break;
+          }
+        }
+        if (!job) {
           await client.query("COMMIT");
           return null;
         }
-        const job = claimed.rows[0] as Record<string, unknown>;
         if (job.job_type === "generate" && job.output_id) {
           await client.query(
             "update ai_content_generation_outputs set status = 'generating', failure_code = null, failure_message = null, updated_at = now() where id = $1",
@@ -1438,7 +1486,8 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         `update ai_content_generation_jobs
             set lease_expires_at = now() + ($4::text || ' seconds')::interval,
                 last_heartbeat_at = now(), updated_at = now()
-          where id = $1 and status = 'processing' and worker_id = $2 and lease_token = $3 and lease_expires_at > now()
+          where id = $1 and status = 'processing' and worker_id = $2 and lease_token = $3
+            and lease_expires_at > clock_timestamp()
           returning id`,
         [input.jobId, input.workerId, input.leaseToken, input.leaseSeconds],
       );

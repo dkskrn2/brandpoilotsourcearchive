@@ -743,5 +743,208 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         error_code: "ai_content_job_lease_exhausted",
       });
     });
+
+    it.each(["complete", "fail"] as const)(
+      "keeps stale %s versus a normal queued claim deadlock-free and lease-fenced",
+      async (operation) => {
+        const repository = createAiContentRepository(pool);
+        await pool.query(
+          "update ai_content_generations set status = 'queued' where id = $1",
+          [GENERATION_ID],
+        );
+        await pool.query(
+          `insert into ai_content_generation_outputs (
+             id, generation_id, workspace_id, brand_id, output_index, status
+           ) values ($1, $2, $3, $4, 1, 'queued')`,
+          [OUTPUT_ID, GENERATION_ID, WORKSPACE_ID, BRAND_ID],
+        );
+        await pool.query(
+          `insert into ai_content_generation_jobs (
+             id, generation_id, output_id, workspace_id, brand_id, job_type,
+             content_type, status, payload_json, attempt_count, available_at
+           ) values (
+             $1, $2, $3, $4, $5, 'generate', 'card_news', 'queued',
+             $6::jsonb, 0, clock_timestamp()
+           )`,
+          [
+            JOB_ID_1,
+            GENERATION_ID,
+            OUTPUT_ID,
+            WORKSPACE_ID,
+            BRAND_ID,
+            JSON.stringify(RETRY_PAYLOAD),
+          ],
+        );
+
+        const stale = operation === "complete"
+          ? repository.completeAiContentJob({
+              jobId: JOB_ID_1,
+              workerId: "stale-worker",
+              leaseToken: LEASE_TOKEN,
+              skillVersion: "card-news-skill.v5",
+              jobType: "generate",
+              manifestUrl: "https://test.public.blob.vercel-storage.com/stale-manifest.json",
+              manifest: cardManifest(1),
+            })
+          : repository.failAiContentJob({
+              jobId: JOB_ID_1,
+              workerId: "stale-worker",
+              leaseToken: LEASE_TOKEN,
+              errorCode: "stale_failure",
+              errorMessage: "stale",
+              retryable: false,
+            });
+        const settled = await Promise.race([
+          Promise.allSettled([
+            repository.claimAiContentJob({
+              contentType: "card_news",
+              workerId: "fresh-worker",
+              leaseSeconds: 180,
+            }),
+            stale,
+          ]),
+          new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 5_000)),
+        ]);
+
+        expect(settled).not.toBe("timeout");
+        const results = settled as PromiseSettledResult<unknown>[];
+        expect(results[0]).toMatchObject({ status: "fulfilled" });
+        expect(results[1]).toMatchObject({
+          status: "rejected",
+          reason: expect.objectContaining({ message: "ai_content_job_lease_invalid" }),
+        });
+        const claimed = await pool.query(
+          `select status, worker_id, attempt_count
+             from ai_content_generation_jobs
+            where id = $1`,
+          [JOB_ID_1],
+        );
+        expect(claimed.rows[0]).toMatchObject({
+          status: "processing",
+          worker_id: "fresh-worker",
+          attempt_count: 1,
+        });
+      },
+    );
+
+    it.each(["complete", "fail"] as const)(
+      "rejects %s when its lease expires while waiting for the generation lock",
+      async (operation) => {
+      const repository = createAiContentRepository(pool);
+      await pool.query(
+        "update ai_content_generations set status = 'generating' where id = $1",
+        [GENERATION_ID],
+      );
+      await pool.query(
+        `insert into ai_content_generation_outputs (
+           id, generation_id, workspace_id, brand_id, output_index, status
+         ) values ($1, $2, $3, $4, 1, 'generating')`,
+        [OUTPUT_ID, GENERATION_ID, WORKSPACE_ID, BRAND_ID],
+      );
+      const inserted = await pool.query(
+        `insert into ai_content_generation_jobs (
+           id, generation_id, output_id, workspace_id, brand_id, job_type,
+           content_type, status, payload_json, attempt_count, worker_id,
+           lease_token, lease_expires_at
+         ) values (
+           $1, $2, $3, $4, $5, 'generate', 'card_news', 'processing',
+           $6::jsonb, 1, 'worker-1', $7, clock_timestamp() + interval '300 milliseconds'
+         )
+         returning lease_expires_at`,
+        [
+          JOB_ID_1,
+          GENERATION_ID,
+          OUTPUT_ID,
+          WORKSPACE_ID,
+          BRAND_ID,
+          JSON.stringify(RETRY_PAYLOAD),
+          LEASE_TOKEN,
+        ],
+      );
+      const leaseExpiresAt = inserted.rows[0]?.lease_expires_at;
+      const gate = await pool.connect();
+      let gateOpen = false;
+      let completion: Promise<unknown> | null = null;
+      try {
+        await gate.query("BEGIN");
+        gateOpen = true;
+        await gate.query(
+          "select id from ai_content_generations where id = $1 for update",
+          [GENERATION_ID],
+        );
+        completion = operation === "complete"
+          ? repository.completeAiContentJob({
+              jobId: JOB_ID_1,
+              workerId: "worker-1",
+              leaseToken: LEASE_TOKEN,
+              skillVersion: "card-news-skill.v5",
+              jobType: "generate",
+              manifestUrl: "https://test.public.blob.vercel-storage.com/late-manifest.json",
+              manifest: cardManifest(1),
+            })
+          : repository.failAiContentJob({
+              jobId: JOB_ID_1,
+              workerId: "worker-1",
+              leaseToken: LEASE_TOKEN,
+              errorCode: "late_failure",
+              errorMessage: "late",
+              retryable: false,
+            });
+        const completionState = completion.then(
+          () => "completed" as const,
+          () => "rejected" as const,
+        );
+        let observedLockWait = false;
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          const waiting = await gate.query(
+            `select count(*)::integer as count
+               from pg_stat_activity
+              where datname = current_database()
+                and pid <> pg_backend_pid()
+                and wait_event_type = 'Lock'
+                and query like '%from ai_content_generations%for update%'`,
+          );
+          if (Number(waiting.rows[0]?.count ?? 0) > 0) {
+            observedLockWait = true;
+            break;
+          }
+          if (await Promise.race([
+            completionState,
+            new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), 20)),
+          ]) !== "waiting") {
+            break;
+          }
+        }
+        expect(observedLockWait).toBe(true);
+        for (;;) {
+          const expired = await gate.query(
+            "select clock_timestamp() >= $1::timestamptz as expired",
+            [leaseExpiresAt],
+          );
+          if (expired.rows[0]?.expired === true) break;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        await gate.query("COMMIT");
+        gateOpen = false;
+
+        await expect(completion).rejects.toThrow("ai_content_job_lease_invalid");
+        const unchanged = await pool.query(
+          `select job.status as job_status, output.status as output_status
+             from ai_content_generation_jobs job
+             join ai_content_generation_outputs output on output.id = job.output_id
+            where job.id = $1`,
+          [JOB_ID_1],
+        );
+        expect(unchanged.rows[0]).toMatchObject({
+          job_status: "processing",
+          output_status: "generating",
+        });
+      } finally {
+        if (gateOpen) await gate.query("ROLLBACK");
+        gate.release();
+        if (completion) await completion.catch(() => undefined);
+      }
+      },
+    );
   },
 );
