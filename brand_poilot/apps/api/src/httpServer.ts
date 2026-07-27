@@ -20,7 +20,10 @@ import { channelNames } from "./channelCatalog.js";
 import { buildChannelCapabilities } from "./channelCapabilities.js";
 import {
   parseAttachmentUploadTokenInput,
-  parseLegacyConfirmAttachmentInput,
+  parseAiContentAttachmentId,
+  parseAiContentGenerationId,
+  parseCancelUploadSessionInput,
+  parseConfirmAttachmentInput,
   parseCreateAiContentAnalysisInput,
   parseStartAiContentGenerationInput,
   parseUpdateAiContentDraftInput,
@@ -32,8 +35,11 @@ import { parseAiContentManifest } from "./aiContentManifest.js";
 import { parseAiContentPublishRequest } from "./aiContentPublishTargets.js";
 import {
   confirmAiContentAttachment,
+  AI_CONTENT_ATTACHMENT_POLICY,
   issueAiContentAttachmentToken,
+  issueAiContentUploadSessionToken,
   verifyAiContentAttachmentBlob,
+  verifyAiContentUploadSessionBlob,
   type AiContentTokenOptions,
 } from "./aiContentUpload.js";
 import { kstDateKey } from "./publishSchedule.js";
@@ -134,6 +140,7 @@ interface CreateServerOptions {
   brandLogoService?: BrandLogoService;
   aiContentUpload?: {
     readWriteToken: string;
+    uploadSessionsEnabled?: boolean;
     generateClientToken?: AiContentTokenOptions["generateClientToken"];
     headBlob?: import("./aiContentUpload.js").AiContentBlobVerificationOptions["headBlob"];
   };
@@ -251,6 +258,13 @@ function positiveLimit(value: number | undefined, fallback: number) {
 function requiredAiContentField(value: unknown, code: string, maxLength = 500) {
   if (typeof value !== "string" || !value.trim() || value.trim().length > maxLength) throw new Error(code);
   return value.trim();
+}
+
+function parseAiContentBrandId(value: string) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+    throw new Error("ai_content_brand_id_invalid");
+  }
+  return value.toLowerCase();
 }
 
 function asChannel(value: string): Channel {
@@ -753,11 +767,31 @@ export function createServer(
     if (message.startsWith("ai_content_")) {
       if (message === "ai_content_limit_reached") {
         reply.code(429).send({ error: message });
-      } else if (message === "ai_content_attachment_storage_not_configured") {
+      } else if (
+        message === "ai_content_attachment_storage_not_configured"
+        || message === "ai_content_attachment_storage_unavailable"
+        || message === "ai_content_attachment_verification_timeout"
+      ) {
         reply.code(503).send({ error: message });
+      } else if (
+        message === "ai_content_upload_session_expired"
+        || message === "ai_content_attachment_retention_expired"
+      ) {
+        reply.code(410).send({ error: message });
+      } else if (
+        message === "ai_content_attachment_blob_unavailable"
+        || message === "ai_content_attachment_path_mismatch"
+        || message === "ai_content_attachment_size_mismatch"
+        || message === "ai_content_attachment_mime_mismatch"
+        || message === "ai_content_attachment_url_mismatch"
+      ) {
+        reply.code(422).send({ error: message });
       } else if (
         message === "ai_content_generation_not_analysis_ready"
         || message === "ai_content_publish_target_unsupported"
+        || message === "ai_content_attachment_limit_exceeded"
+        || message === "ai_content_attachments_locked"
+        || message === "ai_content_attachment_upload_in_progress"
         || message.endsWith("_conflict")
       ) {
         reply.code(409).send({ error: message });
@@ -2324,30 +2358,91 @@ export function createServer(
   app.post<{ Params: { brandId: string; generationId: string }; Body: unknown }>(
     "/brands/:brandId/ai-content/generations/:generationId/attachments/token",
     async (request) => {
-      const scope = aiContentScope(request, request.params.brandId);
-      const generation = await repository.getAiContentGeneration({ ...scope, generationId: request.params.generationId });
-      if (!generation) throw new Error("ai_content_generation_not_found");
-      return issueAiContentAttachmentToken({
-        brandId: request.params.brandId,
-        generationId: request.params.generationId,
-        attachment: parseAttachmentUploadTokenInput(request.body),
-      }, {
+      const brandId = parseAiContentBrandId(request.params.brandId);
+      const generationId = parseAiContentGenerationId(request.params.generationId);
+      const scope = aiContentScope(request, brandId);
+      const attachment = parseAttachmentUploadTokenInput(request.body);
+      const tokenOptions = {
         token: aiContentUpload?.readWriteToken ?? "",
         generateClientToken: aiContentUpload?.generateClientToken,
+      };
+      if (!aiContentUpload?.uploadSessionsEnabled) {
+        // Legacy issuance cannot reserve capacity before the provider call. An abandoned
+        // Blob is therefore undiscoverable until upload-session issuance is enabled.
+        await repository.assertAiContentAttachmentUploadMutable!({ ...scope, generationId });
+        return issueAiContentAttachmentToken({
+          brandId,
+          generationId,
+          attachment,
+        }, tokenOptions);
+      }
+      const createdByUserId = aiContentActorUserId(request);
+      if (!createdByUserId) throw new Error("authentication_required");
+      const session = await repository.createAiContentUploadSession!({
+        ...scope,
+        generationId,
+        createdByUserId,
+        attachment,
       });
+      try {
+        const token = await issueAiContentUploadSessionToken({
+          storagePath: session.storagePath,
+          mimeType: session.mimeType,
+          maximumSizeInBytes: AI_CONTENT_ATTACHMENT_POLICY[session.role][session.mimeType]!,
+          tokenExpiresAt: session.tokenExpiresAt,
+        }, tokenOptions);
+        return {
+          contractVersion: "ai-content-attachment-upload.v2",
+          sessionId: session.id,
+          nonce: session.nonce,
+          pathname: token.pathname,
+          clientToken: token.clientToken,
+          uploadExpiresAt: token.uploadExpiresAt,
+          sessionExpiresAt: session.tokenExpiresAt,
+        };
+      } catch (error) {
+        const errorCode = error instanceof Error
+          ? error.message
+          : "ai_content_attachment_storage_unavailable";
+        await repository.failAiContentUploadSession!({
+          ...scope,
+          generationId,
+          sessionId: session.id,
+          createdByUserId,
+          errorCode,
+        }).catch(() => undefined);
+        throw error;
+      }
     },
   );
 
   app.post<{ Params: { brandId: string; generationId: string }; Body: unknown }>(
     "/brands/:brandId/ai-content/generations/:generationId/attachments/confirm",
     async (request) => {
-      const scope = aiContentScope(request, request.params.brandId);
-      const generation = await repository.getAiContentGeneration({ ...scope, generationId: request.params.generationId });
+      const brandId = parseAiContentBrandId(request.params.brandId);
+      const generationId = parseAiContentGenerationId(request.params.generationId);
+      const scope = aiContentScope(request, brandId);
+      const parsed = parseConfirmAttachmentInput(request.body);
+      if ("sessionId" in parsed) {
+        const createdByUserId = aiContentActorUserId(request);
+        if (!createdByUserId) throw new Error("authentication_required");
+        return repository.confirmAiContentUploadSession!({
+          ...scope,
+          generationId,
+          sessionId: parsed.sessionId,
+          nonce: parsed.nonce,
+          createdByUserId,
+        }, (session, abortSignal) => verifyAiContentUploadSessionBlob(session, {
+          token: aiContentUpload?.readWriteToken ?? "",
+          headBlob: aiContentUpload?.headBlob,
+          abortSignal,
+        }));
+      }
+      const generation = await repository.getAiContentGeneration({ ...scope, generationId });
       if (!generation) throw new Error("ai_content_generation_not_found");
-      const parsed = parseLegacyConfirmAttachmentInput(request.body);
       const confirmed = confirmAiContentAttachment({
-        brandId: request.params.brandId,
-        generationId: request.params.generationId,
+        brandId,
+        generationId,
         attachment: parsed,
         storagePath: parsed.storagePath,
         storageUrl: parsed.storageUrl,
@@ -2356,17 +2451,39 @@ export function createServer(
         token: aiContentUpload?.readWriteToken ?? "",
         headBlob: aiContentUpload?.headBlob,
       });
-      return repository.confirmAiContentAttachment({ ...scope, generationId: request.params.generationId, ...verified });
+      return repository.confirmLegacyAiContentAttachment!({ ...scope, generationId, ...verified });
+    },
+  );
+
+  app.post<{ Params: { brandId: string; generationId: string }; Body: unknown }>(
+    "/brands/:brandId/ai-content/generations/:generationId/attachments/cancel",
+    async (request) => {
+      const brandId = parseAiContentBrandId(request.params.brandId);
+      const generationId = parseAiContentGenerationId(request.params.generationId);
+      const scope = aiContentScope(request, brandId);
+      const createdByUserId = aiContentActorUserId(request);
+      if (!createdByUserId) throw new Error("authentication_required");
+      const parsed = parseCancelUploadSessionInput(request.body);
+      return repository.cancelAiContentUploadSession!({
+        ...scope,
+        generationId,
+        sessionId: parsed.sessionId,
+        nonce: parsed.nonce,
+        createdByUserId,
+      });
     },
   );
 
   app.delete<{ Params: { brandId: string; generationId: string; attachmentId: string } }>(
     "/brands/:brandId/ai-content/generations/:generationId/attachments/:attachmentId",
-    async (request) => repository.removeAiContentAttachment({
-      ...aiContentScope(request, request.params.brandId),
-      generationId: request.params.generationId,
-      attachmentId: request.params.attachmentId,
-    }),
+    async (request) => {
+      const brandId = parseAiContentBrandId(request.params.brandId);
+      return repository.removeAiContentAttachment({
+        ...aiContentScope(request, brandId),
+        generationId: parseAiContentGenerationId(request.params.generationId),
+        attachmentId: parseAiContentAttachmentId(request.params.attachmentId),
+      });
+    },
   );
 
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/content-outputs", async (request) => {

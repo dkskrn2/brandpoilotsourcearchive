@@ -15,6 +15,7 @@ export interface ApiRuntimeConfig {
   };
   schedulerEnabled: boolean;
   instagramPublishEnabled: boolean;
+  aiContentAttachmentUploadSessionsEnabled: boolean;
 }
 
 const productionRequiredKeys = [
@@ -134,6 +135,10 @@ export function loadApiRuntimeConfig(
   const devAuthEnabled = parseBoolean(env.DEV_AUTH_ENABLED, "DEV_AUTH_ENABLED");
   const schedulerEnabled = parseBoolean(env.LOCAL_SCHEDULER_ENABLED, "LOCAL_SCHEDULER_ENABLED");
   const instagramPublishEnabled = parseBoolean(env.INSTAGRAM_PUBLISH_ENABLED, "INSTAGRAM_PUBLISH_ENABLED");
+  const aiContentAttachmentUploadSessionsEnabled = parseBoolean(
+    env.AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED,
+    "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED",
+  );
   const frontendOrigin = production
     ? parseOrigin(env.AUTH_FRONTEND_URL!, "AUTH_FRONTEND_URL", true)
     : undefined;
@@ -199,5 +204,6 @@ export function loadApiRuntimeConfig(
     },
     schedulerEnabled,
     instagramPublishEnabled,
+    aiContentAttachmentUploadSessionsEnabled,
   };
 }

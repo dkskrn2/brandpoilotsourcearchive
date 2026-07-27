@@ -8,6 +8,8 @@ const generationId = "33333333-3333-4333-8333-333333333333";
 const outputId = "44444444-4444-4444-8444-444444444444";
 const analysisId = "55555555-5555-4555-8555-555555555555";
 const attachmentId = "66666666-6666-4666-8666-666666666666";
+const sessionId = "77777777-7777-4777-8777-777777777777";
+const actorUserId = "88888888-8888-4888-8888-888888888888";
 
 function subjectAnalysis(status: "queued" | "ready" | "partial" = "queued") {
   return {
@@ -104,7 +106,12 @@ function generation(
   };
 }
 
-function setup(allowed = true) {
+function setup(
+  allowed = true,
+  options: { uploadSessionsEnabled?: boolean; actorUserId?: string | null } = {},
+) {
+  const events: string[] = [];
+  const sessionExpiresAt = "2099-07-18T00:10:00.000Z";
   const repository = {
     health: vi.fn(async () => ({ database: "ok" as const })),
     createAiContentAnalysis: vi.fn(async () => generation()),
@@ -119,6 +126,42 @@ function setup(allowed = true) {
     listBrandAppeals: vi.fn(async () => []),
     saveBrandAppeal: vi.fn(async () => ({ id: "appeal-1", title: "빠른 시작", description: "설정 지원", evidenceType: "benefit" as const, useCount: 0, lastUsedAt: null })),
     confirmAiContentAttachment: vi.fn(async (input) => ({ id: "attachment-1", generationId: input.generationId, role: input.role, fileName: input.fileName, mimeType: input.mimeType, sizeBytes: input.sizeBytes, checksum: input.checksum, storageUrl: input.storageUrl, storagePath: input.storagePath, createdAt: "2026-07-18T00:00:00.000Z" })),
+    assertAiContentAttachmentUploadMutable: vi.fn(async () => undefined),
+    createAiContentUploadSession: vi.fn(async (input) => {
+      events.push("database");
+      return {
+        id: sessionId,
+        generationId: input.generationId,
+        workspaceId: input.workspaceId,
+        brandId: input.brandId,
+        createdByUserId: input.createdByUserId,
+        nonce: "opaque-upload-nonce",
+        ...input.attachment,
+        storagePath: `workspaces/${workspaceId}/brands/${brandId}/ai-content/${generationId}/attachments/${sessionId}/attempt/product.png`,
+        status: "pending" as const,
+        tokenExpiresAt: sessionExpiresAt,
+        createdAt: "2026-07-18T00:00:00.000Z",
+      };
+    }),
+    failAiContentUploadSession: vi.fn(async () => undefined),
+    confirmAiContentUploadSession: vi.fn(async (input, verify) => {
+      const verified = await verify({
+        id: input.sessionId,
+        generationId,
+        workspaceId,
+        brandId,
+        role: "product",
+        fileName: "product.png",
+        mimeType: "image/png",
+        sizeBytes: 100,
+        checksum: "a".repeat(64),
+        storagePath: `workspaces/${workspaceId}/brands/${brandId}/ai-content/${generationId}/attachments/${sessionId}/attempt/product.png`,
+        tokenExpiresAt: sessionExpiresAt,
+      }, new AbortController().signal);
+      return { id: attachmentId, generationId, role: "product", fileName: "product.png", checksum: "a".repeat(64), createdAt: "2026-07-18T00:00:00.000Z", ...verified };
+    }),
+    cancelAiContentUploadSession: vi.fn(async (input) => ({ id: input.sessionId })),
+    confirmLegacyAiContentAttachment: vi.fn(async (input) => ({ id: attachmentId, generationId: input.generationId, role: input.role, fileName: input.fileName, mimeType: input.mimeType, sizeBytes: input.sizeBytes, checksum: input.checksum, storageUrl: input.storageUrl, storagePath: input.storagePath, createdAt: "2026-07-18T00:00:00.000Z" })),
     removeAiContentAttachment: vi.fn(async (input) => ({ id: input.attachmentId })),
     retryAiContentOutput: vi.fn(async () => generation("queued")),
     downloadAiContentOutput: vi.fn(async () => ({ fileName: "result.zip", mimeType: "application/zip" as const, buffer: Buffer.from("PK"), itemCount: 1 })),
@@ -149,23 +192,36 @@ function setup(allowed = true) {
     getConfirmedSubjectAnalysisBrandContext: vi.fn(async () => confirmedSubjectBrandContext),
   } as unknown as ApiRepository;
   const kakaoAuth = {
-    getSession: vi.fn(async () => ({ userId: "user-1", workspaceId, workspaceName: "Workspace", brandId, brandName: "Brand", displayName: "Tester", email: null })),
+    getSession: vi.fn(async () => ({ userId: options.actorUserId ?? (options.actorUserId === null ? null : actorUserId), workspaceId, workspaceName: "Workspace", brandId, brandName: "Brand", displayName: "Tester", email: null })),
     canAccessBrand: vi.fn(async () => allowed),
   } as never;
-  const generateClientToken = vi.fn(async () => "upload-token");
-  const headBlob = vi.fn(async (url: string) => ({
-    pathname: new URL(url).pathname.replace(/^\//, ""),
+  const generateClientToken = vi.fn(async () => {
+    events.push("provider");
+    return "upload-token";
+  });
+  const headBlob = vi.fn(async (urlOrPath: string) => ({
+    pathname: urlOrPath.startsWith("https:")
+      ? new URL(urlOrPath).pathname.replace(/^\//, "")
+      : urlOrPath,
+    url: urlOrPath.startsWith("https:")
+      ? urlOrPath
+      : `https://test.public.blob.vercel-storage.com/${urlOrPath}`,
     size: 100,
     contentType: "image/png",
   } as never));
   const app = createServer({
     repository,
     kakaoAuth,
-    aiContentUpload: { readWriteToken: "rw-token", generateClientToken, headBlob },
+    aiContentUpload: {
+      readWriteToken: "rw-token",
+      generateClientToken,
+      headBlob,
+      uploadSessionsEnabled: options.uploadSessionsEnabled ?? false,
+    },
     aiContentLimits: { dailyGenerationLimit: 10, dailyDownloadLimit: 20 },
     logger: false,
   });
-  return { app, repository, generateClientToken };
+  return { app, repository, generateClientToken, events, sessionExpiresAt };
 }
 
 const auth = { cookie: "bp_session=session-1" };
@@ -315,6 +371,13 @@ describe("AI content customer routes", () => {
     });
     expect(tokenResponse.statusCode).toBe(200);
     const { pathname } = tokenResponse.json();
+    expect(tokenResponse.json()).toEqual({ pathname, clientToken: "upload-token" });
+    expect(repository.assertAiContentAttachmentUploadMutable).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      generationId,
+    });
+    expect(repository.createAiContentUploadSession).not.toHaveBeenCalled();
     expect(generateClientToken).toHaveBeenCalledOnce();
 
     const confirmed = await app.inject({
@@ -324,30 +387,270 @@ describe("AI content customer routes", () => {
       payload: { ...attachment, storagePath: pathname, storageUrl: `https://test.public.blob.vercel-storage.com/${pathname}` },
     });
     expect(confirmed.statusCode).toBe(200);
-    expect(repository.confirmAiContentAttachment).toHaveBeenCalledWith(expect.objectContaining({ workspaceId, brandId, generationId, storagePath: pathname }));
+    expect(repository.confirmLegacyAiContentAttachment).toHaveBeenCalledWith(expect.objectContaining({ workspaceId, brandId, generationId, storagePath: pathname }));
     await app.close();
   });
 
-  it("keeps the current confirm route legacy-only during deployment skew", async () => {
+  it("creates the upload session before issuing its exact-path provider token", async () => {
+    const { app, repository, generateClientToken, events, sessionExpiresAt } = setup(true, {
+      uploadSessionsEnabled: true,
+    });
+    const attachment = { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+      headers: auth,
+      payload: attachment,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const session = vi.mocked(repository.createAiContentUploadSession!).mock.results[0]!.value;
+    const stored = await session;
+    expect(events).toEqual(["database", "provider"]);
+    expect(repository.createAiContentUploadSession).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      generationId,
+      createdByUserId: actorUserId,
+      attachment,
+    });
+    expect(generateClientToken).toHaveBeenCalledWith(expect.objectContaining({
+      pathname: stored.storagePath,
+      allowedContentTypes: [stored.mimeType],
+      maximumSizeInBytes: 5_000_000,
+      validUntil: Date.parse(sessionExpiresAt) - 60_000,
+    }));
+    expect(response.json()).toEqual({
+      contractVersion: "ai-content-attachment-upload.v2",
+      sessionId,
+      nonce: "opaque-upload-nonce",
+      pathname: stored.storagePath,
+      clientToken: "upload-token",
+      uploadExpiresAt: new Date(Date.parse(sessionExpiresAt) - 60_000).toISOString(),
+      sessionExpiresAt,
+    });
+    await app.close();
+  });
+
+  it("marks an enabled session failed while preserving provider outage mapping", async () => {
+    const { app, repository, generateClientToken } = setup(true, { uploadSessionsEnabled: true });
+    generateClientToken.mockRejectedValueOnce(new Error("provider secret must not leak"));
+    vi.mocked(repository.failAiContentUploadSession!).mockRejectedValueOnce(
+      new Error("compensation database failure"),
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+      headers: auth,
+      payload: { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "ai_content_attachment_storage_unavailable" });
+    expect(repository.failAiContentUploadSession).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      generationId,
+      sessionId,
+      createdByUserId: actorUserId,
+      errorCode: "ai_content_attachment_storage_unavailable",
+    });
+    expect(response.body).not.toContain("provider secret");
+    await app.close();
+  });
+
+  it.each([false, true])("routes a legacy confirmation to the legacy repository when issuance=%s", async (uploadSessionsEnabled) => {
+    const { app, repository } = setup(true, { uploadSessionsEnabled });
+    const attachment = { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) };
+    const pathname = `brands/${brandId}/ai-content/${generationId}/attachments/${attachment.checksum}-${attachment.fileName}`;
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`,
+      headers: auth,
+      payload: { ...attachment, storagePath: pathname, storageUrl: `https://test.public.blob.vercel-storage.com/${pathname}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.confirmLegacyAiContentAttachment).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId,
+      brandId,
+      generationId,
+      storagePath: pathname,
+    }));
+    expect(repository.confirmAiContentUploadSession).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("returns not found for a missing tenant-scoped generation before legacy Blob verification", async () => {
     const { app, repository } = setup();
+    vi.mocked(repository.getAiContentGeneration).mockResolvedValueOnce(null);
+    const attachment = { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) };
+    const pathname = `brands/${brandId}/ai-content/${generationId}/attachments/${attachment.checksum}-${attachment.fileName}`;
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`,
+      headers: auth,
+      payload: { ...attachment, storagePath: pathname, storageUrl: `https://test.public.blob.vercel-storage.com/${pathname}` },
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "ai_content_generation_not_found" });
+    expect(repository.confirmLegacyAiContentAttachment).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it.each([false, true])("returns a lock conflict before issuing a token when issuance=%s", async (uploadSessionsEnabled) => {
+    const { app, repository, generateClientToken } = setup(true, { uploadSessionsEnabled });
+    const method = uploadSessionsEnabled
+      ? repository.createAiContentUploadSession!
+      : repository.assertAiContentAttachmentUploadMutable!;
+    vi.mocked(method).mockRejectedValueOnce(new Error("ai_content_attachments_locked"));
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+      headers: auth,
+      payload: { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "ai_content_attachments_locked" });
+    expect(generateClientToken).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("requires an actor for enabled issuance, confirmation, and cancellation", async () => {
+    const { app, repository } = setup(true, { uploadSessionsEnabled: true, actorUserId: null });
+    const requests = [
+      app.inject({
+        method: "POST",
+        url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+        headers: auth,
+        payload: { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) },
+      }),
+      app.inject({
+        method: "POST",
+        url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`,
+        headers: auth,
+        payload: { sessionId, nonce: "opaque-upload-nonce" },
+      }),
+      app.inject({
+        method: "POST",
+        url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/cancel`,
+        headers: auth,
+        payload: { sessionId, nonce: "opaque-upload-nonce" },
+      }),
+    ];
+
+    for (const response of await Promise.all(requests)) {
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toEqual({ error: "authentication_required" });
+    }
+    expect(repository.createAiContentUploadSession).not.toHaveBeenCalled();
+    expect(repository.confirmAiContentUploadSession).not.toHaveBeenCalled();
+    expect(repository.cancelAiContentUploadSession).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("cancels an actor-bound upload session with an exact body", async () => {
+    const { app, repository } = setup(true, { uploadSessionsEnabled: true });
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/cancel`,
+      headers: auth,
+      payload: { sessionId, nonce: "opaque-upload-nonce" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(repository.cancelAiContentUploadSession).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      generationId,
+      sessionId,
+      nonce: "opaque-upload-nonce",
+      createdByUserId: actorUserId,
+    });
+    await app.close();
+  });
+
+  it.each([
+    ["ai_content_upload_session_not_found", 404],
+    ["ai_content_upload_confirmation_conflict", 409],
+    ["ai_content_attachment_limit_exceeded", 409],
+    ["ai_content_attachments_locked", 409],
+    ["ai_content_attachment_upload_in_progress", 409],
+    ["ai_content_upload_session_expired", 410],
+    ["ai_content_attachment_retention_expired", 410],
+    ["ai_content_attachment_blob_unavailable", 422],
+    ["ai_content_attachment_path_mismatch", 422],
+    ["ai_content_attachment_size_mismatch", 422],
+    ["ai_content_attachment_mime_mismatch", 422],
+    ["ai_content_attachment_url_mismatch", 422],
+    ["ai_content_attachment_storage_unavailable", 503],
+    ["ai_content_attachment_verification_timeout", 503],
+  ] as const)("maps lifecycle error %s to HTTP %s", async (errorCode, statusCode) => {
+    const { app, repository } = setup(true, { uploadSessionsEnabled: true });
+    vi.mocked(repository.cancelAiContentUploadSession!).mockRejectedValueOnce(new Error(errorCode));
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/cancel`,
+      headers: auth,
+      payload: { sessionId, nonce: "opaque-upload-nonce" },
+    });
+    expect(response.statusCode).toBe(statusCode);
+    expect(response.json()).toEqual({ error: errorCode });
+    await app.close();
+  });
+
+  it.each([
+    [`/brands/not-a-uuid/ai-content/generations/${generationId}/attachments/token`, { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) }, "ai_content_brand_id_invalid"],
+    [`/brands/${brandId}/ai-content/generations/not-a-uuid/attachments/token`, { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) }, "ai_content_generation_id_invalid"],
+    [`/brands/${brandId}/ai-content/generations/${generationId}/attachments/cancel`, { sessionId: "not-a-uuid", nonce: "opaque-upload-nonce" }, "ai_content_upload_session_id_invalid"],
+  ])("rejects malformed lifecycle IDs before repository access: %s", async (url, payload, errorCode) => {
+    const { app, repository } = setup(true, { uploadSessionsEnabled: true });
+    const response = await app.inject({ method: "POST", url, headers: auth, payload });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: errorCode });
+    expect(repository.createAiContentUploadSession).not.toHaveBeenCalled();
+    expect(repository.cancelAiContentUploadSession).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("rejects a malformed attachment ID before repository access", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/not-a-uuid`,
+      headers: auth,
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "ai_content_attachment_id_invalid" });
+    expect(repository.removeAiContentAttachment).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it.each([false, true])("accepts session confirmation during deployment skew when issuance=%s", async (uploadSessionsEnabled) => {
+    const { app, repository } = setup(true, { uploadSessionsEnabled });
     const response = await app.inject({
       method: "POST",
       url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`,
       headers: auth,
       payload: {
-        sessionId: "33333333-3333-4333-8333-333333333333",
+        sessionId,
         nonce: "opaque-upload-nonce",
       },
     });
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({ error: "ai_content_attachment_size_invalid" });
-    expect(repository.confirmAiContentAttachment).not.toHaveBeenCalled();
+    expect(response.statusCode).toBe(200);
+    expect(repository.confirmAiContentUploadSession).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId, brandId, generationId, sessionId, createdByUserId: actorUserId }),
+      expect.any(Function),
+    );
     await app.close();
   });
 
   it("returns the aggregate attachment limit error from direct API confirmation", async () => {
     const { app, repository } = setup();
-    vi.mocked(repository.confirmAiContentAttachment).mockRejectedValueOnce(new Error("ai_content_attachment_limit_exceeded"));
+    vi.mocked(repository.confirmLegacyAiContentAttachment!).mockRejectedValueOnce(new Error("ai_content_attachment_limit_exceeded"));
     const attachment = { role: "product", fileName: "sixth.png", mimeType: "image/png", sizeBytes: 100, checksum: "b".repeat(64) };
     const tokenResponse = await app.inject({
       method: "POST",
@@ -364,7 +667,7 @@ describe("AI content customer routes", () => {
       payload: { ...attachment, storagePath: pathname, storageUrl: `https://test.public.blob.vercel-storage.com/${pathname}` },
     });
 
-    expect(response.statusCode).toBe(400);
+    expect(response.statusCode).toBe(409);
     expect(response.json()).toEqual({ error: "ai_content_attachment_limit_exceeded" });
     await app.close();
   });

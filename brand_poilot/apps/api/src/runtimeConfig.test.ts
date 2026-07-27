@@ -121,7 +121,26 @@ describe("loadApiRuntimeConfig", () => {
     const config = loadApiRuntimeConfig({});
     expect(config.schedulerEnabled).toBe(false);
     expect(config.instagramPublishEnabled).toBe(false);
+    expect(config.aiContentAttachmentUploadSessionsEnabled).toBe(false);
   });
+
+  it("enables attachment upload sessions only with literal true", () => {
+    expect(loadApiRuntimeConfig({
+      AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED: "true",
+    }).aiContentAttachmentUploadSessionsEnabled).toBe(true);
+    expect(loadApiRuntimeConfig({
+      AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED: "false",
+    }).aiContentAttachmentUploadSessionsEnabled).toBe(false);
+  });
+
+  it.each(["yes", "1", "TRUE", ""])(
+    "rejects a non-literal attachment upload sessions boolean (%s)",
+    (value) => {
+      expect(() => loadApiRuntimeConfig({
+        AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED: value,
+      })).toThrow("AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED");
+    },
+  );
 
   it.each(["LOCAL_SCHEDULER_ENABLED", "INSTAGRAM_PUBLISH_ENABLED"])(
     "forces %s off in production",

@@ -67,7 +67,8 @@ const serverOptions: Parameters<typeof createServer>[0] & {
       verifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN ?? ""
     },
     aiContentUpload: {
-      readWriteToken: blobReadWriteToken
+      readWriteToken: blobReadWriteToken,
+      uploadSessionsEnabled: runtimeConfig.aiContentAttachmentUploadSessionsEnabled,
     },
     assetLibraryUpload: {
       readWriteToken: blobReadWriteToken
