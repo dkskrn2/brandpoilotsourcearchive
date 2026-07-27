@@ -3698,7 +3698,7 @@ test("061 deterministically removes legacy duplicate avatar bytes and prevents n
   });
 });
 
-test("migration runner records forward-only 061 through 064 without changing the applied 058 checksum", async () => {
+test("migration runner records forward-only 061 through 065 without changing the applied 058 checksum", async () => {
   const migrations = await loadMigrations();
   const runnableMigrations = migrations.filter(
     (migration) => !migration.sql.startsWith("-- requires: pgvector")
@@ -3724,20 +3724,22 @@ test("migration runner records forward-only 061 through 064 without changing the
       client,
       migrations: runnableMigrations,
     });
-    assert.deepEqual(upgraded.pending.slice(-4), [
+    assert.deepEqual(upgraded.pending.slice(-5), [
       "061_avatar_image_checksum_uniqueness.sql",
       "062_avatar_upload_cancellation.sql",
       "063_avatar_upload_finalization.sql",
       "064_reference_upload_finalization.sql",
+      "065_ai_content_attachment_upload_sessions.sql",
     ]);
     const recorded = await database.query(
-      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4, $5) order by id",
+      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4, $5, $6) order by id",
       [
         "058_avatar_and_reference_libraries.sql",
         "061_avatar_image_checksum_uniqueness.sql",
         "062_avatar_upload_cancellation.sql",
         "063_avatar_upload_finalization.sql",
         "064_reference_upload_finalization.sql",
+        "065_ai_content_attachment_upload_sessions.sql",
       ],
     );
     assert.deepEqual(recorded.rows, [
@@ -3760,6 +3762,10 @@ test("migration runner records forward-only 061 through 064 without changing the
       {
         id: "064_reference_upload_finalization.sql",
         checksum: migrations.find((migration) => migration.id === "064_reference_upload_finalization.sql")?.checksum,
+      },
+      {
+        id: "065_ai_content_attachment_upload_sessions.sql",
+        checksum: migrations.find((migration) => migration.id === "065_ai_content_attachment_upload_sessions.sql")?.checksum,
       },
     ]);
     const repeated = await runMigrationsWithClient({
@@ -3889,6 +3895,309 @@ test("063 upgrades pathless pre-062 sessions and backoff lets a newer cleanup en
         limit 100`,
     );
     assert.deepEqual(eligible.rows, [{ id: sessionIds[100] }]);
+  });
+});
+
+const attachmentLifecycleCatalog = async (database) => {
+  const columns = await database.query(`
+    select table_name, column_name, data_type, is_nullable, column_default
+      from information_schema.columns
+     where table_schema = 'public'
+       and table_name in (
+         'ai_content_generations',
+         'ai_content_generation_attachments',
+         'ai_content_attachment_upload_sessions',
+         'ai_content_attachment_deletion_jobs'
+       )
+     order by table_name, ordinal_position
+  `);
+  const constraints = await database.query(`
+    select conrelid::regclass::text as table_name, conname,
+           pg_get_constraintdef(oid) as definition
+      from pg_constraint
+     where conrelid in (
+       'ai_content_generations'::regclass,
+       'ai_content_generation_attachments'::regclass,
+       'ai_content_attachment_upload_sessions'::regclass,
+       'ai_content_attachment_deletion_jobs'::regclass
+     )
+     order by table_name, conname
+  `);
+  const indexes = await database.query(`
+    select tablename, indexname, indexdef
+      from pg_indexes
+     where schemaname = 'public'
+       and tablename in (
+         'ai_content_generations',
+         'ai_content_generation_attachments',
+         'ai_content_attachment_upload_sessions',
+         'ai_content_attachment_deletion_jobs'
+       )
+     order by tablename, indexname
+  `);
+  return { columns: columns.rows, constraints: constraints.rows, indexes: indexes.rows };
+};
+
+test("065 fresh and through-064 upgrade paths converge on the attachment lifecycle catalog", async () => {
+  const migrations = await loadMigrations();
+  const migration065 = migrations.find(
+    (migration) => migration.id === "065_ai_content_attachment_upload_sessions.sql",
+  );
+  assert.ok(migration065, "065 attachment lifecycle migration must exist");
+
+  const freshCatalog = await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "065_ai_content_attachment_upload_sessions.sql",
+    );
+    return attachmentLifecycleCatalog(database);
+  });
+  const upgradedCatalog = await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "064_reference_upload_finalization.sql",
+    );
+    await database.exec(migration065.sql);
+    return attachmentLifecycleCatalog(database);
+  });
+
+  assert.deepEqual(upgradedCatalog, freshCatalog);
+  const generationColumns = new Set(
+    freshCatalog.columns
+      .filter((column) => column.table_name === "ai_content_generations")
+      .map((column) => column.column_name),
+  );
+  for (const name of [
+    "attachments_locked_at",
+    "generation_input_snapshot",
+    "terminal_at",
+    "retryable_until",
+  ]) {
+    assert.ok(generationColumns.has(name), `missing generation column ${name}`);
+  }
+  for (const index of [
+    "ai_content_attachment_upload_sessions_nonce_uq",
+    "ai_content_attachment_upload_sessions_storage_path_uq",
+    "ai_content_attachment_upload_sessions_pending_expiry_idx",
+    "ai_content_upload_sessions_generation_reservation_idx",
+    "ai_content_attachment_deletion_jobs_due_idx",
+    "ai_content_attachment_deletion_jobs_expired_lease_idx",
+    "ai_content_generations_terminal_retention_idx",
+  ]) {
+    assert.ok(
+      freshCatalog.indexes.some((entry) => entry.indexname === index),
+      `missing lifecycle index ${index}`,
+    );
+  }
+});
+
+test("065 backfills snapshots, sessions, missing IDs, retention, and durable deletion obligations", async () => {
+  const migrations = await loadMigrations();
+  const migration065 = migrations.find(
+    (migration) => migration.id === "065_ai_content_attachment_upload_sessions.sql",
+  );
+  assert.ok(migration065);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "064_reference_upload_finalization.sql",
+    );
+    const actor = await database.query(
+      "insert into app_users(email) values($1) returning id",
+      [`attachment-lifecycle-${randomUUID()}@example.com`],
+    );
+    const workspace = await database.query(
+      "insert into workspaces(name,slug) values('Attachment lifecycle',$1) returning id",
+      [`attachment-lifecycle-${randomUUID()}`],
+    );
+    await database.query(
+      "insert into workspace_members(workspace_id,user_id,role) values($1,$2,'owner')",
+      [workspace.rows[0].id, actor.rows[0].id],
+    );
+    const brand = await database.query(
+      "insert into brands(workspace_id,name) values($1,'Lifecycle Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    const terminalSnapshot = {
+      contentGenerationInput: { subject: "unchanged", nested: { order: [2, 1] } },
+      marker: "preserve-me",
+    };
+    const terminal = await database.query(
+      `insert into ai_content_generations(
+         workspace_id,brand_id,type,title,status,analysis_idempotency_key,
+         subject_analysis_snapshot,updated_at,completed_at
+       ) values($1,$2,'blog','Terminal','completed',$3,$4::jsonb,
+         '2026-01-02T03:04:05Z',null) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, `terminal-${randomUUID()}`, JSON.stringify(terminalSnapshot)],
+    );
+    const active = await database.query(
+      `insert into ai_content_generations(
+         workspace_id,brand_id,type,title,status,analysis_idempotency_key,
+         subject_analysis_snapshot
+       ) values($1,$2,'blog','Active','queued',$3,$4::jsonb) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, `active-${randomUUID()}`, JSON.stringify(terminalSnapshot)],
+    );
+    const output = await database.query(
+      `insert into ai_content_generation_outputs(
+         generation_id,workspace_id,brand_id,output_index,status
+       ) values($1,$2,$3,1,'queued') returning id`,
+      [active.rows[0].id, workspace.rows[0].id, brand.rows[0].id],
+    );
+    await database.query(
+      `insert into ai_content_generation_jobs(
+         generation_id,output_id,workspace_id,brand_id,job_type,content_type,status,payload_json
+       ) values($1,$2,$3,$4,'generate','blog','queued','{}')`,
+      [active.rows[0].id, output.rows[0].id, workspace.rows[0].id, brand.rows[0].id],
+    );
+    const attachmentIds = [randomUUID(), randomUUID()];
+    await database.query(
+      `insert into ai_content_generation_attachments(
+         id,generation_id,workspace_id,brand_id,role,file_name,mime_type,size_bytes,
+         checksum,storage_url,storage_path,deleted_at
+       ) values
+       ($1,$3,$4,$5,'document','first.pdf','application/pdf',101,$6,
+        'https://cdn.example.com/first.pdf','generation/first.pdf',null),
+       ($2,$3,$4,$5,'visual_reference','second.png','image/png',202,$7,
+        'https://cdn.example.com/second.png','generation/second.png',now())`,
+      [
+        attachmentIds[0],
+        attachmentIds[1],
+        active.rows[0].id,
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        "a".repeat(64),
+        "b".repeat(64),
+      ],
+    );
+    const missingId = randomUUID();
+    await database.query(
+      `insert into ai_content_subject_analyses(
+         workspace_id,brand_id,generation_id,contract_version,subject_type,input_json,
+         attachment_ids_json,status,analysis_version,idempotency_key
+       ) values($1,$2,$3,'subject-analysis.v2','product','{}',$4::jsonb,
+         'queued',1,$5)`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        active.rows[0].id,
+        JSON.stringify([attachmentIds[1], missingId, attachmentIds[0]]),
+        `analysis-${randomUUID()}`,
+      ],
+    );
+    const emptyGeneration = await database.query(
+      `insert into ai_content_generations(
+         workspace_id,brand_id,type,title,status,analysis_idempotency_key
+       ) values($1,$2,'blog','Empty attachments','analysis_ready',$3) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, `empty-${randomUUID()}`],
+    );
+    const emptyAnalysis = await database.query(
+      `insert into ai_content_subject_analyses(
+         workspace_id,brand_id,generation_id,contract_version,subject_type,input_json,
+         attachment_ids_json,status,analysis_version,idempotency_key
+       ) values($1,$2,$3,'subject-analysis.v2','product','{}','[]','ready',1,$4)
+       returning id`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        emptyGeneration.rows[0].id,
+        `empty-analysis-${randomUUID()}`,
+      ],
+    );
+
+    await database.exec(migration065.sql);
+
+    const generations = await database.query(
+      `select id,generation_input_snapshot,terminal_at,retryable_until
+         from ai_content_generations
+        where id in ($1,$2) order by id`,
+      [terminal.rows[0].id, active.rows[0].id],
+    );
+    const terminalRow = generations.rows.find((row) => row.id === terminal.rows[0].id);
+    const activeRow = generations.rows.find((row) => row.id === active.rows[0].id);
+    assert.deepEqual(terminalRow.generation_input_snapshot, terminalSnapshot);
+    assert.equal(new Date(terminalRow.terminal_at).toISOString(), "2026-01-02T03:04:05.000Z");
+    assert.equal(new Date(terminalRow.retryable_until).toISOString(), "2026-01-17T03:04:05.000Z");
+    assert.equal(activeRow.terminal_at, null);
+    assert.equal(activeRow.retryable_until, null);
+    const job = await database.query(
+      "select payload_json from ai_content_generation_jobs where generation_id=$1",
+      [active.rows[0].id],
+    );
+    assert.deepEqual(job.rows[0].payload_json.contentGenerationInput, terminalSnapshot.contentGenerationInput);
+    const analysis = await database.query(
+      "select input_json from ai_content_subject_analyses where generation_id=$1",
+      [active.rows[0].id],
+    );
+    assert.deepEqual(
+      analysis.rows[0].input_json.attachmentSnapshot.map((item) => item.id),
+      [attachmentIds[1], attachmentIds[0]],
+    );
+    assert.deepEqual(analysis.rows[0].input_json.attachmentSnapshotMissingIds, [missingId]);
+    const emptyAnalysisAfter = await database.query(
+      "select input_json from ai_content_subject_analyses where id=$1",
+      [emptyAnalysis.rows[0].id],
+    );
+    assert.deepEqual(emptyAnalysisAfter.rows[0].input_json.attachmentSnapshot, []);
+    assert.deepEqual(
+      emptyAnalysisAfter.rows[0].input_json.attachmentSnapshotMissingIds,
+      [],
+    );
+    const sessions = await database.query(
+      `select created_by_user_id,is_legacy_backfill,confirmed_at,confirmed_attachment_id
+         from ai_content_attachment_upload_sessions
+        where generation_id=$1 order by confirmed_attachment_id`,
+      [active.rows[0].id],
+    );
+    assert.equal(sessions.rows.length, 2);
+    assert.ok(sessions.rows.every((row) =>
+      row.created_by_user_id === null
+      && row.is_legacy_backfill === true
+      && row.confirmed_at !== null
+      && row.confirmed_attachment_id !== null
+    ));
+    const deletedAttachment = await database.query(
+      `select physical_delete_status,physically_deleted_at
+         from ai_content_generation_attachments where id=$1`,
+      [attachmentIds[1]],
+    );
+    assert.deepEqual(deletedAttachment.rows, [{
+      physical_delete_status: "pending",
+      physically_deleted_at: null,
+    }]);
+    const backfillJobs = await database.query(
+      `select storage_path,status from ai_content_attachment_deletion_jobs
+        where workspace_id=$1 order by storage_path`,
+      [workspace.rows[0].id],
+    );
+    assert.deepEqual(backfillJobs.rows, [{
+      storage_path: "generation/second.png",
+      status: "pending",
+    }]);
+
+    await database.query("delete from ai_content_generations where id=$1", [active.rows[0].id]);
+    const afterGenerationDelete = await database.query(
+      `select storage_path from ai_content_attachment_deletion_jobs
+        where workspace_id=$1 order by storage_path`,
+      [workspace.rows[0].id],
+    );
+    assert.deepEqual(
+      afterGenerationDelete.rows.map((row) => row.storage_path),
+      ["generation/first.pdf", "generation/second.png"],
+    );
+    await database.query("delete from workspaces where id=$1", [workspace.rows[0].id]);
+    const afterWorkspaceDelete = await database.query(
+      `select workspace_id,storage_path from ai_content_attachment_deletion_jobs
+        where workspace_id=$1 order by storage_path`,
+      [workspace.rows[0].id],
+    );
+    assert.equal(afterWorkspaceDelete.rows.length, 2);
   });
 });
 

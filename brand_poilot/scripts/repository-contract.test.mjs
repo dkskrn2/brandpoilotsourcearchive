@@ -262,7 +262,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션 registry는 avatar upload lifecycle 063까지 포함한다", async () => {
+test("데이터베이스 마이그레이션 registry는 AI attachment lifecycle 065까지 포함한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -333,12 +333,50 @@ test("데이터베이스 마이그레이션 registry는 avatar upload lifecycle 
     "062_avatar_upload_cancellation.sql",
     "063_avatar_upload_finalization.sql",
     "064_reference_upload_finalization.sql",
+    "065_ai_content_attachment_upload_sessions.sql",
   ]);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("059_")).length <= 1);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("060_")).length <= 1);
   if (reservedProgramMigrations.some((file) => file.startsWith("060_"))) {
     assert.ok(reservedProgramMigrations.includes("060_content_orchestration.sql"));
   }
+});
+
+test("065 defines the parent-independent AI attachment lifecycle contract", async () => {
+  const migration = await readFile(
+    "db/migrations/065_ai_content_attachment_upload_sessions.sql",
+    "utf8",
+  );
+
+  for (const table of [
+    "ai_content_attachment_upload_sessions",
+    "ai_content_attachment_deletion_jobs",
+  ]) {
+    assert.match(migration, new RegExp(`create\\s+table\\s+${table}`, "i"));
+  }
+  for (const column of [
+    "attachments_locked_at",
+    "generation_input_snapshot",
+    "terminal_at",
+    "retryable_until",
+    "upload_session_id",
+    "deletion_reason",
+    "physical_delete_status",
+    "physically_deleted_at",
+  ]) {
+    assert.match(migration, new RegExp(`\\b${column}\\b`, "i"));
+  }
+  assert.match(migration, /deferrable\s+initially\s+deferred[\s\S]*on delete no action/i);
+  assert.match(migration, /created_by_user_id is not null[\s\S]*is_legacy_backfill[\s\S]*confirmed_attachment_id is not null/i);
+  assert.match(migration, /before delete[\s\S]*ai_content_generation_attachments/i);
+  assert.match(migration, /before delete[\s\S]*ai_content_attachment_upload_sessions/i);
+  assert.match(migration, /on conflict[\s\S]*do nothing/i);
+  assert.match(migration, /contentGenerationInput/);
+  assert.match(migration, /attachmentSnapshotMissingIds/);
+  assert.doesNotMatch(
+    migration,
+    /alter\s+table\s+ai_content_generation_attachments[\s\S]*add\s+column\s+(?:attempt|retry|lease|last_error)/i,
+  );
 });
 
 test("063 keeps cancelled sessions pending through token expiry and schedules fair retries", async () => {

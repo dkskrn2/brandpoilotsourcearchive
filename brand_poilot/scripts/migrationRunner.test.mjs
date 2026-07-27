@@ -731,3 +731,17 @@ test("subject analysis migration defines cached analyses, archived images, and g
   );
   assert.match(sql, /commit;\s*$/);
 });
+
+test("an installation applied through 064 has exactly the attachment lifecycle migration pending", async () => {
+  const loaded = await migrationRunner.loadMigrations();
+  const applied = loaded
+    .filter((migration) => migration.id <= "064_reference_upload_finalization.sql")
+    .map(({ id, checksum }) => ({ id, checksum }));
+
+  const plan = buildMigrationPlan(loaded, applied);
+
+  assert.deepEqual(
+    plan.pending.map((migration) => migration.id),
+    ["065_ai_content_attachment_upload_sessions.sql"],
+  );
+});
