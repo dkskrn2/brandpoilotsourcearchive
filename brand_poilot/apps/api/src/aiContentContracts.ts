@@ -247,6 +247,11 @@ export function parseConfirmAttachmentInput(value: unknown): ConfirmAttachmentIn
       nonce: requiredString(session.nonce, "ai_content_upload_nonce_invalid", 500),
     };
   }
+  return parseLegacyConfirmAttachmentInput(source);
+}
+
+export function parseLegacyConfirmAttachmentInput(value: unknown): LegacyConfirmAttachmentInput {
+  const source = inputObject(value);
   return {
     ...parseAttachmentUploadTokenInput(source),
     storageUrl: requiredString(source.storageUrl, "ai_content_attachment_url_invalid", 2_000),

@@ -6,11 +6,13 @@ import {
   parseAiContentUploadSessionId,
   parseCancelUploadSessionInput,
   parseConfirmAttachmentInput,
+  parseLegacyConfirmAttachmentInput,
 } from "./aiContentContracts.js";
 import {
   AI_CONTENT_ATTACHMENT_POLICY,
   AI_CONTENT_UPLOAD_SESSION_TTL_MS,
   buildAiContentAttachmentPath,
+  buildAiContentUploadSessionPath,
   confirmAiContentAttachment,
   issueAiContentAttachmentToken,
   issueAiContentUploadSessionToken,
@@ -62,6 +64,11 @@ describe("AI content attachment upload policy", () => {
       storageUrl: "https://test.public.blob.vercel-storage.com/brands/legacy/path",
     };
     expect(parseConfirmAttachmentInput(legacy)).toEqual(legacy);
+    expect(parseLegacyConfirmAttachmentInput(legacy)).toEqual(legacy);
+    expect(() => parseLegacyConfirmAttachmentInput({
+      sessionId: ids.sessionId,
+      nonce: "opaque-upload-nonce",
+    })).toThrow("ai_content_attachment_size_invalid");
   });
 
   it("exports the MIME, role, and size policy used by attachment consumers", () => {
@@ -121,13 +128,12 @@ describe("AI content attachment upload policy", () => {
   });
 
   it("builds a tenant-scoped path whose upload attempt IDs prevent collisions", () => {
-    const first = buildAiContentAttachmentPath({
+    const first = buildAiContentUploadSessionPath({
       ...ids,
       fileName: base.fileName,
     });
-    const second = buildAiContentAttachmentPath({
+    const second = buildAiContentUploadSessionPath({
       ...ids,
-      sessionId: "66666666-6666-4666-8666-666666666666",
       attemptId: "77777777-7777-4777-8777-777777777777",
       fileName: base.fileName,
     });
@@ -135,6 +141,24 @@ describe("AI content attachment upload policy", () => {
       `workspaces/${ids.workspaceId}/brands/${ids.brandId}/ai-content/${ids.generationId}/attachments/${ids.sessionId}/${ids.attemptId}/${base.fileName}`,
     );
     expect(second).not.toBe(first);
+  });
+
+  it("keeps partial mixed path inputs on explicit legacy or session boundaries", () => {
+    expect(buildAiContentAttachmentPath({
+      brandId: ids.brandId,
+      generationId: ids.generationId,
+      checksum: base.checksum,
+      fileName: base.fileName,
+      attemptId: ids.attemptId,
+    } as never)).toContain(`/attachments/${base.checksum}-${base.fileName}`);
+    expect(() => buildAiContentUploadSessionPath({
+      workspaceId: ids.workspaceId,
+      brandId: ids.brandId,
+      generationId: ids.generationId,
+      sessionId: ids.sessionId,
+      fileName: base.fileName,
+      checksum: base.checksum,
+    } as never)).toThrow("ai_content_upload_attempt_id_invalid");
   });
 
   it("issues a new-session token using the DB path, MIME, maximum, and expiry boundary", async () => {
@@ -182,6 +206,24 @@ describe("AI content attachment upload policy", () => {
       maximumSizeInBytes: 5_000_000,
       tokenExpiresAt,
     }, { token: "read-write", generateClientToken: vi.fn() })).rejects.toThrow("ai_content_upload_session_expiry_invalid");
+  });
+
+  it.each([
+    ["less than the provider buffer remains", "2026-07-27T10:10:00.000Z", "2026-07-27T10:09:30.000Z"],
+    ["the provider boundary has elapsed", "2026-07-27T10:10:00.000Z", "2026-07-27T10:10:01.000Z"],
+  ])("rejects issuance when %s", async (_case, tokenExpiresAt, apiNow) => {
+    const generate = vi.fn(async (_options: any) => "must-not-be-issued");
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse(apiNow));
+    await expect(issueAiContentUploadSessionToken({
+      storagePath: "db-owned/exact-path.png",
+      mimeType: "image/png",
+      maximumSizeInBytes: 5_000_000,
+      tokenExpiresAt,
+    }, { token: "read-write", generateClientToken: generate })).rejects.toThrow(
+      "ai_content_upload_session_expiry_invalid",
+    );
+    expect(generate).not.toHaveBeenCalled();
+    now.mockRestore();
   });
 
   it("issues a token constrained to the computed path", async () => {

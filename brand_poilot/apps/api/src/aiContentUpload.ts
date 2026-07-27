@@ -67,39 +67,32 @@ export function validateAiContentAttachment(input: AiContentAttachmentPolicy): A
   return { ...input, fileName: safeFileName(input.fileName), mimeType, checksum: input.checksum.trim().toLowerCase() };
 }
 
-export function buildAiContentAttachmentPath(input: {
+export function buildAiContentUploadSessionPath(input: {
   workspaceId: string;
   brandId: string;
   generationId: string;
   sessionId: string;
   attemptId: string;
   fileName: string;
-}): string;
+}): string {
+  const workspaceId = pathSegment(input.workspaceId, "ai_content_workspace_id_invalid");
+  const brandId = pathSegment(input.brandId, "ai_content_brand_id_invalid");
+  const generationId = pathSegment(input.generationId, "ai_content_generation_id_invalid");
+  const sessionId = pathSegment(input.sessionId, "ai_content_upload_session_id_invalid");
+  const attemptId = pathSegment(input.attemptId, "ai_content_upload_attempt_id_invalid");
+  return `workspaces/${workspaceId}/brands/${brandId}/ai-content/${generationId}/attachments/${sessionId}/${attemptId}/${safeFileName(input.fileName)}`;
+}
+
 export function buildAiContentAttachmentPath(input: {
   brandId: string;
   generationId: string;
   checksum: string;
   fileName: string;
-}): string;
-export function buildAiContentAttachmentPath(input: {
-  workspaceId?: string;
-  brandId: string;
-  generationId: string;
-  sessionId?: string;
-  attemptId?: string;
-  checksum?: string;
-  fileName: string;
 }): string {
   const brandId = pathSegment(input.brandId, "ai_content_brand_id_invalid");
   const generationId = pathSegment(input.generationId, "ai_content_generation_id_invalid");
-  if (input.workspaceId !== undefined || input.sessionId !== undefined || input.attemptId !== undefined) {
-    const workspaceId = pathSegment(input.workspaceId ?? "", "ai_content_workspace_id_invalid");
-    const sessionId = pathSegment(input.sessionId ?? "", "ai_content_upload_session_id_invalid");
-    const attemptId = pathSegment(input.attemptId ?? "", "ai_content_upload_attempt_id_invalid");
-    return `workspaces/${workspaceId}/brands/${brandId}/ai-content/${generationId}/attachments/${sessionId}/${attemptId}/${safeFileName(input.fileName)}`;
-  }
-  if (!SHA256.test(input.checksum?.trim() ?? "")) fail("ai_content_attachment_checksum_invalid");
-  return `brands/${brandId}/ai-content/${generationId}/attachments/${input.checksum!.trim().toLowerCase()}-${safeFileName(input.fileName)}`;
+  if (!SHA256.test(input.checksum.trim())) fail("ai_content_attachment_checksum_invalid");
+  return `brands/${brandId}/ai-content/${generationId}/attachments/${input.checksum.trim().toLowerCase()}-${safeFileName(input.fileName)}`;
 }
 
 export interface AiContentAttachmentTokenResult { pathname: string; clientToken: string; }
@@ -156,6 +149,7 @@ export async function issueAiContentUploadSessionToken(
     || new Date(sessionExpiresAt).toISOString() !== session.tokenExpiresAt
     || validUntil <= 0
     || validUntil >= sessionExpiresAt
+    || validUntil <= Date.now()
   ) {
     fail("ai_content_upload_session_expiry_invalid");
   }

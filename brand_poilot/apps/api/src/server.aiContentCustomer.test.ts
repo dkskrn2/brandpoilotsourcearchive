@@ -328,6 +328,23 @@ describe("AI content customer routes", () => {
     await app.close();
   });
 
+  it("keeps the current confirm route legacy-only during deployment skew", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`,
+      headers: auth,
+      payload: {
+        sessionId: "33333333-3333-4333-8333-333333333333",
+        nonce: "opaque-upload-nonce",
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "ai_content_attachment_size_invalid" });
+    expect(repository.confirmAiContentAttachment).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("returns the aggregate attachment limit error from direct API confirmation", async () => {
     const { app, repository } = setup();
     vi.mocked(repository.confirmAiContentAttachment).mockRejectedValueOnce(new Error("ai_content_attachment_limit_exceeded"));
