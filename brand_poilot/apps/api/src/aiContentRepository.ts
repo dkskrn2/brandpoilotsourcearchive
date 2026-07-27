@@ -16,6 +16,10 @@ import { buildContentGenerationInput, parseContentGenerationInputV2, type Conten
 import { createAiContentSubjectRepository } from "./aiContentSubjectRepository.js";
 import type { LoadSubjectEvidenceInput, SubjectEvidenceAttachment } from "./aiContentSubjectEvidence.js";
 import type { ConfirmedBrandIntelligence } from "./brandIntelligenceProvider.js";
+import {
+  createAiContentAttachmentRepository,
+  type AiContentAttachmentLifecycleRepository,
+} from "./aiContentAttachmentRepository.js";
 
 export interface BrandScope {
   workspaceId: string;
@@ -177,7 +181,7 @@ export interface SaveAppealInput extends BrandScope {
   evidenceType: AppealRecord["evidenceType"];
 }
 
-export interface AiContentRepository {
+export interface AiContentRepository extends AiContentAttachmentLifecycleRepository {
   getAiContentBrandContext(input: BrandScope): Promise<AiContentBrandContextRecord>;
   getConfirmedSubjectAnalysisBrandContext(input: BrandScope): Promise<SubjectAnalysisBrandContext>;
   listSubjectEvidenceAttachments(input: LoadSubjectEvidenceInput): Promise<SubjectEvidenceAttachment[]>;
@@ -825,7 +829,9 @@ async function retryPendingTerminalAttachmentCleanup(
 
 export function createAiContentRepository(pool: Pool, options: AiContentRepositoryOptions = {}): AiContentRepository {
   const subjectRepository = createAiContentSubjectRepository(pool);
+  const attachmentLifecycle = createAiContentAttachmentRepository(pool);
   return {
+    ...attachmentLifecycle,
     getAiContentBrandContext(input) {
       return loadAiContentBrandContext(pool, input, options.brandIntelligenceProvider);
     },
@@ -1238,31 +1244,6 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         if (cleanupRejectedUpload && options.deleteAttachments) {
           await options.deleteAttachments([input.storageUrl]).catch(() => undefined);
         }
-      }
-    },
-
-    async removeAiContentAttachment(input) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const generation = await scopedGeneration(client, input, true);
-        if (!generation) throw new Error("ai_content_generation_not_found");
-        const removed = await client.query(
-          `update ai_content_generation_attachments
-              set deleted_at = now()
-            where generation_id = $1 and workspace_id = $2 and brand_id = $3
-              and id = $4 and deleted_at is null
-          returning id`,
-          [input.generationId, input.workspaceId, input.brandId, input.attachmentId],
-        );
-        if (!removed.rowCount) throw new Error("ai_content_attachment_not_found");
-        await client.query("COMMIT");
-        return { id: String(removed.rows[0].id) };
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
       }
     },
 

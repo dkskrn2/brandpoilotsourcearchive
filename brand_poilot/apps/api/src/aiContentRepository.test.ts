@@ -90,6 +90,31 @@ function createPool(options: {
       }
       if (
         query.includes("update ai_content_generation_attachments")
+        && query.includes("physical_delete_status = 'pending'")
+        && query.includes("returning *")
+      ) {
+        activeAttachmentCount = Math.max(0, activeAttachmentCount - 1);
+        return {
+          rows: [{
+            id: params[0],
+            generation_id: params[1],
+            workspace_id: params[2],
+            brand_id: params[3],
+            upload_session_id: "50000000-0000-4000-8000-000000000001",
+            role: "product",
+            file_name: "product.png",
+            mime_type: "image/png",
+            size_bytes: 100,
+            checksum: "a".repeat(64),
+            storage_url: "https://example.public.blob.vercel-storage.com/product.png",
+            storage_path: "reserved/product.png",
+            created_at: "2026-07-18T00:00:00.000Z",
+          }],
+          rowCount: 1,
+        };
+      }
+      if (
+        query.includes("update ai_content_generation_attachments")
         && query.includes("deleted_at = now()")
         && query.includes("returning id")
       ) {
@@ -775,21 +800,24 @@ describe("AI content repository", () => {
   it("soft-deletes only a live scoped attachment and allows its replacement at the cap", async () => {
     const pool = createPool({ attachmentCount: 5 });
     const repository = createAiContentRepository(pool as never);
+    const lifecycleScope = {
+      workspaceId: "10000000-0000-4000-8000-000000000001",
+      brandId: "20000000-0000-4000-8000-000000000001",
+      generationId: "30000000-0000-4000-8000-000000000001",
+    };
+    const attachmentId = "40000000-0000-4000-8000-000000000001";
 
     await expect(repository.removeAiContentAttachment({
-      ...scope,
-      generationId: "generation-1",
-      attachmentId: "attachment-1",
-    })).resolves.toEqual({ id: "attachment-1" });
+      ...lifecycleScope,
+      attachmentId,
+    })).resolves.toEqual({ id: attachmentId });
 
     const removal = pool.sql.find((query) => query.includes("update ai_content_generation_attachments")) ?? "";
-    expect(removal).toContain("deleted_at = now()");
-    expect(removal).toContain("generation_id = $1");
-    expect(removal).toContain("workspace_id = $2");
-    expect(removal).toContain("brand_id = $3");
-    expect(removal).toContain("id = $4");
+    expect(removal).toContain("deletion_reason = 'user_removed'");
+    expect(removal).toContain("physical_delete_status = 'pending'");
     expect(removal).toContain("deleted_at is null");
     expect(pool.sql.join("\n")).toContain("from ai_content_generations");
+    expect(pool.sql.join("\n")).toContain("insert into ai_content_attachment_deletion_jobs");
 
     await expect(repository.confirmAiContentAttachment({
       ...scope,
