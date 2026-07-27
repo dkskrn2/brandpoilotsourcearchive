@@ -25,6 +25,24 @@ export type SubjectSourcePriority =
   | "brand_context"
   | "public_research";
 
+export interface AiContentAttachmentSnapshot {
+  id: string;
+  generationId: string;
+  role: AiContentAttachmentRole;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  checksum: string;
+  storageUrl: string;
+  storagePath: string;
+  createdAt: string;
+}
+
+export interface SubjectAttachmentSnapshotEnvelope {
+  attachmentSnapshot: AiContentAttachmentSnapshot[];
+  attachmentSnapshotMissingIds: string[];
+}
+
 export interface SubjectManualInput { name: string; promotion: string; description: string }
 export interface SubjectManualInputV2 { name: string; promotionOrTerms: string; description: string }
 export interface CreateSubjectAnalysisInput {
@@ -1008,3 +1026,4 @@ export function parseSubjectAppealResultV2(
     appealsByTarget,
   };
 }
+import type { AiContentAttachmentRole } from "./aiContentContracts.js";

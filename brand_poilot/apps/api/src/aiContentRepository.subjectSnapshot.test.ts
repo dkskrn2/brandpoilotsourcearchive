@@ -16,14 +16,18 @@ function poolFor(
   draft: Record<string, unknown>,
   snapshot: unknown = null,
   attachmentRows: Array<Record<string, unknown>> = [],
+  pendingUpload = false,
 ) {
   const sql: string[] = [];
   const storedSnapshots: unknown[] = [];
   let attachments = attachmentRows.map((row) => ({ ...row }));
-  const generation = { id: generationId, workspace_id: workspaceId, brand_id: brandId, type: "card_news", title: "상품 콘텐츠", status: "analysis_ready", current_stage: "analysis_ready", draft_json: draft, analysis_json: {}, generation_idempotency_key: null, subject_analysis_snapshot: snapshot, attachments_locked_at: null, error_code: null, error_message: null, created_at: "2026-07-20T00:00:00.000Z", updated_at: "2026-07-20T00:00:00.000Z", completed_at: null };
+  const generation = { id: generationId, workspace_id: workspaceId, brand_id: brandId, type: "card_news", title: "상품 콘텐츠", status: "analysis_ready", current_stage: "analysis_ready", draft_json: draft, analysis_json: {}, generation_idempotency_key: null, subject_analysis_snapshot: snapshot, generation_input_snapshot: snapshot, attachments_locked_at: null, error_code: null, error_message: null, created_at: "2026-07-20T00:00:00.000Z", updated_at: "2026-07-20T00:00:00.000Z", completed_at: null };
   const query = async (text: string, params: unknown[] = []) => {
     sql.push(text);
     if (["BEGIN", "COMMIT", "ROLLBACK"].includes(text)) return { rows: [], rowCount: 0 };
+    if (text.includes("from ai_content_attachment_upload_sessions")) {
+      return pendingUpload ? { rows: [{ id: "upload-1" }], rowCount: 1 } : { rows: [], rowCount: 0 };
+    }
     if (text.includes("from ai_content_subject_analyses") && text.includes("where id = $1")) return { rows: [analysis], rowCount: 1 };
     if (text.includes("from ai_content_subject_images")) return { rows: [image], rowCount: 1 };
     if (text.includes("select brand.name")) return { rows: [{ name: "Growthline", industry: "마케팅", primary_customer: "운영자", description: "콘텐츠", tone: "명확하게", forbidden_terms: [], default_cta: "문의", main_link: "https://example.com", brand_color: "#0057B8", owned_url: "https://example.com", source_status: "crawled", last_crawled_at: null }], rowCount: 1 };
@@ -45,7 +49,7 @@ function poolFor(
     if (text.includes("update ai_content_generations") && text.includes("subject_analysis_snapshot")) {
       const storedSnapshot = params[5] ? JSON.parse(String(params[5])) : snapshot;
       storedSnapshots.push(storedSnapshot);
-      return { rows: [{ ...generation, status: "analyzing", generation_idempotency_key: params[3], subject_analysis_snapshot: storedSnapshot }], rowCount: 1 };
+      return { rows: [{ ...generation, status: "analyzing", generation_idempotency_key: params[3], subject_analysis_snapshot: storedSnapshot, generation_input_snapshot: storedSnapshot, attachments_locked_at: "2026-07-20T00:01:00.000Z" }], rowCount: 1 };
     }
     if (text.includes("insert into ai_content_generation_outputs") || text.includes("insert into ai_content_generation_jobs") || text.includes("insert into ai_content_usage_ledger")) return { rows: [], rowCount: 1 };
     return { rows: [], rowCount: 0 };
@@ -66,6 +70,38 @@ describe("AI content subject snapshot integration", () => {
     const usageIndex = fake.sql.findIndex((item) => item.includes("from ai_content_usage_ledger"));
     expect(updateIndex).toBeGreaterThan(-1);
     expect(usageIndex).toBeGreaterThan(updateIndex);
+  });
+
+  it("stores the canonical input and final attachment lock atomically", async () => {
+    const attachmentId = "50000000-0000-4000-8000-000000000001";
+    const fake = poolFor(subjectDraft(), null, [{
+      id: attachmentId, generation_id: generationId, workspace_id: workspaceId, brand_id: brandId,
+      role: "document", file_name: "brief.md", mime_type: "text/markdown", size_bytes: 20,
+      checksum: "a".repeat(64), storage_url: "https://blob.example/brief.md",
+      storage_path: "attachments/brief.md", created_at: "2026-07-20T00:00:00.000Z", deleted_at: null,
+    }]);
+
+    await createAiContentRepository(fake.pool).startAiContentGeneration({
+      workspaceId, brandId, generationId, idempotencyKey: "generate-canonical",
+      outputCount: 1, usageDate: "2026-07-20", dailyGenerationLimit: 10,
+    });
+
+    const update = fake.sql.find((item) => item.includes("update ai_content_generations")
+      && item.includes("generation_input_snapshot"));
+    expect(update).toContain("attachments_locked_at");
+    expect(fake.storedSnapshots[0]).toMatchObject({
+      attachments: [{ id: attachmentId, storagePath: "attachments/brief.md" }],
+    });
+    expect(fake.sql.find((item) => item.includes("insert into ai_content_generation_jobs")))
+      .toContain("contentGenerationInput");
+  });
+
+  it("rejects final generation while a pending upload is active", async () => {
+    const fake = poolFor(subjectDraft(), null, [], true);
+    await expect(createAiContentRepository(fake.pool).startAiContentGeneration({
+      workspaceId, brandId, generationId, idempotencyKey: "generate-pending",
+      outputCount: 1, usageDate: "2026-07-20", dailyGenerationLimit: 10,
+    })).rejects.toThrow("ai_content_attachment_upload_in_progress");
   });
 
   it("does not rebuild an existing snapshot from a changed draft", async () => {

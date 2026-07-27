@@ -1,4 +1,5 @@
 import { extractSubjectPage, type ExtractSubjectPageInput, type SubjectImageArchiveInput } from "./aiContentSubjectExtractor.js";
+import { head as headBlob } from "@vercel/blob";
 import type {
   SubjectAnalysisInputV1,
   SubjectAnalysisInputV2,
@@ -15,6 +16,7 @@ import type { SubjectAnalysisClaim, SubjectAnalysisRepository } from "./aiConten
 export interface AiContentSubjectRuntime {
   extractPage?: typeof extractSubjectPage;
   fetchBlob?: SubjectEvidenceDependencies["fetchBlob"];
+  headBlob?: SubjectEvidenceDependencies["headBlob"];
   archiveImage?: (
     image: SubjectImageArchiveInput & { analysisId: string; workspaceId: string; brandId: string },
   ) => ReturnType<ExtractSubjectPageInput["archiveImage"]>;
@@ -222,17 +224,21 @@ async function prepareV2Job(
     };
   }
   if (!claim.generationId) throw new Error("subject_analysis_generation_required");
-  if (!repository.listSubjectEvidenceAttachments) {
-    throw new Error("subject_analysis_evidence_repository_not_configured");
-  }
   const evidence = await loadSubjectEvidence({
     workspaceId: claim.workspaceId,
     brandId: claim.brandId,
     generationId: claim.generationId,
     attachmentIds: subject.attachmentIds,
+    attachmentSnapshot: claim.input.attachmentSnapshot ?? [],
+    attachmentSnapshotMissingIds: claim.input.attachmentSnapshotMissingIds ?? [],
   }, {
-    listAttachments: (input) => repository.listSubjectEvidenceAttachments!(input),
     fetchBlob: runtime.fetchBlob ?? fetchSubjectEvidenceBlob,
+    headBlob: runtime.headBlob ?? (process.env.BLOB_READ_WRITE_TOKEN
+      ? (storagePath, limits) => headBlob(storagePath, {
+        token: process.env.BLOB_READ_WRITE_TOKEN!,
+        abortSignal: limits.signal,
+      })
+      : undefined),
   });
 
   let persisted = claim;

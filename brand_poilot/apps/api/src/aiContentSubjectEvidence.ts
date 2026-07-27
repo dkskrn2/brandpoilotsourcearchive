@@ -4,10 +4,12 @@ import {
   type BrandDocumentInput,
 } from "./brandDocumentExtractor.js";
 import type { AiContentAttachmentRole } from "./aiContentContracts.js";
+import type { AiContentAttachmentSnapshot } from "./aiContentSubjectContracts.js";
 import { AI_CONTENT_ATTACHMENT_POLICY } from "./aiContentUpload.js";
 import type { BrandEvidenceDocument } from "./brandIntelligenceContracts.js";
 
 export const SUBJECT_EVIDENCE_FETCH_TIMEOUT_MS = 15_000;
+export const SUBJECT_EVIDENCE_PREFLIGHT_TIMEOUT_MS = 15_000;
 export const SUBJECT_EVIDENCE_OPERATION_TIMEOUT_MS = 30_000;
 export const SUBJECT_EVIDENCE_MAX_ATTACHMENTS = 10;
 export const SUBJECT_EVIDENCE_MAX_TOTAL_BYTES = 50_000_000;
@@ -34,6 +36,8 @@ export interface LoadSubjectEvidenceInput {
   brandId: string;
   generationId: string;
   attachmentIds: string[];
+  attachmentSnapshot?: AiContentAttachmentSnapshot[];
+  attachmentSnapshotMissingIds?: string[];
 }
 
 export interface SubjectEvidenceAttachment {
@@ -49,6 +53,7 @@ export interface SubjectEvidenceAttachment {
   storagePath: string;
   deletedAt: string | null;
   checksum: string;
+  createdAt: string;
   width?: number | null;
   height?: number | null;
 }
@@ -84,9 +89,122 @@ export interface SubjectEvidence {
 }
 
 export interface SubjectEvidenceDependencies {
-  listAttachments(input: LoadSubjectEvidenceInput): Promise<SubjectEvidenceAttachment[]>;
+  listAttachments?(input: LoadSubjectEvidenceInput): Promise<SubjectEvidenceAttachment[]>;
   fetchBlob(url: string, limits: SubjectEvidenceFetchLimits): Promise<SubjectEvidenceBlob>;
+  headBlob?(storagePath: string, limits: { signal: AbortSignal }): Promise<{
+    size?: number;
+    contentType?: string;
+  } | unknown>;
   extractDocument?: (input: BrandDocumentInput) => Promise<BrandEvidenceDocument>;
+  /** Test override; production uses the fixed operation deadline. */
+  operationTimeoutMs?: number;
+}
+
+function preflightFailure(error: unknown): "terminal" | "transient" {
+  if (error && typeof error === "object") {
+    const source = error as Record<string, unknown>;
+    const status = source.status ?? source.statusCode;
+    if (status === 404 || source.code === "BlobNotFound" || source.code === "not_found") return "terminal";
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:404|not[ _-]?found)/i.test(message) ? "terminal" : "transient";
+}
+
+async function preflightSnapshot(
+  attachments: AiContentAttachmentSnapshot[],
+  headBlob: NonNullable<SubjectEvidenceDependencies["headBlob"]>,
+  signal: AbortSignal,
+): Promise<void> {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let rejectDeadline: ((error: Error) => void) | undefined;
+  const abortFromOperation = () => {
+    rejectDeadline?.(new Error("ai_content_attachment_storage_unavailable"));
+    controller.abort();
+  };
+  const deadline = new Promise<never>((_resolve, reject) => {
+    rejectDeadline = reject;
+    signal.addEventListener("abort", abortFromOperation, { once: true });
+    timeout = setTimeout(abortFromOperation, SUBJECT_EVIDENCE_PREFLIGHT_TIMEOUT_MS);
+  });
+  try {
+    const outcomes = await Promise.race([
+      Promise.all(attachments.map(async (attachment) => {
+        try {
+          const metadata = await headBlob(attachment.storagePath, { signal: controller.signal });
+          if (metadata && typeof metadata === "object") {
+            const source = metadata as Record<string, unknown>;
+            if (
+              (typeof source.size === "number" && source.size !== attachment.sizeBytes)
+              || (typeof source.contentType === "string"
+                && mimeType(source.contentType) !== mimeType(attachment.mimeType))
+            ) return "terminal" as const;
+          }
+          return "available" as const;
+        } catch (error) {
+          return preflightFailure(error);
+        }
+      })),
+      deadline,
+    ]);
+    if (outcomes.some((outcome) => outcome === "terminal")) {
+      fail("ai_content_attachment_blob_unavailable");
+    }
+    if (outcomes.some((outcome) => outcome === "transient")) {
+      fail("ai_content_attachment_storage_unavailable");
+    }
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+    signal.removeEventListener("abort", abortFromOperation);
+    controller.abort();
+  }
+}
+
+function snapshotAttachments(input: LoadSubjectEvidenceInput): SubjectEvidenceAttachment[] {
+  if ((input.attachmentSnapshotMissingIds?.length ?? 0) > 0) {
+    fail("ai_content_attachment_blob_unavailable");
+  }
+  const snapshots = input.attachmentSnapshot ?? [];
+  if (snapshots.length !== input.attachmentIds.length || snapshots.length > 5) {
+    fail("ai_content_attachment_blob_unavailable");
+  }
+  const byId = new Map(snapshots.map((attachment) => [attachment.id, attachment]));
+  if (byId.size !== snapshots.length || input.attachmentIds.some((id) => !byId.has(id))) {
+    fail("ai_content_attachment_blob_unavailable");
+  }
+  return snapshots.map((attachment) => {
+    const role = attachment.role;
+    if (
+      attachment.generationId !== input.generationId
+      || (role !== "product"
+        && role !== "person"
+        && role !== "scale"
+        && role !== "visual_reference"
+        && role !== "document")
+      || !attachment.storagePath
+      || !attachment.storageUrl
+      || !attachment.fileName
+      || !attachment.mimeType
+      || !SHA256.test(attachment.checksum)
+      || !Number.isSafeInteger(attachment.sizeBytes)
+      || attachment.sizeBytes <= 0
+      || !attachment.createdAt
+      || Number.isNaN(Date.parse(attachment.createdAt))
+    ) fail("ai_content_attachment_blob_unavailable");
+    try {
+      if (new URL(attachment.storageUrl).protocol !== "https:") {
+        fail("ai_content_attachment_blob_unavailable");
+      }
+    } catch {
+      fail("ai_content_attachment_blob_unavailable");
+    }
+    return {
+      ...attachment,
+      workspaceId: input.workspaceId,
+      brandId: input.brandId,
+      deletedAt: null,
+    };
+  });
 }
 
 function fail(code: string): never {
@@ -231,11 +349,24 @@ async function loadSubjectEvidenceWithinDeadline(
   operationSignal: AbortSignal,
   operationDeadline: number,
 ): Promise<SubjectEvidence> {
-  const attachments = orderedAttachments(
-    input,
-    await dependencies.listAttachments({ ...input, attachmentIds: [...input.attachmentIds] }),
-  );
+  const immutableSnapshot = input.attachmentSnapshot !== undefined;
+  const attachments = immutableSnapshot
+    ? snapshotAttachments(input)
+    : orderedAttachments(
+      input,
+      await (dependencies.listAttachments ?? (() => Promise.resolve([])))({
+        ...input,
+        attachmentIds: [...input.attachmentIds],
+      }),
+    );
   validateStoredByteBudget(attachments);
+  if (immutableSnapshot && dependencies.headBlob) {
+    await preflightSnapshot(
+      attachments as Array<SubjectEvidenceAttachment & AiContentAttachmentSnapshot>,
+      dependencies.headBlob,
+      operationSignal,
+    );
+  }
   const documents: BrandEvidenceDocument[] = [];
   const images: SubjectEvidenceImage[] = [];
   const sourceGaps: string[] = [];
@@ -278,6 +409,16 @@ async function loadSubjectEvidenceWithinDeadline(
         });
       }
     } catch (error) {
+      if (immutableSnapshot) {
+        const code = failureCode(error);
+        if (
+          code === "subject_analysis_attachment_mime_mismatch"
+          || code === "subject_analysis_attachment_size_mismatch"
+          || code === "subject_analysis_attachment_checksum_mismatch"
+          || code === "subject_analysis_attachment_content_invalid"
+        ) fail("ai_content_attachment_blob_unavailable");
+        fail("ai_content_attachment_storage_unavailable");
+      }
       sourceGaps.push(`${attachment.fileName}: ${failureCode(error)}`);
     }
   }
@@ -300,13 +441,17 @@ export async function loadSubjectEvidence(
   }
 
   const controller = new AbortController();
-  const operationDeadline = Date.now() + SUBJECT_EVIDENCE_OPERATION_TIMEOUT_MS;
+  const operationTimeoutMs = dependencies.operationTimeoutMs
+    ?? SUBJECT_EVIDENCE_OPERATION_TIMEOUT_MS;
+  const operationDeadline = Date.now() + operationTimeoutMs;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
     timeout = setTimeout(() => {
       controller.abort();
-      reject(new Error("subject_attachment_read_failed"));
-    }, SUBJECT_EVIDENCE_OPERATION_TIMEOUT_MS);
+      reject(new Error(input.attachmentSnapshot !== undefined
+        ? "ai_content_attachment_storage_unavailable"
+        : "subject_attachment_read_failed"));
+    }, operationTimeoutMs);
   });
   try {
     return await Promise.race([

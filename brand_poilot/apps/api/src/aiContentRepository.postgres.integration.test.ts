@@ -12,10 +12,14 @@ const USER_ID = "40000000-0000-4000-8000-000000000001";
 
 async function applyRealMigrations(pool: Pool) {
   const directory = resolve(process.cwd(), "../../db/migrations");
+  const skippedVectorMigrations = new Set([
+    "021_dm_wiki_pgvector.sql",
+    "027_wiki_search_v2.sql",
+    "033_compounding_wiki_pgvector.sql",
+  ]);
   for (const file of (await readdir(directory)).filter((name) => name.endsWith(".sql")).sort()) {
-    const sql = await readFile(resolve(directory, file), "utf8");
-    if (sql.startsWith("-- requires: pgvector") || file === "027_wiki_search_v2.sql") continue;
-    await pool.query(sql);
+    if (skippedVectorMigrations.has(file)) continue;
+    await pool.query(await readFile(resolve(directory, file), "utf8"));
   }
 }
 

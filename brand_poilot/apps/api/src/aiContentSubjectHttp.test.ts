@@ -19,7 +19,22 @@ function claim(overrides: Partial<SubjectAnalysisClaim> = {}): SubjectAnalysisCl
     subjectType: "product",
     sourceUrl: "https://example.com/product",
     normalizedUrl: "https://example.com/product",
-    input: { name: "Widget", promotion: "Launch", promotionOrTerms: "Launch", description: "Fast setup" },
+    input: {
+      name: "Widget", promotion: "Launch", promotionOrTerms: "Launch", description: "Fast setup",
+      attachmentSnapshot: [
+        {
+          id: "attachment-document", generationId: "generation-1", role: "document", fileName: "brief.txt",
+          mimeType: "text/plain", sizeBytes: Buffer.byteLength("Document evidence"), checksum: sha256(Buffer.from("Document evidence")),
+          storageUrl: "https://blob.example/brief.txt", storagePath: "brief.txt", createdAt: "2026-07-22T01:00:00.000Z",
+        },
+        {
+          id: "attachment-image", generationId: "generation-1", role: "product", fileName: "product.png",
+          mimeType: "image/png", sizeBytes: 8, checksum: sha256(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+          storageUrl: "https://blob.example/product.png", storagePath: "product.png", createdAt: "2026-07-22T01:00:01.000Z",
+        },
+      ],
+      attachmentSnapshotMissingIds: [],
+    },
     brandContext: { brandName: "Acme", brandIntelligenceVersionId: "brand-analysis-7" },
     attachmentIds: ["attachment-document", "attachment-image"],
     status: "extracting",
@@ -102,17 +117,18 @@ function setup(claimed: SubjectAnalysisClaim) {
     images: [],
   }));
   const archiveImage = vi.fn(async () => ({ storageUrl: "https://blob.example/page.png", storagePath: "page.png" }));
-  return { repository, fetchBlob, extractPage, archiveImage };
+  const headBlob = vi.fn(async () => ({}));
+  return { repository, fetchBlob, headBlob, extractPage, archiveImage };
 }
 
 describe("subject worker job preparation", () => {
   it("combines persisted v2 analysis context, attachments, and extracted source page in priority order", async () => {
-    const { repository, fetchBlob, extractPage, archiveImage } = setup(claim());
+    const { repository, fetchBlob, headBlob, extractPage, archiveImage } = setup(claim());
 
     const job = await claimAndPrepareSubjectAnalysis(
       repository,
       { workerId: "subject-worker-1", leaseSeconds: 180 },
-      { fetchBlob, extractPage, archiveImage },
+      { fetchBlob, headBlob, extractPage, archiveImage },
     );
 
     expect(job).toMatchObject({
@@ -144,12 +160,7 @@ describe("subject worker job preparation", () => {
       },
       sourcePriority: ["manual_input", "attachments", "source_url", "brand_context", "public_research"],
     });
-    expect(repository.listSubjectEvidenceAttachments).toHaveBeenCalledWith({
-      workspaceId: "workspace-1",
-      brandId: "brand-1",
-      generationId: "generation-1",
-      attachmentIds: ["attachment-document", "attachment-image"],
-    });
+    expect(repository.listSubjectEvidenceAttachments).not.toHaveBeenCalled();
     expect(repository.markSubjectExtractionComplete).toHaveBeenCalledOnce();
     expect(fetchBlob).toHaveBeenCalledTimes(2);
   });

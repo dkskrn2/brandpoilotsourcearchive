@@ -31,7 +31,7 @@ export interface ContentGenerationInputV2 {
   message: { target: Record<string, unknown>; appeal: Record<string, unknown>; qualityBrief: Record<string, unknown> };
   creativeDirection: { prompts: string[]; brandColor: string; selectedColor: string; aspectRatio: CardNewsAspectRatio; outputCount: 1 | 2 | 3 };
   references: unknown[];
-  attachments: unknown[];
+  attachments: AiContentAttachmentSnapshot[];
 }
 
 const asRecord = (value: unknown, code: string): Record<string, unknown> => {
@@ -101,7 +101,8 @@ export function parseContentGenerationInput(value: unknown): ContentGenerationIn
     },
     message: { target, appeal, qualityBrief: asRecord(message.qualityBrief, "content_generation_quality_brief_invalid") },
     creativeDirection: { prompts, brandColor, selectedColor, aspectRatio: asAspectRatio(direction.aspectRatio), outputCount },
-    references: Array.isArray(input.references) ? input.references : [], attachments: Array.isArray(input.attachments) ? input.attachments : [],
+    references: Array.isArray(input.references) ? input.references : [],
+    attachments: parseAttachmentSnapshots(input.attachments),
   };
 }
 
@@ -137,3 +138,7 @@ export interface WorkerClient {
   heartbeatResource(id: string, workerId: string, leaseToken: string): Promise<void>;
   releaseResource(id: string, workerId: string, leaseToken: string): Promise<void>;
 }
+import {
+  parseAttachmentSnapshots,
+  type AiContentAttachmentSnapshot,
+} from "@brand-pilot/worker-runtime";

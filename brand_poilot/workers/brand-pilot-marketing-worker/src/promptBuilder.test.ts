@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildPrompt } from "./promptBuilder.js";
+import { parseContentGenerationInput } from "./contracts.js";
 
 const job = {
   id: "j", generationId: "g", outputId: "o", workspaceId: "w", brandId: "b", jobType: "generate" as const,
@@ -9,7 +10,7 @@ const job = {
     subject: { analysisId: "analysis-1", analysisVersion: 2, analysisContractVersion: "subject-analysis.v2", analysisResult: { subjectType: "product", productProfile: { name: "상세 제품 분석" }, serviceProfile: null, barriers: [{ text: "가격 우려" }] }, type: "product", sourceUrl: "https://example.com/product", facts: [{ claim: "검증된 사실" }], research: { claims: [{ sourceUrl: "https://research.example" }] }, selectedImages: [{ id: "img-1", url: "https://cdn.example/image.png", role: "product", altText: "제품" }] },
     message: { target: { id: "target-1" }, appeal: { id: "appeal-1", targetId: "target-1" }, qualityBrief: { specificClaims: ["근거"] } },
     creativeDirection: { prompts: ["첫 번째 광고 지시", "두 번째 광고 지시"], brandColor: "#0057B8", selectedColor: "#0F766E", aspectRatio: "1:1", outputCount: 2 },
-    references: [{ mediaUrl: "https://cdn.example/reference.png" }], attachments: [{ role: "user_reference", url: "https://cdn.example/user.png" }],
+    references: [{ mediaUrl: "https://cdn.example/reference.png" }], attachments: [],
   } },
 };
 
@@ -35,5 +36,13 @@ describe("marketing prompt", () => {
     const input = job.payload.contentGenerationInput;
     expect(() => buildPrompt({ ...job, payload: { contentGenerationInput: { ...input, message: { ...input.message, appeal: { targetId: "target-1" } } } } })).toThrow("content_generation_appeal_id_invalid");
     expect(() => buildPrompt({ ...job, payload: { contentGenerationInput: { ...input, message: { ...input.message, appeal: { id: "appeal-1", targetId: "other" } } } } })).toThrow("content_generation_appeal_target_mismatch");
+  });
+
+  it("rejects attachment snapshots with missing structural fields", () => {
+    const input = job.payload.contentGenerationInput;
+    expect(() => parseContentGenerationInput({
+      ...input,
+      attachments: [{ id: "attachment-1" }],
+    })).toThrow("content_generation_attachment_invalid");
   });
 });

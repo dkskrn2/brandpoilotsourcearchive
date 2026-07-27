@@ -24,7 +24,7 @@ function deps(overrides: Record<string, unknown> = {}) {
     getBrandContext: vi.fn(async () => ({ ready: true, brandName: "Growthline", ownedUrl: "https://example.com", sourceStatus: "crawled", lastCrawledAt: null, wikiVersionId: "wiki-1", wikiUpdatedAt: null, summary: "브랜드", pageCount: 1, context: { brand: { name: "Growthline", brandColor: "#0057B8" } } })),
     getSubjectAnalysis: vi.fn(async () => analysis),
     getReferences: vi.fn(async ({ referenceIds }: { referenceIds: string[] }) => referenceIds.map((id) => ({ id, source: "saved_trend" as const, title: id, url: `https://instagram.com/${id}`, previewUrl: null, metrics: {}, checkedAt: null }))),
-    getAttachments: vi.fn(async () => [{ id: "attachment-1", generationId: "generation-1", role: "visual_reference" as const, fileName: "ref.png", mimeType: "image/png", sizeBytes: 10, checksum: "a", storageUrl: "https://blob.example/ref.png", storagePath: "generation/ref.png", createdAt: "2026-07-20T00:00:00.000Z" }]),
+    getAttachments: vi.fn(async () => [{ id: "attachment-1", generationId: "generation-1", role: "visual_reference" as const, fileName: "ref.png", mimeType: "image/png", sizeBytes: 10, checksum: "a".repeat(64), storageUrl: "https://blob.example/ref.png", storagePath: "generation/ref.png", createdAt: "2026-07-20T00:00:00.000Z" }]),
     ...overrides,
   };
 }
@@ -160,5 +160,13 @@ describe("content-generation-input.v2", () => {
 
   it("rejects a snapshot with a mismatched target and appeal", () => {
     expect(() => parseContentGenerationInputV2({ contractVersion: "content-generation-input.v2", contentType: "card_news", subject: { analysisId: "a", analysisVersion: 1, type: "product", sourceUrl: "https://example.com", facts: [], research: {}, selectedImages: [] }, message: { target: { id: "target-1", name: "타깃" }, appeal: { id: "appeal-1", targetId: "target-2", title: "소구점" }, qualityBrief: {} }, creativeDirection: { prompts: [], brandColor: "#0057B8", selectedColor: "#0057B8", aspectRatio: "1:1", outputCount: 1 }, brandContext: {}, references: [], attachments: [] })).toThrow("ai_content_appeal_target_mismatch");
+  });
+
+  it("rejects incomplete attachment snapshots instead of passing unknown records to workers", async () => {
+    const envelope = await buildContentGenerationInput(deps(), generation(), { outputCount: 1 });
+    expect(() => parseContentGenerationInputV2({
+      ...envelope,
+      attachments: [{ id: "attachment-1" }],
+    })).toThrow("ai_content_attachment_snapshot_invalid");
   });
 });

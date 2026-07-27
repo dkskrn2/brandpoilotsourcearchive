@@ -13,6 +13,9 @@ function row(id: string, status = "analyzing") {
     draft_json: { productUrl: "https://example.com/product" },
     analysis_json: {},
     generation_idempotency_key: null as string | null,
+    generation_input_snapshot: null,
+    subject_analysis_snapshot: null,
+    attachments_locked_at: null as string | null,
     error_code: null,
     error_message: null,
     created_at: "2026-07-18T00:00:00.000Z",
@@ -28,12 +31,16 @@ function createPool(options: {
   attachmentCount?: number;
   activeAttachmentPaths?: string[];
   lifecycleEvents?: string[];
+  attachmentsLocked?: boolean;
 } = {}) {
   const commands: string[] = [];
   const sql: string[] = [];
   const referenceSnapshots: Array<Record<string, unknown>> = [];
   let analyzeJobInsertCount = 0;
   let generation = row("generation-1");
+  if (options.attachmentsLocked) {
+    generation = { ...generation, attachments_locked_at: "2026-07-27T00:00:00.000Z" };
+  }
   let analysisCreated = false;
   let activeAttachmentCount = options.attachmentCount ?? 0;
 
@@ -181,13 +188,17 @@ function createWorkerPool(options: {
   qualityBrief?: Record<string, unknown>;
 } = {}) {
   const sql: string[] = [];
+  const generatedJobPayloads: unknown[] = [];
   let generation = row("generation-1", options.jobType === "analyze" ? "analyzing" : "generating");
   let pendingCleanup = false;
   let outputStatus = options.outputStatus ?? "generating";
   const job: Record<string, unknown> = {
     id: "job-1", generation_id: "generation-1", output_id: options.jobType === "analyze" ? null : "output-1",
     workspace_id: "workspace-1", brand_id: "brand-1", job_type: options.jobType ?? "generate", content_type: "card_news",
-    status: "queued", payload_json: options.finalizeGeneration ? { finalizeGeneration: true } : {}, attempt_count: 0, max_attempts: 3, available_at: new Date("2026-07-18T00:00:00.000Z"),
+    status: "queued", payload_json: {
+      ...(options.finalizeGeneration ? { finalizeGeneration: true } : {}),
+      contentGenerationInput: structuredClone(options.subjectAnalysisSnapshot ?? contentGenerationInputV2Fixture),
+    }, attempt_count: 0, max_attempts: 3, available_at: new Date("2026-07-18T00:00:00.000Z"),
     worker_id: null, lease_token: null, lease_expires_at: null,
   };
   const client = {
@@ -218,6 +229,12 @@ function createWorkerPool(options: {
         return { rows: valid ? [{ id: job.id }] : [], rowCount: valid ? 1 : 0 };
       }
       if (query.includes("select * from ai_content_generation_jobs")) return { rows: [{ ...job }], rowCount: 1 };
+      if (query.includes("as generation_input_snapshot") && query.includes("from ai_content_generations")) {
+        return {
+          rows: [{ generation_input_snapshot: options.subjectAnalysisSnapshot ?? contentGenerationInputV2Fixture }],
+          rowCount: 1,
+        };
+      }
       if (query.includes("set analysis_json")) {
         generation = { ...generation, status: String(params[2]), current_stage: String(params[3]), analysis_json: JSON.parse(String(params[1])) };
         return { rows: [], rowCount: 1 };
@@ -279,7 +296,12 @@ function createWorkerPool(options: {
         outputStatus = "queued";
         return { rows: [], rowCount: 1 };
       }
-      if (query.includes("insert into ai_content_generation_jobs")) return { rows: [], rowCount: 1 };
+      if (query.includes("insert into ai_content_generation_jobs")) {
+        if (query.includes("'generate'")) {
+          generatedJobPayloads.push(params[5] ? JSON.parse(String(params[5])) : undefined);
+        }
+        return { rows: [], rowCount: 1 };
+      }
       if (query.includes("update ai_content_generations") && query.includes("set status = 'queued'")) {
         generation = { ...generation, status: "queued" };
         return { rows: [], rowCount: 1 };
@@ -304,7 +326,14 @@ function createWorkerPool(options: {
     },
     release: () => undefined,
   };
-  return { connect: async () => client, query: client.query, sql, job, enablePendingCleanup() { pendingCleanup = true; } };
+  return {
+    connect: async () => client,
+    query: client.query,
+    sql,
+    job,
+    generatedJobPayloads,
+    enablePendingCleanup() { pendingCleanup = true; },
+  };
 }
 
 const scope = { workspaceId: "workspace-1", brandId: "brand-1" };
@@ -552,6 +581,27 @@ describe("AI content repository", () => {
     expect(pool.commands).toContain("ROLLBACK");
   });
 
+  it("allows attachment-neutral draft updates after lock but rejects attachment identity changes", async () => {
+    const pool = createPool({ attachmentsLocked: true });
+    const repository = createAiContentRepository(pool as never);
+    await repository.createAiContentAnalysis(input);
+    pool.setGenerationStatus("analysis_ready");
+
+    await expect(repository.updateAiContentDraft({
+      ...scope,
+      generationId: "generation-1",
+      draft: { productUrl: "https://example.com/new" },
+      referenceIds: [],
+    })).resolves.toMatchObject({ id: "generation-1" });
+
+    await expect(repository.updateAiContentDraft({
+      ...scope,
+      generationId: "generation-1",
+      draft: { productUrl: "https://example.com/new", attachmentIds: ["attachment-new"] },
+      referenceIds: [],
+    })).rejects.toThrow("ai_content_attachments_locked");
+  });
+
   it("queues final analysis before one through three output jobs", async () => {
     const pool = createPool();
     const repository = createAiContentRepository(pool as never);
@@ -608,14 +658,49 @@ describe("AI content repository", () => {
     expect(pool.commands).toContain("ROLLBACK");
   });
 
+  it("performs optional brand-intelligence provider I/O before opening the final-start transaction", async () => {
+    const pool = createPool();
+    let transactionWasOpen = false;
+    const repository = createAiContentRepository(pool as never, {
+      brandIntelligenceProvider: {
+        getConfirmed: vi.fn(async () => {
+          transactionWasOpen = pool.commands.includes("BEGIN");
+          return null;
+        }),
+      },
+    });
+    await repository.createAiContentAnalysis(input);
+    await repository.updateAiContentDraft({
+      ...scope,
+      generationId: "generation-1",
+      draft: { analysisSource: "owned" },
+      referenceIds: [],
+    });
+    pool.setGenerationStatus("analysis_ready");
+    pool.commands.length = 0;
+
+    await expect(repository.startAiContentGeneration({
+      ...scope,
+      generationId: "generation-1",
+      idempotencyKey: "provider-before-transaction",
+      outputCount: 1,
+      usageDate: "2026-07-18",
+      dailyGenerationLimit: 10,
+    })).rejects.toThrow("brand_intelligence_required");
+
+    expect(transactionWasOpen).toBe(false);
+  });
+
   it("claims only the requested content type with a recoverable lease", async () => {
     const pool = createWorkerPool();
     const repository = createAiContentRepository(pool as never);
     const job = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
     expect(job).toMatchObject({ id: "job-1", contentType: "card_news", status: "processing", workerId: "card-worker-1" });
-    expect(job?.payload).toMatchObject({ brandContext: { brand: { name: "Growthline" }, wiki: { versionId: "wiki-1" } } });
+    expect(job?.payload.contentGenerationInput).toEqual(contentGenerationInputV2Fixture);
     expect(pool.sql.join("\n")).toContain("for update skip locked");
     expect(pool.sql.join("\n")).toContain("content_type = $1");
+    expect(pool.sql.join("\n")).not.toContain("select generation.draft_json");
+    expect(pool.sql.join("\n")).not.toContain("from brands brand");
   });
 
   it("rejects a heartbeat from a different lease owner", async () => {
@@ -795,11 +880,19 @@ describe("AI content repository", () => {
 
     expect(generation.status).toBe("queued");
     expect(pool.sql.filter((query) => query.includes("insert into ai_content_generation_jobs")).length).toBe(2);
-    expect(pool.sql.join("\n")).toContain("jsonb_build_object('generationId', $1::uuid, 'outputId', $2::uuid)");
+    expect(pool.sql.join("\n")).toContain("values ($1, $2, $3, $4, 'generate', $5, 'queued', $6::jsonb)");
     expect(pool.sql.join("\n")).not.toContain("jsonb_set(subject_analysis_snapshot, '{message,qualityBrief}'");
+    expect(pool.generatedJobPayloads).toHaveLength(2);
+    expect((pool.generatedJobPayloads[0] as Record<string, unknown>).contentGenerationInput)
+      .toEqual((pool.generatedJobPayloads[1] as Record<string, unknown>).contentGenerationInput);
+    expect(pool.generatedJobPayloads[0]).toMatchObject({
+      contentGenerationInput: {
+        message: { qualityBrief: expect.objectContaining({ hook: "승인 지연의 원인" }) },
+      },
+    });
   });
 
-  it("keeps the stored subject snapshot immutable and overlays the final quality brief only in generate jobs", async () => {
+  it("keeps the already-finalized generate payload immutable instead of overlaying live analysis", async () => {
     const snapshot = structuredClone(contentGenerationInputV2Fixture);
     const finalBrief = { version: "content-quality.v1", hook: "최종 편집안" };
     const pool = createWorkerPool({ subjectAnalysisSnapshot: snapshot, qualityBrief: finalBrief });
@@ -807,8 +900,11 @@ describe("AI content repository", () => {
 
     const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
 
-    expect(claimed?.payload.contentGenerationInput).toMatchObject({ message: { qualityBrief: finalBrief } });
+    expect(claimed?.payload.contentGenerationInput).toMatchObject({
+      message: { qualityBrief: { hook: "사용자 입력" } },
+    });
     expect(snapshot.message.qualityBrief).toEqual({ hook: "사용자 입력" });
+    expect(pool.sql.join("\n")).not.toContain("select generation.draft_json");
   });
 
   it("bridges a completed scheduled card-news output into the automatic publish queue", async () => {
@@ -928,7 +1024,7 @@ describe("AI content repository", () => {
 
     expect(claimed?.payload.contentGenerationInput).toEqual(snapshot);
     expect(pool.sql.join("\n")).toContain(
-      "'contentGenerationInput', coalesce((select subject_analysis_snapshot from ai_content_generations where id = $1), '{}'::jsonb)",
+      "'contentGenerationInput', coalesce((select generation_input_snapshot from ai_content_generations where id = $1), '{}'::jsonb)",
     );
   });
 

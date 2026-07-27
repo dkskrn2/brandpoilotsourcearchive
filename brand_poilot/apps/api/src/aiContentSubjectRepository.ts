@@ -4,6 +4,8 @@ import type { Pool, PoolClient } from "pg";
 import {
   type CreateSubjectAnalysisInput,
   type CreateSubjectPipelineInput,
+  type AiContentAttachmentSnapshot,
+  type SubjectAttachmentSnapshotEnvelope,
   parseSubjectAnalysisResultV2,
   parseSubjectAppealResultV2,
   parseSubjectAnalysisResult,
@@ -49,7 +51,7 @@ export interface SubjectAnalysisRecord extends SubjectBrandScope {
   subjectType: SubjectType;
   sourceUrl: string;
   normalizedUrl: string;
-  input: SubjectManualInput & { promotionOrTerms?: string };
+  input: SubjectManualInput & { promotionOrTerms?: string } & Partial<SubjectAttachmentSnapshotEnvelope>;
   brandContext?: Record<string, unknown>;
   attachmentIds?: string[];
   status: SubjectAnalysisStatus | SubjectPipelineStatus;
@@ -130,7 +132,7 @@ export interface SubjectAnalysisRepository {
 
 type Queryable = Pick<PoolClient, "query">;
 
-interface SubjectPipelineInputEnvelope {
+interface SubjectPipelineInputEnvelope extends SubjectAttachmentSnapshotEnvelope {
   manualInput: CreateSubjectPipelineInput["manualInput"];
   brandContext: Record<string, unknown>;
 }
@@ -228,6 +230,8 @@ function pipelineInputEnvelope(value: unknown): SubjectPipelineInputEnvelope {
       description: typeof manualInput.description === "string" ? manualInput.description : "",
     },
     brandContext: jsonObject(stored.brandContext),
+    attachmentSnapshot: jsonArray<AiContentAttachmentSnapshot>(stored.attachmentSnapshot),
+    attachmentSnapshotMissingIds: jsonArray<string>(stored.attachmentSnapshotMissingIds),
   };
 }
 
@@ -295,6 +299,10 @@ function mapAnalysis(row: Record<string, unknown>, images: SubjectImageRecord[])
       promotion,
       description: typeof input.description === "string" ? input.description : "",
       ...(contractVersion === "subject-analysis.v2" ? { promotionOrTerms } : {}),
+      ...(contractVersion === "subject-analysis.v2" ? {
+        attachmentSnapshot: pipelineInput.attachmentSnapshot,
+        attachmentSnapshotMissingIds: pipelineInput.attachmentSnapshotMissingIds,
+      } : {}),
     },
     ...(contractVersion === "subject-analysis.v2" ? {
       brandContext: pipelineInput.brandContext,
@@ -472,6 +480,16 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
           );
           if (!generation.rowCount) throw new Error("subject_analysis_generation_not_found");
 
+          const activeUpload = await client.query(
+            `select id
+               from ai_content_attachment_upload_sessions
+              where generation_id = $1 and workspace_id = $2 and brand_id = $3
+                and status = 'pending' and expires_at > statement_timestamp()
+              limit 1`,
+            [input.generationId, input.workspaceId, input.brandId],
+          );
+          if (activeUpload.rowCount) throw new Error("ai_content_attachment_upload_in_progress");
+
           const duplicate = await client.query(
             `select ${ANALYSIS_COLUMNS}
                from ai_content_subject_analyses
@@ -527,9 +545,37 @@ export function createAiContentSubjectRepository(pool: Pool): SubjectAnalysisRep
           }
 
           const id = randomUUID();
+          const attachmentRows = input.attachmentIds.length === 0
+            ? { rows: [], rowCount: 0 }
+            : await client.query(
+              `select id, generation_id, role, file_name, mime_type, size_bytes,
+                      checksum, storage_url, storage_path, created_at
+                 from ai_content_generation_attachments
+                where workspace_id = $1 and brand_id = $2 and generation_id = $3
+                  and deleted_at is null and id = any($4::uuid[])
+                order by created_at, id`,
+              [input.workspaceId, input.brandId, input.generationId, input.attachmentIds],
+            );
+          const foundIds = new Set(attachmentRows.rows.map((row) => String(row.id)));
+          const missingIds = input.attachmentIds.filter((attachmentId) => !foundIds.has(attachmentId));
+          if (missingIds.length) throw new Error("subject_analysis_attachment_not_found");
+          const attachmentSnapshot: AiContentAttachmentSnapshot[] = attachmentRows.rows.map((row) => ({
+            id: String(row.id),
+            generationId: String(row.generation_id),
+            role: row.role as AiContentAttachmentSnapshot["role"],
+            fileName: String(row.file_name),
+            mimeType: String(row.mime_type),
+            sizeBytes: Number(row.size_bytes),
+            checksum: String(row.checksum),
+            storageUrl: String(row.storage_url),
+            storagePath: String(row.storage_path),
+            createdAt: iso(row.created_at)!,
+          }));
           const storedInput: SubjectPipelineInputEnvelope = {
             manualInput: input.manualInput,
             brandContext: input.brandContext,
+            attachmentSnapshot,
+            attachmentSnapshotMissingIds: [],
           };
           const inserted = await client.query(
             SUBJECT_PIPELINE_INSERT_SQL,

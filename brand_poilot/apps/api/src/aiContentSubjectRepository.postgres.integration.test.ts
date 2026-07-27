@@ -1,4 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { readFile, readdir } from "node:fs/promises";
+import { resolve } from "node:path";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -10,88 +12,19 @@ const WORKSPACE_ID = "20000000-0000-4000-8000-000000000001";
 const BRAND_ID = "30000000-0000-4000-8000-000000000001";
 const GENERATION_ID = "40000000-0000-4000-8000-000000000001";
 const OTHER_GENERATION_ID = "40000000-0000-4000-8000-000000000002";
+const USER_ID = "50000000-0000-4000-8000-000000000001";
 
 async function createSchema(pool: Pool) {
-  await pool.query(`
-    create table brands (
-      id uuid primary key,
-      workspace_id uuid not null,
-      unique (id, workspace_id)
-    );
-    create table ai_content_generations (
-      id uuid primary key,
-      workspace_id uuid not null,
-      brand_id uuid not null,
-      unique (id, workspace_id, brand_id)
-    );
-    create table ai_content_subject_analyses (
-      id uuid primary key,
-      workspace_id uuid not null,
-      brand_id uuid not null,
-      subject_type text not null,
-      source_url text null,
-      normalized_url text null,
-      generation_id uuid null,
-      contract_version text not null default 'subject-analysis.v1',
-      attachment_ids_json jsonb not null default '[]'::jsonb,
-      analysis_result_json jsonb not null default '{}'::jsonb,
-      input_json jsonb not null default '{}'::jsonb,
-      status text not null default 'queued',
-      facts_json jsonb not null default '[]'::jsonb,
-      structured_data_json jsonb not null default '{}'::jsonb,
-      research_json jsonb not null default '{}'::jsonb,
-      targets_json jsonb not null default '[]'::jsonb,
-      appeals_json jsonb not null default '{}'::jsonb,
-      selected_image_id uuid null,
-      analysis_version integer not null default 1,
-      idempotency_key text not null,
-      leased_by text null,
-      lease_token uuid null,
-      lease_expires_at timestamptz null,
-      attempt_count integer not null default 0,
-      available_at timestamptz not null default now(),
-      error_code text null,
-      error_message text null,
-      superseded_at timestamptz null,
-      created_at timestamptz not null default now(),
-      updated_at timestamptz not null default now(),
-      completed_at timestamptz null,
-      unique (brand_id, idempotency_key)
-    );
-    create unique index ai_content_subject_legacy_active_cache_uq
-      on ai_content_subject_analyses (brand_id, subject_type, normalized_url)
-      where generation_id is null and superseded_at is null;
-    create unique index ai_content_subject_legacy_version_uq
-      on ai_content_subject_analyses (brand_id, subject_type, normalized_url, analysis_version)
-      where generation_id is null;
-    create unique index ai_content_subject_generation_active_uq
-      on ai_content_subject_analyses (generation_id)
-      where generation_id is not null and superseded_at is null;
-    create table ai_content_subject_appeal_regeneration_keys (
-      analysis_id uuid not null references ai_content_subject_analyses(id) on delete cascade,
-      idempotency_key text not null,
-      created_at timestamptz not null default now(),
-      primary key (analysis_id, idempotency_key)
-    );
-    create table ai_content_subject_images (
-      id uuid primary key,
-      analysis_id uuid not null,
-      workspace_id uuid not null,
-      brand_id uuid not null,
-      source_url text not null,
-      storage_url text not null,
-      storage_path text not null,
-      width integer null,
-      height integer null,
-      mime_type text not null,
-      alt_text text null,
-      role text not null,
-      selection_score numeric not null default 0,
-      created_at timestamptz not null default now(),
-      deleted_at timestamptz null,
-      unique (analysis_id, source_url)
-    );
-  `);
+  const directory = resolve(process.cwd(), "../../db/migrations");
+  const skippedVectorMigrations = new Set([
+    "021_dm_wiki_pgvector.sql",
+    "027_wiki_search_v2.sql",
+    "033_compounding_wiki_pgvector.sql",
+  ]);
+  for (const file of (await readdir(directory)).filter((name) => name.endsWith(".sql")).sort()) {
+    if (skippedVectorMigrations.has(file)) continue;
+    await pool.query(await readFile(resolve(directory, file), "utf8"));
+  }
 }
 
 async function seedClaimableRows(pool: Pool) {
@@ -145,14 +78,37 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")("AiContentSubje
       application_name: "subject-analysis-concurrency",
     });
     await createSchema(pool);
+    await pool.query(
+      "insert into app_users (id, email) values ($1, 'subject-repository@example.com')",
+      [USER_ID],
+    );
+    await pool.query(
+      `insert into workspaces (id, name, slug, created_by_user_id)
+       values ($1, 'Subject Repository', 'subject-repository', $2)`,
+      [WORKSPACE_ID, USER_ID],
+    );
+    await pool.query(
+      `insert into brands (id, workspace_id, name, created_by_user_id)
+       values ($1, $2, 'Subject Brand', $3)`,
+      [BRAND_ID, WORKSPACE_ID, USER_ID],
+    );
   }, 120_000);
 
   beforeEach(async () => {
-    await pool.query("truncate table ai_content_subject_images, ai_content_subject_analyses, ai_content_generations, brands");
-    await pool.query("insert into brands (id, workspace_id) values ($1, $2)", [BRAND_ID, WORKSPACE_ID]);
     await pool.query(
-      `insert into ai_content_generations (id, workspace_id, brand_id)
-       values ($1, $3, $4), ($2, $3, $4)`,
+      `truncate table ai_content_subject_images,
+                      ai_content_subject_appeal_regeneration_keys,
+                      ai_content_subject_analyses,
+                      ai_content_generation_attachments,
+                      ai_content_attachment_upload_sessions,
+                      ai_content_generations cascade`,
+    );
+    await pool.query(
+      `insert into ai_content_generations (
+         id, workspace_id, brand_id, type, title, status, analysis_idempotency_key
+       ) values
+         ($1, $3, $4, 'card_news', 'First subject', 'analysis_ready', 'subject-generation-1'),
+         ($2, $3, $4, 'card_news', 'Second subject', 'analysis_ready', 'subject-generation-2')`,
       [GENERATION_ID, OTHER_GENERATION_ID, WORKSPACE_ID, BRAND_ID],
     );
     await seedClaimableRows(pool);

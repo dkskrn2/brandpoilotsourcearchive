@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from "pg";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   type AiContentManifest,
   type CompleteAiContentJobInput,
@@ -15,6 +16,7 @@ import { parseContentQualityBrief } from "./contentQualityBrief.js";
 import { buildContentGenerationInput, parseContentGenerationInputV2, type ContentGenerationInputV2 } from "./aiContentGenerationInput.js";
 import { createAiContentSubjectRepository } from "./aiContentSubjectRepository.js";
 import type { LoadSubjectEvidenceInput, SubjectEvidenceAttachment } from "./aiContentSubjectEvidence.js";
+import type { AiContentAttachmentSnapshot } from "./aiContentSubjectContracts.js";
 import type { ConfirmedBrandIntelligence } from "./brandIntelligenceProvider.js";
 import {
   createAiContentAttachmentRepository,
@@ -108,18 +110,7 @@ export interface SubjectAnalysisWorkerLease {
   attachmentIds: string[];
 }
 
-export interface AiContentAttachmentRecord {
-  id: string;
-  generationId: string;
-  role: LegacyConfirmAttachmentInput["role"];
-  fileName: string;
-  mimeType: string;
-  sizeBytes: number;
-  checksum: string;
-  storageUrl: string;
-  storagePath: string;
-  createdAt: string;
-}
+export interface AiContentAttachmentRecord extends AiContentAttachmentSnapshot {}
 
 export interface AiContentJobRecord {
   id: string;
@@ -229,6 +220,15 @@ function iso(value: unknown) {
 
 function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function attachmentDraftPortion(value: unknown): Record<string, unknown> {
+  const draft = object(value);
+  return Object.fromEntries(
+    Object.entries(draft)
+      .filter(([key]) => key.toLowerCase().includes("attachment"))
+      .sort(([left], [right]) => left.localeCompare(right)),
+  );
 }
 
 async function loadAiContentBrandContext(
@@ -528,7 +528,8 @@ async function outputsForGenerations(client: Queryable, generationIds: string[])
 async function scopedGeneration(client: Queryable, input: BrandGenerationScope, lock = false) {
   const result = await client.query(
     `select id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
-            generation_idempotency_key, subject_analysis_snapshot, error_code, error_message, created_at, updated_at, completed_at
+            generation_idempotency_key, subject_analysis_snapshot, generation_input_snapshot, attachments_locked_at,
+            error_code, error_message, created_at, updated_at, completed_at
        from ai_content_generations
       where id = $1 and workspace_id = $2 and brand_id = $3${lock ? " for update" : ""}`,
     [input.generationId, input.workspaceId, input.brandId],
@@ -651,6 +652,7 @@ function mapSubjectEvidenceAttachment(row: Record<string, unknown>): SubjectEvid
     checksum: String(row.checksum),
     storageUrl: String(row.storage_url),
     storagePath: String(row.storage_path),
+    createdAt: iso(row.created_at)!,
     deletedAt: iso(row.deleted_at),
   };
 }
@@ -844,7 +846,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       if (input.attachmentIds.length === 0) return [];
       const result = await pool.query(
         `select id, workspace_id, brand_id, generation_id, role, file_name, mime_type,
-                size_bytes, checksum, storage_url, storage_path, deleted_at
+                size_bytes, checksum, storage_url, storage_path, created_at, deleted_at
            from ai_content_generation_attachments
           where generation_id = $1 and workspace_id = $2 and brand_id = $3
             and id = any($4::uuid[]) and deleted_at is null
@@ -965,6 +967,15 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         await client.query("BEGIN");
         const generation = await scopedGeneration(client, input, true);
         if (!generation) throw new Error("ai_content_generation_not_found");
+        if (
+          generation.attachments_locked_at
+          && !isDeepStrictEqual(
+            attachmentDraftPortion(generation.draft_json),
+            attachmentDraftPortion(input.draft),
+          )
+        ) {
+          throw new Error("ai_content_attachments_locked");
+        }
         const updated = await client.query(
           `update ai_content_generations set draft_json = $4::jsonb, updated_at = now()
             where id = $1 and workspace_id = $2 and brand_id = $3
@@ -982,8 +993,18 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
 
     async startAiContentGeneration(input) {
       const client = await pool.connect();
+      let transactionOpen = false;
       try {
+        const confirmedBrandIntelligence = options.brandIntelligenceProvider
+          ? await options.brandIntelligenceProvider.getConfirmed(input)
+          : undefined;
+        const transactionBrandIntelligenceProvider = options.brandIntelligenceProvider
+          ? {
+              getConfirmed: async () => confirmedBrandIntelligence ?? null,
+            }
+          : undefined;
         await client.query("BEGIN");
+        transactionOpen = true;
         const current = await scopedGeneration(client, input, true);
         if (!current) throw new Error("ai_content_generation_not_found");
         if (current.generation_idempotency_key === input.idempotencyKey) {
@@ -991,6 +1012,15 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           return mapGeneration(current);
         }
         if (current.status !== "analysis_ready") throw new Error("ai_content_generation_not_analysis_ready");
+        const pendingUpload = await client.query(
+          `select id
+             from ai_content_attachment_upload_sessions
+            where generation_id = $1 and workspace_id = $2 and brand_id = $3
+              and status = 'pending' and expires_at > statement_timestamp()
+            limit 1`,
+          [input.generationId, input.workspaceId, input.brandId],
+        );
+        if (pendingUpload.rowCount) throw new Error("ai_content_attachment_upload_in_progress");
         const draft = object(current.draft_json);
         const subjectFlow = draft.subjectAnalysisId !== undefined
           || draft.subjectType === "product"
@@ -999,7 +1029,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           || draft.selectedAppeal !== undefined;
         const usesOwnedContext = draft.analysisSource === "owned";
         const brandContext = usesOwnedContext
-          ? await loadAiContentBrandContext(client, input, options.brandIntelligenceProvider)
+          ? await loadAiContentBrandContext(client, input, transactionBrandIntelligenceProvider)
           : null;
         if (usesOwnedContext && options.brandIntelligenceProvider && !brandContext?.brandIntelligenceVersionId) {
           throw new Error("brand_intelligence_required");
@@ -1025,13 +1055,18 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         const generationInput = subjectFlow
           ? await buildContentGenerationInput(
             {
-              getBrandContext: (scope) => loadAiContentBrandContext(client, scope, options.brandIntelligenceProvider),
+              getBrandContext: (scope) => loadAiContentBrandContext(client, scope, transactionBrandIntelligenceProvider),
               getSubjectAnalysis: (scope) => subjectRepository.getSubjectAnalysis(scope),
               getReferences: (scope) => loadGenerationReferences(client, scope),
               getAttachments: (scope) => loadGenerationAttachments(client, scope),
             },
             mapGeneration(current),
-            { outputCount: input.outputCount },
+            {
+              outputCount: input.outputCount,
+              ...(current.generation_input_snapshot
+                ? { existingSnapshot: current.generation_input_snapshot }
+                : {}),
+            },
           )
           : null;
         await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
@@ -1040,7 +1075,9 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         const updated = await client.query(
           `update ai_content_generations
               set status = 'analyzing', current_stage = $5, generation_idempotency_key = $4,
-                  subject_analysis_snapshot = coalesce(subject_analysis_snapshot, $6::jsonb), updated_at = now()
+                  generation_input_snapshot = $6::jsonb,
+                  subject_analysis_snapshot = coalesce(subject_analysis_snapshot, $6::jsonb),
+                  attachments_locked_at = statement_timestamp(), updated_at = now()
             where id = $1 and workspace_id = $2 and brand_id = $3 and status = 'analysis_ready'
             returning id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
                       error_code, error_message, created_at, updated_at, completed_at`,
@@ -1072,10 +1109,12 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
            values ($1, $2, $3, 'analyze', $4, 'queued', jsonb_build_object(
              'generationId', $1::uuid,
              'finalizeGeneration', true,
-             'waitForOwnedContext', $5::boolean
+             'waitForOwnedContext', $5::boolean,
+             'contentGenerationInput', $6::jsonb
            ))
            on conflict do nothing`,
-          [input.generationId, input.workspaceId, input.brandId, generation.type, waitForOwnedContext],
+          [input.generationId, input.workspaceId, input.brandId, generation.type, waitForOwnedContext,
+            generationInput ? JSON.stringify(generationInput) : null],
         );
         await client.query(
           `insert into ai_content_usage_ledger
@@ -1087,7 +1126,8 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         await client.query("COMMIT");
         return mapGeneration(generation);
       } catch (error) {
-        await client.query("ROLLBACK"); throw error;
+        if (transactionOpen) await client.query("ROLLBACK");
+        throw error;
       } finally { client.release(); }
     },
 
@@ -1290,8 +1330,13 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             [job.generation_id],
           );
         }
+        if (job.job_type === "generate") {
+          await client.query("COMMIT");
+          return mapJob(job);
+        }
         const context = await client.query(
-          `select generation.draft_json, generation.analysis_json, generation.subject_analysis_snapshot,
+          `select generation.draft_json, generation.analysis_json,
+                  coalesce(generation.generation_input_snapshot, generation.subject_analysis_snapshot) as generation_input_snapshot,
                   generation.title as generation_title,
                   generation.type as generation_type, output.output_index,
                   coalesce((select jsonb_agg(reference.reference_snapshot_json order by reference.position)
@@ -1322,7 +1367,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           attachments: Array.isArray(contextRow.attachments) ? contextRow.attachments : [],
           brandContext: brandContext.context,
           contentGenerationInput: generationInputForWorker(
-            contextRow.subject_analysis_snapshot,
+            contextRow.generation_input_snapshot,
             contextRow.analysis_json,
             job.job_type,
           ),
@@ -1393,6 +1438,22 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             ],
           );
           if (finalizeGeneration) {
+            const storedInput = await client.query(
+              `select coalesce(generation_input_snapshot, subject_analysis_snapshot) as generation_input_snapshot
+                 from ai_content_generations
+                where id = $1`,
+              [job.generation_id],
+            );
+            const baseInput = parseContentGenerationInputV2(
+              storedInput.rows[0]?.generation_input_snapshot,
+            );
+            const finalizedInput = parseContentGenerationInputV2({
+              ...baseInput,
+              message: {
+                ...baseInput.message,
+                qualityBrief,
+              },
+            });
             const outputs = await client.query(
               `select id
                  from ai_content_generation_outputs
@@ -1404,9 +1465,20 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
               await client.query(
                 `insert into ai_content_generation_jobs
                    (generation_id, output_id, workspace_id, brand_id, job_type, content_type, status, payload_json)
-                 values ($1, $2, $3, $4, 'generate', $5, 'queued', jsonb_build_object('generationId', $1::uuid, 'outputId', $2::uuid))
+                 values ($1, $2, $3, $4, 'generate', $5, 'queued', $6::jsonb)
                  on conflict do nothing`,
-                [job.generation_id, output.id, job.workspace_id, job.brand_id, job.content_type],
+                [
+                  job.generation_id,
+                  output.id,
+                  job.workspace_id,
+                  job.brand_id,
+                  job.content_type,
+                  JSON.stringify({
+                    generationId: job.generation_id,
+                    outputId: output.id,
+                    contentGenerationInput: finalizedInput,
+                  }),
+                ],
               );
             }
           }
@@ -1552,7 +1624,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
            values ($1, $2, $3, $4, 'generate', $5, 'queued', jsonb_build_object(
              'generationId', $1::uuid,
              'outputId', $2::uuid,
-             'contentGenerationInput', coalesce((select subject_analysis_snapshot from ai_content_generations where id = $1), '{}'::jsonb)
+             'contentGenerationInput', coalesce((select generation_input_snapshot from ai_content_generations where id = $1), '{}'::jsonb)
            ))`,
           [output.generation_id, input.outputId, input.workspaceId, input.brandId, output.type],
         );

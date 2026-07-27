@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildPrompt } from "./promptBuilder.js";
+import { parseContentGenerationInput } from "./contracts.js";
 
 const job = {
   id: "j", generationId: "g", outputId: "o", workspaceId: "w", brandId: "b", jobType: "generate" as const,
@@ -35,5 +36,13 @@ describe("blog prompt", () => {
   it("rejects an appeal that does not belong to the selected target", () => {
     const input = job.payload.contentGenerationInput;
     expect(() => buildPrompt({ ...job, payload: { contentGenerationInput: { ...input, message: { ...input.message, appeal: { id: "appeal-1", targetId: "other" } } } } })).toThrow("content_generation_appeal_target_mismatch");
+  });
+
+  it("rejects attachment snapshots with missing structural fields", () => {
+    const input = job.payload.contentGenerationInput;
+    expect(() => parseContentGenerationInput({
+      ...input,
+      attachments: [{ id: "attachment-1" }],
+    })).toThrow("content_generation_attachment_invalid");
   });
 });

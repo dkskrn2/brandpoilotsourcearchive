@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildPrompt } from "./promptBuilder.js";
+import { parseContentGenerationInput } from "./contracts.js";
 import type { EditorialPlan } from "./editorialPlan.js";
 
 const job = {
@@ -10,7 +11,7 @@ const job = {
     subject: { analysisId: "analysis-1", analysisVersion: 2, analysisContractVersion: "subject-analysis.v2", analysisResult: { subjectType: "product", productProfile: { name: "상세 제품 분석" }, serviceProfile: null, alternatives: [{ name: "대안 A" }] }, type: "product", sourceUrl: "https://example.com/product", facts: [{ claim: "검증된 사실" }], research: { claims: [{ sourceUrl: "https://research.example" }] }, selectedImages: [{ id: "img-1", url: "https://cdn.example/image.png", role: "product", altText: "제품" }] },
     message: { target: { id: "target-1", name: "초보 고객" }, appeal: { id: "appeal-1", targetId: "target-1", title: "검증된 장점" }, qualityBrief: { hook: "도움이 되는 훅" } },
     creativeDirection: { prompts: ["첫 번째 카드뉴스 지시"], brandColor: "#0057B8", selectedColor: "#0F766E", aspectRatio: "4:5", outputCount: 1 },
-    references: [{ previewUrl: "https://cdn.example/reference.png" }], attachments: [{ role: "user_reference", url: "https://cdn.example/user.png" }],
+    references: [{ previewUrl: "https://cdn.example/reference.png" }], attachments: [],
   } },
 };
 
@@ -61,5 +62,13 @@ describe("card-news prompt", () => {
     const input = job.payload.contentGenerationInput;
     const plan: EditorialPlan = { version: "editorial-plan.v1", intent: "information", singleSubject: "주제", readerQuestion: "질문", corePromise: "약속", slides: [{ index: 1, role: "fact", headline: "제목", keyMessage: "내용", evidenceIds: [] }], cta: null, excludedTopics: [], referenceUses: [] };
     expect(buildPrompt({ ...job, payload: { contentGenerationInput: { ...input, creativeDirection: { ...input.creativeDirection, brandColor: "" } } } }, plan)).toContain("#0F766E");
+  });
+
+  it("rejects attachment snapshots with missing structural fields", () => {
+    const input = job.payload.contentGenerationInput;
+    expect(() => parseContentGenerationInput({
+      ...input,
+      attachments: [{ id: "attachment-1" }],
+    })).toThrow("content_generation_attachment_invalid");
   });
 });

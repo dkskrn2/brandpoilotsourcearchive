@@ -6,7 +6,12 @@ import type {
 } from "./aiContentRepository.js";
 import type { AiContentType } from "./aiContentContracts.js";
 import type { SubjectAnalysisRecord, SubjectBrandScope } from "./aiContentSubjectRepository.js";
-import type { SubjectTarget, SubjectAppeal, SubjectAnalysisResultV2 } from "./aiContentSubjectContracts.js";
+import type {
+  AiContentAttachmentSnapshot,
+  SubjectTarget,
+  SubjectAppeal,
+  SubjectAnalysisResultV2,
+} from "./aiContentSubjectContracts.js";
 
 export interface ContentGenerationInputV2 {
   contractVersion: "content-generation-input.v2";
@@ -170,6 +175,42 @@ function brandColor(context: AiContentBrandContextRecord): string {
   return typeof color === "string" && color.trim() ? color.trim() : "";
 }
 
+function attachmentSnapshot(value: unknown): AiContentAttachmentSnapshot {
+  const source = object(value, "ai_content_attachment_snapshot_invalid");
+  const role = source.role;
+  if (
+    role !== "product"
+    && role !== "person"
+    && role !== "scale"
+    && role !== "visual_reference"
+    && role !== "document"
+  ) {
+    fail("ai_content_attachment_snapshot_invalid");
+  }
+  const sizeBytes = Number(source.sizeBytes);
+  if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) fail("ai_content_attachment_snapshot_invalid");
+  const result = {
+    id: text(source.id, "ai_content_attachment_snapshot_invalid"),
+    generationId: text(source.generationId, "ai_content_attachment_snapshot_invalid"),
+    role: role as AiContentAttachmentSnapshot["role"],
+    fileName: text(source.fileName, "ai_content_attachment_snapshot_invalid"),
+    mimeType: text(source.mimeType, "ai_content_attachment_snapshot_invalid"),
+    sizeBytes,
+    checksum: text(source.checksum, "ai_content_attachment_snapshot_invalid"),
+    storageUrl: text(source.storageUrl, "ai_content_attachment_snapshot_invalid"),
+    storagePath: text(source.storagePath, "ai_content_attachment_snapshot_invalid"),
+    createdAt: text(source.createdAt, "ai_content_attachment_snapshot_invalid"),
+  };
+  if (!/^[0-9a-f]{64}$/i.test(result.checksum)) fail("ai_content_attachment_snapshot_invalid");
+  try {
+    if (new URL(result.storageUrl).protocol !== "https:") fail("ai_content_attachment_snapshot_invalid");
+  } catch {
+    fail("ai_content_attachment_snapshot_invalid");
+  }
+  if (Number.isNaN(Date.parse(result.createdAt))) fail("ai_content_attachment_snapshot_invalid");
+  return result;
+}
+
 export function parseContentGenerationInputV2(value: unknown): ContentGenerationInputV2 {
   const source = object(value, "ai_content_generation_input_invalid");
   if (source.contractVersion !== "content-generation-input.v2") fail("ai_content_generation_contract_version_invalid");
@@ -194,7 +235,9 @@ export function parseContentGenerationInputV2(value: unknown): ContentGeneration
   const selectedColor = text(direction.selectedColor, "ai_content_selected_color_invalid");
   const brandColorValue = text(direction.brandColor, "ai_content_brand_color_invalid", true);
   const references = Array.isArray(source.references) ? source.references : fail("ai_content_references_invalid");
-  const attachments = Array.isArray(source.attachments) ? source.attachments : fail("ai_content_attachments_invalid");
+  const attachments = Array.isArray(source.attachments)
+    ? source.attachments.map(attachmentSnapshot)
+    : fail("ai_content_attachments_invalid");
   return clone({
     contractVersion: "content-generation-input.v2",
     contentType: source.contentType,
@@ -219,7 +262,7 @@ export function parseContentGenerationInputV2(value: unknown): ContentGeneration
       outputCount: outputCount(direction.outputCount),
     },
     references: references as AiContentReferenceRecord[],
-    attachments: attachments as AiContentAttachmentRecord[],
+    attachments,
   });
 }
 

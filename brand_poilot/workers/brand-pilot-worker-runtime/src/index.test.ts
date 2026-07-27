@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { isRetryableContentWorkerError, terminateProcessTree } from "./index.js";
+import {
+  isRetryableContentWorkerError,
+  preflightAttachmentSnapshots,
+  terminateProcessTree,
+} from "./index.js";
 
 describe("worker runtime", () => {
   it("terminates a Windows process tree with taskkill", async () => {
@@ -17,5 +21,51 @@ describe("worker runtime", () => {
     expect(isRetryableContentWorkerError(new Error("card_news_content_invalid"))).toBe(false);
     expect(isRetryableContentWorkerError(new Error("card_news_output_id_required"))).toBe(false);
     expect(isRetryableContentWorkerError(new Error("codex_card_news_failed:1"))).toBe(true);
+  });
+
+  it("requires every structural attachment snapshot field before provider I/O", async () => {
+    const head = vi.fn();
+    await expect(preflightAttachmentSnapshots([{
+      id: "attachment-1",
+      generationId: "generation-1",
+      role: "document",
+      fileName: "brief.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 42,
+      checksum: "a".repeat(64),
+      storageUrl: "https://blob.example/brief.pdf",
+      createdAt: "2026-07-27T00:00:00.000Z",
+    }], { head })).rejects.toThrow("ai_content_attachment_blob_unavailable");
+    expect(head).not.toHaveBeenCalled();
+  });
+
+  it("lets terminal not-found outrank a faster transient failure", async () => {
+    const snapshots = [1, 2].map((index) => ({
+      id: `attachment-${index}`,
+      generationId: "generation-1",
+      role: "document",
+      fileName: `${index}.pdf`,
+      mimeType: "application/pdf",
+      sizeBytes: 42,
+      checksum: "a".repeat(64),
+      storageUrl: `https://blob.example/${index}.pdf`,
+      storagePath: `generation/${index}.pdf`,
+      createdAt: `2026-07-27T00:00:0${index}.000Z`,
+    }));
+    const head = vi.fn(async (path: string) => {
+      if (path.endsWith("1.pdf")) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        throw Object.assign(new Error("not found"), { status: 404 });
+      }
+      throw Object.assign(new Error("upstream unavailable"), { status: 503 });
+    });
+    await expect(preflightAttachmentSnapshots(snapshots, { head }))
+      .rejects.toThrow("ai_content_attachment_blob_unavailable");
+    expect(head).toHaveBeenCalledTimes(2);
+  });
+
+  it("classifies storage availability codes explicitly", () => {
+    expect(isRetryableContentWorkerError(new Error("ai_content_attachment_blob_unavailable"))).toBe(false);
+    expect(isRetryableContentWorkerError(new Error("ai_content_attachment_storage_unavailable"))).toBe(true);
   });
 });
