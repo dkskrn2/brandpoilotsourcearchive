@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-27
 
-**Status:** Approved for implementation planning
+**Status:** Approved for implementation planning; preservation and lifecycle amendments applied during planning
 
 ## 1. Goal
 
@@ -51,9 +51,13 @@ AI 콘텐츠 생성 과정에서 사용하는 임시 첨부파일을 업로드 �
 
 ### 4.2 Attachment mutation
 
-- generation이 attachment input snapshot을 만들기 전에는 첨부 추가·삭제가 가능하다.
-- 첫 consuming snapshot을 생성할 때 `attachments_locked_at`을 기록한다.
+- subject analysis는 요청에 포함된 첨부만 자체 immutable snapshot으로 고정한다. 이 subset snapshot은 GC hold를 만들지만 generation 전체를 잠그지 않는다.
+- 이 예외는 subject analysis 뒤에 generation-prompt 첨부를 추가하는 기존 wizard 흐름을 보존하기 위한 것이다.
+- final generation input snapshot을 만들기 전에는 subject snapshot에 포함되지 않은 첨부를 추가·삭제할 수 있다.
+- final generation input snapshot을 생성할 때 `attachments_locked_at`을 기록한다.
+- subject analysis 요청과 final generation start는 non-expired pending upload session이 있으면 `409 ai_content_attachment_upload_in_progress`로 거절해 업로드 중인 파일을 조용히 누락하지 않는다.
 - lock 이후 token 발급, confirm, remove, attachment-bearing draft 수정은 `409 ai_content_attachments_locked`로 거절한다.
+- lock 전에 이미 confirmed된 session의 동일 `sessionId + nonce` confirm replay는 lock 이후에도 같은 attachment를 반환한다. lock 이후의 pending session confirm만 거절한다.
 - 사용자 제거는 논리 삭제다. 물리 삭제는 snapshot 참조와 보존기간을 확인한 GC만 수행한다.
 - 같은 파일 재업로드는 새 upload attempt UUID와 새 storage path를 사용한다.
 
@@ -81,17 +85,20 @@ Required fields:
 - `storage_path`
 - `token_expires_at`
 - `confirmed_attachment_id`
-- `confirmed_at`, `cancelled_at`, `created_at`, `updated_at`
+- `confirmed_at`, `cancelled_at`, `expired_at`, `failed_at`, `created_at`, `updated_at`
+- redacted `last_error_code`
+- `is_legacy_backfill boolean not null default false`
 
 Constraints:
 
 - generation ownership은 `(generation_id, workspace_id, brand_id)` 복합 FK다.
 - actor membership은 가능한 경우 기존 membership composite FK를 재사용한다.
 - `storage_path`와 `nonce`는 unique다.
-- `pending`은 confirm/cancel 시각과 attachment ID가 없어야 한다.
+- `pending`은 모든 transition 시각과 attachment ID가 없어야 한다.
 - `confirmed`는 attachment ID와 `confirmed_at`이 있어야 한다.
-- `cancelled | expired`는 다시 confirm할 수 없다.
-- legacy actor를 추정해서 채우지 않는다.
+- `cancelled | expired | failed`는 각 상태에 맞는 transition 시각이 있고 attachment ID가 없어야 하며 다시 confirm할 수 없다.
+- session과 attachment의 tenant-scoped 양방향 참조는 deferred constraint로 묶고 confirm의 insert/update를 한 transaction에서 완료한다.
+- `created_by_user_id`가 null인 row는 `is_legacy_backfill=true`인 confirmed migration row만 허용한다. legacy actor를 추정해서 채우지 않는다.
 
 ### 5.2 `ai_content_generation_attachments`
 
@@ -102,14 +109,9 @@ Additional fields:
 - `upload_session_id`
 - `deletion_reason`
 - `physical_delete_status`: `none | pending | deleting | failed | deleted | dead_letter`
-- `physical_delete_attempt_count`
-- `physical_delete_next_attempt_at`
-- `physical_delete_last_error`
-- `physical_delete_lease_token`
-- `physical_delete_lease_expires_at`
 - `physically_deleted_at`
 
-`deleted_at`은 UI와 live draft에서 제외되는 논리 삭제만 뜻한다. `physically_deleted_at`은 provider 삭제 성공 또는 provider의 verified not-found 이후에만 기록한다.
+`deleted_at`은 UI와 live draft에서 제외되는 논리 삭제만 뜻한다. `physically_deleted_at`은 provider 삭제 성공 또는 provider의 verified not-found 이후에만 기록한다. attempt, next-attempt, error, lease의 authoritative state는 parent-independent deletion job에만 저장하고 attachment에는 중복 저장하지 않는다.
 
 ### 5.3 `ai_content_generations`
 
@@ -149,7 +151,7 @@ authenticated request
 ```
 
 - DB pending expiry는 10분이다.
-- provider token은 9분으로 설정해 DB session이 먼저 만료된 상태에서 유효한 upload가 도착하지 않게 한다.
+- 새 session provider token의 `validUntil`은 API 서버 시계가 아니라 DB가 반환한 `token_expires_at - 60 seconds`로 설정한다. 이로써 API/DB clock skew가 있어도 provider token이 DB session보다 먼저 만료된다. Flag OFF legacy issuer는 deployment skew 동안 기존 expiry 계산을 유지한다.
 - token 생성 실패 시 session을 `failed`로 남겨 진단할 수 있게 한다.
 - 최대 5개 제한은 pending reservation과 confirmed attachment를 함께 센다.
 
@@ -157,10 +159,11 @@ Confirm flow:
 
 ```text
 confirm(sessionId, nonce)
-  -> lock tenant-scoped pending session and generation
-  -> reject expired/cancelled/foreign/locked generation
+  -> lock tenant-scoped generation, then session
+  -> return an identical already-confirmed replay
+  -> reject expired/cancelled/foreign/locked pending confirmation
   -> read immutable expected metadata from DB
-  -> verify provider Blob path, size, MIME, availability
+  -> verify provider Blob path, size, MIME, availability with a 15-second abort
   -> create confirmed attachment
   -> mark session confirmed
 ```
@@ -169,24 +172,40 @@ confirm(sessionId, nonce)
 - 동일 session의 동일 confirm replay는 기존 attachment를 반환한다.
 - conflicting replay는 `409 ai_content_upload_confirmation_conflict`다.
 - confirm과 expiry GC가 경쟁하면 row lock을 획득한 한쪽만 상태를 전이한다.
+- provider verification timeout/temporary failure는 transaction을 rollback하고 pending session을 expiry 전까지 재시도 가능하게 둔다.
 
 ## 7. Immutable Snapshot and Worker Contract
+
+Subject-analysis request transaction:
+
+1. generation row를 lock한다.
+2. non-expired pending upload session이 없는지 확인한다.
+3. 요청된 confirmed attachment를 ordered subset snapshot으로 만든다.
+4. `ai_content_subject_analyses.input_json.attachmentSnapshot`에 저장한다.
+5. generation-wide `attachments_locked_at`은 기록하지 않는다.
+
+Subject worker는 이 subset snapshot만 사용하고 live attachment row를 다시 읽지 않는다.
 
 Generation start transaction:
 
 1. generation row를 lock한다.
-2. active confirmed attachment를 ordered snapshot으로 만든다.
-3. attachment ID, role, metadata, storage URL/path를 `generation_input_snapshot`에 저장한다.
-4. `attachments_locked_at`을 기록한다.
-5. output/job을 생성한다.
+2. non-expired pending upload session이 없는지 확인한다.
+3. active confirmed attachment를 ordered snapshot으로 만든다.
+4. attachment ID, role, metadata, storage URL/path를 `generation_input_snapshot`에 저장한다.
+5. `attachments_locked_at`을 기록한다.
+6. output/job을 생성한다.
 
 Worker claim과 retry는 live attachment table을 다시 읽지 않는다. job 생성 transaction에서 snapshot을 payload 또는 별도 job snapshot relation에 고정하고 worker는 그 값만 읽는다.
+
+Subject evidence와 세 generation worker는 실행 전에 snapshot Blob availability를 bounded preflight한다. verified not-found는 non-retryable `ai_content_attachment_blob_unavailable`, provider/network timeout은 retryable `ai_content_attachment_storage_unavailable`로 분리한다. 복합 실패는 전체 outcome을 모은 뒤 structural gap/not-found/mismatch terminal 결과를 transient보다 우선하고, 같은 등급에서는 snapshot 순서를 사용한다.
 
 GC는 다음 attachment를 claim할 수 없다.
 
 - `retryable_until > now()`
 - queued/processing job snapshot이 참조
 - attachment deletion hold가 활성
+- completed generation output의 `manifest_url` 또는 `artifact_manifest_json.assets[*].url`이 attachment URL을 참조
+- 연결된 channel output의 `output_json.cards[*].url` 또는 `output_json.story.url`과 그 publish queue/attempt가 attachment URL을 직접 참조하며 독립 artifact로 승격되지 않음
 - physical deletion lease가 다른 worker에 의해 유지
 
 ## 8. Garbage Collection
@@ -210,8 +229,13 @@ GC phases:
 Claim protocol:
 
 - DB `now()`를 사용한다.
+- retention/job/artifact/publish hold를 candidate `order by/limit` 전에 제외하고 lock 뒤 다시 확인해 held job이 eligible queue를 기아 상태로 만들지 않게 한다.
 - `FOR UPDATE SKIP LOCKED`로 bounded batch를 claim한다.
-- `deleting` 상태, lease token, lease expiry를 기록하고 commit한다.
+- runner는 전체 batch를 한 번에 claim하지 않고 현재 free concurrency만큼 just-in-time claim한다.
+- `deleting` 상태, lease token, lease expiry를 기록하고 commit하되 claim만으로 attempt를 증가시키지 않는다.
+- provider 호출 직전 lease-token compare-and-set으로 attempt를 증가시킨다.
+- endpoint budget으로 시작하지 못한 claim은 `(job_id, lease_token)` 배열의 한 번의 bulk fenced release로 반환하고 attempt를 소비하지 않는다.
+- 모든 GC DB 연산은 runner가 직전에 계산한 remaining budget과 그 이하의 `statement_timeout`을 받는다.
 - provider 삭제는 transaction 밖에서 실행한다.
 - finalize는 같은 lease token으로 compare-and-set한다.
 - provider not-found는 성공으로 처리한다.
@@ -222,7 +246,7 @@ Defaults:
 
 - batch 25, hard maximum 100
 - provider timeout 15 seconds
-- endpoint budget about 45 seconds
+- hard runner budget 45 seconds with the final 2 seconds reserved for bounded bulk fenced finalize/release
 - retry backoff capped near one hour
 
 ## 9. Retry and GC Arbitration
@@ -250,6 +274,7 @@ GC가 `deleting` claim을 commit한 뒤에는 retry가 실패한다. 외부 삭�
 - `404 ai_content_upload_session_not_found`
 - `409 ai_content_upload_confirmation_conflict`
 - `409 ai_content_attachment_limit_exceeded`
+- `409 ai_content_attachment_upload_in_progress`
 - `409 ai_content_attachments_locked`
 - `410 ai_content_upload_session_expired`
 - `410 ai_content_attachment_retention_expired`
@@ -264,6 +289,7 @@ UI는 다음을 표시한다.
 
 - upload session 만료: 파일을 다시 선택하도록 안내
 - 최대 5개: 기존 제한 문구 유지
+- upload 진행 중: 완료 또는 실패한 파일 재시도 후 분석·생성하도록 안내
 - attachment lock: 새 generation에서 변경하도록 안내
 - retry 만료: 새 생성 또는 파일 재업로드 안내
 - storage 일시 오류: 현재 draft를 보존하고 재시도 제공
@@ -293,6 +319,8 @@ Rollout:
 
 Migration rollback은 하지 않는다. flag를 끄는 것이 application rollback이며 cleanup obligation은 계속 보존한다.
 
+Flag OFF의 legacy token 응답은 DB upload session을 만들지 않으므로 confirm되지 않은 legacy Blob은 발견할 수 없다. 이는 dark launch의 명시적 잔여 한계다. abandoned-upload discoverability 보장은 session issuance를 활성화한 뒤 시작하며, 활성화 전 발급된 legacy token의 TTL이 끝나기 전에는 그 보장을 주장하지 않는다.
+
 ## 12. Observability
 
 각 GC run은 다음 구조화 지표를 남긴다.
@@ -300,12 +328,13 @@ Migration rollback은 하지 않는다. flag를 끄는 것이 application rollba
 - sessions scanned/claimed/confirmed/expired
 - deletion claimed/succeeded/failed/retried
 - lease reclaimed
-- queue depth와 oldest pending age
+- eligible queue depth와 oldest eligible pending age
+- held count, oldest held age, hold-reason buckets
 - attempt-count buckets
 - dead-letter count
 - duration과 provider error category
 
-Blob token, nonce, secret 원문은 로그에 남기지 않는다. oldest pending age 증가, 반복 실패, nonzero dead-letter에 alert를 연결한다.
+Blob token, nonce, secret 원문은 로그에 남기지 않는다. 첫 dark launch는 지표와 alert threshold/runbook만 구현하고 실제 alert 연결은 Operations 활성화 단계에서 수행한다. Operations에서는 nonzero dead-letter, oldest eligible pending age 24시간 초과, 또는 5회 연속 scheduled run의 provider failure에 alert를 연결한다.
 
 ## 13. Test Strategy
 
@@ -319,23 +348,29 @@ Blob token, nonce, secret 원문은 로그에 남기지 않는다. oldest pendin
 ### Repository and API
 
 - five-file pending + confirmed reservation concurrency
+- pending upload blocks subject analysis and final generation start
 - token/session actor and tenant scope
 - unique same-file upload attempt paths
+- provider expiry is derived from the DB expiry under API/DB clock skew
 - confirm replay/conflict/expiry/cancel races
 - generation lock and attachment mutation rejection
 - malformed UUID 400 and foreign tenant 404
 - retry immediately before, at, and after expiry
 - retry vs GC lock ordering
 - two GC callers claim once
+- permanently held oldest job does not starve younger eligible work
+- eligible and held queue health metrics remain separate
 - expired lease reclaim and stale fencing token rejection
 - partial provider deletion, not-found replay, transient/permanent failure
+- batch 100 with slow DB stays inside the deadline through just-in-time claim and bulk release
+- completed output manifest/channel publish references hold attachment Blobs
 - generation parent deletion does not erase cleanup obligation
 
 ### Worker
 
-- original and retry job inputs use byte-for-byte equivalent attachment snapshot
+- original and retry job inputs use canonically serialized JSON deep equality/hash-equivalent attachment snapshots
 - live row mutation cannot change queued job input
-- missing retained Blob returns deterministic terminal error
+- missing retained Blob returns deterministic terminal error while transient provider failure remains retryable; mixed terminal/transient outcomes use terminal-first snapshot order
 
 ### UI
 
@@ -353,8 +388,8 @@ Blob token, nonce, secret 원문은 로그에 남기지 않는다. oldest pendin
 
 ## 14. Acceptance Criteria
 
-- abandoned uploads are discoverable and eventually deleted
-- same file can be uploaded again without overwriting a retained snapshot Blob
+- session-issuance tests prove abandoned new-session uploads are discoverable; the operational guarantee starts only after later flag activation and legacy-token drain
+- when session issuance is enabled, the same file can be uploaded again without overwriting a retained snapshot Blob
 - at most five pending + confirmed attachments are reserved per generation
 - attachment inputs become immutable at generation start
 - retry before 15 days uses the original attachment snapshot
