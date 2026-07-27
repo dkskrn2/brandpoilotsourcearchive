@@ -486,7 +486,7 @@ describe("AiContentAttachmentGcRepository", () => {
       jobId: JOB_ID,
       leaseToken: LEASE,
       errorCategory: "transient",
-      errorMessage: "timeout",
+      errorMessage: "provider timeout access_token=persisted-secret",
       retryDelaySeconds: 13,
       ...BUDGET,
     })).resolves.toBe("retry");
@@ -503,6 +503,8 @@ describe("AiContentAttachmentGcRepository", () => {
     expect(query).toContain("attempt_count >= max_attempts");
     expect(query).toContain("$3 in ('authorization','authentication','permanent')");
     expect(query).toContain("'dead_letter'");
+    const firstFailure = pool.params[pool.sql.findIndex((sql) => sql.includes("case when"))];
+    expect(firstFailure?.[3]).toBe("provider timeout access_token=[REDACTED]");
   });
 
   it("reports eligible and held queues separately using the same hold predicate", async () => {
@@ -548,6 +550,38 @@ describe("AiContentAttachmentGcRepository", () => {
     expect(redacted).not.toContain("?token=");
     expect(redacted).not.toContain("&x=1");
     expect(redacted).toContain("[REDACTED]");
+  });
+
+  it.each([
+    ["access_token=supersecret", "supersecret"],
+    ["refresh_token: refreshsecret", "refreshsecret"],
+    ["accessToken=camelSecret", "camelSecret"],
+    ["auth-token=authSecret", "authSecret"],
+    ["client_secret: clientSecretValue", "clientSecretValue"],
+    ["clientSecret=camelClientSecret", "camelClientSecret"],
+    ["token abc123", "abc123"],
+    ["nonce abc123", "abc123"],
+    ["x-vercel-signature: signed-payload", "signed-payload"],
+    ["xVercelSignature=camel-signature", "camel-signature"],
+    ["Authorization: Basic basic-secret", "basic-secret"],
+    ["provider rejected Bearer bearer-secret", "bearer-secret"],
+    ["GET https://blob.example/a?access_token=query-secret&safe=value", "query-secret"],
+    ["request failed?refresh-token=query-secret&attempt=2", "query-secret"],
+  ])("redacts provider credential form %s", (message, secret) => {
+    const redacted = redactAiContentAttachmentGcError(message);
+
+    expect(redacted).not.toContain(secret);
+    expect(redacted).toContain("[REDACTED]");
+  });
+
+  it.each([
+    "upload token expired after provider timeout",
+    "auth request failed before provider call",
+    "client secret rotation failed",
+    "authentication request timed out",
+    "signature verification failed before upload",
+  ])("preserves non-secret diagnostic text: %s", (message) => {
+    expect(redactAiContentAttachmentGcError(message)).toBe(message);
   });
 
   it("rejects invalid budgets before pool acquisition", async () => {

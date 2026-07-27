@@ -234,11 +234,29 @@ async function inBudgetTransaction<T>(
 
 export function redactAiContentAttachmentGcError(value: unknown, maximum = MAX_ERROR_MESSAGE) {
   const raw = value instanceof Error ? value.message : String(value ?? "");
+  const credentialKey =
+    String.raw`(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|nonce|x[_-]?vercel[_-]?signature|signature|authorization|auth|(?:client|api|webhook|signing)?[_-]?secret|api[_-]?key)`;
+  const diagnosticWord =
+    String.raw`(?:expired|invalid|missing|required|request|rotation|verification|failed|failure|unavailable|rejected|timeout|timed|mismatch|not|was|is|has|could)`;
   return raw
-    .replace(/\b(https?:\/\/[^\s?]+)\?[^\s]*/gi, "$1")
-    .replace(/([?&](?:token|nonce|signature|authorization|auth|key)=[^&\s]*)/gi, "")
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [REDACTED]")
-    .replace(/\b(authorization|token|nonce|signature|secret|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]")
+    .replace(/\b(https?:\/\/[^\s?#]+)\?[^\s#]*/gi, "$1?[REDACTED]")
+    .replace(
+      /\b(Authorization)(\s*[:=]\s*)(?:(?:Bearer|Basic|Digest)\s+)?[^\s,;]+/gi,
+      "$1$2[REDACTED]",
+    )
+    .replace(/\b(Bearer)(\s+)[^\s,;]+/gi, "$1$2[REDACTED]")
+    .replace(
+      new RegExp(`([?&]${credentialKey}=)[^&\\s#]*`, "gi"),
+      "$1[REDACTED]",
+    )
+    .replace(
+      new RegExp(`\\b(${credentialKey})(\\s*[:=]\\s*)[^\\s,;&]+`, "gi"),
+      "$1$2[REDACTED]",
+    )
+    .replace(
+      new RegExp(`\\b(${credentialKey})(\\s+)(?!${diagnosticWord}\\b)[^\\s,;]+`, "gi"),
+      "$1$2[REDACTED]",
+    )
     .slice(0, Math.max(1, maximum));
 }
 
