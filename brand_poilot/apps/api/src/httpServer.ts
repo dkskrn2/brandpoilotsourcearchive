@@ -27,6 +27,7 @@ import {
   type AiContentType,
   type CompleteAiContentJobInput,
   type FailAiContentJobInput,
+  type LegacyConfirmAttachmentInput,
 } from "./aiContentContracts.js";
 import { parseAiContentManifest } from "./aiContentManifest.js";
 import { parseAiContentPublishRequest } from "./aiContentPublishTargets.js";
@@ -2344,7 +2345,7 @@ export function createServer(
       const scope = aiContentScope(request, request.params.brandId);
       const generation = await repository.getAiContentGeneration({ ...scope, generationId: request.params.generationId });
       if (!generation) throw new Error("ai_content_generation_not_found");
-      const parsed = parseConfirmAttachmentInput(request.body);
+      const parsed = parseConfirmAttachmentInput(request.body) as LegacyConfirmAttachmentInput;
       const confirmed = confirmAiContentAttachment({
         brandId: request.params.brandId,
         generationId: request.params.generationId,

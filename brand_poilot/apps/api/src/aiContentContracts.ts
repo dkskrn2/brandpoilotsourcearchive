@@ -85,10 +85,24 @@ export interface AttachmentUploadTokenInput {
   checksum: string;
 }
 
-export interface ConfirmAttachmentInput extends AttachmentUploadTokenInput {
+export interface ConfirmUploadSessionInput {
+  sessionId: string;
+  nonce: string;
+}
+
+export interface CancelUploadSessionInput {
+  sessionId: string;
+  nonce: string;
+}
+
+export interface LegacyConfirmAttachmentInput extends AttachmentUploadTokenInput {
   storageUrl: string;
   storagePath: string;
 }
+
+export type ConfirmAttachmentInput =
+  | ConfirmUploadSessionInput
+  | LegacyConfirmAttachmentInput;
 
 interface CompleteAiContentJobBase {
   jobId: string;
@@ -135,6 +149,36 @@ function requiredString(value: unknown, code: string, maxLength = 500): string {
   const normalized = value.trim();
   if (!normalized || normalized.length > maxLength) fail(code);
   return normalized;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function uuid(value: unknown, code: string): string {
+  if (typeof value !== "string" || !UUID.test(value)) fail(code);
+  return value.toLowerCase();
+}
+
+function exactObject(
+  value: unknown,
+  keys: readonly string[],
+  code = "ai_content_invalid_body",
+): Record<string, unknown> {
+  const source = inputObject(value, code);
+  const actual = Object.keys(source);
+  if (actual.length !== keys.length || actual.some((key) => !keys.includes(key))) fail(code);
+  return source;
+}
+
+export function parseAiContentGenerationId(value: unknown): string {
+  return uuid(value, "ai_content_generation_id_invalid");
+}
+
+export function parseAiContentAttachmentId(value: unknown): string {
+  return uuid(value, "ai_content_attachment_id_invalid");
+}
+
+export function parseAiContentUploadSessionId(value: unknown): string {
+  return uuid(value, "ai_content_upload_session_id_invalid");
 }
 
 function parseAttachmentRole(value: unknown): AiContentAttachmentRole {
@@ -195,9 +239,25 @@ export function parseAttachmentUploadTokenInput(value: unknown): AttachmentUploa
 
 export function parseConfirmAttachmentInput(value: unknown): ConfirmAttachmentInput {
   const source = inputObject(value);
+  if (Object.prototype.hasOwnProperty.call(source, "sessionId")
+    || Object.prototype.hasOwnProperty.call(source, "nonce")) {
+    const session = exactObject(source, ["sessionId", "nonce"]);
+    return {
+      sessionId: parseAiContentUploadSessionId(session.sessionId),
+      nonce: requiredString(session.nonce, "ai_content_upload_nonce_invalid", 500),
+    };
+  }
   return {
     ...parseAttachmentUploadTokenInput(source),
     storageUrl: requiredString(source.storageUrl, "ai_content_attachment_url_invalid", 2_000),
     storagePath: requiredString(source.storagePath, "ai_content_attachment_path_invalid", 500),
+  };
+}
+
+export function parseCancelUploadSessionInput(value: unknown): CancelUploadSessionInput {
+  const source = exactObject(value, ["sessionId", "nonce"]);
+  return {
+    sessionId: parseAiContentUploadSessionId(source.sessionId),
+    nonce: requiredString(source.nonce, "ai_content_upload_nonce_invalid", 500),
   };
 }

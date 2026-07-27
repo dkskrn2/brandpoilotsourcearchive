@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   type AiContentManifest,
   type CompleteAiContentJobInput,
-  ConfirmAttachmentInput,
+  LegacyConfirmAttachmentInput,
   type FailAiContentJobInput,
   AiContentType,
   CreateAiContentAnalysisInput,
@@ -107,7 +107,7 @@ export interface SubjectAnalysisWorkerLease {
 export interface AiContentAttachmentRecord {
   id: string;
   generationId: string;
-  role: ConfirmAttachmentInput["role"];
+  role: LegacyConfirmAttachmentInput["role"];
   fileName: string;
   mimeType: string;
   sizeBytes: number;
@@ -200,7 +200,7 @@ export interface AiContentRepository {
   saveBrandAudience(input: SaveAudienceInput): Promise<AudienceRecord>;
   listBrandAppeals(input: BrandScope): Promise<AppealRecord[]>;
   saveBrandAppeal(input: SaveAppealInput): Promise<AppealRecord>;
-  confirmAiContentAttachment(input: BrandGenerationScope & ConfirmAttachmentInput): Promise<AiContentAttachmentRecord>;
+  confirmAiContentAttachment(input: BrandGenerationScope & LegacyConfirmAttachmentInput): Promise<AiContentAttachmentRecord>;
   removeAiContentAttachment(input: BrandGenerationScope & { attachmentId: string }): Promise<{ id: string }>;
   claimAiContentJob(input: { contentType: AiContentType; workerId: string; leaseSeconds: number }): Promise<AiContentJobRecord | null>;
   heartbeatAiContentJob(input: { jobId: string; workerId: string; leaseToken: string; leaseSeconds: number }): Promise<boolean>;
