@@ -120,6 +120,71 @@ describe("content orchestration", () => {
     }))).toThrow("content_orchestration_reference_roles_invalid");
   });
 
+  it("normalizes reference item identifiers", () => {
+    const parsed = parseContentOrchestrationV1(orchestration({
+      references: [{
+        referenceItemId: "  reference-1  ",
+        roles: ["planning"],
+      }],
+    }));
+
+    expect(parsed.references[0]?.referenceItemId).toBe("reference-1");
+  });
+
+  it.each([
+    ["reference-1", "reference-1"],
+    [" reference-1", "reference-1 "],
+  ])("rejects duplicate normalized reference IDs: %s / %s", (first, second) => {
+    expect(() => parseContentOrchestrationV1(orchestration({
+      references: [
+        { referenceItemId: first, roles: ["planning"] },
+        { referenceItemId: second, roles: ["copy_pattern"] },
+      ],
+    }))).toThrow("content_orchestration_reference_ids_invalid");
+  });
+
+  it("rejects non-JSON-safe trusted record values with a stable error", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const unsafeBriefs: Record<string, unknown>[] = [
+      cyclic,
+      { count: 1n },
+      { missing: undefined },
+    ];
+
+    for (const brief of unsafeBriefs) {
+      expect(() => parseContentOrchestrationV1(orchestration({ brief })))
+        .toThrow("content_orchestration_invalid");
+    }
+  });
+
+  it("detaches canonical nested values from later source mutations", () => {
+    const input = orchestration({
+      target: { id: null, snapshot: { nested: { label: "original" } } },
+      brief: { nested: { goal: "original" } },
+      references: [{
+        referenceItemId: "reference-1",
+        roles: ["planning"],
+      }],
+      avatar: {
+        mode: "library",
+        id: "avatar-1",
+        snapshot: { nested: { asset: "original" } },
+      },
+    });
+    const parsed = parseContentOrchestrationV1(input);
+
+    (input.target.snapshot.nested as Record<string, unknown>).label = "mutated";
+    (input.brief.nested as Record<string, unknown>).goal = "mutated";
+    input.references[0]!.roles[0] = "copy_pattern";
+    (input.avatar!.snapshot.nested as Record<string, unknown>).asset = "mutated";
+
+    expect(parsed.target.snapshot).toEqual({ nested: { label: "original" } });
+    expect(parsed.brief).toEqual({ nested: { goal: "original" } });
+    expect(parsed.references[0]?.roles).toEqual(["planning"]);
+    expect(parsed.avatar?.snapshot).toEqual({ nested: { asset: "original" } });
+  });
+
   it("rejects two avatars at the runtime boundary", () => {
     const avatar = {
       mode: "library",

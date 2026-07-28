@@ -55,7 +55,22 @@ function nonempty(value: unknown): value is string {
 }
 
 function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
+  try {
+    const json = JSON.stringify(value, (_key, nested) => {
+      if (
+        nested === undefined
+        || typeof nested === "bigint"
+        || typeof nested === "function"
+        || typeof nested === "symbol"
+        || typeof nested === "number" && !Number.isFinite(nested)
+      ) invalid();
+      return nested;
+    });
+    if (json === undefined) invalid();
+    return JSON.parse(json) as T;
+  } catch {
+    invalid();
+  }
 }
 
 type CatalogGenerationStartCapability = {
@@ -129,6 +144,7 @@ export function parseContentOrchestrationV1(value: unknown): ContentOrchestratio
   if (source.references.length > 5) {
     throw new Error("content_orchestration_reference_limit_exceeded");
   }
+  const normalizedReferenceIds = new Set<string>();
   for (const value of source.references) {
     const reference = record(value);
     if (
@@ -140,6 +156,11 @@ export function parseContentOrchestrationV1(value: unknown): ContentOrchestratio
     if (new Set(reference.roles).size !== reference.roles.length) {
       throw new Error("content_orchestration_reference_roles_invalid");
     }
+    const referenceItemId = (reference.referenceItemId as string).trim();
+    if (normalizedReferenceIds.has(referenceItemId)) {
+      throw new Error("content_orchestration_reference_ids_invalid");
+    }
+    normalizedReferenceIds.add(referenceItemId);
   }
   if (Array.isArray(source.avatar)) {
     throw new Error("content_orchestration_avatar_invalid");
@@ -183,7 +204,7 @@ export function parseContentOrchestrationV1(value: unknown): ContentOrchestratio
     references: source.references.map((value) => {
       const reference = value as Record<string, unknown>;
       return {
-        referenceItemId: reference.referenceItemId,
+        referenceItemId: (reference.referenceItemId as string).trim(),
         roles: clone(reference.roles),
       };
     }),

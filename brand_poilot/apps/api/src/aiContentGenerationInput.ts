@@ -253,12 +253,12 @@ export function parseContentGenerationInputV2(value: unknown): ContentGeneration
   const orchestration = source.orchestration === undefined || source.orchestration === null
       ? null
       : parseContentOrchestrationV1(source.orchestration);
-  const contentFamily = direction.contentFamily === undefined
+  const contentFamily = !orchestration || direction.contentFamily === undefined
     ? undefined
     : direction.contentFamily === "informational" || direction.contentFamily === "marketing"
       ? direction.contentFamily
       : fail("ai_content_content_family_invalid");
-  const outputFormat = direction.outputFormat === undefined
+  const outputFormat = !orchestration || direction.outputFormat === undefined
     ? undefined
     : direction.outputFormat === "card_news"
       || direction.outputFormat === "blog"

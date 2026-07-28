@@ -54,9 +54,28 @@ describe("content-generation-input.v2", () => {
       workerFutureMetadata: { contractVersion: "future-worker-metadata.v1" },
       creativeDirection: {
         ...envelope.creativeDirection,
-        outputFormat: "single_image",
+        futureDirectionHint: "single_image",
       },
     })).not.toThrow();
+  });
+
+  it.each([
+    { contentFamily: "informational" },
+    { contentFamily: "marketing", outputFormat: "single_image" },
+  ])("strips orchestration discriminators from legacy creative direction: %o", async (recognizedFields) => {
+    const envelope = await buildContentGenerationInput(deps(), generation(), { outputCount: 1 });
+
+    const parsed = parseContentGenerationInputV2({
+      ...envelope,
+      orchestration: null,
+      creativeDirection: {
+        ...envelope.creativeDirection,
+        ...recognizedFields,
+      },
+    });
+
+    expect(parsed.creativeDirection).not.toHaveProperty("contentFamily");
+    expect(parsed.creativeDirection).not.toHaveProperty("outputFormat");
   });
 
   it("preserves an optional orchestration envelope and worker creative discriminator", async () => {
