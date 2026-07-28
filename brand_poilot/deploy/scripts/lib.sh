@@ -25,31 +25,36 @@ require_file_mode_600() {
   fi
 }
 
+env_secret_value_digest() {
+  local key="$1"
+  local file="$2"
+  local key_count
+  local canonical_count
+
+  [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || fail "shared_secret_key_invalid"
+  key_count="$(grep -Ec "^${key}=" "$file" || true)"
+  [[ "$key_count" != "0" ]] || fail "shared_secret_missing"
+  [[ "$key_count" == "1" ]] || fail "shared_secret_invalid"
+  grep -Eq "^${key}=required-at-deploy-time$" "$file" &&
+    fail "shared_secret_missing"
+  canonical_count="$(grep -Ec "^${key}=[A-Za-z0-9+/=_:.@%-]+$" "$file" || true)"
+  [[ "$canonical_count" == "1" ]] || fail "shared_secret_invalid"
+
+  grep -E "^${key}=" "$file" |
+    sed 's/^[^=]*=//' |
+    sha256sum |
+    awk '{print $1}'
+}
+
 require_matching_env_secret() {
   local key="$1"
   local left_file="$2"
   local right_file="$3"
-  local left_key_count
-  local right_key_count
-  local left_value_count
-  local right_value_count
   local left_digest
   local right_digest
 
-  [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || fail "shared_secret_key_invalid"
-  left_key_count="$(grep -Ec "^${key}=" "$left_file" || true)"
-  right_key_count="$(grep -Ec "^${key}=" "$right_file" || true)"
-  left_value_count="$(grep -Ec "^${key}=.+$" "$left_file" || true)"
-  right_value_count="$(grep -Ec "^${key}=.+$" "$right_file" || true)"
-  if [[ "$left_key_count" != "1" || "$right_key_count" != "1" ||
-    "$left_value_count" != "1" || "$right_value_count" != "1" ]] ||
-    grep -Eq "^${key}=required-at-deploy-time$" "$left_file" ||
-    grep -Eq "^${key}=required-at-deploy-time$" "$right_file"; then
-    fail "shared_secret_missing"
-  fi
-
-  left_digest="$(grep -E "^${key}=.+$" "$left_file" | sha256sum | awk '{print $1}')"
-  right_digest="$(grep -E "^${key}=.+$" "$right_file" | sha256sum | awk '{print $1}')"
+  left_digest="$(env_secret_value_digest "$key" "$left_file")"
+  right_digest="$(env_secret_value_digest "$key" "$right_file")"
   [[ "$left_digest" == "$right_digest" ]] || fail "shared_secret_mismatch"
 }
 
@@ -57,33 +62,11 @@ require_distinct_env_secrets() {
   local file="$1"
   local first_key="$2"
   local second_key="$3"
-  local first_count
-  local second_count
   local first_digest
   local second_digest
 
-  [[ "$first_key" =~ ^[A-Z][A-Z0-9_]*$ &&
-    "$second_key" =~ ^[A-Z][A-Z0-9_]*$ ]] ||
-    fail "shared_secret_key_invalid"
-  first_count="$(grep -Ec "^${first_key}=.+$" "$file" || true)"
-  second_count="$(grep -Ec "^${second_key}=.+$" "$file" || true)"
-  if [[ "$first_count" != "1" || "$second_count" != "1" ]] ||
-    grep -Eq "^(${first_key}|${second_key})=required-at-deploy-time$" "$file"; then
-    fail "shared_secret_missing"
-  fi
-
-  first_digest="$(
-    grep -E "^${first_key}=.+$" "$file" |
-      sed 's/^[^=]*=//' |
-      sha256sum |
-      awk '{print $1}'
-  )"
-  second_digest="$(
-    grep -E "^${second_key}=.+$" "$file" |
-      sed 's/^[^=]*=//' |
-      sha256sum |
-      awk '{print $1}'
-  )"
+  first_digest="$(env_secret_value_digest "$first_key" "$file")"
+  second_digest="$(env_secret_value_digest "$second_key" "$file")"
   [[ "$first_digest" != "$second_digest" ]] || fail "shared_secret_reuse"
 }
 

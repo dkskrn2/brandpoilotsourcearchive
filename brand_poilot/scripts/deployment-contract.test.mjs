@@ -950,6 +950,85 @@ test("preflight rejects reuse of the general worker token for content proposals 
   }
 });
 
+function runSharedSecretHelper(apiContents, workerContents, command) {
+  const bash = findBash();
+  assert.ok(bash, "Bash is required for the shared secret contract");
+  const fixture = mkdtempSync(join(tmpdir(), "brand-pilot-secret-parser-"));
+  const apiEnv = join(fixture, "api.env");
+  const workerEnv = join(fixture, "content-proposal-worker-1.env");
+  try {
+    writeFileSync(apiEnv, apiContents);
+    writeFileSync(workerEnv, workerContents);
+    return spawnSync(bash, [
+      "-c",
+      `source "$1"; ${command}`,
+      "_",
+      bashPath("deploy/scripts/lib.sh"),
+      bashPath(apiEnv),
+      bashPath(workerEnv),
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+}
+
+test("shared secret parser rejects a duplicate key followed by an empty value", () => {
+  const result = runSharedSecretHelper(
+    [
+      "WORKER_API_TOKEN=general-token",
+      "CONTENT_PROPOSAL_WORKER_API_TOKEN=proposal-token",
+      "CONTENT_PROPOSAL_WORKER_API_TOKEN=",
+      "",
+    ].join("\n"),
+    "CONTENT_PROPOSAL_WORKER_API_TOKEN=proposal-token\n",
+    'require_distinct_env_secrets "$2" WORKER_API_TOKEN CONTENT_PROPOSAL_WORKER_API_TOKEN',
+  );
+  assert.notEqual(result.status, 0);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /general-token|proposal-token/);
+});
+
+test("shared secret parser rejects a whitespace-only value", () => {
+  const result = runSharedSecretHelper(
+    "CONTENT_PROPOSAL_WORKER_API_TOKEN=   \n",
+    "CONTENT_PROPOSAL_WORKER_API_TOKEN=   \n",
+    'require_matching_env_secret CONTENT_PROPOSAL_WORKER_API_TOKEN "$2" "$3"',
+  );
+  assert.notEqual(result.status, 0);
+});
+
+test("shared secret parser rejects quoted and unquoted equivalent values", () => {
+  const result = runSharedSecretHelper(
+    [
+      "WORKER_API_TOKEN=shared-token",
+      'CONTENT_PROPOSAL_WORKER_API_TOKEN="shared-token"',
+      "",
+    ].join("\n"),
+    'CONTENT_PROPOSAL_WORKER_API_TOKEN="shared-token"\n',
+    'require_distinct_env_secrets "$2" WORKER_API_TOKEN CONTENT_PROPOSAL_WORKER_API_TOKEN',
+  );
+  assert.notEqual(result.status, 0);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /shared-token/);
+});
+
+test("shared secret parser accepts canonical unquoted special characters", () => {
+  const specialToken = "AbC+/=_:.@%-123";
+  const result = runSharedSecretHelper(
+    [
+      "WORKER_API_TOKEN=general-token",
+      `CONTENT_PROPOSAL_WORKER_API_TOKEN=${specialToken}`,
+      "",
+    ].join("\n"),
+    `CONTENT_PROPOSAL_WORKER_API_TOKEN=${specialToken}\n`,
+    'require_matching_env_secret CONTENT_PROPOSAL_WORKER_API_TOKEN "$2" "$3"; '
+      + 'require_distinct_env_secrets "$2" WORKER_API_TOKEN CONTENT_PROPOSAL_WORKER_API_TOKEN',
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /general-token|AbC/);
+});
+
 test("Task 8 release replacement cannot mutate shared env files", () => {
   const replacementScripts = [
     "deploy/scripts/deploy.sh",
