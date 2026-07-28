@@ -1029,6 +1029,30 @@ test("shared secret parser accepts canonical unquoted special characters", () =>
   assert.doesNotMatch(`${result.stdout}${result.stderr}`, /general-token|AbC/);
 });
 
+for (const [declarationName, alternateDeclaration] of [
+  ["export declaration", "export CONTENT_PROPOSAL_WORKER_API_TOKEN=exported-secret"],
+  ["leading-space declaration", " CONTENT_PROPOSAL_WORKER_API_TOKEN =spaced-secret"],
+  ["colon declaration", "CONTENT_PROPOSAL_WORKER_API_TOKEN: colon-secret"],
+  ["bare declaration", "CONTENT_PROPOSAL_WORKER_API_TOKEN"],
+]) {
+  test(`shared secret parser rejects a canonical line combined with an ${declarationName}`, () => {
+    const result = runSharedSecretHelper(
+      [
+        "CONTENT_PROPOSAL_WORKER_API_TOKEN=canonical-secret",
+        alternateDeclaration,
+        "",
+      ].join("\n"),
+      "CONTENT_PROPOSAL_WORKER_API_TOKEN=canonical-secret\n",
+      'require_matching_env_secret CONTENT_PROPOSAL_WORKER_API_TOKEN "$2" "$3"',
+    );
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(
+      `${result.stdout}${result.stderr}`,
+      /canonical-secret|exported-secret|spaced-secret|colon-secret|CONTENT_PROPOSAL_WORKER_API_TOKEN[:=]/,
+    );
+  });
+}
+
 test("Task 8 release replacement cannot mutate shared env files", () => {
   const replacementScripts = [
     "deploy/scripts/deploy.sh",
