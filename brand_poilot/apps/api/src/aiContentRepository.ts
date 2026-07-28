@@ -1277,21 +1277,27 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           const existing = await client.query(
             `select * from ai_content_proposal_batches
               where workspace_id=$1 and brand_id=$2 and idempotency_key=$3
+                and request_json=$4::jsonb
               for update`,
-            [input.workspaceId, input.brandId, input.idempotencyKey],
+            [
+              input.workspaceId,
+              input.brandId,
+              input.idempotencyKey,
+              JSON.stringify(requestSnapshot),
+            ],
           );
           batch = existing.rows[0];
-          if (!batch
-            || JSON.stringify(object(batch.request_json)) !== JSON.stringify(requestSnapshot)) {
+          if (!batch) {
             throw new Error("ai_content_proposal_batch_conflict");
           }
         }
-        await client.query(
-          `insert into ai_content_proposal_jobs (workspace_id,brand_id,batch_id,status)
-           values ($1,$2,$3,'queued')
-           on conflict do nothing`,
-          [input.workspaceId, input.brandId, batch.id],
-        );
+        if (created.rowCount) {
+          await client.query(
+            `insert into ai_content_proposal_jobs (workspace_id,brand_id,batch_id,status)
+             values ($1,$2,$3,'queued')`,
+            [input.workspaceId, input.brandId, batch.id],
+          );
+        }
         await client.query("COMMIT");
         return mapProposalBatch(batch);
       } catch (error) {

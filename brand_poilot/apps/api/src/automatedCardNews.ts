@@ -236,14 +236,14 @@ export async function enqueueAutomatedCardNews(
        on conflict (run_key) do nothing`,
       [input.workspaceId, input.brandId],
     );
-    const batch = await client.query(
+    const created = await client.query(
       `insert into ai_content_proposal_batches (
          workspace_id,brand_id,origin,content_family,request_json,
          source_snapshot_json,status,idempotency_key,created_by_user_id
        ) values ($1,$2,'scheduled_crawl','informational',$3::jsonb,$5::jsonb,
                  'queued',$4,null)
        on conflict (workspace_id,brand_id,idempotency_key)
-       do update set updated_at=ai_content_proposal_batches.updated_at
+       do nothing
        returning id`,
       [
         input.workspaceId,
@@ -253,13 +253,27 @@ export async function enqueueAutomatedCardNews(
         JSON.stringify(sourceSnapshots),
       ],
     );
-    const batchId = String(batch.rows[0]?.id);
-    await client.query(
-      `insert into ai_content_proposal_jobs (workspace_id,brand_id,batch_id,status)
-       values ($1,$2,$3,'queued')
-       on conflict do nothing`,
-      [input.workspaceId, input.brandId, batchId],
-    );
+    let batchId = created.rows[0]?.id ? String(created.rows[0].id) : "";
+    if (!batchId) {
+      const existing = await client.query(
+        `select id
+           from ai_content_proposal_batches
+          where workspace_id=$1 and brand_id=$2 and idempotency_key=$3`,
+        [
+          input.workspaceId,
+          input.brandId,
+          `scheduled-proposal:${input.channelOutputId}`,
+        ],
+      );
+      batchId = existing.rows[0]?.id ? String(existing.rows[0].id) : "";
+      if (!batchId) throw new Error("ai_content_proposal_batch_conflict");
+    } else {
+      await client.query(
+        `insert into ai_content_proposal_jobs (workspace_id,brand_id,batch_id,status)
+         values ($1,$2,$3,'queued')`,
+        [input.workspaceId, input.brandId, batchId],
+      );
+    }
     return { batchId, mode: "proposal" as const };
   }
   return { mode: "disabled" as const };

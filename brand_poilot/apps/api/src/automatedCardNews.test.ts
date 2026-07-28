@@ -186,6 +186,7 @@ describe("automated card news input", () => {
   it("queues stale or missing recrawls independently and never mutates an existing batch snapshot", async () => {
     const calls: Array<{ sql: string; params: unknown[] }> = [];
     let lookup = 0;
+    let batchInsert = 0;
     const client = {
       query: async (sql: string, params: unknown[] = []) => {
         calls.push({ sql, params });
@@ -203,6 +204,12 @@ describe("automated card news input", () => {
           };
         }
         if (sql.includes("insert into ai_content_proposal_batches")) {
+          batchInsert += 1;
+          return batchInsert === 1
+            ? { rows: [{ id: "batch-1" }], rowCount: 1 }
+            : { rows: [], rowCount: 0 };
+        }
+        if (sql.includes("from ai_content_proposal_batches")) {
           return { rows: [{ id: "batch-1" }], rowCount: 1 };
         }
         return { rows: [], rowCount: 0 };
@@ -227,8 +234,10 @@ describe("automated card news input", () => {
       && sql.includes("latest.fetched_at is null or latest.fetched_at < now() - interval '7 days'"))).toBe(true);
     const batchInserts = calls.filter(({ sql }) => sql.includes("insert into ai_content_proposal_batches"));
     expect(batchInserts).toHaveLength(2);
-    expect(batchInserts[0]?.sql).toContain("do update set updated_at=ai_content_proposal_batches.updated_at");
+    expect(batchInserts[0]?.sql).toContain("do nothing");
     expect(batchInserts[0]?.params[4]).not.toEqual(batchInserts[1]?.params[4]);
+    expect(calls.filter(({ sql }) => sql.includes("insert into ai_content_proposal_jobs"))).toHaveLength(1);
+    expect(calls.some(({ sql }) => sql.includes("from ai_content_proposal_batches"))).toBe(true);
     expect(calls.some(({ sql }) => /wait|sleep/i.test(sql))).toBe(false);
   });
 });

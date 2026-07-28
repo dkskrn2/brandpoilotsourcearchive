@@ -40,6 +40,7 @@ import {
   parseUpdateAiContentDraftInput,
   type AiContentType,
   type CompleteAiContentJobInput,
+  type ContentChannelTarget,
   type ContentProposalRequestV1,
   type FailAiContentJobInput,
 } from "./aiContentContracts.js";
@@ -316,13 +317,25 @@ function parseAiContentUuid(value: unknown, code: string): string {
   return value.toLowerCase();
 }
 
+const contentChannelTargets: readonly ContentChannelTarget[] = [
+  "instagram",
+  "threads",
+  "x",
+  "linkedin",
+  "youtube",
+  "tiktok",
+  "blog_export",
+];
+
 function parseContentProposalRequest(value: unknown): ContentProposalRequestV1 {
   if (!isObject(value)) throw new Error("ai_content_proposal_request_invalid");
   if (value.contractVersion !== "content-proposal-request.v1"
     || !["informational", "marketing"].includes(String(value.contentFamily))
     || !isObject(value.subjectInput)
     || !Array.isArray(value.channelTargets)
-    || value.channelTargets.some((item) => typeof item !== "string" || !item.trim())
+    || value.channelTargets.length === 0
+    || value.channelTargets.some((item) => !contentChannelTargets.includes(item as ContentChannelTarget))
+    || new Set(value.channelTargets).size !== value.channelTargets.length
     || !Array.isArray(value.outputFormats)
     || value.outputFormats.length === 0
     || value.outputFormats.some((item) => !["card_news", "blog", "single_image", "channel_text"].includes(String(item)))
@@ -336,7 +349,7 @@ function parseContentProposalRequest(value: unknown): ContentProposalRequestV1 {
     contractVersion: "content-proposal-request.v1",
     contentFamily: value.contentFamily as ContentProposalRequestV1["contentFamily"],
     subjectInput: value.subjectInput,
-    channelTargets: value.channelTargets.map(String),
+    channelTargets: value.channelTargets as ContentChannelTarget[],
     outputFormats: value.outputFormats as ContentProposalRequestV1["outputFormats"],
     sourceSnapshotIds: value.sourceSnapshotIds.map((id) => String(id).toLowerCase()),
     performanceSnapshotIds: value.performanceSnapshotIds.map((id) => String(id).toLowerCase()),
@@ -3319,26 +3332,30 @@ export function createServer(
     "/worker/content-proposal-jobs/:jobId/heartbeat",
     async (request, reply) => {
       if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      const jobId = parseAiContentUuid(
+        request.params.jobId,
+        "content_proposal_job_id_invalid",
+      );
+      const leaseToken = parseAiContentUuid(
+        request.body?.leaseToken,
+        "content_proposal_lease_token_invalid",
+      );
       const leaseSeconds = Number(request.body?.leaseSeconds ?? 180);
       if (!Number.isSafeInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 900) {
         throw new Error("content_proposal_lease_seconds_invalid");
       }
       const alive = await requireContentProposalJobsRepository(repository).heartbeatContentProposalJob({
-        jobId: request.params.jobId,
+        jobId,
         workerId: requiredAiContentField(
           request.body?.workerId,
           "content_proposal_worker_id_required",
           200,
         ),
-        leaseToken: requiredAiContentField(
-          request.body?.leaseToken,
-          "content_proposal_lease_token_required",
-          200,
-        ),
+        leaseToken,
         leaseSeconds,
       });
       if (!alive) throw new Error("content_proposal_job_lease_invalid");
-      return { id: request.params.jobId, status: "processing" };
+      return { id: jobId, status: "processing" };
     },
   );
 
@@ -3346,20 +3363,24 @@ export function createServer(
     "/worker/content-proposal-jobs/:jobId/complete",
     async (request, reply) => {
       if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      const jobId = parseAiContentUuid(
+        request.params.jobId,
+        "content_proposal_job_id_invalid",
+      );
+      const leaseToken = parseAiContentUuid(
+        request.body?.leaseToken,
+        "content_proposal_lease_token_invalid",
+      );
       if (!Array.isArray(request.body?.proposals)) throw new Error("content_proposal_result_invalid");
       const proposals = parseContentProposalResult(request.body.proposals);
       return requireContentProposalJobsRepository(repository).completeContentProposalJob({
-        jobId: request.params.jobId,
+        jobId,
         workerId: requiredAiContentField(
           request.body?.workerId,
           "content_proposal_worker_id_required",
           200,
         ),
-        leaseToken: requiredAiContentField(
-          request.body?.leaseToken,
-          "content_proposal_lease_token_required",
-          200,
-        ),
+        leaseToken,
         proposals,
       });
     },
@@ -3369,21 +3390,25 @@ export function createServer(
     "/worker/content-proposal-jobs/:jobId/fail",
     async (request, reply) => {
       if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      const jobId = parseAiContentUuid(
+        request.params.jobId,
+        "content_proposal_job_id_invalid",
+      );
+      const leaseToken = parseAiContentUuid(
+        request.body?.leaseToken,
+        "content_proposal_lease_token_invalid",
+      );
       if (typeof request.body?.retryable !== "boolean") {
         throw new Error("content_proposal_retryable_invalid");
       }
       return requireContentProposalJobsRepository(repository).failContentProposalJob({
-        jobId: request.params.jobId,
+        jobId,
         workerId: requiredAiContentField(
           request.body?.workerId,
           "content_proposal_worker_id_required",
           200,
         ),
-        leaseToken: requiredAiContentField(
-          request.body?.leaseToken,
-          "content_proposal_lease_token_required",
-          200,
-        ),
+        leaseToken,
         errorCode: requiredAiContentField(
           request.body?.errorCode,
           "content_proposal_error_code_invalid",

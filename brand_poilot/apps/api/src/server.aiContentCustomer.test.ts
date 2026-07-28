@@ -526,6 +526,36 @@ describe("AI content customer routes", () => {
     await app.close();
   });
 
+  it.each([
+    ["empty", []],
+    ["duplicate", ["blog_export", "blog_export"]],
+    ["unsupported", ["email"]],
+  ])("rejects %s proposal channel targets before repository access", async (label, channelTargets) => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/proposal-batches`,
+      headers: auth,
+      payload: {
+        idempotencyKey: `invalid-channels-${label}`,
+        request: {
+          contractVersion: "content-proposal-request.v1",
+          contentFamily: "informational",
+          subjectInput: { topic: "여름 관리" },
+          channelTargets,
+          outputFormats: ["blog"],
+          sourceSnapshotIds: [],
+          performanceSnapshotIds: [],
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "ai_content_proposal_request_invalid" });
+    expect(repository.createAiContentProposalBatch).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("maps proposal selection ownership and state failures to explicit 404/409 responses", async () => {
     const { app, repository } = setup();
     const proposalId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";

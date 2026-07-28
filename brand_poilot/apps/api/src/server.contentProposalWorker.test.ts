@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createServer } from "./httpServer.js";
 import type { ApiRepository } from "./types.js";
 
+const jobId = "10000000-0000-4000-8000-000000000001";
+
 function proposal(title: string) {
   return {
     contractVersion: "content-proposal.v1",
@@ -124,7 +126,7 @@ describe("content proposal worker routes", () => {
     };
     const heartbeat = await app.inject({
       method: "POST",
-      url: "/worker/content-proposal-jobs/job-1/heartbeat",
+      url: `/worker/content-proposal-jobs/${jobId}/heartbeat`,
       headers,
       payload: { ...lease, leaseSeconds: 180 },
     });
@@ -132,7 +134,7 @@ describe("content proposal worker routes", () => {
 
     const complete = await app.inject({
       method: "POST",
-      url: "/worker/content-proposal-jobs/job-1/complete",
+      url: `/worker/content-proposal-jobs/${jobId}/complete`,
       headers,
       payload: {
         ...lease,
@@ -141,13 +143,13 @@ describe("content proposal worker routes", () => {
     });
     expect(complete.statusCode).toBe(200);
     expect(repository.completeContentProposalJob).toHaveBeenCalledWith(expect.objectContaining({
-      jobId: "job-1",
+      jobId,
       proposals: expect.any(Array),
     }));
 
     const failed = await app.inject({
       method: "POST",
-      url: "/worker/content-proposal-jobs/job-1/fail",
+      url: `/worker/content-proposal-jobs/${jobId}/fail`,
       headers,
       payload: {
         ...lease,
@@ -158,16 +160,90 @@ describe("content proposal worker routes", () => {
     });
     expect(failed.statusCode).toBe(200);
     expect(repository.failContentProposalJob).toHaveBeenCalledWith(expect.objectContaining({
-      jobId: "job-1", retryable: true,
+      jobId, retryable: true,
     }));
     await app.close();
   });
+
+  it.each(["heartbeat", "complete", "fail"] as const)(
+    "rejects a malformed job UUID on %s before repository access",
+    async (route) => {
+      const { app, repository } = setup();
+      const payload = route === "heartbeat"
+        ? {
+            workerId: "proposal-worker-1",
+            leaseToken: "50000000-0000-4000-8000-000000000005",
+            leaseSeconds: 180,
+          }
+        : route === "complete"
+          ? {
+              workerId: "proposal-worker-1",
+              leaseToken: "50000000-0000-4000-8000-000000000005",
+              proposals: [proposal("A"), proposal("B")],
+            }
+          : {
+              workerId: "proposal-worker-1",
+              leaseToken: "50000000-0000-4000-8000-000000000005",
+              errorCode: "proposal_timeout",
+              errorMessage: "timeout",
+              retryable: true,
+            };
+      const response = await app.inject({
+        method: "POST",
+        url: `/worker/content-proposal-jobs/not-a-uuid/${route}`,
+        headers: { authorization: "Bearer proposal-worker-token" },
+        payload,
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ error: "content_proposal_job_id_invalid" });
+      expect(repository.heartbeatContentProposalJob).not.toHaveBeenCalled();
+      expect(repository.completeContentProposalJob).not.toHaveBeenCalled();
+      expect(repository.failContentProposalJob).not.toHaveBeenCalled();
+      await app.close();
+    },
+  );
+
+  it.each(["heartbeat", "complete", "fail"] as const)(
+    "rejects a malformed lease-token UUID on %s before repository access",
+    async (route) => {
+      const { app, repository } = setup();
+      const payload = route === "heartbeat"
+        ? { workerId: "proposal-worker-1", leaseToken: "not-a-uuid", leaseSeconds: 180 }
+        : route === "complete"
+          ? {
+              workerId: "proposal-worker-1",
+              leaseToken: "not-a-uuid",
+              proposals: [proposal("A"), proposal("B")],
+            }
+          : {
+              workerId: "proposal-worker-1",
+              leaseToken: "not-a-uuid",
+              errorCode: "proposal_timeout",
+              errorMessage: "timeout",
+              retryable: true,
+            };
+      const response = await app.inject({
+        method: "POST",
+        url: `/worker/content-proposal-jobs/${jobId}/${route}`,
+        headers: { authorization: "Bearer proposal-worker-token" },
+        payload,
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ error: "content_proposal_lease_token_invalid" });
+      expect(repository.heartbeatContentProposalJob).not.toHaveBeenCalled();
+      expect(repository.completeContentProposalJob).not.toHaveBeenCalled();
+      expect(repository.failContentProposalJob).not.toHaveBeenCalled();
+      await app.close();
+    },
+  );
 
   it("rejects completion outside the 2-3 proposal bound before repository access", async () => {
     const { app, repository } = setup();
     const response = await app.inject({
       method: "POST",
-      url: "/worker/content-proposal-jobs/job-1/complete",
+      url: `/worker/content-proposal-jobs/${jobId}/complete`,
       headers: { authorization: "Bearer proposal-worker-token" },
       payload: {
         workerId: "proposal-worker-1",

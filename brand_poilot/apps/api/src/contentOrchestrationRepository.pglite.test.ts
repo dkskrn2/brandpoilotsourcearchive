@@ -4,6 +4,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAiContentRepository } from "./aiContentRepository.js";
+import { enqueueAutomatedCardNews } from "./automatedCardNews.js";
 
 let database: PGlite | undefined;
 let selectedProposalId = "";
@@ -637,6 +638,182 @@ describe("content orchestration PostgreSQL contract", () => {
     );
     expect(actorScoped.rows[0]?.record_id).not.toBe(first.rows[0]?.record_id);
   });
+
+  it("replays proposal batches for structurally equal JSON regardless of object key order", async () => {
+    const query = async (sql: string, params?: unknown[]) => {
+      const result = await database!.query(sql, params);
+      return {
+        ...result,
+        rowCount: result.rows.length > 0 ? result.rows.length : (result.affectedRows ?? 0),
+      };
+    };
+    const repository = createAiContentRepository({
+      query,
+      connect: async () => ({ query, release() {} }),
+    } as never);
+    const firstRequest = {
+      contractVersion: "content-proposal-request.v1" as const,
+      contentFamily: "informational" as const,
+      subjectInput: { topic: "여름 관리", filters: { region: "서울", age: 30 } },
+      channelTargets: ["blog_export" as const],
+      outputFormats: ["blog" as const],
+      sourceSnapshotIds: [],
+      performanceSnapshotIds: [],
+    };
+    const reorderedRequest = {
+      performanceSnapshotIds: [],
+      sourceSnapshotIds: [],
+      outputFormats: ["blog" as const],
+      channelTargets: ["blog_export" as const],
+      subjectInput: { filters: { age: 30, region: "서울" }, topic: "여름 관리" },
+      contentFamily: "informational" as const,
+      contractVersion: "content-proposal-request.v1" as const,
+    };
+    const input = {
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      actorUserId: ids.actor,
+      origin: "manual" as const,
+      idempotencyKey: "proposal-jsonb-order",
+    };
+
+    const created = await repository.createAiContentProposalBatch({ ...input, request: firstRequest });
+    await expect(repository.createAiContentProposalBatch({
+      ...input,
+      request: reorderedRequest,
+    })).resolves.toMatchObject({ id: created.id });
+    await expect(repository.createAiContentProposalBatch({
+      ...input,
+      request: {
+        ...reorderedRequest,
+        subjectInput: { topic: "다른 주제", filters: { age: 30, region: "서울" } },
+      },
+    })).rejects.toThrow("ai_content_proposal_batch_conflict");
+  });
+
+  it.each(["queued", "completed", "failed"] as const)(
+    "does not enqueue a replacement proposal job when an idempotent batch job is %s",
+    async (terminalStatus) => {
+      const query = async (sql: string, params?: unknown[]) => {
+        const result = await database!.query(sql, params);
+        return {
+          ...result,
+          rowCount: result.rows.length > 0 ? result.rows.length : (result.affectedRows ?? 0),
+        };
+      };
+      const repository = createAiContentRepository({
+        query,
+        connect: async () => ({ query, release() {} }),
+      } as never);
+      const request = {
+        contractVersion: "content-proposal-request.v1" as const,
+        contentFamily: "informational" as const,
+        subjectInput: { topic: `Replay ${terminalStatus}` },
+        channelTargets: ["blog_export" as const],
+        outputFormats: ["blog" as const],
+        sourceSnapshotIds: [],
+        performanceSnapshotIds: [],
+      };
+      const input = {
+        workspaceId: ids.workspace,
+        brandId: ids.brand,
+        actorUserId: ids.actor,
+        origin: "manual" as const,
+        idempotencyKey: `proposal-job-replay-${terminalStatus}`,
+        request,
+      };
+      const batch = await repository.createAiContentProposalBatch(input);
+      if (terminalStatus === "completed") {
+        await database!.query(
+          `update ai_content_proposal_jobs
+              set status='completed',completed_at=now()
+            where batch_id=$1`,
+          [batch.id],
+        );
+        await database!.query(
+          "update ai_content_proposal_batches set status='ready' where id=$1",
+          [batch.id],
+        );
+      } else if (terminalStatus === "failed") {
+        await database!.query(
+          `update ai_content_proposal_jobs
+              set status='failed',error_code='proposal_failed',
+                  error_message='failed',completed_at=now()
+            where batch_id=$1`,
+          [batch.id],
+        );
+        await database!.query(
+          `update ai_content_proposal_batches
+              set status='failed',error_code='proposal_failed',error_message='failed'
+            where id=$1`,
+          [batch.id],
+        );
+      }
+
+      await expect(repository.createAiContentProposalBatch(input))
+        .resolves.toMatchObject({ id: batch.id });
+      const jobs = await database!.query<{ status: string }>(
+        "select status from ai_content_proposal_jobs where batch_id=$1 order by created_at,id",
+        [batch.id],
+      );
+      expect(jobs.rows.map(({ status }) => status)).toEqual([terminalStatus]);
+    },
+  );
+
+  it.each(["queued", "completed", "failed"] as const)(
+    "does not enqueue a replacement scheduled proposal job when the existing job is %s",
+    async (terminalStatus) => {
+      const channelOutputId = `scheduled-terminal-${terminalStatus}`;
+      const input = {
+        workspaceId: ids.workspace,
+        brandId: ids.brand,
+        contentTopicId: `topic-${terminalStatus}`,
+        channelOutputId,
+        brand: { name: "Brand", brandColor: null },
+        topic: { title: `Scheduled ${terminalStatus}`, angle: "replay" },
+        representativeUrl: null,
+        sourceMaterials: [],
+      };
+      const first = await enqueueAutomatedCardNews(database! as never, input, {
+        automatedContentEnabled: true,
+      });
+      if (terminalStatus === "completed") {
+        await database!.query(
+          `update ai_content_proposal_jobs
+              set status='completed',completed_at=now()
+            where batch_id=$1`,
+          [first.batchId],
+        );
+        await database!.query(
+          "update ai_content_proposal_batches set status='ready' where id=$1",
+          [first.batchId],
+        );
+      } else if (terminalStatus === "failed") {
+        await database!.query(
+          `update ai_content_proposal_jobs
+              set status='failed',error_code='proposal_failed',
+                  error_message='failed',completed_at=now()
+            where batch_id=$1`,
+          [first.batchId],
+        );
+        await database!.query(
+          `update ai_content_proposal_batches
+              set status='failed',error_code='proposal_failed',error_message='failed'
+            where id=$1`,
+          [first.batchId],
+        );
+      }
+
+      await expect(enqueueAutomatedCardNews(database! as never, input, {
+        automatedContentEnabled: true,
+      })).resolves.toMatchObject({ batchId: first.batchId });
+      const jobs = await database!.query<{ status: string }>(
+        "select status from ai_content_proposal_jobs where batch_id=$1 order by created_at,id",
+        [first.batchId],
+      );
+      expect(jobs.rows.map(({ status }) => status)).toEqual([terminalStatus]);
+    },
+  );
 
   it("rejects forged content hashes on immutable reference resources", async () => {
     const db = database as PGlite;
