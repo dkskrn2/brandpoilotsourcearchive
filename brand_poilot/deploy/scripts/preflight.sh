@@ -4,6 +4,8 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 source "$SCRIPT_DIR/lib.sh"
+# shellcheck source=check-public-ports.sh
+source "$SCRIPT_DIR/check-public-ports.sh"
 
 ROOT="${BRAND_PILOT_ROOT:-/opt/brand-pilot}"
 SYSTEM_ROOT="${BRAND_PILOT_SYSTEM_ROOT:-}"
@@ -80,14 +82,12 @@ status_ok "disk_space"
 
 PORT_LISTENERS="$(ss -H -ltnp '( sport = :80 or sport = :443 )' 2>/dev/null || true)"
 if [[ -n "$PORT_LISTENERS" ]]; then
-  while IFS= read -r listener; do
-    [[ -z "$listener" ]] && continue
-    [[ "$listener" == *"docker-proxy"* ]] || fail "public_port_owned_by_other_stack"
-  done <<< "$PORT_LISTENERS"
-  STACK_PORTS="$(docker ps \
-    --filter label=com.docker.compose.project=brand-pilot \
-    --format '{{.Ports}}' 2>/dev/null || true)"
-  [[ "$STACK_PORTS" == *":80->"* && "$STACK_PORTS" == *":443->"* ]] ||
+  PUBLIC_PORT_CONTAINERS="$(docker ps \
+    --filter publish=80 \
+    --filter publish=443 \
+    --format '{{.ID}}|{{.Names}}|{{.Label "com.docker.compose.project"}}|{{.Label "com.docker.compose.service"}}|{{.Ports}}' \
+    2>/dev/null || true)"
+  validate_public_port_ownership "$PORT_LISTENERS" "$PUBLIC_PORT_CONTAINERS" ||
     fail "public_port_owned_by_other_stack"
 fi
 status_ok "public_ports"
