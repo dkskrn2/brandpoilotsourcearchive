@@ -141,7 +141,6 @@ describe("loadApiRuntimeConfig", () => {
       publishingEnabled: false,
       dmWorkersEnabled: false,
       contentProposalsEnabled: false,
-      dmWorkersEnabled: false,
     });
   });
 
@@ -240,6 +239,7 @@ describe("loadApiRuntimeConfig", () => {
     expect(config.readiness).toEqual({
       schedulerEnabled: false,
       publishingEnabled: false,
+      dmWorkersEnabled: false,
       contentProposalsEnabled: false,
     });
     expect(config.db).toEqual({
