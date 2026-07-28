@@ -122,6 +122,10 @@ describe("loadApiRuntimeConfig", () => {
     expect(config.schedulerEnabled).toBe(false);
     expect(config.instagramPublishEnabled).toBe(false);
     expect(config.aiContentAttachmentUploadSessionsEnabled).toBe(false);
+    expect(config.readiness).toEqual({
+      schedulerEnabled: false,
+      publishingEnabled: false,
+    });
   });
 
   it("enables attachment upload sessions only with literal true", () => {
@@ -184,6 +188,10 @@ describe("loadApiRuntimeConfig", () => {
     });
     expect(config.schedulerEnabled).toBe(false);
     expect(config.instagramPublishEnabled).toBe(false);
+    expect(config.readiness).toEqual({
+      schedulerEnabled: false,
+      publishingEnabled: false,
+    });
     expect(config.db).toEqual({
       max: 3,
       idleTimeoutMillis: 10_000,

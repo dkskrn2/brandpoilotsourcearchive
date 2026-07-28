@@ -86,6 +86,7 @@ import {
 import { claimAndPrepareBrandAnalysis, type BrandIntelligenceRuntime } from "./brandIntelligenceHttp.js";
 import { registerBrandCenterRoutes } from "./brandCenterHttp.js";
 import type { ApiHttpRuntimePolicy } from "./runtimeConfig.js";
+import { assessApiReadiness } from "./runtime.js";
 
 export type { ApiHttpRuntimePolicy } from "./runtimeConfig.js";
 
@@ -182,6 +183,10 @@ interface CreateServerOptions {
   };
   brandIntelligence?: BrandIntelligenceRuntime;
   runtimePolicy?: ApiHttpRuntimePolicy;
+  readinessPolicy?: {
+    schedulerEnabled: boolean;
+    publishingEnabled: boolean;
+  };
   logger?: boolean | FastifyLoggerOptions;
 }
 
@@ -833,7 +838,7 @@ export function createFastifyOptions(logger?: boolean | FastifyLoggerOptions) {
 }
 
 export function createServer(
-  { repository, workerApiToken, contentProposalWorkerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, aiContentAttachmentGc, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, brandIntelligence, runtimePolicy, logger }: CreateServerOptions,
+  { repository, workerApiToken, contentProposalWorkerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, aiContentAttachmentGc, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, brandIntelligence, runtimePolicy, readinessPolicy, logger }: CreateServerOptions,
   app: FastifyInstance = Fastify(createFastifyOptions(logger))
 ) {
   const aiContentAttachmentRepository = aiContentUpload
@@ -1171,10 +1176,27 @@ export function createServer(
   app.get("/ready", async (_request, reply) => {
     try {
       const health = await repository.health();
-      return { ok: true, configuration: "ok", database: health.database };
+      const readiness = assessApiReadiness({
+        database: health.database,
+        schedulerEnabled: readinessPolicy?.schedulerEnabled ?? false,
+        publishingEnabled: readinessPolicy?.publishingEnabled ?? false,
+        activeDmEnabled: health.operations?.activeDmEnabled ?? false,
+        dmWorker: health.operations?.dmWorker ?? "offline",
+        wikiWorker: health.operations?.wikiWorker ?? "offline",
+      });
+      reply.code(readiness.statusCode);
+      return readiness.body;
     } catch {
-      reply.code(503);
-      return { ok: false, configuration: "ok", database: "error" };
+      const readiness = assessApiReadiness({
+        database: "error",
+        schedulerEnabled: readinessPolicy?.schedulerEnabled ?? false,
+        publishingEnabled: readinessPolicy?.publishingEnabled ?? false,
+        activeDmEnabled: false,
+        dmWorker: "offline",
+        wikiWorker: "offline",
+      });
+      reply.code(readiness.statusCode);
+      return readiness.body;
     }
   });
 

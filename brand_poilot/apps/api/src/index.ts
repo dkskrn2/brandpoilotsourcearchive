@@ -35,6 +35,7 @@ const serverOptions: Parameters<typeof createServer>[0] & {
   runtimePolicy: typeof runtimeConfig.http;
 } = {
     runtimePolicy: runtimeConfig.http,
+    readinessPolicy: runtimeConfig.readiness,
     repository,
     brandLogoService,
     workerApiToken: process.env.WORKER_API_TOKEN,

@@ -218,6 +218,26 @@ describe("Brand Pilot Admin API", () => {
     await server.close();
   });
 
+  it("passes an idempotent publishing retry operation to the repository", async () => {
+    const repo = repository();
+    const server = await app(repo);
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/v1/publishing/60000000-0000-4000-8000-000000000006/retry",
+      headers: headers({ "idempotency-key": idempotencyKey }),
+      payload: { reason: "인증 복구 완료" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repo.updatePublishingStatus).toHaveBeenCalledWith(expect.objectContaining({
+      action: "retry",
+      reason: "인증 복구 완료",
+      actorId: "growthline-admin",
+      requestHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    }));
+    await server.close();
+  });
+
   it("rejects invalid list filters before they reach PostgreSQL", async () => {
     const repo = repository();
     const server = await app(repo);

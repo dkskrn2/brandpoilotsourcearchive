@@ -16,6 +16,10 @@ export interface ApiRuntimeConfig {
   schedulerEnabled: boolean;
   instagramPublishEnabled: boolean;
   aiContentAttachmentUploadSessionsEnabled: boolean;
+  readiness: {
+    schedulerEnabled: boolean;
+    publishingEnabled: boolean;
+  };
 }
 
 const productionRequiredKeys = [
@@ -205,5 +209,9 @@ export function loadApiRuntimeConfig(
     schedulerEnabled,
     instagramPublishEnabled,
     aiContentAttachmentUploadSessionsEnabled,
+    readiness: {
+      schedulerEnabled,
+      publishingEnabled: instagramPublishEnabled,
+    },
   };
 }

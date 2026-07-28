@@ -1113,6 +1113,16 @@ describe("API server", () => {
       ok: false,
       configuration: "ok",
       database: "error",
+      features: {
+        scheduler: "disabled",
+        publishing: "disabled",
+        dm: "disabled",
+        wiki: "disabled",
+      },
+      workers: {
+        dm: "not_required",
+        wiki: "not_required",
+      },
     });
     expect(repository.health).toHaveBeenCalledTimes(1);
     expect(kakaoAuth.getSession).not.toHaveBeenCalled();
@@ -1122,8 +1132,20 @@ describe("API server", () => {
 
   it("returns readiness when the database is available", async () => {
     const repository = createRepository();
+    vi.mocked(repository.health).mockResolvedValue({
+      database: "ok",
+      operations: {
+        activeDmEnabled: false,
+        dmWorker: "offline",
+        wikiWorker: "offline",
+      },
+    });
     const app = createServer({
       repository,
+      readinessPolicy: {
+        schedulerEnabled: false,
+        publishingEnabled: false,
+      },
       runtimePolicy: {
         cookieSecure: false,
         corsAllowedOrigins: [],
@@ -1138,8 +1160,47 @@ describe("API server", () => {
       ok: true,
       configuration: "ok",
       database: "ok",
+      features: {
+        scheduler: "disabled",
+        publishing: "disabled",
+        dm: "disabled",
+        wiki: "disabled",
+      },
+      workers: {
+        dm: "not_required",
+        wiki: "not_required",
+      },
     });
     expect(repository.health).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 503 when active DM lacks a fresh Wiki worker heartbeat", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.health).mockResolvedValue({
+      database: "ok",
+      operations: {
+        activeDmEnabled: true,
+        dmWorker: "online",
+        wikiWorker: "offline",
+      },
+    });
+    const app = createServer({
+      repository,
+      readinessPolicy: {
+        schedulerEnabled: false,
+        publishingEnabled: false,
+      },
+    });
+
+    const response = await app.inject({ method: "GET", url: "/ready" });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      ok: false,
+      database: "ok",
+      features: { dm: "enabled", wiki: "enabled" },
+      workers: { dm: "online", wiki: "offline" },
+    });
   });
 
   it("returns brand UI status for navigation and onboarding", async () => {

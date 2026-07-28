@@ -1069,7 +1069,14 @@ export interface ApiRepository
     Partial<import("./aiContentAttachmentRepository.js").AiContentAttachmentLifecycleRepository>,
     Partial<import("./aiContentAttachmentGcRepository.js").AiContentAttachmentGcRepository>,
     Partial<ContentProposalJobsRepository> {
-  health(): Promise<{ database: "ok" }>;
+  health(): Promise<{
+    database: "ok";
+    operations?: {
+      activeDmEnabled: boolean;
+      dmWorker: "online" | "stale" | "offline";
+      wikiWorker: "online" | "stale" | "offline";
+    };
+  }>;
   getAiContentBrandContext(input: BrandScope): Promise<AiContentBrandContextRecord>;
   getConfirmedSubjectAnalysisBrandContext?(input: BrandScope): Promise<SubjectAnalysisBrandContext>;
   listSubjectEvidenceAttachments?(input: LoadSubjectEvidenceInput): Promise<SubjectEvidenceAttachment[]>;

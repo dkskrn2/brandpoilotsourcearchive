@@ -522,6 +522,14 @@ test("only Caddy publishes host ports", () => {
     assert.match(apiBlock, /LOCAL_SCHEDULER_ENABLED:\s*"false"/);
     assert.match(apiBlock, /INSTAGRAM_PUBLISH_ENABLED:\s*"false"/);
   }
+  for (const [name, service] of services) {
+    if (!/^(?:dm-worker|wiki-worker)/.test(name)) continue;
+    assert.match(
+      service.text,
+      /^\s{4}profiles:/m,
+      `first-deploy topology must keep ${name} behind an explicit profile`,
+    );
+  }
   assert.match(
     primaryBlock,
     /\$\{PRIMARY_API_IMAGE:-\$\{API_IMAGE:\?API_IMAGE is required\}\}/,

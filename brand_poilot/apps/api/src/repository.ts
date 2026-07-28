@@ -1904,8 +1904,55 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       return aiContentPublish.getAiContentPublishQueueResult(input);
     },
     async health() {
-      await pool.query("select 1");
-      return { database: "ok" };
+      const result = await pool.query(`
+        select
+          exists (
+            select 1
+            from instagram_dm_settings settings
+            join brands brand on brand.id = settings.brand_id
+            where settings.enabled = true
+              and brand.status = 'active'
+              and brand.deleted_at is null
+          ) as active_dm_enabled,
+          case
+            when max(worker.last_heartbeat_at) filter (
+              where worker.worker_type = 'dm'
+                and coalesce(worker.metadata->>'mode', 'dm') <> 'wiki'
+                and lower(worker.worker_id) not like 'wiki-%'
+            ) >= now() - interval '90 seconds' then 'online'
+            when max(worker.last_heartbeat_at) filter (
+              where worker.worker_type = 'dm'
+                and coalesce(worker.metadata->>'mode', 'dm') <> 'wiki'
+                and lower(worker.worker_id) not like 'wiki-%'
+            ) >= now() - interval '10 minutes' then 'stale'
+            else 'offline'
+          end as dm_worker,
+          case
+            when max(worker.last_heartbeat_at) filter (
+              where worker.worker_type = 'dm'
+                and (worker.metadata->>'mode' = 'wiki' or lower(worker.worker_id) like 'wiki-%')
+            ) >= now() - interval '90 seconds' then 'online'
+            when max(worker.last_heartbeat_at) filter (
+              where worker.worker_type = 'dm'
+                and (worker.metadata->>'mode' = 'wiki' or lower(worker.worker_id) like 'wiki-%')
+            ) >= now() - interval '10 minutes' then 'stale'
+            else 'offline'
+          end as wiki_worker
+        from worker_instances worker
+      `);
+      const row = result.rows[0] as {
+        active_dm_enabled: boolean;
+        dm_worker: "online" | "stale" | "offline";
+        wiki_worker: "online" | "stale" | "offline";
+      };
+      return {
+        database: "ok" as const,
+        operations: {
+          activeDmEnabled: row.active_dm_enabled === true,
+          dmWorker: row.dm_worker,
+          wikiWorker: row.wiki_worker,
+        },
+      };
     },
 
     async getBillingSummary(brandId) {
