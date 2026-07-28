@@ -62,6 +62,35 @@ describe("content orchestration", () => {
     expect(parsed.subject).not.toHaveProperty("facts");
   });
 
+  it("canonicalizes untrusted input to exact orchestration fields", () => {
+    const input = {
+      ...orchestration(),
+      brandContext: { fabricatedFact: "외부 레퍼런스에서 승격됨" },
+      subject: {
+        mode: "product_service",
+        productServiceId: "product-service-version-1",
+        facts: [{ claim: "근거 없는 제품 사실" }],
+      },
+      references: [{
+        referenceItemId: "reference-1",
+        roles: ["planning"],
+        brandContext: { copiedClaim: true },
+      }],
+    };
+
+    const parsed = parseContentOrchestrationV1(input);
+
+    expect(parsed).not.toHaveProperty("brandContext");
+    expect(parsed.subject).toEqual({
+      mode: "product_service",
+      productServiceId: "product-service-version-1",
+    });
+    expect(parsed.references).toEqual([{
+      referenceItemId: "reference-1",
+      roles: ["planning"],
+    }]);
+  });
+
   it.each([
     { contentFamily: "informational", strategy: "benefit", outputFormat: "card_news" },
     { contentFamily: "marketing", strategy: "how_to", outputFormat: "single_image" },
@@ -80,6 +109,15 @@ describe("content orchestration", () => {
 
     expect(() => parseContentOrchestrationV1(orchestration({ references })))
       .toThrow("content_orchestration_reference_limit_exceeded");
+  });
+
+  it("rejects duplicate roles on one reference", () => {
+    expect(() => parseContentOrchestrationV1(orchestration({
+      references: [{
+        referenceItemId: "reference-1",
+        roles: ["planning", "planning"],
+      }],
+    }))).toThrow("content_orchestration_reference_roles_invalid");
   });
 
   it("rejects two avatars at the runtime boundary", () => {
@@ -116,7 +154,7 @@ describe("content orchestration", () => {
         channel: "instagram" as const,
         generationFormats: ["card_news", "single_image"] as const,
         exportModes: ["image"] as const,
-        publishModes: ["instagram_feed_single"],
+        publishModes: ["instagram_feed_single"] as const,
       },
       {
         channel: "x" as const,
@@ -134,10 +172,6 @@ describe("content orchestration", () => {
       outputFormat: "channel_text",
       channelTargets: ["x"],
     }, capabilities)).not.toThrow();
-    expect(() => assertContentGenerationStartAllowed({
-      outputFormat: "blog",
-      channelTargets: ["blog_export"],
-    }, capabilities)).not.toThrow();
 
     for (const channel of ["youtube", "tiktok"] as const) {
       expect(() => assertContentGenerationStartAllowed({
@@ -149,5 +183,54 @@ describe("content orchestration", () => {
       outputFormat: "channel_text",
       channelTargets: ["instagram"],
     }, capabilities)).toThrow("content_orchestration_channel_capability_mismatch");
+  });
+
+  it("uses an authoritative publish mode for a publish-only channel capability", () => {
+    expect(() => assertContentGenerationStartAllowed({
+      outputFormat: "channel_text",
+      channelTargets: ["x"],
+    }, [{
+      channel: "x",
+      generationFormats: [],
+      exportModes: [],
+      publishModes: ["x_post"],
+    }])).not.toThrow();
+
+    expect(() => assertContentGenerationStartAllowed({
+      outputFormat: "channel_text",
+      channelTargets: ["x"],
+    }, [{
+      channel: "x",
+      generationFormats: [],
+      exportModes: [],
+      publishModes: ["threads_text"],
+    }])).toThrow("content_orchestration_channel_capability_mismatch");
+  });
+
+  it("requires an explicit blog export capability", () => {
+    expect(() => assertContentGenerationStartAllowed({
+      outputFormat: "blog",
+      channelTargets: ["blog_export"],
+    }, [])).toThrow("content_orchestration_channel_capability_mismatch");
+
+    expect(() => assertContentGenerationStartAllowed({
+      outputFormat: "blog",
+      channelTargets: ["blog_export"],
+    }, [{
+      channel: "blog_export",
+      generationFormats: [],
+      exportModes: ["html"],
+      publishModes: [],
+    }])).not.toThrow();
+
+    expect(() => assertContentGenerationStartAllowed({
+      outputFormat: "single_image",
+      channelTargets: ["blog_export"],
+    }, [{
+      channel: "blog_export",
+      generationFormats: ["single_image"],
+      exportModes: ["image"],
+      publishModes: [],
+    }])).toThrow("content_orchestration_channel_capability_mismatch");
   });
 });

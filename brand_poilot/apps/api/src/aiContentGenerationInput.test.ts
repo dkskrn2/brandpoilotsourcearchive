@@ -37,6 +37,15 @@ function generation(draft: Record<string, unknown> = {}) {
 }
 
 describe("content-generation-input.v2", () => {
+  it("normalizes legacy omission to the canonical nullable orchestration envelope", async () => {
+    const built = await buildContentGenerationInput(deps(), generation(), { outputCount: 1 });
+    const { orchestration: _omitted, ...legacyPayload } = built;
+
+    expect(built).toHaveProperty("orchestration", null);
+    expect(parseContentGenerationInputV2(legacyPayload))
+      .toHaveProperty("orchestration", null);
+  });
+
   it("permits fields unknown to the existing worker parser", async () => {
     const envelope = await buildContentGenerationInput(deps(), generation(), { outputCount: 1 });
 

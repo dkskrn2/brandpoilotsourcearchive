@@ -25,7 +25,7 @@ import type {
 export interface ContentGenerationInputV2 {
   contractVersion: "content-generation-input.v2";
   contentType: AiContentType;
-  orchestration?: ContentOrchestrationV1 | null;
+  orchestration: ContentOrchestrationV1 | null;
   brandContext: AiContentBrandContextRecord;
   subject: {
     analysisId: string;
@@ -250,9 +250,7 @@ export function parseContentGenerationInputV2(value: unknown): ContentGeneration
   const attachments = Array.isArray(source.attachments)
     ? source.attachments.map(attachmentSnapshot)
     : fail("ai_content_attachments_invalid");
-  const orchestration = source.orchestration === undefined
-    ? undefined
-    : source.orchestration === null
+  const orchestration = source.orchestration === undefined || source.orchestration === null
       ? null
       : parseContentOrchestrationV1(source.orchestration);
   const contentFamily = direction.contentFamily === undefined
@@ -279,7 +277,7 @@ export function parseContentGenerationInputV2(value: unknown): ContentGeneration
   return clone({
     contractVersion: "content-generation-input.v2",
     contentType: source.contentType,
-    ...(source.orchestration === undefined ? {} : { orchestration }),
+    orchestration,
     brandContext: object(source.brandContext, "ai_content_brand_context_invalid") as unknown as AiContentBrandContextRecord,
     subject: {
       analysisId: text(subject.analysisId, "ai_content_subject_analysis_required"),
@@ -358,6 +356,7 @@ export async function buildContentGenerationInput(
   const result: ContentGenerationInputV2 = {
     contractVersion: "content-generation-input.v2",
     contentType: generation.type,
+    orchestration: null,
     brandContext: clone(brandContext),
     subject: {
       analysisId: analysis.id,

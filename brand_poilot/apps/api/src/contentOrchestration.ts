@@ -4,6 +4,12 @@ import type {
   ContentOrchestrationV1,
   OutputFormat,
 } from "./aiContentContracts.js";
+import type { ChannelCapability } from "./channelCapabilities.js";
+import type {
+  ChannelExportMode,
+  ChannelGenerationFormat,
+} from "./channelCatalog.js";
+import type { DeliveryFormat } from "./types.js";
 
 const informationalStrategies = new Set([
   "problem_solution",
@@ -48,12 +54,40 @@ function nonempty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-export interface ContentGenerationStartCapability {
-  channel: Exclude<ContentChannelTarget, "blog_export">;
-  generationFormats: readonly OutputFormat[];
-  exportModes: readonly ("image" | "html" | "text")[];
-  publishModes: readonly string[];
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
+
+type CatalogGenerationStartCapability = {
+  channel: ChannelCapability["channel"];
+  generationFormats: readonly ChannelGenerationFormat[];
+  exportModes: readonly ChannelExportMode[];
+  publishModes: readonly DeliveryFormat[];
+};
+
+interface BlogExportGenerationStartCapability {
+  channel: "blog_export";
+  generationFormats: readonly OutputFormat[];
+  exportModes: readonly ChannelExportMode[];
+  publishModes: readonly never[];
+}
+
+export type ContentGenerationStartCapability =
+  | CatalogGenerationStartCapability
+  | BlogExportGenerationStartCapability;
+
+const publishModesByChannelAndFormat: Partial<Record<
+  ChannelCapability["channel"],
+  Partial<Record<OutputFormat, readonly DeliveryFormat[]>>
+>> = {
+  instagram: {
+    card_news: ["instagram_feed_carousel", "instagram_story"],
+    single_image: ["instagram_feed_single", "instagram_story"],
+  },
+  threads: { channel_text: ["threads_text"] },
+  x: { channel_text: ["x_post"] },
+  linkedin: { channel_text: ["linkedin_post"] },
+};
 
 export function parseContentOrchestrationV1(value: unknown): ContentOrchestrationV1 {
   const source = record(value);
@@ -103,6 +137,9 @@ export function parseContentOrchestrationV1(value: unknown): ContentOrchestratio
       || reference.roles.length === 0
       || reference.roles.some((role) => !referenceRoles.has(String(role)))
     ) invalid();
+    if (new Set(reference.roles).size !== reference.roles.length) {
+      throw new Error("content_orchestration_reference_roles_invalid");
+    }
   }
   if (Array.isArray(source.avatar)) {
     throw new Error("content_orchestration_avatar_invalid");
@@ -116,7 +153,48 @@ export function parseContentOrchestrationV1(value: unknown): ContentOrchestratio
       || Array.isArray(avatar.snapshot)
     ) invalid();
   }
-  return JSON.parse(JSON.stringify(value)) as ContentOrchestrationV1;
+  const canonicalSubject = subject.mode === "brand_topic"
+    ? {
+      mode: "brand_topic" as const,
+      topic: subject.topic as string,
+      wikiItemIds: clone(subject.wikiItemIds as string[]),
+    }
+    : subject.mode === "product_service"
+      ? {
+        mode: "product_service" as const,
+        productServiceId: subject.productServiceId as string,
+      }
+      : {
+        mode: "new_subject" as const,
+        subjectAnalysisId: subject.subjectAnalysisId as string,
+      };
+  return {
+    contractVersion: "content-orchestration.v1",
+    contentFamily: source.contentFamily,
+    subject: canonicalSubject,
+    target: {
+      id: target.id as string | null,
+      snapshot: clone(target.snapshot as Record<string, unknown>),
+    },
+    strategy: source.strategy,
+    outputFormat: source.outputFormat,
+    channelTargets: clone(source.channelTargets),
+    brief: clone(source.brief),
+    references: source.references.map((value) => {
+      const reference = value as Record<string, unknown>;
+      return {
+        referenceItemId: reference.referenceItemId,
+        roles: clone(reference.roles),
+      };
+    }),
+    avatar: source.avatar === null
+      ? null
+      : {
+        mode: (source.avatar as Record<string, unknown>).mode,
+        id: (source.avatar as Record<string, unknown>).id,
+        snapshot: clone((source.avatar as Record<string, unknown>).snapshot),
+      },
+  } as ContentOrchestrationV1;
 }
 
 export function mapOrchestrationToWorkerType(
@@ -140,18 +218,19 @@ export function assertContentGenerationStartAllowed(
     if (channel === "youtube" || channel === "tiktok") {
       throw new Error("content_orchestration_channel_unsupported");
     }
-    if (channel === "blog_export") {
-      if (input.outputFormat !== "blog") {
-        throw new Error("content_orchestration_channel_capability_mismatch");
-      }
-      continue;
+    if (channel === "blog_export" && input.outputFormat !== "blog") {
+      throw new Error("content_orchestration_channel_capability_mismatch");
     }
     const capability = capabilities.find((item) => item.channel === channel);
+    const allowedPublishModes = channel === "blog_export"
+      ? []
+      : publishModesByChannelAndFormat[channel]?.[input.outputFormat] ?? [];
     if (
       !capability
       || (
         !capability.generationFormats.includes(input.outputFormat)
         && !capability.exportModes.includes(requiredExportMode)
+        && !capability.publishModes.some((mode) => allowedPublishModes.includes(mode))
       )
     ) {
       throw new Error("content_orchestration_channel_capability_mismatch");
