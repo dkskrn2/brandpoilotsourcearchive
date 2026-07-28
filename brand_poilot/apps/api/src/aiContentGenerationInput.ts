@@ -4,7 +4,16 @@ import type {
   AiContentGenerationRecord,
   AiContentReferenceRecord,
 } from "./aiContentRepository.js";
-import type { AiContentType } from "./aiContentContracts.js";
+import type {
+  AiContentType,
+  ContentFamily,
+  ContentOrchestrationV1,
+  OutputFormat,
+} from "./aiContentContracts.js";
+import {
+  mapOrchestrationToWorkerType,
+  parseContentOrchestrationV1,
+} from "./contentOrchestration.js";
 import type { SubjectAnalysisRecord, SubjectBrandScope } from "./aiContentSubjectRepository.js";
 import type {
   AiContentAttachmentSnapshot,
@@ -16,6 +25,7 @@ import type {
 export interface ContentGenerationInputV2 {
   contractVersion: "content-generation-input.v2";
   contentType: AiContentType;
+  orchestration?: ContentOrchestrationV1 | null;
   brandContext: AiContentBrandContextRecord;
   subject: {
     analysisId: string;
@@ -39,6 +49,8 @@ export interface ContentGenerationInputV2 {
     selectedColor: string;
     aspectRatio: "1:1" | "4:5" | "16:9" | "9:16";
     outputCount: 1 | 2 | 3;
+    contentFamily?: ContentFamily;
+    outputFormat?: OutputFormat;
   };
   references: AiContentReferenceRecord[];
   attachments: AiContentAttachmentRecord[];
@@ -238,9 +250,36 @@ export function parseContentGenerationInputV2(value: unknown): ContentGeneration
   const attachments = Array.isArray(source.attachments)
     ? source.attachments.map(attachmentSnapshot)
     : fail("ai_content_attachments_invalid");
+  const orchestration = source.orchestration === undefined
+    ? undefined
+    : source.orchestration === null
+      ? null
+      : parseContentOrchestrationV1(source.orchestration);
+  const contentFamily = direction.contentFamily === undefined
+    ? undefined
+    : direction.contentFamily === "informational" || direction.contentFamily === "marketing"
+      ? direction.contentFamily
+      : fail("ai_content_content_family_invalid");
+  const outputFormat = direction.outputFormat === undefined
+    ? undefined
+    : direction.outputFormat === "card_news"
+      || direction.outputFormat === "blog"
+      || direction.outputFormat === "single_image"
+      || direction.outputFormat === "channel_text"
+      ? direction.outputFormat
+      : fail("ai_content_output_format_invalid");
+  if (
+    orchestration
+    && (
+      source.contentType !== mapOrchestrationToWorkerType(orchestration)
+      || contentFamily !== orchestration.contentFamily
+      || outputFormat !== orchestration.outputFormat
+    )
+  ) fail("ai_content_orchestration_mismatch");
   return clone({
     contractVersion: "content-generation-input.v2",
     contentType: source.contentType,
+    ...(source.orchestration === undefined ? {} : { orchestration }),
     brandContext: object(source.brandContext, "ai_content_brand_context_invalid") as unknown as AiContentBrandContextRecord,
     subject: {
       analysisId: text(subject.analysisId, "ai_content_subject_analysis_required"),
@@ -260,6 +299,8 @@ export function parseContentGenerationInputV2(value: unknown): ContentGeneration
       selectedColor,
       aspectRatio: aspectRatio(direction.aspectRatio),
       outputCount: outputCount(direction.outputCount),
+      ...(contentFamily === undefined ? {} : { contentFamily }),
+      ...(outputFormat === undefined ? {} : { outputFormat }),
     },
     references: references as AiContentReferenceRecord[],
     attachments,

@@ -1,4 +1,79 @@
 export type AiContentType = "card_news" | "blog" | "marketing";
+export type ContentFamily = "informational" | "marketing";
+export type OutputFormat = "card_news" | "blog" | "single_image" | "channel_text";
+export type ContentChannelTarget =
+  | "instagram"
+  | "threads"
+  | "x"
+  | "linkedin"
+  | "youtube"
+  | "tiktok"
+  | "blog_export";
+export type MessageStrategy =
+  | "problem_solution"
+  | "how_to"
+  | "comparison"
+  | "faq"
+  | "insight"
+  | "benefit"
+  | "social_proof"
+  | "brand_story"
+  | "cta";
+
+export interface ContentOrchestrationV1 {
+  contractVersion: "content-orchestration.v1";
+  contentFamily: ContentFamily;
+  subject:
+    | { mode: "brand_topic"; topic: string; wikiItemIds: string[] }
+    | { mode: "product_service"; productServiceId: string }
+    | { mode: "new_subject"; subjectAnalysisId: string };
+  target: { id: string | null; snapshot: Record<string, unknown> };
+  strategy: MessageStrategy;
+  outputFormat: OutputFormat;
+  channelTargets: ContentChannelTarget[];
+  brief: Record<string, unknown>;
+  references: Array<{
+    referenceItemId: string;
+    roles: Array<"planning" | "copy_pattern" | "visual_composition">;
+  }>;
+  avatar: null | {
+    mode: "library" | "one_time";
+    id: string;
+    snapshot: Record<string, unknown>;
+  };
+}
+
+export interface ContentProposalV1 {
+  contractVersion: "content-proposal.v1";
+  title: string;
+  reasonToCreateNow: string;
+  contentFamily: ContentFamily;
+  topic: string;
+  target: Record<string, unknown>;
+  messageStrategy: MessageStrategy;
+  hook: string;
+  keyMessage: string;
+  evidence: Array<{ sourceSnapshotId: string; summary: string }>;
+  outline: Array<{ heading: string; purpose: string }>;
+  outputFormat: OutputFormat;
+  channelTargets: ContentChannelTarget[];
+  recommendedReferenceQuery: {
+    strategies: MessageStrategy[];
+    formats: OutputFormat[];
+    tags: string[];
+  };
+}
+
+export interface ContentProposalRequestV1 {
+  contractVersion: "content-proposal-request.v1";
+  contentFamily: ContentFamily;
+  subjectInput: Record<string, unknown>;
+  channelTargets: string[];
+  outputFormats: OutputFormat[];
+  sourceSnapshotIds: string[];
+  performanceSnapshotIds: string[];
+}
+
 export type AiContentJobType = "analyze" | "generate";
 export type AiContentGenerationStatus =
   | "draft"

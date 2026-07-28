@@ -37,6 +37,86 @@ function generation(draft: Record<string, unknown> = {}) {
 }
 
 describe("content-generation-input.v2", () => {
+  it("permits fields unknown to the existing worker parser", async () => {
+    const envelope = await buildContentGenerationInput(deps(), generation(), { outputCount: 1 });
+
+    expect(() => parseContentGenerationInputV2({
+      ...envelope,
+      workerFutureMetadata: { contractVersion: "future-worker-metadata.v1" },
+      creativeDirection: {
+        ...envelope.creativeDirection,
+        outputFormat: "single_image",
+      },
+    })).not.toThrow();
+  });
+
+  it("preserves an optional orchestration envelope and worker creative discriminator", async () => {
+    const legacy = await buildContentGenerationInput(deps(), generation(), { outputCount: 1 });
+    const orchestration = {
+      contractVersion: "content-orchestration.v1" as const,
+      contentFamily: "informational" as const,
+      subject: {
+        mode: "brand_topic" as const,
+        topic: "승인 브랜드 토픽",
+        wikiItemIds: ["wiki-1"],
+      },
+      target: { id: null, snapshot: { label: "학습 고객" } },
+      strategy: "insight" as const,
+      outputFormat: "card_news" as const,
+      channelTargets: ["instagram" as const],
+      brief: {},
+      references: [],
+      avatar: null,
+    };
+
+    const parsed = parseContentGenerationInputV2({
+      ...legacy,
+      orchestration,
+      creativeDirection: {
+        ...legacy.creativeDirection,
+        contentFamily: "informational",
+        outputFormat: "card_news",
+      },
+    });
+
+    expect(parsed.contractVersion).toBe("content-generation-input.v2");
+    expect(parsed.orchestration).toEqual(orchestration);
+    expect(parsed.creativeDirection).toMatchObject({
+      contentFamily: "informational",
+      outputFormat: "card_news",
+    });
+  });
+
+  it("rejects worker and creative discriminators that drift from orchestration", async () => {
+    const legacy = await buildContentGenerationInput(deps(), generation(), { outputCount: 1 });
+    const orchestration = {
+      contractVersion: "content-orchestration.v1" as const,
+      contentFamily: "marketing" as const,
+      subject: {
+        mode: "product_service" as const,
+        productServiceId: "product-service-version-1",
+      },
+      target: { id: null, snapshot: {} },
+      strategy: "benefit" as const,
+      outputFormat: "single_image" as const,
+      channelTargets: ["instagram" as const],
+      brief: {},
+      references: [],
+      avatar: null,
+    };
+
+    expect(() => parseContentGenerationInputV2({
+      ...legacy,
+      orchestration,
+      contentType: "card_news",
+      creativeDirection: {
+        ...legacy.creativeDirection,
+        contentFamily: "informational",
+        outputFormat: "card_news",
+      },
+    })).toThrow("ai_content_orchestration_mismatch");
+  });
+
   it("freezes one target, one connected appeal, selected images, references, and edited color", async () => {
     const envelope = await buildContentGenerationInput(deps(), generation(), { outputCount: 2 });
     expect(envelope.contractVersion).toBe("content-generation-input.v2");
