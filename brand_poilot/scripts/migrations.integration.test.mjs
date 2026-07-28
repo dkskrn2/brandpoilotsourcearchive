@@ -3607,6 +3607,88 @@ test("058 backfills one canonical trend item plus unlinked active reference URLs
   });
 });
 
+test("060 upgrades legacy generations idempotently without truncating oversized reference history", async () => {
+  const migrations = await loadMigrations();
+  const migration060 = migrations.find(
+    (migration) => migration.id === "060_content_orchestration.sql",
+  );
+  assert.ok(migration060, "060 content orchestration migration must exist");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "058_avatar_and_reference_libraries.sql",
+    );
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ('Orchestration upgrade', $1) returning id",
+      [`orchestration-upgrade-${randomUUID()}`],
+    );
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Legacy content') returning id",
+      [workspace.rows[0].id],
+    );
+    const generation = await database.query(
+      `insert into ai_content_generations (
+         workspace_id, brand_id, type, title, analysis_idempotency_key, draft_json
+       ) values ($1, $2, 'marketing', 'Legacy generation', $3, '{"contractVersion":"content-generation-input.v2"}')
+       returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, `legacy-${randomUUID()}`],
+    );
+    for (let position = 1; position <= 7; position += 1) {
+      await database.query(
+        `insert into ai_content_generation_references (
+           generation_id, reference_id, workspace_id, brand_id, position
+         ) values ($1, $2, $3, $4, $5)`,
+        [
+          generation.rows[0].id,
+          randomUUID(),
+          workspace.rows[0].id,
+          brand.rows[0].id,
+          position,
+        ],
+      );
+    }
+
+    await database.exec(migration060.sql);
+    await database.exec(migration060.sql);
+
+    const upgraded = await database.query(
+      `select content_family, output_format, orchestration_snapshot, draft_json
+         from ai_content_generations where id = $1`,
+      [generation.rows[0].id],
+    );
+    assert.deepEqual(upgraded.rows[0], {
+      content_family: "marketing",
+      output_format: "single_image",
+      orchestration_snapshot: null,
+      draft_json: { contractVersion: "content-generation-input.v2" },
+    });
+    const references = await database.query(
+      "select count(*)::integer as count, max(position)::integer as max_position from ai_content_generation_references where generation_id = $1",
+      [generation.rows[0].id],
+    );
+    assert.deepEqual(references.rows[0], { count: 7, max_position: 7 });
+    const audit = await database.query(
+      `select reference_count, exceeds_canonical_limit
+         from ai_content_generation_reference_migration_audits
+        where generation_id = $1`,
+      [generation.rows[0].id],
+    );
+    assert.deepEqual(audit.rows, [{ reference_count: 7, exceeds_canonical_limit: true }]);
+
+    for (const table of [
+      "ai_content_proposal_batches",
+      "ai_content_proposals",
+      "ai_content_proposal_jobs",
+    ]) {
+      const found = await database.query("select to_regclass($1) as name", [table]);
+      assert.equal(found.rows[0].name, table);
+    }
+  });
+});
+
 test("061 deterministically removes legacy duplicate avatar bytes and prevents new duplicates", async () => {
   const migrations = await loadMigrations();
   const migration061 = migrations.find(
@@ -3698,7 +3780,7 @@ test("061 deterministically removes legacy duplicate avatar bytes and prevents n
   });
 });
 
-test("migration runner records forward-only 061 through 065 without changing the applied 058 checksum", async () => {
+test("migration runner records forward-only 060 through 065 without changing the applied 058 checksum", async () => {
   const migrations = await loadMigrations();
   const runnableMigrations = migrations.filter(
     (migration) => !migration.sql.startsWith("-- requires: pgvector")
@@ -3724,7 +3806,8 @@ test("migration runner records forward-only 061 through 065 without changing the
       client,
       migrations: runnableMigrations,
     });
-    assert.deepEqual(upgraded.pending.slice(-5), [
+    assert.deepEqual(upgraded.pending.slice(-6), [
+      "060_content_orchestration.sql",
       "061_avatar_image_checksum_uniqueness.sql",
       "062_avatar_upload_cancellation.sql",
       "063_avatar_upload_finalization.sql",
@@ -3732,9 +3815,10 @@ test("migration runner records forward-only 061 through 065 without changing the
       "065_ai_content_attachment_upload_sessions.sql",
     ]);
     const recorded = await database.query(
-      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4, $5, $6) order by id",
+      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4, $5, $6, $7) order by id",
       [
         "058_avatar_and_reference_libraries.sql",
+        "060_content_orchestration.sql",
         "061_avatar_image_checksum_uniqueness.sql",
         "062_avatar_upload_cancellation.sql",
         "063_avatar_upload_finalization.sql",
@@ -3746,6 +3830,10 @@ test("migration runner records forward-only 061 through 065 without changing the
       {
         id: "058_avatar_and_reference_libraries.sql",
         checksum: migrations.find((migration) => migration.id === "058_avatar_and_reference_libraries.sql")?.checksum,
+      },
+      {
+        id: "060_content_orchestration.sql",
+        checksum: migrations.find((migration) => migration.id === "060_content_orchestration.sql")?.checksum,
       },
       {
         id: "061_avatar_image_checksum_uniqueness.sql",

@@ -490,6 +490,73 @@ test("058은 avatar와 typed-origin reference library 계약을 정의한다", a
   assert.match(migration, /not\s+exists\s*\([\s\S]*brand_trend_saved_media/i);
 });
 
+test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계약을 정의한다", async () => {
+  const migration = await readFile("db/migrations/060_content_orchestration.sql", "utf8");
+
+  for (const column of [
+    "content_family",
+    "output_format",
+    "subject_mode",
+    "product_service_id",
+    "orchestration_snapshot",
+    "avatar_snapshot",
+  ]) {
+    assert.match(migration, new RegExp(`add\\s+column\\s+if\\s+not\\s+exists\\s+${column}\\b`, "i"));
+  }
+  assert.match(migration, /content_family[\s\S]*'informational'[\s\S]*'marketing'/i);
+  assert.match(migration, /output_format[\s\S]*'card_news'[\s\S]*'blog'[\s\S]*'single_image'[\s\S]*'channel_text'/i);
+  assert.match(migration, /subject_mode[\s\S]*'brand_topic'[\s\S]*'product_service'[\s\S]*'new_subject'/i);
+  assert.match(migration, /when\s+type\s*=\s*'card_news'\s+then\s+'informational'/i);
+  assert.match(migration, /when\s+type\s*=\s*'marketing'\s+then\s+'single_image'/i);
+
+  assert.match(migration, /add\s+column\s+if\s+not\s+exists\s+reference_item_id\s+uuid/i);
+  assert.match(migration, /add\s+column\s+if\s+not\s+exists\s+roles_json\s+jsonb/i);
+  assert.match(migration, /jsonb_array_length\s*\(\s*value\s*\)\s+between\s+1\s+and\s+3/i);
+  for (const role of ["planning", "copy_pattern", "visual_composition"]) {
+    assert.match(migration, new RegExp(`'${role}'`, "i"));
+  }
+  assert.match(migration, /where\s+reference_item_id\s+is\s+not\s+null/i);
+  assert.match(migration, /ai_content_generation_reference_migration_audits/i);
+  assert.doesNotMatch(migration, /\b(?:truncate|delete\s+from\s+ai_content_generation_references)\b/i);
+
+  for (const table of [
+    "ai_content_proposal_batches",
+    "ai_content_proposals",
+    "ai_content_proposal_jobs",
+  ]) {
+    assert.match(migration, new RegExp(`create\\s+table\\s+if\\s+not\\s+exists\\s+${table}\\b`, "i"));
+  }
+  assert.match(migration, /origin[\s\S]*'manual'[\s\S]*'scheduled_crawl'/i);
+  assert.match(migration, /status[\s\S]*'queued'[\s\S]*'building'[\s\S]*'ready'[\s\S]*'failed'/i);
+  assert.match(migration, /position[\s\S]*between\s+1\s+and\s+3/i);
+  assert.match(migration, /where\s+status\s*=\s*'selected'/i);
+  assert.match(migration, /for\s+update/i);
+  assert.match(migration, /set\s+status\s*=\s*'dismissed'/i);
+  assert.match(migration, /lease_expires_at/i);
+  assert.match(migration, /attempt_count[\s\S]*max_attempts/i);
+  assert.doesNotMatch(migration, /ai_content_proposal_jobs[\s\S]*\bpayload_json\b/i);
+
+  for (const key of [
+    "sourceId",
+    "url",
+    "crawledAt",
+    "contentHash",
+    "summary",
+    "brandCoreVersionId",
+    "ruleSetId",
+    "productServiceVersionId",
+    "wikiVersionId",
+    "proposalId",
+    "referenceSnapshots",
+    "avatarSnapshot",
+    "imageSnapshots",
+  ]) {
+    assert.match(migration, new RegExp(key, "i"));
+  }
+  assert.match(migration, /source_urls_content_purpose_idx/i);
+  assert.match(migration, /reference_items_brand_purpose_active_idx/i);
+});
+
 test("061은 대표 이미지를 우선 보존하고 avatar별 checksum 중복을 차단한다", async () => {
   const [migration, programRegistry] = await Promise.all([
     readFile("db/migrations/061_avatar_image_checksum_uniqueness.sql", "utf8"),
