@@ -130,6 +130,7 @@ require_exact_false "INSTAGRAM_PUBLISH_ENABLED" "$API_ENV_FILE"
 require_exact_false "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED" "$API_ENV_FILE"
 require_exact_false "AUTOMATED_CONTENT_ENABLED" "$API_ENV_FILE"
 require_exact_false "CONTENT_PROPOSALS_ENABLED" "$API_ENV_FILE"
+require_exact_false "DM_WORKERS_ENABLED" "$API_ENV_FILE"
 require_matching_env_secret \
   "CONTENT_PROPOSAL_WORKER_API_TOKEN" \
   "$API_ENV_FILE" \

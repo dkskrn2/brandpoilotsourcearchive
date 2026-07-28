@@ -187,6 +187,7 @@ interface CreateServerOptions {
     schedulerEnabled: boolean;
     publishingEnabled: boolean;
     contentProposalsEnabled: boolean;
+    dmWorkersEnabled?: boolean;
   };
   logger?: boolean | FastifyLoggerOptions;
 }
@@ -1181,6 +1182,7 @@ export function createServer(
         database: health.database,
         schedulerEnabled: readinessPolicy?.schedulerEnabled ?? false,
         publishingEnabled: readinessPolicy?.publishingEnabled ?? false,
+        dmWorkersEnabled: readinessPolicy?.dmWorkersEnabled ?? false,
         activeDmEnabled: health.operations?.activeDmEnabled ?? false,
         dmWorker: health.operations?.dmWorker ?? "offline",
         wikiWorker: health.operations?.wikiWorker ?? "offline",
@@ -1194,6 +1196,7 @@ export function createServer(
         database: "error",
         schedulerEnabled: readinessPolicy?.schedulerEnabled ?? false,
         publishingEnabled: readinessPolicy?.publishingEnabled ?? false,
+        dmWorkersEnabled: readinessPolicy?.dmWorkersEnabled ?? false,
         activeDmEnabled: false,
         dmWorker: "offline",
         wikiWorker: "offline",

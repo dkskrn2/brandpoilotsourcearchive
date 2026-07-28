@@ -18,10 +18,12 @@ export interface ApiRuntimeConfig {
   aiContentAttachmentUploadSessionsEnabled: boolean;
   automatedContentEnabled: boolean;
   contentProposalsEnabled: boolean;
+  dmWorkersEnabled: boolean;
   readiness: {
     schedulerEnabled: boolean;
     publishingEnabled: boolean;
     contentProposalsEnabled: boolean;
+    dmWorkersEnabled: boolean;
   };
 }
 
@@ -151,6 +153,7 @@ export function loadApiRuntimeConfig(
     env.CONTENT_PROPOSALS_ENABLED,
     "CONTENT_PROPOSALS_ENABLED",
   );
+  const dmWorkersEnabled = parseBoolean(env.DM_WORKERS_ENABLED, "DM_WORKERS_ENABLED");
   const aiContentAttachmentUploadSessionsEnabled = parseBoolean(
     env.AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED,
     "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED",
@@ -223,10 +226,12 @@ export function loadApiRuntimeConfig(
     aiContentAttachmentUploadSessionsEnabled,
     automatedContentEnabled,
     contentProposalsEnabled,
+    dmWorkersEnabled,
     readiness: {
       schedulerEnabled,
       publishingEnabled: instagramPublishEnabled,
       contentProposalsEnabled,
+      dmWorkersEnabled,
     },
   };
 }
