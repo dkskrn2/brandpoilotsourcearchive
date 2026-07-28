@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +6,7 @@ import { createMockAiContentGateway } from "../features/ai-content/mockAiContent
 import { AiContentGenerationPage } from "../pages/AiContentGenerationPage";
 import type { ChannelConnection } from "../types";
 import { ApiRequestError } from "../lib/apiClient";
+import type { ContentOrchestration } from "../features/ai-content/types";
 
 afterEach(() => {
   cleanup();
@@ -62,6 +63,25 @@ describe("AiContentGenerationPage", () => {
 
     await user.click(zipButton);
     expect(screen.getByRole("button", { name: "전체 ZIP" })).toHaveTextContent("전체 ZIP (다운로드됨)");
+  });
+
+  it("submits only one download while the same action is already in flight", async () => {
+    let finishDownload!: (value: { blob: Blob; fileName: string }) => void;
+    const { gateway } = renderGeneration("generation-card-complete", false, (configuredGateway) => {
+      configuredGateway.downloadOutput = vi.fn(() => new Promise<{ blob: Blob; fileName: string }>((resolve) => {
+        finishDownload = resolve;
+      }));
+    });
+    const button = await screen.findByRole("button", { name: "카드뉴스 표지 결과 ZIP 다운로드" });
+
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(gateway.downloadOutput).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finishDownload({ blob: new Blob(["zip"]), fileName: "result.zip" });
+      await Promise.resolve();
+    });
   });
 
   it("shows failed output reason and retry control updates output state after reasoned retry", async () => {
@@ -276,6 +296,80 @@ describe("AiContentGenerationPage", () => {
 
     expect(screen.getByRole("button", { name: "선택 결과 ZIP" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "전체 ZIP" })).toBeEnabled();
+  });
+
+  it("moves a completed orchestration into four review tabs and shows its frozen snapshots", async () => {
+    const user = userEvent.setup();
+    const { gateway } = renderGeneration("generation-card-complete", false, (configuredGateway) => {
+      const getGeneration = configuredGateway.getGeneration.bind(configuredGateway);
+      configuredGateway.listReferences = vi.fn(configuredGateway.listReferences);
+      configuredGateway.retryOutput = vi.fn(configuredGateway.retryOutput);
+      configuredGateway.getGeneration = vi.fn(async (brandId, generationId) => {
+        const result = await getGeneration(brandId, generationId);
+        return {
+          ...result,
+          draft: {
+            ...result.draft,
+            orchestration: {
+              contractVersion: "content-orchestration.v1",
+              contentFamily: "informational",
+              subject: { mode: "brand_topic", topic: "여름 피부 관리", wikiItemIds: ["wiki-1"] },
+              target: { id: "target-1", snapshot: { name: "민감성 피부 고객" } },
+              strategy: "how_to",
+              outputFormat: "card_news",
+              channelTargets: ["instagram"],
+              brief: { instruction: "세 단계로 설명" },
+              references: [{ referenceItemId: "reference-1", roles: ["planning", "copy_pattern"] }],
+              avatar: {
+                mode: "library",
+                id: "avatar-1",
+                snapshot: { name: "브랜드 모델", representativeImageUrl: "https://cdn.example/avatar.png" },
+              },
+            } satisfies ContentOrchestration,
+          },
+        };
+      });
+    });
+
+    expect(await screen.findByRole("tab", { name: "기획 근거" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "카피" })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "완성본" })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "게시" })).toBeVisible();
+    expect(screen.getByText("여름 피부 관리")).toBeVisible();
+    expect(screen.getByText("민감성 피부 고객")).toBeVisible();
+    expect(screen.getByText(/reference-1/)).toBeVisible();
+    expect(screen.getByText("브랜드 모델")).toBeVisible();
+
+    await user.click(screen.getByRole("tab", { name: "카피" }));
+    expect(screen.getByText("핵심 메시지: 여름 캠페인 시작")).toBeVisible();
+    await user.click(screen.getByRole("tab", { name: "완성본" }));
+    expect(screen.getByRole("button", { name: "카드뉴스 표지 결과 ZIP 다운로드" })).toBeEnabled();
+    await user.click(screen.getByRole("tab", { name: "게시" }));
+    expect(screen.getByText("Instagram OAuth 게시 계정 미연결")).toBeVisible();
+
+    expect(gateway.listReferences).not.toHaveBeenCalled();
+    expect(gateway.retryOutput).not.toHaveBeenCalled();
+  });
+
+  it("keeps completed outputs untouched while retrying only a failed output from review", async () => {
+    const user = userEvent.setup();
+    const { gateway } = renderGeneration("generation-partial", false, (configuredGateway) => {
+      configuredGateway.retryOutput = vi.fn(configuredGateway.retryOutput);
+    });
+
+    await user.click(await screen.findByRole("tab", { name: "완성본" }));
+    const outputRows = screen.getAllByRole("listitem");
+    const failedOutputRow = outputRows[1];
+    await user.type(within(failedOutputRow).getByLabelText("문제 해결형 다시 생성 사유"), "실패한 이미지만 다시 생성");
+    await user.click(within(failedOutputRow).getByRole("button", { name: /결과 2 다시 생성/ }));
+
+    expect(gateway.retryOutput).toHaveBeenCalledTimes(1);
+    expect(gateway.retryOutput).toHaveBeenCalledWith(
+      "00000000-0000-4000-8000-000000000100",
+      "output-marketing-2",
+      "실패한 이미지만 다시 생성",
+    );
+    expect(within(outputRows[0]).getByRole("button", { name: "혜택 강조형 결과 ZIP 다운로드" })).toBeEnabled();
   });
 
   it("publishes a completed card-news output directly when Instagram is connected", async () => {

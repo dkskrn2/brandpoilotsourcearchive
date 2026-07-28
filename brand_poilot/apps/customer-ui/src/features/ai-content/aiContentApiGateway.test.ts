@@ -2,7 +2,7 @@ import { webcrypto } from "node:crypto";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { apiClient } from "../../lib/apiClient";
 import { ApiRequestError } from "../../lib/apiClient";
-import { createAiContentApiGateway } from "./aiContentApiGateway";
+import { contentGenerationFieldError, createAiContentApiGateway } from "./aiContentApiGateway";
 import type { AiContentDraft, GenerationAttachment, SubjectAnalysisInput } from "./types";
 
 const draft: AiContentDraft = {
@@ -188,6 +188,34 @@ describe("createAiContentApiGateway", () => {
     });
   });
 
+  it("preserves the frozen orchestration snapshot returned in the generation draft", async () => {
+    const orchestration = {
+      contractVersion: "content-orchestration.v1" as const,
+      contentFamily: "informational" as const,
+      subject: { mode: "brand_topic" as const, topic: "여름 피부 관리", wikiItemIds: ["wiki-1"] },
+      target: { id: "target-1", snapshot: { name: "민감성 피부 고객" } },
+      strategy: "how_to" as const,
+      outputFormat: "card_news" as const,
+      channelTargets: ["instagram" as const],
+      brief: { instruction: "세 단계로 설명" },
+      references: [{ referenceItemId: "reference-1", roles: ["planning" as const, "copy_pattern" as const] }],
+      avatar: {
+        mode: "library" as const,
+        id: "avatar-1",
+        snapshot: { name: "브랜드 모델", representativeImageUrl: "https://cdn.example/avatar.png" },
+      },
+    };
+    const requestJson = vi.fn(async () => ({
+      ...generation("completed"),
+      draft: { ...draft, orchestration },
+    }));
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await expect(gateway.getGeneration("brand-1", "generation-1")).resolves.toMatchObject({
+      draft: { orchestration },
+    });
+  });
+
   it("rehydrates only confirmed server attachment records", async () => {
     const confirmed = {
       id: "attachment-1",
@@ -235,6 +263,55 @@ describe("createAiContentApiGateway", () => {
         body: expect.stringContaining('"idempotencyKey":"analysis-1"'),
       }),
     );
+  });
+
+  it("sends canonical orchestration on create, update, and start while mapping its output to the legacy type", async () => {
+    const orchestration = {
+      contractVersion: "content-orchestration.v1" as const,
+      contentFamily: "informational" as const,
+      subject: { mode: "brand_topic" as const, topic: "운영 가이드", wikiItemIds: [] },
+      target: { id: null, snapshot: {} },
+      strategy: "how_to" as const,
+      outputFormat: "blog" as const,
+      channelTargets: ["blog_export" as const],
+      brief: {},
+      references: [],
+      avatar: null,
+    };
+    const requestJson = vi.fn(async (..._args: [string, { body?: string }]) => generation());
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await gateway.createAnalysis("brand-1", {
+      type: "marketing",
+      title: "운영 가이드",
+      draft: { ...draft, orchestration },
+      orchestration,
+      idempotencyKey: "create-orchestration",
+    });
+    await gateway.updateGeneration("brand-1", "generation-1", {
+      draft: { ...draft, orchestration },
+      referenceIds: [],
+      orchestration,
+    });
+    await gateway.startGeneration("brand-1", "generation-1", {
+      idempotencyKey: "start-orchestration",
+      outputCount: 1,
+      orchestration,
+    });
+
+    expect(JSON.parse(requestJson.mock.calls[0]?.[1].body ?? "{}")).toMatchObject({ type: "blog", orchestration });
+    expect(JSON.parse(requestJson.mock.calls[1]?.[1].body ?? "{}")).toMatchObject({ orchestration });
+    expect(JSON.parse(requestJson.mock.calls[2]?.[1].body ?? "{}")).toMatchObject({ orchestration });
+  });
+
+  it.each([
+    ["content_orchestration_channel_unsupported", { phase: "setup", field: "channelTargets" }],
+    ["ai_content_reference_not_found", { phase: "proposal_selection", field: "references" }],
+    ["content_orchestration_avatar_invalid", { phase: "proposal_selection", field: "avatar" }],
+    ["ai_content_output_count_invalid", { phase: "generating", field: "outputCount" }],
+  ])("maps server validation %s back to its phase and field", (errorCode, expected) => {
+    expect(contentGenerationFieldError(new ApiRequestError({ status: 422, errorCode })))
+      .toMatchObject(expected);
   });
 
   it("propagates API failures instead of returning sample content", async () => {

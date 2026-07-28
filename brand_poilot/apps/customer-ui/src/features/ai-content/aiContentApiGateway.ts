@@ -20,8 +20,42 @@ import type {
   ContentProposalBatch,
   ContentProposalRecord,
   AiContentDraftReference,
+  ContentOrchestration,
 } from "./types";
 import { DEFAULT_BRAND_COLOR } from "./useAiContentDraft";
+
+export interface ContentGenerationFieldError {
+  phase: "setup" | "proposal_selection" | "generating";
+  field: "contentFamily" | "subject" | "channelTargets" | "outputFormat" | "references" | "avatar" | "outputCount";
+  errorCode: string;
+}
+
+export function contentGenerationFieldError(error: unknown): ContentGenerationFieldError | null {
+  if (!(error instanceof ApiRequestError) || !error.errorCode) return null;
+  const errorCode = error.errorCode;
+  if (errorCode.includes("reference")) {
+    return { phase: "proposal_selection", field: "references", errorCode };
+  }
+  if (errorCode.includes("avatar")) {
+    return { phase: "proposal_selection", field: "avatar", errorCode };
+  }
+  if (errorCode.includes("channel")) {
+    return { phase: "setup", field: "channelTargets", errorCode };
+  }
+  if (errorCode.includes("output_count")) {
+    return { phase: "generating", field: "outputCount", errorCode };
+  }
+  if (errorCode.includes("output_format") || errorCode.includes("type_mapping")) {
+    return { phase: "setup", field: "outputFormat", errorCode };
+  }
+  if (errorCode.includes("subject")) {
+    return { phase: "setup", field: "subject", errorCode };
+  }
+  if (errorCode.includes("family")) {
+    return { phase: "setup", field: "contentFamily", errorCode };
+  }
+  return null;
+}
 
 interface ApiOutput {
   id: string; generationId: string; outputIndex: number; title: string | null; status: AiGenerationOutput["status"];
@@ -95,7 +129,9 @@ export function normalizeAiContentDraft(type: AiContentType, value: ApiGeneratio
     ? Object.fromEntries(Object.entries(source.appealOverridesByTarget).filter((entry): entry is [string, SubjectAppeal[]] => Array.isArray(entry[1])).map(([targetId, appeals]) => [targetId, appeals.map((appeal) => ({ ...appeal, sources: [...appeal.sources] }))]))
     : {};
   return {
-    type: source.type ?? type, subjectType,
+    type: source.type ?? type,
+    orchestration: source.orchestration as ContentOrchestration | undefined,
+    subjectType,
     subjectInput,
     subjectAnalysisId: source.subjectAnalysisId ?? null,
     subjectAnalysisVersion: typeof source.subjectAnalysisVersion === "number" ? source.subjectAnalysisVersion : null,
@@ -131,7 +167,9 @@ function serializableAttachments(attachments: GenerationAttachment[]) {
 
 function serializeDraft(draft: AiContentDraft): Record<string, unknown> {
   return {
-    type: draft.type, subjectType: draft.subjectType, subjectInput: { ...draft.subjectInput, sourceUrl: draft.subjectInput.sourceUrl || draft.productUrl },
+    type: draft.type,
+    ...(draft.orchestration ? { orchestration: draft.orchestration } : {}),
+    subjectType: draft.subjectType, subjectInput: { ...draft.subjectInput, sourceUrl: draft.subjectInput.sourceUrl || draft.productUrl },
     subjectAnalysisId: draft.subjectAnalysisId, subjectAnalysisVersion: draft.subjectAnalysisVersion,
     subjectAttachments: serializableAttachments(draft.subjectAttachments ?? []),
     selectedSubjectImageIds: [...draft.selectedSubjectImageIds], selectedTarget: draft.selectedTarget, selectedAppeal: draft.selectedAppeal,
@@ -174,6 +212,12 @@ function mapGeneration(value: ApiGeneration): AiContentGeneration {
     retryableUntil: value.retryableUntil ?? null,
     createdAt: value.createdAt, updatedAt: value.updatedAt,
   };
+}
+
+function legacyTypeForOrchestration(orchestration: ContentOrchestration): AiContentType {
+  if (orchestration.outputFormat === "card_news") return "card_news";
+  if (orchestration.outputFormat === "blog") return "blog";
+  return "marketing";
 }
 
 function mapSubjectAnalysis(value: ApiSubjectAnalysis): SubjectAnalysis {
@@ -245,7 +289,21 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
     },
     async listGenerations(brandId) { return (await client.requestJson<ApiGeneration[]>(`/brands/${brandId}/ai-content/generations`, { method: "GET" })).map(mapGeneration); },
     async getGeneration(brandId, generationId) { return mapGeneration(await client.requestJson<ApiGeneration>(`/brands/${brandId}/ai-content/generations/${generationId}`, { method: "GET" })); },
-    async createAnalysis(brandId, input) { return mapGeneration(await client.requestJson<ApiGeneration>(`/brands/${brandId}/ai-content/generations`, { method: "POST", body: JSON.stringify({ ...input, draft: serializeDraft(input.draft) }) })); },
+    async createAnalysis(brandId, input) {
+      const orchestration = input.orchestration ?? input.draft.orchestration ?? undefined;
+      return mapGeneration(await client.requestJson<ApiGeneration>(
+        `/brands/${brandId}/ai-content/generations`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            ...input,
+            type: orchestration ? legacyTypeForOrchestration(orchestration) : input.type,
+            draft: serializeDraft(input.draft),
+            ...(orchestration ? { orchestration } : {}),
+          }),
+        },
+      ));
+    },
     async updateGeneration(brandId, generationId, input) { return mapGeneration(await client.requestJson<ApiGeneration>(`/brands/${brandId}/ai-content/generations/${generationId}`, { method: "PATCH", body: JSON.stringify({ ...input, draft: serializeDraft(input.draft) }) })); },
     async startGeneration(brandId, generationId, input) { return mapGeneration(await client.requestJson<ApiGeneration>(`/brands/${brandId}/ai-content/generations/${generationId}/generate`, { method: "POST", body: JSON.stringify(input) })); },
     async uploadAttachment(brandId, generationId, attachment, onProgress) {

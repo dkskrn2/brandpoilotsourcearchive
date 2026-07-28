@@ -257,6 +257,7 @@ export type GenerationBriefUpdate =
 
 export interface AiContentDraft {
   type: AiContentType | null;
+  orchestration?: ContentOrchestration | null;
   subjectType: SubjectType | null;
   subjectInput: {
     sourceUrl: string;
@@ -351,9 +352,9 @@ export interface AiContentGateway {
   getBrandContext(brandId: string): Promise<AiContentBrandContext>;
   listGenerations(brandId: string): Promise<AiContentGeneration[]>;
   getGeneration(brandId: string, generationId: string): Promise<AiContentGeneration>;
-  createAnalysis(brandId: string, input: { type: AiContentType; title: string; draft: AiContentDraft; idempotencyKey: string }): Promise<AiContentGeneration>;
+  createAnalysis(brandId: string, input: { type: AiContentType; title: string; draft: AiContentDraft; orchestration?: ContentOrchestration; idempotencyKey: string }): Promise<AiContentGeneration>;
   updateGeneration(brandId: string, generationId: string, input: { draft: AiContentDraft; referenceIds: string[]; orchestration?: ContentOrchestration }): Promise<AiContentGeneration>;
-  startGeneration(brandId: string, generationId: string, input: { idempotencyKey: string; outputCount: 1 | 2 | 3 }): Promise<AiContentGeneration>;
+  startGeneration(brandId: string, generationId: string, input: { idempotencyKey: string; outputCount: 1 | 2 | 3; orchestration?: ContentOrchestration }): Promise<AiContentGeneration>;
   uploadAttachment(brandId: string, generationId: string, attachment: GenerationAttachment, onProgress?: (percentage: number) => void): Promise<GenerationAttachment>;
   removeAttachment(brandId: string, generationId: string, attachmentId: string): Promise<void>;
   listAudiencePresets(brandId: string): Promise<AudiencePreset[]>;

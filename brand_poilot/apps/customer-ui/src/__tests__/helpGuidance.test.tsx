@@ -23,7 +23,9 @@ describe("통합형 도움말", () => {
   });
 
   it("동적 AI 콘텐츠 결과 경로에 맞는 가이드를 찾는다", () => {
-    expect(guideForPath("/ai-content/generation-1")?.id).toBe("ai-content-result");
+    const guide = guideForPath("/ai-content/generation-1");
+    expect(guide?.id).toBe("ai-content-result");
+    expect(guide?.sections.flatMap((section) => section.items).join(" ")).toMatch(/생성 중.*상태|검토.*기획 근거/);
   });
 
   it("레퍼런스 view query에 맞는 동적 안내와 외부 URL 제한을 제공한다", () => {

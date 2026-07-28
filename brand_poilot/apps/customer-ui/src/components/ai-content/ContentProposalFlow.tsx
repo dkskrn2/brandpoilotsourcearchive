@@ -11,12 +11,14 @@ import type {
   AiContentReference,
   ContentChannelTarget,
   ContentFamily,
+  ContentOrchestration,
   ContentOutputFormat,
   ContentProposalBatch,
   ContentProposalRecord,
   ContentSetupSection,
 } from "../../features/ai-content/types";
 import { createContentWizardState, transitionContentWizard } from "../../features/ai-content/contentWizardMachine";
+import { contentGenerationFieldError } from "../../features/ai-content/aiContentApiGateway";
 import { ContentFamilyStep } from "./ContentFamilyStep";
 import { ContentSubjectStep, type ContentSubjectMode } from "./ContentSubjectStep";
 import { ContentStrategyStep } from "./ContentStrategyStep";
@@ -31,6 +33,21 @@ const phases = ["콘텐츠 생성", "구현안 선택", "생성", "변경·검�
 const sections: Array<[ContentSetupSection, string]> = [
   ["intent", "1. 목적"], ["sources", "2. 주제·자료"], ["delivery", "3. 채널·형식"],
 ];
+
+const validationFieldLabels = {
+  contentFamily: "목적",
+  subject: "주제·자료",
+  channelTargets: "채널",
+  outputFormat: "결과 형식",
+  references: "레퍼런스",
+  avatar: "아바타",
+  outputCount: "생성 개수",
+} as const;
+
+function validationMessage(error: unknown) {
+  const mapped = contentGenerationFieldError(error);
+  return mapped ? `${validationFieldLabels[mapped.field]} 입력을 확인해 주세요.` : null;
+}
 
 type ContentLibraries = Pick<LibraryGateway, "listProductServices" | "listWikiItems" | "listAvatars">;
 type ChannelCapabilityGateway = ReturnType<typeof createChannelCapabilityGateway>;
@@ -237,8 +254,14 @@ export function ContentProposalFlow({
         },
       });
       await loadBatch(created.batchId);
-    } catch {
-      handleBatchError();
+    } catch (caught) {
+      const mapped = validationMessage(caught);
+      if (mapped) {
+        setLoadingProposal(false);
+        setError(mapped);
+      } else {
+        handleBatchError();
+      }
     }
   }
 
@@ -292,37 +315,42 @@ export function ContentProposalFlow({
       }
       const generation = await gateway.selectProposal(brandId, selectedProposal.id, selectionKey.current);
       const selectedAvatar = activeAvatar ?? null;
+      const orchestration: ContentOrchestration = {
+        contractVersion: "content-orchestration.v1",
+        contentFamily: selectedProposal.proposal.contentFamily,
+        subject: subjectMode === "product_service" && selectedProductId
+          ? { mode: "product_service", productServiceId: selectedProductId }
+          : { mode: "brand_topic", topic, wikiItemIds: selectedWikiIds },
+        target: { id: null, snapshot: selectedProposal.proposal.target },
+        strategy: selectedProposal.proposal.messageStrategy,
+        outputFormat: selectedProposal.proposal.outputFormat,
+        channelTargets: selectedProposal.proposal.channelTargets,
+        brief: { instruction: brief },
+        references: selectedReferences,
+        avatar: selectedAvatar ? {
+          mode: "library",
+          id: selectedAvatar.id,
+          snapshot: {
+            name: selectedAvatar.name,
+            description: selectedAvatar.description,
+            representativeImageUrl: (selectedAvatar.images.find((item) => item.representative) ?? selectedAvatar.images[0])?.storageUrl ?? null,
+          },
+        } : null,
+      };
       await gateway.updateGeneration(brandId, generation.id, {
         draft: generation.draft,
         referenceIds: selectedReferences.map((item) => item.referenceItemId),
-        orchestration: {
-          contractVersion: "content-orchestration.v1",
-          contentFamily: selectedProposal.proposal.contentFamily,
-          subject: subjectMode === "product_service" && selectedProductId
-            ? { mode: "product_service", productServiceId: selectedProductId }
-            : { mode: "brand_topic", topic, wikiItemIds: selectedWikiIds },
-          target: { id: null, snapshot: selectedProposal.proposal.target },
-          strategy: selectedProposal.proposal.messageStrategy,
-          outputFormat: selectedProposal.proposal.outputFormat,
-          channelTargets: selectedProposal.proposal.channelTargets,
-          brief: { instruction: brief },
-          references: selectedReferences,
-          avatar: selectedAvatar ? {
-            mode: "library",
-            id: selectedAvatar.id,
-            snapshot: {
-              name: selectedAvatar.name,
-              description: selectedAvatar.description,
-              representativeImageUrl: (selectedAvatar.images.find((item) => item.representative) ?? selectedAvatar.images[0])?.storageUrl ?? null,
-            },
-          } : null,
-        },
+        orchestration,
       });
-      await gateway.startGeneration(brandId, generation.id, { idempotencyKey: selectionKey.current, outputCount: 1 });
+      await gateway.startGeneration(brandId, generation.id, {
+        idempotencyKey: selectionKey.current,
+        outputCount: 1,
+        orchestration,
+      });
       setMachine((current) => transitionContentWizard(current, { type: "start_generation" }));
       navigate(`/ai-content/${generation.id}`);
-    } catch {
-      setError("선택한 구현안으로 생성을 시작하지 못했습니다. 다시 시도해 주세요.");
+    } catch (caught) {
+      setError(validationMessage(caught) ?? "선택한 구현안으로 생성을 시작하지 못했습니다. 다시 시도해 주세요.");
       setSubmitting(false);
     }
   }
