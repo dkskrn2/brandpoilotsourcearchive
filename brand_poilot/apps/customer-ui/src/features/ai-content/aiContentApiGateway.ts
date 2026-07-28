@@ -17,6 +17,9 @@ import type {
   SubjectAppeal,
   SubjectTarget,
   SubjectType,
+  ContentProposalBatch,
+  ContentProposalRecord,
+  AiContentDraftReference,
 } from "./types";
 import { DEFAULT_BRAND_COLOR } from "./useAiContentDraft";
 
@@ -353,6 +356,43 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
     },
     async selectSubjectImage(brandId, analysisId, imageId) {
       return mapSubjectAnalysis(await client.requestJson<ApiSubjectAnalysis>(`/brands/${brandId}/ai-content/subject-analyses/${analysisId}/selection`, { method: "PATCH", body: JSON.stringify({ imageId }) }));
+    },
+    createProposalBatch(brandId, input) {
+      return client.requestJson(`/brands/${brandId}/ai-content/proposal-batches`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+    },
+    getProposalBatch(brandId, batchId, signal) {
+      return client.requestJson<ContentProposalBatch>(
+        `/brands/${brandId}/ai-content/proposal-batches/${batchId}`,
+        { method: "GET", ...(signal ? { signal } : {}) },
+      );
+    },
+    listSuggestedProposals(brandId, signal) {
+      return client.requestJson<ContentProposalRecord[]>(
+        `/brands/${brandId}/ai-content/proposals?status=suggested`,
+        { method: "GET", ...(signal ? { signal } : {}) },
+      );
+    },
+    async selectProposal(brandId, proposalId, idempotencyKey) {
+      return mapGeneration(await client.requestJson<ApiGeneration>(
+        `/brands/${brandId}/ai-content/proposals/${proposalId}/select`,
+        { method: "POST", body: JSON.stringify({ idempotencyKey }) },
+      ));
+    },
+    dismissProposal(brandId, proposalId) {
+      return client.requestJson<ContentProposalRecord>(
+        `/brands/${brandId}/ai-content/proposals/${proposalId}/dismiss`,
+        { method: "POST" },
+      );
+    },
+    listDraftReferences(brandId, assetType, assetId, signal) {
+      const query = new URLSearchParams({ assetType, assetId }).toString();
+      return client.requestJson<AiContentDraftReference[]>(
+        `/brands/${brandId}/ai-content/draft-references?${query}`,
+        { method: "GET", ...(signal ? { signal } : {}) },
+      );
     },
   };
 }

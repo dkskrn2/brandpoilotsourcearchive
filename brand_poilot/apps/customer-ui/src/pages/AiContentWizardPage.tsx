@@ -10,6 +10,7 @@ import { useAiContentDraft } from "../features/ai-content/useAiContentDraft";
 import { DEMO_BRAND_ID } from "../lib/apiClient";
 import { useAiContentUsage } from "../features/ai-content/AiContentUsageContext";
 import { attachmentLifecycleGuidance } from "../features/ai-content/attachmentErrors";
+import { ContentProposalFlow } from "../components/ai-content/ContentProposalFlow";
 
 function serializableAttachments(attachments: GenerationAttachment[]) {
   return attachments.flatMap((attachment) => {
@@ -51,6 +52,10 @@ export function AiContentWizardPage({ gateway = aiContentApiGateway, brandId = D
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const { refresh: refreshUsage } = useAiContentUsage();
+  const proposalBatchId = params.get("proposalBatch");
+  if (!initialType || proposalBatchId) {
+    return <ContentProposalFlow brandId={brandId} gateway={gateway} initialBatchId={proposalBatchId} />;
+  }
   const valid = state.step === 1 ? Boolean(state.draft.type) : state.step === 3 ? Boolean(state.draft.selectedTarget && state.draft.selectedAppeal) : state.step === 5 ? Boolean(state.draft.brief?.purpose) && !hasUnresolvedAttachments(state.draft) : true;
   const actions = {
     setType: state.setType,

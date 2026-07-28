@@ -440,7 +440,37 @@ export function createMockAiContentGateway(): AiContentGateway {
       analysis.selectedImageId = imageId;
       subjectRows.set(`${brandId}:${analysis.subjectType}:${analysis.sourceUrl}`, analysis);
       return copy(analysis);
-    }
+    },
+    async createProposalBatch() {
+      return { batchId: "batch-demo", status: "queued" };
+    },
+    async getProposalBatch(_brandId, batchId) {
+      return {
+        id: batchId, workspaceId: "workspace-demo", brandId: "brand-demo", origin: "manual",
+        contentFamily: "informational", request: {}, sourceSnapshots: [], status: "ready",
+        proposals: [], errorCode: null, errorMessage: null,
+        createdAt: "2026-07-28T00:00:00.000Z", updatedAt: "2026-07-28T00:00:00.000Z",
+      };
+    },
+    async listSuggestedProposals() {
+      return [];
+    },
+    async selectProposal() {
+      return copy(jobs[0]!);
+    },
+    async dismissProposal(_brandId, proposalId) {
+      return {
+        id: proposalId, batchId: "batch-demo", proposal: {
+          contractVersion: "content-proposal.v1", title: "", reasonToCreateNow: "",
+          contentFamily: "informational", topic: "", target: {}, messageStrategy: "how_to",
+          hook: "", keyMessage: "", evidence: [], outline: [], outputFormat: "blog",
+          channelTargets: ["blog_export"], recommendedReferenceQuery: { strategies: [], formats: [], tags: [] },
+        }, status: "dismissed", generationId: null, createdAt: "2026-07-28T00:00:00.000Z",
+      };
+    },
+    async listDraftReferences() {
+      return [];
+    },
   };
 }
 

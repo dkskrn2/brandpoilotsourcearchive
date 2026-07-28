@@ -59,6 +59,81 @@ function localAttachment(): GenerationAttachment {
 }
 
 describe("createAiContentApiGateway", () => {
+  it("calls the proposal batch, inbox, selection, dismissal, and draft-reference contracts", async () => {
+    const batch = {
+      id: "batch-1",
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      origin: "manual",
+      contentFamily: "informational",
+      request: {},
+      sourceSnapshots: [],
+      status: "ready",
+      proposals: [],
+      errorCode: null,
+      errorMessage: null,
+      createdAt: "2026-07-28T00:00:00.000Z",
+      updatedAt: "2026-07-28T00:00:00.000Z",
+    };
+    const proposal = {
+      id: "proposal-1",
+      batchId: "batch-1",
+      proposal: {
+        contractVersion: "content-proposal.v1",
+        title: "여름 관리",
+        reasonToCreateNow: "지금 필요한 정보",
+        contentFamily: "informational",
+        topic: "여름 관리",
+        target: {},
+        messageStrategy: "how_to",
+        hook: "더운 날에도 편안하게",
+        keyMessage: "세 단계로 관리하세요",
+        evidence: [],
+        outline: [],
+        outputFormat: "blog",
+        channelTargets: ["blog_export"],
+        recommendedReferenceQuery: { strategies: ["how_to"], formats: ["blog"], tags: ["여름"] },
+      },
+      status: "suggested",
+      generationId: null,
+      createdAt: "2026-07-28T00:00:00.000Z",
+    };
+    const requestJson = vi.fn()
+      .mockResolvedValueOnce({ batchId: "batch-1", status: "queued" })
+      .mockResolvedValueOnce(batch)
+      .mockResolvedValueOnce([proposal])
+      .mockResolvedValueOnce(generation("analyzing"))
+      .mockResolvedValueOnce(proposal)
+      .mockResolvedValueOnce([{ assetType: "reference", assetId: "ref-1", generationId: "generation-1", title: "초안" }]);
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+    const request = {
+      contractVersion: "content-proposal-request.v1" as const,
+      contentFamily: "informational" as const,
+      subjectInput: { topic: "여름 관리" },
+      channelTargets: ["blog_export"],
+      outputFormats: ["blog" as const],
+      sourceSnapshotIds: [],
+      performanceSnapshotIds: [],
+    };
+
+    await expect(gateway.createProposalBatch("brand-1", { idempotencyKey: "batch-key", request }))
+      .resolves.toEqual({ batchId: "batch-1", status: "queued" });
+    await gateway.getProposalBatch("brand-1", "batch-1");
+    await gateway.listSuggestedProposals("brand-1");
+    await gateway.selectProposal("brand-1", "proposal-1", "select-key");
+    await gateway.dismissProposal("brand-1", "proposal-1");
+    await gateway.listDraftReferences("brand-1", "reference", "ref-1");
+
+    expect(requestJson.mock.calls).toEqual([
+      ["/brands/brand-1/ai-content/proposal-batches", { method: "POST", body: JSON.stringify({ idempotencyKey: "batch-key", request }) }],
+      ["/brands/brand-1/ai-content/proposal-batches/batch-1", { method: "GET" }],
+      ["/brands/brand-1/ai-content/proposals?status=suggested", { method: "GET" }],
+      ["/brands/brand-1/ai-content/proposals/proposal-1/select", { method: "POST", body: JSON.stringify({ idempotencyKey: "select-key" }) }],
+      ["/brands/brand-1/ai-content/proposals/proposal-1/dismiss", { method: "POST" }],
+      ["/brands/brand-1/ai-content/draft-references?assetType=reference&assetId=ref-1", { method: "GET" }],
+    ]);
+  });
+
   it("keeps the subject analysis input identical to the v2 customer contract", () => {
     expectTypeOf<SubjectAnalysisInput>().toEqualTypeOf<{
       generationId: string;

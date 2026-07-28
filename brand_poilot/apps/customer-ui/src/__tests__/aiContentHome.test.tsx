@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AiContentHomePage } from "../pages/AiContentHomePage";
@@ -54,6 +54,46 @@ describe("AI content mock gateway", () => {
 });
 
 describe("AiContentHomePage", () => {
+  it("keeps existing generation history available when only the proposal inbox request fails", async () => {
+    const gateway = createMockAiContentGateway();
+    vi.spyOn(gateway, "listSuggestedProposals").mockRejectedValue(new Error("proposal_inbox_unavailable"));
+
+    render(<MemoryRouter><AiContentHomePage gateway={gateway} brandId="brand-demo" /></MemoryRouter>);
+
+    expect(await screen.findByRole("region", { name: "AI 콘텐츠 작업" })).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows scheduled AI proposals and dismisses one only after confirmation", async () => {
+    const gateway = createMockAiContentGateway();
+    vi.spyOn(gateway, "listSuggestedProposals").mockResolvedValue([{
+      id: "proposal-1",
+      batchId: "11111111-1111-4111-8111-111111111111",
+      proposal: {
+        contractVersion: "content-proposal.v1", title: "지금 검토할 여름 가이드",
+        reasonToCreateNow: "새 crawl 근거가 준비됐습니다.", contentFamily: "informational",
+        topic: "여름 관리", target: {}, messageStrategy: "how_to", hook: "세 단계로 끝내세요",
+        keyMessage: "단순한 관리", evidence: [{ sourceSnapshotId: "snapshot-1", summary: "7월 브랜드 가이드" }],
+        outline: [], outputFormat: "blog", channelTargets: ["blog_export"],
+        recommendedReferenceQuery: { strategies: ["how_to"], formats: ["blog"], tags: ["여름"] },
+      },
+      status: "suggested", generationId: null, createdAt: "2026-07-28T00:00:00.000Z",
+    }]);
+    const dismiss = vi.spyOn(gateway, "dismissProposal");
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<MemoryRouter><AiContentHomePage gateway={gateway} brandId="brand-demo" /></MemoryRouter>);
+
+    expect(await screen.findByRole("heading", { name: "검토할 AI 제안" })).toBeVisible();
+    expect(screen.getByRole("link", { name: /지금 검토할 여름 가이드/ })).toHaveAttribute(
+      "href",
+      "/ai-content/new?proposalBatch=11111111-1111-4111-8111-111111111111",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "제안 닫기: 지금 검토할 여름 가이드" }));
+    await waitFor(() => expect(dismiss).toHaveBeenCalledWith("brand-demo", "proposal-1"));
+    expect(screen.queryByText("지금 검토할 여름 가이드")).not.toBeInTheDocument();
+  });
+
   it("shows the primary content action and recent jobs as cards without the performance section", async () => {
     render(
       <MemoryRouter>

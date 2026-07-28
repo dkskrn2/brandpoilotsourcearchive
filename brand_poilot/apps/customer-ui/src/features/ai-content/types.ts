@@ -2,6 +2,14 @@ import type { ChannelConnection, ChannelType, DeliveryFormat, PublishArtifact } 
 
 export type AiContentType = "card_news" | "blog" | "marketing";
 export type AiContentWizardStep = 1 | 2 | 3 | 4 | 5;
+export type ContentCreationPhase = "setup" | "proposal_selection" | "generating" | "reviewing";
+export type ContentSetupSection = "intent" | "sources" | "delivery";
+export type ContentFamily = "informational" | "marketing";
+export type ContentOutputFormat = "card_news" | "blog" | "single_image" | "channel_text";
+export type ContentChannelTarget = "instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok" | "blog_export";
+export type ContentMessageStrategy =
+  | "problem_solution" | "how_to" | "comparison" | "faq" | "insight"
+  | "benefit" | "social_proof" | "brand_story" | "cta";
 export type AiGenerationStatus = "draft" | "analyzing" | "analysis_ready" | "queued" | "planning" | "generating" | "completed" | "partial_failed" | "failed";
 export type AiOutputStatus = "queued" | "planning" | "generating" | "completed" | "failed";
 export type SubjectType = "product" | "service";
@@ -124,6 +132,92 @@ export interface AiContentReference {
   subcategory: string | null;
   appealIds: string[];
   comparableMetric: { label: string; value: number } | null;
+}
+
+export interface ContentProposal {
+  contractVersion: "content-proposal.v1";
+  title: string;
+  reasonToCreateNow: string;
+  contentFamily: ContentFamily;
+  topic: string;
+  target: Record<string, unknown>;
+  messageStrategy: ContentMessageStrategy;
+  hook: string;
+  keyMessage: string;
+  evidence: Array<{ sourceSnapshotId: string; summary: string }>;
+  outline: Array<{ heading: string; purpose: string }>;
+  outputFormat: ContentOutputFormat;
+  channelTargets: ContentChannelTarget[];
+  recommendedReferenceQuery: {
+    strategies: ContentMessageStrategy[];
+    formats: ContentOutputFormat[];
+    tags: string[];
+  };
+}
+
+export interface ContentProposalRequest {
+  contractVersion: "content-proposal-request.v1";
+  contentFamily: ContentFamily;
+  subjectInput: Record<string, unknown>;
+  channelTargets: string[];
+  outputFormats: ContentOutputFormat[];
+  sourceSnapshotIds: string[];
+  performanceSnapshotIds: string[];
+}
+
+export interface ContentOrchestration {
+  contractVersion: "content-orchestration.v1";
+  contentFamily: ContentFamily;
+  subject:
+    | { mode: "brand_topic"; topic: string; wikiItemIds: string[] }
+    | { mode: "product_service"; productServiceId: string }
+    | { mode: "new_subject"; subjectAnalysisId: string };
+  target: { id: string | null; snapshot: Record<string, unknown> };
+  strategy: ContentMessageStrategy;
+  outputFormat: ContentOutputFormat;
+  channelTargets: ContentChannelTarget[];
+  brief: Record<string, unknown>;
+  references: Array<{
+    referenceItemId: string;
+    roles: Array<"planning" | "copy_pattern" | "visual_composition">;
+  }>;
+  avatar: null | {
+    mode: "library" | "one_time";
+    id: string;
+    snapshot: Record<string, unknown>;
+  };
+}
+
+export interface ContentProposalRecord {
+  id: string;
+  batchId: string;
+  proposal: ContentProposal;
+  status: "suggested" | "selected" | "dismissed";
+  generationId: string | null;
+  createdAt: string;
+}
+
+export interface ContentProposalBatch {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  origin: "manual" | "scheduled_crawl";
+  contentFamily: ContentFamily;
+  request: Record<string, unknown>;
+  sourceSnapshots: Record<string, unknown>[];
+  status: "queued" | "building" | "ready" | "failed";
+  proposals?: ContentProposalRecord[];
+  errorCode: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AiContentDraftReference {
+  assetType: "reference" | "avatar" | "product_service" | "wiki";
+  assetId: string;
+  generationId: string;
+  title: string;
 }
 
 export interface GenerationAttachment {
@@ -258,7 +352,7 @@ export interface AiContentGateway {
   listGenerations(brandId: string): Promise<AiContentGeneration[]>;
   getGeneration(brandId: string, generationId: string): Promise<AiContentGeneration>;
   createAnalysis(brandId: string, input: { type: AiContentType; title: string; draft: AiContentDraft; idempotencyKey: string }): Promise<AiContentGeneration>;
-  updateGeneration(brandId: string, generationId: string, input: { draft: AiContentDraft; referenceIds: string[] }): Promise<AiContentGeneration>;
+  updateGeneration(brandId: string, generationId: string, input: { draft: AiContentDraft; referenceIds: string[]; orchestration?: ContentOrchestration }): Promise<AiContentGeneration>;
   startGeneration(brandId: string, generationId: string, input: { idempotencyKey: string; outputCount: 1 | 2 | 3 }): Promise<AiContentGeneration>;
   uploadAttachment(brandId: string, generationId: string, attachment: GenerationAttachment, onProgress?: (percentage: number) => void): Promise<GenerationAttachment>;
   removeAttachment(brandId: string, generationId: string, attachmentId: string): Promise<void>;
@@ -281,4 +375,13 @@ export interface AiContentGateway {
   regenerateSubjectAppeals(brandId: string, analysisId: string, idempotencyKey: string): Promise<SubjectAnalysis>;
   reanalyzeSubject(brandId: string, analysisId: string, idempotencyKey: string): Promise<SubjectAnalysis>;
   selectSubjectImage(brandId: string, analysisId: string, imageId: string): Promise<SubjectAnalysis>;
+  createProposalBatch(brandId: string, input: {
+    idempotencyKey: string;
+    request: ContentProposalRequest;
+  }): Promise<{ batchId: string; status: ContentProposalBatch["status"] }>;
+  getProposalBatch(brandId: string, batchId: string, signal?: AbortSignal): Promise<ContentProposalBatch>;
+  listSuggestedProposals(brandId: string, signal?: AbortSignal): Promise<ContentProposalRecord[]>;
+  selectProposal(brandId: string, proposalId: string, idempotencyKey: string): Promise<AiContentGeneration>;
+  dismissProposal(brandId: string, proposalId: string): Promise<ContentProposalRecord>;
+  listDraftReferences(brandId: string, assetType: AiContentDraftReference["assetType"], assetId: string, signal?: AbortSignal): Promise<AiContentDraftReference[]>;
 }

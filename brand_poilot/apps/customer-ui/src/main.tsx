@@ -9,6 +9,7 @@ import "./styles/shell.css";
 import "./styles/dashboard.css";
 import "./styles/brand-center.css";
 import "./styles/references.css";
+import "./styles/content-wizard.css";
 
 const canonicalUrl = canonicalLocalDevUrl(window.location);
 
