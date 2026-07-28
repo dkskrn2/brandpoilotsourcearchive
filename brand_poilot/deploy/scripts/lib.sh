@@ -53,6 +53,40 @@ require_matching_env_secret() {
   [[ "$left_digest" == "$right_digest" ]] || fail "shared_secret_mismatch"
 }
 
+require_distinct_env_secrets() {
+  local file="$1"
+  local first_key="$2"
+  local second_key="$3"
+  local first_count
+  local second_count
+  local first_digest
+  local second_digest
+
+  [[ "$first_key" =~ ^[A-Z][A-Z0-9_]*$ &&
+    "$second_key" =~ ^[A-Z][A-Z0-9_]*$ ]] ||
+    fail "shared_secret_key_invalid"
+  first_count="$(grep -Ec "^${first_key}=.+$" "$file" || true)"
+  second_count="$(grep -Ec "^${second_key}=.+$" "$file" || true)"
+  if [[ "$first_count" != "1" || "$second_count" != "1" ]] ||
+    grep -Eq "^(${first_key}|${second_key})=required-at-deploy-time$" "$file"; then
+    fail "shared_secret_missing"
+  fi
+
+  first_digest="$(
+    grep -E "^${first_key}=.+$" "$file" |
+      sed 's/^[^=]*=//' |
+      sha256sum |
+      awk '{print $1}'
+  )"
+  second_digest="$(
+    grep -E "^${second_key}=.+$" "$file" |
+      sed 's/^[^=]*=//' |
+      sha256sum |
+      awk '{print $1}'
+  )"
+  [[ "$first_digest" != "$second_digest" ]] || fail "shared_secret_reuse"
+}
+
 require_digest_image() {
   local value="$1"
   [[ "$value" =~ ^[a-zA-Z0-9._-]+(:[0-9]+)?(/[a-zA-Z0-9._-]+)+@sha256:[a-f0-9]{64}$ ]] ||

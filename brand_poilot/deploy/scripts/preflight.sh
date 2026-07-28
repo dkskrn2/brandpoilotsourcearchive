@@ -33,6 +33,7 @@ require_command docker
 require_command dpkg
 require_command grep
 require_command sha256sum
+require_command sed
 require_command ss
 require_command stat
 require_command timedatectl
@@ -134,6 +135,11 @@ require_matching_env_secret \
   "$API_ENV_FILE" \
   "$CONTENT_PROPOSAL_WORKER_1_ENV_FILE"
 status_ok "content_proposal_worker_api_token"
+require_distinct_env_secrets \
+  "$API_ENV_FILE" \
+  "WORKER_API_TOKEN" \
+  "CONTENT_PROPOSAL_WORKER_API_TOKEN"
+status_ok "content_proposal_worker_api_token_is_dedicated"
 
 # The initial Ubuntu API/Caddy rollout is intentionally dark. Worker activation is
 # a later, operator-controlled profile action after the remote lease has expired.

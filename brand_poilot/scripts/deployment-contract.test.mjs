@@ -911,6 +911,45 @@ test("preflight rejects missing or mismatched content proposal worker tokens wit
   }
 });
 
+test("preflight rejects reuse of the general worker token for content proposals without leaking it", () => {
+  const bash = findBash();
+  assert.ok(bash, "Bash is required for the shared secret contract");
+  const fixture = mkdtempSync(join(tmpdir(), "brand-pilot-distinct-secret-"));
+  const apiEnv = join(fixture, "api.env");
+  const reusedSecret = "must-not-appear-reused-worker-secret";
+  try {
+    writeFileSync(
+      apiEnv,
+      [
+        `WORKER_API_TOKEN=${reusedSecret}`,
+        `CONTENT_PROPOSAL_WORKER_API_TOKEN=${reusedSecret}`,
+        "",
+      ].join("\n"),
+    );
+    const result = spawnSync(bash, [
+      "-c",
+      'source "$1"; require_distinct_env_secrets "$2" WORKER_API_TOKEN CONTENT_PROPOSAL_WORKER_API_TOKEN',
+      "_",
+      bashPath("deploy/scripts/lib.sh"),
+      bashPath(apiEnv),
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /shared_secret_reuse/);
+    assert.doesNotMatch(result.stderr, new RegExp(reusedSecret));
+
+    const preflight = read("deploy/scripts/preflight.sh");
+    assert.match(
+      preflight,
+      /require_distinct_env_secrets[\s\\]+"\$API_ENV_FILE"[\s\\]+"WORKER_API_TOKEN"[\s\\]+"CONTENT_PROPOSAL_WORKER_API_TOKEN"/,
+    );
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test("Task 8 release replacement cannot mutate shared env files", () => {
   const replacementScripts = [
     "deploy/scripts/deploy.sh",
