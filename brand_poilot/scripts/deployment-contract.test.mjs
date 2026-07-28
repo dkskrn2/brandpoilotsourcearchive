@@ -1482,6 +1482,25 @@ esac
 `;
 }
 
+function bashFixtureCommand() {
+  return `export PATH="$1:/usr/bin:/bin"
+stat() {
+  if [[ "$*" == *"%U"* ]]; then
+    printf 'bpdeploy\\n'
+    return 0
+  fi
+  path="\${@: -1}"
+  case "$path" in
+    */scripts/*.sh) printf '755\\n' ;;
+    */compose.production.yml|*/Caddyfile|*/Caddyfile.canary) printf '644\\n' ;;
+    *) printf '600\\n' ;;
+  esac
+}
+export -f stat
+shift
+exec bash "$@"`;
+}
+
 function runDeployFixture({
   overrides = {},
   extraLines = [],
@@ -1550,7 +1569,7 @@ function runDeployFixture({
 
   const result = spawnSync(bash, [
     "-c",
-    'export PATH="$1:/usr/bin:/bin"; shift; exec bash "$@"',
+    bashFixtureCommand(),
     "_",
     bashPath(mocks),
     bashPath("deploy/scripts/deploy.sh"),
@@ -1630,7 +1649,7 @@ exec /usr/bin/mv "$@"
   );
   const result = spawnSync(bash, [
     "-c",
-    'export PATH="$1:/usr/bin:/bin"; shift; exec bash "$@"',
+    bashFixtureCommand(),
     "_",
     bashPath(mocks),
     bashPath("deploy/scripts/rollback.sh"),
@@ -1744,7 +1763,7 @@ exit 22
 `);
   const run = (...args) => spawnSync(bash, [
     "-c",
-    'export PATH="$1:/usr/bin:/bin"; shift; exec bash "$@"',
+    bashFixtureCommand(),
     "_",
     bashPath(mocks),
     bashPath("deploy/scripts/promote.sh"),
@@ -2161,7 +2180,7 @@ test("later promotion prepare preloads and validates without replacing runtime o
     );
     assert.deepEqual(
       readdirSync(join(fixture.root, "state")).sort(),
-      ["candidate", "current", "deploy.lock", "prepared"],
+      ["candidate", "current", "deploy.lock", "prepared", "promotion-backup.env"],
     );
   } finally {
     rmSync(fixture.fixture, { recursive: true, force: true });
@@ -2186,7 +2205,7 @@ test("first promotion prepare preloads both images and prewarms only primary", (
     );
     assert.deepEqual(
       readdirSync(join(fixture.root, "state")).sort(),
-      ["candidate", "deploy.lock", "prepared"],
+      ["candidate", "deploy.lock", "prepared", "promotion-backup.env"],
     );
   } finally {
     rmSync(fixture.fixture, { recursive: true, force: true });
@@ -3011,7 +3030,7 @@ test("interrupted transition recovery clears rather than rebinds a stale prepare
 
     const commit = fixture.run("--commit", "--dns-cutover-confirmed");
     assert.notEqual(commit.status, 0);
-    assert.match(commit.stderr, /promotion_not_prepared/);
+    assert.match(commit.stderr, /promotion_backup_candidate_mismatch/);
     assert.equal(existsSync(join(fixture.root, "state", "prepared")), false);
   } finally {
     rmSync(fixture.fixture, { recursive: true, force: true });
