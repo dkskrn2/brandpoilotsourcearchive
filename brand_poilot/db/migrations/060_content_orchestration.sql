@@ -446,6 +446,44 @@ create trigger ai_content_wiki_version_snapshots_immutable
 before update or delete on ai_content_wiki_version_snapshots
 for each row execute function reject_ai_content_wiki_version_snapshot_mutation();
 
+create table if not exists ai_content_one_time_avatar_receipts (
+  id uuid primary key,
+  upload_session_id uuid not null unique,
+  generation_id uuid not null,
+  workspace_id uuid not null references workspaces(id) on delete restrict,
+  brand_id uuid not null,
+  created_by_user_id uuid not null,
+  object_hash text not null check (object_hash ~ '^[0-9a-f]{64}$'),
+  mime_type text not null check (mime_type in ('image/png', 'image/jpeg', 'image/webp')),
+  storage_url text not null check (length(trim(storage_url)) > 0),
+  storage_path text not null check (length(trim(storage_path)) > 0),
+  confirmed_at timestamptz not null,
+  created_at timestamptz not null default now(),
+  constraint ai_content_one_time_avatar_receipts_generation_fk
+    foreign key (generation_id, workspace_id, brand_id)
+    references ai_content_generations(id, workspace_id, brand_id) on delete restrict,
+  constraint ai_content_one_time_avatar_receipts_actor_membership_fk
+    foreign key (workspace_id, created_by_user_id)
+    references workspace_members(workspace_id, user_id) on delete restrict,
+  constraint ai_content_one_time_avatar_receipts_tenant_identity_unique
+    unique (id, workspace_id, brand_id)
+);
+
+create or replace function reject_ai_content_one_time_avatar_receipt_mutation()
+returns trigger
+language plpgsql
+as $$
+begin
+  raise exception using errcode = '55000', message = 'one_time_avatar_receipt_immutable';
+end;
+$$;
+
+drop trigger if exists ai_content_one_time_avatar_receipts_immutable
+  on ai_content_one_time_avatar_receipts;
+create trigger ai_content_one_time_avatar_receipts_immutable
+before update or delete on ai_content_one_time_avatar_receipts
+for each row execute function reject_ai_content_one_time_avatar_receipt_mutation();
+
 alter table ai_content_generation_references
   add column if not exists reference_item_id uuid,
   add column if not exists reference_snapshot_id uuid,
@@ -1078,29 +1116,39 @@ begin
     raise exception using errcode = '23514', message = 'brand_versions_not_active_approved';
   end if;
 
-  select batch.id, batch.status, batch.content_family
-  into selected_batch_id, selected_batch_status, selected_batch_family
+  select proposal.batch_id
+  into selected_batch_id
   from ai_content_proposals proposal
-  join ai_content_proposal_batches batch
-    on batch.id = proposal.batch_id
-   and batch.workspace_id = proposal.workspace_id
-   and batch.brand_id = proposal.brand_id
   where proposal.id = (frozen_orchestration_snapshot->>'proposalId')::uuid
     and proposal.workspace_id = target_workspace_id
     and proposal.brand_id = target_brand_id
-    and proposal.status = 'selected'
-  for update of proposal, batch;
+    and proposal.status = 'selected';
   if not found then
     raise exception using errcode = '23514', message = 'proposal_not_selected';
   end if;
+
+  select batch.status, batch.content_family
+  into selected_batch_status, selected_batch_family
+  from ai_content_proposal_batches batch
+  where batch.id = selected_batch_id
+    and batch.workspace_id = target_workspace_id
+    and batch.brand_id = target_brand_id
+  for update;
+  if not found or selected_batch_status <> 'ready' then
+    raise exception using errcode = '23514', message = 'proposal_batch_not_ready';
+  end if;
+
   select proposal.*
   into selected_proposal
   from ai_content_proposals proposal
   where proposal.id = (frozen_orchestration_snapshot->>'proposalId')::uuid
     and proposal.workspace_id = target_workspace_id
-    and proposal.brand_id = target_brand_id;
-  if selected_batch_status <> 'ready' then
-    raise exception using errcode = '23514', message = 'proposal_batch_not_ready';
+    and proposal.brand_id = target_brand_id
+    and proposal.batch_id = selected_batch_id
+    and proposal.status = 'selected'
+  for update;
+  if not found then
+    raise exception using errcode = '23514', message = 'proposal_not_selected';
   end if;
   if selected_batch_family is distinct from target_generation.content_family then
     raise exception using errcode = '23514', message = 'proposal_generation_family_mismatch';
@@ -1209,31 +1257,16 @@ begin
     if frozen_avatar_snapshot->>'provenance' = 'one_time' then
       if not exists (
         select 1
-        from ai_content_attachment_upload_sessions upload
-        join ai_content_generation_attachments attachment
-          on attachment.id = upload.confirmed_attachment_id
-         and attachment.upload_session_id = upload.id
-         and attachment.workspace_id = upload.workspace_id
-         and attachment.brand_id = upload.brand_id
-         and attachment.generation_id = upload.generation_id
-        where upload.id = snapshot_avatar_id
-          and upload.confirmed_attachment_id = snapshot_avatar_image_id
-          and upload.generation_id = target_generation_id
-          and upload.workspace_id = target_workspace_id
-          and upload.brand_id = target_brand_id
-          and upload.created_by_user_id = actor_user_id
-          and upload.status = 'confirmed'
-          and upload.confirmed_at is not null
-          and upload.role = 'person'
-          and attachment.role = 'person'
-          and upload.expected_checksum = frozen_avatar_snapshot->>'objectHash'
-          and attachment.checksum = upload.expected_checksum
-          and upload.expected_mime_type = frozen_avatar_snapshot->>'mime'
-          and attachment.mime_type = upload.expected_mime_type
-          and attachment.storage_url = upload.storage_url
-          and attachment.storage_path = upload.storage_path
-          and attachment.deleted_at is null
-          and attachment.physical_delete_status <> 'deleted'
+        from ai_content_one_time_avatar_receipts receipt
+        where receipt.upload_session_id = snapshot_avatar_id
+          and receipt.id = snapshot_avatar_image_id
+          and receipt.generation_id = target_generation_id
+          and receipt.workspace_id = target_workspace_id
+          and receipt.brand_id = target_brand_id
+          and receipt.created_by_user_id = actor_user_id
+          and receipt.confirmed_at is not null
+          and receipt.object_hash = frozen_avatar_snapshot->>'objectHash'
+          and receipt.mime_type = frozen_avatar_snapshot->>'mime'
       ) then
         raise exception using errcode = '23514', message = 'one_time_avatar_receipt_invalid';
       end if;

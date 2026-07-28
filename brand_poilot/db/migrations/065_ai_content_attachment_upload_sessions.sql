@@ -363,6 +363,110 @@ alter table ai_content_generation_attachments
     on delete no action
     deferrable initially deferred;
 
+create function seal_ai_content_one_time_avatar_receipt_from_upload()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.status <> 'confirmed'
+    or new.is_legacy_backfill
+    or new.created_by_user_id is null
+    or new.role <> 'person' then
+    return new;
+  end if;
+
+  insert into ai_content_one_time_avatar_receipts (
+    id,
+    upload_session_id,
+    generation_id,
+    workspace_id,
+    brand_id,
+    created_by_user_id,
+    object_hash,
+    mime_type,
+    storage_url,
+    storage_path,
+    confirmed_at
+  )
+  select
+    attachment.id,
+    new.id,
+    new.generation_id,
+    new.workspace_id,
+    new.brand_id,
+    new.created_by_user_id,
+    attachment.checksum,
+    attachment.mime_type,
+    attachment.storage_url,
+    attachment.storage_path,
+    new.confirmed_at
+  from ai_content_generation_attachments attachment
+  where attachment.id = new.confirmed_attachment_id
+    and attachment.upload_session_id = new.id
+    and attachment.generation_id = new.generation_id
+    and attachment.workspace_id = new.workspace_id
+    and attachment.brand_id = new.brand_id
+    and attachment.role = 'person'
+    and attachment.deleted_at is null
+    and attachment.checksum = new.expected_checksum
+    and attachment.mime_type = new.expected_mime_type
+    and attachment.storage_url = new.storage_url
+    and attachment.storage_path = new.storage_path
+  on conflict do nothing;
+
+  return new;
+end;
+$$;
+
+create trigger ai_content_upload_sessions_seal_one_time_avatar_receipt
+after insert or update on ai_content_attachment_upload_sessions
+for each row
+execute function seal_ai_content_one_time_avatar_receipt_from_upload();
+
+insert into ai_content_one_time_avatar_receipts (
+  id,
+  upload_session_id,
+  generation_id,
+  workspace_id,
+  brand_id,
+  created_by_user_id,
+  object_hash,
+  mime_type,
+  storage_url,
+  storage_path,
+  confirmed_at
+)
+select
+  attachment.id,
+  upload.id,
+  upload.generation_id,
+  upload.workspace_id,
+  upload.brand_id,
+  upload.created_by_user_id,
+  attachment.checksum,
+  attachment.mime_type,
+  attachment.storage_url,
+  attachment.storage_path,
+  upload.confirmed_at
+from ai_content_attachment_upload_sessions upload
+join ai_content_generation_attachments attachment
+  on attachment.id = upload.confirmed_attachment_id
+ and attachment.upload_session_id = upload.id
+ and attachment.generation_id = upload.generation_id
+ and attachment.workspace_id = upload.workspace_id
+ and attachment.brand_id = upload.brand_id
+where upload.status = 'confirmed'
+  and not upload.is_legacy_backfill
+  and upload.created_by_user_id is not null
+  and upload.role = 'person'
+  and attachment.role = 'person'
+  and attachment.deleted_at is null
+  and attachment.checksum = upload.expected_checksum
+  and attachment.mime_type = upload.expected_mime_type
+  and attachment.storage_url = upload.storage_url
+  and attachment.storage_path = upload.storage_path
+on conflict do nothing;
+
 create table ai_content_attachment_deletion_jobs (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null,

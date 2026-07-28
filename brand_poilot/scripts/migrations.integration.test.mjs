@@ -3694,6 +3694,307 @@ test("060 upgrades legacy generations idempotently without truncating oversized 
   });
 });
 
+test("060 independently validates sealed one-time avatar receipts and remains compatible through 065", async () => {
+  const migrations = await loadMigrations();
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "060_content_orchestration.sql",
+    );
+
+    const actorId = randomUUID();
+    const workspaceId = randomUUID();
+    const brandId = randomUUID();
+    const coreId = randomUUID();
+    const rulesId = randomUUID();
+    const batchId = randomUUID();
+    const proposalId = randomUUID();
+    const approvalId = randomUUID();
+    const generationId = randomUUID();
+    const otherGenerationId = randomUUID();
+    await database.query(
+      "insert into app_users (id,email) values ($1,$2)",
+      [actorId, `through-060-${randomUUID()}@example.com`],
+    );
+    await database.query(
+      "insert into workspaces (id,name,slug,created_by_user_id) values ($1,'Through 060',$2,$3)",
+      [workspaceId, `through-060-${randomUUID()}`, actorId],
+    );
+    await database.query(
+      `insert into workspace_members (workspace_id,user_id,role,status)
+       values ($1,$2,'owner','active')`,
+      [workspaceId, actorId],
+    );
+    await database.query(
+      "insert into brands (id,workspace_id,name,created_by_user_id) values ($1,$2,'Through 060 Brand',$3)",
+      [brandId, workspaceId, actorId],
+    );
+    await database.query(
+      "insert into brand_profiles (workspace_id,brand_id) values ($1,$2)",
+      [workspaceId, brandId],
+    );
+    await database.query(
+      `insert into brand_core_versions (
+         id,workspace_id,brand_id,version,status,core_json,created_by,approved_at
+       ) values ($1,$2,$3,1,'approved','{}','user','2026-07-28T00:00:00Z')`,
+      [coreId, workspaceId, brandId],
+    );
+    await database.query(
+      `insert into brand_rule_sets (
+         id,workspace_id,brand_id,version,status,rules_json,created_by,approved_at
+       ) values ($1,$2,$3,1,'approved','{}','user','2026-07-28T00:00:00Z')`,
+      [rulesId, workspaceId, brandId],
+    );
+    await database.query(
+      `update brand_profiles
+          set active_brand_core_id=$1,active_brand_rule_set_id=$2
+        where workspace_id=$3 and brand_id=$4`,
+      [coreId, rulesId, workspaceId, brandId],
+    );
+    await database.query(
+      `insert into ai_content_proposal_batches (
+         id,workspace_id,brand_id,origin,content_family,request_json,
+         source_snapshot_json,status,idempotency_key,created_by_user_id
+       ) values ($1,$2,$3,'manual','marketing','{}','[]','ready',$4,$5)`,
+      [batchId, workspaceId, brandId, `through-060-${randomUUID()}`, actorId],
+    );
+    await database.query(
+      `insert into ai_content_proposals (
+         id,workspace_id,brand_id,batch_id,position,proposal_json,status,
+         selected_by_user_id,selected_at
+       ) values ($1,$2,$3,$4,1,'{}','selected',$5,'2026-07-28T00:00:00Z')`,
+      [proposalId, workspaceId, brandId, batchId, actorId],
+    );
+    const approvalSnapshot = {
+      contractVersion: "approved-proposal.v1",
+      sourceProposalId: proposalId,
+      revision: 1,
+      effectiveProposal: { contractVersion: "content-proposal.v1" },
+      editPatch: [],
+      validationResultId: `through-060-${approvalId}`,
+      approvedBy: actorId,
+      approvedAt: "2026-07-28T00:00:00.000Z",
+    };
+    await database.query(
+      `insert into ai_content_approved_proposal_versions (
+         id,workspace_id,brand_id,proposal_id,revision,approved_proposal_snapshot,
+         validation_result_id,approved_by_user_id,approved_at
+       ) values ($1,$2,$3,$4,1,$5,$6,$7,$8)`,
+      [
+        approvalId,
+        workspaceId,
+        brandId,
+        proposalId,
+        JSON.stringify(approvalSnapshot),
+        approvalSnapshot.validationResultId,
+        actorId,
+        approvalSnapshot.approvedAt,
+      ],
+    );
+    await database.query(
+      `insert into ai_content_generations (
+         id,workspace_id,brand_id,type,title,analysis_idempotency_key,
+         content_family,output_format,subject_mode
+       ) values
+         ($1,$3,$4,'marketing','Through 060 target',$5,'marketing','single_image',
+          'brand_topic'),
+         ($2,$3,$4,'marketing','Through 060 other',$6,'marketing','single_image',
+          'brand_topic')`,
+      [
+        generationId,
+        otherGenerationId,
+        workspaceId,
+        brandId,
+        `through-060-target-${randomUUID()}`,
+        `through-060-other-${randomUUID()}`,
+      ],
+    );
+
+    const avatarSnapshot = (sessionId, receiptId) => ({
+      id: sessionId,
+      assetVersionId: receiptId,
+      objectHash: "d".repeat(64),
+      mime: "image/png",
+      provenance: "one_time",
+    });
+    const brief = (avatar) => ({
+      contractVersion: "generation-brief.v1",
+      proposalId,
+      approvedProposalVersionId: approvalId,
+      approvedProposalSnapshot: approvalSnapshot,
+      brandCoreVersionId: coreId,
+      ruleSetVersionId: rulesId,
+      subject: { kind: "brand_topic", topic: "Through 060", brandCoreEvidenceIds: [] },
+      wikiSnapshots: [],
+      references: [],
+      avatar,
+      outputFormat: "single_image",
+      channels: ["instagram"],
+      promptDefinitionVersions: { generation: "generation.v1" },
+    });
+    const pendingAvatar = avatarSnapshot(randomUUID(), randomUUID());
+    await assert.rejects(
+      database.query(
+        "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+        [
+          generationId,
+          workspaceId,
+          brandId,
+          JSON.stringify(brief(pendingAvatar)),
+          JSON.stringify(pendingAvatar),
+          actorId,
+        ],
+      ),
+      /one_time_avatar_receipt_invalid/,
+    );
+
+    const crossSessionId = randomUUID();
+    const crossReceiptId = randomUUID();
+    await database.query(
+      `insert into ai_content_one_time_avatar_receipts (
+         id,upload_session_id,generation_id,workspace_id,brand_id,created_by_user_id,
+         object_hash,mime_type,storage_url,storage_path,confirmed_at
+       ) values ($1,$2,$3,$4,$5,$6,$7,'image/png',$8,$9,'2026-07-28T00:00:00Z')`,
+      [
+        crossReceiptId,
+        crossSessionId,
+        otherGenerationId,
+        workspaceId,
+        brandId,
+        actorId,
+        "d".repeat(64),
+        `https://cdn.example.com/${crossReceiptId}.png`,
+        `one-time/${crossReceiptId}.png`,
+      ],
+    );
+    const crossAvatar = avatarSnapshot(crossSessionId, crossReceiptId);
+    await assert.rejects(
+      database.query(
+        "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+        [
+          generationId,
+          workspaceId,
+          brandId,
+          JSON.stringify(brief(crossAvatar)),
+          JSON.stringify(crossAvatar),
+          actorId,
+        ],
+      ),
+      /one_time_avatar_receipt_invalid/,
+    );
+
+    const sessionId = randomUUID();
+    const receiptId = randomUUID();
+    await database.query(
+      `insert into ai_content_one_time_avatar_receipts (
+         id,upload_session_id,generation_id,workspace_id,brand_id,created_by_user_id,
+         object_hash,mime_type,storage_url,storage_path,confirmed_at
+       ) values ($1,$2,$3,$4,$5,$6,$7,'image/png',$8,$9,'2026-07-28T00:00:00Z')`,
+      [
+        receiptId,
+        sessionId,
+        generationId,
+        workspaceId,
+        brandId,
+        actorId,
+        "d".repeat(64),
+        `https://cdn.example.com/${receiptId}.png`,
+        `one-time/${receiptId}.png`,
+      ],
+    );
+    const confirmedAvatar = avatarSnapshot(sessionId, receiptId);
+    const started = await database.query(
+      "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6) generation_id",
+      [
+        generationId,
+        workspaceId,
+        brandId,
+        JSON.stringify(brief(confirmedAvatar)),
+        JSON.stringify(confirmedAvatar),
+        actorId,
+      ],
+    );
+    assert.equal(started.rows[0].generation_id, generationId);
+
+    await runMigrationRange(
+      database,
+      migrations,
+      "061_avatar_image_checksum_uniqueness.sql",
+      "065_ai_content_attachment_upload_sessions.sql",
+    );
+    const retained = await database.query(
+      "select id,upload_session_id from ai_content_one_time_avatar_receipts where id=$1",
+      [receiptId],
+    );
+    assert.deepEqual(retained.rows, [{ id: receiptId, upload_session_id: sessionId }]);
+
+    const compatibleGenerationId = randomUUID();
+    const compatibleSessionId = randomUUID();
+    const compatibleAttachmentId = randomUUID();
+    await database.query(
+      `insert into ai_content_generations (
+         id,workspace_id,brand_id,type,title,analysis_idempotency_key,
+         content_family,output_format,subject_mode,generation_input_snapshot
+       ) values ($1,$2,$3,'marketing','065 mapping',$4,'marketing','single_image',
+         'brand_topic','{"contractVersion":"content-generation-input.v2","contentType":"marketing"}')`,
+      [compatibleGenerationId, workspaceId, brandId, `065-mapping-${randomUUID()}`],
+    );
+    await database.query(
+      `insert into ai_content_attachment_upload_sessions (
+         id,generation_id,workspace_id,brand_id,created_by_user_id,role,file_name,
+         expected_mime_type,expected_size_bytes,expected_checksum,storage_url,storage_path
+       ) values ($1,$2,$3,$4,$5,'person','avatar.png','image/png',1024,$6,$7,$8)`,
+      [
+        compatibleSessionId,
+        compatibleGenerationId,
+        workspaceId,
+        brandId,
+        actorId,
+        "e".repeat(64),
+        `https://cdn.example.com/${compatibleAttachmentId}.png`,
+        `one-time/${compatibleAttachmentId}.png`,
+      ],
+    );
+    await database.query(
+      `insert into ai_content_generation_attachments (
+         id,generation_id,workspace_id,brand_id,upload_session_id,role,file_name,
+         mime_type,size_bytes,checksum,storage_url,storage_path
+       ) values ($1,$2,$3,$4,$5,'person','avatar.png','image/png',1024,$6,$7,$8)`,
+      [
+        compatibleAttachmentId,
+        compatibleGenerationId,
+        workspaceId,
+        brandId,
+        compatibleSessionId,
+        "e".repeat(64),
+        `https://cdn.example.com/${compatibleAttachmentId}.png`,
+        `one-time/${compatibleAttachmentId}.png`,
+      ],
+    );
+    await database.query(
+      `update ai_content_attachment_upload_sessions
+          set status='confirmed',confirmed_at=now(),confirmed_attachment_id=$2
+        where id=$1`,
+      [compatibleSessionId, compatibleAttachmentId],
+    );
+    const mapped = await database.query(
+      `select id,upload_session_id,generation_id,created_by_user_id,object_hash,mime_type
+         from ai_content_one_time_avatar_receipts where id=$1`,
+      [compatibleAttachmentId],
+    );
+    assert.deepEqual(mapped.rows, [{
+      id: compatibleAttachmentId,
+      upload_session_id: compatibleSessionId,
+      generation_id: compatibleGenerationId,
+      created_by_user_id: actorId,
+      object_hash: "e".repeat(64),
+      mime_type: "image/png",
+    }]);
+  });
+});
+
 test("061 deterministically removes legacy duplicate avatar bytes and prevents new duplicates", async () => {
   const migrations = await loadMigrations();
   const migration061 = migrations.find(

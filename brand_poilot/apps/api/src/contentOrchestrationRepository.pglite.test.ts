@@ -1202,6 +1202,10 @@ describe("content orchestration PostgreSQL contract", () => {
       [ids.wiki],
     )).rejects.toThrow(/wiki_version_snapshot_immutable/);
     await expect(db.query(
+      "update ai_content_one_time_avatar_receipts set object_hash=$2 where id=$1",
+      [ids.oneTimeAvatarAsset, "9".repeat(64)],
+    )).rejects.toThrow(/one_time_avatar_receipt_immutable/);
+    await expect(db.query(
       "update ai_content_generation_briefs set approved_proposal_version_id=$2 where generation_id=$1",
       [ids.generation, ids.noAvatarApproved],
     )).rejects.toThrow(/generation_brief_immutable/);

@@ -1,7 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { Pool } from "pg";
+import { Pool, type QueryResult } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 const ids = {
@@ -292,6 +292,67 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       } finally {
         await gate.query("rollback").catch(() => undefined);
         gate.release();
+      }
+    }, 30_000);
+
+    it("orders start behind selection's batch lock without deadlocking on the proposal", async () => {
+      await pool.query("select select_ai_content_proposal($1,$2,$3,$4)", [
+        ids.firstProposal, ids.workspace, ids.brand, ids.actor,
+      ]);
+      await pool.query(
+        `insert into ai_content_approved_proposal_versions (
+           id,workspace_id,brand_id,proposal_id,revision,approved_proposal_snapshot,
+           validation_result_id,approved_by_user_id,approved_at
+         ) values ($1,$2,$3,$4,1,$5,$6,$7,$8)`,
+        [
+          ids.approvedProposal,
+          ids.workspace,
+          ids.brand,
+          ids.firstProposal,
+          JSON.stringify(approvalSnapshot),
+          approvalSnapshot.validationResultId,
+          ids.actor,
+          approvalSnapshot.approvedAt,
+        ],
+      );
+
+      const gate = await pool.connect();
+      let start: Promise<QueryResult> | undefined;
+      try {
+        await gate.query("begin");
+        await gate.query("set local statement_timeout = '5s'");
+        await gate.query(
+          "select id from ai_content_proposal_batches where id=$1 for update",
+          [ids.batch],
+        );
+        const blockerPid = Number((await gate.query("select pg_backend_pid() pid")).rows[0]?.pid);
+        const parameters = [
+          ids.generation,
+          ids.workspace,
+          ids.brand,
+          JSON.stringify(generationBrief),
+          JSON.stringify(null),
+          ids.actor,
+        ];
+        start = pool.query(
+          "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+          parameters,
+        );
+        expect(await waitForBlockedBackends(pool, blockerPid, 1)).toBe(true);
+
+        const selected = await gate.query(
+          "select select_ai_content_proposal($1,$2,$3,$4) selected_id",
+          [ids.firstProposal, ids.workspace, ids.brand, ids.actor],
+        );
+        expect(selected.rows[0]?.selected_id).toBe(ids.firstProposal);
+        await gate.query("commit");
+
+        const started = await start!;
+        expect(started.rows[0]?.start_ai_content_orchestration).toBe(ids.generation);
+      } finally {
+        await gate.query("rollback").catch(() => undefined);
+        gate.release();
+        if (start) await start.catch(() => undefined);
       }
     }, 30_000);
   },

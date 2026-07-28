@@ -491,8 +491,9 @@ test("058은 avatar와 typed-origin reference library 계약을 정의한다", a
 });
 
 test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계약을 정의한다", async () => {
-  const [migration, aiContentRepository, crawlerRepository] = await Promise.all([
+  const [migration, attachmentMigration, aiContentRepository, crawlerRepository] = await Promise.all([
     readFile("db/migrations/060_content_orchestration.sql", "utf8"),
+    readFile("db/migrations/065_ai_content_attachment_upload_sessions.sql", "utf8"),
     readFile("apps/api/src/aiContentRepository.ts", "utf8"),
     readFile("apps/api/src/repository.ts", "utf8"),
   ]);
@@ -533,6 +534,7 @@ test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계�
     "reference_snapshots",
     "reference_pattern_versions",
     "ai_content_wiki_version_snapshots",
+    "ai_content_one_time_avatar_receipts",
   ]) {
     assert.match(migration, new RegExp(`create\\s+table\\s+if\\s+not\\s+exists\\s+${table}\\b`, "i"));
   }
@@ -576,6 +578,14 @@ test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계�
   assert.match(migration, /wiki_version_snapshot_immutable/i);
   assert.match(migration, /ai_content_actor_is_active/i);
   assert.match(migration, /one_time_avatar_receipt_invalid/i);
+  assert.match(migration, /one_time_avatar_receipt_immutable/i);
+  assert.doesNotMatch(migration, /ai_content_attachment_upload_sessions/i);
+  assert.doesNotMatch(migration, /ai_content_generation_attachments/i);
+  assert.match(
+    migration,
+    /from\s+ai_content_proposal_batches\s+batch[\s\S]*?for\s+update;[\s\S]*?from\s+ai_content_proposals\s+proposal[\s\S]*?for\s+update;/i,
+  );
+  assert.match(attachmentMigration, /seal_ai_content_one_time_avatar_receipt_from_upload/i);
   assert.match(migration, /proposal_generation_family_mismatch/i);
   assert.match(migration, /generation_canonical_mapping_missing/i);
   assert.match(migration, /ai_content_versioned_snapshot_is_valid/i);
@@ -593,7 +603,7 @@ test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계�
   );
 });
 
-test("content orchestration PostgreSQL command portably enables and runs both integration tests", async () => {
+test("content orchestration PostgreSQL command portably enables its integration tests", async () => {
   const [packageJson, runner] = await Promise.all([
     readJson("apps/api/package.json"),
     readFile("scripts/run-content-orchestration-postgres-tests.mjs", "utf8"),
