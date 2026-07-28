@@ -169,6 +169,12 @@ npm run test:contract
 
 API의 `build` 스크립트는 타입 검사 후 `tsup`으로 `apps/api/dist/index.js`를 생성합니다. API의 `start` 스크립트는 `node dist/index.js`를 실행합니다. Vercel의 `vercel-build`는 번들을 만드는 대신 `npm run typecheck`를 실행하는 배포 타입 검사 경로입니다. 자세한 설정은 [Vercel 중앙 API 배포](docs/VERCEL_CENTRAL_API_DEPLOYMENT.md)를 참고하세요.
 
+## 개발과 릴리스
+
+GitHub `dkskrn2/main`의 `main` 브랜치가 유일한 source of truth입니다. Windows의 feature branch/worktree에서 테스트한 변경만 PR로 merge하며, Vercel은 merge commit에서 고객 UI를 build하고 GitHub Actions는 server API를 `sha-<commit>` GHCR image와 immutable digest로 게시합니다. Ubuntu는 애플리케이션 소스를 수정하거나 image를 build하지 않으며 Tailscale SSH는 배포·로그·health 관리에만 사용합니다.
+
+Frontend-only, server-only, migration 포함 릴리스의 명령과 rollback 경계는 [개발 및 릴리스 흐름](docs/operations/DEVELOPMENT_AND_RELEASE_FLOW.md)을 따르세요. Ubuntu의 `/opt/brand-pilot/shared/env`는 Git 및 image pull과 분리하며, `latest` 단독 배포는 금지합니다.
+
 ## 선택적 로컬 PostgreSQL
 
 Docker가 준비된 경우 로컬 PostgreSQL을 시작하거나 중지할 수 있습니다.
@@ -266,6 +272,7 @@ Rollout 기준은 Feed 활성 유지, Story capability 확인 후 활성화, Ree
 
 ## 주요 문서
 
+- [개발 및 릴리스 흐름](docs/operations/DEVELOPMENT_AND_RELEASE_FLOW.md)
 - [관리형 콘텐츠 자동화 MVP](docs/specs/BRAND_PILOT_MANAGED_CONTENT_AUTOMATION_MVP.md)
 - [데이터베이스 스키마 설계](docs/specs/BRAND_PILOT_DATABASE_SCHEMA_DESIGN.md)
 - [공개 출시 전 필수 항목](docs/PRE_LAUNCH_REQUIRED.md)
