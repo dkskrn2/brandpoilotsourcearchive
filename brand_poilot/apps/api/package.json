@@ -13,7 +13,7 @@
     "vercel-build": "npm run typecheck",
     "start": "node dist/index.js",
     "test": "vitest run --maxWorkers=4",
-    "test:content-orchestration-postgres": "vitest run --maxWorkers=1 src/contentOrchestrationRepository.postgres.integration.test.ts",
+    "test:content-orchestration-postgres": "node ../../scripts/run-content-orchestration-postgres-tests.mjs",
     "test:topic-concurrency": "tsx src/topicQuota.postgres.integration.ts",
     "seed": "tsx src/seed.ts"
   },

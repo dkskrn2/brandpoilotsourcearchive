@@ -532,6 +532,7 @@ test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계�
     "ai_content_create_idempotency_records",
     "reference_snapshots",
     "reference_pattern_versions",
+    "ai_content_wiki_version_snapshots",
   ]) {
     assert.match(migration, new RegExp(`create\\s+table\\s+if\\s+not\\s+exists\\s+${table}\\b`, "i"));
   }
@@ -572,6 +573,11 @@ test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계�
   assert.match(migration, /idempotency_conflict/i);
   assert.match(migration, /reference_snapshot_immutable/i);
   assert.match(migration, /reference_pattern_version_immutable/i);
+  assert.match(migration, /wiki_version_snapshot_immutable/i);
+  assert.match(migration, /ai_content_actor_is_active/i);
+  assert.match(migration, /one_time_avatar_receipt_invalid/i);
+  assert.match(migration, /proposal_generation_family_mismatch/i);
+  assert.match(migration, /generation_canonical_mapping_missing/i);
   assert.match(migration, /ai_content_versioned_snapshot_is_valid/i);
   assert.match(migration, /approved_proposal_versions_json_identity_check/i);
   assert.match(migration, /generation_briefs_json_identity_check/i);
@@ -585,6 +591,20 @@ test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계�
     crawlerRepository,
     /content_purpose\s+in\s*\(\s*'informational',\s*'marketing',\s*'both'\s*\)/i,
   );
+});
+
+test("content orchestration PostgreSQL command portably enables and runs both integration tests", async () => {
+  const [packageJson, runner] = await Promise.all([
+    readJson("apps/api/package.json"),
+    readFile("scripts/run-content-orchestration-postgres-tests.mjs", "utf8"),
+  ]);
+  assert.equal(
+    packageJson.scripts["test:content-orchestration-postgres"],
+    "node ../../scripts/run-content-orchestration-postgres-tests.mjs",
+  );
+  assert.match(runner, /RUN_POSTGRES_INTEGRATION:\s*"true"/);
+  assert.match(runner, /contentOrchestrationRepository\.postgres\.integration\.test\.ts/);
+  assert.match(runner, /--maxWorkers=1/);
 });
 
 test("061은 대표 이미지를 우선 보존하고 avatar별 checksum 중복을 차단한다", async () => {

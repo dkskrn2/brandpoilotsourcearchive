@@ -11,6 +11,9 @@ let dismissedProposalId = "";
 const ids = {
   actor: "10000000-0000-4000-8000-000000000001",
   competingActor: "10000000-0000-4000-8000-000000000002",
+  inactiveActor: "10000000-0000-4000-8000-000000000003",
+  deletedActor: "10000000-0000-4000-8000-000000000004",
+  nonmemberActor: "10000000-0000-4000-8000-000000000005",
   workspace: "20000000-0000-4000-8000-000000000002",
   brand: "30000000-0000-4000-8000-000000000003",
   otherBrand: "30000000-0000-4000-8000-000000000004",
@@ -33,6 +36,14 @@ const ids = {
   otherAvatarImage: "c0000000-0000-4000-8000-00000000000e",
   oneTimeAvatar: "b0000000-0000-4000-8000-00000000000f",
   oneTimeAvatarAsset: "c0000000-0000-4000-8000-00000000000f",
+  pendingAvatar: "b1000000-0000-4000-8000-00000000000f",
+  pendingAvatarAsset: "c1000000-0000-4000-8000-00000000000f",
+  crossGenerationAvatar: "b2000000-0000-4000-8000-00000000000f",
+  crossGenerationAvatarAsset: "c2000000-0000-4000-8000-00000000000f",
+  crossActorAvatar: "b3000000-0000-4000-8000-00000000000f",
+  crossActorAvatarAsset: "c3000000-0000-4000-8000-00000000000f",
+  crossBrandAvatar: "b4000000-0000-4000-8000-00000000000f",
+  crossBrandAvatarAsset: "c4000000-0000-4000-8000-00000000000f",
   sourceUrl: "d0000000-0000-4000-8000-00000000000d",
   referenceItem: "e0000000-0000-4000-8000-00000000000e",
   referenceSnapshot: "e1000000-0000-4000-8000-00000000000e",
@@ -50,6 +61,8 @@ const ids = {
   oneTimeApproved: "16000000-0000-4000-8000-000000000016",
   oneTimeGeneration: "17000000-0000-4000-8000-000000000017",
   equalityGeneration: "18000000-0000-4000-8000-000000000018",
+  receiptGeneration: "19000000-0000-4000-8000-000000000019",
+  otherBrandGeneration: "1a000000-0000-4000-8000-00000000001a",
 };
 
 const productProfileHash = "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a";
@@ -150,6 +163,67 @@ const generationBrief = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+async function insertOneTimeReceipt(
+  db: PGlite,
+  input: {
+    sessionId: string;
+    attachmentId: string;
+    generationId: string;
+    brandId: string;
+    actorId: string;
+    status?: "pending" | "confirmed";
+    checksum?: string;
+    mime?: "image/png" | "image/jpeg" | "image/webp";
+  },
+) {
+  const status = input.status ?? "confirmed";
+  const checksum = input.checksum ?? "d".repeat(64);
+  const mime = input.mime ?? "image/png";
+  const storagePath = `one-time/${input.sessionId}.png`;
+  const storageUrl = `https://cdn.example.com/${input.sessionId}.png`;
+  await db.query(
+    `insert into ai_content_attachment_upload_sessions (
+       id,generation_id,workspace_id,brand_id,created_by_user_id,role,file_name,
+       expected_mime_type,expected_size_bytes,expected_checksum,storage_url,storage_path
+     ) values ($1,$2,$3,$4,$5,'person','avatar.png',$6,1024,$7,$8,$9)`,
+    [
+      input.sessionId,
+      input.generationId,
+      ids.workspace,
+      input.brandId,
+      input.actorId,
+      mime,
+      checksum,
+      storageUrl,
+      storagePath,
+    ],
+  );
+  if (status === "pending") return;
+  await db.query(
+    `insert into ai_content_generation_attachments (
+       id,generation_id,workspace_id,brand_id,upload_session_id,role,file_name,
+       mime_type,size_bytes,checksum,storage_url,storage_path
+     ) values ($1,$2,$3,$4,$5,'person','avatar.png',$6,1024,$7,$8,$9)`,
+    [
+      input.attachmentId,
+      input.generationId,
+      ids.workspace,
+      input.brandId,
+      input.sessionId,
+      mime,
+      checksum,
+      storageUrl,
+      storagePath,
+    ],
+  );
+  await db.query(
+    `update ai_content_attachment_upload_sessions
+        set status='confirmed',confirmed_at=now(),confirmed_attachment_id=$2
+      where id=$1`,
+    [input.sessionId, input.attachmentId],
+  );
+}
+
 beforeAll(async () => {
   database = await PGlite.create({ extensions: { pgcrypto } });
   const directory = resolve(process.cwd(), "../../db/migrations");
@@ -162,12 +236,19 @@ beforeAll(async () => {
   await database.exec(`
     insert into app_users (id, email) values
       ('${ids.actor}', 'orchestration@example.com'),
-      ('${ids.competingActor}', 'orchestration-competitor@example.com');
+      ('${ids.competingActor}', 'orchestration-competitor@example.com'),
+      ('${ids.inactiveActor}', 'orchestration-inactive@example.com'),
+      ('${ids.deletedActor}', 'orchestration-deleted@example.com'),
+      ('${ids.nonmemberActor}', 'orchestration-nonmember@example.com');
     insert into workspaces (id, name, slug)
       values ('${ids.workspace}', 'Orchestration', 'orchestration');
-    insert into workspace_members (workspace_id, user_id, role) values
-      ('${ids.workspace}', '${ids.actor}', 'owner'),
-      ('${ids.workspace}', '${ids.competingActor}', 'member');
+    insert into workspace_members (
+      workspace_id, user_id, role, status, created_at, updated_at, deleted_at
+    ) values
+      ('${ids.workspace}', '${ids.actor}', 'owner', 'active', now(), now(), null),
+      ('${ids.workspace}', '${ids.competingActor}', 'member', 'active', now(), now(), null),
+      ('${ids.workspace}', '${ids.inactiveActor}', 'member', 'disabled', now(), now(), null),
+      ('${ids.workspace}', '${ids.deletedActor}', 'member', 'active', now(), now(), now());
     insert into brands (id, workspace_id, name) values
       ('${ids.brand}', '${ids.workspace}', 'Primary'),
       ('${ids.otherBrand}', '${ids.workspace}', 'Other');
@@ -215,6 +296,15 @@ beforeAll(async () => {
       ('${ids.otherWiki}', '${ids.workspace}', '${ids.otherBrand}', 'active',
        '2026-07-28T00:00:00Z', '2026-07-28T00:00:00Z', '2026-07-28T00:00:00Z',
        '2026-07-28T00:00:00Z', '2026-07-28T00:00:00Z');
+    insert into ai_content_wiki_version_snapshots (
+      id, workspace_id, brand_id, wiki_version_id, snapshot_json
+    ) values
+      ('${ids.wiki}', '${ids.workspace}', '${ids.brand}', '${ids.wiki}',
+       '${JSON.stringify(versionedSnapshot("wiki", ids.wiki, 1, wikiSnapshotHash))}'),
+      ('${ids.readyWiki}', '${ids.workspace}', '${ids.brand}', '${ids.readyWiki}',
+       '${JSON.stringify(versionedSnapshot("wiki", ids.readyWiki, 1, wikiSnapshotHash))}'),
+      ('${ids.otherWiki}', '${ids.workspace}', '${ids.otherBrand}', '${ids.otherWiki}',
+       '${JSON.stringify(versionedSnapshot("wiki", ids.otherWiki, 1, wikiSnapshotHash))}');
     insert into source_urls (
       id, workspace_id, brand_id, source_type, url, url_hash, content_purpose
     ) values (
@@ -299,6 +389,55 @@ afterAll(async () => {
 });
 
 describe("content orchestration PostgreSQL contract", () => {
+  it("requires an active nondeleted member for selection and idempotency replay", async () => {
+    const db = database as PGlite;
+    for (const actorId of [ids.inactiveActor, ids.deletedActor, ids.nonmemberActor]) {
+      await expect(db.query("select select_ai_content_proposal($1,$2,$3,$4)", [
+        ids.firstProposal, ids.workspace, ids.brand, actorId,
+      ])).rejects.toThrow(/proposal_selection_actor_forbidden/);
+      await expect(db.query(
+        "select reserve_ai_content_create_idempotency($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+        [
+          ids.workspace, ids.brand, actorId, "generation_start", `inactive-${actorId}`,
+          "c".repeat(64), "generation", ids.generation, JSON.stringify({ status: "queued" }),
+        ],
+      )).rejects.toThrow(/idempotency_actor_forbidden/);
+    }
+
+    const replayParameters = [
+      ids.workspace, ids.brand, ids.competingActor, "generation_start", "disabled-replay",
+      "c".repeat(64), "generation", ids.generation, JSON.stringify({ status: "queued" }),
+    ];
+    await db.query(
+      "select reserve_ai_content_create_idempotency($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+      replayParameters,
+    );
+    await db.query(
+      "update workspace_members set status='disabled' where workspace_id=$1 and user_id=$2",
+      [ids.workspace, ids.competingActor],
+    );
+    await expect(db.query(
+      "select reserve_ai_content_create_idempotency($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+      replayParameters,
+    )).rejects.toThrow(/idempotency_actor_forbidden/);
+    await db.query(
+      "update workspace_members set status='active' where workspace_id=$1 and user_id=$2",
+      [ids.workspace, ids.competingActor],
+    );
+    await db.query(
+      "update workspace_members set deleted_at=now() where workspace_id=$1 and user_id=$2",
+      [ids.workspace, ids.competingActor],
+    );
+    await expect(db.query(
+      "select reserve_ai_content_create_idempotency($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+      replayParameters,
+    )).rejects.toThrow(/idempotency_actor_forbidden/);
+    await db.query(
+      "update workspace_members set deleted_at=null where workspace_id=$1 and user_id=$2",
+      [ids.workspace, ids.competingActor],
+    );
+  });
+
   it("serializes competing proposal selections and audits the selected and dismissed rows", async () => {
     const db = database as PGlite;
     const outcomes = await Promise.allSettled([
@@ -502,6 +641,55 @@ describe("content orchestration PostgreSQL contract", () => {
       ],
     )).rejects.toThrow(/generation_brief_invalid/);
 
+    const forgedWiki = generationBrief({
+      wikiSnapshots: [{
+        ...versionedSnapshot("wiki", ids.wiki, 1, wikiSnapshotHash),
+        title: "Caller-forged Wiki title",
+      }],
+    });
+    await expect(db.query(
+      "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+      [
+        ids.generation, ids.workspace, ids.brand, JSON.stringify(forgedWiki),
+        JSON.stringify(forgedWiki.avatar), ids.actor,
+      ],
+    )).rejects.toThrow(/wiki_snapshot_not_sealed/);
+
+    await db.exec("begin");
+    try {
+      await db.query(
+        "update ai_content_generations set content_family='informational' where id=$1",
+        [ids.generation],
+      );
+      await expect(db.query(
+        "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+        [
+          ids.generation, ids.workspace, ids.brand, JSON.stringify(generationBrief()),
+          JSON.stringify(generationBrief().avatar), ids.actor,
+        ],
+      )).rejects.toThrow(/proposal_generation_family_mismatch/);
+    } finally {
+      await db.exec("rollback");
+    }
+
+    for (const column of ["content_family", "output_format", "subject_mode"]) {
+      await db.exec("begin");
+      try {
+        await db.query(`update ai_content_generations set ${column}=null where id=$1`, [
+          ids.generation,
+        ]);
+        await expect(db.query(
+          "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+          [
+            ids.generation, ids.workspace, ids.brand, JSON.stringify(generationBrief()),
+            JSON.stringify(generationBrief().avatar), ids.actor,
+          ],
+        )).rejects.toThrow(/generation_canonical_mapping_missing/);
+      } finally {
+        await db.exec("rollback");
+      }
+    }
+
     const changedApproval = generationBrief({
       approvedProposalSnapshot: {
         ...approvedSnapshot(selectedProposalId),
@@ -663,6 +851,21 @@ describe("content orchestration PostgreSQL contract", () => {
         JSON.stringify(brief.avatar), ids.actor,
       ],
     )).resolves.toBeDefined();
+    await db.query(
+      "update workspace_members set status='disabled' where workspace_id=$1 and user_id=$2",
+      [ids.workspace, ids.actor],
+    );
+    await expect(db.query(
+      "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+      [
+        ids.generation, ids.workspace, ids.brand, JSON.stringify(brief),
+        JSON.stringify(brief.avatar), ids.actor,
+      ],
+    )).rejects.toThrow(/generation_start_actor_forbidden/);
+    await db.query(
+      "update workspace_members set status='active' where workspace_id=$1 and user_id=$2",
+      [ids.workspace, ids.actor],
+    );
     const stored = await db.query<{ orchestration_snapshot: unknown; generation_input_snapshot: unknown }>(
       "select orchestration_snapshot,generation_input_snapshot from ai_content_generations where id=$1",
       [ids.generation],
@@ -791,14 +994,53 @@ describe("content orchestration PostgreSQL contract", () => {
         JSON.stringify(approval), approval.validationResultId, ids.actor, approval.approvedAt,
       ],
     );
-    const avatar = {
-      id: ids.oneTimeAvatar,
-      assetVersionId: ids.oneTimeAvatarAsset,
-      objectHash: "d".repeat(64),
-      mime: "image/png",
-      provenance: "one_time",
-    };
-    const brief = {
+    await db.query(
+      `insert into ai_content_generations (
+         id,workspace_id,brand_id,type,title,analysis_idempotency_key,
+         content_family,output_format,subject_mode,generation_input_snapshot
+       ) values
+         ($1,$3,$4,'marketing','Receipt generation','receipt-generation',
+          'marketing','single_image','brand_topic','{"contractVersion":"content-generation-input.v2"}'),
+         ($2,$3,$5,'marketing','Other-brand receipt','other-brand-receipt',
+          'marketing','single_image','brand_topic','{"contractVersion":"content-generation-input.v2"}')`,
+      [
+        ids.receiptGeneration,
+        ids.otherBrandGeneration,
+        ids.workspace,
+        ids.brand,
+        ids.otherBrand,
+      ],
+    );
+    await insertOneTimeReceipt(db, {
+      sessionId: ids.pendingAvatar,
+      attachmentId: ids.pendingAvatarAsset,
+      generationId: ids.oneTimeGeneration,
+      brandId: ids.brand,
+      actorId: ids.actor,
+      status: "pending",
+    });
+    await insertOneTimeReceipt(db, {
+      sessionId: ids.crossGenerationAvatar,
+      attachmentId: ids.crossGenerationAvatarAsset,
+      generationId: ids.receiptGeneration,
+      brandId: ids.brand,
+      actorId: ids.actor,
+    });
+    await insertOneTimeReceipt(db, {
+      sessionId: ids.crossActorAvatar,
+      attachmentId: ids.crossActorAvatarAsset,
+      generationId: ids.oneTimeGeneration,
+      brandId: ids.brand,
+      actorId: ids.competingActor,
+    });
+    await insertOneTimeReceipt(db, {
+      sessionId: ids.crossBrandAvatar,
+      attachmentId: ids.crossBrandAvatarAsset,
+      generationId: ids.otherBrandGeneration,
+      brandId: ids.otherBrand,
+      actorId: ids.actor,
+    });
+    const oneTimeBrief = (candidate: Record<string, unknown>) => ({
       contractVersion: "generation-brief.v1",
       proposalId: ids.oneTimeProposal,
       approvedProposalVersionId: ids.oneTimeApproved,
@@ -808,11 +1050,77 @@ describe("content orchestration PostgreSQL contract", () => {
       subject: { kind: "brand_topic", topic: "One-time avatar", brandCoreEvidenceIds: [] },
       wikiSnapshots: [],
       references: [],
-      avatar,
+      avatar: candidate,
       outputFormat: "single_image",
       channels: ["instagram"],
       promptDefinitionVersions: { generation: "generation.v1" },
+    });
+    for (const candidate of [
+      {
+        id: "b5000000-0000-4000-8000-00000000000f",
+        assetVersionId: "c5000000-0000-4000-8000-00000000000f",
+        objectHash: "d".repeat(64),
+        mime: "image/png",
+        provenance: "one_time",
+      },
+      {
+        id: ids.pendingAvatar,
+        assetVersionId: ids.pendingAvatarAsset,
+        objectHash: "d".repeat(64),
+        mime: "image/png",
+        provenance: "one_time",
+      },
+      {
+        id: ids.crossGenerationAvatar,
+        assetVersionId: ids.crossGenerationAvatarAsset,
+        objectHash: "d".repeat(64),
+        mime: "image/png",
+        provenance: "one_time",
+      },
+      {
+        id: ids.crossActorAvatar,
+        assetVersionId: ids.crossActorAvatarAsset,
+        objectHash: "d".repeat(64),
+        mime: "image/png",
+        provenance: "one_time",
+      },
+      {
+        id: ids.crossBrandAvatar,
+        assetVersionId: ids.crossBrandAvatarAsset,
+        objectHash: "d".repeat(64),
+        mime: "image/png",
+        provenance: "one_time",
+      },
+    ]) {
+      const rejectedBrief = oneTimeBrief(candidate);
+      await expect(db.query(
+        "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+        [
+          ids.oneTimeGeneration,
+          ids.workspace,
+          ids.brand,
+          JSON.stringify(rejectedBrief),
+          JSON.stringify(candidate),
+          ids.actor,
+        ],
+      )).rejects.toThrow(/one_time_avatar_receipt_invalid/);
+    }
+
+    await insertOneTimeReceipt(db, {
+      sessionId: ids.oneTimeAvatar,
+      attachmentId: ids.oneTimeAvatarAsset,
+      generationId: ids.oneTimeGeneration,
+      brandId: ids.brand,
+      actorId: ids.actor,
+    });
+    const avatar = {
+      id: ids.oneTimeAvatar,
+      assetVersionId: ids.oneTimeAvatarAsset,
+      objectHash: "d".repeat(64),
+      mime: "image/png",
+      provenance: "one_time",
     };
+    const brief = oneTimeBrief(avatar);
     await expect(db.query(
       "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
       [
@@ -875,7 +1183,7 @@ describe("content orchestration PostgreSQL contract", () => {
     )).rejects.toThrow();
   });
 
-  it("keeps approved proposals, reference snapshots, patterns, and briefs immutable", async () => {
+  it("keeps approved proposals, wiki snapshots, references, patterns, and briefs immutable", async () => {
     const db = database as PGlite;
     await expect(db.query(
       "update ai_content_approved_proposal_versions set revision=2 where id=$1",
@@ -890,9 +1198,41 @@ describe("content orchestration PostgreSQL contract", () => {
       [ids.patternVersion, "9".repeat(64)],
     )).rejects.toThrow(/reference_pattern_version_immutable/);
     await expect(db.query(
+      "update ai_content_wiki_version_snapshots set snapshot_json='{}' where id=$1",
+      [ids.wiki],
+    )).rejects.toThrow(/wiki_version_snapshot_immutable/);
+    await expect(db.query(
       "update ai_content_generation_briefs set approved_proposal_version_id=$2 where generation_id=$1",
       [ids.generation, ids.noAvatarApproved],
     )).rejects.toThrow(/generation_brief_immutable/);
     expect(dismissedProposalId).toBeTruthy();
+  });
+
+  it("restricts parent and workspace deletion while immutable lineage exists", async () => {
+    const db = database as PGlite;
+    await expect(db.query(
+      "delete from reference_items where id=$1",
+      [ids.referenceItem],
+    )).rejects.toThrow();
+    await expect(db.query(
+      "delete from wiki_versions where id=$1",
+      [ids.wiki],
+    )).rejects.toThrow();
+    await expect(db.query(
+      "delete from workspaces where id=$1",
+      [ids.workspace],
+    )).rejects.toThrow();
+
+    const remaining = await db.query<{ snapshots: number; wiki_snapshots: number; briefs: number }>(
+      `select
+         (select count(*)::integer from reference_snapshots) snapshots,
+         (select count(*)::integer from ai_content_wiki_version_snapshots) wiki_snapshots,
+         (select count(*)::integer from ai_content_generation_briefs) briefs`,
+    );
+    expect(remaining.rows[0]).toMatchObject({
+      snapshots: 1,
+      wiki_snapshots: 3,
+      briefs: 3,
+    });
   });
 });

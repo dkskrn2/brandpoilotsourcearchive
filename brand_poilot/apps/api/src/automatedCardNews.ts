@@ -161,9 +161,13 @@ export async function enqueueAutomatedCardNews(
     `insert into ai_content_generations (
        id, workspace_id, brand_id, type, title, status, current_stage,
        draft_json, analysis_json, analysis_idempotency_key,
-       generation_idempotency_key, subject_analysis_snapshot
+       generation_idempotency_key, subject_analysis_snapshot,
+       content_family, output_format, subject_mode
      )
-     values ($1, $2, $3, 'card_news', $4, 'analyzing', 'analysis', $5, '{}'::jsonb, $6, $6, $7)`,
+     values (
+       $1, $2, $3, 'card_news', $4, 'analyzing', 'analysis',
+       $5, '{}'::jsonb, $6, $6, $7, $8, $9, $10
+     )`,
     [
       generationId,
       input.workspaceId,
@@ -177,6 +181,9 @@ export async function enqueueAutomatedCardNews(
       }),
       idempotencyKey,
       JSON.stringify(contract),
+      "informational",
+      "card_news",
+      "brand_topic",
     ],
   );
   await client.query(

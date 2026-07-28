@@ -907,15 +907,41 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           pageCount: brandContext?.pageCount,
           brandIntelligenceVersionId: brandContext?.brandIntelligenceVersionId,
         } : {};
+        const contentFamily = input.type === "marketing" ? "marketing" : "informational";
+        const outputFormat = input.type === "marketing" ? "single_image" : input.type;
+        const productServiceId = typeof draft.productServiceId === "string"
+          && draft.productServiceId.trim().length > 0
+          ? draft.productServiceId.trim()
+          : null;
+        const subjectMode = productServiceId
+          ? "product_service"
+          : usesCompletedSubjectAnalysis
+            ? "new_subject"
+            : "brand_topic";
         const created = await client.query(
           `insert into ai_content_generations
-             (workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json, analysis_idempotency_key)
-           values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9)
+             (workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
+              analysis_idempotency_key, content_family, output_format, subject_mode, product_service_id)
+           values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13)
            on conflict (brand_id, analysis_idempotency_key) do nothing
            returning id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
                      attachments_locked_at, terminal_at, retryable_until,
                      error_code, error_message, created_at, updated_at, completed_at`,
-          [input.workspaceId, input.brandId, input.type, input.title, initialStatus, initialStage, JSON.stringify(draft), JSON.stringify(initialAnalysis), input.idempotencyKey],
+          [
+            input.workspaceId,
+            input.brandId,
+            input.type,
+            input.title,
+            initialStatus,
+            initialStage,
+            JSON.stringify(draft),
+            JSON.stringify(initialAnalysis),
+            input.idempotencyKey,
+            contentFamily,
+            outputFormat,
+            subjectMode,
+            productServiceId,
+          ],
         );
         const generation = created.rows[0] as Record<string, unknown> | undefined;
         if (!generation) {

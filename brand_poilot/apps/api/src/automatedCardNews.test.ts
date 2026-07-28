@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAutomatedCardNewsInput } from "./automatedCardNews.js";
+import { buildAutomatedCardNewsInput, enqueueAutomatedCardNews } from "./automatedCardNews.js";
 import { parseContentGenerationInputV2 } from "./aiContentGenerationInput.js";
 
 describe("automated card news input", () => {
@@ -74,5 +74,38 @@ describe("automated card news input", () => {
     expect(() => parseContentGenerationInputV2(result)).not.toThrow();
     expect(result.subject.sourceUrl).toBe("urn:brand-pilot:topic:topic-without-url");
     expect(result.creativeDirection.selectedColor).toBe("#2563eb");
+  });
+
+  it("writes the canonical informational card-news mapping", async () => {
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const client = {
+      query: async (sql: string, params: unknown[] = []) => {
+        calls.push({ sql, params });
+        return { rows: [], rowCount: 1 };
+      },
+    };
+
+    await enqueueAutomatedCardNews(client, {
+      workspaceId: "20000000-0000-4000-8000-000000000002",
+      brandId: "30000000-0000-4000-8000-000000000003",
+      contentTopicId: "topic-1",
+      channelOutputId: "output-1",
+      brand: { name: "Growthline", brandColor: null },
+      topic: { title: "운영 체크리스트", angle: "반복 업무 줄이기" },
+      representativeUrl: null,
+      sourceMaterials: [],
+    });
+
+    const generationInsert = calls.find((call) =>
+      call.sql.includes("insert into ai_content_generations")
+    );
+    expect(generationInsert?.sql).toContain(
+      "content_family, output_format, subject_mode",
+    );
+    expect(generationInsert?.params.slice(7)).toEqual([
+      "informational",
+      "card_news",
+      "brand_topic",
+    ]);
   });
 });

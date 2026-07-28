@@ -324,7 +324,7 @@ $$;
 
 create table if not exists reference_snapshots (
   id uuid primary key default gen_random_uuid(),
-  workspace_id uuid not null references workspaces(id) on delete cascade,
+  workspace_id uuid not null references workspaces(id) on delete restrict,
   brand_id uuid not null,
   reference_item_id uuid not null,
   version integer not null check (version > 0),
@@ -367,7 +367,7 @@ for each row execute function reject_reference_snapshot_mutation();
 
 create table if not exists reference_pattern_versions (
   id uuid primary key default gen_random_uuid(),
-  workspace_id uuid not null references workspaces(id) on delete cascade,
+  workspace_id uuid not null references workspaces(id) on delete restrict,
   brand_id uuid not null,
   reference_item_id uuid not null,
   reference_snapshot_id uuid not null,
@@ -410,6 +410,41 @@ drop trigger if exists reference_pattern_versions_immutable
 create trigger reference_pattern_versions_immutable
 before update or delete on reference_pattern_versions
 for each row execute function reject_reference_pattern_version_mutation();
+
+create table if not exists ai_content_wiki_version_snapshots (
+  id uuid primary key,
+  workspace_id uuid not null references workspaces(id) on delete restrict,
+  brand_id uuid not null,
+  wiki_version_id uuid not null,
+  snapshot_json jsonb not null
+    check (ai_content_versioned_snapshot_is_valid(snapshot_json, 'wiki')),
+  created_at timestamptz not null default now(),
+  constraint ai_content_wiki_version_snapshots_json_identity_check check (
+    snapshot_json->>'id' = id::text
+  ),
+  constraint ai_content_wiki_version_snapshots_version_ownership_fk
+    foreign key (wiki_version_id, workspace_id, brand_id)
+    references wiki_versions(id, workspace_id, brand_id) on delete restrict,
+  constraint ai_content_wiki_version_snapshots_tenant_identity_unique
+    unique (id, workspace_id, brand_id),
+  constraint ai_content_wiki_version_snapshots_version_unique
+    unique (wiki_version_id)
+);
+
+create or replace function reject_ai_content_wiki_version_snapshot_mutation()
+returns trigger
+language plpgsql
+as $$
+begin
+  raise exception using errcode = '55000', message = 'wiki_version_snapshot_immutable';
+end;
+$$;
+
+drop trigger if exists ai_content_wiki_version_snapshots_immutable
+  on ai_content_wiki_version_snapshots;
+create trigger ai_content_wiki_version_snapshots_immutable
+before update or delete on ai_content_wiki_version_snapshots
+for each row execute function reject_ai_content_wiki_version_snapshot_mutation();
 
 alter table ai_content_generation_references
   add column if not exists reference_item_id uuid,
@@ -611,7 +646,7 @@ create unique index if not exists ai_content_proposals_generation_unique
 
 create table if not exists ai_content_approved_proposal_versions (
   id uuid primary key default gen_random_uuid(),
-  workspace_id uuid not null references workspaces(id) on delete cascade,
+  workspace_id uuid not null references workspaces(id) on delete restrict,
   brand_id uuid not null,
   proposal_id uuid not null,
   revision integer not null check (revision > 0),
@@ -654,7 +689,7 @@ for each row execute function reject_ai_content_approved_proposal_version_mutati
 
 create table if not exists ai_content_generation_briefs (
   id uuid primary key default gen_random_uuid(),
-  workspace_id uuid not null references workspaces(id) on delete cascade,
+  workspace_id uuid not null references workspaces(id) on delete restrict,
   brand_id uuid not null,
   generation_id uuid not null,
   approved_proposal_version_id uuid not null,
@@ -779,6 +814,24 @@ create table if not exists ai_content_create_idempotency_records (
     unique (workspace_id, actor_user_id, operation, client_request_id)
 );
 
+create or replace function ai_content_actor_is_active(
+  target_workspace_id uuid,
+  target_actor_user_id uuid
+)
+returns boolean
+language sql
+stable
+as $$
+  select exists (
+    select 1
+    from workspace_members member
+    where member.workspace_id = target_workspace_id
+      and member.user_id = target_actor_user_id
+      and member.status = 'active'
+      and member.deleted_at is null
+  );
+$$;
+
 create or replace function reserve_ai_content_create_idempotency(
   target_workspace_id uuid,
   target_brand_id uuid,
@@ -797,6 +850,13 @@ declare
   existing_record ai_content_create_idempotency_records%rowtype;
   inserted_record ai_content_create_idempotency_records%rowtype;
 begin
+  if not ai_content_actor_is_active(
+    target_workspace_id,
+    target_actor_user_id
+  ) then
+    raise exception using errcode = '42501', message = 'idempotency_actor_forbidden';
+  end if;
+
   insert into ai_content_create_idempotency_records (
     workspace_id,
     brand_id,
@@ -860,12 +920,7 @@ declare
   target_status text;
   already_selected_id uuid;
 begin
-  if not exists (
-    select 1
-    from workspace_members member
-    where member.workspace_id = target_workspace_id
-      and member.user_id = actor_user_id
-  ) then
+  if not ai_content_actor_is_active(target_workspace_id, actor_user_id) then
     raise exception using errcode = '42501', message = 'proposal_selection_actor_forbidden';
   end if;
 
@@ -954,7 +1009,14 @@ declare
   snapshot_avatar_image_id uuid;
   selected_reference_count integer;
   brief_reference_count integer;
+  selected_batch_id uuid;
+  selected_batch_status text;
+  selected_batch_family text;
 begin
+  if not ai_content_actor_is_active(target_workspace_id, actor_user_id) then
+    raise exception using errcode = '42501', message = 'generation_start_actor_forbidden';
+  end if;
+
   select generation.*
   into target_generation
   from ai_content_generations generation
@@ -979,21 +1041,19 @@ begin
     raise exception using errcode = '23505', message = 'generation_already_started';
   end if;
 
-  if not exists (
-    select 1
-    from workspace_members member
-    where member.workspace_id = target_workspace_id
-      and member.user_id = actor_user_id
-  ) then
-    raise exception using errcode = '42501', message = 'generation_start_actor_forbidden';
-  end if;
   if not ai_content_orchestration_snapshot_is_valid(frozen_orchestration_snapshot) then
     raise exception using errcode = '23514', message = 'generation_brief_invalid';
   end if;
   if frozen_avatar_snapshot is distinct from frozen_orchestration_snapshot->'avatar' then
     raise exception using errcode = '23514', message = 'avatar_snapshot_mismatch';
   end if;
-  if target_generation.output_format <> frozen_orchestration_snapshot->>'outputFormat' then
+  if target_generation.content_family is null
+     or target_generation.output_format is null
+     or target_generation.subject_mode is null then
+    raise exception using errcode = '23514', message = 'generation_canonical_mapping_missing';
+  end if;
+  if target_generation.output_format
+     is distinct from frozen_orchestration_snapshot->>'outputFormat' then
     raise exception using errcode = '23514', message = 'generation_output_format_mismatch';
   end if;
 
@@ -1018,16 +1078,32 @@ begin
     raise exception using errcode = '23514', message = 'brand_versions_not_active_approved';
   end if;
 
+  select batch.id, batch.status, batch.content_family
+  into selected_batch_id, selected_batch_status, selected_batch_family
+  from ai_content_proposals proposal
+  join ai_content_proposal_batches batch
+    on batch.id = proposal.batch_id
+   and batch.workspace_id = proposal.workspace_id
+   and batch.brand_id = proposal.brand_id
+  where proposal.id = (frozen_orchestration_snapshot->>'proposalId')::uuid
+    and proposal.workspace_id = target_workspace_id
+    and proposal.brand_id = target_brand_id
+    and proposal.status = 'selected'
+  for update of proposal, batch;
+  if not found then
+    raise exception using errcode = '23514', message = 'proposal_not_selected';
+  end if;
   select proposal.*
   into selected_proposal
   from ai_content_proposals proposal
   where proposal.id = (frozen_orchestration_snapshot->>'proposalId')::uuid
     and proposal.workspace_id = target_workspace_id
-    and proposal.brand_id = target_brand_id
-    and proposal.status = 'selected'
-  for update;
-  if not found then
-    raise exception using errcode = '23514', message = 'proposal_not_selected';
+    and proposal.brand_id = target_brand_id;
+  if selected_batch_status <> 'ready' then
+    raise exception using errcode = '23514', message = 'proposal_batch_not_ready';
+  end if;
+  if selected_batch_family is distinct from target_generation.content_family then
+    raise exception using errcode = '23514', message = 'proposal_generation_family_mismatch';
   end if;
   if selected_proposal.generation_id is not null
      and selected_proposal.generation_id <> target_generation_id then
@@ -1110,27 +1186,73 @@ begin
     raise exception using errcode = '23514', message = 'wiki_version_not_active';
   end if;
 
+  if exists (
+    select 1
+    from jsonb_array_elements(frozen_orchestration_snapshot->'wikiSnapshots') wiki(item)
+    where not exists (
+      select 1
+      from ai_content_wiki_version_snapshots sealed
+      where sealed.id = (wiki.item->>'id')::uuid
+        and sealed.workspace_id = target_workspace_id
+        and sealed.brand_id = target_brand_id
+        and sealed.wiki_version_id = (wiki.item->>'id')::uuid
+        and sealed.snapshot_json = wiki.item
+    )
+  ) then
+    raise exception using errcode = '23514', message = 'wiki_snapshot_not_sealed';
+  end if;
+
   if frozen_avatar_snapshot is not null
      and jsonb_typeof(frozen_avatar_snapshot) <> 'null' then
     snapshot_avatar_id := (frozen_avatar_snapshot->>'id')::uuid;
     snapshot_avatar_image_id := (frozen_avatar_snapshot->>'assetVersionId')::uuid;
-    if frozen_avatar_snapshot->>'provenance' <> 'one_time'
-       and not exists (
-      select 1
-      from brand_avatars avatar
-      join brand_avatar_images image
-        on image.avatar_id = avatar.id
-       and image.workspace_id = avatar.workspace_id
-       and image.brand_id = avatar.brand_id
-      where avatar.id = snapshot_avatar_id
-        and avatar.workspace_id = target_workspace_id
-        and avatar.brand_id = target_brand_id
-        and avatar.status = 'active'
-        and image.id = snapshot_avatar_image_id
-        and image.checksum = frozen_avatar_snapshot->>'objectHash'
-        and image.mime_type = frozen_avatar_snapshot->>'mime'
-    ) then
-      raise exception using errcode = '23514', message = 'avatar_not_active_owned';
+    if frozen_avatar_snapshot->>'provenance' = 'one_time' then
+      if not exists (
+        select 1
+        from ai_content_attachment_upload_sessions upload
+        join ai_content_generation_attachments attachment
+          on attachment.id = upload.confirmed_attachment_id
+         and attachment.upload_session_id = upload.id
+         and attachment.workspace_id = upload.workspace_id
+         and attachment.brand_id = upload.brand_id
+         and attachment.generation_id = upload.generation_id
+        where upload.id = snapshot_avatar_id
+          and upload.confirmed_attachment_id = snapshot_avatar_image_id
+          and upload.generation_id = target_generation_id
+          and upload.workspace_id = target_workspace_id
+          and upload.brand_id = target_brand_id
+          and upload.created_by_user_id = actor_user_id
+          and upload.status = 'confirmed'
+          and upload.confirmed_at is not null
+          and upload.role = 'person'
+          and attachment.role = 'person'
+          and upload.expected_checksum = frozen_avatar_snapshot->>'objectHash'
+          and attachment.checksum = upload.expected_checksum
+          and upload.expected_mime_type = frozen_avatar_snapshot->>'mime'
+          and attachment.mime_type = upload.expected_mime_type
+          and attachment.storage_url = upload.storage_url
+          and attachment.storage_path = upload.storage_path
+          and attachment.deleted_at is null
+          and attachment.physical_delete_status <> 'deleted'
+      ) then
+        raise exception using errcode = '23514', message = 'one_time_avatar_receipt_invalid';
+      end if;
+    elsif not exists (
+        select 1
+        from brand_avatars avatar
+        join brand_avatar_images image
+          on image.avatar_id = avatar.id
+         and image.workspace_id = avatar.workspace_id
+         and image.brand_id = avatar.brand_id
+        where avatar.id = snapshot_avatar_id
+          and avatar.workspace_id = target_workspace_id
+          and avatar.brand_id = target_brand_id
+          and avatar.status = 'active'
+          and image.id = snapshot_avatar_image_id
+          and image.checksum = frozen_avatar_snapshot->>'objectHash'
+          and image.mime_type = frozen_avatar_snapshot->>'mime'
+      ) then
+        raise exception using errcode = '23514', message = 'avatar_not_active_owned';
     end if;
   end if;
 

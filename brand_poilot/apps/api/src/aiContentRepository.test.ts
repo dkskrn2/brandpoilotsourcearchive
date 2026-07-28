@@ -38,6 +38,7 @@ function createPool(options: {
   const commands: string[] = [];
   const sql: string[] = [];
   const referenceSnapshots: Array<Record<string, unknown>> = [];
+  let generationInsertParams: unknown[] = [];
   let analyzeJobInsertCount = 0;
   let generation = row("generation-1");
   if (options.attachmentsLocked) {
@@ -64,6 +65,7 @@ function createPool(options: {
       }
       if (query.includes("insert into ai_content_usage_ledger")) return { rows: [], rowCount: 1 };
       if (query.includes("insert into ai_content_generations")) {
+        generationInsertParams = [...params];
         analysisCreated = true;
         generation = { ...generation, title: String(params[3] ?? generation.title), status: String(params[4]), current_stage: String(params[5]), draft_json: JSON.parse(String(params[6])), analysis_json: JSON.parse(String(params[7])) };
         return { rows: [generation], rowCount: 1 };
@@ -171,6 +173,7 @@ function createPool(options: {
     sql,
     get analyzeJobInsertCount() { return analyzeJobInsertCount; },
     get referenceSnapshots() { return referenceSnapshots; },
+    get generationInsertParams() { return generationInsertParams; },
     setGenerationStatus(status: string) { generation = { ...generation, status }; },
     setGenerationDraft(draft: Record<string, unknown>) {
       generation = {
@@ -623,6 +626,25 @@ describe("AI content repository", () => {
     expect(pool.sql.join("\n")).toContain("insert into ai_content_generation_jobs");
     expect(pool.sql.join("\n")).toContain("jsonb_build_object('generationId', $1::uuid)");
     expect(pool.commands).toEqual(expect.arrayContaining(["BEGIN", "COMMIT"]));
+  });
+
+  it.each([
+    ["marketing", {}, ["marketing", "single_image", "brand_topic", null]],
+    ["blog", { subjectAnalysisId: "analysis-1" }, ["informational", "blog", "new_subject", null]],
+    ["card_news", { productServiceId: "60000000-0000-4000-8000-000000000006" }, [
+      "informational",
+      "card_news",
+      "product_service",
+      "60000000-0000-4000-8000-000000000006",
+    ]],
+  ] as const)("writes canonical orchestration mapping for %s", async (type, draft, expected) => {
+    const pool = createPool();
+    const repository = createAiContentRepository(pool as never);
+
+    await repository.createAiContentAnalysis({ ...input, type, draft });
+
+    expect(pool.sql.join("\n")).toContain("content_family, output_format, subject_mode, product_service_id");
+    expect(pool.generationInsertParams.slice(9)).toEqual(expected);
   });
 
   it("applies stored owned context without queueing a CLI analysis job", async () => {
