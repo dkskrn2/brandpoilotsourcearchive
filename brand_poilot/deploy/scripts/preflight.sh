@@ -23,6 +23,9 @@ else
 fi
 reconcile_transition_or_fail "$ROOT" "${READY_TIMEOUT_SECONDS:-120}"
 validate_release_manifest "$MANIFEST"
+for worker_image_key in DM_WORKER_IMAGE WIKI_WORKER_IMAGE CONTENT_PROPOSAL_WORKER_IMAGE; do
+  [[ -v "RELEASE_MANIFEST[$worker_image_key]" ]] || fail "worker_image_manifest_missing"
+done
 
 require_command awk
 require_command df
@@ -106,6 +109,15 @@ require_exact_false() {
 require_exact_false "LOCAL_SCHEDULER_ENABLED" "$API_ENV_FILE"
 require_exact_false "INSTAGRAM_PUBLISH_ENABLED" "$API_ENV_FILE"
 require_exact_false "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED" "$API_ENV_FILE"
+require_exact_false "AUTOMATED_CONTENT_ENABLED" "$API_ENV_FILE"
+require_exact_false "CONTENT_PROPOSALS_ENABLED" "$API_ENV_FILE"
+
+# The initial Ubuntu API/Caddy rollout is intentionally dark. Worker activation is
+# a later, operator-controlled profile action after the remote lease has expired.
+[[ -z "${COMPOSE_PROFILES:-}" ]] || fail "first_deploy_worker_profiles_forbidden"
+# Activation evidence order:
+# WIKI_ACTIVE_VERSION -> DM_WORKER_1_HEARTBEAT -> DM_WORKER_1_LEASE ->
+# REMOTE_WORKER_LEASE_EXPIRED -> DM_WORKER_2.
 status_ok "release_sha"
 status_ok "api_image_digest"
 status_ok "caddy_image_digest"
@@ -113,6 +125,9 @@ status_ok "caddy_image_digest"
 RELEASE_DIR="$(cd -- "$(dirname -- "$MANIFEST")" && pwd)"
 export PRIMARY_API_IMAGE="${PRIMARY_API_IMAGE:-${RELEASE_MANIFEST[API_IMAGE]}}"
 export CANDIDATE_API_IMAGE="${CANDIDATE_API_IMAGE:-${RELEASE_MANIFEST[API_IMAGE]}}"
+export DM_WORKER_IMAGE="${DM_WORKER_IMAGE:-${RELEASE_MANIFEST[DM_WORKER_IMAGE]}}"
+export WIKI_WORKER_IMAGE="${WIKI_WORKER_IMAGE:-${RELEASE_MANIFEST[WIKI_WORKER_IMAGE]}}"
+export CONTENT_PROPOSAL_WORKER_IMAGE="${CONTENT_PROPOSAL_WORKER_IMAGE:-${RELEASE_MANIFEST[CONTENT_PROPOSAL_WORKER_IMAGE]}}"
 docker compose -p brand-pilot \
   -f "$RELEASE_DIR/compose.production.yml" \
   --env-file "$MANIFEST" config --quiet >/dev/null

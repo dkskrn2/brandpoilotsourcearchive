@@ -106,6 +106,7 @@ parse_release_manifest() {
   local key
   local value
   local required_key
+  local optional_image_key
   [[ -f "$manifest" ]] || fail "release_manifest_missing"
   RELEASE_MANIFEST=()
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -115,7 +116,7 @@ parse_release_manifest() {
     key="${BASH_REMATCH[1]}"
     value="${BASH_REMATCH[2]}"
     case "$key" in
-      RELEASE_SCHEMA|RELEASE_SHA|API_IMAGE|CADDY_IMAGE|CANARY_HOST|PRIMARY_HOST|ACME_EMAIL|API_ENV_FILE) ;;
+      RELEASE_SCHEMA|RELEASE_SHA|API_IMAGE|DM_WORKER_IMAGE|WIKI_WORKER_IMAGE|CONTENT_PROPOSAL_WORKER_IMAGE|CADDY_IMAGE|CANARY_HOST|PRIMARY_HOST|ACME_EMAIL|API_ENV_FILE) ;;
       *) fail "manifest_unknown_key" ;;
     esac
     [[ ! -v "RELEASE_MANIFEST[$key]" ]] || fail "manifest_duplicate_key"
@@ -132,6 +133,11 @@ parse_release_manifest() {
   [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "1" ]] || fail "release_schema_unsupported"
   require_release_sha "${RELEASE_MANIFEST[RELEASE_SHA]}"
   require_digest_image "${RELEASE_MANIFEST[API_IMAGE]}"
+  for optional_image_key in DM_WORKER_IMAGE WIKI_WORKER_IMAGE CONTENT_PROPOSAL_WORKER_IMAGE; do
+    if [[ -v "RELEASE_MANIFEST[$optional_image_key]" ]]; then
+      require_digest_image "${RELEASE_MANIFEST[$optional_image_key]}"
+    fi
+  done
   require_digest_image "${RELEASE_MANIFEST[CADDY_IMAGE]}"
   require_hostname "${RELEASE_MANIFEST[CANARY_HOST]}"
   require_hostname "${RELEASE_MANIFEST[PRIMARY_HOST]}"
