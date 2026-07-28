@@ -2465,6 +2465,20 @@ describe("API server", () => {
     expect(invalidPhone.statusCode).toBe(400);
     expect(invalidPhone.json()).toEqual({ error: "invalid_support_contact_phone" });
 
+    const legacyFeatureCategory = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/support-requests`,
+      payload: {
+        category: "feature",
+        title: "과거 기능 제안 유형",
+        message: "신규 문의는 피드백으로 분리되어야 합니다.",
+        contactPhone: "01012345678"
+      }
+    });
+    expect(legacyFeatureCategory.statusCode).toBe(400);
+    expect(legacyFeatureCategory.json()).toEqual({ error: "support_request_required_fields" });
+    expect(repository.createSupportRequest).not.toHaveBeenCalled();
+
     const created = await app.inject({
       method: "POST",
       url: `/brands/${brandId}/support-requests`,

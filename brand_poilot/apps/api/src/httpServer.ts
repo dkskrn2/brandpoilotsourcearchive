@@ -91,7 +91,7 @@ export type { ApiHttpRuntimePolicy } from "./runtimeConfig.js";
 
 const channels = new Set<string>(channelNames);
 const sourceTypes = new Set(["owned", "reference"]);
-const supportRequestCategories = new Set(["bug", "feature", "channel", "account", "other"]);
+const creatableSupportRequestCategories = new Set(["bug", "channel", "account", "other"]);
 const supportRequestStatuses = new Set(["new", "in_progress", "resolved"]);
 const topicRowStatuses = new Set(["uploaded", "queued", "used", "skipped", "invalid", "failed", "disabled"]);
 const dmConversationFilters = new Set<DmConversationFilter>(["all", "attention", "complaint", "unanswered", "error"]);
@@ -567,8 +567,8 @@ function asSourceType(value: unknown): SourceType | null {
   return typeof value === "string" && sourceTypes.has(value) ? (value as SourceType) : null;
 }
 
-function asSupportRequestCategory(value: unknown): SupportRequestCategory | null {
-  return typeof value === "string" && supportRequestCategories.has(value) ? (value as SupportRequestCategory) : null;
+export function asCreatableSupportRequestCategory(value: unknown): SupportRequestCategory | null {
+  return typeof value === "string" && creatableSupportRequestCategories.has(value) ? (value as SupportRequestCategory) : null;
 }
 
 function asSupportRequestStatus(value: unknown): SupportRequestStatus | null {
@@ -2139,7 +2139,7 @@ export function createServer(
       reply.code(400);
       return { error: "invalid_body" };
     }
-    const category = asSupportRequestCategory(request.body.category);
+    const category = asCreatableSupportRequestCategory(request.body.category);
     const title = typeof request.body.title === "string" ? request.body.title.trim() : "";
     const message = typeof request.body.message === "string" ? request.body.message.trim() : "";
     if (!category || title.length === 0 || message.length === 0) {
