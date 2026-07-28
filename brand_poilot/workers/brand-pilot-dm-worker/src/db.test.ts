@@ -164,4 +164,15 @@ describe("resolveDmWorkerDatabaseConfig", () => {
     expect(source.match(/parseWikiSourceKind\(/g)).toHaveLength(2);
   });
 
+  it("grounds DM prompts in the tenant active approved Brand Core without external inspiration sources", async () => {
+    const source = await readFile(new URL("./db.ts", import.meta.url), "utf8");
+
+    expect(source).toMatch(/join brand_profiles profile[\s\S]*profile\.active_brand_core_id/);
+    expect(source).toMatch(/join brand_core_versions core[\s\S]*core\.status = 'approved'/);
+    expect(source).toMatch(/core\.workspace_id = \$1::uuid[\s\S]*core\.brand_id = \$2::uuid/);
+    expect(source).not.toMatch(/from reference_items/);
+    expect(source).not.toMatch(/brand_trend_saved_media/);
+    expect(source).not.toMatch(/__confirmed_brand_intelligence__/);
+  });
+
 });

@@ -470,6 +470,70 @@ describe("DM Wiki repository", () => {
     expect(statements.some((sql) => sql.includes("pg_advisory_xact_lock"))).toBe(true);
   });
 
+  it("reports approved Brand Core and active-or-stale Wiki readiness without legacy projections", async () => {
+    const statements: string[] = [];
+    const query = vi.fn(async (sql: string) => {
+      statements.push(sql);
+      return {
+        rowCount: 1,
+        rows: [{
+          enabled: false,
+          fallback_message: "fallback",
+          error_message: "error",
+          brand_core_ready: true,
+          wiki_ready: true,
+          wiki_status: "stale",
+          message_permission_ready: true,
+          worker_online: true,
+        }],
+      };
+    });
+    const repository = createRepository(fakePool(query) as any);
+
+    await expect(repository.getInstagramDmSettings("brand-1")).resolves.toMatchObject({
+      brandCoreReady: true,
+      wikiReady: true,
+      wikiStatus: "stale",
+      messagePermissionReady: true,
+      workerStatus: "online",
+    });
+
+    const sql = statements[0];
+    expect(sql).toContain("from brand_profiles profile");
+    expect(sql).toContain("join brand_core_versions core");
+    expect(sql).toContain("core.status = 'approved'");
+    expect(sql).toContain("core.workspace_id = brand.workspace_id");
+    expect(sql).toContain("core.brand_id = brand.id");
+    expect(sql).toContain("version.status = 'active'");
+    expect(sql).toContain("entry.status = 'legacy_projection'");
+  });
+
+  it("does not activate automatic replies without every repository readiness gate", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("select settings.enabled")) {
+        return {
+          rowCount: 1,
+          rows: [{
+            enabled: false,
+            fallback_message: "fallback",
+            error_message: "error",
+            brand_core_ready: false,
+            wiki_ready: true,
+            wiki_status: "active",
+            message_permission_ready: true,
+            worker_online: true,
+          }],
+        };
+      }
+      return { rowCount: 1, rows: [{ workspace_id: "workspace-1" }] };
+    });
+    const repository = createRepository(fakePool(query) as any);
+
+    await expect(repository.updateInstagramDmSettings("brand-1", { enabled: true }))
+      .rejects.toThrow("dm_activation_blocked");
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("insert into instagram_dm_settings"))).toBe(false);
+  });
+
   it("resolves a direct FAQ answer from the owned enabled entry and ignores worker answer text", async () => {
     const fixture = directFaqCompletionFixture({ id: directFaqId, answer: "평일 9시부터 18시까지 운영합니다." });
     const result = parseDmWorkerResult({

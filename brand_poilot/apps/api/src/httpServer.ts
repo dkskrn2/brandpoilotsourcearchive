@@ -10,7 +10,7 @@ import { resolveInstagramConnection } from "./metaGraph.js";
 import { buildFacebookLoginAuthorizeUrl, exchangeFacebookLoginCode, instagramTrendFacebookScopes } from "./facebookLoginGraph.js";
 import { buildInstagramLoginAuthorizeUrl, exchangeInstagramLoginCode, instagramLoginScopes, resolveInstagramLoginConnection, subscribeInstagramMessagingWebhooks } from "./instagramLoginGraph.js";
 import { parseInstagramMessagingEvents, verifyInstagramSignature } from "./instagramWebhook.js";
-import { parseDmWorkerResult } from "./dmTypes.js";
+import { isDmAutomationReady, parseDmWorkerResult } from "./dmTypes.js";
 import { normalizeInstagramHashtag } from "./instagramTrend.js";
 import { StoryCapabilityRequiredError } from "./repository.js";
 import type { ApiRepository, BrandProfileInput, Channel, DmAttentionType, DmConversationFilter, InstagramDeliveryFormat, InstagramFormatSettingsInput, InstagramTrendMediaTypeFilter, InstagramTrendPageDto, InstagramTrendSort, SourceType, SubjectAnalysisRepositoryV2, SupportRequestCategory, SupportRequestStatus } from "./types.js";
@@ -2153,7 +2153,12 @@ export function createServer(
   });
 
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/instagram-dm/settings", async (request) => {
-    return repository.getInstagramDmSettings(request.params.brandId);
+    const settings = await repository.getInstagramDmSettings(request.params.brandId);
+    const webhookConfigured = Boolean(metaWebhook?.appSecret && metaWebhook.verifyToken);
+    return {
+      ...settings,
+      webhookStatus: webhookConfigured ? "connected" as const : "needs_attention" as const,
+    };
   });
 
   app.put<{ Params: { brandId: string }; Body: Record<string, unknown> }>("/brands/:brandId/instagram-dm/settings", async (request, reply) => {
@@ -2167,11 +2172,29 @@ export function createServer(
       return { error: "invalid_dm_settings" };
     }
     try {
-      return await repository.updateInstagramDmSettings(request.params.brandId, {
+      if (body.enabled === true) {
+        const current = await repository.getInstagramDmSettings(request.params.brandId);
+        if (!isDmAutomationReady({
+          ...current,
+          webhookStatus: metaWebhook?.appSecret && metaWebhook.verifyToken
+            ? "connected"
+            : "needs_attention",
+        })) {
+          reply.code(409);
+          return { error: "dm_activation_blocked" };
+        }
+      }
+      const settings = await repository.updateInstagramDmSettings(request.params.brandId, {
         enabled: body.enabled as boolean | undefined,
         fallbackMessage: body.fallbackMessage as string | undefined,
         errorMessage: body.errorMessage as string | undefined,
       });
+      return {
+        ...settings,
+        webhookStatus: metaWebhook?.appSecret && metaWebhook.verifyToken
+          ? "connected" as const
+          : "needs_attention" as const,
+      };
     } catch (error) {
       if (error instanceof Error && error.message === "dm_activation_blocked") {
         reply.code(409);

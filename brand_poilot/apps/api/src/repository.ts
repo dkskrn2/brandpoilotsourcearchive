@@ -6615,11 +6615,35 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       const result = await pool.query(
         `select settings.enabled, settings.fallback_message, settings.error_message,
                 exists(
+                  select 1
+                  from brand_profiles profile
+                  join brand_core_versions core
+                    on core.id = profile.active_brand_core_id
+                   and core.workspace_id = brand.workspace_id
+                   and core.brand_id = brand.id
+                   and core.status = 'approved'
+                  where profile.brand_id = brand.id
+                ) as brand_core_ready,
+                exists(
                   select 1 from wiki_versions version
                   join wiki_page_chunks chunk on chunk.wiki_version_id = version.id
                   where version.brand_id = brand.id and version.status = 'active'
                     and chunk.enabled and chunk.embedding is not null
+                    and not exists (
+                      select 1
+                      from wiki_source_units unit
+                      join knowledge_entries entry on entry.id = unit.source_id
+                      where unit.wiki_version_id = version.id
+                        and entry.status = 'legacy_projection'
+                    )
                 ) as wiki_ready,
+                case
+                  when active_wiki.id is not null and latest_build.status = 'failed' then 'stale'
+                  when active_wiki.id is not null then 'active'
+                  when latest_build.status in ('pending', 'building') then 'building'
+                  when latest_build.status = 'failed' then 'failed'
+                  else 'empty'
+                end as wiki_status,
                 exists(
                   select 1 from brand_channels channel
                   join channel_credentials credential on credential.brand_channel_id = channel.id
@@ -6631,6 +6655,21 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                 (select bool_or(last_heartbeat_at > now() - interval '30 seconds') from worker_instances where worker_type = 'dm') as worker_online
          from brands brand
          left join instagram_dm_settings settings on settings.brand_id = brand.id
+         left join lateral (
+           select version.id
+           from wiki_versions version
+           where version.workspace_id = brand.workspace_id and version.brand_id = brand.id
+             and version.status = 'active'
+           order by version.activated_at desc nulls last
+           limit 1
+         ) active_wiki on true
+         left join lateral (
+           select request.status
+           from wiki_build_requests request
+           where request.workspace_id = brand.workspace_id and request.brand_id = brand.id
+           order by request.created_at desc
+           limit 1
+         ) latest_build on true
          where brand.id = $1 and brand.deleted_at is null`,
         [brandId],
       );
@@ -6641,7 +6680,11 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         enabled: Boolean(row.enabled),
         fallbackMessage: row.fallback_message ?? "현재 확인 가능한 안내 자료가 부족합니다. 담당자가 확인 후 안내드리겠습니다.",
         errorMessage: row.error_message ?? "답변을 준비하는 중 문제가 발생했습니다. 잠시 후 다시 문의해 주세요.",
+        brandCoreReady: Boolean(row.brand_core_ready),
         wikiReady: Boolean(row.wiki_ready),
+        wikiStatus: ["active", "stale", "building", "failed"].includes(row.wiki_status)
+          ? row.wiki_status
+          : "empty",
         messagePermissionReady: Boolean(row.message_permission_ready),
         webhookStatus: "unchecked",
         workerStatus: row.worker_online === true ? "online" : row.worker_online === false ? "worker_offline" : "unknown",
@@ -6651,7 +6694,12 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     async updateInstagramDmSettings(brandId, input) {
       const current = await this.getInstagramDmSettings(brandId);
       const enabled = input.enabled ?? current.enabled;
-      if (enabled && (!current.wikiReady || !current.messagePermissionReady || current.workerStatus !== "online")) {
+      if (enabled && (
+        !current.brandCoreReady
+        || !current.wikiReady
+        || !current.messagePermissionReady
+        || current.workerStatus !== "online"
+      )) {
         throw new Error("dm_activation_blocked");
       }
       const brand = await pool.query("select workspace_id from brands where id = $1 and deleted_at is null", [brandId]);

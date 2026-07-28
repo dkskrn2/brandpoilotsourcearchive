@@ -1,5 +1,12 @@
 import type { DmAttentionType, DmJobRoute, DmReasonCode, DmWorkerResult } from "./dmTypes.js";
 
+export const dmKnowledgeSourcePriority = [
+  "exact_faq",
+  "approved_product_service",
+  "approved_brand_core",
+  "active_wiki",
+] as const;
+
 export const dmFixedMessages = {
   restricted_action: "자동 처리할 수 없는 요청입니다. 담당자가 확인하겠습니다.",
   complaint: "불편을 드려 죄송합니다. 담당자가 내용을 확인하겠습니다.",

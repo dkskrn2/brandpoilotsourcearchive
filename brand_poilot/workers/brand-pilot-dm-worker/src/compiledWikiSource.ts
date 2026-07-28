@@ -4,7 +4,7 @@ import {
   type CompiledWikiSourceUnit,
 } from "./compiledWikiTypes.js";
 import { curateKnowledge, type CuratedKnowledgeUnit } from "./knowledgeCurator.js";
-import { normalizeKnowledgeSource } from "./knowledgeNormalizer.js";
+import { isTrustedDmKnowledgeSource, normalizeKnowledgeSource } from "./knowledgeNormalizer.js";
 import type { ClaimedWikiBuildItem, WikiBuildSource } from "./wikiRefresh.js";
 
 export interface CompiledWikiSourceDb {
@@ -73,6 +73,9 @@ export async function runCompiledWikiSourceItemOnce(input: {
 
   try {
     const source = await input.db.getWikiBuildSource(item);
+    if (!isTrustedDmKnowledgeSource(source.source_kind)) {
+      throw new Error("dm_knowledge_source_untrusted");
+    }
     let units: CuratedKnowledgeUnit[];
     if (source.source_kind === "owned_snapshot") {
       const normalized = normalizeKnowledgeSource(source.content);

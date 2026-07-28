@@ -1,6 +1,19 @@
 const minimumContentLength = 120;
 
 const boilerplatePattern = /(?:쿠키\s*(?:설정|정책|동의)|개인정보\s*처리방침|privacy\s*policy|all\s+rights\s+reserved|copyright|^©\s*\d{4})/i;
+const trustedDmKnowledgeSourceKinds = new Set([
+  "faq",
+  "product",
+  "product_service",
+  "service",
+  "policy",
+  "guide",
+  "owned_snapshot",
+]);
+
+export function isTrustedDmKnowledgeSource(sourceKind: unknown): boolean {
+  return typeof sourceKind === "string" && trustedDmKnowledgeSourceKinds.has(sourceKind);
+}
 
 function normalizeLine(line: string) {
   return line.trim().replace(/[\t ]+/g, " ");

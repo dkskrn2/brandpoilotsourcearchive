@@ -1235,10 +1235,17 @@ export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
     async searchCompiledWiki(workspaceId: string, brandId: string, question: string, embedding: number[]) {
       const version = await pool.query(
         `select version.id,
-                coalesce(overview.structured_data ->> 'brandCore', overview.summary, '') as brand_core
+                core.core_json as brand_core
          from wiki_versions version
-         join wiki_pages overview
-           on overview.wiki_version_id = version.id and overview.page_type = 'brand_overview'
+         join brand_profiles profile
+           on profile.workspace_id = version.workspace_id
+          and profile.brand_id = version.brand_id
+          and profile.active_brand_core_id is not null
+         join brand_core_versions core
+           on core.id = profile.active_brand_core_id
+          and core.workspace_id = $1::uuid
+          and core.brand_id = $2::uuid
+          and core.status = 'approved'
          where version.workspace_id = $1::uuid and version.brand_id = $2::uuid
            and version.status = 'active'
          order by version.activated_at desc nulls last
@@ -1321,7 +1328,7 @@ export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
         : { rows: [] };
       return {
         wikiVersionId,
-        brandCore: String(version.rows[0].brand_core ?? ""),
+        brandCore: JSON.stringify(version.rows[0].brand_core ?? {}),
         chunks: result.rows.map((row) => ({
           chunkId: row.page_chunk_id,
           pageId: row.wiki_page_id,

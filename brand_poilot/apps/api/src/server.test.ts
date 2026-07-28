@@ -523,8 +523,8 @@ function createRepository(): ApiRepository {
     listKnowledgeImports: vi.fn(async () => []),
     enqueueWikiRefresh: vi.fn(async () => ({ id: "wiki-job-1", status: "queued" })),
     receiveInstagramWebhookMessage: vi.fn(async () => ({ status: "queued" as const, brandId, conversationId: "conversation-1", jobId: "dm-job-1" })),
-    getInstagramDmSettings: vi.fn(async () => ({ brandId, enabled: false, fallbackMessage: "담당자가 확인 후 안내드리겠습니다.", errorMessage: "잠시 후 다시 문의해 주세요.", wikiReady: false, messagePermissionReady: false, webhookStatus: "unchecked" as const, workerStatus: "unknown" as const })),
-    updateInstagramDmSettings: vi.fn(async (_brandId, input) => ({ brandId, enabled: input.enabled ?? false, fallbackMessage: input.fallbackMessage ?? "담당자가 확인 후 안내드리겠습니다.", errorMessage: input.errorMessage ?? "잠시 후 다시 문의해 주세요.", wikiReady: true, messagePermissionReady: true, webhookStatus: "connected" as const, workerStatus: "online" as const })),
+    getInstagramDmSettings: vi.fn(async () => ({ brandId, enabled: false, fallbackMessage: "담당자가 확인 후 안내드리겠습니다.", errorMessage: "잠시 후 다시 문의해 주세요.", brandCoreReady: false, wikiReady: false, wikiStatus: "empty" as const, messagePermissionReady: false, webhookStatus: "unchecked" as const, workerStatus: "unknown" as const })),
+    updateInstagramDmSettings: vi.fn(async (_brandId, input) => ({ brandId, enabled: input.enabled ?? false, fallbackMessage: input.fallbackMessage ?? "담당자가 확인 후 안내드리겠습니다.", errorMessage: input.errorMessage ?? "잠시 후 다시 문의해 주세요.", brandCoreReady: true, wikiReady: true, wikiStatus: "active" as const, messagePermissionReady: true, webhookStatus: "connected" as const, workerStatus: "online" as const })),
     listInstagramDmHistory: vi.fn(async () => []),
     listDmConversations: vi.fn(async () => ({ items: [], nextCursor: null })),
     getDmConversation: vi.fn(async (_brandId, conversationId) => ({

@@ -158,4 +158,36 @@ describe("compiled Wiki source collection", () => {
     expect(repository.completeWikiSourceItem).not.toHaveBeenCalled();
     expect(repository.failWikiBuildItem).toHaveBeenCalledWith(item, "wiki_build_source_not_found");
   });
+
+  it("rejects external reference and trend sources before curation", async () => {
+    const untrusted = { ...item, source_kind: "external_reference" as any };
+    const runCodex = vi.fn();
+    const repository = db({
+      claimWikiBuildItem: vi.fn(async () => untrusted),
+      getWikiBuildSource: vi.fn(async () => ({
+        source_kind: "external_reference",
+        source_id: item.source_id,
+        title: "경쟁사 게시물",
+        content: "DM 사실로 사용하면 안 되는 외부 영감 자료입니다.",
+        content_hash: "reference-hash",
+        aliases: [],
+        keywords: [],
+        structured_data: {},
+        source_url: "https://competitor.example/post",
+      })),
+    });
+
+    await expect(runCompiledWikiSourceItemOnce({
+      workerId: "worker-1",
+      db: repository as any,
+      curatorPromptVersion: "curator-v1",
+      embeddingModel: "text-embedding-3-small",
+      embeddingVersion: "v1",
+      runtimeDirectory: "runtime",
+      runCodex,
+    })).resolves.toEqual({ status: "failed", itemId: "item-1" });
+    expect(runCodex).not.toHaveBeenCalled();
+    expect(repository.completeWikiSourceItem).not.toHaveBeenCalled();
+    expect(repository.failWikiBuildItem).toHaveBeenCalledWith(untrusted, "dm_knowledge_source_untrusted");
+  });
 });
