@@ -943,3 +943,77 @@ approved GC operation. Activation evidence must therefore show the migration
 is present, canary and primary remain healthy, the issuance flag change was
 approved, the legacy-token TTL fully drained, and all three alert thresholds
 and response ownership are active.
+
+## 12. D rollout canary, backup, restore, and immediate rollback gate
+
+This gate runs only after development is complete. The automated canary is
+read-only: it never runs paid AI generation and never sends a real DM. It
+never publishes to a real SNS channel. Keep `LOCAL_SCHEDULER_ENABLED=false` and
+`INSTAGRAM_PUBLISH_ENABLED=false`; `/ready` must report scheduler, publishing,
+and DM as disabled.
+
+Prepare a mode-0600 Netscape cookie jar for an existing test operator session.
+Do not put the cookie value on the command line or in evidence:
+
+```bash
+export CANARY_SESSION_COOKIE_FILE=/opt/brand-pilot/shared/canary/session.cookies
+export CANARY_BRAND_ID=<TEST_BRAND_UUID>
+./scripts/verify-canary.sh https://canary-api.danbammsg.co.kr https://app.danbammsg.co.kr
+```
+
+The verifier reads `/health`, `/ready`, `/auth/me`, Brand Core, products, Wiki,
+generation usage, and channel capabilities. It also checks allowed and denied
+CORS, a Secure/HttpOnly/SameSite=Lax login cookie, the disabled development auth
+route, DB readiness, and the safe flags. It performs no write request.
+
+Before `promote.sh --prepare`, create the database provider backup and an
+encrypted/provider-managed Caddy data backup outside these scripts. Record only
+their identifiers and the Caddy data checksum:
+
+```bash
+candidate_sha="$(cat /opt/brand-pilot/state/candidate)"
+./scripts/backup-state.sh \
+  --provider-backup-id <PROVIDER_BACKUP_ID> \
+  --caddy-backup-id <ENCRYPTED_CADDY_BACKUP_ID> \
+  --caddy-data-sha256 <CADDY_DATA_SHA256> \
+  --output "/opt/brand-pilot/state/backups/pre-promote-${candidate_sha}.env"
+export PROMOTION_BACKUP_METADATA="/opt/brand-pilot/state/backups/pre-promote-${candidate_sha}.env"
+./scripts/promote.sh --prepare
+```
+
+The metadata binds the current release SHA and image digest, candidate release
+manifest checksum, external environment checksum, provider backup ID, and Caddy
+backup ID. It never copies `api.env`, database URLs, OAuth secrets, credential
+keys, access tokens, Caddy private keys, or other secret plaintext into an
+archive. Promotion fails closed if the metadata no longer matches.
+
+Restore rehearsal is allowed only into an explicitly named `*_restore_test`
+database. The provider adapter must be a separately reviewed executable; the
+database URL file, metadata, and row-count manifest must all be mode 0600:
+
+```bash
+export RESTORE_REHEARSAL_TEST_ONLY=I_UNDERSTAND_TEST_DATABASE_ONLY
+export RESTORE_REHEARSAL_COMMAND=/opt/brand-pilot/ops/provider-restore-test-db
+./scripts/restore-state.sh \
+  --test-database-url-file /opt/brand-pilot/shared/restore/test-database.url \
+  --backup-metadata "$PROMOTION_BACKUP_METADATA" \
+  --expected-schema-version <LATEST_MIGRATION_FILE.sql> \
+  --row-count-manifest /opt/brand-pilot/shared/restore/expected-row-counts.env
+```
+
+The rehearsal verifies the latest `schema_migrations` version and every
+allowlisted `schema.table=count` entry. It refuses any database whose name does
+not end in `_restore_test`.
+
+Rollback uses the previous immutable image digest with the same external
+`API_ENV_FILE`. Trigger immediate rollback on:
+
+- OAuth repeated failure
+- credential decryption failure
+- duplicate DM or publish
+- API interruption longer than 5 minutes
+- migration mismatch
+
+Record only checksums, immutable SHAs/digests, backup identifiers, safe canary
+status, and row-count results. Never record cookies, tokens, database URLs, or
+environment plaintext.

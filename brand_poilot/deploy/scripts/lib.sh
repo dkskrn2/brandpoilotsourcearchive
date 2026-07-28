@@ -190,7 +190,9 @@ release_file_specs() {
     "755 scripts/deploy.sh" \
     "755 scripts/verify-canary.sh" \
     "755 scripts/promote.sh" \
-    "755 scripts/rollback.sh"
+    "755 scripts/rollback.sh" \
+    "755 scripts/backup-state.sh" \
+    "755 scripts/restore-state.sh"
 }
 
 require_release_file() {

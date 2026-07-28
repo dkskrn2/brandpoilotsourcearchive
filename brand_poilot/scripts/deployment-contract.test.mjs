@@ -43,6 +43,8 @@ const deploymentArtifacts = [
   "deploy/scripts/verify-canary.sh",
   "deploy/scripts/promote.sh",
   "deploy/scripts/rollback.sh",
+  "deploy/scripts/backup-state.sh",
+  "deploy/scripts/restore-state.sh",
   ubuntuRunbookPath,
   oauthCutoverRunbookPath,
   ubuntuBootstrapPath,
@@ -55,8 +57,109 @@ const deploymentScripts = [
   "deploy/scripts/verify-canary.sh",
   "deploy/scripts/promote.sh",
   "deploy/scripts/rollback.sh",
+  "deploy/scripts/backup-state.sh",
+  "deploy/scripts/restore-state.sh",
   ubuntuBootstrapPath,
 ];
+
+test("Task 10 canary is read-only, authenticated, and proves safe feature flags", () => {
+  const verify = read("deploy/scripts/verify-canary.sh");
+  for (const marker of [
+    "/health",
+    "/ready",
+    "cors_allowed",
+    "cors_denied",
+    "secure_cookie",
+    "/auth/meta/dev-complete",
+    "/auth/me",
+    "/brand-core",
+    "/product-services",
+    "/wiki/status",
+    "/ai-content/usage",
+    "/channels/capabilities",
+    "features.scheduler",
+    "features.publishing",
+    "features.dm",
+    "CANARY_SESSION_COOKIE_FILE",
+    "CANARY_BRAND_ID",
+  ]) {
+    assert.ok(verify.includes(marker), `canary verifier missing ${marker}`);
+  }
+  assert.match(verify, /require_file_mode_600/);
+  assert.match(verify, /Secure/);
+  assert.match(verify, /HttpOnly/);
+  assert.match(verify, /SameSite=Lax/);
+  assert.doesNotMatch(verify, /--request\s+(?:POST|PUT|PATCH|DELETE)|\s-X\s*(?:POST|PUT|PATCH|DELETE)/i);
+  assert.doesNotMatch(
+    verify,
+    /--request\s+(?:POST|PUT|PATCH|DELETE)|\/(?:generate|download|publish|send-message|reply)(?:[/?"]|$)/i,
+  );
+});
+
+test("Task 10 backup metadata excludes secret plaintext and binds promotion state", () => {
+  const backup = read("deploy/scripts/backup-state.sh");
+  const promote = read("deploy/scripts/promote.sh");
+  for (const marker of [
+    "PROVIDER_BACKUP_ID",
+    "CADDY_BACKUP_ID",
+    "CADDY_DATA_SHA256",
+    "CURRENT_RELEASE_SHA",
+    "CURRENT_IMAGE_DIGEST",
+    "RELEASE_MANIFEST_SHA256",
+    "EXTERNAL_ENV_SHA256",
+  ]) {
+    assert.ok(backup.includes(marker), `backup metadata missing ${marker}`);
+  }
+  assert.match(backup, /flock -n 9/);
+  assert.match(backup, /reconcile_transition_or_fail/);
+  assert.doesNotMatch(backup, /\b(?:cp|tar|zip|rsync)\b[^\n]*(?:api\.env|env\/|caddy\/data)/i);
+  assert.doesNotMatch(backup, /(?:DATABASE_URL|CREDENTIAL_ENCRYPTION_KEY|CLIENT_SECRET|ACCESS_TOKEN)=/);
+  assert.match(promote, /PROMOTION_BACKUP_METADATA/);
+  assert.match(promote, /validate_promotion_backup_metadata/);
+  assert.match(promote, /CURRENT_RELEASE_SHA/);
+  assert.match(promote, /CURRENT_IMAGE_DIGEST/);
+});
+
+test("Task 10 restore is test-database-only and verifies schema and row counts", () => {
+  const restore = read("deploy/scripts/restore-state.sh");
+  for (const marker of [
+    "--test-database-url-file",
+    "--backup-metadata",
+    "--expected-schema-version",
+    "--row-count-manifest",
+    "RESTORE_REHEARSAL_TEST_ONLY",
+    "restore_target_database_must_be_test_only",
+    "schema_version_mismatch",
+    "row_count_mismatch",
+    "provider_backup_id",
+  ]) {
+    assert.ok(restore.includes(marker), `restore contract missing ${marker}`);
+  }
+  assert.match(restore, /require_file_mode_600/);
+  assert.match(restore, /flock -n 9/);
+  assert.doesNotMatch(restore, /\beval\b|\bsource\b[^\n]*(?:DATABASE|ENV|metadata)/i);
+});
+
+test("Task 10 rollback uses immutable prior digest and documents immediate triggers", () => {
+  const rollback = read("deploy/scripts/rollback.sh");
+  const runbook = read(ubuntuRunbookPath);
+  assert.match(rollback, /OCI_REVISION/);
+  assert.match(rollback, /@sha256:/);
+  assert.match(rollback, /API_ENV_FILE/);
+  assert.match(rollback, /rollback_external_env_mismatch/);
+  for (const phrase of [
+    "OAuth repeated failure",
+    "credential decryption failure",
+    "duplicate DM or publish",
+    "API interruption longer than 5 minutes",
+    "migration mismatch",
+    "never runs paid AI generation",
+    "never sends a real DM",
+    "never publishes to a real SNS channel",
+  ]) {
+    assert.ok(runbook.includes(phrase), `Ubuntu runbook missing: ${phrase}`);
+  }
+});
 
 function indentation(line) {
   return line.match(/^ */)[0].length;
@@ -1278,7 +1381,7 @@ function seedRelease(root, sha, apiEnvFile, overrides = {}) {
   copyFileSync("deploy/Caddyfile", join(releaseDirectory, "Caddyfile"));
   copyFileSync("deploy/Caddyfile.canary", join(releaseDirectory, "Caddyfile.canary"));
   mkdirSync(join(releaseDirectory, "scripts"), { recursive: true });
-  for (const name of ["lib.sh", "preflight.sh", "deploy.sh", "verify-canary.sh", "promote.sh", "rollback.sh"]) {
+  for (const name of ["lib.sh", "preflight.sh", "deploy.sh", "verify-canary.sh", "promote.sh", "rollback.sh", "backup-state.sh", "restore-state.sh"]) {
     copyFileSync(join("deploy", "scripts", name), join(releaseDirectory, "scripts", name));
     chmodSync(join(releaseDirectory, "scripts", name), 0o755);
   }
@@ -1290,6 +1393,8 @@ function seedRelease(root, sha, apiEnvFile, overrides = {}) {
     [0o644, "Caddyfile.canary"],
     ...["lib.sh", "preflight.sh", "deploy.sh", "verify-canary.sh", "promote.sh", "rollback.sh"]
       .map((name) => [0o755, `scripts/${name}`]),
+    [0o755, "scripts/backup-state.sh"],
+    [0o755, "scripts/restore-state.sh"],
   ];
   const integrity = specs.map(([mode, relative]) => {
     chmodSync(join(releaseDirectory, relative), mode);
@@ -1560,6 +1665,9 @@ function runPromotionFixture({
   const apiEnvFile = `${bashPath(root)}/shared/env/api.env`;
   mkdirSync(join(root, "state"), { recursive: true });
   mkdirSync(mocks, { recursive: true });
+  mkdirSync(join(root, "shared", "env"), { recursive: true });
+  writeFileSync(join(root, "shared", "env", "api.env"), "TEST_ONLY=true\n", { mode: 0o600 });
+  chmodSync(join(root, "shared", "env", "api.env"), 0o600);
   seedRelease(root, candidateSha, apiEnvFile, candidateManifestOverrides);
   writeFileSync(join(root, "state", "candidate"), `${candidateSha}\n`, { mode: 0o600 });
   writeFileSync(join(root, "state", "deploy.lock"), "", { mode: 0o600 });
@@ -1567,6 +1675,32 @@ function runPromotionFixture({
     seedRelease(root, currentSha, apiEnvFile, currentManifestOverrides);
     writeFileSync(join(root, "state", "current"), `${currentSha}\n`, { mode: 0o600 });
   }
+  const backupMetadata = join(root, "state", "promotion-backup.env");
+  const candidateManifest = join(root, "releases", candidateSha, "release.env");
+  const manifestChecksum = createHash("sha256").update(readFileSync(candidateManifest)).digest("hex");
+  const envChecksum = createHash("sha256")
+    .update(readFileSync(join(root, "shared", "env", "api.env")))
+    .digest("hex");
+  const currentDigest = current
+    ? `ghcr.io/dkskrn2/brand-pilot-api@sha256:${"b".repeat(64)}`
+    : "NONE";
+  writeFileSync(
+    backupMetadata,
+    [
+      "BACKUP_SCHEMA=1",
+      "PROVIDER_BACKUP_ID=test-provider-backup",
+      "CADDY_BACKUP_ID=test-caddy-backup",
+      `CADDY_DATA_SHA256=${"d".repeat(64)}`,
+      `CURRENT_RELEASE_SHA=${current ? currentSha : "NONE"}`,
+      `CURRENT_IMAGE_DIGEST=${currentDigest}`,
+      `CANDIDATE_RELEASE_SHA=${candidateSha}`,
+      `RELEASE_MANIFEST_SHA256=${manifestChecksum}`,
+      `EXTERNAL_ENV_SHA256=${envChecksum}`,
+      "",
+    ].join("\n"),
+    { mode: 0o600 },
+  );
+  chmodSync(backupMetadata, 0o600);
   const curlLog = join(fixture, "curl.log");
   const dockerLog = join(fixture, "docker.log");
   const eventLog = join(fixture, "events.log");
@@ -1621,6 +1755,7 @@ exit 22
       RELEASE_SHA_FOR_TEST: candidateSha,
       DOCKER_KILL_SWITCH: bashPath(dockerKillSwitch),
       DOCKER_KILL_UP_SERVICE: dockerKillUpService,
+      PROMOTION_BACKUP_METADATA: bashPath(backupMetadata),
     },
   });
   const prepare = () => {
