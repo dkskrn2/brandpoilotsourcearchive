@@ -950,6 +950,45 @@ test("preflight rejects reuse of the general worker token for content proposals 
   }
 });
 
+test("preflight accepts metadata-free ss output only for the exclusive current-stack Caddy owner", () => {
+  const bash = findBash();
+  assert.ok(bash, "Bash is required for the public port ownership contract");
+  const listeners = [
+    "LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*",
+    "LISTEN 0 4096 0.0.0.0:443 0.0.0.0:*",
+    "LISTEN 0 4096 [::]:80 [::]:*",
+    "LISTEN 0 4096 [::]:443 [::]:*",
+  ].join("\n");
+  const validCaddy = [
+    "caddy-id|brand-pilot-caddy-1|brand-pilot|caddy|",
+    "0.0.0.0:80->80/tcp, [::]:80->80/tcp, 0.0.0.0:443->443/tcp, [::]:443->443/tcp",
+  ].join("");
+  const run = (dockerRows) => spawnSync(bash, [
+    "-c",
+    'source "$1"; source "$2"; validate_public_port_ownership "$3" "$4"',
+    "_",
+    bashPath("deploy/scripts/lib.sh"),
+    bashPath("deploy/scripts/check-public-ports.sh"),
+    listeners,
+    dockerRows,
+  ], { cwd: process.cwd(), encoding: "utf8" });
+
+  const accepted = run(validCaddy);
+  assert.equal(accepted.status, 0, accepted.stderr);
+
+  for (const invalid of [
+    validCaddy.replace("|brand-pilot|", "|other-project|"),
+    validCaddy.replace("|caddy|", "||"),
+    validCaddy.replace(":443->443/tcp", ":444->443/tcp"),
+    `${validCaddy}, 0.0.0.0:8080->8080/tcp`,
+    `${validCaddy}, 127.0.0.1:80->8080/tcp`,
+    `${validCaddy}\nother-id|other-caddy|other-project|caddy|0.0.0.0:80->80/tcp`,
+    `${validCaddy}\nduplicate-id|brand-pilot-caddy-2|brand-pilot|caddy|0.0.0.0:80->80/tcp`,
+  ]) {
+    assert.notEqual(run(invalid).status, 0, `unexpectedly accepted: ${invalid}`);
+  }
+});
+
 function runSharedSecretHelper(apiContents, workerContents, command) {
   const bash = findBash();
   assert.ok(bash, "Bash is required for the shared secret contract");
