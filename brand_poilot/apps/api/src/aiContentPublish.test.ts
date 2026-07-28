@@ -14,7 +14,7 @@ const manifest = {
   content: { caption: "여름 운영 전에 확인할 내용입니다.", hashtags: ["#여름운영"], cta: "저장해 두세요." },
 };
 
-const input = {
+const staticPublishActionFixture = {
   workspaceId: "workspace-1",
   brandId: "brand-1",
   outputId: "output-1",
@@ -34,6 +34,7 @@ function setup(options: {
   existingWithoutQueueFormats?: string[];
   existingStatus?: string;
   existingIdempotencyKey?: string;
+  queueResultFormat?: string;
 } = {}) {
   const statements: string[] = [];
   let outputInsert = 0;
@@ -103,7 +104,7 @@ function setup(options: {
       queue_id: "queue-story",
       channel_output_id: "channel-output-story",
       channel: "instagram",
-      delivery_format: "instagram_story",
+      delivery_format: options.queueResultFormat ?? "instagram_story",
       status: "scheduled",
       last_error: null,
       published_url: null,
@@ -119,9 +120,9 @@ function setup(options: {
 }
 
 describe("AI content direct publishing", () => {
-  it("creates one shared draft and one scheduled queue per target", async () => {
+  it("publishes an Instagram feed carousel and static Story without creating a video render job", async () => {
     const { repository, statements } = setup();
-    await expect(repository.prepareAiContentPublish(input)).resolves.toMatchObject({
+    await expect(repository.prepareAiContentPublish(staticPublishActionFixture)).resolves.toMatchObject({
       publishGroupId: "publish-group-1",
       targets: [
         { deliveryFormat: "instagram_feed_carousel", queueId: "queue-instagram_feed_carousel", status: "scheduled" },
@@ -131,6 +132,7 @@ describe("AI content direct publishing", () => {
     expect(statements.filter((sql) => sql.includes("insert into content_topics"))).toHaveLength(1);
     expect(statements.filter((sql) => sql.includes("insert into channel_outputs"))).toHaveLength(2);
     expect(statements.filter((sql) => sql.includes("insert into publish_queue"))).toHaveLength(2);
+    expect(statements.filter((sql) => sql.includes("insert into jobs"))).toHaveLength(0);
     expect(statements.some((sql) => sql.includes("'approved'"))).toBe(true);
     const channelLookup = statements.find((sql) => sql.includes("from brand_channels channel"));
     expect(channelLookup).toContain("credential.expires_at is null");
@@ -139,7 +141,7 @@ describe("AI content direct publishing", () => {
 
   it("reuses an existing target while creating a new target", async () => {
     const { repository, statements } = setup({ existingFormats: ["instagram_feed_carousel"] });
-    const result = await repository.prepareAiContentPublish(input);
+    const result = await repository.prepareAiContentPublish(staticPublishActionFixture);
     expect(result.targets[0]).toMatchObject({ status: "published", queueId: "existing-queue-instagram_feed_carousel" });
     expect(result.targets[1]).toMatchObject({ status: "scheduled", queueId: "queue-instagram_story" });
     expect(statements.filter((sql) => sql.includes("insert into channel_outputs"))).toHaveLength(1);
@@ -147,7 +149,10 @@ describe("AI content direct publishing", () => {
 
   it("creates only the missing queue when a prior attempt already stored the channel output", async () => {
     const { repository, statements, query } = setup({ existingWithoutQueueFormats: ["instagram_feed_carousel"] });
-    const result = await repository.prepareAiContentPublish({ ...input, targets: [input.targets[0]] });
+    const result = await repository.prepareAiContentPublish({
+      ...staticPublishActionFixture,
+      targets: [staticPublishActionFixture.targets[0]],
+    });
 
     expect(result.targets[0]).toMatchObject({
       channelOutputId: "existing-instagram_feed_carousel",
@@ -165,7 +170,10 @@ describe("AI content direct publishing", () => {
       existingIdempotencyKey: "ai-content:output-1:instagram:instagram_story:older-request",
     });
 
-    const result = await repository.prepareAiContentPublish({ ...input, targets: [input.targets[1]] });
+    const result = await repository.prepareAiContentPublish({
+      ...staticPublishActionFixture,
+      targets: [staticPublishActionFixture.targets[1]],
+    });
 
     expect(result.targets[0]).toMatchObject({
       channelOutputId: "existing-instagram_story",
@@ -177,40 +185,27 @@ describe("AI content direct publishing", () => {
     const queueCall = query.mock.calls.find(([sql]) => String(sql).includes("update publish_queue") && String(sql).includes("status = 'scheduled'"));
     expect(queueCall?.[1]).toEqual([
       "existing-queue-instagram_story",
-      expect.stringContaining(input.idempotencyKey),
+      expect.stringContaining(staticPublishActionFixture.idempotencyKey),
     ]);
   });
 
   it("returns the same failed target when the idempotency key is repeated", async () => {
-    const currentKey = `ai-content:output-1:instagram:instagram_story:${input.idempotencyKey}`;
+    const currentKey = `ai-content:output-1:instagram:instagram_story:${staticPublishActionFixture.idempotencyKey}`;
     const { repository, statements } = setup({
       existingFormats: ["instagram_story"],
       existingStatus: "failed",
       existingIdempotencyKey: currentKey,
     });
 
-    const result = await repository.prepareAiContentPublish({ ...input, targets: [input.targets[1]] });
+    const result = await repository.prepareAiContentPublish({
+      ...staticPublishActionFixture,
+      targets: [staticPublishActionFixture.targets[1]],
+    });
 
     expect(result.targets[0]).toMatchObject({
       queueId: "existing-queue-instagram_story",
       status: "failed",
     });
-    expect(statements.filter((sql) => sql.includes("insert into publish_queue"))).toHaveLength(0);
-  });
-
-  it("queues reel rendering before publishing an image result as a reel", async () => {
-    const { repository, statements } = setup();
-    const result = await repository.prepareAiContentPublish({
-      ...input,
-      targets: [{ channel: "instagram", deliveryFormat: "instagram_reel" }],
-    });
-
-    expect(result.targets[0]).toMatchObject({
-      deliveryFormat: "instagram_reel",
-      queueId: null,
-      status: "rendering",
-    });
-    expect(statements.filter((sql) => sql.includes("insert into jobs"))).toHaveLength(1);
     expect(statements.filter((sql) => sql.includes("insert into publish_queue"))).toHaveLength(0);
   });
 
@@ -220,7 +215,7 @@ describe("AI content direct publishing", () => {
     [{ manifestUrl: "https://example.com/manifest.json" }, "ai_content_manifest_url_invalid"],
   ] as const)("rejects invalid direct publishing", async (options, error) => {
     const { repository, statements } = setup(options);
-    await expect(repository.prepareAiContentPublish(input)).rejects.toThrow(error);
+    await expect(repository.prepareAiContentPublish(staticPublishActionFixture)).rejects.toThrow(error);
     expect(statements).toContain("ROLLBACK");
   });
 
@@ -239,6 +234,22 @@ describe("AI content direct publishing", () => {
       publishedUrl: null,
       errorCode: null,
     });
+  });
+
+  it("keeps a legacy Reel queue result readable without using Reel in a new publish action fixture", async () => {
+    const { repository, statements } = setup({ queueResultFormat: "instagram_reel" });
+
+    await expect(repository.getAiContentPublishQueueResult({
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      queueId: "queue-story",
+    })).resolves.toMatchObject({
+      deliveryFormat: "instagram_reel",
+      queueId: "queue-story",
+    });
+    expect(staticPublishActionFixture.targets.map(({ deliveryFormat }) => deliveryFormat))
+      .not.toContain("instagram_reel");
+    expect(statements.filter((sql) => sql.includes("insert into jobs"))).toHaveLength(0);
   });
 
   it("lets the Instagram publisher read ai-content.v1 image assets", () => {
