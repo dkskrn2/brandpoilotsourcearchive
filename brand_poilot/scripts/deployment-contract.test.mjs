@@ -1029,6 +1029,37 @@ test("shared secret parser accepts canonical unquoted special characters", () =>
   assert.doesNotMatch(`${result.stdout}${result.stderr}`, /general-token|AbC/);
 });
 
+test("shared secret parser ignores an exact key mentioned in a comment", () => {
+  const result = runSharedSecretHelper(
+    [
+      "CONTENT_PROPOSAL_WORKER_API_TOKEN=canonical-secret",
+      "# Rotate CONTENT_PROPOSAL_WORKER_API_TOKEN through the approved procedure.",
+      "",
+    ].join("\n"),
+    "CONTENT_PROPOSAL_WORKER_API_TOKEN=canonical-secret\n",
+    'require_matching_env_secret CONTENT_PROPOSAL_WORKER_API_TOKEN "$2" "$3"',
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /canonical-secret/);
+});
+
+test("shared secret parser ignores a longer near-match key", () => {
+  const result = runSharedSecretHelper(
+    [
+      "CONTENT_PROPOSAL_WORKER_API_TOKEN=canonical-secret",
+      "CONTENT_PROPOSAL_WORKER_API_TOKEN_BACKUP=backup-secret",
+      "",
+    ].join("\n"),
+    "CONTENT_PROPOSAL_WORKER_API_TOKEN=canonical-secret\n",
+    'require_matching_env_secret CONTENT_PROPOSAL_WORKER_API_TOKEN "$2" "$3"',
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(
+    `${result.stdout}${result.stderr}`,
+    /canonical-secret|backup-secret/,
+  );
+});
+
 for (const [declarationName, alternateDeclaration] of [
   ["export declaration", "export CONTENT_PROPOSAL_WORKER_API_TOKEN=exported-secret"],
   ["leading-space declaration", " CONTENT_PROPOSAL_WORKER_API_TOKEN =spaced-secret"],

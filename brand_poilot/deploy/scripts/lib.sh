@@ -28,17 +28,17 @@ require_file_mode_600() {
 env_secret_value_digest() {
   local key="$1"
   local file="$2"
-  local literal_count
+  local declaration_count
   local canonical_count
 
   [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || fail "shared_secret_key_invalid"
-  literal_count="$(
-    grep -Ec "(^|[^A-Za-z0-9_])${key}([^A-Za-z0-9_]|$)" "$file" ||
+  declaration_count="$(
+    grep -Ec "^[[:space:]]*(export[[:space:]]+)?${key}[[:space:]]*([=:]|$)" "$file" ||
       true
   )"
-  [[ "$literal_count" =~ ^[0-9]+$ ]] || fail "shared_secret_invalid"
-  [[ "$literal_count" != "0" ]] || fail "shared_secret_missing"
-  [[ "$literal_count" == "1" ]] || fail "shared_secret_invalid"
+  [[ "$declaration_count" =~ ^[0-9]+$ ]] || fail "shared_secret_invalid"
+  [[ "$declaration_count" != "0" ]] || fail "shared_secret_missing"
+  [[ "$declaration_count" == "1" ]] || fail "shared_secret_invalid"
   grep -Eq "^${key}=required-at-deploy-time$" "$file" &&
     fail "shared_secret_missing"
   canonical_count="$(grep -Ec "^${key}=[A-Za-z0-9+/=_:.@%-]+$" "$file" || true)"
