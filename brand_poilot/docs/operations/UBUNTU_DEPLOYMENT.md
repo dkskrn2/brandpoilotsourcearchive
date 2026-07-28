@@ -6,9 +6,11 @@ critical webhook traffic yet. The first release runs no db:migrate, no worker,
 no scheduler, and no publication. Keep the current Vercel API available for at
 least **48 hours** as the rollback target.
 
-LM Studio is not used. Tailscale is for private SSH, code transfer, and
-operations only: **private SSH, never public ingress**. Do not enable a
-Tailscale exit node, Funnel, Serve, subnet routing, or any other public routing.
+LM Studio is not used. Tailscale is the **management plane only** for private
+SSH, code transfer, and operations: **private SSH, never public ingress**. Do
+not enable a Tailscale exit node, Funnel, Serve, subnet routing, or any other
+public routing; public OAuth and webhook DNS must never resolve to a Tailscale
+IP.
 
 Placeholders such as `<PUBLIC_IPV4>`, `<TAILSCALE_IP_OR_NAME>`, `<RUN_ID>`,
 `<RELEASE_SHA>`, and `<GITHUB_OWNER>` must be replaced deliberately. Commands
@@ -64,6 +66,12 @@ DB_POOL_MAX=3
 No worker process is installed in this runbook. Worker, scheduler, publication,
 and database schema changes remain out of scope.
 
+Keep the frontend and API DNS owners separate. `app.danbammsg.co.kr` remains a
+Vercel custom domain. `api.danbammsg.co.kr` and
+`canary-api.danbammsg.co.kr` are the public API hosts and eventually resolve to
+the public Ubuntu IPv4. Publish AAAA only when the host also has a working
+public Ubuntu IPv6 route and matching firewall policy.
+
 ## 2. Network prerequisites
 
 Confirm all of the following before installing software:
@@ -72,15 +80,18 @@ Confirm all of the following before installing software:
 - A static LAN IP or a DHCP reservation for the Ubuntu machine.
 - A real public IPv4. Compare the router WAN address with an external IP check.
   If they differ, investigate double NAT or CGNAT with the ISP before continuing.
-- The router forwards only TCP 80/443 to the static LAN IP. **Never forward TCP
-  22**.
+- The router forwards only TCP 80/443 to the static LAN IP: never TCP 22, 4000,
+  or 5432.
 - If the public address is dynamic, define a tested dynamic public IP / DDNS
   update method and its recovery owner.
 - `canary-api.danbammsg.co.kr` and later `api.danbammsg.co.kr` have DNS A
-  records to the public IPv4. Do not publish an AAAA record without working IPv6
-  routing and firewall policy.
+  records to the public Ubuntu IPv4. Do not publish an AAAA record without a
+  working public Ubuntu IPv6 route and firewall policy.
 - ISP/router/firewall paths allow inbound 80 and 443. Caddy ACME needs public
   reachability to issue and renew certificates.
+- API port 4000 is Docker-internal `expose` only. PostgreSQL 5432 is likewise
+  not published by this stack. Neither port is a router, UFW, or public service
+  exception.
 
 Useful read-only checks:
 
@@ -94,9 +105,9 @@ curl -4 --fail https://ifconfig.me
 sudo ss -lntp
 ```
 
-Record the router WAN IPv4, Ubuntu LAN IPv4, intended public IPv4, DNS values,
-and the person able to change the router. The router forwards only TCP 80/443.
-Operational rule: never forward TCP 22.
+Record the router WAN IPv4, Ubuntu LAN IPv4, intended public IPv4/IPv6, DNS
+values, and the person able to change the router. The router forwards only TCP
+80/443. Operational rule: never forward TCP 22, 4000, or 5432.
 
 ## 3. Tailscale and OpenSSH
 
@@ -114,6 +125,14 @@ sudo install -d -m 700 -o bpdeploy -g bpdeploy /home/bpdeploy/.ssh
 
 No exit node, No Funnel, no public Tailscale routing. Note the Tailscale IP/name
 without publishing it.
+
+The stable device names are `brand-pilot-dev-windows` and
+`brand-pilot-ubuntu`. On every operator run, use `tailscale status` to confirm
+the current device identity, address, online state, and expected owner before
+SSH. Do not hard-code Tailscale IP addresses in scripts, deployment manifests,
+DNS records, or long-lived operator commands; addresses can change. Use the
+device name when MagicDNS is enabled, or copy the current address from that
+specific `tailscale status` result for the one interactive session.
 
 ### 3.2 Windows key
 
@@ -175,18 +194,25 @@ existing session. Re-check the host fingerprint after any OS reinstall.
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
 sudo ufw allow in on tailscale0 to any port 22 proto tcp
+sudo ufw deny 22/tcp
+sudo ufw deny 4000/tcp
+sudo ufw deny 5432/tcp
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
 sudo ufw enable
 sudo ufw status verbose
 ```
 
-The router forwards only TCP 80/443 and never port 22. Verify from an external
-network, not only from the LAN.
+The router forwards only TCP 80/443 and never TCP 22, 4000, or 5432. The
+interface-specific SSH allow precedes the public deny: verify the resulting UFW
+rule order while the physical console and an existing Tailscale session remain
+open. Verify public denial from an external network, not only from the LAN.
 
 ### 3.5 Windows operations
 
-Use the Tailscale IP/name for administration:
+First run `tailscale status` and confirm `brand-pilot-dev-windows` and
+`brand-pilot-ubuntu`; then use the current Tailscale name/address for
+administration:
 
 ```powershell
 ssh -i "$env:USERPROFILE\.ssh\brand-pilot-ubuntu" bpdeploy@<TAILSCALE_IP_OR_NAME>
@@ -444,6 +470,38 @@ releases, canary deployment changes only `api-canary`; the current
 `state/candidate` is the canary SHA. `state/current` is the serving primary SHA,
 and `state/previous` is created only when an existing primary is successfully
 replaced.
+
+The edge is intentionally narrow. Caddy is the only service bound to host ports
+80/443. Its hostname site blocks obtain and renew ACME certificates, redirect
+plain HTTP to HTTPS automatically, send HSTS, reject request bodies over 32MB,
+and apply bounded client and upstream timeouts before proxying to the
+Docker-internal API port 4000.
+
+Before public DNS propagation is complete, a hosts override may prove that this
+operator machine reaches the intended Ubuntu edge without changing the machine's
+hosts file. The authoritative canary A/AAAA record must already target Ubuntu
+and ACME issuance must have succeeded; do not use `--insecure` to bypass TLS:
+
+```bash
+curl --resolve canary-api.danbammsg.co.kr:443:<PUBLIC_IPV4> --fail https://canary-api.danbammsg.co.kr/health
+curl --resolve canary-api.danbammsg.co.kr:443:<PUBLIC_IPV4> --fail https://canary-api.danbammsg.co.kr/ready
+```
+
+This is only the pre-propagation path check; it does not prove public DNS.
+After public DNS propagation, remove the override and verify the actual public
+resolver path from an external network:
+
+```bash
+dig +short canary-api.danbammsg.co.kr A @1.1.1.1
+dig +short canary-api.danbammsg.co.kr A @8.8.8.8
+dig +short canary-api.danbammsg.co.kr AAAA @1.1.1.1
+curl --fail https://canary-api.danbammsg.co.kr/health
+curl --fail https://canary-api.danbammsg.co.kr/ready
+```
+
+The A answers must equal the public Ubuntu IPv4. The AAAA answer must either be
+empty or equal the verified public Ubuntu IPv6. A Tailscale address is a release
+blocker in either public answer.
 
 Acceptance commands:
 

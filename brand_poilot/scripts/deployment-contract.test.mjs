@@ -261,6 +261,58 @@ test("Ubuntu runbook provides private SSH, firewall, Docker, and network prerequ
   assert.match(runbook, /ssh -i .*brand-pilot-ubuntu.*bpdeploy@<TAILSCALE_IP_OR_NAME>/);
 });
 
+test("Ubuntu runbook separates the Tailscale management plane from public DNS and ingress", () => {
+  const runbook = read(ubuntuRunbookPath);
+  const normalizedRunbook = runbook.replace(/\s+/g, " ");
+  const deploymentBoundary = [
+    runbook,
+    read("deploy/compose.production.yml"),
+    read("deploy/Caddyfile"),
+    read("deploy/Caddyfile.canary"),
+    ...deploymentScripts.map(read),
+  ].join("\n");
+
+  for (const phrase of [
+    "management plane only",
+    "`brand-pilot-dev-windows`",
+    "`brand-pilot-ubuntu`",
+    "`tailscale status`",
+    "Do not hard-code Tailscale IP addresses",
+    "public OAuth and webhook DNS must never resolve to a Tailscale IP",
+    "`api.danbammsg.co.kr` and `canary-api.danbammsg.co.kr`",
+    "public Ubuntu IPv4",
+    "working public Ubuntu IPv6",
+    "`app.danbammsg.co.kr` remains a Vercel custom domain",
+    "never TCP 22, 4000, or 5432",
+    "port 4000 is Docker-internal `expose` only",
+    "Before public DNS propagation",
+    "After public DNS propagation",
+  ]) {
+    assert.ok(
+      normalizedRunbook.includes(phrase),
+      `Ubuntu runbook missing network boundary detail: ${phrase}`,
+    );
+  }
+
+  for (const command of [
+    "tailscale status",
+    "sudo ufw allow in on tailscale0 to any port 22 proto tcp",
+    "sudo ufw deny 22/tcp",
+    "sudo ufw deny 4000/tcp",
+    "sudo ufw deny 5432/tcp",
+    "curl --resolve canary-api.danbammsg.co.kr:443:<PUBLIC_IPV4>",
+    "curl --fail https://canary-api.danbammsg.co.kr/health",
+    "curl --fail https://canary-api.danbammsg.co.kr/ready",
+  ]) {
+    assert.ok(runbook.includes(command), `Ubuntu runbook missing network command: ${command}`);
+  }
+  assert.doesNotMatch(
+    deploymentBoundary,
+    /100\.90\.110\.88|100\.106\.196\.48/,
+    "deployment docs and automation must not pin current Tailscale addresses",
+  );
+});
+
 test("Ubuntu runbook is command-ready for env, artifact integrity, canary, rollback, and cutover", () => {
   const runbook = read(ubuntuRunbookPath);
   for (const phrase of [
@@ -521,6 +573,7 @@ test("only Caddy publishes host ports", () => {
   for (const apiBlock of [primaryBlock, canaryBlock]) {
     assert.match(apiBlock, /LOCAL_SCHEDULER_ENABLED:\s*"false"/);
     assert.match(apiBlock, /INSTAGRAM_PUBLISH_ENABLED:\s*"false"/);
+    assert.match(apiBlock, /^ {4}expose:\s*\r?\n {6}- "4000"$/m);
   }
   for (const [name, service] of services) {
     if (!/^(?:dm-worker|wiki-worker)/.test(name)) continue;
@@ -613,6 +666,26 @@ test("Caddy applies baseline browser security headers without access logging", (
   assert.match(caddy, /X-Frame-Options\s+"DENY"/);
   assert.match(caddy, /Referrer-Policy\s+"strict-origin-when-cross-origin"/);
   assert.equal(hasCaddyLogDirective(caddy), false, "Caddy access logging must remain disabled");
+});
+
+test("Caddy enforces HTTPS, bounded requests, and upstream timeouts on both edges", () => {
+  for (const path of ["deploy/Caddyfile", "deploy/Caddyfile.canary"]) {
+    const caddy = read(path);
+    assert.match(caddy, /tls \{\$ACME_EMAIL\}/, `${path} must use ACME TLS`);
+    assert.match(
+      caddy,
+      /Strict-Transport-Security\s+"max-age=31536000; includeSubDomains"/,
+      `${path} must send HSTS`,
+    );
+    assert.match(caddy, /request_body\s*\{[\s\S]*max_size 32MB[\s\S]*\}/);
+    assert.match(caddy, /timeouts\s*\{[\s\S]*read_body 30s[\s\S]*read_header 10s/);
+    assert.match(caddy, /timeouts\s*\{[\s\S]*write 60s[\s\S]*idle 2m/);
+    assert.match(
+      caddy,
+      /transport http\s*\{[\s\S]*dial_timeout 5s[\s\S]*response_header_timeout 30s/,
+    );
+    assert.doesNotMatch(caddy, /http:\/\/\{\$(?:CANARY|PRIMARY)_HOST\}/);
+  }
 });
 
 test("deployment scripts never enable shell tracing", () => {
