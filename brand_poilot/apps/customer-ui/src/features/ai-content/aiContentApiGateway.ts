@@ -94,6 +94,23 @@ interface ApiOutput {
   revisionCapabilities?: AiGenerationOutput["revisionCapabilities"];
   legacyReadOnly?: boolean;
 }
+
+function text(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+function outputCopy(content: Record<string, unknown>) {
+  return {
+    hook: text(content.hook ?? content.headline ?? content.title),
+    keyMessage: text(content.keyMessage ?? content.concept ?? content.summary),
+    body: text(content.body),
+    cta: text(content.cta),
+    caption: text(content.caption),
+    hashtags: Array.isArray(content.hashtags)
+      ? content.hashtags.filter((tag): tag is string => typeof tag === "string")
+      : [],
+  };
+}
 interface ApiGeneration {
   id: string; brandId: string; type: AiContentType; title: string; status: AiContentGeneration["status"];
   currentStage: string | null; draft: Partial<AiContentDraft> | null; analysis: Record<string, unknown>; outputs?: ApiOutput[];
@@ -248,6 +265,7 @@ function mapGeneration(value: ApiGeneration): AiContentGeneration {
       title: output.title ?? `결과 ${output.outputIndex}`,
       status: output.status,
       artifact: outputArtifact(value.type, output),
+      copy: outputCopy(output.content),
       failureReason: output.failureMessage ?? output.failureCode,
       downloadedAt: output.downloadedAt,
       revisionCapabilities: output.revisionCapabilities ?? [],
@@ -435,6 +453,15 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
       const generation = mapGeneration(await client.requestJson<ApiGeneration>(
         `/brands/${brandId}/ai-content/outputs/${outputId}/revisions`,
         { method: "POST", body: JSON.stringify(input) },
+      ));
+      const output = generation.outputs.find((item) => item.id === outputId);
+      if (!output) throw new Error("ai_content_output_not_found");
+      return output;
+    },
+    async saveOutputCopy(brandId, outputId, input) {
+      const generation = mapGeneration(await client.requestJson<ApiGeneration>(
+        `/brands/${brandId}/ai-content/outputs/${outputId}/copy`,
+        { method: "PUT", body: JSON.stringify(input) },
       ));
       const output = generation.outputs.find((item) => item.id === outputId);
       if (!output) throw new Error("ai_content_output_not_found");

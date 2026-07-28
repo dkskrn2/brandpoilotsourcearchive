@@ -1107,6 +1107,11 @@ export interface ApiRepository
     cardIndex?: number;
     idempotencyKey: string;
   }): Promise<AiContentGenerationRecord>;
+  saveAiContentOutputCopy(input: BrandScope & {
+    outputId: string;
+    fields: Partial<Record<import("./aiContentRepository.js").AiContentCopyField, string | string[]>>;
+    idempotencyKey: string;
+  }): Promise<AiContentGenerationRecord>;
   createAiContentProposalBatch?(input: BrandScope & {
     actorUserId: string;
     origin: "manual" | "scheduled_crawl";

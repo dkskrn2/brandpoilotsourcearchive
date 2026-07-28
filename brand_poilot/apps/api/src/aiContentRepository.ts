@@ -96,6 +96,7 @@ export interface AiContentOutputRecord {
 }
 
 export type AiContentRevisionAction = "regenerate_hook" | "regenerate_copy" | "regenerate_card";
+export type AiContentCopyField = "hook" | "keyMessage" | "body" | "cta" | "caption" | "hashtags";
 
 export interface AiContentUsageRecord {
   usageDate: string;
@@ -273,6 +274,11 @@ export interface AiContentRepository extends AiContentAttachmentLifecycleReposit
     outputId: string;
     action: AiContentRevisionAction;
     cardIndex?: number;
+    idempotencyKey: string;
+  }): Promise<AiContentGenerationRecord>;
+  saveAiContentOutputCopy(input: BrandScope & {
+    outputId: string;
+    fields: Partial<Record<AiContentCopyField, string | string[]>>;
     idempotencyKey: string;
   }): Promise<AiContentGenerationRecord>;
   createAiContentProposalBatch(input: AuthenticatedBrandScope & {
@@ -666,9 +672,9 @@ function mapOutput(row: Record<string, unknown>): AiContentOutputRecord {
   const revisionCapabilities: AiContentOutputRecord["revisionCapabilities"] = legacyReadOnly
     ? []
     : manifestType === "card_news"
-      ? ["regenerate_hook", "regenerate_copy", "regenerate_card"]
+      ? ["save_copy", "regenerate_hook", "regenerate_copy", "regenerate_card"]
       : ["blog", "marketing", "single_image", "channel_text"].includes(manifestType)
-        ? ["regenerate_hook", "regenerate_copy"]
+        ? ["save_copy", "regenerate_hook", "regenerate_copy"]
         : [];
   return {
     id: String(row.id), generationId: String(row.generation_id), outputIndex: Number(row.output_index),
@@ -679,6 +685,28 @@ function mapOutput(row: Record<string, unknown>): AiContentOutputRecord {
     revisionCapabilities,
     legacyReadOnly,
   };
+}
+
+const copyFieldsByFormat: Record<string, ReadonlySet<AiContentCopyField>> = {
+  card_news: new Set(["hook", "keyMessage", "body", "cta", "caption", "hashtags"]),
+  blog: new Set(["hook", "keyMessage", "body", "cta"]),
+  marketing: new Set(["hook", "keyMessage", "body", "cta", "caption", "hashtags"]),
+  single_image: new Set(["hook", "keyMessage", "body", "cta", "caption", "hashtags"]),
+  channel_text: new Set(["hook", "keyMessage", "body", "cta", "caption", "hashtags"]),
+};
+
+function editableCopyFields(
+  manifest: Record<string, unknown>,
+  fields: Partial<Record<AiContentCopyField, string | string[]>>,
+) {
+  const format = String(manifest.type ?? manifest.outputFormat ?? "");
+  const allowed = copyFieldsByFormat[format];
+  if (!allowed) throw new Error("ai_content_copy_edit_unsupported");
+  const entries = Object.entries(fields) as Array<[AiContentCopyField, string | string[]]>;
+  if (!entries.length || entries.some(([field]) => !allowed.has(field))) {
+    throw new Error("ai_content_copy_fields_invalid");
+  }
+  return Object.fromEntries(entries);
 }
 
 function mergeRevisionManifest(
@@ -3253,6 +3281,81 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             artifact_manifest_json: output.artifact_manifest_json ?? {},
             completed_at: null,
             created_at: output.created_at ?? new Date(0),
+            updated_at: new Date(),
+          })],
+        };
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async saveAiContentOutputCopy(input) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const outputResult = await client.query(
+          `select output.*, generation.type
+             from ai_content_generation_outputs output
+             join ai_content_generations generation on generation.id = output.generation_id
+            where output.id = $1 and output.workspace_id = $2 and output.brand_id = $3
+            for update of output`,
+          [input.outputId, input.workspaceId, input.brandId],
+        );
+        const output = outputResult.rows[0] as Record<string, unknown> | undefined;
+        if (!output) throw new Error("ai_content_output_not_found");
+        if (output.status !== "completed") throw new Error("ai_content_output_not_completed");
+
+        const manifest = object(output.artifact_manifest_json);
+        const mapped = mapOutput({
+          ...output,
+          output_index: output.output_index ?? 1,
+          content_json: output.content_json ?? {},
+          artifact_manifest_json: manifest,
+          created_at: output.created_at ?? new Date(0),
+          updated_at: output.updated_at ?? new Date(0),
+        });
+        if (mapped.legacyReadOnly || !mapped.revisionCapabilities.includes("save_copy")) {
+          throw new Error("ai_content_copy_edit_unsupported");
+        }
+        const fields = editableCopyFields(manifest, input.fields);
+        const requestHash = createHash("sha256").update(JSON.stringify(fields)).digest("hex");
+        const priorEdit = object(manifest.copyEdit);
+        if (priorEdit.idempotencyKey === input.idempotencyKey) {
+          if (priorEdit.requestHash !== requestHash) throw new Error("ai_content_copy_idempotency_conflict");
+          const generation = await generationById(client, String(output.generation_id));
+          await client.query("COMMIT");
+          return { ...generation, outputs: [mapped] };
+        }
+
+        const content = { ...object(output.content_json), ...fields };
+        const nextManifest = {
+          ...manifest,
+          content: { ...object(manifest.content), ...fields },
+          copyEdit: { idempotencyKey: input.idempotencyKey, requestHash },
+        };
+        await client.query(
+          `update ai_content_generation_outputs
+              set content_json = $2::jsonb, artifact_manifest_json = $3::jsonb, updated_at = now()
+            where id = $1 and workspace_id = $4 and brand_id = $5`,
+          [
+            input.outputId,
+            JSON.stringify(content),
+            JSON.stringify(nextManifest),
+            input.workspaceId,
+            input.brandId,
+          ],
+        );
+        const generation = await generationById(client, String(output.generation_id));
+        await client.query("COMMIT");
+        return {
+          ...generation,
+          outputs: [mapOutput({
+            ...output,
+            content_json: content,
+            artifact_manifest_json: nextManifest,
             updated_at: new Date(),
           })],
         };

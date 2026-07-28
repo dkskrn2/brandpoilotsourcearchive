@@ -15,7 +15,7 @@ import { normalizeInstagramHashtag } from "./instagramTrend.js";
 import { StoryCapabilityRequiredError } from "./repository.js";
 import type { ApiRepository, BrandProfileInput, Channel, DmAttentionType, DmConversationFilter, InstagramDeliveryFormat, InstagramFormatSettingsInput, InstagramTrendMediaTypeFilter, InstagramTrendPageDto, InstagramTrendSort, SourceType, SubjectAnalysisRepositoryV2, SupportRequestCategory, SupportRequestStatus } from "./types.js";
 import type { AiContentAttachmentLifecycleRepository } from "./aiContentAttachmentRepository.js";
-import type { AiContentRevisionAction } from "./aiContentRepository.js";
+import type { AiContentCopyField, AiContentRevisionAction } from "./aiContentRepository.js";
 import {
   runAiContentAttachmentGc,
   type DeleteAiContentAttachmentBlob,
@@ -337,6 +337,45 @@ function parseAiContentRevisionInput(value: unknown): {
   }
   if (value.cardIndex !== undefined) throw new Error("ai_content_revision_card_index_invalid");
   return { action: action as AiContentRevisionAction, idempotencyKey };
+}
+
+const aiContentCopyFields = new Set<AiContentCopyField>([
+  "hook",
+  "keyMessage",
+  "body",
+  "cta",
+  "caption",
+  "hashtags",
+]);
+
+function parseAiContentCopyInput(value: unknown): {
+  fields: Partial<Record<AiContentCopyField, string | string[]>>;
+  idempotencyKey: string;
+} {
+  if (!isObject(value) || !isObject(value.fields)) throw new Error("ai_content_copy_input_invalid");
+  const idempotencyKey = requiredAiContentField(
+    value.idempotencyKey,
+    "ai_content_idempotency_key_invalid",
+    200,
+  );
+  const entries = Object.entries(value.fields);
+  if (!entries.length || entries.some(([field]) => !aiContentCopyFields.has(field as AiContentCopyField))) {
+    throw new Error("ai_content_copy_fields_invalid");
+  }
+  const fields: Partial<Record<AiContentCopyField, string | string[]>> = {};
+  for (const [field, raw] of entries) {
+    if (field === "hashtags") {
+      if (!Array.isArray(raw) || raw.length > 30
+        || raw.some((tag) => typeof tag !== "string" || tag.length > 100)) {
+        throw new Error("ai_content_copy_fields_invalid");
+      }
+      fields.hashtags = raw;
+    } else {
+      if (typeof raw !== "string" || raw.length > 20_000) throw new Error("ai_content_copy_fields_invalid");
+      fields[field as Exclude<AiContentCopyField, "hashtags">] = raw;
+    }
+  }
+  return { fields, idempotencyKey };
 }
 
 function parseAiContentBrandId(value: string) {
@@ -2667,6 +2706,15 @@ export function createServer(
       ...aiContentScope(request, request.params.brandId),
       outputId: request.params.outputId,
       ...parseAiContentRevisionInput(request.body),
+    }),
+  );
+
+  app.put<{ Params: { brandId: string; outputId: string }; Body: unknown }>(
+    "/brands/:brandId/ai-content/outputs/:outputId/copy",
+    async (request) => repository.saveAiContentOutputCopy({
+      ...aiContentScope(request, request.params.brandId),
+      outputId: request.params.outputId,
+      ...parseAiContentCopyInput(request.body),
     }),
   );
 

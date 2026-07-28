@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { AiGenerationOutputList } from "../components/ai-content/AiGenerationOutputList";
+import { AiContentCopyEditor } from "../components/ai-content/AiContentCopyEditor";
 import { aiContentPublishErrorMessage } from "../components/ai-content/AiContentPublishPanel";
 import { PageHeader } from "../components/layout/PageHeader";
 import { PageSkeleton } from "../components/ui/LoadingState";
 import { aiContentApiGateway } from "../features/ai-content/aiContentApiGateway";
 import type {
   AiContentGeneration,
+  AiContentCopyFields,
   AiContentGateway,
   AiContentPublishTargetInput,
   AiContentPublishTargetResult,
@@ -102,6 +104,8 @@ export function AiContentGenerationPage({
   const [error, setError] = useState<string | null>(null);
   const [retryingOutputId, setRetryingOutputId] = useState<string | null>(null);
   const [revisingOutputId, setRevisingOutputId] = useState<string | null>(null);
+  const [savingCopyOutputId, setSavingCopyOutputId] = useState<string | null>(null);
+  const [copySaveMessage, setCopySaveMessage] = useState<string | null>(null);
   const [downloadedKeys, setDownloadedKeys] = useState<Set<string>>(new Set());
   const [selectedForZip, setSelectedForZip] = useState<Set<string>>(new Set());
   const [channels, setChannels] = useState<ChannelConnection[]>([]);
@@ -112,6 +116,7 @@ export function AiContentGenerationPage({
   const actionLocks = useRef({
     retry: new Set<string>(),
     revise: new Set<string>(),
+    saveCopy: new Set<string>(),
     download: new Set<string>(),
     publish: new Set<string>(),
   });
@@ -261,6 +266,30 @@ export function AiContentGenerationPage({
     } finally {
       actionLocks.current.revise.delete(outputId);
       setRevisingOutputId(null);
+    }
+  }
+
+  async function saveOutputCopy(outputId: string, fields: Partial<AiContentCopyFields>) {
+    if (actionLocks.current.saveCopy.has(outputId)) return;
+    actionLocks.current.saveCopy.add(outputId);
+    try {
+      setActionError(null);
+      setCopySaveMessage(null);
+      setSavingCopyOutputId(outputId);
+      const nextOutput = await gateway.saveOutputCopy(brandId, outputId, {
+        fields,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      setGeneration((current) => current ? {
+        ...current,
+        outputs: current.outputs.map((output) => output.id === outputId ? nextOutput : output),
+      } : current);
+      setCopySaveMessage("카피를 저장했습니다.");
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : "카피를 저장하지 못했습니다.");
+    } finally {
+      actionLocks.current.saveCopy.delete(outputId);
+      setSavingCopyOutputId(null);
     }
   }
 
@@ -431,11 +460,18 @@ export function AiContentGenerationPage({
             {activeReviewTab === "copy" ? (
               <section className="panel content-review-copy">
                 <h2>결과 카피</h2>
-                {generation.outputs.some((output) => output.artifact?.text) ? (
-                  generation.outputs.map((output) => output.artifact?.text
-                    ? <article key={output.id}><h3>{output.title}</h3><p>{output.artifact.text}</p></article>
-                    : null)
-                ) : <p className="muted">완료된 카피가 없습니다.</p>}
+                {copySaveMessage ? <p role="status">{copySaveMessage}</p> : null}
+                {generation.outputs.map((output) => (
+                  <AiContentCopyEditor
+                    key={output.id}
+                    type={generation.type}
+                    output={output}
+                    saving={savingCopyOutputId === output.id}
+                    revising={revisingOutputId === output.id}
+                    onSave={(fields) => saveOutputCopy(output.id, fields)}
+                    onRevise={(action) => reviseOutput(output.id, action)}
+                  />
+                ))}
               </section>
             ) : null}
 

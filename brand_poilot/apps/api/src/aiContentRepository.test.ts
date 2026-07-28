@@ -2528,6 +2528,97 @@ describe("AI content repository", () => {
     expect(pool.generatedJobPayloads).toHaveLength(0);
   });
 
+  it("saves format-aware copy fields idempotently inside the tenant-scoped output", async () => {
+    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    let content = {
+      hook: "기존 훅",
+      keyMessage: "기존 핵심 메시지",
+      body: "기존 본문",
+      cta: "기존 CTA",
+      caption: "기존 캡션",
+      hashtags: ["기존"],
+      untouched: "보존",
+    };
+    let manifest = {
+      version: "ai-content.v1",
+      type: "card_news",
+      assets: [{ index: 1, url: "https://cdn.example.com/slide-01.png" }],
+      content: structuredClone(content),
+    };
+    const outputRow = () => ({
+      id: "output-1",
+      generation_id: "generation-1",
+      output_index: 1,
+      title: "여름 카드뉴스",
+      status: "completed",
+      content_json: structuredClone(content),
+      artifact_manifest_json: structuredClone(manifest),
+      manifest_url: null,
+      failure_code: null,
+      failure_message: null,
+      downloaded_at: null,
+      created_at: "2026-07-18T00:00:00.000Z",
+      updated_at: "2026-07-18T00:00:00.000Z",
+      completed_at: "2026-07-18T00:00:00.000Z",
+    });
+    const generationRow = () => ({
+      ...row("generation-1", "completed"),
+      outputs: undefined,
+    });
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        queries.push({ sql, params });
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from ai_content_generation_outputs output") && sql.includes("for update")) {
+          expect(params.slice(0, 3)).toEqual(["output-1", "workspace-1", "brand-1"]);
+          return { rows: [outputRow()], rowCount: 1 };
+        }
+        if (sql.includes("update ai_content_generation_outputs") && sql.includes("content_json")) {
+          content = JSON.parse(String(params[1]));
+          manifest = JSON.parse(String(params[2]));
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.includes("from ai_content_generations")) {
+          return { rows: [generationRow()], rowCount: 1 };
+        }
+        if (sql.includes("from ai_content_generation_outputs") && sql.includes("order by output_index")) {
+          return { rows: [outputRow()], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const pool = {
+      connect: vi.fn(async () => client),
+      query: client.query,
+    };
+    const repository = createAiContentRepository(pool as never);
+    const input = {
+      ...scope,
+      outputId: "output-1",
+      fields: { hook: "수정 훅", cta: "지금 확인", hashtags: ["여름", "브랜드"] },
+      idempotencyKey: "save-copy-1",
+    };
+
+    const first = await repository.saveAiContentOutputCopy(input);
+    const second = await repository.saveAiContentOutputCopy(input);
+
+    expect(first.outputs?.[0].content).toMatchObject({
+      hook: "수정 훅",
+      cta: "지금 확인",
+      hashtags: ["여름", "브랜드"],
+      untouched: "보존",
+    });
+    expect(manifest.content).toMatchObject({
+      hook: "수정 훅",
+      cta: "지금 확인",
+      hashtags: ["여름", "브랜드"],
+      untouched: "보존",
+    });
+    expect(second.outputs?.[0].content).toEqual(first.outputs?.[0].content);
+    expect(queries.filter(({ sql }) => sql.includes("update ai_content_generation_outputs"))).toHaveLength(1);
+  });
+
   it("lists only live generation-scoped subject evidence with loader metadata", async () => {
     const query = vi.fn(async (_sql: string, params: unknown[]) => ({
       rows: [{

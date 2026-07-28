@@ -152,6 +152,11 @@ export function AiContentPublishPanel({
                       </label>
                       {format.reason ? <span className="small muted">{format.reason}</span> : null}
                       {result ? <span className={`ai-publish-result ai-publish-result--${result.status}`}>{resultLabel(result)}</span> : null}
+                      {result?.queueId ? (
+                        <a href={`/publish-queue?queueId=${encodeURIComponent(result.queueId)}`}>
+                          게시 큐에서 확인
+                        </a>
+                      ) : null}
                       {result?.status === "failed" ? (
                         <span className="small bad" role="alert">{aiContentPublishErrorMessage(result.errorCode)}</span>
                       ) : null}

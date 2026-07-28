@@ -373,6 +373,25 @@ export function createMockAiContentGateway(): AiContentGateway {
       output.status = "queued";
       return copy(output);
     },
+    async saveOutputCopy(_brandId, outputId, input) {
+      const output = generationRows.flatMap((job) => job.outputs).find((item) => item.id === outputId);
+      if (!output) throw new Error("ai_content_output_not_found");
+      if (output.status !== "completed" || output.legacyReadOnly) throw new Error("ai_content_copy_edit_unsupported");
+      output.copy = { ...(output.copy ?? {
+        hook: "", keyMessage: "", body: "", cta: "", caption: "", hashtags: [],
+      }), ...copy(input.fields) };
+      if (output.artifact) {
+        output.artifact.text = [
+          output.copy.hook,
+          output.copy.keyMessage,
+          output.copy.body,
+          output.copy.cta,
+          output.copy.caption,
+          ...output.copy.hashtags,
+        ].filter(Boolean).join("\n\n");
+      }
+      return copy(output);
+    },
     async downloadOutput(_brandId, outputId) { return { blob: new Blob([outputId], { type: "application/zip" }), fileName: `${outputId}.zip` }; },
     async downloadGeneration(_brandId, generationId) { return { blob: new Blob([generationId], { type: "application/zip" }), fileName: `${generationId}.zip` }; },
     async publishOutput(_brandId, outputId, input) {

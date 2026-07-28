@@ -1,0 +1,122 @@
+import { useEffect, useState } from "react";
+import type {
+  AiContentCopyFields,
+  AiContentType,
+  AiGenerationOutput,
+} from "../../features/ai-content/types";
+
+const emptyCopy: AiContentCopyFields = {
+  hook: "",
+  keyMessage: "",
+  body: "",
+  cta: "",
+  caption: "",
+  hashtags: [],
+};
+
+const copyLabels: Record<Exclude<keyof AiContentCopyFields, "hashtags">, string> = {
+  hook: "훅",
+  keyMessage: "핵심 메시지",
+  body: "본문",
+  cta: "CTA",
+  caption: "캡션",
+};
+
+function visibleFields(type: AiContentType) {
+  return type === "blog"
+    ? (["hook", "keyMessage", "body", "cta"] as const)
+    : (["hook", "keyMessage", "body", "cta", "caption"] as const);
+}
+
+export function AiContentCopyEditor({
+  type,
+  output,
+  saving,
+  revising,
+  onSave,
+  onRevise,
+}: {
+  type: AiContentType;
+  output: AiGenerationOutput;
+  saving: boolean;
+  revising: boolean;
+  onSave(fields: Partial<AiContentCopyFields>): Promise<void>;
+  onRevise(action: "regenerate_hook" | "regenerate_copy"): Promise<void>;
+}) {
+  const [fields, setFields] = useState<AiContentCopyFields>(output.copy ?? emptyCopy);
+
+  useEffect(() => {
+    setFields(output.copy ?? emptyCopy);
+  }, [output.copy]);
+
+  const canSave = !output.legacyReadOnly
+    && output.status === "completed"
+    && output.revisionCapabilities?.includes("save_copy");
+
+  return (
+    <article className="content-review-copy__output">
+      <h3>{output.title}</h3>
+      {canSave ? (
+        <>
+          <fieldset disabled={saving}>
+            <legend>직접 수정 후 저장</legend>
+            {visibleFields(type).map((field) => (
+              <label key={field}>
+                <span>{copyLabels[field]}</span>
+                <textarea
+                  aria-label={`${output.title} ${copyLabels[field]}`}
+                  value={fields[field]}
+                  onChange={(event) => setFields((current) => ({
+                    ...current,
+                    [field]: event.target.value,
+                  }))}
+                />
+              </label>
+            ))}
+            {type !== "blog" ? (
+              <label>
+                <span>해시태그</span>
+                <input
+                  aria-label={`${output.title} 해시태그`}
+                  value={fields.hashtags.join(", ")}
+                  onChange={(event) => setFields((current) => ({
+                    ...current,
+                    hashtags: event.target.value.split(",").map((tag) => tag.trim()).filter(Boolean),
+                  }))}
+                />
+              </label>
+            ) : null}
+            <button
+              className="button primary"
+              type="button"
+              disabled={saving}
+              onClick={() => void onSave(Object.fromEntries([
+                ...visibleFields(type).map((field) => [field, fields[field]]),
+                ...(type === "blog" ? [] : [["hashtags", fields.hashtags]]),
+              ]))}
+            >
+              {saving ? "저장 중" : `${output.title} 카피 저장`}
+            </button>
+          </fieldset>
+          <div aria-label={`${output.title} AI 부분 재생성`}>
+            <strong>AI 부분 재생성</strong>
+            {output.revisionCapabilities?.includes("regenerate_hook") ? (
+              <button className="button" type="button" disabled={revising} onClick={() => void onRevise("regenerate_hook")}>
+                훅 다시 생성
+              </button>
+            ) : null}
+            {output.revisionCapabilities?.includes("regenerate_copy") ? (
+              <button className="button" type="button" disabled={revising} onClick={() => void onRevise("regenerate_copy")}>
+                카피 다시 생성
+              </button>
+            ) : null}
+          </div>
+        </>
+      ) : output.artifact?.text ? (
+        <p>{output.artifact.text}</p>
+      ) : (
+        <p className="muted">저장 가능한 카피가 없습니다.</p>
+      )}
+    </article>
+  );
+}

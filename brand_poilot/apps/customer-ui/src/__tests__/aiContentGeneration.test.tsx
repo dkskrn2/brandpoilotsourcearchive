@@ -387,6 +387,74 @@ describe("AiContentGenerationPage", () => {
     expect(gateway.retryOutput).not.toHaveBeenCalled();
   });
 
+  it("edits and saves structured copy separately from worker-backed regeneration", async () => {
+    const user = userEvent.setup();
+    const { gateway } = renderGeneration("generation-card-complete", false, (configuredGateway) => {
+      const getGeneration = configuredGateway.getGeneration.bind(configuredGateway);
+      configuredGateway.getGeneration = vi.fn(async (brandId, generationId) => {
+        const result = await getGeneration(brandId, generationId);
+        return {
+          ...result,
+          outputs: result.outputs.map((output) => ({
+            ...output,
+            copy: {
+              hook: "저장 전 훅",
+              keyMessage: "저장 전 핵심 메시지",
+              body: "저장 전 본문",
+              cta: "저장 전 CTA",
+              caption: "저장 전 캡션",
+              hashtags: ["기존", "태그"],
+            },
+            revisionCapabilities: [
+              "save_copy",
+              "regenerate_hook",
+              "regenerate_copy",
+            ] as NonNullable<typeof output.revisionCapabilities>,
+          })),
+        };
+      });
+      configuredGateway.saveOutputCopy = vi.fn(async (_brandId, _outputId, input) => {
+        const result = await getGeneration("brand-1", "generation-card-complete");
+        return {
+          ...result.outputs[0],
+          copy: {
+            hook: "",
+            keyMessage: "",
+            body: "",
+            cta: "",
+            caption: "",
+            hashtags: [],
+            ...input.fields,
+          },
+        };
+      });
+    });
+
+    await user.click(await screen.findByRole("tab", { name: "카피" }));
+    expect(screen.getByDisplayValue("저장 전 훅")).toBeVisible();
+    expect(screen.getByDisplayValue("저장 전 핵심 메시지")).toBeVisible();
+    expect(screen.getByDisplayValue("저장 전 본문")).toBeVisible();
+    expect(screen.getByDisplayValue("저장 전 CTA")).toBeVisible();
+    expect(screen.getByDisplayValue("저장 전 캡션")).toBeVisible();
+    expect(screen.getByDisplayValue("기존, 태그")).toBeVisible();
+    expect(screen.getByRole("button", { name: "훅 다시 생성" })).toBeVisible();
+
+    const cta = screen.getByLabelText("카드뉴스 표지 CTA");
+    await user.clear(cta);
+    await user.type(cta, "지금 확인");
+    await user.click(screen.getByRole("button", { name: "카드뉴스 표지 카피 저장" }));
+
+    expect(gateway.saveOutputCopy).toHaveBeenCalledWith(
+      "00000000-0000-4000-8000-000000000100",
+      "output-card-news",
+      expect.objectContaining({
+        fields: expect.objectContaining({ cta: "지금 확인" }),
+        idempotencyKey: expect.any(String),
+      }),
+    );
+    expect(await screen.findByText("카피를 저장했습니다.")).toBeVisible();
+  });
+
   it("hides unsupported revision and publish actions for a legacy Reel result", async () => {
     renderGeneration("generation-card-complete", true, (gateway) => {
       const getGeneration = gateway.getGeneration.bind(gateway);
@@ -476,6 +544,10 @@ describe("AiContentGenerationPage", () => {
       targets: [{ channel: "instagram", deliveryFormat: "instagram_feed_carousel" }],
     }));
     expect(await screen.findByText("게시 완료")).toBeVisible();
+    expect(screen.getByRole("link", { name: "게시 큐에서 확인" })).toHaveAttribute(
+      "href",
+      "/publish-queue?queueId=queue-output-card-news-0",
+    );
   });
 
   it("shows a structured Story preflight failure in Korean", async () => {

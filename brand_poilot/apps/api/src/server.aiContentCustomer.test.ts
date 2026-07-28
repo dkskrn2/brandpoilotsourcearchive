@@ -173,6 +173,7 @@ function setup(
     removeAiContentAttachment: vi.fn(async (input) => ({ id: input.attachmentId })),
     retryAiContentOutput: vi.fn(async () => generation("queued")),
     reviseAiContentOutput: vi.fn(async () => generation("queued")),
+    saveAiContentOutputCopy: vi.fn(async () => generation("completed")),
     createAiContentProposalBatch: vi.fn(async (input) => ({
       id: "99999999-9999-4999-8999-999999999999",
       workspaceId: input.workspaceId,
@@ -1149,6 +1150,60 @@ describe("AI content customer routes", () => {
 
     expect(response.statusCode).toBe(400);
     expect(repository.reviseAiContentOutput).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("saves validated copy fields for the authenticated brand scope", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "PUT",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/copy`,
+      headers: auth,
+      payload: {
+        fields: {
+          hook: "수정 훅",
+          keyMessage: "수정 핵심",
+          body: "수정 본문",
+          cta: "지금 확인",
+          caption: "수정 캡션",
+          hashtags: ["여름", "브랜드"],
+        },
+        idempotencyKey: "save-copy-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.saveAiContentOutputCopy).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      outputId,
+      fields: {
+        hook: "수정 훅",
+        keyMessage: "수정 핵심",
+        body: "수정 본문",
+        cta: "지금 확인",
+        caption: "수정 캡션",
+        hashtags: ["여름", "브랜드"],
+      },
+      idempotencyKey: "save-copy-1",
+    });
+    await app.close();
+  });
+
+  it("rejects unknown copy fields before the repository", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "PUT",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/copy`,
+      headers: auth,
+      payload: {
+        fields: { privatePrompt: "노출 금지" },
+        idempotencyKey: "save-copy-2",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(repository.saveAiContentOutputCopy).not.toHaveBeenCalled();
     await app.close();
   });
 
