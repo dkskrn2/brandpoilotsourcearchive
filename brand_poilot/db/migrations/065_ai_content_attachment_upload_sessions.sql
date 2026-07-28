@@ -509,6 +509,39 @@ after insert or update or delete on ai_content_generation_attachments
 for each row
 execute function revoke_ai_content_one_time_avatar_on_attachment_unavailable();
 
+-- The trigger above cannot observe attachments that became unavailable before
+-- this migration. Revoke their sealed receipts using either the canonical
+-- attachment/receipt id or the full immutable storage identity within the same
+-- tenant and generation. The revocation helper is append-only and idempotent.
+select revoke_ai_content_one_time_avatar_receipt(
+  receipt.id,
+  case
+    when attachment.physical_delete_status = 'deleted'
+      then 'attachment_physically_deleted'
+    when attachment.physical_delete_status = 'deleting'
+      then 'attachment_deleting'
+    when attachment.deleted_at is not null
+      then 'attachment_logically_deleted'
+    else 'attachment_unavailable'
+  end
+)
+from ai_content_one_time_avatar_receipts receipt
+join ai_content_generation_attachments attachment
+  on attachment.generation_id = receipt.generation_id
+ and attachment.workspace_id = receipt.workspace_id
+ and attachment.brand_id = receipt.brand_id
+ and (
+   attachment.id = receipt.id
+   or (
+     attachment.storage_path = receipt.storage_path
+     and attachment.storage_url = receipt.storage_url
+     and attachment.checksum = receipt.object_hash
+     and attachment.mime_type = receipt.mime_type
+   )
+ )
+where attachment.deleted_at is not null
+   or attachment.physical_delete_status <> 'none';
+
 create table ai_content_attachment_deletion_jobs (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null,

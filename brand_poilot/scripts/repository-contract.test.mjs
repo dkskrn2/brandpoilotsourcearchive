@@ -594,6 +594,10 @@ test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계�
     attachmentMigration,
     /revoke_ai_content_one_time_avatar_on_attachment_unavailable/i,
   );
+  assert.match(
+    attachmentMigration,
+    /from ai_content_one_time_avatar_receipts receipt[\s\S]*join ai_content_generation_attachments attachment[\s\S]*attachment\.generation_id = receipt\.generation_id[\s\S]*attachment\.workspace_id = receipt\.workspace_id[\s\S]*attachment\.brand_id = receipt\.brand_id[\s\S]*attachment\.id = receipt\.id[\s\S]*attachment\.storage_path = receipt\.storage_path[\s\S]*attachment\.deleted_at is not null[\s\S]*attachment\.physical_delete_status <> 'none'/i,
+  );
   assert.match(migration, /proposal_generation_family_mismatch/i);
   assert.match(migration, /generation_canonical_mapping_missing/i);
   assert.match(migration, /ai_content_versioned_snapshot_is_valid/i);

@@ -4007,6 +4007,63 @@ test("060 independently validates sealed one-time avatar receipts and remains co
       /one_time_avatar_revocation_immutable/,
     );
 
+    const staleReceiptId = randomUUID();
+    const staleAttachmentId = randomUUID();
+    const staleSessionId = randomUUID();
+    const staleStorageUrl = `https://cdn.example.com/${staleAttachmentId}.png`;
+    const staleStoragePath = `one-time/${staleAttachmentId}.png`;
+    const activeReceiptId = randomUUID();
+    const activeSessionId = randomUUID();
+    const activeStorageUrl = `https://cdn.example.com/${activeReceiptId}.png`;
+    const activeStoragePath = `one-time/${activeReceiptId}.png`;
+    await database.query(
+      `insert into ai_content_one_time_avatar_receipts (
+         id,upload_session_id,generation_id,workspace_id,brand_id,created_by_user_id,
+         object_hash,mime_type,storage_url,storage_path,confirmed_at
+       ) values
+         ($1,$2,$7,$8,$9,$10,$11,'image/png',$3,$4,'2026-07-28T00:00:00Z'),
+         ($5,$6,$7,$8,$9,$10,$11,'image/png',$12,$13,'2026-07-28T00:00:00Z')`,
+      [
+        staleReceiptId,
+        staleSessionId,
+        staleStorageUrl,
+        staleStoragePath,
+        activeReceiptId,
+        activeSessionId,
+        generationId,
+        workspaceId,
+        brandId,
+        actorId,
+        "f".repeat(64),
+        activeStorageUrl,
+        activeStoragePath,
+      ],
+    );
+    await database.query(
+      `insert into ai_content_generation_attachments (
+         id,generation_id,workspace_id,brand_id,role,file_name,mime_type,size_bytes,
+         checksum,storage_url,storage_path
+       ) values
+         ($1,$3,$4,$5,'person','stale.png','image/png',1024,$6,$7,$8),
+         ($2,$3,$4,$5,'person','active.png','image/png',1024,$6,$9,$10)`,
+      [
+        staleAttachmentId,
+        activeReceiptId,
+        generationId,
+        workspaceId,
+        brandId,
+        "f".repeat(64),
+        staleStorageUrl,
+        staleStoragePath,
+        activeStorageUrl,
+        activeStoragePath,
+      ],
+    );
+    await database.query(
+      "update ai_content_generation_attachments set deleted_at=now() where id=$1",
+      [staleAttachmentId],
+    );
+
     await runMigrationRange(
       database,
       migrations,
@@ -4018,6 +4075,35 @@ test("060 independently validates sealed one-time avatar receipts and remains co
       [receiptId],
     );
     assert.deepEqual(retained.rows, [{ id: receiptId, upload_session_id: sessionId }]);
+    const backfilledRevocations = await database.query(
+      `select receipt_id,reason
+         from ai_content_one_time_avatar_revocations
+        where receipt_id in ($1,$2)
+        order by receipt_id`,
+      [staleReceiptId, activeReceiptId],
+    );
+    assert.deepEqual(backfilledRevocations.rows, [{
+      receipt_id: staleReceiptId,
+      reason: "attachment_logically_deleted",
+    }]);
+    const staleAvatar = {
+      ...avatarSnapshot(staleSessionId, staleReceiptId),
+      objectHash: "f".repeat(64),
+    };
+    await assert.rejects(
+      database.query(
+        "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+        [
+          generationId,
+          workspaceId,
+          brandId,
+          JSON.stringify(brief(staleAvatar)),
+          JSON.stringify(staleAvatar),
+          actorId,
+        ],
+      ),
+      /one_time_avatar_receipt_revoked/,
+    );
 
     const compatibleGenerationId = randomUUID();
     const compatibleSessionId = randomUUID();
