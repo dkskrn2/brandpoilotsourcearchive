@@ -103,6 +103,20 @@ test.beforeEach(async ({ page }) => {
         attentionItems: []
       } });
     }
+    if (pathname.endsWith("/brand-center")) {
+      return route.fulfill({ ...common, json: {
+        source: { state: "ready" },
+        analysis: { state: "confirmed" },
+        brandCore: { state: "approved" },
+        rules: { state: "approved" },
+        products: { state: "ready" },
+        wiki: { state: "ready" },
+        avatars: { state: "ready" }
+      } });
+    }
+    if (pathname.endsWith("/brand-core") || pathname.endsWith("/brand-rules")) {
+      return route.fulfill({ ...common, json: { active: null, draft: null, versions: [] } });
+    }
     if (pathname.endsWith("/ai-content/usage")) {
       return route.fulfill({ ...common, json: {
         generationUsed: 2,
@@ -134,13 +148,12 @@ test("customer IA routes are reachable", async ({ page }) => {
   await clickMenuLink(/레퍼런스/);
   await expect(page.getByRole("heading", { level: 1, name: "레퍼런스" })).toBeVisible();
 
+  await clickMenuLink(/브랜드 센터/);
+  await expect(page.getByRole("heading", { level: 1, name: "브랜드 센터" })).toBeVisible();
+
   await clickMenuLink(/^채널/);
   await expect(page.getByRole("heading", { level: 1, name: "채널 연결" })).toBeVisible();
   await expect(page.getByRole("tab", { name: /자동 승인/ })).toHaveCount(0);
-
-  await clickMenuLink(/브랜드 센터/);
-  await expect(page.getByRole("switch", { name: "브랜드 전체 자동 승인" })).toBeVisible();
-
 });
 
 const legacyRouteMappings = [
@@ -159,12 +172,13 @@ for (const [legacy, canonical] of legacyRouteMappings) {
   });
 }
 
-test("mobile layout has no horizontal overflow", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-
+test.describe("mobile layout has no horizontal overflow", () => {
   for (const path of ["/onboarding", "/publish-queue", "/sources", "/channels", "/brand-settings"]) {
-    await page.goto(path);
-    const hasOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
-    expect(hasOverflow, `${path} should not overflow horizontally`).toBe(false);
+    test(path, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(path);
+      const hasOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
+      expect(hasOverflow, `${path} should not overflow horizontally`).toBe(false);
+    });
   }
 });
