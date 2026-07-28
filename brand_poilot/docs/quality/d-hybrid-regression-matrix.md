@@ -135,15 +135,20 @@
 | AUTH-ROUTING-001 | 비로그인 홈·auth 장애 재확인·legacy redirect·support gate 예외를 보존한다 | `apps/customer-ui/src/__tests__/auth.test.tsx` :: `redirects an anonymous visitor to Danbam` | 수동: onboarding·content legacy URL | 사용 중 | 아니오 | active | - | `npm run test --workspace @brand-pilot/customer-ui -- auth.test.tsx brandSetupGate.test.tsx` |
 | ADMIN-OPERATIONS-001 | pause·resume·usage·publish operation·worker 상태의 권한·사유·감사를 보존한다 | `apps/api/src/adminRepository.test.ts` :: `changes brand status once and records an admin audit event` | 수동: 권한 없는 조작 거절과 상태 기준 | 사용 중 | 아니오 | active | - | `npm run test --workspace @brand-pilot/api -- adminRepository.test.ts adminServer.test.ts` |
 
-## 2026-07-28 로컬 사전 운영 증빙
+## 2026-07-29 로컬 사전 운영 증빙
 
-- 배포 계약 기준 코드 `2f407f9`: `npm run test:deployment` PASS, 95/95, 548.64초(Node), 551.3초(wall).
-- 최종 로컬 검증 기준 코드 `5907c3c`:
+- API·배포·계약 최종 검증 기준 코드 `3ba6cc9`:
+  - `npm run test --workspace @brand-pilot/api` PASS, 1,690 PASS / 31 의도된 SKIP / 0 FAIL, 1,721건(테스트 파일 126 PASS / 4 SKIP), 424.38초(Vitest), 428.35초(wall).
+  - `npm run build --workspace @brand-pilot/api` PASS, 내장 `tsc --noEmit`과 `tsup` build 포함, 53.18초(wall).
+  - `npm run test:deployment` PASS, 현재 계약 108/108, 444.10초(Node), 445.51초(wall).
+  - `npm run test:regression-matrix` PASS, verifier 8/8 및 123개 ID 일치(`active` 105, `planned` 13, `excluded` 4, `superseded` 1), 4.72초(wall).
+  - `npm run test:contract` PASS, 42/42, 3.88초(wall).
+- `3ba6cc9`의 배포 보정은 `CONTENT_PROPOSAL_WORKER_API_TOKEN`의 정확한 canonical 선언을 유지하면서 export·선행 공백·콜론·bare 중복 선언을 fail-closed로 거부한다. 주석의 키 언급과 `${KEY}_BACKUP`처럼 더 긴 독립 키는 선언 중복으로 오인하지 않으며, 계약은 비밀값 비노출도 함께 검증한다.
+- 이 Windows 검증 호스트에는 `shellcheck` 실행 파일이 없어 shellcheck PASS를 주장하지 않는다. 배포 계약은 Git Bash로 실제 스크립트 경로와 상태 전이를 검증했다.
+- E2E·migration 보존 증빙 기준 코드 `5907c3c`:
   - `npm run test:e2e` (`CUSTOMER_UI_E2E_PORT=5278`) PASS, 149 PASS / 7 의도된 SKIP / 0 FAIL, 156건, 594.2초. 종료 후 5278 listener가 없음을 확인했다.
   - `npm run test:migrations` PASS, 총 49/49(상위 subtest 47건), 391.99초(Node), 396.5초(wall).
-  - `npm run test:regression-matrix` PASS, verifier 8/8 및 123개 ID 일치(`active` 105, `planned` 13, `excluded` 4, `superseded` 1).
-  - `npm run test:contract` PASS, 42/42.
-- 같은 로컬 검증 캠페인에서 전체 workspace test와 build가 PASS했다. 제품 코드를 바꾸지 않는 후속 deployment/E2E harness 수정 뒤 위 최종 게이트를 다시 실행했다.
+- `5907c3c..3ba6cc9`에서 E2E 사양과 Playwright 설정은 변경되지 않아 위 E2E 증빙 SHA를 유지한다. E2E를 이번 후속 배포 보정에서 재실행했다고 주장하지 않는다.
 - `planned` 13건은 이 결과로 자동 증빙 완료로 승격하지 않는다.
 - 아직 실행하지 않은 외부 게이트: Vercel preview 실제 인증·OAuth, Ubuntu Docker image digest/canary·승격·rollback, 실제 Meta 연동, 운영 canary 관찰, pilot 사용자 검증. 이 항목들은 모두 `pending`이며 이 문서는 운영 준비 완료나 배포 승인을 주장하지 않는다.
 - 로컬 production dependency audit에는 12개 취약 패키지 키(중간 3, 높음 9, 치명적 0)가 남아 있다. 출시 판단 전에 별도 보안 triage가 필요하다.

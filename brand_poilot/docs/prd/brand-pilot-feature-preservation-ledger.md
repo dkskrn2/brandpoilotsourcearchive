@@ -208,10 +208,12 @@
 
 새 위치가 확정되지 않은 기존 기능은 삭제하지 않고 `미배치` 상태로 보존한다.
 
-## 2026-07-28 보존 회귀 증빙
+## 2026-07-29 보존 회귀 증빙
 
-- 자동 보존표 verifier는 최종 로컬 검증 기준 코드 `5907c3c`에서 123개 ID를 모두 정확히 한 번 확인했다: `active` 105, `planned` 13, `excluded` 4, `superseded` 1.
-- 같은 기준 코드에서 repository contract 42/42, migration 49/49, 브라우저 E2E 149 PASS / 7 의도된 SKIP / 0 FAIL을 확인했다.
-- 배포 상태 전이 계약은 기준 코드 `2f407f9`에서 95/95 PASS했다. 이후 변경은 E2E proxy test lifecycle과 이 증빙 문서뿐이며 운영 스크립트나 제품 동작을 바꾸지 않았다.
+- API·배포·계약 최종 검증 기준 코드 `3ba6cc9`에서 자동 보존표 verifier가 123개 ID를 모두 정확히 한 번 확인했다: `active` 105, `planned` 13, `excluded` 4, `superseded` 1.
+- 같은 기준 코드에서 전체 API workspace test 1,690 PASS / 31 의도된 SKIP / 0 FAIL, API typecheck·build PASS, repository contract 42/42 PASS를 확인했다.
+- 배포 상태 전이 계약은 같은 기준 코드에서 현재 108/108 PASS했다. 전용 content-proposal worker token은 canonical 선언을 요구하고 export·선행 공백·콜론·bare 중복 선언 및 일반 worker token 재사용을 비밀값 노출 없이 거부한다. 주석의 키 언급과 `${KEY}_BACKUP` 근접 키는 중복 선언으로 오인하지 않는다.
+- 브라우저 E2E 149 PASS / 7 의도된 SKIP / 0 FAIL과 migration 49/49는 기준 코드 `5907c3c`의 증빙을 유지한다. `5907c3c..3ba6cc9`에서 E2E 사양과 Playwright 설정은 변경되지 않았으며, 이번 후속 검증에서 E2E를 재실행했다고 주장하지 않는다.
+- 이 Windows 검증 호스트에는 `shellcheck` 실행 파일이 없어 shellcheck PASS를 주장하지 않는다. 배포 계약은 Git Bash로 실제 스크립트 경로와 상태 전이를 검증했다.
 - 위 결과는 기존 기능 삭제 승인이 아니다. `planned` 13건과 수동·외부 연동 항목은 계속 보존 대상이며 자동 완료로 간주하지 않는다.
 - Vercel preview 실제 로그인·OAuth, Ubuntu canary·승격·rollback, 실제 Meta 연동, 운영 관찰, pilot 검증은 `pending`이다. 인증/OAuth·세션·권한과 운영 데이터를 확인하기 전에는 운영 배포 또는 migration 적용을 승인하지 않는다.
