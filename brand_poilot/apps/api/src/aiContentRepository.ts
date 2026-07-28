@@ -250,7 +250,12 @@ export interface AiContentRepository extends AiContentAttachmentLifecycleReposit
   listAiContentGenerations(input: BrandScope): Promise<AiContentGenerationRecord[]>;
   getAiContentGeneration(input: BrandGenerationScope): Promise<AiContentGenerationRecord | null>;
   listAiContentUsage(input: BrandScope & { usageDate: string }): Promise<AiContentUsageRecord>;
-  listAiContentReferences(input: BrandScope & { type?: AiContentType }): Promise<AiContentReferenceRecord[]>;
+  listAiContentReferences(input: BrandScope & {
+    type?: AiContentType;
+    strategies?: string[];
+    formats?: string[];
+    tags?: string[];
+  }): Promise<AiContentReferenceRecord[]>;
   listBrandAudiences(input: BrandScope): Promise<AudienceRecord[]>;
   saveBrandAudience(input: SaveAudienceInput): Promise<AudienceRecord>;
   listBrandAppeals(input: BrandScope): Promise<AppealRecord[]>;
@@ -2015,6 +2020,31 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           );
           let avatar: Record<string, unknown> | null = null;
           if (orchestration.avatar) {
+            if (orchestration.avatar.mode === "one_time") {
+              const selectedReceipt = await client.query(
+                `select receipt.id,receipt.upload_session_id,receipt.object_hash,receipt.mime_type
+                   from ai_content_one_time_avatar_receipts receipt
+                  where receipt.id=$1 and receipt.generation_id=$2
+                    and receipt.workspace_id=$3 and receipt.brand_id=$4
+                    and receipt.created_by_user_id=$5 and receipt.confirmed_at is not null`,
+                [
+                  orchestration.avatar.id,
+                  input.generationId,
+                  input.workspaceId,
+                  input.brandId,
+                  input.actorUserId,
+                ],
+              );
+              const selected = selectedReceipt.rows[0] as Record<string, unknown> | undefined;
+              if (!selected) throw new Error("ai_content_one_time_avatar_receipt_not_found");
+              avatar = {
+                id: String(selected.upload_session_id),
+                assetVersionId: String(selected.id),
+                objectHash: String(selected.object_hash),
+                mime: String(selected.mime_type),
+                provenance: "one_time",
+              };
+            } else {
             const selectedAvatar = await client.query(
               `select avatar.id,image.id asset_version_id,image.checksum object_hash,image.mime_type
                  from brand_avatars avatar
@@ -2035,6 +2065,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
               mime: String(selected.mime_type),
               provenance: "library",
             };
+            }
           }
           const frozen = {
             contractVersion: "generation-brief.v1",
@@ -2290,21 +2321,54 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const marketing = input.type === "marketing";
       const blog = input.type === "blog";
       const queries: string[] = [];
+      const recommendationFilter = (
+        alias: string,
+        supportedFormats: string[],
+      ) => `
+           and ${alias}.workspace_id = $1 and ${alias}.brand_id = $2
+           and ${alias}.archived_at is null
+           and (
+             cardinality($3::text[]) = 0
+             or coalesce(${alias}.metadata->'strategies', '[]'::jsonb) ?| $3::text[]
+           )
+           and (
+             cardinality($4::text[]) = 0
+             or $4::text[] && array[${supportedFormats.map((format) => `'${format}'`).join(",")}]::text[]
+           )
+           and (
+             cardinality($5::text[]) = 0
+             or coalesce(${alias}.metadata->'tags', '[]'::jsonb) ?| $5::text[]
+             or exists (
+               select 1 from unnest($5::text[]) recommended_tag
+                where concat_ws(' ', ${alias}.title, ${alias}.origin, ${alias}.metadata::text)
+                      ilike '%' || recommended_tag || '%'
+             )
+           )`;
       if (cardNews || marketing) queries.push(`
         select co.id, 'brand_output' as source, co.title, null::text as url, null::text as preview_url,
                jsonb_build_object('exposureCount', performance.exposure_count) as metrics, performance.collected_at as checked_at
           from channel_outputs co
+          join reference_items reference_filter
+            on reference_filter.channel_output_id=co.id
+           and reference_filter.workspace_id=co.workspace_id
+           and reference_filter.brand_id=co.brand_id
           left join lateral (select exposure_count, collected_at from content_performance_snapshots cps
             where cps.channel_output_id = co.id order by cps.snapshot_date desc limit 1) performance on true
          where co.workspace_id = $1 and co.brand_id = $2 and co.status in ('approved', 'auto_approved')
-           ${cardNews ? "and co.delivery_format = 'instagram_feed_carousel'" : "and performance.exposure_count is not null"}`);
+           ${cardNews ? "and co.delivery_format = 'instagram_feed_carousel'" : "and performance.exposure_count is not null"}
+           ${recommendationFilter("reference_filter", cardNews ? ["card_news"] : ["single_image", "marketing"])}`);
       if (cardNews) queries.push(`
         select saved.id, 'saved_trend' as source, coalesce(media.caption, media.username, 'Instagram reference') as title,
                media.permalink as url, media.media_url as preview_url,
                jsonb_build_object('likeCount', media.like_count, 'commentsCount', media.comments_count) as metrics,
                media.last_fetched_at as checked_at
           from brand_trend_saved_media saved join instagram_trend_media media on media.id = saved.trend_media_id
-         where saved.workspace_id = $1 and saved.brand_id = $2`);
+          join reference_items reference_filter
+            on reference_filter.saved_trend_id=saved.id
+           and reference_filter.workspace_id=saved.workspace_id
+           and reference_filter.brand_id=saved.brand_id
+         where saved.workspace_id = $1 and saved.brand_id = $2
+           ${recommendationFilter("reference_filter", ["card_news", "single_image"])}`);
       if (blog || marketing) queries.push(`
         select source.id, 'saved_url' as source, coalesce(snapshot.extracted_title, source.title, source.url) as title,
                source.url, null::text as preview_url, '{}'::jsonb as metrics, snapshot.fetched_at as checked_at
@@ -2318,7 +2382,8 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
          where item.workspace_id = $1 and item.brand_id = $2
            and item.archived_at is null
            and item.content_purpose in ('${marketing ? "marketing" : "informational"}', 'both')
-           and source.source_type = 'reference' and source.deleted_at is null`);
+           and source.source_type = 'reference' and source.deleted_at is null
+           ${recommendationFilter("item", marketing ? ["single_image", "marketing"] : ["blog"])}`);
       if (!queries.length) return [];
       const result = await pool.query(
         `select * from (${queries.join(" union all ")}) reference_rows
@@ -2327,7 +2392,13 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             coalesce((metrics->>'likeCount')::bigint, 0),
             coalesce((metrics->>'commentsCount')::bigint, 0)
           ) > 0 then 0 else 1 end, checked_at desc nulls last`,
-        [input.workspaceId, input.brandId],
+        [
+          input.workspaceId,
+          input.brandId,
+          input.strategies ?? [],
+          input.formats ?? [],
+          input.tags ?? [],
+        ],
       );
       return result.rows.map((row) => ({ id: String(row.id), source: row.source, title: String(row.title), url: row.url ?? null, previewUrl: row.preview_url ?? null, metrics: object(row.metrics), checkedAt: iso(row.checked_at) }));
     },

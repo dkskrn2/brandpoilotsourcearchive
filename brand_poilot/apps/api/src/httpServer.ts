@@ -2724,16 +2724,35 @@ export function createServer(
     },
   );
 
-  app.get<{ Params: { brandId: string }; Querystring: { type?: string } }>(
+  app.get<{
+    Params: { brandId: string };
+    Querystring: { type?: string; strategies?: string; formats?: string; tags?: string };
+  }>(
     "/brands/:brandId/ai-content/references",
     async (request) => {
       const type = request.query.type;
       if (type !== undefined && !["card_news", "blog", "marketing"].includes(type)) {
         throw new Error("ai_content_type_invalid");
       }
+      const parseFilter = (raw: string | undefined, allowed?: ReadonlySet<string>) => {
+        if (!raw) return [];
+        const values = raw.split(",").map((value) => value.trim()).filter(Boolean);
+        if (
+          values.length > 30
+          || new Set(values).size !== values.length
+          || values.some((value) => value.length > 80 || allowed && !allowed.has(value))
+        ) throw new Error("ai_content_reference_filter_invalid");
+        return values;
+      };
       return repository.listAiContentReferences({
         ...aiContentScope(request, request.params.brandId),
         type: type as AiContentType | undefined,
+        strategies: parseFilter(request.query.strategies, new Set([
+          "problem_solution", "how_to", "comparison", "faq", "insight",
+          "benefit", "social_proof", "brand_story", "cta",
+        ])),
+        formats: parseFilter(request.query.formats, new Set(["card_news", "blog", "single_image", "channel_text"])),
+        tags: parseFilter(request.query.tags),
       });
     },
   );

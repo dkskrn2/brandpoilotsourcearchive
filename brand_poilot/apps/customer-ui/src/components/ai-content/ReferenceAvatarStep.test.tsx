@@ -38,15 +38,24 @@ const avatars: Avatar[] = [1, 2].map((index) => ({
 function Harness({ onGenerate = vi.fn() }: { onGenerate?: () => void }) {
   const [selectedReferences, setSelectedReferences] = useState<SelectedReference[]>([]);
   const [avatarId, setAvatarId] = useState<string | null>(null);
+  const [oneTimeAvatar, setOneTimeAvatar] = useState<File | null>(null);
   return <ReferenceAvatarStep
     references={references}
     avatars={avatars}
     selectedReferences={selectedReferences}
     selectedAvatarId={avatarId}
+    oneTimeAvatar={oneTimeAvatar}
     loading={false}
     submitting={false}
     onReferencesChange={setSelectedReferences}
-    onAvatarChange={setAvatarId}
+    onAvatarChange={(value) => {
+      setAvatarId(value);
+      if (value) setOneTimeAvatar(null);
+    }}
+    onOneTimeAvatarChange={(value) => {
+      setOneTimeAvatar(value);
+      if (value) setAvatarId(null);
+    }}
     onGenerate={onGenerate}
   />;
 }
@@ -82,6 +91,20 @@ describe("ReferenceAvatarStep", () => {
     expect(screen.getByRole("radio", { name: "아바타 2" })).toBeChecked();
   });
 
+  it("keeps a one-time avatar mutually exclusive with the library slot and preserves the local file", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+
+    const oneTime = new File(["person"], "campaign-person.png", { type: "image/png" });
+    await user.upload(screen.getByLabelText("이번 생성에만 사용할 아바타"), oneTime);
+
+    expect(screen.getByText("campaign-person.png")).toBeVisible();
+    expect(screen.getByRole("radio", { name: "아바타 1" })).not.toBeChecked();
+
+    await user.click(screen.getByRole("radio", { name: "아바타 1" }));
+    expect(screen.queryByText("campaign-person.png")).not.toBeInTheDocument();
+  });
+
   it("opens direct reference and avatar upload flows from the proposal phase", async () => {
     const user = userEvent.setup();
     const addReference = vi.fn();
@@ -91,10 +114,12 @@ describe("ReferenceAvatarStep", () => {
       avatars={avatars}
       selectedReferences={[]}
       selectedAvatarId={null}
+      oneTimeAvatar={null}
       loading={false}
       submitting={false}
       onReferencesChange={vi.fn()}
       onAvatarChange={vi.fn()}
+      onOneTimeAvatarChange={vi.fn()}
       onAddReference={addReference}
       onAddAvatar={addAvatar}
       onGenerate={vi.fn()}

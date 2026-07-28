@@ -134,6 +134,12 @@ export interface AiContentReference {
   comparableMetric: { label: string; value: number } | null;
 }
 
+export interface AiContentReferenceQuery {
+  strategies: ContentMessageStrategy[];
+  formats: ContentOutputFormat[];
+  tags: string[];
+}
+
 export interface ContentProposal {
   contractVersion: "content-proposal.v1";
   title: string;
@@ -378,7 +384,7 @@ export interface AiContentGateway {
   saveAudiencePreset(brandId: string, input: Omit<AudiencePreset, "id" | "useCount" | "lastUsedAt">): Promise<AudiencePreset>;
   listAppealPresets(brandId: string): Promise<AppealPreset[]>;
   saveAppealPreset(brandId: string, input: Omit<AppealPreset, "id" | "useCount" | "lastUsedAt">): Promise<AppealPreset>;
-  listReferences(brandId: string, type?: AiContentType): Promise<AiContentReference[]>;
+  listReferences(brandId: string, query?: AiContentType | AiContentReferenceQuery): Promise<AiContentReference[]>;
   retryOutput(brandId: string, outputId: string, reason: string): Promise<AiGenerationOutput>;
   downloadOutput(brandId: string, outputId: string): Promise<{ blob: Blob; fileName: string }>;
   downloadGeneration(brandId: string, generationId: string, outputIds?: string[]): Promise<{ blob: Blob; fileName: string }>;

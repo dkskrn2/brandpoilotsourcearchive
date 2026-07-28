@@ -14,15 +14,17 @@ const roleOptions: Array<[ReferenceRole, string]> = [
   ["visual_composition", "비주얼 구성"],
 ];
 
-export function ReferenceAvatarStep({ references, avatars, selectedReferences, selectedAvatarId, loading, submitting, onReferencesChange, onAvatarChange, onAddReference, onAddAvatar, onGenerate }: {
+export function ReferenceAvatarStep({ references, avatars, selectedReferences, selectedAvatarId, oneTimeAvatar, loading, submitting, onReferencesChange, onAvatarChange, onOneTimeAvatarChange, onAddReference, onAddAvatar, onGenerate }: {
   references: AiContentReference[];
   avatars: Avatar[];
   selectedReferences: SelectedReference[];
   selectedAvatarId: string | null;
+  oneTimeAvatar: File | null;
   loading: boolean;
   submitting: boolean;
   onReferencesChange(value: SelectedReference[]): void;
   onAvatarChange(value: string | null): void;
+  onOneTimeAvatarChange(value: File | null): void;
   onAddReference?(): void;
   onAddAvatar?(): void;
   onGenerate(): void;
@@ -76,12 +78,27 @@ export function ReferenceAvatarStep({ references, avatars, selectedReferences, s
       </div>
       <aside className="avatar-slot" aria-label="아바타 한 개 선택">
         <h3>아바타</h3>
-        <label><input type="radio" name="avatar" checked={selectedAvatarId === null} onChange={() => onAvatarChange(null)} />사용 안 함</label>
+        <label><input type="radio" name="avatar" checked={selectedAvatarId === null && !oneTimeAvatar} onChange={() => {
+          onAvatarChange(null);
+          onOneTimeAvatarChange(null);
+        }} />사용 안 함</label>
         <button type="button" className="button" onClick={onAddAvatar}>아바타 업로드 후 저장</button>
+        <label>이번 생성에만 사용할 아바타
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            disabled={submitting}
+            onChange={(event) => onOneTimeAvatarChange(event.target.files?.[0] ?? null)}
+          />
+        </label>
+        {oneTimeAvatar ? <p>{oneTimeAvatar.name}<button type="button" disabled={submitting} onClick={() => onOneTimeAvatarChange(null)}>제거</button></p> : null}
         {avatars.filter((item) => item.status === "active").map((item) => {
           const image = item.images.find((candidate) => candidate.representative) ?? item.images[0];
           return <label className="avatar-choice" key={item.id}>
-            <input type="radio" name="avatar" checked={selectedAvatarId === item.id} onChange={() => onAvatarChange(item.id)} />
+            <input type="radio" name="avatar" checked={selectedAvatarId === item.id} onChange={() => {
+              onOneTimeAvatarChange(null);
+              onAvatarChange(item.id);
+            }} />
             {image ? <img src={image.storageUrl} alt="" /> : null}
             <span><strong>{item.name}</strong><small>{item.description}</small></span>
           </label>;

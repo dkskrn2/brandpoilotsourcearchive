@@ -48,18 +48,34 @@ export function AiContentWizardPage({ gateway = aiContentApiGateway, brandId = D
   const queryType = params.get("type");
   const initialType = (["card_news", "blog", "marketing"] as const).includes(queryType as AiContentType) ? queryType as AiContentType : null;
   const returnToProductLibrary = params.get("returnTo") === "product-library";
+  const returnToContentProposal = params.get("returnTo") === "content-proposal";
   const state = useAiContentDraft(initialType);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const { refresh: refreshUsage } = useAiContentUsage();
   const proposalBatchId = params.get("proposalBatch");
   const seedReferenceId = params.get("reference");
+  const proposalFamily = params.get("proposalFamily");
+  const proposalFormat = params.get("proposalFormat");
+  const proposalChannels = (params.get("proposalChannels") ?? "").split(",").filter((channel) =>
+    ["instagram", "threads", "x", "linkedin", "youtube", "tiktok", "blog_export"].includes(channel),
+  );
   if (!initialType || proposalBatchId) {
     return <ContentProposalFlow
       brandId={brandId}
       gateway={gateway}
       initialBatchId={proposalBatchId}
       initialSeedReferenceId={seedReferenceId}
+      initialAnalyzedSubjectId={params.get("analysis")}
+      initialSetup={{
+        family: proposalFamily === "informational" || proposalFamily === "marketing" ? proposalFamily : null,
+        topic: params.get("proposalTopic") ?? "",
+        format: proposalFormat === "card_news" || proposalFormat === "blog" || proposalFormat === "single_image" || proposalFormat === "channel_text"
+          ? proposalFormat
+          : null,
+        channels: proposalChannels as import("../features/ai-content/types").ContentChannelTarget[],
+        brief: params.get("proposalBrief") ?? "",
+      }}
       onSeedReferenceInvalid={() => {
         const next = new URLSearchParams(params);
         next.delete("reference");
@@ -150,6 +166,13 @@ export function AiContentWizardPage({ gateway = aiContentApiGateway, brandId = D
       if (!value || (value.status !== "ready" && value.status !== "partial")) return;
       if (returnToProductLibrary) {
         navigate(`/brand-center?${new URLSearchParams({ tab: "products", analysis: value.id }).toString()}`);
+        return;
+      }
+      if (returnToContentProposal) {
+        const next = new URLSearchParams(params);
+        next.delete("type");
+        next.set("analysis", value.id);
+        navigate(`/ai-content/new?${next.toString()}`);
         return;
       }
       state.setStep(3);

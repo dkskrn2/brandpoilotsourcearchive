@@ -514,6 +514,21 @@ describe("AI content customer routes", () => {
       workspaceId, brandId, proposalId, actorUserId,
     });
 
+    const recommendedReferences = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/ai-content/references?type=blog&strategies=how_to&formats=blog&tags=${encodeURIComponent("여름,가이드")}`,
+      headers: auth,
+    });
+    expect(recommendedReferences.statusCode).toBe(200);
+    expect(repository.listAiContentReferences).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      type: "blog",
+      strategies: ["how_to"],
+      formats: ["blog"],
+      tags: ["여름", "가이드"],
+    });
+
     const references = await app.inject({
       method: "GET",
       url: `/brands/${brandId}/ai-content/draft-references?assetType=reference&assetId=${referenceId}`,

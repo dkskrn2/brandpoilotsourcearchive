@@ -3,7 +3,7 @@ import type {
   WikiItem,
 } from "../../features/libraries/libraryGateway";
 
-export type ContentSubjectMode = "brand_topic" | "product_service";
+export type ContentSubjectMode = "brand_topic" | "product_service" | "new_subject";
 
 export function ContentSubjectStep({
   mode,
@@ -12,6 +12,7 @@ export function ContentSubjectStep({
   wikiItems,
   selectedWikiIds,
   selectedProductId,
+  analyzedSubjectTitle,
   loading,
   onModeChange,
   onTopicChange,
@@ -26,6 +27,7 @@ export function ContentSubjectStep({
   wikiItems: WikiItem[];
   selectedWikiIds: string[];
   selectedProductId: string | null;
+  analyzedSubjectTitle?: string | null;
   loading: boolean;
   onModeChange(value: ContentSubjectMode): void;
   onTopicChange(value: string): void;
@@ -42,7 +44,11 @@ export function ContentSubjectStep({
   const activeWiki = wikiItems.filter((item) =>
     item.status === "active" && item.activeVersionId && item.buildStatus === "active",
   );
-  const valid = mode === "brand_topic" ? Boolean(topic.trim()) : Boolean(selectedProductId);
+  const valid = mode === "brand_topic"
+    ? Boolean(topic.trim())
+    : mode === "product_service"
+      ? Boolean(selectedProductId)
+      : Boolean(analyzedSubjectTitle);
   const toggleWiki = (id: string) => onWikiIdsChange(
     selectedWikiIds.includes(id)
       ? selectedWikiIds.filter((item) => item !== id)
@@ -56,7 +62,10 @@ export function ContentSubjectStep({
       <button type="button" aria-pressed="false" onClick={onStartNewAnalysis}>새 제품·서비스 분석</button>
     </div>
     {loading ? <p>승인된 제품·서비스와 Wiki를 불러오는 중입니다.</p> : null}
-    {mode === "brand_topic" ? <>
+    {mode === "new_subject" ? <div className="wizard-notice">
+      <strong>새 분석 완료</strong>
+      <p>{analyzedSubjectTitle}</p>
+    </div> : mode === "brand_topic" ? <>
       <label>브랜드 주제
         <input value={topic} onChange={(event) => onTopicChange(event.target.value)} placeholder="예: 여름 피부 관리" />
       </label>

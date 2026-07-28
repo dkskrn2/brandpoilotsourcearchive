@@ -945,6 +945,8 @@ describe("AI content repository", () => {
   });
 
   it("starts canonical orchestration with one frozen brief, outputs, job, and ledger transaction", async () => {
+    const oneTimeReceiptId = "a0000000-0000-4000-8000-00000000000a";
+    const oneTimeSessionId = "b0000000-0000-4000-8000-00000000000b";
     const orchestration = {
       contractVersion: "content-orchestration.v1",
       contentFamily: "informational",
@@ -955,7 +957,11 @@ describe("AI content repository", () => {
       channelTargets: ["blog_export"],
       brief: {},
       references: [],
-      avatar: null,
+      avatar: {
+        mode: "one_time",
+        id: oneTimeReceiptId,
+        snapshot: { fileName: "campaign-person.png" },
+      },
     };
     const statements: Array<{ sql: string; params: unknown[] }> = [];
     const generation = {
@@ -990,6 +996,12 @@ describe("AI content repository", () => {
           }], rowCount: 1 };
         }
         if (sql.includes("from ai_content_generation_references")) return { rows: [], rowCount: 0 };
+        if (sql.includes("from ai_content_one_time_avatar_receipts")) return { rows: [{
+          id: oneTimeReceiptId,
+          upload_session_id: oneTimeSessionId,
+          object_hash: "a".repeat(64),
+          mime_type: "image/png",
+        }], rowCount: 1 };
         if (sql.includes("start_ai_content_orchestration")) return { rows: [{ id: "generation-1" }], rowCount: 1 };
         if (sql.includes("update ai_content_generations") && sql.includes("generation_idempotency_key")) {
           return { rows: [{ ...generation, status: "queued", current_stage: "generation" }], rowCount: 1 };
@@ -1013,11 +1025,26 @@ describe("AI content repository", () => {
 
     expect(started.status).toBe("queued");
     const freeze = statements.find(({ sql }) => sql.includes("start_ai_content_orchestration"));
+    const receiptLookup = statements.find(({ sql }) => sql.includes("from ai_content_one_time_avatar_receipts"));
+    expect(receiptLookup?.params).toEqual([
+      oneTimeReceiptId,
+      "generation-1",
+      scope.workspaceId,
+      scope.brandId,
+      scope.actorUserId,
+    ]);
     expect(JSON.parse(String(freeze?.params[3]))).toMatchObject({
       contractVersion: "generation-brief.v1",
       brandCoreVersionId: "40000000-0000-4000-8000-000000000004",
       ruleSetVersionId: "50000000-0000-4000-8000-000000000005",
       outputFormat: "blog",
+      avatar: {
+        id: oneTimeSessionId,
+        assetVersionId: oneTimeReceiptId,
+        objectHash: "a".repeat(64),
+        mime: "image/png",
+        provenance: "one_time",
+      },
     });
     expect(statements.map(({ sql }) => sql)).toEqual(expect.arrayContaining([
       "BEGIN",
@@ -1264,6 +1291,34 @@ describe("AI content repository", () => {
 
     expect(pool.sql.join("\n")).toContain("select source.id, 'saved_url' as source");
     expect(pool.sql.join("\n")).toContain("item.content_purpose in ('informational', 'both')");
+  });
+
+  it("applies recommended strategy, format, and tag filters inside the tenant-scoped reference query", async () => {
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, params: unknown[] = []) => {
+      calls.push({ sql, params });
+      return { rows: [], rowCount: 0 };
+    });
+    const repository = createAiContentRepository({ query } as never);
+
+    await repository.listAiContentReferences({
+      ...scope,
+      type: "blog",
+      strategies: ["how_to"],
+      formats: ["blog"],
+      tags: ["여름"],
+    });
+
+    expect(calls[0]?.sql).toContain("item.workspace_id = $1");
+    expect(calls[0]?.sql).toContain("item.brand_id = $2");
+    expect(calls[0]?.sql).toContain("item.metadata");
+    expect(calls[0]?.params).toEqual([
+      scope.workspaceId,
+      scope.brandId,
+      ["how_to"],
+      ["blog"],
+      ["여름"],
+    ]);
   });
 
   it("creates a generation and analyze job atomically", async () => {

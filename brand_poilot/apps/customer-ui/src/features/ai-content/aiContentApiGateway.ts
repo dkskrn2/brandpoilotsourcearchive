@@ -403,10 +403,18 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
     saveAudiencePreset(brandId, input) { return client.requestJson(`/brands/${brandId}/ai-content/audiences`, { method: "POST", body: JSON.stringify(input) }); },
     listAppealPresets(brandId) { return client.requestJson(`/brands/${brandId}/ai-content/appeals`, { method: "GET" }); },
     saveAppealPreset(brandId, input) { return client.requestJson(`/brands/${brandId}/ai-content/appeals`, { method: "POST", body: JSON.stringify(input) }); },
-    async listReferences(brandId, type) {
+    async listReferences(brandId, query) {
+      const type = typeof query === "string" ? query : undefined;
       const types = type ? [type] : ["card_news", "blog", "marketing"] as AiContentType[];
+      const filters = typeof query === "object" && query
+        ? `&${new URLSearchParams({
+          strategies: query.strategies.join(","),
+          formats: query.formats.join(","),
+          tags: query.tags.join(","),
+        }).toString()}`
+        : "";
       const rows = (await Promise.all(types.map(async (format) => {
-        const references = await client.requestJson<Array<{ id: string; source: string; title: string; url: string | null; previewUrl: string | null; metrics: Record<string, unknown> }>>(`/brands/${brandId}/ai-content/references?type=${format}`, { method: "GET" });
+        const references = await client.requestJson<Array<{ id: string; source: string; title: string; url: string | null; previewUrl: string | null; metrics: Record<string, unknown> }>>(`/brands/${brandId}/ai-content/references?type=${format}${filters}`, { method: "GET" });
         return references.map((reference) => ({ ...reference, format }));
       }))).flat();
       const unique = new Map<string, AiContentReference>();

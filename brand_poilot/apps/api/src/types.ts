@@ -1083,7 +1083,12 @@ export interface ApiRepository
   listAiContentGenerations(input: BrandScope): Promise<AiContentGenerationRecord[]>;
   getAiContentGeneration(input: BrandGenerationScope): Promise<AiContentGenerationRecord | null>;
   listAiContentUsage(input: BrandScope & { usageDate: string }): Promise<AiContentUsageRecord>;
-  listAiContentReferences(input: BrandScope & { type?: AiContentType }): Promise<AiContentReferenceRecord[]>;
+  listAiContentReferences(input: BrandScope & {
+    type?: AiContentType;
+    strategies?: string[];
+    formats?: string[];
+    tags?: string[];
+  }): Promise<AiContentReferenceRecord[]>;
   listBrandAudiences(input: BrandScope): Promise<AudienceRecord[]>;
   saveBrandAudience(input: SaveAudienceInput): Promise<AudienceRecord>;
   listBrandAppeals(input: BrandScope): Promise<AppealRecord[]>;

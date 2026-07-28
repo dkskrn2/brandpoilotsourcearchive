@@ -67,6 +67,8 @@ export function ContentProposalFlow({
   initialSeedReferenceId = null,
   onSeedReferenceInvalid,
   assetGateway = libraryGateway,
+  initialAnalyzedSubjectId = null,
+  initialSetup,
 }: {
   brandId: string;
   gateway: AiContentGateway;
@@ -76,27 +78,42 @@ export function ContentProposalFlow({
   initialSeedReferenceId?: string | null;
   onSeedReferenceInvalid?(): void;
   assetGateway?: LibraryGateway;
+  initialAnalyzedSubjectId?: string | null;
+  initialSetup?: {
+    family: ContentFamily | null;
+    topic: string;
+    format: ContentOutputFormat | null;
+    channels: ContentChannelTarget[];
+    brief: string;
+  };
 }) {
   const navigate = useNavigate();
   const capabilityGateway = useRef(channelCapabilities ?? createChannelCapabilityGateway());
   const [machine, setMachine] = useState(createContentWizardState);
-  const [family, setFamily] = useState<ContentFamily | null>(null);
+  const [family, setFamily] = useState<ContentFamily | null>(initialSetup?.family ?? null);
   const [subjectMode, setSubjectMode] = useState<ContentSubjectMode>("brand_topic");
-  const [topic, setTopic] = useState("");
+  const [topic, setTopic] = useState(initialSetup?.topic ?? "");
+  const [analyzedSubjectId, setAnalyzedSubjectId] = useState<string | null>(null);
+  const [analyzedSubjectTitle, setAnalyzedSubjectTitle] = useState<string | null>(null);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [selectedWikiIds, setSelectedWikiIds] = useState<string[]>([]);
   const [products, setProducts] = useState<Awaited<ReturnType<ContentLibraries["listProductServices"]>>>([]);
   const [wikiItems, setWikiItems] = useState<Awaited<ReturnType<ContentLibraries["listWikiItems"]>>>([]);
   const [loadingSubjects, setLoadingSubjects] = useState(false);
-  const [format, setFormat] = useState<ContentOutputFormat>("" as ContentOutputFormat);
-  const [channels, setChannels] = useState<ContentChannelTarget[]>([]);
-  const [brief, setBrief] = useState("");
+  const [format, setFormat] = useState<ContentOutputFormat>(initialSetup?.format ?? "" as ContentOutputFormat);
+  const [channels, setChannels] = useState<ContentChannelTarget[]>(initialSetup?.channels ?? []);
+  const [brief, setBrief] = useState(initialSetup?.brief ?? "");
   const [batch, setBatch] = useState<ContentProposalBatch | null>(null);
   const [selectedProposal, setSelectedProposal] = useState<ContentProposalRecord | null>(null);
   const [references, setReferences] = useState<AiContentReference[]>([]);
   const [avatars, setAvatars] = useState<Awaited<ReturnType<LibraryGateway["listAvatars"]>>>([]);
   const [selectedReferences, setSelectedReferences] = useState<SelectedReference[]>([]);
   const [selectedAvatarId, setSelectedAvatarId] = useState<string | null>(null);
+  const [oneTimeAvatar, setOneTimeAvatar] = useState<File | null>(null);
+  const [oneTimeReceipt, setOneTimeReceipt] = useState<{
+    generationId: string;
+    attachment: Awaited<ReturnType<AiContentGateway["uploadAttachment"]>>;
+  } | null>(null);
   const [loadingProposal, setLoadingProposal] = useState(false);
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -147,7 +164,10 @@ export function ContentProposalFlow({
       setFamily(next.contentFamily);
     }
     if (typeof subjectInput.topic === "string") setTopic(subjectInput.topic);
-    if (subjectInput.mode === "product_service" && typeof subjectInput.productServiceId === "string") {
+    if (subjectInput.mode === "new_subject" && typeof subjectInput.subjectAnalysisId === "string") {
+      setSubjectMode("new_subject");
+      setAnalyzedSubjectId(subjectInput.subjectAnalysisId);
+    } else if (subjectInput.mode === "product_service" && typeof subjectInput.productServiceId === "string") {
       setSubjectMode("product_service");
       setSelectedProductId(subjectInput.productServiceId);
     } else {
@@ -193,6 +213,21 @@ export function ContentProposalFlow({
   }, [brandId, initialBatchId]);
 
   useEffect(() => {
+    if (!initialAnalyzedSubjectId) return;
+    let current = true;
+    void gateway.getSubjectAnalysis(brandId, initialAnalyzedSubjectId).then((analysis) => {
+      if (!current || (analysis.status !== "ready" && analysis.status !== "partial")) return;
+      setAnalyzedSubjectId(analysis.id);
+      setAnalyzedSubjectTitle(analysis.input.name || analysis.sourceUrl || "새 제품·서비스 분석");
+      setSubjectMode("new_subject");
+      setMachine((state) => ({ ...state, activeSection: "sources", completedSections: ["intent"] }));
+    }).catch(() => {
+      if (current) setError("완료한 새 분석을 불러오지 못했습니다. 다시 분석해 주세요.");
+    });
+    return () => { current = false; };
+  }, [brandId, gateway, initialAnalyzedSubjectId]);
+
+  useEffect(() => {
     if (machine.phase !== "setup" || machine.activeSection !== "delivery") return;
     let current = true;
     setCapabilityState(capabilityGateway.current.getState());
@@ -232,7 +267,11 @@ export function ContentProposalFlow({
   async function createProposal() {
     if (
       !family
-      || (subjectMode === "brand_topic" ? !topic.trim() : !selectedProductId)
+      || (subjectMode === "brand_topic"
+        ? !topic.trim()
+        : subjectMode === "product_service"
+          ? !selectedProductId
+          : !analyzedSubjectId)
       || !format
       || channels.length === 0
     ) return;
@@ -246,7 +285,9 @@ export function ContentProposalFlow({
           contentFamily: family,
           subjectInput: subjectMode === "product_service"
             ? { mode: "product_service", productServiceId: selectedProductId, brief }
-            : { mode: "brand_topic", topic: topic.trim(), wikiItemIds: selectedWikiIds, brief },
+            : subjectMode === "new_subject"
+              ? { mode: "new_subject", subjectAnalysisId: analyzedSubjectId, brief }
+              : { mode: "brand_topic", topic: topic.trim(), wikiItemIds: selectedWikiIds, brief },
           channelTargets: channels,
           outputFormats: [format],
           sourceSnapshotIds: [],
@@ -272,7 +313,7 @@ export function ContentProposalFlow({
     setError(null);
     try {
       const [nextReferences, nextAvatars] = await Promise.all([
-        gateway.listReferences(brandId),
+        gateway.listReferences(brandId, item.proposal.recommendedReferenceQuery),
         libraries.listAvatars(brandId),
       ]);
       setReferences(nextReferences);
@@ -315,19 +356,47 @@ export function ContentProposalFlow({
       }
       const generation = await gateway.selectProposal(brandId, selectedProposal.id, selectionKey.current);
       const selectedAvatar = activeAvatar ?? null;
+      let preparedOneTimeReceipt = oneTimeAvatar && oneTimeReceipt?.generationId === generation.id
+        ? oneTimeReceipt
+        : null;
+      if (oneTimeAvatar && !preparedOneTimeReceipt) {
+        const attachment = await gateway.uploadAttachment(brandId, generation.id, {
+          id: crypto.randomUUID(),
+          role: "person",
+          fileName: oneTimeAvatar.name,
+          mimeType: oneTimeAvatar.type,
+          size: oneTimeAvatar.size,
+          file: oneTimeAvatar,
+          uploadStatus: "pending",
+        });
+        preparedOneTimeReceipt = { generationId: generation.id, attachment };
+        setOneTimeReceipt(preparedOneTimeReceipt);
+      }
       const orchestration: ContentOrchestration = {
         contractVersion: "content-orchestration.v1",
         contentFamily: selectedProposal.proposal.contentFamily,
         subject: subjectMode === "product_service" && selectedProductId
           ? { mode: "product_service", productServiceId: selectedProductId }
-          : { mode: "brand_topic", topic, wikiItemIds: selectedWikiIds },
+          : subjectMode === "new_subject" && analyzedSubjectId
+            ? { mode: "new_subject", subjectAnalysisId: analyzedSubjectId }
+            : { mode: "brand_topic", topic, wikiItemIds: selectedWikiIds },
         target: { id: null, snapshot: selectedProposal.proposal.target },
         strategy: selectedProposal.proposal.messageStrategy,
         outputFormat: selectedProposal.proposal.outputFormat,
         channelTargets: selectedProposal.proposal.channelTargets,
         brief: { instruction: brief },
         references: selectedReferences,
-        avatar: selectedAvatar ? {
+        avatar: preparedOneTimeReceipt ? {
+          mode: "one_time",
+          id: preparedOneTimeReceipt.attachment.id,
+          snapshot: {
+            fileName: preparedOneTimeReceipt.attachment.fileName,
+            mimeType: preparedOneTimeReceipt.attachment.mimeType,
+            size: preparedOneTimeReceipt.attachment.size,
+            storageUrl: preparedOneTimeReceipt.attachment.storageUrl ?? null,
+            storagePath: preparedOneTimeReceipt.attachment.storagePath ?? null,
+          },
+        } : selectedAvatar ? {
           mode: "library",
           id: selectedAvatar.id,
           snapshot: {
@@ -382,6 +451,7 @@ export function ContentProposalFlow({
               wikiItems={wikiItems}
               selectedWikiIds={selectedWikiIds}
               selectedProductId={selectedProductId}
+              analyzedSubjectTitle={analyzedSubjectTitle}
               loading={loadingSubjects}
               onModeChange={(next) => {
                 setSubjectMode(next);
@@ -393,6 +463,11 @@ export function ContentProposalFlow({
               onStartNewAnalysis={() => navigate(`/ai-content/new?${new URLSearchParams({
                 type: family === "marketing" ? "marketing" : "blog",
                 returnTo: "content-proposal",
+                proposalFamily: family ?? "",
+                proposalTopic: topic,
+                proposalFormat: format,
+                proposalChannels: channels.join(","),
+                proposalBrief: brief,
               }).toString()}`)}
               onComplete={() => complete("sources")}
             /> : null}
@@ -425,10 +500,20 @@ export function ContentProposalFlow({
           avatars={avatars}
           selectedReferences={selectedReferences}
           selectedAvatarId={selectedAvatarId}
+          oneTimeAvatar={oneTimeAvatar}
           loading={loadingAssets}
           submitting={submitting}
           onReferencesChange={setSelectedReferences}
           onAvatarChange={setSelectedAvatarId}
+          onOneTimeAvatarChange={(file) => {
+            setOneTimeAvatar(file);
+            if (file) setSelectedAvatarId(null);
+            if (!file && oneTimeReceipt) {
+              void gateway.removeAttachment(brandId, oneTimeReceipt.generationId, oneTimeReceipt.attachment.id)
+                .then(() => setOneTimeReceipt(null))
+                .catch(() => setError("이번 생성용 아바타를 취소하지 못했습니다. 다시 시도해 주세요."));
+            }
+          }}
           onAddReference={() => {
             setAssetReturnFocus(document.activeElement instanceof HTMLElement ? document.activeElement : null);
             setAddingReference(true);

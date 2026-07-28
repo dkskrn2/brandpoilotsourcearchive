@@ -84,6 +84,14 @@ function renderFlow(options: {
   const selectProposal = vi.spyOn(gateway, "selectProposal");
   const updateGeneration = vi.spyOn(gateway, "updateGeneration");
   const startGeneration = vi.spyOn(gateway, "startGeneration");
+  const uploadAttachment = vi.spyOn(gateway, "uploadAttachment").mockImplementation(async (_brandId, _generationId, attachment) => ({
+    ...attachment,
+    id: "one-time-receipt-1",
+    file: undefined,
+    storageUrl: "https://blob.example/one-time.png",
+    storagePath: "one-time.png",
+    uploadStatus: "confirmed",
+  }));
   const libraries = {
     listProductServices: vi.fn().mockResolvedValue([]),
     listWikiItems: vi.fn().mockResolvedValue([]),
@@ -107,7 +115,7 @@ function renderFlow(options: {
     initialSeedReferenceId={options.initialSeedReferenceId}
     onSeedReferenceInvalid={options.onSeedReferenceInvalid}
   /></MemoryRouter>);
-  return { gateway, create, getBatch, listReferences, libraries, selectProposal, updateGeneration, startGeneration };
+  return { gateway, create, getBatch, listReferences, libraries, selectProposal, updateGeneration, startGeneration, uploadAttachment };
 }
 
 describe("ContentProposalFlow", () => {
@@ -241,5 +249,61 @@ describe("ContentProposalFlow", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("보관되었거나 찾을 수 없습니다");
     expect(selectProposal).not.toHaveBeenCalled();
+  });
+
+  it("passes the selected proposal recommendation to the tenant-scoped reference query", async () => {
+    const user = userEvent.setup();
+    const { listReferences } = renderFlow({ initialBatchId: "batch-1" });
+
+    await user.click(await screen.findByRole("button", { name: "구현안 선택: 여름 피부 3단계 관리" }));
+
+    await waitFor(() => expect(listReferences).toHaveBeenCalledWith("brand-demo", {
+      strategies: ["how_to"],
+      formats: ["blog"],
+      tags: ["여름"],
+    }));
+  });
+
+  it("uploads a one-time avatar into the selected generation and starts with its receipt snapshot", async () => {
+    const user = userEvent.setup();
+    const { uploadAttachment, updateGeneration, startGeneration } = renderFlow({ initialBatchId: "batch-1" });
+
+    await user.click(await screen.findByRole("button", { name: "구현안 선택: 여름 피부 3단계 관리" }));
+    await user.upload(
+      await screen.findByLabelText("이번 생성에만 사용할 아바타"),
+      new File(["person"], "campaign-person.png", { type: "image/png" }),
+    );
+    await user.click(screen.getByRole("button", { name: "이 구현안으로 생성" }));
+
+    await waitFor(() => expect(uploadAttachment).toHaveBeenCalledWith(
+      "brand-demo",
+      expect.any(String),
+      expect.objectContaining({ role: "person", fileName: "campaign-person.png" }),
+    ));
+    expect(updateGeneration).toHaveBeenCalledWith(
+      "brand-demo",
+      expect.any(String),
+      expect.objectContaining({
+        orchestration: expect.objectContaining({
+          avatar: {
+            mode: "one_time",
+            id: "one-time-receipt-1",
+            snapshot: expect.objectContaining({
+              fileName: "campaign-person.png",
+              storageUrl: "https://blob.example/one-time.png",
+            }),
+          },
+        }),
+      }),
+    );
+    expect(startGeneration).toHaveBeenCalledWith(
+      "brand-demo",
+      expect.any(String),
+      expect.objectContaining({
+        orchestration: expect.objectContaining({
+          avatar: expect.objectContaining({ mode: "one_time", id: "one-time-receipt-1" }),
+        }),
+      }),
+    );
   });
 });
