@@ -393,6 +393,44 @@ describe("createAiContentApiGateway", () => {
     });
   });
 
+  it("queues supported partial revisions through the output revision endpoint", async () => {
+    const requestJson = vi.fn(async () => ({
+      ...generation("generating"),
+      outputs: [{
+        id: "output-1",
+        generationId: "generation-1",
+        outputIndex: 1,
+        title: "수정 중",
+        status: "generating",
+        content: {},
+        manifest: {},
+        manifestUrl: null,
+        failureCode: null,
+        failureMessage: null,
+        downloadedAt: null,
+        revisionCapabilities: ["regenerate_card"],
+      }],
+    }));
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await expect(gateway.reviseOutput("brand-1", "output-1", {
+      action: "regenerate_card",
+      cardIndex: 2,
+      idempotencyKey: "revision-card-2",
+    })).resolves.toMatchObject({ id: "output-1", status: "generating" });
+    expect(requestJson).toHaveBeenCalledWith(
+      "/brands/brand-1/ai-content/outputs/output-1/revisions",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          action: "regenerate_card",
+          cardIndex: 2,
+          idempotencyKey: "revision-card-2",
+        }),
+      },
+    );
+  });
+
   it("propagates API failures instead of returning sample content", async () => {
     const requestJson = vi.fn(async () => { throw new Error("API request failed: 503"); });
     const gateway = createAiContentApiGateway(clientWith(requestJson));

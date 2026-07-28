@@ -15,6 +15,26 @@ const job = {
 };
 
 describe("blog prompt", () => {
+  it("carries hook-only revision constraints into the prompt", () => {
+    const prompt = buildPrompt({
+      ...job,
+      payload: {
+        ...job.payload,
+        revision: {
+          contractVersion: "ai-content-revision.v1",
+          action: "regenerate_hook",
+          idempotencyKey: "revision-hook-1",
+          cardIndex: null,
+          previousManifest: { type: "blog", assets: [] },
+          previousContent: { title: "기존 제목", summary: "기존 요약" },
+        },
+      },
+    });
+
+    expect(prompt).toContain("부분 재생성 계약");
+    expect(prompt).toContain("첫 훅만");
+  });
+
   it("requires v2 grounded semantic SEO writing", () => {
     const prompt = buildPrompt(job);
     expect(prompt).toContain("content-generation-input.v2");

@@ -205,12 +205,18 @@ function createWorkerPool(options: {
   subjectAnalysisSnapshot?: Record<string, unknown>;
   qualityBrief?: Record<string, unknown>;
   priorGeneratePayload?: Record<string, unknown>;
+  outputManifest?: Record<string, unknown>;
+  outputContent?: Record<string, unknown>;
+  existingRevisionIdempotencyKey?: string;
+  revision?: Record<string, unknown>;
   retryable?: boolean;
   retryBoundary?: "before" | "equal" | "after";
   deletionStatus?: "deleting" | "deleted" | null;
 } = {}) {
   const sql: string[] = [];
   const generatedJobPayloads: unknown[] = [];
+  const completedOutputManifests: Record<string, unknown>[] = [];
+  const completedOutputContents: Record<string, unknown>[] = [];
   let leaseAtBoundary = false;
   let generation = row("generation-1", options.jobType === "analyze" ? "analyzing" : "generating");
   let pendingCleanup = false;
@@ -221,6 +227,7 @@ function createWorkerPool(options: {
     status: options.exhaustedJob ? "processing" : "queued", payload_json: {
       ...(options.finalizeGeneration ? { finalizeGeneration: true } : {}),
       contentGenerationInput: structuredClone(options.subjectAnalysisSnapshot ?? contentGenerationInputV2Fixture),
+      ...(options.revision ? { revision: structuredClone(options.revision) } : {}),
     }, attempt_count: options.exhaustedJob ? 3 : 0, max_attempts: 3, available_at: new Date("2026-07-18T00:00:00.000Z"),
     worker_id: options.exhaustedJob ? "expired-worker" : null,
     lease_token: options.exhaustedJob ? "expired-token" : null,
@@ -312,6 +319,7 @@ function createWorkerPool(options: {
         query.includes("from ai_content_generation_jobs")
         && query.includes("output_id = $1")
         && query.includes("job_type = 'generate'")
+        && query.includes("select payload_json")
       ) {
         return options.priorGeneratePayload
           ? { rows: [{ payload_json: structuredClone(options.priorGeneratePayload) }], rowCount: 1 }
@@ -397,6 +405,8 @@ function createWorkerPool(options: {
       }
       if (query.includes("update ai_content_generation_outputs") && query.includes("status = 'completed'")) {
         outputStatus = "completed";
+        completedOutputContents.push(JSON.parse(String(params[2])));
+        completedOutputManifests.push(JSON.parse(String(params[3])));
         return { rows: [], rowCount: 1 };
       }
       if (query.includes("from channel_outputs channel_output") && query.includes("ai_content_generation_output_id")) {
@@ -469,7 +479,30 @@ function createWorkerPool(options: {
         };
       }
       if (query.includes("from ai_content_generation_outputs output") && query.includes("for update of output")) {
-        return { rows: [{ id: "output-1", generation_id: "generation-1", workspace_id: "workspace-1", brand_id: "brand-1", status: outputStatus, type: "card_news" }], rowCount: 1 };
+        return { rows: [{
+          id: "output-1",
+          generation_id: "generation-1",
+          workspace_id: "workspace-1",
+          brand_id: "brand-1",
+          status: outputStatus,
+          type: "card_news",
+          artifact_manifest_json: options.outputManifest ?? {},
+          content_json: options.outputContent ?? {},
+        }], rowCount: 1 };
+      }
+      if (
+        query.includes("from ai_content_generation_jobs")
+        && query.includes("payload_json #>> '{revision,idempotencyKey}'")
+      ) {
+        return options.existingRevisionIdempotencyKey === params[3]
+          ? { rows: [{ id: "revision-job-1" }], rowCount: 1 }
+          : { rows: [], rowCount: 0 };
+      }
+      if (
+        query.includes("from ai_content_generation_jobs")
+        && query.includes("status in ('queued', 'processing')")
+      ) {
+        return { rows: [], rowCount: 0 };
       }
       if (query.includes("update ai_content_generation_outputs") && query.includes("set status = 'queued'")) {
         outputStatus = "queued";
@@ -521,6 +554,8 @@ function createWorkerPool(options: {
     sql,
     job,
     generatedJobPayloads,
+    completedOutputManifests,
+    completedOutputContents,
     expireLeaseAtBoundary() { leaseAtBoundary = true; },
     enablePendingCleanup() { pendingCleanup = true; },
   };
@@ -1830,6 +1865,64 @@ describe("AI content repository", () => {
     expect(outputAggregate).toBeGreaterThan(generationLock);
   });
 
+  it("merges an individual-card revision without replacing successful sibling cards or copy", async () => {
+    const previousManifest = {
+      version: "ai-content.v1",
+      type: "card_news",
+      title: "기존 제목",
+      assets: [
+        { role: "slide", url: "https://blob.example.com/old-1.png", fileName: "slide-01.png", mimeType: "image/png", width: 1080, height: 1080, index: 1 },
+        { role: "slide", url: "https://blob.example.com/old-2.png", fileName: "slide-02.png", mimeType: "image/png", width: 1080, height: 1080, index: 2 },
+      ],
+      content: { caption: "기존 카피", hashtags: ["기존"], cta: "기존 CTA" },
+    };
+    const pool = createWorkerPool({
+      revision: {
+        contractVersion: "ai-content-revision.v1",
+        action: "regenerate_card",
+        idempotencyKey: "revision-card-2",
+        cardIndex: 2,
+        previousManifest,
+        previousContent: previousManifest.content,
+      },
+    });
+    const repository = createAiContentRepository(pool as never);
+    const claimed = await repository.claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-1",
+      leaseSeconds: 180,
+    });
+
+    await repository.completeAiContentJob({
+      jobId: "job-1",
+      workerId: "card-worker-1",
+      leaseToken: claimed!.leaseToken!,
+      skillVersion: "card-news-skill.v7",
+      jobType: "generate",
+      manifestUrl: "https://blob.example.com/manifest.json",
+      manifest: {
+        version: "ai-content.v1",
+        type: "card_news",
+        title: "새 제목",
+        assets: [
+          { role: "slide", url: "https://blob.example.com/new-1.png", fileName: "slide-01.png", mimeType: "image/png", width: 1080, height: 1080, index: 1 },
+          { role: "slide", url: "https://blob.example.com/new-2.png", fileName: "slide-02.png", mimeType: "image/png", width: 1080, height: 1080, index: 2 },
+        ],
+        content: { caption: "새 카피", hashtags: ["새"], cta: "새 CTA" },
+      },
+    });
+
+    expect(pool.completedOutputManifests.at(-1)).toMatchObject({
+      title: "기존 제목",
+      assets: [
+        expect.objectContaining({ index: 1, url: "https://blob.example.com/old-1.png" }),
+        expect.objectContaining({ index: 2, url: "https://blob.example.com/new-2.png" }),
+      ],
+      content: previousManifest.content,
+    });
+    expect(pool.completedOutputContents.at(-1)).toEqual(previousManifest.content);
+  });
+
   it("retains temporary attachments after every output completes", async () => {
     const pool = createWorkerPool();
     const repository = createAiContentRepository(pool as never);
@@ -2346,6 +2439,79 @@ describe("AI content repository", () => {
       },
     });
     expect(pool.sql.join("\n")).toContain("generation_input_snapshot, analysis_json");
+  });
+
+  it("queues an idempotent scoped hook revision without replacing unrelated completed outputs", async () => {
+    const priorPayload = {
+      generationId: "generation-1",
+      outputId: "output-1",
+      contentGenerationInput: contentGenerationInputV2Fixture,
+    };
+    const manifest = {
+      version: "ai-content.v1",
+      type: "card_news",
+      assets: [{ index: 1, url: "https://cdn.example.com/slide-01.png" }],
+      content: { caption: "기존 카피", hashtags: ["기존"], cta: "기존 CTA" },
+    };
+    const pool = createWorkerPool({
+      outputStatus: "completed",
+      priorGeneratePayload: priorPayload,
+      outputManifest: manifest,
+      outputContent: { caption: "기존 카피" },
+      totalOutputs: 2,
+      completedOutputs: 1,
+    });
+    const repository = createAiContentRepository(pool as never);
+
+    await expect(repository.reviseAiContentOutput({
+      ...scope,
+      outputId: "output-1",
+      action: "regenerate_hook",
+      idempotencyKey: "revision-hook-1",
+    })).resolves.toMatchObject({
+      id: "generation-1",
+      status: "queued",
+      outputs: [{ id: "output-1", status: "queued" }],
+    });
+
+    expect(pool.generatedJobPayloads.at(-1)).toEqual({
+      ...priorPayload,
+      revision: {
+        contractVersion: "ai-content-revision.v1",
+        action: "regenerate_hook",
+        idempotencyKey: "revision-hook-1",
+        cardIndex: null,
+        previousManifest: manifest,
+        previousContent: { caption: "기존 카피" },
+      },
+    });
+    expect(pool.sql.join("\n")).toContain("output.id = $1 and output.workspace_id = $2 and output.brand_id = $3");
+    expect(pool.sql.join("\n")).not.toContain("update ai_content_generation_outputs\n              set artifact_manifest_json");
+  });
+
+  it("returns the current generation for the same revision idempotency key", async () => {
+    const pool = createWorkerPool({
+      outputStatus: "queued",
+      existingRevisionIdempotencyKey: "revision-card-1",
+      outputManifest: {
+        type: "card_news",
+        assets: [
+          { index: 1, url: "https://cdn.example.com/slide-01.png" },
+          { index: 2, url: "https://cdn.example.com/slide-02.png" },
+        ],
+      },
+    });
+    const repository = createAiContentRepository(pool as never);
+
+    await repository.reviseAiContentOutput({
+      ...scope,
+      outputId: "output-1",
+      action: "regenerate_card",
+      cardIndex: 2,
+      idempotencyKey: "revision-card-1",
+    });
+
+    expect(pool.generatedJobPayloads).toHaveLength(0);
   });
 
   it("lists only live generation-scoped subject evidence with loader metadata", async () => {

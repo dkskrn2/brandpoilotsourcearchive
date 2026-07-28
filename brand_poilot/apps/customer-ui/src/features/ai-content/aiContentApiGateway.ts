@@ -431,6 +431,15 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
       if (!output) throw new Error("ai_content_output_not_found");
       return output;
     },
+    async reviseOutput(brandId, outputId, input) {
+      const generation = mapGeneration(await client.requestJson<ApiGeneration>(
+        `/brands/${brandId}/ai-content/outputs/${outputId}/revisions`,
+        { method: "POST", body: JSON.stringify(input) },
+      ));
+      const output = generation.outputs.find((item) => item.id === outputId);
+      if (!output) throw new Error("ai_content_output_not_found");
+      return output;
+    },
     downloadOutput(brandId, outputId) {
       return client.requestBlob(`/brands/${brandId}/ai-content/outputs/${outputId}/download`, { method: "GET" });
     },

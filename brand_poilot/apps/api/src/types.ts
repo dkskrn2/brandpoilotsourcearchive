@@ -21,6 +21,7 @@ import type {
   SaveAudienceInput,
   SubjectAnalysisBrandContext,
   SubjectAnalysisWorkerLease,
+  AiContentRevisionAction,
 } from "./aiContentRepository.js";
 
 export type AiContentGenerationDto = AiContentGenerationRecord;
@@ -1100,6 +1101,12 @@ export interface ApiRepository
   completeAiContentJob(input: CompleteAiContentJobInput): Promise<AiContentGenerationRecord>;
   failAiContentJob(input: FailAiContentJobInput): Promise<AiContentGenerationRecord>;
   retryAiContentOutput(input: BrandScope & { outputId: string }): Promise<AiContentGenerationRecord>;
+  reviseAiContentOutput(input: BrandScope & {
+    outputId: string;
+    action: AiContentRevisionAction;
+    cardIndex?: number;
+    idempotencyKey: string;
+  }): Promise<AiContentGenerationRecord>;
   createAiContentProposalBatch?(input: BrandScope & {
     actorUserId: string;
     origin: "manual" | "scheduled_crawl";

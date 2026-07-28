@@ -1,11 +1,41 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildAiContentRevisionInstruction,
   isRetryableContentWorkerError,
   preflightAttachmentSnapshots,
   terminateProcessTree,
 } from "./index.js";
 
 describe("worker runtime", () => {
+  it("builds a targeted card revision instruction that freezes all unrelated cards", () => {
+    const instruction = buildAiContentRevisionInstruction({
+      contractVersion: "ai-content-revision.v1",
+      action: "regenerate_card",
+      idempotencyKey: "revision-card-2",
+      cardIndex: 2,
+      previousManifest: {
+        type: "card_news",
+        assets: [{ index: 1, url: "https://cdn/1.png" }, { index: 2, url: "https://cdn/2.png" }],
+      },
+      previousContent: { caption: "기존 카피" },
+    }, "card_news");
+
+    expect(instruction).toContain("2번 카드만");
+    expect(instruction).toContain("나머지 카드");
+    expect(instruction).toContain('"idempotencyKey": "revision-card-2"');
+  });
+
+  it("rejects card revisions in non-card workers", () => {
+    expect(() => buildAiContentRevisionInstruction({
+      contractVersion: "ai-content-revision.v1",
+      action: "regenerate_card",
+      idempotencyKey: "revision-card-1",
+      cardIndex: 1,
+      previousManifest: { type: "card_news", assets: [{ index: 1 }] },
+      previousContent: {},
+    }, "blog")).toThrow("ai_content_revision_worker_mismatch");
+  });
+
   it("terminates a Windows process tree with taskkill", async () => {
     const execFileImpl = vi.fn((...args: unknown[]) => {
       (args[3] as (error: null, stdout: string, stderr: string) => void)(null, "", "");

@@ -15,6 +15,26 @@ const job = {
 };
 
 describe("marketing prompt", () => {
+  it("carries copy-only revision constraints into the prompt", () => {
+    const prompt = buildPrompt({
+      ...job,
+      payload: {
+        ...job.payload,
+        revision: {
+          contractVersion: "ai-content-revision.v1",
+          action: "regenerate_copy",
+          idempotencyKey: "revision-copy-1",
+          cardIndex: null,
+          previousManifest: { type: "marketing", assets: [{ index: 1 }] },
+          previousContent: { headline: "기존 헤드라인" },
+        },
+      },
+    });
+
+    expect(prompt).toContain("부분 재생성 계약");
+    expect(prompt).toContain("카피만");
+  });
+
   it("requires independent grounded ads for each requested output", () => {
     const prompt = buildPrompt(job);
     expect(prompt).toContain("content-generation-input.v2");

@@ -95,6 +95,8 @@ export interface AiContentOutputRecord {
   legacyReadOnly: boolean;
 }
 
+export type AiContentRevisionAction = "regenerate_hook" | "regenerate_copy" | "regenerate_card";
+
 export interface AiContentUsageRecord {
   usageDate: string;
   generationCount: number;
@@ -267,6 +269,12 @@ export interface AiContentRepository extends AiContentAttachmentLifecycleReposit
   completeAiContentJob(input: CompleteAiContentJobInput): Promise<AiContentGenerationRecord>;
   failAiContentJob(input: FailAiContentJobInput): Promise<AiContentGenerationRecord>;
   retryAiContentOutput(input: BrandScope & { outputId: string }): Promise<AiContentGenerationRecord>;
+  reviseAiContentOutput(input: BrandScope & {
+    outputId: string;
+    action: AiContentRevisionAction;
+    cardIndex?: number;
+    idempotencyKey: string;
+  }): Promise<AiContentGenerationRecord>;
   createAiContentProposalBatch(input: AuthenticatedBrandScope & {
     actorUserId: string;
     origin: "manual" | "scheduled_crawl";
@@ -653,15 +661,55 @@ function mapGeneration(row: Record<string, unknown>): AiContentGenerationRecord 
 
 function mapOutput(row: Record<string, unknown>): AiContentOutputRecord {
   const manifest = object(row.artifact_manifest_json);
+  const legacyReadOnly = manifest.deliveryFormat === "instagram_reel" || manifest.outputFormat === "reel";
+  const manifestType = String(manifest.type ?? manifest.outputFormat ?? "");
+  const revisionCapabilities: AiContentOutputRecord["revisionCapabilities"] = legacyReadOnly
+    ? []
+    : manifestType === "card_news"
+      ? ["regenerate_hook", "regenerate_copy", "regenerate_card"]
+      : ["blog", "marketing", "single_image", "channel_text"].includes(manifestType)
+        ? ["regenerate_hook", "regenerate_copy"]
+        : [];
   return {
     id: String(row.id), generationId: String(row.generation_id), outputIndex: Number(row.output_index),
     title: row.title ? String(row.title) : null, status: row.status as AiContentOutputRecord["status"],
     content: object(row.content_json), manifest, manifestUrl: row.manifest_url ? String(row.manifest_url) : null,
     failureCode: row.failure_code ? String(row.failure_code) : null, failureMessage: row.failure_message ? String(row.failure_message) : null,
     downloadedAt: iso(row.downloaded_at), createdAt: iso(row.created_at)!, updatedAt: iso(row.updated_at)!, completedAt: iso(row.completed_at),
-    revisionCapabilities: [],
-    legacyReadOnly: manifest.deliveryFormat === "instagram_reel" || manifest.outputFormat === "reel",
+    revisionCapabilities,
+    legacyReadOnly,
   };
+}
+
+function mergeRevisionManifest(
+  generatedManifest: AiContentManifest,
+  revisionValue: unknown,
+): AiContentManifest {
+  const revision = object(revisionValue);
+  if (revision.contractVersion !== "ai-content-revision.v1") return generatedManifest;
+  const previousManifest = object(revision.previousManifest);
+  const previousAssets = Array.isArray(previousManifest.assets) ? previousManifest.assets : [];
+  if (revision.action === "regenerate_card") {
+    const cardIndex = Number(revision.cardIndex);
+    const generatedAssets = Array.isArray(generatedManifest.assets) ? generatedManifest.assets : [];
+    const replacement = generatedAssets.find((asset, index) =>
+      Number(object(asset).index ?? index + 1) === cardIndex);
+    if (!replacement) throw new Error("ai_content_revision_card_result_missing");
+    return {
+      ...generatedManifest,
+      ...previousManifest,
+      assets: previousAssets.map((asset, index) =>
+        Number(object(asset).index ?? index + 1) === cardIndex ? replacement : asset),
+      content: object(revision.previousContent),
+    } as unknown as AiContentManifest;
+  }
+  if (revision.action === "regenerate_hook" || revision.action === "regenerate_copy") {
+    return {
+      ...generatedManifest,
+      ...(previousAssets.length ? { assets: previousAssets } : {}),
+    } as unknown as AiContentManifest;
+  }
+  throw new Error("ai_content_revision_invalid");
 }
 
 function publicGenerationInputSnapshot(value: unknown): Record<string, unknown> {
@@ -2806,7 +2854,16 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             );
             requestedDimensions = requestedDimensionsFromDraft(generationDraft.rows[0]?.draft_json);
           }
-          const manifest = parseAiContentManifest(job.content_type as AiContentType, input.manifest, requestedDimensions) as AiContentManifest;
+          const generatedManifest = parseAiContentManifest(
+            job.content_type as AiContentType,
+            input.manifest,
+            requestedDimensions,
+          ) as AiContentManifest;
+          const manifest = parseAiContentManifest(
+            job.content_type as AiContentType,
+            mergeRevisionManifest(generatedManifest, object(job.payload_json).revision),
+            requestedDimensions,
+          ) as AiContentManifest;
           let manifestUrl: URL;
           try { manifestUrl = new URL(input.manifestUrl); } catch { throw new Error("ai_content_manifest_url_invalid"); }
           if (manifestUrl.protocol !== "https:") throw new Error("ai_content_manifest_url_invalid");
@@ -3041,6 +3098,170 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         await client.query("ROLLBACK");
         throw error;
       } finally { client.release(); }
+    },
+
+    async reviseAiContentOutput(input) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const outputScope = await client.query(
+          `select generation_id
+             from ai_content_generation_outputs
+            where id = $1 and workspace_id = $2 and brand_id = $3`,
+          [input.outputId, input.workspaceId, input.brandId],
+        );
+        if (!outputScope.rowCount) throw new Error("ai_content_output_not_found");
+        const generationId = String(outputScope.rows[0]?.generation_id);
+        const generationResult = await client.query(
+          `select id
+             from ai_content_generations
+            where id = $1 and workspace_id = $2 and brand_id = $3
+            for update`,
+          [generationId, input.workspaceId, input.brandId],
+        );
+        if (!generationResult.rowCount) throw new Error("ai_content_output_not_found");
+        const outputResult = await client.query(
+          `select output.*, generation.type
+             from ai_content_generation_outputs output
+             join ai_content_generations generation on generation.id = output.generation_id
+            where output.id = $1 and output.workspace_id = $2 and output.brand_id = $3
+              and output.generation_id = $4
+            for update of output`,
+          [input.outputId, input.workspaceId, input.brandId, generationId],
+        );
+        const output = outputResult.rows[0] as Record<string, unknown> | undefined;
+        if (!output) throw new Error("ai_content_output_not_found");
+        const duplicate = await client.query(
+          `select id
+             from ai_content_generation_jobs
+            where output_id = $1 and workspace_id = $2 and brand_id = $3
+              and payload_json #>> '{revision,idempotencyKey}' = $4
+            for update
+            limit 1`,
+          [input.outputId, input.workspaceId, input.brandId, input.idempotencyKey],
+        );
+        if (duplicate.rowCount) {
+          const generation = await generationById(client, generationId);
+          await client.query("COMMIT");
+          return {
+            ...generation,
+            outputs: [mapOutput({
+              ...output,
+              output_index: output.output_index ?? 1,
+              content_json: output.content_json ?? {},
+              artifact_manifest_json: output.artifact_manifest_json ?? {},
+              created_at: output.created_at ?? new Date(0),
+              updated_at: output.updated_at ?? new Date(0),
+            })],
+          };
+        }
+        if (output.status !== "completed") throw new Error("ai_content_output_not_completed");
+
+        const manifest = object(output.artifact_manifest_json);
+        const capabilities = mapOutput({
+          ...output,
+          output_index: output.output_index ?? 1,
+          content_json: output.content_json ?? {},
+          artifact_manifest_json: manifest,
+          created_at: output.created_at ?? new Date(0),
+          updated_at: output.updated_at ?? new Date(0),
+        }).revisionCapabilities;
+        if (!capabilities.includes(input.action)) throw new Error("ai_content_revision_unsupported");
+        if (input.action === "regenerate_card") {
+          if (!Number.isSafeInteger(input.cardIndex) || Number(input.cardIndex) < 1) {
+            throw new Error("ai_content_revision_card_index_invalid");
+          }
+          const assets = Array.isArray(manifest.assets) ? manifest.assets : [];
+          if (!assets.some((asset, index) => Number(object(asset).index ?? index + 1) === input.cardIndex)) {
+            throw new Error("ai_content_revision_card_index_invalid");
+          }
+        } else if (input.cardIndex !== undefined) {
+          throw new Error("ai_content_revision_card_index_invalid");
+        }
+
+        const active = await client.query(
+          `select id
+             from ai_content_generation_jobs
+            where output_id = $1 and workspace_id = $2 and brand_id = $3
+              and job_type = 'generate' and status in ('queued', 'processing')
+            for update
+            limit 1`,
+          [input.outputId, input.workspaceId, input.brandId],
+        );
+        if (active.rowCount) throw new Error("ai_content_revision_conflict");
+
+        const previousGenerateJob = await client.query(
+          `select payload_json
+             from ai_content_generation_jobs
+            where output_id = $1 and workspace_id = $2 and brand_id = $3
+              and job_type = 'generate'
+              and payload_json ? 'contentGenerationInput'
+            order by created_at desc, id desc
+            for update
+            limit 1`,
+          [input.outputId, input.workspaceId, input.brandId],
+        );
+        const previousPayload = object(previousGenerateJob.rows[0]?.payload_json);
+        if (!previousPayload.contentGenerationInput) throw new Error("ai_content_revision_snapshot_missing");
+        const revisionPayload = {
+          ...previousPayload,
+          revision: {
+            contractVersion: "ai-content-revision.v1",
+            action: input.action,
+            idempotencyKey: input.idempotencyKey,
+            cardIndex: input.action === "regenerate_card" ? input.cardIndex : null,
+            previousManifest: manifest,
+            previousContent: object(output.content_json),
+          },
+        };
+        await client.query(
+          `update ai_content_generation_outputs
+              set status = 'queued', failure_code = null, failure_message = null,
+                  completed_at = null, updated_at = now()
+            where id = $1 and generation_id = $2 and workspace_id = $3 and brand_id = $4`,
+          [input.outputId, generationId, input.workspaceId, input.brandId],
+        );
+        await client.query(
+          `insert into ai_content_generation_jobs
+             (generation_id, output_id, workspace_id, brand_id, job_type, content_type, status, payload_json)
+           values ($1, $2, $3, $4, 'generate', $5, 'queued', $6::jsonb)`,
+          [
+            generationId,
+            input.outputId,
+            input.workspaceId,
+            input.brandId,
+            output.type,
+            JSON.stringify(revisionPayload),
+          ],
+        );
+        await client.query(
+          `update ai_content_generations
+              set status = 'queued', current_stage = 'generation', completed_at = null,
+                  error_code = null, error_message = null, updated_at = now()
+            where id = $1 and workspace_id = $2 and brand_id = $3`,
+          [generationId, input.workspaceId, input.brandId],
+        );
+        const generation = await generationById(client, generationId);
+        await client.query("COMMIT");
+        return {
+          ...generation,
+          outputs: [mapOutput({
+            ...output,
+            status: "queued",
+            output_index: output.output_index ?? 1,
+            content_json: output.content_json ?? {},
+            artifact_manifest_json: output.artifact_manifest_json ?? {},
+            completed_at: null,
+            created_at: output.created_at ?? new Date(0),
+            updated_at: new Date(),
+          })],
+        };
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
     },
   };
 }

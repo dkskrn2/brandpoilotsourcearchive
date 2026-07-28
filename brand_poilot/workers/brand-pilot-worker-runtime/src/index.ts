@@ -16,6 +16,16 @@ export interface AiContentAttachmentSnapshot {
 export type WorkerContentFamily = "informational" | "marketing";
 export type WorkerOutputFormat = "card_news" | "blog" | "single_image" | "channel_text";
 export type WorkerContentType = "card_news" | "blog" | "marketing";
+export type AiContentRevisionAction = "regenerate_hook" | "regenerate_copy" | "regenerate_card";
+
+export interface AiContentRevisionV1 {
+  contractVersion: "ai-content-revision.v1";
+  action: AiContentRevisionAction;
+  idempotencyKey: string;
+  cardIndex: number | null;
+  previousManifest: Record<string, unknown>;
+  previousContent: Record<string, unknown>;
+}
 export type WorkerMessageStrategy =
   | "problem_solution"
   | "how_to"
@@ -50,6 +60,55 @@ export interface WorkerContentOrchestrationV1 {
     id: string;
     snapshot: Record<string, unknown>;
   };
+}
+
+export function buildAiContentRevisionInstruction(
+  value: unknown,
+  expectedWorkerType: WorkerContentType,
+): string {
+  if (value === undefined || value === null) return "";
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("ai_content_revision_invalid");
+  }
+  const revision = value as Record<string, unknown>;
+  const action = revision.action;
+  const previousManifest = revision.previousManifest;
+  const previousContent = revision.previousContent;
+  if (
+    revision.contractVersion !== "ai-content-revision.v1"
+    || !["regenerate_hook", "regenerate_copy", "regenerate_card"].includes(String(action))
+    || typeof revision.idempotencyKey !== "string"
+    || !revision.idempotencyKey.trim()
+    || !previousManifest
+    || typeof previousManifest !== "object"
+    || Array.isArray(previousManifest)
+    || !previousContent
+    || typeof previousContent !== "object"
+    || Array.isArray(previousContent)
+  ) {
+    throw new Error("ai_content_revision_invalid");
+  }
+  if (action === "regenerate_card") {
+    if (expectedWorkerType !== "card_news") {
+      throw new Error("ai_content_revision_worker_mismatch");
+    }
+    if (!Number.isSafeInteger(revision.cardIndex) || Number(revision.cardIndex) < 1) {
+      throw new Error("ai_content_revision_invalid");
+    }
+  } else if (revision.cardIndex !== null && revision.cardIndex !== undefined) {
+    throw new Error("ai_content_revision_invalid");
+  }
+  const instruction = action === "regenerate_card"
+    ? `${Number(revision.cardIndex)}번 카드만 다시 생성하세요. 나머지 카드, 순서, 카피와 메타데이터는 previousManifest/previousContent와 동일하게 보존하세요.`
+    : action === "regenerate_hook"
+      ? "첫 훅만 다시 작성하세요. 훅 외 본문 카피, 카드/이미지, 순서와 메타데이터는 previousManifest/previousContent와 동일하게 보존하세요."
+      : "카피만 다시 작성하세요. 카드/이미지, 순서와 기타 메타데이터는 previousManifest/previousContent와 동일하게 보존하세요.";
+  return [
+    "부분 재생성 계약(ai-content-revision.v1):",
+    instruction,
+    "전체 결과 계약은 그대로 출력하되 지정하지 않은 성공 결과를 변경하지 마세요.",
+    JSON.stringify(revision, null, 2),
+  ].join("\n");
 }
 
 function orchestrationInvalid(): never {

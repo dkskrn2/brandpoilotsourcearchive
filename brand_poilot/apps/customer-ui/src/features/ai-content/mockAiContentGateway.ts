@@ -363,6 +363,16 @@ export function createMockAiContentGateway(): AiContentGateway {
       output.failureReason = null;
       return copy(output);
     },
+    async reviseOutput(_brandId, outputId, input) {
+      const output = generationRows.flatMap((job) => job.outputs).find((item) => item.id === outputId);
+      if (!output) throw new Error("ai_content_output_not_found");
+      if (output.status !== "completed") throw new Error("ai_content_output_not_completed");
+      if (input.action === "regenerate_card" && (!input.cardIndex || input.cardIndex < 1)) {
+        throw new Error("ai_content_revision_card_index_invalid");
+      }
+      output.status = "queued";
+      return copy(output);
+    },
     async downloadOutput(_brandId, outputId) { return { blob: new Blob([outputId], { type: "application/zip" }), fileName: `${outputId}.zip` }; },
     async downloadGeneration(_brandId, generationId) { return { blob: new Blob([generationId], { type: "application/zip" }), fileName: `${generationId}.zip` }; },
     async publishOutput(_brandId, outputId, input) {

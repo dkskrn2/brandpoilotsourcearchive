@@ -94,6 +94,7 @@ export function AiContentGenerationPage({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryingOutputId, setRetryingOutputId] = useState<string | null>(null);
+  const [revisingOutputId, setRevisingOutputId] = useState<string | null>(null);
   const [downloadedKeys, setDownloadedKeys] = useState<Set<string>>(new Set());
   const [selectedForZip, setSelectedForZip] = useState<Set<string>>(new Set());
   const [channels, setChannels] = useState<ChannelConnection[]>([]);
@@ -103,6 +104,7 @@ export function AiContentGenerationPage({
   const [selectedReviewTab, setSelectedReviewTab] = useState<ReviewTab | null>(null);
   const actionLocks = useRef({
     retry: new Set<string>(),
+    revise: new Set<string>(),
     download: new Set<string>(),
     publish: new Set<string>(),
   });
@@ -227,6 +229,34 @@ export function AiContentGenerationPage({
     }
   }
 
+  async function reviseOutput(
+    outputId: string,
+    action: "regenerate_hook" | "regenerate_copy" | "regenerate_card",
+    cardIndex?: number,
+  ) {
+    if (actionLocks.current.revise.has(outputId)) return;
+    actionLocks.current.revise.add(outputId);
+    try {
+      setActionError(null);
+      setRevisingOutputId(outputId);
+      const nextOutput = await gateway.reviseOutput(brandId, outputId, {
+        action,
+        ...(cardIndex === undefined ? {} : { cardIndex }),
+        idempotencyKey: crypto.randomUUID(),
+      });
+      setGeneration((current) => current ? {
+        ...current,
+        status: "generating",
+        outputs: current.outputs.map((output) => output.id === outputId ? nextOutput : output),
+      } : current);
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : "부분 재생성을 시작하지 못했습니다.");
+    } finally {
+      actionLocks.current.revise.delete(outputId);
+      setRevisingOutputId(null);
+    }
+  }
+
   function markDownloaded(key: string) {
     setDownloadedKeys((current) => new Set(current).add(key));
   }
@@ -304,9 +334,11 @@ export function AiContentGenerationPage({
       selectedForZip={selectedForZip}
       channels={channels}
       retryingOutputId={retryingOutputId}
+      revisingOutputId={revisingOutputId}
       publishingOutputIds={publishingOutputIds}
       publishResults={publishResults}
       onRetry={retryOutput}
+      onRevise={reviseOutput}
       onDownload={handleDownload}
       onPublish={handlePublish}
       onToggleSelection={toggleSelection}

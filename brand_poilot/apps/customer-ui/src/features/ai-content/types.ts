@@ -386,6 +386,11 @@ export interface AiContentGateway {
   saveAppealPreset(brandId: string, input: Omit<AppealPreset, "id" | "useCount" | "lastUsedAt">): Promise<AppealPreset>;
   listReferences(brandId: string, query?: AiContentType | AiContentReferenceQuery): Promise<AiContentReference[]>;
   retryOutput(brandId: string, outputId: string, reason: string): Promise<AiGenerationOutput>;
+  reviseOutput(brandId: string, outputId: string, input: {
+    action: "regenerate_hook" | "regenerate_copy" | "regenerate_card";
+    cardIndex?: number;
+    idempotencyKey: string;
+  }): Promise<AiGenerationOutput>;
   downloadOutput(brandId: string, outputId: string): Promise<{ blob: Blob; fileName: string }>;
   downloadGeneration(brandId: string, generationId: string, outputIds?: string[]): Promise<{ blob: Blob; fileName: string }>;
   publishOutput(brandId: string, outputId: string, input: {

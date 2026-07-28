@@ -1,5 +1,6 @@
 import { parseContentGenerationInput, type MarketingJob } from "./contracts.js";
 import { requestedDimensions } from "./manifest.js";
+import { buildAiContentRevisionInstruction } from "../../brand-pilot-worker-runtime/src/index.js";
 
 export const marketingSkillVersion = "marketing-creative-skill.v5";
 
@@ -25,6 +26,7 @@ export function buildPrompt(job: MarketingJob) {
       ? { visualDirection: { avatar: input.orchestration.avatar } }
       : {}),
   } : null;
+  const revisionInstruction = buildAiContentRevisionInstruction(job.payload.revision, "marketing");
   return [
     ".agents/skills/marketing-creative/SKILL.md를 읽고 따르세요.",
     `계약 버전: ${marketingSkillVersion}`,
@@ -53,6 +55,7 @@ export function buildPrompt(job: MarketingJob) {
       ? "generate 작업에서는 text artifact인 channel-text.txt와 content.json만 출력하세요."
       : "generate 작업에서는 content.json과 요청 크기의 creative.png를 출력하세요.",
     "입력에 qualityBrief가 있으면 hook, readerPayoff, whyNow, specificClaims, evidence를 우선 반영하세요.",
+    revisionInstruction,
     "작업 데이터(JSON):",
     JSON.stringify(promptInput ?? job.payload, null, 2),
   ].join("\n");

@@ -395,6 +395,40 @@ describe("AiContentGenerationPage", () => {
     expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
   });
 
+  it("queues supported hook, copy, and individual-card revisions from review", async () => {
+    const user = userEvent.setup();
+    const { gateway } = renderGeneration("generation-card-complete", false, (configuredGateway) => {
+      const getGeneration = configuredGateway.getGeneration.bind(configuredGateway);
+      configuredGateway.getGeneration = vi.fn(async (brandId, generationId) => {
+        const result = await getGeneration(brandId, generationId);
+        return {
+          ...result,
+          outputs: result.outputs.map((output) => ({
+            ...output,
+            revisionCapabilities: [
+              "regenerate_hook",
+              "regenerate_copy",
+              "regenerate_card",
+            ] as Array<"regenerate_hook" | "regenerate_copy" | "regenerate_card">,
+          })),
+        };
+      });
+      configuredGateway.reviseOutput = vi.fn(configuredGateway.reviseOutput);
+    });
+
+    await user.click(await screen.findByRole("button", { name: "1번 카드 다시 생성" }));
+
+    expect(gateway.reviseOutput).toHaveBeenCalledWith(
+      "00000000-0000-4000-8000-000000000100",
+      "output-card-news",
+      expect.objectContaining({
+        action: "regenerate_card",
+        cardIndex: 1,
+        idempotencyKey: expect.any(String),
+      }),
+    );
+  });
+
   it("keeps completed outputs untouched while retrying only a failed output from review", async () => {
     const user = userEvent.setup();
     const { gateway } = renderGeneration("generation-partial", false, (configuredGateway) => {

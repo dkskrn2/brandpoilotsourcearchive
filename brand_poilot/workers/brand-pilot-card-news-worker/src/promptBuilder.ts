@@ -1,5 +1,6 @@
 import { parseContentGenerationInput, type AiContentJob } from "./contracts.js";
 import { buildEditorialEvidencePool, type EditorialPlan } from "./editorialPlan.js";
+import { buildAiContentRevisionInstruction } from "../../brand-pilot-worker-runtime/src/index.js";
 
 export const cardNewsSkillVersion = "card-news-skill.v6";
 
@@ -49,6 +50,7 @@ export function buildPrompt(job: AiContentJob, editorialPlan?: EditorialPlan) {
     },
     sourceGaps: Array.isArray(input.message.qualityBrief.sourceGaps) ? input.message.qualityBrief.sourceGaps : [],
   } : null;
+  const revisionInstruction = buildAiContentRevisionInstruction(job.payload.revision, "card_news");
   return [
     ".agents/skills/card-news-creator/SKILL.md를 읽고 따르세요.",
     `계약 버전: ${cardNewsSkillVersion}`,
@@ -78,6 +80,7 @@ export function buildPrompt(job: AiContentJob, editorialPlan?: EditorialPlan) {
     "analyze 작업에서는 이미지 없이 analysis.json만 출력하세요. JSON은 반드시 {\"qualityBrief\":{\"version\":\"content-quality.v1\",\"hook\":\"...\",\"readerPayoff\":\"...\",\"whyNow\":\"...\",\"specificClaims\":[\"...\",\"...\"],\"evidence\":[{\"claim\":\"...\",\"support\":\"...\",\"sourceUrl\":\"https://...\"},{\"claim\":\"...\",\"support\":\"...\"}],\"sourceGaps\":[]}} 형태여야 하며 evidence는 2개 이상이어야 합니다.",
     "generate 작업에서는 content.json과 필요한 slide PNG만 출력하세요.",
     "이미지 생성 전에 내용을 다시 기획하거나 장수를 변경하지 마세요.",
+    revisionInstruction,
     "작업 데이터(JSON):",
     JSON.stringify(generationInput ?? job.payload, null, 2),
   ].join("\n");

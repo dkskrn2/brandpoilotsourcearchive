@@ -172,6 +172,7 @@ function setup(
     confirmLegacyAiContentAttachment: vi.fn(async (input) => ({ id: attachmentId, generationId: input.generationId, role: input.role, fileName: input.fileName, mimeType: input.mimeType, sizeBytes: input.sizeBytes, checksum: input.checksum, storageUrl: input.storageUrl, storagePath: input.storagePath, createdAt: "2026-07-18T00:00:00.000Z" })),
     removeAiContentAttachment: vi.fn(async (input) => ({ id: input.attachmentId })),
     retryAiContentOutput: vi.fn(async () => generation("queued")),
+    reviseAiContentOutput: vi.fn(async () => generation("queued")),
     createAiContentProposalBatch: vi.fn(async (input) => ({
       id: "99999999-9999-4999-8999-999999999999",
       workspaceId: input.workspaceId,
@@ -1105,6 +1106,49 @@ describe("AI content customer routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual(retriedRecord);
     expect(repository.retryAiContentOutput).toHaveBeenCalledWith({ workspaceId, brandId, outputId: fixtureOutputId });
+    await app.close();
+  });
+
+  it("queues a validated partial revision for the authenticated brand scope", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/revisions`,
+      headers: auth,
+      payload: {
+        action: "regenerate_card",
+        cardIndex: 2,
+        idempotencyKey: "revision-card-2",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.reviseAiContentOutput).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      outputId,
+      action: "regenerate_card",
+      cardIndex: 2,
+      idempotencyKey: "revision-card-2",
+    });
+    await app.close();
+  });
+
+  it("rejects a card index for non-card partial revision actions", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/revisions`,
+      headers: auth,
+      payload: {
+        action: "regenerate_copy",
+        cardIndex: 2,
+        idempotencyKey: "revision-copy-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(repository.reviseAiContentOutput).not.toHaveBeenCalled();
     await app.close();
   });
 

@@ -17,9 +17,15 @@ interface AiGenerationOutputListProps {
   selectedForZip: ReadonlySet<string>;
   channels: readonly ChannelConnection[];
   retryingOutputId: string | null;
+  revisingOutputId: string | null;
   publishingOutputIds: ReadonlySet<string>;
   publishResults: Readonly<Record<string, readonly AiContentPublishTargetResult[]>>;
   onRetry(outputId: string, reason: string): Promise<void>;
+  onRevise(
+    outputId: string,
+    action: "regenerate_hook" | "regenerate_copy" | "regenerate_card",
+    cardIndex?: number,
+  ): Promise<void>;
   onDownload(key: string): Promise<void>;
   onPublish(outputId: string, targets: AiContentPublishTargetInput[]): Promise<void>;
   onToggleSelection(outputId: string): void;
@@ -123,9 +129,11 @@ export function AiGenerationOutputList({
   selectedForZip,
   channels,
   retryingOutputId,
+  revisingOutputId,
   publishingOutputIds,
   publishResults,
   onRetry,
+  onRevise,
   onDownload,
   onPublish,
   onToggleSelection
@@ -167,6 +175,44 @@ export function AiGenerationOutputList({
 
             {output.legacyReadOnly || output.artifact?.deliveryFormat === "instagram_reel" ? (
               <p className="small muted" role="status">과거 Reel 결과는 읽기 전용입니다.</p>
+            ) : null}
+
+            {!output.legacyReadOnly && output.status === "completed" && output.revisionCapabilities?.length ? (
+              <div className="ai-generation-output-list__revision-actions" aria-label={`${output.title} 부분 재생성`}>
+                {output.revisionCapabilities.includes("regenerate_hook") ? (
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={revisingOutputId === output.id}
+                    onClick={() => void onRevise(output.id, "regenerate_hook")}
+                  >
+                    훅 다시 생성
+                  </button>
+                ) : null}
+                {output.revisionCapabilities.includes("regenerate_copy") ? (
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={revisingOutputId === output.id}
+                    onClick={() => void onRevise(output.id, "regenerate_copy")}
+                  >
+                    카피 다시 생성
+                  </button>
+                ) : null}
+                {output.revisionCapabilities.includes("regenerate_card")
+                  ? (output.artifact?.assets ?? []).map((_asset, cardIndex) => (
+                    <button
+                      key={cardIndex}
+                      type="button"
+                      className="button"
+                      disabled={revisingOutputId === output.id}
+                      onClick={() => void onRevise(output.id, "regenerate_card", cardIndex + 1)}
+                    >
+                      {cardIndex + 1}번 카드 다시 생성
+                    </button>
+                  ))
+                  : null}
+              </div>
             ) : null}
 
             {output.status === "completed"

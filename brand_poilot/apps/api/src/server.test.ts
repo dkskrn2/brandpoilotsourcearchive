@@ -89,6 +89,7 @@ function createRepository(): ApiRepository {
     completeAiContentJob: vi.fn(async () => { throw new Error("not_implemented"); }),
     failAiContentJob: vi.fn(async () => { throw new Error("not_implemented"); }),
     retryAiContentOutput: vi.fn(async () => { throw new Error("not_implemented"); }),
+    reviseAiContentOutput: vi.fn(async () => { throw new Error("not_implemented"); }),
     downloadAiContentOutput: vi.fn(async () => ({ fileName: "result.zip", mimeType: "application/zip" as const, buffer: Buffer.from("PK"), itemCount: 1 })),
     downloadAiContentGeneration: vi.fn(async () => ({ fileName: "results.zip", mimeType: "application/zip" as const, buffer: Buffer.from("PK"), itemCount: 1 })),
     sendAiContentToPublish: vi.fn(async () => ({ publishGroupId: "publish-group-1", channelOutputId: "channel-output-1" })),

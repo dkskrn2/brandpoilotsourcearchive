@@ -1,4 +1,5 @@
 import { parseContentGenerationInput, type BlogJob } from "./contracts.js";
+import { buildAiContentRevisionInstruction } from "../../brand-pilot-worker-runtime/src/index.js";
 
 export const blogSkillVersion = "blog-writer-skill.v7";
 
@@ -22,6 +23,7 @@ export function buildPrompt(job: BlogJob) {
       ? { visualDirection: { avatar: input.orchestration.avatar } }
       : {}),
   } : null;
+  const revisionInstruction = buildAiContentRevisionInstruction(job.payload.revision, "blog");
   return [
     ".agents/skills/blog-writer/SKILL.md를 읽고 따르세요.",
     `계약 버전: ${blogSkillVersion}`,
@@ -47,6 +49,7 @@ export function buildPrompt(job: BlogJob) {
     "generate 작업에서는 content.json, article.html, cover.png를 출력하고 필요할 때만 inline PNG를 추가하세요.",
     "입력에 qualityBrief가 있으면 hook, readerPayoff, whyNow, specificClaims, evidence를 우선 반영하세요.",
     "실제 경험이나 고객 반응이 근거에 없으면 만들어내지 마세요.",
+    revisionInstruction,
     "작업 데이터(JSON):",
     JSON.stringify(promptInput ?? job.payload, null, 2),
   ].join("\n");

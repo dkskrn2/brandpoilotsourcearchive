@@ -15,6 +15,7 @@ import { normalizeInstagramHashtag } from "./instagramTrend.js";
 import { StoryCapabilityRequiredError } from "./repository.js";
 import type { ApiRepository, BrandProfileInput, Channel, DmAttentionType, DmConversationFilter, InstagramDeliveryFormat, InstagramFormatSettingsInput, InstagramTrendMediaTypeFilter, InstagramTrendPageDto, InstagramTrendSort, SourceType, SubjectAnalysisRepositoryV2, SupportRequestCategory, SupportRequestStatus } from "./types.js";
 import type { AiContentAttachmentLifecycleRepository } from "./aiContentAttachmentRepository.js";
+import type { AiContentRevisionAction } from "./aiContentRepository.js";
 import {
   runAiContentAttachmentGc,
   type DeleteAiContentAttachmentBlob,
@@ -303,6 +304,39 @@ function positiveLimit(value: number | undefined, fallback: number) {
 function requiredAiContentField(value: unknown, code: string, maxLength = 500) {
   if (typeof value !== "string" || !value.trim() || value.trim().length > maxLength) throw new Error(code);
   return value.trim();
+}
+
+function parseAiContentRevisionInput(value: unknown): {
+  action: AiContentRevisionAction;
+  cardIndex?: number;
+  idempotencyKey: string;
+} {
+  if (!isObject(value)) throw new Error("ai_content_revision_input_invalid");
+  const allowed = new Set(["action", "cardIndex", "idempotencyKey"]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) {
+    throw new Error("ai_content_revision_input_invalid");
+  }
+  const action = value.action;
+  if (!["regenerate_hook", "regenerate_copy", "regenerate_card"].includes(String(action))) {
+    throw new Error("ai_content_revision_action_invalid");
+  }
+  const idempotencyKey = requiredAiContentField(
+    value.idempotencyKey,
+    "ai_content_idempotency_key_invalid",
+    200,
+  );
+  if (action === "regenerate_card") {
+    if (!Number.isSafeInteger(value.cardIndex) || Number(value.cardIndex) < 1) {
+      throw new Error("ai_content_revision_card_index_invalid");
+    }
+    return {
+      action,
+      cardIndex: Number(value.cardIndex),
+      idempotencyKey,
+    };
+  }
+  if (value.cardIndex !== undefined) throw new Error("ai_content_revision_card_index_invalid");
+  return { action: action as AiContentRevisionAction, idempotencyKey };
 }
 
 function parseAiContentBrandId(value: string) {
@@ -2624,6 +2658,15 @@ export function createServer(
     async (request) => repository.retryAiContentOutput({
       ...aiContentScope(request, request.params.brandId),
       outputId: request.params.outputId,
+    }),
+  );
+
+  app.post<{ Params: { brandId: string; outputId: string }; Body: unknown }>(
+    "/brands/:brandId/ai-content/outputs/:outputId/revisions",
+    async (request) => repository.reviseAiContentOutput({
+      ...aiContentScope(request, request.params.brandId),
+      outputId: request.params.outputId,
+      ...parseAiContentRevisionInput(request.body),
     }),
   );
 

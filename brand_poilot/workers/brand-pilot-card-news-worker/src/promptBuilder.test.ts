@@ -16,6 +16,41 @@ const job = {
 };
 
 describe("card-news prompt", () => {
+  it("carries the individual-card revision contract into the generation prompt", () => {
+    const plan: EditorialPlan = {
+      version: "editorial-plan.v1",
+      intent: "information",
+      singleSubject: "검증된 주제",
+      readerQuestion: "무엇인가?",
+      corePromise: "도움을 줍니다.",
+      slides: [
+        { index: 1, role: "fact", headline: "첫 카드", keyMessage: "첫 내용", evidenceIds: ["subject-1"] },
+        { index: 2, role: "fact", headline: "둘째 카드", keyMessage: "둘째 내용", evidenceIds: ["subject-1"] },
+      ],
+      cta: null,
+      excludedTopics: [],
+      referenceUses: [],
+    };
+    const prompt = buildPrompt({
+      ...job,
+      payload: {
+        ...job.payload,
+        revision: {
+          contractVersion: "ai-content-revision.v1",
+          action: "regenerate_card",
+          idempotencyKey: "revision-card-2",
+          cardIndex: 2,
+          previousManifest: { type: "card_news", assets: [{ index: 1 }, { index: 2 }] },
+          previousContent: { caption: "기존 카피" },
+        },
+      },
+    }, plan);
+
+    expect(prompt).toContain("부분 재생성 계약");
+    expect(prompt).toContain("2번 카드만");
+    expect(prompt).toContain("나머지 카드");
+  });
+
   it("reads the v2 subject snapshot and format rules", () => {
     const plan: EditorialPlan = {
       version: "editorial-plan.v1", intent: "information", singleSubject: "검증된 주제", readerQuestion: "무엇인가?", corePromise: "도움을 줍니다.",
