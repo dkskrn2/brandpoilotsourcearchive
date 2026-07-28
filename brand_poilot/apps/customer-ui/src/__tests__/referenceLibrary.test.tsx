@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as routeModule from "../routes";
 import { ReferenceLibraryPage } from "../pages/ReferenceLibraryPage";
+import { aiContentApiGateway } from "../features/ai-content/aiContentApiGateway";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
 import { libraryGateway } from "../features/libraries/libraryGateway";
 
@@ -223,7 +224,7 @@ describe("ReferenceLibraryPage", () => {
   });
 
   it("filters, opens, and archives external URL references through the reference API", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.spyOn(aiContentApiGateway, "listDraftReferences").mockResolvedValue([]);
     const marketingItem = {
       ...referenceItem,
       id: "reference-2",
@@ -251,8 +252,37 @@ describe("ReferenceLibraryPage", () => {
     await userEvent.keyboard("{Escape}");
 
     await userEvent.click(screen.getByRole("button", { name: "실제 크롤링 제목 삭제" }));
+    await userEvent.click(await screen.findByRole("button", { name: "보관 계속" }));
     expect(referenceApi.archiveReference).toHaveBeenCalledWith(DEMO_BRAND_ID, "reference-1");
     expect(screen.queryByRole("heading", { name: "실제 크롤링 제목" })).not.toBeInTheDocument();
+  });
+
+  it("does not archive an external reference when draft-reference lookup fails and retries explicitly", async () => {
+    const lookup = vi.spyOn(aiContentApiGateway, "listDraftReferences")
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce([{
+        assetType: "reference",
+        assetId: "reference-1",
+        generationId: "generation-1",
+        title: "진행 중 캠페인",
+      }]);
+    const referenceApi = installReferenceApi({
+      listReferences: vi.fn(async () => [referenceItem]),
+      archiveReference: vi.fn(async () => undefined),
+    });
+    render(
+      <MemoryRouter initialEntries={["/references?view=external-urls"]}>
+        <ReferenceLibraryPage />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: "실제 크롤링 제목 삭제" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("조회하지 못해 보관을 중단");
+    expect(referenceApi.archiveReference).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "참조 다시 조회" }));
+    expect(await screen.findByText("진행 중 캠페인")).toBeVisible();
+    expect(lookup).toHaveBeenCalledTimes(2);
   });
 
   it("shows only saved public brands and groups their actual saved items in a lazy dialog", async () => {

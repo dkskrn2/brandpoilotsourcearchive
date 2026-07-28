@@ -43,7 +43,7 @@ function hasUnresolvedAttachments(draft: AiContentDraft) {
 }
 
 export function AiContentWizardPage({ gateway = aiContentApiGateway, brandId = DEMO_BRAND_ID }: { gateway?: AiContentGateway; brandId?: string }) {
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const queryType = params.get("type");
   const initialType = (["card_news", "blog", "marketing"] as const).includes(queryType as AiContentType) ? queryType as AiContentType : null;
@@ -53,8 +53,19 @@ export function AiContentWizardPage({ gateway = aiContentApiGateway, brandId = D
   const [submitError, setSubmitError] = useState<string | null>(null);
   const { refresh: refreshUsage } = useAiContentUsage();
   const proposalBatchId = params.get("proposalBatch");
+  const seedReferenceId = params.get("reference");
   if (!initialType || proposalBatchId) {
-    return <ContentProposalFlow brandId={brandId} gateway={gateway} initialBatchId={proposalBatchId} />;
+    return <ContentProposalFlow
+      brandId={brandId}
+      gateway={gateway}
+      initialBatchId={proposalBatchId}
+      initialSeedReferenceId={seedReferenceId}
+      onSeedReferenceInvalid={() => {
+        const next = new URLSearchParams(params);
+        next.delete("reference");
+        setParams(next, { replace: true });
+      }}
+    />;
   }
   const valid = state.step === 1 ? Boolean(state.draft.type) : state.step === 3 ? Boolean(state.draft.selectedTarget && state.draft.selectedAppeal) : state.step === 5 ? Boolean(state.draft.brief?.purpose) && !hasUnresolvedAttachments(state.draft) : true;
   const actions = {

@@ -1,16 +1,19 @@
 import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 import type { LibraryGateway } from "../../features/libraries/libraryGateway";
+import type { ReferenceItem } from "../../types";
 import { ReferenceFileUploader } from "./ReferenceFileUploader";
 
 export function ReferenceUploadDialog({
   brandId,
   gateway,
   onClose,
+  onUploaded,
 }: {
   brandId: string;
   gateway: LibraryGateway;
   onClose(): void;
+  onUploaded?(reference: ReferenceItem): void;
 }) {
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -70,7 +73,7 @@ export function ReferenceUploadDialog({
             <X size={18} aria-hidden="true" />
           </button>
         </header>
-        <ReferenceFileUploader brandId={brandId} gateway={gateway} />
+        <ReferenceFileUploader brandId={brandId} gateway={gateway} onUploaded={onUploaded} />
       </section>
     </div>
   );

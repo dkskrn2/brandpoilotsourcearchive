@@ -9,20 +9,32 @@ import {
   type LibraryGateway,
 } from "../../features/libraries/libraryGateway";
 import { AvatarEditorDialog } from "./AvatarEditorDialog";
+import { aiContentApiGateway } from "../../features/ai-content/aiContentApiGateway";
+import type { AiContentDraftReference, AiContentGateway } from "../../features/ai-content/types";
+import { AssetArchiveDialog } from "../ai-content/AssetArchiveDialog";
 
 interface Props {
   brandId: string;
   gateway?: LibraryGateway;
+  draftReferences?: Pick<AiContentGateway, "listDraftReferences">;
 }
 
-export function AvatarLibraryPanel({ brandId, gateway = libraryGateway }: Props) {
+export function AvatarLibraryPanel({
+  brandId,
+  gateway = libraryGateway,
+  draftReferences = aiContentApiGateway,
+}: Props) {
   const [items, setItems] = useState<Avatar[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ReturnType<typeof classifyLibraryError> | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [pendingArchive, setPendingArchive] = useState<Avatar | null>(null);
+  const [archiveReferences, setArchiveReferences] = useState<AiContentDraftReference[]>([]);
+  const [archiveLookup, setArchiveLookup] = useState<"idle" | "loading" | "failed">("idle");
   const mounted = useRef(true);
   const createButtonRef = useRef<HTMLButtonElement>(null);
+  const archiveTriggerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -63,11 +75,35 @@ export function AvatarLibraryPanel({ brandId, gateway = libraryGateway }: Props)
     }
   }
 
-  async function archive(item: Avatar) {
+  async function checkArchive(item: Avatar, trigger?: HTMLElement) {
+    if (trigger) archiveTriggerRef.current = trigger;
+    setPendingArchive(item);
+    setArchiveLookup("loading");
     setActionError(null);
     try {
-      await gateway.archiveAvatar(brandId, item.id);
-      if (mounted.current) setItems((current) => current.filter((candidate) => candidate.id !== item.id));
+      const references = await draftReferences.listDraftReferences(brandId, "avatar", item.id);
+      if (!mounted.current) return;
+      setArchiveReferences(references);
+      setArchiveLookup("idle");
+    } catch {
+      if (mounted.current) setArchiveLookup("failed");
+    }
+  }
+
+  function closeArchive() {
+    setPendingArchive(null);
+    setArchiveReferences([]);
+    setArchiveLookup("idle");
+    queueMicrotask(() => archiveTriggerRef.current?.focus());
+  }
+
+  async function confirmArchive() {
+    if (!pendingArchive) return;
+    setActionError(null);
+    try {
+      await gateway.archiveAvatar(brandId, pendingArchive.id);
+      if (mounted.current) setItems((current) => current.filter((candidate) => candidate.id !== pendingArchive.id));
+      closeArchive();
     } catch {
       if (mounted.current) setActionError("아바타를 보관 처리하지 못했습니다.");
     }
@@ -137,7 +173,7 @@ export function AvatarLibraryPanel({ brandId, gateway = libraryGateway }: Props)
                         기본으로 설정
                       </button>
                     ) : null}
-                    <button className="button" type="button" onClick={() => void archive(item)}>
+                    <button className="button" type="button" onClick={(event) => void checkArchive(item, event.currentTarget)}>
                       보관
                     </button>
                   </div>
@@ -158,6 +194,15 @@ export function AvatarLibraryPanel({ brandId, gateway = libraryGateway }: Props)
           }}
         />
       ) : null}
+      {pendingArchive ? <AssetArchiveDialog
+        assetName={pendingArchive.name}
+        references={archiveReferences}
+        loading={archiveLookup === "loading"}
+        failed={archiveLookup === "failed"}
+        onRetry={() => void checkArchive(pendingArchive)}
+        onCancel={closeArchive}
+        onConfirm={() => void confirmArchive()}
+      /> : null}
     </section>
   );
 }

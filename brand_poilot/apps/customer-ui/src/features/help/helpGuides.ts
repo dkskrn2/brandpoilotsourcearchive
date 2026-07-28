@@ -52,9 +52,13 @@ export const helpGuides: HelpGuide[] = [
     id: "ai-content-new",
     path: "/ai-content/new",
     title: "새 AI 콘텐츠",
-    summary: "브랜드·자사 정보와 선택한 레퍼런스를 근거로 목적, 타겟, 소구점과 산출물 조건을 정합니다.",
-    sections: [{ title: "생성 전 확인", items: ["브랜드 설정과 자사 URL 분석 정보가 기본 근거로 사용되며, 특정 제품 URL이나 저장한 트렌드 레퍼런스를 추가할 수 있습니다.", "만들려는 목적, 핵심 타겟과 강조할 소구점을 구체적으로 입력하고 저장한 항목은 다음 생성에서 다시 불러옵니다.", "최종 단계에서 근거와 결과 형식을 확인하면 요청이 전용 워커 대기열에 저장되고 생성 이력에서 상태를 확인할 수 있습니다."] }],
-    tour: [{ selector: ".wizard-header", title: "무엇을 만들지 확인", description: "카드뉴스는 여러 장의 정방형 이미지, 블로그는 게시 가능한 HTML과 설명용 이미지, 마케팅 소재는 한 장의 광고 이미지로 생성됩니다. 현재 선택과 작성 단계를 확인합니다." }, { selector: ".wizard-progress", title: "근거부터 표현 조건까지 준비", description: "자사 URL 또는 제품 URL을 고른 뒤 타겟·소구점·레퍼런스·생성 지시를 순서대로 정합니다. 완료한 단계와 남은 단계를 여기서 확인합니다." }, { selector: ".wizard-workspace", title: "입력값이 사용되는 위치", description: "자사 정보와 제품 URL은 사실 근거로, 타겟과 소구점은 제목·본문·CTA의 방향으로, 레퍼런스는 구성과 표현 참고로 사용됩니다. 확인되지 않은 가격이나 성과는 생성 근거로 쓰지 않습니다." }]
+    summary: "목적·주제 자료·채널 형식을 먼저 정하고, AI 구현안을 고른 뒤 실제 레퍼런스와 아바타를 선택합니다.",
+    sections: [{ title: "생성 전 확인", items: ["첫 세 구역에서 정보성·마케팅성 목적, 브랜드 주제·승인 제품·Wiki, 실제 채널 지원 범위와 결과 형식을 순서대로 저장합니다.", "AI 구현안은 근거·타겟·전략·훅·구성을 비교한 뒤 하나를 선택하며, 레퍼런스와 아바타는 이때만 지연 조회됩니다.", "선택한 자료의 활용 역할과 사용량을 확인해 생성을 시작하면 전용 워커 대기열과 생성 이력에 상태가 표시됩니다."] }],
+    tour: [
+      { selector: ".wizard-header", title: "콘텐츠 생성 방식 확인", description: "새 4단계 구현안 흐름과 기존 5단계 생성 흐름 모두 여기서 현재 작업을 확인합니다." },
+      { selector: ":is(.content-setup-accordions,.wizard-progress)", title: "필요한 입력만 순서대로", description: "목적 다음에 승인 제품·Wiki를, 그 다음 실제 채널 capability와 형식을 확인해 저장합니다." },
+      { selector: ":is(.proposal-comparison,.wizard-workspace)", title: "구현안과 실제 자료 선택", description: "구현안 선택 뒤에만 활성 레퍼런스와 아바타를 조회하고, 누락·보관 자산은 교체하거나 제거한 뒤 생성합니다." },
+    ]
   },
   {
     id: "ai-content-result",

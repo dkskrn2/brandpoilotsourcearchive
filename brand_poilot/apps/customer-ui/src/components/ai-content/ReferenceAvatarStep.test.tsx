@@ -81,4 +81,31 @@ describe("ReferenceAvatarStep", () => {
     expect(screen.getByRole("radio", { name: "아바타 1" })).not.toBeChecked();
     expect(screen.getByRole("radio", { name: "아바타 2" })).toBeChecked();
   });
+
+  it("opens direct reference and avatar upload flows from the proposal phase", async () => {
+    const user = userEvent.setup();
+    const addReference = vi.fn();
+    const addAvatar = vi.fn();
+    const { rerender } = render(<ReferenceAvatarStep
+      references={references}
+      avatars={avatars}
+      selectedReferences={[]}
+      selectedAvatarId={null}
+      loading={false}
+      submitting={false}
+      onReferencesChange={vi.fn()}
+      onAvatarChange={vi.fn()}
+      onAddReference={addReference}
+      onAddAvatar={addAvatar}
+      onGenerate={vi.fn()}
+    />);
+
+    await user.click(screen.getByRole("tab", { name: "직접 추가" }));
+    await user.click(screen.getByRole("button", { name: "레퍼런스 파일 업로드" }));
+    await user.click(screen.getByRole("button", { name: "아바타 업로드 후 저장" }));
+
+    expect(addReference).toHaveBeenCalledTimes(1);
+    expect(addAvatar).toHaveBeenCalledTimes(1);
+    rerender(<></>);
+  });
 });

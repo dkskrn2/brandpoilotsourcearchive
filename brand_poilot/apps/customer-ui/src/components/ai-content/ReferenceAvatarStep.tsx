@@ -14,7 +14,7 @@ const roleOptions: Array<[ReferenceRole, string]> = [
   ["visual_composition", "비주얼 구성"],
 ];
 
-export function ReferenceAvatarStep({ references, avatars, selectedReferences, selectedAvatarId, loading, submitting, onReferencesChange, onAvatarChange, onGenerate }: {
+export function ReferenceAvatarStep({ references, avatars, selectedReferences, selectedAvatarId, loading, submitting, onReferencesChange, onAvatarChange, onAddReference, onAddAvatar, onGenerate }: {
   references: AiContentReference[];
   avatars: Avatar[];
   selectedReferences: SelectedReference[];
@@ -23,6 +23,8 @@ export function ReferenceAvatarStep({ references, avatars, selectedReferences, s
   submitting: boolean;
   onReferencesChange(value: SelectedReference[]): void;
   onAvatarChange(value: string | null): void;
+  onAddReference?(): void;
+  onAddAvatar?(): void;
   onGenerate(): void;
 }) {
   const [tab, setTab] = useState("AI 추천");
@@ -49,6 +51,7 @@ export function ReferenceAvatarStep({ references, avatars, selectedReferences, s
             <button key={label} type="button" role="tab" aria-selected={tab === label} onClick={() => setTab(label)}>{label}</button>,
           )}
         </div>
+        {tab === "직접 추가" ? <button type="button" className="button" onClick={onAddReference}>레퍼런스 파일 업로드</button> : null}
         {loading ? <p>실제 레퍼런스를 불러오는 중입니다.</p> : <div className="content-reference-grid">
           {references.map((item) => {
             const selected = selectedReferences.find((value) => value.referenceItemId === item.id);
@@ -74,6 +77,7 @@ export function ReferenceAvatarStep({ references, avatars, selectedReferences, s
       <aside className="avatar-slot" aria-label="아바타 한 개 선택">
         <h3>아바타</h3>
         <label><input type="radio" name="avatar" checked={selectedAvatarId === null} onChange={() => onAvatarChange(null)} />사용 안 함</label>
+        <button type="button" className="button" onClick={onAddAvatar}>아바타 업로드 후 저장</button>
         {avatars.filter((item) => item.status === "active").map((item) => {
           const image = item.images.find((candidate) => candidate.representative) ?? item.images[0];
           return <label className="avatar-choice" key={item.id}>

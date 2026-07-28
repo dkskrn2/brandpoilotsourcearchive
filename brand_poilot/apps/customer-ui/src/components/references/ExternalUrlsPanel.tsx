@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, DEMO_BRAND_ID } from "../../lib/apiClient";
 import type { ReferenceContentPurpose, ReferenceDetail, ReferenceItem, ReferencePattern } from "../../types";
 import { Alert } from "../ui/Alert";
@@ -6,6 +6,9 @@ import { EmptyState } from "../ui/EmptyState";
 import { ListSkeleton } from "../ui/LoadingState";
 import { ReferenceCard } from "./ReferenceCard";
 import { ReferenceDetailDialog } from "./ReferenceDetailDialog";
+import { aiContentApiGateway } from "../../features/ai-content/aiContentApiGateway";
+import type { AiContentDraftReference } from "../../features/ai-content/types";
+import { AssetArchiveDialog } from "../ai-content/AssetArchiveDialog";
 
 export function ExternalUrlsPanel() {
   const [items, setItems] = useState<ReferenceItem[] | null>(null);
@@ -15,6 +18,10 @@ export function ExternalUrlsPanel() {
   const [saving, setSaving] = useState(false);
   const [filter, setFilter] = useState<ReferenceContentPurpose | "all">("all");
   const [selected, setSelected] = useState<ReferenceItem | null>(null);
+  const [pendingArchive, setPendingArchive] = useState<ReferenceItem | null>(null);
+  const [archiveReferences, setArchiveReferences] = useState<AiContentDraftReference[]>([]);
+  const [archiveLookup, setArchiveLookup] = useState<"idle" | "loading" | "failed">("idle");
+  const archiveTriggerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -63,11 +70,32 @@ export function ExternalUrlsPanel() {
     [],
   );
 
-  async function archive(item: ReferenceItem) {
-    if (!window.confirm(`${item.title} 외부 URL을 삭제할까요?`)) return;
+  async function checkArchive(item: ReferenceItem, trigger?: HTMLElement) {
+    if (trigger) archiveTriggerRef.current = trigger;
+    setPendingArchive(item);
+    setArchiveLookup("loading");
     try {
-      await api.archiveReference(DEMO_BRAND_ID, item.id);
-      setItems((current) => current?.filter((entry) => entry.id !== item.id) ?? null);
+      const references = await aiContentApiGateway.listDraftReferences(DEMO_BRAND_ID, "reference", item.id);
+      setArchiveReferences(references);
+      setArchiveLookup("idle");
+    } catch {
+      setArchiveLookup("failed");
+    }
+  }
+
+  function closeArchive() {
+    setPendingArchive(null);
+    setArchiveReferences([]);
+    setArchiveLookup("idle");
+    queueMicrotask(() => archiveTriggerRef.current?.focus());
+  }
+
+  async function archive() {
+    if (!pendingArchive) return;
+    try {
+      await api.archiveReference(DEMO_BRAND_ID, pendingArchive.id);
+      setItems((current) => current?.filter((entry) => entry.id !== pendingArchive.id) ?? null);
+      closeArchive();
     } catch {
       setNotice("외부 URL을 삭제하지 못했습니다.");
     }
@@ -101,11 +129,20 @@ export function ExternalUrlsPanel() {
         {visibleItems.length ? <div className="reference-card-grid">{visibleItems.map((item) => (
           <div className="external-reference-card" key={item.id}>
             <ReferenceCard item={item} onSelect={setSelected} />
-            <button className="button" type="button" aria-label={`${item.title} 삭제`} onClick={() => void archive(item)}>삭제</button>
+            <button className="button" type="button" aria-label={`${item.title} 삭제`} onClick={(event) => void checkArchive(item, event.currentTarget)}>삭제</button>
           </div>
         ))}</div> : null}
       </div>
       {selected ? <ReferenceDetailDialog item={selected} onClose={() => setSelected(null)} loadDetail={loadDetail} loadPattern={loadPattern} /> : null}
+      {pendingArchive ? <AssetArchiveDialog
+        assetName={pendingArchive.title}
+        references={archiveReferences}
+        loading={archiveLookup === "loading"}
+        failed={archiveLookup === "failed"}
+        onRetry={() => void checkArchive(pendingArchive)}
+        onCancel={closeArchive}
+        onConfirm={() => void archive()}
+      /> : null}
     </section>
   );
 }

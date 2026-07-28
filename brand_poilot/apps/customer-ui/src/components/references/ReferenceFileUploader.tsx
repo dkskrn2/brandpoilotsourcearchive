@@ -25,9 +25,11 @@ const accept = [
 export function ReferenceFileUploader({
   brandId,
   gateway,
+  onUploaded,
 }: {
   brandId: string;
   gateway: LibraryGateway;
+  onUploaded?(reference: ReferenceItem): void;
 }) {
   const [items, setItems] = useState<UploadItem[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
@@ -81,6 +83,7 @@ export function ReferenceFileUploader({
         status: "uploaded", progress: 100, sessionId: result.sessionId,
         reference: result.reference, error: null,
       });
+      onUploaded?.(result.reference);
     } catch {
       if (!controller.signal.aborted) {
         update(item.id, { status: "error", error: "파일을 업로드하지 못했습니다." });

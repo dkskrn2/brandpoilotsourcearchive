@@ -94,13 +94,17 @@ describe("AvatarLibraryPanel", () => {
     const other = { ...avatar, id: secondAvatarId, name: "소라", isDefault: false };
     const setDefaultAvatar = vi.fn(async () => ({ ...other, isDefault: true }));
     const archiveAvatar = vi.fn(async () => undefined);
-    const confirm = vi.spyOn(window, "confirm");
+    const listDraftReferences = vi.fn(async () => []);
     const api = gateway({
       listAvatars: vi.fn(async () => [avatar, other]),
       setDefaultAvatar,
       archiveAvatar,
     });
-    render(<AvatarLibraryPanel brandId="brand-1" gateway={api as never} />);
+    render(<AvatarLibraryPanel
+      brandId="brand-1"
+      gateway={api as never}
+      draftReferences={{ listDraftReferences }}
+    />);
 
     const card = await screen.findByRole("article", { name: "소라" });
     expect(within(card).getByRole("img", { name: "소라 대표 이미지" })).toBeVisible();
@@ -108,8 +112,31 @@ describe("AvatarLibraryPanel", () => {
 
     expect(setDefaultAvatar).toHaveBeenCalledWith("brand-1", secondAvatarId);
     await userEvent.click(within(card).getByRole("button", { name: "보관" }));
+    expect(listDraftReferences).toHaveBeenCalledWith("brand-1", "avatar", secondAvatarId);
+    await userEvent.click(await screen.findByRole("button", { name: "보관 계속" }));
     expect(archiveAvatar).toHaveBeenCalledWith("brand-1", secondAvatarId);
-    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("warns about live drafts and blocks archive when the reference lookup fails", async () => {
+    const archiveAvatar = vi.fn(async () => undefined);
+    const lookup = vi.fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce([{ assetType: "avatar", assetId: avatarId, generationId: "generation-1", title: "진행 중 초안" }]);
+    render(<AvatarLibraryPanel
+      brandId="brand-1"
+      gateway={gateway({ archiveAvatar }) as never}
+      draftReferences={{ listDraftReferences: lookup }}
+    />);
+
+    const card = await screen.findByRole("article", { name: "민지" });
+    await userEvent.click(within(card).getByRole("button", { name: "보관" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("조회하지 못해 보관을 중단");
+    expect(archiveAvatar).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "참조 다시 조회" }));
+    expect(await screen.findByText("진행 중 초안")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "보관 계속" }));
+    expect(archiveAvatar).toHaveBeenCalledWith("brand-1", avatarId);
   });
 
   it("creates an avatar from reserved-ID staged uploads and the chosen representative image", async () => {
