@@ -109,9 +109,9 @@ describe("BrandCenterPage", () => {
     await renderPage();
     expect(await screen.findByRole("heading", { name: "브랜드 센터" })).toBeInTheDocument();
     expect(screen.getByDisplayValue("브랜드 운영을 단순하게")).toBeDisabled();
-    expect(screen.getByRole("button", { name: "제품·서비스" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Wiki" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "모델·아바타" })).toBeEnabled();
+    expect(screen.getByRole("tab", { name: "제품·서비스" })).toBeEnabled();
+    expect(screen.getByRole("tab", { name: "Wiki" })).toBeEnabled();
+    expect(screen.getByRole("tab", { name: "모델·아바타" })).toBeEnabled();
   });
 
   it("creates a new draft without replacing the approved version", async () => {

@@ -18,6 +18,7 @@ describe("D hybrid customer navigation model", () => {
     const paths = customerNavigation.flatMap((group) => group.items.map((item) => item.path));
     expect(paths).toEqual([
       "/dashboard",
+      "/performance",
       "/brand-center",
       "/references",
       "/ai-content",
@@ -29,7 +30,7 @@ describe("D hybrid customer navigation model", () => {
     ]);
     expect(paths).toContain("/brand-center");
     expect(paths).toContain("/references");
-    expect(paths).not.toContain("/performance");
+    expect(paths).toContain("/performance");
     expect(paths).not.toContain("/ai-content/library");
   });
 
