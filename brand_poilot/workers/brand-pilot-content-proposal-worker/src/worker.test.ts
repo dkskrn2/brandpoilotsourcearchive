@@ -61,6 +61,7 @@ const validResult = [proposal("A", "how_to"), proposal("B", "insight")];
 
 function api(overrides: Partial<ContentProposalWorkerClient> = {}): ContentProposalWorkerClient {
   return {
+    heartbeatWorker: vi.fn(async () => undefined),
     claim: vi.fn(async () => job),
     heartbeat: vi.fn(async () => undefined),
     complete: vi.fn(async () => undefined),

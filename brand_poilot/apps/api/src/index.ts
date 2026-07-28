@@ -39,6 +39,7 @@ const serverOptions: Parameters<typeof createServer>[0] & {
     repository,
     brandLogoService,
     workerApiToken: process.env.WORKER_API_TOKEN,
+    contentProposalWorkerApiToken: process.env.CONTENT_PROPOSAL_WORKER_API_TOKEN,
     cronSecret: process.env.CRON_SECRET,
     kakaoAuth: createKakaoAuthStore(pool),
     kakao: {

@@ -85,12 +85,14 @@ describe("content proposal clients", () => {
     );
 
     await expect(client.claim("proposal-worker-1", 180)).resolves.toEqual(job);
+    await client.heartbeatWorker("content-proposal-worker-1");
     await client.heartbeat(job, 180);
     await client.complete(job, proposals);
     await client.fail(job, { errorCode: "model_timeout", errorMessage: "timeout", retryable: true });
 
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
       "https://api.example/worker/content-proposal-jobs/claim",
+      "https://api.example/worker/content-proposal-jobs/heartbeat",
       `https://api.example/worker/content-proposal-jobs/${job.id}/heartbeat`,
       `https://api.example/worker/content-proposal-jobs/${job.id}/complete`,
       `https://api.example/worker/content-proposal-jobs/${job.id}/fail`,

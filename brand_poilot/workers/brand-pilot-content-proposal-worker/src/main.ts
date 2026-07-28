@@ -8,6 +8,7 @@ import {
   runContentProposalOnce,
   runContentProposalWatchIteration,
 } from "./worker.js";
+import { startWorkerInstanceHeartbeat } from "./instanceHeartbeat.js";
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -41,6 +42,12 @@ async function main(): Promise<void> {
     1_000,
     Math.max(1_000, leaseSeconds * 750),
   );
+  const instanceHeartbeatMs = boundedNumber(
+    "CONTENT_PROPOSAL_INSTANCE_HEARTBEAT_MS",
+    5_000,
+    1_000,
+    60_000,
+  );
   const client = createContentProposalApiClient(
     required("BRAND_PILOT_API_URL"),
     required("CONTENT_PROPOSAL_WORKER_API_TOKEN"),
@@ -63,7 +70,17 @@ async function main(): Promise<void> {
     signal: controller.signal,
   });
 
+  let stopInstanceHeartbeat: (() => void) | undefined;
   try {
+    if (mode === "once") {
+      await client.heartbeatWorker(workerId);
+    } else {
+      stopInstanceHeartbeat = startWorkerInstanceHeartbeat({
+        heartbeat: client.heartbeatWorker,
+        workerId,
+        intervalMs: instanceHeartbeatMs,
+      });
+    }
     do {
       const result = mode === "once"
         ? await runOnce()
@@ -85,6 +102,7 @@ async function main(): Promise<void> {
       if ("jobId" in result && result.status === "lease_lost") continue;
     } while (!controller.signal.aborted);
   } finally {
+    stopInstanceHeartbeat?.();
     process.removeListener("SIGTERM", shutdown);
     process.removeListener("SIGINT", shutdown);
   }

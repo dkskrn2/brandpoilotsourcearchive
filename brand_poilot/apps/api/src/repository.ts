@@ -1917,13 +1917,15 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           case
             when max(worker.last_heartbeat_at) filter (
               where worker.worker_type = 'dm'
-                and coalesce(worker.metadata->>'mode', 'dm') <> 'wiki'
+                and coalesce(worker.metadata->>'mode', 'dm') not in ('wiki', 'content_proposal')
                 and lower(worker.worker_id) not like 'wiki-%'
+                and lower(worker.worker_id) not like 'content-proposal-%'
             ) >= now() - interval '90 seconds' then 'online'
             when max(worker.last_heartbeat_at) filter (
               where worker.worker_type = 'dm'
-                and coalesce(worker.metadata->>'mode', 'dm') <> 'wiki'
+                and coalesce(worker.metadata->>'mode', 'dm') not in ('wiki', 'content_proposal')
                 and lower(worker.worker_id) not like 'wiki-%'
+                and lower(worker.worker_id) not like 'content-proposal-%'
             ) >= now() - interval '10 minutes' then 'stale'
             else 'offline'
           end as dm_worker,
@@ -1937,13 +1939,31 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                 and (worker.metadata->>'mode' = 'wiki' or lower(worker.worker_id) like 'wiki-%')
             ) >= now() - interval '10 minutes' then 'stale'
             else 'offline'
-          end as wiki_worker
+          end as wiki_worker,
+          case
+            when max(worker.last_heartbeat_at) filter (
+              where worker.worker_type = 'dm'
+                and (
+                  worker.metadata->>'mode' = 'content_proposal'
+                  or lower(worker.worker_id) like 'content-proposal-%'
+                )
+            ) >= now() - interval '90 seconds' then 'online'
+            when max(worker.last_heartbeat_at) filter (
+              where worker.worker_type = 'dm'
+                and (
+                  worker.metadata->>'mode' = 'content_proposal'
+                  or lower(worker.worker_id) like 'content-proposal-%'
+                )
+            ) >= now() - interval '10 minutes' then 'stale'
+            else 'offline'
+          end as content_proposal_worker
         from worker_instances worker
       `);
       const row = result.rows[0] as {
         active_dm_enabled: boolean;
         dm_worker: "online" | "stale" | "offline";
         wiki_worker: "online" | "stale" | "offline";
+        content_proposal_worker: "online" | "stale" | "offline";
       };
       return {
         database: "ok" as const,
@@ -1951,6 +1971,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           activeDmEnabled: row.active_dm_enabled === true,
           dmWorker: row.dm_worker,
           wikiWorker: row.wiki_worker,
+          contentProposalWorker: row.content_proposal_worker,
         },
       };
     },
@@ -5624,6 +5645,20 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         `insert into worker_instances (worker_id, worker_type, last_heartbeat_at)
          values ($1, 'dm', now())
          on conflict (worker_id) do update set worker_type = 'dm', last_heartbeat_at = now(), updated_at = now()`,
+        [workerId],
+      );
+      return { workerId };
+    },
+
+    async heartbeatContentProposalWorker(workerId) {
+      await pool.query(
+        `insert into worker_instances (worker_id, worker_type, last_heartbeat_at, metadata)
+         values ($1, 'dm', now(), '{"mode":"content_proposal"}'::jsonb)
+         on conflict (worker_id) do update
+         set worker_type = 'dm',
+             last_heartbeat_at = now(),
+             metadata = excluded.metadata,
+             updated_at = now()`,
         [workerId],
       );
       return { workerId };

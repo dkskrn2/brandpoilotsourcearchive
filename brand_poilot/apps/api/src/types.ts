@@ -1075,6 +1075,7 @@ export interface ApiRepository
       activeDmEnabled: boolean;
       dmWorker: "online" | "stale" | "offline";
       wikiWorker: "online" | "stale" | "offline";
+      contentProposalWorker: "online" | "stale" | "offline";
     };
   }>;
   getAiContentBrandContext(input: BrandScope): Promise<AiContentBrandContextRecord>;
@@ -1266,6 +1267,7 @@ export interface ApiRepository
     retryAfterMs: number;
   }): Promise<{ id: string; status: string }>;
   heartbeatDmWorker(workerId: string): Promise<{ workerId: string }>;
+  heartbeatContentProposalWorker(workerId: string): Promise<{ workerId: string }>;
   acquireWorkerResourceLease(
     resourceType: import("./workerResources.js").WorkerResourceType,
     workerId: string,

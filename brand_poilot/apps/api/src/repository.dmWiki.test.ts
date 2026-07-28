@@ -53,6 +53,44 @@ function directFaqCompletionFixture(entry: { id: string; answer: string } | null
 }
 
 describe("DM Wiki repository", () => {
+  it("stores proposal readiness separately without requiring a new worker type migration", async () => {
+    const query = vi.fn(async () => ({ rowCount: 1, rows: [] }));
+    const repository = createRepository(fakePool(query) as any);
+
+    await repository.heartbeatContentProposalWorker("content-proposal-worker-1");
+
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining(`values ($1, 'dm', now(), '{"mode":"content_proposal"}'::jsonb)`),
+      ["content-proposal-worker-1"],
+    );
+  });
+
+  it("does not let a proposal heartbeat satisfy DM readiness", async () => {
+    const query = vi.fn(async (_sql: string) => ({
+      rowCount: 1,
+      rows: [{
+        active_dm_enabled: false,
+        dm_worker: "offline",
+        wiki_worker: "offline",
+        content_proposal_worker: "online",
+      }],
+    }));
+    const repository = createRepository(fakePool(query) as any);
+
+    await expect(repository.health()).resolves.toEqual({
+      database: "ok",
+      operations: {
+        activeDmEnabled: false,
+        dmWorker: "offline",
+        wikiWorker: "offline",
+        contentProposalWorker: "online",
+      },
+    });
+    const sql = String(query.mock.calls[0]?.[0]);
+    expect(sql).toContain("not in ('wiki', 'content_proposal')");
+    expect(sql).toContain("content_proposal_worker");
+  });
+
   it("creates a manual Wiki draft with nullable import provenance and its author", async () => {
     const statements: Array<{ sql: string; values: unknown[] }> = [];
     const query = vi.fn(async (sql: string, values: unknown[] = []) => {

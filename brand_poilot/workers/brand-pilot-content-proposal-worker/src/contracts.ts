@@ -69,6 +69,7 @@ export interface ContentProposalV1 {
 }
 
 export interface ContentProposalWorkerClient {
+  heartbeatWorker(workerId: string): Promise<void>;
   claim(workerId: string, leaseSeconds: number): Promise<ContentProposalJob | null>;
   heartbeat(job: ContentProposalJob, leaseSeconds: number): Promise<void>;
   complete(job: ContentProposalJob, proposals: ContentProposalV1[]): Promise<void>;

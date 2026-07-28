@@ -22,6 +22,8 @@ describe("server runtime", () => {
       activeDmEnabled: false,
       dmWorker: "offline",
       wikiWorker: "offline",
+      contentProposalsEnabled: false,
+      contentProposalWorker: "offline",
     })).toEqual({
       statusCode: 200,
       body: {
@@ -33,10 +35,12 @@ describe("server runtime", () => {
           publishing: "disabled",
           dm: "disabled",
           wiki: "disabled",
+          contentProposals: "disabled",
         },
         workers: {
           dm: "not_required",
           wiki: "not_required",
+          contentProposal: "not_required",
         },
       },
     });
@@ -57,6 +61,8 @@ describe("server runtime", () => {
         activeDmEnabled: true,
         dmWorker,
         wikiWorker,
+        contentProposalsEnabled: false,
+        contentProposalWorker: "offline",
       });
 
       expect(result.statusCode).toBe(503);
@@ -68,4 +74,40 @@ describe("server runtime", () => {
       });
     },
   );
+
+  it.each(["offline", "stale"] as const)(
+    "fails readiness when manual proposals are enabled without a fresh %s worker",
+    (contentProposalWorker) => {
+      const result = assessApiReadiness({
+        database: "ok",
+        schedulerEnabled: false,
+        publishingEnabled: false,
+        activeDmEnabled: false,
+        dmWorker: "offline",
+        wikiWorker: "offline",
+        contentProposalsEnabled: true,
+        contentProposalWorker,
+      });
+
+      expect(result.statusCode).toBe(503);
+      expect(result.body).toMatchObject({
+        ok: false,
+        features: { contentProposals: "enabled" },
+        workers: { contentProposal: contentProposalWorker },
+      });
+    },
+  );
+
+  it("permits manual proposals only with a fresh proposal worker", () => {
+    expect(assessApiReadiness({
+      database: "ok",
+      schedulerEnabled: false,
+      publishingEnabled: false,
+      activeDmEnabled: false,
+      dmWorker: "offline",
+      wikiWorker: "offline",
+      contentProposalsEnabled: true,
+      contentProposalWorker: "online",
+    }).statusCode).toBe(200);
+  });
 });

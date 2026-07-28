@@ -26,6 +26,8 @@ function validProductionEnv(): NodeJS.ProcessEnv {
     DEV_AUTH_ENABLED: "false",
     LOCAL_SCHEDULER_ENABLED: "false",
     INSTAGRAM_PUBLISH_ENABLED: "false",
+    AUTOMATED_CONTENT_ENABLED: "false",
+    CONTENT_PROPOSALS_ENABLED: "false",
   };
 }
 
@@ -122,11 +124,45 @@ describe("loadApiRuntimeConfig", () => {
     expect(config.schedulerEnabled).toBe(false);
     expect(config.instagramPublishEnabled).toBe(false);
     expect(config.aiContentAttachmentUploadSessionsEnabled).toBe(false);
+    expect(config.automatedContentEnabled).toBe(false);
+    expect(config.contentProposalsEnabled).toBe(false);
     expect(config.readiness).toEqual({
       schedulerEnabled: false,
       publishingEnabled: false,
+      contentProposalsEnabled: false,
     });
   });
+
+  it("keeps manual proposal and scheduled automation gates independent", () => {
+    expect(loadApiRuntimeConfig({
+      CONTENT_PROPOSALS_ENABLED: "true",
+      AUTOMATED_CONTENT_ENABLED: "false",
+    })).toMatchObject({
+      contentProposalsEnabled: true,
+      automatedContentEnabled: false,
+      readiness: { contentProposalsEnabled: true },
+    });
+    expect(loadApiRuntimeConfig({
+      CONTENT_PROPOSALS_ENABLED: "false",
+      AUTOMATED_CONTENT_ENABLED: "true",
+    })).toMatchObject({
+      contentProposalsEnabled: false,
+      automatedContentEnabled: true,
+      readiness: { contentProposalsEnabled: false },
+    });
+  });
+
+  it.each(["yes", "1", "TRUE", ""])(
+    "rejects invalid proposal gate booleans (%s)",
+    (value) => {
+      expect(() => loadApiRuntimeConfig({
+        CONTENT_PROPOSALS_ENABLED: value,
+      })).toThrow("CONTENT_PROPOSALS_ENABLED");
+      expect(() => loadApiRuntimeConfig({
+        AUTOMATED_CONTENT_ENABLED: value,
+      })).toThrow("AUTOMATED_CONTENT_ENABLED");
+    },
+  );
 
   it("enables attachment upload sessions only with literal true", () => {
     expect(loadApiRuntimeConfig({
@@ -191,6 +227,7 @@ describe("loadApiRuntimeConfig", () => {
     expect(config.readiness).toEqual({
       schedulerEnabled: false,
       publishingEnabled: false,
+      contentProposalsEnabled: false,
     });
     expect(config.db).toEqual({
       max: 3,

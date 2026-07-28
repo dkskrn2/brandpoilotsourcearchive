@@ -51,6 +51,7 @@ function setup() {
       batchId: "40000000-0000-4000-8000-000000000004",
       status: "queued" as const,
     })),
+    heartbeatContentProposalWorker: vi.fn(async (workerId) => ({ workerId })),
   } as unknown as ApiRepository;
   return {
     app: createServer({
@@ -114,6 +115,22 @@ describe("content proposal worker routes", () => {
       workerId: "proposal-worker-1",
       leaseSeconds: 180,
     });
+    await app.close();
+  });
+
+  it("records an authenticated idle-worker heartbeat with a stable identity", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST",
+      url: "/worker/content-proposal-jobs/heartbeat",
+      headers: { authorization: "Bearer proposal-worker-token" },
+      payload: { workerId: "content-proposal-worker-1" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.heartbeatContentProposalWorker).toHaveBeenCalledWith(
+      "content-proposal-worker-1",
+    );
     await app.close();
   });
 

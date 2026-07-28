@@ -16,9 +16,12 @@ export interface ApiRuntimeConfig {
   schedulerEnabled: boolean;
   instagramPublishEnabled: boolean;
   aiContentAttachmentUploadSessionsEnabled: boolean;
+  automatedContentEnabled: boolean;
+  contentProposalsEnabled: boolean;
   readiness: {
     schedulerEnabled: boolean;
     publishingEnabled: boolean;
+    contentProposalsEnabled: boolean;
   };
 }
 
@@ -139,6 +142,14 @@ export function loadApiRuntimeConfig(
   const devAuthEnabled = parseBoolean(env.DEV_AUTH_ENABLED, "DEV_AUTH_ENABLED");
   const schedulerEnabled = parseBoolean(env.LOCAL_SCHEDULER_ENABLED, "LOCAL_SCHEDULER_ENABLED");
   const instagramPublishEnabled = parseBoolean(env.INSTAGRAM_PUBLISH_ENABLED, "INSTAGRAM_PUBLISH_ENABLED");
+  const automatedContentEnabled = parseBoolean(
+    env.AUTOMATED_CONTENT_ENABLED,
+    "AUTOMATED_CONTENT_ENABLED",
+  );
+  const contentProposalsEnabled = parseBoolean(
+    env.CONTENT_PROPOSALS_ENABLED,
+    "CONTENT_PROPOSALS_ENABLED",
+  );
   const aiContentAttachmentUploadSessionsEnabled = parseBoolean(
     env.AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED,
     "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED",
@@ -209,9 +220,12 @@ export function loadApiRuntimeConfig(
     schedulerEnabled,
     instagramPublishEnabled,
     aiContentAttachmentUploadSessionsEnabled,
+    automatedContentEnabled,
+    contentProposalsEnabled,
     readiness: {
       schedulerEnabled,
       publishingEnabled: instagramPublishEnabled,
+      contentProposalsEnabled,
     },
   };
 }

@@ -91,6 +91,9 @@ export function createContentProposalApiClient(
   }
 
   return {
+    async heartbeatWorker(workerId) {
+      await request("/worker/content-proposal-jobs/heartbeat", { workerId });
+    },
     async claim(workerId, leaseSeconds) {
       const payload = await request("/worker/content-proposal-jobs/claim", { workerId, leaseSeconds });
       return payload.job === null || payload.job === undefined

@@ -186,6 +186,7 @@ interface CreateServerOptions {
   readinessPolicy?: {
     schedulerEnabled: boolean;
     publishingEnabled: boolean;
+    contentProposalsEnabled: boolean;
   };
   logger?: boolean | FastifyLoggerOptions;
 }
@@ -1183,6 +1184,8 @@ export function createServer(
         activeDmEnabled: health.operations?.activeDmEnabled ?? false,
         dmWorker: health.operations?.dmWorker ?? "offline",
         wikiWorker: health.operations?.wikiWorker ?? "offline",
+        contentProposalsEnabled: readinessPolicy?.contentProposalsEnabled ?? false,
+        contentProposalWorker: health.operations?.contentProposalWorker ?? "offline",
       });
       reply.code(readiness.statusCode);
       return readiness.body;
@@ -1194,6 +1197,8 @@ export function createServer(
         activeDmEnabled: false,
         dmWorker: "offline",
         wikiWorker: "offline",
+        contentProposalsEnabled: readinessPolicy?.contentProposalsEnabled ?? false,
+        contentProposalWorker: "offline",
       });
       reply.code(readiness.statusCode);
       return readiness.body;
@@ -2554,6 +2559,15 @@ export function createServer(
   app.post<{ Params: { brandId: string }; Body: Record<string, unknown> }>(
     "/brands/:brandId/ai-content/proposal-batches",
     async (request, reply) => {
+      if (!(readinessPolicy?.contentProposalsEnabled ?? false)) {
+        reply.code(503);
+        return { error: "content_proposals_disabled" };
+      }
+      const health = await repository.health().catch(() => null);
+      if (health?.operations?.contentProposalWorker !== "online") {
+        reply.code(503);
+        return { error: "content_proposal_worker_not_ready" };
+      }
       const batch = await requireContentProposalCustomerRepository(repository).createAiContentProposalBatch({
         ...aiContentScope(request, request.params.brandId),
         actorUserId: requiredAiContentActorUserId(request),
@@ -3301,6 +3315,19 @@ export function createServer(
     }
     return true;
   }
+
+  app.post<{ Body: Record<string, unknown> }>(
+    "/worker/content-proposal-jobs/heartbeat",
+    async (request, reply) => {
+      if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      const workerId = requiredAiContentField(
+        request.body?.workerId,
+        "content_proposal_worker_id_required",
+        200,
+      );
+      return repository.heartbeatContentProposalWorker(workerId);
+    },
+  );
 
   app.post<{ Body: unknown }>("/worker/brand-analyses/claim", async (request, reply) => {
     if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;

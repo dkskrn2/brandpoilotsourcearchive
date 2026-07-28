@@ -616,6 +616,7 @@ function createRepository(): ApiRepository {
     runDmProfileRefreshJob: vi.fn(async (id) => ({ id, status: "succeeded" })),
     failDmProfileRefreshJob: vi.fn(async (id) => ({ id, status: "failed" })),
     heartbeatDmWorker: vi.fn(async (workerId) => ({ workerId })),
+    heartbeatContentProposalWorker: vi.fn(async (workerId) => ({ workerId })),
     acquireWorkerResourceLease: vi.fn(async () => null),
     heartbeatWorkerResourceLease: vi.fn(async (id, _workerId, leaseToken) => ({
       id,
@@ -1118,10 +1119,12 @@ describe("API server", () => {
         publishing: "disabled",
         dm: "disabled",
         wiki: "disabled",
+        contentProposals: "disabled",
       },
       workers: {
         dm: "not_required",
         wiki: "not_required",
+        contentProposal: "not_required",
       },
     });
     expect(repository.health).toHaveBeenCalledTimes(1);
@@ -1138,6 +1141,7 @@ describe("API server", () => {
         activeDmEnabled: false,
         dmWorker: "offline",
         wikiWorker: "offline",
+        contentProposalWorker: "offline",
       },
     });
     const app = createServer({
@@ -1145,6 +1149,7 @@ describe("API server", () => {
       readinessPolicy: {
         schedulerEnabled: false,
         publishingEnabled: false,
+        contentProposalsEnabled: false,
       },
       runtimePolicy: {
         cookieSecure: false,
@@ -1165,10 +1170,12 @@ describe("API server", () => {
         publishing: "disabled",
         dm: "disabled",
         wiki: "disabled",
+        contentProposals: "disabled",
       },
       workers: {
         dm: "not_required",
         wiki: "not_required",
+        contentProposal: "not_required",
       },
     });
     expect(repository.health).toHaveBeenCalledTimes(1);
@@ -1182,6 +1189,7 @@ describe("API server", () => {
         activeDmEnabled: true,
         dmWorker: "online",
         wikiWorker: "offline",
+        contentProposalWorker: "offline",
       },
     });
     const app = createServer({
@@ -1189,6 +1197,7 @@ describe("API server", () => {
       readinessPolicy: {
         schedulerEnabled: false,
         publishingEnabled: false,
+        contentProposalsEnabled: false,
       },
     });
 

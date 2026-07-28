@@ -116,12 +116,22 @@ function setup(
     uploadSessionsEnabled?: boolean;
     actorUserId?: string | null;
     app?: FastifyInstance;
+    contentProposalsEnabled?: boolean;
+    contentProposalWorker?: "online" | "stale" | "offline";
   } = {},
 ) {
   const events: string[] = [];
   const sessionExpiresAt = "2099-07-18T00:10:00.000Z";
   const repository = {
-    health: vi.fn(async () => ({ database: "ok" as const })),
+    health: vi.fn(async () => ({
+      database: "ok" as const,
+      operations: {
+        activeDmEnabled: false,
+        dmWorker: "offline" as const,
+        wikiWorker: "offline" as const,
+        contentProposalWorker: options.contentProposalWorker ?? "online" as const,
+      },
+    })),
     createAiContentAnalysis: vi.fn(async () => generation()),
     updateAiContentDraft: vi.fn(async () => generation("analysis_ready")),
     startAiContentGeneration: vi.fn(async () => generation("queued")),
@@ -255,6 +265,11 @@ function setup(
       uploadSessionsEnabled: options.uploadSessionsEnabled ?? false,
     },
     aiContentLimits: { dailyGenerationLimit: 10, dailyDownloadLimit: 20 },
+    readinessPolicy: {
+      schedulerEnabled: false,
+      publishingEnabled: false,
+      contentProposalsEnabled: options.contentProposalsEnabled ?? true,
+    },
     logger: false,
   }, options.app);
   return { app, repository, kakaoAuth, generateClientToken, events, sessionExpiresAt };
@@ -542,6 +557,42 @@ describe("AI content customer routes", () => {
     });
     await app.close();
   });
+
+  it.each([
+    ["disabled", false, "online", "content_proposals_disabled"],
+    ["offline", true, "offline", "content_proposal_worker_not_ready"],
+    ["stale", true, "stale", "content_proposal_worker_not_ready"],
+  ] as const)(
+    "blocks manual proposal creation when the gate/worker is %s",
+    async (_caseName, contentProposalsEnabled, contentProposalWorker, error) => {
+      const { app, repository } = setup(true, {
+        contentProposalsEnabled,
+        contentProposalWorker,
+      });
+      const response = await app.inject({
+        method: "POST",
+        url: `/brands/${brandId}/ai-content/proposal-batches`,
+        headers: auth,
+        payload: {
+          idempotencyKey: "proposal-gated",
+          request: {
+            contractVersion: "content-proposal-request.v1",
+            contentFamily: "informational",
+            subjectInput: { topic: "여름 관리" },
+            channelTargets: ["blog_export"],
+            outputFormats: ["blog"],
+            sourceSnapshotIds: [],
+            performanceSnapshotIds: [],
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual({ error });
+      expect(repository.createAiContentProposalBatch).not.toHaveBeenCalled();
+      await app.close();
+    },
+  );
 
   it.each([
     ["empty", []],
