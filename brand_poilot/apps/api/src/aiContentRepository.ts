@@ -1169,6 +1169,27 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       try {
         await client.query("BEGIN");
         await assertActiveAiContentActor(client, input);
+        const replay = await client.query(
+          `select *,
+                  (request_json - 'performanceEvidence') = $4::jsonb request_matches
+             from ai_content_proposal_batches
+            where workspace_id=$1 and brand_id=$2 and idempotency_key=$3
+            for update`,
+          [
+            input.workspaceId,
+            input.brandId,
+            input.idempotencyKey,
+            JSON.stringify(input.request),
+          ],
+        );
+        if (replay.rowCount) {
+          const batch = replay.rows[0] as Record<string, unknown>;
+          if (batch.request_matches !== true) {
+            throw new Error("ai_content_proposal_batch_conflict");
+          }
+          await client.query("COMMIT");
+          return mapProposalBatch(batch);
+        }
         const sourceIds = [...new Set(input.request.sourceSnapshotIds)];
         const sources = sourceIds.length
           ? await client.query(
@@ -1277,13 +1298,13 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           const existing = await client.query(
             `select * from ai_content_proposal_batches
               where workspace_id=$1 and brand_id=$2 and idempotency_key=$3
-                and request_json=$4::jsonb
+                and (request_json - 'performanceEvidence')=$4::jsonb
               for update`,
             [
               input.workspaceId,
               input.brandId,
               input.idempotencyKey,
-              JSON.stringify(requestSnapshot),
+              JSON.stringify(input.request),
             ],
           );
           batch = existing.rows[0];

@@ -691,6 +691,78 @@ describe("content orchestration PostgreSQL contract", () => {
     })).rejects.toThrow("ai_content_proposal_batch_conflict");
   });
 
+  it("replays the frozen batch before mutable source freshness checks or refresh scheduling", async () => {
+    const snapshotA = "41000000-0000-4000-8000-000000000041";
+    const snapshotB = "42000000-0000-4000-8000-000000000042";
+    await database!.query(
+      `insert into source_snapshots (
+         id,workspace_id,brand_id,source_url_id,status,fetched_at,
+         content_hash,extracted_text,summary
+       ) values ($1,$2,$3,$4,'succeeded',now(),$5,'Snapshot A','Snapshot A')`,
+      [snapshotA, ids.workspace, ids.brand, ids.sourceUrl, "a".repeat(64)],
+    );
+    const query = async (sql: string, params?: unknown[]) => {
+      const result = await database!.query(sql, params);
+      return {
+        ...result,
+        rowCount: result.rows.length > 0 ? result.rows.length : (result.affectedRows ?? 0),
+      };
+    };
+    const repository = createAiContentRepository({
+      query,
+      connect: async () => ({ query, release() {} }),
+    } as never);
+    const input = {
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      actorUserId: ids.actor,
+      origin: "manual" as const,
+      idempotencyKey: "proposal-frozen-source-replay",
+      request: {
+        contractVersion: "content-proposal-request.v1" as const,
+        contentFamily: "informational" as const,
+        subjectInput: { topic: "Frozen source replay" },
+        channelTargets: ["blog_export" as const],
+        outputFormats: ["blog" as const],
+        sourceSnapshotIds: [snapshotA],
+        performanceSnapshotIds: [],
+      },
+    };
+    const created = await repository.createAiContentProposalBatch(input);
+    await database!.query(
+      "update source_snapshots set fetched_at=now()-interval '9 days' where id=$1",
+      [snapshotA],
+    );
+    await database!.query(
+      `insert into source_snapshots (
+         id,workspace_id,brand_id,source_url_id,status,fetched_at,
+         content_hash,extracted_text,summary
+       ) values ($1,$2,$3,$4,'succeeded',now()-interval '8 days',$5,'Snapshot B','Snapshot B')`,
+      [snapshotB, ids.workspace, ids.brand, ids.sourceUrl, "b".repeat(64)],
+    );
+    await database!.query(
+      "delete from source_crawl_runs where source_url_id=$1",
+      [ids.sourceUrl],
+    );
+
+    await expect(repository.createAiContentProposalBatch(input))
+      .resolves.toMatchObject({ id: created.id });
+    const jobs = await database!.query<{ count: string }>(
+      "select count(*)::text count from ai_content_proposal_jobs where batch_id=$1",
+      [created.id],
+    );
+    expect(jobs.rows[0]?.count).toBe("1");
+    const refreshes = await database!.query<{ count: string }>(
+      "select count(*)::text count from source_crawl_runs where source_url_id=$1",
+      [ids.sourceUrl],
+    );
+    expect(refreshes.rows[0]?.count).toBe("0");
+    await expect(repository.createAiContentProposalBatch({
+      ...input,
+      actorUserId: ids.inactiveActor,
+    })).rejects.toThrow("ai_content_actor_forbidden");
+  });
+
   it.each(["queued", "completed", "failed"] as const)(
     "does not enqueue a replacement proposal job when an idempotent batch job is %s",
     async (terminalStatus) => {
