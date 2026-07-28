@@ -597,6 +597,7 @@ function createRepository(): ApiRepository {
     })),
     publishQueueItem: vi.fn(async (queueId) => ({ id: queueId, status: "published", publishedUrl: "mock://instagram/queue-1" })),
     retryPublishQueueItem: vi.fn(async (queueId) => ({ id: queueId, status: "queued" as const })),
+    cancelPublishQueueItem: vi.fn(async (queueId) => ({ id: queueId, status: "cancelled" as const })),
     claimImageRenderJob: vi.fn(async () => null),
     heartbeatImageRenderJob: vi.fn(async (id) => ({ id, status: "running" })),
     completeImageRenderJob: vi.fn(async (id) => ({ id, status: "succeeded", artifactId: "artifact-1" })),
@@ -2726,6 +2727,11 @@ describe("API server", () => {
     expect(retry.statusCode).toBe(200);
     expect(retry.json()).toEqual({ id: "queue-1", status: "queued" });
     expect(repository.retryPublishQueueItem).toHaveBeenCalledWith("queue-1");
+
+    const cancel = await app.inject({ method: "POST", url: "/publish-queue/queue-1/cancel" });
+    expect(cancel.statusCode).toBe(200);
+    expect(cancel.json()).toEqual({ id: "queue-1", status: "cancelled" });
+    expect(repository.cancelPublishQueueItem).toHaveBeenCalledWith("queue-1");
   });
 
   it("lists publish results grouped by content for the completed tab", async () => {

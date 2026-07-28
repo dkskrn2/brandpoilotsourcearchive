@@ -31,6 +31,13 @@ export interface AiContentPublishTargetResult {
   status: "rendering" | "scheduled" | "publishing" | "published" | "failed";
   publishedUrl: string | null;
   errorCode: string | null;
+  recovery?: {
+    action: "none" | "retry" | "reconcile";
+    retryAllowed: boolean;
+    retryReason: string;
+    cancelAllowed: boolean;
+    cancelReason: string | null;
+  };
 }
 
 export interface PreparedAiContentPublishResult {
@@ -82,6 +89,22 @@ function vercelBlobUrl(value: unknown) {
 function normalizeQueueStatus(value: unknown): AiContentPublishTargetResult["status"] {
   if (value === "publishing" || value === "published" || value === "failed") return value;
   return "scheduled";
+}
+
+function publishRecovery(status: AiContentPublishTargetResult["status"], errorCode: string | null) {
+  const resultUnknown = status === "failed" && errorCode === "publish_delivery_unknown";
+  const retryAllowed = status === "failed"
+    && (errorCode === "oauth_required" || errorCode === "provider_not_implemented");
+  const cancelAllowed = status === "scheduled";
+  return {
+    action: resultUnknown ? "reconcile" as const : retryAllowed ? "retry" as const : "none" as const,
+    retryAllowed,
+    retryReason: errorCode ?? (status === "failed" ? "publish_queue_not_retryable" : "publish_not_failed"),
+    cancelAllowed,
+    cancelReason: cancelAllowed ? null : status === "publishing" || status === "published" || status === "failed"
+      ? "publish_already_attempted"
+      : "publish_not_cancellable",
+  };
 }
 
 function outputCopy(manifest: AiContentManifest) {
@@ -501,14 +524,17 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
     );
     if (!result.rowCount) throw new Error("publish_queue_not_found");
     const row = result.rows[0];
+    const status = normalizeQueueStatus(row.status);
+    const errorCode = text(row.last_error) || null;
     return {
       channel: row.channel as Channel,
       deliveryFormat: row.delivery_format as AiContentPublishDeliveryFormat,
       channelOutputId: String(row.channel_output_id),
       queueId: String(row.queue_id),
-      status: normalizeQueueStatus(row.status),
+      status,
       publishedUrl: text(row.published_url) || null,
-      errorCode: text(row.last_error) || null,
+      errorCode,
+      recovery: publishRecovery(status, errorCode),
     };
   }
 

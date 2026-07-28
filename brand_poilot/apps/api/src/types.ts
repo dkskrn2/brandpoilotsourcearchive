@@ -1206,6 +1206,7 @@ export interface ApiRepository
   runDuePublishing(now?: Date): Promise<PipelineRunResult>;
   publishQueueItem(queueId: string): Promise<{ id: string; status: string; publishedUrl: string | null }>;
   retryPublishQueueItem(queueId: string): Promise<{ id: string; status: "queued" | "scheduled" }>;
+  cancelPublishQueueItem(queueId: string): Promise<{ id: string; status: "cancelled" }>;
   claimImageRenderJob(workerId: string): Promise<ImageRenderJobDto | null>;
   heartbeatImageRenderJob(jobId: string, workerId: string, leaseToken: string): Promise<{ id: string; status: string }>;
   completeImageRenderJob(jobId: string, input: ImageRenderJobCompletionInput): Promise<{ id: string; status: string; artifactId: string }>;

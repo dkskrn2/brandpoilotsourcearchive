@@ -35,6 +35,8 @@ function setup(options: {
   existingStatus?: string;
   existingIdempotencyKey?: string;
   queueResultFormat?: string;
+  queueResultStatus?: string;
+  queueResultError?: string;
 } = {}) {
   const statements: string[] = [];
   let outputInsert = 0;
@@ -105,8 +107,8 @@ function setup(options: {
       channel_output_id: "channel-output-story",
       channel: "instagram",
       delivery_format: options.queueResultFormat ?? "instagram_story",
-      status: "scheduled",
-      last_error: null,
+      status: options.queueResultStatus ?? "scheduled",
+      last_error: options.queueResultError ?? null,
       published_url: null,
     }] };
     throw new Error(`unexpected_query:${sql}`);
@@ -233,6 +235,57 @@ describe("AI content direct publishing", () => {
       status: "scheduled",
       publishedUrl: null,
       errorCode: null,
+      recovery: {
+        action: "none",
+        retryAllowed: false,
+        retryReason: "publish_not_failed",
+        cancelAllowed: true,
+        cancelReason: null,
+      },
+    });
+  });
+
+  it("requires reconciliation instead of retry when delivery is unknown", async () => {
+    const { repository } = setup({
+      queueResultStatus: "failed",
+      queueResultError: "publish_delivery_unknown",
+    });
+
+    await expect(repository.getAiContentPublishQueueResult({
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      queueId: "queue-story",
+    })).resolves.toMatchObject({
+      status: "failed",
+      errorCode: "publish_delivery_unknown",
+      recovery: {
+        action: "reconcile",
+        retryAllowed: false,
+        retryReason: "publish_delivery_unknown",
+        cancelAllowed: false,
+        cancelReason: "publish_already_attempted",
+      },
+    });
+  });
+
+  it("returns the server retry reason for retryable publish failures", async () => {
+    const { repository } = setup({
+      queueResultStatus: "failed",
+      queueResultError: "oauth_required",
+    });
+
+    await expect(repository.getAiContentPublishQueueResult({
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      queueId: "queue-story",
+    })).resolves.toMatchObject({
+      recovery: {
+        action: "retry",
+        retryAllowed: true,
+        retryReason: "oauth_required",
+        cancelAllowed: false,
+        cancelReason: "publish_already_attempted",
+      },
     });
   });
 

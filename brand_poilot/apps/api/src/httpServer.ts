@@ -3147,6 +3147,18 @@ export function createServer(
     }
   });
 
+  app.post<{ Params: { queueId: string } }>("/publish-queue/:queueId/cancel", async (request, reply) => {
+    try {
+      return await repository.cancelPublishQueueItem(request.params.queueId);
+    } catch (error) {
+      if (error instanceof Error && error.message === "publish_queue_not_cancellable") {
+        reply.code(409);
+        return { error: error.message };
+      }
+      throw error;
+    }
+  });
+
   function assertWorkerAuthentication(authorization: string | undefined) {
     if (!workerApiToken) throw new Error("worker_api_not_configured");
     if (authorization !== `Bearer ${workerApiToken}`) throw new Error("worker_api_unauthorized");

@@ -2412,6 +2412,28 @@ describe("repository", () => {
     expect(query).not.toHaveBeenCalled();
   });
 
+  it("cancels only queued, scheduled, or deferred publication rows", async () => {
+    const query = vi.fn(async (sql: string) => {
+      expect(sql).toContain("status in ('queued', 'scheduled', 'deferred')");
+      return { rowCount: 1, rows: [{ id: "queue-1", status: "cancelled" }] };
+    });
+    const repository = createRepository({ query } as any);
+
+    await expect(repository.cancelPublishQueueItem("queue-1")).resolves.toEqual({
+      id: "queue-1",
+      status: "cancelled"
+    });
+  });
+
+  it("rejects cancellation after publishing has started", async () => {
+    const repository = createRepository({
+      query: vi.fn(async () => ({ rowCount: 0, rows: [] }))
+    } as any);
+
+    await expect(repository.cancelPublishQueueItem("queue-publishing"))
+      .rejects.toThrow("publish_queue_not_cancellable");
+  });
+
   it("does no scheduled publication work or querying when publication is disabled", async () => {
     const query = vi.fn();
     const repository = createRepository({ query } as any, { instagramPublish: { enabled: false } });

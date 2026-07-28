@@ -658,6 +658,12 @@ export function apiClient(options: ApiClientOptions = {}) {
     },
     publishQueueItem(queueId: string) {
       return request<{ id: string; status: string; publishedUrl: string | null }>(fetcher, `${baseUrl}/publish-queue/${queueId}/publish`, { method: "POST" });
+    },
+    retryPublishQueueItem(queueId: string) {
+      return request<{ id: string; status: "queued" | "scheduled" }>(fetcher, `${baseUrl}/publish-queue/${queueId}/retry`, { method: "POST" });
+    },
+    cancelPublishQueueItem(queueId: string) {
+      return request<{ id: string; status: "cancelled" }>(fetcher, `${baseUrl}/publish-queue/${queueId}/cancel`, { method: "POST" });
     }
   };
 }

@@ -5042,6 +5042,38 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       return { id: result.rows[0].id, status: result.rows[0].status as "queued" | "scheduled" };
     },
 
+    async cancelPublishQueueItem(queueId) {
+      const result = await pool.query(
+        `with cancelled as (
+           update publish_queue
+              set status = 'cancelled', deferred_until = null,
+                  publishing_started_at = null, updated_at = now()
+            where id = $1 and status in ('queued', 'scheduled', 'deferred')
+          returning id, status, topic_publish_group_id
+         ), updated_group as (
+           update topic_publish_groups tpg
+              set status = case
+                    when exists (select 1 from publish_queue pq where pq.topic_publish_group_id = tpg.id and pq.status = 'failed') then 'failed'
+                    when exists (select 1 from publish_queue pq where pq.topic_publish_group_id = tpg.id and pq.status = 'published') then 'published'
+                    else 'cancelled'
+                  end,
+                  slot_date = null, slot_number = null, scheduled_for = null, updated_at = now()
+             from cancelled
+            where tpg.id = cancelled.topic_publish_group_id
+              and not exists (
+                select 1 from publish_queue pq
+                 where pq.topic_publish_group_id = tpg.id
+                   and pq.status in ('queued', 'scheduled', 'publishing', 'deferred')
+              )
+          returning tpg.id
+         )
+         select id, status from cancelled`,
+        [queueId]
+      );
+      if (!result.rowCount) throw new Error("publish_queue_not_cancellable");
+      return { id: String(result.rows[0].id), status: "cancelled" as const };
+    },
+
     async claimDmReplyJob(workerId) {
       await pool.query(
         `with recovered as (
