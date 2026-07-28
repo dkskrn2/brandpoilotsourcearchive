@@ -60,6 +60,7 @@ test("restores a running generation after reload and renders every real artifact
 
   await page.goto("/ai-content/generation-e2e");
   await expect(page.getByText("생성 작업 상태: 생성 중")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Reel|video|영상 생성/i })).toHaveCount(0);
   allowComplete = true;
   await page.reload();
   await expect(page.getByRole("img", { name: "카드뉴스 슬라이드 1" })).toBeVisible();

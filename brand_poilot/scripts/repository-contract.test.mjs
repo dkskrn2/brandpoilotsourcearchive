@@ -986,6 +986,68 @@ test("자동 크롤링은 지원하지 않는 Vercel Cron 대신 외부 또는 �
   assert.match(envExample, /^LOCAL_SCHEDULER_ENABLED=false$/m);
 });
 
+test("D-hybrid 콘텐츠 smoke는 legacy v2와 optional orchestration을 함께 검증한다", async () => {
+  const [smoke, inputContract, workerContracts] = await Promise.all([
+    readFile("scripts/ai-content-smoke.mjs", "utf8"),
+    readFile("apps/api/src/aiContentGenerationInput.ts", "utf8"),
+    Promise.all([
+      "workers/brand-pilot-card-news-worker/src/contracts.ts",
+      "workers/brand-pilot-blog-worker/src/contracts.ts",
+      "workers/brand-pilot-marketing-worker/src/contracts.ts",
+    ].map((path) => readFile(path, "utf8"))),
+  ]);
+  assert.match(inputContract, /content-generation-input\.v2/);
+  assert.match(smoke, /content-orchestration\.v1/);
+  assert.match(smoke, /AI_CONTENT_SMOKE_ORCHESTRATION/);
+  assert.match(smoke, /assertLegacyGeneration/);
+  assert.match(smoke, /assertOrchestratedGeneration/);
+  assert.match(smoke, /video|reel/i);
+  assert.match(inputContract, /orchestration:\s*ContentOrchestrationV1\s*\|\s*null/);
+  assert.match(inputContract, /source\.orchestration\s*===\s*undefined\s*\|\|\s*source\.orchestration\s*===\s*null/);
+  for (const contract of workerContracts) {
+    assert.match(contract, /orchestration:[^;]*\|\s*null/);
+    assert.match(contract, /parseWorkerContentOrchestration\(input\.orchestration/);
+  }
+});
+
+test("subject smoke는 확인되지 않은 주장을 verified fact에서 배제한다", async () => {
+  const smoke = await readFile("scripts/ai-content-subject-smoke.mjs", "utf8");
+  assert.match(smoke, /unsupported claim/i);
+  assert.match(smoke, /verifiedFacts/);
+  assert.match(smoke, /doesNotMatch|includes/);
+});
+
+test("자동 crawl smoke 계약은 OFF와 ON proposal-only를 모두 고정한다", async () => {
+  const smoke = await readFile("scripts/ai-content-smoke.mjs", "utf8");
+  assert.match(smoke, /AI_CONTENT_PROPOSAL_SCHEDULER_ENABLED/);
+  assert.match(smoke, /proposal-only/);
+  assert.match(smoke, /scheduled_crawl/);
+  assert.match(smoke, /generation/i);
+});
+
+test("D-hybrid 브라우저 사양은 계획의 13개 흐름과 영상 생성 차단을 명시한다", async () => {
+  const e2e = await readFile("apps/customer-ui/e2e/d-hybrid-content-wizard.spec.ts", "utf8");
+  for (const marker of [
+    "accordion-lazy-load",
+    "informational-url-evidence",
+    "marketing-reference-preview",
+    "brand-topic-card-news",
+    "saved-product-blog-reference-roles",
+    "new-product-single-image-avatar",
+    "channel-text-no-image-job",
+    "reload-resume-selection",
+    "usage-limit-double-submit",
+    "channel-capability-refresh",
+    "reference-seed-resume",
+    "performance-proposal-tenant-guard",
+    "scheduled-proposal-review-dismiss",
+  ]) {
+    assert.match(e2e, new RegExp(marker));
+  }
+  assert.match(e2e, /video|reel/i);
+  assert.match(e2e, /not\.toHaveBeenCalled|toHaveCount\(0\)|requests.*0/i);
+});
+
 test("각 워크스페이스 패키지는 개별 package-lock.json을 두지 않는다", async () => {
   const lockfiles = [
     "apps/api/package-lock.json",

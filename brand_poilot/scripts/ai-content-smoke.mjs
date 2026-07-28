@@ -14,8 +14,27 @@ assert.ok(supported.has(type), "AI_CONTENT_SMOKE_TYPE must be card_news, blog, o
 const apiUrl = (process.env.BRAND_PILOT_API_URL ?? "http://127.0.0.1:4000").replace(/\/+$/, "");
 const brandId = process.env.AI_CONTENT_SMOKE_BRAND_ID;
 const cookie = process.env.AI_CONTENT_SMOKE_COOKIE;
+const orchestrationJson = process.env.AI_CONTENT_SMOKE_ORCHESTRATION;
 assert.ok(brandId, "AI_CONTENT_SMOKE_BRAND_ID is required");
 assert.ok(cookie, "AI_CONTENT_SMOKE_COOKIE is required");
+
+function parseOptionalOrchestration() {
+  if (!orchestrationJson) return null;
+  const orchestration = JSON.parse(orchestrationJson);
+  assert.equal(orchestration.contractVersion, "content-orchestration.v1");
+  assert.ok(!["video", "reel"].includes(orchestration.outputFormat), "video/Reel generation is excluded");
+  return orchestration;
+}
+
+function assertLegacyGeneration(generation) {
+  assert.ok(generation?.id);
+  assert.equal(generation.draft?.orchestration ?? null, null);
+}
+
+function assertOrchestratedGeneration(generation, orchestration) {
+  assert.equal(orchestration.contractVersion, "content-orchestration.v1");
+  assert.deepEqual(generation.draft?.orchestration ?? generation.orchestrationSnapshot, orchestration);
+}
 
 const workerScript = {
   card_news: "card-news-worker:once",
@@ -101,9 +120,41 @@ async function inspectOrPublish() {
 
 if (await inspectOrPublish()) process.exit(0);
 
+async function verifyProposalSchedulerContract() {
+  if (!args.has("--scheduler-contract")) return false;
+  const enabled = process.env.AI_CONTENT_PROPOSAL_SCHEDULER_ENABLED === "true";
+  const cronSecret = process.env.CRON_SECRET;
+  assert.ok(cronSecret, "CRON_SECRET is required for scheduler contract smoke");
+  const beforeProposals = await request(`/brands/${brandId}/ai-content/proposals?status=suggested`);
+  const beforeGenerations = await request(`/brands/${brandId}/ai-content/generations`);
+  await request("/internal/cron/source-crawl", {
+    method: "GET",
+    headers: { authorization: `Bearer ${cronSecret}` },
+  });
+  const afterProposals = await request(`/brands/${brandId}/ai-content/proposals?status=suggested`);
+  const afterGenerations = await request(`/brands/${brandId}/ai-content/generations`);
+  assert.equal(afterGenerations.length, beforeGenerations.length, "proposal-only scheduler must not create a generation");
+  if (enabled) {
+    const batches = await Promise.all(afterProposals.map((item) =>
+      request(`/brands/${brandId}/ai-content/proposal-batches/${item.batchId}`),
+    ));
+    const scheduled = batches.filter((item) => item.origin === "scheduled_crawl");
+    assert.ok(afterProposals.length >= beforeProposals.length);
+    assert.ok(scheduled.length > 0, "ON proposal-only scheduler must expose a scheduled_crawl proposal");
+  } else {
+    assert.equal(afterProposals.length, beforeProposals.length, "OFF scheduler must not create a proposal");
+  }
+  console.log(`[smoke] scheduler ${enabled ? "ON proposal-only" : "OFF"} verified`);
+  return true;
+}
+
+if (await verifyProposalSchedulerContract()) process.exit(0);
+
 const key = `${type}-${Date.now()}`;
+const orchestration = parseOptionalOrchestration();
 const draft = {
   type,
+  ...(orchestration ? { orchestration } : {}),
   analysisSource: "owned",
   productUrl: "",
   selectedAnalysisImageIds: [],
@@ -115,11 +166,13 @@ const draft = {
 };
 
 console.log(`[smoke] create ${type} analysis`);
-const created = await request(`/brands/${brandId}/ai-content/generations`, { method: "POST", body: JSON.stringify({ type, title: `AI 콘텐츠 smoke ${key}`, draft, idempotencyKey: `analysis-${key}` }) });
+const created = await request(`/brands/${brandId}/ai-content/generations`, { method: "POST", body: JSON.stringify({ type, title: `AI 콘텐츠 smoke ${key}`, draft, ...(orchestration ? { orchestration } : {}), idempotencyKey: `analysis-${key}` }) });
+if (orchestration) assertOrchestratedGeneration(created, orchestration);
+else assertLegacyGeneration(created);
 await runWorkerOnce();
 await waitFor(created.id, ["analysis_ready"]);
-await request(`/brands/${brandId}/ai-content/generations/${created.id}`, { method: "PATCH", body: JSON.stringify({ draft, referenceIds: [] }) });
-await request(`/brands/${brandId}/ai-content/generations/${created.id}/generate`, { method: "POST", body: JSON.stringify({ idempotencyKey: `generate-${key}`, outputCount: 1 }) });
+await request(`/brands/${brandId}/ai-content/generations/${created.id}`, { method: "PATCH", body: JSON.stringify({ draft, referenceIds: [], ...(orchestration ? { orchestration } : {}) }) });
+await request(`/brands/${brandId}/ai-content/generations/${created.id}/generate`, { method: "POST", body: JSON.stringify({ idempotencyKey: `generate-${key}`, outputCount: 1, ...(orchestration ? { orchestration } : {}) }) });
 await runWorkerOnce();
 const completed = await waitFor(created.id, ["completed", "partial_failed", "failed"], 60_000);
 assert.equal(completed.status, "completed");

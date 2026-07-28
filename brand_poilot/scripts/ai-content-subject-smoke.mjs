@@ -87,6 +87,7 @@ async function ensureGenerationStatus(generationId, status) {
 }
 
 function analysisFixture(subjectType) {
+  const unsupportedClaim = "unsupported claim: guaranteed results";
   const common = {
     contractVersion: "subject-analysis-result.v2",
     phase: "analysis",
@@ -102,6 +103,10 @@ function analysisFixture(subjectType) {
     barriers: [],
     sourceGaps: [],
   };
+  assert.ok(
+    common.verifiedFacts.every((fact) => !fact.claim.includes(unsupportedClaim)),
+    "unsupported claim must not appear in verifiedFacts",
+  );
   if (subjectType === "product") {
     return {
       ...common,
