@@ -17,6 +17,8 @@ export function FeedbackDialog({
   const [notice, setNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const submitLockedRef = useRef(false);
+  const lastSubmittedMessageRef = useRef<string | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const resolvedBookingUrl = bookingUrl.trim() || fallbackBookingUrl;
@@ -60,16 +62,19 @@ export function FeedbackDialog({
   async function submitFeedback(event: React.FormEvent) {
     event.preventDefault();
     const normalized = message.trim();
-    if (!normalized || submitting) return;
+    if (!normalized || submitLockedRef.current || normalized === lastSubmittedMessageRef.current) return;
+    submitLockedRef.current = true;
     setSubmitting(true);
     setNotice(null);
     try {
       await onSubmit(normalized);
+      lastSubmittedMessageRef.current = normalized;
       setMessage("");
       setNotice({ type: "success", text: "의견을 보내주셔서 감사합니다." });
     } catch {
       setNotice({ type: "error", text: "피드백을 보내지 못했습니다. 잠시 후 다시 시도해 주세요." });
     } finally {
+      submitLockedRef.current = false;
       setSubmitting(false);
     }
   }

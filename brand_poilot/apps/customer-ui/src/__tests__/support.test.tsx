@@ -68,8 +68,16 @@ async function renderSupportPage(
 describe("SupportPage", () => {
   it("keeps feature suggestions out of customer support", async () => {
     await renderSupportPage({}, ["/support?category=feature#support-request-form"]);
-    expect(screen.getByLabelText(/문의 유형/)).not.toHaveDisplayValue("기능 건의");
-    expect(screen.queryByRole("option", { name: "기능 건의" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("option").map((option) => ({
+      value: (option as HTMLOptionElement).value,
+      label: option.textContent
+    }))).toEqual([
+      { value: "", label: "문의 유형 선택" },
+      { value: "bug", label: "오류" },
+      { value: "channel", label: "채널 연결" },
+      { value: "account", label: "계정/로그인" },
+      { value: "other", label: "기타" }
+    ]);
     expect(await screen.findByRole("button", { name: /문의 내역 확인/ })).toBeVisible();
     expect(screen.queryByRole("button", { name: "새로고침" })).not.toBeInTheDocument();
   });

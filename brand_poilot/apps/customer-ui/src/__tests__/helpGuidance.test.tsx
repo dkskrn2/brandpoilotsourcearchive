@@ -60,6 +60,18 @@ describe("통합형 도움말", () => {
     expect(screen.getByText("1 / 4")).toBeVisible();
   });
 
+  it("화면 안내를 중단한 뒤 사용자가 다시 시작할 수 있다", () => {
+    render(<MemoryRouter initialEntries={["/channels"]}><HelpProvider><HelpHarness /></HelpProvider></MemoryRouter>);
+
+    fireEvent.click(screen.getByRole("button", { name: /화면 안내/ }));
+    fireEvent.click(screen.getByRole("button", { name: "화면 안내 닫기" }));
+    expect(screen.queryByRole("dialog", { name: "현재 화면 화면 안내" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /화면 안내/ }));
+    expect(screen.getByRole("dialog", { name: "현재 화면 화면 안내" })).toBeVisible();
+    expect(screen.getByText("1 / 4")).toBeVisible();
+  });
+
   it("모든 화면 가이드가 데이터, 사용자 작업, 후속 결과를 설명한다", () => {
     for (const guide of helpGuides) {
       const items = guide.sections.flatMap((section) => section.items);
