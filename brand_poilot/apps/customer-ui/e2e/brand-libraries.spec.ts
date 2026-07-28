@@ -97,6 +97,7 @@ async function installRealApi(page: Page) {
 }
 
 test.beforeAll(async () => {
+  test.setTimeout(120_000);
   database = await PGlite.create({ extensions: { pgcrypto } });
   const migrations = resolve(process.cwd(), "../../db/migrations");
   for (const file of (await readdir(migrations)).filter((name) => name.endsWith(".sql")).sort()) {
@@ -235,7 +236,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await api?.close();
   await database?.close();
-}, 120_000);
+});
 
 test.beforeEach(async ({ page, context }) => {
   await context.addCookies([{
