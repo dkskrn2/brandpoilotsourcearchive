@@ -83,6 +83,20 @@ const validMarketing = {
 };
 
 describe("parseAiContentManifest", () => {
+  it("preserves optional content family, strategy, and output format metadata", () => {
+    const parsed = parseAiContentManifest("card_news", {
+      ...cardManifest(1),
+      family: "informational",
+      strategy: "how_to",
+      outputFormat: "card_news",
+    });
+    expect(parsed).toMatchObject({
+      family: "informational",
+      strategy: "how_to",
+      outputFormat: "card_news",
+    });
+  });
+
   it("accepts card news with one or five slides", () => {
     expect(parseAiContentManifest("card_news", cardManifest(1)).assets).toHaveLength(1);
     expect(parseAiContentManifest("card_news", cardManifest(5)).assets).toHaveLength(5);

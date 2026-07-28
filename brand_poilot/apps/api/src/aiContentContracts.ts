@@ -1,3 +1,5 @@
+import { parseContentOrchestrationV1 } from "./contentOrchestration.js";
+
 export type AiContentType = "card_news" | "blog" | "marketing";
 export type ContentFamily = "informational" | "marketing";
 export type OutputFormat = "card_news" | "blog" | "single_image" | "channel_text";
@@ -126,6 +128,9 @@ interface AiContentManifestBase<TType extends AiContentType, TContent> {
   title: string;
   assets: AiContentAsset[];
   content: TContent;
+  family?: ContentFamily;
+  strategy?: MessageStrategy;
+  outputFormat?: OutputFormat;
 }
 
 export type CardNewsManifest = AiContentManifestBase<"card_news", CardNewsContent>;
@@ -137,12 +142,14 @@ export interface CreateAiContentAnalysisInput {
   type: AiContentType;
   title: string;
   draft: Record<string, unknown>;
+  orchestration?: ContentOrchestrationV1;
   idempotencyKey: string;
 }
 
 export interface UpdateAiContentDraftInput {
   draft: Record<string, unknown>;
   referenceIds: string[];
+  orchestration?: ContentOrchestrationV1;
 }
 
 export interface StartAiContentGenerationInput {
@@ -268,12 +275,31 @@ export function parseCreateAiContentAnalysisInput(value: unknown): CreateAiConte
   if (!(new Set(["card_news", "blog", "marketing"])).has(String(source.type))) {
     fail("ai_content_type_invalid");
   }
+  const orchestration = source.orchestration === undefined
+    ? undefined
+    : parseContentOrchestrationInput(source.orchestration);
+  if (orchestration && mapOrchestrationOutputToLegacyType(orchestration.outputFormat) !== source.type) {
+    fail("ai_content_type_mapping_mismatch");
+  }
   return {
     type: source.type as AiContentType,
     title: requiredString(source.title, "ai_content_title_invalid", 200),
     draft: inputObject(source.draft, "ai_content_draft_invalid"),
+    ...(orchestration ? { orchestration } : {}),
     idempotencyKey: requiredString(source.idempotencyKey, "ai_content_idempotency_key_invalid", 200),
   };
+}
+
+function mapOrchestrationOutputToLegacyType(outputFormat: OutputFormat): AiContentType {
+  if (outputFormat === "card_news") return "card_news";
+  if (outputFormat === "blog") return "blog";
+  return "marketing";
+}
+
+function parseContentOrchestrationInput(value: unknown): ContentOrchestrationV1 {
+  // Kept as a late import boundary in the public parser contract: the canonical
+  // parser remains the single source of validation truth in contentOrchestration.
+  return parseContentOrchestrationV1(value);
 }
 
 export function parseUpdateAiContentDraftInput(value: unknown): UpdateAiContentDraftInput {
@@ -284,6 +310,9 @@ export function parseUpdateAiContentDraftInput(value: unknown): UpdateAiContentD
   return {
     draft: inputObject(source.draft, "ai_content_draft_invalid"),
     referenceIds: source.referenceIds.map((id) => String(id).trim()),
+    ...(source.orchestration === undefined
+      ? {}
+      : { orchestration: parseContentOrchestrationInput(source.orchestration) }),
   };
 }
 

@@ -334,12 +334,29 @@ test("데이터베이스 마이그레이션 registry는 AI attachment lifecycle 
     "063_avatar_upload_finalization.sql",
     "064_reference_upload_finalization.sql",
     "065_ai_content_attachment_upload_sessions.sql",
+    "066_ai_content_analyzed_subject_orchestration.sql",
   ]);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("059_")).length <= 1);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("060_")).length <= 1);
   if (reservedProgramMigrations.some((file) => file.startsWith("060_"))) {
     assert.ok(reservedProgramMigrations.includes("060_content_orchestration.sql"));
   }
+});
+
+test("066 extends orchestration with immutable analyzed-subject snapshots", async () => {
+  const migration = await readFile(
+    "db/migrations/066_ai_content_analyzed_subject_orchestration.sql",
+    "utf8",
+  );
+  assert.match(migration, /create\s+table\s+if\s+not\s+exists\s+ai_content_analyzed_subject_snapshots/i);
+  assert.match(migration, /analyzed_subject_snapshot_immutable/i);
+  assert.match(migration, /kind'\s*=\s*'analyzed_subject'/i);
+  assert.match(migration, /analysis\.status\s+in\s*\('ready','partial'\)/i);
+  assert.match(migration, /analysis\.workspace_id=sealed\.workspace_id/i);
+  assert.match(migration, /analysis\.brand_id=sealed\.brand_id/i);
+  assert.match(migration, /add\s+column\s+if\s+not\s+exists\s+created_by_user_id\s+uuid/i);
+  assert.match(migration, /foreign\s+key\s*\(workspace_id,created_by_user_id\)/i);
+  assert.match(migration, /foreign\s+key\s*\(workspace_id,updated_by_user_id\)/i);
 });
 
 test("065 defines the parent-independent AI attachment lifecycle contract", async () => {

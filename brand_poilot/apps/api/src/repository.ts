@@ -1257,6 +1257,9 @@ async function enqueueAutomatedCardNewsOutput(client: Pick<PoolClient, "query">,
     topic: input.topic,
     representativeUrl: input.representativeUrl,
     sourceMaterials: automatedCardNewsSourceMaterials(input.sourceMaterials),
+  }, {
+    automatedContentEnabled: process.env.AUTOMATED_CONTENT_ENABLED === "true",
+    mode: "proposal",
   });
 }
 

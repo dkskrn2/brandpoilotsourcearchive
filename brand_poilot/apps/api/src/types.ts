@@ -8,6 +8,9 @@ import type {
   AiContentJobRecord,
   AiContentAttachmentRecord,
   AiContentReferenceRecord,
+  AiContentProposalBatchRecord,
+  AiContentProposalRecord,
+  AiContentDraftReferenceRecord,
   AiContentUsageRecord,
   AiContentBrandContextRecord,
   AppealRecord,
@@ -39,6 +42,7 @@ import type {
   CreateSubjectAnalysisInput,
   CreateSubjectPipelineInput,
 } from "./aiContentSubjectContracts.js";
+import type { ContentProposalJobsRepository } from "./contentProposalJobs.js";
 
 export type {
   InstagramDeliveryFormat,
@@ -1013,7 +1017,8 @@ export interface ApiRepository
     Partial<WikiManagementRepository>,
     Partial<import("./assetLibraryRepository.js").AssetLibraryRepository>,
     Partial<import("./aiContentAttachmentRepository.js").AiContentAttachmentLifecycleRepository>,
-    Partial<import("./aiContentAttachmentGcRepository.js").AiContentAttachmentGcRepository> {
+    Partial<import("./aiContentAttachmentGcRepository.js").AiContentAttachmentGcRepository>,
+    Partial<ContentProposalJobsRepository> {
   health(): Promise<{ database: "ok" }>;
   getAiContentBrandContext(input: BrandScope): Promise<AiContentBrandContextRecord>;
   getConfirmedSubjectAnalysisBrandContext?(input: BrandScope): Promise<SubjectAnalysisBrandContext>;
@@ -1023,9 +1028,9 @@ export interface ApiRepository
     workerId: string;
     leaseToken: string;
   }): Promise<SubjectAnalysisWorkerLease | null>;
-  createAiContentAnalysis(input: BrandScope & CreateAiContentAnalysisInput): Promise<AiContentGenerationRecord>;
-  updateAiContentDraft(input: BrandGenerationScope & UpdateAiContentDraftInput): Promise<AiContentGenerationRecord>;
-  startAiContentGeneration(input: BrandGenerationScope & StartAiContentGenerationInput & { usageDate: string; dailyGenerationLimit: number }): Promise<AiContentGenerationRecord>;
+  createAiContentAnalysis(input: BrandScope & { actorUserId?: string } & CreateAiContentAnalysisInput): Promise<AiContentGenerationRecord>;
+  updateAiContentDraft(input: BrandGenerationScope & { actorUserId?: string } & UpdateAiContentDraftInput): Promise<AiContentGenerationRecord>;
+  startAiContentGeneration(input: BrandGenerationScope & { actorUserId?: string } & StartAiContentGenerationInput & { usageDate: string; dailyGenerationLimit: number }): Promise<AiContentGenerationRecord>;
   listAiContentGenerations(input: BrandScope): Promise<AiContentGenerationRecord[]>;
   getAiContentGeneration(input: BrandGenerationScope): Promise<AiContentGenerationRecord | null>;
   listAiContentUsage(input: BrandScope & { usageDate: string }): Promise<AiContentUsageRecord>;
@@ -1041,6 +1046,29 @@ export interface ApiRepository
   completeAiContentJob(input: CompleteAiContentJobInput): Promise<AiContentGenerationRecord>;
   failAiContentJob(input: FailAiContentJobInput): Promise<AiContentGenerationRecord>;
   retryAiContentOutput(input: BrandScope & { outputId: string }): Promise<AiContentGenerationRecord>;
+  createAiContentProposalBatch?(input: BrandScope & {
+    actorUserId: string;
+    origin: "manual" | "scheduled_crawl";
+    idempotencyKey: string;
+    request: import("./aiContentContracts.js").ContentProposalRequestV1;
+  }): Promise<AiContentProposalBatchRecord>;
+  getAiContentProposalBatch?(input: BrandScope & { batchId: string }): Promise<AiContentProposalBatchRecord | null>;
+  listAiContentProposals?(input: BrandScope & {
+    status: "suggested" | "selected" | "dismissed";
+  }): Promise<AiContentProposalRecord[]>;
+  selectAiContentProposal?(input: BrandScope & {
+    actorUserId: string;
+    proposalId: string;
+    idempotencyKey: string;
+  }): Promise<AiContentGenerationRecord>;
+  dismissAiContentProposal?(input: BrandScope & {
+    actorUserId: string;
+    proposalId: string;
+  }): Promise<AiContentProposalRecord>;
+  listAiContentDraftReferences?(input: BrandScope & {
+    assetType: "reference" | "avatar" | "product_service" | "wiki";
+    assetId: string;
+  }): Promise<AiContentDraftReferenceRecord[]>;
   downloadAiContentOutput(input: BrandScope & { outputId: string; usageDate: string; dailyDownloadLimit: number }): Promise<DownloadPackageDto>;
   downloadAiContentGeneration(input: BrandGenerationScope & { outputIds?: string[]; usageDate: string; dailyDownloadLimit: number }): Promise<DownloadPackageDto>;
   sendAiContentToPublish(input: BrandScope & { outputId: string }): Promise<{ publishGroupId: string; channelOutputId: string }>;

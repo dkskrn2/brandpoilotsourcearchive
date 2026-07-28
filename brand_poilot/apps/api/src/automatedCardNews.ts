@@ -150,7 +150,51 @@ export function buildAutomatedCardNewsInput(input: AutomatedCardNewsInput): Cont
 export async function enqueueAutomatedCardNews(
   client: Queryable,
   input: EnqueueAutomatedCardNewsInput,
+  options: {
+    automatedContentEnabled?: boolean;
+    mode?: "proposal";
+  } = {},
 ) {
+  if (options.automatedContentEnabled && (options.mode ?? "proposal") === "proposal") {
+    const request = {
+      contractVersion: "content-proposal-request.v1",
+      contentFamily: "informational",
+      subjectInput: {
+        contentTopicId: input.contentTopicId,
+        title: input.topic.title,
+        angle: input.topic.angle,
+        representativeUrl: input.representativeUrl,
+      },
+      channelTargets: ["instagram"],
+      outputFormats: ["card_news"],
+      sourceSnapshotIds: [],
+      performanceSnapshotIds: [],
+    };
+    const batch = await client.query(
+      `insert into ai_content_proposal_batches (
+         workspace_id,brand_id,origin,content_family,request_json,
+         source_snapshot_json,status,idempotency_key,created_by_user_id
+       ) values ($1,$2,'scheduled_crawl','informational',$3::jsonb,'[]'::jsonb,
+                 'queued',$4,null)
+       on conflict (workspace_id,brand_id,idempotency_key)
+       do update set updated_at=ai_content_proposal_batches.updated_at
+       returning id`,
+      [
+        input.workspaceId,
+        input.brandId,
+        JSON.stringify(request),
+        `scheduled-proposal:${input.channelOutputId}`,
+      ],
+    );
+    const batchId = String(batch.rows[0]?.id);
+    await client.query(
+      `insert into ai_content_proposal_jobs (workspace_id,brand_id,batch_id,status)
+       values ($1,$2,$3,'queued')
+       on conflict do nothing`,
+      [input.workspaceId, input.brandId, batchId],
+    );
+    return { batchId, mode: "proposal" as const };
+  }
   const generationId = randomUUID();
   const outputId = randomUUID();
   const jobId = randomUUID();

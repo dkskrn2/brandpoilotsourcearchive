@@ -21,6 +21,10 @@ import {
   type AiContentAttachmentGcRunResult,
 } from "./aiContentAttachmentGc.js";
 import type { AiContentAttachmentGcRepository } from "./aiContentAttachmentGcRepository.js";
+import {
+  parseContentProposalResult,
+  type ContentProposalJobsRepository,
+} from "./contentProposalJobs.js";
 import { createKakaoAuthStore, type KakaoProfile } from "./kakaoAuth.js";
 import { brandLogoRequestBodyLimit, type BrandLogoService } from "./brandLogo.js";
 import { channelNames } from "./channelCatalog.js";
@@ -36,6 +40,7 @@ import {
   parseUpdateAiContentDraftInput,
   type AiContentType,
   type CompleteAiContentJobInput,
+  type ContentProposalRequestV1,
   type FailAiContentJobInput,
 } from "./aiContentContracts.js";
 import { parseAiContentManifest } from "./aiContentManifest.js";
@@ -139,6 +144,7 @@ function instagramLoginCallbackUrl(
 interface CreateServerOptions {
   repository: ApiRepository;
   workerApiToken?: string;
+  contentProposalWorkerApiToken?: string;
   cronSecret?: string;
   kakaoAuth?: ReturnType<typeof createKakaoAuthStore>;
   kakao?: { restApiKey: string; clientSecret?: string; redirectUri: string; frontendUrl: string };
@@ -283,6 +289,12 @@ function aiContentActorUserId(request: FastifyRequest): string | null {
   return session?.userId ?? process.env.BRAND_PILOT_DEV_USER_ID ?? null;
 }
 
+function requiredAiContentActorUserId(request: FastifyRequest): string {
+  const actorUserId = aiContentActorUserId(request);
+  if (!actorUserId) throw new Error("authentication_required");
+  return actorUserId;
+}
+
 function positiveLimit(value: number | undefined, fallback: number) {
   return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : fallback;
 }
@@ -297,6 +309,38 @@ function parseAiContentBrandId(value: string) {
     throw new Error("ai_content_brand_id_invalid");
   }
   return value.toLowerCase();
+}
+
+function parseAiContentUuid(value: unknown, code: string): string {
+  if (typeof value !== "string" || !uuidPattern.test(value)) throw new Error(code);
+  return value.toLowerCase();
+}
+
+function parseContentProposalRequest(value: unknown): ContentProposalRequestV1 {
+  if (!isObject(value)) throw new Error("ai_content_proposal_request_invalid");
+  if (value.contractVersion !== "content-proposal-request.v1"
+    || !["informational", "marketing"].includes(String(value.contentFamily))
+    || !isObject(value.subjectInput)
+    || !Array.isArray(value.channelTargets)
+    || value.channelTargets.some((item) => typeof item !== "string" || !item.trim())
+    || !Array.isArray(value.outputFormats)
+    || value.outputFormats.length === 0
+    || value.outputFormats.some((item) => !["card_news", "blog", "single_image", "channel_text"].includes(String(item)))
+    || !Array.isArray(value.sourceSnapshotIds)
+    || value.sourceSnapshotIds.some((id) => typeof id !== "string" || !uuidPattern.test(id))
+    || !Array.isArray(value.performanceSnapshotIds)
+    || value.performanceSnapshotIds.some((id) => typeof id !== "string" || !uuidPattern.test(id))) {
+    throw new Error("ai_content_proposal_request_invalid");
+  }
+  return {
+    contractVersion: "content-proposal-request.v1",
+    contentFamily: value.contentFamily as ContentProposalRequestV1["contentFamily"],
+    subjectInput: value.subjectInput,
+    channelTargets: value.channelTargets.map(String),
+    outputFormats: value.outputFormats as ContentProposalRequestV1["outputFormats"],
+    sourceSnapshotIds: value.sourceSnapshotIds.map((id) => String(id).toLowerCase()),
+    performanceSnapshotIds: value.performanceSnapshotIds.map((id) => String(id).toLowerCase()),
+  };
 }
 
 async function validateAiContentLifecycleBrand(request: FastifyRequest) {
@@ -331,6 +375,44 @@ function asAiContentAttachmentGcRepository(
   return aiContentAttachmentGcRepositoryMethods.every((method) => typeof source[method] === "function")
     ? repository as ApiRepository & AiContentAttachmentGcRepository
     : null;
+}
+
+function requireContentProposalJobsRepository(repository: ApiRepository): ContentProposalJobsRepository {
+  const candidate = repository as ApiRepository & Partial<ContentProposalJobsRepository>;
+  if (!candidate.claimContentProposalJob
+    || !candidate.heartbeatContentProposalJob
+    || !candidate.completeContentProposalJob
+    || !candidate.failContentProposalJob) {
+    throw new Error("content_proposal_repository_not_configured");
+  }
+  return candidate as ContentProposalJobsRepository;
+}
+
+type ContentProposalCustomerRepository = Required<Pick<ApiRepository,
+  "createAiContentProposalBatch"
+  | "getAiContentProposalBatch"
+  | "listAiContentProposals"
+  | "selectAiContentProposal"
+  | "dismissAiContentProposal"
+  | "listAiContentDraftReferences"
+>>;
+
+function requireContentProposalCustomerRepository(
+  repository: ApiRepository,
+): ContentProposalCustomerRepository {
+  const candidate = repository as ApiRepository & Partial<ContentProposalCustomerRepository>;
+  const methods = [
+    "createAiContentProposalBatch",
+    "getAiContentProposalBatch",
+    "listAiContentProposals",
+    "selectAiContentProposal",
+    "dismissAiContentProposal",
+    "listAiContentDraftReferences",
+  ] as const;
+  if (methods.some((method) => typeof candidate[method] !== "function")) {
+    throw new Error("content_proposal_repository_not_configured");
+  }
+  return candidate as ContentProposalCustomerRepository;
 }
 
 function safeAiContentAttachmentGcResult(
@@ -665,7 +747,7 @@ export function createFastifyOptions(logger?: boolean | FastifyLoggerOptions) {
 }
 
 export function createServer(
-  { repository, workerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, aiContentAttachmentGc, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, brandIntelligence, runtimePolicy, logger }: CreateServerOptions,
+  { repository, workerApiToken, contentProposalWorkerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, aiContentAttachmentGc, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, brandIntelligence, runtimePolicy, logger }: CreateServerOptions,
   app: FastifyInstance = Fastify(createFastifyOptions(logger))
 ) {
   const aiContentAttachmentRepository = aiContentUpload
@@ -892,6 +974,12 @@ export function createServer(
       if (message === "ai_content_limit_reached") {
         reply.code(429).send({ error: message });
       } else if (
+        message === "ai_content_proposal_not_found"
+        || message === "ai_content_proposal_batch_not_found"
+        || message === "ai_content_generation_not_found"
+      ) {
+        reply.code(404).send({ error: message });
+      } else if (
         message === "ai_content_attachment_storage_not_configured"
         || message === "ai_content_attachment_storage_unavailable"
         || message === "ai_content_attachment_verification_timeout"
@@ -916,12 +1004,25 @@ export function createServer(
         || message === "ai_content_attachment_limit_exceeded"
         || message === "ai_content_attachments_locked"
         || message === "ai_content_attachment_upload_in_progress"
+        || message === "ai_content_proposal_batch_not_ready"
+        || message === "ai_content_proposal_already_selected"
+        || message === "ai_content_proposal_not_selectable"
+        || message === "ai_content_proposal_not_dismissible"
         || message.endsWith("_conflict")
       ) {
         reply.code(409).send({ error: message });
       } else {
         reply.code(400).send({ error: message });
       }
+      return;
+    }
+    if (message.startsWith("content_proposal_")) {
+      const status = message === "content_proposal_job_not_found"
+        ? 404
+        : message === "content_proposal_job_lease_invalid"
+          ? 409
+          : 400;
+      reply.code(status).send({ error: message });
       return;
     }
     if (message === "channel_oauth_not_connected" || message === "delivery_format_asset_mismatch") {
@@ -2307,9 +2408,112 @@ export function createServer(
     ),
   );
 
+  app.post<{ Params: { brandId: string }; Body: Record<string, unknown> }>(
+    "/brands/:brandId/ai-content/proposal-batches",
+    async (request, reply) => {
+      const batch = await requireContentProposalCustomerRepository(repository).createAiContentProposalBatch({
+        ...aiContentScope(request, request.params.brandId),
+        actorUserId: requiredAiContentActorUserId(request),
+        origin: "manual",
+        idempotencyKey: requiredAiContentField(
+          request.body?.idempotencyKey,
+          "ai_content_idempotency_key_invalid",
+          200,
+        ),
+        request: parseContentProposalRequest(request.body?.request),
+      });
+      reply.code(202);
+      return { batchId: batch.id, status: batch.status };
+    },
+  );
+
+  app.get<{ Params: { brandId: string; batchId: string } }>(
+    "/brands/:brandId/ai-content/proposal-batches/:batchId",
+    async (request) => {
+      const batch = await requireContentProposalCustomerRepository(repository).getAiContentProposalBatch({
+        ...aiContentScope(request, request.params.brandId),
+        batchId: parseAiContentUuid(request.params.batchId, "ai_content_proposal_batch_id_invalid"),
+      });
+      if (!batch) throw new Error("ai_content_proposal_batch_not_found");
+      return batch;
+    },
+  );
+
+  app.get<{ Params: { brandId: string }; Querystring: { status?: string } }>(
+    "/brands/:brandId/ai-content/proposals",
+    async (request) => {
+      const status = request.query.status ?? "suggested";
+      if (!["suggested", "selected", "dismissed"].includes(status)) {
+        throw new Error("ai_content_proposal_status_invalid");
+      }
+      return requireContentProposalCustomerRepository(repository).listAiContentProposals({
+        ...aiContentScope(request, request.params.brandId),
+        status: status as "suggested" | "selected" | "dismissed",
+      });
+    },
+  );
+
+  app.post<{ Params: { brandId: string; proposalId: string }; Body: Record<string, unknown> }>(
+    "/brands/:brandId/ai-content/proposals/:proposalId/select",
+    async (request) => {
+      try {
+        return await requireContentProposalCustomerRepository(repository).selectAiContentProposal({
+          ...aiContentScope(request, request.params.brandId),
+          actorUserId: requiredAiContentActorUserId(request),
+          proposalId: parseAiContentUuid(request.params.proposalId, "ai_content_proposal_id_invalid"),
+          idempotencyKey: requiredAiContentField(
+            request.body?.idempotencyKey,
+            "ai_content_idempotency_key_invalid",
+            200,
+          ),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        const mapped: Record<string, string> = {
+          proposal_not_found: "ai_content_proposal_not_found",
+          proposal_batch_not_ready: "ai_content_proposal_batch_not_ready",
+          proposal_already_selected: "ai_content_proposal_already_selected",
+          proposal_not_selectable: "ai_content_proposal_not_selectable",
+        };
+        if (mapped[message]) throw new Error(mapped[message]);
+        throw error;
+      }
+    },
+  );
+
+  app.post<{ Params: { brandId: string; proposalId: string } }>(
+    "/brands/:brandId/ai-content/proposals/:proposalId/dismiss",
+    async (request) => requireContentProposalCustomerRepository(repository).dismissAiContentProposal({
+      ...aiContentScope(request, request.params.brandId),
+      actorUserId: requiredAiContentActorUserId(request),
+      proposalId: parseAiContentUuid(request.params.proposalId, "ai_content_proposal_id_invalid"),
+    }),
+  );
+
+  app.get<{
+    Params: { brandId: string };
+    Querystring: { assetType?: string; assetId?: string };
+  }>(
+    "/brands/:brandId/ai-content/draft-references",
+    async (request) => {
+      if (!["reference", "avatar", "product_service", "wiki"].includes(String(request.query.assetType))) {
+        throw new Error("ai_content_asset_type_invalid");
+      }
+      return requireContentProposalCustomerRepository(repository).listAiContentDraftReferences({
+        ...aiContentScope(request, request.params.brandId),
+        assetType: request.query.assetType as "reference" | "avatar" | "product_service" | "wiki",
+        assetId: parseAiContentUuid(request.query.assetId, "ai_content_asset_id_invalid"),
+      });
+    },
+  );
+
   app.post<{ Params: { brandId: string }; Body: unknown }>("/brands/:brandId/ai-content/generations", async (request) => {
     const scope = aiContentScope(request, request.params.brandId);
-    return repository.createAiContentAnalysis({ ...scope, ...parseCreateAiContentAnalysisInput(request.body) });
+    return repository.createAiContentAnalysis({
+      ...scope,
+      actorUserId: requiredAiContentActorUserId(request),
+      ...parseCreateAiContentAnalysisInput(request.body),
+    });
   });
 
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/ai-content/brand-context", async (request) => {
@@ -2323,6 +2527,7 @@ export function createServer(
       return repository.updateAiContentDraft({
         ...scope,
         generationId: request.params.generationId,
+        actorUserId: requiredAiContentActorUserId(request),
         ...parseUpdateAiContentDraftInput(request.body),
       });
     },
@@ -2342,6 +2547,7 @@ export function createServer(
       return repository.startAiContentGeneration({
         ...scope,
         generationId: request.params.generationId,
+        actorUserId: requiredAiContentActorUserId(request),
         usageDate,
         dailyGenerationLimit: limits.dailyGenerationLimit,
         ...parseStartAiContentGenerationInput(request.body),
@@ -2891,6 +3097,19 @@ export function createServer(
     }
   }
 
+  function authenticateContentProposalWorker(authorization: string | undefined, reply: FastifyReply) {
+    const token = contentProposalWorkerApiToken ?? workerApiToken;
+    if (!token) {
+      reply.code(503).send({ error: "worker_api_not_configured" });
+      return false;
+    }
+    if (authorization !== `Bearer ${token}`) {
+      reply.code(401).send({ error: "worker_api_unauthorized" });
+      return false;
+    }
+    return true;
+  }
+
   app.post<{ Body: unknown }>("/worker/brand-analyses/claim", async (request, reply) => {
     if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
     if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
@@ -3071,6 +3290,110 @@ export function createServer(
         leaseToken: lease.leaseToken,
         errorCode: requiredAiContentField(request.body.errorCode, "subject_analysis_error_code_invalid", 120),
         errorMessage: requiredAiContentField(request.body.errorMessage, "subject_analysis_error_message_invalid", 2_000),
+        retryable: request.body.retryable,
+      });
+    },
+  );
+
+  app.post<{ Body: Record<string, unknown> }>(
+    "/worker/content-proposal-jobs/claim",
+    async (request, reply) => {
+      if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      const workerId = requiredAiContentField(
+        request.body?.workerId,
+        "content_proposal_worker_id_required",
+        200,
+      );
+      const leaseSeconds = Number(request.body?.leaseSeconds ?? 180);
+      if (!Number.isSafeInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 900) {
+        throw new Error("content_proposal_lease_seconds_invalid");
+      }
+      return {
+        job: await requireContentProposalJobsRepository(repository)
+          .claimContentProposalJob({ workerId, leaseSeconds }),
+      };
+    },
+  );
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>(
+    "/worker/content-proposal-jobs/:jobId/heartbeat",
+    async (request, reply) => {
+      if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      const leaseSeconds = Number(request.body?.leaseSeconds ?? 180);
+      if (!Number.isSafeInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 900) {
+        throw new Error("content_proposal_lease_seconds_invalid");
+      }
+      const alive = await requireContentProposalJobsRepository(repository).heartbeatContentProposalJob({
+        jobId: request.params.jobId,
+        workerId: requiredAiContentField(
+          request.body?.workerId,
+          "content_proposal_worker_id_required",
+          200,
+        ),
+        leaseToken: requiredAiContentField(
+          request.body?.leaseToken,
+          "content_proposal_lease_token_required",
+          200,
+        ),
+        leaseSeconds,
+      });
+      if (!alive) throw new Error("content_proposal_job_lease_invalid");
+      return { id: request.params.jobId, status: "processing" };
+    },
+  );
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>(
+    "/worker/content-proposal-jobs/:jobId/complete",
+    async (request, reply) => {
+      if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      if (!Array.isArray(request.body?.proposals)) throw new Error("content_proposal_result_invalid");
+      const proposals = parseContentProposalResult(request.body.proposals);
+      return requireContentProposalJobsRepository(repository).completeContentProposalJob({
+        jobId: request.params.jobId,
+        workerId: requiredAiContentField(
+          request.body?.workerId,
+          "content_proposal_worker_id_required",
+          200,
+        ),
+        leaseToken: requiredAiContentField(
+          request.body?.leaseToken,
+          "content_proposal_lease_token_required",
+          200,
+        ),
+        proposals,
+      });
+    },
+  );
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>(
+    "/worker/content-proposal-jobs/:jobId/fail",
+    async (request, reply) => {
+      if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      if (typeof request.body?.retryable !== "boolean") {
+        throw new Error("content_proposal_retryable_invalid");
+      }
+      return requireContentProposalJobsRepository(repository).failContentProposalJob({
+        jobId: request.params.jobId,
+        workerId: requiredAiContentField(
+          request.body?.workerId,
+          "content_proposal_worker_id_required",
+          200,
+        ),
+        leaseToken: requiredAiContentField(
+          request.body?.leaseToken,
+          "content_proposal_lease_token_required",
+          200,
+        ),
+        errorCode: requiredAiContentField(
+          request.body?.errorCode,
+          "content_proposal_error_code_invalid",
+          120,
+        ),
+        errorMessage: requiredAiContentField(
+          request.body?.errorMessage,
+          "content_proposal_error_message_invalid",
+          2_000,
+        ),
         retryable: request.body.retryable,
       });
     },

@@ -67,6 +67,12 @@ const ids = {
   equalityGeneration: "18000000-0000-4000-8000-000000000018",
   receiptGeneration: "19000000-0000-4000-8000-000000000019",
   otherBrandGeneration: "1a000000-0000-4000-8000-00000000001a",
+  analyzedSubject: "1b000000-0000-4000-8000-00000000001b",
+  analyzedSnapshot: "1c000000-0000-4000-8000-00000000001c",
+  analyzedBatch: "1d000000-0000-4000-8000-00000000001d",
+  analyzedProposal: "1e000000-0000-4000-8000-00000000001e",
+  analyzedApproved: "1f000000-0000-4000-8000-00000000001f",
+  analyzedGeneration: "2a000000-0000-4000-8000-00000000002a",
 };
 
 const productProfileHash = "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a";
@@ -393,6 +399,121 @@ afterAll(async () => {
 });
 
 describe("content orchestration PostgreSQL contract", () => {
+  it("starts with a frozen ready analyzed-subject snapshot without masquerading as a product or topic", async () => {
+    await database!.exec("begin");
+    try {
+      await database!.query(
+        `insert into ai_content_subject_analyses (
+           id,workspace_id,brand_id,subject_type,source_url,normalized_url,input_json,
+           status,facts_json,structured_data_json,research_json,analysis_result_json,
+           contract_version,analysis_version,idempotency_key,completed_at
+         ) values (
+           $1,$2,$3,'service','https://example.com/service','https://example.com/service',
+           '{"name":"Analyzed service"}','ready','[{"key":"name","value":"Analyzed service"}]',
+           '{}','{"sources":[]}','{"summary":"Ready analysis"}','subject-analysis.v1',2,
+           'analyzed-subject-066','2026-07-28T00:00:00Z'
+         )`,
+        [ids.analyzedSubject, ids.workspace, ids.brand],
+      );
+      const snapshot = {
+        contractVersion: "analyzed-subject-snapshot.v1",
+        snapshotId: ids.analyzedSnapshot,
+        analysisId: ids.analyzedSubject,
+        analysisVersion: 2,
+        analysisContractVersion: "subject-analysis.v1",
+        subjectType: "service",
+        source: {
+          sourceUrl: "https://example.com/service",
+          normalizedUrl: "https://example.com/service",
+          input: { name: "Analyzed service" },
+        },
+        facts: [{ key: "name", value: "Analyzed service" }],
+        research: { sources: [] },
+        analysisResult: { summary: "Ready analysis" },
+        selectedImages: [],
+        capturedAt: "2026-07-28T00:00:00.000Z",
+      };
+      await database!.query(
+        `insert into ai_content_analyzed_subject_snapshots (
+           id,workspace_id,brand_id,analysis_id,snapshot_json
+         ) values ($1,$2,$3,$4,$5::jsonb)`,
+        [ids.analyzedSnapshot, ids.workspace, ids.brand, ids.analyzedSubject, JSON.stringify(snapshot)],
+      );
+      await database!.query(
+        `insert into ai_content_proposal_batches (
+           id,workspace_id,brand_id,origin,content_family,request_json,
+           source_snapshot_json,status,idempotency_key,created_by_user_id
+         ) values ($1,$2,$3,'manual','informational','{}','[]','ready','analyzed-066',$4)`,
+        [ids.analyzedBatch, ids.workspace, ids.brand, ids.actor],
+      );
+      await database!.query(
+        `insert into ai_content_proposals (
+           id,workspace_id,brand_id,batch_id,position,proposal_json,status,
+           selected_by_user_id,selected_at
+         ) values ($1,$2,$3,$4,1,'{}','selected',$5,'2026-07-28T00:00:00Z')`,
+        [ids.analyzedProposal, ids.workspace, ids.brand, ids.analyzedBatch, ids.actor],
+      );
+      await database!.query(
+        `insert into ai_content_generations (
+           id,workspace_id,brand_id,type,title,status,analysis_idempotency_key,
+           content_family,output_format,subject_mode
+         ) values ($1,$2,$3,'blog','Analyzed subject','draft','analyzed-generation-066',
+                   'informational','blog','new_subject')`,
+        [ids.analyzedGeneration, ids.workspace, ids.brand],
+      );
+      await database!.query(
+        "update ai_content_proposals set generation_id=$2 where id=$1",
+        [ids.analyzedProposal, ids.analyzedGeneration],
+      );
+      const approval = approvedSnapshot(ids.analyzedProposal);
+      await database!.query(
+        `insert into ai_content_approved_proposal_versions (
+           id,workspace_id,brand_id,proposal_id,revision,approved_proposal_snapshot,
+           validation_result_id,approved_by_user_id,approved_at
+         ) values ($1,$2,$3,$4,1,$5::jsonb,$6,$7,'2026-07-28T00:00:00Z')`,
+        [
+          ids.analyzedApproved, ids.workspace, ids.brand, ids.analyzedProposal,
+          JSON.stringify(approval), approval.validationResultId, ids.actor,
+        ],
+      );
+      const brief = generationBrief({
+        proposalId: ids.analyzedProposal,
+        approvedProposalVersionId: ids.analyzedApproved,
+        approvedProposalSnapshot: approval,
+        subject: {
+          kind: "analyzed_subject",
+          analysisId: ids.analyzedSubject,
+          snapshotId: ids.analyzedSnapshot,
+          snapshot,
+        },
+        wikiSnapshots: [],
+        references: [],
+        avatar: null,
+        outputFormat: "blog",
+        channels: ["blog_export"],
+      });
+
+      await expect(database!.query(
+        "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+        [
+          ids.analyzedGeneration, ids.workspace, ids.brand, JSON.stringify(brief),
+          JSON.stringify(null), ids.actor,
+        ],
+      )).resolves.toBeDefined();
+      const stored = await database!.query<{ orchestration_snapshot: Record<string, any> }>(
+        "select orchestration_snapshot from ai_content_generations where id=$1",
+        [ids.analyzedGeneration],
+      );
+      expect(stored.rows[0]?.orchestration_snapshot.subject).toMatchObject({
+        kind: "analyzed_subject",
+        analysisId: ids.analyzedSubject,
+        snapshotId: ids.analyzedSnapshot,
+      });
+    } finally {
+      await database!.exec("rollback");
+    }
+  });
+
   it("requires an active nondeleted member for selection and idempotency replay", async () => {
     const db = database as PGlite;
     for (const actorId of [ids.inactiveActor, ids.deletedActor, ids.nonmemberActor]) {

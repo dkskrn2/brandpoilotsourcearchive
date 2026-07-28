@@ -108,4 +108,31 @@ describe("automated card news input", () => {
       "brand_topic",
     ]);
   });
+
+  it("creates only a scheduled proposal batch when automated proposal mode is enabled", async () => {
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const client = {
+      query: async (sql: string, params: unknown[] = []) => {
+        calls.push({ sql, params });
+        if (sql.includes("insert into ai_content_proposal_batches")) {
+          return { rows: [{ id: "batch-1" }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 1 };
+      },
+    };
+    await enqueueAutomatedCardNews(client, {
+      workspaceId: "20000000-0000-4000-8000-000000000002",
+      brandId: "30000000-0000-4000-8000-000000000003",
+      contentTopicId: "topic-1",
+      channelOutputId: "output-1",
+      brand: { name: "Growthline", brandColor: null },
+      topic: { title: "운영 체크리스트", angle: "반복 업무 줄이기" },
+      representativeUrl: "https://example.com/topic",
+      sourceMaterials: [],
+    }, { automatedContentEnabled: true });
+
+    expect(calls.some(({ sql }) => sql.includes("origin") && sql.includes("'scheduled_crawl'"))).toBe(true);
+    expect(calls.some(({ sql }) => sql.includes("insert into ai_content_proposal_jobs"))).toBe(true);
+    expect(calls.some(({ sql }) => sql.includes("insert into ai_content_generations"))).toBe(false);
+  });
 });

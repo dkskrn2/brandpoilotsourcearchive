@@ -5,6 +5,9 @@ import type {
   BlogContent,
   CardNewsContent,
   MarketingContent,
+  MessageStrategy,
+  OutputFormat,
+  ContentFamily,
 } from "./aiContentContracts.js";
 
 type UnknownObject = Record<string, unknown>;
@@ -118,6 +121,37 @@ function parseAssets(value: unknown): AiContentAsset[] {
   return assets;
 }
 
+function parseOptionalMetadata(source: UnknownObject): {
+  family?: ContentFamily;
+  strategy?: MessageStrategy;
+  outputFormat?: OutputFormat;
+} {
+  const metadata: {
+    family?: ContentFamily;
+    strategy?: MessageStrategy;
+    outputFormat?: OutputFormat;
+  } = {};
+  if (source.family !== undefined) {
+    if (!["informational", "marketing"].includes(String(source.family))) {
+      fail("ai_content_manifest_family_invalid");
+    }
+    metadata.family = source.family as ContentFamily;
+  }
+  if (source.strategy !== undefined) {
+    if (!["problem_solution", "how_to", "comparison", "faq", "insight", "benefit", "social_proof", "brand_story", "cta"].includes(String(source.strategy))) {
+      fail("ai_content_manifest_strategy_invalid");
+    }
+    metadata.strategy = source.strategy as MessageStrategy;
+  }
+  if (source.outputFormat !== undefined) {
+    if (!["card_news", "blog", "single_image", "channel_text"].includes(String(source.outputFormat))) {
+      fail("ai_content_manifest_output_format_invalid");
+    }
+    metadata.outputFormat = source.outputFormat as OutputFormat;
+  }
+  return metadata;
+}
+
 function parseCardNewsContent(value: unknown): CardNewsContent {
   const source = object(value, "ai_content_card_news_content_invalid");
   if (!Array.isArray(source.hashtags) || source.hashtags.length > 5) {
@@ -189,6 +223,7 @@ export function parseAiContentManifest(
 
   const title = text(source.title, "ai_content_manifest_title_invalid");
   const assets = parseAssets(source.assets);
+  const metadata = parseOptionalMetadata(source);
 
   if (type === "card_news") {
     if (assets.length < 1 || assets.length > 5) fail("ai_content_card_news_slide_count_invalid");
@@ -204,7 +239,7 @@ export function parseAiContentManifest(
         fail("ai_content_card_news_dimensions_invalid");
       }
     }
-    return { version: "ai-content.v1", type, title, assets, content: parseCardNewsContent(source.content) };
+    return { version: "ai-content.v1", type, title, assets, content: parseCardNewsContent(source.content), ...metadata };
   }
 
   if (type === "blog") {
@@ -231,7 +266,7 @@ export function parseAiContentManifest(
       if (!image) fail("ai_content_blog_inline_asset_not_referenced");
       if (image.alt.length < 4 || !/[가-힣]/.test(image.alt)) fail("ai_content_blog_inline_asset_alt_invalid");
     }
-    return { version: "ai-content.v1", type, title, assets, content };
+    return { version: "ai-content.v1", type, title, assets, content, ...metadata };
   }
 
   if (assets.length !== 1 || assets[0].role !== "creative" || assets[0].mimeType !== "image/png") {
@@ -243,5 +278,5 @@ export function parseAiContentManifest(
   if (requestedDimensions && (assets[0].width !== requestedDimensions.width || assets[0].height !== requestedDimensions.height)) {
     fail("ai_content_marketing_dimensions_mismatch");
   }
-  return { version: "ai-content.v1", type, title, assets, content: parseMarketingContent(source.content) };
+  return { version: "ai-content.v1", type, title, assets, content: parseMarketingContent(source.content), ...metadata };
 }

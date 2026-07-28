@@ -1,9 +1,10 @@
 import type { Pool, PoolClient } from "pg";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
   type AiContentManifest,
   type CompleteAiContentJobInput,
+  type ContentProposalRequestV1,
   LegacyConfirmAttachmentInput,
   type FailAiContentJobInput,
   AiContentType,
@@ -11,7 +12,12 @@ import {
   StartAiContentGenerationInput,
   UpdateAiContentDraftInput,
 } from "./aiContentContracts.js";
+import {
+  createContentProposalJobsRepository,
+  type ContentProposalJobsRepository,
+} from "./contentProposalJobs.js";
 import { parseAiContentManifest } from "./aiContentManifest.js";
+import { mapOrchestrationToWorkerType, parseContentOrchestrationV1 } from "./contentOrchestration.js";
 import { parseContentQualityBrief } from "./contentQualityBrief.js";
 import { buildContentGenerationInput, parseContentGenerationInputV2, type ContentGenerationInputV2 } from "./aiContentGenerationInput.js";
 import { createAiContentSubjectRepository } from "./aiContentSubjectRepository.js";
@@ -26,6 +32,10 @@ import {
 export interface BrandScope {
   workspaceId: string;
   brandId: string;
+}
+
+export interface AuthenticatedBrandScope extends BrandScope {
+  actorUserId?: string;
 }
 
 export interface BrandGenerationScope extends BrandScope {
@@ -142,6 +152,38 @@ export interface AiContentReferenceRecord {
   checkedAt: string | null;
 }
 
+export interface AiContentProposalBatchRecord {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  origin: "manual" | "scheduled_crawl";
+  contentFamily: "informational" | "marketing";
+  request: Record<string, unknown>;
+  sourceSnapshots: Record<string, unknown>[];
+  status: "queued" | "building" | "ready" | "failed";
+  proposals?: AiContentProposalRecord[];
+  errorCode: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AiContentProposalRecord {
+  id: string;
+  batchId: string;
+  proposal: Record<string, unknown>;
+  status: "suggested" | "selected" | "dismissed";
+  generationId: string | null;
+  createdAt: string;
+}
+
+export interface AiContentDraftReferenceRecord {
+  assetType: "reference" | "avatar" | "product_service" | "wiki";
+  assetId: string;
+  generationId: string;
+  title: string;
+}
+
 export interface AudienceRecord {
   id: string;
   name: string;
@@ -174,7 +216,7 @@ export interface SaveAppealInput extends BrandScope {
   evidenceType: AppealRecord["evidenceType"];
 }
 
-export interface AiContentRepository extends AiContentAttachmentLifecycleRepository {
+export interface AiContentRepository extends AiContentAttachmentLifecycleRepository, ContentProposalJobsRepository {
   getAiContentBrandContext(input: BrandScope): Promise<AiContentBrandContextRecord>;
   getConfirmedSubjectAnalysisBrandContext(input: BrandScope): Promise<SubjectAnalysisBrandContext>;
   listSubjectEvidenceAttachments(input: LoadSubjectEvidenceInput): Promise<SubjectEvidenceAttachment[]>;
@@ -183,9 +225,10 @@ export interface AiContentRepository extends AiContentAttachmentLifecycleReposit
     workerId: string;
     leaseToken: string;
   }): Promise<SubjectAnalysisWorkerLease | null>;
-  createAiContentAnalysis(input: BrandScope & CreateAiContentAnalysisInput): Promise<AiContentGenerationRecord>;
-  updateAiContentDraft(input: BrandGenerationScope & UpdateAiContentDraftInput): Promise<AiContentGenerationRecord>;
+  createAiContentAnalysis(input: AuthenticatedBrandScope & CreateAiContentAnalysisInput): Promise<AiContentGenerationRecord>;
+  updateAiContentDraft(input: BrandGenerationScope & { actorUserId?: string } & UpdateAiContentDraftInput): Promise<AiContentGenerationRecord>;
   startAiContentGeneration(input: BrandGenerationScope & StartAiContentGenerationInput & {
+    actorUserId?: string;
     usageDate: string;
     dailyGenerationLimit: number;
   }): Promise<AiContentGenerationRecord>;
@@ -204,6 +247,27 @@ export interface AiContentRepository extends AiContentAttachmentLifecycleReposit
   completeAiContentJob(input: CompleteAiContentJobInput): Promise<AiContentGenerationRecord>;
   failAiContentJob(input: FailAiContentJobInput): Promise<AiContentGenerationRecord>;
   retryAiContentOutput(input: BrandScope & { outputId: string }): Promise<AiContentGenerationRecord>;
+  createAiContentProposalBatch(input: AuthenticatedBrandScope & {
+    actorUserId: string;
+    origin: "manual" | "scheduled_crawl";
+    idempotencyKey: string;
+    request: ContentProposalRequestV1;
+  }): Promise<AiContentProposalBatchRecord>;
+  getAiContentProposalBatch(input: BrandScope & { batchId: string }): Promise<AiContentProposalBatchRecord | null>;
+  listAiContentProposals(input: BrandScope & { status: "suggested" | "selected" | "dismissed" }): Promise<AiContentProposalRecord[]>;
+  selectAiContentProposal(input: AuthenticatedBrandScope & {
+    actorUserId: string;
+    proposalId: string;
+    idempotencyKey: string;
+  }): Promise<AiContentGenerationRecord>;
+  dismissAiContentProposal(input: AuthenticatedBrandScope & {
+    actorUserId: string;
+    proposalId: string;
+  }): Promise<AiContentProposalRecord>;
+  listAiContentDraftReferences(input: BrandScope & {
+    assetType: "reference" | "avatar" | "product_service" | "wiki";
+    assetId: string;
+  }): Promise<AiContentDraftReferenceRecord[]>;
 }
 
 interface AiContentRepositoryOptions {
@@ -214,6 +278,23 @@ interface AiContentRepositoryOptions {
 
 type Queryable = Pick<PoolClient, "query">;
 
+async function assertActiveAiContentActor(
+  client: Queryable,
+  input: { workspaceId: string; brandId: string; actorUserId?: string },
+): Promise<void> {
+  if (!input.actorUserId) return;
+  const result = await client.query(
+    `select 1
+       from workspace_members member
+       join brands brand on brand.workspace_id=member.workspace_id
+      where member.workspace_id=$1 and member.user_id=$2
+        and member.status='active' and member.deleted_at is null
+        and brand.id=$3 and brand.workspace_id=$1`,
+    [input.workspaceId, input.actorUserId, input.brandId],
+  );
+  if (!result.rowCount) throw new Error("ai_content_actor_forbidden");
+}
+
 function iso(value: unknown) {
   if (!(value instanceof Date) && typeof value !== "string") return null;
   return new Date(value).toISOString();
@@ -221,6 +302,39 @@ function iso(value: unknown) {
 
 function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function mapProposal(row: Record<string, unknown>): AiContentProposalRecord {
+  return {
+    id: String(row.id),
+    batchId: String(row.batch_id),
+    proposal: object(row.proposal_json),
+    status: row.status as AiContentProposalRecord["status"],
+    generationId: row.generation_id ? String(row.generation_id) : null,
+    createdAt: iso(row.created_at) ?? "",
+  };
+}
+
+function mapProposalBatch(row: Record<string, unknown>): AiContentProposalBatchRecord {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    brandId: String(row.brand_id),
+    origin: row.origin as AiContentProposalBatchRecord["origin"],
+    contentFamily: row.content_family as AiContentProposalBatchRecord["contentFamily"],
+    request: object(row.request_json),
+    sourceSnapshots: Array.isArray(row.source_snapshot_json)
+      ? row.source_snapshot_json as Record<string, unknown>[]
+      : [],
+    status: row.status as AiContentProposalBatchRecord["status"],
+    ...(Array.isArray(row.proposals)
+      ? { proposals: (row.proposals as Record<string, unknown>[]).map(mapProposal) }
+      : {}),
+    errorCode: row.error_code ? String(row.error_code) : null,
+    errorMessage: row.error_message ? String(row.error_message) : null,
+    createdAt: iso(row.created_at) ?? "",
+    updatedAt: iso(row.updated_at) ?? "",
+  };
 }
 
 function attachmentDraftPortion(value: unknown): Record<string, unknown> {
@@ -532,6 +646,7 @@ async function scopedGeneration(client: Queryable, input: BrandGenerationScope, 
   const result = await client.query(
     `select id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
             generation_idempotency_key, subject_analysis_snapshot, generation_input_snapshot, attachments_locked_at,
+            content_family, output_format, subject_mode, product_service_id, orchestration_snapshot, avatar_snapshot,
             terminal_at, retryable_until, error_code, error_message, created_at, updated_at, completed_at
        from ai_content_generations
       where id = $1 and workspace_id = $2 and brand_id = $3${lock ? " for update" : ""}`,
@@ -615,6 +730,61 @@ async function snapshotReferences(client: Queryable, input: BrandGenerationScope
          (generation_id, reference_id, workspace_id, brand_id, position, reference_snapshot_json)
        values ($1, $2, $3, $4, $5, $6::jsonb)`,
       [input.generationId, referenceId, input.workspaceId, input.brandId, index + 1, JSON.stringify(byId.get(referenceId))],
+    );
+  }
+}
+
+async function snapshotCanonicalReferences(
+  client: Queryable,
+  input: BrandGenerationScope,
+  references: Array<{ referenceItemId: string; roles: string[] }>,
+) {
+  await client.query(
+    "delete from ai_content_generation_references where generation_id=$1 and workspace_id=$2 and brand_id=$3",
+    [input.generationId, input.workspaceId, input.brandId],
+  );
+  for (const [index, reference] of references.entries()) {
+    const selected = await client.query(
+      `select item.id, snapshot.id snapshot_id, snapshot.snapshot_json,
+              pattern.id pattern_version_id
+         from reference_items item
+         join lateral (
+           select * from reference_snapshots candidate
+            where candidate.reference_item_id=item.id
+              and candidate.workspace_id=item.workspace_id
+              and candidate.brand_id=item.brand_id
+            order by candidate.version desc limit 1
+         ) snapshot on true
+         join lateral (
+           select * from reference_pattern_versions candidate
+            where candidate.reference_item_id=item.id
+              and candidate.reference_snapshot_id=snapshot.id
+              and candidate.workspace_id=item.workspace_id
+              and candidate.brand_id=item.brand_id
+            order by candidate.version desc limit 1
+         ) pattern on true
+        where item.id=$1 and item.workspace_id=$2 and item.brand_id=$3
+          and item.archived_at is null`,
+      [reference.referenceItemId, input.workspaceId, input.brandId],
+    );
+    const row = selected.rows[0] as Record<string, unknown> | undefined;
+    if (!row) throw new Error("ai_content_reference_not_found");
+    await client.query(
+      `insert into ai_content_generation_references (
+         generation_id,reference_id,workspace_id,brand_id,position,reference_snapshot_json,
+         reference_item_id,reference_snapshot_id,pattern_version_id,roles_json
+       ) values ($1,$2,$3,$4,$5,$6::jsonb,$2,$7,$8,$9::jsonb)`,
+      [
+        input.generationId,
+        reference.referenceItemId,
+        input.workspaceId,
+        input.brandId,
+        index + 1,
+        JSON.stringify(row.snapshot_json),
+        row.snapshot_id,
+        row.pattern_version_id,
+        JSON.stringify(reference.roles),
+      ],
     );
   }
 }
@@ -815,8 +985,10 @@ function generationInputForWorker(
 export function createAiContentRepository(pool: Pool, options: AiContentRepositoryOptions = {}): AiContentRepository {
   const subjectRepository = createAiContentSubjectRepository(pool);
   const attachmentLifecycle = createAiContentAttachmentRepository(pool);
+  const proposalJobs = createContentProposalJobsRepository(pool);
   return {
     ...attachmentLifecycle,
+    ...proposalJobs,
     getAiContentBrandContext(input) {
       return loadAiContentBrandContext(pool, input, options.brandIntelligenceProvider);
     },
@@ -870,6 +1042,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertActiveAiContentActor(client, input);
         const existing = await client.query(
     `select id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json, generation_idempotency_key,
                   attachments_locked_at, terminal_at, retryable_until,
@@ -883,7 +1056,11 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           await client.query("COMMIT");
           return mapGeneration(existing.rows[0]);
         }
-        const draft: Record<string, unknown> = { ...object(input.draft), origin: "manual" };
+        const draft: Record<string, unknown> = {
+          ...object(input.draft),
+          ...(input.orchestration ? { orchestration: input.orchestration } : {}),
+          origin: "manual",
+        };
         const usesOwnedContext = draft.analysisSource === "owned";
         const usesCompletedSubjectAnalysis = typeof draft.subjectAnalysisId === "string"
           && draft.subjectAnalysisId.trim().length > 0;
@@ -921,8 +1098,9 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         const created = await client.query(
           `insert into ai_content_generations
              (workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
-              analysis_idempotency_key, content_family, output_format, subject_mode, product_service_id)
-           values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13)
+              analysis_idempotency_key, content_family, output_format, subject_mode, product_service_id,
+              created_by_user_id, updated_by_user_id)
+           values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, $14, $14)
            on conflict (brand_id, analysis_idempotency_key) do nothing
            returning id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
                      attachments_locked_at, terminal_at, retryable_until,
@@ -941,6 +1119,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             outputFormat,
             subjectMode,
             productServiceId,
+            input.actorUserId ?? null,
           ],
         );
         const generation = created.rows[0] as Record<string, unknown> | undefined;
@@ -973,10 +1152,355 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       } finally { client.release(); }
     },
 
+    async createAiContentProposalBatch(input) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await assertActiveAiContentActor(client, input);
+        const sourceIds = [...new Set(input.request.sourceSnapshotIds)];
+        const sources = sourceIds.length
+          ? await client.query(
+              `select snapshot.id, snapshot.source_url_id, source.url,
+                      snapshot.fetched_at, snapshot.content_hash,
+                      coalesce(snapshot.summary, left(snapshot.extracted_text, 2000), '') summary
+                 from source_urls source
+                 join source_snapshots snapshot on snapshot.source_url_id=source.id
+                where source.workspace_id=$1 and source.brand_id=$2
+                  and source.deleted_at is null and source.enabled=true
+                  and snapshot.workspace_id=$1 and snapshot.brand_id=$2
+                  and snapshot.status='succeeded'
+                  and snapshot.id=any($3::uuid[])
+                  and not exists (
+                    select 1 from source_snapshots newer
+                     where newer.source_url_id=snapshot.source_url_id
+                       and newer.status='succeeded'
+                       and (newer.fetched_at,newer.id) > (snapshot.fetched_at,snapshot.id)
+                  )
+                order by snapshot.id`,
+              [input.workspaceId, input.brandId, sourceIds],
+            )
+          : { rows: [], rowCount: 0 };
+        if (Number(sources.rowCount) !== sourceIds.length) {
+          throw new Error("ai_content_source_snapshot_invalid");
+        }
+        const performanceIds = [...new Set(input.request.performanceSnapshotIds)];
+        const performance = performanceIds.length
+          ? await client.query(
+              `select performance.id, performance.snapshot_date,
+                      performance.raw_metrics, performance.collected_at,
+                      performance.channel_output_id
+                 from content_performance_snapshots performance
+                 join channel_outputs output
+                   on output.id=performance.channel_output_id
+                  and output.workspace_id=performance.workspace_id
+                  and output.brand_id=performance.brand_id
+                  and output.channel=performance.channel
+                where performance.workspace_id=$1 and performance.brand_id=$2
+                  and performance.id=any($3::uuid[])
+                  and performance.collected_at is not null
+                  and output.status in ('published','completed')
+                order by performance.id`,
+              [input.workspaceId, input.brandId, performanceIds],
+            )
+          : { rows: [], rowCount: 0 };
+        if (Number(performance.rowCount) !== performanceIds.length) {
+          throw new Error("ai_content_performance_snapshot_invalid");
+        }
+        const sourceSnapshots = sources.rows.map((row) => ({
+          sourceId: String(row.id),
+          url: String(row.url),
+          crawledAt: iso(row.fetched_at),
+          contentHash: String(row.content_hash),
+          summary: String(row.summary ?? ""),
+        }));
+        const requestSnapshot = {
+          ...input.request,
+          performanceEvidence: performance.rows.map((row) => ({
+            snapshotId: String(row.id),
+            channelOutputId: String(row.channel_output_id ?? ""),
+            snapshotDate: String(row.snapshot_date),
+            metrics: object(row.raw_metrics),
+            collectedAt: iso(row.collected_at),
+          })),
+        };
+        await client.query(
+          `insert into source_crawl_runs (
+             workspace_id,brand_id,source_url_id,run_key,trigger,status
+           )
+           select source.workspace_id,source.brand_id,source.id,
+                  'proposal-refresh:' || source.id::text || ':' || current_date::text,
+                  'manual','queued'
+             from source_urls source
+             left join lateral (
+               select fetched_at from source_snapshots snapshot
+                where snapshot.source_url_id=source.id and snapshot.status='succeeded'
+                order by fetched_at desc limit 1
+             ) latest on true
+            where source.workspace_id=$1 and source.brand_id=$2
+              and source.enabled=true and source.deleted_at is null
+              and (latest.fetched_at is null or latest.fetched_at < now() - interval '7 days')
+           on conflict (run_key) do nothing`,
+          [input.workspaceId, input.brandId],
+        );
+        const created = await client.query(
+          `insert into ai_content_proposal_batches (
+             workspace_id,brand_id,origin,content_family,request_json,
+             source_snapshot_json,status,idempotency_key,created_by_user_id
+           ) values ($1,$2,$3,$4,$5::jsonb,$6::jsonb,'queued',$7,$8)
+           on conflict (workspace_id,brand_id,idempotency_key) do nothing
+           returning *`,
+          [
+            input.workspaceId,
+            input.brandId,
+            input.origin,
+            input.request.contentFamily,
+            JSON.stringify(requestSnapshot),
+            JSON.stringify(sourceSnapshots),
+            input.idempotencyKey,
+            input.actorUserId,
+          ],
+        );
+        let batch = created.rows[0] as Record<string, unknown> | undefined;
+        if (!batch) {
+          const existing = await client.query(
+            `select * from ai_content_proposal_batches
+              where workspace_id=$1 and brand_id=$2 and idempotency_key=$3
+              for update`,
+            [input.workspaceId, input.brandId, input.idempotencyKey],
+          );
+          batch = existing.rows[0];
+          if (!batch
+            || JSON.stringify(object(batch.request_json)) !== JSON.stringify(requestSnapshot)) {
+            throw new Error("ai_content_proposal_batch_conflict");
+          }
+        }
+        await client.query(
+          `insert into ai_content_proposal_jobs (workspace_id,brand_id,batch_id,status)
+           values ($1,$2,$3,'queued')
+           on conflict do nothing`,
+          [input.workspaceId, input.brandId, batch.id],
+        );
+        await client.query("COMMIT");
+        return mapProposalBatch(batch);
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async getAiContentProposalBatch(input) {
+      const result = await pool.query(
+        `select batch.*,
+                coalesce(jsonb_agg(to_jsonb(proposal) order by proposal.position)
+                  filter (where proposal.id is not null),'[]'::jsonb) proposals
+           from ai_content_proposal_batches batch
+           left join ai_content_proposals proposal
+             on proposal.batch_id=batch.id
+            and proposal.workspace_id=batch.workspace_id
+            and proposal.brand_id=batch.brand_id
+          where batch.id=$1 and batch.workspace_id=$2 and batch.brand_id=$3
+          group by batch.id`,
+        [input.batchId, input.workspaceId, input.brandId],
+      );
+      return result.rowCount ? mapProposalBatch(result.rows[0]) : null;
+    },
+
+    async listAiContentProposals(input) {
+      const result = await pool.query(
+        `select proposal.*
+           from ai_content_proposals proposal
+           join ai_content_proposal_batches batch
+             on batch.id=proposal.batch_id
+            and batch.workspace_id=proposal.workspace_id
+            and batch.brand_id=proposal.brand_id
+          where proposal.workspace_id=$1 and proposal.brand_id=$2
+            and proposal.status=$3
+            and batch.origin='scheduled_crawl'
+          order by proposal.created_at desc,proposal.id`,
+        [input.workspaceId, input.brandId, input.status],
+      );
+      return result.rows.map(mapProposal);
+    },
+
+    async selectAiContentProposal(input) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await assertActiveAiContentActor(client, input);
+        await client.query(
+          "select select_ai_content_proposal($1,$2,$3,$4) selected",
+          [input.proposalId, input.workspaceId, input.brandId, input.actorUserId],
+        );
+        const selected = await client.query(
+          `select proposal.id,proposal.proposal_json,proposal.generation_id,
+                  batch.content_family
+             from ai_content_proposals proposal
+             join ai_content_proposal_batches batch
+               on batch.id=proposal.batch_id
+              and batch.workspace_id=proposal.workspace_id
+              and batch.brand_id=proposal.brand_id
+            where proposal.id=$1 and proposal.workspace_id=$2 and proposal.brand_id=$3
+            for update of proposal`,
+          [input.proposalId, input.workspaceId, input.brandId],
+        );
+        const proposal = selected.rows[0] as Record<string, unknown> | undefined;
+        if (!proposal) throw new Error("ai_content_proposal_not_found");
+        if (proposal.generation_id) {
+          const existing = await generationById(client, String(proposal.generation_id));
+          await client.query("COMMIT");
+          return existing;
+        }
+        const proposalJson = object(proposal.proposal_json);
+        const outputFormat = String(proposalJson.outputFormat ?? "blog");
+        const type: AiContentType = outputFormat === "card_news"
+          ? "card_news"
+          : outputFormat === "blog"
+            ? "blog"
+            : "marketing";
+        const generationId = randomUUID();
+        const approvedVersionId = randomUUID();
+        const approvedAt = new Date().toISOString();
+        const approvedSnapshot = {
+          contractVersion: "approved-proposal.v1",
+          sourceProposalId: input.proposalId,
+          revision: 1,
+          effectiveProposal: proposalJson,
+          editPatch: [],
+          validationResultId: `proposal-selection:${input.idempotencyKey}`,
+          approvedBy: input.actorUserId,
+          approvedAt,
+        };
+        const created = await client.query(
+          `insert into ai_content_generations (
+             id,workspace_id,brand_id,type,title,status,current_stage,draft_json,
+             analysis_json,analysis_idempotency_key,content_family,output_format,subject_mode,
+             created_by_user_id,updated_by_user_id
+           ) values ($1,$2,$3,$4,$5,'draft','draft',$6::jsonb,'{}',$7,$8,$9,'brand_topic',$10,$10)
+           returning id,workspace_id,brand_id,type,title,status,current_stage,draft_json,analysis_json,
+                     attachments_locked_at,terminal_at,retryable_until,error_code,error_message,
+                     created_at,updated_at,completed_at`,
+          [
+            generationId,
+            input.workspaceId,
+            input.brandId,
+            type,
+            String(proposalJson.title ?? "콘텐츠 제안"),
+            JSON.stringify({
+              origin: "proposal",
+              proposalId: input.proposalId,
+              approvedProposalVersionId: approvedVersionId,
+            }),
+            `proposal:${input.proposalId}:${input.idempotencyKey}`,
+            proposal.content_family,
+            outputFormat,
+            input.actorUserId,
+          ],
+        );
+        await client.query(
+          `insert into ai_content_approved_proposal_versions (
+             id,workspace_id,brand_id,proposal_id,revision,approved_proposal_snapshot,
+             validation_result_id,approved_by_user_id,approved_at
+           ) values ($1,$2,$3,$4,1,$5::jsonb,$6,$7,$8::timestamptz)`,
+          [
+            approvedVersionId,
+            input.workspaceId,
+            input.brandId,
+            input.proposalId,
+            JSON.stringify(approvedSnapshot),
+            approvedSnapshot.validationResultId,
+            input.actorUserId,
+            approvedAt,
+          ],
+        );
+        await client.query(
+          `update ai_content_proposals
+              set generation_id=$2,updated_at=now()
+            where id=$1 and workspace_id=$3 and brand_id=$4 and status='selected'`,
+          [input.proposalId, generationId, input.workspaceId, input.brandId],
+        );
+        await client.query("COMMIT");
+        return mapGeneration(created.rows[0]);
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async dismissAiContentProposal(input) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await assertActiveAiContentActor(client, input);
+        const dismissed = await client.query(
+          `update ai_content_proposals
+              set status='dismissed',dismissed_by_user_id=$4,dismissed_at=now(),updated_at=now()
+            where id=$1 and workspace_id=$2 and brand_id=$3 and status='suggested'
+            returning *`,
+          [input.proposalId, input.workspaceId, input.brandId, input.actorUserId],
+        );
+        if (!dismissed.rowCount) throw new Error("ai_content_proposal_not_dismissible");
+        await client.query("COMMIT");
+        return mapProposal(dismissed.rows[0]);
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async listAiContentDraftReferences(input) {
+      const result = await pool.query(
+        `select reference.asset_type,reference.asset_id,reference.generation_id,reference.title
+           from (
+             select 'reference'::text asset_type,selected.reference_item_id::text asset_id,
+                    generation.id::text generation_id,generation.title
+               from ai_content_generations generation
+               join ai_content_generation_references selected
+                 on selected.generation_id=generation.id
+                and selected.workspace_id=generation.workspace_id
+                and selected.brand_id=generation.brand_id
+              where selected.reference_item_id is not null
+             union all
+             select 'avatar',generation.avatar_snapshot->>'id',generation.id::text,generation.title
+               from ai_content_generations generation
+              where generation.avatar_snapshot is not null
+             union all
+             select 'product_service',generation.product_service_id::text,generation.id::text,generation.title
+               from ai_content_generations generation
+              where generation.product_service_id is not null
+             union all
+             select 'wiki',wiki.item->>'id',generation.id::text,generation.title
+               from ai_content_generations generation
+               cross join lateral jsonb_array_elements(
+                 coalesce(generation.orchestration_snapshot->'wikiSnapshots','[]'::jsonb)
+               ) wiki(item)
+           ) reference
+           join ai_content_generations generation on generation.id=reference.generation_id::uuid
+          where generation.workspace_id=$1 and generation.brand_id=$2
+            and generation.status in ('draft','analysis_ready')
+            and generation.orchestration_snapshot is null
+            and reference.asset_type=$3 and reference.asset_id=$4
+          order by generation.updated_at desc`,
+        [input.workspaceId, input.brandId, input.assetType, input.assetId],
+      );
+      return result.rows.map((row) => ({
+        assetType: row.asset_type,
+        assetId: String(row.asset_id),
+        generationId: String(row.generation_id),
+        title: String(row.title),
+      }));
+    },
+
     async updateAiContentDraft(input) {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertActiveAiContentActor(client, input);
         const generation = await scopedGeneration(client, input, true);
         if (!generation) throw new Error("ai_content_generation_not_found");
         if (
@@ -989,14 +1513,35 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           throw new Error("ai_content_attachments_locked");
         }
         const updated = await client.query(
-          `update ai_content_generations set draft_json = $4::jsonb, updated_at = now()
+          `update ai_content_generations
+              set draft_json = $4::jsonb,
+                  updated_by_user_id = coalesce($5, updated_by_user_id),
+                  updated_at = now()
             where id = $1 and workspace_id = $2 and brand_id = $3
             returning id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
                       attachments_locked_at, terminal_at, retryable_until,
                       error_code, error_message, created_at, updated_at, completed_at`,
-          [input.generationId, input.workspaceId, input.brandId, JSON.stringify({ ...object(input.draft), origin: "manual" })],
+          [
+            input.generationId,
+            input.workspaceId,
+            input.brandId,
+            JSON.stringify({
+              ...object(input.draft),
+              ...(input.orchestration ? { orchestration: input.orchestration } : {}),
+              origin: "manual",
+            }),
+            input.actorUserId ?? null,
+          ],
         );
-        await snapshotReferences(client, input, [...new Set(input.referenceIds)]);
+        if (input.orchestration) {
+          const canonicalIds = input.orchestration.references.map((reference) => reference.referenceItemId);
+          if (!isDeepStrictEqual(canonicalIds, input.referenceIds)) {
+            throw new Error("ai_content_reference_ids_mismatch");
+          }
+          await snapshotCanonicalReferences(client, input, input.orchestration.references);
+        } else {
+          await snapshotReferences(client, input, [...new Set(input.referenceIds)]);
+        }
         await client.query("COMMIT");
         return mapGeneration(updated.rows[0]);
       } catch (error) {
@@ -1010,10 +1555,11 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       if (initial.generation_idempotency_key === input.idempotencyKey) {
         return mapGeneration(initial);
       }
-      if (initial.status !== "analysis_ready") {
+      const initialDraft = object(initial.draft_json);
+      const canonical = initialDraft.orchestration !== undefined;
+      if (initial.status !== "analysis_ready" && !(canonical && initial.status === "draft")) {
         throw new Error("ai_content_generation_not_analysis_ready");
       }
-      const initialDraft = object(initial.draft_json);
       const initiallyUsesOwnedContext = initialDraft.analysisSource === "owned";
       const confirmedBrandIntelligence = initiallyUsesOwnedContext && options.brandIntelligenceProvider
         ? await options.brandIntelligenceProvider.getConfirmed(input)
@@ -1028,15 +1574,361 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       try {
         await client.query("BEGIN");
         transactionOpen = true;
+        await assertActiveAiContentActor(client, input);
         const current = await scopedGeneration(client, input, true);
         if (!current) throw new Error("ai_content_generation_not_found");
         if (current.generation_idempotency_key === input.idempotencyKey) {
           await client.query("COMMIT");
           return mapGeneration(current);
         }
-        if (current.status !== "analysis_ready") throw new Error("ai_content_generation_not_analysis_ready");
+        if (current.status !== "analysis_ready" && !(canonical && current.status === "draft")) {
+          throw new Error("ai_content_generation_not_analysis_ready");
+        }
         if (JSON.stringify(object(current.draft_json)) !== JSON.stringify(initialDraft)) {
           throw new Error("ai_content_generation_start_conflict");
+        }
+        if (canonical) {
+          const orchestration = parseContentOrchestrationV1(initialDraft.orchestration);
+          if (mapOrchestrationToWorkerType(orchestration) !== current.type) {
+            throw new Error("ai_content_type_mapping_mismatch");
+          }
+          await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+            `ai-content-usage:${input.brandId}:${input.usageDate}`,
+          ]);
+          const usage = await client.query(
+            `select coalesce(sum(quantity),0)::integer generation_count
+               from ai_content_usage_ledger
+              where workspace_id=$1 and brand_id=$2 and usage_date=$3::date
+                and usage_type in ('generation','reversal')`,
+            [input.workspaceId, input.brandId, input.usageDate],
+          );
+          if (Number(usage.rows[0]?.generation_count ?? 0) + input.outputCount > input.dailyGenerationLimit) {
+            throw new Error("ai_content_limit_reached");
+          }
+          const proposalId = String(initialDraft.proposalId ?? "");
+          const approvedProposalVersionId = String(initialDraft.approvedProposalVersionId ?? "");
+          const versions = await client.query(
+            `select profile.active_brand_core_id brand_core_version_id,
+                    profile.active_brand_rule_set_id rule_set_version_id,
+                    approved.approved_proposal_snapshot
+               from brand_profiles profile
+               join brand_core_versions core
+                 on core.id=profile.active_brand_core_id
+                and core.workspace_id=profile.workspace_id and core.brand_id=profile.brand_id
+                and core.status='approved'
+               join brand_rule_sets rules
+                 on rules.id=profile.active_brand_rule_set_id
+                and rules.workspace_id=profile.workspace_id and rules.brand_id=profile.brand_id
+                and rules.status='approved'
+               join ai_content_approved_proposal_versions approved
+                 on approved.id=$4 and approved.workspace_id=profile.workspace_id
+                and approved.brand_id=profile.brand_id and approved.proposal_id=$3
+               join ai_content_proposals proposal
+                 on proposal.id=approved.proposal_id
+                and proposal.workspace_id=approved.workspace_id and proposal.brand_id=approved.brand_id
+                and proposal.status='selected' and proposal.generation_id=$5
+               join ai_content_proposal_batches batch
+                 on batch.id=proposal.batch_id and batch.workspace_id=proposal.workspace_id
+                and batch.brand_id=proposal.brand_id and batch.status='ready'
+                and batch.content_family=$6
+              where profile.workspace_id=$1 and profile.brand_id=$2`,
+            [
+              input.workspaceId,
+              input.brandId,
+              proposalId,
+              approvedProposalVersionId,
+              input.generationId,
+              orchestration.contentFamily,
+            ],
+          );
+          const version = versions.rows[0] as Record<string, unknown> | undefined;
+          if (!version) throw new Error("ai_content_orchestration_versions_invalid");
+
+          let subject: Record<string, unknown>;
+          if (orchestration.subject.mode === "product_service") {
+            const product = await client.query(
+              `select product.id item_id,product.display_name title,version.id,version.version,
+                      version.profile_json::text body,
+                      encode(digest(version.profile_json::text,'sha256'),'hex') content_hash,
+                      version.approved_at captured_at
+                 from product_services product
+                 join product_service_versions version
+                   on version.id=product.active_version_id
+                  and version.workspace_id=product.workspace_id and version.brand_id=product.brand_id
+                  and version.product_service_id=product.id and version.status='approved'
+                where product.id=$1 and product.workspace_id=$2 and product.brand_id=$3
+                  and product.status='active'`,
+              [orchestration.subject.productServiceId, input.workspaceId, input.brandId],
+            );
+            const item = product.rows[0] as Record<string, unknown> | undefined;
+            if (!item) throw new Error("ai_content_product_service_not_found");
+            subject = {
+              kind: "approved_product_service",
+              itemId: String(item.item_id),
+              version: {
+                kind: "product_service",
+                id: String(item.id),
+                version: Number(item.version),
+                title: String(item.title),
+                body: String(item.body),
+                contentHash: String(item.content_hash),
+                capturedAt: iso(item.captured_at),
+                stale: false,
+                trustLevel: "approved",
+                purpose: orchestration.contentFamily,
+              },
+            };
+          } else if (orchestration.subject.mode === "brand_topic") {
+            subject = {
+              kind: "brand_topic",
+              topic: orchestration.subject.topic,
+              brandCoreEvidenceIds: [],
+            };
+          } else {
+            const analyzed = await client.query(
+              `select analysis.id,analysis.analysis_version,analysis.contract_version,
+                      analysis.subject_type,analysis.source_url,analysis.normalized_url,
+                      analysis.input_json,analysis.facts_json,analysis.research_json,
+                      analysis.analysis_result_json,
+                      coalesce(analysis.completed_at,analysis.updated_at) captured_at,
+                      coalesce(jsonb_agg(jsonb_build_object(
+                        'id',image.id::text,'sourceUrl',image.source_url,
+                        'storageUrl',image.storage_url,'width',image.width,'height',image.height,
+                        'mimeType',image.mime_type,'altText',image.alt_text,'role',image.role
+                      ) order by image.id) filter (where image.id is not null),'[]'::jsonb)
+                        selected_images
+                 from ai_content_subject_analyses analysis
+                 left join ai_content_subject_images image
+                   on image.analysis_id=analysis.id
+                  and image.workspace_id=analysis.workspace_id
+                  and image.brand_id=analysis.brand_id
+                  and image.deleted_at is null
+                  and (
+                    image.id=analysis.selected_image_id
+                    or image.id::text=any(
+                      select jsonb_array_elements_text(analysis.attachment_ids_json)
+                    )
+                  )
+                where analysis.id=$1 and analysis.workspace_id=$2 and analysis.brand_id=$3
+                  and analysis.status in ('ready','partial')
+                  and analysis.superseded_at is null
+                group by analysis.id
+                for share of analysis`,
+              [orchestration.subject.subjectAnalysisId, input.workspaceId, input.brandId],
+            );
+            const analysis = analyzed.rows[0] as Record<string, unknown> | undefined;
+            if (!analysis) throw new Error("ai_content_subject_analysis_not_ready");
+            const snapshotId = randomUUID();
+            const analyzedSnapshot = {
+              contractVersion: "analyzed-subject-snapshot.v1",
+              snapshotId,
+              analysisId: String(analysis.id),
+              analysisVersion: Number(analysis.analysis_version),
+              analysisContractVersion: String(analysis.contract_version),
+              subjectType: String(analysis.subject_type),
+              source: {
+                sourceUrl: analysis.source_url ? String(analysis.source_url) : "",
+                normalizedUrl: analysis.normalized_url ? String(analysis.normalized_url) : "",
+                input: object(analysis.input_json),
+              },
+              facts: Array.isArray(analysis.facts_json) ? analysis.facts_json : [],
+              research: object(analysis.research_json),
+              analysisResult: object(analysis.analysis_result_json),
+              selectedImages: Array.isArray(analysis.selected_images) ? analysis.selected_images : [],
+              capturedAt: iso(analysis.captured_at),
+            };
+            const sealed = await client.query(
+              `insert into ai_content_analyzed_subject_snapshots (
+                 id,workspace_id,brand_id,analysis_id,snapshot_json
+               ) values ($1,$2,$3,$4,$5::jsonb)
+               on conflict (analysis_id) do nothing
+               returning id,snapshot_json`,
+              [
+                snapshotId,
+                input.workspaceId,
+                input.brandId,
+                analysis.id,
+                JSON.stringify(analyzedSnapshot),
+              ],
+            );
+            let sealedId: string = snapshotId;
+            let sealedSnapshot = analyzedSnapshot;
+            if (!sealed.rowCount) {
+              const existing = await client.query(
+                `select id,snapshot_json
+                   from ai_content_analyzed_subject_snapshots
+                  where analysis_id=$1 and workspace_id=$2 and brand_id=$3`,
+                [analysis.id, input.workspaceId, input.brandId],
+              );
+              if (!existing.rowCount) throw new Error("ai_content_subject_snapshot_conflict");
+              sealedId = String(existing.rows[0]?.id);
+              sealedSnapshot = existing.rows[0]?.snapshot_json;
+            }
+            subject = {
+              kind: "analyzed_subject",
+              analysisId: String(analysis.id),
+              snapshotId: sealedId,
+              snapshot: sealedSnapshot,
+            };
+          }
+
+          const wikiSnapshots: Record<string, unknown>[] = [];
+          const wikiIds = orchestration.subject.mode === "brand_topic"
+            ? orchestration.subject.wikiItemIds
+            : [];
+          for (const wikiId of wikiIds) {
+            const wiki = await client.query(
+              `select version.id,coalesce(version.activated_at,version.completed_at) captured_at,
+                      coalesce(string_agg(document.title || E'\\n' || document.content,E'\\n\\n'
+                        order by document.id),'') body
+                 from wiki_versions version
+                 left join wiki_documents document
+                   on document.wiki_version_id=version.id and document.workspace_id=version.workspace_id
+                  and document.brand_id=version.brand_id and document.is_active=true
+                where version.id=$1 and version.workspace_id=$2 and version.brand_id=$3
+                  and version.status='active'
+                group by version.id`,
+              [wikiId, input.workspaceId, input.brandId],
+            );
+            const row = wiki.rows[0] as Record<string, unknown> | undefined;
+            if (!row || !String(row.body ?? "")) throw new Error("ai_content_wiki_snapshot_not_found");
+            const sealed = {
+              kind: "wiki",
+              id: String(row.id),
+              version: 1,
+              title: "Brand Wiki",
+              body: String(row.body),
+              contentHash: createHash("sha256").update(String(row.body)).digest("hex"),
+              capturedAt: iso(row.captured_at),
+              stale: false,
+              trustLevel: "approved",
+              purpose: orchestration.contentFamily,
+            };
+            await client.query(
+              `insert into ai_content_wiki_version_snapshots (
+                 id,workspace_id,brand_id,wiki_version_id,snapshot_json
+               ) values ($1,$2,$3,$1,$4::jsonb)
+               on conflict (wiki_version_id) do nothing`,
+              [wikiId, input.workspaceId, input.brandId, JSON.stringify(sealed)],
+            );
+            wikiSnapshots.push(sealed);
+          }
+          const references = await client.query(
+            `select reference_item_id item_id,reference_snapshot_id snapshot_id,
+                    pattern_version_id,roles_json
+               from ai_content_generation_references
+              where generation_id=$1 and workspace_id=$2 and brand_id=$3
+                and reference_item_id is not null
+              order by position`,
+            [input.generationId, input.workspaceId, input.brandId],
+          );
+          let avatar: Record<string, unknown> | null = null;
+          if (orchestration.avatar) {
+            const selectedAvatar = await client.query(
+              `select avatar.id,image.id asset_version_id,image.checksum object_hash,image.mime_type
+                 from brand_avatars avatar
+                 join brand_avatar_images image
+                   on image.avatar_id=avatar.id and image.workspace_id=avatar.workspace_id
+                  and image.brand_id=avatar.brand_id
+                where avatar.id=$1 and avatar.workspace_id=$2 and avatar.brand_id=$3
+                  and avatar.status='active'
+                order by image.created_at desc limit 1`,
+              [orchestration.avatar.id, input.workspaceId, input.brandId],
+            );
+            const selected = selectedAvatar.rows[0] as Record<string, unknown> | undefined;
+            if (!selected) throw new Error("ai_content_avatar_not_found");
+            avatar = {
+              id: String(selected.id),
+              assetVersionId: String(selected.asset_version_id),
+              objectHash: String(selected.object_hash),
+              mime: String(selected.mime_type),
+              provenance: "library",
+            };
+          }
+          const frozen = {
+            contractVersion: "generation-brief.v1",
+            proposalId,
+            approvedProposalVersionId,
+            approvedProposalSnapshot: version.approved_proposal_snapshot,
+            brandCoreVersionId: String(version.brand_core_version_id),
+            ruleSetVersionId: String(version.rule_set_version_id),
+            subject,
+            wikiSnapshots,
+            references: references.rows.map((row) => ({
+              itemId: String(row.item_id),
+              snapshotId: String(row.snapshot_id),
+              patternVersionId: String(row.pattern_version_id),
+              roles: row.roles_json,
+            })),
+            avatar,
+            outputFormat: orchestration.outputFormat,
+            channels: orchestration.channelTargets,
+            promptDefinitionVersions: { generation: "content-generation.v2" },
+          };
+          await client.query(
+            "select start_ai_content_orchestration($1,$2,$3,$4::jsonb,$5::jsonb,$6) id",
+            [
+              input.generationId,
+              input.workspaceId,
+              input.brandId,
+              JSON.stringify(frozen),
+              JSON.stringify(avatar),
+              input.actorUserId,
+            ],
+          );
+          const outputIds: string[] = [];
+          for (let index = 1; index <= input.outputCount; index += 1) {
+            const output = await client.query(
+              `insert into ai_content_generation_outputs (
+                 generation_id,workspace_id,brand_id,output_index,status
+               ) values ($1,$2,$3,$4,'queued') returning id`,
+              [input.generationId, input.workspaceId, input.brandId, index],
+            );
+            outputIds.push(String(output.rows[0]?.id));
+          }
+          await client.query(
+            `insert into ai_content_generation_jobs (
+               generation_id,workspace_id,brand_id,job_type,content_type,status,payload_json
+             ) values ($1,$2,$3,'analyze',$4,'queued',$5::jsonb)`,
+            [
+              input.generationId,
+              input.workspaceId,
+              input.brandId,
+              current.type,
+              JSON.stringify({
+                generationId: input.generationId,
+                finalizeGeneration: true,
+                orchestrationSnapshot: frozen,
+                outputIds,
+              }),
+            ],
+          );
+          await client.query(
+            `insert into ai_content_usage_ledger (
+               workspace_id,brand_id,generation_id,usage_type,quantity,usage_date,idempotency_key
+             ) values ($1,$2,$3,'generation',$4,$5::date,$6)`,
+            [
+              input.workspaceId,
+              input.brandId,
+              input.generationId,
+              input.outputCount,
+              input.usageDate,
+              `generation:${input.generationId}:${input.idempotencyKey}`,
+            ],
+          );
+          const updated = await client.query(
+            `update ai_content_generations
+                set status='queued',current_stage='generation',generation_idempotency_key=$4,
+                    attachments_locked_at=statement_timestamp(),
+                    updated_by_user_id=coalesce($5,updated_by_user_id),updated_at=now()
+              where id=$1 and workspace_id=$2 and brand_id=$3
+              returning id,workspace_id,brand_id,type,title,status,current_stage,draft_json,analysis_json,
+                        attachments_locked_at,terminal_at,retryable_until,error_code,error_message,
+                        created_at,updated_at,completed_at`,
+            [input.generationId, input.workspaceId, input.brandId, input.idempotencyKey, input.actorUserId ?? null],
+          );
+          await client.query("COMMIT");
+          return mapGeneration(updated.rows[0]);
         }
         const pendingUpload = await client.query(
           `select id
@@ -1106,12 +1998,13 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
               set status = 'analyzing', current_stage = $5, generation_idempotency_key = $4,
                   generation_input_snapshot = $6::jsonb,
                   subject_analysis_snapshot = coalesce(subject_analysis_snapshot, $6::jsonb),
-                  attachments_locked_at = statement_timestamp(), updated_at = now()
+                  attachments_locked_at = statement_timestamp(),
+                  updated_by_user_id = coalesce($7, updated_by_user_id), updated_at = now()
             where id = $1 and workspace_id = $2 and brand_id = $3 and status = 'analysis_ready'
             returning id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
                       attachments_locked_at, terminal_at, retryable_until,
                       error_code, error_message, created_at, updated_at, completed_at`,
-          [input.generationId, input.workspaceId, input.brandId, input.idempotencyKey, waitForOwnedContext ? "owned_context" : "analysis", generationInput ? JSON.stringify(generationInput) : null],
+          [input.generationId, input.workspaceId, input.brandId, input.idempotencyKey, waitForOwnedContext ? "owned_context" : "analysis", generationInput ? JSON.stringify(generationInput) : null, input.actorUserId ?? null],
         );
         const generation = updated.rows[0] as Record<string, unknown> | undefined;
         if (!generation) throw new Error("ai_content_generation_start_conflict");
