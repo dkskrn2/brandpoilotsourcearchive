@@ -207,6 +207,11 @@ begin
   if definition is null then
     raise exception 'start_ai_content_orchestration_missing';
   end if;
+  if position('analyzed_subject_snapshot_invalid' in definition)>0
+     and position('generation_subject_mode_mismatch' in definition)>0
+     and position('not in (''brand_topic'',''analyzed_subject'')' in definition)>0 then
+    return;
+  end if;
   original_definition := definition;
 
   definition := replace(
@@ -223,7 +228,20 @@ begin
   definition := replace(
     definition,
     $needle$  snapshot_product_version_id := null;$needle$,
-    $replacement$  if frozen_orchestration_snapshot->'subject'->>'kind' = 'analyzed_subject'
+    $replacement$  if (
+    target_generation.subject_mode='brand_topic'
+    and frozen_orchestration_snapshot->'subject'->>'kind'<>'brand_topic'
+  ) or (
+    target_generation.subject_mode='product_service'
+    and frozen_orchestration_snapshot->'subject'->>'kind'<>'approved_product_service'
+  ) or (
+    target_generation.subject_mode='new_subject'
+    and frozen_orchestration_snapshot->'subject'->>'kind'<>'analyzed_subject'
+  ) then
+    raise exception using errcode='23514',message='generation_subject_mode_mismatch';
+  end if;
+
+  if frozen_orchestration_snapshot->'subject'->>'kind' = 'analyzed_subject'
      and not exists (
        select 1
        from ai_content_analyzed_subject_snapshots sealed
@@ -270,6 +288,7 @@ begin
 
   if definition=original_definition
      or position('analyzed_subject_snapshot_invalid' in definition)=0
+     or position('generation_subject_mode_mismatch' in definition)=0
      or position('not in (''brand_topic'',''analyzed_subject'')' in definition)=0 then
     raise exception 'start_ai_content_orchestration_patch_failed';
   end if;

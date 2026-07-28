@@ -51,12 +51,37 @@ function setup() {
     })),
   } as unknown as ApiRepository;
   return {
-    app: createServer({ repository, workerApiToken: "proposal-worker-token", logger: false }),
+    app: createServer({
+      repository,
+      workerApiToken: "generic-worker-token",
+      contentProposalWorkerApiToken: "proposal-worker-token",
+      logger: false,
+    }),
     repository,
   };
 }
 
 describe("content proposal worker routes", () => {
+  it("rejects the generic worker token when no dedicated proposal-worker token is configured", async () => {
+    const { repository } = setup();
+    const app = createServer({
+      repository,
+      workerApiToken: "generic-worker-token",
+      logger: false,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/worker/content-proposal-jobs/claim",
+      headers: { authorization: "Bearer generic-worker-token" },
+      payload: { workerId: "proposal-worker-1", leaseSeconds: 180 },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "worker_api_not_configured" });
+    expect(repository.claimContentProposalJob).not.toHaveBeenCalled();
+  });
+
   it("requires the dedicated worker token", async () => {
     const { app, repository } = setup();
     const response = await app.inject({

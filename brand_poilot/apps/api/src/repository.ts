@@ -1212,6 +1212,7 @@ function nullableText(value: unknown) {
 function automatedCardNewsSourceMaterials(value: unknown) {
   if (!Array.isArray(value)) return [];
   return value.map((item) => recordValue(item)).map((material) => ({
+    sourceSnapshotId: nullableText(material.sourceSnapshotId) ?? undefined,
     sourceType: String(material.sourceType ?? ""),
     contentUrl: String(material.contentUrl ?? ""),
     content: String(material.content ?? ""),
@@ -1234,6 +1235,7 @@ async function enqueueAutomatedCardNewsOutput(client: Pick<PoolClient, "query">,
   };
   representativeUrl: string | null;
   sourceMaterials: unknown;
+  sourceSnapshotIds?: string[];
 }) {
   return enqueueAutomatedCardNews(client, {
     workspaceId: input.workspaceId,
@@ -1257,6 +1259,7 @@ async function enqueueAutomatedCardNewsOutput(client: Pick<PoolClient, "query">,
     topic: input.topic,
     representativeUrl: input.representativeUrl,
     sourceMaterials: automatedCardNewsSourceMaterials(input.sourceMaterials),
+    sourceSnapshotIds: input.sourceSnapshotIds,
   }, {
     automatedContentEnabled: process.env.AUTOMATED_CONTENT_ENABLED === "true",
     mode: "proposal",
@@ -2862,7 +2865,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                      tr.target_customer, tr.region, tr.season, tr.reference_url, tr.notes,
                      coalesce((
                        select jsonb_agg(jsonb_build_object(
-                         'sourceType', su.source_type,
+                          'sourceSnapshotId', ss.id::text,
+                          'sourceType', su.source_type,
                          'contentUrl', coalesce(sci.content_url, su.url),
                          'content', ss.extracted_text
                        ) order by ss.fetched_at desc)
@@ -4262,6 +4266,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                 topic: automatedTopic,
                 representativeUrl: crawlContentUrl ?? referenceUrl,
                 sourceMaterials,
+                sourceSnapshotIds,
               });
             } else {
               await createImageRenderJob(client as any, {

@@ -752,7 +752,7 @@ describe("repository", () => {
     ]);
   });
 
-  it("reuses the original source snapshot when regenerating card news", async () => {
+  it("does not enqueue automated card news while automation is disabled", async () => {
     const statements: Array<{ sql: string; values: unknown[] }> = [];
     const query = vi.fn(async (sql: string, values: unknown[] = []) => {
       statements.push({ sql, values });
@@ -775,7 +775,8 @@ describe("repository", () => {
     await createRepository(fakePoolWithClient(query) as any).reviewContentOutput("output-1", "regenerate");
 
     const generation = statements.find(({ sql }) => sql.includes("insert into ai_content_generations"));
-    expect(String(generation?.values[6])).toContain("ORIGINAL SOURCE EVIDENCE");
+    expect(generation).toBeUndefined();
+    expect(statements.some(({ sql }) => sql.includes("insert into ai_content_proposal_batches"))).toBe(false);
   });
 
   it("treats a missing regeneration capability row as not reviewable", async () => {
@@ -1818,12 +1819,7 @@ describe("repository", () => {
       representativeUrl: "https://brand.example.com/service",
       contentHash: "hash-1"
     });
-    expect(cardNewsInput).toMatchObject({
-      subject: {
-        sourceUrl: "https://brand.example.com/service",
-        research: { topic: { title: "크롤링 소스 기반 콘텐츠", angle: "source_url" } }
-      }
-    });
+    expect(cardNewsInput).toBeUndefined();
     expect(query).not.toHaveBeenCalledWith(expect.stringContaining("insert into llm_runs"), expect.any(Array));
     expect(query).not.toHaveBeenCalledWith(expect.stringContaining("update topic_rows"), expect.any(Array));
   });
@@ -1914,12 +1910,7 @@ describe("repository", () => {
     expect(result).toMatchObject({ processed: 1, created: 1, failed: 0 });
     expect(query).toHaveBeenCalledWith(expect.stringContaining("from content_topics ct"), ["brand-1"]);
     expect(statusUpdates).toEqual([["content-topic-1", "instagram_feed_carousel"], ["content-topic-1", now]]);
-    expect(cardNewsInput).toMatchObject({
-      subject: {
-        sourceUrl: "https://brand.example.com/service",
-        research: { topic: { title: "크롤링 기사 제목", angle: "source_url" } }
-      }
-    });
+    expect(cardNewsInput).toBeUndefined();
     expect(query).not.toHaveBeenCalledWith(expect.stringContaining("insert into content_topics"), expect.any(Array));
   });
 
@@ -2096,12 +2087,7 @@ describe("repository", () => {
     expect(storageArtifactValues).toBeUndefined();
     expect(renderedOutputValues).toBeUndefined();
     expect(query.mock.calls.some(([sql, values]) => String(sql).includes("insert into jobs") && (values as unknown[])?.includes("instagram_feed_render"))).toBe(false);
-    expect(cardNewsInput).toMatchObject({
-      contentType: "card_news",
-      subject: { research: { topic: { title: "Jeju family stay", angle: "location-first checklist" } } },
-      message: { target: { name: "family travelers" } },
-      brandContext: { context: { brand: { name: "Jeju Pilot", categoryContext: "여행·관광 / 여행 상담" } } }
-    });
+    expect(cardNewsInput).toBeUndefined();
     expect(threadsJobPayload).toMatchObject({
       deliveryFormat: "threads_text",
       promptVersion: "worker-threads.v1",

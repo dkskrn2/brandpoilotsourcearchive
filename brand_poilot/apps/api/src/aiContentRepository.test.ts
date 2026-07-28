@@ -52,6 +52,7 @@ function createPool(options: {
       commands.push(query);
       sql.push(query);
       if (query === "BEGIN" || query === "COMMIT" || query === "ROLLBACK") return { rows: [], rowCount: 0 };
+      if (query.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
       if (query.includes("pg_advisory_xact_lock")) return { rows: [{}], rowCount: 1 };
       if (query.includes("from ai_content_usage_ledger")) {
         return { rows: [{ generation_count: options.generationUsage ?? 0 }], rowCount: 1 };
@@ -525,7 +526,11 @@ function createWorkerPool(options: {
   };
 }
 
-const scope = { workspaceId: "workspace-1", brandId: "brand-1" };
+const scope = {
+  workspaceId: "workspace-1",
+  brandId: "brand-1",
+  actorUserId: "10000000-0000-4000-8000-000000000001",
+};
 const input = {
   ...scope,
   type: "card_news" as const,
@@ -565,6 +570,48 @@ const contentGenerationInputV2Fixture = {
 };
 
 describe("AI content repository", () => {
+  it("rejects repository writes when the authenticated actor is missing", async () => {
+    const pool = createPool();
+    const repository = createAiContentRepository(pool as never);
+    const { actorUserId: _actorUserId, ...missingActor } = input;
+
+    await expect(repository.createAiContentAnalysis(missingActor as never))
+      .rejects.toThrow("ai_content_actor_required");
+  });
+
+  it("validates the actor before returning an idempotent start replay", async () => {
+    const pool = createPool();
+    const repository = createAiContentRepository(pool as never);
+    await repository.createAiContentAnalysis(input);
+    pool.setGenerationIdempotencyKey("same-start");
+
+    await expect(repository.startAiContentGeneration({
+      workspaceId: scope.workspaceId,
+      brandId: scope.brandId,
+      generationId: "generation-1",
+      idempotencyKey: "same-start",
+      outputCount: 1,
+      usageDate: "2026-07-28",
+      dailyGenerationLimit: 10,
+    } as never)).rejects.toThrow("ai_content_actor_required");
+  });
+
+  it("validates the actor before looking up a generation to start", async () => {
+    const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
+    const repository = createAiContentRepository({ query } as never);
+
+    await expect(repository.startAiContentGeneration({
+      workspaceId: scope.workspaceId,
+      brandId: scope.brandId,
+      generationId: "missing-generation",
+      idempotencyKey: "missing-start",
+      outputCount: 1,
+      usageDate: "2026-07-28",
+      dailyGenerationLimit: 10,
+    } as never)).rejects.toThrow("ai_content_actor_required");
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it("creates a proposal batch and job atomically from owned completed snapshots", async () => {
     const statements: Array<{ sql: string; params: unknown[] }> = [];
     const client = {
@@ -637,10 +684,10 @@ describe("AI content repository", () => {
   });
 
   it("selects under the database batch lock and links one generation draft", async () => {
-    const sql: string[] = [];
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
     const client = {
       query: vi.fn(async (query: string, params: unknown[] = []) => {
-        sql.push(query);
+        statements.push({ sql: query, params });
         if (["BEGIN", "COMMIT", "ROLLBACK"].includes(query)) return { rows: [], rowCount: 0 };
         if (query.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
         if (query.includes("select select_ai_content_proposal")) return { rows: [{ selected: params[0] }], rowCount: 1 };
@@ -664,8 +711,183 @@ describe("AI content repository", () => {
     });
 
     expect(selected.status).toBe("draft");
-    expect(sql.join("\n")).toContain("select_ai_content_proposal");
-    expect(sql.join("\n")).toContain("insert into ai_content_approved_proposal_versions");
+    expect(statements.map(({ sql }) => sql).join("\n")).toContain("select_ai_content_proposal");
+    expect(statements.map(({ sql }) => sql).join("\n")).toContain("insert into ai_content_approved_proposal_versions");
+    const generationInsert = statements.find(({ sql }) => sql.includes("insert into ai_content_generations"));
+    expect(generationInsert?.sql).not.toContain("'brand_topic'");
+    expect(generationInsert?.params.slice(-3)).toEqual([null, null, "10000000-0000-4000-8000-000000000001"]);
+  });
+
+  it("returns an existing linked draft only for the same locked idempotent selection", async () => {
+    const statements: string[] = [];
+    const proposalId = "70000000-0000-4000-8000-000000000007";
+    const existing = {
+      ...row("generation-1", "draft"),
+      analysis_idempotency_key: `proposal:${proposalId}:select-1`,
+      draft_json: { origin: "proposal", proposalId },
+    };
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        statements.push(sql);
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (sql.includes("select select_ai_content_proposal")) return { rows: [{ selected: params[0] }], rowCount: 1 };
+        if (sql.includes("from ai_content_proposals proposal") && sql.includes("join ai_content_proposal_batches")) {
+          return {
+            rows: [{
+              id: proposalId,
+              proposal_json: { title: "선택 제안", outputFormat: "blog" },
+              generation_id: "generation-1",
+              content_family: "informational",
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes("from ai_content_generations")) return { rows: [existing], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+
+    await expect(repository.selectAiContentProposal({
+      ...scope,
+      proposalId,
+      idempotencyKey: "select-1",
+    })).resolves.toMatchObject({ id: "generation-1", status: "draft" });
+    expect(statements.some((sql) => sql.includes("from ai_content_generations")
+      && sql.includes("for update"))).toBe(true);
+  });
+
+  it.each([
+    ["different selection key", "draft", "proposal:70000000-0000-4000-8000-000000000007:other-key", "70000000-0000-4000-8000-000000000007"],
+    ["different proposal", "draft", "proposal:80000000-0000-4000-8000-000000000008:select-1", "80000000-0000-4000-8000-000000000008"],
+    ["failed generation", "failed", "proposal:70000000-0000-4000-8000-000000000007:select-1", "70000000-0000-4000-8000-000000000007"],
+  ])("rejects an existing linked generation for a %s", async (_label, status, identity, draftProposalId) => {
+    const proposalId = "70000000-0000-4000-8000-000000000007";
+    const existing = {
+      ...row("generation-1", status),
+      analysis_idempotency_key: identity,
+      draft_json: { origin: "proposal", proposalId: draftProposalId },
+    };
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (sql.includes("select select_ai_content_proposal")) return { rows: [{ selected: params[0] }], rowCount: 1 };
+        if (sql.includes("from ai_content_proposals proposal") && sql.includes("join ai_content_proposal_batches")) {
+          return {
+            rows: [{
+              id: proposalId,
+              proposal_json: { title: "선택 제안", outputFormat: "blog" },
+              generation_id: "generation-1",
+              content_family: "informational",
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes("from ai_content_generations")) return { rows: [existing], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+
+    await expect(repository.selectAiContentProposal({
+      ...scope,
+      proposalId,
+      idempotencyKey: "select-1",
+    })).rejects.toThrow("ai_content_proposal_selection_conflict");
+  });
+
+  it.each([
+    ["brand_topic", { mode: "brand_topic", topic: "여름 관리", wikiItemIds: [] }, null],
+    ["product_service", { mode: "product_service", productServiceId: "60000000-0000-4000-8000-000000000006" }, "60000000-0000-4000-8000-000000000006"],
+    ["new_subject", { mode: "new_subject", subjectAnalysisId: "70000000-0000-4000-8000-000000000007" }, null],
+  ])("persists %s canonical subject columns while updating a locked draft", async (mode, subject, productServiceId) => {
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const generation = row("generation-1", "draft");
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        statements.push({ sql, params });
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (sql.includes("from ai_content_generations") && sql.includes("for update")) return { rows: [generation], rowCount: 1 };
+        if (sql.includes("update ai_content_generations")) return { rows: [generation], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+
+    await repository.updateAiContentDraft({
+      ...scope,
+      generationId: "generation-1",
+      actorUserId: "10000000-0000-4000-8000-000000000001",
+      draft: {},
+      referenceIds: [],
+      orchestration: {
+        contractVersion: "content-orchestration.v1",
+        contentFamily: "informational",
+        subject,
+        target: { id: null, snapshot: {} },
+        strategy: "how_to",
+        outputFormat: "blog",
+        channelTargets: ["blog_export"],
+        brief: {},
+        references: [],
+        avatar: null,
+      } as never,
+    });
+
+    const update = statements.find(({ sql }) => sql.includes("update ai_content_generations"));
+    expect(update?.sql).toContain("subject_mode");
+    expect(update?.sql).toContain("product_service_id");
+    expect(update?.params.slice(-3)).toEqual([mode, productServiceId, "10000000-0000-4000-8000-000000000001"]);
+  });
+
+  it("rejects a canonical start when persisted subject columns do not match the draft", async () => {
+    const orchestration = {
+      contractVersion: "content-orchestration.v1",
+      contentFamily: "informational",
+      subject: { mode: "new_subject", subjectAnalysisId: "70000000-0000-4000-8000-000000000007" },
+      target: { id: null, snapshot: {} },
+      strategy: "how_to",
+      outputFormat: "blog",
+      channelTargets: ["blog_export"],
+      brief: {},
+      references: [],
+      avatar: null,
+    };
+    const generation = {
+      ...row("generation-1", "draft"),
+      type: "blog",
+      draft_json: { orchestration },
+      content_family: "informational",
+      output_format: "blog",
+      subject_mode: "brand_topic",
+      product_service_id: null,
+    };
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (sql.includes("from ai_content_generations")) return { rows: [generation], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+
+    await expect(repository.startAiContentGeneration({
+      ...scope,
+      generationId: "generation-1",
+      actorUserId: "10000000-0000-4000-8000-000000000001",
+      idempotencyKey: "mapping-mismatch",
+      outputCount: 1,
+      usageDate: "2026-07-28",
+      dailyGenerationLimit: 10,
+    })).rejects.toThrow("ai_content_subject_mapping_mismatch");
   });
 
   it("lists only incomplete real draft references for archive warnings", async () => {
@@ -686,6 +908,40 @@ describe("AI content repository", () => {
     ]);
     expect(query.mock.calls[0]?.[0]).toContain("generation.status in ('draft','analysis_ready')");
     expect(query.mock.calls[0]?.[0]).not.toContain("draft_json::text");
+  });
+
+  it.each([
+    ["avatar", "draft_json->'orchestration'->'avatar'->>'id'"],
+    ["product_service", "draft_json->'orchestration'->'subject'->>'productServiceId'"],
+    ["wiki", "draft_json->'orchestration'->'subject'->'wikiItemIds'"],
+  ])("resolves canonical %s draft references before start snapshots exist", async (assetType, expectedSql) => {
+    const query = vi.fn(async (_sql: string) => ({ rows: [], rowCount: 0 }));
+    const repository = createAiContentRepository({ query } as never);
+
+    await repository.listAiContentDraftReferences({
+      ...scope,
+      assetType: assetType as "avatar" | "product_service" | "wiki",
+      assetId: "60000000-0000-4000-8000-000000000006",
+    });
+
+    expect(query.mock.calls[0]?.[0]).toContain(expectedSql);
+  });
+
+  it("scopes draft reference warnings to the tenant and excludes every started or terminal generation", async () => {
+    const query = vi.fn(async (_sql: string) => ({ rows: [], rowCount: 0 }));
+    const repository = createAiContentRepository({ query } as never);
+
+    await repository.listAiContentDraftReferences({
+      ...scope,
+      assetType: "reference",
+      assetId: "60000000-0000-4000-8000-000000000006",
+    });
+
+    const sql = String(query.mock.calls[0]?.[0]);
+    expect(sql).toContain("generation.workspace_id=$1 and generation.brand_id=$2");
+    expect(sql).toContain("generation.status in ('draft','analysis_ready')");
+    expect(sql).toContain("generation.attachments_locked_at is null");
+    expect(sql).toContain("generation.orchestration_snapshot is null");
   });
 
   it("starts canonical orchestration with one frozen brief, outputs, job, and ledger transaction", async () => {

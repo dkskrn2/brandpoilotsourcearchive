@@ -57,6 +57,17 @@ test("AI 콘텐츠 저장소 계약은 중앙 ApiRepository에 모두 노출된�
   }
 });
 
+test("AI 콘텐츠 생성 쓰기 계약은 인증 actor를 필수로 요구한다", async () => {
+  const repository = await readFile("apps/api/src/aiContentRepository.ts", "utf8");
+  const types = await readFile("apps/api/src/types.ts", "utf8");
+  for (const source of [repository, types]) {
+    assert.doesNotMatch(source, /createAiContentAnalysis\(input:[^;]*actorUserId\?:/);
+    assert.doesNotMatch(source, /updateAiContentDraft\(input:[^;]*actorUserId\?:/);
+    assert.doesNotMatch(source, /startAiContentGeneration\(input:[^;]*actorUserId\?:/);
+  }
+  assert.match(repository, /interface AuthenticatedBrandScope extends BrandScope\s*\{\s*actorUserId: string;/);
+});
+
 test("관리자 API는 별도 namespace와 server-only credential 계약을 사용한다", async () => {
   const [server, index, envExample, adminTypes] = await Promise.all([
     readFile("apps/api/src/adminServer.ts", "utf8"),

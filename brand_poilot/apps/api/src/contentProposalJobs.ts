@@ -78,41 +78,98 @@ function nonEmptyText(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+const contentFamilies = ["informational", "marketing"] as const;
+const messageStrategies = [
+  "problem_solution", "how_to", "comparison", "faq", "insight",
+  "benefit", "social_proof", "brand_story", "cta",
+] as const;
+const outputFormats = ["card_news", "blog", "single_image", "channel_text"] as const;
+const channelTargets = [
+  "instagram", "threads", "x", "linkedin", "youtube", "tiktok", "blog_export",
+] as const;
+const proposalKeys = [
+  "contractVersion", "title", "reasonToCreateNow", "contentFamily", "topic",
+  "target", "messageStrategy", "hook", "keyMessage", "evidence", "outline",
+  "outputFormat", "channelTargets", "recommendedReferenceQuery",
+].sort();
+
+function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  return Object.keys(value).sort().join("\0") === [...keys].sort().join("\0");
+}
+
+function isUniqueStringArray(value: unknown, allowed?: readonly string[]): value is string[] {
+  return Array.isArray(value)
+    && value.every((item) => nonEmptyText(item) && (!allowed || allowed.includes(String(item))))
+    && new Set(value).size === value.length;
+}
+
 export function parseContentProposalResult(value: unknown[]): ContentProposalV1[] {
   if (!Array.isArray(value) || value.length < 2 || value.length > 3) {
     throw new Error("content_proposal_result_invalid");
   }
   for (const proposal of value) {
     if (!isObject(proposal)
+      || !hasExactKeys(proposal, proposalKeys)
       || proposal.contractVersion !== "content-proposal.v1"
       || !nonEmptyText(proposal.title)
       || !nonEmptyText(proposal.reasonToCreateNow)
-      || !["informational", "marketing"].includes(String(proposal.contentFamily))
+      || !contentFamilies.includes(proposal.contentFamily as typeof contentFamilies[number])
       || !nonEmptyText(proposal.topic)
       || !isObject(proposal.target)
-      || !["problem_solution", "how_to", "comparison", "faq", "insight", "benefit", "social_proof", "brand_story", "cta"].includes(String(proposal.messageStrategy))
+      || !messageStrategies.includes(proposal.messageStrategy as typeof messageStrategies[number])
       || !nonEmptyText(proposal.hook)
       || !nonEmptyText(proposal.keyMessage)
       || !Array.isArray(proposal.evidence)
       || proposal.evidence.some((evidence) => !isObject(evidence)
+        || !hasExactKeys(evidence, ["sourceSnapshotId", "summary"])
         || !nonEmptyText(evidence.sourceSnapshotId)
         || !nonEmptyText(evidence.summary))
       || !Array.isArray(proposal.outline)
       || proposal.outline.length === 0
       || proposal.outline.some((item) => !isObject(item)
+        || !hasExactKeys(item, ["heading", "purpose"])
         || !nonEmptyText(item.heading)
         || !nonEmptyText(item.purpose))
-      || !["card_news", "blog", "single_image", "channel_text"].includes(String(proposal.outputFormat))
-      || !Array.isArray(proposal.channelTargets)
-      || proposal.channelTargets.some((channel) => !nonEmptyText(channel))
+      || !outputFormats.includes(proposal.outputFormat as typeof outputFormats[number])
+      || !isUniqueStringArray(proposal.channelTargets, channelTargets)
+      || proposal.channelTargets.length === 0
       || !isObject(proposal.recommendedReferenceQuery)
-      || !Array.isArray(proposal.recommendedReferenceQuery.strategies)
-      || !Array.isArray(proposal.recommendedReferenceQuery.formats)
-      || !Array.isArray(proposal.recommendedReferenceQuery.tags)) {
+      || !hasExactKeys(proposal.recommendedReferenceQuery, ["strategies", "formats", "tags"])
+      || !isUniqueStringArray(proposal.recommendedReferenceQuery.strategies, messageStrategies)
+      || !isUniqueStringArray(proposal.recommendedReferenceQuery.formats, outputFormats)
+      || !isUniqueStringArray(proposal.recommendedReferenceQuery.tags)) {
       throw new Error("content_proposal_result_invalid");
     }
   }
   return value as ContentProposalV1[];
+}
+
+function assertProposalsMatchBatch(
+  proposals: ContentProposalV1[],
+  job: Record<string, unknown>,
+): void {
+  const request = isObject(job.request_json) ? job.request_json : {};
+  const requestedFormats = new Set(Array.isArray(request.outputFormats) ? request.outputFormats : []);
+  const requestedChannels = new Set(Array.isArray(request.channelTargets) ? request.channelTargets : []);
+  const requestedSourceIds = new Set(Array.isArray(request.sourceSnapshotIds) ? request.sourceSnapshotIds : []);
+  const frozenSourceIds = new Set(
+    Array.isArray(job.source_snapshot_json)
+      ? job.source_snapshot_json.flatMap((snapshot) => {
+          const sourceId = isObject(snapshot) ? snapshot.sourceId : null;
+          return nonEmptyText(sourceId) ? [sourceId as string] : [];
+        })
+      : [],
+  );
+  const family = String(job.content_family ?? "");
+  if (request.contentFamily !== family
+    || [...requestedSourceIds].some((id) => !frozenSourceIds.has(id))
+    || proposals.some((proposal) => proposal.contentFamily !== family
+      || !requestedFormats.has(proposal.outputFormat)
+      || proposal.channelTargets.some((channel) => !requestedChannels.has(channel))
+      || proposal.evidence.some((evidence) => !requestedSourceIds.has(evidence.sourceSnapshotId)
+        || !frozenSourceIds.has(evidence.sourceSnapshotId)))) {
+    throw new Error("content_proposal_batch_mismatch");
+  }
 }
 
 export function createContentProposalJobsRepository(pool: Pool): ContentProposalJobsRepository {
@@ -122,14 +179,33 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
       try {
         await client.query("BEGIN");
         await client.query(
+          `with exhausted as (
+             update ai_content_proposal_jobs
+                set status='failed', error_code='content_proposal_attempts_exhausted',
+                    error_message='proposal job attempts exhausted', completed_at=now(),
+                    lease_owner=null, lease_token=null, lease_started_at=null, lease_expires_at=null,
+                    updated_at=now()
+              where status in ('queued','processing')
+                and attempt_count >= max_attempts
+                and (status='queued' or lease_expires_at <= clock_timestamp())
+              returning batch_id,workspace_id,brand_id
+           )
+           update ai_content_proposal_batches batch
+              set status='failed',error_code='content_proposal_attempts_exhausted',
+                  error_message='proposal job attempts exhausted',updated_at=now()
+             from exhausted
+            where batch.id=exhausted.batch_id
+              and batch.workspace_id=exhausted.workspace_id
+              and batch.brand_id=exhausted.brand_id`,
+        );
+        await client.query(
           `update ai_content_proposal_jobs
-              set status='failed', error_code='content_proposal_attempts_exhausted',
-                  error_message='proposal job attempts exhausted', completed_at=now(),
-                  lease_owner=null, lease_token=null, lease_started_at=null, lease_expires_at=null,
+              set status='queued',available_at=clock_timestamp(),
+                  lease_owner=null,lease_token=null,lease_started_at=null,lease_expires_at=null,
                   updated_at=now()
-            where status in ('queued','processing')
-              and attempt_count >= max_attempts
-              and (status='queued' or lease_expires_at <= clock_timestamp())`,
+            where status='processing'
+              and attempt_count < max_attempts
+              and lease_expires_at <= clock_timestamp()`,
         );
         const selected = await client.query(
           `select job.id
@@ -163,6 +239,16 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
             returning job.*, batch.request_json, batch.source_snapshot_json`,
           [selected.rows[0]?.id, input.workerId, leaseToken, input.leaseSeconds],
         );
+        if (claimed.rowCount) {
+          await client.query(
+            `update ai_content_proposal_batches batch
+                set status='building',error_code=null,error_message=null,updated_at=now()
+               from ai_content_proposal_jobs job
+              where job.id=$1 and batch.id=job.batch_id
+                and batch.workspace_id=job.workspace_id and batch.brand_id=job.brand_id`,
+            [selected.rows[0]?.id],
+          );
+        }
         await client.query("COMMIT");
         return claimed.rowCount ? mapJob(claimed.rows[0]) : null;
       } catch (error) {
@@ -196,10 +282,14 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
       try {
         await client.query("BEGIN");
         const result = await client.query(
-          `select job.*, lease_expires_at <= clock_timestamp() as lease_expired
+          `select job.*,batch.content_family,batch.request_json,batch.source_snapshot_json,
+                  job.lease_expires_at <= clock_timestamp() as lease_expired
              from ai_content_proposal_jobs job
+             join ai_content_proposal_batches batch
+               on batch.id=job.batch_id and batch.workspace_id=job.workspace_id
+              and batch.brand_id=job.brand_id
             where job.id=$1
-            for update`,
+            for update of job,batch`,
           [input.jobId],
         );
         const job = result.rows[0] as Record<string, unknown> | undefined;
@@ -218,6 +308,7 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
           || job.lease_expired === true) {
           throw new Error("content_proposal_job_lease_invalid");
         }
+        assertProposalsMatchBatch(proposals, job);
         await client.query(
           `insert into ai_content_proposals (
              workspace_id, brand_id, batch_id, position, proposal_json

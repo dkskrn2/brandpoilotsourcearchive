@@ -4,6 +4,7 @@ import { createAiContentRepository } from "./aiContentRepository.js";
 const workspaceId = "10000000-0000-4000-8000-000000000001";
 const brandId = "20000000-0000-4000-8000-000000000001";
 const generationId = "30000000-0000-4000-8000-000000000001";
+const actorUserId = "40000000-0000-4000-8000-000000000001";
 const target = { id: "target-1", name: "실용 고객", traits: ["바쁨"], painPoints: ["시간 부족"], purchaseMotivations: ["간편함"], uspEvidence: [] };
 const appeal = { id: "appeal-1", targetId: "target-1", title: "빠른 시작", description: "쉽게 시작", evidenceType: "product_fact", connectionReason: "상품 근거", sources: [] };
 const analysis = {
@@ -25,6 +26,7 @@ function poolFor(
   const query = async (text: string, params: unknown[] = []) => {
     sql.push(text);
     if (["BEGIN", "COMMIT", "ROLLBACK"].includes(text)) return { rows: [], rowCount: 0 };
+    if (text.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
     if (text.includes("from ai_content_attachment_upload_sessions")) {
       return pendingUpload ? { rows: [{ id: "upload-1" }], rowCount: 1 } : { rows: [], rowCount: 0 };
     }
@@ -65,7 +67,7 @@ function subjectDraft(overrides: Record<string, unknown> = {}) {
 describe("AI content subject snapshot integration", () => {
   it("stores the v2 snapshot before usage ledger insertion", async () => {
     const fake = poolFor(subjectDraft());
-    await createAiContentRepository(fake.pool).startAiContentGeneration({ workspaceId, brandId, generationId, idempotencyKey: "generate-1", outputCount: 1, usageDate: "2026-07-20", dailyGenerationLimit: 10 });
+    await createAiContentRepository(fake.pool).startAiContentGeneration({ workspaceId, brandId, generationId, actorUserId, idempotencyKey: "generate-1", outputCount: 1, usageDate: "2026-07-20", dailyGenerationLimit: 10 });
     const updateIndex = fake.sql.findIndex((item) => item.includes("subject_analysis_snapshot = coalesce"));
     const usageIndex = fake.sql.findIndex((item) => item.includes("from ai_content_usage_ledger"));
     expect(updateIndex).toBeGreaterThan(-1);
@@ -82,7 +84,7 @@ describe("AI content subject snapshot integration", () => {
     }]);
 
     await createAiContentRepository(fake.pool).startAiContentGeneration({
-      workspaceId, brandId, generationId, idempotencyKey: "generate-canonical",
+      workspaceId, brandId, generationId, actorUserId, idempotencyKey: "generate-canonical",
       outputCount: 1, usageDate: "2026-07-20", dailyGenerationLimit: 10,
     });
 
@@ -99,7 +101,7 @@ describe("AI content subject snapshot integration", () => {
   it("rejects final generation while a pending upload is active", async () => {
     const fake = poolFor(subjectDraft(), null, [], true);
     await expect(createAiContentRepository(fake.pool).startAiContentGeneration({
-      workspaceId, brandId, generationId, idempotencyKey: "generate-pending",
+      workspaceId, brandId, generationId, actorUserId, idempotencyKey: "generate-pending",
       outputCount: 1, usageDate: "2026-07-20", dailyGenerationLimit: 10,
     })).rejects.toThrow("ai_content_attachment_upload_in_progress");
   });
@@ -107,7 +109,7 @@ describe("AI content subject snapshot integration", () => {
   it("does not rebuild an existing snapshot from a changed draft", async () => {
     const existing = { contractVersion: "content-generation-input.v2", contentType: "card_news", brandContext: { ready: true, brandName: "Growthline", ownedUrl: "https://example.com", sourceStatus: "crawled", lastCrawledAt: null, wikiVersionId: "wiki-1", wikiUpdatedAt: null, summary: "브랜드", pageCount: 1, context: { brand: { name: "Growthline", brandColor: "#0057B8" } } }, subject: { analysisId: "analysis-old", analysisVersion: 1, type: "product", sourceUrl: "https://example.com/product", facts: [], research: {}, selectedImages: [{ id: "image-1", url: "https://blob.example/product.png", role: "product", altText: "상품" }] }, message: { target, appeal, qualityBrief: {} }, creativeDirection: { prompts: [], brandColor: "#0057B8", selectedColor: "#0057B8", aspectRatio: "1:1", outputCount: 1 }, references: [], attachments: [] };
     const fake = poolFor(subjectDraft({ subjectAnalysisId: "analysis-new" }), existing);
-    await createAiContentRepository(fake.pool).startAiContentGeneration({ workspaceId, brandId, generationId, idempotencyKey: "generate-2", outputCount: 1, usageDate: "2026-07-20", dailyGenerationLimit: 10 });
+    await createAiContentRepository(fake.pool).startAiContentGeneration({ workspaceId, brandId, generationId, actorUserId, idempotencyKey: "generate-2", outputCount: 1, usageDate: "2026-07-20", dailyGenerationLimit: 10 });
     expect(fake.sql.some((item) => item.includes("from ai_content_subject_analyses where id = $1"))).toBe(false);
   });
 
@@ -140,6 +142,7 @@ describe("AI content subject snapshot integration", () => {
       workspaceId,
       brandId,
       generationId,
+      actorUserId,
       idempotencyKey: "generate-after-removal",
       outputCount: 1,
       usageDate: "2026-07-20",

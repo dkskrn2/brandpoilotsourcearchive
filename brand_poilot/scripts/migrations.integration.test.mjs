@@ -4351,6 +4351,31 @@ test("migration runner records forward-only 060 through 066 without changing the
   });
 });
 
+test("066 can be applied twice without duplicating its orchestration patch", async () => {
+  const migrations = await loadMigrations();
+  const migration066 = migrations.find(
+    (migration) => migration.id === "066_ai_content_analyzed_subject_orchestration.sql",
+  );
+  assert.ok(migration066);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "066_ai_content_analyzed_subject_orchestration.sql",
+    );
+    await database.exec(migration066.sql);
+    const definition = await database.query(
+      "select pg_get_functiondef('start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)'::regprocedure) definition",
+    );
+    assert.equal(
+      definition.rows[0].definition.match(/analyzed_subject_snapshot_invalid/g)?.length,
+      1,
+    );
+  });
+});
+
 test("064 keeps reference upload cancellation identity separate from avatar receipts", async () => {
   const migrations = await loadMigrations();
   await withDatabase(async (database) => {

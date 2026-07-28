@@ -76,7 +76,10 @@ describe("automated card news input", () => {
     expect(result.creativeDirection.selectedColor).toBe("#2563eb");
   });
 
-  it("writes the canonical informational card-news mapping", async () => {
+  it.each([
+    ["absent", undefined],
+    ["false", { automatedContentEnabled: false }],
+  ])("performs no automated writes when the feature flag is %s", async (_label, options) => {
     const calls: Array<{ sql: string; params: unknown[] }> = [];
     const client = {
       query: async (sql: string, params: unknown[] = []) => {
@@ -85,7 +88,7 @@ describe("automated card news input", () => {
       },
     };
 
-    await enqueueAutomatedCardNews(client, {
+    const result = await enqueueAutomatedCardNews(client, {
       workspaceId: "20000000-0000-4000-8000-000000000002",
       brandId: "30000000-0000-4000-8000-000000000003",
       contentTopicId: "topic-1",
@@ -94,19 +97,10 @@ describe("automated card news input", () => {
       topic: { title: "운영 체크리스트", angle: "반복 업무 줄이기" },
       representativeUrl: null,
       sourceMaterials: [],
-    });
+    }, options);
 
-    const generationInsert = calls.find((call) =>
-      call.sql.includes("insert into ai_content_generations")
-    );
-    expect(generationInsert?.sql).toContain(
-      "content_family, output_format, subject_mode",
-    );
-    expect(generationInsert?.params.slice(7)).toEqual([
-      "informational",
-      "card_news",
-      "brand_topic",
-    ]);
+    expect(result).toEqual({ mode: "disabled" });
+    expect(calls).toEqual([]);
   });
 
   it("creates only a scheduled proposal batch when automated proposal mode is enabled", async () => {
@@ -134,5 +128,107 @@ describe("automated card news input", () => {
     expect(calls.some(({ sql }) => sql.includes("origin") && sql.includes("'scheduled_crawl'"))).toBe(true);
     expect(calls.some(({ sql }) => sql.includes("insert into ai_content_proposal_jobs"))).toBe(true);
     expect(calls.some(({ sql }) => sql.includes("insert into ai_content_generations"))).toBe(false);
+  });
+
+  it("freezes the latest successful same-brand snapshot that triggered a scheduled proposal", async () => {
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const client = {
+      query: async (sql: string, params: unknown[] = []) => {
+        calls.push({ sql, params });
+        if (sql.includes("with candidate_sources")) {
+          return {
+            rows: [{
+              id: "90000000-0000-4000-8000-000000000009",
+              url: "https://example.com/topic",
+              fetched_at: "2026-07-28T00:00:00.000Z",
+              content_hash: "a".repeat(64),
+              summary: "frozen evidence",
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes("insert into ai_content_proposal_batches")) {
+          return { rows: [{ id: "batch-1" }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      },
+    };
+
+    await enqueueAutomatedCardNews(client, {
+      workspaceId: "20000000-0000-4000-8000-000000000002",
+      brandId: "30000000-0000-4000-8000-000000000003",
+      contentTopicId: "topic-1",
+      channelOutputId: "output-1",
+      sourceSnapshotIds: ["80000000-0000-4000-8000-000000000008"],
+      brand: { name: "Growthline", brandColor: null },
+      topic: { title: "운영 체크리스트", angle: "반복 업무 줄이기" },
+      representativeUrl: "https://example.com/topic",
+      sourceMaterials: [],
+    }, { automatedContentEnabled: true });
+
+    const lookup = calls.find(({ sql }) => sql.includes("with candidate_sources"));
+    expect(lookup?.sql).toContain("snapshot.workspace_id=$1");
+    expect(lookup?.sql).toContain("snapshot.brand_id=$2");
+    expect(lookup?.sql).toContain("order by latest.fetched_at desc,latest.id desc");
+    const insert = calls.find(({ sql }) => sql.includes("insert into ai_content_proposal_batches"));
+    expect(JSON.parse(String(insert?.params[4]))).toEqual([{
+      sourceId: "90000000-0000-4000-8000-000000000009",
+      url: "https://example.com/topic",
+      crawledAt: "2026-07-28T00:00:00.000Z",
+      contentHash: "a".repeat(64),
+      summary: "frozen evidence",
+    }]);
+    expect(JSON.parse(String(insert?.params[2])).sourceSnapshotIds).toEqual([
+      "90000000-0000-4000-8000-000000000009",
+    ]);
+  });
+
+  it("queues stale or missing recrawls independently and never mutates an existing batch snapshot", async () => {
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    let lookup = 0;
+    const client = {
+      query: async (sql: string, params: unknown[] = []) => {
+        calls.push({ sql, params });
+        if (sql.includes("with candidate_sources")) {
+          lookup += 1;
+          return {
+            rows: [{
+              id: lookup === 1 ? "80000000-0000-4000-8000-000000000008" : "90000000-0000-4000-8000-000000000009",
+              url: "https://example.com/topic",
+              fetched_at: "2026-07-01T00:00:00.000Z",
+              content_hash: (lookup === 1 ? "a" : "b").repeat(64),
+              summary: "evidence",
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes("insert into ai_content_proposal_batches")) {
+          return { rows: [{ id: "batch-1" }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      },
+    };
+    const input = {
+      workspaceId: "20000000-0000-4000-8000-000000000002",
+      brandId: "30000000-0000-4000-8000-000000000003",
+      contentTopicId: "topic-1",
+      channelOutputId: "output-1",
+      sourceSnapshotIds: ["70000000-0000-4000-8000-000000000007"],
+      brand: { name: "Growthline", brandColor: null },
+      topic: { title: "운영 체크리스트", angle: "반복 업무 줄이기" },
+      representativeUrl: "https://example.com/topic",
+      sourceMaterials: [],
+    };
+
+    await enqueueAutomatedCardNews(client, input, { automatedContentEnabled: true });
+    await enqueueAutomatedCardNews(client, input, { automatedContentEnabled: true });
+
+    expect(calls.some(({ sql }) => sql.includes("insert into source_crawl_runs")
+      && sql.includes("latest.fetched_at is null or latest.fetched_at < now() - interval '7 days'"))).toBe(true);
+    const batchInserts = calls.filter(({ sql }) => sql.includes("insert into ai_content_proposal_batches"));
+    expect(batchInserts).toHaveLength(2);
+    expect(batchInserts[0]?.sql).toContain("do update set updated_at=ai_content_proposal_batches.updated_at");
+    expect(batchInserts[0]?.params[4]).not.toEqual(batchInserts[1]?.params[4]);
+    expect(calls.some(({ sql }) => /wait|sleep/i.test(sql))).toBe(false);
   });
 });

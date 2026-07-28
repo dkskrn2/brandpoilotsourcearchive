@@ -1028,9 +1028,9 @@ export interface ApiRepository
     workerId: string;
     leaseToken: string;
   }): Promise<SubjectAnalysisWorkerLease | null>;
-  createAiContentAnalysis(input: BrandScope & { actorUserId?: string } & CreateAiContentAnalysisInput): Promise<AiContentGenerationRecord>;
-  updateAiContentDraft(input: BrandGenerationScope & { actorUserId?: string } & UpdateAiContentDraftInput): Promise<AiContentGenerationRecord>;
-  startAiContentGeneration(input: BrandGenerationScope & { actorUserId?: string } & StartAiContentGenerationInput & { usageDate: string; dailyGenerationLimit: number }): Promise<AiContentGenerationRecord>;
+  createAiContentAnalysis(input: BrandScope & { actorUserId: string } & CreateAiContentAnalysisInput): Promise<AiContentGenerationRecord>;
+  updateAiContentDraft(input: BrandGenerationScope & { actorUserId: string } & UpdateAiContentDraftInput): Promise<AiContentGenerationRecord>;
+  startAiContentGeneration(input: BrandGenerationScope & { actorUserId: string } & StartAiContentGenerationInput & { usageDate: string; dailyGenerationLimit: number }): Promise<AiContentGenerationRecord>;
   listAiContentGenerations(input: BrandScope): Promise<AiContentGenerationRecord[]>;
   getAiContentGeneration(input: BrandGenerationScope): Promise<AiContentGenerationRecord | null>;
   listAiContentUsage(input: BrandScope & { usageDate: string }): Promise<AiContentUsageRecord>;

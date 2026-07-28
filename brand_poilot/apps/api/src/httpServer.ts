@@ -3098,7 +3098,7 @@ export function createServer(
   }
 
   function authenticateContentProposalWorker(authorization: string | undefined, reply: FastifyReply) {
-    const token = contentProposalWorkerApiToken ?? workerApiToken;
+    const token = contentProposalWorkerApiToken;
     if (!token) {
       reply.code(503).send({ error: "worker_api_not_configured" });
       return false;

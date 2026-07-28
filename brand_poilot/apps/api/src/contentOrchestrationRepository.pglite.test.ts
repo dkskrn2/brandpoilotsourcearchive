@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createAiContentRepository } from "./aiContentRepository.js";
 
 let database: PGlite | undefined;
 let selectedProposalId = "";
@@ -493,6 +494,19 @@ describe("content orchestration PostgreSQL contract", () => {
         channels: ["blog_export"],
       });
 
+      await database!.exec("savepoint subject_mode_mismatch");
+      await database!.query(
+        "update ai_content_generations set subject_mode='brand_topic' where id=$1",
+        [ids.analyzedGeneration],
+      );
+      await expect(database!.query(
+        "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+        [
+          ids.analyzedGeneration, ids.workspace, ids.brand, JSON.stringify(brief),
+          JSON.stringify(null), ids.actor,
+        ],
+      )).rejects.toThrow(/generation_subject_mode_mismatch/);
+      await database!.exec("rollback to savepoint subject_mode_mismatch");
       await expect(database!.query(
         "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
         [
@@ -945,6 +959,90 @@ describe("content orchestration PostgreSQL contract", () => {
     } finally {
       await db.exec("rollback");
     }
+  });
+
+  it("resolves every canonical asset only from same-tenant incomplete unstarted drafts", async () => {
+    const db = database as PGlite;
+    const productDraft = "2b000000-0000-4000-8000-00000000002b";
+    const wikiDraft = "2c000000-0000-4000-8000-00000000002c";
+    const startedDraft = "2d000000-0000-4000-8000-00000000002d";
+    const completedDraft = "2e000000-0000-4000-8000-00000000002e";
+    const otherTenantDraft = "2f000000-0000-4000-8000-00000000002f";
+    const productOrchestration = {
+      subject: { mode: "product_service", productServiceId: ids.product },
+      avatar: { mode: "library", id: ids.avatar, snapshot: {} },
+    };
+    const wikiOrchestration = {
+      subject: { mode: "brand_topic", topic: "Topic", wikiItemIds: [ids.wiki] },
+      avatar: null,
+    };
+    await db.query(
+      `insert into ai_content_generations (
+         id,workspace_id,brand_id,type,title,status,analysis_idempotency_key,draft_json,
+         content_family,output_format,subject_mode,product_service_id,attachments_locked_at
+       ) values
+       ($1,$6,$7,'blog','Product draft','draft','draft-assets-product',$10::jsonb,
+        'informational','blog','product_service',$8,null),
+       ($2,$6,$7,'blog','Wiki draft','analysis_ready','draft-assets-wiki',$11::jsonb,
+        'informational','blog','brand_topic',null,null),
+       ($3,$6,$7,'blog','Started draft','draft','draft-assets-started',$10::jsonb,
+        'informational','blog','product_service',$8,now()),
+       ($4,$6,$7,'blog','Completed draft','completed','draft-assets-completed',$10::jsonb,
+        'informational','blog','product_service',$8,null),
+       ($5,$6,$9,'blog','Other tenant draft','draft','draft-assets-other',$12::jsonb,
+        'informational','blog','brand_topic',null,null)`,
+      [
+        productDraft, wikiDraft, startedDraft, completedDraft, otherTenantDraft,
+        ids.workspace, ids.brand, ids.product, ids.otherBrand,
+        JSON.stringify({ orchestration: productOrchestration }),
+        JSON.stringify({ orchestration: wikiOrchestration }),
+        JSON.stringify({
+          orchestration: {
+            subject: { mode: "brand_topic", topic: "Other", wikiItemIds: [ids.otherWiki] },
+            avatar: { mode: "library", id: ids.otherAvatar, snapshot: {} },
+          },
+        }),
+      ],
+    );
+    await db.query(
+      `insert into ai_content_generation_references (
+         generation_id,reference_id,workspace_id,brand_id,position,reference_item_id,
+         reference_snapshot_id,pattern_version_id,roles_json,reference_snapshot_json
+       ) values ($1,gen_random_uuid(),$2,$3,1,$4,$5,$6,'["planning"]',$7::jsonb)`,
+      [
+        productDraft, ids.workspace, ids.brand, ids.referenceItem, ids.referenceSnapshot,
+        ids.patternVersion, JSON.stringify(canonicalReferenceSnapshot),
+      ],
+    );
+    const repository = createAiContentRepository({
+      query: db.query.bind(db),
+    } as never);
+
+    const referenceDrafts = await repository.listAiContentDraftReferences({
+      workspaceId: ids.workspace, brandId: ids.brand,
+      assetType: "reference", assetId: ids.referenceItem,
+    });
+    expect(referenceDrafts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ generationId: productDraft }),
+    ]));
+    expect(referenceDrafts.map((reference) => reference.generationId))
+      .not.toEqual(expect.arrayContaining([startedDraft, completedDraft]));
+    await expect(repository.listAiContentDraftReferences({
+      workspaceId: ids.workspace, brandId: ids.brand,
+      assetType: "avatar", assetId: ids.avatar,
+    })).resolves.toEqual([expect.objectContaining({ generationId: productDraft })]);
+    await expect(repository.listAiContentDraftReferences({
+      workspaceId: ids.workspace, brandId: ids.brand,
+      assetType: "product_service", assetId: ids.product,
+    })).resolves.toEqual([expect.objectContaining({ generationId: productDraft })]);
+    await expect(repository.listAiContentDraftReferences({
+      workspaceId: ids.workspace, brandId: ids.brand,
+      assetType: "wiki", assetId: ids.wiki,
+    })).resolves.toEqual([expect.objectContaining({ generationId: wikiDraft })]);
+    await expect(repository.listAiContentDraftReferences({
+      workspaceId: ids.workspace, brandId: ids.brand,
+      assetType: "avatar", assetId: ids.otherAvatar,
+    })).resolves.toEqual([]);
   });
 
   it("starts concurrently from one exact brief and retries the frozen snapshot without current reads", async () => {
