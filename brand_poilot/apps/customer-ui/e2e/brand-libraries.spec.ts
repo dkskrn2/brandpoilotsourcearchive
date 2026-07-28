@@ -92,7 +92,12 @@ async function installRealApi(page: Page) {
       url: `${apiOrigin}${source.pathname}${source.search}`,
       headers,
     });
-    await route.fulfill({ response });
+    const body = await response.body();
+    await route.fulfill({
+      status: response.status(),
+      headers: response.headers(),
+      body,
+    });
   });
 }
 
@@ -322,7 +327,7 @@ test("manual Wiki item reaches active-version UI through the real Wiki worker", 
 });
 
 test("two-image avatar becomes default and archives without deleting its snapshot assets", async ({ page }) => {
-  await page.goto("http://localhost:5273/brand-center?tab=avatars");
+  await page.goto("/brand-center?tab=avatars");
   const registration = await page.evaluate(async (input) => {
     const response = await fetch(`http://localhost:4000/brands/${input.brandId}/avatars`, {
       method: "POST",
@@ -357,6 +362,7 @@ test("two-image avatar becomes default and archives without deleting its snapsho
   await card.getByRole("button", { name: "E2E 모델를 기본 아바타로 설정" }).click();
   await expect(card.getByText("기본 아바타")).toBeVisible();
   await card.getByRole("button", { name: "보관", exact: true }).click();
+  await page.getByRole("button", { name: "보관 계속" }).click();
   await expect(card).toHaveCount(0);
 
   const retained = await database.query<{ status: string; image_count: number }>(
@@ -373,7 +379,7 @@ test("saved trend opens one patterned canonical reference under its stable ID", 
     response.request().method() === "GET"
     && /\/brands\/[^/]+\/references(?:\?|$)/.test(response.url()),
   );
-  await page.goto("http://localhost:5273/references?view=all");
+  await page.goto("/references?view=all");
   const listResponse = await listResponsePromise;
   const references = await listResponse.json() as Array<{ id: string; title: string }>;
   expect(listResponse.status(), JSON.stringify(references)).toBe(200);

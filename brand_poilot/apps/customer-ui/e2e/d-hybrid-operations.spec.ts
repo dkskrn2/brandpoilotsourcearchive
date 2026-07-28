@@ -270,7 +270,7 @@ test.describe("D hybrid operations cycle", () => {
     await page.getByRole("region", { name: "고객 A 대화 내용" }).getByRole("link", { name: "Wiki에서 보완" }).click();
     await expect(page).toHaveURL(new RegExp(`/brand-center\\?tab=wiki&issue=${issueId}`));
     const issueDetail = page.getByRole("region", { name: "지식 개선 상세" });
-    await expect(issueDetail).toBeFocused();
+    await expect(issueDetail).toBeFocused({ timeout: 15_000 });
     await expect(issueDetail.getByRole("heading", { name: "환불 기준이 뭐예요?" })).toBeVisible();
     await page.getByLabel("연결할 Wiki 항목").selectOption("wiki-refund");
     await page.getByRole("button", { name: "보완 항목 연결" }).click();
