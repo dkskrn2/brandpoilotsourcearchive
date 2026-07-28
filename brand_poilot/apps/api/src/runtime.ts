@@ -14,6 +14,7 @@ export interface ApiReadinessInput {
   database: "ok" | "error";
   schedulerEnabled: boolean;
   publishingEnabled: boolean;
+  dmWorkersEnabled: boolean;
   activeDmEnabled: boolean;
   dmWorker: WorkerReadinessStatus;
   wikiWorker: WorkerReadinessStatus;
@@ -22,7 +23,8 @@ export interface ApiReadinessInput {
 }
 
 export function assessApiReadiness(input: ApiReadinessInput) {
-  const dmDependenciesReady = !input.activeDmEnabled
+  const dmRequired = input.dmWorkersEnabled && input.activeDmEnabled;
+  const dmDependenciesReady = !dmRequired
     || (input.dmWorker === "online" && input.wikiWorker === "online");
   const contentProposalDependenciesReady = !input.contentProposalsEnabled
     || input.contentProposalWorker === "online";
@@ -38,13 +40,13 @@ export function assessApiReadiness(input: ApiReadinessInput) {
       features: {
         scheduler: input.schedulerEnabled ? "enabled" as const : "disabled" as const,
         publishing: input.publishingEnabled ? "enabled" as const : "disabled" as const,
-        dm: input.activeDmEnabled ? "enabled" as const : "disabled" as const,
-        wiki: input.activeDmEnabled ? "enabled" as const : "disabled" as const,
+        dm: dmRequired ? "enabled" as const : "disabled" as const,
+        wiki: dmRequired ? "enabled" as const : "disabled" as const,
         contentProposals: input.contentProposalsEnabled ? "enabled" as const : "disabled" as const,
       },
       workers: {
-        dm: input.activeDmEnabled ? input.dmWorker : "not_required" as const,
-        wiki: input.activeDmEnabled ? input.wikiWorker : "not_required" as const,
+        dm: dmRequired ? input.dmWorker : "not_required" as const,
+        wiki: dmRequired ? input.wikiWorker : "not_required" as const,
         contentProposal: input.contentProposalsEnabled
           ? input.contentProposalWorker
           : "not_required" as const,

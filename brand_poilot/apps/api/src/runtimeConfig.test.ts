@@ -139,6 +139,7 @@ describe("loadApiRuntimeConfig", () => {
     expect(config.readiness).toEqual({
       schedulerEnabled: false,
       publishingEnabled: false,
+      dmWorkersEnabled: false,
       contentProposalsEnabled: false,
     });
   });
@@ -157,6 +158,7 @@ describe("loadApiRuntimeConfig", () => {
       AUTOMATED_CONTENT_ENABLED: "true",
     })).toMatchObject({
       contentProposalsEnabled: false,
+      dmWorkersEnabled: false,
       automatedContentEnabled: true,
       readiness: { contentProposalsEnabled: false },
     });
@@ -237,6 +239,7 @@ describe("loadApiRuntimeConfig", () => {
     expect(config.readiness).toEqual({
       schedulerEnabled: false,
       publishingEnabled: false,
+      dmWorkersEnabled: false,
       contentProposalsEnabled: false,
     });
     expect(config.db).toEqual({

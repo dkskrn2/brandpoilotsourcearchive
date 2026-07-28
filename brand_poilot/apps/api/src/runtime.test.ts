@@ -19,6 +19,7 @@ describe("server runtime", () => {
       database: "ok",
       schedulerEnabled: false,
       publishingEnabled: false,
+      dmWorkersEnabled: false,
       activeDmEnabled: false,
       dmWorker: "offline",
       wikiWorker: "offline",
@@ -46,6 +47,17 @@ describe("server runtime", () => {
     });
   });
 
+  it("does not require offline DM workers while their deployment profile is disabled", () => {
+    const result = assessApiReadiness({
+      database: "ok", schedulerEnabled: false, publishingEnabled: false,
+      dmWorkersEnabled: false, activeDmEnabled: true,
+      dmWorker: "offline", wikiWorker: "offline",
+      contentProposalsEnabled: false, contentProposalWorker: "offline",
+    });
+    expect(result.statusCode).toBe(200);
+    expect(result.body.workers).toMatchObject({ dm: "not_required", wiki: "not_required" });
+  });
+
   it.each([
     ["dm", "offline", "online"],
     ["dm stale", "stale", "online"],
@@ -58,6 +70,7 @@ describe("server runtime", () => {
         database: "ok",
         schedulerEnabled: false,
         publishingEnabled: false,
+        dmWorkersEnabled: true,
         activeDmEnabled: true,
         dmWorker,
         wikiWorker,
@@ -82,6 +95,7 @@ describe("server runtime", () => {
         database: "ok",
         schedulerEnabled: false,
         publishingEnabled: false,
+        dmWorkersEnabled: false,
         activeDmEnabled: false,
         dmWorker: "offline",
         wikiWorker: "offline",
@@ -103,6 +117,7 @@ describe("server runtime", () => {
       database: "ok",
       schedulerEnabled: false,
       publishingEnabled: false,
+      dmWorkersEnabled: false,
       activeDmEnabled: false,
       dmWorker: "offline",
       wikiWorker: "offline",

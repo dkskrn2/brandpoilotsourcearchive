@@ -1149,6 +1149,7 @@ describe("API server", () => {
       readinessPolicy: {
         schedulerEnabled: false,
         publishingEnabled: false,
+        dmWorkersEnabled: true,
         contentProposalsEnabled: false,
       },
       runtimePolicy: {
@@ -1197,6 +1198,7 @@ describe("API server", () => {
       readinessPolicy: {
         schedulerEnabled: false,
         publishingEnabled: false,
+        dmWorkersEnabled: true,
         contentProposalsEnabled: false,
       },
     });
