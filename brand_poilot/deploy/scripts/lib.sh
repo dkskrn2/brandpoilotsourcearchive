@@ -220,14 +220,17 @@ validate_release_manifest() {
 
 validate_release_directory() {
   local release_directory="$1"
+  local validation_role="${2:-candidate}"
   [[ -d "$release_directory" && ! -L "$release_directory" ]] || fail "release_directory_invalid"
-  validate_release_integrity "$release_directory"
+  validate_release_integrity "$release_directory" "$validation_role"
   validate_release_manifest "$release_directory/release.env"
   [[ "$(basename -- "$release_directory")" == "${RELEASE_MANIFEST[RELEASE_SHA]}" ]] ||
     fail "release_directory_sha_mismatch"
 }
 
 release_file_specs() {
+  local release_directory="${1:-}"
+  local validation_role="${2:-candidate}"
   printf '%s\n' \
     "600 release.env" \
     "600 release.env.sha256" \
@@ -239,9 +242,13 @@ release_file_specs() {
     "755 scripts/deploy.sh" \
     "755 scripts/verify-canary.sh" \
     "755 scripts/promote.sh" \
-    "755 scripts/rollback.sh" \
-    "755 scripts/backup-state.sh" \
-    "755 scripts/restore-state.sh"
+    "755 scripts/rollback.sh"
+  if [[ "$validation_role" != "legacy-current" ||
+        "$(basename -- "$release_directory")" != "02aa2bcae3f66d494f16a26bec9055cac17464f9" ]]; then
+    printf '%s\n' \
+      "755 scripts/backup-state.sh" \
+      "755 scripts/restore-state.sh"
+  fi
 }
 
 require_release_file() {
@@ -254,6 +261,7 @@ require_release_file() {
 
 build_release_integrity() {
   local release_directory="$1"
+  local validation_role="${2:-candidate}"
   local mode
   local relative
   local checksum
@@ -267,7 +275,7 @@ build_release_integrity() {
     modes+=("$mode")
     relatives+=("$relative")
     paths+=("$release_directory/$relative")
-  done < <(release_file_specs)
+  done < <(release_file_specs "$release_directory" "$validation_role")
   while read -r checksum ignored_path; do
     [[ "$checksum" =~ ^[a-f0-9]{64}$ ]] || fail "release_integrity_checksum_invalid"
     [[ "$index" -lt "${#paths[@]}" ]] || fail "release_integrity_count_invalid"
@@ -286,11 +294,12 @@ generate_release_integrity() {
 
 validate_release_integrity() {
   local release_directory="$1"
+  local validation_role="${2:-candidate}"
   local integrity_file="$release_directory/release-integrity.sha256"
   local expected
   local actual
   require_release_file "$integrity_file" 600
-  expected="$(build_release_integrity "$release_directory")"
+  expected="$(build_release_integrity "$release_directory" "$validation_role")"
   actual="$(<"$integrity_file")"
   [[ "$actual" == "$expected" ]] || fail "release_integrity_mismatch"
 }
@@ -488,7 +497,7 @@ reconcile_transition() {
   local -a restore_compose=()
 
   if [[ "$from_current" != "NONE" ]]; then
-    validate_release_directory "$root/releases/$from_current"
+    validate_release_directory "$root/releases/$from_current" legacy-current
     current_api_image="${RELEASE_MANIFEST[API_IMAGE]}"
     current_caddy_image="${RELEASE_MANIFEST[CADDY_IMAGE]}"
     current_canary_host="${RELEASE_MANIFEST[CANARY_HOST]}"

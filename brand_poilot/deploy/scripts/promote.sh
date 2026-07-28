@@ -42,7 +42,7 @@ CURRENT_CADDY_IMAGE=""
 CURRENT_CANARY_HOST=""
 CURRENT_PRIMARY_HOST=""
 if load_optional_state_sha "$ROOT/state/current" CURRENT_SHA; then
-  validate_release_directory "$ROOT/releases/$CURRENT_SHA"
+  validate_release_directory "$ROOT/releases/$CURRENT_SHA" legacy-current
   CURRENT_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
   CURRENT_CADDY_IMAGE="${RELEASE_MANIFEST[CADDY_IMAGE]}"
   CURRENT_CANARY_HOST="${RELEASE_MANIFEST[CANARY_HOST]}"
