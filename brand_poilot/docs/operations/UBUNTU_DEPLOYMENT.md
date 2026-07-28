@@ -325,7 +325,8 @@ NODE_ENV HOST PORT COOKIE_SECURE CORS_ALLOWED_ORIGINS DEV_AUTH_ENABLED
 AUTH_FRONTEND_URL SUPABASE_DATABASE_URL DB_POOL_MAX
 DB_POOL_IDLE_TIMEOUT_MS DB_POOL_CONNECTION_TIMEOUT_MS DB_SSL_CA_BASE64
 SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_BRAND_ASSETS_BUCKET
-WORKER_API_TOKEN ADMIN_SERVICE_TOKEN CRON_SECRET SOURCE_CRAWL_BATCH_SIZE
+WORKER_API_TOKEN ADMIN_SERVICE_TOKEN CONTENT_PROPOSAL_WORKER_API_TOKEN
+CRON_SECRET SOURCE_CRAWL_BATCH_SIZE
 SOURCE_CRAWL_DISCOVERY_LIMIT SOURCE_CRAWL_TIME_BUDGET_MS
 LOCAL_SCHEDULER_ENABLED WORKER_CODEX_MAX_CONCURRENCY
 WORKER_CODEX_DM_RESERVED_SLOTS CREDENTIAL_ENCRYPTION_KEY
@@ -399,6 +400,13 @@ container replacement, release installation, promotion, or rollback must never
 create, modify, or delete shared env files. Those operations may only read the
 fixed paths. Back up and restore them through a separately approved,
 secret-safe operator procedure.
+
+Set `CONTENT_PROPOSAL_WORKER_API_TOKEN` to one dedicated secret in both
+`api.env` and `content-proposal-worker-1.env`. It must not reuse
+`WORKER_API_TOKEN`. Preflight compares only SHA-256 digests of the two complete
+environment lines and fails closed when either value is missing, still a
+placeholder, or different. Do not print either file or token while diagnosing
+this check.
 
 OAuth/provider changes follow
 [`OAUTH_CUTOVER.md`](./OAUTH_CUTOVER.md). In particular,

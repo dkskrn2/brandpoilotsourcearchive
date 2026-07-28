@@ -840,6 +840,77 @@ test("Task 8 fixes every shared env path and preflight permission contract", () 
   assert.match(runbook, /shared\/env[^]*mode 700[^]*bpdeploy/i);
 });
 
+test("content proposal worker authentication is present in the API operator contract", () => {
+  const apiEnv = read("deploy/env/api.env.example");
+  const ubuntuRunbook = read(ubuntuRunbookPath);
+  assert.match(
+    apiEnv,
+    /^CONTENT_PROPOSAL_WORKER_API_TOKEN=required-at-deploy-time$/m,
+  );
+  assert.match(
+    ubuntuRunbook,
+    /WORKER_API_TOKEN ADMIN_SERVICE_TOKEN CONTENT_PROPOSAL_WORKER_API_TOKEN/,
+  );
+});
+
+test("preflight rejects missing or mismatched content proposal worker tokens without leaking them", () => {
+  const bash = findBash();
+  assert.ok(bash, "Bash is required for the shared secret contract");
+  const fixture = mkdtempSync(join(tmpdir(), "brand-pilot-shared-secret-"));
+  const apiEnv = join(fixture, "api.env");
+  const workerEnv = join(fixture, "content-proposal-worker-1.env");
+  const run = () => spawnSync(bash, [
+    "-c",
+    'source "$1"; require_matching_env_secret CONTENT_PROPOSAL_WORKER_API_TOKEN "$2" "$3"',
+    "_",
+    bashPath("deploy/scripts/lib.sh"),
+    bashPath(apiEnv),
+    bashPath(workerEnv),
+  ], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  try {
+    for (const [apiContents, workerContents] of [
+      ["OTHER=value\n", "CONTENT_PROPOSAL_WORKER_API_TOKEN=worker-only\n"],
+      ["CONTENT_PROPOSAL_WORKER_API_TOKEN=api-only\n", "OTHER=value\n"],
+    ]) {
+      writeFileSync(apiEnv, apiContents);
+      writeFileSync(workerEnv, workerContents);
+      const missing = run();
+      assert.notEqual(missing.status, 0);
+      assert.match(missing.stderr, /shared_secret_missing/);
+      assert.doesNotMatch(missing.stderr, /api-only|worker-only/);
+    }
+
+    writeFileSync(apiEnv, "CONTENT_PROPOSAL_WORKER_API_TOKEN=required-at-deploy-time\n");
+    writeFileSync(workerEnv, "CONTENT_PROPOSAL_WORKER_API_TOKEN=required-at-deploy-time\n");
+    const placeholder = run();
+    assert.notEqual(placeholder.status, 0);
+    assert.match(placeholder.stderr, /shared_secret_missing/);
+
+    writeFileSync(apiEnv, "CONTENT_PROPOSAL_WORKER_API_TOKEN=api-secret-value\n");
+    writeFileSync(workerEnv, "CONTENT_PROPOSAL_WORKER_API_TOKEN=worker-secret-value\n");
+    const mismatch = run();
+    assert.notEqual(mismatch.status, 0);
+    assert.match(mismatch.stderr, /shared_secret_mismatch/);
+    assert.doesNotMatch(mismatch.stderr, /api-secret-value|worker-secret-value/);
+
+    writeFileSync(apiEnv, "CONTENT_PROPOSAL_WORKER_API_TOKEN=matching-secret-value\n");
+    writeFileSync(workerEnv, "CONTENT_PROPOSAL_WORKER_API_TOKEN=matching-secret-value\n");
+    const matching = run();
+    assert.equal(matching.status, 0, matching.stderr);
+
+    const preflight = read("deploy/scripts/preflight.sh");
+    assert.match(
+      preflight,
+      /require_matching_env_secret[\s\\]+"CONTENT_PROPOSAL_WORKER_API_TOKEN"[\s\\]+"\$API_ENV_FILE"[\s\\]+"\$CONTENT_PROPOSAL_WORKER_1_ENV_FILE"/,
+    );
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test("Task 8 release replacement cannot mutate shared env files", () => {
   const replacementScripts = [
     "deploy/scripts/deploy.sh",

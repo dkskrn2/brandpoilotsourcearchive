@@ -25,6 +25,34 @@ require_file_mode_600() {
   fi
 }
 
+require_matching_env_secret() {
+  local key="$1"
+  local left_file="$2"
+  local right_file="$3"
+  local left_key_count
+  local right_key_count
+  local left_value_count
+  local right_value_count
+  local left_digest
+  local right_digest
+
+  [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || fail "shared_secret_key_invalid"
+  left_key_count="$(grep -Ec "^${key}=" "$left_file" || true)"
+  right_key_count="$(grep -Ec "^${key}=" "$right_file" || true)"
+  left_value_count="$(grep -Ec "^${key}=.+$" "$left_file" || true)"
+  right_value_count="$(grep -Ec "^${key}=.+$" "$right_file" || true)"
+  if [[ "$left_key_count" != "1" || "$right_key_count" != "1" ||
+    "$left_value_count" != "1" || "$right_value_count" != "1" ]] ||
+    grep -Eq "^${key}=required-at-deploy-time$" "$left_file" ||
+    grep -Eq "^${key}=required-at-deploy-time$" "$right_file"; then
+    fail "shared_secret_missing"
+  fi
+
+  left_digest="$(grep -E "^${key}=.+$" "$left_file" | sha256sum | awk '{print $1}')"
+  right_digest="$(grep -E "^${key}=.+$" "$right_file" | sha256sum | awk '{print $1}')"
+  [[ "$left_digest" == "$right_digest" ]] || fail "shared_secret_mismatch"
+}
+
 require_digest_image() {
   local value="$1"
   [[ "$value" =~ ^[a-zA-Z0-9._-]+(:[0-9]+)?(/[a-zA-Z0-9._-]+)+@sha256:[a-f0-9]{64}$ ]] ||

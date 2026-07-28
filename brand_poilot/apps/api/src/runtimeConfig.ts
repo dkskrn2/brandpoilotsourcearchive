@@ -28,6 +28,7 @@ export interface ApiRuntimeConfig {
 const productionRequiredKeys = [
   "AUTH_FRONTEND_URL",
   "WORKER_API_TOKEN",
+  "CONTENT_PROPOSAL_WORKER_API_TOKEN",
   "ADMIN_SERVICE_TOKEN",
   "CRON_SECRET",
   "CREDENTIAL_ENCRYPTION_KEY",

@@ -129,6 +129,11 @@ require_exact_false "INSTAGRAM_PUBLISH_ENABLED" "$API_ENV_FILE"
 require_exact_false "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED" "$API_ENV_FILE"
 require_exact_false "AUTOMATED_CONTENT_ENABLED" "$API_ENV_FILE"
 require_exact_false "CONTENT_PROPOSALS_ENABLED" "$API_ENV_FILE"
+require_matching_env_secret \
+  "CONTENT_PROPOSAL_WORKER_API_TOKEN" \
+  "$API_ENV_FILE" \
+  "$CONTENT_PROPOSAL_WORKER_1_ENV_FILE"
+status_ok "content_proposal_worker_api_token"
 
 # The initial Ubuntu API/Caddy rollout is intentionally dark. Worker activation is
 # a later, operator-controlled profile action after the remote lease has expired.

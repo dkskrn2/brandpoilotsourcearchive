@@ -7,6 +7,7 @@ function validProductionEnv(): NodeJS.ProcessEnv {
     SUPABASE_DATABASE_URL: "postgresql://database.example.com/brand_pilot",
     AUTH_FRONTEND_URL: "https://app.danbammsg.co.kr",
     WORKER_API_TOKEN: "worker-secret",
+    CONTENT_PROPOSAL_WORKER_API_TOKEN: "content-proposal-worker-secret",
     ADMIN_SERVICE_TOKEN: "admin-secret",
     CRON_SECRET: "cron-secret",
     CREDENTIAL_ENCRYPTION_KEY: "credential-secret-that-is-long-enough",
@@ -32,6 +33,15 @@ function validProductionEnv(): NodeJS.ProcessEnv {
 }
 
 describe("loadApiRuntimeConfig", () => {
+  it("requires a dedicated content proposal worker token in production", () => {
+    const env = validProductionEnv();
+    delete env.CONTENT_PROPOSAL_WORKER_API_TOKEN;
+
+    expect(() => loadApiRuntimeConfig(env)).toThrow(
+      "runtime_config_missing:CONTENT_PROPOSAL_WORKER_API_TOKEN",
+    );
+  });
+
   it("reports only the missing production variable name", () => {
     const env = validProductionEnv();
     delete env.META_APP_SECRET;
