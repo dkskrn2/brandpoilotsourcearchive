@@ -609,6 +609,7 @@ describe("AI content repository", () => {
     await repository.listAiContentReferences({ ...scope, type: "blog" });
 
     expect(pool.sql.join("\n")).toContain("select source.id, 'saved_url' as source");
+    expect(pool.sql.join("\n")).toContain("item.content_purpose in ('informational', 'both')");
   });
 
   it("creates a generation and analyze job atomically", async () => {

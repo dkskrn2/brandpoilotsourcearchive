@@ -3357,9 +3357,10 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       context?: { attempt?: number; parentRunId?: string; now?: Date }
     ) {
       const sourceResult = await pool.query(
-        `select id, workspace_id, brand_id, url
+        `select id, workspace_id, brand_id, url, content_purpose
          from source_urls
          where id = $1 and brand_id = $2
+           and content_purpose in ('informational', 'marketing', 'both')
            and enabled = true
            and deleted_at is null
            and status != 'disabled'`,

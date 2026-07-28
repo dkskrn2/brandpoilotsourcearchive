@@ -44,6 +44,34 @@ as $$
   ), false);
 $$;
 
+create or replace function ai_content_approved_proposal_snapshot_is_valid(value jsonb)
+returns boolean
+language sql
+immutable
+as $$
+  select coalesce((
+    jsonb_typeof(value) = 'object'
+    and value->>'contractVersion' = 'approved-proposal.v1'
+    and value ?& array[
+      'sourceProposalId',
+      'revision',
+      'effectiveProposal',
+      'editPatch',
+      'validationResultId',
+      'approvedBy',
+      'approvedAt'
+    ]
+    and jsonb_typeof(value->'sourceProposalId') = 'string'
+    and jsonb_typeof(value->'revision') = 'number'
+    and (value->>'revision')::integer > 0
+    and jsonb_typeof(value->'effectiveProposal') = 'object'
+    and jsonb_typeof(value->'editPatch') = 'array'
+    and jsonb_typeof(value->'validationResultId') = 'string'
+    and jsonb_typeof(value->'approvedBy') = 'string'
+    and jsonb_typeof(value->'approvedAt') = 'string'
+  ), false);
+$$;
+
 create or replace function ai_content_orchestration_snapshot_is_valid(value jsonb)
 returns boolean
 language sql
@@ -53,38 +81,91 @@ as $$
     jsonb_typeof(value) = 'object'
     and value->>'contractVersion' = 'generation-brief.v1'
     and value ?& array[
-      'brandCoreVersionId',
-      'ruleSetId',
-      'productServiceVersionId',
-      'wikiVersionId',
       'proposalId',
-      'referenceSnapshots',
-      'avatarSnapshot',
-      'imageSnapshots'
+      'approvedProposalVersionId',
+      'approvedProposalSnapshot',
+      'brandCoreVersionId',
+      'ruleSetVersionId',
+      'subject',
+      'wikiSnapshots',
+      'references',
+      'avatar',
+      'outputFormat',
+      'channels',
+      'promptDefinitionVersions'
     ]
-    and jsonb_typeof(value->'brandCoreVersionId') = 'string'
-    and jsonb_typeof(value->'ruleSetId') = 'string'
-    and jsonb_typeof(value->'productServiceVersionId') in ('string', 'null')
-    and jsonb_typeof(value->'wikiVersionId') in ('string', 'null')
     and jsonb_typeof(value->'proposalId') = 'string'
-    and jsonb_typeof(value->'referenceSnapshots') = 'array'
-    and jsonb_array_length(value->'referenceSnapshots') between 0 and 5
-    and jsonb_typeof(value->'avatarSnapshot') in ('object', 'null')
-    and jsonb_typeof(value->'imageSnapshots') = 'array'
-    and not exists (
-      select 1
-      from jsonb_array_elements(value->'referenceSnapshots') as reference(item)
-      where jsonb_typeof(reference.item) is distinct from 'object'
-         or jsonb_typeof(reference.item->'itemId') is distinct from 'string'
-         or not ai_content_reference_roles_are_valid(reference.item->'roles')
+    and jsonb_typeof(value->'approvedProposalVersionId') = 'string'
+    and ai_content_approved_proposal_snapshot_is_valid(value->'approvedProposalSnapshot')
+    and jsonb_typeof(value->'brandCoreVersionId') = 'string'
+    and jsonb_typeof(value->'ruleSetVersionId') = 'string'
+    and jsonb_typeof(value->'subject') = 'object'
+    and (
+      (
+        value->'subject'->>'kind' = 'brand_topic'
+        and jsonb_typeof(value->'subject'->'topic') = 'string'
+        and jsonb_typeof(value->'subject'->'brandCoreEvidenceIds') = 'array'
+      )
+      or (
+        value->'subject'->>'kind' = 'approved_product_service'
+        and jsonb_typeof(value->'subject'->'itemId') = 'string'
+        and jsonb_typeof(value->'subject'->'version') = 'object'
+        and jsonb_typeof(value->'subject'->'version'->'id') = 'string'
+      )
+    )
+    and jsonb_typeof(value->'wikiSnapshots') = 'array'
+    and (
+      select count(*) = count(distinct wiki.item->>'id')
+      from jsonb_array_elements(value->'wikiSnapshots') as wiki(item)
     )
     and not exists (
       select 1
-      from jsonb_array_elements(value->'imageSnapshots') as image(item)
-      where jsonb_typeof(image.item) is distinct from 'object'
-         or jsonb_typeof(image.item->'imageId') is distinct from 'string'
-         or jsonb_typeof(image.item->'objectHash') is distinct from 'string'
-         or image.item->>'objectHash' !~ '^[0-9a-f]{64}$'
+      from jsonb_array_elements(value->'wikiSnapshots') as wiki(item)
+      where jsonb_typeof(wiki.item) is distinct from 'object'
+         or jsonb_typeof(wiki.item->'id') is distinct from 'string'
+    )
+    and jsonb_typeof(value->'references') = 'array'
+    and jsonb_array_length(value->'references') between 0 and 5
+    and (
+      select count(*) = count(distinct reference.item->>'itemId')
+      from jsonb_array_elements(value->'references') as reference(item)
+    )
+    and not exists (
+      select 1
+      from jsonb_array_elements(value->'references') as reference(item)
+      where jsonb_typeof(reference.item) is distinct from 'object'
+         or jsonb_typeof(reference.item->'itemId') is distinct from 'string'
+         or jsonb_typeof(reference.item->'snapshotId') is distinct from 'string'
+         or jsonb_typeof(reference.item->'patternVersionId') is distinct from 'string'
+         or not ai_content_reference_roles_are_valid(reference.item->'roles')
+    )
+    and jsonb_typeof(value->'avatar') in ('object', 'null')
+    and (
+      jsonb_typeof(value->'avatar') = 'null'
+      or (
+        jsonb_typeof(value->'avatar'->'id') = 'string'
+        and jsonb_typeof(value->'avatar'->'assetVersionId') = 'string'
+        and value->'avatar'->>'objectHash' ~ '^[0-9a-f]{64}$'
+        and value->'avatar'->>'mime' in ('image/png', 'image/jpeg', 'image/webp')
+        and value->'avatar'->>'provenance' in ('library', 'upload_and_save', 'one_time')
+      )
+    )
+    and value->>'outputFormat' in ('card_news', 'blog', 'single_image', 'channel_text')
+    and jsonb_typeof(value->'channels') = 'array'
+    and (
+      select count(*) = count(distinct channel)
+      from jsonb_array_elements_text(value->'channels') as selected(channel)
+    )
+    and jsonb_typeof(value->'promptDefinitionVersions') = 'object'
+    and exists (
+      select 1 from jsonb_each(value->'promptDefinitionVersions')
+    )
+    and not exists (
+      select 1
+      from jsonb_each(value->'promptDefinitionVersions') as definition(name, version)
+      where length(trim(definition.name)) = 0
+         or jsonb_typeof(definition.version) <> 'string'
+         or length(trim(definition.version #>> '{}')) = 0
     )
   ), false);
 $$;
@@ -156,6 +237,8 @@ $$;
 
 alter table ai_content_generation_references
   add column if not exists reference_item_id uuid,
+  add column if not exists reference_snapshot_id uuid,
+  add column if not exists pattern_version_id uuid,
   add column if not exists roles_json jsonb;
 
 alter table ai_content_generation_references
@@ -165,6 +248,12 @@ alter table ai_content_generation_references
       reference_item_id is null
       or (
         position between 1 and 5
+        and reference_snapshot_id is not null
+        and pattern_version_id is not null
+        and reference_snapshot_json->>'snapshotId' = reference_snapshot_id::text
+        and reference_snapshot_json->>'contentHash' ~ '^[0-9a-f]{64}$'
+        and jsonb_typeof(reference_snapshot_json->'capturedAt') = 'string'
+        and jsonb_typeof(reference_snapshot_json->'sourceUrl') = 'string'
         and ai_content_reference_roles_are_valid(roles_json)
       )
     );
@@ -179,6 +268,15 @@ begin
       add constraint ai_content_generation_references_reference_item_ownership_fk
       foreign key (reference_item_id, workspace_id, brand_id)
       references reference_items(id, workspace_id, brand_id) on delete restrict;
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'ai_content_generation_references_pattern_ownership_fk'
+  ) then
+    alter table ai_content_generation_references
+      add constraint ai_content_generation_references_pattern_ownership_fk
+      foreign key (pattern_version_id, workspace_id, brand_id)
+      references reference_patterns(id, workspace_id, brand_id) on delete restrict;
   end if;
 end;
 $$;
@@ -271,8 +369,10 @@ create table if not exists ai_content_proposals (
   status text not null default 'suggested'
     check (status in ('suggested', 'selected', 'dismissed')),
   generation_id uuid null,
-  selected_by_user_id uuid null references app_users(id) on delete set null,
+  selected_by_user_id uuid null references app_users(id) on delete restrict,
   selected_at timestamptz null,
+  dismissed_by_user_id uuid null references app_users(id) on delete restrict,
+  dismissed_at timestamptz null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint ai_content_proposals_batch_ownership_fk
@@ -288,13 +388,26 @@ create table if not exists ai_content_proposals (
   constraint ai_content_proposals_selection_state_check check (
     (
       status = 'selected'
+      and selected_by_user_id is not null
       and selected_at is not null
+      and dismissed_by_user_id is null
+      and dismissed_at is null
     )
     or (
-      status <> 'selected'
+      status = 'dismissed'
       and selected_by_user_id is null
       and selected_at is null
       and generation_id is null
+      and dismissed_by_user_id is not null
+      and dismissed_at is not null
+    )
+    or (
+      status = 'suggested'
+      and selected_by_user_id is null
+      and selected_at is null
+      and generation_id is null
+      and dismissed_by_user_id is null
+      and dismissed_at is null
     )
   )
 );
@@ -306,6 +419,79 @@ create unique index if not exists ai_content_proposals_one_selected_per_batch
 create unique index if not exists ai_content_proposals_generation_unique
   on ai_content_proposals (generation_id)
   where generation_id is not null;
+
+create table if not exists ai_content_approved_proposal_versions (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+  brand_id uuid not null,
+  proposal_id uuid not null,
+  revision integer not null check (revision > 0),
+  approved_proposal_snapshot jsonb not null
+    check (ai_content_approved_proposal_snapshot_is_valid(approved_proposal_snapshot)),
+  validation_result_id text not null check (length(trim(validation_result_id)) > 0),
+  approved_by_user_id uuid not null references app_users(id) on delete restrict,
+  approved_at timestamptz not null,
+  created_at timestamptz not null default now(),
+  constraint ai_content_approved_proposal_versions_proposal_ownership_fk
+    foreign key (proposal_id, workspace_id, brand_id)
+    references ai_content_proposals(id, workspace_id, brand_id) on delete restrict,
+  constraint ai_content_approved_proposal_versions_tenant_identity_unique
+    unique (id, workspace_id, brand_id),
+  constraint ai_content_approved_proposal_versions_proposal_revision_unique
+    unique (proposal_id, revision)
+);
+
+create or replace function reject_ai_content_approved_proposal_version_mutation()
+returns trigger
+language plpgsql
+as $$
+begin
+  raise exception using errcode = '55000', message = 'approved_proposal_version_immutable';
+end;
+$$;
+
+drop trigger if exists ai_content_approved_proposal_versions_immutable
+  on ai_content_approved_proposal_versions;
+create trigger ai_content_approved_proposal_versions_immutable
+before update or delete on ai_content_approved_proposal_versions
+for each row execute function reject_ai_content_approved_proposal_version_mutation();
+
+create table if not exists ai_content_generation_briefs (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+  brand_id uuid not null,
+  generation_id uuid not null,
+  approved_proposal_version_id uuid not null,
+  brief_json jsonb not null
+    check (ai_content_orchestration_snapshot_is_valid(brief_json)),
+  created_by_user_id uuid not null references app_users(id) on delete restrict,
+  created_at timestamptz not null default now(),
+  constraint ai_content_generation_briefs_generation_ownership_fk
+    foreign key (generation_id, workspace_id, brand_id)
+    references ai_content_generations(id, workspace_id, brand_id) on delete restrict,
+  constraint ai_content_generation_briefs_approved_proposal_ownership_fk
+    foreign key (approved_proposal_version_id, workspace_id, brand_id)
+    references ai_content_approved_proposal_versions(id, workspace_id, brand_id) on delete restrict,
+  constraint ai_content_generation_briefs_tenant_identity_unique
+    unique (id, workspace_id, brand_id),
+  constraint ai_content_generation_briefs_generation_unique
+    unique (generation_id)
+);
+
+create or replace function reject_ai_content_generation_brief_mutation()
+returns trigger
+language plpgsql
+as $$
+begin
+  raise exception using errcode = '55000', message = 'generation_brief_immutable';
+end;
+$$;
+
+drop trigger if exists ai_content_generation_briefs_immutable
+  on ai_content_generation_briefs;
+create trigger ai_content_generation_briefs_immutable
+before update or delete on ai_content_generation_briefs
+for each row execute function reject_ai_content_generation_brief_mutation();
 
 create table if not exists ai_content_proposal_jobs (
   id uuid primary key default gen_random_uuid(),
@@ -366,6 +552,100 @@ create unique index if not exists ai_content_proposal_jobs_active_batch_unique
 create index if not exists ai_content_proposal_jobs_claim_idx
   on ai_content_proposal_jobs (status, available_at, created_at)
   where status = 'queued';
+
+create table if not exists ai_content_create_idempotency_records (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+  brand_id uuid not null,
+  actor_user_id uuid not null,
+  operation text not null
+    check (operation in ('proposal_batch', 'generation_brief', 'generation_start')),
+  client_request_id text not null check (length(trim(client_request_id)) > 0),
+  normalized_payload_hash text not null
+    check (normalized_payload_hash ~ '^[0-9a-f]{64}$'),
+  resource_type text not null check (length(trim(resource_type)) > 0),
+  resource_id uuid not null,
+  response_json jsonb not null default '{}'::jsonb
+    check (jsonb_typeof(response_json) = 'object'),
+  created_at timestamptz not null default now(),
+  constraint ai_content_create_idempotency_records_brand_ownership_fk
+    foreign key (brand_id, workspace_id)
+    references brands(id, workspace_id) on delete cascade,
+  constraint ai_content_create_idempotency_records_actor_membership_fk
+    foreign key (workspace_id, actor_user_id)
+    references workspace_members(workspace_id, user_id) on delete restrict,
+  constraint ai_content_create_idempotency_records_tenant_identity_unique
+    unique (id, workspace_id, brand_id),
+  constraint ai_content_create_idempotency_records_scope_unique
+    unique (workspace_id, actor_user_id, operation, client_request_id)
+);
+
+create or replace function reserve_ai_content_create_idempotency(
+  target_workspace_id uuid,
+  target_brand_id uuid,
+  target_actor_user_id uuid,
+  target_operation text,
+  target_client_request_id text,
+  target_normalized_payload_hash text,
+  target_resource_type text,
+  target_resource_id uuid,
+  target_response_json jsonb
+)
+returns ai_content_create_idempotency_records
+language plpgsql
+as $$
+declare
+  existing_record ai_content_create_idempotency_records%rowtype;
+  inserted_record ai_content_create_idempotency_records%rowtype;
+begin
+  insert into ai_content_create_idempotency_records (
+    workspace_id,
+    brand_id,
+    actor_user_id,
+    operation,
+    client_request_id,
+    normalized_payload_hash,
+    resource_type,
+    resource_id,
+    response_json
+  ) values (
+    target_workspace_id,
+    target_brand_id,
+    target_actor_user_id,
+    target_operation,
+    target_client_request_id,
+    target_normalized_payload_hash,
+    target_resource_type,
+    target_resource_id,
+    target_response_json
+  )
+  on conflict (workspace_id, actor_user_id, operation, client_request_id)
+  do nothing
+  returning * into inserted_record;
+
+  if inserted_record.id is not null then
+    return inserted_record;
+  end if;
+
+  select record.*
+  into existing_record
+  from ai_content_create_idempotency_records record
+  where record.workspace_id = target_workspace_id
+    and record.actor_user_id = target_actor_user_id
+    and record.operation = target_operation
+    and record.client_request_id = target_client_request_id
+  for update;
+
+  if existing_record.brand_id <> target_brand_id
+     or existing_record.normalized_payload_hash <> target_normalized_payload_hash
+     or existing_record.resource_type <> target_resource_type
+     or existing_record.resource_id <> target_resource_id then
+    raise exception using errcode = '23505', message = 'idempotency_conflict';
+  end if;
+
+  return existing_record;
+end;
+$$;
 
 create or replace function select_ai_content_proposal(
   target_proposal_id uuid,
@@ -437,6 +717,8 @@ begin
 
   update ai_content_proposals
   set status = 'dismissed',
+      dismissed_by_user_id = actor_user_id,
+      dismissed_at = now(),
       updated_at = now()
   where batch_id = target_batch_id
     and id <> target_proposal_id
@@ -467,10 +749,12 @@ as $$
 declare
   target_generation ai_content_generations%rowtype;
   selected_proposal ai_content_proposals%rowtype;
+  approved_proposal_version ai_content_approved_proposal_versions%rowtype;
   snapshot_product_version_id uuid;
-  snapshot_wiki_version_id uuid;
   snapshot_avatar_id uuid;
   snapshot_avatar_image_id uuid;
+  selected_reference_count integer;
+  brief_reference_count integer;
 begin
   select generation.*
   into target_generation
@@ -507,8 +791,11 @@ begin
   if not ai_content_orchestration_snapshot_is_valid(frozen_orchestration_snapshot) then
     raise exception using errcode = '23514', message = 'generation_brief_invalid';
   end if;
-  if frozen_avatar_snapshot is distinct from frozen_orchestration_snapshot->'avatarSnapshot' then
+  if frozen_avatar_snapshot is distinct from frozen_orchestration_snapshot->'avatar' then
     raise exception using errcode = '23514', message = 'avatar_snapshot_mismatch';
+  end if;
+  if target_generation.output_format <> frozen_orchestration_snapshot->>'outputFormat' then
+    raise exception using errcode = '23514', message = 'generation_output_format_mismatch';
   end if;
 
   if not exists (
@@ -527,7 +814,7 @@ begin
     where profile.workspace_id = target_workspace_id
       and profile.brand_id = target_brand_id
       and core.id = (frozen_orchestration_snapshot->>'brandCoreVersionId')::uuid
-      and rules.id = (frozen_orchestration_snapshot->>'ruleSetId')::uuid
+      and rules.id = (frozen_orchestration_snapshot->>'ruleSetVersionId')::uuid
   ) then
     raise exception using errcode = '23514', message = 'brand_versions_not_active_approved';
   end if;
@@ -548,13 +835,33 @@ begin
     raise exception using errcode = '23505', message = 'proposal_generation_already_started';
   end if;
 
-  snapshot_product_version_id :=
-    nullif(frozen_orchestration_snapshot->>'productServiceVersionId', '')::uuid;
+  select approved.*
+  into approved_proposal_version
+  from ai_content_approved_proposal_versions approved
+  where approved.id = (frozen_orchestration_snapshot->>'approvedProposalVersionId')::uuid
+    and approved.workspace_id = target_workspace_id
+    and approved.brand_id = target_brand_id
+    and approved.proposal_id = selected_proposal.id;
+  if not found
+     or approved_proposal_version.approved_proposal_snapshot
+        is distinct from frozen_orchestration_snapshot->'approvedProposalSnapshot' then
+    raise exception using errcode = '23514', message = 'approved_proposal_version_invalid';
+  end if;
+
+  snapshot_product_version_id := null;
+  if frozen_orchestration_snapshot->'subject'->>'kind' = 'approved_product_service' then
+    snapshot_product_version_id :=
+      (frozen_orchestration_snapshot->'subject'->'version'->>'id')::uuid;
+  end if;
   if target_generation.product_service_id is null then
-    if snapshot_product_version_id is not null then
+    if frozen_orchestration_snapshot->'subject'->>'kind' <> 'brand_topic'
+       or snapshot_product_version_id is not null then
       raise exception using errcode = '23514', message = 'product_snapshot_unexpected';
     end if;
-  elsif not exists (
+  elsif frozen_orchestration_snapshot->'subject'->>'kind' <> 'approved_product_service'
+     or (frozen_orchestration_snapshot->'subject'->>'itemId')::uuid
+        <> target_generation.product_service_id
+     or not exists (
     select 1
     from product_services product
     join product_service_versions version
@@ -572,24 +879,25 @@ begin
     raise exception using errcode = '23514', message = 'product_version_not_active_approved';
   end if;
 
-  snapshot_wiki_version_id :=
-    nullif(frozen_orchestration_snapshot->>'wikiVersionId', '')::uuid;
-  if snapshot_wiki_version_id is not null
-     and not exists (
-       select 1
-       from wiki_versions version
-       where version.id = snapshot_wiki_version_id
-         and version.workspace_id = target_workspace_id
-         and version.brand_id = target_brand_id
-         and version.status = 'active'
-     ) then
+  if exists (
+    select 1
+    from jsonb_array_elements(frozen_orchestration_snapshot->'wikiSnapshots') wiki(item)
+    where not exists (
+      select 1
+      from wiki_versions version
+      where version.id = (wiki.item->>'id')::uuid
+        and version.workspace_id = target_workspace_id
+        and version.brand_id = target_brand_id
+        and version.status = 'active'
+    )
+  ) then
     raise exception using errcode = '23514', message = 'wiki_version_not_active';
   end if;
 
   if frozen_avatar_snapshot is not null
      and jsonb_typeof(frozen_avatar_snapshot) <> 'null' then
-    snapshot_avatar_id := (frozen_avatar_snapshot->>'avatarId')::uuid;
-    snapshot_avatar_image_id := (frozen_avatar_snapshot->>'imageId')::uuid;
+    snapshot_avatar_id := (frozen_avatar_snapshot->>'id')::uuid;
+    snapshot_avatar_image_id := (frozen_avatar_snapshot->>'assetVersionId')::uuid;
     if not exists (
       select 1
       from brand_avatars avatar
@@ -602,41 +910,70 @@ begin
         and avatar.brand_id = target_brand_id
         and avatar.status = 'active'
         and image.id = snapshot_avatar_image_id
+        and image.checksum = frozen_avatar_snapshot->>'objectHash'
+        and image.mime_type = frozen_avatar_snapshot->>'mime'
     ) then
       raise exception using errcode = '23514', message = 'avatar_not_active_owned';
     end if;
   end if;
 
-  if exists (
-    select 1
-    from jsonb_array_elements(frozen_orchestration_snapshot->'imageSnapshots') image_snapshot(item)
-    where not exists (
-      select 1
-      from brand_avatar_images image
-      where image.id = (image_snapshot.item->>'imageId')::uuid
-        and image.workspace_id = target_workspace_id
-        and image.brand_id = target_brand_id
-        and image.checksum = image_snapshot.item->>'objectHash'
-    )
-  ) then
-    raise exception using errcode = '23514', message = 'image_snapshot_not_owned';
+  select count(*)::integer
+  into selected_reference_count
+  from ai_content_generation_references selected
+  where selected.generation_id = target_generation_id
+    and selected.workspace_id = target_workspace_id
+    and selected.brand_id = target_brand_id
+    and selected.reference_item_id is not null;
+
+  brief_reference_count :=
+    jsonb_array_length(frozen_orchestration_snapshot->'references');
+  if selected_reference_count <> brief_reference_count then
+    raise exception using errcode = '23514', message = 'reference_snapshot_set_mismatch';
   end if;
 
   if exists (
     select 1
-    from jsonb_array_elements(frozen_orchestration_snapshot->'referenceSnapshots') reference(item)
+    from jsonb_array_elements(frozen_orchestration_snapshot->'references') reference(item)
     where not exists (
       select 1
       from ai_content_generation_references selected
+      join reference_items item
+        on item.id = selected.reference_item_id
+       and item.workspace_id = selected.workspace_id
+       and item.brand_id = selected.brand_id
+       and item.archived_at is null
+      join reference_patterns pattern
+        on pattern.id = selected.pattern_version_id
+       and pattern.workspace_id = selected.workspace_id
+       and pattern.brand_id = selected.brand_id
+       and pattern.reference_item_id = selected.reference_item_id
       where selected.generation_id = target_generation_id
         and selected.workspace_id = target_workspace_id
         and selected.brand_id = target_brand_id
         and selected.reference_item_id = (reference.item->>'itemId')::uuid
+        and selected.reference_snapshot_id = (reference.item->>'snapshotId')::uuid
+        and selected.pattern_version_id = (reference.item->>'patternVersionId')::uuid
         and selected.roles_json = reference.item->'roles'
     )
   ) then
-    raise exception using errcode = '23514', message = 'reference_snapshot_not_selected';
+    raise exception using errcode = '23514', message = 'reference_snapshot_set_mismatch';
   end if;
+
+  insert into ai_content_generation_briefs (
+    workspace_id,
+    brand_id,
+    generation_id,
+    approved_proposal_version_id,
+    brief_json,
+    created_by_user_id
+  ) values (
+    target_workspace_id,
+    target_brand_id,
+    target_generation_id,
+    approved_proposal_version.id,
+    frozen_orchestration_snapshot,
+    actor_user_id
+  );
 
   update ai_content_proposals
   set generation_id = target_generation_id,

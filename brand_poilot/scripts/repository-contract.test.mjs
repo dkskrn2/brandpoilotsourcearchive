@@ -491,7 +491,11 @@ test("058은 avatar와 typed-origin reference library 계약을 정의한다", a
 });
 
 test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계약을 정의한다", async () => {
-  const migration = await readFile("db/migrations/060_content_orchestration.sql", "utf8");
+  const [migration, aiContentRepository, crawlerRepository] = await Promise.all([
+    readFile("db/migrations/060_content_orchestration.sql", "utf8"),
+    readFile("apps/api/src/aiContentRepository.ts", "utf8"),
+    readFile("apps/api/src/repository.ts", "utf8"),
+  ]);
 
   for (const column of [
     "content_family",
@@ -523,6 +527,9 @@ test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계�
     "ai_content_proposal_batches",
     "ai_content_proposals",
     "ai_content_proposal_jobs",
+    "ai_content_approved_proposal_versions",
+    "ai_content_generation_briefs",
+    "ai_content_create_idempotency_records",
   ]) {
     assert.match(migration, new RegExp(`create\\s+table\\s+if\\s+not\\s+exists\\s+${table}\\b`, "i"));
   }
@@ -532,6 +539,8 @@ test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계�
   assert.match(migration, /where\s+status\s*=\s*'selected'/i);
   assert.match(migration, /for\s+update/i);
   assert.match(migration, /set\s+status\s*=\s*'dismissed'/i);
+  assert.match(migration, /dismissed_by_user_id/i);
+  assert.match(migration, /dismissed_at/i);
   assert.match(migration, /lease_expires_at/i);
   assert.match(migration, /attempt_count[\s\S]*max_attempts/i);
   assert.doesNotMatch(migration, /ai_content_proposal_jobs[\s\S]*\bpayload_json\b/i);
@@ -543,18 +552,28 @@ test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계�
     "contentHash",
     "summary",
     "brandCoreVersionId",
-    "ruleSetId",
-    "productServiceVersionId",
-    "wikiVersionId",
+    "approvedProposalVersionId",
+    "approvedProposalSnapshot",
+    "ruleSetVersionId",
+    "subject",
+    "wikiSnapshots",
     "proposalId",
-    "referenceSnapshots",
-    "avatarSnapshot",
-    "imageSnapshots",
+    "snapshotId",
+    "patternVersionId",
+    "assetVersionId",
+    "promptDefinitionVersions",
   ]) {
     assert.match(migration, new RegExp(key, "i"));
   }
   assert.match(migration, /source_urls_content_purpose_idx/i);
   assert.match(migration, /reference_items_brand_purpose_active_idx/i);
+  assert.match(migration, /idempotency_conflict/i);
+  assert.match(migration, /actor_user_id[\s\S]*operation[\s\S]*client_request_id[\s\S]*normalized_payload_hash/i);
+  assert.doesNotMatch(migration, /'ruleSetId'/);
+  assert.doesNotMatch(migration, /'referenceSnapshots'/);
+  assert.doesNotMatch(migration, /'imageSnapshots'/);
+  assert.match(aiContentRepository, /reference_items[\s\S]*content_purpose/i);
+  assert.match(crawlerRepository, /crawlSingleSource[\s\S]*source_urls[\s\S]*content_purpose/i);
 });
 
 test("061은 대표 이미지를 우선 보존하고 avatar별 checksum 중복을 차단한다", async () => {

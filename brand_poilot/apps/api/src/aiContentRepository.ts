@@ -1193,9 +1193,17 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       if (blog || marketing) queries.push(`
         select source.id, 'saved_url' as source, coalesce(snapshot.extracted_title, source.title, source.url) as title,
                source.url, null::text as preview_url, '{}'::jsonb as metrics, snapshot.fetched_at as checked_at
-          from source_urls source join lateral (select * from source_snapshots ss where ss.source_url_id = source.id
+          from reference_items item
+          join source_urls source
+            on source.id = item.source_url_id
+           and source.workspace_id = item.workspace_id
+           and source.brand_id = item.brand_id
+          join lateral (select * from source_snapshots ss where ss.source_url_id = source.id
             and ss.status = 'succeeded' order by ss.fetched_at desc limit 1) snapshot on true
-         where source.workspace_id = $1 and source.brand_id = $2 and source.source_type = 'reference' and source.deleted_at is null`);
+         where item.workspace_id = $1 and item.brand_id = $2
+           and item.archived_at is null
+           and item.content_purpose in ('${marketing ? "marketing" : "informational"}', 'both')
+           and source.source_type = 'reference' and source.deleted_at is null`);
       if (!queries.length) return [];
       const result = await pool.query(
         `select * from (${queries.join(" union all ")}) reference_rows

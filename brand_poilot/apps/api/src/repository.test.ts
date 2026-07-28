@@ -1087,6 +1087,7 @@ describe("repository", () => {
 
     expect(result.sourceUrlId).toBe("source-1");
     expect(query).toHaveBeenCalledWith(expect.stringContaining("where id = $1 and brand_id = $2"), ["source-1", "brand-1"]);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("content_purpose"), ["source-1", "brand-1"]);
     fetchSpy.mockRestore();
   });
 
