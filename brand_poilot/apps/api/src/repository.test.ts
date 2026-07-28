@@ -28,6 +28,7 @@ function task3CredentialExpiry(daysFromNow: number) {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 
 describe("Task 4 transactional topic generation", () => {
@@ -89,6 +90,9 @@ describe("Task 4 transactional topic generation", () => {
         const channel = String(values?.[4]);
         return { rowCount: 1, rows: [{ id: `output-${channel}` }] };
       }
+      if (sql.includes("insert into ai_content_proposal_batches")) {
+        return { rowCount: 1, rows: [{ id: "proposal-batch-1" }] };
+      }
       if (sql.includes("insert into jobs")) return { rowCount: 1, rows: [{ id: "render-job-1" }] };
       if (sql.includes("select id from brand_channels")) return { rowCount: 1, rows: [{ id: `channel-${values?.[1]}` }] };
       if (sql.includes("insert into publish_queue")) return { rowCount: 1, rows: [{ id: "queue-1" }] };
@@ -134,6 +138,7 @@ describe("Task 4 transactional topic generation", () => {
     { enabled: ["instagram_feed_carousel", "instagram_story", "instagram_reel"], last: "instagram_reel", expected: "instagram_feed_carousel" },
     { enabled: ["instagram_feed_carousel", "instagram_reel"], last: "instagram_story", expected: "instagram_reel" }
   ])("rotates enabled Instagram formats transactionally: $expected", async ({ enabled, last, expected }) => {
+    vi.stubEnv("AUTOMATED_CONTENT_ENABLED", "true");
     const fixture = generationQuery({ channels: ["instagram"], enabledFormats: enabled, lastSelectedFormat: last });
 
     await createRepository(fakePoolWithClient(fixture.query) as any).generateContent("brand-1");
@@ -149,9 +154,9 @@ describe("Task 4 transactional topic generation", () => {
     const legacyJobs = fixture.statements.filter(({ sql }) => sql.includes("insert into jobs"));
     if (expected === "instagram_feed_carousel") {
       expect(legacyJobs.some(({ values }) => values.includes("instagram_feed_render"))).toBe(false);
-      expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generations"))).toBe(true);
-      expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generation_outputs"))).toBe(true);
-      expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generation_jobs"))).toBe(true);
+      expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_proposal_batches"))).toBe(true);
+      expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_proposal_jobs"))).toBe(true);
+      expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generations"))).toBe(false);
     } else {
       expect(legacyJobs.some(({ values }) => values.includes(
         expected === "instagram_story" ? "instagram_story_render" : "instagram_reel_render"
@@ -186,6 +191,7 @@ describe("Task 4 transactional topic generation", () => {
   });
 
   it("creates outputs for every enabled channel and exposes generation readiness", async () => {
+    vi.stubEnv("AUTOMATED_CONTENT_ENABLED", "true");
     const fixture = generationQuery({
       channels: ["instagram", "threads", "x", "linkedin", "youtube", "tiktok"],
       enabledFormats: ["instagram_feed_carousel"],
@@ -251,10 +257,12 @@ describe("Task 4 transactional topic generation", () => {
     expect(jobs).toHaveLength(1);
     expect(jobs.some(({ values }) => values.includes("instagram_feed_render"))).toBe(false);
     expect(jobs.some(({ sql }) => sql.includes("threads_text_render"))).toBe(true);
-    expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generation_jobs"))).toBe(true);
+    expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_proposal_jobs"))).toBe(true);
+    expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generation_jobs"))).toBe(false);
   });
 
-  it("passes source evidence through the shared card-news contract without legacy render fields", async () => {
+  it("freezes source evidence in the scheduled proposal contract without legacy render fields", async () => {
+    vi.stubEnv("AUTOMATED_CONTENT_ENABLED", "true");
     const fixture = generationQuery({ channels: ["instagram"], enabledFormats: ["instagram_feed_carousel"] });
     fixture.query.mockImplementation((async (sql: string, values?: unknown[]) => {
       const base = generationQuery({ channels: ["instagram"], enabledFormats: ["instagram_feed_carousel"] });
@@ -268,20 +276,31 @@ describe("Task 4 transactional topic generation", () => {
       if (sql.includes("count(*)") && sql.includes("from content_topics")) return { rowCount: 1, rows: [{ topic_count: "0" }] };
       if (sql.includes("from content_topics ct") && sql.includes("for update")) return { rowCount: 0, rows: [] };
       if (sql.includes("from topic_rows")) return { rowCount: 0, rows: [] };
+      if (sql.includes("with candidate_sources")) return {
+        rowCount: 1,
+        rows: [{
+          id: "snapshot-1",
+          url: "https://brand.example.com/raw",
+          fetched_at: "2026-07-28T00:00:00.000Z",
+          content_hash: "hash-1",
+          summary: "SECRET RAW SNAPSHOT",
+        }],
+      };
       if (sql.includes("from source_snapshots")) return { rowCount: 1, rows: [{ id: "snapshot-1", source_content_item_id: "item-1", content_hash: "hash-1", source_type: "owned", content_url: "https://brand.example.com/raw", content: "SECRET RAW SNAPSHOT" }] };
       if (sql.includes("insert into content_topics")) return { rowCount: 1, rows: [{ id: "content-topic-1" }] };
       if (sql.includes("insert into topic_publish_groups")) return { rowCount: 1, rows: [{ id: "publish-group-1" }] };
       if (sql.includes("insert into master_drafts")) return { rowCount: 1, rows: [{ id: "master-draft-1" }] };
       if (sql.includes("insert into llm_runs")) return { rowCount: 1, rows: [] };
       if (sql.includes("insert into channel_outputs")) return { rowCount: 1, rows: [{ id: "output-instagram" }] };
+      if (sql.includes("insert into ai_content_proposal_batches")) return { rowCount: 1, rows: [{ id: "proposal-batch-1" }] };
       if (sql.includes("insert into jobs")) return { rowCount: 1, rows: [] };
       return { rowCount: 1, rows: [] };
     }) as any);
 
     await createRepository(fakePoolWithClient(fixture.query) as any).generateContent("brand-1");
 
-    const generation = fixture.statements.find(({ sql }) => sql.includes("insert into ai_content_generations"));
-    const payload = String(generation?.values[6]);
+    const proposal = fixture.statements.find(({ sql }) => sql.includes("insert into ai_content_proposal_batches"));
+    const payload = String(proposal?.values[4]);
     expect(payload).toContain("SECRET RAW SNAPSHOT");
     expect(payload).not.toContain("raw_text");
     expect(payload).not.toContain("extracted_text");
@@ -2103,6 +2122,7 @@ describe("repository", () => {
   });
 
   it("does not create image artifacts while the worker owns rendering", async () => {
+    vi.stubEnv("AUTOMATED_CONTENT_ENABLED", "true");
     let storageArtifactValues: unknown[] | undefined;
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       if (sql.trim() === "begin" || sql.trim() === "commit" || sql.trim() === "rollback") return { rowCount: 0, rows: [] };
@@ -2115,11 +2135,26 @@ describe("repository", () => {
       if (sql.includes("from topic_rows") && sql.includes("for update skip locked")) {
         return { rowCount: 1, rows: [{ id: "topic-row-1", topic_title: "Jeju family stay", topic_angle: "location-first checklist", target_customer: "family travelers" }] };
       }
+      if (sql.includes("with candidate_sources")) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: "snapshot-1",
+            url: "https://brand.example.com/faq",
+            fetched_at: "2026-07-28T00:00:00.000Z",
+            content_hash: "hash-1",
+            summary: "Owned FAQ says visitors need short routes.",
+          }],
+        };
+      }
       if (sql.includes("from source_snapshots")) return { rowCount: 1, rows: [{ id: "snapshot-1", source_type: "owned", content_url: "https://brand.example.com/faq", content: "Owned FAQ says visitors need short routes." }] };
       if (sql.includes("insert into content_topics")) return { rowCount: 1, rows: [{ id: "content-topic-1" }] };
       if (sql.includes("insert into master_drafts")) return { rowCount: 1, rows: [{ id: "master-draft-1" }] };
       if (sql.includes("insert into llm_runs")) return { rowCount: 1, rows: [{ id: "llm-run-1" }] };
       if (sql.includes("insert into channel_outputs")) return { rowCount: 1, rows: [{ id: `output-${values?.[4]}` }] };
+      if (sql.includes("insert into ai_content_proposal_batches")) {
+        return { rowCount: 1, rows: [{ id: "proposal-batch-1" }] };
+      }
       if (sql.includes("insert into storage_artifacts")) {
         storageArtifactValues = values;
         return { rowCount: 1, rows: [{ id: "artifact-1" }] };
@@ -2132,7 +2167,8 @@ describe("repository", () => {
 
     expect(result).toMatchObject({ processed: 1, created: 1, updated: 1, failed: 0 });
     expect(storageArtifactValues).toBeUndefined();
-    expect(query).toHaveBeenCalledWith(expect.stringContaining("insert into ai_content_generation_jobs"), expect.any(Array));
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("insert into ai_content_proposal_jobs"), expect.any(Array));
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("insert into ai_content_generation_jobs"))).toBe(false);
   });
 
   it("does not call the legacy OpenAI generator or write llm_runs", async () => {

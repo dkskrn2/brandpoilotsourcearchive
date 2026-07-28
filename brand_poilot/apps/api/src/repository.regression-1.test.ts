@@ -1,8 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { encryptCredential } from "./credentialCrypto";
 import { MetaGraphRequestError } from "./metaGraph";
 import { InstagramPublishStageError } from "./instagramPublisher";
 import { createRepository, fetchInstagramImageManifest } from "./repository";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function fakePoolWithClient(query: ReturnType<typeof vi.fn>) {
   return {
@@ -410,6 +414,7 @@ describe("repository regressions", () => {
   });
 
   it("keeps Instagram generating until the image worker artifact exists", async () => {
+    vi.stubEnv("AUTOMATED_CONTENT_ENABLED", "true");
     const outputStatuses: string[] = [];
     const queueInserts: unknown[][] = [];
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
@@ -469,6 +474,9 @@ describe("repository regressions", () => {
         outputStatuses.push(String(values?.[6]));
         return { rowCount: 1, rows: [{ id: "output-instagram" }] };
       }
+      if (sql.includes("insert into ai_content_proposal_batches")) {
+        return { rowCount: 1, rows: [{ id: "proposal-batch-1" }] };
+      }
       if (sql.includes("select id from brand_channels")) {
         return { rowCount: 1, rows: [{ id: "channel-instagram" }] };
       }
@@ -484,7 +492,8 @@ describe("repository regressions", () => {
 
     expect(outputStatuses).toEqual(["generating"]);
     expect(queueInserts).toHaveLength(0);
-    expect(query.mock.calls.some(([sql]) => String(sql).includes("insert into ai_content_generation_jobs"))).toBe(true);
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("insert into ai_content_proposal_jobs"))).toBe(true);
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("insert into ai_content_generation_jobs"))).toBe(false);
     expect(query.mock.calls.some(([sql, values]) => String(sql).includes("insert into jobs") && Array.isArray(values) && values.includes("instagram_feed_render"))).toBe(false);
   });
 

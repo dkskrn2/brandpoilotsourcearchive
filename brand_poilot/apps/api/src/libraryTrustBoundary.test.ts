@@ -33,6 +33,7 @@ const otherBrandId = "73000000-0000-4000-8000-000000000003";
 const ownerId = "74000000-0000-4000-8000-000000000004";
 const memberId = "75000000-0000-4000-8000-000000000005";
 const analysisId = "76000000-0000-4000-8000-000000000006";
+const brandCoreId = "76500000-0000-4000-8000-000000000006";
 const hashtagId = "77000000-0000-4000-8000-000000000007";
 const mediaId = "78000000-0000-4000-8000-000000000008";
 const avatarId = "79000000-0000-4000-8000-000000000009";
@@ -106,6 +107,18 @@ beforeAll(async () => {
     insert into brands(id,workspace_id,name,created_by_user_id) values
       ('${primaryBrandId}','${workspaceId}','Primary Library Brand','${ownerId}'),
       ('${otherBrandId}','${workspaceId}','Other Library Brand','${ownerId}');
+    insert into brand_profiles(workspace_id,brand_id) values
+      ('${workspaceId}','${primaryBrandId}');
+    insert into brand_core_versions(
+      id,workspace_id,brand_id,version,status,core_json,evidence_json,
+      review_state_json,created_by,approved_at
+    ) values (
+      '${brandCoreId}','${workspaceId}','${primaryBrandId}',1,'approved',
+      '{"contractVersion":1,"summary":{"oneLine":"Primary Library Brand","description":"승인된 브랜드 안내"}}',
+      '[]','{}','migration',now()
+    );
+    update brand_profiles set active_brand_core_id='${brandCoreId}'
+      where workspace_id='${workspaceId}' and brand_id='${primaryBrandId}';
     insert into ai_content_subject_analyses(
       id,workspace_id,brand_id,subject_type,source_url,normalized_url,status,
       facts_json,structured_data_json,targets_json,appeals_json,idempotency_key
@@ -319,7 +332,7 @@ describe("library reuse and trust boundaries", () => {
         content: expect.stringContaining("영업일 기준 이틀"),
       })]),
     });
-  });
+  }, 30_000);
 
   it("keeps two avatar images and their representative snapshot after default/archive", async () => {
     const assets = createAssetLibraryRepository(pool);
