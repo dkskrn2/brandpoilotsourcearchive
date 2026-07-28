@@ -44,6 +44,10 @@ const ids = {
   crossActorAvatarAsset: "c3000000-0000-4000-8000-00000000000f",
   crossBrandAvatar: "b4000000-0000-4000-8000-00000000000f",
   crossBrandAvatarAsset: "c4000000-0000-4000-8000-00000000000f",
+  revokedAvatar: "b5000000-0000-4000-8000-00000000000f",
+  revokedAvatarAsset: "c5000000-0000-4000-8000-00000000000f",
+  physicallyDeletedAvatar: "b6000000-0000-4000-8000-00000000000f",
+  physicallyDeletedAvatarAsset: "c6000000-0000-4000-8000-00000000000f",
   sourceUrl: "d0000000-0000-4000-8000-00000000000d",
   referenceItem: "e0000000-0000-4000-8000-00000000000e",
   referenceSnapshot: "e1000000-0000-4000-8000-00000000000e",
@@ -1040,6 +1044,33 @@ describe("content orchestration PostgreSQL contract", () => {
       brandId: ids.otherBrand,
       actorId: ids.actor,
     });
+    await insertOneTimeReceipt(db, {
+      sessionId: ids.revokedAvatar,
+      attachmentId: ids.revokedAvatarAsset,
+      generationId: ids.oneTimeGeneration,
+      brandId: ids.brand,
+      actorId: ids.actor,
+    });
+    await db.query(
+      `update ai_content_generation_attachments
+          set deleted_at=now(),deletion_reason='user_removed',physical_delete_status='pending'
+        where id=$1`,
+      [ids.revokedAvatarAsset],
+    );
+    await insertOneTimeReceipt(db, {
+      sessionId: ids.physicallyDeletedAvatar,
+      attachmentId: ids.physicallyDeletedAvatarAsset,
+      generationId: ids.oneTimeGeneration,
+      brandId: ids.brand,
+      actorId: ids.actor,
+    });
+    await db.query(
+      `update ai_content_generation_attachments
+          set deleted_at=now(),deletion_reason='gc_completed',
+              physical_delete_status='deleted',physically_deleted_at=now()
+        where id=$1`,
+      [ids.physicallyDeletedAvatarAsset],
+    );
     const oneTimeBrief = (candidate: Record<string, unknown>) => ({
       contractVersion: "generation-brief.v1",
       proposalId: ids.oneTimeProposal,
@@ -1091,8 +1122,28 @@ describe("content orchestration PostgreSQL contract", () => {
         mime: "image/png",
         provenance: "one_time",
       },
+      {
+        id: ids.revokedAvatar,
+        assetVersionId: ids.revokedAvatarAsset,
+        objectHash: "d".repeat(64),
+        mime: "image/png",
+        provenance: "one_time",
+      },
+      {
+        id: ids.physicallyDeletedAvatar,
+        assetVersionId: ids.physicallyDeletedAvatarAsset,
+        objectHash: "d".repeat(64),
+        mime: "image/png",
+        provenance: "one_time",
+      },
     ]) {
       const rejectedBrief = oneTimeBrief(candidate);
+      const expectedError = (
+        candidate.id === ids.revokedAvatar
+        || candidate.id === ids.physicallyDeletedAvatar
+      )
+        ? /one_time_avatar_receipt_revoked/
+        : /one_time_avatar_receipt_invalid/;
       await expect(db.query(
         "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
         [
@@ -1103,7 +1154,7 @@ describe("content orchestration PostgreSQL contract", () => {
           JSON.stringify(candidate),
           ids.actor,
         ],
-      )).rejects.toThrow(/one_time_avatar_receipt_invalid/);
+      )).rejects.toThrow(expectedError);
     }
 
     await insertOneTimeReceipt(db, {
@@ -1121,6 +1172,24 @@ describe("content orchestration PostgreSQL contract", () => {
       provenance: "one_time",
     };
     const brief = oneTimeBrief(avatar);
+    await expect(db.query(
+      "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+      [
+        ids.oneTimeGeneration, ids.workspace, ids.brand, JSON.stringify(brief),
+        JSON.stringify(avatar), ids.actor,
+      ],
+    )).resolves.toBeDefined();
+    await db.query(
+      `update ai_content_generation_attachments
+          set deleted_at=now(),deletion_reason='user_removed',physical_delete_status='pending'
+        where id=$1`,
+      [ids.oneTimeAvatarAsset],
+    );
+    const revocation = await db.query<{ reason: string }>(
+      "select reason from ai_content_one_time_avatar_revocations where receipt_id=$1",
+      [ids.oneTimeAvatarAsset],
+    );
+    expect(revocation.rows).toEqual([{ reason: "attachment_logically_deleted" }]);
     await expect(db.query(
       "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
       [

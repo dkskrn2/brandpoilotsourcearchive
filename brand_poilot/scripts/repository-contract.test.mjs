@@ -535,6 +535,7 @@ test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계�
     "reference_pattern_versions",
     "ai_content_wiki_version_snapshots",
     "ai_content_one_time_avatar_receipts",
+    "ai_content_one_time_avatar_revocations",
   ]) {
     assert.match(migration, new RegExp(`create\\s+table\\s+if\\s+not\\s+exists\\s+${table}\\b`, "i"));
   }
@@ -579,6 +580,9 @@ test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계�
   assert.match(migration, /ai_content_actor_is_active/i);
   assert.match(migration, /one_time_avatar_receipt_invalid/i);
   assert.match(migration, /one_time_avatar_receipt_immutable/i);
+  assert.match(migration, /one_time_avatar_revocation_immutable/i);
+  assert.match(migration, /revoke_ai_content_one_time_avatar_receipt/i);
+  assert.match(migration, /one_time_avatar_receipt_revoked/i);
   assert.doesNotMatch(migration, /ai_content_attachment_upload_sessions/i);
   assert.doesNotMatch(migration, /ai_content_generation_attachments/i);
   assert.match(
@@ -586,6 +590,10 @@ test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계�
     /from\s+ai_content_proposal_batches\s+batch[\s\S]*?for\s+update;[\s\S]*?from\s+ai_content_proposals\s+proposal[\s\S]*?for\s+update;/i,
   );
   assert.match(attachmentMigration, /seal_ai_content_one_time_avatar_receipt_from_upload/i);
+  assert.match(
+    attachmentMigration,
+    /revoke_ai_content_one_time_avatar_on_attachment_unavailable/i,
+  );
   assert.match(migration, /proposal_generation_family_mismatch/i);
   assert.match(migration, /generation_canonical_mapping_missing/i);
   assert.match(migration, /ai_content_versioned_snapshot_is_valid/i);

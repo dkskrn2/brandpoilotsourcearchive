@@ -484,6 +484,93 @@ create trigger ai_content_one_time_avatar_receipts_immutable
 before update or delete on ai_content_one_time_avatar_receipts
 for each row execute function reject_ai_content_one_time_avatar_receipt_mutation();
 
+create table if not exists ai_content_one_time_avatar_revocations (
+  id uuid primary key default gen_random_uuid(),
+  receipt_id uuid not null,
+  generation_id uuid not null,
+  workspace_id uuid not null references workspaces(id) on delete restrict,
+  brand_id uuid not null,
+  receipt_created_by_user_id uuid not null,
+  reason text not null check (
+    reason in (
+      'attachment_logically_deleted',
+      'attachment_deleting',
+      'attachment_physically_deleted',
+      'attachment_unavailable'
+    )
+  ),
+  revoked_at timestamptz not null default now(),
+  constraint ai_content_one_time_avatar_revocations_receipt_fk
+    foreign key (receipt_id, workspace_id, brand_id)
+    references ai_content_one_time_avatar_receipts(id, workspace_id, brand_id)
+    on delete restrict,
+  constraint ai_content_one_time_avatar_revocations_generation_fk
+    foreign key (generation_id, workspace_id, brand_id)
+    references ai_content_generations(id, workspace_id, brand_id) on delete restrict,
+  constraint ai_content_one_time_avatar_revocations_actor_membership_fk
+    foreign key (workspace_id, receipt_created_by_user_id)
+    references workspace_members(workspace_id, user_id) on delete restrict,
+  constraint ai_content_one_time_avatar_revocations_receipt_unique
+    unique (receipt_id),
+  constraint ai_content_one_time_avatar_revocations_tenant_identity_unique
+    unique (id, workspace_id, brand_id)
+);
+
+create or replace function reject_ai_content_one_time_avatar_revocation_mutation()
+returns trigger
+language plpgsql
+as $$
+begin
+  raise exception using errcode = '55000', message = 'one_time_avatar_revocation_immutable';
+end;
+$$;
+
+drop trigger if exists ai_content_one_time_avatar_revocations_immutable
+  on ai_content_one_time_avatar_revocations;
+create trigger ai_content_one_time_avatar_revocations_immutable
+before update or delete on ai_content_one_time_avatar_revocations
+for each row execute function reject_ai_content_one_time_avatar_revocation_mutation();
+
+create or replace function revoke_ai_content_one_time_avatar_receipt(
+  target_receipt_id uuid,
+  target_reason text
+)
+returns uuid
+language plpgsql
+as $$
+declare
+  revocation_id uuid;
+begin
+  insert into ai_content_one_time_avatar_revocations (
+    receipt_id,
+    generation_id,
+    workspace_id,
+    brand_id,
+    receipt_created_by_user_id,
+    reason
+  )
+  select
+    receipt.id,
+    receipt.generation_id,
+    receipt.workspace_id,
+    receipt.brand_id,
+    receipt.created_by_user_id,
+    target_reason
+  from ai_content_one_time_avatar_receipts receipt
+  where receipt.id = target_receipt_id
+  on conflict (receipt_id) do nothing
+  returning id into revocation_id;
+
+  if revocation_id is null then
+    select revocation.id
+    into revocation_id
+    from ai_content_one_time_avatar_revocations revocation
+    where revocation.receipt_id = target_receipt_id;
+  end if;
+  return revocation_id;
+end;
+$$;
+
 alter table ai_content_generation_references
   add column if not exists reference_item_id uuid,
   add column if not exists reference_snapshot_id uuid,
@@ -1269,6 +1356,17 @@ begin
           and receipt.mime_type = frozen_avatar_snapshot->>'mime'
       ) then
         raise exception using errcode = '23514', message = 'one_time_avatar_receipt_invalid';
+      end if;
+      if exists (
+        select 1
+        from ai_content_one_time_avatar_revocations revocation
+        where revocation.receipt_id = snapshot_avatar_image_id
+          and revocation.generation_id = target_generation_id
+          and revocation.workspace_id = target_workspace_id
+          and revocation.brand_id = target_brand_id
+          and revocation.receipt_created_by_user_id = actor_user_id
+      ) then
+        raise exception using errcode = '23514', message = 'one_time_avatar_receipt_revoked';
       end if;
     elsif not exists (
         select 1

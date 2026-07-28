@@ -467,6 +467,48 @@ where upload.status = 'confirmed'
   and attachment.storage_path = upload.storage_path
 on conflict do nothing;
 
+create function revoke_ai_content_one_time_avatar_on_attachment_unavailable()
+returns trigger
+language plpgsql
+as $$
+declare
+  attachment ai_content_generation_attachments%rowtype;
+  revocation_reason text;
+begin
+  if tg_op = 'DELETE' then
+    attachment := old;
+  else
+    attachment := new;
+  end if;
+
+  if tg_op <> 'DELETE'
+    and attachment.deleted_at is null
+    and attachment.physical_delete_status = 'none' then
+    return new;
+  end if;
+
+  revocation_reason := case
+    when attachment.physical_delete_status = 'deleted'
+      then 'attachment_physically_deleted'
+    when attachment.physical_delete_status = 'deleting'
+      then 'attachment_deleting'
+    when attachment.deleted_at is not null
+      then 'attachment_logically_deleted'
+    else 'attachment_unavailable'
+  end;
+  perform revoke_ai_content_one_time_avatar_receipt(
+    attachment.id,
+    revocation_reason
+  );
+  return case when tg_op = 'DELETE' then old else new end;
+end;
+$$;
+
+create trigger ai_content_generation_attachments_revoke_one_time_avatar
+after insert or update or delete on ai_content_generation_attachments
+for each row
+execute function revoke_ai_content_one_time_avatar_on_attachment_unavailable();
+
 create table ai_content_attachment_deletion_jobs (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null,

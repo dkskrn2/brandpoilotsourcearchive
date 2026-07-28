@@ -726,6 +726,55 @@ describe("AI content attachment lifecycle in PostgreSQL", () => {
     expect(next.storagePath).not.toBe(first.storagePath);
   });
 
+  it("appends a one-time avatar revocation in the repository removal transaction", async () => {
+    const repository = createAiContentAttachmentRepository(pglitePool(database));
+    const request = {
+      workspaceId: WORKSPACE_ID,
+      brandId: BRAND_ID,
+      generationId: GENERATION_ID,
+      createdByUserId: USER_ID,
+      attachment: {
+        role: "person" as const,
+        fileName: "one-time-person.png",
+        mimeType: "image/png",
+        sizeBytes: 100,
+        checksum: "e".repeat(64),
+      },
+    };
+    const session = await repository.createAiContentUploadSession(request);
+    const confirmed = await repository.confirmAiContentUploadSession({
+      ...request,
+      sessionId: session.id,
+      nonce: session.nonce,
+    }, async (stored) => ({
+      storagePath: stored.storagePath,
+      storageUrl: `https://test.public.blob.vercel-storage.com/${stored.storagePath}`,
+      mimeType: stored.mimeType,
+      sizeBytes: stored.sizeBytes,
+    }));
+
+    await repository.removeAiContentAttachment({
+      ...request,
+      attachmentId: confirmed.id,
+    });
+
+    const revoked = await database.query(
+      `select receipt_id,generation_id,workspace_id,brand_id,
+              receipt_created_by_user_id,reason
+         from ai_content_one_time_avatar_revocations
+        where receipt_id=$1`,
+      [confirmed.id],
+    );
+    expect(revoked.rows).toEqual([{
+      receipt_id: confirmed.id,
+      generation_id: GENERATION_ID,
+      workspace_id: WORKSPACE_ID,
+      brand_id: BRAND_ID,
+      receipt_created_by_user_id: USER_ID,
+      reason: "attachment_logically_deleted",
+    }]);
+  });
+
   it("confirms when the persisted DB boundary is still before expiry", async () => {
     const repository = createAiContentAttachmentRepository(pglitePool(database));
     const sessionId = "50000000-0000-4000-8000-000000000088";

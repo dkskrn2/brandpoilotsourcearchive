@@ -3712,6 +3712,9 @@ test("060 independently validates sealed one-time avatar receipts and remains co
     const batchId = randomUUID();
     const proposalId = randomUUID();
     const approvalId = randomUUID();
+    const otherBatchId = randomUUID();
+    const otherProposalId = randomUUID();
+    const otherApprovalId = randomUUID();
     const generationId = randomUUID();
     const otherGenerationId = randomUUID();
     await database.query(
@@ -3757,15 +3760,27 @@ test("060 independently validates sealed one-time avatar receipts and remains co
       `insert into ai_content_proposal_batches (
          id,workspace_id,brand_id,origin,content_family,request_json,
          source_snapshot_json,status,idempotency_key,created_by_user_id
-       ) values ($1,$2,$3,'manual','marketing','{}','[]','ready',$4,$5)`,
-      [batchId, workspaceId, brandId, `through-060-${randomUUID()}`, actorId],
+       ) values
+         ($1,$3,$4,'manual','marketing','{}','[]','ready',$5,$7),
+         ($2,$3,$4,'manual','marketing','{}','[]','ready',$6,$7)`,
+      [
+        batchId,
+        otherBatchId,
+        workspaceId,
+        brandId,
+        `through-060-${randomUUID()}`,
+        `through-060-other-${randomUUID()}`,
+        actorId,
+      ],
     );
     await database.query(
       `insert into ai_content_proposals (
          id,workspace_id,brand_id,batch_id,position,proposal_json,status,
          selected_by_user_id,selected_at
-       ) values ($1,$2,$3,$4,1,'{}','selected',$5,'2026-07-28T00:00:00Z')`,
-      [proposalId, workspaceId, brandId, batchId, actorId],
+       ) values
+         ($1,$3,$4,$5,1,'{}','selected',$7,'2026-07-28T00:00:00Z'),
+         ($2,$3,$4,$6,1,'{}','selected',$7,'2026-07-28T00:00:00Z')`,
+      [proposalId, otherProposalId, workspaceId, brandId, batchId, otherBatchId, actorId],
     );
     const approvalSnapshot = {
       contractVersion: "approved-proposal.v1",
@@ -3776,6 +3791,11 @@ test("060 independently validates sealed one-time avatar receipts and remains co
       validationResultId: `through-060-${approvalId}`,
       approvedBy: actorId,
       approvedAt: "2026-07-28T00:00:00.000Z",
+    };
+    const otherApprovalSnapshot = {
+      ...approvalSnapshot,
+      sourceProposalId: otherProposalId,
+      validationResultId: `through-060-${otherApprovalId}`,
     };
     await database.query(
       `insert into ai_content_approved_proposal_versions (
@@ -3791,6 +3811,22 @@ test("060 independently validates sealed one-time avatar receipts and remains co
         approvalSnapshot.validationResultId,
         actorId,
         approvalSnapshot.approvedAt,
+      ],
+    );
+    await database.query(
+      `insert into ai_content_approved_proposal_versions (
+         id,workspace_id,brand_id,proposal_id,revision,approved_proposal_snapshot,
+         validation_result_id,approved_by_user_id,approved_at
+       ) values ($1,$2,$3,$4,1,$5,$6,$7,$8)`,
+      [
+        otherApprovalId,
+        workspaceId,
+        brandId,
+        otherProposalId,
+        JSON.stringify(otherApprovalSnapshot),
+        otherApprovalSnapshot.validationResultId,
+        actorId,
+        otherApprovalSnapshot.approvedAt,
       ],
     );
     await database.query(
@@ -3819,11 +3855,16 @@ test("060 independently validates sealed one-time avatar receipts and remains co
       mime: "image/png",
       provenance: "one_time",
     });
-    const brief = (avatar) => ({
+    const brief = (
+      avatar,
+      selectedProposalId = proposalId,
+      selectedApprovalId = approvalId,
+      selectedApprovalSnapshot = approvalSnapshot,
+    ) => ({
       contractVersion: "generation-brief.v1",
-      proposalId,
-      approvedProposalVersionId: approvalId,
-      approvedProposalSnapshot: approvalSnapshot,
+      proposalId: selectedProposalId,
+      approvedProposalVersionId: selectedApprovalId,
+      approvedProposalSnapshot: selectedApprovalSnapshot,
       brandCoreVersionId: coreId,
       ruleSetVersionId: rulesId,
       subject: { kind: "brand_topic", topic: "Through 060", brandCoreEvidenceIds: [] },
@@ -3905,18 +3946,66 @@ test("060 independently validates sealed one-time avatar receipts and remains co
       ],
     );
     const confirmedAvatar = avatarSnapshot(sessionId, receiptId);
+    await database.query(
+      "select revoke_ai_content_one_time_avatar_receipt($1,'attachment_unavailable')",
+      [receiptId],
+    );
+    await assert.rejects(
+      database.query(
+        "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+        [
+          generationId,
+          workspaceId,
+          brandId,
+          JSON.stringify(brief(confirmedAvatar)),
+          JSON.stringify(confirmedAvatar),
+          actorId,
+        ],
+      ),
+      /one_time_avatar_receipt_revoked/,
+    );
+
+    const otherBrief = brief(
+      crossAvatar,
+      otherProposalId,
+      otherApprovalId,
+      otherApprovalSnapshot,
+    );
     const started = await database.query(
       "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6) generation_id",
       [
-        generationId,
+        otherGenerationId,
         workspaceId,
         brandId,
-        JSON.stringify(brief(confirmedAvatar)),
-        JSON.stringify(confirmedAvatar),
+        JSON.stringify(otherBrief),
+        JSON.stringify(crossAvatar),
         actorId,
       ],
     );
-    assert.equal(started.rows[0].generation_id, generationId);
+    assert.equal(started.rows[0].generation_id, otherGenerationId);
+    await database.query(
+      "select revoke_ai_content_one_time_avatar_receipt($1,'attachment_logically_deleted')",
+      [crossReceiptId],
+    );
+    const replayed = await database.query(
+      "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6) generation_id",
+      [
+        otherGenerationId,
+        workspaceId,
+        brandId,
+        JSON.stringify(otherBrief),
+        JSON.stringify(crossAvatar),
+        actorId,
+      ],
+    );
+    assert.equal(replayed.rows[0].generation_id, otherGenerationId);
+    await assert.rejects(
+      database.query(
+        "update ai_content_one_time_avatar_revocations set reason='attachment_deleting' where receipt_id=$1",
+        [receiptId],
+      ),
+      /one_time_avatar_revocation_immutable/,
+    );
 
     await runMigrationRange(
       database,

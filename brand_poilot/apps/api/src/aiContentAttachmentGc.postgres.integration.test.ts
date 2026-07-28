@@ -459,6 +459,112 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       })).resolves.toBe(true);
     });
 
+    it("keeps a confirmed one-time avatar revoked through GC claim and physical completion", async () => {
+      const sessionId = "52000000-0000-4000-8000-000000000052";
+      const attachmentId = "62000000-0000-4000-8000-000000000062";
+      const jobId = "72000000-0000-4000-8000-000000000072";
+      const path = "gc/one-time-person.png";
+      await pool.query("begin");
+      try {
+        await pool.query(
+          `insert into ai_content_attachment_upload_sessions (
+             id,generation_id,workspace_id,brand_id,created_by_user_id,nonce,
+             role,file_name,expected_mime_type,expected_size_bytes,expected_checksum,
+             storage_url,storage_path,status,created_at,token_expires_at
+           ) values (
+             $1,$2,$3,$4,$5,$6,'person','person.png','image/png',10,$7,$8,$9,
+             'pending',now()-interval '20 minutes',now()-interval '10 minutes'
+           )`,
+          [
+            sessionId,
+            GENERATION_ID,
+            WORKSPACE_ID,
+            BRAND_ID,
+            USER_ID,
+            "53000000-0000-4000-8000-000000000053",
+            "e".repeat(64),
+            `https://blob.example/${path}`,
+            path,
+          ],
+        );
+        await pool.query(
+          `insert into ai_content_generation_attachments (
+             id,generation_id,workspace_id,brand_id,upload_session_id,role,file_name,
+             mime_type,size_bytes,checksum,storage_url,storage_path
+           ) values ($1,$2,$3,$4,$5,'person','person.png','image/png',10,$6,$7,$8)`,
+          [
+            attachmentId,
+            GENERATION_ID,
+            WORKSPACE_ID,
+            BRAND_ID,
+            sessionId,
+            "e".repeat(64),
+            `https://blob.example/${path}`,
+            path,
+          ],
+        );
+        await pool.query(
+          `update ai_content_attachment_upload_sessions
+              set status='confirmed',confirmed_at=now(),confirmed_attachment_id=$2
+            where id=$1`,
+          [sessionId, attachmentId],
+        );
+        await pool.query(
+          `insert into ai_content_attachment_deletion_jobs (
+             id,workspace_id,brand_id,generation_id,attachment_id,upload_session_id,
+             storage_url,storage_path,reason,status,next_attempt_at
+           ) values ($1,$2,$3,$4,$5,$6,$7,$8,'user_removed','pending',now())`,
+          [
+            jobId,
+            WORKSPACE_ID,
+            BRAND_ID,
+            GENERATION_ID,
+            attachmentId,
+            sessionId,
+            `https://blob.example/${path}`,
+            path,
+          ],
+        );
+        await pool.query("commit");
+      } catch (error) {
+        await pool.query("rollback");
+        throw error;
+      }
+
+      expect((await pool.query(
+        "select count(*)::integer count from ai_content_one_time_avatar_receipts where id=$1",
+        [attachmentId],
+      )).rows[0]?.count).toBe(1);
+      const repository = createAiContentAttachmentGcRepository(pool);
+      const [claim] = await repository.claimAiContentAttachmentDeletionJobs({
+        workerId: "gc-one-time-avatar",
+        batchSize: 1,
+        leaseSeconds: 60,
+        ...BUDGET,
+      });
+      expect(claim?.jobId).toBe(jobId);
+      await expect(repository.completeAiContentAttachmentDeletion({
+        jobId,
+        leaseToken: claim!.leaseToken,
+        outcome: "deleted",
+        ...BUDGET,
+      })).resolves.toBe(true);
+
+      expect((await pool.query(
+        `select revocation.reason,attachment.physical_delete_status,
+                attachment.physically_deleted_at is not null physically_deleted
+           from ai_content_one_time_avatar_revocations revocation
+           join ai_content_generation_attachments attachment
+             on attachment.id=revocation.receipt_id
+          where revocation.receipt_id=$1`,
+        [attachmentId],
+      )).rows).toEqual([{
+        reason: "attachment_deleting",
+        physical_delete_status: "deleted",
+        physically_deleted: true,
+      }]);
+    });
+
     it("releases unstarted claims without attempts and retries failures from database time", async () => {
       const jobId = "70000000-0000-4000-8000-000000000010";
       await insertJob(pool, { id: jobId, path: "gc/budget.png" });
