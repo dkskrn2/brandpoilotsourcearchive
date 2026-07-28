@@ -4791,7 +4791,10 @@ test("065 direct SQL and migration runner pending-tail paths converge on lifecyc
     await runMigrationsWithClient({ client, migrations: through064 });
     await seedAttachmentLifecycleUpgradeFixture(database, fixture);
     const result = await runMigrationsWithClient({ client, migrations: runnable });
-    assert.deepEqual(result.pending, ["065_ai_content_attachment_upload_sessions.sql"]);
+    assert.deepEqual(result.pending, [
+      "065_ai_content_attachment_upload_sessions.sql",
+      "066_ai_content_analyzed_subject_orchestration.sql",
+    ]);
     return attachmentLifecycleRowState(database, fixture);
   });
 
