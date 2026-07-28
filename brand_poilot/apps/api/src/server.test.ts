@@ -2536,6 +2536,16 @@ describe("API server", () => {
       url: `/brands/${brandId}/feedback`,
       payload: { message: "가".repeat(2001) }
     });
+    const oneCharacter = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/feedback`,
+      payload: { message: "좋" }
+    });
+    const exactLimit = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/feedback`,
+      payload: { message: "가".repeat(2000) }
+    });
     const created = await app.inject({
       method: "POST",
       url: `/brands/${brandId}/feedback`,
@@ -2546,6 +2556,8 @@ describe("API server", () => {
     expect(blank.json()).toEqual({ error: "feedback_message_required" });
     expect(tooLong.statusCode).toBe(400);
     expect(tooLong.json()).toEqual({ error: "feedback_message_too_long" });
+    expect(oneCharacter.statusCode).toBe(201);
+    expect(exactLimit.statusCode).toBe(201);
     expect(created.statusCode).toBe(201);
     expect(created.json()).toMatchObject({ id: "feedback-1", status: "new" });
     expect(repository.createFeedbackSubmission).toHaveBeenCalledWith(brandId, {

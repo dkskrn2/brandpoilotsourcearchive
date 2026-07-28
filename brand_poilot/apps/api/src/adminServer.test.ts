@@ -122,6 +122,24 @@ describe("Brand Pilot Admin API", () => {
     await server.close();
   });
 
+  it.each(["new", "reviewed", "archived"] as const)(
+    "passes the %s feedback status filter to the admin repository",
+    async (status) => {
+      const repo = repository() as AdminRepository & { listFeedback: ReturnType<typeof vi.fn> };
+      const server = await app(repo);
+
+      const response = await server.inject({
+        method: "GET",
+        url: `/admin/v1/feedback?status=${status}`,
+        headers: headers()
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(repo.listFeedback).toHaveBeenCalledWith(expect.objectContaining({ status }));
+      await server.close();
+    }
+  );
+
   it("returns customer support requests from a different admin resource", async () => {
     const repo = repository() as AdminRepository & { listSupportRequests: ReturnType<typeof vi.fn> };
     repo.listSupportRequests = vi.fn(async () => ({ items: [{

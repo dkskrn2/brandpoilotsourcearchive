@@ -28,6 +28,28 @@ describe("통합형 도움말", () => {
     expect(guide?.sections.flatMap((section) => section.items).join(" ")).toMatch(/생성 중.*상태|검토.*기획 근거/);
   });
 
+  it.each([
+    ["/content", "publish-queue"],
+    ["/archive", "references-saved-trends"],
+    ["/instagram-trends", "references-trends"],
+    ["/brand-settings", "brand-center"],
+    ["/sources", "brand-center"],
+    ["/sources?view=references", "references-external-urls"],
+  ])("legacy 경로 %s에서도 이동 대상과 같은 가이드를 찾는다", (path, guideId) => {
+    expect(guideForPath(path)?.id).toBe(guideId);
+  });
+
+  it.each(helpGuides
+    .filter((guide) => !["/instagram-trends", "/brand-settings", "/sources"].includes(guide.path))
+    .map((guide) => [guide.path, guide.id]))(
+    "canonical 경로 %s의 가이드를 찾는다",
+    (path, guideId) => {
+      const concretePath = path.replace(":generationId", "generation-regression");
+      const expectedId = guideId === "references" ? "references-all" : guideId;
+      expect(guideForPath(concretePath)?.id).toBe(expectedId);
+    },
+  );
+
   it("레퍼런스 view query에 맞는 동적 안내와 외부 URL 제한을 제공한다", () => {
     const external = guideForPath("/references?view=external-urls");
     const trends = guideForPath("/references?view=trends");

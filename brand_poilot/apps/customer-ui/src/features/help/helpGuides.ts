@@ -193,7 +193,23 @@ function matchesGuidePath(pattern: string, pathname: string) {
 }
 
 export function guideForPath(pathname: string) {
-  const [rawPathname, rawSearch = ""] = pathname.split("?", 2);
+  const [requestedPathname, requestedSearch = ""] = pathname.split("?", 2);
+  const requestedQuery = new URLSearchParams(requestedSearch);
+  const sourceRoutesToReferences = ["tab", "section", "view", "sourceType", "type"]
+    .map((key) => requestedQuery.get(key)?.toLowerCase())
+    .some((value) => value === "reference" || value === "references");
+  const legacyPathTargets: Record<string, { pathname: string; search?: string }> = {
+    "/content": { pathname: "/publish-queue", search: "status=needs_review" },
+    "/archive": { pathname: "/references", search: "view=saved-trends" },
+    "/instagram-trends": { pathname: "/references", search: "view=trends" },
+    "/brand-settings": { pathname: "/brand-center" },
+    "/sources": sourceRoutesToReferences
+      ? { pathname: "/references", search: "view=external-urls" }
+      : { pathname: "/brand-center" },
+  };
+  const legacyTarget = legacyPathTargets[requestedPathname];
+  const rawPathname = legacyTarget?.pathname ?? requestedPathname;
+  const rawSearch = legacyTarget?.search ?? requestedSearch;
   const guide = helpGuides.find((item) => matchesGuidePath(item.path, rawPathname)) ?? null;
   if (guide?.id !== "references") return guide;
   const view = new URLSearchParams(rawSearch).get("view") || "all";

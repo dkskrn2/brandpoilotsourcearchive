@@ -142,6 +142,47 @@ describe("SupportPage", () => {
     expect(api.listSupportRequests).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps email optional when submitting a support request", async () => {
+    const api = await renderSupportPage();
+
+    await userEvent.selectOptions(screen.getByLabelText(/문의 유형/), "other");
+    await userEvent.type(screen.getByLabelText(/제목/), "기타 문의");
+    await userEvent.type(screen.getByLabelText(/휴대전화 번호/), "01012345678");
+    await userEvent.type(screen.getByLabelText(/내용/), "이메일 없이 문의합니다.");
+    await userEvent.click(screen.getByRole("button", { name: "문의 접수" }));
+
+    expect(api.createSupportRequest).toHaveBeenCalledWith("brand-1", expect.objectContaining({
+      contactPhone: "010-1234-5678",
+      contactEmail: null
+    }));
+  });
+
+  it.each([
+    ["new", "접수"],
+    ["in_progress", "처리중"],
+    ["resolved", "답변 완료"],
+  ] as const)("shows the %s inquiry as %s", async (status, label) => {
+    await renderSupportPage({
+      listSupportRequests: vi.fn(async () => [{
+        id: `support-${status}`,
+        brandId: "brand-1",
+        workspaceId: "workspace-1",
+        category: "bug",
+        title: `${label} 문의`,
+        message: "처리 상태를 확인합니다.",
+        contactPhone: "010-1234-5678",
+        contactEmail: null,
+        status,
+        responseMessage: status === "resolved" ? "답변입니다." : null,
+        respondedAt: status === "resolved" ? "2026-07-12T01:00:00.000Z" : null,
+        createdAt: "2026-07-12T00:00:00.000Z",
+        updatedAt: "2026-07-12T01:00:00.000Z"
+      }])
+    });
+
+    expect(await screen.findByText(label)).toBeVisible();
+  });
+
   it("keeps the newest inquiry history when an older request resolves last", async () => {
     let resolveInitialRequest!: (requests: Array<Record<string, unknown>>) => void;
     const initialRequest = new Promise<Array<Record<string, unknown>>>((resolve) => {
