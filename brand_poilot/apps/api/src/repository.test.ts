@@ -1047,6 +1047,7 @@ describe("repository", () => {
   });
 
   it("crawls only the requested source", async () => {
+    let queuedTopicContext: Record<string, unknown> | null = null;
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url: string | URL | Request) => {
       const href = String(url);
       if (href === "https://example.com/blog") {
@@ -1062,7 +1063,16 @@ describe("repository", () => {
     });
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       if (sql.includes("where id = $1 and brand_id = $2")) {
-        return { rowCount: 1, rows: [{ id: "source-1", workspace_id: "workspace-1", brand_id: "brand-1", url: "https://example.com/blog" }] };
+        return {
+          rowCount: 1,
+          rows: [{
+            id: "source-1",
+            workspace_id: "workspace-1",
+            brand_id: "brand-1",
+            url: "https://example.com/blog",
+            content_purpose: "marketing",
+          }],
+        };
       }
       if (sql.includes("insert into source_crawl_runs")) {
         return { rowCount: 1, rows: [{ id: "run-1" }] };
@@ -1076,6 +1086,10 @@ describe("repository", () => {
       if (sql.includes("insert into source_snapshots")) {
         return { rowCount: 1, rows: [{ id: "snapshot-1" }] };
       }
+      if (sql.includes("insert into content_topics")) {
+        queuedTopicContext = JSON.parse(String(values?.[3]));
+        return { rowCount: 1, rows: [{ id: "content-topic-1" }] };
+      }
       if (sql.includes("update source_crawl_runs")) {
         return { rowCount: 1, rows: [] };
       }
@@ -1087,7 +1101,7 @@ describe("repository", () => {
 
     expect(result.sourceUrlId).toBe("source-1");
     expect(query).toHaveBeenCalledWith(expect.stringContaining("where id = $1 and brand_id = $2"), ["source-1", "brand-1"]);
-    expect(query).toHaveBeenCalledWith(expect.stringContaining("content_purpose"), ["source-1", "brand-1"]);
+    expect(queuedTopicContext).toMatchObject({ contentPurpose: "marketing" });
     fetchSpy.mockRestore();
   });
 

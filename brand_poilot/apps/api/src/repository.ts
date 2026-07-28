@@ -834,13 +834,15 @@ async function enqueueSourceContentTopic(queryable: Queryable, input: {
   contentUrl: string;
   contentHash: string;
   title: string | null;
+  contentPurpose: "informational" | "marketing" | "both";
 }) {
   const sourceContext = {
     source: "source_url",
     sourceContentItemId: input.sourceContentItemId,
     sourceSnapshotId: input.sourceSnapshotId,
     contentUrl: input.contentUrl,
-    contentHash: input.contentHash
+    contentHash: input.contentHash,
+    contentPurpose: input.contentPurpose,
   };
   await queryable.query(
     `insert into content_topics (workspace_id, brand_id, topic_row_id, title, angle, status, source_context)
@@ -875,6 +877,7 @@ async function enqueueLatestSourceContentTopics(queryable: Queryable, brandId: s
               ss.id as source_snapshot_id,
               ss.source_content_item_id,
               ss.content_hash,
+              su.content_purpose,
               coalesce(nullif(ss.extracted_title, ''), nullif(sci.title, ''), '크롤링 소스 기반 콘텐츠') as title,
               coalesce(sci.content_url, su.url) as content_url
        from source_snapshots ss
@@ -901,7 +904,8 @@ async function enqueueLatestSourceContentTopics(queryable: Queryable, brandId: s
               'sourceContentItemId', lss.source_content_item_id::text,
               'sourceSnapshotId', lss.source_snapshot_id::text,
               'contentUrl', lss.content_url,
-              'contentHash', lss.content_hash
+              'contentHash', lss.content_hash,
+              'contentPurpose', lss.content_purpose
             )
      from latest_source_snapshots lss
      where lss.content_url is not null
@@ -3360,7 +3364,6 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         `select id, workspace_id, brand_id, url, content_purpose
          from source_urls
          where id = $1 and brand_id = $2
-           and content_purpose in ('informational', 'marketing', 'both')
            and enabled = true
            and deleted_at is null
            and status != 'disabled'`,
@@ -3544,7 +3547,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     async crawlSources(brandId, sourceId?: string) {
       const sources = sourceId
         ? await pool.query(
-          `select id, workspace_id, brand_id, url
+          `select id, workspace_id, brand_id, url, content_purpose
            from source_urls
            where id = $1 and brand_id = $2
              and enabled = true
@@ -3553,7 +3556,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           [sourceId, brandId]
         )
         : await pool.query(
-          `select id, workspace_id, brand_id, url
+          `select id, workspace_id, brand_id, url, content_purpose
            from source_urls
            where brand_id = $1
              and enabled = true
@@ -3665,7 +3668,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                     sourceSnapshotId,
                     contentUrl: discoveredUrl.url,
                     contentHash: snapshot.contentHash,
-                    title: snapshot.title
+                    title: snapshot.title,
+                    contentPurpose: source.content_purpose,
                   });
                 }
                 created += 1;
@@ -3677,7 +3681,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                   sourceSnapshotId: existingSnapshot.rows[0].id,
                   contentUrl: discoveredUrl.url,
                   contentHash: snapshot.contentHash,
-                  title: snapshot.title
+                  title: snapshot.title,
+                  contentPurpose: source.content_purpose,
                 });
               }
               await pool.query(

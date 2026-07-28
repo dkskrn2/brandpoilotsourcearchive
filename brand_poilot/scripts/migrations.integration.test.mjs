@@ -3685,6 +3685,8 @@ test("060 upgrades legacy generations idempotently without truncating oversized 
       "ai_content_approved_proposal_versions",
       "ai_content_generation_briefs",
       "ai_content_create_idempotency_records",
+      "reference_snapshots",
+      "reference_pattern_versions",
     ]) {
       const found = await database.query("select to_regclass($1) as name", [table]);
       assert.equal(found.rows[0].name, table);

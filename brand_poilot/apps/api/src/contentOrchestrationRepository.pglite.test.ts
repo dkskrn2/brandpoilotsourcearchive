@@ -31,9 +31,12 @@ const ids = {
   avatarImage: "c0000000-0000-4000-8000-00000000000c",
   otherAvatar: "b0000000-0000-4000-8000-00000000000d",
   otherAvatarImage: "c0000000-0000-4000-8000-00000000000e",
+  oneTimeAvatar: "b0000000-0000-4000-8000-00000000000f",
+  oneTimeAvatarAsset: "c0000000-0000-4000-8000-00000000000f",
   sourceUrl: "d0000000-0000-4000-8000-00000000000d",
   referenceItem: "e0000000-0000-4000-8000-00000000000e",
   referenceSnapshot: "e1000000-0000-4000-8000-00000000000e",
+  mutablePattern: "e2000000-0000-4000-8000-00000000000e",
   patternVersion: "f0000000-0000-4000-8000-00000000000f",
   wiki: "aa000000-0000-4000-8000-000000000001",
   readyWiki: "aa000000-0000-4000-8000-000000000002",
@@ -42,7 +45,15 @@ const ids = {
   noAvatarProposal: "12000000-0000-4000-8000-000000000012",
   noAvatarApproved: "12000000-0000-4000-8000-000000000013",
   noAvatarGeneration: "13000000-0000-4000-8000-000000000013",
+  oneTimeBatch: "14000000-0000-4000-8000-000000000014",
+  oneTimeProposal: "15000000-0000-4000-8000-000000000015",
+  oneTimeApproved: "16000000-0000-4000-8000-000000000016",
+  oneTimeGeneration: "17000000-0000-4000-8000-000000000017",
+  equalityGeneration: "18000000-0000-4000-8000-000000000018",
 };
+
+const productProfileHash = "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a";
+const wikiSnapshotHash = "94c400daf4714744abd2d87602cc780686c5555d6906197a40d350405266f6ac";
 
 const approvedSnapshot = (proposalId: string, actorId = ids.actor) => ({
   contractVersion: "approved-proposal.v1",
@@ -55,6 +66,56 @@ const approvedSnapshot = (proposalId: string, actorId = ids.actor) => ({
   approvedAt: "2026-07-28T00:00:00.000Z",
 });
 
+const versionedSnapshot = (
+  kind: "product_service" | "wiki",
+  id: string,
+  version: number,
+  contentHash: string,
+) => ({
+  kind,
+  id,
+  version,
+  title: kind === "product_service" ? "Approved service" : "Active Wiki",
+  body: kind === "product_service" ? "{}" : "Approved Wiki facts",
+  contentHash,
+  capturedAt: "2026-07-28T00:00:00.000Z",
+  stale: false,
+  trustLevel: "approved",
+  purpose: "both",
+});
+
+const canonicalReferenceSnapshot = {
+  snapshotId: ids.referenceSnapshot,
+  itemId: ids.referenceItem,
+  version: 1,
+  sourceUrl: "https://example.com/reference",
+  capturedAt: "2026-07-28T00:00:00.000Z",
+  contentHash: "92722245c0a680cff7a839bf84184056631adb36652ed97d10c26adc0cbc6f91",
+  content: { text: "Bounded reference text" },
+  media: {},
+  sourceAvailability: "available",
+  provenance: { kind: "saved_reference" },
+  permittedUse: {
+    displayPreview: true,
+    archiveBytes: false,
+    modelInput: true,
+    derivativeInspiration: true,
+  },
+};
+
+const canonicalPatternVersion = {
+  patternVersionId: ids.patternVersion,
+  itemId: ids.referenceItem,
+  snapshotId: ids.referenceSnapshot,
+  version: 1,
+  analysisVersion: "reference-pattern.v1",
+  observations: [],
+  interpretation: "Bounded pattern",
+  applicationIdeas: [],
+  doNotCopy: [],
+  confidence: 1,
+};
+
 const generationBrief = (overrides: Record<string, unknown> = {}) => ({
   contractVersion: "generation-brief.v1",
   proposalId: selectedProposalId,
@@ -65,11 +126,11 @@ const generationBrief = (overrides: Record<string, unknown> = {}) => ({
   subject: {
     kind: "approved_product_service",
     itemId: ids.product,
-    version: { id: ids.productVersion, contentHash: "1".repeat(64) },
+    version: versionedSnapshot("product_service", ids.productVersion, 1, productProfileHash),
     targetId: null,
     appealId: null,
   },
-  wikiSnapshots: [{ id: ids.wiki, contentHash: "2".repeat(64) }],
+  wikiSnapshots: [versionedSnapshot("wiki", ids.wiki, 1, wikiSnapshotHash)],
   references: [{
     itemId: ids.referenceItem,
     snapshotId: ids.referenceSnapshot,
@@ -135,15 +196,25 @@ beforeAll(async () => {
     ) values ('${ids.product}', '${ids.workspace}', '${ids.brand}', 'service', 'Approved service');
     insert into product_service_versions (
       id, workspace_id, brand_id, product_service_id, version, status,
-      profile_json, approved_at
+      profile_json, approved_at, created_at, updated_at
     ) values
-      ('${ids.productVersion}', '${ids.workspace}', '${ids.brand}', '${ids.product}', 1, 'approved', '{}', now()),
-      ('${ids.draftProductVersion}', '${ids.workspace}', '${ids.brand}', '${ids.product}', 2, 'draft', '{}', null);
+      ('${ids.productVersion}', '${ids.workspace}', '${ids.brand}', '${ids.product}', 1, 'approved', '{}',
+       '2026-07-28T00:00:00Z', '2026-07-28T00:00:00Z', '2026-07-28T00:00:00Z'),
+      ('${ids.draftProductVersion}', '${ids.workspace}', '${ids.brand}', '${ids.product}', 2, 'draft', '{}',
+       null, '2026-07-28T00:00:00Z', '2026-07-28T00:00:00Z');
     update product_services set active_version_id = '${ids.productVersion}' where id = '${ids.product}';
-    insert into wiki_versions (id, workspace_id, brand_id, status) values
-      ('${ids.wiki}', '${ids.workspace}', '${ids.brand}', 'active'),
-      ('${ids.readyWiki}', '${ids.workspace}', '${ids.brand}', 'ready'),
-      ('${ids.otherWiki}', '${ids.workspace}', '${ids.otherBrand}', 'active');
+    insert into wiki_versions (
+      id, workspace_id, brand_id, status, started_at, completed_at, activated_at, created_at, updated_at
+    ) values
+      ('${ids.wiki}', '${ids.workspace}', '${ids.brand}', 'active',
+       '2026-07-28T00:00:00Z', '2026-07-28T00:00:00Z', '2026-07-28T00:00:00Z',
+       '2026-07-28T00:00:00Z', '2026-07-28T00:00:00Z'),
+      ('${ids.readyWiki}', '${ids.workspace}', '${ids.brand}', 'ready',
+       '2026-07-28T00:00:00Z', '2026-07-28T00:00:00Z', null,
+       '2026-07-28T00:00:00Z', '2026-07-28T00:00:00Z'),
+      ('${ids.otherWiki}', '${ids.workspace}', '${ids.otherBrand}', 'active',
+       '2026-07-28T00:00:00Z', '2026-07-28T00:00:00Z', '2026-07-28T00:00:00Z',
+       '2026-07-28T00:00:00Z', '2026-07-28T00:00:00Z');
     insert into source_urls (
       id, workspace_id, brand_id, source_type, url, url_hash, content_purpose
     ) values (
@@ -159,8 +230,26 @@ beforeAll(async () => {
     insert into reference_patterns (
       id, workspace_id, brand_id, reference_item_id, confidence, analysis_version
     ) values (
-      '${ids.patternVersion}', '${ids.workspace}', '${ids.brand}',
+      '${ids.mutablePattern}', '${ids.workspace}', '${ids.brand}',
       '${ids.referenceItem}', 1, 'reference-pattern.v1'
+    );
+    insert into reference_snapshots (
+      id, workspace_id, brand_id, reference_item_id, version,
+      content_hash, captured_at, snapshot_json
+    ) values (
+      '${ids.referenceSnapshot}', '${ids.workspace}', '${ids.brand}', '${ids.referenceItem}', 1,
+      '${canonicalReferenceSnapshot.contentHash}', '2026-07-28T00:00:00Z',
+      '${JSON.stringify(canonicalReferenceSnapshot)}'
+    );
+    insert into reference_pattern_versions (
+      id, workspace_id, brand_id, reference_item_id, reference_snapshot_id,
+      version, content_hash, analysis_version, pattern_json
+    ) values (
+      '${ids.patternVersion}', '${ids.workspace}', '${ids.brand}', '${ids.referenceItem}',
+      '${ids.referenceSnapshot}', 1,
+      encode(digest(('${JSON.stringify(canonicalPatternVersion)}'::jsonb)::text,'sha256'),'hex'),
+      'reference-pattern.v1',
+      '${JSON.stringify(canonicalPatternVersion)}'
     );
     insert into ai_content_proposal_batches (
       id, workspace_id, brand_id, origin, content_family, request_json,
@@ -271,17 +360,81 @@ describe("content orchestration PostgreSQL contract", () => {
     expect(actorScoped.rows[0]?.record_id).not.toBe(first.rows[0]?.record_id);
   });
 
+  it("rejects forged content hashes on immutable reference resources", async () => {
+    const db = database as PGlite;
+    const forgedWiki = versionedSnapshot("wiki", ids.wiki, 1, "9".repeat(64));
+    const snapshotValidation = await db.query<{ valid: boolean }>(
+      "select ai_content_versioned_snapshot_is_valid($1,'wiki') valid",
+      [JSON.stringify(forgedWiki)],
+    );
+    expect(snapshotValidation.rows[0]?.valid).toBe(false);
+
+    const forgedSnapshotId = "e1000000-0000-4000-8000-000000000099";
+    await db.exec("begin");
+    try {
+      await expect(db.query(
+        `insert into reference_snapshots (
+           id,workspace_id,brand_id,reference_item_id,version,
+           content_hash,captured_at,snapshot_json
+         ) values ($1,$2,$3,$4,2,$5,$6,$7)`,
+        [
+          forgedSnapshotId,
+          ids.workspace,
+          ids.brand,
+          ids.referenceItem,
+          "9".repeat(64),
+          canonicalReferenceSnapshot.capturedAt,
+          JSON.stringify({
+            ...canonicalReferenceSnapshot,
+            snapshotId: forgedSnapshotId,
+            version: 2,
+            contentHash: "9".repeat(64),
+          }),
+        ],
+      )).rejects.toThrow();
+    } finally {
+      await db.exec("rollback");
+    }
+
+    await db.exec("begin");
+    try {
+      const forgedPatternId = "f1000000-0000-4000-8000-000000000099";
+      await expect(db.query(
+        `insert into reference_pattern_versions (
+           id,workspace_id,brand_id,reference_item_id,reference_snapshot_id,
+           version,content_hash,analysis_version,pattern_json
+         ) values ($1,$2,$3,$4,$5,2,$6,'reference-pattern.v2',$7)`,
+        [
+          forgedPatternId,
+          ids.workspace,
+          ids.brand,
+          ids.referenceItem,
+          ids.referenceSnapshot,
+          "9".repeat(64),
+          JSON.stringify({
+            ...canonicalPatternVersion,
+            patternVersionId: forgedPatternId,
+            version: 2,
+            analysisVersion: "reference-pattern.v2",
+          }),
+        ],
+      )).rejects.toThrow();
+    } finally {
+      await db.exec("rollback");
+    }
+  });
+
   it("rejects reduced briefs and non-exact or inactive resource snapshots before start", async () => {
     const db = database as PGlite;
     const snapshot = approvedSnapshot(selectedProposalId);
     await db.query(
       `insert into ai_content_approved_proposal_versions (
-         id, workspace_id, brand_id, proposal_id, revision, approved_proposal_snapshot,
+       id, workspace_id, brand_id, proposal_id, revision, approved_proposal_snapshot,
          validation_result_id, approved_by_user_id, approved_at
-       ) values ($1,$2,$3,$4,1,$5,$6,$7,now())`,
+       ) values ($1,$2,$3,$4,1,$5,$6,$7,$8)`,
       [
         ids.approvedProposal, ids.workspace, ids.brand, selectedProposalId,
-        JSON.stringify(snapshot), snapshot.validationResultId, ids.actor,
+        JSON.stringify(snapshot), snapshot.validationResultId, ids.actor, snapshot.approvedAt,
       ],
     );
     await db.query(
@@ -290,15 +443,11 @@ describe("content orchestration PostgreSQL contract", () => {
          reference_item_id, reference_snapshot_id, pattern_version_id, roles_json,
          reference_snapshot_json
        ) values (
-         $1,gen_random_uuid(),$2,$3,1,$4,$5,$6,'["planning"]',
-         jsonb_build_object(
-           'snapshotId',($5::uuid)::text,'contentHash',$7::text,
-           'capturedAt','2026-07-28T00:00:00Z','sourceUrl','https://example.com/reference'
-         )
+         $1,gen_random_uuid(),$2,$3,1,$4,$5,$6,'["planning"]',$7
        )`,
       [
         ids.generation, ids.workspace, ids.brand, ids.referenceItem,
-        ids.referenceSnapshot, ids.patternVersion, "3".repeat(64),
+        ids.referenceSnapshot, ids.patternVersion, JSON.stringify(canonicalReferenceSnapshot),
       ],
     );
 
@@ -324,6 +473,34 @@ describe("content orchestration PostgreSQL contract", () => {
         JSON.stringify(generationBrief().avatar), ids.actor,
       ],
     )).rejects.toThrow(/reference_snapshot_set_mismatch/);
+
+    const incompleteProduct = generationBrief({
+      subject: {
+        kind: "approved_product_service",
+        itemId: ids.product,
+        version: { id: ids.productVersion, contentHash: "1".repeat(64) },
+        targetId: null,
+        appealId: null,
+      },
+    });
+    await expect(db.query(
+      "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+      [
+        ids.generation, ids.workspace, ids.brand, JSON.stringify(incompleteProduct),
+        JSON.stringify(incompleteProduct.avatar), ids.actor,
+      ],
+    )).rejects.toThrow(/generation_brief_invalid/);
+
+    const incompleteWiki = generationBrief({
+      wikiSnapshots: [{ id: ids.wiki, contentHash: "2".repeat(64) }],
+    });
+    await expect(db.query(
+      "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+      [
+        ids.generation, ids.workspace, ids.brand, JSON.stringify(incompleteWiki),
+        JSON.stringify(incompleteWiki.avatar), ids.actor,
+      ],
+    )).rejects.toThrow(/generation_brief_invalid/);
 
     const changedApproval = generationBrief({
       approvedProposalSnapshot: {
@@ -356,13 +533,17 @@ describe("content orchestration PostgreSQL contract", () => {
         subject: {
           kind: "approved_product_service",
           itemId: ids.product,
-          version: { id: ids.draftProductVersion },
+          version: versionedSnapshot("product_service", ids.draftProductVersion, 2, productProfileHash),
           targetId: null,
           appealId: null,
         },
       }), generationBrief().avatar, "product_version_not_active_approved"],
-      [generationBrief({ wikiSnapshots: [{ id: ids.readyWiki }] }), generationBrief().avatar, "wiki_version_not_active"],
-      [generationBrief({ wikiSnapshots: [{ id: ids.otherWiki }] }), generationBrief().avatar, "wiki_version_not_active"],
+      [generationBrief({
+        wikiSnapshots: [versionedSnapshot("wiki", ids.readyWiki, 1, wikiSnapshotHash)],
+      }), generationBrief().avatar, "wiki_version_not_active"],
+      [generationBrief({
+        wikiSnapshots: [versionedSnapshot("wiki", ids.otherWiki, 1, wikiSnapshotHash)],
+      }), generationBrief().avatar, "wiki_version_not_active"],
       [generationBrief({
         avatar: {
           id: ids.otherAvatar,
@@ -405,17 +586,24 @@ describe("content orchestration PostgreSQL contract", () => {
          reference_item_id,reference_snapshot_id,pattern_version_id,roles_json,
          reference_snapshot_json
        ) values (
-         $1,gen_random_uuid(),$2,$3,2,$4,$5,$6,'["planning"]',
-         jsonb_build_object(
-           'snapshotId',($5::uuid)::text,'contentHash',$7::text,
-           'capturedAt','2026-07-28T00:00:00Z','sourceUrl','https://example.com/reference'
-         )
+         $1,gen_random_uuid(),$2,$3,2,$4,$5,$6,'["planning"]',$7
        )`,
       [
         ids.generation, ids.workspace, ids.otherBrand, ids.referenceItem,
-        "e1000000-0000-4000-8000-000000000099", ids.patternVersion, "4".repeat(64),
+        "e1000000-0000-4000-8000-000000000099", ids.patternVersion,
+        JSON.stringify({ ...canonicalReferenceSnapshot, snapshotId: "e1000000-0000-4000-8000-000000000099" }),
       ],
     )).rejects.toThrow();
+
+    await db.exec("begin");
+    try {
+      await expect(db.query(
+        "update ai_content_generation_references set pattern_version_id=$2 where generation_id=$1",
+        [ids.generation, ids.mutablePattern],
+      )).rejects.toThrow();
+    } finally {
+      await db.exec("rollback");
+    }
 
     await db.exec("begin");
     try {
@@ -529,10 +717,10 @@ describe("content orchestration PostgreSQL contract", () => {
       `insert into ai_content_approved_proposal_versions (
          id,workspace_id,brand_id,proposal_id,revision,approved_proposal_snapshot,
          validation_result_id,approved_by_user_id,approved_at
-       ) values ($1,$2,$3,$4,1,$5,$6,$7,now())`,
+       ) values ($1,$2,$3,$4,1,$5,$6,$7,$8)`,
       [
         ids.noAvatarApproved, ids.workspace, ids.brand, ids.noAvatarProposal,
-        JSON.stringify(approval), approval.validationResultId, ids.actor,
+        JSON.stringify(approval), approval.validationResultId, ids.actor, approval.approvedAt,
       ],
     );
     const brief = {
@@ -561,12 +749,150 @@ describe("content orchestration PostgreSQL contract", () => {
     }
   });
 
-  it("keeps approved proposal versions immutable", async () => {
+  it("allows a content-addressed one-time avatar without a library row", async () => {
+    const db = database as PGlite;
+    const approval = approvedSnapshot(ids.oneTimeProposal);
+    await db.exec(`
+      update brand_profiles
+         set active_brand_core_id='${ids.core}',active_brand_rule_set_id='${ids.rules}'
+       where brand_id='${ids.brand}';
+      insert into ai_content_proposal_batches (
+        id,workspace_id,brand_id,origin,content_family,request_json,
+        source_snapshot_json,status,idempotency_key,created_by_user_id
+      ) values (
+        '${ids.oneTimeBatch}','${ids.workspace}','${ids.brand}','manual',
+        'marketing','{}','[]','ready','one-time-avatar-batch','${ids.actor}'
+      );
+      insert into ai_content_proposals (
+        id,workspace_id,brand_id,batch_id,position,proposal_json
+      ) values (
+        '${ids.oneTimeProposal}','${ids.workspace}','${ids.brand}',
+        '${ids.oneTimeBatch}',1,'{}'
+      );
+      insert into ai_content_generations (
+        id,workspace_id,brand_id,type,title,analysis_idempotency_key,
+        content_family,output_format,subject_mode,generation_input_snapshot
+      ) values (
+        '${ids.oneTimeGeneration}','${ids.workspace}','${ids.brand}','marketing',
+        'One-time avatar','one-time-avatar-generation','marketing','single_image','brand_topic',
+        '{"contractVersion":"content-generation-input.v2","contentType":"marketing"}'
+      );
+    `);
+    await db.query("select select_ai_content_proposal($1,$2,$3,$4)", [
+      ids.oneTimeProposal, ids.workspace, ids.brand, ids.actor,
+    ]);
+    await db.query(
+      `insert into ai_content_approved_proposal_versions (
+         id,workspace_id,brand_id,proposal_id,revision,approved_proposal_snapshot,
+         validation_result_id,approved_by_user_id,approved_at
+       ) values ($1,$2,$3,$4,1,$5,$6,$7,$8)`,
+      [
+        ids.oneTimeApproved, ids.workspace, ids.brand, ids.oneTimeProposal,
+        JSON.stringify(approval), approval.validationResultId, ids.actor, approval.approvedAt,
+      ],
+    );
+    const avatar = {
+      id: ids.oneTimeAvatar,
+      assetVersionId: ids.oneTimeAvatarAsset,
+      objectHash: "d".repeat(64),
+      mime: "image/png",
+      provenance: "one_time",
+    };
+    const brief = {
+      contractVersion: "generation-brief.v1",
+      proposalId: ids.oneTimeProposal,
+      approvedProposalVersionId: ids.oneTimeApproved,
+      approvedProposalSnapshot: approval,
+      brandCoreVersionId: ids.core,
+      ruleSetVersionId: ids.rules,
+      subject: { kind: "brand_topic", topic: "One-time avatar", brandCoreEvidenceIds: [] },
+      wikiSnapshots: [],
+      references: [],
+      avatar,
+      outputFormat: "single_image",
+      channels: ["instagram"],
+      promptDefinitionVersions: { generation: "generation.v1" },
+    };
+    await expect(db.query(
+      "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+      [
+        ids.oneTimeGeneration, ids.workspace, ids.brand, JSON.stringify(brief),
+        JSON.stringify(avatar), ids.actor,
+      ],
+    )).resolves.toBeDefined();
+  });
+
+  it("enforces immutable resource JSON equality on direct inserts", async () => {
+    const db = database as PGlite;
+    await db.exec("begin");
+    try {
+      const mismatchedApproval = approvedSnapshot(dismissedProposalId);
+      await expect(db.query(
+        `insert into ai_content_approved_proposal_versions (
+           workspace_id,brand_id,proposal_id,revision,approved_proposal_snapshot,
+           validation_result_id,approved_by_user_id,approved_at
+         ) values ($1,$2,$3,2,$4,$5,$6,$7)`,
+        [
+          ids.workspace, ids.brand, dismissedProposalId, JSON.stringify(mismatchedApproval),
+          mismatchedApproval.validationResultId, ids.actor, mismatchedApproval.approvedAt,
+        ],
+      )).rejects.toThrow();
+    } finally {
+      await db.exec("rollback");
+    }
+
+    await db.query(
+      `insert into ai_content_generations (
+         id,workspace_id,brand_id,type,title,analysis_idempotency_key,
+         content_family,output_format,subject_mode,generation_input_snapshot
+       ) values (
+         $1,$2,$3,'blog','Equality generation','equality-generation',
+         'informational','blog','brand_topic',
+         '{"contractVersion":"content-generation-input.v2","contentType":"blog"}'
+       )`,
+      [ids.equalityGeneration, ids.workspace, ids.brand],
+    );
+    await expect(db.query(
+      `insert into ai_content_generation_briefs (
+         workspace_id,brand_id,generation_id,approved_proposal_version_id,
+         brief_json,created_by_user_id
+       ) values ($1,$2,$3,$4,$5,$6)`,
+      [
+        ids.workspace, ids.brand, ids.equalityGeneration, ids.noAvatarApproved,
+        JSON.stringify({
+          ...generationBrief({
+            proposalId: selectedProposalId,
+            approvedProposalVersionId: ids.approvedProposal,
+            avatar: null,
+            references: [],
+            wikiSnapshots: [],
+            outputFormat: "blog",
+            subject: { kind: "brand_topic", topic: "Mismatch", brandCoreEvidenceIds: [] },
+          }),
+        }),
+        ids.actor,
+      ],
+    )).rejects.toThrow();
+  });
+
+  it("keeps approved proposals, reference snapshots, patterns, and briefs immutable", async () => {
     const db = database as PGlite;
     await expect(db.query(
       "update ai_content_approved_proposal_versions set revision=2 where id=$1",
       [ids.approvedProposal],
     )).rejects.toThrow(/approved_proposal_version_immutable/);
+    await expect(db.query(
+      "update reference_snapshots set content_hash=$2 where id=$1",
+      [ids.referenceSnapshot, "9".repeat(64)],
+    )).rejects.toThrow(/reference_snapshot_immutable/);
+    await expect(db.query(
+      "update reference_pattern_versions set content_hash=$2 where id=$1",
+      [ids.patternVersion, "9".repeat(64)],
+    )).rejects.toThrow(/reference_pattern_version_immutable/);
+    await expect(db.query(
+      "update ai_content_generation_briefs set approved_proposal_version_id=$2 where generation_id=$1",
+      [ids.generation, ids.noAvatarApproved],
+    )).rejects.toThrow(/generation_brief_immutable/);
     expect(dismissedProposalId).toBeTruthy();
   });
 });

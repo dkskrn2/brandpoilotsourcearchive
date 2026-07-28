@@ -530,6 +530,8 @@ test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계�
     "ai_content_approved_proposal_versions",
     "ai_content_generation_briefs",
     "ai_content_create_idempotency_records",
+    "reference_snapshots",
+    "reference_pattern_versions",
   ]) {
     assert.match(migration, new RegExp(`create\\s+table\\s+if\\s+not\\s+exists\\s+${table}\\b`, "i"));
   }
@@ -568,12 +570,21 @@ test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계�
   assert.match(migration, /source_urls_content_purpose_idx/i);
   assert.match(migration, /reference_items_brand_purpose_active_idx/i);
   assert.match(migration, /idempotency_conflict/i);
+  assert.match(migration, /reference_snapshot_immutable/i);
+  assert.match(migration, /reference_pattern_version_immutable/i);
+  assert.match(migration, /ai_content_versioned_snapshot_is_valid/i);
+  assert.match(migration, /approved_proposal_versions_json_identity_check/i);
+  assert.match(migration, /generation_briefs_json_identity_check/i);
   assert.match(migration, /actor_user_id[\s\S]*operation[\s\S]*client_request_id[\s\S]*normalized_payload_hash/i);
   assert.doesNotMatch(migration, /'ruleSetId'/);
   assert.doesNotMatch(migration, /'referenceSnapshots'/);
   assert.doesNotMatch(migration, /'imageSnapshots'/);
   assert.match(aiContentRepository, /reference_items[\s\S]*content_purpose/i);
-  assert.match(crawlerRepository, /crawlSingleSource[\s\S]*source_urls[\s\S]*content_purpose/i);
+  assert.match(crawlerRepository, /enqueueSourceContentTopic[\s\S]*contentPurpose[\s\S]*source\.content_purpose/i);
+  assert.doesNotMatch(
+    crawlerRepository,
+    /content_purpose\s+in\s*\(\s*'informational',\s*'marketing',\s*'both'\s*\)/i,
+  );
 });
 
 test("061은 대표 이미지를 우선 보존하고 avatar별 checksum 중복을 차단한다", async () => {
