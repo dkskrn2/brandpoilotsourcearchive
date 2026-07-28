@@ -5,7 +5,7 @@ import { mockAiContentGateway } from "./mockAiContentGateway";
 
 function Probe() {
   const { usage, loading, refresh } = useAiContentUsage();
-  return <div><span>{usage ? `${usage.generationLimit - usage.generationUsed}` : "none"}</span><span>{loading ? "loading" : "idle"}</span><button onClick={() => void refresh()}>refresh</button></div>;
+  return <div><span>{usage ? `${usage.generationLimit - usage.generationUsed}` : "none"}</span><span>{usage ? `${usage.generationLimit}/${usage.newDownloadLimit}` : "no-limits"}</span><span>{loading ? "loading" : "idle"}</span><button onClick={() => void refresh()}>refresh</button></div>;
 }
 
 function deferred<T>() {
@@ -20,7 +20,8 @@ describe("AiContentUsageProvider", () => {
   it("loads usage once and exposes a refresh function", async () => {
     const getUsage = vi.fn(mockAiContentGateway.getUsage);
     render(<AiContentUsageProvider gateway={{ ...mockAiContentGateway, getUsage }} brandId="brand-1"><Probe /></AiContentUsageProvider>);
-    expect(await screen.findByText("3")).toBeVisible();
+    expect(await screen.findByText("8")).toBeVisible();
+    expect(screen.getByText("10/20")).toBeVisible();
     expect(getUsage).toHaveBeenCalledTimes(1);
     screen.getByRole("button", { name: "refresh" }).click();
     await waitFor(() => expect(getUsage).toHaveBeenCalledTimes(2));
@@ -45,17 +46,17 @@ describe("AiContentUsageProvider", () => {
     await waitFor(() => expect(getUsage).toHaveBeenCalledTimes(2));
 
     await act(async () => {
-      second.resolve({ generationUsed: 4, generationLimit: 5, newDownloadUsed: 2, newDownloadLimit: 10, resetsAt: "2026-07-20T00:00:00+09:00" });
+      second.resolve({ generationUsed: 4, generationLimit: 10, newDownloadUsed: 2, newDownloadLimit: 20, resetsAt: "2026-07-20T00:00:00+09:00" });
       await second.promise;
     });
-    expect(await screen.findByText("1")).toBeVisible();
+    expect(await screen.findByText("6")).toBeVisible();
     expect(screen.getByText("idle")).toBeVisible();
 
     await act(async () => {
-      first.resolve({ generationUsed: 1, generationLimit: 5, newDownloadUsed: 1, newDownloadLimit: 10, resetsAt: "2026-07-19T00:00:00+09:00" });
+      first.resolve({ generationUsed: 1, generationLimit: 10, newDownloadUsed: 1, newDownloadLimit: 20, resetsAt: "2026-07-19T00:00:00+09:00" });
       await first.promise;
     });
-    expect(screen.getByText("1")).toBeVisible();
-    expect(screen.queryByText("4")).not.toBeInTheDocument();
+    expect(screen.getByText("6")).toBeVisible();
+    expect(screen.queryByText("9")).not.toBeInTheDocument();
   });
 });

@@ -664,6 +664,7 @@ describe("InstagramTrendExplorerPanel", () => {
       await userEvent.type(nextInput, "여행콘텐츠");
       await userEvent.click(screen.getByRole("button", { name: "검색" }));
       expect(await screen.findByText(copy)).toBeVisible();
+      expect(nextInput).toHaveValue("여행콘텐츠");
       expect(api.getInstagramTrends).toHaveBeenCalled();
     }
   });

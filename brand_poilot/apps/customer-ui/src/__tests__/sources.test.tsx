@@ -319,6 +319,7 @@ describe("SourcesPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "URL 추가" }));
 
     expect(await screen.findByText(/http:\/\/ 또는 https:\/\//)).toBeVisible();
+    expect(input).toHaveValue("api.example.com");
   });
 
   it("prevents adding more than ten reference URLs", async () => {

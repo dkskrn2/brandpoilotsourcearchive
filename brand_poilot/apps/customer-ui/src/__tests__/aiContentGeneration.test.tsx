@@ -84,6 +84,22 @@ describe("AiContentGenerationPage", () => {
     });
   });
 
+  it("maps the download quota code to Korean and preserves completed materials", async () => {
+    const { gateway } = renderGeneration("generation-card-complete", false, (configuredGateway) => {
+      configuredGateway.downloadOutput = vi.fn(async () => {
+        throw new ApiRequestError({ status: 429, errorCode: "ai_content_download_limit_reached" });
+      });
+    });
+    const outputButton = await screen.findByRole("button", { name: "카드뉴스 표지 결과 ZIP 다운로드" });
+
+    await userEvent.click(outputButton);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("오늘 신규 다운로드 20회를 모두 사용했습니다");
+    expect(outputButton).toHaveTextContent("결과 ZIP");
+    expect(screen.getByRole("button", { name: "전체 ZIP" })).toBeEnabled();
+    expect(gateway.downloadOutput).toHaveBeenCalledTimes(1);
+  });
+
   it("shows failed output reason and retry control updates output state after reasoned retry", async () => {
     const user = userEvent.setup();
     renderGeneration("generation-partial");

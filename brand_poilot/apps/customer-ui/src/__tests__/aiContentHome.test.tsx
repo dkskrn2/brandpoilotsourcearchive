@@ -11,7 +11,7 @@ describe("AI content mock gateway", () => {
     const usage = await mockAiContentGateway.getUsage("brand-1");
     const jobs = await mockAiContentGateway.listGenerations("brand-1");
 
-    expect(usage).toMatchObject({ generationUsed: 2, generationLimit: 5 });
+    expect(usage).toMatchObject({ generationUsed: 2, generationLimit: 10, newDownloadLimit: 20 });
     expect(jobs.map((job) => job.status)).toEqual(expect.arrayContaining(["generating", "completed", "partial_failed"]));
     expect(jobs.flatMap((job) => job.outputs).length).toBeGreaterThan(0);
   });

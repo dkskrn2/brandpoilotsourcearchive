@@ -7,6 +7,7 @@ import { createMockAiContentGateway } from "../../features/ai-content/mockAiCont
 import { createChannelCapabilityGateway } from "../../features/channels/channelCapabilityGateway";
 import type { ChannelCapability } from "../../types";
 import type { ContentProposalRecord } from "../../features/ai-content/types";
+import { ApiRequestError } from "../../lib/apiClient";
 import { ContentProposalFlow } from "./ContentProposalFlow";
 
 afterEach(cleanup);
@@ -305,5 +306,20 @@ describe("ContentProposalFlow", () => {
         }),
       }),
     );
+  });
+
+  it("maps the generation quota code to Korean and preserves the selected proposal", async () => {
+    const user = userEvent.setup();
+    const { startGeneration } = renderFlow({ initialBatchId: "batch-1" });
+    startGeneration.mockRejectedValueOnce(
+      new ApiRequestError({ status: 429, errorCode: "ai_content_limit_reached" }),
+    );
+
+    await user.click(await screen.findByRole("button", { name: "구현안 선택: 여름 피부 3단계 관리" }));
+    await user.click(await screen.findByRole("button", { name: "이 구현안으로 생성" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("오늘 AI 콘텐츠 생성 10회를 모두 사용했습니다");
+    expect(screen.getByText("여름 피부 3단계 관리")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "레퍼런스와 아바타" })).toBeVisible();
   });
 });

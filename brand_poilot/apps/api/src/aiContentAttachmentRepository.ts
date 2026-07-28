@@ -1,7 +1,7 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import type { AttachmentUploadTokenInput, LegacyConfirmAttachmentInput } from "./aiContentContracts.js";
-import { buildAiContentUploadSessionPath } from "./aiContentUpload.js";
+import { AI_CONTENT_TOTAL_ATTACHMENT_LIMIT, buildAiContentUploadSessionPath } from "./aiContentUpload.js";
 import type {
   AiContentAttachmentRecord,
   BrandGenerationScope,
@@ -308,7 +308,7 @@ export function createAiContentAttachmentRepository(
 
       return inTransaction(pool, async (client) => {
         assertMutable(await lockGeneration(client, scope));
-        if (await countReservedSlots(client, scope) >= 5) {
+        if (await countReservedSlots(client, scope) >= AI_CONTENT_TOTAL_ATTACHMENT_LIMIT) {
           throw new Error("ai_content_attachment_limit_exceeded");
         }
         const result = await client.query(
@@ -567,7 +567,7 @@ export function createAiContentAttachmentRepository(
           }
           return mapAttachment(row);
         }
-        if (await countReservedSlots(client, scope) >= 5) {
+        if (await countReservedSlots(client, scope) >= AI_CONTENT_TOTAL_ATTACHMENT_LIMIT) {
           throw new Error("ai_content_attachment_limit_exceeded");
         }
         const attachmentId = randomUUID();

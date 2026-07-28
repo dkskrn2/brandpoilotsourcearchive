@@ -16,9 +16,9 @@ import type { PublishArtifactAsset } from "../../types";
 
 const usage: AiContentUsage = {
   generationUsed: 2,
-  generationLimit: 5,
+  generationLimit: 10,
   newDownloadUsed: 3,
-  newDownloadLimit: 10,
+  newDownloadLimit: 20,
   resetsAt: "2026-07-19T00:00:00+09:00"
 };
 

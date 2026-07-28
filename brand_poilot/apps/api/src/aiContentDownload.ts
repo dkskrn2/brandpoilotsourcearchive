@@ -97,13 +97,19 @@ async function recordDownloads(client: PoolClient, input: Scope, rows: OutputRow
   );
 }
 
-export function createAiContentDownloadRepository(pool: Pool, options: { fetchImpl?: typeof fetch; maxAssetBytes?: number } = {}): AiContentDownloadRepository {
+export function createAiContentDownloadRepository(pool: Pool, options: {
+  fetchImpl?: typeof fetch;
+  maxAssetBytes?: number;
+  zipBuilder?: typeof createZipBuffer;
+} = {}): AiContentDownloadRepository {
   const fetchImpl = options.fetchImpl ?? fetch;
   const maxAssetBytes = options.maxAssetBytes ?? 20 * 1024 * 1024;
+  const zipBuilder = options.zipBuilder ?? createZipBuffer;
 
   async function packageRows(input: Scope, rows: OutputRow[], fileName: string) {
     if (!rows.length) throw new Error("ai_content_output_not_found");
     const entries = (await Promise.all(rows.map((row) => outputEntries(row, fetchImpl, maxAssetBytes)))).flat();
+    const buffer = zipBuilder(entries);
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -115,7 +121,7 @@ export function createAiContentDownloadRepository(pool: Pool, options: { fetchIm
     } finally {
       client.release();
     }
-    return { fileName, mimeType: "application/zip" as const, buffer: createZipBuffer(entries), itemCount: rows.length };
+    return { fileName, mimeType: "application/zip" as const, buffer, itemCount: rows.length };
   }
 
   return {

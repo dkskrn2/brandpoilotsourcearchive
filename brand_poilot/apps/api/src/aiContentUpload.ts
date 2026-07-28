@@ -4,6 +4,7 @@ import type { AttachmentUploadTokenInput, AiContentAttachmentRole } from "./aiCo
 
 export const AI_CONTENT_IMAGE_MAX_BYTES = 5_000_000;
 export const AI_CONTENT_DOCUMENT_MAX_BYTES = 10_000_000;
+export const AI_CONTENT_TOTAL_ATTACHMENT_LIMIT = 5;
 export const AI_CONTENT_UPLOAD_SESSION_TTL_MS = 10 * 60_000;
 export const AI_CONTENT_UPLOAD_TOKEN_EXPIRY_BUFFER_MS = 60_000;
 type AttachmentMimePolicy = Readonly<Record<string, number>>;

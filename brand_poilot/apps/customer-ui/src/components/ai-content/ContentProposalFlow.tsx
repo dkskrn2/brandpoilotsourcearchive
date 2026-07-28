@@ -28,6 +28,7 @@ import { ReferenceUploadDialog } from "../references/ReferenceUploadDialog";
 import { AvatarEditorDialog } from "../brand-center/AvatarEditorDialog";
 import type { ReferenceItem } from "../../types";
 import { PageGuideButton } from "../layout/PageHeader";
+import { ApiRequestError } from "../../lib/apiClient";
 
 const phases = ["콘텐츠 생성", "구현안 선택", "생성", "변경·검토·보완"];
 const sections: Array<[ContentSetupSection, string]> = [
@@ -45,6 +46,9 @@ const validationFieldLabels = {
 } as const;
 
 function validationMessage(error: unknown) {
+  if (error instanceof ApiRequestError && error.errorCode === "ai_content_limit_reached") {
+    return "오늘 AI 콘텐츠 생성 10회를 모두 사용했습니다. 내일 00:00(KST)에 다시 사용할 수 있습니다.";
+  }
   const mapped = contentGenerationFieldError(error);
   return mapped ? `${validationFieldLabels[mapped.field]} 입력을 확인해 주세요.` : null;
 }

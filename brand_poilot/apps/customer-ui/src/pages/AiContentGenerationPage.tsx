@@ -85,6 +85,13 @@ function subjectLabel(orchestration: ContentOrchestration) {
   return `신규 주제 분석 ${orchestration.subject.subjectAnalysisId}`;
 }
 
+function downloadErrorMessage(error: unknown) {
+  if (error instanceof ApiRequestError && error.errorCode === "ai_content_download_limit_reached") {
+    return "오늘 신규 다운로드 20회를 모두 사용했습니다. 같은 결과는 다시 다운로드해도 차감되지 않습니다.";
+  }
+  return error instanceof Error ? error.message : "결과 다운로드에 실패했습니다.";
+}
+
 export function AiContentGenerationPage({
   gateway = aiContentApiGateway,
   brandId = DEMO_BRAND_ID
@@ -288,7 +295,7 @@ export function AiContentGenerationPage({
       markDownloaded(key);
       await refreshUsage();
     } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : "결과 다운로드에 실패했습니다.");
+      setActionError(downloadErrorMessage(err));
     } finally {
       actionLocks.current.download.delete(key);
     }

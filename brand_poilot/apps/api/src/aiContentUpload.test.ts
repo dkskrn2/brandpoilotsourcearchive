@@ -10,6 +10,7 @@ import {
 } from "./aiContentContracts.js";
 import {
   AI_CONTENT_ATTACHMENT_POLICY,
+  AI_CONTENT_TOTAL_ATTACHMENT_LIMIT,
   AI_CONTENT_UPLOAD_SESSION_TTL_MS,
   buildAiContentAttachmentPath,
   buildAiContentUploadSessionPath,
@@ -72,6 +73,7 @@ describe("AI content attachment upload policy", () => {
   });
 
   it("exports the MIME, role, and size policy used by attachment consumers", () => {
+    expect(AI_CONTENT_TOTAL_ATTACHMENT_LIMIT).toBe(5);
     expect(AI_CONTENT_ATTACHMENT_POLICY.product).toEqual({
       "image/png": 5_000_000,
       "image/jpeg": 5_000_000,

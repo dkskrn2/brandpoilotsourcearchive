@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAiContentRepository } from "./aiContentRepository.js";
+import { kstDateKey } from "./publishSchedule.js";
 
 function row(id: string, status = "analyzing") {
   return {
@@ -1648,6 +1649,19 @@ describe("AI content repository", () => {
     })).rejects.toThrow("ai_content_limit_reached");
     expect(pool.sql.join("\n")).toContain("pg_advisory_xact_lock");
     expect(pool.commands).toContain("ROLLBACK");
+  });
+
+  it("uses a new quota date exactly at the KST midnight boundary", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-18T14:59:59.999Z"));
+      expect(kstDateKey(new Date())).toBe("2026-07-18");
+
+      vi.setSystemTime(new Date("2026-07-18T15:00:00.000Z"));
+      expect(kstDateKey(new Date())).toBe("2026-07-19");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("performs optional brand-intelligence provider I/O before opening the final-start transaction", async () => {
