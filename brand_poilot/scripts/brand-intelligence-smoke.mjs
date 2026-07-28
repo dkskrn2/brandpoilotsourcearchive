@@ -76,11 +76,15 @@ await request(`/brands/${brandId}/brand-intelligence/analyses/${created.id}`, {
 });
 const confirmed = await request(`/brands/${brandId}/brand-intelligence/analyses/${created.id}/confirm`, { method: "POST" });
 const current = await request(`/brands/${brandId}/brand-intelligence`);
+const brandCore = await request(`/brands/${brandId}/brand-core`);
 const aiContext = await request(`/brands/${brandId}/ai-content/brand-context`);
 
 assert.equal(confirmed.status, "confirmed");
 assert.equal(current.intelligence.id, confirmed.id);
 assert.equal(current.intelligence.effectiveResult.primaryTarget, editedResult.primaryTarget);
+assert.equal(brandCore.active.sourceAnalysisId, confirmed.id);
+assert.equal(brandCore.active.status, "approved");
+assert.equal(brandCore.active.core.contractVersion, "brand-core.v1");
 assert.equal(aiContext.brandIntelligenceVersionId, confirmed.id);
 assert.equal(aiContext.context.brandIntelligence.profile.primaryTarget, editedResult.primaryTarget);
 
@@ -88,5 +92,6 @@ console.log(JSON.stringify({
   analysisId: confirmed.id,
   status: confirmed.status,
   primaryTarget: editedResult.primaryTarget,
+  brandCoreVersionId: brandCore.active.id,
   aiContentVersionId: aiContext.brandIntelligenceVersionId,
 }, null, 2));

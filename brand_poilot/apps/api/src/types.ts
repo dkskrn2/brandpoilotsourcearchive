@@ -1,10 +1,16 @@
 import type { InstagramDeliveryFormat } from "./instagramFormats.js";
 import type { DmAttentionType, DmDecision, DmJobRoute, DmReasonCode } from "./dmTypes.js";
+import type { BrandCoreRepository } from "./brandCoreRepository.js";
+import type { ProductLibraryRepository } from "./productLibraryRepository.js";
+import type { WikiManagementRepository } from "./wikiManagementContracts.js";
 import type {
   AiContentGenerationRecord,
   AiContentJobRecord,
   AiContentAttachmentRecord,
   AiContentReferenceRecord,
+  AiContentProposalBatchRecord,
+  AiContentProposalRecord,
+  AiContentDraftReferenceRecord,
   AiContentUsageRecord,
   AiContentBrandContextRecord,
   AppealRecord,
@@ -15,7 +21,10 @@ import type {
   SaveAudienceInput,
   SubjectAnalysisBrandContext,
   SubjectAnalysisWorkerLease,
+  AiContentRevisionAction,
 } from "./aiContentRepository.js";
+
+export type AiContentGenerationDto = AiContentGenerationRecord;
 import type { LoadSubjectEvidenceInput, SubjectEvidenceAttachment } from "./aiContentSubjectEvidence.js";
 import type {
   AiContentType,
@@ -34,6 +43,7 @@ import type {
   CreateSubjectAnalysisInput,
   CreateSubjectPipelineInput,
 } from "./aiContentSubjectContracts.js";
+import type { ContentProposalJobsRepository } from "./contentProposalJobs.js";
 
 export type {
   InstagramDeliveryFormat,
@@ -72,7 +82,9 @@ export interface InstagramDmSettingsDto {
   enabled: boolean;
   fallbackMessage: string;
   errorMessage: string;
+  brandCoreReady: boolean;
   wikiReady: boolean;
+  wikiStatus: "active" | "stale" | "building" | "failed" | "empty";
   messagePermissionReady: boolean;
   webhookStatus: "connected" | "needs_attention" | "unchecked";
   workerStatus: DmWorkerStatus;
@@ -412,6 +424,53 @@ export interface DashboardDto {
     type: "publish_failed" | "channel_error" | "sync_failed" | "stale_sync";
     channel: Channel | null;
     message: string;
+  }>;
+}
+
+export interface PerformanceInsightsDto {
+  period: "30d";
+  summary: {
+    dataStatus: "sufficient" | "insufficient";
+    measuredContentCount: number;
+    totalExposure: number | null;
+  };
+  windows: Array<{
+    window: "24h" | "72h" | "7d";
+    sampleSize: number;
+    averageExposure: number | null;
+  }>;
+  observations: Array<{
+    id: string;
+    kind: "observation";
+    label: string;
+    metric: { name: string; value: number | null; unit: "회"; sampleSize: number };
+    evidenceSnapshotIds: string[];
+    interpretation: null | {
+      kind: "interpretation";
+      statement: string;
+      confidence: "low" | "medium" | "high";
+    };
+  }>;
+  experiments: Array<{
+    id: string;
+    kind: "experiment";
+    title: string;
+    hypothesis: string;
+    contentFamily: "informational" | "marketing";
+    channelTargets: Array<"instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok" | "blog_export">;
+    outputFormats: Array<"card_news" | "blog" | "single_image" | "channel_text">;
+    performanceSnapshotIds: string[];
+  }>;
+  sampleSize: number;
+  lastCollectedAt: string | null;
+  topContents: Array<{
+    publishQueueId: string;
+    title: string;
+    channel: Channel;
+    deliveryFormat: string | null;
+    exposureCount: number | null;
+    snapshotId: string;
+    externalUrl: string | null;
   }>;
 }
 
@@ -1001,8 +1060,24 @@ export interface SubjectAnalysisRepositoryV2 extends SubjectAnalysisRepository {
   ): Promise<SubjectAnalysisRecord>;
 }
 
-export interface ApiRepository extends Partial<SubjectAnalysisRepositoryV2> {
-  health(): Promise<{ database: "ok" }>;
+export interface ApiRepository
+  extends Partial<SubjectAnalysisRepositoryV2>,
+    Partial<BrandCoreRepository>,
+    Partial<ProductLibraryRepository>,
+    Partial<WikiManagementRepository>,
+    Partial<import("./assetLibraryRepository.js").AssetLibraryRepository>,
+    Partial<import("./aiContentAttachmentRepository.js").AiContentAttachmentLifecycleRepository>,
+    Partial<import("./aiContentAttachmentGcRepository.js").AiContentAttachmentGcRepository>,
+    Partial<ContentProposalJobsRepository> {
+  health(): Promise<{
+    database: "ok";
+    operations?: {
+      activeDmEnabled: boolean;
+      dmWorker: "online" | "stale" | "offline";
+      wikiWorker: "online" | "stale" | "offline";
+      contentProposalWorker: "online" | "stale" | "offline";
+    };
+  }>;
   getAiContentBrandContext(input: BrandScope): Promise<AiContentBrandContextRecord>;
   getConfirmedSubjectAnalysisBrandContext?(input: BrandScope): Promise<SubjectAnalysisBrandContext>;
   listSubjectEvidenceAttachments?(input: LoadSubjectEvidenceInput): Promise<SubjectEvidenceAttachment[]>;
@@ -1011,23 +1086,63 @@ export interface ApiRepository extends Partial<SubjectAnalysisRepositoryV2> {
     workerId: string;
     leaseToken: string;
   }): Promise<SubjectAnalysisWorkerLease | null>;
-  createAiContentAnalysis(input: BrandScope & CreateAiContentAnalysisInput): Promise<AiContentGenerationRecord>;
-  updateAiContentDraft(input: BrandGenerationScope & UpdateAiContentDraftInput): Promise<AiContentGenerationRecord>;
-  startAiContentGeneration(input: BrandGenerationScope & StartAiContentGenerationInput & { usageDate: string; dailyGenerationLimit: number }): Promise<AiContentGenerationRecord>;
+  createAiContentAnalysis(input: BrandScope & { actorUserId: string } & CreateAiContentAnalysisInput): Promise<AiContentGenerationRecord>;
+  updateAiContentDraft(input: BrandGenerationScope & { actorUserId: string } & UpdateAiContentDraftInput): Promise<AiContentGenerationRecord>;
+  startAiContentGeneration(input: BrandGenerationScope & { actorUserId: string } & StartAiContentGenerationInput & { usageDate: string; dailyGenerationLimit: number }): Promise<AiContentGenerationRecord>;
   listAiContentGenerations(input: BrandScope): Promise<AiContentGenerationRecord[]>;
   getAiContentGeneration(input: BrandGenerationScope): Promise<AiContentGenerationRecord | null>;
   listAiContentUsage(input: BrandScope & { usageDate: string }): Promise<AiContentUsageRecord>;
-  listAiContentReferences(input: BrandScope & { type?: AiContentType }): Promise<AiContentReferenceRecord[]>;
+  listAiContentReferences(input: BrandScope & {
+    type?: AiContentType;
+    strategies?: string[];
+    formats?: string[];
+    tags?: string[];
+  }): Promise<AiContentReferenceRecord[]>;
   listBrandAudiences(input: BrandScope): Promise<AudienceRecord[]>;
   saveBrandAudience(input: SaveAudienceInput): Promise<AudienceRecord>;
   listBrandAppeals(input: BrandScope): Promise<AppealRecord[]>;
   saveBrandAppeal(input: SaveAppealInput): Promise<AppealRecord>;
   confirmAiContentAttachment(input: BrandGenerationScope & import("./aiContentContracts.js").ConfirmAttachmentInput): Promise<AiContentAttachmentRecord>;
+  removeAiContentAttachment(input: BrandGenerationScope & { attachmentId: string }): Promise<{ id: string }>;
   claimAiContentJob(input: { contentType: AiContentType; workerId: string; leaseSeconds: number }): Promise<AiContentJobRecord | null>;
   heartbeatAiContentJob(input: { jobId: string; workerId: string; leaseToken: string; leaseSeconds: number }): Promise<boolean>;
   completeAiContentJob(input: CompleteAiContentJobInput): Promise<AiContentGenerationRecord>;
   failAiContentJob(input: FailAiContentJobInput): Promise<AiContentGenerationRecord>;
   retryAiContentOutput(input: BrandScope & { outputId: string }): Promise<AiContentGenerationRecord>;
+  reviseAiContentOutput(input: BrandScope & {
+    outputId: string;
+    action: AiContentRevisionAction;
+    cardIndex?: number;
+    idempotencyKey: string;
+  }): Promise<AiContentGenerationRecord>;
+  saveAiContentOutputCopy(input: BrandScope & {
+    outputId: string;
+    fields: Partial<Record<import("./aiContentRepository.js").AiContentCopyField, string | string[]>>;
+    idempotencyKey: string;
+  }): Promise<AiContentGenerationRecord>;
+  createAiContentProposalBatch?(input: BrandScope & {
+    actorUserId: string;
+    origin: "manual" | "scheduled_crawl";
+    idempotencyKey: string;
+    request: import("./aiContentContracts.js").ContentProposalRequestV1;
+  }): Promise<AiContentProposalBatchRecord>;
+  getAiContentProposalBatch?(input: BrandScope & { batchId: string }): Promise<AiContentProposalBatchRecord | null>;
+  listAiContentProposals?(input: BrandScope & {
+    status: "suggested" | "selected" | "dismissed";
+  }): Promise<AiContentProposalRecord[]>;
+  selectAiContentProposal?(input: BrandScope & {
+    actorUserId: string;
+    proposalId: string;
+    idempotencyKey: string;
+  }): Promise<AiContentGenerationRecord>;
+  dismissAiContentProposal?(input: BrandScope & {
+    actorUserId: string;
+    proposalId: string;
+  }): Promise<AiContentProposalRecord>;
+  listAiContentDraftReferences?(input: BrandScope & {
+    assetType: "reference" | "avatar" | "product_service" | "wiki";
+    assetId: string;
+  }): Promise<AiContentDraftReferenceRecord[]>;
   downloadAiContentOutput(input: BrandScope & { outputId: string; usageDate: string; dailyDownloadLimit: number }): Promise<DownloadPackageDto>;
   downloadAiContentGeneration(input: BrandGenerationScope & { outputIds?: string[]; usageDate: string; dailyDownloadLimit: number }): Promise<DownloadPackageDto>;
   sendAiContentToPublish(input: BrandScope & { outputId: string }): Promise<{ publishGroupId: string; channelOutputId: string }>;
@@ -1046,8 +1161,8 @@ export interface ApiRepository extends Partial<SubjectAnalysisRepositoryV2> {
   deleteInstagramTrendSearch(brandId: string, hashtagId: string): Promise<InstagramTrendDeleteSearchDto>;
   listInstagramTrendArchive(brandId: string, input: { page: number; limit: number }): Promise<InstagramTrendArchivePageDto>;
   setInstagramTrendFavorite(brandId: string, hashtagId: string, input: InstagramTrendFavoriteInput): Promise<InstagramTrendSearchHistoryDto>;
-  saveInstagramTrendSource(brandId: string, mediaId: string): Promise<InstagramTrendSaveSourceDto>;
-  removeInstagramTrendSource(brandId: string, mediaId: string): Promise<InstagramTrendRemoveSourceDto>;
+  saveInstagramTrendSource(brandId: string, mediaId: string, actorUserId?: string | null): Promise<InstagramTrendSaveSourceDto>;
+  removeInstagramTrendSource(brandId: string, mediaId: string, actorUserId?: string | null): Promise<InstagramTrendRemoveSourceDto>;
   getBillingSummary(brandId: string): Promise<BillingSummaryDto>;
   getBrandUiStatus(brandId: string): Promise<BrandUiStatusDto>;
   getBrandProfile(brandId: string): Promise<BrandProfileDto>;
@@ -1062,6 +1177,9 @@ export interface ApiRepository extends Partial<SubjectAnalysisRepositoryV2> {
   updateSource(sourceId: string, input: SourceUpdateInput): Promise<SourceDto>;
   deleteSource(sourceId: string): Promise<{ id: string }>;
   listChannels(brandId: string): Promise<ChannelDto[]>;
+  getInstagramChannelCapabilityContext(
+    brandId: string,
+  ): Promise<import("./channelCapabilities.js").InstagramChannelCapabilityContext>;
   getInstagramChannelIdentity(brandId: string): Promise<{ externalAccountId: string | null; accountLabel: string | null }>;
   updateChannelEnabled(brandId: string, channel: Channel, enabled: boolean): Promise<ChannelDto>;
   getChannelConnectionRequest(brandId: string): Promise<ChannelConnectionRequestDto>;
@@ -1103,10 +1221,12 @@ export interface ApiRepository extends Partial<SubjectAnalysisRepositoryV2> {
   runDailyGeneration(now?: Date): Promise<DailyGenerationRunResult>;
   runDailyPerformanceSync(now?: Date): Promise<PerformanceSyncSummaryDto>;
   getDashboard(brandId: string): Promise<DashboardDto>;
+  getPerformanceInsights?(brandId: string): Promise<PerformanceInsightsDto>;
   schedulePublishQueue(brandId: string, now?: Date): Promise<PipelineRunResult>;
   runDuePublishing(now?: Date): Promise<PipelineRunResult>;
   publishQueueItem(queueId: string): Promise<{ id: string; status: string; publishedUrl: string | null }>;
   retryPublishQueueItem(queueId: string): Promise<{ id: string; status: "queued" | "scheduled" }>;
+  cancelPublishQueueItem(queueId: string): Promise<{ id: string; status: "cancelled" }>;
   claimImageRenderJob(workerId: string): Promise<ImageRenderJobDto | null>;
   heartbeatImageRenderJob(jobId: string, workerId: string, leaseToken: string): Promise<{ id: string; status: string }>;
   completeImageRenderJob(jobId: string, input: ImageRenderJobCompletionInput): Promise<{ id: string; status: string; artifactId: string }>;
@@ -1147,6 +1267,7 @@ export interface ApiRepository extends Partial<SubjectAnalysisRepositoryV2> {
     retryAfterMs: number;
   }): Promise<{ id: string; status: string }>;
   heartbeatDmWorker(workerId: string): Promise<{ workerId: string }>;
+  heartbeatContentProposalWorker(workerId: string): Promise<{ workerId: string }>;
   acquireWorkerResourceLease(
     resourceType: import("./workerResources.js").WorkerResourceType,
     workerId: string,

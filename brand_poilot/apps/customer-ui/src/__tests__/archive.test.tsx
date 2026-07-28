@@ -33,8 +33,8 @@ async function renderArchive(page: InstagramTrendArchivePage, overrides: {
     DEMO_BRAND_ID: "brand-1",
     api: { listInstagramTrendArchive, saveInstagramTrendSource, removeInstagramTrendSource },
   }));
-  const { ArchivePage } = await import("../pages/ArchivePage");
-  render(<ArchivePage />);
+  const { SavedTrendReferencesPanel } = await import("../components/references/SavedTrendReferencesPanel");
+  render(<SavedTrendReferencesPanel />);
   return { listInstagramTrendArchive, saveInstagramTrendSource, removeInstagramTrendSource };
 }
 
@@ -44,11 +44,11 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("ArchivePage", () => {
+describe("SavedTrendReferencesPanel", () => {
   it("shows saved trend cards and reuses the detail dialog with the original Instagram link", async () => {
     const api = await renderArchive({ items: [savedMedia], page: 1, limit: 30, total: 31 });
 
-    expect(await screen.findByRole("heading", { name: "아카이브" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "저장한 트렌드" })).toBeVisible();
     expect(api.listInstagramTrendArchive).toHaveBeenCalledWith("brand-1", { page: 1, limit: 30 });
     expect(screen.getByRole("button", { name: "@archive_creator 저장됨" })).toBeEnabled();
 

@@ -6,6 +6,10 @@ import {
   type BrandEvidenceDocument,
   type BrandIntelligenceResultV1,
 } from "./brandIntelligenceContracts.js";
+import {
+  BRAND_CORE_FIELD_PATHS,
+  mapAnalysisToBrandCoreDraft,
+} from "./brandCoreContracts.js";
 import { hashSourceUrl, normalizeSourceDomain, normalizeSourceUrl } from "./sourceUrl.js";
 
 export interface BrandAnalysisScope { workspaceId: string; brandId: string }
@@ -53,7 +57,10 @@ export interface BrandIntelligenceRepository {
   updateBrandAnalysisDraft(input: BrandAnalysisScope & {
     analysisId: string; editedResult: BrandIntelligenceResultV1;
   }): Promise<BrandAnalysisRecord>;
-  confirmBrandAnalysis(input: BrandAnalysisScope & { analysisId: string }): Promise<BrandAnalysisRecord>;
+  confirmBrandAnalysis(input: BrandAnalysisScope & {
+    analysisId: string;
+    actorUserId?: string | null;
+  }): Promise<BrandAnalysisRecord>;
   claimBrandAnalysis(input: { workerId: string; leaseSeconds: number }): Promise<BrandAnalysisClaim | null>;
   listBrandAnalysisUploads(input: { analysisId: string }): Promise<Array<{
     id: string; fileName: string; mimeType: string; byteSize: number; storageUrl: string;
@@ -310,6 +317,52 @@ export function createBrandIntelligenceRepository(pool: Pool): BrandIntelligence
             effective.primaryCategory.code, effective.primaryCategory.name, input.analysisId],
         );
         const profileId = String(profile.rows[0]!.id);
+        const mappedCore = mapAnalysisToBrandCoreDraft(effective);
+        const approvedAt = new Date().toISOString();
+        const reviewState = input.actorUserId
+          ? Object.fromEntries(BRAND_CORE_FIELD_PATHS.map((fieldPath) => [
+              fieldPath,
+              {
+                decision: "approved",
+                reviewerUserId: input.actorUserId,
+                reviewedAt: approvedAt,
+              },
+            ]))
+          : {};
+        await client.query(
+          `update brand_core_versions
+              set status = 'superseded', updated_at = now()
+            where workspace_id = $1 and brand_id = $2 and status = 'approved'`,
+          [input.workspaceId, input.brandId],
+        );
+        const coreVersion = await client.query(
+          `insert into brand_core_versions (
+             workspace_id, brand_id, source_analysis_id, version, status,
+             core_json, evidence_json, review_state_json, created_by,
+             created_by_user_id, approved_by_user_id, approved_at
+           )
+           select $1, $2, $3, coalesce(max(version), 0) + 1, 'approved',
+                  $4::jsonb, $5::jsonb, $6::jsonb, 'analysis_confirm', $7, $7, $8::timestamptz
+             from brand_core_versions
+            where workspace_id = $1 and brand_id = $2
+           returning id`,
+          [
+            input.workspaceId,
+            input.brandId,
+            input.analysisId,
+            JSON.stringify(mappedCore.core),
+            JSON.stringify(mappedCore.evidence),
+            JSON.stringify(reviewState),
+            input.actorUserId ?? null,
+            approvedAt,
+          ],
+        );
+        await client.query(
+          `update brand_profiles
+              set active_brand_core_id = $3
+            where workspace_id = $1 and brand_id = $2`,
+          [input.workspaceId, input.brandId, coreVersion.rows[0]!.id],
+        );
         await client.query("delete from brand_profile_subcategories where brand_profile_id = $1", [profileId]);
         for (const subcategory of effective.subcategories) {
           let inserted = { rowCount: 0 as number | null };

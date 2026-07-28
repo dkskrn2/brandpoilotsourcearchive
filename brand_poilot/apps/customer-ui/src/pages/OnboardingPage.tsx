@@ -40,7 +40,7 @@ export function OnboardingPage() {
           : "API 상태를 불러오면 필요한 온보딩 항목을 표시합니다."}
         actions={
           <>
-            <ButtonLink to="/brand-settings" variant="primary">브랜드 설정</ButtonLink>
+            <ButtonLink to="/brand-center?tab=understanding&section=core" variant="primary">브랜드 센터</ButtonLink>
             <ButtonLink to="/onboarding/brand-intelligence">브랜드 정보 만들기</ButtonLink>
           </>
         }

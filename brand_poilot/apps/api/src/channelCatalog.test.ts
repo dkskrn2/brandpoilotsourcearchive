@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { Pool } from "pg";
 import { channelCatalog, type OAuthProvider } from "./channelCatalog.js";
 import { createServer } from "./httpServer.js";
+import { createPublishAdapterRegistry } from "./publishAdapters.js";
 import { createRepository } from "./repository.js";
 import type { ApiRepository, Channel, ChannelDto } from "./types.js";
 
@@ -58,6 +59,24 @@ describe("channel catalog", () => {
       "threads"
     ]);
   });
+
+  it.each(["threads", "x", "linkedin", "youtube", "tiktok"] as const)(
+    "does not treat %s catalog presence as implemented API publishing",
+    async (channel) => {
+      const registry = createPublishAdapterRegistry({ publishInstagram: vi.fn() });
+
+      await expect(registry[channel].publish({
+        channel,
+        credentialState: "connected",
+        queueId: "queue-1",
+        outputJson: {}
+      })).resolves.toEqual({
+        status: "blocked",
+        errorCode: "provider_not_implemented",
+        retryable: false
+      });
+    }
+  );
 });
 
 describe("channel repository", () => {

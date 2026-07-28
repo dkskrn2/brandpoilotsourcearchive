@@ -63,6 +63,23 @@ test.beforeEach(async ({ page }) => {
         autoApprovalEnabled: false
       } });
     }
+    if (pathname.endsWith("/brand-center")) {
+      return route.fulfill({ ...common, json: {
+        source: { state: "ready" },
+        analysis: { state: "confirmed" },
+        brandCore: { state: "approved" },
+        rules: { state: "approved" },
+        products: { state: "unavailable" },
+        wiki: { state: "unavailable" },
+        avatars: { state: "unavailable" }
+      } });
+    }
+    if (pathname.endsWith("/brand-core") || pathname.endsWith("/brand-rules")) {
+      return route.fulfill({ ...common, json: { active: null, draft: null, versions: [] } });
+    }
+    if (pathname.endsWith("/instagram-trends/archive")) {
+      return route.fulfill({ ...common, json: { items: [], page: 1, limit: 30, total: 0 } });
+    }
     if (pathname.endsWith("/instagram-formats")) {
       const format = (name: string, enabled: boolean, rotationOrder: number) => ({
         format: name, enabled, rotationOrder, capabilityStatus: name === "instagram_feed_carousel" ? "available" : "unchecked",
@@ -86,6 +103,29 @@ test.beforeEach(async ({ page }) => {
         attentionItems: []
       } });
     }
+    if (pathname.endsWith("/brand-center")) {
+      return route.fulfill({ ...common, json: {
+        source: { state: "ready" },
+        analysis: { state: "confirmed" },
+        brandCore: { state: "approved" },
+        rules: { state: "approved" },
+        products: { state: "ready" },
+        wiki: { state: "ready" },
+        avatars: { state: "ready" }
+      } });
+    }
+    if (pathname.endsWith("/brand-core") || pathname.endsWith("/brand-rules")) {
+      return route.fulfill({ ...common, json: { active: null, draft: null, versions: [] } });
+    }
+    if (pathname.endsWith("/ai-content/usage")) {
+      return route.fulfill({ ...common, json: {
+        generationUsed: 2,
+        generationLimit: 10,
+        newDownloadUsed: 4,
+        newDownloadLimit: 20,
+        resetsAt: "2026-07-23T00:00:00+09:00"
+      } });
+    }
     return route.fulfill({ ...common, json: [] });
   });
 });
@@ -98,31 +138,47 @@ test("customer IA routes are reachable", async ({ page }) => {
     if (await openMenu.isVisible()) await openMenu.click();
     await menu.getByRole("link", { name }).click();
   };
-  await expect(page.getByRole("heading", { level: 1, name: "전체 현황" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "오늘의 운영 현황" })).toBeVisible();
 
   await clickMenuLink(/게시 관리/);
   await expect(page.getByRole("heading", { level: 1, name: "게시 관리" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "게시 목록" })).toBeVisible();
   await expect(page.getByRole("button", { name: "준비 중 0", exact: true })).toBeVisible();
 
-  await clickMenuLink(/소스/);
-  await expect(page.getByRole("heading", { level: 1, name: "소스" })).toBeVisible();
+  await clickMenuLink(/레퍼런스/);
+  await expect(page.getByRole("heading", { level: 1, name: "레퍼런스" })).toBeVisible();
+
+  await clickMenuLink(/브랜드 센터/);
+  await expect(page.getByRole("heading", { level: 1, name: "브랜드 센터" })).toBeVisible();
 
   await clickMenuLink(/^채널/);
   await expect(page.getByRole("heading", { level: 1, name: "채널 연결" })).toBeVisible();
   await expect(page.getByRole("tab", { name: /자동 승인/ })).toHaveCount(0);
-
-  await clickMenuLink(/브랜드 설정/);
-  await expect(page.getByRole("switch", { name: "브랜드 전체 자동 승인" })).toBeVisible();
-
 });
 
-test("mobile layout has no horizontal overflow", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
+const legacyRouteMappings = [
+  ["/brand-settings", "/brand-center?tab=understanding&section=core"],
+  ["/sources", "/brand-center?tab=understanding&section=sources"],
+  ["/archive", "/references?view=saved-trends"],
+  ["/instagram-trends", "/references?view=trends"],
+  ["/content", "/publish-queue?status=needs_review"],
+  ["/onboarding", "/onboarding/brand-intelligence"],
+] as const;
 
+for (const [legacy, canonical] of legacyRouteMappings) {
+  test(`legacy URL ${legacy} resolves to ${canonical}`, async ({ page }) => {
+    await page.goto(legacy, { waitUntil: "domcontentloaded" });
+    await expect(page).toHaveURL(new RegExp(`${canonical.replace(/[?]/g, "\\?")}$`));
+  });
+}
+
+test.describe("mobile layout has no horizontal overflow", () => {
   for (const path of ["/onboarding", "/publish-queue", "/sources", "/channels", "/brand-settings"]) {
-    await page.goto(path);
-    const hasOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
-    expect(hasOverflow, `${path} should not overflow horizontally`).toBe(false);
+    test(path, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(path);
+      const hasOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
+      expect(hasOverflow, `${path} should not overflow horizontally`).toBe(false);
+    });
   }
 });

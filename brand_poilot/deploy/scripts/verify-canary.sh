@@ -14,11 +14,32 @@ EVIL_ORIGIN="https://not-allowed.invalid"
 REQUEST_TIMEOUT_SECONDS=15
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf -- "$TMP_DIR"' EXIT
+CANARY_SESSION_COOKIE_FILE="${CANARY_SESSION_COOKIE_FILE:-}"
+CANARY_BRAND_ID="${CANARY_BRAND_ID:-}"
+
+for command_name in curl grep jq mktemp; do
+  require_command "$command_name"
+done
+[[ -n "$CANARY_SESSION_COOKIE_FILE" ]] || fail "canary_session_cookie_file_required"
+require_file_mode_600 "$CANARY_SESSION_COOKIE_FILE"
+[[ "$CANARY_BRAND_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || fail "canary_brand_id_invalid"
 
 wait_for_url "$BASE_URL/health" 120 || fail "canary_health_failed"
-wait_for_url "$BASE_URL/ready" 120 || fail "canary_readiness_failed"
+curl --silent --show-error --fail \
+  --connect-timeout 5 --max-time "$REQUEST_TIMEOUT_SECONDS" \
+  --output "$TMP_DIR/ready.json" -- "$BASE_URL/ready" ||
+  fail "canary_readiness_failed"
+jq -e '
+  .ok == true
+  and .database == "ok"
+  and .features.scheduler == "disabled"
+  and .features.publishing == "disabled"
+  and .features.dm == "disabled"
+' "$TMP_DIR/ready.json" >/dev/null || fail "canary_safe_flags_invalid"
 status_ok "health"
 status_ok "readiness"
+status_ok "db_read"
+status_ok "safe_flags"
 
 request_headers() {
   local origin="$1"
@@ -40,9 +61,41 @@ if grep -Eiq '^access-control-allow-origin:' "$TMP_DIR/evil.headers"; then
 fi
 status_ok "cors_denied"
 
+curl --silent --show-error --fail \
+  --connect-timeout 5 --max-time "$REQUEST_TIMEOUT_SECONDS" \
+  --dump-header "$TMP_DIR/login.headers" --output /dev/null \
+  -- "$BASE_URL/auth/kakao/login"
+grep -Eiq '^set-cookie:.*Secure' "$TMP_DIR/login.headers" ||
+  fail "canary_secure_cookie_missing"
+grep -Eiq '^set-cookie:.*HttpOnly' "$TMP_DIR/login.headers" ||
+  fail "canary_http_only_cookie_missing"
+grep -Eiq '^set-cookie:.*SameSite=Lax' "$TMP_DIR/login.headers" ||
+  fail "canary_same_site_cookie_missing"
+status_ok "secure_cookie"
+
 DEV_STATUS="$(curl --silent --show-error \
   --connect-timeout 5 --max-time "$REQUEST_TIMEOUT_SECONDS" \
   --output /dev/null --write-out '%{http_code}' \
   -- "$BASE_URL/auth/meta/dev-complete")"
 [[ "$DEV_STATUS" == "404" ]] || fail "canary_dev_route_exposed"
 status_ok "dev_route"
+
+readonly_get() {
+  local path="$1"
+  local label="$2"
+  curl --silent --show-error --fail \
+    --connect-timeout 5 --max-time "$REQUEST_TIMEOUT_SECONDS" \
+    --cookie "$CANARY_SESSION_COOKIE_FILE" \
+    --output "$TMP_DIR/${label}.json" -- "$BASE_URL$path" ||
+    fail "canary_${label}_read_failed"
+  jq -e 'type == "object" or type == "array"' "$TMP_DIR/${label}.json" >/dev/null ||
+    fail "canary_${label}_response_invalid"
+  status_ok "$label"
+}
+
+readonly_get "/auth/me" "authenticated_session"
+readonly_get "/brands/$CANARY_BRAND_ID/brand-core" "brand_core"
+readonly_get "/brands/$CANARY_BRAND_ID/product-services" "product_services"
+readonly_get "/brands/$CANARY_BRAND_ID/wiki/status" "wiki"
+readonly_get "/brands/$CANARY_BRAND_ID/ai-content/usage" "generation_usage"
+readonly_get "/brands/$CANARY_BRAND_ID/channels/capabilities" "channel_capabilities"

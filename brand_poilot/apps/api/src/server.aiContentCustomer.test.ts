@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import Fastify, { LogController, type FastifyInstance } from "fastify";
 import { createServer } from "./httpServer.js";
 import type { ApiRepository } from "./types.js";
 
@@ -8,6 +9,8 @@ const generationId = "33333333-3333-4333-8333-333333333333";
 const outputId = "44444444-4444-4444-8444-444444444444";
 const analysisId = "55555555-5555-4555-8555-555555555555";
 const attachmentId = "66666666-6666-4666-8666-666666666666";
+const sessionId = "77777777-7777-4777-8777-777777777777";
+const actorUserId = "88888888-8888-4888-8888-888888888888";
 
 function subjectAnalysis(status: "queued" | "ready" | "partial" = "queued") {
   return {
@@ -80,28 +83,55 @@ const confirmedSubjectBrandContext = {
   confirmedAt: "2026-07-21T00:00:00.000Z",
 };
 
-function generation(status = "analyzing") {
+function generation(
+  status = "analyzing",
+  type: "card_news" | "blog" | "marketing" = "card_news",
+  title = "여름 추천",
+  draft: Record<string, unknown> = {},
+) {
   return {
     id: generationId,
     workspaceId,
     brandId,
-    type: "card_news" as const,
-    title: "여름 추천",
+    type,
+    title,
     status,
     currentStage: "analysis",
-    draft: {},
+    draft,
     analysis: {},
     errorCode: null,
     errorMessage: null,
     createdAt: "2026-07-18T00:00:00.000Z",
     updatedAt: "2026-07-18T00:00:00.000Z",
     completedAt: null,
+    attachmentsLockedAt: null,
+    terminalAt: null,
+    retryableUntil: null,
   };
 }
 
-function setup(allowed = true) {
+function setup(
+  allowed = true,
+  options: {
+    uploadSessionsEnabled?: boolean;
+    actorUserId?: string | null;
+    app?: FastifyInstance;
+    contentProposalsEnabled?: boolean;
+    contentProposalWorker?: "online" | "stale" | "offline";
+  } = {},
+) {
+  const events: string[] = [];
+  const sessionExpiresAt = "2099-07-18T00:10:00.000Z";
   const repository = {
-    health: vi.fn(async () => ({ database: "ok" as const })),
+    health: vi.fn(async () => ({
+      database: "ok" as const,
+      operations: {
+        activeDmEnabled: false,
+        dmWorker: "offline" as const,
+        wikiWorker: "offline" as const,
+        contentProposalWorker: options.contentProposalWorker ?? "online" as const,
+      },
+    })),
     createAiContentAnalysis: vi.fn(async () => generation()),
     updateAiContentDraft: vi.fn(async () => generation("analysis_ready")),
     startAiContentGeneration: vi.fn(async () => generation("queued")),
@@ -114,7 +144,72 @@ function setup(allowed = true) {
     listBrandAppeals: vi.fn(async () => []),
     saveBrandAppeal: vi.fn(async () => ({ id: "appeal-1", title: "빠른 시작", description: "설정 지원", evidenceType: "benefit" as const, useCount: 0, lastUsedAt: null })),
     confirmAiContentAttachment: vi.fn(async (input) => ({ id: "attachment-1", generationId: input.generationId, role: input.role, fileName: input.fileName, mimeType: input.mimeType, sizeBytes: input.sizeBytes, checksum: input.checksum, storageUrl: input.storageUrl, storagePath: input.storagePath, createdAt: "2026-07-18T00:00:00.000Z" })),
+    assertAiContentAttachmentUploadMutable: vi.fn(async () => undefined),
+    createAiContentUploadSession: vi.fn(async (input) => {
+      events.push("database");
+      return {
+        id: sessionId,
+        generationId: input.generationId,
+        workspaceId: input.workspaceId,
+        brandId: input.brandId,
+        createdByUserId: input.createdByUserId,
+        nonce: "opaque-upload-nonce",
+        ...input.attachment,
+        storagePath: `workspaces/${workspaceId}/brands/${brandId}/ai-content/${generationId}/attachments/${sessionId}/attempt/product.png`,
+        status: "pending" as const,
+        tokenExpiresAt: sessionExpiresAt,
+        createdAt: "2026-07-18T00:00:00.000Z",
+      };
+    }),
+    failAiContentUploadSession: vi.fn(async () => undefined),
+    confirmAiContentUploadSession: vi.fn(async (input, verify) => {
+      const verified = await verify({
+        id: input.sessionId,
+        generationId,
+        workspaceId,
+        brandId,
+        role: "product",
+        fileName: "product.png",
+        mimeType: "image/png",
+        sizeBytes: 100,
+        checksum: "a".repeat(64),
+        storagePath: `workspaces/${workspaceId}/brands/${brandId}/ai-content/${generationId}/attachments/${sessionId}/attempt/product.png`,
+        tokenExpiresAt: sessionExpiresAt,
+      }, new AbortController().signal);
+      return { id: attachmentId, generationId, role: "product", fileName: "product.png", checksum: "a".repeat(64), createdAt: "2026-07-18T00:00:00.000Z", ...verified };
+    }),
+    cancelAiContentUploadSession: vi.fn(async (input) => ({ id: input.sessionId })),
+    confirmLegacyAiContentAttachment: vi.fn(async (input) => ({ id: attachmentId, generationId: input.generationId, role: input.role, fileName: input.fileName, mimeType: input.mimeType, sizeBytes: input.sizeBytes, checksum: input.checksum, storageUrl: input.storageUrl, storagePath: input.storagePath, createdAt: "2026-07-18T00:00:00.000Z" })),
+    removeAiContentAttachment: vi.fn(async (input) => ({ id: input.attachmentId })),
     retryAiContentOutput: vi.fn(async () => generation("queued")),
+    reviseAiContentOutput: vi.fn(async () => generation("queued")),
+    saveAiContentOutputCopy: vi.fn(async () => generation("completed")),
+    createAiContentProposalBatch: vi.fn(async (input) => ({
+      id: "99999999-9999-4999-8999-999999999999",
+      workspaceId: input.workspaceId,
+      brandId: input.brandId,
+      origin: input.origin,
+      contentFamily: input.request.contentFamily,
+      request: input.request,
+      sourceSnapshots: [],
+      status: "queued" as const,
+      errorCode: null,
+      errorMessage: null,
+      createdAt: "2026-07-28T00:00:00.000Z",
+      updatedAt: "2026-07-28T00:00:00.000Z",
+    })),
+    getAiContentProposalBatch: vi.fn(async () => null),
+    listAiContentProposals: vi.fn(async () => []),
+    selectAiContentProposal: vi.fn(async () => generation("draft", "blog", "선택 제안")),
+    dismissAiContentProposal: vi.fn(async (input) => ({
+      id: input.proposalId,
+      batchId: "99999999-9999-4999-8999-999999999999",
+      proposal: {},
+      status: "dismissed" as const,
+      generationId: null,
+      createdAt: "2026-07-28T00:00:00.000Z",
+    })),
+    listAiContentDraftReferences: vi.fn(async () => []),
     downloadAiContentOutput: vi.fn(async () => ({ fileName: "result.zip", mimeType: "application/zip" as const, buffer: Buffer.from("PK"), itemCount: 1 })),
     downloadAiContentGeneration: vi.fn(async () => ({ fileName: "generation.zip", mimeType: "application/zip" as const, buffer: Buffer.from("PK"), itemCount: 1 })),
     prepareAiContentPublish: vi.fn(async () => ({
@@ -143,38 +238,414 @@ function setup(allowed = true) {
     getConfirmedSubjectAnalysisBrandContext: vi.fn(async () => confirmedSubjectBrandContext),
   } as unknown as ApiRepository;
   const kakaoAuth = {
-    getSession: vi.fn(async () => ({ userId: "user-1", workspaceId, workspaceName: "Workspace", brandId, brandName: "Brand", displayName: "Tester", email: null })),
+    getSession: vi.fn(async () => ({ userId: options.actorUserId ?? (options.actorUserId === null ? null : actorUserId), workspaceId, workspaceName: "Workspace", brandId, brandName: "Brand", displayName: "Tester", email: null })),
     canAccessBrand: vi.fn(async () => allowed),
-  } as never;
-  const generateClientToken = vi.fn(async () => "upload-token");
-  const headBlob = vi.fn(async (url: string) => ({
-    pathname: new URL(url).pathname.replace(/^\//, ""),
+  };
+  const generateClientToken = vi.fn(async () => {
+    events.push("provider");
+    return "upload-token";
+  });
+  const headBlob = vi.fn(async (urlOrPath: string) => ({
+    pathname: urlOrPath.startsWith("https:")
+      ? new URL(urlOrPath).pathname.replace(/^\//, "")
+      : urlOrPath,
+    url: urlOrPath.startsWith("https:")
+      ? urlOrPath
+      : `https://test.public.blob.vercel-storage.com/${urlOrPath}`,
     size: 100,
     contentType: "image/png",
   } as never));
   const app = createServer({
     repository,
-    kakaoAuth,
-    aiContentUpload: { readWriteToken: "rw-token", generateClientToken, headBlob },
+    kakaoAuth: kakaoAuth as never,
+    aiContentUpload: {
+      readWriteToken: "rw-token",
+      generateClientToken,
+      headBlob,
+      uploadSessionsEnabled: options.uploadSessionsEnabled ?? false,
+    },
     aiContentLimits: { dailyGenerationLimit: 10, dailyDownloadLimit: 20 },
+    readinessPolicy: {
+      schedulerEnabled: false,
+      publishingEnabled: false,
+      contentProposalsEnabled: options.contentProposalsEnabled ?? true,
+    },
     logger: false,
-  });
-  return { app, repository, generateClientToken };
+  }, options.app);
+  return { app, repository, kakaoAuth, generateClientToken, events, sessionExpiresAt };
 }
 
 const auth = { cookie: "bp_session=session-1" };
+const generationContractFixtures = [
+  {
+    type: "card_news",
+    title: "여름 추천 카드뉴스",
+    draft: { subjectType: "product", brief: { aspectRatio: "1:1" } },
+    updatedDraft: { subjectType: "product", brief: { aspectRatio: "4:5" } },
+    referenceIds: ["card-reference"],
+    outputCount: 2,
+  },
+  {
+    type: "blog",
+    title: "여름 운영 블로그",
+    draft: { subjectType: "service", brief: { aspectRatio: "16:9" } },
+    updatedDraft: { subjectType: "service", brief: { aspectRatio: "1:1" } },
+    referenceIds: ["blog-reference"],
+    outputCount: 1,
+  },
+  {
+    type: "marketing",
+    title: "여름 프로모션 소재",
+    draft: { subjectType: "product", brief: { aspectRatio: "9:16" } },
+    updatedDraft: { subjectType: "product", brief: { aspectRatio: "1:1" } },
+    referenceIds: ["marketing-reference"],
+    outputCount: 3,
+  },
+] as const;
 
 describe("AI content customer routes", () => {
-  it("creates an analysis in the authenticated workspace and brand scope", async () => {
+  it("fails fast when configured upload routes lack a lifecycle dependency", async () => {
     const { app, repository } = setup();
-    const response = await app.inject({
+    await app.close();
+    const incompleteRepository: ApiRepository = {
+      ...repository,
+      failAiContentUploadSession: undefined,
+    };
+
+    expect(() => createServer({
+      repository: incompleteRepository,
+      aiContentUpload: { readWriteToken: "rw-token" },
+      logger: false,
+    })).toThrow("ai_content_upload_repository_not_configured");
+  });
+
+  it.each(generationContractFixtures)("locks the $type create, update, start, list, and get contracts", async (fixture) => {
+    const { app, repository } = setup();
+    const createdRecord = generation("analyzing", fixture.type, fixture.title, fixture.draft);
+    vi.mocked(repository.createAiContentAnalysis).mockResolvedValueOnce(createdRecord);
+    const create = await app.inject({
       method: "POST",
       url: `/brands/${brandId}/ai-content/generations`,
       headers: auth,
-      payload: { type: "card_news", title: "여름 추천", draft: { productUrl: "https://example.com" }, idempotencyKey: "analysis-1" },
+      payload: { type: fixture.type, title: fixture.title, draft: fixture.draft, idempotencyKey: `${fixture.type}-analysis` },
     });
-    expect(response.statusCode).toBe(200);
-    expect(repository.createAiContentAnalysis).toHaveBeenCalledWith(expect.objectContaining({ workspaceId, brandId, idempotencyKey: "analysis-1" }));
+    expect(create.statusCode).toBe(200);
+    expect(create.json()).toEqual(createdRecord);
+    expect(repository.createAiContentAnalysis).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      actorUserId,
+      type: fixture.type,
+      title: fixture.title,
+      draft: fixture.draft,
+      idempotencyKey: `${fixture.type}-analysis`,
+    });
+
+    const updatedRecord = generation("analysis_ready", fixture.type, fixture.title, fixture.updatedDraft);
+    vi.mocked(repository.updateAiContentDraft).mockResolvedValueOnce(updatedRecord);
+    const update = await app.inject({
+      method: "PATCH",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}`,
+      headers: auth,
+      payload: { draft: fixture.updatedDraft, referenceIds: fixture.referenceIds },
+    });
+    expect(update.statusCode).toBe(200);
+    expect(update.json()).toEqual(updatedRecord);
+    expect(repository.updateAiContentDraft).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      generationId,
+      actorUserId,
+      draft: fixture.updatedDraft,
+      referenceIds: fixture.referenceIds,
+    });
+
+    const startedRecord = generation("queued", fixture.type, fixture.title, fixture.updatedDraft);
+    vi.mocked(repository.startAiContentGeneration).mockResolvedValueOnce(startedRecord);
+    const start = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/generate`,
+      headers: auth,
+      payload: { idempotencyKey: `${fixture.type}-generate`, outputCount: fixture.outputCount },
+    });
+    expect(start.statusCode).toBe(200);
+    expect(start.json()).toEqual(startedRecord);
+    expect(repository.startAiContentGeneration).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      generationId,
+      actorUserId,
+      idempotencyKey: `${fixture.type}-generate`,
+      outputCount: fixture.outputCount,
+      usageDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      dailyGenerationLimit: 10,
+    });
+
+    vi.mocked(repository.listAiContentGenerations).mockResolvedValueOnce([startedRecord]);
+    const list = await app.inject({ method: "GET", url: `/brands/${brandId}/ai-content/generations`, headers: auth });
+    expect(list.statusCode).toBe(200);
+    expect(list.json()).toEqual([startedRecord]);
+    expect(repository.listAiContentGenerations).toHaveBeenCalledWith({ workspaceId, brandId });
+
+    vi.mocked(repository.getAiContentGeneration).mockResolvedValueOnce(startedRecord);
+    const detail = await app.inject({ method: "GET", url: `/brands/${brandId}/ai-content/generations/${generationId}`, headers: auth });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json()).toEqual(startedRecord);
+    expect(repository.getAiContentGeneration).toHaveBeenCalledWith({ workspaceId, brandId, generationId });
+    await app.close();
+  });
+
+  it("accepts canonical orchestration while enforcing the deterministic legacy type mapping", async () => {
+    const { app, repository } = setup();
+    const orchestration = {
+      contractVersion: "content-orchestration.v1",
+      contentFamily: "informational",
+      subject: { mode: "brand_topic", topic: "여름 관리", wikiItemIds: [] },
+      target: { id: null, snapshot: {} },
+      strategy: "how_to",
+      outputFormat: "blog",
+      channelTargets: ["blog_export"],
+      brief: {},
+      references: [],
+      avatar: null,
+    };
+    const accepted = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations`,
+      headers: auth,
+      payload: {
+        type: "blog",
+        title: "여름 관리",
+        draft: {},
+        orchestration,
+        idempotencyKey: "canonical-create-1",
+      },
+    });
+    expect(accepted.statusCode).toBe(200);
+    expect(repository.createAiContentAnalysis).toHaveBeenCalledWith(expect.objectContaining({
+      actorUserId,
+      type: "blog",
+      orchestration,
+    }));
+
+    const mismatch = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations`,
+      headers: auth,
+      payload: {
+        type: "marketing",
+        title: "여름 관리",
+        draft: {},
+        orchestration,
+        idempotencyKey: "canonical-create-2",
+      },
+    });
+    expect(mismatch.statusCode).toBe(400);
+    expect(mismatch.json()).toEqual({ error: "ai_content_type_mapping_mismatch" });
+
+    const updated = await app.inject({
+      method: "PATCH",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}`,
+      headers: auth,
+      payload: { draft: {}, orchestration, referenceIds: [] },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(repository.updateAiContentDraft).toHaveBeenCalledWith(expect.objectContaining({
+      actorUserId,
+      orchestration,
+      referenceIds: [],
+    }));
+    await app.close();
+  });
+
+  it("exposes proposal batch, inbox, selection, dismissal, and draft-reference contracts", async () => {
+    const { app, repository } = setup();
+    const batchId = "99999999-9999-4999-8999-999999999999";
+    const proposalId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const referenceId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const request = {
+      contractVersion: "content-proposal-request.v1",
+      contentFamily: "informational",
+      subjectInput: { topic: "여름 관리" },
+      channelTargets: ["blog_export"],
+      outputFormats: ["blog"],
+      sourceSnapshotIds: [],
+      performanceSnapshotIds: [],
+    };
+    const created = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/proposal-batches`,
+      headers: auth,
+      payload: { idempotencyKey: "proposal-1", request },
+    });
+    expect(created.statusCode).toBe(202);
+    expect(created.json()).toMatchObject({ batchId, status: "queued" });
+    expect(repository.createAiContentProposalBatch).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      actorUserId,
+      origin: "manual",
+      idempotencyKey: "proposal-1",
+      request,
+    });
+
+    vi.mocked(repository.getAiContentProposalBatch!).mockResolvedValueOnce({
+      ...(await vi.mocked(repository.createAiContentProposalBatch!).mock.results[0]!.value),
+      proposals: [],
+    });
+    const progress = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/ai-content/proposal-batches/${batchId}`,
+      headers: auth,
+    });
+    expect(progress.statusCode).toBe(200);
+
+    const inbox = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/ai-content/proposals?status=suggested`,
+      headers: auth,
+    });
+    expect(inbox.statusCode).toBe(200);
+    expect(repository.listAiContentProposals).toHaveBeenCalledWith({
+      workspaceId, brandId, status: "suggested",
+    });
+
+    const selected = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/proposals/${proposalId}/select`,
+      headers: auth,
+      payload: { idempotencyKey: "select-1" },
+    });
+    expect(selected.statusCode).toBe(200);
+    expect(repository.selectAiContentProposal).toHaveBeenCalledWith({
+      workspaceId, brandId, proposalId, actorUserId, idempotencyKey: "select-1",
+    });
+
+    const dismissed = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/proposals/${proposalId}/dismiss`,
+      headers: auth,
+    });
+    expect(dismissed.statusCode).toBe(200);
+    expect(repository.dismissAiContentProposal).toHaveBeenCalledWith({
+      workspaceId, brandId, proposalId, actorUserId,
+    });
+
+    const recommendedReferences = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/ai-content/references?type=blog&strategies=how_to&formats=blog&tags=${encodeURIComponent("여름,가이드")}`,
+      headers: auth,
+    });
+    expect(recommendedReferences.statusCode).toBe(200);
+    expect(repository.listAiContentReferences).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      type: "blog",
+      strategies: ["how_to"],
+      formats: ["blog"],
+      tags: ["여름", "가이드"],
+    });
+
+    const references = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/ai-content/draft-references?assetType=reference&assetId=${referenceId}`,
+      headers: auth,
+    });
+    expect(references.statusCode).toBe(200);
+    expect(repository.listAiContentDraftReferences).toHaveBeenCalledWith({
+      workspaceId, brandId, assetType: "reference", assetId: referenceId,
+    });
+    await app.close();
+  });
+
+  it.each([
+    ["disabled", false, "online", "content_proposals_disabled"],
+    ["offline", true, "offline", "content_proposal_worker_not_ready"],
+    ["stale", true, "stale", "content_proposal_worker_not_ready"],
+  ] as const)(
+    "blocks manual proposal creation when the gate/worker is %s",
+    async (_caseName, contentProposalsEnabled, contentProposalWorker, error) => {
+      const { app, repository } = setup(true, {
+        contentProposalsEnabled,
+        contentProposalWorker,
+      });
+      const response = await app.inject({
+        method: "POST",
+        url: `/brands/${brandId}/ai-content/proposal-batches`,
+        headers: auth,
+        payload: {
+          idempotencyKey: "proposal-gated",
+          request: {
+            contractVersion: "content-proposal-request.v1",
+            contentFamily: "informational",
+            subjectInput: { topic: "여름 관리" },
+            channelTargets: ["blog_export"],
+            outputFormats: ["blog"],
+            sourceSnapshotIds: [],
+            performanceSnapshotIds: [],
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual({ error });
+      expect(repository.createAiContentProposalBatch).not.toHaveBeenCalled();
+      await app.close();
+    },
+  );
+
+  it.each([
+    ["empty", []],
+    ["duplicate", ["blog_export", "blog_export"]],
+    ["unsupported", ["email"]],
+  ])("rejects %s proposal channel targets before repository access", async (label, channelTargets) => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/proposal-batches`,
+      headers: auth,
+      payload: {
+        idempotencyKey: `invalid-channels-${label}`,
+        request: {
+          contractVersion: "content-proposal-request.v1",
+          contentFamily: "informational",
+          subjectInput: { topic: "여름 관리" },
+          channelTargets,
+          outputFormats: ["blog"],
+          sourceSnapshotIds: [],
+          performanceSnapshotIds: [],
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "ai_content_proposal_request_invalid" });
+    expect(repository.createAiContentProposalBatch).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("maps proposal selection ownership and state failures to explicit 404/409 responses", async () => {
+    const { app, repository } = setup();
+    const proposalId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    vi.mocked(repository.selectAiContentProposal!).mockRejectedValueOnce(new Error("proposal_not_found"));
+    const missing = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/proposals/${proposalId}/select`,
+      headers: auth,
+      payload: { idempotencyKey: "select-missing" },
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toEqual({ error: "ai_content_proposal_not_found" });
+
+    vi.mocked(repository.selectAiContentProposal!).mockRejectedValueOnce(new Error("proposal_already_selected"));
+    const conflict = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/proposals/${proposalId}/select`,
+      headers: auth,
+      payload: { idempotencyKey: "select-conflict" },
+    });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json()).toEqual({ error: "ai_content_proposal_already_selected" });
     await app.close();
   });
 
@@ -223,6 +694,13 @@ describe("AI content customer routes", () => {
     });
     expect(tokenResponse.statusCode).toBe(200);
     const { pathname } = tokenResponse.json();
+    expect(tokenResponse.json()).toEqual({ pathname, clientToken: "upload-token" });
+    expect(repository.assertAiContentAttachmentUploadMutable).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      generationId,
+    });
+    expect(repository.createAiContentUploadSession).not.toHaveBeenCalled();
     expect(generateClientToken).toHaveBeenCalledOnce();
 
     const confirmed = await app.inject({
@@ -232,19 +710,570 @@ describe("AI content customer routes", () => {
       payload: { ...attachment, storagePath: pathname, storageUrl: `https://test.public.blob.vercel-storage.com/${pathname}` },
     });
     expect(confirmed.statusCode).toBe(200);
-    expect(repository.confirmAiContentAttachment).toHaveBeenCalledWith(expect.objectContaining({ workspaceId, brandId, generationId, storagePath: pathname }));
+    expect(repository.confirmLegacyAiContentAttachment).toHaveBeenCalledWith(expect.objectContaining({ workspaceId, brandId, generationId, storagePath: pathname }));
     await app.close();
   });
 
-  it("retries a failed output in the authenticated brand scope", async () => {
-    const { app, repository } = setup();
+  it("creates the upload session before issuing its exact-path provider token", async () => {
+    const { app, repository, generateClientToken, events, sessionExpiresAt } = setup(true, {
+      uploadSessionsEnabled: true,
+    });
+    const attachment = { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) };
+
     const response = await app.inject({
       method: "POST",
-      url: `/brands/${brandId}/ai-content/outputs/output-1/retry`,
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+      headers: auth,
+      payload: attachment,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const session = vi.mocked(repository.createAiContentUploadSession!).mock.results[0]!.value;
+    const stored = await session;
+    expect(events).toEqual(["database", "provider"]);
+    expect(repository.createAiContentUploadSession).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      generationId,
+      createdByUserId: actorUserId,
+      attachment,
+    });
+    expect(generateClientToken).toHaveBeenCalledWith(expect.objectContaining({
+      pathname: stored.storagePath,
+      allowedContentTypes: [stored.mimeType],
+      maximumSizeInBytes: 5_000_000,
+      validUntil: Date.parse(sessionExpiresAt) - 60_000,
+    }));
+    expect(response.json()).toEqual({
+      contractVersion: "ai-content-attachment-upload.v2",
+      sessionId,
+      nonce: "opaque-upload-nonce",
+      pathname: stored.storagePath,
+      clientToken: "upload-token",
+      uploadExpiresAt: new Date(Date.parse(sessionExpiresAt) - 60_000).toISOString(),
+      sessionExpiresAt,
+    });
+    await app.close();
+  });
+
+  it.each([
+    [
+      "invalid checksum",
+      { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "not-a-sha256" },
+      "ai_content_attachment_checksum_invalid",
+    ],
+    [
+      "oversize image",
+      { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 5_000_001, checksum: "a".repeat(64) },
+      "ai_content_attachment_size_invalid",
+    ],
+    [
+      "oversize document",
+      { role: "document", fileName: "brief.pdf", mimeType: "application/pdf", sizeBytes: 10_000_001, checksum: "a".repeat(64) },
+      "ai_content_attachment_size_invalid",
+    ],
+    [
+      "unsupported role",
+      { role: "avatar", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) },
+      "ai_content_attachment_role_invalid",
+    ],
+    [
+      "role and MIME mismatch",
+      { role: "product", fileName: "brief.pdf", mimeType: "application/pdf", sizeBytes: 100, checksum: "a".repeat(64) },
+      "ai_content_attachment_role_mime_invalid",
+    ],
+    [
+      "unsafe filename",
+      { role: "product", fileName: "../product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) },
+      "ai_content_attachment_file_name_invalid",
+    ],
+  ])("rejects enabled session metadata before reservation: %s", async (_caseName, attachment, errorCode) => {
+    const { app, repository, generateClientToken } = setup(true, { uploadSessionsEnabled: true });
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+      headers: auth,
+      payload: attachment,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: errorCode });
+    expect(repository.createAiContentUploadSession).not.toHaveBeenCalled();
+    expect(generateClientToken).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("normalizes enabled session metadata before reservation", async () => {
+    const { app, repository } = setup(true, { uploadSessionsEnabled: true });
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+      headers: auth,
+      payload: {
+        role: "product",
+        fileName: " product image.png ",
+        mimeType: " IMAGE/PNG ",
+        sizeBytes: 100,
+        checksum: ` ${"A".repeat(64)} `,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.createAiContentUploadSession).toHaveBeenCalledWith(expect.objectContaining({
+      attachment: {
+        role: "product",
+        fileName: "product-image.png",
+        mimeType: "image/png",
+        sizeBytes: 100,
+        checksum: "a".repeat(64),
+      },
+    }));
+    await app.close();
+  });
+
+  it("marks an enabled session failed while preserving provider outage mapping", async () => {
+    const logger = {
+      level: "warn",
+      fatal: vi.fn(),
+      error: vi.fn(),
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+      trace: vi.fn(),
+      silent: vi.fn(),
+      child: vi.fn(),
+    };
+    logger.child.mockReturnValue(logger);
+    const { app, repository, generateClientToken } = setup(true, {
+      uploadSessionsEnabled: true,
+      app: Fastify({
+        logController: new LogController({ disableRequestLogging: true }),
+        loggerInstance: logger as never,
+      }) as unknown as FastifyInstance,
+    });
+    generateClientToken.mockRejectedValueOnce(new Error("provider-secret-sentinel"));
+    vi.mocked(repository.failAiContentUploadSession!).mockRejectedValueOnce(
+      new Error("compensation-secret-sentinel opaque-upload-nonce workspaces/private/path"),
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+      headers: auth,
+      payload: { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "ai_content_attachment_storage_unavailable" });
+    expect(repository.failAiContentUploadSession).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      generationId,
+      sessionId,
+      createdByUserId: actorUserId,
+      errorCode: "ai_content_attachment_storage_unavailable",
+    });
+    const compensationLogs = logger.warn.mock.calls
+      .filter(([fields]) => (fields as Record<string, unknown>).event === "ai_content_upload_session_compensation_failed");
+    const serializedLogs = JSON.stringify(compensationLogs);
+    expect(logger.warn).toHaveBeenCalledOnce();
+    expect(compensationLogs).toHaveLength(1);
+    expect(compensationLogs[0]?.[0]).toMatchObject({
+      event: "ai_content_upload_session_compensation_failed",
+      requestId: expect.any(String),
+      errorCode: "database_compensation_failed",
+    });
+    expect(Object.keys(compensationLogs[0]?.[0] as Record<string, unknown>).sort()).toEqual([
+      "errorCode",
+      "event",
+      "requestId",
+    ]);
+    expect(compensationLogs[0]?.[1]).toBe("ai_content_upload_session_compensation_failed");
+    expect(serializedLogs).not.toContain("provider-secret-sentinel");
+    expect(serializedLogs).not.toContain("compensation-secret-sentinel");
+    expect(serializedLogs).not.toContain("opaque-upload-nonce");
+    expect(serializedLogs).not.toContain("workspaces/private/path");
+    expect(serializedLogs).not.toContain("product.png");
+    await app.close();
+  });
+
+  it.each([false, true])("routes a legacy confirmation to the legacy repository when issuance=%s", async (uploadSessionsEnabled) => {
+    const { app, repository } = setup(true, { uploadSessionsEnabled });
+    const attachment = { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) };
+    const pathname = `brands/${brandId}/ai-content/${generationId}/attachments/${attachment.checksum}-${attachment.fileName}`;
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`,
+      headers: auth,
+      payload: { ...attachment, storagePath: pathname, storageUrl: `https://test.public.blob.vercel-storage.com/${pathname}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.confirmLegacyAiContentAttachment).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId,
+      brandId,
+      generationId,
+      storagePath: pathname,
+    }));
+    expect(repository.confirmAiContentUploadSession).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("returns not found for a missing tenant-scoped generation before legacy Blob verification", async () => {
+    const { app, repository } = setup();
+    vi.mocked(repository.getAiContentGeneration).mockResolvedValueOnce(null);
+    const attachment = { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) };
+    const pathname = `brands/${brandId}/ai-content/${generationId}/attachments/${attachment.checksum}-${attachment.fileName}`;
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`,
+      headers: auth,
+      payload: { ...attachment, storagePath: pathname, storageUrl: `https://test.public.blob.vercel-storage.com/${pathname}` },
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "ai_content_generation_not_found" });
+    expect(repository.confirmLegacyAiContentAttachment).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it.each([false, true])("returns a lock conflict before issuing a token when issuance=%s", async (uploadSessionsEnabled) => {
+    const { app, repository, generateClientToken } = setup(true, { uploadSessionsEnabled });
+    const method = uploadSessionsEnabled
+      ? repository.createAiContentUploadSession!
+      : repository.assertAiContentAttachmentUploadMutable!;
+    vi.mocked(method).mockRejectedValueOnce(new Error("ai_content_attachments_locked"));
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+      headers: auth,
+      payload: { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "ai_content_attachments_locked" });
+    expect(generateClientToken).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("requires an actor for enabled issuance, confirmation, and cancellation", async () => {
+    const { app, repository } = setup(true, { uploadSessionsEnabled: true, actorUserId: null });
+    const requests = [
+      app.inject({
+        method: "POST",
+        url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+        headers: auth,
+        payload: { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) },
+      }),
+      app.inject({
+        method: "POST",
+        url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`,
+        headers: auth,
+        payload: { sessionId, nonce: "opaque-upload-nonce" },
+      }),
+      app.inject({
+        method: "POST",
+        url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/cancel`,
+        headers: auth,
+        payload: { sessionId, nonce: "opaque-upload-nonce" },
+      }),
+    ];
+
+    for (const response of await Promise.all(requests)) {
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toEqual({ error: "authentication_required" });
+    }
+    expect(repository.createAiContentUploadSession).not.toHaveBeenCalled();
+    expect(repository.confirmAiContentUploadSession).not.toHaveBeenCalled();
+    expect(repository.cancelAiContentUploadSession).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it.each([false, true])("cancels an actor-bound upload session with an exact body when issuance=%s", async (uploadSessionsEnabled) => {
+    const { app, repository } = setup(true, { uploadSessionsEnabled });
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/cancel`,
+      headers: auth,
+      payload: { sessionId, nonce: "opaque-upload-nonce" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(repository.cancelAiContentUploadSession).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      generationId,
+      sessionId,
+      nonce: "opaque-upload-nonce",
+      createdByUserId: actorUserId,
+    });
+    await app.close();
+  });
+
+  it.each([
+    ["ai_content_upload_session_not_found", 404],
+    ["ai_content_upload_confirmation_conflict", 409],
+    ["ai_content_attachment_limit_exceeded", 409],
+    ["ai_content_attachments_locked", 409],
+    ["ai_content_attachment_upload_in_progress", 409],
+    ["ai_content_upload_session_expired", 410],
+    ["ai_content_attachment_retention_expired", 410],
+    ["ai_content_attachment_blob_unavailable", 422],
+    ["ai_content_attachment_path_mismatch", 422],
+    ["ai_content_attachment_size_mismatch", 422],
+    ["ai_content_attachment_mime_mismatch", 422],
+    ["ai_content_attachment_url_mismatch", 422],
+    ["ai_content_attachment_storage_unavailable", 503],
+    ["ai_content_attachment_verification_timeout", 503],
+  ] as const)("maps lifecycle error %s to HTTP %s", async (errorCode, statusCode) => {
+    const { app, repository } = setup(true, { uploadSessionsEnabled: true });
+    vi.mocked(repository.cancelAiContentUploadSession!).mockRejectedValueOnce(new Error(errorCode));
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/cancel`,
+      headers: auth,
+      payload: { sessionId, nonce: "opaque-upload-nonce" },
+    });
+    expect(response.statusCode).toBe(statusCode);
+    expect(response.json()).toEqual({ error: errorCode });
+    await app.close();
+  });
+
+  it.each([
+    [`/brands/not-a-uuid/ai-content/generations/${generationId}/attachments/token`, { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) }, "ai_content_brand_id_invalid"],
+    [`/brands/${brandId}/ai-content/generations/not-a-uuid/attachments/token`, { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) }, "ai_content_generation_id_invalid"],
+    [`/brands/${brandId}/ai-content/generations/${generationId}/attachments/cancel`, { sessionId: "not-a-uuid", nonce: "opaque-upload-nonce" }, "ai_content_upload_session_id_invalid"],
+  ])("rejects malformed lifecycle IDs before repository access: %s", async (url, payload, errorCode) => {
+    const { app, repository } = setup(true, { uploadSessionsEnabled: true });
+    const response = await app.inject({ method: "POST", url, headers: auth, payload });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: errorCode });
+    expect(repository.createAiContentUploadSession).not.toHaveBeenCalled();
+    expect(repository.cancelAiContentUploadSession).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("rejects a malformed lifecycle brand before the auth database check", async () => {
+    const { app, kakaoAuth } = setup();
+    kakaoAuth.canAccessBrand.mockRejectedValueOnce(
+      new Error("auth-database-sentinel-must-not-run"),
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/not-a-uuid/ai-content/generations/${generationId}/attachments/token`,
+      headers: auth,
+      payload: { role: "product", fileName: "product.png", mimeType: "image/png", sizeBytes: 100, checksum: "a".repeat(64) },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "ai_content_brand_id_invalid" });
+    expect(kakaoAuth.canAccessBrand).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("rejects a malformed attachment ID before repository access", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/not-a-uuid`,
+      headers: auth,
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "ai_content_attachment_id_invalid" });
+    expect(repository.removeAiContentAttachment).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it.each([false, true])("accepts session confirmation during deployment skew when issuance=%s", async (uploadSessionsEnabled) => {
+    const { app, repository } = setup(true, { uploadSessionsEnabled });
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`,
+      headers: auth,
+      payload: {
+        sessionId,
+        nonce: "opaque-upload-nonce",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(repository.confirmAiContentUploadSession).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId, brandId, generationId, sessionId, createdByUserId: actorUserId }),
+      expect.any(Function),
+    );
+    await app.close();
+  });
+
+  it("returns the aggregate attachment limit error from direct API confirmation", async () => {
+    const { app, repository } = setup();
+    vi.mocked(repository.confirmLegacyAiContentAttachment!).mockRejectedValueOnce(new Error("ai_content_attachment_limit_exceeded"));
+    const attachment = { role: "product", fileName: "sixth.png", mimeType: "image/png", sizeBytes: 100, checksum: "b".repeat(64) };
+    const tokenResponse = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+      headers: auth,
+      payload: attachment,
+    });
+    const { pathname } = tokenResponse.json();
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`,
+      headers: auth,
+      payload: { ...attachment, storagePath: pathname, storageUrl: `https://test.public.blob.vercel-storage.com/${pathname}` },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "ai_content_attachment_limit_exceeded" });
+    await app.close();
+  });
+
+  it("soft-deletes a confirmed attachment through the tenant-scoped generation route", async () => {
+    const { app, repository } = setup();
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/${attachmentId}`,
+      headers: auth,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ id: attachmentId });
+    expect(repository.removeAiContentAttachment).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      generationId,
+      attachmentId,
+    });
+    await app.close();
+  });
+
+  it.each(generationContractFixtures)("locks the $type retry contract", async (fixture) => {
+    const { app, repository } = setup();
+    const retriedRecord = generation("queued", fixture.type, fixture.title, fixture.updatedDraft);
+    vi.mocked(repository.retryAiContentOutput).mockResolvedValueOnce(retriedRecord);
+    const fixtureOutputId = `${fixture.type}-output`;
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${fixtureOutputId}/retry`,
       headers: auth,
     });
     expect(response.statusCode).toBe(200);
-    expect(repository.retryAiContentOutput).toHaveBeenCalledWith({ workspaceId, brandId, outputId: "output-1" });
+    expect(response.json()).toEqual(retriedRecord);
+    expect(repository.retryAiContentOutput).toHaveBeenCalledWith({ workspaceId, brandId, outputId: fixtureOutputId });
+    await app.close();
+  });
+
+  it("queues a validated partial revision for the authenticated brand scope", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/revisions`,
+      headers: auth,
+      payload: {
+        action: "regenerate_card",
+        cardIndex: 2,
+        idempotencyKey: "revision-card-2",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.reviseAiContentOutput).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      outputId,
+      action: "regenerate_card",
+      cardIndex: 2,
+      idempotencyKey: "revision-card-2",
+    });
+    await app.close();
+  });
+
+  it("rejects a card index for non-card partial revision actions", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/revisions`,
+      headers: auth,
+      payload: {
+        action: "regenerate_copy",
+        cardIndex: 2,
+        idempotencyKey: "revision-copy-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(repository.reviseAiContentOutput).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("saves validated copy fields for the authenticated brand scope", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "PUT",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/copy`,
+      headers: auth,
+      payload: {
+        fields: {
+          hook: "수정 훅",
+          keyMessage: "수정 핵심",
+          body: "수정 본문",
+          cta: "지금 확인",
+          caption: "수정 캡션",
+          hashtags: ["여름", "브랜드"],
+        },
+        idempotencyKey: "save-copy-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.saveAiContentOutputCopy).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      outputId,
+      fields: {
+        hook: "수정 훅",
+        keyMessage: "수정 핵심",
+        body: "수정 본문",
+        cta: "지금 확인",
+        caption: "수정 캡션",
+        hashtags: ["여름", "브랜드"],
+      },
+      idempotencyKey: "save-copy-1",
+    });
+    await app.close();
+  });
+
+  it("rejects unknown copy fields before the repository", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "PUT",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/copy`,
+      headers: auth,
+      payload: {
+        fields: { privatePrompt: "노출 금지" },
+        idempotencyKey: "save-copy-2",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(repository.saveAiContentOutputCopy).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("returns HTTP 410 when output retry attachment retention has expired", async () => {
+    const { app, repository } = setup();
+    vi.mocked(repository.retryAiContentOutput).mockRejectedValueOnce(
+      new Error("ai_content_attachment_retention_expired"),
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/retry`,
+      headers: auth,
+    });
+
+    expect(response.statusCode).toBe(410);
+    expect(response.json()).toEqual({
+      error: "ai_content_attachment_retention_expired",
+    });
     await app.close();
   });
 

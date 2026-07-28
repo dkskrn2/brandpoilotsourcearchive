@@ -28,6 +28,7 @@ function task3CredentialExpiry(daysFromNow: number) {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 
 describe("Task 4 transactional topic generation", () => {
@@ -89,6 +90,9 @@ describe("Task 4 transactional topic generation", () => {
         const channel = String(values?.[4]);
         return { rowCount: 1, rows: [{ id: `output-${channel}` }] };
       }
+      if (sql.includes("insert into ai_content_proposal_batches")) {
+        return { rowCount: 1, rows: [{ id: "proposal-batch-1" }] };
+      }
       if (sql.includes("insert into jobs")) return { rowCount: 1, rows: [{ id: "render-job-1" }] };
       if (sql.includes("select id from brand_channels")) return { rowCount: 1, rows: [{ id: `channel-${values?.[1]}` }] };
       if (sql.includes("insert into publish_queue")) return { rowCount: 1, rows: [{ id: "queue-1" }] };
@@ -134,6 +138,7 @@ describe("Task 4 transactional topic generation", () => {
     { enabled: ["instagram_feed_carousel", "instagram_story", "instagram_reel"], last: "instagram_reel", expected: "instagram_feed_carousel" },
     { enabled: ["instagram_feed_carousel", "instagram_reel"], last: "instagram_story", expected: "instagram_reel" }
   ])("rotates enabled Instagram formats transactionally: $expected", async ({ enabled, last, expected }) => {
+    vi.stubEnv("AUTOMATED_CONTENT_ENABLED", "true");
     const fixture = generationQuery({ channels: ["instagram"], enabledFormats: enabled, lastSelectedFormat: last });
 
     await createRepository(fakePoolWithClient(fixture.query) as any).generateContent("brand-1");
@@ -149,9 +154,9 @@ describe("Task 4 transactional topic generation", () => {
     const legacyJobs = fixture.statements.filter(({ sql }) => sql.includes("insert into jobs"));
     if (expected === "instagram_feed_carousel") {
       expect(legacyJobs.some(({ values }) => values.includes("instagram_feed_render"))).toBe(false);
-      expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generations"))).toBe(true);
-      expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generation_outputs"))).toBe(true);
-      expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generation_jobs"))).toBe(true);
+      expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_proposal_batches"))).toBe(true);
+      expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_proposal_jobs"))).toBe(true);
+      expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generations"))).toBe(false);
     } else {
       expect(legacyJobs.some(({ values }) => values.includes(
         expected === "instagram_story" ? "instagram_story_render" : "instagram_reel_render"
@@ -186,6 +191,7 @@ describe("Task 4 transactional topic generation", () => {
   });
 
   it("creates outputs for every enabled channel and exposes generation readiness", async () => {
+    vi.stubEnv("AUTOMATED_CONTENT_ENABLED", "true");
     const fixture = generationQuery({
       channels: ["instagram", "threads", "x", "linkedin", "youtube", "tiktok"],
       enabledFormats: ["instagram_feed_carousel"],
@@ -251,10 +257,12 @@ describe("Task 4 transactional topic generation", () => {
     expect(jobs).toHaveLength(1);
     expect(jobs.some(({ values }) => values.includes("instagram_feed_render"))).toBe(false);
     expect(jobs.some(({ sql }) => sql.includes("threads_text_render"))).toBe(true);
-    expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generation_jobs"))).toBe(true);
+    expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_proposal_jobs"))).toBe(true);
+    expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generation_jobs"))).toBe(false);
   });
 
-  it("passes source evidence through the shared card-news contract without legacy render fields", async () => {
+  it("freezes source evidence in the scheduled proposal contract without legacy render fields", async () => {
+    vi.stubEnv("AUTOMATED_CONTENT_ENABLED", "true");
     const fixture = generationQuery({ channels: ["instagram"], enabledFormats: ["instagram_feed_carousel"] });
     fixture.query.mockImplementation((async (sql: string, values?: unknown[]) => {
       const base = generationQuery({ channels: ["instagram"], enabledFormats: ["instagram_feed_carousel"] });
@@ -268,20 +276,31 @@ describe("Task 4 transactional topic generation", () => {
       if (sql.includes("count(*)") && sql.includes("from content_topics")) return { rowCount: 1, rows: [{ topic_count: "0" }] };
       if (sql.includes("from content_topics ct") && sql.includes("for update")) return { rowCount: 0, rows: [] };
       if (sql.includes("from topic_rows")) return { rowCount: 0, rows: [] };
+      if (sql.includes("with candidate_sources")) return {
+        rowCount: 1,
+        rows: [{
+          id: "snapshot-1",
+          url: "https://brand.example.com/raw",
+          fetched_at: "2026-07-28T00:00:00.000Z",
+          content_hash: "hash-1",
+          summary: "SECRET RAW SNAPSHOT",
+        }],
+      };
       if (sql.includes("from source_snapshots")) return { rowCount: 1, rows: [{ id: "snapshot-1", source_content_item_id: "item-1", content_hash: "hash-1", source_type: "owned", content_url: "https://brand.example.com/raw", content: "SECRET RAW SNAPSHOT" }] };
       if (sql.includes("insert into content_topics")) return { rowCount: 1, rows: [{ id: "content-topic-1" }] };
       if (sql.includes("insert into topic_publish_groups")) return { rowCount: 1, rows: [{ id: "publish-group-1" }] };
       if (sql.includes("insert into master_drafts")) return { rowCount: 1, rows: [{ id: "master-draft-1" }] };
       if (sql.includes("insert into llm_runs")) return { rowCount: 1, rows: [] };
       if (sql.includes("insert into channel_outputs")) return { rowCount: 1, rows: [{ id: "output-instagram" }] };
+      if (sql.includes("insert into ai_content_proposal_batches")) return { rowCount: 1, rows: [{ id: "proposal-batch-1" }] };
       if (sql.includes("insert into jobs")) return { rowCount: 1, rows: [] };
       return { rowCount: 1, rows: [] };
     }) as any);
 
     await createRepository(fakePoolWithClient(fixture.query) as any).generateContent("brand-1");
 
-    const generation = fixture.statements.find(({ sql }) => sql.includes("insert into ai_content_generations"));
-    const payload = String(generation?.values[6]);
+    const proposal = fixture.statements.find(({ sql }) => sql.includes("insert into ai_content_proposal_batches"));
+    const payload = String(proposal?.values[4]);
     expect(payload).toContain("SECRET RAW SNAPSHOT");
     expect(payload).not.toContain("raw_text");
     expect(payload).not.toContain("extracted_text");
@@ -752,7 +771,7 @@ describe("repository", () => {
     ]);
   });
 
-  it("reuses the original source snapshot when regenerating card news", async () => {
+  it("does not enqueue automated card news while automation is disabled", async () => {
     const statements: Array<{ sql: string; values: unknown[] }> = [];
     const query = vi.fn(async (sql: string, values: unknown[] = []) => {
       statements.push({ sql, values });
@@ -775,7 +794,8 @@ describe("repository", () => {
     await createRepository(fakePoolWithClient(query) as any).reviewContentOutput("output-1", "regenerate");
 
     const generation = statements.find(({ sql }) => sql.includes("insert into ai_content_generations"));
-    expect(String(generation?.values[6])).toContain("ORIGINAL SOURCE EVIDENCE");
+    expect(generation).toBeUndefined();
+    expect(statements.some(({ sql }) => sql.includes("insert into ai_content_proposal_batches"))).toBe(false);
   });
 
   it("treats a missing regeneration capability row as not reviewable", async () => {
@@ -1047,6 +1067,7 @@ describe("repository", () => {
   });
 
   it("crawls only the requested source", async () => {
+    let queuedTopicContext: Record<string, unknown> | null = null;
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url: string | URL | Request) => {
       const href = String(url);
       if (href === "https://example.com/blog") {
@@ -1062,7 +1083,16 @@ describe("repository", () => {
     });
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       if (sql.includes("where id = $1 and brand_id = $2")) {
-        return { rowCount: 1, rows: [{ id: "source-1", workspace_id: "workspace-1", brand_id: "brand-1", url: "https://example.com/blog" }] };
+        return {
+          rowCount: 1,
+          rows: [{
+            id: "source-1",
+            workspace_id: "workspace-1",
+            brand_id: "brand-1",
+            url: "https://example.com/blog",
+            content_purpose: "marketing",
+          }],
+        };
       }
       if (sql.includes("insert into source_crawl_runs")) {
         return { rowCount: 1, rows: [{ id: "run-1" }] };
@@ -1076,6 +1106,10 @@ describe("repository", () => {
       if (sql.includes("insert into source_snapshots")) {
         return { rowCount: 1, rows: [{ id: "snapshot-1" }] };
       }
+      if (sql.includes("insert into content_topics")) {
+        queuedTopicContext = JSON.parse(String(values?.[3]));
+        return { rowCount: 1, rows: [{ id: "content-topic-1" }] };
+      }
       if (sql.includes("update source_crawl_runs")) {
         return { rowCount: 1, rows: [] };
       }
@@ -1087,6 +1121,7 @@ describe("repository", () => {
 
     expect(result.sourceUrlId).toBe("source-1");
     expect(query).toHaveBeenCalledWith(expect.stringContaining("where id = $1 and brand_id = $2"), ["source-1", "brand-1"]);
+    expect(queuedTopicContext).toMatchObject({ contentPurpose: "marketing" });
     fetchSpy.mockRestore();
   });
 
@@ -1803,12 +1838,7 @@ describe("repository", () => {
       representativeUrl: "https://brand.example.com/service",
       contentHash: "hash-1"
     });
-    expect(cardNewsInput).toMatchObject({
-      subject: {
-        sourceUrl: "https://brand.example.com/service",
-        research: { topic: { title: "크롤링 소스 기반 콘텐츠", angle: "source_url" } }
-      }
-    });
+    expect(cardNewsInput).toBeUndefined();
     expect(query).not.toHaveBeenCalledWith(expect.stringContaining("insert into llm_runs"), expect.any(Array));
     expect(query).not.toHaveBeenCalledWith(expect.stringContaining("update topic_rows"), expect.any(Array));
   });
@@ -1899,12 +1929,7 @@ describe("repository", () => {
     expect(result).toMatchObject({ processed: 1, created: 1, failed: 0 });
     expect(query).toHaveBeenCalledWith(expect.stringContaining("from content_topics ct"), ["brand-1"]);
     expect(statusUpdates).toEqual([["content-topic-1", "instagram_feed_carousel"], ["content-topic-1", now]]);
-    expect(cardNewsInput).toMatchObject({
-      subject: {
-        sourceUrl: "https://brand.example.com/service",
-        research: { topic: { title: "크롤링 기사 제목", angle: "source_url" } }
-      }
-    });
+    expect(cardNewsInput).toBeUndefined();
     expect(query).not.toHaveBeenCalledWith(expect.stringContaining("insert into content_topics"), expect.any(Array));
   });
 
@@ -2081,12 +2106,7 @@ describe("repository", () => {
     expect(storageArtifactValues).toBeUndefined();
     expect(renderedOutputValues).toBeUndefined();
     expect(query.mock.calls.some(([sql, values]) => String(sql).includes("insert into jobs") && (values as unknown[])?.includes("instagram_feed_render"))).toBe(false);
-    expect(cardNewsInput).toMatchObject({
-      contentType: "card_news",
-      subject: { research: { topic: { title: "Jeju family stay", angle: "location-first checklist" } } },
-      message: { target: { name: "family travelers" } },
-      brandContext: { context: { brand: { name: "Jeju Pilot", categoryContext: "여행·관광 / 여행 상담" } } }
-    });
+    expect(cardNewsInput).toBeUndefined();
     expect(threadsJobPayload).toMatchObject({
       deliveryFormat: "threads_text",
       promptVersion: "worker-threads.v1",
@@ -2102,6 +2122,7 @@ describe("repository", () => {
   });
 
   it("does not create image artifacts while the worker owns rendering", async () => {
+    vi.stubEnv("AUTOMATED_CONTENT_ENABLED", "true");
     let storageArtifactValues: unknown[] | undefined;
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       if (sql.trim() === "begin" || sql.trim() === "commit" || sql.trim() === "rollback") return { rowCount: 0, rows: [] };
@@ -2114,11 +2135,26 @@ describe("repository", () => {
       if (sql.includes("from topic_rows") && sql.includes("for update skip locked")) {
         return { rowCount: 1, rows: [{ id: "topic-row-1", topic_title: "Jeju family stay", topic_angle: "location-first checklist", target_customer: "family travelers" }] };
       }
+      if (sql.includes("with candidate_sources")) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: "snapshot-1",
+            url: "https://brand.example.com/faq",
+            fetched_at: "2026-07-28T00:00:00.000Z",
+            content_hash: "hash-1",
+            summary: "Owned FAQ says visitors need short routes.",
+          }],
+        };
+      }
       if (sql.includes("from source_snapshots")) return { rowCount: 1, rows: [{ id: "snapshot-1", source_type: "owned", content_url: "https://brand.example.com/faq", content: "Owned FAQ says visitors need short routes." }] };
       if (sql.includes("insert into content_topics")) return { rowCount: 1, rows: [{ id: "content-topic-1" }] };
       if (sql.includes("insert into master_drafts")) return { rowCount: 1, rows: [{ id: "master-draft-1" }] };
       if (sql.includes("insert into llm_runs")) return { rowCount: 1, rows: [{ id: "llm-run-1" }] };
       if (sql.includes("insert into channel_outputs")) return { rowCount: 1, rows: [{ id: `output-${values?.[4]}` }] };
+      if (sql.includes("insert into ai_content_proposal_batches")) {
+        return { rowCount: 1, rows: [{ id: "proposal-batch-1" }] };
+      }
       if (sql.includes("insert into storage_artifacts")) {
         storageArtifactValues = values;
         return { rowCount: 1, rows: [{ id: "artifact-1" }] };
@@ -2131,7 +2167,8 @@ describe("repository", () => {
 
     expect(result).toMatchObject({ processed: 1, created: 1, updated: 1, failed: 0 });
     expect(storageArtifactValues).toBeUndefined();
-    expect(query).toHaveBeenCalledWith(expect.stringContaining("insert into ai_content_generation_jobs"), expect.any(Array));
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("insert into ai_content_proposal_jobs"), expect.any(Array));
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("insert into ai_content_generation_jobs"))).toBe(false);
   });
 
   it("does not call the legacy OpenAI generator or write llm_runs", async () => {
@@ -2296,12 +2333,141 @@ describe("repository", () => {
     expect(publishInstagramOutput).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "a naturally expired credential",
+      row: { credential_expires_at: new Date("2020-01-01T00:00:00.000Z") },
+      reason: "credential_expired",
+    },
+    {
+      name: "a credential missing content-publish scope",
+      row: { credential_scopes: ["instagram_business_basic"] },
+      reason: "missing_required_scopes",
+    },
+    {
+      name: "a credential for an unsupported provider",
+      row: { credential_provider: "x" },
+      reason: "provider_not_supported",
+    },
+    {
+      name: "a channel without an active credential",
+      row: {
+        credential_id: null,
+        credential_provider: null,
+        credential_status: null,
+        credential_expires_at: null,
+        credential_scopes: [],
+        encrypted_payload: null,
+      },
+      reason: "channel_not_connected",
+    },
+    {
+      name: "a current channel token failure",
+      row: { channel_status: "needs_attention", channel_last_error: "meta_token_invalid" },
+      reason: "meta_token_invalid",
+    },
+    {
+      name: "a current channel permission failure",
+      row: { channel_status: "needs_attention", channel_last_error: "meta_permission_denied" },
+      reason: "meta_permission_denied",
+    },
+    {
+      name: "an unverified Story credential",
+      row: {
+        delivery_format: "instagram_story",
+        capability_status: "available",
+        capability_metadata: {
+          verifiedCredentialId: "different-credential",
+          storyPublishVerifiedAt: "2026-07-20T00:00:00.000Z",
+        },
+      },
+      reason: "story_capability_required",
+      channelNeedsAttention: false,
+    },
+  ])("fails $name before invoking the Meta adapter", async ({
+    row,
+    reason,
+    channelNeedsAttention = true,
+  }) => {
+    const statements: Array<{ sql: string; values: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      statements.push({ sql, values: values ?? [] });
+      if (sql.includes("with selected as") && sql.includes("from publish_queue pq")) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: "queue-1",
+            workspace_id: "workspace-1",
+            brand_id: "brand-1",
+            channel: "instagram",
+            channel_output_id: "output-1",
+            delivery_format: "instagram_feed_carousel",
+            output_json: { caption: "hello" },
+            rendered_manifest_url: "https://cdn.example.com/manifest.json",
+            channel_status: "connected",
+            channel_last_error: null,
+            external_account_id: "17890000000000000",
+            credential_id: "credential-1",
+            credential_provider: "meta",
+            credential_status: "active",
+            credential_expires_at: new Date("2099-01-01T00:00:00.000Z"),
+            credential_scopes: ["instagram_business_basic", "instagram_business_content_publish"],
+            encrypted_payload: encryptCredential("meta-token"),
+            auth_mode: "instagram_login",
+            attempt_id: "attempt-1",
+            ...row,
+          }],
+        };
+      }
+      if (sql.includes("with failed_attempt as")) {
+        return { rowCount: 1, rows: [{ id: "queue-1" }] };
+      }
+      return { rowCount: 0, rows: [] };
+    });
+    const publishInstagramOutput = vi.fn();
+    const fetchInstagramImageManifest = vi.fn();
+    const repository = createRepository({ query } as any, {
+      instagramPublish: { enabled: true },
+      publishInstagramOutput,
+      fetchInstagramImageManifest,
+    });
+
+    await expect(repository.publishQueueItem("queue-1")).rejects.toThrow(reason);
+    expect(publishInstagramOutput).not.toHaveBeenCalled();
+    expect(fetchInstagramImageManifest).not.toHaveBeenCalled();
+    const failure = statements.find(({ sql }) => sql.includes("with failed_attempt as"));
+    expect(failure?.values).toContain(reason);
+    expect(failure?.values).toContain(channelNeedsAttention);
+  });
+
   it("rejects publication retry without querying when publication is disabled", async () => {
     const query = vi.fn();
     const repository = createRepository({ query } as any, { instagramPublish: { enabled: false } });
 
     await expect(repository.retryPublishQueueItem("queue-1")).rejects.toThrow("publishing_disabled");
     expect(query).not.toHaveBeenCalled();
+  });
+
+  it("cancels only queued, scheduled, or deferred publication rows", async () => {
+    const query = vi.fn(async (sql: string) => {
+      expect(sql).toContain("status in ('queued', 'scheduled', 'deferred')");
+      return { rowCount: 1, rows: [{ id: "queue-1", status: "cancelled" }] };
+    });
+    const repository = createRepository({ query } as any);
+
+    await expect(repository.cancelPublishQueueItem("queue-1")).resolves.toEqual({
+      id: "queue-1",
+      status: "cancelled"
+    });
+  });
+
+  it("rejects cancellation after publishing has started", async () => {
+    const repository = createRepository({
+      query: vi.fn(async () => ({ rowCount: 0, rows: [] }))
+    } as any);
+
+    await expect(repository.cancelPublishQueueItem("queue-publishing"))
+      .rejects.toThrow("publish_queue_not_cancellable");
   });
 
   it("does no scheduled publication work or querying when publication is disabled", async () => {
@@ -2538,8 +2704,16 @@ describe("repository", () => {
             },
             attempt_count: "0",
             rendered_manifest_url: "https://cdn.example.com/rendered-content/instagram/brand-1/output-1/manifest.json",
+            channel_status: "connected",
+            channel_last_error: null,
             external_account_id: "17890000000000000",
+            credential_id: "credential-1",
+            credential_provider: "meta",
+            credential_status: "active",
+            credential_expires_at: new Date("2099-01-01T00:00:00.000Z"),
+            credential_scopes: ["instagram_business_basic", "instagram_business_content_publish"],
             encrypted_payload: encryptCredential("meta-token"),
+            auth_mode: "instagram_login",
             attempt_id: "attempt-1"
           }]
         };

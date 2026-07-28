@@ -70,6 +70,48 @@ describe("AdminRepository", () => {
     expect(page.nextCursor).toBeNull();
   });
 
+  it("returns today's AI usage from the current-date ledger", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("from brand_profiles bp")) {
+        return queryResult([{
+          id: "profile-1",
+          primary_customer: "운영자",
+          description: "브랜드 설명",
+          tone: "친근함",
+          default_cta: "문의하기",
+          main_link: "https://example.com",
+          auto_approval_enabled: false,
+          generation_count: "7",
+          download_count: "3",
+        }]);
+      }
+      return queryResult([{
+        id: "11111111-1111-4111-8111-111111111111",
+        workspace_id: "22222222-2222-4222-8222-222222222222",
+        workspace_name: "Growthline",
+        name: "Brand Pilot",
+        status: "active",
+        created_at: "2026-07-19T01:00:00.000Z",
+        last_activity_at: "2026-07-19T02:00:00.000Z",
+        owner_display_name: "관리자",
+        owner_email: "admin@example.com",
+        subcategories: [],
+        connected_channel_count: "0",
+        dm_enabled: false,
+        onboarding_completed: true,
+      }]);
+    });
+
+    const result = await createAdminRepository({ query } as never)
+      .getBrand("11111111-1111-4111-8111-111111111111");
+
+    expect(result?.aiContentUsageToday).toEqual({
+      generationCount: 7,
+      downloadCount: 3,
+    });
+    expect(String(query.mock.calls[1]?.[0])).toContain("usage.usage_date = current_date");
+  });
+
   it("returns only masked channel credential metadata", async () => {
     const query = vi.fn(async () => queryResult([{
       id: "33333333-3333-4333-8333-333333333333",
@@ -176,7 +218,7 @@ describe("AdminRepository", () => {
   });
 
   it("maps system health and worker heartbeat states", async () => {
-    const query = vi.fn(async () => queryResult([{
+    const query = vi.fn(async (_sql: string) => queryResult([{
       queue_counts: { queued: 4, running: 2, failed: 1, dead: 0 },
       workers: [
         { workerId: "dm-1", workerType: "dm", status: "online", lastHeartbeatAt: "2026-07-19T01:00:00.000Z", metadata: {} },
@@ -190,6 +232,11 @@ describe("AdminRepository", () => {
     expect(result.database).toBe("ok");
     expect(result.queueCounts.queued).toBe(4);
     expect(result.workers[0]?.status).toBe("online");
+    const sql = String(query.mock.calls[0]?.[0]);
+    expect(sql).toContain("then 'online'");
+    expect(sql).toContain("then 'stale'");
+    expect(sql).toContain("else 'offline'");
+    expect(sql).toContain("last_heartbeat_at");
   });
 
   it("returns cursor-paginated publishing rows with safe operation flags", async () => {

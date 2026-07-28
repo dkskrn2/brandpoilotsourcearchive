@@ -18,6 +18,13 @@ export interface BrandEvidenceDocument {
   contentHash: string;
 }
 
+export interface BrandIntelligenceEvidence {
+  field: string;
+  claim: string;
+  sourceId: string;
+  sourceUrl: string | null;
+}
+
 export interface BrandIntelligenceResultV1 {
   contractVersion: "brand-intelligence-result.v1";
   companyOverview: string;
@@ -28,7 +35,7 @@ export interface BrandIntelligenceResultV1 {
   differentiators: string;
   coreAppeal: string;
   competitors: Array<{ name: string; description: string; sourceUrls: string[] }>;
-  evidence: Array<{ field: string; claim: string; sourceId: string; sourceUrl: string | null }>;
+  evidence: BrandIntelligenceEvidence[];
   sourceGaps: string[];
 }
 

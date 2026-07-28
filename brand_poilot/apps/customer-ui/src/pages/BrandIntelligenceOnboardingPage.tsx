@@ -68,7 +68,7 @@ export function BrandIntelligenceOnboardingPage() {
     try {
       await gateway.updateDraft(DEMO_BRAND_ID, analysisId, draft);
       await gateway.confirm(DEMO_BRAND_ID, analysisId);
-      navigate("/brand-settings?brandIntelligence=confirmed");
+      navigate("/brand-center?tab=understanding&section=core&brandIntelligence=confirmed");
     } catch {
       setActionError("브랜드 정보를 저장하지 못했습니다. 필수 입력값과 API 상태를 확인하세요.");
     } finally {

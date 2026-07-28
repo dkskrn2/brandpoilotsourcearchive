@@ -1,5 +1,6 @@
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FeedbackProvider, useFeedback } from "../components/feedback/FeedbackContext";
@@ -94,13 +95,19 @@ async function renderDashboardPage(
   openFeedback = vi.fn()
 ) {
   const api = { getDashboard, getPublishArtifact };
-  vi.doMock("../lib/apiClient", () => ({ DEMO_BRAND_ID: "brand-1", api }));
+  vi.doMock("../lib/apiClient", () => ({
+    DEMO_BRAND_ID: "brand-1",
+    api,
+    apiClient: vi.fn(() => ({})),
+  }));
   vi.doMock("../components/feedback/FeedbackContext", () => ({ FeedbackProvider, useFeedback }));
   const { DashboardPage } = await import("../pages/DashboardPage");
   render(
-    <FeedbackProvider onOpenFeedback={openFeedback}>
-      <DashboardPage />
-    </FeedbackProvider>
+    <MemoryRouter>
+      <FeedbackProvider onOpenFeedback={openFeedback}>
+        <DashboardPage />
+      </FeedbackProvider>
+    </MemoryRouter>
   );
   return api;
 }
@@ -115,15 +122,22 @@ describe("DashboardPage", () => {
   it("shows the recent 30-day operational summary and performance sections", async () => {
     const api = await renderDashboardPage();
 
-    expect(await screen.findByRole("heading", { name: "전체 현황" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "오늘의 운영 현황" })).toBeVisible();
     expect(screen.getByText("최근 30일 · 2026. 7. 16. 기준")).toBeVisible();
+    expect(screen.getByRole("link", { name: "콘텐츠 만들기" })).toHaveAttribute("href", "/ai-content/new");
+    expect(screen.getByRole("link", { name: "브랜드 검토하기" })).toHaveAttribute(
+      "href",
+      "/brand-center?tab=understanding&section=core",
+    );
     const summary = screen.getByLabelText("최근 30일 요약");
     expect(within(summary).getByText("발행 완료")).toBeVisible();
     expect(within(summary).getByText("12건")).toBeVisible();
     expect(within(summary).getByText("8,430회")).toBeVisible();
     expect(within(summary).getByText("3건")).toBeVisible();
     expect(within(summary).getByText("1건")).toBeVisible();
-    expect(screen.getByRole("heading", { name: "현재 콘텐츠 운영 흐름" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "오늘의 우선 작업" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "오늘의 사용량" })).toBeVisible();
+    expect(screen.getByText("사용량 데이터를 불러올 수 없습니다.")).toBeVisible();
     expect(screen.getByRole("img", { name: /2026년 7월 15일.*1,280회.*2026년 7월 16일.*1,650회/ })).toBeVisible();
     expect(screen.getByRole("heading", { name: "채널별 성과" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "성과가 좋았던 콘텐츠" })).toBeVisible();
@@ -162,6 +176,9 @@ describe("DashboardPage", () => {
       "href",
       "https://instagram.com/p/post-1"
     );
+    await user.click(within(dialog).getByRole("button", { name: "닫기" }));
+    expect(screen.queryByRole("dialog", { name: "여름 캠페인 운영 가이드" })).not.toBeInTheDocument();
+    expect(detailButton).toHaveFocus();
   });
 
   it("renders distinct channel exposure series and only legends channels with data", async () => {
@@ -189,7 +206,7 @@ describe("DashboardPage", () => {
       topContents: [{ ...dashboard.topContents[0], exposureCount: null }]
     })));
 
-    expect(await screen.findByRole("heading", { name: "전체 현황" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "오늘의 운영 현황" })).toBeVisible();
     expect(screen.getByLabelText("최근 30일 요약")).toHaveTextContent("데이터 없음");
     const linkedin = screen.getByRole("row", { name: /LinkedIn/ });
     expect(linkedin).toHaveTextContent("연결 전");
@@ -216,7 +233,7 @@ describe("DashboardPage", () => {
       ]
     })));
 
-    expect(await screen.findByRole("heading", { name: "전체 현황" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "오늘의 운영 현황" })).toBeVisible();
     expect(screen.getAllByText("채널 성과 일부를 수집하지 못했습니다.")).toHaveLength(1);
   });
 

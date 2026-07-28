@@ -9,6 +9,7 @@ import { AiContentUsageProvider } from "../../features/ai-content/AiContentUsage
 import { FeedbackDialog } from "../feedback/FeedbackDialog";
 import { FeedbackProvider } from "../feedback/FeedbackContext";
 import { api, DEMO_BRAND_ID } from "../../lib/apiClient";
+import { FocusTrap } from "../ui/FocusTrap";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -102,13 +103,21 @@ export function AppShell({ children }: AppShellProps) {
                 <ScrollToTopButton />
               </main>
               {mobileMenuOpen ? (
-                <div id="mobile-navigation" className="mobile-menu-screen" role="dialog" aria-modal="true" aria-label="전체 메뉴">
+                <FocusTrap
+                  active
+                  initialFocusSelector=".nav a"
+                  id="mobile-navigation"
+                  className="mobile-menu-screen"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="전체 메뉴"
+                >
                   <Sidebar
                     variant="mobile"
                     onClose={() => setMobileMenuOpen(false)}
                     onNavigate={() => setMobileMenuOpen(false)}
                   />
-                </div>
+                </FocusTrap>
               ) : null}
               {feedbackOpen ? (
                 <FeedbackDialog

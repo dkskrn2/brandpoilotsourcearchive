@@ -41,6 +41,25 @@ export const helpGuides: HelpGuide[] = [
     tour: [pageHeaderStep("게시 기록과 채널 성과를 최근 30일 기준으로 집계한 운영 현황입니다."), { selector: ".dashboard-summary", title: "30일 핵심 지표", description: "발행 수, 수집된 노출 수, 검토 대기와 게시 실패 건수를 비교합니다." }, { selector: ".dashboard-workflow", title: "작업 정체 구간", description: "주제 선택부터 게시까지 작업이 쌓인 단계를 확인하고 해당 관리 화면으로 이동합니다." }]
   },
   {
+    id: "performance",
+    path: "/performance",
+    title: "성과·개선",
+    summary: "최근 30일의 실제 성과 관측값과 해석, 사용자가 승인할 수 있는 다음 실험을 구분해 보여줍니다.",
+    sections: [{
+      title: "근거를 구분해 사용하기",
+      items: [
+        "관측은 24시간, 72시간, 7일 snapshot에서 실제로 수집된 metric과 표본 수만 표시합니다.",
+        "해석은 관측값에서 읽은 경향과 confidence이며, 표본이 부족하면 결론을 제시하지 않습니다.",
+        "다음 실험은 사용자가 버튼을 눌렀을 때 구성안만 만들며 콘텐츠 생성이나 게시는 자동으로 시작하지 않습니다.",
+      ],
+    }],
+    tour: [
+      pageHeaderStep("최근 30일 성과를 관측, 해석, 다음 실험의 세 층으로 나눠 확인합니다."),
+      { selector: ".performance-evidence-grid", title: "관측과 해석", description: "실제 수치와 그 수치에 대한 해석을 서로 다른 영역에서 확인합니다." },
+      { selector: ".performance-experiments", title: "다음 실험", description: "검증할 가설을 선택해 AI 구성안을 만들고 생성 전에 다시 검토합니다." },
+    ],
+  },
+  {
     id: "ai-content",
     path: "/ai-content",
     title: "AI 콘텐츠 생성",
@@ -52,17 +71,21 @@ export const helpGuides: HelpGuide[] = [
     id: "ai-content-new",
     path: "/ai-content/new",
     title: "새 AI 콘텐츠",
-    summary: "브랜드·자사 정보와 선택한 레퍼런스를 근거로 목적, 타겟, 소구점과 산출물 조건을 정합니다.",
-    sections: [{ title: "생성 전 확인", items: ["브랜드 설정과 자사 URL 분석 정보가 기본 근거로 사용되며, 특정 제품 URL이나 저장한 트렌드 레퍼런스를 추가할 수 있습니다.", "만들려는 목적, 핵심 타겟과 강조할 소구점을 구체적으로 입력하고 저장한 항목은 다음 생성에서 다시 불러옵니다.", "최종 단계에서 근거와 결과 형식을 확인하면 요청이 전용 워커 대기열에 저장되고 생성 이력에서 상태를 확인할 수 있습니다."] }],
-    tour: [{ selector: ".wizard-header", title: "무엇을 만들지 확인", description: "카드뉴스는 여러 장의 정방형 이미지, 블로그는 게시 가능한 HTML과 설명용 이미지, 마케팅 소재는 한 장의 광고 이미지로 생성됩니다. 현재 선택과 작성 단계를 확인합니다." }, { selector: ".wizard-progress", title: "근거부터 표현 조건까지 준비", description: "자사 URL 또는 제품 URL을 고른 뒤 타겟·소구점·레퍼런스·생성 지시를 순서대로 정합니다. 완료한 단계와 남은 단계를 여기서 확인합니다." }, { selector: ".wizard-workspace", title: "입력값이 사용되는 위치", description: "자사 정보와 제품 URL은 사실 근거로, 타겟과 소구점은 제목·본문·CTA의 방향으로, 레퍼런스는 구성과 표현 참고로 사용됩니다. 확인되지 않은 가격이나 성과는 생성 근거로 쓰지 않습니다." }]
+    summary: "목적·주제 자료·채널 형식을 먼저 정하고, AI 구현안을 고른 뒤 실제 레퍼런스와 아바타를 선택합니다.",
+    sections: [{ title: "생성 전 확인", items: ["첫 세 구역에서 정보성·마케팅성 목적, 브랜드 주제·승인 제품·Wiki, 실제 채널 지원 범위와 결과 형식을 순서대로 저장합니다.", "AI 구현안은 근거·타겟·전략·훅·구성을 비교한 뒤 하나를 선택하며, 레퍼런스와 아바타는 이때만 지연 조회됩니다.", "선택한 자료의 활용 역할과 사용량을 확인해 생성을 시작하면 전용 워커 대기열과 생성 이력에 상태가 표시됩니다."] }],
+    tour: [
+      { selector: ".wizard-header", title: "콘텐츠 생성 방식 확인", description: "새 4단계 구현안 흐름과 기존 5단계 생성 흐름 모두 여기서 현재 작업을 확인합니다." },
+      { selector: ":is(.content-setup-accordions,.wizard-progress)", title: "필요한 입력만 순서대로", description: "목적 다음에 승인 제품·Wiki를, 그 다음 실제 채널 capability와 형식을 확인해 저장합니다." },
+      { selector: ":is(.proposal-comparison,.wizard-workspace)", title: "구현안과 실제 자료 선택", description: "구현안 선택 뒤에만 활성 레퍼런스와 아바타를 조회하고, 누락·보관 자산은 교체하거나 제거한 뒤 생성합니다." },
+    ]
   },
   {
     id: "ai-content-result",
     path: "/ai-content/:generationId",
     title: "AI 콘텐츠 결과",
     summary: "전용 워커가 만든 실제 이미지 또는 HTML과 사용한 생성 조건을 확인합니다.",
-    sections: [{ title: "결과 관리", items: ["완료된 카드뉴스·마케팅 소재는 실제 이미지로, 블로그는 본문 HTML과 필요한 설명 이미지로 미리봅니다.", "실패한 작업은 오류 사유를 확인한 뒤 다시 생성하고, 완료 결과는 파일로 다운로드할 수 있습니다.", "게시 가능한 카드뉴스를 게시 관리로 보내면 검토 또는 예약 게시 흐름이 시작됩니다."] }],
-    tour: [pageHeaderStep("요청한 생성 조건, 작업 상태와 결과 제목을 확인합니다."), { selector: ".ai-generation-output-list", title: "실제 산출물", description: "이미지 또는 HTML 미리보기와 생성 상태를 확인하고 다운로드하거나 다음 작업으로 보냅니다." }]
+    sections: [{ title: "결과 관리", items: ["생성 중에는 generation과 output 상태만 갱신하며 완료 결과는 검토 화면으로 전환됩니다.", "검토에서는 기획 근거, 카피, 완성본, 게시 탭으로 고정된 생성 조건과 실제 산출물을 확인합니다.", "실패한 output만 사유를 입력해 다시 생성하고 성공 output과 개별·선택·전체 ZIP 다운로드는 그대로 유지합니다."] }],
+    tour: [pageHeaderStep("요청한 생성 조건, 작업 상태와 결과 제목을 확인합니다."), { selector: ":is(.ai-content-review,.ai-generation-output-list)", title: "생성 상태와 검토", description: "생성 중에는 output별 진행 상태를, 완료 후에는 기획 근거부터 게시까지 순서대로 확인합니다." }]
   },
   {
     id: "publish-queue",
@@ -71,6 +94,18 @@ export const helpGuides: HelpGuide[] = [
     summary: "생성된 채널 콘텐츠와 게시 큐 기록을 상태별로 확인하고 승인부터 게시 결과까지 관리합니다.",
     sections: [{ title: "상태별 작업", items: ["검토 필요에서 생성된 이미지·영상·본문을 열어보고 승인, 재생성 또는 거절합니다.", "승인된 결과는 게시 큐에 저장되고 예약·게시 중 상태에서 자동 발행 진행 상황과 게시 일시를 확인합니다.", "완료 결과는 실제 산출물과 외부 게시 정보를 확인하거나 다운로드하고, 실패 건은 오류 원인을 확인합니다."] }],
     tour: [pageHeaderStep("채널별 생성 결과와 게시 작업을 하나의 목록으로 관리합니다."), { selector: ".queue-filters", title: "게시 상태 선택", description: "준비 중, 검토 필요, 게시 예정, 완료, 문제 중 확인할 상태를 선택합니다." }, { selector: ".publish-management-grid", title: "콘텐츠와 게시 정보", description: "카드별로 결과물, 채널, 게시 일시, 현재 상태와 가능한 작업을 확인합니다." }]
+  },
+  {
+    id: "references",
+    path: "/references",
+    title: "레퍼런스",
+    summary: "저장한 실제 콘텐츠, 공개 해시태그 트렌드, 외부 URL과 공개 브랜드 출처를 한곳에서 확인합니다.",
+    sections: [{ title: "자료를 저장하고 확인하기", items: [
+      "카드에는 저장된 출처, 저장 시각, 형식, 용도와 실제 snapshot 미리보기만 먼저 표시하고 상세 정보는 항목을 열 때 확인합니다.",
+      "외부 URL은 정보성, 마케팅성 또는 둘 다 용도를 지정하며 활성 항목 기준 최대 10개까지 등록합니다.",
+      "패턴 분석은 저장된 분석이 있을 때만 관찰 사실과 AI 해석을 구분해 표시하고, 아직 생성되지 않은 분석은 사용할 수 없음으로 표시합니다.",
+    ] }],
+    tour: [pageHeaderStep("실제 저장 자료와 공개 Instagram 해시태그 탐색을 보기별로 전환합니다."), { selector: ".reference-view-nav", title: "레퍼런스 보기", description: "저장한 브랜드, 콘텐츠, 트렌드, 외부 URL, 최근 사용과 즐겨찾기 보기를 선택합니다." }, { selector: ".reference-card-grid", title: "저장된 snapshot", description: "실제 저장된 미리보기와 metadata를 확인하고 상세에서 원본 링크와 분석 가능 여부를 확인합니다." }]
   },
   {
     id: "sources",
@@ -106,6 +141,14 @@ export const helpGuides: HelpGuide[] = [
     summary: "Instagram DM 대화 기록과 자동답변 상태를 확인하고, 답변 근거가 되는 브랜드별 자사 정보를 관리합니다.",
     sections: [{ title: "대화와 답변 지식 관리", items: ["대화 목록은 연결된 Instagram 계정의 수신·발신 기록, 미확인 수와 자동응답 상태를 표시합니다.", "사람의 확인이 필요한 대화는 자동응답을 중지하거나 수동 답변을 보내고, 처리 후 자동응답을 다시 시작합니다.", "FAQ·제품·이벤트 자료를 자사 정보로 추가하면 검증 후 브랜드 Wiki 재생성에 반영되어 이후 자동답변의 검색 근거가 됩니다."] }],
     tour: [pageHeaderStep("연결된 Instagram 계정의 DM과 브랜드별 답변 근거를 함께 관리합니다."), { selector: ".dm-conversation-list", title: "고객별 대화", description: "최근 메시지, 미확인 여부와 자동응답 중지 상태를 확인하고 대화를 선택합니다." }, { selector: ".dm-thread", title: "답변 이력과 수동 답변", description: "수신·자동 발신 기록을 확인하고 필요한 경우 담당자가 직접 답변합니다." }, { selector: ".dm-knowledge-panel", title: "자동답변용 자사 정보", description: "FAQ·제품 자료를 등록하고 Wiki 생성 상태와 반영된 자료 수를 확인합니다." }]
+  },
+  {
+    id: "brand-center",
+    path: "/brand-center",
+    title: "브랜드 센터",
+    summary: "원본 자료에서 AI 분석, 사용자 검토와 실행 규칙까지 브랜드 운영의 공통 기준을 관리합니다.",
+    sections: [{ title: "승인 데이터 관리", items: ["AI 재분석은 새 초안만 만들고 현재 승인된 Brand Core를 유지합니다.", "AI 제안값과 근거를 확인하고 수정한 뒤 승인하면 콘텐츠 생성과 고객 응답의 공통 기준으로 사용됩니다.", "제품·서비스, Wiki, 모델·아바타 보관함은 후속 단계에서 활성화되며 현재는 준비 상태를 명시합니다."] }],
+    tour: [pageHeaderStep("브랜드 준비도와 마지막 승인 시각을 확인하고 새 분석 또는 변경 검토를 시작합니다."), { selector: ".brand-readiness-journey", title: "브랜드 준비 과정", description: "원본 자료, AI 분석, 사용자 검토, 실행 규칙의 완료 상태를 확인합니다." }, { selector: ".brand-center-subnav", title: "브랜드 이해 영역", description: "원본 자료부터 승인 이력까지 필요한 영역을 선택합니다." }]
   },
   {
     id: "brand-settings",
@@ -150,5 +193,44 @@ function matchesGuidePath(pattern: string, pathname: string) {
 }
 
 export function guideForPath(pathname: string) {
-  return helpGuides.find((guide) => matchesGuidePath(guide.path, pathname)) ?? null;
+  const [requestedPathname, requestedSearch = ""] = pathname.split("?", 2);
+  const requestedQuery = new URLSearchParams(requestedSearch);
+  const sourceRoutesToReferences = ["tab", "section", "view", "sourceType", "type"]
+    .map((key) => requestedQuery.get(key)?.toLowerCase())
+    .some((value) => value === "reference" || value === "references");
+  const legacyPathTargets: Record<string, { pathname: string; search?: string }> = {
+    "/content": { pathname: "/publish-queue", search: "status=needs_review" },
+    "/archive": { pathname: "/references", search: "view=saved-trends" },
+    "/instagram-trends": { pathname: "/references", search: "view=trends" },
+    "/brand-settings": { pathname: "/brand-center" },
+    "/sources": sourceRoutesToReferences
+      ? { pathname: "/references", search: "view=external-urls" }
+      : { pathname: "/brand-center" },
+  };
+  const legacyTarget = legacyPathTargets[requestedPathname];
+  const rawPathname = legacyTarget?.pathname ?? requestedPathname;
+  const rawSearch = legacyTarget?.search ?? requestedSearch;
+  const guide = helpGuides.find((item) => matchesGuidePath(item.path, rawPathname)) ?? null;
+  if (guide?.id !== "references") return guide;
+  const view = new URLSearchParams(rawSearch).get("view") || "all";
+  const labels: Record<string, string> = {
+    all: "전체",
+    "saved-brands": "저장한 브랜드",
+    "saved-content": "저장한 콘텐츠",
+    trends: "트렌드 탐색",
+    "saved-trends": "저장한 트렌드",
+    "external-urls": "외부 URL",
+    recent: "최근 사용",
+    favorites: "즐겨찾기",
+    add: "직접 추가",
+  };
+  const key = labels[view] ? view : "all";
+  return {
+    ...guide,
+    id: `references-${key}`,
+    title: `레퍼런스 · ${labels[key]}`,
+    summary: key === "trends"
+      ? "Meta 연결을 사용해 공개 해시태그 결과를 확인하고 실제 콘텐츠만 레퍼런스로 저장합니다."
+      : guide.summary,
+  };
 }

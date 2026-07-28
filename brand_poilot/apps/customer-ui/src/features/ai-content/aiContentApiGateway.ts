@@ -1,6 +1,6 @@
 import { put as putBlob } from "@vercel/blob/client";
-import { apiClient, mapApiChannelConnection, type ApiChannel } from "../../lib/apiClient";
-import type { PublishArtifact, PublishArtifactAsset } from "../../types";
+import { ApiRequestError, apiClient, mapApiChannelConnection, type ApiChannel } from "../../lib/apiClient";
+import type { DeliveryFormat, PublishArtifact, PublishArtifactAsset } from "../../types";
 import type {
   AiContentDraft,
   AiContentGateway,
@@ -17,17 +17,105 @@ import type {
   SubjectAppeal,
   SubjectTarget,
   SubjectType,
+  ContentProposalBatch,
+  ContentProposalRecord,
+  AiContentDraftReference,
+  ContentOrchestration,
 } from "./types";
 import { DEFAULT_BRAND_COLOR } from "./useAiContentDraft";
+
+export interface ContentGenerationFieldError {
+  phase: "setup" | "proposal_selection" | "generating";
+  field: "contentFamily" | "subject" | "channelTargets" | "outputFormat" | "references" | "avatar" | "outputCount";
+  errorCode: string;
+}
+
+export function contentGenerationFieldError(error: unknown): ContentGenerationFieldError | null {
+  if (!(error instanceof ApiRequestError) || !error.errorCode) return null;
+  const errorCode = error.errorCode;
+  const path = error.fieldPath ?? (
+    typeof error.details?.fieldPath === "string" ? error.details.fieldPath : null
+  );
+  const phase = error.details?.phase;
+  const mappedPhase = phase === "setup" || phase === "proposal_selection" || phase === "generating"
+    ? phase
+    : null;
+  if (path) {
+    if (path.includes("reference")) {
+      return { phase: mappedPhase ?? "proposal_selection", field: "references", errorCode };
+    }
+    if (path.includes("avatar")) {
+      return { phase: mappedPhase ?? "proposal_selection", field: "avatar", errorCode };
+    }
+    if (path.includes("channel")) {
+      return { phase: mappedPhase ?? "setup", field: "channelTargets", errorCode };
+    }
+    if (path.includes("outputCount") || path.includes("output_count")) {
+      return { phase: mappedPhase ?? "generating", field: "outputCount", errorCode };
+    }
+    if (path.includes("outputFormat") || path.includes("output_format") || path.includes("type")) {
+      return { phase: mappedPhase ?? "setup", field: "outputFormat", errorCode };
+    }
+    if (path.includes("subject")) {
+      return { phase: mappedPhase ?? "setup", field: "subject", errorCode };
+    }
+    if (path.includes("contentFamily") || path.includes("content_family")) {
+      return { phase: mappedPhase ?? "setup", field: "contentFamily", errorCode };
+    }
+  }
+  if (errorCode.includes("reference")) {
+    return { phase: "proposal_selection", field: "references", errorCode };
+  }
+  if (errorCode.includes("avatar")) {
+    return { phase: "proposal_selection", field: "avatar", errorCode };
+  }
+  if (errorCode.includes("channel")) {
+    return { phase: "setup", field: "channelTargets", errorCode };
+  }
+  if (errorCode.includes("output_count")) {
+    return { phase: "generating", field: "outputCount", errorCode };
+  }
+  if (errorCode.includes("output_format") || errorCode.includes("type_mapping")) {
+    return { phase: "setup", field: "outputFormat", errorCode };
+  }
+  if (errorCode.includes("subject")) {
+    return { phase: "setup", field: "subject", errorCode };
+  }
+  if (errorCode.includes("family")) {
+    return { phase: "setup", field: "contentFamily", errorCode };
+  }
+  return null;
+}
 
 interface ApiOutput {
   id: string; generationId: string; outputIndex: number; title: string | null; status: AiGenerationOutput["status"];
   content: Record<string, unknown>; manifest: Record<string, unknown>; manifestUrl: string | null;
   failureCode: string | null; failureMessage: string | null; downloadedAt: string | null;
+  revisionCapabilities?: AiGenerationOutput["revisionCapabilities"];
+  legacyReadOnly?: boolean;
+}
+
+function text(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+function outputCopy(content: Record<string, unknown>) {
+  return {
+    hook: text(content.hook ?? content.headline ?? content.title),
+    keyMessage: text(content.keyMessage ?? content.concept ?? content.summary),
+    body: text(content.body),
+    cta: text(content.cta),
+    caption: text(content.caption),
+    hashtags: Array.isArray(content.hashtags)
+      ? content.hashtags.filter((tag): tag is string => typeof tag === "string")
+      : [],
+  };
 }
 interface ApiGeneration {
   id: string; brandId: string; type: AiContentType; title: string; status: AiContentGeneration["status"];
   currentStage: string | null; draft: Partial<AiContentDraft> | null; analysis: Record<string, unknown>; outputs?: ApiOutput[];
+  attachmentsLockedAt?: string | null; terminalAt?: string | null; retryableUntil?: string | null;
+  evidenceSnapshot?: AiContentGeneration["evidenceSnapshot"];
   createdAt: string; updatedAt: string;
 }
 
@@ -42,11 +130,27 @@ interface ApiSubjectAnalysis {
   sourceGaps?: string[];
 }
 
+function confirmedServerAttachments(value: GenerationAttachment[] | null | undefined) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((attachment) => typeof attachment.storageUrl === "string" && typeof attachment.storagePath === "string")
+    .map((attachment) => ({
+      id: attachment.id,
+      role: attachment.role,
+      fileName: attachment.fileName,
+      mimeType: attachment.mimeType,
+      size: attachment.size,
+      storageUrl: attachment.storageUrl,
+      storagePath: attachment.storagePath,
+      uploadStatus: "confirmed" as const,
+    }));
+}
+
 function normalizeBrief(value: Partial<GenerationBrief> | null | undefined, brandColor = DEFAULT_BRAND_COLOR): GenerationBrief {
   return {
     purpose: value?.purpose ?? ("" as GenerationBrief["purpose"]), emphasis: value?.emphasis ?? "", cta: value?.cta ?? "",
     additionalInstruction: value?.additionalInstruction ?? "", selectedColor: value?.selectedColor ?? brandColor,
-    attachments: Array.isArray(value?.attachments) ? value.attachments : [], aspectRatio: value?.aspectRatio ?? "1:1",
+    attachments: confirmedServerAttachments(value?.attachments), aspectRatio: value?.aspectRatio ?? "1:1",
     outputCount: value?.outputCount ?? 1, outputDirections: Array.isArray(value?.outputDirections) ? value.outputDirections : [""],
   };
 }
@@ -75,11 +179,13 @@ export function normalizeAiContentDraft(type: AiContentType, value: ApiGeneratio
     ? Object.fromEntries(Object.entries(source.appealOverridesByTarget).filter((entry): entry is [string, SubjectAppeal[]] => Array.isArray(entry[1])).map(([targetId, appeals]) => [targetId, appeals.map((appeal) => ({ ...appeal, sources: [...appeal.sources] }))]))
     : {};
   return {
-    type: source.type ?? type, subjectType,
+    type: source.type ?? type,
+    orchestration: source.orchestration as ContentOrchestration | undefined,
+    subjectType,
     subjectInput,
     subjectAnalysisId: source.subjectAnalysisId ?? null,
     subjectAnalysisVersion: typeof source.subjectAnalysisVersion === "number" ? source.subjectAnalysisVersion : null,
-    subjectAttachments: Array.isArray(source.subjectAttachments) ? [...source.subjectAttachments] : [],
+    subjectAttachments: confirmedServerAttachments(source.subjectAttachments),
     selectedSubjectImageIds: [...selectedSubjectImageIds], selectedTarget, selectedAppeal, appealOverridesByTarget,
     referenceIds: Array.isArray(source.referenceIds) ? [...source.referenceIds] : [], brief: normalizeBrief(source.brief, brandColor),
     analysisSource: source.analysisSource ?? (subjectType === "product" ? "product_url" : subjectType === "service" ? "owned" : null),
@@ -90,14 +196,35 @@ export function normalizeAiContentDraft(type: AiContentType, value: ApiGeneratio
   };
 }
 
+function serializableAttachment(attachment: GenerationAttachment) {
+  const confirmed = attachment.uploadStatus === "confirmed"
+    || (attachment.uploadStatus === undefined && Boolean(attachment.storagePath && attachment.storageUrl));
+  if (!confirmed || !attachment.storagePath || !attachment.storageUrl) return null;
+  return {
+    id: attachment.id,
+    role: attachment.role,
+    fileName: attachment.fileName,
+    mimeType: attachment.mimeType,
+    size: attachment.size,
+    storageUrl: attachment.storageUrl,
+    storagePath: attachment.storagePath,
+  };
+}
+
+function serializableAttachments(attachments: GenerationAttachment[]) {
+  return attachments.map(serializableAttachment).filter((attachment) => attachment !== null);
+}
+
 function serializeDraft(draft: AiContentDraft): Record<string, unknown> {
   return {
-    type: draft.type, subjectType: draft.subjectType, subjectInput: { ...draft.subjectInput, sourceUrl: draft.subjectInput.sourceUrl || draft.productUrl },
+    type: draft.type,
+    ...(draft.orchestration ? { orchestration: draft.orchestration } : {}),
+    subjectType: draft.subjectType, subjectInput: { ...draft.subjectInput, sourceUrl: draft.subjectInput.sourceUrl || draft.productUrl },
     subjectAnalysisId: draft.subjectAnalysisId, subjectAnalysisVersion: draft.subjectAnalysisVersion,
-    subjectAttachments: (draft.subjectAttachments ?? []).map(({ file: _file, ...attachment }) => attachment),
+    subjectAttachments: serializableAttachments(draft.subjectAttachments ?? []),
     selectedSubjectImageIds: [...draft.selectedSubjectImageIds], selectedTarget: draft.selectedTarget, selectedAppeal: draft.selectedAppeal,
     appealOverridesByTarget: Object.fromEntries(Object.entries(draft.appealOverridesByTarget).map(([targetId, appeals]) => [targetId, appeals.map((appeal) => ({ ...appeal, sources: [...appeal.sources] }))])),
-    referenceIds: [...draft.referenceIds], brief: draft.brief ? { ...draft.brief, attachments: [...draft.brief.attachments], outputDirections: [...draft.brief.outputDirections] } : null,
+    referenceIds: [...draft.referenceIds], brief: draft.brief ? { ...draft.brief, attachments: serializableAttachments(draft.brief.attachments), outputDirections: [...draft.brief.outputDirections] } : null,
   };
 }
 
@@ -108,6 +235,9 @@ function outputArtifact(type: AiContentType, output: ApiOutput): PublishArtifact
     : [];
   const content = output.content ?? {};
   const html = type === "blog" && typeof content.html === "string" ? content.html : null;
+  const deliveryFormat = typeof output.manifest.deliveryFormat === "string"
+    ? output.manifest.deliveryFormat as DeliveryFormat
+    : null;
   const text = type === "card_news"
     ? [content.caption, ...(Array.isArray(content.hashtags) ? content.hashtags : [])].filter(Boolean).join("\n\n")
     : type === "marketing"
@@ -116,7 +246,7 @@ function outputArtifact(type: AiContentType, output: ApiOutput): PublishArtifact
   return {
     queueId: output.id,
     kind: type === "blog" ? "html" : type === "card_news" ? "image_gallery" : "image",
-    deliveryFormat: null,
+    deliveryFormat,
     assets: assets.map((asset) => ({ ...asset, width: asset.width ?? null, height: asset.height ?? null })),
     posterUrl: assets.find((asset) => asset.mimeType === "image/png")?.url ?? null,
     html,
@@ -129,9 +259,32 @@ function mapGeneration(value: ApiGeneration): AiContentGeneration {
   return {
     id: value.id, brandId: value.brandId, title: value.title, type: value.type, status: value.status,
     currentStep: stepByStatus[value.status], draft: normalizeAiContentDraft(value.type, value.draft), analysis: value.analysis,
-    outputs: (value.outputs ?? []).map((output) => ({ id: output.id, generationId: output.generationId, title: output.title ?? `결과 ${output.outputIndex}`, status: output.status, artifact: outputArtifact(value.type, output), failureReason: output.failureMessage ?? output.failureCode, downloadedAt: output.downloadedAt })),
+    outputs: (value.outputs ?? []).map((output) => ({
+      id: output.id,
+      generationId: output.generationId,
+      title: output.title ?? `결과 ${output.outputIndex}`,
+      status: output.status,
+      artifact: outputArtifact(value.type, output),
+      copy: outputCopy(output.content),
+      failureReason: output.failureMessage ?? output.failureCode,
+      downloadedAt: output.downloadedAt,
+      revisionCapabilities: output.revisionCapabilities ?? [],
+      legacyReadOnly: output.legacyReadOnly === true
+        || output.manifest.deliveryFormat === "instagram_reel"
+        || output.manifest.outputFormat === "reel",
+    })),
+    evidenceSnapshot: value.evidenceSnapshot ?? null,
+    attachmentsLockedAt: value.attachmentsLockedAt ?? null,
+    terminalAt: value.terminalAt ?? null,
+    retryableUntil: value.retryableUntil ?? null,
     createdAt: value.createdAt, updatedAt: value.updatedAt,
   };
+}
+
+function legacyTypeForOrchestration(orchestration: ContentOrchestration): AiContentType {
+  if (orchestration.outputFormat === "card_news") return "card_news";
+  if (orchestration.outputFormat === "blog") return "blog";
+  return "marketing";
 }
 
 function mapSubjectAnalysis(value: ApiSubjectAnalysis): SubjectAnalysis {
@@ -170,6 +323,27 @@ async function sha256(file: File) {
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
+interface LegacyAttachmentToken {
+  pathname: string;
+  clientToken: string;
+}
+
+interface SessionAttachmentToken extends LegacyAttachmentToken {
+  sessionId: string;
+  nonce: string;
+}
+
+function isSessionAttachmentToken(token: LegacyAttachmentToken | SessionAttachmentToken): token is SessionAttachmentToken {
+  return typeof (token as Partial<SessionAttachmentToken>).sessionId === "string"
+    && typeof (token as Partial<SessionAttachmentToken>).nonce === "string";
+}
+
+function shouldRetryConfirm(error: unknown) {
+  if (!(error instanceof ApiRequestError)) return true;
+  if (error.status >= 400 && error.status < 500) return false;
+  return error.status >= 500 || error.deliveryStatus === "unknown";
+}
+
 export function createAiContentApiGateway(client = apiClient(), blobPut: typeof putBlob = putBlob): AiContentGateway {
   return {
     async getUsage(brandId) {
@@ -182,31 +356,83 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
     },
     async listGenerations(brandId) { return (await client.requestJson<ApiGeneration[]>(`/brands/${brandId}/ai-content/generations`, { method: "GET" })).map(mapGeneration); },
     async getGeneration(brandId, generationId) { return mapGeneration(await client.requestJson<ApiGeneration>(`/brands/${brandId}/ai-content/generations/${generationId}`, { method: "GET" })); },
-    async createAnalysis(brandId, input) { return mapGeneration(await client.requestJson<ApiGeneration>(`/brands/${brandId}/ai-content/generations`, { method: "POST", body: JSON.stringify({ ...input, draft: serializeDraft(input.draft) }) })); },
+    async createAnalysis(brandId, input) {
+      const orchestration = input.orchestration ?? input.draft.orchestration ?? undefined;
+      return mapGeneration(await client.requestJson<ApiGeneration>(
+        `/brands/${brandId}/ai-content/generations`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            ...input,
+            type: orchestration ? legacyTypeForOrchestration(orchestration) : input.type,
+            draft: serializeDraft(input.draft),
+            ...(orchestration ? { orchestration } : {}),
+          }),
+        },
+      ));
+    },
     async updateGeneration(brandId, generationId, input) { return mapGeneration(await client.requestJson<ApiGeneration>(`/brands/${brandId}/ai-content/generations/${generationId}`, { method: "PATCH", body: JSON.stringify({ ...input, draft: serializeDraft(input.draft) }) })); },
     async startGeneration(brandId, generationId, input) { return mapGeneration(await client.requestJson<ApiGeneration>(`/brands/${brandId}/ai-content/generations/${generationId}/generate`, { method: "POST", body: JSON.stringify(input) })); },
     async uploadAttachment(brandId, generationId, attachment, onProgress) {
       if (!attachment.file) throw new Error("ai_content_attachment_file_required");
       const checksum = await sha256(attachment.file);
       const metadata = { role: attachment.role, fileName: attachment.fileName, mimeType: attachment.mimeType, sizeBytes: attachment.size, checksum };
-      const token = await client.requestJson<{ pathname: string; clientToken: string }>(`/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`, { method: "POST", body: JSON.stringify(metadata) });
-      const stored = await blobPut(token.pathname, attachment.file, {
-        access: "public",
-        token: token.clientToken,
-        contentType: attachment.mimeType,
-        onUploadProgress: onProgress ? ({ percentage }) => onProgress(percentage) : undefined,
-      });
-      const confirmed = await client.requestJson<{ id: string; storageUrl?: string; storagePath?: string }>(`/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`, { method: "POST", body: JSON.stringify({ ...metadata, storageUrl: stored.url, storagePath: token.pathname }) });
-      return { ...attachment, id: confirmed.id, file: undefined, storageUrl: confirmed.storageUrl ?? stored.url, storagePath: confirmed.storagePath ?? token.pathname };
+      const token = await client.requestJson<LegacyAttachmentToken | SessionAttachmentToken>(`/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`, { method: "POST", body: JSON.stringify(metadata) });
+      let stored: Awaited<ReturnType<typeof blobPut>>;
+      try {
+        stored = await blobPut(token.pathname, attachment.file, {
+          access: "public",
+          token: token.clientToken,
+          contentType: attachment.mimeType,
+          onUploadProgress: onProgress ? ({ percentage }) => onProgress(percentage) : undefined,
+        });
+      } catch (error) {
+        if (isSessionAttachmentToken(token)) {
+          await client.requestJson(
+            `/brands/${brandId}/ai-content/generations/${generationId}/attachments/cancel`,
+            { method: "POST", body: JSON.stringify({ sessionId: token.sessionId, nonce: token.nonce }) },
+          ).catch(() => undefined);
+        }
+        throw error;
+      }
+      const confirmBody = isSessionAttachmentToken(token)
+        ? JSON.stringify({ sessionId: token.sessionId, nonce: token.nonce })
+        : JSON.stringify({ ...metadata, storageUrl: stored.url, storagePath: token.pathname });
+      const confirm = () => client.requestJson<{ id: string; storageUrl?: string; storagePath?: string }>(
+        `/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`,
+        { method: "POST", body: confirmBody },
+      );
+      let confirmed;
+      try {
+        confirmed = await confirm();
+      } catch (error) {
+        if (!isSessionAttachmentToken(token) || !shouldRetryConfirm(error)) throw error;
+        confirmed = await confirm();
+      }
+      return { ...attachment, id: confirmed.id, file: undefined, storageUrl: confirmed.storageUrl ?? stored.url, storagePath: confirmed.storagePath ?? token.pathname, uploadStatus: "confirmed" };
+    },
+    async removeAttachment(brandId, generationId, attachmentId) {
+      await client.requestJson(
+        `/brands/${brandId}/ai-content/generations/${generationId}/attachments/${attachmentId}`,
+        { method: "DELETE" },
+      );
     },
     listAudiencePresets(brandId) { return client.requestJson(`/brands/${brandId}/ai-content/audiences`, { method: "GET" }); },
     saveAudiencePreset(brandId, input) { return client.requestJson(`/brands/${brandId}/ai-content/audiences`, { method: "POST", body: JSON.stringify(input) }); },
     listAppealPresets(brandId) { return client.requestJson(`/brands/${brandId}/ai-content/appeals`, { method: "GET" }); },
     saveAppealPreset(brandId, input) { return client.requestJson(`/brands/${brandId}/ai-content/appeals`, { method: "POST", body: JSON.stringify(input) }); },
-    async listReferences(brandId, type) {
+    async listReferences(brandId, query) {
+      const type = typeof query === "string" ? query : undefined;
       const types = type ? [type] : ["card_news", "blog", "marketing"] as AiContentType[];
+      const filters = typeof query === "object" && query
+        ? `&${new URLSearchParams({
+          strategies: query.strategies.join(","),
+          formats: query.formats.join(","),
+          tags: query.tags.join(","),
+        }).toString()}`
+        : "";
       const rows = (await Promise.all(types.map(async (format) => {
-        const references = await client.requestJson<Array<{ id: string; source: string; title: string; url: string | null; previewUrl: string | null; metrics: Record<string, unknown> }>>(`/brands/${brandId}/ai-content/references?type=${format}`, { method: "GET" });
+        const references = await client.requestJson<Array<{ id: string; source: string; title: string; url: string | null; previewUrl: string | null; metrics: Record<string, unknown> }>>(`/brands/${brandId}/ai-content/references?type=${format}${filters}`, { method: "GET" });
         return references.map((reference) => ({ ...reference, format }));
       }))).flat();
       const unique = new Map<string, AiContentReference>();
@@ -219,6 +445,24 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
     async retryOutput(brandId, outputId, reason) {
       if (!reason.trim()) throw new Error("retry_reason_required");
       const generation = mapGeneration(await client.requestJson<ApiGeneration>(`/brands/${brandId}/ai-content/outputs/${outputId}/retry`, { method: "POST", body: JSON.stringify({ reason }) }));
+      const output = generation.outputs.find((item) => item.id === outputId);
+      if (!output) throw new Error("ai_content_output_not_found");
+      return output;
+    },
+    async reviseOutput(brandId, outputId, input) {
+      const generation = mapGeneration(await client.requestJson<ApiGeneration>(
+        `/brands/${brandId}/ai-content/outputs/${outputId}/revisions`,
+        { method: "POST", body: JSON.stringify(input) },
+      ));
+      const output = generation.outputs.find((item) => item.id === outputId);
+      if (!output) throw new Error("ai_content_output_not_found");
+      return output;
+    },
+    async saveOutputCopy(brandId, outputId, input) {
+      const generation = mapGeneration(await client.requestJson<ApiGeneration>(
+        `/brands/${brandId}/ai-content/outputs/${outputId}/copy`,
+        { method: "PUT", body: JSON.stringify(input) },
+      ));
       const output = generation.outputs.find((item) => item.id === outputId);
       if (!output) throw new Error("ai_content_output_not_found");
       return output;
@@ -263,6 +507,43 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
     },
     async selectSubjectImage(brandId, analysisId, imageId) {
       return mapSubjectAnalysis(await client.requestJson<ApiSubjectAnalysis>(`/brands/${brandId}/ai-content/subject-analyses/${analysisId}/selection`, { method: "PATCH", body: JSON.stringify({ imageId }) }));
+    },
+    createProposalBatch(brandId, input) {
+      return client.requestJson(`/brands/${brandId}/ai-content/proposal-batches`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+    },
+    getProposalBatch(brandId, batchId, signal) {
+      return client.requestJson<ContentProposalBatch>(
+        `/brands/${brandId}/ai-content/proposal-batches/${batchId}`,
+        { method: "GET", ...(signal ? { signal } : {}) },
+      );
+    },
+    listSuggestedProposals(brandId, signal) {
+      return client.requestJson<ContentProposalRecord[]>(
+        `/brands/${brandId}/ai-content/proposals?status=suggested`,
+        { method: "GET", ...(signal ? { signal } : {}) },
+      );
+    },
+    async selectProposal(brandId, proposalId, idempotencyKey) {
+      return mapGeneration(await client.requestJson<ApiGeneration>(
+        `/brands/${brandId}/ai-content/proposals/${proposalId}/select`,
+        { method: "POST", body: JSON.stringify({ idempotencyKey }) },
+      ));
+    },
+    dismissProposal(brandId, proposalId) {
+      return client.requestJson<ContentProposalRecord>(
+        `/brands/${brandId}/ai-content/proposals/${proposalId}/dismiss`,
+        { method: "POST" },
+      );
+    },
+    listDraftReferences(brandId, assetType, assetId, signal) {
+      const query = new URLSearchParams({ assetType, assetId }).toString();
+      return client.requestJson<AiContentDraftReference[]>(
+        `/brands/${brandId}/ai-content/draft-references?${query}`,
+        { method: "GET", ...(signal ? { signal } : {}) },
+      );
     },
   };
 }

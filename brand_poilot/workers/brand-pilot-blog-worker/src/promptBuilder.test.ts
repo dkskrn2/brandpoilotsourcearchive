@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildPrompt } from "./promptBuilder.js";
+import { parseContentGenerationInput } from "./contracts.js";
 
 const job = {
   id: "j", generationId: "g", outputId: "o", workspaceId: "w", brandId: "b", jobType: "generate" as const,
@@ -14,6 +15,26 @@ const job = {
 };
 
 describe("blog prompt", () => {
+  it("carries hook-only revision constraints into the prompt", () => {
+    const prompt = buildPrompt({
+      ...job,
+      payload: {
+        ...job.payload,
+        revision: {
+          contractVersion: "ai-content-revision.v1",
+          action: "regenerate_hook",
+          idempotencyKey: "revision-hook-1",
+          cardIndex: null,
+          previousManifest: { type: "blog", assets: [] },
+          previousContent: { title: "기존 제목", summary: "기존 요약" },
+        },
+      },
+    });
+
+    expect(prompt).toContain("부분 재생성 계약");
+    expect(prompt).toContain("첫 훅만");
+  });
+
   it("requires v2 grounded semantic SEO writing", () => {
     const prompt = buildPrompt(job);
     expect(prompt).toContain("content-generation-input.v2");
@@ -35,5 +56,53 @@ describe("blog prompt", () => {
   it("rejects an appeal that does not belong to the selected target", () => {
     const input = job.payload.contentGenerationInput;
     expect(() => buildPrompt({ ...job, payload: { contentGenerationInput: { ...input, message: { ...input.message, appeal: { id: "appeal-1", targetId: "other" } } } } })).toThrow("content_generation_appeal_target_mismatch");
+  });
+
+  it("rejects attachment snapshots with missing structural fields", () => {
+    const input = job.payload.contentGenerationInput;
+    expect(() => parseContentGenerationInput({
+      ...input,
+      attachments: [{ id: "attachment-1" }],
+    })).toThrow("content_generation_attachment_invalid");
+  });
+
+  it("uses informational orchestration priority and keeps avatar out of factual direction", () => {
+    const input = job.payload.contentGenerationInput;
+    const prompt = buildPrompt({
+      ...job,
+      payload: {
+        contentGenerationInput: {
+          ...input,
+          orchestration: {
+            contractVersion: "content-orchestration.v1",
+            contentFamily: "informational",
+            subject: { mode: "brand_topic", topic: "FAQ", wikiItemIds: ["wiki-1"] },
+            target: { id: "target-1", snapshot: { name: "초보 고객" } },
+            strategy: "faq",
+            outputFormat: "blog",
+            channelTargets: ["blog_export"],
+            brief: { goal: "질문 해결" },
+            references: [{ referenceItemId: "reference-1", roles: ["copy_pattern"] }],
+            avatar: {
+              mode: "one_time",
+              id: "avatar-1",
+              snapshot: { assetUrl: "https://cdn.example/avatar.png" },
+            },
+          },
+          creativeDirection: {
+            ...input.creativeDirection,
+            contentFamily: "informational",
+            outputFormat: "blog",
+          },
+        },
+      },
+    });
+    expect(prompt).toContain("승인 Brand Core와 실행 규칙");
+    expect(prompt).toContain("사용자가 확정한 target, strategy, brief");
+    expect(prompt).toContain("교육·문제 해결·가이드 톤");
+    expect(prompt).toContain("원문 문장을 그대로 복제하지 마세요");
+    const promptData = JSON.parse(prompt.split("작업 데이터(JSON):\n")[1]!);
+    expect(promptData.visualDirection.avatar.snapshot.assetUrl).toBe("https://cdn.example/avatar.png");
+    expect(promptData.factualDirection).not.toHaveProperty("avatar");
   });
 });

@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { head } from "@vercel/blob";
 import { createClient } from "./client.js";
 import { createStorage } from "./storage.js";
 import { createCommandRunner, runOnce } from "./worker.js";
@@ -13,7 +14,11 @@ async function main() {
   const planner = createCommandRunner(process.env.CARD_NEWS_CODEX_PLAN_COMMAND ?? "node scripts/run-codex-card-news-plan.mjs --job \"{{jobFile}}\" --output \"{{outputDir}}\"", Math.max(1_000, Number(process.env.CARD_NEWS_CODEX_PLAN_TIMEOUT_MS ?? 300_000)));
   const runner = createCommandRunner(required("CARD_NEWS_CODEX_COMMAND"), Math.max(1_000, Number(process.env.CARD_NEWS_CODEX_TIMEOUT_MS ?? 1_200_000)));
   const storage = createStorage(required("BLOB_READ_WRITE_TOKEN"));
-  const execute = () => runOnce({ workerId, client, planner, runner, storage });
+  const blobToken = required("BLOB_READ_WRITE_TOKEN");
+  const execute = () => runOnce({
+    workerId, client, planner, runner, storage,
+    head: (storagePath, options) => head(storagePath, { token: blobToken, abortSignal: options.abortSignal }),
+  });
   if (mode === "watch") {
     const pollMs = Math.max(1_000, Number(process.env.CARD_NEWS_WORKER_POLL_MS ?? 10_000));
     for (;;) { process.stdout.write(`${JSON.stringify(await execute().catch((error) => ({ status: "error", error: error instanceof Error ? error.message : String(error) })))}\n`); await wait(pollMs); }

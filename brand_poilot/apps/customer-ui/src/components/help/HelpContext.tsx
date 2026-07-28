@@ -18,14 +18,17 @@ export function useHelp() {
 
 export function HelpProvider({ children }: { children: React.ReactNode }) {
   const location = useLocation();
-  const currentGuide = useMemo(() => guideForPath(location.pathname), [location.pathname]);
+  const currentGuide = useMemo(
+    () => guideForPath(`${location.pathname}${location.search}`),
+    [location.pathname, location.search],
+  );
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [tour, setTour] = useState<{ steps: HelpTourStep[]; index: number } | null>(null);
 
   useEffect(() => {
     setDrawerOpen(false);
     setTour(null);
-  }, [location.pathname]);
+  }, [location.pathname, location.search]);
 
   function startTour() {
     if (!currentGuide) return;

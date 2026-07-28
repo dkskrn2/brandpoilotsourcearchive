@@ -36,15 +36,15 @@ describe("BrandLogo", () => {
 });
 
 describe("SidebarBrandProfile", () => {
-  it("links the compact profile directly to brand settings", () => {
+  it("links the compact profile directly to the brand center", () => {
     render(
       <MemoryRouter>
         <SidebarBrandProfile brandName="그로스라인" logoUrl="https://cdn.example.com/logo.png" />
       </MemoryRouter>
     );
-    const link = screen.getByRole("link", { name: "그로스라인 브랜드 설정 열기" });
-    expect(link).toHaveAttribute("href", "/brand-settings");
-    expect(screen.getByText("브랜드 설정")).toBeVisible();
+    const link = screen.getByRole("link", { name: "그로스라인 브랜드 센터 열기" });
+    expect(link).toHaveAttribute("href", "/brand-center");
+    expect(screen.getByText("브랜드 센터")).toBeVisible();
   });
 });
 

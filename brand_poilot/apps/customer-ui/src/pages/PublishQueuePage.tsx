@@ -82,7 +82,7 @@ interface PublishManagementRow {
   contentId: string;
   title: string;
   generatedAt: string;
-  status: "publish_queued" | "scheduled" | "publishing" | "completed" | "failed";
+  status: "publish_queued" | "scheduled" | "publishing" | "completed" | "result_unknown" | "failed";
   result: PublishResult;
 }
 
@@ -107,6 +107,14 @@ interface TopicGroupManagementRow {
 }
 
 type ManagementRow = ReviewManagementRow | PublishManagementRow | WaitingManagementRow | TopicGroupManagementRow;
+
+function rowContainsQueueId(row: ManagementRow, queueId: string | null) {
+  if (!queueId) return false;
+  if (row.kind === "topic_group") return row.group.items.some((item) => item.slot.id === queueId);
+  if (row.kind === "publish") return row.result.channels.some((channel) => channel.queueId === queueId);
+  if (row.kind === "waiting") return row.slot.id === queueId;
+  return false;
+}
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString("ko-KR", {
@@ -158,6 +166,7 @@ function isGeneratedOutput(output: ContentOutput) {
 function statusForPublishResult(result: PublishResult): PublishManagementRow["status"] {
   const statuses = result.channels.map((item) => item.status);
 
+  if (result.channels.some((channel) => channel.status === "failed" && channel.lastError === "publish_delivery_unknown")) return "result_unknown";
   if (statuses.some((status) => status === "failed" || status === "cancelled")) return "failed";
   if (statuses.some((status) => status === "publishing")) return "publishing";
   if (statuses.some((status) => status === "scheduled")) return "scheduled";
@@ -174,6 +183,7 @@ function statusLabel(row: ManagementRow) {
     scheduled: "예약",
     publishing: "게시 중",
     completed: "완료",
+    result_unknown: "결과 확인 필요",
     failed: "실패",
     rejected: "거절됨"
   };
@@ -189,6 +199,7 @@ function statusVariant(row: ManagementRow): BadgeVariant {
     scheduled: "info",
     publishing: "info",
     completed: "ok",
+    result_unknown: "warn",
     failed: "bad",
     rejected: "neutral"
   };
@@ -264,6 +275,7 @@ function buildWaitingRows(queueRows: PublishSlot[]): WaitingManagementRow[] {
 function queueStatus(row: PublishSlot): ManagementStatus {
   if (row.approvalType === "empty") return "queued";
   if (row.status === "published") return "completed";
+  if (row.status === "failed" && row.lastError === "publish_delivery_unknown") return "result_unknown";
   if (row.status === "failed" || row.status === "cancelled") return "failed";
   if (row.status === "publishing") return "publishing";
   if (row.status === "scheduled") return "scheduled";
@@ -287,7 +299,8 @@ function buildTopicGroupRows(queueRows: PublishSlot[], results: PublishResult[])
 
   return Array.from(grouped.entries()).map(([id, slots]) => {
     const statuses = slots.map(queueStatus);
-    const status: ManagementStatus = statuses.includes("failed") ? "failed"
+    const status: ManagementStatus = statuses.includes("result_unknown") ? "result_unknown"
+      : statuses.includes("failed") ? "failed"
       : statuses.includes("publishing") ? "publishing"
       : statuses.includes("scheduled") ? "scheduled"
       : statuses.every((value) => value === "completed") ? "completed"
@@ -501,7 +514,11 @@ function ManagementCardGrid({
   onSelectResult,
   onSelectReviewOutput,
   onReviewGroup,
-  reviewingOutputIds
+  reviewingOutputIds,
+  highlightedQueueId,
+  onRetryPublish,
+  onVerifyPublish,
+  onCancelPublish
 }: {
   rows: ManagementRow[];
   activeFilter: ManagementFilterId;
@@ -510,9 +527,15 @@ function ManagementCardGrid({
   onSelectReviewOutput: (output: ContentOutput) => void;
   onReviewGroup: (outputs: ContentOutput[], action: "approve" | "reject" | "regenerate", message: string) => void;
   reviewingOutputIds: ReadonlySet<string>;
+  highlightedQueueId: string | null;
+  onRetryPublish: (queueId: string) => void;
+  onVerifyPublish: (queueId: string) => void;
+  onCancelPublish: (queueId: string) => void;
 }) {
   const counts = countPublishManagementFilters(rows.map((row) => row.status));
-  const filteredRows = rows.filter((row) => matchesPublishManagementFilter(row.status, activeFilter));
+  const filteredRows = rows.filter((row) => (
+    matchesPublishManagementFilter(row.status, activeFilter) || rowContainsQueueId(row, highlightedQueueId)
+  ));
 
   return (
     <section className="panel">
@@ -540,9 +563,23 @@ function ManagementCardGrid({
               description="생성, 승인, 예약, 게시 결과가 생기면 이 목록에 표시됩니다."
             />
           ) : filteredRows.map((row) => row.kind === "topic_group" ? (
-              <TopicPublishGroup key={row.id} group={row.group} onSelectResult={onSelectResult} />
+              <TopicPublishGroup
+                key={row.id}
+                group={row.group}
+                onSelectResult={onSelectResult}
+                onRetry={onRetryPublish}
+                onVerify={onVerifyPublish}
+                onCancel={onCancelPublish}
+                highlightedQueueId={highlightedQueueId}
+              />
             ) : (
-              <article className="publish-management-card" aria-label={row.title} key={row.id}>
+              <article
+                className={`publish-management-card${rowContainsQueueId(row, highlightedQueueId) ? " is-highlighted" : ""}`}
+                aria-label={row.title}
+                key={row.id}
+                data-publish-deep-link={rowContainsQueueId(row, highlightedQueueId) ? "true" : undefined}
+                tabIndex={rowContainsQueueId(row, highlightedQueueId) ? -1 : undefined}
+              >
                 <div className="publish-management-card__preview">
                   <PublishManagementPreview title={row.title} preview={previewForManagementRow(row)} />
                 </div>
@@ -562,6 +599,23 @@ function ManagementCardGrid({
                     )}
                   </div>
                   {row.kind === "publish" ? <PublishedAtCell result={row.result} /> : null}
+                  {row.kind === "publish" ? row.result.channels.map((channel) => {
+                    const resultUnknown = channel.status === "failed" && channel.lastError === "publish_delivery_unknown";
+                    const retryAllowed = channel.status === "failed"
+                      && (channel.lastError === "oauth_required" || channel.lastError === "provider_not_implemented");
+                    if (!resultUnknown && !retryAllowed && channel.status !== "failed") return null;
+                    return (
+                      <div className="publish-management-card__actions" key={`recovery-${channel.queueId}`}>
+                        {resultUnknown ? (
+                          <button className="button" type="button" onClick={() => onVerifyPublish(channel.queueId)}>게시 결과 확인</button>
+                        ) : retryAllowed ? (
+                          <button className="button" type="button" onClick={() => onRetryPublish(channel.queueId)}>재시도</button>
+                        ) : (
+                          <span className="row-meta">서버가 이 실패의 재시도를 허용하지 않습니다.</span>
+                        )}
+                      </div>
+                    );
+                  }) : null}
                   {row.kind === "review" ? (
                     <ReviewCardActions
                       row={row}
@@ -790,6 +844,10 @@ function PublishResultDialog({
 }
 
 export function PublishQueuePage() {
+  const highlightedQueueId = useMemo(
+    () => new URLSearchParams(window.location.search).get("queueId"),
+    []
+  );
   const [queueRows, setQueueRows] = useState<PublishSlot[]>([]);
   const [contentOutputs, setContentOutputs] = useState<ContentOutput[]>([]);
   const [publishResults, setPublishResults] = useState<PublishResult[]>([]);
@@ -811,6 +869,14 @@ export function PublishQueuePage() {
       .sort((a, b) => Date.parse(b.generatedAt) - Date.parse(a.generatedAt));
   }, [queueRows, contentOutputs, publishResults]);
 
+  useEffect(() => {
+    if (initialLoading || !highlightedQueueId) return;
+    const highlighted = document.querySelector<HTMLElement>('[data-publish-deep-link="true"]');
+    if (!highlighted) return;
+    highlighted.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    highlighted.focus();
+  }, [highlightedQueueId, initialLoading, managementRows]);
+
   async function refreshQueue() {
     const apiRows = await api.listPublishQueue(DEMO_BRAND_ID);
     setQueueRows(apiRows);
@@ -824,6 +890,35 @@ export function PublishQueuePage() {
   async function refreshPublishResults() {
     const apiResults = await api.listPublishResults(DEMO_BRAND_ID);
     setPublishResults(apiResults);
+  }
+
+  async function refreshRecoveryState() {
+    try {
+      await Promise.all([refreshQueue(), refreshPublishResults()]);
+      setNotice("게시 상태를 서버에서 다시 확인했습니다.");
+    } catch {
+      setNotice("목록을 새로고침하지 못해 기존 상태를 표시합니다.");
+    }
+  }
+
+  async function retryPublish(queueId: string) {
+    try {
+      await api.retryPublishQueueItem(queueId);
+      await refreshRecoveryState();
+    } catch (error) {
+      const reason = error instanceof Error && error.message ? error.message : "publish_queue_not_retryable";
+      setNotice(`재시도할 수 없습니다: ${reason}`);
+    }
+  }
+
+  async function cancelPublish(queueId: string) {
+    try {
+      await api.cancelPublishQueueItem(queueId);
+      await refreshRecoveryState();
+    } catch (error) {
+      const reason = error instanceof Error && error.message ? error.message : "publish_queue_not_cancellable";
+      setNotice(`취소할 수 없습니다: ${reason}`);
+    }
   }
 
   useEffect(() => {
@@ -974,6 +1069,10 @@ export function PublishQueuePage() {
           onSelectReviewOutput={setSelectedReviewOutput}
           onReviewGroup={(outputs, action, message) => void reviewOutputGroup(outputs, action, message)}
           reviewingOutputIds={reviewingOutputIds}
+          highlightedQueueId={highlightedQueueId}
+          onRetryPublish={(queueId) => void retryPublish(queueId)}
+          onVerifyPublish={() => void refreshRecoveryState()}
+          onCancelPublish={(queueId) => void cancelPublish(queueId)}
         />
       )}
 

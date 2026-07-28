@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { isRetryableContentWorkerError, runShellCommandWithTimeout } from "@brand-pilot/worker-runtime";
-import type { BlogClient, BlogJob } from "./contracts.js";
+import { isRetryableContentWorkerError, preflightAttachmentSnapshots, runShellCommandWithTimeout, type AttachmentHead } from "@brand-pilot/worker-runtime";
+import { parseContentGenerationInput, type BlogClient, type BlogJob } from "./contracts.js";
 import { loadAnalysis, loadBlogResult } from "./manifest.js";
 import { blogSkillVersion, buildPrompt } from "./promptBuilder.js";
 import { withResource } from "./resourceLease.js";
@@ -28,11 +28,12 @@ export function createCommandRunner(template: string, timeoutMs: number): CodexR
   };
 }
 
-export async function runOnce({ workerId, client, runner, storage }: {
+export async function runOnce({ workerId, client, runner, storage, head }: {
   workerId: string;
   client: BlogClient;
   runner: CodexRunner;
   storage: BlogStorage;
+  head?: AttachmentHead;
 }) {
   return withResource(client, workerId, async () => {
     const job = await client.claim(workerId);
@@ -40,6 +41,12 @@ export async function runOnce({ workerId, client, runner, storage }: {
     let output: Awaited<ReturnType<CodexRunner["run"]>> | undefined;
     const heartbeat = setInterval(() => void client.heartbeat(job.id, workerId, job.leaseToken).catch(() => undefined), 30_000);
     try {
+      const rawInput = job.payload.contentGenerationInput;
+      const parsedInput = rawInput === undefined ? null : parseContentGenerationInput(rawInput);
+      if (parsedInput?.attachments.length) {
+        if (!head) throw new Error("ai_content_attachment_storage_unavailable");
+        await preflightAttachmentSnapshots(parsedInput.attachments, { head });
+      }
       output = await runner.run(job, buildPrompt(job));
       if (job.jobType === "analyze") {
         await client.complete(job.id, { workerId, leaseToken: job.leaseToken, skillVersion: blogSkillVersion, jobType: "analyze", analysisJson: await loadAnalysis(output.outputDir) });

@@ -1,10 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { parseDmWorkerResult } from "./dmTypes";
+import { isDmAutomationReady, parseDmWorkerResult } from "./dmTypes";
 
 const sourceId = "00000000-0000-4000-8000-000000000001";
 const destinationId = "00000000-0000-4000-8000-000000000002";
 
 describe("DM worker result contract", () => {
+  it("requires every safety dependency before automatic replies are ready", () => {
+    const ready = {
+      brandCoreReady: true,
+      wikiReady: true,
+      messagePermissionReady: true,
+      webhookStatus: "connected" as const,
+      workerStatus: "online" as const,
+    };
+    expect(isDmAutomationReady(ready)).toBe(true);
+    expect(isDmAutomationReady({ ...ready, brandCoreReady: false })).toBe(false);
+    expect(isDmAutomationReady({ ...ready, wikiReady: false })).toBe(false);
+    expect(isDmAutomationReady({ ...ready, messagePermissionReady: false })).toBe(false);
+    expect(isDmAutomationReady({ ...ready, webhookStatus: "needs_attention" })).toBe(false);
+    expect(isDmAutomationReady({ ...ready, workerStatus: "worker_offline" })).toBe(false);
+  });
+
   it("accepts an answer only when it has a nonempty answer and a UUID source", () => {
     expect(parseDmWorkerResult({
       decision: "answer",

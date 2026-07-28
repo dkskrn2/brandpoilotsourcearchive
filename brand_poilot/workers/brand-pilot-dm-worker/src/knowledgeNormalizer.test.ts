@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { normalizeKnowledgeSource } from "./knowledgeNormalizer.js";
+import { isTrustedDmKnowledgeSource, normalizeKnowledgeSource } from "./knowledgeNormalizer.js";
 
 describe("knowledge source normalizer", () => {
+  it("accepts only approved or owned Wiki source kinds", () => {
+    expect(isTrustedDmKnowledgeSource("faq")).toBe(true);
+    expect(isTrustedDmKnowledgeSource("product_service")).toBe(true);
+    expect(isTrustedDmKnowledgeSource("owned_snapshot")).toBe(true);
+    expect(isTrustedDmKnowledgeSource("reference_item")).toBe(false);
+    expect(isTrustedDmKnowledgeSource("trend_caption")).toBe(false);
+    expect(isTrustedDmKnowledgeSource("external_reference")).toBe(false);
+  });
+
   it("normalizes whitespace while preserving heading, list, and table order", () => {
     const repeated = "배송 일정은 결제 완료 시점과 배송 지역에 따라 달라지며, 주문 상세 화면에서 최신 상태를 확인할 수 있습니다.";
     const source = [

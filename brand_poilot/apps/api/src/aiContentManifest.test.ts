@@ -83,6 +83,20 @@ const validMarketing = {
 };
 
 describe("parseAiContentManifest", () => {
+  it("preserves optional content family, strategy, and output format metadata", () => {
+    const parsed = parseAiContentManifest("card_news", {
+      ...cardManifest(1),
+      family: "informational",
+      strategy: "how_to",
+      outputFormat: "card_news",
+    });
+    expect(parsed).toMatchObject({
+      family: "informational",
+      strategy: "how_to",
+      outputFormat: "card_news",
+    });
+  });
+
   it("accepts card news with one or five slides", () => {
     expect(parseAiContentManifest("card_news", cardManifest(1)).assets).toHaveLength(1);
     expect(parseAiContentManifest("card_news", cardManifest(5)).assets).toHaveLength(5);
@@ -247,6 +261,29 @@ describe("parseAiContentManifest", () => {
     expect(parseAiContentManifest("marketing", validMarketing, { width: 1080, height: 1350 }).type).toBe("marketing");
     expect(() => parseAiContentManifest("marketing", validMarketing, { width: 1080, height: 1920 }))
       .toThrow("ai_content_marketing_dimensions_mismatch");
+  });
+
+  it("accepts a text-only marketing artifact only for channel_text output", () => {
+    const channelText = {
+      ...validMarketing,
+      family: "marketing",
+      strategy: "cta",
+      outputFormat: "channel_text",
+      assets: [{
+        role: "text",
+        url: "https://blob.example/channel-text.txt",
+        fileName: "channel-text.txt",
+        mimeType: "text/plain",
+        index: 1,
+      }],
+    };
+
+    expect(parseAiContentManifest("marketing", channelText))
+      .toMatchObject({ outputFormat: "channel_text", assets: [{ role: "text", mimeType: "text/plain" }] });
+    expect(() => parseAiContentManifest("marketing", {
+      ...channelText,
+      outputFormat: "single_image",
+    })).toThrow("ai_content_marketing_asset_invalid");
   });
 
   it("rejects a manifest type mismatch", () => {

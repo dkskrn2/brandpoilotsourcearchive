@@ -108,7 +108,10 @@ describe("brand setup gating", () => {
       </MemoryRouter>
     );
 
-    expect(screen.getByRole("link", { name: /브랜드 분석/ })).toHaveAttribute("href", "/onboarding/brand-intelligence");
+    expect(screen.getByRole("link", { name: /브랜드 분석/ })).toHaveAttribute(
+      "href",
+      "/brand-center?tab=understanding&section=sources",
+    );
     expect(screen.getByRole("link", { name: /고객센터/ })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "브랜드 설정" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /게시 관리/ })).not.toBeInTheDocument();

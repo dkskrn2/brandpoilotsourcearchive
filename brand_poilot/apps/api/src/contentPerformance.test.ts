@@ -73,8 +73,24 @@ describe("performance learning metadata", () => {
       topicTitle: "승인 병목 해결",
       topicAngle: "실무 체크리스트",
       hook: "게시가 늦는 진짜 이유",
+      strategy: null,
+      format: null,
+      appeal: null,
       evidenceCount: 2,
       claimCount: 2,
+    });
+  });
+
+  it("captures comparable orchestration metadata when a generated result contains it", () => {
+    expect(contentPerformanceFeatures({
+      orchestration: { strategy: "how_to", outputFormat: "card_news" },
+      message: { appeal: { title: "승인 시간 절감" } },
+      qualityBrief: { hook: "세 단계로 끝내세요" },
+    }, "instagram_feed_carousel")).toMatchObject({
+      strategy: "how_to",
+      format: "card_news",
+      hook: "세 단계로 끝내세요",
+      appeal: "승인 시간 절감",
     });
   });
 });

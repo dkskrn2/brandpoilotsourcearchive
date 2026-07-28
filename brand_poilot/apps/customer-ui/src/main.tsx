@@ -3,7 +3,14 @@ import ReactDOM from "react-dom/client";
 import { RouterProvider } from "react-router-dom";
 import { router } from "./routes";
 import { canonicalLocalDevUrl } from "./lib/localOrigin";
+import "./styles/tokens.css";
 import "./styles/prototype.css";
+import "./styles/shell.css";
+import "./styles/dashboard.css";
+import "./styles/performance.css";
+import "./styles/brand-center.css";
+import "./styles/references.css";
+import "./styles/content-wizard.css";
 
 const canonicalUrl = canonicalLocalDevUrl(window.location);
 

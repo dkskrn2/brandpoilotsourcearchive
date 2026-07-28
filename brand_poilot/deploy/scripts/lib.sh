@@ -25,6 +25,55 @@ require_file_mode_600() {
   fi
 }
 
+env_secret_value_digest() {
+  local key="$1"
+  local file="$2"
+  local declaration_count
+  local canonical_count
+
+  [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || fail "shared_secret_key_invalid"
+  declaration_count="$(
+    grep -Ec "^[[:space:]]*(export[[:space:]]+)?${key}[[:space:]]*([=:]|$)" "$file" ||
+      true
+  )"
+  [[ "$declaration_count" =~ ^[0-9]+$ ]] || fail "shared_secret_invalid"
+  [[ "$declaration_count" != "0" ]] || fail "shared_secret_missing"
+  [[ "$declaration_count" == "1" ]] || fail "shared_secret_invalid"
+  grep -Eq "^${key}=required-at-deploy-time$" "$file" &&
+    fail "shared_secret_missing"
+  canonical_count="$(grep -Ec "^${key}=[A-Za-z0-9+/=_:.@%-]+$" "$file" || true)"
+  [[ "$canonical_count" == "1" ]] || fail "shared_secret_invalid"
+
+  grep -E "^${key}=" "$file" |
+    sed 's/^[^=]*=//' |
+    sha256sum |
+    awk '{print $1}'
+}
+
+require_matching_env_secret() {
+  local key="$1"
+  local left_file="$2"
+  local right_file="$3"
+  local left_digest
+  local right_digest
+
+  left_digest="$(env_secret_value_digest "$key" "$left_file")"
+  right_digest="$(env_secret_value_digest "$key" "$right_file")"
+  [[ "$left_digest" == "$right_digest" ]] || fail "shared_secret_mismatch"
+}
+
+require_distinct_env_secrets() {
+  local file="$1"
+  local first_key="$2"
+  local second_key="$3"
+  local first_digest
+  local second_digest
+
+  first_digest="$(env_secret_value_digest "$first_key" "$file")"
+  second_digest="$(env_secret_value_digest "$second_key" "$file")"
+  [[ "$first_digest" != "$second_digest" ]] || fail "shared_secret_reuse"
+}
+
 require_digest_image() {
   local value="$1"
   [[ "$value" =~ ^[a-zA-Z0-9._-]+(:[0-9]+)?(/[a-zA-Z0-9._-]+)+@sha256:[a-f0-9]{64}$ ]] ||
@@ -106,6 +155,7 @@ parse_release_manifest() {
   local key
   local value
   local required_key
+  local optional_image_key
   [[ -f "$manifest" ]] || fail "release_manifest_missing"
   RELEASE_MANIFEST=()
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -115,7 +165,7 @@ parse_release_manifest() {
     key="${BASH_REMATCH[1]}"
     value="${BASH_REMATCH[2]}"
     case "$key" in
-      RELEASE_SCHEMA|RELEASE_SHA|API_IMAGE|CADDY_IMAGE|CANARY_HOST|PRIMARY_HOST|ACME_EMAIL|API_ENV_FILE) ;;
+      RELEASE_SCHEMA|RELEASE_SHA|API_IMAGE|DM_WORKER_IMAGE|WIKI_WORKER_IMAGE|CONTENT_PROPOSAL_WORKER_IMAGE|CADDY_IMAGE|CANARY_HOST|PRIMARY_HOST|ACME_EMAIL|API_ENV_FILE) ;;
       *) fail "manifest_unknown_key" ;;
     esac
     [[ ! -v "RELEASE_MANIFEST[$key]" ]] || fail "manifest_duplicate_key"
@@ -132,6 +182,11 @@ parse_release_manifest() {
   [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "1" ]] || fail "release_schema_unsupported"
   require_release_sha "${RELEASE_MANIFEST[RELEASE_SHA]}"
   require_digest_image "${RELEASE_MANIFEST[API_IMAGE]}"
+  for optional_image_key in DM_WORKER_IMAGE WIKI_WORKER_IMAGE CONTENT_PROPOSAL_WORKER_IMAGE; do
+    if [[ -v "RELEASE_MANIFEST[$optional_image_key]" ]]; then
+      require_digest_image "${RELEASE_MANIFEST[$optional_image_key]}"
+    fi
+  done
   require_digest_image "${RELEASE_MANIFEST[CADDY_IMAGE]}"
   require_hostname "${RELEASE_MANIFEST[CANARY_HOST]}"
   require_hostname "${RELEASE_MANIFEST[PRIMARY_HOST]}"
@@ -184,7 +239,9 @@ release_file_specs() {
     "755 scripts/deploy.sh" \
     "755 scripts/verify-canary.sh" \
     "755 scripts/promote.sh" \
-    "755 scripts/rollback.sh"
+    "755 scripts/rollback.sh" \
+    "755 scripts/backup-state.sh" \
+    "755 scripts/restore-state.sh"
 }
 
 require_release_file() {

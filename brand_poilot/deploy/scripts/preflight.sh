@@ -23,6 +23,9 @@ else
 fi
 reconcile_transition_or_fail "$ROOT" "${READY_TIMEOUT_SECONDS:-120}"
 validate_release_manifest "$MANIFEST"
+for worker_image_key in DM_WORKER_IMAGE WIKI_WORKER_IMAGE CONTENT_PROPOSAL_WORKER_IMAGE; do
+  [[ -v "RELEASE_MANIFEST[$worker_image_key]" ]] || fail "worker_image_manifest_missing"
+done
 
 require_command awk
 require_command df
@@ -30,6 +33,7 @@ require_command docker
 require_command dpkg
 require_command grep
 require_command sha256sum
+require_command sed
 require_command ss
 require_command stat
 require_command timedatectl
@@ -88,9 +92,27 @@ if [[ -n "$PORT_LISTENERS" ]]; then
 fi
 status_ok "public_ports"
 
-API_ENV_FILE="${RELEASE_MANIFEST[API_ENV_FILE]}"
+SHARED_ENV_DIR="$ROOT/shared/env"
+[[ -d "$SHARED_ENV_DIR" ]] || fail "required_env_directory_missing"
+[[ "$(stat -c '%a' -- "$SHARED_ENV_DIR")" == "700" ]] ||
+  fail "required_directory_mode_invalid"
+[[ "$(stat -c '%U' -- "$SHARED_ENV_DIR")" == "bpdeploy" ]] ||
+  fail "required_directory_owner_invalid"
+status_ok "shared_env_directory"
+
+API_ENV_FILE="$SHARED_ENV_DIR/api.env"
+DM_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/dm-worker-1.env"
+DM_WORKER_2_ENV_FILE="$SHARED_ENV_DIR/dm-worker-2.env"
+WIKI_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/wiki-worker-1.env"
+CONTENT_PROPOSAL_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/content-proposal-worker-1.env"
+[[ "${RELEASE_MANIFEST[API_ENV_FILE]}" == "$API_ENV_FILE" ]] ||
+  fail "manifest_api_env_file_not_fixed"
 require_file_mode_600 "$API_ENV_FILE" "bpdeploy"
-status_ok "api_env_file"
+require_file_mode_600 "$DM_WORKER_1_ENV_FILE" "bpdeploy"
+require_file_mode_600 "$DM_WORKER_2_ENV_FILE" "bpdeploy"
+require_file_mode_600 "$WIKI_WORKER_1_ENV_FILE" "bpdeploy"
+require_file_mode_600 "$CONTENT_PROPOSAL_WORKER_1_ENV_FILE" "bpdeploy"
+status_ok "shared_env_files"
 
 require_exact_false() {
   local key="$1"
@@ -105,6 +127,26 @@ require_exact_false() {
 
 require_exact_false "LOCAL_SCHEDULER_ENABLED" "$API_ENV_FILE"
 require_exact_false "INSTAGRAM_PUBLISH_ENABLED" "$API_ENV_FILE"
+require_exact_false "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED" "$API_ENV_FILE"
+require_exact_false "AUTOMATED_CONTENT_ENABLED" "$API_ENV_FILE"
+require_exact_false "CONTENT_PROPOSALS_ENABLED" "$API_ENV_FILE"
+require_matching_env_secret \
+  "CONTENT_PROPOSAL_WORKER_API_TOKEN" \
+  "$API_ENV_FILE" \
+  "$CONTENT_PROPOSAL_WORKER_1_ENV_FILE"
+status_ok "content_proposal_worker_api_token"
+require_distinct_env_secrets \
+  "$API_ENV_FILE" \
+  "WORKER_API_TOKEN" \
+  "CONTENT_PROPOSAL_WORKER_API_TOKEN"
+status_ok "content_proposal_worker_api_token_is_dedicated"
+
+# The initial Ubuntu API/Caddy rollout is intentionally dark. Worker activation is
+# a later, operator-controlled profile action after the remote lease has expired.
+[[ -z "${COMPOSE_PROFILES:-}" ]] || fail "first_deploy_worker_profiles_forbidden"
+# Activation evidence order:
+# WIKI_ACTIVE_VERSION -> DM_WORKER_1_HEARTBEAT -> DM_WORKER_1_LEASE ->
+# REMOTE_WORKER_LEASE_EXPIRED -> DM_WORKER_2.
 status_ok "release_sha"
 status_ok "api_image_digest"
 status_ok "caddy_image_digest"
@@ -112,6 +154,9 @@ status_ok "caddy_image_digest"
 RELEASE_DIR="$(cd -- "$(dirname -- "$MANIFEST")" && pwd)"
 export PRIMARY_API_IMAGE="${PRIMARY_API_IMAGE:-${RELEASE_MANIFEST[API_IMAGE]}}"
 export CANDIDATE_API_IMAGE="${CANDIDATE_API_IMAGE:-${RELEASE_MANIFEST[API_IMAGE]}}"
+export DM_WORKER_IMAGE="${DM_WORKER_IMAGE:-${RELEASE_MANIFEST[DM_WORKER_IMAGE]}}"
+export WIKI_WORKER_IMAGE="${WIKI_WORKER_IMAGE:-${RELEASE_MANIFEST[WIKI_WORKER_IMAGE]}}"
+export CONTENT_PROPOSAL_WORKER_IMAGE="${CONTENT_PROPOSAL_WORKER_IMAGE:-${RELEASE_MANIFEST[CONTENT_PROPOSAL_WORKER_IMAGE]}}"
 docker compose -p brand-pilot \
   -f "$RELEASE_DIR/compose.production.yml" \
   --env-file "$MANIFEST" config --quiet >/dev/null

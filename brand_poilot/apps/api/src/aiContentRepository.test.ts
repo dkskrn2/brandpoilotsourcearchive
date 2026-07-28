@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAiContentRepository } from "./aiContentRepository.js";
+import { kstDateKey } from "./publishSchedule.js";
 
 function row(id: string, status = "analyzing") {
   return {
@@ -13,6 +14,11 @@ function row(id: string, status = "analyzing") {
     draft_json: { productUrl: "https://example.com/product" },
     analysis_json: {},
     generation_idempotency_key: null as string | null,
+    generation_input_snapshot: null,
+    subject_analysis_snapshot: null,
+    attachments_locked_at: null as string | null,
+    terminal_at: null as string | null,
+    retryable_until: null as string | null,
     error_code: null,
     error_message: null,
     created_at: "2026-07-18T00:00:00.000Z",
@@ -21,19 +27,33 @@ function row(id: string, status = "analyzing") {
   };
 }
 
-function createPool(options: { missingReferences?: boolean; generationUsage?: number; wikiReady?: boolean } = {}) {
+function createPool(options: {
+  missingReferences?: boolean;
+  generationUsage?: number;
+  wikiReady?: boolean;
+  attachmentCount?: number;
+  activeAttachmentPaths?: string[];
+  lifecycleEvents?: string[];
+  attachmentsLocked?: boolean;
+} = {}) {
   const commands: string[] = [];
   const sql: string[] = [];
   const referenceSnapshots: Array<Record<string, unknown>> = [];
+  let generationInsertParams: unknown[] = [];
   let analyzeJobInsertCount = 0;
   let generation = row("generation-1");
+  if (options.attachmentsLocked) {
+    generation = { ...generation, attachments_locked_at: "2026-07-27T00:00:00.000Z" };
+  }
   let analysisCreated = false;
+  let activeAttachmentCount = options.attachmentCount ?? 0;
 
   const client = {
     query: async (query: string, params: unknown[] = []) => {
       commands.push(query);
       sql.push(query);
       if (query === "BEGIN" || query === "COMMIT" || query === "ROLLBACK") return { rows: [], rowCount: 0 };
+      if (query.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
       if (query.includes("pg_advisory_xact_lock")) return { rows: [{}], rowCount: 1 };
       if (query.includes("from ai_content_usage_ledger")) {
         return { rows: [{ generation_count: options.generationUsage ?? 0 }], rowCount: 1 };
@@ -47,6 +67,7 @@ function createPool(options: { missingReferences?: boolean; generationUsage?: nu
       }
       if (query.includes("insert into ai_content_usage_ledger")) return { rows: [], rowCount: 1 };
       if (query.includes("insert into ai_content_generations")) {
+        generationInsertParams = [...params];
         analysisCreated = true;
         generation = { ...generation, title: String(params[3] ?? generation.title), status: String(params[4]), current_stage: String(params[5]), draft_json: JSON.parse(String(params[6])), analysis_json: JSON.parse(String(params[7])) };
         return { rows: [generation], rowCount: 1 };
@@ -80,6 +101,39 @@ function createPool(options: { missingReferences?: boolean; generationUsage?: nu
       if (query.includes("insert into ai_content_generation_outputs")) {
         return { rows: [{ id: `output-${params.at(-1)}` }], rowCount: 1 };
       }
+      if (
+        query.includes("update ai_content_generation_attachments")
+        && query.includes("physical_delete_status = 'pending'")
+        && query.includes("returning *")
+      ) {
+        activeAttachmentCount = Math.max(0, activeAttachmentCount - 1);
+        return {
+          rows: [{
+            id: params[0],
+            generation_id: params[1],
+            workspace_id: params[2],
+            brand_id: params[3],
+            upload_session_id: "50000000-0000-4000-8000-000000000001",
+            role: "product",
+            file_name: "product.png",
+            mime_type: "image/png",
+            size_bytes: 100,
+            checksum: "a".repeat(64),
+            storage_url: "https://example.public.blob.vercel-storage.com/product.png",
+            storage_path: "reserved/product.png",
+            created_at: "2026-07-18T00:00:00.000Z",
+          }],
+          rowCount: 1,
+        };
+      }
+      if (
+        query.includes("update ai_content_generation_attachments")
+        && query.includes("deleted_at = now()")
+        && query.includes("returning id")
+      ) {
+        activeAttachmentCount = Math.max(0, activeAttachmentCount - 1);
+        return { rows: [{ id: params[3] }], rowCount: 1 };
+      }
       if (query.includes("insert into ai_content_generation_attachments")) {
         return {
           rows: [{
@@ -97,9 +151,21 @@ function createPool(options: { missingReferences?: boolean; generationUsage?: nu
           rowCount: 1,
         };
       }
+      if (
+        query.includes("select id")
+        && query.includes("from ai_content_generation_attachments")
+        && query.includes("storage_path = $4")
+        && query.includes("deleted_at is null")
+      ) {
+        const active = options.activeAttachmentPaths?.includes(String(params[3])) ?? false;
+        return { rows: active ? [{ id: "attachment-1" }] : [], rowCount: active ? 1 : 0 };
+      }
+      if (query.includes("count(*)::integer as attachment_count") && query.includes("from ai_content_generation_attachments")) {
+        return { rows: [{ attachment_count: activeAttachmentCount }], rowCount: 1 };
+      }
       return { rows: [], rowCount: 0 };
     },
-    release: () => undefined,
+    release: () => { options.lifecycleEvents?.push("release"); },
   };
 
   return {
@@ -109,7 +175,20 @@ function createPool(options: { missingReferences?: boolean; generationUsage?: nu
     sql,
     get analyzeJobInsertCount() { return analyzeJobInsertCount; },
     get referenceSnapshots() { return referenceSnapshots; },
+    get generationInsertParams() { return generationInsertParams; },
     setGenerationStatus(status: string) { generation = { ...generation, status }; },
+    setGenerationDraft(draft: Record<string, unknown>) {
+      generation = {
+        ...generation,
+        draft_json: {
+          ...draft,
+          productUrl: typeof draft.productUrl === "string" ? draft.productUrl : "",
+        },
+      };
+    },
+    setGenerationIdempotencyKey(idempotencyKey: string | null) {
+      generation = { ...generation, generation_idempotency_key: idempotencyKey };
+    },
   };
 }
 
@@ -126,31 +205,93 @@ function createWorkerPool(options: {
   manifestAssetUrls?: string[];
   subjectAnalysisSnapshot?: Record<string, unknown>;
   qualityBrief?: Record<string, unknown>;
+  priorGeneratePayload?: Record<string, unknown>;
+  outputManifest?: Record<string, unknown>;
+  outputContent?: Record<string, unknown>;
+  existingRevisionIdempotencyKey?: string;
+  revision?: Record<string, unknown>;
+  retryable?: boolean;
+  retryBoundary?: "before" | "equal" | "after";
+  deletionStatus?: "deleting" | "deleted" | null;
 } = {}) {
   const sql: string[] = [];
+  const generatedJobPayloads: unknown[] = [];
+  const completedOutputManifests: Record<string, unknown>[] = [];
+  const completedOutputContents: Record<string, unknown>[] = [];
+  let leaseAtBoundary = false;
   let generation = row("generation-1", options.jobType === "analyze" ? "analyzing" : "generating");
   let pendingCleanup = false;
   let outputStatus = options.outputStatus ?? "generating";
   const job: Record<string, unknown> = {
     id: "job-1", generation_id: "generation-1", output_id: options.jobType === "analyze" ? null : "output-1",
     workspace_id: "workspace-1", brand_id: "brand-1", job_type: options.jobType ?? "generate", content_type: "card_news",
-    status: "queued", payload_json: options.finalizeGeneration ? { finalizeGeneration: true } : {}, attempt_count: 0, max_attempts: 3, available_at: new Date("2026-07-18T00:00:00.000Z"),
-    worker_id: null, lease_token: null, lease_expires_at: null,
+    status: options.exhaustedJob ? "processing" : "queued", payload_json: {
+      ...(options.finalizeGeneration ? { finalizeGeneration: true } : {}),
+      contentGenerationInput: structuredClone(options.subjectAnalysisSnapshot ?? contentGenerationInputV2Fixture),
+      ...(options.revision ? { revision: structuredClone(options.revision) } : {}),
+    }, attempt_count: options.exhaustedJob ? 3 : 0, max_attempts: 3, available_at: new Date("2026-07-18T00:00:00.000Z"),
+    worker_id: options.exhaustedJob ? "expired-worker" : null,
+    lease_token: options.exhaustedJob ? "expired-token" : null,
+    lease_expires_at: options.exhaustedJob ? new Date("2026-07-17T00:00:00.000Z") : null,
   };
   const client = {
     query: async (query: string, params: unknown[] = []) => {
       sql.push(query);
       if (["BEGIN", "COMMIT", "ROLLBACK"].includes(query)) return { rows: [], rowCount: 0 };
       if (query.includes("select terminal_generation.id")) return pendingCleanup ? { rows: [{ id: "generation-1" }], rowCount: 1 } : { rows: [], rowCount: 0 };
-      if (query.includes("update ai_content_generation_jobs") && query.includes("lease_exhausted")) {
+      if (
+        query.includes("select id")
+        && query.includes("from ai_content_generation_jobs")
+        && query.includes("attempt_count >= max_attempts")
+      ) {
         return options.exhaustedJob
-          ? { rows: [{ generation_id: "generation-1", output_id: "output-1", job_type: "generate" }], rowCount: 1 }
+          ? { rows: [{ id: "job-1" }], rowCount: 1 }
           : { rows: [], rowCount: 0 };
       }
-      if (query.includes("update ai_content_generation_jobs") && query.includes("lease_expired")) return { rows: [], rowCount: 0 };
-      if (query.includes("with candidate as")) {
+      if (
+        query.includes("update ai_content_generation_jobs")
+        && query.includes("ai_content_job_lease_exhausted")
+        && query.includes("where id = $1")
+      ) {
+        Object.assign(job, {
+          status: "failed",
+          worker_id: null,
+          lease_token: null,
+          lease_expires_at: null,
+          error_code: "ai_content_job_lease_exhausted",
+        });
+        return { rows: [], rowCount: 1 };
+      }
+      if (
+        query.includes("select id")
+        && query.includes("from ai_content_generation_jobs")
+        && query.includes("attempt_count < max_attempts")
+        && query.includes("lease_expires_at <= clock_timestamp()")
+      ) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (
+        query.includes("select job.id")
+        && query.includes("from ai_content_generation_jobs job")
+        && query.includes("limit 25")
+      ) {
+        return job.status === "queued"
+          ? { rows: [{ id: job.id }], rowCount: 1 }
+          : { rows: [], rowCount: 0 };
+      }
+      if (
+        query.includes("update ai_content_generation_jobs")
+        && query.includes("status = 'processing'")
+        && query.includes("returning *")
+      ) {
         if (job.status !== "queued") return { rows: [], rowCount: 0 };
-        Object.assign(job, { status: "processing", worker_id: params[1], lease_token: params[2], lease_expires_at: new Date("2099-07-18T00:03:00.000Z"), attempt_count: Number(job.attempt_count) + 1 });
+        Object.assign(job, {
+          status: "processing",
+          worker_id: params[1],
+          lease_token: params[2],
+          lease_expires_at: new Date("2099-07-18T00:03:00.000Z"),
+          attempt_count: Number(job.attempt_count) + 1,
+        });
         return { rows: [{ ...job }], rowCount: 1 };
       }
       if (query.includes("from brands brand")) {
@@ -160,17 +301,113 @@ function createWorkerPool(options: {
         return { rows: [{ id: "wiki-1", wiki_updated_at: "2026-07-18T00:10:00.000Z", pages: [{ type: "brand_overview", title: "브랜드 개요", summary: "자사 분석", content: "브랜드 근거", structuredData: {} }] }], rowCount: 1 };
       }
       if (query.includes("select generation.draft_json")) return { rows: [{ draft_json: {}, analysis_json: options.qualityBrief ? { qualityBrief: options.qualityBrief } : {}, subject_analysis_snapshot: options.subjectAnalysisSnapshot ?? null, generation_title: "여름 추천", generation_type: "card_news", output_index: 1, reference_snapshots: [], attachments: [] }], rowCount: 1 };
-      if (query.includes("set lease_expires_at") && query.includes("last_heartbeat_at")) {
+      if (
+        query.includes("select id")
+        && query.includes("from ai_content_generation_jobs")
+        && query.includes("worker_id = $2")
+        && query.includes("for update")
+      ) {
+        const valid = job.status === "processing"
+          && job.worker_id === params[1]
+          && job.lease_token === params[2];
+        return { rows: valid ? [{ id: job.id }] : [], rowCount: valid ? 1 : 0 };
+      }
+      if (query.includes("set (lease_expires_at, last_heartbeat_at)")) {
         const valid = job.status === "processing" && job.worker_id === params[1] && job.lease_token === params[2];
         return { rows: valid ? [{ id: job.id }] : [], rowCount: valid ? 1 : 0 };
       }
-      if (query.includes("select * from ai_content_generation_jobs")) return { rows: [{ ...job }], rowCount: 1 };
+      if (
+        query.includes("from ai_content_generation_jobs")
+        && query.includes("output_id = $1")
+        && query.includes("job_type = 'generate'")
+        && query.includes("select payload_json")
+      ) {
+        return options.priorGeneratePayload
+          ? { rows: [{ payload_json: structuredClone(options.priorGeneratePayload) }], rowCount: 1 }
+          : { rows: [], rowCount: 0 };
+      }
+      if (query.includes("from ai_content_generations") && query.includes("retryable_until > transaction_timestamp()")) {
+        const retryable = options.retryBoundary
+          ? options.retryBoundary === "before"
+          : options.retryable ?? true;
+        return {
+          rows: [{
+            ...generation,
+            terminal_at: "2026-07-18T00:00:00.000Z",
+            retryable_until: options.retryBoundary === "after"
+              ? "2026-08-01T23:59:59.999Z"
+              : "2026-08-02T00:00:00.000Z",
+            retryable,
+          }],
+          rowCount: 1,
+        };
+      }
+      if (query.includes("from ai_content_attachment_deletion_jobs") && query.includes("for update")) {
+        return options.deletionStatus
+          ? { rows: [{ status: options.deletionStatus }], rowCount: 1 }
+          : { rows: [], rowCount: 0 };
+      }
+      if (
+        query.includes("select generation_id, output_id")
+        && query.includes("from ai_content_generation_jobs")
+        && query.includes("where id = $1")
+      ) {
+        return {
+          rows: [{ generation_id: job.generation_id, output_id: job.output_id }],
+          rowCount: 1,
+        };
+      }
+      if (
+        query.includes("select id")
+        && query.includes("from ai_content_generations")
+        && query.includes("for update")
+      ) {
+        return { rows: [{ id: "generation-1" }], rowCount: 1 };
+      }
+      if (
+        query.includes("select id, generation_id")
+        && query.includes("from ai_content_generation_outputs")
+        && query.includes("for update")
+      ) {
+        return {
+          rows: [{ id: "output-1", generation_id: "generation-1" }],
+          rowCount: 1,
+        };
+      }
+      if (query.includes("select *") && query.includes("from ai_content_generation_jobs")) {
+        return {
+          rows: [{
+            ...job,
+            lease_expired: leaseAtBoundary
+              || (options.exhaustedJob && job.status === "processing"),
+            available: true,
+          }],
+          rowCount: 1,
+        };
+      }
+      if (query.includes("as generation_input_snapshot") && query.includes("from ai_content_generations")) {
+        return {
+          rows: [{ generation_input_snapshot: options.subjectAnalysisSnapshot ?? contentGenerationInputV2Fixture }],
+          rowCount: 1,
+        };
+      }
+      if (query.includes("select generation_input_snapshot") && query.includes("from ai_content_generations")) {
+        return {
+          rows: [{
+            generation_input_snapshot: options.subjectAnalysisSnapshot ?? contentGenerationInputV2Fixture,
+            analysis_json: options.qualityBrief ? { qualityBrief: options.qualityBrief } : {},
+          }],
+          rowCount: 1,
+        };
+      }
       if (query.includes("set analysis_json")) {
         generation = { ...generation, status: String(params[2]), current_stage: String(params[3]), analysis_json: JSON.parse(String(params[1])) };
         return { rows: [], rowCount: 1 };
       }
       if (query.includes("update ai_content_generation_outputs") && query.includes("status = 'completed'")) {
         outputStatus = "completed";
+        completedOutputContents.push(JSON.parse(String(params[2])));
+        completedOutputManifests.push(JSON.parse(String(params[3])));
         return { rows: [], rowCount: 1 };
       }
       if (query.includes("from channel_outputs channel_output") && query.includes("ai_content_generation_output_id")) {
@@ -207,7 +444,20 @@ function createWorkerPool(options: {
       }
       if (query.includes("count(*)::integer as total")) return { rows: [{ total: options.totalOutputs ?? 1, completed: options.completedOutputs ?? (outputStatus === "completed" ? 1 : 0), failed: outputStatus === "failed" ? 1 : 0 }], rowCount: 1 };
       if (query.includes("update ai_content_generations") && query.includes("completed_at = case")) {
-        generation = { ...generation, status: String(params[1]) };
+        const wasTerminal = ["completed", "partial_failed", "failed"].includes(
+          String(generation.status),
+        );
+        const becomesTerminal = params[3] === true;
+        generation = {
+          ...generation,
+          status: String(params[1]),
+          ...(becomesTerminal && !wasTerminal
+            ? {
+                terminal_at: "2026-07-18T00:00:00.000Z",
+                retryable_until: "2026-08-02T00:00:00.000Z",
+              }
+            : {}),
+        };
         return { rows: [], rowCount: 1 };
       }
       if (query.includes("update ai_content_generation_jobs") && query.includes("available_at = case")) {
@@ -219,14 +469,62 @@ function createWorkerPool(options: {
         outputStatus = String(params[1]);
         return { rows: [], rowCount: 1 };
       }
+      if (
+        query.includes("select generation_id")
+        && query.includes("from ai_content_generation_outputs")
+        && !query.includes("for update")
+      ) {
+        return {
+          rows: [{ generation_id: "generation-1" }],
+          rowCount: 1,
+        };
+      }
       if (query.includes("from ai_content_generation_outputs output") && query.includes("for update of output")) {
-        return { rows: [{ id: "output-1", generation_id: "generation-1", workspace_id: "workspace-1", brand_id: "brand-1", status: outputStatus, type: "card_news" }], rowCount: 1 };
+        return { rows: [{
+          id: "output-1",
+          generation_id: "generation-1",
+          workspace_id: "workspace-1",
+          brand_id: "brand-1",
+          status: outputStatus,
+          type: "card_news",
+          artifact_manifest_json: options.outputManifest ?? {},
+          content_json: options.outputContent ?? {},
+        }], rowCount: 1 };
+      }
+      if (
+        query.includes("from ai_content_generation_jobs")
+        && query.includes("payload_json #>> '{revision,idempotencyKey}'")
+      ) {
+        return options.existingRevisionIdempotencyKey === params[3]
+          ? { rows: [{ id: "revision-job-1" }], rowCount: 1 }
+          : { rows: [], rowCount: 0 };
+      }
+      if (
+        query.includes("from ai_content_generation_jobs")
+        && query.includes("status in ('queued', 'processing')")
+      ) {
+        return { rows: [], rowCount: 0 };
       }
       if (query.includes("update ai_content_generation_outputs") && query.includes("set status = 'queued'")) {
         outputStatus = "queued";
         return { rows: [], rowCount: 1 };
       }
-      if (query.includes("insert into ai_content_generation_jobs")) return { rows: [], rowCount: 1 };
+      if (query.includes("insert into ai_content_generation_jobs")) {
+        if (query.includes("'generate'")) {
+          const payload = params[5]
+            ? JSON.parse(String(params[5]))
+            : {
+                generationId: params[0],
+                outputId: params[1],
+                contentGenerationInput: structuredClone(
+                  options.subjectAnalysisSnapshot ?? contentGenerationInputV2Fixture,
+                ),
+              };
+          generatedJobPayloads.push(payload);
+          Object.assign(job, { payload_json: payload, status: "queued" });
+        }
+        return { rows: [], rowCount: 1 };
+      }
       if (query.includes("update ai_content_generations") && query.includes("set status = 'queued'")) {
         generation = { ...generation, status: "queued" };
         return { rows: [], rowCount: 1 };
@@ -251,10 +549,24 @@ function createWorkerPool(options: {
     },
     release: () => undefined,
   };
-  return { connect: async () => client, query: client.query, sql, job, enablePendingCleanup() { pendingCleanup = true; } };
+  return {
+    connect: async () => client,
+    query: client.query,
+    sql,
+    job,
+    generatedJobPayloads,
+    completedOutputManifests,
+    completedOutputContents,
+    expireLeaseAtBoundary() { leaseAtBoundary = true; },
+    enablePendingCleanup() { pendingCleanup = true; },
+  };
 }
 
-const scope = { workspaceId: "workspace-1", brandId: "brand-1" };
+const scope = {
+  workspaceId: "workspace-1",
+  brandId: "brand-1",
+  actorUserId: "10000000-0000-4000-8000-000000000001",
+};
 const input = {
   ...scope,
   type: "card_news" as const,
@@ -262,8 +574,751 @@ const input = {
   draft: { productUrl: "https://example.com/product" },
   idempotencyKey: "analysis-key-1",
 };
+const contentGenerationInputV2Fixture = {
+  contractVersion: "content-generation-input.v2" as const,
+  contentType: "card_news" as const,
+  brandContext: {},
+  subject: {
+    analysisId: "analysis-1",
+    analysisVersion: 1,
+    analysisContractVersion: "subject-analysis.v1" as const,
+    analysisResult: null,
+    type: "product" as const,
+    sourceUrl: "",
+    facts: [],
+    research: {},
+    selectedImages: [],
+  },
+  message: {
+    target: { id: "target-1", name: "타깃" },
+    appeal: { id: "appeal-1", targetId: "target-1", title: "소구점" },
+    qualityBrief: { hook: "사용자 입력" },
+  },
+  creativeDirection: {
+    prompts: [],
+    brandColor: "",
+    selectedColor: "#0057B8",
+    aspectRatio: "1:1" as const,
+    outputCount: 1 as const,
+  },
+  references: [],
+  attachments: [],
+};
 
 describe("AI content repository", () => {
+  it("rejects repository writes when the authenticated actor is missing", async () => {
+    const pool = createPool();
+    const repository = createAiContentRepository(pool as never);
+    const { actorUserId: _actorUserId, ...missingActor } = input;
+
+    await expect(repository.createAiContentAnalysis(missingActor as never))
+      .rejects.toThrow("ai_content_actor_required");
+  });
+
+  it("validates the actor before returning an idempotent start replay", async () => {
+    const pool = createPool();
+    const repository = createAiContentRepository(pool as never);
+    await repository.createAiContentAnalysis(input);
+    pool.setGenerationIdempotencyKey("same-start");
+
+    await expect(repository.startAiContentGeneration({
+      workspaceId: scope.workspaceId,
+      brandId: scope.brandId,
+      generationId: "generation-1",
+      idempotencyKey: "same-start",
+      outputCount: 1,
+      usageDate: "2026-07-28",
+      dailyGenerationLimit: 10,
+    } as never)).rejects.toThrow("ai_content_actor_required");
+  });
+
+  it("validates the actor before looking up a generation to start", async () => {
+    const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
+    const repository = createAiContentRepository({ query } as never);
+
+    await expect(repository.startAiContentGeneration({
+      workspaceId: scope.workspaceId,
+      brandId: scope.brandId,
+      generationId: "missing-generation",
+      idempotencyKey: "missing-start",
+      outputCount: 1,
+      usageDate: "2026-07-28",
+      dailyGenerationLimit: 10,
+    } as never)).rejects.toThrow("ai_content_actor_required");
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("creates a proposal batch and job atomically from owned completed snapshots", async () => {
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        statements.push({ sql, params });
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (sql.includes("from source_urls source") && sql.includes("source_snapshots")) {
+          return {
+            rows: [{
+              id: "90000000-0000-4000-8000-000000000009",
+              source_url_id: "91000000-0000-4000-8000-000000000009",
+              url: "https://example.com/article",
+              fetched_at: "2026-07-28T00:00:00.000Z",
+              content_hash: "a".repeat(64),
+              summary: "stored summary",
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes("from content_performance_snapshots performance")) {
+          return { rows: [{ id: "92000000-0000-4000-8000-000000000009", snapshot_date: "2026-07-27", raw_metrics: { likes: 10 }, collected_at: "2026-07-28T00:00:00.000Z" }], rowCount: 1 };
+        }
+        if (sql.includes("insert into source_crawl_runs")) return { rows: [], rowCount: 0 };
+        if (sql.includes("insert into ai_content_proposal_batches")) {
+          return {
+            rows: [{
+              id: "93000000-0000-4000-8000-000000000009",
+              workspace_id: scope.workspaceId,
+              brand_id: scope.brandId,
+              origin: "manual",
+              content_family: "informational",
+              request_json: JSON.parse(String(params[4])),
+              source_snapshot_json: JSON.parse(String(params[5])),
+              status: "queued",
+              error_code: null,
+              error_message: null,
+              created_at: "2026-07-28T00:00:00.000Z",
+              updated_at: "2026-07-28T00:00:00.000Z",
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes("insert into ai_content_proposal_jobs")) return { rows: [], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+
+    const batch = await repository.createAiContentProposalBatch({
+      ...scope,
+      actorUserId: "10000000-0000-4000-8000-000000000001",
+      origin: "manual",
+      idempotencyKey: "proposal-batch-1",
+      request: {
+        contractVersion: "content-proposal-request.v1",
+        contentFamily: "informational",
+        subjectInput: { topic: "여름 관리" },
+        channelTargets: ["blog_export"],
+        outputFormats: ["blog"],
+        sourceSnapshotIds: ["90000000-0000-4000-8000-000000000009"],
+        performanceSnapshotIds: ["92000000-0000-4000-8000-000000000009"],
+      },
+    });
+
+    expect(batch).toMatchObject({ status: "queued", sourceSnapshots: [{ sourceId: "90000000-0000-4000-8000-000000000009" }] });
+    expect(statements.some(({ sql }) => sql.includes("insert into ai_content_proposal_jobs"))).toBe(true);
+    expect(statements.map(({ sql }) => sql)).toEqual(expect.arrayContaining(["BEGIN", "COMMIT"]));
+  });
+
+  it("selects under the database batch lock and links one generation draft", async () => {
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const client = {
+      query: vi.fn(async (query: string, params: unknown[] = []) => {
+        statements.push({ sql: query, params });
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(query)) return { rows: [], rowCount: 0 };
+        if (query.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (query.includes("select select_ai_content_proposal")) return { rows: [{ selected: params[0] }], rowCount: 1 };
+        if (query.includes("from ai_content_proposals proposal") && query.includes("join ai_content_proposal_batches")) {
+          return { rows: [{ id: params[0], proposal_json: { title: "선택 제안", outputFormat: "blog" }, content_family: "informational" }], rowCount: 1 };
+        }
+        if (query.includes("insert into ai_content_generations")) return { rows: [row("generation-1", "draft")], rowCount: 1 };
+        if (query.includes("insert into ai_content_approved_proposal_versions")) return { rows: [{ id: "approved-1" }], rowCount: 1 };
+        if (query.includes("update ai_content_proposals")) return { rows: [], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+
+    const selected = await repository.selectAiContentProposal({
+      ...scope,
+      proposalId: "70000000-0000-4000-8000-000000000007",
+      actorUserId: "10000000-0000-4000-8000-000000000001",
+      idempotencyKey: "select-1",
+    });
+
+    expect(selected.status).toBe("draft");
+    expect(statements.map(({ sql }) => sql).join("\n")).toContain("select_ai_content_proposal");
+    expect(statements.map(({ sql }) => sql).join("\n")).toContain("insert into ai_content_approved_proposal_versions");
+    const generationInsert = statements.find(({ sql }) => sql.includes("insert into ai_content_generations"));
+    expect(generationInsert?.sql).not.toContain("'brand_topic'");
+    expect(generationInsert?.params.slice(-3)).toEqual([null, null, "10000000-0000-4000-8000-000000000001"]);
+  });
+
+  it("returns an existing linked draft only for the same locked idempotent selection", async () => {
+    const statements: string[] = [];
+    const proposalId = "70000000-0000-4000-8000-000000000007";
+    const existing = {
+      ...row("generation-1", "draft"),
+      analysis_idempotency_key: `proposal:${proposalId}:select-1`,
+      draft_json: { origin: "proposal", proposalId },
+    };
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        statements.push(sql);
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (sql.includes("select select_ai_content_proposal")) return { rows: [{ selected: params[0] }], rowCount: 1 };
+        if (sql.includes("from ai_content_proposals proposal") && sql.includes("join ai_content_proposal_batches")) {
+          return {
+            rows: [{
+              id: proposalId,
+              proposal_json: { title: "선택 제안", outputFormat: "blog" },
+              generation_id: "generation-1",
+              content_family: "informational",
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes("from ai_content_generations")) return { rows: [existing], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+
+    await expect(repository.selectAiContentProposal({
+      ...scope,
+      proposalId,
+      idempotencyKey: "select-1",
+    })).resolves.toMatchObject({ id: "generation-1", status: "draft" });
+    expect(statements.some((sql) => sql.includes("from ai_content_generations")
+      && sql.includes("for update"))).toBe(true);
+  });
+
+  it.each([
+    ["different selection key", "draft", "proposal:70000000-0000-4000-8000-000000000007:other-key", "70000000-0000-4000-8000-000000000007"],
+    ["different proposal", "draft", "proposal:80000000-0000-4000-8000-000000000008:select-1", "80000000-0000-4000-8000-000000000008"],
+    ["failed generation", "failed", "proposal:70000000-0000-4000-8000-000000000007:select-1", "70000000-0000-4000-8000-000000000007"],
+  ])("rejects an existing linked generation for a %s", async (_label, status, identity, draftProposalId) => {
+    const proposalId = "70000000-0000-4000-8000-000000000007";
+    const existing = {
+      ...row("generation-1", status),
+      analysis_idempotency_key: identity,
+      draft_json: { origin: "proposal", proposalId: draftProposalId },
+    };
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (sql.includes("select select_ai_content_proposal")) return { rows: [{ selected: params[0] }], rowCount: 1 };
+        if (sql.includes("from ai_content_proposals proposal") && sql.includes("join ai_content_proposal_batches")) {
+          return {
+            rows: [{
+              id: proposalId,
+              proposal_json: { title: "선택 제안", outputFormat: "blog" },
+              generation_id: "generation-1",
+              content_family: "informational",
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes("from ai_content_generations")) return { rows: [existing], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+
+    await expect(repository.selectAiContentProposal({
+      ...scope,
+      proposalId,
+      idempotencyKey: "select-1",
+    })).rejects.toThrow("ai_content_proposal_selection_conflict");
+  });
+
+  it.each([
+    ["brand_topic", { mode: "brand_topic", topic: "여름 관리", wikiItemIds: [] }, null],
+    ["product_service", { mode: "product_service", productServiceId: "60000000-0000-4000-8000-000000000006" }, "60000000-0000-4000-8000-000000000006"],
+    ["new_subject", { mode: "new_subject", subjectAnalysisId: "70000000-0000-4000-8000-000000000007" }, null],
+  ])("persists %s canonical subject columns while updating a locked draft", async (mode, subject, productServiceId) => {
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const generation = row("generation-1", "draft");
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        statements.push({ sql, params });
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (sql.includes("from ai_content_generations") && sql.includes("for update")) return { rows: [generation], rowCount: 1 };
+        if (sql.includes("update ai_content_generations")) return { rows: [generation], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+
+    await repository.updateAiContentDraft({
+      ...scope,
+      generationId: "generation-1",
+      actorUserId: "10000000-0000-4000-8000-000000000001",
+      draft: {},
+      referenceIds: [],
+      orchestration: {
+        contractVersion: "content-orchestration.v1",
+        contentFamily: "informational",
+        subject,
+        target: { id: null, snapshot: {} },
+        strategy: "how_to",
+        outputFormat: "blog",
+        channelTargets: ["blog_export"],
+        brief: {},
+        references: [],
+        avatar: null,
+      } as never,
+    });
+
+    const update = statements.find(({ sql }) => sql.includes("update ai_content_generations"));
+    expect(update?.sql).toContain("subject_mode");
+    expect(update?.sql).toContain("product_service_id");
+    expect(update?.params.slice(-3)).toEqual([mode, productServiceId, "10000000-0000-4000-8000-000000000001"]);
+  });
+
+  it("rejects a canonical start when persisted subject columns do not match the draft", async () => {
+    const orchestration = {
+      contractVersion: "content-orchestration.v1",
+      contentFamily: "informational",
+      subject: { mode: "new_subject", subjectAnalysisId: "70000000-0000-4000-8000-000000000007" },
+      target: { id: null, snapshot: {} },
+      strategy: "how_to",
+      outputFormat: "blog",
+      channelTargets: ["blog_export"],
+      brief: {},
+      references: [],
+      avatar: null,
+    };
+    const generation = {
+      ...row("generation-1", "draft"),
+      type: "blog",
+      draft_json: { orchestration },
+      content_family: "informational",
+      output_format: "blog",
+      subject_mode: "brand_topic",
+      product_service_id: null,
+    };
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (sql.includes("from ai_content_generations")) return { rows: [generation], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+
+    await expect(repository.startAiContentGeneration({
+      ...scope,
+      generationId: "generation-1",
+      actorUserId: "10000000-0000-4000-8000-000000000001",
+      idempotencyKey: "mapping-mismatch",
+      outputCount: 1,
+      usageDate: "2026-07-28",
+      dailyGenerationLimit: 10,
+    })).rejects.toThrow("ai_content_subject_mapping_mismatch");
+  });
+
+  it("lists only incomplete real draft references for archive warnings", async () => {
+    const query = vi.fn(async (sql: string) => ({
+      rows: sql.includes("ai_content_generation_references")
+        ? [{ asset_type: "reference", asset_id: "reference-1", generation_id: "generation-1", title: "초안" }]
+        : [],
+      rowCount: 1,
+    }));
+    const repository = createAiContentRepository({ query } as never);
+
+    await expect(repository.listAiContentDraftReferences({
+      ...scope,
+      assetType: "reference",
+      assetId: "reference-1",
+    })).resolves.toEqual([
+      { assetType: "reference", assetId: "reference-1", generationId: "generation-1", title: "초안" },
+    ]);
+    expect(query.mock.calls[0]?.[0]).toContain("generation.status in ('draft','analysis_ready')");
+    expect(query.mock.calls[0]?.[0]).not.toContain("draft_json::text");
+  });
+
+  it.each([
+    ["avatar", "draft_json->'orchestration'->'avatar'->>'id'"],
+    ["product_service", "draft_json->'orchestration'->'subject'->>'productServiceId'"],
+    ["wiki", "draft_json->'orchestration'->'subject'->'wikiItemIds'"],
+  ])("resolves canonical %s draft references before start snapshots exist", async (assetType, expectedSql) => {
+    const query = vi.fn(async (_sql: string) => ({ rows: [], rowCount: 0 }));
+    const repository = createAiContentRepository({ query } as never);
+
+    await repository.listAiContentDraftReferences({
+      ...scope,
+      assetType: assetType as "avatar" | "product_service" | "wiki",
+      assetId: "60000000-0000-4000-8000-000000000006",
+    });
+
+    expect(query.mock.calls[0]?.[0]).toContain(expectedSql);
+  });
+
+  it("scopes draft reference warnings to the tenant and excludes every started or terminal generation", async () => {
+    const query = vi.fn(async (_sql: string) => ({ rows: [], rowCount: 0 }));
+    const repository = createAiContentRepository({ query } as never);
+
+    await repository.listAiContentDraftReferences({
+      ...scope,
+      assetType: "reference",
+      assetId: "60000000-0000-4000-8000-000000000006",
+    });
+
+    const sql = String(query.mock.calls[0]?.[0]);
+    expect(sql).toContain("generation.workspace_id=$1 and generation.brand_id=$2");
+    expect(sql).toContain("generation.status in ('draft','analysis_ready')");
+    expect(sql).toContain("generation.attachments_locked_at is null");
+    expect(sql).toContain("generation.orchestration_snapshot is null");
+  });
+
+  it("starts canonical orchestration with one frozen brief, outputs, job, and ledger transaction", async () => {
+    const oneTimeReceiptId = "a0000000-0000-4000-8000-00000000000a";
+    const oneTimeSessionId = "b0000000-0000-4000-8000-00000000000b";
+    const orchestration = {
+      contractVersion: "content-orchestration.v1",
+      contentFamily: "informational",
+      subject: { mode: "brand_topic", topic: "여름 관리", wikiItemIds: [] },
+      target: { id: null, snapshot: {} },
+      strategy: "how_to",
+      outputFormat: "blog",
+      channelTargets: ["blog_export"],
+      brief: {},
+      references: [],
+      avatar: {
+        mode: "one_time",
+        id: oneTimeReceiptId,
+        snapshot: { fileName: "campaign-person.png" },
+      },
+    };
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const generation = {
+      ...row("generation-1", "draft"),
+      type: "blog",
+      draft_json: {
+        orchestration,
+        proposalId: "70000000-0000-4000-8000-000000000007",
+        approvedProposalVersionId: "80000000-0000-4000-8000-000000000008",
+      },
+      content_family: "informational",
+      output_format: "blog",
+      subject_mode: "brand_topic",
+      product_service_id: null,
+      orchestration_snapshot: null,
+    };
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        statements.push({ sql, params });
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (sql.includes("from ai_content_generations") && sql.includes("where id = $1")) return { rows: [generation], rowCount: 1 };
+        if (sql.includes("from ai_content_usage_ledger")) return { rows: [{ generation_count: 0 }], rowCount: 1 };
+        if (sql.includes("from brand_profiles profile")) {
+          return { rows: [{
+            brand_core_version_id: "40000000-0000-4000-8000-000000000004",
+            rule_set_version_id: "50000000-0000-4000-8000-000000000005",
+            approved_proposal_snapshot: {
+              contractVersion: "approved-proposal.v1",
+              sourceProposalId: "70000000-0000-4000-8000-000000000007",
+            },
+          }], rowCount: 1 };
+        }
+        if (sql.includes("from ai_content_generation_references")) return { rows: [], rowCount: 0 };
+        if (sql.includes("from ai_content_one_time_avatar_receipts")) return { rows: [{
+          id: oneTimeReceiptId,
+          upload_session_id: oneTimeSessionId,
+          object_hash: "a".repeat(64),
+          mime_type: "image/png",
+        }], rowCount: 1 };
+        if (sql.includes("start_ai_content_orchestration")) return { rows: [{ id: "generation-1" }], rowCount: 1 };
+        if (sql.includes("update ai_content_generations") && sql.includes("generation_idempotency_key")) {
+          return { rows: [{ ...generation, status: "queued", current_stage: "generation" }], rowCount: 1 };
+        }
+        if (sql.includes("insert into ai_content_generation_outputs")) return { rows: [{ id: "output-1" }], rowCount: 1 };
+        return { rows: [], rowCount: 1 };
+      }),
+      release: vi.fn(),
+    };
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+
+    const started = await repository.startAiContentGeneration({
+      ...scope,
+      generationId: "generation-1",
+      actorUserId: "10000000-0000-4000-8000-000000000001",
+      idempotencyKey: "canonical-start-1",
+      outputCount: 1,
+      usageDate: "2026-07-28",
+      dailyGenerationLimit: 10,
+    });
+
+    expect(started.status).toBe("queued");
+    const freeze = statements.find(({ sql }) => sql.includes("start_ai_content_orchestration"));
+    const receiptLookup = statements.find(({ sql }) => sql.includes("from ai_content_one_time_avatar_receipts"));
+    expect(receiptLookup?.params).toEqual([
+      oneTimeReceiptId,
+      "generation-1",
+      scope.workspaceId,
+      scope.brandId,
+      scope.actorUserId,
+    ]);
+    expect(JSON.parse(String(freeze?.params[3]))).toMatchObject({
+      contractVersion: "generation-brief.v1",
+      brandCoreVersionId: "40000000-0000-4000-8000-000000000004",
+      ruleSetVersionId: "50000000-0000-4000-8000-000000000005",
+      outputFormat: "blog",
+      avatar: {
+        id: oneTimeSessionId,
+        assetVersionId: oneTimeReceiptId,
+        objectHash: "a".repeat(64),
+        mime: "image/png",
+        provenance: "one_time",
+      },
+    });
+    expect(statements.map(({ sql }) => sql)).toEqual(expect.arrayContaining([
+      "BEGIN",
+      "COMMIT",
+    ]));
+    expect(statements.some(({ sql }) => sql.includes("insert into ai_content_usage_ledger"))).toBe(true);
+    expect(statements.some(({ sql }) => sql.includes("updated_by_user_id"))).toBe(true);
+  });
+
+  it("freezes the same-tenant ready analysis for canonical new_subject start", async () => {
+    const analysisId = "60000000-0000-4000-8000-000000000006";
+    const generation = {
+      ...row("generation-1", "draft"),
+      type: "blog",
+      draft_json: {
+        orchestration: {
+          contractVersion: "content-orchestration.v1",
+          contentFamily: "informational",
+          subject: { mode: "new_subject", subjectAnalysisId: analysisId },
+          target: { id: null, snapshot: {} },
+          strategy: "how_to",
+          outputFormat: "blog",
+          channelTargets: ["blog_export"],
+          brief: {},
+          references: [],
+          avatar: null,
+        },
+        proposalId: "70000000-0000-4000-8000-000000000007",
+        approvedProposalVersionId: "80000000-0000-4000-8000-000000000008",
+      },
+      content_family: "informational",
+      output_format: "blog",
+      subject_mode: "new_subject",
+      product_service_id: null,
+    };
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        statements.push({ sql, params });
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (sql.includes("from ai_content_generations") && sql.includes("where id = $1")) return { rows: [generation], rowCount: 1 };
+        if (sql.includes("from ai_content_usage_ledger")) return { rows: [{ generation_count: 0 }], rowCount: 1 };
+        if (sql.includes("from brand_profiles profile")) return { rows: [{
+          brand_core_version_id: "40000000-0000-4000-8000-000000000004",
+          rule_set_version_id: "50000000-0000-4000-8000-000000000005",
+          approved_proposal_snapshot: { contractVersion: "approved-proposal.v1" },
+        }], rowCount: 1 };
+        if (sql.includes("from ai_content_subject_analyses analysis")) return { rows: [{
+          id: analysisId,
+          analysis_version: 2,
+          contract_version: "subject-analysis.v2",
+          subject_type: "service",
+          source_url: "https://example.com/service",
+          normalized_url: "https://example.com/service",
+          input_json: { name: "서비스" },
+          facts_json: [{ key: "name", value: "서비스" }],
+          research_json: {},
+          analysis_result_json: { summary: "분석" },
+          selected_images: [],
+          captured_at: "2026-07-28T00:00:00.000Z",
+        }], rowCount: 1 };
+        if (sql.includes("insert into ai_content_analyzed_subject_snapshots")) return { rows: [], rowCount: 1 };
+        if (sql.includes("from ai_content_generation_references")) return { rows: [], rowCount: 0 };
+        if (sql.includes("start_ai_content_orchestration")) return { rows: [{}], rowCount: 1 };
+        if (sql.includes("update ai_content_generations") && sql.includes("generation_idempotency_key")) {
+          return { rows: [{ ...generation, status: "queued", current_stage: "generation" }], rowCount: 1 };
+        }
+        if (sql.includes("insert into ai_content_generation_outputs")) return { rows: [{ id: "output-1" }], rowCount: 1 };
+        return { rows: [], rowCount: 1 };
+      }),
+      release: vi.fn(),
+    };
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+
+    await repository.startAiContentGeneration({
+      ...scope,
+      generationId: "generation-1",
+      actorUserId: "10000000-0000-4000-8000-000000000001",
+      idempotencyKey: "new-subject-start-1",
+      outputCount: 1,
+      usageDate: "2026-07-28",
+      dailyGenerationLimit: 10,
+    });
+
+    const freeze = statements.find(({ sql }) => sql.includes("start_ai_content_orchestration"));
+    expect(JSON.parse(String(freeze?.params[3])).subject).toMatchObject({
+      kind: "analyzed_subject",
+      analysisId,
+      snapshot: {
+        contractVersion: "analyzed-subject-snapshot.v1",
+        analysisVersion: 2,
+        analysisContractVersion: "subject-analysis.v2",
+      },
+    });
+    expect(statements.some(({ sql }) => sql.includes("insert into ai_content_analyzed_subject_snapshots"))).toBe(true);
+  });
+
+  it("returns only public lifecycle fields and never exposes the immutable input snapshot", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("from ai_content_generation_outputs")) {
+        return { rows: [], rowCount: 0 };
+      }
+      return {
+        rows: [{
+          ...row("generation-1", "failed"),
+          attachments_locked_at: "2026-07-18T01:00:00.000Z",
+          terminal_at: "2026-07-18T02:00:00.000Z",
+          retryable_until: "2026-08-02T02:00:00.000Z",
+          generation_input_snapshot: {
+            brandContext: { secret: "internal" },
+            attachments: [{
+              storagePath: "private/path.png",
+              storageUrl: "https://blob.example.com/private/path.png",
+            }],
+          },
+          subject_analysis_snapshot: {
+            brandContext: { secret: "internal" },
+          },
+        }],
+        rowCount: 1,
+      };
+    });
+    const repository = createAiContentRepository({ query } as never);
+
+    const [generation] = await repository.listAiContentGenerations(scope);
+
+    expect(generation).toMatchObject({
+      attachmentsLockedAt: "2026-07-18T01:00:00.000Z",
+      terminalAt: "2026-07-18T02:00:00.000Z",
+      retryableUntil: "2026-08-02T02:00:00.000Z",
+    });
+    expect(generation).not.toHaveProperty("generationInputSnapshot");
+    expect(generation).not.toHaveProperty("subjectAnalysisSnapshot");
+    expect(JSON.stringify(generation)).not.toContain("private/path.png");
+    expect(JSON.stringify(generation)).not.toContain("brandContext");
+  });
+
+  it("returns a tenant-scoped sanitized frozen evidence snapshot for generation detail", async () => {
+    const query = vi.fn(async (sql: string, params: unknown[] = []) => {
+      if (sql.includes("from ai_content_generation_outputs")) {
+        return {
+          rows: [{
+            id: "output-reel",
+            generation_id: "generation-1",
+            output_index: 1,
+            title: "과거 릴스",
+            status: "completed",
+            content_json: { caption: "과거 결과" },
+            artifact_manifest_json: { deliveryFormat: "instagram_reel", assets: [] },
+            manifest_url: null,
+            failure_code: null,
+            failure_message: null,
+            downloaded_at: null,
+            created_at: "2026-07-18T00:00:00.000Z",
+            updated_at: "2026-07-18T00:00:00.000Z",
+            completed_at: "2026-07-18T00:00:00.000Z",
+          }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("from ai_content_generation_references")) {
+        expect(params).toEqual(["generation-1", "workspace-1", "brand-1"]);
+        return {
+          rows: [{
+            reference_id: "reference-1",
+            reference_snapshot_json: {
+              title: "동결된 레퍼런스",
+              url: "https://example.com/reference",
+              previewUrl: "https://cdn.example.com/reference.png",
+            },
+            roles_json: ["planning"],
+          }],
+          rowCount: 1,
+        };
+      }
+      expect(params).toEqual(["generation-1", "workspace-1", "brand-1"]);
+      return {
+        rows: [{
+          ...row("generation-1", "completed"),
+          orchestration_snapshot: {
+            contractVersion: "generation-brief.v1",
+            proposalId: "proposal-1",
+            approvedProposalSnapshot: { title: "동결된 구현안", hook: "동결된 훅" },
+            references: [{ itemId: "reference-1", roles: ["planning"] }],
+            avatar: { id: "avatar-1", objectHash: "avatar-hash" },
+          },
+          generation_input_snapshot: {
+            contractVersion: "content-generation-input.v2",
+            contentType: "card_news",
+            brandContext: { secret: "must-not-leak" },
+            subject: { analysisId: "analysis-1", facts: [{ key: "benefit", value: "편안함" }] },
+            message: { target: { id: "target-1", name: "고객" }, qualityBrief: { hook: "동결된 훅" } },
+            creativeDirection: { outputCount: 1 },
+            attachments: [{ storagePath: "private/path.png" }],
+          },
+          avatar_snapshot: { id: "avatar-1", objectHash: "avatar-hash" },
+        }],
+        rowCount: 1,
+      };
+    });
+    const repository = createAiContentRepository({ query } as never);
+
+    const generation = await repository.getAiContentGeneration({
+      ...scope,
+      generationId: "generation-1",
+    });
+
+    expect(generation).toMatchObject({
+      evidenceSnapshot: {
+        orchestration: {
+          proposalId: "proposal-1",
+          approvedProposalSnapshot: { title: "동결된 구현안", hook: "동결된 훅" },
+        },
+        generationInput: {
+          contentType: "card_news",
+          subject: { analysisId: "analysis-1" },
+          message: { target: { id: "target-1" } },
+          creativeDirection: { outputCount: 1 },
+        },
+        references: [{
+          id: "reference-1",
+          title: "동결된 레퍼런스",
+          url: "https://example.com/reference",
+          roles: ["planning"],
+        }],
+        avatar: { id: "avatar-1", objectHash: "avatar-hash" },
+        proposal: { title: "동결된 구현안", hook: "동결된 훅" },
+      },
+      outputs: [{
+        legacyReadOnly: true,
+        revisionCapabilities: [],
+      }],
+    });
+    expect(JSON.stringify(generation)).not.toContain("must-not-leak");
+    expect(JSON.stringify(generation)).not.toContain("private/path.png");
+  });
+
   it("returns source URL ids for blog references so they can be snapshotted later", async () => {
     const pool = createPool();
     const repository = createAiContentRepository(pool as never);
@@ -271,6 +1326,35 @@ describe("AI content repository", () => {
     await repository.listAiContentReferences({ ...scope, type: "blog" });
 
     expect(pool.sql.join("\n")).toContain("select source.id, 'saved_url' as source");
+    expect(pool.sql.join("\n")).toContain("item.content_purpose in ('informational', 'both')");
+  });
+
+  it("applies recommended strategy, format, and tag filters inside the tenant-scoped reference query", async () => {
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, params: unknown[] = []) => {
+      calls.push({ sql, params });
+      return { rows: [], rowCount: 0 };
+    });
+    const repository = createAiContentRepository({ query } as never);
+
+    await repository.listAiContentReferences({
+      ...scope,
+      type: "blog",
+      strategies: ["how_to"],
+      formats: ["blog"],
+      tags: ["여름"],
+    });
+
+    expect(calls[0]?.sql).toContain("item.workspace_id = $1");
+    expect(calls[0]?.sql).toContain("item.brand_id = $2");
+    expect(calls[0]?.sql).toContain("item.metadata");
+    expect(calls[0]?.params).toEqual([
+      scope.workspaceId,
+      scope.brandId,
+      ["how_to"],
+      ["blog"],
+      ["여름"],
+    ]);
   });
 
   it("creates a generation and analyze job atomically", async () => {
@@ -282,8 +1366,28 @@ describe("AI content repository", () => {
     expect(result.status).toBe("analyzing");
     expect(result.draft).toMatchObject({ origin: "manual" });
     expect(pool.sql.join("\n")).toContain("insert into ai_content_generation_jobs");
+    expect(pool.sql.join("\n")).toContain("created_by_user_id");
     expect(pool.sql.join("\n")).toContain("jsonb_build_object('generationId', $1::uuid)");
     expect(pool.commands).toEqual(expect.arrayContaining(["BEGIN", "COMMIT"]));
+  });
+
+  it.each([
+    ["marketing", {}, ["marketing", "single_image", "brand_topic", null]],
+    ["blog", { subjectAnalysisId: "analysis-1" }, ["informational", "blog", "new_subject", null]],
+    ["card_news", { productServiceId: "60000000-0000-4000-8000-000000000006" }, [
+      "informational",
+      "card_news",
+      "product_service",
+      "60000000-0000-4000-8000-000000000006",
+    ]],
+  ] as const)("writes canonical orchestration mapping for %s", async (type, draft, expected) => {
+    const pool = createPool();
+    const repository = createAiContentRepository(pool as never);
+
+    await repository.createAiContentAnalysis({ ...input, type, draft });
+
+    expect(pool.sql.join("\n")).toContain("content_family, output_format, subject_mode, product_service_id");
+    expect(pool.generationInsertParams.slice(9, 13)).toEqual(expected);
   });
 
   it("applies stored owned context without queueing a CLI analysis job", async () => {
@@ -444,6 +1548,7 @@ describe("AI content repository", () => {
     expect(result.id).toBe("generation-1");
     expect(result.draft).toMatchObject({ origin: "manual" });
     expect(pool.sql.join("\n")).toContain("ai_content_generation_references");
+    expect(pool.sql.join("\n")).toContain("updated_by_user_id");
     expect(pool.sql.join("\n")).toContain("media.media_url");
     expect(pool.sql.join("\n")).toContain("_previewUrl");
     expect(pool.referenceSnapshots[0]).toMatchObject({
@@ -467,6 +1572,27 @@ describe("AI content repository", () => {
       referenceIds: ["reference-from-another-brand"],
     })).rejects.toThrow("ai_content_reference_not_found");
     expect(pool.commands).toContain("ROLLBACK");
+  });
+
+  it("allows attachment-neutral draft updates after lock but rejects attachment identity changes", async () => {
+    const pool = createPool({ attachmentsLocked: true });
+    const repository = createAiContentRepository(pool as never);
+    await repository.createAiContentAnalysis(input);
+    pool.setGenerationStatus("analysis_ready");
+
+    await expect(repository.updateAiContentDraft({
+      ...scope,
+      generationId: "generation-1",
+      draft: { productUrl: "https://example.com/new" },
+      referenceIds: [],
+    })).resolves.toMatchObject({ id: "generation-1" });
+
+    await expect(repository.updateAiContentDraft({
+      ...scope,
+      generationId: "generation-1",
+      draft: { productUrl: "https://example.com/new", attachmentIds: ["attachment-new"] },
+      referenceIds: [],
+    })).rejects.toThrow("ai_content_attachments_locked");
   });
 
   it("queues final analysis before one through three output jobs", async () => {
@@ -525,25 +1651,97 @@ describe("AI content repository", () => {
     expect(pool.commands).toContain("ROLLBACK");
   });
 
-  it("confirms an attachment only for the scoped generation and keeps confirmation idempotent", async () => {
-    const pool = createPool();
-    const repository = createAiContentRepository(pool as never);
-    await repository.createAiContentAnalysis(input);
+  it("uses a new quota date exactly at the KST midnight boundary", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-18T14:59:59.999Z"));
+      expect(kstDateKey(new Date())).toBe("2026-07-18");
 
-    const result = await repository.confirmAiContentAttachment({
+      vi.setSystemTime(new Date("2026-07-18T15:00:00.000Z"));
+      expect(kstDateKey(new Date())).toBe("2026-07-19");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("performs optional brand-intelligence provider I/O before opening the final-start transaction", async () => {
+    const pool = createPool();
+    let transactionWasOpen = false;
+    const repository = createAiContentRepository(pool as never, {
+      brandIntelligenceProvider: {
+        getConfirmed: vi.fn(async () => {
+          transactionWasOpen = pool.commands.includes("BEGIN");
+          return null;
+        }),
+      },
+    });
+    await repository.createAiContentAnalysis(input);
+    await repository.updateAiContentDraft({
       ...scope,
       generationId: "generation-1",
-      role: "product",
-      fileName: "product.png",
-      mimeType: "image/png",
-      sizeBytes: 100,
-      checksum: "a".repeat(64),
-      storageUrl: "https://example.public.blob.vercel-storage.com/path",
-      storagePath: "brands/brand-1/ai-content/generation-1/attachments/product.png",
+      draft: { analysisSource: "owned" },
+      referenceIds: [],
     });
+    pool.setGenerationStatus("analysis_ready");
+    pool.commands.length = 0;
 
-    expect(result).toMatchObject({ id: "attachment-1", generationId: "generation-1" });
-    expect(pool.sql.join("\n")).toContain("on conflict (generation_id, storage_path) do update");
+    await expect(repository.startAiContentGeneration({
+      ...scope,
+      generationId: "generation-1",
+      idempotencyKey: "provider-before-transaction",
+      outputCount: 1,
+      usageDate: "2026-07-18",
+      dailyGenerationLimit: 10,
+    })).rejects.toThrow("brand_intelligence_required");
+
+    expect(transactionWasOpen).toBe(false);
+  });
+
+  it("returns an idempotent owned replay without calling a throwing provider", async () => {
+    const pool = createPool();
+    const getConfirmed = vi.fn(async () => {
+      throw new Error("provider_unavailable");
+    });
+    const repository = createAiContentRepository(pool as never, {
+      brandIntelligenceProvider: { getConfirmed },
+    });
+    pool.setGenerationStatus("analyzing");
+    pool.setGenerationDraft({ analysisSource: "owned" });
+    pool.setGenerationIdempotencyKey("existing-generation");
+
+    await expect(repository.startAiContentGeneration({
+      ...scope,
+      generationId: "generation-1",
+      idempotencyKey: "existing-generation",
+      outputCount: 1,
+      usageDate: "2026-07-18",
+      dailyGenerationLimit: 10,
+    })).resolves.toMatchObject({ id: "generation-1", status: "analyzing" });
+
+    expect(getConfirmed).not.toHaveBeenCalled();
+  });
+
+  it("starts a non-owned generation without calling the configured provider", async () => {
+    const pool = createPool();
+    const getConfirmed = vi.fn(async () => {
+      throw new Error("provider_unavailable");
+    });
+    const repository = createAiContentRepository(pool as never, {
+      brandIntelligenceProvider: { getConfirmed },
+    });
+    pool.setGenerationStatus("analysis_ready");
+    pool.setGenerationDraft({ analysisSource: "manual" });
+
+    await expect(repository.startAiContentGeneration({
+      ...scope,
+      generationId: "generation-1",
+      idempotencyKey: "non-owned-generation",
+      outputCount: 1,
+      usageDate: "2026-07-18",
+      dailyGenerationLimit: 10,
+    })).resolves.toMatchObject({ id: "generation-1", status: "analyzing" });
+
+    expect(getConfirmed).not.toHaveBeenCalled();
   });
 
   it("claims only the requested content type with a recoverable lease", async () => {
@@ -551,9 +1749,19 @@ describe("AI content repository", () => {
     const repository = createAiContentRepository(pool as never);
     const job = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
     expect(job).toMatchObject({ id: "job-1", contentType: "card_news", status: "processing", workerId: "card-worker-1" });
-    expect(job?.payload).toMatchObject({ brandContext: { brand: { name: "Growthline" }, wiki: { versionId: "wiki-1" } } });
-    expect(pool.sql.join("\n")).toContain("for update skip locked");
+    expect(job?.payload.contentGenerationInput).toEqual(contentGenerationInputV2Fixture);
+    const generationLock = pool.sql.findIndex((sql) =>
+      sql.includes("from ai_content_generations") && sql.includes("for update"));
+    const outputLock = pool.sql.findIndex((sql) =>
+      sql.includes("from ai_content_generation_outputs") && sql.includes("for update"));
+    const jobLock = pool.sql.findIndex((sql) =>
+      sql.includes("from ai_content_generation_jobs") && sql.includes("for update"));
+    expect(generationLock).toBeGreaterThanOrEqual(0);
+    expect(outputLock).toBeGreaterThan(generationLock);
+    expect(jobLock).toBeGreaterThan(outputLock);
     expect(pool.sql.join("\n")).toContain("content_type = $1");
+    expect(pool.sql.join("\n")).not.toContain("select generation.draft_json");
+    expect(pool.sql.join("\n")).not.toContain("from brands brand");
   });
 
   it("rejects a heartbeat from a different lease owner", async () => {
@@ -563,10 +1771,86 @@ describe("AI content repository", () => {
     await expect(repository.heartbeatAiContentJob({ jobId: "job-1", workerId: "wrong-worker", leaseToken: "wrong-token", leaseSeconds: 180 })).resolves.toBe(false);
   });
 
+  it("extends heartbeat timestamps from the actual current DB clock", async () => {
+    const pool = createWorkerPool();
+    const repository = createAiContentRepository(pool as never);
+    const claimed = await repository.claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-1",
+      leaseSeconds: 180,
+    });
+
+    await expect(repository.heartbeatAiContentJob({
+      jobId: "job-1",
+      workerId: "card-worker-1",
+      leaseToken: claimed!.leaseToken!,
+      leaseSeconds: 180,
+    })).resolves.toBe(true);
+    const heartbeatSql = pool.sql.find((sql) =>
+      sql.includes("set (lease_expires_at, last_heartbeat_at)"));
+    expect(heartbeatSql).toContain(
+      "heartbeat.at + ($4::text || ' seconds')::interval",
+    );
+    expect(heartbeatSql).toContain("select clock_timestamp() as at");
+    expect(heartbeatSql).toContain("lease_expires_at > clock_timestamp()");
+  });
+
+  it.each(["complete", "fail"] as const)(
+    "rejects %s when the lease equals the current DB clock after locks are acquired",
+    async (operation) => {
+    const pool = createWorkerPool();
+    const repository = createAiContentRepository(pool as never);
+    const claimed = await repository.claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-1",
+      leaseSeconds: 180,
+    });
+    pool.expireLeaseAtBoundary();
+
+    const result = operation === "complete"
+      ? repository.completeAiContentJob({
+          jobId: "job-1",
+          workerId: "card-worker-1",
+          leaseToken: claimed!.leaseToken!,
+          skillVersion: "card-news-skill.v1",
+          jobType: "generate",
+          manifestUrl: "https://blob.example.com/manifest.json",
+          manifest: {
+            version: "ai-content.v1",
+            type: "card_news",
+            title: "여름 추천",
+            assets: [{
+              role: "slide",
+              url: "https://blob.example.com/slide.png",
+              fileName: "slide.png",
+              mimeType: "image/png",
+              width: 1080,
+              height: 1080,
+              index: 1,
+            }],
+            content: { caption: "내용", hashtags: ["여름"], cta: "저장하세요" },
+          },
+        })
+      : repository.failAiContentJob({
+          jobId: "job-1",
+          workerId: "card-worker-1",
+          leaseToken: claimed!.leaseToken!,
+          errorCode: "equal_boundary",
+          errorMessage: "equal",
+          retryable: false,
+        });
+    await expect(result).rejects.toThrow("ai_content_job_lease_invalid");
+    expect(pool.sql.join("\n")).toContain(
+      "lease_expires_at <= clock_timestamp() as lease_expired",
+    );
+    },
+  );
+
   it("completes a generated manifest idempotently", async () => {
     const pool = createWorkerPool();
     const repository = createAiContentRepository(pool as never);
     const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
+    const completionSqlStart = pool.sql.length;
     const completion = {
       jobId: "job-1", workerId: "card-worker-1", leaseToken: claimed!.leaseToken!, skillVersion: "card-news-skill.v1", jobType: "generate" as const,
       manifestUrl: "https://blob.example.com/manifest.json",
@@ -576,12 +1860,86 @@ describe("AI content repository", () => {
     const second = await repository.completeAiContentJob(completion);
     expect(first.id).toBe(second.id);
     expect(first.status).toBe("completed");
+    expect(first.terminalAt).not.toBeNull();
+    expect(first.retryableUntil).not.toBeNull();
+    expect(second.terminalAt).toBe(first.terminalAt);
+    expect(second.retryableUntil).toBe(first.retryableUntil);
+    const completionSql = pool.sql.slice(completionSqlStart);
+    const generationLock = completionSql.findIndex((sql) =>
+      sql.includes("from ai_content_generations") && sql.includes("for update"));
+    const outputLock = completionSql.findIndex((sql) =>
+      sql.includes("from ai_content_generation_outputs") && sql.includes("for update"));
+    const jobLock = completionSql.findIndex((sql) =>
+      sql.includes("from ai_content_generation_jobs") && sql.includes("for update"));
+    const outputAggregate = completionSql.findIndex((sql) =>
+      sql.includes("count(*)::integer as total"));
+    expect(generationLock).toBeGreaterThanOrEqual(0);
+    expect(outputLock).toBeGreaterThan(generationLock);
+    expect(jobLock).toBeGreaterThan(outputLock);
+    expect(outputAggregate).toBeGreaterThan(generationLock);
   });
 
-  it("deletes temporary attachments after every output completes", async () => {
+  it("merges an individual-card revision without replacing successful sibling cards or copy", async () => {
+    const previousManifest = {
+      version: "ai-content.v1",
+      type: "card_news",
+      title: "기존 제목",
+      assets: [
+        { role: "slide", url: "https://blob.example.com/old-1.png", fileName: "slide-01.png", mimeType: "image/png", width: 1080, height: 1080, index: 1 },
+        { role: "slide", url: "https://blob.example.com/old-2.png", fileName: "slide-02.png", mimeType: "image/png", width: 1080, height: 1080, index: 2 },
+      ],
+      content: { caption: "기존 카피", hashtags: ["기존"], cta: "기존 CTA" },
+    };
+    const pool = createWorkerPool({
+      revision: {
+        contractVersion: "ai-content-revision.v1",
+        action: "regenerate_card",
+        idempotencyKey: "revision-card-2",
+        cardIndex: 2,
+        previousManifest,
+        previousContent: previousManifest.content,
+      },
+    });
+    const repository = createAiContentRepository(pool as never);
+    const claimed = await repository.claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-1",
+      leaseSeconds: 180,
+    });
+
+    await repository.completeAiContentJob({
+      jobId: "job-1",
+      workerId: "card-worker-1",
+      leaseToken: claimed!.leaseToken!,
+      skillVersion: "card-news-skill.v7",
+      jobType: "generate",
+      manifestUrl: "https://blob.example.com/manifest.json",
+      manifest: {
+        version: "ai-content.v1",
+        type: "card_news",
+        title: "새 제목",
+        assets: [
+          { role: "slide", url: "https://blob.example.com/new-1.png", fileName: "slide-01.png", mimeType: "image/png", width: 1080, height: 1080, index: 1 },
+          { role: "slide", url: "https://blob.example.com/new-2.png", fileName: "slide-02.png", mimeType: "image/png", width: 1080, height: 1080, index: 2 },
+        ],
+        content: { caption: "새 카피", hashtags: ["새"], cta: "새 CTA" },
+      },
+    });
+
+    expect(pool.completedOutputManifests.at(-1)).toMatchObject({
+      title: "기존 제목",
+      assets: [
+        expect.objectContaining({ index: 1, url: "https://blob.example.com/old-1.png" }),
+        expect.objectContaining({ index: 2, url: "https://blob.example.com/new-2.png" }),
+      ],
+      content: previousManifest.content,
+    });
+    expect(pool.completedOutputContents.at(-1)).toEqual(previousManifest.content);
+  });
+
+  it("retains temporary attachments after every output completes", async () => {
     const pool = createWorkerPool();
-    const deleteAttachments = vi.fn(async () => undefined);
-    const repository = createAiContentRepository(pool as never, { deleteAttachments });
+    const repository = createAiContentRepository(pool as never);
     const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
 
     await repository.completeAiContentJob({
@@ -590,15 +1948,12 @@ describe("AI content repository", () => {
       manifest: { version: "ai-content.v1", type: "card_news", title: "여름 추천", assets: [{ role: "slide", url: "https://blob.example.com/slide.png", fileName: "slide.png", mimeType: "image/png", width: 1080, height: 1080, index: 1 }], content: { caption: "내용", hashtags: ["여름"], cta: "저장하세요" } },
     });
 
-    expect(deleteAttachments).toHaveBeenCalledWith(["https://blob.example.com/reference.png"]);
-    expect(pool.sql.join("\n")).toContain("update ai_content_generation_attachments");
-    expect(pool.sql.join("\n")).toContain("deleted_at = now()");
+    expect(pool.sql.join("\n")).not.toContain("deleted_at = now()");
   });
 
   it("keeps temporary attachments while another output is pending", async () => {
     const pool = createWorkerPool({ totalOutputs: 2 });
-    const deleteAttachments = vi.fn(async () => undefined);
-    const repository = createAiContentRepository(pool as never, { deleteAttachments });
+    const repository = createAiContentRepository(pool as never);
     const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
 
     const generation = await repository.completeAiContentJob({
@@ -608,16 +1963,14 @@ describe("AI content repository", () => {
     });
 
     expect(generation.status).toBe("generating");
-    expect(deleteAttachments).not.toHaveBeenCalled();
   });
 
   it.each([
     { name: "all outputs fail", poolOptions: { totalOutputs: 1 } },
     { name: "some outputs fail", poolOptions: { totalOutputs: 2, completedOutputs: 1 } },
-  ])("deletes temporary attachments when $name", async ({ poolOptions }) => {
+  ])("retains temporary attachments when $name", async ({ poolOptions }) => {
     const pool = createWorkerPool(poolOptions);
-    const deleteAttachments = vi.fn(async () => undefined);
-    const repository = createAiContentRepository(pool as never, { deleteAttachments });
+    const repository = createAiContentRepository(pool as never);
     const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
 
     const generation = await repository.failAiContentJob({
@@ -630,17 +1983,23 @@ describe("AI content repository", () => {
     });
 
     expect(["failed", "partial_failed"]).toContain(generation.status);
-    expect(deleteAttachments).toHaveBeenCalledWith(["https://blob.example.com/reference.png"]);
+    if (poolOptions.totalOutputs === 1) {
+      expect(generation.status).toBe("failed");
+      expect(generation.terminalAt).not.toBeNull();
+      expect(generation.retryableUntil).not.toBeNull();
+      expect(
+        Date.parse(generation.retryableUntil!) - Date.parse(generation.terminalAt!),
+      ).toBe(15 * 24 * 60 * 60 * 1_000);
+    }
   });
 
-  it("keeps final manifest assets while deleting temporary originals", async () => {
+  it("does not run the legacy cleanup manifest scan while final assets are recorded", async () => {
     const finalUrl = "https://blob.example.com/final-slide.png";
     const pool = createWorkerPool({
       attachmentUrls: ["https://blob.example.com/reference.png", finalUrl],
       manifestAssetUrls: [finalUrl],
     });
-    const deleteAttachments = vi.fn(async () => undefined);
-    const repository = createAiContentRepository(pool as never, { deleteAttachments });
+    const repository = createAiContentRepository(pool as never);
     const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
 
     await repository.completeAiContentJob({
@@ -649,18 +2008,12 @@ describe("AI content repository", () => {
       manifest: { version: "ai-content.v1", type: "card_news", title: "여름 추천", assets: [{ role: "slide", url: finalUrl, fileName: "slide.png", mimeType: "image/png", width: 1080, height: 1080, index: 1 }], content: { caption: "내용", hashtags: ["여름"], cta: "저장하세요" } },
     });
 
-    expect(deleteAttachments).toHaveBeenCalledWith(["https://blob.example.com/reference.png"]);
-    expect(pool.sql.join("\n")).toContain("select manifest_url, artifact_manifest_json");
+    expect(pool.sql.join("\n")).not.toContain("select manifest_url, artifact_manifest_json");
   });
 
-  it("does not mark attachments deleted when blob deletion fails", async () => {
+  it("does not invoke the legacy terminal cleanup retry path", async () => {
     const pool = createWorkerPool();
-    const deleteAttachments = vi.fn()
-      .mockRejectedValueOnce(new Error("blob unavailable"))
-      .mockResolvedValueOnce(undefined);
-    const repository = createAiContentRepository(pool as never, {
-      deleteAttachments,
-    });
+    const repository = createAiContentRepository(pool as never);
     const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
 
     await repository.completeAiContentJob({
@@ -673,10 +2026,9 @@ describe("AI content repository", () => {
 
     pool.enablePendingCleanup();
     await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
-    expect(deleteAttachments).toHaveBeenCalledTimes(2);
-    expect(pool.sql.join("\n")).toContain("select terminal_generation.id");
-    expect(pool.sql.join("\n")).toContain("jsonb_array_elements");
-    expect(pool.sql.join("\n")).toContain("deleted_at = now()");
+    expect(pool.sql.join("\n")).not.toContain("select terminal_generation.id");
+    expect(pool.sql.join("\n")).not.toContain("jsonb_array_elements");
+    expect(pool.sql.join("\n")).not.toContain("deleted_at = now()");
   });
 
   it("rejects an analysis result with fewer than two concrete evidence items", async () => {
@@ -733,29 +2085,31 @@ describe("AI content repository", () => {
 
     expect(generation.status).toBe("queued");
     expect(pool.sql.filter((query) => query.includes("insert into ai_content_generation_jobs")).length).toBe(2);
-    expect(pool.sql.join("\n")).toContain("jsonb_build_object('generationId', $1::uuid, 'outputId', $2::uuid)");
+    expect(pool.sql.join("\n")).toContain("values ($1, $2, $3, $4, 'generate', $5, 'queued', $6::jsonb)");
     expect(pool.sql.join("\n")).not.toContain("jsonb_set(subject_analysis_snapshot, '{message,qualityBrief}'");
+    expect(pool.generatedJobPayloads).toHaveLength(2);
+    expect((pool.generatedJobPayloads[0] as Record<string, unknown>).contentGenerationInput)
+      .toEqual((pool.generatedJobPayloads[1] as Record<string, unknown>).contentGenerationInput);
+    expect(pool.generatedJobPayloads[0]).toMatchObject({
+      contentGenerationInput: {
+        message: { qualityBrief: expect.objectContaining({ hook: "승인 지연의 원인" }) },
+      },
+    });
   });
 
-  it("keeps the stored subject snapshot immutable and overlays the final quality brief only in generate jobs", async () => {
-    const snapshot = {
-      contractVersion: "content-generation-input.v2",
-      contentType: "card_news",
-      brandContext: {},
-      subject: { analysisId: "analysis-1", analysisVersion: 1, analysisContractVersion: "subject-analysis.v1", analysisResult: null, type: "product", sourceUrl: "", facts: [], research: {}, selectedImages: [] },
-      message: { target: { id: "target-1", name: "타깃" }, appeal: { id: "appeal-1", targetId: "target-1", title: "소구점" }, qualityBrief: { hook: "사용자 입력" } },
-      creativeDirection: { prompts: [], brandColor: "", selectedColor: "#0057B8", aspectRatio: "1:1", outputCount: 1 },
-      references: [],
-      attachments: [],
-    };
+  it("keeps the already-finalized generate payload immutable instead of overlaying live analysis", async () => {
+    const snapshot = structuredClone(contentGenerationInputV2Fixture);
     const finalBrief = { version: "content-quality.v1", hook: "최종 편집안" };
     const pool = createWorkerPool({ subjectAnalysisSnapshot: snapshot, qualityBrief: finalBrief });
     const repository = createAiContentRepository(pool as never);
 
     const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
 
-    expect(claimed?.payload.contentGenerationInput).toMatchObject({ message: { qualityBrief: finalBrief } });
+    expect(claimed?.payload.contentGenerationInput).toMatchObject({
+      message: { qualityBrief: { hook: "사용자 입력" } },
+    });
     expect(snapshot.message.qualityBrief).toEqual({ hook: "사용자 입력" });
+    expect(pool.sql.join("\n")).not.toContain("select generation.draft_json");
   });
 
   it("bridges a completed scheduled card-news output into the automatic publish queue", async () => {
@@ -852,12 +2206,417 @@ describe("AI content repository", () => {
     await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
 
     expect(pool.sql.join("\n")).toContain("status = 'generation_failed'");
+    const generationLock = pool.sql.findIndex((sql) =>
+      sql.includes("from ai_content_generations") && sql.includes("for update"));
+    const outputLock = pool.sql.findIndex((sql) =>
+      sql.includes("from ai_content_generation_outputs") && sql.includes("for update"));
+    const jobLock = pool.sql.findIndex((sql) =>
+      sql.includes("from ai_content_generation_jobs") && sql.includes("for update"));
+    expect(generationLock).toBeGreaterThanOrEqual(0);
+    expect(outputLock).toBeGreaterThan(generationLock);
+    expect(jobLock).toBeGreaterThan(outputLock);
+  });
+
+  it("records the exact 15-day retention window on every generation terminal transition", async () => {
+    const completed = createWorkerPool({ totalOutputs: 1 });
+    const completedRepository = createAiContentRepository(completed as never);
+    const completedClaim = await completedRepository.claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-1",
+      leaseSeconds: 180,
+    });
+    await completedRepository.completeAiContentJob({
+      jobId: "job-1",
+      workerId: "card-worker-1",
+      leaseToken: completedClaim!.leaseToken!,
+      skillVersion: "card-news-skill.v5",
+      jobType: "generate",
+      manifestUrl: "https://blob.example.com/manifest.json",
+      manifest: {
+        version: "ai-content.v1",
+        type: "card_news",
+        title: "완료",
+        assets: [{
+          role: "slide",
+          url: "https://blob.example.com/slide.png",
+          fileName: "slide.png",
+          mimeType: "image/png",
+          width: 1080,
+          height: 1080,
+          index: 1,
+        }],
+        content: { caption: "내용", hashtags: ["완료"], cta: "저장하세요" },
+      },
+    });
+
+    const failed = createWorkerPool({ totalOutputs: 2, completedOutputs: 1 });
+    const failedRepository = createAiContentRepository(failed as never);
+    const failedClaim = await failedRepository.claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-1",
+      leaseSeconds: 180,
+    });
+    await failedRepository.failAiContentJob({
+      jobId: "job-1",
+      workerId: "card-worker-1",
+      leaseToken: failedClaim!.leaseToken!,
+      errorCode: "generation_failed",
+      errorMessage: "failed",
+      retryable: false,
+    });
+
+    for (const statements of [completed.sql.join("\n"), failed.sql.join("\n")]) {
+      expect(statements).toContain("terminal_at = case");
+      expect(statements).toContain("retryable_until = case");
+      expect(statements).toContain("interval '15 days'");
+      expect(statements).toContain("status not in ('completed','partial_failed','failed')");
+    }
+  });
+
+  it("records retention for non-retryable analysis failure and exhausted leases", async () => {
+    const analysis = createWorkerPool({ jobType: "analyze" });
+    const analysisRepository = createAiContentRepository(analysis as never);
+    const claim = await analysisRepository.claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-1",
+      leaseSeconds: 180,
+    });
+    await analysisRepository.failAiContentJob({
+      jobId: "job-1",
+      workerId: "card-worker-1",
+      leaseToken: claim!.leaseToken!,
+      errorCode: "analysis_failed",
+      errorMessage: "failed",
+      retryable: false,
+    });
+    const exhausted = createWorkerPool({ exhaustedJob: true });
+    await createAiContentRepository(exhausted as never).claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-1",
+      leaseSeconds: 180,
+    });
+
+    for (const statements of [analysis.sql.join("\n"), exhausted.sql.join("\n")]) {
+      expect(statements).toContain("terminal_at");
+      expect(statements).toContain("retryable_until");
+      expect(statements).toContain("interval '15 days'");
+    }
   });
 
   it("only retries failed outputs", async () => {
     const pool = createWorkerPool({ outputStatus: "completed" });
     const repository = createAiContentRepository(pool as never);
     await expect(repository.retryAiContentOutput({ ...scope, outputId: "output-1" })).rejects.toThrow("ai_content_output_not_failed");
+  });
+
+  it("uses the strict DB-time retention boundary before, at, and after expiry", async () => {
+    const before = createWorkerPool({
+      outputStatus: "failed",
+      retryBoundary: "before",
+      priorGeneratePayload: {
+        generationId: "generation-1",
+        outputId: "output-1",
+        contentGenerationInput: contentGenerationInputV2Fixture,
+      },
+    });
+    await expect(createAiContentRepository(before as never).retryAiContentOutput({
+      ...scope,
+      outputId: "output-1",
+    })).resolves.toMatchObject({ status: "queued" });
+
+    for (const retryBoundary of ["equal", "after"] as const) {
+      const pool = createWorkerPool({ outputStatus: "failed", retryBoundary });
+      const repository = createAiContentRepository(pool as never);
+      await expect(repository.retryAiContentOutput({ ...scope, outputId: "output-1" }))
+        .rejects.toThrow("ai_content_attachment_retention_expired");
+    }
+  });
+
+  it("locks generation then output then deletion jobs and rejects a committed deletion", async () => {
+    const pool = createWorkerPool({
+      outputStatus: "failed",
+      retryable: true,
+      deletionStatus: "deleting",
+      priorGeneratePayload: {
+        generationId: "generation-1",
+        outputId: "output-1",
+        contentGenerationInput: {
+          ...contentGenerationInputV2Fixture,
+          attachments: [{
+            id: "attachment-1",
+            role: "product",
+            fileName: "product.png",
+            mimeType: "image/png",
+            sizeBytes: 100,
+            checksum: "a".repeat(64),
+            storageUrl: "https://blob.example.com/product.png",
+            storagePath: "retained/product.png",
+          }],
+        },
+      },
+    });
+    const repository = createAiContentRepository(pool as never);
+
+    await expect(repository.retryAiContentOutput({ ...scope, outputId: "output-1" }))
+      .rejects.toThrow("ai_content_attachment_retention_expired");
+    const statements = pool.sql;
+    const generationLock = statements.findIndex((sql) =>
+      sql.includes("from ai_content_generations") && sql.includes("for update"));
+    const outputLock = statements.findIndex((sql) =>
+      sql.includes("from ai_content_generation_outputs") && sql.includes("for update"));
+    const deletionLock = statements.findIndex((sql) =>
+      sql.includes("from ai_content_attachment_deletion_jobs") && sql.includes("for update"));
+    expect(generationLock).toBeGreaterThanOrEqual(0);
+    expect(outputLock).toBeGreaterThan(generationLock);
+    expect(deletionLock).toBeGreaterThan(outputLock);
+  });
+
+  it("keeps retry job creation and its snapshot hold inside one transaction", async () => {
+    const pool = createWorkerPool({
+      outputStatus: "failed",
+      retryable: true,
+      priorGeneratePayload: {
+        outputId: "output-1",
+        generationId: "generation-1",
+        contentGenerationInput: contentGenerationInputV2Fixture,
+      },
+    });
+    await createAiContentRepository(pool as never).retryAiContentOutput({
+      ...scope,
+      outputId: "output-1",
+    });
+
+    const begin = pool.sql.indexOf("BEGIN");
+    const insert = pool.sql.findIndex((sql) =>
+      sql.includes("insert into ai_content_generation_jobs") && sql.includes("'generate'"));
+    const commit = pool.sql.indexOf("COMMIT");
+    expect(begin).toBeGreaterThanOrEqual(0);
+    expect(insert).toBeGreaterThan(begin);
+    expect(commit).toBeGreaterThan(insert);
+    expect(pool.generatedJobPayloads.at(-1)).toEqual({
+      outputId: "output-1",
+      generationId: "generation-1",
+      contentGenerationInput: contentGenerationInputV2Fixture,
+    });
+  });
+
+  it("reuses the stored content-generation-input.v2 snapshot when retrying a failed output", async () => {
+    const generationSnapshot = structuredClone(contentGenerationInputV2Fixture);
+    const finalizedSnapshot = structuredClone(contentGenerationInputV2Fixture);
+    finalizedSnapshot.message.qualityBrief = { hook: "최초 확정 quality brief" };
+    const priorPayload = {
+      generationId: "generation-1",
+      outputId: "output-1",
+      contentGenerationInput: finalizedSnapshot,
+    };
+    const pool = createWorkerPool({
+      outputStatus: "failed",
+      subjectAnalysisSnapshot: generationSnapshot,
+      priorGeneratePayload: priorPayload,
+    });
+    const repository = createAiContentRepository(pool as never);
+
+    await expect(repository.retryAiContentOutput({ ...scope, outputId: "output-1" }))
+      .resolves.toMatchObject({ id: "generation-1", status: "queued" });
+    const claimed = await repository.claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-1",
+      leaseSeconds: 180,
+    });
+
+    expect(claimed?.payload).toEqual(priorPayload);
+    expect(pool.generatedJobPayloads.at(-1)).toEqual(priorPayload);
+  });
+
+  it("synthesizes the finalized worker input only for the explicit legacy retry fallback", async () => {
+    const legacySnapshot = structuredClone(contentGenerationInputV2Fixture);
+    const finalQualityBrief = { hook: "legacy finalized quality brief", sourceGaps: [] };
+    const pool = createWorkerPool({
+      outputStatus: "failed",
+      subjectAnalysisSnapshot: legacySnapshot,
+      qualityBrief: finalQualityBrief,
+    });
+    const repository = createAiContentRepository(pool as never);
+
+    await repository.retryAiContentOutput({ ...scope, outputId: "output-1" });
+
+    expect(pool.generatedJobPayloads.at(-1)).toEqual({
+      generationId: "generation-1",
+      outputId: "output-1",
+      contentGenerationInput: {
+        ...legacySnapshot,
+        orchestration: null,
+        message: {
+          ...legacySnapshot.message,
+          qualityBrief: finalQualityBrief,
+        },
+      },
+    });
+    expect(pool.sql.join("\n")).toContain("generation_input_snapshot, analysis_json");
+  });
+
+  it("queues an idempotent scoped hook revision without replacing unrelated completed outputs", async () => {
+    const priorPayload = {
+      generationId: "generation-1",
+      outputId: "output-1",
+      contentGenerationInput: contentGenerationInputV2Fixture,
+    };
+    const manifest = {
+      version: "ai-content.v1",
+      type: "card_news",
+      assets: [{ index: 1, url: "https://cdn.example.com/slide-01.png" }],
+      content: { caption: "기존 카피", hashtags: ["기존"], cta: "기존 CTA" },
+    };
+    const pool = createWorkerPool({
+      outputStatus: "completed",
+      priorGeneratePayload: priorPayload,
+      outputManifest: manifest,
+      outputContent: { caption: "기존 카피" },
+      totalOutputs: 2,
+      completedOutputs: 1,
+    });
+    const repository = createAiContentRepository(pool as never);
+
+    await expect(repository.reviseAiContentOutput({
+      ...scope,
+      outputId: "output-1",
+      action: "regenerate_hook",
+      idempotencyKey: "revision-hook-1",
+    })).resolves.toMatchObject({
+      id: "generation-1",
+      status: "queued",
+      outputs: [{ id: "output-1", status: "queued" }],
+    });
+
+    expect(pool.generatedJobPayloads.at(-1)).toEqual({
+      ...priorPayload,
+      revision: {
+        contractVersion: "ai-content-revision.v1",
+        action: "regenerate_hook",
+        idempotencyKey: "revision-hook-1",
+        cardIndex: null,
+        previousManifest: manifest,
+        previousContent: { caption: "기존 카피" },
+      },
+    });
+    expect(pool.sql.join("\n")).toContain("output.id = $1 and output.workspace_id = $2 and output.brand_id = $3");
+    expect(pool.sql.join("\n")).not.toContain("update ai_content_generation_outputs\n              set artifact_manifest_json");
+  });
+
+  it("returns the current generation for the same revision idempotency key", async () => {
+    const pool = createWorkerPool({
+      outputStatus: "queued",
+      existingRevisionIdempotencyKey: "revision-card-1",
+      outputManifest: {
+        type: "card_news",
+        assets: [
+          { index: 1, url: "https://cdn.example.com/slide-01.png" },
+          { index: 2, url: "https://cdn.example.com/slide-02.png" },
+        ],
+      },
+    });
+    const repository = createAiContentRepository(pool as never);
+
+    await repository.reviseAiContentOutput({
+      ...scope,
+      outputId: "output-1",
+      action: "regenerate_card",
+      cardIndex: 2,
+      idempotencyKey: "revision-card-1",
+    });
+
+    expect(pool.generatedJobPayloads).toHaveLength(0);
+  });
+
+  it("saves format-aware copy fields idempotently inside the tenant-scoped output", async () => {
+    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    let content = {
+      hook: "기존 훅",
+      keyMessage: "기존 핵심 메시지",
+      body: "기존 본문",
+      cta: "기존 CTA",
+      caption: "기존 캡션",
+      hashtags: ["기존"],
+      untouched: "보존",
+    };
+    let manifest = {
+      version: "ai-content.v1",
+      type: "card_news",
+      assets: [{ index: 1, url: "https://cdn.example.com/slide-01.png" }],
+      content: structuredClone(content),
+    };
+    const outputRow = () => ({
+      id: "output-1",
+      generation_id: "generation-1",
+      output_index: 1,
+      title: "여름 카드뉴스",
+      status: "completed",
+      content_json: structuredClone(content),
+      artifact_manifest_json: structuredClone(manifest),
+      manifest_url: null,
+      failure_code: null,
+      failure_message: null,
+      downloaded_at: null,
+      created_at: "2026-07-18T00:00:00.000Z",
+      updated_at: "2026-07-18T00:00:00.000Z",
+      completed_at: "2026-07-18T00:00:00.000Z",
+    });
+    const generationRow = () => ({
+      ...row("generation-1", "completed"),
+      outputs: undefined,
+    });
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        queries.push({ sql, params });
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from ai_content_generation_outputs output") && sql.includes("for update")) {
+          expect(params.slice(0, 3)).toEqual(["output-1", "workspace-1", "brand-1"]);
+          return { rows: [outputRow()], rowCount: 1 };
+        }
+        if (sql.includes("update ai_content_generation_outputs") && sql.includes("content_json")) {
+          content = JSON.parse(String(params[1]));
+          manifest = JSON.parse(String(params[2]));
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.includes("from ai_content_generations")) {
+          return { rows: [generationRow()], rowCount: 1 };
+        }
+        if (sql.includes("from ai_content_generation_outputs") && sql.includes("order by output_index")) {
+          return { rows: [outputRow()], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const pool = {
+      connect: vi.fn(async () => client),
+      query: client.query,
+    };
+    const repository = createAiContentRepository(pool as never);
+    const input = {
+      ...scope,
+      outputId: "output-1",
+      fields: { hook: "수정 훅", cta: "지금 확인", hashtags: ["여름", "브랜드"] },
+      idempotencyKey: "save-copy-1",
+    };
+
+    const first = await repository.saveAiContentOutputCopy(input);
+    const second = await repository.saveAiContentOutputCopy(input);
+
+    expect(first.outputs?.[0].content).toMatchObject({
+      hook: "수정 훅",
+      cta: "지금 확인",
+      hashtags: ["여름", "브랜드"],
+      untouched: "보존",
+    });
+    expect(manifest.content).toMatchObject({
+      hook: "수정 훅",
+      cta: "지금 확인",
+      hashtags: ["여름", "브랜드"],
+      untouched: "보존",
+    });
+    expect(second.outputs?.[0].content).toEqual(first.outputs?.[0].content);
+    expect(queries.filter(({ sql }) => sql.includes("update ai_content_generation_outputs"))).toHaveLength(1);
   });
 
   it("lists only live generation-scoped subject evidence with loader metadata", async () => {

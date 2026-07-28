@@ -3,6 +3,7 @@ import type {
   BrandProfileInput,
   BrandUiStatus,
   BillingSummary,
+  ChannelCapability,
   ChannelConnection,
   ChannelConnectionRequest,
   ChannelType,
@@ -34,6 +35,11 @@ import type {
   PublishArtifact,
   PublishSlot,
   PublishResult,
+  ReferenceBrand,
+  ReferenceDetail,
+  ReferenceContentPurpose,
+  ReferenceItem,
+  ReferencePattern,
   SourceSnapshot,
   SourceCrawlRun,
   SourceCreateResult,
@@ -63,12 +69,16 @@ export class ApiRequestError extends Error {
   readonly errorCode: string | null;
   readonly requestId: string | null;
   readonly deliveryStatus: "failed" | "unknown" | null;
+  readonly fieldPath: string | null;
+  readonly details: Record<string, unknown> | null;
 
   constructor(input: {
     status: number;
     errorCode: string | null;
     requestId?: string | null;
     deliveryStatus?: "failed" | "unknown" | null;
+    fieldPath?: string | null;
+    details?: Record<string, unknown> | null;
   }) {
     super(input.errorCode ? `API request failed: ${input.status}:${input.errorCode}` : `API request failed: ${input.status}`);
     this.name = "ApiRequestError";
@@ -76,6 +86,8 @@ export class ApiRequestError extends Error {
     this.errorCode = input.errorCode;
     this.requestId = input.requestId ?? null;
     this.deliveryStatus = input.deliveryStatus ?? null;
+    this.fieldPath = input.fieldPath ?? null;
+    this.details = input.details ?? null;
   }
 }
 
@@ -134,6 +146,8 @@ async function request<T>(fetcher: typeof fetch, url: string, init: RequestInit)
     let errorCode: string | null = null;
     let requestId: string | null = null;
     let deliveryStatus: "failed" | "unknown" | null = null;
+    let fieldPath: string | null = null;
+    let details: Record<string, unknown> | null = null;
     try {
       const payload = await response.clone().json();
       errorCode = typeof payload?.error === "string" ? payload.error : null;
@@ -141,12 +155,25 @@ async function request<T>(fetcher: typeof fetch, url: string, init: RequestInit)
       deliveryStatus = payload?.deliveryStatus === "failed" || payload?.deliveryStatus === "unknown"
         ? payload.deliveryStatus
         : null;
+      details = payload?.details && typeof payload.details === "object" && !Array.isArray(payload.details)
+        ? payload.details as Record<string, unknown>
+        : null;
+      fieldPath = typeof payload?.field === "string"
+        ? payload.field
+        : typeof details?.fieldPath === "string" ? details.fieldPath : null;
     } catch {
       errorCode = null;
     }
-    throw new ApiRequestError({ status: response.status, errorCode, requestId, deliveryStatus });
+    throw new ApiRequestError({
+      status: response.status,
+      errorCode,
+      requestId,
+      deliveryStatus,
+      fieldPath,
+      details,
+    });
   }
-  const payload = await response.json() as T;
+  const payload = response.status === 204 ? undefined as T : await response.json() as T;
   if (init.method !== "GET" && typeof window !== "undefined") {
     window.dispatchEvent(new Event(BRAND_STATUS_CHANGED_EVENT));
   }
@@ -344,6 +371,83 @@ export function apiClient(options: ApiClientOptions = {}) {
     listSourceCrawlRuns(brandId: string) {
       return request<SourceCrawlRun[]>(fetcher, `${baseUrl}/brands/${brandId}/source-crawl-runs`, { method: "GET" });
     },
+    listReferences(
+      brandId: string,
+      filters: {
+        kind?: string;
+        contentFamily?: string;
+        strategy?: string;
+        format?: string;
+        origin?: string;
+        favorite?: boolean;
+        recent?: number;
+      } = {},
+    ) {
+      const query = new URLSearchParams();
+      for (const [key, value] of Object.entries(filters)) {
+        if (value !== undefined && value !== "") query.set(key, String(value));
+      }
+      const suffix = query.size ? `?${query.toString()}` : "";
+      return request<ReferenceItem[]>(fetcher, `${baseUrl}/brands/${brandId}/references${suffix}`, { method: "GET" });
+    },
+    getReference(brandId: string, referenceId: string) {
+      return request<ReferenceDetail>(
+        fetcher,
+        `${baseUrl}/brands/${brandId}/references/${referenceId}`,
+        { method: "GET" },
+      );
+    },
+    addReferenceUrl(
+      brandId: string,
+      payload: { url: string; title: string; contentPurpose: ReferenceContentPurpose },
+    ) {
+      return request<ReferenceItem>(fetcher, `${baseUrl}/brands/${brandId}/references/url`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    },
+    setReferenceFavorite(brandId: string, referenceId: string, favorite: boolean) {
+      return request<ReferenceItem>(fetcher, `${baseUrl}/brands/${brandId}/references/${referenceId}/favorite`, {
+        method: "POST",
+        body: JSON.stringify({ favorite }),
+      });
+    },
+    archiveReference(brandId: string, referenceId: string) {
+      return request<void>(fetcher, `${baseUrl}/brands/${brandId}/references/${referenceId}/archive`, {
+        method: "POST",
+      });
+    },
+    getReferencePattern(brandId: string, referenceId: string) {
+      return request<ReferencePattern>(fetcher, `${baseUrl}/brands/${brandId}/references/${referenceId}/pattern`, {
+        method: "GET",
+      });
+    },
+    listReferenceBrands(brandId: string) {
+      return request<ReferenceBrand[]>(fetcher, `${baseUrl}/brands/${brandId}/reference-brands`, { method: "GET" });
+    },
+    createReferenceBrand(
+      brandId: string,
+      payload: { platform: string; handle: string; publicSourceUrl: string },
+    ) {
+      return request<ReferenceBrand>(fetcher, `${baseUrl}/brands/${brandId}/reference-brands`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    },
+    createReferenceBrandFromTrend(brandId: string, mediaId: string) {
+      return request<ReferenceBrand>(
+        fetcher,
+        `${baseUrl}/brands/${brandId}/reference-brands/from-trend-media/${mediaId}`,
+        { method: "POST" },
+      );
+    },
+    listReferenceBrandItems(brandId: string, referenceBrandId: string) {
+      return request<ReferenceItem[]>(
+        fetcher,
+        `${baseUrl}/brands/${brandId}/reference-brands/${referenceBrandId}/items`,
+        { method: "GET" },
+      );
+    },
     createSource(brandId: string, payload: { sourceType: SourceUrl["sourceType"]; url: string }) {
       return request<SourceCreateResult>(fetcher, `${baseUrl}/brands/${brandId}/sources`, {
         method: "POST",
@@ -365,6 +469,13 @@ export function apiClient(options: ApiClientOptions = {}) {
     async listChannels(brandId: string) {
       const channels = await request<ApiChannel[]>(fetcher, `${baseUrl}/brands/${brandId}/channels`, { method: "GET" });
       return channels.map(mapApiChannelConnection);
+    },
+    getChannelCapabilities(brandId: string) {
+      return request<ChannelCapability[]>(
+        fetcher,
+        `${baseUrl}/brands/${brandId}/channels/capabilities`,
+        { method: "GET" },
+      );
     },
     updateChannelEnabled(brandId: string, channel: ChannelType, enabled: boolean) {
       return request<ApiChannel>(fetcher, `${baseUrl}/brands/${brandId}/channels/${channel}`, {
@@ -547,6 +658,12 @@ export function apiClient(options: ApiClientOptions = {}) {
     },
     publishQueueItem(queueId: string) {
       return request<{ id: string; status: string; publishedUrl: string | null }>(fetcher, `${baseUrl}/publish-queue/${queueId}/publish`, { method: "POST" });
+    },
+    retryPublishQueueItem(queueId: string) {
+      return request<{ id: string; status: "queued" | "scheduled" }>(fetcher, `${baseUrl}/publish-queue/${queueId}/retry`, { method: "POST" });
+    },
+    cancelPublishQueueItem(queueId: string) {
+      return request<{ id: string; status: "cancelled" }>(fetcher, `${baseUrl}/publish-queue/${queueId}/cancel`, { method: "POST" });
     }
   };
 }

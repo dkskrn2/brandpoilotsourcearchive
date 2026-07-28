@@ -6,6 +6,7 @@ export type PublishManagementStatus =
   | "scheduled"
   | "publishing"
   | "completed"
+  | "result_unknown"
   | "failed"
   | "rejected";
 
@@ -37,7 +38,7 @@ const groupedStatuses: Record<
   needs_review: new Set(["needs_review"]),
   upcoming: new Set(["publish_queued", "scheduled", "publishing"]),
   completed: new Set(["completed"]),
-  issues: new Set(["failed", "rejected"])
+  issues: new Set(["failed", "result_unknown", "rejected"])
 };
 
 export function matchesPublishManagementFilter(

@@ -4,19 +4,22 @@ import type {
   AiContentDraft,
   AiContentGateway,
   GenerationAttachment,
+  GenerationAttachmentUpdate,
   SubjectAnalysis,
   SubjectType,
 } from "../../features/ai-content/types";
+import { attachmentLifecycleGuidance } from "../../features/ai-content/attachmentErrors";
 import { AiContentAttachmentUploader } from "./AiContentAttachmentUploader";
 
 interface Props {
   brandId: string;
+  generationId: string | null;
   gateway: AiContentGateway;
   draft: AiContentDraft;
   analysis: SubjectAnalysis | null;
   onSubjectType(value: SubjectType): void;
   onSubjectInput(value: Partial<AiContentDraft["subjectInput"]>): void;
-  onSubjectAttachments(value: GenerationAttachment[]): void;
+  onSubjectAttachments(update: GenerationAttachmentUpdate): void;
   onPrepareAnalysis(): Promise<{ generationId: string; attachments: GenerationAttachment[] }>;
   onAnalysis(value: SubjectAnalysis): void;
 }
@@ -33,6 +36,7 @@ function statusLabel(status: SubjectAnalysis["status"]) {
 
 export function SubjectAnalysisStep({
   brandId,
+  generationId,
   gateway,
   draft,
   onSubjectType,
@@ -45,22 +49,17 @@ export function SubjectAnalysisStep({
   const [pipelineStatus, setPipelineStatus] = useState<SubjectAnalysis["status"]>("extracting");
   const [error, setError] = useState<string | null>(null);
   const attachments = draft.subjectAttachments ?? [];
-  const imageAttachments = attachments.filter(({ role }) => role === "product");
-  const documentAttachments = attachments.filter(({ role }) => role === "document");
+  const attachmentUploadBlocked = attachments.some(
+    (attachment) => attachment.uploadStatus === "pending" || attachment.uploadStatus === "failed",
+  );
   const readyToAnalyze = Boolean(
     draft.subjectType
       && (draft.subjectInput.sourceUrl.trim()
         || draft.subjectInput.name.trim()
         || draft.subjectInput.description.trim()
-        || attachments.length),
+        || attachments.length)
+      && !attachmentUploadBlocked,
   );
-
-  function replaceAttachments(roles: GenerationAttachment["role"][], next: GenerationAttachment[]) {
-    onSubjectAttachments([
-      ...attachments.filter(({ role }) => !roles.includes(role)),
-      ...next,
-    ]);
-  }
 
   async function run() {
     if (!draft.subjectType || !readyToAnalyze) {
@@ -98,7 +97,7 @@ export function SubjectAnalysisStep({
       setError(current.errorMessage ?? "분석을 완료하지 못했습니다.");
       setRunStatus("failure");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "분석을 완료하지 못했습니다.");
+      setError(attachmentLifecycleGuidance(cause)?.message ?? (cause instanceof Error ? cause.message : "분석을 완료하지 못했습니다."));
       setRunStatus("failure");
     }
   }
@@ -121,11 +120,11 @@ export function SubjectAnalysisStep({
       <div className="analysis-upload-groups">
         <div className="analysis-upload-group">
           <div className="section-heading-inline"><h3><Image size={17} />제품·서비스 이미지</h3><span>PNG, JPEG</span></div>
-          <AiContentAttachmentUploader gateway={gateway} brandId={brandId} generationId={null} attachments={imageAttachments} allowedRoles={["product"]} onChange={(next) => replaceAttachments(["product"], next)} />
+          <AiContentAttachmentUploader gateway={gateway} brandId={brandId} generationId={generationId} attachments={attachments} allowedRoles={["product"]} onChange={onSubjectAttachments} disabled={runStatus === "loading"} />
         </div>
         <div className="analysis-upload-group">
           <div className="section-heading-inline"><h3><FileText size={17} />설명 문서</h3><span>PDF, TXT, MD, CSV, XLSX</span></div>
-          <AiContentAttachmentUploader gateway={gateway} brandId={brandId} generationId={null} attachments={documentAttachments} allowedRoles={["document"]} onChange={(next) => replaceAttachments(["document"], next)} />
+          <AiContentAttachmentUploader gateway={gateway} brandId={brandId} generationId={generationId} attachments={attachments} allowedRoles={["document"]} onChange={onSubjectAttachments} disabled={runStatus === "loading"} />
         </div>
       </div>
       <div className="wizard-inline-actions"><button type="button" className="button primary" disabled={!readyToAnalyze || runStatus === "loading"} onClick={() => void run()}>{runStatus === "loading" ? <LoaderCircle className="inline-spinner" size={17} /> : <CheckCircle2 size={17} />}분석하고 소구점 만들기</button></div>

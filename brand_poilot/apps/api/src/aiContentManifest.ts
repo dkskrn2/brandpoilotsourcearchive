@@ -5,6 +5,9 @@ import type {
   BlogContent,
   CardNewsContent,
   MarketingContent,
+  MessageStrategy,
+  OutputFormat,
+  ContentFamily,
 } from "./aiContentContracts.js";
 
 type UnknownObject = Record<string, unknown>;
@@ -88,11 +91,13 @@ function parseAsset(value: unknown): AiContentAsset {
   }
 
   const role = source.role;
-  if (!(["slide", "cover", "inline", "html", "creative"] as unknown[]).includes(role)) {
+  if (!(["slide", "cover", "inline", "html", "creative", "text"] as unknown[]).includes(role)) {
     fail("ai_content_asset_role_invalid");
   }
   const mimeType = source.mimeType;
-  if (mimeType !== "image/png" && mimeType !== "text/html") fail("ai_content_asset_mime_type_invalid");
+  if (mimeType !== "image/png" && mimeType !== "text/html" && mimeType !== "text/plain") {
+    fail("ai_content_asset_mime_type_invalid");
+  }
 
   const width = source.width === undefined ? undefined : positiveInteger(source.width, "ai_content_asset_dimensions_invalid");
   const height = source.height === undefined ? undefined : positiveInteger(source.height, "ai_content_asset_dimensions_invalid");
@@ -116,6 +121,37 @@ function parseAssets(value: unknown): AiContentAsset[] {
     fail("ai_content_asset_index_invalid");
   }
   return assets;
+}
+
+function parseOptionalMetadata(source: UnknownObject): {
+  family?: ContentFamily;
+  strategy?: MessageStrategy;
+  outputFormat?: OutputFormat;
+} {
+  const metadata: {
+    family?: ContentFamily;
+    strategy?: MessageStrategy;
+    outputFormat?: OutputFormat;
+  } = {};
+  if (source.family !== undefined) {
+    if (!["informational", "marketing"].includes(String(source.family))) {
+      fail("ai_content_manifest_family_invalid");
+    }
+    metadata.family = source.family as ContentFamily;
+  }
+  if (source.strategy !== undefined) {
+    if (!["problem_solution", "how_to", "comparison", "faq", "insight", "benefit", "social_proof", "brand_story", "cta"].includes(String(source.strategy))) {
+      fail("ai_content_manifest_strategy_invalid");
+    }
+    metadata.strategy = source.strategy as MessageStrategy;
+  }
+  if (source.outputFormat !== undefined) {
+    if (!["card_news", "blog", "single_image", "channel_text"].includes(String(source.outputFormat))) {
+      fail("ai_content_manifest_output_format_invalid");
+    }
+    metadata.outputFormat = source.outputFormat as OutputFormat;
+  }
+  return metadata;
 }
 
 function parseCardNewsContent(value: unknown): CardNewsContent {
@@ -189,6 +225,7 @@ export function parseAiContentManifest(
 
   const title = text(source.title, "ai_content_manifest_title_invalid");
   const assets = parseAssets(source.assets);
+  const metadata = parseOptionalMetadata(source);
 
   if (type === "card_news") {
     if (assets.length < 1 || assets.length > 5) fail("ai_content_card_news_slide_count_invalid");
@@ -204,7 +241,7 @@ export function parseAiContentManifest(
         fail("ai_content_card_news_dimensions_invalid");
       }
     }
-    return { version: "ai-content.v1", type, title, assets, content: parseCardNewsContent(source.content) };
+    return { version: "ai-content.v1", type, title, assets, content: parseCardNewsContent(source.content), ...metadata };
   }
 
   if (type === "blog") {
@@ -231,9 +268,22 @@ export function parseAiContentManifest(
       if (!image) fail("ai_content_blog_inline_asset_not_referenced");
       if (image.alt.length < 4 || !/[가-힣]/.test(image.alt)) fail("ai_content_blog_inline_asset_alt_invalid");
     }
-    return { version: "ai-content.v1", type, title, assets, content };
+    return { version: "ai-content.v1", type, title, assets, content, ...metadata };
   }
 
+  if (metadata.outputFormat === "channel_text") {
+    if (
+      assets.length !== 1
+      || assets[0].role !== "text"
+      || assets[0].mimeType !== "text/plain"
+      || assets[0].fileName !== "channel-text.txt"
+      || assets[0].width !== undefined
+      || assets[0].height !== undefined
+    ) {
+      fail("ai_content_marketing_asset_invalid");
+    }
+    return { version: "ai-content.v1", type, title, assets, content: parseMarketingContent(source.content), ...metadata };
+  }
   if (assets.length !== 1 || assets[0].role !== "creative" || assets[0].mimeType !== "image/png") {
     fail("ai_content_marketing_asset_invalid");
   }
@@ -243,5 +293,5 @@ export function parseAiContentManifest(
   if (requestedDimensions && (assets[0].width !== requestedDimensions.width || assets[0].height !== requestedDimensions.height)) {
     fail("ai_content_marketing_dimensions_mismatch");
   }
-  return { version: "ai-content.v1", type, title, assets, content: parseMarketingContent(source.content) };
+  return { version: "ai-content.v1", type, title, assets, content: parseMarketingContent(source.content), ...metadata };
 }

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { FeedbackDialog } from "./FeedbackDialog";
@@ -25,6 +25,7 @@ describe("FeedbackDialog", () => {
     render(<FeedbackDialog onClose={vi.fn()} onSubmit={onSubmit} bookingUrl="" />);
 
     const send = screen.getByRole("button", { name: "보내기" });
+    expect(screen.getByRole("textbox", { name: "의견" })).toHaveAttribute("maxlength", "2000");
     expect(send).toBeDisabled();
     expect(screen.getByRole("link", { name: "통화 문의 예약하기" })).toHaveAttribute(
       "href",
@@ -35,6 +36,30 @@ describe("FeedbackDialog", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("피드백을 보내지 못했습니다");
     expect(screen.getByRole("textbox", { name: "의견" })).toHaveValue("전송 실패 확인");
+  });
+
+  it("locks concurrent submits and does not resend the same successful opinion", async () => {
+    let resolveSubmission!: () => void;
+    const onSubmit = vi.fn(() => new Promise<void>((resolve) => {
+      resolveSubmission = resolve;
+    }));
+    render(<FeedbackDialog onClose={vi.fn()} onSubmit={onSubmit} bookingUrl="" />);
+
+    const input = screen.getByRole("textbox", { name: "의견" });
+    await userEvent.type(input, "같은 의견은 한 번만 보냅니다.");
+    const form = screen.getByRole("button", { name: "보내기" }).closest("form");
+    expect(form).not.toBeNull();
+
+    fireEvent.submit(form!);
+    fireEvent.submit(form!);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+
+    resolveSubmission();
+    expect(await screen.findByRole("status")).toHaveTextContent("의견을 보내주셔서 감사합니다.");
+    await userEvent.type(input, "같은 의견은 한 번만 보냅니다.");
+    await userEvent.click(screen.getByRole("button", { name: "보내기" }));
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 
   it("closes with Escape and a backdrop click", async () => {

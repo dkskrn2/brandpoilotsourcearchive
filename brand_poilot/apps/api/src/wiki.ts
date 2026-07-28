@@ -3,6 +3,25 @@ import { createHash } from "node:crypto";
 const chunkLength = 800;
 const chunkOverlap = 120;
 
+export type WikiSourceKind = "faq" | "product" | "product_service" | "service" | "policy" | "guide" | "owned_snapshot";
+
+const wikiSourceKinds = new Set<WikiSourceKind>([
+  "faq",
+  "product",
+  "product_service",
+  "service",
+  "policy",
+  "guide",
+  "owned_snapshot",
+]);
+
+export function parseWikiSourceKind(value: unknown): WikiSourceKind {
+  if (typeof value !== "string" || !wikiSourceKinds.has(value as WikiSourceKind)) {
+    throw new Error("wiki_source_kind_invalid");
+  }
+  return value as WikiSourceKind;
+}
+
 export interface WikiFaqEntry {
   id: string;
   question: string;
@@ -21,7 +40,7 @@ export interface WikiSourceSnapshot {
 }
 
 export interface WikiChunk {
-  sourceKind: "faq" | "owned_snapshot";
+  sourceKind: WikiSourceKind;
   sourceId: string;
   title: string | null;
   chunkIndex: number;

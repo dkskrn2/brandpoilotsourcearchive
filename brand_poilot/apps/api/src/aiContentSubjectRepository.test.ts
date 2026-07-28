@@ -65,7 +65,31 @@ async function createSchema(database: PGlite) {
       id uuid primary key,
       workspace_id uuid not null,
       brand_id uuid not null,
+      attachments_locked_at timestamptz null,
       unique (id, workspace_id, brand_id)
+    );
+    create table ai_content_generation_attachments (
+      id uuid primary key,
+      generation_id uuid not null,
+      workspace_id uuid not null,
+      brand_id uuid not null,
+      role text not null,
+      file_name text not null,
+      mime_type text not null,
+      size_bytes bigint not null,
+      checksum text not null,
+      storage_url text not null,
+      storage_path text not null,
+      created_at timestamptz not null,
+      deleted_at timestamptz null
+    );
+    create table ai_content_attachment_upload_sessions (
+      id uuid primary key,
+      generation_id uuid not null,
+      workspace_id uuid not null,
+      brand_id uuid not null,
+      status text not null,
+      token_expires_at timestamptz not null
     );
     create table ai_content_subject_analyses (
       id uuid primary key,
@@ -295,6 +319,15 @@ describe("createAiContentSubjectRepository", () => {
       `insert into ai_content_generations (id, workspace_id, brand_id)
        values ($1, $3, $4), ($2, $3, $4)`,
       [generationId, otherGenerationId, workspaceId, brandId],
+    );
+    await database.query(
+      `insert into ai_content_generation_attachments (
+         id, generation_id, workspace_id, brand_id, role, file_name, mime_type,
+         size_bytes, checksum, storage_url, storage_path, created_at
+       ) values ($1, $2, $3, $4, 'document', 'brief.pdf', 'application/pdf',
+         42, $5, 'https://blob.example/brief.pdf', 'generation/brief.pdf',
+         '2026-07-27T00:00:00.000Z')`,
+      [attachmentId, generationId, workspaceId, brandId, "a".repeat(64)],
     );
     repository = createAiContentSubjectRepository(pglitePool(database));
   }, 30_000);
@@ -665,6 +698,19 @@ describe("createAiContentSubjectRepository", () => {
     expect((persistedInput.rows[0] as { input_json: Record<string, unknown> }).input_json).toMatchObject({
       manualInput: pipelineRequest().manualInput,
       brandContext: pipelineRequest().brandContext,
+      attachmentSnapshot: [{
+        id: attachmentId,
+        generationId,
+        role: "document",
+        fileName: "brief.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 42,
+        checksum: "a".repeat(64),
+        storageUrl: "https://blob.example/brief.pdf",
+        storagePath: "generation/brief.pdf",
+        createdAt: "2026-07-27T00:00:00.000Z",
+      }],
+      attachmentSnapshotMissingIds: [],
     });
     expect((persistedInput.rows[0] as { input_json: Record<string, unknown> }).input_json)
       .not.toHaveProperty("regenerationIdempotencyKeys");
@@ -705,6 +751,40 @@ describe("createAiContentSubjectRepository", () => {
       appealsByTarget: appealResultV2().appealsByTarget,
       analysisResult: analysisResultV2(["source_url: subject_page_fetch_failed"]),
     });
+  });
+
+  it("rejects a subject request while a non-expired upload reservation is active", async () => {
+    await database.query(
+      `insert into ai_content_attachment_upload_sessions
+         (id, generation_id, workspace_id, brand_id, status, token_expires_at)
+       values ('70000000-0000-4000-8000-000000000001', $1, $2, $3, 'pending', now() + interval '5 minutes')`,
+      [generationId, workspaceId, brandId],
+    );
+
+    await expect(repository.requestSubjectAnalysis(pipelineRequest()))
+      .rejects.toThrow("ai_content_attachment_upload_in_progress");
+  });
+
+  it("claims the stored snapshot after the live attachment is removed or changed", async () => {
+    const queued = await repository.requestSubjectAnalysis(pipelineRequest());
+    await database.query(
+      `update ai_content_generation_attachments
+          set file_name = 'changed.pdf', deleted_at = now()
+        where id = $1`,
+      [attachmentId],
+    );
+
+    const claimed = await repository.claimSubjectAnalysis({
+      analysisId: queued.id,
+      workerId: "snapshot-worker",
+      leaseSeconds: 60,
+    });
+
+    expect(claimed?.input.attachmentSnapshot).toEqual([expect.objectContaining({
+      id: attachmentId,
+      fileName: "brief.pdf",
+      storagePath: "generation/brief.pdf",
+    })]);
   });
 
   it("caps merged extraction and analysis source gaps at the v2 contract limit", async () => {
@@ -786,6 +866,7 @@ describe("createAiContentSubjectRepository", () => {
     const first = await repository.requestSubjectAnalysis(pipelineRequest());
     const second = await repository.requestSubjectAnalysis(pipelineRequest({
       generationId: otherGenerationId,
+      attachmentIds: [],
       idempotencyKey: "pipeline-request-2",
     }));
 

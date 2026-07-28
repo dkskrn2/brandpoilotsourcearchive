@@ -24,7 +24,7 @@ function deps(overrides: Record<string, unknown> = {}) {
     getBrandContext: vi.fn(async () => ({ ready: true, brandName: "Growthline", ownedUrl: "https://example.com", sourceStatus: "crawled", lastCrawledAt: null, wikiVersionId: "wiki-1", wikiUpdatedAt: null, summary: "브랜드", pageCount: 1, context: { brand: { name: "Growthline", brandColor: "#0057B8" } } })),
     getSubjectAnalysis: vi.fn(async () => analysis),
     getReferences: vi.fn(async ({ referenceIds }: { referenceIds: string[] }) => referenceIds.map((id) => ({ id, source: "saved_trend" as const, title: id, url: `https://instagram.com/${id}`, previewUrl: null, metrics: {}, checkedAt: null }))),
-    getAttachments: vi.fn(async () => [{ id: "attachment-1", generationId: "generation-1", role: "visual_reference" as const, fileName: "ref.png", mimeType: "image/png", sizeBytes: 10, checksum: "a", storageUrl: "https://blob.example/ref.png", storagePath: "generation/ref.png", createdAt: "2026-07-20T00:00:00.000Z" }]),
+    getAttachments: vi.fn(async () => [{ id: "attachment-1", generationId: "generation-1", role: "visual_reference" as const, fileName: "ref.png", mimeType: "image/png", sizeBytes: 10, checksum: "a".repeat(64), storageUrl: "https://blob.example/ref.png", storagePath: "generation/ref.png", createdAt: "2026-07-20T00:00:00.000Z" }]),
     ...overrides,
   };
 }
@@ -37,6 +37,114 @@ function generation(draft: Record<string, unknown> = {}) {
 }
 
 describe("content-generation-input.v2", () => {
+  it("normalizes legacy omission to the canonical nullable orchestration envelope", async () => {
+    const built = await buildContentGenerationInput(deps(), generation(), { outputCount: 1 });
+    const { orchestration: _omitted, ...legacyPayload } = built;
+
+    expect(built).toHaveProperty("orchestration", null);
+    expect(parseContentGenerationInputV2(legacyPayload))
+      .toHaveProperty("orchestration", null);
+  });
+
+  it("permits fields unknown to the existing worker parser", async () => {
+    const envelope = await buildContentGenerationInput(deps(), generation(), { outputCount: 1 });
+
+    expect(() => parseContentGenerationInputV2({
+      ...envelope,
+      workerFutureMetadata: { contractVersion: "future-worker-metadata.v1" },
+      creativeDirection: {
+        ...envelope.creativeDirection,
+        futureDirectionHint: "single_image",
+      },
+    })).not.toThrow();
+  });
+
+  it.each([
+    { contentFamily: "informational" },
+    { contentFamily: "marketing", outputFormat: "single_image" },
+  ])("strips orchestration discriminators from legacy creative direction: %o", async (recognizedFields) => {
+    const envelope = await buildContentGenerationInput(deps(), generation(), { outputCount: 1 });
+
+    const parsed = parseContentGenerationInputV2({
+      ...envelope,
+      orchestration: null,
+      creativeDirection: {
+        ...envelope.creativeDirection,
+        ...recognizedFields,
+      },
+    });
+
+    expect(parsed.creativeDirection).not.toHaveProperty("contentFamily");
+    expect(parsed.creativeDirection).not.toHaveProperty("outputFormat");
+  });
+
+  it("preserves an optional orchestration envelope and worker creative discriminator", async () => {
+    const legacy = await buildContentGenerationInput(deps(), generation(), { outputCount: 1 });
+    const orchestration = {
+      contractVersion: "content-orchestration.v1" as const,
+      contentFamily: "informational" as const,
+      subject: {
+        mode: "brand_topic" as const,
+        topic: "승인 브랜드 토픽",
+        wikiItemIds: ["wiki-1"],
+      },
+      target: { id: null, snapshot: { label: "학습 고객" } },
+      strategy: "insight" as const,
+      outputFormat: "card_news" as const,
+      channelTargets: ["instagram" as const],
+      brief: {},
+      references: [],
+      avatar: null,
+    };
+
+    const parsed = parseContentGenerationInputV2({
+      ...legacy,
+      orchestration,
+      creativeDirection: {
+        ...legacy.creativeDirection,
+        contentFamily: "informational",
+        outputFormat: "card_news",
+      },
+    });
+
+    expect(parsed.contractVersion).toBe("content-generation-input.v2");
+    expect(parsed.orchestration).toEqual(orchestration);
+    expect(parsed.creativeDirection).toMatchObject({
+      contentFamily: "informational",
+      outputFormat: "card_news",
+    });
+  });
+
+  it("rejects worker and creative discriminators that drift from orchestration", async () => {
+    const legacy = await buildContentGenerationInput(deps(), generation(), { outputCount: 1 });
+    const orchestration = {
+      contractVersion: "content-orchestration.v1" as const,
+      contentFamily: "marketing" as const,
+      subject: {
+        mode: "product_service" as const,
+        productServiceId: "product-service-version-1",
+      },
+      target: { id: null, snapshot: {} },
+      strategy: "benefit" as const,
+      outputFormat: "single_image" as const,
+      channelTargets: ["instagram" as const],
+      brief: {},
+      references: [],
+      avatar: null,
+    };
+
+    expect(() => parseContentGenerationInputV2({
+      ...legacy,
+      orchestration,
+      contentType: "card_news",
+      creativeDirection: {
+        ...legacy.creativeDirection,
+        contentFamily: "informational",
+        outputFormat: "card_news",
+      },
+    })).toThrow("ai_content_orchestration_mismatch");
+  });
+
   it("freezes one target, one connected appeal, selected images, references, and edited color", async () => {
     const envelope = await buildContentGenerationInput(deps(), generation(), { outputCount: 2 });
     expect(envelope.contractVersion).toBe("content-generation-input.v2");
@@ -160,5 +268,13 @@ describe("content-generation-input.v2", () => {
 
   it("rejects a snapshot with a mismatched target and appeal", () => {
     expect(() => parseContentGenerationInputV2({ contractVersion: "content-generation-input.v2", contentType: "card_news", subject: { analysisId: "a", analysisVersion: 1, type: "product", sourceUrl: "https://example.com", facts: [], research: {}, selectedImages: [] }, message: { target: { id: "target-1", name: "타깃" }, appeal: { id: "appeal-1", targetId: "target-2", title: "소구점" }, qualityBrief: {} }, creativeDirection: { prompts: [], brandColor: "#0057B8", selectedColor: "#0057B8", aspectRatio: "1:1", outputCount: 1 }, brandContext: {}, references: [], attachments: [] })).toThrow("ai_content_appeal_target_mismatch");
+  });
+
+  it("rejects incomplete attachment snapshots instead of passing unknown records to workers", async () => {
+    const envelope = await buildContentGenerationInput(deps(), generation(), { outputCount: 1 });
+    expect(() => parseContentGenerationInputV2({
+      ...envelope,
+      attachments: [{ id: "attachment-1" }],
+    })).toThrow("ai_content_attachment_snapshot_invalid");
   });
 });

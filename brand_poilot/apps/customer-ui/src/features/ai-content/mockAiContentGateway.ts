@@ -16,9 +16,9 @@ import type { PublishArtifactAsset } from "../../types";
 
 const usage: AiContentUsage = {
   generationUsed: 2,
-  generationLimit: 5,
+  generationLimit: 10,
   newDownloadUsed: 3,
-  newDownloadLimit: 10,
+  newDownloadLimit: 20,
   resetsAt: "2026-07-19T00:00:00+09:00"
 };
 
@@ -75,6 +75,7 @@ const jobs: AiContentGeneration[] = [
     currentStep: 5,
     draft: emptyDraft("card_news"),
     outputs: [{ id: "output-generating", generationId: "generation-generating", title: "카드뉴스", status: "generating", artifact: null, failureReason: null, downloadedAt: null }],
+    attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-18T06:30:00.000Z",
     updatedAt: "2026-07-18T06:34:00.000Z"
   },
@@ -87,6 +88,7 @@ const jobs: AiContentGeneration[] = [
     currentStep: 3,
     draft: emptyDraft("marketing"),
     outputs: [{ id: "output-marketing-planning", generationId: "generation-planning", title: "시안 후보", status: "queued", artifact: null, failureReason: null, downloadedAt: null }],
+    attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-18T03:20:00.000Z",
     updatedAt: "2026-07-18T03:40:00.000Z"
   },
@@ -99,6 +101,7 @@ const jobs: AiContentGeneration[] = [
     currentStep: 5,
     draft: emptyDraft("blog"),
     outputs: [{ id: "output-blog", generationId: "generation-completed", title: "운영 가이드", status: "completed", artifact: artifact("output-blog", "html"), failureReason: null, downloadedAt: null }],
+    attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-17T02:00:00.000Z",
     updatedAt: "2026-07-17T02:08:00.000Z"
   },
@@ -121,6 +124,7 @@ const jobs: AiContentGeneration[] = [
         downloadedAt: null
       }
     ],
+    attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-17T01:00:00.000Z",
     updatedAt: "2026-07-17T01:17:00.000Z"
   },
@@ -136,6 +140,7 @@ const jobs: AiContentGeneration[] = [
       { id: "output-marketing-1", generationId: "generation-partial", title: "혜택 강조형", status: "completed", artifact: artifact("output-marketing-1", "image"), failureReason: null, downloadedAt: null },
       { id: "output-marketing-2", generationId: "generation-partial", title: "문제 해결형", status: "failed", artifact: null, failureReason: "이미지 생성 실패", downloadedAt: null }
     ],
+    attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-16T04:00:00.000Z",
     updatedAt: "2026-07-16T04:06:00.000Z"
   },
@@ -148,6 +153,7 @@ const jobs: AiContentGeneration[] = [
     currentStep: 4,
     draft: emptyDraft("blog"),
     outputs: [{ id: "output-failed", generationId: "generation-failed", title: "실패 결과", status: "failed", artifact: null, failureReason: "내부 분석 데이터 오류", downloadedAt: null }],
+    attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-15T12:00:00.000Z",
     updatedAt: "2026-07-15T12:04:00.000Z"
   }
@@ -180,7 +186,9 @@ const references: AiContentReference[] = [
 
 function deterministicSubjectAnalysis(brandId: string, input: SubjectAnalysisInput, version = 1): SubjectAnalysis {
   const sourceUrl = input.sourceUrl ?? "";
-  const analysisId = `subject-analysis-${brandId}-${input.subjectType}`;
+  const analysisId = input.subjectType === "product"
+    ? "00000000-0000-4000-8000-000000000401"
+    : "00000000-0000-4000-8000-000000000402";
   const targets = [1, 2, 3].map((index) => ({
     id: `target-${index}`,
     name: `${index === 1 ? "시간이 부족한" : index === 2 ? "비교 후 결정하는" : "처음 시작하는"} ${input.subjectType === "product" ? "제품 고객" : "서비스 고객"}`,
@@ -293,6 +301,9 @@ export function createMockAiContentGateway(): AiContentGateway {
           evidence: [input.draft.productUrl || "등록된 자사 정보"]
         },
         outputs: [],
+        attachmentsLockedAt: null,
+        terminalAt: null,
+        retryableUntil: null,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -313,6 +324,7 @@ export function createMockAiContentGateway(): AiContentGateway {
       return copy(generation);
     },
     async uploadAttachment(_brandId, _generationId, attachment) { return copy({ ...attachment, file: undefined, storageUrl: "https://blob.example.com/attachment", storagePath: "attachment" }); },
+    async removeAttachment() {},
     async listAudiencePresets(brandId) {
       return copy(audienceByBrand.get(brandId) ?? []);
     },
@@ -349,6 +361,35 @@ export function createMockAiContentGateway(): AiContentGateway {
       if (output.status !== "failed") throw new Error("ai_content_output_not_failed");
       output.status = "queued";
       output.failureReason = null;
+      return copy(output);
+    },
+    async reviseOutput(_brandId, outputId, input) {
+      const output = generationRows.flatMap((job) => job.outputs).find((item) => item.id === outputId);
+      if (!output) throw new Error("ai_content_output_not_found");
+      if (output.status !== "completed") throw new Error("ai_content_output_not_completed");
+      if (input.action === "regenerate_card" && (!input.cardIndex || input.cardIndex < 1)) {
+        throw new Error("ai_content_revision_card_index_invalid");
+      }
+      output.status = "queued";
+      return copy(output);
+    },
+    async saveOutputCopy(_brandId, outputId, input) {
+      const output = generationRows.flatMap((job) => job.outputs).find((item) => item.id === outputId);
+      if (!output) throw new Error("ai_content_output_not_found");
+      if (output.status !== "completed" || output.legacyReadOnly) throw new Error("ai_content_copy_edit_unsupported");
+      output.copy = { ...(output.copy ?? {
+        hook: "", keyMessage: "", body: "", cta: "", caption: "", hashtags: [],
+      }), ...copy(input.fields) };
+      if (output.artifact) {
+        output.artifact.text = [
+          output.copy.hook,
+          output.copy.keyMessage,
+          output.copy.body,
+          output.copy.cta,
+          output.copy.caption,
+          ...output.copy.hashtags,
+        ].filter(Boolean).join("\n\n");
+      }
       return copy(output);
     },
     async downloadOutput(_brandId, outputId) { return { blob: new Blob([outputId], { type: "application/zip" }), fileName: `${outputId}.zip` }; },
@@ -428,7 +469,37 @@ export function createMockAiContentGateway(): AiContentGateway {
       analysis.selectedImageId = imageId;
       subjectRows.set(`${brandId}:${analysis.subjectType}:${analysis.sourceUrl}`, analysis);
       return copy(analysis);
-    }
+    },
+    async createProposalBatch() {
+      return { batchId: "batch-demo", status: "queued" };
+    },
+    async getProposalBatch(_brandId, batchId) {
+      return {
+        id: batchId, workspaceId: "workspace-demo", brandId: "brand-demo", origin: "manual",
+        contentFamily: "informational", request: {}, sourceSnapshots: [], status: "ready",
+        proposals: [], errorCode: null, errorMessage: null,
+        createdAt: "2026-07-28T00:00:00.000Z", updatedAt: "2026-07-28T00:00:00.000Z",
+      };
+    },
+    async listSuggestedProposals() {
+      return [];
+    },
+    async selectProposal() {
+      return copy(jobs[0]!);
+    },
+    async dismissProposal(_brandId, proposalId) {
+      return {
+        id: proposalId, batchId: "batch-demo", proposal: {
+          contractVersion: "content-proposal.v1", title: "", reasonToCreateNow: "",
+          contentFamily: "informational", topic: "", target: {}, messageStrategy: "how_to",
+          hook: "", keyMessage: "", evidence: [], outline: [], outputFormat: "blog",
+          channelTargets: ["blog_export"], recommendedReferenceQuery: { strategies: [], formats: [], tags: [] },
+        }, status: "dismissed", generationId: null, createdAt: "2026-07-28T00:00:00.000Z",
+      };
+    },
+    async listDraftReferences() {
+      return [];
+    },
   };
 }
 

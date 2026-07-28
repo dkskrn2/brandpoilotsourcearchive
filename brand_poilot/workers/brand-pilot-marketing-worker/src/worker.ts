@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { isRetryableContentWorkerError, runShellCommandWithTimeout } from "@brand-pilot/worker-runtime";
-import type { MarketingClient, MarketingJob } from "./contracts.js";
+import { isRetryableContentWorkerError, preflightAttachmentSnapshots, runShellCommandWithTimeout, type AttachmentHead } from "@brand-pilot/worker-runtime";
+import { parseContentGenerationInput, type MarketingClient, type MarketingJob } from "./contracts.js";
 import { loadAnalysis, loadMarketingResult, requestedDimensions } from "./manifest.js";
 import { buildPrompt, marketingSkillVersion } from "./promptBuilder.js";
 import { withResource } from "./resourceLease.js";
@@ -28,11 +28,12 @@ export function createCommandRunner(template: string, timeoutMs: number): CodexR
   };
 }
 
-export async function runOnce({ workerId, client, runner, storage }: {
+export async function runOnce({ workerId, client, runner, storage, head }: {
   workerId: string;
   client: MarketingClient;
   runner: CodexRunner;
   storage: MarketingStorage;
+  head?: AttachmentHead;
 }) {
   return withResource(client, workerId, async () => {
     const job = await client.claim(workerId);
@@ -40,11 +41,25 @@ export async function runOnce({ workerId, client, runner, storage }: {
     let output: Awaited<ReturnType<CodexRunner["run"]>> | undefined;
     const heartbeat = setInterval(() => void client.heartbeat(job.id, workerId, job.leaseToken).catch(() => undefined), 30_000);
     try {
+      const rawInput = job.payload.contentGenerationInput;
+      const parsedInput = rawInput === undefined ? null : parseContentGenerationInput(rawInput);
+      if (parsedInput?.attachments.length) {
+        if (!head) throw new Error("ai_content_attachment_storage_unavailable");
+        await preflightAttachmentSnapshots(parsedInput.attachments, { head });
+      }
       output = await runner.run(job, buildPrompt(job));
       if (job.jobType === "analyze") {
         await client.complete(job.id, { workerId, leaseToken: job.leaseToken, skillVersion: marketingSkillVersion, jobType: "analyze", analysisJson: await loadAnalysis(output.outputDir) });
       } else {
         if (!job.outputId) throw new Error("marketing_output_id_required");
+        const outputFormat = parsedInput?.orchestration?.outputFormat === "channel_text"
+          ? "channel_text"
+          : "single_image";
+        const result = await loadMarketingResult(
+          output.outputDir,
+          requestedDimensions(job.payload.contentGenerationInput as Record<string, unknown>),
+          outputFormat,
+        );
         await client.complete(job.id, {
           workerId,
           leaseToken: job.leaseToken,
@@ -54,7 +69,15 @@ export async function runOnce({ workerId, client, runner, storage }: {
             brandId: job.brandId,
             generationId: job.generationId,
             outputId: job.outputId,
-            result: await loadMarketingResult(output.outputDir, requestedDimensions(job.payload.contentGenerationInput as Record<string, unknown>)),
+            result: {
+              ...result,
+              ...(parsedInput?.orchestration
+                ? {
+                  family: "marketing" as const,
+                  strategy: parsedInput.orchestration.strategy,
+                }
+                : {}),
+            },
           }),
         });
       }

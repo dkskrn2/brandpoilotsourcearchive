@@ -280,6 +280,7 @@ const preLlmQueueRows: PublishSlot[] = [{
 
 afterEach(() => {
   cleanup();
+  window.history.replaceState({}, "", "/publish-queue");
   vi.resetModules();
   vi.restoreAllMocks();
   vi.clearAllMocks();
@@ -303,6 +304,8 @@ async function renderPublishQueuePage(apiOverrides: Partial<Record<string, Retur
     })),
     schedulePublishQueue: vi.fn(async () => ({ processed: 2, created: 0, updated: 2, failed: 0 })),
     publishQueueItem: vi.fn(async () => ({ id: "queue-topic", status: "published", publishedUrl: "mock://instagram/queue-topic" })),
+    retryPublishQueueItem: vi.fn(async () => ({ id: "queue-threads", status: "queued" })),
+    cancelPublishQueueItem: vi.fn(async () => ({ id: "queue-topic", status: "cancelled" })),
     ...apiOverrides
   };
   vi.doMock("../lib/apiClient", () => ({
@@ -815,6 +818,99 @@ describe("PublishQueuePage", () => {
     expect(screen.getByText("제주 가족 숙소 카드뉴스")).toBeVisible();
     expect(screen.queryByText("게시 대기 상태 콘텐츠")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Threads 실패" })).toBeVisible();
+  });
+
+  it("keeps a deep-linked queue result visible across filters and focuses it", async () => {
+    window.history.replaceState({}, "", "/publish-queue?status=issues&queueId=queue-instagram-waiting");
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView
+    });
+
+    await renderPublishQueuePage({ listPublishResults: vi.fn(async () => publishResults) });
+
+    const card = await screen.findByRole("article", { name: "게시 대기 상태 콘텐츠" });
+    expect(card).toHaveAttribute("data-publish-deep-link", "true");
+    expect(card).toHaveFocus();
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+  });
+
+  it("shows reconcile instead of retry for an unknown publish result", async () => {
+    const unknownRows: PublishSlot[] = [{
+      ...groupedQueueRows[1],
+      id: "queue-unknown",
+      status: "failed",
+      lastError: "publish_delivery_unknown"
+    }];
+    const api = await renderPublishQueuePage({ listPublishQueue: vi.fn(async () => unknownRows) });
+
+    expect(await screen.findByText("결과 확인 필요")).toBeVisible();
+    expect(screen.getByText("publish_delivery_unknown")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "재시도" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "게시 결과 확인" }));
+    expect(api.publishQueueItem).not.toHaveBeenCalled();
+    expect(api.listPublishQueue).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows server retry reasons and only enables retry for allowed failures", async () => {
+    const failures: PublishSlot[] = [{
+      ...groupedQueueRows[1],
+      id: "queue-retryable",
+      lastError: "oauth_required"
+    }, {
+      ...groupedQueueRows[1],
+      id: "queue-forbidden",
+      topicPublishGroupId: "publish-group-2",
+      title: "재시도 금지 콘텐츠",
+      lastError: "invalid_media"
+    }];
+    const api = await renderPublishQueuePage({ listPublishQueue: vi.fn(async () => failures) });
+
+    expect(await screen.findByText("oauth_required")).toBeVisible();
+    expect(screen.getByText("invalid_media")).toBeVisible();
+    expect(screen.getByText("서버가 이 실패의 재시도를 허용하지 않습니다.")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "재시도" }));
+    expect(api.retryPublishQueueItem).toHaveBeenCalledWith("queue-retryable");
+  });
+
+  it("keeps the current list and warns when a recovery refresh fails", async () => {
+    const listPublishQueue = vi.fn()
+      .mockResolvedValueOnce([{
+        ...groupedQueueRows[1],
+        id: "queue-unknown",
+        status: "failed",
+        lastError: "publish_delivery_unknown"
+      }])
+      .mockRejectedValueOnce(new Error("refresh_failed"));
+    await renderPublishQueuePage({ listPublishQueue });
+
+    await screen.findByText("제주 가족 숙소 카드뉴스");
+    await userEvent.click(screen.getByRole("button", { name: "게시 결과 확인" }));
+
+    expect(await screen.findByText("목록을 새로고침하지 못해 기존 상태를 표시합니다.")).toBeVisible();
+    expect(screen.getByText("제주 가족 숙소 카드뉴스")).toBeVisible();
+  });
+
+  it("allows cancellation only before publishing starts", async () => {
+    const cancellable = [{
+      ...groupedQueueRows[0],
+      id: "queue-cancellable",
+      title: "취소 가능한 예약",
+      status: "scheduled"
+    }] as PublishSlot[];
+    const api = await renderPublishQueuePage({
+      listPublishQueue: vi.fn(async () => cancellable),
+      listPublishResults: vi.fn(async () => publishResults)
+    });
+
+    await screen.findByText("게시 대기 상태 콘텐츠");
+    const scheduled = screen.getByRole("article", { name: "취소 가능한 예약" });
+    await userEvent.click(within(scheduled).getByRole("button", { name: "예약 취소" }));
+
+    expect(api.cancelPublishQueueItem).toHaveBeenCalledWith("queue-cancellable");
+    const publishing = screen.getByRole("article", { name: "게시 대기 상태 콘텐츠" });
+    expect(within(publishing).queryByRole("button", { name: "예약 취소" })).not.toBeInTheDocument();
   });
 
   it("does not show sample queue items when the API is unavailable", async () => {

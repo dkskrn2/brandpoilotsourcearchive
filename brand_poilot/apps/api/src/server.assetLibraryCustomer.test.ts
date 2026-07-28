@@ -1,0 +1,402 @@
+import { createHash } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
+import { createServer } from "./httpServer.js";
+import type { ApiRepository } from "./types.js";
+
+const workspaceId = "11111111-1111-4111-8111-111111111111";
+const brandId = "22222222-2222-4222-8222-222222222222";
+const userId = "33333333-3333-4333-8333-333333333333";
+const avatarId = "44444444-4444-4444-8444-444444444444";
+const referenceId = "55555555-5555-4555-8555-555555555555";
+const sessionId = "66666666-6666-4666-8666-666666666666";
+const uploadBytes = Buffer.alloc(100, 7);
+const checksum = createHash("sha256").update(uploadBytes).digest("hex");
+const auth = { cookie: "bp_session=session-1" };
+const uploaded = {
+  fileName: "face.webp", mimeType: "image/webp", sizeBytes: 100, checksum,
+  storagePath: `brands/${brandId}/asset-library/avatars/${avatarId}/${sessionId}/${checksum}-face.webp`,
+  storageUrl: `https://store.blob.vercel-storage.com/brands/${brandId}/asset-library/avatars/${avatarId}/${sessionId}/${checksum}-face.webp`,
+};
+const avatar = {
+  id: avatarId, workspaceId, brandId, name: "모델", description: "", isDefault: false,
+  status: "active" as const, createdByUserId: userId,
+  createdAt: "2026-07-27T00:00:00.000Z", updatedAt: "2026-07-27T00:00:00.000Z", images: [],
+};
+
+function setup(overrides: Partial<ApiRepository> = {}) {
+  const repository = {
+    health: vi.fn(async () => ({ database: "ok" as const })),
+    getActive: vi.fn(async () => null), listVersions: vi.fn(async () => []),
+    getActiveRules: vi.fn(async () => null), listRuleSets: vi.fn(async () => []),
+    listAvatars: vi.fn(async () => [avatar]), getAvatar: vi.fn(async () => avatar),
+    createAvatar: vi.fn(async () => avatar), updateAvatar: vi.fn(async () => avatar),
+    addAvatarImage: vi.fn(async () => avatar), deleteAvatarImage: vi.fn(async () => undefined),
+    setDefaultAvatar: vi.fn(async () => ({ ...avatar, isDefault: true })),
+    archiveAvatar: vi.fn(async () => undefined), summarizeAvatars: vi.fn(async () => ({ active: 1, defaultAvatarId: null })),
+    listReferences: vi.fn(async () => []), addReferenceUrl: vi.fn(async () => ({ id: referenceId })),
+    getReference: vi.fn(async () => ({ id: referenceId, title: "Real detail" })),
+    setReferenceFavorite: vi.fn(async () => ({ id: referenceId })), archiveReference: vi.fn(async () => undefined),
+    getReferencePattern: vi.fn(async () => ({ observations: ["강한 대비"] })),
+    createUploadSession: vi.fn(async (_scope, kind) => ({
+      id: sessionId, nonce: "valid-nonce-123456", workspaceId, brandId, kind,
+      avatarId: kind === "avatar" ? avatarId : null,
+      fileName: "face.webp", storagePathPrefix: kind === "avatar"
+        ? `brands/${brandId}/asset-library/avatars/${avatarId}/${sessionId}/`
+        : `brands/${brandId}/asset-library/references/${sessionId}/`,
+      expectedMimeType: "image/webp", expectedSizeBytes: 100, expectedChecksum: checksum,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(), confirmedAt: null,
+    })),
+    getUploadSession: vi.fn(async () => ({
+      id: sessionId, nonce: "valid-nonce-123456", workspaceId, brandId, kind: "avatar" as const,
+      avatarId,
+      fileName: "face.webp", storagePathPrefix: `brands/${brandId}/asset-library/avatars/${avatarId}/${sessionId}/`,
+      expectedMimeType: "image/webp", expectedSizeBytes: 100, expectedChecksum: checksum,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(), confirmedAt: null,
+    })),
+    confirmAvatarUpload: vi.fn(async () => ({ status: "staged" as const, avatarId, sessionId })),
+    cancelAvatarUpload: vi.fn(async () => ({
+      status: "cleanup_pending" as const,
+      immediateCleanup: "succeeded" as const,
+    })),
+    cleanupExpiredAvatarUploads: vi.fn(async () => ({ scanned: 0, cancelled: 0, failed: [] })),
+    cancelReferenceUpload: vi.fn(async () => ({
+      status: "cleanup_pending" as const,
+      immediateCleanup: "succeeded" as const,
+    })),
+    cleanupExpiredReferenceUploads: vi.fn(async () => ({
+      scanned: 0, cancelled: 0, preserved: 0, failed: [],
+    })),
+    confirmReferenceUpload: vi.fn(async () => ({ id: referenceId })),
+    listReferenceBrands: vi.fn(async () => []), createReferenceBrand: vi.fn(async () => ({ id: referenceId })),
+    createReferenceBrandFromTrend: vi.fn(async () => ({ id: referenceId })),
+    listReferenceBrandItems: vi.fn(async () => []),
+    ...overrides,
+  } as unknown as ApiRepository;
+  const kakaoAuth = {
+    getSession: vi.fn(async () => ({ userId, workspaceId, workspaceName: "W", brandId, brandName: "B", displayName: "T", email: null })),
+    canAccessBrand: vi.fn(async () => true),
+  } as never;
+  const getBlob = vi.fn(async () => ({
+    statusCode: 200 as const,
+    stream: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(uploadBytes);
+        controller.close();
+      },
+    }),
+    headers: new Headers(),
+    blob: {
+      url: uploaded.storageUrl, downloadUrl: `${uploaded.storageUrl}?download=1`,
+      pathname: uploaded.storagePath, size: uploadBytes.length,
+      uploadedAt: new Date(), contentType: "image/webp", contentDisposition: "inline",
+      cacheControl: "public, max-age=0", etag: "etag",
+    },
+  }));
+  const generateClientToken = vi.fn(async () => "client-token");
+  const deleteBlob = vi.fn(async () => undefined);
+  const listBlobs = vi.fn(async () => ({ blobs: [], hasMore: false }));
+  return {
+    app: createServer({
+      repository, kakaoAuth, logger: false, cronSecret: "cron-secret",
+      assetLibraryUpload: {
+        readWriteToken: "rw-token", getBlob, generateClientToken, deleteBlob,
+        listBlobs: listBlobs as never,
+      },
+    }),
+    repository, getBlob, deleteBlob, listBlobs,
+  };
+}
+
+describe("asset library customer routes", () => {
+  it("lists, creates, edits, defaults, and archives avatars with the authenticated actor", async () => {
+    const { app, repository } = setup();
+    expect((await app.inject({ method: "GET", url: `/brands/${brandId}/avatars`, headers: auth })).statusCode).toBe(200);
+    const created = await app.inject({
+      method: "POST", url: `/brands/${brandId}/avatars`, headers: auth,
+      payload: {
+        avatarId, name: " 모델 ", description: "",
+        imageSessionIds: [sessionId], representativeSessionId: sessionId,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(repository.createAvatar).toHaveBeenCalledWith(
+      { workspaceId, brandId, actorUserId: userId },
+      {
+        avatarId, name: "모델", description: "",
+        imageSessionIds: [sessionId], representativeSessionId: sessionId,
+      },
+    );
+    expect((await app.inject({
+      method: "GET", url: `/brands/${brandId}/avatars/${avatarId}`, headers: auth,
+    })).statusCode).toBe(200);
+    await app.inject({ method: "PATCH", url: `/brands/${brandId}/avatars/${avatarId}`, headers: auth, payload: { name: "수정", description: "" } });
+    expect((await app.inject({
+      method: "DELETE", url: `/brands/${brandId}/avatars/${avatarId}/images/${referenceId}`, headers: auth,
+    })).statusCode).toBe(204);
+    await app.inject({ method: "POST", url: `/brands/${brandId}/avatars/${avatarId}/default`, headers: auth });
+    await app.inject({ method: "POST", url: `/brands/${brandId}/avatars/${avatarId}/archive`, headers: auth });
+    expect(repository.updateAvatar).toHaveBeenCalledWith(
+      { workspaceId, brandId, actorUserId: userId, avatarId }, { name: "수정", description: "" },
+    );
+    expect(repository.setDefaultAvatar).toHaveBeenCalledWith({ workspaceId, brandId, actorUserId: userId, avatarId });
+    expect(repository.archiveAvatar).toHaveBeenCalledWith({ workspaceId, brandId, actorUserId: userId, avatarId });
+    await app.close();
+  });
+
+  it("issues and confirms a dedicated avatar upload session", async () => {
+    const { app, repository } = setup();
+    const token = await app.inject({
+      method: "POST", url: `/brands/${brandId}/avatars/${avatarId}/images/upload-token`, headers: auth,
+      payload: { fileName: "face.webp", mimeType: "image/webp", sizeBytes: 100, checksum },
+    });
+    expect(token.statusCode).toBe(200);
+    expect(token.json().pathname).toContain("/asset-library/avatars/");
+    expect(token.json().nonce).toBe("valid-nonce-123456");
+    expect(repository.createUploadSession).toHaveBeenCalledWith(
+      { workspaceId, brandId, actorUserId: userId },
+      "avatar",
+      { fileName: "face.webp", mimeType: "image/webp", sizeBytes: 100, checksum },
+      avatarId,
+    );
+    const confirmed = await app.inject({
+      method: "POST", url: `/brands/${brandId}/avatars/${avatarId}/images/confirm`, headers: auth,
+      payload: { sessionId, nonce: "valid-nonce-123456", ...uploaded, representative: false },
+    });
+    expect(confirmed.statusCode).toBe(200);
+    expect(confirmed.json()).toEqual({ status: "staged", avatarId, sessionId });
+    expect(repository.confirmAvatarUpload).toHaveBeenCalledWith(
+      { workspaceId, brandId, actorUserId: userId, avatarId, sessionId },
+      { ...uploaded, representative: false },
+    );
+    await app.close();
+  });
+
+  it("cancels an avatar upload with authenticated tenant, actor, and reserved-avatar scope", async () => {
+    const { app, repository, deleteBlob } = setup();
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/brands/${brandId}/avatars/${avatarId}/images/upload-sessions/${sessionId}`,
+      headers: auth,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ status: "cleanup_pending", immediateCleanup: "succeeded" });
+    expect(repository.cancelAvatarUpload).toHaveBeenCalledWith(
+      { workspaceId, brandId, actorUserId: userId, avatarId, sessionId },
+      expect.any(Function),
+    );
+    const cleanup = (repository.cancelAvatarUpload as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
+    const prefix = `brands/${brandId}/asset-library/avatars/${avatarId}/${sessionId}/`;
+    await cleanup(prefix, uploaded.storagePath);
+    expect(deleteBlob).toHaveBeenCalledWith(uploaded.storagePath, expect.objectContaining({ token: "rw-token" }));
+    await app.close();
+  });
+
+  it("cancels a reference upload with authenticated tenant and actor scope", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/brands/${brandId}/references/upload-sessions/${sessionId}`,
+      headers: auth,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ status: "cleanup_pending", immediateCleanup: "succeeded" });
+    expect(repository.cancelReferenceUpload).toHaveBeenCalledWith(
+      { workspaceId, brandId, actorUserId: userId, sessionId },
+      expect.any(Function),
+    );
+    await app.close();
+  });
+
+  it("runs abandoned avatar and reference cleanup only through the authenticated cron route", async () => {
+    const cleanupExpiredAvatarUploads = vi.fn(async () => ({
+      scanned: 2,
+      cancelled: 1,
+      failed: [{ sessionId, error: "asset_library_blob_delete_failed" }],
+    }));
+    const cleanupExpiredReferenceUploads = vi.fn(async () => ({
+      scanned: 1, cancelled: 1, preserved: 0, failed: [],
+    }));
+    const { app } = setup({ cleanupExpiredAvatarUploads, cleanupExpiredReferenceUploads });
+    expect((await app.inject({
+      method: "GET", url: "/internal/cron/avatar-upload-cleanup",
+    })).statusCode).toBe(401);
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/cron/avatar-upload-cleanup",
+      headers: { authorization: "Bearer cron-secret" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      scanned: 2, cancelled: 1,
+      failed: [{ sessionId, error: "asset_library_blob_delete_failed" }],
+    });
+    expect(cleanupExpiredAvatarUploads).toHaveBeenCalledWith(expect.any(Function));
+    expect(cleanupExpiredReferenceUploads).toHaveBeenCalledWith(expect.any(Function));
+    await app.close();
+  });
+
+  it("maps duplicate avatar image bytes to a stable conflict response", async () => {
+    const { app } = setup({
+      createAvatar: vi.fn(async () => {
+        throw new Error("avatar_image_duplicate");
+      }),
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/avatars`,
+      headers: auth,
+      payload: {
+        avatarId,
+        name: "중복 모델",
+        description: "",
+        imageSessionIds: [sessionId],
+        representativeSessionId: sessionId,
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "avatar_image_duplicate" });
+    await app.close();
+  });
+
+  it("maps an existing-avatar duplicate confirmation to the same stable conflict response", async () => {
+    const { app } = setup({
+      confirmAvatarUpload: vi.fn(async () => {
+        throw new Error("avatar_image_duplicate");
+      }),
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/avatars/${avatarId}/images/confirm`,
+      headers: auth,
+      payload: {
+        sessionId,
+        nonce: "valid-nonce-123456",
+        ...uploaded,
+        representative: false,
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "avatar_image_duplicate" });
+    await app.close();
+  });
+
+  it("does not persist a caller Blob hostname that differs from the provider canonical URL", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST", url: `/brands/${brandId}/avatars/${avatarId}/images/confirm`, headers: auth,
+      payload: {
+        sessionId, nonce: "valid-nonce-123456", ...uploaded,
+        storageUrl: `https://attacker.blob.vercel-storage.com/${uploaded.storagePath}`,
+        representative: false,
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "asset_library_upload_url_mismatch" });
+    expect(repository.confirmAvatarUpload).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("rejects an invalid reserved avatar ID before creating an upload session", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST", url: `/brands/${brandId}/avatars/not-a-uuid/images/upload-token`, headers: auth,
+      payload: { fileName: "face.webp", mimeType: "image/webp", sizeBytes: 100, checksum },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "asset_library_upload_scope_invalid" });
+    expect(repository.createUploadSession).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("passes all reference filters and exposes patterns only on the dedicated endpoint", async () => {
+    const { app, repository } = setup();
+    const listed = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/references?kind=trend&contentFamily=blog&strategy=educational&format=reel&origin=acme&favorite=true&recent=30`,
+      headers: auth,
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(repository.listReferences).toHaveBeenCalledWith({ workspaceId, brandId }, {
+      kind: "trend", contentFamily: "blog", strategy: "educational", format: "reel",
+      origin: "acme", favorite: true, recent: 30,
+    });
+    expect(listed.json()).toEqual([]);
+    const detail = await app.inject({
+      method: "GET", url: `/brands/${brandId}/references/${referenceId}`, headers: auth,
+    });
+    expect(detail.json()).toEqual({ id: referenceId, title: "Real detail" });
+    expect(repository.getReference).toHaveBeenCalledWith({ workspaceId, brandId, referenceId });
+    const pattern = await app.inject({
+      method: "GET", url: `/brands/${brandId}/references/${referenceId}/pattern`, headers: auth,
+    });
+    expect(pattern.json()).toEqual({ observations: ["강한 대비"] });
+    await app.close();
+  });
+
+  it("supports URL, favorite, archive, and real saved reference-brand routes", async () => {
+    const { app, repository } = setup();
+    expect((await app.inject({
+      method: "POST", url: `/brands/${brandId}/references/url`, headers: auth,
+      payload: { url: "https://example.com/a", contentPurpose: "both", title: "A" },
+    })).statusCode).toBe(201);
+    const uploadToken = await app.inject({
+      method: "POST", url: `/brands/${brandId}/references/upload-token`, headers: auth,
+      payload: { fileName: "face.webp", mimeType: "image/webp", sizeBytes: 100, checksum },
+    });
+    expect(uploadToken.statusCode).toBe(200);
+    expect(uploadToken.json().pathname).toContain("/asset-library/references/");
+    await app.inject({
+      method: "POST", url: `/brands/${brandId}/references/${referenceId}/favorite`, headers: auth,
+      payload: { favorite: true },
+    });
+    await app.inject({ method: "POST", url: `/brands/${brandId}/references/${referenceId}/archive`, headers: auth });
+    await app.inject({
+      method: "POST", url: `/brands/${brandId}/reference-brands`, headers: auth,
+      payload: { platform: "instagram", handle: "@acme" },
+    });
+    expect((await app.inject({
+      method: "GET", url: `/brands/${brandId}/reference-brands`, headers: auth,
+    })).statusCode).toBe(200);
+    await app.inject({
+      method: "POST", url: `/brands/${brandId}/reference-brands/from-trend-media/${referenceId}`, headers: auth,
+    });
+    await app.inject({
+      method: "GET", url: `/brands/${brandId}/reference-brands/${referenceId}/items`, headers: auth,
+    });
+    expect(repository.createReferenceBrandFromTrend).toHaveBeenCalledWith({
+      workspaceId, brandId, actorUserId: userId, mediaId: referenceId,
+    });
+    expect(repository.listReferenceBrandItems).toHaveBeenCalledWith({
+      workspaceId, brandId, referenceBrandId: referenceId,
+    });
+    await app.close();
+  });
+
+  it("maps member archive rejection to a stable forbidden response", async () => {
+    const { app } = setup({ archiveReference: vi.fn(async () => { throw new Error("asset_library_admin_required"); }) });
+    const response = await app.inject({
+      method: "POST", url: `/brands/${brandId}/references/${referenceId}/archive`, headers: auth,
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: "asset_library_admin_required" });
+    await app.close();
+  });
+
+  it("returns a client error instead of inventing a reference-brand author", async () => {
+    const { app } = setup({
+      createReferenceBrandFromTrend: vi.fn(async () => {
+        throw new Error("reference_brand_author_unavailable");
+      }),
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/reference-brands/from-trend-media/${referenceId}`,
+      headers: auth,
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "reference_brand_author_unavailable" });
+    await app.close();
+  });
+});

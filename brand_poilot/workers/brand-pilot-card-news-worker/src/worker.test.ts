@@ -67,4 +67,29 @@ describe("card-news worker", () => {
       retryable: false,
     }));
   });
+
+  it("preflights attachment blobs before either Codex command", async () => {
+    const item = job("generate");
+    const input = item.payload.contentGenerationInput as Record<string, unknown>;
+    input.attachments = [{
+      id: "attachment-1", generationId: "generation-1", role: "document",
+      fileName: "brief.pdf", mimeType: "application/pdf", sizeBytes: 42,
+      checksum: "a".repeat(64), storageUrl: "https://blob.example/brief.pdf",
+      storagePath: "generation/brief.pdf", createdAt: "2026-07-27T00:00:00.000Z",
+    }];
+    const api = client(item);
+    const planner = { run: vi.fn() };
+    const runner = { run: vi.fn() };
+    await runOnce({
+      workerId: "worker-1", client: api, planner, runner,
+      storage: { upload: vi.fn() },
+      head: vi.fn(async () => { throw Object.assign(new Error("not found"), { status: 404 }); }),
+    });
+    expect(planner.run).not.toHaveBeenCalled();
+    expect(runner.run).not.toHaveBeenCalled();
+    expect(api.fail).toHaveBeenCalledWith("job-1", expect.objectContaining({
+      errorCode: "ai_content_attachment_blob_unavailable",
+      retryable: false,
+    }));
+  });
 });

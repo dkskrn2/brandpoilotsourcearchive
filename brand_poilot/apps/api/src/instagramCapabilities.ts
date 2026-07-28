@@ -1,4 +1,4 @@
-import type { InstagramCapabilityStatus } from "./types.js";
+import type { ChannelStatus, InstagramCapabilityStatus } from "./types.js";
 
 export const requiredInstagramStoryScopes = [
   "instagram_basic",
@@ -31,6 +31,184 @@ export interface InstagramStoryCapabilityResult {
     scopesVerified: boolean;
     verifiedCredentialId: string | null;
   };
+}
+
+export type InstagramChannelReadiness =
+  | { connectionStatus: "connected"; readiness: "ready"; reasonCode: null }
+  | {
+    connectionStatus: "connected";
+    readiness: "not_supported";
+    reasonCode: "publishing_disabled";
+  }
+  | {
+    connectionStatus: "not_connected";
+    readiness: "needs_connection";
+    reasonCode: "channel_not_connected";
+  }
+  | {
+    connectionStatus: Exclude<ChannelStatus, "connected" | "not_connected">;
+    readiness: "needs_permission";
+    reasonCode:
+      | "channel_needs_attention"
+      | "credential_expired"
+      | "credential_invalid"
+      | "meta_permission_denied"
+      | "meta_token_invalid"
+      | "missing_required_scopes"
+      | "professional_account_required"
+      | "provider_not_supported"
+      | "publish_failed";
+  };
+
+export interface AuthoritativeInstagramChannelInput {
+  adapterEnabled: boolean;
+  channelStatus: ChannelStatus | null;
+  channelLastError: string | null;
+  externalAccountId: string | null;
+  credentialId: string | null;
+  credentialProvider: string | null;
+  credentialStatus: string | null;
+  credentialExpiresAt: Date | string | null;
+  hasCredentialPayload: boolean;
+  scopes: readonly string[];
+  now?: Date;
+}
+
+const instagramBasicScopeAlternatives = [
+  "instagram_business_basic",
+  "instagram_basic",
+] as const;
+const instagramPublishScopeAlternatives = [
+  "instagram_business_content_publish",
+  "instagram_content_publish",
+] as const;
+
+const instagramStoryScopeAlternatives: Record<
+  (typeof requiredInstagramStoryScopes)[number],
+  readonly string[]
+> = {
+  instagram_basic: instagramBasicScopeAlternatives,
+  instagram_content_publish: instagramPublishScopeAlternatives,
+};
+
+function missingInstagramStoryScopes(scopes: readonly string[]) {
+  const presentScopes = new Set(scopes);
+  return requiredInstagramStoryScopes.filter((requiredScope) => (
+    !instagramStoryScopeAlternatives[requiredScope].some((scope) => presentScopes.has(scope))
+  ));
+}
+
+export function evaluateInstagramChannelReadiness(
+  input: AuthoritativeInstagramChannelInput,
+): InstagramChannelReadiness {
+  if (!input.credentialId || !input.credentialStatus) {
+    return {
+      connectionStatus: "not_connected",
+      readiness: "needs_connection",
+      reasonCode: "channel_not_connected",
+    };
+  }
+  if (!input.hasCredentialPayload) {
+    return {
+      connectionStatus: "needs_attention",
+      readiness: "needs_permission",
+      reasonCode: "credential_invalid",
+    };
+  }
+  if (!input.externalAccountId?.trim()) {
+    return {
+      connectionStatus: "mapping_required",
+      readiness: "needs_permission",
+      reasonCode: "professional_account_required",
+    };
+  }
+  if (input.credentialProvider !== "meta") {
+    return {
+      connectionStatus: "needs_attention",
+      readiness: "needs_permission",
+      reasonCode: "provider_not_supported",
+    };
+  }
+
+  const now = input.now ?? new Date();
+  const expiresAt = input.credentialExpiresAt === null
+    ? null
+    : new Date(input.credentialExpiresAt);
+  const expired = input.credentialStatus === "expired"
+    || (expiresAt !== null
+      && Number.isFinite(expiresAt.getTime())
+      && expiresAt.getTime() <= now.getTime());
+  if (expired) {
+    return {
+      connectionStatus: "expired",
+      readiness: "needs_permission",
+      reasonCode: "credential_expired",
+    };
+  }
+  if (input.credentialStatus !== "active"
+    || (expiresAt !== null && !Number.isFinite(expiresAt.getTime()))) {
+    return {
+      connectionStatus: "needs_attention",
+      readiness: "needs_permission",
+      reasonCode: "credential_invalid",
+    };
+  }
+
+  if (missingInstagramStoryScopes(input.scopes).length > 0) {
+    return {
+      connectionStatus: "insufficient_permissions",
+      readiness: "needs_permission",
+      reasonCode: "missing_required_scopes",
+    };
+  }
+  if (input.channelStatus !== "connected") {
+    if (input.channelStatus === "not_connected" || input.channelStatus === null) {
+      return {
+        connectionStatus: "not_connected",
+        readiness: "needs_connection",
+        reasonCode: "channel_not_connected",
+      };
+    }
+    const reasonCode = input.channelStatus === "expired"
+      ? "credential_expired"
+      : input.channelStatus === "insufficient_permissions"
+        ? "missing_required_scopes"
+        : input.channelStatus === "mapping_required"
+          ? "professional_account_required"
+          : input.channelStatus === "publish_failed"
+            ? "publish_failed"
+            : input.channelLastError === "meta_token_invalid"
+              ? "meta_token_invalid"
+              : input.channelLastError === "meta_permission_denied"
+                ? "meta_permission_denied"
+                : "channel_needs_attention";
+    return {
+      connectionStatus: input.channelStatus,
+      readiness: "needs_permission",
+      reasonCode,
+    };
+  }
+  if (!input.adapterEnabled) {
+    return {
+      connectionStatus: "connected",
+      readiness: "not_supported",
+      reasonCode: "publishing_disabled",
+    };
+  }
+  return { connectionStatus: "connected", readiness: "ready", reasonCode: null };
+}
+
+export function isVerifiedInstagramStoryCapability(input: {
+  capabilityStatus: unknown;
+  capabilityMetadata: Record<string, unknown>;
+  credentialId: string | null;
+}) {
+  return input.capabilityStatus === "available"
+    && input.capabilityMetadata.scopesVerified === true
+    && input.capabilityMetadata.storyPublishVerified === true
+    && typeof input.capabilityMetadata.verifiedCredentialId === "string"
+    && input.credentialId !== null
+    && input.capabilityMetadata.verifiedCredentialId === input.credentialId;
 }
 
 function metadataRecord(value: unknown): Record<string, unknown> {
@@ -68,7 +246,7 @@ export function evaluateInstagramStoryCapability(
   input: InstagramStoryCapabilityInput
 ): InstagramStoryCapabilityResult {
   const presentScopes = [...new Set(input.scopes.filter((scope) => scope.trim().length > 0))];
-  const missingScopes = requiredInstagramStoryScopes.filter((scope) => !presentScopes.includes(scope));
+  const missingScopes = missingInstagramStoryScopes(presentScopes);
   const professionalAccountPresent = Boolean(input.externalAccountId?.trim());
   const now = input.now ?? new Date();
   const expiresAt = input.credentialExpiresAt === null ? null : new Date(input.credentialExpiresAt);

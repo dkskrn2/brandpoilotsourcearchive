@@ -4,6 +4,7 @@ import type { BrandEvidenceDocument, BrandEvidenceSourceType } from "./brandInte
 import { AI_CONTENT_ATTACHMENT_POLICY } from "./aiContentUpload.js";
 import {
   SUBJECT_EVIDENCE_FETCH_TIMEOUT_MS,
+  SUBJECT_EVIDENCE_PREFLIGHT_TIMEOUT_MS,
   loadSubjectEvidence,
   type SubjectEvidenceAttachment,
   type SubjectEvidenceFetchLimits,
@@ -47,6 +48,7 @@ function attachment(
     storagePath: "attachments/facts.txt",
     deletedAt: null,
     checksum: checksum(bytes),
+    createdAt: "2026-07-21T00:00:00.000Z",
     ...overrides,
   };
 }
@@ -83,6 +85,252 @@ describe("generation-scoped subject evidence", () => {
 
     expect(listAttachments).not.toHaveBeenCalled();
     expect(fetchBlob).not.toHaveBeenCalled();
+  });
+
+  it("uses the immutable snapshot without consulting live attachment rows", async () => {
+    const row = attachment();
+    const listAttachments = vi.fn();
+    const headBlob = vi.fn(async () => ({ size: row.sizeBytes, contentType: row.mimeType }));
+
+    await expect(loadSubjectEvidence(
+      { ...scope, attachmentIds: [row.id], attachmentSnapshot: [row], attachmentSnapshotMissingIds: [] },
+      {
+        listAttachments,
+        headBlob,
+        fetchBlob: async () => ({ bytes: Buffer.from("facts"), contentType: "text/plain", contentLength: 5 }),
+      },
+    )).resolves.toMatchObject({ documents: [{ sourceId: row.id }], sourceGaps: [] });
+
+    expect(listAttachments).not.toHaveBeenCalled();
+    expect(headBlob).toHaveBeenCalledWith(row.storagePath, expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }));
+  });
+
+  it("rejects a migration snapshot gap before storage or live-row access", async () => {
+    const listAttachments = vi.fn();
+    const fetchBlob = vi.fn();
+    const headBlob = vi.fn();
+
+    await expect(loadSubjectEvidence(
+      {
+        ...scope,
+        attachmentIds: [attachmentIds.first],
+        attachmentSnapshot: [],
+        attachmentSnapshotMissingIds: [attachmentIds.first],
+      },
+      { listAttachments, fetchBlob, headBlob },
+    )).rejects.toThrow("ai_content_attachment_blob_unavailable");
+
+    expect(listAttachments).not.toHaveBeenCalled();
+    expect(fetchBlob).not.toHaveBeenCalled();
+    expect(headBlob).not.toHaveBeenCalled();
+  });
+
+  it("rejects structural snapshot field gaps before Blob preflight", async () => {
+    const row = attachment();
+    const { createdAt: _missing, ...incomplete } = row;
+    const headBlob = vi.fn();
+
+    await expect(loadSubjectEvidence(
+      {
+        ...scope,
+        attachmentIds: [row.id],
+        attachmentSnapshot: [incomplete as never],
+        attachmentSnapshotMissingIds: [],
+      },
+      { listAttachments: vi.fn(), fetchBlob: vi.fn(), headBlob },
+    )).rejects.toThrow("ai_content_attachment_blob_unavailable");
+
+    expect(headBlob).not.toHaveBeenCalled();
+  });
+
+  it("lets a slower Blob not-found outrank a transient preflight failure", async () => {
+    const rows = [
+      attachment(),
+      attachment({
+        id: attachmentIds.second,
+        fileName: "second.txt",
+        storageUrl: "https://blob.example.com/second.txt",
+        storagePath: "attachments/second.txt",
+      }),
+    ];
+    const fetchBlob = vi.fn();
+    const headBlob = vi.fn(async (storagePath: string) => {
+      if (storagePath.endsWith("facts.txt")) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        throw Object.assign(new Error("not found"), { status: 404 });
+      }
+      throw Object.assign(new Error("unavailable"), { status: 503 });
+    });
+
+    await expect(loadSubjectEvidence(
+      {
+        ...scope,
+        attachmentIds: rows.map(({ id }) => id),
+        attachmentSnapshot: rows,
+        attachmentSnapshotMissingIds: [],
+      },
+      { listAttachments: vi.fn(), fetchBlob, headBlob },
+    )).rejects.toThrow("ai_content_attachment_blob_unavailable");
+
+    expect(headBlob).toHaveBeenCalledTimes(2);
+    expect(fetchBlob).not.toHaveBeenCalled();
+  });
+
+  it("bounds the whole snapshot preflight to fifteen seconds with one abort signal", async () => {
+    vi.useFakeTimers();
+    const row = attachment();
+    const signals: AbortSignal[] = [];
+    const headBlob = vi.fn((_storagePath: string, { signal }: { signal: AbortSignal }) => {
+      signals.push(signal);
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+    });
+    const pending = loadSubjectEvidence(
+      {
+        ...scope,
+        attachmentIds: [row.id],
+        attachmentSnapshot: [row],
+        attachmentSnapshotMissingIds: [],
+      },
+      { listAttachments: vi.fn(), fetchBlob: vi.fn(), headBlob },
+    );
+    const rejection = expect(pending).rejects.toThrow(
+      "ai_content_attachment_storage_unavailable",
+    );
+
+    await vi.advanceTimersByTimeAsync(SUBJECT_EVIDENCE_PREFLIGHT_TIMEOUT_MS);
+    await rejection;
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  it("aborts snapshot preflight on the parent operation deadline without a late rejection", async () => {
+    vi.useFakeTimers();
+    const row = attachment();
+    const signals: AbortSignal[] = [];
+    const headBlob = vi.fn((_storagePath: string, { signal }: { signal: AbortSignal }) => {
+      signals.push(signal);
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          setTimeout(() => reject(new Error("late provider rejection")), 1);
+        }, { once: true });
+      });
+    });
+    const pending = loadSubjectEvidence(
+      {
+        ...scope,
+        attachmentIds: [row.id],
+        attachmentSnapshot: [row],
+        attachmentSnapshotMissingIds: [],
+      },
+      {
+        listAttachments: vi.fn(),
+        fetchBlob: vi.fn(),
+        headBlob,
+        operationTimeoutMs: 10,
+      },
+    );
+    const rejection = expect(pending).rejects.toThrow(
+      "ai_content_attachment_storage_unavailable",
+    );
+
+    await vi.advanceTimersByTimeAsync(11);
+    await rejection;
+    await vi.runAllTimersAsync();
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  it("lets an earlier terminal HEAD 404 outrank timeout when another request ignores abort", async () => {
+    vi.useFakeTimers();
+    const rows = [
+      attachment(),
+      attachment({
+        id: attachmentIds.second,
+        fileName: "hung.txt",
+        storageUrl: "https://blob.example.com/hung.txt",
+        storagePath: "attachments/hung.txt",
+      }),
+    ];
+    const pending = loadSubjectEvidence(
+      {
+        ...scope,
+        attachmentIds: rows.map(({ id }) => id),
+        attachmentSnapshot: rows,
+        attachmentSnapshotMissingIds: [],
+      },
+      {
+        fetchBlob: vi.fn(),
+        headBlob: async (storagePath) => {
+          if (storagePath.endsWith("facts.txt")) {
+            throw Object.assign(new Error("not found"), { status: 404 });
+          }
+          return new Promise(() => {});
+        },
+      },
+    );
+    const rejection = expect(pending).rejects.toThrow("ai_content_attachment_blob_unavailable");
+
+    await vi.advanceTimersByTimeAsync(SUBJECT_EVIDENCE_PREFLIGHT_TIMEOUT_MS);
+    await rejection;
+  });
+
+  it("classifies GET not-found as terminal after a successful HEAD preflight", async () => {
+    const row = attachment();
+    await expect(loadSubjectEvidence(
+      {
+        ...scope,
+        attachmentIds: [row.id],
+        attachmentSnapshot: [row],
+        attachmentSnapshotMissingIds: [],
+      },
+      {
+        headBlob: async () => ({ size: row.sizeBytes, contentType: row.mimeType }),
+        fetchBlob: async () => {
+          throw Object.assign(new Error("blob not found"), { status: 404 });
+        },
+      },
+    )).rejects.toThrow("ai_content_attachment_blob_unavailable");
+  });
+
+  it("classifies GET provider 5xx as transient after a successful HEAD preflight", async () => {
+    const row = attachment();
+    await expect(loadSubjectEvidence(
+      {
+        ...scope,
+        attachmentIds: [row.id],
+        attachmentSnapshot: [row],
+        attachmentSnapshotMissingIds: [],
+      },
+      {
+        headBlob: async () => ({ size: row.sizeBytes, contentType: row.mimeType }),
+        fetchBlob: async () => {
+          throw Object.assign(new Error("provider unavailable"), { status: 503 });
+        },
+      },
+    )).rejects.toThrow("ai_content_attachment_storage_unavailable");
+  });
+
+  it("classifies GET DNS ENOTFOUND as transient after a successful HEAD preflight", async () => {
+    const row = attachment();
+    await expect(loadSubjectEvidence(
+      {
+        ...scope,
+        attachmentIds: [row.id],
+        attachmentSnapshot: [row],
+        attachmentSnapshotMissingIds: [],
+      },
+      {
+        headBlob: async () => ({ size: row.sizeBytes, contentType: row.mimeType }),
+        fetchBlob: async () => {
+          throw Object.assign(new Error("getaddrinfo ENOTFOUND blob.example.com"), {
+            code: "ENOTFOUND",
+          });
+        },
+      },
+    )).rejects.toThrow("ai_content_attachment_storage_unavailable");
   });
 
   it("requires every requested ID to resolve as non-deleted in the exact scope", async () => {

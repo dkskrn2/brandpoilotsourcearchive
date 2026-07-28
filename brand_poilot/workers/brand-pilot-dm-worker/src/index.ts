@@ -11,6 +11,7 @@ import {
   resolveDmWorkerDatabaseConfig,
 } from "./db.js";
 import { createEmbedding } from "./embeddings.js";
+import { startWorkerInstanceHeartbeat } from "./instanceHeartbeat.js";
 import { runDmWorkerOnce } from "./worker.js";
 import { runProfileRefreshOnce } from "./profileRefresh.js";
 import { runWikiMaintenanceOnce } from "./wikiMaintenance.js";
@@ -129,11 +130,22 @@ async function runLane(run: () => Promise<{ status: string }>, label: string) {
 async function main() {
   const runSelectedLane = workerMode === "dm" ? runDmLaneOnce : runWikiLaneOnce;
   if (command === "once") {
+    await api.heartbeatWorker(workerId);
     console.log(await runSelectedLane());
     await db.close();
     return;
   }
-  await runLane(runSelectedLane, `${workerMode}_worker`);
+  const stopHeartbeat = startWorkerInstanceHeartbeat({
+    heartbeat: api.heartbeatWorker,
+    workerId,
+    intervalMs: common.heartbeatIntervalMs,
+  });
+  try {
+    await runLane(runSelectedLane, `${workerMode}_worker`);
+  } finally {
+    stopHeartbeat();
+    await db.close();
+  }
 }
 
 void main();

@@ -68,8 +68,16 @@ async function renderSupportPage(
 describe("SupportPage", () => {
   it("keeps feature suggestions out of customer support", async () => {
     await renderSupportPage({}, ["/support?category=feature#support-request-form"]);
-    expect(screen.getByLabelText(/문의 유형/)).not.toHaveDisplayValue("기능 건의");
-    expect(screen.queryByRole("option", { name: "기능 건의" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("option").map((option) => ({
+      value: (option as HTMLOptionElement).value,
+      label: option.textContent
+    }))).toEqual([
+      { value: "", label: "문의 유형 선택" },
+      { value: "bug", label: "오류" },
+      { value: "channel", label: "채널 연결" },
+      { value: "account", label: "계정/로그인" },
+      { value: "other", label: "기타" }
+    ]);
     expect(await screen.findByRole("button", { name: /문의 내역 확인/ })).toBeVisible();
     expect(screen.queryByRole("button", { name: "새로고침" })).not.toBeInTheDocument();
   });
@@ -132,6 +140,47 @@ describe("SupportPage", () => {
       contactEmail: "user@example.com"
     });
     expect(api.listSupportRequests).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps email optional when submitting a support request", async () => {
+    const api = await renderSupportPage();
+
+    await userEvent.selectOptions(screen.getByLabelText(/문의 유형/), "other");
+    await userEvent.type(screen.getByLabelText(/제목/), "기타 문의");
+    await userEvent.type(screen.getByLabelText(/휴대전화 번호/), "01012345678");
+    await userEvent.type(screen.getByLabelText(/내용/), "이메일 없이 문의합니다.");
+    await userEvent.click(screen.getByRole("button", { name: "문의 접수" }));
+
+    expect(api.createSupportRequest).toHaveBeenCalledWith("brand-1", expect.objectContaining({
+      contactPhone: "010-1234-5678",
+      contactEmail: null
+    }));
+  });
+
+  it.each([
+    ["new", "접수"],
+    ["in_progress", "처리중"],
+    ["resolved", "답변 완료"],
+  ] as const)("shows the %s inquiry as %s", async (status, label) => {
+    await renderSupportPage({
+      listSupportRequests: vi.fn(async () => [{
+        id: `support-${status}`,
+        brandId: "brand-1",
+        workspaceId: "workspace-1",
+        category: "bug",
+        title: `${label} 문의`,
+        message: "처리 상태를 확인합니다.",
+        contactPhone: "010-1234-5678",
+        contactEmail: null,
+        status,
+        responseMessage: status === "resolved" ? "답변입니다." : null,
+        respondedAt: status === "resolved" ? "2026-07-12T01:00:00.000Z" : null,
+        createdAt: "2026-07-12T00:00:00.000Z",
+        updatedAt: "2026-07-12T01:00:00.000Z"
+      }])
+    });
+
+    expect(await screen.findByText(label)).toBeVisible();
   });
 
   it("keeps the newest inquiry history when an older request resolves last", async () => {

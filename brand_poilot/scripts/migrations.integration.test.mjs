@@ -4,10 +4,12 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
-import { loadMigrations } from "./migrationRunner.mjs";
+import { loadMigrations, runMigrationsWithClient } from "./migrationRunner.mjs";
 
 const legacyInstagramDeliveryChecksum =
   "7e45bc297cf35128368700b49f34974690d699198e465ecfb608ac9922cb1882";
+const originalProductServiceLibraryChecksum =
+  "3b3c9f6887d3f396c106a4a95cea6e4aa321c5dac0784c16a45fe2356a2b1b74";
 const legacyInstagramDeliverySql = await readFile(
   "scripts/fixtures/014_instagram_delivery_formats.legacy.sql",
   "utf8",
@@ -37,6 +39,19 @@ const runMigrationRange = async (database, migrations, firstId, lastId) => {
     }
   }
 };
+
+const createPgliteMigrationClient = (database) => ({
+  async query(sql, parameters = []) {
+    const normalized = sql.trim().toLowerCase();
+    if (normalized.startsWith("select pg_advisory_lock")) return { rows: [{ pg_advisory_lock: null }] };
+    if (normalized.startsWith("select pg_advisory_unlock")) return { rows: [{ pg_advisory_unlock: null }] };
+    if (parameters.length || normalized.startsWith("select ")) {
+      return database.query(sql, parameters);
+    }
+    await database.exec(sql);
+    return { rows: [], rowCount: 0 };
+  },
+});
 
 const insertPublishingFixture = async (database) => {
   const deliveryFormatColumn = await database.query(`
@@ -2854,6 +2869,2887 @@ test("049 creates tenant-safe versioned brand intelligence analyses", async () =
       "brand_analysis_runs_one_active_per_brand_uq",
     ]);
 
+  });
+});
+
+test("055 backfills tenant-safe approved brand core and rules without mutating confirmed analyses", async () => {
+  const migrations = await loadMigrations();
+  const migration055 = migrations.find(
+    (migration) => migration.id === "055_brand_core_and_rules.sql",
+  );
+  assert.ok(migration055, "055 brand core migration must exist");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "054_feedback_submissions.sql",
+    );
+
+    const user = await database.query(
+      "insert into app_users (email) values ($1) returning id",
+      [`brand-core-${randomUUID()}@example.com`],
+    );
+    const workspace = await database.query(
+      "insert into workspaces (name, slug, created_by_user_id) values ('Brand Core', $1, $2) returning id",
+      [`brand-core-${randomUUID()}`, user.rows[0].id],
+    );
+    await database.query(
+      "insert into workspace_members (workspace_id, user_id, role, status) values ($1, $2, 'owner', 'active')",
+      [workspace.rows[0].id, user.rows[0].id],
+    );
+    const firstBrand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'First Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    const secondBrand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Second Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    await database.query(
+      `insert into brand_profiles (
+         workspace_id, brand_id, forbidden_terms, default_cta, auto_approval_enabled
+       ) values
+       ($1, $2, '["금지 표현"]'::jsonb, '지금 확인하기', true),
+       ($1, $3, '[]'::jsonb, null, false)`,
+      [workspace.rows[0].id, firstBrand.rows[0].id, secondBrand.rows[0].id],
+    );
+    const analysis = await database.query(
+      `insert into brand_analysis_runs (
+         workspace_id, brand_id, status, input_json, evidence_json, result_json,
+         edited_result_json, idempotency_key, is_active, confirmed_at
+       ) values (
+         $1, $2, 'confirmed', '{}'::jsonb, '[{"sourceId":"owned"}]'::jsonb,
+         '{"primaryTarget":"AI 고객","businessDescription":"AI 설명"}'::jsonb,
+         '{"primaryTarget":"사용자 고객","businessDescription":"사용자 설명","evidence":[{"field":"businessDescription","claim":"사용자 설명","sourceId":"owned-url","sourceUrl":"https://example.com/about"}]}'::jsonb,
+         'confirmed-1', true, now()
+       ) returning id, result_json, edited_result_json`,
+      [workspace.rows[0].id, firstBrand.rows[0].id],
+    );
+    await database.query(
+      "update brand_profiles set active_brand_analysis_id = $1 where brand_id = $2",
+      [analysis.rows[0].id, firstBrand.rows[0].id],
+    );
+    const knowledgeImport = await database.query(
+      `insert into knowledge_imports (
+         workspace_id, brand_id, file_name, source_rows, result_json, status
+       ) values ($1, $2, 'legacy.json', '[]'::jsonb, '{}'::jsonb, 'succeeded') returning id`,
+      [workspace.rows[0].id, firstBrand.rows[0].id],
+    );
+    await database.query(
+      `insert into knowledge_entries (
+         workspace_id, brand_id, normalized_question, entry_type, title, content,
+         structured_data, direct_reply_enabled, enabled, last_import_id
+       ) values (
+         $1, $2, '__confirmed_brand_intelligence__', 'policy', 'Legacy', 'Legacy projection',
+         '{}'::jsonb, false, true, $3
+       )`,
+      [workspace.rows[0].id, firstBrand.rows[0].id, knowledgeImport.rows[0].id],
+    );
+
+    await database.exec(migration055.sql);
+    await database.exec(migration055.sql);
+
+    const core = await database.query(
+      `select id, source_analysis_id, version, status, core_json, evidence_json, created_by
+         from brand_core_versions
+        where workspace_id = $1 and brand_id = $2`,
+      [workspace.rows[0].id, firstBrand.rows[0].id],
+    );
+    assert.equal(core.rows.length, 1);
+    assert.equal(core.rows[0].source_analysis_id, analysis.rows[0].id);
+    assert.equal(core.rows[0].version, 1);
+    assert.equal(core.rows[0].status, "approved");
+    assert.equal(core.rows[0].core_json.contractVersion, "brand-core.v1");
+    assert.equal(core.rows[0].core_json.audiences[0].name, "사용자 고객");
+    assert.deepEqual(core.rows[0].evidence_json, [{
+      fieldPath: "summary.description",
+      sourceType: "owned_url",
+      sourceId: "owned-url",
+      sourceUrl: "https://example.com/about",
+      excerpt: "사용자 설명",
+      confidence: null,
+    }]);
+    assert.equal(core.rows[0].created_by, "migration");
+
+    const profile = await database.query(
+      `select active_brand_analysis_id, active_brand_core_id, active_brand_rule_set_id
+         from brand_profiles where brand_id = $1`,
+      [firstBrand.rows[0].id],
+    );
+    assert.equal(profile.rows[0].active_brand_analysis_id, analysis.rows[0].id);
+    assert.equal(profile.rows[0].active_brand_core_id, core.rows[0].id);
+    assert.ok(profile.rows[0].active_brand_rule_set_id);
+
+    const rules = await database.query(
+      "select status, rules_json from brand_rule_sets where brand_id = $1",
+      [firstBrand.rows[0].id],
+    );
+    assert.equal(rules.rows.length, 1);
+    assert.equal(rules.rows[0].status, "approved");
+    assert.deepEqual(rules.rows[0].rules_json.forbiddenPhrases, ["금지 표현"]);
+    assert.equal(rules.rows[0].rules_json.ctaRules.defaultCta, "지금 확인하기");
+
+    const legacy = await database.query(
+      `select enabled, direct_reply_enabled, structured_data
+         from knowledge_entries
+        where brand_id = $1 and normalized_question = '__confirmed_brand_intelligence__'`,
+      [firstBrand.rows[0].id],
+    );
+    assert.equal(legacy.rows[0].enabled, false);
+    assert.equal(legacy.rows[0].direct_reply_enabled, false);
+    assert.equal(legacy.rows[0].structured_data.legacyProjection, true);
+
+    await assert.rejects(
+      database.query(
+        "update brand_profiles set active_brand_core_id = $1 where brand_id = $2",
+        [core.rows[0].id, secondBrand.rows[0].id],
+      ),
+    );
+    const unchanged = await database.query(
+      "select result_json, edited_result_json from brand_analysis_runs where id = $1",
+      [analysis.rows[0].id],
+    );
+    assert.deepEqual(unchanged.rows[0], {
+      result_json: analysis.rows[0].result_json,
+      edited_result_json: analysis.rows[0].edited_result_json,
+    });
+  });
+});
+
+test("056 backfills legacy product knowledge into one approved reusable product", async () => {
+  const migrations = await loadMigrations();
+  const migration056 = migrations.find(
+    (migration) => migration.id === "056_product_service_library.sql",
+  );
+  assert.ok(migration056, "056 product service migration must exist");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "055_brand_core_and_rules.sql",
+    );
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ('Products', $1) returning id",
+      [`products-${randomUUID()}`],
+    );
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Product Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    const knowledgeImport = await database.query(
+      `insert into knowledge_imports (
+         workspace_id, brand_id, file_name, source_rows, result_json, status
+       ) values ($1, $2, 'products.csv', '[]', '{}', 'succeeded') returning id`,
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+    const legacy = await database.query(
+      `insert into knowledge_entries (
+         workspace_id, brand_id, normalized_question, entry_type, title, content,
+         structured_data, last_import_id
+       ) values (
+         $1, $2, 'legacy-product', 'product', '기존 제품', '기존 설명',
+         '{"features":["기능"]}', $3
+       ) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, knowledgeImport.rows[0].id],
+    );
+
+    await database.exec(migration056.sql);
+    await database.exec(migration056.sql);
+
+    const items = await database.query(
+      `select item.id, item.active_version_id, version.profile_json, version.status
+         from product_services item
+         join product_service_versions version on version.id = item.active_version_id
+        where item.brand_id = $1`,
+      [brand.rows[0].id],
+    );
+    assert.equal(items.rows.length, 1);
+    assert.equal(items.rows[0].status, "approved");
+    assert.equal(items.rows[0].profile_json.contractVersion, "product-service.v1");
+    assert.deepEqual(items.rows[0].profile_json.features, ["기능"]);
+
+    const projection = await database.query(
+      "select status, provenance_json from knowledge_entries where id = $1",
+      [legacy.rows[0].id],
+    );
+    assert.equal(projection.rows[0].status, "legacy_projection");
+    assert.equal(projection.rows[0].provenance_json.productServiceId, items.rows[0].id);
+  });
+});
+
+test("migration runner upgrades the original 056 state to Wiki source kinds in 057", async () => {
+  const migrations = await loadMigrations();
+  const migration056 = migrations.find(
+    (migration) => migration.id === "056_product_service_library.sql",
+  );
+  const migration057 = migrations.find(
+    (migration) => migration.id === "057_wiki_source_kinds.sql",
+  );
+  assert.equal(
+    migration056?.checksum,
+    originalProductServiceLibraryChecksum,
+    "committed migration 056 must remain byte-for-byte stable",
+  );
+  assert.ok(migration057, "057 Wiki source kinds migration must exist");
+  const runnableMigrations = migrations.filter(
+    (migration) => !migration.sql.startsWith("-- requires: pgvector")
+      && migration.id !== "027_wiki_search_v2.sql"
+      && migration.id <= "057_wiki_source_kinds.sql",
+  );
+  const through056 = runnableMigrations.filter(
+    (migration) => migration.id <= "056_product_service_library.sql",
+  );
+  const sourceKinds = [
+    "faq",
+    "product",
+    "product_service",
+    "service",
+    "policy",
+    "guide",
+    "owned_snapshot",
+  ].sort();
+
+  await withDatabase(async (database) => {
+    const client = createPgliteMigrationClient(database);
+    const initial = await runMigrationsWithClient({
+      client,
+      migrations: through056,
+    });
+    assert.equal(initial.pending.at(-1), "056_product_service_library.sql");
+
+    const stored056 = await database.query(
+      "select checksum from schema_migrations where id = '056_product_service_library.sql'",
+    );
+    assert.equal(stored056.rows[0].checksum, originalProductServiceLibraryChecksum);
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "wiki_build_items",
+        "wiki_build_items_source_kind_check",
+      ),
+      ["faq", "owned_snapshot", "policy", "product"],
+    );
+    const beforeColumn = await database.query(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = 'wiki_documents'
+         and column_name = 'product_service_id'`,
+    );
+    assert.equal(beforeColumn.rows.length, 0);
+
+    const upgraded = await runMigrationsWithClient({
+      client,
+      migrations: runnableMigrations,
+    });
+    assert.deepEqual(upgraded.pending, ["057_wiki_source_kinds.sql"]);
+
+    for (const [table, constraint] of [
+      ["wiki_build_items", "wiki_build_items_source_kind_check"],
+      ["wiki_documents", "wiki_documents_source_kind_check"],
+      ["wiki_source_units", "wiki_source_units_source_kind_check"],
+    ]) {
+      assert.deepEqual(
+        await readConstraintValues(database, table, constraint),
+        sourceKinds,
+      );
+    }
+    const column = await database.query(
+      `select is_nullable from information_schema.columns
+       where table_schema = 'public' and table_name = 'wiki_documents'
+         and column_name = 'product_service_id'`,
+    );
+    assert.deepEqual(column.rows, [{ is_nullable: "YES" }]);
+    const foreignKey = await database.query(
+      `select pg_get_constraintdef(oid) as definition
+       from pg_constraint
+       where conrelid = 'wiki_documents'::regclass
+         and conname = 'wiki_documents_product_service_ownership_fk'`,
+    );
+    assert.match(
+      foreignKey.rows[0].definition,
+      /FOREIGN KEY \(product_service_id, workspace_id, brand_id\).*product_services\(id, workspace_id, brand_id\)/,
+    );
+    const index = await database.query(
+      `select indexname from pg_indexes
+       where schemaname = 'public'
+         and indexname = 'wiki_documents_version_product_service_unique'`,
+    );
+    assert.equal(index.rows.length, 1);
+    const history = await database.query(
+      `select id, checksum from schema_migrations
+       where id in ('056_product_service_library.sql', '057_wiki_source_kinds.sql')
+       order by id`,
+    );
+    assert.equal(history.rows.length, 2);
+    assert.deepEqual(history.rows[0], {
+      id: "056_product_service_library.sql",
+      checksum: originalProductServiceLibraryChecksum,
+    });
+
+    const repeated = await runMigrationsWithClient({
+      client,
+      migrations: runnableMigrations,
+    });
+    assert.deepEqual(repeated.pending, []);
+  });
+});
+
+test("057 upgrades existing Wiki rows and accepts every source kind idempotently", async () => {
+  const migrations = await loadMigrations();
+  const migration056 = migrations.find(
+    (migration) => migration.id === "056_product_service_library.sql",
+  );
+  assert.ok(migration056, "056 product service migration must exist");
+  const migration057 = migrations.find(
+    (migration) => migration.id === "057_wiki_source_kinds.sql",
+  );
+  assert.ok(migration057, "057 Wiki source kinds migration must exist");
+  const sourceKinds = [
+    "faq",
+    "product",
+    "product_service",
+    "service",
+    "policy",
+    "guide",
+    "owned_snapshot",
+  ].sort();
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "055_brand_core_and_rules.sql",
+    );
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ('Wiki Upgrade', $1) returning id",
+      [`wiki-upgrade-${randomUUID()}`],
+    );
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Wiki Upgrade Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    const knowledgeImport = await database.query(
+      `insert into knowledge_imports (
+         workspace_id, brand_id, file_name, source_rows, result_json, status
+       ) values ($1, $2, 'wiki.csv', '[]', '{}', 'succeeded') returning id`,
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+    const existingEntry = await database.query(
+      `insert into knowledge_entries (
+         workspace_id, brand_id, normalized_question, question, answer, entry_type,
+         title, content, last_import_id
+       ) values ($1, $2, 'existing-faq', '기존 질문', '기존 답변', 'faq',
+         '기존 질문', '기존 답변', $3) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, knowledgeImport.rows[0].id],
+    );
+    const legacyProduct = await database.query(
+      `insert into knowledge_entries (
+         workspace_id, brand_id, normalized_question, entry_type, title, content,
+         last_import_id
+       ) values ($1, $2, 'existing-product', 'product', '기존 제품', '기존 제품 설명',
+         $3) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, knowledgeImport.rows[0].id],
+    );
+    const version = await database.query(
+      `insert into wiki_versions (workspace_id, brand_id, status, build_stage)
+       values ($1, $2, 'building', 'collecting') returning id`,
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+    const existingBuildItem = await database.query(
+      `insert into wiki_build_items (
+         workspace_id, brand_id, wiki_version_id, source_kind, source_id
+       ) values ($1, $2, $3, 'faq', $4) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, version.rows[0].id, existingEntry.rows[0].id],
+    );
+    const existingDocument = await database.query(
+      `insert into wiki_documents (
+         workspace_id, brand_id, wiki_version_id, source_kind, knowledge_entry_id,
+         title, content, content_hash, is_active
+       ) values ($1, $2, $3, 'faq', $4, '기존 질문', '기존 답변', 'existing-document', false)
+       returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, version.rows[0].id, existingEntry.rows[0].id],
+    );
+    const existingUnit = await database.query(
+      `insert into wiki_source_units (
+         workspace_id, brand_id, wiki_version_id, source_kind, source_id,
+         unit_type, stable_key, title, content, content_hash, source_quote
+       ) values ($1, $2, $3, 'faq', $4, 'faq', 'faq:existing',
+         '기존 질문', '기존 답변', 'existing-unit', '기존 답변') returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, version.rows[0].id, existingEntry.rows[0].id],
+    );
+
+    await database.exec(migration056.sql);
+    await database.exec(migration057.sql);
+    await database.exec(migration057.sql);
+
+    for (const [table, constraint] of [
+      ["wiki_build_items", "wiki_build_items_source_kind_check"],
+      ["wiki_documents", "wiki_documents_source_kind_check"],
+      ["wiki_source_units", "wiki_source_units_source_kind_check"],
+    ]) {
+      assert.deepEqual(
+        await readConstraintValues(database, table, constraint),
+        sourceKinds,
+      );
+    }
+
+    const preserved = await database.query(
+      `select
+         exists(select 1 from wiki_build_items where id = $1) as build_item,
+         exists(select 1 from wiki_documents where id = $2) as document,
+         exists(select 1 from wiki_source_units where id = $3) as source_unit`,
+      [existingBuildItem.rows[0].id, existingDocument.rows[0].id, existingUnit.rows[0].id],
+    );
+    assert.deepEqual(preserved.rows[0], {
+      build_item: true,
+      document: true,
+      source_unit: true,
+    });
+
+    const directEntries = await database.query(
+      `insert into knowledge_entries (
+         workspace_id, brand_id, normalized_question, entry_type, title, content,
+         last_import_id, origin
+       ) values
+         ($1, $2, 'service-entry', 'service', '서비스', '서비스 설명', null, 'manual'),
+         ($1, $2, 'guide-entry', 'guide', '가이드', '가이드 설명', null, 'manual')
+       returning id, entry_type`,
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+    const entryIds = new Map(directEntries.rows.map((row) => [row.entry_type, row.id]));
+    const productService = await database.query(
+      `select product_service_id as id
+         from product_service_legacy_mappings
+        where knowledge_entry_id = $1`,
+      [legacyProduct.rows[0].id],
+    );
+    assert.equal(productService.rows.length, 1);
+
+    for (const [sourceKind, sourceId, unitType] of [
+      ["product_service", productService.rows[0].id, "product"],
+      ["service", entryIds.get("service"), "service"],
+      ["guide", entryIds.get("guide"), "guide_section"],
+    ]) {
+      await database.query(
+        `insert into wiki_build_items (
+           workspace_id, brand_id, wiki_version_id, source_kind, source_id
+         ) values ($1, $2, $3, $4, $5)`,
+        [workspace.rows[0].id, brand.rows[0].id, version.rows[0].id, sourceKind, sourceId],
+      );
+      await database.query(
+        `insert into wiki_source_units (
+           workspace_id, brand_id, wiki_version_id, source_kind, source_id,
+           unit_type, stable_key, title, content, content_hash, source_quote
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $9)`,
+        [
+          workspace.rows[0].id,
+          brand.rows[0].id,
+          version.rows[0].id,
+          sourceKind,
+          sourceId,
+          unitType,
+          `${sourceKind}:new`,
+          `${sourceKind} title`,
+          `${sourceKind} content`,
+          `${sourceKind}-hash`,
+        ],
+      );
+    }
+
+    await database.query(
+      `insert into wiki_documents (
+         workspace_id, brand_id, wiki_version_id, source_kind, knowledge_entry_id,
+         title, content, content_hash, is_active
+       ) values
+         ($1, $2, $3, 'service', $4, '서비스', '서비스 설명', 'service-document', false),
+         ($1, $2, $3, 'guide', $5, '가이드', '가이드 설명', 'guide-document', false)`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        version.rows[0].id,
+        entryIds.get("service"),
+        entryIds.get("guide"),
+      ],
+    );
+    await database.query(
+      `insert into wiki_documents (
+         workspace_id, brand_id, wiki_version_id, source_kind, product_service_id,
+         title, content, content_hash, is_active
+       ) values ($1, $2, $3, 'product_service', $4,
+         '기존 제품', '기존 제품 설명', 'product-service-document', false)`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        version.rows[0].id,
+        productService.rows[0].id,
+      ],
+    );
+
+    const insertedKinds = await database.query(
+      `select distinct source_kind
+         from wiki_source_units
+        where wiki_version_id = $1
+          and source_kind in ('product_service', 'service', 'guide')
+        order by source_kind`,
+      [version.rows[0].id],
+    );
+    assert.deepEqual(
+      insertedKinds.rows.map((row) => row.source_kind),
+      ["guide", "product_service", "service"],
+    );
+  });
+});
+
+test("058 backfills one canonical trend item plus unlinked active reference URLs idempotently", async () => {
+  const migrations = await loadMigrations();
+  const migration058 = migrations.find(
+    (migration) => migration.id === "058_avatar_and_reference_libraries.sql",
+  );
+  assert.ok(migration058, "058 avatar and reference libraries migration must exist");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "057_wiki_source_kinds.sql",
+    );
+    const actor = await database.query(
+      "insert into app_users (email) values ($1) returning id",
+      [`libraries-${randomUUID()}@example.com`],
+    );
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ('Libraries', $1) returning id",
+      [`libraries-${randomUUID()}`],
+    );
+    await database.query(
+      "insert into workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')",
+      [workspace.rows[0].id, actor.rows[0].id],
+    );
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Library Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    const otherBrand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Other Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    const linkedSource = await database.query(
+      `insert into source_urls (
+         workspace_id, brand_id, source_type, url, url_hash, status, enabled
+       ) values ($1, $2, 'reference', 'https://example.com/trend', $3, 'crawled', true)
+       returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, `trend-${randomUUID()}`],
+    );
+    const standaloneSource = await database.query(
+      `insert into source_urls (
+         workspace_id, brand_id, source_type, url, url_hash, title, status, enabled
+       ) values ($1, $2, 'reference', 'https://example.com/standalone', $3,
+         'Standalone', 'active', true)
+       returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, `standalone-${randomUUID()}`],
+    );
+    await database.query(
+      `insert into source_urls (
+         workspace_id, brand_id, source_type, url, url_hash, status, enabled
+       ) values ($1, $2, 'owned', 'https://example.com/owned', $3, 'active', true)`,
+      [workspace.rows[0].id, brand.rows[0].id, `owned-${randomUUID()}`],
+    );
+    const media = await database.query(
+      `insert into instagram_trend_media (
+         instagram_media_id, username, caption, media_type, media_url, permalink,
+         last_fetched_at
+       ) values ($1, 'real_creator', 'Legacy trend', 'IMAGE',
+         'https://cdn.example.com/trend.webp', 'https://instagram.com/p/legacy', now())
+       returning id`,
+      [`media-${randomUUID()}`],
+    );
+    const saved = await database.query(
+      `insert into brand_trend_saved_media (
+         workspace_id, brand_id, trend_media_id, source_url_id
+       ) values ($1, $2, $3, $4) returning id`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        media.rows[0].id,
+        linkedSource.rows[0].id,
+      ],
+    );
+
+    await database.exec(migration058.sql);
+    await database.exec(migration058.sql);
+
+    const items = await database.query(
+      `select kind, saved_trend_id, source_url_id, content_purpose, source_url
+         from reference_items
+        where brand_id = $1
+        order by kind`,
+      [brand.rows[0].id],
+    );
+    assert.deepEqual(items.rows, [
+      {
+        kind: "external_url",
+        saved_trend_id: null,
+        source_url_id: standaloneSource.rows[0].id,
+        content_purpose: "both",
+        source_url: "https://example.com/standalone",
+      },
+      {
+        kind: "trend",
+        saved_trend_id: saved.rows[0].id,
+        source_url_id: null,
+        content_purpose: "both",
+        source_url: "https://example.com/trend",
+      },
+    ]);
+    const provenance = await database.query(
+      `select source_url_id
+         from reference_item_source_url_provenance
+        where workspace_id = $1 and brand_id = $2`,
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+    assert.deepEqual(provenance.rows, [{ source_url_id: linkedSource.rows[0].id }]);
+    const purposes = await database.query(
+      "select source_type, content_purpose from source_urls where brand_id = $1 order by source_type, url",
+      [brand.rows[0].id],
+    );
+    assert.ok(purposes.rows.every((row) => row.content_purpose === "both"));
+    await assert.rejects(database.query(
+      `update source_urls
+          set content_purpose = 'marketing'
+        where brand_id = $1 and source_type = 'owned'`,
+      [brand.rows[0].id],
+    ));
+
+    await database.exec("begin");
+    const avatar = await database.query(
+      `insert into brand_avatars (
+         workspace_id, brand_id, name, is_default, created_by_user_id
+       ) values ($1, $2, 'Founder', true, $3) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, actor.rows[0].id],
+    );
+    await database.query(
+      `insert into brand_avatar_images (
+         workspace_id, brand_id, avatar_id, position, is_representative,
+         storage_url, storage_path, mime_type, size_bytes, checksum, created_by_user_id
+       ) values ($1, $2, $3, 1, true, 'https://cdn.example.com/avatar.webp',
+         'avatars/avatar.webp', 'image/webp', 1024, $4, $5)`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        avatar.rows[0].id,
+        "a".repeat(64),
+        actor.rows[0].id,
+      ],
+    );
+    await database.exec("commit");
+    await assert.rejects(database.query(
+      `insert into brand_avatars (
+         workspace_id, brand_id, name, is_default, created_by_user_id
+       ) values ($1, $2, 'Duplicate default', true, $3)`,
+      [workspace.rows[0].id, brand.rows[0].id, actor.rows[0].id],
+    ));
+    await assert.rejects(database.query(
+      `insert into brand_avatar_images (
+         workspace_id, brand_id, avatar_id, position, is_representative,
+         storage_url, storage_path, mime_type, size_bytes, checksum, created_by_user_id
+       ) values ($1, $2, $3, 2, true, 'https://cdn.example.com/avatar-2.webp',
+         'avatars/avatar-2.webp', 'image/webp', 1024, $4, $5)`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        avatar.rows[0].id,
+        "b".repeat(64),
+        actor.rows[0].id,
+      ],
+    ));
+    await assert.rejects(database.query(
+      `insert into brand_avatar_images (
+         workspace_id, brand_id, avatar_id, position, is_representative,
+         storage_url, storage_path, mime_type, size_bytes, checksum, created_by_user_id
+       ) values ($1, $2, $3, 2, false, 'https://cdn.example.com/cross.webp',
+         'avatars/cross.webp', 'image/webp', 1024, $4, $5)`,
+      [
+        workspace.rows[0].id,
+        otherBrand.rows[0].id,
+        avatar.rows[0].id,
+        "c".repeat(64),
+        actor.rows[0].id,
+      ],
+    ));
+    await assert.rejects(database.query(
+      `insert into reference_items (
+         workspace_id, brand_id, kind, source_url_id, saved_trend_id, created_by_user_id
+       ) values ($1, $2, 'trend', $3, $4, $5)`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        standaloneSource.rows[0].id,
+        saved.rows[0].id,
+        actor.rows[0].id,
+      ],
+    ));
+    await assert.rejects(database.query(
+      `insert into reference_items (
+         workspace_id, brand_id, kind, source_url_id, created_by_user_id
+       ) values ($1, $2, 'external_url', $3, $4)`,
+      [
+        workspace.rows[0].id,
+        otherBrand.rows[0].id,
+        standaloneSource.rows[0].id,
+        actor.rows[0].id,
+      ],
+    ));
+  });
+});
+
+test("060 upgrades legacy generations idempotently without truncating oversized reference history", async () => {
+  const migrations = await loadMigrations();
+  const migration060 = migrations.find(
+    (migration) => migration.id === "060_content_orchestration.sql",
+  );
+  assert.ok(migration060, "060 content orchestration migration must exist");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "058_avatar_and_reference_libraries.sql",
+    );
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ('Orchestration upgrade', $1) returning id",
+      [`orchestration-upgrade-${randomUUID()}`],
+    );
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Legacy content') returning id",
+      [workspace.rows[0].id],
+    );
+    const generation = await database.query(
+      `insert into ai_content_generations (
+         workspace_id, brand_id, type, title, analysis_idempotency_key, draft_json
+       ) values ($1, $2, 'marketing', 'Legacy generation', $3, '{"contractVersion":"content-generation-input.v2"}')
+       returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, `legacy-${randomUUID()}`],
+    );
+    for (let position = 1; position <= 7; position += 1) {
+      await database.query(
+        `insert into ai_content_generation_references (
+           generation_id, reference_id, workspace_id, brand_id, position
+         ) values ($1, $2, $3, $4, $5)`,
+        [
+          generation.rows[0].id,
+          randomUUID(),
+          workspace.rows[0].id,
+          brand.rows[0].id,
+          position,
+        ],
+      );
+    }
+
+    await database.exec(migration060.sql);
+    await database.exec(migration060.sql);
+
+    const upgraded = await database.query(
+      `select content_family, output_format, orchestration_snapshot, draft_json
+         from ai_content_generations where id = $1`,
+      [generation.rows[0].id],
+    );
+    assert.deepEqual(upgraded.rows[0], {
+      content_family: "marketing",
+      output_format: "single_image",
+      orchestration_snapshot: null,
+      draft_json: { contractVersion: "content-generation-input.v2" },
+    });
+    const references = await database.query(
+      "select count(*)::integer as count, max(position)::integer as max_position from ai_content_generation_references where generation_id = $1",
+      [generation.rows[0].id],
+    );
+    assert.deepEqual(references.rows[0], { count: 7, max_position: 7 });
+    const audit = await database.query(
+      `select reference_count, exceeds_canonical_limit
+         from ai_content_generation_reference_migration_audits
+        where generation_id = $1`,
+      [generation.rows[0].id],
+    );
+    assert.deepEqual(audit.rows, [{ reference_count: 7, exceeds_canonical_limit: true }]);
+
+    for (const table of [
+      "ai_content_proposal_batches",
+      "ai_content_proposals",
+      "ai_content_proposal_jobs",
+      "ai_content_approved_proposal_versions",
+      "ai_content_generation_briefs",
+      "ai_content_create_idempotency_records",
+      "reference_snapshots",
+      "reference_pattern_versions",
+    ]) {
+      const found = await database.query("select to_regclass($1) as name", [table]);
+      assert.equal(found.rows[0].name, table);
+    }
+  });
+});
+
+test("060 independently validates sealed one-time avatar receipts and remains compatible through 065", async () => {
+  const migrations = await loadMigrations();
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "060_content_orchestration.sql",
+    );
+
+    const actorId = randomUUID();
+    const workspaceId = randomUUID();
+    const brandId = randomUUID();
+    const coreId = randomUUID();
+    const rulesId = randomUUID();
+    const batchId = randomUUID();
+    const proposalId = randomUUID();
+    const approvalId = randomUUID();
+    const otherBatchId = randomUUID();
+    const otherProposalId = randomUUID();
+    const otherApprovalId = randomUUID();
+    const generationId = randomUUID();
+    const otherGenerationId = randomUUID();
+    await database.query(
+      "insert into app_users (id,email) values ($1,$2)",
+      [actorId, `through-060-${randomUUID()}@example.com`],
+    );
+    await database.query(
+      "insert into workspaces (id,name,slug,created_by_user_id) values ($1,'Through 060',$2,$3)",
+      [workspaceId, `through-060-${randomUUID()}`, actorId],
+    );
+    await database.query(
+      `insert into workspace_members (workspace_id,user_id,role,status)
+       values ($1,$2,'owner','active')`,
+      [workspaceId, actorId],
+    );
+    await database.query(
+      "insert into brands (id,workspace_id,name,created_by_user_id) values ($1,$2,'Through 060 Brand',$3)",
+      [brandId, workspaceId, actorId],
+    );
+    await database.query(
+      "insert into brand_profiles (workspace_id,brand_id) values ($1,$2)",
+      [workspaceId, brandId],
+    );
+    await database.query(
+      `insert into brand_core_versions (
+         id,workspace_id,brand_id,version,status,core_json,created_by,approved_at
+       ) values ($1,$2,$3,1,'approved','{}','user','2026-07-28T00:00:00Z')`,
+      [coreId, workspaceId, brandId],
+    );
+    await database.query(
+      `insert into brand_rule_sets (
+         id,workspace_id,brand_id,version,status,rules_json,created_by,approved_at
+       ) values ($1,$2,$3,1,'approved','{}','user','2026-07-28T00:00:00Z')`,
+      [rulesId, workspaceId, brandId],
+    );
+    await database.query(
+      `update brand_profiles
+          set active_brand_core_id=$1,active_brand_rule_set_id=$2
+        where workspace_id=$3 and brand_id=$4`,
+      [coreId, rulesId, workspaceId, brandId],
+    );
+    await database.query(
+      `insert into ai_content_proposal_batches (
+         id,workspace_id,brand_id,origin,content_family,request_json,
+         source_snapshot_json,status,idempotency_key,created_by_user_id
+       ) values
+         ($1,$3,$4,'manual','marketing','{}','[]','ready',$5,$7),
+         ($2,$3,$4,'manual','marketing','{}','[]','ready',$6,$7)`,
+      [
+        batchId,
+        otherBatchId,
+        workspaceId,
+        brandId,
+        `through-060-${randomUUID()}`,
+        `through-060-other-${randomUUID()}`,
+        actorId,
+      ],
+    );
+    await database.query(
+      `insert into ai_content_proposals (
+         id,workspace_id,brand_id,batch_id,position,proposal_json,status,
+         selected_by_user_id,selected_at
+       ) values
+         ($1,$3,$4,$5,1,'{}','selected',$7,'2026-07-28T00:00:00Z'),
+         ($2,$3,$4,$6,1,'{}','selected',$7,'2026-07-28T00:00:00Z')`,
+      [proposalId, otherProposalId, workspaceId, brandId, batchId, otherBatchId, actorId],
+    );
+    const approvalSnapshot = {
+      contractVersion: "approved-proposal.v1",
+      sourceProposalId: proposalId,
+      revision: 1,
+      effectiveProposal: { contractVersion: "content-proposal.v1" },
+      editPatch: [],
+      validationResultId: `through-060-${approvalId}`,
+      approvedBy: actorId,
+      approvedAt: "2026-07-28T00:00:00.000Z",
+    };
+    const otherApprovalSnapshot = {
+      ...approvalSnapshot,
+      sourceProposalId: otherProposalId,
+      validationResultId: `through-060-${otherApprovalId}`,
+    };
+    await database.query(
+      `insert into ai_content_approved_proposal_versions (
+         id,workspace_id,brand_id,proposal_id,revision,approved_proposal_snapshot,
+         validation_result_id,approved_by_user_id,approved_at
+       ) values ($1,$2,$3,$4,1,$5,$6,$7,$8)`,
+      [
+        approvalId,
+        workspaceId,
+        brandId,
+        proposalId,
+        JSON.stringify(approvalSnapshot),
+        approvalSnapshot.validationResultId,
+        actorId,
+        approvalSnapshot.approvedAt,
+      ],
+    );
+    await database.query(
+      `insert into ai_content_approved_proposal_versions (
+         id,workspace_id,brand_id,proposal_id,revision,approved_proposal_snapshot,
+         validation_result_id,approved_by_user_id,approved_at
+       ) values ($1,$2,$3,$4,1,$5,$6,$7,$8)`,
+      [
+        otherApprovalId,
+        workspaceId,
+        brandId,
+        otherProposalId,
+        JSON.stringify(otherApprovalSnapshot),
+        otherApprovalSnapshot.validationResultId,
+        actorId,
+        otherApprovalSnapshot.approvedAt,
+      ],
+    );
+    await database.query(
+      `insert into ai_content_generations (
+         id,workspace_id,brand_id,type,title,analysis_idempotency_key,
+         content_family,output_format,subject_mode
+       ) values
+         ($1,$3,$4,'marketing','Through 060 target',$5,'marketing','single_image',
+          'brand_topic'),
+         ($2,$3,$4,'marketing','Through 060 other',$6,'marketing','single_image',
+          'brand_topic')`,
+      [
+        generationId,
+        otherGenerationId,
+        workspaceId,
+        brandId,
+        `through-060-target-${randomUUID()}`,
+        `through-060-other-${randomUUID()}`,
+      ],
+    );
+
+    const avatarSnapshot = (sessionId, receiptId) => ({
+      id: sessionId,
+      assetVersionId: receiptId,
+      objectHash: "d".repeat(64),
+      mime: "image/png",
+      provenance: "one_time",
+    });
+    const brief = (
+      avatar,
+      selectedProposalId = proposalId,
+      selectedApprovalId = approvalId,
+      selectedApprovalSnapshot = approvalSnapshot,
+    ) => ({
+      contractVersion: "generation-brief.v1",
+      proposalId: selectedProposalId,
+      approvedProposalVersionId: selectedApprovalId,
+      approvedProposalSnapshot: selectedApprovalSnapshot,
+      brandCoreVersionId: coreId,
+      ruleSetVersionId: rulesId,
+      subject: { kind: "brand_topic", topic: "Through 060", brandCoreEvidenceIds: [] },
+      wikiSnapshots: [],
+      references: [],
+      avatar,
+      outputFormat: "single_image",
+      channels: ["instagram"],
+      promptDefinitionVersions: { generation: "generation.v1" },
+    });
+    const pendingAvatar = avatarSnapshot(randomUUID(), randomUUID());
+    await assert.rejects(
+      database.query(
+        "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+        [
+          generationId,
+          workspaceId,
+          brandId,
+          JSON.stringify(brief(pendingAvatar)),
+          JSON.stringify(pendingAvatar),
+          actorId,
+        ],
+      ),
+      /one_time_avatar_receipt_invalid/,
+    );
+
+    const crossSessionId = randomUUID();
+    const crossReceiptId = randomUUID();
+    await database.query(
+      `insert into ai_content_one_time_avatar_receipts (
+         id,upload_session_id,generation_id,workspace_id,brand_id,created_by_user_id,
+         object_hash,mime_type,storage_url,storage_path,confirmed_at
+       ) values ($1,$2,$3,$4,$5,$6,$7,'image/png',$8,$9,'2026-07-28T00:00:00Z')`,
+      [
+        crossReceiptId,
+        crossSessionId,
+        otherGenerationId,
+        workspaceId,
+        brandId,
+        actorId,
+        "d".repeat(64),
+        `https://cdn.example.com/${crossReceiptId}.png`,
+        `one-time/${crossReceiptId}.png`,
+      ],
+    );
+    const crossAvatar = avatarSnapshot(crossSessionId, crossReceiptId);
+    await assert.rejects(
+      database.query(
+        "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+        [
+          generationId,
+          workspaceId,
+          brandId,
+          JSON.stringify(brief(crossAvatar)),
+          JSON.stringify(crossAvatar),
+          actorId,
+        ],
+      ),
+      /one_time_avatar_receipt_invalid/,
+    );
+
+    const sessionId = randomUUID();
+    const receiptId = randomUUID();
+    await database.query(
+      `insert into ai_content_one_time_avatar_receipts (
+         id,upload_session_id,generation_id,workspace_id,brand_id,created_by_user_id,
+         object_hash,mime_type,storage_url,storage_path,confirmed_at
+       ) values ($1,$2,$3,$4,$5,$6,$7,'image/png',$8,$9,'2026-07-28T00:00:00Z')`,
+      [
+        receiptId,
+        sessionId,
+        generationId,
+        workspaceId,
+        brandId,
+        actorId,
+        "d".repeat(64),
+        `https://cdn.example.com/${receiptId}.png`,
+        `one-time/${receiptId}.png`,
+      ],
+    );
+    const confirmedAvatar = avatarSnapshot(sessionId, receiptId);
+    await database.query(
+      "select revoke_ai_content_one_time_avatar_receipt($1,'attachment_unavailable')",
+      [receiptId],
+    );
+    await assert.rejects(
+      database.query(
+        "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+        [
+          generationId,
+          workspaceId,
+          brandId,
+          JSON.stringify(brief(confirmedAvatar)),
+          JSON.stringify(confirmedAvatar),
+          actorId,
+        ],
+      ),
+      /one_time_avatar_receipt_revoked/,
+    );
+
+    const otherBrief = brief(
+      crossAvatar,
+      otherProposalId,
+      otherApprovalId,
+      otherApprovalSnapshot,
+    );
+    const started = await database.query(
+      "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6) generation_id",
+      [
+        otherGenerationId,
+        workspaceId,
+        brandId,
+        JSON.stringify(otherBrief),
+        JSON.stringify(crossAvatar),
+        actorId,
+      ],
+    );
+    assert.equal(started.rows[0].generation_id, otherGenerationId);
+    await database.query(
+      "select revoke_ai_content_one_time_avatar_receipt($1,'attachment_logically_deleted')",
+      [crossReceiptId],
+    );
+    const replayed = await database.query(
+      "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6) generation_id",
+      [
+        otherGenerationId,
+        workspaceId,
+        brandId,
+        JSON.stringify(otherBrief),
+        JSON.stringify(crossAvatar),
+        actorId,
+      ],
+    );
+    assert.equal(replayed.rows[0].generation_id, otherGenerationId);
+    await assert.rejects(
+      database.query(
+        "update ai_content_one_time_avatar_revocations set reason='attachment_deleting' where receipt_id=$1",
+        [receiptId],
+      ),
+      /one_time_avatar_revocation_immutable/,
+    );
+
+    const staleReceiptId = randomUUID();
+    const staleAttachmentId = randomUUID();
+    const staleSessionId = randomUUID();
+    const staleStorageUrl = `https://cdn.example.com/${staleAttachmentId}.png`;
+    const staleStoragePath = `one-time/${staleAttachmentId}.png`;
+    const activeReceiptId = randomUUID();
+    const activeSessionId = randomUUID();
+    const activeStorageUrl = `https://cdn.example.com/${activeReceiptId}.png`;
+    const activeStoragePath = `one-time/${activeReceiptId}.png`;
+    await database.query(
+      `insert into ai_content_one_time_avatar_receipts (
+         id,upload_session_id,generation_id,workspace_id,brand_id,created_by_user_id,
+         object_hash,mime_type,storage_url,storage_path,confirmed_at
+       ) values
+         ($1,$2,$7,$8,$9,$10,$11,'image/png',$3,$4,'2026-07-28T00:00:00Z'),
+         ($5,$6,$7,$8,$9,$10,$11,'image/png',$12,$13,'2026-07-28T00:00:00Z')`,
+      [
+        staleReceiptId,
+        staleSessionId,
+        staleStorageUrl,
+        staleStoragePath,
+        activeReceiptId,
+        activeSessionId,
+        generationId,
+        workspaceId,
+        brandId,
+        actorId,
+        "f".repeat(64),
+        activeStorageUrl,
+        activeStoragePath,
+      ],
+    );
+    await database.query(
+      `insert into ai_content_generation_attachments (
+         id,generation_id,workspace_id,brand_id,role,file_name,mime_type,size_bytes,
+         checksum,storage_url,storage_path
+       ) values
+         ($1,$3,$4,$5,'person','stale.png','image/png',1024,$6,$7,$8),
+         ($2,$3,$4,$5,'person','active.png','image/png',1024,$6,$9,$10)`,
+      [
+        staleAttachmentId,
+        activeReceiptId,
+        generationId,
+        workspaceId,
+        brandId,
+        "f".repeat(64),
+        staleStorageUrl,
+        staleStoragePath,
+        activeStorageUrl,
+        activeStoragePath,
+      ],
+    );
+    await database.query(
+      "update ai_content_generation_attachments set deleted_at=now() where id=$1",
+      [staleAttachmentId],
+    );
+
+    await runMigrationRange(
+      database,
+      migrations,
+      "061_avatar_image_checksum_uniqueness.sql",
+      "065_ai_content_attachment_upload_sessions.sql",
+    );
+    const retained = await database.query(
+      "select id,upload_session_id from ai_content_one_time_avatar_receipts where id=$1",
+      [receiptId],
+    );
+    assert.deepEqual(retained.rows, [{ id: receiptId, upload_session_id: sessionId }]);
+    const backfilledRevocations = await database.query(
+      `select receipt_id,reason
+         from ai_content_one_time_avatar_revocations
+        where receipt_id in ($1,$2)
+        order by receipt_id`,
+      [staleReceiptId, activeReceiptId],
+    );
+    assert.deepEqual(backfilledRevocations.rows, [{
+      receipt_id: staleReceiptId,
+      reason: "attachment_logically_deleted",
+    }]);
+    const staleAvatar = {
+      ...avatarSnapshot(staleSessionId, staleReceiptId),
+      objectHash: "f".repeat(64),
+    };
+    await assert.rejects(
+      database.query(
+        "select start_ai_content_orchestration($1,$2,$3,$4,$5,$6)",
+        [
+          generationId,
+          workspaceId,
+          brandId,
+          JSON.stringify(brief(staleAvatar)),
+          JSON.stringify(staleAvatar),
+          actorId,
+        ],
+      ),
+      /one_time_avatar_receipt_revoked/,
+    );
+
+    const compatibleGenerationId = randomUUID();
+    const compatibleSessionId = randomUUID();
+    const compatibleAttachmentId = randomUUID();
+    await database.query(
+      `insert into ai_content_generations (
+         id,workspace_id,brand_id,type,title,analysis_idempotency_key,
+         content_family,output_format,subject_mode,generation_input_snapshot
+       ) values ($1,$2,$3,'marketing','065 mapping',$4,'marketing','single_image',
+         'brand_topic','{"contractVersion":"content-generation-input.v2","contentType":"marketing"}')`,
+      [compatibleGenerationId, workspaceId, brandId, `065-mapping-${randomUUID()}`],
+    );
+    await database.query(
+      `insert into ai_content_attachment_upload_sessions (
+         id,generation_id,workspace_id,brand_id,created_by_user_id,role,file_name,
+         expected_mime_type,expected_size_bytes,expected_checksum,storage_url,storage_path
+       ) values ($1,$2,$3,$4,$5,'person','avatar.png','image/png',1024,$6,$7,$8)`,
+      [
+        compatibleSessionId,
+        compatibleGenerationId,
+        workspaceId,
+        brandId,
+        actorId,
+        "e".repeat(64),
+        `https://cdn.example.com/${compatibleAttachmentId}.png`,
+        `one-time/${compatibleAttachmentId}.png`,
+      ],
+    );
+    await database.query(
+      `insert into ai_content_generation_attachments (
+         id,generation_id,workspace_id,brand_id,upload_session_id,role,file_name,
+         mime_type,size_bytes,checksum,storage_url,storage_path
+       ) values ($1,$2,$3,$4,$5,'person','avatar.png','image/png',1024,$6,$7,$8)`,
+      [
+        compatibleAttachmentId,
+        compatibleGenerationId,
+        workspaceId,
+        brandId,
+        compatibleSessionId,
+        "e".repeat(64),
+        `https://cdn.example.com/${compatibleAttachmentId}.png`,
+        `one-time/${compatibleAttachmentId}.png`,
+      ],
+    );
+    await database.query(
+      `update ai_content_attachment_upload_sessions
+          set status='confirmed',confirmed_at=now(),confirmed_attachment_id=$2
+        where id=$1`,
+      [compatibleSessionId, compatibleAttachmentId],
+    );
+    const mapped = await database.query(
+      `select id,upload_session_id,generation_id,created_by_user_id,object_hash,mime_type
+         from ai_content_one_time_avatar_receipts where id=$1`,
+      [compatibleAttachmentId],
+    );
+    assert.deepEqual(mapped.rows, [{
+      id: compatibleAttachmentId,
+      upload_session_id: compatibleSessionId,
+      generation_id: compatibleGenerationId,
+      created_by_user_id: actorId,
+      object_hash: "e".repeat(64),
+      mime_type: "image/png",
+    }]);
+  });
+});
+
+test("061 deterministically removes legacy duplicate avatar bytes and prevents new duplicates", async () => {
+  const migrations = await loadMigrations();
+  const migration061 = migrations.find(
+    (migration) => migration.id === "061_avatar_image_checksum_uniqueness.sql",
+  );
+  assert.ok(migration061, "061 avatar image checksum uniqueness migration must exist");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "058_avatar_and_reference_libraries.sql",
+    );
+    const actor = await database.query(
+      "insert into app_users (email) values ($1) returning id",
+      [`avatar-checksum-${randomUUID()}@example.com`],
+    );
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ('Avatar checksum', $1) returning id",
+      [`avatar-checksum-${randomUUID()}`],
+    );
+    await database.query(
+      "insert into workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')",
+      [workspace.rows[0].id, actor.rows[0].id],
+    );
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Checksum Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    await database.exec("begin");
+    const avatar = await database.query(
+      `insert into brand_avatars (workspace_id, brand_id, name, created_by_user_id)
+       values ($1, $2, 'Legacy duplicate', $3) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, actor.rows[0].id],
+    );
+    const firstImageId = randomUUID();
+    const representativeImageId = randomUUID();
+    const duplicateChecksum = "d".repeat(64);
+    await database.query(
+      `insert into brand_avatar_images (
+         id, workspace_id, brand_id, avatar_id, position, is_representative,
+         storage_url, storage_path, mime_type, size_bytes, checksum, created_by_user_id
+       ) values
+       ($1, $2, $3, $4, 1, false, 'https://cdn.example.com/legacy-first.webp',
+        'avatars/legacy-first.webp', 'image/webp', 100, $5, $6),
+       ($7, $2, $3, $4, 2, true, 'https://cdn.example.com/legacy-representative.webp',
+        'avatars/legacy-representative.webp', 'image/webp', 100, $5, $6)`,
+      [
+        firstImageId,
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        avatar.rows[0].id,
+        duplicateChecksum,
+        actor.rows[0].id,
+        representativeImageId,
+      ],
+    );
+    await database.exec("commit");
+
+    await database.exec(migration061.sql);
+    await database.exec(migration061.sql);
+
+    const retained = await database.query(
+      `select id, position, is_representative
+         from brand_avatar_images
+        where avatar_id = $1`,
+      [avatar.rows[0].id],
+    );
+    assert.deepEqual(retained.rows, [{
+      id: representativeImageId,
+      position: 1,
+      is_representative: true,
+    }]);
+    await assert.rejects(database.query(
+      `insert into brand_avatar_images (
+         workspace_id, brand_id, avatar_id, position, is_representative,
+         storage_url, storage_path, mime_type, size_bytes, checksum, created_by_user_id
+       ) values ($1, $2, $3, 1, false, 'https://cdn.example.com/new-duplicate.webp',
+         'avatars/new-duplicate.webp', 'image/webp', 100, $4, $5)`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        avatar.rows[0].id,
+        duplicateChecksum,
+        actor.rows[0].id,
+      ],
+    ));
+  });
+});
+
+test("migration runner records forward-only 060 through 066 without changing the applied 058 checksum", async () => {
+  const migrations = await loadMigrations();
+  const runnableMigrations = migrations.filter(
+    (migration) => !migration.sql.startsWith("-- requires: pgvector")
+      && migration.id !== "027_wiki_search_v2.sql",
+  );
+  const through058 = runnableMigrations.filter(
+    (migration) => migration.id <= "058_avatar_and_reference_libraries.sql",
+  );
+
+  await withDatabase(async (database) => {
+    const client = createPgliteMigrationClient(database);
+    await runMigrationsWithClient({ client, migrations: through058 });
+    const before = await database.query(
+      "select id, checksum from schema_migrations order by id desc limit 1",
+    );
+    assert.equal(before.rows[0].id, "058_avatar_and_reference_libraries.sql");
+    assert.equal(
+      before.rows[0].checksum,
+      migrations.find((migration) => migration.id === "058_avatar_and_reference_libraries.sql")?.checksum,
+    );
+
+    const upgraded = await runMigrationsWithClient({
+      client,
+      migrations: runnableMigrations,
+    });
+    assert.deepEqual(upgraded.pending.slice(-7), [
+      "060_content_orchestration.sql",
+      "061_avatar_image_checksum_uniqueness.sql",
+      "062_avatar_upload_cancellation.sql",
+      "063_avatar_upload_finalization.sql",
+      "064_reference_upload_finalization.sql",
+      "065_ai_content_attachment_upload_sessions.sql",
+      "066_ai_content_analyzed_subject_orchestration.sql",
+    ]);
+    const recorded = await database.query(
+      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4, $5, $6, $7, $8) order by id",
+      [
+        "058_avatar_and_reference_libraries.sql",
+        "060_content_orchestration.sql",
+        "061_avatar_image_checksum_uniqueness.sql",
+        "062_avatar_upload_cancellation.sql",
+        "063_avatar_upload_finalization.sql",
+        "064_reference_upload_finalization.sql",
+        "065_ai_content_attachment_upload_sessions.sql",
+        "066_ai_content_analyzed_subject_orchestration.sql",
+      ],
+    );
+    assert.deepEqual(recorded.rows, [
+      {
+        id: "058_avatar_and_reference_libraries.sql",
+        checksum: migrations.find((migration) => migration.id === "058_avatar_and_reference_libraries.sql")?.checksum,
+      },
+      {
+        id: "060_content_orchestration.sql",
+        checksum: migrations.find((migration) => migration.id === "060_content_orchestration.sql")?.checksum,
+      },
+      {
+        id: "061_avatar_image_checksum_uniqueness.sql",
+        checksum: migrations.find((migration) => migration.id === "061_avatar_image_checksum_uniqueness.sql")?.checksum,
+      },
+      {
+        id: "062_avatar_upload_cancellation.sql",
+        checksum: migrations.find((migration) => migration.id === "062_avatar_upload_cancellation.sql")?.checksum,
+      },
+      {
+        id: "063_avatar_upload_finalization.sql",
+        checksum: migrations.find((migration) => migration.id === "063_avatar_upload_finalization.sql")?.checksum,
+      },
+      {
+        id: "064_reference_upload_finalization.sql",
+        checksum: migrations.find((migration) => migration.id === "064_reference_upload_finalization.sql")?.checksum,
+      },
+      {
+        id: "065_ai_content_attachment_upload_sessions.sql",
+        checksum: migrations.find((migration) => migration.id === "065_ai_content_attachment_upload_sessions.sql")?.checksum,
+      },
+      {
+        id: "066_ai_content_analyzed_subject_orchestration.sql",
+        checksum: migrations.find((migration) => migration.id === "066_ai_content_analyzed_subject_orchestration.sql")?.checksum,
+      },
+    ]);
+    const repeated = await runMigrationsWithClient({
+      client,
+      migrations: runnableMigrations,
+    });
+    assert.deepEqual(repeated.pending, []);
+  });
+});
+
+test("066 can be applied twice without duplicating its orchestration patch", async () => {
+  const migrations = await loadMigrations();
+  const migration066 = migrations.find(
+    (migration) => migration.id === "066_ai_content_analyzed_subject_orchestration.sql",
+  );
+  assert.ok(migration066);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "066_ai_content_analyzed_subject_orchestration.sql",
+    );
+    await database.exec(migration066.sql);
+    const definition = await database.query(
+      "select pg_get_functiondef('start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)'::regprocedure) definition",
+    );
+    assert.equal(
+      definition.rows[0].definition.match(/analyzed_subject_snapshot_invalid/g)?.length,
+      1,
+    );
+  });
+});
+
+test("064 keeps reference upload cancellation identity separate from avatar receipts", async () => {
+  const migrations = await loadMigrations();
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "064_reference_upload_finalization.sql",
+    );
+    const columns = await database.query(
+      `select column_name,is_nullable
+        from information_schema.columns
+        where table_schema='public'
+          and table_name='reference_upload_cancellation_receipts'
+        order by ordinal_position`,
+    );
+    const byName = new Map(columns.rows.map((row) => [row.column_name, row.is_nullable]));
+    for (const required of [
+      "session_id", "workspace_id", "brand_id", "created_by_user_id",
+      "storage_path_prefix", "token_expires_at", "status", "next_attempt_at",
+    ]) {
+      assert.equal(byName.get(required), "NO");
+    }
+    assert.equal(byName.get("storage_path"), "YES");
+    assert.equal(byName.has("avatar_id"), false);
+    const dueIndex = await database.query(
+      `select indexdef from pg_indexes
+        where schemaname='public'
+          and indexname='reference_upload_cancellation_receipts_due_idx'`,
+    );
+    assert.equal(dueIndex.rows.length, 1);
+    assert.match(dueIndex.rows[0].indexdef, /WHERE \(status = 'pending'::text\)/i);
+  });
+});
+
+test("063 upgrades pathless pre-062 sessions and backoff lets a newer cleanup enter the batch", async () => {
+  const migrations = await loadMigrations();
+  const migration062 = migrations.find((migration) => migration.id === "062_avatar_upload_cancellation.sql");
+  const migration063 = migrations.find((migration) => migration.id === "063_avatar_upload_finalization.sql");
+  assert.ok(migration062);
+  assert.ok(migration063);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "061_avatar_image_checksum_uniqueness.sql",
+    );
+    const actor = await database.query(
+      "insert into app_users(email) values($1) returning id",
+      [`avatar-cleanup-${randomUUID()}@example.com`],
+    );
+    const workspace = await database.query(
+      "insert into workspaces(name,slug) values('Avatar cleanup',$1) returning id",
+      [`avatar-cleanup-${randomUUID()}`],
+    );
+    await database.query(
+      "insert into workspace_members(workspace_id,user_id,role) values($1,$2,'owner')",
+      [workspace.rows[0].id, actor.rows[0].id],
+    );
+    const brand = await database.query(
+      "insert into brands(workspace_id,name) values($1,'Cleanup Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    const avatarId = randomUUID();
+    const sessionIds = Array.from({ length: 101 }, () => randomUUID());
+    for (const [index, sessionId] of sessionIds.entries()) {
+      await database.query(
+        `insert into reference_upload_sessions(
+          id,nonce,workspace_id,brand_id,storage_path_prefix,expected_mime_type,
+          expected_size_bytes,expected_checksum,expires_at,created_by_user_id,created_at
+        ) values($1,$2,$3,$4,$5,'image/webp',100,$6,
+          now()-interval '10 minutes',$7,now()-interval '20 minutes')`,
+        [
+          sessionId,
+          `legacy-cleanup-${index}-${randomUUID()}`,
+          workspace.rows[0].id,
+          brand.rows[0].id,
+          `brands/${brand.rows[0].id}/asset-library/avatars/${avatarId}/${sessionId}/`,
+          String(index).padStart(64, "0"),
+          actor.rows[0].id,
+        ],
+      );
+    }
+
+    await database.exec(migration062.sql);
+    const upgradedLegacy = await database.query(
+      "select file_name,storage_path from reference_upload_sessions where id=$1",
+      [sessionIds[0]],
+    );
+    assert.deepEqual(upgradedLegacy.rows, [{ file_name: null, storage_path: null }]);
+    await database.exec(migration063.sql);
+
+    for (const sessionId of sessionIds.slice(0, 100)) {
+      await database.query(
+        `insert into avatar_upload_cancellation_receipts(
+          session_id,workspace_id,brand_id,avatar_id,created_by_user_id,storage_path,
+          storage_path_prefix,token_expires_at,status,next_attempt_at,attempt_count,last_error,reason
+        ) select id,workspace_id,brand_id,$2,created_by_user_id,null,storage_path_prefix,
+          expires_at,'pending',now()+interval '1 hour',1,'provider unavailable','expired'
+          from reference_upload_sessions where id=$1`,
+        [sessionId, avatarId],
+      );
+    }
+    const eligible = await database.query(
+      `select session.id
+        from reference_upload_sessions session
+        left join avatar_upload_cancellation_receipts receipt on receipt.session_id=session.id
+        where session.expires_at <= now()
+          and (
+            receipt.session_id is null
+            or (receipt.status='pending' and receipt.token_expires_at <= now()
+              and receipt.next_attempt_at <= now())
+          )
+        order by session.expires_at,session.id
+        limit 100`,
+    );
+    assert.deepEqual(eligible.rows, [{ id: sessionIds[100] }]);
+  });
+});
+
+const attachmentLifecycleCatalog = async (database) => {
+  const columns = await database.query(`
+    select table_name, column_name, data_type, is_nullable, column_default
+      from information_schema.columns
+     where table_schema = 'public'
+       and table_name in (
+         'ai_content_generations',
+         'ai_content_generation_attachments',
+         'ai_content_attachment_upload_sessions',
+         'ai_content_attachment_deletion_jobs',
+         'ai_content_attachment_storage_path_guards'
+       )
+     order by table_name, ordinal_position
+  `);
+  const constraints = await database.query(`
+    select conrelid::regclass::text as table_name, conname,
+           pg_get_constraintdef(oid) as definition,
+           confdeltype, condeferrable, condeferred
+      from pg_constraint
+     where conrelid in (
+       'ai_content_generations'::regclass,
+       'ai_content_generation_attachments'::regclass,
+       'ai_content_attachment_upload_sessions'::regclass,
+       'ai_content_attachment_deletion_jobs'::regclass,
+       'ai_content_attachment_storage_path_guards'::regclass
+     )
+     order by table_name, conname
+  `);
+  const indexes = await database.query(`
+    select tablename, indexname, indexdef
+      from pg_indexes
+     where schemaname = 'public'
+       and tablename in (
+         'ai_content_generations',
+         'ai_content_generation_attachments',
+         'ai_content_attachment_upload_sessions',
+         'ai_content_attachment_deletion_jobs',
+         'ai_content_attachment_storage_path_guards'
+       )
+     order by tablename, indexname
+  `);
+  return { columns: columns.rows, constraints: constraints.rows, indexes: indexes.rows };
+};
+
+const createAttachmentLifecycleIdentity = async (database, label) => {
+  const actor = await database.query(
+    "insert into app_users(email) values($1) returning id",
+    [`${label}-${randomUUID()}@example.com`],
+  );
+  const workspace = await database.query(
+    "insert into workspaces(name,slug) values($1,$2) returning id",
+    [label, `${label}-${randomUUID()}`],
+  );
+  await database.query(
+    "insert into workspace_members(workspace_id,user_id,role) values($1,$2,'owner')",
+    [workspace.rows[0].id, actor.rows[0].id],
+  );
+  const brand = await database.query(
+    "insert into brands(workspace_id,name) values($1,$2) returning id",
+    [workspace.rows[0].id, label],
+  );
+  const generation = await database.query(
+    `insert into ai_content_generations(
+       workspace_id,brand_id,type,title,status,analysis_idempotency_key
+     ) values($1,$2,'blog',$3,'queued',$4) returning id`,
+    [workspace.rows[0].id, brand.rows[0].id, label, randomUUID()],
+  );
+  return {
+    actorId: actor.rows[0].id,
+    workspaceId: workspace.rows[0].id,
+    brandId: brand.rows[0].id,
+    generationId: generation.rows[0].id,
+  };
+};
+
+const seedAttachmentLifecycleUpgradeFixture = async (database, fixture) => {
+  await database.query(
+    "insert into workspaces(id,name,slug) values($1,'Lifecycle convergence',$2)",
+    [fixture.workspaceId, `lifecycle-convergence-${fixture.workspaceId}`],
+  );
+  await database.query(
+    "insert into brands(id,workspace_id,name) values($1,$2,'Lifecycle convergence')",
+    [fixture.brandId, fixture.workspaceId],
+  );
+  const snapshot = {
+    contentGenerationInput: { subject: "fixture", order: [2, 1] },
+    stable: true,
+  };
+  await database.query(
+    `insert into ai_content_generations(
+       id,workspace_id,brand_id,type,title,status,analysis_idempotency_key,
+       subject_analysis_snapshot,completed_at,updated_at
+     ) values($1,$2,$3,'blog','Lifecycle convergence','completed',$4,$5::jsonb,
+       '2026-02-03T04:05:06Z',now())`,
+    [
+      fixture.generationId,
+      fixture.workspaceId,
+      fixture.brandId,
+      `convergence-${fixture.generationId}`,
+      JSON.stringify(snapshot),
+    ],
+  );
+  await database.query(
+    `insert into ai_content_generation_attachments(
+       id,generation_id,workspace_id,brand_id,role,file_name,mime_type,size_bytes,
+       checksum,storage_url,storage_path,deleted_at,created_at
+     ) values($1,$2,$3,$4,'document','fixture.pdf','application/pdf',321,$5,
+       'https://cdn.example.com/fixture.pdf','generation/convergence/fixture.pdf',
+       '2026-02-04T00:00:00Z','2026-02-01T00:00:00Z')`,
+    [
+      fixture.attachmentId,
+      fixture.generationId,
+      fixture.workspaceId,
+      fixture.brandId,
+      "9".repeat(64),
+    ],
+  );
+  await database.query(
+    `insert into ai_content_subject_analyses(
+       id,workspace_id,brand_id,generation_id,contract_version,subject_type,input_json,
+       attachment_ids_json,status,analysis_version,idempotency_key
+     ) values($1,$2,$3,$4,'subject-analysis.v2','product','{"stable":"input"}',$5::jsonb,
+       'ready',1,$6)`,
+    [
+      fixture.analysisId,
+      fixture.workspaceId,
+      fixture.brandId,
+      fixture.generationId,
+      JSON.stringify([fixture.missingId, fixture.attachmentId]),
+      `analysis-${fixture.analysisId}`,
+    ],
+  );
+};
+
+const attachmentLifecycleRowState = async (database, fixture) => {
+  const sessions = await database.query(
+    `select id,generation_id,workspace_id,brand_id,created_by_user_id,nonce,storage_path,
+            status,token_expires_at,confirmed_at,confirmed_attachment_id,is_legacy_backfill
+       from ai_content_attachment_upload_sessions order by id`,
+  );
+  const attachments = await database.query(
+    `select id,upload_session_id,deletion_reason,physical_delete_status,physically_deleted_at
+       from ai_content_generation_attachments order by id`,
+  );
+  const generations = await database.query(
+    `select id,generation_input_snapshot,terminal_at,retryable_until
+       from ai_content_generations where id=$1`,
+    [fixture.generationId],
+  );
+  const analyses = await database.query(
+    `select id,input_json from ai_content_subject_analyses where id=$1`,
+    [fixture.analysisId],
+  );
+  const deletionJobs = await database.query(
+    `select id,workspace_id,brand_id,generation_id,attachment_id,upload_session_id,
+            storage_url,storage_path,reason,status
+       from ai_content_attachment_deletion_jobs order by id`,
+  );
+  const pathGuards = await database.query(
+    `select storage_path,legacy_session_count,nonlegacy_session_count
+       from ai_content_attachment_storage_path_guards order by storage_path`,
+  );
+  return {
+    sessions: sessions.rows,
+    attachments: attachments.rows,
+    generations: generations.rows,
+    analyses: analyses.rows,
+    deletionJobs: deletionJobs.rows,
+    pathGuards: pathGuards.rows,
+  };
+};
+
+test("065 preserves duplicate legacy attachment paths across generations", async () => {
+  const migrations = await loadMigrations();
+  const migration065 = migrations.find(
+    (migration) => migration.id === "065_ai_content_attachment_upload_sessions.sql",
+  );
+  assert.ok(migration065);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "064_reference_upload_finalization.sql",
+    );
+    const workspace = await database.query(
+      "insert into workspaces(name,slug) values('Legacy duplicate path',$1) returning id",
+      [`legacy-duplicate-path-${randomUUID()}`],
+    );
+    const brand = await database.query(
+      "insert into brands(workspace_id,name) values($1,'Legacy duplicate path') returning id",
+      [workspace.rows[0].id],
+    );
+    const generationIds = [];
+    for (const title of ["First legacy generation", "Second legacy generation"]) {
+      const generation = await database.query(
+        `insert into ai_content_generations(
+           workspace_id,brand_id,type,title,status,analysis_idempotency_key
+         ) values($1,$2,'blog',$3,'queued',$4) returning id`,
+        [workspace.rows[0].id, brand.rows[0].id, title, randomUUID()],
+      );
+      generationIds.push(generation.rows[0].id);
+    }
+    const attachmentIds = [randomUUID(), randomUUID()];
+    const sharedPath = "generation/shared-legacy-source.png";
+    await database.query(
+      `insert into ai_content_generation_attachments(
+         id,generation_id,workspace_id,brand_id,role,file_name,mime_type,size_bytes,
+         checksum,storage_url,storage_path,deleted_at
+       ) values
+       ($1,$3,$5,$6,'visual_reference','first.png','image/png',101,$7,
+        'https://cdn.example.com/shared.png',$9,now()),
+       ($2,$4,$5,$6,'visual_reference','second.png','image/png',202,$8,
+        'https://cdn.example.com/shared.png',$9,now())`,
+      [
+        attachmentIds[0],
+        attachmentIds[1],
+        generationIds[0],
+        generationIds[1],
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        "a".repeat(64),
+        "b".repeat(64),
+        sharedPath,
+      ],
+    );
+
+    await database.exec(migration065.sql);
+
+    const sessions = await database.query(
+      `select id,confirmed_attachment_id,storage_path,is_legacy_backfill
+         from ai_content_attachment_upload_sessions order by confirmed_attachment_id`,
+    );
+    assert.deepEqual(
+      sessions.rows,
+      [...attachmentIds].sort().map((attachmentId) => ({
+        id: createHash("md5")
+          .update(`ai-content-attachment-upload-session:${attachmentId}`)
+          .digest("hex")
+          .replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, "$1-$2-$3-$4-$5"),
+        confirmed_attachment_id: attachmentId,
+        storage_path: sharedPath,
+        is_legacy_backfill: true,
+      })),
+    );
+    const obligations = await database.query(
+      `select workspace_id,storage_path,count(*)::integer as job_count
+         from ai_content_attachment_deletion_jobs
+        group by workspace_id,storage_path`,
+    );
+    assert.deepEqual(obligations.rows, [{
+      workspace_id: workspace.rows[0].id,
+      storage_path: sharedPath,
+      job_count: 1,
+    }]);
+  });
+});
+
+test("065 direct SQL and migration runner pending-tail paths converge on lifecycle row state", async () => {
+  const migrations = await loadMigrations();
+  const runnable = migrations.filter(
+    (migration) => !migration.sql.startsWith("-- requires: pgvector")
+      && migration.id !== "027_wiki_search_v2.sql",
+  );
+  const through064 = runnable.filter(
+    (migration) => migration.id <= "064_reference_upload_finalization.sql",
+  );
+  const migration065 = runnable.find(
+    (migration) => migration.id === "065_ai_content_attachment_upload_sessions.sql",
+  );
+  assert.ok(migration065);
+  const fixture = {
+    workspaceId: randomUUID(),
+    brandId: randomUUID(),
+    generationId: randomUUID(),
+    attachmentId: randomUUID(),
+    analysisId: randomUUID(),
+    missingId: randomUUID(),
+  };
+
+  const directState = await withDatabase(async (database) => {
+    const client = createPgliteMigrationClient(database);
+    await runMigrationsWithClient({ client, migrations: through064 });
+    await seedAttachmentLifecycleUpgradeFixture(database, fixture);
+    await database.exec(migration065.sql);
+    return attachmentLifecycleRowState(database, fixture);
+  });
+  const runnerState = await withDatabase(async (database) => {
+    const client = createPgliteMigrationClient(database);
+    await runMigrationsWithClient({ client, migrations: through064 });
+    await seedAttachmentLifecycleUpgradeFixture(database, fixture);
+    const result = await runMigrationsWithClient({ client, migrations: runnable });
+    assert.deepEqual(result.pending, [
+      "065_ai_content_attachment_upload_sessions.sql",
+      "066_ai_content_analyzed_subject_orchestration.sql",
+    ]);
+    return attachmentLifecycleRowState(database, fixture);
+  });
+
+  assert.deepEqual(runnerState, directState);
+  assert.deepEqual(
+    directState.analyses[0].input_json.attachmentSnapshot.map((item) => item.id),
+    [fixture.attachmentId],
+  );
+  assert.deepEqual(
+    directState.analyses[0].input_json.attachmentSnapshotMissingIds,
+    [fixture.missingId],
+  );
+});
+
+test("065 enforces nonlegacy actor, state, and storage path semantics", async () => {
+  const migrations = await loadMigrations();
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "065_ai_content_attachment_upload_sessions.sql",
+    );
+    const identity = await createAttachmentLifecycleIdentity(database, "session-semantics");
+    const insertPending = (overrides = {}) => database.query(
+      `insert into ai_content_attachment_upload_sessions(
+         generation_id,workspace_id,brand_id,created_by_user_id,nonce,role,file_name,
+         expected_mime_type,expected_size_bytes,expected_checksum,storage_path,status,
+         token_expires_at,created_at,is_legacy_backfill
+       ) values($1,$2,$3,$4,$5,'document','contract.pdf','application/pdf',100,$6,$7,$8,
+         now()+interval '10 minutes',now(),$9)`,
+      [
+        identity.generationId,
+        identity.workspaceId,
+        identity.brandId,
+        Object.hasOwn(overrides, "actorId") ? overrides.actorId : identity.actorId,
+        randomUUID(),
+        "a".repeat(64),
+        overrides.storagePath ?? `generation/${randomUUID()}.pdf`,
+        overrides.status ?? "pending",
+        overrides.isLegacy ?? false,
+      ],
+    );
+
+    await assert.rejects(
+      insertPending({ actorId: null }),
+      /actor_semantics|check constraint/i,
+    );
+    await assert.rejects(
+      insertPending({ isLegacy: true }),
+      /legacy_semantics|check constraint/i,
+    );
+    const duplicatePath = `generation/${randomUUID()}/duplicate.pdf`;
+    await insertPending({ storagePath: duplicatePath });
+    await assert.rejects(
+      insertPending({ storagePath: duplicatePath }),
+      /storage_path_uq|unique constraint/i,
+    );
+  });
+});
+
+test("065 makes every terminal upload-session lifecycle irreversible", async () => {
+  const migrations = await loadMigrations();
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "065_ai_content_attachment_upload_sessions.sql",
+    );
+    const identity = await createAttachmentLifecycleIdentity(database, "terminal-transitions");
+    const terminalSessions = new Map();
+    for (const state of [
+      { status: "cancelled", timestampColumn: "cancelled_at", error: null },
+      { status: "expired", timestampColumn: "expired_at", error: null },
+      { status: "failed", timestampColumn: "failed_at", error: "provider_failed" },
+    ]) {
+      const inserted = await database.query(
+        `insert into ai_content_attachment_upload_sessions(
+           generation_id,workspace_id,brand_id,created_by_user_id,nonce,role,file_name,
+           expected_mime_type,expected_size_bytes,expected_checksum,storage_path,status,
+           token_expires_at,created_at,last_error_code,${state.timestampColumn}
+         ) values($1,$2,$3,$4,$5,'document',$6,'application/pdf',100,$7,$8,$9,
+           now()+interval '10 minutes',now(),$10,now()) returning id`,
+        [
+          identity.generationId,
+          identity.workspaceId,
+          identity.brandId,
+          identity.actorId,
+          randomUUID(),
+          `${state.status}.pdf`,
+          "3".repeat(64),
+          `generation/${randomUUID()}/${state.status}.pdf`,
+          state.status,
+          state.error,
+        ],
+      );
+      terminalSessions.set(state.status, inserted.rows[0].id);
+    }
+
+    const confirmedSession = await database.query(
+      `insert into ai_content_attachment_upload_sessions(
+         generation_id,workspace_id,brand_id,created_by_user_id,nonce,role,file_name,
+         expected_mime_type,expected_size_bytes,expected_checksum,storage_path,
+         token_expires_at,created_at
+       ) values($1,$2,$3,$4,$5,'document','confirmed.pdf','application/pdf',100,$6,$7,
+         now()+interval '10 minutes',now()) returning id`,
+      [
+        identity.generationId,
+        identity.workspaceId,
+        identity.brandId,
+        identity.actorId,
+        randomUUID(),
+        "4".repeat(64),
+        `generation/${randomUUID()}/confirmed.pdf`,
+      ],
+    );
+    const confirmedAttachmentId = randomUUID();
+    await database.exec("begin");
+    await database.query(
+      `insert into ai_content_generation_attachments(
+         id,generation_id,workspace_id,brand_id,role,file_name,mime_type,size_bytes,
+         checksum,storage_url,storage_path,upload_session_id
+       ) values($1,$2,$3,$4,'document','confirmed.pdf','application/pdf',100,$5,
+         'https://cdn.example.com/confirmed.pdf',$6,$7)`,
+      [
+        confirmedAttachmentId,
+        identity.generationId,
+        identity.workspaceId,
+        identity.brandId,
+        "4".repeat(64),
+        `generation/${randomUUID()}/confirmed-attachment.pdf`,
+        confirmedSession.rows[0].id,
+      ],
+    );
+    await database.query(
+      `update ai_content_attachment_upload_sessions
+          set status='confirmed',confirmed_at=now(),confirmed_attachment_id=$2,
+              storage_url='https://cdn.example.com/confirmed.pdf'
+        where id=$1`,
+      [confirmedSession.rows[0].id, confirmedAttachmentId],
+    );
+    await database.exec("commit");
+    terminalSessions.set("confirmed", confirmedSession.rows[0].id);
+
+    const terminalRewrites = new Map([
+      ["cancelled", "status='expired',cancelled_at=null,expired_at=now()"],
+      ["expired", "status='failed',expired_at=null,failed_at=now(),last_error_code='provider_failed'"],
+      ["failed", "status='cancelled',failed_at=null,last_error_code=null,cancelled_at=now()"],
+      ["confirmed", "status='cancelled',confirmed_at=null,confirmed_attachment_id=null,cancelled_at=now()"],
+    ]);
+    for (const [status, sessionId] of terminalSessions) {
+      await assert.rejects(
+        database.query(
+          `update ai_content_attachment_upload_sessions
+              set status='pending',confirmed_at=null,cancelled_at=null,expired_at=null,
+                  failed_at=null,confirmed_attachment_id=null,last_error_code=null
+            where id=$1`,
+          [sessionId],
+        ),
+        /transition_invalid/i,
+      );
+      await assert.rejects(
+        database.query(
+          `update ai_content_attachment_upload_sessions
+              set ${terminalRewrites.get(status)}
+            where id=$1`,
+          [sessionId],
+        ),
+        /transition_invalid/i,
+      );
+      await database.query(
+        `update ai_content_attachment_upload_sessions
+            set status=status,updated_at=updated_at
+          where id=$1`,
+        [sessionId],
+      );
+    }
+
+    const replacementAttachmentId = randomUUID();
+    await database.query(
+      `insert into ai_content_generation_attachments(
+         id,generation_id,workspace_id,brand_id,role,file_name,mime_type,size_bytes,
+         checksum,storage_url,storage_path
+       ) values($1,$2,$3,$4,'document','replacement.pdf','application/pdf',100,$5,
+         'https://cdn.example.com/replacement.pdf',$6)`,
+      [
+        replacementAttachmentId,
+        identity.generationId,
+        identity.workspaceId,
+        identity.brandId,
+        "5".repeat(64),
+        `generation/${randomUUID()}/replacement.pdf`,
+      ],
+    );
+    await assert.rejects(
+      database.query(
+        `update ai_content_attachment_upload_sessions
+            set confirmed_attachment_id=$2
+          where id=$1`,
+        [confirmedSession.rows[0].id, replacementAttachmentId],
+      ),
+      /transition_invalid/i,
+    );
+
+    const pendingToCancelled = await database.query(
+      `insert into ai_content_attachment_upload_sessions(
+         generation_id,workspace_id,brand_id,created_by_user_id,nonce,role,file_name,
+         expected_mime_type,expected_size_bytes,expected_checksum,storage_path,
+         token_expires_at,created_at
+       ) values($1,$2,$3,$4,$5,'document','pending.pdf','application/pdf',100,$6,$7,
+         now()+interval '10 minutes',now()) returning id`,
+      [
+        identity.generationId,
+        identity.workspaceId,
+        identity.brandId,
+        identity.actorId,
+        randomUUID(),
+        "6".repeat(64),
+        `generation/${randomUUID()}/pending.pdf`,
+      ],
+    );
+    await database.query(
+      `update ai_content_attachment_upload_sessions
+          set status='cancelled',cancelled_at=now()
+        where id=$1`,
+      [pendingToCancelled.rows[0].id],
+    );
+  });
+});
+
+test("065 rejects a nonlegacy session that reuses a truthful legacy storage path", async () => {
+  const migrations = await loadMigrations();
+  const migration065 = migrations.find(
+    (migration) => migration.id === "065_ai_content_attachment_upload_sessions.sql",
+  );
+  assert.ok(migration065);
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "064_reference_upload_finalization.sql",
+    );
+    const identity = await createAttachmentLifecycleIdentity(database, "cross-boundary-path");
+    const storagePath = "generation/truthful-legacy-path.pdf";
+    await database.query(
+      `insert into ai_content_generation_attachments(
+         generation_id,workspace_id,brand_id,role,file_name,mime_type,size_bytes,
+         checksum,storage_url,storage_path
+       ) values($1,$2,$3,'document','legacy.pdf','application/pdf',100,$4,
+         'https://cdn.example.com/legacy.pdf',$5)`,
+      [
+        identity.generationId,
+        identity.workspaceId,
+        identity.brandId,
+        "1".repeat(64),
+        storagePath,
+      ],
+    );
+    await database.exec(migration065.sql);
+
+    await assert.rejects(
+      database.query(
+        `insert into ai_content_attachment_upload_sessions(
+           generation_id,workspace_id,brand_id,created_by_user_id,nonce,role,file_name,
+           expected_mime_type,expected_size_bytes,expected_checksum,storage_path,
+           token_expires_at,created_at
+         ) values($1,$2,$3,$4,$5,'document','new.pdf','application/pdf',100,$6,$7,
+           now()+interval '10 minutes',now())`,
+        [
+          identity.generationId,
+          identity.workspaceId,
+          identity.brandId,
+          identity.actorId,
+          randomUUID(),
+          "2".repeat(64),
+          storagePath,
+        ],
+      ),
+      (error) => {
+        assert.equal(error.code, "23505");
+        assert.doesNotMatch(error.message, new RegExp(storagePath));
+        return true;
+      },
+    );
+  });
+});
+
+test("065 serializes attachment path reservations through a per-path guard row", async () => {
+  const migrations = await loadMigrations();
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "065_ai_content_attachment_upload_sessions.sql",
+    );
+    const guardTable = await database.query(
+      "select to_regclass('public.ai_content_attachment_storage_path_guards')::text as name",
+    );
+    assert.deepEqual(guardTable.rows, [{
+      name: "ai_content_attachment_storage_path_guards",
+    }]);
+    const primaryKey = await database.query(
+      `select pg_get_constraintdef(oid) as definition
+         from pg_constraint
+        where conrelid='ai_content_attachment_storage_path_guards'::regclass
+          and contype='p'`,
+    );
+    assert.deepEqual(primaryKey.rows, [{
+      definition: "PRIMARY KEY (storage_path)",
+    }]);
+    const triggerFunctions = await database.query(
+      `select trigger_name,action_timing,event_manipulation,action_statement
+         from information_schema.triggers
+        where event_object_schema='public'
+          and event_object_table='ai_content_attachment_upload_sessions'
+          and trigger_name in (
+            'ai_content_attachment_upload_sessions_reserve_storage_path',
+            'ai_content_attachment_upload_sessions_release_storage_path'
+          )
+        order by trigger_name`,
+    );
+    assert.deepEqual(
+      triggerFunctions.rows.map((row) => ({
+        trigger_name: row.trigger_name,
+        action_timing: row.action_timing,
+        event_manipulation: row.event_manipulation,
+      })),
+      [
+        {
+          trigger_name: "ai_content_attachment_upload_sessions_release_storage_path",
+          action_timing: "AFTER",
+          event_manipulation: "DELETE",
+        },
+        {
+          trigger_name: "ai_content_attachment_upload_sessions_reserve_storage_path",
+          action_timing: "AFTER",
+          event_manipulation: "INSERT",
+        },
+      ],
+    );
+    const reservationFunction = await database.query(
+      `select pg_get_functiondef(p.oid) as definition
+         from pg_proc p
+         join pg_namespace n on n.oid=p.pronamespace
+        where n.nspname='public'
+          and p.proname='reserve_ai_content_attachment_storage_path'`,
+    );
+    assert.equal(reservationFunction.rows.length, 1);
+    assert.match(
+      reservationFunction.rows[0].definition,
+      /insert into ai_content_attachment_storage_path_guards[\s\S]*on conflict \(storage_path\) do update/i,
+    );
+    assert.match(
+      reservationFunction.rows[0].definition,
+      /nonlegacy_session_count = 0[\s\S]*excluded\.nonlegacy_session_count = 0[\s\S]*legacy_session_count = 0/i,
+    );
+  });
+});
+
+test("065 defers circular confirmation links until commit and rejects cross-tenant links", async () => {
+  const migrations = await loadMigrations();
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "065_ai_content_attachment_upload_sessions.sql",
+    );
+    const first = await createAttachmentLifecycleIdentity(database, "circular-first");
+    const second = await createAttachmentLifecycleIdentity(database, "circular-second");
+    const insertSession = async (identity, storagePath) => {
+      const session = await database.query(
+        `insert into ai_content_attachment_upload_sessions(
+           generation_id,workspace_id,brand_id,created_by_user_id,nonce,role,file_name,
+           expected_mime_type,expected_size_bytes,expected_checksum,storage_path,
+           token_expires_at,created_at
+         ) values($1,$2,$3,$4,$5,'document','confirm.pdf','application/pdf',100,$6,$7,
+           now()+interval '10 minutes',now()) returning id`,
+        [
+          identity.generationId,
+          identity.workspaceId,
+          identity.brandId,
+          identity.actorId,
+          randomUUID(),
+          "b".repeat(64),
+          storagePath,
+        ],
+      );
+      return session.rows[0].id;
+    };
+
+    const validSessionId = await insertSession(
+      first,
+      `generation/${randomUUID()}/valid.pdf`,
+    );
+    const validAttachmentId = randomUUID();
+    await database.exec("begin");
+    await database.query(
+      `insert into ai_content_generation_attachments(
+         id,generation_id,workspace_id,brand_id,role,file_name,mime_type,size_bytes,
+         checksum,storage_url,storage_path,upload_session_id
+       ) values($1,$2,$3,$4,'document','confirm.pdf','application/pdf',100,$5,
+         'https://cdn.example.com/confirmed.pdf',$6,$7)`,
+      [
+        validAttachmentId,
+        first.generationId,
+        first.workspaceId,
+        first.brandId,
+        "b".repeat(64),
+        `generation/${randomUUID()}/confirmed.pdf`,
+        validSessionId,
+      ],
+    );
+    await database.query(
+      `update ai_content_attachment_upload_sessions
+          set status='confirmed',confirmed_at=now(),confirmed_attachment_id=$2
+        where id=$1`,
+      [validSessionId, validAttachmentId],
+    );
+    await database.exec("commit");
+
+    const invalidSessionId = await insertSession(
+      first,
+      `generation/${randomUUID()}/invalid.pdf`,
+    );
+    const invalidAttachmentId = randomUUID();
+    await database.exec("begin");
+    await database.query(
+      `insert into ai_content_generation_attachments(
+         id,generation_id,workspace_id,brand_id,role,file_name,mime_type,size_bytes,
+         checksum,storage_url,storage_path,upload_session_id
+       ) values($1,$2,$3,$4,'document','cross-tenant.pdf','application/pdf',100,$5,
+         'https://cdn.example.com/cross-tenant.pdf',$6,$7)`,
+      [
+        invalidAttachmentId,
+        second.generationId,
+        second.workspaceId,
+        second.brandId,
+        "c".repeat(64),
+        `generation/${randomUUID()}/cross-tenant.pdf`,
+        invalidSessionId,
+      ],
+    );
+    await database.query(
+      `update ai_content_attachment_upload_sessions
+          set status='confirmed',confirmed_at=now(),confirmed_attachment_id=$2
+        where id=$1`,
+      [invalidSessionId, invalidAttachmentId],
+    );
+    await assert.rejects(
+      database.exec("commit"),
+      /foreign key constraint/i,
+    );
+    await database.exec("rollback");
+  });
+});
+
+test("065 deleting every unconfirmed session state creates expiry-safe parent-independent jobs", async () => {
+  const migrations = await loadMigrations();
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "065_ai_content_attachment_upload_sessions.sql",
+    );
+    const identity = await createAttachmentLifecycleIdentity(database, "session-cleanup");
+    const states = [
+      { status: "pending", timestampColumn: null, error: null },
+      { status: "cancelled", timestampColumn: "cancelled_at", error: null },
+      { status: "failed", timestampColumn: "failed_at", error: "provider_failed" },
+      { status: "expired", timestampColumn: "expired_at", error: null },
+    ];
+    const expiries = new Map();
+    for (const state of states) {
+      const sessionId = randomUUID();
+      const path = `generation/${sessionId}/${state.status}.bin`;
+      const timestampColumns = state.timestampColumn ? `,${state.timestampColumn}` : "";
+      const timestampValues = state.timestampColumn ? ",now()" : "";
+      const inserted = await database.query(
+        `insert into ai_content_attachment_upload_sessions(
+           id,generation_id,workspace_id,brand_id,created_by_user_id,nonce,role,file_name,
+           expected_mime_type,expected_size_bytes,expected_checksum,storage_path,status,
+           token_expires_at,created_at,last_error_code${timestampColumns}
+         ) values($1,$2,$3,$4,$5,$6,'document',$7,'application/octet-stream',100,$8,$9,$10,
+           now()+interval '10 minutes',now(),$11${timestampValues})
+         returning token_expires_at`,
+        [
+          sessionId,
+          identity.generationId,
+          identity.workspaceId,
+          identity.brandId,
+          identity.actorId,
+          randomUUID(),
+          `${state.status}.bin`,
+          "d".repeat(64),
+          path,
+          state.status,
+          state.error,
+        ],
+      );
+      expiries.set(sessionId, inserted.rows[0].token_expires_at);
+      await database.query(
+        "delete from ai_content_attachment_upload_sessions where id=$1",
+        [sessionId],
+      );
+    }
+
+    const jobs = await database.query(
+      `select upload_session_id,attachment_id,reason,next_attempt_at
+         from ai_content_attachment_deletion_jobs
+        where workspace_id=$1 order by reason`,
+      [identity.workspaceId],
+    );
+    assert.equal(jobs.rows.length, states.length);
+    for (const job of jobs.rows) {
+      assert.equal(job.attachment_id, null);
+      assert.ok(job.reason.startsWith("upload_session_"));
+      assert.ok(
+        new Date(job.next_attempt_at) >= new Date(expiries.get(job.upload_session_id)),
+      );
+    }
+    const staleGuards = await database.query(
+      `select count(*)::integer as count
+         from ai_content_attachment_storage_path_guards`,
+    );
+    assert.deepEqual(staleGuards.rows, [{ count: 0 }]);
+  });
+});
+
+test("065 attachment deletion skips only physically deleted bytes", async () => {
+  const migrations = await loadMigrations();
+  const migration065 = migrations.find(
+    (migration) => migration.id === "065_ai_content_attachment_upload_sessions.sql",
+  );
+  assert.ok(migration065);
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "064_reference_upload_finalization.sql",
+    );
+    const identity = await createAttachmentLifecycleIdentity(database, "attachment-trigger");
+    const attachmentIds = [randomUUID(), randomUUID()];
+    const paths = ["generation/needs-delete.bin", "generation/already-deleted.bin"];
+    await database.query(
+      `insert into ai_content_generation_attachments(
+         id,generation_id,workspace_id,brand_id,role,file_name,mime_type,size_bytes,
+         checksum,storage_url,storage_path
+       ) values
+       ($1,$3,$4,$5,'document','needs-delete.bin','application/octet-stream',100,$6,
+        'https://cdn.example.com/needs-delete.bin',$8),
+       ($2,$3,$4,$5,'document','already-deleted.bin','application/octet-stream',100,$7,
+        'https://cdn.example.com/already-deleted.bin',$9)`,
+      [
+        attachmentIds[0],
+        attachmentIds[1],
+        identity.generationId,
+        identity.workspaceId,
+        identity.brandId,
+        "e".repeat(64),
+        "f".repeat(64),
+        paths[0],
+        paths[1],
+      ],
+    );
+    await database.exec(migration065.sql);
+    await database.query(
+      `update ai_content_generation_attachments
+          set physical_delete_status='deleted',physically_deleted_at=now()
+        where id=$1`,
+      [attachmentIds[1]],
+    );
+    await database.query(
+      "delete from ai_content_generations where id=$1",
+      [identity.generationId],
+    );
+    const jobs = await database.query(
+      `select storage_path from ai_content_attachment_deletion_jobs
+        where workspace_id=$1 order by storage_path`,
+      [identity.workspaceId],
+    );
+    assert.deepEqual(jobs.rows, [{ storage_path: paths[0] }]);
+  });
+});
+
+test("065 workspace cascade preserves cleanup for a nonlegacy pending session", async () => {
+  const migrations = await loadMigrations();
+  const migration065 = migrations.find(
+    (migration) => migration.id === "065_ai_content_attachment_upload_sessions.sql",
+  );
+  assert.ok(migration065);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "064_reference_upload_finalization.sql",
+    );
+    const identity = await createAttachmentLifecycleIdentity(database, "pending-cascade");
+    await database.exec(migration065.sql);
+    const sessionId = randomUUID();
+    const storagePath = `generation/${sessionId}/pending.png`;
+    const inserted = await database.query(
+      `insert into ai_content_attachment_upload_sessions(
+         id,generation_id,workspace_id,brand_id,created_by_user_id,nonce,role,file_name,
+         expected_mime_type,expected_size_bytes,expected_checksum,storage_path,
+         token_expires_at,created_at
+       ) values($1,$2,$3,$4,$5,$6,'visual_reference','pending.png','image/png',123,$7,$8,
+         now()+interval '10 minutes',now())
+       returning token_expires_at`,
+      [
+        sessionId,
+        identity.generationId,
+        identity.workspaceId,
+        identity.brandId,
+        identity.actorId,
+        randomUUID(),
+        "c".repeat(64),
+        storagePath,
+      ],
+    );
+
+    await database.query("delete from workspaces where id=$1", [identity.workspaceId]);
+
+    const session = await database.query(
+      "select id from ai_content_attachment_upload_sessions where id=$1",
+      [sessionId],
+    );
+    assert.equal(session.rows.length, 0);
+    const jobs = await database.query(
+      `select workspace_id,brand_id,generation_id,attachment_id,upload_session_id,
+              storage_path,next_attempt_at
+         from ai_content_attachment_deletion_jobs where workspace_id=$1`,
+      [identity.workspaceId],
+    );
+    assert.equal(jobs.rows.length, 1);
+    assert.equal(jobs.rows[0].storage_path, storagePath);
+    assert.equal(jobs.rows[0].attachment_id, null);
+    assert.equal(jobs.rows[0].upload_session_id, sessionId);
+    assert.ok(
+      new Date(jobs.rows[0].next_attempt_at) >= new Date(inserted.rows[0].token_expires_at),
+    );
+    const staleGuard = await database.query(
+      `select storage_path
+         from ai_content_attachment_storage_path_guards
+        where storage_path=$1`,
+      [storagePath],
+    );
+    assert.equal(staleGuard.rows.length, 0);
+  });
+});
+
+test("065 fresh and through-064 upgrade paths converge on the attachment lifecycle catalog", async () => {
+  const migrations = await loadMigrations();
+  const migration065 = migrations.find(
+    (migration) => migration.id === "065_ai_content_attachment_upload_sessions.sql",
+  );
+  assert.ok(migration065, "065 attachment lifecycle migration must exist");
+
+  const freshCatalog = await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "065_ai_content_attachment_upload_sessions.sql",
+    );
+    return attachmentLifecycleCatalog(database);
+  });
+  const upgradedCatalog = await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "064_reference_upload_finalization.sql",
+    );
+    await database.exec(migration065.sql);
+    return attachmentLifecycleCatalog(database);
+  });
+
+  assert.deepEqual(upgradedCatalog, freshCatalog);
+  const generationColumns = new Set(
+    freshCatalog.columns
+      .filter((column) => column.table_name === "ai_content_generations")
+      .map((column) => column.column_name),
+  );
+  for (const name of [
+    "attachments_locked_at",
+    "generation_input_snapshot",
+    "terminal_at",
+    "retryable_until",
+  ]) {
+    assert.ok(generationColumns.has(name), `missing generation column ${name}`);
+  }
+  for (const index of [
+    "ai_content_attachment_upload_sessions_nonce_uq",
+    "ai_content_attachment_upload_sessions_storage_path_uq",
+    "ai_content_attachment_upload_sessions_generation_fk_idx",
+    "ai_content_attachment_upload_sessions_actor_fk_idx",
+    "ai_content_attachment_upload_sessions_pending_expiry_idx",
+    "ai_content_upload_sessions_generation_reservation_idx",
+    "ai_content_attachment_deletion_jobs_due_idx",
+    "ai_content_attachment_deletion_jobs_expired_lease_idx",
+    "ai_content_generations_terminal_retention_idx",
+  ]) {
+    assert.ok(
+      freshCatalog.indexes.some((entry) => entry.indexname === index),
+      `missing lifecycle index ${index}`,
+    );
+  }
+  const actorForeignKey = freshCatalog.constraints.find(
+    (entry) => entry.conname === "ai_content_attachment_upload_sessions_actor_fk",
+  );
+  assert.match(actorForeignKey?.definition ?? "", /FOREIGN KEY/i);
+  assert.equal(actorForeignKey?.confdeltype, "a");
+  assert.equal(actorForeignKey?.condeferrable, true);
+  assert.equal(actorForeignKey?.condeferred, true);
+  const storagePathIndex = freshCatalog.indexes.find(
+    (entry) => entry.indexname === "ai_content_attachment_upload_sessions_storage_path_uq",
+  );
+  assert.match(storagePathIndex?.indexdef ?? "", /WHERE \(NOT is_legacy_backfill\)/i);
+  const generationForeignKeyIndex = freshCatalog.indexes.find(
+    (entry) =>
+      entry.indexname === "ai_content_attachment_upload_sessions_generation_fk_idx",
+  );
+  assert.match(
+    generationForeignKeyIndex?.indexdef ?? "",
+    /\(generation_id, workspace_id, brand_id\)$/i,
+  );
+  const actorForeignKeyIndex = freshCatalog.indexes.find(
+    (entry) => entry.indexname === "ai_content_attachment_upload_sessions_actor_fk_idx",
+  );
+  assert.match(
+    actorForeignKeyIndex?.indexdef ?? "",
+    /\(workspace_id, created_by_user_id\) WHERE \(created_by_user_id IS NOT NULL\)/i,
+  );
+  assert.equal(
+    freshCatalog.constraints.some(
+      (entry) =>
+        entry.table_name === "ai_content_attachment_deletion_jobs"
+        && /^FOREIGN KEY/i.test(entry.definition),
+    ),
+    false,
+    "deletion jobs must not retain foreign keys to parent lifecycle tables",
+  );
+});
+
+test("065 backfills snapshots, sessions, missing IDs, retention, and durable deletion obligations", async () => {
+  const migrations = await loadMigrations();
+  const migration065 = migrations.find(
+    (migration) => migration.id === "065_ai_content_attachment_upload_sessions.sql",
+  );
+  assert.ok(migration065);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "064_reference_upload_finalization.sql",
+    );
+    const actor = await database.query(
+      "insert into app_users(email) values($1) returning id",
+      [`attachment-lifecycle-${randomUUID()}@example.com`],
+    );
+    const workspace = await database.query(
+      "insert into workspaces(name,slug) values('Attachment lifecycle',$1) returning id",
+      [`attachment-lifecycle-${randomUUID()}`],
+    );
+    await database.query(
+      "insert into workspace_members(workspace_id,user_id,role) values($1,$2,'owner')",
+      [workspace.rows[0].id, actor.rows[0].id],
+    );
+    const brand = await database.query(
+      "insert into brands(workspace_id,name) values($1,'Lifecycle Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    const terminalSnapshot = {
+      contentGenerationInput: { subject: "unchanged", nested: { order: [2, 1] } },
+      marker: "preserve-me",
+    };
+    const terminal = await database.query(
+      `insert into ai_content_generations(
+         workspace_id,brand_id,type,title,status,analysis_idempotency_key,
+         subject_analysis_snapshot,updated_at,completed_at
+       ) values($1,$2,'blog','Terminal','completed',$3,$4::jsonb,
+         '2026-01-02T03:04:05Z',null) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, `terminal-${randomUUID()}`, JSON.stringify(terminalSnapshot)],
+    );
+    const active = await database.query(
+      `insert into ai_content_generations(
+         workspace_id,brand_id,type,title,status,analysis_idempotency_key,
+         subject_analysis_snapshot
+       ) values($1,$2,'blog','Active','queued',$3,$4::jsonb) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, `active-${randomUUID()}`, JSON.stringify(terminalSnapshot)],
+    );
+    const output = await database.query(
+      `insert into ai_content_generation_outputs(
+         generation_id,workspace_id,brand_id,output_index,status
+       ) values($1,$2,$3,1,'queued') returning id`,
+      [active.rows[0].id, workspace.rows[0].id, brand.rows[0].id],
+    );
+    await database.query(
+      `insert into ai_content_generation_jobs(
+         generation_id,output_id,workspace_id,brand_id,job_type,content_type,status,payload_json
+       ) values($1,$2,$3,$4,'generate','blog','queued','{}')`,
+      [active.rows[0].id, output.rows[0].id, workspace.rows[0].id, brand.rows[0].id],
+    );
+    const attachmentIds = [randomUUID(), randomUUID()];
+    await database.query(
+      `insert into ai_content_generation_attachments(
+         id,generation_id,workspace_id,brand_id,role,file_name,mime_type,size_bytes,
+         checksum,storage_url,storage_path,deleted_at
+       ) values
+       ($1,$3,$4,$5,'document','first.pdf','application/pdf',101,$6,
+        'https://cdn.example.com/first.pdf','generation/first.pdf',null),
+       ($2,$3,$4,$5,'visual_reference','second.png','image/png',202,$7,
+        'https://cdn.example.com/second.png','generation/second.png',now())`,
+      [
+        attachmentIds[0],
+        attachmentIds[1],
+        active.rows[0].id,
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        "a".repeat(64),
+        "b".repeat(64),
+      ],
+    );
+    const missingId = randomUUID();
+    await database.query(
+      `insert into ai_content_subject_analyses(
+         workspace_id,brand_id,generation_id,contract_version,subject_type,input_json,
+         attachment_ids_json,status,analysis_version,idempotency_key
+       ) values($1,$2,$3,'subject-analysis.v2','product','{}',$4::jsonb,
+         'queued',1,$5)`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        active.rows[0].id,
+        JSON.stringify([attachmentIds[1], missingId, attachmentIds[0]]),
+        `analysis-${randomUUID()}`,
+      ],
+    );
+    const emptyGeneration = await database.query(
+      `insert into ai_content_generations(
+         workspace_id,brand_id,type,title,status,analysis_idempotency_key
+       ) values($1,$2,'blog','Empty attachments','analysis_ready',$3) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, `empty-${randomUUID()}`],
+    );
+    const emptyAnalysis = await database.query(
+      `insert into ai_content_subject_analyses(
+         workspace_id,brand_id,generation_id,contract_version,subject_type,input_json,
+         attachment_ids_json,status,analysis_version,idempotency_key
+       ) values($1,$2,$3,'subject-analysis.v2','product','{}','[]','ready',1,$4)
+       returning id`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        emptyGeneration.rows[0].id,
+        `empty-analysis-${randomUUID()}`,
+      ],
+    );
+
+    await database.exec(migration065.sql);
+
+    const generations = await database.query(
+      `select id,generation_input_snapshot,terminal_at,retryable_until
+         from ai_content_generations
+        where id in ($1,$2) order by id`,
+      [terminal.rows[0].id, active.rows[0].id],
+    );
+    const terminalRow = generations.rows.find((row) => row.id === terminal.rows[0].id);
+    const activeRow = generations.rows.find((row) => row.id === active.rows[0].id);
+    assert.deepEqual(terminalRow.generation_input_snapshot, terminalSnapshot);
+    assert.equal(new Date(terminalRow.terminal_at).toISOString(), "2026-01-02T03:04:05.000Z");
+    assert.equal(new Date(terminalRow.retryable_until).toISOString(), "2026-01-17T03:04:05.000Z");
+    assert.equal(activeRow.terminal_at, null);
+    assert.equal(activeRow.retryable_until, null);
+    const job = await database.query(
+      "select payload_json from ai_content_generation_jobs where generation_id=$1",
+      [active.rows[0].id],
+    );
+    assert.deepEqual(job.rows[0].payload_json.contentGenerationInput, terminalSnapshot);
+    const analysis = await database.query(
+      "select input_json from ai_content_subject_analyses where generation_id=$1",
+      [active.rows[0].id],
+    );
+    assert.deepEqual(
+      analysis.rows[0].input_json.attachmentSnapshot.map((item) => item.id),
+      [attachmentIds[1], attachmentIds[0]],
+    );
+    assert.deepEqual(analysis.rows[0].input_json.attachmentSnapshotMissingIds, [missingId]);
+    const emptyAnalysisAfter = await database.query(
+      "select input_json from ai_content_subject_analyses where id=$1",
+      [emptyAnalysis.rows[0].id],
+    );
+    assert.deepEqual(emptyAnalysisAfter.rows[0].input_json.attachmentSnapshot, []);
+    assert.deepEqual(
+      emptyAnalysisAfter.rows[0].input_json.attachmentSnapshotMissingIds,
+      [],
+    );
+    const sessions = await database.query(
+      `select created_by_user_id,is_legacy_backfill,confirmed_at,confirmed_attachment_id
+         from ai_content_attachment_upload_sessions
+        where generation_id=$1 order by confirmed_attachment_id`,
+      [active.rows[0].id],
+    );
+    assert.equal(sessions.rows.length, 2);
+    assert.ok(sessions.rows.every((row) =>
+      row.created_by_user_id === null
+      && row.is_legacy_backfill === true
+      && row.confirmed_at !== null
+      && row.confirmed_attachment_id !== null
+    ));
+    const deletedAttachment = await database.query(
+      `select physical_delete_status,physically_deleted_at
+         from ai_content_generation_attachments where id=$1`,
+      [attachmentIds[1]],
+    );
+    assert.deepEqual(deletedAttachment.rows, [{
+      physical_delete_status: "pending",
+      physically_deleted_at: null,
+    }]);
+    const backfillJobs = await database.query(
+      `select storage_path,status from ai_content_attachment_deletion_jobs
+        where workspace_id=$1 order by storage_path`,
+      [workspace.rows[0].id],
+    );
+    assert.deepEqual(backfillJobs.rows, [{
+      storage_path: "generation/second.png",
+      status: "pending",
+    }]);
+
+    await database.query("delete from ai_content_generations where id=$1", [active.rows[0].id]);
+    const afterGenerationDelete = await database.query(
+      `select storage_path from ai_content_attachment_deletion_jobs
+        where workspace_id=$1 order by storage_path`,
+      [workspace.rows[0].id],
+    );
+    assert.deepEqual(
+      afterGenerationDelete.rows.map((row) => row.storage_path),
+      ["generation/first.pdf", "generation/second.png"],
+    );
+    await database.query("delete from workspaces where id=$1", [workspace.rows[0].id]);
+    const afterWorkspaceDelete = await database.query(
+      `select workspace_id,storage_path from ai_content_attachment_deletion_jobs
+        where workspace_id=$1 order by storage_path`,
+      [workspace.rows[0].id],
+    );
+    assert.equal(afterWorkspaceDelete.rows.length, 2);
   });
 });
 

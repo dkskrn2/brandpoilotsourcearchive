@@ -1,5 +1,5 @@
 import cors from "@fastify/cors";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import Fastify, { LogController, type FastifyReply } from "fastify";
 import rawBody from "fastify-raw-body";
 import type { FastifyLoggerOptions } from "fastify/types/logger";
@@ -10,29 +10,51 @@ import { resolveInstagramConnection } from "./metaGraph.js";
 import { buildFacebookLoginAuthorizeUrl, exchangeFacebookLoginCode, instagramTrendFacebookScopes } from "./facebookLoginGraph.js";
 import { buildInstagramLoginAuthorizeUrl, exchangeInstagramLoginCode, instagramLoginScopes, resolveInstagramLoginConnection, subscribeInstagramMessagingWebhooks } from "./instagramLoginGraph.js";
 import { parseInstagramMessagingEvents, verifyInstagramSignature } from "./instagramWebhook.js";
-import { parseDmWorkerResult } from "./dmTypes.js";
+import { isDmAutomationReady, parseDmWorkerResult } from "./dmTypes.js";
 import { normalizeInstagramHashtag } from "./instagramTrend.js";
 import { StoryCapabilityRequiredError } from "./repository.js";
 import type { ApiRepository, BrandProfileInput, Channel, DmAttentionType, DmConversationFilter, InstagramDeliveryFormat, InstagramFormatSettingsInput, InstagramTrendMediaTypeFilter, InstagramTrendPageDto, InstagramTrendSort, SourceType, SubjectAnalysisRepositoryV2, SupportRequestCategory, SupportRequestStatus } from "./types.js";
+import type { AiContentAttachmentLifecycleRepository } from "./aiContentAttachmentRepository.js";
+import type { AiContentCopyField, AiContentRevisionAction } from "./aiContentRepository.js";
+import {
+  runAiContentAttachmentGc,
+  type DeleteAiContentAttachmentBlob,
+  type AiContentAttachmentGcRunResult,
+} from "./aiContentAttachmentGc.js";
+import type { AiContentAttachmentGcRepository } from "./aiContentAttachmentGcRepository.js";
+import {
+  parseContentProposalResult,
+  type ContentProposalJobsRepository,
+} from "./contentProposalJobs.js";
 import { createKakaoAuthStore, type KakaoProfile } from "./kakaoAuth.js";
 import { brandLogoRequestBodyLimit, type BrandLogoService } from "./brandLogo.js";
 import { channelNames } from "./channelCatalog.js";
+import { buildChannelCapabilities } from "./channelCapabilities.js";
 import {
   parseAttachmentUploadTokenInput,
+  parseAiContentAttachmentId,
+  parseAiContentGenerationId,
+  parseCancelUploadSessionInput,
   parseConfirmAttachmentInput,
   parseCreateAiContentAnalysisInput,
   parseStartAiContentGenerationInput,
   parseUpdateAiContentDraftInput,
   type AiContentType,
   type CompleteAiContentJobInput,
+  type ContentChannelTarget,
+  type ContentProposalRequestV1,
   type FailAiContentJobInput,
 } from "./aiContentContracts.js";
 import { parseAiContentManifest } from "./aiContentManifest.js";
 import { parseAiContentPublishRequest } from "./aiContentPublishTargets.js";
 import {
   confirmAiContentAttachment,
-  issueAiContentAttachmentToken,
+  AI_CONTENT_ATTACHMENT_POLICY,
+  issueValidatedAiContentAttachmentToken,
+  issueAiContentUploadSessionToken,
+  validateAiContentAttachment,
   verifyAiContentAttachmentBlob,
+  verifyAiContentUploadSessionBlob,
   type AiContentTokenOptions,
 } from "./aiContentUpload.js";
 import { kstDateKey } from "./publishSchedule.js";
@@ -62,13 +84,15 @@ import {
   verifyBrandAnalysisUpload,
 } from "./brandAnalysisUpload.js";
 import { claimAndPrepareBrandAnalysis, type BrandIntelligenceRuntime } from "./brandIntelligenceHttp.js";
+import { registerBrandCenterRoutes } from "./brandCenterHttp.js";
 import type { ApiHttpRuntimePolicy } from "./runtimeConfig.js";
+import { assessApiReadiness } from "./runtime.js";
 
 export type { ApiHttpRuntimePolicy } from "./runtimeConfig.js";
 
 const channels = new Set<string>(channelNames);
 const sourceTypes = new Set(["owned", "reference"]);
-const supportRequestCategories = new Set(["bug", "feature", "channel", "account", "other"]);
+const creatableSupportRequestCategories = new Set(["bug", "channel", "account", "other"]);
 const supportRequestStatuses = new Set(["new", "in_progress", "resolved"]);
 const topicRowStatuses = new Set(["uploaded", "queued", "used", "skipped", "invalid", "failed", "disabled"]);
 const dmConversationFilters = new Set<DmConversationFilter>(["all", "attention", "complaint", "unanswered", "error"]);
@@ -92,6 +116,7 @@ const defaultDevBrandId = "00000000-0000-4000-8000-000000000100";
 const maxBrandProfileShortFieldLength = 30;
 const kakaoStateCookiePrefix = "bp_kakao_state_";
 const instagramLoginStateCookie = "bp_instagram_login_state";
+const instagramLoginBindingCookie = "bp_instagram_login_binding";
 const instagramTrendStateCookie = "bp_instagram_trend_state";
 const uuidPattern = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const workerResourceWorkloads = new Set(["dm", "wiki", "content"]);
@@ -101,9 +126,28 @@ const contentTypeByWorkerSlug = {
   marketing: "marketing",
 } as const;
 
+type InstagramLoginCallbackFailureReason =
+  | "account_mapping_failed"
+  | "authentication_required"
+  | "connection_failed"
+  | "invalid_callback"
+  | "token_exchange_failed";
+
+function instagramLoginCallbackUrl(
+  frontendUrl: string,
+  outcome: "connected" | "cancelled" | "failed",
+  reason?: InstagramLoginCallbackFailureReason,
+) {
+  const url = new URL("/channels", frontendUrl);
+  url.searchParams.set("instagram", outcome);
+  if (outcome === "failed") url.searchParams.set("reason", reason ?? "connection_failed");
+  return url.toString();
+}
+
 interface CreateServerOptions {
   repository: ApiRepository;
   workerApiToken?: string;
+  contentProposalWorkerApiToken?: string;
   cronSecret?: string;
   kakaoAuth?: ReturnType<typeof createKakaoAuthStore>;
   kakao?: { restApiKey: string; clientSecret?: string; redirectUri: string; frontendUrl: string };
@@ -113,8 +157,21 @@ interface CreateServerOptions {
   brandLogoService?: BrandLogoService;
   aiContentUpload?: {
     readWriteToken: string;
+    uploadSessionsEnabled?: boolean;
     generateClientToken?: AiContentTokenOptions["generateClientToken"];
     headBlob?: import("./aiContentUpload.js").AiContentBlobVerificationOptions["headBlob"];
+  };
+  aiContentAttachmentGc?: {
+    deleteBlob: DeleteAiContentAttachmentBlob;
+    workerId?: string;
+    runGc?: typeof runAiContentAttachmentGc;
+  };
+  assetLibraryUpload?: {
+    readWriteToken: string;
+    generateClientToken?: import("./assetLibraryUpload.js").AssetLibraryTokenOptions["generateClientToken"];
+    getBlob?: import("./assetLibraryUpload.js").AssetLibraryBlobOptions["getBlob"];
+    deleteBlob?: import("./assetLibraryUpload.js").AssetLibraryDeleteOptions["deleteBlob"];
+    listBlobs?: import("./assetLibraryUpload.js").AssetLibraryDeleteOptions["listBlobs"];
   };
   aiContentLimits?: { dailyGenerationLimit: number; dailyDownloadLimit: number };
   subjectAnalysis?: AiContentSubjectRuntime;
@@ -126,16 +183,124 @@ interface CreateServerOptions {
   };
   brandIntelligence?: BrandIntelligenceRuntime;
   runtimePolicy?: ApiHttpRuntimePolicy;
+  readinessPolicy?: {
+    schedulerEnabled: boolean;
+    publishingEnabled: boolean;
+    contentProposalsEnabled: boolean;
+  };
   logger?: boolean | FastifyLoggerOptions;
 }
 
+type AiContentUploadRouteRepository = Pick<
+  AiContentAttachmentLifecycleRepository,
+  | "assertAiContentAttachmentUploadMutable"
+  | "createAiContentUploadSession"
+  | "failAiContentUploadSession"
+  | "confirmAiContentUploadSession"
+  | "cancelAiContentUploadSession"
+  | "confirmLegacyAiContentAttachment"
+>;
+
+const aiContentUploadRouteRepositoryMethods = [
+  "assertAiContentAttachmentUploadMutable",
+  "createAiContentUploadSession",
+  "failAiContentUploadSession",
+  "confirmAiContentUploadSession",
+  "cancelAiContentUploadSession",
+  "confirmLegacyAiContentAttachment",
+] as const satisfies readonly (keyof AiContentUploadRouteRepository)[];
+
 type AuthSession = Awaited<ReturnType<NonNullable<CreateServerOptions["kakaoAuth"]>["getSession"]>>;
+
+interface InstagramLoginBinding {
+  version: 1;
+  mode: "session" | "development";
+  stateDigest: string;
+  sessionDigest: string | null;
+  identityDigest: string;
+}
+
+function keyedDigest(secret: string, label: string, value: string) {
+  return createHmac("sha256", secret).update(`${label}\0${value}`).digest("base64url");
+}
+
+function instagramLoginIdentity(session: NonNullable<AuthSession>) {
+  return `${session.userId}\0${session.workspaceId}\0${session.brandId}`;
+}
+
+function encodeInstagramLoginBinding(input: {
+  appSecret: string;
+  state: string;
+  sessionToken: string | null;
+  session: AuthSession;
+  developmentBrandId: string;
+}) {
+  const binding: InstagramLoginBinding = {
+    version: 1,
+    mode: input.session ? "session" : "development",
+    stateDigest: keyedDigest(input.appSecret, "state", input.state),
+    sessionDigest: input.sessionToken
+      ? keyedDigest(input.appSecret, "session", input.sessionToken)
+      : null,
+    identityDigest: keyedDigest(
+      input.appSecret,
+      "identity",
+      input.session
+        ? instagramLoginIdentity(input.session)
+        : `development\0${input.developmentBrandId}`,
+    ),
+  };
+  const payload = Buffer.from(JSON.stringify(binding)).toString("base64url");
+  const signature = keyedDigest(input.appSecret, "binding", payload);
+  return `${payload}.${signature}`;
+}
+
+function decodeInstagramLoginBinding(value: string | null, appSecret: string): InstagramLoginBinding | null {
+  if (!value) return null;
+  const parts = value.split(".");
+  if (parts.length !== 2) return null;
+  const [payload, signature] = parts;
+  if (!matchesOpaqueSecret(signature, keyedDigest(appSecret, "binding", payload))) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Partial<InstagramLoginBinding>;
+    if (
+      parsed.version !== 1
+      || (parsed.mode !== "session" && parsed.mode !== "development")
+      || typeof parsed.stateDigest !== "string"
+      || (typeof parsed.sessionDigest !== "string" && parsed.sessionDigest !== null)
+      || typeof parsed.identityDigest !== "string"
+    ) {
+      return null;
+    }
+    return parsed as InstagramLoginBinding;
+  } catch {
+    return null;
+  }
+}
+
+function clearInstagramLoginCookies(secure: boolean) {
+  return [
+    cookie(instagramLoginStateCookie, "", 0, secure),
+    cookie(instagramLoginBindingCookie, "", 0, secure),
+  ];
+}
 
 function aiContentScope(request: FastifyRequest, brandId: string) {
   const session = (request as { aiContentSession?: AuthSession }).aiContentSession;
   const workspaceId = session?.workspaceId ?? process.env.BRAND_PILOT_DEV_WORKSPACE_ID;
   if (!workspaceId) throw new Error("authentication_required");
   return { workspaceId, brandId };
+}
+
+function aiContentActorUserId(request: FastifyRequest): string | null {
+  const session = (request as { aiContentSession?: AuthSession }).aiContentSession;
+  return session?.userId ?? process.env.BRAND_PILOT_DEV_USER_ID ?? null;
+}
+
+function requiredAiContentActorUserId(request: FastifyRequest): string {
+  const actorUserId = aiContentActorUserId(request);
+  if (!actorUserId) throw new Error("authentication_required");
+  return actorUserId;
 }
 
 function positiveLimit(value: number | undefined, fallback: number) {
@@ -145,6 +310,256 @@ function positiveLimit(value: number | undefined, fallback: number) {
 function requiredAiContentField(value: unknown, code: string, maxLength = 500) {
   if (typeof value !== "string" || !value.trim() || value.trim().length > maxLength) throw new Error(code);
   return value.trim();
+}
+
+function parseAiContentRevisionInput(value: unknown): {
+  action: AiContentRevisionAction;
+  cardIndex?: number;
+  idempotencyKey: string;
+} {
+  if (!isObject(value)) throw new Error("ai_content_revision_input_invalid");
+  const allowed = new Set(["action", "cardIndex", "idempotencyKey"]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) {
+    throw new Error("ai_content_revision_input_invalid");
+  }
+  const action = value.action;
+  if (!["regenerate_hook", "regenerate_copy", "regenerate_card"].includes(String(action))) {
+    throw new Error("ai_content_revision_action_invalid");
+  }
+  const idempotencyKey = requiredAiContentField(
+    value.idempotencyKey,
+    "ai_content_idempotency_key_invalid",
+    200,
+  );
+  if (action === "regenerate_card") {
+    if (!Number.isSafeInteger(value.cardIndex) || Number(value.cardIndex) < 1) {
+      throw new Error("ai_content_revision_card_index_invalid");
+    }
+    return {
+      action,
+      cardIndex: Number(value.cardIndex),
+      idempotencyKey,
+    };
+  }
+  if (value.cardIndex !== undefined) throw new Error("ai_content_revision_card_index_invalid");
+  return { action: action as AiContentRevisionAction, idempotencyKey };
+}
+
+const aiContentCopyFields = new Set<AiContentCopyField>([
+  "hook",
+  "keyMessage",
+  "body",
+  "cta",
+  "caption",
+  "hashtags",
+]);
+
+function parseAiContentCopyInput(value: unknown): {
+  fields: Partial<Record<AiContentCopyField, string | string[]>>;
+  idempotencyKey: string;
+} {
+  if (!isObject(value) || !isObject(value.fields)) throw new Error("ai_content_copy_input_invalid");
+  const idempotencyKey = requiredAiContentField(
+    value.idempotencyKey,
+    "ai_content_idempotency_key_invalid",
+    200,
+  );
+  const entries = Object.entries(value.fields);
+  if (!entries.length || entries.some(([field]) => !aiContentCopyFields.has(field as AiContentCopyField))) {
+    throw new Error("ai_content_copy_fields_invalid");
+  }
+  const fields: Partial<Record<AiContentCopyField, string | string[]>> = {};
+  for (const [field, raw] of entries) {
+    if (field === "hashtags") {
+      if (!Array.isArray(raw) || raw.length > 30
+        || raw.some((tag) => typeof tag !== "string" || tag.length > 100)) {
+        throw new Error("ai_content_copy_fields_invalid");
+      }
+      fields.hashtags = raw;
+    } else {
+      if (typeof raw !== "string" || raw.length > 20_000) throw new Error("ai_content_copy_fields_invalid");
+      fields[field as Exclude<AiContentCopyField, "hashtags">] = raw;
+    }
+  }
+  return { fields, idempotencyKey };
+}
+
+function parseAiContentBrandId(value: string) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+    throw new Error("ai_content_brand_id_invalid");
+  }
+  return value.toLowerCase();
+}
+
+function parseAiContentUuid(value: unknown, code: string): string {
+  if (typeof value !== "string" || !uuidPattern.test(value)) throw new Error(code);
+  return value.toLowerCase();
+}
+
+const contentChannelTargets: readonly ContentChannelTarget[] = [
+  "instagram",
+  "threads",
+  "x",
+  "linkedin",
+  "youtube",
+  "tiktok",
+  "blog_export",
+];
+
+function parseContentProposalRequest(value: unknown): ContentProposalRequestV1 {
+  if (!isObject(value)) throw new Error("ai_content_proposal_request_invalid");
+  if (value.contractVersion !== "content-proposal-request.v1"
+    || !["informational", "marketing"].includes(String(value.contentFamily))
+    || !isObject(value.subjectInput)
+    || !Array.isArray(value.channelTargets)
+    || value.channelTargets.length === 0
+    || value.channelTargets.some((item) => !contentChannelTargets.includes(item as ContentChannelTarget))
+    || new Set(value.channelTargets).size !== value.channelTargets.length
+    || !Array.isArray(value.outputFormats)
+    || value.outputFormats.length === 0
+    || value.outputFormats.some((item) => !["card_news", "blog", "single_image", "channel_text"].includes(String(item)))
+    || !Array.isArray(value.sourceSnapshotIds)
+    || value.sourceSnapshotIds.some((id) => typeof id !== "string" || !uuidPattern.test(id))
+    || !Array.isArray(value.performanceSnapshotIds)
+    || value.performanceSnapshotIds.some((id) => typeof id !== "string" || !uuidPattern.test(id))) {
+    throw new Error("ai_content_proposal_request_invalid");
+  }
+  return {
+    contractVersion: "content-proposal-request.v1",
+    contentFamily: value.contentFamily as ContentProposalRequestV1["contentFamily"],
+    subjectInput: value.subjectInput,
+    channelTargets: value.channelTargets as ContentChannelTarget[],
+    outputFormats: value.outputFormats as ContentProposalRequestV1["outputFormats"],
+    sourceSnapshotIds: value.sourceSnapshotIds.map((id) => String(id).toLowerCase()),
+    performanceSnapshotIds: value.performanceSnapshotIds.map((id) => String(id).toLowerCase()),
+  };
+}
+
+async function validateAiContentLifecycleBrand(request: FastifyRequest) {
+  const { brandId } = request.params as { brandId: string };
+  parseAiContentBrandId(brandId);
+}
+
+function requireAiContentUploadRouteRepository(
+  repository: ApiRepository,
+): AiContentUploadRouteRepository {
+  const source = repository as unknown as Record<string, unknown>;
+  if (aiContentUploadRouteRepositoryMethods.some((method) => typeof source[method] !== "function")) {
+    throw new Error("ai_content_upload_repository_not_configured");
+  }
+  return repository as ApiRepository & AiContentUploadRouteRepository;
+}
+
+const aiContentAttachmentGcRepositoryMethods = [
+  "prepareAiContentAttachmentGc",
+  "claimAiContentAttachmentDeletionJobs",
+  "beginAiContentAttachmentDeletionAttempt",
+  "releaseUnstartedAiContentAttachmentDeletions",
+  "completeAiContentAttachmentDeletion",
+  "failAiContentAttachmentDeletion",
+  "getAiContentAttachmentGcMetrics",
+] as const satisfies readonly (keyof AiContentAttachmentGcRepository)[];
+
+function asAiContentAttachmentGcRepository(
+  repository: ApiRepository,
+): AiContentAttachmentGcRepository | null {
+  const source = repository as unknown as Record<string, unknown>;
+  return aiContentAttachmentGcRepositoryMethods.every((method) => typeof source[method] === "function")
+    ? repository as ApiRepository & AiContentAttachmentGcRepository
+    : null;
+}
+
+function requireContentProposalJobsRepository(repository: ApiRepository): ContentProposalJobsRepository {
+  const candidate = repository as ApiRepository & Partial<ContentProposalJobsRepository>;
+  if (!candidate.claimContentProposalJob
+    || !candidate.heartbeatContentProposalJob
+    || !candidate.completeContentProposalJob
+    || !candidate.failContentProposalJob) {
+    throw new Error("content_proposal_repository_not_configured");
+  }
+  return candidate as ContentProposalJobsRepository;
+}
+
+type ContentProposalCustomerRepository = Required<Pick<ApiRepository,
+  "createAiContentProposalBatch"
+  | "getAiContentProposalBatch"
+  | "listAiContentProposals"
+  | "selectAiContentProposal"
+  | "dismissAiContentProposal"
+  | "listAiContentDraftReferences"
+>>;
+
+function requireContentProposalCustomerRepository(
+  repository: ApiRepository,
+): ContentProposalCustomerRepository {
+  const candidate = repository as ApiRepository & Partial<ContentProposalCustomerRepository>;
+  const methods = [
+    "createAiContentProposalBatch",
+    "getAiContentProposalBatch",
+    "listAiContentProposals",
+    "selectAiContentProposal",
+    "dismissAiContentProposal",
+    "listAiContentDraftReferences",
+  ] as const;
+  if (methods.some((method) => typeof candidate[method] !== "function")) {
+    throw new Error("content_proposal_repository_not_configured");
+  }
+  return candidate as ContentProposalCustomerRepository;
+}
+
+function safeAiContentAttachmentGcResult(
+  result: AiContentAttachmentGcRunResult,
+): AiContentAttachmentGcRunResult {
+  return {
+    sessions: {
+      scanned: result.sessions.scanned,
+      claimed: result.sessions.claimed,
+      confirmed: result.sessions.confirmed,
+      expired: result.sessions.expired,
+    },
+    deletions: {
+      claimed: result.deletions.claimed,
+      started: result.deletions.started,
+      succeeded: result.deletions.succeeded,
+      failed: result.deletions.failed,
+      retried: result.deletions.retried,
+      releasedUnstarted: result.deletions.releasedUnstarted,
+    },
+    leasesReclaimed: result.leasesReclaimed,
+    eligibleQueueDepth: result.eligibleQueueDepth,
+    oldestEligiblePendingAgeSeconds: result.oldestEligiblePendingAgeSeconds,
+    heldJobCount: result.heldJobCount,
+    oldestHeldAgeSeconds: result.oldestHeldAgeSeconds,
+    holdReasonCounts: { ...result.holdReasonCounts },
+    attemptCountBuckets: { ...result.attemptCountBuckets },
+    deadLetterCount: result.deadLetterCount,
+    durationMs: result.durationMs,
+    providerErrorCategories: { ...result.providerErrorCategories },
+  };
+}
+
+export function parseAiContentAttachmentGcRequestBody(
+  value: unknown,
+): { batchSize: number } {
+  if (value === undefined) return { batchSize: 25 };
+  if (
+    value === null
+    || typeof value !== "object"
+    || Array.isArray(value)
+    || Object.getPrototypeOf(value) !== Object.prototype
+  ) {
+    throw new Error("ai_content_attachment_gc_request_body_invalid");
+  }
+  const keys = Reflect.ownKeys(value);
+  if (keys.some((key) => key !== "batchSize")) {
+    throw new Error("ai_content_attachment_gc_request_body_invalid");
+  }
+  if (keys.length === 0) return { batchSize: 25 };
+  const { batchSize } = value as { batchSize?: unknown };
+  if (!Number.isInteger(batchSize) || Number(batchSize) < 1 || Number(batchSize) > 100) {
+    throw new Error("ai_content_attachment_gc_batch_size_invalid");
+  }
+  return { batchSize: Number(batchSize) };
 }
 
 function asChannel(value: string): Channel {
@@ -158,8 +573,8 @@ function asSourceType(value: unknown): SourceType | null {
   return typeof value === "string" && sourceTypes.has(value) ? (value as SourceType) : null;
 }
 
-function asSupportRequestCategory(value: unknown): SupportRequestCategory | null {
-  return typeof value === "string" && supportRequestCategories.has(value) ? (value as SupportRequestCategory) : null;
+export function asCreatableSupportRequestCategory(value: unknown): SupportRequestCategory | null {
+  return typeof value === "string" && creatableSupportRequestCategories.has(value) ? (value as SupportRequestCategory) : null;
 }
 
 function asSupportRequestStatus(value: unknown): SupportRequestStatus | null {
@@ -330,6 +745,13 @@ function cookie(name: string, value: string, maxAge: number, secure = false, sam
   return `${name}=${value}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
 }
 
+function matchesOpaqueSecret(candidate: string | null | undefined, expected: string | null | undefined) {
+  if (!candidate || !expected) return false;
+  const candidateDigest = createHash("sha256").update(candidate).digest();
+  const expectedDigest = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(candidateDigest, expectedDigest);
+}
+
 function sessionCookie(value: string, maxAge: number, secure: boolean) {
   return cookie("bp_session", value, maxAge, secure, secure ? "None" : "Lax");
 }
@@ -417,9 +839,12 @@ export function createFastifyOptions(logger?: boolean | FastifyLoggerOptions) {
 }
 
 export function createServer(
-  { repository, workerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, brandIntelligence, runtimePolicy, logger }: CreateServerOptions,
+  { repository, workerApiToken, contentProposalWorkerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, aiContentAttachmentGc, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, brandIntelligence, runtimePolicy, readinessPolicy, logger }: CreateServerOptions,
   app: FastifyInstance = Fastify(createFastifyOptions(logger))
 ) {
+  const aiContentAttachmentRepository = aiContentUpload
+    ? requireAiContentUploadRouteRepository(repository)
+    : null;
   const httpPolicy: ApiHttpRuntimePolicy = runtimePolicy ?? {
     cookieSecure: false,
     corsAllowedOrigins: [],
@@ -448,6 +873,85 @@ export function createServer(
     }
     if (message === "publishing_disabled") {
       reply.code(503).send({ error: "publishing_disabled" });
+      return;
+    }
+    if (message.startsWith("brand_core_validation_failed:")) {
+      reply.code(400).send({
+        error: "brand_core_validation_failed",
+        field: message.slice("brand_core_validation_failed:".length),
+      });
+      return;
+    }
+    if (message.startsWith("product_service_validation_failed:")) {
+      reply.code(400).send({
+        error: "product_service_validation_failed",
+        field: message.slice("product_service_validation_failed:".length),
+      });
+      return;
+    }
+    if (message.startsWith("avatar_validation_failed:")
+      || message.startsWith("reference_validation_failed:")
+      || message.startsWith("reference_filter_invalid:")
+      || message.startsWith("reference_brand_validation_failed:")
+      || message.startsWith("asset_upload_validation_failed:")) {
+      const separator = message.indexOf(":");
+      reply.code(400).send({ error: message.slice(0, separator), field: message.slice(separator + 1) });
+      return;
+    }
+    if (message === "asset_library_admin_required" || message === "asset_library_access_forbidden") {
+      reply.code(403).send({ error: message });
+      return;
+    }
+    if (message === "asset_library_not_configured" || message === "asset_library_upload_storage_not_configured") {
+      reply.code(503).send({ error: message });
+      return;
+    }
+    if (message === "asset_library_blob_delete_failed") {
+      reply.code(503).send({ error: message });
+      return;
+    }
+    if (message.startsWith("asset_library_upload_") || message === "avatar_image_limit_exceeded"
+      || message === "avatar_image_minimum_required" || message === "avatar_image_duplicate"
+      || message === "reference_origin_duplicate"
+      || message === "reference_brand_author_unavailable") {
+      const conflict = message === "asset_library_upload_replayed" || message === "reference_origin_duplicate"
+        || message === "avatar_image_limit_exceeded" || message === "avatar_image_minimum_required"
+        || message === "avatar_image_duplicate";
+      reply.code(conflict ? 409 : 400).send({ error: message });
+      return;
+    }
+    if (message === "brand_core_approval_forbidden" || message === "brand_core_access_forbidden") {
+      reply.code(403).send({ error: message });
+      return;
+    }
+    if (message === "product_service_approval_forbidden" || message === "product_service_access_forbidden") {
+      reply.code(403).send({ error: message });
+      return;
+    }
+    if (message === "wiki_item_approval_forbidden" || message === "wiki_item_access_forbidden"
+      || message === "wiki_issue_resolution_forbidden") {
+      reply.code(403).send({ error: message });
+      return;
+    }
+    if ([
+      "brand_core_not_draft",
+      "brand_core_version_conflict",
+      "brand_rules_not_draft",
+      "brand_rules_version_conflict",
+      "wiki_issue_not_open",
+      "wiki_issue_source_ineligible",
+    ].includes(message)) {
+      reply.code(409).send({ error: message });
+      return;
+    }
+    if (message === "brand_center_not_configured" || message === "product_library_not_configured"
+      || message === "wiki_management_not_configured") {
+      reply.code(503).send({ error: message });
+      return;
+    }
+    if (message.startsWith("wiki_item_validation_failed:") || message.startsWith("wiki_issue_validation_failed:")) {
+      const separator = message.indexOf(":");
+      reply.code(400).send({ error: message.slice(0, separator), field: message.slice(separator + 1) });
       return;
     }
     if (message.endsWith("_not_found")) {
@@ -561,17 +1065,56 @@ export function createServer(
     if (message.startsWith("ai_content_")) {
       if (message === "ai_content_limit_reached") {
         reply.code(429).send({ error: message });
-      } else if (message === "ai_content_attachment_storage_not_configured") {
+      } else if (
+        message === "ai_content_proposal_not_found"
+        || message === "ai_content_proposal_batch_not_found"
+        || message === "ai_content_generation_not_found"
+      ) {
+        reply.code(404).send({ error: message });
+      } else if (
+        message === "ai_content_attachment_storage_not_configured"
+        || message === "ai_content_attachment_storage_unavailable"
+        || message === "ai_content_attachment_verification_timeout"
+      ) {
         reply.code(503).send({ error: message });
+      } else if (
+        message === "ai_content_upload_session_expired"
+        || message === "ai_content_attachment_retention_expired"
+      ) {
+        reply.code(410).send({ error: message });
+      } else if (
+        message === "ai_content_attachment_blob_unavailable"
+        || message === "ai_content_attachment_path_mismatch"
+        || message === "ai_content_attachment_size_mismatch"
+        || message === "ai_content_attachment_mime_mismatch"
+        || message === "ai_content_attachment_url_mismatch"
+      ) {
+        reply.code(422).send({ error: message });
       } else if (
         message === "ai_content_generation_not_analysis_ready"
         || message === "ai_content_publish_target_unsupported"
+        || message === "ai_content_attachment_limit_exceeded"
+        || message === "ai_content_attachments_locked"
+        || message === "ai_content_attachment_upload_in_progress"
+        || message === "ai_content_proposal_batch_not_ready"
+        || message === "ai_content_proposal_already_selected"
+        || message === "ai_content_proposal_not_selectable"
+        || message === "ai_content_proposal_not_dismissible"
         || message.endsWith("_conflict")
       ) {
         reply.code(409).send({ error: message });
       } else {
         reply.code(400).send({ error: message });
       }
+      return;
+    }
+    if (message.startsWith("content_proposal_")) {
+      const status = message === "content_proposal_job_not_found"
+        ? 404
+        : message === "content_proposal_job_lease_invalid"
+          ? 409
+          : 400;
+      reply.code(status).send({ error: message });
       return;
     }
     if (message === "channel_oauth_not_connected" || message === "delivery_format_asset_mismatch") {
@@ -634,10 +1177,31 @@ export function createServer(
   app.get("/ready", async (_request, reply) => {
     try {
       const health = await repository.health();
-      return { ok: true, configuration: "ok", database: health.database };
+      const readiness = assessApiReadiness({
+        database: health.database,
+        schedulerEnabled: readinessPolicy?.schedulerEnabled ?? false,
+        publishingEnabled: readinessPolicy?.publishingEnabled ?? false,
+        activeDmEnabled: health.operations?.activeDmEnabled ?? false,
+        dmWorker: health.operations?.dmWorker ?? "offline",
+        wikiWorker: health.operations?.wikiWorker ?? "offline",
+        contentProposalsEnabled: readinessPolicy?.contentProposalsEnabled ?? false,
+        contentProposalWorker: health.operations?.contentProposalWorker ?? "offline",
+      });
+      reply.code(readiness.statusCode);
+      return readiness.body;
     } catch {
-      reply.code(503);
-      return { ok: false, configuration: "ok", database: "error" };
+      const readiness = assessApiReadiness({
+        database: "error",
+        schedulerEnabled: readinessPolicy?.schedulerEnabled ?? false,
+        publishingEnabled: readinessPolicy?.publishingEnabled ?? false,
+        activeDmEnabled: false,
+        dmWorker: "offline",
+        wikiWorker: "offline",
+        contentProposalsEnabled: readinessPolicy?.contentProposalsEnabled ?? false,
+        contentProposalWorker: "offline",
+      });
+      reply.code(readiness.statusCode);
+      return readiness.body;
     }
   });
 
@@ -713,6 +1277,78 @@ export function createServer(
     return repository.runDuePublishing(new Date());
   });
 
+  app.get("/internal/cron/avatar-upload-cleanup", async (request, reply) => {
+    if (!matchesBearerSecret(request.headers.authorization, cronSecret)) {
+      reply.code(401);
+      return { error: "cron_unauthorized" };
+    }
+    if (!repository.cleanupExpiredAvatarUploads
+      || !repository.cleanupExpiredReferenceUploads
+      || !assetLibraryUpload) {
+      throw new Error("asset_library_not_configured");
+    }
+    const { cleanupAssetLibraryUploadPrefix } = await import("./assetLibraryUpload.js");
+    const result = await repository.cleanupExpiredAvatarUploads(
+      (storagePathPrefix, storagePath) => cleanupAssetLibraryUploadPrefix(storagePathPrefix, storagePath, {
+        token: assetLibraryUpload.readWriteToken,
+        deleteBlob: assetLibraryUpload.deleteBlob,
+        listBlobs: assetLibraryUpload.listBlobs,
+      }),
+    );
+    if (result.failed.length) {
+      request.log.error({ event: "avatar_upload_cleanup_partial_failure", ...result });
+    }
+    const referenceResult = await repository.cleanupExpiredReferenceUploads(
+      (storagePathPrefix, storagePath) => cleanupAssetLibraryUploadPrefix(storagePathPrefix, storagePath, {
+        token: assetLibraryUpload.readWriteToken,
+        deleteBlob: assetLibraryUpload.deleteBlob,
+        listBlobs: assetLibraryUpload.listBlobs,
+      }),
+    );
+    if (referenceResult.failed.length) {
+      request.log.error({ event: "reference_upload_cleanup_partial_failure", ...referenceResult });
+    }
+    return result;
+  });
+
+  app.post("/internal/cron/ai-content-attachment-gc", async (request, reply) => {
+    if (!matchesBearerSecret(request.headers.authorization, cronSecret)) {
+      reply.code(401);
+      return { error: "cron_unauthorized" };
+    }
+    const gcRepository = asAiContentAttachmentGcRepository(repository);
+    if (!aiContentAttachmentGc || !gcRepository) {
+      reply.code(503);
+      return { error: "ai_content_attachment_gc_not_configured" };
+    }
+    let body: { batchSize: number };
+    try {
+      body = parseAiContentAttachmentGcRequestBody(request.body);
+    } catch (error) {
+      reply.code(400);
+      const code = error instanceof Error
+        && (
+          error.message === "ai_content_attachment_gc_request_body_invalid"
+          || error.message === "ai_content_attachment_gc_batch_size_invalid"
+        )
+        ? error.message
+        : "ai_content_attachment_gc_request_body_invalid";
+      return {
+        error: code,
+      };
+    }
+    const unsafeResult: AiContentAttachmentGcRunResult = await (
+      aiContentAttachmentGc.runGc ?? runAiContentAttachmentGc
+    )(gcRepository, {
+      workerId: aiContentAttachmentGc.workerId ?? "api-cron",
+      batchSize: body.batchSize,
+      deleteBlob: aiContentAttachmentGc.deleteBlob,
+    });
+    const result = safeAiContentAttachmentGcResult(unsafeResult);
+    request.log.info({ event: "ai_content_attachment_gc_completed", ...result });
+    return result;
+  });
+
   app.get("/auth/me", async (request, reply) => {
     if (!kakaoAuth) return { user: null };
     const token = readCookie(request.headers.cookie, "bp_session");
@@ -724,13 +1360,29 @@ export function createServer(
     return { user: { id: session.userId, displayName: session.displayName, email: session.email }, workspace: { id: session.workspaceId, name: session.workspaceName }, brand: { id: session.brandId, name: session.brandName } };
   });
 
-  app.get("/auth/kakao/login", async (request, reply) => {
+  app.get<{ Querystring: { destination?: string } }>("/auth/kakao/login", async (request, reply) => {
     if (!kakao?.restApiKey || !kakao.redirectUri) {
       reply.code(503);
       return { error: "kakao_auth_not_configured" };
     }
+    const destination = request.query.destination ?? "primary";
+    if (
+      (destination !== "primary" && destination !== "preview")
+      || (destination === "preview" && !httpPolicy.previewFrontendOrigin)
+    ) {
+      reply.code(400);
+      return { error: "kakao_login_destination_invalid" };
+    }
     const state = crypto.randomUUID();
-    reply.header("set-cookie", cookie(`${kakaoStateCookiePrefix}${state}`, "1", 600, httpPolicy.cookieSecure));
+    reply.header(
+      "set-cookie",
+      cookie(
+        `${kakaoStateCookiePrefix}${state}`,
+        destination === "preview" ? "preview" : "1",
+        600,
+        httpPolicy.cookieSecure,
+      ),
+    );
     const url = new URL("https://kauth.kakao.com/oauth/authorize");
     url.searchParams.set("response_type", "code");
     url.searchParams.set("client_id", kakao.restApiKey);
@@ -740,20 +1392,25 @@ export function createServer(
   });
 
   app.get<{ Querystring: { code?: string; state?: string; error?: string } }>("/auth/kakao/callback", async (request, reply) => {
-    const frontendUrl = kakao?.frontendUrl ?? "http://localhost:5173";
+    const primaryFrontendUrl = kakao?.frontendUrl ?? "http://localhost:5173";
     if (!kakaoAuth || !kakao?.restApiKey || !kakao.redirectUri) {
       request.log.warn({ event: "kakao_callback_failed", reason: "configuration_missing" }, "kakao_callback_failed");
-      return reply.redirect(`${frontendUrl}/login?error=kakao_configuration_missing`);
+      return reply.redirect(`${primaryFrontendUrl}/login?error=kakao_configuration_missing`);
     }
+    const stateCookieName = request.query.state ? kakaoStateCookieName(request.query.state) : null;
+    const stateCookie = stateCookieName ? readCookie(request.headers.cookie, stateCookieName) : null;
+    const frontendUrl = stateCookie === "preview" && httpPolicy.previewFrontendOrigin
+      ? httpPolicy.previewFrontendOrigin
+      : primaryFrontendUrl;
     if (request.query.error || !request.query.code) {
       request.log.warn({ event: "kakao_callback_failed", reason: "authorization_denied", kakaoError: request.query.error ?? null }, "kakao_callback_failed");
       return reply.redirect(`${frontendUrl}/login?error=kakao_authorization_denied`);
     }
-    const stateCookieName = request.query.state ? kakaoStateCookieName(request.query.state) : null;
-    const stateCookie = stateCookieName ? readCookie(request.headers.cookie, stateCookieName) : null;
     // Supports an in-flight login initiated before the per-attempt cookie rollout.
     const legacyStateMatches = request.query.state !== undefined && readCookie(request.headers.cookie, "bp_kakao_state") === request.query.state;
-    if (!request.query.state || (stateCookie !== "1" && !legacyStateMatches)) {
+    const stateCookieMatches = stateCookie === "1"
+      || (stateCookie === "preview" && Boolean(httpPolicy.previewFrontendOrigin));
+    if (!request.query.state || (!stateCookieMatches && !legacyStateMatches)) {
       request.log.warn({ event: "kakao_callback_failed", reason: "state_mismatch" }, "kakao_callback_failed");
       return reply.redirect(`${frontendUrl}/login?error=kakao_state_mismatch`);
     }
@@ -770,7 +1427,7 @@ export function createServer(
     if (!tokenResponse.ok || typeof tokenPayload.access_token !== "string") {
       request.log.warn({ event: "kakao_callback_failed", reason: "token_exchange_failed", status: tokenResponse.status }, "kakao_callback_failed");
       reply.header("set-cookie", clearStateCookie);
-      return reply.redirect(`${kakao.frontendUrl}/login?error=kakao_token_exchange_failed`);
+      return reply.redirect(`${frontendUrl}/login?error=kakao_token_exchange_failed`);
     }
     const profileResponse = await fetch("https://kapi.kakao.com/v2/user/me", { headers: { authorization: `Bearer ${tokenPayload.access_token}` } });
     const profilePayload = await profileResponse.json() as Record<string, unknown>;
@@ -779,19 +1436,22 @@ export function createServer(
     if (!profileResponse.ok || (typeof profilePayload.id !== "number" && typeof profilePayload.id !== "string")) {
       request.log.warn({ event: "kakao_callback_failed", reason: "profile_fetch_failed", status: profileResponse.status }, "kakao_callback_failed");
       reply.header("set-cookie", clearStateCookie);
-      return reply.redirect(`${kakao.frontendUrl}/login?error=kakao_profile_fetch_failed`);
+      return reply.redirect(`${frontendUrl}/login?error=kakao_profile_fetch_failed`);
     }
     const profile: KakaoProfile = { subject: String(profilePayload.id), nickname: typeof properties.nickname === "string" ? properties.nickname : null, email: typeof account.email === "string" ? account.email : null };
     const session = await kakaoAuth.createOrLoadUser(profile);
     const sessionToken = await kakaoAuth.createSession(session.userId);
     reply.header("set-cookie", [sessionCookie(sessionToken, 60 * 60 * 24 * 7, httpPolicy.cookieSecure), clearStateCookie]);
-    return reply.redirect(`${kakao.frontendUrl}/onboarding`);
+    return reply.redirect(`${frontendUrl}/onboarding`);
   });
 
   app.post("/auth/logout", async (request, reply) => {
     const token = readCookie(request.headers.cookie, "bp_session");
     if (token && kakaoAuth) await kakaoAuth.revokeSession(token);
-    reply.header("set-cookie", sessionCookie("", 0, httpPolicy.cookieSecure));
+    reply.header("set-cookie", [
+      sessionCookie("", 0, httpPolicy.cookieSecure),
+      ...clearInstagramLoginCookies(httpPolicy.cookieSecure),
+    ]);
     return { ok: true };
   });
 
@@ -800,16 +1460,29 @@ export function createServer(
       reply.code(503);
       return { error: "instagram_login_not_configured" };
     }
+    const state = randomUUID();
+    let session: AuthSession = null;
+    let sessionToken: string | null = null;
+    const developmentBrandId = process.env.BRAND_PILOT_DEV_BRAND_ID ?? defaultDevBrandId;
     if (kakaoAuth) {
-      const token = readCookie(request.headers.cookie, "bp_session");
-      const session = token ? await kakaoAuth.getSession(token) : null;
-      if (!session) {
+      sessionToken = readCookie(request.headers.cookie, "bp_session");
+      session = sessionToken ? await kakaoAuth.getSession(sessionToken) : null;
+      if (!session || !await kakaoAuth.canAccessBrand(session.userId, session.brandId)) {
         reply.code(401);
         return { error: "authentication_required" };
       }
     }
-    const state = randomUUID();
-    reply.header("set-cookie", cookie(instagramLoginStateCookie, state, 10 * 60, httpPolicy.cookieSecure));
+    const binding = encodeInstagramLoginBinding({
+      appSecret: instagramLogin.appSecret,
+      state,
+      sessionToken,
+      session,
+      developmentBrandId,
+    });
+    reply.header("set-cookie", [
+      cookie(instagramLoginStateCookie, state, 10 * 60, httpPolicy.cookieSecure),
+      cookie(instagramLoginBindingCookie, binding, 10 * 60, httpPolicy.cookieSecure),
+    ]);
     return reply.redirect(buildInstagramLoginAuthorizeUrl({
       appId: instagramLogin.appId,
       redirectUri: instagramLogin.redirectUri,
@@ -820,29 +1493,95 @@ export function createServer(
   app.get<{
     Querystring: { code?: string; state?: string; error?: string; error_description?: string };
   }>("/auth/meta/callback", async (request, reply) => {
-    const clearState = cookie(instagramLoginStateCookie, "", 0, httpPolicy.cookieSecure);
+    const clearPending = clearInstagramLoginCookies(httpPolicy.cookieSecure);
     if (!instagramLogin?.appId || !instagramLogin.appSecret || !instagramLogin.redirectUri) {
-      reply.header("set-cookie", clearState).code(503);
+      reply.header("set-cookie", clearPending).code(503);
       return { error: "instagram_login_not_configured" };
     }
-    if (request.query.error) {
-      reply.header("set-cookie", clearState).code(400);
-      return { error: request.query.error, errorDescription: request.query.error_description ?? null };
+    const storedState = readCookie(request.headers.cookie, instagramLoginStateCookie);
+    if (!matchesOpaqueSecret(request.query.state, storedState)) {
+      return reply.redirect(instagramLoginCallbackUrl(
+        instagramLogin.frontendUrl,
+        "failed",
+        "invalid_callback",
+      ));
     }
-    if (!request.query.code || request.query.state !== readCookie(request.headers.cookie, instagramLoginStateCookie)) {
-      reply.header("set-cookie", clearState).code(400);
-      return { error: "meta_oauth_state_invalid" };
+    const binding = decodeInstagramLoginBinding(
+      readCookie(request.headers.cookie, instagramLoginBindingCookie),
+      instagramLogin.appSecret,
+    );
+    if (
+      !binding
+      || !matchesOpaqueSecret(
+        binding.stateDigest,
+        keyedDigest(instagramLogin.appSecret, "state", request.query.state!),
+      )
+    ) {
+      return reply.redirect(instagramLoginCallbackUrl(
+        instagramLogin.frontendUrl,
+        "failed",
+        "invalid_callback",
+      ));
     }
     let brandId = process.env.BRAND_PILOT_DEV_BRAND_ID ?? defaultDevBrandId;
     if (kakaoAuth) {
-      const token = readCookie(request.headers.cookie, "bp_session");
-      const session = token ? await kakaoAuth.getSession(token) : null;
-      if (!session) {
-        reply.header("set-cookie", clearState).code(401);
-        return { error: "authentication_required" };
+      const currentSessionToken = readCookie(request.headers.cookie, "bp_session");
+      const currentSession = currentSessionToken
+        ? await kakaoAuth.getSession(currentSessionToken)
+        : null;
+      const sessionMatches = binding.mode === "session"
+        && currentSession
+        && matchesOpaqueSecret(
+          binding.sessionDigest,
+          keyedDigest(instagramLogin.appSecret, "session", currentSessionToken!),
+        )
+        && matchesOpaqueSecret(
+          binding.identityDigest,
+          keyedDigest(
+            instagramLogin.appSecret,
+            "identity",
+            instagramLoginIdentity(currentSession),
+          ),
+        );
+      const authorized = sessionMatches
+        ? await kakaoAuth.canAccessBrand(currentSession.userId, currentSession.brandId)
+        : false;
+      if (!sessionMatches || !authorized) {
+        reply.header("set-cookie", clearPending);
+        return reply.redirect(instagramLoginCallbackUrl(
+          instagramLogin.frontendUrl,
+          "failed",
+          "invalid_callback",
+        ));
       }
-      brandId = session.brandId;
+      brandId = currentSession.brandId;
+    } else {
+      const developmentMatches = binding.mode === "development"
+        && binding.sessionDigest === null
+        && matchesOpaqueSecret(
+          binding.identityDigest,
+          keyedDigest(instagramLogin.appSecret, "identity", `development\0${brandId}`),
+        );
+      if (!developmentMatches) {
+        return reply.redirect(instagramLoginCallbackUrl(
+          instagramLogin.frontendUrl,
+          "failed",
+          "invalid_callback",
+        ));
+      }
     }
+    reply.header("set-cookie", clearPending);
+    if (request.query.error) {
+      return reply.redirect(instagramLoginCallbackUrl(instagramLogin.frontendUrl, "cancelled"));
+    }
+    if (!request.query.code) {
+      return reply.redirect(instagramLoginCallbackUrl(
+        instagramLogin.frontendUrl,
+        "failed",
+        "invalid_callback",
+      ));
+    }
+    let failureReason: InstagramLoginCallbackFailureReason = "token_exchange_failed";
     try {
       const token = await exchangeInstagramLoginCode({
         code: request.query.code,
@@ -850,7 +1589,9 @@ export function createServer(
         appSecret: instagramLogin.appSecret,
         redirectUri: instagramLogin.redirectUri,
       });
+      failureReason = "account_mapping_failed";
       const connection = await resolveInstagramLoginConnection({ accessToken: token.accessToken });
+      failureReason = "connection_failed";
       await subscribeInstagramMessagingWebhooks({
         accessToken: token.accessToken,
         instagramBusinessAccountId: connection.instagramBusinessAccountId,
@@ -870,12 +1611,14 @@ export function createServer(
         secretValue: token.accessToken,
         authMode: "instagram_login",
       });
-      reply.header("set-cookie", clearState);
-      return reply.redirect(`${instagramLogin.frontendUrl}/channels?instagram=connected`);
+      return reply.redirect(instagramLoginCallbackUrl(instagramLogin.frontendUrl, "connected"));
     } catch (error) {
       request.log.warn({ event: "instagram_login_callback_failed", errorCode: safeInternalErrorCode(error) }, "instagram_login_callback_failed");
-      reply.header("set-cookie", clearState).code(400);
-      return { error: "meta_instagram_connection_failed" };
+      return reply.redirect(instagramLoginCallbackUrl(
+        instagramLogin.frontendUrl,
+        "failed",
+        failureReason,
+      ));
     }
   });
 
@@ -1078,6 +1821,18 @@ export function createServer(
     }
   );
 
+  app.get<{ Params: { brandId: string }; Querystring: { period?: string } }>(
+    "/brands/:brandId/performance/insights",
+    async (request, reply) => {
+      if (request.query.period && request.query.period !== "30d") {
+        reply.code(400);
+        return { error: "performance_insights_period_invalid" };
+      }
+      if (!repository.getPerformanceInsights) throw new Error("performance_insights_repository_not_configured");
+      return repository.getPerformanceInsights(request.params.brandId);
+    },
+  );
+
   app.get("/content-categories", async () => {
     return repository.listContentCategories();
   });
@@ -1157,7 +1912,11 @@ export function createServer(
   }>("/brands/:brandId/instagram-trends/:mediaId/save-source", async (request, reply) => {
     return instagramTrendResponse(
       reply,
-      () => repository.removeInstagramTrendSource(request.params.brandId, request.params.mediaId)
+      () => repository.removeInstagramTrendSource(
+        request.params.brandId,
+        request.params.mediaId,
+        aiContentActorUserId(request),
+      )
     );
   });
 
@@ -1193,7 +1952,11 @@ export function createServer(
   }>("/brands/:brandId/instagram-trends/:mediaId/save-source", async (request, reply) => {
     return instagramTrendResponse(
       reply,
-      () => repository.saveInstagramTrendSource(request.params.brandId, request.params.mediaId)
+      () => repository.saveInstagramTrendSource(
+        request.params.brandId,
+        request.params.mediaId,
+        aiContentActorUserId(request),
+      )
     );
   });
 
@@ -1339,6 +2102,17 @@ export function createServer(
     return repository.listChannels(request.params.brandId);
   });
 
+  app.get<{ Params: { brandId: string } }>("/brands/:brandId/channels/capabilities", async (request) => {
+    const channels = await repository.listChannels(request.params.brandId);
+    const instagramSettings = await repository.listInstagramFormats(request.params.brandId);
+    const instagramContext = await repository.getInstagramChannelCapabilityContext(request.params.brandId);
+    return buildChannelCapabilities({
+      channels,
+      instagramFormats: instagramSettings.formats,
+      instagramContext,
+    });
+  });
+
   app.patch<{ Params: { brandId: string; channel: string }; Body: unknown }>(
     "/brands/:brandId/channels/:channel",
     async (request, reply) => {
@@ -1392,7 +2166,7 @@ export function createServer(
       reply.code(400);
       return { error: "invalid_body" };
     }
-    const category = asSupportRequestCategory(request.body.category);
+    const category = asCreatableSupportRequestCategory(request.body.category);
     const title = typeof request.body.title === "string" ? request.body.title.trim() : "";
     const message = typeof request.body.message === "string" ? request.body.message.trim() : "";
     if (!category || title.length === 0 || message.length === 0) {
@@ -1491,7 +2265,12 @@ export function createServer(
   });
 
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/instagram-dm/settings", async (request) => {
-    return repository.getInstagramDmSettings(request.params.brandId);
+    const settings = await repository.getInstagramDmSettings(request.params.brandId);
+    const webhookConfigured = Boolean(metaWebhook?.appSecret && metaWebhook.verifyToken);
+    return {
+      ...settings,
+      webhookStatus: webhookConfigured ? "connected" as const : "needs_attention" as const,
+    };
   });
 
   app.put<{ Params: { brandId: string }; Body: Record<string, unknown> }>("/brands/:brandId/instagram-dm/settings", async (request, reply) => {
@@ -1505,11 +2284,29 @@ export function createServer(
       return { error: "invalid_dm_settings" };
     }
     try {
-      return await repository.updateInstagramDmSettings(request.params.brandId, {
+      if (body.enabled === true) {
+        const current = await repository.getInstagramDmSettings(request.params.brandId);
+        if (!isDmAutomationReady({
+          ...current,
+          webhookStatus: metaWebhook?.appSecret && metaWebhook.verifyToken
+            ? "connected"
+            : "needs_attention",
+        })) {
+          reply.code(409);
+          return { error: "dm_activation_blocked" };
+        }
+      }
+      const settings = await repository.updateInstagramDmSettings(request.params.brandId, {
         enabled: body.enabled as boolean | undefined,
         fallbackMessage: body.fallbackMessage as string | undefined,
         errorMessage: body.errorMessage as string | undefined,
       });
+      return {
+        ...settings,
+        webhookStatus: metaWebhook?.appSecret && metaWebhook.verifyToken
+          ? "connected" as const
+          : "needs_attention" as const,
+      };
     } catch (error) {
       if (error instanceof Error && error.message === "dm_activation_blocked") {
         reply.code(409);
@@ -1543,6 +2340,14 @@ export function createServer(
       return analysis;
     },
   );
+
+  registerBrandCenterRoutes(app, {
+    repository,
+    brandIntelligenceRepository,
+    scope: aiContentScope,
+    actorUserId: aiContentActorUserId,
+    assetLibraryUpload,
+  });
 
   app.get<{ Params: { brandId: string } }>(
     "/brands/:brandId/brand-intelligence",
@@ -1599,6 +2404,7 @@ export function createServer(
       return brandIntelligenceRepository.confirmBrandAnalysis({
         ...aiContentScope(request, request.params.brandId),
         analysisId: request.params.analysisId,
+        actorUserId: aiContentActorUserId(request),
       });
     },
   );
@@ -1750,9 +2556,121 @@ export function createServer(
     ),
   );
 
+  app.post<{ Params: { brandId: string }; Body: Record<string, unknown> }>(
+    "/brands/:brandId/ai-content/proposal-batches",
+    async (request, reply) => {
+      if (!(readinessPolicy?.contentProposalsEnabled ?? false)) {
+        reply.code(503);
+        return { error: "content_proposals_disabled" };
+      }
+      const health = await repository.health().catch(() => null);
+      if (health?.operations?.contentProposalWorker !== "online") {
+        reply.code(503);
+        return { error: "content_proposal_worker_not_ready" };
+      }
+      const batch = await requireContentProposalCustomerRepository(repository).createAiContentProposalBatch({
+        ...aiContentScope(request, request.params.brandId),
+        actorUserId: requiredAiContentActorUserId(request),
+        origin: "manual",
+        idempotencyKey: requiredAiContentField(
+          request.body?.idempotencyKey,
+          "ai_content_idempotency_key_invalid",
+          200,
+        ),
+        request: parseContentProposalRequest(request.body?.request),
+      });
+      reply.code(202);
+      return { batchId: batch.id, status: batch.status };
+    },
+  );
+
+  app.get<{ Params: { brandId: string; batchId: string } }>(
+    "/brands/:brandId/ai-content/proposal-batches/:batchId",
+    async (request) => {
+      const batch = await requireContentProposalCustomerRepository(repository).getAiContentProposalBatch({
+        ...aiContentScope(request, request.params.brandId),
+        batchId: parseAiContentUuid(request.params.batchId, "ai_content_proposal_batch_id_invalid"),
+      });
+      if (!batch) throw new Error("ai_content_proposal_batch_not_found");
+      return batch;
+    },
+  );
+
+  app.get<{ Params: { brandId: string }; Querystring: { status?: string } }>(
+    "/brands/:brandId/ai-content/proposals",
+    async (request) => {
+      const status = request.query.status ?? "suggested";
+      if (!["suggested", "selected", "dismissed"].includes(status)) {
+        throw new Error("ai_content_proposal_status_invalid");
+      }
+      return requireContentProposalCustomerRepository(repository).listAiContentProposals({
+        ...aiContentScope(request, request.params.brandId),
+        status: status as "suggested" | "selected" | "dismissed",
+      });
+    },
+  );
+
+  app.post<{ Params: { brandId: string; proposalId: string }; Body: Record<string, unknown> }>(
+    "/brands/:brandId/ai-content/proposals/:proposalId/select",
+    async (request) => {
+      try {
+        return await requireContentProposalCustomerRepository(repository).selectAiContentProposal({
+          ...aiContentScope(request, request.params.brandId),
+          actorUserId: requiredAiContentActorUserId(request),
+          proposalId: parseAiContentUuid(request.params.proposalId, "ai_content_proposal_id_invalid"),
+          idempotencyKey: requiredAiContentField(
+            request.body?.idempotencyKey,
+            "ai_content_idempotency_key_invalid",
+            200,
+          ),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        const mapped: Record<string, string> = {
+          proposal_not_found: "ai_content_proposal_not_found",
+          proposal_batch_not_ready: "ai_content_proposal_batch_not_ready",
+          proposal_already_selected: "ai_content_proposal_already_selected",
+          proposal_not_selectable: "ai_content_proposal_not_selectable",
+        };
+        if (mapped[message]) throw new Error(mapped[message]);
+        throw error;
+      }
+    },
+  );
+
+  app.post<{ Params: { brandId: string; proposalId: string } }>(
+    "/brands/:brandId/ai-content/proposals/:proposalId/dismiss",
+    async (request) => requireContentProposalCustomerRepository(repository).dismissAiContentProposal({
+      ...aiContentScope(request, request.params.brandId),
+      actorUserId: requiredAiContentActorUserId(request),
+      proposalId: parseAiContentUuid(request.params.proposalId, "ai_content_proposal_id_invalid"),
+    }),
+  );
+
+  app.get<{
+    Params: { brandId: string };
+    Querystring: { assetType?: string; assetId?: string };
+  }>(
+    "/brands/:brandId/ai-content/draft-references",
+    async (request) => {
+      if (!["reference", "avatar", "product_service", "wiki"].includes(String(request.query.assetType))) {
+        throw new Error("ai_content_asset_type_invalid");
+      }
+      return requireContentProposalCustomerRepository(repository).listAiContentDraftReferences({
+        ...aiContentScope(request, request.params.brandId),
+        assetType: request.query.assetType as "reference" | "avatar" | "product_service" | "wiki",
+        assetId: parseAiContentUuid(request.query.assetId, "ai_content_asset_id_invalid"),
+      });
+    },
+  );
+
   app.post<{ Params: { brandId: string }; Body: unknown }>("/brands/:brandId/ai-content/generations", async (request) => {
     const scope = aiContentScope(request, request.params.brandId);
-    return repository.createAiContentAnalysis({ ...scope, ...parseCreateAiContentAnalysisInput(request.body) });
+    return repository.createAiContentAnalysis({
+      ...scope,
+      actorUserId: requiredAiContentActorUserId(request),
+      ...parseCreateAiContentAnalysisInput(request.body),
+    });
   });
 
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/ai-content/brand-context", async (request) => {
@@ -1766,6 +2684,7 @@ export function createServer(
       return repository.updateAiContentDraft({
         ...scope,
         generationId: request.params.generationId,
+        actorUserId: requiredAiContentActorUserId(request),
         ...parseUpdateAiContentDraftInput(request.body),
       });
     },
@@ -1785,6 +2704,7 @@ export function createServer(
       return repository.startAiContentGeneration({
         ...scope,
         generationId: request.params.generationId,
+        actorUserId: requiredAiContentActorUserId(request),
         usageDate,
         dailyGenerationLimit: limits.dailyGenerationLimit,
         ...parseStartAiContentGenerationInput(request.body),
@@ -1813,6 +2733,24 @@ export function createServer(
     async (request) => repository.retryAiContentOutput({
       ...aiContentScope(request, request.params.brandId),
       outputId: request.params.outputId,
+    }),
+  );
+
+  app.post<{ Params: { brandId: string; outputId: string }; Body: unknown }>(
+    "/brands/:brandId/ai-content/outputs/:outputId/revisions",
+    async (request) => repository.reviseAiContentOutput({
+      ...aiContentScope(request, request.params.brandId),
+      outputId: request.params.outputId,
+      ...parseAiContentRevisionInput(request.body),
+    }),
+  );
+
+  app.put<{ Params: { brandId: string; outputId: string }; Body: unknown }>(
+    "/brands/:brandId/ai-content/outputs/:outputId/copy",
+    async (request) => repository.saveAiContentOutputCopy({
+      ...aiContentScope(request, request.params.brandId),
+      outputId: request.params.outputId,
+      ...parseAiContentCopyInput(request.body),
     }),
   );
 
@@ -1913,16 +2851,35 @@ export function createServer(
     },
   );
 
-  app.get<{ Params: { brandId: string }; Querystring: { type?: string } }>(
+  app.get<{
+    Params: { brandId: string };
+    Querystring: { type?: string; strategies?: string; formats?: string; tags?: string };
+  }>(
     "/brands/:brandId/ai-content/references",
     async (request) => {
       const type = request.query.type;
       if (type !== undefined && !["card_news", "blog", "marketing"].includes(type)) {
         throw new Error("ai_content_type_invalid");
       }
+      const parseFilter = (raw: string | undefined, allowed?: ReadonlySet<string>) => {
+        if (!raw) return [];
+        const values = raw.split(",").map((value) => value.trim()).filter(Boolean);
+        if (
+          values.length > 30
+          || new Set(values).size !== values.length
+          || values.some((value) => value.length > 80 || allowed && !allowed.has(value))
+        ) throw new Error("ai_content_reference_filter_invalid");
+        return values;
+      };
       return repository.listAiContentReferences({
         ...aiContentScope(request, request.params.brandId),
         type: type as AiContentType | undefined,
+        strategies: parseFilter(request.query.strategies, new Set([
+          "problem_solution", "how_to", "comparison", "faq", "insight",
+          "benefit", "social_proof", "brand_story", "cta",
+        ])),
+        formats: parseFilter(request.query.formats, new Set(["card_news", "blog", "single_image", "channel_text"])),
+        tags: parseFilter(request.query.tags),
       });
     },
   );
@@ -1960,33 +2917,107 @@ export function createServer(
     });
   });
 
+  if (aiContentAttachmentRepository) {
   app.post<{ Params: { brandId: string; generationId: string }; Body: unknown }>(
     "/brands/:brandId/ai-content/generations/:generationId/attachments/token",
+    { preValidation: validateAiContentLifecycleBrand },
     async (request) => {
-      const scope = aiContentScope(request, request.params.brandId);
-      const generation = await repository.getAiContentGeneration({ ...scope, generationId: request.params.generationId });
-      if (!generation) throw new Error("ai_content_generation_not_found");
-      return issueAiContentAttachmentToken({
-        brandId: request.params.brandId,
-        generationId: request.params.generationId,
-        attachment: parseAttachmentUploadTokenInput(request.body),
-      }, {
+      const brandId = parseAiContentBrandId(request.params.brandId);
+      const generationId = parseAiContentGenerationId(request.params.generationId);
+      const scope = aiContentScope(request, brandId);
+      const attachment = validateAiContentAttachment(
+        parseAttachmentUploadTokenInput(request.body),
+      );
+      const tokenOptions = {
         token: aiContentUpload?.readWriteToken ?? "",
         generateClientToken: aiContentUpload?.generateClientToken,
+      };
+      if (!aiContentUpload?.uploadSessionsEnabled) {
+        // Legacy issuance cannot reserve capacity before the provider call. An abandoned
+        // Blob is therefore undiscoverable until upload-session issuance is enabled.
+        await aiContentAttachmentRepository.assertAiContentAttachmentUploadMutable({ ...scope, generationId });
+        return issueValidatedAiContentAttachmentToken({
+          brandId,
+          generationId,
+          attachment,
+        }, tokenOptions);
+      }
+      const createdByUserId = aiContentActorUserId(request);
+      if (!createdByUserId) throw new Error("authentication_required");
+      const session = await aiContentAttachmentRepository.createAiContentUploadSession({
+        ...scope,
+        generationId,
+        createdByUserId,
+        attachment,
       });
+      try {
+        const token = await issueAiContentUploadSessionToken({
+          storagePath: session.storagePath,
+          mimeType: session.mimeType,
+          maximumSizeInBytes: AI_CONTENT_ATTACHMENT_POLICY[session.role][session.mimeType]!,
+          tokenExpiresAt: session.tokenExpiresAt,
+        }, tokenOptions);
+        return {
+          contractVersion: "ai-content-attachment-upload.v2",
+          sessionId: session.id,
+          nonce: session.nonce,
+          pathname: token.pathname,
+          clientToken: token.clientToken,
+          uploadExpiresAt: token.uploadExpiresAt,
+          sessionExpiresAt: session.tokenExpiresAt,
+        };
+      } catch (error) {
+        const errorCode = error instanceof Error
+          ? error.message
+          : "ai_content_attachment_storage_unavailable";
+        try {
+          await aiContentAttachmentRepository.failAiContentUploadSession({
+            ...scope,
+            generationId,
+            sessionId: session.id,
+            createdByUserId,
+            errorCode,
+          });
+        } catch {
+          request.log.warn({
+            event: "ai_content_upload_session_compensation_failed",
+            requestId: request.id,
+            errorCode: "database_compensation_failed",
+          }, "ai_content_upload_session_compensation_failed");
+        }
+        throw error;
+      }
     },
   );
 
   app.post<{ Params: { brandId: string; generationId: string }; Body: unknown }>(
     "/brands/:brandId/ai-content/generations/:generationId/attachments/confirm",
+    { preValidation: validateAiContentLifecycleBrand },
     async (request) => {
-      const scope = aiContentScope(request, request.params.brandId);
-      const generation = await repository.getAiContentGeneration({ ...scope, generationId: request.params.generationId });
-      if (!generation) throw new Error("ai_content_generation_not_found");
+      const brandId = parseAiContentBrandId(request.params.brandId);
+      const generationId = parseAiContentGenerationId(request.params.generationId);
+      const scope = aiContentScope(request, brandId);
       const parsed = parseConfirmAttachmentInput(request.body);
+      if ("sessionId" in parsed) {
+        const createdByUserId = aiContentActorUserId(request);
+        if (!createdByUserId) throw new Error("authentication_required");
+        return aiContentAttachmentRepository.confirmAiContentUploadSession({
+          ...scope,
+          generationId,
+          sessionId: parsed.sessionId,
+          nonce: parsed.nonce,
+          createdByUserId,
+        }, (session, abortSignal) => verifyAiContentUploadSessionBlob(session, {
+          token: aiContentUpload?.readWriteToken ?? "",
+          headBlob: aiContentUpload?.headBlob,
+          abortSignal,
+        }));
+      }
+      const generation = await repository.getAiContentGeneration({ ...scope, generationId });
+      if (!generation) throw new Error("ai_content_generation_not_found");
       const confirmed = confirmAiContentAttachment({
-        brandId: request.params.brandId,
-        generationId: request.params.generationId,
+        brandId,
+        generationId,
         attachment: parsed,
         storagePath: parsed.storagePath,
         storageUrl: parsed.storageUrl,
@@ -1995,7 +3026,41 @@ export function createServer(
         token: aiContentUpload?.readWriteToken ?? "",
         headBlob: aiContentUpload?.headBlob,
       });
-      return repository.confirmAiContentAttachment({ ...scope, generationId: request.params.generationId, ...verified });
+      return aiContentAttachmentRepository.confirmLegacyAiContentAttachment({ ...scope, generationId, ...verified });
+    },
+  );
+
+  app.post<{ Params: { brandId: string; generationId: string }; Body: unknown }>(
+    "/brands/:brandId/ai-content/generations/:generationId/attachments/cancel",
+    { preValidation: validateAiContentLifecycleBrand },
+    async (request) => {
+      const brandId = parseAiContentBrandId(request.params.brandId);
+      const generationId = parseAiContentGenerationId(request.params.generationId);
+      const scope = aiContentScope(request, brandId);
+      const createdByUserId = aiContentActorUserId(request);
+      if (!createdByUserId) throw new Error("authentication_required");
+      const parsed = parseCancelUploadSessionInput(request.body);
+      return aiContentAttachmentRepository.cancelAiContentUploadSession({
+        ...scope,
+        generationId,
+        sessionId: parsed.sessionId,
+        nonce: parsed.nonce,
+        createdByUserId,
+      });
+    },
+  );
+  }
+
+  app.delete<{ Params: { brandId: string; generationId: string; attachmentId: string } }>(
+    "/brands/:brandId/ai-content/generations/:generationId/attachments/:attachmentId",
+    { preValidation: validateAiContentLifecycleBrand },
+    async (request) => {
+      const brandId = parseAiContentBrandId(request.params.brandId);
+      return repository.removeAiContentAttachment({
+        ...aiContentScope(request, brandId),
+        generationId: parseAiContentGenerationId(request.params.generationId),
+        attachmentId: parseAiContentAttachmentId(request.params.attachmentId),
+      });
     },
   );
 
@@ -2209,6 +3274,18 @@ export function createServer(
     }
   });
 
+  app.post<{ Params: { queueId: string } }>("/publish-queue/:queueId/cancel", async (request, reply) => {
+    try {
+      return await repository.cancelPublishQueueItem(request.params.queueId);
+    } catch (error) {
+      if (error instanceof Error && error.message === "publish_queue_not_cancellable") {
+        reply.code(409);
+        return { error: error.message };
+      }
+      throw error;
+    }
+  });
+
   function assertWorkerAuthentication(authorization: string | undefined) {
     if (!workerApiToken) throw new Error("worker_api_not_configured");
     if (authorization !== `Bearer ${workerApiToken}`) throw new Error("worker_api_unauthorized");
@@ -2225,6 +3302,32 @@ export function createServer(
       return false;
     }
   }
+
+  function authenticateContentProposalWorker(authorization: string | undefined, reply: FastifyReply) {
+    const token = contentProposalWorkerApiToken;
+    if (!token) {
+      reply.code(503).send({ error: "worker_api_not_configured" });
+      return false;
+    }
+    if (authorization !== `Bearer ${token}`) {
+      reply.code(401).send({ error: "worker_api_unauthorized" });
+      return false;
+    }
+    return true;
+  }
+
+  app.post<{ Body: Record<string, unknown> }>(
+    "/worker/content-proposal-jobs/heartbeat",
+    async (request, reply) => {
+      if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      const workerId = requiredAiContentField(
+        request.body?.workerId,
+        "content_proposal_worker_id_required",
+        200,
+      );
+      return repository.heartbeatContentProposalWorker(workerId);
+    },
+  );
 
   app.post<{ Body: unknown }>("/worker/brand-analyses/claim", async (request, reply) => {
     if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
@@ -2406,6 +3509,122 @@ export function createServer(
         leaseToken: lease.leaseToken,
         errorCode: requiredAiContentField(request.body.errorCode, "subject_analysis_error_code_invalid", 120),
         errorMessage: requiredAiContentField(request.body.errorMessage, "subject_analysis_error_message_invalid", 2_000),
+        retryable: request.body.retryable,
+      });
+    },
+  );
+
+  app.post<{ Body: Record<string, unknown> }>(
+    "/worker/content-proposal-jobs/claim",
+    async (request, reply) => {
+      if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      const workerId = requiredAiContentField(
+        request.body?.workerId,
+        "content_proposal_worker_id_required",
+        200,
+      );
+      const leaseSeconds = Number(request.body?.leaseSeconds ?? 180);
+      if (!Number.isSafeInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 900) {
+        throw new Error("content_proposal_lease_seconds_invalid");
+      }
+      return {
+        job: await requireContentProposalJobsRepository(repository)
+          .claimContentProposalJob({ workerId, leaseSeconds }),
+      };
+    },
+  );
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>(
+    "/worker/content-proposal-jobs/:jobId/heartbeat",
+    async (request, reply) => {
+      if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      const jobId = parseAiContentUuid(
+        request.params.jobId,
+        "content_proposal_job_id_invalid",
+      );
+      const leaseToken = parseAiContentUuid(
+        request.body?.leaseToken,
+        "content_proposal_lease_token_invalid",
+      );
+      const leaseSeconds = Number(request.body?.leaseSeconds ?? 180);
+      if (!Number.isSafeInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 900) {
+        throw new Error("content_proposal_lease_seconds_invalid");
+      }
+      const alive = await requireContentProposalJobsRepository(repository).heartbeatContentProposalJob({
+        jobId,
+        workerId: requiredAiContentField(
+          request.body?.workerId,
+          "content_proposal_worker_id_required",
+          200,
+        ),
+        leaseToken,
+        leaseSeconds,
+      });
+      if (!alive) throw new Error("content_proposal_job_lease_invalid");
+      return { id: jobId, status: "processing" };
+    },
+  );
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>(
+    "/worker/content-proposal-jobs/:jobId/complete",
+    async (request, reply) => {
+      if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      const jobId = parseAiContentUuid(
+        request.params.jobId,
+        "content_proposal_job_id_invalid",
+      );
+      const leaseToken = parseAiContentUuid(
+        request.body?.leaseToken,
+        "content_proposal_lease_token_invalid",
+      );
+      if (!Array.isArray(request.body?.proposals)) throw new Error("content_proposal_result_invalid");
+      const proposals = parseContentProposalResult(request.body.proposals);
+      return requireContentProposalJobsRepository(repository).completeContentProposalJob({
+        jobId,
+        workerId: requiredAiContentField(
+          request.body?.workerId,
+          "content_proposal_worker_id_required",
+          200,
+        ),
+        leaseToken,
+        proposals,
+      });
+    },
+  );
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>(
+    "/worker/content-proposal-jobs/:jobId/fail",
+    async (request, reply) => {
+      if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      const jobId = parseAiContentUuid(
+        request.params.jobId,
+        "content_proposal_job_id_invalid",
+      );
+      const leaseToken = parseAiContentUuid(
+        request.body?.leaseToken,
+        "content_proposal_lease_token_invalid",
+      );
+      if (typeof request.body?.retryable !== "boolean") {
+        throw new Error("content_proposal_retryable_invalid");
+      }
+      return requireContentProposalJobsRepository(repository).failContentProposalJob({
+        jobId,
+        workerId: requiredAiContentField(
+          request.body?.workerId,
+          "content_proposal_worker_id_required",
+          200,
+        ),
+        leaseToken,
+        errorCode: requiredAiContentField(
+          request.body?.errorCode,
+          "content_proposal_error_code_invalid",
+          120,
+        ),
+        errorMessage: requiredAiContentField(
+          request.body?.errorMessage,
+          "content_proposal_error_message_invalid",
+          2_000,
+        ),
         retryable: request.body.retryable,
       });
     },

@@ -6,6 +6,35 @@ import type { ApiRepository, InstagramFormatSettingsInput, InstagramTrendPageDto
 
 const brandId = "11111111-1111-1111-1111-111111111111";
 
+function setCookieValues(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  return typeof value === "string" ? [value] : [];
+}
+
+function requestCookieHeader(value: unknown) {
+  return setCookieValues(value).map((item) => item.split(";", 1)[0]).join("; ");
+}
+
+const oauthSessionA = {
+  userId: "user-a",
+  displayName: "User A",
+  email: "a@example.com",
+  workspaceId: "workspace-a",
+  workspaceName: "Workspace A",
+  brandId: "brand-a",
+  brandName: "Brand A",
+};
+
+const oauthSessionB = {
+  userId: "user-b",
+  displayName: "User B",
+  email: "b@example.com",
+  workspaceId: "workspace-b",
+  workspaceName: "Workspace B",
+  brandId: "brand-b",
+  brandName: "Brand B",
+};
+
 const instagramTrendPage: InstagramTrendPageDto = {
   hashtag: { id: "hashtag-1", displayTag: "콘텐츠마케팅", normalizedTag: "콘텐츠마케팅" },
   source: "meta",
@@ -54,11 +83,14 @@ function createRepository(): ApiRepository {
     listBrandAppeals: vi.fn(async () => []),
     saveBrandAppeal: vi.fn(async () => { throw new Error("not_implemented"); }),
     confirmAiContentAttachment: vi.fn(async () => { throw new Error("not_implemented"); }),
+    removeAiContentAttachment: vi.fn(async () => { throw new Error("not_implemented"); }),
     claimAiContentJob: vi.fn(async () => null),
     heartbeatAiContentJob: vi.fn(async () => false),
     completeAiContentJob: vi.fn(async () => { throw new Error("not_implemented"); }),
     failAiContentJob: vi.fn(async () => { throw new Error("not_implemented"); }),
     retryAiContentOutput: vi.fn(async () => { throw new Error("not_implemented"); }),
+    reviseAiContentOutput: vi.fn(async () => { throw new Error("not_implemented"); }),
+    saveAiContentOutputCopy: vi.fn(async () => { throw new Error("not_implemented"); }),
     downloadAiContentOutput: vi.fn(async () => ({ fileName: "result.zip", mimeType: "application/zip" as const, buffer: Buffer.from("PK"), itemCount: 1 })),
     downloadAiContentGeneration: vi.fn(async () => ({ fileName: "results.zip", mimeType: "application/zip" as const, buffer: Buffer.from("PK"), itemCount: 1 })),
     sendAiContentToPublish: vi.fn(async () => ({ publishGroupId: "publish-group-1", channelOutputId: "channel-output-1" })),
@@ -285,6 +317,18 @@ function createRepository(): ApiRepository {
     })),
     deleteSource: vi.fn(async (sourceId) => ({ id: sourceId })),
     listChannels: vi.fn(async () => []),
+    getInstagramChannelCapabilityContext: vi.fn(async () => ({
+      adapterEnabled: false,
+      channelStatus: "not_connected" as const,
+      channelLastError: null,
+      externalAccountId: null,
+      credentialId: null,
+      credentialProvider: null,
+      credentialStatus: null,
+      credentialExpiresAt: null,
+      hasCredentialPayload: false,
+      scopes: [],
+    })),
     updateChannelEnabled: vi.fn(async (_brandId, channel, enabled) => ({
       channel,
       enabled,
@@ -481,8 +525,8 @@ function createRepository(): ApiRepository {
     listKnowledgeImports: vi.fn(async () => []),
     enqueueWikiRefresh: vi.fn(async () => ({ id: "wiki-job-1", status: "queued" })),
     receiveInstagramWebhookMessage: vi.fn(async () => ({ status: "queued" as const, brandId, conversationId: "conversation-1", jobId: "dm-job-1" })),
-    getInstagramDmSettings: vi.fn(async () => ({ brandId, enabled: false, fallbackMessage: "담당자가 확인 후 안내드리겠습니다.", errorMessage: "잠시 후 다시 문의해 주세요.", wikiReady: false, messagePermissionReady: false, webhookStatus: "unchecked" as const, workerStatus: "unknown" as const })),
-    updateInstagramDmSettings: vi.fn(async (_brandId, input) => ({ brandId, enabled: input.enabled ?? false, fallbackMessage: input.fallbackMessage ?? "담당자가 확인 후 안내드리겠습니다.", errorMessage: input.errorMessage ?? "잠시 후 다시 문의해 주세요.", wikiReady: true, messagePermissionReady: true, webhookStatus: "connected" as const, workerStatus: "online" as const })),
+    getInstagramDmSettings: vi.fn(async () => ({ brandId, enabled: false, fallbackMessage: "담당자가 확인 후 안내드리겠습니다.", errorMessage: "잠시 후 다시 문의해 주세요.", brandCoreReady: false, wikiReady: false, wikiStatus: "empty" as const, messagePermissionReady: false, webhookStatus: "unchecked" as const, workerStatus: "unknown" as const })),
+    updateInstagramDmSettings: vi.fn(async (_brandId, input) => ({ brandId, enabled: input.enabled ?? false, fallbackMessage: input.fallbackMessage ?? "담당자가 확인 후 안내드리겠습니다.", errorMessage: input.errorMessage ?? "잠시 후 다시 문의해 주세요.", brandCoreReady: true, wikiReady: true, wikiStatus: "active" as const, messagePermissionReady: true, webhookStatus: "connected" as const, workerStatus: "online" as const })),
     listInstagramDmHistory: vi.fn(async () => []),
     listDmConversations: vi.fn(async () => ({ items: [], nextCursor: null })),
     getDmConversation: vi.fn(async (_brandId, conversationId) => ({
@@ -555,6 +599,7 @@ function createRepository(): ApiRepository {
     })),
     publishQueueItem: vi.fn(async (queueId) => ({ id: queueId, status: "published", publishedUrl: "mock://instagram/queue-1" })),
     retryPublishQueueItem: vi.fn(async (queueId) => ({ id: queueId, status: "queued" as const })),
+    cancelPublishQueueItem: vi.fn(async (queueId) => ({ id: queueId, status: "cancelled" as const })),
     claimImageRenderJob: vi.fn(async () => null),
     heartbeatImageRenderJob: vi.fn(async (id) => ({ id, status: "running" })),
     completeImageRenderJob: vi.fn(async (id) => ({ id, status: "succeeded", artifactId: "artifact-1" })),
@@ -571,6 +616,7 @@ function createRepository(): ApiRepository {
     runDmProfileRefreshJob: vi.fn(async (id) => ({ id, status: "succeeded" })),
     failDmProfileRefreshJob: vi.fn(async (id) => ({ id, status: "failed" })),
     heartbeatDmWorker: vi.fn(async (workerId) => ({ workerId })),
+    heartbeatContentProposalWorker: vi.fn(async (workerId) => ({ workerId })),
     acquireWorkerResourceLease: vi.fn(async () => null),
     heartbeatWorkerResourceLease: vi.fn(async (id, _workerId, leaseToken) => ({
       id,
@@ -711,6 +757,85 @@ describe("API server", () => {
     expect(sessionCookie).toContain("SameSite=None");
     expect(sessionCookie).toContain("Secure");
     expect(cookies.find((value) => value.startsWith("bp_kakao_state_"))).toContain("Secure");
+  });
+
+  it("returns a preview login to the exact configured preview origin", async () => {
+    const kakaoAuth = {
+      createOrLoadUser: vi.fn(async () => ({ userId: "user-1" })),
+      createSession: vi.fn(async () => "session-token"),
+    };
+    const app = createServer({
+      repository: createRepository(),
+      kakaoAuth: kakaoAuth as any,
+      kakao: {
+        restApiKey: "kakao-rest-api-key",
+        redirectUri: "https://api.danbammsg.co.kr/auth/kakao/callback",
+        frontendUrl: "https://app.danbammsg.co.kr",
+      },
+      runtimePolicy: {
+        cookieSecure: true,
+        corsAllowedOrigins: [
+          "https://app.danbammsg.co.kr",
+          "https://staging-app.danbammsg.co.kr",
+        ],
+        devAuthEnabled: false,
+        previewFrontendOrigin: "https://staging-app.danbammsg.co.kr",
+      },
+      logger: false,
+    });
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: "access-token" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 1234, properties: { nickname: "Tester" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })));
+
+    const login = await app.inject({
+      method: "GET",
+      url: "/auth/kakao/login?destination=preview",
+    });
+    const state = new URL(String(login.headers.location)).searchParams.get("state");
+    const stateCookie = String(login.headers["set-cookie"]).split(";", 1)[0];
+    const callback = await app.inject({
+      method: "GET",
+      url: `/auth/kakao/callback?code=test-code&state=${encodeURIComponent(state!)}`,
+      headers: { cookie: stateCookie },
+    });
+
+    expect(login.statusCode).toBe(302);
+    expect(stateCookie).toMatch(/^bp_kakao_state_[0-9a-f-]+=preview$/i);
+    expect(callback.statusCode).toBe(302);
+    expect(callback.headers.location).toBe("https://staging-app.danbammsg.co.kr/onboarding");
+  });
+
+  it("rejects an unknown Kakao login destination", async () => {
+    const app = createServer({
+      repository: createRepository(),
+      kakao: {
+        restApiKey: "kakao-rest-api-key",
+        redirectUri: "https://api.danbammsg.co.kr/auth/kakao/callback",
+        frontendUrl: "https://app.danbammsg.co.kr",
+      },
+      runtimePolicy: {
+        cookieSecure: true,
+        corsAllowedOrigins: ["https://app.danbammsg.co.kr"],
+        devAuthEnabled: false,
+      },
+      logger: false,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/auth/kakao/login?destination=https%3A%2F%2Fevil.example",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "kakao_login_destination_invalid" });
+    expect(response.headers.location).toBeUndefined();
+    expect(response.headers["set-cookie"]).toBeUndefined();
   });
 
   it("accepts a valid Kakao state from an earlier concurrent login attempt", async () => {
@@ -989,6 +1114,18 @@ describe("API server", () => {
       ok: false,
       configuration: "ok",
       database: "error",
+      features: {
+        scheduler: "disabled",
+        publishing: "disabled",
+        dm: "disabled",
+        wiki: "disabled",
+        contentProposals: "disabled",
+      },
+      workers: {
+        dm: "not_required",
+        wiki: "not_required",
+        contentProposal: "not_required",
+      },
     });
     expect(repository.health).toHaveBeenCalledTimes(1);
     expect(kakaoAuth.getSession).not.toHaveBeenCalled();
@@ -998,8 +1135,22 @@ describe("API server", () => {
 
   it("returns readiness when the database is available", async () => {
     const repository = createRepository();
+    vi.mocked(repository.health).mockResolvedValue({
+      database: "ok",
+      operations: {
+        activeDmEnabled: false,
+        dmWorker: "offline",
+        wikiWorker: "offline",
+        contentProposalWorker: "offline",
+      },
+    });
     const app = createServer({
       repository,
+      readinessPolicy: {
+        schedulerEnabled: false,
+        publishingEnabled: false,
+        contentProposalsEnabled: false,
+      },
       runtimePolicy: {
         cookieSecure: false,
         corsAllowedOrigins: [],
@@ -1014,8 +1165,51 @@ describe("API server", () => {
       ok: true,
       configuration: "ok",
       database: "ok",
+      features: {
+        scheduler: "disabled",
+        publishing: "disabled",
+        dm: "disabled",
+        wiki: "disabled",
+        contentProposals: "disabled",
+      },
+      workers: {
+        dm: "not_required",
+        wiki: "not_required",
+        contentProposal: "not_required",
+      },
     });
     expect(repository.health).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 503 when active DM lacks a fresh Wiki worker heartbeat", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.health).mockResolvedValue({
+      database: "ok",
+      operations: {
+        activeDmEnabled: true,
+        dmWorker: "online",
+        wikiWorker: "offline",
+        contentProposalWorker: "offline",
+      },
+    });
+    const app = createServer({
+      repository,
+      readinessPolicy: {
+        schedulerEnabled: false,
+        publishingEnabled: false,
+        contentProposalsEnabled: false,
+      },
+    });
+
+    const response = await app.inject({ method: "GET", url: "/ready" });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      ok: false,
+      database: "ok",
+      features: { dm: "enabled", wiki: "enabled" },
+      workers: { dm: "online", wiki: "offline" },
+    });
   });
 
   it("returns brand UI status for navigation and onboarding", async () => {
@@ -1641,7 +1835,7 @@ describe("API server", () => {
     expect(authorizeUrl.hostname).toBe("www.instagram.com");
     expect(authorizeUrl.searchParams.get("scope")).toContain("instagram_business_manage_messages");
     const state = authorizeUrl.searchParams.get("state");
-    const stateCookie = String(start.headers["set-cookie"]);
+    const stateCookie = requestCookieHeader(start.headers["set-cookie"]);
 
     const callback = await app.inject({
       method: "GET",
@@ -1667,6 +1861,400 @@ describe("API server", () => {
         secretValue: "long-lived-token",
       }),
     );
+  });
+
+  it("binds pending Instagram OAuth to the initiating session and clears it on logout", async () => {
+    const kakaoAuth = {
+      getSession: vi.fn(async (token: string) => token === "session-a" ? oauthSessionA : null),
+      canAccessBrand: vi.fn(async () => true),
+      revokeSession: vi.fn(async () => undefined),
+    };
+    const app = createServer({
+      repository: createRepository(),
+      kakaoAuth: kakaoAuth as any,
+      instagramLogin: {
+        appId: "instagram-app-id",
+        appSecret: "instagram-app-secret",
+        redirectUri: "https://api.example/auth/meta/callback",
+        frontendUrl: "https://app.example",
+      },
+      runtimePolicy: {
+        cookieSecure: true,
+        corsAllowedOrigins: ["https://app.example"],
+        devAuthEnabled: false,
+      },
+      logger: false,
+    });
+
+    const start = await app.inject({
+      method: "GET",
+      url: "/auth/meta/start",
+      headers: { cookie: "bp_session=session-a" },
+    });
+    const pendingCookies = setCookieValues(start.headers["set-cookie"]);
+    expect(pendingCookies.some((item) => item.startsWith("bp_instagram_login_state="))).toBe(true);
+    expect(pendingCookies.some((item) => item.startsWith("bp_instagram_login_binding="))).toBe(true);
+    expect(pendingCookies.every((item) => item.includes("HttpOnly") && item.includes("Secure"))).toBe(true);
+    expect(requestCookieHeader(start.headers["set-cookie"])).not.toMatch(/user-a|workspace-a|brand-a/);
+    expect(kakaoAuth.canAccessBrand).toHaveBeenCalledWith("user-a", "brand-a");
+
+    const logout = await app.inject({
+      method: "POST",
+      url: "/auth/logout",
+      headers: {
+        cookie: `bp_session=session-a; ${requestCookieHeader(start.headers["set-cookie"])}`,
+      },
+    });
+    const cleared = setCookieValues(logout.headers["set-cookie"]);
+    for (const name of ["bp_session", "bp_instagram_login_state", "bp_instagram_login_binding"]) {
+      expect(cleared.find((item) => item.startsWith(`${name}=`))).toContain("Max-Age=0");
+    }
+    expect(kakaoAuth.revokeSession).toHaveBeenCalledWith("session-a");
+  });
+
+  it("rejects an Instagram callback after the browser session changes from tenant A to tenant B", async () => {
+    const repository = createRepository();
+    const kakaoAuth = {
+      getSession: vi.fn(async (token: string) => token === "session-a" ? oauthSessionA : oauthSessionB),
+      canAccessBrand: vi.fn(async () => true),
+    };
+    const app = createServer({
+      repository,
+      kakaoAuth: kakaoAuth as any,
+      instagramLogin: {
+        appId: "instagram-app-id",
+        appSecret: "instagram-app-secret",
+        redirectUri: "https://api.example/auth/meta/callback",
+        frontendUrl: "https://app.example",
+      },
+      logger: false,
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const start = await app.inject({
+      method: "GET",
+      url: "/auth/meta/start",
+      headers: { cookie: "bp_session=session-a" },
+    });
+    const state = new URL(start.headers.location ?? "").searchParams.get("state");
+
+    const callback = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?code=oauth-code&state=${state}`,
+      headers: {
+        cookie: `bp_session=session-b; ${requestCookieHeader(start.headers["set-cookie"])}`,
+      },
+    });
+
+    expect(callback.headers.location).toBe(
+      "https://app.example/channels?instagram=failed&reason=invalid_callback",
+    );
+    expect(setCookieValues(callback.headers["set-cookie"]).map((item) => item.split("=", 1)[0])).toEqual([
+      "bp_instagram_login_state",
+      "bp_instagram_login_binding",
+    ]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(repository.saveChannelCredentials).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "the same user switches brands",
+      callbackSession: {
+        ...oauthSessionA,
+        brandId: "brand-b",
+        brandName: "Brand B",
+      },
+      callbackAccess: true,
+    },
+    {
+      name: "the initiating user loses brand membership",
+      callbackSession: oauthSessionA,
+      callbackAccess: false,
+    },
+  ])("rejects the Instagram callback when $name", async ({ callbackSession, callbackAccess }) => {
+    const repository = createRepository();
+    const kakaoAuth = {
+      getSession: vi.fn()
+        .mockResolvedValueOnce(oauthSessionA)
+        .mockResolvedValueOnce(callbackSession),
+      canAccessBrand: vi.fn()
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(callbackAccess),
+    };
+    const app = createServer({
+      repository,
+      kakaoAuth: kakaoAuth as any,
+      instagramLogin: {
+        appId: "instagram-app-id",
+        appSecret: "instagram-app-secret",
+        redirectUri: "https://api.example/auth/meta/callback",
+        frontendUrl: "https://app.example",
+      },
+      logger: false,
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const start = await app.inject({
+      method: "GET",
+      url: "/auth/meta/start",
+      headers: { cookie: "bp_session=session-a" },
+    });
+    const state = new URL(start.headers.location ?? "").searchParams.get("state");
+
+    const callback = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?code=oauth-code&state=${state}`,
+      headers: {
+        cookie: `bp_session=session-a; ${requestCookieHeader(start.headers["set-cookie"])}`,
+      },
+    });
+
+    expect(callback.headers.location).toBe(
+      "https://app.example/channels?instagram=failed&reason=invalid_callback",
+    );
+    expect(setCookieValues(callback.headers["set-cookie"]).map((item) => item.split("=", 1)[0])).toEqual([
+      "bp_instagram_login_state",
+      "bp_instagram_login_binding",
+    ]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(repository.saveChannelCredentials).not.toHaveBeenCalled();
+  });
+
+  it("completes a session-bound Instagram callback for tenant A once", async () => {
+    const repository = createRepository();
+    const kakaoAuth = {
+      getSession: vi.fn(async (token: string) => token === "session-a" ? oauthSessionA : null),
+      canAccessBrand: vi.fn(async (userId: string, requestedBrandId: string) => (
+        userId === oauthSessionA.userId && requestedBrandId === oauthSessionA.brandId
+      )),
+    };
+    const app = createServer({
+      repository,
+      kakaoAuth: kakaoAuth as any,
+      instagramLogin: {
+        appId: "instagram-app-id",
+        appSecret: "instagram-app-secret",
+        redirectUri: "https://api.example/auth/meta/callback",
+        frontendUrl: "https://app.example",
+      },
+      logger: false,
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "https://api.instagram.com/oauth/access_token") {
+        return new Response(JSON.stringify({ access_token: "short-token" }));
+      }
+      if (url.startsWith("https://graph.instagram.com/access_token")) {
+        return new Response(JSON.stringify({ access_token: "long-token" }));
+      }
+      if (url.includes("/subscribed_apps")) {
+        return new Response(JSON.stringify({ success: true }));
+      }
+      return new Response(JSON.stringify({
+        id: "professional-account-a",
+        username: "brand-a",
+      }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const start = await app.inject({
+      method: "GET",
+      url: "/auth/meta/start",
+      headers: { cookie: "bp_session=session-a" },
+    });
+    const state = new URL(start.headers.location ?? "").searchParams.get("state");
+
+    const callback = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?code=oauth-code&state=${state}`,
+      headers: {
+        cookie: `bp_session=session-a; ${requestCookieHeader(start.headers["set-cookie"])}`,
+      },
+    });
+
+    expect(callback.headers.location).toBe("https://app.example/channels?instagram=connected");
+    expect(repository.saveChannelCredentials).toHaveBeenCalledWith(
+      "brand-a",
+      "instagram",
+      expect.objectContaining({ externalAccountId: "professional-account-a" }),
+    );
+    const fetchCount = fetchMock.mock.calls.length;
+    const replay = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?code=oauth-code&state=${state}`,
+      headers: { cookie: "bp_session=session-a" },
+    });
+    expect(replay.headers.location).toBe(
+      "https://app.example/channels?instagram=failed&reason=invalid_callback",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(fetchCount);
+    expect(repository.saveChannelCredentials).toHaveBeenCalledOnce();
+  });
+
+  it("redirects an Instagram provider denial to a canonical cancellation without leaking provider text", async () => {
+    const app = createServer({
+      repository: createRepository(),
+      instagramLogin: {
+        appId: "instagram-app-id",
+        appSecret: "instagram-app-secret",
+        redirectUri: "http://localhost:4000/auth/meta/callback",
+        frontendUrl: "http://localhost:5173",
+      },
+      logger: false,
+    });
+
+    const start = await app.inject({ method: "GET", url: "/auth/meta/start" });
+    const state = new URL(start.headers.location ?? "").searchParams.get("state");
+    const callback = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?error=access_denied&error_description=SECRET_PROVIDER_TEXT&state=${state}`,
+      headers: { cookie: requestCookieHeader(start.headers["set-cookie"]) },
+    });
+
+    expect(callback.statusCode).toBe(302);
+    expect(callback.headers.location).toBe("http://localhost:5173/channels?instagram=cancelled");
+    expect(callback.headers.location).not.toContain("SECRET_PROVIDER_TEXT");
+    expect(String(callback.headers["set-cookie"])).toContain("bp_instagram_login_state=");
+    expect(String(callback.headers["set-cookie"])).toContain("Max-Age=0");
+  });
+
+  it("does not let a forged provider error consume a legitimate state and rejects replay after valid denial", async () => {
+    const app = createServer({
+      repository: createRepository(),
+      instagramLogin: {
+        appId: "instagram-app-id",
+        appSecret: "instagram-app-secret",
+        redirectUri: "http://localhost:4000/auth/meta/callback",
+        frontendUrl: "http://localhost:5173",
+      },
+      logger: false,
+    });
+    const start = await app.inject({ method: "GET", url: "/auth/meta/start" });
+    const state = new URL(start.headers.location ?? "").searchParams.get("state");
+    const pendingCookies = setCookieValues(start.headers["set-cookie"]);
+    expect(pendingCookies.every((item) => item.includes("HttpOnly"))).toBe(true);
+    const stateCookie = requestCookieHeader(start.headers["set-cookie"]);
+
+    for (const forgedUrl of [
+      "/auth/meta/callback?error=access_denied&error_description=SECRET_MISSING_STATE",
+      "/auth/meta/callback?error=access_denied&error_description=SECRET_MISMATCHED_STATE&state=forged-state",
+    ]) {
+      const forged = await app.inject({
+        method: "GET",
+        url: forgedUrl,
+        headers: { cookie: stateCookie },
+      });
+
+      expect(forged.statusCode).toBe(302);
+      expect(forged.headers.location).toBe(
+        "http://localhost:5173/channels?instagram=failed&reason=invalid_callback",
+      );
+      expect(forged.headers.location).not.toContain("SECRET");
+      expect(forged.headers["set-cookie"]).toBeUndefined();
+    }
+
+    const bindingCookie = pendingCookies
+      .find((item) => item.startsWith("bp_instagram_login_binding="))
+      ?.split(";", 1)[0];
+    expect(bindingCookie).toBeDefined();
+    const forgedBinding = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?error=access_denied&state=${state}`,
+      headers: { cookie: stateCookie.replace(bindingCookie!, `${bindingCookie!}x`) },
+    });
+    expect(forgedBinding.headers.location).toBe(
+      "http://localhost:5173/channels?instagram=failed&reason=invalid_callback",
+    );
+    expect(forgedBinding.headers["set-cookie"]).toBeUndefined();
+
+    const denied = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?error=access_denied&state=${state}`,
+      headers: { cookie: stateCookie },
+    });
+    expect(denied.headers.location).toBe("http://localhost:5173/channels?instagram=cancelled");
+    expect(String(denied.headers["set-cookie"])).toContain("Max-Age=0");
+
+    const replayed = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?error=access_denied&state=${state}`,
+    });
+    expect(replayed.headers.location).toBe(
+      "http://localhost:5173/channels?instagram=failed&reason=invalid_callback",
+    );
+    expect(replayed.headers["set-cookie"]).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "token exchange",
+      reason: "token_exchange_failed",
+      fetchImpl: async () => new Response(JSON.stringify({
+        error: { message: "SECRET_EXCHANGE_DETAIL" },
+      }), { status: 400 }),
+    },
+    {
+      name: "professional account mapping",
+      reason: "account_mapping_failed",
+      fetchImpl: async (url: string) => {
+        if (url === "https://api.instagram.com/oauth/access_token") {
+          return new Response(JSON.stringify({ access_token: "short-token" }));
+        }
+        if (url.startsWith("https://graph.instagram.com/access_token")) {
+          return new Response(JSON.stringify({ access_token: "long-token" }));
+        }
+        return new Response(JSON.stringify({ username: "missing-id", detail: "SECRET_MAPPING_DETAIL" }));
+      },
+    },
+    {
+      name: "internal credential persistence",
+      reason: "connection_failed",
+      fetchImpl: async (url: string) => {
+        if (url === "https://api.instagram.com/oauth/access_token") {
+          return new Response(JSON.stringify({ access_token: "short-token" }));
+        }
+        if (url.startsWith("https://graph.instagram.com/access_token")) {
+          return new Response(JSON.stringify({ access_token: "long-token" }));
+        }
+        if (url.includes("/subscribed_apps")) {
+          return new Response(JSON.stringify({ success: true }));
+        }
+        return new Response(JSON.stringify({
+          id: "professional-account-1",
+          username: "brand",
+        }));
+      },
+      saveFails: true,
+    },
+  ])("redirects an Instagram $name failure with an allowlisted reason", async ({ reason, fetchImpl, saveFails }) => {
+    const repository = createRepository();
+    if (saveFails) {
+      vi.mocked(repository.saveChannelCredentials).mockRejectedValueOnce(new Error("SECRET_DATABASE_DETAIL"));
+    }
+    const app = createServer({
+      repository,
+      instagramLogin: {
+        appId: "instagram-app-id",
+        appSecret: "instagram-app-secret",
+        redirectUri: "http://localhost:4000/auth/meta/callback",
+        frontendUrl: "http://localhost:5173",
+      },
+      logger: false,
+    });
+    vi.stubGlobal("fetch", vi.fn(fetchImpl));
+    const start = await app.inject({ method: "GET", url: "/auth/meta/start" });
+    const state = new URL(start.headers.location ?? "").searchParams.get("state");
+
+    const callback = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?code=oauth-code&state=${state}`,
+      headers: { cookie: requestCookieHeader(start.headers["set-cookie"]) },
+    });
+
+    expect(callback.statusCode).toBe(302);
+    expect(callback.headers.location).toBe(
+      `http://localhost:5173/channels?instagram=failed&reason=${reason}`,
+    );
+    expect(callback.headers.location).not.toContain("SECRET");
   });
 
   it("connects Facebook Login for trends without replacing Instagram Login credentials", async () => {
@@ -1947,6 +2535,20 @@ describe("API server", () => {
     expect(invalidPhone.statusCode).toBe(400);
     expect(invalidPhone.json()).toEqual({ error: "invalid_support_contact_phone" });
 
+    const legacyFeatureCategory = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/support-requests`,
+      payload: {
+        category: "feature",
+        title: "과거 기능 제안 유형",
+        message: "신규 문의는 피드백으로 분리되어야 합니다.",
+        contactPhone: "01012345678"
+      }
+    });
+    expect(legacyFeatureCategory.statusCode).toBe(400);
+    expect(legacyFeatureCategory.json()).toEqual({ error: "support_request_required_fields" });
+    expect(repository.createSupportRequest).not.toHaveBeenCalled();
+
     const created = await app.inject({
       method: "POST",
       url: `/brands/${brandId}/support-requests`,
@@ -2019,6 +2621,16 @@ describe("API server", () => {
       url: `/brands/${brandId}/feedback`,
       payload: { message: "가".repeat(2001) }
     });
+    const oneCharacter = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/feedback`,
+      payload: { message: "좋" }
+    });
+    const exactLimit = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/feedback`,
+      payload: { message: "가".repeat(2000) }
+    });
     const created = await app.inject({
       method: "POST",
       url: `/brands/${brandId}/feedback`,
@@ -2029,6 +2641,8 @@ describe("API server", () => {
     expect(blank.json()).toEqual({ error: "feedback_message_required" });
     expect(tooLong.statusCode).toBe(400);
     expect(tooLong.json()).toEqual({ error: "feedback_message_too_long" });
+    expect(oneCharacter.statusCode).toBe(201);
+    expect(exactLimit.statusCode).toBe(201);
     expect(created.statusCode).toBe(201);
     expect(created.json()).toMatchObject({ id: "feedback-1", status: "new" });
     expect(repository.createFeedbackSubmission).toHaveBeenCalledWith(brandId, {
@@ -2211,6 +2825,11 @@ describe("API server", () => {
     expect(retry.statusCode).toBe(200);
     expect(retry.json()).toEqual({ id: "queue-1", status: "queued" });
     expect(repository.retryPublishQueueItem).toHaveBeenCalledWith("queue-1");
+
+    const cancel = await app.inject({ method: "POST", url: "/publish-queue/queue-1/cancel" });
+    expect(cancel.statusCode).toBe(200);
+    expect(cancel.json()).toEqual({ id: "queue-1", status: "cancelled" });
+    expect(repository.cancelPublishQueueItem).toHaveBeenCalledWith("queue-1");
   });
 
   it("lists publish results grouped by content for the completed tab", async () => {
@@ -2433,8 +3052,8 @@ describe("API server", () => {
     expect(repository.listInstagramTrendSearches).toHaveBeenCalledWith(brandId);
     expect(repository.deleteInstagramTrendSearch).toHaveBeenCalledWith(brandId, "hashtag-1");
     expect(repository.setInstagramTrendFavorite).toHaveBeenCalledWith(brandId, "hashtag-1", { isFavorite: true });
-    expect(repository.saveInstagramTrendSource).toHaveBeenCalledWith(brandId, "media-1");
-    expect(repository.removeInstagramTrendSource).toHaveBeenCalledWith(brandId, "media-1");
+    expect(repository.saveInstagramTrendSource).toHaveBeenCalledWith(brandId, "media-1", null);
+    expect(repository.removeInstagramTrendSource).toHaveBeenCalledWith(brandId, "media-1", null);
   });
 
   it("returns the paged brand trend archive", async () => {

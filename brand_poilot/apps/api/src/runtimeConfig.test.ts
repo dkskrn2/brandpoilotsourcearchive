@@ -7,6 +7,7 @@ function validProductionEnv(): NodeJS.ProcessEnv {
     SUPABASE_DATABASE_URL: "postgresql://database.example.com/brand_pilot",
     AUTH_FRONTEND_URL: "https://app.danbammsg.co.kr",
     WORKER_API_TOKEN: "worker-secret",
+    CONTENT_PROPOSAL_WORKER_API_TOKEN: "content-proposal-worker-secret",
     ADMIN_SERVICE_TOKEN: "admin-secret",
     CRON_SECRET: "cron-secret",
     CREDENTIAL_ENCRYPTION_KEY: "credential-secret-that-is-long-enough",
@@ -26,10 +27,21 @@ function validProductionEnv(): NodeJS.ProcessEnv {
     DEV_AUTH_ENABLED: "false",
     LOCAL_SCHEDULER_ENABLED: "false",
     INSTAGRAM_PUBLISH_ENABLED: "false",
+    AUTOMATED_CONTENT_ENABLED: "false",
+    CONTENT_PROPOSALS_ENABLED: "false",
   };
 }
 
 describe("loadApiRuntimeConfig", () => {
+  it("requires a dedicated content proposal worker token in production", () => {
+    const env = validProductionEnv();
+    delete env.CONTENT_PROPOSAL_WORKER_API_TOKEN;
+
+    expect(() => loadApiRuntimeConfig(env)).toThrow(
+      "runtime_config_missing:CONTENT_PROPOSAL_WORKER_API_TOKEN",
+    );
+  });
+
   it("reports only the missing production variable name", () => {
     const env = validProductionEnv();
     delete env.META_APP_SECRET;
@@ -70,6 +82,41 @@ describe("loadApiRuntimeConfig", () => {
     expect(() => loadApiRuntimeConfig(env)).toThrow("AUTH_FRONTEND_URL");
   });
 
+  it("allows one exact Danbam preview origin when it is explicitly configured", () => {
+    const env = validProductionEnv();
+    env.AUTH_PREVIEW_FRONTEND_URL = "https://staging-app.danbammsg.co.kr";
+    env.CORS_ALLOWED_ORIGINS = `${env.CORS_ALLOWED_ORIGINS},${env.AUTH_PREVIEW_FRONTEND_URL}`;
+
+    expect(loadApiRuntimeConfig(env).http).toEqual({
+      cookieSecure: true,
+      corsAllowedOrigins: [
+        "https://app.danbammsg.co.kr",
+        "https://www.danbammsg.co.kr",
+        "https://staging-app.danbammsg.co.kr",
+      ],
+      devAuthEnabled: false,
+      previewFrontendOrigin: "https://staging-app.danbammsg.co.kr",
+    });
+  });
+
+  it.each([
+    "https://brand-pilot-git-feature.example.vercel.app",
+    "https://staging-app.danbammsg.co.kr:8443",
+  ])("rejects an unsafe production preview origin: %s", (origin) => {
+    const env = validProductionEnv();
+    env.AUTH_PREVIEW_FRONTEND_URL = origin;
+    env.CORS_ALLOWED_ORIGINS = `${env.CORS_ALLOWED_ORIGINS},${origin}`;
+
+    expect(() => loadApiRuntimeConfig(env)).toThrow("AUTH_PREVIEW_FRONTEND_URL");
+  });
+
+  it("rejects a configured preview origin when it is missing from CORS", () => {
+    const env = validProductionEnv();
+    env.AUTH_PREVIEW_FRONTEND_URL = "https://staging-app.danbammsg.co.kr";
+
+    expect(() => loadApiRuntimeConfig(env)).toThrow("AUTH_PREVIEW_FRONTEND_URL");
+  });
+
   it("rejects production COOKIE_SECURE other than true", () => {
     const env = validProductionEnv();
     env.COOKIE_SECURE = "false";
@@ -86,7 +133,64 @@ describe("loadApiRuntimeConfig", () => {
     const config = loadApiRuntimeConfig({});
     expect(config.schedulerEnabled).toBe(false);
     expect(config.instagramPublishEnabled).toBe(false);
+    expect(config.aiContentAttachmentUploadSessionsEnabled).toBe(false);
+    expect(config.automatedContentEnabled).toBe(false);
+    expect(config.contentProposalsEnabled).toBe(false);
+    expect(config.readiness).toEqual({
+      schedulerEnabled: false,
+      publishingEnabled: false,
+      contentProposalsEnabled: false,
+    });
   });
+
+  it("keeps manual proposal and scheduled automation gates independent", () => {
+    expect(loadApiRuntimeConfig({
+      CONTENT_PROPOSALS_ENABLED: "true",
+      AUTOMATED_CONTENT_ENABLED: "false",
+    })).toMatchObject({
+      contentProposalsEnabled: true,
+      automatedContentEnabled: false,
+      readiness: { contentProposalsEnabled: true },
+    });
+    expect(loadApiRuntimeConfig({
+      CONTENT_PROPOSALS_ENABLED: "false",
+      AUTOMATED_CONTENT_ENABLED: "true",
+    })).toMatchObject({
+      contentProposalsEnabled: false,
+      automatedContentEnabled: true,
+      readiness: { contentProposalsEnabled: false },
+    });
+  });
+
+  it.each(["yes", "1", "TRUE", ""])(
+    "rejects invalid proposal gate booleans (%s)",
+    (value) => {
+      expect(() => loadApiRuntimeConfig({
+        CONTENT_PROPOSALS_ENABLED: value,
+      })).toThrow("CONTENT_PROPOSALS_ENABLED");
+      expect(() => loadApiRuntimeConfig({
+        AUTOMATED_CONTENT_ENABLED: value,
+      })).toThrow("AUTOMATED_CONTENT_ENABLED");
+    },
+  );
+
+  it("enables attachment upload sessions only with literal true", () => {
+    expect(loadApiRuntimeConfig({
+      AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED: "true",
+    }).aiContentAttachmentUploadSessionsEnabled).toBe(true);
+    expect(loadApiRuntimeConfig({
+      AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED: "false",
+    }).aiContentAttachmentUploadSessionsEnabled).toBe(false);
+  });
+
+  it.each(["yes", "1", "TRUE", ""])(
+    "rejects a non-literal attachment upload sessions boolean (%s)",
+    (value) => {
+      expect(() => loadApiRuntimeConfig({
+        AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED: value,
+      })).toThrow("AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED");
+    },
+  );
 
   it.each(["LOCAL_SCHEDULER_ENABLED", "INSTAGRAM_PUBLISH_ENABLED"])(
     "forces %s off in production",
@@ -130,6 +234,11 @@ describe("loadApiRuntimeConfig", () => {
     });
     expect(config.schedulerEnabled).toBe(false);
     expect(config.instagramPublishEnabled).toBe(false);
+    expect(config.readiness).toEqual({
+      schedulerEnabled: false,
+      publishingEnabled: false,
+      contentProposalsEnabled: false,
+    });
     expect(config.db).toEqual({
       max: 3,
       idleTimeoutMillis: 10_000,

@@ -29,6 +29,18 @@ export type ChannelStatus =
   | "mapping_required"
   | "publish_failed";
 
+export interface ChannelCapability {
+  channel: ChannelType;
+  catalogStatus: "available" | "planned";
+  connectionStatus: ChannelStatus;
+  canGenerate: boolean;
+  generationFormats: Array<"card_news" | "blog" | "single_image" | "channel_text">;
+  exportModes: Array<"image" | "html" | "text">;
+  publishModes: DeliveryFormat[];
+  readiness: "ready" | "needs_connection" | "needs_permission" | "not_supported";
+  reasonCode: string | null;
+}
+
 export interface Dashboard {
   period: "30d";
   generatedAt: string;
@@ -71,6 +83,80 @@ export interface Dashboard {
     channel: ChannelType | null;
     message: string;
   }>;
+}
+
+export interface PerformanceExperiment {
+  id: string;
+  kind?: "experiment";
+  title: string;
+  hypothesis: string;
+  contentFamily: "informational" | "marketing";
+  channelTargets: Array<"instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok" | "blog_export">;
+  outputFormats: Array<"card_news" | "blog" | "single_image" | "channel_text">;
+  performanceSnapshotIds: string[];
+}
+
+export interface PerformanceInsights {
+  period: "30d";
+  summary: {
+    dataStatus: "sufficient" | "insufficient";
+    measuredContentCount: number;
+    totalExposure: number | null;
+  };
+  windows: Array<{
+    window: "24h" | "72h" | "7d";
+    sampleSize: number;
+    averageExposure: number | null;
+  }>;
+  observations: Array<{
+    id: string;
+    kind: "observation";
+    label: string;
+    metric: { name: string; value: number | null; unit: "회"; sampleSize: number };
+    evidenceSnapshotIds: string[];
+    interpretation: null | {
+      kind: "interpretation";
+      statement: string;
+      confidence: "low" | "medium" | "high";
+    };
+  }>;
+  experiments: PerformanceExperiment[];
+  sampleSize: number;
+  lastCollectedAt: string | null;
+  topContents: Array<{
+    publishQueueId: string;
+    title: string;
+    channel: ChannelType;
+    deliveryFormat: string | null;
+    exposureCount: number | null;
+    snapshotId: string;
+    externalUrl: string | null;
+  }>;
+}
+
+export type DashboardPriorityKind =
+  | "brand_review"
+  | "content_review"
+  | "publish_failure"
+  | "channel_attention"
+  | "dm_attention";
+
+export interface DashboardPriority {
+  kind: DashboardPriorityKind;
+  severity: "critical" | "warning" | "info";
+  count: number;
+  title: string;
+  description: string;
+  href: string;
+  actionLabel: string;
+}
+
+export interface DashboardKpi {
+  label: string;
+  value: number | null;
+  unit: "건" | "회";
+  description: string;
+  tone?: "danger";
 }
 
 export type ReviewStatus =
@@ -601,6 +687,59 @@ export interface SourceCrawlRun extends PipelineRunResult {
 export interface SourceCreateResult {
   source: SourceUrl;
   initialCrawl: SourceCrawlRun;
+}
+
+export type ReferenceContentPurpose = "informational" | "marketing" | "both";
+
+export interface ReferenceItem {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  kind: "saved_brand" | "saved_content" | "trend" | "external_url" | "upload" | "owned_content" | string;
+  contentPurpose: ReferenceContentPurpose;
+  origin: string;
+  title: string;
+  previewUrl: string | null;
+  sourceUrl: string | null;
+  format: string | null;
+  metadata: Record<string, unknown>;
+  favorite: boolean;
+  archivedAt: string | null;
+  referenceBrandId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReferenceDetail extends ReferenceItem {
+  description: string | null;
+  body: string | null;
+  snapshot: {
+    id: string;
+    fetchedAt: string;
+    metadata: Record<string, unknown>;
+  } | null;
+}
+
+export interface ReferencePattern {
+  observations: string[];
+  interpretation: string;
+  applicationIdeas: string[];
+  doNotCopy: string[];
+  confidence: number;
+  analysisVersion: string;
+  updatedAt: string;
+}
+
+export interface ReferenceBrand {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  platform: string;
+  handle: string;
+  displayName: string;
+  publicSourceUrl: string;
+  profileSnapshot: Record<string, unknown>;
+  previewUrl: string | null;
 }
 
 export interface PublishSlot {

@@ -12,11 +12,13 @@ const kindLabels: Record<InstagramTrendMedia["kind"], string> = {
 export function TrendMediaDetailDialog({
   media,
   onClose,
-  onSave
+  onSave,
+  onSaveAuthor,
 }: {
   media: InstagramTrendMedia;
   onClose: () => void;
   onSave: () => Promise<{ alreadySaved: boolean }>;
+  onSaveAuthor?: () => Promise<unknown>;
 }) {
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -25,6 +27,9 @@ export function TrendMediaDetailDialog({
   const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(media.isSaved);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [isSavingAuthor, setIsSavingAuthor] = useState(false);
+  const [authorSaved, setAuthorSaved] = useState(false);
+  const [authorSaveError, setAuthorSaveError] = useState<string | null>(null);
   const isVideo = media.kind === "video" || media.kind === "reel";
   const previewUrl = media.previewUrl ?? media.mediaUrl;
   const authorLabel = media.username ? `@${media.username}` : "Instagram 인기 콘텐츠";
@@ -82,6 +87,20 @@ export function TrendMediaDetailDialog({
     }
   }
 
+  async function saveAuthor() {
+    if (!onSaveAuthor || authorSaved || isSavingAuthor) return;
+    setIsSavingAuthor(true);
+    setAuthorSaveError(null);
+    try {
+      await onSaveAuthor();
+      setAuthorSaved(true);
+    } catch {
+      setAuthorSaveError("작성자를 저장한 브랜드에 추가하지 못했습니다. 다시 시도하세요.");
+    } finally {
+      setIsSavingAuthor(false);
+    }
+  }
+
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
       <section ref={dialogRef} className="modal-panel trend-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="trend-detail-title">
@@ -117,7 +136,14 @@ export function TrendMediaDetailDialog({
           </div>
         </div>
         <footer className="trend-detail-dialog__footer">
-          {saveError ? <span className="trend-detail-dialog__error" role="alert">{saveError}</span> : null}
+          {saveError || authorSaveError ? (
+            <span className="trend-detail-dialog__error" role="alert">{saveError ?? authorSaveError}</span>
+          ) : null}
+          {onSaveAuthor ? (
+            <button className="button" type="button" disabled={authorSaved || isSavingAuthor} onClick={saveAuthor}>
+              {authorSaved ? "작성자 저장됨" : isSavingAuthor ? "작성자 저장 중..." : "작성자 저장"}
+            </button>
+          ) : null}
           <a className="button" href={media.permalink} target="_blank" rel="noreferrer">Instagram에서 보기</a>
           <button className="button primary" type="button" disabled={saved || isSaving} onClick={saveSource}>
             {saved ? "저장됨" : isSaving ? "저장 중..." : "참고 소스로 저장"}

@@ -14,6 +14,9 @@ permissions:
 env:
   REGISTRY: ghcr.io
   API_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-api
+  DM_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-dm-worker
+  WIKI_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-wiki-worker
+  CONTENT_PROPOSAL_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-content-proposal-worker
 
 jobs:
   verify:
@@ -43,7 +46,10 @@ jobs:
           npm run test:migrations
           npm run test --workspace @brand-pilot/api
           npm run test --workspace @brand-pilot/dm-worker
+          npm run test --workspace @brand-pilot/content-proposal-worker
           npm run build --workspace @brand-pilot/api
+          npm run build --workspace @brand-pilot/dm-worker
+          npm run build --workspace @brand-pilot/content-proposal-worker
           shellcheck --exclude=SC1091,SC2034,SC2317 deploy/scripts/*.sh
           npm run test:deployment
 
@@ -73,9 +79,17 @@ jobs:
         run: |
           set -Eeuo pipefail
           image="${REGISTRY}/${API_IMAGE_NAME,,}"
-          [[ "$image" =~ ^ghcr\.io/[a-z0-9._/-]+$ ]]
-          [[ "$image" != *$'\n'* && "$image" != *$'\r'* ]]
+          dm_worker_image="${REGISTRY}/${DM_WORKER_IMAGE_NAME,,}"
+          wiki_worker_image="${REGISTRY}/${WIKI_WORKER_IMAGE_NAME,,}"
+          content_proposal_worker_image="${REGISTRY}/${CONTENT_PROPOSAL_WORKER_IMAGE_NAME,,}"
+          for value in "$image" "$dm_worker_image" "$wiki_worker_image" "$content_proposal_worker_image"; do
+            [[ "$value" =~ ^ghcr\.io/[a-z0-9._/-]+$ ]]
+            [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]]
+          done
           printf 'name=%s\n' "$image" >> "$GITHUB_OUTPUT"
+          printf 'dm_worker=%s\n' "$dm_worker_image" >> "$GITHUB_OUTPUT"
+          printf 'wiki_worker=%s\n' "$wiki_worker_image" >> "$GITHUB_OUTPUT"
+          printf 'content_proposal_worker=%s\n' "$content_proposal_worker_image" >> "$GITHUB_OUTPUT"
 
       - name: Build and push API
         id: api
@@ -90,6 +104,45 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
+      - name: Build and push DM worker
+        id: dm_worker
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: brand_poilot
+          file: brand_poilot/workers/brand-pilot-dm-worker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.image.outputs.dm_worker }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Build and push Wiki worker
+        id: wiki_worker
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: brand_poilot
+          file: brand_poilot/workers/brand-pilot-dm-worker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.image.outputs.wiki_worker }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Build and push content proposal worker
+        id: content_proposal_worker
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: brand_poilot
+          file: brand_poilot/workers/brand-pilot-content-proposal-worker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.image.outputs.content_proposal_worker }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
       - name: Create release manifest
         working-directory: brand_poilot
         shell: bash
@@ -97,6 +150,12 @@ jobs:
           RELEASE_SHA: ${{ github.sha }}
           API_IMAGE: ${{ steps.image.outputs.name }}
           API_DIGEST: ${{ steps.api.outputs.digest }}
+          DM_WORKER_IMAGE: ${{ steps.image.outputs.dm_worker }}
+          DM_WORKER_DIGEST: ${{ steps.dm_worker.outputs.digest }}
+          WIKI_WORKER_IMAGE: ${{ steps.image.outputs.wiki_worker }}
+          WIKI_WORKER_DIGEST: ${{ steps.wiki_worker.outputs.digest }}
+          CONTENT_PROPOSAL_WORKER_IMAGE: ${{ steps.image.outputs.content_proposal_worker }}
+          CONTENT_PROPOSAL_WORKER_DIGEST: ${{ steps.content_proposal_worker.outputs.digest }}
         run: |
           set -Eeuo pipefail
           caddy_line="$(cat deploy/caddy-image.env)"
@@ -106,9 +165,14 @@ jobs:
 
           [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$API_IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+$ ]]
-          [[ "$API_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          for image in "$API_IMAGE" "$DM_WORKER_IMAGE" "$WIKI_WORKER_IMAGE" "$CONTENT_PROPOSAL_WORKER_IMAGE"; do
+            [[ "$image" =~ ^ghcr\.io/[a-z0-9._/-]+$ ]]
+          done
+          for digest in "$API_DIGEST" "$DM_WORKER_DIGEST" "$WIKI_WORKER_DIGEST" "$CONTENT_PROPOSAL_WORKER_DIGEST"; do
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          done
           [[ "$CADDY_IMAGE" =~ ^docker\.io/library/caddy@sha256:[0-9a-f]{64}$ ]]
-          for value in "$RELEASE_SHA" "$API_IMAGE" "$API_DIGEST" "$CADDY_IMAGE"; do
+          for value in "$RELEASE_SHA" "$API_IMAGE" "$API_DIGEST" "$DM_WORKER_IMAGE" "$DM_WORKER_DIGEST" "$WIKI_WORKER_IMAGE" "$WIKI_WORKER_DIGEST" "$CONTENT_PROPOSAL_WORKER_IMAGE" "$CONTENT_PROPOSAL_WORKER_DIGEST" "$CADDY_IMAGE"; do
             [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]]
           done
 
@@ -116,6 +180,9 @@ jobs:
             printf 'RELEASE_SCHEMA=1\n'
             printf 'RELEASE_SHA=%s\n' "$RELEASE_SHA"
             printf 'API_IMAGE=%s@%s\n' "$API_IMAGE" "$API_DIGEST"
+            printf 'DM_WORKER_IMAGE=%s@%s\n' "$DM_WORKER_IMAGE" "$DM_WORKER_DIGEST"
+            printf 'WIKI_WORKER_IMAGE=%s@%s\n' "$WIKI_WORKER_IMAGE" "$WIKI_WORKER_DIGEST"
+            printf 'CONTENT_PROPOSAL_WORKER_IMAGE=%s@%s\n' "$CONTENT_PROPOSAL_WORKER_IMAGE" "$CONTENT_PROPOSAL_WORKER_DIGEST"
             printf 'CADDY_IMAGE=%s\n' "$CADDY_IMAGE"
             printf 'CANARY_HOST=canary-api.danbammsg.co.kr\n'
             printf 'PRIMARY_HOST=api.danbammsg.co.kr\n'

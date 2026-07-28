@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildWikiChunks } from "./wiki.js";
+import * as wiki from "./wiki.js";
 
 describe("buildWikiChunks", () => {
   it("uses enabled FAQ entries and only the latest successful owned snapshot", () => {
-    const chunks = buildWikiChunks({
+    const chunks = wiki.buildWikiChunks({
       faqEntries: [{ id: "faq-1", question: "환불", answer: "결제 후 7일 이내", enabled: true }],
       sourceSnapshots: [
         { id: "old-owned", sourceUrlId: "source-1", sourceType: "owned", status: "succeeded", title: "오래된 소개", content: "오래된 내용", fetchedAt: "2026-07-01T00:00:00.000Z" },
@@ -20,7 +20,7 @@ describe("buildWikiChunks", () => {
   });
 
   it("limits chunks to 800 characters with a 120 character overlap", () => {
-    const chunks = buildWikiChunks({
+    const chunks = wiki.buildWikiChunks({
       faqEntries: [{ id: "faq-1", question: "긴 답변", answer: "가".repeat(900), enabled: true }],
       sourceSnapshots: [],
     });
@@ -28,5 +28,33 @@ describe("buildWikiChunks", () => {
     expect(chunks).toHaveLength(2);
     expect(chunks[0].content).toHaveLength(800);
     expect(chunks[1].content).toContain(chunks[0].content.slice(-120));
+  });
+
+  it("parses the complete Wiki source-kind contract and rejects unknown values", () => {
+    const parseWikiSourceKind = (
+      wiki as unknown as {
+        parseWikiSourceKind?: (value: unknown) => string;
+      }
+    ).parseWikiSourceKind;
+    expect(parseWikiSourceKind).toBeTypeOf("function");
+    expect([
+      "faq",
+      "product",
+      "product_service",
+      "service",
+      "policy",
+      "guide",
+      "owned_snapshot",
+    ].map((kind) => parseWikiSourceKind!(kind))).toEqual([
+      "faq",
+      "product",
+      "product_service",
+      "service",
+      "policy",
+      "guide",
+      "owned_snapshot",
+    ]);
+    expect(() => parseWikiSourceKind!("reference_snapshot"))
+      .toThrow("wiki_source_kind_invalid");
   });
 });

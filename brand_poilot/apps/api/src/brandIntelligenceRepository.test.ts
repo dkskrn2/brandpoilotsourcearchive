@@ -69,7 +69,8 @@ describe("brand intelligence repository", () => {
       create table content_subcategories (id uuid primary key, code text unique, name text not null);
       create table brand_profiles (
         id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null unique,
-        primary_customer text, description text, primary_category_id uuid, active_brand_analysis_id uuid
+        primary_customer text, description text, primary_category_id uuid, active_brand_analysis_id uuid,
+        active_brand_core_id uuid
       );
       create table brand_analysis_runs (
         id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null,
@@ -81,6 +82,17 @@ describe("brand intelligence repository", () => {
         completed_at timestamptz, confirmed_at timestamptz, unique (brand_id, idempotency_key)
       );
       create unique index one_active on brand_analysis_runs(brand_id) where is_active;
+      create table brand_core_versions (
+        id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null,
+        source_analysis_id uuid, version integer not null, status text not null,
+        core_json jsonb not null, evidence_json jsonb not null default '[]'::jsonb,
+        review_state_json jsonb not null default '{}'::jsonb, created_by text not null,
+        created_by_user_id uuid, approved_by_user_id uuid, approved_at timestamptz,
+        created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+        unique (workspace_id, brand_id, version)
+      );
+      create unique index one_approved_brand_core
+        on brand_core_versions(workspace_id, brand_id) where status = 'approved';
       create table source_urls (
         id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null,
         source_type text not null, url text not null, url_hash text not null, domain text,
@@ -149,11 +161,95 @@ describe("brand intelligence repository", () => {
 
     const profile = await database.query("select primary_customer, description, active_brand_analysis_id from brand_profiles where brand_id = $1", [brandId]);
     expect(profile.rows[0]).toMatchObject({ primary_customer: "수정한 고객", description: "사업 소개", active_brand_analysis_id: requested.id });
+    const core = await database.query(
+      "select status, core_json from brand_core_versions where brand_id = $1",
+      [brandId],
+    );
+    expect(core.rows[0]).toMatchObject({
+      status: "approved",
+      core_json: {
+        contractVersion: "brand-core.v1",
+        audiences: [{ name: "수정한 고객", problem: "", desiredOutcome: "" }],
+      },
+    });
     const builds = await database.query("select count(*)::int as count from wiki_build_requests where brand_id = $1", [brandId]);
     expect((builds.rows[0] as { count: number } | undefined)?.count).toBe(1);
     const knowledge = await database.query("select content, direct_reply_enabled from knowledge_entries where brand_id = $1", [brandId]);
     expect(knowledge.rows[0]).toMatchObject({ direct_reply_enabled: false });
     expect(String((knowledge.rows[0] as { content: string }).content)).toContain("수정한 고객");
+  });
+
+  it("keeps the confirmed edited result active when a later analysis completes", async () => {
+    const repository = createBrandIntelligenceRepository(pglitePool(database));
+    const first = await prepareAnalysis(repository, {
+      ownedUrl: "https://example.com",
+      idempotencyKey: "confirmed-analysis",
+    });
+    await repository.updateBrandAnalysisDraft({
+      workspaceId,
+      brandId,
+      analysisId: first.id,
+      editedResult: result("사용자 확정 고객"),
+    });
+    await repository.confirmBrandAnalysis({ workspaceId, brandId, analysisId: first.id });
+
+    const second = await repository.requestBrandAnalysis({
+      workspaceId,
+      brandId,
+      ownedUrl: "https://example.com/new",
+      uploadIds: [],
+      idempotencyKey: "later-analysis",
+    });
+    const claim = await repository.claimBrandAnalysis({ workerId: "worker-2", leaseSeconds: 60 });
+    await repository.completeBrandAnalysis({
+      analysisId: second.id,
+      workerId: "worker-2",
+      leaseToken: claim!.leaseToken,
+      evidence: [],
+      result: result("재분석 제안 고객"),
+    });
+
+    const current = await repository.getCurrentBrandIntelligence({ workspaceId, brandId });
+    expect(current).toMatchObject({
+      id: first.id,
+      status: "confirmed",
+      isActive: true,
+      effectiveResult: { primaryTarget: "사용자 확정 고객" },
+    });
+    const rows = await database.query(
+      `select id, result_json, edited_result_json, is_active
+         from brand_analysis_runs
+        where brand_id = $1
+        order by created_at`,
+      [brandId],
+    );
+    expect(rows.rows).toEqual([
+      expect.objectContaining({
+        id: first.id,
+        result_json: expect.objectContaining({ primaryTarget: "초기 고객" }),
+        edited_result_json: expect.objectContaining({ primaryTarget: "사용자 확정 고객" }),
+        is_active: true,
+      }),
+      expect.objectContaining({
+        id: second.id,
+        result_json: expect.objectContaining({ primaryTarget: "재분석 제안 고객" }),
+        edited_result_json: null,
+        is_active: false,
+      }),
+    ]);
+    const profile = await database.query(
+      "select primary_customer, active_brand_analysis_id from brand_profiles where brand_id = $1",
+      [brandId],
+    );
+    expect(profile.rows[0]).toMatchObject({
+      primary_customer: "사용자 확정 고객",
+      active_brand_analysis_id: first.id,
+    });
+    const builds = await database.query(
+      "select count(*)::int as count from wiki_build_requests where brand_id = $1",
+      [brandId],
+    );
+    expect((builds.rows[0] as { count: number }).count).toBe(1);
   });
 
   it("rejects edits before analysis and isolates brand reads", async () => {

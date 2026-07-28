@@ -57,6 +57,17 @@ test("AI 콘텐츠 저장소 계약은 중앙 ApiRepository에 모두 노출된�
   }
 });
 
+test("AI 콘텐츠 생성 쓰기 계약은 인증 actor를 필수로 요구한다", async () => {
+  const repository = await readFile("apps/api/src/aiContentRepository.ts", "utf8");
+  const types = await readFile("apps/api/src/types.ts", "utf8");
+  for (const source of [repository, types]) {
+    assert.doesNotMatch(source, /createAiContentAnalysis\(input:[^;]*actorUserId\?:/);
+    assert.doesNotMatch(source, /updateAiContentDraft\(input:[^;]*actorUserId\?:/);
+    assert.doesNotMatch(source, /startAiContentGeneration\(input:[^;]*actorUserId\?:/);
+  }
+  assert.match(repository, /interface AuthenticatedBrandScope extends BrandScope\s*\{\s*actorUserId: string;/);
+});
+
 test("관리자 API는 별도 namespace와 server-only credential 계약을 사용한다", async () => {
   const [server, index, envExample, adminTypes] = await Promise.all([
     readFile("apps/api/src/adminServer.ts", "utf8"),
@@ -262,10 +273,13 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션은 001부터 054까지 정확한 이름으로 존재한다", async () => {
+test("데이터베이스 마이그레이션 registry는 AI attachment lifecycle 065까지 포함한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
+  const reservedProgramMigrations = migrationFiles.filter(
+    (file) => file.startsWith("059_") || file.startsWith("060_"),
+  );
   assert.deepEqual(migrationFiles, [
     "001_initial_schema.sql",
     "002_source_content_items.sql",
@@ -321,10 +335,396 @@ test("데이터베이스 마이그레이션은 001부터 054까지 정확한 이
     "052_ai_content_subject_appeal_regeneration_keys.sql",
     "053_dm_manual_delivery_audit.sql",
     "054_feedback_submissions.sql",
+    "055_brand_core_and_rules.sql",
+    "056_product_service_library.sql",
+    "057_wiki_source_kinds.sql",
+    "058_avatar_and_reference_libraries.sql",
+    ...reservedProgramMigrations,
+    "061_avatar_image_checksum_uniqueness.sql",
+    "062_avatar_upload_cancellation.sql",
+    "063_avatar_upload_finalization.sql",
+    "064_reference_upload_finalization.sql",
+    "065_ai_content_attachment_upload_sessions.sql",
+    "066_ai_content_analyzed_subject_orchestration.sql",
   ]);
+  assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("059_")).length <= 1);
+  assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("060_")).length <= 1);
+  if (reservedProgramMigrations.some((file) => file.startsWith("060_"))) {
+    assert.ok(reservedProgramMigrations.includes("060_content_orchestration.sql"));
+  }
 });
 
-test("적용된 031과 033 마이그레이션은 원본 체크섬을 유지한다", async () => {
+test("066 extends orchestration with immutable analyzed-subject snapshots", async () => {
+  const migration = await readFile(
+    "db/migrations/066_ai_content_analyzed_subject_orchestration.sql",
+    "utf8",
+  );
+  assert.match(migration, /create\s+table\s+if\s+not\s+exists\s+ai_content_analyzed_subject_snapshots/i);
+  assert.match(migration, /analyzed_subject_snapshot_immutable/i);
+  assert.match(migration, /kind'\s*=\s*'analyzed_subject'/i);
+  assert.match(migration, /analysis\.status\s+in\s*\('ready','partial'\)/i);
+  assert.match(migration, /analysis\.workspace_id=sealed\.workspace_id/i);
+  assert.match(migration, /analysis\.brand_id=sealed\.brand_id/i);
+  assert.match(migration, /add\s+column\s+if\s+not\s+exists\s+created_by_user_id\s+uuid/i);
+  assert.match(migration, /foreign\s+key\s*\(workspace_id,created_by_user_id\)/i);
+  assert.match(migration, /foreign\s+key\s*\(workspace_id,updated_by_user_id\)/i);
+});
+
+test("065 defines the parent-independent AI attachment lifecycle contract", async () => {
+  const migration = await readFile(
+    "db/migrations/065_ai_content_attachment_upload_sessions.sql",
+    "utf8",
+  );
+
+  for (const table of [
+    "ai_content_attachment_upload_sessions",
+    "ai_content_attachment_deletion_jobs",
+  ]) {
+    assert.match(migration, new RegExp(`create\\s+table\\s+${table}`, "i"));
+  }
+  for (const column of [
+    "attachments_locked_at",
+    "generation_input_snapshot",
+    "terminal_at",
+    "retryable_until",
+    "upload_session_id",
+    "deletion_reason",
+    "physical_delete_status",
+    "physically_deleted_at",
+  ]) {
+    assert.match(migration, new RegExp(`\\b${column}\\b`, "i"));
+  }
+  assert.match(
+    migration,
+    /ai_content_attachment_upload_sessions_actor_fk[\s\S]*on delete no action[\s\S]*deferrable initially deferred/i,
+  );
+  assert.match(
+    migration,
+    /create unique index ai_content_attachment_upload_sessions_storage_path_uq[\s\S]*where not is_legacy_backfill/i,
+  );
+  assert.match(
+    migration,
+    /create table ai_content_attachment_storage_path_guards[\s\S]*storage_path text primary key/i,
+  );
+  assert.match(
+    migration,
+    /insert into ai_content_attachment_storage_path_guards[\s\S]*on conflict \(storage_path\) do update/i,
+  );
+  assert.match(
+    migration,
+    /nonlegacy_session_count = 0[\s\S]*excluded\.nonlegacy_session_count = 0[\s\S]*legacy_session_count = 0/i,
+  );
+  assert.match(
+    migration,
+    /ai_content_attachment_upload_sessions_generation_fk_idx[\s\S]*generation_id[\s\S]*workspace_id[\s\S]*brand_id/i,
+  );
+  assert.match(
+    migration,
+    /ai_content_attachment_upload_sessions_actor_fk_idx[\s\S]*workspace_id, created_by_user_id[\s\S]*where created_by_user_id is not null/i,
+  );
+  assert.match(
+    migration,
+    /old\.status <> 'pending'[\s\S]*confirmed_attachment_id[\s\S]*last_error_code[\s\S]*is_legacy_backfill[\s\S]*transition_invalid/i,
+  );
+  assert.doesNotMatch(
+    migration,
+    /old\.status <> 'pending'[\s\S]*new\.storage_url is distinct from old\.storage_url[\s\S]*transition_invalid/i,
+  );
+  assert.match(
+    migration,
+    /atomic schema change and data backfill[\s\S]*Operations must approve row counts[\s\S]*maintenance window/i,
+  );
+  assert.match(migration, /deferrable\s+initially\s+deferred[\s\S]*on delete no action/i);
+  assert.match(migration, /created_by_user_id is not null[\s\S]*is_legacy_backfill[\s\S]*confirmed_attachment_id is not null/i);
+  assert.match(migration, /before delete[\s\S]*ai_content_generation_attachments/i);
+  assert.match(migration, /before delete[\s\S]*ai_content_attachment_upload_sessions/i);
+  assert.match(migration, /on conflict[\s\S]*do nothing/i);
+  assert.match(migration, /contentGenerationInput/);
+  assert.match(migration, /attachmentSnapshotMissingIds/);
+  assert.doesNotMatch(
+    migration,
+    /alter\s+table\s+ai_content_generation_attachments[\s\S]*add\s+column\s+(?:attempt|retry|lease|last_error)/i,
+  );
+});
+
+test("063 keeps cancelled sessions pending through token expiry and schedules fair retries", async () => {
+  const migration = await readFile("db/migrations/063_avatar_upload_finalization.sql", "utf8");
+  assert.match(migration, /reference_upload_sessions[\s\S]*cancelled_at/i);
+  assert.match(migration, /avatar_upload_cancellation_receipts[\s\S]*token_expires_at/i);
+  assert.match(migration, /avatar_upload_cancellation_receipts[\s\S]*next_attempt_at/i);
+  assert.match(migration, /status[\s\S]*pending[\s\S]*completed/i);
+});
+
+test("064 defines an independently scoped and fairly retried reference upload finalizer", async () => {
+  const migration = await readFile("db/migrations/064_reference_upload_finalization.sql", "utf8");
+  assert.match(migration, /create\s+table\s+if\s+not\s+exists\s+reference_upload_cancellation_receipts/i);
+  for (const column of [
+    "session_id", "workspace_id", "brand_id", "created_by_user_id",
+    "storage_path", "storage_path_prefix", "token_expires_at", "status",
+    "next_attempt_at", "attempt_count", "last_error",
+  ]) {
+    assert.match(migration, new RegExp(`\\b${column}\\b`, "i"));
+  }
+  assert.match(migration, /reason[\s\S]*'user'[\s\S]*'expired'/i);
+  assert.match(migration, /reference_upload_cancellation_receipts_due_idx/i);
+  assert.match(migration, /where\s+status\s*=\s*'pending'/i);
+  assert.doesNotMatch(migration, /\bavatar_id\b/i);
+});
+
+test("062는 exact-path avatar cancellation receipt와 expiry cleanup index를 정의한다", async () => {
+  const migration = await readFile("db/migrations/062_avatar_upload_cancellation.sql", "utf8");
+  assert.match(migration, /add\s+column\s+if\s+not\s+exists\s+storage_path\s+text/i);
+  assert.match(migration, /create\s+table\s+if\s+not\s+exists\s+avatar_upload_cancellation_receipts/i);
+  assert.match(migration, /session_id\s+uuid\s+primary\s+key/i);
+  assert.match(migration, /reason\s+text\s+not\s+null\s+check\s*\(\s*reason\s+in\s*\(\s*'user',\s*'expired'\s*\)/i);
+  assert.match(migration, /reference_upload_sessions_avatar_expiry_cleanup_idx/i);
+});
+
+test("058은 avatar와 typed-origin reference library 계약을 정의한다", async () => {
+  const migration = await readFile(
+    "db/migrations/058_avatar_and_reference_libraries.sql",
+    "utf8",
+  );
+
+  for (const table of [
+    "brand_avatars",
+    "brand_avatar_images",
+    "reference_brands",
+    "reference_items",
+    "reference_item_source_url_provenance",
+    "reference_upload_sessions",
+    "reference_patterns",
+  ]) {
+    assert.match(migration, new RegExp(`create\\s+table\\s+if\\s+not\\s+exists\\s+${table}\\b`, "i"));
+  }
+
+  assert.match(migration, /kind\s+in\s*\(\s*'saved_brand',\s*'saved_content',\s*'trend',\s*'external_url',\s*'upload',\s*'owned_performance'\s*\)/i);
+  assert.match(migration, /content_purpose\s+in\s*\(\s*'informational',\s*'marketing',\s*'both'\s*\)/i);
+  assert.match(migration, /num_nonnulls\s*\(\s*reference_brand_id,\s*source_url_id,\s*saved_trend_id,\s*channel_output_id,\s*storage_artifact_id\s*\)\s*=\s*1/i);
+  assert.doesNotMatch(migration, /\borigin_id\s+uuid\b/i);
+  assert.doesNotMatch(migration, /\b(likeness|consent)\b/i);
+  assert.match(migration, /brand_avatar_images_mime_type_check[\s\S]*'image\/png'[\s\S]*'image\/jpeg'[\s\S]*'image\/webp'/i);
+  assert.match(migration, /brand_avatar_images_size_check[\s\S]*5242880/i);
+  assert.match(migration, /create\s+table\s+if\s+not\s+exists\s+brand_avatars\s*\([\s\S]*?created_by_user_id\s+uuid\s+not\s+null/i);
+  assert.match(migration, /create\s+table\s+if\s+not\s+exists\s+brand_avatar_images\s*\([\s\S]*?created_by_user_id\s+uuid\s+not\s+null/i);
+  assert.match(migration, /brand_avatars_one_active_default/i);
+  assert.match(migration, /brand_avatar_images_one_representative/i);
+  assert.match(migration, /create\s+(?:or\s+replace\s+)?function[\s\S]*brand_avatar[\s\S]*image_count[\s\S]*representative_count/i);
+  assert.match(migration, /create\s+constraint\s+trigger[\s\S]*deferrable\s+initially\s+deferred/i);
+  assert.match(migration, /reference_items_saved_trend_origin_unique/i);
+  assert.match(migration, /insert\s+into\s+reference_item_source_url_provenance/i);
+  assert.match(migration, /from\s+brand_trend_saved_media/i);
+  assert.match(migration, /source_type\s*=\s*'reference'/i);
+  assert.match(migration, /not\s+exists\s*\([\s\S]*brand_trend_saved_media/i);
+});
+
+test("060은 tenant-safe content orchestration과 재현 가능한 snapshot 계약을 정의한다", async () => {
+  const [migration, attachmentMigration, aiContentRepository, crawlerRepository] = await Promise.all([
+    readFile("db/migrations/060_content_orchestration.sql", "utf8"),
+    readFile("db/migrations/065_ai_content_attachment_upload_sessions.sql", "utf8"),
+    readFile("apps/api/src/aiContentRepository.ts", "utf8"),
+    readFile("apps/api/src/repository.ts", "utf8"),
+  ]);
+
+  for (const column of [
+    "content_family",
+    "output_format",
+    "subject_mode",
+    "product_service_id",
+    "orchestration_snapshot",
+    "avatar_snapshot",
+  ]) {
+    assert.match(migration, new RegExp(`add\\s+column\\s+if\\s+not\\s+exists\\s+${column}\\b`, "i"));
+  }
+  assert.match(migration, /content_family[\s\S]*'informational'[\s\S]*'marketing'/i);
+  assert.match(migration, /output_format[\s\S]*'card_news'[\s\S]*'blog'[\s\S]*'single_image'[\s\S]*'channel_text'/i);
+  assert.match(migration, /subject_mode[\s\S]*'brand_topic'[\s\S]*'product_service'[\s\S]*'new_subject'/i);
+  assert.match(migration, /when\s+type\s*=\s*'card_news'\s+then\s+'informational'/i);
+  assert.match(migration, /when\s+type\s*=\s*'marketing'\s+then\s+'single_image'/i);
+
+  assert.match(migration, /add\s+column\s+if\s+not\s+exists\s+reference_item_id\s+uuid/i);
+  assert.match(migration, /add\s+column\s+if\s+not\s+exists\s+roles_json\s+jsonb/i);
+  assert.match(migration, /jsonb_array_length\s*\(\s*value\s*\)\s+between\s+1\s+and\s+3/i);
+  for (const role of ["planning", "copy_pattern", "visual_composition"]) {
+    assert.match(migration, new RegExp(`'${role}'`, "i"));
+  }
+  assert.match(migration, /where\s+reference_item_id\s+is\s+not\s+null/i);
+  assert.match(migration, /ai_content_generation_reference_migration_audits/i);
+  assert.doesNotMatch(migration, /\b(?:truncate|delete\s+from\s+ai_content_generation_references)\b/i);
+
+  for (const table of [
+    "ai_content_proposal_batches",
+    "ai_content_proposals",
+    "ai_content_proposal_jobs",
+    "ai_content_approved_proposal_versions",
+    "ai_content_generation_briefs",
+    "ai_content_create_idempotency_records",
+    "reference_snapshots",
+    "reference_pattern_versions",
+    "ai_content_wiki_version_snapshots",
+    "ai_content_one_time_avatar_receipts",
+    "ai_content_one_time_avatar_revocations",
+  ]) {
+    assert.match(migration, new RegExp(`create\\s+table\\s+if\\s+not\\s+exists\\s+${table}\\b`, "i"));
+  }
+  assert.match(migration, /origin[\s\S]*'manual'[\s\S]*'scheduled_crawl'/i);
+  assert.match(migration, /status[\s\S]*'queued'[\s\S]*'building'[\s\S]*'ready'[\s\S]*'failed'/i);
+  assert.match(migration, /position[\s\S]*between\s+1\s+and\s+3/i);
+  assert.match(migration, /where\s+status\s*=\s*'selected'/i);
+  assert.match(migration, /for\s+update/i);
+  assert.match(migration, /set\s+status\s*=\s*'dismissed'/i);
+  assert.match(migration, /dismissed_by_user_id/i);
+  assert.match(migration, /dismissed_at/i);
+  assert.match(migration, /lease_expires_at/i);
+  assert.match(migration, /attempt_count[\s\S]*max_attempts/i);
+  assert.doesNotMatch(migration, /ai_content_proposal_jobs[\s\S]*\bpayload_json\b/i);
+
+  for (const key of [
+    "sourceId",
+    "url",
+    "crawledAt",
+    "contentHash",
+    "summary",
+    "brandCoreVersionId",
+    "approvedProposalVersionId",
+    "approvedProposalSnapshot",
+    "ruleSetVersionId",
+    "subject",
+    "wikiSnapshots",
+    "proposalId",
+    "snapshotId",
+    "patternVersionId",
+    "assetVersionId",
+    "promptDefinitionVersions",
+  ]) {
+    assert.match(migration, new RegExp(key, "i"));
+  }
+  assert.match(migration, /source_urls_content_purpose_idx/i);
+  assert.match(migration, /reference_items_brand_purpose_active_idx/i);
+  assert.match(migration, /idempotency_conflict/i);
+  assert.match(migration, /reference_snapshot_immutable/i);
+  assert.match(migration, /reference_pattern_version_immutable/i);
+  assert.match(migration, /wiki_version_snapshot_immutable/i);
+  assert.match(migration, /ai_content_actor_is_active/i);
+  assert.match(migration, /one_time_avatar_receipt_invalid/i);
+  assert.match(migration, /one_time_avatar_receipt_immutable/i);
+  assert.match(migration, /one_time_avatar_revocation_immutable/i);
+  assert.match(migration, /revoke_ai_content_one_time_avatar_receipt/i);
+  assert.match(migration, /one_time_avatar_receipt_revoked/i);
+  assert.doesNotMatch(migration, /ai_content_attachment_upload_sessions/i);
+  assert.doesNotMatch(migration, /ai_content_generation_attachments/i);
+  assert.match(
+    migration,
+    /from\s+ai_content_proposal_batches\s+batch[\s\S]*?for\s+update;[\s\S]*?from\s+ai_content_proposals\s+proposal[\s\S]*?for\s+update;/i,
+  );
+  assert.match(attachmentMigration, /seal_ai_content_one_time_avatar_receipt_from_upload/i);
+  assert.match(
+    attachmentMigration,
+    /revoke_ai_content_one_time_avatar_on_attachment_unavailable/i,
+  );
+  assert.match(
+    attachmentMigration,
+    /from ai_content_one_time_avatar_receipts receipt[\s\S]*join ai_content_generation_attachments attachment[\s\S]*attachment\.generation_id = receipt\.generation_id[\s\S]*attachment\.workspace_id = receipt\.workspace_id[\s\S]*attachment\.brand_id = receipt\.brand_id[\s\S]*attachment\.id = receipt\.id[\s\S]*attachment\.storage_path = receipt\.storage_path[\s\S]*attachment\.deleted_at is not null[\s\S]*attachment\.physical_delete_status <> 'none'/i,
+  );
+  assert.match(migration, /proposal_generation_family_mismatch/i);
+  assert.match(migration, /generation_canonical_mapping_missing/i);
+  assert.match(migration, /ai_content_versioned_snapshot_is_valid/i);
+  assert.match(migration, /approved_proposal_versions_json_identity_check/i);
+  assert.match(migration, /generation_briefs_json_identity_check/i);
+  assert.match(migration, /actor_user_id[\s\S]*operation[\s\S]*client_request_id[\s\S]*normalized_payload_hash/i);
+  assert.doesNotMatch(migration, /'ruleSetId'/);
+  assert.doesNotMatch(migration, /'referenceSnapshots'/);
+  assert.doesNotMatch(migration, /'imageSnapshots'/);
+  assert.match(aiContentRepository, /reference_items[\s\S]*content_purpose/i);
+  assert.match(crawlerRepository, /enqueueSourceContentTopic[\s\S]*contentPurpose[\s\S]*source\.content_purpose/i);
+  assert.doesNotMatch(
+    crawlerRepository,
+    /content_purpose\s+in\s*\(\s*'informational',\s*'marketing',\s*'both'\s*\)/i,
+  );
+});
+
+test("content orchestration PostgreSQL command portably enables its integration tests", async () => {
+  const [packageJson, runner] = await Promise.all([
+    readJson("apps/api/package.json"),
+    readFile("scripts/run-content-orchestration-postgres-tests.mjs", "utf8"),
+  ]);
+  assert.equal(
+    packageJson.scripts["test:content-orchestration-postgres"],
+    "node ../../scripts/run-content-orchestration-postgres-tests.mjs",
+  );
+  assert.match(runner, /RUN_POSTGRES_INTEGRATION:\s*"true"/);
+  assert.match(runner, /contentOrchestrationRepository\.postgres\.integration\.test\.ts/);
+  assert.match(runner, /--maxWorkers=1/);
+});
+
+test("061은 대표 이미지를 우선 보존하고 avatar별 checksum 중복을 차단한다", async () => {
+  const [migration, programRegistry] = await Promise.all([
+    readFile("db/migrations/061_avatar_image_checksum_uniqueness.sql", "utf8"),
+    readFile(
+      "docs/superpowers/specs/2026-07-25-d-hybrid-internal-ai-reference-onboarding-design.md",
+      "utf8",
+    ),
+  ]);
+
+  assert.match(programRegistry, /\|\s*059\s*\|\s*reference snapshot,\s*usage policy,[^|]+\|\s*Libraries\s*\|/i);
+  assert.match(programRegistry, /\|\s*060\s*\|\s*proposal batch,[^|]+GenerationBrief[^|]+\|\s*Content Creation\s*\|/i);
+  assert.match(migration, /depends\s+on:\s+058_avatar_and_reference_libraries\.sql\s+only/i);
+  assert.match(migration, /array_agg\s*\(\s*id\s+order\s+by\s+is_representative\s+desc,\s*position\s+asc,\s*created_at\s+asc,\s*id\s+asc\s*\)/i);
+  assert.match(migration, /min\s*\(\s*position\s*\)\s+as\s+retained_position/i);
+  assert.match(migration, /delete\s+from\s+brand_avatar_images[\s\S]*image\.id\s*<>\s*survivor\.survivor_id/i);
+  assert.match(migration, /update\s+brand_avatar_images[\s\S]*set\s+position\s*=\s*survivor\.retained_position/i);
+  assert.match(migration, /set\s+constraints\s+brand_avatar_images_commit_state\s+immediate/i);
+  assert.match(
+    migration,
+    /create\s+unique\s+index\s+if\s+not\s+exists\s+brand_avatar_images_avatar_checksum_unique\s+on\s+brand_avatar_images\s*\(\s*avatar_id,\s*checksum\s*\)/i,
+  );
+});
+
+test("057은 Wiki source kind를 schema와 API/worker 계약 전체에서 일치시킨다", async () => {
+  const [migration, apiWiki, wikiRefresh, compiledTypes, compiledSource] = await Promise.all([
+    readFile("db/migrations/057_wiki_source_kinds.sql", "utf8"),
+    readFile("apps/api/src/wiki.ts", "utf8"),
+    readFile("workers/brand-pilot-dm-worker/src/wikiRefresh.ts", "utf8"),
+    readFile("workers/brand-pilot-dm-worker/src/compiledWikiTypes.ts", "utf8"),
+    readFile("workers/brand-pilot-dm-worker/src/compiledWikiSource.ts", "utf8"),
+  ]);
+  const sourceKinds = [
+    "faq",
+    "product",
+    "product_service",
+    "service",
+    "policy",
+    "guide",
+    "owned_snapshot",
+  ];
+
+  for (const [table, constraint] of [
+    ["wiki_build_items", "wiki_build_items_source_kind_check"],
+    ["wiki_documents", "wiki_documents_source_kind_check"],
+    ["wiki_source_units", "wiki_source_units_source_kind_check"],
+  ]) {
+    assertExactSqlValues(
+      extractAddedCheckConstraintBody(migration, table, constraint),
+      sourceKinds,
+    );
+  }
+
+  const expectedUnion = sourceKinds.map((kind) => `"${kind}"`).join(" | ");
+  for (const [name, source] of [
+    ["API Wiki", apiWiki],
+    ["Wiki refresh worker", wikiRefresh],
+    ["compiled Wiki worker", compiledTypes],
+  ]) {
+    assert.ok(
+      source.includes(`export type WikiSourceKind = ${expectedUnion};`),
+      `${name} WikiSourceKind must match migration 057`,
+    );
+  }
+  assert.match(compiledTypes, /export function parseWikiSourceKind/);
+  assert.match(compiledSource, /directWikiUnitType\(source\)/);
+});
+
+test("적용된 기존 마이그레이션은 원본 체크섬을 유지한다", async () => {
   const expectedChecksums = new Map([
     [
       "db/migrations/031_content_performance_dashboard.sql",
@@ -333,6 +733,18 @@ test("적용된 031과 033 마이그레이션은 원본 체크섬을 유지한�
     [
       "db/migrations/033_compounding_wiki_pgvector.sql",
       "9cd196aad1b9dcc1e7b1bbd5d47c16343cd04e5652f5ca376ff16eb5d8dd405b",
+    ],
+    [
+      "db/migrations/055_brand_core_and_rules.sql",
+      "0e5159e9c0f7ad031fabfeb2ed7973cbb1c670e8b64bf723419031a0f4ab311b",
+    ],
+    [
+      "db/migrations/056_product_service_library.sql",
+      "3b3c9f6887d3f396c106a4a95cea6e4aa321c5dac0784c16a45fe2356a2b1b74",
+    ],
+    [
+      "db/migrations/057_wiki_source_kinds.sql",
+      "77773df7091ae962faf1de4d073d7819ba34a991d23d1d4e1d6d4bb1958f2aaa",
     ],
   ]);
 
@@ -572,6 +984,68 @@ test("자동 크롤링은 지원하지 않는 Vercel Cron 대신 외부 또는 �
   assert.match(envExample, /^SOURCE_CRAWL_DISCOVERY_LIMIT=20$/m);
   assert.match(envExample, /^SOURCE_CRAWL_TIME_BUDGET_MS=45000$/m);
   assert.match(envExample, /^LOCAL_SCHEDULER_ENABLED=false$/m);
+});
+
+test("D-hybrid 콘텐츠 smoke는 legacy v2와 optional orchestration을 함께 검증한다", async () => {
+  const [smoke, inputContract, workerContracts] = await Promise.all([
+    readFile("scripts/ai-content-smoke.mjs", "utf8"),
+    readFile("apps/api/src/aiContentGenerationInput.ts", "utf8"),
+    Promise.all([
+      "workers/brand-pilot-card-news-worker/src/contracts.ts",
+      "workers/brand-pilot-blog-worker/src/contracts.ts",
+      "workers/brand-pilot-marketing-worker/src/contracts.ts",
+    ].map((path) => readFile(path, "utf8"))),
+  ]);
+  assert.match(inputContract, /content-generation-input\.v2/);
+  assert.match(smoke, /content-orchestration\.v1/);
+  assert.match(smoke, /AI_CONTENT_SMOKE_ORCHESTRATION/);
+  assert.match(smoke, /assertLegacyGeneration/);
+  assert.match(smoke, /assertOrchestratedGeneration/);
+  assert.match(smoke, /video|reel/i);
+  assert.match(inputContract, /orchestration:\s*ContentOrchestrationV1\s*\|\s*null/);
+  assert.match(inputContract, /source\.orchestration\s*===\s*undefined\s*\|\|\s*source\.orchestration\s*===\s*null/);
+  for (const contract of workerContracts) {
+    assert.match(contract, /orchestration:[^;]*\|\s*null/);
+    assert.match(contract, /parseWorkerContentOrchestration\(input\.orchestration/);
+  }
+});
+
+test("subject smoke는 확인되지 않은 주장을 verified fact에서 배제한다", async () => {
+  const smoke = await readFile("scripts/ai-content-subject-smoke.mjs", "utf8");
+  assert.match(smoke, /unsupported claim/i);
+  assert.match(smoke, /verifiedFacts/);
+  assert.match(smoke, /doesNotMatch|includes/);
+});
+
+test("자동 crawl smoke 계약은 OFF와 ON proposal-only를 모두 고정한다", async () => {
+  const smoke = await readFile("scripts/ai-content-smoke.mjs", "utf8");
+  assert.match(smoke, /AI_CONTENT_PROPOSAL_SCHEDULER_ENABLED/);
+  assert.match(smoke, /proposal-only/);
+  assert.match(smoke, /scheduled_crawl/);
+  assert.match(smoke, /generation/i);
+});
+
+test("D-hybrid 브라우저 사양은 계획의 13개 흐름과 영상 생성 차단을 명시한다", async () => {
+  const e2e = await readFile("apps/customer-ui/e2e/d-hybrid-content-wizard.spec.ts", "utf8");
+  for (const marker of [
+    "accordion-lazy-load",
+    "informational-url-evidence",
+    "marketing-reference-preview",
+    "brand-topic-card-news",
+    "saved-product-blog-reference-roles",
+    "new-product-single-image-avatar",
+    "channel-text-no-image-job",
+    "reload-resume-selection",
+    "usage-limit-double-submit",
+    "channel-capability-refresh",
+    "reference-seed-resume",
+    "performance-proposal-tenant-guard",
+    "scheduled-proposal-review-dismiss",
+  ]) {
+    assert.match(e2e, new RegExp(marker));
+  }
+  assert.match(e2e, /video|reel/i);
+  assert.match(e2e, /not\.toHaveBeenCalled|toHaveCount\(0\)|requests.*0/i);
 });
 
 test("각 워크스페이스 패키지는 개별 package-lock.json을 두지 않는다", async () => {

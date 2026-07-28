@@ -3,6 +3,11 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const cssPath = resolve(process.cwd(), "src/styles/prototype.css");
+const tokensPath = resolve(process.cwd(), "src/styles/tokens.css");
+const shellPath = resolve(process.cwd(), "src/styles/shell.css");
+const dashboardPath = resolve(process.cwd(), "src/styles/dashboard.css");
+const performancePath = resolve(process.cwd(), "src/styles/performance.css");
+const mainPath = resolve(process.cwd(), "src/main.tsx");
 
 describe("responsive UI style contracts", () => {
   it("keeps publish management cards square across responsive layouts", async () => {
@@ -44,5 +49,60 @@ describe("responsive UI style contracts", () => {
     expect(css).toMatch(/\*::?-webkit-scrollbar\s*\{[^}]*width:\s*8px/s);
     expect(css).toMatch(/\*::?-webkit-scrollbar-thumb\s*\{[^}]*background:/s);
     expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.upload-progress__bar\s*\{[^}]*transition:\s*none/s);
+  });
+
+  it("loads D hybrid style layers in their stable cascade order", async () => {
+    const main = await readFile(mainPath, "utf8");
+
+    const imports = [
+      "./styles/tokens.css",
+      "./styles/prototype.css",
+      "./styles/shell.css",
+      "./styles/dashboard.css"
+      ,"./styles/performance.css"
+    ].map((path) => main.indexOf(`import "${path}"`));
+
+    expect(imports.every((index) => index >= 0)).toBe(true);
+    expect(imports).toEqual([...imports].sort((a, b) => a - b));
+  });
+
+  it("keeps performance insights responsive and motion-safe", async () => {
+    const css = await readFile(performancePath, "utf8");
+
+    expect(css).toMatch(/\.performance-summary,[\s\S]*?grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/s);
+    expect(css).toMatch(/@media \(max-width:\s*1080px\)[\s\S]*?\.performance-summary,[\s\S]*?repeat\(2,\s*minmax\(0,\s*1fr\)\)/s);
+    expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*?\.performance-summary,[\s\S]*?grid-template-columns:\s*1fr/s);
+    expect(css).toMatch(/@media \(prefers-reduced-motion:\s*reduce\)/);
+  });
+
+  it("defines the approved D hybrid shell tokens and responsive accessibility contracts", async () => {
+    const [tokens, shell, dashboard] = await Promise.all([
+      readFile(tokensPath, "utf8"),
+      readFile(shellPath, "utf8"),
+      readFile(dashboardPath, "utf8")
+    ]);
+
+    expect(tokens).toMatch(/--bp-color-sidebar:\s*#102822/);
+    expect(tokens).toMatch(/--bp-color-primary:\s*#2f6b55/);
+    expect(tokens).toMatch(/--bp-color-canvas:\s*#f7f4ed/);
+    expect(tokens).toMatch(/--bp-sidebar-width:\s*238px/);
+    expect(tokens).toMatch(/--bp-sidebar-collapsed-width:\s*78px/);
+    expect(tokens).toMatch(/--bp-topbar-height:\s*64px/);
+
+    expect(shell).toMatch(/\.app\s*\{[^}]*var\(--bp-sidebar-width\)/s);
+    expect(shell).toMatch(/\.app--sidebar-collapsed\s*\{[^}]*var\(--bp-sidebar-collapsed-width\)/s);
+    expect(shell).toMatch(/\.topbar\s*\{[^}]*min-height:\s*var\(--bp-topbar-height\)/s);
+    expect(shell).toMatch(/\.nav a[\s\S]*?min-height:\s*44px/s);
+    expect(shell).toMatch(/\.sidebar \.nav a,[\s\S]*?color:\s*#d8e5df/s);
+    expect(shell).toMatch(/\.sidebar \.sidebar-brand-profile\s*\{[^}]*background:\s*transparent/s);
+    expect(shell).toMatch(/@media \(max-width:\s*1080px\)/);
+    expect(shell).toMatch(/@media \(max-width:\s*760px\)/);
+    expect(shell).toMatch(/@media \(max-width:\s*470px\)/);
+    expect(shell).toMatch(/@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*?scroll-behavior:\s*auto\s*!important/s);
+    expect(shell).toMatch(/@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*?transition:\s*none\s*!important/s);
+    expect(shell).toMatch(/@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*?animation:\s*none\s*!important/s);
+
+    expect(dashboard).toMatch(/\.dashboard-columns\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1\.08fr\)\s*minmax\(0,\s*\.92fr\)/s);
+    expect(dashboard).toMatch(/@media \(max-width:\s*1080px\)[\s\S]*?\.dashboard-columns\s*\{[^}]*grid-template-columns:\s*1fr/s);
   });
 });

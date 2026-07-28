@@ -4,6 +4,7 @@ import {
   claimAndPrepareSubjectAnalysis,
   fetchSubjectEvidenceBlob,
 } from "./aiContentSubjectHttp.js";
+import { loadSubjectEvidence } from "./aiContentSubjectEvidence.js";
 import type { ApiRepository } from "./types.js";
 import type { SubjectAnalysisClaim, SubjectAnalysisRepository } from "./aiContentSubjectRepository.js";
 
@@ -19,7 +20,22 @@ function claim(overrides: Partial<SubjectAnalysisClaim> = {}): SubjectAnalysisCl
     subjectType: "product",
     sourceUrl: "https://example.com/product",
     normalizedUrl: "https://example.com/product",
-    input: { name: "Widget", promotion: "Launch", promotionOrTerms: "Launch", description: "Fast setup" },
+    input: {
+      name: "Widget", promotion: "Launch", promotionOrTerms: "Launch", description: "Fast setup",
+      attachmentSnapshot: [
+        {
+          id: "attachment-document", generationId: "generation-1", role: "document", fileName: "brief.txt",
+          mimeType: "text/plain", sizeBytes: Buffer.byteLength("Document evidence"), checksum: sha256(Buffer.from("Document evidence")),
+          storageUrl: "https://blob.example/brief.txt", storagePath: "brief.txt", createdAt: "2026-07-22T01:00:00.000Z",
+        },
+        {
+          id: "attachment-image", generationId: "generation-1", role: "product", fileName: "product.png",
+          mimeType: "image/png", sizeBytes: 8, checksum: sha256(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+          storageUrl: "https://blob.example/product.png", storagePath: "product.png", createdAt: "2026-07-22T01:00:01.000Z",
+        },
+      ],
+      attachmentSnapshotMissingIds: [],
+    },
     brandContext: { brandName: "Acme", brandIntelligenceVersionId: "brand-analysis-7" },
     attachmentIds: ["attachment-document", "attachment-image"],
     status: "extracting",
@@ -102,17 +118,18 @@ function setup(claimed: SubjectAnalysisClaim) {
     images: [],
   }));
   const archiveImage = vi.fn(async () => ({ storageUrl: "https://blob.example/page.png", storagePath: "page.png" }));
-  return { repository, fetchBlob, extractPage, archiveImage };
+  const headBlob = vi.fn(async () => ({}));
+  return { repository, fetchBlob, headBlob, extractPage, archiveImage };
 }
 
 describe("subject worker job preparation", () => {
   it("combines persisted v2 analysis context, attachments, and extracted source page in priority order", async () => {
-    const { repository, fetchBlob, extractPage, archiveImage } = setup(claim());
+    const { repository, fetchBlob, headBlob, extractPage, archiveImage } = setup(claim());
 
     const job = await claimAndPrepareSubjectAnalysis(
       repository,
       { workerId: "subject-worker-1", leaseSeconds: 180 },
-      { fetchBlob, extractPage, archiveImage },
+      { fetchBlob, headBlob, extractPage, archiveImage },
     );
 
     expect(job).toMatchObject({
@@ -144,12 +161,7 @@ describe("subject worker job preparation", () => {
       },
       sourcePriority: ["manual_input", "attachments", "source_url", "brand_context", "public_research"],
     });
-    expect(repository.listSubjectEvidenceAttachments).toHaveBeenCalledWith({
-      workspaceId: "workspace-1",
-      brandId: "brand-1",
-      generationId: "generation-1",
-      attachmentIds: ["attachment-document", "attachment-image"],
-    });
+    expect(repository.listSubjectEvidenceAttachments).not.toHaveBeenCalled();
     expect(repository.markSubjectExtractionComplete).toHaveBeenCalledOnce();
     expect(fetchBlob).toHaveBeenCalledTimes(2);
   });
@@ -334,4 +346,45 @@ describe("subject evidence HTTP fetch", () => {
       streamed as typeof fetch,
     )).rejects.toThrow("subject_analysis_attachment_size_mismatch");
   });
+
+  it.each([
+    ["404", async () => new Response("missing", { status: 404 }), "ai_content_attachment_blob_unavailable"],
+    ["500", async () => new Response("unavailable", { status: 500 }), "ai_content_attachment_storage_unavailable"],
+    ["network", async () => {
+      throw Object.assign(new Error("socket unavailable"), { code: "ECONNRESET" });
+    }, "ai_content_attachment_storage_unavailable"],
+  ] as const)(
+    "preserves production fetch %s classification through loadSubjectEvidence",
+    async (_label, fetchImpl, expectedCode) => {
+      const bytes = Buffer.from("facts");
+      const attachment = {
+        id: "44444444-4444-4444-8444-444444444444",
+        generationId: "33333333-3333-4333-8333-333333333333",
+        role: "document" as const,
+        fileName: "facts.txt",
+        mimeType: "text/plain",
+        sizeBytes: bytes.length,
+        checksum: sha256(bytes),
+        storageUrl: "https://blob.example/facts.txt",
+        storagePath: "attachments/facts.txt",
+        createdAt: "2026-07-21T00:00:00.000Z",
+      };
+
+      await expect(loadSubjectEvidence({
+        workspaceId: "11111111-1111-4111-8111-111111111111",
+        brandId: "22222222-2222-4222-8222-222222222222",
+        generationId: attachment.generationId,
+        attachmentIds: [attachment.id],
+        attachmentSnapshot: [attachment],
+        attachmentSnapshotMissingIds: [],
+      }, {
+        headBlob: async () => ({ size: bytes.length, contentType: "text/plain" }),
+        fetchBlob: (url, limits) => fetchSubjectEvidenceBlob(
+          url,
+          limits,
+          fetchImpl as typeof fetch,
+        ),
+      })).rejects.toThrow(expectedCode);
+    },
+  );
 });

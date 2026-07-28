@@ -16,6 +16,22 @@ export type DmAttentionType =
   | "processing_error";
 export type DmJobRoute = "fixed_fallback" | "knowledge" | "ignore";
 
+export interface DmKnowledgeReadiness {
+  brandCoreReady: boolean;
+  wikiReady: boolean;
+  messagePermissionReady: boolean;
+  webhookStatus: "connected" | "needs_attention" | "unchecked";
+  workerStatus: "online" | "worker_offline" | "unknown";
+}
+
+export function isDmAutomationReady(readiness: DmKnowledgeReadiness) {
+  return readiness.brandCoreReady
+    && readiness.wikiReady
+    && readiness.messagePermissionReady
+    && readiness.webhookStatus === "connected"
+    && readiness.workerStatus === "online";
+}
+
 export interface DmWorkerResult {
   decision: DmDecision;
   answer: string | null;

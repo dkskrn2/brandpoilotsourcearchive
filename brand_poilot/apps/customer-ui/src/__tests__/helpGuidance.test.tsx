@@ -23,7 +23,42 @@ describe("통합형 도움말", () => {
   });
 
   it("동적 AI 콘텐츠 결과 경로에 맞는 가이드를 찾는다", () => {
-    expect(guideForPath("/ai-content/generation-1")?.id).toBe("ai-content-result");
+    const guide = guideForPath("/ai-content/generation-1");
+    expect(guide?.id).toBe("ai-content-result");
+    expect(guide?.sections.flatMap((section) => section.items).join(" ")).toMatch(/생성 중.*상태|검토.*기획 근거/);
+  });
+
+  it.each([
+    ["/content", "publish-queue"],
+    ["/archive", "references-saved-trends"],
+    ["/instagram-trends", "references-trends"],
+    ["/brand-settings", "brand-center"],
+    ["/sources", "brand-center"],
+    ["/sources?view=references", "references-external-urls"],
+  ])("legacy 경로 %s에서도 이동 대상과 같은 가이드를 찾는다", (path, guideId) => {
+    expect(guideForPath(path)?.id).toBe(guideId);
+  });
+
+  it.each(helpGuides
+    .filter((guide) => !["/instagram-trends", "/brand-settings", "/sources"].includes(guide.path))
+    .map((guide) => [guide.path, guide.id]))(
+    "canonical 경로 %s의 가이드를 찾는다",
+    (path, guideId) => {
+      const concretePath = path.replace(":generationId", "generation-regression");
+      const expectedId = guideId === "references" ? "references-all" : guideId;
+      expect(guideForPath(concretePath)?.id).toBe(expectedId);
+    },
+  );
+
+  it("레퍼런스 view query에 맞는 동적 안내와 외부 URL 제한을 제공한다", () => {
+    const external = guideForPath("/references?view=external-urls");
+    const trends = guideForPath("/references?view=trends");
+
+    expect(external?.id).toBe("references-external-urls");
+    expect(external?.title).toContain("외부 URL");
+    expect(external?.sections.flatMap((section) => section.items).join(" ")).toContain("최대 10개");
+    expect(trends?.id).toBe("references-trends");
+    expect(trends?.summary).toContain("공개 해시태그");
   });
 
   it("현재 화면 가이드와 OAuth 체크리스트를 서랍에 표시한다", () => {
@@ -47,6 +82,18 @@ describe("통합형 도움말", () => {
     expect(screen.getByText("1 / 4")).toBeVisible();
   });
 
+  it("화면 안내를 중단한 뒤 사용자가 다시 시작할 수 있다", () => {
+    render(<MemoryRouter initialEntries={["/channels"]}><HelpProvider><HelpHarness /></HelpProvider></MemoryRouter>);
+
+    fireEvent.click(screen.getByRole("button", { name: /화면 안내/ }));
+    fireEvent.click(screen.getByRole("button", { name: "화면 안내 닫기" }));
+    expect(screen.queryByRole("dialog", { name: "현재 화면 화면 안내" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /화면 안내/ }));
+    expect(screen.getByRole("dialog", { name: "현재 화면 화면 안내" })).toBeVisible();
+    expect(screen.getByText("1 / 4")).toBeVisible();
+  });
+
   it("모든 화면 가이드가 데이터, 사용자 작업, 후속 결과를 설명한다", () => {
     for (const guide of helpGuides) {
       const items = guide.sections.flatMap((section) => section.items);
@@ -60,8 +107,8 @@ describe("통합형 도움말", () => {
 
   it("AI 콘텐츠 생성 가이드가 입력값의 실제 사용처를 설명한다", () => {
     const guide = guideForPath("/ai-content/new");
-    expect(guide?.tour.map((step) => step.description).join(" ")).toContain("자사 정보와 제품 URL은 사실 근거");
-    expect(guide?.tour.map((step) => step.description).join(" ")).toContain("블로그는 게시 가능한 HTML");
+    expect(guide?.sections.flatMap((section) => section.items).join(" ")).toContain("실제 채널 지원 범위");
+    expect(guide?.tour.map((step) => step.description).join(" ")).toContain("구현안 선택 뒤에만 활성 레퍼런스와 아바타");
   });
 
   it("채널별 연결 가이드가 OAuth 준비부터 문제 해결까지 제공한다", () => {

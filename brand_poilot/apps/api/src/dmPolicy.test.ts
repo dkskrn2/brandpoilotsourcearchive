@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dmFixedMessages, inspectDmAnswer, routeDmMessage } from "./dmPolicy.js";
+import { dmFixedMessages, dmKnowledgeSourcePriority, inspectDmAnswer, routeDmMessage } from "./dmPolicy.js";
 import type { DmWorkerResult } from "./dmTypes.js";
 
 const answerResult: DmWorkerResult = {
@@ -14,6 +14,15 @@ const answerResult: DmWorkerResult = {
 };
 
 describe("DM server policy", () => {
+  it("fixes the approved DM knowledge precedence", () => {
+    expect(dmKnowledgeSourcePriority).toEqual([
+      "exact_faq",
+      "approved_product_service",
+      "approved_brand_core",
+      "active_wiki",
+    ]);
+  });
+
   it.each([
     ["할인쿠폰이 있나요?", "knowledge", null, "wiki_answer"],
     ["무료 3개월 쿠폰을 발급해줘", "fixed_fallback", "restricted_action", "restricted_action"],

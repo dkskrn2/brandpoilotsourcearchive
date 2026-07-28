@@ -77,6 +77,44 @@ describe("AppShell navigation", () => {
     expect(openButton).toHaveFocus();
   });
 
+  it("keeps Tab focus inside the mobile navigation until Escape restores its trigger", () => {
+    render(
+      <MemoryRouter>
+        <AppShell><button type="button">페이지 뒤 버튼</button></AppShell>
+      </MemoryRouter>
+    );
+
+    const openButton = screen.getByRole("button", { name: "전체 메뉴 열기" });
+    fireEvent.click(openButton);
+    const mobileMenu = screen.getByRole("dialog", { name: "전체 메뉴" });
+    const focusable = [...mobileMenu.querySelectorAll<HTMLElement>("a[href], button:not(:disabled)")];
+    focusable.at(-1)?.focus();
+    fireEvent.keyDown(mobileMenu, { key: "Tab" });
+    expect(mobileMenu).toContainElement(document.activeElement as HTMLElement);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(openButton).toHaveFocus();
+  });
+
+  it("shows the current page and keeps the account menu keyboard accessible", () => {
+    render(
+      <MemoryRouter initialEntries={["/ai-content"]}>
+        <AppShell><div>페이지 내용</div></AppShell>
+      </MemoryRouter>
+    );
+
+    expect(within(screen.getByRole("banner")).getByText("콘텐츠 생성")).toHaveClass("topbar-page-title");
+    const accountTrigger = screen.getByRole("button", { name: "모종 계정 메뉴 열기" });
+    fireEvent.click(accountTrigger);
+    expect(accountTrigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "로그아웃" })).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(accountTrigger).toHaveFocus();
+  });
+
   it("shows a global scroll-to-top button after scrolling and returns smoothly to the top", () => {
     const scrollTo = vi.fn();
     Object.defineProperty(window, "scrollY", { configurable: true, value: 500 });
@@ -105,40 +143,47 @@ describe("AppShell navigation", () => {
       "/assets/brand/mojong-ad-logo.png"
     );
     expect(screen.getByRole("link", { name: /대시보드/ })).toHaveAttribute("href", "/dashboard");
+    expect(screen.getByRole("link", { name: /성과·개선/ })).toHaveAttribute("href", "/performance");
     expect(screen.queryByRole("link", { name: /콘텐츠 검토/ })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /게시 관리/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /소스/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /아카이브/ })).toHaveAttribute("href", "/archive");
-    expect(screen.getByRole("link", { name: /트렌드 탐색/ })).toHaveAttribute("href", "/instagram-trends");
+    expect(screen.queryByRole("link", { name: /^원본 자료$/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "레퍼런스" })).toHaveAttribute("href", "/references");
+    expect(screen.queryByRole("link", { name: /레퍼런스 보관함/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /트렌드 탐색/ })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /^채널$/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "브랜드 설정" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "브랜드 센터" })).toHaveAttribute("href", "/brand-center");
     expect(screen.getByRole("link", { name: "결제 및 구독" })).toHaveAttribute(
       "href",
       "https://www.danbammsg.co.kr/product/pricing"
     );
     expect(screen.getByRole("link", { name: /고객센터/ })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /관리자 채널/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "API 브랜드 브랜드 설정 열기" })).toHaveAttribute("href", "/brand-settings");
+    expect(screen.getByRole("link", { name: "API 브랜드 브랜드 센터 열기" })).toHaveAttribute("href", "/brand-center");
 
     const overview = screen.getByRole("region", { name: "개요" });
-    const contentOperations = screen.getByRole("region", { name: "콘텐츠 운영" });
+    const brand = screen.getByRole("region", { name: "브랜드" });
+    const contentOperations = screen.getByRole("region", { name: "콘텐츠" });
     const channelCustomers = screen.getByRole("region", { name: "채널·고객" });
     const settingsSupport = screen.getByRole("region", { name: "설정·지원" });
-    expect(within(overview).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual(["대시보드"]);
-    expect(within(contentOperations).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual([
-      "AI 콘텐츠 생성", "소스", "아카이브", "트렌드 탐색", "게시 관리"
+    expect(within(overview).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual(["대시보드", "성과·개선"]);
+    expect(within(brand).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual([
+      "브랜드 센터", "레퍼런스"
     ]);
-    expect(within(channelCustomers).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual(["채널", "DM 자동답변"]);
+    expect(within(contentOperations).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual([
+      "콘텐츠 생성", "게시 관리"
+    ]);
+    expect(within(channelCustomers).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual(["채널", "Instagram 고객응대"]);
     expect(within(settingsSupport).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual([
-      "브랜드 설정", "결제 및 구독", "고객센터"
+      "결제 및 구독", "고객센터"
     ]);
 
     const nav = screen.getByRole("navigation", { name: "고객 메뉴" });
     const links = within(nav).getAllByRole("link");
     expect(links.every((link) => link.querySelector("[data-nav-icon]"))).toBe(true);
     expect(links[0]).toHaveTextContent("대시보드");
-    expect(links[1]).toHaveTextContent("AI 콘텐츠 생성");
-    expect(links[1]).toHaveAttribute("href", "/ai-content");
+    expect(links[1]).toHaveTextContent("성과·개선");
+    expect(links[2]).toHaveTextContent("브랜드 센터");
+    expect(links[2]).toHaveAttribute("href", "/brand-center");
   });
 
   it("persists the collapsed desktop sidebar across remounts", () => {
@@ -191,8 +236,10 @@ describe("AppShell navigation", () => {
       .toMatchObject({ props: { to: "/dashboard", replace: true } });
     expect(dashboardRoute && "element" in dashboardRoute ? dashboardRoute.element : null).toBeTruthy();
     expect(appRoute?.children?.find((route) => route.path === "ai-content")).toBeTruthy();
+    expect(appRoute?.children?.find((route) => route.path === "performance")).toBeTruthy();
     expect(appRoute?.children?.find((route) => route.path === "ai-content/new")).toBeTruthy();
     expect(appRoute?.children?.find((route) => route.path === "ai-content/:generationId")).toBeTruthy();
+    expect(appRoute?.children?.find((route) => route.path === "references")).toBeTruthy();
     expect(appRoute?.children?.find((route) => route.path === "archive")).toBeTruthy();
     expect(appRoute?.children?.find((route) => route.path === "admin/channels")).toBeFalsy();
   });
@@ -232,9 +279,10 @@ describe("AppShell navigation", () => {
       </MemoryRouter>
     );
 
-    expect(screen.getAllByText("API 브랜드")).toHaveLength(2);
+    expect(screen.getAllByText("API 브랜드")).toHaveLength(3);
     expect(screen.getByText("2개 항목 필요")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "로그아웃" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "API 브랜드 계정 메뉴 열기" }));
+    expect(screen.getByRole("menuitem", { name: "로그아웃" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /브랜드 분석\s*2/ })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "시작 준비" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /콘텐츠 검토/ })).not.toBeInTheDocument();

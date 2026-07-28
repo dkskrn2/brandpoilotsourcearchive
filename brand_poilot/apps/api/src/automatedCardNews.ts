@@ -1,5 +1,4 @@
 import { parseContentGenerationInputV2, type ContentGenerationInputV2 } from "./aiContentGenerationInput.js";
-import { randomUUID } from "node:crypto";
 
 type Queryable = {
   query(sql: string, values?: unknown[]): Promise<{ rows: any[]; rowCount?: number | null }>;
@@ -26,6 +25,7 @@ export interface AutomatedCardNewsInput {
   };
   representativeUrl: string | null;
   sourceMaterials: Array<{
+    sourceSnapshotId?: string;
     sourceType: string;
     contentUrl: string;
     content: string;
@@ -36,6 +36,7 @@ export interface EnqueueAutomatedCardNewsInput extends AutomatedCardNewsInput {
   workspaceId: string;
   brandId: string;
   channelOutputId: string;
+  sourceSnapshotIds?: string[];
 }
 
 function compact(value: string | null | undefined, maxLength = 6_000) {
@@ -150,64 +151,130 @@ export function buildAutomatedCardNewsInput(input: AutomatedCardNewsInput): Cont
 export async function enqueueAutomatedCardNews(
   client: Queryable,
   input: EnqueueAutomatedCardNewsInput,
+  options: {
+    automatedContentEnabled?: boolean;
+    mode?: "proposal";
+  } = {},
 ) {
-  const generationId = randomUUID();
-  const outputId = randomUUID();
-  const jobId = randomUUID();
-  const contract = buildAutomatedCardNewsInput(input);
-  const idempotencyKey = `scheduled:${input.channelOutputId}`;
-
-  await client.query(
-    `insert into ai_content_generations (
-       id, workspace_id, brand_id, type, title, status, current_stage,
-       draft_json, analysis_json, analysis_idempotency_key,
-       generation_idempotency_key, subject_analysis_snapshot
-     )
-     values ($1, $2, $3, 'card_news', $4, 'analyzing', 'analysis', $5, '{}'::jsonb, $6, $6, $7)`,
-    [
-      generationId,
-      input.workspaceId,
-      input.brandId,
-      input.topic.title,
-      JSON.stringify({
-        origin: "scheduled_automation",
+  if (!options.automatedContentEnabled) {
+    return { mode: "disabled" as const };
+  }
+  if ((options.mode ?? "proposal") === "proposal") {
+    const requestedSnapshotIds = [...new Set(
+      input.sourceSnapshotIds
+        ?? input.sourceMaterials.flatMap((material) => material.sourceSnapshotId ? [material.sourceSnapshotId] : []),
+    )];
+    const sourceResult = await client.query(
+      `with candidate_sources as (
+         select distinct source.id
+           from source_urls source
+           left join source_snapshots triggering
+             on triggering.source_url_id=source.id
+            and triggering.workspace_id=source.workspace_id
+            and triggering.brand_id=source.brand_id
+          where source.workspace_id=$1 and source.brand_id=$2
+            and source.enabled=true and source.deleted_at is null
+            and (
+              (cardinality($3::uuid[]) > 0 and triggering.id=any($3::uuid[]))
+              or (cardinality($3::uuid[]) = 0 and source.url=$4)
+            )
+       )
+       select latest.id,source.url,latest.fetched_at,latest.content_hash,
+              coalesce(latest.summary,left(latest.extracted_text,2000),'') summary
+         from candidate_sources candidate
+         join source_urls source on source.id=candidate.id
+         join lateral (
+           select snapshot.*
+             from source_snapshots snapshot
+            where snapshot.source_url_id=source.id
+              and snapshot.workspace_id=$1 and snapshot.brand_id=$2
+              and snapshot.status='succeeded'
+            order by snapshot.fetched_at desc,snapshot.id desc
+            limit 1
+         ) latest on true
+        order by latest.fetched_at desc,latest.id desc`,
+      [input.workspaceId, input.brandId, requestedSnapshotIds, input.representativeUrl],
+    );
+    const sourceSnapshots = sourceResult.rows.map((row) => ({
+      sourceId: String(row.id),
+      url: String(row.url),
+      crawledAt: new Date(row.fetched_at).toISOString(),
+      contentHash: String(row.content_hash),
+      summary: String(row.summary ?? ""),
+    }));
+    const request = {
+      contractVersion: "content-proposal-request.v1",
+      contentFamily: "informational",
+      subjectInput: {
         contentTopicId: input.contentTopicId,
-        channelOutputId: input.channelOutputId,
-        brief: { aspectRatio: "1:1", outputCount: 1 },
-      }),
-      idempotencyKey,
-      JSON.stringify(contract),
-    ],
-  );
-  await client.query(
-    `insert into ai_content_generation_outputs (
-       id, generation_id, workspace_id, brand_id, output_index, status
-     ) values ($1, $2, $3, $4, 1, 'queued')`,
-    [outputId, generationId, input.workspaceId, input.brandId],
-  );
-  await client.query(
-    `update channel_outputs
-        set ai_content_generation_output_id = $2, updated_at = now()
-      where id = $1 and workspace_id = $3 and brand_id = $4`,
-    [input.channelOutputId, outputId, input.workspaceId, input.brandId],
-  );
-  await client.query(
-    `insert into ai_content_generation_jobs (
-       id, generation_id, workspace_id, brand_id, job_type, content_type, status, payload_json
-     ) values ($1, $2, $3, $4, 'analyze', 'card_news', 'queued', $5)`,
-    [
-      jobId,
-      generationId,
-      input.workspaceId,
-      input.brandId,
-      JSON.stringify({
-        generationId,
-        finalizeGeneration: true,
-        origin: "scheduled_automation",
-        channelOutputId: input.channelOutputId,
-      }),
-    ],
-  );
-
-  return { generationId, outputId, jobId };
+        title: input.topic.title,
+        angle: input.topic.angle,
+        representativeUrl: input.representativeUrl,
+      },
+      channelTargets: ["instagram"],
+      outputFormats: ["card_news"],
+      sourceSnapshotIds: sourceSnapshots.map((snapshot) => snapshot.sourceId),
+      performanceSnapshotIds: [],
+    };
+    await client.query(
+      `insert into source_crawl_runs (
+         workspace_id,brand_id,source_url_id,run_key,trigger,status
+       )
+       select source.workspace_id,source.brand_id,source.id,
+              'scheduled-proposal-refresh:' || source.id::text || ':' || current_date::text,
+              'scheduled','queued'
+         from source_urls source
+         left join lateral (
+           select snapshot.fetched_at
+             from source_snapshots snapshot
+            where snapshot.source_url_id=source.id and snapshot.status='succeeded'
+            order by snapshot.fetched_at desc,snapshot.id desc limit 1
+         ) latest on true
+        where source.workspace_id=$1 and source.brand_id=$2
+          and source.enabled=true and source.deleted_at is null
+          and (latest.fetched_at is null or latest.fetched_at < now() - interval '7 days')
+       on conflict (run_key) do nothing`,
+      [input.workspaceId, input.brandId],
+    );
+    const created = await client.query(
+      `insert into ai_content_proposal_batches (
+         workspace_id,brand_id,origin,content_family,request_json,
+         source_snapshot_json,status,idempotency_key,created_by_user_id
+       ) values ($1,$2,'scheduled_crawl','informational',$3::jsonb,$5::jsonb,
+                 'queued',$4,null)
+       on conflict (workspace_id,brand_id,idempotency_key)
+       do nothing
+       returning id`,
+      [
+        input.workspaceId,
+        input.brandId,
+        JSON.stringify(request),
+        `scheduled-proposal:${input.channelOutputId}`,
+        JSON.stringify(sourceSnapshots),
+      ],
+    );
+    let batchId = created.rows[0]?.id ? String(created.rows[0].id) : "";
+    if (!batchId) {
+      const existing = await client.query(
+        `select id
+           from ai_content_proposal_batches
+          where workspace_id=$1 and brand_id=$2 and idempotency_key=$3`,
+        [
+          input.workspaceId,
+          input.brandId,
+          `scheduled-proposal:${input.channelOutputId}`,
+        ],
+      );
+      batchId = existing.rows[0]?.id ? String(existing.rows[0].id) : "";
+      if (!batchId) throw new Error("ai_content_proposal_batch_conflict");
+    } else {
+      await client.query(
+        `insert into ai_content_proposal_jobs (workspace_id,brand_id,batch_id,status)
+         values ($1,$2,$3,'queued')`,
+        [input.workspaceId, input.brandId, batchId],
+      );
+    }
+    return { batchId, mode: "proposal" as const };
+  }
+  return { mode: "disabled" as const };
 }

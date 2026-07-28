@@ -24,9 +24,6 @@ const repository = createRepository(pool, {
   instagramPublish: {
     enabled: runtimeConfig.instagramPublishEnabled,
   },
-  deleteAiContentAttachments: blobReadWriteToken
-    ? (urls) => deleteBlob(urls, { token: blobReadWriteToken })
-    : undefined,
 });
 const adminRepository = createAdminRepository(pool);
 const brandIntelligenceRepository = createBrandIntelligenceRepository(pool);
@@ -38,9 +35,11 @@ const serverOptions: Parameters<typeof createServer>[0] & {
   runtimePolicy: typeof runtimeConfig.http;
 } = {
     runtimePolicy: runtimeConfig.http,
+    readinessPolicy: runtimeConfig.readiness,
     repository,
     brandLogoService,
     workerApiToken: process.env.WORKER_API_TOKEN,
+    contentProposalWorkerApiToken: process.env.CONTENT_PROPOSAL_WORKER_API_TOKEN,
     cronSecret: process.env.CRON_SECRET,
     kakaoAuth: createKakaoAuthStore(pool),
     kakao: {
@@ -67,6 +66,14 @@ const serverOptions: Parameters<typeof createServer>[0] & {
       verifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN ?? ""
     },
     aiContentUpload: {
+      readWriteToken: blobReadWriteToken,
+      uploadSessionsEnabled: runtimeConfig.aiContentAttachmentUploadSessionsEnabled,
+    },
+    aiContentAttachmentGc: {
+      deleteBlob: (urlOrPath, { abortSignal }) =>
+        deleteBlob(urlOrPath, { token: blobReadWriteToken, abortSignal }),
+    },
+    assetLibraryUpload: {
       readWriteToken: blobReadWriteToken
     },
     aiContentLimits: {

@@ -1,11 +1,12 @@
 import crypto from "node:crypto";
+import { directWikiUnitType } from "./compiledWikiTypes.js";
 import { curateKnowledge, type CuratedKnowledgeUnit } from "./knowledgeCurator.js";
 import { normalizeKnowledgeSource } from "./knowledgeNormalizer.js";
 
 const chunkSize = 800;
 const overlap = 120;
 
-export type WikiSourceKind = "faq" | "product" | "policy" | "owned_snapshot";
+export type WikiSourceKind = "faq" | "product" | "product_service" | "service" | "policy" | "guide" | "owned_snapshot";
 
 export interface ClaimedWikiBuildItem {
   id: string;
@@ -77,7 +78,7 @@ function hash(value: string) {
 
 function directUnit(source: WikiBuildSource): CuratedKnowledgeUnit {
   return {
-    unitType: source.source_kind as "faq" | "product" | "policy",
+    unitType: directWikiUnitType(source),
     title: source.title,
     content: source.content,
     keywords: source.keywords,

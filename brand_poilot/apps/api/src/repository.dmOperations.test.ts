@@ -50,6 +50,45 @@ function manualReplyFixture(sendInstagramDirectMessage: (input: InstagramDmSendI
 }
 
 describe("DM operations repository", () => {
+  it("stores an inbound message but never enqueues an automatic reply while the feature flag is off", async () => {
+    const statements: string[] = [];
+    const query = vi.fn(async (sql: string) => {
+      statements.push(sql);
+      if (sql.trim() === "begin" || sql.trim() === "commit") return { rowCount: 0, rows: [] };
+      if (sql.includes("from brand_channels channel")) {
+        return { rowCount: 1, rows: [{ id: "channel-1", workspace_id: "workspace-1", brand_id: "brand-1" }] };
+      }
+      if (sql.includes("insert into instagram_dm_conversations")) {
+        return { rowCount: 1, rows: [{ id: "conversation-1", automation_status: "active", profile_fetched_at: null }] };
+      }
+      if (sql.includes("insert into instagram_dm_messages")) {
+        return { rowCount: 1, rows: [{ id: "message-1" }] };
+      }
+      if (sql.includes("insert into dm_turns")) {
+        return { rowCount: 1, rows: [{ id: "turn-1", aggregated_text: "배송 문의" }] };
+      }
+      if (sql.includes("select enabled from instagram_dm_settings")) {
+        return { rowCount: 1, rows: [{ enabled: false }] };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+    const client = { query, release: vi.fn() };
+    const repository = createRepository({ query, connect: vi.fn(async () => client) } as any);
+
+    await expect(repository.receiveInstagramWebhookMessage({
+      recipientId: "instagram-account-1",
+      senderId: "customer-1",
+      messageId: "message-external-1",
+      text: "배송 문의",
+      timestamp: 1_722_470_400_000,
+      isEcho: false,
+      rawPayload: {},
+    })).resolves.toMatchObject({ status: "disabled", jobId: null });
+
+    expect(statements.some((sql) => sql.includes("'instagram_dm_reply'"))).toBe(false);
+    expect(statements.some((sql) => sql.includes("insert into instagram_dm_messages"))).toBe(true);
+  });
+
   it("migrates delivery attempts for nullable manual jobs without weakening auto attempts", async () => {
     const migration = await readFile(resolve(process.cwd(), "../../db/migrations/053_dm_manual_delivery_audit.sql"), "utf8");
 

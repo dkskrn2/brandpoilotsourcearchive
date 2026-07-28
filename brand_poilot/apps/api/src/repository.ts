@@ -10,19 +10,28 @@ import {
   type InstagramWorkerJobResult
 } from "./imageRenderJobs.js";
 import { formatInstagramCaption } from "./instagramCaption.js";
-import { evaluateInstagramStoryCapability, sanitizeInstagramCapabilityMetadata } from "./instagramCapabilities.js";
+import {
+  evaluateInstagramChannelReadiness,
+  evaluateInstagramStoryCapability,
+  isVerifiedInstagramStoryCapability,
+  sanitizeInstagramCapabilityMetadata,
+} from "./instagramCapabilities.js";
 import { dmFixedMessages, inspectDmAnswer, routeDmMessage } from "./dmPolicy.js";
 import { classifyInstagramDmSendError, sendInstagramDirectMessage } from "./instagramMessaging.js";
 import { fetchInstagramMessagingProfile } from "./instagramLoginGraph.js";
 import { fetchInstagramHashtagTopMedia } from "./instagramTrendMeta.js";
 import { createInstagramTrendRepository } from "./instagramTrendRepository.js";
 import { createAiContentRepository } from "./aiContentRepository.js";
+import { createAiContentAttachmentGcRepository } from "./aiContentAttachmentGcRepository.js";
 import { createAiContentDownloadRepository } from "./aiContentDownload.js";
 import { createAiContentPublishRepository } from "./aiContentPublish.js";
 import { createAiContentSubjectRepository } from "./aiContentSubjectRepository.js";
 import { enqueueAutomatedCardNews } from "./automatedCardNews.js";
 import { createBrandIntelligenceRepository } from "./brandIntelligenceRepository.js";
 import { createBrandIntelligenceProvider } from "./brandIntelligenceProvider.js";
+import { createBrandCoreRepository } from "./brandCoreRepository.js";
+import { createProductLibraryRepository } from "./productLibraryRepository.js";
+import { createAssetLibraryRepository } from "./assetLibraryRepository.js";
 import { deliveryFormatToRenderJobType } from "./instagramFormats.js";
 import { kstDateKey, nextAvailablePolicySlot } from "./publishSchedule.js";
 import { MetaGraphRequestError, classifyMetaGraphPublishError } from "./metaGraph.js";
@@ -64,6 +73,7 @@ import type {
   ChannelConnectionRequestDto,
   ChannelConnectionRequestInput,
   ChannelDto,
+  ChannelStatus,
   ContentOutputDto,
   ContentOutputStatus,
   CredentialInput,
@@ -97,6 +107,7 @@ import type {
   PublishResultDto,
   PipelineRunResult,
   PerformanceSyncStatus,
+  PerformanceInsightsDto,
   SourceCrawlRunDto,
   SourceCrawlRunStatus,
   SourceCrawlTrigger,
@@ -114,6 +125,16 @@ import type {
   TopicUploadInput,
   WikiStatusDto
 } from "./types.js";
+import { buildPerformanceInsights, type PerformanceInsightSnapshot } from "./performanceInsights.js";
+import type {
+  CreateWikiItemInput,
+  ResolveWikiIssueInput,
+  UpdateWikiItemInput,
+  WikiManagementBuildStatus,
+  WikiManagementIssue,
+  WikiManagementItem,
+  WikiManagementSummary,
+} from "./wikiManagementContracts.js";
 import { resolveWorkerResourceLimits, type WorkerResourceLimits } from "./workerResources.js";
 
 function toIso(value: Date | string | null): string | null {
@@ -193,6 +214,18 @@ function toDateKey(value: Date | string | null): string | null {
 }
 
 const maxReferenceSourceUrls = 10;
+const instagramReadinessFailureCodes = new Set([
+  "channel_not_connected",
+  "channel_needs_attention",
+  "credential_expired",
+  "credential_invalid",
+  "meta_permission_denied",
+  "meta_token_invalid",
+  "missing_required_scopes",
+  "professional_account_required",
+  "provider_not_supported",
+  "publish_failed",
+]);
 
 type Queryable = {
   query(sql: string, values?: unknown[]): Promise<any>;
@@ -470,6 +503,112 @@ function mapKnowledgeImport(row: any): KnowledgeImportDto {
   };
 }
 
+function jsonObject(value: unknown): Record<string, unknown> {
+  if (!value) return {};
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function mapWikiManagementItem(row: Record<string, any>): WikiManagementItem {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    brandId: String(row.brand_id),
+    itemType: row.item_type,
+    title: String(row.title),
+    content: String(row.content),
+    status: row.status,
+    origin: row.origin,
+    provenance: jsonObject(row.provenance_json),
+    createdByUserId: row.created_by_user_id ? String(row.created_by_user_id) : null,
+    approvedByUserId: row.approved_by_user_id ? String(row.approved_by_user_id) : null,
+    approvedAt: toIso(row.approved_at),
+    sourceKind: row.source_kind,
+    sourceId: String(row.source_id),
+    activeVersionId: row.active_version_id ? String(row.active_version_id) : null,
+    lastBuiltAt: toIso(row.last_built_at),
+    buildStatus: row.build_status as WikiManagementBuildStatus,
+  };
+}
+
+function mapWikiManagementIssue(row: Record<string, any>): WikiManagementIssue {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    brandId: String(row.brand_id),
+    issueType: String(row.issue_type),
+    severity: row.severity,
+    status: row.status,
+    question: row.question === null || row.question === undefined ? null : String(row.question),
+    detail: jsonObject(row.detail_json),
+    sourceKind: row.source_kind ?? null,
+    sourceId: row.source_id ? String(row.source_id) : null,
+    activeVersionId: row.active_version_id ? String(row.active_version_id) : null,
+    lastBuiltAt: toIso(row.last_built_at),
+    buildStatus: row.build_status as WikiManagementBuildStatus,
+    resolvedAt: toIso(row.resolved_at),
+  };
+}
+
+function wikiNormalizedKey(input: CreateWikiItemInput) {
+  const title = input.title.normalize("NFKC").trim().toLocaleLowerCase("ko-KR").replace(/\s+/g, " ");
+  return input.itemType === "faq" ? title : `manual:${input.itemType}:${title}`;
+}
+
+async function requireWikiMember(
+  client: Pick<PoolClient, "query">,
+  scope: { workspaceId: string; brandId: string; actorUserId: string },
+  permission: "author" | "approve" | "resolve" = "author",
+) {
+  const membership = await client.query(
+    `select member.role
+       from workspace_members member
+      where member.workspace_id = $1::uuid and member.user_id = $2::uuid
+        and member.status = 'active'
+        and exists (
+          select 1 from brands
+           where id = $3::uuid and workspace_id = $1::uuid and deleted_at is null
+        )`,
+    [scope.workspaceId, scope.actorUserId, scope.brandId],
+  );
+  if (!membership.rowCount) throw new Error("wiki_item_access_forbidden");
+  if (!["owner", "admin"].includes(String(membership.rows[0].role))) {
+    if (permission === "approve") throw new Error("wiki_item_approval_forbidden");
+    if (permission === "resolve") throw new Error("wiki_issue_resolution_forbidden");
+  }
+}
+
+async function enqueueManagedWikiBuild(
+  client: Pick<PoolClient, "query">,
+  workspaceId: string,
+  brandId: string,
+) {
+  return client.query(
+    `insert into wiki_build_requests (
+       workspace_id, brand_id, requested_revision, status, quiet_until
+     ) values ($1::uuid, $2::uuid, 1, 'pending', now())
+     on conflict (workspace_id, brand_id)
+     where status in ('pending', 'building')
+     do update set
+       requested_revision = wiki_build_requests.requested_revision + 1,
+       rebuild_requested = wiki_build_requests.rebuild_requested or wiki_build_requests.status = 'building',
+       quiet_until = case when wiki_build_requests.status = 'pending'
+         then now() else wiki_build_requests.quiet_until end,
+       updated_at = now()
+     returning id, status`,
+    [workspaceId, brandId],
+  );
+}
+
 function decodeBase64Upload(value: string) {
   const normalized = value.replace(/\s+/g, "");
   const maxBase64Length = Math.ceil((1024 * 1024) / 3) * 4 + 4;
@@ -697,13 +836,15 @@ async function enqueueSourceContentTopic(queryable: Queryable, input: {
   contentUrl: string;
   contentHash: string;
   title: string | null;
+  contentPurpose: "informational" | "marketing" | "both";
 }) {
   const sourceContext = {
     source: "source_url",
     sourceContentItemId: input.sourceContentItemId,
     sourceSnapshotId: input.sourceSnapshotId,
     contentUrl: input.contentUrl,
-    contentHash: input.contentHash
+    contentHash: input.contentHash,
+    contentPurpose: input.contentPurpose,
   };
   await queryable.query(
     `insert into content_topics (workspace_id, brand_id, topic_row_id, title, angle, status, source_context)
@@ -738,6 +879,7 @@ async function enqueueLatestSourceContentTopics(queryable: Queryable, brandId: s
               ss.id as source_snapshot_id,
               ss.source_content_item_id,
               ss.content_hash,
+              su.content_purpose,
               coalesce(nullif(ss.extracted_title, ''), nullif(sci.title, ''), '크롤링 소스 기반 콘텐츠') as title,
               coalesce(sci.content_url, su.url) as content_url
        from source_snapshots ss
@@ -764,7 +906,8 @@ async function enqueueLatestSourceContentTopics(queryable: Queryable, brandId: s
               'sourceContentItemId', lss.source_content_item_id::text,
               'sourceSnapshotId', lss.source_snapshot_id::text,
               'contentUrl', lss.content_url,
-              'contentHash', lss.content_hash
+              'contentHash', lss.content_hash,
+              'contentPurpose', lss.content_purpose
             )
      from latest_source_snapshots lss
      where lss.content_url is not null
@@ -999,7 +1142,6 @@ interface RepositoryOptions {
   trendNow?: () => Date;
   performanceAdapters?: Partial<Record<PerformanceChannel, PerformanceAdapter>>;
   workerResourceLimits?: Pick<WorkerResourceLimits, "total" | "dmReserved">;
-  deleteAiContentAttachments?: (urls: string[]) => Promise<void>;
 }
 
 function repositoryWorkerResourceLimits(options?: RepositoryOptions) {
@@ -1072,6 +1214,7 @@ function nullableText(value: unknown) {
 function automatedCardNewsSourceMaterials(value: unknown) {
   if (!Array.isArray(value)) return [];
   return value.map((item) => recordValue(item)).map((material) => ({
+    sourceSnapshotId: nullableText(material.sourceSnapshotId) ?? undefined,
     sourceType: String(material.sourceType ?? ""),
     contentUrl: String(material.contentUrl ?? ""),
     content: String(material.content ?? ""),
@@ -1094,6 +1237,7 @@ async function enqueueAutomatedCardNewsOutput(client: Pick<PoolClient, "query">,
   };
   representativeUrl: string | null;
   sourceMaterials: unknown;
+  sourceSnapshotIds?: string[];
 }) {
   return enqueueAutomatedCardNews(client, {
     workspaceId: input.workspaceId,
@@ -1117,6 +1261,10 @@ async function enqueueAutomatedCardNewsOutput(client: Pick<PoolClient, "query">,
     topic: input.topic,
     representativeUrl: input.representativeUrl,
     sourceMaterials: automatedCardNewsSourceMaterials(input.sourceMaterials),
+    sourceSnapshotIds: input.sourceSnapshotIds,
+  }, {
+    automatedContentEnabled: process.env.AUTOMATED_CONTENT_ENABLED === "true",
+    mode: "proposal",
   });
 }
 
@@ -1193,11 +1341,14 @@ export async function fetchInstagramImageManifest(
 
 export function createRepository(pool: Pool, options: RepositoryOptions = {}): ApiRepository {
   const subjectAnalysis = createAiContentSubjectRepository(pool);
+  const brandCore = createBrandCoreRepository(pool);
+  const productLibrary = createProductLibraryRepository(pool);
+  const assetLibrary = createAssetLibraryRepository(pool);
   const brandIntelligenceProvider = createBrandIntelligenceProvider(createBrandIntelligenceRepository(pool));
   const aiContent = createAiContentRepository(pool, {
-    deleteAttachments: options.deleteAiContentAttachments,
     brandIntelligenceProvider,
   });
+  const aiContentAttachmentGc = createAiContentAttachmentGcRepository(pool);
   const aiContentDownload = createAiContentDownloadRepository(pool, { fetchImpl: options.fetchPublishArtifact ?? fetch });
   const aiContentPublish = createAiContentPublishRepository(pool);
   const instagramPublish = resolveInstagramPublishOptions(options);
@@ -1412,15 +1563,25 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
          select pq.id, pq.workspace_id, pq.brand_id, pq.channel, pq.channel_output_id,
                co.delivery_format, co.output_json,
                sa.public_url as rendered_manifest_url,
+               bc.status as channel_status, bc.last_error as channel_last_error,
                bc.external_account_id,
-               cc.id as credential_id, cc.encrypted_payload, cc.auth_mode,
+               cc.id as credential_id, cc.provider as credential_provider,
+               cc.status as credential_status, cc.expires_at as credential_expires_at,
+               cc.scopes as credential_scopes, cc.encrypted_payload, cc.auth_mode,
                bcf.capability_status, bcf.capability_metadata,
                coalesce((select max(pa.attempt_number) from publish_attempts pa where pa.publish_queue_id = pq.id), 0) + 1 as attempt_number
          from claimed pq
          join channel_outputs co on co.id = pq.channel_output_id
          left join storage_artifacts sa on sa.id = co.rendered_artifact_id
          left join brand_channels bc on bc.brand_id = pq.brand_id and bc.channel = pq.channel and bc.deleted_at is null
-         left join channel_credentials cc on cc.brand_channel_id = bc.id and cc.status = 'active' and cc.revoked_at is null
+         left join lateral (
+           select current_credential.*
+           from channel_credentials current_credential
+           where current_credential.brand_channel_id = bc.id
+             and current_credential.revoked_at is null
+           order by current_credential.created_at desc
+           limit 1
+         ) cc on true
          left join brand_content_formats bcf on bcf.brand_id = pq.brand_id and bcf.format = co.delivery_format
        ), attempt as (
          insert into publish_attempts (
@@ -1471,11 +1632,6 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         responseMetadata = { publishedUrl, externalPostId };
       }
       if (queue.channel === "instagram" && instagramPublish.enabled) {
-        if (!queue.rendered_manifest_url) throw new Error("instagram_rendered_manifest_required");
-        if (!queue.external_account_id) throw new Error("instagram_business_account_id_required");
-        if (!queue.encrypted_payload) throw new Error("instagram_access_token_required");
-        const manifest = await fetchInstagramManifest(queue.rendered_manifest_url);
-        const manifestRecord = recordValue(manifest);
         const deliveryFormat = nullableText(queue.delivery_format)
           ?? nullableText(queue.output_json?.deliveryFormat)
           ?? "instagram_feed_carousel";
@@ -1487,6 +1643,35 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         ) {
           throw new Error("instagram_manifest_delivery_format_mismatch");
         }
+        const readiness = evaluateInstagramChannelReadiness({
+          adapterEnabled: instagramPublish.enabled,
+          channelStatus: nullableText(queue.channel_status) as ChannelStatus | null,
+          channelLastError: nullableText(queue.channel_last_error),
+          externalAccountId: nullableText(queue.external_account_id),
+          credentialId: nullableText(queue.credential_id),
+          credentialProvider: nullableText(queue.credential_provider),
+          credentialStatus: nullableText(queue.credential_status),
+          credentialExpiresAt: queue.credential_expires_at instanceof Date
+            || typeof queue.credential_expires_at === "string"
+            ? queue.credential_expires_at
+            : null,
+          hasCredentialPayload: typeof queue.encrypted_payload === "string"
+            && queue.encrypted_payload.length > 0,
+          scopes: Array.isArray(queue.credential_scopes)
+            ? queue.credential_scopes.filter((scope: unknown): scope is string => typeof scope === "string")
+            : [],
+        });
+        if (readiness.readiness !== "ready") throw new Error(readiness.reasonCode);
+        if (deliveryFormat === "instagram_story" && !isVerifiedInstagramStoryCapability({
+          capabilityStatus: queue.capability_status,
+          capabilityMetadata: recordValue(queue.capability_metadata),
+          credentialId: nullableText(queue.credential_id),
+        })) {
+          throw new Error("story_capability_required");
+        }
+        if (!queue.rendered_manifest_url) throw new Error("instagram_rendered_manifest_required");
+        const manifest = await fetchInstagramManifest(queue.rendered_manifest_url);
+        const manifestRecord = recordValue(manifest);
         const manifestDeliveryFormat = nullableText(manifestRecord.deliveryFormat);
         if (manifestDeliveryFormat && manifestDeliveryFormat !== deliveryFormat) {
           throw new Error("instagram_manifest_delivery_format_mismatch");
@@ -1633,11 +1818,21 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         ).catch(() => undefined);
       } else {
         const providerError = error instanceof InstagramPublishStageError ? error.cause : error;
+        const readinessFailureCode = error instanceof Error
+          && instagramReadinessFailureCodes.has(error.message)
+          ? error.message
+          : null;
         const classification = deferredProviderFailure
           ? {
               errorCode: deferredProviderFailure.errorCode,
               retryable: deferredProviderFailure.retryable,
               channelNeedsAttention: deferredProviderFailure.errorCode === "oauth_required"
+            }
+          : readinessFailureCode
+            ? {
+              errorCode: readinessFailureCode,
+              retryable: false,
+              channelNeedsAttention: true,
             }
           : classifyMetaGraphPublishError(providerError);
         const responseMetadata = error instanceof InstagramPublishStageError
@@ -1690,8 +1885,12 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
 
   return {
     ...subjectAnalysis,
+    ...brandCore,
+    ...productLibrary,
+    ...assetLibrary,
     ...instagramTrendRepository,
     ...aiContent,
+    ...aiContentAttachmentGc,
     ...aiContentDownload,
     async prepareAiContentPublish(input) {
       if (!instagramPublish.enabled) throw new Error("publishing_disabled");
@@ -1705,8 +1904,76 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       return aiContentPublish.getAiContentPublishQueueResult(input);
     },
     async health() {
-      await pool.query("select 1");
-      return { database: "ok" };
+      const result = await pool.query(`
+        select
+          exists (
+            select 1
+            from instagram_dm_settings settings
+            join brands brand on brand.id = settings.brand_id
+            where settings.enabled = true
+              and brand.status = 'active'
+              and brand.deleted_at is null
+          ) as active_dm_enabled,
+          case
+            when max(worker.last_heartbeat_at) filter (
+              where worker.worker_type = 'dm'
+                and coalesce(worker.metadata->>'mode', 'dm') not in ('wiki', 'content_proposal')
+                and lower(worker.worker_id) not like 'wiki-%'
+                and lower(worker.worker_id) not like 'content-proposal-%'
+            ) >= now() - interval '90 seconds' then 'online'
+            when max(worker.last_heartbeat_at) filter (
+              where worker.worker_type = 'dm'
+                and coalesce(worker.metadata->>'mode', 'dm') not in ('wiki', 'content_proposal')
+                and lower(worker.worker_id) not like 'wiki-%'
+                and lower(worker.worker_id) not like 'content-proposal-%'
+            ) >= now() - interval '10 minutes' then 'stale'
+            else 'offline'
+          end as dm_worker,
+          case
+            when max(worker.last_heartbeat_at) filter (
+              where worker.worker_type = 'dm'
+                and (worker.metadata->>'mode' = 'wiki' or lower(worker.worker_id) like 'wiki-%')
+            ) >= now() - interval '90 seconds' then 'online'
+            when max(worker.last_heartbeat_at) filter (
+              where worker.worker_type = 'dm'
+                and (worker.metadata->>'mode' = 'wiki' or lower(worker.worker_id) like 'wiki-%')
+            ) >= now() - interval '10 minutes' then 'stale'
+            else 'offline'
+          end as wiki_worker,
+          case
+            when max(worker.last_heartbeat_at) filter (
+              where worker.worker_type = 'dm'
+                and (
+                  worker.metadata->>'mode' = 'content_proposal'
+                  or lower(worker.worker_id) like 'content-proposal-%'
+                )
+            ) >= now() - interval '90 seconds' then 'online'
+            when max(worker.last_heartbeat_at) filter (
+              where worker.worker_type = 'dm'
+                and (
+                  worker.metadata->>'mode' = 'content_proposal'
+                  or lower(worker.worker_id) like 'content-proposal-%'
+                )
+            ) >= now() - interval '10 minutes' then 'stale'
+            else 'offline'
+          end as content_proposal_worker
+        from worker_instances worker
+      `);
+      const row = result.rows[0] as {
+        active_dm_enabled: boolean;
+        dm_worker: "online" | "stale" | "offline";
+        wiki_worker: "online" | "stale" | "offline";
+        content_proposal_worker: "online" | "stale" | "offline";
+      };
+      return {
+        database: "ok" as const,
+        operations: {
+          activeDmEnabled: row.active_dm_enabled === true,
+          dmWorker: row.dm_worker,
+          wikiWorker: row.wiki_worker,
+          contentProposalWorker: row.content_proposal_worker,
+        },
+      };
     },
 
     async getBillingSummary(brandId) {
@@ -2170,6 +2437,55 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       }));
     },
 
+    async getInstagramChannelCapabilityContext(brandId) {
+      const result = await pool.query(
+        `select bc.status as channel_status,
+                bc.last_error as channel_last_error,
+                bc.external_account_id,
+                credential.id as credential_id,
+                credential.provider as credential_provider,
+                credential.status as credential_status,
+                credential.expires_at as credential_expires_at,
+                (credential.encrypted_payload is not null and credential.encrypted_payload <> '') as has_credential_payload,
+                coalesce(credential.scopes, '{}'::text[]) as scopes
+         from brand_channels bc
+         left join lateral (
+           select cc.id, cc.provider, cc.status, cc.expires_at, cc.scopes, cc.encrypted_payload
+           from channel_credentials cc
+           where cc.brand_channel_id = bc.id
+             and cc.revoked_at is null
+           order by cc.created_at desc
+           limit 1
+         ) credential on true
+         where bc.brand_id = $1
+           and bc.channel = 'instagram'
+           and bc.deleted_at is null
+         limit 1`,
+        [brandId],
+      );
+      const row = result.rows[0];
+      return {
+        adapterEnabled: instagramPublish.enabled,
+        channelStatus: typeof row?.channel_status === "string" ? row.channel_status : null,
+        channelLastError: typeof row?.channel_last_error === "string" ? row.channel_last_error : null,
+        externalAccountId: typeof row?.external_account_id === "string"
+          ? row.external_account_id
+          : null,
+        credentialId: typeof row?.credential_id === "string" ? row.credential_id : null,
+        credentialProvider: typeof row?.credential_provider === "string"
+          ? row.credential_provider
+          : null,
+        credentialStatus: typeof row?.credential_status === "string"
+          ? row.credential_status
+          : null,
+        credentialExpiresAt: toIso(row?.credential_expires_at),
+        hasCredentialPayload: row?.has_credential_payload === true,
+        scopes: Array.isArray(row?.scopes)
+          ? row.scopes.filter((scope: unknown): scope is string => typeof scope === "string")
+          : [],
+      };
+    },
+
     async getInstagramChannelIdentity(brandId) {
       const result = await pool.query(
         `select external_account_id, account_label
@@ -2619,7 +2935,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                      tr.target_customer, tr.region, tr.season, tr.reference_url, tr.notes,
                      coalesce((
                        select jsonb_agg(jsonb_build_object(
-                         'sourceType', su.source_type,
+                          'sourceSnapshotId', ss.id::text,
+                          'sourceType', su.source_type,
                          'contentUrl', coalesce(sci.content_url, su.url),
                          'content', ss.extracted_text
                        ) order by ss.fetched_at desc)
@@ -3121,7 +3438,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       context?: { attempt?: number; parentRunId?: string; now?: Date }
     ) {
       const sourceResult = await pool.query(
-        `select id, workspace_id, brand_id, url
+        `select id, workspace_id, brand_id, url, content_purpose
          from source_urls
          where id = $1 and brand_id = $2
            and enabled = true
@@ -3307,7 +3624,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     async crawlSources(brandId, sourceId?: string) {
       const sources = sourceId
         ? await pool.query(
-          `select id, workspace_id, brand_id, url
+          `select id, workspace_id, brand_id, url, content_purpose
            from source_urls
            where id = $1 and brand_id = $2
              and enabled = true
@@ -3316,7 +3633,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           [sourceId, brandId]
         )
         : await pool.query(
-          `select id, workspace_id, brand_id, url
+          `select id, workspace_id, brand_id, url, content_purpose
            from source_urls
            where brand_id = $1
              and enabled = true
@@ -3428,7 +3745,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                     sourceSnapshotId,
                     contentUrl: discoveredUrl.url,
                     contentHash: snapshot.contentHash,
-                    title: snapshot.title
+                    title: snapshot.title,
+                    contentPurpose: source.content_purpose,
                   });
                 }
                 created += 1;
@@ -3440,7 +3758,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                   sourceSnapshotId: existingSnapshot.rows[0].id,
                   contentUrl: discoveredUrl.url,
                   contentHash: snapshot.contentHash,
-                  title: snapshot.title
+                  title: snapshot.title,
+                  contentPurpose: source.content_purpose,
                 });
               }
               await pool.query(
@@ -4017,6 +4336,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                 topic: automatedTopic,
                 representativeUrl: crawlContentUrl ?? referenceUrl,
                 sourceMaterials,
+                sourceSnapshotIds,
               });
             } else {
               await createImageRenderJob(client as any, {
@@ -4524,6 +4844,48 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       return dashboard;
     },
 
+    async getPerformanceInsights(brandId): Promise<PerformanceInsightsDto> {
+      const result = await pool.query(
+        `/* performance_insights */
+         select cps.id, cps.brand_id, cps.publish_queue_id, co.title, cps.channel,
+                co.delivery_format, cps.measurement_window, cps.exposure_count,
+                cps.raw_metrics, cps.content_features, cps.collected_at,
+                latest_attempt.external_url
+         from content_performance_snapshots cps
+         join publish_queue pq
+           on pq.id = cps.publish_queue_id and pq.brand_id = cps.brand_id
+         join channel_outputs co
+           on co.id = cps.channel_output_id and co.brand_id = cps.brand_id
+         left join lateral (
+           select pa.external_url
+           from publish_attempts pa
+           where pa.publish_queue_id = cps.publish_queue_id and pa.status = 'succeeded'
+           order by pa.finished_at desc nulls last, pa.created_at desc, pa.id desc
+           limit 1
+         ) latest_attempt on true
+         where cps.brand_id = $1
+           and cps.measurement_window in ('24h', '72h', '7d')
+           and cps.collected_at >= now() - interval '30 days'
+         order by cps.collected_at, cps.id`,
+        [brandId],
+      );
+      const snapshots: PerformanceInsightSnapshot[] = result.rows.map((row) => ({
+        id: String(row.id),
+        brandId: String(row.brand_id),
+        publishQueueId: String(row.publish_queue_id),
+        title: String(row.title),
+        channel: row.channel as Channel,
+        deliveryFormat: row.delivery_format ?? null,
+        measurementWindow: row.measurement_window,
+        exposureCount: row.exposure_count === null ? null : Number(row.exposure_count),
+        rawMetrics: row.raw_metrics ?? {},
+        contentFeatures: row.content_features ?? {},
+        collectedAt: toIso(row.collected_at)!,
+        externalUrl: row.external_url ?? null,
+      }));
+      return buildPerformanceInsights({ brandId, period: "30d", snapshots });
+    },
+
     async schedulePublishQueue(brandId, now = new Date()) {
       if (!instagramPublish.enabled) throw new Error("publishing_disabled");
       const client = await pool.connect();
@@ -4746,6 +5108,38 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       );
       if (!result.rowCount) throw new Error("publish_queue_not_retryable");
       return { id: result.rows[0].id, status: result.rows[0].status as "queued" | "scheduled" };
+    },
+
+    async cancelPublishQueueItem(queueId) {
+      const result = await pool.query(
+        `with cancelled as (
+           update publish_queue
+              set status = 'cancelled', deferred_until = null,
+                  publishing_started_at = null, updated_at = now()
+            where id = $1 and status in ('queued', 'scheduled', 'deferred')
+          returning id, status, topic_publish_group_id
+         ), updated_group as (
+           update topic_publish_groups tpg
+              set status = case
+                    when exists (select 1 from publish_queue pq where pq.topic_publish_group_id = tpg.id and pq.status = 'failed') then 'failed'
+                    when exists (select 1 from publish_queue pq where pq.topic_publish_group_id = tpg.id and pq.status = 'published') then 'published'
+                    else 'cancelled'
+                  end,
+                  slot_date = null, slot_number = null, scheduled_for = null, updated_at = now()
+             from cancelled
+            where tpg.id = cancelled.topic_publish_group_id
+              and not exists (
+                select 1 from publish_queue pq
+                 where pq.topic_publish_group_id = tpg.id
+                   and pq.status in ('queued', 'scheduled', 'publishing', 'deferred')
+              )
+          returning tpg.id
+         )
+         select id, status from cancelled`,
+        [queueId]
+      );
+      if (!result.rowCount) throw new Error("publish_queue_not_cancellable");
+      return { id: String(result.rows[0].id), status: "cancelled" as const };
     },
 
     async claimDmReplyJob(workerId) {
@@ -5251,6 +5645,20 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         `insert into worker_instances (worker_id, worker_type, last_heartbeat_at)
          values ($1, 'dm', now())
          on conflict (worker_id) do update set worker_type = 'dm', last_heartbeat_at = now(), updated_at = now()`,
+        [workerId],
+      );
+      return { workerId };
+    },
+
+    async heartbeatContentProposalWorker(workerId) {
+      await pool.query(
+        `insert into worker_instances (worker_id, worker_type, last_heartbeat_at, metadata)
+         values ($1, 'dm', now(), '{"mode":"content_proposal"}'::jsonb)
+         on conflict (worker_id) do update
+         set worker_type = 'dm',
+             last_heartbeat_at = now(),
+             metadata = excluded.metadata,
+             updated_at = now()`,
         [workerId],
       );
       return { workerId };
@@ -5814,6 +6222,408 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       }
     },
 
+    async listWikiItems(scope) {
+      const result = await pool.query(
+        `with active_version as (
+           select id, activated_at
+             from wiki_versions
+            where workspace_id = $1::uuid and brand_id = $2::uuid and status = 'active'
+            order by activated_at desc nulls last limit 1
+         ), latest_build as (
+           select status
+             from wiki_build_requests
+            where workspace_id = $1::uuid and brand_id = $2::uuid
+            order by created_at desc limit 1
+         ), sources as (
+           select entry.id, entry.workspace_id, entry.brand_id,
+                  coalesce(nullif(entry.structured_data->>'managementItemType', ''), entry.entry_type) as item_type,
+                  coalesce(nullif(entry.title, ''), entry.question) as title,
+                  coalesce(nullif(entry.content, ''), entry.answer) as content,
+                  case
+                    when entry.status = 'draft' then 'draft'
+                    when entry.status = 'archived' or not entry.enabled then 'inactive'
+                    else entry.status
+                  end as status,
+                  case when entry.origin = 'manual' then 'manual' else 'import' end as origin,
+                  entry.provenance_json, entry.created_by_user_id, entry.approved_by_user_id, entry.approved_at,
+                  entry.entry_type as source_kind, entry.id as source_id
+             from knowledge_entries entry
+            where entry.workspace_id = $1::uuid and entry.brand_id = $2::uuid
+              and entry.entry_type in ('faq', 'policy', 'guide')
+              and entry.status <> 'legacy_projection'
+           union all
+           select item.id, item.workspace_id, item.brand_id, item.kind,
+                  item.display_name,
+                  coalesce(active.profile_json->>'description', item.display_name),
+                  'read_only', 'product_service', '{}'::jsonb, null::uuid,
+                  active.approved_by_user_id, active.approved_at,
+                  'product_service', item.id
+             from product_services item
+             join product_service_versions active
+               on active.id = item.active_version_id
+              and active.workspace_id = item.workspace_id
+              and active.brand_id = item.brand_id
+              and active.status = 'approved'
+            where item.workspace_id = $1::uuid and item.brand_id = $2::uuid
+              and item.status = 'active'
+         )
+         select sources.*,
+                included.wiki_version_id as active_version_id,
+                case when included.wiki_version_id is not null then version.activated_at end as last_built_at,
+                case
+                  when sources.status = 'draft' then 'draft'
+                  when sources.status = 'inactive' then 'inactive'
+                  when latest.status in ('pending', 'building') then latest.status
+                  when latest.status = 'failed' and included.wiki_version_id is not null then 'stale'
+                  when latest.status = 'failed' then 'failed'
+                  when included.wiki_version_id is not null then 'active'
+                  else 'pending'
+                end as build_status
+           from sources
+           left join active_version version on true
+           left join latest_build latest on true
+           left join lateral (
+             select unit.wiki_version_id
+               from wiki_source_units unit
+              where unit.wiki_version_id = version.id
+                and unit.source_kind = sources.source_kind
+                and unit.source_id = sources.source_id
+              limit 1
+           ) included on true
+          order by case when sources.source_kind = 'product_service' then 0 else 1 end,
+                   sources.title, sources.id`,
+        [scope.workspaceId, scope.brandId],
+      );
+      return result.rows.map((row) => mapWikiManagementItem(row as Record<string, any>));
+    },
+
+    async createWikiItem(scope, input) {
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        await requireWikiMember(client, scope);
+        const entryType = input.itemType === "how_to" ? "guide" : input.itemType;
+        const structuredData = input.itemType === "how_to"
+          ? { managementItemType: "how_to" }
+          : {};
+        const created = await client.query(
+          `insert into knowledge_entries (
+             workspace_id, brand_id, entry_type, normalized_question,
+             question, answer, title, content, structured_data,
+             direct_reply_enabled, enabled, last_import_id,
+             origin, provenance_json, status, created_by_user_id
+           ) values (
+             $1::uuid, $2::uuid, $3, $4,
+             case when $3 = 'faq' then $5 end,
+             case when $3 = 'faq' then $6 end,
+             $5, $6, $7::jsonb,
+             $3 = 'faq', false, null,
+             'manual', $8::jsonb, 'draft', $9::uuid
+           )
+           returning id, workspace_id, brand_id,
+                     coalesce(nullif(structured_data->>'managementItemType', ''), entry_type) as item_type,
+                     title, content, status, origin, provenance_json,
+                     created_by_user_id, approved_by_user_id, approved_at,
+                     entry_type as source_kind, id as source_id,
+                     null::uuid as active_version_id, null::timestamptz as last_built_at,
+                     'draft'::text as build_status`,
+          [
+            scope.workspaceId,
+            scope.brandId,
+            entryType,
+            wikiNormalizedKey(input),
+            input.title,
+            input.content,
+            JSON.stringify(structuredData),
+            JSON.stringify(input.provenance),
+            scope.actorUserId,
+          ],
+        );
+        await client.query("commit");
+        return mapWikiManagementItem(created.rows[0] as Record<string, any>);
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async updateWikiItem(scope, input) {
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const approval = input.status === "active" || input.status === "inactive";
+        await requireWikiMember(client, scope, approval ? "approve" : "author");
+        const targetStatus = input.status ?? "draft";
+        const updated = await client.query(
+          `update knowledge_entries
+              set title = coalesce($5, title),
+                  content = coalesce($6, content),
+                  question = case when entry_type = 'faq' then coalesce($5, question) else question end,
+                  answer = case when entry_type = 'faq' then coalesce($6, answer) else answer end,
+                  normalized_question = case
+                    when $5 is null then normalized_question
+                    when entry_type = 'faq' then lower(regexp_replace(normalize($5, NFKC), '\\s+', ' ', 'g'))
+                    else normalized_question
+                  end,
+                  status = case
+                    when $7 = 'active' then 'active'
+                    when $7 = 'inactive' then 'archived'
+                    else 'draft'
+                  end,
+                  enabled = $7 = 'active',
+                  approved_by_user_id = case when $7 = 'active' then $4::uuid else null end,
+                  approved_at = case when $7 = 'active' then now() else null end,
+                  provenance_json = case
+                    when $7 = 'inactive' then provenance_json || jsonb_build_object(
+                      'deactivatedByUserId', $4::text,
+                      'deactivatedAt', now()
+                    )
+                    when $7 = 'active' then provenance_json
+                      - 'deactivatedByUserId' - 'deactivatedAt'
+                    else provenance_json
+                  end,
+                  updated_at = now()
+            where id = $1::uuid and workspace_id = $2::uuid and brand_id = $3::uuid
+              and origin = 'manual'
+              and ($7 in ('active', 'inactive') or status = 'draft')
+          returning id, workspace_id, brand_id,
+                    coalesce(nullif(structured_data->>'managementItemType', ''), entry_type) as item_type,
+                    title, content,
+                    case when status = 'archived' then 'inactive' else status end as status,
+                    origin, provenance_json, created_by_user_id, approved_by_user_id, approved_at,
+                    entry_type as source_kind, id as source_id,
+                    null::uuid as active_version_id, null::timestamptz as last_built_at,
+                    case
+                      when status = 'draft' then 'draft'
+                      when status = 'archived' then 'inactive'
+                      else 'pending'
+                    end as build_status`,
+          [
+            scope.itemId,
+            scope.workspaceId,
+            scope.brandId,
+            scope.actorUserId,
+            input.title ?? null,
+            input.content ?? null,
+            targetStatus,
+          ],
+        );
+        if (!updated.rowCount) throw new Error("wiki_item_not_found");
+        if (approval) await enqueueManagedWikiBuild(client, scope.workspaceId, scope.brandId);
+        await client.query("commit");
+        return mapWikiManagementItem(updated.rows[0] as Record<string, any>);
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async listWikiIssues(scope) {
+      const result = await pool.query(
+        `select issue.id, issue.workspace_id, issue.brand_id, issue.issue_type,
+                issue.severity,
+                case
+                  when issue.status = 'open'
+                   and issue.detail_json ? 'resolutionSourceId' then 'pending_build'
+                  else issue.status
+                end as status,
+                issue.question, issue.detail_json,
+                issue.detail_json->>'resolutionSourceKind' as source_kind,
+                issue.detail_json->>'resolutionSourceId' as source_id,
+                active.id as active_version_id, active.activated_at as last_built_at,
+                case
+                  when build.status in ('pending', 'building') then build.status
+                  when build.status = 'failed' and active.id is not null then 'stale'
+                  when build.status = 'failed' then 'failed'
+                  when active.id is not null then 'active'
+                  else 'pending'
+                end as build_status,
+                issue.resolved_at
+           from wiki_issues issue
+           left join lateral (
+             select id, activated_at from wiki_versions
+              where workspace_id = issue.workspace_id and brand_id = issue.brand_id
+                and status = 'active'
+              order by activated_at desc nulls last limit 1
+           ) active on true
+           left join lateral (
+             select status from wiki_build_requests
+              where workspace_id = issue.workspace_id and brand_id = issue.brand_id
+              order by created_at desc limit 1
+           ) build on true
+          where issue.workspace_id = $1::uuid and issue.brand_id = $2::uuid
+          order by case issue.status when 'open' then 0 else 1 end, issue.created_at desc`,
+        [scope.workspaceId, scope.brandId],
+      );
+      return result.rows.map((row) => mapWikiManagementIssue(row as Record<string, any>));
+    },
+
+    async resolveWikiIssue(scope, input) {
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        await requireWikiMember(client, scope, "resolve");
+        const issue = await client.query(
+          `select id, detail_json, status
+             from wiki_issues
+            where id = $1::uuid and workspace_id = $2::uuid and brand_id = $3::uuid
+            for update`,
+          [scope.issueId, scope.workspaceId, scope.brandId],
+        );
+        if (!issue.rowCount) throw new Error("wiki_issue_not_found");
+        if (issue.rows[0].status !== "open") throw new Error("wiki_issue_not_open");
+        const source = input.sourceKind === "product_service"
+          ? await client.query(
+              `select item.id as source_id
+                 from product_services item
+                 join product_service_versions active
+                   on active.id = item.active_version_id
+                  and active.workspace_id = item.workspace_id
+                  and active.brand_id = item.brand_id
+                  and active.status = 'approved'
+                where item.id = $1::uuid and item.workspace_id = $2::uuid and item.brand_id = $3::uuid
+                  and item.status = 'active'`,
+              [input.sourceId, scope.workspaceId, scope.brandId],
+            )
+          : input.sourceKind === "owned_snapshot"
+            ? await client.query(
+                `select refresh.source_id
+                   from get_wiki_refresh_sources($2::uuid, $3::uuid) refresh
+                  where refresh.source_kind = 'owned_snapshot'
+                    and refresh.source_id = $1::uuid`,
+                [input.sourceId, scope.workspaceId, scope.brandId],
+              )
+            : await client.query(
+                `select entry.id as source_id
+                   from knowledge_entries entry
+                  where entry.id = $1::uuid and entry.workspace_id = $2::uuid
+                    and entry.brand_id = $3::uuid and entry.entry_type = $4
+                    and entry.entry_type in ('faq', 'policy', 'guide')
+                    and entry.enabled
+                    and entry.status in ('approved', 'active')`,
+                [input.sourceId, scope.workspaceId, scope.brandId, input.sourceKind],
+              );
+        if (!source.rowCount) throw new Error("wiki_issue_source_ineligible");
+        const resolved = await client.query(
+          `with changed as (
+             update wiki_issues
+                set detail_json = detail_json || jsonb_build_object(
+                      'resolutionSourceKind', $4::text,
+                      'resolutionSourceId', $5::text,
+                      'resolutionRequestedByUserId', $6::text,
+                      'resolutionRequestedAt', now()
+                    ),
+                    updated_at = now()
+              where id = $1::uuid and workspace_id = $2::uuid and brand_id = $3::uuid
+          returning *
+           )
+           select changed.id, changed.workspace_id, changed.brand_id, changed.issue_type,
+                  changed.severity, 'pending_build'::text as status,
+                  changed.question, changed.detail_json,
+                  changed.detail_json->>'resolutionSourceKind' as source_kind,
+                  changed.detail_json->>'resolutionSourceId' as source_id,
+                  active.id as active_version_id, active.activated_at as last_built_at,
+                  'pending'::text as build_status, changed.resolved_at
+             from changed
+             left join lateral (
+               select id, activated_at from wiki_versions
+                where workspace_id = changed.workspace_id and brand_id = changed.brand_id
+                  and status = 'active'
+                order by activated_at desc nulls last limit 1
+             ) active on true`,
+          [
+            scope.issueId,
+            scope.workspaceId,
+            scope.brandId,
+            input.sourceKind,
+            input.sourceId,
+            scope.actorUserId,
+          ],
+        );
+        await enqueueManagedWikiBuild(client, scope.workspaceId, scope.brandId);
+        await client.query("commit");
+        return mapWikiManagementIssue(resolved.rows[0] as Record<string, any>);
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async summarizeWiki(scope) {
+      const result = await pool.query(
+        `select active.id as active_version_id, active.activated_at as last_built_at,
+                build.status as request_status,
+                ((select count(*)
+                    from knowledge_entries entry
+                   where entry.workspace_id = $1::uuid and entry.brand_id = $2::uuid
+                     and entry.entry_type in ('faq', 'policy', 'guide')
+                     and entry.status <> 'legacy_projection')
+                 +
+                 (select count(*)
+                    from product_services item
+                    join product_service_versions active
+                      on active.id = item.active_version_id
+                     and active.workspace_id = item.workspace_id
+                     and active.brand_id = item.brand_id
+                     and active.status = 'approved'
+                   where item.workspace_id = $1::uuid and item.brand_id = $2::uuid
+                     and item.status = 'active'))::integer as item_count,
+                (select count(*)::integer
+                   from wiki_issues issue
+                  where issue.workspace_id = $1::uuid and issue.brand_id = $2::uuid
+                    and issue.status = 'open') as issue_count,
+                exists(
+                  select 1 from knowledge_entries entry
+                   where entry.workspace_id = $1::uuid and entry.brand_id = $2::uuid
+                     and entry.status = 'draft'
+                ) as has_draft
+           from (select 1) seed
+           left join lateral (
+             select id, activated_at from wiki_versions
+              where workspace_id = $1::uuid and brand_id = $2::uuid and status = 'active'
+              order by activated_at desc nulls last limit 1
+           ) active on true
+           left join lateral (
+             select status from wiki_build_requests
+              where workspace_id = $1::uuid and brand_id = $2::uuid
+              order by created_at desc limit 1
+           ) build on true`,
+        [scope.workspaceId, scope.brandId],
+      );
+      const row = result.rows[0] ?? {};
+      const activeVersionId = row.active_version_id ? String(row.active_version_id) : null;
+      const requestStatus = row.request_status as string | undefined;
+      const buildStatus: WikiManagementBuildStatus =
+        requestStatus === "pending" || requestStatus === "building"
+          ? requestStatus
+          : requestStatus === "failed"
+            ? activeVersionId ? "stale" : "failed"
+            : activeVersionId
+              ? "active"
+              : row.has_draft ? "draft"
+                : Number(row.item_count ?? 0) > 0 ? "pending" : "idle";
+      const state: WikiManagementSummary["state"] =
+        buildStatus === "stale" ? "stale"
+          : buildStatus === "failed" ? "failed"
+            : buildStatus === "building" || buildStatus === "pending" ? "building"
+              : buildStatus === "active" ? "active"
+                : buildStatus === "draft" ? "draft" : "empty";
+      return {
+        state,
+        activeVersionId,
+        lastBuiltAt: toIso(row.last_built_at),
+        buildStatus,
+        itemCount: Number(row.item_count ?? 0),
+        issueCount: Number(row.issue_count ?? 0),
+      };
+    },
+
     async createKnowledgeImport(brandId, input: KnowledgeImportInput) {
       const entryType = input.entryType ?? "faq";
       const parsed = await parseKnowledgeUpload({
@@ -5963,11 +6773,35 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       const result = await pool.query(
         `select settings.enabled, settings.fallback_message, settings.error_message,
                 exists(
+                  select 1
+                  from brand_profiles profile
+                  join brand_core_versions core
+                    on core.id = profile.active_brand_core_id
+                   and core.workspace_id = brand.workspace_id
+                   and core.brand_id = brand.id
+                   and core.status = 'approved'
+                  where profile.brand_id = brand.id
+                ) as brand_core_ready,
+                exists(
                   select 1 from wiki_versions version
                   join wiki_page_chunks chunk on chunk.wiki_version_id = version.id
                   where version.brand_id = brand.id and version.status = 'active'
                     and chunk.enabled and chunk.embedding is not null
+                    and not exists (
+                      select 1
+                      from wiki_source_units unit
+                      join knowledge_entries entry on entry.id = unit.source_id
+                      where unit.wiki_version_id = version.id
+                        and entry.status = 'legacy_projection'
+                    )
                 ) as wiki_ready,
+                case
+                  when active_wiki.id is not null and latest_build.status = 'failed' then 'stale'
+                  when active_wiki.id is not null then 'active'
+                  when latest_build.status in ('pending', 'building') then 'building'
+                  when latest_build.status = 'failed' then 'failed'
+                  else 'empty'
+                end as wiki_status,
                 exists(
                   select 1 from brand_channels channel
                   join channel_credentials credential on credential.brand_channel_id = channel.id
@@ -5979,6 +6813,21 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                 (select bool_or(last_heartbeat_at > now() - interval '30 seconds') from worker_instances where worker_type = 'dm') as worker_online
          from brands brand
          left join instagram_dm_settings settings on settings.brand_id = brand.id
+         left join lateral (
+           select version.id
+           from wiki_versions version
+           where version.workspace_id = brand.workspace_id and version.brand_id = brand.id
+             and version.status = 'active'
+           order by version.activated_at desc nulls last
+           limit 1
+         ) active_wiki on true
+         left join lateral (
+           select request.status
+           from wiki_build_requests request
+           where request.workspace_id = brand.workspace_id and request.brand_id = brand.id
+           order by request.created_at desc
+           limit 1
+         ) latest_build on true
          where brand.id = $1 and brand.deleted_at is null`,
         [brandId],
       );
@@ -5989,7 +6838,11 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         enabled: Boolean(row.enabled),
         fallbackMessage: row.fallback_message ?? "현재 확인 가능한 안내 자료가 부족합니다. 담당자가 확인 후 안내드리겠습니다.",
         errorMessage: row.error_message ?? "답변을 준비하는 중 문제가 발생했습니다. 잠시 후 다시 문의해 주세요.",
+        brandCoreReady: Boolean(row.brand_core_ready),
         wikiReady: Boolean(row.wiki_ready),
+        wikiStatus: ["active", "stale", "building", "failed"].includes(row.wiki_status)
+          ? row.wiki_status
+          : "empty",
         messagePermissionReady: Boolean(row.message_permission_ready),
         webhookStatus: "unchecked",
         workerStatus: row.worker_online === true ? "online" : row.worker_online === false ? "worker_offline" : "unknown",
@@ -5999,7 +6852,12 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     async updateInstagramDmSettings(brandId, input) {
       const current = await this.getInstagramDmSettings(brandId);
       const enabled = input.enabled ?? current.enabled;
-      if (enabled && (!current.wikiReady || !current.messagePermissionReady || current.workerStatus !== "online")) {
+      if (enabled && (
+        !current.brandCoreReady
+        || !current.wikiReady
+        || !current.messagePermissionReady
+        || current.workerStatus !== "online"
+      )) {
         throw new Error("dm_activation_blocked");
       }
       const brand = await pool.query("select workspace_id from brands where id = $1 and deleted_at is null", [brandId]);

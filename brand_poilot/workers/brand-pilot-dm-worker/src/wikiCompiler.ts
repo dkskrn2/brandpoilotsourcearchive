@@ -87,7 +87,7 @@ export function isEditorialSourceUrl(sourceUrl: string | null) {
 }
 
 export function isBrandOfferingSource(unit: CompiledWikiSourceRecord) {
-  if (unit.sourceKind === "product") return true;
+  if (["product", "product_service", "service"].includes(unit.sourceKind)) return true;
   return unit.sourceKind === "owned_snapshot"
     && Boolean(unit.sourceUrl)
     && !isEditorialSourceUrl(unit.sourceUrl);

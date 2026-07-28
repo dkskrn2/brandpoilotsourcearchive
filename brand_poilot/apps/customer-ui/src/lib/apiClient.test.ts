@@ -1,7 +1,57 @@
 import { describe, expect, it, vi } from "vitest";
-import { apiClient } from "./apiClient";
+import { ApiRequestError, apiClient } from "./apiClient";
 
 describe("apiClient", () => {
+  it("preserves structured API error details and field paths", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      error: "content_orchestration_invalid",
+      field: "orchestration.references.0.roles",
+      details: {
+        phase: "proposal_selection",
+        fieldPath: "orchestration.references.0.roles",
+      },
+      requestId: "request-1",
+    }), { status: 422 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    const error = await client.requestJson("/brands/brand-1/ai-content/generations", { method: "POST" })
+      .catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect(error).toMatchObject({
+      status: 422,
+      errorCode: "content_orchestration_invalid",
+      fieldPath: "orchestration.references.0.roles",
+      details: {
+        phase: "proposal_selection",
+        fieldPath: "orchestration.references.0.roles",
+      },
+      requestId: "request-1",
+    });
+  });
+
+  it("requests the authoritative channel capability aggregate", async () => {
+    const response = [{
+      channel: "instagram",
+      catalogStatus: "available",
+      connectionStatus: "connected",
+      canGenerate: true,
+      generationFormats: ["card_news"],
+      exportModes: ["image"],
+      publishModes: ["instagram_feed_carousel"],
+      readiness: "ready",
+      reasonCode: null,
+    }];
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(response), { status: 200 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await expect(client.getChannelCapabilities("brand-1")).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/brands/brand-1/channels/capabilities",
+      expect.objectContaining({ method: "GET", credentials: "include" }),
+    );
+  });
+
   it("submits feedback to its dedicated brand endpoint", async () => {
     const response = {
       id: "feedback-1",

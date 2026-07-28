@@ -642,7 +642,11 @@ export function createInstagramTrendRepository(input: {
     return { hashtagId: String(deleted.rows[0].hashtag_id) };
   }
 
-  async function saveInstagramTrendSource(brandId: string, mediaId: string): Promise<InstagramTrendSaveSourceDto> {
+  async function saveInstagramTrendSource(
+    brandId: string,
+    mediaId: string,
+    actorUserId: string | null = null,
+  ): Promise<InstagramTrendSaveSourceDto> {
     const savedAt = now();
     const client = await input.pool.connect();
     try {
@@ -692,7 +696,21 @@ export function createInstagramTrendRepository(input: {
           [brandId, hash],
         );
       }
-      const source = sourceResult.rows[0];
+      const existingSource = sourceResult.rows[0];
+      if (!existingSource) throw new Error("instagram_trend_source_save_failed");
+      const activatedSource = await client.query(
+        `update source_urls
+         set enabled = true,
+             status = 'crawled',
+             disabled_at = null,
+             last_crawled_at = coalesce(last_crawled_at, $3),
+             last_error = null
+         where id = $1 and brand_id = $2 and deleted_at is null
+         returning id, brand_id, source_type, url, title, status, enabled,
+                   last_crawled_at, last_error`,
+        [existingSource.id, brandId, savedAt],
+      );
+      const source = activatedSource.rows[0];
       if (!source) throw new Error("instagram_trend_source_save_failed");
       const saved = await client.query(
         `insert into brand_trend_saved_media (workspace_id, brand_id, trend_media_id, source_url_id)
@@ -702,6 +720,22 @@ export function createInstagramTrendRepository(input: {
         [workspaceId, brandId, item.id, source.id],
       );
       const alreadySaved = !saved.rowCount;
+      let savedId = saved.rows[0]?.id;
+      if (!savedId) {
+        const existingSaved = await client.query(
+          `select id
+           from brand_trend_saved_media
+           where brand_id = $1 and trend_media_id = $2
+           for update`,
+          [brandId, item.id],
+        );
+        savedId = existingSaved.rows[0]?.id;
+      }
+      if (!savedId) throw new Error("instagram_trend_source_save_failed");
+      await client.query(
+        "select upsert_brand_trend_saved_reference($1, $2) as reference_item_id",
+        [savedId, actorUserId],
+      );
       if (!alreadySaved) {
         const caption = item.caption ?? "";
         const hashtags = [...caption.matchAll(/#[\p{L}\p{N}_]+/gu)].map((match: RegExpMatchArray) => match[0]);
@@ -734,14 +768,64 @@ export function createInstagramTrendRepository(input: {
     }
   }
 
-  async function removeInstagramTrendSource(brandId: string, mediaId: string) {
-    const deleted = await input.pool.query(
-      `delete from brand_trend_saved_media
-       where brand_id = $1 and trend_media_id = $2
-       returning trend_media_id`,
-      [brandId, mediaId],
-    );
-    return { mediaId, removed: Boolean(deleted.rowCount) };
+  async function removeInstagramTrendSource(
+    brandId: string,
+    mediaId: string,
+    actorUserId: string | null = null,
+  ) {
+    const client = await input.pool.connect();
+    try {
+      await client.query("begin");
+      const candidate = await client.query(
+        `select id,workspace_id,source_url_id
+         from brand_trend_saved_media
+         where brand_id = $1 and trend_media_id = $2
+        `,
+        [brandId, mediaId],
+      );
+      if (!candidate.rowCount) {
+        await client.query("commit");
+        return { mediaId, removed: false };
+      }
+      const identity = candidate.rows[0];
+      const source = await client.query(
+        `select id from source_urls
+         where id = $1 and workspace_id = $2 and brand_id = $3
+           and source_type = 'reference' and deleted_at is null
+         for update`,
+        [identity.source_url_id, identity.workspace_id, brandId],
+      );
+      if (!source.rowCount) throw new Error("instagram_trend_source_remove_failed");
+      const saved = await client.query(
+        `select id
+         from brand_trend_saved_media
+         where id = $1 and workspace_id = $2 and brand_id = $3
+           and trend_media_id = $4 and source_url_id = $5
+         for update`,
+        [identity.id, identity.workspace_id, brandId, mediaId, identity.source_url_id],
+      );
+      if (!saved.rowCount) {
+        await client.query("commit");
+        return { mediaId, removed: false };
+      }
+      await client.query(
+        "select archive_brand_trend_saved_reference($1, $2) as reference_item_id",
+        [saved.rows[0].id, actorUserId],
+      );
+      const deleted = await client.query(
+        `delete from brand_trend_saved_media
+         where id = $1 and brand_id = $2 and trend_media_id = $3
+         returning trend_media_id`,
+        [saved.rows[0].id, brandId, mediaId],
+      );
+      await client.query("commit");
+      return { mediaId, removed: Boolean(deleted.rowCount) };
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async function listInstagramTrendArchive(

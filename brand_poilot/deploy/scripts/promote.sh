@@ -8,6 +8,7 @@ source "$SCRIPT_DIR/lib.sh"
 ROOT="${BRAND_PILOT_ROOT:-/opt/brand-pilot}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-120}"
 MODE=""
+PROMOTION_BACKUP_METADATA="${PROMOTION_BACKUP_METADATA:-}"
 
 if [[ $# -eq 1 && "$1" == "--prepare" ]]; then
   MODE="prepare"
@@ -29,6 +30,7 @@ reconcile_transition_or_fail "$ROOT" "$READY_TIMEOUT_SECONDS"
 load_required_state_sha "$ROOT/state/candidate" CANDIDATE_SHA
 validate_release_directory "$ROOT/releases/$CANDIDATE_SHA"
 CANDIDATE_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
+require_digest_image "$CANDIDATE_API_IMAGE"
 CANDIDATE_CADDY_IMAGE="${RELEASE_MANIFEST[CADDY_IMAGE]}"
 CANDIDATE_CANARY_HOST="${RELEASE_MANIFEST[CANARY_HOST]}"
 CANDIDATE_PRIMARY_HOST="${RELEASE_MANIFEST[PRIMARY_HOST]}"
@@ -67,6 +69,47 @@ export CANDIDATE_API_IMAGE
 export CADDY_IMAGE="$CANDIDATE_CADDY_IMAGE"
 export CADDYFILE_PATH="$CANDIDATE_DIR/Caddyfile"
 compose=(docker compose -p brand-pilot -f "$CANDIDATE_DIR/compose.production.yml" --env-file "$CANDIDATE_DIR/release.env")
+
+validate_promotion_backup_metadata() {
+  local path="$1"
+  local line key value required_key
+  local candidate_manifest_checksum external_env_checksum
+  declare -A metadata=()
+  [[ -n "$path" ]] || fail "promotion_backup_metadata_required"
+  require_secure_state_file "$path"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^([A-Z][A-Z0-9_]*)=(.*)$ ]] || fail "promotion_backup_metadata_invalid"
+    key="${BASH_REMATCH[1]}"
+    value="${BASH_REMATCH[2]}"
+    case "$key" in
+      BACKUP_SCHEMA|PROVIDER_BACKUP_ID|CADDY_BACKUP_ID|CADDY_DATA_SHA256|CURRENT_RELEASE_SHA|CURRENT_IMAGE_DIGEST|CANDIDATE_RELEASE_SHA|RELEASE_MANIFEST_SHA256|EXTERNAL_ENV_SHA256) ;;
+      *) fail "promotion_backup_metadata_invalid" ;;
+    esac
+    [[ ! -v "metadata[$key]" && -n "$value" ]] || fail "promotion_backup_metadata_invalid"
+    metadata["$key"]="$value"
+  done < "$path"
+  for required_key in BACKUP_SCHEMA PROVIDER_BACKUP_ID CADDY_BACKUP_ID CADDY_DATA_SHA256 CURRENT_RELEASE_SHA CURRENT_IMAGE_DIGEST CANDIDATE_RELEASE_SHA RELEASE_MANIFEST_SHA256 EXTERNAL_ENV_SHA256; do
+    [[ -v "metadata[$required_key]" ]] || fail "promotion_backup_metadata_invalid"
+  done
+  [[ "${metadata[BACKUP_SCHEMA]}" == "1" ]] || fail "promotion_backup_metadata_invalid"
+  [[ "${metadata[CURRENT_RELEASE_SHA]}" == "${CURRENT_SHA:-NONE}" ]] ||
+    fail "promotion_backup_current_release_mismatch"
+  [[ "${metadata[CURRENT_IMAGE_DIGEST]}" == "${CURRENT_API_IMAGE:-NONE}" ]] ||
+    fail "promotion_backup_current_image_mismatch"
+  [[ "${metadata[CANDIDATE_RELEASE_SHA]}" == "$CANDIDATE_SHA" ]] ||
+    fail "promotion_backup_candidate_mismatch"
+  [[ "${metadata[CADDY_DATA_SHA256]}" =~ ^[a-f0-9]{64}$ ]] ||
+    fail "promotion_backup_metadata_invalid"
+  candidate_manifest_checksum="$(sha256sum -- "$CANDIDATE_DIR/release.env" | awk '{print $1}')"
+  [[ "${metadata[RELEASE_MANIFEST_SHA256]}" == "$candidate_manifest_checksum" ]] ||
+    fail "promotion_backup_manifest_mismatch"
+  require_file_mode_600 "${RELEASE_MANIFEST[API_ENV_FILE]}"
+  external_env_checksum="$(sha256sum -- "${RELEASE_MANIFEST[API_ENV_FILE]}" | awk '{print $1}')"
+  [[ "${metadata[EXTERNAL_ENV_SHA256]}" == "$external_env_checksum" ]] ||
+    fail "promotion_backup_env_mismatch"
+}
+
+validate_promotion_backup_metadata "$PROMOTION_BACKUP_METADATA"
 
 verify_local_release_images() {
   local revision

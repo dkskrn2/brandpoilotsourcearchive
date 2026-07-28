@@ -1,8 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { encryptCredential } from "./credentialCrypto";
 import { MetaGraphRequestError } from "./metaGraph";
 import { InstagramPublishStageError } from "./instagramPublisher";
 import { createRepository, fetchInstagramImageManifest } from "./repository";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function fakePoolWithClient(query: ReturnType<typeof vi.fn>) {
   return {
@@ -16,6 +20,18 @@ function fakePoolWithClient(query: ReturnType<typeof vi.fn>) {
 
 function connectedInstagram() {
   return { rowCount: 1, rows: [{ channel: "instagram" }] };
+}
+
+function readyInstagramPublishContext() {
+  return {
+    channel_status: "connected",
+    channel_last_error: null,
+    credential_provider: "meta",
+    credential_status: "active",
+    credential_expires_at: new Date("2099-01-01T00:00:00.000Z"),
+    credential_scopes: ["instagram_business_basic", "instagram_business_content_publish"],
+    auth_mode: "instagram_login",
+  };
 }
 
 describe("repository regressions", () => {
@@ -398,6 +414,7 @@ describe("repository regressions", () => {
   });
 
   it("keeps Instagram generating until the image worker artifact exists", async () => {
+    vi.stubEnv("AUTOMATED_CONTENT_ENABLED", "true");
     const outputStatuses: string[] = [];
     const queueInserts: unknown[][] = [];
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
@@ -457,6 +474,9 @@ describe("repository regressions", () => {
         outputStatuses.push(String(values?.[6]));
         return { rowCount: 1, rows: [{ id: "output-instagram" }] };
       }
+      if (sql.includes("insert into ai_content_proposal_batches")) {
+        return { rowCount: 1, rows: [{ id: "proposal-batch-1" }] };
+      }
       if (sql.includes("select id from brand_channels")) {
         return { rowCount: 1, rows: [{ id: "channel-instagram" }] };
       }
@@ -472,7 +492,8 @@ describe("repository regressions", () => {
 
     expect(outputStatuses).toEqual(["generating"]);
     expect(queueInserts).toHaveLength(0);
-    expect(query.mock.calls.some(([sql]) => String(sql).includes("insert into ai_content_generation_jobs"))).toBe(true);
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("insert into ai_content_proposal_jobs"))).toBe(true);
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("insert into ai_content_generation_jobs"))).toBe(false);
     expect(query.mock.calls.some(([sql, values]) => String(sql).includes("insert into jobs") && Array.isArray(values) && values.includes("instagram_feed_render"))).toBe(false);
   });
 
@@ -489,6 +510,7 @@ describe("repository regressions", () => {
           delivery_format: "instagram_reel",
           output_json: { caption: "Reel caption", hashtags: ["#brand"] },
           rendered_manifest_url: "https://cdn.example.com/manifest.json",
+          ...readyInstagramPublishContext(),
           external_account_id: "account-1",
           encrypted_payload: encryptCredential("meta-token"),
           credential_id: "credential-1",
@@ -532,6 +554,7 @@ describe("repository regressions", () => {
           delivery_format: "instagram_reel",
           output_json: {},
           rendered_manifest_url: "https://cdn.example.com/manifest.json",
+          ...readyInstagramPublishContext(),
           external_account_id: "account-1",
           encrypted_payload: encryptCredential("meta-token"),
           credential_id: "credential-1",
@@ -563,6 +586,7 @@ describe("repository regressions", () => {
           channel_output_id: "output-1", delivery_format: "instagram_feed_carousel",
           output_json: { caption: "첫 문단입니다.\n\n둘째 문단입니다.", hashtags: ["#하나", "#둘", "#셋", "#넷", "#다섯"] },
           rendered_manifest_url: "https://cdn.example.com/manifest.json", external_account_id: "account-1",
+          ...readyInstagramPublishContext(),
           encrypted_payload: encryptCredential("meta-token"), credential_id: "credential-1", attempt_id: "attempt-1",
         }] };
       }
@@ -598,6 +622,7 @@ describe("repository regressions", () => {
           delivery_format: "instagram_reel",
           output_json: {},
           rendered_manifest_url: "https://cdn.example.com/manifest.json",
+          ...readyInstagramPublishContext(),
           external_account_id: "account-1",
           encrypted_payload: encryptCredential("meta-token"),
           credential_id: "credential-1",

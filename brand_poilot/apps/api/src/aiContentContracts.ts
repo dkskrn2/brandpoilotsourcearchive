@@ -1,4 +1,81 @@
+import { parseContentOrchestrationV1 } from "./contentOrchestration.js";
+
 export type AiContentType = "card_news" | "blog" | "marketing";
+export type ContentFamily = "informational" | "marketing";
+export type OutputFormat = "card_news" | "blog" | "single_image" | "channel_text";
+export type ContentChannelTarget =
+  | "instagram"
+  | "threads"
+  | "x"
+  | "linkedin"
+  | "youtube"
+  | "tiktok"
+  | "blog_export";
+export type MessageStrategy =
+  | "problem_solution"
+  | "how_to"
+  | "comparison"
+  | "faq"
+  | "insight"
+  | "benefit"
+  | "social_proof"
+  | "brand_story"
+  | "cta";
+
+export interface ContentOrchestrationV1 {
+  contractVersion: "content-orchestration.v1";
+  contentFamily: ContentFamily;
+  subject:
+    | { mode: "brand_topic"; topic: string; wikiItemIds: string[] }
+    | { mode: "product_service"; productServiceId: string }
+    | { mode: "new_subject"; subjectAnalysisId: string };
+  target: { id: string | null; snapshot: Record<string, unknown> };
+  strategy: MessageStrategy;
+  outputFormat: OutputFormat;
+  channelTargets: ContentChannelTarget[];
+  brief: Record<string, unknown>;
+  references: Array<{
+    referenceItemId: string;
+    roles: Array<"planning" | "copy_pattern" | "visual_composition">;
+  }>;
+  avatar: null | {
+    mode: "library" | "one_time";
+    id: string;
+    snapshot: Record<string, unknown>;
+  };
+}
+
+export interface ContentProposalV1 {
+  contractVersion: "content-proposal.v1";
+  title: string;
+  reasonToCreateNow: string;
+  contentFamily: ContentFamily;
+  topic: string;
+  target: Record<string, unknown>;
+  messageStrategy: MessageStrategy;
+  hook: string;
+  keyMessage: string;
+  evidence: Array<{ sourceSnapshotId: string; summary: string }>;
+  outline: Array<{ heading: string; purpose: string }>;
+  outputFormat: OutputFormat;
+  channelTargets: ContentChannelTarget[];
+  recommendedReferenceQuery: {
+    strategies: MessageStrategy[];
+    formats: OutputFormat[];
+    tags: string[];
+  };
+}
+
+export interface ContentProposalRequestV1 {
+  contractVersion: "content-proposal-request.v1";
+  contentFamily: ContentFamily;
+  subjectInput: Record<string, unknown>;
+  channelTargets: string[];
+  outputFormats: OutputFormat[];
+  sourceSnapshotIds: string[];
+  performanceSnapshotIds: string[];
+}
+
 export type AiContentJobType = "analyze" | "generate";
 export type AiContentGenerationStatus =
   | "draft"
@@ -11,13 +88,13 @@ export type AiContentGenerationStatus =
   | "partial_failed"
   | "failed";
 export type AiContentOutputStatus = "queued" | "planning" | "generating" | "completed" | "failed";
-export type AiContentAssetRole = "slide" | "cover" | "inline" | "html" | "creative";
+export type AiContentAssetRole = "slide" | "cover" | "inline" | "html" | "creative" | "text";
 
 export interface AiContentAsset {
   role: AiContentAssetRole;
   url: string;
   fileName: string;
-  mimeType: "image/png" | "text/html";
+  mimeType: "image/png" | "text/html" | "text/plain";
   width?: number;
   height?: number;
   index: number;
@@ -51,6 +128,9 @@ interface AiContentManifestBase<TType extends AiContentType, TContent> {
   title: string;
   assets: AiContentAsset[];
   content: TContent;
+  family?: ContentFamily;
+  strategy?: MessageStrategy;
+  outputFormat?: OutputFormat;
 }
 
 export type CardNewsManifest = AiContentManifestBase<"card_news", CardNewsContent>;
@@ -62,12 +142,14 @@ export interface CreateAiContentAnalysisInput {
   type: AiContentType;
   title: string;
   draft: Record<string, unknown>;
+  orchestration?: ContentOrchestrationV1;
   idempotencyKey: string;
 }
 
 export interface UpdateAiContentDraftInput {
   draft: Record<string, unknown>;
   referenceIds: string[];
+  orchestration?: ContentOrchestrationV1;
 }
 
 export interface StartAiContentGenerationInput {
@@ -85,10 +167,24 @@ export interface AttachmentUploadTokenInput {
   checksum: string;
 }
 
-export interface ConfirmAttachmentInput extends AttachmentUploadTokenInput {
+export interface ConfirmUploadSessionInput {
+  sessionId: string;
+  nonce: string;
+}
+
+export interface CancelUploadSessionInput {
+  sessionId: string;
+  nonce: string;
+}
+
+export interface LegacyConfirmAttachmentInput extends AttachmentUploadTokenInput {
   storageUrl: string;
   storagePath: string;
 }
+
+export type ConfirmAttachmentInput =
+  | ConfirmUploadSessionInput
+  | LegacyConfirmAttachmentInput;
 
 interface CompleteAiContentJobBase {
   jobId: string;
@@ -137,6 +233,36 @@ function requiredString(value: unknown, code: string, maxLength = 500): string {
   return normalized;
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function uuid(value: unknown, code: string): string {
+  if (typeof value !== "string" || !UUID.test(value)) fail(code);
+  return value.toLowerCase();
+}
+
+function exactObject(
+  value: unknown,
+  keys: readonly string[],
+  code = "ai_content_invalid_body",
+): Record<string, unknown> {
+  const source = inputObject(value, code);
+  const actual = Object.keys(source);
+  if (actual.length !== keys.length || actual.some((key) => !keys.includes(key))) fail(code);
+  return source;
+}
+
+export function parseAiContentGenerationId(value: unknown): string {
+  return uuid(value, "ai_content_generation_id_invalid");
+}
+
+export function parseAiContentAttachmentId(value: unknown): string {
+  return uuid(value, "ai_content_attachment_id_invalid");
+}
+
+export function parseAiContentUploadSessionId(value: unknown): string {
+  return uuid(value, "ai_content_upload_session_id_invalid");
+}
+
 function parseAttachmentRole(value: unknown): AiContentAttachmentRole {
   if (!(new Set(["product", "person", "scale", "visual_reference", "document"])).has(String(value))) {
     fail("ai_content_attachment_role_invalid");
@@ -149,12 +275,31 @@ export function parseCreateAiContentAnalysisInput(value: unknown): CreateAiConte
   if (!(new Set(["card_news", "blog", "marketing"])).has(String(source.type))) {
     fail("ai_content_type_invalid");
   }
+  const orchestration = source.orchestration === undefined
+    ? undefined
+    : parseContentOrchestrationInput(source.orchestration);
+  if (orchestration && mapOrchestrationOutputToLegacyType(orchestration.outputFormat) !== source.type) {
+    fail("ai_content_type_mapping_mismatch");
+  }
   return {
     type: source.type as AiContentType,
     title: requiredString(source.title, "ai_content_title_invalid", 200),
     draft: inputObject(source.draft, "ai_content_draft_invalid"),
+    ...(orchestration ? { orchestration } : {}),
     idempotencyKey: requiredString(source.idempotencyKey, "ai_content_idempotency_key_invalid", 200),
   };
+}
+
+function mapOrchestrationOutputToLegacyType(outputFormat: OutputFormat): AiContentType {
+  if (outputFormat === "card_news") return "card_news";
+  if (outputFormat === "blog") return "blog";
+  return "marketing";
+}
+
+function parseContentOrchestrationInput(value: unknown): ContentOrchestrationV1 {
+  // Kept as a late import boundary in the public parser contract: the canonical
+  // parser remains the single source of validation truth in contentOrchestration.
+  return parseContentOrchestrationV1(value);
 }
 
 export function parseUpdateAiContentDraftInput(value: unknown): UpdateAiContentDraftInput {
@@ -165,6 +310,9 @@ export function parseUpdateAiContentDraftInput(value: unknown): UpdateAiContentD
   return {
     draft: inputObject(source.draft, "ai_content_draft_invalid"),
     referenceIds: source.referenceIds.map((id) => String(id).trim()),
+    ...(source.orchestration === undefined
+      ? {}
+      : { orchestration: parseContentOrchestrationInput(source.orchestration) }),
   };
 }
 
@@ -195,9 +343,30 @@ export function parseAttachmentUploadTokenInput(value: unknown): AttachmentUploa
 
 export function parseConfirmAttachmentInput(value: unknown): ConfirmAttachmentInput {
   const source = inputObject(value);
+  if (Object.prototype.hasOwnProperty.call(source, "sessionId")
+    || Object.prototype.hasOwnProperty.call(source, "nonce")) {
+    const session = exactObject(source, ["sessionId", "nonce"]);
+    return {
+      sessionId: parseAiContentUploadSessionId(session.sessionId),
+      nonce: requiredString(session.nonce, "ai_content_upload_nonce_invalid", 500),
+    };
+  }
+  return parseLegacyConfirmAttachmentInput(source);
+}
+
+export function parseLegacyConfirmAttachmentInput(value: unknown): LegacyConfirmAttachmentInput {
+  const source = inputObject(value);
   return {
     ...parseAttachmentUploadTokenInput(source),
     storageUrl: requiredString(source.storageUrl, "ai_content_attachment_url_invalid", 2_000),
     storagePath: requiredString(source.storagePath, "ai_content_attachment_path_invalid", 500),
+  };
+}
+
+export function parseCancelUploadSessionInput(value: unknown): CancelUploadSessionInput {
+  const source = exactObject(value, ["sessionId", "nonce"]);
+  return {
+    sessionId: parseAiContentUploadSessionId(source.sessionId),
+    nonce: requiredString(source.nonce, "ai_content_upload_nonce_invalid", 500),
   };
 }

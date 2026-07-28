@@ -1,6 +1,11 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { isRetryableContentWorkerError, runShellCommandWithTimeout } from "@brand-pilot/worker-runtime";
+import {
+  isRetryableContentWorkerError,
+  preflightAttachmentSnapshots,
+  runShellCommandWithTimeout,
+  type AttachmentHead,
+} from "@brand-pilot/worker-runtime";
 import { parseContentGenerationInput, type AiContentJob, type WorkerClient } from "./contracts.js";
 import { loadAnalysis, loadCardNewsResult } from "./manifest.js";
 import { buildPrompt, cardNewsSkillVersion } from "./promptBuilder.js";
@@ -32,7 +37,7 @@ export function createCommandRunner(commandTemplate: string, timeoutMs: number):
   };
 }
 
-export async function runOnce({ workerId, client, planner, runner, storage }: { workerId: string; client: WorkerClient; planner: CodexRunner; runner: CodexRunner; storage: CardNewsStorage }) {
+export async function runOnce({ workerId, client, planner, runner, storage, head }: { workerId: string; client: WorkerClient; planner: CodexRunner; runner: CodexRunner; storage: CardNewsStorage; head?: AttachmentHead }) {
   return withResource(client, workerId, async () => {
     const job = await client.claim(workerId);
     if (!job) return { status: "idle" as const };
@@ -41,12 +46,18 @@ export async function runOnce({ workerId, client, planner, runner, storage }: { 
     let output: Awaited<ReturnType<CodexRunner["run"]>> | undefined;
     try {
       heartbeat = setInterval(() => void client.heartbeat(job.id, workerId, job.leaseToken).catch(() => undefined), 30_000);
+      const rawInput = job.payload.contentGenerationInput;
+      const parsedInput = rawInput === undefined ? null : parseContentGenerationInput(rawInput);
+      if (parsedInput?.attachments.length) {
+        if (!head) throw new Error("ai_content_attachment_storage_unavailable");
+        await preflightAttachmentSnapshots(parsedInput.attachments, { head });
+      }
       if (job.jobType === "analyze") {
         output = await runner.run(job, buildPrompt(job));
         await client.complete(job.id, { workerId, leaseToken: job.leaseToken, skillVersion: cardNewsSkillVersion, jobType: "analyze", analysisJson: await loadAnalysis(output.outputDir) });
       } else {
         if (!job.outputId) throw new Error("card_news_output_id_required");
-        const input = parseContentGenerationInput(job.payload.contentGenerationInput);
+        const input = parsedInput ?? parseContentGenerationInput(job.payload.contentGenerationInput);
         const evidencePool = buildEditorialEvidencePool(job);
         planned = await planner.run(job, buildEditorialPrompt(job));
         const editorialPlan = await loadEditorialPlan(planned.outputDir, evidencePool);

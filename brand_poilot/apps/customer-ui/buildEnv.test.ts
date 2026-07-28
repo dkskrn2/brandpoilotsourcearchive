@@ -70,6 +70,34 @@ describe("assertCustomerBuildEnv", () => {
       })
     ).toBe(productionApiBaseUrl);
   });
+
+  it("rejects the preview destination in a production Vercel build", () => {
+    expect(() =>
+      assertCustomerBuildEnv({
+        VERCEL_ENV: "production",
+        VITE_API_BASE_URL: productionApiBaseUrl,
+        VITE_AUTH_DESTINATION: "preview"
+      })
+    ).toThrowError("VITE_AUTH_DESTINATION_invalid");
+  });
+
+  it("allows only the opaque preview destination in a Vercel preview build", () => {
+    expect(
+      assertCustomerBuildEnv({
+        VERCEL_ENV: "preview",
+        VITE_API_BASE_URL: productionApiBaseUrl,
+        VITE_AUTH_DESTINATION: "preview"
+      })
+    ).toBe(productionApiBaseUrl);
+
+    expect(() =>
+      assertCustomerBuildEnv({
+        VERCEL_ENV: "preview",
+        VITE_API_BASE_URL: productionApiBaseUrl,
+        VITE_AUTH_DESTINATION: "https://evil.example"
+      })
+    ).toThrowError("VITE_AUTH_DESTINATION_invalid");
+  });
 });
 
 describe("Vercel customer asset caching", () => {

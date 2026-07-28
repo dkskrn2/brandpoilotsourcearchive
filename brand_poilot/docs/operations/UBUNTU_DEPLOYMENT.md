@@ -6,9 +6,11 @@ critical webhook traffic yet. The first release runs no db:migrate, no worker,
 no scheduler, and no publication. Keep the current Vercel API available for at
 least **48 hours** as the rollback target.
 
-LM Studio is not used. Tailscale is for private SSH, code transfer, and
-operations only: **private SSH, never public ingress**. Do not enable a
-Tailscale exit node, Funnel, Serve, subnet routing, or any other public routing.
+LM Studio is not used. Tailscale is the **management plane only** for private
+SSH, code transfer, and operations: **private SSH, never public ingress**. Do
+not enable a Tailscale exit node, Funnel, Serve, subnet routing, or any other
+public routing; public OAuth and webhook DNS must never resolve to a Tailscale
+IP.
 
 Placeholders such as `<PUBLIC_IPV4>`, `<TAILSCALE_IP_OR_NAME>`, `<RUN_ID>`,
 `<RELEASE_SHA>`, and `<GITHUB_OWNER>` must be replaced deliberately. Commands
@@ -56,12 +58,19 @@ The fixed first-move controls are:
 ```text
 LOCAL_SCHEDULER_ENABLED=false
 INSTAGRAM_PUBLISH_ENABLED=false
+AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED=false
 DEV_AUTH_ENABLED=false
 DB_POOL_MAX=3
 ```
 
 No worker process is installed in this runbook. Worker, scheduler, publication,
 and database schema changes remain out of scope.
+
+Keep the frontend and API DNS owners separate. `app.danbammsg.co.kr` remains a
+Vercel custom domain. `api.danbammsg.co.kr` and
+`canary-api.danbammsg.co.kr` are the public API hosts and eventually resolve to
+the public Ubuntu IPv4. Publish AAAA only when the host also has a working
+public Ubuntu IPv6 route and matching firewall policy.
 
 ## 2. Network prerequisites
 
@@ -71,15 +80,18 @@ Confirm all of the following before installing software:
 - A static LAN IP or a DHCP reservation for the Ubuntu machine.
 - A real public IPv4. Compare the router WAN address with an external IP check.
   If they differ, investigate double NAT or CGNAT with the ISP before continuing.
-- The router forwards only TCP 80/443 to the static LAN IP. **Never forward TCP
-  22**.
+- The router forwards only TCP 80/443 to the static LAN IP: never TCP 22, 4000,
+  or 5432.
 - If the public address is dynamic, define a tested dynamic public IP / DDNS
   update method and its recovery owner.
 - `canary-api.danbammsg.co.kr` and later `api.danbammsg.co.kr` have DNS A
-  records to the public IPv4. Do not publish an AAAA record without working IPv6
-  routing and firewall policy.
+  records to the public Ubuntu IPv4. Do not publish an AAAA record without a
+  working public Ubuntu IPv6 route and firewall policy.
 - ISP/router/firewall paths allow inbound 80 and 443. Caddy ACME needs public
   reachability to issue and renew certificates.
+- API port 4000 is Docker-internal `expose` only. PostgreSQL 5432 is likewise
+  not published by this stack. Neither port is a router, UFW, or public service
+  exception.
 
 Useful read-only checks:
 
@@ -93,9 +105,9 @@ curl -4 --fail https://ifconfig.me
 sudo ss -lntp
 ```
 
-Record the router WAN IPv4, Ubuntu LAN IPv4, intended public IPv4, DNS values,
-and the person able to change the router. The router forwards only TCP 80/443.
-Operational rule: never forward TCP 22.
+Record the router WAN IPv4, Ubuntu LAN IPv4, intended public IPv4/IPv6, DNS
+values, and the person able to change the router. The router forwards only TCP
+80/443. Operational rule: never forward TCP 22, 4000, or 5432.
 
 ## 3. Tailscale and OpenSSH
 
@@ -113,6 +125,14 @@ sudo install -d -m 700 -o bpdeploy -g bpdeploy /home/bpdeploy/.ssh
 
 No exit node, No Funnel, no public Tailscale routing. Note the Tailscale IP/name
 without publishing it.
+
+The stable device names are `brand-pilot-dev-windows` and
+`brand-pilot-ubuntu`. On every operator run, use `tailscale status` to confirm
+the current device identity, address, online state, and expected owner before
+SSH. Do not hard-code Tailscale IP addresses in scripts, deployment manifests,
+DNS records, or long-lived operator commands; addresses can change. Use the
+device name when MagicDNS is enabled, or copy the current address from that
+specific `tailscale status` result for the one interactive session.
 
 ### 3.2 Windows key
 
@@ -174,18 +194,25 @@ existing session. Re-check the host fingerprint after any OS reinstall.
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
 sudo ufw allow in on tailscale0 to any port 22 proto tcp
+sudo ufw deny 22/tcp
+sudo ufw deny 4000/tcp
+sudo ufw deny 5432/tcp
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
 sudo ufw enable
 sudo ufw status verbose
 ```
 
-The router forwards only TCP 80/443 and never port 22. Verify from an external
-network, not only from the LAN.
+The router forwards only TCP 80/443 and never TCP 22, 4000, or 5432. The
+interface-specific SSH allow precedes the public deny: verify the resulting UFW
+rule order while the physical console and an existing Tailscale session remain
+open. Verify public denial from an external network, not only from the LAN.
 
 ### 3.5 Windows operations
 
-Use the Tailscale IP/name for administration:
+First run `tailscale status` and confirm `brand-pilot-dev-windows` and
+`brand-pilot-ubuntu`; then use the current Tailscale name/address for
+administration:
 
 ```powershell
 ssh -i "$env:USERPROFILE\.ssh\brand-pilot-ubuntu" bpdeploy@<TAILSCALE_IP_OR_NAME>
@@ -298,7 +325,8 @@ NODE_ENV HOST PORT COOKIE_SECURE CORS_ALLOWED_ORIGINS DEV_AUTH_ENABLED
 AUTH_FRONTEND_URL SUPABASE_DATABASE_URL DB_POOL_MAX
 DB_POOL_IDLE_TIMEOUT_MS DB_POOL_CONNECTION_TIMEOUT_MS DB_SSL_CA_BASE64
 SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_BRAND_ASSETS_BUCKET
-WORKER_API_TOKEN ADMIN_SERVICE_TOKEN CRON_SECRET SOURCE_CRAWL_BATCH_SIZE
+WORKER_API_TOKEN ADMIN_SERVICE_TOKEN CONTENT_PROPOSAL_WORKER_API_TOKEN
+CRON_SECRET SOURCE_CRAWL_BATCH_SIZE
 SOURCE_CRAWL_DISCOVERY_LIMIT SOURCE_CRAWL_TIME_BUDGET_MS
 LOCAL_SCHEDULER_ENABLED WORKER_CODEX_MAX_CONCURRENCY
 WORKER_CODEX_DM_RESERVED_SLOTS CREDENTIAL_ENCRYPTION_KEY
@@ -307,6 +335,7 @@ META_APP_SECRET META_OAUTH_REDIRECT_URI META_TRENDS_OAUTH_REDIRECT_URI
 META_WEBHOOK_VERIFY_TOKEN DM_PROFILE_REFRESH_AFTER_HOURS KAKAO_REST_API_KEY
 KAKAO_CLIENT_SECRET KAKAO_REDIRECT_URI BRAND_PILOT_DEV_BRAND_ID
 BRAND_PILOT_DEV_WORKSPACE_ID BLOB_READ_WRITE_TOKEN
+AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED
 AI_CONTENT_DAILY_GENERATION_LIMIT AI_CONTENT_DAILY_DOWNLOAD_LIMIT
 PUBLISH_ARTIFACT_ALLOWED_ORIGINS
 ```
@@ -320,6 +349,7 @@ DEV_AUTH_ENABLED=false
 DB_POOL_MAX=3
 LOCAL_SCHEDULER_ENABLED=false
 INSTAGRAM_PUBLISH_ENABLED=false
+AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED=false
 ```
 
 Keep the original `CREDENTIAL_ENCRYPTION_KEY`. Set `DB_SSL_CA_BASE64` only when
@@ -331,6 +361,58 @@ that renders the environment. On the secret-bearing machine, every Compose
 validation must use `config --quiet`; never render the resolved configuration.
 
 Do not copy a development `.env` wholesale. Do not add `api.env` to Git.
+
+### Shared environment ownership and release boundary
+
+The operator, not an image or release script, creates the five fixed production
+environment files:
+
+```text
+/opt/brand-pilot/shared/env/api.env
+/opt/brand-pilot/shared/env/dm-worker-1.env
+/opt/brand-pilot/shared/env/dm-worker-2.env
+/opt/brand-pilot/shared/env/wiki-worker-1.env
+/opt/brand-pilot/shared/env/content-proposal-worker-1.env
+```
+
+`/opt/brand-pilot/shared/env` must remain owner `bpdeploy`, mode 700. Every file
+must remain owner `bpdeploy`, mode 600. Create the worker files from their
+reviewed examples before running preflight, even while their Compose profiles
+remain disabled:
+
+```bash
+install -m 0600 deploy/env/dm-worker.env.example \
+  /opt/brand-pilot/shared/env/dm-worker-1.env
+install -m 0600 deploy/env/dm-worker.env.example \
+  /opt/brand-pilot/shared/env/dm-worker-2.env
+install -m 0600 deploy/env/wiki-worker.env.example \
+  /opt/brand-pilot/shared/env/wiki-worker-1.env
+install -m 0600 deploy/env/content-proposal-worker.env.example \
+  /opt/brand-pilot/shared/env/content-proposal-worker-1.env
+chmod 700 /opt/brand-pilot/shared/env
+chmod 600 /opt/brand-pilot/shared/env/*.env
+stat -c '%a %U:%G %n' /opt/brand-pilot/shared/env \
+  /opt/brand-pilot/shared/env/*.env
+```
+
+Review and replace every placeholder without printing values. An image pull,
+container replacement, release installation, promotion, or rollback must never
+create, modify, or delete shared env files. Those operations may only read the
+fixed paths. Back up and restore them through a separately approved,
+secret-safe operator procedure.
+
+Set `CONTENT_PROPOSAL_WORKER_API_TOKEN` to one dedicated secret in both
+`api.env` and `content-proposal-worker-1.env`. It must not reuse
+`WORKER_API_TOKEN`. Preflight compares only SHA-256 digests of the two complete
+environment lines and fails closed when either value is missing, still a
+placeholder, or different. Do not print either file or token while diagnosing
+this check.
+
+OAuth/provider changes follow
+[`OAUTH_CUTOVER.md`](./OAUTH_CUTOVER.md). In particular,
+`AUTH_FRONTEND_URL=https://app.danbammsg.co.kr` and
+`CORS_ALLOWED_ORIGINS=https://app.danbammsg.co.kr` are exact production values;
+do not add a temporary or arbitrary origin.
 
 ## 7. Publish and obtain an immutable release
 
@@ -441,6 +523,38 @@ releases, canary deployment changes only `api-canary`; the current
 `state/candidate` is the canary SHA. `state/current` is the serving primary SHA,
 and `state/previous` is created only when an existing primary is successfully
 replaced.
+
+The edge is intentionally narrow. Caddy is the only service bound to host ports
+80/443. Its hostname site blocks obtain and renew ACME certificates, redirect
+plain HTTP to HTTPS automatically, send HSTS, reject request bodies over 32MB,
+and apply bounded client and upstream timeouts before proxying to the
+Docker-internal API port 4000.
+
+Before public DNS propagation is complete, a hosts override may prove that this
+operator machine reaches the intended Ubuntu edge without changing the machine's
+hosts file. The authoritative canary A/AAAA record must already target Ubuntu
+and ACME issuance must have succeeded; do not use `--insecure` to bypass TLS:
+
+```bash
+curl --resolve canary-api.danbammsg.co.kr:443:<PUBLIC_IPV4> --fail https://canary-api.danbammsg.co.kr/health
+curl --resolve canary-api.danbammsg.co.kr:443:<PUBLIC_IPV4> --fail https://canary-api.danbammsg.co.kr/ready
+```
+
+This is only the pre-propagation path check; it does not prove public DNS.
+After public DNS propagation, remove the override and verify the actual public
+resolver path from an external network:
+
+```bash
+dig +short canary-api.danbammsg.co.kr A @1.1.1.1
+dig +short canary-api.danbammsg.co.kr A @8.8.8.8
+dig +short canary-api.danbammsg.co.kr AAAA @1.1.1.1
+curl --fail https://canary-api.danbammsg.co.kr/health
+curl --fail https://canary-api.danbammsg.co.kr/ready
+```
+
+The A answers must equal the public Ubuntu IPv4. The AAAA answer must either be
+empty or equal the verified public Ubuntu IPv6. A Tailscale address is a release
+blocker in either public answer.
 
 Acceptance commands:
 
@@ -768,6 +882,7 @@ Record evidence that:
 - Services are `api-primary`, `api-canary`, and `caddy`.
 - Only TCP 80/443 are publicly bound by this stack.
 - `LOCAL_SCHEDULER_ENABLED=false`, `INSTAGRAM_PUBLISH_ENABLED=false`,
+  `AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED=false`,
   `DEV_AUTH_ENABLED=false`, and DB pool maximum is 3.
 - No database migration, worker, scheduler, or publication ran.
 - The evidence explicitly records no database migration.
@@ -782,3 +897,131 @@ canary verification, `--prepare`, DNS confirmation,
 `--commit --dns-cutover-confirmed`, and rollback workflow. Worker deployment
 remains a **future worker plan** covering DM1, DM2, Wiki, leases, graceful
 shutdown, and its own canary. Do not add workers to this API cutover.
+
+## 11. AI content attachment lifecycle dark launch
+
+The first rollout keeps
+`AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED=false` in the reviewed
+mode-0600 source file, and both `api-canary` and `api-primary` force that same
+safe value. Preflight accepts only the exact lowercase value `false`. Record
+this pass/fail result in the final evidence without printing the resolved
+environment.
+
+The authenticated internal endpoint
+`/internal/cron/ai-content-attachment-gc` is implemented-but-not-scheduled.
+This release adds no cron call, systemd service/timer, or local scheduler
+registration. Endpoint scheduling, alert-rule activation, and
+`AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED=true` each require a later
+Operations/rollout approval.
+
+While the flag is OFF, abandoned legacy uploads remain undiscoverable because
+the legacy token flow creates no upload-session row. The abandoned-upload
+discoverability guarantee begins only after approved upload-session issuance
+and a full legacy-token TTL drain. Do not claim that dark launch alone closes
+this residual risk.
+
+Each approved future GC invocation emits a bounded
+`ai_content_attachment_gc_completed` record. Its metric fields include
+`sessions` scanned/claimed/confirmed/expired, `deletions`
+claimed/started/succeeded/failed/retried/releasedUnstarted,
+`leasesReclaimed`, `eligibleQueueDepth`,
+`oldestEligiblePendingAgeSeconds`, `heldJobCount`, `oldestHeldAgeSeconds`,
+`holdReasonCounts`, `attemptCountBuckets`, `deadLetterCount`, `durationMs`,
+and `providerErrorCategories`. Never record Blob tokens, nonces, signed URLs,
+or secret values.
+
+Alert-rule wiring and activation are explicitly deferred until GC scheduling
+is approved. At that later Operations gate, alert on any of:
+
+- `deadLetterCount` greater than zero;
+- `oldestEligiblePendingAgeSeconds` greater than 86,400 seconds (24 hours);
+- any provider failure repeated for five consecutive scheduled runs.
+
+For a threshold breach, keep issuance OFF or pause its activation, retain the
+deletion obligations, capture only redacted run IDs and metric fields, inspect
+the held-reason and attempt buckets, correct provider authorization or
+availability, then run one explicitly approved bounded GC request. Do not
+discard or manually mark jobs deleted. A dead letter requires named operator
+ownership and evidence that the Blob was deleted or is already not found
+before reconciliation.
+
+Migration 065 is forward-only and is not rolled back. Application rollback is
+flag OFF; cleanup obligations remain and must still converge through the later
+approved GC operation. Activation evidence must therefore show the migration
+is present, canary and primary remain healthy, the issuance flag change was
+approved, the legacy-token TTL fully drained, and all three alert thresholds
+and response ownership are active.
+
+## 12. D rollout canary, backup, restore, and immediate rollback gate
+
+This gate runs only after development is complete. The automated canary is
+read-only: it never runs paid AI generation and never sends a real DM. It
+never publishes to a real SNS channel. Keep `LOCAL_SCHEDULER_ENABLED=false` and
+`INSTAGRAM_PUBLISH_ENABLED=false`; `/ready` must report scheduler, publishing,
+and DM as disabled.
+
+Prepare a mode-0600 Netscape cookie jar for an existing test operator session.
+Do not put the cookie value on the command line or in evidence:
+
+```bash
+export CANARY_SESSION_COOKIE_FILE=/opt/brand-pilot/shared/canary/session.cookies
+export CANARY_BRAND_ID=<TEST_BRAND_UUID>
+./scripts/verify-canary.sh https://canary-api.danbammsg.co.kr https://app.danbammsg.co.kr
+```
+
+The verifier reads `/health`, `/ready`, `/auth/me`, Brand Core, products, Wiki,
+generation usage, and channel capabilities. It also checks allowed and denied
+CORS, a Secure/HttpOnly/SameSite=Lax login cookie, the disabled development auth
+route, DB readiness, and the safe flags. It performs no write request.
+
+Before `promote.sh --prepare`, create the database provider backup and an
+encrypted/provider-managed Caddy data backup outside these scripts. Record only
+their identifiers and the Caddy data checksum:
+
+```bash
+candidate_sha="$(cat /opt/brand-pilot/state/candidate)"
+./scripts/backup-state.sh \
+  --provider-backup-id <PROVIDER_BACKUP_ID> \
+  --caddy-backup-id <ENCRYPTED_CADDY_BACKUP_ID> \
+  --caddy-data-sha256 <CADDY_DATA_SHA256> \
+  --output "/opt/brand-pilot/state/backups/pre-promote-${candidate_sha}.env"
+export PROMOTION_BACKUP_METADATA="/opt/brand-pilot/state/backups/pre-promote-${candidate_sha}.env"
+./scripts/promote.sh --prepare
+```
+
+The metadata binds the current release SHA and image digest, candidate release
+manifest checksum, external environment checksum, provider backup ID, and Caddy
+backup ID. It never copies `api.env`, database URLs, OAuth secrets, credential
+keys, access tokens, Caddy private keys, or other secret plaintext into an
+archive. Promotion fails closed if the metadata no longer matches.
+
+Restore rehearsal is allowed only into an explicitly named `*_restore_test`
+database. The provider adapter must be a separately reviewed executable; the
+database URL file, metadata, and row-count manifest must all be mode 0600:
+
+```bash
+export RESTORE_REHEARSAL_TEST_ONLY=I_UNDERSTAND_TEST_DATABASE_ONLY
+export RESTORE_REHEARSAL_COMMAND=/opt/brand-pilot/ops/provider-restore-test-db
+./scripts/restore-state.sh \
+  --test-database-url-file /opt/brand-pilot/shared/restore/test-database.url \
+  --backup-metadata "$PROMOTION_BACKUP_METADATA" \
+  --expected-schema-version <LATEST_MIGRATION_FILE.sql> \
+  --row-count-manifest /opt/brand-pilot/shared/restore/expected-row-counts.env
+```
+
+The rehearsal verifies the latest `schema_migrations` version and every
+allowlisted `schema.table=count` entry. It refuses any database whose name does
+not end in `_restore_test`.
+
+Rollback uses the previous immutable image digest with the same external
+`API_ENV_FILE`. Trigger immediate rollback on:
+
+- OAuth repeated failure
+- credential decryption failure
+- duplicate DM or publish
+- API interruption longer than 5 minutes
+- migration mismatch
+
+Record only checksums, immutable SHAs/digests, backup identifiers, safe canary
+status, and row-count results. Never record cookies, tokens, database URLs, or
+environment plaintext.

@@ -14,7 +14,7 @@ const connectedInstagram: ChannelConnection = {
 };
 
 describe("buildAiContentPublishOptions", () => {
-  it("always returns six channels and compatible Instagram card-news formats", () => {
+  it("keeps static Story publishing but excludes user-facing Reel generation", () => {
     const options = buildAiContentPublishOptions({ type: "card_news", assetCount: 3, channels: [connectedInstagram] });
 
     expect(options).toHaveLength(6);
@@ -26,15 +26,11 @@ describe("buildAiContentPublishOptions", () => {
         formats: [
           expect.objectContaining({ deliveryFormat: "instagram_feed_carousel", enabled: true }),
           expect.objectContaining({ deliveryFormat: "instagram_story", enabled: true }),
-          expect.objectContaining({
-            deliveryFormat: "instagram_reel",
-            enabled: true,
-            reason: "세로형 영상으로 변환 후 게시",
-          }),
         ],
       }),
       expect.objectContaining({ channel: "threads", connected: false, statusLabel: "OAuth 게시 계정 미연결", formats: [] }),
     ]));
+    expect(options[0].formats.map((format) => format.deliveryFormat)).not.toContain("instagram_reel");
   });
 
   it("uses a single-feed format for one marketing image", () => {

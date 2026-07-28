@@ -79,6 +79,12 @@ export function ChannelConnectionGuideDialog({
         </header>
 
         <div className="channel-guide-dialog__body">
+          {guide.capabilitySummary ? (
+            <section className="channel-guide-section channel-guide-section--notice">
+              <h3>현재 지원 범위</h3>
+              <p>{guide.capabilitySummary}</p>
+            </section>
+          ) : null}
           <section className="channel-guide-section channel-guide-section--notice">
             <h3>연결 전에 준비하세요</h3>
             <ul>{guide.prerequisites.map((item) => <li key={item}>{item}</li>)}</ul>

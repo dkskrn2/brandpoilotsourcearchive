@@ -21,22 +21,32 @@ import { test } from "node:test";
 const read = (path) => readFileSync(path, "utf8");
 const publishWorkflowPath = "../.github/workflows/publish-brand-pilot-server-images.yml";
 const ubuntuRunbookPath = "docs/operations/UBUNTU_DEPLOYMENT.md";
+const oauthCutoverRunbookPath = "docs/operations/OAUTH_CUTOVER.md";
+const previewAuthRunbookPath = "docs/operations/VERCEL_PREVIEW_AUTH.md";
 const ubuntuBootstrapPath = "deploy/scripts/bootstrap-ubuntu.sh";
 const deploymentArtifacts = [
   ".dockerignore",
   "apps/api/Dockerfile",
+  "workers/brand-pilot-dm-worker/Dockerfile",
+  "workers/brand-pilot-content-proposal-worker/Dockerfile",
   "deploy/compose.production.yml",
   "deploy/Caddyfile",
   "deploy/Caddyfile.canary",
   "deploy/release.env.example",
   "deploy/env/api.env.example",
+  "deploy/env/dm-worker.env.example",
+  "deploy/env/wiki-worker.env.example",
+  "deploy/env/content-proposal-worker.env.example",
   "deploy/scripts/preflight.sh",
   "deploy/scripts/deploy.sh",
   "deploy/scripts/lib.sh",
   "deploy/scripts/verify-canary.sh",
   "deploy/scripts/promote.sh",
   "deploy/scripts/rollback.sh",
+  "deploy/scripts/backup-state.sh",
+  "deploy/scripts/restore-state.sh",
   ubuntuRunbookPath,
+  oauthCutoverRunbookPath,
   ubuntuBootstrapPath,
 ];
 
@@ -47,8 +57,109 @@ const deploymentScripts = [
   "deploy/scripts/verify-canary.sh",
   "deploy/scripts/promote.sh",
   "deploy/scripts/rollback.sh",
+  "deploy/scripts/backup-state.sh",
+  "deploy/scripts/restore-state.sh",
   ubuntuBootstrapPath,
 ];
+
+test("Task 10 canary is read-only, authenticated, and proves safe feature flags", () => {
+  const verify = read("deploy/scripts/verify-canary.sh");
+  for (const marker of [
+    "/health",
+    "/ready",
+    "cors_allowed",
+    "cors_denied",
+    "secure_cookie",
+    "/auth/meta/dev-complete",
+    "/auth/me",
+    "/brand-core",
+    "/product-services",
+    "/wiki/status",
+    "/ai-content/usage",
+    "/channels/capabilities",
+    "features.scheduler",
+    "features.publishing",
+    "features.dm",
+    "CANARY_SESSION_COOKIE_FILE",
+    "CANARY_BRAND_ID",
+  ]) {
+    assert.ok(verify.includes(marker), `canary verifier missing ${marker}`);
+  }
+  assert.match(verify, /require_file_mode_600/);
+  assert.match(verify, /Secure/);
+  assert.match(verify, /HttpOnly/);
+  assert.match(verify, /SameSite=Lax/);
+  assert.doesNotMatch(verify, /--request\s+(?:POST|PUT|PATCH|DELETE)|\s-X\s*(?:POST|PUT|PATCH|DELETE)/i);
+  assert.doesNotMatch(
+    verify,
+    /--request\s+(?:POST|PUT|PATCH|DELETE)|\/(?:generate|download|publish|send-message|reply)(?:[/?"]|$)/i,
+  );
+});
+
+test("Task 10 backup metadata excludes secret plaintext and binds promotion state", () => {
+  const backup = read("deploy/scripts/backup-state.sh");
+  const promote = read("deploy/scripts/promote.sh");
+  for (const marker of [
+    "PROVIDER_BACKUP_ID",
+    "CADDY_BACKUP_ID",
+    "CADDY_DATA_SHA256",
+    "CURRENT_RELEASE_SHA",
+    "CURRENT_IMAGE_DIGEST",
+    "RELEASE_MANIFEST_SHA256",
+    "EXTERNAL_ENV_SHA256",
+  ]) {
+    assert.ok(backup.includes(marker), `backup metadata missing ${marker}`);
+  }
+  assert.match(backup, /flock -n 9/);
+  assert.match(backup, /reconcile_transition_or_fail/);
+  assert.doesNotMatch(backup, /\b(?:cp|tar|zip|rsync)\b[^\n]*(?:api\.env|env\/|caddy\/data)/i);
+  assert.doesNotMatch(backup, /(?:DATABASE_URL|CREDENTIAL_ENCRYPTION_KEY|CLIENT_SECRET|ACCESS_TOKEN)=/);
+  assert.match(promote, /PROMOTION_BACKUP_METADATA/);
+  assert.match(promote, /validate_promotion_backup_metadata/);
+  assert.match(promote, /CURRENT_RELEASE_SHA/);
+  assert.match(promote, /CURRENT_IMAGE_DIGEST/);
+});
+
+test("Task 10 restore is test-database-only and verifies schema and row counts", () => {
+  const restore = read("deploy/scripts/restore-state.sh");
+  for (const marker of [
+    "--test-database-url-file",
+    "--backup-metadata",
+    "--expected-schema-version",
+    "--row-count-manifest",
+    "RESTORE_REHEARSAL_TEST_ONLY",
+    "restore_target_database_must_be_test_only",
+    "schema_version_mismatch",
+    "row_count_mismatch",
+    "provider_backup_id",
+  ]) {
+    assert.ok(restore.includes(marker), `restore contract missing ${marker}`);
+  }
+  assert.match(restore, /require_file_mode_600/);
+  assert.match(restore, /flock -n 9/);
+  assert.doesNotMatch(restore, /\beval\b|\bsource\b[^\n]*(?:DATABASE|ENV|metadata)/i);
+});
+
+test("Task 10 rollback uses immutable prior digest and documents immediate triggers", () => {
+  const rollback = read("deploy/scripts/rollback.sh");
+  const runbook = read(ubuntuRunbookPath);
+  assert.match(rollback, /OCI_REVISION/);
+  assert.match(rollback, /@sha256:/);
+  assert.match(rollback, /API_ENV_FILE/);
+  assert.match(rollback, /rollback_external_env_mismatch/);
+  for (const phrase of [
+    "OAuth repeated failure",
+    "credential decryption failure",
+    "duplicate DM or publish",
+    "API interruption longer than 5 minutes",
+    "migration mismatch",
+    "never runs paid AI generation",
+    "never sends a real DM",
+    "never publishes to a real SNS channel",
+  ]) {
+    assert.ok(runbook.includes(phrase), `Ubuntu runbook missing: ${phrase}`);
+  }
+});
 
 function indentation(line) {
   return line.match(/^ */)[0].length;
@@ -169,6 +280,24 @@ test("production deployment artifacts exist", () => {
   );
 });
 
+test("preview auth runbook uses one stable origin and an opaque OAuth destination", () => {
+  assert.equal(existsSync(previewAuthRunbookPath), true, "preview auth runbook is missing");
+  const runbook = read(previewAuthRunbookPath);
+  for (const phrase of [
+    "https://staging-app.danbammsg.co.kr",
+    "AUTH_PREVIEW_FRONTEND_URL=https://staging-app.danbammsg.co.kr",
+    "VITE_API_BASE_URL=https://api.danbammsg.co.kr",
+    "VITE_AUTH_DESTINATION=preview",
+    "destination=preview",
+    "CORS_ALLOWED_ORIGINS=https://app.danbammsg.co.kr,https://www.danbammsg.co.kr,https://staging-app.danbammsg.co.kr",
+    "Do not use a generated `*.vercel.app` URL",
+    "Do not attach the stable alias to an unreviewed pull request",
+    "No Ubuntu host or Vercel project is changed by this repository commit",
+  ]) {
+    assert.ok(runbook.includes(phrase), `preview auth runbook missing: ${phrase}`);
+  }
+});
+
 test("Ubuntu runbook fixes the API-only scope and stable public integration URLs", () => {
   const runbook = read(ubuntuRunbookPath);
   for (const phrase of [
@@ -240,6 +369,58 @@ test("Ubuntu runbook provides private SSH, firewall, Docker, and network prerequ
     assert.ok(runbook.includes(phrase), `Ubuntu runbook missing: ${phrase}`);
   }
   assert.match(runbook, /ssh -i .*brand-pilot-ubuntu.*bpdeploy@<TAILSCALE_IP_OR_NAME>/);
+});
+
+test("Ubuntu runbook separates the Tailscale management plane from public DNS and ingress", () => {
+  const runbook = read(ubuntuRunbookPath);
+  const normalizedRunbook = runbook.replace(/\s+/g, " ");
+  const deploymentBoundary = [
+    runbook,
+    read("deploy/compose.production.yml"),
+    read("deploy/Caddyfile"),
+    read("deploy/Caddyfile.canary"),
+    ...deploymentScripts.map(read),
+  ].join("\n");
+
+  for (const phrase of [
+    "management plane only",
+    "`brand-pilot-dev-windows`",
+    "`brand-pilot-ubuntu`",
+    "`tailscale status`",
+    "Do not hard-code Tailscale IP addresses",
+    "public OAuth and webhook DNS must never resolve to a Tailscale IP",
+    "`api.danbammsg.co.kr` and `canary-api.danbammsg.co.kr`",
+    "public Ubuntu IPv4",
+    "working public Ubuntu IPv6",
+    "`app.danbammsg.co.kr` remains a Vercel custom domain",
+    "never TCP 22, 4000, or 5432",
+    "port 4000 is Docker-internal `expose` only",
+    "Before public DNS propagation",
+    "After public DNS propagation",
+  ]) {
+    assert.ok(
+      normalizedRunbook.includes(phrase),
+      `Ubuntu runbook missing network boundary detail: ${phrase}`,
+    );
+  }
+
+  for (const command of [
+    "tailscale status",
+    "sudo ufw allow in on tailscale0 to any port 22 proto tcp",
+    "sudo ufw deny 22/tcp",
+    "sudo ufw deny 4000/tcp",
+    "sudo ufw deny 5432/tcp",
+    "curl --resolve canary-api.danbammsg.co.kr:443:<PUBLIC_IPV4>",
+    "curl --fail https://canary-api.danbammsg.co.kr/health",
+    "curl --fail https://canary-api.danbammsg.co.kr/ready",
+  ]) {
+    assert.ok(runbook.includes(command), `Ubuntu runbook missing network command: ${command}`);
+  }
+  assert.doesNotMatch(
+    deploymentBoundary,
+    /100\.90\.110\.88|100\.106\.196\.48/,
+    "deployment docs and automation must not pin current Tailscale addresses",
+  );
 });
 
 test("Ubuntu runbook is command-ready for env, artifact integrity, canary, rollback, and cutover", () => {
@@ -502,6 +683,15 @@ test("only Caddy publishes host ports", () => {
   for (const apiBlock of [primaryBlock, canaryBlock]) {
     assert.match(apiBlock, /LOCAL_SCHEDULER_ENABLED:\s*"false"/);
     assert.match(apiBlock, /INSTAGRAM_PUBLISH_ENABLED:\s*"false"/);
+    assert.match(apiBlock, /^ {4}expose:\s*\r?\n {6}- "4000"$/m);
+  }
+  for (const [name, service] of services) {
+    if (!/^(?:dm-worker|wiki-worker)/.test(name)) continue;
+    assert.match(
+      service.text,
+      /^\s{4}profiles:/m,
+      `first-deploy topology must keep ${name} behind an explicit profile`,
+    );
   }
   assert.match(
     primaryBlock,
@@ -513,6 +703,451 @@ test("only Caddy publishes host ports", () => {
   );
   assert.match(caddyBlock, /"80:80"/);
   assert.match(caddyBlock, /"443:443"/);
+});
+
+test("optional workers use dedicated profiles, identities, env files, and hardened containers", () => {
+  const compose = read("deploy/compose.production.yml");
+  const services = assertComposeTopology(compose);
+  const expected = new Map([
+    ["dm-worker-1", {
+      profile: "dm-worker-1",
+      image: "DM_WORKER_IMAGE",
+      env: "DM_WORKER_1_ENV_FILE",
+      identity: "WORKER_ID: dm-worker-1",
+    }],
+    ["dm-worker-2", {
+      profile: "dm-worker-2",
+      image: "DM_WORKER_IMAGE",
+      env: "DM_WORKER_2_ENV_FILE",
+      identity: "WORKER_ID: dm-worker-2",
+    }],
+    ["wiki-worker-1", {
+      profile: "wiki-worker-1",
+      image: "WIKI_WORKER_IMAGE",
+      env: "WIKI_WORKER_1_ENV_FILE",
+      identity: "WORKER_ID: wiki-worker-1",
+    }],
+    ["content-proposal-worker-1", {
+      profile: "content-proposal-worker-1",
+      image: "CONTENT_PROPOSAL_WORKER_IMAGE",
+      env: "CONTENT_PROPOSAL_WORKER_1_ENV_FILE",
+      identity: "WORKER_ID: content-proposal-worker-1",
+    }],
+  ]);
+
+  for (const [name, contract] of expected) {
+    const block = services.get(name);
+    assert.ok(block, `${name} service is missing`);
+    assert.deepEqual(parseServiceList(block, "profiles"), [`"${contract.profile}"`]);
+    assert.match(block.text, new RegExp(`\\$\\{${contract.image}:\\?`));
+    assert.match(block.text, new RegExp(`\\$\\{${contract.env}:-/opt/brand-pilot/shared/env/`));
+    assert.ok(block.text.includes(contract.identity), `${name} must have a unique stable WORKER_ID`);
+    assert.match(block.text, /^ {4}read_only:\s+true$/m);
+    assert.deepEqual(parseServiceList(block, "tmpfs"), ["/tmp:size=64m,mode=1777"]);
+    assert.deepEqual(parseServiceList(block, "cap_drop"), ["ALL"]);
+    assert.deepEqual(parseServiceList(block, "security_opt"), ["no-new-privileges:true"]);
+    assert.match(block.text, /driver:\s+json-file/);
+    assert.match(block.text, /max-size:\s+10m/);
+    assert.match(block.text, /max-file:\s+"5"/);
+    assert.doesNotMatch(block.text, /API_ENV_FILE|api\.env/);
+  }
+
+  for (const automatedWorker of [
+    "card-news-worker",
+    "blog-worker",
+    "marketing-worker",
+    "image-worker",
+    "subject-analysis-worker",
+  ]) {
+    assert.equal(services.has(automatedWorker), false, `${automatedWorker} must stay out of the first Ubuntu stack`);
+  }
+});
+
+test("worker env examples keep service credentials separate and rollout flags fail closed", () => {
+  const apiEnv = read("deploy/env/api.env.example");
+  assert.match(apiEnv, /^AUTOMATED_CONTENT_ENABLED=false$/m);
+  assert.match(apiEnv, /^CONTENT_PROPOSALS_ENABLED=false$/m);
+
+  const dmEnv = read("deploy/env/dm-worker.env.example");
+  const wikiEnv = read("deploy/env/wiki-worker.env.example");
+  const proposalEnv = read("deploy/env/content-proposal-worker.env.example");
+  assert.match(dmEnv, /^DM_WORKER_DATABASE_URL=required-at-deploy-time$/m);
+  assert.match(dmEnv, /^WORKER_API_TOKEN=required-at-deploy-time$/m);
+  assert.match(wikiEnv, /^DM_WORKER_DATABASE_URL=required-at-deploy-time$/m);
+  assert.match(wikiEnv, /^WORKER_API_TOKEN=required-at-deploy-time$/m);
+  assert.match(proposalEnv, /^CONTENT_PROPOSAL_WORKER_API_TOKEN=required-at-deploy-time$/m);
+  for (const env of [dmEnv, wikiEnv, proposalEnv]) {
+    assert.doesNotMatch(env, /API_SERVICE_TOKEN|ADMIN_SERVICE_TOKEN|CRON_SECRET/);
+  }
+});
+
+test("worker Docker images run the real entrypoints as non-root users", () => {
+  const dmDockerfile = read("workers/brand-pilot-dm-worker/Dockerfile");
+  const proposalDockerfile = read("workers/brand-pilot-content-proposal-worker/Dockerfile");
+  for (const dockerfile of [dmDockerfile, proposalDockerfile]) {
+    assert.match(dockerfile, /^FROM node:22-bookworm-slim AS build$/m);
+    assert.match(dockerfile, /^FROM node:22-bookworm-slim AS runtime$/m);
+    assert.match(dockerfile, /^USER node$/m);
+  }
+  assert.match(dmDockerfile, /workers\/brand-pilot-dm-worker\/dist\/index\.js/);
+  assert.match(dmDockerfile, /workers\/brand-pilot-dm-worker\/runtime/);
+  assert.match(dmDockerfile, /@openai\/codex@0\.145\.0/);
+  assert.match(proposalDockerfile, /workers\/brand-pilot-content-proposal-worker\/dist\/main\.js/);
+});
+
+test("preflight forbids worker profiles on the first deploy and fixes activation order", () => {
+  const preflight = read("deploy/scripts/preflight.sh");
+  assert.match(preflight, /COMPOSE_PROFILES/);
+  assert.match(preflight, /first_deploy_worker_profiles_forbidden/);
+  assert.match(
+    preflight,
+    /WIKI_ACTIVE_VERSION[\s\S]*DM_WORKER_1_HEARTBEAT[\s\S]*DM_WORKER_1_LEASE[\s\S]*REMOTE_WORKER_LEASE_EXPIRED[\s\S]*DM_WORKER_2/,
+  );
+});
+
+test("Task 8 fixes every shared env path and preflight permission contract", () => {
+  const compose = read("deploy/compose.production.yml");
+  const preflight = read("deploy/scripts/preflight.sh");
+  const runbook = read(ubuntuRunbookPath);
+  const expectedEnvPaths = [
+    "/opt/brand-pilot/shared/env/api.env",
+    "/opt/brand-pilot/shared/env/dm-worker-1.env",
+    "/opt/brand-pilot/shared/env/dm-worker-2.env",
+    "/opt/brand-pilot/shared/env/wiki-worker-1.env",
+    "/opt/brand-pilot/shared/env/content-proposal-worker-1.env",
+  ];
+
+  for (const path of expectedEnvPaths) {
+    assert.ok(compose.includes(path), `compose missing fixed env path: ${path}`);
+    assert.ok(preflight.includes(path.split("/").at(-1)), `preflight missing env file: ${path}`);
+    assert.ok(runbook.includes(path), `Ubuntu runbook missing env path: ${path}`);
+  }
+  assert.match(preflight, /shared\/env[\s\S]*required_directory_mode_invalid/);
+  assert.match(preflight, /shared\/env[\s\S]*required_directory_owner_invalid/);
+  for (const variable of [
+    "API_ENV_FILE",
+    "DM_WORKER_1_ENV_FILE",
+    "DM_WORKER_2_ENV_FILE",
+    "WIKI_WORKER_1_ENV_FILE",
+    "CONTENT_PROPOSAL_WORKER_1_ENV_FILE",
+  ]) {
+    assert.match(
+      preflight,
+      new RegExp(`require_file_mode_600 "\\$${variable}" "bpdeploy"`),
+      `preflight must validate ${variable}`,
+    );
+  }
+  assert.match(runbook, /shared\/env[^]*mode 700[^]*bpdeploy/i);
+});
+
+test("content proposal worker authentication is present in the API operator contract", () => {
+  const apiEnv = read("deploy/env/api.env.example");
+  const ubuntuRunbook = read(ubuntuRunbookPath);
+  assert.match(
+    apiEnv,
+    /^CONTENT_PROPOSAL_WORKER_API_TOKEN=required-at-deploy-time$/m,
+  );
+  assert.match(
+    ubuntuRunbook,
+    /WORKER_API_TOKEN ADMIN_SERVICE_TOKEN CONTENT_PROPOSAL_WORKER_API_TOKEN/,
+  );
+});
+
+test("preflight rejects missing or mismatched content proposal worker tokens without leaking them", () => {
+  const bash = findBash();
+  assert.ok(bash, "Bash is required for the shared secret contract");
+  const fixture = mkdtempSync(join(tmpdir(), "brand-pilot-shared-secret-"));
+  const apiEnv = join(fixture, "api.env");
+  const workerEnv = join(fixture, "content-proposal-worker-1.env");
+  const run = () => spawnSync(bash, [
+    "-c",
+    'source "$1"; require_matching_env_secret CONTENT_PROPOSAL_WORKER_API_TOKEN "$2" "$3"',
+    "_",
+    bashPath("deploy/scripts/lib.sh"),
+    bashPath(apiEnv),
+    bashPath(workerEnv),
+  ], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  try {
+    for (const [apiContents, workerContents] of [
+      ["OTHER=value\n", "CONTENT_PROPOSAL_WORKER_API_TOKEN=worker-only\n"],
+      ["CONTENT_PROPOSAL_WORKER_API_TOKEN=api-only\n", "OTHER=value\n"],
+    ]) {
+      writeFileSync(apiEnv, apiContents);
+      writeFileSync(workerEnv, workerContents);
+      const missing = run();
+      assert.notEqual(missing.status, 0);
+      assert.match(missing.stderr, /shared_secret_missing/);
+      assert.doesNotMatch(missing.stderr, /api-only|worker-only/);
+    }
+
+    writeFileSync(apiEnv, "CONTENT_PROPOSAL_WORKER_API_TOKEN=required-at-deploy-time\n");
+    writeFileSync(workerEnv, "CONTENT_PROPOSAL_WORKER_API_TOKEN=required-at-deploy-time\n");
+    const placeholder = run();
+    assert.notEqual(placeholder.status, 0);
+    assert.match(placeholder.stderr, /shared_secret_missing/);
+
+    writeFileSync(apiEnv, "CONTENT_PROPOSAL_WORKER_API_TOKEN=api-secret-value\n");
+    writeFileSync(workerEnv, "CONTENT_PROPOSAL_WORKER_API_TOKEN=worker-secret-value\n");
+    const mismatch = run();
+    assert.notEqual(mismatch.status, 0);
+    assert.match(mismatch.stderr, /shared_secret_mismatch/);
+    assert.doesNotMatch(mismatch.stderr, /api-secret-value|worker-secret-value/);
+
+    writeFileSync(apiEnv, "CONTENT_PROPOSAL_WORKER_API_TOKEN=matching-secret-value\n");
+    writeFileSync(workerEnv, "CONTENT_PROPOSAL_WORKER_API_TOKEN=matching-secret-value\n");
+    const matching = run();
+    assert.equal(matching.status, 0, matching.stderr);
+
+    const preflight = read("deploy/scripts/preflight.sh");
+    assert.match(
+      preflight,
+      /require_matching_env_secret[\s\\]+"CONTENT_PROPOSAL_WORKER_API_TOKEN"[\s\\]+"\$API_ENV_FILE"[\s\\]+"\$CONTENT_PROPOSAL_WORKER_1_ENV_FILE"/,
+    );
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("preflight rejects reuse of the general worker token for content proposals without leaking it", () => {
+  const bash = findBash();
+  assert.ok(bash, "Bash is required for the shared secret contract");
+  const fixture = mkdtempSync(join(tmpdir(), "brand-pilot-distinct-secret-"));
+  const apiEnv = join(fixture, "api.env");
+  const reusedSecret = "must-not-appear-reused-worker-secret";
+  try {
+    writeFileSync(
+      apiEnv,
+      [
+        `WORKER_API_TOKEN=${reusedSecret}`,
+        `CONTENT_PROPOSAL_WORKER_API_TOKEN=${reusedSecret}`,
+        "",
+      ].join("\n"),
+    );
+    const result = spawnSync(bash, [
+      "-c",
+      'source "$1"; require_distinct_env_secrets "$2" WORKER_API_TOKEN CONTENT_PROPOSAL_WORKER_API_TOKEN',
+      "_",
+      bashPath("deploy/scripts/lib.sh"),
+      bashPath(apiEnv),
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /shared_secret_reuse/);
+    assert.doesNotMatch(result.stderr, new RegExp(reusedSecret));
+
+    const preflight = read("deploy/scripts/preflight.sh");
+    assert.match(
+      preflight,
+      /require_distinct_env_secrets[\s\\]+"\$API_ENV_FILE"[\s\\]+"WORKER_API_TOKEN"[\s\\]+"CONTENT_PROPOSAL_WORKER_API_TOKEN"/,
+    );
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+function runSharedSecretHelper(apiContents, workerContents, command) {
+  const bash = findBash();
+  assert.ok(bash, "Bash is required for the shared secret contract");
+  const fixture = mkdtempSync(join(tmpdir(), "brand-pilot-secret-parser-"));
+  const apiEnv = join(fixture, "api.env");
+  const workerEnv = join(fixture, "content-proposal-worker-1.env");
+  try {
+    writeFileSync(apiEnv, apiContents);
+    writeFileSync(workerEnv, workerContents);
+    return spawnSync(bash, [
+      "-c",
+      `source "$1"; ${command}`,
+      "_",
+      bashPath("deploy/scripts/lib.sh"),
+      bashPath(apiEnv),
+      bashPath(workerEnv),
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+}
+
+test("shared secret parser rejects a duplicate key followed by an empty value", () => {
+  const result = runSharedSecretHelper(
+    [
+      "WORKER_API_TOKEN=general-token",
+      "CONTENT_PROPOSAL_WORKER_API_TOKEN=proposal-token",
+      "CONTENT_PROPOSAL_WORKER_API_TOKEN=",
+      "",
+    ].join("\n"),
+    "CONTENT_PROPOSAL_WORKER_API_TOKEN=proposal-token\n",
+    'require_distinct_env_secrets "$2" WORKER_API_TOKEN CONTENT_PROPOSAL_WORKER_API_TOKEN',
+  );
+  assert.notEqual(result.status, 0);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /general-token|proposal-token/);
+});
+
+test("shared secret parser rejects a whitespace-only value", () => {
+  const result = runSharedSecretHelper(
+    "CONTENT_PROPOSAL_WORKER_API_TOKEN=   \n",
+    "CONTENT_PROPOSAL_WORKER_API_TOKEN=   \n",
+    'require_matching_env_secret CONTENT_PROPOSAL_WORKER_API_TOKEN "$2" "$3"',
+  );
+  assert.notEqual(result.status, 0);
+});
+
+test("shared secret parser rejects quoted and unquoted equivalent values", () => {
+  const result = runSharedSecretHelper(
+    [
+      "WORKER_API_TOKEN=shared-token",
+      'CONTENT_PROPOSAL_WORKER_API_TOKEN="shared-token"',
+      "",
+    ].join("\n"),
+    'CONTENT_PROPOSAL_WORKER_API_TOKEN="shared-token"\n',
+    'require_distinct_env_secrets "$2" WORKER_API_TOKEN CONTENT_PROPOSAL_WORKER_API_TOKEN',
+  );
+  assert.notEqual(result.status, 0);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /shared-token/);
+});
+
+test("shared secret parser accepts canonical unquoted special characters", () => {
+  const specialToken = "AbC+/=_:.@%-123";
+  const result = runSharedSecretHelper(
+    [
+      "WORKER_API_TOKEN=general-token",
+      `CONTENT_PROPOSAL_WORKER_API_TOKEN=${specialToken}`,
+      "",
+    ].join("\n"),
+    `CONTENT_PROPOSAL_WORKER_API_TOKEN=${specialToken}\n`,
+    'require_matching_env_secret CONTENT_PROPOSAL_WORKER_API_TOKEN "$2" "$3"; '
+      + 'require_distinct_env_secrets "$2" WORKER_API_TOKEN CONTENT_PROPOSAL_WORKER_API_TOKEN',
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /general-token|AbC/);
+});
+
+test("shared secret parser ignores an exact key mentioned in a comment", () => {
+  const result = runSharedSecretHelper(
+    [
+      "CONTENT_PROPOSAL_WORKER_API_TOKEN=canonical-secret",
+      "# Rotate CONTENT_PROPOSAL_WORKER_API_TOKEN through the approved procedure.",
+      "",
+    ].join("\n"),
+    "CONTENT_PROPOSAL_WORKER_API_TOKEN=canonical-secret\n",
+    'require_matching_env_secret CONTENT_PROPOSAL_WORKER_API_TOKEN "$2" "$3"',
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /canonical-secret/);
+});
+
+test("shared secret parser ignores a longer near-match key", () => {
+  const result = runSharedSecretHelper(
+    [
+      "CONTENT_PROPOSAL_WORKER_API_TOKEN=canonical-secret",
+      "CONTENT_PROPOSAL_WORKER_API_TOKEN_BACKUP=backup-secret",
+      "",
+    ].join("\n"),
+    "CONTENT_PROPOSAL_WORKER_API_TOKEN=canonical-secret\n",
+    'require_matching_env_secret CONTENT_PROPOSAL_WORKER_API_TOKEN "$2" "$3"',
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(
+    `${result.stdout}${result.stderr}`,
+    /canonical-secret|backup-secret/,
+  );
+});
+
+for (const [declarationName, alternateDeclaration] of [
+  ["export declaration", "export CONTENT_PROPOSAL_WORKER_API_TOKEN=exported-secret"],
+  ["leading-space declaration", " CONTENT_PROPOSAL_WORKER_API_TOKEN =spaced-secret"],
+  ["colon declaration", "CONTENT_PROPOSAL_WORKER_API_TOKEN: colon-secret"],
+  ["bare declaration", "CONTENT_PROPOSAL_WORKER_API_TOKEN"],
+]) {
+  test(`shared secret parser rejects a canonical line combined with an ${declarationName}`, () => {
+    const result = runSharedSecretHelper(
+      [
+        "CONTENT_PROPOSAL_WORKER_API_TOKEN=canonical-secret",
+        alternateDeclaration,
+        "",
+      ].join("\n"),
+      "CONTENT_PROPOSAL_WORKER_API_TOKEN=canonical-secret\n",
+      'require_matching_env_secret CONTENT_PROPOSAL_WORKER_API_TOKEN "$2" "$3"',
+    );
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(
+      `${result.stdout}${result.stderr}`,
+      /canonical-secret|exported-secret|spaced-secret|colon-secret|CONTENT_PROPOSAL_WORKER_API_TOKEN[:=]/,
+    );
+  });
+}
+
+test("Task 8 release replacement cannot mutate shared env files", () => {
+  const replacementScripts = [
+    "deploy/scripts/deploy.sh",
+    "deploy/scripts/promote.sh",
+    "deploy/scripts/rollback.sh",
+  ].map(read).join("\n");
+
+  const sharedEnvTarget =
+    /shared\/env|(?:API|DM_WORKER_1|DM_WORKER_2|WIKI_WORKER_1|CONTENT_PROPOSAL_WORKER_1)_ENV_FILE/;
+  const sharedEnvMutations = replacementScripts
+    .split(/\r?\n/)
+    .filter((line) =>
+      sharedEnvTarget.test(line)
+      && (
+        /\b(?:rm|mv|cp|install|touch|truncate|chmod|chown|tee)\b/.test(line)
+        || /\bsed\b[^#\n]*\s-i(?:\s|$)/.test(line)
+        || /(?:^|[^<])>{1,2}\s*["']?\$\{?(?:API|DM_WORKER_1|DM_WORKER_2|WIKI_WORKER_1|CONTENT_PROPOSAL_WORKER_1)_ENV_FILE/.test(line)
+      ),
+    );
+  assert.deepEqual(
+    sharedEnvMutations,
+    [],
+    "release replacement scripts must not create, modify, or delete shared env targets",
+  );
+  const runbook = read(ubuntuRunbookPath);
+  assert.match(runbook, /image[^]*release[^]*(?:never|must not)[^]*(?:create|modify|delete)[^]*shared env/i);
+});
+
+test("Task 8 pins OAuth cutover, frontend origin, and secret lifecycle", () => {
+  assert.equal(existsSync(oauthCutoverRunbookPath), true, "OAuth cutover runbook is missing");
+  const runbook = read(oauthCutoverRunbookPath);
+  const apiEnv = read("deploy/env/api.env.example");
+  const fixedValues = [
+    "https://api.danbammsg.co.kr/auth/kakao/callback",
+    "https://api.danbammsg.co.kr/auth/meta/callback",
+    "https://api.danbammsg.co.kr/auth/meta/trends/callback",
+    "https://api.danbammsg.co.kr/webhooks/meta/instagram",
+    "https://app.danbammsg.co.kr",
+  ];
+  for (const value of fixedValues) {
+    assert.ok(runbook.includes(value), `OAuth runbook missing: ${value}`);
+    assert.ok(apiEnv.includes(value), `API env example missing: ${value}`);
+  }
+  for (const phrase of [
+    "add the new callback before removing the old callback",
+    "NEVER arbitrarily rotate `CREDENTIAL_ENCRYPTION_KEY`",
+    "Kakao REST key",
+    "Meta app ID",
+    "webhook verify token",
+    "Supabase",
+    "Blob token",
+    "worker/admin/cron",
+    "suspected exposure",
+    "arbitrary origin",
+    "login",
+    "cancel",
+    "state mismatch",
+    "token decryption",
+    "must not log secrets",
+  ]) {
+    assert.ok(runbook.includes(phrase), `OAuth runbook missing policy: ${phrase}`);
+  }
+  assert.match(apiEnv, /^AUTH_FRONTEND_URL=https:\/\/app\.danbammsg\.co\.kr$/m);
+  assert.match(apiEnv, /^CORS_ALLOWED_ORIGINS=https:\/\/app\.danbammsg\.co\.kr$/m);
 });
 
 test("release images are digest pinned and Caddy checks readiness", () => {
@@ -588,6 +1223,26 @@ test("Caddy applies baseline browser security headers without access logging", (
   assert.equal(hasCaddyLogDirective(caddy), false, "Caddy access logging must remain disabled");
 });
 
+test("Caddy enforces HTTPS, bounded requests, and upstream timeouts on both edges", () => {
+  for (const path of ["deploy/Caddyfile", "deploy/Caddyfile.canary"]) {
+    const caddy = read(path);
+    assert.match(caddy, /tls \{\$ACME_EMAIL\}/, `${path} must use ACME TLS`);
+    assert.match(
+      caddy,
+      /Strict-Transport-Security\s+"max-age=31536000; includeSubDomains"/,
+      `${path} must send HSTS`,
+    );
+    assert.match(caddy, /request_body\s*\{[\s\S]*max_size 32MB[\s\S]*\}/);
+    assert.match(caddy, /timeouts\s*\{[\s\S]*read_body 30s[\s\S]*read_header 10s/);
+    assert.match(caddy, /timeouts\s*\{[\s\S]*write 60s[\s\S]*idle 2m/);
+    assert.match(
+      caddy,
+      /transport http\s*\{[\s\S]*dial_timeout 5s[\s\S]*response_header_timeout 30s/,
+    );
+    assert.doesNotMatch(caddy, /http:\/\/\{\$(?:CANARY|PRIMARY)_HOST\}/);
+  }
+});
+
 test("deployment scripts never enable shell tracing", () => {
   for (const path of deploymentScripts) {
     assert.equal(hasShellTracing(read(path)), false, `${path} enables shell tracing`);
@@ -646,7 +1301,7 @@ test("release manifests are parsed without source or eval and preflight is fail-
   assert.doesNotMatch(preflight, /source\s+["']?\$MANIFEST/);
   assert.match(lib, /manifest_unknown_key/);
   assert.match(lib, /manifest_duplicate_key/);
-  assert.match(lib, /RELEASE_SCHEMA\|RELEASE_SHA\|API_IMAGE\|CADDY_IMAGE\|CANARY_HOST\|PRIMARY_HOST\|ACME_EMAIL\|API_ENV_FILE/);
+  assert.match(lib, /RELEASE_SCHEMA\|RELEASE_SHA\|API_IMAGE\|DM_WORKER_IMAGE\|WIKI_WORKER_IMAGE\|CONTENT_PROPOSAL_WORKER_IMAGE\|CADDY_IMAGE\|CANARY_HOST\|PRIMARY_HOST\|ACME_EMAIL\|API_ENV_FILE/);
   assert.match(preflight, /VERSION_ID=.*24\\?\.04|24\\?\.04.*VERSION_ID/);
   assert.match(preflight, /dpkg --print-architecture/);
   assert.match(preflight, /COMPOSE_MINOR >= 24/);
@@ -658,6 +1313,111 @@ test("release manifests are parsed without source or eval and preflight is fail-
   assert.match(preflight, /LOCAL_SCHEDULER_ENABLED/);
   assert.match(preflight, /INSTAGRAM_PUBLISH_ENABLED/);
   assert.match(preflight, /config --quiet/);
+});
+
+test("the first attachment lifecycle rollout is forced off and remains unscheduled", () => {
+  const flag = "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED";
+  const envExample = read("deploy/env/api.env.example");
+  const compose = read("deploy/compose.production.yml");
+  const services = assertComposeTopology(compose);
+  const preflight = read("deploy/scripts/preflight.sh");
+  const runbook = read(ubuntuRunbookPath);
+  const normalizedRunbook = runbook.replace(/\s+/g, " ");
+  const ledger = read("docs/prd/brand-pilot-feature-preservation-ledger.md");
+
+  assert.equal(
+    envExample.match(new RegExp(`^${flag}=false$`, "gm"))?.length,
+    1,
+    "reviewed API env example must contain one exact false attachment-session flag",
+  );
+  for (const service of ["api-primary", "api-canary"]) {
+    assert.match(
+      services.get(service).text,
+      new RegExp(`^\\s+${flag}:\\s+["']false["']\\s*$`, "m"),
+      `${service} must force the attachment-session flag false`,
+    );
+  }
+  assert.match(
+    preflight,
+    new RegExp(`require_exact_false\\s+"${flag}"\\s+"\\$API_ENV_FILE"`),
+  );
+  assert.ok(
+    runbook.match(new RegExp(`${flag}=false`, "g"))?.length >= 4,
+    "runbook must retain the flag in fixed controls, safe values, final evidence, and dark-launch checks",
+  );
+
+  for (const phrase of [
+    `${flag}=false`,
+    "/internal/cron/ai-content-attachment-gc",
+    "implemented-but-not-scheduled",
+    "later Operations/rollout approval",
+    "full legacy-token TTL drain",
+    "oldestEligiblePendingAgeSeconds",
+    "deadLetterCount",
+    "five consecutive scheduled runs",
+    "forward-only",
+    "flag OFF",
+    "cleanup obligations remain",
+  ]) {
+    assert.ok(normalizedRunbook.includes(phrase), `Ubuntu runbook missing: ${phrase}`);
+  }
+  for (const phrase of [
+    "콘텐츠 첨부 총 5개",
+    "PNG/JPEG 각 5MB",
+    "활성 중복 경고",
+    "fresh upload attempt",
+    "immutable worker snapshot",
+    "15-day retry boundary",
+    "draft preservation on storage failure",
+    "npm run test:deployment",
+  ]) {
+    assert.ok(ledger.includes(phrase), `preservation ledger missing: ${phrase}`);
+  }
+
+  for (const path of deploymentScripts) {
+    assert.doesNotMatch(
+      read(path),
+      /\/internal\/cron\/ai-content-attachment-gc/,
+      `${path} must not invoke attachment GC`,
+    );
+  }
+  assert.doesNotMatch(
+    compose,
+    /(?:systemd|\.service\b|\.timer\b|AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED:\s*["']?true)/i,
+  );
+  assert.doesNotMatch(
+    envExample,
+    /^AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED=true$/m,
+  );
+  const trackedOperationalFiles = spawnSync(
+    "git",
+    ["ls-files", "-z", "--", "apps/api/.env.example", "deploy"],
+    { cwd: process.cwd(), encoding: "utf8" },
+  );
+  assert.equal(trackedOperationalFiles.status, 0, trackedOperationalFiles.stderr);
+  const operationalPaths = trackedOperationalFiles.stdout.split("\0").filter(Boolean);
+  const trackedWorkflowFiles = spawnSync(
+    "git",
+    ["ls-files", "-z", "--", ":(top).github"],
+    { cwd: process.cwd(), encoding: "utf8" },
+  );
+  assert.equal(trackedWorkflowFiles.status, 0, trackedWorkflowFiles.stderr);
+  const workflowPaths = trackedWorkflowFiles.stdout
+    .split("\0")
+    .filter(Boolean)
+    .map((path) => resolve(path));
+  for (const path of [...operationalPaths, ...workflowPaths]) {
+    assert.doesNotMatch(
+      read(path),
+      /AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED(?:=|:\s*)["']?true["']?/,
+      `${path} must not enable attachment-session issuance`,
+    );
+  }
+  assert.equal(
+    operationalPaths.some((path) => /\.(?:service|timer)$/.test(path)),
+    false,
+    "first rollout must not check in an attachment lifecycle systemd unit",
+  );
 });
 
 test("canary verification and promotion keep bounded explicit contracts", () => {
@@ -729,7 +1489,7 @@ test("CI publishing verifies the complete server release contract before buildin
   assert.match(verifyJob, /uses: actions\/checkout@[0-9a-f]{40}\s+# v4\.4\.0[\s\S]*persist-credentials: false/);
   assert.match(verifyJob, /uses: actions\/setup-node@[0-9a-f]{40}\s+# v4\.4\.0[\s\S]*node-version: 22\.23\.1[\s\S]*cache: npm[\s\S]*cache-dependency-path: brand_poilot\/package-lock\.json/);
   assert.match(verifyJob, /name: Install\n {8}working-directory: brand_poilot\n {8}run: npm ci/);
-  assert.match(verifyJob, /name: Verify\n {8}working-directory: brand_poilot\n {8}run: \|\n {10}npm run test:contract\n {10}node --test scripts\/migrationRunner\.test\.mjs\n {10}npm run test:migrations\n {10}npm run test --workspace @brand-pilot\/api\n {10}npm run test --workspace @brand-pilot\/dm-worker\n {10}npm run build --workspace @brand-pilot\/api\n {10}shellcheck --exclude=SC1091,SC2034,SC2317 deploy\/scripts\/\*\.sh\n {10}npm run test:deployment/);
+  assert.match(verifyJob, /name: Verify\n {8}working-directory: brand_poilot\n {8}run: \|\n {10}npm run test:contract\n {10}node --test scripts\/migrationRunner\.test\.mjs\n {10}npm run test:migrations\n {10}npm run test --workspace @brand-pilot\/api\n {10}npm run test --workspace @brand-pilot\/dm-worker\n {10}npm run test --workspace @brand-pilot\/content-proposal-worker\n {10}npm run build --workspace @brand-pilot\/api\n {10}npm run build --workspace @brand-pilot\/dm-worker\n {10}npm run build --workspace @brand-pilot\/content-proposal-worker\n {10}shellcheck --exclude=SC1091,SC2034,SC2317 deploy\/scripts\/\*\.sh\n {10}npm run test:deployment/);
 });
 
 test("CI publishing pushes a lowercase linux amd64 API image with immutable metadata", () => {
@@ -743,6 +1503,16 @@ test("CI publishing pushes a lowercase linux amd64 API image with immutable meta
   assert.match(publishJob, /tags: \$\{\{ steps\.image\.outputs\.name \}\}:sha-\$\{\{ github\.sha \}\}/);
   assert.match(publishJob, /org\.opencontainers\.image\.revision=\$\{\{ github\.sha \}\}/);
   assert.match(publishJob, /org\.opencontainers\.image\.source=https:\/\/github\.com\/\$\{\{ github\.repository \}\}/);
+  for (const [id, file, output] of [
+    ["dm_worker", "workers/brand-pilot-dm-worker/Dockerfile", "dm_worker"],
+    ["wiki_worker", "workers/brand-pilot-dm-worker/Dockerfile", "wiki_worker"],
+    ["content_proposal_worker", "workers/brand-pilot-content-proposal-worker/Dockerfile", "content_proposal_worker"],
+  ]) {
+    assert.match(
+      publishJob,
+      new RegExp(`id: ${id}[\\s\\S]*file: brand_poilot/${file}[\\s\\S]*tags: \\$\\{\\{ steps\\.image\\.outputs\\.${output} \\}\\}:sha-\\$\\{\\{ github\\.sha \\}\\}`),
+    );
+  }
 });
 
 test("CI publishing pins every third-party action to its verified commit", () => {
@@ -756,7 +1526,7 @@ test("CI publishing pins every third-party action to its verified commit", () =>
     ["actions/upload-artifact", "ea165f8d65b6e75b540449e92b4886f43607fa02"],
   ]);
   const uses = [...workflow.matchAll(/^\s*(?:-\s+)?uses:\s+([^@\s]+)@([^\s#]+)\s+#\s+(v\d+\.\d+\.\d+)$/gm)];
-  assert.equal(uses.length, 7);
+  assert.equal(uses.length, 10);
   for (const [, action, revision] of uses) {
     assert.equal(revision, expected.get(action), `${action} is not pinned to the verified SHA`);
   }
@@ -769,8 +1539,12 @@ test("CI release manifest is digest pinned, single-line validated, and checksumm
   assert.match(workflow, /\[\[ "\$caddy_line" == 'CADDY_IMAGE=docker\.io\/library\/caddy@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648' \]\]/);
   assert.match(workflow, /source deploy\/caddy-image\.env/);
   assert.match(workflow, /\[\[ "\$RELEASE_SHA" =~ \^\[0-9a-f\]\{40\}\$ \]\]/);
-  assert.match(workflow, /\[\[ "\$API_DIGEST" =~ \^sha256:\[0-9a-f\]\{64\}\$ \]\]/);
+  assert.match(workflow, /for digest in "\$API_DIGEST" "\$DM_WORKER_DIGEST" "\$WIKI_WORKER_DIGEST" "\$CONTENT_PROPOSAL_WORKER_DIGEST"/);
+  assert.match(workflow, /\[\[ "\$digest" =~ \^sha256:\[0-9a-f\]\{64\}\$ \]\]/);
   assert.match(workflow, /printf 'API_IMAGE=%s@%s\\n' "\$API_IMAGE" "\$API_DIGEST"/);
+  assert.match(workflow, /printf 'DM_WORKER_IMAGE=%s@%s\\n' "\$DM_WORKER_IMAGE" "\$DM_WORKER_DIGEST"/);
+  assert.match(workflow, /printf 'WIKI_WORKER_IMAGE=%s@%s\\n' "\$WIKI_WORKER_IMAGE" "\$WIKI_WORKER_DIGEST"/);
+  assert.match(workflow, /printf 'CONTENT_PROPOSAL_WORKER_IMAGE=%s@%s\\n' "\$CONTENT_PROPOSAL_WORKER_IMAGE" "\$CONTENT_PROPOSAL_WORKER_DIGEST"/);
   for (const line of [
     "RELEASE_SCHEMA=1",
     "CANARY_HOST=canary-api.danbammsg.co.kr",
@@ -821,6 +1595,9 @@ function writeReleaseManifest(directory, overrides = {}, extraLines = []) {
     RELEASE_SCHEMA: "1",
     RELEASE_SHA: "1".repeat(40),
     API_IMAGE: `ghcr.io/dkskrn2/brand-pilot-api@sha256:${digest}`,
+    DM_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-dm-worker@sha256:${digest}`,
+    WIKI_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-wiki-worker@sha256:${digest}`,
+    CONTENT_PROPOSAL_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-content-proposal-worker@sha256:${digest}`,
     CADDY_IMAGE: `docker.io/library/caddy@sha256:${digest}`,
     CANARY_HOST: "canary-api.danbammsg.co.kr",
     PRIMARY_HOST: "api.danbammsg.co.kr",
@@ -849,6 +1626,9 @@ function seedRelease(root, sha, apiEnvFile, overrides = {}) {
   writeReleaseManifest(releaseDirectory, {
     RELEASE_SHA: sha,
     API_IMAGE: `ghcr.io/dkskrn2/brand-pilot-api@sha256:${digest}`,
+    DM_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-dm-worker@sha256:${digest}`,
+    WIKI_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-wiki-worker@sha256:${digest}`,
+    CONTENT_PROPOSAL_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-content-proposal-worker@sha256:${digest}`,
     CADDY_IMAGE: `docker.io/library/caddy@sha256:${digest}`,
     API_ENV_FILE: apiEnvFile,
     ...overrides,
@@ -857,7 +1637,7 @@ function seedRelease(root, sha, apiEnvFile, overrides = {}) {
   copyFileSync("deploy/Caddyfile", join(releaseDirectory, "Caddyfile"));
   copyFileSync("deploy/Caddyfile.canary", join(releaseDirectory, "Caddyfile.canary"));
   mkdirSync(join(releaseDirectory, "scripts"), { recursive: true });
-  for (const name of ["lib.sh", "preflight.sh", "deploy.sh", "verify-canary.sh", "promote.sh", "rollback.sh"]) {
+  for (const name of ["lib.sh", "preflight.sh", "deploy.sh", "verify-canary.sh", "promote.sh", "rollback.sh", "backup-state.sh", "restore-state.sh"]) {
     copyFileSync(join("deploy", "scripts", name), join(releaseDirectory, "scripts", name));
     chmodSync(join(releaseDirectory, "scripts", name), 0o755);
   }
@@ -869,6 +1649,8 @@ function seedRelease(root, sha, apiEnvFile, overrides = {}) {
     [0o644, "Caddyfile.canary"],
     ...["lib.sh", "preflight.sh", "deploy.sh", "verify-canary.sh", "promote.sh", "rollback.sh"]
       .map((name) => [0o755, `scripts/${name}`]),
+    [0o755, "scripts/backup-state.sh"],
+    [0o755, "scripts/restore-state.sh"],
   ];
   const integrity = specs.map(([mode, relative]) => {
     chmodSync(join(releaseDirectory, relative), mode);
@@ -944,6 +1726,25 @@ esac
 `;
 }
 
+function bashFixtureCommand() {
+  return `export PATH="$1:/usr/bin:/bin"
+stat() {
+  if [[ "$*" == *"%U"* ]]; then
+    printf 'bpdeploy\\n'
+    return 0
+  fi
+  path="\${@: -1}"
+  case "$path" in
+    */scripts/*.sh) printf '755\\n' ;;
+    */compose.production.yml|*/Caddyfile|*/Caddyfile.canary) printf '644\\n' ;;
+    *) printf '600\\n' ;;
+  esac
+}
+export -f stat
+shift
+exec bash "$@"`;
+}
+
 function runDeployFixture({
   overrides = {},
   extraLines = [],
@@ -1012,7 +1813,7 @@ function runDeployFixture({
 
   const result = spawnSync(bash, [
     "-c",
-    'export PATH="$1:/usr/bin:/bin"; shift; exec bash "$@"',
+    bashFixtureCommand(),
     "_",
     bashPath(mocks),
     bashPath("deploy/scripts/deploy.sh"),
@@ -1092,7 +1893,7 @@ exec /usr/bin/mv "$@"
   );
   const result = spawnSync(bash, [
     "-c",
-    'export PATH="$1:/usr/bin:/bin"; shift; exec bash "$@"',
+    bashFixtureCommand(),
     "_",
     bashPath(mocks),
     bashPath("deploy/scripts/rollback.sh"),
@@ -1139,6 +1940,9 @@ function runPromotionFixture({
   const apiEnvFile = `${bashPath(root)}/shared/env/api.env`;
   mkdirSync(join(root, "state"), { recursive: true });
   mkdirSync(mocks, { recursive: true });
+  mkdirSync(join(root, "shared", "env"), { recursive: true });
+  writeFileSync(join(root, "shared", "env", "api.env"), "TEST_ONLY=true\n", { mode: 0o600 });
+  chmodSync(join(root, "shared", "env", "api.env"), 0o600);
   seedRelease(root, candidateSha, apiEnvFile, candidateManifestOverrides);
   writeFileSync(join(root, "state", "candidate"), `${candidateSha}\n`, { mode: 0o600 });
   writeFileSync(join(root, "state", "deploy.lock"), "", { mode: 0o600 });
@@ -1146,6 +1950,32 @@ function runPromotionFixture({
     seedRelease(root, currentSha, apiEnvFile, currentManifestOverrides);
     writeFileSync(join(root, "state", "current"), `${currentSha}\n`, { mode: 0o600 });
   }
+  const backupMetadata = join(root, "state", "promotion-backup.env");
+  const candidateManifest = join(root, "releases", candidateSha, "release.env");
+  const manifestChecksum = createHash("sha256").update(readFileSync(candidateManifest)).digest("hex");
+  const envChecksum = createHash("sha256")
+    .update(readFileSync(join(root, "shared", "env", "api.env")))
+    .digest("hex");
+  const currentDigest = current
+    ? `ghcr.io/dkskrn2/brand-pilot-api@sha256:${"b".repeat(64)}`
+    : "NONE";
+  writeFileSync(
+    backupMetadata,
+    [
+      "BACKUP_SCHEMA=1",
+      "PROVIDER_BACKUP_ID=test-provider-backup",
+      "CADDY_BACKUP_ID=test-caddy-backup",
+      `CADDY_DATA_SHA256=${"d".repeat(64)}`,
+      `CURRENT_RELEASE_SHA=${current ? currentSha : "NONE"}`,
+      `CURRENT_IMAGE_DIGEST=${currentDigest}`,
+      `CANDIDATE_RELEASE_SHA=${candidateSha}`,
+      `RELEASE_MANIFEST_SHA256=${manifestChecksum}`,
+      `EXTERNAL_ENV_SHA256=${envChecksum}`,
+      "",
+    ].join("\n"),
+    { mode: 0o600 },
+  );
+  chmodSync(backupMetadata, 0o600);
   const curlLog = join(fixture, "curl.log");
   const dockerLog = join(fixture, "docker.log");
   const eventLog = join(fixture, "events.log");
@@ -1177,7 +2007,7 @@ exit 22
 `);
   const run = (...args) => spawnSync(bash, [
     "-c",
-    'export PATH="$1:/usr/bin:/bin"; shift; exec bash "$@"',
+    bashFixtureCommand(),
     "_",
     bashPath(mocks),
     bashPath("deploy/scripts/promote.sh"),
@@ -1200,6 +2030,7 @@ exit 22
       RELEASE_SHA_FOR_TEST: candidateSha,
       DOCKER_KILL_SWITCH: bashPath(dockerKillSwitch),
       DOCKER_KILL_UP_SERVICE: dockerKillUpService,
+      PROMOTION_BACKUP_METADATA: bashPath(backupMetadata),
     },
   });
   const prepare = () => {
@@ -1593,7 +2424,7 @@ test("later promotion prepare preloads and validates without replacing runtime o
     );
     assert.deepEqual(
       readdirSync(join(fixture.root, "state")).sort(),
-      ["candidate", "current", "deploy.lock", "prepared"],
+      ["candidate", "current", "deploy.lock", "prepared", "promotion-backup.env"],
     );
   } finally {
     rmSync(fixture.fixture, { recursive: true, force: true });
@@ -1618,7 +2449,7 @@ test("first promotion prepare preloads both images and prewarms only primary", (
     );
     assert.deepEqual(
       readdirSync(join(fixture.root, "state")).sort(),
-      ["candidate", "deploy.lock", "prepared"],
+      ["candidate", "deploy.lock", "prepared", "promotion-backup.env"],
     );
   } finally {
     rmSync(fixture.fixture, { recursive: true, force: true });
@@ -2443,7 +3274,7 @@ test("interrupted transition recovery clears rather than rebinds a stale prepare
 
     const commit = fixture.run("--commit", "--dns-cutover-confirmed");
     assert.notEqual(commit.status, 0);
-    assert.match(commit.stderr, /promotion_not_prepared/);
+    assert.match(commit.stderr, /promotion_backup_candidate_mismatch/);
     assert.equal(existsSync(join(fixture.root, "state", "prepared")), false);
   } finally {
     rmSync(fixture.fixture, { recursive: true, force: true });

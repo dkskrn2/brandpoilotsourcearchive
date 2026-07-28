@@ -52,12 +52,6 @@ function instagramFormats(type: AiContentType, assetCount: number): AiContentPub
       enabled: assetCount >= 1,
       reason: assetCount >= 1 ? null : "이미지 결과 필요",
     },
-    {
-      deliveryFormat: "instagram_reel",
-      label: "릴스",
-      enabled: assetCount >= 1,
-      reason: assetCount >= 1 ? "세로형 영상으로 변환 후 게시" : "이미지 결과 필요",
-    },
   ];
 }
 

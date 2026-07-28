@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, CheckCircle2, PauseCircle, Send, UserRound } from "lucide-react";
+import { ArrowLeft, CheckCircle2, ExternalLink, PauseCircle, RotateCcw, Send, UserRound } from "lucide-react";
 import { Badge } from "../ui/Badge";
 import { EmptyState } from "../ui/EmptyState";
 import { InlineSpinner, ListSkeleton } from "../ui/LoadingState";
@@ -53,6 +53,14 @@ function manualReplyErrorMessage(error: unknown) {
   return `수동 답변 전송 중 알 수 없는 오류가 발생했습니다.${requestId ? ` 요청 ID: ${requestId}` : ""}`;
 }
 
+const deliveryLabels = {
+  prepared: "발송 준비",
+  sending: "발송 중",
+  sent: "발송 완료",
+  unknown: "발송 확인 필요",
+  failed: "발송 실패"
+} as const;
+
 interface DmConversationThreadProps {
   detail: DmConversationDetail | null;
   loading: boolean;
@@ -60,7 +68,7 @@ interface DmConversationThreadProps {
   resolving: boolean;
   onBack(): void;
   onResolve(attentionId: string): void;
-  onManualReply(body: string): Promise<void>;
+  onManualReply(body: string, idempotencyKey: ReturnType<Crypto["randomUUID"]>): Promise<void>;
 }
 
 export function DmConversationThread({ detail, loading, error, resolving, onBack, onResolve, onManualReply }: DmConversationThreadProps) {
@@ -68,24 +76,35 @@ export function DmConversationThread({ detail, loading, error, resolving, onBack
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [sendNotice, setSendNotice] = useState<string | null>(null);
+  const [retryBody, setRetryBody] = useState<string | null>(null);
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
   useEffect(() => {
     setBody("");
     setSendError(null);
     setSendNotice(null);
+    setRetryBody(null);
+    setIdempotencyKey(crypto.randomUUID());
   }, [detail?.id]);
 
-  async function submitManualReply() {
-    const trimmed = body.trim();
+  async function submitManualReply(
+    explicitBody?: string,
+    explicitIdempotencyKey: ReturnType<Crypto["randomUUID"]> = idempotencyKey
+  ) {
+    const trimmed = (explicitBody ?? body).trim();
     if (!trimmed || sending) return;
     setSending(true);
     setSendError(null);
     setSendNotice(null);
     try {
-      await onManualReply(trimmed);
+      await onManualReply(trimmed, explicitIdempotencyKey);
       setBody("");
+      setRetryBody(null);
+      setIdempotencyKey(crypto.randomUUID());
       setSendNotice("수동 답변을 전송했습니다.");
     } catch (error) {
+      setRetryBody(trimmed);
+      setIdempotencyKey(explicitIdempotencyKey);
       setSendError(manualReplyErrorMessage(error));
     } finally {
       setSending(false);
@@ -98,6 +117,7 @@ export function DmConversationThread({ detail, loading, error, resolving, onBack
 
   let previousDate = "";
   const openAttention = detail.attentionItems.find((item) => item.status === "open");
+  const knowledgeGap = detail.attentionItems.find((item) => item.status === "open" && item.type === "knowledge_gap");
   const participantName = detail.participant.displayName || detail.participant.username || `사용자-${detail.participant.instagramScopedId.slice(-6)}`;
 
   return (
@@ -123,6 +143,12 @@ export function DmConversationThread({ detail, loading, error, resolving, onBack
           </button>
         </div>
       ) : null}
+      {knowledgeGap ? (
+        <div className="dm-knowledge-gap">
+          <div><strong>답변 지식 보완이 필요합니다</strong><span>{knowledgeGap.reason || "고객 질문에 답할 승인된 지식이 부족합니다."}</span></div>
+          <a className="button" href={`/brand-center?tab=wiki&issue=${encodeURIComponent(knowledgeGap.id)}`}>Wiki에서 보완 <ExternalLink size={14} /></a>
+        </div>
+      ) : null}
 
       <div className="dm-message-stream">
         {detail.messages.length === 0 ? <EmptyState title="메시지가 없습니다" description="이 대화에 저장된 메시지가 없습니다." /> : null}
@@ -140,7 +166,16 @@ export function DmConversationThread({ detail, loading, error, resolving, onBack
                   <time>{new Date(message.createdAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}</time>
                   {message.reasonCode ? <span>{reasonLabels[message.reasonCode]}</span> : null}
                   {message.sourceLabel ? <span>근거: {message.sourceLabel}</span> : null}
-                  {message.deliveryStatus ? <span>발송: {message.deliveryStatus}</span> : null}
+                  {message.deliveryStatus ? <span>{deliveryLabels[message.deliveryStatus]}</span> : null}
+                  {message.direction === "outbound" && message.deliveryStatus === "failed" && message.body ? (
+                    <button className="dm-message-retry" type="button" aria-label={`${message.body} 다시 보내기`} disabled={sending} onClick={() => {
+                      const nextIdempotencyKey = crypto.randomUUID();
+                      setIdempotencyKey(nextIdempotencyKey);
+                      void submitManualReply(message.body ?? undefined, nextIdempotencyKey);
+                    }}>
+                      <RotateCcw size={12} /> 다시 보내기
+                    </button>
+                  ) : null}
                 </div>
               </article>
             </div>
@@ -171,7 +206,7 @@ export function DmConversationThread({ detail, loading, error, resolving, onBack
           </button>
         </div>
         {sendNotice ? <p className="notice success" role="status">{sendNotice}</p> : null}
-        {sendError ? <p className="dm-error-text" role="alert">{sendError}</p> : null}
+        {sendError ? <div className="dm-manual-error" role="alert"><span>{sendError}</span>{retryBody ? <button className="button" type="button" disabled={sending} onClick={() => void submitManualReply(retryBody)}>다시 시도</button> : null}</div> : null}
       </div>
     </section>
   );

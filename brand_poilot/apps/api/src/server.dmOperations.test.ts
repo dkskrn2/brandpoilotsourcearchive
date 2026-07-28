@@ -4,6 +4,30 @@ import { createServer } from "./httpServer.js";
 function repository() {
   return {
     health: vi.fn(async () => ({ database: "ok" as const })),
+    getInstagramDmSettings: vi.fn(async () => ({
+      brandId,
+      enabled: false,
+      fallbackMessage: "fallback",
+      errorMessage: "error",
+      brandCoreReady: true,
+      wikiReady: true,
+      wikiStatus: "active",
+      messagePermissionReady: true,
+      webhookStatus: "unchecked",
+      workerStatus: "online",
+    })),
+    updateInstagramDmSettings: vi.fn(async (_brandId: string, input: { enabled?: boolean }) => ({
+      brandId,
+      enabled: input.enabled ?? false,
+      fallbackMessage: "fallback",
+      errorMessage: "error",
+      brandCoreReady: true,
+      wikiReady: true,
+      wikiStatus: "active",
+      messagePermissionReady: true,
+      webhookStatus: "unchecked",
+      workerStatus: "online",
+    })),
     listDmConversations: vi.fn(async () => ({ items: [], nextCursor: null })),
     getDmConversation: vi.fn(async () => ({ id: "conversation-1" })),
     sendManualDmReply: vi.fn(async () => ({ id: "message-manual", body: "직접 답변" })),
@@ -19,6 +43,46 @@ const attentionId = "33333333-3333-4333-8333-333333333333";
 const idempotencyKey = "44444444-4444-4444-8444-444444444444";
 
 describe("DM operations routes", () => {
+  it("reports webhook readiness from API configuration and blocks activation when it is absent", async () => {
+    const configuredRepository = repository();
+    const configured = createServer({
+      repository: configuredRepository,
+      metaWebhook: { appSecret: "secret", verifyToken: "verify" },
+      logger: false,
+    });
+    const ready = await configured.inject({ method: "GET", url: `/brands/${brandId}/instagram-dm/settings` });
+    expect(ready.statusCode).toBe(200);
+    expect(ready.json()).toMatchObject({ webhookStatus: "connected", brandCoreReady: true, wikiStatus: "active" });
+
+    const missingRepository = repository();
+    const missing = createServer({ repository: missingRepository, logger: false });
+    const blocked = await missing.inject({
+      method: "PUT",
+      url: `/brands/${brandId}/instagram-dm/settings`,
+      payload: { enabled: true },
+    });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json()).toEqual({ error: "dm_activation_blocked" });
+    expect(missingRepository.updateInstagramDmSettings).not.toHaveBeenCalled();
+  });
+
+  it("keeps DM settings tenant-scoped before exposing readiness", async () => {
+    const repo = repository();
+    const kakaoAuth = {
+      getSession: vi.fn(async () => ({ userId: "user-1" })),
+      canAccessBrand: vi.fn(async () => false),
+      canAccessResource: vi.fn(async () => false),
+    } as any;
+    const app = createServer({ repository: repo, kakaoAuth, logger: false });
+    const response = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/instagram-dm/settings`,
+      headers: { cookie: "bp_session=session-token" },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(repo.getInstagramDmSettings).not.toHaveBeenCalled();
+  });
+
   it("validates filters and exposes the five operations endpoints", async () => {
     const repo = repository();
     const app = createServer({ repository: repo, logger: false });

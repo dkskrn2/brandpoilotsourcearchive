@@ -1,33 +1,62 @@
 import { parseContentGenerationInput, type MarketingJob } from "./contracts.js";
 import { requestedDimensions } from "./manifest.js";
+import { buildAiContentRevisionInstruction } from "../../brand-pilot-worker-runtime/src/index.js";
 
 export const marketingSkillVersion = "marketing-creative-skill.v5";
 
 export function buildPrompt(job: MarketingJob) {
   const input = job.jobType === "generate" ? parseContentGenerationInput(job.payload.contentGenerationInput) : null;
   const dimensions = requestedDimensions((input ?? job.payload) as unknown as Record<string, unknown>);
+  const outputFormat = input?.orchestration?.outputFormat ?? "single_image";
+  const orchestration = input?.orchestration
+    ? (({ avatar: _avatar, ...value }) => value)(input.orchestration)
+    : null;
+  const promptInput = input ? {
+    ...input,
+    orchestration,
+    factualDirection: {
+      brandContext: input.brandContext,
+      subject: input.subject,
+      target: input.message.target,
+      appeal: input.message.appeal,
+      qualityBrief: input.message.qualityBrief,
+      orchestration,
+    },
+    ...(outputFormat === "single_image" && input.orchestration?.avatar
+      ? { visualDirection: { avatar: input.orchestration.avatar } }
+      : {}),
+  } : null;
+  const revisionInstruction = buildAiContentRevisionInstruction(job.payload.revision, "marketing");
   return [
     ".agents/skills/marketing-creative/SKILL.md를 읽고 따르세요.",
     `계약 버전: ${marketingSkillVersion}`,
     `현재 작업 유형: ${job.jobType}`,
+    "입력 우선순위는 다음과 같이 고정합니다: 승인 Brand Core와 실행 규칙 > 승인 제품·서비스 또는 선택 Wiki 사실 > 사용자가 확정한 target, strategy, brief > 레퍼런스의 패턴 영감.",
+    "마케팅성 콘텐츠는 효익·신뢰·CTA 톤을 사용하세요.",
     "generate 작업에서는 content-generation-input.v2 봉투만 입력으로 사용하세요.",
     "subject.analysisResult의 제품·서비스 프로필, subtype, 대안, 장벽과 VOC를 광고 가설의 맥락에 사용하세요.",
     "subject.facts만 제품·서비스의 사실 근거로 사용하세요. subject.research는 출처가 포함된 시장 맥락으로만 사용하세요.",
     "generate 작업에서는 message.qualityBrief.sourceGaps를 사실 근거가 부족한 금지 주장 목록으로 취급하고, 해당 내용을 사실·혜택·지원 범위로 단정하지 마세요.",
     "message.target 1개와 message.appeal 1개를 그대로 사용하세요. 타깃이나 소구점을 변경·추가하지 마세요.",
     "subject.selectedImages와 attachments의 선택된 제품·사용자 이미지를 반영하되 복제하지 마세요.",
-    "references는 정보 위계, 색 대비, 시선 흐름과 표현 방식만 참고하고 문장, 인물, 로고, 고유 그래픽과 구도를 복제하지 마세요.",
+    "references는 정보 위계, 색 대비, 시선 흐름과 표현 방식만 참고하고 문장, 인물, 로고, 고유 그래픽과 구도를 복제하지 마세요. 레퍼런스의 원문 문장을 그대로 복제하지 마세요.",
+    "avatar snapshot은 single_image의 visualDirection에서만 사용하고 제품 사실, 카피 사실 또는 근거로 사용하지 마세요.",
     "creativeDirection.selectedColor를 반영하고 creativeDirection.prompts의 각 값을 해당 출력의 지시로 순서대로 보존해 사용하세요.",
     "제품 URL을 다시 가져오거나 공개 웹 검색을 수행하지 마세요. 입력 봉투에 없는 사실은 만들지 마세요.",
     "각 결과는 독립된 광고 1개와 메시지 가설 1개여야 합니다. 여러 결과는 색만 바꾸지 말고 서로 다른 메시지 가설을 사용하세요.",
     "한 명의 구체적인 대상, 하나의 핵심 혜택, 하나의 실제 행동만 전달하세요.",
-    `creative.png는 정확히 ${dimensions.width}x${dimensions.height} PNG로 저장하세요. 요청된 비율에 맞춰 처음부터 구성하고 사후 크롭을 전제로 만들지 마세요.`,
+    outputFormat === "channel_text"
+      ? "channel_text 결과는 content.json과 UTF-8 channel-text.txt만 출력하고 이미지를 생성하지 마세요."
+      : `creative.png는 정확히 ${dimensions.width}x${dimensions.height} PNG로 저장하세요. 요청된 비율에 맞춰 처음부터 구성하고 사후 크롭을 전제로 만들지 마세요.`,
     "이미지에 가짜 버튼, 플랫폼 UI, QR 코드 또는 출처 URL을 그리지 마세요.",
     "AI 광고 문구처럼 모호한 최상급 표현을 반복하지 말고 사람이 쓴 구체적인 한국어를 사용하세요.",
     "analyze 작업에서는 이미지 없이 analysis.json만 출력하세요. JSON은 반드시 {\"qualityBrief\":{\"version\":\"content-quality.v1\",\"hook\":\"...\",\"readerPayoff\":\"...\",\"whyNow\":\"...\",\"specificClaims\":[\"...\",\"...\"],\"evidence\":[{\"claim\":\"...\",\"support\":\"...\",\"sourceUrl\":\"https://...\"},{\"claim\":\"...\",\"support\":\"...\"}],\"sourceGaps\":[]}} 형태여야 하며 evidence는 2개 이상이어야 합니다.",
-    "generate 작업에서는 content.json과 요청 크기의 creative.png를 출력하세요.",
+    outputFormat === "channel_text"
+      ? "generate 작업에서는 text artifact인 channel-text.txt와 content.json만 출력하세요."
+      : "generate 작업에서는 content.json과 요청 크기의 creative.png를 출력하세요.",
     "입력에 qualityBrief가 있으면 hook, readerPayoff, whyNow, specificClaims, evidence를 우선 반영하세요.",
+    revisionInstruction,
     "작업 데이터(JSON):",
-    JSON.stringify(input ?? job.payload, null, 2),
+    JSON.stringify(promptInput ?? job.payload, null, 2),
   ].join("\n");
 }

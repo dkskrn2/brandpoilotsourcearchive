@@ -82,10 +82,18 @@ function formatPublishedAt(value: string) {
 
 export function TopicPublishGroup({
   group,
-  onSelectResult
+  onSelectResult,
+  onRetry,
+  onVerify,
+  onCancel,
+  highlightedQueueId
 }: {
   group: TopicPublishGroupModel;
   onSelectResult: (result: PublishResult, channel: PublishResultChannel) => void;
+  onRetry?: (queueId: string) => void;
+  onVerify?: (queueId: string) => void;
+  onCancel?: (queueId: string) => void;
+  highlightedQueueId?: string | null;
 }) {
   const representative = group.items.find((item) => item.resultChannel) ?? group.items[0];
   const representativeChannel = representative?.resultChannel;
@@ -98,6 +106,7 @@ export function TopicPublishGroup({
     : statuses[0] ?? "empty";
   const groupMeta = statusMeta[groupStatus];
   const isPreGenerationGroup = group.items.every((item) => item.slot.approvalType === "empty");
+  const isHighlighted = Boolean(highlightedQueueId && group.items.some((item) => item.slot.id === highlightedQueueId));
   const preview = resolvePublishPreview({
     title: group.title,
     artifactPublicUrl: representativeChannel?.artifactPublicUrl,
@@ -108,7 +117,12 @@ export function TopicPublishGroup({
   });
 
   return (
-    <article className="publish-management-card" aria-label={group.title}>
+    <article
+      className={`publish-management-card${isHighlighted ? " is-highlighted" : ""}`}
+      aria-label={group.title}
+      data-publish-deep-link={isHighlighted ? "true" : undefined}
+      tabIndex={isHighlighted ? -1 : undefined}
+    >
       <div className="publish-management-card__preview">
         <PublishManagementPreview title={group.title} preview={preview} />
       </div>
@@ -129,6 +143,9 @@ export function TopicPublishGroup({
             const externalUrl = item.resultChannel?.externalUrl;
             const canOpenDetail = item.slot.status === "published" && item.result && item.resultChannel;
             const isPreGeneration = item.slot.approvalType === "empty";
+            const isResultUnknown = item.slot.status === "failed" && error === "publish_delivery_unknown";
+            const retryAllowed = item.slot.status === "failed"
+              && (error === "oauth_required" || error === "provider_not_implemented");
             return (
               <div className="publish-management-card__channel" key={item.slot.id}>
                 <div className="publish-management-card__channel-head">
@@ -144,7 +161,9 @@ export function TopicPublishGroup({
                       {label}
                     </button>
                   ) : <strong>{label}</strong>}
-                  <Badge variant={meta.variant}>{isPreGeneration ? "생성 전" : meta.label}</Badge>
+                  <Badge variant={isResultUnknown ? "warn" : meta.variant}>
+                    {isPreGeneration ? "생성 전" : isResultUnknown ? "결과 확인 필요" : meta.label}
+                  </Badge>
                 </div>
                 {item.resultChannel?.publishedAt ? (
                   <div className="row-meta">게시일시 {formatPublishedAt(item.resultChannel.publishedAt)}</div>
@@ -152,6 +171,15 @@ export function TopicPublishGroup({
                 {error ? <div className="row-meta">{error}</div> : null}
                 <div className="publish-management-card__actions">
                   {externalUrl ? <a className="button" href={externalUrl} target="_blank" rel="noreferrer">게시물 열기</a> : null}
+                  {isResultUnknown ? (
+                    <button className="button" type="button" onClick={() => onVerify?.(item.slot.id)}>게시 결과 확인</button>
+                  ) : retryAllowed ? (
+                    <button className="button" type="button" onClick={() => onRetry?.(item.slot.id)}>재시도</button>
+                  ) : item.slot.status === "queued" || item.slot.status === "scheduled" || item.slot.status === "deferred" ? (
+                    <button className="button" type="button" onClick={() => onCancel?.(item.slot.id)}>예약 취소</button>
+                  ) : item.slot.status === "failed" ? (
+                    <span className="row-meta">서버가 이 실패의 재시도를 허용하지 않습니다.</span>
+                  ) : null}
                 </div>
               </div>
             );
