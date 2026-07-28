@@ -32,6 +32,12 @@ const sections: Array<{ id: UnderstandingSection; label: string }> = [
   { id: "rules", label: "실행 규칙" },
   { id: "versions", label: "버전 이력" },
 ];
+const brandTabs: Array<{ id: BrandCenterTab; label: string }> = [
+  { id: "understanding", label: "브랜드 이해" },
+  { id: "products", label: "제품·서비스" },
+  { id: "wiki", label: "Wiki" },
+  { id: "avatars", label: "모델·아바타" },
+];
 
 const emptyRules: BrandRules = {
   contractVersion: "brand-rules.v1",
@@ -279,12 +285,39 @@ export function BrandCenterPage() {
       {notice && <Alert title="변경 사항" variant="info">{notice}</Alert>}
       {error && <Alert title="작업을 완료하지 못했습니다" variant="bad">{error}<button className="button" type="button" onClick={load}>다시 시도</button></Alert>}
 
-      <nav className="brand-center-tabs" aria-label="브랜드 센터 영역">
-        <button className={tab === "understanding" ? "is-active" : ""} type="button" onClick={() => selectTab("understanding")}>브랜드 이해</button>
-        <button className={tab === "products" ? "is-active" : ""} type="button" onClick={() => selectTab("products")}>제품·서비스</button>
-        <button className={tab === "wiki" ? "is-active" : ""} type="button" onClick={() => selectTab("wiki")}>Wiki</button>
-        <button className={tab === "avatars" ? "is-active" : ""} type="button" onClick={() => selectTab("avatars")}>모델·아바타</button>
+      <nav className="brand-center-tabs" aria-label="브랜드 센터 영역" role="tablist">
+        {brandTabs.map((item, index) => (
+          <button
+            aria-controls={`brand-center-panel-${item.id}`}
+            aria-selected={tab === item.id}
+            className={tab === item.id ? "is-active" : ""}
+            data-brand-tab={item.id}
+            id={`brand-center-tab-${item.id}`}
+            key={item.id}
+            role="tab"
+            tabIndex={tab === item.id ? 0 : -1}
+            type="button"
+            onClick={() => selectTab(item.id)}
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+              event.preventDefault();
+              const direction = event.key === "ArrowRight" ? 1 : -1;
+              const next = brandTabs[(index + direction + brandTabs.length) % brandTabs.length];
+              selectTab(next.id);
+              requestAnimationFrame(() => {
+                document.querySelector<HTMLElement>(`[data-brand-tab="${next.id}"]`)?.focus();
+              });
+            }}
+          >
+            {item.label}
+          </button>
+        ))}
       </nav>
+      <div
+        aria-labelledby={`brand-center-tab-${tab}`}
+        id={`brand-center-panel-${tab}`}
+        role="tabpanel"
+      >
       {tab === "understanding" ? <nav className="brand-center-subnav" aria-label="브랜드 이해 세부 영역">
         {sections.map((item) => (
           <button
@@ -354,6 +387,7 @@ export function BrandCenterPage() {
         }}
       /> : null}
       {tab === "avatars" ? <AvatarLibraryPanel brandId={DEMO_BRAND_ID} /> : null}
+      </div>
     </section>
   );
 }

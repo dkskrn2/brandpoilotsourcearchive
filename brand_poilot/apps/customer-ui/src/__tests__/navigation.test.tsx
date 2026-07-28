@@ -77,6 +77,25 @@ describe("AppShell navigation", () => {
     expect(openButton).toHaveFocus();
   });
 
+  it("keeps Tab focus inside the mobile navigation until Escape restores its trigger", () => {
+    render(
+      <MemoryRouter>
+        <AppShell><button type="button">페이지 뒤 버튼</button></AppShell>
+      </MemoryRouter>
+    );
+
+    const openButton = screen.getByRole("button", { name: "전체 메뉴 열기" });
+    fireEvent.click(openButton);
+    const mobileMenu = screen.getByRole("dialog", { name: "전체 메뉴" });
+    const focusable = [...mobileMenu.querySelectorAll<HTMLElement>("a[href], button:not(:disabled)")];
+    focusable.at(-1)?.focus();
+    fireEvent.keyDown(mobileMenu, { key: "Tab" });
+    expect(mobileMenu).toContainElement(document.activeElement as HTMLElement);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(openButton).toHaveFocus();
+  });
+
   it("shows the current page and keeps the account menu keyboard accessible", () => {
     render(
       <MemoryRouter initialEntries={["/ai-content"]}>

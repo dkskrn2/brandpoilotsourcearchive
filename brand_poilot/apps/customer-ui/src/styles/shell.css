@@ -25,6 +25,7 @@
 .sidebar .nav-disabled {
   min-height: 44px;
   border-radius: var(--bp-radius-sm);
+  color: #d8e5df;
 }
 
 .sidebar .nav a:hover {
@@ -43,6 +44,12 @@
 .sidebar-brand-profile {
   min-width: 44px;
   min-height: 44px;
+}
+
+.sidebar .sidebar-brand-profile {
+  color: #e9f2ee;
+  border-color: rgb(255 255 255 / 14%);
+  background: transparent;
 }
 
 .sidebar-collapse-button,
@@ -70,6 +77,10 @@
 
 .sidebar-brand-copy strong {
   color: #fff;
+}
+
+.sidebar .sidebar-brand-profile > svg {
+  color: #a9beb5;
 }
 
 .topbar {
@@ -213,7 +224,7 @@
   *::before,
   *::after {
     scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
-    animation-duration: 0.01ms !important;
+    transition: none !important;
+    animation: none !important;
   }
 }

@@ -93,10 +93,14 @@ describe("responsive UI style contracts", () => {
     expect(shell).toMatch(/\.app--sidebar-collapsed\s*\{[^}]*var\(--bp-sidebar-collapsed-width\)/s);
     expect(shell).toMatch(/\.topbar\s*\{[^}]*min-height:\s*var\(--bp-topbar-height\)/s);
     expect(shell).toMatch(/\.nav a[\s\S]*?min-height:\s*44px/s);
+    expect(shell).toMatch(/\.sidebar \.nav a,[\s\S]*?color:\s*#d8e5df/s);
+    expect(shell).toMatch(/\.sidebar \.sidebar-brand-profile\s*\{[^}]*background:\s*transparent/s);
     expect(shell).toMatch(/@media \(max-width:\s*1080px\)/);
     expect(shell).toMatch(/@media \(max-width:\s*760px\)/);
     expect(shell).toMatch(/@media \(max-width:\s*470px\)/);
     expect(shell).toMatch(/@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*?scroll-behavior:\s*auto\s*!important/s);
+    expect(shell).toMatch(/@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*?transition:\s*none\s*!important/s);
+    expect(shell).toMatch(/@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*?animation:\s*none\s*!important/s);
 
     expect(dashboard).toMatch(/\.dashboard-columns\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1\.08fr\)\s*minmax\(0,\s*\.92fr\)/s);
     expect(dashboard).toMatch(/@media \(max-width:\s*1080px\)[\s\S]*?\.dashboard-columns\s*\{[^}]*grid-template-columns:\s*1fr/s);

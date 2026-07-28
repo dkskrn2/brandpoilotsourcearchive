@@ -287,7 +287,7 @@
 
 .library-list p,
 .library-editor p {
-  color: var(--bp-color-muted);
+  color: #606d67;
 }
 
 .library-list ul {
