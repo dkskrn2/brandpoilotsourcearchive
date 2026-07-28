@@ -263,6 +263,29 @@ describe("parseAiContentManifest", () => {
       .toThrow("ai_content_marketing_dimensions_mismatch");
   });
 
+  it("accepts a text-only marketing artifact only for channel_text output", () => {
+    const channelText = {
+      ...validMarketing,
+      family: "marketing",
+      strategy: "cta",
+      outputFormat: "channel_text",
+      assets: [{
+        role: "text",
+        url: "https://blob.example/channel-text.txt",
+        fileName: "channel-text.txt",
+        mimeType: "text/plain",
+        index: 1,
+      }],
+    };
+
+    expect(parseAiContentManifest("marketing", channelText))
+      .toMatchObject({ outputFormat: "channel_text", assets: [{ role: "text", mimeType: "text/plain" }] });
+    expect(() => parseAiContentManifest("marketing", {
+      ...channelText,
+      outputFormat: "single_image",
+    })).toThrow("ai_content_marketing_asset_invalid");
+  });
+
   it("rejects a manifest type mismatch", () => {
     expect(() => parseAiContentManifest("blog", cardManifest()))
       .toThrow("ai_content_manifest_type_mismatch");

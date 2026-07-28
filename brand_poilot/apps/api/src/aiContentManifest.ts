@@ -91,11 +91,13 @@ function parseAsset(value: unknown): AiContentAsset {
   }
 
   const role = source.role;
-  if (!(["slide", "cover", "inline", "html", "creative"] as unknown[]).includes(role)) {
+  if (!(["slide", "cover", "inline", "html", "creative", "text"] as unknown[]).includes(role)) {
     fail("ai_content_asset_role_invalid");
   }
   const mimeType = source.mimeType;
-  if (mimeType !== "image/png" && mimeType !== "text/html") fail("ai_content_asset_mime_type_invalid");
+  if (mimeType !== "image/png" && mimeType !== "text/html" && mimeType !== "text/plain") {
+    fail("ai_content_asset_mime_type_invalid");
+  }
 
   const width = source.width === undefined ? undefined : positiveInteger(source.width, "ai_content_asset_dimensions_invalid");
   const height = source.height === undefined ? undefined : positiveInteger(source.height, "ai_content_asset_dimensions_invalid");
@@ -269,6 +271,19 @@ export function parseAiContentManifest(
     return { version: "ai-content.v1", type, title, assets, content, ...metadata };
   }
 
+  if (metadata.outputFormat === "channel_text") {
+    if (
+      assets.length !== 1
+      || assets[0].role !== "text"
+      || assets[0].mimeType !== "text/plain"
+      || assets[0].fileName !== "channel-text.txt"
+      || assets[0].width !== undefined
+      || assets[0].height !== undefined
+    ) {
+      fail("ai_content_marketing_asset_invalid");
+    }
+    return { version: "ai-content.v1", type, title, assets, content: parseMarketingContent(source.content), ...metadata };
+  }
   if (assets.length !== 1 || assets[0].role !== "creative" || assets[0].mimeType !== "image/png") {
     fail("ai_content_marketing_asset_invalid");
   }

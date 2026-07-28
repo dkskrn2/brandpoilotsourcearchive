@@ -88,13 +88,13 @@ export type AiContentGenerationStatus =
   | "partial_failed"
   | "failed";
 export type AiContentOutputStatus = "queued" | "planning" | "generating" | "completed" | "failed";
-export type AiContentAssetRole = "slide" | "cover" | "inline" | "html" | "creative";
+export type AiContentAssetRole = "slide" | "cover" | "inline" | "html" | "creative" | "text";
 
 export interface AiContentAsset {
   role: AiContentAssetRole;
   url: string;
   fileName: string;
-  mimeType: "image/png" | "text/html";
+  mimeType: "image/png" | "text/html" | "text/plain";
   width?: number;
   height?: number;
   index: number;
