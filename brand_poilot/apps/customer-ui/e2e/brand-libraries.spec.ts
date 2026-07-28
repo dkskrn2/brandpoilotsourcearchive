@@ -2,7 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, request, test, type APIRequestContext, type Page } from "@playwright/test";
 import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 import { createServer } from "../../api/src/httpServer";
@@ -48,6 +48,7 @@ const ids = {
 let database: PGlite;
 let api: FastifyInstance;
 let apiOrigin: string;
+let apiRequest: APIRequestContext;
 let sessionToken: string;
 let stableReferenceId: string;
 let workerDatabase: ReturnType<typeof createDmWorkerDbFromPool>;
@@ -88,15 +89,23 @@ async function installRealApi(page: Page) {
     const source = new URL(route.request().url());
     const headers = { ...route.request().headers(), cookie: `bp_session=${sessionToken}` };
     delete headers.host;
-    const response = await route.fetch({
-      url: `${apiOrigin}${source.pathname}${source.search}`,
-      headers,
-    });
-    const body = await response.body();
-    await route.fulfill({
+    const response = await apiRequest.fetch(
+      `${apiOrigin}${source.pathname}${source.search}`,
+      {
+        method: route.request().method(),
+        headers,
+        data: route.request().postDataBuffer() ?? undefined,
+        failOnStatusCode: false,
+      },
+    );
+    const snapshot = {
       status: response.status(),
       headers: response.headers(),
-      body,
+      body: await response.body(),
+    };
+    await response.dispose();
+    await route.fulfill({
+      ...snapshot,
     });
   });
 }
@@ -227,6 +236,7 @@ test.beforeAll(async () => {
   const address = api.server.address();
   if (!address || typeof address === "string") throw new Error("libraries_e2e_api_address_missing");
   apiOrigin = `http://127.0.0.1:${address.port}`;
+  apiRequest = await request.newContext();
   const authProbe = await fetch(`${apiOrigin}/auth/me`, {
     headers: {
       cookie: `bp_session=${sessionToken}`,
@@ -239,6 +249,7 @@ test.beforeAll(async () => {
 }, 90_000);
 
 test.afterAll(async () => {
+  await apiRequest?.dispose();
   await api?.close();
   await database?.close();
 });
