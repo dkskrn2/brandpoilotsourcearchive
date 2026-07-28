@@ -47,6 +47,7 @@
     "test": "npm run test --workspaces --if-present",
     "test:contract": "node --test scripts/repository-contract.test.mjs",
     "test:deployment": "node --test scripts/deployment-contract.test.mjs",
+    "test:regression-matrix": "node --test scripts/verify-regression-matrix.test.mjs && node scripts/verify-regression-matrix.mjs",
     "smoke:instagram-trends": "node scripts/instagram-trend-smoke.mjs",
     "smoke:compiled-wiki": "node scripts/compiled-wiki-smoke.mjs",
     "smoke:ai-content": "node scripts/ai-content-smoke.mjs",
