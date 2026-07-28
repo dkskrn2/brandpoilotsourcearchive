@@ -80,7 +80,10 @@ test("desktop D shell keeps approved dimensions and dashboard actions", async ({
   await expect(sidebar).toHaveCSS("width", "238px");
   await expect(page.locator(".topbar")).toHaveCSS("min-height", "64px");
   await expect(page.getByRole("link", { name: "콘텐츠 만들기" })).toHaveAttribute("href", "/ai-content/new");
-  await expect(page.getByRole("link", { name: "브랜드 검토하기" })).toHaveAttribute("href", "/brand-settings");
+  await expect(page.getByRole("link", { name: "브랜드 검토하기" })).toHaveAttribute(
+    "href",
+    "/brand-center?tab=understanding&section=core",
+  );
 
   await page.getByRole("button", { name: "사이드바 접기" }).click();
   await expect(sidebar).toHaveCSS("width", "78px");

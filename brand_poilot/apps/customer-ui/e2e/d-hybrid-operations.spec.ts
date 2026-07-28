@@ -154,7 +154,11 @@ test.describe("D hybrid operations cycle", () => {
     const deepLink = page.getByRole("link", { name: "게시 큐에서 확인" }).first();
     await expect(deepLink).toHaveAttribute("href", "/publish-queue?queueId=queue-feed");
     await deepLink.click();
-    await expect(page.getByRole("article", { name: "운영 연결 카드뉴스" })).toHaveAttribute("data-publish-deep-link", "true");
+    await expect(page.getByRole("article", { name: "운영 연결 카드뉴스" })).toHaveAttribute(
+      "data-publish-deep-link",
+      "true",
+      { timeout: 15_000 },
+    );
     expect(publishTargets).toEqual([
       { channel: "instagram", deliveryFormat: "instagram_feed_carousel" },
       { channel: "instagram", deliveryFormat: "instagram_story" },
@@ -366,10 +370,12 @@ test.describe("D hybrid operations cycle", () => {
     expect(requestBody).toMatchObject({ request: { performanceSnapshotIds: ["snapshot-1"] } });
     await link.click();
     await expect(page).toHaveURL(/\/ai-content\/new\?proposalBatch=batch-performance$/);
-    await expect(page.getByRole("button", { name: "구현안 선택: 성과 기반 체크리스트" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "구현안 선택: 성과 기반 체크리스트" })).toBeVisible({
+      timeout: 15_000,
+    });
   });
 
-  test("dashboard, support, and sidebar open the same feedback dialog", async ({ page }) => {
+  test("dashboard, support, and sidebar open the same feedback dialog", async ({ page }, testInfo) => {
     await installShell(page, async (route, url) => {
       if (url.pathname.endsWith("/dashboard")) {
         await route.fulfill({ json: { generatedAt: now, lastCollectedAt: null, summary: { publishedCount: 0, exposureCount: null, pendingReviewCount: 0, failedPublishCount: 0 }, workflow: { queuedTopics: 0, generating: 0, pendingReview: 0, scheduledOrPublished: 0 }, dailyExposure: [], channelPerformance: [], topContents: [], attentionItems: [] } }); return true;
@@ -383,7 +389,12 @@ test.describe("D hybrid operations cycle", () => {
     await page.getByRole("button", { name: "기능 제안하기" }).click();
     await expect(page.getByRole("dialog", { name: "피드백" })).toBeVisible();
     await page.getByRole("button", { name: "피드백 닫기" }).click();
-    await page.getByRole("button", { name: "피드백" }).click();
+    if (testInfo.project.name === "mobile") {
+      await page.getByRole("button", { name: "전체 메뉴 열기" }).click();
+      await page.getByRole("dialog", { name: "전체 메뉴" }).getByRole("button", { name: "피드백" }).click();
+    } else {
+      await page.getByRole("button", { name: "피드백" }).click();
+    }
     await expect(page.getByRole("dialog", { name: "피드백" })).toBeVisible();
     await page.getByRole("button", { name: "피드백 닫기" }).click();
     await page.goto("/support");

@@ -127,8 +127,8 @@ test.beforeEach(async ({ page }) => {
     return isApiRequest ? route.fulfill({ ...common, json: [] }) : route.continue();
   });
 
-  await page.goto("/instagram-trends");
-  await expect(page.getByRole("heading", { level: 1, name: "Instagram 트렌드 탐색" })).toBeVisible();
+  await page.goto("/references?view=trends");
+  await expect(page.getByRole("heading", { level: 2, name: "Instagram 트렌드 탐색" })).toBeVisible();
 });
 
 test("searches a hashtag, opens growthline352, and saves the source", async ({ page }) => {

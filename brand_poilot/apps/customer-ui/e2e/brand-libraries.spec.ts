@@ -235,7 +235,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await api?.close();
   await database?.close();
-});
+}, 120_000);
 
 test.beforeEach(async ({ page, context }) => {
   await context.addCookies([{

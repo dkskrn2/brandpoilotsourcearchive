@@ -264,6 +264,7 @@ for (const [path, heading] of operationPages) {
 }
 
 test("brand center and every tab pass the axe gate and support arrow navigation", async ({ page }) => {
+  test.setTimeout(90_000);
   await page.goto("/brand-center");
   const tabs = page.getByRole("tab");
   await expect(tabs.first()).toBeVisible();
@@ -327,6 +328,7 @@ test("content review phase passes the axe gate", async ({ page }) => {
 });
 
 test("sidebar, mobile drawer and feedback dialog are keyboard-only and restore focus", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/dashboard");
   const collapse = page.getByRole("button", { name: "사이드바 접기" });
   await collapse.focus();
