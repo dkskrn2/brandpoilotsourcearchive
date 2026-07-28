@@ -1,7 +1,35 @@
 import { describe, expect, it, vi } from "vitest";
-import { apiClient } from "./apiClient";
+import { ApiRequestError, apiClient } from "./apiClient";
 
 describe("apiClient", () => {
+  it("preserves structured API error details and field paths", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      error: "content_orchestration_invalid",
+      field: "orchestration.references.0.roles",
+      details: {
+        phase: "proposal_selection",
+        fieldPath: "orchestration.references.0.roles",
+      },
+      requestId: "request-1",
+    }), { status: 422 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    const error = await client.requestJson("/brands/brand-1/ai-content/generations", { method: "POST" })
+      .catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect(error).toMatchObject({
+      status: 422,
+      errorCode: "content_orchestration_invalid",
+      fieldPath: "orchestration.references.0.roles",
+      details: {
+        phase: "proposal_selection",
+        fieldPath: "orchestration.references.0.roles",
+      },
+      requestId: "request-1",
+    });
+  });
+
   it("requests the authoritative channel capability aggregate", async () => {
     const response = [{
       channel: "instagram",

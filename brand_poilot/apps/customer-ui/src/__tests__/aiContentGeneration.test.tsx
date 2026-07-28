@@ -308,6 +308,25 @@ describe("AiContentGenerationPage", () => {
         const result = await getGeneration(brandId, generationId);
         return {
           ...result,
+          evidenceSnapshot: {
+            orchestration: {
+              contractVersion: "generation-brief.v1",
+              proposalId: "proposal-1",
+            },
+            generationInput: {
+              contentType: "card_news",
+              subject: { analysisId: "analysis-1" },
+            },
+            references: [{
+              id: "reference-1",
+              title: "동결된 레퍼런스 제목",
+              url: "https://example.com/frozen-reference",
+              previewUrl: "https://cdn.example.com/frozen-reference.png",
+              roles: ["planning", "copy_pattern"],
+            }],
+            avatar: { id: "avatar-1", name: "동결된 브랜드 모델" },
+            proposal: { title: "동결된 구현안 제목", hook: "동결된 훅" },
+          },
           draft: {
             ...result.draft,
             orchestration: {
@@ -337,8 +356,9 @@ describe("AiContentGenerationPage", () => {
     expect(screen.getByRole("tab", { name: "게시" })).toBeVisible();
     expect(screen.getByText("여름 피부 관리")).toBeVisible();
     expect(screen.getByText("민감성 피부 고객")).toBeVisible();
-    expect(screen.getByText(/reference-1/)).toBeVisible();
-    expect(screen.getByText("브랜드 모델")).toBeVisible();
+    expect(screen.getByText("동결된 구현안 제목")).toBeVisible();
+    expect(screen.getByText(/동결된 레퍼런스 제목/)).toBeVisible();
+    expect(screen.getByText("동결된 브랜드 모델")).toBeVisible();
 
     await user.click(screen.getByRole("tab", { name: "카피" }));
     expect(screen.getByText("핵심 메시지: 여름 캠페인 시작")).toBeVisible();
@@ -349,6 +369,30 @@ describe("AiContentGenerationPage", () => {
 
     expect(gateway.listReferences).not.toHaveBeenCalled();
     expect(gateway.retryOutput).not.toHaveBeenCalled();
+  });
+
+  it("hides unsupported revision and publish actions for a legacy Reel result", async () => {
+    renderGeneration("generation-card-complete", true, (gateway) => {
+      const getGeneration = gateway.getGeneration.bind(gateway);
+      gateway.getGeneration = vi.fn(async (brandId, generationId) => {
+        const result = await getGeneration(brandId, generationId);
+        return {
+          ...result,
+          outputs: result.outputs.map((output) => ({
+            ...output,
+            legacyReadOnly: true,
+            revisionCapabilities: [],
+            artifact: output.artifact
+              ? { ...output.artifact, deliveryFormat: "instagram_reel" as const }
+              : null,
+          })),
+        };
+      });
+    });
+
+    expect(await screen.findByText("과거 Reel 결과는 읽기 전용입니다.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /훅.*재생성|카피.*재생성|카드.*재생성/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
   });
 
   it("keeps completed outputs untouched while retrying only a failed output from review", async () => {

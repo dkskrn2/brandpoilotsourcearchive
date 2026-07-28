@@ -314,6 +314,85 @@ describe("createAiContentApiGateway", () => {
       .toMatchObject(expected);
   });
 
+  it("uses the server field path and phase before error-code heuristics", () => {
+    expect(contentGenerationFieldError(new ApiRequestError({
+      status: 422,
+      errorCode: "content_orchestration_invalid",
+      fieldPath: "orchestration.avatar.id",
+      details: { phase: "proposal_selection" },
+    }))).toEqual({
+      phase: "proposal_selection",
+      field: "avatar",
+      errorCode: "content_orchestration_invalid",
+    });
+  });
+
+  it("maps frozen generation evidence without falling back to mutable libraries", async () => {
+    const requestJson = vi.fn(async () => ({
+      ...generation("completed"),
+      evidenceSnapshot: {
+        orchestration: {
+          contractVersion: "generation-brief.v1",
+          proposalId: "proposal-1",
+          approvedProposalSnapshot: { title: "동결된 구현안", hook: "동결된 훅" },
+          references: [{ itemId: "reference-1", roles: ["planning"] }],
+          avatar: { id: "avatar-1", objectHash: "avatar-hash" },
+        },
+        generationInput: {
+          contentType: "card_news",
+          subject: { analysisId: "analysis-1", facts: [{ key: "benefit", value: "편안함" }] },
+          message: { target: { id: "target-1", name: "고객" }, qualityBrief: { hook: "동결된 훅" } },
+          creativeDirection: { outputCount: 1 },
+        },
+        references: [{ id: "reference-1", title: "동결된 레퍼런스", url: "https://example.com/reference", roles: ["planning"] }],
+        avatar: { id: "avatar-1", objectHash: "avatar-hash" },
+        proposal: { title: "동결된 구현안", hook: "동결된 훅" },
+      },
+    }));
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await expect(gateway.getGeneration("brand-1", "generation-1")).resolves.toMatchObject({
+      evidenceSnapshot: {
+        proposal: { title: "동결된 구현안", hook: "동결된 훅" },
+        references: [{ id: "reference-1", title: "동결된 레퍼런스" }],
+        avatar: { id: "avatar-1", objectHash: "avatar-hash" },
+      },
+    });
+    expect(requestJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps revision capabilities explicitly and keeps legacy Reel results read-only", async () => {
+    const requestJson = vi.fn(async () => ({
+      ...generation("completed"),
+      outputs: [{
+        id: "output-reel",
+        generationId: "generation-1",
+        outputIndex: 1,
+        title: "과거 릴스",
+        status: "completed",
+        content: { caption: "과거 결과" },
+        manifest: {
+          deliveryFormat: "instagram_reel",
+          assets: [{ url: "https://cdn.example.com/reel.png", fileName: "reel.png", mimeType: "image/png", index: 1 }],
+        },
+        manifestUrl: null,
+        failureCode: null,
+        failureMessage: null,
+        downloadedAt: null,
+        revisionCapabilities: [],
+      }],
+    }));
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await expect(gateway.getGeneration("brand-1", "generation-1")).resolves.toMatchObject({
+      outputs: [{
+        legacyReadOnly: true,
+        revisionCapabilities: [],
+        artifact: { deliveryFormat: "instagram_reel" },
+      }],
+    });
+  });
+
   it("propagates API failures instead of returning sample content", async () => {
     const requestJson = vi.fn(async () => { throw new Error("API request failed: 503"); });
     const gateway = createAiContentApiGateway(clientWith(requestJson));

@@ -176,6 +176,7 @@ export function AiContentGenerationPage({
     output.status === "completed" || output.status === "failed",
   );
   const orchestration = generation.draft.orchestration ?? null;
+  const evidenceSnapshot = generation.evidenceSnapshot ?? null;
   const activeReviewTab = selectedReviewTab ?? (orchestration ? "planning" : "final");
 
   function toggleSelection(outputId: string) {
@@ -351,14 +352,24 @@ export function AiContentGenerationPage({
                   <>
                     <dl>
                       <div><dt>콘텐츠 성격</dt><dd>{familyLabels[orchestration.contentFamily]}</dd></div>
-                      <div><dt>선택 구현안</dt><dd>{generation.title}</dd></div>
+                      <div><dt>선택 구현안</dt><dd>{evidenceSnapshot?.proposal ? snapshotName(evidenceSnapshot.proposal) : generation.title}</dd></div>
                       <div><dt>전략</dt><dd>{strategyLabels[orchestration.strategy]}</dd></div>
                       <div><dt>형식</dt><dd>{formatLabels[orchestration.outputFormat]}</dd></div>
                       <div><dt>주제</dt><dd>{subjectLabel(orchestration)}</dd></div>
                       <div><dt>타깃 snapshot</dt><dd>{snapshotName(orchestration.target.snapshot)}</dd></div>
                     </dl>
                     <h3>URL·레퍼런스 근거 snapshot</h3>
-                    {orchestration.references.length ? (
+                    {(evidenceSnapshot?.references.length ?? 0) > 0 ? (
+                      <ul>
+                        {evidenceSnapshot!.references.map((reference) => (
+                          <li key={reference.id}>
+                            {reference.title}
+                            {reference.url ? <> · <a href={reference.url} target="_blank" rel="noreferrer">원본 URL</a></> : null}
+                            {reference.roles.length ? ` · ${reference.roles.map((role) => referenceRoleLabels[role as keyof typeof referenceRoleLabels] ?? role).join(", ")}` : ""}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : orchestration.references.length ? (
                       <ul>
                         {orchestration.references.map((reference) => (
                           <li key={reference.referenceItemId}>
@@ -368,7 +379,9 @@ export function AiContentGenerationPage({
                       </ul>
                     ) : <p className="muted">선택한 레퍼런스가 없습니다.</p>}
                     <h3>아바타 snapshot</h3>
-                    <p>{orchestration.avatar ? snapshotName(orchestration.avatar.snapshot) : "사용하지 않음"}</p>
+                    <p>{evidenceSnapshot?.avatar
+                      ? snapshotName(evidenceSnapshot.avatar)
+                      : orchestration.avatar ? snapshotName(orchestration.avatar.snapshot) : "사용하지 않음"}</p>
                   </>
                 ) : (
                   <p className="muted">기존 생성 건에는 orchestration snapshot이 없어 저장된 초안과 결과만 표시합니다.</p>

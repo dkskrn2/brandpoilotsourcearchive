@@ -60,6 +60,19 @@ export interface AiContentGenerationRecord {
   attachmentsLockedAt: string | null;
   terminalAt: string | null;
   retryableUntil: string | null;
+  evidenceSnapshot?: {
+    orchestration: Record<string, unknown>;
+    generationInput: Record<string, unknown>;
+    references: Array<{
+      id: string;
+      title: string;
+      url: string | null;
+      previewUrl: string | null;
+      roles: string[];
+    }>;
+    avatar: Record<string, unknown> | null;
+    proposal: Record<string, unknown> | null;
+  };
   outputs?: AiContentOutputRecord[];
 }
 
@@ -78,6 +91,8 @@ export interface AiContentOutputRecord {
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
+  revisionCapabilities: Array<"save_copy" | "regenerate_hook" | "regenerate_copy" | "regenerate_card">;
+  legacyReadOnly: boolean;
 }
 
 export interface AiContentUsageRecord {
@@ -632,12 +647,75 @@ function mapGeneration(row: Record<string, unknown>): AiContentGenerationRecord 
 }
 
 function mapOutput(row: Record<string, unknown>): AiContentOutputRecord {
+  const manifest = object(row.artifact_manifest_json);
   return {
     id: String(row.id), generationId: String(row.generation_id), outputIndex: Number(row.output_index),
     title: row.title ? String(row.title) : null, status: row.status as AiContentOutputRecord["status"],
-    content: object(row.content_json), manifest: object(row.artifact_manifest_json), manifestUrl: row.manifest_url ? String(row.manifest_url) : null,
+    content: object(row.content_json), manifest, manifestUrl: row.manifest_url ? String(row.manifest_url) : null,
     failureCode: row.failure_code ? String(row.failure_code) : null, failureMessage: row.failure_message ? String(row.failure_message) : null,
     downloadedAt: iso(row.downloaded_at), createdAt: iso(row.created_at)!, updatedAt: iso(row.updated_at)!, completedAt: iso(row.completed_at),
+    revisionCapabilities: [],
+    legacyReadOnly: manifest.deliveryFormat === "instagram_reel" || manifest.outputFormat === "reel",
+  };
+}
+
+function publicGenerationInputSnapshot(value: unknown): Record<string, unknown> {
+  const source = object(value);
+  const result: Record<string, unknown> = {};
+  for (const key of [
+    "contractVersion",
+    "contentType",
+    "orchestration",
+    "subject",
+    "message",
+    "creativeDirection",
+  ]) {
+    if (source[key] !== undefined) result[key] = source[key];
+  }
+  return result;
+}
+
+async function generationEvidenceSnapshot(
+  client: Queryable,
+  input: BrandGenerationScope,
+  row: Record<string, unknown>,
+): Promise<NonNullable<AiContentGenerationRecord["evidenceSnapshot"]> | undefined> {
+  const orchestration = object(row.orchestration_snapshot);
+  const generationInput = publicGenerationInputSnapshot(row.generation_input_snapshot);
+  const avatarSource = object(row.avatar_snapshot);
+  const proposalSource = object(orchestration.approvedProposalSnapshot);
+  const references = await client.query(
+    `select reference_id, reference_snapshot_json, roles_json
+       from ai_content_generation_references
+      where generation_id = $1 and workspace_id = $2 and brand_id = $3
+      order by position`,
+    [input.generationId, input.workspaceId, input.brandId],
+  );
+  if (
+    Object.keys(orchestration).length === 0
+    && Object.keys(generationInput).length === 0
+    && Object.keys(avatarSource).length === 0
+    && references.rows.length === 0
+  ) {
+    return undefined;
+  }
+  return {
+    orchestration,
+    generationInput,
+    references: references.rows.map((reference) => {
+      const snapshot = object(reference.reference_snapshot_json);
+      return {
+        id: String(reference.reference_id),
+        title: String(snapshot.title ?? snapshot.caption ?? snapshot.url ?? reference.reference_id),
+        url: snapshot.url ? String(snapshot.url) : snapshot.permalink ? String(snapshot.permalink) : null,
+        previewUrl: snapshot.previewUrl ? String(snapshot.previewUrl) : snapshot.mediaUrl ? String(snapshot.mediaUrl) : null,
+        roles: Array.isArray(reference.roles_json)
+          ? reference.roles_json.filter((role: unknown): role is string => typeof role === "string")
+          : [],
+      };
+    }),
+    avatar: Object.keys(avatarSource).length ? avatarSource : null,
+    proposal: Object.keys(proposalSource).length ? proposalSource : null,
   };
 }
 
@@ -2188,7 +2266,12 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       if (!row) return null;
       const generation = mapGeneration(row);
       const outputs = await outputsForGenerations(pool, [generation.id]);
-      return { ...generation, outputs: outputs.get(generation.id) ?? [] };
+      const evidenceSnapshot = await generationEvidenceSnapshot(pool, input, row);
+      return {
+        ...generation,
+        ...(evidenceSnapshot ? { evidenceSnapshot } : {}),
+        outputs: outputs.get(generation.id) ?? [],
+      };
     },
 
     async listAiContentUsage(input) {

@@ -134,6 +134,8 @@ export function AiGenerationOutputList({
   const completedCount = generation.outputs.filter((output) => output.status === "completed").length;
   const type = generation.type;
   const retryRetention = useRetryRetentionState(generation.retryableUntil);
+  const orchestrationFormat = generation.draft.orchestration?.outputFormat;
+  const directPublishSupported = orchestrationFormat !== "channel_text";
 
   return (
     <section className="ai-generation-output-list" aria-labelledby="ai-generation-result-title">
@@ -163,7 +165,14 @@ export function AiGenerationOutputList({
               <AiContentArtifactPreview type={type} output={output} />
             </div>
 
-            {output.status === "completed" ? (
+            {output.legacyReadOnly || output.artifact?.deliveryFormat === "instagram_reel" ? (
+              <p className="small muted" role="status">과거 Reel 결과는 읽기 전용입니다.</p>
+            ) : null}
+
+            {output.status === "completed"
+              && directPublishSupported
+              && !output.legacyReadOnly
+              && output.artifact?.deliveryFormat !== "instagram_reel" ? (
               <AiContentPublishPanel
                 type={type}
                 assetCount={output.artifact?.assets.length ?? 0}
@@ -204,13 +213,13 @@ export function AiGenerationOutputList({
               })()}
             </div>
 
-            {output.status === "failed" && retryRetention.expired ? (
+            {!output.legacyReadOnly && output.status === "failed" && retryRetention.expired ? (
               <div className="ai-generation-output-list__retry-expired" role="status">
                 <p>첨부파일 보관 기간이 만료되어 이 결과를 다시 생성할 수 없습니다.</p>
                 <p className="small muted">새 콘텐츠 생성 후 파일을 다시 업로드해 주세요.</p>
                 <Link className="button" to="/ai-content/new">새 콘텐츠 생성</Link>
               </div>
-            ) : output.status === "failed" ? (
+            ) : !output.legacyReadOnly && output.status === "failed" ? (
               <div className="ai-generation-output-list__retry">
                 <label htmlFor={`retry-reason-${output.id}`}>다시 생성 사유</label>
                 {retryRetention.deadline !== null ? (

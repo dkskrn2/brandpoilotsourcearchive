@@ -1,6 +1,6 @@
 import { put as putBlob } from "@vercel/blob/client";
 import { ApiRequestError, apiClient, mapApiChannelConnection, type ApiChannel } from "../../lib/apiClient";
-import type { PublishArtifact, PublishArtifactAsset } from "../../types";
+import type { DeliveryFormat, PublishArtifact, PublishArtifactAsset } from "../../types";
 import type {
   AiContentDraft,
   AiContentGateway,
@@ -33,6 +33,36 @@ export interface ContentGenerationFieldError {
 export function contentGenerationFieldError(error: unknown): ContentGenerationFieldError | null {
   if (!(error instanceof ApiRequestError) || !error.errorCode) return null;
   const errorCode = error.errorCode;
+  const path = error.fieldPath ?? (
+    typeof error.details?.fieldPath === "string" ? error.details.fieldPath : null
+  );
+  const phase = error.details?.phase;
+  const mappedPhase = phase === "setup" || phase === "proposal_selection" || phase === "generating"
+    ? phase
+    : null;
+  if (path) {
+    if (path.includes("reference")) {
+      return { phase: mappedPhase ?? "proposal_selection", field: "references", errorCode };
+    }
+    if (path.includes("avatar")) {
+      return { phase: mappedPhase ?? "proposal_selection", field: "avatar", errorCode };
+    }
+    if (path.includes("channel")) {
+      return { phase: mappedPhase ?? "setup", field: "channelTargets", errorCode };
+    }
+    if (path.includes("outputCount") || path.includes("output_count")) {
+      return { phase: mappedPhase ?? "generating", field: "outputCount", errorCode };
+    }
+    if (path.includes("outputFormat") || path.includes("output_format") || path.includes("type")) {
+      return { phase: mappedPhase ?? "setup", field: "outputFormat", errorCode };
+    }
+    if (path.includes("subject")) {
+      return { phase: mappedPhase ?? "setup", field: "subject", errorCode };
+    }
+    if (path.includes("contentFamily") || path.includes("content_family")) {
+      return { phase: mappedPhase ?? "setup", field: "contentFamily", errorCode };
+    }
+  }
   if (errorCode.includes("reference")) {
     return { phase: "proposal_selection", field: "references", errorCode };
   }
@@ -61,11 +91,14 @@ interface ApiOutput {
   id: string; generationId: string; outputIndex: number; title: string | null; status: AiGenerationOutput["status"];
   content: Record<string, unknown>; manifest: Record<string, unknown>; manifestUrl: string | null;
   failureCode: string | null; failureMessage: string | null; downloadedAt: string | null;
+  revisionCapabilities?: AiGenerationOutput["revisionCapabilities"];
+  legacyReadOnly?: boolean;
 }
 interface ApiGeneration {
   id: string; brandId: string; type: AiContentType; title: string; status: AiContentGeneration["status"];
   currentStage: string | null; draft: Partial<AiContentDraft> | null; analysis: Record<string, unknown>; outputs?: ApiOutput[];
   attachmentsLockedAt?: string | null; terminalAt?: string | null; retryableUntil?: string | null;
+  evidenceSnapshot?: AiContentGeneration["evidenceSnapshot"];
   createdAt: string; updatedAt: string;
 }
 
@@ -185,6 +218,9 @@ function outputArtifact(type: AiContentType, output: ApiOutput): PublishArtifact
     : [];
   const content = output.content ?? {};
   const html = type === "blog" && typeof content.html === "string" ? content.html : null;
+  const deliveryFormat = typeof output.manifest.deliveryFormat === "string"
+    ? output.manifest.deliveryFormat as DeliveryFormat
+    : null;
   const text = type === "card_news"
     ? [content.caption, ...(Array.isArray(content.hashtags) ? content.hashtags : [])].filter(Boolean).join("\n\n")
     : type === "marketing"
@@ -193,7 +229,7 @@ function outputArtifact(type: AiContentType, output: ApiOutput): PublishArtifact
   return {
     queueId: output.id,
     kind: type === "blog" ? "html" : type === "card_news" ? "image_gallery" : "image",
-    deliveryFormat: null,
+    deliveryFormat,
     assets: assets.map((asset) => ({ ...asset, width: asset.width ?? null, height: asset.height ?? null })),
     posterUrl: assets.find((asset) => asset.mimeType === "image/png")?.url ?? null,
     html,
@@ -206,7 +242,20 @@ function mapGeneration(value: ApiGeneration): AiContentGeneration {
   return {
     id: value.id, brandId: value.brandId, title: value.title, type: value.type, status: value.status,
     currentStep: stepByStatus[value.status], draft: normalizeAiContentDraft(value.type, value.draft), analysis: value.analysis,
-    outputs: (value.outputs ?? []).map((output) => ({ id: output.id, generationId: output.generationId, title: output.title ?? `결과 ${output.outputIndex}`, status: output.status, artifact: outputArtifact(value.type, output), failureReason: output.failureMessage ?? output.failureCode, downloadedAt: output.downloadedAt })),
+    outputs: (value.outputs ?? []).map((output) => ({
+      id: output.id,
+      generationId: output.generationId,
+      title: output.title ?? `결과 ${output.outputIndex}`,
+      status: output.status,
+      artifact: outputArtifact(value.type, output),
+      failureReason: output.failureMessage ?? output.failureCode,
+      downloadedAt: output.downloadedAt,
+      revisionCapabilities: output.revisionCapabilities ?? [],
+      legacyReadOnly: output.legacyReadOnly === true
+        || output.manifest.deliveryFormat === "instagram_reel"
+        || output.manifest.outputFormat === "reel",
+    })),
+    evidenceSnapshot: value.evidenceSnapshot ?? null,
     attachmentsLockedAt: value.attachmentsLockedAt ?? null,
     terminalAt: value.terminalAt ?? null,
     retryableUntil: value.retryableUntil ?? null,

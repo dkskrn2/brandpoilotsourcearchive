@@ -69,12 +69,16 @@ export class ApiRequestError extends Error {
   readonly errorCode: string | null;
   readonly requestId: string | null;
   readonly deliveryStatus: "failed" | "unknown" | null;
+  readonly fieldPath: string | null;
+  readonly details: Record<string, unknown> | null;
 
   constructor(input: {
     status: number;
     errorCode: string | null;
     requestId?: string | null;
     deliveryStatus?: "failed" | "unknown" | null;
+    fieldPath?: string | null;
+    details?: Record<string, unknown> | null;
   }) {
     super(input.errorCode ? `API request failed: ${input.status}:${input.errorCode}` : `API request failed: ${input.status}`);
     this.name = "ApiRequestError";
@@ -82,6 +86,8 @@ export class ApiRequestError extends Error {
     this.errorCode = input.errorCode;
     this.requestId = input.requestId ?? null;
     this.deliveryStatus = input.deliveryStatus ?? null;
+    this.fieldPath = input.fieldPath ?? null;
+    this.details = input.details ?? null;
   }
 }
 
@@ -140,6 +146,8 @@ async function request<T>(fetcher: typeof fetch, url: string, init: RequestInit)
     let errorCode: string | null = null;
     let requestId: string | null = null;
     let deliveryStatus: "failed" | "unknown" | null = null;
+    let fieldPath: string | null = null;
+    let details: Record<string, unknown> | null = null;
     try {
       const payload = await response.clone().json();
       errorCode = typeof payload?.error === "string" ? payload.error : null;
@@ -147,10 +155,23 @@ async function request<T>(fetcher: typeof fetch, url: string, init: RequestInit)
       deliveryStatus = payload?.deliveryStatus === "failed" || payload?.deliveryStatus === "unknown"
         ? payload.deliveryStatus
         : null;
+      details = payload?.details && typeof payload.details === "object" && !Array.isArray(payload.details)
+        ? payload.details as Record<string, unknown>
+        : null;
+      fieldPath = typeof payload?.field === "string"
+        ? payload.field
+        : typeof details?.fieldPath === "string" ? details.fieldPath : null;
     } catch {
       errorCode = null;
     }
-    throw new ApiRequestError({ status: response.status, errorCode, requestId, deliveryStatus });
+    throw new ApiRequestError({
+      status: response.status,
+      errorCode,
+      requestId,
+      deliveryStatus,
+      fieldPath,
+      details,
+    });
   }
   const payload = response.status === 204 ? undefined as T : await response.json() as T;
   if (init.method !== "GET" && typeof window !== "undefined") {

@@ -315,6 +315,22 @@ export interface AiGenerationOutput {
   artifact: PublishArtifact | null;
   failureReason: string | null;
   downloadedAt: string | null;
+  revisionCapabilities?: Array<"save_copy" | "regenerate_hook" | "regenerate_copy" | "regenerate_card">;
+  legacyReadOnly?: boolean;
+}
+
+export interface AiContentGenerationEvidenceSnapshot {
+  orchestration: Record<string, unknown>;
+  generationInput: Record<string, unknown>;
+  references: Array<{
+    id: string;
+    title: string;
+    url: string | null;
+    previewUrl: string | null;
+    roles: string[];
+  }>;
+  avatar: Record<string, unknown> | null;
+  proposal: Record<string, unknown> | null;
 }
 
 export interface AiContentGeneration {
@@ -326,6 +342,7 @@ export interface AiContentGeneration {
   currentStep: AiContentWizardStep;
   draft: AiContentDraft;
   analysis?: Record<string, unknown>;
+  evidenceSnapshot?: AiContentGenerationEvidenceSnapshot | null;
   outputs: AiGenerationOutput[];
   attachmentsLockedAt: string | null;
   terminalAt: string | null;

@@ -1156,6 +1156,106 @@ describe("AI content repository", () => {
     expect(JSON.stringify(generation)).not.toContain("brandContext");
   });
 
+  it("returns a tenant-scoped sanitized frozen evidence snapshot for generation detail", async () => {
+    const query = vi.fn(async (sql: string, params: unknown[] = []) => {
+      if (sql.includes("from ai_content_generation_outputs")) {
+        return {
+          rows: [{
+            id: "output-reel",
+            generation_id: "generation-1",
+            output_index: 1,
+            title: "과거 릴스",
+            status: "completed",
+            content_json: { caption: "과거 결과" },
+            artifact_manifest_json: { deliveryFormat: "instagram_reel", assets: [] },
+            manifest_url: null,
+            failure_code: null,
+            failure_message: null,
+            downloaded_at: null,
+            created_at: "2026-07-18T00:00:00.000Z",
+            updated_at: "2026-07-18T00:00:00.000Z",
+            completed_at: "2026-07-18T00:00:00.000Z",
+          }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("from ai_content_generation_references")) {
+        expect(params).toEqual(["generation-1", "workspace-1", "brand-1"]);
+        return {
+          rows: [{
+            reference_id: "reference-1",
+            reference_snapshot_json: {
+              title: "동결된 레퍼런스",
+              url: "https://example.com/reference",
+              previewUrl: "https://cdn.example.com/reference.png",
+            },
+            roles_json: ["planning"],
+          }],
+          rowCount: 1,
+        };
+      }
+      expect(params).toEqual(["generation-1", "workspace-1", "brand-1"]);
+      return {
+        rows: [{
+          ...row("generation-1", "completed"),
+          orchestration_snapshot: {
+            contractVersion: "generation-brief.v1",
+            proposalId: "proposal-1",
+            approvedProposalSnapshot: { title: "동결된 구현안", hook: "동결된 훅" },
+            references: [{ itemId: "reference-1", roles: ["planning"] }],
+            avatar: { id: "avatar-1", objectHash: "avatar-hash" },
+          },
+          generation_input_snapshot: {
+            contractVersion: "content-generation-input.v2",
+            contentType: "card_news",
+            brandContext: { secret: "must-not-leak" },
+            subject: { analysisId: "analysis-1", facts: [{ key: "benefit", value: "편안함" }] },
+            message: { target: { id: "target-1", name: "고객" }, qualityBrief: { hook: "동결된 훅" } },
+            creativeDirection: { outputCount: 1 },
+            attachments: [{ storagePath: "private/path.png" }],
+          },
+          avatar_snapshot: { id: "avatar-1", objectHash: "avatar-hash" },
+        }],
+        rowCount: 1,
+      };
+    });
+    const repository = createAiContentRepository({ query } as never);
+
+    const generation = await repository.getAiContentGeneration({
+      ...scope,
+      generationId: "generation-1",
+    });
+
+    expect(generation).toMatchObject({
+      evidenceSnapshot: {
+        orchestration: {
+          proposalId: "proposal-1",
+          approvedProposalSnapshot: { title: "동결된 구현안", hook: "동결된 훅" },
+        },
+        generationInput: {
+          contentType: "card_news",
+          subject: { analysisId: "analysis-1" },
+          message: { target: { id: "target-1" } },
+          creativeDirection: { outputCount: 1 },
+        },
+        references: [{
+          id: "reference-1",
+          title: "동결된 레퍼런스",
+          url: "https://example.com/reference",
+          roles: ["planning"],
+        }],
+        avatar: { id: "avatar-1", objectHash: "avatar-hash" },
+        proposal: { title: "동결된 구현안", hook: "동결된 훅" },
+      },
+      outputs: [{
+        legacyReadOnly: true,
+        revisionCapabilities: [],
+      }],
+    });
+    expect(JSON.stringify(generation)).not.toContain("must-not-leak");
+    expect(JSON.stringify(generation)).not.toContain("private/path.png");
+  });
+
   it("returns source URL ids for blog references so they can be snapshotted later", async () => {
     const pool = createPool();
     const repository = createAiContentRepository(pool as never);
