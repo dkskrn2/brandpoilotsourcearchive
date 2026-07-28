@@ -21,6 +21,7 @@ import { test } from "node:test";
 const read = (path) => readFileSync(path, "utf8");
 const publishWorkflowPath = "../.github/workflows/publish-brand-pilot-server-images.yml";
 const ubuntuRunbookPath = "docs/operations/UBUNTU_DEPLOYMENT.md";
+const oauthCutoverRunbookPath = "docs/operations/OAUTH_CUTOVER.md";
 const previewAuthRunbookPath = "docs/operations/VERCEL_PREVIEW_AUTH.md";
 const ubuntuBootstrapPath = "deploy/scripts/bootstrap-ubuntu.sh";
 const deploymentArtifacts = [
@@ -43,6 +44,7 @@ const deploymentArtifacts = [
   "deploy/scripts/promote.sh",
   "deploy/scripts/rollback.sh",
   ubuntuRunbookPath,
+  oauthCutoverRunbookPath,
   ubuntuBootstrapPath,
 ];
 
@@ -698,6 +700,95 @@ test("preflight forbids worker profiles on the first deploy and fixes activation
     preflight,
     /WIKI_ACTIVE_VERSION[\s\S]*DM_WORKER_1_HEARTBEAT[\s\S]*DM_WORKER_1_LEASE[\s\S]*REMOTE_WORKER_LEASE_EXPIRED[\s\S]*DM_WORKER_2/,
   );
+});
+
+test("Task 8 fixes every shared env path and preflight permission contract", () => {
+  const compose = read("deploy/compose.production.yml");
+  const preflight = read("deploy/scripts/preflight.sh");
+  const runbook = read(ubuntuRunbookPath);
+  const expectedEnvPaths = [
+    "/opt/brand-pilot/shared/env/api.env",
+    "/opt/brand-pilot/shared/env/dm-worker-1.env",
+    "/opt/brand-pilot/shared/env/dm-worker-2.env",
+    "/opt/brand-pilot/shared/env/wiki-worker-1.env",
+    "/opt/brand-pilot/shared/env/content-proposal-worker-1.env",
+  ];
+
+  for (const path of expectedEnvPaths) {
+    assert.ok(compose.includes(path), `compose missing fixed env path: ${path}`);
+    assert.ok(preflight.includes(path.split("/").at(-1)), `preflight missing env file: ${path}`);
+    assert.ok(runbook.includes(path), `Ubuntu runbook missing env path: ${path}`);
+  }
+  assert.match(preflight, /shared\/env[\s\S]*required_directory_mode_invalid/);
+  assert.match(preflight, /shared\/env[\s\S]*required_directory_owner_invalid/);
+  for (const variable of [
+    "API_ENV_FILE",
+    "DM_WORKER_1_ENV_FILE",
+    "DM_WORKER_2_ENV_FILE",
+    "WIKI_WORKER_1_ENV_FILE",
+    "CONTENT_PROPOSAL_WORKER_1_ENV_FILE",
+  ]) {
+    assert.match(
+      preflight,
+      new RegExp(`require_file_mode_600 "\\$${variable}" "bpdeploy"`),
+      `preflight must validate ${variable}`,
+    );
+  }
+  assert.match(runbook, /shared\/env[^]*mode 700[^]*bpdeploy/i);
+});
+
+test("Task 8 release replacement cannot mutate shared env files", () => {
+  const replacementScripts = [
+    "deploy/scripts/deploy.sh",
+    "deploy/scripts/promote.sh",
+    "deploy/scripts/rollback.sh",
+  ].map(read).join("\n");
+
+  assert.doesNotMatch(
+    replacementScripts,
+    /shared\/env|(?:API|DM_WORKER_1|DM_WORKER_2|WIKI_WORKER_1|CONTENT_PROPOSAL_WORKER_1)_ENV_FILE/,
+    "release replacement scripts must not address shared env targets directly",
+  );
+  const runbook = read(ubuntuRunbookPath);
+  assert.match(runbook, /image[^]*release[^]*(?:never|must not)[^]*(?:create|modify|delete)[^]*shared env/i);
+});
+
+test("Task 8 pins OAuth cutover, frontend origin, and secret lifecycle", () => {
+  assert.equal(existsSync(oauthCutoverRunbookPath), true, "OAuth cutover runbook is missing");
+  const runbook = read(oauthCutoverRunbookPath);
+  const apiEnv = read("deploy/env/api.env.example");
+  const fixedValues = [
+    "https://api.danbammsg.co.kr/auth/kakao/callback",
+    "https://api.danbammsg.co.kr/auth/meta/callback",
+    "https://api.danbammsg.co.kr/auth/meta/trends/callback",
+    "https://api.danbammsg.co.kr/webhooks/meta/instagram",
+    "https://app.danbammsg.co.kr",
+  ];
+  for (const value of fixedValues) {
+    assert.ok(runbook.includes(value), `OAuth runbook missing: ${value}`);
+    assert.ok(apiEnv.includes(value), `API env example missing: ${value}`);
+  }
+  for (const phrase of [
+    "add the new callback before removing the old callback",
+    "NEVER arbitrarily rotate `CREDENTIAL_ENCRYPTION_KEY`",
+    "Kakao REST key",
+    "Meta app ID",
+    "webhook verify token",
+    "Supabase",
+    "Blob token",
+    "worker/admin/cron",
+    "suspected exposure",
+    "arbitrary origin",
+    "login",
+    "cancel",
+    "state mismatch",
+    "token decryption",
+    "must not log secrets",
+  ]) {
+    assert.ok(runbook.includes(phrase), `OAuth runbook missing policy: ${phrase}`);
+  }
+  assert.match(apiEnv, /^AUTH_FRONTEND_URL=https:\/\/app\.danbammsg\.co\.kr$/m);
+  assert.match(apiEnv, /^CORS_ALLOWED_ORIGINS=https:\/\/app\.danbammsg\.co\.kr$/m);
 });
 
 test("release images are digest pinned and Caddy checks readiness", () => {

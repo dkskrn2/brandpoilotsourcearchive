@@ -361,6 +361,51 @@ validation must use `config --quiet`; never render the resolved configuration.
 
 Do not copy a development `.env` wholesale. Do not add `api.env` to Git.
 
+### Shared environment ownership and release boundary
+
+The operator, not an image or release script, creates the five fixed production
+environment files:
+
+```text
+/opt/brand-pilot/shared/env/api.env
+/opt/brand-pilot/shared/env/dm-worker-1.env
+/opt/brand-pilot/shared/env/dm-worker-2.env
+/opt/brand-pilot/shared/env/wiki-worker-1.env
+/opt/brand-pilot/shared/env/content-proposal-worker-1.env
+```
+
+`/opt/brand-pilot/shared/env` must remain owner `bpdeploy`, mode 700. Every file
+must remain owner `bpdeploy`, mode 600. Create the worker files from their
+reviewed examples before running preflight, even while their Compose profiles
+remain disabled:
+
+```bash
+install -m 0600 deploy/env/dm-worker.env.example \
+  /opt/brand-pilot/shared/env/dm-worker-1.env
+install -m 0600 deploy/env/dm-worker.env.example \
+  /opt/brand-pilot/shared/env/dm-worker-2.env
+install -m 0600 deploy/env/wiki-worker.env.example \
+  /opt/brand-pilot/shared/env/wiki-worker-1.env
+install -m 0600 deploy/env/content-proposal-worker.env.example \
+  /opt/brand-pilot/shared/env/content-proposal-worker-1.env
+chmod 700 /opt/brand-pilot/shared/env
+chmod 600 /opt/brand-pilot/shared/env/*.env
+stat -c '%a %U:%G %n' /opt/brand-pilot/shared/env \
+  /opt/brand-pilot/shared/env/*.env
+```
+
+Review and replace every placeholder without printing values. An image pull,
+container replacement, release installation, promotion, or rollback must never
+create, modify, or delete shared env files. Those operations may only read the
+fixed paths. Back up and restore them through a separately approved,
+secret-safe operator procedure.
+
+OAuth/provider changes follow
+[`OAUTH_CUTOVER.md`](./OAUTH_CUTOVER.md). In particular,
+`AUTH_FRONTEND_URL=https://app.danbammsg.co.kr` and
+`CORS_ALLOWED_ORIGINS=https://app.danbammsg.co.kr` are exact production values;
+do not add a temporary or arbitrary origin.
+
 ## 7. Publish and obtain an immutable release
 
 The workflow

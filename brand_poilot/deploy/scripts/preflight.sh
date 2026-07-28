@@ -91,9 +91,27 @@ if [[ -n "$PORT_LISTENERS" ]]; then
 fi
 status_ok "public_ports"
 
-API_ENV_FILE="${RELEASE_MANIFEST[API_ENV_FILE]}"
+SHARED_ENV_DIR="$ROOT/shared/env"
+[[ -d "$SHARED_ENV_DIR" ]] || fail "required_env_directory_missing"
+[[ "$(stat -c '%a' -- "$SHARED_ENV_DIR")" == "700" ]] ||
+  fail "required_directory_mode_invalid"
+[[ "$(stat -c '%U' -- "$SHARED_ENV_DIR")" == "bpdeploy" ]] ||
+  fail "required_directory_owner_invalid"
+status_ok "shared_env_directory"
+
+API_ENV_FILE="$SHARED_ENV_DIR/api.env"
+DM_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/dm-worker-1.env"
+DM_WORKER_2_ENV_FILE="$SHARED_ENV_DIR/dm-worker-2.env"
+WIKI_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/wiki-worker-1.env"
+CONTENT_PROPOSAL_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/content-proposal-worker-1.env"
+[[ "${RELEASE_MANIFEST[API_ENV_FILE]}" == "$API_ENV_FILE" ]] ||
+  fail "manifest_api_env_file_not_fixed"
 require_file_mode_600 "$API_ENV_FILE" "bpdeploy"
-status_ok "api_env_file"
+require_file_mode_600 "$DM_WORKER_1_ENV_FILE" "bpdeploy"
+require_file_mode_600 "$DM_WORKER_2_ENV_FILE" "bpdeploy"
+require_file_mode_600 "$WIKI_WORKER_1_ENV_FILE" "bpdeploy"
+require_file_mode_600 "$CONTENT_PROPOSAL_WORKER_1_ENV_FILE" "bpdeploy"
+status_ok "shared_env_files"
 
 require_exact_false() {
   local key="$1"
