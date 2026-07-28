@@ -1,39 +1,35 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ExternalLink, RefreshCw } from "lucide-react";
 import { DmConversationList } from "../components/dm/DmConversationList";
 import { DmConversationThread } from "../components/dm/DmConversationThread";
-import { DmKnowledgePanel } from "../components/dm/DmKnowledgePanel";
+import { Alert } from "../components/ui/Alert";
+import { Badge } from "../components/ui/Badge";
+import { InlineSpinner } from "../components/ui/LoadingState";
 import { PageHeader } from "../components/layout/PageHeader";
-import { Tabs } from "../components/ui/Tabs";
+import { Switch } from "../components/ui/Switch";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
 import type {
   DmAttentionItem,
   DmConversationDetail,
   DmConversationFilter,
   DmConversationSummary,
-  KnowledgeImport,
-  WikiStatus
+  InstagramDmSettings
 } from "../types";
 
-async function fileToBase64(file: File) {
-  const buffer = typeof file.arrayBuffer === "function"
-    ? await file.arrayBuffer()
-    : await new Promise<ArrayBuffer>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as ArrayBuffer);
-      reader.onerror = () => reject(reader.error ?? new Error("file_read_failed"));
-      reader.readAsArrayBuffer(file);
-    });
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-  }
-  return btoa(binary);
+function isReady(settings: InstagramDmSettings) {
+  return settings.wikiReady
+    && settings.messagePermissionReady
+    && settings.workerStatus === "online";
 }
 
 export function DmAutomationPage() {
-  const [section, setSection] = useState("conversations");
+  const [settings, setSettings] = useState<InstagramDmSettings | null>(null);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsUpdating, setSettingsUpdating] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [conversationFilter, setConversationFilter] = useState<DmConversationFilter>("all");
+  const [conversationSearch, setConversationSearch] = useState("");
   const [conversations, setConversations] = useState<DmConversationSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DmConversationDetail | null>(null);
@@ -44,76 +40,102 @@ export function DmAutomationPage() {
   const [conversationError, setConversationError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [resolvingId, setResolvingId] = useState<string | null>(null);
-  const [imports, setImports] = useState<KnowledgeImport[]>([]);
-  const [wikiStatus, setWikiStatus] = useState<WikiStatus | null>(null);
-  const [knowledgeLoading, setKnowledgeLoading] = useState(false);
-  const [knowledgeError, setKnowledgeError] = useState<string | null>(null);
-  const [knowledgeNotice, setKnowledgeNotice] = useState<string | null>(null);
-  const [uploading, setUploading] = useState<"faq" | "product" | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  const conversationsRef = useRef<DmConversationSummary[]>([]);
+  const listRequestRef = useRef(0);
+  const detailRequestRef = useRef(0);
+
+  function replaceConversations(next: DmConversationSummary[]) {
+    conversationsRef.current = next;
+    setConversations(next);
+  }
+
+  async function loadSettings() {
+    setSettingsLoading(true);
+    setSettingsError(null);
+    try {
+      setSettings(await api.getInstagramDmSettings(DEMO_BRAND_ID));
+    } catch {
+      setSettings(null);
+      setSettingsError("DM 자동답변 준비 상태를 불러오지 못했습니다.");
+    } finally {
+      setSettingsLoading(false);
+    }
+  }
+
+  async function toggleAutomation(enabled: boolean) {
+    if (!settings || settingsUpdating || (enabled && !isReady(settings))) return;
+    setSettingsUpdating(true);
+    setSettingsError(null);
+    setSettingsNotice(null);
+    try {
+      setSettings(await api.updateInstagramDmSettings(DEMO_BRAND_ID, { enabled }));
+      setSettingsNotice(enabled ? "자동답변이 켜졌습니다." : "자동답변이 꺼졌습니다.");
+    } catch {
+      setSettingsError(enabled
+        ? "자동답변을 켜지 못했습니다. 준비 상태를 다시 확인해 주세요."
+        : "자동답변을 끄지 못했습니다. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      setSettingsUpdating(false);
+    }
+  }
 
   async function loadConversations(filter = conversationFilter, cursor?: string) {
+    const requestId = ++listRequestRef.current;
     if (cursor) setConversationLoadingMore(true);
     else setConversationLoading(true);
     setConversationError(null);
     try {
       const page = await api.listDmConversations(DEMO_BRAND_ID, { filter, cursor });
-      setConversations((current) => cursor
-        ? [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))]
-        : page.items);
+      if (requestId !== listRequestRef.current) return;
+      const next = cursor
+        ? [...conversationsRef.current, ...page.items.filter((item) => !conversationsRef.current.some((existing) => existing.id === item.id))]
+        : page.items;
+      replaceConversations(next);
       setConversationNextCursor(page.nextCursor);
       if (!cursor && selectedId && !page.items.some((item) => item.id === selectedId)) {
         setSelectedId(null);
         setDetail(null);
       }
     } catch {
-      if (!cursor) {
-        setConversations([]);
+      if (requestId !== listRequestRef.current) return;
+      if (conversationsRef.current.length === 0) {
+        replaceConversations([]);
         setSelectedId(null);
         setDetail(null);
         setConversationNextCursor(null);
+        setConversationError("DM 대화 목록을 불러오지 못했습니다.");
+      } else {
+        setConversationError("새 대화를 불러오지 못했습니다. 기존 대화를 표시하고 있습니다.");
       }
-      setConversationError("DM 대화 목록을 불러오지 못했습니다.");
     } finally {
-      if (cursor) setConversationLoadingMore(false);
-      else setConversationLoading(false);
+      if (requestId === listRequestRef.current) {
+        if (cursor) setConversationLoadingMore(false);
+        else setConversationLoading(false);
+      }
     }
   }
 
   async function loadConversation(conversationId: string) {
+    const requestId = ++detailRequestRef.current;
     setSelectedId(conversationId);
     setDetailLoading(true);
     setDetailError(null);
     try {
-      setDetail(await api.getDmConversation(DEMO_BRAND_ID, conversationId));
+      const next = await api.getDmConversation(DEMO_BRAND_ID, conversationId);
+      if (requestId === detailRequestRef.current) setDetail(next);
     } catch {
+      if (requestId !== detailRequestRef.current) return;
       setDetail(null);
       setDetailError("선택한 대화 내용을 불러오지 못했습니다.");
     } finally {
-      setDetailLoading(false);
+      if (requestId === detailRequestRef.current) setDetailLoading(false);
     }
   }
 
-  async function loadKnowledge() {
-    setKnowledgeLoading(true);
-    setKnowledgeError(null);
-    try {
-      const [nextImports, nextStatus] = await Promise.all([
-        api.listKnowledgeImports(DEMO_BRAND_ID),
-        api.getWikiStatus(DEMO_BRAND_ID)
-      ]);
-      setImports(nextImports);
-      setWikiStatus(nextStatus);
-    } catch {
-      setImports([]);
-      setWikiStatus(null);
-      setKnowledgeError("지식 데이터와 Wiki 상태를 불러오지 못했습니다.");
-    } finally {
-      setKnowledgeLoading(false);
-    }
-  }
-
-  useEffect(() => { void loadConversations("all"); }, []);
+  useEffect(() => {
+    void loadSettings();
+    void loadConversations("all");
+  }, []);
 
   function changeConversationFilter(filter: DmConversationFilter) {
     setConversationFilter(filter);
@@ -136,77 +158,108 @@ export function DmAutomationPage() {
     }
   }
 
-  async function sendManualReply(body: string) {
+  async function sendManualReply(body: string, idempotencyKey: ReturnType<Crypto["randomUUID"]>) {
     if (!selectedId) return;
-    await api.sendManualDmReply(DEMO_BRAND_ID, selectedId, body);
+    await api.sendManualDmReply(DEMO_BRAND_ID, selectedId, body, idempotencyKey);
     await Promise.all([
       loadConversation(selectedId),
       loadConversations(conversationFilter)
     ]);
   }
 
-  async function uploadKnowledge(entryType: "faq" | "product", file: File) {
-    setUploading(entryType);
-    setKnowledgeError(null);
-    setKnowledgeNotice(null);
-    try {
-      const result = await api.importKnowledge(DEMO_BRAND_ID, { entryType, fileName: file.name, fileBase64: await fileToBase64(file) });
-      setKnowledgeNotice(`${entryType === "faq" ? "FAQ" : "제품"} 반영: 유효 ${result.validRows}행, 중복 ${result.duplicateRows}행, 오류 ${result.invalidRows}행`);
-      await loadKnowledge();
-    } catch {
-      setKnowledgeError(`${entryType === "faq" ? "FAQ" : "제품"} 파일을 업로드하지 못했습니다. 파일 형식과 필수 열을 확인하세요.`);
-    } finally {
-      setUploading(null);
-    }
-  }
-
-  async function refreshWiki() {
-    setRefreshing(true);
-    setKnowledgeError(null);
-    try {
-      await api.refreshWiki(DEMO_BRAND_ID);
-      setKnowledgeNotice("Wiki 재생성 작업을 등록했습니다. 기존 활성 버전은 새 버전이 준비될 때까지 유지됩니다.");
-      await loadKnowledge();
-    } catch {
-      setKnowledgeError("Wiki 재생성 작업을 등록하지 못했습니다.");
-    } finally {
-      setRefreshing(false);
-    }
-  }
+  const ready = settings ? isReady(settings) : false;
 
   return (
     <section className="content dm-automation-page">
-      <PageHeader title="DM 자동답변" description="Instagram DM 대화, 수동 답변, 자동답변 지식을 관리합니다." />
-      <Tabs
-        defaultId="conversations"
-        activeId={section}
-        onChange={(next) => {
-          setSection(next);
-          if (next === "knowledge") void loadKnowledge();
-        }}
-        items={[
-          {
-            id: "conversations",
-            label: "대화",
-            content: (
-              <div className={`dm-conversation-layout${selectedId ? " has-selection" : ""}`}>
-                <DmConversationList conversations={conversations} selectedId={selectedId} filter={conversationFilter} loading={conversationLoading} loadingMore={conversationLoadingMore} nextCursor={conversationNextCursor} error={conversationError} onFilterChange={changeConversationFilter} onSelect={(id) => void loadConversation(id)} onLoadMore={() => {
-                  if (conversationNextCursor) void loadConversations(conversationFilter, conversationNextCursor);
-                }} />
-                <DmConversationThread detail={detail} loading={detailLoading} error={detailError} resolving={Boolean(resolvingId)} onBack={() => { setSelectedId(null); setDetail(null); }} onResolve={(attentionId) => {
-                  const item = detail?.attentionItems.find((candidate) => candidate.id === attentionId);
-                  if (item) void resolveAttention(item);
-                }} onManualReply={sendManualReply} />
+      <PageHeader title="Instagram 고객응대" description="자동답변 준비 상태를 확인하고 고객 대화와 상담 필요 요청을 한곳에서 처리합니다." />
+
+      <section className="panel dm-readiness-panel" aria-label="DM 자동답변 준비도">
+        <div className="panel-head">
+          <div>
+            <h2>자동답변</h2>
+            <p className="muted small">준비 조건을 모두 충족해야 켤 수 있습니다.</p>
+          </div>
+          {settings ? (
+            <div className="actions">
+              <Badge variant={settings.enabled ? "ok" : "neutral"}>{settings.enabled ? "ON" : "OFF"}</Badge>
+              <Switch
+                label="DM 자동답변"
+                checked={settings.enabled}
+                disabled={settingsUpdating || (!settings.enabled && !ready)}
+                onChange={(enabled) => void toggleAutomation(enabled)}
+              />
+            </div>
+          ) : null}
+        </div>
+        <div className="panel-body grid">
+          {settingsLoading ? <div role="status" aria-label="DM 준비 상태를 불러오는 중입니다."><InlineSpinner label="DM 준비 상태 로딩 중" /> 준비 상태 확인 중</div> : null}
+          {!settingsLoading && settingsError ? <Alert title="준비 상태 오류" variant="bad">{settingsError} <button className="button" type="button" onClick={() => void loadSettings()}>다시 시도</button></Alert> : null}
+          {!settingsLoading && settings ? <>
+            <div className="dm-readiness-summary">
+              <strong>{ready ? "자동답변 준비 완료" : "자동답변을 켤 수 없습니다"}</strong>
+              <div className="actions">
+                <Badge variant={settings.wikiReady ? "ok" : "warn"}>Wiki {settings.wikiReady ? "준비됨" : "보완 필요"}</Badge>
+                <Badge variant={settings.messagePermissionReady ? "ok" : "warn"}>메시지 권한 {settings.messagePermissionReady ? "확인됨" : "필요"}</Badge>
+                <Badge variant={settings.workerStatus === "online" ? "ok" : "warn"}>워커 {settings.workerStatus === "online" ? "온라인" : "확인 필요"}</Badge>
+                <Badge variant={settings.webhookStatus === "connected" ? "ok" : "neutral"}>Webhook {settings.webhookStatus === "connected" ? "연결됨" : "확인 필요"}</Badge>
               </div>
-            )
-          },
-          {
-            id: "knowledge",
-            label: "자사 정보",
-            content: <DmKnowledgePanel imports={imports} wikiStatus={wikiStatus} loading={knowledgeLoading} error={knowledgeError} uploading={uploading} refreshing={refreshing} notice={knowledgeNotice} onUpload={(type, file) => void uploadKnowledge(type, file)} onRefresh={() => void refreshWiki()} />
-          }
-        ]}
-      />
+            </div>
+            {!ready ? <Alert title="해결 후 활성화하세요" variant="warn">
+              <span className="dm-repair-links">
+                {!settings.wikiReady ? <a href="/brand-center?tab=wiki">Wiki 보완하기 <ExternalLink size={14} /></a> : null}
+                {!settings.messagePermissionReady || settings.workerStatus !== "online" ? <a href="/channels">Instagram 연결 확인 <ExternalLink size={14} /></a> : null}
+              </span>
+            </Alert> : null}
+            <p className="dm-wiki-link">
+              DM 답변 지식은 브랜드 센터에서 관리합니다.
+              <a href="/brand-center?tab=wiki">Wiki에서 보완 <ExternalLink size={14} /></a>
+            </p>
+          </> : null}
+          {settingsUpdating ? <div role="status"><InlineSpinner label="자동답변 상태 저장 중" /> 상태 저장 중</div> : null}
+          {settingsNotice ? <p className="notice success" role="status">{settingsNotice}</p> : null}
+        </div>
+      </section>
+
+      <div className="dm-conversation-toolbar">
+        <div><h2>고객 대화</h2><p className="muted small">최신 Instagram 메시지와 상담 필요 상태를 확인합니다.</p></div>
+        <button className="button" type="button" aria-label="대화 새로고침" disabled={conversationLoading} onClick={() => void loadConversations(conversationFilter)}>
+          <RefreshCw size={16} /> 새로고침
+        </button>
+      </div>
+      <div className={`dm-conversation-layout${selectedId ? " has-selection" : ""}`}>
+        <DmConversationList
+          conversations={conversations}
+          selectedId={selectedId}
+          filter={conversationFilter}
+          search={conversationSearch}
+          loading={conversationLoading}
+          loadingMore={conversationLoadingMore}
+          nextCursor={conversationNextCursor}
+          error={conversationError}
+          onSearchChange={setConversationSearch}
+          onFilterChange={changeConversationFilter}
+          onSelect={(id) => void loadConversation(id)}
+          onLoadMore={() => {
+            if (conversationNextCursor) void loadConversations(conversationFilter, conversationNextCursor);
+          }}
+        />
+        <DmConversationThread
+          detail={detail}
+          loading={detailLoading}
+          error={detailError}
+          resolving={Boolean(resolvingId)}
+          onBack={() => {
+            detailRequestRef.current += 1;
+            setSelectedId(null);
+            setDetail(null);
+          }}
+          onResolve={(attentionId) => {
+            const item = detail?.attentionItems.find((candidate) => candidate.id === attentionId);
+            if (item) void resolveAttention(item);
+          }}
+          onManualReply={sendManualReply}
+        />
+      </div>
     </section>
   );
 }

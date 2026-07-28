@@ -1,4 +1,4 @@
-import { CheckCircle2 } from "lucide-react";
+import { CheckCircle2, ExternalLink } from "lucide-react";
 import { Badge } from "../ui/Badge";
 import { EmptyState } from "../ui/EmptyState";
 import type { BadgeVariant, DmAttentionItem, DmAttentionType } from "../../types";
@@ -48,6 +48,7 @@ export function DmAttentionPanel({ items, filter, loading, error, resolvingId, o
                   <blockquote>{item.originalMessage || "원문 메시지가 없습니다."}</blockquote>
                   <p>{item.reason || "담당자 확인이 필요한 요청입니다."}</p>
                   <span className="muted small">{new Date(item.createdAt).toLocaleString("ko-KR")} · 자동 안내 {item.autoReplyStatus === "sent" ? "발송됨" : item.autoReplyStatus === "not_sent" ? "미발송" : "확인 필요"}</span>
+                  {item.type === "knowledge_gap" ? <a className="button" href={`/brand-center?tab=wiki&issue=${encodeURIComponent(item.id)}`}>Wiki에서 보완 <ExternalLink size={14} /></a> : null}
                 </div>
                 {item.status === "open" ? <button className="button primary" type="button" disabled={resolvingId === item.id} onClick={() => onResolve(item)}><CheckCircle2 size={16} /> {resolvingId === item.id ? "처리 중" : "확인 완료"}</button> : null}
               </article>

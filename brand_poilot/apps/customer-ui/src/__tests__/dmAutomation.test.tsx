@@ -1,7 +1,7 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DmAttentionItem, DmConversationDetail, DmConversationSummary, WikiStatus } from "../types";
+import type { DmAttentionItem, DmConversationDetail, DmConversationSummary, InstagramDmSettings, WikiStatus } from "../types";
 
 const conversation: DmConversationSummary = {
   id: "conversation-1",
@@ -40,6 +40,17 @@ const wikiStatus: WikiStatus = {
   importStats: { total: 1, succeeded: 1, failed: 0, faqRows: 10, productRows: 0 }
 };
 
+const dmSettings: InstagramDmSettings = {
+  brandId: "brand-1",
+  enabled: false,
+  fallbackMessage: "담당자가 확인하겠습니다.",
+  errorMessage: "잠시 후 다시 문의해 주세요.",
+  wikiReady: true,
+  messagePermissionReady: true,
+  webhookStatus: "connected",
+  workerStatus: "online"
+};
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -65,6 +76,11 @@ async function renderPage(overrides: Partial<Record<string, ReturnType<typeof vi
       deliveryStatus: "sent",
       createdAt: "2026-07-14T08:21:00.000Z"
     })),
+    getInstagramDmSettings: vi.fn(async () => dmSettings),
+    updateInstagramDmSettings: vi.fn(async (_brandId: string, payload: { enabled?: boolean }) => ({
+      ...dmSettings,
+      enabled: payload.enabled ?? dmSettings.enabled
+    })),
     listKnowledgeImports: vi.fn(async () => [{ id: "import-1", entryType: "faq", fileName: "faq.csv", status: "succeeded", totalRows: 10, validRows: 9, duplicateRows: 1, invalidRows: 0, updatedRows: 9, createdAt: "2026-07-14T06:00:00.000Z" }]),
     getWikiStatus: vi.fn(async () => wikiStatus),
     importKnowledge: vi.fn(async (_brandId: string, payload: { entryType: "faq" | "product" }) => ({ id: "import-2", entryType: payload.entryType, fileName: "data.csv", status: "succeeded", totalRows: 1, validRows: 1, duplicateRows: 0, invalidRows: 0, updatedRows: 1, createdAt: "2026-07-14T09:00:00.000Z" })),
@@ -78,23 +94,53 @@ async function renderPage(overrides: Partial<Record<string, ReturnType<typeof vi
 }
 
 describe("DmAutomationPage", () => {
-  it("shows skeletons while conversations, messages, and Wiki data are pending", async () => {
+  it("shows skeletons while readiness, conversations, and messages are pending", async () => {
     let resolveConversations: ((value: { items: DmConversationSummary[]; nextCursor: null }) => void) | undefined;
     const api = await renderPage({
       listDmConversations: vi.fn(() => new Promise((resolve) => { resolveConversations = resolve; })),
       getDmConversation: vi.fn(() => new Promise(() => {})),
-      listKnowledgeImports: vi.fn(() => new Promise(() => {})),
-      getWikiStatus: vi.fn(() => new Promise(() => {}))
+      getInstagramDmSettings: vi.fn(() => new Promise(() => {}))
     });
 
+    expect(screen.getByRole("status", { name: "DM 준비 상태를 불러오는 중입니다." })).toBeVisible();
     expect(screen.getByRole("status", { name: "대화 목록을 불러오는 중입니다." })).toHaveClass("skeleton-list");
     resolveConversations?.({ items: [conversation], nextCursor: null });
     await userEvent.click(await screen.findByRole("button", { name: "홍길동 대화 열기" }));
     expect(screen.getByRole("status", { name: "대화 내용을 불러오는 중입니다." })).toHaveClass("skeleton-list");
-
-    await userEvent.click(screen.getByRole("tab", { name: "자사 정보" }));
-    expect(screen.getByRole("status", { name: "Wiki 상태를 불러오는 중입니다." })).toHaveClass("skeleton-list");
     expect(api.getDmConversation).toHaveBeenCalledWith("brand-1", "conversation-1");
+  });
+
+  it("shows readiness, toggles automation, and links Wiki management to Brand Center", async () => {
+    const api = await renderPage();
+
+    expect(await screen.findByText("자동답변 준비 완료")).toBeVisible();
+    expect(screen.getByText("Wiki 준비됨")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Wiki에서 보완" })).toHaveAttribute("href", "/brand-center?tab=wiki");
+    expect(screen.queryByRole("button", { name: "Wiki 다시 만들기" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("FAQ 파일")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("switch", { name: "DM 자동답변" }));
+    expect(api.updateInstagramDmSettings).toHaveBeenCalledWith("brand-1", { enabled: true });
+    expect(await screen.findByText("자동답변이 켜졌습니다.")).toBeVisible();
+  });
+
+  it("blocks activation until readiness passes and provides concrete repair links", async () => {
+    const updateInstagramDmSettings = vi.fn();
+    await renderPage({
+      getInstagramDmSettings: vi.fn(async () => ({
+        ...dmSettings,
+        wikiReady: false,
+        messagePermissionReady: false,
+        workerStatus: "worker_offline"
+      })),
+      updateInstagramDmSettings
+    });
+
+    expect(await screen.findByText("자동답변을 켤 수 없습니다")).toBeVisible();
+    expect(screen.getByRole("switch", { name: "DM 자동답변" })).toBeDisabled();
+    expect(screen.getByRole("link", { name: "Wiki 보완하기" })).toHaveAttribute("href", "/brand-center?tab=wiki");
+    expect(screen.getByRole("link", { name: "Instagram 연결 확인" })).toHaveAttribute("href", "/channels");
+    expect(updateInstagramDmSettings).not.toHaveBeenCalled();
   });
 
   it("opens the selected conversation and shows direction and source metadata", async () => {
@@ -105,7 +151,21 @@ describe("DmAutomationPage", () => {
     expect(await screen.findByText("@customer → @브랜드")).toBeVisible();
     expect(screen.getByText("@브랜드 → @customer")).toBeVisible();
     expect(screen.getByText("근거: 고정 안내")).toBeVisible();
+    expect(screen.getByText("발송 완료")).toBeVisible();
     expect(screen.getByRole("textbox", { name: "수동 답변" })).toBeInTheDocument();
+  });
+
+  it("opens the exact Wiki issue deep link for a knowledge gap", async () => {
+    const knowledgeGap = { ...attention, id: "11111111-1111-4111-8111-111111111111", type: "knowledge_gap" as const };
+    await renderPage({
+      getDmConversation: vi.fn(async () => ({ ...detail, attentionItems: [knowledgeGap] }))
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "홍길동 대화 열기" }));
+
+    expect((await screen.findAllByRole("link", { name: "Wiki에서 보완" })).find((link) => link.getAttribute("href")?.includes("issue="))).toHaveAttribute(
+      "href",
+      "/brand-center?tab=wiki&issue=11111111-1111-4111-8111-111111111111"
+    );
   });
 
   it("removes the conversation attention filter from the UI and resolves attention in the thread", async () => {
@@ -137,7 +197,7 @@ describe("DmAutomationPage", () => {
     expect(sendButton).toHaveAttribute("aria-busy", "true");
     expect(screen.getByLabelText("수동 답변 전송 중")).toBeVisible();
     expect(sendManualDmReply).toHaveBeenCalledTimes(1);
-    expect(sendManualDmReply).toHaveBeenCalledWith("brand-1", "conversation-1", "수동으로 안내드립니다.");
+    expect(sendManualDmReply).toHaveBeenCalledWith("brand-1", "conversation-1", "수동으로 안내드립니다.", expect.any(String));
     resolveSend?.();
     expect(await screen.findByText("수동 답변을 전송했습니다.")).toBeVisible();
     expect(api.getDmConversation).toHaveBeenCalledTimes(2);
@@ -171,28 +231,38 @@ describe("DmAutomationPage", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("요청 ID: request-123");
   });
 
-  it("keeps the active Wiki visible after a failed build and distinguishes upload types", async () => {
-    const api = await renderPage();
-    await userEvent.click(screen.getByRole("tab", { name: "자사 정보" }));
+  it("retries a definitely failed delivered message but not an unknown delivery", async () => {
+    const failed = { ...detail.messages[1], id: "message-failed", body: "실패한 답변", deliveryStatus: "failed" as const };
+    const unknown = { ...detail.messages[1], id: "message-unknown", body: "확인 중 답변", deliveryStatus: "unknown" as const };
+    const api = await renderPage({
+      getDmConversation: vi.fn(async () => ({ ...detail, messages: [detail.messages[0], failed, unknown] }))
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "홍길동 대화 열기" }));
 
-    expect(await screen.findByText("버전 2")).toBeVisible();
-    expect(screen.getByText(/최근 Wiki 빌드 실패/)).toBeVisible();
-    const productFile = new File(["name,description\n상품,설명"], "products.csv", { type: "text/csv" });
-    await userEvent.upload(screen.getByLabelText("제품 파일"), productFile);
-    expect(api.importKnowledge).toHaveBeenCalledWith("brand-1", expect.objectContaining({ entryType: "product", fileName: "products.csv" }));
-    expect(screen.getByRole("link", { name: "FAQ 템플릿" })).toHaveAttribute("href", "/faq-template.csv");
+    expect(await screen.findByText("발송 실패")).toBeVisible();
+    expect(screen.getByText("발송 확인 필요")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "확인 중 답변 다시 보내기" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "실패한 답변 다시 보내기" }));
+    expect(api.sendManualDmReply).toHaveBeenCalledWith("brand-1", "conversation-1", "실패한 답변", expect.any(String));
   });
 
-  it("shows an inline loader while a Wiki rebuild is pending", async () => {
-    const refreshWiki = vi.fn(() => new Promise(() => {}));
-    await renderPage({ refreshWiki });
-    await userEvent.click(screen.getByRole("tab", { name: "자사 정보" }));
-    const rebuildButton = screen.getByRole("button", { name: "Wiki 다시 만들기" });
-    await userEvent.click(rebuildButton);
+  it("uses a fresh idempotency key when retrying a stored failure after a composer failure", async () => {
+    const failed = { ...detail.messages[1], id: "message-failed", body: "과거 실패 답변", deliveryStatus: "failed" as const };
+    const sendManualDmReply = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error("failed"), { errorCode: "meta_graph_400" }))
+      .mockResolvedValueOnce({ id: "message-retry" });
+    await renderPage({
+      getDmConversation: vi.fn(async () => ({ ...detail, messages: [detail.messages[0], failed] })),
+      sendManualDmReply
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "홍길동 대화 열기" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "수동 답변" }), "새 답변");
+    await userEvent.click(screen.getByRole("button", { name: "수동 답변 전송" }));
+    expect(await screen.findByRole("alert")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "과거 실패 답변 다시 보내기" }));
 
-    expect(rebuildButton).toBeDisabled();
-    expect(rebuildButton).toHaveAttribute("aria-busy", "true");
-    expect(screen.getByLabelText("Wiki 재생성 요청 중")).toBeVisible();
+    expect(sendManualDmReply).toHaveBeenCalledTimes(2);
+    expect(sendManualDmReply.mock.calls[0][3]).not.toBe(sendManualDmReply.mock.calls[1][3]);
   });
 
   it("shows an API error without rendering sample conversations", async () => {
@@ -217,5 +287,62 @@ describe("DmAutomationPage", () => {
     expect(await screen.findByRole("button", { name: "김고객 대화 열기" })).toBeVisible();
     expect(screen.getByRole("button", { name: "홍길동 대화 열기" })).toBeVisible();
     expect(listDmConversations).toHaveBeenLastCalledWith("brand-1", { filter: "all", cursor: "cursor-2" });
+  });
+
+  it("searches loaded conversations without breaking server filters and pagination", async () => {
+    const nextConversation = {
+      ...conversation,
+      id: "conversation-2",
+      participant: { ...conversation.participant, displayName: "김고객", username: "customer2" }
+    };
+    const listDmConversations = vi.fn(async (_brandId: string, options: { filter?: string; cursor?: string }) => options.cursor
+      ? { items: [nextConversation], nextCursor: null }
+      : { items: [conversation], nextCursor: "cursor-2" });
+    await renderPage({ listDmConversations });
+
+    await userEvent.type(await screen.findByRole("searchbox", { name: "대화 검색" }), "김고객");
+    expect(screen.queryByRole("button", { name: "홍길동 대화 열기" })).not.toBeInTheDocument();
+    expect(screen.getByText("검색 결과가 없습니다")).toBeVisible();
+    await userEvent.clear(screen.getByRole("searchbox", { name: "대화 검색" }));
+    await userEvent.click(screen.getByRole("button", { name: "대화 더 보기" }));
+    await userEvent.type(screen.getByRole("searchbox", { name: "대화 검색" }), "김고객");
+    expect(await screen.findByRole("button", { name: "김고객 대화 열기" })).toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: "불만" }));
+    expect(listDmConversations).toHaveBeenLastCalledWith("brand-1", { filter: "complaint", cursor: undefined });
+  });
+
+  it("ignores a stale conversation list response that resolves after a newer filter", async () => {
+    let resolveAll: ((value: { items: DmConversationSummary[]; nextCursor: null }) => void) | undefined;
+    const complaintConversation = {
+      ...conversation,
+      id: "complaint-2",
+      participant: { ...conversation.participant, displayName: "최신 고객" }
+    };
+    const listDmConversations = vi.fn((_brandId: string, options: { filter?: string }) => options.filter === "complaint"
+      ? Promise.resolve({ items: [complaintConversation], nextCursor: null })
+      : new Promise<{ items: DmConversationSummary[]; nextCursor: null }>((resolve) => { resolveAll = resolve; }));
+    await renderPage({ listDmConversations });
+
+    await userEvent.click(screen.getByRole("button", { name: "불만" }));
+    expect(await screen.findByRole("button", { name: "최신 고객 대화 열기" })).toBeVisible();
+    await act(async () => resolveAll?.({ items: [conversation], nextCursor: null }));
+    expect(screen.queryByRole("button", { name: "홍길동 대화 열기" })).not.toBeInTheDocument();
+  });
+
+  it("keeps stale conversations visible with a retryable warning when refresh fails", async () => {
+    let calls = 0;
+    await renderPage({
+      listDmConversations: vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) return { items: [conversation], nextCursor: null };
+        throw new Error("offline");
+      })
+    });
+    expect(await screen.findByRole("button", { name: "홍길동 대화 열기" })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "대화 새로고침" }));
+
+    expect(await screen.findByText(/기존 대화를 표시하고 있습니다/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "홍길동 대화 열기" })).toBeVisible();
   });
 });

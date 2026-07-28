@@ -1,4 +1,4 @@
-import { AlertCircle, MessageCircle, UserRound } from "lucide-react";
+import { AlertCircle, MessageCircle, Search, UserRound } from "lucide-react";
 import { Badge } from "../ui/Badge";
 import { EmptyState } from "../ui/EmptyState";
 import { InlineSpinner, ListSkeleton } from "../ui/LoadingState";
@@ -23,11 +23,13 @@ interface DmConversationListProps {
   conversations: DmConversationSummary[];
   selectedId: string | null;
   filter: DmConversationFilter;
+  search: string;
   loading: boolean;
   loadingMore: boolean;
   nextCursor: string | null;
   error: string | null;
   onFilterChange(filter: DmConversationFilter): void;
+  onSearchChange(search: string): void;
   onSelect(conversationId: string): void;
   onLoadMore(): void;
 }
@@ -36,14 +38,25 @@ export function DmConversationList({
   conversations,
   selectedId,
   filter,
+  search,
   loading,
   loadingMore,
   nextCursor,
   error,
   onFilterChange,
+  onSearchChange,
   onSelect,
   onLoadMore
 }: DmConversationListProps) {
+  const normalizedSearch = search.trim().toLocaleLowerCase("ko-KR");
+  const visibleConversations = normalizedSearch
+    ? conversations.filter((item) => [
+      participantLabel(item),
+      participantHandle(item),
+      item.lastMessage?.body ?? ""
+    ].some((value) => value.toLocaleLowerCase("ko-KR").includes(normalizedSearch)))
+    : conversations;
+
   return (
     <aside className="dm-conversation-list" aria-label="DM 대화 목록">
       <div className="dm-list-head">
@@ -53,6 +66,17 @@ export function DmConversationList({
         </div>
         <Badge variant="info">{conversations.length}개</Badge>
       </div>
+      <label className="dm-search">
+        <Search size={16} aria-hidden="true" />
+        <span className="visually-hidden">대화 검색</span>
+        <input
+          type="search"
+          aria-label="대화 검색"
+          value={search}
+          placeholder="이름, 계정, 메시지 검색"
+          onChange={(event) => onSearchChange(event.currentTarget.value)}
+        />
+      </label>
       <div className="dm-filter-row" role="group" aria-label="대화 필터">
         {filters.map((item) => (
           <button
@@ -71,9 +95,12 @@ export function DmConversationList({
       {!loading && !error && conversations.length === 0 ? (
         <EmptyState title="대화가 없습니다" description="선택한 조건에 해당하는 Instagram DM 대화가 없습니다." />
       ) : null}
-      {!loading && !error ? (
+      {!loading && conversations.length > 0 && visibleConversations.length === 0 ? (
+        <EmptyState title="검색 결과가 없습니다" description="다른 이름, 계정 또는 메시지로 검색해 보세요." />
+      ) : null}
+      {!loading && visibleConversations.length > 0 ? (
         <div className="dm-conversation-rows">
-          {conversations.map((item) => (
+          {visibleConversations.map((item) => (
             <button
               className="dm-conversation-row"
               data-selected={selectedId === item.id}
