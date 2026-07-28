@@ -207,3 +207,11 @@
 15. 위 `소기능 보존·회귀 체크리스트` 전 항목
 
 새 위치가 확정되지 않은 기존 기능은 삭제하지 않고 `미배치` 상태로 보존한다.
+
+## 2026-07-28 보존 회귀 증빙
+
+- 자동 보존표 verifier는 최종 로컬 검증 기준 코드 `5907c3c`에서 123개 ID를 모두 정확히 한 번 확인했다: `active` 105, `planned` 13, `excluded` 4, `superseded` 1.
+- 같은 기준 코드에서 repository contract 42/42, migration 49/49, 브라우저 E2E 149 PASS / 7 의도된 SKIP / 0 FAIL을 확인했다.
+- 배포 상태 전이 계약은 기준 코드 `2f407f9`에서 95/95 PASS했다. 이후 변경은 E2E proxy test lifecycle과 이 증빙 문서뿐이며 운영 스크립트나 제품 동작을 바꾸지 않았다.
+- 위 결과는 기존 기능 삭제 승인이 아니다. `planned` 13건과 수동·외부 연동 항목은 계속 보존 대상이며 자동 완료로 간주하지 않는다.
+- Vercel preview 실제 로그인·OAuth, Ubuntu canary·승격·rollback, 실제 Meta 연동, 운영 관찰, pilot 검증은 `pending`이다. 인증/OAuth·세션·권한과 운영 데이터를 확인하기 전에는 운영 배포 또는 migration 적용을 승인하지 않는다.

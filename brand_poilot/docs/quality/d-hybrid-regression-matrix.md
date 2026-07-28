@@ -134,3 +134,16 @@
 | A11Y-FOCUS-001 | 키보드·focus trap·Escape·focus restore·reduced motion을 지킨다 | `apps/customer-ui/src/components/ui/FocusTrap.test.tsx` :: `focuses the requested element and loops Tab within the active region` | 수동: mouse 없이 핵심 흐름 완료 | 사용 중 | 아니오 | active | - | `npm run test --workspace @brand-pilot/customer-ui -- FocusTrap.test.tsx responsiveStyles.test.ts` |
 | AUTH-ROUTING-001 | 비로그인 홈·auth 장애 재확인·legacy redirect·support gate 예외를 보존한다 | `apps/customer-ui/src/__tests__/auth.test.tsx` :: `redirects an anonymous visitor to Danbam` | 수동: onboarding·content legacy URL | 사용 중 | 아니오 | active | - | `npm run test --workspace @brand-pilot/customer-ui -- auth.test.tsx brandSetupGate.test.tsx` |
 | ADMIN-OPERATIONS-001 | pause·resume·usage·publish operation·worker 상태의 권한·사유·감사를 보존한다 | `apps/api/src/adminRepository.test.ts` :: `changes brand status once and records an admin audit event` | 수동: 권한 없는 조작 거절과 상태 기준 | 사용 중 | 아니오 | active | - | `npm run test --workspace @brand-pilot/api -- adminRepository.test.ts adminServer.test.ts` |
+
+## 2026-07-28 로컬 사전 운영 증빙
+
+- 배포 계약 기준 코드 `2f407f9`: `npm run test:deployment` PASS, 95/95, 548.64초(Node), 551.3초(wall).
+- 최종 로컬 검증 기준 코드 `5907c3c`:
+  - `npm run test:e2e` (`CUSTOMER_UI_E2E_PORT=5278`) PASS, 149 PASS / 7 의도된 SKIP / 0 FAIL, 156건, 594.2초. 종료 후 5278 listener가 없음을 확인했다.
+  - `npm run test:migrations` PASS, 총 49/49(상위 subtest 47건), 391.99초(Node), 396.5초(wall).
+  - `npm run test:regression-matrix` PASS, verifier 8/8 및 123개 ID 일치(`active` 105, `planned` 13, `excluded` 4, `superseded` 1).
+  - `npm run test:contract` PASS, 42/42.
+- 같은 로컬 검증 캠페인에서 전체 workspace test와 build가 PASS했다. 제품 코드를 바꾸지 않는 후속 deployment/E2E harness 수정 뒤 위 최종 게이트를 다시 실행했다.
+- `planned` 13건은 이 결과로 자동 증빙 완료로 승격하지 않는다.
+- 아직 실행하지 않은 외부 게이트: Vercel preview 실제 인증·OAuth, Ubuntu Docker image digest/canary·승격·rollback, 실제 Meta 연동, 운영 canary 관찰, pilot 사용자 검증. 이 항목들은 모두 `pending`이며 이 문서는 운영 준비 완료나 배포 승인을 주장하지 않는다.
+- 로컬 production dependency audit에는 12개 취약 패키지 키(중간 3, 높음 9, 치명적 0)가 남아 있다. 출시 판단 전에 별도 보안 triage가 필요하다.
