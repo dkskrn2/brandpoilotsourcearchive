@@ -1495,24 +1495,53 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
                  on selected.generation_id=generation.id
                 and selected.workspace_id=generation.workspace_id
                 and selected.brand_id=generation.brand_id
+               join reference_items item
+                 on item.id=selected.reference_item_id
+                and item.workspace_id=selected.workspace_id
+                and item.brand_id=selected.brand_id
+                and item.archived_at is null
               where selected.reference_item_id is not null
              union all
-              select 'avatar',generation.draft_json->'orchestration'->'avatar'->>'id',
-                     generation.id::text,generation.title
+              select 'avatar',avatar.id::text,generation.id::text,generation.title
                 from ai_content_generations generation
-               where generation.draft_json->'orchestration'->'avatar'->>'id' is not null
+                join brand_avatars avatar
+                  on avatar.id::text=generation.draft_json->'orchestration'->'avatar'->>'id'
+                 and avatar.workspace_id=generation.workspace_id
+                 and avatar.brand_id=generation.brand_id
+                 and avatar.status='active'
+               where exists (
+                 select 1
+                   from brand_avatar_images image
+                  where image.avatar_id=avatar.id
+                    and image.workspace_id=avatar.workspace_id
+                    and image.brand_id=avatar.brand_id
+               )
              union all
-              select 'product_service',
-                     generation.draft_json->'orchestration'->'subject'->>'productServiceId',
-                     generation.id::text,generation.title
+              select 'product_service',product.id::text,generation.id::text,generation.title
                 from ai_content_generations generation
+                join product_services product
+                  on product.id::text=generation.draft_json->'orchestration'->'subject'->>'productServiceId'
+                 and product.workspace_id=generation.workspace_id
+                 and product.brand_id=generation.brand_id
+                 and product.status='active'
+                join product_service_versions version
+                  on version.id=product.active_version_id
+                 and version.workspace_id=product.workspace_id
+                 and version.brand_id=product.brand_id
+                 and version.product_service_id=product.id
+                 and version.status='approved'
                where generation.draft_json->'orchestration'->'subject'->>'mode'='product_service'
              union all
-              select 'wiki',wiki.item,generation.id::text,generation.title
+              select 'wiki',version.id::text,generation.id::text,generation.title
                 from ai_content_generations generation
                 cross join lateral jsonb_array_elements_text(
                   coalesce(generation.draft_json->'orchestration'->'subject'->'wikiItemIds','[]'::jsonb)
                 ) wiki(item)
+                join wiki_versions version
+                  on version.id::text=wiki.item
+                 and version.workspace_id=generation.workspace_id
+                 and version.brand_id=generation.brand_id
+                 and version.status='active'
            ) reference
            join ai_content_generations generation on generation.id=reference.generation_id::uuid
           where generation.workspace_id=$1 and generation.brand_id=$2

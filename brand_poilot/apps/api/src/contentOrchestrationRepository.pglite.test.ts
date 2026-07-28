@@ -1045,6 +1045,216 @@ describe("content orchestration PostgreSQL contract", () => {
     })).resolves.toEqual([]);
   });
 
+  it("resolves only active same-tenant avatar library references from draft JSON", async () => {
+    const db = database as PGlite;
+    const validDraft = "31000000-0000-4000-8000-000000000031";
+    const missingDraft = "32000000-0000-4000-8000-000000000032";
+    const crossBrandDraft = "33000000-0000-4000-8000-000000000033";
+    const missingAvatar = "34000000-0000-4000-8000-000000000034";
+    const repository = createAiContentRepository({ query: db.query.bind(db) } as never);
+
+    await db.exec("begin");
+    try {
+      await db.query(
+        `insert into ai_content_generations (
+           id,workspace_id,brand_id,type,title,status,analysis_idempotency_key,draft_json,
+           content_family,output_format,subject_mode
+         ) values
+         ($1,$4,$5,'blog','Valid avatar draft','draft','avatar-valid',$6::jsonb,
+          'informational','blog','brand_topic'),
+         ($2,$4,$5,'blog','Missing avatar draft','draft','avatar-missing',$7::jsonb,
+          'informational','blog','brand_topic'),
+         ($3,$4,$5,'blog','Cross-brand avatar draft','draft','avatar-cross-brand',$8::jsonb,
+          'informational','blog','brand_topic')`,
+        [
+          validDraft,
+          missingDraft,
+          crossBrandDraft,
+          ids.workspace,
+          ids.brand,
+          JSON.stringify({ orchestration: { avatar: { mode: "library", id: ids.avatar } } }),
+          JSON.stringify({ orchestration: { avatar: { mode: "library", id: missingAvatar } } }),
+          JSON.stringify({ orchestration: { avatar: { mode: "library", id: ids.otherAvatar } } }),
+        ],
+      );
+
+      const valid = await repository.listAiContentDraftReferences({
+        workspaceId: ids.workspace,
+        brandId: ids.brand,
+        assetType: "avatar",
+        assetId: ids.avatar,
+      });
+      expect(valid).toEqual(expect.arrayContaining([
+        expect.objectContaining({ generationId: validDraft }),
+      ]));
+      await expect(repository.listAiContentDraftReferences({
+        workspaceId: ids.workspace,
+        brandId: ids.brand,
+        assetType: "avatar",
+        assetId: missingAvatar,
+      })).resolves.toEqual([]);
+      await expect(repository.listAiContentDraftReferences({
+        workspaceId: ids.workspace,
+        brandId: ids.brand,
+        assetType: "avatar",
+        assetId: ids.otherAvatar,
+      })).resolves.toEqual([]);
+
+      await db.query("update brand_avatars set status='archived' where id=$1", [ids.avatar]);
+      await expect(repository.listAiContentDraftReferences({
+        workspaceId: ids.workspace,
+        brandId: ids.brand,
+        assetType: "avatar",
+        assetId: ids.avatar,
+      })).resolves.toEqual([]);
+    } finally {
+      await db.exec("rollback");
+    }
+  });
+
+  it("resolves only active same-tenant Wiki versions from draft JSON", async () => {
+    const db = database as PGlite;
+    const validDraft = "35000000-0000-4000-8000-000000000035";
+    const missingDraft = "36000000-0000-4000-8000-000000000036";
+    const crossBrandDraft = "37000000-0000-4000-8000-000000000037";
+    const inactiveDraft = "38000000-0000-4000-8000-000000000038";
+    const missingWiki = "39000000-0000-4000-8000-000000000039";
+    const repository = createAiContentRepository({ query: db.query.bind(db) } as never);
+
+    await db.exec("begin");
+    try {
+      await db.query(
+        `insert into ai_content_generations (
+           id,workspace_id,brand_id,type,title,status,analysis_idempotency_key,draft_json,
+           content_family,output_format,subject_mode
+         ) values
+         ($1,$5,$6,'blog','Valid Wiki draft','draft','wiki-valid',$7::jsonb,
+          'informational','blog','brand_topic'),
+         ($2,$5,$6,'blog','Missing Wiki draft','draft','wiki-missing',$8::jsonb,
+          'informational','blog','brand_topic'),
+         ($3,$5,$6,'blog','Cross-brand Wiki draft','draft','wiki-cross-brand',$9::jsonb,
+          'informational','blog','brand_topic'),
+         ($4,$5,$6,'blog','Inactive Wiki draft','draft','wiki-inactive',$10::jsonb,
+          'informational','blog','brand_topic')`,
+        [
+          validDraft,
+          missingDraft,
+          crossBrandDraft,
+          inactiveDraft,
+          ids.workspace,
+          ids.brand,
+          JSON.stringify({ orchestration: { subject: { mode: "brand_topic", wikiItemIds: [ids.wiki] } } }),
+          JSON.stringify({ orchestration: { subject: { mode: "brand_topic", wikiItemIds: [missingWiki] } } }),
+          JSON.stringify({ orchestration: { subject: { mode: "brand_topic", wikiItemIds: [ids.otherWiki] } } }),
+          JSON.stringify({ orchestration: { subject: { mode: "brand_topic", wikiItemIds: [ids.readyWiki] } } }),
+        ],
+      );
+
+      const valid = await repository.listAiContentDraftReferences({
+        workspaceId: ids.workspace,
+        brandId: ids.brand,
+        assetType: "wiki",
+        assetId: ids.wiki,
+      });
+      expect(valid).toEqual(expect.arrayContaining([
+        expect.objectContaining({ generationId: validDraft }),
+      ]));
+      for (const assetId of [missingWiki, ids.otherWiki, ids.readyWiki]) {
+        await expect(repository.listAiContentDraftReferences({
+          workspaceId: ids.workspace,
+          brandId: ids.brand,
+          assetType: "wiki",
+          assetId,
+        })).resolves.toEqual([]);
+      }
+    } finally {
+      await db.exec("rollback");
+    }
+  });
+
+  it("resolves product and saved-reference drafts only through active tenant-owned library rows", async () => {
+    const db = database as PGlite;
+    const missingDraft = "3a000000-0000-4000-8000-00000000003a";
+    const crossBrandDraft = "3b000000-0000-4000-8000-00000000003b";
+    const missingProduct = "3c000000-0000-4000-8000-00000000003c";
+    const crossBrandProduct = "3d000000-0000-4000-8000-00000000003d";
+    const crossBrandVersion = "3e000000-0000-4000-8000-00000000003e";
+    const repository = createAiContentRepository({ query: db.query.bind(db) } as never);
+
+    await db.exec("begin");
+    try {
+      await db.query(
+        `insert into product_services (
+           id,workspace_id,brand_id,kind,display_name
+         ) values ($1,$2,$3,'service','Other brand service')`,
+        [crossBrandProduct, ids.workspace, ids.otherBrand],
+      );
+      await db.query(
+        `insert into product_service_versions (
+           id,workspace_id,brand_id,product_service_id,version,status,profile_json,approved_at
+         ) values ($1,$2,$3,$4,1,'approved','{}',now())`,
+        [crossBrandVersion, ids.workspace, ids.otherBrand, crossBrandProduct],
+      );
+      await db.query(
+        "update product_services set active_version_id=$2 where id=$1",
+        [crossBrandProduct, crossBrandVersion],
+      );
+      await db.query(
+        `insert into ai_content_generations (
+           id,workspace_id,brand_id,type,title,status,analysis_idempotency_key,draft_json,
+           content_family,output_format,subject_mode,product_service_id
+         ) values
+         ($1,$3,$4,'blog','Missing product draft','draft','product-missing',$5::jsonb,
+          'informational','blog','product_service',null),
+         ($2,$3,$4,'blog','Cross-brand product draft','draft','product-cross-brand',$6::jsonb,
+          'informational','blog','product_service',null)`,
+        [
+          missingDraft,
+          crossBrandDraft,
+          ids.workspace,
+          ids.brand,
+          JSON.stringify({
+            orchestration: {
+              subject: { mode: "product_service", productServiceId: missingProduct },
+            },
+          }),
+          JSON.stringify({
+            orchestration: {
+              subject: { mode: "product_service", productServiceId: crossBrandProduct },
+            },
+          }),
+        ],
+      );
+
+      for (const assetId of [missingProduct, crossBrandProduct]) {
+        await expect(repository.listAiContentDraftReferences({
+          workspaceId: ids.workspace,
+          brandId: ids.brand,
+          assetType: "product_service",
+          assetId,
+        })).resolves.toEqual([]);
+      }
+
+      await db.query("update product_services set status='archived' where id=$1", [ids.product]);
+      await expect(repository.listAiContentDraftReferences({
+        workspaceId: ids.workspace,
+        brandId: ids.brand,
+        assetType: "product_service",
+        assetId: ids.product,
+      })).resolves.toEqual([]);
+
+      await db.query("update reference_items set archived_at=now() where id=$1", [ids.referenceItem]);
+      await expect(repository.listAiContentDraftReferences({
+        workspaceId: ids.workspace,
+        brandId: ids.brand,
+        assetType: "reference",
+        assetId: ids.referenceItem,
+      })).resolves.toEqual([]);
+    } finally {
+      await db.exec("rollback");
+    }
+  });
+
   it("starts concurrently from one exact brief and retries the frozen snapshot without current reads", async () => {
     const db = database as PGlite;
     const brief = generationBrief();
