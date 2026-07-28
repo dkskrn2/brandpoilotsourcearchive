@@ -44,7 +44,7 @@ EXTERNAL_ENV_SHA256="$(sha256sum -- "$EXTERNAL_ENV_FILE" | awk '{print $1}')"
 CURRENT_RELEASE_SHA="NONE"
 CURRENT_IMAGE_DIGEST="NONE"
 if load_optional_state_sha "$ROOT/state/current" CURRENT_RELEASE_SHA; then
-  validate_release_directory "$ROOT/releases/$CURRENT_RELEASE_SHA"
+  validate_release_directory "$ROOT/releases/$CURRENT_RELEASE_SHA" legacy-current
   CURRENT_IMAGE_DIGEST="${RELEASE_MANIFEST[API_IMAGE]}"
 fi
 

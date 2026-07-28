@@ -1354,6 +1354,47 @@ test("release manifests are parsed without source or eval and preflight is fail-
   assert.match(preflight, /config --quiet/);
 });
 
+test("release validation uses the signed 02aa legacy file set only for the immutable 02aa release", () => {
+  const bash = findBash();
+  assert.ok(bash, "Bash is required for the legacy release contract");
+  const run = (sha) => spawnSync(bash, [
+    "-c",
+    'source "$1"; release_file_specs "/opt/brand-pilot/releases/$2" "$3"',
+    "_",
+    bashPath("deploy/scripts/lib.sh"),
+    sha,
+    "legacy-current",
+  ], { cwd: process.cwd(), encoding: "utf8" });
+  const legacy = run("02aa2bcae3f66d494f16a26bec9055cac17464f9");
+  assert.equal(legacy.status, 0, legacy.stderr);
+  assert.doesNotMatch(legacy.stdout, /backup-state\.sh|restore-state\.sh/);
+  for (const required of ["release.env", "compose.production.yml", "scripts/lib.sh", "scripts/deploy.sh"]) {
+    assert.match(legacy.stdout, new RegExp(required.replace(".", "\\.")));
+  }
+  const candidateLegacy = spawnSync(bash, [
+    "-c",
+    'source "$1"; release_file_specs "/opt/brand-pilot/releases/$2"',
+    "_",
+    bashPath("deploy/scripts/lib.sh"),
+    "02aa2bcae3f66d494f16a26bec9055cac17464f9",
+  ], { cwd: process.cwd(), encoding: "utf8" });
+  assert.match(candidateLegacy.stdout, /scripts\/backup-state\.sh/);
+  assert.match(candidateLegacy.stdout, /scripts\/restore-state\.sh/);
+  const lib = read("deploy/scripts/lib.sh");
+  assert.match(
+    lib,
+    /validate_release_directory "\$root\/releases\/\$from_current" legacy-current/,
+  );
+  assert.match(
+    lib,
+    /validate_release_directory "\$root\/releases\/\$from_candidate"\s*\n/,
+  );
+  const current = run("95a975bf263756fbc13fb6ac16b1a3962e303d8e");
+  assert.equal(current.status, 0, current.stderr);
+  assert.match(current.stdout, /scripts\/backup-state\.sh/);
+  assert.match(current.stdout, /scripts\/restore-state\.sh/);
+});
+
 test("the first attachment lifecycle rollout is forced off and remains unscheduled", () => {
   const flag = "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED";
   const envExample = read("deploy/env/api.env.example");
