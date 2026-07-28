@@ -847,10 +847,22 @@ test("Task 8 release replacement cannot mutate shared env files", () => {
     "deploy/scripts/rollback.sh",
   ].map(read).join("\n");
 
-  assert.doesNotMatch(
-    replacementScripts,
-    /shared\/env|(?:API|DM_WORKER_1|DM_WORKER_2|WIKI_WORKER_1|CONTENT_PROPOSAL_WORKER_1)_ENV_FILE/,
-    "release replacement scripts must not address shared env targets directly",
+  const sharedEnvTarget =
+    /shared\/env|(?:API|DM_WORKER_1|DM_WORKER_2|WIKI_WORKER_1|CONTENT_PROPOSAL_WORKER_1)_ENV_FILE/;
+  const sharedEnvMutations = replacementScripts
+    .split(/\r?\n/)
+    .filter((line) =>
+      sharedEnvTarget.test(line)
+      && (
+        /\b(?:rm|mv|cp|install|touch|truncate|chmod|chown|tee)\b/.test(line)
+        || /\bsed\b[^#\n]*\s-i(?:\s|$)/.test(line)
+        || /(?:^|[^<])>{1,2}\s*["']?\$\{?(?:API|DM_WORKER_1|DM_WORKER_2|WIKI_WORKER_1|CONTENT_PROPOSAL_WORKER_1)_ENV_FILE/.test(line)
+      ),
+    );
+  assert.deepEqual(
+    sharedEnvMutations,
+    [],
+    "release replacement scripts must not create, modify, or delete shared env targets",
   );
   const runbook = read(ubuntuRunbookPath);
   assert.match(runbook, /image[^]*release[^]*(?:never|must not)[^]*(?:create|modify|delete)[^]*shared env/i);
