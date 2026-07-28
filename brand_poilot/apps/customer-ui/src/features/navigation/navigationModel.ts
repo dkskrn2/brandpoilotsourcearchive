@@ -2,6 +2,7 @@ import {
   CreditCard,
   Headphones,
   LayoutDashboard,
+  ChartNoAxesCombined,
   MessageCircleReply,
   ScanSearch,
   Send,
@@ -28,7 +29,10 @@ export const customerNavigation: CustomerNavigationGroup[] = [
   {
     id: "overview",
     label: "개요",
-    items: [{ label: "대시보드", path: "/dashboard", icon: LayoutDashboard }],
+    items: [
+      { label: "대시보드", path: "/dashboard", icon: LayoutDashboard },
+      { label: "성과·개선", path: "/performance", icon: ChartNoAxesCombined },
+    ],
   },
   {
     id: "brand",

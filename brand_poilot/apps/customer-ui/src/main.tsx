@@ -7,6 +7,7 @@ import "./styles/tokens.css";
 import "./styles/prototype.css";
 import "./styles/shell.css";
 import "./styles/dashboard.css";
+import "./styles/performance.css";
 import "./styles/brand-center.css";
 import "./styles/references.css";
 import "./styles/content-wizard.css";

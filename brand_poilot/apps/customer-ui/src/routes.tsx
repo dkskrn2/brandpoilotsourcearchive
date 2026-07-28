@@ -7,6 +7,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { SupportPage } from "./pages/SupportPage";
 import { DmAutomationPage } from "./pages/DmAutomationPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { PerformanceInsightsPage } from "./pages/PerformanceInsightsPage";
 import { AiContentHomePage } from "./pages/AiContentHomePage";
 import { AiContentWizardPage } from "./pages/AiContentWizardPage";
 import { AiContentGenerationPage } from "./pages/AiContentGenerationPage";
@@ -60,6 +61,7 @@ export const router = createBrowserRouter(
       children: [
         { index: true, element: <Navigate to="/dashboard" replace /> },
         { path: "dashboard", element: <DashboardPage /> },
+        { path: "performance", element: <PerformanceInsightsPage /> },
         { path: "ai-content", element: <AiContentHomePage /> },
         { path: "ai-content/new", element: <AiContentWizardPage /> },
         { path: "ai-content/:generationId", element: <AiContentGenerationPage /> },

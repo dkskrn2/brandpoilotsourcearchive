@@ -293,6 +293,7 @@ function DashboardContent({ dashboard }: { dashboard: Dashboard }) {
         </div>
         <div className="actions dashboard-head-actions">
           <span className="dashboard-collected">성과 {lastCollected(dashboard.lastCollectedAt)}</span>
+          <Link className="button secondary" to="/performance">성과 자세히 보기</Link>
           <Link className="button secondary" to="/brand-center?tab=understanding&section=core">브랜드 검토하기</Link>
           <Link className="button primary" to="/ai-content/new">콘텐츠 만들기</Link>
           <PageGuideButton />

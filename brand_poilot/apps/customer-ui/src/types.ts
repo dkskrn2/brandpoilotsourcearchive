@@ -85,6 +85,55 @@ export interface Dashboard {
   }>;
 }
 
+export interface PerformanceExperiment {
+  id: string;
+  kind?: "experiment";
+  title: string;
+  hypothesis: string;
+  contentFamily: "informational" | "marketing";
+  channelTargets: Array<"instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok" | "blog_export">;
+  outputFormats: Array<"card_news" | "blog" | "single_image" | "channel_text">;
+  performanceSnapshotIds: string[];
+}
+
+export interface PerformanceInsights {
+  period: "30d";
+  summary: {
+    dataStatus: "sufficient" | "insufficient";
+    measuredContentCount: number;
+    totalExposure: number | null;
+  };
+  windows: Array<{
+    window: "24h" | "72h" | "7d";
+    sampleSize: number;
+    averageExposure: number | null;
+  }>;
+  observations: Array<{
+    id: string;
+    kind: "observation";
+    label: string;
+    metric: { name: string; value: number | null; unit: "회"; sampleSize: number };
+    evidenceSnapshotIds: string[];
+    interpretation: null | {
+      kind: "interpretation";
+      statement: string;
+      confidence: "low" | "medium" | "high";
+    };
+  }>;
+  experiments: PerformanceExperiment[];
+  sampleSize: number;
+  lastCollectedAt: string | null;
+  topContents: Array<{
+    publishQueueId: string;
+    title: string;
+    channel: ChannelType;
+    deliveryFormat: string | null;
+    exposureCount: number | null;
+    snapshotId: string;
+    externalUrl: string | null;
+  }>;
+}
+
 export type DashboardPriorityKind =
   | "brand_review"
   | "content_review"

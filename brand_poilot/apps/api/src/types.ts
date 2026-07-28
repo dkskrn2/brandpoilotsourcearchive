@@ -426,6 +426,53 @@ export interface DashboardDto {
   }>;
 }
 
+export interface PerformanceInsightsDto {
+  period: "30d";
+  summary: {
+    dataStatus: "sufficient" | "insufficient";
+    measuredContentCount: number;
+    totalExposure: number | null;
+  };
+  windows: Array<{
+    window: "24h" | "72h" | "7d";
+    sampleSize: number;
+    averageExposure: number | null;
+  }>;
+  observations: Array<{
+    id: string;
+    kind: "observation";
+    label: string;
+    metric: { name: string; value: number | null; unit: "회"; sampleSize: number };
+    evidenceSnapshotIds: string[];
+    interpretation: null | {
+      kind: "interpretation";
+      statement: string;
+      confidence: "low" | "medium" | "high";
+    };
+  }>;
+  experiments: Array<{
+    id: string;
+    kind: "experiment";
+    title: string;
+    hypothesis: string;
+    contentFamily: "informational" | "marketing";
+    channelTargets: Array<"instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok" | "blog_export">;
+    outputFormats: Array<"card_news" | "blog" | "single_image" | "channel_text">;
+    performanceSnapshotIds: string[];
+  }>;
+  sampleSize: number;
+  lastCollectedAt: string | null;
+  topContents: Array<{
+    publishQueueId: string;
+    title: string;
+    channel: Channel;
+    deliveryFormat: string | null;
+    exposureCount: number | null;
+    snapshotId: string;
+    externalUrl: string | null;
+  }>;
+}
+
 export interface ChannelConnectionRequestDto {
   id: string | null;
   brandId: string;
@@ -1149,6 +1196,7 @@ export interface ApiRepository
   runDailyGeneration(now?: Date): Promise<DailyGenerationRunResult>;
   runDailyPerformanceSync(now?: Date): Promise<PerformanceSyncSummaryDto>;
   getDashboard(brandId: string): Promise<DashboardDto>;
+  getPerformanceInsights?(brandId: string): Promise<PerformanceInsightsDto>;
   schedulePublishQueue(brandId: string, now?: Date): Promise<PipelineRunResult>;
   runDuePublishing(now?: Date): Promise<PipelineRunResult>;
   publishQueueItem(queueId: string): Promise<{ id: string; status: string; publishedUrl: string | null }>;

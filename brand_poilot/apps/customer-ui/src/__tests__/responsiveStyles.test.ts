@@ -6,6 +6,7 @@ const cssPath = resolve(process.cwd(), "src/styles/prototype.css");
 const tokensPath = resolve(process.cwd(), "src/styles/tokens.css");
 const shellPath = resolve(process.cwd(), "src/styles/shell.css");
 const dashboardPath = resolve(process.cwd(), "src/styles/dashboard.css");
+const performancePath = resolve(process.cwd(), "src/styles/performance.css");
 const mainPath = resolve(process.cwd(), "src/main.tsx");
 
 describe("responsive UI style contracts", () => {
@@ -58,10 +59,20 @@ describe("responsive UI style contracts", () => {
       "./styles/prototype.css",
       "./styles/shell.css",
       "./styles/dashboard.css"
+      ,"./styles/performance.css"
     ].map((path) => main.indexOf(`import "${path}"`));
 
     expect(imports.every((index) => index >= 0)).toBe(true);
     expect(imports).toEqual([...imports].sort((a, b) => a - b));
+  });
+
+  it("keeps performance insights responsive and motion-safe", async () => {
+    const css = await readFile(performancePath, "utf8");
+
+    expect(css).toMatch(/\.performance-summary,[\s\S]*?grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/s);
+    expect(css).toMatch(/@media \(max-width:\s*1080px\)[\s\S]*?\.performance-summary,[\s\S]*?repeat\(2,\s*minmax\(0,\s*1fr\)\)/s);
+    expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*?\.performance-summary,[\s\S]*?grid-template-columns:\s*1fr/s);
+    expect(css).toMatch(/@media \(prefers-reduced-motion:\s*reduce\)/);
   });
 
   it("defines the approved D hybrid shell tokens and responsive accessibility contracts", async () => {

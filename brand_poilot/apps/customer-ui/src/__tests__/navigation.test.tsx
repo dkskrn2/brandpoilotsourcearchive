@@ -124,6 +124,7 @@ describe("AppShell navigation", () => {
       "/assets/brand/mojong-ad-logo.png"
     );
     expect(screen.getByRole("link", { name: /대시보드/ })).toHaveAttribute("href", "/dashboard");
+    expect(screen.getByRole("link", { name: /성과·개선/ })).toHaveAttribute("href", "/performance");
     expect(screen.queryByRole("link", { name: /콘텐츠 검토/ })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /게시 관리/ })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /^원본 자료$/ })).not.toBeInTheDocument();
@@ -145,7 +146,7 @@ describe("AppShell navigation", () => {
     const contentOperations = screen.getByRole("region", { name: "콘텐츠" });
     const channelCustomers = screen.getByRole("region", { name: "채널·고객" });
     const settingsSupport = screen.getByRole("region", { name: "설정·지원" });
-    expect(within(overview).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual(["대시보드"]);
+    expect(within(overview).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual(["대시보드", "성과·개선"]);
     expect(within(brand).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual([
       "브랜드 센터", "레퍼런스"
     ]);
@@ -161,8 +162,9 @@ describe("AppShell navigation", () => {
     const links = within(nav).getAllByRole("link");
     expect(links.every((link) => link.querySelector("[data-nav-icon]"))).toBe(true);
     expect(links[0]).toHaveTextContent("대시보드");
-    expect(links[1]).toHaveTextContent("브랜드 센터");
-    expect(links[1]).toHaveAttribute("href", "/brand-center");
+    expect(links[1]).toHaveTextContent("성과·개선");
+    expect(links[2]).toHaveTextContent("브랜드 센터");
+    expect(links[2]).toHaveAttribute("href", "/brand-center");
   });
 
   it("persists the collapsed desktop sidebar across remounts", () => {
@@ -215,6 +217,7 @@ describe("AppShell navigation", () => {
       .toMatchObject({ props: { to: "/dashboard", replace: true } });
     expect(dashboardRoute && "element" in dashboardRoute ? dashboardRoute.element : null).toBeTruthy();
     expect(appRoute?.children?.find((route) => route.path === "ai-content")).toBeTruthy();
+    expect(appRoute?.children?.find((route) => route.path === "performance")).toBeTruthy();
     expect(appRoute?.children?.find((route) => route.path === "ai-content/new")).toBeTruthy();
     expect(appRoute?.children?.find((route) => route.path === "ai-content/:generationId")).toBeTruthy();
     expect(appRoute?.children?.find((route) => route.path === "references")).toBeTruthy();

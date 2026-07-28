@@ -41,6 +41,25 @@ export const helpGuides: HelpGuide[] = [
     tour: [pageHeaderStep("게시 기록과 채널 성과를 최근 30일 기준으로 집계한 운영 현황입니다."), { selector: ".dashboard-summary", title: "30일 핵심 지표", description: "발행 수, 수집된 노출 수, 검토 대기와 게시 실패 건수를 비교합니다." }, { selector: ".dashboard-workflow", title: "작업 정체 구간", description: "주제 선택부터 게시까지 작업이 쌓인 단계를 확인하고 해당 관리 화면으로 이동합니다." }]
   },
   {
+    id: "performance",
+    path: "/performance",
+    title: "성과·개선",
+    summary: "최근 30일의 실제 성과 관측값과 해석, 사용자가 승인할 수 있는 다음 실험을 구분해 보여줍니다.",
+    sections: [{
+      title: "근거를 구분해 사용하기",
+      items: [
+        "관측은 24시간, 72시간, 7일 snapshot에서 실제로 수집된 metric과 표본 수만 표시합니다.",
+        "해석은 관측값에서 읽은 경향과 confidence이며, 표본이 부족하면 결론을 제시하지 않습니다.",
+        "다음 실험은 사용자가 버튼을 눌렀을 때 구성안만 만들며 콘텐츠 생성이나 게시는 자동으로 시작하지 않습니다.",
+      ],
+    }],
+    tour: [
+      pageHeaderStep("최근 30일 성과를 관측, 해석, 다음 실험의 세 층으로 나눠 확인합니다."),
+      { selector: ".performance-evidence-grid", title: "관측과 해석", description: "실제 수치와 그 수치에 대한 해석을 서로 다른 영역에서 확인합니다." },
+      { selector: ".performance-experiments", title: "다음 실험", description: "검증할 가설을 선택해 AI 구성안을 만들고 생성 전에 다시 검토합니다." },
+    ],
+  },
+  {
     id: "ai-content",
     path: "/ai-content",
     title: "AI 콘텐츠 생성",

@@ -1721,6 +1721,18 @@ export function createServer(
     }
   );
 
+  app.get<{ Params: { brandId: string }; Querystring: { period?: string } }>(
+    "/brands/:brandId/performance/insights",
+    async (request, reply) => {
+      if (request.query.period && request.query.period !== "30d") {
+        reply.code(400);
+        return { error: "performance_insights_period_invalid" };
+      }
+      if (!repository.getPerformanceInsights) throw new Error("performance_insights_repository_not_configured");
+      return repository.getPerformanceInsights(request.params.brandId);
+    },
+  );
+
   app.get("/content-categories", async () => {
     return repository.listContentCategories();
   });

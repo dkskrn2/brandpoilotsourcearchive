@@ -76,6 +76,9 @@ export function contentPerformanceFeatures(output: unknown, deliveryFormat: stri
   const record = asRecord(output) ?? {};
   const topic = asRecord(record.topic) ?? {};
   const brief = asRecord(record.qualityBrief) ?? {};
+  const orchestration = asRecord(record.orchestration) ?? {};
+  const message = asRecord(record.message) ?? {};
+  const appeal = asRecord(message.appeal) ?? asRecord(record.appeal) ?? {};
   const evidence = Array.isArray(brief.evidence) ? brief.evidence : [];
   const claims = Array.isArray(brief.specificClaims) ? brief.specificClaims : [];
   return {
@@ -83,6 +86,15 @@ export function contentPerformanceFeatures(output: unknown, deliveryFormat: stri
     topicTitle: typeof topic.title === "string" ? topic.title : null,
     topicAngle: typeof topic.angle === "string" ? topic.angle : null,
     hook: typeof brief.hook === "string" ? brief.hook : null,
+    strategy: typeof orchestration.strategy === "string"
+      ? orchestration.strategy
+      : typeof record.strategy === "string" ? record.strategy : null,
+    format: typeof orchestration.outputFormat === "string"
+      ? orchestration.outputFormat
+      : typeof record.outputFormat === "string" ? record.outputFormat : null,
+    appeal: typeof appeal.title === "string"
+      ? appeal.title
+      : typeof record.appeal === "string" ? record.appeal : null,
     evidenceCount: evidence.length,
     claimCount: claims.length,
   };
