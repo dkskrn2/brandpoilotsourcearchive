@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { MarketingClient, MarketingJob } from "./contracts.js";
 import { runOnce } from "./worker.js";
 
@@ -19,5 +22,74 @@ describe("marketing worker attachment preflight", () => {
     await runOnce({ workerId: "worker", client, runner, storage: { upload: vi.fn() }, head: vi.fn(async () => { throw Object.assign(new Error("not found"), { status: 404 }); }) });
     expect(runner.run).not.toHaveBeenCalled();
     expect(client.fail).toHaveBeenCalledWith("job-1", expect.objectContaining({ errorCode: "ai_content_attachment_blob_unavailable", retryable: false }));
+  });
+
+  it("completes channel text without a generated image", async () => {
+    const channelTextInput = {
+      ...input,
+      orchestration: {
+        contractVersion: "content-orchestration.v1",
+        contentFamily: "marketing",
+        subject: { mode: "product_service", productServiceId: "product-1" },
+        target: { id: "t", snapshot: { name: "target" } },
+        strategy: "cta",
+        outputFormat: "channel_text",
+        channelTargets: ["threads"],
+        brief: { goal: "문의 유도" },
+        references: [],
+        avatar: null,
+      },
+      creativeDirection: {
+        ...input.creativeDirection,
+        contentFamily: "marketing",
+        outputFormat: "channel_text",
+      },
+      attachments: [],
+    };
+    const job: MarketingJob = {
+      id: "job-text",
+      generationId: "generation-1",
+      outputId: "output-1",
+      workspaceId: "w",
+      brandId: "b",
+      jobType: "generate",
+      contentType: "marketing",
+      status: "processing",
+      payload: { contentGenerationInput: channelTextInput },
+      leaseToken: "lease",
+    };
+    const client = {
+      claim: vi.fn(async () => job),
+      heartbeat: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      acquire: vi.fn(async () => ({ id: "resource", leaseToken: "resource-lease" })),
+      heartbeatResource: vi.fn(),
+      releaseResource: vi.fn(),
+    } as unknown as MarketingClient;
+    const storage = { upload: vi.fn(async ({ result }) => ({ manifest: { result }, manifestUrl: "https://blob.example/manifest.json" })) };
+    const outputDir = await mkdtemp(path.join(os.tmpdir(), "marketing-worker-text-"));
+    await writeFile(path.join(outputDir, "content.json"), JSON.stringify({
+      title: "채널 글",
+      content: { headline: "혜택", body: "설명", cta: "문의", concept: "대상 → 가치" },
+    }));
+    await writeFile(path.join(outputDir, "channel-text.txt"), "혜택\n설명\n문의", "utf8");
+    const runner = {
+      run: vi.fn(async () => ({
+        outputDir,
+        cleanup: vi.fn(),
+      })),
+    };
+    await runOnce({
+      workerId: "worker",
+      client,
+      runner,
+      storage,
+    });
+    expect(storage.upload).toHaveBeenCalledWith(expect.objectContaining({
+      result: expect.objectContaining({ outputFormat: "channel_text", text: "혜택\n설명\n문의" }),
+    }));
+    expect(client.complete).toHaveBeenCalledOnce();
+    expect(client.fail).not.toHaveBeenCalled();
   });
 });

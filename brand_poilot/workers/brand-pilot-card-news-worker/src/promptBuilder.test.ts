@@ -71,4 +71,58 @@ describe("card-news prompt", () => {
       attachments: [{ id: "attachment-1" }],
     })).toThrow("content_generation_attachment_invalid");
   });
+
+  it("uses informational orchestration with the fixed trust priority and visual-only avatar", () => {
+    const input = job.payload.contentGenerationInput;
+    const orchestratedJob = {
+      ...job,
+      payload: {
+        contentGenerationInput: {
+          ...input,
+          orchestration: {
+            contractVersion: "content-orchestration.v1",
+            contentFamily: "informational",
+            subject: { mode: "brand_topic", topic: "사용법", wikiItemIds: ["wiki-1"] },
+            target: { id: "target-1", snapshot: { name: "초보 고객" } },
+            strategy: "how_to",
+            outputFormat: "card_news",
+            channelTargets: ["instagram"],
+            brief: { goal: "문제를 해결하는 가이드" },
+            references: [{ referenceItemId: "reference-1", roles: ["visual_composition"] }],
+            avatar: {
+              mode: "library",
+              id: "avatar-1",
+              snapshot: { assetUrl: "https://cdn.example/avatar.png" },
+            },
+          },
+          creativeDirection: {
+            ...input.creativeDirection,
+            contentFamily: "informational",
+            outputFormat: "card_news",
+          },
+        },
+      },
+    };
+    const plan: EditorialPlan = {
+      version: "editorial-plan.v1",
+      intent: "information",
+      singleSubject: "사용법",
+      readerQuestion: "어떻게 쓰나요?",
+      corePromise: "쉽게 이해합니다.",
+      slides: [{ index: 1, role: "fact", headline: "사용법", keyMessage: "검증된 설명", evidenceIds: [] }],
+      cta: null,
+      excludedTopics: [],
+      referenceUses: [],
+    };
+    const prompt = buildPrompt(orchestratedJob, plan);
+    expect(prompt).toContain("승인 Brand Core와 실행 규칙");
+    expect(prompt).toContain("승인 제품·서비스 또는 선택 Wiki 사실");
+    expect(prompt).toContain("사용자가 확정한 target, strategy, brief");
+    expect(prompt).toContain("레퍼런스의 패턴 영감");
+    expect(prompt).toContain("교육·문제 해결·가이드 톤");
+    expect(prompt).toContain("원문 문장을 그대로 복제하지 마세요");
+    const promptData = JSON.parse(prompt.split("작업 데이터(JSON):\n")[1]!);
+    expect(promptData.visualDirection.avatar.snapshot.assetUrl).toBe("https://cdn.example/avatar.png");
+    expect(promptData.factualDirection).not.toHaveProperty("avatar");
+  });
 });

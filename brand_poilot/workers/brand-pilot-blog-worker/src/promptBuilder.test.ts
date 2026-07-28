@@ -45,4 +45,44 @@ describe("blog prompt", () => {
       attachments: [{ id: "attachment-1" }],
     })).toThrow("content_generation_attachment_invalid");
   });
+
+  it("uses informational orchestration priority and keeps avatar out of factual direction", () => {
+    const input = job.payload.contentGenerationInput;
+    const prompt = buildPrompt({
+      ...job,
+      payload: {
+        contentGenerationInput: {
+          ...input,
+          orchestration: {
+            contractVersion: "content-orchestration.v1",
+            contentFamily: "informational",
+            subject: { mode: "brand_topic", topic: "FAQ", wikiItemIds: ["wiki-1"] },
+            target: { id: "target-1", snapshot: { name: "초보 고객" } },
+            strategy: "faq",
+            outputFormat: "blog",
+            channelTargets: ["blog_export"],
+            brief: { goal: "질문 해결" },
+            references: [{ referenceItemId: "reference-1", roles: ["copy_pattern"] }],
+            avatar: {
+              mode: "one_time",
+              id: "avatar-1",
+              snapshot: { assetUrl: "https://cdn.example/avatar.png" },
+            },
+          },
+          creativeDirection: {
+            ...input.creativeDirection,
+            contentFamily: "informational",
+            outputFormat: "blog",
+          },
+        },
+      },
+    });
+    expect(prompt).toContain("승인 Brand Core와 실행 규칙");
+    expect(prompt).toContain("사용자가 확정한 target, strategy, brief");
+    expect(prompt).toContain("교육·문제 해결·가이드 톤");
+    expect(prompt).toContain("원문 문장을 그대로 복제하지 마세요");
+    const promptData = JSON.parse(prompt.split("작업 데이터(JSON):\n")[1]!);
+    expect(promptData.visualDirection.avatar.snapshot.assetUrl).toBe("https://cdn.example/avatar.png");
+    expect(promptData.factualDirection).not.toHaveProperty("avatar");
+  });
 });

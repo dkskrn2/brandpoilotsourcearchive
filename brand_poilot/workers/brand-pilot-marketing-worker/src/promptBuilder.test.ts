@@ -45,4 +45,83 @@ describe("marketing prompt", () => {
       attachments: [{ id: "attachment-1" }],
     })).toThrow("content_generation_attachment_invalid");
   });
+
+  it("uses marketing orchestration priority and a visual-only avatar for a single image", () => {
+    const input = job.payload.contentGenerationInput;
+    const prompt = buildPrompt({
+      ...job,
+      payload: {
+        contentGenerationInput: {
+          ...input,
+          orchestration: {
+            contractVersion: "content-orchestration.v1",
+            contentFamily: "marketing",
+            subject: { mode: "product_service", productServiceId: "product-1" },
+            target: { id: "target-1", snapshot: { name: "구매 고려 고객" } },
+            strategy: "benefit",
+            outputFormat: "single_image",
+            channelTargets: ["instagram"],
+            brief: { goal: "검증된 효익 전달" },
+            references: [{ referenceItemId: "reference-1", roles: ["visual_composition"] }],
+            avatar: {
+              mode: "library",
+              id: "avatar-1",
+              snapshot: { assetUrl: "https://cdn.example/avatar.png" },
+            },
+          },
+          creativeDirection: {
+            ...input.creativeDirection,
+            contentFamily: "marketing",
+            outputFormat: "single_image",
+          },
+        },
+      },
+    });
+    expect(prompt).toContain("승인 Brand Core와 실행 규칙");
+    expect(prompt).toContain("사용자가 확정한 target, strategy, brief");
+    expect(prompt).toContain("효익·신뢰·CTA 톤");
+    expect(prompt).toContain("원문 문장을 그대로 복제하지 마세요");
+    const promptData = JSON.parse(prompt.split("작업 데이터(JSON):\n")[1]!);
+    expect(promptData.visualDirection.avatar.snapshot.assetUrl).toBe("https://cdn.example/avatar.png");
+    expect(promptData.factualDirection).not.toHaveProperty("avatar");
+  });
+
+  it("requires a text-only artifact and omits avatar visual input for channel text", () => {
+    const input = job.payload.contentGenerationInput;
+    const prompt = buildPrompt({
+      ...job,
+      payload: {
+        contentGenerationInput: {
+          ...input,
+          orchestration: {
+            contractVersion: "content-orchestration.v1",
+            contentFamily: "marketing",
+            subject: { mode: "product_service", productServiceId: "product-1" },
+            target: { id: "target-1", snapshot: { name: "구매 고려 고객" } },
+            strategy: "cta",
+            outputFormat: "channel_text",
+            channelTargets: ["threads"],
+            brief: { goal: "행동 유도" },
+            references: [],
+            avatar: {
+              mode: "library",
+              id: "avatar-1",
+              snapshot: { assetUrl: "https://cdn.example/avatar.png" },
+            },
+          },
+          creativeDirection: {
+            ...input.creativeDirection,
+            contentFamily: "marketing",
+            outputFormat: "channel_text",
+          },
+        },
+      },
+    });
+    expect(prompt).toContain("channel-text.txt");
+    expect(prompt).toContain("이미지를 생성하지 마세요");
+    expect(prompt).not.toContain("creative.png는 정확히");
+    const promptData = JSON.parse(prompt.split("작업 데이터(JSON):\n")[1]!);
+    expect(promptData).not.toHaveProperty("visualDirection");
+    expect(JSON.stringify(promptData)).not.toContain("avatar.png");
+  });
 });

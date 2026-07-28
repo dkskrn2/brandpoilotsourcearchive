@@ -52,6 +52,14 @@ export async function runOnce({ workerId, client, runner, storage, head }: {
         await client.complete(job.id, { workerId, leaseToken: job.leaseToken, skillVersion: marketingSkillVersion, jobType: "analyze", analysisJson: await loadAnalysis(output.outputDir) });
       } else {
         if (!job.outputId) throw new Error("marketing_output_id_required");
+        const outputFormat = parsedInput?.orchestration?.outputFormat === "channel_text"
+          ? "channel_text"
+          : "single_image";
+        const result = await loadMarketingResult(
+          output.outputDir,
+          requestedDimensions(job.payload.contentGenerationInput as Record<string, unknown>),
+          outputFormat,
+        );
         await client.complete(job.id, {
           workerId,
           leaseToken: job.leaseToken,
@@ -61,7 +69,15 @@ export async function runOnce({ workerId, client, runner, storage, head }: {
             brandId: job.brandId,
             generationId: job.generationId,
             outputId: job.outputId,
-            result: await loadMarketingResult(output.outputDir, requestedDimensions(job.payload.contentGenerationInput as Record<string, unknown>)),
+            result: {
+              ...result,
+              ...(parsedInput?.orchestration
+                ? {
+                  family: "marketing" as const,
+                  strategy: parsedInput.orchestration.strategy,
+                }
+                : {}),
+            },
           }),
         });
       }

@@ -4,17 +4,38 @@ export const blogSkillVersion = "blog-writer-skill.v7";
 
 export function buildPrompt(job: BlogJob) {
   const input = job.jobType === "generate" ? parseContentGenerationInput(job.payload.contentGenerationInput) : null;
+  const orchestration = input?.orchestration
+    ? (({ avatar: _avatar, ...value }) => value)(input.orchestration)
+    : null;
+  const promptInput = input ? {
+    ...input,
+    orchestration,
+    factualDirection: {
+      brandContext: input.brandContext,
+      subject: input.subject,
+      target: input.message.target,
+      appeal: input.message.appeal,
+      qualityBrief: input.message.qualityBrief,
+      orchestration,
+    },
+    ...(input.orchestration?.avatar
+      ? { visualDirection: { avatar: input.orchestration.avatar } }
+      : {}),
+  } : null;
   return [
     ".agents/skills/blog-writer/SKILL.md를 읽고 따르세요.",
     `계약 버전: ${blogSkillVersion}`,
     `현재 작업 유형: ${job.jobType}`,
+    "입력 우선순위는 다음과 같이 고정합니다: 승인 Brand Core와 실행 규칙 > 승인 제품·서비스 또는 선택 Wiki 사실 > 사용자가 확정한 target, strategy, brief > 레퍼런스의 패턴 영감.",
+    "정보성 콘텐츠는 교육·문제 해결·가이드 톤을 사용하세요.",
     "generate 작업에서는 content-generation-input.v2 봉투만 입력으로 사용하세요.",
     "subject.analysisResult의 제품·서비스 프로필, subtype, 대안, 장벽과 VOC를 글의 구조와 설명 맥락에 사용하세요.",
     "subject.facts만 제품·서비스의 사실 근거로 사용하세요. subject.research는 출처가 포함된 시장 맥락으로만 사용하세요.",
     "generate 작업에서는 message.qualityBrief.sourceGaps를 사실 근거가 부족한 금지 주장 목록으로 취급하고, 해당 내용을 사실·혜택·지원 범위로 단정하지 마세요.",
     "message.target 1개와 message.appeal 1개를 그대로 사용하고 변경·추가하지 마세요.",
     "subject.selectedImages와 attachments의 선택된 제품·사용자 이미지는 설명에 실제로 필요할 때만 반영하세요.",
-    "references는 정보 구조와 설명 방식 같은 시각적 방향만 참고하고 문장, 인물, 로고, 고유 그래픽과 구도를 복제하지 마세요.",
+    "references는 정보 구조와 설명 방식 같은 시각적 방향만 참고하고 문장, 인물, 로고, 고유 그래픽과 구도를 복제하지 마세요. 레퍼런스의 원문 문장을 그대로 복제하지 마세요.",
+    "avatar snapshot은 visualDirection에서만 사용하고 제품 사실, 본문 카피 사실 또는 근거로 사용하지 마세요.",
     "creativeDirection.selectedColor를 반영하고 creativeDirection.prompts의 각 값을 해당 출력의 지시로 순서대로 보존해 사용하세요.",
     "제품 URL을 다시 가져오거나 공개 웹 검색을 수행하지 마세요. 입력 봉투에 없는 사실은 만들지 마세요.",
     "독자의 검색 의도와 실제로 해결해야 할 질문을 분석하고, H1은 정확히 하나만 사용하세요.",
@@ -27,6 +48,6 @@ export function buildPrompt(job: BlogJob) {
     "입력에 qualityBrief가 있으면 hook, readerPayoff, whyNow, specificClaims, evidence를 우선 반영하세요.",
     "실제 경험이나 고객 반응이 근거에 없으면 만들어내지 마세요.",
     "작업 데이터(JSON):",
-    JSON.stringify(input ?? job.payload, null, 2),
+    JSON.stringify(promptInput ?? job.payload, null, 2),
   ].join("\n");
 }

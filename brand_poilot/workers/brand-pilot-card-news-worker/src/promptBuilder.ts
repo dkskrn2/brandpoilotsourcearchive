@@ -17,8 +17,18 @@ export function buildPrompt(job: AiContentJob, editorialPlan?: EditorialPlan) {
   }) ?? [];
   const outputIndex = Number(job.payload.outputIndex);
   const selectedDirection = input?.creativeDirection.prompts[Number.isInteger(outputIndex) && outputIndex > 0 ? outputIndex - 1 : 0] ?? input?.creativeDirection.prompts[0];
+  const orchestration = input?.orchestration
+    ? (({ avatar: _avatar, ...value }) => value)(input.orchestration)
+    : null;
   const generationInput = input && editorialPlan ? {
     editorialPlan,
+    factualDirection: {
+      subject: input.subject,
+      target: input.message.target,
+      appeal: input.message.appeal,
+      qualityBrief: input.message.qualityBrief,
+      orchestration,
+    },
     subjectAnalysis: {
       analysisId: input.subject.analysisId,
       analysisVersion: input.subject.analysisVersion,
@@ -35,6 +45,7 @@ export function buildPrompt(job: AiContentJob, editorialPlan?: EditorialPlan) {
       selectedImages: input.subject.selectedImages,
       references: selectedReferences,
       attachments: input.attachments,
+      ...(input.orchestration?.avatar ? { avatar: input.orchestration.avatar } : {}),
     },
     sourceGaps: Array.isArray(input.message.qualityBrief.sourceGaps) ? input.message.qualityBrief.sourceGaps : [],
   } : null;
@@ -42,6 +53,8 @@ export function buildPrompt(job: AiContentJob, editorialPlan?: EditorialPlan) {
     ".agents/skills/card-news-creator/SKILL.md를 읽고 따르세요.",
     `계약 버전: ${cardNewsSkillVersion}`,
     `현재 작업 유형: ${job.jobType}`,
+    "입력 우선순위는 다음과 같이 고정합니다: 승인 Brand Core와 실행 규칙 > 승인 제품·서비스 또는 선택 Wiki 사실 > 사용자가 확정한 target, strategy, brief > 레퍼런스의 패턴 영감.",
+    "정보성 콘텐츠는 교육·문제 해결·가이드 톤을 사용하세요.",
     "generate 작업에서는 editorial-plan.v1을 최종 편집 계약으로 사용해 한국어 카드뉴스를 만드세요.",
     "subjectAnalysis.result의 제품·서비스 프로필, subtype, 대안, 장벽과 VOC를 기획 맥락으로 사용하되 확인된 사실과 편집안의 범위를 넘는 주장은 만들지 마세요.",
     "편집안의 singleSubject를 다른 제품, 상위 브랜드, 컨설팅 범위로 넓히지 마세요.",
@@ -49,7 +62,8 @@ export function buildPrompt(job: AiContentJob, editorialPlan?: EditorialPlan) {
     "각 장의 role은 내부 편집 메타데이터입니다. role 값이나 '문제', '처리 과정', '통제 방식', 'CTA' 같은 기획 단계명을 이미지 문구로 노출하지 마세요.",
     "excludedTopics와 sourceGaps의 내용을 사실·혜택·지원 범위로 단정하지 마세요.",
     "subject.selectedImages와 attachments의 선택된 제품·사용자 이미지를 반영하되 복제하지 마세요.",
-    "references는 정보 위계, 색 대비, 시선 흐름과 표현 방식만 참고하고 문장, 인물, 로고, 고유 그래픽과 구도를 복제하지 마세요.",
+    "references는 정보 위계, 색 대비, 시선 흐름과 표현 방식만 참고하고 문장, 인물, 로고, 고유 그래픽과 구도를 복제하지 마세요. 레퍼런스의 원문 문장을 그대로 복제하지 마세요.",
+    "avatar snapshot은 visualDirection에서만 사용하고 제품 사실, 카피 사실 또는 근거로 사용하지 마세요.",
     "creativeDirection.selectedColor를 핵심 색상으로 반영하고 creativeDirection.prompts의 각 값을 해당 출력의 지시로 순서대로 보존해 사용하세요.",
     "제품 URL을 다시 가져오거나 공개 웹 검색을 수행하지 마세요. 입력 봉투에 없는 사실은 만들지 마세요.",
     input && editorialPlan

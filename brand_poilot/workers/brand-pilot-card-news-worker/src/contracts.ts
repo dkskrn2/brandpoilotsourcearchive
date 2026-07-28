@@ -16,6 +16,7 @@ export type CardNewsAspectRatio = "1:1" | "4:5" | "16:9" | "9:16";
 export interface ContentGenerationInputV2 {
   contractVersion: "content-generation-input.v2";
   contentType: "card_news";
+  orchestration: WorkerContentOrchestrationV1 | null;
   brandContext: Record<string, unknown>;
   subject: {
     analysisId: string;
@@ -29,7 +30,7 @@ export interface ContentGenerationInputV2 {
     selectedImages: Array<{ id: string; url: string; role: string; altText: string }>;
   };
   message: { target: Record<string, unknown>; appeal: Record<string, unknown>; qualityBrief: Record<string, unknown> };
-  creativeDirection: { prompts: string[]; brandColor: string; selectedColor: string; aspectRatio: CardNewsAspectRatio; outputCount: 1 | 2 | 3 };
+  creativeDirection: { prompts: string[]; brandColor: string; selectedColor: string; aspectRatio: CardNewsAspectRatio; outputCount: 1 | 2 | 3; contentFamily?: "informational"; outputFormat?: "card_news" };
   references: unknown[];
   attachments: AiContentAttachmentSnapshot[];
 }
@@ -85,8 +86,10 @@ export function parseContentGenerationInput(value: unknown): ContentGenerationIn
   const brandColor = typeof direction.brandColor === "string" && direction.brandColor.trim()
     ? direction.brandColor
     : selectedColor;
+  const orchestration = parseWorkerContentOrchestration(input.orchestration, "card_news", direction);
   return {
     contractVersion: "content-generation-input.v2", contentType: "card_news",
+    orchestration,
     brandContext: asRecord(input.brandContext, "content_generation_brand_context_invalid"),
     subject: {
       analysisId: asText(subject.analysisId, "content_generation_analysis_id_invalid"),
@@ -100,7 +103,16 @@ export function parseContentGenerationInput(value: unknown): ContentGenerationIn
       selectedImages,
     },
     message: { target, appeal, qualityBrief: asRecord(message.qualityBrief, "content_generation_quality_brief_invalid") },
-    creativeDirection: { prompts, brandColor, selectedColor, aspectRatio: asAspectRatio(direction.aspectRatio), outputCount },
+    creativeDirection: {
+      prompts,
+      brandColor,
+      selectedColor,
+      aspectRatio: asAspectRatio(direction.aspectRatio),
+      outputCount,
+      ...(orchestration
+        ? { contentFamily: orchestration.contentFamily as "informational", outputFormat: orchestration.outputFormat as "card_news" }
+        : {}),
+    },
     references: Array.isArray(input.references) ? input.references : [],
     attachments: parseAttachmentSnapshots(input.attachments),
   };
@@ -140,5 +152,7 @@ export interface WorkerClient {
 }
 import {
   parseAttachmentSnapshots,
+  parseWorkerContentOrchestration,
   type AiContentAttachmentSnapshot,
+  type WorkerContentOrchestrationV1,
 } from "@brand-pilot/worker-runtime";
