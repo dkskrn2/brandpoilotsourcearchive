@@ -714,7 +714,7 @@ function mapSupportRequest(row: any): SupportRequestDto {
     category: row.category,
     title: row.title,
     message: row.message,
-    contactPhone: row.contact_phone,
+    contactPhone: row.contact_phone ?? null,
     contactEmail: row.contact_email,
     status: row.status,
     responseMessage: row.response_message ?? null,
@@ -723,6 +723,14 @@ function mapSupportRequest(row: any): SupportRequestDto {
     updatedAt: toIso(row.updated_at)!
   };
 }
+
+const supportRequestCategoryTitles: Record<SupportRequestInput["category"], string> = {
+  bug: "오류",
+  feature: "기능 요청",
+  channel: "채널",
+  account: "계정",
+  other: "기타"
+};
 
 function mapFeedbackSubmission(row: any): FeedbackSubmissionDto {
   return {
@@ -2792,6 +2800,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     async createSupportRequest(brandId: string, input: SupportRequestInput) {
       const brand = await pool.query("select workspace_id from brands where id = $1 and deleted_at is null", [brandId]);
       if (!brand.rowCount) throw new Error("brand_not_found");
+      const title = input.title?.trim() || supportRequestCategoryTitles[input.category];
       const result = await pool.query(
         `insert into support_requests (workspace_id, brand_id, category, title, message, contact_phone, contact_email, status)
          values ($1, $2, $3, $4, $5, $6, $7, 'new')
@@ -2801,9 +2810,9 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           brand.rows[0].workspace_id,
           brandId,
           input.category,
-          input.title.trim(),
+          title,
           input.message.trim(),
-          input.contactPhone,
+          input.contactPhone ?? null,
           optionalText(input.contactEmail ?? null)
         ]
       );

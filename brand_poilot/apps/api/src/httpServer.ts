@@ -92,7 +92,14 @@ export type { ApiHttpRuntimePolicy } from "./runtimeConfig.js";
 
 const channels = new Set<string>(channelNames);
 const sourceTypes = new Set(["owned", "reference"]);
-const creatableSupportRequestCategories = new Set(["bug", "channel", "account", "other"]);
+const creatableSupportRequestCategories = new Set(["bug", "feature", "channel", "account", "other"]);
+const supportRequestCategoryTitles: Record<SupportRequestCategory, string> = {
+  bug: "오류",
+  feature: "기능 요청",
+  channel: "채널",
+  account: "계정",
+  other: "기타"
+};
 const supportRequestStatuses = new Set(["new", "in_progress", "resolved"]);
 const topicRowStatuses = new Set(["uploaded", "queued", "used", "skipped", "invalid", "failed", "disabled"]);
 const dmConversationFilters = new Set<DmConversationFilter>(["all", "attention", "complaint", "unanswered", "error"]);
@@ -2174,17 +2181,14 @@ export function createServer(
       return { error: "invalid_body" };
     }
     const category = asCreatableSupportRequestCategory(request.body.category);
-    const title = typeof request.body.title === "string" ? request.body.title.trim() : "";
+    const providedTitle = typeof request.body.title === "string" ? request.body.title.trim() : "";
     const message = typeof request.body.message === "string" ? request.body.message.trim() : "";
-    if (!category || title.length === 0 || message.length === 0) {
+    if (!category || message.length === 0) {
       reply.code(400);
       return { error: "support_request_required_fields" };
     }
+    const title = providedTitle || supportRequestCategoryTitles[category];
     const contactPhone = normalizeSupportContactPhone(request.body.contactPhone);
-    if (contactPhone === null) {
-      reply.code(400);
-      return { error: "support_contact_phone_required" };
-    }
     if (contactPhone === undefined) {
       reply.code(400);
       return { error: "invalid_support_contact_phone" };
@@ -2370,6 +2374,18 @@ export function createServer(
       if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
       return {
         intelligence: await brandIntelligenceRepository.getCurrentBrandIntelligence(
+          aiContentScope(request, request.params.brandId),
+        ),
+      };
+    },
+  );
+
+  app.get<{ Params: { brandId: string } }>(
+    "/brands/:brandId/brand-intelligence/workflow",
+    async (request) => {
+      if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
+      return {
+        workflow: await brandIntelligenceRepository.getOpenBrandAnalysis(
           aiContentScope(request, request.params.brandId),
         ),
       };

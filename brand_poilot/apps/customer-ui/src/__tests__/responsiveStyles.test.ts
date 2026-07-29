@@ -91,7 +91,24 @@ describe("responsive UI style contracts", () => {
 
     expect(shell).toMatch(/\.app\s*\{[^}]*var\(--bp-sidebar-width\)/s);
     expect(shell).toMatch(/\.app--sidebar-collapsed\s*\{[^}]*var\(--bp-sidebar-collapsed-width\)/s);
-    expect(shell).toMatch(/\.topbar\s*\{[^}]*min-height:\s*var\(--bp-topbar-height\)/s);
+    expect(shell).toMatch(/\.topbar\s*\{[^}]*display:\s*none/s);
+    expect(shell).toMatch(
+      /@media \(max-width:\s*1080px\)[\s\S]*?\.sidebar--desktop\s*\{[^}]*display:\s*none[^}]*\}[\s\S]*?\.topbar\s*\{[^}]*display:\s*flex[^}]*min-height:\s*var\(--bp-topbar-height\)/s
+    );
+    const mobileShell = shell.slice(
+      shell.indexOf("@media (max-width: 1080px)"),
+      shell.indexOf("@media (max-width: 760px)"),
+    );
+    expect(mobileShell).toMatch(
+      /\.mobile-menu-trigger,\s*\.mobile-menu-close\s*\{[^}]*display:\s*grid/s,
+    );
+    expect(mobileShell).toMatch(
+      /\.sidebar--mobile\s*\{[^}]*position:\s*static[^}]*width:\s*100%[^}]*height:\s*100dvh/s,
+    );
+    expect(mobileShell).toMatch(
+      /\.sidebar--mobile \.nav\s*\{[^}]*overflow-y:\s*auto/s,
+    );
+    expect(shell).toMatch(/\.sidebar \.nav\s*\{[^}]*overflow-y:\s*auto/s);
     expect(shell).toMatch(/\.nav a[\s\S]*?min-height:\s*44px/s);
     expect(shell).toMatch(/\.sidebar \.nav a,[\s\S]*?color:\s*#d8e5df/s);
     expect(shell).toMatch(/\.sidebar \.sidebar-brand-profile\s*\{[^}]*background:\s*transparent/s);

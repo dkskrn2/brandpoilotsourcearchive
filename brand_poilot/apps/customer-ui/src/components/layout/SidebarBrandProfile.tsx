@@ -1,25 +1,106 @@
-import { ChevronRight } from "lucide-react";
-import { NavLink } from "react-router-dom";
+import { Building2, ChevronDown, LogOut } from "lucide-react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { NavLink, useLocation } from "react-router-dom";
+import { useAuth } from "../../lib/auth";
 import { BrandLogo } from "../brand/BrandLogo";
 
 interface SidebarBrandProfileProps {
   brandName: string;
   logoUrl: string | null;
+  onNavigate?: () => void;
 }
 
-export function SidebarBrandProfile({ brandName, logoUrl }: SidebarBrandProfileProps) {
+export function SidebarBrandProfile({ brandName, logoUrl, onNavigate }: SidebarBrandProfileProps) {
+  const { logout } = useAuth();
+  const location = useLocation();
+  const menuId = useId();
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const firstItemRef = useRef<HTMLAnchorElement>(null);
+  const [open, setOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  useEffect(() => {
+    setOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!open) return;
+    firstItemRef.current?.focus();
+
+    function closeOnOutsidePointer(event: PointerEvent) {
+      if (wrapperRef.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    }
+
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [open]);
+
+  function closeAndRestoreFocus() {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }
+
+  function handleKeyDown(event: ReactKeyboardEvent) {
+    if (event.key !== "Escape" || !open) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeAndRestoreFocus();
+  }
+
+  function handleBrandCenterNavigation() {
+    setOpen(false);
+    onNavigate?.();
+  }
+
+  async function handleLogout() {
+    setLoggingOut(true);
+    setOpen(false);
+    onNavigate?.();
+    try {
+      await logout();
+    } finally {
+      setLoggingOut(false);
+    }
+  }
+
   return (
-    <NavLink
-      className="sidebar-brand-profile"
-      to="/brand-center"
-      aria-label={`${brandName} 브랜드 센터 열기`}
-    >
-      <BrandLogo brandName={brandName} logoUrl={logoUrl} className="sidebar-brand-logo" />
-      <span className="sidebar-brand-copy">
-        <strong>{brandName}</strong>
-        <small>브랜드 센터</small>
-      </span>
-      <ChevronRight size={17} aria-hidden="true" />
-    </NavLink>
+    <div className="sidebar-brand-profile-menu" ref={wrapperRef} onKeyDown={handleKeyDown}>
+      <button
+        ref={triggerRef}
+        className="sidebar-brand-profile"
+        type="button"
+        aria-label={`${brandName} 계정 메뉴 열기`}
+        aria-haspopup="menu"
+        aria-controls={menuId}
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <BrandLogo brandName={brandName} logoUrl={logoUrl} className="sidebar-brand-logo" />
+        <span className="sidebar-brand-copy">
+          <strong>{brandName}</strong>
+          <small>계정 메뉴</small>
+        </span>
+        <ChevronDown size={17} aria-hidden="true" />
+      </button>
+      {open ? (
+        <div id={menuId} className="sidebar-brand-account-menu" role="menu" aria-label="계정 메뉴">
+          <NavLink
+            ref={firstItemRef}
+            to="/brand-center"
+            role="menuitem"
+            onClick={handleBrandCenterNavigation}
+          >
+            <Building2 size={16} aria-hidden="true" />
+            브랜드센터
+          </NavLink>
+          <button role="menuitem" type="button" onClick={handleLogout} disabled={loggingOut}>
+            <LogOut size={16} aria-hidden="true" />
+            {loggingOut ? "로그아웃 중" : "로그아웃"}
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }

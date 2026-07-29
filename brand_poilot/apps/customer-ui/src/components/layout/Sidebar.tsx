@@ -16,6 +16,7 @@ import type { BadgeVariant } from "../../types";
 import { Badge } from "../ui/Badge";
 import { ProductBrandLogo } from "../brand/ProductBrandLogo";
 import { SidebarBrandProfile } from "./SidebarBrandProfile";
+import { SidebarUsageSummary } from "./SidebarUsageSummary";
 import { useHelp } from "../help/HelpContext";
 import { useFeedback } from "../feedback/FeedbackContext";
 
@@ -134,6 +135,7 @@ export function Sidebar({
             </section>
           );
         })}
+        <SidebarUsageSummary />
       </nav>
       <button
         className="sidebar-feedback-button"
@@ -149,10 +151,11 @@ export function Sidebar({
         <CircleHelp size={18} aria-hidden="true" />
         <span><strong>도움말</strong><small>현재 화면 안내와 연결 가이드</small></span>
       </button> : null}
-      {brandProfileComplete ? <SidebarBrandProfile
+      <SidebarBrandProfile
         brandName={status?.brandName ?? "모종"}
         logoUrl={status?.logoUrl ?? null}
-      /> : null}
+        onNavigate={onNavigate}
+      />
     </aside>
   );
 }

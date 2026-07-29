@@ -511,7 +511,7 @@ export interface SupportRequestDto {
   category: SupportRequestCategory;
   title: string;
   message: string;
-  contactPhone: string;
+  contactPhone: string | null;
   contactEmail: string | null;
   status: SupportRequestStatus;
   responseMessage: string | null;
@@ -522,9 +522,9 @@ export interface SupportRequestDto {
 
 export interface SupportRequestInput {
   category: SupportRequestCategory;
-  title: string;
+  title?: string;
   message: string;
-  contactPhone: string;
+  contactPhone?: string | null;
   contactEmail?: string | null;
 }
 

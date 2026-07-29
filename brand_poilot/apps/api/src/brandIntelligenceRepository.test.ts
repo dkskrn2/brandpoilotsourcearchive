@@ -82,6 +82,8 @@ describe("brand intelligence repository", () => {
         completed_at timestamptz, confirmed_at timestamptz, unique (brand_id, idempotency_key)
       );
       create unique index one_active on brand_analysis_runs(brand_id) where is_active;
+      create unique index one_open on brand_analysis_runs(brand_id)
+        where status in ('queued', 'extracting', 'analyzing', 'review_ready');
       create table brand_core_versions (
         id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null,
         source_analysis_id uuid, version integer not null, status text not null,
@@ -179,6 +181,38 @@ describe("brand intelligence repository", () => {
     expect(String((knowledge.rows[0] as { content: string }).content)).toContain("수정한 고객");
   });
 
+  it("reuses one open analysis for concurrent requests with different idempotency keys", async () => {
+    const repository = createBrandIntelligenceRepository(pglitePool(database));
+
+    const [first, second] = await Promise.all([
+      repository.requestBrandAnalysis({
+        workspaceId,
+        brandId,
+        ownedUrl: "https://example.com",
+        uploadIds: [],
+        idempotencyKey: "concurrent-open-1",
+      }),
+      repository.requestBrandAnalysis({
+        workspaceId,
+        brandId,
+        ownedUrl: "https://example.com",
+        uploadIds: [],
+        idempotencyKey: "concurrent-open-2",
+      }),
+    ]);
+
+    expect(second.id).toBe(first.id);
+    const open = await database.query(
+      `select id from brand_analysis_runs
+        where brand_id = $1
+          and status in ('queued', 'extracting', 'analyzing', 'review_ready')`,
+      [brandId],
+    );
+    expect(open.rows).toEqual([{ id: first.id }]);
+    await expect(repository.getOpenBrandAnalysis({ workspaceId, brandId }))
+      .resolves.toMatchObject({ id: first.id, status: "queued" });
+  });
+
   it("keeps the confirmed edited result active when a later analysis completes", async () => {
     const repository = createBrandIntelligenceRepository(pglitePool(database));
     const first = await prepareAnalysis(repository, {
@@ -215,6 +249,11 @@ describe("brand intelligence repository", () => {
       status: "confirmed",
       isActive: true,
       effectiveResult: { primaryTarget: "사용자 확정 고객" },
+    });
+    await expect(repository.getOpenBrandAnalysis({ workspaceId, brandId })).resolves.toMatchObject({
+      id: second.id,
+      status: "review_ready",
+      isActive: false,
     });
     const rows = await database.query(
       `select id, result_json, edited_result_json, is_active

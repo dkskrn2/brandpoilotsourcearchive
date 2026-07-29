@@ -31,6 +31,7 @@ export interface BrandAnalysis {
 
 export interface BrandIntelligenceGateway {
   getCurrent(brandId: string): Promise<BrandAnalysis | null>;
+  getWorkflow(brandId: string): Promise<BrandAnalysis | null>;
   getAnalysis(brandId: string, analysisId: string, signal?: AbortSignal): Promise<BrandAnalysis>;
   requestAnalysis(brandId: string, input: {
     ownedUrl: string | null;

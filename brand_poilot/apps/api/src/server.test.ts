@@ -2512,18 +2512,6 @@ describe("API server", () => {
     });
     expect(invalid.statusCode).toBe(400);
 
-    const missingPhone = await app.inject({
-      method: "POST",
-      url: `/brands/${brandId}/support-requests`,
-      payload: {
-        category: "bug",
-        title: "채널 연결 오류",
-        message: "인스타 연결이 실패합니다."
-      }
-    });
-    expect(missingPhone.statusCode).toBe(400);
-    expect(missingPhone.json()).toEqual({ error: "support_contact_phone_required" });
-
     const invalidPhone = await app.inject({
       method: "POST",
       url: `/brands/${brandId}/support-requests`,
@@ -2537,18 +2525,6 @@ describe("API server", () => {
     expect(invalidPhone.statusCode).toBe(400);
     expect(invalidPhone.json()).toEqual({ error: "invalid_support_contact_phone" });
 
-    const legacyFeatureCategory = await app.inject({
-      method: "POST",
-      url: `/brands/${brandId}/support-requests`,
-      payload: {
-        category: "feature",
-        title: "과거 기능 제안 유형",
-        message: "신규 문의는 피드백으로 분리되어야 합니다.",
-        contactPhone: "01012345678"
-      }
-    });
-    expect(legacyFeatureCategory.statusCode).toBe(400);
-    expect(legacyFeatureCategory.json()).toEqual({ error: "support_request_required_fields" });
     expect(repository.createSupportRequest).not.toHaveBeenCalled();
 
     const created = await app.inject({
@@ -2596,6 +2572,52 @@ describe("API server", () => {
       responseMessage: "Meta 연결을 초기화했습니다."
     });
     expect(repository.respondToSupportRequest).toHaveBeenCalledWith("support-1", "Meta 연결을 초기화했습니다.");
+  });
+
+  it("creates a simplified support request with a server title and nullable contacts", async () => {
+    const repository = createRepository() as ApiRepository & {
+      createSupportRequest: ReturnType<typeof vi.fn>;
+    };
+    repository.createSupportRequest = vi.fn(async (_brandId, body) => ({
+      id: "support-simple",
+      brandId,
+      workspaceId: "workspace-1",
+      category: body.category,
+      title: body.title,
+      message: body.message,
+      contactPhone: body.contactPhone ?? null,
+      contactEmail: body.contactEmail ?? null,
+      status: "new" as const,
+      responseMessage: null,
+      respondedAt: null,
+      createdAt: "2026-07-30T00:00:00.000Z",
+      updatedAt: "2026-07-30T00:00:00.000Z"
+    }));
+    const app = createServer({ repository });
+
+    const created = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/support-requests`,
+      payload: {
+        category: "feature",
+        message: "성과 화면에서 비교 기준을 선택하고 싶습니다."
+      }
+    });
+
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({
+      category: "feature",
+      title: "기능 요청",
+      contactPhone: null,
+      contactEmail: null
+    });
+    expect(repository.createSupportRequest).toHaveBeenCalledWith(brandId, {
+      category: "feature",
+      title: "기능 요청",
+      message: "성과 화면에서 비교 기준을 선택하고 싶습니다.",
+      contactPhone: null,
+      contactEmail: null
+    });
   });
 
   it("creates validated feedback separately from support requests", async () => {

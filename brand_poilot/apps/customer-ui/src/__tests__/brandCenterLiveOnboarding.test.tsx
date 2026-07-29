@@ -63,6 +63,7 @@ function analysis(status: BrandAnalysis["status"]): BrandAnalysis {
 function gateway(overrides: Partial<BrandIntelligenceGateway> = {}): BrandIntelligenceGateway {
   return {
     getCurrent: vi.fn().mockResolvedValue(null),
+    getWorkflow: vi.fn().mockResolvedValue(null),
     getAnalysis: vi.fn().mockResolvedValue(analysis("review_ready")),
     requestAnalysis: vi.fn().mockResolvedValue(analysis("queued")),
     uploadFile: vi.fn().mockResolvedValue("upload-1"),
@@ -81,6 +82,28 @@ function LocationProbe() {
   return <output data-testid="location">{location.pathname}{location.search}</output>;
 }
 
+function LiveView({
+  api,
+  brandId = "brand-1",
+  scope = storageScope,
+}: {
+  api: BrandIntelligenceGateway;
+  brandId?: string;
+  scope?: typeof storageScope;
+}) {
+  return (
+    <>
+      <BrandCenterPreviewPage
+        mode="live"
+        gateway={api}
+        brandId={brandId}
+        storageScope={scope}
+      />
+      <LocationProbe />
+    </>
+  );
+}
+
 function renderLive(
   api: BrandIntelligenceGateway,
   initialEntry = "/onboarding/brand-intelligence?analysisId=analysis-1",
@@ -88,13 +111,7 @@ function renderLive(
 ) {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
-      <BrandCenterPreviewPage
-        mode="live"
-        gateway={api}
-        brandId="brand-1"
-        storageScope={scope}
-      />
-      <LocationProbe />
+      <LiveView api={api} scope={scope} />
     </MemoryRouter>,
   );
 }
@@ -139,6 +156,206 @@ describe("live Brand Center onboarding", () => {
     vi.useRealTimers();
   });
 
+  it("opens a server review-ready workflow before local storage and locks Step 1", async () => {
+    localStorage.setItem(persistenceKey, "stored-analysis");
+    const getWorkflow = vi.fn().mockResolvedValue(analysis("review_ready"));
+    const getAnalysis = vi.fn().mockResolvedValue(analysis("review_ready"));
+    renderLive(
+      gateway({ getWorkflow, getAnalysis }),
+      "/onboarding/brand-intelligence",
+    );
+
+    expect(await screen.findByText("AI 분석 결과를 확인하고 수정하세요")).toBeVisible();
+    expect(screen.getByRole("button", { name: "1. 자료 등록" }))
+      .toHaveAttribute("aria-disabled", "true");
+    expect(getWorkflow).toHaveBeenCalledTimes(1);
+    expect(getAnalysis).not.toHaveBeenCalled();
+    expect(localStorage.getItem(persistenceKey)).toBe("analysis-1");
+  });
+
+  it("resumes a pending server workflow without rendering Step 1 and locks sources", async () => {
+    vi.useFakeTimers();
+    const getWorkflow = vi.fn().mockResolvedValue(analysis("queued"));
+    const getAnalysis = vi.fn().mockResolvedValue(analysis("queued"));
+    renderLive(
+      gateway({ getWorkflow, getAnalysis }),
+      "/onboarding/brand-intelligence",
+    );
+    await flushEffects();
+
+    expect(screen.getByText("자료를 읽는 중")).toBeVisible();
+    expect(screen.queryByRole("textbox", { name: "브랜드 웹사이트 URL" }))
+      .not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "1. 자료 등록" }))
+      .toHaveAttribute("aria-disabled", "true");
+    expect(getWorkflow).toHaveBeenCalledTimes(1);
+    expect(getAnalysis).toHaveBeenCalledWith("brand-1", "analysis-1", expect.anything());
+  });
+
+  it("shows Step 1 when the server has no workflow or scoped resume pointer", async () => {
+    const getWorkflow = vi.fn().mockResolvedValue(null);
+    renderLive(
+      gateway({ getWorkflow }),
+      "/onboarding/brand-intelligence",
+    );
+
+    expect(await screen.findByRole("textbox", { name: "브랜드 웹사이트 URL" }))
+      .toBeVisible();
+    expect(screen.getByRole("button", { name: "1. 자료 등록" }))
+      .not.toHaveAttribute("aria-disabled");
+    expect(getWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Step 1 locked when workflow lookup fails and retries the lookup", async () => {
+    localStorage.setItem(persistenceKey, "stored-analysis");
+    const getWorkflow = vi.fn()
+      .mockRejectedValueOnce(new Error("workflow unavailable"))
+      .mockResolvedValueOnce(null);
+    const getAnalysis = vi.fn().mockResolvedValue(analysis("review_ready"));
+    const user = userEvent.setup();
+    renderLive(
+      gateway({ getWorkflow, getAnalysis }),
+      "/onboarding/brand-intelligence",
+    );
+
+    expect(await screen.findByText(
+      "진행 중인 분석 상태를 확인하지 못했습니다. 다시 시도해 주세요.",
+    )).toBeVisible();
+    expect(screen.queryByRole("textbox", { name: "브랜드 웹사이트 URL" }))
+      .not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "1. 자료 등록" }))
+      .toHaveAttribute("aria-disabled", "true");
+    expect(getAnalysis).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "다시 분석" }));
+
+    expect(await screen.findByText("AI 분석 결과를 확인하고 수정하세요")).toBeVisible();
+    expect(getWorkflow).toHaveBeenCalledTimes(2);
+    expect(getAnalysis).toHaveBeenCalledWith(
+      "brand-1",
+      "stored-analysis",
+      expect.anything(),
+    );
+  });
+
+  it("adopts the valid server workflow when a query analysis is stale", async () => {
+    const serverWorkflow = {
+      ...analysis("review_ready"),
+      id: "server-analysis",
+    };
+    const getWorkflow = vi.fn().mockResolvedValue(serverWorkflow);
+    const getAnalysis = vi.fn().mockRejectedValue(
+      new ApiRequestError({ status: 404, errorCode: "brand_analysis_not_found" }),
+    );
+    renderLive(
+      gateway({ getWorkflow, getAnalysis }),
+      "/onboarding/brand-intelligence?analysisId=stale-query",
+    );
+
+    expect(await screen.findByText("AI 분석 결과를 확인하고 수정하세요")).toBeVisible();
+    expect(screen.getByTestId("location")).toHaveTextContent("analysisId=server-analysis");
+    expect(localStorage.getItem(persistenceKey)).toBe("server-analysis");
+    expect(getAnalysis).toHaveBeenCalledTimes(1);
+    expect(getAnalysis).toHaveBeenCalledWith(
+      "brand-1",
+      "stale-query",
+      expect.anything(),
+    );
+  });
+
+  it.each(["failed", "confirmed"] as const)(
+    "adopts the valid server workflow when a query analysis reaches %s",
+    async (terminalStatus) => {
+      const serverWorkflow = {
+        ...analysis("review_ready"),
+        id: "server-analysis",
+      };
+      const getWorkflow = vi.fn().mockResolvedValue(serverWorkflow);
+      const getAnalysis = vi.fn().mockResolvedValue({
+        ...analysis(terminalStatus),
+        id: "stale-query",
+      });
+      renderLive(
+        gateway({ getWorkflow, getAnalysis }),
+        "/onboarding/brand-intelligence?analysisId=stale-query",
+      );
+
+      expect(await screen.findByText("AI 분석 결과를 확인하고 수정하세요")).toBeVisible();
+      expect(screen.getByTestId("location")).toHaveTextContent("analysisId=server-analysis");
+      expect(localStorage.getItem(persistenceKey)).toBe("server-analysis");
+      expect(getAnalysis).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("resets brand-owned state before bootstrapping a changed brand and scope", async () => {
+    const secondWorkflow = deferred<BrandAnalysis | null>();
+    const secondResult: BrandIntelligenceResult = {
+      ...result,
+      companyOverview: "두 번째 브랜드 개요",
+    };
+    const getWorkflow = vi.fn((requestedBrandId: string) => (
+      requestedBrandId === "brand-1"
+        ? Promise.resolve(null)
+        : secondWorkflow.promise
+    ));
+    const api = gateway({
+      getWorkflow,
+      getAnalysis: vi.fn().mockResolvedValue(analysis("review_ready")),
+    });
+    const user = userEvent.setup();
+    const view = render(
+      <MemoryRouter initialEntries={["/onboarding/brand-intelligence"]}>
+        <LiveView api={api} />
+      </MemoryRouter>,
+    );
+
+    await user.type(
+      await screen.findByRole("textbox", { name: "브랜드 웹사이트 URL" }),
+      "https://first-brand.example",
+    );
+    await user.upload(
+      screen.getByLabelText("브랜드 자료 파일 선택"),
+      new File(["first brand"], "first-brand.txt", { type: "text/plain" }),
+    );
+    await user.click(screen.getByRole("button", { name: "AI 분석 시작" }));
+    expect(await screen.findByDisplayValue("기존 기업 개요")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "완료" }));
+    expect(await screen.findByText("브랜드 준비가 완료되었습니다")).toBeVisible();
+
+    view.rerender(
+      <MemoryRouter initialEntries={["/onboarding/brand-intelligence"]}>
+        <LiveView
+          api={api}
+          brandId="brand-2"
+          scope={{ workspaceId: "workspace-2", userId: "user-2" }}
+        />
+      </MemoryRouter>,
+    );
+    await flushEffects();
+
+    expect(screen.getByText("자료를 읽는 중")).toBeVisible();
+    expect(screen.queryByText("브랜드 준비가 완료되었습니다")).not.toBeInTheDocument();
+    expect(screen.queryByText("https://first-brand.example")).not.toBeInTheDocument();
+    expect(screen.queryByText("1개 선택됨")).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue("기존 기업 개요")).not.toBeInTheDocument();
+
+    await act(async () => {
+      secondWorkflow.resolve({
+        ...analysis("review_ready"),
+        id: "brand-2-analysis",
+        brandId: "brand-2",
+        input: { ownedUrl: "https://second-brand.example", uploadIds: [] },
+        result: secondResult,
+        effectiveResult: secondResult,
+      });
+      await secondWorkflow.promise;
+    });
+
+    expect(await screen.findByDisplayValue("두 번째 브랜드 개요")).toBeVisible();
+    expect(getWorkflow).toHaveBeenCalledWith("brand-1");
+    expect(getWorkflow).toHaveBeenCalledWith("brand-2");
+  });
+
   it("uploads real files, polls until review, preserves the complete Step 2 draft, then saves and confirms", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.spyOn(Math, "random").mockReturnValue(0);
@@ -150,7 +367,10 @@ describe("live Brand Center onboarding", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderLive(api, "/onboarding/brand-intelligence");
 
-    await user.type(screen.getByRole("textbox", { name: "브랜드 웹사이트 URL" }), "https://brand.example");
+    await user.type(
+      await screen.findByRole("textbox", { name: "브랜드 웹사이트 URL" }),
+      "https://brand.example",
+    );
     const file = new File(["brand facts"], "facts.txt", { type: "text/plain" });
     await user.upload(screen.getByLabelText("브랜드 자료 파일 선택"), file);
     await user.click(screen.getByRole("button", { name: "AI 분석 시작" }));

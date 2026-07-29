@@ -545,7 +545,7 @@ export interface SupportRequest {
   category: SupportRequestCategory;
   title: string;
   message: string;
-  contactPhone: string;
+  contactPhone: string | null;
   contactEmail: string | null;
   status: SupportRequestStatus;
   responseMessage: string | null;

@@ -647,11 +647,23 @@ describe("repository", () => {
       contactPhone: "010-1234-5678",
       contactEmail: "user@example.com"
     });
+    const simplified = await repository.createSupportRequest("brand-1", {
+      category: "feature",
+      message: "비교 기준을 추가해 주세요."
+    });
     const list = await repository.listSupportRequests("brand-1");
     const updated = await repository.updateSupportRequestStatus("support-1", "in_progress");
     const responded = await repository.respondToSupportRequest("support-1", "Meta 연결을 초기화했습니다.");
 
     expect(created).toMatchObject({ id: "support-1", status: "new", contactPhone: "010-1234-5678", contactEmail: "user@example.com" });
+    expect(simplified).toMatchObject({
+      category: "feature",
+      title: "기능 요청",
+      contactPhone: null,
+      contactEmail: null
+    });
+    expect(queries.filter((entry) => entry.sql.includes("insert into support_requests")).at(-1)?.values)
+      .toEqual(["workspace-1", "brand-1", "feature", "기능 요청", "비교 기준을 추가해 주세요.", null, null]);
     expect(list).toEqual([expect.objectContaining({ id: "support-1", title: "채널 연결 오류" })]);
     expect(updated).toMatchObject({ id: "support-1", status: "in_progress" });
     expect(responded).toMatchObject({

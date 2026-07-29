@@ -15,6 +15,7 @@ async function renderSupportPage(
   initialEntries = ["/support"],
   openFeedback = vi.fn()
 ) {
+  const supportRequestsChangedEvent = "brand-pilot:support-requests-changed";
   const answeredRequest = {
     id: "support-answered",
     brandId: "brand-1",
@@ -32,25 +33,29 @@ async function renderSupportPage(
   };
   const api = {
     listSupportRequests: vi.fn(async () => [answeredRequest]),
-    createSupportRequest: vi.fn(async () => ({
-      id: "support-1",
-      brandId: "brand-1",
-      workspaceId: "workspace-1",
-      category: "bug",
-      title: "채널 연결 오류",
-      message: "인스타 연결이 실패합니다.",
-      contactPhone: "010-1234-5678",
-      contactEmail: "user@example.com",
-      status: "new",
-      responseMessage: null,
-      respondedAt: null,
-      createdAt: "2026-07-11T00:00:00.000Z",
-      updatedAt: "2026-07-11T00:00:00.000Z"
-    })),
+    createSupportRequest: vi.fn(async () => {
+      window.dispatchEvent(new Event(supportRequestsChangedEvent));
+      return {
+        id: "support-1",
+        brandId: "brand-1",
+        workspaceId: "workspace-1",
+        category: "bug",
+        title: "채널 연결 오류",
+        message: "인스타 연결이 실패합니다.",
+        contactPhone: "010-1234-5678",
+        contactEmail: "user@example.com",
+        status: "new",
+        responseMessage: null,
+        respondedAt: null,
+        createdAt: "2026-07-11T00:00:00.000Z",
+        updatedAt: "2026-07-11T00:00:00.000Z"
+      };
+    }),
     ...apiOverrides
   };
   vi.doMock("../lib/apiClient", () => ({
     DEMO_BRAND_ID: "brand-1",
+    SUPPORT_REQUESTS_CHANGED_EVENT: supportRequestsChangedEvent,
     api
   }));
   vi.doMock("../components/feedback/FeedbackContext", () => ({ FeedbackProvider, useFeedback }));
@@ -237,10 +242,11 @@ describe("SupportPage", () => {
   it("shows submitted inquiries and their answers", async () => {
     await renderSupportPage();
 
-    expect(await screen.findByRole("heading", { name: "내 문의 내역" })).toBeVisible();
+    expect(await screen.findByRole("region", { name: "문의 내역" })).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: /문의 내역 확인/ }));
 
     expect(screen.getByText("답변은 어디에서 확인하나요?")).toBeVisible();
     expect(screen.getByText("고객센터의 문의 내역에서 확인할 수 있습니다.")).toBeVisible();
+    expect(screen.queryByText(/010-1234-5678/)).not.toBeInTheDocument();
   });
 });

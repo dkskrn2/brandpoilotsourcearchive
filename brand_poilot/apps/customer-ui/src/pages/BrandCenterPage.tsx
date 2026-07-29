@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Alert } from "../components/ui/Alert";
 import { PageSkeleton } from "../components/ui/LoadingState";
 import { BrandCenterHeader } from "../components/brand-center/BrandCenterHeader";
@@ -8,7 +8,10 @@ import { BrandRulesPanel } from "../components/brand-center/BrandRulesPanel";
 import { KnowledgeCategoryEditorPanel } from "../components/brand-center/KnowledgeCategoryEditorPanel";
 import { ProductServiceLibraryPanel } from "../components/brand-center/ProductServiceLibraryPanel";
 import { StyleReferenceImageBoard } from "../components/brand-center/StyleReferenceImageBoard";
+import { SupportRequestHistory } from "../components/support/SupportRequestHistory";
 import { brandCenterGateway } from "../features/brand-center/brandCenterGateway";
+import { brandIntelligenceGateway } from "../features/brand-intelligence/brandIntelligenceGateway";
+import type { BrandAnalysis } from "../features/brand-intelligence/types";
 import { libraryGateway } from "../features/libraries/libraryGateway";
 import type {
   BrandCenterSummary,
@@ -21,7 +24,16 @@ import type {
 import { DEMO_BRAND_ID } from "../lib/apiClient";
 
 type BrandCenterTab = "core" | "faq" | "how_to" | "guide" | "products" | "style";
+type BrandCenterOnboardingView =
+  | "not_started"
+  | "initial_in_progress"
+  | "initial_review_ready"
+  | "ready"
+  | "reanalyzing"
+  | "reanalysis_review_ready"
+  | "failed";
 const canonicalUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const pendingAnalysisStatuses: BrandAnalysis["status"][] = ["queued", "extracting", "analyzing"];
 
 const brandTabs: Array<{ id: BrandCenterTab; label: string }> = [
   { id: "core", label: "브랜드 코어" },
@@ -56,6 +68,88 @@ function readiness(summary: BrandCenterSummary | null) {
     summary.brandCore.state === "approved",
     summary.rules.state === "approved",
   ].filter(Boolean).length}/4`;
+}
+
+function resolveOnboardingView(
+  hasConfirmedContent: boolean,
+  workflow: BrandAnalysis | null,
+  failed: boolean,
+): BrandCenterOnboardingView {
+  if (failed && !hasConfirmedContent) return "failed";
+  if (!hasConfirmedContent) {
+    if (!workflow) return "not_started";
+    if (workflow.status === "review_ready") return "initial_review_ready";
+    if (pendingAnalysisStatuses.includes(workflow.status)) return "initial_in_progress";
+    return "failed";
+  }
+  if (!workflow) return "ready";
+  if (workflow.status === "review_ready") return "reanalysis_review_ready";
+  if (pendingAnalysisStatuses.includes(workflow.status)) return "reanalyzing";
+  return "ready";
+}
+
+function BrandCenterOnboardingStatus({
+  view,
+  workflow,
+}: {
+  view: BrandCenterOnboardingView;
+  workflow: BrandAnalysis | null;
+}) {
+  if (view === "ready" || view === "failed") return null;
+  const reviewHref = workflow
+    ? `/onboarding/brand-intelligence?analysisId=${workflow.id}`
+    : "/onboarding/brand-intelligence";
+  if (view === "not_started") {
+    return (
+      <section className="brand-center-onboarding-status">
+        <div>
+          <h2>브랜드 정보를 먼저 만들어 주세요</h2>
+          <p>URL과 자료를 등록하면 AI가 브랜드 정보를 정리합니다.</p>
+        </div>
+        <Link className="button primary" to="/onboarding/brand-intelligence">온보딩 하기</Link>
+      </section>
+    );
+  }
+  if (view === "initial_in_progress") {
+    return (
+      <section className="brand-center-onboarding-status" aria-live="polite">
+        <div>
+          <h2>분석중입니다</h2>
+          <p>등록한 자료를 바탕으로 브랜드 정보를 정리하고 있습니다.</p>
+        </div>
+      </section>
+    );
+  }
+  if (view === "initial_review_ready") {
+    return (
+      <section className="brand-center-onboarding-status">
+        <div>
+          <h2>분석이 완료되었습니다.</h2>
+          <p>AI 초안을 확인하고 수정한 뒤 브랜드 정보로 확정해 주세요.</p>
+        </div>
+        <Link className="button primary" to={reviewHref}>분석확인하기</Link>
+      </section>
+    );
+  }
+  if (view === "reanalyzing") {
+    return (
+      <section className="brand-center-onboarding-status" aria-live="polite">
+        <div>
+          <h2>재분석 중입니다</h2>
+          <p>새 결과를 확인하기 전까지 현재 확정된 브랜드 정보를 계속 사용합니다.</p>
+        </div>
+      </section>
+    );
+  }
+  return (
+    <section className="brand-center-onboarding-status">
+      <div>
+        <h2>재분석 결과를 확인하세요</h2>
+        <p>현재 확정 정보는 유지되며, 새 분석을 확인한 뒤 교체할 수 있습니다.</p>
+      </div>
+      <Link className="button primary" to={reviewHref}>분석확인하기</Link>
+    </section>
+  );
 }
 
 export function BrandCenterPage() {
@@ -96,6 +190,9 @@ export function BrandCenterPage() {
   >(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [confirmedAnalysis, setConfirmedAnalysis] = useState<BrandAnalysis | null>(null);
+  const [workflow, setWorkflow] = useState<BrandAnalysis | null>(null);
+  const [intelligenceLoadFailed, setIntelligenceLoadFailed] = useState(false);
 
   const visibleVersion = useMemo(() => {
     if (!workspace) return null;
@@ -106,15 +203,32 @@ export function BrandCenterPage() {
   const operationalRules = draftRules ?? visibleRules;
   const serverConflictVersion = serverConflictSnapshot?.draft ?? serverConflictSnapshot?.active ?? null;
   const hasUnsavedChanges = dirty || rulesDirty || childDirty || productDirty;
+  const showConfirmedContent = confirmedAnalysis !== null
+    || Boolean(workspace?.active)
+    || summary?.analysis.state === "confirmed"
+    || summary?.brandCore.state === "approved";
+  const onboardingView = resolveOnboardingView(
+    showConfirmedContent,
+    workflow,
+    intelligenceLoadFailed,
+  );
 
   async function load() {
     setLoading(true);
     setInitialLoadError(null);
     setRulesLoadError(null);
-    const [summaryResult, coreResult, rulesResult] = await Promise.allSettled([
+    const [
+      summaryResult,
+      coreResult,
+      rulesResult,
+      currentAnalysisResult,
+      workflowResult,
+    ] = await Promise.allSettled([
       brandCenterGateway.getSummary(DEMO_BRAND_ID),
       brandCenterGateway.getCore(DEMO_BRAND_ID),
       brandCenterGateway.getRules(DEMO_BRAND_ID),
+      brandIntelligenceGateway.getCurrent(DEMO_BRAND_ID),
+      brandIntelligenceGateway.getWorkflow(DEMO_BRAND_ID),
     ]);
     if (summaryResult.status === "fulfilled") setSummary(summaryResult.value);
     if (coreResult.status === "fulfilled") {
@@ -139,7 +253,20 @@ export function BrandCenterPage() {
       setRulesWorkspace(null);
       setDraftRules(emptyRules());
     }
-    if (summaryResult.status === "rejected" || coreResult.status === "rejected") {
+    if (currentAnalysisResult.status === "fulfilled") {
+      setConfirmedAnalysis(currentAnalysisResult.value);
+    }
+    if (workflowResult.status === "fulfilled") {
+      setWorkflow(workflowResult.value);
+    }
+    const nextIntelligenceLoadFailed = currentAnalysisResult.status === "rejected"
+      || workflowResult.status === "rejected";
+    setIntelligenceLoadFailed(nextIntelligenceLoadFailed);
+    if (
+      summaryResult.status === "rejected"
+      || coreResult.status === "rejected"
+      || nextIntelligenceLoadFailed
+    ) {
       setInitialLoadError("브랜드 센터 정보를 불러오지 못했습니다.");
     } else {
       setChildDirty(false);
@@ -547,8 +674,10 @@ export function BrandCenterPage() {
         readiness={readiness(summary)}
         approvedAt={workspace?.active?.approvedAt ?? null}
         busy={saving}
+        showReanalyze={showConfirmedContent}
         onReanalyze={reanalyze}
       />
+      <BrandCenterOnboardingStatus view={onboardingView} workflow={workflow} />
       {notice && <Alert title="변경 사항" variant="info">{notice}</Alert>}
       {initialLoadError && (
         <Alert title="브랜드 센터를 불러오지 못했습니다" variant="bad">
@@ -591,6 +720,8 @@ export function BrandCenterPage() {
         </Alert>
       ) : null}
 
+      {showConfirmedContent ? (
+        <>
       <nav className="brand-center-tabs" aria-label="브랜드 센터 영역" role="tablist">
         {brandTabs.map((item, index) => (
           <button
@@ -754,6 +885,9 @@ export function BrandCenterPage() {
           />
         ) : null}
       </div>
+        </>
+      ) : null}
+      {showConfirmedContent ? <SupportRequestHistory brandId={DEMO_BRAND_ID} /> : null}
     </section>
   );
 }

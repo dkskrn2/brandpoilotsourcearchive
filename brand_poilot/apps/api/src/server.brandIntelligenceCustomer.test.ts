@@ -5,6 +5,7 @@ import type { BrandIntelligenceRepository } from "./brandIntelligenceRepository.
 
 const workspaceId = "11111111-1111-4111-8111-111111111111";
 const brandId = "22222222-2222-4222-8222-222222222222";
+const otherBrandId = "44444444-4444-4444-8444-444444444444";
 const analysisId = "33333333-3333-4333-8333-333333333333";
 
 function record(status = "queued") {
@@ -23,6 +24,7 @@ function setup() {
   const intelligence = {
     requestBrandAnalysis: vi.fn(async () => record()),
     getBrandAnalysis: vi.fn(async () => record("review_ready")),
+    getOpenBrandAnalysis: vi.fn(async () => record("review_ready")),
     getCurrentBrandIntelligence: vi.fn(async () => null),
     updateBrandAnalysisDraft: vi.fn(async () => record("review_ready")),
     confirmBrandAnalysis: vi.fn(async () => record("confirmed")),
@@ -30,7 +32,7 @@ function setup() {
   } as unknown as BrandIntelligenceRepository;
   const kakaoAuth = {
     getSession: vi.fn(async () => ({ userId: "user-1", workspaceId, workspaceName: "Workspace", brandId, brandName: "Brand", displayName: "Tester", email: null })),
-    canAccessBrand: vi.fn(async () => true),
+    canAccessBrand: vi.fn(async (_userId: string, requestedBrandId: string) => requestedBrandId === brandId),
   } as never;
   const app = createServer({ repository, kakaoAuth, brandIntelligenceRepository: intelligence, logger: false });
   return { app, intelligence };
@@ -64,6 +66,55 @@ describe("brand intelligence customer routes", () => {
     const response = await app.inject({ method: "GET", url: `/brands/${brandId}/brand-intelligence`, headers: auth });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ intelligence: null });
+    await app.close();
+  });
+
+  it("returns the scoped open workflow without changing the confirmed endpoint", async () => {
+    const { app, intelligence } = setup();
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/brand-intelligence/workflow`,
+      headers: auth,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      workflow: expect.objectContaining({ id: analysisId, status: "review_ready" }),
+    });
+    expect(intelligence.getOpenBrandAnalysis).toHaveBeenCalledWith({ workspaceId, brandId });
+    expect(intelligence.getCurrentBrandIntelligence).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("returns null when the scoped brand has no open workflow", async () => {
+    const { app, intelligence } = setup();
+    vi.mocked(intelligence.getOpenBrandAnalysis).mockResolvedValueOnce(null);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/brand-intelligence/workflow`,
+      headers: auth,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ workflow: null });
+    expect(intelligence.getOpenBrandAnalysis).toHaveBeenCalledWith({ workspaceId, brandId });
+    await app.close();
+  });
+
+  it("does not disclose an open workflow from another brand", async () => {
+    const { app, intelligence } = setup();
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/brands/${otherBrandId}/brand-intelligence/workflow`,
+      headers: auth,
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: "workspace_access_denied" });
+    expect(intelligence.getOpenBrandAnalysis).not.toHaveBeenCalled();
     await app.close();
   });
 

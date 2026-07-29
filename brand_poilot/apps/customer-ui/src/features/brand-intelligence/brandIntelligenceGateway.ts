@@ -43,6 +43,13 @@ export function createBrandIntelligenceGateway(
       );
       return payload.intelligence;
     },
+    async getWorkflow(brandId) {
+      const payload = await client.requestJson<{ workflow: BrandAnalysis | null }>(
+        `/brands/${brandId}/brand-intelligence/workflow`,
+        { method: "GET" },
+      );
+      return payload.workflow;
+    },
     getAnalysis(brandId, analysisId, signal) {
       return client.requestJson(`/brands/${brandId}/brand-intelligence/analyses/${analysisId}`, {
         method: "GET",
@@ -98,6 +105,7 @@ export function createBrandIntelligenceGateway(
 
 export const brandIntelligenceGateway: BrandIntelligenceGateway = {
   getCurrent: (...args) => createBrandIntelligenceGateway().getCurrent(...args),
+  getWorkflow: (...args) => createBrandIntelligenceGateway().getWorkflow(...args),
   getAnalysis: (...args) => createBrandIntelligenceGateway().getAnalysis(...args),
   requestAnalysis: (...args) => createBrandIntelligenceGateway().requestAnalysis(...args),
   uploadFile: (...args) => createBrandIntelligenceGateway().uploadFile(...args),

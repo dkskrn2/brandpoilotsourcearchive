@@ -3018,6 +3018,77 @@ test("055 backfills tenant-safe approved brand core and rules without mutating c
   });
 });
 
+test("069 preserves the newest open brand analysis and terminally supersedes older duplicates", async () => {
+  const migrations = await loadMigrations();
+  const migration069 = migrations.find(
+    (migration) => migration.id === "069_brand_analysis_one_open_workflow.sql",
+  );
+  assert.ok(migration069, "069 brand analysis open workflow migration must exist");
+  assert.match(
+    migration069.sql,
+    /begin;\s*lock table brand_analysis_runs in share row exclusive mode;\s*with ranked as/i,
+  );
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(database, migrations, "001_initial_schema.sql", "049_brand_intelligence_onboarding.sql");
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ('Open workflows', $1) returning id",
+      [`open-workflows-${randomUUID()}`],
+    );
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Workflow Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    const runs = await database.query(
+      `insert into brand_analysis_runs (
+         workspace_id, brand_id, status, idempotency_key, created_at
+       ) values
+         ($1, $2, 'review_ready', 'older-open', '2026-07-29T00:00:00Z'),
+         ($1, $2, 'queued', 'newer-open', '2026-07-30T00:00:00Z')
+       returning id, idempotency_key`,
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+
+    await database.exec(migration069.sql);
+
+    const after = await database.query(
+      `select id, idempotency_key, status, error_code, completed_at
+         from brand_analysis_runs
+        where brand_id = $1
+        order by created_at`,
+      [brand.rows[0].id],
+    );
+    assert.equal(after.rows.length, 2);
+    assert.deepEqual(after.rows.map((row) => ({
+      idempotencyKey: row.idempotency_key,
+      status: row.status,
+      errorCode: row.error_code,
+      completed: row.completed_at !== null,
+    })), [
+      {
+        idempotencyKey: "older-open",
+        status: "failed",
+        errorCode: "brand_analysis_superseded",
+        completed: true,
+      },
+      {
+        idempotencyKey: "newer-open",
+        status: "queued",
+        errorCode: null,
+        completed: false,
+      },
+    ]);
+    assert.notEqual(runs.rows[0].id, runs.rows[1].id);
+    await assert.rejects(
+      database.query(
+        `insert into brand_analysis_runs (workspace_id, brand_id, status, idempotency_key)
+         values ($1, $2, 'analyzing', 'third-open')`,
+        [workspace.rows[0].id, brand.rows[0].id],
+      ),
+    );
+  });
+});
+
 test("068 refuses legacy duplicate core drafts without changing user data", async () => {
   const migrations = await loadMigrations();
   const migration068 = migrations.find(
@@ -4306,7 +4377,7 @@ test("061 deterministically removes legacy duplicate avatar bytes and prevents n
   });
 });
 
-test("migration runner records forward-only 060 through 068 without changing the applied 058 checksum", async () => {
+test("migration runner records forward-only 060 through 069 without changing the applied 058 checksum", async () => {
   const migrations = await loadMigrations();
   const runnableMigrations = migrations.filter(
     (migration) => !migration.sql.startsWith("-- requires: pgvector")
@@ -4332,7 +4403,7 @@ test("migration runner records forward-only 060 through 068 without changing the
       client,
       migrations: runnableMigrations,
     });
-    assert.deepEqual(upgraded.pending.slice(-9), [
+    assert.deepEqual(upgraded.pending.slice(-10), [
       "060_content_orchestration.sql",
       "061_avatar_image_checksum_uniqueness.sql",
       "062_avatar_upload_cancellation.sql",
@@ -4342,9 +4413,10 @@ test("migration runner records forward-only 060 through 068 without changing the
       "066_ai_content_analyzed_subject_orchestration.sql",
       "067_wiki_refresh_outbox.sql",
       "068_brand_core_one_draft.sql",
+      "069_brand_analysis_one_open_workflow.sql",
     ]);
     const recorded = await database.query(
-      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) order by id",
+      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) order by id",
       [
         "058_avatar_and_reference_libraries.sql",
         "060_content_orchestration.sql",
@@ -4356,6 +4428,7 @@ test("migration runner records forward-only 060 through 068 without changing the
         "066_ai_content_analyzed_subject_orchestration.sql",
         "067_wiki_refresh_outbox.sql",
         "068_brand_core_one_draft.sql",
+        "069_brand_analysis_one_open_workflow.sql",
       ],
     );
     assert.deepEqual(recorded.rows, [
@@ -4398,6 +4471,10 @@ test("migration runner records forward-only 060 through 068 without changing the
       {
         id: "068_brand_core_one_draft.sql",
         checksum: migrations.find((migration) => migration.id === "068_brand_core_one_draft.sql")?.checksum,
+      },
+      {
+        id: "069_brand_analysis_one_open_workflow.sql",
+        checksum: migrations.find((migration) => migration.id === "069_brand_analysis_one_open_workflow.sql")?.checksum,
       },
     ]);
     const repeated = await runMigrationsWithClient({
@@ -4853,6 +4930,7 @@ test("065 direct SQL and migration runner pending-tail paths converge on lifecyc
       "066_ai_content_analyzed_subject_orchestration.sql",
       "067_wiki_refresh_outbox.sql",
       "068_brand_core_one_draft.sql",
+      "069_brand_analysis_one_open_workflow.sql",
     ]);
     return attachmentLifecycleRowState(database, fixture);
   });

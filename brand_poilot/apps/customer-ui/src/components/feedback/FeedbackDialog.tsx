@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { ExternalLink, X } from "lucide-react";
+import type { SupportRequestCategory } from "../../types";
 
-const fallbackBookingUrl = "/support?category=other#support-request-form";
+const inquiryCategories: Array<{ value: SupportRequestCategory; label: string }> = [
+  { value: "bug", label: "오류" },
+  { value: "feature", label: "기능 요청" },
+  { value: "channel", label: "채널" },
+  { value: "account", label: "계정" },
+  { value: "other", label: "기타" }
+];
 
 export function FeedbackDialog({
   bookingUrl,
@@ -10,25 +17,29 @@ export function FeedbackDialog({
 }: {
   bookingUrl: string;
   onClose: () => void;
-  onSubmit: (message: string) => Promise<void>;
+  onSubmit: (input: {
+    category: SupportRequestCategory;
+    message: string;
+  }) => Promise<void>;
 }) {
+  const [category, setCategory] = useState<SupportRequestCategory | "">("");
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const dialogRef = useRef<HTMLElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const categoryRef = useRef<HTMLSelectElement>(null);
   const submitLockedRef = useRef(false);
-  const lastSubmittedMessageRef = useRef<string | null>(null);
+  const lastSubmittedInquiryRef = useRef<string | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-  const resolvedBookingUrl = bookingUrl.trim() || fallbackBookingUrl;
+  const resolvedBookingUrl = bookingUrl.trim();
   const externalBookingUrl = /^https?:\/\//i.test(resolvedBookingUrl);
 
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    textareaRef.current?.focus();
+    categoryRef.current?.focus();
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
@@ -37,7 +48,7 @@ export function FeedbackDialog({
       }
       if (event.key !== "Tab") return;
       const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        'a[href], button:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
       ) ?? []);
       if (focusable.length === 0) return;
       const first = focusable[0];
@@ -62,17 +73,20 @@ export function FeedbackDialog({
   async function submitFeedback(event: React.FormEvent) {
     event.preventDefault();
     const normalized = message.trim();
-    if (!normalized || submitLockedRef.current || normalized === lastSubmittedMessageRef.current) return;
+    if (!category || !normalized || submitLockedRef.current) return;
+    const inquiryKey = `${category}:${normalized}`;
+    if (inquiryKey === lastSubmittedInquiryRef.current) return;
     submitLockedRef.current = true;
     setSubmitting(true);
     setNotice(null);
     try {
-      await onSubmit(normalized);
-      lastSubmittedMessageRef.current = normalized;
+      await onSubmit({ category, message: normalized });
+      lastSubmittedInquiryRef.current = inquiryKey;
+      setCategory("");
       setMessage("");
-      setNotice({ type: "success", text: "의견을 보내주셔서 감사합니다." });
+      setNotice({ type: "success", text: "문의가 접수되었습니다." });
     } catch {
-      setNotice({ type: "error", text: "피드백을 보내지 못했습니다. 잠시 후 다시 시도해 주세요." });
+      setNotice({ type: "error", text: "문의를 보내지 못했습니다. 잠시 후 다시 시도해 주세요." });
     } finally {
       submitLockedRef.current = false;
       setSubmitting(false);
@@ -103,27 +117,45 @@ export function FeedbackDialog({
           </button>
         </header>
 
-        <section className="feedback-dialog__card feedback-dialog__booking">
-          <h3>통화 문의 예약하기</h3>
-          <p>15분 정도의 짧은 통화로 필요한 기능이나 불편한 점을 직접 전해주세요.</p>
-          <a
-            className="button feedback-dialog__booking-link"
-            href={resolvedBookingUrl}
-            target={externalBookingUrl ? "_blank" : undefined}
-            rel={externalBookingUrl ? "noreferrer" : undefined}
-          >
-            통화 문의 예약하기 <ExternalLink size={15} aria-hidden="true" />
-          </a>
-        </section>
+        {resolvedBookingUrl ? (
+          <section className="feedback-dialog__card feedback-dialog__booking">
+            <h3>통화 문의 예약하기</h3>
+            <p>15분 정도의 짧은 통화로 필요한 기능이나 불편한 점을 직접 전해주세요.</p>
+            <a
+              className="button feedback-dialog__booking-link"
+              href={resolvedBookingUrl}
+              target={externalBookingUrl ? "_blank" : undefined}
+              rel={externalBookingUrl ? "noreferrer" : undefined}
+            >
+              통화 문의 예약하기 <ExternalLink size={15} aria-hidden="true" />
+            </a>
+          </section>
+        ) : null}
 
         <form className="feedback-dialog__card feedback-dialog__form" onSubmit={submitFeedback}>
           <div>
             <h3>의견 보내기</h3>
-            <p>느끼신 점이나 제안을 자유롭게 적어주세요.</p>
+            <p>문의 유형을 고르고 필요한 내용을 남겨주세요.</p>
           </div>
-          <label className="sr-only" htmlFor="feedback-message">의견</label>
+          <label className="feedback-dialog__field" htmlFor="feedback-category">
+            <span>문의 유형</span>
+            <select
+              ref={categoryRef}
+              id="feedback-category"
+              value={category}
+              onChange={(event) => {
+                setCategory(event.currentTarget.value as SupportRequestCategory | "");
+                setNotice(null);
+              }}
+            >
+              <option value="">문의 유형 선택</option>
+              {inquiryCategories.map((item) => (
+                <option key={item.value} value={item.value}>{item.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="sr-only" htmlFor="feedback-message">내용</label>
           <textarea
-            ref={textareaRef}
             id="feedback-message"
             maxLength={2000}
             placeholder="어떤 점이 좋았고, 무엇이 더 필요하신가요?"
@@ -131,7 +163,7 @@ export function FeedbackDialog({
             onChange={(event) => { setMessage(event.currentTarget.value); setNotice(null); }}
           />
           <div className="feedback-dialog__form-footer">
-            <button className="button primary" type="submit" disabled={!message.trim() || submitting}>
+            <button className="button primary" type="submit" disabled={!category || !message.trim() || submitting}>
               {submitting ? "보내는 중" : "보내기"}
             </button>
             <small>{message.length.toLocaleString()} / 2,000</small>

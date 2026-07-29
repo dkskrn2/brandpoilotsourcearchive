@@ -4,11 +4,13 @@ export function BrandCenterHeader({
   readiness,
   approvedAt,
   busy,
+  showReanalyze = true,
   onReanalyze,
 }: {
   readiness: string;
   approvedAt: string | null;
   busy: boolean;
+  showReanalyze?: boolean;
   onReanalyze(): void;
 }) {
   return (
@@ -22,11 +24,13 @@ export function BrandCenterHeader({
           <span>마지막 승인 {approvedAt ? new Date(approvedAt).toLocaleString("ko-KR") : "아직 없음"}</span>
         </div>
       </div>
-      <div className="brand-center-actions">
-        <button className="button" type="button" disabled={busy} onClick={onReanalyze}>
-          <RefreshCw size={16} aria-hidden="true" /> AI 재분석
-        </button>
-      </div>
+      {showReanalyze ? (
+        <div className="brand-center-actions">
+          <button className="button" type="button" disabled={busy} onClick={onReanalyze}>
+            <RefreshCw size={16} aria-hidden="true" /> AI 재분석
+          </button>
+        </div>
+      ) : null}
     </header>
   );
 }

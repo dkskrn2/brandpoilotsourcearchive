@@ -25,8 +25,7 @@ describe("D hybrid customer navigation model", () => {
       "/publish-queue",
       "/channels",
       "/dm-automation",
-      "/billing",
-      "/support"
+      "/billing"
     ]);
     expect(paths).toContain("/brand-center");
     expect(paths).toContain("/references");
@@ -41,8 +40,9 @@ describe("D hybrid customer navigation model", () => {
   it("keeps the incomplete-brand recovery destination separate", () => {
     expect(onboardingNavigationItem).toMatchObject({
       label: "브랜드 분석",
-      path: "/brand-center?tab=understanding&section=sources"
+      path: "/onboarding/brand-intelligence"
     });
+    expect(resolveCustomerPageTitle("/onboarding/brand-intelligence")).toBe("브랜드 분석");
   });
 
   it("resolves dynamic content titles without treating unknown paths as dashboard", () => {

@@ -747,6 +747,7 @@ test("an installation applied through 064 has every later migration pending", as
       "066_ai_content_analyzed_subject_orchestration.sql",
       "067_wiki_refresh_outbox.sql",
       "068_brand_core_one_draft.sql",
+      "069_brand_analysis_one_open_workflow.sql",
     ],
   );
 });

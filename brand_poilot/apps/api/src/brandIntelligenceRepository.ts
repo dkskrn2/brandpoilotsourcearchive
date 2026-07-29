@@ -53,6 +53,7 @@ export interface BrandIntelligenceRepository {
     ownedUrl: string | null; uploadIds: string[]; idempotencyKey: string;
   }): Promise<BrandAnalysisRecord>;
   getBrandAnalysis(input: BrandAnalysisScope & { analysisId: string }): Promise<BrandAnalysisRecord | null>;
+  getOpenBrandAnalysis(input: BrandAnalysisScope): Promise<BrandAnalysisRecord | null>;
   getCurrentBrandIntelligence(input: BrandAnalysisScope): Promise<BrandAnalysisRecord | null>;
   updateBrandAnalysisDraft(input: BrandAnalysisScope & {
     analysisId: string; editedResult: BrandIntelligenceResultV1;
@@ -132,6 +133,18 @@ async function loadRun(client: Queryable, analysisId: string): Promise<BrandAnal
   return found.rowCount ? mapRun(found.rows[0] as Record<string, unknown>) : null;
 }
 
+async function loadOpenRun(client: Queryable, input: BrandAnalysisScope): Promise<BrandAnalysisRecord | null> {
+  const found = await client.query(
+    `select ${columns} from brand_analysis_runs
+      where workspace_id = $1 and brand_id = $2
+        and status in ('queued', 'extracting', 'analyzing', 'review_ready')
+      order by created_at desc, id desc
+      limit 1`,
+    [input.workspaceId, input.brandId],
+  );
+  return found.rowCount ? mapRun(found.rows[0] as Record<string, unknown>) : null;
+}
+
 async function transaction<T>(pool: Pool, operation: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
@@ -188,14 +201,28 @@ export function createBrandIntelligenceRepository(pool: Pool): BrandIntelligence
           [input.brandId, input.workspaceId, input.idempotencyKey],
         );
         if (existing.rowCount) return mapRun(existing.rows[0] as Record<string, unknown>);
+        const open = await loadOpenRun(client, input);
+        if (open) return open;
         const id = randomUUID();
         const inserted = await client.query(
           `insert into brand_analysis_runs
              (id, workspace_id, brand_id, status, input_json, idempotency_key)
            values ($1, $2, $3, 'queued', $4::jsonb, $5)
+           on conflict do nothing
            returning ${columns}`,
           [id, input.workspaceId, input.brandId, JSON.stringify({ ownedUrl: input.ownedUrl, uploadIds: input.uploadIds }), input.idempotencyKey],
         );
+        if (!inserted.rowCount) {
+          const conflicted = await client.query(
+            `select ${columns} from brand_analysis_runs
+              where brand_id = $1 and workspace_id = $2 and idempotency_key = $3`,
+            [input.brandId, input.workspaceId, input.idempotencyKey],
+          );
+          if (conflicted.rowCount) return mapRun(conflicted.rows[0] as Record<string, unknown>);
+          const concurrentOpen = await loadOpenRun(client, input);
+          if (concurrentOpen) return concurrentOpen;
+          throw new Error("brand_analysis_create_conflict");
+        }
         if (input.uploadIds.length) {
           const attached = await client.query(
             `update brand_analysis_uploads set analysis_id = $1
@@ -218,6 +245,10 @@ export function createBrandIntelligenceRepository(pool: Pool): BrandIntelligence
         [input.analysisId, input.workspaceId, input.brandId],
       );
       return found.rowCount ? mapRun(found.rows[0] as Record<string, unknown>) : null;
+    },
+
+    async getOpenBrandAnalysis(input) {
+      return loadOpenRun(pool, input);
     },
 
     async getCurrentBrandIntelligence(input) {

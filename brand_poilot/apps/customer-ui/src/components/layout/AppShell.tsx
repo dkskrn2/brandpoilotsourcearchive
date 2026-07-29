@@ -123,7 +123,7 @@ export function AppShell({ children }: AppShellProps) {
                 <FeedbackDialog
                   bookingUrl={import.meta.env.VITE_FEEDBACK_BOOKING_URL ?? ""}
                   onClose={() => setFeedbackOpen(false)}
-                  onSubmit={async (message) => { await api.createFeedbackSubmission(DEMO_BRAND_ID, message); }}
+                  onSubmit={async (input) => { await api.createSupportRequest(DEMO_BRAND_ID, input); }}
                 />
               ) : null}
             </div>

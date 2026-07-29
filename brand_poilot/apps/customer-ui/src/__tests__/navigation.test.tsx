@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { router } from "../routes";
@@ -7,6 +8,9 @@ import { Topbar } from "../components/layout/Topbar";
 import { ScrollToTopButton } from "../components/layout/ScrollToTopButton";
 import { AppShell } from "../components/layout/AppShell";
 import { BrandStatusProvider } from "../lib/brandStatus";
+import { AiContentUsageProvider } from "../features/ai-content/AiContentUsageContext";
+import type { AiContentGateway } from "../features/ai-content/types";
+import { api, DEMO_BRAND_ID } from "../lib/apiClient";
 import type { BrandUiStatus } from "../types";
 
 const completeStatus: BrandUiStatus = {
@@ -51,11 +55,52 @@ describe("AppShell navigation", () => {
     fireEvent.click(within(mobileMenu).getByRole("button", { name: "피드백" }));
     expect(screen.queryByRole("dialog", { name: "전체 메뉴" })).not.toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "피드백" })).toBeVisible();
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "의견" })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "문의 유형" })).toHaveFocus());
 
     fireEvent.click(screen.getByRole("button", { name: "피드백 닫기" }));
     await waitFor(() => expect(mobileMenuTrigger).toHaveFocus());
     unmount();
+  });
+
+  it("submits shell feedback through the support request API", async () => {
+    const user = userEvent.setup();
+    const createSupportRequest = vi.spyOn(api, "createSupportRequest").mockResolvedValue({
+      id: "request-1",
+      brandId: DEMO_BRAND_ID,
+      workspaceId: "workspace-1",
+      category: "feature",
+      title: "기능 요청",
+      message: "브랜드센터에서 문의 내역을 보고 싶어요.",
+      contactPhone: null,
+      contactEmail: null,
+      status: "new",
+      responseMessage: null,
+      respondedAt: null,
+      createdAt: "2026-07-30T00:00:00.000Z",
+      updatedAt: "2026-07-30T00:00:00.000Z",
+    });
+
+    render(
+      <MemoryRouter>
+        <AppShell><div>페이지 내용</div></AppShell>
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "피드백" }));
+    await user.selectOptions(screen.getByLabelText("문의 유형"), "feature");
+    await user.type(
+      screen.getByRole("textbox", { name: "내용" }),
+      "브랜드센터에서 문의 내역을 보고 싶어요.",
+    );
+    await user.click(screen.getByRole("button", { name: "보내기" }));
+
+    await waitFor(() => expect(createSupportRequest).toHaveBeenCalledWith(
+      DEMO_BRAND_ID,
+      {
+        category: "feature",
+        message: "브랜드센터에서 문의 내역을 보고 싶어요.",
+      },
+    ));
   });
 
   it("opens mobile navigation as a full-screen menu and closes it with Escape", async () => {
@@ -96,23 +141,69 @@ describe("AppShell navigation", () => {
     expect(openButton).toHaveFocus();
   });
 
-  it("shows the current page and keeps the account menu keyboard accessible", () => {
+  it("closes the account menu before the mobile drawer and preserves both focus targets", async () => {
+    const user = userEvent.setup();
     render(
-      <MemoryRouter initialEntries={["/ai-content"]}>
+      <MemoryRouter>
         <AppShell><div>페이지 내용</div></AppShell>
       </MemoryRouter>
     );
 
-    expect(within(screen.getByRole("banner")).getByText("콘텐츠 생성")).toHaveClass("topbar-page-title");
-    const accountTrigger = screen.getByRole("button", { name: "모종 계정 메뉴 열기" });
-    fireEvent.click(accountTrigger);
-    expect(accountTrigger).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("menu")).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "로그아웃" })).toBeInTheDocument();
+    const openButton = screen.getByRole("button", { name: "전체 메뉴 열기" });
+    await user.click(openButton);
+    const mobileMenu = screen.getByRole("dialog", { name: "전체 메뉴" });
+    const accountTrigger = within(mobileMenu).getByRole("button", { name: "모종 계정 메뉴 열기" });
+    await user.click(accountTrigger);
 
-    fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(within(mobileMenu).queryByRole("menu", { name: "계정 메뉴" })).not.toBeInTheDocument();
     expect(accountTrigger).toHaveFocus();
+    expect(mobileMenu).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "전체 메뉴" })).not.toBeInTheDocument();
+    expect(openButton).toHaveFocus();
+  });
+
+  it("keeps only the mobile menu entry in the global bar", () => {
+    render(
+      <MemoryRouter initialEntries={["/ai-content"]}>
+        <Topbar mobileMenuOpen={false} onOpenMobileMenu={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    const bar = screen.getByRole("banner");
+    expect(within(bar).getByRole("button", { name: "전체 메뉴 열기" })).toBeInTheDocument();
+    expect(within(bar).queryByText("콘텐츠 생성")).not.toBeInTheDocument();
+    expect(within(bar).queryByText("준비 완료")).not.toBeInTheDocument();
+    expect(within(bar).queryByRole("button", { name: /계정 메뉴 열기/ })).not.toBeInTheDocument();
+  });
+
+  it("shows existing AI usage inside the scrollable sidebar navigation", async () => {
+    const gateway = {
+      getUsage: vi.fn(async () => ({
+        generationUsed: 1,
+        generationLimit: 10,
+        newDownloadUsed: 2,
+        newDownloadLimit: 20,
+        resetsAt: "2026-07-31T00:00:00+09:00"
+      }))
+    } as unknown as AiContentGateway;
+
+    render(
+      <MemoryRouter>
+        <BrandStatusProvider initialStatus={completeStatus}>
+          <AiContentUsageProvider gateway={gateway}>
+            <Sidebar />
+          </AiContentUsageProvider>
+        </BrandStatusProvider>
+      </MemoryRouter>
+    );
+
+    const navigation = screen.getByRole("navigation", { name: "고객 메뉴" });
+    const usage = await within(navigation).findByLabelText("오늘 AI 콘텐츠 잔여 사용량");
+    expect(usage).toHaveTextContent("생성 9회 남음");
+    expect(usage).toHaveTextContent("다운로드 18회 남음");
   });
 
   it("shows a global scroll-to-top button after scrolling and returns smoothly to the top", () => {
@@ -156,9 +247,9 @@ describe("AppShell navigation", () => {
       "href",
       "/billing"
     );
-    expect(screen.getByRole("link", { name: /고객센터/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /고객센터/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /관리자 채널/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "API 브랜드 브랜드 센터 열기" })).toHaveAttribute("href", "/brand-center");
+    expect(screen.getByRole("button", { name: "API 브랜드 계정 메뉴 열기" })).toBeInTheDocument();
 
     const overview = screen.getByRole("region", { name: "개요" });
     const brand = screen.getByRole("region", { name: "브랜드" });
@@ -174,7 +265,7 @@ describe("AppShell navigation", () => {
     ]);
     expect(within(channelCustomers).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual(["채널", "Instagram 고객응대"]);
     expect(within(settingsSupport).getAllByRole("link").map((link) => link.textContent?.trim())).toEqual([
-      "결제 및 구독", "고객센터"
+      "결제 및 구독"
     ]);
 
     const nav = screen.getByRole("navigation", { name: "고객 메뉴" });
@@ -241,6 +332,7 @@ describe("AppShell navigation", () => {
     expect(appRoute?.children?.find((route) => route.path === "ai-content/:generationId")).toBeTruthy();
     expect(appRoute?.children?.find((route) => route.path === "references")).toBeTruthy();
     expect(appRoute?.children?.find((route) => route.path === "archive")).toBeTruthy();
+    expect(appRoute?.children?.find((route) => route.path === "support")).toBeTruthy();
     expect(appRoute?.children?.find((route) => route.path === "admin/channels")).toBeFalsy();
   });
 
@@ -274,16 +366,16 @@ describe("AppShell navigation", () => {
           }
         }}>
           <Sidebar />
-          <Topbar />
         </BrandStatusProvider>
       </MemoryRouter>
     );
 
-    expect(screen.getAllByText("API 브랜드")).toHaveLength(3);
-    expect(screen.getByText("2개 항목 필요")).toBeInTheDocument();
+    expect(screen.getAllByText("API 브랜드")).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "API 브랜드 계정 메뉴 열기" }));
-    expect(screen.getByRole("menuitem", { name: "로그아웃" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "로그아웃" })).toBeVisible();
     expect(screen.getByRole("link", { name: /브랜드 분석\s*2/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /브랜드 분석\s*2/ }))
+      .toHaveAttribute("href", "/onboarding/brand-intelligence");
     expect(screen.getByRole("region", { name: "시작 준비" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /콘텐츠 검토/ })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /게시 관리\s*1/ })).toBeInTheDocument();

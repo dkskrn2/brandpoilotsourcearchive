@@ -142,6 +142,51 @@ const approvedProduct = {
   draft: null,
 };
 
+const intelligenceResult = {
+  contractVersion: "brand-intelligence-result.v1" as const,
+  companyOverview: "승인된 기업 개요",
+  businessDescription: "승인된 사업 소개",
+  primaryCategory: { code: "service", name: "서비스" },
+  subcategories: [],
+  primaryTarget: "브랜드 담당자",
+  differentiators: "승인 기반 운영",
+  coreAppeal: "일관된 콘텐츠",
+  competitors: [],
+  evidence: [],
+  sourceGaps: [],
+};
+
+const confirmedAnalysis = {
+  id: "11111111-1111-4111-8111-111111111111",
+  brandId: "brand-1",
+  status: "confirmed" as const,
+  input: { ownedUrl: "https://brand.example", uploadIds: [] },
+  result: intelligenceResult,
+  editedResult: null,
+  effectiveResult: intelligenceResult,
+  errorCode: null,
+  errorMessage: null,
+  createdAt: "2026-07-29T00:00:00.000Z",
+  updatedAt: "2026-07-29T00:01:00.000Z",
+  confirmedAt: "2026-07-29T00:01:00.000Z",
+};
+
+const queuedWorkflow = {
+  ...confirmedAnalysis,
+  id: "22222222-2222-4222-8222-222222222222",
+  status: "queued" as const,
+  result: null,
+  effectiveResult: null,
+  confirmedAt: null,
+};
+
+const reviewReadyWorkflow = {
+  ...confirmedAnalysis,
+  id: "33333333-3333-4333-8333-333333333333",
+  status: "review_ready" as const,
+  confirmedAt: null,
+};
+
 afterEach(() => {
   cleanup();
   vi.resetModules();
@@ -157,6 +202,7 @@ async function renderPage(
   path = "/brand-center?tab=understanding&section=core",
   gatewayOverrides: Record<string, unknown> = {},
   libraryOverrides: Record<string, unknown> = {},
+  intelligenceOverrides: Record<string, unknown> = {},
 ) {
   const gateway = {
     getSummary: vi.fn(async () => ({
@@ -185,10 +231,22 @@ async function renderPage(
   vi.doMock("../features/brand-center/brandCenterGateway", () => ({
     brandCenterGateway: gateway,
   }));
+  const supportApi = {
+    listSources: vi.fn(async () => []),
+    listSupportRequests: vi.fn(async () => []),
+  };
   vi.doMock("../lib/apiClient", async (importOriginal) => ({
     ...await importOriginal<typeof import("../lib/apiClient")>(),
     DEMO_BRAND_ID: "brand-1",
-    api: { listSources: vi.fn(async () => []) },
+    api: supportApi,
+  }));
+  const intelligenceGateway = {
+    getCurrent: vi.fn(async () => confirmedAnalysis),
+    getWorkflow: vi.fn(async () => null),
+    ...intelligenceOverrides,
+  };
+  vi.doMock("../features/brand-intelligence/brandIntelligenceGateway", () => ({
+    brandIntelligenceGateway: intelligenceGateway,
   }));
   const libraryApi = {
     listProductServices: vi.fn(async () => []),
@@ -257,7 +315,7 @@ async function renderPage(
       <LocationProbe />
     </MemoryRouter>,
   );
-  return { gateway, libraryApi, ...view };
+  return { gateway, intelligenceGateway, libraryApi, supportApi, ...view };
 }
 
 function dispatchBeforeUnload() {
@@ -266,7 +324,169 @@ function dispatchBeforeUnload() {
   return event;
 }
 
+function emptyBrandCenterOverrides() {
+  return {
+    getSummary: vi.fn(async () => ({
+      source: { state: "empty" },
+      analysis: { state: "empty" },
+      brandCore: { state: "empty" },
+      rules: { state: "empty" },
+      products: { state: "unavailable" },
+      wiki: { state: "unavailable" },
+      avatars: { state: "unavailable" },
+    })),
+    getCore: vi.fn(async () => ({ active: null, draft: null, versions: [] })),
+  };
+}
+
 describe("BrandCenterPage", () => {
+  it("hides the tabs and starts onboarding when no confirmed analysis or workflow exists", async () => {
+    await renderPage(
+      "/brand-center?tab=core",
+      emptyBrandCenterOverrides(),
+      {},
+      {
+        getCurrent: vi.fn(async () => null),
+        getWorkflow: vi.fn(async () => null),
+      },
+    );
+
+    expect(await screen.findByRole("link", { name: "온보딩 하기" }))
+      .toHaveAttribute("href", "/onboarding/brand-intelligence");
+    expect(screen.queryByRole("tablist", { name: "브랜드 센터 영역" }))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "문의 내역" })).not.toBeInTheDocument();
+  });
+
+  it("hides the tabs while the initial analysis is pending", async () => {
+    await renderPage(
+      "/brand-center?tab=core",
+      emptyBrandCenterOverrides(),
+      {},
+      {
+        getCurrent: vi.fn(async () => null),
+        getWorkflow: vi.fn(async () => queuedWorkflow),
+      },
+    );
+
+    expect(await screen.findByText("분석중입니다")).toBeVisible();
+    expect(screen.queryByRole("tablist", { name: "브랜드 센터 영역" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("hides the tabs and links to the initial analysis review", async () => {
+    await renderPage(
+      "/brand-center?tab=core",
+      emptyBrandCenterOverrides(),
+      {},
+      {
+        getCurrent: vi.fn(async () => null),
+        getWorkflow: vi.fn(async () => reviewReadyWorkflow),
+      },
+    );
+
+    expect(await screen.findByText("분석이 완료되었습니다.")).toBeVisible();
+    expect(screen.getByRole("link", { name: "분석확인하기" })).toHaveAttribute(
+      "href",
+      `/onboarding/brand-intelligence?analysisId=${reviewReadyWorkflow.id}`,
+    );
+    expect(screen.queryByRole("tablist", { name: "브랜드 센터 영역" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("keeps legacy approved brand content visible without an intelligence run", async () => {
+    const { supportApi } = await renderPage(
+      "/brand-center?tab=core",
+      {},
+      {},
+      {
+        getCurrent: vi.fn(async () => null),
+        getWorkflow: vi.fn(async () => null),
+      },
+    );
+
+    expect(await screen.findByRole("tablist", { name: "브랜드 센터 영역" })).toBeVisible();
+    expect(screen.getByDisplayValue("브랜드 운영을 단순하게")).toBeDisabled();
+    expect(screen.getByRole("region", { name: "문의 내역" })).toBeVisible();
+    expect(supportApi.listSupportRequests).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats an open workflow as reanalysis for a legacy approved brand", async () => {
+    await renderPage(
+      "/brand-center?tab=core",
+      {},
+      {},
+      {
+        getCurrent: vi.fn(async () => null),
+        getWorkflow: vi.fn(async () => queuedWorkflow),
+      },
+    );
+
+    expect(await screen.findByText("재분석 중입니다")).toBeVisible();
+    expect(screen.queryByText("분석중입니다")).not.toBeInTheDocument();
+    expect(screen.getByRole("tablist", { name: "브랜드 센터 영역" })).toBeVisible();
+  });
+
+  it("treats a ready workflow as reanalysis review for a legacy approved brand", async () => {
+    await renderPage(
+      "/brand-center?tab=core",
+      {},
+      {},
+      {
+        getCurrent: vi.fn(async () => null),
+        getWorkflow: vi.fn(async () => reviewReadyWorkflow),
+      },
+    );
+
+    expect(await screen.findByText("재분석 결과를 확인하세요")).toBeVisible();
+    expect(screen.queryByText("분석이 완료되었습니다.")).not.toBeInTheDocument();
+    expect(screen.getByRole("tablist", { name: "브랜드 센터 영역" })).toBeVisible();
+  });
+
+  it("keeps confirmed tabs visible while reanalysis is pending", async () => {
+    await renderPage(
+      "/brand-center?tab=core",
+      {},
+      {},
+      {
+        getCurrent: vi.fn(async () => confirmedAnalysis),
+        getWorkflow: vi.fn(async () => queuedWorkflow),
+      },
+    );
+
+    expect(await screen.findByText("재분석 중입니다")).toBeVisible();
+    expect(screen.getByRole("tablist", { name: "브랜드 센터 영역" })).toBeVisible();
+  });
+
+  it("keeps confirmed tabs visible and links to a ready reanalysis", async () => {
+    await renderPage(
+      "/brand-center?tab=core",
+      {},
+      {},
+      {
+        getCurrent: vi.fn(async () => confirmedAnalysis),
+        getWorkflow: vi.fn(async () => reviewReadyWorkflow),
+      },
+    );
+
+    expect(await screen.findByText("재분석 결과를 확인하세요")).toBeVisible();
+    expect(screen.getByRole("link", { name: "분석확인하기" })).toHaveAttribute(
+      "href",
+      `/onboarding/brand-intelligence?analysisId=${reviewReadyWorkflow.id}`,
+    );
+    expect(screen.getByRole("tablist", { name: "브랜드 센터 영역" })).toBeVisible();
+  });
+
+  it("mounts one shared support history below every confirmed tab panel", async () => {
+    const { supportApi } = await renderPage("/brand-center?tab=core");
+
+    expect(await screen.findByRole("region", { name: "문의 내역" })).toBeVisible();
+    expect(screen.getAllByRole("region", { name: "문의 내역" })).toHaveLength(1);
+    await userEvent.click(screen.getByRole("tab", { name: "스타일" }));
+    expect(screen.getAllByRole("region", { name: "문의 내역" })).toHaveLength(1);
+    expect(supportApi.listSupportRequests).toHaveBeenCalledTimes(1);
+  });
+
   it("shows the approved core with the final customer-facing tab order", async () => {
     await renderPage();
     expect(await screen.findByRole("heading", { name: "브랜드 센터" })).toBeInTheDocument();

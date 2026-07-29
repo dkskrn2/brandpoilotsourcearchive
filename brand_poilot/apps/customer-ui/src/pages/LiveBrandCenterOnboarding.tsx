@@ -181,30 +181,78 @@ export function LiveBrandCenterOnboarding({
     workspaceId: session.workspace.id,
     userId: session.user.id,
   } : null);
+  const stateOwnerKey = scope
+    ? `${scope.workspaceId}:${scope.userId}:${brandId}`
+    : `anonymous:${brandId}`;
+
+  return (
+    <LiveBrandCenterOnboardingState
+      key={stateOwnerKey}
+      gateway={gateway}
+      brandId={brandId}
+      storageScope={scope}
+    />
+  );
+}
+
+function LiveBrandCenterOnboardingState({
+  gateway,
+  brandId,
+  storageScope: scope,
+}: {
+  gateway: BrandIntelligenceGateway;
+  brandId: string;
+  storageScope: BrandIntelligenceStorageScope | null;
+}) {
   const persistenceKey = useMemo(
     () => scope ? storageKey(scope, brandId) : null,
     [brandId, scope?.userId, scope?.workspaceId],
   );
   const [searchParams, setSearchParams] = useSearchParams();
   const queryAnalysisId = searchParams.get("analysisId");
-  const restoredAnalysisId = persistenceKey
-    ? window.localStorage.getItem(persistenceKey)
-    : null;
-  const [analysisId, setAnalysisId] = useState(queryAnalysisId ?? restoredAnalysisId);
-  const [currentStep, setCurrentStep] = useState<PreviewStep>(
-    analysisId ? "analysis" : "sources",
-  );
+  const queryAnalysisIdRef = useRef(queryAnalysisId);
+  const serverWorkflowRef = useRef<BrandAnalysis | null>(null);
+  const [analysisId, setAnalysisId] = useState<string | null>(null);
+  const [currentStep, setCurrentStep] = useState<PreviewStep>("analysis");
   const [sourceUrl, setSourceUrl] = useState("");
   const [files, setFiles] = useState<PreviewFile[]>([]);
   const [sourceError, setSourceError] = useState<string | null>(null);
-  const [analysisState, setAnalysisState] = useState<PreviewAsyncState>(
-    analysisId ? "loading" : "idle",
-  );
+  const [analysisState, setAnalysisState] = useState<PreviewAsyncState>("loading");
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [draft, setDraft] = useState<BrandIntelligenceResult | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [bootstrapComplete, setBootstrapComplete] = useState(false);
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
+  const [pollingRequired, setPollingRequired] = useState(false);
   const requestRef = useRef(0);
+
+  const resumeWorkflow = useCallback((workflow: BrandAnalysis) => {
+    setAnalysisId(workflow.id);
+    setCurrentStep("analysis");
+    setSourceUrl(workflow.input.ownedUrl ?? "");
+    setDraft(null);
+    setConfirmed(false);
+    setAnalysisError(null);
+    if (workflow.status === "review_ready" && workflow.effectiveResult) {
+      setDraft(structuredClone(workflow.effectiveResult));
+      setAnalysisState("succeeded");
+      setPollingRequired(false);
+      return;
+    }
+    setAnalysisState("loading");
+    setPollingRequired(true);
+  }, []);
+
+  const recoverFromTerminalAnalysis = useCallback((staleAnalysisId: string) => {
+    if (queryAnalysisIdRef.current === staleAnalysisId) {
+      queryAnalysisIdRef.current = null;
+    }
+    const workflow = serverWorkflowRef.current;
+    if (!workflow || workflow.id === staleAnalysisId) return false;
+    resumeWorkflow(workflow);
+    return true;
+  }, [resumeWorkflow]);
 
   const clearResumePointer = useCallback(() => {
     if (persistenceKey) window.localStorage.removeItem(persistenceKey);
@@ -215,6 +263,52 @@ export function LiveBrandCenterOnboarding({
       return next;
     }, { replace: true });
   }, [persistenceKey, setSearchParams]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const restorePointer = () => (
+      persistenceKey ? window.localStorage.getItem(persistenceKey) : null
+    );
+    const resumeById = (nextAnalysisId: string | null) => {
+      setAnalysisError(null);
+      if (!nextAnalysisId) {
+        setAnalysisId(null);
+        setCurrentStep("sources");
+        setAnalysisState("idle");
+        setPollingRequired(false);
+        return;
+      }
+      setAnalysisId(nextAnalysisId);
+      setCurrentStep("analysis");
+      setAnalysisState("loading");
+      setPollingRequired(true);
+    };
+
+    void gateway.getWorkflow(brandId).then((workflow) => {
+      if (cancelled) return;
+      serverWorkflowRef.current = workflow;
+      if (queryAnalysisIdRef.current) {
+        resumeById(queryAnalysisIdRef.current);
+      } else if (workflow) {
+        resumeWorkflow(workflow);
+      } else {
+        resumeById(restorePointer());
+      }
+      setBootstrapComplete(true);
+    }).catch(() => {
+      if (cancelled) return;
+      setAnalysisId(null);
+      setCurrentStep("analysis");
+      setAnalysisState("failed");
+      setAnalysisError("진행 중인 분석 상태를 확인하지 못했습니다. 다시 시도해 주세요.");
+      setPollingRequired(false);
+      setBootstrapComplete(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [bootstrapAttempt, brandId, gateway, persistenceKey, resumeWorkflow]);
 
   useEffect(() => {
     if (analysisId && persistenceKey) {
@@ -230,7 +324,7 @@ export function LiveBrandCenterOnboarding({
   }, [analysisId, queryAnalysisId, searchParams, setSearchParams]);
 
   useEffect(() => {
-    if (!analysisId) return;
+    if (!bootstrapComplete || !pollingRequired || !analysisId) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let activeController: AbortController | null = null;
@@ -321,6 +415,7 @@ export function LiveBrandCenterOnboarding({
           scheduleNext();
         } else {
           pollingFinished = true;
+          if (recoverFromTerminalAnalysis(analysisId)) return;
           setAnalysisState("failed");
           setAnalysisError(errorMessage(failure));
           clearResumePointer();
@@ -337,6 +432,7 @@ export function LiveBrandCenterOnboarding({
       }
       if (next.status === "review_ready" && next.effectiveResult) {
         pollingFinished = true;
+        setPollingRequired(false);
         setDraft(structuredClone(next.effectiveResult));
         setAnalysisState("succeeded");
         setCurrentStep("analysis");
@@ -345,12 +441,16 @@ export function LiveBrandCenterOnboarding({
       }
       if (next.status === "confirmed") {
         pollingFinished = true;
+        if (recoverFromTerminalAnalysis(analysisId)) return;
+        setPollingRequired(false);
         setConfirmed(true);
         setCurrentStep("generation");
         clearResumePointer();
         return;
       }
       pollingFinished = true;
+      if (recoverFromTerminalAnalysis(analysisId)) return;
+      setPollingRequired(false);
       setAnalysisState("failed");
       setAnalysisError(next.errorMessage ?? "분석을 완료하지 못했습니다.");
       clearResumePointer();
@@ -383,7 +483,15 @@ export function LiveBrandCenterOnboarding({
       if (timer !== undefined) clearTimeout(timer);
       activeController?.abort();
     };
-  }, [analysisId, brandId, clearResumePointer, gateway]);
+  }, [
+    analysisId,
+    bootstrapComplete,
+    brandId,
+    clearResumePointer,
+    gateway,
+    pollingRequired,
+    recoverFromTerminalAnalysis,
+  ]);
 
   function validateSources() {
     const normalized = sourceUrl.trim();
@@ -422,6 +530,7 @@ export function LiveBrandCenterOnboarding({
       });
       if (requestRef.current !== request) return;
       setAnalysisId(created.id);
+      setPollingRequired(true);
       if (persistenceKey) window.localStorage.setItem(persistenceKey, created.id);
     } catch (error) {
       if (requestRef.current !== request) return;
@@ -449,7 +558,9 @@ export function LiveBrandCenterOnboarding({
 
   const fallbackCore = draft ? previewCore(draft) : createPreviewState().brandCore;
   const canEnter = (step: PreviewStep) => {
-    if (step === "sources") return true;
+    if (step === "sources") {
+      return bootstrapComplete && !analysisId && analysisState !== "loading";
+    }
     if (step === "analysis") return Boolean(analysisId || sourceUrl.trim() || files.length);
     return step === "generation" && confirmed;
   };
@@ -491,6 +602,12 @@ export function LiveBrandCenterOnboarding({
           onBrandCoreChange={() => undefined}
           onKnowledgeChange={() => undefined}
           onRetry={() => {
+            if (!bootstrapComplete) {
+              setAnalysisState("loading");
+              setAnalysisError(null);
+              setBootstrapAttempt((attempt) => attempt + 1);
+              return;
+            }
             clearResumePointer();
             setCurrentStep("sources");
             setAnalysisState("idle");

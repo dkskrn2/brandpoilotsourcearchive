@@ -148,7 +148,7 @@ describe("legacy data compatibility", () => {
     });
   });
 
-  it("reads legacy feature support rows but rejects feature for new requests", async () => {
+  it("reads legacy feature support rows and accepts feature for new requests", async () => {
     const query = vi.fn(async () => ({
       rowCount: 1,
       rows: [{
@@ -172,7 +172,7 @@ describe("legacy data compatibility", () => {
     await expect(repository.listSupportRequests("brand-1")).resolves.toEqual([
       expect.objectContaining({ id: "support-feature", category: "feature" }),
     ]);
-    expect(asCreatableSupportRequestCategory("feature")).toBeNull();
+    expect(asCreatableSupportRequestCategory("feature")).toBe("feature");
     expect(asCreatableSupportRequestCategory("bug")).toBe("bug");
   });
 

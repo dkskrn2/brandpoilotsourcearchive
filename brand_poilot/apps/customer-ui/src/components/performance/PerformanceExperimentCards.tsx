@@ -13,7 +13,13 @@ export function PerformanceExperimentCards({
 }) {
   return (
     <section className="performance-experiments" aria-labelledby="performance-experiment-title">
-      <h2 id="performance-experiment-title">다음 실험</h2>
+      <header className="performance-section-heading">
+        <div>
+          <p className="performance-eyebrow">NEXT ACTION</p>
+          <h2 id="performance-experiment-title">다음 실험</h2>
+        </div>
+        <p>성과 근거를 다음 콘텐츠 구성안으로 연결합니다.</p>
+      </header>
       {experiments.length ? (
         <div className="performance-experiment-grid">
           {experiments.map((experiment) => (

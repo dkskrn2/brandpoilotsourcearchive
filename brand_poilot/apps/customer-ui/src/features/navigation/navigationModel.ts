@@ -1,6 +1,5 @@
 import {
   CreditCard,
-  Headphones,
   LayoutDashboard,
   ChartNoAxesCombined,
   MessageCircleReply,
@@ -71,14 +70,13 @@ export const customerNavigation: CustomerNavigationGroup[] = [
         path: "/billing",
         icon: CreditCard,
       },
-      { label: "고객센터", path: "/support", icon: Headphones },
     ],
   },
 ];
 
 export const onboardingNavigationItem: CustomerNavigationItem = {
   label: "브랜드 분석",
-  path: "/brand-center?tab=understanding&section=sources",
+  path: "/onboarding/brand-intelligence",
   icon: ScanSearch,
 };
 

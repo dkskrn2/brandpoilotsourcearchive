@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -36,15 +36,65 @@ describe("BrandLogo", () => {
 });
 
 describe("SidebarBrandProfile", () => {
-  it("links the compact profile directly to the brand center", () => {
+  it("opens an account menu with the brand center and logout actions", async () => {
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
     render(
       <MemoryRouter>
-        <SidebarBrandProfile brandName="그로스라인" logoUrl="https://cdn.example.com/logo.png" />
+        <SidebarBrandProfile
+          brandName="그로스라인"
+          logoUrl="https://cdn.example.com/logo.png"
+          onNavigate={onNavigate}
+        />
       </MemoryRouter>
     );
-    const link = screen.getByRole("link", { name: "그로스라인 브랜드 센터 열기" });
-    expect(link).toHaveAttribute("href", "/brand-center");
-    expect(screen.getByText("브랜드 센터")).toBeVisible();
+
+    const trigger = screen.getByRole("button", { name: "그로스라인 계정 메뉴 열기" });
+    await user.click(trigger);
+
+    const menu = screen.getByRole("menu", { name: "계정 메뉴" });
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items).toHaveLength(2);
+    expect(within(menu).getByRole("menuitem", { name: "브랜드센터" }))
+      .toHaveAttribute("href", "/brand-center");
+    expect(within(menu).getByRole("menuitem", { name: "로그아웃" })).toBeEnabled();
+
+    await user.click(within(menu).getByRole("menuitem", { name: "브랜드센터" }));
+    expect(onNavigate).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu", { name: "계정 메뉴" })).not.toBeInTheDocument();
+  });
+
+  it("closes on Escape and restores focus to the account trigger", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <SidebarBrandProfile brandName="그로스라인" logoUrl={null} />
+      </MemoryRouter>
+    );
+
+    const trigger = screen.getByRole("button", { name: "그로스라인 계정 메뉴 열기" });
+    await user.click(trigger);
+    fireEvent.keyDown(screen.getByRole("menu", { name: "계정 메뉴" }), { key: "Escape" });
+
+    expect(screen.queryByRole("menu", { name: "계정 메뉴" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("closes on an outside pointer interaction", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <div>
+          <SidebarBrandProfile brandName="그로스라인" logoUrl={null} />
+          <button type="button">외부 작업</button>
+        </div>
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getByRole("button", { name: "그로스라인 계정 메뉴 열기" }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: "외부 작업" }));
+
+    expect(screen.queryByRole("menu", { name: "계정 메뉴" })).not.toBeInTheDocument();
   });
 });
 

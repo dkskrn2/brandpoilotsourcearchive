@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "../components/layout/PageHeader";
 import { PageSkeleton } from "../components/ui/LoadingState";
 import { PerformanceSummary } from "../components/performance/PerformanceSummary";
 import { PerformanceObservationList } from "../components/performance/PerformanceObservationList";
 import { PerformanceExperimentCards } from "../components/performance/PerformanceExperimentCards";
+import { PerformanceContentList } from "../components/performance/PerformanceContentList";
 import { PerformanceContentDialog } from "../components/performance/PerformanceContentDialog";
 import { createPerformanceViewModel } from "../features/performance/performanceViewModel";
 import { performanceGateway } from "../features/performance/performanceGateway";
@@ -16,6 +17,7 @@ export function PerformanceInsightsPage() {
   const [selected, setSelected] = useState<PerformanceInsights["topContents"][number] | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [batchId, setBatchId] = useState<string | null>(null);
+  const detailTriggerRef = useRef<HTMLButtonElement | null>(null);
   const loadArtifact = useCallback((queueId: string) => performanceGateway.getArtifact(queueId), []);
 
   useEffect(() => {
@@ -38,6 +40,19 @@ export function PerformanceInsightsPage() {
     }
   }
 
+  function openContent(
+    content: PerformanceInsights["topContents"][number],
+    trigger: HTMLButtonElement,
+  ) {
+    detailTriggerRef.current = trigger;
+    setSelected(content);
+  }
+
+  function closeContent() {
+    setSelected(null);
+    detailTriggerRef.current?.focus();
+  }
+
   if (error) return <section className="content performance-page"><p className="performance-state" role="alert">성과 데이터를 불러오지 못했습니다.</p></section>;
   if (!insights || !viewModel) return <section className="content performance-page"><PageSkeleton label="성과·개선을 불러오는 중입니다." /></section>;
 
@@ -47,15 +62,13 @@ export function PerformanceInsightsPage() {
       <PerformanceSummary insights={insights} />
       {insights.summary.dataStatus === "insufficient" ? <p className="performance-data-warning">데이터 부족 · 개선 결론을 제시하지 않습니다.</p> : null}
       <PerformanceObservationList observations={viewModel.observations} />
+      <PerformanceContentList contents={insights.topContents} onOpen={openContent} />
       <section className="performance-windows" aria-label="측정 구간">
-        {insights.windows.map((window) => <div key={window.window}><strong>{window.window}</strong><span>표본 {window.sampleSize}건</span><span>{window.averageExposure === null ? "미수집" : `평균 ${window.averageExposure.toLocaleString("ko-KR")}회`}</span></div>)}
-      </section>
-      <section className="performance-top" aria-labelledby="performance-top-title">
-        <h2 id="performance-top-title">성과 콘텐츠</h2>
-        {insights.topContents.length ? <ul>{insights.topContents.map((content) => <li key={content.publishQueueId}><button type="button" onClick={() => setSelected(content)} aria-label={`${content.title} 상세 보기`}><span>{content.title}</span><strong>{content.exposureCount?.toLocaleString("ko-KR") ?? "미수집"}회</strong></button></li>)}</ul> : <p className="performance-state">성과가 수집된 콘텐츠가 없습니다.</p>}
+        <span className="performance-windows-label">측정 구간</span>
+        {insights.windows.map((window) => <div key={window.window}><strong>{window.window === "24h" ? "24시간" : window.window === "72h" ? "72시간" : "7일"}</strong><span>표본 {window.sampleSize}건</span><span>{window.averageExposure === null ? "미수집" : `평균 ${window.averageExposure.toLocaleString("ko-KR")}회`}</span></div>)}
       </section>
       <PerformanceExperimentCards experiments={viewModel.experiments} busyId={busyId} batchId={batchId} onCreate={createProposal} />
-      {selected ? <PerformanceContentDialog content={selected} loadArtifact={loadArtifact} onClose={() => setSelected(null)} /> : null}
+      {selected ? <PerformanceContentDialog content={selected} loadArtifact={loadArtifact} onClose={closeContent} /> : null}
     </section>
   );
 }

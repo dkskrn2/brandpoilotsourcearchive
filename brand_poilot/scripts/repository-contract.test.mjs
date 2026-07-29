@@ -57,6 +57,27 @@ test("AI 콘텐츠 저장소 계약은 중앙 ApiRepository에 모두 노출된�
   }
 });
 
+test("브랜드 분석 저장소는 open workflow 조회와 보존형 중복 정리를 계약으로 고정한다", async () => {
+  const [repository, migration] = await Promise.all([
+    readFile("apps/api/src/brandIntelligenceRepository.ts", "utf8"),
+    readFile("db/migrations/069_brand_analysis_one_open_workflow.sql", "utf8"),
+  ]);
+
+  assert.match(repository, /getOpenBrandAnalysis\(input:\s*BrandAnalysisScope\)/);
+  assert.match(
+    migration,
+    /begin;\s*lock table brand_analysis_runs in share row exclusive mode;\s*with ranked as/i,
+  );
+  assert.match(migration, /row_number\(\)\s+over/i);
+  assert.match(migration, /status\s*=\s*'failed'/i);
+  assert.match(migration, /error_code\s*=\s*'brand_analysis_superseded'/i);
+  assert.match(
+    migration,
+    /create unique index brand_analysis_runs_one_open_per_brand_uq[\s\S]*where status in \('queued', 'extracting', 'analyzing', 'review_ready'\)/i,
+  );
+  assert.doesNotMatch(migration, /delete\s+from\s+brand_analysis_runs/i);
+});
+
 test("AI 콘텐츠 생성 쓰기 계약은 인증 actor를 필수로 요구한다", async () => {
   const repository = await readFile("apps/api/src/aiContentRepository.ts", "utf8");
   const types = await readFile("apps/api/src/types.ts", "utf8");
@@ -273,7 +294,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션 registry는 Brand Center integration 068까지 포함한다", async () => {
+test("데이터베이스 마이그레이션 registry는 onboarding workflow lock 069까지 포함한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -348,6 +369,7 @@ test("데이터베이스 마이그레이션 registry는 Brand Center integration
     "066_ai_content_analyzed_subject_orchestration.sql",
     "067_wiki_refresh_outbox.sql",
     "068_brand_core_one_draft.sql",
+    "069_brand_analysis_one_open_workflow.sql",
   ]);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("059_")).length <= 1);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("060_")).length <= 1);

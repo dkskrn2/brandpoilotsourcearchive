@@ -54,6 +54,7 @@ import type {
 
 export let DEMO_BRAND_ID = "00000000-0000-4000-8000-000000000100";
 export const BRAND_STATUS_CHANGED_EVENT = "brand-pilot:status-changed";
+export const SUPPORT_REQUESTS_CHANGED_EVENT = "brand-pilot:support-requests-changed";
 
 export function setActiveBrandId(brandId: string) {
   DEMO_BRAND_ID = brandId;
@@ -522,15 +523,20 @@ export function apiClient(options: ApiClientOptions = {}) {
       brandId: string,
       payload: {
         category: SupportRequestCategory;
-        title: string;
+        title?: string;
         message: string;
-        contactPhone: string;
+        contactPhone?: string | null;
         contactEmail?: string | null;
       }
     ) {
       return request<SupportRequest>(fetcher, `${baseUrl}/brands/${brandId}/support-requests`, {
         method: "POST",
         body: JSON.stringify(payload)
+      }).then((supportRequest) => {
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new Event(SUPPORT_REQUESTS_CHANGED_EVENT));
+        }
+        return supportRequest;
       });
     },
     updateSupportRequestStatus(requestId: string, status: SupportRequestStatus) {

@@ -1,7 +1,61 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiRequestError, apiClient } from "./apiClient";
+import { ApiRequestError, apiClient, SUPPORT_REQUESTS_CHANGED_EVENT } from "./apiClient";
 
 describe("apiClient", () => {
+  it("dispatches the support history event only after a simplified request succeeds", async () => {
+    const listener = vi.fn();
+    window.addEventListener(SUPPORT_REQUESTS_CHANGED_EVENT, listener);
+    const response = {
+      id: "support-1",
+      brandId: "brand-1",
+      workspaceId: "workspace-1",
+      category: "feature",
+      title: "기능 요청",
+      message: "비교 기준을 추가해 주세요.",
+      contactPhone: null,
+      contactEmail: null,
+      status: "new",
+      responseMessage: null,
+      respondedAt: null,
+      createdAt: "2026-07-30T00:00:00.000Z",
+      updatedAt: "2026-07-30T00:00:00.000Z"
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(response), { status: 201 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await client.createSupportRequest("brand-1", {
+      category: "feature",
+      message: "비교 기준을 추가해 주세요."
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/brands/brand-1/support-requests",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          category: "feature",
+          message: "비교 기준을 추가해 주세요."
+        })
+      })
+    );
+    expect(listener).toHaveBeenCalledOnce();
+
+    const failedClient = apiClient({
+      baseUrl: "http://api.test",
+      fetcher: vi.fn(async () => new Response(
+        JSON.stringify({ error: "support_request_failed" }),
+        { status: 500 }
+      )) as typeof fetch
+    });
+    await expect(failedClient.createSupportRequest("brand-1", {
+      category: "bug",
+      message: "실패한 요청"
+    })).rejects.toBeInstanceOf(ApiRequestError);
+    expect(listener).toHaveBeenCalledOnce();
+
+    window.removeEventListener(SUPPORT_REQUESTS_CHANGED_EVENT, listener);
+  });
+
   it("preserves structured API error details and field paths", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       error: "content_orchestration_invalid",
