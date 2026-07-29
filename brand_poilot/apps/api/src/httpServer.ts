@@ -1456,7 +1456,7 @@ export function createServer(
     const session = await kakaoAuth.createOrLoadUser(profile);
     const sessionToken = await kakaoAuth.createSession(session.userId);
     reply.header("set-cookie", [sessionCookie(sessionToken, 60 * 60 * 24 * 7, httpPolicy.cookieSecure), clearStateCookie]);
-    return reply.redirect(`${frontendUrl}/onboarding`);
+    return reply.redirect(`${frontendUrl}/onboarding/brand-intelligence`);
   });
 
   app.post("/auth/logout", async (request, reply) => {

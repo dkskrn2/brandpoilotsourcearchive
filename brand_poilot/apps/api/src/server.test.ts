@@ -754,6 +754,7 @@ describe("API server", () => {
 
     expect(login.headers["set-cookie"]).toContain("Secure");
     expect(callback.statusCode).toBe(302);
+    expect(callback.headers.location).toBe("http://localhost:5173/onboarding/brand-intelligence");
     expect(sessionCookie).toContain("SameSite=None");
     expect(sessionCookie).toContain("Secure");
     expect(cookies.find((value) => value.startsWith("bp_kakao_state_"))).toContain("Secure");
@@ -808,7 +809,7 @@ describe("API server", () => {
     expect(login.statusCode).toBe(302);
     expect(stateCookie).toMatch(/^bp_kakao_state_[0-9a-f-]+=preview$/i);
     expect(callback.statusCode).toBe(302);
-    expect(callback.headers.location).toBe("https://staging-app.danbammsg.co.kr/onboarding");
+    expect(callback.headers.location).toBe("https://staging-app.danbammsg.co.kr/onboarding/brand-intelligence");
   });
 
   it("rejects an unknown Kakao login destination", async () => {

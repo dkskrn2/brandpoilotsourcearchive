@@ -99,7 +99,7 @@ describe("brand setup gating", () => {
     expect(screen.getByText("고객센터 화면")).toBeInTheDocument();
   });
 
-  it("disables sidebar links except brand analysis and support before analysis is confirmed", () => {
+  it("disables sidebar links except brand analysis before analysis is confirmed", () => {
     render(
       <MemoryRouter>
         <BrandStatusProvider initialStatus={incompleteStatus}>
@@ -110,9 +110,9 @@ describe("brand setup gating", () => {
 
     expect(screen.getByRole("link", { name: /브랜드 분석/ })).toHaveAttribute(
       "href",
-      "/brand-center?tab=understanding&section=sources",
+      "/onboarding/brand-intelligence",
     );
-    expect(screen.getByRole("link", { name: /고객센터/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /고객센터/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "브랜드 설정" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /게시 관리/ })).not.toBeInTheDocument();
     expect(screen.getByText("게시 관리").closest("[aria-disabled='true']")).toBeInTheDocument();
