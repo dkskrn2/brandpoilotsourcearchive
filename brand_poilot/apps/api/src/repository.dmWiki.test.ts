@@ -546,6 +546,24 @@ describe("DM Wiki repository", () => {
     expect(sql).toContain("entry.status = 'legacy_projection'");
   });
 
+  it("idempotently provisions the first Wiki without treating a pending build as active", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ state: "enqueued" }] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ state: "already_pending" }] });
+    const repository = createRepository(fakePool(query) as any);
+
+    await expect(repository.ensureInitialWikiBuild!("brand-1")).resolves.toEqual({ state: "enqueued" });
+    await expect(repository.ensureInitialWikiBuild!("brand-1")).resolves.toEqual({ state: "already_pending" });
+
+    const sql = String(query.mock.calls[0]?.[0]);
+    expect(sql).toContain("wiki_versions");
+    expect(sql).toContain("status = 'active'");
+    expect(sql).toContain("wiki_build_requests");
+    expect(sql).toContain("'already_active'");
+    expect(sql).toContain("'already_pending'");
+    expect(sql).toContain("'enqueued'");
+  });
+
   it("does not activate automatic replies without every repository readiness gate", async () => {
     const query = vi.fn(async (sql: string) => {
       if (sql.includes("select settings.enabled")) {
@@ -569,6 +587,41 @@ describe("DM Wiki repository", () => {
 
     await expect(repository.updateInstagramDmSettings("brand-1", { enabled: true }))
       .rejects.toThrow("dm_activation_blocked");
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("insert into instagram_dm_settings"))).toBe(false);
+  });
+
+  it("blocks the same enable attempt after enqueuing the first Wiki even if readiness races active", async () => {
+    let settingsReads = 0;
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("select settings.enabled")) {
+        settingsReads += 1;
+        return {
+          rowCount: 1,
+          rows: [{
+            enabled: false,
+            fallback_message: "fallback",
+            error_message: "error",
+            brand_core_ready: true,
+            wiki_ready: settingsReads > 1,
+            wiki_status: settingsReads > 1 ? "active" : "empty",
+            message_permission_ready: true,
+            worker_online: true,
+          }],
+        };
+      }
+      if (sql.includes("with brand_scope as")) {
+        return { rowCount: 1, rows: [{ state: "enqueued" }] };
+      }
+      if (sql.includes("select workspace_id from brands")) {
+        return { rowCount: 1, rows: [{ workspace_id: "workspace-1" }] };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+    const repository = createRepository(fakePool(query) as any);
+
+    await expect(repository.updateInstagramDmSettings("brand-1", { enabled: true }))
+      .rejects.toThrow("dm_activation_blocked");
+    expect(settingsReads).toBe(1);
     expect(query.mock.calls.some(([sql]) => String(sql).includes("insert into instagram_dm_settings"))).toBe(false);
   });
 

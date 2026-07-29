@@ -3,6 +3,10 @@ import { useState } from "react";
 import { FileUploadButton } from "../ui/FileUploadButton";
 import type { PreviewFile } from "../../features/brand-center-preview/types";
 
+const MAX_FILES = 5;
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+const ALLOWED_EXTENSIONS = new Set(["txt", "md", "pdf", "csv", "xlsx"]);
+
 interface SourceIntakeStepProps {
   url: string;
   files: PreviewFile[];
@@ -24,13 +28,31 @@ export function SourceIntakeStep({
 }: SourceIntakeStepProps) {
   const hasSource = Boolean(url.trim() || files.length);
   const [dragging, setDragging] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
 
   function addSelectedFiles(selectedFiles: File[]) {
+    if (selectedFiles.some((file) => {
+      const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+      return !ALLOWED_EXTENSIONS.has(extension);
+    })) {
+      setFileError("TXT, MD, PDF, CSV, XLSX 파일만 첨부할 수 있습니다.");
+      return;
+    }
+    if (files.length + selectedFiles.length > MAX_FILES) {
+      setFileError("문서는 최대 5개까지 첨부할 수 있습니다.");
+      return;
+    }
+    if (selectedFiles.some((file) => file.size > MAX_FILE_SIZE_BYTES)) {
+      setFileError("파일 하나의 크기는 10MB 이하여야 합니다.");
+      return;
+    }
+    setFileError(null);
     onFilesAdded(selectedFiles.map((file, index) => ({
       id: `${Date.now()}-${index}-${file.name}`,
       name: file.name,
       size: file.size,
       status: "selected",
+      file,
     })));
   }
 
@@ -81,28 +103,32 @@ export function SourceIntakeStep({
           }}
         >
           <strong>파일을 끌어다 놓으세요</strong>
-          <span>PDF, DOC, DOCX, PPT, PPTX</span>
+          <span>TXT, MD, PDF, CSV, XLSX · 파일당 최대 10MB · 최대 5개</span>
         </div>
 
         <FileUploadButton
           inputLabel="브랜드 자료 파일 선택"
           buttonLabel="문서 파일 선택"
-          accept=".pdf,.doc,.docx,.ppt,.pptx"
+          accept=".txt,.md,.pdf,.csv,.xlsx"
           multiple
           items={files}
           onFiles={addSelectedFiles}
           onRemove={onFileRemoved}
         />
 
-        {error ? (
-          <p id="brand-preview-source-error" className="brand-center-preview__field-error">
-            {error}
+        {fileError || error ? (
+          <p
+            id="brand-preview-source-error"
+            className="brand-center-preview__field-error"
+            role="alert"
+          >
+            {fileError ?? error}
           </p>
         ) : null}
       </div>
 
       <div className="brand-center-preview__card-footer">
-        <p>자료 내용은 전송하거나 저장하지 않습니다.</p>
+        <p>등록한 자료는 AI 분석과 브랜드 정보 저장에 사용됩니다.</p>
         <button
           type="button"
           className="brand-center-preview__primary-action"

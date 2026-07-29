@@ -150,6 +150,123 @@ type DmWorkerPool = Pick<Pool, "query" | "connect"> & { end?: Pool["end"] };
 
 export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
   return {
+    async dispatchWikiRefreshOutboxOnce(workerId: string) {
+      const client = await pool.connect();
+      let claimed: {
+        id: string;
+        workspaceId: string;
+        brandId: string;
+        leaseToken: string;
+        requestedAt: Date;
+      } | null = null;
+      try {
+        await client.query("begin");
+        await client.query(
+          `update wiki_refresh_outbox
+              set status = 'pending', lease_owner = null, lease_token = null,
+                  lease_expires_at = null, next_attempt_at = now(),
+                  last_error = coalesce(last_error, 'wiki_refresh_outbox_lease_expired'),
+                  updated_at = now()
+            where status = 'processing' and lease_expires_at < now()`,
+        );
+        const claim = await client.query(
+          `with candidate as (
+             select id
+               from wiki_refresh_outbox
+              where status = 'pending' and next_attempt_at <= now()
+              order by next_attempt_at, created_at
+              for update skip locked
+              limit 1
+           )
+           update wiki_refresh_outbox event
+              set status = 'processing', attempt_count = event.attempt_count + 1,
+                  lease_owner = $1, lease_token = gen_random_uuid(),
+                  lease_expires_at = now() + interval '5 minutes',
+                  last_error = null, updated_at = now()
+             from candidate
+            where event.id = candidate.id
+           returning event.id, event.workspace_id, event.brand_id,
+                     event.lease_token, event.created_at`,
+          [workerId],
+        );
+        if (!claim.rowCount) {
+          await client.query("commit");
+          return { status: "idle" as const };
+        }
+        claimed = {
+          id: String(claim.rows[0].id),
+          workspaceId: String(claim.rows[0].workspace_id),
+          brandId: String(claim.rows[0].brand_id),
+          leaseToken: String(claim.rows[0].lease_token),
+          requestedAt: new Date(claim.rows[0].created_at as string),
+        };
+        await client.query(
+          `insert into wiki_build_requests (
+             workspace_id, brand_id, requested_revision, status, quiet_until
+           ) values (
+             $1::uuid, $2::uuid, 1, 'pending',
+             case
+               when not exists (
+                 select 1
+                   from wiki_versions version
+                  where version.workspace_id = $1::uuid
+                    and version.brand_id = $2::uuid
+                    and version.status = 'active'
+               ) then $3::timestamptz
+               else (
+                 case
+                 when ($3::timestamptz at time zone 'Asia/Seoul')::time < time '03:00'
+                   then date_trunc('day', $3::timestamptz at time zone 'Asia/Seoul') + interval '3 hours'
+                 else date_trunc('day', $3::timestamptz at time zone 'Asia/Seoul') + interval '1 day 3 hours'
+                 end
+               ) at time zone 'Asia/Seoul'
+             end
+           )
+           on conflict (workspace_id, brand_id)
+           where status in ('pending', 'building')
+           do update set
+             requested_revision = wiki_build_requests.requested_revision + 1,
+             rebuild_requested = wiki_build_requests.rebuild_requested or wiki_build_requests.status = 'building',
+             quiet_until = case when wiki_build_requests.status = 'pending'
+               then least(wiki_build_requests.quiet_until, excluded.quiet_until)
+               else excluded.quiet_until end,
+             updated_at = now()`,
+          [claimed.workspaceId, claimed.brandId, claimed.requestedAt],
+        );
+        const completed = await client.query(
+          `update wiki_refresh_outbox
+              set status = 'succeeded', lease_owner = null, lease_token = null,
+                  lease_expires_at = null, succeeded_at = now(), last_error = null,
+                  updated_at = now()
+            where id = $1::uuid and status = 'processing'
+              and lease_owner = $2 and lease_token = $3::uuid`,
+          [claimed.id, workerId, claimed.leaseToken],
+        );
+        if (completed.rowCount !== 1) throw new Error("wiki_refresh_outbox_lease_lost");
+        await client.query("commit");
+        return { status: "completed" as const, eventId: claimed.id };
+      } catch (error) {
+        await client.query("rollback");
+        const message = error instanceof Error ? error.message : "wiki_refresh_dispatch_failed";
+        if (claimed) {
+          await pool.query(
+            `update wiki_refresh_outbox
+                set status = 'pending',
+                    attempt_count = least(attempt_count + 1, 2147483647),
+                    next_attempt_at = now() + make_interval(
+                      secs => least(3600, 60 * power(2, least(attempt_count + 1, 6)))::integer
+                    ),
+                    lease_owner = null, lease_token = null, lease_expires_at = null,
+                    last_error = $2, updated_at = now()
+              where id = $1::uuid and status = 'pending'`,
+            [claimed.id, message.slice(0, 2000)],
+          );
+        }
+        return { status: "retry" as const, eventId: claimed?.id ?? null, error: message };
+      } finally {
+        client.release();
+      }
+    },
     async claimWikiBuildItem(workerId: string, versions: {
       curatorPromptVersion: string;
       embeddingModel: string;
@@ -1036,7 +1153,7 @@ export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
                end,
                quiet_until = case
                  when requested_revision > coalesce(building_revision, 0) or rebuild_requested
-                   then now() + interval '2 minutes'
+                   then greatest(quiet_until, now() + interval '2 minutes')
                  else quiet_until
                end,
                building_revision = null, rebuild_requested = false,

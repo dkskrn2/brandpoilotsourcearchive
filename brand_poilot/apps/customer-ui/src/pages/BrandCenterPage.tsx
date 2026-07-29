@@ -1,16 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Alert } from "../components/ui/Alert";
 import { PageSkeleton } from "../components/ui/LoadingState";
 import { BrandCenterHeader } from "../components/brand-center/BrandCenterHeader";
 import { BrandCoreReviewPanel } from "../components/brand-center/BrandCoreReviewPanel";
-import { BrandReadinessJourney } from "../components/brand-center/BrandReadinessJourney";
 import { BrandRulesPanel } from "../components/brand-center/BrandRulesPanel";
-import { AvatarLibraryPanel } from "../components/brand-center/AvatarLibraryPanel";
+import { KnowledgeCategoryEditorPanel } from "../components/brand-center/KnowledgeCategoryEditorPanel";
 import { ProductServiceLibraryPanel } from "../components/brand-center/ProductServiceLibraryPanel";
-import { SourceLibraryPanel } from "../components/brand-center/SourceLibraryPanel";
-import { WikiLibraryPanel } from "../components/brand-center/WikiLibraryPanel";
+import { StyleReferenceImageBoard } from "../components/brand-center/StyleReferenceImageBoard";
 import { brandCenterGateway } from "../features/brand-center/brandCenterGateway";
+import { libraryGateway } from "../features/libraries/libraryGateway";
 import type {
   BrandCenterSummary,
   BrandCore,
@@ -21,34 +20,33 @@ import type {
 } from "../features/brand-center/types";
 import { DEMO_BRAND_ID } from "../lib/apiClient";
 
-type UnderstandingSection = "sources" | "analysis" | "core" | "rules" | "versions";
-type BrandCenterTab = "understanding" | "products" | "wiki" | "avatars";
+type BrandCenterTab = "core" | "faq" | "how_to" | "guide" | "products" | "style";
 const canonicalUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const sections: Array<{ id: UnderstandingSection; label: string }> = [
-  { id: "sources", label: "원본 자료" },
-  { id: "analysis", label: "AI 분석" },
-  { id: "core", label: "Brand Core" },
-  { id: "rules", label: "실행 규칙" },
-  { id: "versions", label: "버전 이력" },
-];
 const brandTabs: Array<{ id: BrandCenterTab; label: string }> = [
-  { id: "understanding", label: "브랜드 이해" },
+  { id: "core", label: "브랜드 코어" },
+  { id: "faq", label: "FAQ" },
+  { id: "how_to", label: "이용 방법" },
+  { id: "guide", label: "가이드" },
   { id: "products", label: "제품·서비스" },
-  { id: "wiki", label: "Wiki" },
-  { id: "avatars", label: "모델·아바타" },
+  { id: "style", label: "스타일" },
 ];
 
-const emptyRules: BrandRules = {
+const emptyRules = (): BrandRules => ({
   contractVersion: "brand-rules.v1",
   requiredPhrases: [],
   forbiddenPhrases: [],
   exaggerationRules: [],
   ctaRules: { defaultCta: "", allowed: [] },
   channelRules: {},
-  designRules: { colors: [], fonts: [], notes: [] },
+  designRules: {
+    colors: [],
+    fonts: [],
+    notes: [],
+    referenceImages: [],
+  },
   autoApprovalRules: { enabled: false, conditions: [] },
-};
+});
 
 function readiness(summary: BrandCenterSummary | null) {
   if (!summary) return "0/4";
@@ -64,63 +62,121 @@ export function BrandCenterPage() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const requestedTab = params.get("tab");
-  const tab: BrandCenterTab = requestedTab === "products" || requestedTab === "wiki" || requestedTab === "avatars"
-    ? requestedTab
-    : "understanding";
-  const requestedSection = params.get("section");
+  const tab = requestedTab === "wiki"
+    ? "guide"
+    : brandTabs.some((item) => item.id === requestedTab)
+      ? requestedTab as BrandCenterTab
+      : "core";
   const requestedAnalysisId = params.get("analysis");
   const analysisId = requestedAnalysisId && canonicalUuidPattern.test(requestedAnalysisId)
     ? requestedAnalysisId
     : null;
-  const section = sections.some((item) => item.id === requestedSection)
-    ? requestedSection as UnderstandingSection
-    : "core";
   const [summary, setSummary] = useState<BrandCenterSummary | null>(null);
   const [workspace, setWorkspace] = useState<BrandCoreWorkspace | null>(null);
-  const [ruleWorkspace, setRuleWorkspace] = useState<BrandRulesWorkspace | null>(null);
+  const [rulesWorkspace, setRulesWorkspace] = useState<BrandRulesWorkspace | null>(null);
   const [draftCore, setDraftCore] = useState<BrandCore | null>(null);
-  const [rules, setRules] = useState<BrandRules>(emptyRules);
   const [dirty, setDirty] = useState(false);
+  const [coreEditing, setCoreEditing] = useState(false);
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
+  const [coreConflict, setCoreConflict] = useState(false);
+  const [showServerVersion, setShowServerVersion] = useState(false);
+  const [serverConflictSnapshot, setServerConflictSnapshot] = useState<BrandCoreWorkspace | null>(null);
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [draftRules, setDraftRules] = useState<BrandRules | null>(null);
+  const [rulesEditing, setRulesEditing] = useState(false);
+  const [rulesDirty, setRulesDirty] = useState(false);
+  const [childDirty, setChildDirty] = useState(false);
+  const [productDirty, setProductDirty] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [initialLoadError, setInitialLoadError] = useState<string | null>(null);
+  const [rulesLoadError, setRulesLoadError] = useState<string | null>(null);
+  const [retryOperation, setRetryOperation] = useState<
+    "createCore" | "saveCore" | "approveCore" | "saveRules" | "approveRules" | null
+  >(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const visibleVersion = useMemo(() => workspace?.draft ?? workspace?.active ?? null, [workspace]);
+  const visibleVersion = useMemo(() => {
+    if (!workspace) return null;
+    const selected = workspace.versions.find((item) => item.id === selectedVersionId);
+    return selected ?? workspace.active ?? workspace.draft ?? null;
+  }, [selectedVersionId, workspace]);
+  const visibleRules = rulesWorkspace?.draft?.rules ?? rulesWorkspace?.active?.rules ?? emptyRules();
+  const operationalRules = draftRules ?? visibleRules;
+  const serverConflictVersion = serverConflictSnapshot?.draft ?? serverConflictSnapshot?.active ?? null;
+  const hasUnsavedChanges = dirty || rulesDirty || childDirty || productDirty;
 
   async function load() {
     setLoading(true);
-    setError(null);
-    try {
-      const [nextSummary, nextCore, nextRules] = await Promise.all([
-        brandCenterGateway.getSummary(DEMO_BRAND_ID),
-        brandCenterGateway.getCore(DEMO_BRAND_ID),
-        brandCenterGateway.getRules(DEMO_BRAND_ID),
-      ]);
-      setSummary(nextSummary);
+    setInitialLoadError(null);
+    setRulesLoadError(null);
+    const [summaryResult, coreResult, rulesResult] = await Promise.allSettled([
+      brandCenterGateway.getSummary(DEMO_BRAND_ID),
+      brandCenterGateway.getCore(DEMO_BRAND_ID),
+      brandCenterGateway.getRules(DEMO_BRAND_ID),
+    ]);
+    if (summaryResult.status === "fulfilled") setSummary(summaryResult.value);
+    if (coreResult.status === "fulfilled") {
+      const nextCore = coreResult.value;
       setWorkspace(nextCore);
-      setRuleWorkspace(nextRules);
-      setDraftCore(nextCore.draft?.core ?? null);
-      setRules(nextRules.draft?.rules ?? nextRules.active?.rules ?? emptyRules);
+      setDraftCore(nextCore.draft ? structuredClone(nextCore.draft.core) : null);
+      setSelectedVersionId(nextCore.active?.id ?? nextCore.draft?.id ?? null);
+      setCoreEditing(false);
+      setCoreConflict(false);
+      setShowServerVersion(false);
+      setServerConflictSnapshot(null);
       setDirty(false);
+    }
+    if (rulesResult.status === "fulfilled") {
+      const nextRules = rulesResult.value;
+      setRulesWorkspace(nextRules);
+      setDraftRules(structuredClone(nextRules.draft?.rules ?? nextRules.active?.rules ?? emptyRules()));
+      setRulesEditing(false);
+      setRulesDirty(false);
+    } else {
+      setRulesLoadError("운영 규칙을 불러오지 못했습니다.");
+      setRulesWorkspace(null);
+      setDraftRules(emptyRules());
+    }
+    if (summaryResult.status === "rejected" || coreResult.status === "rejected") {
+      setInitialLoadError("브랜드 센터 정보를 불러오지 못했습니다.");
+    } else {
+      setChildDirty(false);
+      setProductDirty(false);
+    }
+    setLoading(false);
+  }
+
+  async function loadRules() {
+    setRulesLoadError(null);
+    try {
+      const nextRules = await brandCenterGateway.getRules(DEMO_BRAND_ID);
+      setRulesWorkspace(nextRules);
+      setDraftRules(structuredClone(nextRules.draft?.rules ?? nextRules.active?.rules ?? emptyRules()));
+      setRulesEditing(false);
+      setRulesDirty(false);
     } catch {
-      setError("브랜드 센터 정보를 불러오지 못했습니다.");
-    } finally {
-      setLoading(false);
+      setRulesLoadError("운영 규칙을 불러오지 못했습니다.");
     }
   }
 
   useEffect(() => {
+    const next = new URLSearchParams(params);
+    let changed = false;
     if (requestedAnalysisId && !analysisId) {
-      const next = new URLSearchParams(params);
       next.delete("analysis");
-      setParams(next, { replace: true });
-    } else if (!["understanding", "products", "wiki", "avatars"].includes(requestedTab ?? "") || (tab === "understanding" && !requestedSection)) {
-      const next = new URLSearchParams(params);
-      next.set("tab", tab);
-      if (tab === "understanding") next.set("section", section);
-      setParams(next, { replace: true });
+      changed = true;
     }
+    if (requestedTab !== tab) {
+      next.set("tab", tab);
+      changed = true;
+    }
+    if (next.has("section")) {
+      next.delete("section");
+      changed = true;
+    }
+    if (changed) setParams(next, { replace: true });
     void load();
     // Initial route normalization and load are intentionally run once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -128,57 +184,104 @@ export function BrandCenterPage() {
 
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
-      if (!dirty) return;
+      if (!hasUnsavedChanges) return;
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty]);
-
-  function selectSection(nextSection: UnderstandingSection) {
-    if (dirty && !window.confirm("저장하지 않은 변경이 있습니다. 이동할까요?")) return;
-    const next = new URLSearchParams(params);
-    next.set("tab", "understanding");
-    next.set("section", nextSection);
-    setParams(next);
-  }
+  }, [hasUnsavedChanges]);
 
   function selectTab(nextTab: BrandCenterTab) {
-    if (tab === "understanding" && dirty && !window.confirm("저장하지 않은 변경이 있습니다. 이동할까요?")) return;
+    if (nextTab === tab) return;
+    if (hasUnsavedChanges && !window.confirm("저장하지 않은 변경이 있습니다. 이동할까요?")) return;
+    setDraftCore(workspace?.draft ? structuredClone(workspace.draft.core) : null);
+    setDirty(false);
+    setCoreEditing(false);
+    setCoreConflict(false);
+    setShowServerVersion(false);
+    setServerConflictSnapshot(null);
+    setDraftRules(structuredClone(rulesWorkspace?.draft?.rules ?? rulesWorkspace?.active?.rules ?? emptyRules()));
+    setRulesDirty(false);
+    setRulesEditing(false);
+    setChildDirty(false);
+    setProductDirty(false);
     const next = new URLSearchParams(params);
     next.set("tab", nextTab);
-    if (nextTab === "understanding") {
-      next.set("section", section);
-    } else {
-      next.delete("section");
+    next.delete("section");
+    if (nextTab !== "products") {
+      next.delete("item");
+      next.delete("analysis");
     }
-    if (nextTab !== "wiki") next.delete("issue");
-    if (nextTab !== "products") next.delete("item");
+    if (nextTab !== "guide") next.delete("issue");
     setParams(next);
   }
 
-  async function createChangeDraft() {
+  function closeWikiIssue() {
+    const next = new URLSearchParams(params);
+    next.delete("issue");
+    setParams(next, { replace: true });
+  }
+
+  async function editCore() {
+    if (workspace?.draft) {
+      setDraftCore(structuredClone(workspace.draft.core));
+      setSelectedVersionId(workspace.draft.id);
+      setCoreEditing(true);
+      setCoreConflict(false);
+      setShowServerVersion(false);
+      setServerConflictSnapshot(null);
+      return;
+    }
+    if (!workspace?.active) return;
     setSaving(true);
     setError(null);
+    setRetryOperation(null);
     try {
-      const draft = await brandCenterGateway.createCoreDraft(DEMO_BRAND_ID, {});
-      setWorkspace((current) => current
-        ? { ...current, draft, versions: [draft, ...current.versions] }
-        : { active: null, draft, versions: [draft] });
-      setDraftCore(draft.core);
-      setNotice("승인된 버전은 유지되고 새 초안에서 변경을 검토합니다.");
-      selectSection("core");
+      const created = await brandCenterGateway.createCoreDraft(DEMO_BRAND_ID, {
+        core: workspace.active.core,
+        evidence: workspace.active.evidence,
+        reviewState: workspace.active.reviewState,
+        sourceAnalysisId: workspace.active.sourceAnalysisId,
+      });
+      setWorkspace({
+        ...workspace,
+        draft: created,
+        versions: [created, ...workspace.versions],
+      });
+      setDraftCore(structuredClone(created.core));
+      setSelectedVersionId(created.id);
+      setCoreEditing(true);
+      setCoreConflict(false);
+      setShowServerVersion(false);
+      setServerConflictSnapshot(null);
+      setNotice("브랜드 코어 수정 초안을 만들었습니다.");
     } catch {
-      setError("변경 초안을 만들지 못했습니다.");
+      setError("브랜드 코어 수정 초안을 만들지 못했습니다.");
+      setRetryOperation("createCore");
     } finally {
       setSaving(false);
     }
   }
 
-  async function saveCore(): Promise<boolean> {
-    if (!workspace?.draft || !draftCore) return false;
+  function cancelCore() {
+    setDraftCore(workspace?.draft ? structuredClone(workspace.draft.core) : null);
+    setDirty(false);
+    setCoreEditing(false);
+    setCoreConflict(false);
+    setShowServerVersion(false);
+    setServerConflictSnapshot(null);
+    setSelectedVersionId(workspace?.active?.id ?? workspace?.draft?.id ?? null);
+    setError(null);
+    setRetryOperation(null);
+    setNotice("저장하지 않은 브랜드 코어 변경을 취소했습니다.");
+  }
+
+  async function saveCore(): Promise<BrandCoreVersion | null> {
+    if (!workspace?.draft || !draftCore) return null;
     setSaving(true);
+    setError(null);
+    setRetryOperation(null);
     try {
       const updated = await brandCenterGateway.updateCoreDraft(
         DEMO_BRAND_ID,
@@ -190,15 +293,36 @@ export function BrandCenterPage() {
           expectedUpdatedAt: workspace.draft.updatedAt,
         },
       );
-      setWorkspace({ ...workspace, draft: updated, versions: workspace.versions.map((item) => item.id === updated.id ? updated : item) });
+      setWorkspace({
+        ...workspace,
+        draft: updated,
+        versions: workspace.versions.some((item) => item.id === updated.id)
+          ? workspace.versions.map((item) => item.id === updated.id ? updated : item)
+          : [updated, ...workspace.versions],
+      });
       setDirty(false);
-      setNotice("초안을 저장했습니다.");
-      return true;
+      setCoreEditing(false);
+      setCoreConflict(false);
+      setShowServerVersion(false);
+      setServerConflictSnapshot(null);
+      setSelectedVersionId(updated.id);
+      setNotice("브랜드 코어를 저장했습니다.");
+      return updated;
     } catch (caught) {
-      setError(caught instanceof Error && caught.message.includes("brand_core_version_conflict")
-        ? "다른 화면에서 수정되었습니다. 현재 입력은 유지했으니 새 데이터를 불러온 뒤 다시 적용하세요."
+      const conflict = typeof caught === "object"
+        && caught !== null
+        && "errorCode" in caught
+        && caught.errorCode === "brand_core_version_conflict";
+      setCoreConflict(conflict);
+      if (conflict) {
+        setShowServerVersion(false);
+        setServerConflictSnapshot(null);
+      }
+      setError(conflict
+        ? "다른 곳에서 초안이 변경되었습니다. 현재 입력은 유지됩니다."
         : "초안을 저장하지 못했습니다.");
-      return false;
+      setRetryOperation(conflict ? null : "saveCore");
+      return null;
     } finally {
       setSaving(false);
     }
@@ -206,68 +330,213 @@ export function BrandCenterPage() {
 
   async function approveCore() {
     if (!workspace?.draft) return;
-    if (dirty && !(await saveCore())) return;
+    let targetDraft = workspace.draft;
+    if (dirty) {
+      const savedDraft = await saveCore();
+      if (!savedDraft) return;
+      targetDraft = savedDraft;
+    }
     setSaving(true);
+    setError(null);
+    setRetryOperation(null);
     try {
-      const approved = await brandCenterGateway.approveCoreDraft(DEMO_BRAND_ID, workspace.draft.id);
-      setWorkspace({
+      const approved = await brandCenterGateway.approveCoreDraft(
+        DEMO_BRAND_ID,
+        targetDraft.id,
+        targetDraft.updatedAt,
+      );
+      const fallbackWorkspace: BrandCoreWorkspace = {
         active: approved,
         draft: null,
-        versions: workspace.versions.map((item) => item.id === approved.id ? approved : item),
-      });
+        versions: workspace.versions.map((item) => {
+          if (item.id === approved.id) return approved;
+          return item.status === "approved"
+            ? { ...item, status: "superseded" as const }
+            : item;
+        }),
+      };
+      let refreshedWorkspace = fallbackWorkspace;
+      try {
+        refreshedWorkspace = await brandCenterGateway.getCore(DEMO_BRAND_ID);
+      } catch {
+        // Approval already succeeded; keep a deterministic local history if refresh is unavailable.
+      }
+      setWorkspace(refreshedWorkspace);
       setDraftCore(null);
       setDirty(false);
-      setNotice("Brand Core를 승인했습니다.");
-    } catch {
-      setError("필수 정보를 확인한 뒤 다시 승인하세요.");
+      setCoreEditing(false);
+      setCoreConflict(false);
+      setShowServerVersion(false);
+      setServerConflictSnapshot(null);
+      setSelectedVersionId(refreshedWorkspace.active?.id ?? approved.id);
+      setNotice("브랜드 코어를 승인했습니다.");
+    } catch (caught) {
+      const conflict = typeof caught === "object"
+        && caught !== null
+        && "errorCode" in caught
+        && caught.errorCode === "brand_core_version_conflict";
+      setCoreConflict(conflict);
+      setError(conflict
+        ? "다른 곳에서 초안이 변경되었습니다. 서버 버전을 확인하세요."
+        : "필수 정보를 확인한 뒤 다시 승인하세요.");
+      setRetryOperation(conflict ? null : "approveCore");
     } finally {
       setSaving(false);
     }
   }
 
-  async function saveRules() {
+  async function loadServerConflictSnapshot() {
     setSaving(true);
+    setError(null);
     try {
-      const saved = await brandCenterGateway.saveRuleDraft(DEMO_BRAND_ID, rules);
-      setRuleWorkspace((current) => ({
+      const latestWorkspace = await brandCenterGateway.getCore(DEMO_BRAND_ID);
+      setServerConflictSnapshot(latestWorkspace);
+      setShowServerVersion(true);
+    } catch {
+      setError("서버의 최신 브랜드 코어를 불러오지 못했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function editRules() {
+    setDraftRules(structuredClone(
+      rulesWorkspace?.draft?.rules ?? rulesWorkspace?.active?.rules ?? emptyRules(),
+    ));
+    setRulesEditing(true);
+    setRulesDirty(false);
+  }
+
+  function cancelRules() {
+    setDraftRules(structuredClone(
+      rulesWorkspace?.draft?.rules ?? rulesWorkspace?.active?.rules ?? emptyRules(),
+    ));
+    setRulesEditing(false);
+    setRulesDirty(false);
+    setError(null);
+    setRetryOperation(null);
+    setNotice("저장하지 않은 운영 규칙 변경을 취소했습니다.");
+  }
+
+  async function saveRules(rulesToSave = draftRules) {
+    if (!rulesToSave) return null;
+    setSaving(true);
+    setError(null);
+    setRetryOperation(null);
+    try {
+      const saved = await brandCenterGateway.saveRuleDraft(DEMO_BRAND_ID, rulesToSave);
+      setRulesWorkspace((current) => ({
         active: current?.active ?? null,
         draft: saved,
-        versions: [saved, ...(current?.versions ?? []).filter((item) => item.id !== saved.id)],
+        versions: [
+          saved,
+          ...(current?.versions ?? []).filter((item) => item.id !== saved.id),
+        ],
       }));
-      setNotice("실행 규칙 초안을 저장했습니다.");
+      setDraftRules(structuredClone(saved.rules));
+      setRulesEditing(false);
+      setRulesDirty(false);
+      setNotice("운영 규칙을 저장했습니다.");
+      return saved;
     } catch {
-      setError("실행 규칙을 저장하지 못했습니다.");
+      setError("운영 규칙을 저장하지 못했습니다.");
+      setRetryOperation("saveRules");
+      return null;
     } finally {
       setSaving(false);
     }
   }
 
   async function approveRules() {
-    let draft = ruleWorkspace?.draft ?? null;
-    if (!draft) {
-      setSaving(true);
-      try {
-        draft = await brandCenterGateway.saveRuleDraft(DEMO_BRAND_ID, rules);
-      } catch {
-        setError("실행 규칙 초안을 저장하지 못해 승인할 수 없습니다.");
-        setSaving(false);
-        return;
-      }
-    }
+    const saved = rulesDirty ? await saveRules() : null;
+    if (rulesDirty && !saved) return;
+    const targetId = saved?.id ?? rulesWorkspace?.draft?.id;
+    if (!targetId) return;
     setSaving(true);
+    setError(null);
+    setRetryOperation(null);
     try {
-      const approved = await brandCenterGateway.approveRules(DEMO_BRAND_ID, draft.id);
-      setRuleWorkspace((current) => ({
+      const approved = await brandCenterGateway.approveRules(DEMO_BRAND_ID, targetId);
+      setRulesWorkspace((current) => ({
         active: approved,
         draft: null,
-        versions: [approved, ...(current?.versions ?? []).filter((item) => item.id !== approved.id)],
+        versions: (current?.versions ?? []).map((item) => item.id === approved.id ? approved : item),
       }));
-      setNotice("실행 규칙을 승인했습니다.");
+      setDraftRules(structuredClone(approved.rules));
+      setRulesEditing(false);
+      setRulesDirty(false);
+      setNotice("운영 규칙을 승인했습니다.");
     } catch {
-      setError("실행 규칙을 승인하지 못했습니다.");
+      setError("운영 규칙을 승인하지 못했습니다.");
+      setRetryOperation("approveRules");
     } finally {
       setSaving(false);
     }
+  }
+
+  function retryMutation() {
+    switch (retryOperation) {
+      case "createCore":
+        void editCore();
+        break;
+      case "saveCore":
+        void saveCore();
+        break;
+      case "approveCore":
+        void approveCore();
+        break;
+      case "saveRules":
+        void saveRules();
+        break;
+      case "approveRules":
+        void approveRules();
+        break;
+    }
+  }
+
+  function retryInitialLoad() {
+    if (
+      hasUnsavedChanges
+      && !window.confirm("저장하지 않은 변경이 있습니다. 다시 불러올까요?")
+    ) return;
+    void load();
+  }
+
+  function reanalyze() {
+    if (
+      hasUnsavedChanges
+      && !window.confirm("저장하지 않은 변경이 있습니다. 재분석을 시작할까요?")
+    ) return;
+    setDraftCore(workspace?.draft ? structuredClone(workspace.draft.core) : null);
+    setDirty(false);
+    setCoreEditing(false);
+    setCoreConflict(false);
+    setShowServerVersion(false);
+    setServerConflictSnapshot(null);
+    setDraftRules(structuredClone(
+      rulesWorkspace?.draft?.rules ?? rulesWorkspace?.active?.rules ?? emptyRules(),
+    ));
+    setRulesDirty(false);
+    setRulesEditing(false);
+    setChildDirty(false);
+    setProductDirty(false);
+    setError(null);
+    setRetryOperation(null);
+    navigate("/onboarding/brand-intelligence?from=brand-center");
+  }
+
+  async function saveStyle(rules: BrandRules) {
+    const saved = await brandCenterGateway.saveRuleDraft(DEMO_BRAND_ID, rules);
+    setRulesWorkspace((current) => ({
+      active: current?.active ?? null,
+      draft: saved,
+      versions: [
+        saved,
+        ...(current?.versions ?? []).filter((item) => item.id !== saved.id),
+      ],
+    }));
+    setDraftRules(structuredClone(saved.rules));
+    setChildDirty(false);
   }
 
   if (loading) return <PageSkeleton label="브랜드 센터를 불러오는 중입니다." />;
@@ -278,12 +547,49 @@ export function BrandCenterPage() {
         readiness={readiness(summary)}
         approvedAt={workspace?.active?.approvedAt ?? null}
         busy={saving}
-        onReanalyze={() => navigate("/onboarding/brand-intelligence?from=brand-center")}
-        onReviewChanges={createChangeDraft}
+        onReanalyze={reanalyze}
       />
-      <BrandReadinessJourney completed={summary?.rules.state === "approved" ? 4 : summary?.brandCore.state === "approved" ? 3 : summary?.analysis.state === "confirmed" ? 2 : summary?.source.state === "ready" ? 1 : 0} />
       {notice && <Alert title="변경 사항" variant="info">{notice}</Alert>}
-      {error && <Alert title="작업을 완료하지 못했습니다" variant="bad">{error}<button className="button" type="button" onClick={load}>다시 시도</button></Alert>}
+      {initialLoadError && (
+        <Alert title="브랜드 센터를 불러오지 못했습니다" variant="bad">
+          {initialLoadError}
+          <button className="button" type="button" onClick={retryInitialLoad}>
+            초기 정보 다시 시도
+          </button>
+        </Alert>
+      )}
+      {rulesLoadError && (
+        <Alert title="운영 규칙을 불러오지 못했습니다" variant="bad">
+          {rulesLoadError}
+          <button className="button" type="button" onClick={() => void loadRules()}>
+            운영 규칙 다시 시도
+          </button>
+        </Alert>
+      )}
+      {error && (
+        <Alert title="작업을 완료하지 못했습니다" variant="bad">
+          {error}
+          {coreConflict ? (
+            <button
+              className="button"
+              type="button"
+              disabled={saving}
+              onClick={() => void loadServerConflictSnapshot()}
+            >
+              서버 버전 확인
+            </button>
+          ) : (
+            retryOperation ? (
+              <button className="button" type="button" onClick={retryMutation}>다시 시도</button>
+            ) : null
+          )}
+        </Alert>
+      )}
+      {showServerVersion && serverConflictVersion ? (
+        <Alert title={`서버의 저장된 초안 · 버전 ${serverConflictVersion.version}`} variant="info">
+          {serverConflictVersion.core.summary.oneLine}
+        </Alert>
+      ) : null}
 
       <nav className="brand-center-tabs" aria-label="브랜드 센터 영역" role="tablist">
         {brandTabs.map((item, index) => (
@@ -318,75 +624,135 @@ export function BrandCenterPage() {
         id={`brand-center-panel-${tab}`}
         role="tabpanel"
       >
-      {tab === "understanding" ? <nav className="brand-center-subnav" aria-label="브랜드 이해 세부 영역">
-        {sections.map((item) => (
-          <button
-            className={section === item.id ? "is-active" : ""}
-            key={item.id}
-            type="button"
-            onClick={() => selectSection(item.id)}
-          >
-            {item.label}
-          </button>
-        ))}
-      </nav> : null}
-
-      {tab === "understanding" && section === "sources" && (
-        <SourceLibraryPanel />
-      )}
-      {tab === "understanding" && section === "analysis" && (
-        <section className="panel"><div className="panel-body brand-center-empty">
-          <h2>AI 분석</h2>
-          <p>재분석 결과는 새 초안으로만 저장되며 현재 승인된 Brand Core를 덮어쓰지 않습니다.</p>
-          <Link className="button primary" to="/onboarding/brand-intelligence?from=brand-center">AI 분석 열기</Link>
-        </div></section>
-      )}
-      {tab === "understanding" && section === "core" && visibleVersion && (
-        <BrandCoreReviewPanel
-          version={workspace?.draft && draftCore ? { ...workspace.draft, core: draftCore } : visibleVersion}
-          saving={saving}
-          onChange={(core) => { setDraftCore(core); setDirty(true); }}
-          onSave={saveCore}
-          onApprove={approveCore}
-        />
-      )}
-      {tab === "understanding" && section === "core" && !visibleVersion && (
-        <section className="panel"><div className="panel-body brand-center-empty">
-          <h2>Brand Core가 없습니다</h2>
-          <p>원본 자료를 분석하고 AI 제안값을 검토하면 첫 Brand Core를 만들 수 있습니다.</p>
-          <Link className="button primary" to="/onboarding/brand-intelligence">브랜드 분석 시작</Link>
-        </div></section>
-      )}
-      {tab === "understanding" && section === "rules" && <BrandRulesPanel rules={rules} saving={saving} onChange={setRules} onSave={saveRules} onApprove={approveRules} />}
-      {tab === "understanding" && section === "versions" && (
-        <section className="panel"><div className="panel-header"><h2>버전 이력</h2></div><div className="panel-body">
-          <ol className="brand-version-list">
-            {(workspace?.versions ?? []).map((item: BrandCoreVersion) => (
-              <li key={item.id}><strong>v{item.version}</strong><span>{item.status}</span><time>{new Date(item.updatedAt).toLocaleString("ko-KR")}</time></li>
+        {tab === "core" && (workspace?.versions.length ?? 0) > 1 ? (
+          <nav aria-label="브랜드 코어 수정 이력" className="form-actions">
+            {workspace?.versions.map((version) => (
+              <button
+                aria-pressed={visibleVersion?.id === version.id}
+                className="button"
+                key={version.id}
+                type="button"
+                onClick={() => setSelectedVersionId(version.id)}
+              >
+                {version.status === "draft"
+                  ? `수정 초안 버전 ${version.version}`
+                  : version.status === "approved"
+                    ? `승인 버전 ${version.version}`
+                    : `버전 ${version.version} · 대체됨`}
+              </button>
             ))}
-          </ol>
-        </div></section>
-      )}
-      {tab === "products" ? <ProductServiceLibraryPanel
-        brandId={DEMO_BRAND_ID}
-        initialItemId={params.get("item")}
-        initialAnalysisId={analysisId}
-        onAnalysisConsumed={() => {
-          const next = new URLSearchParams(params);
-          next.delete("analysis");
-          setParams(next, { replace: true });
-        }}
-      /> : null}
-      {tab === "wiki" ? <WikiLibraryPanel
-        brandId={DEMO_BRAND_ID}
-        initialIssueId={params.get("issue")}
-        onCloseIssue={() => {
-          const next = new URLSearchParams(params);
-          next.delete("issue");
-          setParams(next, { replace: true });
-        }}
-      /> : null}
-      {tab === "avatars" ? <AvatarLibraryPanel brandId={DEMO_BRAND_ID} /> : null}
+          </nav>
+        ) : null}
+        {tab === "core" && visibleVersion ? (
+          <BrandCoreReviewPanel
+            version={workspace?.draft?.id === visibleVersion.id && draftCore
+              ? { ...workspace.draft, core: draftCore }
+              : visibleVersion}
+            editing={coreEditing && workspace?.draft?.id === visibleVersion.id}
+            saving={saving}
+            onChange={(core) => { setDraftCore(core); setDirty(true); }}
+            onSave={saveCore}
+            onApprove={approveCore}
+            onEdit={() => void editCore()}
+            onCancel={cancelCore}
+            dirty={dirty}
+          />
+        ) : null}
+        {tab === "core" && !visibleVersion ? (
+          <section className="panel"><div className="panel-body brand-center-empty">
+            <h2>브랜드 코어가 없습니다</h2>
+            <p>브랜드 정보를 등록하면 콘텐츠 제작 기준을 확인할 수 있습니다.</p>
+          </div></section>
+        ) : null}
+        {tab === "core" ? (
+          <>
+            <div className="form-actions">
+              <button
+                aria-expanded={rulesOpen}
+                className="button"
+                disabled={Boolean(rulesLoadError)}
+                type="button"
+                onClick={() => setRulesOpen((open) => !open)}
+              >
+                운영 규칙
+              </button>
+            </div>
+            {rulesOpen ? (
+              <BrandRulesPanel
+                rules={operationalRules}
+                saving={saving}
+                editing={rulesEditing}
+                dirty={rulesDirty}
+                canApprove={Boolean(rulesWorkspace?.draft)}
+                onChange={(rules) => {
+                  setDraftRules(rules);
+                  setRulesDirty(true);
+                }}
+                onDirty={() => setRulesDirty(true)}
+                onSave={(rules) => void saveRules(rules)}
+                onApprove={() => void approveRules()}
+                onEdit={editRules}
+                onCancel={cancelRules}
+              />
+            ) : null}
+          </>
+        ) : null}
+        {tab === "faq" ? (
+          <KnowledgeCategoryEditorPanel
+            brandId={DEMO_BRAND_ID}
+            kind="faq"
+            title="FAQ"
+            onDirtyChange={setChildDirty}
+          />
+        ) : null}
+        {tab === "how_to" ? (
+          <KnowledgeCategoryEditorPanel
+            brandId={DEMO_BRAND_ID}
+            kind="how_to"
+            title="이용 방법"
+            onDirtyChange={setChildDirty}
+          />
+        ) : null}
+        {tab === "guide" ? (
+          <KnowledgeCategoryEditorPanel
+            brandId={DEMO_BRAND_ID}
+            kind="guide"
+            title="가이드"
+            initialIssueId={params.get("issue")}
+            onCloseIssue={closeWikiIssue}
+            onDirtyChange={setChildDirty}
+          />
+        ) : null}
+        {tab === "products" ? (
+          <ProductServiceLibraryPanel
+            brandId={DEMO_BRAND_ID}
+            initialItemId={params.get("item")}
+            initialAnalysisId={analysisId}
+            onAnalysisConsumed={() => {
+              const next = new URLSearchParams(params);
+              next.delete("analysis");
+              setParams(next, { replace: true });
+            }}
+            onDirtyChange={setProductDirty}
+          />
+        ) : null}
+        {tab === "style" && rulesLoadError ? (
+          <section className="panel">
+            <div className="panel-body brand-center-empty">
+              <h2>스타일 정보를 불러올 수 없습니다</h2>
+              <p>운영 규칙을 다시 불러온 뒤 디자인 스타일을 수정해 주세요.</p>
+            </div>
+          </section>
+        ) : null}
+        {tab === "style" && !rulesLoadError ? (
+          <StyleReferenceImageBoard
+            brandId={DEMO_BRAND_ID}
+            gateway={libraryGateway}
+            rules={visibleRules}
+            onSave={saveStyle}
+            onDirtyChange={setChildDirty}
+          />
+        ) : null}
       </div>
     </section>
   );

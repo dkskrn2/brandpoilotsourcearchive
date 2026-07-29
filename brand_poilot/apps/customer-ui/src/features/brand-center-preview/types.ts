@@ -13,6 +13,7 @@ export interface PreviewFile {
   name: string;
   size: number;
   status: "selected";
+  file: File;
 }
 
 export interface PreviewBrandCore {

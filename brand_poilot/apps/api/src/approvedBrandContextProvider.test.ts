@@ -54,7 +54,7 @@ const rules = {
     exaggerationRules: [],
     ctaRules: { defaultCta: "", allowed: [] },
     channelRules: {},
-    designRules: { colors: [], fonts: [], notes: [] },
+    designRules: { colors: [], fonts: [], notes: [], referenceImages: [] },
     autoApprovalRules: { enabled: false, conditions: [] },
   },
 } as BrandRuleSet;

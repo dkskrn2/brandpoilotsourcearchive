@@ -3,6 +3,18 @@ import { ApiRequestError } from "../../lib/apiClient";
 import { classifyLibraryError, createLibraryGateway } from "./libraryGateway";
 
 describe("library gateway", () => {
+  it("loads a scoped reference detail for persisted style previews", async () => {
+    const detail = { id: "reference-1", previewUrl: "https://blob.example/style.png" };
+    const requestJson = vi.fn().mockResolvedValue(detail);
+    const gateway = createLibraryGateway({ requestJson } as never);
+
+    await expect(gateway.getReference("brand-1", "reference-1")).resolves.toEqual(detail);
+    expect(requestJson).toHaveBeenCalledWith(
+      "/brands/brand-1/references/reference-1",
+      { method: "GET" },
+    );
+  });
+
   it("uses the product-service lifecycle endpoints with typed payloads", async () => {
     const requestJson = vi.fn().mockResolvedValue({});
     const gateway = createLibraryGateway({ requestJson } as never);
@@ -25,8 +37,9 @@ describe("library gateway", () => {
     await gateway.createProductServiceFromAnalysis("brand-1", "analysis-1");
     await gateway.updateProductServiceDraft("brand-1", "item-1", profile);
     await gateway.approveProductService("brand-1", "item-1");
+    await gateway.archiveProductService("brand-1", "item-1");
 
-    expect(requestJson).toHaveBeenNthCalledWith(1, "/brands/brand-1/product-services", { method: "GET" });
+    expect(requestJson).toHaveBeenNthCalledWith(1, "/brands/brand-1/product-services?include=draft", { method: "GET" });
     expect(requestJson).toHaveBeenNthCalledWith(2, "/brands/brand-1/product-services", {
       method: "POST",
       body: JSON.stringify(profile),
@@ -44,6 +57,11 @@ describe("library gateway", () => {
     expect(requestJson).toHaveBeenNthCalledWith(
       5,
       "/brands/brand-1/product-services/item-1/approve",
+      { method: "POST" },
+    );
+    expect(requestJson).toHaveBeenNthCalledWith(
+      6,
+      "/brands/brand-1/product-services/item-1/archive",
       { method: "POST" },
     );
   });

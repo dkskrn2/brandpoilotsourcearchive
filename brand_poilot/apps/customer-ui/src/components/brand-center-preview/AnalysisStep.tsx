@@ -21,14 +21,6 @@ interface AnalysisStepProps {
   onComplete(): void;
 }
 
-const knowledgeKindLabels: Record<PreviewKnowledgeItem["kind"], string> = {
-  faq: "자주 묻는 질문",
-  policy: "정책",
-  how_to: "이용 방법",
-  guide: "가이드",
-  product_service: "제품·서비스",
-};
-
 type ScalarKey = "oneLine" | "description" | "target" | "customerProblem" | "primaryValue";
 type ArrayKey = "differentiators" | "tone" | "priorityMessages";
 
@@ -68,16 +60,11 @@ export function AnalysisStep({
   error,
   brandCore,
   brandCoreApproved,
-  knowledge,
   onBrandCoreChange,
-  onKnowledgeChange,
   onRetry,
   onComplete,
 }: AnalysisStepProps) {
   const coreStatus = brandCoreApproved ? "승인 완료" : null;
-  const visibleKnowledge = knowledge.filter((item) => item.kind !== "policy");
-  const [openKnowledgeKind, setOpenKnowledgeKind] =
-    useState<PreviewKnowledgeItem["kind"]>("faq");
   const [loadingPhase, setLoadingPhase] = useState(0);
   const [arrayDrafts, setArrayDrafts] = useState<Record<ArrayKey, string>>({
     differentiators: brandCore.differentiators.join("\n"),
@@ -103,11 +90,6 @@ export function AnalysisStep({
     }, PREVIEW_PHASE_DURATION_MS);
     return () => window.clearInterval(timer);
   }, [state]);
-
-  function knowledgeStatus(item: PreviewKnowledgeItem) {
-    if (item.origin === "user") return "직접 입력";
-    return item.reviewStatus === "approved" ? "승인 완료" : null;
-  }
 
   return (
     <section className="brand-center-preview__card" aria-labelledby="analysis-step-title">
@@ -141,6 +123,7 @@ export function AnalysisStep({
             "브랜드 핵심을 정리하는 중",
             "지식 초안을 만드는 중",
           ][loadingPhase]}<span aria-hidden="true">...</span></strong>
+          <p>보통 수분~10분 정도 소요되며 자료에 따라 더 길어질 수 있습니다.</p>
           <ListSkeleton
             rows={4}
             columns={1}
@@ -206,54 +189,6 @@ export function AnalysisStep({
             ))}
           </div>
 
-          <section className="brand-center-preview__knowledge" aria-labelledby="preview-knowledge-title">
-            <div className="brand-center-preview__knowledge-heading">
-              <p className="brand-center-preview__eyebrow">PROPOSED KNOWLEDGE</p>
-              <h3 id="preview-knowledge-title">AI 제안 정보</h3>
-            </div>
-            <div className="brand-center-preview__knowledge-accordions">
-              {(["faq", "how_to", "guide", "product_service"] as const).map((kind) => {
-                const expanded = openKnowledgeKind === kind;
-                const kindItems = visibleKnowledge.filter((item) => item.kind === kind);
-                return (
-                  <section key={kind} className="brand-center-preview__knowledge-accordion">
-                    <button
-                      type="button"
-                      aria-expanded={expanded}
-                      aria-controls={`knowledge-panel-${kind}`}
-                      onClick={() => setOpenKnowledgeKind(kind)}
-                    >
-                      <span>{knowledgeKindLabels[kind]}</span>
-                      <span aria-hidden="true">{expanded ? "−" : "+"}</span>
-                    </button>
-                    <div id={`knowledge-panel-${kind}`} hidden={!expanded}>
-                      <div className="brand-center-preview__knowledge-list">
-                        {kindItems.map((item) => {
-                          const status = knowledgeStatus(item);
-                          return <article key={item.id}>
-                            <header>
-                              <span>{knowledgeKindLabels[item.kind]}</span>
-                              {status ? <StatusBadge label={status} /> : null}
-                            </header>
-                            <h4>{item.title}</h4>
-                            <textarea
-                              aria-label={`${item.title} 내용`}
-                              rows={3}
-                              value={item.content}
-                              onChange={(event) => onKnowledgeChange({
-                                ...item,
-                                content: event.target.value,
-                              })}
-                            />
-                          </article>;
-                        })}
-                      </div>
-                    </div>
-                  </section>
-                );
-              })}
-            </div>
-          </section>
           <div className="brand-center-preview__section-actions">
             <button
               type="button"

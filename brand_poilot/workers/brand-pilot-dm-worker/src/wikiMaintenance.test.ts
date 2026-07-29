@@ -36,4 +36,18 @@ describe("Wiki maintenance", () => {
       missingKnowledge: [{ question: "가격이 얼마예요?", reason: "원문 가격 없음" }],
     }));
   });
+
+  it("does not invoke maintenance generation when no brand is eligible", async () => {
+    const db = {
+      claimWikiMaintenance: vi.fn(async () => null),
+      completeWikiMaintenance: vi.fn(async () => undefined),
+      failWikiMaintenance: vi.fn(async () => undefined),
+    };
+    const runCodex = vi.fn();
+
+    await expect(runWikiMaintenanceOnce({
+      db, runtimeDirectory: "runtime", timeoutMs: 120_000, runCodex,
+    })).resolves.toEqual({ status: "idle" });
+    expect(runCodex).not.toHaveBeenCalled();
+  });
 });

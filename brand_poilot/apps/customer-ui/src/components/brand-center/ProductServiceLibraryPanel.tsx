@@ -16,6 +16,7 @@ interface Props {
   initialItemId?: string | null;
   initialAnalysisId?: string | null;
   onAnalysisConsumed?(): void;
+  onDirtyChange?(dirty: boolean): void;
 }
 
 export function ProductServiceLibraryPanel({
@@ -24,6 +25,7 @@ export function ProductServiceLibraryPanel({
   initialItemId = null,
   initialAnalysisId = null,
   onAnalysisConsumed,
+  onDirtyChange,
 }: Props) {
   const [items, setItems] = useState<ProductServiceItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(initialItemId);
@@ -140,6 +142,7 @@ export function ProductServiceLibraryPanel({
       creating={creating}
       onSaved={acceptSaved}
       onCancelCreate={() => setCreating(false)}
+      onDirtyChange={onDirtyChange}
     />
   </section>;
 }

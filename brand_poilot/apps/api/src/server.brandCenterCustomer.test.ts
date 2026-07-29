@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { BrandCoreVersion } from "./brandCoreRepository.js";
 import { createServer } from "./httpServer.js";
 import type { ApiRepository } from "./types.js";
 
@@ -27,7 +28,7 @@ function core(label = "브랜드") {
   };
 }
 
-function version(status: "draft" | "approved" = "draft") {
+function version(status: "draft" | "approved" = "draft"): BrandCoreVersion {
   return {
     id: "44444444-4444-4444-8444-444444444444",
     workspaceId,
@@ -44,7 +45,7 @@ function version(status: "draft" | "approved" = "draft") {
     approvedAt: status === "approved" ? "2026-07-26T00:00:00.000Z" : null,
     createdAt: "2026-07-26T00:00:00.000Z",
     updatedAt: "2026-07-26T00:00:00.000Z",
-  } as const;
+  };
 }
 
 function setup(overrides: Partial<ApiRepository> = {}) {
@@ -176,6 +177,62 @@ describe("brand center customer routes", () => {
     await app.close();
   });
 
+  it("creates a revision from the active core without changing the active lookup", async () => {
+    const approved = version("approved");
+    const createDraft = vi.fn(async () => ({ ...version(), version: 2 }));
+    const getActive = vi.fn(async () => approved);
+    const { app } = setup({ createDraft, getActive });
+
+    const created = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/brand-core/drafts`,
+      headers: auth,
+      payload: {},
+    });
+
+    expect(created.statusCode).toBe(200);
+    expect(getActive).toHaveBeenCalledWith({ workspaceId, brandId });
+    expect(createDraft).toHaveBeenCalledWith(
+      { workspaceId, brandId, actorUserId: userId },
+      {
+        core: approved.core,
+        evidence: approved.evidence,
+        reviewState: approved.reviewState,
+        sourceAnalysisId: null,
+      },
+    );
+    await app.close();
+  });
+
+  it("returns repository revision order and identifies the editable draft", async () => {
+    const draft = { ...version(), id: "55555555-5555-4555-8555-555555555555", version: 3 };
+    const approved = { ...version("approved"), version: 2 };
+    const old = {
+      ...version("approved"),
+      id: "66666666-6666-4666-8666-666666666666",
+      version: 1,
+      status: "superseded" as const,
+    };
+    const { app } = setup({
+      getActive: vi.fn(async () => approved),
+      listVersions: vi.fn(async () => [draft, approved, old]),
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/brand-core`,
+      headers: auth,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      active: approved,
+      draft,
+      versions: [draft, approved, old],
+    });
+    await app.close();
+  });
+
   it("maps stale edits and forbidden approvals to stable HTTP errors", async () => {
     const conflict = setup({
       updateDraft: vi.fn(async () => {
@@ -198,9 +255,73 @@ describe("brand center customer routes", () => {
       method: "POST",
       url: `/brands/${brandId}/brand-core/drafts/${version().id}/approve`,
       headers: auth,
+      payload: { expectedUpdatedAt: version().updatedAt },
     });
     expect(forbidden.statusCode).toBe(403);
     expect(forbidden.json()).toEqual({ error: "brand_core_approval_forbidden" });
     await conflict.app.close();
+  });
+
+  it("maps invalid style reference ownership to a stable client error", async () => {
+    const saveRuleDraft = vi.fn(async () => {
+      throw new Error("brand_style_reference_invalid");
+    });
+    const { app } = setup({ saveRuleDraft });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: `/brands/${brandId}/brand-rules/draft`,
+      headers: auth,
+      payload: {
+        contractVersion: "brand-rules.v1",
+        requiredPhrases: [],
+        forbiddenPhrases: [],
+        exaggerationRules: [],
+        ctaRules: { defaultCta: "", allowed: [] },
+        channelRules: {},
+        designRules: {
+          colors: [],
+          fonts: [],
+          notes: [],
+          referenceImages: [{
+            referenceItemId: "44444444-4444-4444-8444-444444444444",
+            description: "",
+            tags: [],
+          }],
+        },
+        autoApprovalRules: { enabled: false, conditions: [] },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "brand_style_reference_invalid" });
+    await app.close();
+  });
+
+  it("requires and forwards the displayed concurrency token for approval", async () => {
+    const approve = vi.fn(async () => version("approved"));
+    const { app } = setup({ approve });
+
+    const missing = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/brand-core/drafts/${version().id}/approve`,
+      headers: auth,
+      payload: {},
+    });
+    expect(missing.statusCode).toBe(409);
+    expect(approve).not.toHaveBeenCalled();
+
+    const approved = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/brand-core/drafts/${version().id}/approve`,
+      headers: auth,
+      payload: { expectedUpdatedAt: version().updatedAt },
+    });
+    expect(approved.statusCode).toBe(200);
+    expect(approve).toHaveBeenCalledWith(
+      { workspaceId, brandId, actorUserId: userId, versionId: version().id },
+      { expectedUpdatedAt: version().updatedAt },
+    );
+    await app.close();
   });
 });

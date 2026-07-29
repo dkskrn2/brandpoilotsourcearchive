@@ -3018,6 +3018,51 @@ test("055 backfills tenant-safe approved brand core and rules without mutating c
   });
 });
 
+test("068 refuses legacy duplicate core drafts without changing user data", async () => {
+  const migrations = await loadMigrations();
+  const migration068 = migrations.find(
+    (migration) => migration.id === "068_brand_core_one_draft.sql",
+  );
+  assert.ok(migration068, "068 brand core draft uniqueness migration must exist");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(database, migrations, "001_initial_schema.sql", "055_brand_core_and_rules.sql");
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ('Legacy Drafts', $1) returning id",
+      [`legacy-drafts-${randomUUID()}`],
+    );
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Legacy Draft Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    await database.query(
+      "insert into brand_profiles (workspace_id, brand_id) values ($1, $2)",
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+    await database.query(
+      `insert into brand_core_versions (
+         workspace_id, brand_id, version, status, core_json, created_by
+       ) values
+         ($1, $2, 1, 'draft', '{}'::jsonb, 'migration'),
+         ($1, $2, 2, 'draft', '{}'::jsonb, 'migration')`,
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+
+    await assert.rejects(
+      database.exec(migration068.sql),
+      /brand_core_duplicate_drafts_require_manual_resolution/,
+    );
+    const drafts = await database.query(
+      `select id, version from brand_core_versions
+        where workspace_id = $1 and brand_id = $2 and status = 'draft'
+        order by version`,
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+    assert.equal(drafts.rows.length, 2);
+    assert.deepEqual(drafts.rows.map((row) => row.version), [1, 2]);
+  });
+});
+
 test("056 backfills legacy product knowledge into one approved reusable product", async () => {
   const migrations = await loadMigrations();
   const migration056 = migrations.find(

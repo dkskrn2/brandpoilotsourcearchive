@@ -534,3 +534,36 @@ git status --short
 git add docs/quality/d-hybrid-regression-matrix.md docs/prd/brand-pilot-feature-preservation-ledger.md
 git commit -m "test(release): record d-hybrid preproduction evidence"
 ```
+
+## Brand Center live integration checkpoint (2026-07-30)
+
+The following executable checks are required before the separate Ubuntu and
+production browser-QA workflow. This checkpoint records development evidence
+only; it does not mark deployment or production QA complete.
+
+| Preserved behavior | Executable evidence |
+| --- | --- |
+| Bounded, abortable onboarding polling | `boundedAnalysisPoller.test.ts`, `brandCenterLiveOnboarding.test.tsx`, `brand-center-live-integration.spec.ts` |
+| Hidden legacy analysis payload survives visible category edits | `brandCenterLiveOnboarding.test.tsx`, `brand-center-live-integration.spec.ts` |
+| Exactly six Brand Center tabs and secondary policy/issues controls | `brandCenter.test.tsx`, `brandCenterRouting.test.tsx`, `brand-center-live-integration.spec.ts` |
+| Style accepts confirmed same-brand image references only | `StyleReferenceImageBoard.test.tsx`, `brandCoreContracts.test.ts`, `brandCoreRepository.test.ts`, `server.brandCenterCustomer.test.ts` |
+| First Wiki is provisioned by Instagram enable, not onboarding | `dmAutomation.test.tsx`, `channels.test.tsx`, `repository.dmWiki.test.ts`, `repository.dmWiki.pglite.test.ts`, `server.dmOperations.test.ts` |
+| Product changes coalesce at the next 03:00 KST boundary | `productLibraryRepository.test.ts`, `db.transaction.test.ts` |
+| Avatar backend remains available while the canonical panel stays unmounted | `brandCenter.test.tsx`, `avatarLibrary.test.tsx`, `libraryGateway.test.ts`, `server.assetLibraryCustomer.test.ts` |
+
+Run the customer checkpoint:
+
+```bash
+npm run test --workspace @brand-pilot/customer-ui -- brandCenterLiveOnboarding.test.tsx boundedAnalysisPoller.test.ts brandCenter.test.tsx brandCenterRouting.test.tsx BrandCoreReviewPanel.test.tsx wikiLibrary.test.tsx productServiceLibrary.test.tsx StyleReferenceImageBoard.test.tsx referenceLibrary.test.tsx dmAutomation.test.tsx channels.test.tsx avatarLibrary.test.tsx
+npm run build --workspace @brand-pilot/customer-ui
+npm run e2e --workspace @brand-pilot/customer-ui -- brand-center-live-integration.spec.ts
+```
+
+Run the server/worker checkpoint with local Docker PostgreSQL only:
+
+```bash
+npm run test --workspace @brand-pilot/api -- brandCoreContracts.test.ts brandCoreRepository.test.ts server.brandCenterCustomer.test.ts repository.dmWiki.test.ts repository.dmWiki.pglite.test.ts server.dmOperations.test.ts productLibraryRepository.test.ts server.assetLibraryCustomer.test.ts
+npm run test --workspace @brand-pilot/dm-worker -- db.transaction.test.ts
+npm run test:contract
+npm run test:migrations
+```

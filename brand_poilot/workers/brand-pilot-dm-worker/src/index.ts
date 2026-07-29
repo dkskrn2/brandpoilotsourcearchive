@@ -15,6 +15,7 @@ import { startWorkerInstanceHeartbeat } from "./instanceHeartbeat.js";
 import { runDmWorkerOnce } from "./worker.js";
 import { runProfileRefreshOnce } from "./profileRefresh.js";
 import { runWikiMaintenanceOnce } from "./wikiMaintenance.js";
+import { runWikiRefreshOutboxOnce } from "./wikiRefreshOutbox.js";
 import { withWorkerResourceLease } from "./resourceLease.js";
 import { resolveWorkerMode } from "./workerMode.js";
 
@@ -76,6 +77,8 @@ async function runDmLaneOnce() {
 }
 
 async function runWikiLaneWithoutResource() {
+  const outbox = await runWikiRefreshOutboxOnce({ workerId, db });
+  if (outbox.status !== "idle") return outbox;
   const source = await runCompiledWikiSourceItemOnce({
     workerId,
     db,

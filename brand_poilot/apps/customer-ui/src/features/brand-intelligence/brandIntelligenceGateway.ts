@@ -43,8 +43,11 @@ export function createBrandIntelligenceGateway(
       );
       return payload.intelligence;
     },
-    getAnalysis(brandId, analysisId) {
-      return client.requestJson(`/brands/${brandId}/brand-intelligence/analyses/${analysisId}`, { method: "GET" });
+    getAnalysis(brandId, analysisId, signal) {
+      return client.requestJson(`/brands/${brandId}/brand-intelligence/analyses/${analysisId}`, {
+        method: "GET",
+        signal,
+      });
     },
     requestAnalysis(brandId, input) {
       return client.requestJson(`/brands/${brandId}/brand-intelligence/analyses`, {

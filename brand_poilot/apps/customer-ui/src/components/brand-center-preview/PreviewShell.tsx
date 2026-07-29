@@ -39,11 +39,9 @@ export function PreviewShell({
   return (
     <section className="brand-center-preview" aria-labelledby="preview-title">
       <header className="brand-center-preview__header">
-        <p>BRAND CENTER</p>
-        <h1 id="preview-title" aria-label="Brand Center Preview">
-          브랜드 기준을 만드는 첫 단계
+        <h1 id="preview-title">
+          URL 입력하면 AI가 내 서비스를 분석해줘요
         </h1>
-        <span>브랜드 자료를 등록하면 AI가 핵심 정보를 정리합니다.</span>
       </header>
 
       <nav className="brand-center-preview__steps" aria-label="브랜드 센터 진행 상태">
@@ -93,7 +91,7 @@ export function PreviewShell({
             </p>
           )}
           <p className="brand-center-preview__context-note">
-            선택한 파일은 이 화면에서 이름과 크기만 보관합니다.
+            등록한 URL과 문서는 AI 분석을 위해 서버로 전송됩니다.
           </p>
         </aside>
 

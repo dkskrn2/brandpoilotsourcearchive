@@ -24,7 +24,16 @@ export interface BrandRulesV1 {
   exaggerationRules: string[];
   ctaRules: { defaultCta: string; allowed: string[] };
   channelRules: Record<string, string[]>;
-  designRules: { colors: string[]; fonts: string[]; notes: string[] };
+  designRules: {
+    colors: string[];
+    fonts: string[];
+    notes: string[];
+    referenceImages: Array<{
+      referenceItemId: string;
+      description: string;
+      tags: string[];
+    }>;
+  };
   autoApprovalRules: { enabled: boolean; conditions: string[] };
 }
 
@@ -93,6 +102,7 @@ const SOURCE_TYPES: readonly BrandEvidenceSource[] = [
   "public_web",
   "analysis",
 ];
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function invalid(path: string): never {
   throw new Error(`brand_core_validation_failed:${path}`);
@@ -332,7 +342,12 @@ export function parseBrandRules(value: unknown): BrandRulesV1 {
       allowEmpty: true,
     });
   }
-  const designRules = strictObject(source.designRules, ["colors", "fonts", "notes"], "rules.designRules");
+  const designRules = strictObject(source.designRules, [
+    "colors",
+    "fonts",
+    "notes",
+    "referenceImages",
+  ], "rules.designRules");
   const autoApprovalRules = strictObject(
     source.autoApprovalRules,
     ["enabled", "conditions"],
@@ -354,11 +369,44 @@ export function parseBrandRules(value: unknown): BrandRulesV1 {
       allowed: stringList(ctaRules.allowed, "rules.ctaRules.allowed", { allowEmpty: true }),
     },
     channelRules: parsedChannelRules,
-    designRules: {
-      colors: stringList(designRules.colors, "rules.designRules.colors", { allowEmpty: true }),
-      fonts: stringList(designRules.fonts, "rules.designRules.fonts", { allowEmpty: true }),
-      notes: stringList(designRules.notes, "rules.designRules.notes", { allowEmpty: true }),
-    },
+    designRules: (() => {
+      const rawReferenceImages = designRules.referenceImages ?? [];
+      if (!Array.isArray(rawReferenceImages) || rawReferenceImages.length > 5) {
+        invalid("rules.designRules.referenceImages");
+      }
+      const seenIds = new Set<string>();
+      const referenceImages = rawReferenceImages.map((rawImage, index) => {
+        const path = `rules.designRules.referenceImages[${index}]`;
+        const image = strictObject(
+          rawImage,
+          ["referenceItemId", "description", "tags"],
+          path,
+        );
+        const referenceItemId = text(image.referenceItemId, `${path}.referenceItemId`, { max: 36 });
+        if (!UUID_PATTERN.test(referenceItemId) || seenIds.has(referenceItemId)) {
+          invalid("rules.designRules.referenceImages");
+        }
+        seenIds.add(referenceItemId);
+        return {
+          referenceItemId,
+          description: text(image.description, `${path}.description`, {
+            max: 240,
+            allowEmpty: true,
+          }),
+          tags: stringList(image.tags, `${path}.tags`, {
+            maxItems: 10,
+            maxLength: 40,
+            allowEmpty: true,
+          }),
+        };
+      });
+      return {
+        colors: stringList(designRules.colors, "rules.designRules.colors", { allowEmpty: true }),
+        fonts: stringList(designRules.fonts, "rules.designRules.fonts", { allowEmpty: true }),
+        notes: stringList(designRules.notes, "rules.designRules.notes", { allowEmpty: true }),
+        referenceImages,
+      };
+    })(),
     autoApprovalRules: {
       enabled: autoApprovalRules.enabled,
       conditions: stringList(autoApprovalRules.conditions, "rules.autoApprovalRules.conditions", {

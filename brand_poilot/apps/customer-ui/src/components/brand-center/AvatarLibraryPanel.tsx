@@ -15,12 +15,14 @@ import { AssetArchiveDialog } from "../ai-content/AssetArchiveDialog";
 
 interface Props {
   brandId: string;
+  title?: string;
   gateway?: LibraryGateway;
   draftReferences?: Pick<AiContentGateway, "listDraftReferences">;
 }
 
 export function AvatarLibraryPanel({
   brandId,
+  title = "모델·아바타",
   gateway = libraryGateway,
   draftReferences = aiContentApiGateway,
 }: Props) {
@@ -122,7 +124,7 @@ export function AvatarLibraryPanel({
     <section className="avatar-library panel">
       <header className="panel-header avatar-library-header">
         <div>
-          <h2>모델·아바타</h2>
+          <h2>{title}</h2>
           <p>정적 콘텐츠에서 재사용할 승인된 이미지 자산을 관리합니다.</p>
         </div>
         <button ref={createButtonRef} className="button primary" type="button" onClick={() => setCreating(true)}>

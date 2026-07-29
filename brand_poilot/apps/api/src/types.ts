@@ -1202,6 +1202,9 @@ export interface ApiRepository
   createKnowledgeImport(brandId: string, input: KnowledgeImportInput): Promise<KnowledgeImportDto>;
   listKnowledgeImports(brandId: string): Promise<KnowledgeImportDto[]>;
   enqueueWikiRefresh(brandId: string): Promise<{ id: string; status: string }>;
+  ensureInitialWikiBuild?(brandId: string): Promise<{
+    state: "already_active" | "already_pending" | "enqueued";
+  }>;
   receiveInstagramWebhookMessage(input: InstagramWebhookMessageInput): Promise<InstagramWebhookReceiveResult>;
   getInstagramDmSettings(brandId: string): Promise<InstagramDmSettingsDto>;
   updateInstagramDmSettings(brandId: string, input: Partial<Pick<InstagramDmSettingsDto, "enabled" | "fallbackMessage" | "errorMessage">>): Promise<InstagramDmSettingsDto>;

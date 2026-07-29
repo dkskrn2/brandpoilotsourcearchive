@@ -423,25 +423,6 @@ export function createBrandIntelligenceRepository(pool: Pool): BrandIntelligence
              enabled = true, last_import_id = excluded.last_import_id, updated_at = now()`,
           [input.workspaceId, input.brandId, knowledgeContent, JSON.stringify(effective), knowledgeImport.rows[0]!.id],
         );
-        const activeBuild = await client.query(
-          `select id, status from wiki_build_requests
-            where workspace_id = $1 and brand_id = $2 and status in ('pending', 'building')
-            limit 1 for update`,
-          [input.workspaceId, input.brandId],
-        );
-        if (activeBuild.rowCount) {
-          await client.query(
-            `update wiki_build_requests set requested_revision = requested_revision + 1,
-              rebuild_requested = rebuild_requested or status = 'building', updated_at = now()
-              where id = $1`,
-            [activeBuild.rows[0]!.id],
-          );
-        } else {
-          await client.query(
-            "insert into wiki_build_requests (workspace_id, brand_id) values ($1, $2)",
-            [input.workspaceId, input.brandId],
-          );
-        }
         const confirmed = await client.query(
           `update brand_analysis_runs set status = 'confirmed', is_active = true,
              edited_result_json = $2::jsonb, confirmed_at = coalesce(confirmed_at, now()),

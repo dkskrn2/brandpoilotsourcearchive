@@ -45,6 +45,8 @@ const dmSettings: InstagramDmSettings = {
   enabled: false,
   fallbackMessage: "담당자가 확인하겠습니다.",
   errorMessage: "잠시 후 다시 문의해 주세요.",
+  brandCoreReady: true,
+  wikiStatus: "active",
   wikiReady: true,
   messagePermissionReady: true,
   webhookStatus: "connected",
@@ -124,6 +126,63 @@ describe("DmAutomationPage", () => {
     expect(await screen.findByText("자동답변이 켜졌습니다.")).toBeVisible();
   });
 
+  it("refreshes blocked activation and explains that the first Wiki is building", async () => {
+    const buildingSettings = {
+      ...dmSettings,
+      enabled: false,
+      wikiReady: false,
+      wikiStatus: "building",
+    };
+    const getInstagramDmSettings = vi.fn()
+      .mockResolvedValueOnce(dmSettings)
+      .mockResolvedValueOnce(buildingSettings);
+    const updateInstagramDmSettings = vi.fn(async () => {
+      throw { errorCode: "dm_activation_blocked" };
+    });
+    const api = await renderPage({ getInstagramDmSettings, updateInstagramDmSettings });
+
+    await screen.findByText("자동답변 준비 완료");
+    await userEvent.click(screen.getByRole("switch", { name: "DM 자동답변" }));
+
+    expect(api.updateInstagramDmSettings).toHaveBeenCalledWith("brand-1", { enabled: true });
+    expect(getInstagramDmSettings).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText(
+      "첫 Wiki를 준비하고 있습니다. 기존 설정은 꺼진 상태이며 준비가 끝난 뒤 다시 활성화할 수 있습니다.",
+    )).toBeVisible();
+    expect(screen.getByRole("switch", { name: "DM 자동답변" })).not.toBeChecked();
+  });
+
+  it("allows an empty Wiki activation attempt to provision the first build while staying off", async () => {
+    const emptySettings = {
+      ...dmSettings,
+      enabled: false,
+      wikiReady: false,
+      wikiStatus: "empty" as const,
+    };
+    const buildingSettings = {
+      ...emptySettings,
+      wikiStatus: "building" as const,
+    };
+    const getInstagramDmSettings = vi.fn()
+      .mockResolvedValueOnce(emptySettings)
+      .mockResolvedValueOnce(buildingSettings);
+    const updateInstagramDmSettings = vi.fn(async () => {
+      throw { errorCode: "dm_activation_blocked" };
+    });
+    const api = await renderPage({ getInstagramDmSettings, updateInstagramDmSettings });
+
+    const activation = await screen.findByRole("switch", { name: "DM 자동답변" });
+    expect(activation).toBeEnabled();
+    await userEvent.click(activation);
+
+    expect(api.updateInstagramDmSettings).toHaveBeenCalledWith("brand-1", { enabled: true });
+    expect(getInstagramDmSettings).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText(
+      "첫 Wiki를 준비하고 있습니다. 기존 설정은 꺼진 상태이며 준비가 끝난 뒤 다시 활성화할 수 있습니다.",
+    )).toBeVisible();
+    expect(activation).not.toBeChecked();
+  });
+
   it("blocks activation until readiness passes and provides concrete repair links", async () => {
     const updateInstagramDmSettings = vi.fn();
     await renderPage({
@@ -140,6 +199,21 @@ describe("DmAutomationPage", () => {
     expect(screen.getByRole("switch", { name: "DM 자동답변" })).toBeDisabled();
     expect(screen.getByRole("link", { name: "Wiki 보완하기" })).toHaveAttribute("href", "/brand-center?tab=wiki");
     expect(screen.getByRole("link", { name: "Instagram 연결 확인" })).toHaveAttribute("href", "/channels");
+    expect(updateInstagramDmSettings).not.toHaveBeenCalled();
+  });
+
+  it("blocks activation when the webhook is not connected", async () => {
+    const updateInstagramDmSettings = vi.fn();
+    await renderPage({
+      getInstagramDmSettings: vi.fn(async () => ({
+        ...dmSettings,
+        webhookStatus: "needs_attention" as const,
+      })),
+      updateInstagramDmSettings,
+    });
+
+    expect(await screen.findByText("자동답변을 켤 수 없습니다")).toBeVisible();
+    expect(screen.getByRole("switch", { name: "DM 자동답변" })).toBeDisabled();
     expect(updateInstagramDmSettings).not.toHaveBeenCalled();
   });
 

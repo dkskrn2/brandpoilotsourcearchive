@@ -211,16 +211,20 @@ export function registerBrandCenterRoutes(
     },
   );
 
-  app.post<{ Params: { brandId: string; versionId: string } }>(
+  app.post<{ Params: { brandId: string; versionId: string }; Body: unknown }>(
     "/brands/:brandId/brand-core/drafts/:versionId/approve",
     async (request, reply) => {
       if (!repository.approve) throw new Error("brand_center_not_configured");
       const scope = options.scope(request, request.params.brandId);
-      const approved = await repository.approve({
-        ...scope,
-        actorUserId: requireActor(options, request),
-        versionId: request.params.versionId,
-      });
+      const body = record(request.body);
+      const approved = await repository.approve(
+        {
+          ...scope,
+          actorUserId: requireActor(options, request),
+          versionId: request.params.versionId,
+        },
+        { expectedUpdatedAt: ifMatch(request, body) },
+      );
       reply.header("etag", etag(approved.updatedAt));
       return approved;
     },

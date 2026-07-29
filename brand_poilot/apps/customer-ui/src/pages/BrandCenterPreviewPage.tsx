@@ -13,9 +13,39 @@ import {
   previewReducer,
 } from "../features/brand-center-preview/previewReducer";
 import type { PreviewFile } from "../features/brand-center-preview/types";
+import type { BrandIntelligenceGateway } from "../features/brand-intelligence/types";
+import {
+  LiveBrandCenterOnboarding,
+  type BrandIntelligenceStorageScope,
+} from "./LiveBrandCenterOnboarding";
 import "../styles/brand-center-preview.css";
 
 export function BrandCenterPreviewPage({
+  adapter,
+  mode = "mock",
+  gateway,
+  brandId,
+  storageScope,
+}: {
+  adapter?: PreviewAdapter;
+  mode?: "mock" | "live";
+  gateway?: BrandIntelligenceGateway;
+  brandId?: string;
+  storageScope?: BrandIntelligenceStorageScope;
+}) {
+  if (mode === "live") {
+    return (
+      <LiveBrandCenterOnboarding
+        gateway={gateway}
+        brandId={brandId}
+        storageScope={storageScope}
+      />
+    );
+  }
+  return <MockBrandCenterPreviewPage adapter={adapter} />;
+}
+
+function MockBrandCenterPreviewPage({
   adapter,
 }: {
   adapter?: PreviewAdapter;

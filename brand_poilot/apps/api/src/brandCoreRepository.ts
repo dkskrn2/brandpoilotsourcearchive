@@ -6,9 +6,10 @@ import {
   parseBrandEvidence,
   parseBrandReviewState,
   parseBrandRules,
-  transitionBrandReviewState,
   type BrandCoreV1,
+  type BrandCoreFieldPath,
   type BrandEvidenceItem,
+  type BrandFieldReview,
   type BrandReviewState,
   type BrandRulesV1,
 } from "./brandCoreContracts.js";
@@ -61,6 +62,10 @@ export interface UpdateBrandCoreDraft {
   expectedUpdatedAt: string;
 }
 
+export interface ApproveBrandCoreDraft {
+  expectedUpdatedAt: string;
+}
+
 export interface BrandCoreRepository {
   getActive(scope: BrandScope): Promise<BrandCoreVersion | null>;
   listVersions(scope: BrandScope): Promise<BrandCoreVersion[]>;
@@ -74,6 +79,7 @@ export interface BrandCoreRepository {
   ): Promise<BrandCoreVersion>;
   approve(
     scope: BrandScope & { actorUserId: string; versionId: string },
+    input: ApproveBrandCoreDraft,
   ): Promise<BrandCoreVersion>;
   getActiveRules(scope: BrandScope): Promise<BrandRuleSet | null>;
   listRuleSets(scope: BrandScope): Promise<BrandRuleSet[]>;
@@ -88,7 +94,8 @@ export interface BrandCoreRepository {
 
 const coreColumns = `id, workspace_id, brand_id, source_analysis_id, version, status,
   core_json, evidence_json, review_state_json, created_by, created_by_user_id,
-  approved_by_user_id, approved_at, created_at, updated_at`;
+  approved_by_user_id, approved_at, created_at,
+  to_char(updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as updated_at`;
 const ruleColumns = `id, workspace_id, brand_id, version, status, rules_json, created_by,
   created_by_user_id, approved_by_user_id, approved_at, created_at, updated_at`;
 
@@ -109,6 +116,14 @@ function iso(value: unknown): string | null {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+function concurrencyToken(value: unknown): string {
+  if (
+    typeof value === "string"
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(value)
+  ) return value;
+  return iso(value)!;
+}
+
 function mapCore(row: Record<string, unknown>): BrandCoreVersion {
   return {
     id: String(row.id),
@@ -125,7 +140,7 @@ function mapCore(row: Record<string, unknown>): BrandCoreVersion {
     approvedByUserId: row.approved_by_user_id ? String(row.approved_by_user_id) : null,
     approvedAt: iso(row.approved_at),
     createdAt: iso(row.created_at)!,
-    updatedAt: iso(row.updated_at)!,
+    updatedAt: concurrencyToken(row.updated_at),
   };
 }
 
@@ -183,11 +198,93 @@ async function requireMember(
   }
 }
 
+async function requireValidStyleReferences(
+  client: Pick<PoolClient, "query">,
+  scope: BrandScope,
+  rules: BrandRulesV1,
+): Promise<void> {
+  const referenceIds = rules.designRules.referenceImages.map((image) => image.referenceItemId);
+  if (referenceIds.length === 0) return;
+  const result = await client.query(
+    `select item.id
+       from reference_items item
+       join storage_artifacts artifact
+         on artifact.id = item.storage_artifact_id
+        and artifact.workspace_id = item.workspace_id
+        and artifact.brand_id = item.brand_id
+      where item.workspace_id = $1
+        and item.brand_id = $2
+        and item.id = any($3::uuid[])
+        and item.kind = 'upload'
+        and item.archived_at is null
+        and artifact.deleted_at is null
+        and lower(artifact.mime_type) in ('image/png','image/jpeg','image/webp')`,
+    [scope.workspaceId, scope.brandId, referenceIds],
+  );
+  if (result.rowCount !== referenceIds.length) throw new Error("brand_style_reference_invalid");
+}
+
 function initialReviewState(): BrandReviewState {
   return Object.fromEntries(BRAND_CORE_FIELD_PATHS.map((path) => [
     path,
     { decision: "ai_suggested", reviewerUserId: null, reviewedAt: null },
   ])) as BrandReviewState;
+}
+
+function coreField(core: BrandCoreV1, path: BrandCoreFieldPath): unknown {
+  switch (path) {
+    case "summary.oneLine": return core.summary.oneLine;
+    case "summary.description": return core.summary.description;
+    case "audiences": return core.audiences;
+    case "valueProposition.primary": return core.valueProposition.primary;
+    case "valueProposition.differentiators": return core.valueProposition.differentiators;
+    case "valueProposition.proofPoints": return core.valueProposition.proofPoints;
+    case "messaging.appeals": return core.messaging.appeals;
+    case "messaging.tone": return core.messaging.tone;
+    case "messaging.preferredPhrases": return core.messaging.preferredPhrases;
+    case "messaging.brandDirection": return core.messaging.brandDirection;
+    case "messaging.priorityMessages": return core.messaging.priorityMessages;
+  }
+}
+
+function sameValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function changedCoreFields(previous: BrandCoreV1, next: BrandCoreV1): Set<BrandCoreFieldPath> {
+  return new Set(BRAND_CORE_FIELD_PATHS.filter(
+    (path) => !sameValue(coreField(previous, path), coreField(next, path)),
+  ));
+}
+
+function reviewStateForEdit(
+  previous: BrandCoreV1,
+  next: BrandCoreV1,
+  previousReviewState: BrandReviewState,
+  actorUserId: string,
+  reviewedAt: string,
+): BrandReviewState {
+  const changed = changedCoreFields(previous, next);
+  return Object.fromEntries(BRAND_CORE_FIELD_PATHS.map((path) => {
+    const review: BrandFieldReview = changed.has(path)
+      ? { decision: "user_edited", reviewerUserId: actorUserId, reviewedAt }
+      : previousReviewState[path]
+        ?? { decision: "ai_suggested", reviewerUserId: null, reviewedAt: null };
+    return [path, review];
+  })) as BrandReviewState;
+}
+
+function evidenceForEdit(
+  previous: BrandCoreV1,
+  next: BrandCoreV1,
+  previousEvidence: BrandEvidenceItem[],
+  nextEvidence: BrandEvidenceItem[],
+): BrandEvidenceItem[] {
+  const changed = changedCoreFields(previous, next);
+  return [
+    ...previousEvidence.filter((item) => !changed.has(item.fieldPath)),
+    ...nextEvidence.filter((item) => changed.has(item.fieldPath)),
+  ];
 }
 
 export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
@@ -222,13 +319,13 @@ export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
     async createDraft(scope, input) {
       const core = parseBrandCoreDraft(input.core);
       const evidence = parseBrandEvidence(input.evidence);
-      const reviewState = input.reviewState
+      const requestedReviewState = input.reviewState
         ? parseBrandReviewState(input.reviewState)
         : initialReviewState();
       return transaction(pool, async (client) => {
         await requireMember(client, scope);
         const profile = await client.query(
-          `select id from brand_profiles
+          `select id, active_brand_core_id from brand_profiles
             where workspace_id = $1 and brand_id = $2
             for update`,
           [scope.workspaceId, scope.brandId],
@@ -242,6 +339,43 @@ export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
           );
           if (!analysis.rowCount) throw new Error("brand_analysis_not_found");
         }
+        const existingDraft = await client.query(
+          `select ${coreColumns}
+             from brand_core_versions
+            where workspace_id = $1 and brand_id = $2 and status = 'draft'
+            order by version desc
+            limit 1
+            for update`,
+          [scope.workspaceId, scope.brandId],
+        );
+        if (existingDraft.rowCount) {
+          return mapCore(existingDraft.rows[0] as Record<string, unknown>);
+        }
+        let reviewState = requestedReviewState;
+        let storedEvidence = evidence;
+        if (profile.rows[0]?.active_brand_core_id) {
+          const activeResult = await client.query(
+            `select ${coreColumns}
+               from brand_core_versions
+              where id = $1 and workspace_id = $2 and brand_id = $3`,
+            [
+              profile.rows[0].active_brand_core_id,
+              scope.workspaceId,
+              scope.brandId,
+            ],
+          );
+          if (activeResult.rowCount) {
+            const active = mapCore(activeResult.rows[0] as Record<string, unknown>);
+            reviewState = reviewStateForEdit(
+              active.core,
+              core,
+              active.reviewState,
+              scope.actorUserId,
+              new Date().toISOString(),
+            );
+            storedEvidence = evidenceForEdit(active.core, core, active.evidence, evidence);
+          }
+        }
         const inserted = await client.query(
           `insert into brand_core_versions (
              workspace_id, brand_id, source_analysis_id, version, status, core_json,
@@ -251,25 +385,38 @@ export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
                   $4::jsonb, $5::jsonb, $6::jsonb, 'user', $7
              from brand_core_versions
             where workspace_id = $1 and brand_id = $2
+           on conflict (workspace_id, brand_id) where status = 'draft' do nothing
            returning ${coreColumns}`,
           [
             scope.workspaceId,
             scope.brandId,
             input.sourceAnalysisId,
             JSON.stringify(core),
-            JSON.stringify(evidence),
+            JSON.stringify(storedEvidence),
             JSON.stringify(reviewState),
             scope.actorUserId,
           ],
         );
-        return mapCore(inserted.rows[0] as Record<string, unknown>);
+        if (inserted.rowCount) {
+          return mapCore(inserted.rows[0] as Record<string, unknown>);
+        }
+        const concurrentDraft = await client.query(
+          `select ${coreColumns}
+             from brand_core_versions
+            where workspace_id = $1 and brand_id = $2 and status = 'draft'
+            order by version desc
+            limit 1`,
+          [scope.workspaceId, scope.brandId],
+        );
+        if (!concurrentDraft.rowCount) throw new Error("brand_core_version_conflict");
+        return mapCore(concurrentDraft.rows[0] as Record<string, unknown>);
       });
     },
 
     async updateDraft(scope, input) {
       const core = parseBrandCoreDraft(input.core);
       const evidence = parseBrandEvidence(input.evidence);
-      const reviewState = parseBrandReviewState(input.reviewState);
+      parseBrandReviewState(input.reviewState);
       return transaction(pool, async (client) => {
         await requireMember(client, scope);
         const current = await client.query(
@@ -282,10 +429,14 @@ export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
         if (!current.rowCount) throw new Error("brand_core_not_found");
         const existing = mapCore(current.rows[0] as Record<string, unknown>);
         if (existing.status !== "draft") throw new Error("brand_core_not_draft");
-        for (const [path, next] of Object.entries(reviewState)) {
-          const previous = existing.reviewState[path as keyof BrandReviewState];
-          if (previous && next) transitionBrandReviewState(previous, next);
-        }
+        const reviewState = reviewStateForEdit(
+          existing.core,
+          core,
+          existing.reviewState,
+          scope.actorUserId,
+          new Date().toISOString(),
+        );
+        const storedEvidence = evidenceForEdit(existing.core, core, existing.evidence, evidence);
         const updated = await client.query(
           `update brand_core_versions
               set core_json = $4::jsonb,
@@ -300,7 +451,7 @@ export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
             scope.workspaceId,
             scope.brandId,
             JSON.stringify(core),
-            JSON.stringify(evidence),
+            JSON.stringify(storedEvidence),
             JSON.stringify(reviewState),
             input.expectedUpdatedAt,
           ],
@@ -310,7 +461,7 @@ export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
       });
     },
 
-    async approve(scope) {
+    async approve(scope, input) {
       return transaction(pool, async (client) => {
         await requireMember(client, scope, true);
         const profile = await client.query(
@@ -329,6 +480,12 @@ export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
         );
         if (!current.rowCount) throw new Error("brand_core_not_found");
         const target = mapCore(current.rows[0] as Record<string, unknown>);
+        if (
+          new Date(target.updatedAt).getTime()
+          !== new Date(input.expectedUpdatedAt).getTime()
+        ) {
+          throw new Error("brand_core_version_conflict");
+        }
         if (target.status === "approved") return target;
         if (target.status !== "draft") throw new Error("brand_core_not_draft");
         parseBrandCoreForApproval(target.core);
@@ -353,6 +510,7 @@ export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
                   approved_at = $6::timestamptz,
                   updated_at = now()
             where id = $1 and workspace_id = $2 and brand_id = $3 and status = 'draft'
+              and updated_at = $7::timestamptz
             returning ${coreColumns}`,
           [
             scope.versionId,
@@ -361,6 +519,7 @@ export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
             JSON.stringify(approvedReview),
             scope.actorUserId,
             approvedAt,
+            input.expectedUpdatedAt,
           ],
         );
         if (!approved.rowCount) throw new Error("brand_core_version_conflict");
@@ -411,6 +570,7 @@ export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
           [scope.workspaceId, scope.brandId],
         );
         if (!profile.rowCount) throw new Error("brand_not_found");
+        await requireValidStyleReferences(client, scope, rules);
         const inserted = await client.query(
           `insert into brand_rule_sets (
              workspace_id, brand_id, version, status, rules_json, created_by, created_by_user_id

@@ -45,8 +45,13 @@ function validCore(label: string) {
 }
 
 const workspaceId = "10000000-0000-4000-8000-000000000001";
+const foreignWorkspaceId = "10000000-0000-4000-8000-000000000002";
 const brandId = "20000000-0000-4000-8000-000000000002";
 const otherBrandId = "20000000-0000-4000-8000-000000000003";
+const concurrencyBrandId = "20000000-0000-4000-8000-000000000004";
+const provenanceBrandId = "20000000-0000-4000-8000-000000000005";
+const precisionBrandId = "20000000-0000-4000-8000-000000000006";
+const foreignWorkspaceBrandId = "20000000-0000-4000-8000-000000000007";
 const ownerId = "30000000-0000-4000-8000-000000000003";
 const memberId = "30000000-0000-4000-8000-000000000004";
 
@@ -65,17 +70,26 @@ beforeAll(async () => {
     insert into app_users (id, email) values
       ('${ownerId}', 'owner@example.com'),
       ('${memberId}', 'member@example.com');
-    insert into workspaces (id, name, slug, created_by_user_id)
-      values ('${workspaceId}', 'Brand Core Repository', 'brand-core-repository', '${ownerId}');
+    insert into workspaces (id, name, slug, created_by_user_id) values
+      ('${workspaceId}', 'Brand Core Repository', 'brand-core-repository', '${ownerId}'),
+      ('${foreignWorkspaceId}', 'Foreign Workspace', 'brand-core-foreign', '${ownerId}');
     insert into workspace_members (workspace_id, user_id, role, status) values
       ('${workspaceId}', '${ownerId}', 'owner', 'active'),
-      ('${workspaceId}', '${memberId}', 'member', 'active');
+      ('${workspaceId}', '${memberId}', 'member', 'active'),
+      ('${foreignWorkspaceId}', '${ownerId}', 'owner', 'active');
     insert into brands (id, workspace_id, name) values
       ('${brandId}', '${workspaceId}', 'First'),
-      ('${otherBrandId}', '${workspaceId}', 'Other');
+      ('${otherBrandId}', '${workspaceId}', 'Other'),
+      ('${concurrencyBrandId}', '${workspaceId}', 'Concurrent'),
+      ('${provenanceBrandId}', '${workspaceId}', 'Provenance'),
+      ('${precisionBrandId}', '${workspaceId}', 'Precision'),
+      ('${foreignWorkspaceBrandId}', '${foreignWorkspaceId}', 'Foreign');
     insert into brand_profiles (workspace_id, brand_id) values
       ('${workspaceId}', '${brandId}'),
-      ('${workspaceId}', '${otherBrandId}');
+      ('${workspaceId}', '${otherBrandId}'),
+      ('${workspaceId}', '${concurrencyBrandId}'),
+      ('${workspaceId}', '${provenanceBrandId}'),
+      ('${workspaceId}', '${precisionBrandId}');
   `);
 }, 30_000);
 
@@ -101,22 +115,44 @@ describe("brand core repository", () => {
     );
     expect(updated.core.summary.oneLine).toContain("수정");
 
-    await expect(repository.approve({
-      workspaceId,
-      brandId,
-      actorUserId: memberId,
-      versionId: draft.id,
-    })).rejects.toThrow("brand_core_approval_forbidden");
+    await expect(repository.approve(
+      {
+        workspaceId,
+        brandId,
+        actorUserId: memberId,
+        versionId: draft.id,
+      },
+      { expectedUpdatedAt: updated.updatedAt },
+    )).rejects.toThrow("brand_core_approval_forbidden");
 
-    const approved = await repository.approve({
-      workspaceId,
-      brandId,
-      actorUserId: ownerId,
-      versionId: draft.id,
-    });
+    const approved = await repository.approve(
+      {
+        workspaceId,
+        brandId,
+        actorUserId: ownerId,
+        versionId: draft.id,
+      },
+      { expectedUpdatedAt: updated.updatedAt },
+    );
     expect(approved.status).toBe("approved");
     expect((await repository.getActive({ workspaceId, brandId }))?.id).toBe(draft.id);
     expect(Object.values(approved.reviewState).every((review) => review?.decision === "approved")).toBe(true);
+
+    const nextDraft = await repository.createDraft(
+      { workspaceId, brandId, actorUserId: memberId },
+      {
+        core: validCore("다음 초안"),
+        evidence: [],
+        reviewState: approved.reviewState,
+        sourceAnalysisId: null,
+      },
+    );
+    expect((await repository.getActive({ workspaceId, brandId }))?.id).toBe(approved.id);
+    const versions = await repository.listVersions({ workspaceId, brandId });
+    expect(versions.map((item) => item.version)).toEqual(
+      [...versions.map((item) => item.version)].sort((left, right) => right - left),
+    );
+    expect(versions[0]?.id).toBe(nextDraft.id);
   }, 30_000);
 
   it("rejects cross-brand resources and stale browser updates", async () => {
@@ -154,6 +190,11 @@ describe("brand core repository", () => {
         expectedUpdatedAt: draft.updatedAt,
       },
     )).rejects.toThrow("brand_core_version_conflict");
+
+    await expect(repository.approve(
+      { workspaceId, brandId: otherBrandId, actorUserId: ownerId, versionId: draft.id },
+      { expectedUpdatedAt: draft.updatedAt },
+    )).rejects.toThrow("brand_core_version_conflict");
   }, 30_000);
 
   it("versions rules and keeps auto-approval as review configuration", async () => {
@@ -167,7 +208,7 @@ describe("brand core repository", () => {
         exaggerationRules: [],
         ctaRules: { defaultCta: "자세히 확인하기", allowed: [] },
         channelRules: {},
-        designRules: { colors: [], fonts: [], notes: [] },
+        designRules: { colors: [], fonts: [], notes: [], referenceImages: [] },
         autoApprovalRules: { enabled: true, conditions: ["금지 문구 없음"] },
       },
     );
@@ -187,5 +228,239 @@ describe("brand core repository", () => {
     expect(approved.status).toBe("approved");
     expect((await repository.getActiveRules({ workspaceId, brandId: otherBrandId }))
       ?.rules.autoApprovalRules.enabled).toBe(true);
+  }, 30_000);
+
+  it("accepts only active same-brand confirmed image uploads as style references", async () => {
+    const validArtifactId = "70000000-0000-4000-8000-000000000001";
+    const validReferenceId = "71000000-0000-4000-8000-000000000001";
+    const pdfArtifactId = "70000000-0000-4000-8000-000000000002";
+    const pdfReferenceId = "71000000-0000-4000-8000-000000000002";
+    const archivedArtifactId = "70000000-0000-4000-8000-000000000003";
+    const archivedReferenceId = "71000000-0000-4000-8000-000000000003";
+    const otherArtifactId = "70000000-0000-4000-8000-000000000004";
+    const otherReferenceId = "71000000-0000-4000-8000-000000000004";
+    const jpegArtifactId = "70000000-0000-4000-8000-000000000005";
+    const jpegReferenceId = "71000000-0000-4000-8000-000000000005";
+    const webpArtifactId = "70000000-0000-4000-8000-000000000006";
+    const webpReferenceId = "71000000-0000-4000-8000-000000000006";
+    const deletedArtifactId = "70000000-0000-4000-8000-000000000007";
+    const deletedReferenceId = "71000000-0000-4000-8000-000000000007";
+    const foreignArtifactId = "70000000-0000-4000-8000-000000000008";
+    const foreignReferenceId = "71000000-0000-4000-8000-000000000008";
+    const sourceUrlId = "72000000-0000-4000-8000-000000000001";
+    const nonUploadReferenceId = "71000000-0000-4000-8000-000000000009";
+    await database.exec(`
+      insert into storage_artifacts (
+        id,workspace_id,brand_id,artifact_type,bucket,path,public_url,mime_type,byte_size,checksum,created_by_user_id
+      ) values
+        ('${validArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/valid.png','https://blob.example/valid.png','image/png',100,'valid','${ownerId}'),
+        ('${pdfArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/invalid.pdf','https://blob.example/invalid.pdf','application/pdf',100,'pdf','${ownerId}'),
+        ('${archivedArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/archived.webp','https://blob.example/archived.webp','image/webp',100,'archived','${ownerId}'),
+        ('${otherArtifactId}','${workspaceId}','${brandId}','brand_asset','test','style/other.jpg','https://blob.example/other.jpg','image/jpeg',100,'other','${ownerId}'),
+        ('${jpegArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/valid.jpg','https://blob.example/valid.jpg','image/jpeg',100,'jpeg','${ownerId}'),
+        ('${webpArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/valid.webp','https://blob.example/valid.webp','image/webp',100,'webp','${ownerId}'),
+        ('${deletedArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/deleted.png','https://blob.example/deleted.png','image/png',100,'deleted','${ownerId}'),
+        ('${foreignArtifactId}','${foreignWorkspaceId}','${foreignWorkspaceBrandId}','brand_asset','test','style/foreign.png','https://blob.example/foreign.png','image/png',100,'foreign','${ownerId}');
+      update storage_artifacts set deleted_at = now() where id = '${deletedArtifactId}';
+      insert into source_urls (
+        id,workspace_id,brand_id,source_type,url,url_hash,status,enabled
+      ) values (
+        '${sourceUrlId}','${workspaceId}','${otherBrandId}','reference',
+        'https://example.com/style','style-reference-source','active',true
+      );
+      insert into reference_items (
+        id,workspace_id,brand_id,kind,origin,title,preview_url,source_url,format,metadata,
+        storage_artifact_id,created_by_user_id,archived_at
+      ) values
+        ('${validReferenceId}','${workspaceId}','${otherBrandId}','upload','Upload','valid.png','https://blob.example/valid.png','https://blob.example/valid.png','image/png','{}','${validArtifactId}','${ownerId}',null),
+        ('${pdfReferenceId}','${workspaceId}','${otherBrandId}','upload','Upload','invalid.pdf',null,'https://blob.example/invalid.pdf','application/pdf','{}','${pdfArtifactId}','${ownerId}',null),
+        ('${archivedReferenceId}','${workspaceId}','${otherBrandId}','upload','Upload','archived.webp','https://blob.example/archived.webp','https://blob.example/archived.webp','image/webp','{}','${archivedArtifactId}','${ownerId}',now()),
+        ('${otherReferenceId}','${workspaceId}','${brandId}','upload','Upload','other.jpg','https://blob.example/other.jpg','https://blob.example/other.jpg','image/jpeg','{}','${otherArtifactId}','${ownerId}',null),
+        ('${jpegReferenceId}','${workspaceId}','${otherBrandId}','upload','Upload','valid.jpg','https://blob.example/valid.jpg','https://blob.example/valid.jpg','image/jpeg','{}','${jpegArtifactId}','${ownerId}',null),
+        ('${webpReferenceId}','${workspaceId}','${otherBrandId}','upload','Upload','valid.webp','https://blob.example/valid.webp','https://blob.example/valid.webp','image/webp','{}','${webpArtifactId}','${ownerId}',null),
+        ('${deletedReferenceId}','${workspaceId}','${otherBrandId}','upload','Upload','deleted.png','https://blob.example/deleted.png','https://blob.example/deleted.png','image/png','{}','${deletedArtifactId}','${ownerId}',null),
+        ('${foreignReferenceId}','${foreignWorkspaceId}','${foreignWorkspaceBrandId}','upload','Upload','foreign.png','https://blob.example/foreign.png','https://blob.example/foreign.png','image/png','{}','${foreignArtifactId}','${ownerId}',null);
+      insert into reference_items (
+        id,workspace_id,brand_id,kind,origin,title,preview_url,source_url,format,metadata,
+        source_url_id,created_by_user_id,archived_at
+      ) values (
+        '${nonUploadReferenceId}','${workspaceId}','${otherBrandId}','external_url','URL',
+        'style link',null,'https://example.com/style','image/png','{}','${sourceUrlId}','${ownerId}',null
+      );
+    `);
+    const repository = createBrandCoreRepository(pglitePool(database));
+    const rules = (...referenceItemIds: string[]) => ({
+      contractVersion: "brand-rules.v1" as const,
+      requiredPhrases: [],
+      forbiddenPhrases: [],
+      exaggerationRules: [],
+      ctaRules: { defaultCta: "", allowed: [] },
+      channelRules: {},
+      designRules: {
+        colors: ["#174A3A"],
+        fonts: ["Pretendard"],
+        notes: ["절제된 이미지"],
+        referenceImages: referenceItemIds.map((referenceItemId) => ({
+          referenceItemId,
+          description: "",
+          tags: [],
+        })),
+      },
+      autoApprovalRules: { enabled: false, conditions: [] },
+    });
+
+    const saved = await repository.saveRuleDraft(
+      { workspaceId, brandId: otherBrandId, actorUserId: memberId },
+      rules(validReferenceId, jpegReferenceId, webpReferenceId),
+    );
+    expect(saved.rules.designRules.referenceImages.map((item) => item.referenceItemId))
+      .toEqual([validReferenceId, jpegReferenceId, webpReferenceId]);
+    expect(saved.rules.designRules).toMatchObject({
+      colors: ["#174A3A"],
+      fonts: ["Pretendard"],
+      notes: ["절제된 이미지"],
+    });
+
+    const beforeInvalid = await database.query<{ count: string }>(
+      `select count(*)::text as count from brand_rule_sets
+       where workspace_id = $1 and brand_id = $2`,
+      [workspaceId, otherBrandId],
+    );
+    for (const invalidId of [
+      pdfReferenceId,
+      archivedReferenceId,
+      otherReferenceId,
+      deletedReferenceId,
+      foreignReferenceId,
+      nonUploadReferenceId,
+    ]) {
+      await expect(repository.saveRuleDraft(
+        { workspaceId, brandId: otherBrandId, actorUserId: memberId },
+        rules(invalidId),
+      )).rejects.toThrow("brand_style_reference_invalid");
+    }
+    await expect(repository.saveRuleDraft(
+      { workspaceId, brandId: otherBrandId, actorUserId: memberId },
+      rules(validReferenceId, validReferenceId),
+    )).rejects.toThrow("brand_core_validation_failed:rules.designRules.referenceImages");
+    const afterInvalid = await database.query<{ count: string }>(
+      `select count(*)::text as count from brand_rule_sets
+       where workspace_id = $1 and brand_id = $2`,
+      [workspaceId, otherBrandId],
+    );
+    expect(afterInvalid.rows[0]?.count).toBe(beforeInvalid.rows[0]?.count);
+  }, 30_000);
+
+  it("marks only changed core fields user-edited and preserves unchanged review provenance", async () => {
+    const repository = createBrandCoreRepository(pglitePool(database));
+    const initial = await repository.createDraft(
+      { workspaceId, brandId: provenanceBrandId, actorUserId: ownerId },
+      { core: validCore("승인 원본"), evidence: [], sourceAnalysisId: null },
+    );
+    const approved = await repository.approve(
+      { workspaceId, brandId: provenanceBrandId, actorUserId: ownerId, versionId: initial.id },
+      { expectedUpdatedAt: initial.updatedAt },
+    );
+    const changedAtCreate = validCore("승인 원본");
+    changedAtCreate.summary.oneLine = "사용자가 바꾼 한 줄";
+    const draft = await repository.createDraft(
+      { workspaceId, brandId: provenanceBrandId, actorUserId: memberId },
+      {
+        core: changedAtCreate,
+        evidence: approved.evidence,
+        reviewState: approved.reviewState,
+        sourceAnalysisId: null,
+      },
+    );
+
+    expect(draft.reviewState["summary.oneLine"]).toMatchObject({
+      decision: "user_edited",
+      reviewerUserId: memberId,
+    });
+    expect(draft.reviewState["summary.description"]).toEqual(
+      approved.reviewState["summary.description"],
+    );
+
+    const changedAtUpdate = structuredClone(draft.core);
+    changedAtUpdate.messaging.tone = ["따뜻함"];
+    const updated = await repository.updateDraft(
+      {
+        workspaceId,
+        brandId: provenanceBrandId,
+        actorUserId: ownerId,
+        versionId: draft.id,
+      },
+      {
+        core: changedAtUpdate,
+        evidence: draft.evidence,
+        reviewState: draft.reviewState,
+        expectedUpdatedAt: draft.updatedAt,
+      },
+    );
+
+    expect(updated.reviewState["messaging.tone"]).toMatchObject({
+      decision: "user_edited",
+      reviewerUserId: ownerId,
+    });
+    expect(updated.reviewState["summary.oneLine"]).toEqual(
+      draft.reviewState["summary.oneLine"],
+    );
+    expect(updated.reviewState["summary.description"]).toEqual(
+      approved.reviewState["summary.description"],
+    );
+  }, 30_000);
+
+  it("returns the same draft when create requests race for one brand", async () => {
+    const repository = createBrandCoreRepository(pglitePool(database));
+    const input = { core: validCore("동시 초안"), evidence: [], sourceAnalysisId: null };
+
+    const [first, second] = await Promise.all([
+      repository.createDraft(
+        { workspaceId, brandId: concurrencyBrandId, actorUserId: ownerId },
+        input,
+      ),
+      repository.createDraft(
+        { workspaceId, brandId: concurrencyBrandId, actorUserId: memberId },
+        input,
+      ),
+    ]);
+
+    expect(first.id).toBe(second.id);
+    const versions = await repository.listVersions({ workspaceId, brandId: concurrencyBrandId });
+    expect(versions.filter((version) => version.status === "draft")).toHaveLength(1);
+  }, 30_000);
+
+  it("preserves microsecond concurrency tokens returned by PostgreSQL", async () => {
+    const repository = createBrandCoreRepository(pglitePool(database));
+    const draft = await repository.createDraft(
+      { workspaceId, brandId: precisionBrandId, actorUserId: ownerId },
+      { core: validCore("정밀 토큰"), evidence: [], sourceAnalysisId: null },
+    );
+    await database.exec("alter table brand_core_versions disable trigger brand_core_versions_set_updated_at");
+    try {
+      await database.query(
+        `update brand_core_versions
+            set updated_at = '2026-07-29T03:04:05.123456Z'::timestamptz
+          where id = $1`,
+        [draft.id],
+      );
+    } finally {
+      await database.exec("alter table brand_core_versions enable trigger brand_core_versions_set_updated_at");
+    }
+
+    const preciseDraft = (await repository.listVersions({
+      workspaceId,
+      brandId: precisionBrandId,
+    }))[0];
+    expect(preciseDraft.updatedAt).toBe("2026-07-29T03:04:05.123456Z");
+    await expect(repository.approve(
+      {
+        workspaceId,
+        brandId: precisionBrandId,
+        actorUserId: ownerId,
+        versionId: draft.id,
+      },
+      { expectedUpdatedAt: preciseDraft.updatedAt },
+    )).resolves.toMatchObject({ status: "approved" });
   }, 30_000);
 });

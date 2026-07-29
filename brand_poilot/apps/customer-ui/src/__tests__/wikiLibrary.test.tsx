@@ -4,9 +4,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { useState } from "react";
 import { ApiRequestError } from "../lib/apiClient";
+import { KnowledgeCategoryEditorPanel } from "../components/brand-center/KnowledgeCategoryEditorPanel";
 import { WikiLibraryPanel } from "../components/brand-center/WikiLibraryPanel";
 
 const faqId = "00000000-0000-4000-8000-000000000201";
+const howToId = "00000000-0000-4000-8000-000000000202";
+const guideId = "00000000-0000-4000-8000-000000000203";
+const policyId = "00000000-0000-4000-8000-000000000204";
 const issueId = "00000000-0000-4000-8000-000000000301";
 const productId = "00000000-0000-4000-8000-000000000101";
 
@@ -26,6 +30,63 @@ const items = [
     approvedAt: "2026-07-27T00:00:00.000Z",
     sourceKind: "faq" as const,
     sourceId: faqId,
+    activeVersionId: "wiki-v4",
+    lastBuiltAt: "2026-07-27T01:00:00.000Z",
+    buildStatus: "active" as const,
+  },
+  {
+    id: howToId,
+    workspaceId: "workspace-1",
+    brandId: "brand-1",
+    itemType: "how_to" as const,
+    title: "처음 시작하기",
+    content: "브랜드 정보를 먼저 확인합니다.",
+    status: "draft" as const,
+    origin: "manual" as const,
+    provenance: {},
+    createdByUserId: "user-1",
+    approvedByUserId: null,
+    approvedAt: null,
+    sourceKind: "guide" as const,
+    sourceId: howToId,
+    activeVersionId: "wiki-v4",
+    lastBuiltAt: "2026-07-27T01:00:00.000Z",
+    buildStatus: "draft" as const,
+  },
+  {
+    id: guideId,
+    workspaceId: "workspace-1",
+    brandId: "brand-1",
+    itemType: "guide" as const,
+    title: "콘텐츠 검토 가이드",
+    content: "검토 기준을 순서대로 확인합니다.",
+    status: "draft" as const,
+    origin: "manual" as const,
+    provenance: {},
+    createdByUserId: "user-1",
+    approvedByUserId: null,
+    approvedAt: null,
+    sourceKind: "guide" as const,
+    sourceId: guideId,
+    activeVersionId: "wiki-v4",
+    lastBuiltAt: "2026-07-27T01:00:00.000Z",
+    buildStatus: "pending" as const,
+  },
+  {
+    id: policyId,
+    workspaceId: "workspace-1",
+    brandId: "brand-1",
+    itemType: "policy" as const,
+    title: "환불 정책",
+    content: "결제 후 7일 이내 요청할 수 있습니다.",
+    status: "active" as const,
+    origin: "manual" as const,
+    provenance: {},
+    createdByUserId: "user-1",
+    approvedByUserId: "user-1",
+    approvedAt: "2026-07-27T00:00:00.000Z",
+    sourceKind: "policy" as const,
+    sourceId: policyId,
     activeVersionId: "wiki-v4",
     lastBuiltAt: "2026-07-27T01:00:00.000Z",
     buildStatus: "active" as const,
@@ -123,6 +184,159 @@ function IssueRouteHarness({ onCloseIssue }: { onCloseIssue(): void }) {
 }
 
 describe("WikiLibraryPanel", () => {
+  it("opens an existing category item in view mode and cancel restores the persisted draft", async () => {
+    const onDirtyChange = vi.fn();
+    const api = gateway();
+    renderPanel(<KnowledgeCategoryEditorPanel
+      brandId="brand-1"
+      kind="faq"
+      title="FAQ"
+      gateway={api as never}
+      onDirtyChange={onDirtyChange}
+    />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /배송 기간/ }));
+    expect(screen.getByRole("textbox", { name: "제목" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "수정" }));
+    await userEvent.clear(screen.getByRole("textbox", { name: "제목" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "제목" }), "변경한 배송 기간");
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+
+    await userEvent.click(screen.getByRole("button", { name: "취소" }));
+
+    expect(screen.getByRole("textbox", { name: "제목" })).toHaveValue("배송 기간");
+    expect(screen.getByRole("textbox", { name: "제목" })).toBeDisabled();
+    expect(api.updateWikiItem).not.toHaveBeenCalled();
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("activates and deactivates a category item with status-only patches", async () => {
+    const updateWikiItem = vi.fn(async (_brandId: string, _itemId: string, input: { status: "active" | "inactive" }) => ({
+      ...items[0],
+      status: input.status,
+    }));
+    const api = gateway({ updateWikiItem });
+    renderPanel(<KnowledgeCategoryEditorPanel
+      brandId="brand-1"
+      kind="faq"
+      title="FAQ"
+      gateway={api as never}
+    />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /배송 기간/ }));
+    await userEvent.click(screen.getByRole("button", { name: "비활성화" }));
+
+    expect(updateWikiItem).toHaveBeenLastCalledWith("brand-1", faqId, { status: "inactive" });
+    await userEvent.click(await screen.findByRole("button", { name: "활성화" }));
+    expect(updateWikiItem).toHaveBeenLastCalledWith("brand-1", faqId, { status: "active" });
+  });
+
+  it("lists the how-to projection and creates a how-to draft with the existing Wiki contract", async () => {
+    const createWikiItem = vi.fn(async (_brandId: string, input: {
+      itemType: "how_to";
+      title: string;
+      content: string;
+    }) => ({
+      ...items[1],
+      id: "00000000-0000-4000-8000-000000000205",
+      title: input.title,
+      content: input.content,
+    }));
+    const api = gateway({ createWikiItem });
+    renderPanel(<KnowledgeCategoryEditorPanel
+      brandId="brand-1"
+      kind="how_to"
+      title="이용 방법"
+      gateway={api as never}
+    />);
+
+    expect(await screen.findByRole("button", { name: /처음 시작하기/ })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /배송 기간/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /콘텐츠 검토 가이드/ })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "새 항목" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "제목" }), "게시물 예약하기");
+    await userEvent.type(screen.getByRole("textbox", { name: "내용" }), "콘텐츠를 선택하고 예약 시간을 지정합니다.");
+    await userEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    expect(createWikiItem).toHaveBeenCalledWith("brand-1", {
+      contractVersion: "wiki-item.v1",
+      itemType: "how_to",
+      title: "게시물 예약하기",
+      content: "콘텐츠를 선택하고 예약 시간을 지정합니다.",
+      provenance: { input: "manual" },
+    });
+  });
+
+  it("keeps guide, policy, issues, imports, and failed-build recovery under guide controls", async () => {
+    const knowledgeApi = {
+      ...legacyApi,
+      getWikiStatus: vi.fn(async () => ({
+        ...await legacyApi.getWikiStatus(),
+        latestFailedVersion: {
+          id: "wiki-v5",
+          status: "failed",
+          version: 5,
+          sourceCount: 2,
+          documentCount: 2,
+          knowledgeEntryCount: 2,
+          chunkCount: 3,
+          activatedAt: null,
+          failedAt: "2026-07-27T02:00:00.000Z",
+          errorMessage: "embedding_failed",
+        },
+      })),
+    };
+    renderPanel(<KnowledgeCategoryEditorPanel
+      brandId="brand-1"
+      kind="guide"
+      title="가이드"
+      gateway={gateway() as never}
+      knowledgeApi={knowledgeApi as never}
+    />);
+
+    const controls = await screen.findByRole("group", { name: "가이드 보조 메뉴" });
+    for (const label of ["가이드", "정책", "지식 개선함"]) {
+      expect(within(controls).getByRole("button", { name: label })).toBeVisible();
+    }
+    expect(screen.getByRole("button", { name: /콘텐츠 검토 가이드/ })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /환불 정책/ })).not.toBeInTheDocument();
+
+    await userEvent.click(within(controls).getByRole("button", { name: "정책" }));
+    expect(await screen.findByRole("button", { name: /환불 정책/ })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /콘텐츠 검토 가이드/ })).not.toBeInTheDocument();
+
+    await userEvent.click(within(controls).getByRole("button", { name: "지식 개선함" }));
+    expect(await screen.findByRole("button", { name: /배송이 얼마나 걸리나요/ })).toBeVisible();
+    expect(screen.getByText("활성 Wiki")).toBeVisible();
+    expect(screen.getByText("버전 4")).toBeVisible();
+    expect(screen.getByText("최근 Wiki 빌드 실패 · 버전 5")).toBeVisible();
+    expect(screen.getByText(/기존 활성 버전은 계속 사용됩니다/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Wiki 다시 만들기" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "FAQ 템플릿" })).toHaveAttribute("href", "/faq-template.csv");
+  });
+
+  it("keeps a dirty guide open when a secondary control change is cancelled", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderPanel(<KnowledgeCategoryEditorPanel
+      brandId="brand-1"
+      kind="guide"
+      title="가이드"
+      gateway={gateway() as never}
+      knowledgeApi={legacyApi as never}
+    />);
+
+    const controls = await screen.findByRole("group", { name: "가이드 보조 메뉴" });
+    await userEvent.click(screen.getByRole("button", { name: /콘텐츠 검토 가이드/ }));
+    await userEvent.click(screen.getByRole("button", { name: "수정" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "내용" }), " 변경");
+    await userEvent.click(within(controls).getByRole("button", { name: "정책" }));
+
+    expect(confirm).toHaveBeenCalledWith("저장하지 않은 변경이 있습니다. 이동할까요?");
+    expect(within(controls).getByRole("button", { name: "가이드" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /콘텐츠 검토 가이드/ })).toBeVisible();
+  });
+
   it("focuses a same-brand route issue and shows resolved state with its linked item", async () => {
     const onCloseIssue = vi.fn();
     renderPanel(<IssueRouteHarness onCloseIssue={onCloseIssue} />);

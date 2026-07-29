@@ -4,6 +4,8 @@
   --preview-cyan: #effbfe;
   --preview-cyan-line: #c7edf3;
   width: min(1280px, calc(100vw - var(--bp-sidebar-width) - 40px));
+  max-width: 100%;
+  box-sizing: border-box;
   margin: 0 auto;
   padding: 38px 0 64px;
   overflow-x: hidden;
@@ -49,6 +51,8 @@
   justify-content: center;
   align-items: start;
   gap: 22px;
+  width: 100%;
+  min-width: 0;
 }
 
 .brand-center-preview__steps {
@@ -62,6 +66,8 @@
   border-radius: 18px;
   background: #fff;
   box-shadow: 0 14px 40px rgb(20 47 78 / 7%);
+  overscroll-behavior-inline: contain;
+  scroll-snap-type: inline proximity;
 }
 
 .brand-center-preview__steps button {
@@ -77,6 +83,7 @@
   color: #7b8796;
   background: transparent;
   cursor: pointer;
+  scroll-snap-align: start;
 }
 
 .brand-center-preview__steps button > span {
@@ -536,6 +543,23 @@
 .brand-center-preview__phase-loader > strong {
   color: #1e6274;
   font-size: 15px;
+}
+
+.brand-center-preview__legacy-details {
+  margin-top: 18px;
+  border-top: 1px solid rgb(88 164 181 / 25%);
+}
+
+.brand-center-preview__legacy-details > summary {
+  padding: 18px 2px 0;
+  color: #315f6e;
+  font-size: 13px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.brand-center-preview__legacy-details[open] > summary {
+  margin-bottom: 4px;
 }
 
 .brand-center-preview__knowledge-list article {
@@ -1112,8 +1136,43 @@
   }
 }
 
+@media (max-width: 420px) {
+  .brand-center-preview,
+  .app--sidebar-collapsed .brand-center-preview {
+    width: calc(100vw - 16px);
+    padding-bottom: 36px;
+  }
+
+  .brand-center-preview__steps {
+    justify-content: flex-start;
+    grid-template-columns: repeat(3, minmax(132px, 1fr));
+  }
+
+  .brand-center-preview__card-heading,
+  .brand-center-preview__source-form,
+  .brand-center-preview__analysis-error,
+  .brand-center-preview__card-footer {
+    padding-inline: 16px;
+  }
+
+  .brand-center-preview__analysis-surface,
+  .brand-center-preview__analysis-idle,
+  .brand-center-preview__review-surface,
+  .brand-center-preview__generation-surface {
+    margin-inline: 12px;
+  }
+
+  .brand-center-preview__analysis-surface,
+  .brand-center-preview__review-section {
+    padding: 14px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .brand-center-preview * {
+  .brand-center-preview *,
+  .brand-center-preview *::before,
+  .brand-center-preview *::after {
+    scroll-behavior: auto !important;
     transition-duration: .01ms !important;
     animation-duration: .01ms !important;
     animation-iteration-count: 1 !important;

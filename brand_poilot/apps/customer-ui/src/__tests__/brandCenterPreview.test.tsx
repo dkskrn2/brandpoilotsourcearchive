@@ -20,11 +20,22 @@ async function enterAnalysis(adapter = createAdapter()) {
     "https://brand.example",
   );
   await user.click(screen.getByRole("button", { name: "AI 분석 시작" }));
-  await screen.findByRole("button", { name: "자주 묻는 질문" });
+  await screen.findByRole("textbox", { name: "한 줄 정의" });
   return user;
 }
 
 describe("Brand Center three-status preview", () => {
+  it("uses the production onboarding heading without preview branding", () => {
+    render(<BrandCenterPreviewPage adapter={createAdapter()} />);
+
+    expect(screen.getByRole("heading", {
+      name: "URL 입력하면 AI가 내 서비스를 분석해줘요",
+    })).toBeInTheDocument();
+    expect(screen.queryByText("BRAND CENTER")).not.toBeInTheDocument();
+    expect(screen.queryByText("브랜드 자료를 등록하면 AI가 핵심 정보를 정리합니다."))
+      .not.toBeInTheDocument();
+  });
+
   it("shows exactly three statuses and keeps completion locked before analysis", () => {
     render(<BrandCenterPreviewPage adapter={createAdapter()} />);
 
@@ -60,7 +71,35 @@ describe("Brand Center three-status preview", () => {
       .toBeInTheDocument();
   });
 
-  it("shows phased analysis feedback and one-open-at-a-time knowledge accordions", async () => {
+  it("enforces the backend file contract before accepting documents", async () => {
+    render(<BrandCenterPreviewPage adapter={createAdapter()} />);
+    const input = screen.getByLabelText("브랜드 자료 파일 선택");
+    const user = userEvent.setup({ applyAccept: false });
+
+    await user.upload(input, new File(["bad"], "deck.pptx", {
+      type: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }));
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "TXT, MD, PDF, CSV, XLSX 파일만 첨부할 수 있습니다.",
+    );
+
+    await user.upload(input, Array.from({ length: 6 }, (_, index) =>
+      new File(["ok"], `source-${index}.txt`, { type: "text/plain" })));
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "문서는 최대 5개까지 첨부할 수 있습니다.",
+    );
+
+    await user.upload(input, new File(
+      [new Uint8Array(10 * 1024 * 1024 + 1)],
+      "oversized.pdf",
+      { type: "application/pdf" },
+    ));
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "파일 하나의 크기는 10MB 이하여야 합니다.",
+    );
+  });
+
+  it("shows phased analysis feedback and only editable Brand Core fields", async () => {
     let finishAnalysis!: () => void;
     const adapter = createAdapter(() => new Promise<"succeeded">((resolve) => {
       finishAnalysis = () => resolve("succeeded");
@@ -73,19 +112,31 @@ describe("Brand Center three-status preview", () => {
     );
     await user.click(screen.getByRole("button", { name: "AI 분석 시작" }));
     expect(screen.getByText("자료를 읽는 중")).toBeInTheDocument();
+    expect(screen.getByText(
+      "보통 수분~10분 정도 소요되며 자료에 따라 더 길어질 수 있습니다.",
+    )).toBeInTheDocument();
 
     finishAnalysis();
-    const faq = await screen.findByRole("button", { name: "자주 묻는 질문" });
-    const usage = screen.getByRole("button", { name: "이용 방법" });
-    expect(faq).toHaveAttribute("aria-expanded", "true");
-    expect(usage).toHaveAttribute("aria-expanded", "false");
-    expect(screen.getByRole("button", { name: "가이드" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "제품·서비스" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "정책" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("textbox", { name: "한 줄 정의" })).toBeInTheDocument();
+    expect(screen.queryByText("AI 제안 정보")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Wiki/i)).not.toBeInTheDocument();
+  });
 
-    await user.click(usage);
-    expect(usage).toHaveAttribute("aria-expanded", "true");
-    expect(faq).toHaveAttribute("aria-expanded", "false");
+  it("keeps the final loader phase visible while analysis remains unresolved", async () => {
+    vi.useFakeTimers();
+    const adapter = createAdapter(() => new Promise<"succeeded">(() => undefined));
+    render(<BrandCenterPreviewPage adapter={adapter} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "브랜드 웹사이트 URL" }), {
+      target: { value: "https://brand.example" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "AI 분석 시작" }));
+
+    await vi.advanceTimersByTimeAsync(2_800);
+
+    expect(screen.getByText("지식 초안을 만드는 중")).toBeInTheDocument();
+    expect(screen.getByText("지식 초안을 만드는 중").closest("[aria-busy='true']"))
+      .toBeInTheDocument();
+    vi.useRealTimers();
   });
 
   it("starts saving and card generation automatically from the 완료 action", async () => {

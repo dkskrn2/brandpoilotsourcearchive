@@ -173,7 +173,7 @@ describe("brand intelligence repository", () => {
       },
     });
     const builds = await database.query("select count(*)::int as count from wiki_build_requests where brand_id = $1", [brandId]);
-    expect((builds.rows[0] as { count: number } | undefined)?.count).toBe(1);
+    expect((builds.rows[0] as { count: number } | undefined)?.count).toBe(0);
     const knowledge = await database.query("select content, direct_reply_enabled from knowledge_entries where brand_id = $1", [brandId]);
     expect(knowledge.rows[0]).toMatchObject({ direct_reply_enabled: false });
     expect(String((knowledge.rows[0] as { content: string }).content)).toContain("수정한 고객");
@@ -249,7 +249,7 @@ describe("brand intelligence repository", () => {
       "select count(*)::int as count from wiki_build_requests where brand_id = $1",
       [brandId],
     );
-    expect((builds.rows[0] as { count: number }).count).toBe(1);
+    expect((builds.rows[0] as { count: number }).count).toBe(0);
   });
 
   it("rejects edits before analysis and isolates brand reads", async () => {

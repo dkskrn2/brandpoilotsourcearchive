@@ -5,13 +5,11 @@ export function BrandCenterHeader({
   approvedAt,
   busy,
   onReanalyze,
-  onReviewChanges,
 }: {
   readiness: string;
   approvedAt: string | null;
   busy: boolean;
   onReanalyze(): void;
-  onReviewChanges(): void;
 }) {
   return (
     <header className="brand-center-header" data-guide="page-header">
@@ -27,9 +25,6 @@ export function BrandCenterHeader({
       <div className="brand-center-actions">
         <button className="button" type="button" disabled={busy} onClick={onReanalyze}>
           <RefreshCw size={16} aria-hidden="true" /> AI 재분석
-        </button>
-        <button className="button primary" type="button" disabled={busy} onClick={onReviewChanges}>
-          변경 검토
         </button>
       </div>
     </header>

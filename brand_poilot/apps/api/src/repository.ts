@@ -587,11 +587,12 @@ async function requireWikiMember(
   }
 }
 
-async function enqueueManagedWikiBuild(
+async function enqueueImmediateWikiBuild(
   client: Pick<PoolClient, "query">,
-  workspaceId: string,
-  brandId: string,
+  scope: { workspaceId: string; brandId: string },
+  reason: "manual_wiki_activation" | "wiki_issue_resolution",
 ) {
+  void reason;
   return client.query(
     `insert into wiki_build_requests (
        workspace_id, brand_id, requested_revision, status, quiet_until
@@ -605,7 +606,7 @@ async function enqueueManagedWikiBuild(
          then now() else wiki_build_requests.quiet_until end,
        updated_at = now()
      returning id, status`,
-    [workspaceId, brandId],
+    [scope.workspaceId, scope.brandId],
   );
 }
 
@@ -6411,7 +6412,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           ],
         );
         if (!updated.rowCount) throw new Error("wiki_item_not_found");
-        if (approval) await enqueueManagedWikiBuild(client, scope.workspaceId, scope.brandId);
+        if (approval) await enqueueImmediateWikiBuild(client, scope, "manual_wiki_activation");
         await client.query("commit");
         return mapWikiManagementItem(updated.rows[0] as Record<string, any>);
       } catch (error) {
@@ -6544,7 +6545,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             scope.actorUserId,
           ],
         );
-        await enqueueManagedWikiBuild(client, scope.workspaceId, scope.brandId);
+        await enqueueImmediateWikiBuild(client, scope, "wiki_issue_resolution");
         await client.query("commit");
         return mapWikiManagementIssue(resolved.rows[0] as Record<string, any>);
       } catch (error) {
@@ -6769,6 +6770,56 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       return { id: result.rows[0].id, status: result.rows[0].status };
     },
 
+    async ensureInitialWikiBuild(brandId) {
+      const result = await pool.query(
+        `with brand_scope as (
+           select workspace_id, id as brand_id
+             from brands
+            where id = $1::uuid and deleted_at is null
+         ), active_wiki as (
+           select 1
+             from wiki_versions version
+             join brand_scope scope
+               on scope.workspace_id = version.workspace_id
+              and scope.brand_id = version.brand_id
+            where version.status = 'active'
+            limit 1
+         ), active_request as (
+           select 1
+             from wiki_build_requests request
+             join brand_scope scope
+               on scope.workspace_id = request.workspace_id
+              and scope.brand_id = request.brand_id
+            where request.status in ('pending', 'building')
+            limit 1
+         ), inserted as (
+           insert into wiki_build_requests (
+             workspace_id, brand_id, requested_revision, status, quiet_until
+           )
+           select scope.workspace_id, scope.brand_id, 1, 'pending', now()
+             from brand_scope scope
+            where not exists (select 1 from active_wiki)
+              and not exists (select 1 from active_request)
+           on conflict (workspace_id, brand_id)
+           where status in ('pending', 'building')
+           do nothing
+           returning id
+         )
+         select case
+           when exists (select 1 from active_wiki) then 'already_active'
+           when exists (select 1 from active_request) then 'already_pending'
+           when exists (select 1 from inserted) then 'enqueued'
+           else 'already_pending'
+         end as state
+         from brand_scope`,
+        [brandId],
+      );
+      if (!result.rowCount) throw new Error("brand_not_found");
+      return {
+        state: result.rows[0].state as "already_active" | "already_pending" | "enqueued",
+      };
+    },
+
     async getInstagramDmSettings(brandId) {
       const result = await pool.query(
         `select settings.enabled, settings.fallback_message, settings.error_message,
@@ -6850,8 +6901,15 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     },
 
     async updateInstagramDmSettings(brandId, input) {
-      const current = await this.getInstagramDmSettings(brandId);
+      let current = await this.getInstagramDmSettings(brandId);
       const enabled = input.enabled ?? current.enabled;
+      if (enabled && (current.wikiStatus === "empty" || current.wikiStatus === "failed")) {
+        const provisioning = await this.ensureInitialWikiBuild?.(brandId);
+        if (provisioning && provisioning.state !== "already_active") {
+          throw new Error("dm_activation_blocked");
+        }
+        current = await this.getInstagramDmSettings(brandId);
+      }
       if (enabled && (
         !current.brandCoreReady
         || !current.wikiReady

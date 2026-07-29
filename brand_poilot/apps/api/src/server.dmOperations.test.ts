@@ -28,6 +28,7 @@ function repository() {
       webhookStatus: "unchecked",
       workerStatus: "online",
     })),
+    ensureInitialWikiBuild: vi.fn(async () => ({ state: "already_active" as const })),
     listDmConversations: vi.fn(async () => ({ items: [], nextCursor: null })),
     getDmConversation: vi.fn(async () => ({ id: "conversation-1" })),
     sendManualDmReply: vi.fn(async () => ({ id: "message-manual", body: "직접 답변" })),
@@ -65,6 +66,106 @@ describe("DM operations routes", () => {
     expect(blocked.json()).toEqual({ error: "dm_activation_blocked" });
     expect(missingRepository.updateInstagramDmSettings).not.toHaveBeenCalled();
   });
+
+  it("enqueues the first Wiki before returning the existing activation block", async () => {
+    const repo = repository();
+    repo.getInstagramDmSettings
+      .mockResolvedValueOnce({
+        brandId,
+        enabled: false,
+        fallbackMessage: "fallback",
+        errorMessage: "error",
+        brandCoreReady: true,
+        wikiReady: false,
+        wikiStatus: "empty",
+        messagePermissionReady: true,
+        webhookStatus: "unchecked",
+        workerStatus: "online",
+      })
+      .mockResolvedValue({
+        brandId,
+        enabled: false,
+        fallbackMessage: "fallback",
+        errorMessage: "error",
+        brandCoreReady: true,
+        wikiReady: false,
+        wikiStatus: "building",
+        messagePermissionReady: true,
+        webhookStatus: "unchecked",
+        workerStatus: "online",
+      });
+    repo.ensureInitialWikiBuild.mockResolvedValueOnce({ state: "enqueued" });
+    const app = createServer({
+      repository: repo,
+      metaWebhook: { appSecret: "secret", verifyToken: "verify" },
+      logger: false,
+    });
+
+    const blocked = await app.inject({
+      method: "PUT",
+      url: `/brands/${brandId}/instagram-dm/settings`,
+      payload: { enabled: true },
+    });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json()).toEqual({ error: "dm_activation_blocked" });
+    expect(repo.ensureInitialWikiBuild).toHaveBeenCalledWith(brandId);
+    expect(repo.updateInstagramDmSettings).not.toHaveBeenCalled();
+
+    const refreshed = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/instagram-dm/settings`,
+    });
+    expect(refreshed.json()).toMatchObject({ enabled: false, wikiStatus: "building" });
+  });
+
+  it.each(["enqueued", "already_pending"] as const)(
+    "keeps DM disabled when first-Wiki provisioning reports %s despite a ready refresh race",
+    async (state) => {
+      const repo = repository();
+      repo.getInstagramDmSettings
+        .mockResolvedValueOnce({
+          brandId,
+          enabled: false,
+          fallbackMessage: "fallback",
+          errorMessage: "error",
+          brandCoreReady: true,
+          wikiReady: false,
+          wikiStatus: "empty",
+          messagePermissionReady: true,
+          webhookStatus: "unchecked",
+          workerStatus: "online",
+        })
+        .mockResolvedValue({
+          brandId,
+          enabled: false,
+          fallbackMessage: "fallback",
+          errorMessage: "error",
+          brandCoreReady: true,
+          wikiReady: true,
+          wikiStatus: "active",
+          messagePermissionReady: true,
+          webhookStatus: "unchecked",
+          workerStatus: "online",
+        });
+      repo.ensureInitialWikiBuild.mockResolvedValueOnce({ state });
+      const app = createServer({
+        repository: repo,
+        metaWebhook: { appSecret: "secret", verifyToken: "verify" },
+        logger: false,
+      });
+
+      const response = await app.inject({
+        method: "PUT",
+        url: `/brands/${brandId}/instagram-dm/settings`,
+        payload: { enabled: true },
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toEqual({ error: "dm_activation_blocked" });
+      expect(repo.getInstagramDmSettings).toHaveBeenCalledTimes(1);
+      expect(repo.updateInstagramDmSettings).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps DM settings tenant-scoped before exposing readiness", async () => {
     const repo = repository();

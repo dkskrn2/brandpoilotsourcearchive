@@ -11,7 +11,6 @@ import { PerformanceInsightsPage } from "./pages/PerformanceInsightsPage";
 import { AiContentHomePage } from "./pages/AiContentHomePage";
 import { AiContentWizardPage } from "./pages/AiContentWizardPage";
 import { AiContentGenerationPage } from "./pages/AiContentGenerationPage";
-import { BrandIntelligenceOnboardingPage } from "./pages/BrandIntelligenceOnboardingPage";
 import { BrandCenterPage } from "./pages/BrandCenterPage";
 import { BrandCenterPreviewPage } from "./pages/BrandCenterPreviewPage";
 import { ReferenceLibraryPage } from "./pages/ReferenceLibraryPage";
@@ -67,7 +66,7 @@ export const router = createBrowserRouter(
         { path: "ai-content/new", element: <AiContentWizardPage /> },
         { path: "ai-content/:generationId", element: <AiContentGenerationPage /> },
         { path: "onboarding", element: <Navigate to="/onboarding/brand-intelligence" replace /> },
-        { path: "onboarding/brand-intelligence", element: <BrandIntelligenceOnboardingPage /> },
+        { path: "onboarding/brand-intelligence", element: <BrandCenterPreviewPage mode="live" /> },
         { path: "content", element: <Navigate to="/publish-queue?status=needs_review" replace /> },
         { path: "publish-queue", element: <PublishQueuePage /> },
         { path: "references", element: <ReferenceLibraryPage /> },

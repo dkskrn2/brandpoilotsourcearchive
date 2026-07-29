@@ -1,6 +1,9 @@
 ﻿.brand-center-page {
   display: grid;
   gap: 20px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
 }
 
 .brand-center-header {
@@ -101,7 +104,10 @@
 .brand-center-subnav {
   display: flex;
   gap: 8px;
+  max-width: 100%;
   overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
 }
 
 .brand-center-tabs button,
@@ -115,8 +121,15 @@
 }
 
 .brand-center-tabs button {
+  flex: 0 0 auto;
   padding: 12px 16px;
   font-weight: 700;
+  scroll-snap-align: start;
+}
+
+.brand-center-tabs {
+  padding: 2px;
+  scroll-snap-type: inline proximity;
 }
 
 .brand-center-tabs button small {
@@ -143,6 +156,27 @@
   background: color-mix(in srgb, var(--bp-color-primary) 12%, transparent);
   color: var(--bp-color-primary);
   font-weight: 700;
+}
+
+.brand-center-page :is(button, a, input, select, textarea, summary):focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--bp-color-primary) 42%, transparent);
+  outline-offset: 3px;
+}
+
+.brand-center-dirty {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bp-color-human-review) 14%, transparent);
+  color: var(--bp-color-human-review);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.brand-center-page [aria-busy="true"] {
+  cursor: progress;
 }
 
 .brand-field-status {
@@ -215,6 +249,14 @@
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.brand-center-page nav[aria-label="브랜드 코어 수정 이력"] {
+  flex-wrap: wrap;
+  padding: 14px;
+  border: 1px solid var(--bp-color-line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bp-color-paper) 94%, var(--bp-color-primary));
 }
 
 .source-library-list {
@@ -446,6 +488,120 @@
   background: var(--bp-color-paper);
 }
 
+.style-reference-header {
+  align-items: center;
+}
+
+.style-reference-header h2,
+.style-reference-header p,
+.style-reference-card strong,
+.style-reference-card p {
+  margin: 0;
+}
+
+.style-reference-header p:not(.brand-center-eyebrow) {
+  color: var(--bp-color-muted);
+}
+
+.style-reference-body {
+  display: grid;
+  gap: 20px;
+}
+
+.style-reference-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.style-reference-card {
+  overflow: hidden;
+  border: 1px solid var(--bp-color-line);
+  border-radius: 18px;
+  background: var(--bp-color-paper);
+}
+
+.style-reference-card > img,
+.style-reference-placeholder {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: color-mix(in srgb, var(--bp-color-paper) 88%, var(--bp-color-primary));
+}
+
+.style-reference-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--bp-color-muted);
+  font-size: 13px;
+}
+
+.style-reference-card-body {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.style-reference-card-body label {
+  display: grid;
+  gap: 7px;
+  color: var(--bp-color-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.style-reference-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.style-reference-tags span {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bp-color-primary) 12%, transparent);
+  color: var(--bp-color-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.style-reference-dropzone {
+  display: grid;
+  min-height: 170px;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  padding: 24px;
+  border: 1px dashed color-mix(in srgb, var(--bp-color-primary) 46%, var(--bp-color-line));
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--bp-color-primary) 5%, var(--bp-color-paper));
+  cursor: pointer;
+  text-align: center;
+  transition: border-color .16s ease, background .16s ease, transform .16s ease;
+}
+
+.style-reference-dropzone.is-dragging {
+  border-color: var(--bp-color-primary);
+  background: color-mix(in srgb, var(--bp-color-primary) 12%, var(--bp-color-paper));
+  transform: translateY(-2px);
+}
+
+.style-reference-dropzone span,
+.style-reference-progress {
+  color: var(--bp-color-muted);
+  font-size: 13px;
+}
+
+.style-reference-dropzone input {
+  max-width: 100%;
+  margin-top: 8px;
+}
+
+.style-reference-progress {
+  margin: 0;
+}
+
 .avatar-library-header {
   align-items: center;
 }
@@ -640,6 +796,11 @@
     grid-template-columns: 1fr 1fr;
   }
 
+  .brand-center-tabs {
+    margin-inline: -4px;
+    padding: 4px;
+  }
+
   .brand-core-form,
   .brand-rules-form,
   .library-form {
@@ -648,6 +809,7 @@
 
   .library-split {
     grid-template-columns: 1fr;
+    min-height: 0;
   }
 
   .library-list {
@@ -655,8 +817,77 @@
     border-bottom: 1px solid var(--bp-color-line);
   }
 
+  .library-list,
+  .library-editor {
+    min-width: 0;
+    padding: 18px;
+  }
+
   .avatar-library-header,
-  .avatar-editor-header {
+  .avatar-editor-header,
+  .style-reference-header {
     align-items: flex-start;
+  }
+
+  .style-reference-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 420px) {
+  .brand-center-page {
+    gap: 14px;
+  }
+
+  .brand-center-header,
+  .brand-center-empty {
+    padding: 18px;
+  }
+
+  .brand-center-header h1 {
+    font-size: 28px;
+  }
+
+  .brand-readiness-journey {
+    grid-template-columns: 1fr;
+  }
+
+  .brand-center-actions,
+  .library-list > header,
+  .library-editor-head,
+  .style-reference-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .brand-center-tabs button {
+    padding-inline: 13px;
+  }
+
+  .source-library-list li,
+  .brand-version-list li {
+    grid-template-columns: 1fr;
+  }
+
+  .library-list,
+  .library-editor,
+  .style-reference-card-body,
+  .style-reference-dropzone {
+    padding: 14px;
+  }
+
+  .style-reference-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-center-page *,
+  .brand-center-page *::before,
+  .brand-center-page *::after {
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }

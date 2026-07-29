@@ -50,6 +50,22 @@ beforeAll(async () => {
 afterAll(async () => database.close());
 
 describe("DM Wiki repository PostgreSQL behavior", () => {
+  it("enqueues only one immediate request until the first Wiki becomes active", async () => {
+    await database.query("delete from wiki_build_requests where brand_id = $1", [brandId]);
+    const repository = createRepository(pglitePool(database));
+
+    await expect(repository.ensureInitialWikiBuild!(brandId)).resolves.toEqual({ state: "enqueued" });
+    await expect(repository.ensureInitialWikiBuild!(brandId)).resolves.toEqual({ state: "already_pending" });
+
+    const requests = await database.query(
+      `select requested_revision, status, quiet_until <= now() as immediate
+         from wiki_build_requests
+        where workspace_id = $1 and brand_id = $2`,
+      [workspaceId, brandId],
+    );
+    expect(requests.rows).toEqual([{ requested_revision: 1, status: "pending", immediate: true }]);
+  });
+
   it("preserves draft status when a newly created disabled item is listed", async () => {
     const repository = createRepository(pglitePool(database));
     const created = await repository.createWikiItem!(

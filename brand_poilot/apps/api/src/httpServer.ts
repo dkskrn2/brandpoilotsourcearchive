@@ -883,6 +883,10 @@ export function createServer(
       });
       return;
     }
+    if (message === "brand_style_reference_invalid") {
+      reply.code(400).send({ error: message });
+      return;
+    }
     if (message.startsWith("product_service_validation_failed:")) {
       reply.code(400).send({
         error: "product_service_validation_failed",
@@ -2288,7 +2292,15 @@ export function createServer(
     }
     try {
       if (body.enabled === true) {
-        const current = await repository.getInstagramDmSettings(request.params.brandId);
+        let current = await repository.getInstagramDmSettings(request.params.brandId);
+        if (current.wikiStatus === "empty" || current.wikiStatus === "failed") {
+          const provisioning = await repository.ensureInitialWikiBuild?.(request.params.brandId);
+          if (provisioning && provisioning.state !== "already_active") {
+            reply.code(409);
+            return { error: "dm_activation_blocked" };
+          }
+          current = await repository.getInstagramDmSettings(request.params.brandId);
+        }
         if (!isDmAutomationReady({
           ...current,
           webhookStatus: metaWebhook?.appSecret && metaWebhook.verifyToken

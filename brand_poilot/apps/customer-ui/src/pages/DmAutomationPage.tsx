@@ -17,9 +17,30 @@ import type {
 } from "../types";
 
 function isReady(settings: InstagramDmSettings) {
-  return settings.wikiReady
+  return settings.brandCoreReady
+    && settings.wikiReady
     && settings.messagePermissionReady
+    && settings.webhookStatus === "connected"
     && settings.workerStatus === "online";
+}
+
+function canProvisionWiki(settings: InstagramDmSettings) {
+  return settings.brandCoreReady
+    && (settings.wikiStatus === "empty" || settings.wikiStatus === "failed")
+    && settings.messagePermissionReady
+    && settings.webhookStatus === "connected"
+    && settings.workerStatus === "online";
+}
+
+function dmWikiStatus(settings: InstagramDmSettings) {
+  return settings.wikiStatus;
+}
+
+function isActivationBlocked(error: unknown) {
+  return typeof error === "object"
+    && error !== null
+    && "errorCode" in error
+    && (error as { errorCode?: unknown }).errorCode === "dm_activation_blocked";
 }
 
 export function DmAutomationPage() {
@@ -63,14 +84,18 @@ export function DmAutomationPage() {
   }
 
   async function toggleAutomation(enabled: boolean) {
-    if (!settings || settingsUpdating || (enabled && !isReady(settings))) return;
+    if (!settings || settingsUpdating || (enabled && !isReady(settings) && !canProvisionWiki(settings))) return;
     setSettingsUpdating(true);
     setSettingsError(null);
     setSettingsNotice(null);
     try {
       setSettings(await api.updateInstagramDmSettings(DEMO_BRAND_ID, { enabled }));
       setSettingsNotice(enabled ? "자동답변이 켜졌습니다." : "자동답변이 꺼졌습니다.");
-    } catch {
+    } catch (error) {
+      if (enabled && isActivationBlocked(error)) {
+        await loadSettings();
+        return;
+      }
       setSettingsError(enabled
         ? "자동답변을 켜지 못했습니다. 준비 상태를 다시 확인해 주세요."
         : "자동답변을 끄지 못했습니다. 잠시 후 다시 시도해 주세요.");
@@ -185,7 +210,7 @@ export function DmAutomationPage() {
               <Switch
                 label="DM 자동답변"
                 checked={settings.enabled}
-                disabled={settingsUpdating || (!settings.enabled && !ready)}
+                disabled={settingsUpdating || (!settings.enabled && !ready && !canProvisionWiki(settings))}
                 onChange={(enabled) => void toggleAutomation(enabled)}
               />
             </div>
@@ -195,6 +220,11 @@ export function DmAutomationPage() {
           {settingsLoading ? <div role="status" aria-label="DM 준비 상태를 불러오는 중입니다."><InlineSpinner label="DM 준비 상태 로딩 중" /> 준비 상태 확인 중</div> : null}
           {!settingsLoading && settingsError ? <Alert title="준비 상태 오류" variant="bad">{settingsError} <button className="button" type="button" onClick={() => void loadSettings()}>다시 시도</button></Alert> : null}
           {!settingsLoading && settings ? <>
+            {dmWikiStatus(settings) === "building" ? (
+              <Alert title="첫 Wiki 준비 중" variant="warn">
+                첫 Wiki를 준비하고 있습니다. 기존 설정은 꺼진 상태이며 준비가 끝난 뒤 다시 활성화할 수 있습니다.
+              </Alert>
+            ) : null}
             <div className="dm-readiness-summary">
               <strong>{ready ? "자동답변 준비 완료" : "자동답변을 켤 수 없습니다"}</strong>
               <div className="actions">
@@ -206,8 +236,8 @@ export function DmAutomationPage() {
             </div>
             {!ready ? <Alert title="해결 후 활성화하세요" variant="warn">
               <span className="dm-repair-links">
-                {!settings.wikiReady ? <a href="/brand-center?tab=wiki">Wiki 보완하기 <ExternalLink size={14} /></a> : null}
-                {!settings.messagePermissionReady || settings.workerStatus !== "online" ? <a href="/channels">Instagram 연결 확인 <ExternalLink size={14} /></a> : null}
+                {!settings.brandCoreReady || !settings.wikiReady ? <a href="/brand-center?tab=wiki">Wiki 보완하기 <ExternalLink size={14} /></a> : null}
+                {!settings.messagePermissionReady || settings.webhookStatus !== "connected" || settings.workerStatus !== "online" ? <a href="/channels">Instagram 연결 확인 <ExternalLink size={14} /></a> : null}
               </span>
             </Alert> : null}
             <p className="dm-wiki-link">

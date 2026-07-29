@@ -50,10 +50,13 @@ export function createBrandCenterGateway(client: Client = apiClient()) {
         },
       );
     },
-    approveCoreDraft(brandId: string, versionId: string) {
+    approveCoreDraft(brandId: string, versionId: string, expectedUpdatedAt: string) {
       return client.requestJson<BrandCoreVersion>(
         `/brands/${brandId}/brand-core/drafts/${versionId}/approve`,
-        { method: "POST" },
+        {
+          method: "POST",
+          body: JSON.stringify({ expectedUpdatedAt }),
+        },
       );
     },
     getRules(brandId: string) {

@@ -417,7 +417,9 @@ export interface InstagramDmSettings {
   enabled: boolean;
   fallbackMessage: string;
   errorMessage: string;
+  brandCoreReady: boolean;
   wikiReady: boolean;
+  wikiStatus: "active" | "stale" | "building" | "failed" | "empty";
   messagePermissionReady: boolean;
   webhookStatus: "connected" | "needs_attention" | "unchecked";
   workerStatus: "online" | "worker_offline" | "unknown";

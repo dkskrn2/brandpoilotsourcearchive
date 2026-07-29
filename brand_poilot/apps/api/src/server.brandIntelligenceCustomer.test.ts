@@ -66,4 +66,19 @@ describe("brand intelligence customer routes", () => {
     expect(response.json()).toEqual({ intelligence: null });
     await app.close();
   });
+
+  it("returns a scoped 404 when a resumed analysis no longer exists", async () => {
+    const { app, intelligence } = setup();
+    vi.mocked(intelligence.getBrandAnalysis).mockResolvedValueOnce(null);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/brand-intelligence/analyses/${analysisId}`,
+      headers: auth,
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "brand_analysis_not_found" });
+    await app.close();
+  });
 });

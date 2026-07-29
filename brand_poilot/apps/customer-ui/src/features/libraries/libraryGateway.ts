@@ -1,6 +1,6 @@
 import { put as putBlob } from "@vercel/blob/client";
 import { ApiRequestError, apiClient } from "../../lib/apiClient";
-import type { ReferenceItem } from "../../types";
+import type { ReferenceDetail, ReferenceItem } from "../../types";
 
 export interface ProductServiceProfile {
   contractVersion: "product-service.v1";
@@ -227,8 +227,14 @@ function validateReferenceFile(file: File) {
 
 export function createLibraryGateway(client: Client = apiClient(), blobPut: typeof putBlob = putBlob) {
   return {
+    getReference(brandId: string, referenceId: string) {
+      return client.requestJson<ReferenceDetail>(
+        `/brands/${brandId}/references/${referenceId}`,
+        { method: "GET" },
+      );
+    },
     listProductServices(brandId: string) {
-      return client.requestJson<ProductServiceItem[]>(`/brands/${brandId}/product-services`, { method: "GET" });
+      return client.requestJson<ProductServiceItem[]>(`/brands/${brandId}/product-services?include=draft`, { method: "GET" });
     },
     getProductService(brandId: string, itemId: string) {
       return client.requestJson<ProductServiceItem>(`/brands/${brandId}/product-services/${itemId}`, { method: "GET" });

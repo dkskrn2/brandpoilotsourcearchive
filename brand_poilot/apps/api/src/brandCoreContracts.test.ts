@@ -136,6 +136,131 @@ describe("BrandRulesV1 validation", () => {
       conditions: ["금지 문구가 없습니다."],
     });
   });
+
+  it("parses confirmed style reference images and defaults legacy rules", () => {
+    const base = {
+      contractVersion: "brand-rules.v1",
+      requiredPhrases: [],
+      forbiddenPhrases: [],
+      exaggerationRules: [],
+      ctaRules: { defaultCta: "", allowed: [] },
+      channelRules: {},
+      designRules: {
+        colors: ["#174A3A"],
+        fonts: ["Pretendard"],
+        notes: ["절제된 이미지"],
+      },
+      autoApprovalRules: { enabled: false, conditions: [] },
+    };
+    const referenceImages = [
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+      "33333333-3333-4333-8333-333333333333",
+      "44444444-4444-4444-8444-444444444444",
+      "55555555-5555-4555-8555-555555555555",
+    ].map((referenceItemId, index) => ({
+      referenceItemId,
+      description: index === 0 ? "차분한 자연광" : "",
+      tags: index === 0 ? ["자연광", "여백"] : [],
+    }));
+    expect(parseBrandRules({
+      ...base,
+      designRules: {
+        ...base.designRules,
+        referenceImages,
+      },
+    }).designRules).toEqual({
+      colors: ["#174A3A"],
+      fonts: ["Pretendard"],
+      notes: ["절제된 이미지"],
+      referenceImages,
+    });
+    expect(parseBrandRules(base).designRules).toMatchObject({
+      referenceImages: [],
+    });
+  });
+
+  it("rejects invalid or unbounded style reference images", () => {
+    const base = {
+      contractVersion: "brand-rules.v1",
+      requiredPhrases: [],
+      forbiddenPhrases: [],
+      exaggerationRules: [],
+      ctaRules: { defaultCta: "", allowed: [] },
+      channelRules: {},
+      designRules: { colors: [], fonts: [], notes: [] },
+      autoApprovalRules: { enabled: false, conditions: [] },
+    };
+    const image = (id: string) => ({
+      referenceItemId: id,
+      description: "",
+      tags: [],
+    });
+    const validIds = [
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+      "33333333-3333-4333-8333-333333333333",
+      "44444444-4444-4444-8444-444444444444",
+      "55555555-5555-4555-8555-555555555555",
+      "66666666-6666-4666-8666-666666666666",
+    ];
+
+    expect(() => parseBrandRules({
+      ...base,
+      designRules: { ...base.designRules, referenceImages: validIds.map(image) },
+    })).toThrow("brand_core_validation_failed:rules.designRules.referenceImages");
+    expect(() => parseBrandRules({
+      ...base,
+      designRules: { ...base.designRules, referenceImages: [image("not-a-uuid")] },
+    })).toThrow("brand_core_validation_failed:rules.designRules.referenceImages");
+    expect(() => parseBrandRules({
+      ...base,
+      designRules: {
+        ...base.designRules,
+        referenceImages: [image(validIds[0]!), image(validIds[0]!)],
+      },
+    })).toThrow("brand_core_validation_failed:rules.designRules.referenceImages");
+    expect(() => parseBrandRules({
+      ...base,
+      designRules: {
+        ...base.designRules,
+        referenceImages: [{
+          ...image(validIds[0]!),
+          description: "x".repeat(241),
+        }],
+      },
+    })).toThrow("brand_core_validation_failed:rules.designRules.referenceImages[0].description");
+    expect(() => parseBrandRules({
+      ...base,
+      designRules: {
+        ...base.designRules,
+        referenceImages: [{
+          ...image(validIds[0]!),
+          tags: Array.from({ length: 11 }, (_, index) => `tag-${index}`),
+        }],
+      },
+    })).toThrow("brand_core_validation_failed:rules.designRules.referenceImages[0].tags");
+    expect(() => parseBrandRules({
+      ...base,
+      designRules: {
+        ...base.designRules,
+        referenceImages: [{
+          ...image(validIds[0]!),
+          tags: ["x".repeat(41)],
+        }],
+      },
+    })).toThrow("brand_core_validation_failed:rules.designRules.referenceImages[0].tags");
+    expect(() => parseBrandRules({
+      ...base,
+      designRules: {
+        ...base.designRules,
+        referenceImages: [{
+          ...image(validIds[0]!),
+          sourceUrl: "https://example.com/not-allowed",
+        }],
+      },
+    })).toThrow("brand_core_validation_failed:rules.designRules.referenceImages[0]");
+  });
 });
 
 describe("analysis to Brand Core draft mapping", () => {

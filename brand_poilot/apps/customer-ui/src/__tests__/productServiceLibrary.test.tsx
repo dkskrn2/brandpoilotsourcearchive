@@ -43,6 +43,21 @@ const draftItem = {
   draft: draftVersion,
 };
 
+const approvedVersion = {
+  ...draftVersion,
+  id: "version-approved",
+  status: "approved" as const,
+  approvedAt: "2026-07-27T01:00:00.000Z",
+};
+
+const approvedItem = {
+  ...draftItem,
+  status: "active" as const,
+  activeVersionId: approvedVersion.id,
+  activeVersion: approvedVersion,
+  draft: null,
+};
+
 const analysisIdA = "00000000-0000-4000-8000-000000000401";
 const analysisIdB = "00000000-0000-4000-8000-000000000402";
 
@@ -82,6 +97,115 @@ function gateway(overrides: Record<string, unknown> = {}) {
 }
 
 describe("ProductServiceLibraryPanel", () => {
+  it("keeps an approved item read-only until explicit edit and supports cancel", async () => {
+    const onDirtyChange = vi.fn();
+    const api = gateway({ listProductServices: vi.fn(async () => [approvedItem]) });
+    renderPanel(
+      <ProductServiceLibraryPanel
+        brandId="brand-1"
+        gateway={api as never}
+        onDirtyChange={onDirtyChange}
+      />,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: /콘텐츠 운영/ }));
+    expect(screen.getByRole("textbox", { name: "설명" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "수정" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "설명" }), " 수정");
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+    await userEvent.click(screen.getByRole("button", { name: "취소" }));
+    expect(screen.getByRole("textbox", { name: "설명" })).toHaveValue("초안 설명");
+    expect(api.updateProductServiceDraft).not.toHaveBeenCalled();
+  });
+
+  it("reopens an approved item with a persisted next draft in view mode", async () => {
+    const persistedDraft = {
+      ...draftVersion,
+      id: "version-persisted-draft",
+      version: 2,
+      profile: { ...draftVersion.profile, description: "저장된 다음 리비전" },
+    };
+    const api = gateway({
+      listProductServices: vi.fn(async () => [{
+        ...approvedItem,
+        draft: persistedDraft,
+      }]),
+    });
+    renderPanel(<ProductServiceLibraryPanel brandId="brand-1" gateway={api as never} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /콘텐츠 운영/ }));
+    expect(screen.getByRole("textbox", { name: "설명" })).toHaveValue("저장된 다음 리비전");
+    expect(screen.getByRole("textbox", { name: "설명" })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "수정" }));
+    expect(screen.getByRole("textbox", { name: "설명" })).toBeEnabled();
+  });
+
+  it("saves the next draft without changing the active revision, then returns to view before approval", async () => {
+    const nextDraft = {
+      ...draftVersion,
+      id: "version-next-draft",
+      version: 2,
+      profile: { ...draftVersion.profile, description: "다음 리비전 설명" },
+    };
+    const savedItem = {
+      ...approvedItem,
+      activeVersionId: approvedVersion.id,
+      activeVersion: approvedVersion,
+      draft: nextDraft,
+    };
+    const approvedNextItem = {
+      ...savedItem,
+      activeVersionId: nextDraft.id,
+      activeVersion: {
+        ...nextDraft,
+        status: "approved" as const,
+        approvedAt: "2026-07-27T02:00:00.000Z",
+      },
+      draft: null,
+    };
+    const api = gateway({
+      listProductServices: vi.fn(async () => [approvedItem]),
+      updateProductServiceDraft: vi.fn(async () => savedItem),
+      approveProductService: vi.fn(async () => approvedNextItem),
+    });
+    renderPanel(<ProductServiceLibraryPanel brandId="brand-1" gateway={api as never} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /콘텐츠 운영/ }));
+    await userEvent.click(screen.getByRole("button", { name: "수정" }));
+    await userEvent.clear(screen.getByRole("textbox", { name: "설명" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "설명" }), "다음 리비전 설명");
+    expect(screen.queryByRole("button", { name: "승인" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    expect(api.updateProductServiceDraft).toHaveBeenCalledWith(
+      "brand-1",
+      approvedItem.id,
+      expect.objectContaining({ description: "다음 리비전 설명" }),
+    );
+    expect(api.approveProductService).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox", { name: "설명" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "설명" })).toHaveValue("다음 리비전 설명");
+    expect(screen.getByRole("button", { name: "수정" })).toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: "승인" }));
+    expect(api.approveProductService).toHaveBeenCalledWith("brand-1", approvedItem.id);
+    expect(await screen.findByText("콘텐츠 사용 가능")).toBeVisible();
+  });
+
+  it("blocks approval while a persisted draft has unsaved edits", async () => {
+    const api = gateway();
+    renderPanel(<ProductServiceLibraryPanel brandId="brand-1" gateway={api as never} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /콘텐츠 운영/ }));
+    await userEvent.type(screen.getByRole("textbox", { name: "설명" }), " 수정");
+
+    expect(screen.getByRole("button", { name: "승인" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "승인" }));
+    expect(api.approveProductService).not.toHaveBeenCalled();
+  });
+
   it("renders a list/detail split and only enables content and DM use for approved items", async () => {
     renderPanel(<ProductServiceLibraryPanel brandId="brand-1" gateway={gateway() as never} />);
 
@@ -90,6 +214,21 @@ describe("ProductServiceLibraryPanel", () => {
     const usage = screen.getByRole("group", { name: "사용 가능 범위" });
     expect(within(usage).getByText("콘텐츠 사용 불가")).toBeVisible();
     expect(within(usage).getByText("DM 사용 불가")).toBeVisible();
+  });
+
+  it("keeps draft-only items visible after the collection reloads", async () => {
+    const listProductServices = vi.fn(async () => [draftItem]);
+    const api = gateway({ listProductServices });
+    const first = renderPanel(
+      <ProductServiceLibraryPanel brandId="brand-1" gateway={api as never} />,
+    );
+
+    expect(await screen.findByRole("button", { name: /콘텐츠 운영/ })).toBeVisible();
+    first.unmount();
+
+    renderPanel(<ProductServiceLibraryPanel brandId="brand-1" gateway={api as never} />);
+    expect(await screen.findByRole("button", { name: /콘텐츠 운영/ })).toBeVisible();
+    expect(listProductServices).toHaveBeenCalledTimes(2);
   });
 
   it("starts the existing analysis flow without asking the user for an internal ID", async () => {
@@ -104,6 +243,21 @@ describe("ProductServiceLibraryPanel", () => {
     );
     expect(screen.queryByRole("textbox", { name: "완료된 분석 ID" })).not.toBeInTheDocument();
     expect(screen.getByText(/분석이 완료되면 이 보관함으로 자동으로 돌아옵니다/)).toBeVisible();
+  });
+
+  it("returns a newly created manual draft to view mode after saving", async () => {
+    const api = gateway();
+    renderPanel(<ProductServiceLibraryPanel brandId="brand-1" gateway={api as never} />);
+    await screen.findByRole("button", { name: /콘텐츠 운영/ });
+
+    await userEvent.click(screen.getByRole("button", { name: "새 제품·서비스" }));
+    await userEvent.click(screen.getByRole("button", { name: "AI 없이 직접 입력" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "이름" }), "콘텐츠 운영");
+    await userEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    expect(api.createProductService).toHaveBeenCalled();
+    expect(screen.getByRole("textbox", { name: "이름" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "수정" })).toBeVisible();
   });
 
   it("automatically consumes the completed analysis return, then allows edit and approval", async () => {
@@ -121,7 +275,7 @@ describe("ProductServiceLibraryPanel", () => {
     expect(screen.getByText(draftItem.id)).toBeVisible();
     await userEvent.clear(screen.getByRole("textbox", { name: "설명" }));
     await userEvent.type(screen.getByRole("textbox", { name: "설명" }), "검토 후 수정한 설명");
-    await userEvent.click(screen.getByRole("button", { name: "보관함에 저장" }));
+    await userEvent.click(screen.getByRole("button", { name: "저장" }));
     expect(api.updateProductServiceDraft).toHaveBeenCalledWith(
       "brand-1",
       draftItem.id,

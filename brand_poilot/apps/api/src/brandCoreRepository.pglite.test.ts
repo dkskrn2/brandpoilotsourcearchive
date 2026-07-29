@@ -58,6 +58,29 @@ describe("brand core PostgreSQL schema contract", () => {
     `);
     expect(profile.rows[0]?.active_brand_core_id).toBe("30000000-0000-4000-8000-000000000003");
 
+    await db.exec(`
+      insert into brand_core_versions (
+        id, workspace_id, brand_id, version, status, core_json, evidence_json, review_state_json, created_by
+      ) values (
+        '30000000-0000-4000-8000-000000000004',
+        '10000000-0000-4000-8000-000000000001',
+        '20000000-0000-4000-8000-000000000002',
+        2,
+        'draft',
+        '{"contractVersion":1,"summary":{"oneLine":"수정 초안","description":"설명"}}',
+        '[]',
+        '{}',
+        'migration'
+      )
+    `);
+    const profileAfterDraft = await db.query<{ active_brand_core_id: string }>(`
+      select active_brand_core_id
+      from brand_profiles
+      where brand_id = '20000000-0000-4000-8000-000000000002'
+    `);
+    expect(profileAfterDraft.rows[0]?.active_brand_core_id)
+      .toBe("30000000-0000-4000-8000-000000000003");
+
     await expect(
       db.exec(`
         insert into brand_core_versions (
@@ -108,5 +131,40 @@ describe("brand core PostgreSQL schema contract", () => {
          where brand_id = '20000000-0000-4000-8000-000000000002'
       `),
     ).rejects.toThrow();
+  }, 30_000);
+
+  it("allows only one concurrent draft per brand", async () => {
+    const db = database as PGlite;
+    const workspace = "70000000-0000-4000-8000-000000000007";
+    const brand = "80000000-0000-4000-8000-000000000008";
+    await db.exec(`
+      insert into workspaces (id, name, slug)
+        values ('${workspace}', 'Concurrent Core', 'concurrent-core');
+      insert into brands (id, workspace_id, name)
+        values ('${brand}', '${workspace}', 'Concurrent');
+      insert into brand_profiles (workspace_id, brand_id)
+        values ('${workspace}', '${brand}');
+    `);
+
+    const results = await Promise.allSettled([
+      db.exec(`
+        insert into brand_core_versions (
+          workspace_id, brand_id, version, status, core_json, created_by
+        ) values ('${workspace}', '${brand}', 1, 'draft', '{}', 'user')
+      `),
+      db.exec(`
+        insert into brand_core_versions (
+          workspace_id, brand_id, version, status, core_json, created_by
+        ) values ('${workspace}', '${brand}', 2, 'draft', '{}', 'user')
+      `),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const drafts = await db.query<{ count: number }>(`
+      select count(*)::int count
+        from brand_core_versions
+       where workspace_id = '${workspace}' and brand_id = '${brand}' and status = 'draft'
+    `);
+    expect(drafts.rows[0]?.count).toBe(1);
   }, 30_000);
 });

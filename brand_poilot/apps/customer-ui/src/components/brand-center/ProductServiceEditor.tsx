@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Alert } from "../ui/Alert";
 import { InlineSpinner } from "../ui/LoadingState";
@@ -33,6 +33,7 @@ interface Props {
   creating: boolean;
   onSaved(item: ProductServiceItem): void;
   onCancelCreate(): void;
+  onDirtyChange?(dirty: boolean): void;
 }
 
 export function ProductServiceEditor({
@@ -42,22 +43,34 @@ export function ProductServiceEditor({
   creating,
   onSaved,
   onCancelCreate,
+  onDirtyChange,
 }: Props) {
   const version = item?.draft ?? item?.activeVersion ?? null;
   const [profile, setProfile] = useState<ProductServiceProfile>(() => version?.profile ?? emptyProfile());
+  const [editing, setEditing] = useState(creating || Boolean(item?.draft && !item.activeVersion));
   const [mode, setMode] = useState<"analysis" | "manual">("analysis");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const savedCreationId = useRef<string | null>(null);
 
   useEffect(() => {
+    const savedCreation = Boolean(item?.id && item.id === savedCreationId.current);
+    if (savedCreation) savedCreationId.current = null;
     setProfile(version?.profile ?? emptyProfile());
+    setEditing(savedCreation ? false : creating || Boolean(item?.draft && !item.activeVersion));
     setNotice(null);
     setError(null);
-  }, [item?.id, version?.id, creating]);
+  }, [item?.id, creating]);
 
   const approved = Boolean(item?.activeVersion);
-  const editable = creating || Boolean(item?.draft);
+  const editable = editing;
+  const dirty = editable && JSON.stringify(profile) !== JSON.stringify(version?.profile ?? emptyProfile());
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+    return () => onDirtyChange?.(false);
+  }, [dirty, onDirtyChange]);
 
   async function save() {
     if (!profile.name.trim()) {
@@ -70,7 +83,10 @@ export function ProductServiceEditor({
       const saved = item
         ? await gateway.updateProductServiceDraft(brandId, item.id, profile)
         : await gateway.createProductService(brandId, profile);
+      if (!item) savedCreationId.current = saved.id;
+      setProfile(saved.draft?.profile ?? saved.activeVersion?.profile ?? emptyProfile());
       onSaved(saved);
+      setEditing(false);
       setNotice(`보관함에 저장했습니다. 항목 ID: ${saved.id}`);
     } catch {
       setError("초안을 저장하지 못했습니다. 필수 입력과 URL 형식을 확인해 주세요.");
@@ -79,13 +95,23 @@ export function ProductServiceEditor({
     }
   }
 
+  function cancel() {
+    setProfile(version?.profile ?? emptyProfile());
+    setEditing(false);
+    setError(null);
+    setNotice(null);
+    if (creating) onCancelCreate();
+  }
+
   async function approve() {
-    if (!item) return;
+    if (!item || dirty) return;
     setBusy(true);
     setError(null);
     try {
       const saved = await gateway.approveProductService(brandId, item.id);
+      setProfile(saved.activeVersion?.profile ?? saved.draft?.profile ?? emptyProfile());
       onSaved(saved);
+      setEditing(false);
       setNotice("승인했습니다. 이제 콘텐츠와 DM에서 사용할 수 있습니다.");
     } catch {
       setError("승인하지 못했습니다. 편집 가능한 초안과 권한을 확인해 주세요.");
@@ -126,6 +152,7 @@ export function ProductServiceEditor({
         {item ? <code className="stable-item-id">{item.id}</code> : null}
       </div>
       {creating ? <button className="button" type="button" onClick={onCancelCreate}>취소</button> : null}
+      {!creating && !editing ? <button className="button primary" type="button" onClick={() => setEditing(true)}>수정</button> : null}
     </header>
     <div className="library-usage" role="group" aria-label="사용 가능 범위">
       <span className={approved ? "is-ready" : ""}>{approved ? "콘텐츠 사용 가능" : "콘텐츠 사용 불가"}</span>
@@ -143,9 +170,11 @@ export function ProductServiceEditor({
       <label>상시 구매 정보<textarea aria-label="상시 구매 정보" disabled={!editable} value={profile.evergreenPurchaseInfo} onChange={(event) => setProfile({ ...profile, evergreenPurchaseInfo: event.target.value })} /></label>
       <label className="is-wide">근거 URL <small>한 줄에 하나</small><textarea aria-label="근거 URL" disabled={!editable} value={profile.sourceUrls.join("\n")} onChange={(event) => setProfile({ ...profile, sourceUrls: lines(event.target.value) })} /></label>
       <div className="form-actions is-wide">
-        {editable ? <button className="button" type="submit" disabled={busy}>{busy ? <InlineSpinner label="제품·서비스 저장 중" /> : null}보관함에 저장</button> : null}
-        {item?.draft ? <button className="button primary" type="button" disabled={busy} onClick={() => void approve()}>승인</button> : null}
+        {editable ? <button className="button primary" type="submit" disabled={busy || !dirty}>{busy ? <InlineSpinner label="제품·서비스 저장 중" /> : null}저장</button> : null}
+        {editable ? <button className="button" type="button" disabled={busy} onClick={cancel}>취소</button> : null}
+        {item?.draft ? <button className="button primary" type="button" disabled={busy || dirty} onClick={() => void approve()}>승인</button> : null}
         {creating ? <button className="button quiet" type="button" onClick={() => setMode("analysis")}>AI 분석으로 시작</button> : null}
+        {dirty ? <span className="brand-center-dirty">저장하지 않은 변경</span> : null}
       </div>
     </form>
   </section>;

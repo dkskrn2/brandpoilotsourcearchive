@@ -2,7 +2,11 @@ import { useRef, useState } from "react";
 import type { BrandCore, BrandCoreVersion } from "../../features/brand-center/types";
 
 function FieldStatus({ version }: { version: BrandCoreVersion }) {
-  const label = version.status === "approved" ? "승인됨" : "AI 제안 · 수정 가능";
+  const label = version.status === "approved"
+    ? "승인됨"
+    : version.status === "superseded"
+      ? "대체됨"
+      : "수정 초안";
   return <span className={`brand-field-status is-${version.status}`}>{label}</span>;
 }
 
@@ -12,14 +16,22 @@ export function BrandCoreReviewPanel({
   onChange,
   onSave,
   onApprove,
+  onEdit,
+  onCancel,
+  dirty,
+  editing,
 }: {
   version: BrandCoreVersion;
+  editing: boolean;
   saving: boolean;
   onChange(core: BrandCore): void;
   onSave(): void;
   onApprove(): void;
+  onEdit(): void;
+  onCancel(): void;
+  dirty: boolean;
 }) {
-  const disabled = version.status !== "draft";
+  const disabled = !editing || version.status !== "draft";
   const core = version.core;
   const [validationMessage, setValidationMessage] = useState<string | null>(null);
   const oneLineRef = useRef<HTMLInputElement>(null);
@@ -52,9 +64,24 @@ export function BrandCoreReviewPanel({
       <div className="panel-header">
         <div>
           <span className="brand-center-eyebrow">BRAND CORE V{version.version}</span>
-          <h2>{disabled ? "현재 승인된 Brand Core" : "변경 초안 검토"}</h2>
+          <h2>
+            {editing
+              ? "변경 초안 검토"
+              : version.status === "approved"
+                ? "현재 승인된 Brand Core"
+                : version.status === "superseded"
+                  ? "이전 Brand Core"
+                  : "저장된 변경 초안"}
+          </h2>
         </div>
-        <FieldStatus version={version} />
+        <div className="brand-core-heading-actions">
+          <FieldStatus version={version} />
+          {!editing && version.status !== "superseded" ? (
+            <button className="button primary" type="button" disabled={saving} onClick={onEdit}>
+              브랜드 코어 수정
+            </button>
+          ) : null}
+        </div>
       </div>
       <div className="panel-body brand-core-form">
         <label>
@@ -124,12 +151,14 @@ export function BrandCoreReviewPanel({
             ))}
           </details>
         )}
-        {!disabled && (
+        {editing && version.status === "draft" && (
           <>
             {validationMessage && <p className="form-error" role="alert">{validationMessage}</p>}
             <div className="form-actions">
-              <button className="button" type="button" disabled={saving} onClick={onSave}>초안 저장</button>
+              <button className="button primary" type="button" disabled={saving || !dirty} onClick={onSave}>저장</button>
+              <button className="button" type="button" disabled={saving} onClick={onCancel}>취소</button>
               <button className="button primary" type="button" disabled={saving} onClick={validateAndApprove}>Brand Core 승인</button>
+              {dirty ? <span className="brand-center-dirty">저장하지 않은 변경</span> : null}
             </div>
           </>
         )}

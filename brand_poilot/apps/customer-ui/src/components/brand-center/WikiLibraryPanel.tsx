@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert } from "../ui/Alert";
 import { EmptyState } from "../ui/EmptyState";
 import { ListSkeleton } from "../ui/LoadingState";
@@ -9,15 +9,17 @@ import {
   classifyLibraryError,
   libraryGateway,
   type LibraryGateway,
+  type ManualWikiItemType,
   type WikiIssue,
   type WikiItem,
 } from "../../features/libraries/libraryGateway";
 import { WikiItemEditor } from "./WikiItemEditor";
 
 type Filter = "all" | "faq" | "policy" | "how_to" | "guide" | "issues";
+export type CanonicalKnowledgeTab = "faq" | "how_to" | "guide";
 const uuidPattern = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 
-type KnowledgeApi = Pick<
+export type KnowledgeApi = Pick<
   typeof api,
   "listKnowledgeImports" | "getWikiStatus" | "importKnowledge" | "refreshWiki"
 >;
@@ -28,6 +30,9 @@ interface Props {
   onCloseIssue?(): void;
   gateway?: LibraryGateway;
   knowledgeApi?: KnowledgeApi;
+  category?: CanonicalKnowledgeTab;
+  title?: string;
+  onDirtyChange?(dirty: boolean): void;
 }
 
 async function fileToBase64(file: File) {
@@ -60,10 +65,13 @@ export function WikiLibraryPanel({
   onCloseIssue,
   gateway = libraryGateway,
   knowledgeApi = api,
+  category,
+  title = "Wiki",
+  onDirtyChange,
 }: Props) {
   const [items, setItems] = useState<WikiItem[]>([]);
   const [issues, setIssues] = useState<WikiIssue[]>([]);
-  const [filter, setFilter] = useState<Filter>("all");
+  const [filter, setFilter] = useState<Filter>(category ?? "all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIssue, setSelectedIssue] = useState<WikiIssue | null>(null);
   const [creating, setCreating] = useState(false);
@@ -84,6 +92,8 @@ export function WikiLibraryPanel({
   const [knowledgeNotice, setKnowledgeNotice] = useState<string | null>(null);
   const [uploading, setUploading] = useState<"faq" | "product" | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [editorDirty, setEditorDirty] = useState(false);
+  const showKnowledgeOperations = !category || category === "guide";
 
   async function loadKnowledge() {
     setKnowledgeLoading(true);
@@ -124,8 +134,19 @@ export function WikiLibraryPanel({
 
   useEffect(() => {
     void load();
-    void loadKnowledge();
-  }, [brandId]);
+    if (showKnowledgeOperations) {
+      void loadKnowledge();
+    } else {
+      setKnowledgeLoading(false);
+    }
+  }, [brandId, showKnowledgeOperations]);
+
+  useEffect(() => {
+    setFilter(category ?? "all");
+    setSelectedId(null);
+    setSelectedIssue(null);
+    setCreating(false);
+  }, [category]);
 
   useEffect(() => {
     if (loading || !initialIssueId) return;
@@ -158,6 +179,15 @@ export function WikiLibraryPanel({
     setSelectedId(saved.id);
     setCreating(false);
   }
+
+  function canLeaveEditor() {
+    return !editorDirty || window.confirm("저장하지 않은 변경이 있습니다. 이동할까요?");
+  }
+
+  const handleEditorDirty = useCallback((dirty: boolean) => {
+    setEditorDirty(dirty);
+    onDirtyChange?.(dirty);
+  }, [onDirtyChange]);
 
   function closeIssue() {
     restoreIssueListFocus.current = true;
@@ -229,6 +259,21 @@ export function WikiLibraryPanel({
       ? []
       : items.filter((item) => item.itemType === filter);
   const selected = items.find((item) => item.id === selectedId) ?? null;
+  const allowedItemType = (["faq", "policy", "how_to", "guide"] as string[]).includes(filter)
+    ? filter as ManualWikiItemType
+    : category;
+  const filterOptions: Array<[Filter, string]> = category === "guide"
+    ? [["guide", "가이드"], ["policy", "정책"], ["issues", "지식 개선함"]]
+    : category
+      ? []
+      : [
+        ["all", "전체"],
+        ["faq", "FAQ"],
+        ["policy", "정책"],
+        ["how_to", "사용법"],
+        ["guide", "가이드"],
+        ["issues", "지식 개선함"],
+      ];
 
   return <div className="wiki-library-workspace">
     {loading ? <ListSkeleton rows={5} columns={2} label="Wiki 보관함을 불러오는 중입니다." /> : errorKind === "unavailable" ? (
@@ -241,24 +286,41 @@ export function WikiLibraryPanel({
       {routeError}<button className="button" type="button" onClick={() => { setFilter("issues"); setRouteError(null); issueListHeadingRef.current?.focus(); }}>지식 개선함 보기</button>
       </Alert> : null}
       {errorKind ? <Alert title="Wiki를 불러오지 못했습니다" variant="warn">연결 상태를 확인한 뒤 다시 시도해 주세요.<button className="button" type="button" onClick={() => void load()}>다시 시도</button></Alert> : null}
-      <div className="library-filter-bar" role="group" aria-label="Wiki 필터">
-      {([
-        ["all", "전체"],
-        ["faq", "FAQ"],
-        ["policy", "정책"],
-        ["how_to", "사용법"],
-        ["guide", "가이드"],
-        ["issues", "지식 개선함"],
-      ] as Array<[Filter, string]>).map(([value, label]) => <button className={filter === value ? "is-active" : ""} type="button" key={value} aria-pressed={filter === value} onClick={() => { setFilter(value); setCreating(false); setSelectedId(null); }}>{label}</button>)}
-      </div>
+      {filterOptions.length ? <div
+        className="library-filter-bar"
+        role="group"
+        aria-label={category === "guide" ? "가이드 보조 메뉴" : "Wiki 필터"}
+      >
+        {filterOptions.map(([value, label]) => <button
+          className={filter === value ? "is-active" : ""}
+          type="button"
+          key={value}
+          aria-pressed={filter === value}
+          onClick={() => {
+            if (!canLeaveEditor()) return;
+            setFilter(value);
+            setCreating(false);
+            setSelectedId(null);
+            setSelectedIssue(null);
+          }}
+        >{label}</button>)}
+      </div> : null}
       <section className="library-split">
-      <aside className="library-list" aria-label="Wiki 목록">
-        <header><div><h2 ref={issueListHeadingRef} tabIndex={-1}>{filter === "issues" ? "지식 개선함" : "Wiki 항목"}</h2><p>활성 항목만 다음 Wiki 버전에 반영됩니다.</p></div>{filter !== "issues" ? <button className="button primary" type="button" onClick={() => { setCreating(true); setSelectedId(null); }}>새 Wiki 항목</button> : null}</header>
+      <aside className="library-list" aria-label={category ? `${title} 목록` : "Wiki 목록"}>
+        <header><div><h2 ref={issueListHeadingRef} tabIndex={-1}>{filter === "issues" ? "지식 개선함" : category ? title : "Wiki 항목"}</h2><p>활성 항목만 다음 Wiki 버전에 반영됩니다.</p></div>{filter !== "issues" ? <button className="button primary" type="button" onClick={() => {
+          if (!canLeaveEditor()) return;
+          setCreating(true);
+          setSelectedId(null);
+        }}>{category ? "새 항목" : "새 Wiki 항목"}</button> : null}</header>
         {filter === "issues" ? (
           issues.length ? <ul>{issues.map((issue) => <li key={issue.id}><button type="button" aria-pressed={selectedIssue?.id === issue.id} className={selectedIssue?.id === issue.id ? "is-selected" : ""} onClick={(event) => { setSelectedIssue(issue); event.currentTarget.dataset.issueCaller = "true"; }}><strong>{issue.question || issue.issueType}</strong><span>{issueStatusLabel(issue)} · {issue.severity}</span></button></li>)}</ul>
             : <EmptyState title="지식 개선 항목이 없습니다" description="답변 근거가 부족한 질문이 감지되면 여기에 표시됩니다." />
         ) : (
-          visibleItems.length ? <ul>{visibleItems.map((item) => <li key={item.id}><button type="button" aria-pressed={selectedId === item.id} className={selectedId === item.id ? "is-selected" : ""} onClick={() => { setSelectedId(item.id); setCreating(false); }}><strong>{item.title}</strong><span>{item.origin === "product_service" ? "제품·서비스 원본" : item.itemType} · {item.buildStatus}</span></button></li>)}</ul>
+          visibleItems.length ? <ul>{visibleItems.map((item) => <li key={item.id}><button type="button" aria-pressed={selectedId === item.id} className={selectedId === item.id ? "is-selected" : ""} onClick={() => {
+            if (!canLeaveEditor()) return;
+            setSelectedId(item.id);
+            setCreating(false);
+          }}><strong>{item.title}</strong><span>{item.origin === "product_service" ? "제품·서비스 원본" : item.itemType} · {item.buildStatus}</span></button></li>)}</ul>
             : <EmptyState title="해당 Wiki 항목이 없습니다" description="필터를 바꾸거나 새 항목을 추가하세요." />
         )}
       </aside>
@@ -276,10 +338,20 @@ export function WikiLibraryPanel({
           <button className="button primary" type="button" disabled={!issueSourceId || issueBusy} onClick={() => void resolveIssue()}>보완 항목 연결</button>
           {issueError ? <Alert title="연결하지 못했습니다" variant="warn">{issueError}</Alert> : null}
         </div>}
-      </section> : <WikiItemEditor brandId={brandId} gateway={gateway} item={selected} creating={creating} onSaved={acceptSaved} onCancelCreate={() => setCreating(false)} />}
+      </section> : <WikiItemEditor
+        brandId={brandId}
+        gateway={gateway}
+        item={selected}
+        creating={creating}
+        allowedItemType={allowedItemType}
+        contextTitle={category ? title : undefined}
+        onSaved={acceptSaved}
+        onCancelCreate={() => setCreating(false)}
+        onDirtyChange={handleEditorDirty}
+      />}
       </section>
     </>}
-    <section className="wiki-import-preserved" aria-label="기존 지식 가져오기">
+    {showKnowledgeOperations ? <section className="wiki-import-preserved" aria-label="기존 지식 가져오기">
       <DmKnowledgePanel
         imports={imports}
         wikiStatus={wikiStatus}
@@ -291,6 +363,6 @@ export function WikiLibraryPanel({
         onUpload={(type, file) => void uploadKnowledge(type, file)}
         onRefresh={() => void refreshWiki()}
       />
-    </section>
+    </section> : null}
   </div>;
 }

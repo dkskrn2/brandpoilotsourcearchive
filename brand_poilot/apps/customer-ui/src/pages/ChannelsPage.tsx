@@ -28,6 +28,33 @@ function alertVariantFor(status: ChannelStatus) {
   return "warn";
 }
 
+function dmWikiStatus(settings: InstagramDmSettings) {
+  return settings.wikiStatus;
+}
+
+function isDmReady(settings: InstagramDmSettings) {
+  return settings.brandCoreReady
+    && settings.wikiReady
+    && settings.messagePermissionReady
+    && settings.webhookStatus === "connected"
+    && settings.workerStatus === "online";
+}
+
+function canProvisionDmWiki(settings: InstagramDmSettings) {
+  return settings.brandCoreReady
+    && (settings.wikiStatus === "empty" || settings.wikiStatus === "failed")
+    && settings.messagePermissionReady
+    && settings.webhookStatus === "connected"
+    && settings.workerStatus === "online";
+}
+
+function isActivationBlocked(error: unknown) {
+  return typeof error === "object"
+    && error !== null
+    && "errorCode" in error
+    && (error as { errorCode?: unknown }).errorCode === "dm_activation_blocked";
+}
+
 function channelAction(
   channel: ChannelConnection | null,
   capability: ChannelCapability,
@@ -157,11 +184,20 @@ export function ChannelsPage() {
   }, []);
 
   async function toggleDm(enabled: boolean) {
-    if (!dmSettings) return;
+    if (!dmSettings || (enabled && !isDmReady(dmSettings) && !canProvisionDmWiki(dmSettings))) return;
     try {
       setDmSettings(await api.updateInstagramDmSettings(DEMO_BRAND_ID, { enabled }));
       setApiNotice(null);
-    } catch {
+    } catch (error) {
+      if (enabled && isActivationBlocked(error)) {
+        try {
+          setDmSettings(await api.getInstagramDmSettings(DEMO_BRAND_ID));
+          setApiNotice(null);
+        } catch {
+          setDmSettings(null);
+        }
+        return;
+      }
       setApiNotice("DM 자동답변을 켜지 못했습니다. Wiki, 메시지 권한, 워커 상태를 먼저 확인하세요.");
     }
   }
@@ -299,15 +335,21 @@ export function ChannelsPage() {
       </section>
 
       <section className="panel" style={{ marginTop: 16 }} data-guide="dm-readiness">
-        <div className="panel-head"><h2>Instagram DM 자동답변</h2>{dmSettings ? <Switch label="DM 자동답변" checked={dmSettings.enabled} onChange={toggleDm} /> : null}</div>
+        <div className="panel-head"><h2>Instagram DM 자동답변</h2>{dmSettings ? <Switch label="DM 자동답변" checked={dmSettings.enabled} disabled={!dmSettings.enabled && !isDmReady(dmSettings) && !canProvisionDmWiki(dmSettings)} onChange={toggleDm} /> : null}</div>
         <div className="panel-body grid">
           {!dmSettings ? <EmptyState title="DM 상태를 불러올 수 없습니다" description="API 연결 후 메시지 권한과 Wiki 상태를 확인할 수 있습니다." /> : <>
+            {dmWikiStatus(dmSettings) === "building" ? (
+              <Alert title="첫 Wiki 준비 중" variant="warn">
+                첫 Wiki를 준비하고 있습니다. 기존 설정은 꺼진 상태이며 준비가 끝난 뒤 다시 활성화할 수 있습니다.
+              </Alert>
+            ) : null}
             <div className="actions">
               <Badge variant={dmSettings.wikiReady ? "ok" : "warn"}>Wiki {dmSettings.wikiReady ? "준비됨" : "필요"}</Badge>
               <Badge variant={dmSettings.messagePermissionReady ? "ok" : "warn"}>메시지 권한 {dmSettings.messagePermissionReady ? "확인됨" : "필요"}</Badge>
+              <Badge variant={dmSettings.webhookStatus === "connected" ? "ok" : "warn"}>Webhook {dmSettings.webhookStatus === "connected" ? "연결됨" : "확인 필요"}</Badge>
               <Badge variant={dmSettings.workerStatus === "online" ? "ok" : "warn"}>워커 {dmSettings.workerStatus === "online" ? "온라인" : "오프라인"}</Badge>
             </div>
-            {!dmSettings.wikiReady || !dmSettings.messagePermissionReady || dmSettings.workerStatus !== "online" ? <Alert title="자동답변을 켤 수 없습니다" variant="warn">FAQ/Wiki, Instagram 메시지 권한, DM 워커 상태를 모두 준비한 후 활성화할 수 있습니다.</Alert> : null}
+            {!isDmReady(dmSettings) ? <Alert title="자동답변을 켤 수 없습니다" variant="warn">브랜드 코어와 Wiki, Instagram 메시지·Webhook 권한, DM 워커 상태를 모두 준비한 후 활성화할 수 있습니다.</Alert> : null}
             <p className="muted">근거가 부족하거나 처리 오류가 나면 고정 안내문을 발송하고, 처리 이력에 남깁니다.</p>
           </>}
         </div>

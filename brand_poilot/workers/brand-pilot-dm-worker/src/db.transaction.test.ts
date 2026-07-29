@@ -27,12 +27,15 @@ interface DatabaseState {
     sourceKind: string;
     sourceId: string;
   }>;
+  outboxScheduleFails: boolean;
+  outboxCompletionSucceeds: boolean;
   committed: boolean;
   rolledBack: boolean;
 }
 
 const harness = vi.hoisted(() => ({
   state: null as DatabaseState | null,
+  queries: [] as string[],
 }));
 
 function cloneState(state: DatabaseState): DatabaseState {
@@ -41,6 +44,15 @@ function cloneState(state: DatabaseState): DatabaseState {
 
 vi.mock("pg", () => ({
   Pool: class TransactionalPool {
+    async query(sql: string, values: unknown[] = []) {
+      const client = await this.connect();
+      try {
+        return await client.query(sql, values);
+      } finally {
+        client.release();
+      }
+    }
+
     async connect() {
       const state = harness.state;
       if (!state) throw new Error("transaction_test_state_missing");
@@ -48,6 +60,7 @@ vi.mock("pg", () => ({
       return {
         async query(sql: string, values: unknown[] = []) {
           const normalized = sql.trim();
+          harness.queries.push(normalized);
           if (normalized === "begin") {
             snapshot = cloneState(state);
             return { rowCount: 0, rows: [] };
@@ -109,8 +122,41 @@ vi.mock("pg", () => ({
             return { rowCount: 0, rows: [] };
           }
           if (sql.includes("update wiki_build_requests")) {
+            if (sql.includes("insert into wiki_build_requests") && state.outboxScheduleFails) {
+              throw new Error("forced_wiki_enqueue_failure");
+            }
             state.buildRequestStatus = "succeeded";
             return { rowCount: 1, rows: [] };
+          }
+          if (sql.includes("update wiki_refresh_outbox") && sql.includes("lease_expires_at < now()")) {
+            return { rowCount: 0, rows: [] };
+          }
+          if (sql.includes("update wiki_refresh_outbox event")
+            && sql.includes("status = 'processing'")) {
+            return {
+              rowCount: 1,
+              rows: [{
+                id: "48000000-0000-4000-8000-000000000008",
+                workspace_id: workspaceId,
+                brand_id: brandId,
+                lease_token: "49000000-0000-4000-8000-000000000009",
+                created_at: new Date("2026-07-28T17:59:00.000Z"),
+              }],
+            };
+          }
+          if (sql.includes("insert into wiki_build_requests")) {
+            if (state.outboxScheduleFails) throw new Error("forced_wiki_enqueue_failure");
+            return { rowCount: 1, rows: [] };
+          }
+          if (sql.includes("update wiki_refresh_outbox")
+            && (sql.includes("status = 'succeeded'") || sql.includes("last_error"))) {
+            return {
+              rowCount: sql.includes("status = 'succeeded'") && !state.outboxCompletionSucceeds ? 0 : 1,
+              rows: [],
+            };
+          }
+          if (sql.includes("insert into wiki_maintenance_runs")) {
+            return { rowCount: 0, rows: [] };
           }
           return { rowCount: 1, rows: [] };
         },
@@ -154,6 +200,8 @@ function initialState(overrides: Partial<DatabaseState> = {}): DatabaseState {
       sourceKind: "faq",
       sourceId,
     }],
+    outboxScheduleFails: false,
+    outboxCompletionSucceeds: true,
     committed: false,
     rolledBack: false,
     ...overrides,
@@ -163,6 +211,7 @@ function initialState(overrides: Partial<DatabaseState> = {}): DatabaseState {
 describe("completeWikiValidationItem transaction", () => {
   beforeEach(() => {
     harness.state = initialState();
+    harness.queries = [];
   });
 
   it("commits activation before resolving an issue linked to the activated source", async () => {
@@ -183,6 +232,20 @@ describe("completeWikiValidationItem transaction", () => {
         resolutionActiveVersionId: candidateVersionId,
       }],
     });
+    expect(harness.queries.findIndex((sql) => sql.includes("activate_compiled_wiki_version")))
+      .toBeLessThan(harness.queries.findIndex((sql) => sql.includes("update wiki_issues issue")));
+  });
+
+  it("keeps a later scheduled refresh target when a rebuild was requested during the build", async () => {
+    const { createDmWorkerDb } = await import("./db.js");
+    const db = createDmWorkerDb("postgresql://transaction-test");
+
+    await db.completeWikiValidationItem(item, [], "brand core");
+
+    const completion = harness.queries.find((sql) =>
+      sql.includes("update wiki_build_requests")
+      && sql.includes("requested_revision > coalesce(building_revision, 0)"));
+    expect(completion).toContain("greatest(quiet_until, now() + interval '2 minutes')");
   });
 
   it("rolls back activation failure, preserving the prior active version and pending issue", async () => {
@@ -242,5 +305,69 @@ describe("completeWikiValidationItem transaction", () => {
       committed: true,
       rolledBack: false,
     });
+  });
+
+  it("claims 03:00 KST maintenance only after five gaps and at most once per brand day", async () => {
+    const { createDmWorkerDb } = await import("./db.js");
+    const db = createDmWorkerDb("postgresql://transaction-test");
+
+    await expect(db.claimWikiMaintenance()).resolves.toBeNull();
+
+    const claim = harness.queries.find((sql) => sql.includes("insert into wiki_maintenance_runs"));
+    expect(claim).toContain("reason_code in ('knowledge_gap', 'low_confidence')");
+    expect(claim).toContain("having count(*) >= 5");
+    expect(claim).toContain("Asia/Seoul");
+    expect(claim).toContain("not exists");
+    expect(claim).toContain("date_trunc('day'");
+  });
+
+  it("recovers expired outbox leases and succeeds only after scheduling the Wiki request", async () => {
+    const { createDmWorkerDb } = await import("./db.js");
+    const db = createDmWorkerDb("postgresql://transaction-test");
+
+    await expect(db.dispatchWikiRefreshOutboxOnce("wiki-worker-1"))
+      .resolves.toMatchObject({ status: "completed" });
+
+    const recovery = harness.queries.find((sql) =>
+      sql.includes("update wiki_refresh_outbox") && sql.includes("lease_expires_at < now()"));
+    const claim = harness.queries.find((sql) =>
+      sql.includes("update wiki_refresh_outbox event") && sql.includes("status = 'processing'"));
+    const scheduleIndex = harness.queries.findIndex((sql) => sql.includes("insert into wiki_build_requests"));
+    const successIndex = harness.queries.findIndex((sql) =>
+      sql.includes("update wiki_refresh_outbox") && sql.includes("status = 'succeeded'"));
+    expect(recovery).toContain("status = 'pending'");
+    expect(claim).toContain("for update skip locked");
+    expect(claim).toContain("next_attempt_at <= now()");
+    expect(scheduleIndex).toBeGreaterThan(-1);
+    expect(successIndex).toBeGreaterThan(scheduleIndex);
+  });
+
+  it("returns a failed outbox dispatch to pending with observable bounded backoff", async () => {
+    harness.state = initialState({ outboxScheduleFails: true });
+    const { createDmWorkerDb } = await import("./db.js");
+    const db = createDmWorkerDb("postgresql://transaction-test");
+
+    await expect(db.dispatchWikiRefreshOutboxOnce("wiki-worker-1"))
+      .resolves.toMatchObject({ status: "retry", error: "forced_wiki_enqueue_failure" });
+
+    const failure = harness.queries.find((sql) =>
+      sql.includes("update wiki_refresh_outbox")
+      && sql.includes("last_error")
+      && sql.includes("attempt_count = least"));
+    expect(failure).toContain("status = 'pending'");
+    expect(failure).toContain("least(3600");
+    expect(failure).toContain("attempt_count");
+  });
+
+  it("rolls back Wiki scheduling when the outbox completion lease is lost", async () => {
+    harness.state = initialState({ outboxCompletionSucceeds: false });
+    const { createDmWorkerDb } = await import("./db.js");
+    const db = createDmWorkerDb("postgresql://transaction-test");
+
+    await expect(db.dispatchWikiRefreshOutboxOnce("wiki-worker-1"))
+      .resolves.toMatchObject({ status: "retry", error: "wiki_refresh_outbox_lease_lost" });
+
+    expect(harness.queries).toContain("rollback");
+    expect(harness.state).toMatchObject({ committed: false, rolledBack: true });
   });
 });
