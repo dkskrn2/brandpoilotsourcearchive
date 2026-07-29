@@ -4306,7 +4306,7 @@ test("061 deterministically removes legacy duplicate avatar bytes and prevents n
   });
 });
 
-test("migration runner records forward-only 060 through 066 without changing the applied 058 checksum", async () => {
+test("migration runner records forward-only 060 through 068 without changing the applied 058 checksum", async () => {
   const migrations = await loadMigrations();
   const runnableMigrations = migrations.filter(
     (migration) => !migration.sql.startsWith("-- requires: pgvector")
@@ -4332,7 +4332,7 @@ test("migration runner records forward-only 060 through 066 without changing the
       client,
       migrations: runnableMigrations,
     });
-    assert.deepEqual(upgraded.pending.slice(-7), [
+    assert.deepEqual(upgraded.pending.slice(-9), [
       "060_content_orchestration.sql",
       "061_avatar_image_checksum_uniqueness.sql",
       "062_avatar_upload_cancellation.sql",
@@ -4340,9 +4340,11 @@ test("migration runner records forward-only 060 through 066 without changing the
       "064_reference_upload_finalization.sql",
       "065_ai_content_attachment_upload_sessions.sql",
       "066_ai_content_analyzed_subject_orchestration.sql",
+      "067_wiki_refresh_outbox.sql",
+      "068_brand_core_one_draft.sql",
     ]);
     const recorded = await database.query(
-      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4, $5, $6, $7, $8) order by id",
+      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) order by id",
       [
         "058_avatar_and_reference_libraries.sql",
         "060_content_orchestration.sql",
@@ -4352,6 +4354,8 @@ test("migration runner records forward-only 060 through 066 without changing the
         "064_reference_upload_finalization.sql",
         "065_ai_content_attachment_upload_sessions.sql",
         "066_ai_content_analyzed_subject_orchestration.sql",
+        "067_wiki_refresh_outbox.sql",
+        "068_brand_core_one_draft.sql",
       ],
     );
     assert.deepEqual(recorded.rows, [
@@ -4386,6 +4390,14 @@ test("migration runner records forward-only 060 through 066 without changing the
       {
         id: "066_ai_content_analyzed_subject_orchestration.sql",
         checksum: migrations.find((migration) => migration.id === "066_ai_content_analyzed_subject_orchestration.sql")?.checksum,
+      },
+      {
+        id: "067_wiki_refresh_outbox.sql",
+        checksum: migrations.find((migration) => migration.id === "067_wiki_refresh_outbox.sql")?.checksum,
+      },
+      {
+        id: "068_brand_core_one_draft.sql",
+        checksum: migrations.find((migration) => migration.id === "068_brand_core_one_draft.sql")?.checksum,
       },
     ]);
     const repeated = await runMigrationsWithClient({
@@ -4839,6 +4851,8 @@ test("065 direct SQL and migration runner pending-tail paths converge on lifecyc
     assert.deepEqual(result.pending, [
       "065_ai_content_attachment_upload_sessions.sql",
       "066_ai_content_analyzed_subject_orchestration.sql",
+      "067_wiki_refresh_outbox.sql",
+      "068_brand_core_one_draft.sql",
     ]);
     return attachmentLifecycleRowState(database, fixture);
   });
