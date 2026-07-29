@@ -68,7 +68,7 @@ export const customerNavigation: CustomerNavigationGroup[] = [
     items: [
       {
         label: "결제 및 구독",
-        path: "https://www.danbammsg.co.kr/product/pricing",
+        path: "/billing",
         icon: CreditCard,
       },
       { label: "고객센터", path: "/support", icon: Headphones },

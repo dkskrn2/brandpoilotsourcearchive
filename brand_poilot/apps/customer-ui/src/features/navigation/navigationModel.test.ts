@@ -25,13 +25,17 @@ describe("D hybrid customer navigation model", () => {
       "/publish-queue",
       "/channels",
       "/dm-automation",
-      "https://www.danbammsg.co.kr/product/pricing",
+      "/billing",
       "/support"
     ]);
     expect(paths).toContain("/brand-center");
     expect(paths).toContain("/references");
     expect(paths).toContain("/performance");
     expect(paths).not.toContain("/ai-content/library");
+    expect(
+      customerNavigation.flatMap((group) => group.items)
+        .find((item) => item.label === "결제 및 구독"),
+    ).toMatchObject({ path: "/billing", label: "결제 및 구독" });
   });
 
   it("keeps the incomplete-brand recovery destination separate", () => {

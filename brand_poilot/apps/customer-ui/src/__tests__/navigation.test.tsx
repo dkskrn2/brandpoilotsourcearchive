@@ -154,7 +154,7 @@ describe("AppShell navigation", () => {
     expect(screen.getByRole("link", { name: "브랜드 센터" })).toHaveAttribute("href", "/brand-center");
     expect(screen.getByRole("link", { name: "결제 및 구독" })).toHaveAttribute(
       "href",
-      "https://www.danbammsg.co.kr/product/pricing"
+      "/billing"
     );
     expect(screen.getByRole("link", { name: /고객센터/ })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /관리자 채널/ })).not.toBeInTheDocument();

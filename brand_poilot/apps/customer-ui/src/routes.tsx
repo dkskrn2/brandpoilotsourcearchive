@@ -13,6 +13,7 @@ import { AiContentWizardPage } from "./pages/AiContentWizardPage";
 import { AiContentGenerationPage } from "./pages/AiContentGenerationPage";
 import { BrandIntelligenceOnboardingPage } from "./pages/BrandIntelligenceOnboardingPage";
 import { BrandCenterPage } from "./pages/BrandCenterPage";
+import { BrandCenterPreviewPage } from "./pages/BrandCenterPreviewPage";
 import { ReferenceLibraryPage } from "./pages/ReferenceLibraryPage";
 
 export function LegacyBrandSettingsRedirect() {
@@ -72,6 +73,7 @@ export const router = createBrowserRouter(
         { path: "references", element: <ReferenceLibraryPage /> },
         { path: "sources", element: <LegacySourcesRedirect /> },
         { path: "brand-center", element: <BrandCenterPage /> },
+        { path: "brand-center-preview", element: <BrandCenterPreviewPage /> },
         { path: "archive", element: <LegacyArchiveRedirect /> },
         { path: "instagram-trends", element: <LegacyInstagramTrendsRedirect /> },
         { path: "channels", element: <ChannelsPage /> },
