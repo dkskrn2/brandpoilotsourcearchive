@@ -88,6 +88,110 @@ test("runtime consumers build the emitted package before developer entrypoints",
   );
 });
 
+test("published server images invoke valid clean-checkout build targets in dependency order", async () => {
+  const runtimeBuild = "npm run build --workspace @brand-pilot/worker-runtime";
+  const publishedImages = [
+    {
+      name: "api",
+      dockerfile: "apps/api/Dockerfile",
+      packagePath: "apps/api/package.json",
+      compile: "npm run build --workspace @brand-pilot/api",
+      requiresRuntime: true,
+    },
+    {
+      name: "dm",
+      dockerfile: "workers/brand-pilot-dm-worker/Dockerfile",
+      packagePath: "workers/brand-pilot-dm-worker/package.json",
+      compile: "./node_modules/.bin/tsc -p workers/brand-pilot-dm-worker/tsconfig.json --noEmit false",
+      requiresRuntime: true,
+    },
+    {
+      name: "wiki",
+      dockerfile: "workers/brand-pilot-dm-worker/Dockerfile",
+      packagePath: "workers/brand-pilot-dm-worker/package.json",
+      compile: "./node_modules/.bin/tsc -p workers/brand-pilot-dm-worker/tsconfig.json --noEmit false",
+      requiresRuntime: true,
+    },
+    {
+      name: "content-proposal",
+      dockerfile: "workers/brand-pilot-content-proposal-worker/Dockerfile",
+      packagePath: "workers/brand-pilot-content-proposal-worker/package.json",
+      compile: "npm run build --workspace @brand-pilot/content-proposal-worker",
+      requiresRuntime: true,
+    },
+    {
+      name: "brand-intelligence",
+      dockerfile: "workers/brand-pilot-brand-intelligence-worker/Dockerfile",
+      packagePath: "workers/brand-pilot-brand-intelligence-worker/package.json",
+      compile: "npm run build --workspace @brand-pilot/brand-intelligence-worker",
+      requiresRuntime: true,
+    },
+    {
+      name: "subject-analysis",
+      dockerfile: "workers/brand-pilot-subject-analysis-worker/Dockerfile",
+      packagePath: "workers/brand-pilot-subject-analysis-worker/package.json",
+      compile: "npm run build --workspace @brand-pilot/subject-analysis-worker",
+      requiresRuntime: true,
+    },
+    {
+      name: "image",
+      dockerfile: "workers/brand-pilot-image-worker/Dockerfile",
+      packagePath: "workers/brand-pilot-image-worker/package.json",
+      compile: "npm run build --workspace @brand-pilot/image-worker",
+      requiresRuntime: false,
+    },
+    {
+      name: "card-news",
+      dockerfile: "workers/brand-pilot-card-news-worker/Dockerfile",
+      packagePath: "workers/brand-pilot-card-news-worker/package.json",
+      compile: "npm run build --workspace @brand-pilot/card-news-worker",
+      requiresRuntime: true,
+    },
+    {
+      name: "blog",
+      dockerfile: "workers/brand-pilot-blog-worker/Dockerfile",
+      packagePath: "workers/brand-pilot-blog-worker/package.json",
+      compile: "npm run build --workspace @brand-pilot/blog-worker",
+      requiresRuntime: true,
+    },
+    {
+      name: "marketing",
+      dockerfile: "workers/brand-pilot-marketing-worker/Dockerfile",
+      packagePath: "workers/brand-pilot-marketing-worker/package.json",
+      compile: "npm run build --workspace @brand-pilot/marketing-worker",
+      requiresRuntime: true,
+    },
+  ];
+  const violations = [];
+
+  for (const image of publishedImages) {
+    const [dockerfile, packageJson] = await Promise.all([
+      readFile(image.dockerfile, "utf8"),
+      readFile(image.packagePath, "utf8").then(JSON.parse),
+    ]);
+    const compileIndex = dockerfile.indexOf(image.compile);
+    if (compileIndex < 0) {
+      violations.push(`${image.name}:missing ${image.compile}`);
+      continue;
+    }
+    if (!image.requiresRuntime) continue;
+
+    const directRuntimeIndex = dockerfile.indexOf(runtimeBuild);
+    const buildsRuntimeDirectly = directRuntimeIndex >= 0 && directRuntimeIndex < compileIndex;
+    const delegatesToOrderedPackageBuild = image.compile.includes(packageJson.name)
+      && packageJson.scripts?.build?.startsWith(`${runtimeBuild} &&`);
+    if (!buildsRuntimeDirectly && !delegatesToOrderedPackageBuild) {
+      violations.push(`${image.name}:worker-runtime must build before ${image.compile}`);
+    }
+  }
+
+  assert.deepEqual(
+    violations,
+    [],
+    `published image clean-build order is invalid:\n${violations.map((value) => `- ${value}`).join("\n")}`,
+  );
+});
+
 test("Codex worker images install bubblewrap for the pinned Linux sandbox", async () => {
   const dockerfiles = [
     "brand-pilot-brand-intelligence-worker",

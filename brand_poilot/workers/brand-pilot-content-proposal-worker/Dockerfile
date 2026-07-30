@@ -3,7 +3,7 @@ FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY . .
 RUN npm ci
-RUN npm run build --workspace @brand-pilot-content-proposal-worker
+RUN npm run build --workspace @brand-pilot/content-proposal-worker
 RUN npm prune --omit=dev
 
 FROM node:22-bookworm-slim AS runtime
