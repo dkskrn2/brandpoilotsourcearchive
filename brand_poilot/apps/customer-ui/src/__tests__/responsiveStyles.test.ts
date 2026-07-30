@@ -69,9 +69,9 @@ describe("responsive UI style contracts", () => {
   it("keeps performance insights responsive and motion-safe", async () => {
     const css = await readFile(performancePath, "utf8");
 
-    expect(css).toMatch(/\.performance-summary,[\s\S]*?grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/s);
-    expect(css).toMatch(/@media \(max-width:\s*1080px\)[\s\S]*?\.performance-summary,[\s\S]*?repeat\(2,\s*minmax\(0,\s*1fr\)\)/s);
-    expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*?\.performance-summary,[\s\S]*?grid-template-columns:\s*1fr/s);
+    expect(css).toMatch(/\.performance-summary-metrics,[\s\S]*?grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
+    expect(css).toMatch(/@media \(max-width:\s*1080px\)[\s\S]*?\.performance-summary-metrics,[\s\S]*?repeat\(2,\s*minmax\(0,\s*1fr\)\)/s);
+    expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*?\.performance-summary-metrics,[\s\S]*?grid-template-columns:\s*1fr/s);
     expect(css).toMatch(/@media \(prefers-reduced-motion:\s*reduce\)/);
   });
 

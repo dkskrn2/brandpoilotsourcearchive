@@ -209,7 +209,7 @@ services:
     volumes:
       - ${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex
     tmpfs:
-      - /tmp:size=64m,mode=1777
+      - /tmp:size=512m,mode=1777
     cap_drop:
       - ALL
     security_opt:

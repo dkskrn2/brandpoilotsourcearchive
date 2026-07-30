@@ -2013,7 +2013,11 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     async getBrandUiStatus(brandId) {
       const result = await pool.query(
         `select b.id as brand_id,
-                b.name as brand_name,
+                case
+                  when not (to_jsonb(b) ? 'company_name_state')
+                    or coalesce(to_jsonb(b) ->> 'company_name_state', 'legacy_unknown') <> 'provisional'
+                  then b.name else ''
+                end as brand_name,
                 bp.primary_category_id,
                 bp.primary_customer,
                 bp.description,
@@ -2044,7 +2048,12 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
 
     async getBrandProfile(brandId) {
       const result = await pool.query(
-        `select bp.id as profile_id, bp.workspace_id, b.id as brand_id, b.name as brand_name,
+        `select bp.id as profile_id, bp.workspace_id, b.id as brand_id,
+                case
+                  when not (to_jsonb(b) ? 'company_name_state')
+                    or coalesce(to_jsonb(b) ->> 'company_name_state', 'legacy_unknown') <> 'provisional'
+                  then b.name else ''
+                end as brand_name,
                 category.code as category_code, category.name as category_name,
                 bp.description, bp.primary_customer, bp.tone, bp.default_cta, bp.main_link,
                 bp.auto_approval_enabled, bp.logo_url,
@@ -2931,7 +2940,12 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                        channel, delivery_format, title, output_json, source_summary, rendered_artifact_id
            )
              select updated.*, bc.id as brand_channel_id, tpg.id as topic_publish_group_id,
-                    b.name as brand_name, category.code as category_code, category.name as category_name,
+                    case
+                      when not (to_jsonb(b) ? 'company_name_state')
+                        or coalesce(to_jsonb(b) ->> 'company_name_state', 'legacy_unknown') <> 'provisional'
+                      then b.name else ''
+                    end as brand_name,
+                    category.code as category_code, category.name as category_name,
                     coalesce((select jsonb_agg(jsonb_build_object(
                       'type', case when selected.subcategory_id is null then 'custom' else 'system' end,
                       'code', subcategory.code,
@@ -3909,7 +3923,13 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       try {
         await client.query("begin");
         const brandResult = await client.query(
-          `select b.workspace_id, b.name as brand_name, b.timezone,
+          `select b.workspace_id,
+                  case
+                    when not (to_jsonb(b) ? 'company_name_state')
+                      or coalesce(to_jsonb(b) ->> 'company_name_state', 'legacy_unknown') <> 'provisional'
+                    then b.name else ''
+                  end as brand_name,
+                  b.timezone,
                   category.code as category_code, category.name as category_name,
                   coalesce((select jsonb_agg(jsonb_build_object(
                     'type', case when selected.subcategory_id is null then 'custom' else 'system' end,

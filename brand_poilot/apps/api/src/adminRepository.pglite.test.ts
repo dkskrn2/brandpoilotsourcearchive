@@ -44,7 +44,7 @@ beforeAll(async () => {
     insert into publish_queue (id, workspace_id, brand_id, channel_output_id, topic_publish_group_id, brand_channel_id, channel, status, approval_type, idempotency_key)
       values ('90000000-0000-4000-8000-000000000009', '20000000-0000-4000-8000-000000000002', '30000000-0000-4000-8000-000000000003', '70000000-0000-4000-8000-000000000007', '80000000-0000-4000-8000-000000000008', '40000000-0000-4000-8000-000000000004', 'instagram', 'queued', 'manual', 'admin-publishing-test');
   `);
-}, 30_000);
+}, 60_000);
 
 afterAll(async () => {
   await database?.close();

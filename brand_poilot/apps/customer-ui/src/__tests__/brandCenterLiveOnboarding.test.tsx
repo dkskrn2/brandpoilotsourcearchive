@@ -48,7 +48,7 @@ function analysis(status: BrandAnalysis["status"]): BrandAnalysis {
     id: "analysis-1",
     brandId: "brand-1",
     status,
-    input: { ownedUrl: "https://brand.example", uploadIds: ["upload-1"] },
+    input: { companyName: "테스트 회사", ownedUrl: "https://brand.example", uploadIds: ["upload-1"] },
     result: hasResult ? result : null,
     editedResult: null,
     effectiveResult: hasResult ? result : null,
@@ -310,6 +310,10 @@ describe("live Brand Center onboarding", () => {
     );
 
     await user.type(
+      await screen.findByRole("textbox", { name: "회사명" }),
+      "첫 번째 회사",
+    );
+    await user.type(
       await screen.findByRole("textbox", { name: "브랜드 웹사이트 URL" }),
       "https://first-brand.example",
     );
@@ -319,7 +323,7 @@ describe("live Brand Center onboarding", () => {
     );
     await user.click(screen.getByRole("button", { name: "AI 분석 시작" }));
     expect(await screen.findByDisplayValue("기존 기업 개요")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "완료" }));
+    await user.click(screen.getByRole("button", { name: "확인하고 저장" }));
     expect(await screen.findByText("브랜드 준비가 완료되었습니다")).toBeVisible();
 
     view.rerender(
@@ -368,6 +372,10 @@ describe("live Brand Center onboarding", () => {
     renderLive(api, "/onboarding/brand-intelligence");
 
     await user.type(
+      await screen.findByRole("textbox", { name: "회사명" }),
+      "테스트 회사",
+    );
+    await user.type(
       await screen.findByRole("textbox", { name: "브랜드 웹사이트 URL" }),
       "https://brand.example",
     );
@@ -375,14 +383,10 @@ describe("live Brand Center onboarding", () => {
     await user.upload(screen.getByLabelText("브랜드 자료 파일 선택"), file);
     await user.click(screen.getByRole("button", { name: "AI 분석 시작" }));
 
-    await waitFor(() => expect(api.uploadFile).toHaveBeenCalledWith(
-      "brand-1",
-      expect.any(String),
-      file,
-    ));
     expect(api.requestAnalysis).toHaveBeenCalledWith("brand-1", {
+      companyName: "테스트 회사",
       ownedUrl: "https://brand.example",
-      uploadIds: ["upload-1"],
+      files: [file],
       idempotencyKey: expect.any(String),
     });
     expect(localStorage.getItem(persistenceKey)).toBe("analysis-1");
@@ -393,18 +397,19 @@ describe("live Brand Center onboarding", () => {
     expect(screen.getByDisplayValue("브랜드 운영")).toBeInTheDocument();
     expect(screen.queryByLabelText("대표 분야 코드")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("추가 확인이 필요한 정보")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("경쟁사 1 이름")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("경쟁사 1 이름")).toBeInTheDocument();
     expect(screen.queryByLabelText("경쟁사 1 근거 URL")).not.toBeInTheDocument();
-    expect(screen.queryByText("기업 근거")).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "근거 보기" })).not.toBeInTheDocument();
+    expect(screen.getByText(/기업 근거/)).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "근거 보기" }).length).toBeGreaterThan(0);
 
     await user.clear(screen.getByLabelText("기업 개요"));
     await user.type(screen.getByLabelText("기업 개요"), "수정 기업 개요");
-    await user.click(screen.getByRole("button", { name: "완료" }));
+    await user.click(screen.getByRole("button", { name: "확인하고 저장" }));
 
-    await waitFor(() => expect(api.updateDraft).toHaveBeenCalledWith(
+    await waitFor(() => expect(api.confirm).toHaveBeenCalledWith(
       "brand-1",
       "analysis-1",
+      "테스트 회사",
       expect.objectContaining({
         companyOverview: "수정 기업 개요",
         primaryCategory: { code: "software", name: "소프트웨어" },
@@ -414,7 +419,6 @@ describe("live Brand Center onboarding", () => {
         sourceGaps: result.sourceGaps,
       }),
     ));
-    expect(api.confirm).toHaveBeenCalledWith("brand-1", "analysis-1");
     expect(localStorage.getItem(persistenceKey)).toBeNull();
   });
 
@@ -435,7 +439,7 @@ describe("live Brand Center onboarding", () => {
     }
   });
 
-  it("stops after 63 completed requests and retains the resume pointer", async () => {
+  it("keeps polling through the full 20-minute active window and retains the resume pointer", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-29T00:00:00.000Z"));
     vi.spyOn(Math, "random").mockReturnValue(0);
@@ -443,18 +447,13 @@ describe("live Brand Center onboarding", () => {
     renderLive(gateway({ getAnalysis }));
     await flushEffects();
 
-    for (let completed = 1; completed < ANALYSIS_POLL_MAX_REQUESTS; completed += 1) {
-      await act(() => vi.advanceTimersByTimeAsync(
-        nextAnalysisPollDelay(completed - 1, () => 0),
-      ));
-    }
-    expect(getAnalysis).toHaveBeenCalledTimes(ANALYSIS_POLL_MAX_REQUESTS);
-    await act(() => vi.advanceTimersByTimeAsync(60_000));
-    expect(getAnalysis).toHaveBeenCalledTimes(ANALYSIS_POLL_MAX_REQUESTS);
+    await act(() => vi.advanceTimersByTimeAsync(20 * 60_000 + 1));
+    expect(getAnalysis.mock.calls.length).toBeGreaterThan(63);
+    expect(ANALYSIS_POLL_MAX_REQUESTS).toBeGreaterThan(getAnalysis.mock.calls.length);
     expect(localStorage.getItem(persistenceKey)).toBe("analysis-1");
   });
 
-  it("stops at the fifteen-minute deadline before the request budget and retains the pointer", async () => {
+  it("does not mistake a legitimate fifteen-minute queue wait for a failed analysis", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-29T00:00:00.000Z"));
     vi.spyOn(Math, "random").mockReturnValue(1);
@@ -462,12 +461,12 @@ describe("live Brand Center onboarding", () => {
     renderLive(gateway({ getAnalysis }));
     await flushEffects();
 
-    await act(() => vi.advanceTimersByTimeAsync(ANALYSIS_POLL_DEADLINE_MS + 20_000));
-    const callsAtDeadline = getAnalysis.mock.calls.length;
-    expect(callsAtDeadline).toBeGreaterThan(1);
-    expect(callsAtDeadline).toBeLessThan(ANALYSIS_POLL_MAX_REQUESTS);
+    await act(() => vi.advanceTimersByTimeAsync(15 * 60_000 + 20_000));
+    const callsAfterFifteenMinutes = getAnalysis.mock.calls.length;
+    expect(callsAfterFifteenMinutes).toBeGreaterThan(1);
     await act(() => vi.advanceTimersByTimeAsync(60_000));
-    expect(getAnalysis).toHaveBeenCalledTimes(callsAtDeadline);
+    expect(getAnalysis.mock.calls.length).toBeGreaterThan(callsAfterFifteenMinutes);
+    expect(screen.queryByText(/분석 상태 확인 시간이 초과되었습니다/)).not.toBeInTheDocument();
     expect(localStorage.getItem(persistenceKey)).toBe("analysis-1");
   });
 
@@ -647,18 +646,45 @@ describe("live Brand Center onboarding", () => {
     expect(getAnalysis).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["failed", "confirmed"] as const)(
-    "clears the resume pointer when the server reports %s",
-    async (status) => {
+  it.each([
+    ["failed", true],
+    ["confirmed", false],
+  ] as const)(
+    "handles the resume pointer when the server reports %s",
+    async (status, shouldRetain) => {
       renderLive(gateway({
         getAnalysis: vi.fn().mockResolvedValue(analysis(status)),
       }));
       await flushEffects();
 
-      expect(localStorage.getItem(persistenceKey)).toBeNull();
-      expect(screen.getByTestId("location")).not.toHaveTextContent("analysisId");
+      expect(localStorage.getItem(persistenceKey)).toBe(shouldRetain ? "analysis-1" : null);
+      if (shouldRetain) {
+        expect(screen.getByTestId("location")).toHaveTextContent("analysisId");
+      } else {
+        expect(screen.getByTestId("location")).not.toHaveTextContent("analysisId");
+      }
     },
   );
+
+  it("lets a failed run be discarded and returns to a completely blank Step 1", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const cancel = vi.fn().mockResolvedValue(analysis("cancelled"));
+    const user = userEvent.setup();
+    renderLive(gateway({
+      getAnalysis: vi.fn().mockResolvedValue(analysis("failed")),
+      cancel,
+    }));
+    await flushEffects();
+
+    expect(await screen.findByText("분석 실패")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "입력 다시하기" }));
+
+    expect(cancel).toHaveBeenCalledWith("brand-1", "analysis-1");
+    expect(await screen.findByRole("textbox", { name: "회사명" })).toHaveValue("");
+    expect(screen.getByRole("textbox", { name: "브랜드 웹사이트 URL" })).toHaveValue("");
+    expect(localStorage.getItem(persistenceKey)).toBeNull();
+    expect(screen.getByTestId("location")).not.toHaveTextContent("analysisId");
+  });
 
   it("keeps the resume pointer while review is ready", async () => {
     renderLive(gateway());

@@ -18,7 +18,16 @@ interface AnalysisStepProps {
   onBrandCoreChange(brandCore: PreviewBrandCore): void;
   onKnowledgeChange(item: PreviewKnowledgeItem): void;
   onRetry(): void;
+  onReset?(): void;
   onComplete(): void;
+  companyName?: string;
+  statusText?: string;
+  ownedPageProgress?: string;
+  cliProgress?: string;
+  waitingMinutes?: string;
+  activeMinutes?: string;
+  cancelling?: boolean;
+  onCancel?(): void;
 }
 
 type ScalarKey = "oneLine" | "description" | "target" | "customerProblem" | "primaryValue";
@@ -62,7 +71,16 @@ export function AnalysisStep({
   brandCoreApproved,
   onBrandCoreChange,
   onRetry,
+  onReset,
   onComplete,
+  companyName,
+  statusText,
+  ownedPageProgress,
+  cliProgress,
+  waitingMinutes,
+  activeMinutes,
+  cancelling = false,
+  onCancel,
 }: AnalysisStepProps) {
   const coreStatus = brandCoreApproved ? "승인 완료" : null;
   const [loadingPhase, setLoadingPhase] = useState(0);
@@ -124,11 +142,23 @@ export function AnalysisStep({
             "지식 초안을 만드는 중",
           ][loadingPhase]}<span aria-hidden="true">...</span></strong>
           <p>보통 수분~10분 정도 소요되며 자료에 따라 더 길어질 수 있습니다.</p>
+          {companyName && <p><strong>회사명</strong> {companyName}</p>}
+          {statusText && <p><strong>현재 단계</strong> {statusText}</p>}
+          {ownedPageProgress && <p><strong>자사 중요 페이지</strong> {ownedPageProgress}</p>}
+          {cliProgress && <p><strong>CLI 분석</strong> {cliProgress}</p>}
+          {waitingMinutes && <p><strong>자원 대기</strong> {waitingMinutes}</p>}
+          {activeMinutes && <p><strong>실제 분석</strong> {activeMinutes} / 최대 20분</p>}
+          {!activeMinutes && <p>자원 대기 시간은 최대 20분 분석 제한에 포함되지 않습니다.</p>}
           <ListSkeleton
             rows={4}
             columns={1}
             label="브랜드 자료를 분석하고 있습니다."
           />
+          {onCancel && (
+            <button type="button" className="button" disabled={cancelling} onClick={onCancel}>
+              {cancelling ? "중단 및 정리 중" : "분석 취소"}
+            </button>
+          )}
         </div>
       ) : null}
 
@@ -144,6 +174,15 @@ export function AnalysisStep({
           >
             다시 분석
           </button>
+          {onReset ? (
+            <button
+              type="button"
+              className="button"
+              onClick={onReset}
+            >
+              입력 다시하기
+            </button>
+          ) : null}
         </div>
       ) : null}
 

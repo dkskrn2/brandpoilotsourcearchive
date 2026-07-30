@@ -1,4 +1,4 @@
-import { Building2, ChevronDown, LogOut } from "lucide-react";
+import { Building2, ChevronDown, CreditCard, LogOut } from "lucide-react";
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "../../lib/auth";
@@ -49,7 +49,7 @@ export function SidebarBrandProfile({ brandName, logoUrl, onNavigate }: SidebarB
     closeAndRestoreFocus();
   }
 
-  function handleBrandCenterNavigation() {
+  function handleMenuNavigation() {
     setOpen(false);
     onNavigate?.();
   }
@@ -90,10 +90,14 @@ export function SidebarBrandProfile({ brandName, logoUrl, onNavigate }: SidebarB
             ref={firstItemRef}
             to="/brand-center"
             role="menuitem"
-            onClick={handleBrandCenterNavigation}
+            onClick={handleMenuNavigation}
           >
             <Building2 size={16} aria-hidden="true" />
             브랜드센터
+          </NavLink>
+          <NavLink to="/billing" role="menuitem" onClick={handleMenuNavigation}>
+            <CreditCard size={16} aria-hidden="true" />
+            플랜
           </NavLink>
           <button role="menuitem" type="button" onClick={handleLogout} disabled={loggingOut}>
             <LogOut size={16} aria-hidden="true" />

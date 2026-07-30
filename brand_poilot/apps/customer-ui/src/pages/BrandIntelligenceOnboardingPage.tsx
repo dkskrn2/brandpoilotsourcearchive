@@ -22,34 +22,47 @@ export function BrandIntelligenceOnboardingPage() {
   });
   const [submitting, setSubmitting] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [companyName, setCompanyName] = useState("");
   const [ownedUrl, setOwnedUrl] = useState("");
   const [categories, setCategories] = useState<ContentCategory[]>([]);
 
   useEffect(() => {
     let active = true;
-    void Promise.all([api.listSources(DEMO_BRAND_ID), api.listContentCategories()])
-      .then(([sources, loadedCategories]) => {
+    void Promise.all([
+      api.listSources(DEMO_BRAND_ID),
+      api.listContentCategories(),
+      gateway.getOnboarding!(DEMO_BRAND_ID),
+    ])
+      .then(([sources, loadedCategories, context]) => {
         if (!active) return;
         setOwnedUrl(sources.find((source) => source.sourceType === "owned" && source.enabled)?.url ?? "");
+        setCompanyName(context.companyName);
         setCategories(loadedCategories);
+        if (!analysisId && context.activeAnalysis) {
+          setSearchParams({ analysisId: context.activeAnalysis.id }, { replace: true });
+        }
       })
       .catch(() => undefined);
     return () => { active = false; };
-  }, []);
+  }, [analysisId, gateway, setSearchParams]);
 
-  async function start(input: { ownedUrl: string | null; files: File[] }) {
+  useEffect(() => {
+    if (analysis?.input.companyName) setCompanyName(analysis.input.companyName);
+  }, [analysis?.input.companyName]);
+
+  async function start(input: { companyName: string; ownedUrl: string | null; files: File[] }) {
     setSubmitting(true);
     setActionError(null);
     try {
-      const uploadSessionId = crypto.randomUUID();
-      const uploadIds: string[] = [];
-      for (const file of input.files) uploadIds.push(await gateway.uploadFile(DEMO_BRAND_ID, uploadSessionId, file));
       const created = await gateway.requestAnalysis(DEMO_BRAND_ID, {
+        companyName: input.companyName,
         ownedUrl: input.ownedUrl,
-        uploadIds,
+        files: input.files,
         idempotencyKey: crypto.randomUUID(),
       });
+      setCompanyName(input.companyName);
       setSearchParams({ analysisId: created.id }, { replace: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
@@ -61,13 +74,47 @@ export function BrandIntelligenceOnboardingPage() {
     }
   }
 
+  async function cancel() {
+    if (!analysisId) return;
+    if (!window.confirm("분석을 취소하면 수집 중인 자료와 분석 결과가 삭제됩니다. 계속할까요?")) return;
+    setCancelling(true);
+    setActionError(null);
+    try {
+      await gateway.cancel!(DEMO_BRAND_ID, analysisId);
+      setCompanyName("");
+      setOwnedUrl("");
+      setSearchParams({}, { replace: true });
+    } catch {
+      setActionError("분석을 중단하지 못했습니다. 잠시 후 다시 시도하세요.");
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  async function retry() {
+    if (!analysisId) return;
+    setSubmitting(true);
+    setActionError(null);
+    try {
+      await gateway.retry!(DEMO_BRAND_ID, analysisId);
+      window.location.reload();
+    } catch {
+      setActionError("보관된 입력으로 분석을 다시 시작하지 못했습니다.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function confirm() {
-    if (!analysisId || !draft) return;
+    const normalizedCompanyName = companyName.normalize("NFKC").trim();
+    if (!analysisId || !draft || !normalizedCompanyName) {
+      setActionError("회사명을 입력하세요.");
+      return;
+    }
     setSaving(true);
     setActionError(null);
     try {
-      await gateway.updateDraft(DEMO_BRAND_ID, analysisId, draft);
-      await gateway.confirm(DEMO_BRAND_ID, analysisId);
+      await gateway.confirm(DEMO_BRAND_ID, analysisId, normalizedCompanyName, draft);
       navigate("/brand-center?tab=understanding&section=core&brandIntelligence=confirmed");
     } catch {
       setActionError("브랜드 정보를 저장하지 못했습니다. 필수 입력값과 API 상태를 확인하세요.");
@@ -89,17 +136,65 @@ export function BrandIntelligenceOnboardingPage() {
         ))}
       </ol>
 
-      {step === 1 && <BrandEvidenceInputStep busy={submitting} error={actionError} initialOwnedUrl={ownedUrl} onSubmit={start} />}
-      {step === 2 && analysis && analysis.status !== "failed" && <BrandAnalysisProgressStep status={analysis.status} />}
-      {step === 2 && loading && !analysis && <BrandAnalysisProgressStep status="queued" />}
+      {step === 1 && (
+        <BrandEvidenceInputStep
+          busy={submitting}
+          error={actionError}
+          initialCompanyName={companyName}
+          initialOwnedUrl={ownedUrl}
+          onSubmit={start}
+        />
+      )}
+      {step === 2 && analysis && !["failed", "cancelled"].includes(analysis.status) && (
+        <BrandAnalysisProgressStep
+          status={analysis.status}
+          companyName={analysis.input.companyName}
+          currentStage={analysis.currentStage}
+          selectedPageCount={analysis.selectedPageCount}
+          successfulPageCount={analysis.successfulPageCount}
+          requiredPageCount={analysis.requiredPageCount}
+          completedCliStageCount={analysis.completedCliStageCount}
+          totalCliStageCount={analysis.totalCliStageCount}
+          queuedAt={analysis.createdAt}
+          activeStartedAt={analysis.activeStartedAt}
+          cancelling={cancelling}
+          onCancel={() => void cancel()}
+        />
+      )}
+      {step === 2 && loading && !analysis && (
+        <BrandAnalysisProgressStep
+          status="queued"
+          companyName={companyName}
+          cancelling={cancelling}
+          onCancel={() => void cancel()}
+        />
+      )}
       {step === 2 && (analysis?.status === "failed" || loadError) && (
         <section className="panel"><div className="panel-body">
           <Alert title="분석을 완료하지 못했습니다" variant="bad">{analysis?.errorMessage ?? loadError ?? "잠시 후 다시 시도하세요."}</Alert>
-          <div className="form-actions"><button type="button" className="button" onClick={() => setSearchParams({}, { replace: true })}>자료 다시 입력</button></div>
+          <div className="form-actions">
+            {analysis?.status === "failed" && (
+              <button type="button" className="button primary" disabled={submitting} onClick={() => void retry()}>
+                같은 자료로 다시 시도
+              </button>
+            )}
+            <button type="button" className="button" onClick={() => void cancel()}>입력 삭제 후 다시 시작</button>
+          </div>
         </div></section>
       )}
       {step === 3 && draft && (
-        <BrandAnalysisReviewStep draft={draft} saving={saving} error={actionError} categories={categories} onChange={setDraft} onConfirm={confirm} />
+        <>
+          <section className="panel brand-intelligence-step">
+            <div className="panel-head"><h2>회사명 확인</h2></div>
+            <div className="panel-body">
+              <label className="field-stack">
+                <span className="field-label">회사명</span>
+                <input value={companyName} maxLength={100} onChange={(event) => setCompanyName(event.target.value)} />
+              </label>
+            </div>
+          </section>
+          <BrandAnalysisReviewStep draft={draft} saving={saving} error={actionError} categories={categories} onChange={setDraft} onConfirm={confirm} />
+        </>
       )}
     </section>
   );

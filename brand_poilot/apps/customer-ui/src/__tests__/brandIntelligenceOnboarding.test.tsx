@@ -65,13 +65,23 @@ describe("brand intelligence onboarding review", () => {
 
   it("prefills the registered owned URL without starting analysis automatically", async () => {
     const submit = vi.fn(async () => undefined);
-    render(<BrandEvidenceInputStep busy={false} error={null} initialOwnedUrl="https://brand.example.com" onSubmit={submit} />);
+    render(<BrandEvidenceInputStep
+      busy={false}
+      error={null}
+      initialCompanyName="테스트 회사"
+      initialOwnedUrl="https://brand.example.com"
+      onSubmit={submit}
+    />);
 
     expect(screen.getByRole("textbox", { name: /자사 URL/ })).toHaveValue("https://brand.example.com");
     expect(screen.getByText(/분석 결과를 확인하고 저장할 때 자사 URL에 반영됩니다/)).toBeVisible();
     expect(submit).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "분석 시작" }));
-    expect(submit).toHaveBeenCalledWith({ ownedUrl: "https://brand.example.com", files: [] });
+    expect(submit).toHaveBeenCalledWith({
+      companyName: "테스트 회사",
+      ownedUrl: "https://brand.example.com",
+      files: [],
+    });
   });
 
   it("maps the reviewed category to the catalog and keeps custom subcategories", async () => {

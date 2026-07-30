@@ -1,7 +1,7 @@
 import { ApiRequestError } from "../../lib/apiClient";
 
-export const ANALYSIS_POLL_MAX_REQUESTS = 63;
-export const ANALYSIS_POLL_DEADLINE_MS = 15 * 60_000;
+export const ANALYSIS_POLL_MAX_REQUESTS = 6_000;
+export const ANALYSIS_POLL_DEADLINE_MS = 24 * 60 * 60_000;
 export const ANALYSIS_REQUEST_TIMEOUT_MS = 15_000;
 export const ANALYSIS_POLL_TIMEOUT_ERROR_CODE = "brand_analysis_poll_timeout";
 

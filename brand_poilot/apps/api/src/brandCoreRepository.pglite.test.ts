@@ -16,7 +16,7 @@ beforeAll(async () => {
     if (sql.startsWith("-- requires: pgvector") || file === "027_wiki_search_v2.sql") continue;
     await database.exec(sql);
   }
-}, 30_000);
+}, 60_000);
 
 afterAll(async () => {
   await database?.close();

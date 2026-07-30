@@ -169,7 +169,7 @@ export const helpGuides: HelpGuide[] = [
   {
     id: "billing",
     path: "/billing",
-    title: "결제 및 구독",
+    title: "플랜",
     summary: "결제 시스템에 저장된 구독 상태, 이용 권한, 다음 결제일과 결제 이력을 확인합니다.",
     sections: [{ title: "결제 정보와 변경", items: ["카드 번호 원문은 모종이 저장하지 않으며 결제수단 표시 정보와 결제 결과만 확인합니다.", "결제수단 등록·변경과 결제 승인은 Toss Payments 연동 화면에서 처리되고 결과가 이 화면에 반영됩니다.", "해지를 예약하면 현재 이용 기간 종료일에 적용되며, 결제 실패나 이용 권한 만료 시 생성·게시 기능이 제한될 수 있습니다."] }],
     tour: [pageHeaderStep("현재 구독, 서비스 이용 가능 여부와 결제 처리 결과를 확인합니다."), { selector: ".billing-page .panel", title: "구독·결제 결과", description: "플랜 상태, 다음 결제일, 결제수단 표시 정보와 과거 승인·실패 이력을 확인합니다." }]

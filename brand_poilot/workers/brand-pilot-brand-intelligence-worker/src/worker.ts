@@ -3,27 +3,42 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { terminateProcessTree } from "@brand-pilot/worker-runtime";
+import {
+  terminateProcessTree,
+} from "@brand-pilot/worker-runtime";
+import { withFailClosedResourceLease } from "./resourceLease.js";
 import type {
   BrandAnalysisJob,
+  BrandAnalysisProgress,
   BrandIntelligenceResult,
+  BrandIntelligenceValidationRegistry,
   BrandIntelligenceWorkerClient,
 } from "./contracts.js";
 import { BrandIntelligenceApiError } from "./client.js";
-import { buildBrandIntelligencePrompt } from "./promptBuilder.js";
+import { buildEvidenceBatches } from "./documentPipeline.js";
+import { prepareBrandEvidence } from "./evidencePreparer.js";
 import { BrandIntelligenceContractError, parseBrandIntelligenceResult } from "./result.js";
 
 export interface BrandIntelligenceRunner {
-  run(job: BrandAnalysisJob): Promise<BrandIntelligenceResult>;
+  run(
+    job: BrandAnalysisJob,
+    signal?: AbortSignal,
+    onProgress?: (progress: BrandAnalysisProgress) => Promise<void>,
+  ): Promise<BrandIntelligenceResult | {
+    result: BrandIntelligenceResult;
+    registry: BrandIntelligenceValidationRegistry;
+  }>;
 }
+
+export const BRAND_INTELLIGENCE_ACTIVE_TIMEOUT_MS = 20 * 60 * 1_000;
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CHILD_ENV_KEYS = [
   "APPDATA", "CODEX_HOME", "COMSPEC", "HOME", "LANG", "LC_ALL", "LOCALAPPDATA",
-  "NODE_EXTRA_CA_CERTS", "NO_PROXY", "PATH", "PATHEXT",
+  "NODE_EXTRA_CA_CERTS", "PATH", "PATHEXT",
   "SSL_CERT_FILE", "SYSTEMROOT", "TEMP", "TMP", "USERPROFILE", "WINDIR",
-  "BRAND_INTELLIGENCE_CODEX_COMMAND", "BRAND_INTELLIGENCE_CODEX_MODEL",
-  "BRAND_INTELLIGENCE_CODEX_REASONING_EFFORT",
+  "BRAND_INTELLIGENCE_CODEX_COMMAND",
+  "BRAND_INTELLIGENCE_CODEX_MODEL", "BRAND_INTELLIGENCE_CODEX_REASONING_EFFORT",
   "BRAND_INTELLIGENCE_CODEX_FAST_MODE",
 ] as const;
 
@@ -38,11 +53,11 @@ type SpawnFunction = (
   args: string[],
   timeoutMs: number,
   env?: NodeJS.ProcessEnv,
-  cwd?: string,
+  signal?: AbortSignal,
 ) => Promise<void>;
 
 export function createCodexRunner({
-  timeoutMs = 900_000,
+  timeoutMs = BRAND_INTELLIGENCE_ACTIVE_TIMEOUT_MS,
   scriptPath = path.join(packageRoot, "scripts", "run-codex-brand-intelligence.mjs"),
   skillPath = path.join(packageRoot, ".agents", "skills", "brand-intelligence", "SKILL.md"),
   runtimeRoot = path.join(tmpdir(), "brand-pilot-brand-intelligence"),
@@ -55,35 +70,94 @@ export function createCodexRunner({
   spawnProcess?: SpawnFunction;
 } = {}): BrandIntelligenceRunner {
   return {
-    async run(job) {
+    async run(job, signal, onProgress) {
       await mkdir(runtimeRoot, { recursive: true });
       const workDir = await mkdtemp(path.join(runtimeRoot, "job-"));
       const outputFile = path.join(workDir, "result.json");
       const jobFile = path.join(workDir, "job.txt");
+      const progressFile = path.join(workDir, "progress.jsonl");
+      const progressController = new AbortController();
+      const combinedSignal = signal
+        ? AbortSignal.any([signal, progressController.signal])
+        : progressController.signal;
+      let deliveredProgressLines = 0;
+      let progressError: unknown;
+      let progressDrain = Promise.resolve();
+      const drainProgress = () => {
+        if (!onProgress) return progressDrain;
+        progressDrain = progressDrain.then(async () => {
+          try {
+            const content = await readFile(progressFile, "utf8").catch(() => "");
+            const lines = content.split(/\r?\n/).filter(Boolean);
+            for (const line of lines.slice(deliveredProgressLines)) {
+              await onProgress(JSON.parse(line) as BrandAnalysisProgress);
+              deliveredProgressLines += 1;
+            }
+          } catch (error) {
+            progressError = error;
+            progressController.abort(error);
+          }
+        });
+        return progressDrain;
+      };
+      let progressTimer: ReturnType<typeof setInterval> | undefined;
       try {
         const runtimeSkillDirectory = path.join(workDir, ".agents", "skills", "brand-intelligence");
         await mkdir(runtimeSkillDirectory, { recursive: true });
         await copyFile(skillPath, path.join(runtimeSkillDirectory, "SKILL.md"));
-        await writeFile(jobFile, `${buildBrandIntelligencePrompt(job)}\n`, "utf8");
+        await writeFile(progressFile, "", "utf8");
+        const evidence = buildEvidenceBatches(job.evidence);
+        await writeFile(jobFile, `${JSON.stringify({
+          analysisId: job.id,
+          brandId: job.brandId,
+          companyName: job.input.companyName ?? null,
+          batches: evidence.batches,
+          sourceRegistry: job.evidence.map((document) => ({
+            sourceId: document.sourceId,
+            sourceUrl: document.sourceUrl,
+          })),
+        })}\n`, "utf8");
+        progressTimer = setInterval(() => { void drainProgress(); }, 250);
         await spawnProcess(
           process.execPath,
-          [scriptPath, `--job-file=${jobFile}`, `--output-file=${outputFile}`, `--runtime-dir=${workDir}`],
+          [
+            scriptPath,
+            `--job-file=${jobFile}`,
+            `--output-file=${outputFile}`,
+            `--runtime-dir=${workDir}`,
+            `--progress-file=${progressFile}`,
+          ],
           timeoutMs,
           buildBrandIntelligenceChildEnv(process.env),
-          workDir,
+          combinedSignal,
         );
-        return parseBrandIntelligenceResult(JSON.parse(await readFile(outputFile, "utf8")));
+        clearInterval(progressTimer);
+        progressTimer = undefined;
+        await drainProgress();
+        if (progressError) throw progressError;
+        const output = JSON.parse(await readFile(outputFile, "utf8")) as {
+          result?: unknown;
+          registry?: BrandIntelligenceValidationRegistry;
+        };
+        if (output.result && output.registry) {
+          return {
+            result: parseBrandIntelligenceResult(output.result),
+            registry: output.registry,
+          };
+        }
+        return parseBrandIntelligenceResult(output);
       } finally {
+        if (progressTimer) clearInterval(progressTimer);
+        await drainProgress();
         await rm(workDir, { recursive: true, force: true });
       }
     },
   };
 }
 
-const spawnWithoutShell: SpawnFunction = async (command, args, timeoutMs, env, cwd) => {
+const spawnWithoutShell: SpawnFunction = async (command, args, timeoutMs, env, signal) => {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(command, args, {
-      cwd,
       stdio: "inherit",
       windowsHide: true,
       shell: false,
@@ -95,13 +169,21 @@ const spawnWithoutShell: SpawnFunction = async (command, args, timeoutMs, env, c
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
       callback();
+    };
+    const abort = () => {
+      void terminateProcessTree(child).finally(() => (
+        finish(() => reject(signal?.reason ?? new Error("brand_intelligence_cancelled")))
+      ));
     };
     const timer = setTimeout(() => {
       void terminateProcessTree(child).finally(() => (
         finish(() => reject(new Error("brand_intelligence_codex_timeout")))
       ));
     }, timeoutMs);
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
     child.once("error", (error) => finish(() => reject(error)));
     child.once("close", (code) => finish(() => (
       code === 0 ? resolve() : reject(new Error(`brand_intelligence_codex_process_failed:${code}`))
@@ -110,38 +192,83 @@ const spawnWithoutShell: SpawnFunction = async (command, args, timeoutMs, env, c
 };
 
 export async function processBrandIntelligenceJob({
-  client, runner, job, leaseSeconds, heartbeatMs = 30_000,
+  client, runner, job, leaseSeconds, heartbeatMs = 3_000,
+  activeTimeoutMs = BRAND_INTELLIGENCE_ACTIVE_TIMEOUT_MS,
+  signal,
 }: {
   client: BrandIntelligenceWorkerClient;
   runner: BrandIntelligenceRunner;
   job: BrandAnalysisJob;
   leaseSeconds: number;
   heartbeatMs?: number;
+  activeTimeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<{ status: "completed" | "failed"; analysisId: string }> {
+  const controller = new AbortController();
+  const forwardAbort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) forwardAbort();
+  else signal?.addEventListener("abort", forwardAbort, { once: true });
+  const persistedRemainingMs = job.deadlineAt
+    ? new Date(job.deadlineAt).getTime() - Date.now()
+    : activeTimeoutMs;
+  const remainingMs = Math.min(activeTimeoutMs, persistedRemainingMs);
+  const deadline = setTimeout(() => {
+    controller.abort(new Error("analysis_deadline_exceeded"));
+  }, Math.max(0, remainingMs));
   let heartbeatInFlight = false;
   const heartbeat = setInterval(() => {
     if (heartbeatInFlight) return;
     heartbeatInFlight = true;
     void client.heartbeat(job, leaseSeconds)
-      .catch(() => undefined)
+      .catch((error) => {
+        controller.abort(error instanceof Error
+          ? error
+          : new Error("brand_analysis_lease_lost"));
+      })
       .finally(() => { heartbeatInFlight = false; });
   }, heartbeatMs);
   try {
-    const result = await runner.run(job);
-    await client.complete(job, result, leaseSeconds);
+    const evidence = job.evidence.length
+      ? job.evidence
+      : await prepareBrandEvidence(job, {
+          signal: controller.signal,
+          progress: (progress) => client.progress(job, progress, leaseSeconds),
+        });
+    const preparedJob = { ...job, evidence };
+    const runOutput = await runner.run(
+      preparedJob,
+      controller.signal,
+      (progress) => client.progress(job, progress, leaseSeconds),
+    );
+    if (controller.signal.aborted) {
+      throw controller.signal.reason ?? new Error("brand_analysis_cancelled");
+    }
+    const result = "result" in runOutput ? runOutput.result : runOutput;
+    const registry = "result" in runOutput ? runOutput.registry : undefined;
+    await client.complete(job, result, evidence, leaseSeconds, registry);
     return { status: "completed", analysisId: job.id };
   } catch (error) {
     const retryable = !(error instanceof BrandIntelligenceContractError)
       && (!(error instanceof BrandIntelligenceApiError) || error.retryable);
     const message = error instanceof Error ? error.message : String(error);
-    await client.fail(job, {
-      errorCode: message.split(":")[0].slice(0, 120),
-      errorMessage: message.slice(0, 2_000),
-      retryable,
-      leaseSeconds,
-    });
+    if (message.includes("brand_analysis_cancel")) {
+      await client.cancelled?.(job, leaseSeconds).catch(() => undefined);
+      return { status: "failed", analysisId: job.id };
+    }
+    try {
+      await client.fail(job, {
+        errorCode: message.split(":")[0].slice(0, 120),
+        errorMessage: message.slice(0, 2_000),
+        retryable,
+        leaseSeconds,
+      });
+    } catch {
+      // Cancellation may revoke the analysis lease before the worker acknowledges it.
+    }
     return { status: "failed", analysisId: job.id };
   } finally {
+    signal?.removeEventListener("abort", forwardAbort);
+    clearTimeout(deadline);
     clearInterval(heartbeat);
   }
 }
@@ -157,12 +284,26 @@ export async function runBrandIntelligenceOnce({
   pollMs?: number;
   wait?: (ms: number) => Promise<unknown>;
 }) {
-  const job = await client.claim(workerId, leaseSeconds);
-  if (!job) {
+  await client.cleanup();
+  const result = await withFailClosedResourceLease({
+    client,
+    workerId,
+    workload: "onboarding",
+  }, async (signal) => {
+    const job = await client.claim(workerId, leaseSeconds);
+    if (!job) return { status: "idle" as const };
+    return processBrandIntelligenceJob({
+      client,
+      runner,
+      job,
+      leaseSeconds,
+      signal,
+    });
+  });
+  if (result.status === "idle") {
     await wait(pollMs);
-    return { status: "idle" as const };
   }
-  return processBrandIntelligenceJob({ client, runner, job, leaseSeconds });
+  return result;
 }
 
 export async function runBrandIntelligenceWatchIteration<T>({

@@ -479,6 +479,7 @@ async function loadAiContentBrandContext(
         versionId: confirmed.versionId,
         confirmedAt: confirmed.confirmedAt,
         profile: confirmed.profile,
+        result: confirmed.result ?? confirmed.profile,
       } : null,
       ownedSource: ownedUrl ? { url: ownedUrl, status: brand.source_status ?? null, lastCrawledAt: iso(brand.last_crawled_at) } : null,
       wiki: wikiVersionId ? { versionId: wikiVersionId, updatedAt: iso(wiki?.wiki_updated_at), pages } : null,

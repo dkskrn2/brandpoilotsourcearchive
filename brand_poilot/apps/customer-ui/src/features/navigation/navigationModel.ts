@@ -1,7 +1,5 @@
 import {
-  CreditCard,
   LayoutDashboard,
-  ChartNoAxesCombined,
   MessageCircleReply,
   ScanSearch,
   Send,
@@ -30,7 +28,6 @@ export const customerNavigation: CustomerNavigationGroup[] = [
     label: "개요",
     items: [
       { label: "대시보드", path: "/dashboard", icon: LayoutDashboard },
-      { label: "성과·개선", path: "/performance", icon: ChartNoAxesCombined },
     ],
   },
   {
@@ -61,17 +58,6 @@ export const customerNavigation: CustomerNavigationGroup[] = [
       },
     ],
   },
-  {
-    id: "settings",
-    label: "설정·지원",
-    items: [
-      {
-        label: "결제 및 구독",
-        path: "/billing",
-        icon: CreditCard,
-      },
-    ],
-  },
 ];
 
 export const onboardingNavigationItem: CustomerNavigationItem = {
@@ -89,6 +75,7 @@ const pageTitles = new Map(
 );
 
 pageTitles.set(onboardingNavigationItem.path, onboardingNavigationItem.label);
+pageTitles.set("/billing", "플랜");
 
 export function resolveCustomerPageTitle(rawPath: string): string | null {
   const pathname = rawPath.split(/[?#]/, 1)[0];

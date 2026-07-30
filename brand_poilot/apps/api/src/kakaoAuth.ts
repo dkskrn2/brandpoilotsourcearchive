@@ -66,7 +66,9 @@ export function createKakaoAuthStore(pool: Pool) {
       try {
         await client.query("begin");
         const existing = await client.query(
-          `select u.id as user_id, u.display_name, u.email, w.id as workspace_id, w.name as workspace_name, b.id as brand_id, b.name as brand_name
+          `select u.id as user_id, u.display_name, u.email, w.id as workspace_id, w.name as workspace_name,
+                  b.id as brand_id,
+                  case when b.company_name_state <> 'provisional' then b.name else '' end as brand_name
            from user_identities i join app_users u on u.id = i.user_id
            join workspace_members wm on wm.user_id = u.id and wm.status = 'active' and wm.deleted_at is null
            join workspaces w on w.id = wm.workspace_id and w.deleted_at is null
@@ -92,7 +94,9 @@ export function createKakaoAuthStore(pool: Pool) {
         const workspaceId = workspace.rows[0].id;
         await client.query("insert into workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')", [workspaceId, userId]);
         const brand = await client.query(
-          `insert into brands (workspace_id, name, created_by_user_id) values ($1, '내 브랜드', $2) returning id, name`,
+          `insert into brands (workspace_id, name, created_by_user_id)
+           values ($1, concat('__provisional__:', $2::text), $2)
+           returning id, name`,
           [workspaceId, userId]
         );
         await client.query(
@@ -108,7 +112,7 @@ export function createKakaoAuthStore(pool: Pool) {
           workspaceId,
           workspaceName: workspace.rows[0].name,
           brandId: brand.rows[0].id,
-          brandName: brand.rows[0].name
+          brandName: ""
         } satisfies AuthSession;
       } catch (error) {
         await client.query("rollback");
@@ -124,7 +128,9 @@ export function createKakaoAuthStore(pool: Pool) {
     },
     async getSession(token: string): Promise<AuthSession | null> {
       const result = await pool.query(
-        `select u.id as user_id, u.display_name, u.email, w.id as workspace_id, w.name as workspace_name, b.id as brand_id, b.name as brand_name
+        `select u.id as user_id, u.display_name, u.email, w.id as workspace_id, w.name as workspace_name,
+                b.id as brand_id,
+                case when b.company_name_state <> 'provisional' then b.name else '' end as brand_name
          from user_sessions s join app_users u on u.id = s.user_id
          join workspace_members wm on wm.user_id = u.id and wm.status = 'active' and wm.deleted_at is null
          join workspaces w on w.id = wm.workspace_id and w.deleted_at is null

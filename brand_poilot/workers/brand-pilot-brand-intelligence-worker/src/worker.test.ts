@@ -1,27 +1,15 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { readFile } from "node:fs/promises";
 import type { BrandAnalysisJob, BrandIntelligenceResult, BrandIntelligenceWorkerClient } from "./contracts.js";
 import { BrandIntelligenceApiError } from "./client.js";
-import { buildBrandIntelligencePrompt } from "./promptBuilder.js";
 import { BrandIntelligenceContractError } from "./result.js";
 import {
   buildBrandIntelligenceChildEnv,
-  createCodexRunner,
   processBrandIntelligenceJob,
   runBrandIntelligenceOnce,
   runBrandIntelligenceWatchIteration,
   type BrandIntelligenceRunner,
 } from "./worker.js";
-
-const temporaryDirectories: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(temporaryDirectories.splice(0).map((directory) => (
-    rm(directory, { recursive: true, force: true })
-  )));
-});
 
 const job: BrandAnalysisJob = {
   id: "analysis-1",
@@ -72,29 +60,31 @@ const result = {
 
 function client(overrides: Partial<BrandIntelligenceWorkerClient> = {}): BrandIntelligenceWorkerClient {
   return {
+    cleanup: vi.fn(async () => undefined),
+    acquireResource: vi.fn(async () => ({
+      id: "resource-1",
+      leaseToken: "resource-token-1",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    })),
+    heartbeatResource: vi.fn(async () => undefined),
+    releaseResource: vi.fn(async () => undefined),
     claim: vi.fn(async () => job),
     heartbeat: vi.fn(async () => undefined),
+    progress: vi.fn(async () => undefined),
     complete: vi.fn(async () => undefined),
+    cancelled: vi.fn(async () => undefined),
     fail: vi.fn(async () => undefined),
     ...overrides,
   };
 }
 
 describe("brand intelligence worker", () => {
-  it("builds a Korean evidence-grounded public research prompt", () => {
-    const prompt = buildBrandIntelligencePrompt(job);
-    expect(prompt).toContain("기업 개요");
-    expect(prompt).toContain("공개 웹검색");
-    expect(prompt).toContain("근거 URL");
-    expect(prompt).toContain("brand-intelligence-result.v1");
-  });
-
   it("completes one leased analysis", async () => {
     const api = client();
     const runner: BrandIntelligenceRunner = { run: vi.fn(async () => result) };
     await expect(processBrandIntelligenceJob({ client: api, runner, job, leaseSeconds: 900 }))
       .resolves.toEqual({ status: "completed", analysisId: "analysis-1" });
-    expect(api.complete).toHaveBeenCalledWith(job, result, 900);
+    expect(api.complete).toHaveBeenCalledWith(job, result, job.evidence, 900, undefined);
   });
 
   it("does not retry invalid model output", async () => {
@@ -113,6 +103,32 @@ describe("brand intelligence worker", () => {
     };
     await processBrandIntelligenceJob({ client: api, runner, job, leaseSeconds: 900 });
     expect(api.fail).toHaveBeenCalledWith(job, expect.objectContaining({ retryable: true }));
+  });
+
+  it("fails closed and aborts active work when the lease heartbeat is lost", async () => {
+    const api = client({
+      heartbeat: vi.fn(async () => {
+        throw new BrandIntelligenceApiError("brand_analysis_cancelled", 409);
+      }),
+    });
+    const runner: BrandIntelligenceRunner = {
+      run: vi.fn(async (_job, signal) => new Promise<BrandIntelligenceResult>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      })),
+    };
+
+    await expect(processBrandIntelligenceJob({
+      client: api,
+      runner,
+      job,
+      leaseSeconds: 900,
+      heartbeatMs: 1,
+    })).resolves.toEqual({ status: "failed", analysisId: "analysis-1" });
+    expect(runner.run).toHaveBeenCalledWith(
+      job,
+      expect.any(AbortSignal),
+      expect.any(Function),
+    );
   });
 
   it("does not invoke the CLI when no job exists", async () => {
@@ -145,56 +161,24 @@ describe("brand intelligence worker", () => {
   it("passes only allowlisted values to Codex", () => {
     expect(buildBrandIntelligenceChildEnv({
       PATH: "bin", CODEX_HOME: "codex", DATABASE_URL: "secret", WORKER_API_TOKEN: "secret",
-      OPENAI_API_KEY: "openai-secret",
-      HTTP_PROXY: "http://proxy-secret",
-      HTTPS_PROXY: "http://proxy-secret",
-      ALL_PROXY: "http://proxy-secret",
+      HTTP_PROXY: "http://proxy.invalid", HTTPS_PROXY: "http://proxy.invalid",
+      NO_PROXY: "*",
     })).toEqual({ PATH: "bin", CODEX_HOME: "codex" });
   });
 
-  it("runs the adapter from the isolated job workspace", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "brand-intelligence-worker-"));
-    temporaryDirectories.push(root);
-    const skillPath = path.join(root, "SKILL.md");
-    await writeFile(skillPath, "# brand intelligence runtime skill\n", "utf8");
-    const spawnProcess = vi.fn(async (
-      _command: string,
-      args: string[],
-      _timeoutMs: number,
-      _env?: NodeJS.ProcessEnv,
-      cwd?: string,
-    ) => {
-      const runtimeDirectory = args.find((arg) => arg.startsWith("--runtime-dir="))!
-        .slice("--runtime-dir=".length);
-      const outputFile = args.find((arg) => arg.startsWith("--output-file="))!
-        .slice("--output-file=".length);
-      expect(cwd).toBe(runtimeDirectory);
-      await writeFile(outputFile, JSON.stringify(result), "utf8");
-    });
-    const runner = createCodexRunner({
-      runtimeRoot: path.join(root, "runtime"),
-      skillPath,
-      spawnProcess,
-    });
-
-    await expect(runner.run(job)).resolves.toEqual(result);
-  });
-
-  it("enables live web search as a top-level Codex option", async () => {
+  it("keeps external research fail-closed and isolates every Codex stage", async () => {
     const script = await readFile(new URL("../scripts/run-codex-brand-intelligence.mjs", import.meta.url), "utf8");
-    expect(script).toContain('"--search",\n  "exec"');
-    expect(script).toContain('"--strict-config"');
-    expect(script).toContain('"default_permissions=\\"worker\\""');
-    expect(script).toContain('"permissions.worker.filesystem={\\":minimal\\"=\\"read\\",\\"/codex\\"=\\"deny\\",\\":workspace_roots\\"={\\".\\"=\\"read\\"}}"');
-    expect(script).toContain('"permissions.worker.network.enabled=false"');
+    expect(script).toContain("External research is fail-closed");
+    expect(script).not.toContain("실제로 확인한 HTTPS 페이지만");
+    expect(script).toContain("MAX_RETRIES = 2");
+    expect(script).toContain("physicalCalls > 10");
     expect(script).toContain('"--disable", "shell_tool"');
-    expect(script).toContain('"--disable", "shell_snapshot"');
-    expect(script).toContain('"--disable", "image_generation"');
-    expect(script).not.toContain('"--sandbox"');
-    expect(script).toContain("cwd: runtimeDir");
-    expect(script).not.toContain("OPENAI_API_KEY");
-    expect(script).not.toContain("HTTP_PROXY");
-    expect(script).not.toContain("HTTPS_PROXY");
-    expect(script).not.toContain("ALL_PROXY");
+    expect(script).toContain('"--disable", "apps"');
+    expect(script).toContain('"--ignore-rules"');
+    expect(script).toContain('"--output-schema"');
+    expect(script).toContain("brand_intelligence_forbidden_tool_event");
+    expect(script).toContain("parseOwnedFactEnvelope(response, registeredSegments)");
+    expect(script).toContain("brand_intelligence_offering_registry_mismatch");
+    expect(script).toMatch(/const keys = \[\s*"APPDATA", "CODEX_HOME", "COMSPEC", "HOME"/);
   });
 });

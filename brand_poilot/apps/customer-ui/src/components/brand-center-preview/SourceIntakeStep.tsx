@@ -8,10 +8,12 @@ const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_EXTENSIONS = new Set(["txt", "md", "pdf", "csv", "xlsx"]);
 
 interface SourceIntakeStepProps {
+  companyName?: string;
   url: string;
   files: PreviewFile[];
   error: string | null;
   onUrlChanged(url: string): void;
+  onCompanyNameChanged?(companyName: string): void;
   onFilesAdded(files: PreviewFile[]): void;
   onFileRemoved(id: string): void;
   onAnalyze(): void;
@@ -19,14 +21,16 @@ interface SourceIntakeStepProps {
 
 export function SourceIntakeStep({
   url,
+  companyName = "",
   files,
   error,
   onUrlChanged,
+  onCompanyNameChanged,
   onFilesAdded,
   onFileRemoved,
   onAnalyze,
 }: SourceIntakeStepProps) {
-  const hasSource = Boolean(url.trim() || files.length);
+  const hasSource = Boolean(companyName.trim() && (url.trim() || files.length));
   const [dragging, setDragging] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
 
@@ -44,6 +48,11 @@ export function SourceIntakeStep({
     }
     if (selectedFiles.some((file) => file.size > MAX_FILE_SIZE_BYTES)) {
       setFileError("파일 하나의 크기는 10MB 이하여야 합니다.");
+      return;
+    }
+    if ([...files.map(({ file }) => file), ...selectedFiles]
+      .reduce((total, file) => total + file.size, 0) > 25 * 1024 * 1024) {
+      setFileError("첨부 문서 전체 크기는 25MB 이하여야 합니다.");
       return;
     }
     setFileError(null);
@@ -65,6 +74,17 @@ export function SourceIntakeStep({
       </div>
 
       <div className="brand-center-preview__source-form">
+        <label htmlFor="brand-preview-company-name">회사명</label>
+        <input
+          id="brand-preview-company-name"
+          type="text"
+          value={companyName}
+          maxLength={100}
+          placeholder="회사명을 입력하세요"
+          onChange={(event) => onCompanyNameChanged?.(event.currentTarget.value)}
+        />
+        <small>카카오 계정의 사람 이름이 아니라 실제 회사명을 입력하세요.</small>
+
         <label htmlFor="brand-preview-url">브랜드 웹사이트 URL</label>
         <div className="brand-center-preview__url-field">
           <Link2 size={18} aria-hidden="true" />

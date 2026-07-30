@@ -678,9 +678,9 @@ export function BrandSettingsPage() {
               <div><dt>대표 URL</dt><dd>{ownedSourceUrl ?? brandIntelligence.input.ownedUrl ?? "첨부 문서로 분석"}</dd></div>
               <div><dt>기업 개요</dt><dd>{brandIntelligence.effectiveResult.companyOverview}</dd></div>
               <div><dt>사업 소개</dt><dd>{brandIntelligence.effectiveResult.businessDescription}</dd></div>
-              <div><dt>분야</dt><dd>{[brandIntelligence.effectiveResult.primaryCategory.name, ...brandIntelligence.effectiveResult.subcategories.map((item) => item.name)].filter(Boolean).join(" · ")}</dd></div>
+              <div><dt>분야</dt><dd>{[brandIntelligence.effectiveResult.primaryCategory?.name, ...brandIntelligence.effectiveResult.subcategories.map((item) => item.name)].filter(Boolean).join(" · ")}</dd></div>
               <div><dt>핵심 타깃</dt><dd>{brandIntelligence.effectiveResult.primaryTarget}</dd></div>
-              <div><dt>차별점</dt><dd>{brandIntelligence.effectiveResult.differentiators}</dd></div>
+              <div><dt>차별점</dt><dd>{Array.isArray(brandIntelligence.effectiveResult.differentiators) ? brandIntelligence.effectiveResult.differentiators.join(" · ") : brandIntelligence.effectiveResult.differentiators}</dd></div>
               <div><dt>핵심 소구점</dt><dd>{brandIntelligence.effectiveResult.coreAppeal}</dd></div>
             </dl>
           ) : <p className="muted">아직 확정된 브랜드 정보가 없습니다.</p>}
