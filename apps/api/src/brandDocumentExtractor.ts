@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { extname } from "node:path";
 import ExcelJS from "exceljs";
-import { PDFParse } from "pdf-parse";
 import type { BrandEvidenceDocument, BrandEvidenceSourceType } from "./brandIntelligenceContracts.js";
 
 export interface BrandDocumentInput {
@@ -126,6 +125,7 @@ async function parseXlsx(bytes: Buffer) {
 }
 
 async function defaultPdfText(bytes: Buffer): Promise<string> {
+  const { PDFParse } = await import("pdf-parse");
   const parser = new PDFParse({ data: bytes });
   try { return (await parser.getText()).text; }
   finally { await parser.destroy(); }
