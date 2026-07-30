@@ -4,7 +4,7 @@ WORKDIR /app
 COPY . .
 RUN npm ci
 RUN npm run build --workspace @brand-pilot/brand-intelligence-worker
-RUN npm prune --omit=dev
+RUN npm prune --omit=dev --workspaces
 
 FROM node:22-bookworm-slim AS runtime
 
