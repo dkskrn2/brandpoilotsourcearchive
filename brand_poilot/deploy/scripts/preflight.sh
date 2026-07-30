@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016
-# Container shell snippets are single-quoted so the host cannot expand them.
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

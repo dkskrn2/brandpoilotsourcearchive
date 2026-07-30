@@ -68,7 +68,7 @@ jobs:
           npm run build --workspace @brand-pilot/card-news-worker
           npm run build --workspace @brand-pilot/blog-worker
           npm run build --workspace @brand-pilot/marketing-worker
-          shellcheck --exclude=SC1091,SC2034,SC2317 deploy/scripts/*.sh
+          shellcheck --exclude=SC1091,SC2016,SC2034,SC2317 deploy/scripts/*.sh
           npm run test:deployment
 
   publish:

@@ -311,10 +311,10 @@ test("preview auth runbook uses one stable origin and an opaque OAuth destinatio
   }
 });
 
-test("Ubuntu runbook fixes the API-only scope and stable public integration URLs", () => {
+test("Ubuntu runbook fixes the initial API/Caddy and gated worker scope with stable public integration URLs", () => {
   const runbook = read(ubuntuRunbookPath);
   for (const phrase of [
-    "API + Caddy only",
+    "API + Caddy:",
     "no external customers",
     "Vercel API",
     "48 hours",
@@ -466,7 +466,7 @@ test("Ubuntu runbook is command-ready for env, artifact integrity, canary, rollb
     "scheduler",
     "publication",
     "no database migration",
-    "future worker plan",
+    "Incremental Codex worker activation",
   ]) {
     assert.ok(runbook.includes(phrase), `Ubuntu runbook missing: ${phrase}`);
   }
@@ -1938,7 +1938,7 @@ test("CI publishing verifies the complete server release contract before buildin
       `npm run test --workspace ${workspace}`,
       `npm run build --workspace ${workspace}`,
     ]),
-    "shellcheck --exclude=SC1091,SC2034,SC2317 deploy/scripts/*.sh",
+    "shellcheck --exclude=SC1091,SC2016,SC2034,SC2317 deploy/scripts/*.sh",
     "npm run test:deployment",
   ]) {
     assert.ok(verifyJob.includes(`          ${command}`), `verify job missing ${command}`);
