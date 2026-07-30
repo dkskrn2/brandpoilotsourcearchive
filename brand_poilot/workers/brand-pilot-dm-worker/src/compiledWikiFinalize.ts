@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { createEmbedding } from "./embeddings.js";
 import { buildBrandCore, type WikiPageType } from "./wikiCompiler.js";
 
 export interface ClaimedWikiValidationItem {
@@ -27,21 +26,11 @@ export interface FinalizedWikiChunk {
   chunkIndex: number;
   content: string;
   contentHash: string;
-  embedding: number[];
-  embeddingModel: string;
-  embeddingVersion: string;
 }
 
 export interface CompiledWikiFinalizeDb {
   claimWikiValidationItem(workerId: string): Promise<ClaimedWikiValidationItem | null>;
   getWikiPagesForFinalization(item: ClaimedWikiValidationItem): Promise<WikiPageForFinalization[]>;
-  getReusablePageEmbeddings(
-    brandId: string,
-    contentHashes: string[],
-    embeddingModel: string,
-    embeddingVersion: string,
-    promptVersion: string,
-  ): Promise<Array<{ contentHash: string; embedding: number[] }>>;
   completeWikiValidationItem(
     item: ClaimedWikiValidationItem,
     chunks: FinalizedWikiChunk[],
@@ -92,40 +81,13 @@ function compiledBrandCore(pages: WikiPageForFinalization[]) {
 export async function runWikiFinalizeOnce(input: {
   workerId: string;
   db: CompiledWikiFinalizeDb;
-  apiKey: string;
-  embeddingModel: string;
-  embeddingVersion: string;
-  embed?: typeof createEmbedding;
 }) {
   const item = await input.db.claimWikiValidationItem(input.workerId);
   if (!item) return { status: "idle" as const };
   try {
     const pages = await input.db.getWikiPagesForFinalization(item);
     if (!pages.length) throw new Error("wiki_pages_missing");
-    const pending = pages.flatMap(chunkCompiledWikiPage);
-    const reusable = await input.db.getReusablePageEmbeddings(
-      item.brandId,
-      pending.map((chunk) => chunk.contentHash),
-      input.embeddingModel,
-      input.embeddingVersion,
-      pages[0]?.promptVersion ?? "v1",
-    );
-    const reuseByHash = new Map(reusable.map((entry) => [entry.contentHash, entry.embedding]));
-    const embed = input.embed ?? createEmbedding;
-    const chunks: FinalizedWikiChunk[] = [];
-    for (const chunk of pending) {
-      const embedding = reuseByHash.get(chunk.contentHash) ?? await embed({
-        text: chunk.content,
-        apiKey: input.apiKey,
-        model: input.embeddingModel,
-      });
-      chunks.push({
-        ...chunk,
-        embedding,
-        embeddingModel: input.embeddingModel,
-        embeddingVersion: input.embeddingVersion,
-      });
-    }
+    const chunks: FinalizedWikiChunk[] = pages.flatMap(chunkCompiledWikiPage);
     await input.db.completeWikiValidationItem(item, chunks, compiledBrandCore(pages));
     return { status: "ready" as const, itemId: item.id, chunkCount: chunks.length };
   } catch (error) {

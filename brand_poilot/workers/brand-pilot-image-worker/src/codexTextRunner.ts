@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { buildImageWorkerChildEnvironment } from "./childEnvironment.mjs";
 import { buildCodexTextExecArguments, resolveCodexInvocation } from "./codexCommand.mjs";
 import { parseCodexFinalMessage } from "./codexImageOutput.mjs";
 import type { SourceReadResult } from "./sourceReader.js";
@@ -14,7 +15,13 @@ export async function executeCodexText({ rootDir, prompt }: { rootDir: string; p
     const child = spawn(codex.command, [
       ...codex.argsPrefix,
       ...buildCodexTextExecArguments({ rootDir })
-    ], { stdio: ["pipe", "pipe", "inherit"], env: process.env });
+    ], {
+      shell: false,
+      windowsHide: true,
+      cwd: rootDir,
+      stdio: ["pipe", "pipe", "inherit"],
+      env: buildImageWorkerChildEnvironment(process.env)
+    });
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       pendingOutput += chunk;

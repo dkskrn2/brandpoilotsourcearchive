@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { terminateProcessTree } from "@brand-pilot/worker-runtime";
@@ -19,10 +20,10 @@ export interface BrandIntelligenceRunner {
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CHILD_ENV_KEYS = [
   "APPDATA", "CODEX_HOME", "COMSPEC", "HOME", "LANG", "LC_ALL", "LOCALAPPDATA",
-  "NODE_EXTRA_CA_CERTS", "NO_PROXY", "OPENAI_API_KEY", "PATH", "PATHEXT",
+  "NODE_EXTRA_CA_CERTS", "NO_PROXY", "PATH", "PATHEXT",
   "SSL_CERT_FILE", "SYSTEMROOT", "TEMP", "TMP", "USERPROFILE", "WINDIR",
-  "HTTP_PROXY", "HTTPS_PROXY", "BRAND_INTELLIGENCE_CODEX_COMMAND",
-  "BRAND_INTELLIGENCE_CODEX_MODEL", "BRAND_INTELLIGENCE_CODEX_REASONING_EFFORT",
+  "BRAND_INTELLIGENCE_CODEX_COMMAND", "BRAND_INTELLIGENCE_CODEX_MODEL",
+  "BRAND_INTELLIGENCE_CODEX_REASONING_EFFORT",
   "BRAND_INTELLIGENCE_CODEX_FAST_MODE",
 ] as const;
 
@@ -37,13 +38,14 @@ type SpawnFunction = (
   args: string[],
   timeoutMs: number,
   env?: NodeJS.ProcessEnv,
+  cwd?: string,
 ) => Promise<void>;
 
 export function createCodexRunner({
   timeoutMs = 900_000,
   scriptPath = path.join(packageRoot, "scripts", "run-codex-brand-intelligence.mjs"),
   skillPath = path.join(packageRoot, ".agents", "skills", "brand-intelligence", "SKILL.md"),
-  runtimeRoot = path.resolve(process.cwd(), ".runtime-brand-intelligence"),
+  runtimeRoot = path.join(tmpdir(), "brand-pilot-brand-intelligence"),
   spawnProcess = spawnWithoutShell,
 }: {
   timeoutMs?: number;
@@ -68,6 +70,7 @@ export function createCodexRunner({
           [scriptPath, `--job-file=${jobFile}`, `--output-file=${outputFile}`, `--runtime-dir=${workDir}`],
           timeoutMs,
           buildBrandIntelligenceChildEnv(process.env),
+          workDir,
         );
         return parseBrandIntelligenceResult(JSON.parse(await readFile(outputFile, "utf8")));
       } finally {
@@ -77,9 +80,10 @@ export function createCodexRunner({
   };
 }
 
-const spawnWithoutShell: SpawnFunction = async (command, args, timeoutMs, env) => {
+const spawnWithoutShell: SpawnFunction = async (command, args, timeoutMs, env, cwd) => {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(command, args, {
+      cwd,
       stdio: "inherit",
       windowsHide: true,
       shell: false,

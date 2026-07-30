@@ -41,7 +41,7 @@ CURRENT_CANARY_HOST=""
 CURRENT_PRIMARY_HOST=""
 CURRENT_API_ENV_FILE=""
 if load_optional_state_sha "$ROOT/state/current" CURRENT_SHA; then
-  validate_release_directory "$ROOT/releases/$CURRENT_SHA" legacy-current
+  validate_state_release_directory "$ROOT" "$CURRENT_SHA"
   CURRENT_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
   CURRENT_CADDY_IMAGE="${RELEASE_MANIFEST[CADDY_IMAGE]}"
   CURRENT_CANARY_HOST="${RELEASE_MANIFEST[CANARY_HOST]}"
@@ -54,7 +54,7 @@ CANDIDATE_CANARY_HOST=""
 CANDIDATE_PRIMARY_HOST=""
 CANDIDATE_API_ENV_FILE=""
 if load_optional_state_sha "$ROOT/state/candidate" CANDIDATE_SHA; then
-  validate_release_directory "$ROOT/releases/$CANDIDATE_SHA"
+  validate_state_release_directory "$ROOT" "$CANDIDATE_SHA"
   CANDIDATE_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
   CANDIDATE_CANARY_HOST="${RELEASE_MANIFEST[CANARY_HOST]}"
   CANDIDATE_PRIMARY_HOST="${RELEASE_MANIFEST[PRIMARY_HOST]}"
@@ -68,9 +68,9 @@ ORIGINAL_PREVIOUS_SHA=""
 ORIGINAL_PREVIOUS_EXISTS=false
 if load_optional_state_sha "$ROOT/state/previous" ORIGINAL_PREVIOUS_SHA; then
   ORIGINAL_PREVIOUS_EXISTS=true
-  validate_release_directory "$ROOT/releases/$ORIGINAL_PREVIOUS_SHA"
+  validate_state_release_directory "$ROOT" "$ORIGINAL_PREVIOUS_SHA"
 fi
-validate_release_directory "$ROOT/releases/$TARGET_SHA"
+validate_state_release_directory "$ROOT" "$TARGET_SHA"
 TARGET_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
 TARGET_CADDY_IMAGE="${RELEASE_MANIFEST[CADDY_IMAGE]}"
 TARGET_CANARY_HOST="${RELEASE_MANIFEST[CANARY_HOST]}"

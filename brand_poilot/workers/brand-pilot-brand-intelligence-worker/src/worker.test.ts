@@ -1,16 +1,27 @@
-import { describe, expect, it, vi } from "vitest";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrandAnalysisJob, BrandIntelligenceResult, BrandIntelligenceWorkerClient } from "./contracts.js";
 import { BrandIntelligenceApiError } from "./client.js";
 import { buildBrandIntelligencePrompt } from "./promptBuilder.js";
 import { BrandIntelligenceContractError } from "./result.js";
 import {
   buildBrandIntelligenceChildEnv,
+  createCodexRunner,
   processBrandIntelligenceJob,
   runBrandIntelligenceOnce,
   runBrandIntelligenceWatchIteration,
   type BrandIntelligenceRunner,
 } from "./worker.js";
+
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => (
+    rm(directory, { recursive: true, force: true })
+  )));
+});
 
 const job: BrandAnalysisJob = {
   id: "analysis-1",
@@ -134,11 +145,56 @@ describe("brand intelligence worker", () => {
   it("passes only allowlisted values to Codex", () => {
     expect(buildBrandIntelligenceChildEnv({
       PATH: "bin", CODEX_HOME: "codex", DATABASE_URL: "secret", WORKER_API_TOKEN: "secret",
+      OPENAI_API_KEY: "openai-secret",
+      HTTP_PROXY: "http://proxy-secret",
+      HTTPS_PROXY: "http://proxy-secret",
+      ALL_PROXY: "http://proxy-secret",
     })).toEqual({ PATH: "bin", CODEX_HOME: "codex" });
+  });
+
+  it("runs the adapter from the isolated job workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "brand-intelligence-worker-"));
+    temporaryDirectories.push(root);
+    const skillPath = path.join(root, "SKILL.md");
+    await writeFile(skillPath, "# brand intelligence runtime skill\n", "utf8");
+    const spawnProcess = vi.fn(async (
+      _command: string,
+      args: string[],
+      _timeoutMs: number,
+      _env?: NodeJS.ProcessEnv,
+      cwd?: string,
+    ) => {
+      const runtimeDirectory = args.find((arg) => arg.startsWith("--runtime-dir="))!
+        .slice("--runtime-dir=".length);
+      const outputFile = args.find((arg) => arg.startsWith("--output-file="))!
+        .slice("--output-file=".length);
+      expect(cwd).toBe(runtimeDirectory);
+      await writeFile(outputFile, JSON.stringify(result), "utf8");
+    });
+    const runner = createCodexRunner({
+      runtimeRoot: path.join(root, "runtime"),
+      skillPath,
+      spawnProcess,
+    });
+
+    await expect(runner.run(job)).resolves.toEqual(result);
   });
 
   it("enables live web search as a top-level Codex option", async () => {
     const script = await readFile(new URL("../scripts/run-codex-brand-intelligence.mjs", import.meta.url), "utf8");
     expect(script).toContain('"--search",\n  "exec"');
+    expect(script).toContain('"--strict-config"');
+    expect(script).toContain('"default_permissions=\\"worker\\""');
+    expect(script).toContain('"permissions.worker.filesystem={\\":minimal\\"=\\"read\\",\\"/codex\\"=\\"deny\\",\\":workspace_roots\\"={\\".\\"=\\"read\\"}}"');
+    expect(script).toContain('"permissions.worker.network.enabled=false"');
+    expect(script).toContain('"--disable", "shell_tool"');
+    expect(script).toContain('"--disable", "shell_snapshot"');
+    expect(script).toContain('"--disable", "image_generation"');
+    expect(script).not.toContain('"--sandbox"');
+    expect(script).toContain("cwd: runtimeDir");
+    expect(script).not.toContain("OPENAI_API_KEY");
+    expect(script).not.toContain("HTTP_PROXY");
+    expect(script).not.toContain("HTTPS_PROXY");
+    expect(script).not.toContain("ALL_PROXY");
   });
 });

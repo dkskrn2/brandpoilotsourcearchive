@@ -30,6 +30,7 @@ managed_paths=(
   "$ROOT/state"
   "$ROOT/shared"
   "$ROOT/shared/env"
+  "$ROOT/shared/codex"
 )
 
 for path in "${managed_paths[@]}"; do
@@ -46,5 +47,6 @@ install -d -m 0750 -o bpdeploy -g bpdeploy "$ROOT/releases"
 install -d -m 0700 -o bpdeploy -g bpdeploy "$ROOT/state"
 install -d -m 0700 -o bpdeploy -g bpdeploy "$ROOT/shared"
 install -d -m 0700 -o bpdeploy -g bpdeploy "$ROOT/shared/env"
+install -d -m 0700 -o bpdeploy -g bpdeploy "$ROOT/shared/codex"
 
 printf 'bootstrap_ok:%s\n' "$ROOT"

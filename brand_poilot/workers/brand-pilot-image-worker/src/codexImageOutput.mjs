@@ -1,9 +1,11 @@
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
-/** @param {{ codexHome?: string, homeDir: string }} input */
-export function resolveCodexGeneratedImagesDirectory({ codexHome, homeDir }) {
-  return path.join(codexHome || path.join(homeDir, ".codex"), "generated_images");
+/** @param {{ generatedImagesDirectory?: string, codexHome?: string, homeDir: string }} input */
+export function resolveCodexGeneratedImagesDirectory({ generatedImagesDirectory, codexHome, homeDir }) {
+  return generatedImagesDirectory
+    ? path.resolve(generatedImagesDirectory)
+    : path.join(codexHome || path.join(homeDir, ".codex"), "generated_images");
 }
 
 export function parseCodexThreadId(line) {

@@ -1,6 +1,6 @@
 import { parseContentGenerationInput, type MarketingJob } from "./contracts.js";
 import { requestedDimensions } from "./manifest.js";
-import { buildAiContentRevisionInstruction } from "../../brand-pilot-worker-runtime/src/index.js";
+import { buildAiContentRevisionInstruction } from "@brand-pilot/worker-runtime";
 
 export const marketingSkillVersion = "marketing-creative-skill.v5";
 

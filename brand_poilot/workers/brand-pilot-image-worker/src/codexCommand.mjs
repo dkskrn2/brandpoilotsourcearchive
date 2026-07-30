@@ -18,15 +18,18 @@ export function resolveCodexInvocation({
 
 export function buildCodexExecArguments({ rootDir }) {
   return [
+    "exec",
+    "--ignore-user-config",
+    "--strict-config",
+    "-c", "default_permissions=\"worker\"",
+    "-c", "permissions.worker.filesystem={\":minimal\"=\"read\",\"/codex\"=\"deny\",\":workspace_roots\"={\".\"=\"read\"}}",
+    "-c", "permissions.worker.network.enabled=false",
     "--enable", "image_generation",
     "--disable", "shell_tool",
     "--disable", "shell_snapshot",
-    "--ask-for-approval", "never",
-    "exec",
     "--skip-git-repo-check",
     "--ephemeral",
     "--json",
-    "--sandbox", "workspace-write",
     "-C", rootDir,
     "-"
   ];
@@ -34,14 +37,18 @@ export function buildCodexExecArguments({ rootDir }) {
 
 export function buildCodexTextExecArguments({ rootDir }) {
   return [
+    "exec",
+    "--ignore-user-config",
+    "--strict-config",
+    "-c", "default_permissions=\"worker\"",
+    "-c", "permissions.worker.filesystem={\":minimal\"=\"read\",\"/codex\"=\"deny\",\":workspace_roots\"={\".\"=\"read\"}}",
+    "-c", "permissions.worker.network.enabled=false",
     "--disable", "shell_tool",
     "--disable", "shell_snapshot",
-    "--ask-for-approval", "never",
-    "exec",
+    "--disable", "image_generation",
     "--skip-git-repo-check",
     "--ephemeral",
     "--json",
-    "--sandbox", "read-only",
     "-C", rootDir,
     "-"
   ];

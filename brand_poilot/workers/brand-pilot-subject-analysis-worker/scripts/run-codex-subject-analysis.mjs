@@ -30,7 +30,7 @@ function codexInvocation() {
 }
 
 function childEnvironment(source) {
-  const keys = ["APPDATA", "CODEX_HOME", "COMSPEC", "HOME", "LANG", "LC_ALL", "LOCALAPPDATA", "NODE_EXTRA_CA_CERTS", "NO_PROXY", "OPENAI_API_KEY", "PATH", "PATHEXT", "SSL_CERT_FILE", "SYSTEMROOT", "TEMP", "TMP", "USERPROFILE", "WINDIR", "HTTP_PROXY", "HTTPS_PROXY"];
+  const keys = ["APPDATA", "CODEX_HOME", "COMSPEC", "HOME", "LANG", "LC_ALL", "LOCALAPPDATA", "NODE_EXTRA_CA_CERTS", "NO_PROXY", "PATH", "PATHEXT", "SSL_CERT_FILE", "SYSTEMROOT", "TEMP", "TMP", "USERPROFILE", "WINDIR"];
   return Object.fromEntries(keys.flatMap((key) => source[key] === undefined ? [] : [[key, source[key]]]));
 }
 
@@ -42,11 +42,23 @@ const prompt = await readFile(jobFile, "utf8");
 
 const child = spawn(codex.command, [
   ...codex.argsPrefix,
-  "exec", "--ignore-user-config", "-m", model,
+  "exec", "--ignore-user-config", "--strict-config", "-m", model,
   "-c", `model_reasoning_effort=\"${effort}\"`,
   ...(fast ? ["--enable", "fast_mode", "-c", "service_tier=\"fast\""] : []),
-  "--skip-git-repo-check", "--ephemeral", "--json", "--sandbox", "read-only", "-C", runtimeDir, "-",
-], { shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: childEnvironment(process.env) });
+  "-c", "default_permissions=\"worker\"",
+  "-c", "permissions.worker.filesystem={\":minimal\"=\"read\",\"/codex\"=\"deny\",\":workspace_roots\"={\".\"=\"read\"}}",
+  "-c", "permissions.worker.network.enabled=false",
+  "--disable", "shell_tool",
+  "--disable", "shell_snapshot",
+  "--disable", "image_generation",
+  "--skip-git-repo-check", "--ephemeral", "--json", "-C", runtimeDir, "-",
+], {
+  cwd: runtimeDir,
+  shell: false,
+  windowsHide: true,
+  stdio: ["pipe", "pipe", "pipe"],
+  env: childEnvironment(process.env),
+});
 
 let stdout = "";
 let stderr = "";

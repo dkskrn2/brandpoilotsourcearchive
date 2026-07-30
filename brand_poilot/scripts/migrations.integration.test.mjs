@@ -5923,3 +5923,421 @@ test("050 stores normalized support request mobile phone numbers", async () => {
     assert.match(constraints.rows[0].definition, /010-/);
   });
 });
+
+test("070 activates and deterministically searches compiled Wiki chunks without embeddings", async () => {
+  const migrations = await loadMigrations();
+  const lexicalMigration = migrations.find(
+    (migration) => migration.id === "070_remove_embedding_runtime.sql",
+  );
+
+  assert.ok(
+    lexicalMigration,
+    "missing migration 070_remove_embedding_runtime.sql",
+  );
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "032_compounding_wiki_core.sql",
+    );
+    await database.exec(
+      "alter table wiki_page_chunks add column embedding text null",
+    );
+
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ('Lexical Wiki', $1) returning id",
+      [`lexical-wiki-${randomUUID()}`],
+    );
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Lexical Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    const inflight = await database.query(
+      `insert into wiki_versions (workspace_id, brand_id, status, build_stage)
+       values ($1, $2, 'building', 'embedding') returning id`,
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+
+    await database.exec(lexicalMigration.sql);
+
+    const resumed = await database.query(
+      "select status, build_stage from wiki_versions where id = $1",
+      [inflight.rows[0].id],
+    );
+    assert.deepEqual(resumed.rows, [{
+      status: "building",
+      build_stage: "validating",
+    }]);
+
+    const version = await database.query(
+      `insert into wiki_versions (workspace_id, brand_id, status, build_stage)
+       values ($1, $2, 'ready', null) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+    const sourceUnit = await database.query(
+      `insert into wiki_source_units (
+         workspace_id, brand_id, wiki_version_id, source_kind, source_id,
+         unit_type, stable_key, title, content, content_hash, keywords,
+         aliases, source_quote
+       ) values (
+         $1, $2, $3, 'policy', $4, 'policy', 'returns-policy-source',
+         '교환 및 반품 안내', '교환과 반품 신청 방법', 'source-hash',
+         array['교환', '반품'], array['교환 안내', '반품 도움말'],
+         '교환 및 반품 신청 방법'
+       ) returning id`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        version.rows[0].id,
+        randomUUID(),
+      ],
+    );
+    const pageFixtures = [
+      {
+        pageType: "brand_overview",
+        stableKey: "brand-overview",
+        title: "브랜드 소개",
+        content: "브랜드의 가치와 운영 원칙을 소개합니다.",
+      },
+      {
+        pageType: "catalog",
+        stableKey: "product-catalog",
+        title: "상품 카탈로그",
+        content: "판매 중인 상품을 한눈에 안내합니다.",
+      },
+      {
+        pageType: "policy",
+        stableKey: "returns-policy",
+        title: "교환 및 반품 안내",
+        content: "수령 후 칠 일 안에 교환 또는 반품을 신청할 수 있습니다.",
+      },
+    ];
+    const pages = [];
+    for (const fixture of pageFixtures) {
+      const page = await database.query(
+        `insert into wiki_pages (
+           workspace_id, brand_id, wiki_version_id, page_type, stable_key,
+           title, content_json
+         ) values (
+           $1, $2, $3, $4, $5, $6,
+           jsonb_build_object(
+             'sections',
+             jsonb_build_array(
+               jsonb_build_object(
+                 'sectionKey', 'main',
+                 'sourceUnitIds', jsonb_build_array($7::text)
+               )
+             )
+           )
+         ) returning id`,
+        [
+          workspace.rows[0].id,
+          brand.rows[0].id,
+          version.rows[0].id,
+          fixture.pageType,
+          fixture.stableKey,
+          fixture.title,
+          sourceUnit.rows[0].id,
+        ],
+      );
+      pages.push({ ...fixture, id: page.rows[0].id });
+      await database.query(
+        `insert into wiki_page_sources (
+           workspace_id, brand_id, wiki_version_id, wiki_page_id,
+           wiki_source_unit_id, section_key, source_kind, source_id,
+           source_quote
+         ) values ($1, $2, $3, $4, $5, 'main', 'policy', $6, $7)`,
+        [
+          workspace.rows[0].id,
+          brand.rows[0].id,
+          version.rows[0].id,
+          page.rows[0].id,
+          sourceUnit.rows[0].id,
+          randomUUID(),
+          fixture.content,
+        ],
+      );
+      await database.query(
+        `insert into wiki_page_chunks (
+           workspace_id, brand_id, wiki_version_id, wiki_page_id,
+           chunk_index, content, content_hash, enabled, embedding
+         ) values ($1, $2, $3, $4, 0, $5, $6, true, null)`,
+        [
+          workspace.rows[0].id,
+          brand.rows[0].id,
+          version.rows[0].id,
+          page.rows[0].id,
+          fixture.content,
+          `${fixture.stableKey}-0`,
+        ],
+      );
+    }
+    const catalog = pages.find((page) => page.pageType === "catalog");
+    for (let chunkIndex = 1; chunkIndex <= 12; chunkIndex += 1) {
+      await database.query(
+        `insert into wiki_page_chunks (
+           workspace_id, brand_id, wiki_version_id, wiki_page_id,
+           chunk_index, content, content_hash, enabled, embedding
+         ) values ($1, $2, $3, $4, $5, $6, $7, true, null)`,
+        [
+          workspace.rows[0].id,
+          brand.rows[0].id,
+          version.rows[0].id,
+          catalog.id,
+          chunkIndex,
+          `상품 안내 ${chunkIndex}`,
+          `catalog-${chunkIndex}`,
+        ],
+      );
+    }
+    await database.query(
+      `insert into wiki_compilation_items (
+         workspace_id, brand_id, wiki_version_id, item_type, stable_key,
+         idempotency_key, status, completed_at
+       ) values (
+         $1, $2, $3, 'validate', 'validate', $4, 'succeeded', now()
+       )`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        version.rows[0].id,
+        `validate-${randomUUID()}`,
+      ],
+    );
+
+    const activated = await database.query(
+      "select activate_compiled_wiki_version($1) as activated",
+      [version.rows[0].id],
+    );
+    assert.equal(activated.rows[0].activated, true);
+    const activeVersion = await database.query(
+      "select status, chunk_count from wiki_versions where id = $1",
+      [version.rows[0].id],
+    );
+    assert.deepEqual(activeVersion.rows, [{
+      status: "active",
+      chunk_count: 15,
+    }]);
+    const legacyEmbeddings = await database.query(
+      `select count(*)::integer as count
+         from wiki_page_chunks
+        where wiki_version_id = $1 and embedding is not null`,
+      [version.rows[0].id],
+    );
+    assert.deepEqual(legacyEmbeddings.rows, [{ count: 0 }]);
+
+    const search = async (query, limit) => database.query(
+      "select * from search_brand_wiki_lexical($1, $2, $3, $4)",
+      [workspace.rows[0].id, brand.rows[0].id, query, limit],
+    );
+    for (const fixture of [
+      { label: "NULL query", query: null },
+      { label: "blank query", query: "  \t\n  " },
+      { label: "wholly unmatched query", query: "절대존재하지않는검색어" },
+    ]) {
+      const result = await search(fixture.query, 12);
+      assert.equal(
+        result.rows.length,
+        0,
+        `${fixture.label} must not return arbitrary Wiki chunks`,
+      );
+    }
+    const first = await search("교환 안내", 12);
+    const second = await search("교환 안내", 12);
+    const policy = pages.find((page) => page.pageType === "policy");
+    assert.equal(first.rows[0].wiki_page_id, policy.id);
+    assert.deepEqual(
+      second.rows.map((row) => row.page_chunk_id),
+      first.rows.map((row) => row.page_chunk_id),
+    );
+    assert.equal(first.rows[0].cosine_similarity, 0);
+    assert.ok(first.rows[0].keyword_match >= 0);
+    assert.ok(first.rows[0].rrf_score > 0);
+    assert.equal(first.rows[0].source_link_ids.length, 1);
+
+    const bounded = await search("안내", 999);
+    assert.equal(bounded.rows.length, 12);
+
+    const insertOfferingPage = async ({
+      pageType,
+      sourceKind,
+      stableKey,
+      title,
+      content,
+      sourceUrl,
+      destinationUrl,
+    }) => {
+      const sourceId = randomUUID();
+      const source = await database.query(
+        `insert into wiki_source_units (
+           workspace_id, brand_id, wiki_version_id, source_kind, source_id,
+           unit_type, stable_key, title, content, content_hash,
+           source_url, destination_url, source_quote
+         ) values (
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $9
+         ) returning id`,
+        [
+          workspace.rows[0].id,
+          brand.rows[0].id,
+          version.rows[0].id,
+          sourceKind,
+          sourceId,
+          pageType,
+          stableKey,
+          title,
+          content,
+          `${stableKey}-source`,
+          sourceUrl,
+          destinationUrl,
+        ],
+      );
+      const page = await database.query(
+        `insert into wiki_pages (
+           workspace_id, brand_id, wiki_version_id, page_type, stable_key,
+           title, content_json, is_active
+         ) values (
+           $1, $2, $3, $4, $5, $6,
+           jsonb_build_object(
+             'sections',
+             jsonb_build_array(
+               jsonb_build_object(
+                 'sectionKey', 'main',
+                 'sourceUnitIds', jsonb_build_array($7::text)
+               )
+             )
+           ),
+           true
+         ) returning id`,
+        [
+          workspace.rows[0].id,
+          brand.rows[0].id,
+          version.rows[0].id,
+          pageType,
+          stableKey,
+          title,
+          source.rows[0].id,
+        ],
+      );
+      await database.query(
+        `insert into wiki_page_sources (
+           workspace_id, brand_id, wiki_version_id, wiki_page_id,
+           wiki_source_unit_id, section_key, source_kind, source_id,
+           source_url, destination_url, source_quote
+         ) values ($1, $2, $3, $4, $5, 'main', $6, $7, $8, $9, $10)`,
+        [
+          workspace.rows[0].id,
+          brand.rows[0].id,
+          version.rows[0].id,
+          page.rows[0].id,
+          source.rows[0].id,
+          sourceKind,
+          sourceId,
+          sourceUrl,
+          destinationUrl,
+          content,
+        ],
+      );
+      await database.query(
+        `insert into wiki_page_chunks (
+           workspace_id, brand_id, wiki_version_id, wiki_page_id,
+           chunk_index, content, content_hash, enabled, embedding
+         ) values ($1, $2, $3, $4, 0, $5, $6, true, null)`,
+        [
+          workspace.rows[0].id,
+          brand.rows[0].id,
+          version.rows[0].id,
+          page.rows[0].id,
+          content,
+          `${stableKey}-chunk`,
+        ],
+      );
+      return page.rows[0].id;
+    };
+    const validProductPageId = await insertOfferingPage({
+      pageType: "product",
+      sourceKind: "product",
+      stableKey: "product-basic",
+      title: "기본 상품",
+      content: "프리미엄 상품 기본 안내",
+      sourceUrl: "https://example.com/products/basic",
+      destinationUrl: "https://example.com/products/basic",
+    });
+    const ownedProductPageId = await insertOfferingPage({
+      pageType: "product",
+      sourceKind: "owned_snapshot",
+      stableKey: "owned-product",
+      title: "상품 안내",
+      content: "상품 안내와 구매 정보를 확인합니다.",
+      sourceUrl: "https://example.com/shop/owned-product",
+      destinationUrl: "https://example.com/shop/owned-product",
+    });
+    const articleProductPageId = await insertOfferingPage({
+      pageType: "product",
+      sourceKind: "owned_snapshot",
+      stableKey: "article-product",
+      title: "상품 안내 블로그",
+      content: "프리미엄 상품 안내와 자세한 서비스 정보",
+      sourceUrl: "https://example.com/blog/product-story",
+      destinationUrl: "https://example.com/blog/product-story",
+    });
+    const shortLocationServicePageId = await insertOfferingPage({
+      pageType: "service",
+      sourceKind: "owned_snapshot",
+      stableKey: "service-short-location",
+      title: "서비스 정보",
+      content: "자세한 서비스 상세 정보 안내",
+      sourceUrl: "https://x.co/s",
+      destinationUrl: "https://x.co/s",
+    });
+    await insertOfferingPage({
+      pageType: "service",
+      sourceKind: "owned_snapshot",
+      stableKey: "service-exact-location",
+      title: "프리미엄 상품 안내 자세한 서비스 정보",
+      content: "프리미엄 상품 안내 자세한 서비스 정보",
+      sourceUrl: "https://example.com/services/very-long-location-path",
+      destinationUrl: "https://example.com/services/very-long-location-path",
+    });
+
+    const searchWithIntent = async (
+      query,
+      isOffering,
+      isProduct,
+      isOfferingLocation,
+    ) => database.query(
+      "select * from search_brand_wiki_lexical($1, $2, $3, $4, $5, $6, $7)",
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        query,
+        12,
+        isOffering,
+        isProduct,
+        isOfferingLocation,
+      ],
+    );
+    const offering = await searchWithIntent("상품 안내", true, false, false);
+    assert.ok(offering.rows.some((row) => row.wiki_page_id === ownedProductPageId));
+    assert.ok(offering.rows.every((row) => ["product", "service"].includes(row.page_type)));
+    assert.ok(offering.rows.every((row) => row.wiki_page_id !== articleProductPageId));
+    assert.ok(offering.rows.every((row) => row.wiki_page_id !== catalog.id));
+
+    const productPriority = await searchWithIntent(
+      "프리미엄 상품 안내",
+      true,
+      true,
+      false,
+    );
+    assert.equal(productPriority.rows[0].wiki_page_id, validProductPageId);
+
+    const locationPriority = await searchWithIntent(
+      "자세한 서비스 정보",
+      true,
+      false,
+      true,
+    );
+    assert.equal(locationPriority.rows[0].wiki_page_id, shortLocationServicePageId);
+  });
+});

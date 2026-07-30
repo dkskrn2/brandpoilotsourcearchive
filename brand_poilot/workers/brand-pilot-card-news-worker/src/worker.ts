@@ -1,4 +1,5 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import {
   isRetryableContentWorkerError,
@@ -13,26 +14,75 @@ import { buildEditorialEvidencePool, buildEditorialPrompt, loadEditorialPlan } f
 import { withResource } from "./resourceLease.js";
 import type { CardNewsStorage } from "./storage.js";
 
-export interface CodexRunner { run(job: AiContentJob, prompt: string): Promise<{ outputDir: string; cleanup(): Promise<void> }>; }
+export interface CodexRunner {
+  run(job: AiContentJob, prompt: string): Promise<{
+    outputDir: string;
+    cleanup(): Promise<void>;
+  }>;
+}
 
-export function createCommandRunner(commandTemplate: string, timeoutMs: number): CodexRunner {
+async function sessionDirectories(directory: string): Promise<Set<string>> {
+  try {
+    return new Set((await readdir(directory, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Set();
+    throw error;
+  }
+}
+
+export function createCommandRunner(
+  commandTemplate: string,
+  timeoutMs: number,
+  {
+    generatedImagesDirectory = path.join(process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"), "generated_images"),
+    skillFile = path.resolve(import.meta.dirname, "..", ".agents", "skills", "card-news-creator", "SKILL.md"),
+  }: {
+    generatedImagesDirectory?: string;
+    skillFile?: string;
+  } = {},
+): CodexRunner {
   return {
     async run(job, prompt) {
-      const runtimeRoot = path.join(process.cwd(), ".runtime-card-news");
-      await mkdir(runtimeRoot, { recursive: true });
-      const workDir = await mkdtemp(path.join(runtimeRoot, "job-"));
-      const outputDir = path.join(workDir, "output");
-      await mkdir(outputDir);
-      const jobFile = path.join(workDir, "job.json");
-      await writeFile(jobFile, JSON.stringify({ job, prompt }, null, 2), "utf8");
-      const command = commandTemplate.replaceAll("{{jobFile}}", jobFile).replaceAll("{{outputDir}}", outputDir);
-      await runShellCommandWithTimeout({
-        command,
-        timeoutMs,
-        timeoutErrorCode: "codex_card_news_timeout",
-        processErrorCode: "codex_card_news_failed",
-      });
-      return { outputDir, cleanup: () => rm(workDir, { recursive: true, force: true }) };
+      const workDir = await mkdtemp(path.join(os.tmpdir(), "brand-pilot-card-news-"));
+      const sessionsBefore = await sessionDirectories(generatedImagesDirectory);
+      let ownedSessions: string[] = [];
+      const captureOwnedSessions = async () => {
+        const sessionsAfter = await sessionDirectories(generatedImagesDirectory);
+        ownedSessions = [...sessionsAfter].filter((name) => !sessionsBefore.has(name));
+      };
+      const cleanup = async () => {
+        await Promise.all([
+          rm(workDir, { recursive: true, force: true }),
+          ...ownedSessions.map((name) =>
+            rm(path.join(generatedImagesDirectory, name), { recursive: true, force: true })),
+        ]);
+      };
+      let cleanupHandedOff = false;
+      try {
+        const outputDir = path.join(workDir, "output");
+        const stagedSkill = path.join(outputDir, ".agents", "skills", "card-news-creator", "SKILL.md");
+        await mkdir(path.dirname(stagedSkill), { recursive: true });
+        await copyFile(skillFile, stagedSkill);
+        const jobFile = path.join(workDir, "job.json");
+        await writeFile(jobFile, JSON.stringify({ job, prompt }, null, 2), "utf8");
+        const command = commandTemplate.replaceAll("{{jobFile}}", jobFile).replaceAll("{{outputDir}}", outputDir);
+        await runShellCommandWithTimeout({
+          command,
+          timeoutMs,
+          timeoutErrorCode: "codex_card_news_timeout",
+          processErrorCode: "codex_card_news_failed",
+        });
+        await captureOwnedSessions();
+        cleanupHandedOff = true;
+        return { outputDir, cleanup };
+      } finally {
+        if (!cleanupHandedOff) {
+          await captureOwnedSessions();
+          await cleanup();
+        }
+      }
     },
   };
 }

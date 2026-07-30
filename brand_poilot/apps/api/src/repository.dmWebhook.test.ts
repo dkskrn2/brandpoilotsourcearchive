@@ -74,6 +74,7 @@ describe("Instagram DM webhook repository", () => {
 
     const exactLookup = fixture.statements.find((statement) => statement.sql.includes("find_direct_faq_exact"));
     expect(exactLookup?.values).toEqual(["workspace-1", "brand-1", fixture.aggregatedQuestion]);
+    expect(fixture.statements.some((statement) => statement.sql.includes("from wiki_versions version"))).toBe(false);
     const job = fixture.statements.find((statement) => isDmReplyJobInsert(statement.sql));
     expect(JSON.parse(String(job?.values[2]))).toMatchObject({
       route: "knowledge",
@@ -117,6 +118,10 @@ describe("Instagram DM webhook repository", () => {
       .resolves.toMatchObject({ status: "queued", jobId: "dm-job-1" });
 
     const job = fixture.statements.find((statement) => isDmReplyJobInsert(statement.sql));
+    const wikiReadiness = fixture.statements.find((statement) => statement.sql.includes("from wiki_versions version"));
+    expect(wikiReadiness?.sql).toContain("chunk.enabled");
+    expect(wikiReadiness?.sql).not.toContain("chunk.embedding");
+    expect(wikiReadiness?.values).toEqual(["brand-1"]);
     expect(JSON.parse(String(job?.values[2]))).toEqual({
       conversationId: "conversation-1",
       turnId: "turn-1",

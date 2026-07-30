@@ -1,6 +1,6 @@
 import { parseContentGenerationInput, type AiContentJob } from "./contracts.js";
 import { buildEditorialEvidencePool, type EditorialPlan } from "./editorialPlan.js";
-import { buildAiContentRevisionInstruction } from "../../brand-pilot-worker-runtime/src/index.js";
+import { buildAiContentRevisionInstruction } from "@brand-pilot/worker-runtime";
 
 export const cardNewsSkillVersion = "card-news-skill.v6";
 

@@ -24,11 +24,18 @@ const ubuntuRunbookPath = "docs/operations/UBUNTU_DEPLOYMENT.md";
 const oauthCutoverRunbookPath = "docs/operations/OAUTH_CUTOVER.md";
 const previewAuthRunbookPath = "docs/operations/VERCEL_PREVIEW_AUTH.md";
 const ubuntuBootstrapPath = "deploy/scripts/bootstrap-ubuntu.sh";
+const legacyReleaseSha = "02aa2bcae3f66d494f16a26bec9055cac17464f9";
 const deploymentArtifacts = [
   ".dockerignore",
   "apps/api/Dockerfile",
   "workers/brand-pilot-dm-worker/Dockerfile",
   "workers/brand-pilot-content-proposal-worker/Dockerfile",
+  "workers/brand-pilot-brand-intelligence-worker/Dockerfile",
+  "workers/brand-pilot-subject-analysis-worker/Dockerfile",
+  "workers/brand-pilot-image-worker/Dockerfile",
+  "workers/brand-pilot-card-news-worker/Dockerfile",
+  "workers/brand-pilot-blog-worker/Dockerfile",
+  "workers/brand-pilot-marketing-worker/Dockerfile",
   "deploy/compose.production.yml",
   "deploy/Caddyfile",
   "deploy/Caddyfile.canary",
@@ -37,6 +44,12 @@ const deploymentArtifacts = [
   "deploy/env/dm-worker.env.example",
   "deploy/env/wiki-worker.env.example",
   "deploy/env/content-proposal-worker.env.example",
+  "deploy/env/brand-intelligence-worker.env.example",
+  "deploy/env/subject-analysis-worker.env.example",
+  "deploy/env/image-worker.env.example",
+  "deploy/env/card-news-worker.env.example",
+  "deploy/env/blog-worker.env.example",
+  "deploy/env/marketing-worker.env.example",
   "deploy/scripts/preflight.sh",
   "deploy/scripts/deploy.sh",
   "deploy/scripts/lib.sh",
@@ -660,7 +673,7 @@ test("Ubuntu bootstrap is strict, root-only, idempotent, and creates safe owned 
   for (const path of ["repo", "incoming", "releases"]) {
     assert.match(script, new RegExp(`install -d -m 0750[^\\n]*\\$ROOT/${path}`));
   }
-  for (const path of ["state", "shared", "shared/env"]) {
+  for (const path of ["state", "shared", "shared/env", "shared/codex"]) {
     assert.match(script, new RegExp(`install -d -m 0700[^\\n]*\\$ROOT/${path}`));
   }
   assert.match(script, /-o bpdeploy -g bpdeploy/);
@@ -733,6 +746,42 @@ test("optional workers use dedicated profiles, identities, env files, and harden
       env: "CONTENT_PROPOSAL_WORKER_1_ENV_FILE",
       identity: "WORKER_ID: content-proposal-worker-1",
     }],
+    ["brand-intelligence-worker-1", {
+      profile: "brand-intelligence-worker-1",
+      image: "BRAND_INTELLIGENCE_WORKER_IMAGE",
+      env: "BRAND_INTELLIGENCE_WORKER_1_ENV_FILE",
+      identity: "BRAND_INTELLIGENCE_WORKER_ID: brand-intelligence-worker-1",
+    }],
+    ["subject-analysis-worker-1", {
+      profile: "subject-analysis-worker-1",
+      image: "SUBJECT_ANALYSIS_WORKER_IMAGE",
+      env: "SUBJECT_ANALYSIS_WORKER_1_ENV_FILE",
+      identity: "SUBJECT_ANALYSIS_WORKER_ID: subject-analysis-worker-1",
+    }],
+    ["image-worker-1", {
+      profile: "image-worker-1",
+      image: "IMAGE_WORKER_IMAGE",
+      env: "IMAGE_WORKER_1_ENV_FILE",
+      identity: "WORKER_ID: image-worker-1",
+    }],
+    ["card-news-worker-1", {
+      profile: "card-news-worker-1",
+      image: "CARD_NEWS_WORKER_IMAGE",
+      env: "CARD_NEWS_WORKER_1_ENV_FILE",
+      identity: "CARD_NEWS_WORKER_ID: card-news-worker-1",
+    }],
+    ["blog-worker-1", {
+      profile: "blog-worker-1",
+      image: "BLOG_WORKER_IMAGE",
+      env: "BLOG_WORKER_1_ENV_FILE",
+      identity: "BLOG_WORKER_ID: blog-worker-1",
+    }],
+    ["marketing-worker-1", {
+      profile: "marketing-worker-1",
+      image: "MARKETING_WORKER_IMAGE",
+      env: "MARKETING_WORKER_1_ENV_FILE",
+      identity: "MARKETING_WORKER_ID: marketing-worker-1",
+    }],
   ]);
 
   for (const [name, contract] of expected) {
@@ -743,7 +792,10 @@ test("optional workers use dedicated profiles, identities, env files, and harden
     assert.match(block.text, new RegExp(`\\$\\{${contract.env}:-/opt/brand-pilot/shared/env/`));
     assert.ok(block.text.includes(contract.identity), `${name} must have a unique stable WORKER_ID`);
     assert.match(block.text, /^ {4}read_only:\s+true$/m);
-    assert.deepEqual(parseServiceList(block, "tmpfs"), ["/tmp:size=64m,mode=1777"]);
+    assert.ok(
+      parseServiceList(block, "tmpfs").includes("/tmp:size=64m,mode=1777"),
+      `${name} must keep temporary workspaces on bounded tmpfs`,
+    );
     assert.deepEqual(parseServiceList(block, "cap_drop"), ["ALL"]);
     assert.deepEqual(parseServiceList(block, "security_opt"), ["no-new-privileges:true"]);
     assert.match(block.text, /driver:\s+json-file/);
@@ -752,15 +804,6 @@ test("optional workers use dedicated profiles, identities, env files, and harden
     assert.doesNotMatch(block.text, /API_ENV_FILE|api\.env/);
   }
 
-  for (const automatedWorker of [
-    "card-news-worker",
-    "blog-worker",
-    "marketing-worker",
-    "image-worker",
-    "subject-analysis-worker",
-  ]) {
-    assert.equal(services.has(automatedWorker), false, `${automatedWorker} must stay out of the first Ubuntu stack`);
-  }
 });
 
 test("worker env examples keep service credentials separate and rollout flags fail closed", () => {
@@ -781,18 +824,318 @@ test("worker env examples keep service credentials separate and rollout flags fa
   }
 });
 
-test("worker Docker images run the real entrypoints as non-root users", () => {
-  const dmDockerfile = read("workers/brand-pilot-dm-worker/Dockerfile");
-  const proposalDockerfile = read("workers/brand-pilot-content-proposal-worker/Dockerfile");
-  for (const dockerfile of [dmDockerfile, proposalDockerfile]) {
+test("Task 6 gives every CLI worker an isolated explicit Compose profile and writable shared login", () => {
+  const compose = read("deploy/compose.production.yml");
+  const services = assertComposeTopology(compose);
+  const expected = new Map([
+    ["dm-worker-1", ["DM_WORKER_IMAGE", "DM_WORKER_1_ENV_FILE", "WORKER_ID: dm-worker-1"]],
+    ["dm-worker-2", ["DM_WORKER_IMAGE", "DM_WORKER_2_ENV_FILE", "WORKER_ID: dm-worker-2"]],
+    ["wiki-worker-1", ["WIKI_WORKER_IMAGE", "WIKI_WORKER_1_ENV_FILE", "WORKER_ID: wiki-worker-1"]],
+    ["content-proposal-worker-1", [
+      "CONTENT_PROPOSAL_WORKER_IMAGE",
+      "CONTENT_PROPOSAL_WORKER_1_ENV_FILE",
+      "CONTENT_PROPOSAL_WORKER_ID: content-proposal-worker-1",
+    ]],
+    ["brand-intelligence-worker-1", [
+      "BRAND_INTELLIGENCE_WORKER_IMAGE",
+      "BRAND_INTELLIGENCE_WORKER_1_ENV_FILE",
+      "BRAND_INTELLIGENCE_WORKER_ID: brand-intelligence-worker-1",
+    ]],
+    ["subject-analysis-worker-1", [
+      "SUBJECT_ANALYSIS_WORKER_IMAGE",
+      "SUBJECT_ANALYSIS_WORKER_1_ENV_FILE",
+      "SUBJECT_ANALYSIS_WORKER_ID: subject-analysis-worker-1",
+    ]],
+    ["image-worker-1", ["IMAGE_WORKER_IMAGE", "IMAGE_WORKER_1_ENV_FILE", "WORKER_ID: image-worker-1"]],
+    ["card-news-worker-1", [
+      "CARD_NEWS_WORKER_IMAGE",
+      "CARD_NEWS_WORKER_1_ENV_FILE",
+      "CARD_NEWS_WORKER_ID: card-news-worker-1",
+    ]],
+    ["blog-worker-1", ["BLOG_WORKER_IMAGE", "BLOG_WORKER_1_ENV_FILE", "BLOG_WORKER_ID: blog-worker-1"]],
+    ["marketing-worker-1", [
+      "MARKETING_WORKER_IMAGE",
+      "MARKETING_WORKER_1_ENV_FILE",
+      "MARKETING_WORKER_ID: marketing-worker-1",
+    ]],
+  ]);
+  const runtimeUser =
+    '"${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"';
+  const codexMount = "${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex";
+
+  for (const [name, [image, envFile, identity]] of expected) {
+    const block = services.get(name);
+    assert.ok(block, `${name} service is missing`);
+    assert.deepEqual(parseServiceList(block, "profiles"), [`"${name}"`]);
+    assert.match(block.text, new RegExp(`\\$\\{${image}:\\?${image} is required\\}`));
+    assert.match(block.text, new RegExp(`\\$\\{${envFile}:-/opt/brand-pilot/shared/env/`));
+    assert.ok(block.text.includes(identity), `${name} must have a stable identity`);
+    assert.match(block.text, /^ {6}CODEX_HOME:\s+\/codex$/m);
+    assert.match(block.text, new RegExp(`^ {4}user:\\s+${runtimeUser.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+    assert.deepEqual(parseServiceList(block, "volumes"), [codexMount]);
+    assert.match(block.text, /^ {4}read_only:\s+true$/m);
+    assert.deepEqual(parseServiceList(block, "cap_drop"), ["ALL"]);
+    assert.deepEqual(parseServiceList(block, "security_opt"), ["no-new-privileges:true"]);
+    assert.ok(
+      parseServiceList(block, "tmpfs").some((entry) => entry.startsWith("/tmp:")),
+      `${name} must keep job workspaces on bounded tmpfs`,
+    );
+    assert.doesNotMatch(
+      block.text,
+      /OPENAI_API_KEY|OPENAI_BASE_URL|OPENAI_(?:EMBEDDING_)?MODEL|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY/i,
+    );
+  }
+
+  for (const serviceName of [
+    "image-worker-1",
+    "card-news-worker-1",
+    "blog-worker-1",
+    "marketing-worker-1",
+  ]) {
+    const imageTmpfs = parseServiceList(services.get(serviceName), "tmpfs");
+    assert.ok(
+      imageTmpfs.some((entry) => (
+        entry.startsWith("/codex/generated_images:")
+        && /(?:^|,)size=[^,]+/.test(entry)
+        && /(?:^|,)mode=0700(?:,|$)/.test(entry)
+        && entry.includes("uid=${CODEX_RUNTIME_UID")
+        && entry.includes("gid=${CODEX_RUNTIME_GID")
+      )),
+      `${serviceName} must use a bounded runtime-user tmpfs at /codex/generated_images`,
+    );
+  }
+});
+
+test("Task 6 release plumbing validates every immutable worker image and the persistent Codex login", () => {
+  const releaseExample = read("deploy/release.env.example");
+  const lib = read("deploy/scripts/lib.sh");
+  const preflight = read("deploy/scripts/preflight.sh");
+  const deploy = read("deploy/scripts/deploy.sh");
+  const bootstrap = read(ubuntuBootstrapPath);
+  const workerImageKeys = [
+    "DM_WORKER_IMAGE",
+    "WIKI_WORKER_IMAGE",
+    "CONTENT_PROPOSAL_WORKER_IMAGE",
+    "BRAND_INTELLIGENCE_WORKER_IMAGE",
+    "SUBJECT_ANALYSIS_WORKER_IMAGE",
+    "IMAGE_WORKER_IMAGE",
+    "CARD_NEWS_WORKER_IMAGE",
+    "BLOG_WORKER_IMAGE",
+    "MARKETING_WORKER_IMAGE",
+  ];
+
+  for (const key of workerImageKeys) {
+    assert.match(releaseExample, new RegExp(`^${key}=required-at-deploy-time$`, "m"));
+    assert.ok(lib.includes(key), `release parser missing ${key}`);
+    assert.ok(preflight.includes(key), `preflight missing ${key}`);
+  }
+  assert.match(lib, /for required_image_key in[\s\S]*require_digest_image/);
+  assert.match(preflight, /verify_release_image_revision/);
+  assert.match(preflight, /docker pull[\s\S]*--/);
+  assert.match(deploy, /verify_release_image_revision[\s\S]*CANDIDATE_API_IMAGE/);
+  assert.match(preflight, /COMPOSE_PROFILES[\s\S]*first_deploy_worker_profiles_forbidden/);
+
+  assert.match(bootstrap, /managed_paths=\([\s\S]*"\$ROOT\/shared\/codex"/);
+  assert.match(bootstrap, /install -d -m 0700 -o bpdeploy -g bpdeploy "\$ROOT\/shared\/codex"/);
+  assert.doesNotMatch(bootstrap, /(?:cp|mv|ln|cat|touch|printf)[^\n]*auth\.json/);
+
+  assert.match(preflight, /CODEX_HOME_PATH="\$ROOT\/shared\/codex"/);
+  assert.match(preflight, /codex_home_symlink_forbidden/);
+  assert.match(preflight, /codex_home_mode_invalid/);
+  assert.match(preflight, /codex_home_owner_invalid/);
+  assert.match(preflight, /AUTH_FILE="\$CODEX_HOME_PATH\/auth\.json"/);
+  assert.match(preflight, /auth_file_symlink_forbidden/);
+  assert.match(preflight, /require_file_mode_600 "\$AUTH_FILE" "bpdeploy"/);
+  assert.match(preflight, /CODEX_RUNTIME_UID=.*id -u bpdeploy/);
+  assert.match(preflight, /CODEX_RUNTIME_GID=.*id -g bpdeploy/);
+  assert.match(preflight, /timeout[\s\S]*docker run[\s\S]*--pull never[\s\S]*--user[\s\S]*CODEX_HOME=\/codex[\s\S]*codex login status/);
+  assert.match(preflight, /codex login status[\s\S]*>\/dev\/null 2>&1/);
+  assert.doesNotMatch(preflight, /(?:cat|sed|awk|grep|head|tail|less|more)[^\n]*auth\.json/);
+
+  const runtimeStart = preflight.indexOf("CODEX_WORKER_IMAGE_KEYS=(");
+  const runtimeEnd = preflight.indexOf('status_ok "codex_sandbox_policy"');
+  assert.ok(runtimeStart >= 0, "preflight must enumerate release images that execute Codex");
+  assert.ok(runtimeEnd > runtimeStart, "preflight must complete the offline Codex sandbox probe");
+  const runtimeBlock = preflight.slice(runtimeStart, runtimeEnd);
+  for (const key of [
+    "DM_WORKER_IMAGE",
+    "CONTENT_PROPOSAL_WORKER_IMAGE",
+    "BRAND_INTELLIGENCE_WORKER_IMAGE",
+    "SUBJECT_ANALYSIS_WORKER_IMAGE",
+    "IMAGE_WORKER_IMAGE",
+    "CARD_NEWS_WORKER_IMAGE",
+    "BLOG_WORKER_IMAGE",
+    "MARKETING_WORKER_IMAGE",
+  ]) {
+    assert.ok(runtimeBlock.includes(key), `Codex runtime preflight missing ${key}`);
+  }
+  assert.match(runtimeBlock, /codex --version 2>\/dev\/null/);
+  assert.match(runtimeBlock, /codex-cli 0\.145\.0/);
+  assert.match(runtimeBlock, /command -v bwrap >\/dev\/null 2>&1/);
+  assert.match(runtimeBlock, /--network none/);
+  assert.match(runtimeBlock, />\/dev\/null 2>&1[\s\S]*fail "codex_worker_runtime_invalid"/);
+  assert.match(runtimeBlock, /permissions\.worker\.filesystem=\{":minimal"="read","\/codex"="deny",":workspace_roots"=\{"\."="write"\}\}/);
+  assert.match(runtimeBlock, /permissions\.worker\.network\.enabled=false/);
+  assert.match(runtimeBlock, /sandbox[\s\\]*--permission-profile worker[\s\\]*-C \/workspace[\s\\]*--/);
+  assert.doesNotMatch(runtimeBlock, /sandbox[\s\\]+linux/);
+  assert.match(runtimeBlock, /exec 3<\/codex\/auth\.json/);
+  assert.match(runtimeBlock, /codex-preflight-write-probe/);
+  assert.match(runtimeBlock, />\/dev\/null 2>&1[\s\S]*fail "codex_sandbox_policy_probe_failed"/);
+});
+
+test("Task 6 deployment env examples expose only real worker settings and never direct model API credentials", () => {
+  const expected = new Map([
+    ["deploy/env/dm-worker.env.example", ["DM_CODEX_MODEL", "DM_CLI_TIMEOUT_MS"]],
+    ["deploy/env/wiki-worker.env.example", ["WIKI_CODEX_MODEL", "WIKI_CODEX_TIMEOUT_MS"]],
+    ["deploy/env/content-proposal-worker.env.example", [
+      "CONTENT_PROPOSAL_CODEX_COMMAND",
+      "CONTENT_PROPOSAL_CODEX_MODEL",
+      "CONTENT_PROPOSAL_CODEX_TIMEOUT_MS",
+    ]],
+    ["deploy/env/brand-intelligence-worker.env.example", [
+      "BRAND_INTELLIGENCE_CODEX_COMMAND",
+      "BRAND_INTELLIGENCE_CODEX_MODEL",
+      "BRAND_INTELLIGENCE_CODEX_TIMEOUT_MS",
+    ]],
+    ["deploy/env/subject-analysis-worker.env.example", [
+      "SUBJECT_ANALYSIS_CODEX_COMMAND",
+      "SUBJECT_ANALYSIS_CODEX_MODEL",
+      "SUBJECT_ANALYSIS_CODEX_TIMEOUT_MS",
+    ]],
+    ["deploy/env/image-worker.env.example", ["IMAGE_RENDER_COMMAND", "IMAGE_MODEL", "IMAGE_JOB_TIMEOUT_MS"]],
+    ["deploy/env/card-news-worker.env.example", [
+      "CARD_NEWS_CODEX_COMMAND",
+      "CARD_NEWS_CODEX_PLAN_COMMAND",
+      "CARD_NEWS_CODEX_TIMEOUT_MS",
+    ]],
+    ["deploy/env/blog-worker.env.example", ["BLOG_CODEX_COMMAND", "BLOG_CODEX_TIMEOUT_MS"]],
+    ["deploy/env/marketing-worker.env.example", ["MARKETING_CODEX_COMMAND", "MARKETING_CODEX_TIMEOUT_MS"]],
+  ]);
+
+  for (const [path, requiredKeys] of expected) {
+    assert.equal(existsSync(path), true, `${path} is missing`);
+    const env = read(path);
+    assert.match(env, /^BRAND_PILOT_API_URL=https:\/\/api\.danbammsg\.co\.kr$/m);
+    for (const key of requiredKeys) {
+      assert.match(env, new RegExp(`^${key}=\\S.+$`, "m"), `${path} missing ${key}`);
+    }
+    assert.doesNotMatch(
+      env,
+      /OPENAI_API_KEY|OPENAI_BASE_URL|OPENAI_(?:EMBEDDING_)?MODEL|AZURE_OPENAI|ANTHROPIC_API_KEY|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY/i,
+      `${path} must not configure a direct or proxied model API`,
+    );
+  }
+});
+
+test("Task 6 CI publishes all worker Dockerfiles with immutable revisions and digest manifest keys", () => {
+  const workflow = read(publishWorkflowPath);
+  const publishJob = parseWorkflowJob(workflow, "publish");
+  const expected = [
+    ["brand_intelligence_worker", "brand-pilot-brand-intelligence-worker", "BRAND_INTELLIGENCE_WORKER"],
+    ["subject_analysis_worker", "brand-pilot-subject-analysis-worker", "SUBJECT_ANALYSIS_WORKER"],
+    ["image_worker", "brand-pilot-image-worker", "IMAGE_WORKER"],
+    ["card_news_worker", "brand-pilot-card-news-worker", "CARD_NEWS_WORKER"],
+    ["blog_worker", "brand-pilot-blog-worker", "BLOG_WORKER"],
+    ["marketing_worker", "brand-pilot-marketing-worker", "MARKETING_WORKER"],
+  ];
+
+  for (const [id, directory, manifestPrefix] of expected) {
+    assert.match(
+      publishJob,
+      new RegExp(
+        `id: ${id}[\\s\\S]*context: brand_poilot[\\s\\S]*file: brand_poilot/workers/${directory}/Dockerfile`
+          + `[\\s\\S]*platforms: linux/amd64[\\s\\S]*tags: \\$\\{\\{ steps\\.image\\.outputs\\.${id} \\}\\}:sha-\\$\\{\\{ github\\.sha \\}\\}`
+          + `[\\s\\S]*org\\.opencontainers\\.image\\.revision=\\$\\{\\{ github\\.sha \\}\\}`,
+      ),
+    );
+    assert.match(
+      workflow,
+      new RegExp(`printf '${manifestPrefix}_IMAGE=%s@%s\\\\n' "\\$${manifestPrefix}_IMAGE" "\\$${manifestPrefix}_DIGEST"`),
+    );
+  }
+  assert.doesNotMatch(workflow, /\b(?:ssh|scp|rsync)\b|deploy\/scripts\/deploy\.sh/);
+});
+
+test("all CLI worker images install the pinned Codex runtime and run real entrypoints as non-root users", () => {
+  const workers = new Map([
+    ["dm", {
+      path: "workers/brand-pilot-dm-worker/Dockerfile",
+      entrypoint: /workers\/brand-pilot-dm-worker\/dist\/index\.js/,
+      assets: [/workers\/brand-pilot-dm-worker\/runtime/],
+    }],
+    ["content proposal", {
+      path: "workers/brand-pilot-content-proposal-worker/Dockerfile",
+      entrypoint: /workers\/brand-pilot-content-proposal-worker\/dist\/main\.js/,
+      assets: [],
+    }],
+    ["brand intelligence", {
+      path: "workers/brand-pilot-brand-intelligence-worker/Dockerfile",
+      entrypoint: /workers\/brand-pilot-brand-intelligence-worker\/dist\/index\.js/,
+      assets: [/run-codex-brand-intelligence\.mjs/, /brand-intelligence\/SKILL\.md/],
+    }],
+    ["subject analysis", {
+      path: "workers/brand-pilot-subject-analysis-worker/Dockerfile",
+      entrypoint: /workers\/brand-pilot-subject-analysis-worker\/dist\/index\.js/,
+      assets: [/run-codex-subject-analysis\.mjs/, /subject-analysis\/SKILL\.md/],
+    }],
+    ["image", {
+      path: "workers/brand-pilot-image-worker/Dockerfile",
+      entrypoint: /workers\/brand-pilot-image-worker\/dist\/index\.js/,
+      assets: [/render-reel\.py/, /image-render\/SKILL\.md/, /threads-text\/SKILL\.md/],
+    }],
+    ["card news", {
+      path: "workers/brand-pilot-card-news-worker/Dockerfile",
+      entrypoint: /workers\/brand-pilot-card-news-worker\/dist\/index\.js/,
+      assets: [/editorial-plan\.schema\.json/, /card-news-creator\/SKILL\.md/],
+    }],
+    ["blog", {
+      path: "workers/brand-pilot-blog-worker/Dockerfile",
+      entrypoint: /workers\/brand-pilot-blog-worker\/dist\/index\.js/,
+      assets: [/run-codex-blog\.mjs/, /blog-writer\/SKILL\.md/],
+    }],
+    ["marketing", {
+      path: "workers/brand-pilot-marketing-worker/Dockerfile",
+      entrypoint: /workers\/brand-pilot-marketing-worker\/dist\/index\.js/,
+      assets: [/run-codex-marketing\.mjs/, /marketing-creative\/SKILL\.md/],
+    }],
+  ]);
+
+  for (const [name, contract] of workers) {
+    const dockerfile = read(contract.path);
     assert.match(dockerfile, /^FROM node:22-bookworm-slim AS build$/m);
     assert.match(dockerfile, /^FROM node:22-bookworm-slim AS runtime$/m);
     assert.match(dockerfile, /^USER node$/m);
+    assert.match(dockerfile, /ca-certificates/, `${name} must trust normal HTTPS certificates`);
+    assert.match(dockerfile, /@openai\/codex@0\.145\.0/, `${name} must pin the Codex CLI`);
+    assert.match(dockerfile, /CODEX_HOME=\/codex/, `${name} must isolate the shared auth home`);
+    assert.match(dockerfile, contract.entrypoint, `${name} must run its compiled entrypoint`);
+    for (const asset of contract.assets) {
+      assert.match(dockerfile, asset, `${name} is missing runtime asset ${asset}`);
+    }
+    assert.doesNotMatch(dockerfile, /OPENAI_API_KEY|docker\.sock/);
   }
-  assert.match(dmDockerfile, /workers\/brand-pilot-dm-worker\/dist\/index\.js/);
-  assert.match(dmDockerfile, /workers\/brand-pilot-dm-worker\/runtime/);
-  assert.match(dmDockerfile, /@openai\/codex@0\.145\.0/);
-  assert.match(proposalDockerfile, /workers\/brand-pilot-content-proposal-worker\/dist\/main\.js/);
+
+  const imageDockerfile = read(workers.get("image").path);
+  assert.match(imageDockerfile, /python3/);
+  assert.match(imageDockerfile, /ffmpeg/);
+  assert.match(imageDockerfile, /PYTHON=python3/);
+  assert.doesNotMatch(imageDockerfile, /tsx\/esm\/api|src\/[A-Za-z0-9_.-]+\.ts/);
+});
+
+test("shared worker runtime is emitted for production and CLI children use explicit execution boundaries", () => {
+  const runtimePackage = JSON.parse(read("workers/brand-pilot-worker-runtime/package.json"));
+  const runtimeTsconfig = JSON.parse(read("workers/brand-pilot-worker-runtime/tsconfig.json"));
+  const runtimeSource = read("workers/brand-pilot-worker-runtime/src/index.ts");
+
+  assert.equal(runtimePackage.exports, "./dist/index.js");
+  assert.equal(runtimePackage.types, "./dist/index.d.ts");
+  assert.match(runtimePackage.scripts.build, /\btsc\b/);
+  assert.doesNotMatch(runtimePackage.scripts.build, /--noEmit/);
+  assert.equal(runtimeTsconfig.compilerOptions.outDir, "dist");
+  assert.equal(runtimeTsconfig.compilerOptions.declaration, true);
+  assert.match(runtimeSource, /\bcwd\b/);
+  assert.match(runtimeSource, /\benv\b/);
+  assert.doesNotMatch(runtimeSource, /shell:\s*true/);
 });
 
 test("preflight forbids worker profiles on the first deploy and fixes activation order", () => {
@@ -1340,7 +1683,10 @@ test("release manifests are parsed without source or eval and preflight is fail-
   assert.doesNotMatch(preflight, /source\s+["']?\$MANIFEST/);
   assert.match(lib, /manifest_unknown_key/);
   assert.match(lib, /manifest_duplicate_key/);
-  assert.match(lib, /RELEASE_SCHEMA\|RELEASE_SHA\|API_IMAGE\|DM_WORKER_IMAGE\|WIKI_WORKER_IMAGE\|CONTENT_PROPOSAL_WORKER_IMAGE\|CADDY_IMAGE\|CANARY_HOST\|PRIMARY_HOST\|ACME_EMAIL\|API_ENV_FILE/);
+  assert.match(
+    lib,
+    /RELEASE_SCHEMA\|RELEASE_SHA\|API_IMAGE\|DM_WORKER_IMAGE\|WIKI_WORKER_IMAGE\|CONTENT_PROPOSAL_WORKER_IMAGE\|BRAND_INTELLIGENCE_WORKER_IMAGE\|SUBJECT_ANALYSIS_WORKER_IMAGE\|IMAGE_WORKER_IMAGE\|CARD_NEWS_WORKER_IMAGE\|BLOG_WORKER_IMAGE\|MARKETING_WORKER_IMAGE\|CADDY_IMAGE\|CANARY_HOST\|PRIMARY_HOST\|ACME_EMAIL\|API_ENV_FILE/,
+  );
   assert.match(preflight, /VERSION_ID=.*24\\?\.04|24\\?\.04.*VERSION_ID/);
   assert.match(preflight, /dpkg --print-architecture/);
   assert.match(preflight, /COMPOSE_MINOR >= 24/);
@@ -1383,11 +1729,15 @@ test("release validation uses the signed 02aa legacy file set only for the immut
   const lib = read("deploy/scripts/lib.sh");
   assert.match(
     lib,
-    /validate_release_directory "\$root\/releases\/\$from_current" legacy-current/,
+    /readonly LEGACY_RELEASE_SHA="02aa2bcae3f66d494f16a26bec9055cac17464f9"/,
   );
   assert.match(
     lib,
-    /validate_release_directory "\$root\/releases\/\$from_candidate"\s*\n/,
+    /validate_state_release_directory\(\)[\s\S]*validation_role="candidate"[\s\S]*"\$release_sha" == "\$LEGACY_RELEASE_SHA"[\s\S]*validation_role="legacy-current"/,
+  );
+  assert.match(
+    lib,
+    /validate_state_release_directory "\$root" "\$from_current"[\s\S]*validate_state_release_directory "\$root" "\$from_candidate"[\s\S]*validate_state_release_directory "\$root" "\$from_previous"/,
   );
   const current = run("95a975bf263756fbc13fb6ac16b1a3962e303d8e");
   assert.equal(current.status, 0, current.stderr);
@@ -1569,7 +1919,30 @@ test("CI publishing verifies the complete server release contract before buildin
   assert.match(verifyJob, /uses: actions\/checkout@[0-9a-f]{40}\s+# v4\.4\.0[\s\S]*persist-credentials: false/);
   assert.match(verifyJob, /uses: actions\/setup-node@[0-9a-f]{40}\s+# v4\.4\.0[\s\S]*node-version: 22\.23\.1[\s\S]*cache: npm[\s\S]*cache-dependency-path: brand_poilot\/package-lock\.json/);
   assert.match(verifyJob, /name: Install\n {8}working-directory: brand_poilot\n {8}run: npm ci/);
-  assert.match(verifyJob, /name: Verify\n {8}working-directory: brand_poilot\n {8}run: \|\n {10}npm run test:contract\n {10}node --test scripts\/migrationRunner\.test\.mjs\n {10}npm run test:migrations\n {10}npm run test --workspace @brand-pilot\/api\n {10}npm run test --workspace @brand-pilot\/dm-worker\n {10}npm run test --workspace @brand-pilot\/content-proposal-worker\n {10}npm run build --workspace @brand-pilot\/api\n {10}npm run build --workspace @brand-pilot\/dm-worker\n {10}npm run build --workspace @brand-pilot\/content-proposal-worker\n {10}shellcheck --exclude=SC1091,SC2034,SC2317 deploy\/scripts\/\*\.sh\n {10}npm run test:deployment/);
+  assert.match(verifyJob, /name: Verify\n {8}working-directory: brand_poilot\n {8}run: \|/);
+  for (const command of [
+    "npm run test:contract",
+    "node --test scripts/migrationRunner.test.mjs",
+    "npm run test:migrations",
+    ...[
+      "@brand-pilot/api",
+      "@brand-pilot/dm-worker",
+      "@brand-pilot/content-proposal-worker",
+      "@brand-pilot/brand-intelligence-worker",
+      "@brand-pilot/subject-analysis-worker",
+      "@brand-pilot/image-worker",
+      "@brand-pilot/card-news-worker",
+      "@brand-pilot/blog-worker",
+      "@brand-pilot/marketing-worker",
+    ].flatMap((workspace) => [
+      `npm run test --workspace ${workspace}`,
+      `npm run build --workspace ${workspace}`,
+    ]),
+    "shellcheck --exclude=SC1091,SC2034,SC2317 deploy/scripts/*.sh",
+    "npm run test:deployment",
+  ]) {
+    assert.ok(verifyJob.includes(`          ${command}`), `verify job missing ${command}`);
+  }
 });
 
 test("CI publishing pushes a lowercase linux amd64 API image with immutable metadata", () => {
@@ -1587,6 +1960,12 @@ test("CI publishing pushes a lowercase linux amd64 API image with immutable meta
     ["dm_worker", "workers/brand-pilot-dm-worker/Dockerfile", "dm_worker"],
     ["wiki_worker", "workers/brand-pilot-dm-worker/Dockerfile", "wiki_worker"],
     ["content_proposal_worker", "workers/brand-pilot-content-proposal-worker/Dockerfile", "content_proposal_worker"],
+    ["brand_intelligence_worker", "workers/brand-pilot-brand-intelligence-worker/Dockerfile", "brand_intelligence_worker"],
+    ["subject_analysis_worker", "workers/brand-pilot-subject-analysis-worker/Dockerfile", "subject_analysis_worker"],
+    ["image_worker", "workers/brand-pilot-image-worker/Dockerfile", "image_worker"],
+    ["card_news_worker", "workers/brand-pilot-card-news-worker/Dockerfile", "card_news_worker"],
+    ["blog_worker", "workers/brand-pilot-blog-worker/Dockerfile", "blog_worker"],
+    ["marketing_worker", "workers/brand-pilot-marketing-worker/Dockerfile", "marketing_worker"],
   ]) {
     assert.match(
       publishJob,
@@ -1606,7 +1985,7 @@ test("CI publishing pins every third-party action to its verified commit", () =>
     ["actions/upload-artifact", "ea165f8d65b6e75b540449e92b4886f43607fa02"],
   ]);
   const uses = [...workflow.matchAll(/^\s*(?:-\s+)?uses:\s+([^@\s]+)@([^\s#]+)\s+#\s+(v\d+\.\d+\.\d+)$/gm)];
-  assert.equal(uses.length, 10);
+  assert.equal(uses.length, 16);
   for (const [, action, revision] of uses) {
     assert.equal(revision, expected.get(action), `${action} is not pinned to the verified SHA`);
   }
@@ -1619,12 +1998,28 @@ test("CI release manifest is digest pinned, single-line validated, and checksumm
   assert.match(workflow, /\[\[ "\$caddy_line" == 'CADDY_IMAGE=docker\.io\/library\/caddy@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648' \]\]/);
   assert.match(workflow, /source deploy\/caddy-image\.env/);
   assert.match(workflow, /\[\[ "\$RELEASE_SHA" =~ \^\[0-9a-f\]\{40\}\$ \]\]/);
-  assert.match(workflow, /for digest in "\$API_DIGEST" "\$DM_WORKER_DIGEST" "\$WIKI_WORKER_DIGEST" "\$CONTENT_PROPOSAL_WORKER_DIGEST"/);
+  assert.match(
+    workflow,
+    /for digest in "\$API_DIGEST" "\$DM_WORKER_DIGEST" "\$WIKI_WORKER_DIGEST" "\$CONTENT_PROPOSAL_WORKER_DIGEST" "\$BRAND_INTELLIGENCE_WORKER_DIGEST" "\$SUBJECT_ANALYSIS_WORKER_DIGEST" "\$IMAGE_WORKER_DIGEST" "\$CARD_NEWS_WORKER_DIGEST" "\$BLOG_WORKER_DIGEST" "\$MARKETING_WORKER_DIGEST"/,
+  );
   assert.match(workflow, /\[\[ "\$digest" =~ \^sha256:\[0-9a-f\]\{64\}\$ \]\]/);
   assert.match(workflow, /printf 'API_IMAGE=%s@%s\\n' "\$API_IMAGE" "\$API_DIGEST"/);
   assert.match(workflow, /printf 'DM_WORKER_IMAGE=%s@%s\\n' "\$DM_WORKER_IMAGE" "\$DM_WORKER_DIGEST"/);
   assert.match(workflow, /printf 'WIKI_WORKER_IMAGE=%s@%s\\n' "\$WIKI_WORKER_IMAGE" "\$WIKI_WORKER_DIGEST"/);
   assert.match(workflow, /printf 'CONTENT_PROPOSAL_WORKER_IMAGE=%s@%s\\n' "\$CONTENT_PROPOSAL_WORKER_IMAGE" "\$CONTENT_PROPOSAL_WORKER_DIGEST"/);
+  for (const prefix of [
+    "BRAND_INTELLIGENCE_WORKER",
+    "SUBJECT_ANALYSIS_WORKER",
+    "IMAGE_WORKER",
+    "CARD_NEWS_WORKER",
+    "BLOG_WORKER",
+    "MARKETING_WORKER",
+  ]) {
+    assert.match(
+      workflow,
+      new RegExp(`printf '${prefix}_IMAGE=%s@%s\\\\n' "\\$${prefix}_IMAGE" "\\$${prefix}_DIGEST"`),
+    );
+  }
   for (const line of [
     "RELEASE_SCHEMA=1",
     "CANARY_HOST=canary-api.danbammsg.co.kr",
@@ -1678,6 +2073,12 @@ function writeReleaseManifest(directory, overrides = {}, extraLines = []) {
     DM_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-dm-worker@sha256:${digest}`,
     WIKI_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-wiki-worker@sha256:${digest}`,
     CONTENT_PROPOSAL_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-content-proposal-worker@sha256:${digest}`,
+    BRAND_INTELLIGENCE_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-brand-intelligence-worker@sha256:${digest}`,
+    SUBJECT_ANALYSIS_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-subject-analysis-worker@sha256:${digest}`,
+    IMAGE_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-image-worker@sha256:${digest}`,
+    CARD_NEWS_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-card-news-worker@sha256:${digest}`,
+    BLOG_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-blog-worker@sha256:${digest}`,
+    MARKETING_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-marketing-worker@sha256:${digest}`,
     CADDY_IMAGE: `docker.io/library/caddy@sha256:${digest}`,
     CANARY_HOST: "canary-api.danbammsg.co.kr",
     PRIMARY_HOST: "api.danbammsg.co.kr",
@@ -1699,7 +2100,13 @@ function writeReleaseManifest(directory, overrides = {}, extraLines = []) {
   return manifest;
 }
 
-function seedRelease(root, sha, apiEnvFile, overrides = {}) {
+function seedRelease(
+  root,
+  sha,
+  apiEnvFile,
+  overrides = {},
+  { legacyFileSet = false } = {},
+) {
   const releaseDirectory = join(root, "releases", sha);
   const digestCharacter = sha[0] === "1" ? "a" : sha[0] === "2" ? "b" : "c";
   const digest = digestCharacter.repeat(64);
@@ -1709,6 +2116,12 @@ function seedRelease(root, sha, apiEnvFile, overrides = {}) {
     DM_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-dm-worker@sha256:${digest}`,
     WIKI_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-wiki-worker@sha256:${digest}`,
     CONTENT_PROPOSAL_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-content-proposal-worker@sha256:${digest}`,
+    BRAND_INTELLIGENCE_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-brand-intelligence-worker@sha256:${digest}`,
+    SUBJECT_ANALYSIS_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-subject-analysis-worker@sha256:${digest}`,
+    IMAGE_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-image-worker@sha256:${digest}`,
+    CARD_NEWS_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-card-news-worker@sha256:${digest}`,
+    BLOG_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-blog-worker@sha256:${digest}`,
+    MARKETING_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-marketing-worker@sha256:${digest}`,
     CADDY_IMAGE: `docker.io/library/caddy@sha256:${digest}`,
     API_ENV_FILE: apiEnvFile,
     ...overrides,
@@ -1717,7 +2130,16 @@ function seedRelease(root, sha, apiEnvFile, overrides = {}) {
   copyFileSync("deploy/Caddyfile", join(releaseDirectory, "Caddyfile"));
   copyFileSync("deploy/Caddyfile.canary", join(releaseDirectory, "Caddyfile.canary"));
   mkdirSync(join(releaseDirectory, "scripts"), { recursive: true });
-  for (const name of ["lib.sh", "preflight.sh", "deploy.sh", "verify-canary.sh", "promote.sh", "rollback.sh", "backup-state.sh", "restore-state.sh"]) {
+  const releaseScripts = [
+    "lib.sh",
+    "preflight.sh",
+    "deploy.sh",
+    "verify-canary.sh",
+    "promote.sh",
+    "rollback.sh",
+    ...(legacyFileSet ? [] : ["backup-state.sh", "restore-state.sh"]),
+  ];
+  for (const name of releaseScripts) {
     copyFileSync(join("deploy", "scripts", name), join(releaseDirectory, "scripts", name));
     chmodSync(join(releaseDirectory, "scripts", name), 0o755);
   }
@@ -1729,8 +2151,12 @@ function seedRelease(root, sha, apiEnvFile, overrides = {}) {
     [0o644, "Caddyfile.canary"],
     ...["lib.sh", "preflight.sh", "deploy.sh", "verify-canary.sh", "promote.sh", "rollback.sh"]
       .map((name) => [0o755, `scripts/${name}`]),
-    [0o755, "scripts/backup-state.sh"],
-    [0o755, "scripts/restore-state.sh"],
+    ...(legacyFileSet
+      ? []
+      : [
+          [0o755, "scripts/backup-state.sh"],
+          [0o755, "scripts/restore-state.sh"],
+        ]),
   ];
   const integrity = specs.map(([mode, relative]) => {
     chmodSync(join(releaseDirectory, relative), mode);
@@ -2000,6 +2426,8 @@ exec /usr/bin/mv "$@"
 
 function runPromotionFixture({
   current = true,
+  initialCurrentSha = "2".repeat(40),
+  currentLegacyFileSet = false,
   dockerFailUpService = "",
   dockerFailUpTimes = 1,
   dockerUpFailures = 0,
@@ -2016,7 +2444,7 @@ function runPromotionFixture({
   const root = join(fixture, "root");
   const mocks = join(fixture, "bin");
   const candidateSha = "1".repeat(40);
-  const currentSha = "2".repeat(40);
+  const currentSha = initialCurrentSha;
   const apiEnvFile = `${bashPath(root)}/shared/env/api.env`;
   mkdirSync(join(root, "state"), { recursive: true });
   mkdirSync(mocks, { recursive: true });
@@ -2027,7 +2455,13 @@ function runPromotionFixture({
   writeFileSync(join(root, "state", "candidate"), `${candidateSha}\n`, { mode: 0o600 });
   writeFileSync(join(root, "state", "deploy.lock"), "", { mode: 0o600 });
   if (current) {
-    seedRelease(root, currentSha, apiEnvFile, currentManifestOverrides);
+    seedRelease(
+      root,
+      currentSha,
+      apiEnvFile,
+      currentManifestOverrides,
+      { legacyFileSet: currentLegacyFileSet },
+    );
     writeFileSync(join(root, "state", "current"), `${currentSha}\n`, { mode: 0o600 });
   }
   const backupMetadata = join(root, "state", "promotion-backup.env");
@@ -2036,8 +2470,13 @@ function runPromotionFixture({
   const envChecksum = createHash("sha256")
     .update(readFileSync(join(root, "shared", "env", "api.env")))
     .digest("hex");
+  const currentDigestCharacter = currentSha[0] === "1"
+    ? "a"
+    : currentSha[0] === "2"
+      ? "b"
+      : "c";
   const currentDigest = current
-    ? `ghcr.io/dkskrn2/brand-pilot-api@sha256:${"b".repeat(64)}`
+    ? `ghcr.io/dkskrn2/brand-pilot-api@sha256:${currentDigestCharacter.repeat(64)}`
     : "NONE";
   writeFileSync(
     backupMetadata,
@@ -2113,6 +2552,31 @@ exit 22
       PROMOTION_BACKUP_METADATA: bashPath(backupMetadata),
     },
   });
+  const rollbackPrevious = () => spawnSync(bash, [
+    "-c",
+    bashFixtureCommand(),
+    "_",
+    bashPath(mocks),
+    bashPath("deploy/scripts/rollback.sh"),
+    "--previous",
+    "--phase",
+    "production",
+  ], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    timeout: 60_000,
+    env: {
+      ...process.env,
+      BRAND_PILOT_ROOT: bashPath(root),
+      READY_TIMEOUT_SECONDS: "1",
+      CURL_LOG: bashPath(curlLog),
+      DOCKER_LOG: bashPath(dockerLog),
+      EVENT_LOG: bashPath(eventLog),
+      DOCKER_UP_COUNT_FILE: bashPath(dockerUpCountFile),
+      DOCKER_UP_FAILURES: "0",
+      RELEASE_SHA_FOR_TEST: currentSha,
+    },
+  });
   const prepare = () => {
     const result = run("--prepare");
     if (result.status === 0) {
@@ -2129,6 +2593,7 @@ exit 22
     dockerLog,
     eventLog,
     run,
+    rollbackPrevious,
     prepare,
     candidateSha,
     currentSha,
@@ -2608,6 +3073,52 @@ test("confirmed promotion applies production Caddy before polling primary and mu
       `${fixture.candidateSha}\n`,
     );
     assert.equal(existsSync(join(fixture.root, "state", "candidate")), false);
+  } finally {
+    rmSync(fixture.fixture, { recursive: true, force: true });
+  }
+});
+
+test("first Task 6 promotion can roll back --previous to the exact signed legacy release", () => {
+  const fixture = runPromotionFixture({
+    initialCurrentSha: legacyReleaseSha,
+    currentLegacyFileSet: true,
+  });
+  try {
+    const prepare = fixture.prepare();
+    assert.equal(prepare.status, 0, prepare.stderr);
+    const promotion = fixture.run("--commit", "--dns-cutover-confirmed");
+    assert.equal(promotion.status, 0, promotion.stderr);
+    assert.equal(
+      readFileSync(join(fixture.root, "state", "previous"), "utf8"),
+      `${legacyReleaseSha}\n`,
+    );
+    assert.equal(
+      readFileSync(join(fixture.root, "state", "current"), "utf8"),
+      `${fixture.candidateSha}\n`,
+    );
+
+    for (const path of [
+      fixture.dockerLog,
+      fixture.curlLog,
+      fixture.eventLog,
+    ]) {
+      rmSync(path, { force: true });
+    }
+    const rollback = fixture.rollbackPrevious();
+    assert.equal(rollback.status, 0, rollback.stderr);
+    assert.equal(
+      readFileSync(join(fixture.root, "state", "current"), "utf8"),
+      `${legacyReleaseSha}\n`,
+    );
+    assert.equal(
+      readFileSync(join(fixture.root, "state", "previous"), "utf8"),
+      `${fixture.candidateSha}\n`,
+    );
+    const dockerLog = readFileSync(fixture.dockerLog, "utf8");
+    assert.match(
+      dockerLog,
+      new RegExp(`/releases/${legacyReleaseSha}/.*api-primary caddy`),
+    );
   } finally {
     rmSync(fixture.fixture, { recursive: true, force: true });
   }

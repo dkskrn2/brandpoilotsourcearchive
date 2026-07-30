@@ -10,7 +10,6 @@ import {
   createDmWorkerDb,
   resolveDmWorkerDatabaseConfig,
 } from "./db.js";
-import { createEmbedding } from "./embeddings.js";
 import { startWorkerInstanceHeartbeat } from "./instanceHeartbeat.js";
 import { runDmWorkerOnce } from "./worker.js";
 import { runProfileRefreshOnce } from "./profileRefresh.js";
@@ -43,8 +42,6 @@ const common = {
   workerId,
   api,
   db,
-  apiKey: required("OPENAI_API_KEY"),
-  embeddingModel: process.env.OPENAI_EMBEDDING_MODEL ?? "text-embedding-3-small",
   runtimeDirectory,
   timeoutMs,
   heartbeatIntervalMs: Math.max(1_000, Number(process.env.HEARTBEAT_INTERVAL_MS ?? 5_000)),
@@ -59,8 +56,6 @@ const common = {
   }, task),
 };
 const wikiVersions = {
-  embeddingModel: common.embeddingModel,
-  embeddingVersion: process.env.OPENAI_EMBEDDING_VERSION?.trim() || "v1",
   curatorPromptVersion: process.env.KNOWLEDGE_CURATOR_PROMPT_VERSION?.trim() || "v1",
 };
 const runWikiCodex = (input: { prompt: string; runtimeDirectory: string; timeoutMs: number }) => runCodexJson({
@@ -99,10 +94,6 @@ async function runWikiLaneWithoutResource() {
   const finalization = await runWikiFinalizeOnce({
     workerId,
     db,
-    apiKey: common.apiKey,
-    embeddingModel: wikiVersions.embeddingModel,
-    embeddingVersion: wikiVersions.embeddingVersion,
-    embed: createEmbedding,
   });
   if (finalization.status !== "idle") return finalization;
   return runWikiMaintenanceOnce({

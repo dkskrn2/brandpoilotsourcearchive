@@ -384,6 +384,118 @@ test("compiled Wiki migrations define a brand-scoped core and pgvector boundary"
   assert.doesNotMatch(vector, /\bwiki_engine\b|\blegacy_rag\b/);
 });
 
+test("070 adds bounded lexical compiled Wiki retrieval without a query vector", async () => {
+  const sql = await readFile(
+    "db/migrations/070_remove_embedding_runtime.sql",
+    "utf8",
+  );
+
+  assert.match(sql, /^begin;/);
+  assert.match(sql, /commit;\s*$/);
+  assert.match(
+    sql,
+    /create or replace function search_brand_wiki_lexical\(\s*p_workspace_id uuid,\s*p_brand_id uuid,\s*p_query text,\s*p_limit integer default 12,\s*p_is_offering_question boolean default false,\s*p_is_product_question boolean default false,\s*p_is_offering_location_question boolean default false\s*\)/i,
+  );
+  for (const field of [
+    "page_chunk_id uuid",
+    "wiki_page_id uuid",
+    "page_type text",
+    "title text",
+    "content text",
+    "source_link_ids uuid[]",
+    "cosine_similarity double precision",
+    "keyword_match double precision",
+    "rrf_score double precision",
+  ]) {
+    assert.match(sql, new RegExp(field.replace("[]", "\\[\\]"), "i"));
+  }
+  assert.match(sql, /websearch_to_tsquery\('simple'/i);
+  assert.match(sql, /chunk\.search_vector/i);
+  assert.match(sql, /version\.status = 'active'/i);
+  assert.match(sql, /chunk\.enabled/i);
+  assert.match(sql, /normalized_phrase_match/i);
+  assert.match(sql, /token_overlap/i);
+  assert.match(sql, /title_match/i);
+  assert.match(sql, /stable_key_match/i);
+  assert.match(sql, /alias_match/i);
+  assert.match(sql, /keyword_array_match/i);
+  assert.match(
+    sql,
+    /limit greatest\(1, least\(coalesce\(p_limit, 12\), 12\)\)/i,
+  );
+  assert.doesNotMatch(sql, /p_query_embedding/i);
+  assert.doesNotMatch(sql, /<=>/);
+});
+
+test("070 preserves trusted offering filtering and product/location priorities before lexical rank", async () => {
+  const sql = await readFile(
+    "db/migrations/070_remove_embedding_runtime.sql",
+    "utf8",
+  );
+
+  assert.match(
+    sql,
+    /not coalesce\(p_is_offering_question,\s*false\)[\s\S]*page\.page_type in \('product',\s*'service'\)[\s\S]*source\.source_kind in \('product',\s*'product_service',\s*'service'\)/i,
+  );
+  assert.match(
+    sql,
+    /source\.source_kind = 'owned_snapshot'[\s\S]*source\.source_url is not null[\s\S]*lower\(source\.source_url\) !~\s*'\/\(article\|articles\|blog\|content\|insight\|insights\|news\|resource\|resources\)/i,
+  );
+
+  const ordering = sql.slice(sql.lastIndexOf("order by"));
+  const productPriority = ordering.indexOf("p_is_product_question");
+  const locationPriority = ordering.indexOf("p_is_offering_location_question");
+  const lexicalPriority = ordering.indexOf("lexical_score desc");
+  assert.ok(productPriority >= 0, "product intent priority must be present");
+  assert.ok(locationPriority > productPriority, "location priority must follow product priority");
+  assert.ok(lexicalPriority > locationPriority, "lexical relevance must follow intent priorities");
+});
+
+test("070 returns no lexical Wiki chunks for blank or zero-signal queries", async () => {
+  const sql = await readFile(
+    "db/migrations/070_remove_embedding_runtime.sql",
+    "utf8",
+  );
+
+  assert.match(
+    sql,
+    /query_input as \([\s\S]*where regexp_replace\(coalesce\(p_query, ''\), '\[\[:space:\]\]\+', '', 'g'\) <> ''[\s\S]*\), query_tokens as/i,
+  );
+  assert.match(
+    sql,
+    /from ranked\s+where lexical_score > 0\s+order by/i,
+  );
+});
+
+test("070 makes enabled chunks sufficient for compiled Wiki activation and resumes validation", async () => {
+  const sql = await readFile(
+    "db/migrations/070_remove_embedding_runtime.sql",
+    "utf8",
+  );
+  const activation = sql.slice(
+    sql.indexOf("create or replace function activate_compiled_wiki_version"),
+  );
+
+  assert.match(
+    sql,
+    /set build_stage = 'validating'[\s\S]*status = 'building'[\s\S]*build_stage = 'embedding'/i,
+  );
+  assert.match(activation, /chunk\.enabled/i);
+  assert.doesNotMatch(activation, /chunk\.embedding/i);
+});
+
+test("070 preserves exact FAQ and vector rollback surfaces", async () => {
+  const sql = await readFile(
+    "db/migrations/070_remove_embedding_runtime.sql",
+    "utf8",
+  );
+
+  assert.doesNotMatch(sql, /create or replace function find_direct_faq_exact/i);
+  assert.doesNotMatch(sql, /drop\s+function\s+(?:if exists\s+)?search_brand_compiled_wiki/i);
+  assert.doesNotMatch(sql, /drop\s+(?:column\s+)?embedding/i);
+  assert.doesNotMatch(sql, /update\s+wiki_page_chunks[\s\S]*embedding\s*=/i);
+});
+
 test("exact direct FAQ lookup returns one unique match or a knowledge conflict marker", async () => {
   const sql = await readFile("db/migrations/027_wiki_search_v2.sql", "utf8");
   const exactLookup = sql.slice(sql.indexOf("create or replace function find_direct_faq_exact"));
@@ -748,6 +860,7 @@ test("an installation applied through 064 has every later migration pending", as
       "067_wiki_refresh_outbox.sql",
       "068_brand_core_one_draft.sql",
       "069_brand_analysis_one_open_workflow.sql",
+      "070_remove_embedding_runtime.sql",
     ],
   );
 });

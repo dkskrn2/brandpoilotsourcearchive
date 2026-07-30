@@ -80,9 +80,7 @@ describe("DM worker", () => {
       workerId: "worker-1",
       api,
       db,
-      apiKey: "key",
       runtimeDirectory: "runtime",
-      embed: vi.fn(async () => [0.1]),
       withCodexLease,
       runCodex: vi.fn(async () => ({
         decision: "answer", answer: "안내입니다.", wikiChunkIds: [chunkId], knowledgeEntryId: null,
@@ -118,9 +116,8 @@ describe("DM worker", () => {
       searchCompiledWiki: vi.fn(async () => wikiPacket()),
       conversationHistory: vi.fn(async () => []),
     };
-    const embed = vi.fn(async () => [0.1]);
     const prompts: string[] = [];
-    const runCodex = async (input: { prompt: string; runtimeDirectory: string; timeoutMs: number }) => {
+    const runCodex = vi.fn(async (input: { prompt: string; runtimeDirectory: string; timeoutMs: number }) => {
       prompts.push(input.prompt);
       return {
         decision: "answer" as const,
@@ -132,11 +129,13 @@ describe("DM worker", () => {
         needsAttention: false,
         reason: "FAQ 근거",
       };
-    };
+    });
 
     await expect(runDmWorkerOnce({
-      workerId: "worker-1", api, db, apiKey: "key", runtimeDirectory: "runtime", embed: embed as any, runCodex,
+      workerId: "worker-1", api, db, runtimeDirectory: "runtime", runCodex,
     })).resolves.toMatchObject({ status: "completed", jobId: "job-1", decision: "answer" });
+    expect(db.searchCompiledWiki).toHaveBeenCalledWith("workspace-1", "brand-1", "운영 시간은?");
+    expect(runCodex).toHaveBeenCalledTimes(1);
     expect(prompts[0]).toContain("운영 시간은 평일 9시~18시입니다.");
     expect(prompts[0]).toContain("$dm-human-response");
     expect(prompts[0]).toContain("JSON만 출력");
@@ -148,17 +147,15 @@ describe("DM worker", () => {
     }));
   });
 
-  it("uses a payload exact FAQ ID before embedding, search, history, or Codex", async () => {
+  it("uses a payload exact FAQ ID before retrieval, history, or Codex", async () => {
     const api = workerApi({ exactFaqId: knowledgeEntryId });
     const db = { searchCompiledWiki: vi.fn(), conversationHistory: vi.fn() };
-    const embed = vi.fn();
     const runCodex = vi.fn();
 
     await expect(runDmWorkerOnce({
-      workerId: "worker-1", api, db, apiKey: "key", runtimeDirectory: "runtime", embed: embed as any, runCodex,
+      workerId: "worker-1", api, db, runtimeDirectory: "runtime", runCodex,
     })).resolves.toEqual({ status: "completed", jobId: "job-1", decision: "answer" });
 
-    expect(embed).not.toHaveBeenCalled();
     expect(db.searchCompiledWiki).not.toHaveBeenCalled();
     expect(db.conversationHistory).not.toHaveBeenCalled();
     expect(runCodex).not.toHaveBeenCalled();
@@ -189,10 +186,10 @@ describe("DM worker", () => {
     }));
 
     await runDmWorkerOnce({
-      workerId: "worker-1", api, db, apiKey: "key", runtimeDirectory: "runtime",
-      embed: vi.fn(async () => [0.1]) as any, runCodex,
+      workerId: "worker-1", api, db, runtimeDirectory: "runtime", runCodex,
     });
 
+    expect(db.searchCompiledWiki).toHaveBeenCalledWith("workspace-1", "brand-1", "운영 시간은?");
     expect(runCodex).toHaveBeenCalledTimes(1);
     expect(db.conversationHistory).toHaveBeenCalledTimes(1);
     expect(api.complete).toHaveBeenCalledWith("job-1", "worker-1", "lease-1", expect.objectContaining({
@@ -217,8 +214,7 @@ describe("DM worker", () => {
     }));
 
     await runDmWorkerOnce({
-      workerId: "worker-1", api, db, apiKey: "key", runtimeDirectory: "runtime",
-      embed: vi.fn(async () => [0.1]) as any, runCodex,
+      workerId: "worker-1", api, db, runtimeDirectory: "runtime", runCodex,
     });
 
     expect(runCodex).toHaveBeenCalledTimes(1);
@@ -229,7 +225,7 @@ describe("DM worker", () => {
     await runDmWorkerOnce({
       workerId: "worker-1", api,
       db: { searchCompiledWiki: vi.fn(async () => wikiPacket()), conversationHistory: vi.fn(async () => []) },
-      apiKey: "key", runtimeDirectory: "runtime", embed: vi.fn(async () => [0.1]) as any,
+      runtimeDirectory: "runtime",
       runCodex: vi.fn(async () => ({
         decision: "answer", answer: "제품 안내입니다.", wikiChunkIds: [chunkId],
         destinationUrlIds: ["00000000-0000-4000-8000-000000000099"], knowledgeEntryId: null,
@@ -242,14 +238,32 @@ describe("DM worker", () => {
     );
   });
 
+  it("rejects an invented knowledge entry ID from the compiled Wiki Codex path", async () => {
+    const api = workerApi();
+    await runDmWorkerOnce({
+      workerId: "worker-1", api,
+      db: { searchCompiledWiki: vi.fn(async () => wikiPacket()), conversationHistory: vi.fn(async () => []) },
+      runtimeDirectory: "runtime",
+      runCodex: vi.fn(async () => ({
+        decision: "answer", answer: "평일 9시부터 18시까지입니다.", wikiChunkIds: [chunkId],
+        knowledgeEntryId: "00000000-0000-4000-8000-000000000099",
+        confidence: 0.9, reasonCode: "wiki_answer", needsAttention: false, reason: "Wiki 근거",
+      })),
+    });
+
+    expect(api.complete).not.toHaveBeenCalled();
+    expect(api.fail).toHaveBeenCalledWith(
+      "job-1", "worker-1", "lease-1", "dm_knowledge_entry_not_provided", false, 0,
+    );
+  });
+
   it("returns the knowledge gap fallback without Codex when retrieval has no basis", async () => {
     const api = workerApi();
     const db = { searchCompiledWiki: vi.fn(async () => null), conversationHistory: vi.fn() };
     const runCodex = vi.fn();
 
     await runDmWorkerOnce({
-      workerId: "worker-1", api, db, apiKey: "key", runtimeDirectory: "runtime",
-      embed: vi.fn(async () => [0.1]) as any, runCodex,
+      workerId: "worker-1", api, db, runtimeDirectory: "runtime", runCodex,
     });
 
     expect(runCodex).not.toHaveBeenCalled();
@@ -265,7 +279,7 @@ describe("DM worker", () => {
     });
   });
 
-  it("completes fixed fallback from immutable policy data without embedding, Wiki, history, or Codex", async () => {
+  it("completes fixed fallback from immutable policy data without Wiki, history, or Codex", async () => {
     const api = workerApi({
       question: "정말 최악이고 너무 불편해요",
       route: "fixed_fallback",
@@ -276,14 +290,12 @@ describe("DM worker", () => {
       searchCompiledWiki: vi.fn(),
       conversationHistory: vi.fn(),
     };
-    const embed = vi.fn();
     const runCodex = vi.fn();
 
     await expect(runDmWorkerOnce({
-      workerId: "worker-1", api, db, apiKey: "key", runtimeDirectory: "runtime", embed: embed as any, runCodex,
+      workerId: "worker-1", api, db, runtimeDirectory: "runtime", runCodex,
     })).resolves.toEqual({ status: "completed", jobId: "job-1", decision: "fallback" });
 
-    expect(embed).not.toHaveBeenCalled();
     expect(db.searchCompiledWiki).not.toHaveBeenCalled();
     expect(db.conversationHistory).not.toHaveBeenCalled();
     expect(runCodex).not.toHaveBeenCalled();
@@ -316,9 +328,7 @@ describe("DM worker", () => {
         searchCompiledWiki: vi.fn(async () => wikiPacket()),
         conversationHistory: vi.fn(async () => []),
       },
-      apiKey: "key",
       runtimeDirectory: "runtime",
-      embed: vi.fn(async () => [0.1]) as any,
       runCodex: vi.fn(async () => result),
     });
 
@@ -336,9 +346,10 @@ describe("DM worker", () => {
   it("marks a timeout retryable without leaking an answer", async () => {
     const api = workerApi({ question: "질문" });
     await expect(runDmWorkerOnce({
-      workerId: "worker-1", api, db: { searchCompiledWiki: vi.fn(), conversationHistory: vi.fn() }, apiKey: "key", runtimeDirectory: "runtime",
-      embed: vi.fn(async () => { throw new Error("codex_timeout"); }) as any,
-      runCodex: vi.fn(),
+      workerId: "worker-1", api,
+      db: { searchCompiledWiki: vi.fn(async () => wikiPacket()), conversationHistory: vi.fn(async () => []) },
+      runtimeDirectory: "runtime",
+      runCodex: vi.fn(async () => { throw new Error("codex_timeout"); }),
     })).resolves.toMatchObject({ status: "failed" });
     expect(api.fail).toHaveBeenCalledWith("job-1", "worker-1", "lease-1", "codex_timeout", true, 5000);
   });
@@ -349,11 +360,12 @@ describe("DM worker", () => {
     await runDmWorkerOnce({
       workerId: "worker-1",
       api,
-      db: { searchCompiledWiki: vi.fn(), conversationHistory: vi.fn() },
-      apiKey: "key",
+      db: {
+        searchCompiledWiki: vi.fn(async () => wikiPacket()),
+        conversationHistory: vi.fn(async () => []),
+      },
       runtimeDirectory: "runtime",
-      embed: vi.fn(async () => { throw new TypeError("fetch failed"); }) as any,
-      runCodex: vi.fn(),
+      runCodex: vi.fn(async () => { throw new TypeError("fetch failed"); }),
     });
 
     expect(api.fail).toHaveBeenCalledWith("job-1", "worker-1", "lease-1", "fetch failed", true, 5000);

@@ -1,8 +1,6 @@
 import "dotenv/config";
-import {
-  createContentProposalApiClient,
-  createOpenAiContentProposalModel,
-} from "./client.js";
+import { createCodexContentProposalModel } from "./codexModel.js";
+import { createContentProposalApiClient } from "./client.js";
 import {
   createContentProposalRunner,
   runContentProposalOnce,
@@ -54,12 +52,16 @@ async function main(): Promise<void> {
     fetch,
     boundedNumber("CONTENT_PROPOSAL_API_TIMEOUT_MS", 300_000, 1_000, 900_000),
   );
-  const runner = createContentProposalRunner(createOpenAiContentProposalModel(
-    required("OPENAI_API_KEY"),
-    required("CONTENT_PROPOSAL_MODEL"),
-    fetch,
-    boundedNumber("CONTENT_PROPOSAL_MODEL_TIMEOUT_MS", 300_000, 1_000, 900_000),
-  ));
+  const runner = createContentProposalRunner(createCodexContentProposalModel({
+    command: process.env.CONTENT_PROPOSAL_CODEX_COMMAND?.trim() || "codex",
+    model: process.env.CONTENT_PROPOSAL_CODEX_MODEL?.trim() || "gpt-5.4",
+    timeoutMs: boundedNumber(
+      "CONTENT_PROPOSAL_CODEX_TIMEOUT_MS",
+      300_000,
+      1_000,
+      900_000,
+    ),
+  }));
   const runOnce = () => runContentProposalOnce({
     client,
     runner,

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -22,10 +23,10 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 
 const CHILD_ENV_KEYS = [
   "APPDATA", "CODEX_HOME", "COMSPEC", "HOME", "LANG", "LC_ALL", "LOCALAPPDATA",
-  "NODE_EXTRA_CA_CERTS", "NO_PROXY", "OPENAI_API_KEY", "PATH", "PATHEXT",
+  "NODE_EXTRA_CA_CERTS", "NO_PROXY", "PATH", "PATHEXT",
   "SSL_CERT_FILE", "SYSTEMROOT", "TEMP", "TMP", "USERPROFILE", "WINDIR",
-  "HTTP_PROXY", "HTTPS_PROXY", "SUBJECT_ANALYSIS_CODEX_COMMAND",
-  "SUBJECT_ANALYSIS_CODEX_MODEL", "SUBJECT_ANALYSIS_CODEX_REASONING_EFFORT",
+  "SUBJECT_ANALYSIS_CODEX_COMMAND", "SUBJECT_ANALYSIS_CODEX_MODEL",
+  "SUBJECT_ANALYSIS_CODEX_REASONING_EFFORT",
   "SUBJECT_ANALYSIS_CODEX_FAST_MODE",
 ] as const;
 
@@ -35,13 +36,19 @@ export function buildSubjectAnalysisChildEnv(source: NodeJS.ProcessEnv): NodeJS.
   return output;
 }
 
-type SpawnFunction = (command: string, args: string[], timeoutMs: number, env?: NodeJS.ProcessEnv) => Promise<void>;
+type SpawnFunction = (
+  command: string,
+  args: string[],
+  timeoutMs: number,
+  env?: NodeJS.ProcessEnv,
+  cwd?: string,
+) => Promise<void>;
 
 export function createCodexRunner({
   timeoutMs = 900_000,
   scriptPath = path.join(packageRoot, "scripts", "run-codex-subject-analysis.mjs"),
   skillPath = path.join(packageRoot, ".agents", "skills", "subject-analysis", "SKILL.md"),
-  runtimeRoot = path.resolve(process.cwd(), ".runtime-subject-analysis"),
+  runtimeRoot = path.join(tmpdir(), "brand-pilot-subject-analysis"),
   spawnProcess = BunlessSpawn,
 }: { timeoutMs?: number; scriptPath?: string; skillPath?: string; runtimeRoot?: string; spawnProcess?: SpawnFunction } = {}): SubjectAnalysisRunner {
   return { async run(job) {
@@ -54,7 +61,13 @@ export function createCodexRunner({
       await mkdir(runtimeSkillDirectory, { recursive: true });
       await copyFile(skillPath, path.join(runtimeSkillDirectory, "SKILL.md"));
       await writeFile(jobFile, `${buildSubjectPrompt(job)}\n`, "utf8");
-      await spawnProcess(process.execPath, [scriptPath, `--job-file=${jobFile}`, `--output-file=${outputFile}`, `--runtime-dir=${workDir}`], timeoutMs, buildSubjectAnalysisChildEnv(process.env));
+      await spawnProcess(
+        process.execPath,
+        [scriptPath, `--job-file=${jobFile}`, `--output-file=${outputFile}`, `--runtime-dir=${workDir}`],
+        timeoutMs,
+        buildSubjectAnalysisChildEnv(process.env),
+        workDir,
+      );
       const output: unknown = JSON.parse(await readFile(outputFile, "utf8"));
       if (job.contractVersion === "subject-analysis.v1") return parseSubjectAnalysisResult(output);
       if (job.phase === "analysis") {
@@ -70,9 +83,16 @@ export function createCodexRunner({
   } };
 }
 
-const BunlessSpawn: SpawnFunction = async (command, args, timeoutMs, env) => {
+const BunlessSpawn: SpawnFunction = async (command, args, timeoutMs, env, cwd) => {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, { stdio: "inherit", windowsHide: true, shell: false, detached: process.platform !== "win32", env });
+    const child = spawn(command, args, {
+      cwd,
+      stdio: "inherit",
+      windowsHide: true,
+      shell: false,
+      detached: process.platform !== "win32",
+      env,
+    });
     let settled = false;
     const finish = (callback: () => void) => {
       if (settled) return;

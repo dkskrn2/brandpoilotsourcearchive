@@ -6,8 +6,10 @@ import type {
 } from "./compiledWikiFinalize.js";
 import {
   parseWikiSourceKind,
+  type ClaimedWikiBuildItem,
   type CompiledWikiSearchPacket,
   type CompiledWikiSourceUnit,
+  type WikiBuildSource,
 } from "./compiledWikiTypes.js";
 
 const offeringQuestionPattern = /(제품|상품|서비스|제공|판매|구매|도입|상세\s*정보|자세한\s*정보|어디(?:서|에서)?\s*확인|무엇을\s*(?:하|제공)|뭘\s*(?:하|제공))/i;
@@ -31,21 +33,7 @@ import {
   type CompiledWikiPage,
   type CompiledWikiSourceRecord,
 } from "./wikiCompiler.js";
-import type { ClaimedWikiBuildItem, WikiBuildDocument, WikiBuildSource } from "./wikiRefresh.js";
 import type { WikiMaintenanceContext, WikiMaintenanceOutput } from "./wikiMaintenance.js";
-
-export interface WikiSearchChunk {
-  chunkId: string;
-  wikiDocumentId: string;
-  knowledgeEntryId: string | null;
-  sourceKind: string;
-  title: string | null;
-  content: string;
-  directAnswer: string | null;
-  cosineSimilarity: number;
-  keywordMatch: number;
-  rrfScore: number;
-}
 
 export interface ConversationHistoryItem {
   direction: string;
@@ -269,8 +257,6 @@ export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
     },
     async claimWikiBuildItem(workerId: string, versions: {
       curatorPromptVersion: string;
-      embeddingModel: string;
-      embeddingVersion: string;
     }) {
       const client = await pool.connect();
       const claimPending = () => client.query(
@@ -349,10 +335,10 @@ export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
             const version = await client.query(
               `insert into wiki_versions (
                  workspace_id, brand_id, status, build_stage,
-                 prompt_version, embedding_model, embedding_version
-               ) values ($1::uuid, $2::uuid, 'building', 'collecting', $3, $4, $5)
+                 prompt_version
+               ) values ($1::uuid, $2::uuid, 'building', 'collecting', $3)
                returning id`,
-              [workspaceId, brandId, versions.curatorPromptVersion, versions.embeddingModel, versions.embeddingVersion],
+              [workspaceId, brandId, versions.curatorPromptVersion],
             );
             const versionId = version.rows[0].id as string;
             await client.query(
@@ -867,7 +853,7 @@ export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
             [item.wikiVersionId, item.workspaceId, item.brandId],
           );
           await client.query(
-            `update wiki_versions set build_stage = 'embedding', updated_at = now()
+            `update wiki_versions set build_stage = 'validating', updated_at = now()
              where id = $1::uuid and status = 'building'`,
             [item.wikiVersionId],
           );
@@ -931,7 +917,7 @@ export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
              and item.available_at <= now()
              and item.attempt_count < item.max_attempts
              and version.status = 'building'
-             and version.build_stage = 'embedding'
+             and version.build_stage = 'validating'
              and not exists (
                select 1 from wiki_compilation_items dependency
                where dependency.wiki_version_id = item.wiki_version_id
@@ -988,33 +974,6 @@ export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
       );
       return result.rows as WikiPageForFinalization[];
     },
-    async getReusablePageEmbeddings(
-      brandId: string,
-      contentHashes: string[],
-      embeddingModel: string,
-      embeddingVersion: string,
-      promptVersion: string,
-    ) {
-      if (!contentHashes.length) return [];
-      const result = await pool.query(
-        `select distinct on (chunk.content_hash)
-                chunk.content_hash as "contentHash", chunk.embedding::text as embedding
-         from wiki_page_chunks chunk
-         join wiki_pages page on page.id = chunk.wiki_page_id
-         where chunk.brand_id = $1::uuid and chunk.enabled and chunk.embedding is not null
-           and chunk.content_hash = any($2::text[])
-           and chunk.embedding_model = $3 and chunk.embedding_version = $4
-           and coalesce(page.prompt_version, '') = $5
-         order by chunk.content_hash, chunk.updated_at desc`,
-        [brandId, contentHashes, embeddingModel, embeddingVersion, promptVersion],
-      );
-      return result.rows.map((row) => ({
-        contentHash: row.contentHash as string,
-        embedding: String(row.embedding)
-          .replace(/^\[/, "").replace(/\]$/, "")
-          .split(",").map(Number),
-      }));
-    },
     async completeWikiValidationItem(
       item: ClaimedWikiValidationItem,
       chunks: FinalizedWikiChunk[],
@@ -1039,16 +998,13 @@ export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
         );
         await client.query("delete from wiki_page_chunks where wiki_version_id = $1::uuid", [item.wikiVersionId]);
         for (const chunk of chunks) {
-          if (chunk.embedding.length !== 1536 || chunk.embedding.some((value) => !Number.isFinite(value))) {
-            throw new Error("wiki_embedding_invalid");
-          }
           await client.query(
             `insert into wiki_page_chunks (
                workspace_id, brand_id, wiki_version_id, wiki_page_id, chunk_index,
-               content, content_hash, embedding, embedding_model, embedding_version, enabled
+               content, content_hash, enabled
              ) values (
                $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5,
-               $6, $7, $8::vector, $9, $10, true
+               $6, $7, true
              )`,
             [
               item.workspaceId,
@@ -1058,9 +1014,6 @@ export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
               chunk.chunkIndex,
               chunk.content,
               chunk.contentHash,
-              `[${chunk.embedding.join(",")}]`,
-              chunk.embeddingModel,
-              chunk.embeddingVersion,
             ],
           );
         }
@@ -1080,7 +1033,7 @@ export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
                where page.wiki_version_id = $1::uuid
                  and (jsonb_array_length(page.content_json -> 'sections') = 0
                    or not exists (select 1 from wiki_page_sources source where source.wiki_page_id = page.id)
-                   or not exists (select 1 from wiki_page_chunks chunk where chunk.wiki_page_id = page.id and chunk.enabled and chunk.embedding is not null))
+                   or not exists (select 1 from wiki_page_chunks chunk where chunk.wiki_page_id = page.id and chunk.enabled))
              ) as has_incomplete_page,
              exists(
                select 1 from wiki_pages offering
@@ -1206,97 +1159,6 @@ export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
         client.release();
       }
     },
-    async getExistingEmbeddings(brandId: string, contentHashes: string[]) {
-      if (!contentHashes.length) return [];
-      const result = await pool.query(
-        `select chunk.content_hash, chunk.embedding::text as embedding,
-                chunk.embedding_model, chunk.embedding_version,
-                coalesce(version.prompt_version, '') as curator_prompt_version
-         from wiki_chunks chunk
-         join wiki_documents document on document.id = chunk.wiki_document_id
-         join wiki_versions version on version.id = document.wiki_version_id
-         where chunk.brand_id = $1::uuid and chunk.enabled and chunk.embedding is not null
-           and chunk.content_hash = any($2::text[])`,
-        [brandId, contentHashes],
-      );
-      return result.rows as Array<{
-        content_hash: string;
-        embedding: string;
-        embedding_model: string;
-        embedding_version: string;
-        curator_prompt_version: string;
-      }>;
-    },
-    async completeWikiBuildItem(item: ClaimedWikiBuildItem, document: WikiBuildDocument | null) {
-      const client = await pool.connect();
-      try {
-        await client.query("begin");
-        if (document) {
-          const inserted = await client.query(
-            `insert into wiki_documents (
-               workspace_id, brand_id, wiki_version_id, source_kind,
-               knowledge_entry_id, product_service_id, source_snapshot_id,
-               title, content, content_hash,
-               is_active, normalized_json, source_url, refreshed_at
-             ) values (
-               $1::uuid, $2::uuid, $3::uuid, $4,
-               case when $4 in ('faq', 'product', 'service', 'policy', 'guide') then $5::uuid end,
-               case when $4 = 'product_service' then $5::uuid end,
-               case when $4 = 'owned_snapshot' then $5::uuid end,
-               $6, $7, $8, false, $9::jsonb, $10, now()
-             ) returning id`,
-            [
-              item.workspace_id, item.brand_id, item.wiki_version_id, document.source_kind,
-              document.source_id, document.title, document.content, document.content_hash,
-              JSON.stringify(document.normalized_json), document.source_url,
-            ],
-          );
-          await client.query(
-            `insert into wiki_chunks (
-               workspace_id, brand_id, wiki_document_id, chunk_index, content, content_hash,
-               search_vector, embedding, embedding_model, embedding_version, enabled
-             )
-             select $1::uuid, $2::uuid, $3::uuid, chunk.chunk_index, chunk.content, chunk.content_hash,
-                    to_tsvector('simple', chunk.content), nullif(chunk.embedding, '')::vector,
-                    chunk.embedding_model, chunk.embedding_version, true
-             from jsonb_to_recordset($4::jsonb) as chunk(
-               chunk_index integer, content text, content_hash text, embedding text,
-               embedding_model text, embedding_version text
-             )`,
-            [item.workspace_id, item.brand_id, inserted.rows[0].id, JSON.stringify(document.chunks)],
-          );
-        }
-        const completed = await client.query(
-          `update wiki_build_items
-           set status = 'succeeded', error_message = null, completed_at = now(), updated_at = now()
-           where id = $1::uuid and wiki_version_id = $2::uuid and status = 'processing'`,
-          [item.id, item.wiki_version_id],
-        );
-        if (!completed.rowCount) throw new Error("wiki_build_item_not_processing");
-        const remaining = await client.query(
-          `select exists(
-             select 1 from wiki_build_items
-             where wiki_version_id = $1::uuid and status <> 'succeeded'
-           ) as has_remaining`,
-          [item.wiki_version_id],
-        );
-        let activated = false;
-        if (!remaining.rows[0].has_remaining) {
-          const activation = await client.query(
-            "select activate_wiki_version($1::uuid) as activated",
-            [item.wiki_version_id],
-          );
-          activated = activation.rows[0].activated === true;
-        }
-        await client.query("commit");
-        return { activated };
-      } catch (error) {
-        await client.query("rollback");
-        throw error;
-      } finally {
-        client.release();
-      }
-    },
     async failWikiBuildItem(item: ClaimedWikiBuildItem, error: string) {
       const client = await pool.connect();
       try {
@@ -1331,104 +1193,48 @@ export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
         client.release();
       }
     },
-    async searchWiki(workspaceId: string, brandId: string, question: string, embedding: number[]) {
+    async searchCompiledWiki(workspaceId: string, brandId: string, question: string) {
       const result = await pool.query(
-        "select * from search_brand_wiki_v2($1::uuid, $2::uuid, $3::vector, $4, 8)",
-        [workspaceId, brandId, `[${embedding.join(",")}]`, question],
+        `with active_version as materialized (
+           select version.id as wiki_version_id,
+                  core.core_json as brand_core
+           from wiki_versions version
+           join brand_profiles profile
+             on profile.workspace_id = version.workspace_id
+            and profile.brand_id = version.brand_id
+            and profile.active_brand_core_id is not null
+           join brand_core_versions core
+             on core.id = profile.active_brand_core_id
+            and core.workspace_id = $1::uuid
+            and core.brand_id = $2::uuid
+            and core.status = 'approved'
+           where version.workspace_id = $1::uuid and version.brand_id = $2::uuid
+             and version.status = 'active'
+           order by version.activated_at desc nulls last
+           limit 1
+         )
+         select active_version.wiki_version_id,
+                active_version.brand_core,
+                lexical.*
+         from active_version
+         left join lateral search_brand_wiki_lexical(
+           $1::uuid, $2::uuid, $3, $4, $5, $6, $7
+         ) lexical on true`,
+        [
+          workspaceId,
+          brandId,
+          question,
+          12,
+          isOfferingQuestion(question),
+          isProductQuestion(question),
+          isOfferingLocationQuestion(question),
+        ],
       );
-      return result.rows.map((row) => ({
-        chunkId: row.chunk_id,
-        wikiDocumentId: row.wiki_document_id,
-        knowledgeEntryId: row.knowledge_entry_id,
-        sourceKind: row.source_kind,
-        title: row.title,
-        content: row.content,
-        directAnswer: row.direct_answer,
-        cosineSimilarity: Number(row.cosine_similarity),
-        keywordMatch: Number(row.keyword_match),
-        rrfScore: Number(row.rrf_score),
-      })) as WikiSearchChunk[];
-    },
-    async searchCompiledWiki(workspaceId: string, brandId: string, question: string, embedding: number[]) {
-      const version = await pool.query(
-        `select version.id,
-                core.core_json as brand_core
-         from wiki_versions version
-         join brand_profiles profile
-           on profile.workspace_id = version.workspace_id
-          and profile.brand_id = version.brand_id
-          and profile.active_brand_core_id is not null
-         join brand_core_versions core
-           on core.id = profile.active_brand_core_id
-          and core.workspace_id = $1::uuid
-          and core.brand_id = $2::uuid
-          and core.status = 'approved'
-         where version.workspace_id = $1::uuid and version.brand_id = $2::uuid
-           and version.status = 'active'
-         order by version.activated_at desc nulls last
-         limit 1`,
-        [workspaceId, brandId],
-      );
-      if (!version.rowCount) return null;
-      const wikiVersionId = version.rows[0].id as string;
-      const vector = `[${embedding.join(",")}]`;
-      const result = isOfferingQuestion(question)
-        ? await pool.query(
-          `select chunk.id as page_chunk_id, page.id as wiki_page_id,
-                  page.page_type, page.title, chunk.content,
-                  coalesce((
-                    select array_agg(source.id order by source.id::text)
-                    from wiki_page_sources source
-                    where source.wiki_page_id = page.id
-                      and source.workspace_id = $1::uuid and source.brand_id = $2::uuid
-                      and source.wiki_version_id = $3::uuid
-                  ), '{}'::uuid[]) as source_link_ids,
-                  (1 - (chunk.embedding <=> $4::vector))::double precision as cosine_similarity,
-                  ts_rank_cd(chunk.search_vector, websearch_to_tsquery('simple', coalesce($5::text, '')))::double precision as keyword_match,
-                  (1 - (chunk.embedding <=> $4::vector))::double precision as rrf_score
-           from wiki_page_chunks chunk
-           join wiki_pages page on page.id = chunk.wiki_page_id
-           where chunk.workspace_id = $1::uuid and chunk.brand_id = $2::uuid
-             and chunk.wiki_version_id = $3::uuid and chunk.enabled and chunk.embedding is not null
-             and page.page_type in ('product', 'service')
-             and exists (
-               select 1 from wiki_page_sources source
-               where source.wiki_page_id = page.id
-                 and (
-                   source.source_kind in ('product', 'product_service', 'service')
-                   or (
-                     source.source_kind = 'owned_snapshot'
-                     and source.source_url is not null
-                     and lower(source.source_url) !~ '/(article|articles|blog|content|insight|insights|news|resource|resources)(/|\\?|#|$)'
-                   )
-                 )
-             )
-           order by
-             case when $7::boolean and exists (
-               select 1 from wiki_page_sources source
-               where source.wiki_page_id = page.id
-                 and source.source_kind in ('product', 'product_service')
-                 and page.page_type = 'product'
-             ) then 0 else 1 end,
-             case when $6::boolean then coalesce((
-               select min(length(source.destination_url))
-               from wiki_page_sources source
-               where source.wiki_page_id = page.id and source.destination_url is not null
-             ), 2147483647) else 0 end,
-             chunk.embedding <=> $4::vector, page.stable_key, chunk.chunk_index
-           limit 3`,
-          [
-            workspaceId, brandId, wikiVersionId, vector, question,
-            isOfferingLocationQuestion(question), isProductQuestion(question),
-          ],
-        )
-        : await pool.query(
-          `select * from search_brand_compiled_wiki(
-             $1::uuid, $2::uuid, $3::uuid, $4::vector, $5, 3
-           )`,
-          [workspaceId, brandId, wikiVersionId, vector, question],
-        );
-      const sourceIds = [...new Set(result.rows.flatMap((row) => row.source_link_ids as string[]))];
+      if (!result.rowCount) return null;
+      const wikiVersionId = result.rows[0].wiki_version_id as string;
+      const chunkRows = result.rows.filter((row) => row.page_chunk_id);
+      const sourceIds = [...new Set(chunkRows.flatMap((row) =>
+        Array.isArray(row.source_link_ids) ? row.source_link_ids as string[] : []))];
       const destinationResult = sourceIds.length
         ? await pool.query(
           `select source.id, coalesce(page.title, unit.title) as label, source.destination_url as url
@@ -1445,8 +1251,8 @@ export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
         : { rows: [] };
       return {
         wikiVersionId,
-        brandCore: JSON.stringify(version.rows[0].brand_core ?? {}),
-        chunks: result.rows.map((row) => ({
+        brandCore: JSON.stringify(result.rows[0].brand_core ?? {}),
+        chunks: chunkRows.map((row) => ({
           chunkId: row.page_chunk_id,
           pageId: row.wiki_page_id,
           pageType: row.page_type,

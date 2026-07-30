@@ -17,6 +17,12 @@ env:
   DM_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-dm-worker
   WIKI_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-wiki-worker
   CONTENT_PROPOSAL_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-content-proposal-worker
+  BRAND_INTELLIGENCE_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-brand-intelligence-worker
+  SUBJECT_ANALYSIS_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-subject-analysis-worker
+  IMAGE_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-image-worker
+  CARD_NEWS_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-card-news-worker
+  BLOG_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-blog-worker
+  MARKETING_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-marketing-worker
 
 jobs:
   verify:
@@ -47,9 +53,21 @@ jobs:
           npm run test --workspace @brand-pilot/api
           npm run test --workspace @brand-pilot/dm-worker
           npm run test --workspace @brand-pilot/content-proposal-worker
+          npm run test --workspace @brand-pilot/brand-intelligence-worker
+          npm run test --workspace @brand-pilot/subject-analysis-worker
+          npm run test --workspace @brand-pilot/image-worker
+          npm run test --workspace @brand-pilot/card-news-worker
+          npm run test --workspace @brand-pilot/blog-worker
+          npm run test --workspace @brand-pilot/marketing-worker
           npm run build --workspace @brand-pilot/api
           npm run build --workspace @brand-pilot/dm-worker
           npm run build --workspace @brand-pilot/content-proposal-worker
+          npm run build --workspace @brand-pilot/brand-intelligence-worker
+          npm run build --workspace @brand-pilot/subject-analysis-worker
+          npm run build --workspace @brand-pilot/image-worker
+          npm run build --workspace @brand-pilot/card-news-worker
+          npm run build --workspace @brand-pilot/blog-worker
+          npm run build --workspace @brand-pilot/marketing-worker
           shellcheck --exclude=SC1091,SC2034,SC2317 deploy/scripts/*.sh
           npm run test:deployment
 
@@ -82,7 +100,13 @@ jobs:
           dm_worker_image="${REGISTRY}/${DM_WORKER_IMAGE_NAME,,}"
           wiki_worker_image="${REGISTRY}/${WIKI_WORKER_IMAGE_NAME,,}"
           content_proposal_worker_image="${REGISTRY}/${CONTENT_PROPOSAL_WORKER_IMAGE_NAME,,}"
-          for value in "$image" "$dm_worker_image" "$wiki_worker_image" "$content_proposal_worker_image"; do
+          brand_intelligence_worker_image="${REGISTRY}/${BRAND_INTELLIGENCE_WORKER_IMAGE_NAME,,}"
+          subject_analysis_worker_image="${REGISTRY}/${SUBJECT_ANALYSIS_WORKER_IMAGE_NAME,,}"
+          image_worker_image="${REGISTRY}/${IMAGE_WORKER_IMAGE_NAME,,}"
+          card_news_worker_image="${REGISTRY}/${CARD_NEWS_WORKER_IMAGE_NAME,,}"
+          blog_worker_image="${REGISTRY}/${BLOG_WORKER_IMAGE_NAME,,}"
+          marketing_worker_image="${REGISTRY}/${MARKETING_WORKER_IMAGE_NAME,,}"
+          for value in "$image" "$dm_worker_image" "$wiki_worker_image" "$content_proposal_worker_image" "$brand_intelligence_worker_image" "$subject_analysis_worker_image" "$image_worker_image" "$card_news_worker_image" "$blog_worker_image" "$marketing_worker_image"; do
             [[ "$value" =~ ^ghcr\.io/[a-z0-9._/-]+$ ]]
             [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]]
           done
@@ -90,6 +114,12 @@ jobs:
           printf 'dm_worker=%s\n' "$dm_worker_image" >> "$GITHUB_OUTPUT"
           printf 'wiki_worker=%s\n' "$wiki_worker_image" >> "$GITHUB_OUTPUT"
           printf 'content_proposal_worker=%s\n' "$content_proposal_worker_image" >> "$GITHUB_OUTPUT"
+          printf 'brand_intelligence_worker=%s\n' "$brand_intelligence_worker_image" >> "$GITHUB_OUTPUT"
+          printf 'subject_analysis_worker=%s\n' "$subject_analysis_worker_image" >> "$GITHUB_OUTPUT"
+          printf 'image_worker=%s\n' "$image_worker_image" >> "$GITHUB_OUTPUT"
+          printf 'card_news_worker=%s\n' "$card_news_worker_image" >> "$GITHUB_OUTPUT"
+          printf 'blog_worker=%s\n' "$blog_worker_image" >> "$GITHUB_OUTPUT"
+          printf 'marketing_worker=%s\n' "$marketing_worker_image" >> "$GITHUB_OUTPUT"
 
       - name: Build and push API
         id: api
@@ -143,6 +173,84 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
+      - name: Build and push brand intelligence worker
+        id: brand_intelligence_worker
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: brand_poilot
+          file: brand_poilot/workers/brand-pilot-brand-intelligence-worker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.image.outputs.brand_intelligence_worker }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Build and push subject analysis worker
+        id: subject_analysis_worker
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: brand_poilot
+          file: brand_poilot/workers/brand-pilot-subject-analysis-worker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.image.outputs.subject_analysis_worker }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Build and push image worker
+        id: image_worker
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: brand_poilot
+          file: brand_poilot/workers/brand-pilot-image-worker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.image.outputs.image_worker }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Build and push card news worker
+        id: card_news_worker
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: brand_poilot
+          file: brand_poilot/workers/brand-pilot-card-news-worker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.image.outputs.card_news_worker }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Build and push blog worker
+        id: blog_worker
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: brand_poilot
+          file: brand_poilot/workers/brand-pilot-blog-worker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.image.outputs.blog_worker }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Build and push marketing worker
+        id: marketing_worker
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: brand_poilot
+          file: brand_poilot/workers/brand-pilot-marketing-worker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.image.outputs.marketing_worker }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
       - name: Create release manifest
         working-directory: brand_poilot
         shell: bash
@@ -156,6 +264,18 @@ jobs:
           WIKI_WORKER_DIGEST: ${{ steps.wiki_worker.outputs.digest }}
           CONTENT_PROPOSAL_WORKER_IMAGE: ${{ steps.image.outputs.content_proposal_worker }}
           CONTENT_PROPOSAL_WORKER_DIGEST: ${{ steps.content_proposal_worker.outputs.digest }}
+          BRAND_INTELLIGENCE_WORKER_IMAGE: ${{ steps.image.outputs.brand_intelligence_worker }}
+          BRAND_INTELLIGENCE_WORKER_DIGEST: ${{ steps.brand_intelligence_worker.outputs.digest }}
+          SUBJECT_ANALYSIS_WORKER_IMAGE: ${{ steps.image.outputs.subject_analysis_worker }}
+          SUBJECT_ANALYSIS_WORKER_DIGEST: ${{ steps.subject_analysis_worker.outputs.digest }}
+          IMAGE_WORKER_IMAGE: ${{ steps.image.outputs.image_worker }}
+          IMAGE_WORKER_DIGEST: ${{ steps.image_worker.outputs.digest }}
+          CARD_NEWS_WORKER_IMAGE: ${{ steps.image.outputs.card_news_worker }}
+          CARD_NEWS_WORKER_DIGEST: ${{ steps.card_news_worker.outputs.digest }}
+          BLOG_WORKER_IMAGE: ${{ steps.image.outputs.blog_worker }}
+          BLOG_WORKER_DIGEST: ${{ steps.blog_worker.outputs.digest }}
+          MARKETING_WORKER_IMAGE: ${{ steps.image.outputs.marketing_worker }}
+          MARKETING_WORKER_DIGEST: ${{ steps.marketing_worker.outputs.digest }}
         run: |
           set -Eeuo pipefail
           caddy_line="$(cat deploy/caddy-image.env)"
@@ -165,14 +285,14 @@ jobs:
 
           [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$API_IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+$ ]]
-          for image in "$API_IMAGE" "$DM_WORKER_IMAGE" "$WIKI_WORKER_IMAGE" "$CONTENT_PROPOSAL_WORKER_IMAGE"; do
+          for image in "$API_IMAGE" "$DM_WORKER_IMAGE" "$WIKI_WORKER_IMAGE" "$CONTENT_PROPOSAL_WORKER_IMAGE" "$BRAND_INTELLIGENCE_WORKER_IMAGE" "$SUBJECT_ANALYSIS_WORKER_IMAGE" "$IMAGE_WORKER_IMAGE" "$CARD_NEWS_WORKER_IMAGE" "$BLOG_WORKER_IMAGE" "$MARKETING_WORKER_IMAGE"; do
             [[ "$image" =~ ^ghcr\.io/[a-z0-9._/-]+$ ]]
           done
-          for digest in "$API_DIGEST" "$DM_WORKER_DIGEST" "$WIKI_WORKER_DIGEST" "$CONTENT_PROPOSAL_WORKER_DIGEST"; do
+          for digest in "$API_DIGEST" "$DM_WORKER_DIGEST" "$WIKI_WORKER_DIGEST" "$CONTENT_PROPOSAL_WORKER_DIGEST" "$BRAND_INTELLIGENCE_WORKER_DIGEST" "$SUBJECT_ANALYSIS_WORKER_DIGEST" "$IMAGE_WORKER_DIGEST" "$CARD_NEWS_WORKER_DIGEST" "$BLOG_WORKER_DIGEST" "$MARKETING_WORKER_DIGEST"; do
             [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           done
           [[ "$CADDY_IMAGE" =~ ^docker\.io/library/caddy@sha256:[0-9a-f]{64}$ ]]
-          for value in "$RELEASE_SHA" "$API_IMAGE" "$API_DIGEST" "$DM_WORKER_IMAGE" "$DM_WORKER_DIGEST" "$WIKI_WORKER_IMAGE" "$WIKI_WORKER_DIGEST" "$CONTENT_PROPOSAL_WORKER_IMAGE" "$CONTENT_PROPOSAL_WORKER_DIGEST" "$CADDY_IMAGE"; do
+          for value in "$RELEASE_SHA" "$API_IMAGE" "$API_DIGEST" "$DM_WORKER_IMAGE" "$DM_WORKER_DIGEST" "$WIKI_WORKER_IMAGE" "$WIKI_WORKER_DIGEST" "$CONTENT_PROPOSAL_WORKER_IMAGE" "$CONTENT_PROPOSAL_WORKER_DIGEST" "$BRAND_INTELLIGENCE_WORKER_IMAGE" "$BRAND_INTELLIGENCE_WORKER_DIGEST" "$SUBJECT_ANALYSIS_WORKER_IMAGE" "$SUBJECT_ANALYSIS_WORKER_DIGEST" "$IMAGE_WORKER_IMAGE" "$IMAGE_WORKER_DIGEST" "$CARD_NEWS_WORKER_IMAGE" "$CARD_NEWS_WORKER_DIGEST" "$BLOG_WORKER_IMAGE" "$BLOG_WORKER_DIGEST" "$MARKETING_WORKER_IMAGE" "$MARKETING_WORKER_DIGEST" "$CADDY_IMAGE"; do
             [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]]
           done
 
@@ -183,6 +303,12 @@ jobs:
             printf 'DM_WORKER_IMAGE=%s@%s\n' "$DM_WORKER_IMAGE" "$DM_WORKER_DIGEST"
             printf 'WIKI_WORKER_IMAGE=%s@%s\n' "$WIKI_WORKER_IMAGE" "$WIKI_WORKER_DIGEST"
             printf 'CONTENT_PROPOSAL_WORKER_IMAGE=%s@%s\n' "$CONTENT_PROPOSAL_WORKER_IMAGE" "$CONTENT_PROPOSAL_WORKER_DIGEST"
+            printf 'BRAND_INTELLIGENCE_WORKER_IMAGE=%s@%s\n' "$BRAND_INTELLIGENCE_WORKER_IMAGE" "$BRAND_INTELLIGENCE_WORKER_DIGEST"
+            printf 'SUBJECT_ANALYSIS_WORKER_IMAGE=%s@%s\n' "$SUBJECT_ANALYSIS_WORKER_IMAGE" "$SUBJECT_ANALYSIS_WORKER_DIGEST"
+            printf 'IMAGE_WORKER_IMAGE=%s@%s\n' "$IMAGE_WORKER_IMAGE" "$IMAGE_WORKER_DIGEST"
+            printf 'CARD_NEWS_WORKER_IMAGE=%s@%s\n' "$CARD_NEWS_WORKER_IMAGE" "$CARD_NEWS_WORKER_DIGEST"
+            printf 'BLOG_WORKER_IMAGE=%s@%s\n' "$BLOG_WORKER_IMAGE" "$BLOG_WORKER_DIGEST"
+            printf 'MARKETING_WORKER_IMAGE=%s@%s\n' "$MARKETING_WORKER_IMAGE" "$MARKETING_WORKER_DIGEST"
             printf 'CADDY_IMAGE=%s\n' "$CADDY_IMAGE"
             printf 'CANARY_HOST=canary-api.danbammsg.co.kr\n'
             printf 'PRIMARY_HOST=api.danbammsg.co.kr\n'

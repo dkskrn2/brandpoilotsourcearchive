@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import pg from "pg";
 import * as database from "./db.js";
 
@@ -135,6 +135,28 @@ describe("resolveDmWorkerDatabaseConfig", () => {
     expect(source).toMatch(/runCompiledWikiSourceItemOnce\(\{[\s\S]*?\bdb,/);
   });
 
+  it("starts DM and Wiki lanes without OpenAI or embedding configuration", async () => {
+    const source = await readFile(new URL("./index.ts", import.meta.url), "utf8");
+
+    expect(source).not.toMatch(/OPENAI_API_KEY|OPENAI_EMBEDDING/);
+    expect(source).not.toMatch(/createEmbedding|apiKey|embeddingModel|embeddingVersion/);
+  });
+
+  it("contains no executable OpenAI API or legacy embedding refresh path", async () => {
+    const directory = new URL(".", import.meta.url);
+    const files = (await readdir(directory))
+      .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"));
+    const sources = await Promise.all(files.map(async (file) => ({
+      file,
+      source: await readFile(new URL(file, directory), "utf8"),
+    })));
+
+    for (const { file, source } of sources) {
+      expect(source, file).not.toMatch(/api\.openai\.com|OPENAI_API_KEY/);
+      expect(source, file).not.toContain("runWikiBuildItemOnce");
+    }
+  });
+
   it("documents the optional CA environment input for worker deployment", async () => {
     const example = await readFile(
       new URL("../.env.example", import.meta.url),
@@ -153,14 +175,8 @@ describe("resolveDmWorkerDatabaseConfig", () => {
     expect(source.match(/entry\.status in \('approved', 'active'\)/g)).toHaveLength(2);
     expect(source.match(/entry\.entry_type in \('faq', 'policy', 'guide'\)/g))
       .toHaveLength(2);
-    expect(source).toMatch(
-      /case when \$4 in \('faq', 'product', 'service', 'policy', 'guide'\) then \$5::uuid end/,
-    );
-    expect(source).toMatch(
-      /case when \$4 = 'product_service' then \$5::uuid end/,
-    );
     expect(source.match(/source_kind in \('product', 'product_service', 'service'\)/g))
-      .toHaveLength(3);
+      .toHaveLength(2);
     expect(source.match(/parseWikiSourceKind\(/g)).toHaveLength(2);
   });
 
@@ -173,6 +189,16 @@ describe("resolveDmWorkerDatabaseConfig", () => {
     expect(source).not.toMatch(/from reference_items/);
     expect(source).not.toMatch(/brand_trend_saved_media/);
     expect(source).not.toMatch(/__confirmed_brand_intelligence__/);
+  });
+
+  it("persists enabled compiled chunks and searches them lexically without embedding gates", async () => {
+    const source = await readFile(new URL("./db.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("search_brand_wiki_lexical");
+    expect(source).not.toContain("search_brand_compiled_wiki");
+    expect(source).not.toContain("wiki_embedding_invalid");
+    expect(source).not.toContain("getReusablePageEmbeddings");
+    expect(source).toMatch(/chunk\.wiki_page_id = page\.id and chunk\.enabled\)/);
   });
 
 });

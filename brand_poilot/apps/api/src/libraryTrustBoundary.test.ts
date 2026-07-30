@@ -50,50 +50,6 @@ beforeAll(async () => {
     if (sql.startsWith("-- requires: pgvector") || file === "027_wiki_search_v2.sql") continue;
     await database.exec(sql);
   }
-  // PGlite has no pgvector extension. This domain and deterministic search
-  // function replace only that external boundary; worker orchestration,
-  // persistence, validation, activation, and retrieval repository SQL stay real.
-  await database.exec(`
-    create domain vector as text;
-    alter table wiki_page_chunks add column embedding vector null;
-    create function search_brand_compiled_wiki(
-      p_workspace_id uuid,
-      p_brand_id uuid,
-      p_wiki_version_id uuid,
-      p_query_embedding vector,
-      p_query_text text,
-      p_limit integer default 3
-    )
-    returns table(
-      page_chunk_id uuid,
-      wiki_page_id uuid,
-      page_type text,
-      title text,
-      content text,
-      source_link_ids uuid[],
-      cosine_similarity double precision,
-      keyword_match double precision,
-      rrf_score double precision
-    )
-    language sql stable as $$
-      select chunk.id,page.id,page.page_type,page.title,chunk.content,
-             coalesce(array_agg(distinct source.id) filter(where source.id is not null),'{}'::uuid[]),
-             1::double precision,
-             case when chunk.content ilike concat('%',p_query_text,'%') then 1 else 0 end::double precision,
-             1::double precision
-        from wiki_page_chunks chunk
-        join wiki_pages page on page.id=chunk.wiki_page_id
-        left join wiki_page_sources source on source.wiki_page_id=page.id
-       where chunk.workspace_id=p_workspace_id and chunk.brand_id=p_brand_id
-         and chunk.wiki_version_id=p_wiki_version_id and chunk.enabled
-         and chunk.embedding is not null
-       group by chunk.id,page.id
-       order by
-         case when chunk.content ilike '%배송%' then 0 else 1 end,
-         page.stable_key,chunk.chunk_index
-       limit p_limit
-    $$;
-  `);
   pool = pglitePool(database);
   await database.exec(`
     insert into app_users(id,email) values
@@ -233,8 +189,6 @@ describe("library reuse and trust boundaries", () => {
         workerId: "library-trust-source-worker",
         db: workerDatabase,
         curatorPromptVersion: "library-trust.v1",
-        embeddingModel: "deterministic-vector",
-        embeddingVersion: "v1",
         runtimeDirectory: process.cwd(),
         runCodex: async () => { throw new Error("direct_sources_must_not_call_codex"); },
       });
@@ -291,10 +245,6 @@ describe("library reuse and trust boundaries", () => {
     const finalized = await finalizeWorkerModule.runWikiFinalizeOnce({
       workerId: "library-trust-finalizer",
       db: workerDatabase,
-      apiKey: "deterministic",
-      embeddingModel: "deterministic-vector",
-      embeddingVersion: "v1",
-      embed: async () => Array.from({ length: 1536 }, () => 0.01),
     });
     expect(finalized).toMatchObject({ status: "ready" });
     const version = await database.query<{ id: string }>(
@@ -323,7 +273,6 @@ describe("library reuse and trust boundaries", () => {
       workspaceId,
       primaryBrandId,
       "배송은 언제 시작하나요?",
-      Array.from({ length: 1536 }, () => 0.01),
     );
     expect(dmResult).toMatchObject({
       wikiVersionId: version.rows[0].id,

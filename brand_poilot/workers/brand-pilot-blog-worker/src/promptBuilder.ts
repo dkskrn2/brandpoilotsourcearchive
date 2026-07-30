@@ -1,5 +1,5 @@
 import { parseContentGenerationInput, type BlogJob } from "./contracts.js";
-import { buildAiContentRevisionInstruction } from "../../brand-pilot-worker-runtime/src/index.js";
+import { buildAiContentRevisionInstruction } from "@brand-pilot/worker-runtime";
 
 export const blogSkillVersion = "blog-writer-skill.v7";
 

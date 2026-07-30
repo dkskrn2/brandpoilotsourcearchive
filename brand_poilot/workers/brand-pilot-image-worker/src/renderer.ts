@@ -1,15 +1,102 @@
-import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { spawn, type SpawnOptions } from "node:child_process";
+import { copyFile, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import sharp from "sharp";
+import {
+  buildImageWorkerChildEnvironment,
+  resolveGeneratedImagesDirectory
+} from "./childEnvironment.mjs";
 import { parseWorkerManifest } from "./manifest.js";
+import { signalProcessTree } from "./processTermination.mjs";
 import type { InstagramDeliveryFormat } from "./promptBuilder.js";
 import type { ClaimedImageJob, ImageRenderer, RenderedImage, RenderedInstagramPackage } from "./worker.js";
 
 const fixturePng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+const imageWorkerRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 type ImageDimensions = { width: 1080; height: 1080 | 1920 };
+type RenderChildProcess = {
+  pid?: number;
+  kill(signal?: NodeJS.Signals): unknown;
+  once(event: "error", listener: (error: Error) => void): unknown;
+  once(event: "exit", listener: (code: number | null) => void): unknown;
+};
+type SpawnRenderProcess = (
+  command: string,
+  args: string[],
+  options: SpawnOptions
+) => RenderChildProcess;
+
+function tokenizeRenderCommand(commandTemplate: string) {
+  const tokens: string[] = [];
+  let token = "";
+  let quote: "'" | "\"" | null = null;
+  let tokenStarted = false;
+  for (let index = 0; index < commandTemplate.length; index += 1) {
+    const character = commandTemplate[index];
+    if (quote) {
+      if (character === quote) {
+        quote = null;
+        tokenStarted = true;
+      } else if (quote === "\"" && character === "\\" && commandTemplate[index + 1] === "\"") {
+        token += "\"";
+        tokenStarted = true;
+        index += 1;
+      } else {
+        token += character;
+        tokenStarted = true;
+      }
+      continue;
+    }
+    if (character === "'" || character === "\"") {
+      quote = character;
+      tokenStarted = true;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      if (tokenStarted) {
+        tokens.push(token);
+        token = "";
+        tokenStarted = false;
+      }
+      continue;
+    }
+    token += character;
+    tokenStarted = true;
+  }
+  if (quote) throw new Error("image_render_command_quote_invalid");
+  if (tokenStarted) tokens.push(token);
+  return tokens;
+}
+
+export function parseRenderCommandTemplate(
+  commandTemplate: string,
+  replacements: { jobFile: string; outputDir: string; workspaceDir: string }
+) {
+  const tokens = tokenizeRenderCommand(commandTemplate).map((token) =>
+    token
+      .replaceAll("{{jobFile}}", replacements.jobFile)
+      .replaceAll("{{outputDir}}", replacements.outputDir)
+      .replaceAll("{{workspaceDir}}", replacements.workspaceDir)
+  );
+  const [command, ...args] = tokens;
+  if (!command) throw new Error("IMAGE_RENDER_COMMAND_required");
+  return { command, args };
+}
+
+async function stageImageRenderWorkspace(assetRoot: string, workspaceDir: string) {
+  const skillDirectory = path.join(workspaceDir, ".codex", "skills", "image-render");
+  await mkdir(skillDirectory, { recursive: true });
+  await Promise.all([
+    copyFile(path.join(assetRoot, "AGENTS.md"), path.join(workspaceDir, "AGENTS.md")),
+    copyFile(
+      path.join(assetRoot, ".codex", "skills", "image-render", "SKILL.md"),
+      path.join(skillDirectory, "SKILL.md")
+    )
+  ]);
+}
 
 async function readPngMetadata(bytes: Buffer) {
   const metadata = await sharp(bytes, { failOn: "error" }).metadata().catch(() => {
@@ -206,33 +293,95 @@ export function createConfiguredRenderer({
   return createCommandRenderer(commandTemplate, commandTimeoutMs);
 }
 
-export function createCommandRenderer(commandTemplate: string, commandTimeoutMs = 20 * 60_000): ImageRenderer {
+export function createCommandRenderer(
+  commandTemplate: string,
+  commandTimeoutMs = 20 * 60_000,
+  {
+    spawnProcess = spawn as SpawnRenderProcess,
+    env = process.env,
+    assetRoot = imageWorkerRoot,
+    platform = process.platform,
+    killProcess = process.kill,
+    terminationGraceMs = 5_000
+  }: {
+    spawnProcess?: SpawnRenderProcess;
+    env?: NodeJS.ProcessEnv;
+    assetRoot?: string;
+    platform?: NodeJS.Platform;
+    killProcess?: typeof process.kill;
+    terminationGraceMs?: number;
+  } = {}
+): ImageRenderer {
   return {
     async renderJob(job: ClaimedImageJob): Promise<RenderedInstagramPackage> {
       const workDir = await mkdtemp(path.join(os.tmpdir(), "brand-pilot-image-job-"));
       try {
         const jobFile = path.join(workDir, "job.json");
         const outputDir = path.join(workDir, "output");
-        await mkdir(outputDir, { recursive: true });
+        const workspaceDir = path.join(workDir, "workspace");
+        const generatedImagesDirectory = resolveGeneratedImagesDirectory(env);
+        await Promise.all([
+          mkdir(outputDir, { recursive: true }),
+          mkdir(generatedImagesDirectory, { recursive: true }),
+          stageImageRenderWorkspace(assetRoot, workspaceDir)
+        ]);
         await writeFile(jobFile, JSON.stringify(job.payload, null, 2), "utf8");
-        const command = commandTemplate.replaceAll("{{jobFile}}", jobFile).replaceAll("{{outputDir}}", outputDir);
+        const { command, args } = parseRenderCommandTemplate(commandTemplate, {
+          jobFile,
+          outputDir,
+          workspaceDir
+        });
+        if (!commandTemplate.includes("{{workspaceDir}}")) {
+          args.push("--workspace", workspaceDir);
+        }
         await new Promise<void>((resolve, reject) => {
-          const child = spawn(command, { shell: true, stdio: "inherit" });
+          const child = spawnProcess(command, args, {
+            shell: false,
+            windowsHide: true,
+            cwd: workDir,
+            detached: platform !== "win32",
+            stdio: "inherit",
+            env: buildImageWorkerChildEnvironment({
+              ...env,
+              CODEX_GENERATED_IMAGES_DIR: generatedImagesDirectory
+            })
+          });
           let settled = false;
+          let stopping = false;
+          let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+          const timeoutError = new Error("image_render_command_timeout");
+          const sendTerminationSignal = (signal: NodeJS.Signals) => {
+            void signalProcessTree(child, signal, { platform, killProcess }).catch(() => {
+              // Keep waiting for child exit rather than allowing an overlapping retry.
+            });
+          };
           const finish = (error?: Error) => {
             if (settled) return;
             settled = true;
             clearTimeout(timeout);
+            if (forceKillTimer) clearTimeout(forceKillTimer);
             error ? reject(error) : resolve();
           };
           const timeout = setTimeout(() => {
-            child.kill();
-            finish(new Error("image_render_command_timeout"));
+            if (settled || stopping) return;
+            stopping = true;
+            sendTerminationSignal("SIGTERM");
+            if (platform !== "win32") {
+              forceKillTimer = setTimeout(() => {
+                sendTerminationSignal("SIGKILL");
+              }, terminationGraceMs);
+            }
           }, commandTimeoutMs);
-          child.once("error", (error) => finish(error));
-          child.once("exit", (code) => code === 0
-            ? finish()
-            : finish(new Error(`image_render_command_failed:${code ?? "unknown"}`)));
+          child.once("error", (error) => finish(stopping ? timeoutError : error));
+          child.once("exit", (code) => {
+            if (stopping) {
+              finish(timeoutError);
+              return;
+            }
+            code === 0
+              ? finish()
+              : finish(new Error(`image_render_command_failed:${code ?? "unknown"}`));
+          });
         });
         return await loadRenderedPackage(job, outputDir);
       } finally {

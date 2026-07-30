@@ -1,6 +1,6 @@
 # 모종 Runtime Architecture
 
-작성일: 2026-07-16  
+작성일: 2026-07-30
 상태: Living document  
 적용 범위: 중앙 API, 고객 UI, PostgreSQL, 작업 큐, 콘텐츠 생성, DM 자동답변, Wiki, 크롤링, 게시 및 성과 수집
 
@@ -62,7 +62,7 @@ DM Worker Process              Content Generation Worker
   - profile refresh              - card news
   - Wiki source curation         - story
   - Wiki compilation             - reel and FFmpeg
-  - embeddings                   - artifact upload
+  - lexical retrieval            - artifact upload
   - Wiki maintenance
 ```
 
@@ -72,7 +72,9 @@ DM Worker Process              Content Generation Worker
 |---|---|---|
 | `apps/api` | 중앙 API와 로컬 스케줄러 | 예약 작업이 API 프로세스와 자원을 공유함 |
 | `apps/customer-ui` | 고객용 React UI | 운영에서는 정적 빌드로 배포해야 함 |
-| `workers/brand-pilot-dm-worker` | 동일 코드에서 `dm` 또는 `wiki` 전용 모드로 실행 | Wiki 빌드와 DM 답변이 별도 프로세스로 분리됨 |
+| `workers/brand-pilot-dm-worker` | 동일 코드에서 `dm` 또는 `wiki` 전용 모드로 실행하며 embedding 없는 lexical 검색 사용 | Wiki 빌드와 DM 답변이 별도 프로세스로 분리됨 |
+| `workers/brand-pilot-brand-intelligence-worker` | 사용자 요청 URL·업로드 근거로 브랜드 분석 초안 생성 | 확인된 버전만 Brand Core와 후속 생성에 사용 |
+| `workers/brand-pilot-content-proposal-worker` | 승인된 브랜드 컨텍스트로 콘텐츠 제안 생성 | 전용 worker token과 중앙 API lease 사용 |
 | `workers/brand-pilot-image-worker` | Instagram Story·Reel, 영상 렌더링, 기존 텍스트 작업, 업로드 | 디렉터리 이름이 실제 책임보다 좁고 이미지 작업이 지속되면 텍스트 작업이 지연될 수 있음 |
 | `workers/brand-pilot-card-news-worker` | 수동 AI 콘텐츠와 매일 자동 운영의 카드뉴스 분석·1~5장 PNG 생성 | Instagram 게시 전송은 중앙 API와 게시 큐가 수행 |
 | `workers/brand-pilot-blog-worker` | AI 콘텐츠 스튜디오 블로그 분석·HTML·대표 PNG 생성 | 외부 CMS 자동 게시는 지원하지 않음 |
@@ -137,8 +139,11 @@ DM Worker Process              Content Generation Worker
 |---|---:|---|---|---|
 | 중앙 API | 1 | 상시 | 낮음~중간 | 인증, Webhook, API, 큐 등록, 권한, 결과 검증 |
 | 스케줄러·일반 작업 워커 | 1 | 상시 | 낮음~중간 | 예약 게시, 크롤링 진입, 성과 수집, 배치 작업 등록 |
+| 브랜드 인텔리전스 워커 | 1 | profile로 필요 시 활성 | 높음 | URL·업로드 기반 브랜드 분석과 확인용 초안 생성 |
+| 제품·서비스 분석 워커 | 1 | profile로 필요 시 활성 | 높음 | 제품·서비스 분석과 타깃별 소구점 생성 |
+| 콘텐츠 제안 워커 | 1 | profile로 필요 시 활성 | 높음 | 승인된 브랜드 컨텍스트 기반 제안 생성 |
 | DM 전용 워커 | 2 | 상시 | 작업 시 높음 | Wiki 검색, Codex 답변 생성, 중앙 API 완료 보고 |
-| Wiki 전용 워커 | 1 | 상시 저우선순위 또는 야간 | 작업 시 높음 | 정제, 컴파일, 임베딩, 유지보수, 후보 Wiki 검증 |
+| Wiki 전용 워커 | 1 | 상시 저우선순위 또는 야간 | 작업 시 높음 | 정제, 컴파일, 키워드 검색 색인, 유지보수, 후보 Wiki 검증 |
 | 자동 운영 콘텐츠 워커 | 1 | 상시 폴링 | 가장 높음 | Story·Reel과 채널별 텍스트·영상 콘텐츠 생성 및 업로드 |
 | 카드뉴스 공통 워커 | 1 | 상시 폴링 | 높음 | 수동·자동 카드뉴스의 품질 브리프, 편집안, 1~5장 PNG·캡션 생성 |
 | AI 블로그 워커 | 1 | 필요 시 폴링 | 높음 | 안전한 HTML·메타 정보·대표 PNG 생성 |
@@ -146,9 +151,46 @@ DM Worker Process              Content Generation Worker
 | PostgreSQL | 1 | 상시 | 중간 | 고객 데이터, 큐, lease, Wiki, 상태, 로그 |
 | 정적 프론트 | 1 배포 | 요청 시 낮음 | 낮음 | 빌드된 React 자산 제공; Vite 개발 서버는 운영에서 사용하지 않음 |
 
-초기 운영 서버의 핵심 실행 수는 API 1개, 일반 작업 1개, DM 2개, Wiki 1개, 콘텐츠 생성 1개다. PostgreSQL과 정적 프론트는 별도 서비스로 계산한다.
+Ubuntu Compose는 worker를 자동 시작하지 않는다. API/Caddy 안전 배포가 끝난 뒤 아래 profile을 정해진 순서로 하나씩 활성화한다. 스케줄러·일반 작업 워커는 아직 중앙 API에서 분리되지 않았으므로 이 표의 목표 프로세스다. PostgreSQL과 정적 프론트는 별도 서비스로 계산한다.
+
+### 5.1 Ubuntu worker image와 service 계약
+
+릴리스 manifest는 API·Caddy 외에 아래 9개 worker image key를 모두 immutable digest로 고정한다. DM image를 서로 다른 ID로 두 번 실행하므로 Compose worker service는 10개다.
+
+| Worker image key | Profile 전용 service | 역할 |
+|---|---|---|
+| `DM_WORKER_IMAGE` | `dm-worker-1`, `dm-worker-2` | DM 답변 |
+| `WIKI_WORKER_IMAGE` | `wiki-worker-1` | Wiki 정제·컴파일 |
+| `CONTENT_PROPOSAL_WORKER_IMAGE` | `content-proposal-worker-1` | 콘텐츠 제안 |
+| `BRAND_INTELLIGENCE_WORKER_IMAGE` | `brand-intelligence-worker-1` | 브랜드 온보딩 분석 |
+| `SUBJECT_ANALYSIS_WORKER_IMAGE` | `subject-analysis-worker-1` | 제품·서비스 분석 |
+| `IMAGE_WORKER_IMAGE` | `image-worker-1` | 자동 운영 이미지·채널 콘텐츠 |
+| `CARD_NEWS_WORKER_IMAGE` | `card-news-worker-1` | 카드뉴스 |
+| `BLOG_WORKER_IMAGE` | `blog-worker-1` | 블로그 |
+| `MARKETING_WORKER_IMAGE` | `marketing-worker-1` | 마케팅 이미지·카피 |
+
+모든 worker image는 `@openai/codex@0.145.0`을 포함하고 `org.opencontainers.image.revision=<RELEASE_SHA>`를 가져야 한다. 운영 AI는 이 Codex CLI와 ChatGPT 로그인만 사용한다. 직접 OpenAI API key나 model API endpoint는 운영 계약이 아니다.
+
+호스트의 `/opt/brand-pilot/shared/codex`는 `bpdeploy:bpdeploy`, mode `0700`인 영속 writable 디렉터리이며 모든 worker에 `/codex`로 bind mount된다. `/opt/brand-pilot/shared/codex/auth.json`은 `bpdeploy:bpdeploy`, mode `0600`이어야 한다. 컨테이너는 `bpdeploy`의 실제 UID/GID로 실행하고 root filesystem은 read-only로 유지한다. 일반 임시 작업은 `/tmp` tmpfs를 사용하며, image worker의 `/codex/generated_images`만 mode `0700`, 512MB 제한의 중첩 tmpfs로 덮어 로그인 디렉터리에 생성 이미지를 남기지 않는다.
+
+### 5.2 점진 활성화 순서
+
+1. persisted ChatGPT login과 비출력 `codex login status` preflight를 확인한다.
+2. API, Caddy, 9개 worker image와 Compose 정의만 배포하고 worker profile은 모두 끈다.
+3. `brand-intelligence-worker-1`만 시작하고 실제 온보딩 작업 한 건의 `queued -> running -> completed`를 확인한다.
+4. `subject-analysis-worker-1`과 `content-proposal-worker-1`을 차례로 검증한다.
+5. `wiki-worker-1`을 먼저 검증한 뒤 `dm-worker-1`을 시작한다. 기존 원격 lease 만료를 확인한 다음에만 `dm-worker-2`를 시작한다.
+6. `image-worker-1`, `card-news-worker-1`, `blog-worker-1`, `marketing-worker-1`을 한 번에 하나씩 시작하고 각 profile의 실제 작업 완료와 재시작 복구를 확인한 뒤 다음으로 넘어간다.
+
+각 gate는 deployed SHA, API/Caddy와 9개 worker digest, profile/service의 stable worker ID, 실제 job ID, queued/running/completed 시각과 duration, heartbeat·lease 결과, rollback target SHA/digest를 남긴다. 값이 없는 항목은 `pending`으로 기록하고 배포나 사용자 온보딩 검증이 끝났다고 주장하지 않는다.
 
 ## 6. 워커 책임
+
+### 6.0 브랜드 인텔리전스 워커
+
+`brand-pilot-brand-intelligence-worker`는 사용자가 요청한 회사 분석만 처리한다. 중앙 API가 소유 URL 하나와 지원 문서 최대 5개를 안전하게 수집·정규화한 뒤 근거를 전달한다. 워커는 읽기 전용 filesystem sandbox의 Codex CLI를 사용하고, 경쟁사·시장 맥락에 한해서만 공개 웹 검색을 수행한다. DB를 직접 수정하지 않고 leased job을 worker API로 완료하거나 실패시킨다.
+
+확인된 결과는 `brand_analysis_runs`에서 버전 관리되고 호환 가능한 `brand_profiles` 필드와 정책 지식으로 동기화된다. AI 콘텐츠와 예약 콘텐츠는 활성 확인 버전만 읽으며 분석을 암묵적으로 시작하지 않는다.
 
 ### 6.1 DM 전용 워커
 
@@ -182,6 +224,7 @@ npm run dev:dm-worker:2
 - 전체 Wiki 동시 실행 기본값은 1이다.
 - 기존 활성 Wiki는 후보 Wiki 생성 중에도 계속 사용한다.
 - 후보 Wiki는 검증과 회귀 질문 평가를 통과한 뒤에만 활성화한다.
+- 활성 Wiki 검색은 embedding API 없이 브랜드 격리 lexical rank, 구문·token 겹침, title/key/alias 신호와 결정적 tie-break를 사용한다.
 - 실패 질문은 사실 원본으로 사용하지 않고 검색 개선 신호로만 사용한다.
 - 원본에 없는 사실은 자동 추가하지 않고 `wiki_issues`에 기록한다.
 
@@ -219,6 +262,8 @@ AI 콘텐츠 스튜디오의 나머지 산출물은 계약이 다르므로 별�
 | 마케팅 | `marketing` | 출력별 PNG, headline, body, CTA | `brands/{brandId}/ai-content/{generationId}/marketing/{outputId}/` |
 
 세 AI 콘텐츠 워커와 기존 콘텐츠 생성 워커는 모두 중앙 API의 `codex_cli/content` lease를 사용한다. 기본 콘텐츠 lane 동시성은 1이며 DM 예약 슬롯을 침범하지 않는다. 카드뉴스 공통 워커도 하나만 실행하므로 수동·자동 카드뉴스가 병렬로 이미지 생성되지 않는다. 처리량을 늘릴 때는 중앙 lease 상한과 공급자 rate limit을 함께 조정한다. 작업이 중단되면 `AI_CONTENT_JOB_LEASE_SECONDS` 이후 같은 작업 ID를 다시 claim하고 동일 Blob 경로에 덮어쓴다. API는 manifest 검증이 끝난 결과만 완료 처리한다.
+
+브랜드 인텔리전스, 제품·서비스 분석, 콘텐츠 제안, DM, Wiki와 네 생성 워커의 AI 실행은 모두 pinned Codex CLI를 통과한다. worker child process는 필요한 최소 환경만 전달하며 `OPENAI_API_KEY`, proxy 변수, 호스트 credential 경로를 상속하지 않는다.
 
 제품·서비스 분석 워커도 초기에는 한 프로세스만 둔다. 하나의 `brand-pilot-subject-analysis-worker`가 별도 프로세스를 늘리지 않고 `analysis`와 `appeal` 두 phase를 순차 처리한다. 입력 유형과 phase에 따라 `product-analysis.v2-ko`, `service-analysis.v2-ko`, `product-appeal.v2-ko`, `service-appeal.v2-ko` 네 프롬프트를 사용한다.
 
@@ -389,9 +434,9 @@ DM retrieval logs
 | 구성 요소 | 보유 가능 | 보유 금지 |
 |---|---|---|
 | 중앙 API | DB 연결, credential 암호화 키, Meta 앱 secret, OAuth credential | 브라우저 노출 |
-| DM 워커 | 중앙 API worker token, 제한된 Wiki DB 연결, embedding 키 | Meta access token, 앱 secret |
-| Wiki 워커 | 제한된 Wiki DB 연결, embedding 키, worker token | Meta credential |
-| 콘텐츠 생성 워커 | worker token, Blob 쓰기 토큰, 생성 모델 설정 | DB 연결, Meta credential, 서비스 role key |
+| DM 워커 | 중앙 API worker token, 제한된 Wiki DB 연결, 공유 ChatGPT login mount | Meta access token, 앱 secret, OpenAI API key |
+| Wiki 워커 | 제한된 Wiki DB 연결, worker token, 공유 ChatGPT login mount | Meta credential, embedding/model API key |
+| 기타 AI 워커 | 역할별 worker token, 필요한 경우 Blob 쓰기 토큰, 공유 ChatGPT login mount | 불필요한 DB 연결, Meta credential, 서비스 role key, 직접 model API key |
 | 고객 UI | 공개 API URL과 사용자 세션 | worker token, DB URL, service role key, 채널 access token |
 
 ## 10. 데이터베이스 마이그레이션
@@ -433,7 +478,6 @@ DM retrieval logs
 아래 항목은 목표 구조에 포함되지만 아직 구현이 완료되지 않았다.
 
 - 중앙 API에서 로컬 스케줄러 분리
-- DM용 전역 Codex 슬롯 예약
 - 후보 Wiki 회귀 평가 후 자동 활성화
 - 성공했지만 부자연스럽거나 잘못된 답변의 비동기 품질 평가
 - 동일 destination URL 중복 제거
@@ -475,8 +519,4 @@ DM retrieval logs
 - [공개 출시 전 필수 항목](PRE_LAUNCH_REQUIRED.md)
 - [Instagram DM 운영 런북](operations/instagram-dm-operations-runbook.md)
 - [콘텐츠 생성 워커 설정](IMAGE_WORKER_SETUP.md)
-# Brand intelligence worker
-
-`brand-pilot-brand-intelligence-worker` handles infrequent, user-requested company analysis jobs. The central API securely crawls one owned URL and extracts up to five supported documents before the worker receives normalized evidence. The worker runs Codex CLI with read-only filesystem access and public web search limited to competitor and market-context research. It writes no database rows directly; it completes or fails the leased job through the worker API.
-
-Confirmed results are versioned in `brand_analysis_runs`, synchronized to compatible `brand_profiles` fields, and represented as a non-direct-reply policy knowledge entry so the existing Wiki build and embedding pipeline can consume the same reviewed data. AI content and scheduled content must read only the active confirmed version and must never trigger analysis implicitly.
+- [Ubuntu 배포 런북](operations/UBUNTU_DEPLOYMENT.md)

@@ -113,7 +113,7 @@
 | OPS-HEALTH-001 | health는 DB 조회 없이 process liveness만 반환한다 | `apps/api/src/server.test.ts` :: `returns liveness without querying the database` | 수동: API process 기동 health | 사용 중 | 아니오 | active | - | `npm run test --workspace @brand-pilot/api -- server.test.ts` |
 | OPS-READY-001 | ready는 DB와 필수 dependency 준비 실패를 정직하게 반환한다 | `apps/api/src/server.test.ts` :: `returns 503 readiness when database is unavailable` | 수동: DB·worker gate별 degraded | 외부 설정 필요 | 아니오 | active | - | `npm run test --workspace @brand-pilot/api -- server.test.ts` |
 | OPS-DOCKER-001 | Docker API·Caddy가 내부 API 포트와 HTTPS 경계를 지킨다 | `scripts/deployment-contract.test.mjs` :: `only Caddy publishes host ports` | 수동: compose config와 HTTPS health | 외부 설정 필요 | 아니오 | active | - | `node --test scripts/deployment-contract.test.mjs` |
-| OPS-WORKER-COMPOSE-001 | DM·Wiki worker가 준비되지 않으면 자동응답을 활성화하지 않는다 | GAP: worker compose profile과 readiness를 함께 고정하는 후속 Task 7 증빙이 없음 | 수동: safe default에는 API·Caddy만 | 외부 설정 필요 | 아니오 | planned | - | `node --test scripts/deployment-contract.test.mjs` |
+| OPS-WORKER-COMPOSE-001 | 9개 immutable worker image와 10개 profile service를 자동 시작 없이 배포하고 공유 ChatGPT login 경계를 지킨다 | `scripts/deployment-contract.test.mjs` :: `Task 6 gives every CLI worker an isolated explicit Compose profile and writable shared login` | 수동: safe default에는 API·Caddy만 실행하고 brand intelligence부터 순차 활성화 | 배포 정의 완료·운영 활성화 pending | 아니오 | active | - | `node --test scripts/deployment-contract.test.mjs` |
 | OPS-ROLLBACK-001 | canary·promote·rollback·restore를 SHA/digest 단위로 복구한다 | `scripts/deployment-contract.test.mjs` :: `a failed promotion restores the exact current primary and Caddy release` | 수동: canary 승격과 rollback 리허설 | 외부 설정 필요 | 아니오 | active | - | `node --test scripts/deployment-contract.test.mjs` |
 | OPS-BACKUP-001 | 운영 백업을 실제 복원 시험으로 검증한다 | GAP: backup 생성과 실제 restore를 자동 증빙하는 test name이 없음 | 수동: 격리 DB restore와 행 수 비교 | 외부 설정 필요 | 아니오 | planned | - | `node --test scripts/deployment-contract.test.mjs` |
 | OPS-SECRET-001 | 비밀값을 저장소 밖 최소 권한으로 주입하고 로그에 노출하지 않는다 | `scripts/deployment-contract.test.mjs` :: `Ubuntu runbook separates administrator and bpdeploy permissions and protects incoming artifacts` | 수동: env mode·owner와 secret log 검사 | 외부 설정 필요 | 아니오 | active | - | `node --test scripts/deployment-contract.test.mjs` |
@@ -152,3 +152,12 @@
 - `planned` 13건은 이 결과로 자동 증빙 완료로 승격하지 않는다.
 - 아직 실행하지 않은 외부 게이트: Vercel preview 실제 인증·OAuth, Ubuntu Docker image digest/canary·승격·rollback, 실제 Meta 연동, 운영 canary 관찰, pilot 사용자 검증. 이 항목들은 모두 `pending`이며 이 문서는 운영 준비 완료나 배포 승인을 주장하지 않는다.
 - 로컬 production dependency audit에는 12개 취약 패키지 키(중간 3, 높음 9, 치명적 0)가 남아 있다. 출시 판단 전에 별도 보안 triage가 필요하다.
+
+## 2026-07-30 all-Codex worker 운영 상태
+
+- 운영 AI 경로는 모두 `@openai/codex@0.145.0`과 ChatGPT 로그인을 사용한다. 직접 OpenAI API key 또는 model API 호출은 운영 계약이 아니다.
+- release manifest는 worker image key 9개를 immutable digest로 요구한다. Compose는 DM 2개를 포함한 worker service 10개를 각각 독립 profile로 정의하며 첫 배포에서는 어느 profile도 자동 시작하지 않는다.
+- `/opt/brand-pilot/shared/codex`는 `bpdeploy:bpdeploy` mode `0700`의 persistent writable `/codex` mount다. `auth.json`은 같은 owner/group의 mode `0600`이다. image worker의 `/codex/generated_images`만 mode `0700`, 512MB tmpfs로 덮는다.
+- 2026-07-30 Ubuntu ChatGPT 로그인과 credential 비출력 `codex login status` 확인은 완료됐다.
+- 운영 활성화 순서는 brand intelligence 한 건 검증, subject analysis와 content proposal, Wiki, DM1·기존 원격 lease 만료·DM2, generation worker를 한 번에 하나씩 검증하는 순서다.
+- Ubuntu 배포, 실제 온보딩 QA, production worker job은 아직 완료됐다고 주장하지 않는다. production evidence는 deployed SHA, API/Caddy와 9개 worker digest, stable worker ID, job ID·상태·duration, lease/restart 결과, rollback target을 모두 채운 뒤에만 완료로 판정한다.

@@ -124,11 +124,12 @@ export async function runLocalCompiledWikiContractSmoke() {
        values($1,$2,'active',now()) returning id`,
       [ids.workspace, ids.brand],
     );
-    await database.query(
+    const sourceUnit = await database.query(
       `insert into wiki_source_units(
          workspace_id,brand_id,wiki_version_id,source_kind,source_id,unit_type,stable_key,
          title,content,content_hash,source_quote
-       ) values($1,$2,$3,'faq',$4,'faq','shipping-start',$5,$6,md5($6),$6)`,
+       ) values($1,$2,$3,'faq',$4,'faq','shipping-start',$5,$6,md5($6),$6)
+       returning id`,
       [
         ids.workspace,
         ids.brand,
@@ -138,27 +139,200 @@ export async function runLocalCompiledWikiContractSmoke() {
         "영업일 기준 이틀 안에 시작합니다.",
       ],
     );
-    const retrieved = await database.query(
-      `select source_kind,source_id,title,content
-         from wiki_source_units
-        where workspace_id=$1 and brand_id=$2 and wiki_version_id=$3
-          and content ilike '%이틀%'`,
-      [ids.workspace, ids.brand, version.rows[0].id],
+    const page = await database.query(
+      `insert into wiki_pages(
+         workspace_id,brand_id,wiki_version_id,page_type,stable_key,title,summary,
+         content_markdown,content_json,source_count,is_active
+       ) values(
+         $1,$2,$3,'faq','shipping-start',$4,$5,$6,
+         jsonb_build_object(
+           'sections',
+           jsonb_build_array(
+             jsonb_build_object(
+               'sectionKey','answer',
+               'sourceUnitIds',jsonb_build_array($7::text)
+             )
+           )
+         ),
+         1,true
+       ) returning id`,
+      [
+        ids.workspace,
+        ids.brand,
+        version.rows[0].id,
+        "배송은 언제 시작하나요?",
+        "배송 시작 안내",
+        "배송은 언제 시작하나요? 영업일 기준 이틀 안에 시작합니다.",
+        sourceUnit.rows[0].id,
+      ],
     );
-    assertTrustedCompiledWikiSources(retrieved.rows);
-    if (retrieved.rows.length !== 1 || retrieved.rows[0].source_id !== ids.faq) {
+    const chunk = await database.query(
+      `insert into wiki_page_chunks(
+         workspace_id,brand_id,wiki_version_id,wiki_page_id,chunk_index,
+         content,content_hash,enabled
+       ) values($1,$2,$3,$4,0,$5,md5($5),true)
+       returning id`,
+      [
+        ids.workspace,
+        ids.brand,
+        version.rows[0].id,
+        page.rows[0].id,
+        "배송은 언제 시작하나요? 영업일 기준 이틀 안에 시작합니다.",
+      ],
+    );
+    await database.query(
+      `insert into wiki_page_sources(
+         workspace_id,brand_id,wiki_version_id,wiki_page_id,wiki_source_unit_id,
+         section_key,source_kind,source_id,source_quote
+       ) values($1,$2,$3,$4,$5,'answer','faq',$6,$7)`,
+      [
+        ids.workspace,
+        ids.brand,
+        version.rows[0].id,
+        page.rows[0].id,
+        sourceUnit.rows[0].id,
+        ids.faq,
+        "영업일 기준 이틀 안에 시작합니다.",
+      ],
+    );
+    const retrieved = await database.query(
+      "select * from search_brand_wiki_lexical($1,$2,$3,$4)",
+      [ids.workspace, ids.brand, "배송 시작", 3],
+    );
+    const sourceLinkIds = [...new Set(
+      retrieved.rows.flatMap((row) => Array.isArray(row.source_link_ids) ? row.source_link_ids : []),
+    )];
+    const retrievedSources = sourceLinkIds.length
+      ? await database.query(
+        `select source_kind,source_id
+           from wiki_page_sources
+          where workspace_id=$1 and brand_id=$2 and wiki_version_id=$3
+            and id=any($4::uuid[])`,
+        [ids.workspace, ids.brand, version.rows[0].id, sourceLinkIds],
+      )
+      : { rows: [] };
+    assertTrustedCompiledWikiSources(retrievedSources.rows);
+    if (
+      retrieved.rows.length !== 1
+      || retrieved.rows[0].page_chunk_id !== chunk.rows[0].id
+      || retrievedSources.rows.length !== 1
+      || retrievedSources.rows[0].source_id !== ids.faq
+    ) {
       throw new Error("compiled_wiki_local_retrieval_failed");
     }
     const result = {
       mode: "local-contract",
       versionId: version.rows[0].id,
-      activeSourceKinds: retrieved.rows.map((source) => source.source_kind),
+      retrievalMode: "search_brand_wiki_lexical",
+      retrievedChunkCount: retrieved.rows.length,
+      activeSourceKinds: retrievedSources.rows.map((source) => source.source_kind),
       unsupportedReferenceExcluded: true,
     };
     console.log(JSON.stringify(result, null, 2));
     return result;
   } finally {
     await database.close();
+  }
+}
+
+async function loadCompiledWikiVersion(database, versionId, forUpdate = false) {
+  const version = await database.query(
+    `select id, workspace_id, brand_id, status
+       from wiki_versions
+      where id = $1::uuid
+      ${forUpdate ? "for update" : ""}`,
+    [versionId],
+  );
+  if (!version.rowCount) throw new Error("wiki_version_not_found");
+  return version.rows[0];
+}
+
+async function assertDatabaseCompiledWikiSmoke(database, version, versionId, questions) {
+  const results = [];
+  for (const question of questions) {
+    const found = await database.query(
+      `select page_type, title, source_link_ids, cosine_similarity, keyword_match, rrf_score
+         from search_brand_wiki_lexical($1::uuid, $2::uuid, $3, $4)`,
+      [version.workspace_id, version.brand_id, question, 3],
+    );
+    const sourceLinkIds = [...new Set(
+      found.rows.flatMap((row) => Array.isArray(row.source_link_ids) ? row.source_link_ids : []),
+    )];
+    if (found.rows.length && !sourceLinkIds.length) {
+      throw new Error("compiled_wiki_untrusted_source");
+    }
+    if (sourceLinkIds.length) {
+      const sources = await database.query(
+        `select source.id, source.source_kind, source.source_id
+           from wiki_page_sources source
+          where source.workspace_id = $1::uuid
+            and source.brand_id = $2::uuid
+            and source.wiki_version_id = $3::uuid
+            and source.id = any($4::uuid[])`,
+        [
+          version.workspace_id,
+          version.brand_id,
+          versionId,
+          sourceLinkIds,
+        ],
+      );
+      if (sources.rowCount !== sourceLinkIds.length) {
+        throw new Error("compiled_wiki_untrusted_source");
+      }
+      assertTrustedCompiledWikiSources(sources.rows);
+    }
+    results.push({ question, pages: found.rows });
+  }
+  const emptyQuestions = results
+    .filter((result) => result.pages.length === 0)
+    .map((result) => result.question);
+  if (emptyQuestions.length) throw new Error("compiled_wiki_smoke_empty_results");
+  return { emptyQuestions, results };
+}
+
+export async function runDatabaseCompiledWikiSmoke({
+  pool,
+  versionId,
+  activate,
+  questions,
+}) {
+  const observedVersion = await loadCompiledWikiVersion(pool, versionId);
+  if (observedVersion.status === "active") {
+    const verified = await assertDatabaseCompiledWikiSmoke(
+      pool,
+      observedVersion,
+      versionId,
+      questions,
+    );
+    return { ...verified, status: "active", activated: false };
+  }
+  if (observedVersion.status !== "ready" || !activate) {
+    throw new Error("wiki_version_not_active");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const version = await loadCompiledWikiVersion(client, versionId, true);
+    if (version.status !== "ready") throw new Error("wiki_version_not_ready");
+    const activated = await client.query(
+      "select activate_compiled_wiki_version($1::uuid) as activated",
+      [versionId],
+    );
+    if (!activated.rows[0]?.activated) throw new Error("compiled_wiki_activation_failed");
+    const verified = await assertDatabaseCompiledWikiSmoke(
+      client,
+      { ...version, status: "active" },
+      versionId,
+      questions,
+    );
+    await client.query("commit");
+    return { ...verified, status: "active", activated: true };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
   }
 }
 
@@ -171,90 +345,33 @@ export async function main() {
   const connectionString = process.env.DM_WORKER_DATABASE_URL
     || process.env.SUPABASE_DATABASE_URL
     || process.env.DATABASE_URL;
-  const apiKey = process.env.OPENAI_API_KEY;
-  const embeddingModel = process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
 
-  if (!versionId && !connectionString && !apiKey) {
+  if (!versionId && !connectionString) {
     return runLocalCompiledWikiContractSmoke();
   }
   if (!versionId) throw new Error("usage: npm run smoke:compiled-wiki -- --version=<uuid> [--activate]");
   if (!connectionString) throw new Error("DM_WORKER_DATABASE_URL_required");
-  if (!apiKey) throw new Error("OPENAI_API_KEY_required");
 
   const caCertificate = decodeCaCertificate(process.env.DB_SSL_CA_BASE64);
   const pool = new pg.Pool(resolveSmokePoolConfig(connectionString, {
     caCertificate,
   }));
 
-  async function embedding(text) {
-    const response = await fetch("https://api.openai.com/v1/embeddings", {
-      method: "POST",
-      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({ model: embeddingModel, input: text, dimensions: 1536 }),
-    });
-    const payload = await response.json();
-    const vector = payload.data?.[0]?.embedding;
-    if (!response.ok || !Array.isArray(vector) || vector.length !== 1536) {
-      throw new Error(`embedding_request_failed:${response.status}`);
-    }
-    return vector;
-  }
-
   try {
-    const version = await pool.query(
-      `select id, workspace_id, brand_id, status from wiki_versions where id = $1::uuid`,
-      [versionId],
-    );
-    if (!version.rowCount) throw new Error("wiki_version_not_found");
-    if (!["ready", "active"].includes(version.rows[0].status)) throw new Error("wiki_version_not_searchable");
     const questions = JSON.parse(await readFile(new URL("./fixtures/dm-wiki-questions.json", import.meta.url), "utf8"));
-    const results = [];
-    for (const question of questions) {
-      const vector = await embedding(question);
-      const found = await pool.query(
-        `select page_type, title, source_link_ids, cosine_similarity, keyword_match, rrf_score
-         from search_brand_compiled_wiki($1::uuid, $2::uuid, $3::uuid, $4::vector, $5, 3)`,
-        [version.rows[0].workspace_id, version.rows[0].brand_id, versionId, `[${vector.join(",")}]`, question],
-      );
-      const sourceLinkIds = [...new Set(
-        found.rows.flatMap((row) => Array.isArray(row.source_link_ids) ? row.source_link_ids : []),
-      )];
-      if (found.rows.length && !sourceLinkIds.length) {
-        throw new Error("compiled_wiki_untrusted_source");
-      }
-      if (sourceLinkIds.length) {
-        const sources = await pool.query(
-          `select source.id, source.source_kind, source.source_id
-             from wiki_page_sources source
-            where source.workspace_id = $1::uuid
-              and source.brand_id = $2::uuid
-              and source.wiki_version_id = $3::uuid
-              and source.id = any($4::uuid[])`,
-          [
-            version.rows[0].workspace_id,
-            version.rows[0].brand_id,
-            versionId,
-            sourceLinkIds,
-          ],
-        );
-        if (sources.rowCount !== sourceLinkIds.length) {
-          throw new Error("compiled_wiki_untrusted_source");
-        }
-        assertTrustedCompiledWikiSources(sources.rows);
-      }
-      results.push({ question, pages: found.rows });
-    }
-    const emptyQuestions = results.filter((result) => result.pages.length === 0).map((result) => result.question);
-    console.log(JSON.stringify({ versionId, status: version.rows[0].status, emptyQuestions, results }, null, 2));
-    if (emptyQuestions.length) throw new Error("compiled_wiki_smoke_empty_results");
-    if (activate) {
-      const activated = await pool.query(
-        "select activate_compiled_wiki_version($1::uuid) as activated",
-        [versionId],
-      );
-      if (!activated.rows[0]?.activated) throw new Error("compiled_wiki_activation_failed");
-      console.log(JSON.stringify({ versionId, activated: true }));
-    }
+    const result = await runDatabaseCompiledWikiSmoke({
+      pool,
+      versionId,
+      activate,
+      questions,
+    });
+    if (result.activated) console.log(JSON.stringify({ versionId, activated: true }));
+    console.log(JSON.stringify({
+      versionId,
+      status: result.status,
+      emptyQuestions: result.emptyQuestions,
+      results: result.results,
+    }, null, 2));
   } finally {
     await pool.end();
   }

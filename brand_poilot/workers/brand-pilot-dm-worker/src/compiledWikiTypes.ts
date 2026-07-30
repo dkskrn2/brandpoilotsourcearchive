@@ -3,6 +3,27 @@ import type { CuratedKnowledgeUnit } from "./knowledgeCurator.js";
 
 export type WikiSourceKind = "faq" | "product" | "product_service" | "service" | "policy" | "guide" | "owned_snapshot";
 
+export interface ClaimedWikiBuildItem {
+  id: string;
+  workspace_id: string;
+  brand_id: string;
+  wiki_version_id: string;
+  source_kind: WikiSourceKind;
+  source_id: string;
+}
+
+export interface WikiBuildSource {
+  source_kind: WikiSourceKind;
+  source_id: string;
+  title: string;
+  content: string;
+  content_hash: string;
+  aliases: string[];
+  keywords: string[];
+  structured_data: Record<string, string | number | null>;
+  source_url: string | null;
+}
+
 const wikiSourceKinds = new Set<WikiSourceKind>([
   "faq",
   "product",

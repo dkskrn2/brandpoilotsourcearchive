@@ -15,10 +15,24 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required_command_missing"
 }
 
+configure_codex_runtime_identity_if_available() {
+  local runtime_uid
+  local runtime_gid
+  command -v id >/dev/null 2>&1 || return 0
+  runtime_uid="$(id -u bpdeploy 2>/dev/null)" || return 0
+  runtime_gid="$(id -g bpdeploy 2>/dev/null)" || return 0
+  [[ "$runtime_uid" =~ ^[0-9]+$ && "$runtime_gid" =~ ^[0-9]+$ ]] || return 0
+  (( runtime_uid > 0 && runtime_gid > 0 )) || return 0
+  export CODEX_RUNTIME_UID="$runtime_uid"
+  export CODEX_RUNTIME_GID="$runtime_gid"
+}
+
+configure_codex_runtime_identity_if_available
+
 require_file_mode_600() {
   local file="$1"
   local expected_owner="${2:-}"
-  [[ -f "$file" ]] || fail "required_file_missing"
+  [[ -f "$file" && ! -L "$file" ]] || fail "required_file_missing"
   [[ "$(stat -c '%a' -- "$file")" == "600" ]] || fail "required_file_mode_invalid"
   if [[ -n "$expected_owner" ]]; then
     [[ "$(stat -c '%U' -- "$file")" == "$expected_owner" ]] || fail "required_file_owner_invalid"
@@ -78,6 +92,41 @@ require_digest_image() {
   local value="$1"
   [[ "$value" =~ ^[a-zA-Z0-9._-]+(:[0-9]+)?(/[a-zA-Z0-9._-]+)+@sha256:[a-f0-9]{64}$ ]] ||
     fail "image_must_be_digest_pinned"
+}
+
+readonly -a WORKER_IMAGE_KEYS=(
+  DM_WORKER_IMAGE
+  WIKI_WORKER_IMAGE
+  CONTENT_PROPOSAL_WORKER_IMAGE
+  BRAND_INTELLIGENCE_WORKER_IMAGE
+  SUBJECT_ANALYSIS_WORKER_IMAGE
+  IMAGE_WORKER_IMAGE
+  CARD_NEWS_WORKER_IMAGE
+  BLOG_WORKER_IMAGE
+  MARKETING_WORKER_IMAGE
+)
+readonly LEGACY_RELEASE_SHA="02aa2bcae3f66d494f16a26bec9055cac17464f9"
+
+require_worker_image_manifest() {
+  local required_image_key
+  for required_image_key in "${WORKER_IMAGE_KEYS[@]}"; do
+    [[ -v "RELEASE_MANIFEST[$required_image_key]" ]] ||
+      fail "worker_image_manifest_missing"
+    require_digest_image "${RELEASE_MANIFEST[$required_image_key]}"
+  done
+}
+
+verify_release_image_revision() {
+  local image="$1"
+  local expected_revision="$2"
+  local actual_revision
+  require_digest_image "$image"
+  require_release_sha "$expected_revision"
+  actual_revision="$(docker image inspect \
+    --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+    "$image" 2>/dev/null)" || fail "release_image_inspect_failed"
+  [[ "$actual_revision" == "$expected_revision" ]] ||
+    fail "release_image_revision_mismatch"
 }
 
 require_release_sha() {
@@ -165,7 +214,7 @@ parse_release_manifest() {
     key="${BASH_REMATCH[1]}"
     value="${BASH_REMATCH[2]}"
     case "$key" in
-      RELEASE_SCHEMA|RELEASE_SHA|API_IMAGE|DM_WORKER_IMAGE|WIKI_WORKER_IMAGE|CONTENT_PROPOSAL_WORKER_IMAGE|CADDY_IMAGE|CANARY_HOST|PRIMARY_HOST|ACME_EMAIL|API_ENV_FILE) ;;
+      RELEASE_SCHEMA|RELEASE_SHA|API_IMAGE|DM_WORKER_IMAGE|WIKI_WORKER_IMAGE|CONTENT_PROPOSAL_WORKER_IMAGE|BRAND_INTELLIGENCE_WORKER_IMAGE|SUBJECT_ANALYSIS_WORKER_IMAGE|IMAGE_WORKER_IMAGE|CARD_NEWS_WORKER_IMAGE|BLOG_WORKER_IMAGE|MARKETING_WORKER_IMAGE|CADDY_IMAGE|CANARY_HOST|PRIMARY_HOST|ACME_EMAIL|API_ENV_FILE) ;;
       *) fail "manifest_unknown_key" ;;
     esac
     [[ ! -v "RELEASE_MANIFEST[$key]" ]] || fail "manifest_duplicate_key"
@@ -182,7 +231,7 @@ parse_release_manifest() {
   [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "1" ]] || fail "release_schema_unsupported"
   require_release_sha "${RELEASE_MANIFEST[RELEASE_SHA]}"
   require_digest_image "${RELEASE_MANIFEST[API_IMAGE]}"
-  for optional_image_key in DM_WORKER_IMAGE WIKI_WORKER_IMAGE CONTENT_PROPOSAL_WORKER_IMAGE; do
+  for optional_image_key in "${WORKER_IMAGE_KEYS[@]}"; do
     if [[ -v "RELEASE_MANIFEST[$optional_image_key]" ]]; then
       require_digest_image "${RELEASE_MANIFEST[$optional_image_key]}"
     fi
@@ -228,6 +277,17 @@ validate_release_directory() {
     fail "release_directory_sha_mismatch"
 }
 
+validate_state_release_directory() {
+  local root="$1"
+  local release_sha="$2"
+  local validation_role="candidate"
+  require_release_sha "$release_sha"
+  if [[ "$release_sha" == "$LEGACY_RELEASE_SHA" ]]; then
+    validation_role="legacy-current"
+  fi
+  validate_release_directory "$root/releases/$release_sha" "$validation_role"
+}
+
 release_file_specs() {
   local release_directory="${1:-}"
   local validation_role="${2:-candidate}"
@@ -244,7 +304,7 @@ release_file_specs() {
     "755 scripts/promote.sh" \
     "755 scripts/rollback.sh"
   if [[ "$validation_role" != "legacy-current" ||
-        "$(basename -- "$release_directory")" != "02aa2bcae3f66d494f16a26bec9055cac17464f9" ]]; then
+        "$(basename -- "$release_directory")" != "$LEGACY_RELEASE_SHA" ]]; then
     printf '%s\n' \
       "755 scripts/backup-state.sh" \
       "755 scripts/restore-state.sh"
@@ -497,23 +557,23 @@ reconcile_transition() {
   local -a restore_compose=()
 
   if [[ "$from_current" != "NONE" ]]; then
-    validate_release_directory "$root/releases/$from_current" legacy-current
+    validate_state_release_directory "$root" "$from_current"
     current_api_image="${RELEASE_MANIFEST[API_IMAGE]}"
     current_caddy_image="${RELEASE_MANIFEST[CADDY_IMAGE]}"
     current_canary_host="${RELEASE_MANIFEST[CANARY_HOST]}"
     current_primary_host="${RELEASE_MANIFEST[PRIMARY_HOST]}"
   fi
   if [[ "$from_candidate" != "NONE" ]]; then
-    validate_release_directory "$root/releases/$from_candidate"
+    validate_state_release_directory "$root" "$from_candidate"
     candidate_api_image="${RELEASE_MANIFEST[API_IMAGE]}"
     candidate_caddy_image="${RELEASE_MANIFEST[CADDY_IMAGE]}"
     candidate_canary_host="${RELEASE_MANIFEST[CANARY_HOST]}"
     candidate_primary_host="${RELEASE_MANIFEST[PRIMARY_HOST]}"
   fi
   if [[ "$from_previous" != "NONE" ]]; then
-    validate_release_directory "$root/releases/$from_previous"
+    validate_state_release_directory "$root" "$from_previous"
   fi
-  validate_release_directory "$root/releases/${TRANSITION_JOURNAL[TO_RELEASE]}"
+  validate_state_release_directory "$root" "${TRANSITION_JOURNAL[TO_RELEASE]}"
   target_canary_host="${RELEASE_MANIFEST[CANARY_HOST]}"
   target_primary_host="${RELEASE_MANIFEST[PRIMARY_HOST]}"
 
@@ -616,13 +676,19 @@ reconcile_transition_or_fail() {
 release_preparation_fingerprint() {
   local release_directory="$1"
   local integrity_checksum
+  local worker_image_key
   integrity_checksum="$(sha256sum -- "$release_directory/release-integrity.sha256" | awk '{print $1}')"
-  printf '%s\n%s\n%s\n%s\n' \
-    "${RELEASE_MANIFEST[RELEASE_SHA]}" \
-    "${RELEASE_MANIFEST[API_IMAGE]}" \
-    "${RELEASE_MANIFEST[CADDY_IMAGE]}" \
-    "$integrity_checksum" |
-    sha256sum | awk '{print $1}'
+  {
+    printf '%s\n%s\n' \
+      "${RELEASE_MANIFEST[RELEASE_SHA]}" \
+      "${RELEASE_MANIFEST[API_IMAGE]}"
+    for worker_image_key in "${WORKER_IMAGE_KEYS[@]}"; do
+      printf '%s\n' "${RELEASE_MANIFEST[$worker_image_key]-}"
+    done
+    printf '%s\n%s\n' \
+      "${RELEASE_MANIFEST[CADDY_IMAGE]}" \
+      "$integrity_checksum"
+  } | sha256sum | awk '{print $1}'
 }
 
 write_prepared_proof() {

@@ -7,7 +7,8 @@
     "dev": "tsx src/index.ts watch",
     "run-once": "tsx src/index.ts run-once",
     "control": "tsx src/control/index.ts",
-    "build": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js watch",
     "test": "vitest run",
     "verify:reel": "node scripts/verify-reel.mjs"
   },

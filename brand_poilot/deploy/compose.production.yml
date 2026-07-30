@@ -72,11 +72,15 @@ services:
     env_file:
       - ${DM_WORKER_1_ENV_FILE:-/opt/brand-pilot/shared/env/dm-worker-1.env}
     environment:
+      CODEX_HOME: /codex
       WORKER_ID: dm-worker-1
       WORKER_MODE: dm
+    user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
     restart: unless-stopped
     init: true
     read_only: true
+    volumes:
+      - ${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex
     tmpfs:
       - /tmp:size=64m,mode=1777
     cap_drop:
@@ -97,11 +101,15 @@ services:
     env_file:
       - ${DM_WORKER_2_ENV_FILE:-/opt/brand-pilot/shared/env/dm-worker-2.env}
     environment:
+      CODEX_HOME: /codex
       WORKER_ID: dm-worker-2
       WORKER_MODE: dm
+    user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
     restart: unless-stopped
     init: true
     read_only: true
+    volumes:
+      - ${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex
     tmpfs:
       - /tmp:size=64m,mode=1777
     cap_drop:
@@ -122,11 +130,15 @@ services:
     env_file:
       - ${WIKI_WORKER_1_ENV_FILE:-/opt/brand-pilot/shared/env/wiki-worker-1.env}
     environment:
+      CODEX_HOME: /codex
       WORKER_ID: wiki-worker-1
       WORKER_MODE: wiki
+    user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
     restart: unless-stopped
     init: true
     read_only: true
+    volumes:
+      - ${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex
     tmpfs:
       - /tmp:size=64m,mode=1777
     cap_drop:
@@ -147,13 +159,189 @@ services:
     env_file:
       - ${CONTENT_PROPOSAL_WORKER_1_ENV_FILE:-/opt/brand-pilot/shared/env/content-proposal-worker-1.env}
     environment:
+      CODEX_HOME: /codex
       WORKER_ID: content-proposal-worker-1
       CONTENT_PROPOSAL_WORKER_ID: content-proposal-worker-1
+    user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
     restart: unless-stopped
     init: true
     read_only: true
+    volumes:
+      - ${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex
     tmpfs:
       - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  brand-intelligence-worker-1:
+    profiles:
+      - "brand-intelligence-worker-1"
+    image: ${BRAND_INTELLIGENCE_WORKER_IMAGE:?BRAND_INTELLIGENCE_WORKER_IMAGE is required}
+    env_file:
+      - ${BRAND_INTELLIGENCE_WORKER_1_ENV_FILE:-/opt/brand-pilot/shared/env/brand-intelligence-worker-1.env}
+    environment:
+      CODEX_HOME: /codex
+      BRAND_INTELLIGENCE_WORKER_ID: brand-intelligence-worker-1
+    user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    volumes:
+      - ${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  subject-analysis-worker-1:
+    profiles:
+      - "subject-analysis-worker-1"
+    image: ${SUBJECT_ANALYSIS_WORKER_IMAGE:?SUBJECT_ANALYSIS_WORKER_IMAGE is required}
+    env_file:
+      - ${SUBJECT_ANALYSIS_WORKER_1_ENV_FILE:-/opt/brand-pilot/shared/env/subject-analysis-worker-1.env}
+    environment:
+      CODEX_HOME: /codex
+      SUBJECT_ANALYSIS_WORKER_ID: subject-analysis-worker-1
+    user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    volumes:
+      - ${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  image-worker-1:
+    profiles:
+      - "image-worker-1"
+    image: ${IMAGE_WORKER_IMAGE:?IMAGE_WORKER_IMAGE is required}
+    env_file:
+      - ${IMAGE_WORKER_1_ENV_FILE:-/opt/brand-pilot/shared/env/image-worker-1.env}
+    environment:
+      CODEX_HOME: /codex
+      WORKER_ID: image-worker-1
+    user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    volumes:
+      - ${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /codex/generated_images:rw,size=512m,mode=0700,uid=${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required},gid=${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  card-news-worker-1:
+    profiles:
+      - "card-news-worker-1"
+    image: ${CARD_NEWS_WORKER_IMAGE:?CARD_NEWS_WORKER_IMAGE is required}
+    env_file:
+      - ${CARD_NEWS_WORKER_1_ENV_FILE:-/opt/brand-pilot/shared/env/card-news-worker-1.env}
+    environment:
+      CODEX_HOME: /codex
+      CARD_NEWS_WORKER_ID: card-news-worker-1
+    user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    volumes:
+      - ${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /codex/generated_images:rw,size=512m,mode=0700,uid=${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required},gid=${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  blog-worker-1:
+    profiles:
+      - "blog-worker-1"
+    image: ${BLOG_WORKER_IMAGE:?BLOG_WORKER_IMAGE is required}
+    env_file:
+      - ${BLOG_WORKER_1_ENV_FILE:-/opt/brand-pilot/shared/env/blog-worker-1.env}
+    environment:
+      CODEX_HOME: /codex
+      BLOG_WORKER_ID: blog-worker-1
+    user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    volumes:
+      - ${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /codex/generated_images:rw,size=512m,mode=0700,uid=${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required},gid=${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  marketing-worker-1:
+    profiles:
+      - "marketing-worker-1"
+    image: ${MARKETING_WORKER_IMAGE:?MARKETING_WORKER_IMAGE is required}
+    env_file:
+      - ${MARKETING_WORKER_1_ENV_FILE:-/opt/brand-pilot/shared/env/marketing-worker-1.env}
+    environment:
+      CODEX_HOME: /codex
+      MARKETING_WORKER_ID: marketing-worker-1
+    user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    volumes:
+      - ${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /codex/generated_images:rw,size=512m,mode=0700,uid=${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required},gid=${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}
     cap_drop:
       - ALL
     security_opt:

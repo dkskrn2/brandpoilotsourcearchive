@@ -42,49 +42,28 @@ describe("compiled Wiki finalization", () => {
     expect(chunks.every((chunk) => chunk.content.length <= 800)).toBe(true);
   });
 
-  it("embeds missing chunks and completes a ready version without activating it", async () => {
+  it("stores searchable chunks without embeddings and completes validation", async () => {
     const db = {
       claimWikiValidationItem: vi.fn(async () => item),
       getWikiPagesForFinalization: vi.fn(async () => pages),
-      getReusablePageEmbeddings: vi.fn(async () => []),
       completeWikiValidationItem: vi.fn(async () => undefined),
       failWikiValidationItem: vi.fn(async () => undefined),
     };
-    const embed = vi.fn(async () => Array.from({ length: 1536 }, () => 0.1));
 
     await expect(runWikiFinalizeOnce({
       workerId: "worker-1",
       db,
-      apiKey: "key",
-      embeddingModel: "text-embedding-3-small",
-      embeddingVersion: "v1",
-      embed,
     })).resolves.toEqual({ status: "ready", itemId: "item-1", chunkCount: 2 });
 
-    expect(embed).toHaveBeenCalledTimes(2);
-    expect(db.completeWikiValidationItem).toHaveBeenCalledTimes(1);
-  });
-
-  it("reuses a matching embedding", async () => {
-    const db = {
-      claimWikiValidationItem: vi.fn(async () => item),
-      getWikiPagesForFinalization: vi.fn(async () => pages.slice(0, 1)),
-      getReusablePageEmbeddings: vi.fn(async (_brandId: string, hashes: string[]) => [{
-        contentHash: hashes[0],
-        embedding: Array.from({ length: 1536 }, () => 0.2),
-      }]),
-      completeWikiValidationItem: vi.fn(async () => undefined),
-      failWikiValidationItem: vi.fn(async () => undefined),
-    };
-    const embed = vi.fn();
-    await runWikiFinalizeOnce({
-      workerId: "worker-1",
-      db,
-      apiKey: "key",
-      embeddingModel: "text-embedding-3-small",
-      embeddingVersion: "v1",
-      embed,
-    });
-    expect(embed).not.toHaveBeenCalled();
+    const [, chunks] = db.completeWikiValidationItem.mock.calls[0]!;
+    expect(chunks).toHaveLength(2);
+    expect(chunks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        pageId: "page-1",
+        chunkIndex: 0,
+        content: "## 소개\n\n브랜드 설명",
+      }),
+    ]));
+    expect(chunks.every((chunk) => !("embedding" in chunk))).toBe(true);
   });
 });

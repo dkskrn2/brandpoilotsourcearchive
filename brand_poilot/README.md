@@ -12,6 +12,10 @@
 - `apps/customer-ui`: React/Vite 고객 UI
 - `workers/brand-pilot-image-worker`: 별도 PC에서도 실행할 수 있는 콘텐츠 생성 워커와 로컬 제어 앱. 디렉터리 이름은 기존 이름이며 텍스트·이미지·영상 콘텐츠를 처리함
 - `workers/brand-pilot-dm-worker`: Instagram DM 답변과 브랜드별 Wiki 작업 워커. `dm`과 `wiki` 실행 모드를 별도 프로세스로 운영함
+- `workers/brand-pilot-brand-intelligence-worker`: URL·업로드 근거를 사용하는 브랜드 온보딩 분석 워커
+- `workers/brand-pilot-subject-analysis-worker`: 제품·서비스 분석과 소구점 생성 워커
+- `workers/brand-pilot-content-proposal-worker`: 콘텐츠 제안 생성 워커
+- `workers/brand-pilot-card-news-worker`, `brand-pilot-blog-worker`, `brand-pilot-marketing-worker`: 산출물 유형별 생성 워커
 - `db`: PostgreSQL 마이그레이션, 스모크 테스트, 로컬 DB 안내
 - `docs`: 제품 명세, 배포·운영 절차, 출시 체크리스트
 
@@ -87,7 +91,7 @@ npm run worker:control
 
 워커를 전용 PC에 설치하거나 제어 앱을 사용할 때는 [워커 README](workers/brand-pilot-image-worker/README.md)와 [콘텐츠 생성 워커 설정](docs/IMAGE_WORKER_SETUP.md)을 따르세요. 문서 파일명과 코드 디렉터리명에는 기존 `image-worker` 명칭이 남아 있습니다.
 
-Instagram DM 자동답변 워커는 콘텐츠 생성 워커와 별도 프로세스로 실행합니다. `DM_WORKER_DATABASE_URL`은 Wiki 검색과 갱신에만 쓰며 Meta access token은 넣지 않습니다. DM과 Wiki는 한 프로세스에서 병렬 실행하지 않습니다.
+Instagram DM 자동답변 워커는 콘텐츠 생성 워커와 별도 프로세스로 실행합니다. `DM_WORKER_DATABASE_URL`은 Wiki의 브랜드 격리 키워드 검색과 갱신에만 쓰며 Meta access token은 넣지 않습니다. DM과 Wiki는 한 프로세스에서 병렬 실행하지 않습니다.
 
 ```powershell
 # DM 큐를 서로 다른 ID로 폴링
@@ -175,6 +179,10 @@ GitHub `dkskrn2/main`의 `main` 브랜치가 유일한 source of truth입니다.
 
 Frontend-only, server-only, migration 포함 릴리스의 명령과 rollback 경계는 [개발 및 릴리스 흐름](docs/operations/DEVELOPMENT_AND_RELEASE_FLOW.md)을 따르세요. Ubuntu의 `/opt/brand-pilot/shared/env`는 Git 및 image pull과 분리하며, `latest` 단독 배포는 금지합니다.
 
+운영 AI 실행은 모두 `@openai/codex@0.145.0`으로 고정된 Codex CLI와 Ubuntu의 단일 ChatGPT 로그인으로 수행합니다. 직접 OpenAI API key를 요구하거나 model API를 호출하는 운영 경로는 없습니다. 로그인 상태는 `/opt/brand-pilot/shared/codex`를 컨테이너의 writable `/codex`로 mount해 공유하고, worker root filesystem과 일반 작업 공간은 read-only/tmpfs 경계에 둡니다.
+
+릴리스에는 9개 worker image key와 10개 profile 전용 worker service(DM 2개 포함)가 들어가지만 첫 배포에서 자동 시작하지 않습니다. 2026-07-30 Ubuntu ChatGPT 로그인과 비출력 상태 검사는 완료됐습니다. 이는 worker 배포 또는 실제 온보딩 QA 완료를 뜻하지 않습니다. image digest, profile별 점진 활성화, 인증 권한과 증빙 형식은 [Ubuntu 배포 런북](docs/operations/UBUNTU_DEPLOYMENT.md)을 따르세요.
+
 ## 선택적 로컬 PostgreSQL
 
 Docker가 준비된 경우 로컬 PostgreSQL을 시작하거나 중지할 수 있습니다.
@@ -258,7 +266,7 @@ npm run verify:reel --workspace @brand-pilot/image-worker
 - 고객 UI: `VITE_API_BASE_URL`, `VITE_AUTH_DESTINATION`, `VITE_META_TRENDS_CONNECT_URL` (로컬 UI에서 Meta 트렌드 OAuth를 시작할 때 배포된 HTTPS API의 `/auth/meta/trends/start` 사용)
 - 콘텐츠 생성 워커(코드 경로 `brand-pilot-image-worker`): `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, `WORKER_ID`, `WORKER_RESOURCE_POLL_INTERVAL_MS`, `WORKER_RESOURCE_HEARTBEAT_INTERVAL_MS`, `BLOB_READ_WRITE_TOKEN`, `IMAGE_PROVIDER`, `IMAGE_RENDER_COMMAND`, `IMAGE_JOB_TIMEOUT_MS`, `IMAGE_MODEL`, `IMAGE_RETRY_DELAY_MS`, `POLL_INTERVAL_MS`, `HEARTBEAT_INTERVAL_MS`, `WORKER_CONTROL_PORT`, `PYTHON`, `CODEX_HOME`, `CODEX_COMMAND`, `APPDATA`, `NODE_ENV`
 - 제품·서비스 분석 워커: `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, `SUBJECT_ANALYSIS_WORKER_ID`, `SUBJECT_ANALYSIS_POLL_MS`, `SUBJECT_ANALYSIS_LEASE_SECONDS`, `SUBJECT_ANALYSIS_HEARTBEAT_MS`, `SUBJECT_ANALYSIS_API_TIMEOUT_MS`, `SUBJECT_ANALYSIS_CODEX_TIMEOUT_MS`, `SUBJECT_ANALYSIS_CODEX_COMMAND`, `SUBJECT_ANALYSIS_CODEX_MODEL`, `SUBJECT_ANALYSIS_CODEX_REASONING_EFFORT`, `SUBJECT_ANALYSIS_CODEX_FAST_MODE`
-- DM/Wiki 워커: `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, `DM_WORKER_DATABASE_URL`, `WORKER_MODE`, `WORKER_ID`, `POLL_INTERVAL_MS`, `HEARTBEAT_INTERVAL_MS`, `WORKER_RESOURCE_POLL_INTERVAL_MS`, `WORKER_RESOURCE_HEARTBEAT_INTERVAL_MS`, `DM_CLI_TIMEOUT_MS`, `KNOWLEDGE_CURATOR_TIMEOUT_MS`, `WIKI_CODEX_MODEL`, `WIKI_CODEX_TIMEOUT_MS`, `DM_PROFILE_REFRESH_AFTER_HOURS`, `OPENAI_API_KEY`, `OPENAI_EMBEDDING_MODEL`
+- DM/Wiki 워커: `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, `DM_WORKER_DATABASE_URL`, `DB_SSL_CA_BASE64`, `WORKER_MODE`, `WORKER_ID`, `POLL_INTERVAL_MS`, `HEARTBEAT_INTERVAL_MS`, `WORKER_RESOURCE_POLL_INTERVAL_MS`, `WORKER_RESOURCE_HEARTBEAT_INTERVAL_MS`, `DM_CLI_TIMEOUT_MS`, `DM_CODEX_MODEL`, `DM_CODEX_REASONING_EFFORT`, `DM_CODEX_FAST_MODE`, `KNOWLEDGE_CURATOR_TIMEOUT_MS`, `WIKI_CODEX_MODEL`, `WIKI_CODEX_REASONING_EFFORT`, `WIKI_CODEX_FAST_MODE`, `WIKI_CODEX_TIMEOUT_MS`, `DM_PROFILE_REFRESH_AFTER_HOURS`
 
 Rollout 기준은 Feed 활성 유지, Story capability 확인 후 활성화, Reel은 Python/FFmpeg와 비공개 계정 E2E 통과 후 활성화 순서입니다. 고객에게 Meta access token 입력을 요구하지 않으며, OAuth로 획득한 credential은 중앙 API가 암호화 저장합니다.
 

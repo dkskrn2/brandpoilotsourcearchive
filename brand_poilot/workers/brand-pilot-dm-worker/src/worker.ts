@@ -1,6 +1,5 @@
 import type { ClaimedDmJob } from "./client.js";
 import type { CompiledWikiSearchPacket } from "./compiledWikiTypes.js";
-import { createEmbedding } from "./embeddings.js";
 import { buildDmPrompt } from "./prompts.js";
 
 export type DmReasonCode =
@@ -34,7 +33,7 @@ export interface DmWorkerClient {
 }
 
 export interface DmWorkerDb {
-  searchCompiledWiki(workspaceId: string, brandId: string, question: string, embedding: number[]): Promise<CompiledWikiSearchPacket | null>;
+  searchCompiledWiki(workspaceId: string, brandId: string, question: string): Promise<CompiledWikiSearchPacket | null>;
   conversationHistory(workspaceId: string, brandId: string, conversationId: string): Promise<Array<{ direction: string; body: string | null }>>;
   recordCompiledWikiRetrieval?(input: {
     workspaceId: string;
@@ -126,6 +125,9 @@ export function validateResult(value: unknown, packet?: CompiledWikiSearchPacket
   if (typeof candidate.needsAttention !== "boolean") {
     throw new Error("dm_needs_attention_invalid");
   }
+  if (packet && knowledgeEntryId !== null) {
+    throw new Error("dm_knowledge_entry_not_provided");
+  }
 
   if (decision === "answer") {
     if (wikiChunkIds.length === 0 && knowledgeEntryId === null) {
@@ -199,11 +201,8 @@ export async function runDmWorkerOnce({
   workerId,
   api,
   db,
-  apiKey,
-  embeddingModel = "text-embedding-3-small",
   runtimeDirectory,
   timeoutMs = 10_000,
-  embed = createEmbedding,
   withCodexLease,
   heartbeatIntervalMs = 5_000,
   runCodex,
@@ -211,11 +210,8 @@ export async function runDmWorkerOnce({
   workerId: string;
   api: DmWorkerClient;
   db: DmWorkerDb;
-  apiKey: string;
-  embeddingModel?: string;
   runtimeDirectory: string;
   timeoutMs?: number;
-  embed?: typeof createEmbedding;
   withCodexLease?: <T>(task: () => Promise<T>, onWait: () => Promise<unknown>) => Promise<T>;
   heartbeatIntervalMs?: number;
   runCodex: (input: { prompt: string; runtimeDirectory: string; timeoutMs: number }) => Promise<unknown>;
@@ -259,8 +255,7 @@ export async function runDmWorkerOnce({
     }
 
     const retrievalStartedAt = Date.now();
-    const embedding = await embed({ text: job.payload.question, apiKey, model: embeddingModel });
-    const packet = await db.searchCompiledWiki(job.workspaceId, job.brandId, job.payload.question, embedding);
+    const packet = await db.searchCompiledWiki(job.workspaceId, job.brandId, job.payload.question);
     const retrievalLatencyMs = Date.now() - retrievalStartedAt;
     if (!packet || (!packet.brandCore && packet.chunks.length === 0)) {
       const result = fixedFallbackResult("knowledge_gap");
@@ -291,7 +286,7 @@ export async function runDmWorkerOnce({
     return { status: "completed" as const, jobId: job.id, decision: result.decision };
   } catch (error) {
     const message = error instanceof Error ? error.message : "dm_worker_unknown_error";
-    const retryable = message === "fetch failed" || /^(codex_timeout|embedding_request_failed:5|worker_api_failed:5)/.test(message);
+    const retryable = message === "fetch failed" || /^(codex_timeout|worker_api_failed:5)/.test(message);
     await api.fail(job.id, workerId, job.leaseToken, message, retryable, retryable ? 5_000 : 0);
     return { status: "failed" as const, jobId: job.id };
   } finally {

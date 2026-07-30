@@ -1,8 +1,8 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
   ContentProposalApiError,
   createContentProposalApiClient,
-  createOpenAiContentProposalModel,
 } from "./client.js";
 import { parseContentProposalJob } from "./contracts.js";
 
@@ -126,27 +126,18 @@ describe("content proposal clients", () => {
     });
   });
 
-  it("requests strict 2-3 proposal JSON and extracts the model response", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({
-      output: [{ content: [{ type: "output_text", text: JSON.stringify(proposals) }] }],
-    }), { status: 200 }));
-    const fetchImpl = fetchMock as unknown as typeof fetch;
-    const model = createOpenAiContentProposalModel("openai-key", "proposal-model", fetchImpl);
+  it("keeps the API client while startup uses only Codex CLI model configuration", async () => {
+    const [clientSource, mainSource] = await Promise.all([
+      readFile(new URL("./client.ts", import.meta.url), "utf8"),
+      readFile(new URL("./main.ts", import.meta.url), "utf8"),
+    ]);
 
-    await expect(model.generate("frozen prompt")).resolves.toEqual(proposals);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.openai.com/v1/responses",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({ authorization: "Bearer openai-key" }),
-      }),
-    );
-    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
-    expect(body).toMatchObject({
-      model: "proposal-model",
-      input: "frozen prompt",
-      text: { format: { type: "json_schema", strict: false } },
-    });
-    expect(body.text.format.schema).toMatchObject({ type: "array", minItems: 2, maxItems: 3 });
+    expect(clientSource).not.toContain("api.openai.com");
+    expect(clientSource).not.toContain("createOpenAiContentProposalModel");
+    expect(mainSource).not.toContain("OPENAI_API_KEY");
+    expect(mainSource).toContain("createCodexContentProposalModel");
+    expect(mainSource).toContain("CONTENT_PROPOSAL_CODEX_COMMAND");
+    expect(mainSource).toContain("CONTENT_PROPOSAL_CODEX_MODEL");
+    expect(mainSource).toContain("CONTENT_PROPOSAL_CODEX_TIMEOUT_MS");
   });
 });

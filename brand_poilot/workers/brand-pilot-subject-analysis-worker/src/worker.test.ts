@@ -175,11 +175,18 @@ describe("subject analysis worker", () => {
     temporaryDirectories.push(root);
     const skillPath = path.join(root, "SKILL.md");
     await writeFile(skillPath, "# subject-analysis runtime skill\n", "utf8");
-    const spawnProcess = vi.fn(async (_command: string, args: string[], _timeoutMs: number, env?: NodeJS.ProcessEnv) => {
+    const spawnProcess = vi.fn(async (
+      _command: string,
+      args: string[],
+      _timeoutMs: number,
+      env?: NodeJS.ProcessEnv,
+      cwd?: string,
+    ) => {
       const runtimeDirectory = args.find((arg) => arg.startsWith("--runtime-dir="))!.slice("--runtime-dir=".length);
       const outputFile = args.find((arg) => arg.startsWith("--output-file="))!.slice("--output-file=".length);
       expect(await readFile(path.join(runtimeDirectory, ".agents", "skills", "subject-analysis", "SKILL.md"), "utf8")).toContain("runtime skill");
       expect(env).not.toHaveProperty("DATABASE_URL");
+      expect(cwd).toBe(runtimeDirectory);
       await writeFile(outputFile, JSON.stringify(validResult()), "utf8");
     });
     const runner = createCodexRunner({ runtimeRoot: path.join(root, "runtime"), skillPath, spawnProcess });
@@ -250,6 +257,35 @@ describe("subject analysis worker", () => {
   });
 
   it("passes only allowlisted environment variables to Codex", () => {
-    expect(buildSubjectAnalysisChildEnv({ PATH: "bin", CODEX_HOME: "codex", DATABASE_URL: "secret", WORKER_API_TOKEN: "secret" })).toEqual({ PATH: "bin", CODEX_HOME: "codex" });
+    expect(buildSubjectAnalysisChildEnv({
+      PATH: "bin",
+      CODEX_HOME: "codex",
+      DATABASE_URL: "secret",
+      WORKER_API_TOKEN: "secret",
+      OPENAI_API_KEY: "openai-secret",
+      HTTP_PROXY: "http://proxy-secret",
+      HTTPS_PROXY: "http://proxy-secret",
+      ALL_PROXY: "http://proxy-secret",
+    })).toEqual({ PATH: "bin", CODEX_HOME: "codex" });
+  });
+
+  it("runs Codex from the isolated job workspace without API-key authentication", async () => {
+    const script = await readFile(
+      new URL("../scripts/run-codex-subject-analysis.mjs", import.meta.url),
+      "utf8",
+    );
+    expect(script).toContain('"--strict-config"');
+    expect(script).toContain('"default_permissions=\\"worker\\""');
+    expect(script).toContain('"permissions.worker.filesystem={\\":minimal\\"=\\"read\\",\\"/codex\\"=\\"deny\\",\\":workspace_roots\\"={\\".\\"=\\"read\\"}}"');
+    expect(script).toContain('"permissions.worker.network.enabled=false"');
+    expect(script).toContain('"--disable", "shell_tool"');
+    expect(script).toContain('"--disable", "shell_snapshot"');
+    expect(script).toContain('"--disable", "image_generation"');
+    expect(script).not.toContain('"--sandbox"');
+    expect(script).toContain("cwd: runtimeDir");
+    expect(script).not.toContain("OPENAI_API_KEY");
+    expect(script).not.toContain("HTTP_PROXY");
+    expect(script).not.toContain("HTTPS_PROXY");
+    expect(script).not.toContain("ALL_PROXY");
   });
 });

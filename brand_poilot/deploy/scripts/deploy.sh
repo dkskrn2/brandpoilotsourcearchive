@@ -23,6 +23,7 @@ flock -n 9 || fail "deploy_lock_busy"
 reconcile_transition_or_fail "$ROOT" "$READY_TIMEOUT_SECONDS"
 
 validate_release_manifest "$MANIFEST"
+require_worker_image_manifest
 RELEASE_SHA="${RELEASE_MANIFEST[RELEASE_SHA]}"
 CANDIDATE_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
 RELEASE_DIR="$ROOT/releases/$RELEASE_SHA"
@@ -71,6 +72,7 @@ else
 fi
 
 validate_release_directory "$RELEASE_DIR"
+require_worker_image_manifest
 CANDIDATE_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
 require_digest_image "$CANDIDATE_API_IMAGE"
 CANDIDATE_CANARY_HOST="${RELEASE_MANIFEST[CANARY_HOST]}"
@@ -88,6 +90,15 @@ fi
 export PRIMARY_API_IMAGE="$CURRENT_API_IMAGE"
 export CANDIDATE_API_IMAGE
 export CADDY_IMAGE="${RELEASE_MANIFEST[CADDY_IMAGE]}"
+export DM_WORKER_IMAGE="${RELEASE_MANIFEST[DM_WORKER_IMAGE]}"
+export WIKI_WORKER_IMAGE="${RELEASE_MANIFEST[WIKI_WORKER_IMAGE]}"
+export CONTENT_PROPOSAL_WORKER_IMAGE="${RELEASE_MANIFEST[CONTENT_PROPOSAL_WORKER_IMAGE]}"
+export BRAND_INTELLIGENCE_WORKER_IMAGE="${RELEASE_MANIFEST[BRAND_INTELLIGENCE_WORKER_IMAGE]}"
+export SUBJECT_ANALYSIS_WORKER_IMAGE="${RELEASE_MANIFEST[SUBJECT_ANALYSIS_WORKER_IMAGE]}"
+export IMAGE_WORKER_IMAGE="${RELEASE_MANIFEST[IMAGE_WORKER_IMAGE]}"
+export CARD_NEWS_WORKER_IMAGE="${RELEASE_MANIFEST[CARD_NEWS_WORKER_IMAGE]}"
+export BLOG_WORKER_IMAGE="${RELEASE_MANIFEST[BLOG_WORKER_IMAGE]}"
+export MARKETING_WORKER_IMAGE="${RELEASE_MANIFEST[MARKETING_WORKER_IMAGE]}"
 
 START_CADDY=false
 if [[ -z "$CURRENT_SHA" && -z "$PREVIOUS_CANDIDATE_SHA" ]]; then
@@ -106,10 +117,7 @@ else
   "${compose[@]}" pull api-canary
 fi
 
-OCI_REVISION="$(docker image inspect \
-  --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
-  "$CANDIDATE_API_IMAGE")"
-[[ "$OCI_REVISION" == "$RELEASE_SHA" ]] || fail "api_image_revision_mismatch"
+verify_release_image_revision "$CANDIDATE_API_IMAGE" "$RELEASE_SHA"
 
 state_value_or_none "$ROOT/state/current" TRANSITION_CURRENT
 state_value_or_none "$ROOT/state/candidate" TRANSITION_CANDIDATE

@@ -1,17 +1,16 @@
 import {
   buildCompiledSourceUnits,
   directWikiUnitType,
+  type ClaimedWikiBuildItem,
   type CompiledWikiSourceUnit,
+  type WikiBuildSource,
 } from "./compiledWikiTypes.js";
 import { curateKnowledge, type CuratedKnowledgeUnit } from "./knowledgeCurator.js";
 import { isTrustedDmKnowledgeSource, normalizeKnowledgeSource } from "./knowledgeNormalizer.js";
-import type { ClaimedWikiBuildItem, WikiBuildSource } from "./wikiRefresh.js";
 
 export interface CompiledWikiSourceDb {
   claimWikiBuildItem(workerId: string, versions: {
     curatorPromptVersion: string;
-    embeddingModel: string;
-    embeddingVersion: string;
   }): Promise<ClaimedWikiBuildItem | null>;
   getWikiBuildSource(item: ClaimedWikiBuildItem): Promise<WikiBuildSource>;
   completeWikiSourceItem(
@@ -58,16 +57,12 @@ export async function runCompiledWikiSourceItemOnce(input: {
   workerId: string;
   db: CompiledWikiSourceDb;
   curatorPromptVersion: string;
-  embeddingModel: string;
-  embeddingVersion: string;
   runtimeDirectory: string;
   curatorTimeoutMs?: number;
   runCodex: (input: { prompt: string; runtimeDirectory: string; timeoutMs: number }) => Promise<unknown>;
 }) {
   const item = await input.db.claimWikiBuildItem(input.workerId, {
     curatorPromptVersion: input.curatorPromptVersion,
-    embeddingModel: input.embeddingModel,
-    embeddingVersion: input.embeddingVersion,
   });
   if (!item) return { status: "idle" as const };
 

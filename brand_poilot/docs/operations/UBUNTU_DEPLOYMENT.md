@@ -1,10 +1,10 @@
-# Brand Pilot Ubuntu API deployment
+# Brand Pilot Ubuntu API and worker deployment
 
-This runbook moves only the Brand Pilot **API + Caddy only** runtime to one
-Ubuntu host. It assumes there are **no external customers** and no continuity
-critical webhook traffic yet. The first release runs no db:migrate, no worker,
-no scheduler, and no publication. Keep the current Vercel API available for at
-least **48 hours** as the rollback target.
+This runbook moves the Brand Pilot API/Caddy runtime and immutable worker image
+definitions to one Ubuntu host. It assumes there are **no external customers**
+and no continuity-critical webhook traffic yet. The first release starts only
+API + Caddy: no db:migrate, worker profile, scheduler, or publication. Keep the
+current Vercel API available for at least **48 hours** as the rollback target.
 
 LM Studio is not used. Tailscale is the **management plane only** for private
 SSH, code transfer, and operations: **private SSH, never public ingress**. Do
@@ -59,12 +59,17 @@ The fixed first-move controls are:
 LOCAL_SCHEDULER_ENABLED=false
 INSTAGRAM_PUBLISH_ENABLED=false
 AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED=false
+AUTOMATED_CONTENT_ENABLED=false
+CONTENT_PROPOSALS_ENABLED=false
+DM_WORKERS_ENABLED=false
 DEV_AUTH_ENABLED=false
 DB_POOL_MAX=3
 ```
 
-No worker process is installed in this runbook. Worker, scheduler, publication,
-and database schema changes remain out of scope.
+The release contains 9 digest-pinned worker image keys and 10 profile-only
+worker services, but no worker starts with the API/Caddy deployment. Section 13
+is a separate, operator-controlled activation gate. Scheduler, publication, and
+database schema changes remain out of scope until their own approvals.
 
 Keep the frontend and API DNS owners separate. `app.danbammsg.co.kr` remains a
 Vercel custom domain. `api.danbammsg.co.kr` and
@@ -287,6 +292,7 @@ Expected directories:
 /opt/brand-pilot/state                0700 bpdeploy:bpdeploy
 /opt/brand-pilot/shared               0700 bpdeploy:bpdeploy
 /opt/brand-pilot/shared/env           0700 bpdeploy:bpdeploy
+/opt/brand-pilot/shared/codex         0700 bpdeploy:bpdeploy
 ```
 
 ## 6. Source and production environment
@@ -364,7 +370,7 @@ Do not copy a development `.env` wholesale. Do not add `api.env` to Git.
 
 ### Shared environment ownership and release boundary
 
-The operator, not an image or release script, creates the five fixed production
+The operator, not an image or release script, creates the eleven fixed production
 environment files:
 
 ```text
@@ -373,6 +379,12 @@ environment files:
 /opt/brand-pilot/shared/env/dm-worker-2.env
 /opt/brand-pilot/shared/env/wiki-worker-1.env
 /opt/brand-pilot/shared/env/content-proposal-worker-1.env
+/opt/brand-pilot/shared/env/brand-intelligence-worker-1.env
+/opt/brand-pilot/shared/env/subject-analysis-worker-1.env
+/opt/brand-pilot/shared/env/image-worker-1.env
+/opt/brand-pilot/shared/env/card-news-worker-1.env
+/opt/brand-pilot/shared/env/blog-worker-1.env
+/opt/brand-pilot/shared/env/marketing-worker-1.env
 ```
 
 `/opt/brand-pilot/shared/env` must remain owner `bpdeploy`, mode 700. Every file
@@ -389,6 +401,18 @@ install -m 0600 deploy/env/wiki-worker.env.example \
   /opt/brand-pilot/shared/env/wiki-worker-1.env
 install -m 0600 deploy/env/content-proposal-worker.env.example \
   /opt/brand-pilot/shared/env/content-proposal-worker-1.env
+install -m 0600 deploy/env/brand-intelligence-worker.env.example \
+  /opt/brand-pilot/shared/env/brand-intelligence-worker-1.env
+install -m 0600 deploy/env/subject-analysis-worker.env.example \
+  /opt/brand-pilot/shared/env/subject-analysis-worker-1.env
+install -m 0600 deploy/env/image-worker.env.example \
+  /opt/brand-pilot/shared/env/image-worker-1.env
+install -m 0600 deploy/env/card-news-worker.env.example \
+  /opt/brand-pilot/shared/env/card-news-worker-1.env
+install -m 0600 deploy/env/blog-worker.env.example \
+  /opt/brand-pilot/shared/env/blog-worker-1.env
+install -m 0600 deploy/env/marketing-worker.env.example \
+  /opt/brand-pilot/shared/env/marketing-worker-1.env
 chmod 700 /opt/brand-pilot/shared/env
 chmod 600 /opt/brand-pilot/shared/env/*.env
 stat -c '%a %U:%G %n' /opt/brand-pilot/shared/env \
@@ -400,6 +424,10 @@ container replacement, release installation, promotion, or rollback must never
 create, modify, or delete shared env files. Those operations may only read the
 fixed paths. Back up and restore them through a separately approved,
 secret-safe operator procedure.
+
+No worker environment file accepts `OPENAI_API_KEY`, an embedding API key, or a
+direct model endpoint. AI authentication comes only from the persisted ChatGPT
+login described below.
 
 Set `CONTENT_PROPOSAL_WORKER_API_TOKEN` to one dedicated secret in both
 `api.env` and `content-proposal-worker-1.env`. It must not reuse
@@ -418,8 +446,9 @@ do not add a temporary or arbitrary origin.
 
 The workflow
 `.github/workflows/publish-brand-pilot-server-images.yml` verifies the source,
-builds the linux/amd64 API image in CI, pushes it to GHCR, captures the immutable
-API image digest and Caddy digest, and uploads:
+builds the linux/amd64 API image and nine Codex CLI worker images in CI, pushes
+them to GHCR, captures every immutable image digest plus the Caddy digest, and
+uploads:
 
 ```text
 artifact: brand-pilot-api-release-<RELEASE_SHA>
@@ -449,8 +478,22 @@ gh run download <RUN_ID> \
 cd ./brand-pilot-release-download
 sha256sum --check release.env.sha256
 grep -Fx "RELEASE_SHA=<RELEASE_SHA>" release.env
-grep -E '^API_IMAGE=ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$' release.env
-grep -E '^CADDY_IMAGE=docker\.io/library/caddy@sha256:[0-9a-f]{64}$' release.env
+required_ghcr_images=(
+  API_IMAGE
+  DM_WORKER_IMAGE
+  WIKI_WORKER_IMAGE
+  CONTENT_PROPOSAL_WORKER_IMAGE
+  BRAND_INTELLIGENCE_WORKER_IMAGE
+  SUBJECT_ANALYSIS_WORKER_IMAGE
+  IMAGE_WORKER_IMAGE
+  CARD_NEWS_WORKER_IMAGE
+  BLOG_WORKER_IMAGE
+  MARKETING_WORKER_IMAGE
+)
+for image_key in "${required_ghcr_images[@]}"; do
+  grep -Eq "^${image_key}=ghcr\\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$" release.env
+done
+grep -Eq '^CADDY_IMAGE=docker\.io/library/caddy@sha256:[0-9a-f]{64}$' release.env
 ```
 
 Transfer exactly those two verified files to
@@ -472,7 +515,22 @@ sha256sum --check release.env.sha256
 release_sha="$(sed -n 's/^RELEASE_SHA=//p' release.env)"
 test "$release_sha" = "<RELEASE_SHA>"
 test "$(git -C /opt/brand-pilot/repo rev-parse HEAD)" = "$release_sha"
-grep -E '^(API_IMAGE|CADDY_IMAGE)=.+@sha256:[0-9a-f]{64}$' release.env
+required_image_keys=(
+  API_IMAGE
+  DM_WORKER_IMAGE
+  WIKI_WORKER_IMAGE
+  CONTENT_PROPOSAL_WORKER_IMAGE
+  BRAND_INTELLIGENCE_WORKER_IMAGE
+  SUBJECT_ANALYSIS_WORKER_IMAGE
+  IMAGE_WORKER_IMAGE
+  CARD_NEWS_WORKER_IMAGE
+  BLOG_WORKER_IMAGE
+  MARKETING_WORKER_IMAGE
+  CADDY_IMAGE
+)
+for image_key in "${required_image_keys[@]}"; do
+  grep -Eq "^${image_key}=.+@sha256:[0-9a-f]{64}$" release.env
+done
 ```
 
 The deployment script creates and verifies
@@ -494,6 +552,80 @@ unset GHCR_TOKEN
 
 Do not place the token on a command line or in a file. Revoke it when it is no
 longer required.
+
+### [bpdeploy Tailscale SSH] 7.1 Persist and verify the ChatGPT login
+
+Every production AI path uses `@openai/codex@0.145.0` in its immutable worker
+image. There is no direct OpenAI API key path. The single ChatGPT login lives
+outside Git and release directories at `/opt/brand-pilot/shared/codex`; all
+worker containers mount that writable directory at `/codex`.
+
+The directory must be `bpdeploy:bpdeploy` mode `700`. Its `auth.json` must be a
+regular, non-symlink file owned by `bpdeploy:bpdeploy` with mode `600`. The
+container runs with the same numeric UID/GID so Codex can refresh login state.
+Never copy `auth.json` into an image, archive, release, ticket, chat, or log.
+
+After the verified manifest is present and its private GHCR login is active,
+run the interactive login only when the persisted login is missing or expired:
+
+```bash
+release_manifest=/opt/brand-pilot/incoming/release.env
+brand_intelligence_image="$(sed -n 's/^BRAND_INTELLIGENCE_WORKER_IMAGE=//p' "$release_manifest")"
+test -n "$brand_intelligence_image"
+test "${brand_intelligence_image#*@sha256:}" != "$brand_intelligence_image"
+docker pull --quiet "$brand_intelligence_image" >/dev/null
+
+runtime_uid="$(id -u bpdeploy)"
+runtime_gid="$(id -g bpdeploy)"
+docker run --rm -it --network host \
+  --user "$runtime_uid:$runtime_gid" \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --pids-limit 128 \
+  --tmpfs /tmp:size=64m,mode=1777 \
+  --mount type=bind,src=/opt/brand-pilot/shared/codex,dst=/codex \
+  --env CODEX_HOME=/codex \
+  --entrypoint codex \
+  "$brand_intelligence_image" login
+```
+
+Complete the ChatGPT/Google flow in Ubuntu Chrome. Then restore and verify the
+fixed metadata without reading the credential:
+
+```bash
+runtime_uid="$(id -u bpdeploy)"
+runtime_gid="$(id -g bpdeploy)"
+chmod 700 /opt/brand-pilot/shared/codex
+chmod 600 /opt/brand-pilot/shared/codex/auth.json
+test "$(stat -c '%U:%G %a' /opt/brand-pilot/shared/codex)" = "bpdeploy:bpdeploy 700"
+test "$(stat -c '%U:%G %a' /opt/brand-pilot/shared/codex/auth.json)" = "bpdeploy:bpdeploy 600"
+
+if ! docker run --rm --pull never \
+  --user "$runtime_uid:$runtime_gid" \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --pids-limit 128 \
+  --tmpfs /tmp:size=64m,mode=1777 \
+  --mount type=bind,src=/opt/brand-pilot/shared/codex,dst=/codex \
+  --env CODEX_HOME=/codex \
+  --entrypoint codex \
+  "$brand_intelligence_image" login status >/dev/null 2>&1; then
+  printf '%s\n' 'codex_login_status=failed' >&2
+  exit 1
+fi
+printf '%s\n' 'codex_login_status=ok'
+```
+
+The deployment preflight repeats the same owner/mode checks and suppresses all
+`codex login status` output. Never diagnose login by printing, parsing, or
+grepping `auth.json`, and never run a Compose command that renders resolved
+environment values.
+
+As of 2026-07-30, this Ubuntu ChatGPT login and the non-output status check were
+completed successfully. That proves only the persisted login. Worker deployment
+and production onboarding QA remain pending.
 
 ## 8. Canary deployment
 
@@ -843,6 +975,15 @@ cd /opt/brand-pilot/repo/brand_poilot/deploy
 ./scripts/rollback.sh --previous --phase production
 ```
 
+For the first all-Codex-worker release, `state/previous` may be the signed
+legacy API-only release
+`02aa2bcae3f66d494f16a26bec9055cac17464f9`. Keep that immutable release
+directory and its original signed file set. The release validator recognizes
+that exact SHA as `legacy-current`; `rollback.sh --previous --phase production`
+still verifies its digest, revision, external `API_ENV_FILE`, host pair, and
+readiness before committing the rollback. Do not retrofit worker manifest keys
+or newer backup scripts into the legacy directory.
+
 Production rollback requires an existing current or candidate runtime state.
 When both `state/current` and `state/candidate` are absent, the script rejects
 production rollback before Docker instead of inventing a runtime baseline.
@@ -865,7 +1006,8 @@ docker compose -p brand-pilot -f "$release_dir/compose.production.yml" --env-fil
 docker compose -p brand-pilot -f "$release_dir/compose.production.yml" --env-file "$release_dir/release.env" ps
 docker inspect --format '{{.Name}} {{.Config.Image}} {{.RestartCount}} {{.State.Health.Status}}' \
   brand-pilot-api-primary-1 brand-pilot-api-canary-1 brand-pilot-caddy-1
-grep -E '^(RELEASE_SHA|API_IMAGE|CADDY_IMAGE)=' "$release_dir/release.env"
+grep -E '^(RELEASE_SHA|API_IMAGE|DM_WORKER_IMAGE|WIKI_WORKER_IMAGE|CONTENT_PROPOSAL_WORKER_IMAGE|BRAND_INTELLIGENCE_WORKER_IMAGE|SUBJECT_ANALYSIS_WORKER_IMAGE|IMAGE_WORKER_IMAGE|CARD_NEWS_WORKER_IMAGE|BLOG_WORKER_IMAGE|MARKETING_WORKER_IMAGE|CADDY_IMAGE)=' \
+  "$release_dir/release.env"
 curl --fail https://api.danbammsg.co.kr/ready
 ```
 
@@ -877,9 +1019,13 @@ sudo ss -lntp
 
 Record evidence that:
 
-- The exact `RELEASE_SHA`, `API_IMAGE`, and `CADDY_IMAGE` are immutable and
-  digest-pinned.
+- The exact `RELEASE_SHA`, `API_IMAGE`, nine worker image keys, and
+  `CADDY_IMAGE` are immutable and digest-pinned.
+- Every API and worker image has
+  `org.opencontainers.image.revision=<RELEASE_SHA>`.
 - Services are `api-primary`, `api-canary`, and `caddy`.
+- All ten worker services remain behind explicit Compose profiles until their
+  Section 13 gate.
 - Only TCP 80/443 are publicly bound by this stack.
 - `LOCAL_SCHEDULER_ENABLED=false`, `INSTAGRAM_PUBLISH_ENABLED=false`,
   `AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED=false`,
@@ -895,8 +1041,9 @@ reviewed mode-0600 source file locally and record only pass/fail evidence.
 After 48 hours, a future API release uses the same immutable artifact,
 canary verification, `--prepare`, DNS confirmation,
 `--commit --dns-cutover-confirmed`, and rollback workflow. Worker deployment
-remains a **future worker plan** covering DM1, DM2, Wiki, leases, graceful
-shutdown, and its own canary. Do not add workers to this API cutover.
+remains disabled until the separate Section 13 gates cover each worker ID,
+real job, lease, graceful shutdown, restart recovery, and rollback target. Do
+not start a worker as part of the API DNS cutover.
 
 ## 11. AI content attachment lifecycle dark launch
 
@@ -1025,3 +1172,211 @@ Rollback uses the previous immutable image digest with the same external
 Record only checksums, immutable SHAs/digests, backup identifiers, safe canary
 status, and row-count results. Never record cookies, tokens, database URLs, or
 environment plaintext.
+
+## 13. Incremental Codex worker activation
+
+This gate is separate from API DNS cutover. Do not begin it until the immutable
+API release is current, Section 7.1 login checks pass, the remote/legacy worker
+owner is known, and the rollback target is recorded. `COMPOSE_PROFILES` remains
+unset so preflight can prove that a normal deploy cannot auto-start workers.
+
+All worker root filesystems are read-only. `/opt/brand-pilot/shared/codex` is the
+one persistent writable bind mount at `/codex`; the image worker additionally
+overlays `/codex/generated_images` with a mode-0700, 512MB tmpfs so generated
+PNGs do not persist beside `auth.json`.
+
+### [bpdeploy Tailscale SSH] Prepare the immutable Compose command
+
+```bash
+unset COMPOSE_PROFILES
+release_sha="$(cat /opt/brand-pilot/state/current)"
+[[ "$release_sha" =~ ^[0-9a-f]{40}$ ]]
+release_dir="/opt/brand-pilot/releases/$release_sha"
+test -d "$release_dir"
+
+export CODEX_HOME_PATH=/opt/brand-pilot/shared/codex
+export CODEX_RUNTIME_UID="$(id -u bpdeploy)"
+export CODEX_RUNTIME_GID="$(id -g bpdeploy)"
+
+"$release_dir/scripts/preflight.sh" "$release_dir/release.env"
+
+compose=(
+  docker compose
+  -p brand-pilot
+  -f "$release_dir/compose.production.yml"
+  --env-file "$release_dir/release.env"
+)
+"${compose[@]}" config --quiet
+
+start_worker_profile() {
+  local service="$1"
+  "${compose[@]}" --profile "$service" up -d --no-deps --pull never "$service"
+  "${compose[@]}" ps "$service"
+}
+
+stop_worker_profile() {
+  local service="$1"
+  "${compose[@]}" --profile "$service" stop -t 30 "$service"
+  "${compose[@]}" --profile "$service" rm -f "$service"
+}
+```
+
+These commands never render the resolved Compose configuration or container
+environment. Review any application log locally before retaining a redacted
+job/heartbeat line. Never include cookies, tokens, DB URLs, prompts containing
+customer data, or `auth.json`.
+
+The preflight above is the initial fail-closed deployment gate. Run it before
+any rollout flag changes: `deploy.sh` and `preflight.sh` intentionally require
+`AUTOMATED_CONTENT_ENABLED`, `CONTENT_PROPOSALS_ENABLED`, and
+`DM_WORKERS_ENABLED` to be exactly `false`. Starting a profile-only worker
+requires neither a flag change nor an API redeploy.
+
+When a real job route requires one of those flags, obtain separate explicit
+operator approval for that one key. In the same shell that owns the prepared
+current-release `compose` array, update only the approved key in the external
+mode-0600 `api.env` without printing the file, then recreate only
+`api-primary` from the already-local immutable image:
+
+```bash
+rollout_flag='<APPROVED_ROLLOUT_FLAG>'
+case "$rollout_flag" in
+  AUTOMATED_CONTENT_ENABLED|CONTENT_PROPOSALS_ENABLED|DM_WORKERS_ENABLED) ;;
+  *) printf '%s\n' 'invalid_rollout_flag' >&2; exit 1 ;;
+esac
+
+api_env=/opt/brand-pilot/shared/env/api.env
+test "$(stat -c '%U:%G %a' "$api_env")" = "bpdeploy:bpdeploy 600"
+test "$(grep -Ec "^${rollout_flag}=false$" "$api_env")" = "1"
+test "$(grep -Ec '^(AUTOMATED_CONTENT_ENABLED|CONTENT_PROPOSALS_ENABLED|DM_WORKERS_ENABLED)=true$' "$api_env")" = "0"
+
+sed -i -E "s/^${rollout_flag}=false$/${rollout_flag}=true/" "$api_env"
+chmod 600 "$api_env"
+test "$(stat -c '%U:%G %a' "$api_env")" = "bpdeploy:bpdeploy 600"
+test "$(grep -Ec "^${rollout_flag}=true$" "$api_env")" = "1"
+test "$(grep -Ec '^(AUTOMATED_CONTENT_ENABLED|CONTENT_PROPOSALS_ENABLED|DM_WORKERS_ENABLED)=true$' "$api_env")" = "1"
+
+"${compose[@]}" up -d --no-deps --pull never --force-recreate api-primary
+"${compose[@]}" ps api-primary
+curl --fail --silent --show-error https://api.danbammsg.co.kr/ready >/dev/null
+```
+
+Do not run `deploy.sh` or `preflight.sh` while a rollout flag is `true`; that
+failure is intentional. Do not enable a second rollout flag. After the bounded
+job proof, or immediately if readiness or the job gate fails, restore the exact
+safe value and recreate the same current `api-primary`:
+
+```bash
+test "$(grep -Ec "^${rollout_flag}=true$" "$api_env")" = "1"
+sed -i -E "s/^${rollout_flag}=true$/${rollout_flag}=false/" "$api_env"
+chmod 600 "$api_env"
+test "$(stat -c '%U:%G %a' "$api_env")" = "bpdeploy:bpdeploy 600"
+test "$(grep -Ec "^${rollout_flag}=false$" "$api_env")" = "1"
+test "$(grep -Ec '^(AUTOMATED_CONTENT_ENABLED|CONTENT_PROPOSALS_ENABLED|DM_WORKERS_ENABLED)=false$' "$api_env")" = "3"
+
+"${compose[@]}" up -d --no-deps --pull never --force-recreate api-primary
+"${compose[@]}" ps api-primary
+curl --fail --silent --show-error https://api.danbammsg.co.kr/ready >/dev/null
+```
+
+Record only the approved key name, change/recovery timestamps, readiness
+result, and job evidence. Never record or render the rest of `api.env`. If the
+exact-false recreation does not restore readiness, continue with the signed
+production rollback procedure in Section 9.3.
+
+### 13.1 Required activation order
+
+1. Start only brand intelligence:
+
+   ```bash
+   start_worker_profile brand-intelligence-worker-1
+   ```
+
+   Submit one production onboarding URL/file job. Do not continue until its
+   stable worker ID and `queued -> running -> completed` timestamps, saved Brand
+   Core draft, re-entry behavior, duration, heartbeat, lease, and restart
+   recovery are recorded. This onboarding QA is currently `pending`.
+
+2. Start and verify subject analysis, then content proposal:
+
+   ```bash
+   start_worker_profile subject-analysis-worker-1
+   ```
+
+   Record one completed product/service analysis before running:
+
+   ```bash
+   start_worker_profile content-proposal-worker-1
+   ```
+
+   Record one completed proposal and confirm its dedicated worker token remains
+   distinct from `WORKER_API_TOKEN`.
+
+3. Start Wiki before DM:
+
+   ```bash
+   start_worker_profile wiki-worker-1
+   ```
+
+   Record an active Wiki version that retrieves grounded text with no embedding
+   API. Only then start the first DM worker:
+
+   ```bash
+   start_worker_profile dm-worker-1
+   ```
+
+   Verify `DM_WORKER_1_HEARTBEAT` and one lease. Confirm the previous remote
+   worker lease is expired and cannot claim again. Only then run:
+
+   ```bash
+   start_worker_profile dm-worker-2
+   ```
+
+4. Start generation profiles one at a time. After each command, retain one real
+   completed job and restart-recovery result before running the next command:
+
+   ```bash
+   start_worker_profile image-worker-1
+   ```
+
+   ```bash
+   start_worker_profile card-news-worker-1
+   ```
+
+   ```bash
+   start_worker_profile blog-worker-1
+   ```
+
+   ```bash
+   start_worker_profile marketing-worker-1
+   ```
+
+If any gate fails, stop only that profile with
+`stop_worker_profile <service>`, leave queued jobs intact, and diagnose before
+continuing. Do not use `docker compose down`; it would also disturb API/Caddy.
+For an application-release regression, use the signed
+`./scripts/rollback.sh --previous --phase production` path instead of composing
+around the release scripts.
+
+### 13.2 Production evidence record
+
+Keep this record secret-free. Replace no field until the corresponding command
+or real job has been observed.
+
+| Field | Required value |
+|---|---|
+| Deployed release | `RELEASE_SHA=<pending>` |
+| Immutable API/Caddy images | exact `@sha256:<pending>` references |
+| Immutable worker images | all 9 manifest keys with exact `@sha256:<pending>` references |
+| Image revision check | every API/worker `org.opencontainers.image.revision` equals deployed SHA |
+| Worker identity | profile, service name, stable worker ID, heartbeat status |
+| Job evidence | job ID, job type, `queued_at`, `running_at`, `completed_at`/failure, duration seconds |
+| Lease/restart evidence | claim owner, remote lease expiry where applicable, graceful stop, restart recovery |
+| Login method | `ChatGPT`; status pass/fail only, no credential material |
+| Rollback target | previous or signed legacy SHA and exact API/Caddy digest |
+| Product verification | Brand Core draft, saved progress, loader duration, re-entry result |
+
+The Ubuntu ChatGPT login is verified. All deployed SHA/digest, worker, job,
+duration, rollback, and product-verification fields remain `pending` until the
+incremental production rollout is actually performed. Do not call login success
+deployment success or onboarding QA.

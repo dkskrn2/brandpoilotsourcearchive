@@ -28,24 +28,62 @@ describe("resolveCodexInvocation", () => {
     })).toEqual({ command: "D:\\tools\\codex.exe", argsPrefix: [] });
   });
 
-  it("reads the creative brief from stdin instead of adding it to the command line", () => {
+  it("pins the image renderer to the strict read-only worker profile", () => {
     const args = buildCodexExecArguments({ rootDir: "C:\\worker" });
 
-    expect(args.at(-1)).toBe("-");
-    expect(args).toContain("--json");
-    expect(args).toContain("shell_tool");
-    expect(args).toContain("shell_snapshot");
+    expect(args).toEqual([
+      "exec",
+      "--ignore-user-config",
+      "--strict-config",
+      "-c",
+      "default_permissions=\"worker\"",
+      "-c",
+      "permissions.worker.filesystem={\":minimal\"=\"read\",\"/codex\"=\"deny\",\":workspace_roots\"={\".\"=\"read\"}}",
+      "-c",
+      "permissions.worker.network.enabled=false",
+      "--enable",
+      "image_generation",
+      "--disable",
+      "shell_tool",
+      "--disable",
+      "shell_snapshot",
+      "--skip-git-repo-check",
+      "--ephemeral",
+      "--json",
+      "-C",
+      "C:\\worker",
+      "-"
+    ]);
+    expect(args).not.toContain("--sandbox");
     expect(args.join(" ")).not.toContain("creative brief");
   });
 
-  it("runs Threads text in a read-only sandbox without enabling image generation", () => {
+  it("pins Threads text to the strict read-only worker profile with image tools disabled", () => {
     const args = buildCodexTextExecArguments({ rootDir: "C:\\worker" });
 
-    expect(args).toContain("--json");
-    expect(args).toContain("read-only");
-    expect(args).toContain("shell_tool");
-    expect(args).toContain("shell_snapshot");
-    expect(args.at(-1)).toBe("-");
-    expect(args).not.toContain("image_generation");
+    expect(args).toEqual([
+      "exec",
+      "--ignore-user-config",
+      "--strict-config",
+      "-c",
+      "default_permissions=\"worker\"",
+      "-c",
+      "permissions.worker.filesystem={\":minimal\"=\"read\",\"/codex\"=\"deny\",\":workspace_roots\"={\".\"=\"read\"}}",
+      "-c",
+      "permissions.worker.network.enabled=false",
+      "--disable",
+      "shell_tool",
+      "--disable",
+      "shell_snapshot",
+      "--disable",
+      "image_generation",
+      "--skip-git-repo-check",
+      "--ephemeral",
+      "--json",
+      "-C",
+      "C:\\worker",
+      "-"
+    ]);
+    expect(args).not.toContain("--sandbox");
   });
 });

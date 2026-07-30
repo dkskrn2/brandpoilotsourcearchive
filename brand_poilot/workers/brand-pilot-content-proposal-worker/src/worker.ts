@@ -1,4 +1,5 @@
-import { ContentProposalApiError, type ContentProposalModelClient } from "./client.js";
+import type { ContentProposalModelClient } from "./codexModel.js";
+import { ContentProposalApiError } from "./client.js";
 import {
   ContentProposalContractError,
   parseContentProposalResult,

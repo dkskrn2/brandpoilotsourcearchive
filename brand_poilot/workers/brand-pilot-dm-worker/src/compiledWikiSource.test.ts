@@ -41,12 +41,16 @@ describe("compiled Wiki source collection", () => {
       workerId: "worker-1",
       db: repository,
       curatorPromptVersion: "curator-v1",
-      embeddingModel: "text-embedding-3-small",
-      embeddingVersion: "v1",
       runtimeDirectory: "runtime",
       runCodex: vi.fn(),
     })).resolves.toEqual({ status: "completed", itemId: "item-1", unitCount: 1, collectionComplete: false });
 
+    expect(repository.claimWikiBuildItem).toHaveBeenCalledWith("worker-1", {
+      curatorPromptVersion: "curator-v1",
+    });
+    expect(Object.keys(repository.claimWikiBuildItem.mock.calls[0]![1]!)).toEqual([
+      "curatorPromptVersion",
+    ]);
     expect(repository.completeWikiSourceItem).toHaveBeenCalledWith(item, [expect.objectContaining({
       stableKey: "product:sku:bp-001",
       destinationUrl: "https://www.danbammsg.co.kr/product",
@@ -82,8 +86,6 @@ describe("compiled Wiki source collection", () => {
       workerId: "worker-1",
       db: repository,
       curatorPromptVersion: "curator-v1",
-      embeddingModel: "text-embedding-3-small",
-      embeddingVersion: "v1",
       runtimeDirectory: "runtime",
       runCodex: vi.fn(),
     });
@@ -127,8 +129,6 @@ describe("compiled Wiki source collection", () => {
       workerId: "worker-1",
       db: repository,
       curatorPromptVersion: "curator-v1",
-      embeddingModel: "text-embedding-3-small",
-      embeddingVersion: "v1",
       runtimeDirectory: "runtime",
       runCodex,
     });
@@ -149,8 +149,6 @@ describe("compiled Wiki source collection", () => {
       workerId: "worker-1",
       db: repository,
       curatorPromptVersion: "curator-v1",
-      embeddingModel: "text-embedding-3-small",
-      embeddingVersion: "v1",
       runtimeDirectory: "runtime",
       runCodex: vi.fn(),
     })).resolves.toEqual({ status: "failed", itemId: "item-1" });
@@ -181,8 +179,6 @@ describe("compiled Wiki source collection", () => {
       workerId: "worker-1",
       db: repository as any,
       curatorPromptVersion: "curator-v1",
-      embeddingModel: "text-embedding-3-small",
-      embeddingVersion: "v1",
       runtimeDirectory: "runtime",
       runCodex,
     })).resolves.toEqual({ status: "failed", itemId: "item-1" });

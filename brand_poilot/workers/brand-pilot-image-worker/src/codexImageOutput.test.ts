@@ -5,7 +5,12 @@ import { describe, expect, it } from "vitest";
 import { findGeneratedImages, outputImageName, parseCodexFinalMessage, parseCodexThreadId, resolveCodexGeneratedImagesDirectory } from "./codexImageOutput.mjs";
 
 describe("findGeneratedImages", () => {
-  it("uses CODEX_HOME generated_images instead of a project-local assumption", () => {
+  it("uses the dedicated generated-image directory before the CODEX_HOME fallback", () => {
+    expect(resolveCodexGeneratedImagesDirectory({
+      generatedImagesDirectory: "/codex/generated_images",
+      codexHome: "/auth/codex",
+      homeDir: "/home/worker"
+    })).toBe(path.resolve("/codex/generated_images"));
     expect(resolveCodexGeneratedImagesDirectory({ codexHome: "C:\\codex-home", homeDir: "C:\\Users\\worker" }))
       .toBe(path.join("C:\\codex-home", "generated_images"));
     expect(resolveCodexGeneratedImagesDirectory({ homeDir: "C:\\Users\\worker" }))

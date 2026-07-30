@@ -294,7 +294,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션 registry는 onboarding workflow lock 069까지 포함한다", async () => {
+test("데이터베이스 마이그레이션 registry는 embedding-free Wiki 070까지 포함한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -370,6 +370,7 @@ test("데이터베이스 마이그레이션 registry는 onboarding workflow lock
     "067_wiki_refresh_outbox.sql",
     "068_brand_core_one_draft.sql",
     "069_brand_analysis_one_open_workflow.sql",
+    "070_remove_embedding_runtime.sql",
   ]);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("059_")).length <= 1);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("060_")).length <= 1);
@@ -705,10 +706,9 @@ test("061은 대표 이미지를 우선 보존하고 avatar별 checksum 중복�
 });
 
 test("057은 Wiki source kind를 schema와 API/worker 계약 전체에서 일치시킨다", async () => {
-  const [migration, apiWiki, wikiRefresh, compiledTypes, compiledSource] = await Promise.all([
+  const [migration, apiWiki, compiledTypes, compiledSource] = await Promise.all([
     readFile("db/migrations/057_wiki_source_kinds.sql", "utf8"),
     readFile("apps/api/src/wiki.ts", "utf8"),
-    readFile("workers/brand-pilot-dm-worker/src/wikiRefresh.ts", "utf8"),
     readFile("workers/brand-pilot-dm-worker/src/compiledWikiTypes.ts", "utf8"),
     readFile("workers/brand-pilot-dm-worker/src/compiledWikiSource.ts", "utf8"),
   ]);
@@ -736,8 +736,7 @@ test("057은 Wiki source kind를 schema와 API/worker 계약 전체에서 일치
   const expectedUnion = sourceKinds.map((kind) => `"${kind}"`).join(" | ");
   for (const [name, source] of [
     ["API Wiki", apiWiki],
-    ["Wiki refresh worker", wikiRefresh],
-    ["compiled Wiki worker", compiledTypes],
+    ["compiled Wiki types", compiledTypes],
   ]) {
     assert.ok(
       source.includes(`export type WikiSourceKind = ${expectedUnion};`),

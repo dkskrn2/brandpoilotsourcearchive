@@ -543,6 +543,8 @@ describe("DM Wiki repository", () => {
     expect(sql).toContain("core.workspace_id = brand.workspace_id");
     expect(sql).toContain("core.brand_id = brand.id");
     expect(sql).toContain("version.status = 'active'");
+    expect(sql).toContain("chunk.enabled");
+    expect(sql).not.toContain("chunk.embedding");
     expect(sql).toContain("entry.status = 'legacy_projection'");
   });
 

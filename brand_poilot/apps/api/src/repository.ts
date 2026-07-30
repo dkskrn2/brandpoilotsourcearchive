@@ -6846,7 +6846,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                   select 1 from wiki_versions version
                   join wiki_page_chunks chunk on chunk.wiki_version_id = version.id
                   where version.brand_id = brand.id and version.status = 'active'
-                    and chunk.enabled and chunk.embedding is not null
+                    and chunk.enabled
                     and not exists (
                       select 1
                       from wiki_source_units unit
@@ -7109,7 +7109,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                  from wiki_versions version
                  join wiki_page_chunks chunk on chunk.wiki_version_id = version.id
                  where version.brand_id = $1 and version.status = 'active'
-                   and chunk.enabled and chunk.embedding is not null
+                   and chunk.enabled
                ) as ready`,
               [channelRow.brand_id],
             );
