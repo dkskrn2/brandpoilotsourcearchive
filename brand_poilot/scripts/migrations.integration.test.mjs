@@ -4377,7 +4377,7 @@ test("061 deterministically removes legacy duplicate avatar bytes and prevents n
   });
 });
 
-test("migration runner records forward-only 060 through 069 without changing the applied 058 checksum", async () => {
+test("migration runner records forward-only 060 through 070 without changing the applied 058 checksum", async () => {
   const migrations = await loadMigrations();
   const runnableMigrations = migrations.filter(
     (migration) => !migration.sql.startsWith("-- requires: pgvector")
@@ -4403,7 +4403,7 @@ test("migration runner records forward-only 060 through 069 without changing the
       client,
       migrations: runnableMigrations,
     });
-    assert.deepEqual(upgraded.pending.slice(-10), [
+    assert.deepEqual(upgraded.pending.slice(-11), [
       "060_content_orchestration.sql",
       "061_avatar_image_checksum_uniqueness.sql",
       "062_avatar_upload_cancellation.sql",
@@ -4414,9 +4414,10 @@ test("migration runner records forward-only 060 through 069 without changing the
       "067_wiki_refresh_outbox.sql",
       "068_brand_core_one_draft.sql",
       "069_brand_analysis_one_open_workflow.sql",
+      "070_remove_embedding_runtime.sql",
     ]);
     const recorded = await database.query(
-      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) order by id",
+      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) order by id",
       [
         "058_avatar_and_reference_libraries.sql",
         "060_content_orchestration.sql",
@@ -4429,6 +4430,7 @@ test("migration runner records forward-only 060 through 069 without changing the
         "067_wiki_refresh_outbox.sql",
         "068_brand_core_one_draft.sql",
         "069_brand_analysis_one_open_workflow.sql",
+        "070_remove_embedding_runtime.sql",
       ],
     );
     assert.deepEqual(recorded.rows, [
@@ -4475,6 +4477,10 @@ test("migration runner records forward-only 060 through 069 without changing the
       {
         id: "069_brand_analysis_one_open_workflow.sql",
         checksum: migrations.find((migration) => migration.id === "069_brand_analysis_one_open_workflow.sql")?.checksum,
+      },
+      {
+        id: "070_remove_embedding_runtime.sql",
+        checksum: migrations.find((migration) => migration.id === "070_remove_embedding_runtime.sql")?.checksum,
       },
     ]);
     const repeated = await runMigrationsWithClient({
@@ -4931,6 +4937,7 @@ test("065 direct SQL and migration runner pending-tail paths converge on lifecyc
       "067_wiki_refresh_outbox.sql",
       "068_brand_core_one_draft.sql",
       "069_brand_analysis_one_open_workflow.sql",
+      "070_remove_embedding_runtime.sql",
     ]);
     return attachmentLifecycleRowState(database, fixture);
   });
