@@ -87,6 +87,9 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+      - apparmor:runc
+      - seccomp:unconfined
+      - systempaths:unconfined
     stop_grace_period: 30s
     logging:
       driver: json-file
@@ -116,6 +119,9 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+      - apparmor:runc
+      - seccomp:unconfined
+      - systempaths:unconfined
     stop_grace_period: 30s
     logging:
       driver: json-file
@@ -145,6 +151,9 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+      - apparmor:runc
+      - seccomp:unconfined
+      - systempaths:unconfined
     stop_grace_period: 30s
     logging:
       driver: json-file
@@ -174,6 +183,9 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+      - apparmor:runc
+      - seccomp:unconfined
+      - systempaths:unconfined
     stop_grace_period: 30s
     logging:
       driver: json-file
@@ -202,6 +214,9 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+      - apparmor:runc
+      - seccomp:unconfined
+      - systempaths:unconfined
     stop_grace_period: 30s
     logging:
       driver: json-file
@@ -230,6 +245,9 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+      - apparmor:runc
+      - seccomp:unconfined
+      - systempaths:unconfined
     stop_grace_period: 30s
     logging:
       driver: json-file
@@ -259,6 +277,9 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+      - apparmor:runc
+      - seccomp:unconfined
+      - systempaths:unconfined
     stop_grace_period: 30s
     logging:
       driver: json-file
@@ -288,6 +309,9 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+      - apparmor:runc
+      - seccomp:unconfined
+      - systempaths:unconfined
     stop_grace_period: 30s
     logging:
       driver: json-file
@@ -317,6 +341,9 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+      - apparmor:runc
+      - seccomp:unconfined
+      - systempaths:unconfined
     stop_grace_period: 30s
     logging:
       driver: json-file
@@ -346,6 +373,9 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+      - apparmor:runc
+      - seccomp:unconfined
+      - systempaths:unconfined
     stop_grace_period: 30s
     logging:
       driver: json-file
