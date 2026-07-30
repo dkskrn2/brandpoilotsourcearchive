@@ -198,13 +198,20 @@ test("Codex worker images install bubblewrap for the pinned Linux sandbox", asyn
     "brand-pilot-subject-analysis-worker",
     "brand-pilot-content-proposal-worker",
     "brand-pilot-dm-worker",
+    "brand-pilot-image-worker",
+    "brand-pilot-card-news-worker",
+    "brand-pilot-blog-worker",
+    "brand-pilot-marketing-worker",
   ].map((directory) => join(workerRoot, directory, "Dockerfile"));
   const violations = [];
 
   for (const path of dockerfiles) {
     const source = await readFile(path, "utf8");
     if (!/\bapt-get install\b[^\n]*\bbubblewrap\b/.test(source)) {
-      violations.push(path);
+      violations.push(`${path}: system bubblewrap package missing`);
+    }
+    if (!/codex-resources\/bwrap \/usr\/local\/bin\/bwrap/.test(source)) {
+      violations.push(`${path}: pinned Codex bubblewrap override missing`);
     }
   }
 

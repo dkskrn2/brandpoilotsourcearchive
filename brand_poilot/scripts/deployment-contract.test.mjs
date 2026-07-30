@@ -797,7 +797,12 @@ test("optional workers use dedicated profiles, identities, env files, and harden
       `${name} must keep temporary workspaces on bounded tmpfs`,
     );
     assert.deepEqual(parseServiceList(block, "cap_drop"), ["ALL"]);
-    assert.deepEqual(parseServiceList(block, "security_opt"), ["no-new-privileges:true"]);
+    assert.deepEqual(parseServiceList(block, "security_opt"), [
+      "no-new-privileges:true",
+      "apparmor:runc",
+      "seccomp:unconfined",
+      "systempaths:unconfined",
+    ]);
     assert.match(block.text, /driver:\s+json-file/);
     assert.match(block.text, /max-size:\s+10m/);
     assert.match(block.text, /max-file:\s+"5"/);
@@ -875,7 +880,12 @@ test("Task 6 gives every CLI worker an isolated explicit Compose profile and wri
     assert.deepEqual(parseServiceList(block, "volumes"), [codexMount]);
     assert.match(block.text, /^ {4}read_only:\s+true$/m);
     assert.deepEqual(parseServiceList(block, "cap_drop"), ["ALL"]);
-    assert.deepEqual(parseServiceList(block, "security_opt"), ["no-new-privileges:true"]);
+    assert.deepEqual(parseServiceList(block, "security_opt"), [
+      "no-new-privileges:true",
+      "apparmor:runc",
+      "seccomp:unconfined",
+      "systempaths:unconfined",
+    ]);
     assert.ok(
       parseServiceList(block, "tmpfs").some((entry) => entry.startsWith("/tmp:")),
       `${name} must keep job workspaces on bounded tmpfs`,
@@ -976,9 +986,12 @@ test("Task 6 release plumbing validates every immutable worker image and the per
   assert.match(runtimeBlock, />\/dev\/null 2>&1[\s\S]*fail "codex_worker_runtime_invalid"/);
   assert.match(runtimeBlock, /permissions\.worker\.filesystem=\{":minimal"="read","\/codex"="deny",":workspace_roots"=\{"\."="write"\}\}/);
   assert.match(runtimeBlock, /permissions\.worker\.network\.enabled=false/);
+  assert.match(runtimeBlock, /--security-opt apparmor=runc/);
+  assert.match(runtimeBlock, /--security-opt seccomp=unconfined/);
+  assert.match(runtimeBlock, /--security-opt systempaths=unconfined/);
   assert.match(runtimeBlock, /sandbox[\s\\]*--permission-profile worker[\s\\]*-C \/workspace[\s\\]*--/);
   assert.doesNotMatch(runtimeBlock, /sandbox[\s\\]+linux/);
-  assert.match(runtimeBlock, /exec 3<\/codex\/auth\.json/);
+  assert.match(runtimeBlock, /\/bin\/sh -c ": <\/codex\/auth\.json"/);
   assert.match(runtimeBlock, /codex-preflight-write-probe/);
   assert.match(runtimeBlock, />\/dev\/null 2>&1[\s\S]*fail "codex_sandbox_policy_probe_failed"/);
 });

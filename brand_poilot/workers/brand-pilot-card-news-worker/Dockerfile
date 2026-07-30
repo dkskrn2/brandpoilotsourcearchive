@@ -16,6 +16,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends bubblewrap ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && npm install --global --omit=dev @openai/codex@0.145.0 \
+    && ln -s /usr/local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-resources/bwrap /usr/local/bin/bwrap \
     && mkdir -p /codex \
     && chown node:node /codex
 

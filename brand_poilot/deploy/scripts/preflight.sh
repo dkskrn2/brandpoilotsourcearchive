@@ -280,6 +280,9 @@ if ! timeout --signal=TERM --kill-after=5s 30s \
     --read-only \
     --cap-drop ALL \
     --security-opt no-new-privileges \
+    --security-opt apparmor=runc \
+    --security-opt seccomp=unconfined \
+    --security-opt systempaths=unconfined \
     --pids-limit 64 \
     --tmpfs /tmp:size=16m,mode=1777 \
     --tmpfs "/workspace:rw,size=1m,mode=0700,uid=$CODEX_RUNTIME_UID,gid=$CODEX_RUNTIME_GID" \
@@ -295,7 +298,7 @@ if ! timeout --signal=TERM --kill-after=5s 30s \
     -C /workspace \
     -- \
     /bin/sh -eu -c '
-      if exec 3</codex/auth.json; then
+      if /bin/sh -c ": </codex/auth.json" 2>/dev/null; then
         exit 41
       fi
       probe=/workspace/.codex-preflight-write-probe
