@@ -56,8 +56,38 @@ export function createClient(
   }
 
   return {
+    async cleanup() {
+      await request("/worker/brand-analyses/cleanup", {});
+    },
+    async acquireResource(workerId, workload) {
+      const payload = await request("/worker/resources/codex-cli/acquire", {
+        workerId,
+        workload,
+      });
+      return payload.id ? payload as unknown as {
+        id: string;
+        leaseToken: string;
+        expiresAt: string;
+      } : null;
+    },
+    heartbeatResource(id, workerId, leaseToken) {
+      return request(`/worker/resources/codex-cli/${id}/heartbeat`, {
+        workerId,
+        leaseToken,
+      });
+    },
+    releaseResource(id, workerId, leaseToken) {
+      return request(`/worker/resources/codex-cli/${id}/release`, {
+        workerId,
+        leaseToken,
+      });
+    },
     async claim(workerId, leaseSeconds) {
-      const payload = await request("/worker/brand-analyses/claim", { workerId, leaseSeconds });
+      const payload = await request("/worker/brand-analyses/claim", {
+        workerId,
+        leaseSeconds,
+        supportedPipelineVersions: [2],
+      });
       return (payload.job ?? null) as BrandAnalysisJob | null;
     },
     async heartbeat(job, leaseSeconds) {

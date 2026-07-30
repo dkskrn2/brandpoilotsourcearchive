@@ -216,9 +216,17 @@ export async function runDmWorkerOnce({
   runtimeDirectory: string;
   timeoutMs?: number;
   embed?: typeof createEmbedding;
-  withCodexLease?: <T>(task: () => Promise<T>, onWait: () => Promise<unknown>) => Promise<T>;
+  withCodexLease?: <T>(
+    task: (signal?: AbortSignal) => Promise<T>,
+    onWait: () => Promise<unknown>,
+  ) => Promise<T>;
   heartbeatIntervalMs?: number;
-  runCodex: (input: { prompt: string; runtimeDirectory: string; timeoutMs: number }) => Promise<unknown>;
+  runCodex: (input: {
+    prompt: string;
+    runtimeDirectory: string;
+    timeoutMs: number;
+    signal?: AbortSignal;
+  }) => Promise<unknown>;
 }) {
   await api.heartbeatWorker(workerId);
   const job = await api.claim(workerId);
@@ -274,10 +282,11 @@ export async function runDmWorkerOnce({
     }
 
     const history = await db.conversationHistory(job.workspaceId, job.brandId, job.payload.conversationId);
-    const executeCodex = () => runCodex({
+    const executeCodex = (signal?: AbortSignal) => runCodex({
         prompt: buildDmPrompt({ question: job.payload.question, history, packet }),
         runtimeDirectory,
         timeoutMs,
+        signal,
       });
     const rawResult = withCodexLease
       ? await withCodexLease(executeCodex, heartbeat)

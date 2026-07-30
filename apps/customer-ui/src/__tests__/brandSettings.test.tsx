@@ -75,7 +75,7 @@ const confirmedBrandIntelligence: BrandAnalysis = {
   id: "analysis-1",
   brandId: "brand-1",
   status: "confirmed",
-  input: { ownedUrl: "https://brand.example.com", uploadIds: [] },
+  input: { companyName: "모종애드", ownedUrl: "https://brand.example.com", uploadIds: [] },
   result: null,
   editedResult: null,
   effectiveResult: {

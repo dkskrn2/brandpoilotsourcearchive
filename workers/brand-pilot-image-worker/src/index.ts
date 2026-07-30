@@ -33,7 +33,7 @@ async function main() {
   });
   const reelRenderer = createReelRenderer();
   const storage = createBlobStorage({ token: required("BLOB_READ_WRITE_TOKEN"), model: process.env.IMAGE_MODEL ?? "external-image-cli" });
-  const executeJob = async () => {
+  const executeJob = async (signal?: AbortSignal) => {
     const result = await runOnce({
       workerId,
       client,
@@ -45,10 +45,12 @@ async function main() {
         client: textClient,
         generator: textGenerator,
         heartbeatIntervalMs: Math.max(1000, Number(process.env.HEARTBEAT_INTERVAL_MS ?? "300000")),
-        retryDelayMs: Math.max(1000, Number(process.env.TEXT_RETRY_DELAY_MS ?? process.env.IMAGE_RETRY_DELAY_MS ?? "300000"))
+        retryDelayMs: Math.max(1000, Number(process.env.TEXT_RETRY_DELAY_MS ?? process.env.IMAGE_RETRY_DELAY_MS ?? "300000")),
+        signal,
       }),
       heartbeatIntervalMs: Math.max(1000, Number(process.env.HEARTBEAT_INTERVAL_MS ?? "300000")),
-      retryDelayMs: Math.max(1000, Number(process.env.IMAGE_RETRY_DELAY_MS ?? "300000"))
+      retryDelayMs: Math.max(1000, Number(process.env.IMAGE_RETRY_DELAY_MS ?? "300000")),
+      signal,
     });
     process.stdout.write(`${JSON.stringify(result)}\n`);
   };

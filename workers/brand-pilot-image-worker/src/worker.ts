@@ -71,7 +71,7 @@ export interface WorkerClient {
 }
 
 export interface ImageRenderer {
-  renderJob(job: ClaimedImageJob): Promise<RenderedInstagramPackage>;
+  renderJob(job: ClaimedImageJob, signal?: AbortSignal): Promise<RenderedInstagramPackage>;
 }
 
 export interface ImageStorage {
@@ -237,6 +237,7 @@ export async function runOnce({
   readSource = readRepresentativeSource,
   buildPrompt = buildWorkerPrompt,
   runTextJob,
+  signal,
   heartbeatIntervalMs = 5 * 60 * 1000,
   retryDelayMs = 5 * 60 * 1000
 }: {
@@ -248,9 +249,11 @@ export async function runOnce({
   readSource?: (url: string | null | undefined) => Promise<SourceReadResult>;
   buildPrompt?: typeof buildWorkerPrompt;
   runTextJob?: () => Promise<WorkerRunResult>;
+  signal?: AbortSignal;
   heartbeatIntervalMs?: number;
   retryDelayMs?: number;
 }): Promise<WorkerRunResult> {
+  if (signal?.aborted) throw signal.reason;
   const job = await client.claim(workerId);
   if (!job) return runTextJob ? await runTextJob() : { status: "idle" };
   const stopHeartbeat = startHeartbeat({ job, workerId, client, heartbeatIntervalMs });
@@ -275,7 +278,10 @@ export async function runOnce({
         sourceText: source.sourceText
       }
     };
-    const rendered = await renderer.renderJob(preparedJob);
+    const rendered = signal
+      ? await renderer.renderJob(preparedJob, signal)
+      : await renderer.renderJob(preparedJob);
+    if (signal?.aborted) throw signal.reason;
     const manifest = parseWorkerManifest(rendered.manifest, { maxImages });
     requireQualityBrief(manifest.qualityBrief);
     const expectedFormat = formatFor(job);

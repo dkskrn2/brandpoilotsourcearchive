@@ -9,6 +9,8 @@ import type {
   SubjectAppealJobV2,
   SubjectAppealResultV2,
   SubjectWorkerClient,
+  SubjectWorkerJob,
+  SubjectWorkerResult,
 } from "./contracts.js";
 import { SubjectAnalysisApiError } from "./client.js";
 import { buildSubjectAnalysisChildEnv, createCodexRunner, processSubjectAnalysisJob, runSubjectAnalysisOnce, terminateProcessTree, type SubjectAnalysisRunner } from "./worker.js";
@@ -38,7 +40,16 @@ function validResult() {
 }
 
 function client(overrides: Partial<SubjectWorkerClient> = {}): SubjectWorkerClient {
-  return { claim: vi.fn(async () => job), heartbeat: vi.fn(async () => undefined), complete: vi.fn(async () => undefined), fail: vi.fn(async () => undefined), ...overrides };
+  return {
+    acquireResource: vi.fn(async () => ({ id: "resource-1", leaseToken: "resource-token" })),
+    heartbeatResource: vi.fn(async () => undefined),
+    releaseResource: vi.fn(async () => undefined),
+    claim: vi.fn(async () => job),
+    heartbeat: vi.fn(async () => undefined),
+    complete: vi.fn(async () => undefined),
+    fail: vi.fn(async () => undefined),
+    ...overrides,
+  };
 }
 
 function analysisJobV2(type: "product" | "service" = "product"): SubjectAnalysisJobV2 {
@@ -168,6 +179,33 @@ describe("subject analysis worker", () => {
     const output = await runSubjectAnalysisOnce({ client: api, runner, workerId: "worker-1", leaseSeconds: 900, pollMs: 1, wait: vi.fn(async () => undefined) });
     expect(output.status).toBe("idle");
     expect(runner.run).not.toHaveBeenCalled();
+  });
+
+  it("fails closed and aborts the CLI when the shared resource heartbeat is lost", async () => {
+    vi.useFakeTimers();
+    const resourceClient = client({
+      heartbeatResource: vi.fn(async () => {
+        throw new Error("resource_lease_lost");
+      }),
+    });
+    const runner = {
+      run: vi.fn((_job: SubjectWorkerJob, signal?: AbortSignal) => new Promise<SubjectWorkerResult>(
+        (_resolve, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }),
+      )),
+    };
+
+    const processing = runSubjectAnalysisOnce({
+      client: resourceClient,
+      runner,
+      workerId: "worker-1",
+      leaseSeconds: 900,
+      resourceHeartbeatMs: 10,
+    });
+    const rejected = expect(processing).rejects.toThrow("resource_lease_lost");
+    await vi.advanceTimersByTimeAsync(10);
+
+    await rejected;
+    expect(resourceClient.releaseResource).toHaveBeenCalledOnce();
   });
 
   it("copies the subject analysis skill into the actual Codex runtime", async () => {

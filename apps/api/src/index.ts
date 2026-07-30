@@ -23,7 +23,11 @@ const repository = createRepository(pool, {
     : undefined,
 });
 const adminRepository = createAdminRepository(pool);
-const brandIntelligenceRepository = createBrandIntelligenceRepository(pool);
+const brandIntelligenceRepository = createBrandIntelligenceRepository(pool, {
+  deleteBlobs: blobReadWriteToken
+    ? (urls) => deleteBlob(urls, { token: blobReadWriteToken })
+    : undefined,
+});
 const brandLogoService = createBrandLogoService({
   storage: createSupabaseBrandLogoStorage(),
   store: createPostgresBrandLogoStore(pool, (brandId) => repository.getBrandProfile(brandId))

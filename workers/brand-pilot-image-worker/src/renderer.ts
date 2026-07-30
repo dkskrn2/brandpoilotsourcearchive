@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { terminateProcessTree } from "@brand-pilot/worker-runtime";
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -208,7 +209,7 @@ export function createConfiguredRenderer({
 
 export function createCommandRenderer(commandTemplate: string, commandTimeoutMs = 20 * 60_000): ImageRenderer {
   return {
-    async renderJob(job: ClaimedImageJob): Promise<RenderedInstagramPackage> {
+    async renderJob(job: ClaimedImageJob, signal?: AbortSignal): Promise<RenderedInstagramPackage> {
       const workDir = await mkdtemp(path.join(os.tmpdir(), "brand-pilot-image-job-"));
       try {
         const jobFile = path.join(workDir, "job.json");
@@ -223,12 +224,22 @@ export function createCommandRenderer(commandTemplate: string, commandTimeoutMs 
             if (settled) return;
             settled = true;
             clearTimeout(timeout);
+            signal?.removeEventListener("abort", abort);
             error ? reject(error) : resolve();
           };
+          const abort = () => {
+            void terminateProcessTree(child).finally(() => finish(
+              signal?.reason instanceof Error
+                ? signal.reason
+                : new Error("worker_resource_lease_lost"),
+            ));
+          };
           const timeout = setTimeout(() => {
-            child.kill();
-            finish(new Error("image_render_command_timeout"));
+            void terminateProcessTree(child)
+              .finally(() => finish(new Error("image_render_command_timeout")));
           }, commandTimeoutMs);
+          if (signal?.aborted) abort();
+          else signal?.addEventListener("abort", abort, { once: true });
           child.once("error", (error) => finish(error));
           child.once("exit", (code) => code === 0
             ? finish()

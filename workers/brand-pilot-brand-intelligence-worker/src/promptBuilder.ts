@@ -5,7 +5,7 @@ export const brandIntelligenceSkillVersion = "brand-intelligence.v1-ko";
 export function buildBrandIntelligencePrompt(job: BrandAnalysisJob): string {
   const analysisInput = {
     contractVersion: "brand-intelligence.v1",
-    brand: { id: job.brandId },
+    brand: { id: job.brandId, companyName: job.input.companyName ?? null },
     documents: job.evidence,
     researchPolicy: {
       publicWebSearch: true,
@@ -30,6 +30,7 @@ export function buildBrandIntelligencePrompt(job: BrandAnalysisJob): string {
     "너는 모종애드의 브랜드 정보 분석 담당자다.",
     "반드시 한국어로 답하고, 마지막에는 brand-intelligence-result.v1 JSON 하나만 출력한다. JSON 앞뒤에 설명이나 마크다운을 넣지 않는다.",
     "기업 개요, 사업 소개, 분야, 타깃, 차별점, 소구점은 입력 documents의 자사 자료에서만 도출한다.",
+    "입력 companyName은 회사 식별 맥락으로만 사용하고 결과 JSON에는 회사명 필드를 만들지 않는다.",
     "자사 자료에 없는 가격, 성과, 고객 수, 인증, 효능, 시장 점유율을 추측하거나 만들지 않는다.",
     "공개 웹검색은 경쟁사와 시장 맥락 확인에만 사용한다.",
     "경쟁사와 외부 시장 주장에는 반드시 접근 가능한 HTTPS 근거 URL을 넣는다.",

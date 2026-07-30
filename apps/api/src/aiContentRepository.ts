@@ -339,7 +339,9 @@ async function loadConfirmedSubjectAnalysisBrandContext(
     primaryCategory: profile.primaryCategory,
     subcategories: profile.subcategories,
     primaryTarget: profile.primaryTarget,
-    differentiators: profile.differentiators,
+    differentiators: Array.isArray(profile.differentiators)
+      ? profile.differentiators.join(", ")
+      : profile.differentiators,
     coreAppeal: profile.coreAppeal,
     brandColor: typeof brand.brandColor === "string" ? brand.brandColor : null,
     brandIntelligenceVersionId: context.brandIntelligenceVersionId,

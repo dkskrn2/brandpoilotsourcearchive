@@ -1,20 +1,17 @@
-export type WorkerResourceWorkload = "dm" | "wiki" | "content";
+import {
+  withFailClosedResourceLease,
+  type WorkerResourceClient,
+  type WorkerResourceLease,
+  type WorkerResourceWorkload,
+} from "@brand-pilot/worker-runtime";
 
-export interface WorkerResourceLease {
-  id: string;
-  leaseToken: string;
-  expiresAt: string;
-}
+export type {
+  WorkerResourceClient,
+  WorkerResourceLease,
+  WorkerResourceWorkload,
+};
 
-export interface WorkerResourceClient {
-  acquireResource(workerId: string, workload: WorkerResourceWorkload): Promise<WorkerResourceLease | null>;
-  heartbeatResource(id: string, workerId: string, leaseToken: string): Promise<unknown>;
-  releaseResource(id: string, workerId: string, leaseToken: string): Promise<unknown>;
-}
-
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-export async function withWorkerResourceLease<T>({
+export function withWorkerResourceLease<T>({
   client,
   workerId,
   workload,
@@ -28,38 +25,13 @@ export async function withWorkerResourceLease<T>({
   pollIntervalMs?: number;
   heartbeatIntervalMs?: number;
   onWait?: () => Promise<unknown>;
-}, task: () => Promise<T>): Promise<T> {
-  let lease: WorkerResourceLease | null = null;
-  while (!lease) {
-    lease = await client.acquireResource(workerId, workload);
-    if (lease) break;
-    await onWait?.();
-    await delay(Math.max(1, pollIntervalMs));
-  }
-
-  let stopped = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let activeHeartbeat = Promise.resolve();
-  const scheduleHeartbeat = () => {
-    timer = setTimeout(() => {
-      if (stopped || !lease) return;
-      activeHeartbeat = Promise.resolve(client.heartbeatResource(lease.id, workerId, lease.leaseToken))
-        .catch((error) => console.error("worker_resource_heartbeat_failed", error))
-        .then(() => {
-          if (!stopped) scheduleHeartbeat();
-        });
-    }, Math.max(1, heartbeatIntervalMs));
-  };
-  scheduleHeartbeat();
-
-  try {
-    return await task();
-  } finally {
-    stopped = true;
-    if (timer) clearTimeout(timer);
-    await activeHeartbeat;
-    await client.releaseResource(lease.id, workerId, lease.leaseToken).catch((error) => {
-      console.error("worker_resource_release_failed", error);
-    });
-  }
+}, task: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  return withFailClosedResourceLease({
+    client,
+    workerId,
+    workload,
+    pollIntervalMs,
+    heartbeatIntervalMs,
+    onWait,
+  }, task);
 }

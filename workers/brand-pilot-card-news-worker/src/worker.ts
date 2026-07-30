@@ -8,11 +8,16 @@ import { buildEditorialEvidencePool, buildEditorialPrompt, loadEditorialPlan } f
 import { withResource } from "./resourceLease.js";
 import type { CardNewsStorage } from "./storage.js";
 
-export interface CodexRunner { run(job: AiContentJob, prompt: string): Promise<{ outputDir: string; cleanup(): Promise<void> }>; }
+export interface CodexRunner {
+  run(job: AiContentJob, prompt: string, signal?: AbortSignal): Promise<{
+    outputDir: string;
+    cleanup(): Promise<void>;
+  }>;
+}
 
 export function createCommandRunner(commandTemplate: string, timeoutMs: number): CodexRunner {
   return {
-    async run(job, prompt) {
+    async run(job, prompt, signal) {
       const runtimeRoot = path.join(process.cwd(), ".runtime-card-news");
       await mkdir(runtimeRoot, { recursive: true });
       const workDir = await mkdtemp(path.join(runtimeRoot, "job-"));
@@ -26,6 +31,7 @@ export function createCommandRunner(commandTemplate: string, timeoutMs: number):
         timeoutMs,
         timeoutErrorCode: "codex_card_news_timeout",
         processErrorCode: "codex_card_news_failed",
+        signal,
       });
       return { outputDir, cleanup: () => rm(workDir, { recursive: true, force: true }) };
     },
@@ -33,7 +39,7 @@ export function createCommandRunner(commandTemplate: string, timeoutMs: number):
 }
 
 export async function runOnce({ workerId, client, planner, runner, storage }: { workerId: string; client: WorkerClient; planner: CodexRunner; runner: CodexRunner; storage: CardNewsStorage }) {
-  return withResource(client, workerId, async () => {
+  return withResource(client, workerId, async (signal) => {
     const job = await client.claim(workerId);
     if (!job) return { status: "idle" as const };
     let heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -42,15 +48,15 @@ export async function runOnce({ workerId, client, planner, runner, storage }: { 
     try {
       heartbeat = setInterval(() => void client.heartbeat(job.id, workerId, job.leaseToken).catch(() => undefined), 30_000);
       if (job.jobType === "analyze") {
-        output = await runner.run(job, buildPrompt(job));
+        output = await runner.run(job, buildPrompt(job), signal);
         await client.complete(job.id, { workerId, leaseToken: job.leaseToken, skillVersion: cardNewsSkillVersion, jobType: "analyze", analysisJson: await loadAnalysis(output.outputDir) });
       } else {
         if (!job.outputId) throw new Error("card_news_output_id_required");
         const input = parseContentGenerationInput(job.payload.contentGenerationInput);
         const evidencePool = buildEditorialEvidencePool(job);
-        planned = await planner.run(job, buildEditorialPrompt(job));
+        planned = await planner.run(job, buildEditorialPrompt(job), signal);
         const editorialPlan = await loadEditorialPlan(planned.outputDir, evidencePool);
-        output = await runner.run(job, buildPrompt(job, editorialPlan));
+        output = await runner.run(job, buildPrompt(job, editorialPlan), signal);
         const stored = await storage.upload({ brandId: job.brandId, generationId: job.generationId, outputId: job.outputId, result: await loadCardNewsResult(output.outputDir, input.creativeDirection.aspectRatio) });
         await client.complete(job.id, { workerId, leaseToken: job.leaseToken, skillVersion: cardNewsSkillVersion, jobType: "generate", ...stored });
       }

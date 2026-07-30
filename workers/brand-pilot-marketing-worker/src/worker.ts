@@ -8,12 +8,12 @@ import { withResource } from "./resourceLease.js";
 import type { MarketingStorage } from "./storage.js";
 
 export interface CodexRunner {
-  run(job: MarketingJob, prompt: string): Promise<{ outputDir: string; cleanup(): Promise<void> }>;
+  run(job: MarketingJob, prompt: string, signal?: AbortSignal): Promise<{ outputDir: string; cleanup(): Promise<void> }>;
 }
 
 export function createCommandRunner(template: string, timeoutMs: number): CodexRunner {
   return {
-    async run(job, prompt) {
+    async run(job, prompt, signal) {
       const runtimeRoot = path.join(process.cwd(), ".runtime-marketing");
       await mkdir(runtimeRoot, { recursive: true });
       const workDir = await mkdtemp(path.join(runtimeRoot, "job-"));
@@ -22,7 +22,13 @@ export function createCommandRunner(template: string, timeoutMs: number): CodexR
       const jobFile = path.join(workDir, "job.json");
       await writeFile(jobFile, JSON.stringify({ job, prompt }, null, 2));
       const command = template.replaceAll("{{jobFile}}", jobFile).replaceAll("{{outputDir}}", outputDir);
-      await runShellCommandWithTimeout({ command, timeoutMs, timeoutErrorCode: "codex_marketing_timeout", processErrorCode: "codex_marketing_failed" });
+      await runShellCommandWithTimeout({
+        command,
+        timeoutMs,
+        timeoutErrorCode: "codex_marketing_timeout",
+        processErrorCode: "codex_marketing_failed",
+        signal,
+      });
       return { outputDir, cleanup: () => rm(workDir, { recursive: true, force: true }) };
     },
   };
@@ -34,13 +40,13 @@ export async function runOnce({ workerId, client, runner, storage }: {
   runner: CodexRunner;
   storage: MarketingStorage;
 }) {
-  return withResource(client, workerId, async () => {
+  return withResource(client, workerId, async (signal) => {
     const job = await client.claim(workerId);
     if (!job) return { status: "idle" as const };
     let output: Awaited<ReturnType<CodexRunner["run"]>> | undefined;
     const heartbeat = setInterval(() => void client.heartbeat(job.id, workerId, job.leaseToken).catch(() => undefined), 30_000);
     try {
-      output = await runner.run(job, buildPrompt(job));
+      output = await runner.run(job, buildPrompt(job), signal);
       if (job.jobType === "analyze") {
         await client.complete(job.id, { workerId, leaseToken: job.leaseToken, skillVersion: marketingSkillVersion, jobType: "analyze", analysisJson: await loadAnalysis(output.outputDir) });
       } else {

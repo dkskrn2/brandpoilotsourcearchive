@@ -43,4 +43,26 @@ describe("withWorkerResourceLease", () => {
 
     expect(client.releaseResource).toHaveBeenCalledWith("lease-1", "wiki-1", "token-1");
   });
+
+  it("fails closed when the resource heartbeat is lost", async () => {
+    const client = {
+      acquireResource: vi.fn(async () => ({
+        id: "lease-1", leaseToken: "token-1", expiresAt: "2026-07-16T00:01:00.000Z",
+      })),
+      heartbeatResource: vi.fn(async () => { throw new Error("lease_lost"); }),
+      releaseResource: vi.fn(async () => undefined),
+    };
+
+    await expect(withWorkerResourceLease({
+      client,
+      workerId: "wiki-1",
+      workload: "wiki",
+      heartbeatIntervalMs: 1,
+    }, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return "unsafe-completion";
+    })).rejects.toThrow("lease_lost");
+
+    expect(client.releaseResource).toHaveBeenCalledWith("lease-1", "wiki-1", "token-1");
+  });
 });

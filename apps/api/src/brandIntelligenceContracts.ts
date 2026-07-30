@@ -1,10 +1,36 @@
+import {
+  parseBrandIntelligenceResultV2,
+  toBrandIntelligenceCommonView,
+  type BrandIntelligenceCommonView,
+  type BrandIntelligenceResult,
+  type BrandIntelligenceResultV2,
+  type BrandIntelligenceValidationRegistry,
+  type BrandOfferingV2,
+} from "./brandIntelligenceV2Contracts.js";
+
+export {
+  toBrandIntelligenceCommonView,
+  type BrandIntelligenceCommonView,
+  type BrandIntelligenceResult,
+  type BrandIntelligenceResultV2,
+  type BrandIntelligenceValidationRegistry,
+  type BrandOfferingV2,
+};
+
 export type BrandAnalysisStatus =
   | "queued"
   | "extracting"
   | "analyzing"
+  | "accepting_uploads"
+  | "waiting_for_resource"
+  | "running"
+  | "finalizing"
   | "review_ready"
   | "confirmed"
-  | "failed";
+  | "failed"
+  | "cancel_requested"
+  | "purging"
+  | "cancelled";
 
 export type BrandEvidenceSourceType = "owned_url" | "text" | "markdown" | "pdf" | "csv" | "xlsx";
 
@@ -44,20 +70,35 @@ export interface BrandIntelligenceInputV1 {
 }
 
 export interface CreateBrandAnalysisInput {
+  companyName?: string;
   ownedUrl: string | null;
   uploadIds: string[];
+  uploads?: Array<{
+    fileName: string;
+    mimeType: string;
+    byteSize: number;
+    checksum: string;
+  }>;
   idempotencyKey: string;
 }
 
-export interface EditBrandAnalysisInput { editedResult: BrandIntelligenceResultV1 }
-export interface BrandAnalysisWorkerClaimInput { workerId: string; leaseSeconds: number }
-export interface BrandAnalysisWorkerLeaseInput extends BrandAnalysisWorkerClaimInput { leaseToken: string }
+export interface EditBrandAnalysisInput { editedResult: BrandIntelligenceResult }
+export interface BrandAnalysisWorkerClaimInput {
+  workerId: string;
+  leaseSeconds: number;
+  supportedPipelineVersions: number[];
+}
+export interface BrandAnalysisWorkerLeaseInput {
+  workerId: string;
+  leaseSeconds: number;
+  leaseToken: string;
+}
 
 const LIMITS = {
   narrative: 4_000,
   short: 300,
   list: 50,
-  documents: 6,
+  documents: 25,
   textBlocks: 200,
   tables: 30,
   rows: 500,
@@ -120,9 +161,20 @@ function leaseSeconds(value: unknown): number {
 export function parseCreateBrandAnalysisInput(value: unknown): CreateBrandAnalysisInput {
   const source = strictObject(
     value,
-    ["ownedUrl", "uploadIds", "idempotencyKey"],
+    ["companyName", "ownedUrl", "uploadIds", "uploads", "idempotencyKey"],
     "brand_analysis_create_input_invalid",
   );
+  let companyName: string | undefined;
+  if (Object.hasOwn(source, "companyName")) {
+    if (typeof source.companyName !== "string" || !source.companyName.trim()) {
+      fail("brand_analysis_company_name_required");
+    }
+    companyName = source.companyName.normalize("NFKC").trim();
+    if (companyName.length > 100
+      || /[\u0000-\u001f\u007f]/.test(companyName)) {
+      fail("brand_analysis_company_name_invalid");
+    }
+  }
   const ownedUrl = nullableHttpsUrl(source.ownedUrl, "brand_analysis_owned_url_invalid");
   const uploadIds = list(
     source.uploadIds ?? [],
@@ -130,10 +182,42 @@ export function parseCreateBrandAnalysisInput(value: unknown): CreateBrandAnalys
     (item) => text(item, "brand_analysis_upload_id_invalid", 200),
     5,
   );
-  if (!ownedUrl && uploadIds.length === 0) fail("brand_analysis_source_required");
+  const uploads = list(
+    source.uploads ?? [],
+    "brand_analysis_upload_limit_exceeded",
+    (item) => {
+      const upload = strictObject(
+        item,
+        ["fileName", "mimeType", "byteSize", "checksum"],
+        "brand_analysis_upload_invalid",
+      );
+      const byteSize = Number(upload.byteSize);
+      if (!Number.isSafeInteger(byteSize) || byteSize < 1 || byteSize > 10 * 1024 * 1024) {
+        fail("brand_analysis_file_too_large");
+      }
+      const checksum = text(upload.checksum, "brand_analysis_checksum_invalid", 64);
+      if (!/^[a-f0-9]{64}$/i.test(checksum)) fail("brand_analysis_checksum_invalid");
+      return {
+        fileName: text(upload.fileName, "brand_analysis_file_name_invalid", 160),
+        mimeType: text(upload.mimeType, "brand_analysis_file_type_invalid", 200),
+        byteSize,
+        checksum: checksum.toLowerCase(),
+      };
+    },
+    5,
+  );
+  if (uploadIds.length && uploads.length) fail("brand_analysis_upload_input_invalid");
+  if (uploads.reduce((total, upload) => total + upload.byteSize, 0) > 25 * 1024 * 1024) {
+    fail("brand_analysis_upload_total_too_large");
+  }
+  if (!ownedUrl && uploadIds.length === 0 && uploads.length === 0) {
+    fail("brand_analysis_source_required");
+  }
   return {
+    ...(companyName ? { companyName } : {}),
     ownedUrl,
     uploadIds,
+    ...(uploads.length ? { uploads } : {}),
     idempotencyKey: text(source.idempotencyKey, "brand_analysis_idempotency_key_invalid", 200),
   };
 }
@@ -204,13 +288,20 @@ function parseResult(value: unknown): BrandIntelligenceResultV1 {
   };
 }
 
-export function parseBrandIntelligenceResult(value: unknown): BrandIntelligenceResultV1 {
+export function parseBrandIntelligenceResult(
+  value: unknown,
+  registry?: BrandIntelligenceValidationRegistry,
+): BrandIntelligenceResult {
+  if (value && typeof value === "object" && !Array.isArray(value)
+    && (value as Record<string, unknown>).contractVersion === "brand-intelligence-result.v2") {
+    return parseBrandIntelligenceResultV2(value, registry);
+  }
   return parseResult(value);
 }
 
 export function parseEditBrandAnalysisInput(value: unknown): EditBrandAnalysisInput {
   const source = strictObject(value, ["editedResult"], "brand_analysis_edit_input_invalid");
-  return { editedResult: parseResult(source.editedResult) };
+  return { editedResult: parseBrandIntelligenceResult(source.editedResult) };
 }
 
 function sourceType(value: unknown): BrandEvidenceSourceType {
@@ -304,10 +395,25 @@ export function parseBrandIntelligenceInput(value: unknown): BrandIntelligenceIn
 }
 
 export function parseBrandAnalysisWorkerClaimInput(value: unknown): BrandAnalysisWorkerClaimInput {
-  const source = strictObject(value, ["workerId", "leaseSeconds"], "brand_analysis_worker_claim_invalid");
+  const source = strictObject(
+    value,
+    ["workerId", "leaseSeconds", "supportedPipelineVersions"],
+    "brand_analysis_worker_claim_invalid",
+  );
+  const rawVersions = source.supportedPipelineVersions ?? [1];
+  if (!Array.isArray(rawVersions) || rawVersions.length < 1 || rawVersions.length > 2) {
+    fail("brand_analysis_pipeline_versions_invalid");
+  }
+  const supportedPipelineVersions = [...new Set(rawVersions.map((version) => {
+    if (!Number.isSafeInteger(version) || Number(version) < 1 || Number(version) > 2) {
+      fail("brand_analysis_pipeline_versions_invalid");
+    }
+    return Number(version);
+  }))];
   return {
     workerId: text(source.workerId, "brand_analysis_worker_id_invalid", 200),
     leaseSeconds: leaseSeconds(source.leaseSeconds),
+    supportedPipelineVersions,
   };
 }
 

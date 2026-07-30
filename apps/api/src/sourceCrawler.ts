@@ -443,9 +443,19 @@ export async function crawlSourceUrl(
     timeoutMs = 15000,
     resolveHostname = defaultResolveHostname,
     maxResponseBytes = 2 * 1024 * 1024,
-  }: { fetcher?: typeof fetch; timeoutMs?: number; resolveHostname?: HostnameResolver; maxResponseBytes?: number } = {}
+    signal,
+  }: {
+    fetcher?: typeof fetch;
+    timeoutMs?: number;
+    resolveHostname?: HostnameResolver;
+    maxResponseBytes?: number;
+    signal?: AbortSignal;
+  } = {}
 ): Promise<CrawledSnapshot> {
   const controller = new AbortController();
+  const forwardAbort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) forwardAbort();
+  else signal?.addEventListener("abort", forwardAbort, { once: true });
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let dispatcher: Agent | null = null;
   try {
@@ -489,6 +499,7 @@ export async function crawlSourceUrl(
     await dispatcher?.close();
     return { ...extractPageSnapshot(rawText, finalUrl), httpStatus: response.status, rawText };
   } finally {
+    signal?.removeEventListener("abort", forwardAbort);
     await dispatcher?.close().catch(() => undefined);
     clearTimeout(timeout);
   }

@@ -73,7 +73,8 @@ export async function runTextOnce({
   readSource = readRepresentativeSource,
   buildPrompt = buildThreadsPrompt,
   heartbeatIntervalMs = 5 * 60 * 1000,
-  retryDelayMs = 5 * 60 * 1000
+  retryDelayMs = 5 * 60 * 1000,
+  signal
 }: {
   workerId: string;
   client: TextWorkerClient;
@@ -82,7 +83,9 @@ export async function runTextOnce({
   buildPrompt?: typeof buildThreadsPrompt;
   heartbeatIntervalMs?: number;
   retryDelayMs?: number;
+  signal?: AbortSignal;
 }): Promise<TextRunResult> {
+  if (signal?.aborted) throw signal.reason;
   const job = await client.claim(workerId);
   if (!job) return { status: "idle" };
   const stopHeartbeat = startHeartbeat({ job, workerId, client, heartbeatIntervalMs });
@@ -94,7 +97,7 @@ export async function runTextOnce({
       sourceText: null
     }));
     const prompt = buildPrompt({ payload, source, model: generator.model });
-    const result = await generator.generate({ prompt, source });
+    const result = await generator.generate({ prompt, source, signal });
     await client.complete(job.id, { workerId, leaseToken: job.leaseToken, result });
     return { status: "completed", jobId: job.id };
   } catch (error) {

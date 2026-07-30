@@ -2890,3 +2890,88 @@ test("050 stores normalized support request mobile phone numbers", async () => {
     assert.match(constraints.rows[0].definition, /010-/);
   });
 });
+
+test("055 adds the cancellable brand intelligence v2 lifecycle", async () => {
+  const migrations = await loadMigrations();
+  const migration055 = migrations.find(
+    (migration) =>
+      migration.id === "055_brand_intelligence_onboarding_worker_v2.sql",
+  );
+  assert.ok(migration055, "055 brand intelligence v2 migration must exist");
+
+  const schema = migration055.sql;
+  assert.match(schema, /company_name_state/);
+  assert.match(schema, /brand_analysis_stage_runs/);
+  assert.match(schema, /brand_analysis_cli_calls/);
+  assert.match(schema, /brand_analysis_cli_attempts/);
+  assert.match(schema, /brand_analysis_upload_attempts/);
+  assert.match(schema, /accepting_uploads/);
+  assert.match(schema, /brand_analysis_uploads_upload_status_check/);
+  assert.match(schema, /logical_call_count/);
+  assert.match(schema, /physical_cli_count/);
+  assert.match(schema, /brand_analysis_runs_one_open_per_brand_uq/);
+  assert.match(
+    schema,
+    /workload_type in \('dm', 'wiki', 'content', 'onboarding'\)/,
+  );
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "049_brand_intelligence_onboarding.sql",
+    );
+    await database.exec(migration055.sql);
+
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ('v2', $1) returning id",
+      [`v2-${randomUUID()}`],
+    );
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, '내 브랜드') returning id, company_name_state",
+      [workspace.rows[0].id],
+    );
+    assert.equal(brand.rows[0].company_name_state, "provisional");
+
+    const run = await database.query(
+      `insert into brand_analysis_runs
+         (workspace_id, brand_id, status, pipeline_version, idempotency_key)
+       values ($1, $2, 'accepting_uploads', 2, $3)
+       returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, `v2-${randomUUID()}`],
+    );
+    assert.ok(run.rows[0].id);
+
+    await assert.rejects(
+      database.query(
+        `insert into brand_analysis_runs
+           (workspace_id, brand_id, status, pipeline_version, idempotency_key)
+         values ($1, $2, 'queued', 2, $3)`,
+        [workspace.rows[0].id, brand.rows[0].id, `v2-${randomUUID()}`],
+      ),
+      /brand_analysis_runs_one_open_per_brand_uq/,
+    );
+    await assert.rejects(
+      database.query(
+        "update brand_analysis_runs set logical_call_count = 9 where id = $1",
+        [run.rows[0].id],
+      ),
+      /brand_analysis_runs_call_count_check/,
+    );
+    await assert.rejects(
+      database.query(
+        "update brand_analysis_runs set external_page_count = 11 where id = $1",
+        [run.rows[0].id],
+      ),
+      /brand_analysis_runs_page_count_check/,
+    );
+    await assert.rejects(
+      database.query(
+        "update brand_analysis_runs set offering_count = 6 where id = $1",
+        [run.rows[0].id],
+      ),
+      /brand_analysis_runs_page_count_check/,
+    );
+  });
+});

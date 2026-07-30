@@ -61,6 +61,14 @@ const result = {
 
 function client(overrides: Partial<BrandIntelligenceWorkerClient> = {}): BrandIntelligenceWorkerClient {
   return {
+    cleanup: vi.fn(async () => undefined),
+    acquireResource: vi.fn(async () => ({
+      id: "resource-1",
+      leaseToken: "resource-token-1",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    })),
+    heartbeatResource: vi.fn(async () => undefined),
+    releaseResource: vi.fn(async () => undefined),
     claim: vi.fn(async () => job),
     heartbeat: vi.fn(async () => undefined),
     complete: vi.fn(async () => undefined),
@@ -104,6 +112,28 @@ describe("brand intelligence worker", () => {
     expect(api.fail).toHaveBeenCalledWith(job, expect.objectContaining({ retryable: true }));
   });
 
+  it("fails closed and aborts active work when the lease heartbeat is lost", async () => {
+    const api = client({
+      heartbeat: vi.fn(async () => {
+        throw new BrandIntelligenceApiError("brand_analysis_cancelled", 409);
+      }),
+    });
+    const runner: BrandIntelligenceRunner = {
+      run: vi.fn(async (_job, signal) => new Promise<BrandIntelligenceResult>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      })),
+    };
+
+    await expect(processBrandIntelligenceJob({
+      client: api,
+      runner,
+      job,
+      leaseSeconds: 900,
+      heartbeatMs: 1,
+    })).resolves.toEqual({ status: "failed", analysisId: "analysis-1" });
+    expect(runner.run).toHaveBeenCalledWith(job, expect.any(AbortSignal));
+  });
+
   it("does not invoke the CLI when no job exists", async () => {
     const api = client({ claim: vi.fn(async () => null) });
     const runner = { run: vi.fn() };
@@ -137,8 +167,16 @@ describe("brand intelligence worker", () => {
     })).toEqual({ PATH: "bin", CODEX_HOME: "codex" });
   });
 
-  it("enables live web search as a top-level Codex option", async () => {
+  it("keeps external research fail-closed and isolates every Codex stage", async () => {
     const script = await readFile(new URL("../scripts/run-codex-brand-intelligence.mjs", import.meta.url), "utf8");
-    expect(script).toContain('"--search",\n  "exec"');
+    expect(script).toContain("External research is fail-closed");
+    expect(script).not.toContain("실제로 확인한 HTTPS 페이지만");
+    expect(script).toContain("MAX_RETRIES = 2");
+    expect(script).toContain("physicalCalls > 10");
+    expect(script).toContain('"--disable", "shell_tool"');
+    expect(script).toContain('"--disable", "apps"');
+    expect(script).toContain('"--ignore-rules"');
+    expect(script).toContain('"--output-schema"');
+    expect(script).toContain("brand_intelligence_forbidden_tool_event");
   });
 });

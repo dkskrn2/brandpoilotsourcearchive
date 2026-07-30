@@ -520,9 +520,10 @@ export function parseSubjectAppealResultV2(
   return { contractVersion: "subject-appeal-result.v2", phase: "appeal", targets, appealsByTarget };
 }
 
-export interface SubjectWorkerClient {
+export interface SubjectWorkerClient extends WorkerResourceClient {
   claim(workerId: string, leaseSeconds: number): Promise<SubjectWorkerJob | null>;
   heartbeat(job: SubjectWorkerJob, leaseSeconds: number): Promise<void>;
   complete(job: SubjectWorkerJob, result: SubjectWorkerResult, leaseSeconds: number): Promise<void>;
   fail(job: SubjectWorkerJob, input: { errorCode: string; errorMessage: string; retryable: boolean; leaseSeconds: number }): Promise<void>;
 }
+import type { WorkerResourceClient } from "@brand-pilot/worker-runtime";

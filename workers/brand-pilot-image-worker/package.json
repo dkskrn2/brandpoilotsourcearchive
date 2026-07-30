@@ -12,6 +12,7 @@
     "verify:reel": "node scripts/verify-reel.mjs"
   },
   "dependencies": {
+    "@brand-pilot/worker-runtime": "0.1.0",
     "@vercel/blob": "^2.6.1",
     "cheerio": "^1.2.0",
     "dotenv": "^17.2.3",

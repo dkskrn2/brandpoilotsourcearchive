@@ -28,7 +28,20 @@ describe("brand intelligence provider", () => {
     await expect(provider.getConfirmed(scope)).resolves.toEqual({
       versionId: "analysis-1",
       confirmedAt: "2026-07-21T00:00:00.000Z",
-      profile,
+      profile: {
+        contractVersion: "brand-intelligence-result.v1",
+        companyName: null,
+        companyOverview: profile.companyOverview,
+        businessDescription: profile.businessDescription,
+        primaryCategory: profile.primaryCategory,
+        subcategories: profile.subcategories,
+        primaryTarget: profile.primaryTarget,
+        differentiators: [profile.differentiators],
+        coreAppeal: profile.coreAppeal,
+        offerings: [],
+        competitors: profile.competitors,
+        sourceGaps: profile.sourceGaps,
+      },
     });
     expect(getCurrentBrandIntelligence).toHaveBeenCalledWith(scope);
   });

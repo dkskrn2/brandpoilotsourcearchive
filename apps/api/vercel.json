@@ -1,5 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "fastify",
-  "regions": ["bom1"]
+  "regions": ["bom1"],
+  "functions": {
+    "src/index.ts": {
+      "maxDuration": 300
+    }
+  }
 }

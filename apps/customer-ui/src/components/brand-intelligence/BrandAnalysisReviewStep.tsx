@@ -75,27 +75,41 @@ export function BrandAnalysisReviewStep({
   onConfirm(): Promise<void>;
   categories?: ContentCategory[];
 }) {
-  const required = [draft.companyOverview, draft.businessDescription, draft.primaryTarget, draft.differentiators, draft.coreAppeal, draft.primaryCategory.name];
-  const canConfirm = required.every((value) => value.trim())
-    && (categories.length === 0 || Boolean(draft.primaryCategory.code));
-  const selectedCategory = categories.find((category) => category.code === draft.primaryCategory.code);
-  const update = <K extends keyof BrandIntelligenceResult>(key: K, value: BrandIntelligenceResult[K]) => (
-    onChange({ ...draft, [key]: value })
+  const primaryCategory = draft.primaryCategory ?? { code: null, name: "" };
+  const differentiators = Array.isArray(draft.differentiators)
+    ? draft.differentiators.join("\n")
+    : draft.differentiators;
+  const required = [
+    draft.companyOverview,
+    draft.businessDescription,
+    draft.primaryTarget,
+    differentiators,
+    draft.coreAppeal,
+    primaryCategory.name,
+    ...(draft.contractVersion === "brand-intelligence-result.v2"
+      ? [draft.valueProposition]
+      : []),
+  ];
+  const canConfirm = required.every((value) => value?.trim())
+    && (categories.length === 0 || Boolean(primaryCategory.code));
+  const selectedCategory = categories.find((category) => category.code === primaryCategory.code);
+  const update = (key: string, value: unknown) => (
+    onChange({ ...draft, [key]: value } as BrandIntelligenceResult)
   );
   return (
     <section className="brand-intelligence-review brand-intelligence-review--wide">
       <section className="panel brand-intelligence-step">
         <div className="panel-head"><h2>분석 결과 확인</h2></div>
         <div className="panel-body brand-review-fields">
-          <NarrativeField label="기업 개요" value={draft.companyOverview} onChange={(value) => update("companyOverview", value)} />
-          <NarrativeField label="사업 소개" value={draft.businessDescription} onChange={(value) => update("businessDescription", value)} />
+          <NarrativeField label="기업 개요" value={draft.companyOverview ?? ""} onChange={(value) => update("companyOverview", value)} />
+          <NarrativeField label="사업 소개" value={draft.businessDescription ?? ""} onChange={(value) => update("businessDescription", value)} />
           <div className="brand-category-fields">
             <label className="field-stack">
               <span className="field-label">대표 분야</span>
               {categories.length ? (
                 <select
                   aria-label="분석 결과 대표 분야"
-                  value={draft.primaryCategory.code ?? ""}
+                  value={primaryCategory.code ?? ""}
                   onChange={(event) => {
                     const category = categories.find((item) => item.code === event.target.value);
                     if (!category) return;
@@ -111,9 +125,9 @@ export function BrandAnalysisReviewStep({
                   {categories.map((category) => <option key={category.code} value={category.code}>{category.name}</option>)}
                 </select>
               ) : (
-                <input value={draft.primaryCategory.name} onChange={(event) => update("primaryCategory", { ...draft.primaryCategory, name: event.target.value })} />
+                <input value={primaryCategory.name} onChange={(event) => update("primaryCategory", { ...primaryCategory, name: event.target.value })} />
               )}
-              {categories.length && !draft.primaryCategory.code && draft.primaryCategory.name ? <small>분석 제안: {draft.primaryCategory.name}</small> : null}
+              {categories.length && !primaryCategory.code && primaryCategory.name ? <small>분석 제안: {primaryCategory.name}</small> : null}
             </label>
             <label className="field-stack">
               <span className="field-label">직접 입력 세부 분야</span>
@@ -147,11 +161,61 @@ export function BrandAnalysisReviewStep({
               })}
             </fieldset>
           ) : null}
-          <NarrativeField label="핵심 타깃" value={draft.primaryTarget} onChange={(value) => update("primaryTarget", value)} />
-          <NarrativeField label="차별점" value={draft.differentiators} onChange={(value) => update("differentiators", value)} />
-          <NarrativeField label="핵심 소구점" value={draft.coreAppeal} onChange={(value) => update("coreAppeal", value)} />
+          <NarrativeField label="핵심 타깃" value={draft.primaryTarget ?? ""} onChange={(value) => update("primaryTarget", value)} />
+          {draft.contractVersion === "brand-intelligence-result.v2" && (
+            <NarrativeField
+              label="가치 제안"
+              value={draft.valueProposition ?? ""}
+              onChange={(value) => update("valueProposition", value || null)}
+            />
+          )}
+          <NarrativeField
+            label="차별점"
+            value={differentiators}
+            onChange={(value) => update(
+              "differentiators",
+              draft.contractVersion === "brand-intelligence-result.v2"
+                ? value.split("\n").map((item) => item.trim()).filter(Boolean)
+                : value,
+            )}
+          />
+          <NarrativeField label="핵심 소구점" value={draft.coreAppeal ?? ""} onChange={(value) => update("coreAppeal", value)} />
         </div>
       </section>
+
+      {draft.contractVersion === "brand-intelligence-result.v2" && (
+        <section className="panel">
+          <div className="panel-head"><h2>대표 상품·서비스 ({draft.offerings.length}/5)</h2></div>
+          <div className="panel-body brand-competitor-list">
+            {draft.offerings.length === 0 && <p className="muted">근거로 확인된 대표 상품·서비스가 없습니다.</p>}
+            {draft.offerings.map((offering, index) => (
+              <article key={`${offering.kind}-${index}`}>
+                <input
+                  aria-label={`대표 상품·서비스 ${index + 1} 이름`}
+                  value={offering.name}
+                  onChange={(event) => onChange({
+                    ...draft,
+                    offerings: draft.offerings.map((item, itemIndex) => (
+                      itemIndex === index ? { ...item, name: event.target.value } : item
+                    )),
+                  })}
+                />
+                <AutoResizeTextarea
+                  aria-label={`대표 상품·서비스 ${index + 1} 설명`}
+                  rows={3}
+                  value={offering.description ?? ""}
+                  onChange={(value) => onChange({
+                    ...draft,
+                    offerings: draft.offerings.map((item, itemIndex) => (
+                      itemIndex === index ? { ...item, description: value || null } : item
+                    )),
+                  })}
+                />
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="panel">
         <div className="panel-head"><h2>경쟁사와 근거</h2></div>

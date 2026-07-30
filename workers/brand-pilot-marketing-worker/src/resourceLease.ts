@@ -1,1 +1,18 @@
-import type { MarketingClient } from "./contracts.js"; const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)); export async function withResource<T>(client: MarketingClient, workerId: string, task: () => Promise<T>) { let lease: Awaited<ReturnType<MarketingClient["acquire"]>> = null; while (!lease) { lease = await client.acquire(workerId); if (!lease) await wait(1_000); } const timer = setInterval(() => void client.heartbeatResource(lease!.id, workerId, lease!.leaseToken).catch(() => undefined), 15_000); try { return await task(); } finally { clearInterval(timer); await Promise.resolve(client.releaseResource(lease.id, workerId, lease.leaseToken)).catch(() => undefined); } }
+import { withFailClosedResourceLease } from "@brand-pilot/worker-runtime";
+import type { MarketingClient } from "./contracts.js";
+
+export function withResource<T>(
+  client: MarketingClient,
+  workerId: string,
+  task: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  return withFailClosedResourceLease({
+    client: {
+      acquireResource: (id) => client.acquire(id),
+      heartbeatResource: (id, idOfWorker, token) => client.heartbeatResource(id, idOfWorker, token),
+      releaseResource: (id, idOfWorker, token) => client.releaseResource(id, idOfWorker, token),
+    },
+    workerId,
+    workload: "content",
+  }, task);
+}

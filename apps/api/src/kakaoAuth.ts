@@ -92,7 +92,9 @@ export function createKakaoAuthStore(pool: Pool) {
         const workspaceId = workspace.rows[0].id;
         await client.query("insert into workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')", [workspaceId, userId]);
         const brand = await client.query(
-          `insert into brands (workspace_id, name, created_by_user_id) values ($1, '내 브랜드', $2) returning id, name`,
+          `insert into brands (workspace_id, name, company_name_state, created_by_user_id)
+           values ($1, '내 브랜드', 'provisional', $2)
+           returning id, name`,
           [workspaceId, userId]
         );
         await client.query(

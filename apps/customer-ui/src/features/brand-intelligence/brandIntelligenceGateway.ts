@@ -35,6 +35,34 @@ export function createBrandIntelligenceGateway(
   client = apiClient(),
   blobPut: typeof putBlob = putBlob,
 ): BrandIntelligenceGateway {
+  async function uploadFile(brandId: string, analysisId: string, uploadId: string, file: File) {
+    const checksum = await sha256(file);
+    const metadata = {
+      analysisId,
+      uploadId,
+      fileName: file.name,
+      mimeType: resolveBrandAnalysisFileMimeType(file),
+      byteSize: file.size,
+      checksum,
+    };
+    const token = await client.requestJson<{ pathname: string; clientToken: string }>(
+      `/brands/${brandId}/brand-intelligence/uploads/token`,
+      { method: "POST", body: JSON.stringify(metadata) },
+    );
+    const stored = await blobPut(token.pathname, file, {
+      access: "public",
+      token: token.clientToken,
+      contentType: metadata.mimeType,
+    });
+    const confirmed = await client.requestJson<{ id: string }>(
+      `/brands/${brandId}/brand-intelligence/uploads/confirm`,
+      {
+        method: "POST",
+        body: JSON.stringify({ ...metadata, storagePath: token.pathname, storageUrl: stored.url }),
+      },
+    );
+    return confirmed.id;
+  }
   return {
     async getCurrent(brandId) {
       const payload = await client.requestJson<{ intelligence: BrandAnalysis | null }>(
@@ -46,48 +74,61 @@ export function createBrandIntelligenceGateway(
     getAnalysis(brandId, analysisId) {
       return client.requestJson(`/brands/${brandId}/brand-intelligence/analyses/${analysisId}`, { method: "GET" });
     },
-    requestAnalysis(brandId, input) {
-      return client.requestJson(`/brands/${brandId}/brand-intelligence/analyses`, {
-        method: "POST",
-        body: JSON.stringify(input),
-      });
-    },
-    async uploadFile(brandId, uploadSessionId, file) {
-      const checksum = await sha256(file);
-      const metadata = {
-        uploadSessionId,
+    async requestAnalysis(brandId, input) {
+      const uploads = await Promise.all(input.files.map(async (file) => ({
         fileName: file.name,
         mimeType: resolveBrandAnalysisFileMimeType(file),
         byteSize: file.size,
-        checksum,
-      };
-      const token = await client.requestJson<{ pathname: string; clientToken: string }>(
-        `/brands/${brandId}/brand-intelligence/uploads/token`,
-        { method: "POST", body: JSON.stringify(metadata) },
-      );
-      const stored = await blobPut(token.pathname, file, {
-        access: "public",
-        token: token.clientToken,
-        contentType: metadata.mimeType,
-      });
-      const confirmed = await client.requestJson<{ id: string }>(
-        `/brands/${brandId}/brand-intelligence/uploads/confirm`,
+        checksum: await sha256(file),
+      })));
+      const created = await client.requestJson<BrandAnalysis>(
+        `/brands/${brandId}/brand-intelligence/analyses`,
         {
           method: "POST",
-          body: JSON.stringify({ ...metadata, storagePath: token.pathname, storageUrl: stored.url }),
+          body: JSON.stringify({
+            companyName: input.companyName,
+            ownedUrl: input.ownedUrl,
+            uploadIds: [],
+            uploads,
+            idempotencyKey: input.idempotencyKey,
+          }),
         },
       );
-      return confirmed.id;
+      if (!input.files.length) return created;
+      try {
+        for (const [index, file] of input.files.entries()) {
+          const uploadId = created.input.uploadIds[index];
+          if (!uploadId) throw new Error("brand_analysis_upload_intent_missing");
+          await uploadFile(brandId, created.id, uploadId, file);
+        }
+        return await client.requestJson<BrandAnalysis>(
+          `/brands/${brandId}/brand-intelligence/analyses/${created.id}/start`,
+          { method: "POST" },
+        );
+      } catch (error) {
+        await client.requestJson(
+          `/brands/${brandId}/brand-intelligence/analyses/${created.id}/cancel`,
+          { method: "POST" },
+        ).catch(() => undefined);
+        throw error;
+      }
     },
+    uploadFile,
     updateDraft(brandId, analysisId, editedResult) {
       return client.requestJson(`/brands/${brandId}/brand-intelligence/analyses/${analysisId}`, {
         method: "PATCH",
         body: JSON.stringify({ editedResult }),
       });
     },
-    confirm(brandId, analysisId) {
+    cancel(brandId, analysisId) {
+      return client.requestJson(`/brands/${brandId}/brand-intelligence/analyses/${analysisId}/cancel`, {
+        method: "POST",
+      });
+    },
+    confirm(brandId, analysisId, companyName) {
       return client.requestJson(`/brands/${brandId}/brand-intelligence/analyses/${analysisId}/confirm`, {
         method: "POST",
+        body: JSON.stringify({ companyName }),
       });
     },
   };
@@ -99,5 +140,6 @@ export const brandIntelligenceGateway: BrandIntelligenceGateway = {
   requestAnalysis: (...args) => createBrandIntelligenceGateway().requestAnalysis(...args),
   uploadFile: (...args) => createBrandIntelligenceGateway().uploadFile(...args),
   updateDraft: (...args) => createBrandIntelligenceGateway().updateDraft(...args),
+  cancel: (...args) => createBrandIntelligenceGateway().cancel(...args),
   confirm: (...args) => createBrandIntelligenceGateway().confirm(...args),
 };

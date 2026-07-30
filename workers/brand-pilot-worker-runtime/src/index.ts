@@ -31,6 +31,7 @@ export async function runShellCommandWithTimeout(input: {
   timeoutMs: number;
   timeoutErrorCode: string;
   processErrorCode: string;
+  signal?: AbortSignal;
 }): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(input.command, {
@@ -44,11 +45,19 @@ export async function runShellCommandWithTimeout(input: {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      input.signal?.removeEventListener("abort", abort);
       callback();
+    };
+    const abort = () => {
+      void terminateProcessTree(child).finally(() => finish(() => reject(
+        input.signal?.reason ?? new Error("worker_resource_lease_lost"),
+      )));
     };
     const timer = setTimeout(() => {
       void terminateProcessTree(child).finally(() => finish(() => reject(new Error(input.timeoutErrorCode))));
     }, input.timeoutMs);
+    if (input.signal?.aborted) abort();
+    else input.signal?.addEventListener("abort", abort, { once: true });
     child.once("error", (error) => finish(() => reject(error)));
     child.once("close", (code) => finish(() => code === 0
       ? resolve()
@@ -62,3 +71,10 @@ export function isRetryableContentWorkerError(error: unknown): boolean {
   if (code === "ENOENT" || code.includes("output_id_required")) return false;
   return !/_(?:invalid|required|mismatch)$/.test(code);
 }
+
+export {
+  withFailClosedResourceLease,
+  type WorkerResourceClient,
+  type WorkerResourceLease,
+  type WorkerResourceWorkload,
+} from "./resourceLease.js";

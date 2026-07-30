@@ -1,6 +1,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { terminateProcessTree } from "@brand-pilot/worker-runtime";
 
 type CodexInvocation = { command: string; argsPrefix: string[] };
 
@@ -46,6 +47,7 @@ export async function runCodexJson({
   model = process.env.DM_CODEX_MODEL?.trim() || "gpt-5.4",
   reasoningEffort = process.env.DM_CODEX_REASONING_EFFORT?.trim() || "none",
   fastMode = process.env.DM_CODEX_FAST_MODE?.trim().toLowerCase() !== "false",
+  signal,
   spawnImpl = nodeSpawn,
   resolveInvocation = resolveCodexInvocation,
 }: {
@@ -55,6 +57,7 @@ export async function runCodexJson({
   model?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  signal?: AbortSignal;
   spawnImpl?: typeof nodeSpawn;
   resolveInvocation?: () => CodexInvocation;
 }): Promise<unknown> {
@@ -83,17 +86,35 @@ export async function runCodexJson({
     });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      callback();
+    };
+    const abort = () => {
+      void terminateProcessTree(child).finally(() => finish(() => reject(
+        signal?.reason ?? new Error("worker_resource_lease_lost"),
+      )));
+    };
     const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error("codex_timeout"));
+      void terminateProcessTree(child).finally(() => finish(() => reject(new Error("codex_timeout"))));
     }, timeoutMs);
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
     child.stdout?.on("data", (data) => { stdout += String(data); });
     child.stderr?.on("data", (data) => { stderr += String(data); });
-    child.once("error", (error) => { clearTimeout(timer); reject(error); });
+    child.once("error", (error) => finish(() => reject(error)));
     child.once("close", (code) => {
-      clearTimeout(timer);
-      if (code !== 0) return reject(new Error(`codex_failed:${code}:${stderr.slice(0, 300)}`));
-      try { resolve(extractJson(stdout)); } catch (error) { reject(error); }
+      if (code !== 0) return finish(() => reject(new Error(`codex_failed:${code}:${stderr.slice(0, 300)}`)));
+      try {
+        const output = extractJson(stdout);
+        finish(() => resolve(output));
+      } catch (error) {
+        finish(() => reject(error));
+      }
     });
     child.stdin?.end(prompt);
   });

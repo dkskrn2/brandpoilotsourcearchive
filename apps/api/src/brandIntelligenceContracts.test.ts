@@ -96,7 +96,7 @@ describe("brand intelligence customer inputs", () => {
     expect(parseEditBrandAnalysisInput({ editedResult: validResult() }).editedResult.primaryTarget)
       .toContain("중소 브랜드");
     expect(parseBrandAnalysisWorkerClaimInput({ workerId: " worker-1 " }))
-      .toEqual({ workerId: "worker-1", leaseSeconds: 300 });
+      .toEqual({ workerId: "worker-1", leaseSeconds: 300, supportedPipelineVersions: [1] });
     expect(parseBrandAnalysisWorkerLeaseInput({
       workerId: "worker-1",
       leaseToken: "lease-1",

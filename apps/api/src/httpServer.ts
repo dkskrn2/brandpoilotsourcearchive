@@ -61,7 +61,11 @@ import {
   issueBrandAnalysisUploadToken,
   verifyBrandAnalysisUpload,
 } from "./brandAnalysisUpload.js";
-import { claimAndPrepareBrandAnalysis, type BrandIntelligenceRuntime } from "./brandIntelligenceHttp.js";
+import {
+  abortBrandAnalysisPreparation,
+  claimAndPrepareBrandAnalysis,
+  type BrandIntelligenceRuntime,
+} from "./brandIntelligenceHttp.js";
 
 const channels = new Set<string>(channelNames);
 const sourceTypes = new Set(["owned", "reference"]);
@@ -91,7 +95,7 @@ const kakaoStateCookiePrefix = "bp_kakao_state_";
 const instagramLoginStateCookie = "bp_instagram_login_state";
 const instagramTrendStateCookie = "bp_instagram_trend_state";
 const uuidPattern = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
-const workerResourceWorkloads = new Set(["dm", "wiki", "content"]);
+const workerResourceWorkloads = new Set(["dm", "wiki", "content", "onboarding"]);
 const contentTypeByWorkerSlug = {
   "card-news": "card_news",
   blog: "blog",
@@ -488,7 +492,11 @@ export function createServer(
     }
     if (message.startsWith("brand_analysis_") || message.startsWith("brand_intelligence_")
       || message === "scanned_pdf_not_supported") {
-      const conflict = ["brand_analysis_not_review_ready", "brand_analysis_lease_invalid"].includes(message);
+      const conflict = [
+        "brand_analysis_not_review_ready",
+        "brand_analysis_lease_invalid",
+        "brand_analysis_company_name_conflict",
+      ].includes(message);
       const unavailable = message === "brand_analysis_storage_not_configured";
       reply.code(conflict ? 409 : unavailable ? 503 : 400).send({ error: message });
       return;
@@ -1566,11 +1574,34 @@ export function createServer(
     },
   );
 
-  app.post<{ Params: { brandId: string; analysisId: string } }>(
+  app.post<{
+    Params: { brandId: string; analysisId: string };
+    Body: { companyName?: unknown };
+  }>(
     "/brands/:brandId/brand-intelligence/analyses/:analysisId/confirm",
     async (request) => {
       if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
+      const companyName = request.body?.companyName === undefined
+        ? undefined
+        : requiredAiContentField(
+            request.body.companyName,
+            "brand_analysis_company_name_required",
+            100,
+          );
       return brandIntelligenceRepository.confirmBrandAnalysis({
+        ...aiContentScope(request, request.params.brandId),
+        analysisId: request.params.analysisId,
+        ...(companyName ? { companyName } : {}),
+      });
+    },
+  );
+
+  app.post<{ Params: { brandId: string; analysisId: string } }>(
+    "/brands/:brandId/brand-intelligence/analyses/:analysisId/cancel",
+    async (request) => {
+      if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
+      abortBrandAnalysisPreparation(request.params.analysisId);
+      return brandIntelligenceRepository.cancelBrandAnalysis({
         ...aiContentScope(request, request.params.brandId),
         analysisId: request.params.analysisId,
       });
@@ -1580,16 +1611,17 @@ export function createServer(
   app.post<{ Params: { brandId: string }; Body: Record<string, unknown> }>(
     "/brands/:brandId/brand-intelligence/uploads/token",
     async (request) => {
-      if (!brandAnalysisUpload) throw new Error("brand_analysis_storage_not_configured");
-      const uploadSessionId = requiredAiContentField(
-        request.body.uploadSessionId,
-        "brand_analysis_upload_session_invalid",
-        100,
-      );
-      if (!uuidPattern.test(uploadSessionId)) throw new Error("brand_analysis_upload_session_invalid");
-      return issueBrandAnalysisUploadToken({
+      if (!brandAnalysisUpload || !brandIntelligenceRepository) {
+        throw new Error("brand_analysis_storage_not_configured");
+      }
+      const analysisId = requiredAiContentField(request.body.analysisId, "brand_analysis_id_invalid", 100);
+      const uploadId = requiredAiContentField(request.body.uploadId, "brand_analysis_upload_id_invalid", 100);
+      if (!uuidPattern.test(analysisId) || !uuidPattern.test(uploadId)) {
+        throw new Error("brand_analysis_upload_session_invalid");
+      }
+      const issued = await issueBrandAnalysisUploadToken({
         brandId: request.params.brandId,
-        uploadSessionId,
+        uploadSessionId: uploadId,
         file: {
           fileName: requiredAiContentField(request.body.fileName, "brand_analysis_file_name_invalid", 160),
           mimeType: requiredAiContentField(request.body.mimeType, "brand_analysis_file_type_invalid", 200),
@@ -1600,6 +1632,13 @@ export function createServer(
         token: brandAnalysisUpload.readWriteToken,
         generateClientToken: brandAnalysisUpload.generateClientToken,
       });
+      await brandIntelligenceRepository.beginBrandAnalysisUpload({
+        ...aiContentScope(request, request.params.brandId),
+        analysisId,
+        uploadId,
+        storagePath: issued.pathname,
+      });
+      return issued;
     },
   );
 
@@ -1609,11 +1648,14 @@ export function createServer(
       if (!brandIntelligenceRepository || !brandAnalysisUpload) {
         throw new Error("brand_analysis_storage_not_configured");
       }
-      const uploadSessionId = requiredAiContentField(request.body.uploadSessionId, "brand_analysis_upload_session_invalid", 100);
-      if (!uuidPattern.test(uploadSessionId)) throw new Error("brand_analysis_upload_session_invalid");
+      const analysisId = requiredAiContentField(request.body.analysisId, "brand_analysis_id_invalid", 100);
+      const uploadId = requiredAiContentField(request.body.uploadId, "brand_analysis_upload_id_invalid", 100);
+      if (!uuidPattern.test(analysisId) || !uuidPattern.test(uploadId)) {
+        throw new Error("brand_analysis_upload_session_invalid");
+      }
       const verified = await verifyBrandAnalysisUpload({
         brandId: request.params.brandId,
-        uploadSessionId,
+        uploadSessionId: uploadId,
         file: {
           fileName: requiredAiContentField(request.body.fileName, "brand_analysis_file_name_invalid", 160),
           mimeType: requiredAiContentField(request.body.mimeType, "brand_analysis_file_type_invalid", 200),
@@ -1623,14 +1665,24 @@ export function createServer(
         storagePath: requiredAiContentField(request.body.storagePath, "brand_analysis_upload_path_invalid", 2_000),
         storageUrl: requiredAiContentField(request.body.storageUrl, "brand_analysis_upload_url_invalid", 2_000),
       }, { token: brandAnalysisUpload.readWriteToken, headBlob: brandAnalysisUpload.headBlob });
-      return brandIntelligenceRepository.registerBrandAnalysisUpload({
+      await brandIntelligenceRepository.completeBrandAnalysisUpload({
         ...aiContentScope(request, request.params.brandId),
-        fileName: verified.fileName,
-        mimeType: verified.mimeType,
-        byteSize: verified.byteSize,
-        checksum: verified.checksum,
+        analysisId,
+        uploadId,
         storagePath: verified.storagePath,
         storageUrl: verified.storageUrl,
+      });
+      return { id: uploadId };
+    },
+  );
+
+  app.post<{ Params: { brandId: string; analysisId: string } }>(
+    "/brands/:brandId/brand-intelligence/analyses/:analysisId/start",
+    async (request) => {
+      if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
+      return brandIntelligenceRepository.startBrandAnalysis({
+        ...aiContentScope(request, request.params.brandId),
+        analysisId: request.params.analysisId,
       });
     },
   );
@@ -2211,6 +2263,14 @@ export function createServer(
     };
   });
 
+  app.post("/worker/brand-analyses/cleanup", async (request, reply) => {
+    if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
+    if (!brandIntelligenceRepository?.cleanupBrandAnalysisRuns) {
+      throw new Error("brand_intelligence_not_configured");
+    }
+    return brandIntelligenceRepository.cleanupBrandAnalysisRuns();
+  });
+
   app.post<{ Params: { analysisId: string }; Body: Record<string, unknown> }>(
     "/worker/brand-analyses/:analysisId/heartbeat",
     async (request, reply) => {
@@ -2495,7 +2555,7 @@ export function createServer(
     const lease = await repository.acquireWorkerResourceLease(
       "codex_cli",
       request.body.workerId.trim(),
-      request.body.workload as "dm" | "wiki" | "content",
+      request.body.workload as "dm" | "wiki" | "content" | "onboarding",
     );
     if (!lease) {
       reply.code(204);

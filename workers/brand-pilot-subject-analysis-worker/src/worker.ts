@@ -12,11 +12,13 @@ import {
 import { SubjectAnalysisApiError } from "./client.js";
 import { buildSubjectPrompt } from "./promptBuilder.js";
 import { parseSubjectAnalysisResult, parseSubjectAnalysisResultV2, SubjectAnalysisContractError } from "./result.js";
-import { terminateProcessTree } from "@brand-pilot/worker-runtime";
+import { terminateProcessTree, withFailClosedResourceLease } from "@brand-pilot/worker-runtime";
 
 export { terminateProcessTree } from "@brand-pilot/worker-runtime";
 
-export interface SubjectAnalysisRunner { run(job: SubjectWorkerJob): Promise<SubjectWorkerResult>; }
+export interface SubjectAnalysisRunner {
+  run(job: SubjectWorkerJob, signal?: AbortSignal): Promise<SubjectWorkerResult>;
+}
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -35,7 +37,13 @@ export function buildSubjectAnalysisChildEnv(source: NodeJS.ProcessEnv): NodeJS.
   return output;
 }
 
-type SpawnFunction = (command: string, args: string[], timeoutMs: number, env?: NodeJS.ProcessEnv) => Promise<void>;
+type SpawnFunction = (
+  command: string,
+  args: string[],
+  timeoutMs: number,
+  env?: NodeJS.ProcessEnv,
+  signal?: AbortSignal,
+) => Promise<void>;
 
 export function createCodexRunner({
   timeoutMs = 900_000,
@@ -44,7 +52,7 @@ export function createCodexRunner({
   runtimeRoot = path.resolve(process.cwd(), ".runtime-subject-analysis"),
   spawnProcess = BunlessSpawn,
 }: { timeoutMs?: number; scriptPath?: string; skillPath?: string; runtimeRoot?: string; spawnProcess?: SpawnFunction } = {}): SubjectAnalysisRunner {
-  return { async run(job) {
+  return { async run(job, signal) {
     await mkdir(runtimeRoot, { recursive: true });
     const workDir = await mkdtemp(path.join(runtimeRoot, "job-"));
     const outputFile = path.join(workDir, "result.json");
@@ -54,7 +62,7 @@ export function createCodexRunner({
       await mkdir(runtimeSkillDirectory, { recursive: true });
       await copyFile(skillPath, path.join(runtimeSkillDirectory, "SKILL.md"));
       await writeFile(jobFile, `${buildSubjectPrompt(job)}\n`, "utf8");
-      await spawnProcess(process.execPath, [scriptPath, `--job-file=${jobFile}`, `--output-file=${outputFile}`, `--runtime-dir=${workDir}`], timeoutMs, buildSubjectAnalysisChildEnv(process.env));
+      await spawnProcess(process.execPath, [scriptPath, `--job-file=${jobFile}`, `--output-file=${outputFile}`, `--runtime-dir=${workDir}`], timeoutMs, buildSubjectAnalysisChildEnv(process.env), signal);
       const output: unknown = JSON.parse(await readFile(outputFile, "utf8"));
       if (job.contractVersion === "subject-analysis.v1") return parseSubjectAnalysisResult(output);
       if (job.phase === "analysis") {
@@ -70,7 +78,7 @@ export function createCodexRunner({
   } };
 }
 
-const BunlessSpawn: SpawnFunction = async (command, args, timeoutMs, env) => {
+const BunlessSpawn: SpawnFunction = async (command, args, timeoutMs, env, signal) => {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(command, args, { stdio: "inherit", windowsHide: true, shell: false, detached: process.platform !== "win32", env });
     let settled = false;
@@ -78,17 +86,25 @@ const BunlessSpawn: SpawnFunction = async (command, args, timeoutMs, env) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
       callback();
+    };
+    const abort = () => {
+      void terminateProcessTree(child).finally(() => finish(() => reject(
+        signal?.reason ?? new Error("subject_analysis_cancelled"),
+      )));
     };
     const timer = setTimeout(() => {
       void terminateProcessTree(child).finally(() => finish(() => reject(new Error("subject_analysis_codex_timeout"))));
     }, timeoutMs);
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
     child.once("error", (error) => finish(() => reject(error)));
     child.once("close", (code) => finish(() => code === 0 ? resolve() : reject(new Error(`subject_analysis_codex_process_failed:${code}`))));
   });
 };
 
-export async function processSubjectAnalysisJob({ client, runner, job, leaseSeconds, heartbeatMs = 30_000 }: { client: SubjectWorkerClient; runner: SubjectAnalysisRunner; job: SubjectWorkerJob; leaseSeconds: number; heartbeatMs?: number }): Promise<{ status: "completed" | "failed"; analysisId: string }> {
+export async function processSubjectAnalysisJob({ client, runner, job, leaseSeconds, heartbeatMs = 30_000, signal }: { client: SubjectWorkerClient; runner: SubjectAnalysisRunner; job: SubjectWorkerJob; leaseSeconds: number; heartbeatMs?: number; signal?: AbortSignal }): Promise<{ status: "completed" | "failed"; analysisId: string }> {
   let heartbeatInFlight = false;
   const heartbeat = setInterval(() => {
     if (heartbeatInFlight) return;
@@ -96,7 +112,8 @@ export async function processSubjectAnalysisJob({ client, runner, job, leaseSeco
     void client.heartbeat(job, leaseSeconds).catch(() => undefined).finally(() => { heartbeatInFlight = false; });
   }, heartbeatMs);
   try {
-    const result = await runner.run(job);
+    const result = await runner.run(job, signal);
+    if (signal?.aborted) throw signal.reason ?? new Error("subject_analysis_cancelled");
     await client.complete(job, result, leaseSeconds);
     return { status: "completed", analysisId: job.analysisId };
   } catch (error) {
@@ -111,8 +128,17 @@ export async function processSubjectAnalysisJob({ client, runner, job, leaseSeco
   }
 }
 
-export async function runSubjectAnalysisOnce({ client, runner, workerId, leaseSeconds, pollMs = 5_000, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }: { client: SubjectWorkerClient; runner: SubjectAnalysisRunner; workerId: string; leaseSeconds: number; pollMs?: number; wait?: (ms: number) => Promise<unknown> }) {
-  const job = await client.claim(workerId, leaseSeconds);
-  if (!job) { await wait(pollMs); return { status: "idle" as const }; }
-  return processSubjectAnalysisJob({ client, runner, job, leaseSeconds });
+export async function runSubjectAnalysisOnce({ client, runner, workerId, leaseSeconds, pollMs = 5_000, resourceHeartbeatMs = 15_000, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }: { client: SubjectWorkerClient; runner: SubjectAnalysisRunner; workerId: string; leaseSeconds: number; pollMs?: number; resourceHeartbeatMs?: number; wait?: (ms: number) => Promise<unknown> }) {
+  const result = await withFailClosedResourceLease({
+    client,
+    workerId,
+    workload: "content",
+    heartbeatIntervalMs: resourceHeartbeatMs,
+  }, async (signal) => {
+    const job = await client.claim(workerId, leaseSeconds);
+    if (!job) return { status: "idle" as const };
+    return processSubjectAnalysisJob({ client, runner, job, leaseSeconds, signal });
+  });
+  if (result.status === "idle") await wait(pollMs);
+  return result;
 }

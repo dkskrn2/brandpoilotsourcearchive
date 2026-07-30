@@ -10,6 +10,7 @@ export interface BrandAnalysisFileDescriptor {
 
 const MAX_FILES = 5;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 const supported = new Map<string, readonly string[]>([
   [".txt", ["text/plain"]],
   [".md", ["text/markdown", "text/plain"]],
@@ -23,6 +24,9 @@ export function validateBrandAnalysisFiles(
   files: BrandAnalysisFileDescriptor[],
 ): BrandAnalysisFileDescriptor[] {
   if (files.length > MAX_FILES) throw new Error("brand_analysis_upload_limit_exceeded");
+  if (files.reduce((total, file) => total + file.byteSize, 0) > MAX_TOTAL_BYTES) {
+    throw new Error("brand_analysis_upload_total_too_large");
+  }
   return files.map((file) => {
     const extension = extname(file.fileName).toLowerCase();
     const mimeTypes = supported.get(extension);

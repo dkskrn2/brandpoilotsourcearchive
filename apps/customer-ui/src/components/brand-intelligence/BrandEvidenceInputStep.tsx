@@ -14,12 +14,15 @@ export function BrandEvidenceInputStep({
   error,
   onSubmit,
   initialOwnedUrl = "",
+  initialCompanyName = "",
 }: {
   busy: boolean;
   error: string | null;
   initialOwnedUrl?: string;
-  onSubmit(input: { ownedUrl: string | null; files: File[] }): Promise<void>;
+  initialCompanyName?: string;
+  onSubmit(input: { companyName: string; ownedUrl: string | null; files: File[] }): Promise<void>;
 }) {
+  const [companyName, setCompanyName] = useState(initialCompanyName);
   const [ownedUrl, setOwnedUrl] = useState(initialOwnedUrl);
   const [files, setFiles] = useState<SelectedEvidenceFile[]>([]);
   const [validation, setValidation] = useState<string | null>(null);
@@ -28,12 +31,19 @@ export function BrandEvidenceInputStep({
   useEffect(() => {
     setOwnedUrl((current) => current || initialOwnedUrl);
   }, [initialOwnedUrl]);
+  useEffect(() => {
+    setCompanyName((current) => current || initialCompanyName);
+  }, [initialCompanyName]);
 
   function chooseFiles(selected: File[]) {
     if (files.length + selected.length > 5) return setValidation("문서는 최대 5개까지 첨부할 수 있습니다.");
     const invalid = selected.find((file) => !acceptedExtensions.includes(file.name.split(".").pop()?.toLowerCase() ?? ""));
     if (invalid) return setValidation("TXT, MD, PDF, CSV, XLSX 파일만 첨부할 수 있습니다.");
     if (selected.some((file) => file.size > 10 * 1024 * 1024)) return setValidation("파일 하나의 크기는 10MB 이하여야 합니다.");
+    if ([...files.map(({ file }) => file), ...selected]
+      .reduce((total, file) => total + file.size, 0) > 25 * 1024 * 1024) {
+      return setValidation("첨부 문서 전체 크기는 25MB 이하여야 합니다.");
+    }
     setValidation(null);
     setFiles((current) => [
       ...current,
@@ -42,6 +52,11 @@ export function BrandEvidenceInputStep({
   }
 
   async function submit() {
+    const normalizedCompanyName = companyName.normalize("NFKC").trim();
+    if (!normalizedCompanyName) return setValidation("회사명을 입력하세요.");
+    if (normalizedCompanyName.length > 100 || /[\u0000-\u001f\u007f]/.test(normalizedCompanyName)) {
+      return setValidation("회사명을 100자 이내의 올바른 문자로 입력하세요.");
+    }
     const normalizedUrl = ownedUrl.trim();
     if (!normalizedUrl && files.length === 0) return setValidation("자사 URL 또는 문서를 하나 이상 입력하세요.");
     if (normalizedUrl) {
@@ -52,13 +67,30 @@ export function BrandEvidenceInputStep({
       }
     }
     setValidation(null);
-    await onSubmit({ ownedUrl: normalizedUrl || null, files: files.map((item) => item.file) });
+    await onSubmit({
+      companyName: normalizedCompanyName,
+      ownedUrl: normalizedUrl || null,
+      files: files.map((item) => item.file),
+    });
   }
 
   return (
     <section className="panel brand-intelligence-step">
       <div className="panel-head"><h2>분석할 자사 자료</h2></div>
       <div className="panel-body brand-evidence-form">
+        <label className="field-stack">
+          <span className="field-label">회사명</span>
+          <input
+            type="text"
+            value={companyName}
+            onChange={(event) => setCompanyName(event.target.value)}
+            placeholder="회사명을 입력하세요"
+            maxLength={100}
+            disabled={busy}
+          />
+          <small>카카오 계정의 사람 이름과 구분해 실제 회사명을 입력하세요.</small>
+        </label>
+
         <label className="field-stack">
           <span className="field-label">자사 URL</span>
           <input

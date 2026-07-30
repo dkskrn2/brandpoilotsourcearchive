@@ -30,7 +30,11 @@ export function Topbar({
   const { usage } = useAiContentUsage();
   const [loggingOut, setLoggingOut] = useState(false);
   const remainingCount = status?.onboarding.remainingCount ?? 0;
-  const brandName = session?.brand.name ?? status?.brandName ?? "모종";
+  const statusBrandName = status?.brandName;
+  const sessionBrandName = session?.brand.name;
+  const brandName = [statusBrandName, sessionBrandName].find((name) => (
+    name && !["내 브랜드", "Brand", "모종"].includes(name)
+  )) ?? "회사명 확인 필요";
   const statusLabel = error && !status
     ? "API 확인 필요"
     : loading && !status

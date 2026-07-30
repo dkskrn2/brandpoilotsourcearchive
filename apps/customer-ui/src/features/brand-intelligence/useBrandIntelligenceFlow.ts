@@ -35,7 +35,10 @@ export function useBrandIntelligenceFlow({
         const next = await refresh();
         if (stopped || !next) return;
         setError(null);
-        if (["queued", "extracting", "analyzing"].includes(next.status)) timer = setTimeout(poll, 2_000);
+        if ([
+          "queued", "accepting_uploads", "waiting_for_resource", "extracting",
+          "analyzing", "running", "finalizing", "cancel_requested", "purging",
+        ].includes(next.status)) timer = setTimeout(poll, 2_000);
       } catch {
         if (!stopped) setError("분석 상태를 불러오지 못했습니다.");
       } finally {

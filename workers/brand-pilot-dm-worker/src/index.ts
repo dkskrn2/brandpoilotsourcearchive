@@ -43,22 +43,29 @@ const common = {
   timeoutMs,
   heartbeatIntervalMs: Math.max(1_000, Number(process.env.HEARTBEAT_INTERVAL_MS ?? 5_000)),
   runCodex: runCodexJson,
-  withCodexLease: <T>(task: () => Promise<T>, onWait: () => Promise<unknown>) => withWorkerResourceLease({
+  withCodexLease: <T>(
+    task: (signal?: AbortSignal) => Promise<T>,
+    onWait: () => Promise<unknown>,
+  ) => withWorkerResourceLease({
     client: api,
     workerId,
     workload: "dm",
     pollIntervalMs: resourcePollIntervalMs,
     heartbeatIntervalMs: resourceHeartbeatIntervalMs,
     onWait,
-  }, task),
+  }, (signal) => task(signal)),
 };
 const wikiVersions = {
   embeddingModel: common.embeddingModel,
   embeddingVersion: process.env.OPENAI_EMBEDDING_VERSION?.trim() || "v1",
   curatorPromptVersion: process.env.KNOWLEDGE_CURATOR_PROMPT_VERSION?.trim() || "v1",
 };
-const runWikiCodex = (input: { prompt: string; runtimeDirectory: string; timeoutMs: number }) => runCodexJson({
+const runWikiCodex = (
+  input: { prompt: string; runtimeDirectory: string; timeoutMs: number },
+  signal?: AbortSignal,
+) => runCodexJson({
   ...input,
+  signal,
   model: process.env.WIKI_CODEX_MODEL?.trim() || "gpt-5.4",
   reasoningEffort: process.env.WIKI_CODEX_REASONING_EFFORT?.trim() || "low",
   fastMode: process.env.WIKI_CODEX_FAST_MODE?.trim().toLowerCase() !== "false",
@@ -70,14 +77,17 @@ async function runDmLaneOnce() {
   return runProfileRefreshOnce({ workerId, api });
 }
 
-async function runWikiLaneWithoutResource() {
+async function runWikiLaneWithoutResource(signal?: AbortSignal) {
+  const runCodex = (input: { prompt: string; runtimeDirectory: string; timeoutMs: number }) => (
+    runWikiCodex(input, signal)
+  );
   const source = await runCompiledWikiSourceItemOnce({
     workerId,
     db,
     ...wikiVersions,
     runtimeDirectory,
     curatorTimeoutMs,
-    runCodex: runWikiCodex,
+    runCodex,
   });
   if (source.status !== "idle") return source;
   const compilation = await runWikiCompilationItemOnce({
@@ -85,7 +95,7 @@ async function runWikiLaneWithoutResource() {
     db,
     runtimeDirectory,
     timeoutMs: wikiTimeoutMs,
-    runCodex: runWikiCodex,
+    runCodex,
   });
   if (compilation.status !== "idle") return compilation;
   const finalization = await runWikiFinalizeOnce({
@@ -101,7 +111,7 @@ async function runWikiLaneWithoutResource() {
     db,
     runtimeDirectory,
     timeoutMs: wikiTimeoutMs,
-    runCodex: runWikiCodex,
+    runCodex,
   });
 }
 

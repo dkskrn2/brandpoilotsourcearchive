@@ -43,6 +43,20 @@ export function createClient(apiUrl: string, token: string, fetchImpl: typeof fe
     return await response.json() as Record<string, unknown>;
   }
   return {
+    async acquireResource(workerId, workload) {
+      const payload = await request("/worker/resources/codex-cli/acquire", { workerId, workload });
+      return payload.id ? payload as unknown as {
+        id: string;
+        leaseToken: string;
+        expiresAt: string;
+      } : null;
+    },
+    heartbeatResource(id, workerId, leaseToken) {
+      return request(`/worker/resources/codex-cli/${id}/heartbeat`, { workerId, leaseToken });
+    },
+    releaseResource(id, workerId, leaseToken) {
+      return request(`/worker/resources/codex-cli/${id}/release`, { workerId, leaseToken });
+    },
     async claim(workerId, leaseSeconds) {
       const payload = await request("/worker/ai-content-subject-analyses/claim", { workerId, leaseSeconds });
       return (payload.job ?? null) as SubjectWorkerJob | null;

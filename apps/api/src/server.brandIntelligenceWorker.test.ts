@@ -6,10 +6,12 @@ import type { BrandAnalysisClaim, BrandIntelligenceRepository } from "./brandInt
 const analysisId = "33333333-3333-4333-8333-333333333333";
 const claim = {
   id: analysisId, workspaceId: "workspace-1", brandId: "brand-1", status: "analyzing",
-  input: { ownedUrl: "https://example.com", uploadIds: [] }, evidence: [], result: null,
+  input: { companyName: null, ownedUrl: "https://example.com", uploadIds: [] }, evidence: [], result: null,
   editedResult: null, effectiveResult: null, idempotencyKey: "analysis-1", isActive: false,
   leasedBy: "worker-1", leaseToken: "44444444-4444-4444-8444-444444444444",
   leaseExpiresAt: "2099-01-01T00:00:00.000Z", attemptCount: 1,
+  activeStartedAt: "2026-07-21T00:00:00.000Z",
+  deadlineAt: "2026-07-21T00:20:00.000Z",
   availableAt: "2026-07-21T00:00:00.000Z", errorCode: null, errorMessage: null,
   createdAt: "2026-07-21T00:00:00.000Z", updatedAt: "2026-07-21T00:00:00.000Z",
   completedAt: null, confirmedAt: null,
