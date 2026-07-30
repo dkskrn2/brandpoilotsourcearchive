@@ -1139,6 +1139,16 @@ test("all CLI worker images install the pinned Codex runtime and run real entryp
   assert.doesNotMatch(imageDockerfile, /tsx\/esm\/api|src\/[A-Za-z0-9_.-]+\.ts/);
 });
 
+test("brand intelligence image preserves production dependencies from npm workspaces", () => {
+  const dockerfile = read("workers/brand-pilot-brand-intelligence-worker/Dockerfile");
+
+  assert.match(
+    dockerfile,
+    /npm prune --omit=dev --workspaces/,
+    "workspace production dependencies such as Playwright must survive the build-stage prune",
+  );
+});
+
 test("shared worker runtime is emitted for production and CLI children use explicit execution boundaries", () => {
   const runtimePackage = JSON.parse(read("workers/brand-pilot-worker-runtime/package.json"));
   const runtimeTsconfig = JSON.parse(read("workers/brand-pilot-worker-runtime/tsconfig.json"));
