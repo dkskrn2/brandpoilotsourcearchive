@@ -76,6 +76,11 @@ test("runtime consumers build the emitted package before developer entrypoints",
     }
   }
 
+  const apiPackage = JSON.parse(await readFile("apps/api/package.json", "utf8"));
+  if (apiPackage.scripts?.pretest !== runtimeBuild) {
+    violations.push(`${apiPackage.name}:pretest`);
+  }
+
   assert.deepEqual(
     violations,
     [],
