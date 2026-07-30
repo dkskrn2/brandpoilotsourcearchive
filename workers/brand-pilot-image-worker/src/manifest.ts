@@ -17,6 +17,7 @@ interface ValidatedWorkerManifestBase {
   validation: { passed: true };
   caption?: string;
   hashtags?: string[];
+  qualityBrief?: Record<string, unknown>;
 }
 
 export interface ValidatedFeedManifest extends ValidatedWorkerManifestBase {
@@ -113,7 +114,13 @@ function parseAssets(
     if (!role) invalid("asset_role_invalid");
     const width = deliveryFormat === "instagram_feed_carousel" ? Number(record.width) : 1080;
     const height = deliveryFormat === "instagram_feed_carousel" ? Number(record.height) : 1920;
-    if (deliveryFormat === "instagram_feed_carousel" && (width !== 1080 || height !== 1080)) {
+    if (deliveryFormat === "instagram_feed_carousel" && (
+      !Number.isSafeInteger(width)
+      || !Number.isSafeInteger(height)
+      || width <= 0
+      || height <= 0
+      || width !== height
+    )) {
       invalid("image_asset_dimensions_invalid");
     }
     const checksum = nonEmptyString(record.checksum);
@@ -221,7 +228,8 @@ export function parseWorkerManifest(
     promptVersion: expectedPromptVersion,
     selectedAssetCount,
     assets,
-    validation: { passed: true as const }
+    validation: { passed: true as const },
+    ...(asRecord(record.qualityBrief) ? { qualityBrief: asRecord(record.qualityBrief)! } : {})
   };
 
   if (deliveryFormat === "instagram_feed_carousel") {

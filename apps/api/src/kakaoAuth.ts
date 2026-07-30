@@ -37,7 +37,7 @@ function mapAuthSession(row: Record<string, unknown>): AuthSession {
   };
 }
 
-async function ensureCoreBrandChannels(
+async function ensureBrandChannels(
   queryable: Pick<Pool, "query">,
   input: { workspaceId: string; brandId: string }
 ) {
@@ -45,7 +45,11 @@ async function ensureCoreBrandChannels(
     `insert into brand_channels (workspace_id, brand_id, channel, status, account_label, enabled)
      values
        ($1, $2, 'instagram', 'not_connected', '연결 전', true),
-       ($1, $2, 'threads', 'not_connected', '연결 전', true)
+       ($1, $2, 'threads', 'not_connected', '연결 전', true),
+       ($1, $2, 'x', 'not_connected', '연결 전', false),
+       ($1, $2, 'linkedin', 'not_connected', '연결 전', false),
+       ($1, $2, 'youtube', 'not_connected', '연결 전', false),
+       ($1, $2, 'tiktok', 'not_connected', '연결 전', false)
      on conflict (brand_id, channel) where deleted_at is null do nothing`,
     [input.workspaceId, input.brandId]
   );
@@ -83,19 +87,21 @@ export function createKakaoAuthStore(pool: Pool) {
         await client.query("insert into user_identities (user_id, provider, provider_subject) values ($1, 'kakao', $2)", [userId, profile.subject]);
         const workspace = await client.query(
           `insert into workspaces (name, slug, created_by_user_id) values ($1, $2, $3) returning id, name`,
-          [`${profile.nickname || "새 사용자"}의 Brand Pilot`, workspaceSlug(), userId]
+          [`${profile.nickname || "새 사용자"}의 모종`, workspaceSlug(), userId]
         );
         const workspaceId = workspace.rows[0].id;
         await client.query("insert into workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')", [workspaceId, userId]);
         const brand = await client.query(
-          `insert into brands (workspace_id, name, created_by_user_id) values ($1, '내 브랜드', $2) returning id, name`,
+          `insert into brands (workspace_id, name, company_name_state, created_by_user_id)
+           values ($1, '내 브랜드', 'provisional', $2)
+           returning id, name`,
           [workspaceId, userId]
         );
         await client.query(
           "insert into brand_profiles (workspace_id, brand_id, auto_approval_enabled) values ($1, $2, true)",
           [workspaceId, brand.rows[0].id]
         );
-        await ensureCoreBrandChannels(client as Pick<Pool, "query">, { workspaceId, brandId: brand.rows[0].id });
+        await ensureBrandChannels(client as Pick<Pool, "query">, { workspaceId, brandId: brand.rows[0].id });
         await client.query("commit");
         return {
           userId,
@@ -143,9 +149,10 @@ export function createKakaoAuthStore(pool: Pool) {
       );
       return Boolean(result.rowCount);
     },
-    async canAccessResource(userId: string, table: "source_urls" | "content_outputs" | "publish_queue" | "support_requests", resourceId: string) {
+    async canAccessResource(userId: string, table: "source_urls" | "content_outputs" | "publish_queue" | "support_requests" | "dm_attention_items", resourceId: string) {
+      const resourceTable = table === "content_outputs" ? "channel_outputs" : table;
       const result = await pool.query(
-        `select 1 from ${table} resource join workspace_members wm on wm.workspace_id = resource.workspace_id
+        `select 1 from ${resourceTable} resource join workspace_members wm on wm.workspace_id = resource.workspace_id
          where resource.id = $1 and wm.user_id = $2 and wm.status = 'active' and wm.deleted_at is null`,
         [resourceId, userId]
       );

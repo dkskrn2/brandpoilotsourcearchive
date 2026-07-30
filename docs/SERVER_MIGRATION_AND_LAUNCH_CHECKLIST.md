@@ -5,12 +5,191 @@
 ## 현재 상태
 
 - Supabase를 중앙 PostgreSQL 데이터베이스로 사용한다.
-- Vercel은 중앙 API와 정적 정책·서비스 페이지를 호스팅한다.
+- Vercel은 현재 중앙 API와 정적 정책·서비스 페이지를 호스팅한다.
 - Vercel Blob은 공개 생성 Instagram PNG 파일과 매니페스트를 저장한다.
-- 별도의 Windows PC에서 Codex 이미지 워커를 실행한다.
+- 콘텐츠 생성, DM, Wiki, AI 카드뉴스, AI 블로그, AI 마케팅 작업은 각각의 워커 프로세스로 분리되어 있다.
 - Kakao 테스트 앱 로그인 코드, 세션 저장, 최초 워크스페이스 생성, 로그인 페이지가 구현되어 있다.
 - `db/migrations/007_kakao_auth.sql`을 포함한 각 마이그레이션의 적용 여부는 대상 데이터베이스의 적용 이력과 실제 스키마를 확인하여 판단한다.
-- Threads 게시는 구현되지 않았다. 준비되기 전에는 사용 가능한 게시 채널로 표시하지 않는다.
+- Instagram 외 채널은 OAuth와 게시 어댑터가 실제로 연결된 채널만 활성화한다.
+
+## 로컬 중앙 서버 1차 이관 기준
+
+1차 이관에서는 장애 범위를 줄이기 위해 **중앙 API와 일부 상시 워커만 로컬 서버로 옮긴다.** 데이터베이스와 Object Storage를 동시에 옮기지 않는다.
+
+| 위치 | 구성 요소 | 초기 실행 수 | 비고 |
+| --- | --- | ---: | --- |
+| 로컬 중앙 서버 | 중앙 API | 1 | 인증, OAuth callback, Webhook, 큐, 게시, 관리자 API |
+| 로컬 중앙 서버 | API 내부 로컬 스케줄러 | 1 | 현재 구현 기준. `LOCAL_SCHEDULER_ENABLED=true`인 API는 정확히 하나만 실행 |
+| 로컬 중앙 서버 | DM 워커 | 2 | 서로 다른 `WORKER_ID`, 동일 공용 큐 사용 |
+| 로컬 중앙 서버 | Wiki 워커 | 1 | 저우선순위 또는 야간 실행 |
+| 별도 생성 PC | 자동 운영 콘텐츠 워커 | 1 | 이미지·영상 생성과 Blob 업로드 |
+| 별도 생성 PC | 카드뉴스·블로그·마케팅 워커 | 유형별 0~1 | 요청이 있을 때 실행. 콘텐츠 lease를 공유 |
+| 외부 유지 | Supabase PostgreSQL | 1 | 1차 이관 중 DB 이동 금지 |
+| 외부 유지 | Vercel Blob/Object Storage | 1 | 생성 결과물 장기 저장, 로컬 임시 파일은 성공 후 삭제 |
+| 외부 유지 | 고객·관리자 프론트 | 1 배포 | 공개 API URL만 로컬 중앙 API 주소로 변경 |
+
+`I5 8세대`, RAM 16GB, SSD 1TB 서버는 트래픽이 낮은 초기 운영에서 위 구성을 실행할 수 있다. 다만 콘텐츠 이미지·영상 생성 워커는 별도 PC에 유지하고, 중앙 서버의 Codex CLI 전체 동시 실행은 `WORKER_CODEX_MAX_CONCURRENCY=2`, DM 예약 슬롯은 `WORKER_CODEX_DM_RESERVED_SLOTS=1`로 제한한다.
+
+현재 루트 `docker-compose.yml`은 개발용 PostgreSQL 하나만 실행하며 개발 비밀번호를 사용한다. **중앙 API와 워커의 운영 배포 정의가 아니므로 그대로 운영 서버에 사용하지 않는다.** 컨테이너 이관을 선택할 경우 API·워커별 Dockerfile, healthcheck, 비밀값 주입, 로그·재시작 정책을 별도로 완성한 뒤 사용한다.
+
+## 이관 전 결정 사항
+
+- [ ] 공개 API 주소를 확정한다. 기존 API 도메인을 유지하고 DNS 대상만 로컬 서버로 바꾸는 방식이 OAuth 변경량이 가장 적다.
+- [ ] 고정 공인 IP, DDNS 또는 outbound tunnel 중 공개 진입 방식을 하나로 정한다.
+- [ ] HTTPS 종료 지점을 정한다. 외부에는 `443`만 열고 내부 API 포트 `4000`과 DB 포트는 공개하지 않는다.
+- [ ] 프론트는 Vercel에 유지할지 같은 서버로 옮길지 확정한다. 1차 권장은 Vercel 유지다.
+- [ ] Supabase와 Blob을 1차 이관에서 유지한다. 로컬 PostgreSQL 전환은 별도 이관 작업으로 분리한다.
+- [ ] 이관 시간, 작업자, 롤백 결정자와 최대 허용 중단 시간을 정한다.
+
+## 네트워크·도메인 확인
+
+- [ ] 로컬 서버의 DHCP 주소를 고정하고 절전·최대 절전·자동 종료를 해제한다.
+- [ ] 공유기에서 API 서버로 필요한 트래픽만 전달한다. RDP와 PostgreSQL은 인터넷에 직접 노출하지 않는다.
+- [ ] Caddy, Nginx 또는 관리형 tunnel 중 하나로 HTTPS를 제공하고 인증서 자동 갱신을 확인한다.
+- [ ] `GET /health`와 Meta Webhook 검증 경로를 외부 LTE 네트워크에서도 호출할 수 있는지 확인한다.
+- [ ] 고객 UI의 API URL과 CORS 허용 origin을 실제 HTTPS 주소로 맞춘다.
+- [ ] 쿠키 기반 로그인에서는 `localhost`, `127.0.0.1`, 운영 도메인을 혼용하지 않는다.
+- [ ] Meta Webhook callback, Meta OAuth redirect, Meta Trends OAuth redirect, Kakao redirect URI를 실제 공개 API 주소와 정확히 일치시킨다.
+- [ ] DNS 변경 전 TTL을 낮추고, 이관 완료 후 정상 값으로 되돌린다.
+
+필수 공개 callback 예시:
+
+```text
+https://<api-host>/auth/kakao/callback
+https://<api-host>/auth/meta/callback
+https://<api-host>/auth/meta/trends/callback
+https://<api-host>/<instagram-webhook-path>
+```
+
+실제 경로는 배포된 라우트와 개발자 콘솔 값을 대조한다. 예시를 그대로 등록하지 않는다.
+
+## 환경변수 이관 원칙
+
+환경변수 파일 하나를 모든 프로세스가 공유하지 않는다. 중앙 API, DM/Wiki 워커, 콘텐츠 생성 워커는 각 프로세스가 필요한 값만 가진다.
+
+### 중앙 API
+
+- DB·Storage: `SUPABASE_DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, 버킷 설정
+- 내부 인증: `WORKER_API_TOKEN`, `ADMIN_SERVICE_TOKEN`, `CRON_SECRET`
+- 암호화: `CREDENTIAL_ENCRYPTION_KEY`
+- OAuth·Webhook: Meta, Kakao 앱 ID·secret·redirect·verify token
+- 공개 연결: `AUTH_FRONTEND_URL`, CORS와 artifact origin
+- 스케줄러: `LOCAL_SCHEDULER_ENABLED`, 크롤링·성과·생성 제한
+
+### DM·Wiki 워커
+
+- `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, 고유 `WORKER_ID`
+- Wiki 검색에 필요한 제한된 DB URL과 embedding 설정
+- Codex CLI 모델·timeout·poll·heartbeat 설정
+- Meta access token, Meta app secret, Supabase service role key는 두지 않는다.
+
+### 콘텐츠 생성 워커
+
+- `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, 고유 `WORKER_ID`
+- Blob 쓰기 토큰, Codex·이미지 모델, Python·FFmpeg 경로
+- DB URL, Meta credential, Kakao secret는 두지 않는다.
+
+확인 절차:
+
+- [ ] 기존 Vercel과 각 PC의 환경변수 **이름 목록**을 내보내되 값은 문서나 채팅에 기록하지 않는다.
+- [ ] `apps/api/.env.example`과 각 워커 `.env.example`을 기준으로 누락·중복을 비교한다.
+- [ ] `WORKER_API_TOKEN`, callback URL, 암호화 키가 필요한 프로세스에서만 일치하는지 확인한다.
+- [ ] `CREDENTIAL_ENCRYPTION_KEY`는 기존 채널 credential을 복호화해야 하므로 임의로 재생성하지 않는다.
+- [ ] 이관 후 교체할 secret와 유지할 암호화 키를 구분한다.
+- [ ] `.env` ACL을 서버 실행 계정과 관리자만 읽을 수 있게 설정하고 Git·백업 로그에서 제외한다.
+- [ ] API와 워커를 시작하기 전에 `npm run env:check`를 실행한다.
+
+## 프로세스 운영 기준
+
+- [ ] 개발용 `npm run dev` 대신 빌드 결과와 운영 실행 명령을 사용한다.
+- [ ] 중앙 API, DM 워커 2개, Wiki 워커를 각각 독립 서비스로 등록한다.
+- [ ] 모든 서비스에 부팅 후 자동 시작, 비정상 종료 재시작, 최대 재시작 횟수와 지연을 설정한다.
+- [ ] 각 워커 `WORKER_ID`가 서버와 프로세스마다 유일한지 확인한다.
+- [ ] stdout·stderr 로그를 파일 또는 수집기로 보내고 일별 rotation과 보존 기간을 설정한다.
+- [ ] Windows Update 후 자동 재부팅 시간을 정하고 서비스 자동 복구를 실제로 시험한다.
+- [ ] SSD 여유 공간 20% 미만, RAM 지속 85% 이상, CPU 지속 90% 이상을 경고 조건으로 둔다.
+- [ ] 로컬 생성 임시 파일은 Blob 업로드와 manifest 반영 성공 후 삭제한다.
+- [ ] 바이러스 검사·인덱싱이 워커 임시 폴더와 `node_modules`를 장시간 잠그지 않는지 확인한다.
+
+## 중복 실행 방지
+
+이관에서 가장 위험한 오류는 구 서버와 신 서버가 동시에 같은 큐를 처리하는 것이다.
+
+- [ ] 새 API는 처음에 `LOCAL_SCHEDULER_ENABLED=false`, `INSTAGRAM_PUBLISH_ENABLED=false`로 시작한다.
+- [ ] 새 서버 health, DB 연결, OAuth 복호화, 읽기 API를 먼저 확인한다.
+- [ ] 기존 워커를 중지한 뒤 heartbeat가 stale로 바뀌고 lease가 만료된 것을 확인한다.
+- [ ] 새 워커를 한 종류씩 시작하고 고유 `WORKER_ID`로 heartbeat가 기록되는지 확인한다.
+- [ ] 기존 Vercel Cron 또는 구 서버 스케줄러가 더 이상 실행되지 않는 것을 확인한 뒤 새 API 한 곳만 스케줄러를 활성화한다.
+- [ ] Instagram 게시 활성화는 큐 중복 claim과 예약 시간 검증 후 마지막에 켠다.
+- [ ] 같은 DB를 사용하는 모든 서버에서 `worker_resource_leases`와 작업 claim이 단일 실행을 보장하는지 확인한다.
+
+## 권장 이관 순서
+
+1. 현재 Vercel API, Supabase, Blob, 워커의 정상 기준과 큐 건수를 기록한다.
+2. DB 백업과 환경변수 이름 목록을 확보한다.
+3. 로컬 서버에 Node.js, Git, Codex CLI와 필요한 런타임을 설치한다.
+4. 저장소를 배포 전용 경로에 checkout하고 lockfile 기준으로 설치·빌드·테스트한다.
+5. 중앙 API를 스케줄러·게시 비활성 상태로 시작한다.
+6. 내부 URL과 공개 HTTPS URL에서 health, 로그인, 관리자 조회를 확인한다.
+7. Meta·Kakao developer console의 callback을 새 공개 API로 변경하고 OAuth를 다시 연결한다.
+8. 고객 UI의 API URL을 새 주소로 변경한다.
+9. DM 워커 1개를 시작해 수신→검색→답변→발송 한 사이클을 시험한 뒤 두 번째 DM 워커를 시작한다.
+10. Wiki 워커를 시작해 고객 한 곳의 Wiki 재생성과 검색 회귀를 확인한다.
+11. 별도 생성 PC의 API URL·worker token을 변경하고 콘텐츠 생성 한 건을 완료한다.
+12. 구 스케줄러와 Cron을 중지한 뒤 새 스케줄러를 활성화한다.
+13. 예약 게시 한 건을 테스트 계정으로 실행한 뒤 Instagram 게시를 활성화한다.
+14. 24시간 동안 큐 지연, worker heartbeat, 실패율, 디스크·메모리와 callback 오류를 집중 관찰한다.
+
+## 기능별 이관 스모크 테스트
+
+- [ ] Kakao 신규 로그인, 재로그인, 로그아웃과 세션 유지
+- [ ] Meta OAuth 연결과 credential 복호화
+- [ ] Instagram DM Webhook 수신, FAQ 직접 응답, Wiki 응답, fallback, 수동 응답
+- [ ] 자사 URL 크롤링, source snapshot 저장, Wiki 반영
+- [ ] 자동 운영 콘텐츠 생성과 검토·자동 승인 정책
+- [ ] Instagram Feed, Story, Reel 테스트 계정 게시
+- [ ] `share_to_feed=true` Reel 게시 결과
+- [ ] 예약 게시, 실패 재시도, 취소와 중복 방지
+- [ ] Instagram 해시태그 트렌드 검색
+- [ ] 매일 03:00 KST 성과 수집 또는 수동 1회 실행
+- [ ] AI 카드뉴스·블로그·마케팅 생성과 다운로드
+- [ ] 고객 UI와 관리자 UI에서 API 오류·로그아웃 오판이 없는지 확인
+- [ ] 서비스 토큰, access token, DB URL이 브라우저 응답과 로그에 없는지 확인
+
+## 모니터링·백업
+
+- [ ] API health를 외부 모니터가 1분 간격으로 확인한다.
+- [ ] DM 수신부터 답변까지 시간, 큐 oldest age, 워커 heartbeat, stale lease를 수집한다.
+- [ ] 게시 성공률, 중복 게시, OAuth 만료·권한 오류를 알림 대상으로 둔다.
+- [ ] CPU, RAM, SSD 사용량, 네트워크 끊김과 프로세스 재시작 횟수를 기록한다.
+- [ ] Supabase 자동 백업 정책과 복구 가능 시점을 확인하고 월 1회 복구 연습을 한다.
+- [ ] 서버의 코드·설정 백업과 별도로 암호화된 환경변수 백업을 오프사이트에 보관한다.
+- [ ] 정전 대비 UPS 또는 정상 종료 정책을 준비한다.
+
+## 롤백 기준과 절차
+
+다음 중 하나면 즉시 롤백한다: OAuth callback 지속 실패, DM 또는 게시 중복, DB 연결 불안정, 큐 claim 중복, 5분 이상 API 중단, credential 복호화 실패.
+
+1. 로컬 스케줄러와 모든 로컬 워커를 중지한다.
+2. 고객 UI API URL과 DNS를 기존 Vercel API로 되돌린다.
+3. Meta·Kakao callback을 기존 주소로 복원한다.
+4. 기존 API health와 OAuth state 저장소를 확인한 뒤 기존 워커를 순차 재시작한다.
+5. 중단 시점의 `publishing`, `failed`, stale lease와 처리 중 DM을 점검한다.
+6. 같은 작업을 임의로 재실행하지 말고 idempotency·외부 게시 결과를 먼저 확인한다.
+
+Supabase와 Blob을 1차 이관에서 유지하면 데이터 롤백 없이 실행 위치만 되돌릴 수 있다.
+
+## PostgreSQL도 로컬로 옮길 경우
+
+DB 이관은 중앙 API 이관과 같은 날 진행하지 않는다.
+
+- [ ] PostgreSQL 버전과 필요한 extension을 운영 Supabase와 맞춘다.
+- [ ] `pg_dump`/`pg_restore` 리허설에서 행 수, 제약, 인덱스, migration history를 비교한다.
+- [ ] 쓰기 중단 시간을 정하고 최종 dump 이후 API와 워커가 구 DB에 쓰지 못하게 한다.
+- [ ] DB는 loopback 또는 사설망에서만 열고 인터넷에 `5432`를 노출하지 않는다.
+- [ ] 매일 암호화 전체 백업과 더 짧은 주기의 WAL/PITR 대안을 외부 저장소에 보관한다.
+- [ ] 디스크 장애와 서버 전체 손실을 가정해 다른 PC에서 복구한다.
+- [ ] 로컬 DB 장애가 API·DM·게시 전체 장애가 된다는 점을 수용할 수 있을 때만 전환한다.
 
 ## 공개 출시 전 필수 항목
 

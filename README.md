@@ -1,14 +1,17 @@
-# Brand Pilot
+# 모종
 
-Brand Pilot은 브랜드 콘텐츠의 수집, 생성, 이미지 렌더링, 검토, 소셜 채널 발행을 한 흐름으로 관리하는 자동화 서비스입니다.
+모종은 브랜드 콘텐츠의 수집, 생성, 이미지 렌더링, 검토, 소셜 채널 발행을 한 흐름으로 관리하는 통합 마케팅 자동화 서비스입니다.
 
 현재는 **내부 파일럿 단계**입니다. 공개 출시 전에 반드시 완료해야 할 보안·운영 항목이 남아 있으므로, 외부 공개나 운영 전환 전에 [공개 출시 전 필수 항목](docs/PRE_LAUNCH_REQUIRED.md)을 확인하세요.
+
+런타임 구성, 워커 책임, 기본 실행 수량과 확장 기준은 [아키텍처 기준 문서](docs/ARCHITECTURE.md)를 따릅니다. 채널 또는 워커 기능과 배포 구조를 변경할 때는 같은 작업에서 `docs/ARCHITECTURE.md`를 함께 갱신해야 합니다.
 
 ## 저장소 구조
 
 - `apps/api`: 중앙 Fastify API, 데이터베이스 및 발행 오케스트레이션
 - `apps/customer-ui`: React/Vite 고객 UI
-- `workers/brand-pilot-image-worker`: 별도 PC에서도 실행할 수 있는 이미지 생성 워커와 로컬 제어 앱
+- `workers/brand-pilot-image-worker`: 별도 PC에서도 실행할 수 있는 콘텐츠 생성 워커와 로컬 제어 앱. 디렉터리 이름은 기존 이름이며 텍스트·이미지·영상 콘텐츠를 처리함
+- `workers/brand-pilot-dm-worker`: Instagram DM 답변과 브랜드별 Wiki 작업 워커. `dm`과 `wiki` 실행 모드를 별도 프로세스로 운영함
 - `db`: PostgreSQL 마이그레이션, 스모크 테스트, 로컬 DB 안내
 - `docs`: 제품 명세, 배포·운영 절차, 출시 체크리스트
 
@@ -31,11 +34,12 @@ npm install
 
 ## 환경 설정
 
-중앙 API와 이미지 워커는 각자의 예제 파일을 복사해 로컬 환경 파일을 만듭니다.
+중앙 API와 콘텐츠 생성 워커는 각자의 예제 파일을 복사해 로컬 환경 파일을 만듭니다.
 
 ```powershell
 Copy-Item apps/api/.env.example apps/api/.env
 Copy-Item workers/brand-pilot-image-worker/.env.example workers/brand-pilot-image-worker/.env
+Copy-Item workers/brand-pilot-dm-worker/.env.example workers/brand-pilot-dm-worker/.env
 ```
 
 실제 `.env` 파일과 비밀값은 커밋하지 마세요. 비밀값을 소스 코드, 문서, 이슈, 로그에 붙여 넣지 말고 배포 환경의 비밀 관리 기능을 사용하세요. 필요한 변수와 역할은 각 `.env.example`에 정의되어 있습니다.
@@ -52,6 +56,8 @@ Supabase를 사용할 때는 `apps/api/.env`의 `SUPABASE_DATABASE_URL`을 해�
 
 **Supabase가 현재 기본 운영 데이터베이스입니다.** 운영 환경에서는 `SUPABASE_DATABASE_URL` 등 명시적인 운영 DB 연결 URL을 반드시 설정해야 하며, URL이 없으면 API가 시작되지 않습니다. 자동 로컬 fallback은 개발·테스트 같은 비운영 환경에서만 사용됩니다.
 
+브랜드 로고를 사용하려면 Supabase Storage에 public `brand-assets` 버킷을 한 번 생성하고 중앙 API에 `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_BRAND_ASSETS_BUCKET`을 설정합니다. 서비스 역할 키는 브라우저나 워커에 전달하지 않습니다. 로고 객체는 `{workspaceId}/{brandId}/logo-{uuid}.{extension}` 경로에 저장됩니다.
+
 ## 개발 실행
 
 API와 UI는 저장소 루트의 서로 다른 터미널에서 실행합니다.
@@ -66,7 +72,7 @@ npm run dev:api
 npm run dev:ui
 ```
 
-이미지 워커는 중앙 API를 유일한 원격 제어면으로 사용하므로 API가 먼저 실행 중이거나 배포되어 있어야 합니다. 필요에 맞는 명령 하나를 선택하세요.
+콘텐츠 생성 워커는 중앙 API를 유일한 원격 제어면으로 사용하므로 API가 먼저 실행 중이거나 배포되어 있어야 합니다. 필요에 맞는 명령 하나를 선택하세요.
 
 ```powershell
 # 작업 큐를 계속 폴링
@@ -79,7 +85,69 @@ npm run worker:once
 npm run worker:control
 ```
 
-워커를 전용 PC에 설치하거나 제어 앱을 사용할 때는 [워커 README](workers/brand-pilot-image-worker/README.md)와 [이미지 워커 설정](docs/IMAGE_WORKER_SETUP.md)을 따르세요.
+워커를 전용 PC에 설치하거나 제어 앱을 사용할 때는 [워커 README](workers/brand-pilot-image-worker/README.md)와 [콘텐츠 생성 워커 설정](docs/IMAGE_WORKER_SETUP.md)을 따르세요. 문서 파일명과 코드 디렉터리명에는 기존 `image-worker` 명칭이 남아 있습니다.
+
+Instagram DM 자동답변 워커는 콘텐츠 생성 워커와 별도 프로세스로 실행합니다. `DM_WORKER_DATABASE_URL`은 Wiki 검색과 갱신에만 쓰며 Meta access token은 넣지 않습니다. DM과 Wiki는 한 프로세스에서 병렬 실행하지 않습니다.
+
+```powershell
+# DM 큐를 서로 다른 ID로 폴링
+npm run dev:dm-worker:1
+npm run dev:dm-worker:2
+
+# 저우선순위 Wiki 큐 폴링
+npm run dev:wiki-worker
+
+# DM 작업을 한 번만 처리
+npm run dm-worker:once
+
+# Wiki 작업을 한 번만 처리
+npm run wiki-worker:once
+```
+
+콘텐츠 생성 워커까지 포함한 Codex CLI 동시 실행은 중앙 API의 `worker_resource_leases`로 최대 2개입니다. Wiki와 콘텐츠 생성이 합쳐서 1개를 넘지 못하게 하여 DM용 슬롯 1개를 항상 남깁니다. 이 제한을 사용하려면 `034_worker_resource_limits.sql` 마이그레이션이 적용되어 있어야 합니다.
+
+AI 콘텐츠 스튜디오는 자동 운영 워커와 분리된 유형별 워커를 사용합니다. 각 프로세스는 같은 중앙 `codex_cli/content` lease를 획득하므로 기본 설정에서는 무거운 생성 작업이 동시에 실행되지 않습니다.
+
+```powershell
+# 카드뉴스
+npm run dev:card-news-worker
+npm run card-news-worker:once
+
+# 블로그 HTML과 대표 이미지
+npm run dev:blog-worker
+npm run blog-worker:once
+
+# 마케팅 이미지와 카피
+npm run dev:marketing-worker
+npm run marketing-worker:once
+```
+
+각 워커의 `.env.example`을 같은 디렉터리의 `.env`로 복사하고 `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, `BLOB_READ_WRITE_TOKEN`, 유형별 Codex 명령을 설정합니다. `npm run dev:*`의 사전 검사는 해당 프로세스에 필요한 환경 파일만 확인하므로 UI 실행이 워커 비밀값 때문에 차단되지 않습니다.
+
+실제 산출물 smoke는 로그인 세션 쿠키와 테스트 브랜드를 명시한 뒤 유형별로 실행합니다. 이 명령은 생성까지만 수행하며 Instagram 게시를 자동 실행하지 않습니다.
+
+```powershell
+$env:AI_CONTENT_SMOKE_BRAND_ID='브랜드 UUID'
+$env:AI_CONTENT_SMOKE_COOKIE='bp_session=세션값'
+$env:AI_CONTENT_SMOKE_TYPE='card_news' # blog 또는 marketing
+npm run smoke:ai-content
+```
+
+제품·서비스 v2 분석의 생성 건 귀속과 `analysis` → `appeal` 전환을 빠르게 확인하려면 fixture smoke를 사용합니다. 이 모드는 실제 Codex 호출 대신 계약 fixture로 제품과 서비스 각각 한 건을 검증합니다.
+
+```powershell
+$env:AI_CONTENT_SMOKE_COOKIE='bp_session=세션값'
+$env:AI_CONTENT_SMOKE_WORKER_TOKEN='중앙 API와 같은 WORKER_API_TOKEN'
+npm run smoke:ai-content-subject -- --mode fixture --brand-id '브랜드 UUID'
+```
+
+`--mode real`과 `--url`을 사용하는 기존 live smoke는 공개 페이지, Codex CLI, Object Storage와 v1 읽기 호환 경로를 실제로 확인할 때만 사용합니다. v2는 생성 건 사이에서 URL 캐시를 재사용하거나 전체 `force` 재분석하지 않고, 같은 생성 건의 동일 입력만 멱등 처리합니다. 기존 v1 저장 결과와 캐시 조회는 읽기 호환으로 유지합니다.
+
+분석 워커는 초기에는 한 프로세스만 실행합니다. 이 한 프로세스가 제품·서비스의 `analysis`와 `appeal` phase를 모두 처리하며 `product-analysis.v2-ko`, `service-analysis.v2-ko`, `product-appeal.v2-ko`, `service-appeal.v2-ko` 네 프롬프트를 사용합니다. 평상시에는 `npm run dev:subject-analysis-worker`, 한 작업만 확인할 때는 `npm run subject-analysis-worker:once`를 사용합니다. 워커를 중지할 때는 실행 중인 콘솔에서 `Ctrl+C`를 누르고, 강제 종료된 작업은 lease 만료 후 최대 3회까지 재시도됩니다.
+
+분석 입력 첨부는 PNG/JPEG 이미지 5MB, TXT/Markdown/CSV 문서 5MB, PDF/XLSX 문서 10MB까지 허용합니다. 서버가 MIME, 크기, Blob 메타데이터와 파일 시그니처를 검증합니다. 로컬과 실제 서버는 워커 `.env.example`의 동일한 `SUBJECT_ANALYSIS_*` 변수 계약을 사용하며 값만 환경에 맞게 설정합니다. 세부 정책은 [Subject Analysis Worker README](workers/brand-pilot-subject-analysis-worker/README.md)를 참고하세요.
+
+DM 운영 중 일시정지 대화, 확인 필요 항목, Wiki 실패, 발송 결과 불명확 상태를 처리하는 절차는 [Instagram DM 운영 런북](docs/operations/instagram-dm-operations-runbook.md)을 따릅니다.
 
 ## 검사와 빌드
 
@@ -128,12 +196,25 @@ URL을 새로 등록하면 해당 URL을 즉시 한 번 크롤링합니다. 이�
 
 - URL 크롤링: 15분마다 실행 후보를 확인
 - 콘텐츠 생성: 매일 오전 10시 KST, 브랜드별 1회만 생성
+- 성과 수집: 로컬 중앙 API가 매일 오전 3시 KST 이후 첫 스케줄러 틱에서 브랜드·채널별 1회 실행
 - 자동 게시: 브랜드 전체에서 하루 최대 4개 주제 그룹을 11:30, 14:30, 17:30, 20:30 KST 정책 슬롯에 배정
 - 자동 승인: 검토만 건너뛰며 즉시 게시하지 않음. 이미지 렌더 완료 후에도 정책 슬롯까지 대기
 
-같은 주제의 Instagram·Threads 결과물은 하나의 `topic_publish_group`으로 묶이며, 준비된 결과물 전체가 같은 슬롯과 `scheduled_for`를 공유합니다. 한도는 채널별 4개가 아니라 브랜드별 주제 그룹 4개입니다.
+같은 주제의 활성 채널 결과물은 하나의 `topic_publish_group`으로 묶이며, 준비된 결과물 전체가 같은 슬롯과 `scheduled_for`를 공유합니다. 한도는 채널별 4개가 아니라 브랜드별 주제 그룹 4개입니다.
 
-로컬 API에서 이 흐름을 켜려면 `LOCAL_SCHEDULER_ENABLED=true`를 설정합니다. 기본값은 꺼짐이며, 운영에서는 Vercel Cron이 `/internal/cron/*` 엔드포인트를 호출합니다.
+## 멀티채널 기반
+
+채널 카탈로그는 Instagram, Threads, X, LinkedIn, YouTube, TikTok 여섯 개로 고정합니다. 브랜드별 활성화 상태와 OAuth 연결 상태는 서로 분리되며, 활성화된 채널은 콘텐츠 생성 계약, 채널별 검토, 게시 큐, 이미지·영상·HTML·텍스트 미리보기 및 다운로드 흐름에 포함됩니다.
+
+Webflow는 지원 채널이 아닙니다. 마이그레이션 `035_remove_webflow_and_split_content_status.sql`이 기존 Webflow 런타임 데이터와 제약 값을 물리적으로 제거했으며, API·UI·워커·게시 경로에서 지원하지 않습니다.
+
+현재 구현된 범위는 DB 제약과 초기 채널 생성, 활성화 API/UI, 채널별 기본 포맷과 생성 제약, 게시 어댑터 인터페이스까지입니다. Instagram 외 공급자는 OAuth 정보가 없거나 실제 어댑터가 연결되지 않은 경우 각각 `oauth_required`, `provider_not_implemented`로 실패 기록하며 게시 성공으로 처리하지 않습니다. 실제 OAuth 인증과 외부 게시 호출은 공급자별 개발자 앱 설정을 받은 뒤 연결합니다.
+
+`channel_outputs`는 생성 중 `generating`을 유지하고, 성공하면 `auto_approved` 또는 `pending_review`, 최종 실패하면 `generation_failed`로 전환합니다. `auto_approval_blocked`는 완성된 결과물이 자동 승인 정책 또는 결과 검증을 통과하지 못한 경우에만 사용합니다. 재시도 가능한 워커 오류는 출력 상태를 바꾸지 않으며, 재시도 불가 오류나 최대 시도 횟수 소진만 최종 실패로 처리합니다. 현재 재생성은 Instagram과 Threads만 지원합니다.
+
+성과 수집은 Vercel Cron 작업이 아닙니다. `.env.example`의 안전한 예제 기본값은 `LOCAL_SCHEDULER_ENABLED=false`입니다. 매일 03:00 KST 성과 수집 작업을 실행하려면 실제 로컬 중앙 API 환경(`apps/api/.env` 또는 프로세스 환경 변수)에 `LOCAL_SCHEDULER_ENABLED=true`를 설정하고 하나 이상의 API 프로세스를 지속 실행해야 합니다. 스케줄러는 매분 성과 수집 진입점을 호출하고, 저장소가 03:00 KST 이전 요청과 당일 중복 실행을 처리합니다. 03:00에 프로세스가 중단돼 있었더라도 재시작 후 다음 틱에서 당일 작업을 보충 실행합니다. Vercel 인스턴스에서는 `VERCEL` 환경 분기로 로컬 스케줄러가 시작되지 않습니다.
+
+기존 `/internal/cron/source-crawl`, `/internal/cron/daily-generation`, `/internal/cron/publish-due` 엔드포인트는 Vercel Cron에서 계속 호출할 수 있으며 `CRON_SECRET` 인증이 필요합니다.
 
 자동 운영을 배포 환경에서 사용하려면 다음 순서를 따르세요.
 
@@ -147,7 +228,7 @@ URL을 새로 등록하면 해당 URL을 즉시 한 번 크롤링합니다. 이�
 
 중앙 API는 주제와 활성 Instagram 포맷을 선택합니다. 포맷은 Feed 캐러셀 → Story → Reel 순서로 순환하며, 중앙 API는 storyboard나 최종 이미지·장면 수를 만들지 않고 상한 `maxImages: 5`만 작업 계약에 넣습니다. 기본값은 Feed만 활성이고 Story와 Reel은 비활성입니다.
 
-이미지 워커는 대표 URL을 직접 읽되 HTTP(S), 공개 unicast 주소, DNS 고정, redirect·시간·응답 크기·MIME 제한을 적용합니다. 읽지 못하면 주제만으로 계속 진행합니다. Feed와 Reel은 필요한 최소 1~5개 자산을 워커가 결정하고 Story는 정확히 1장을 만듭니다. 브랜드 컬러는 강제 팔레트가 아닌 선택적 시각 힌트입니다.
+콘텐츠 생성 워커는 대표 URL을 직접 읽되 HTTP(S), 공개 unicast 주소, DNS 고정, redirect·시간·응답 크기·MIME 제한을 적용합니다. 읽지 못하면 주제만으로 계속 진행합니다. Feed와 Reel은 필요한 최소 1~5개 자산을 워커가 결정하고 Story는 정확히 1장을 만듭니다. 브랜드 컬러는 강제 팔레트가 아닌 선택적 시각 힌트입니다.
 
 Vercel Blob 공개 경로는 `brands/{brandId}/topics/{contentTopicId}/{deliveryFormat}/{jobId}/`입니다. Feed는 `card-XX.png`, Story는 `story.png`, Reel은 `scene-XX.png`, `cover.png`, `reel.mp4`를 저장하고 모든 형식이 `manifest.json`을 저장합니다. 중앙 API는 manifest의 작업·출력 ID, 포맷·프롬프트 버전, `selectedAssetCount`, URL 경로, MIME과 공개 접근 가능 여부를 검증한 뒤에만 산출물을 반영합니다.
 
@@ -167,18 +248,21 @@ npm run verify:reel --workspace @brand-pilot/image-worker
 
 실제 런타임이 읽는 환경 변수는 다음과 같습니다. 값은 `.env` 또는 배포 비밀 저장소에만 두고 문서에 기록하지 않습니다.
 
-- 중앙 API: `SUPABASE_DATABASE_URL`, `DATABASE_URL`, `WORKER_API_TOKEN`, `CRON_SECRET`, `LOCAL_SCHEDULER_ENABLED`, `SOURCE_CRAWL_BATCH_SIZE`, `SOURCE_CRAWL_DISCOVERY_LIMIT`, `SOURCE_CRAWL_TIME_BUDGET_MS`, `CREDENTIAL_ENCRYPTION_KEY`, `INSTAGRAM_PUBLISH_ENABLED`, `META_GRAPH_VERSION`, `KAKAO_REST_API_KEY`, `KAKAO_CLIENT_SECRET`, `KAKAO_REDIRECT_URI`, `AUTH_FRONTEND_URL`, `BRAND_PILOT_DEV_BRAND_ID`, `PORT`, `HOST`, `NODE_ENV`, `VERCEL`
-- 이미지 워커: `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, `WORKER_ID`, `BLOB_READ_WRITE_TOKEN`, `IMAGE_PROVIDER`, `IMAGE_RENDER_COMMAND`, `IMAGE_MODEL`, `IMAGE_RETRY_DELAY_MS`, `POLL_INTERVAL_MS`, `HEARTBEAT_INTERVAL_MS`, `WORKER_CONTROL_PORT`, `PYTHON`, `CODEX_HOME`, `CODEX_COMMAND`, `APPDATA`, `NODE_ENV`
+- 중앙 API: `SUPABASE_DATABASE_URL`, `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_BRAND_ASSETS_BUCKET`, `PUBLISH_ARTIFACT_ALLOWED_ORIGINS`, `WORKER_API_TOKEN`, `WORKER_CODEX_MAX_CONCURRENCY`, `WORKER_CODEX_DM_RESERVED_SLOTS`, `CRON_SECRET`, `LOCAL_SCHEDULER_ENABLED`, `SOURCE_CRAWL_BATCH_SIZE`, `SOURCE_CRAWL_DISCOVERY_LIMIT`, `SOURCE_CRAWL_TIME_BUDGET_MS`, `CREDENTIAL_ENCRYPTION_KEY`, `INSTAGRAM_PUBLISH_ENABLED`, `IMAGE_JOB_COOLDOWN_MS`, `META_GRAPH_VERSION`, `META_APP_ID`, `META_APP_SECRET`, `META_OAUTH_REDIRECT_URI`, `META_TRENDS_OAUTH_REDIRECT_URI`, `META_WEBHOOK_VERIFY_TOKEN`, `KAKAO_REST_API_KEY`, `KAKAO_CLIENT_SECRET`, `KAKAO_REDIRECT_URI`, `AUTH_FRONTEND_URL`, `BRAND_PILOT_DEV_BRAND_ID`, `PORT`, `HOST`, `NODE_ENV`, `VERCEL`
+- 고객 UI: `VITE_API_URL`, `VITE_META_TRENDS_CONNECT_URL` (로컬 UI에서 Meta 트렌드 OAuth를 시작할 때 배포된 HTTPS API의 `/auth/meta/trends/start` 사용)
+- 콘텐츠 생성 워커(코드 경로 `brand-pilot-image-worker`): `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, `WORKER_ID`, `WORKER_RESOURCE_POLL_INTERVAL_MS`, `WORKER_RESOURCE_HEARTBEAT_INTERVAL_MS`, `BLOB_READ_WRITE_TOKEN`, `IMAGE_PROVIDER`, `IMAGE_RENDER_COMMAND`, `IMAGE_JOB_TIMEOUT_MS`, `IMAGE_MODEL`, `IMAGE_RETRY_DELAY_MS`, `POLL_INTERVAL_MS`, `HEARTBEAT_INTERVAL_MS`, `WORKER_CONTROL_PORT`, `PYTHON`, `CODEX_HOME`, `CODEX_COMMAND`, `APPDATA`, `NODE_ENV`
+- 제품·서비스 분석 워커: `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, `SUBJECT_ANALYSIS_WORKER_ID`, `SUBJECT_ANALYSIS_POLL_MS`, `SUBJECT_ANALYSIS_LEASE_SECONDS`, `SUBJECT_ANALYSIS_HEARTBEAT_MS`, `SUBJECT_ANALYSIS_API_TIMEOUT_MS`, `SUBJECT_ANALYSIS_CODEX_TIMEOUT_MS`, `SUBJECT_ANALYSIS_CODEX_COMMAND`, `SUBJECT_ANALYSIS_CODEX_MODEL`, `SUBJECT_ANALYSIS_CODEX_REASONING_EFFORT`, `SUBJECT_ANALYSIS_CODEX_FAST_MODE`
+- DM/Wiki 워커: `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, `DM_WORKER_DATABASE_URL`, `WORKER_MODE`, `WORKER_ID`, `POLL_INTERVAL_MS`, `HEARTBEAT_INTERVAL_MS`, `WORKER_RESOURCE_POLL_INTERVAL_MS`, `WORKER_RESOURCE_HEARTBEAT_INTERVAL_MS`, `DM_CLI_TIMEOUT_MS`, `KNOWLEDGE_CURATOR_TIMEOUT_MS`, `WIKI_CODEX_MODEL`, `WIKI_CODEX_TIMEOUT_MS`, `DM_PROFILE_REFRESH_AFTER_HOURS`, `OPENAI_API_KEY`, `OPENAI_EMBEDDING_MODEL`
 
 Rollout 기준은 Feed 활성 유지, Story capability 확인 후 활성화, Reel은 Python/FFmpeg와 비공개 계정 E2E 통과 후 활성화 순서입니다. 고객에게 Meta access token 입력을 요구하지 않으며, OAuth로 획득한 credential은 중앙 API가 암호화 저장합니다.
 
 운영 서버 이전, 자격 증명 교체, 백업 및 출시 검증의 전체 순서는 [서버 이전 및 출시 체크리스트](docs/SERVER_MIGRATION_AND_LAUNCH_CHECKLIST.md)를 참고하세요.
 
-## 이미지 워커 책임 경계
+## 콘텐츠 생성 워커 책임 경계
 
-중앙 API는 Supabase 연결, 콘텐츠 상태, Meta OAuth 자격 증명, Instagram 발행, 산출물 검증을 소유합니다. 이미지 워커 PC는 중앙 API 호출, 이미지 렌더링, Blob 업로드만 담당합니다.
+중앙 API는 Supabase 연결, 콘텐츠 상태, Meta OAuth 자격 증명, Instagram 발행, 산출물 검증을 소유합니다. 콘텐츠 생성 워커 PC는 중앙 API에서 작업을 받아 채널별 텍스트·이미지·영상 콘텐츠를 생성하고 Blob에 산출물을 업로드합니다.
 
-따라서 워커 PC에 `SUPABASE_DATABASE_URL`, `DATABASE_URL`, Supabase 키, Meta 자격 증명 또는 Instagram 액세스 토큰을 복사하지 마세요. 워커에는 중앙 API 주소·전용 토큰, 워커 식별자, Blob 쓰기 권한, 이미지 생성 명령과 모델 등 이미지 생성에 필요한 환경만 둡니다. 구체적인 전달·검증 절차는 [이미지 워커 설정](docs/IMAGE_WORKER_SETUP.md)에 있습니다.
+따라서 워커 PC에 `SUPABASE_DATABASE_URL`, `DATABASE_URL`, Supabase 키, Meta 자격 증명 또는 Instagram 액세스 토큰을 복사하지 마세요. 워커에는 중앙 API 주소·전용 토큰, 워커 식별자, Blob 쓰기 권한과 콘텐츠 생성에 필요한 CLI·모델 설정만 둡니다. 구체적인 전달·검증 절차는 [콘텐츠 생성 워커 설정](docs/IMAGE_WORKER_SETUP.md)에 있습니다.
 
 ## 주요 문서
 
@@ -187,8 +271,17 @@ Rollout 기준은 Feed 활성 유지, Story capability 확인 후 활성화, Ree
 - [공개 출시 전 필수 항목](docs/PRE_LAUNCH_REQUIRED.md)
 - [서버 이전 및 출시 체크리스트](docs/SERVER_MIGRATION_AND_LAUNCH_CHECKLIST.md)
 - [Vercel 중앙 API 배포](docs/VERCEL_CENTRAL_API_DEPLOYMENT.md)
-- [이미지 워커 설정](docs/IMAGE_WORKER_SETUP.md)
-- [이미지 워커 README](workers/brand-pilot-image-worker/README.md)
+- [콘텐츠 생성 워커 설정](docs/IMAGE_WORKER_SETUP.md)
+- [콘텐츠 생성 워커 README](workers/brand-pilot-image-worker/README.md)
+- [Instagram DM 자동응답 설계](docs/superpowers/specs/2026-07-14-instagram-dm-ai-auto-reply-design.md)
+- [Instagram DM 운영 런북](docs/operations/instagram-dm-operations-runbook.md)
+- [Instagram 해시태그 트렌드 운영 런북](docs/operations/INSTAGRAM_HASHTAG_TRENDS.md)
+
+Instagram 해시태그 트렌드의 인증된 로컬 smoke 실행:
+
+```powershell
+npm run smoke:instagram-trends
+```
 
 ## 산출물과 백업
 

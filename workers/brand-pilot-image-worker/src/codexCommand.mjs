@@ -19,6 +19,8 @@ export function resolveCodexInvocation({
 export function buildCodexExecArguments({ rootDir }) {
   return [
     "--enable", "image_generation",
+    "--disable", "shell_tool",
+    "--disable", "shell_snapshot",
     "--ask-for-approval", "never",
     "exec",
     "--skip-git-repo-check",
@@ -32,6 +34,8 @@ export function buildCodexExecArguments({ rootDir }) {
 
 export function buildCodexTextExecArguments({ rootDir }) {
   return [
+    "--disable", "shell_tool",
+    "--disable", "shell_snapshot",
     "--ask-for-approval", "never",
     "exec",
     "--skip-git-repo-check",

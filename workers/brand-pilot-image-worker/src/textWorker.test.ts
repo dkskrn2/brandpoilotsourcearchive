@@ -23,7 +23,7 @@ function claimedTextJob(): ClaimedTextJob {
       },
       brand: {
         name: "Brand",
-        industry: "Industry",
+        categoryContext: "Business / Marketing",
         primaryCustomer: "Customer",
         description: "Description",
         tone: "Tone",

@@ -1,0 +1,129 @@
+import { useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
+import type { InstagramTrendMedia } from "../../types";
+
+const kindLabels: Record<InstagramTrendMedia["kind"], string> = {
+  image: "이미지",
+  carousel: "캐러셀",
+  video: "영상",
+  reel: "릴스"
+};
+
+export function TrendMediaDetailDialog({
+  media,
+  onClose,
+  onSave
+}: {
+  media: InstagramTrendMedia;
+  onClose: () => void;
+  onSave: () => Promise<{ alreadySaved: boolean }>;
+}) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+  const [previewFailed, setPreviewFailed] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saved, setSaved] = useState(media.isSaved);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const isVideo = media.kind === "video" || media.kind === "reel";
+  const previewUrl = media.previewUrl ?? media.mediaUrl;
+  const authorLabel = media.username ? `@${media.username}` : "Instagram 인기 콘텐츠";
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        ) ?? []
+      );
+      if (focusable.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previousFocus?.focus();
+    };
+  }, []);
+
+  async function saveSource() {
+    if (saved || isSaving) return;
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      await onSave();
+      setSaved(true);
+    } catch {
+      setSaveError("참고 소스로 저장하지 못했습니다. 다시 시도하세요.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
+      <section ref={dialogRef} className="modal-panel trend-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="trend-detail-title">
+        <header className="trend-detail-dialog__header">
+          <div>
+            <h2 id="trend-detail-title">Instagram 트렌드 상세</h2>
+            <p className="muted">{authorLabel} · {kindLabels[media.kind]}</p>
+          </div>
+          <button ref={closeRef} className="button trend-detail-dialog__close" type="button" aria-label="닫기" onClick={onClose}>
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+        <div className="trend-detail-dialog__body">
+          <div className="trend-detail-dialog__media">
+            {!previewUrl || previewFailed ? (
+              <div className="trend-media-card__fallback">
+                <strong>{previewFailed ? "미디어 미리보기를 불러오지 못했습니다." : "미리보기를 사용할 수 없습니다."}</strong>
+                <span>Instagram에서 원본을 확인하세요.</span>
+              </div>
+            ) : isVideo ? (
+              <video src={media.mediaUrl ?? previewUrl} poster={media.previewUrl ?? undefined} preload="metadata" muted playsInline onError={() => setPreviewFailed(true)} />
+            ) : (
+              <img src={previewUrl} alt={`${authorLabel} 미디어 원본`} loading="lazy" onError={() => setPreviewFailed(true)} />
+            )}
+          </div>
+          <div className="trend-detail-dialog__copy">
+            <p>{media.caption ?? "캡션이 없습니다."}</p>
+            <dl>
+              <div><dt>게시일</dt><dd>{media.postedAt ? new Date(media.postedAt).toLocaleString("ko-KR") : "게시일 없음"}</dd></div>
+              {media.likeCount !== null ? <div><dt>좋아요</dt><dd>{media.likeCount.toLocaleString("ko-KR")}</dd></div> : null}
+              {media.commentsCount !== null ? <div><dt>댓글</dt><dd>{media.commentsCount.toLocaleString("ko-KR")}</dd></div> : null}
+            </dl>
+          </div>
+        </div>
+        <footer className="trend-detail-dialog__footer">
+          {saveError ? <span className="trend-detail-dialog__error" role="alert">{saveError}</span> : null}
+          <a className="button" href={media.permalink} target="_blank" rel="noreferrer">Instagram에서 보기</a>
+          <button className="button primary" type="button" disabled={saved || isSaving} onClick={saveSource}>
+            {saved ? "저장됨" : isSaving ? "저장 중..." : "참고 소스로 저장"}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}

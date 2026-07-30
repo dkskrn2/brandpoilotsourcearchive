@@ -2,7 +2,7 @@ export const INSTAGRAM_CARD_IMAGE_PROMPT_VERSION = "instagram.card-image.v3";
 
 export interface InstagramCardImageContext {
   brandProfile: {
-    industry: string | null;
+    categoryContext: string | null;
     serviceDescription: string | null;
     primaryCustomer: string | null;
     tone: string | null;
@@ -35,7 +35,7 @@ export function buildInstagramCardImagePrompt(context: InstagramCardImageContext
   const { brandProfile, masterDraft, instagram } = context;
   return [
     "Instagram 카드뉴스 전체 이미지를 생성하세요.",
-    "정방형 1080x1080 카드여야 합니다.",
+    "가로와 세로가 같은 정방형 PNG 카드여야 합니다.",
     "아래 브랜드 맥락과 콘텐츠 초안을 읽고 가장 적절한 카드뉴스 구성을 먼저 판단하세요.",
     "카드 수는 내용에 맞게 결정하되 최소 1장, 최대 5장으로 제한하세요.",
     "각 카드는 하나의 독립된 PNG 파일로 생성하세요.",
@@ -56,7 +56,7 @@ export function buildInstagramCardImagePrompt(context: InstagramCardImageContext
     "워터마크, UI 크롬, 가짜 앱 화면, QR 코드, 읽기 어려운 작은 텍스트를 넣지 마세요.",
     "",
     "[브랜드 맥락]",
-    `- 업종: ${text(brandProfile.industry)}`,
+    `- 분야: ${text(brandProfile.categoryContext)}`,
     `- 서비스 설명: ${text(brandProfile.serviceDescription)}`,
     `- 주요 고객: ${text(brandProfile.primaryCustomer)}`,
     `- 톤: ${text(brandProfile.tone)}`,

@@ -5,7 +5,7 @@ describe("instagramImageGenerator", () => {
   it("builds one job prompt that lets Codex choose one to five separate cards", () => {
     const prompt = buildInstagramCardImagePrompt({
       brandProfile: {
-        industry: "여행 상담",
+        categoryContext: "여행·관광 / 여행 상담",
         serviceDescription: "제주 일정과 숙소 동선을 상담합니다.",
         primaryCustomer: "제주 가족 여행자",
         tone: "친절하지만 과장 없는 전문가 톤"
@@ -29,7 +29,7 @@ describe("instagramImageGenerator", () => {
     expect(prompt).toContain("최소 1장, 최대 5장");
     expect(prompt).toContain("각 카드는 하나의 독립된 PNG 파일");
     expect(prompt).toContain("공감, 공유, 저장");
-    expect(prompt).toContain("여행 상담");
+    expect(prompt).toContain("여행·관광 / 여행 상담");
     expect(prompt).toContain("친절하지만 과장 없는 전문가 톤");
     expect(prompt).toContain("이동 동선 중심 숙소 선택");
     expect(prompt).toContain("숙소 후기보다 먼저 볼 것");

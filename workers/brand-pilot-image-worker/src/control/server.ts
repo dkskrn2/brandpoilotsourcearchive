@@ -23,7 +23,7 @@ const page = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Brand Pilot Worker</title>
+<title>모종 Worker</title>
 <style>
   :root { color: #17212b; background: #f5f7fa; font-family: Arial, sans-serif; }
   body { margin: 0; min-width: 320px; }
@@ -43,7 +43,7 @@ const page = `<!doctype html>
 </head>
 <body>
 <main>
-  <h1>Brand Pilot Worker</h1>
+  <h1>모종 Worker</h1>
   <p>이 PC에서만 이미지 워커를 제어합니다.</p>
   <section aria-live="polite">
     <dl>

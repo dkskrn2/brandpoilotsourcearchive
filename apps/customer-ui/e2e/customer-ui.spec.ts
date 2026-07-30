@@ -20,7 +20,12 @@ test.beforeEach(async ({ page }) => {
     const pathname = requestUrl.pathname;
     const isApiRequest = requestUrl.port === "4000" || pathname.startsWith("/api/");
     if (!isApiRequest) return route.continue();
-    const common = { headers: { "access-control-allow-origin": "http://localhost:5173", "access-control-allow-credentials": "true" } };
+    const common = {
+      headers: {
+        "access-control-allow-origin": route.request().headers().origin ?? "http://127.0.0.1:5273",
+        "access-control-allow-credentials": "true"
+      }
+    };
     if (pathname.endsWith("/auth/me")) {
       return route.fulfill({ ...common, json: {
         user: { id: "user-e2e", displayName: "E2E", email: "e2e@example.com" },
@@ -32,6 +37,7 @@ test.beforeEach(async ({ page }) => {
       return route.fulfill({ ...common, json: {
         brandId: "brand-e2e",
         brandName: "E2E Brand",
+        logoUrl: null,
         lastGeneratedAt: null,
         navigation: { onboardingRemaining: 0, contentReview: 0, publishIssues: 0, channelIssues: 0 },
         onboarding: {
@@ -44,8 +50,11 @@ test.beforeEach(async ({ page }) => {
     }
     if (pathname.endsWith("/profile")) {
       return route.fulfill({ ...common, json: {
+        id: "profile-e2e",
+        brandId: "brand-e2e",
         name: "E2E Brand",
-        industry: "정보통신업",
+        primaryCategory: { code: "it", name: "IT·디지털" },
+        subcategories: [],
         primaryCustomer: "기업 실무 담당자",
         description: "E2E brand profile",
         tone: "명확하게",
@@ -65,38 +74,53 @@ test.beforeEach(async ({ page }) => {
         formats: [format("instagram_feed_carousel", true, 1), format("instagram_story", false, 2), format("instagram_reel", false, 3)]
       } });
     }
+    if (pathname.endsWith("/dashboard")) {
+      return route.fulfill({ ...common, json: {
+        generatedAt: "2026-07-22T00:00:00.000Z",
+        lastCollectedAt: null,
+        summary: { publishedCount: 0, exposureCount: null, pendingReviewCount: 0, failedPublishCount: 0 },
+        workflow: { queuedTopics: 0, generating: 0, pendingReview: 0, scheduledOrPublished: 0 },
+        dailyExposure: [],
+        channelPerformance: [],
+        topContents: [],
+        attentionItems: []
+      } });
+    }
     return route.fulfill({ ...common, json: [] });
   });
 });
 
 test("customer IA routes are reachable", async ({ page }) => {
-  await page.goto("/onboarding");
+  await page.goto("/dashboard");
   const menu = page.getByRole("navigation", { name: "고객 메뉴" });
-  await expect(page.getByRole("heading", { level: 1, name: /게시 자동화/ })).toBeVisible();
+  const clickMenuLink = async (name: RegExp) => {
+    const openMenu = page.getByRole("button", { name: "전체 메뉴 열기" });
+    if (await openMenu.isVisible()) await openMenu.click();
+    await menu.getByRole("link", { name }).click();
+  };
+  await expect(page.getByRole("heading", { level: 1, name: "전체 현황" })).toBeVisible();
 
-  await menu.getByRole("link", { name: /게시 관리/ }).click();
+  await clickMenuLink(/게시 관리/);
   await expect(page.getByRole("heading", { level: 1, name: "게시 관리" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "게시 목록" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "대기", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "준비 중 0", exact: true })).toBeVisible();
 
-  await menu.getByRole("link", { name: /소스/ }).click();
+  await clickMenuLink(/소스/);
   await expect(page.getByRole("heading", { level: 1, name: "소스" })).toBeVisible();
 
-  await menu.getByRole("link", { name: /^채널/ }).click();
+  await clickMenuLink(/^채널/);
   await expect(page.getByRole("heading", { level: 1, name: "채널 연결" })).toBeVisible();
   await expect(page.getByRole("tab", { name: /자동 승인/ })).toHaveCount(0);
 
-  await menu.getByRole("link", { name: /브랜드 설정/ }).click();
+  await clickMenuLink(/브랜드 설정/);
   await expect(page.getByRole("switch", { name: "브랜드 전체 자동 승인" })).toBeVisible();
 
-  await menu.getByRole("link", { name: /관리자 채널/ }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "관리자 채널" })).toBeVisible();
 });
 
 test("mobile layout has no horizontal overflow", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
 
-  for (const path of ["/onboarding", "/publish-queue", "/sources", "/channels", "/brand-settings", "/admin/channels"]) {
+  for (const path of ["/onboarding", "/publish-queue", "/sources", "/channels", "/brand-settings"]) {
     await page.goto(path);
     const hasOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
     expect(hasOverflow, `${path} should not overflow horizontally`).toBe(false);

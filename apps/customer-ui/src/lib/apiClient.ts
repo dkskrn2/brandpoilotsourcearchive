@@ -1,16 +1,37 @@
 import type {
   BrandProfile,
+  BrandProfileInput,
   BrandUiStatus,
   BillingSummary,
   ChannelConnection,
   ChannelConnectionRequest,
   ChannelType,
   ContentOutput,
+  ContentCategory,
   BrandContentFormat,
   InstagramDeliveryFormat,
   InstagramFormatSettings,
   InstagramFormatSettingsInput,
+  InstagramTrendFavoriteInput,
+  InstagramTrendConnection,
+  InstagramTrendArchivePage,
+  InstagramTrendListInput,
+  InstagramTrendPage,
+  InstagramTrendSaveSource,
+  InstagramTrendSearchHistory,
+  InstagramDmHistory,
+  InstagramDmSettings,
+  DmAttentionItem,
+  DmConversationDetail,
+  DmConversationFilter,
+  DmConversationMessage,
+  DmConversationPage,
+  Dashboard,
+  FeedbackSubmission,
+  KnowledgeImport,
+  KnowledgeImportInput,
   PipelineRunResult,
+  PublishArtifact,
   PublishSlot,
   PublishResult,
   SourceSnapshot,
@@ -21,7 +42,8 @@ import type {
   SupportRequestCategory,
   SupportRequestStatus,
   TopicRow,
-  TopicUploadSummary
+  TopicUploadSummary,
+  WikiStatus
 } from "../types";
 
 export let DEMO_BRAND_ID = "00000000-0000-4000-8000-000000000100";
@@ -36,14 +58,37 @@ interface ApiClientOptions {
   fetcher?: typeof fetch;
 }
 
+export class ApiRequestError extends Error {
+  readonly status: number;
+  readonly errorCode: string | null;
+  readonly requestId: string | null;
+  readonly deliveryStatus: "failed" | "unknown" | null;
+
+  constructor(input: {
+    status: number;
+    errorCode: string | null;
+    requestId?: string | null;
+    deliveryStatus?: "failed" | "unknown" | null;
+  }) {
+    super(input.errorCode ? `API request failed: ${input.status}:${input.errorCode}` : `API request failed: ${input.status}`);
+    this.name = "ApiRequestError";
+    this.status = input.status;
+    this.errorCode = input.errorCode;
+    this.requestId = input.requestId ?? null;
+    this.deliveryStatus = input.deliveryStatus ?? null;
+  }
+}
+
 export interface AuthSession {
   user: { id: string; displayName: string | null; email: string | null };
   workspace: { id: string; name: string };
   brand: { id: string; name: string };
 }
 
-interface ApiChannel {
+export interface ApiChannel {
   channel: ChannelType;
+  enabled: boolean;
+  oauthState: ChannelConnection["oauthState"];
   status: ChannelConnection["status"];
   accountLabel: string | null;
   lastHealthyAt: string | null;
@@ -87,13 +132,19 @@ async function request<T>(fetcher: typeof fetch, url: string, init: RequestInit)
   });
   if (!response.ok) {
     let errorCode: string | null = null;
+    let requestId: string | null = null;
+    let deliveryStatus: "failed" | "unknown" | null = null;
     try {
       const payload = await response.clone().json();
       errorCode = typeof payload?.error === "string" ? payload.error : null;
+      requestId = typeof payload?.requestId === "string" ? payload.requestId : null;
+      deliveryStatus = payload?.deliveryStatus === "failed" || payload?.deliveryStatus === "unknown"
+        ? payload.deliveryStatus
+        : null;
     } catch {
       errorCode = null;
     }
-    throw new Error(errorCode ? `API request failed: ${response.status}:${errorCode}` : `API request failed: ${response.status}`);
+    throw new ApiRequestError({ status: response.status, errorCode, requestId, deliveryStatus });
   }
   const payload = await response.json() as T;
   if (init.method !== "GET" && typeof window !== "undefined") {
@@ -105,7 +156,14 @@ async function request<T>(fetcher: typeof fetch, url: string, init: RequestInit)
 async function requestBlob(fetcher: typeof fetch, url: string, init: RequestInit): Promise<{ blob: Blob; fileName: string }> {
   const response = await fetcher(url, { ...init, credentials: "include" });
   if (!response.ok) {
-    throw new Error(`API request failed: ${response.status}`);
+    let errorCode: string | null = null;
+    try {
+      const payload = await response.clone().json();
+      errorCode = typeof payload?.error === "string" ? payload.error : null;
+    } catch {
+      errorCode = null;
+    }
+    throw new Error(errorCode ? `API request failed: ${response.status}:${errorCode}` : `API request failed: ${response.status}`);
   }
   return {
     blob: await response.blob(),
@@ -126,10 +184,11 @@ function fileNameFromContentDisposition(value: string | null) {
   return value.match(/filename="([^"]+)"/i)?.[1] ?? value.match(/filename=([^;]+)/i)?.[1]?.trim() ?? null;
 }
 
-function mapChannel(channel: ApiChannel): ChannelConnection {
+export function mapApiChannelConnection(channel: ApiChannel): ChannelConnection {
   const labels: Record<ChannelType, string> = {
     instagram: "Instagram",
     threads: "Threads",
+    linkedin: "LinkedIn",
     tiktok: "TikTok",
     youtube: "YouTube",
     x: "X"
@@ -137,6 +196,8 @@ function mapChannel(channel: ApiChannel): ChannelConnection {
   return {
     type: channel.channel,
     label: labels[channel.channel],
+    enabled: channel.enabled,
+    oauthState: channel.oauthState,
     status: channel.status,
     accountLabel: channel.accountLabel ?? "연결 전",
     lastHealthyAt: channel.lastHealthyAt ?? "-",
@@ -177,6 +238,12 @@ export function apiClient(options: ApiClientOptions = {}) {
       : fetch);
 
   return {
+    requestJson<T>(path: string, init: RequestInit) {
+      return request<T>(fetcher, `${baseUrl}${path}`, init);
+    },
+    requestBlob(path: string, init: RequestInit) {
+      return requestBlob(fetcher, `${baseUrl}${path}`, init);
+    },
     getAuthSession() {
       return request<AuthSession>(fetcher, `${baseUrl}/auth/me`, { method: "GET" });
     },
@@ -186,17 +253,73 @@ export function apiClient(options: ApiClientOptions = {}) {
     getBrandUiStatus(brandId: string) {
       return request<BrandUiStatus>(fetcher, `${baseUrl}/brands/${brandId}/ui-status`, { method: "GET" });
     },
+    getDashboard(brandId: string) {
+      return request<Dashboard>(fetcher, `${baseUrl}/brands/${brandId}/dashboard?period=30d`, { method: "GET" });
+    },
+    listContentCategories() {
+      return request<ContentCategory[]>(fetcher, `${baseUrl}/content-categories`, { method: "GET" });
+    },
+    getInstagramTrendConnection(brandId: string) {
+      return request<InstagramTrendConnection>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trends/connection`, { method: "GET" });
+    },
+    getInstagramTrends(brandId: string, input: InstagramTrendListInput) {
+      const query = new URLSearchParams({
+        hashtag: input.hashtag,
+        type: input.type,
+        sort: input.sort,
+        page: String(input.page)
+      });
+      return request<InstagramTrendPage>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trends?${query.toString()}`, { method: "GET" });
+    },
+    searchInstagramTrends(brandId: string, hashtag: string) {
+      return request<InstagramTrendPage>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trends/search`, {
+        method: "POST",
+        body: JSON.stringify({ hashtag })
+      });
+    },
+    listInstagramTrendSearches(brandId: string) {
+      return request<InstagramTrendSearchHistory[]>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trend-searches`, { method: "GET" });
+    },
+    deleteInstagramTrendSearch(brandId: string, hashtagId: string) {
+      return request<{ hashtagId: string }>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trend-searches/${hashtagId}`, { method: "DELETE" });
+    },
+    setInstagramTrendFavorite(brandId: string, hashtagId: string, isFavorite: InstagramTrendFavoriteInput["isFavorite"]) {
+      return request<InstagramTrendSearchHistory>(
+        fetcher,
+        `${baseUrl}/brands/${brandId}/instagram-trend-searches/${hashtagId}/favorite`,
+        { method: "PUT", body: JSON.stringify({ isFavorite }) }
+      );
+    },
+    saveInstagramTrendSource(brandId: string, mediaId: string) {
+      return request<InstagramTrendSaveSource>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trends/${mediaId}/save-source`, { method: "POST" });
+    },
+    removeInstagramTrendSource(brandId: string, mediaId: string) {
+      return request<{ mediaId: string; removed: boolean }>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trends/${mediaId}/save-source`, { method: "DELETE" });
+    },
+    listInstagramTrendArchive(brandId: string, input: { page: number; limit: number }) {
+      const query = new URLSearchParams({ page: String(input.page), limit: String(input.limit) });
+      return request<InstagramTrendArchivePage>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trends/archive?${query.toString()}`, { method: "GET" });
+    },
     getBillingSummary(brandId: string) {
       return request<BillingSummary>(fetcher, `${baseUrl}/brands/${brandId}/billing/summary`, { method: "GET" });
     },
     getBrandProfile(brandId: string) {
       return request<BrandProfile>(fetcher, `${baseUrl}/brands/${brandId}/profile`, { method: "GET" });
     },
-    updateBrandProfile(brandId: string, profile: Partial<BrandProfile>) {
+    updateBrandProfile(brandId: string, profile: BrandProfileInput) {
       return request<BrandProfile>(fetcher, `${baseUrl}/brands/${brandId}/profile`, {
         method: "PUT",
         body: JSON.stringify(profile)
       });
+    },
+    uploadBrandLogo(brandId: string, payload: { fileName: string; mimeType: string; fileBase64: string }) {
+      return request<BrandProfile>(fetcher, `${baseUrl}/brands/${brandId}/logo`, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+    },
+    deleteBrandLogo(brandId: string) {
+      return request<BrandProfile>(fetcher, `${baseUrl}/brands/${brandId}/logo`, { method: "DELETE" });
     },
     getInstagramFormats(brandId: string) {
       return request<InstagramFormatSettings>(fetcher, `${baseUrl}/brands/${brandId}/instagram-formats`, { method: "GET" });
@@ -241,7 +364,13 @@ export function apiClient(options: ApiClientOptions = {}) {
     },
     async listChannels(brandId: string) {
       const channels = await request<ApiChannel[]>(fetcher, `${baseUrl}/brands/${brandId}/channels`, { method: "GET" });
-      return channels.map(mapChannel);
+      return channels.map(mapApiChannelConnection);
+    },
+    updateChannelEnabled(brandId: string, channel: ChannelType, enabled: boolean) {
+      return request<ApiChannel>(fetcher, `${baseUrl}/brands/${brandId}/channels/${channel}`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled })
+      }).then(mapApiChannelConnection);
     },
     getChannelConnectionRequest(brandId: string) {
       return request<ChannelConnectionRequest>(fetcher, `${baseUrl}/brands/${brandId}/channel-connection-request`, { method: "GET" });
@@ -270,10 +399,10 @@ export function apiClient(options: ApiClientOptions = {}) {
       return request<ApiChannel>(fetcher, `${baseUrl}/brands/${brandId}/channels/${channel}/credentials`, {
         method: "PUT",
         body: JSON.stringify(payload)
-      }).then(mapChannel);
+      }).then(mapApiChannelConnection);
     },
     checkChannel(brandId: string, channel: ChannelType) {
-      return request<ApiChannel>(fetcher, `${baseUrl}/brands/${brandId}/channels/${channel}/check`, { method: "POST" }).then(mapChannel);
+      return request<ApiChannel>(fetcher, `${baseUrl}/brands/${brandId}/channels/${channel}/check`, { method: "POST" }).then(mapApiChannelConnection);
     },
     listSupportRequests(brandId: string) {
       return request<SupportRequest[]>(fetcher, `${baseUrl}/brands/${brandId}/support-requests`, { method: "GET" });
@@ -284,6 +413,7 @@ export function apiClient(options: ApiClientOptions = {}) {
         category: SupportRequestCategory;
         title: string;
         message: string;
+        contactPhone: string;
         contactEmail?: string | null;
       }
     ) {
@@ -298,6 +428,18 @@ export function apiClient(options: ApiClientOptions = {}) {
         body: JSON.stringify({ status })
       });
     },
+    respondToSupportRequest(requestId: string, responseMessage: string) {
+      return request<SupportRequest>(fetcher, `${baseUrl}/support-requests/${requestId}/response`, {
+        method: "POST",
+        body: JSON.stringify({ responseMessage })
+      });
+    },
+    createFeedbackSubmission(brandId: string, message: string) {
+      return request<FeedbackSubmission>(fetcher, `${baseUrl}/brands/${brandId}/feedback`, {
+        method: "POST",
+        body: JSON.stringify({ message })
+      });
+    },
     listContentOutputs(brandId: string) {
       return request<ContentOutput[]>(fetcher, `${baseUrl}/brands/${brandId}/content-outputs`, { method: "GET" });
     },
@@ -307,14 +449,20 @@ export function apiClient(options: ApiClientOptions = {}) {
         body: JSON.stringify({ action, reason })
       });
     },
+    getContentOutputArtifact(outputId: string) {
+      return request<PublishArtifact>(fetcher, `${baseUrl}/content-outputs/${outputId}/artifact`, { method: "GET" });
+    },
     listPublishQueue(brandId: string) {
       return request<ApiPublishQueueItem[]>(fetcher, `${baseUrl}/brands/${brandId}/publish-queue`, { method: "GET" }).then((items) => items.map(mapPublishQueueItem));
     },
     listPublishResults(brandId: string) {
       return request<PublishResult[]>(fetcher, `${baseUrl}/brands/${brandId}/publish-results`, { method: "GET" });
     },
-    downloadPublishedResults(brandId: string) {
-      return requestBlob(fetcher, `${baseUrl}/brands/${brandId}/publish-queue/download`, { method: "GET" });
+    getPublishArtifact(queueId: string) {
+      return request<PublishArtifact>(fetcher, `${baseUrl}/publish-queue/${queueId}/artifacts`, { method: "GET" });
+    },
+    downloadPublishResult(queueId: string) {
+      return requestBlob(fetcher, `${baseUrl}/publish-queue/${queueId}/download`, { method: "GET" });
     },
     createTopicUpload(brandId: string, payload: { fileName: string; csvText: string }) {
       return request<TopicUploadSummary>(fetcher, `${baseUrl}/brands/${brandId}/topic-uploads`, {
@@ -325,6 +473,68 @@ export function apiClient(options: ApiClientOptions = {}) {
     listTopicRows(brandId: string, status?: TopicRow["status"]) {
       const query = status ? `?${new URLSearchParams({ status }).toString()}` : "";
       return request<TopicRow[]>(fetcher, `${baseUrl}/brands/${brandId}/topic-rows${query}`, { method: "GET" });
+    },
+    importKnowledge(brandId: string, payload: KnowledgeImportInput) {
+      return request<KnowledgeImport>(fetcher, `${baseUrl}/brands/${brandId}/knowledge-imports`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    },
+    importFaq(brandId: string, payload: { fileName: string; fileBase64: string }) {
+      return request<KnowledgeImport>(fetcher, `${baseUrl}/brands/${brandId}/knowledge-imports`, {
+        method: "POST",
+        body: JSON.stringify({ ...payload, entryType: "faq" }),
+      });
+    },
+    listKnowledgeImports(brandId: string) {
+      return request<KnowledgeImport[]>(fetcher, `${baseUrl}/brands/${brandId}/knowledge-imports`, { method: "GET" });
+    },
+    refreshWiki(brandId: string) {
+      return request<{ id: string; status: string }>(fetcher, `${baseUrl}/brands/${brandId}/wiki/refresh`, { method: "POST" });
+    },
+    getInstagramDmSettings(brandId: string) {
+      return request<InstagramDmSettings>(fetcher, `${baseUrl}/brands/${brandId}/instagram-dm/settings`, { method: "GET" });
+    },
+    updateInstagramDmSettings(brandId: string, payload: Partial<Pick<InstagramDmSettings, "enabled" | "fallbackMessage" | "errorMessage">>) {
+      return request<InstagramDmSettings>(fetcher, `${baseUrl}/brands/${brandId}/instagram-dm/settings`, { method: "PUT", body: JSON.stringify(payload) });
+    },
+    listInstagramDmHistory(brandId: string) {
+      return request<InstagramDmHistory[]>(fetcher, `${baseUrl}/brands/${brandId}/instagram-dm/history`, { method: "GET" });
+    },
+    listDmConversations(
+      brandId: string,
+      options: { filter?: DmConversationFilter; cursor?: string; limit?: number } = {}
+    ) {
+      const params = new URLSearchParams();
+      if (options.filter && options.filter !== "all") params.set("filter", options.filter);
+      if (options.cursor) params.set("cursor", options.cursor);
+      if (options.limit) params.set("limit", String(options.limit));
+      const query = params.size > 0 ? `?${params.toString()}` : "";
+      return request<DmConversationPage>(fetcher, `${baseUrl}/brands/${brandId}/dm/conversations${query}`, { method: "GET" });
+    },
+    getDmConversation(brandId: string, conversationId: string) {
+      return request<DmConversationDetail>(fetcher, `${baseUrl}/brands/${brandId}/dm/conversations/${conversationId}`, { method: "GET" });
+    },
+    sendManualDmReply(brandId: string, conversationId: string, body: string, idempotencyKey = globalThis.crypto.randomUUID()) {
+      return request<DmConversationMessage>(
+        fetcher,
+        `${baseUrl}/brands/${brandId}/dm/conversations/${conversationId}/messages`,
+        { method: "POST", body: JSON.stringify({ body, idempotencyKey }) }
+      );
+    },
+    listDmAttentionItems(brandId: string, type?: DmAttentionItem["type"]) {
+      const query = type ? `?${new URLSearchParams({ type }).toString()}` : "";
+      return request<DmAttentionItem[]>(fetcher, `${baseUrl}/brands/${brandId}/dm/attention-items${query}`, { method: "GET" });
+    },
+    resolveDmAttentionItem(attentionId: string) {
+      return request<{ conversationId: string; automationStatus: "active"; attentionStatus: "resolved" }>(
+        fetcher,
+        `${baseUrl}/dm/attention-items/${attentionId}`,
+        { method: "PATCH", body: JSON.stringify({ status: "resolved" }) }
+      );
+    },
+    getWikiStatus(brandId: string) {
+      return request<WikiStatus>(fetcher, `${baseUrl}/brands/${brandId}/wiki/status`, { method: "GET" });
     },
     crawlSources(brandId: string) {
       return request<PipelineRunResult>(fetcher, `${baseUrl}/brands/${brandId}/sources/crawl`, { method: "POST" });

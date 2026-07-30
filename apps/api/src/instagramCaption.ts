@@ -27,6 +27,6 @@ export function containsProhibitedInstagramCta(value: string) {
 export function formatInstagramCaption(caption: string, hashtags: unknown) {
   const paragraphs = normalizeParagraphs(caption);
   if (containsProhibitedInstagramCta(caption)) throw new Error("instagram_caption_prohibited_cta");
-  if (paragraphs.length < 2) throw new Error("instagram_caption_paragraphs_invalid");
+  if (paragraphs.length === 0) throw new Error("instagram_caption_paragraphs_invalid");
   return `${paragraphs.join("\n\n")}\n\n${normalizeHashtags(hashtags).join(" ")}`;
 }

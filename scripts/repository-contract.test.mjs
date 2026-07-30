@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { access, readFile, readdir } from "node:fs/promises";
+import { createServer } from "node:http";
+import { promisify } from "node:util";
 import { test } from "node:test";
 
+const execFileAsync = promisify(execFile);
 const readJson = async (path) => JSON.parse(await readFile(path, "utf8"));
 
 const extractAddedCheckConstraintBody = (sql, table, constraint) => {
@@ -21,6 +26,50 @@ const quotedSqlValues = (sql) =>
 const assertExactSqlValues = (body, expected) => {
   assert.deepEqual(quotedSqlValues(body).sort(), [...expected].sort());
 };
+
+test("AI 콘텐츠 저장소 계약은 중앙 ApiRepository에 모두 노출된다", async () => {
+  const types = await readFile("apps/api/src/types.ts", "utf8");
+  const requiredMethods = [
+    "createAiContentAnalysis",
+    "updateAiContentDraft",
+    "startAiContentGeneration",
+    "listAiContentGenerations",
+    "getAiContentGeneration",
+    "listAiContentUsage",
+    "listAiContentReferences",
+    "listBrandAudiences",
+    "saveBrandAudience",
+    "listBrandAppeals",
+    "saveBrandAppeal",
+    "confirmAiContentAttachment",
+    "claimAiContentJob",
+    "heartbeatAiContentJob",
+    "completeAiContentJob",
+    "failAiContentJob",
+    "retryAiContentOutput",
+    "downloadAiContentOutput",
+    "downloadAiContentGeneration",
+    "sendAiContentToPublish",
+  ];
+
+  for (const method of requiredMethods) {
+    assert.match(types, new RegExp(`\\b${method}\\s*\\(`), `ApiRepository에 필수 ${method} 메서드가 있어야 합니다`);
+  }
+});
+
+test("관리자 API는 별도 namespace와 server-only credential 계약을 사용한다", async () => {
+  const [server, index, envExample, adminTypes] = await Promise.all([
+    readFile("apps/api/src/adminServer.ts", "utf8"),
+    readFile("apps/api/src/index.ts", "utf8"),
+    readFile("apps/api/.env.example", "utf8"),
+    readFile("apps/api/src/adminTypes.ts", "utf8"),
+  ]);
+
+  assert.match(server, /prefix:\s*"\/admin\/v1"/);
+  assert.match(index, /process\.env\.ADMIN_SERVICE_TOKEN/);
+  assert.match(envExample, /^ADMIN_SERVICE_TOKEN=$/m);
+  assert.doesNotMatch(adminTypes, /encryptedPayload|encrypted_payload|secretValue|accessToken|refreshToken/);
+});
 
 const assertDeliveryBackfill = (migration, channel, deliveryFormat) => {
   assert.match(
@@ -213,7 +262,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션은 001부터 019까지 정확한 이름으로 존재한다", async () => {
+test("데이터베이스 마이그레이션은 001부터 049까지 정확한 이름으로 존재한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -237,7 +286,55 @@ test("데이터베이스 마이그레이션은 001부터 019까지 정확한 이
     "017_preserve_topic_publish_group_status.sql",
     "018_repair_active_render_job_unique.sql",
     "019_threads_text_render_jobs.sql",
+    "020_dm_wiki_core.sql",
+    "021_dm_wiki_pgvector.sql",
+    "022_instagram_login_auth_mode.sql",
+    "023_wiki_include_disabled_owned_sources.sql",
+    "024_wiki_index_all_owned_pages.sql",
+    "025_dm_conversation_operations.sql",
+    "026_wiki_versions_and_knowledge_items.sql",
+    "027_wiki_search_v2.sql",
+    "028_brand_profile_logo.sql",
+    "029_instagram_hashtag_trends.sql",
+    "030_multichannel_foundation.sql",
+    "031_content_performance_dashboard.sql",
+    "032_compounding_wiki_core.sql",
+    "033_compounding_wiki_pgvector.sql",
+    "034_worker_resource_limits.sql",
+    "035_remove_webflow_and_split_content_status.sql",
+    "036_harden_performance_and_wiki_activation.sql",
+    "037_repair_orphaned_generation_outputs.sql",
+    "038_fail_exhausted_generation_jobs.sql",
+    "039_instagram_trend_connections.sql",
+    "040_restore_support_requests.sql",
+    "041_instagram_trend_page_optional.sql",
+    "042_single_owned_source.sql",
+    "043_support_request_responses.sql",
+    "044_ai_content_studio_runtime.sql",
+    "045_admin_api_foundation.sql",
+    "046_content_quality_learning.sql",
+    "047_ai_content_subject_analysis.sql",
+    "048_ai_content_direct_social_publishing.sql",
+    "049_brand_intelligence_onboarding.sql",
   ]);
+});
+
+test("적용된 031과 033 마이그레이션은 원본 체크섬을 유지한다", async () => {
+  const expectedChecksums = new Map([
+    [
+      "db/migrations/031_content_performance_dashboard.sql",
+      "8517fe3cfe469065387c9e20d5165a9daa6932ba4a0ef3d19c0c53b5e5c0a015",
+    ],
+    [
+      "db/migrations/033_compounding_wiki_pgvector.sql",
+      "9cd196aad1b9dcc1e7b1bbd5d47c16343cd04e5652f5ca376ff16eb5d8dd405b",
+    ],
+  ]);
+
+  for (const [path, expectedChecksum] of expectedChecksums) {
+    const migration = await readFile(path);
+    assert.equal(createHash("sha256").update(migration).digest("hex"), expectedChecksum);
+  }
 });
 
 test("Threads 텍스트 워커 마이그레이션은 작업 유형과 활성 작업 중복 방지를 정의한다", async () => {
@@ -460,13 +557,9 @@ test("발행 그룹 상태 보존 마이그레이션은 최종 상태를 한 파
   );
 });
 
-test("자동 크롤링 마이그레이션과 Vercel Cron을 등록한다", async () => {
+test("자동 크롤링은 지원하지 않는 Vercel Cron 대신 외부 또는 로컬 스케줄러를 사용한다", async () => {
   const vercel = await readJson("apps/api/vercel.json");
-  assert.deepEqual(vercel.crons, [
-    { path: "/internal/cron/source-crawl", schedule: "*/15 * * * *" },
-    { path: "/internal/cron/daily-generation", schedule: "0 1 * * *" },
-    { path: "/internal/cron/publish-due", schedule: "*/5 * * * *" },
-  ]);
+  assert.equal(vercel.crons, undefined);
 
   const envExample = await readFile("apps/api/.env.example", "utf8");
   assert.match(envExample, /^CRON_SECRET=$/m);
@@ -491,5 +584,108 @@ test("각 워크스페이스 패키지는 개별 package-lock.json을 두지 않
         `${lockfile} 파일이 없어야 합니다`,
       ),
     ),
+  );
+});
+
+test("Instagram 해시태그 운영 문서는 Meta 출시 전제와 제한된 롤백을 명시한다", async () => {
+  const operations = await readFile(
+    "docs/operations/INSTAGRAM_HASHTAG_TRENDS.md",
+    "utf8",
+  );
+  for (const required of [
+    "Instagram Public Content Access",
+    "Advanced Access",
+    "connected Professional Instagram account",
+    "rolling seven-day 30 unique hashtag limit",
+    "no access token in browser/network responses",
+    "disable only the sidebar/route",
+    "category data",
+  ]) {
+    assert.match(operations, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+  }
+});
+
+test("Instagram trend smoke 계약은 비밀값 없는 순차 호출과 재귀 JSON 검사를 정의한다", async () => {
+  const smoke = await readFile("scripts/instagram-trend-smoke.mjs", "utf8");
+  for (const variable of [
+    "BRAND_PILOT_API_URL",
+    "BRAND_PILOT_SESSION_COOKIE",
+    "BRAND_PILOT_SMOKE_BRAND_ID",
+    "BRAND_PILOT_SMOKE_HASHTAG",
+  ]) {
+    assert.match(smoke, new RegExp(`process\\.env\\.${variable}`));
+  }
+  assert.match(smoke, /items\.length\s*<=\s*50/);
+  assert.match(smoke, /secondSearch\.source,\s*["']cache["']/);
+  assert.match(smoke, /secondSearch\.refreshed,\s*false/);
+  assert.match(smoke, /secondSave\.alreadySaved,\s*true/);
+  assert.match(smoke, /(?:token|secret|credential)/i);
+  assert.match(smoke, /Object\.entries\s*\(/);
+  assert.match(smoke, /HEAD|GET/);
+
+  const search = smoke.indexOf("/instagram-trends/search");
+  const page = smoke.indexOf("/instagram-trends?", search);
+  const save = smoke.indexOf("/save-source", page);
+  assert.ok(search >= 0 && page > search && save > page);
+  assert.match(smoke, /method:\s*["']POST["']/g);
+});
+
+test("루트 패키지는 Instagram trend smoke 명령을 정의한다", async () => {
+  const packageJson = await readJson("package.json");
+  assert.equal(
+    packageJson.scripts["smoke:instagram-trends"],
+    "node scripts/instagram-trend-smoke.mjs",
+  );
+});
+
+test("Instagram trend smoke는 비-2xx secret payload를 출력하지 않는다", async () => {
+  const secret = "server-secret-must-not-escape";
+  const server = createServer((_request, response) => {
+    response.writeHead(500, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: secret }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    await assert.rejects(
+      execFileAsync(process.execPath, ["scripts/instagram-trend-smoke.mjs"], {
+        env: {
+          ...process.env,
+          BRAND_PILOT_API_URL: `http://127.0.0.1:${address.port}`,
+          BRAND_PILOT_SESSION_COOKIE: "bp_session=contract-test",
+          BRAND_PILOT_SMOKE_BRAND_ID: "brand-1",
+          BRAND_PILOT_SMOKE_HASHTAG: "contract-test",
+        },
+      }),
+      (error) => {
+        const output = `${error.stdout ?? ""}\n${error.stderr ?? ""}`;
+        assert.doesNotMatch(output, new RegExp(secret));
+        assert.match(output, /request_failed: POST status=500/);
+        return true;
+      },
+    );
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+test("Instagram trend smoke는 세션 쿠키를 비보안 원격 API로 보내지 않는다", async () => {
+  await assert.rejects(
+    execFileAsync(process.execPath, ["scripts/instagram-trend-smoke.mjs"], {
+      env: {
+        ...process.env,
+        BRAND_PILOT_API_URL: "http://example.com",
+        BRAND_PILOT_SESSION_COOKIE: "bp_session=must-not-be-sent",
+        BRAND_PILOT_SMOKE_BRAND_ID: "brand-smoke",
+        BRAND_PILOT_SMOKE_HASHTAG: "콘텐츠마케팅",
+      },
+    }),
+    (error) => {
+      assert.match(error.stderr, /invalid_environment: BRAND_PILOT_API_URL/);
+      assert.doesNotMatch(error.stderr, /must-not-be-sent/);
+      return true;
+    },
   );
 });

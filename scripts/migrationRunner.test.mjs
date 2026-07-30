@@ -60,6 +60,278 @@ test("legacy 014 fixture has the exact allowlisted checksum", async () => {
   );
 });
 
+test("Wiki refresh includes owned sources regardless of their enabled state", async () => {
+  const sql = await readFile(
+    "db/migrations/023_wiki_include_disabled_owned_sources.sql",
+    "utf8",
+  );
+
+  assert.match(sql, /source\.source_type = 'owned'/);
+  assert.doesNotMatch(sql, /source\.enabled/);
+});
+
+test("Wiki refresh indexes the latest snapshot for every owned-site content page", async () => {
+  const sql = await readFile(
+    "db/migrations/024_wiki_index_all_owned_pages.sql",
+    "utf8",
+  );
+
+  assert.match(sql, /from source_content_items item/);
+  assert.match(sql, /latest\.source_content_item_id = item\.id/);
+  assert.doesNotMatch(sql, /source\.enabled/);
+});
+
+test("DM conversation operations migration defines the operational schema in one transaction", async () => {
+  const sql = await readFile(
+    "db/migrations/025_dm_conversation_operations.sql",
+    "utf8",
+  );
+
+  assert.match(sql, /^begin;/);
+  assert.match(sql, /commit;\s*$/);
+  assert.match(sql, /alter table instagram_dm_conversations/);
+  assert.match(sql, /automation_status text not null default 'active'/);
+  assert.match(sql, /attention_status text not null default 'none'/);
+  assert.match(sql, /unread_count integer not null default 0/);
+  assert.match(sql, /check \(automation_status in \('active', 'paused'\)\)/);
+  assert.match(sql, /check \(attention_status in \('none', 'open', 'resolved'\)\)/);
+  assert.match(sql, /check \(unread_count >= 0\)/);
+  assert.match(sql, /create table dm_turns/);
+  assert.match(sql, /create table dm_attention_items/);
+  assert.match(sql, /create table dm_delivery_attempts/);
+  assert.match(sql, /alter table instagram_dm_messages[\s\S]*add column turn_id/);
+  assert.match(sql, /add column decision/);
+  assert.match(sql, /add column reason_code/);
+  assert.match(sql, /add column delivery_attempt_id/);
+});
+
+test("DM conversation operations migration enforces lifecycle, dedupe, and JSON constraints", async () => {
+  const sql = await readFile(
+    "db/migrations/025_dm_conversation_operations.sql",
+    "utf8",
+  );
+
+  assert.match(sql, /check \(status in \('collecting', 'queued', 'processing', 'completed', 'skipped'\)\)/);
+  assert.match(sql, /create unique index dm_turns_collecting_conversation_unique[\s\S]*where status = 'collecting'/);
+  assert.match(sql, /check \(attention_type in \('restricted_action', 'complaint', 'knowledge_gap', 'delivery_unknown', 'processing_error'\)\)/);
+  assert.match(sql, /check \(reason_code in \('direct_faq', 'wiki_answer', 'restricted_action', 'complaint', 'knowledge_gap', 'low_confidence', 'processing_error', 'system_event'\)\)/);
+  assert.match(sql, /check \(jsonb_typeof\(detail_json\) = 'object'\)/);
+  assert.match(sql, /job_id uuid not null/);
+  assert.match(sql, /constraint dm_delivery_attempts_job_unique unique \(job_id\)/);
+  assert.match(sql, /create unique index dm_delivery_attempts_dedupe_unique[\s\S]*on dm_delivery_attempts\(dedupe_key\)/);
+  assert.match(sql, /check \(status in \('prepared', 'sending', 'sent', 'unknown', 'failed'\)\)/);
+});
+
+test("DM conversation operations migration enforces composite tenant ownership", async () => {
+  const sql = await readFile(
+    "db/migrations/025_dm_conversation_operations.sql",
+    "utf8",
+  );
+
+  assert.match(sql, /constraint instagram_dm_conversations_tenant_identity_unique\s+unique \(id, workspace_id, brand_id\)/);
+  assert.match(sql, /constraint instagram_dm_messages_tenant_identity_unique\s+unique \(id, workspace_id, brand_id, conversation_id\)/);
+  assert.match(sql, /constraint jobs_tenant_identity_unique\s+unique \(id, workspace_id, brand_id\)/);
+  assert.match(sql, /constraint instagram_dm_messages_conversation_ownership_fk\s+foreign key \(conversation_id, workspace_id, brand_id\)\s+references instagram_dm_conversations\(id, workspace_id, brand_id\)/);
+  assert.match(sql, /constraint dm_turns_tenant_identity_unique\s+unique \(id, workspace_id, brand_id, conversation_id\)/);
+  assert.match(sql, /constraint dm_turns_conversation_ownership_fk\s+foreign key \(conversation_id, workspace_id, brand_id\)\s+references instagram_dm_conversations\(id, workspace_id, brand_id\)/);
+  assert.match(sql, /constraint dm_attention_items_conversation_ownership_fk\s+foreign key \(conversation_id, workspace_id, brand_id\)\s+references instagram_dm_conversations\(id, workspace_id, brand_id\)/);
+  assert.match(sql, /constraint dm_attention_items_trigger_message_ownership_fk\s+foreign key \(trigger_message_id, workspace_id, brand_id, conversation_id\)\s+references instagram_dm_messages\(id, workspace_id, brand_id, conversation_id\)/);
+  assert.match(sql, /constraint dm_attention_items_trigger_turn_ownership_fk\s+foreign key \(trigger_turn_id, workspace_id, brand_id, conversation_id\)\s+references dm_turns\(id, workspace_id, brand_id, conversation_id\)/);
+  assert.match(sql, /constraint dm_delivery_attempts_conversation_ownership_fk\s+foreign key \(conversation_id, workspace_id, brand_id\)\s+references instagram_dm_conversations\(id, workspace_id, brand_id\)/);
+  assert.match(sql, /constraint dm_delivery_attempts_tenant_identity_unique\s+unique \(id, workspace_id, brand_id, conversation_id\)/);
+  assert.match(sql, /constraint dm_delivery_attempts_job_ownership_fk\s+foreign key \(job_id, workspace_id, brand_id\)\s+references jobs\(id, workspace_id, brand_id\)\s+on delete restrict/);
+  assert.match(sql, /constraint instagram_dm_messages_turn_ownership_fk\s+foreign key \(turn_id, workspace_id, brand_id, conversation_id\)\s+references dm_turns\(id, workspace_id, brand_id, conversation_id\)/);
+  assert.match(sql, /constraint instagram_dm_messages_delivery_ownership_fk\s+foreign key \(delivery_attempt_id, workspace_id, brand_id, conversation_id\)\s+references dm_delivery_attempts\(id, workspace_id, brand_id, conversation_id\)/);
+});
+
+test("DM delivery attempts survive job cleanup", async () => {
+  const sql = await readFile(
+    "db/migrations/025_dm_conversation_operations.sql",
+    "utf8",
+  );
+
+  assert.doesNotMatch(sql, /job_id uuid not null references jobs\(id\) on delete cascade/);
+  assert.match(sql, /dm_delivery_attempts_job_ownership_fk[\s\S]*references jobs\(id, workspace_id, brand_id\)\s+on delete restrict/);
+});
+
+test("DM conversation operations migration preserves job types and limits updated_at triggers", async () => {
+  const sql = await readFile(
+    "db/migrations/025_dm_conversation_operations.sql",
+    "utf8",
+  );
+  const expectedJobTypes = [
+    "daily_generation_enqueue", "source_crawl", "topic_select", "master_draft_generate",
+    "channel_output_generate", "auto_approval_check", "instagram_feed_render",
+    "instagram_story_render", "instagram_reel_render", "threads_text_render",
+    "artifact_upload", "instagram_publish", "threads_publish", "token_health_check",
+    "storage_cleanup", "wiki_refresh", "instagram_dm_reply", "instagram_dm_profile_refresh",
+  ];
+
+  for (const jobType of expectedJobTypes) {
+    assert.match(sql, new RegExp(`'${jobType}'`));
+  }
+  assert.match(sql, /create trigger dm_turns_set_updated_at\s+before update on dm_turns/);
+  assert.match(sql, /create trigger dm_attention_items_set_updated_at\s+before update on dm_attention_items/);
+  assert.match(sql, /create trigger dm_delivery_attempts_set_updated_at\s+before update on dm_delivery_attempts/);
+  assert.doesNotMatch(sql, /instagram_dm_messages_set_updated_at/);
+});
+
+test("admin API foundation migration adds external actors and idempotent mutations", async () => {
+  const sql = await readFile(
+    "db/migrations/045_admin_api_foundation.sql",
+    "utf8",
+  );
+
+  assert.match(sql, /alter table audit_events[\s\S]*add column actor_external_id text null/i);
+  assert.match(sql, /audit_events_actor_type_check[\s\S]*'admin'/i);
+  assert.match(sql, /create table admin_idempotency_keys/i);
+  assert.match(sql, /request_hash text not null/i);
+  assert.match(sql, /response_json jsonb not null/i);
+  assert.match(sql, /unique \(actor_external_id, idempotency_key\)/i);
+});
+
+test("versioned Wiki migration expands knowledge entries with conditional item contracts", async () => {
+  const sql = await readFile(
+    "db/migrations/026_wiki_versions_and_knowledge_items.sql",
+    "utf8",
+  );
+
+  assert.match(sql, /^begin;/);
+  assert.match(sql, /commit;\s*$/);
+  assert.match(sql, /add column entry_type text not null default 'faq'/);
+  assert.match(sql, /add column title text/);
+  assert.match(sql, /add column content text/);
+  assert.match(sql, /add column aliases text\[\] not null default '\{\}'/);
+  assert.match(sql, /add column structured_data jsonb not null default '\{\}'::jsonb/);
+  assert.match(sql, /add column direct_reply_enabled boolean not null default true/);
+  assert.match(sql, /set title = question,\s*content = answer/);
+  assert.match(sql, /drop not null/);
+  assert.match(sql, /entry_type in \('faq', 'product', 'policy'\)/);
+  assert.match(sql, /entry_type <> 'faq'[\s\S]*question is not null[\s\S]*answer is not null/);
+  assert.match(sql, /entry_type not in \('product', 'policy'\)[\s\S]*title is not null[\s\S]*content is not null/);
+  assert.match(sql, /normalized_question is not null[\s\S]*length\(trim\(normalized_question\)\) > 0/);
+  assert.match(sql, /jsonb_typeof\(structured_data\) = 'object'/);
+});
+
+test("versioned Wiki migration creates build tables and version-scoped documents", async () => {
+  const sql = await readFile(
+    "db/migrations/026_wiki_versions_and_knowledge_items.sql",
+    "utf8",
+  );
+
+  assert.match(sql, /create table wiki_versions/);
+  assert.match(sql, /status in \('building', 'active', 'failed', 'superseded'\)/);
+  assert.match(sql, /source_count integer not null default 0/);
+  assert.match(sql, /document_count integer not null default 0/);
+  assert.match(sql, /chunk_count integer not null default 0/);
+  assert.match(sql, /prompt_version text/);
+  assert.match(sql, /embedding_model text/);
+  assert.match(sql, /embedding_version text/);
+  assert.match(sql, /create table wiki_build_items/);
+  assert.match(sql, /status in \('pending', 'processing', 'succeeded', 'failed'\)/);
+  assert.match(sql, /add column wiki_version_id uuid/);
+  assert.match(sql, /constraint wiki_documents_version_ownership_fk\s+foreign key \(wiki_version_id, workspace_id, brand_id\)\s+references wiki_versions\(id, workspace_id, brand_id\) on delete cascade/);
+  assert.match(sql, /add column normalized_json jsonb not null default '\{\}'::jsonb/);
+  assert.match(sql, /add column source_url text/);
+  assert.match(sql, /source_kind in \('faq', 'product', 'policy', 'owned_snapshot'\)/);
+  assert.match(sql, /insert into wiki_versions[\s\S]*'active'/);
+  assert.match(sql, /count\(distinct document\.id\)::integer,[\s\S]*count\(distinct document\.id\)::integer,[\s\S]*count\(distinct chunk\.id\)::integer/);
+  assert.match(sql, /update wiki_documents document[\s\S]*set wiki_version_id = version\.id/);
+  assert.match(sql, /drop index if exists wiki_documents_active_faq_unique/);
+  assert.match(sql, /drop index if exists wiki_documents_active_snapshot_unique/);
+  assert.match(sql, /create unique index wiki_documents_version_knowledge_entry_unique[\s\S]*wiki_version_id, knowledge_entry_id/);
+  assert.match(sql, /create unique index wiki_documents_version_snapshot_unique[\s\S]*wiki_version_id, source_snapshot_id/);
+});
+
+test("Wiki activation validates completed items and preserves the current active version on failure", async () => {
+  const sql = await readFile(
+    "db/migrations/026_wiki_versions_and_knowledge_items.sql",
+    "utf8",
+  );
+  const activation = sql.slice(sql.indexOf("create or replace function activate_wiki_version"));
+
+  assert.match(activation, /returns boolean/);
+  assert.match(activation, /item\.status <> 'succeeded'/);
+  assert.match(activation, /from wiki_documents document/);
+  assert.match(activation, /join wiki_chunks chunk/);
+  assert.match(activation, /chunk\.enabled/);
+  assert.match(activation, /set status = 'failed'/);
+  assert.match(activation, /return false/);
+  assert.match(activation, /set status = 'superseded'/);
+  assert.match(activation, /set status = 'active'/);
+  assert.match(activation, /set is_active = false/);
+  assert.match(activation, /set is_active = true/);
+  assert.ok(
+    activation.indexOf("set status = 'failed'") < activation.indexOf("set status = 'superseded'"),
+    "validation failure must be handled before the current active version is superseded",
+  );
+});
+
+test("Wiki search v2 exposes absolute and ranking scores from only the active enabled Wiki", async () => {
+  const sql = await readFile("db/migrations/027_wiki_search_v2.sql", "utf8");
+
+  assert.match(sql, /^begin;/);
+  assert.match(sql, /commit;\s*$/);
+  assert.match(sql, /create or replace function search_brand_wiki_v2/);
+  assert.match(sql, /chunk_id uuid/);
+  assert.match(sql, /wiki_document_id uuid/);
+  assert.match(sql, /knowledge_entry_id uuid/);
+  assert.match(sql, /source_kind text/);
+  assert.match(sql, /title text/);
+  assert.match(sql, /content text/);
+  assert.match(sql, /direct_answer text/);
+  assert.match(sql, /cosine_similarity double precision/);
+  assert.match(sql, /keyword_match double precision/);
+  assert.match(sql, /rrf_score double precision/);
+  assert.match(sql, /chunk\.embedding <=> p_query_embedding/);
+  assert.match(sql, /1 - distance/);
+  assert.match(sql, /version\.status = 'active'/);
+  assert.match(sql, /chunk\.enabled/);
+});
+
+test("compiled Wiki migrations define a brand-scoped core and pgvector boundary", async () => {
+  const core = await readFile("db/migrations/032_compounding_wiki_core.sql", "utf8");
+  const vector = await readFile("db/migrations/033_compounding_wiki_pgvector.sql", "utf8");
+
+  assert.match(core, /add column build_stage text/);
+  assert.match(core, /status in \('building', 'ready', 'active', 'failed', 'superseded'\)/);
+  for (const table of [
+    "wiki_build_requests", "wiki_source_units", "wiki_pages", "wiki_page_sources",
+    "wiki_page_links", "wiki_page_chunks", "wiki_compilation_items",
+    "wiki_retrieval_runs", "wiki_maintenance_runs", "wiki_issues",
+  ]) {
+    assert.match(core, new RegExp(`create table ${table}`));
+  }
+  assert.doesNotMatch(core, /\bvector\s*\(/);
+  assert.doesNotMatch(core, /\bwiki_engine\b|\blegacy_rag\b|\bcompiled_wiki\b/);
+
+  assert.match(vector, /^-- requires: pgvector/);
+  assert.match(vector, /add column embedding vector\(1536\)/);
+  assert.match(vector, /create or replace function search_brand_compiled_wiki/);
+  assert.match(vector, /create or replace function activate_compiled_wiki_version/);
+  assert.match(vector, /jsonb_array_elements_text\(section -> 'sourceUnitIds'\)/);
+  assert.match(vector, /source\.wiki_source_unit_id::text = listed_source\.source_unit_id/);
+  assert.match(vector, /wiki_compilation_items_missing/);
+  assert.doesNotMatch(vector, /\bwiki_engine\b|\blegacy_rag\b/);
+});
+
+test("exact direct FAQ lookup returns one unique match or a knowledge conflict marker", async () => {
+  const sql = await readFile("db/migrations/027_wiki_search_v2.sql", "utf8");
+  const exactLookup = sql.slice(sql.indexOf("create or replace function find_direct_faq_exact"));
+
+  assert.match(exactLookup, /entry\.entry_type = 'faq'/);
+  assert.match(exactLookup, /entry\.enabled/);
+  assert.match(exactLookup, /entry\.direct_reply_enabled/);
+  assert.match(exactLookup, /entry\.normalized_question/);
+  assert.match(exactLookup, /unnest\(entry\.keywords\)/);
+  assert.match(exactLookup, /unnest\(entry\.aliases\)/);
+  assert.match(exactLookup, /count\(\*\)/);
+  assert.doesNotMatch(exactLookup, /min\(id\)/, "PostgreSQL does not provide min(uuid)");
+  assert.match(exactLookup, /array_agg\(id order by id::text\)/);
+  assert.match(exactLookup, /when match_count = 1 then/);
+  assert.match(exactLookup, /when match_count > 1 then 'knowledge_conflict'/);
+});
+
 test("migration runner applies only migrations absent from history", () => {
   const plan = buildMigrationPlan(migrations, [{ id: "001_initial.sql", checksum: "first" }]);
   assert.deepEqual(plan.pending.map((migration) => migration.id), ["002_second.sql"]);
@@ -197,4 +469,57 @@ test("migration runner unlocks its advisory lock in finally when migration appli
   const unlockIndex = client.calls.findIndex((call) => call.sql.includes("pg_advisory_unlock"));
   assert.ok(rollbackIndex >= 0 && rollbackIndex < unlockIndex);
   assert.equal(unlockIndex, client.calls.length - 1);
+});
+
+test("support request repair migration restores the table when migration history is stale", async () => {
+  const sql = await readFile("db/migrations/040_restore_support_requests.sql", "utf8");
+
+  assert.match(sql, /^begin;/);
+  assert.match(sql, /create table if not exists support_requests/);
+  assert.match(sql, /support_requests_brand_created_idx/);
+  assert.match(sql, /support_requests_set_updated_at/);
+  assert.match(sql, /commit;\s*$/);
+  assert.doesNotMatch(sql, /drop table/);
+});
+
+test("subject analysis migration defines cached analyses, archived images, and generation snapshots", async () => {
+  const sql = await readFile(
+    "db/migrations/047_ai_content_subject_analysis.sql",
+    "utf8",
+  );
+
+  assert.match(sql, /^begin;/);
+  assert.match(sql, /create table if not exists ai_content_subject_analyses/i);
+  assert.match(sql, /create table if not exists ai_content_subject_images/i);
+  assert.match(sql, /subject_type in \('product', 'service'\)/i);
+  assert.match(
+    sql,
+    /status in \([\s\S]*'queued'[\s\S]*'extracting'[\s\S]*'researching'[\s\S]*'ready'[\s\S]*'partial'[\s\S]*'failed'[\s\S]*\)/i,
+  );
+  assert.match(sql, /where superseded_at is null/i);
+  assert.match(sql, /lease_expires_at/i);
+  assert.match(
+    sql,
+    /ai_content_subject_claim_idx[\s\S]*where status in \('queued', 'extracting', 'researching'\)/i,
+  );
+  assert.match(sql, /ai_content_subject_selected_image_fk/i);
+  assert.match(sql, /subject_analysis_snapshot/i);
+  assert.doesNotMatch(sql, /is_selected/i);
+  assert.match(sql, /ai_content_subject_analyses_workspace_idx/i);
+  assert.match(sql, /ai_content_subject_images_workspace_idx/i);
+  assert.match(sql, /ai_content_subject_images_brand_workspace_idx/i);
+  assert.match(sql, /ai_content_subject_images_analysis_ownership_idx/i);
+  assert.match(
+    sql,
+    /drop constraint if exists ai_content_subject_selected_image_fk/i,
+  );
+  assert.match(
+    sql,
+    /drop constraint if exists ai_content_generations_subject_analysis_snapshot_object_check/i,
+  );
+  assert.match(
+    sql,
+    /drop trigger if exists ai_content_subject_analyses_set_updated_at/i,
+  );
+  assert.match(sql, /commit;\s*$/);
 });

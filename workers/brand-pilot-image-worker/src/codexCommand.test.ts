@@ -33,6 +33,8 @@ describe("resolveCodexInvocation", () => {
 
     expect(args.at(-1)).toBe("-");
     expect(args).toContain("--json");
+    expect(args).toContain("shell_tool");
+    expect(args).toContain("shell_snapshot");
     expect(args.join(" ")).not.toContain("creative brief");
   });
 
@@ -41,6 +43,8 @@ describe("resolveCodexInvocation", () => {
 
     expect(args).toContain("--json");
     expect(args).toContain("read-only");
+    expect(args).toContain("shell_tool");
+    expect(args).toContain("shell_snapshot");
     expect(args.at(-1)).toBe("-");
     expect(args).not.toContain("image_generation");
   });

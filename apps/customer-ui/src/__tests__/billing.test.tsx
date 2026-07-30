@@ -7,24 +7,24 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-async function renderBillingPage() {
+async function renderBillingPage(getBillingSummary = vi.fn(async () => ({
+  configured: false,
+  subscription: {
+    status: "none",
+    planName: null,
+    monthlyAmount: null,
+    currency: "KRW",
+    currentPeriodEnd: null,
+    nextBillingAt: null,
+    cancelAtPeriodEnd: false,
+    suspensionReason: null
+  },
+  entitlement: { active: false, source: null, expiresAt: null },
+  paymentMethod: null,
+  payments: []
+}))) {
   const api = {
-    getBillingSummary: vi.fn(async () => ({
-      configured: false,
-      subscription: {
-        status: "none",
-        planName: null,
-        monthlyAmount: null,
-        currency: "KRW",
-        currentPeriodEnd: null,
-        nextBillingAt: null,
-        cancelAtPeriodEnd: false,
-        suspensionReason: null
-      },
-      entitlement: { active: false, source: null, expiresAt: null },
-      paymentMethod: null,
-      payments: []
-    }))
+    getBillingSummary
   };
   vi.doMock("../lib/apiClient", () => ({ DEMO_BRAND_ID: "brand-1", api }));
 
@@ -34,12 +34,26 @@ async function renderBillingPage() {
 }
 
 describe("BillingPage", () => {
-  it("shows a safe unconfigured state before a monthly plan is activated", async () => {
+  it("shows a page skeleton while billing data is pending", async () => {
+    await renderBillingPage(vi.fn(() => new Promise(() => {})));
+
+    expect(screen.getByRole("status", { name: "결제 정보를 불러오는 중입니다." })).toHaveClass("skeleton-page");
+  });
+
+  it("shows the billing sections without collecting raw card details before Toss is connected", async () => {
     const api = await renderBillingPage();
 
     expect(await screen.findByRole("heading", { name: "결제 및 구독" })).toBeVisible();
-    expect(screen.getByText("결제 설정 준비 중")).toBeVisible();
-    expect(screen.getByText("구독을 시작하면 콘텐츠 자동화 기능을 사용할 수 있습니다.")).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "청구" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "청구 내역" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "결제 정보" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "결제 방법" })).toBeVisible();
+    expect(screen.getByText("등록된 결제수단이 없습니다.")).toBeVisible();
+    expect(screen.getByText("토스페이먼츠 연동 후 사용할 수 있습니다.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "구독 시작" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "편집" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "새로 추가" })).toBeDisabled();
+    expect(screen.queryByLabelText(/카드번호|유효기간|CVC|카드 비밀번호/)).not.toBeInTheDocument();
     expect(api.getBillingSummary).toHaveBeenCalledWith("brand-1");
   });
 });

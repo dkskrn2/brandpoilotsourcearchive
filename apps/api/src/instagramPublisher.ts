@@ -5,9 +5,37 @@ export interface InstagramCarouselPublishResult {
   publishedUrl: string | null;
 }
 
+export type InstagramPublishStage =
+  | "child_container_create"
+  | "child_container_status"
+  | "carousel_container_create"
+  | "carousel_container_status"
+  | "media_publish";
+
+export class InstagramPublishStageError extends Error {
+  readonly stage: InstagramPublishStage;
+  override readonly cause: unknown;
+
+  constructor(stage: InstagramPublishStage, cause: unknown) {
+    super(`instagram_publish_stage_failed:${stage}`, { cause });
+    this.name = "InstagramPublishStageError";
+    this.stage = stage;
+    this.cause = cause;
+  }
+}
+
+async function atPublishStage<T>(stage: InstagramPublishStage, operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    throw new InstagramPublishStageError(stage, error);
+  }
+}
+
 interface InstagramPublishBase {
   accessToken: string;
   instagramBusinessAccountId: string;
+  graphHost?: "graph.facebook.com" | "graph.instagram.com";
 }
 
 export interface StoredInstagramStoryCapability {
@@ -17,6 +45,11 @@ export interface StoredInstagramStoryCapability {
 }
 
 export type InstagramPublishInput = InstagramPublishBase & (
+  | {
+    deliveryFormat: "instagram_feed_single";
+    imageUrl: string;
+    caption: string;
+  }
   | {
     deliveryFormat: "instagram_feed_carousel";
     imageUrls: string[];
@@ -36,6 +69,7 @@ export type InstagramPublishInput = InstagramPublishBase & (
 
 export interface InstagramPublishDependencies {
   graphVersion?: string;
+  graphHost?: "graph.facebook.com" | "graph.instagram.com";
   fetchImpl?: typeof fetch;
   statusPollAttempts?: number;
   statusPollIntervalMs?: number;
@@ -73,14 +107,16 @@ async function postMetaGraph({
   path,
   body,
   fetchImpl,
-  graphVersion
+  graphVersion,
+  graphHost
 }: {
   path: string;
   body: Record<string, string>;
   fetchImpl: typeof fetch;
   graphVersion: string;
+  graphHost: "graph.facebook.com" | "graph.instagram.com";
 }) {
-  const payload = asRecord(await postMetaGraphForm({ path, body, fetchImpl, graphVersion }));
+  const payload = asRecord(await postMetaGraphForm({ path, body, fetchImpl, graphVersion, host: graphHost }));
   if (typeof payload.id !== "string" || payload.id.length === 0) {
     throw new Error("instagram_publish_missing_id");
   }
@@ -95,6 +131,7 @@ async function waitForMetaContainer({
   containerId,
   accessToken,
   graphVersion,
+  graphHost,
   fetchImpl,
   maxAttempts,
   intervalMs,
@@ -103,6 +140,7 @@ async function waitForMetaContainer({
   containerId: string;
   accessToken: string;
   graphVersion: string;
+  graphHost: "graph.facebook.com" | "graph.instagram.com";
   fetchImpl: typeof fetch;
   maxAttempts: number;
   intervalMs: number;
@@ -113,7 +151,8 @@ async function waitForMetaContainer({
       path: `/${containerId}`,
       params: { fields: "status_code", access_token: accessToken },
       fetchImpl,
-      graphVersion
+      graphVersion,
+      host: graphHost
     }));
     const statusCode = typeof payload.status_code === "string" ? payload.status_code : "";
     if (statusCode === "FINISHED") return;
@@ -128,6 +167,7 @@ async function waitForMetaContainer({
 function resolveDependencies(deps: InstagramPublishDependencies) {
   return {
     graphVersion: deps.graphVersion ?? process.env.META_GRAPH_VERSION ?? "v20.0",
+    graphHost: deps.graphHost ?? "graph.facebook.com" as const,
     fetchImpl: deps.fetchImpl ?? fetch,
     statusPollAttempts: deps.statusPollAttempts ?? 60,
     statusPollIntervalMs: deps.statusPollIntervalMs ?? 5000,
@@ -144,12 +184,14 @@ async function publishContainer(
     path: `/${input.instagramBusinessAccountId}/media`,
     body: { ...containerBody, access_token: input.accessToken },
     fetchImpl: deps.fetchImpl,
-    graphVersion: deps.graphVersion
+    graphVersion: deps.graphVersion,
+    graphHost: input.graphHost ?? deps.graphHost
   });
   await waitForMetaContainer({
     containerId,
     accessToken: input.accessToken,
     graphVersion: deps.graphVersion,
+    graphHost: input.graphHost ?? deps.graphHost,
     fetchImpl: deps.fetchImpl,
     maxAttempts: deps.statusPollAttempts,
     intervalMs: deps.statusPollIntervalMs,
@@ -159,7 +201,8 @@ async function publishContainer(
     path: `/${input.instagramBusinessAccountId}/media_publish`,
     body: { creation_id: containerId, access_token: input.accessToken },
     fetchImpl: deps.fetchImpl,
-    graphVersion: deps.graphVersion
+    graphVersion: deps.graphVersion,
+    graphHost: input.graphHost ?? deps.graphHost
   });
   return { externalPostId, publishedUrl: null };
 }
@@ -180,10 +223,17 @@ export async function publishInstagramOutput(
 ): Promise<InstagramCarouselPublishResult> {
   const deps = resolveDependencies(dependencies);
   switch (input.deliveryFormat) {
+    case "instagram_feed_single":
+      requirePublicUrl(input.imageUrl);
+      return publishContainer(input, {
+        image_url: input.imageUrl,
+        caption: input.caption,
+      }, deps);
     case "instagram_feed_carousel":
       return publishInstagramCarouselWithMeta({
         ...input,
         graphVersion: deps.graphVersion,
+        graphHost: input.graphHost ?? deps.graphHost,
         fetchImpl: deps.fetchImpl,
         statusPollAttempts: deps.statusPollAttempts,
         statusPollIntervalMs: deps.statusPollIntervalMs,
@@ -204,7 +254,7 @@ export async function publishInstagramOutput(
         media_type: "REELS",
         video_url: input.videoUrl,
         caption: input.caption,
-        share_to_feed: "false"
+        share_to_feed: "true"
       }, deps);
   }
 }
@@ -215,6 +265,7 @@ export async function publishInstagramCarouselWithMeta({
   imageUrls,
   caption,
   graphVersion = process.env.META_GRAPH_VERSION || "v20.0",
+  graphHost = "graph.facebook.com",
   fetchImpl = fetch,
   statusPollAttempts = 60,
   statusPollIntervalMs = 5000,
@@ -225,6 +276,7 @@ export async function publishInstagramCarouselWithMeta({
   imageUrls: string[];
   caption: string;
   graphVersion?: string;
+  graphHost?: "graph.facebook.com" | "graph.instagram.com";
   fetchImpl?: typeof fetch;
   statusPollAttempts?: number;
   statusPollIntervalMs?: number;
@@ -235,25 +287,27 @@ export async function publishInstagramCarouselWithMeta({
 
   for (const imageUrl of imageUrls) {
     requirePublicUrl(imageUrl);
-    const childId = await postMetaGraph({
+    const childId = await atPublishStage("child_container_create", () => postMetaGraph({
       path: `/${instagramBusinessAccountId}/media`,
       body: { image_url: imageUrl, is_carousel_item: "true", access_token: accessToken },
       fetchImpl,
-      graphVersion
-    });
-    await waitForMetaContainer({
+      graphVersion,
+      graphHost
+    }));
+    await atPublishStage("child_container_status", () => waitForMetaContainer({
       containerId: childId,
       accessToken,
       graphVersion,
+      graphHost,
       fetchImpl,
       maxAttempts: statusPollAttempts,
       intervalMs: statusPollIntervalMs,
       sleep
-    });
+    }));
     children.push(childId);
   }
 
-  const carouselId = await postMetaGraph({
+  const carouselId = await atPublishStage("carousel_container_create", () => postMetaGraph({
     path: `/${instagramBusinessAccountId}/media`,
     body: {
       media_type: "CAROUSEL",
@@ -262,23 +316,26 @@ export async function publishInstagramCarouselWithMeta({
       access_token: accessToken
     },
     fetchImpl,
-    graphVersion
-  });
-  await waitForMetaContainer({
+    graphVersion,
+    graphHost
+  }));
+  await atPublishStage("carousel_container_status", () => waitForMetaContainer({
     containerId: carouselId,
     accessToken,
     graphVersion,
+    graphHost,
     fetchImpl,
     maxAttempts: statusPollAttempts,
     intervalMs: statusPollIntervalMs,
     sleep
-  });
+  }));
 
-  const externalPostId = await postMetaGraph({
+  const externalPostId = await atPublishStage("media_publish", () => postMetaGraph({
     path: `/${instagramBusinessAccountId}/media_publish`,
     body: { creation_id: carouselId, access_token: accessToken },
     fetchImpl,
-    graphVersion
-  });
+    graphVersion,
+    graphHost
+  }));
   return { externalPostId, publishedUrl: null };
 }

@@ -30,5 +30,5 @@ const server = createControlServer({
 const port = portFromEnvironment();
 
 server.listen(port, "127.0.0.1", () => {
-  process.stdout.write(`Brand Pilot worker control: http://127.0.0.1:${port}\n`);
+process.stdout.write(`모종 worker control: http://127.0.0.1:${port}\n`);
 });

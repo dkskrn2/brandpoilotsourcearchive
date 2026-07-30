@@ -2,6 +2,221 @@ import { describe, expect, it, vi } from "vitest";
 import { apiClient } from "./apiClient";
 
 describe("apiClient", () => {
+  it("submits feedback to its dedicated brand endpoint", async () => {
+    const response = {
+      id: "feedback-1",
+      brandId: "brand-1",
+      workspaceId: "workspace-1",
+      message: "미리보기를 개선해 주세요.",
+      status: "new",
+      createdAt: "2026-07-22T08:00:00.000Z",
+      updatedAt: "2026-07-22T08:00:00.000Z"
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(response), { status: 201 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await expect(client.createFeedbackSubmission("brand-1", "미리보기를 개선해 주세요.")).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/brands/brand-1/feedback",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify({ message: "미리보기를 개선해 주세요." })
+      })
+    );
+  });
+
+  it("requests the recent 30-day dashboard for a brand", async () => {
+    const response = {
+      period: "30d",
+      generatedAt: "2026-07-16T04:00:00.000Z",
+      lastCollectedAt: null,
+      summary: { publishedCount: 0, exposureCount: null, pendingReviewCount: 0, failedPublishCount: 0 },
+      workflow: { queuedTopics: 0, generating: 0, pendingReview: 0, scheduledOrPublished: 0 },
+      dailyExposure: [],
+      channelPerformance: [],
+      topContents: [],
+      attentionItems: []
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(response), { status: 200 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await expect(client.getDashboard("brand-1")).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/brands/brand-1/dashboard?period=30d",
+      expect.objectContaining({ method: "GET", credentials: "include" })
+    );
+  });
+
+  it("updates one channel activation flag independently from OAuth", async () => {
+    const response = {
+      channel: "linkedin",
+      enabled: true,
+      oauthState: "not_connected",
+      status: "not_connected",
+      accountLabel: null,
+      lastHealthyAt: null,
+      lastPublishedAt: null,
+      lastError: null
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(response), { status: 200 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await expect(client.updateChannelEnabled("brand-1", "linkedin", true)).resolves.toMatchObject({
+      type: "linkedin",
+      enabled: true,
+      oauthState: "not_connected"
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/brands/brand-1/channels/linkedin",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ enabled: true }) })
+    );
+  });
+
+  it("calls all Instagram trend endpoints with encoded queries, exact bodies, and credentials", async () => {
+    const trendPage = {
+      hashtag: { id: "hashtag-1", displayTag: "#콘텐츠 마케팅", normalizedTag: "콘텐츠 마케팅" },
+      source: "meta",
+      refreshed: true,
+      refreshedAt: "2026-07-15T00:00:00.000Z",
+      lastErrorCode: null,
+      page: 2,
+      pageSize: 20,
+      total: 0,
+      items: []
+    };
+    const responses = [
+      [{ code: "marketing", name: "마케팅", recommendedHashtags: [], subcategories: [] }],
+      { status: "connected", accountLabel: "@brand", instagramBusinessAccountId: "ig-1", scopes: ["instagram_basic"], expiresAt: null, lastErrorCode: null },
+      trendPage,
+      trendPage,
+      [{ hashtagId: "hashtag-1", displayTag: "#콘텐츠 마케팅", isFavorite: false, lastSearchedAt: "2026-07-15T00:00:00.000Z", searchCount: 1 }],
+      { hashtagId: "hashtag-1" },
+      { hashtagId: "hashtag-1", isFavorite: true },
+      { source: { id: "source-1" }, alreadySaved: false },
+      { mediaId: "media-1", removed: true }
+    ];
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(responses.shift()), { status: 200 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await client.listContentCategories();
+    await client.getInstagramTrendConnection("brand-1");
+    await client.getInstagramTrends("brand-1", {
+      hashtag: "#콘텐츠 마케팅",
+      type: "reel",
+      sort: "likes",
+      page: 2
+    });
+    await client.searchInstagramTrends("brand-1", "#콘텐츠 마케팅");
+    await client.listInstagramTrendSearches("brand-1");
+    await client.deleteInstagramTrendSearch("brand-1", "hashtag-1");
+    await client.setInstagramTrendFavorite("brand-1", "hashtag-1", true);
+    await client.saveInstagramTrendSource("brand-1", "media-1");
+    await client.removeInstagramTrendSource("brand-1", "media-1");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "http://api.test/content-categories", expect.objectContaining({
+      method: "GET",
+      credentials: "include"
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "http://api.test/brands/brand-1/instagram-trends?hashtag=%23%EC%BD%98%ED%85%90%EC%B8%A0+%EB%A7%88%EC%BC%80%ED%8C%85&type=reel&sort=likes&page=2",
+      expect.objectContaining({ method: "GET", credentials: "include" })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "http://api.test/brands/brand-1/instagram-trends/connection", expect.objectContaining({
+      method: "GET",
+      credentials: "include"
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "http://api.test/brands/brand-1/instagram-trends/search", expect.objectContaining({
+      method: "POST",
+      credentials: "include",
+      body: JSON.stringify({ hashtag: "#콘텐츠 마케팅" })
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(5, "http://api.test/brands/brand-1/instagram-trend-searches", expect.objectContaining({
+      method: "GET",
+      credentials: "include"
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(6, "http://api.test/brands/brand-1/instagram-trend-searches/hashtag-1", expect.objectContaining({
+      method: "DELETE",
+      credentials: "include"
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(7, "http://api.test/brands/brand-1/instagram-trend-searches/hashtag-1/favorite", expect.objectContaining({
+      method: "PUT",
+      credentials: "include",
+      body: JSON.stringify({ isFavorite: true })
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(8, "http://api.test/brands/brand-1/instagram-trends/media-1/save-source", expect.objectContaining({
+      method: "POST",
+      credentials: "include"
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(9, "http://api.test/brands/brand-1/instagram-trends/media-1/save-source", expect.objectContaining({
+      method: "DELETE",
+      credentials: "include"
+    }));
+  });
+
+  it("requests a paged Instagram trend archive", async () => {
+    const archive = { items: [], page: 2, limit: 30, total: 31 };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(archive), { status: 200 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await expect(client.listInstagramTrendArchive("brand-1", { page: 2, limit: 30 })).resolves.toEqual(archive);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/brands/brand-1/instagram-trends/archive?page=2&limit=30",
+      expect.objectContaining({ method: "GET", credentials: "include" })
+    );
+  });
+
+  it("fetches a normalized artifact for one publish queue item", async () => {
+    const artifact = {
+      queueId: "queue-1",
+      kind: "image_gallery",
+      deliveryFormat: "instagram_feed_carousel",
+      assets: [{ url: "https://cdn.test/card-01.png", fileName: "card-01.png", mimeType: "image/png", width: 1080, height: 1080 }],
+      posterUrl: null,
+      html: null,
+      text: null
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(artifact), { status: 200 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    await expect(client.getPublishArtifact("queue-1")).resolves.toEqual(artifact);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/publish-queue/queue-1/artifacts",
+      expect.objectContaining({ method: "GET" })
+    );
+  });
+
+  it("downloads one publish result and preserves its ZIP filename", async () => {
+    const fetchMock = vi.fn(async () => new Response("queue zip", {
+      status: 200,
+      headers: {
+        "content-type": "application/zip",
+        "content-disposition": "attachment; filename*=UTF-8''queue-1-result.zip"
+      }
+    }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const download = await client.downloadPublishResult("queue-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/publish-queue/queue-1/download",
+      expect.objectContaining({ method: "GET", credentials: "include" })
+    );
+    expect(download.fileName).toBe("queue-1-result.zip");
+    expect(await download.blob.text()).toBe("queue zip");
+  });
+
+  it("preserves entitlement error codes from publish result downloads", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "download_entitlement_required" }), {
+      status: 403,
+      headers: { "content-type": "application/json" }
+    }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    await expect(client.downloadPublishResult("queue-1")).rejects.toThrow("download_entitlement_required");
+  });
+
   it("fetches a brand profile from the API", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ name: "API 브랜드" }), { status: 200 }));
     const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
@@ -10,6 +225,22 @@ describe("apiClient", () => {
 
     expect(fetchMock).toHaveBeenCalledWith("http://api.test/brands/brand-1/profile", expect.objectContaining({ method: "GET" }));
     expect(profile).toEqual({ name: "API 브랜드" });
+  });
+
+  it("uploads and deletes a brand logo through dedicated endpoints", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ name: "브랜드", logoUrl: "https://cdn/logo.png" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ name: "브랜드", logoUrl: null }), { status: 200 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await client.uploadBrandLogo("brand-1", { fileName: "logo.png", mimeType: "image/png", fileBase64: "abc=" });
+    await client.deleteBrandLogo("brand-1");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "http://api.test/brands/brand-1/logo", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ fileName: "logo.png", mimeType: "image/png", fileBase64: "abc=" })
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "http://api.test/brands/brand-1/logo", expect.objectContaining({ method: "DELETE" }));
   });
 
   it("fetches brand UI status for shell and onboarding", async () => {
@@ -73,6 +304,63 @@ describe("apiClient", () => {
     expect(init.headers).not.toHaveProperty("content-type");
   });
 
+  it("uses the DM operations endpoints and filter query", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const href = String(url);
+      if (href.includes("/dm/conversations?")) return new Response(JSON.stringify({ items: [], nextCursor: null }), { status: 200 });
+      if (href.endsWith("/dm/conversations/conversation-1")) return new Response(JSON.stringify({ id: "conversation-1", messages: [], attentionItems: [] }), { status: 200 });
+      if (href.endsWith("/dm/conversations/conversation-1/messages") && init?.method === "POST") return new Response(JSON.stringify({ id: "message-manual" }), { status: 200 });
+      if (href.endsWith("/dm/attention-items/attention-1") && init?.method === "PATCH") return new Response(JSON.stringify({ conversationId: "conversation-1", automationStatus: "active", attentionStatus: "resolved" }), { status: 200 });
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await client.listDmConversations("brand-1", { filter: "attention", limit: 20 });
+    await client.getDmConversation("brand-1", "conversation-1");
+    await client.sendManualDmReply("brand-1", "conversation-1", "직접 답변");
+    await client.resolveDmAttentionItem("attention-1");
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/brands/brand-1/dm/conversations?filter=attention&limit=20", expect.objectContaining({ method: "GET" }));
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/brands/brand-1/dm/conversations/conversation-1", expect.objectContaining({ method: "GET" }));
+    const manualReplyCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/dm/conversations/conversation-1/messages"));
+    expect(manualReplyCall?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
+    expect(JSON.parse(String(manualReplyCall?.[1]?.body))).toEqual({
+      body: "직접 답변",
+      idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/i),
+    });
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/dm/attention-items/attention-1", expect.objectContaining({ method: "PATCH", body: JSON.stringify({ status: "resolved" }) }));
+  });
+
+  it("keeps the classified manual reply error and request ID", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      error: "meta_graph_503",
+      deliveryStatus: "unknown",
+      requestId: "request-123",
+    }), { status: 502 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await expect(client.sendManualDmReply("brand-1", "conversation-1", "직접 답변")).rejects.toMatchObject({
+      errorCode: "meta_graph_503",
+      deliveryStatus: "unknown",
+      requestId: "request-123",
+    });
+  });
+
+  it("sends the knowledge entry type and reads Wiki status", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const href = String(url);
+      if (href.endsWith("/wiki/status")) return new Response(JSON.stringify({ activeVersion: null, latestFailedVersion: null, importStats: { total: 0, succeeded: 0, failed: 0, faqRows: 0, productRows: 0 } }), { status: 200 });
+      return new Response(JSON.stringify({ id: "import-1", entryType: "product" }), { status: 200 });
+    });
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await client.importKnowledge("brand-1", { entryType: "product", fileName: "products.csv", fileBase64: "YQ==" });
+    await client.getWikiStatus("brand-1");
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/brands/brand-1/knowledge-imports", expect.objectContaining({ body: JSON.stringify({ entryType: "product", fileName: "products.csv", fileBase64: "YQ==" }) }));
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/brands/brand-1/wiki/status", expect.objectContaining({ method: "GET" }));
+  });
+
   it("creates sources, reviews content, reads queue, and uploads topic csv", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const href = String(url);
@@ -118,8 +406,11 @@ describe("apiClient", () => {
           category: "bug",
           title: "채널 연결 오류",
           message: "인스타 연결이 실패합니다.",
+          contactPhone: "010-1234-5678",
           contactEmail: "user@example.com",
           status: "new",
+          responseMessage: null,
+          respondedAt: null,
           createdAt: "2026-07-11T00:00:00.000Z",
           updatedAt: "2026-07-11T00:00:00.000Z"
         }]), { status: 200 });
@@ -132,8 +423,11 @@ describe("apiClient", () => {
           category: "feature",
           title: "예약 기능 개선",
           message: "채널별 예약 시간을 더 세분화하고 싶습니다.",
+          contactPhone: "010-1234-5678",
           contactEmail: null,
           status: "new",
+          responseMessage: null,
+          respondedAt: null,
           createdAt: "2026-07-11T00:05:00.000Z",
           updatedAt: "2026-07-11T00:05:00.000Z"
         }), { status: 201 });
@@ -146,8 +440,28 @@ describe("apiClient", () => {
           category: "bug",
           title: "채널 연결 오류",
           message: "인스타 연결이 실패합니다.",
+          contactPhone: "010-1234-5678",
           contactEmail: "user@example.com",
           status: "resolved",
+          responseMessage: null,
+          respondedAt: null,
+          createdAt: "2026-07-11T00:00:00.000Z",
+          updatedAt: "2026-07-11T00:10:00.000Z"
+        }), { status: 200 });
+      }
+      if (href.endsWith("/support-requests/support-1/response") && init?.method === "POST") {
+        return new Response(JSON.stringify({
+          id: "support-1",
+          brandId: "brand-1",
+          workspaceId: "workspace-1",
+          category: "bug",
+          title: "채널 연결 오류",
+          message: "인스타 연결이 실패합니다.",
+          contactPhone: "010-1234-5678",
+          contactEmail: "user@example.com",
+          status: "resolved",
+          responseMessage: "Meta 연결을 초기화했습니다.",
+          respondedAt: "2026-07-11T00:10:00.000Z",
           createdAt: "2026-07-11T00:00:00.000Z",
           updatedAt: "2026-07-11T00:10:00.000Z"
         }), { status: 200 });
@@ -179,15 +493,6 @@ describe("apiClient", () => {
             sourceSummary: "자사 FAQ 요약"
           }]
         }]), { status: 200 });
-      }
-      if (href.endsWith("/publish-queue/download")) {
-        return new Response("zip-content", {
-          status: 200,
-          headers: {
-            "content-type": "application/zip",
-            "content-disposition": "attachment; filename=\"published-results.zip\""
-          }
-        });
       }
       if (href.endsWith("/topic-uploads")) {
         return new Response(JSON.stringify({ id: "upload-1", fileName: "topics.csv", status: "validated", totalRows: 1, validRows: 1, duplicateRows: 0, invalidRows: 0 }), { status: 201 });
@@ -246,16 +551,18 @@ describe("apiClient", () => {
       category: "feature",
       title: "예약 기능 개선",
       message: "채널별 예약 시간을 더 세분화하고 싶습니다.",
+      contactPhone: "010-1234-5678",
       contactEmail: null
     })).toMatchObject({ id: "support-2", category: "feature", status: "new" });
     expect(await client.updateSupportRequestStatus("support-1", "resolved")).toMatchObject({ id: "support-1", status: "resolved" });
+    expect(await client.respondToSupportRequest("support-1", "Meta 연결을 초기화했습니다.")).toMatchObject({
+      id: "support-1",
+      responseMessage: "Meta 연결을 초기화했습니다."
+    });
     expect(await client.listPublishResults("brand-1")).toEqual([expect.objectContaining({
       contentId: "master-1",
       channels: [expect.objectContaining({ channel: "instagram", status: "published", previewBody: "캡션 내용" })]
     })]);
-    const download = await client.downloadPublishedResults("brand-1");
-    expect(download.fileName).toBe("published-results.zip");
-    expect(await download.blob.text()).toBe("zip-content");
     expect(await client.createTopicUpload("brand-1", { fileName: "topics.csv", csvText: "topic_title,topic_angle\nA,B" })).toMatchObject({ validRows: 1 });
     expect(await client.listTopicRows("brand-1", "skipped")).toEqual([expect.objectContaining({ status: "skipped", topicTitle: "Jeju food" })]);
     expect(await client.crawlSources("brand-1")).toMatchObject({ processed: 2 });

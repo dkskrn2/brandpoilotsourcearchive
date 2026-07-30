@@ -16,7 +16,7 @@ const topic = {
 
 const brand = {
   name: "제주 여행 연구소",
-  industry: "여행 상담",
+  categoryContext: "여행·관광 / 여행 상담",
   primaryCustomer: "제주 가족 여행자",
   description: "제주 일정과 숙소 동선을 상담합니다.",
   tone: "친절하지만 과장 없는 전문가 톤",
@@ -104,7 +104,9 @@ describe("image render job contract", () => {
   });
 
   it("accepts a valid feed result", () => {
-    const result = parseImageRenderJobResult(feedResultWith(2), {
+    const value = feedResultWith(2);
+    value.cards = value.cards.map((card) => ({ ...card, width: 1254, height: 1254 }));
+    const result = parseImageRenderJobResult(value, {
       jobId: "job-1",
       channelOutputId: "output-1",
       deliveryFormat: "instagram_feed_carousel"
@@ -113,6 +115,7 @@ describe("image render job contract", () => {
     expect(result.deliveryFormat).toBe("instagram_feed_carousel");
     if (result.deliveryFormat !== "instagram_feed_carousel") throw new Error("unexpected_format");
     expect(result.cards).toHaveLength(2);
+    expect(result.cards[0]).toMatchObject({ width: 1254, height: 1254 });
     expect(result.hashtags).toEqual(hashtags);
   });
 

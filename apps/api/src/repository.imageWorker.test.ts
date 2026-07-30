@@ -1,6 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { createRepository } from "./repository";
 
+type SqlCall = [sql: string, values?: unknown[]];
+
+function findSqlCall(calls: ReadonlyArray<readonly unknown[]>, predicate: (sql: string) => boolean): SqlCall | undefined {
+  for (const [sql, values] of calls) {
+    if (typeof sql === "string" && predicate(sql)) {
+      return [sql, Array.isArray(values) ? values : undefined];
+    }
+  }
+  return undefined;
+}
+
 const hashtags = ["#제주여행", "#가족여행", "#제주숙소", "#여행동선", "#여행준비"];
 
 function feedManifest() {
@@ -43,9 +54,9 @@ function runningJobRow(
       promptVersion,
       storagePrefix: "rendered-content/instagram/brand-1/output-1/job-1"
     },
-    output_json: { deliveryFormat, artifactStatus: "pending" },
+    output_json: { deliveryFormat, generationState: "pending", artifactStatus: "pending" },
     output_title: "기존 제목",
-    output_status: options.outputStatus ?? "auto_approval_blocked",
+    output_status: options.outputStatus ?? "generating",
     topic_publish_group_id: "group-1",
     brand_channel_id: "instagram-channel-1",
     auto_approval_enabled: options.autoApprovalEnabled ?? false
@@ -54,35 +65,84 @@ function runningJobRow(
 
 describe("image worker completion", () => {
   it("claims format-specific Instagram render jobs", async () => {
-    const query = vi.fn(async (_sql: string) => ({
-      rowCount: 1,
-      rows: [{
-        id: "job-1",
-        workspace_id: "workspace-1",
-        brand_id: "brand-1",
-        channel_output_id: "output-1",
-        lease_token: "lease-1",
-        payload_json: {
-          deliveryFormat: "instagram_feed_carousel",
-          promptVersion: "worker-card.v4",
-          topic: { title: "Topic", angle: "Angle", targetCustomer: null, region: null, season: null, notes: null },
-          brand: { name: "Brand", industry: null, primaryCustomer: null, description: null, tone: null, brandColor: null },
-          representativeUrl: null,
-          maxImages: 5
-        },
-        attempt_count: "1"
-      }]
-    }));
-    const repository = createRepository({ query } as any);
+    const query = vi.fn(async (sql: string, _values?: unknown[]) => {
+      if (sql.includes("update jobs job")) return {
+        rowCount: 1,
+        rows: [{
+          id: "job-1",
+          workspace_id: "workspace-1",
+          brand_id: "brand-1",
+          channel_output_id: "output-1",
+          lease_token: "lease-1",
+          payload_json: {
+            deliveryFormat: "instagram_feed_carousel",
+            promptVersion: "worker-card.v4",
+            topic: { title: "Topic", angle: "Angle", targetCustomer: null, region: null, season: null, notes: null },
+            brand: { name: "Brand", industry: null, primaryCustomer: null, description: null, tone: null, brandColor: null },
+            representativeUrl: null,
+            maxImages: 5
+          },
+          attempt_count: "1"
+        }]
+      };
+      return { rowCount: 0, rows: [] };
+    });
+    const release = vi.fn();
+    const repository = createRepository({
+      query: vi.fn(),
+      connect: vi.fn(async () => ({ query, release }))
+    } as any, { imageRenderCooldownMs: 60_000 });
 
     const result = await repository.claimImageRenderJob("worker-1");
 
     expect(result?.id).toBe("job-1");
-    const sql = String(query.mock.calls[0]?.[0]);
+    expect(query.mock.calls.map(([sql]) => String(sql).trim())).toEqual(expect.arrayContaining([
+      "begin",
+      "commit"
+    ]));
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("pg_advisory_xact_lock"))).toBe(true);
+    const sql = String(query.mock.calls.find(([statement]) => String(statement).includes("update jobs job"))?.[0]);
     expect(sql).toContain("instagram_feed_render");
     expect(sql).toContain("instagram_story_render");
     expect(sql).toContain("instagram_reel_render");
+    expect(sql).toContain("active.status = 'running'");
+    expect(sql).toContain("recent.attempt_count > 0");
+    expect(sql).toContain("interval '1 millisecond'");
     expect(sql).not.toContain("job_type = 'instagram_render'");
+    expect(query.mock.calls.find(([statement]) => String(statement).includes("update jobs job"))?.[1]).toEqual([
+      "worker-1",
+      60_000
+    ]);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("terminalizes expired image jobs that exhausted their attempts before claiming", async () => {
+    const query = vi.fn(async (sql: string, _values?: unknown[]) => {
+      if (["begin", "commit", "rollback"].includes(sql.trim())) return { rowCount: 0, rows: [] };
+      if (sql.includes("image_render_job_attempts_exhausted")) {
+        return { rowCount: 1, rows: [{ channel_output_id: "output-expired" }] };
+      }
+      if (sql.includes("update jobs job")) return { rowCount: 0, rows: [] };
+      return { rowCount: 1, rows: [] };
+    });
+    const repository = createRepository({
+      query: vi.fn(),
+      connect: vi.fn(async () => ({ query, release: vi.fn() }))
+    } as any);
+
+    await expect(repository.claimImageRenderJob("worker-1")).resolves.toBeNull();
+
+    const terminalOutput = findSqlCall(query.mock.calls, (sql) => sql.includes("update channel_outputs"));
+    expect(terminalOutput?.[1]).toEqual([
+      ["output-expired"],
+      "image_render_job_attempts_exhausted",
+      "image_render_job_attempts_exhausted"
+    ]);
+    expect(terminalOutput?.[0]).toContain("status = 'generation_failed'");
+    const outputIndex = query.mock.calls.findIndex(([sql]) => String(sql).includes("update channel_outputs"));
+    const claimIndex = query.mock.calls.findIndex(([sql]) => String(sql).includes("update jobs job"));
+    expect(outputIndex).toBeGreaterThan(-1);
+    expect(outputIndex).toBeLessThan(claimIndex);
   });
 
   it("validates and accepts a format-specific feed artifact", async () => {
@@ -117,20 +177,33 @@ describe("image worker completion", () => {
       "pending_review",
       "output-1"
     ]);
+    const persistedOutput = findSqlCall(clientQuery.mock.calls, (sql) => sql.includes("output_json = $4::jsonb"));
+    expect(JSON.parse(String(persistedOutput?.[1]?.[3]))).toMatchObject({
+      generationState: "completed",
+      artifactStatus: "ready"
+    });
+    expect(String(persistedOutput?.[1]?.[3])).not.toContain('"generationState":"pending"');
+    expect(String(persistedOutput?.[1]?.[3])).not.toContain('"artifactStatus":"pending"');
     const lockedJobQuery = String(clientQuery.mock.calls.find(([sql]) => String(sql).includes("from jobs"))?.[0]);
     expect(lockedJobQuery).toContain("join channel_outputs");
     expect(lockedJobQuery).toContain("join topic_publish_groups");
     expect(lockedJobQuery).toContain("join brand_channels");
     expect(lockedJobQuery).toContain("for update of job, co");
     const outputUpdate = String(clientQuery.mock.calls.find(([sql]) => String(sql).includes("update channel_outputs"))?.[0]);
-    expect(outputUpdate).toContain("block_reasons = coalesce(block_reasons, '[]'::jsonb) - 'instagram_artifact_pending'");
+    expect(outputUpdate).toContain("block_reasons = coalesce(block_reasons, '[]'::jsonb)");
+    expect(outputUpdate).not.toContain("instagram_artifact_pending");
+    const jobCompletion = String(clientQuery.mock.calls.find(([sql]) => (
+      String(sql).includes("update jobs set status = 'succeeded'")
+    ))?.[0]);
+    expect(jobCompletion).toContain("last_error = null");
     expect(poolQuery).not.toHaveBeenCalled();
   });
 
   it.each([
     { outputStatus: "approved", autoApprovalEnabled: false, expectedStatus: "approved", approvalType: "manual" },
-    { outputStatus: "auto_approval_blocked", autoApprovalEnabled: true, expectedStatus: "auto_approved", approvalType: "auto" },
-    { outputStatus: "auto_approval_blocked", autoApprovalEnabled: false, expectedStatus: "pending_review", approvalType: null },
+    { outputStatus: "generating", autoApprovalEnabled: true, expectedStatus: "auto_approved", approvalType: "auto" },
+    { outputStatus: "generating", autoApprovalEnabled: false, expectedStatus: "pending_review", approvalType: null },
+    { outputStatus: "auto_approval_blocked", autoApprovalEnabled: true, expectedStatus: "auto_approval_blocked", approvalType: null },
     { outputStatus: "rejected", autoApprovalEnabled: true, expectedStatus: "rejected", approvalType: null },
     { outputStatus: "regenerated", autoApprovalEnabled: true, expectedStatus: "regenerated", approvalType: null }
   ])("transitions $outputStatus to $expectedStatus after artifact completion", async ({
@@ -161,9 +234,9 @@ describe("image worker completion", () => {
       manifestUrl: "https://blob.example.com/rendered-content/instagram/brand-1/output-1/job-1/manifest.json"
     });
 
-    const outputUpdate = clientQuery.mock.calls.find(([sql]) => String(sql).includes("update channel_outputs"));
+    const outputUpdate = findSqlCall(clientQuery.mock.calls, (sql) => sql.includes("update channel_outputs"));
     expect(outputUpdate?.[1]?.[5]).toBe(expectedStatus);
-    expect(String(outputUpdate?.[0])).toContain("approved_at = case when status = 'auto_approval_blocked' and $6 = 'auto_approved' then now()");
+    expect(String(outputUpdate?.[0])).toContain("approved_at = case when status = 'generating' and $6 = 'auto_approved' then now()");
     const queueInserts = clientQuery.mock.calls.filter(([sql]) => String(sql).includes("insert into publish_queue"));
     expect(queueInserts).toHaveLength(approvalType ? 1 : 0);
     if (approvalType) {
@@ -181,8 +254,8 @@ describe("image worker completion", () => {
     }
   });
 
-  it("marks only an invalid Reel job failed and creates no fallback format job", async () => {
-    const clientQuery = vi.fn(async (sql: string) => {
+  it("marks an invalid Reel job and linked output failed without creating a fallback job", async () => {
+    const clientQuery = vi.fn(async (sql: string, _values?: unknown[]) => {
       if (["begin", "commit", "rollback"].includes(sql.trim())) return { rowCount: 0, rows: [] };
       if (sql.includes("from jobs")) {
         return { rowCount: 1, rows: [runningJobRow("instagram_reel", "worker-reel.v3")] };
@@ -218,13 +291,27 @@ describe("image worker completion", () => {
     );
     expect(clientQuery.mock.calls.some(([sql]) => String(sql).includes("insert into jobs"))).toBe(false);
     expect(clientQuery.mock.calls.some(([sql]) => String(sql).includes("insert into storage_artifacts"))).toBe(false);
-    expect(clientQuery.mock.calls.some(([sql]) => String(sql).includes("update channel_outputs"))).toBe(false);
+    const terminalOutput = findSqlCall(clientQuery.mock.calls, (sql) => sql.includes("update channel_outputs"));
+    expect(terminalOutput?.[1]).toEqual([
+      ["output-1"],
+      "image_render_validation_failed",
+      "reel_video_required"
+    ]);
+    expect(terminalOutput?.[0]).toContain("status = 'generation_failed'");
+    expect(terminalOutput?.[0]).toContain("block_reasons ? 'generation_failed'");
+    expect(terminalOutput?.[0]).toContain("jsonb_build_object('code', $2, 'message', $3, 'failedAt', now())");
     expect(clientQuery.mock.calls.some(([sql]) => String(sql).includes("insert into publish_queue"))).toBe(false);
   });
 
   it("regenerates only the existing Story delivery format", async () => {
     const clientQuery = vi.fn(async (sql: string, _values?: unknown[]) => {
       if (["begin", "commit", "rollback"].includes(sql.trim())) return { rowCount: 0, rows: [] };
+      if (sql.includes("select channel from channel_outputs")) {
+        return {
+          rowCount: 1,
+          rows: [{ channel: "instagram", delivery_format: "instagram_story" }]
+        };
+      }
       if (sql.trimStart().startsWith("with updated as")) {
         return {
           rowCount: 1,
@@ -243,7 +330,9 @@ describe("image worker completion", () => {
             brand_channel_id: "channel-1",
             topic_publish_group_id: "group-1",
             brand_name: "Brand",
-            industry: "travel",
+            category_code: "travel_tourism",
+            category_name: "여행·관광",
+            subcategories: [{ type: "system", code: "travel_consulting", name: "여행 상담" }],
             primary_customer: "families",
             description: "travel planning",
             tone: "clear",
@@ -286,6 +375,8 @@ describe("image worker completion", () => {
     ]);
     const outputInsert = clientQuery.mock.calls.find(([sql]) => String(sql).includes("insert into channel_outputs"));
     expect(outputInsert?.[1]).toContain("instagram_story");
+    expect(String(outputInsert?.[0])).toContain("'generating'");
+    expect(JSON.parse(String(outputInsert?.[1]?.[11]))).toEqual([]);
     const jobInserts = clientQuery.mock.calls.filter(([sql]) => String(sql).includes("insert into jobs"));
     expect(jobInserts).toHaveLength(1);
     expect(jobInserts[0]?.[1]?.[4]).toBe("instagram_story_render");
@@ -293,7 +384,97 @@ describe("image worker completion", () => {
     expect(payload).toMatchObject({
       deliveryFormat: "instagram_story",
       promptVersion: "worker-story.v1",
-      representativeUrl: "https://reference.example.com/story"
+      representativeUrl: "https://reference.example.com/story",
+      brand: { categoryContext: "여행·관광 / 여행 상담" }
     });
+  });
+});
+
+describe("image worker failure", () => {
+  it("rejects an expired image worker lease without changing the job or output", async () => {
+    const clientQuery = vi.fn(async (sql: string) => {
+      if (["begin", "commit", "rollback"].includes(sql.trim())) return { rowCount: 0, rows: [] };
+      if (sql.includes("update jobs")) return { rowCount: 0, rows: [] };
+      return { rowCount: 1, rows: [] };
+    });
+    const repository = createRepository({
+      query: vi.fn(),
+      connect: vi.fn(async () => ({ query: clientQuery, release: vi.fn() }))
+    } as any);
+
+    await expect(repository.failImageRenderJob("job-1", {
+      workerId: "stale-worker",
+      leaseToken: "stale-lease",
+      error: "late failure",
+      retryable: true,
+      retryAfterMs: 5_000
+    })).rejects.toThrow("image_render_job_lease_invalid");
+
+    const jobUpdate = findSqlCall(clientQuery.mock.calls, (sql) => sql.includes("update jobs"));
+    expect(jobUpdate?.[0]).toContain("locked_until > now()");
+    expect(clientQuery.mock.calls.some(([sql]) => String(sql).includes("update channel_outputs"))).toBe(false);
+    expect(clientQuery).toHaveBeenCalledWith("rollback");
+    expect(clientQuery).not.toHaveBeenCalledWith("commit");
+  });
+
+  it("leaves the output generating while the job can retry", async () => {
+    const clientQuery = vi.fn(async (sql: string) => {
+      if (["begin", "commit", "rollback"].includes(sql.trim())) return { rowCount: 0, rows: [] };
+      if (sql.includes("update jobs")) {
+        return { rowCount: 1, rows: [{ id: "job-1", status: "queued", channel_output_id: "output-1" }] };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+    const repository = createRepository({
+      query: vi.fn(),
+      connect: vi.fn(async () => ({ query: clientQuery, release: vi.fn() }))
+    } as any);
+
+    await expect(repository.failImageRenderJob("job-1", {
+      workerId: "worker-1",
+      leaseToken: "lease-1",
+      error: "temporary renderer outage",
+      retryable: true,
+      retryAfterMs: 5_000
+    })).resolves.toEqual({ id: "job-1", status: "queued" });
+
+    const jobUpdate = findSqlCall(clientQuery.mock.calls, (sql) => sql.includes("update jobs"));
+    expect(jobUpdate?.[0]).toContain("locked_until > now()");
+    expect(clientQuery.mock.calls.some(([sql]) => String(sql).includes("update channel_outputs"))).toBe(false);
+    expect(clientQuery).toHaveBeenCalledWith("commit");
+  });
+
+  it("marks the linked output generation failed when retries are exhausted", async () => {
+    const unsafeMessage = `renderer failed\u0000${"x".repeat(2_100)}`;
+    const clientQuery = vi.fn(async (sql: string) => {
+      if (["begin", "commit", "rollback"].includes(sql.trim())) return { rowCount: 0, rows: [] };
+      if (sql.includes("update jobs")) {
+        return { rowCount: 1, rows: [{ id: "job-1", status: "failed", channel_output_id: "output-1" }] };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+    const repository = createRepository({
+      query: vi.fn(),
+      connect: vi.fn(async () => ({ query: clientQuery, release: vi.fn() }))
+    } as any);
+
+    await expect(repository.failImageRenderJob("job-1", {
+      workerId: "worker-1",
+      leaseToken: "lease-1",
+      error: unsafeMessage,
+      retryable: false,
+      retryAfterMs: 0
+    })).resolves.toEqual({ id: "job-1", status: "failed" });
+
+    const outputUpdate = findSqlCall(clientQuery.mock.calls, (sql) => sql.includes("update channel_outputs"));
+    expect(String(outputUpdate?.[0])).toContain("status = 'generation_failed'");
+    expect(String(outputUpdate?.[0])).toContain("'{generationError}'");
+    expect(String(outputUpdate?.[0])).toContain("jsonb_build_object('code', $2, 'message', $3, 'failedAt', now())");
+    expect(String(outputUpdate?.[0])).toContain("block_reasons ? 'generation_failed'");
+    expect(outputUpdate?.[1]?.[0]).toEqual(["output-1"]);
+    expect(outputUpdate?.[1]?.[1]).toBe("image_render_failed");
+    expect(String(outputUpdate?.[1]?.[2])).not.toContain("\u0000");
+    expect(String(outputUpdate?.[1]?.[2]).length).toBeLessThanOrEqual(2_000);
+    expect(clientQuery).toHaveBeenCalledWith("commit");
   });
 });

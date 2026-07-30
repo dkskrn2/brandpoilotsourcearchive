@@ -10,6 +10,7 @@ export const seedIds = {
   tiktokChannelId: "00000000-0000-4000-8000-000000001003",
   youtubeChannelId: "00000000-0000-4000-8000-000000001004",
   xChannelId: "00000000-0000-4000-8000-000000001005",
+  linkedinChannelId: "00000000-0000-4000-8000-000000001006",
   ownedSourceId: "00000000-0000-4000-8000-000000002001",
   referenceSourceId: "00000000-0000-4000-8000-000000002002",
   topicUploadId: "00000000-0000-4000-8000-000000003001",
@@ -37,7 +38,7 @@ async function seed() {
 
     await client.query(
       `insert into workspaces (id, name, slug, status, created_by_user_id)
-       values ($1, 'Brand Pilot Demo', 'brand-pilot-demo', 'active', $2)
+      values ($1, '모종 Demo', 'brand-pilot-demo', 'active', $2)
        on conflict (id) do update set name = excluded.name, slug = excluded.slug`,
       [seedIds.workspaceId, seedIds.userId]
     );
@@ -58,11 +59,11 @@ async function seed() {
 
     await client.query(
       `insert into brand_profiles (
-         workspace_id, brand_id, industry, primary_customer, description, tone,
+         workspace_id, brand_id, primary_category_id, primary_customer, description, tone,
          forbidden_terms, default_cta, main_link, auto_approval_enabled
        )
        values (
-         $1, $2, '여행 서비스', '일본 여행을 처음 준비하는 20-40대',
+         $1, $2, (select id from content_categories where code = 'travel_tourism'), '일본 여행을 처음 준비하는 20-40대',
          '제주와 일본 여행 일정을 상담하고 숙소, 이동, 예산 정보를 정리해주는 여행 브랜드입니다.',
          '친절하지만 과장하지 않는 전문가 톤', '[]'::jsonb, '무료 상담 신청하기', 'https://example.com', true
        )
@@ -72,24 +73,25 @@ async function seed() {
     );
 
     const channels = [
-      [seedIds.instagramChannelId, "instagram", "not_connected", "연결 전", null],
-      [seedIds.threadsChannelId, "threads", "not_connected", "연결 전", null],
-      [seedIds.tiktokChannelId, "tiktok", "not_connected", "연결 전", null],
-      [seedIds.youtubeChannelId, "youtube", "not_connected", "연결 전", null],
-      [seedIds.xChannelId, "x", "not_connected", "연결 전", null]
+      [seedIds.instagramChannelId, "instagram", "not_connected", "연결 전", true, null],
+      [seedIds.threadsChannelId, "threads", "not_connected", "연결 전", true, null],
+      [seedIds.xChannelId, "x", "not_connected", "연결 전", false, null],
+      [seedIds.linkedinChannelId, "linkedin", "not_connected", "연결 전", false, null],
+      [seedIds.youtubeChannelId, "youtube", "not_connected", "연결 전", false, null],
+      [seedIds.tiktokChannelId, "tiktok", "not_connected", "연결 전", false, null]
     ];
-    for (const [id, channel, status, accountLabel, lastError] of channels) {
+    for (const [id, channel, status, accountLabel, enabled, lastError] of channels) {
       await client.query(
         `insert into brand_channels (id, workspace_id, brand_id, channel, status, account_label, enabled, last_error)
-         values ($1, $2, $3, $4, $5, $6, true, $7)
-         on conflict (id)
+         values ($1, $2, $3, $4, $5, $6, $7, $8)
+         on conflict (brand_id, channel) where deleted_at is null
          do nothing`,
-        [id, seedIds.workspaceId, seedIds.brandId, channel, status, accountLabel, lastError]
+        [id, seedIds.workspaceId, seedIds.brandId, channel, status, accountLabel, enabled, lastError]
       );
     }
 
     await client.query("commit");
-    console.log(`Seeded Brand Pilot demo brand ${seedIds.brandId}`);
+  console.log(`Seeded 모종 demo brand ${seedIds.brandId}`);
   } catch (error) {
     await client.query("rollback");
     throw error;

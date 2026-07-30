@@ -1,4 +1,4 @@
-# Brand Pilot Image Worker
+# 모종 Image Worker
 
 This directory is intentionally self-contained. Copy this entire directory to the image-worker PC. Do not copy the central API, Supabase credentials, or Meta credentials.
 
@@ -21,12 +21,13 @@ WORKER_ID=image-worker-pc-1
 BLOB_READ_WRITE_TOKEN=valid-read-write-token-for-brandpilot-Blob-store
 IMAGE_PROVIDER=command
 IMAGE_RENDER_COMMAND=node scripts/run-codex-image-render.mjs --job "{{jobFile}}" --output "{{outputDir}}"
+IMAGE_JOB_TIMEOUT_MS=1200000
 IMAGE_MODEL=codex-imagegen
 ```
 
 The rendering command is invoked once per claimed job. Codex decides whether the brief needs one to five cards, generates the final Instagram title, caption, up to five hashtags, and card-by-card copy, then creates each card as a separate PNG. The wrapper writes `slide-01.png` through the final card and `content.json` to `{{outputDir}}`. The worker uploads the images and a combined `manifest.json` to Vercel Blob, then reports the manifest URL to the central API.
 
-The worker is sequential. It finishes the current job before claiming the next one. Retryable Codex or Blob failures are requeued after `IMAGE_RETRY_DELAY_MS` (five minutes by default), while invalid job contracts and authentication failures are final. Run only one worker process for one Codex login.
+The worker is sequential. It finishes the current job before claiming the next one. The central API also serializes image claims across every worker process and waits `IMAGE_JOB_COOLDOWN_MS` (60 seconds by default) after a completed or failed attempt before leasing another image job. Retryable Codex or Blob failures are requeued after `IMAGE_RETRY_DELAY_MS` (five minutes by default), while invalid job contracts and authentication failures are final. Run only one worker process for one Codex login.
 
 ## Run
 

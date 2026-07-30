@@ -44,6 +44,14 @@ describe("topic publish group generation policy", () => {
     });
   });
 
+  it("treats enabled non-Instagram channels as producible before OAuth", () => {
+    expect(determineGenerationReadiness(["x", "linkedin", "youtube", "tiktok"], [], null)).toEqual({
+      threads: false,
+      instagramFormat: null,
+      canProduce: true
+    });
+  });
+
   it("runs at most four generation calls and reports topics actually processed", async () => {
     const generate = vi.fn(async () => ({ processed: 1, created: 2, updated: 1, failed: 0 }));
 

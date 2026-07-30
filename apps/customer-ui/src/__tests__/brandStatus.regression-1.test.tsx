@@ -6,6 +6,7 @@ import { BrandStatusProvider } from "../lib/brandStatus";
 const initialStatus = {
   brandId: "brand-1",
   brandName: "Brand",
+  logoUrl: null,
   lastGeneratedAt: null,
   navigation: {
     onboardingRemaining: 1,

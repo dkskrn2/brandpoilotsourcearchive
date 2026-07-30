@@ -1,5 +1,27 @@
 import { Badge } from "../ui/Badge";
+import { PublishManagementPreview, resolvePublishPreview } from "./PublishManagementPreview";
 import type { BadgeVariant, PublishResult, PublishResultChannel, PublishSlot } from "../../types";
+
+const channelLabels: Record<PublishSlot["channel"], string> = {
+  instagram: "Instagram",
+  threads: "Threads",
+  x: "X",
+  linkedin: "LinkedIn",
+  youtube: "YouTube",
+  tiktok: "TikTok"
+};
+
+const deliveryFormatLabels: Record<string, string> = {
+  instagram_feed_carousel: "카드뉴스",
+  instagram_story: "스토리",
+  instagram_reel: "Reel",
+  threads_text: "텍스트",
+  x_post: "게시물",
+  linkedin_post: "게시물",
+  youtube_video: "영상",
+  youtube_short: "Short",
+  tiktok_video: "영상"
+};
 
 export interface TopicPublishGroupItem {
   slot: PublishSlot;
@@ -28,12 +50,12 @@ const statusMeta: Record<PublishSlot["status"], { label: string; variant: BadgeV
 
 function formatLabel(item: TopicPublishGroupItem) {
   const deliveryFormat = item.resultChannel?.outputJson?.deliveryFormat;
-  if (deliveryFormat === "instagram_reel") return "Instagram · Reel";
-  if (deliveryFormat === "instagram_story") return "Instagram · 스토리";
-  if (deliveryFormat === "instagram_feed_carousel") return "Instagram · 카드뉴스";
-  if (item.slot.channel === "instagram") return "Instagram · 카드뉴스";
-  if (item.slot.channel === "threads") return "Threads · 텍스트";
-  return item.slot.channel;
+  const format = typeof deliveryFormat === "string" ? deliveryFormatLabels[deliveryFormat] : null;
+  const fallback = item.slot.channel === "instagram" ? "카드뉴스"
+    : item.slot.channel === "threads" ? "텍스트"
+    : item.slot.channel === "x" || item.slot.channel === "linkedin" ? "게시물"
+    : "영상";
+  return `${channelLabels[item.slot.channel]} · ${format ?? fallback}`;
 }
 
 function formatScheduledAt(value: string | null) {
@@ -49,6 +71,15 @@ function formatScheduledAt(value: string | null) {
   return `${part("month")}월 ${part("day")}일 ${part("hour")}:${part("minute")}`;
 }
 
+function formatPublishedAt(value: string) {
+  return new Date(value).toLocaleString("ko-KR", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
 export function TopicPublishGroup({
   group,
   onSelectResult
@@ -56,31 +87,53 @@ export function TopicPublishGroup({
   group: TopicPublishGroupModel;
   onSelectResult: (result: PublishResult, channel: PublishResultChannel) => void;
 }) {
+  const representative = group.items.find((item) => item.resultChannel) ?? group.items[0];
+  const representativeChannel = representative?.resultChannel;
+  const statuses = group.items.map((item) => item.slot.status);
+  const groupStatus: PublishSlot["status"] = statuses.some((status) => status === "failed") ? "failed"
+    : statuses.some((status) => status === "publishing") ? "publishing"
+    : statuses.some((status) => status === "scheduled") ? "scheduled"
+    : statuses.length > 0 && statuses.every((status) => status === "published") ? "published"
+    : statuses.some((status) => status === "queued") ? "queued"
+    : statuses[0] ?? "empty";
+  const groupMeta = statusMeta[groupStatus];
+  const isPreGenerationGroup = group.items.every((item) => item.slot.approvalType === "empty");
+  const preview = resolvePublishPreview({
+    title: group.title,
+    artifactPublicUrl: representativeChannel?.artifactPublicUrl,
+    outputJson: representativeChannel?.outputJson,
+    previewBody: representativeChannel?.previewBody,
+    pending: !representativeChannel && representative?.slot.approvalType === "empty",
+    failed: groupStatus === "failed" && !representativeChannel
+  });
+
   return (
-    <tr>
-      <td>
-        <strong>{group.title}</strong>
-        <div className="row-meta">{formatScheduledAt(group.scheduledFor)}</div>
-        {group.slotNumber ? <div className="row-meta">슬롯 {group.slotNumber}</div> : null}
-        {group.items.some((item) => item.slot.approvalType === "empty") ? <Badge variant="neutral">대기</Badge> : null}
-        <div className="row-meta">{group.items[0]?.slot.sourceLabel}</div>
-        {group.items[0]?.slot.sourceUrls.map((url) => <div className="row-meta" key={url}>{url}</div>)}
-      </td>
-      <td colSpan={6}>
-        <div className="grid">
+    <article className="publish-management-card" aria-label={group.title}>
+      <div className="publish-management-card__preview">
+        <PublishManagementPreview title={group.title} preview={preview} />
+      </div>
+      <div className="publish-management-card__body">
+        <div className="publish-management-card__heading">
+          <strong className="publish-management-card__title">{group.title}</strong>
+          <Badge variant={groupMeta.variant}>{isPreGenerationGroup ? "대기" : groupMeta.label}</Badge>
+        </div>
+        <div className="row-meta">
+          {formatScheduledAt(group.scheduledFor)}
+          {group.slotNumber ? ` · 슬롯 ${group.slotNumber}` : ""}
+        </div>
+        <div className="publish-management-card__channels">
           {group.items.map((item) => {
             const label = formatLabel(item);
             const meta = statusMeta[item.slot.status];
             const error = item.slot.lastError ?? item.resultChannel?.lastError;
-            const artifactUrl = item.resultChannel?.artifactPublicUrl;
             const externalUrl = item.resultChannel?.externalUrl;
             const canOpenDetail = item.slot.status === "published" && item.result && item.resultChannel;
             const isPreGeneration = item.slot.approvalType === "empty";
             return (
-              <div className="preview" key={item.slot.id}>
-                <div className="panel-head">
+              <div className="publish-management-card__channel" key={item.slot.id}>
+                <div className="publish-management-card__channel-head">
                   {isPreGeneration ? (
-                    <button type="button" className="button is-disabled" disabled>{item.slot.channel === "instagram" ? "Instagram" : "Threads"} 생성 전</button>
+                    <button type="button" className="button is-disabled" disabled>{channelLabels[item.slot.channel]} 생성 전</button>
                   ) : canOpenDetail ? (
                     <button
                       type="button"
@@ -93,16 +146,18 @@ export function TopicPublishGroup({
                   ) : <strong>{label}</strong>}
                   <Badge variant={meta.variant}>{isPreGeneration ? "생성 전" : meta.label}</Badge>
                 </div>
+                {item.resultChannel?.publishedAt ? (
+                  <div className="row-meta">게시일시 {formatPublishedAt(item.resultChannel.publishedAt)}</div>
+                ) : null}
                 {error ? <div className="row-meta">{error}</div> : null}
-                <div className="actions">
-                  {artifactUrl ? <a className="button" href={artifactUrl} target="_blank" rel="noreferrer">결과물 다운로드</a> : null}
+                <div className="publish-management-card__actions">
                   {externalUrl ? <a className="button" href={externalUrl} target="_blank" rel="noreferrer">게시물 열기</a> : null}
                 </div>
               </div>
             );
           })}
         </div>
-      </td>
-    </tr>
+      </div>
+    </article>
   );
 }

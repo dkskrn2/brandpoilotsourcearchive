@@ -3,6 +3,7 @@ import { Alert } from "../components/ui/Alert";
 import { Badge } from "../components/ui/Badge";
 import { ButtonLink } from "../components/ui/ButtonLink";
 import { ChecklistItem } from "../components/ui/ChecklistItem";
+import { PageSkeleton } from "../components/ui/LoadingState";
 import { useBrandStatus } from "../lib/brandStatus";
 import type { BadgeVariant, OnboardingStatus } from "../types";
 
@@ -18,6 +19,14 @@ function pageTitle(remainingCount: number) {
     : "게시 자동화 준비가 완료됐습니다";
 }
 
+function progressDescription(onboarding: NonNullable<ReturnType<typeof useBrandStatus>["status"]>["onboarding"]) {
+  const optionalPendingCount = onboarding.steps.filter((step) => step.status === "pending").length;
+  if (onboarding.remainingCount === 0 && optionalPendingCount > 0) {
+    return `필수 항목은 모두 완료됐습니다. 선택 항목 ${optionalPendingCount}개는 나중에 연결할 수 있습니다.`;
+  }
+  return `${onboarding.completedCount}개 항목이 완료됐고 ${onboarding.remainingCount}개 항목이 남았습니다.`;
+}
+
 export function OnboardingPage() {
   const { status, loading, error } = useBrandStatus();
   const onboarding = status?.onboarding;
@@ -27,17 +36,17 @@ export function OnboardingPage() {
       <PageHeader
         title={pageTitle(onboarding?.remainingCount ?? 0)}
         description={onboarding
-          ? `${onboarding.completedCount}개 항목이 완료됐고 ${onboarding.remainingCount}개 항목이 남았습니다.`
+          ? progressDescription(onboarding)
           : "API 상태를 불러오면 필요한 온보딩 항목을 표시합니다."}
         actions={
           <>
             <ButtonLink to="/brand-settings" variant="primary">브랜드 설정</ButtonLink>
-            <ButtonLink to="/sources">URL 추가</ButtonLink>
+            <ButtonLink to="/onboarding/brand-intelligence">브랜드 정보 만들기</ButtonLink>
           </>
         }
       />
 
-      <section className="panel">
+      {loading && !onboarding ? <PageSkeleton label="온보딩 상태를 불러오는 중입니다." /> : <section className="panel">
         <div className="panel-head">
           <h2>온보딩 체크리스트</h2>
           {onboarding ? (
@@ -72,7 +81,7 @@ export function OnboardingPage() {
             </Alert>
           </div>
         )}
-      </section>
+      </section>}
     </section>
   );
 }

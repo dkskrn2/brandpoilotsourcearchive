@@ -18,6 +18,7 @@ import {
   type WorkerPromptVersion
 } from "./promptBuilder.js";
 import { readRepresentativeSource, type SourceReadResult } from "./sourceReader.js";
+import { requireQualityBrief } from "./qualityBrief.js";
 
 export interface RenderedImage {
   index: number;
@@ -70,7 +71,7 @@ export interface WorkerClient {
 }
 
 export interface ImageRenderer {
-  renderJob(job: ClaimedImageJob): Promise<RenderedInstagramPackage>;
+  renderJob(job: ClaimedImageJob, signal?: AbortSignal): Promise<RenderedInstagramPackage>;
 }
 
 export interface ImageStorage {
@@ -149,7 +150,7 @@ function promptInputFor(
     },
     brand: {
       name: requiredText(brand, "name"),
-      industry: nullableText(brand, "industry"),
+      categoryContext: nullableText(brand, "categoryContext") ?? "미설정",
       primaryCustomer: nullableText(brand, "primaryCustomer"),
       description: nullableText(brand, "description"),
       tone: nullableText(brand, "tone"),
@@ -190,7 +191,7 @@ function validateRenderedImages(
 }
 
 function isRetryableImageRenderError(error: unknown, message: string) {
-  return error instanceof WorkerManifestValidationError || /^(codex_image_|image_render_(?:command|content|output)|image_manifest_|image_asset_|asset_|story_asset_|delivery_format_mismatch|prompt_version_mismatch|worker_api_failed:5|blob_upload_failed|image_provider_rate_limited|ffprobe_|reel_|invalid_reel_)/.test(message);
+  return error instanceof WorkerManifestValidationError || /^(codex_image_|image_render_(?:command|content|output)|image_manifest_|image_asset_|asset_|story_asset_|delivery_format_mismatch|prompt_version_mismatch|worker_api_failed:5|blob_upload_failed|image_provider_rate_limited|ffprobe_|reel_|invalid_reel_|content_quality_)/.test(message);
 }
 
 function startHeartbeat({
@@ -236,6 +237,7 @@ export async function runOnce({
   readSource = readRepresentativeSource,
   buildPrompt = buildWorkerPrompt,
   runTextJob,
+  signal,
   heartbeatIntervalMs = 5 * 60 * 1000,
   retryDelayMs = 5 * 60 * 1000
 }: {
@@ -247,9 +249,11 @@ export async function runOnce({
   readSource?: (url: string | null | undefined) => Promise<SourceReadResult>;
   buildPrompt?: typeof buildWorkerPrompt;
   runTextJob?: () => Promise<WorkerRunResult>;
+  signal?: AbortSignal;
   heartbeatIntervalMs?: number;
   retryDelayMs?: number;
 }): Promise<WorkerRunResult> {
+  if (signal?.aborted) throw signal.reason;
   const job = await client.claim(workerId);
   if (!job) return runTextJob ? await runTextJob() : { status: "idle" };
   const stopHeartbeat = startHeartbeat({ job, workerId, client, heartbeatIntervalMs });
@@ -274,8 +278,12 @@ export async function runOnce({
         sourceText: source.sourceText
       }
     };
-    const rendered = await renderer.renderJob(preparedJob);
+    const rendered = signal
+      ? await renderer.renderJob(preparedJob, signal)
+      : await renderer.renderJob(preparedJob);
+    if (signal?.aborted) throw signal.reason;
     const manifest = parseWorkerManifest(rendered.manifest, { maxImages });
+    requireQualityBrief(manifest.qualityBrief);
     const expectedFormat = formatFor(job);
     if (manifest.deliveryFormat !== expectedFormat.deliveryFormat) throw new Error("delivery_format_mismatch");
     if (manifest.promptVersion !== expectedFormat.promptVersion) throw new Error("prompt_version_mismatch");

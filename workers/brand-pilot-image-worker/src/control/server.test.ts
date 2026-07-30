@@ -52,7 +52,7 @@ describe("worker control server", () => {
       const response = await fetch(`${baseUrl}/`);
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toContain("text/html");
-      expect(await response.text()).toContain("Brand Pilot Worker");
+      expect(await response.text()).toContain("모종 Worker");
     });
   });
 });

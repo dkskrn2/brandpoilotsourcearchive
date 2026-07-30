@@ -30,6 +30,38 @@ async function applyMigrations(client: PoolClient) {
   }
 }
 
+async function applyGenerationProfileFixtureSchema(pool: Pool) {
+  await pool.query(`
+    create table if not exists content_categories (
+      id uuid primary key default gen_random_uuid(),
+      code text not null unique,
+      name text not null,
+      sort_order integer not null default 1,
+      active boolean not null default true
+    );
+    create table if not exists content_subcategories (
+      id uuid primary key default gen_random_uuid(),
+      category_id uuid not null references content_categories(id),
+      code text not null,
+      name text not null,
+      sort_order integer not null default 1,
+      active boolean not null default true
+    );
+    alter table brand_profiles
+      add column if not exists primary_category_id uuid null references content_categories(id);
+    create table if not exists brand_profile_subcategories (
+      id uuid primary key default gen_random_uuid(),
+      workspace_id uuid not null references workspaces(id),
+      brand_id uuid not null references brands(id),
+      brand_profile_id uuid not null references brand_profiles(id),
+      subcategory_id uuid null references content_subcategories(id),
+      custom_name text null,
+      custom_key text null,
+      created_at timestamptz not null default now()
+    );
+  `);
+}
+
 async function seedConcurrencyFixture(pool: Pool) {
   const workspace = await pool.query<{ id: string }>(
     "insert into workspaces (name, slug) values ($1, $2) returning id",
@@ -240,6 +272,7 @@ async function main() {
       } finally {
         migrationClient.release();
       }
+      await applyGenerationProfileFixtureSchema(pool);
       await runConcurrencyAssertions(pool, process.argv.includes("--mutate-no-brand-lock"));
       console.log("topic_quota_postgres_concurrency: PASS");
     } finally {
