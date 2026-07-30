@@ -1139,7 +1139,7 @@ test("all CLI worker images install the pinned Codex runtime and run real entryp
   assert.doesNotMatch(imageDockerfile, /tsx\/esm\/api|src\/[A-Za-z0-9_.-]+\.ts/);
 });
 
-test("brand intelligence image preserves production dependencies from npm workspaces", () => {
+test("brand intelligence image preserves workspace dependencies and invokes Playwright without a pruned bin shim", () => {
   const dockerfile = read("workers/brand-pilot-brand-intelligence-worker/Dockerfile");
 
   assert.match(
@@ -1147,6 +1147,12 @@ test("brand intelligence image preserves production dependencies from npm worksp
     /npm prune --omit=dev --workspaces/,
     "workspace production dependencies such as Playwright must survive the build-stage prune",
   );
+  assert.match(
+    dockerfile,
+    /node node_modules\/playwright\/cli\.js install --with-deps chromium/,
+    "the image must invoke Playwright directly because npm prune removes its .bin shim",
+  );
+  assert.doesNotMatch(dockerfile, /npx playwright install/);
 });
 
 test("shared worker runtime is emitted for production and CLI children use explicit execution boundaries", () => {
