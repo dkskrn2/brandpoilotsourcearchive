@@ -33,7 +33,10 @@ type BrandCenterOnboardingView =
   | "reanalysis_review_ready"
   | "failed";
 const canonicalUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const pendingAnalysisStatuses: BrandAnalysis["status"][] = ["queued", "extracting", "analyzing"];
+const pendingAnalysisStatuses: BrandAnalysis["status"][] = [
+  "queued", "accepting_uploads", "waiting_for_resource", "extracting",
+  "analyzing", "running", "finalizing", "cancel_requested", "purging",
+];
 
 const brandTabs: Array<{ id: BrandCenterTab; label: string }> = [
   { id: "core", label: "브랜드 코어" },

@@ -1,5 +1,5 @@
 export type WorkerResourceType = "codex_cli";
-export type WorkerResourceWorkload = "dm" | "wiki" | "content";
+export type WorkerResourceWorkload = "dm" | "wiki" | "content" | "onboarding";
 
 export interface WorkerResourceLimits {
   total: number;

@@ -22,7 +22,7 @@ describe("brand intelligence gateway", () => {
     await gateway.getAnalysis("brand-1", "analysis-1", controller.signal);
 
     expect(requestJson).toHaveBeenCalledWith(
-      "/brands/brand-1/brand-intelligence/analyses/analysis-1",
+      "/brands/brand-1/brand-analyses/analysis-1",
       { method: "GET", signal: controller.signal },
     );
   });

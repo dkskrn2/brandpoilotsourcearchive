@@ -18,8 +18,8 @@ describe("bounded analysis poll policy", () => {
   });
 
   it("bounds requests, elapsed time, and each request", () => {
-    expect(ANALYSIS_POLL_MAX_REQUESTS).toBe(63);
-    expect(ANALYSIS_POLL_DEADLINE_MS).toBe(15 * 60_000);
+    expect(ANALYSIS_POLL_MAX_REQUESTS).toBe(6_000);
+    expect(ANALYSIS_POLL_DEADLINE_MS).toBe(24 * 60 * 60_000);
     expect(ANALYSIS_REQUEST_TIMEOUT_MS).toBe(15_000);
   });
 

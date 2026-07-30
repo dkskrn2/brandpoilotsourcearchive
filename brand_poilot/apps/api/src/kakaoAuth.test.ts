@@ -35,11 +35,19 @@ describe("createKakaoAuthStore", () => {
     });
     const store = createKakaoAuthStore(createPool(query) as any);
 
-    await store.createOrLoadUser({ subject: "kakao-1", nickname: "사용자", email: "user@example.com" });
+    const session = await store.createOrLoadUser({
+      subject: "kakao-1",
+      nickname: "사용자",
+      email: "user@example.com",
+    });
 
     const channelInsert = calls.find((sql) => sql.includes("insert into brand_channels"));
     const workspaceInsert = query.mock.calls.find(([sql]) => sql.includes("insert into workspaces"));
+    const brandInsert = query.mock.calls.find(([sql]) => sql.includes("insert into brands"));
     expect(workspaceInsert?.[1]?.[0]).toBe("사용자의 모종");
+    expect(String(brandInsert?.[0])).toContain("__provisional__:");
+    expect(session.displayName).toBe("사용자");
+    expect(session.brandName).toBe("");
     expect(channelInsert).toContain("'instagram'");
     expect(channelInsert).toContain("'threads'");
     expect(channelInsert).toContain("'x'");
@@ -61,6 +69,7 @@ describe("createKakaoAuthStore", () => {
     await store.createOrLoadUser({ subject: "kakao-1", nickname: "사용자", email: "user@example.com" });
 
     expect(calls.some((sql) => sql.includes("insert into brand_channels"))).toBe(false);
+    expect(calls.find((sql) => sql.includes("from user_identities"))).toContain("company_name_state");
   });
 
   it("does not write channel rows while loading an existing session", async () => {
@@ -75,6 +84,7 @@ describe("createKakaoAuthStore", () => {
     await store.getSession("session-token");
 
     expect(calls.some((sql) => sql.includes("insert into brand_channels"))).toBe(false);
+    expect(calls.find((sql) => sql.includes("from user_sessions"))).toContain("company_name_state");
   });
 
   it("authorizes a content output against the channel_outputs table", async () => {

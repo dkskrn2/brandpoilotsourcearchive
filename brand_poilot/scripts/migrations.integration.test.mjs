@@ -4377,7 +4377,7 @@ test("061 deterministically removes legacy duplicate avatar bytes and prevents n
   });
 });
 
-test("migration runner records forward-only 060 through 070 without changing the applied 058 checksum", async () => {
+test("migration runner records forward-only 060 through 071 without changing the applied 058 checksum", async () => {
   const migrations = await loadMigrations();
   const runnableMigrations = migrations.filter(
     (migration) => !migration.sql.startsWith("-- requires: pgvector")
@@ -4403,7 +4403,7 @@ test("migration runner records forward-only 060 through 070 without changing the
       client,
       migrations: runnableMigrations,
     });
-    assert.deepEqual(upgraded.pending.slice(-11), [
+    assert.deepEqual(upgraded.pending.slice(-12), [
       "060_content_orchestration.sql",
       "061_avatar_image_checksum_uniqueness.sql",
       "062_avatar_upload_cancellation.sql",
@@ -4415,9 +4415,10 @@ test("migration runner records forward-only 060 through 070 without changing the
       "068_brand_core_one_draft.sql",
       "069_brand_analysis_one_open_workflow.sql",
       "070_remove_embedding_runtime.sql",
+      "071_brand_intelligence_onboarding_worker_v2.sql",
     ]);
     const recorded = await database.query(
-      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) order by id",
+      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) order by id",
       [
         "058_avatar_and_reference_libraries.sql",
         "060_content_orchestration.sql",
@@ -4431,6 +4432,7 @@ test("migration runner records forward-only 060 through 070 without changing the
         "068_brand_core_one_draft.sql",
         "069_brand_analysis_one_open_workflow.sql",
         "070_remove_embedding_runtime.sql",
+        "071_brand_intelligence_onboarding_worker_v2.sql",
       ],
     );
     assert.deepEqual(recorded.rows, [
@@ -4481,6 +4483,10 @@ test("migration runner records forward-only 060 through 070 without changing the
       {
         id: "070_remove_embedding_runtime.sql",
         checksum: migrations.find((migration) => migration.id === "070_remove_embedding_runtime.sql")?.checksum,
+      },
+      {
+        id: "071_brand_intelligence_onboarding_worker_v2.sql",
+        checksum: migrations.find((migration) => migration.id === "071_brand_intelligence_onboarding_worker_v2.sql")?.checksum,
       },
     ]);
     const repeated = await runMigrationsWithClient({
@@ -4938,6 +4944,7 @@ test("065 direct SQL and migration runner pending-tail paths converge on lifecyc
       "068_brand_core_one_draft.sql",
       "069_brand_analysis_one_open_workflow.sql",
       "070_remove_embedding_runtime.sql",
+      "071_brand_intelligence_onboarding_worker_v2.sql",
     ]);
     return attachmentLifecycleRowState(database, fixture);
   });
@@ -6346,5 +6353,79 @@ test("070 activates and deterministically searches compiled Wiki chunks without 
       true,
     );
     assert.equal(locationPriority.rows[0].wiki_page_id, shortLocationServicePageId);
+  });
+});
+
+test("071 creates the onboarding worker v2 lifecycle and remains idempotent", async () => {
+  const migrations = await loadMigrations();
+  const migration071 = migrations.find(
+    (migration) => migration.id === "071_brand_intelligence_onboarding_worker_v2.sql",
+  );
+  assert.ok(migration071);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "070_remove_embedding_runtime.sql",
+    );
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ('Onboarding V2', $1) returning id",
+      [`onboarding-v2-${randomUUID()}`],
+    );
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, '내 브랜드') returning id",
+      [workspace.rows[0].id],
+    );
+
+    await database.exec(migration071.sql);
+    await database.exec(migration071.sql);
+
+    const company = await database.query(
+      `select company_name_state, company_name_confirmed_at
+         from brands where id = $1`,
+      [brand.rows[0].id],
+    );
+    assert.deepEqual(company.rows, [{
+      company_name_state: "provisional",
+      company_name_confirmed_at: null,
+    }]);
+
+    const lifecycleColumns = await database.query(
+      `select column_name from information_schema.columns
+        where table_schema = 'public'
+          and table_name = 'brand_analysis_runs'
+          and column_name in (
+            'active_started_at', 'deadline_at', 'cancel_requested_at',
+            'selected_page_count', 'successful_page_count',
+            'required_page_count', 'completed_cli_stage_count'
+          )
+        order by column_name`,
+    );
+    assert.equal(lifecycleColumns.rows.length, 7);
+
+    const tables = await database.query(
+      `select table_name from information_schema.tables
+        where table_schema = 'public'
+          and table_name in (
+            'brand_analysis_stage_runs', 'brand_analysis_cli_calls',
+            'brand_analysis_cli_attempts', 'brand_offerings'
+          )
+        order by table_name`,
+    );
+    assert.deepEqual(tables.rows.map((row) => row.table_name), [
+      "brand_analysis_cli_attempts",
+      "brand_analysis_cli_calls",
+      "brand_analysis_stage_runs",
+      "brand_offerings",
+    ]);
+
+    const resourceConstraint = await database.query(
+      `select pg_get_constraintdef(oid) as definition
+         from pg_constraint
+        where conname = 'worker_resource_leases_workload_check'`,
+    );
+    assert.match(resourceConstraint.rows[0].definition, /onboarding/);
   });
 });

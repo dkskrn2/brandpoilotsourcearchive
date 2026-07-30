@@ -1,3 +1,5 @@
+import type { WorkerResourceClient } from "./resourceLease.js";
+
 export type BrandEvidenceSourceType = "owned_url" | "text" | "markdown" | "pdf" | "csv" | "xlsx";
 
 export interface BrandEvidenceDocument {
@@ -10,7 +12,7 @@ export interface BrandEvidenceDocument {
   contentHash: string;
 }
 
-export interface BrandIntelligenceResult {
+export interface BrandIntelligenceResultV1 {
   contractVersion: "brand-intelligence-result.v1";
   companyOverview: string;
   businessDescription: string;
@@ -24,12 +26,60 @@ export interface BrandIntelligenceResult {
   sourceGaps: string[];
 }
 
+export interface BrandIntelligenceResultV2 {
+  contractVersion: "brand-intelligence-result.v2";
+  oneLineDefinition: string | null;
+  companyOverview: string | null;
+  businessDescription: string | null;
+  primaryCategory: { code: string | null; name: string } | null;
+  subcategories: Array<{ code: string | null; name: string }>;
+  primaryTarget: string | null;
+  secondaryTargets: string[];
+  customerNeeds: string[];
+  valueProposition: string | null;
+  differentiators: string[];
+  coreAppeal: string | null;
+  supportingAppeals: string[];
+  offerings: Array<{
+    kind: "product" | "service";
+    name: string;
+    description: string | null;
+    target: string | null;
+    benefit: string | null;
+    priceText: string | null;
+    purchaseUrl: string | null;
+    sourceFactIds: string[];
+  }>;
+  keywords: string[];
+  observedTone: { summary: string; sourceFactIds: string[] } | null;
+  competitors: Array<{ name: string; description: string; sourceUrls: string[] }>;
+  marketContext: Array<{ claim: string; sourceUrls: string[] }>;
+  evidence: Array<{
+    fieldPath: string;
+    claim: string;
+    sourceId: string;
+    sourceUrl: string | null;
+    excerpt: string;
+    sourceKind: "owned" | "external" | "upload";
+  }>;
+  sourceGaps: string[];
+}
+
+export type BrandIntelligenceResult =
+  | BrandIntelligenceResultV1
+  | BrandIntelligenceResultV2;
+
+export interface BrandIntelligenceValidationRegistry {
+  ownedFactIds: string[];
+  externalSources: Array<{ sourceId: string; url: string }>;
+}
+
 export interface BrandAnalysisJob {
   id: string;
   workspaceId: string;
   brandId: string;
-  status: "analyzing";
-  input: { ownedUrl: string | null; uploadIds: string[] };
+  status: "running";
+  input: { companyName?: string | null; ownedUrl: string | null; uploadIds: string[] };
   evidence: BrandEvidenceDocument[];
   result: BrandIntelligenceResult | null;
   editedResult: BrandIntelligenceResult | null;
@@ -40,6 +90,26 @@ export interface BrandAnalysisJob {
   leaseToken: string;
   leaseExpiresAt: string;
   attemptCount: number;
+  pipelineVersion: 2;
+  contractVersion: "brand-intelligence-result.v2";
+  executionContract: {
+    ownedPageLimit: 20;
+    externalPageLimit: 10;
+    offeringLimit: 5;
+    pipelineVersion: 2;
+    promptVersion: "brand-intelligence-v2.1";
+    resultContractVersion: "brand-intelligence-result.v2";
+  };
+  uploads: Array<{
+    id: string;
+    fileName: string;
+    mimeType: string;
+    byteSize: number;
+    checksum: string;
+    accessUrl: string;
+  }>;
+  activeStartedAt?: string | null;
+  deadlineAt?: string | null;
   availableAt: string;
   errorCode: string | null;
   errorMessage: string | null;
@@ -49,10 +119,37 @@ export interface BrandAnalysisJob {
   confirmedAt: string | null;
 }
 
-export interface BrandIntelligenceWorkerClient {
+export interface BrandAnalysisProgress {
+  stage: string;
+  attempt?: number;
+  status?: "running" | "succeeded" | "failed" | "cancelled";
+  errorCode?: string;
+  logicalIndex?: number;
+  physicalAttempt?: number;
+  inputCount: number;
+  successCount: number;
+  failedCount: number;
+  selectedPageCount?: number;
+  successfulPageCount?: number;
+  failedPageCount?: number;
+  requiredPageCount?: number;
+  completedCliStageCount?: number;
+  totalCliStageCount?: number;
+}
+
+export interface BrandIntelligenceWorkerClient extends WorkerResourceClient {
+  cleanup(): Promise<void>;
   claim(workerId: string, leaseSeconds: number): Promise<BrandAnalysisJob | null>;
   heartbeat(job: BrandAnalysisJob, leaseSeconds: number): Promise<void>;
-  complete(job: BrandAnalysisJob, result: BrandIntelligenceResult, leaseSeconds: number): Promise<void>;
+  progress(job: BrandAnalysisJob, input: BrandAnalysisProgress, leaseSeconds: number): Promise<void>;
+  complete(
+    job: BrandAnalysisJob,
+    result: BrandIntelligenceResult,
+    evidence: BrandEvidenceDocument[],
+    leaseSeconds: number,
+    registry?: BrandIntelligenceValidationRegistry,
+  ): Promise<void>;
+  cancelled(job: BrandAnalysisJob, leaseSeconds: number): Promise<void>;
   fail(job: BrandAnalysisJob, input: {
     errorCode: string;
     errorMessage: string;

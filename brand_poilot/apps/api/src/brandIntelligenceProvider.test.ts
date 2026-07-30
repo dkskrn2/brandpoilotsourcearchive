@@ -29,6 +29,7 @@ describe("brand intelligence provider", () => {
       versionId: "analysis-1",
       confirmedAt: "2026-07-21T00:00:00.000Z",
       profile,
+      result: profile,
     });
     expect(getCurrentBrandIntelligence).toHaveBeenCalledWith(scope);
   });

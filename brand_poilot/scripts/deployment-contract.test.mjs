@@ -793,7 +793,11 @@ test("optional workers use dedicated profiles, identities, env files, and harden
     assert.ok(block.text.includes(contract.identity), `${name} must have a unique stable WORKER_ID`);
     assert.match(block.text, /^ {4}read_only:\s+true$/m);
     assert.ok(
-      parseServiceList(block, "tmpfs").includes("/tmp:size=64m,mode=1777"),
+      parseServiceList(block, "tmpfs").includes(
+        name === "brand-intelligence-worker-1"
+          ? "/tmp:size=512m,mode=1777"
+          : "/tmp:size=64m,mode=1777",
+      ),
       `${name} must keep temporary workspaces on bounded tmpfs`,
     );
     assert.deepEqual(parseServiceList(block, "cap_drop"), ["ALL"]);

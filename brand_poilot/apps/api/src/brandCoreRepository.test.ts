@@ -91,7 +91,7 @@ beforeAll(async () => {
       ('${workspaceId}', '${provenanceBrandId}'),
       ('${workspaceId}', '${precisionBrandId}');
   `);
-}, 30_000);
+}, 60_000);
 
 afterAll(async () => {
   await database.close();

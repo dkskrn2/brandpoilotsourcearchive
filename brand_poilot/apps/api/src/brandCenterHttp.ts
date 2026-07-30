@@ -6,6 +6,7 @@ import {
   parseBrandReviewState,
   parseBrandRules,
 } from "./brandCoreContracts.js";
+import { toBrandIntelligenceV1Compatibility } from "./brandIntelligenceV2Contracts.js";
 import type { BrandIntelligenceRepository } from "./brandIntelligenceRepository.js";
 import type { ApiRepository } from "./types.js";
 import { parseProductServiceProfile } from "./productLibraryContracts.js";
@@ -172,7 +173,9 @@ export function registerBrandCenterRoutes(
           analysisId: sourceAnalysisId,
         });
         if (!analysis?.effectiveResult) throw new Error("brand_analysis_not_found");
-        const mapped = mapAnalysisToBrandCoreDraft(analysis.effectiveResult);
+        const mapped = mapAnalysisToBrandCoreDraft(
+          toBrandIntelligenceV1Compatibility(analysis.effectiveResult),
+        );
         ({ core, evidence, reviewState } = mapped);
       } else {
         const active = await repository.getActive(scope);

@@ -74,16 +74,19 @@ import type { SubjectAnalysisRecord, SubjectAnalysisRepository } from "./aiConte
 import {
   parseCreateBrandAnalysisInput,
   parseEditBrandAnalysisInput,
+  parseBrandEvidenceDocuments,
   parseBrandAnalysisWorkerClaimInput,
   parseBrandAnalysisWorkerLeaseInput,
   parseBrandIntelligenceResult,
 } from "./brandIntelligenceContracts.js";
-import type { BrandIntelligenceRepository } from "./brandIntelligenceRepository.js";
+import type {
+  BrandAnalysisRecord,
+  BrandIntelligenceRepository,
+} from "./brandIntelligenceRepository.js";
 import {
   issueBrandAnalysisUploadToken,
   verifyBrandAnalysisUpload,
 } from "./brandAnalysisUpload.js";
-import { claimAndPrepareBrandAnalysis, type BrandIntelligenceRuntime } from "./brandIntelligenceHttp.js";
 import { registerBrandCenterRoutes } from "./brandCenterHttp.js";
 import type { ApiHttpRuntimePolicy } from "./runtimeConfig.js";
 import { assessApiReadiness } from "./runtime.js";
@@ -126,7 +129,7 @@ const instagramLoginStateCookie = "bp_instagram_login_state";
 const instagramLoginBindingCookie = "bp_instagram_login_binding";
 const instagramTrendStateCookie = "bp_instagram_trend_state";
 const uuidPattern = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
-const workerResourceWorkloads = new Set(["dm", "wiki", "content"]);
+const workerResourceWorkloads = new Set(["dm", "wiki", "content", "onboarding"]);
 const contentTypeByWorkerSlug = {
   "card-news": "card_news",
   blog: "blog",
@@ -188,7 +191,6 @@ interface CreateServerOptions {
     generateClientToken?: import("./brandAnalysisUpload.js").BrandAnalysisUploadTokenOptions["generateClientToken"];
     headBlob?: typeof import("@vercel/blob").head;
   };
-  brandIntelligence?: BrandIntelligenceRuntime;
   runtimePolicy?: ApiHttpRuntimePolicy;
   readinessPolicy?: {
     schedulerEnabled: boolean;
@@ -793,6 +795,41 @@ function safeInternalErrorCode(error: unknown) {
   return match?.[1] ?? "unclassified_error";
 }
 
+function publicBrandAnalysisError(errorCode: string | null) {
+  switch (errorCode) {
+    case "brand_analysis_owned_page_success_threshold_not_met":
+      return "자사 사이트에서 필요한 수의 중요 페이지를 읽지 못했습니다. URL을 확인한 뒤 다시 시도해 주세요.";
+    case "analysis_deadline_exceeded":
+    case "brand_intelligence_codex_timeout":
+    case "brand_intelligence_stage_timeout":
+      return "최대 분석 시간 20분을 초과했습니다. 잠시 후 다시 시도해 주세요.";
+    case "scanned_pdf_not_supported":
+      return "텍스트가 없는 스캔 PDF는 분석할 수 없습니다.";
+    default:
+      return errorCode ? "브랜드 분석을 완료하지 못했습니다. 입력을 확인한 뒤 다시 시도해 주세요." : null;
+  }
+}
+
+function toPublicBrandAnalysis(analysis: BrandAnalysisRecord | null) {
+  if (!analysis) return null;
+  const {
+    evidence: _evidence,
+    leasedBy: _leasedBy,
+    leaseToken: _leaseToken,
+    leaseExpiresAt: _leaseExpiresAt,
+    idempotencyKey: _idempotencyKey,
+    workspaceId: _workspaceId,
+    attemptCount: _attemptCount,
+    ...publicAnalysis
+  } = analysis;
+  return {
+    ...publicAnalysis,
+    errorMessage: analysis.status === "failed"
+      ? publicBrandAnalysisError(analysis.errorCode)
+      : null,
+  };
+}
+
 function requiredHashtag(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
@@ -847,7 +884,7 @@ export function createFastifyOptions(logger?: boolean | FastifyLoggerOptions) {
 }
 
 export function createServer(
-  { repository, workerApiToken, contentProposalWorkerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, aiContentAttachmentGc, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, brandIntelligence, runtimePolicy, readinessPolicy, logger }: CreateServerOptions,
+  { repository, workerApiToken, contentProposalWorkerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, aiContentAttachmentGc, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, runtimePolicy, readinessPolicy, logger }: CreateServerOptions,
   app: FastifyInstance = Fastify(createFastifyOptions(logger))
 ) {
   const aiContentAttachmentRepository = aiContentUpload
@@ -1021,7 +1058,16 @@ export function createServer(
     }
     if (message.startsWith("brand_analysis_") || message.startsWith("brand_intelligence_")
       || message === "scanned_pdf_not_supported") {
-      const conflict = ["brand_analysis_not_review_ready", "brand_analysis_lease_invalid"].includes(message);
+      const conflict = [
+        "brand_analysis_not_review_ready",
+        "brand_analysis_lease_invalid",
+        "brand_analysis_company_name_conflict",
+        "brand_analysis_not_retryable",
+        "brand_analysis_confirmed_cannot_cancel",
+        "brand_analysis_upload_state_invalid",
+        "brand_analysis_uploads_incomplete",
+        "brand_analysis_cancel_state_invalid",
+      ].includes(message);
       const unavailable = message === "brand_analysis_storage_not_configured";
       reply.code(conflict ? 409 : unavailable ? 503 : 400).send({ error: message });
       return;
@@ -2373,8 +2419,10 @@ export function createServer(
     async (request) => {
       if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
       return {
-        intelligence: await brandIntelligenceRepository.getCurrentBrandIntelligence(
-          aiContentScope(request, request.params.brandId),
+        intelligence: toPublicBrandAnalysis(
+          await brandIntelligenceRepository.getCurrentBrandIntelligence(
+            aiContentScope(request, request.params.brandId),
+          ),
         ),
       };
     },
@@ -2385,10 +2433,194 @@ export function createServer(
     async (request) => {
       if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
       return {
-        workflow: await brandIntelligenceRepository.getOpenBrandAnalysis(
-          aiContentScope(request, request.params.brandId),
+        workflow: toPublicBrandAnalysis(
+          await brandIntelligenceRepository.getOpenBrandAnalysis(
+            aiContentScope(request, request.params.brandId),
+          ),
         ),
       };
+    },
+  );
+
+  app.get<{ Params: { brandId: string } }>(
+    "/brands/:brandId/brand-intelligence/onboarding",
+    async (request) => {
+      if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
+      const scope = aiContentScope(request, request.params.brandId);
+      const [company, activeAnalysis] = await Promise.all([
+        brandIntelligenceRepository.getBrandCompanyName?.(scope) ?? null,
+        brandIntelligenceRepository.getOpenBrandAnalysis(scope),
+      ]);
+      return {
+        companyName: company && company.state !== "provisional" ? company.name : "",
+        companyNameState: company?.state ?? "provisional",
+        activeAnalysis: toPublicBrandAnalysis(activeAnalysis),
+      };
+    },
+  );
+
+  app.post<{ Params: { brandId: string }; Body: unknown }>(
+    "/brands/:brandId/brand-analyses",
+    async (request) => {
+      if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
+      const parsed = parseCreateBrandAnalysisInput(request.body);
+      if (!parsed.companyName) throw new Error("brand_analysis_company_name_required");
+      return toPublicBrandAnalysis(await brandIntelligenceRepository.requestBrandAnalysis({
+        ...aiContentScope(request, request.params.brandId),
+        ...parsed,
+      }));
+    },
+  );
+
+  app.get<{ Params: { brandId: string; analysisId: string } }>(
+    "/brands/:brandId/brand-analyses/:analysisId",
+    async (request) => {
+      if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
+      const analysis = await brandIntelligenceRepository.getBrandAnalysis({
+        ...aiContentScope(request, request.params.brandId),
+        analysisId: request.params.analysisId,
+      });
+      if (!analysis) throw new Error("brand_analysis_not_found");
+      return toPublicBrandAnalysis(analysis);
+    },
+  );
+
+  app.post<{ Params: { brandId: string; analysisId: string } }>(
+    "/brands/:brandId/brand-analyses/:analysisId/cancel",
+    async (request) => {
+      if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
+      return toPublicBrandAnalysis(await brandIntelligenceRepository.cancelBrandAnalysis({
+        ...aiContentScope(request, request.params.brandId),
+        analysisId: request.params.analysisId,
+      }));
+    },
+  );
+
+  app.post<{ Params: { brandId: string; analysisId: string } }>(
+    "/brands/:brandId/brand-analyses/:analysisId/retry",
+    async (request) => {
+      if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
+      return toPublicBrandAnalysis(await brandIntelligenceRepository.retryBrandAnalysis({
+        ...aiContentScope(request, request.params.brandId),
+        analysisId: request.params.analysisId,
+      }));
+    },
+  );
+
+  app.patch<{ Params: { brandId: string; analysisId: string }; Body: unknown }>(
+    "/brands/:brandId/brand-analyses/:analysisId/draft",
+    async (request) => {
+      if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
+      return toPublicBrandAnalysis(await brandIntelligenceRepository.updateBrandAnalysisDraft({
+        ...aiContentScope(request, request.params.brandId),
+        analysisId: request.params.analysisId,
+        ...parseEditBrandAnalysisInput(request.body),
+      }));
+    },
+  );
+
+  app.post<{
+    Params: { brandId: string; analysisId: string };
+    Body: Record<string, unknown>;
+  }>(
+    "/brands/:brandId/brand-analyses/:analysisId/confirm",
+    async (request) => {
+      if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
+      const companyName = requiredAiContentField(
+        request.body.companyName,
+        "brand_analysis_company_name_required",
+        100,
+      ).normalize("NFKC").trim();
+      const editedResult = request.body.editedResult === undefined
+        ? undefined
+        : parseBrandIntelligenceResult(request.body.editedResult);
+      return toPublicBrandAnalysis(await brandIntelligenceRepository.confirmBrandAnalysis({
+        ...aiContentScope(request, request.params.brandId),
+        analysisId: request.params.analysisId,
+        companyName,
+        editedResult,
+        actorUserId: aiContentActorUserId(request),
+      }));
+    },
+  );
+
+  app.post<{
+    Params: { brandId: string; analysisId: string; uploadId: string };
+    Body: Record<string, unknown>;
+  }>(
+    "/brands/:brandId/brand-analyses/:analysisId/uploads/:uploadId/token",
+    async (request) => {
+      if (!brandIntelligenceRepository || !brandAnalysisUpload) {
+        throw new Error("brand_analysis_storage_not_configured");
+      }
+      const file = {
+        fileName: requiredAiContentField(request.body.fileName, "brand_analysis_file_name_invalid", 160),
+        mimeType: requiredAiContentField(request.body.mimeType, "brand_analysis_file_type_invalid", 200),
+        byteSize: Number(request.body.byteSize),
+        checksum: requiredAiContentField(request.body.checksum, "brand_analysis_checksum_invalid", 64).toLowerCase(),
+      };
+      const token = await issueBrandAnalysisUploadToken({
+        brandId: request.params.brandId,
+        uploadSessionId: request.params.analysisId,
+        file,
+      }, {
+        token: brandAnalysisUpload.readWriteToken,
+        generateClientToken: brandAnalysisUpload.generateClientToken,
+      });
+      await brandIntelligenceRepository.beginBrandAnalysisUpload({
+        ...aiContentScope(request, request.params.brandId),
+        analysisId: request.params.analysisId,
+        uploadId: request.params.uploadId,
+        storagePath: token.pathname,
+        ...file,
+      });
+      return token;
+    },
+  );
+
+  app.post<{
+    Params: { brandId: string; analysisId: string; uploadId: string };
+    Body: Record<string, unknown>;
+  }>(
+    "/brands/:brandId/brand-analyses/:analysisId/uploads/:uploadId/confirm",
+    async (request) => {
+      if (!brandIntelligenceRepository || !brandAnalysisUpload) {
+        throw new Error("brand_analysis_storage_not_configured");
+      }
+      const verified = await verifyBrandAnalysisUpload({
+        brandId: request.params.brandId,
+        uploadSessionId: request.params.analysisId,
+        file: {
+          fileName: requiredAiContentField(request.body.fileName, "brand_analysis_file_name_invalid", 160),
+          mimeType: requiredAiContentField(request.body.mimeType, "brand_analysis_file_type_invalid", 200),
+          byteSize: Number(request.body.byteSize),
+          checksum: requiredAiContentField(request.body.checksum, "brand_analysis_checksum_invalid", 64),
+        },
+        storagePath: requiredAiContentField(request.body.storagePath, "brand_analysis_upload_path_invalid", 2_000),
+        storageUrl: requiredAiContentField(request.body.storageUrl, "brand_analysis_upload_url_invalid", 2_000),
+      }, {
+        token: brandAnalysisUpload.readWriteToken,
+        headBlob: brandAnalysisUpload.headBlob,
+      });
+      await brandIntelligenceRepository.completeBrandAnalysisUpload({
+        ...aiContentScope(request, request.params.brandId),
+        analysisId: request.params.analysisId,
+        uploadId: request.params.uploadId,
+        storagePath: verified.storagePath,
+        storageUrl: verified.storageUrl,
+      });
+      return { id: request.params.uploadId };
+    },
+  );
+
+  app.post<{ Params: { brandId: string; analysisId: string } }>(
+    "/brands/:brandId/brand-analyses/:analysisId/start",
+    async (request) => {
+      if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
+      return toPublicBrandAnalysis(await brandIntelligenceRepository.startBrandAnalysis({
+        ...aiContentScope(request, request.params.brandId),
+        analysisId: request.params.analysisId,
+      }));
     },
   );
 
@@ -2396,10 +2628,10 @@ export function createServer(
     "/brands/:brandId/brand-intelligence/analyses",
     async (request) => {
       if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
-      return brandIntelligenceRepository.requestBrandAnalysis({
+      return toPublicBrandAnalysis(await brandIntelligenceRepository.requestBrandAnalysis({
         ...aiContentScope(request, request.params.brandId),
         ...parseCreateBrandAnalysisInput(request.body),
-      });
+      }));
     },
   );
 
@@ -2412,7 +2644,7 @@ export function createServer(
         analysisId: request.params.analysisId,
       });
       if (!analysis) throw new Error("brand_analysis_not_found");
-      return analysis;
+      return toPublicBrandAnalysis(analysis);
     },
   );
 
@@ -2420,11 +2652,11 @@ export function createServer(
     "/brands/:brandId/brand-intelligence/analyses/:analysisId",
     async (request) => {
       if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
-      return brandIntelligenceRepository.updateBrandAnalysisDraft({
+      return toPublicBrandAnalysis(await brandIntelligenceRepository.updateBrandAnalysisDraft({
         ...aiContentScope(request, request.params.brandId),
         analysisId: request.params.analysisId,
         ...parseEditBrandAnalysisInput(request.body),
-      });
+      }));
     },
   );
 
@@ -2432,11 +2664,11 @@ export function createServer(
     "/brands/:brandId/brand-intelligence/analyses/:analysisId/confirm",
     async (request) => {
       if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
-      return brandIntelligenceRepository.confirmBrandAnalysis({
+      return toPublicBrandAnalysis(await brandIntelligenceRepository.confirmBrandAnalysis({
         ...aiContentScope(request, request.params.brandId),
         analysisId: request.params.analysisId,
         actorUserId: aiContentActorUserId(request),
-      });
+      }));
     },
   );
 
@@ -3360,16 +3592,83 @@ export function createServer(
     },
   );
 
+  app.post("/worker/brand-analyses/cleanup", async (request, reply) => {
+    if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
+    if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
+    return brandIntelligenceRepository.cleanupBrandAnalysisRuns?.()
+      ?? { attempted: 0, completed: 0 };
+  });
+
   app.post<{ Body: unknown }>("/worker/brand-analyses/claim", async (request, reply) => {
     if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
     if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
+    const job = await brandIntelligenceRepository.claimBrandAnalysis(
+      parseBrandAnalysisWorkerClaimInput(request.body),
+    );
+    if (!job || !workerApiToken) return { job };
+    const expiresAt = Math.min(
+      Date.now() + 10 * 60 * 1_000,
+      job.deadlineAt ? new Date(job.deadlineAt).getTime() : Number.POSITIVE_INFINITY,
+    );
+    const origin = `${request.protocol}://${request.headers.host}`;
     return {
-      job: await claimAndPrepareBrandAnalysis(
-        brandIntelligenceRepository,
-        parseBrandAnalysisWorkerClaimInput(request.body),
-        brandIntelligence,
-      ),
+      job: {
+        ...job,
+        uploads: job.uploads.map((upload) => {
+          const payload = `${job.id}:${upload.id}:${expiresAt}`;
+          const signature = createHmac("sha256", workerApiToken).update(payload).digest("hex");
+          return {
+            ...upload,
+            accessUrl: `${origin}/worker/brand-analyses/${job.id}/uploads/${upload.id}`
+              + `?expires=${expiresAt}&signature=${signature}`,
+          };
+        }),
+      },
     };
+  });
+
+  app.get<{
+    Params: { analysisId: string; uploadId: string };
+    Querystring: { expires?: string; signature?: string };
+  }>("/worker/brand-analyses/:analysisId/uploads/:uploadId", async (request, reply) => {
+    if (!workerApiToken || !brandIntelligenceRepository) {
+      reply.code(503);
+      return { error: "brand_intelligence_not_configured" };
+    }
+    const expiresAt = Number(request.query.expires);
+    const signature = request.query.signature ?? "";
+    if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()
+      || expiresAt > Date.now() + 10 * 60 * 1_000
+      || !/^[a-f0-9]{64}$/.test(signature)) {
+      reply.code(401);
+      return { error: "brand_analysis_upload_access_invalid" };
+    }
+    const payload = `${request.params.analysisId}:${request.params.uploadId}:${expiresAt}`;
+    const expected = createHmac("sha256", workerApiToken).update(payload).digest();
+    const supplied = Buffer.from(signature, "hex");
+    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+      reply.code(401);
+      return { error: "brand_analysis_upload_access_invalid" };
+    }
+    const upload = await brandIntelligenceRepository.getBrandAnalysisUploadForDownload({
+      analysisId: request.params.analysisId,
+      uploadId: request.params.uploadId,
+    });
+    if (!upload) {
+      reply.code(404);
+      return { error: "brand_analysis_upload_not_found" };
+    }
+    const response = await fetch(upload.storageUrl, {
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) throw new Error("brand_analysis_upload_download_failed");
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length !== upload.byteSize || bytes.length > 10 * 1024 * 1024) {
+      throw new Error("brand_analysis_upload_size_mismatch");
+    }
+    reply.header("content-type", upload.mimeType);
+    reply.header("content-length", String(bytes.length));
+    return reply.send(bytes);
   });
 
   app.post<{ Params: { analysisId: string }; Body: Record<string, unknown> }>(
@@ -3378,14 +3677,127 @@ export function createServer(
       if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
       if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
       const lease = parseBrandAnalysisWorkerLeaseInput(request.body);
-      const alive = await brandIntelligenceRepository.heartbeatBrandAnalysis({
+      const heartbeat = await brandIntelligenceRepository.heartbeatBrandAnalysis({
         analysisId: request.params.analysisId, ...lease,
       });
-      if (!alive) {
+      const heartbeatAlive = typeof heartbeat === "boolean" ? heartbeat : heartbeat.alive;
+      const cancelRequested = typeof heartbeat === "boolean" ? false : heartbeat.cancelRequested;
+      const deadlineAt = typeof heartbeat === "boolean" ? null : heartbeat.deadlineAt;
+      if (!heartbeatAlive) {
         reply.code(409);
-        return { error: "brand_analysis_lease_invalid" };
+        return {
+          error: cancelRequested
+            ? "brand_analysis_cancel_requested"
+            : "brand_analysis_lease_invalid",
+          cancelRequested,
+          deadlineAt,
+        };
       }
-      return { ok: true };
+      return { ok: true, cancelRequested: false, deadlineAt };
+    },
+  );
+
+  app.post<{ Params: { analysisId: string }; Body: Record<string, unknown> }>(
+    "/worker/brand-analyses/:analysisId/progress",
+    async (request, reply) => {
+      if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
+      if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
+      const lease = parseBrandAnalysisWorkerLeaseInput({
+        workerId: request.body.workerId,
+        leaseToken: request.body.leaseToken,
+        leaseSeconds: request.body.leaseSeconds,
+      });
+      const stageStatus = request.body.status === undefined
+        ? undefined
+        : requiredAiContentField(request.body.status, "brand_analysis_stage_status_invalid", 20);
+      if (stageStatus !== undefined
+        && !["running", "succeeded", "failed", "cancelled"].includes(stageStatus)) {
+        throw new Error("brand_analysis_stage_status_invalid");
+      }
+      const progressNumbers = [
+        request.body.inputCount ?? 0,
+        request.body.successCount ?? 0,
+        request.body.failedCount ?? 0,
+        request.body.selectedPageCount ?? 0,
+        request.body.successfulPageCount ?? 0,
+        request.body.failedPageCount ?? 0,
+        request.body.requiredPageCount ?? 0,
+        request.body.completedCliStageCount ?? 0,
+        request.body.totalCliStageCount ?? 0,
+      ].map(Number);
+      if (progressNumbers.some((value) => !Number.isSafeInteger(value) || value < 0)) {
+        throw new Error("brand_analysis_progress_count_invalid");
+      }
+      const attempt = request.body.attempt === undefined ? undefined : Number(request.body.attempt);
+      const logicalIndex = request.body.logicalIndex === undefined
+        ? undefined
+        : Number(request.body.logicalIndex);
+      const physicalAttempt = request.body.physicalAttempt === undefined
+        ? undefined
+        : Number(request.body.physicalAttempt);
+      const selectedPageCount = request.body.selectedPageCount === undefined
+        ? undefined
+        : Number(request.body.selectedPageCount);
+      const successfulPageCount = request.body.successfulPageCount === undefined
+        ? undefined
+        : Number(request.body.successfulPageCount);
+      const failedPageCount = request.body.failedPageCount === undefined
+        ? undefined
+        : Number(request.body.failedPageCount);
+      const requiredPageCount = request.body.requiredPageCount === undefined
+        ? undefined
+        : Number(request.body.requiredPageCount);
+      const completedCliStageCount = request.body.completedCliStageCount === undefined
+        ? undefined
+        : Number(request.body.completedCliStageCount);
+      const totalCliStageCount = request.body.totalCliStageCount === undefined
+        ? undefined
+        : Number(request.body.totalCliStageCount);
+      const errorCode = request.body.errorCode === undefined
+        ? undefined
+        : requiredAiContentField(request.body.errorCode, "brand_analysis_error_code_invalid", 120);
+      if (errorCode !== undefined && !/^[a-z0-9_]+$/.test(errorCode)) {
+        throw new Error("brand_analysis_error_code_invalid");
+      }
+      if ([attempt, logicalIndex, physicalAttempt].some(
+        (value) => value !== undefined && !Number.isSafeInteger(value),
+      )
+        || (attempt !== undefined && (attempt < 1 || attempt > 3))
+        || (logicalIndex !== undefined && (logicalIndex < 1 || logicalIndex > 8))
+        || (physicalAttempt !== undefined && (physicalAttempt < 1 || physicalAttempt > 3))
+        || (selectedPageCount !== undefined && selectedPageCount > 20)
+        || (successfulPageCount !== undefined && successfulPageCount > (selectedPageCount ?? 20))
+        || (failedPageCount !== undefined
+          && failedPageCount > (selectedPageCount ?? 20))
+        || (successfulPageCount !== undefined && failedPageCount !== undefined
+          && selectedPageCount !== undefined
+          && successfulPageCount + failedPageCount > selectedPageCount)
+        || (requiredPageCount !== undefined && requiredPageCount > 10)
+        || (totalCliStageCount !== undefined && totalCliStageCount > 8)
+        || (completedCliStageCount !== undefined
+          && completedCliStageCount > (totalCliStageCount ?? 8))) {
+        throw new Error("brand_analysis_progress_count_invalid");
+      }
+      return brandIntelligenceRepository.progressBrandAnalysis({
+        analysisId: request.params.analysisId,
+        workerId: lease.workerId,
+        leaseToken: lease.leaseToken,
+        stage: requiredAiContentField(request.body.stage, "brand_analysis_stage_invalid", 100),
+        attempt,
+        status: stageStatus as "running" | "succeeded" | "failed" | "cancelled" | undefined,
+        errorCode,
+        logicalIndex,
+        physicalAttempt,
+        inputCount: Number(request.body.inputCount ?? 0),
+        successCount: Number(request.body.successCount ?? 0),
+        failedCount: Number(request.body.failedCount ?? 0),
+        selectedPageCount,
+        successfulPageCount,
+        failedPageCount,
+        requiredPageCount,
+        completedCliStageCount,
+        totalCliStageCount,
+      });
     },
   );
 
@@ -3399,11 +3811,58 @@ export function createServer(
         leaseToken: request.body.leaseToken,
         leaseSeconds: request.body.leaseSeconds,
       });
+      const evidence = parseBrandEvidenceDocuments(request.body.evidence ?? []);
+      const rawRegistry = request.body.registry;
+      if (rawRegistry !== undefined && (!isObject(rawRegistry)
+        || !Array.isArray(rawRegistry.ownedFactIds)
+        || !Array.isArray(rawRegistry.externalSources)
+        || rawRegistry.ownedFactIds.length > 2_000
+        || rawRegistry.externalSources.length > 10)) {
+          throw new Error("brand_intelligence_validation_registry_invalid");
+      }
+      const registry = rawRegistry && isObject(rawRegistry) ? {
+        ownedFactIds: (rawRegistry.ownedFactIds as unknown[]).map((value) => (
+          requiredAiContentField(value, "brand_intelligence_validation_registry_invalid", 200)
+        )),
+        externalSources: (rawRegistry.externalSources as unknown[]).map((value) => {
+          if (!isObject(value)) throw new Error("brand_intelligence_validation_registry_invalid");
+          const sourceId = requiredAiContentField(
+            value.sourceId,
+            "brand_intelligence_validation_registry_invalid",
+            2_200,
+          );
+          const url = requiredAiContentField(
+            value.url,
+            "brand_intelligence_validation_registry_invalid",
+            2_048,
+          );
+          if (sourceId !== `external:${url}`) {
+            throw new Error("brand_intelligence_validation_registry_invalid");
+          }
+          return { sourceId, url };
+        }),
+      } : undefined;
       return brandIntelligenceRepository.completeBrandAnalysis({
         analysisId: request.params.analysisId,
         workerId: lease.workerId,
         leaseToken: lease.leaseToken,
-        result: parseBrandIntelligenceResult(request.body.result),
+        evidence,
+        result: request.body.result as never,
+        registry,
+      });
+    },
+  );
+
+  app.post<{ Params: { analysisId: string }; Body: Record<string, unknown> }>(
+    "/worker/brand-analyses/:analysisId/cancelled",
+    async (request, reply) => {
+      if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
+      if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
+      const lease = parseBrandAnalysisWorkerLeaseInput(request.body);
+      return brandIntelligenceRepository.markBrandAnalysisCancelled({
+        analysisId: request.params.analysisId,
+        workerId: lease.workerId,
+        leaseToken: lease.leaseToken,
       });
     },
   );
@@ -3772,7 +4231,7 @@ export function createServer(
     const lease = await repository.acquireWorkerResourceLease(
       "codex_cli",
       request.body.workerId.trim(),
-      request.body.workload as "dm" | "wiki" | "content",
+      request.body.workload as "dm" | "wiki" | "content" | "onboarding",
     );
     if (!lease) {
       reply.code(204);

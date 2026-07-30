@@ -56,18 +56,75 @@ export function createClient(
   }
 
   return {
+    async cleanup() {
+      await request("/worker/brand-analyses/cleanup", {});
+    },
+    async acquireResource(workerId, workload) {
+      const payload = await request("/worker/resources/codex-cli/acquire", {
+        workerId,
+        workload,
+      });
+      return payload.id ? payload as unknown as {
+        id: string;
+        leaseToken: string;
+        expiresAt: string;
+      } : null;
+    },
+    heartbeatResource(id, workerId, leaseToken) {
+      return request(`/worker/resources/codex-cli/${id}/heartbeat`, {
+        workerId,
+        leaseToken,
+      });
+    },
+    releaseResource(id, workerId, leaseToken) {
+      return request(`/worker/resources/codex-cli/${id}/release`, {
+        workerId,
+        leaseToken,
+      });
+    },
     async claim(workerId, leaseSeconds) {
-      const payload = await request("/worker/brand-analyses/claim", { workerId, leaseSeconds });
-      return (payload.job ?? null) as BrandAnalysisJob | null;
+      const payload = await request("/worker/brand-analyses/claim", {
+        workerId,
+        leaseSeconds,
+        supportedPipelineVersions: [2],
+      });
+      const job = (payload.job ?? null) as BrandAnalysisJob | null;
+      if (job && (
+        job.pipelineVersion !== 2
+        || job.contractVersion !== "brand-intelligence-result.v2"
+        || !job.input.companyName
+        || job.executionContract?.ownedPageLimit !== 20
+        || job.executionContract?.externalPageLimit !== 10
+        || job.executionContract?.offeringLimit !== 5
+        || job.executionContract?.pipelineVersion !== 2
+        || job.executionContract?.promptVersion !== "brand-intelligence-v2.1"
+        || job.executionContract?.resultContractVersion !== "brand-intelligence-result.v2"
+      )) {
+        throw new BrandIntelligenceApiError("brand_intelligence_execution_contract_mismatch", 409);
+      }
+      return job;
     },
     async heartbeat(job, leaseSeconds) {
       await request(`/worker/brand-analyses/${job.id}/heartbeat`, {
         workerId: job.leasedBy, leaseToken: job.leaseToken, leaseSeconds,
       });
     },
-    async complete(job, result: BrandIntelligenceResult, leaseSeconds) {
+    async progress(job, input, leaseSeconds) {
+      await request(`/worker/brand-analyses/${job.id}/progress`, {
+        workerId: job.leasedBy, leaseToken: job.leaseToken, leaseSeconds, ...input,
+      });
+    },
+    async complete(job, result: BrandIntelligenceResult, evidence, leaseSeconds, registry) {
       await request(`/worker/brand-analyses/${job.id}/complete`, {
-        workerId: job.leasedBy, leaseToken: job.leaseToken, leaseSeconds, result,
+        workerId: job.leasedBy, leaseToken: job.leaseToken, leaseSeconds,
+        result, evidence, registry,
+      });
+    },
+    async cancelled(job, leaseSeconds) {
+      await request(`/worker/brand-analyses/${job.id}/cancelled`, {
+        workerId: job.leasedBy,
+        leaseToken: job.leaseToken,
+        leaseSeconds,
       });
     },
     async fail(job, input) {

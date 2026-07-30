@@ -10,7 +10,8 @@ FROM node:22-bookworm-slim AS runtime
 
 WORKDIR /app
 ENV NODE_ENV=production \
-    CODEX_HOME=/codex
+    CODEX_HOME=/codex \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends bubblewrap ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
@@ -26,6 +27,9 @@ COPY --from=build --chown=node:node /app/workers/brand-pilot-brand-intelligence-
 COPY --from=build --chown=node:node /app/workers/brand-pilot-brand-intelligence-worker/dist ./workers/brand-pilot-brand-intelligence-worker/dist
 COPY --from=build --chown=node:node /app/workers/brand-pilot-brand-intelligence-worker/scripts/run-codex-brand-intelligence.mjs ./workers/brand-pilot-brand-intelligence-worker/scripts/run-codex-brand-intelligence.mjs
 COPY --from=build --chown=node:node /app/workers/brand-pilot-brand-intelligence-worker/.agents/skills/brand-intelligence/SKILL.md ./workers/brand-pilot-brand-intelligence-worker/.agents/skills/brand-intelligence/SKILL.md
+RUN npx playwright install --with-deps chromium \
+    && chmod -R a+rX /ms-playwright \
+    && rm -rf /var/lib/apt/lists/*
 
 USER node
 CMD ["node", "workers/brand-pilot-brand-intelligence-worker/dist/index.js", "watch"]

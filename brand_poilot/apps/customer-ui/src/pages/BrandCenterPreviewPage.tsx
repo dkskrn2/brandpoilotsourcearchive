@@ -1,4 +1,4 @@
-import { useReducer, useRef } from "react";
+import { useReducer, useRef, useState } from "react";
 import { AnalysisStep } from "../components/brand-center-preview/AnalysisStep";
 import { CardGenerationStep } from "../components/brand-center-preview/CardGenerationStep";
 import { PreviewShell } from "../components/brand-center-preview/PreviewShell";
@@ -60,10 +60,18 @@ function MockBrandCenterPreviewPage({
     undefined,
     () => createPreviewState(),
   );
+  const [companyName, setCompanyName] = useState("");
   const requestSequence = useRef(0);
   const generationSequence = useRef(0);
 
   function validateSources(): boolean {
+    if (!companyName.normalize("NFKC").trim()) {
+      dispatch({
+        type: "source/errorChanged",
+        error: "회사명을 입력해 주세요.",
+      });
+      return false;
+    }
     const url = state.sources.url.trim();
     if (!url && state.sources.files.length === 0) {
       dispatch({
@@ -140,9 +148,11 @@ function MockBrandCenterPreviewPage({
       </p>
       {state.currentStep === "sources" ? (
         <SourceIntakeStep
+          companyName={companyName}
           url={state.sources.url}
           files={state.sources.files}
           error={state.sources.error}
+          onCompanyNameChanged={setCompanyName}
           onUrlChanged={(url) => dispatch({ type: "source/urlChanged", url })}
           onFilesAdded={addFiles}
           onFileRemoved={(id) => dispatch({ type: "source/fileRemoved", id })}

@@ -79,7 +79,7 @@ describe("BillingPage", () => {
   it("shows the billing sections without collecting raw card details before Toss is connected", async () => {
     const api = await renderBillingPage();
 
-    expect(await screen.findByRole("heading", { name: "결제 및 구독" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "플랜" })).toBeVisible();
     expect(await screen.findByRole("heading", { name: "청구" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "청구 내역" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "결제 정보" })).toBeVisible();

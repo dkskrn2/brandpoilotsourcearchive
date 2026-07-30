@@ -861,6 +861,7 @@ test("an installation applied through 064 has every later migration pending", as
       "068_brand_core_one_draft.sql",
       "069_brand_analysis_one_open_workflow.sql",
       "070_remove_embedding_runtime.sql",
+      "071_brand_intelligence_onboarding_worker_v2.sql",
     ],
   );
 });

@@ -82,7 +82,7 @@ export function BillingSummarySection({
   return (
     <section className="content billing-page">
       <PageHeader
-        title="결제 및 구독"
+        title="플랜"
         description="월 구독 상태와 결제수단, 결제 이력을 관리합니다."
       />
 

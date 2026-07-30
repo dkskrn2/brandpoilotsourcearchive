@@ -152,7 +152,7 @@ export function Sidebar({
         <span><strong>도움말</strong><small>현재 화면 안내와 연결 가이드</small></span>
       </button> : null}
       <SidebarBrandProfile
-        brandName={status?.brandName ?? "모종"}
+        brandName={status?.brandName?.trim() || "회사명 미설정"}
         logoUrl={status?.logoUrl ?? null}
         onNavigate={onNavigate}
       />

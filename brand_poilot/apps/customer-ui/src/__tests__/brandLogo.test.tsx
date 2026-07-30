@@ -36,7 +36,7 @@ describe("BrandLogo", () => {
 });
 
 describe("SidebarBrandProfile", () => {
-  it("opens an account menu with the brand center and logout actions", async () => {
+  it("opens an account menu with the brand center, plan, and logout actions", async () => {
     const user = userEvent.setup();
     const onNavigate = vi.fn();
     render(
@@ -54,9 +54,11 @@ describe("SidebarBrandProfile", () => {
 
     const menu = screen.getByRole("menu", { name: "계정 메뉴" });
     const items = within(menu).getAllByRole("menuitem");
-    expect(items).toHaveLength(2);
+    expect(items).toHaveLength(3);
     expect(within(menu).getByRole("menuitem", { name: "브랜드센터" }))
       .toHaveAttribute("href", "/brand-center");
+    expect(within(menu).getByRole("menuitem", { name: "플랜" }))
+      .toHaveAttribute("href", "/billing");
     expect(within(menu).getByRole("menuitem", { name: "로그아웃" })).toBeEnabled();
 
     await user.click(within(menu).getByRole("menuitem", { name: "브랜드센터" }));

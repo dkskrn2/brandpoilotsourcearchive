@@ -40,4 +40,26 @@ describe("worker resource lease API", () => {
 
     expect(response.statusCode).toBe(204);
   });
+
+  it("accepts the onboarding worker as the single non-DM Codex workload", async () => {
+    const repository = {
+      acquireWorkerResourceLease: vi.fn(async () => ({ id: "lease-onboarding", leaseToken: "token-onboarding" })),
+    } as any;
+    const app = createServer({ repository, workerApiToken: "worker-secret" });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/worker/resources/codex-cli/acquire",
+      headers: { authorization: "Bearer worker-secret" },
+      payload: { workerId: "onboarding-1", workload: "onboarding" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.acquireWorkerResourceLease).toHaveBeenCalledWith(
+      "codex_cli",
+      "onboarding-1",
+      "onboarding",
+    );
+  });
 });

@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { AnalysisStep } from "../components/brand-center-preview/AnalysisStep";
 import { PreviewShell } from "../components/brand-center-preview/PreviewShell";
 import { SourceIntakeStep } from "../components/brand-center-preview/SourceIntakeStep";
+import { BrandAnalysisReviewStep } from "../components/brand-intelligence/BrandAnalysisReviewStep";
 import { Alert } from "../components/ui/Alert";
 import {
   ANALYSIS_POLL_DEADLINE_MS,
@@ -26,7 +27,7 @@ import type {
   PreviewStep,
 } from "../features/brand-center-preview/types";
 import { useAuth } from "../lib/auth";
-import { DEMO_BRAND_ID } from "../lib/apiClient";
+import { ApiRequestError, DEMO_BRAND_ID } from "../lib/apiClient";
 
 export interface BrandIntelligenceStorageScope {
   workspaceId: string;
@@ -39,29 +40,50 @@ interface LiveBrandCenterOnboardingProps {
   storageScope?: BrandIntelligenceStorageScope;
 }
 
-const pendingStatuses: BrandAnalysis["status"][] = ["queued", "extracting", "analyzing"];
+const pendingStatuses: BrandAnalysis["status"][] = [
+  "queued", "accepting_uploads", "waiting_for_resource", "extracting",
+  "analyzing", "running", "finalizing", "cancel_requested", "purging",
+];
 
 function storageKey(scope: BrandIntelligenceStorageScope, brandId: string) {
   return `brand-pilot:brand-intelligence:${scope.workspaceId}:${scope.userId}:${brandId}`;
 }
 
 function previewCore(result: BrandIntelligenceResult): PreviewBrandCore {
+  const isV2 = result.contractVersion === "brand-intelligence-result.v2";
   return {
-    oneLine: result.companyOverview,
-    description: result.businessDescription,
-    target: result.primaryTarget,
-    customerProblem: result.differentiators,
-    primaryValue: result.coreAppeal,
-    differentiators: result.differentiators.split("\n").filter(Boolean),
-    tone: [],
-    priorityMessages: [],
+    oneLine: (isV2 ? result.oneLineDefinition : result.companyOverview) ?? "",
+    description: result.businessDescription ?? "",
+    target: result.primaryTarget ?? "",
+    customerProblem: isV2 ? result.customerNeeds.join("\n") : result.differentiators,
+    primaryValue: (isV2 ? result.valueProposition : result.coreAppeal) ?? "",
+    differentiators: isV2
+      ? result.differentiators
+      : result.differentiators.split("\n").filter(Boolean),
+    tone: isV2 && result.observedTone ? [result.observedTone.summary] : [],
+    priorityMessages: isV2 ? result.supportingAppeals : [],
   };
 }
 
 function errorMessage(error: unknown) {
-  const message = error instanceof Error ? error.message : "";
-  if (message.includes("scanned_pdf_not_supported")) {
+  const errorCode = error instanceof ApiRequestError
+    ? error.errorCode
+    : error instanceof Error
+      ? error.message
+      : "";
+  if (errorCode?.includes("scanned_pdf_not_supported")) {
     return "텍스트가 없는 스캔 PDF는 분석할 수 없습니다. 텍스트 PDF로 다시 첨부해 주세요.";
+  }
+  if (errorCode?.includes("brand_analysis_company_name_conflict")) {
+    return "이 워크스페이스에 같은 회사명이 이미 있습니다. 다른 회사명을 입력해 주세요.";
+  }
+  if (errorCode?.includes("brand_analysis_owned_page_success_threshold_not_met")) {
+    return "자사 사이트에서 중요 페이지를 충분히 읽지 못했습니다. URL을 확인한 뒤 다시 시도해 주세요.";
+  }
+  if (errorCode?.includes("analysis_deadline_exceeded")
+    || errorCode?.includes("brand_intelligence_codex_timeout")
+    || errorCode?.includes("brand_intelligence_stage_timeout")) {
+    return "최대 분석 시간 20분을 초과했습니다. 잠시 후 다시 시도해 주세요.";
   }
   return "자료를 처리하지 못했습니다. 입력과 API 상태를 확인한 뒤 다시 시도해 주세요.";
 }
@@ -79,94 +101,19 @@ function LiveResultEditor({
   onChange(draft: BrandIntelligenceResult): void;
   onComplete(): void;
 }) {
-  const update = <K extends keyof BrandIntelligenceResult>(
-    key: K,
-    value: BrandIntelligenceResult[K],
-  ) => onChange({ ...draft, [key]: value });
-  const required = [
-    draft.companyOverview,
-    draft.businessDescription,
-    draft.primaryCategory.name,
-    draft.primaryTarget,
-    draft.differentiators,
-    draft.coreAppeal,
-  ].every((value) => value.trim());
-
   return (
-    <section className="brand-center-preview__card" aria-labelledby="live-analysis-title">
-      <div className="brand-center-preview__card-heading">
-        <p className="brand-center-preview__eyebrow">STEP 2</p>
-        <h2 id="live-analysis-title">AI 분석 결과를 확인하고 수정하세요</h2>
-        <p>수정한 결과는 완료할 때 서버에 저장한 뒤 브랜드 기준으로 확정합니다.</p>
-      </div>
-
-      <div className="brand-center-preview__analysis-surface">
-        <div className="brand-center-preview__result-grid">
-          {([
-            ["companyOverview", "기업 개요"],
-            ["businessDescription", "사업 소개"],
-            ["primaryTarget", "핵심 타깃"],
-            ["differentiators", "차별점"],
-            ["coreAppeal", "핵심 소구점"],
-          ] as const).map(([key, label]) => (
-            <article key={key}>
-              <header><span>{label}</span></header>
-              <textarea
-                aria-label={label}
-                rows={key === "businessDescription" ? 4 : 3}
-                value={draft[key]}
-                onChange={(event) => update(key, event.currentTarget.value)}
-              />
-            </article>
-          ))}
-        </div>
-
-        <details className="brand-center-preview__legacy-details" open>
-          <summary>업종 상세 검토</summary>
-          <div className="brand-center-preview__result-grid">
-            <article>
-              <header><span>대표 분야</span></header>
-              <input
-                aria-label="대표 분야"
-                value={draft.primaryCategory.name}
-                onChange={(event) => update("primaryCategory", {
-                  ...draft.primaryCategory,
-                  name: event.currentTarget.value,
-                })}
-              />
-            </article>
-            <article>
-              <header><span>세부 분야</span></header>
-              <textarea
-                aria-label="세부 분야"
-                rows={3}
-                value={draft.subcategories.map((item) => item.name).join("\n")}
-                onChange={(event) => update(
-                  "subcategories",
-                  event.currentTarget.value.split("\n").map((name) => name.trim())
-                    .filter(Boolean).map((name) => {
-                      const existing = draft.subcategories.find((item) => item.name === name);
-                      return existing ?? { code: null, name };
-                  }),
-                )}
-              />
-            </article>
-          </div>
-        </details>
-
-        {error ? <Alert title="저장하지 못했습니다" variant="bad">{error}</Alert> : null}
-        <div className="brand-center-preview__section-actions">
-          <button
-            type="button"
-            className="brand-center-preview__primary-action"
-            disabled={!required || saving}
-            onClick={onComplete}
-          >
-            {saving ? "저장하는 중" : "완료"}
-          </button>
-        </div>
-      </div>
-    </section>
+    <>
+      <section className="brand-center-preview__card-heading">
+        <h2>AI 분석 결과를 확인하고 수정하세요</h2>
+      </section>
+      <BrandAnalysisReviewStep
+        draft={draft}
+        saving={saving}
+        error={error}
+        onChange={onChange}
+        onConfirm={async () => onComplete()}
+      />
+    </>
   );
 }
 
@@ -214,13 +161,16 @@ function LiveBrandCenterOnboardingState({
   const serverWorkflowRef = useRef<BrandAnalysis | null>(null);
   const [analysisId, setAnalysisId] = useState<string | null>(null);
   const [currentStep, setCurrentStep] = useState<PreviewStep>("analysis");
+  const [companyName, setCompanyName] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [files, setFiles] = useState<PreviewFile[]>([]);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [analysisState, setAnalysisState] = useState<PreviewAsyncState>("loading");
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [draft, setDraft] = useState<BrandIntelligenceResult | null>(null);
+  const [activeAnalysis, setActiveAnalysis] = useState<BrandAnalysis | null>(null);
   const [saving, setSaving] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [bootstrapComplete, setBootstrapComplete] = useState(false);
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
@@ -228,9 +178,12 @@ function LiveBrandCenterOnboardingState({
   const requestRef = useRef(0);
 
   const resumeWorkflow = useCallback((workflow: BrandAnalysis) => {
+    setActiveAnalysis(workflow);
     setAnalysisId(workflow.id);
+    if (persistenceKey) window.localStorage.setItem(persistenceKey, workflow.id);
     setCurrentStep("analysis");
     setSourceUrl(workflow.input.ownedUrl ?? "");
+    if (workflow.input.companyName) setCompanyName(workflow.input.companyName);
     setDraft(null);
     setConfirmed(false);
     setAnalysisError(null);
@@ -242,7 +195,7 @@ function LiveBrandCenterOnboardingState({
     }
     setAnalysisState("loading");
     setPollingRequired(true);
-  }, []);
+  }, [persistenceKey]);
 
   const recoverFromTerminalAnalysis = useCallback((staleAnalysisId: string) => {
     if (queryAnalysisIdRef.current === staleAnalysisId) {
@@ -284,8 +237,17 @@ function LiveBrandCenterOnboardingState({
       setPollingRequired(true);
     };
 
-    void gateway.getWorkflow(brandId).then((workflow) => {
+    const contextRequest = gateway.getOnboarding
+      ? gateway.getOnboarding(brandId)
+      : gateway.getWorkflow(brandId).then((activeAnalysis) => ({
+          companyName: "",
+          companyNameState: "provisional" as const,
+          activeAnalysis,
+        }));
+    void contextRequest.then((context) => {
       if (cancelled) return;
+      const workflow = context.activeAnalysis;
+      setCompanyName(context.companyName);
       serverWorkflowRef.current = workflow;
       if (queryAnalysisIdRef.current) {
         resumeById(queryAnalysisIdRef.current);
@@ -425,6 +387,8 @@ function LiveBrandCenterOnboardingState({
       if (!next) return;
 
       setSourceUrl(next.input.ownedUrl ?? "");
+      setActiveAnalysis(next);
+      if (next.input.companyName) setCompanyName(next.input.companyName);
       if (pendingStatuses.includes(next.status)) {
         setAnalysisState("loading");
         scheduleNext();
@@ -446,6 +410,14 @@ function LiveBrandCenterOnboardingState({
         setConfirmed(true);
         setCurrentStep("generation");
         clearResumePointer();
+        return;
+      }
+      if (next.status === "failed") {
+        pollingFinished = true;
+        if (recoverFromTerminalAnalysis(analysisId)) return;
+        setPollingRequired(false);
+        setAnalysisState("failed");
+        setAnalysisError(next.errorMessage ?? "분석을 완료하지 못했습니다.");
         return;
       }
       pollingFinished = true;
@@ -494,6 +466,12 @@ function LiveBrandCenterOnboardingState({
   ]);
 
   function validateSources() {
+    const normalizedCompanyName = companyName.normalize("NFKC").trim();
+    if (!normalizedCompanyName || Array.from(normalizedCompanyName).length > 100
+      || /[\u0000-\u001f\u007f]/.test(normalizedCompanyName)) {
+      setSourceError("회사명을 1~100자로 입력해 주세요.");
+      return false;
+    }
     const normalized = sourceUrl.trim();
     if (!normalized && files.length === 0) {
       setSourceError("웹사이트 URL 또는 문서 파일을 등록해 주세요.");
@@ -518,18 +496,15 @@ function LiveBrandCenterOnboardingState({
     setAnalysisState("loading");
     setAnalysisError(null);
     try {
-      const uploadSessionId = crypto.randomUUID();
-      const uploadIds: string[] = [];
-      for (const item of files) {
-        uploadIds.push(await gateway.uploadFile(brandId, uploadSessionId, item.file));
-      }
       const created = await gateway.requestAnalysis(brandId, {
+        companyName: companyName.normalize("NFKC").trim(),
         ownedUrl: sourceUrl.trim() || null,
-        uploadIds,
+        files: files.map((item) => item.file),
         idempotencyKey: crypto.randomUUID(),
       });
       if (requestRef.current !== request) return;
       setAnalysisId(created.id);
+      setActiveAnalysis(created);
       setPollingRequired(true);
       if (persistenceKey) window.localStorage.setItem(persistenceKey, created.id);
     } catch (error) {
@@ -540,15 +515,54 @@ function LiveBrandCenterOnboardingState({
   }
 
   async function complete() {
-    if (!analysisId || !draft || saving) return;
+    const normalizedCompanyName = companyName.normalize("NFKC").trim();
+    if (!analysisId || !draft || saving || !normalizedCompanyName) return;
     setSaving(true);
     setAnalysisError(null);
     try {
-      await gateway.updateDraft(brandId, analysisId, draft);
-      await gateway.confirm(brandId, analysisId);
+      await gateway.confirm(brandId, analysisId, normalizedCompanyName, draft);
       clearResumePointer();
       setConfirmed(true);
       setCurrentStep("generation");
+    } catch (error) {
+      setAnalysisError(errorMessage(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function cancelAnalysis() {
+    if (!analysisId || cancelling) return;
+    if (!window.confirm("분석을 취소하면 수집 중인 자료와 분석 결과가 삭제됩니다. 계속할까요?")) return;
+    setCancelling(true);
+    setAnalysisError(null);
+    try {
+      await gateway.cancel!(brandId, analysisId);
+      clearResumePointer();
+      setActiveAnalysis(null);
+      setCompanyName("");
+      setSourceUrl("");
+      setFiles([]);
+      setDraft(null);
+      setCurrentStep("sources");
+      setAnalysisState("idle");
+      setPollingRequired(false);
+    } catch (error) {
+      setAnalysisError(errorMessage(error));
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  async function retryAnalysis() {
+    if (!analysisId || saving) return;
+    setSaving(true);
+    setAnalysisError(null);
+    try {
+      const retried = await gateway.retry!(brandId, analysisId);
+      setActiveAnalysis(retried);
+      setAnalysisState("loading");
+      setPollingRequired(true);
     } catch (error) {
       setAnalysisError(errorMessage(error));
     } finally {
@@ -577,9 +591,14 @@ function LiveBrandCenterOnboardingState({
     >
       {currentStep === "sources" ? (
         <SourceIntakeStep
+          companyName={companyName}
           url={sourceUrl}
           files={files}
           error={sourceError}
+          onCompanyNameChanged={(value) => {
+            setCompanyName(value);
+            setSourceError(null);
+          }}
           onUrlChanged={(url) => {
             setSourceUrl(url);
             setSourceError(null);
@@ -602,6 +621,10 @@ function LiveBrandCenterOnboardingState({
           onBrandCoreChange={() => undefined}
           onKnowledgeChange={() => undefined}
           onRetry={() => {
+            if (activeAnalysis?.status === "failed") {
+              void retryAnalysis();
+              return;
+            }
             if (!bootstrapComplete) {
               setAnalysisState("loading");
               setAnalysisError(null);
@@ -612,17 +635,46 @@ function LiveBrandCenterOnboardingState({
             setCurrentStep("sources");
             setAnalysisState("idle");
           }}
+          onReset={activeAnalysis?.status === "failed" && analysisId
+            ? () => void cancelAnalysis()
+            : undefined}
           onComplete={() => undefined}
+          companyName={companyName}
+          statusText={activeAnalysis?.currentStage ?? undefined}
+          ownedPageProgress={activeAnalysis
+            ? `${activeAnalysis.successfulPageCount ?? 0}/20개 수집`
+            : undefined}
+          cliProgress={activeAnalysis
+            ? `${activeAnalysis.completedCliStageCount}/${activeAnalysis.totalCliStageCount || 8}단계`
+            : undefined}
+          waitingMinutes={activeAnalysis
+            ? `${Math.max(0, ((activeAnalysis.activeStartedAt
+                ? new Date(activeAnalysis.activeStartedAt).getTime()
+                : Date.now()) - new Date(activeAnalysis.createdAt).getTime()) / 60_000).toFixed(1)}분`
+            : undefined}
+          activeMinutes={activeAnalysis?.activeStartedAt
+            ? `${Math.max(0, (Date.now() - new Date(activeAnalysis.activeStartedAt).getTime()) / 60_000).toFixed(1)}분`
+            : undefined}
+          cancelling={cancelling}
+          onCancel={analysisId ? () => void cancelAnalysis() : undefined}
         />
       ) : null}
       {currentStep === "analysis" && analysisState === "succeeded" && draft ? (
-        <LiveResultEditor
-          draft={draft}
-          saving={saving}
-          error={analysisError}
-          onChange={setDraft}
-          onComplete={() => void complete()}
-        />
+        <>
+          <section className="brand-center-preview__card">
+            <div className="brand-center-preview__source-form">
+              <label htmlFor="brand-review-company-name">회사명</label>
+              <input id="brand-review-company-name" value={companyName} maxLength={100} onChange={(event) => setCompanyName(event.currentTarget.value)} />
+            </div>
+          </section>
+          <LiveResultEditor
+            draft={draft}
+            saving={saving}
+            error={analysisError}
+            onChange={setDraft}
+            onComplete={() => void complete()}
+          />
+        </>
       ) : null}
       {currentStep === "generation" && confirmed ? (
         <section className="brand-center-preview__card">

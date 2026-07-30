@@ -15,6 +15,7 @@ function createAdapter(
 async function enterAnalysis(adapter = createAdapter()) {
   const user = userEvent.setup();
   render(<BrandCenterPreviewPage adapter={adapter} />);
+  await user.type(screen.getByRole("textbox", { name: "회사명" }), "테스트 회사");
   await user.type(
     screen.getByRole("textbox", { name: "브랜드 웹사이트 URL" }),
     "https://brand.example",
@@ -106,6 +107,7 @@ describe("Brand Center three-status preview", () => {
     }));
     const user = userEvent.setup();
     render(<BrandCenterPreviewPage adapter={adapter} />);
+    await user.type(screen.getByRole("textbox", { name: "회사명" }), "테스트 회사");
     await user.type(
       screen.getByRole("textbox", { name: "브랜드 웹사이트 URL" }),
       "https://brand.example",
@@ -126,6 +128,9 @@ describe("Brand Center three-status preview", () => {
     vi.useFakeTimers();
     const adapter = createAdapter(() => new Promise<"succeeded">(() => undefined));
     render(<BrandCenterPreviewPage adapter={adapter} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "회사명" }), {
+      target: { value: "테스트 회사" },
+    });
     fireEvent.change(screen.getByRole("textbox", { name: "브랜드 웹사이트 URL" }), {
       target: { value: "https://brand.example" },
     });

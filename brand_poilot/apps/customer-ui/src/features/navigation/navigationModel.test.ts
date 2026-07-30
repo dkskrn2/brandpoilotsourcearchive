@@ -11,30 +11,25 @@ describe("D hybrid customer navigation model", () => {
       "개요",
       "브랜드",
       "콘텐츠",
-      "채널·고객",
-      "설정·지원"
+      "채널·고객"
     ]);
 
     const paths = customerNavigation.flatMap((group) => group.items.map((item) => item.path));
     expect(paths).toEqual([
       "/dashboard",
-      "/performance",
       "/brand-center",
       "/references",
       "/ai-content",
       "/publish-queue",
       "/channels",
-      "/dm-automation",
-      "/billing"
+      "/dm-automation"
     ]);
     expect(paths).toContain("/brand-center");
     expect(paths).toContain("/references");
-    expect(paths).toContain("/performance");
+    expect(paths).not.toContain("/performance");
+    expect(paths).not.toContain("/billing");
     expect(paths).not.toContain("/ai-content/library");
-    expect(
-      customerNavigation.flatMap((group) => group.items)
-        .find((item) => item.label === "결제 및 구독"),
-    ).toMatchObject({ path: "/billing", label: "결제 및 구독" });
+    expect(resolveCustomerPageTitle("/billing")).toBe("플랜");
   });
 
   it("keeps the incomplete-brand recovery destination separate", () => {
