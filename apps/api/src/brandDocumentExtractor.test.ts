@@ -1,8 +1,15 @@
 import ExcelJS from "exceljs";
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { extractBrandDocument } from "./brandDocumentExtractor.js";
 
 describe("brand document extraction", () => {
+  it("does not load the PDF renderer during API cold start", async () => {
+    const source = await readFile(new URL("./brandDocumentExtractor.ts", import.meta.url), "utf8");
+    expect(source).not.toMatch(/^import .* from "pdf-parse";/m);
+    expect(source).toContain('await import("pdf-parse")');
+  });
+
   it("extracts markdown headings into editable evidence blocks", async () => {
     const result = await extractBrandDocument({
       sourceId: "upload-1",
