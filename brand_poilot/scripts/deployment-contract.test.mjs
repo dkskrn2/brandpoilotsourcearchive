@@ -799,9 +799,9 @@ test("optional workers use dedicated profiles, identities, env files, and harden
     assert.deepEqual(parseServiceList(block, "cap_drop"), ["ALL"]);
     assert.deepEqual(parseServiceList(block, "security_opt"), [
       "no-new-privileges:true",
-      "apparmor:runc",
-      "seccomp:unconfined",
-      "systempaths:unconfined",
+      "apparmor=runc",
+      "seccomp=unconfined",
+      "systempaths=unconfined",
     ]);
     assert.match(block.text, /driver:\s+json-file/);
     assert.match(block.text, /max-size:\s+10m/);
@@ -882,9 +882,9 @@ test("Task 6 gives every CLI worker an isolated explicit Compose profile and wri
     assert.deepEqual(parseServiceList(block, "cap_drop"), ["ALL"]);
     assert.deepEqual(parseServiceList(block, "security_opt"), [
       "no-new-privileges:true",
-      "apparmor:runc",
-      "seccomp:unconfined",
-      "systempaths:unconfined",
+      "apparmor=runc",
+      "seccomp=unconfined",
+      "systempaths=unconfined",
     ]);
     assert.ok(
       parseServiceList(block, "tmpfs").some((entry) => entry.startsWith("/tmp:")),
