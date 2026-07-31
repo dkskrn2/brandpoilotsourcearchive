@@ -5,6 +5,13 @@ import type {
 
 export interface BrandCoreV1 {
   contractVersion: "brand-core.v1";
+  companyOverview?: string;
+  businessDescription?: string;
+  primaryCategory?: { code: string | null; name: string };
+  subcategories?: Array<{ code: string | null; name: string }>;
+  primaryTarget?: string;
+  differentiators?: string[];
+  coreAppeal?: string;
   summary: { oneLine: string; description: string };
   audiences: Array<{ name: string; problem: string; desiredOutcome: string }>;
   valueProposition: { primary: string; differentiators: string[]; proofPoints: string[] };
@@ -157,23 +164,29 @@ function nullableHttpsUrl(value: unknown, path: string): string | null {
 }
 
 function parseBrandCore(value: unknown, approval: boolean): BrandCoreV1 {
+  const canonicalKeys = [
+    "companyOverview", "businessDescription", "primaryCategory", "subcategories",
+    "primaryTarget", "differentiators", "coreAppeal",
+  ] as const;
   const source = strictObject(
     value,
-    ["contractVersion", "summary", "audiences", "valueProposition", "messaging"],
+    ["contractVersion", ...canonicalKeys, "summary", "audiences", "valueProposition", "messaging"],
     "root",
   );
   if (source.contractVersion !== "brand-core.v1") invalid("contractVersion");
+  const hasCanonical = canonicalKeys.some((key) => Object.prototype.hasOwnProperty.call(source, key));
+  const requireLegacy = approval && !hasCanonical;
 
   const summary = strictObject(source.summary, ["oneLine", "description"], "summary");
   const audiences = Array.isArray(source.audiences) ? source.audiences : invalid("audiences");
-  if (audiences.length > 10 || (approval && audiences.length === 0)) invalid("audiences");
+  if (audiences.length > 10 || (requireLegacy && audiences.length === 0)) invalid("audiences");
   const parsedAudiences = audiences.map((item, index) => {
     const audience = strictObject(item, ["name", "problem", "desiredOutcome"], `audiences[${index}]`);
     return {
-      name: text(audience.name, `audiences[${index}].name`, { max: 300, allowEmpty: !approval }),
-      problem: text(audience.problem, `audiences[${index}].problem`, { allowEmpty: !approval }),
+      name: text(audience.name, `audiences[${index}].name`, { max: 300, allowEmpty: !requireLegacy }),
+      problem: text(audience.problem, `audiences[${index}].problem`, { allowEmpty: !requireLegacy }),
       desiredOutcome: text(audience.desiredOutcome, `audiences[${index}].desiredOutcome`, {
-        allowEmpty: !approval,
+        allowEmpty: !requireLegacy,
       }),
     };
   });
@@ -188,34 +201,56 @@ function parseBrandCore(value: unknown, approval: boolean): BrandCoreV1 {
     ["appeals", "tone", "preferredPhrases", "brandDirection", "priorityMessages"],
     "messaging",
   );
+  const parseCategory = (value: unknown, path: string, allowEmpty: boolean) => {
+    const category = strictObject(value, ["code", "name"], path);
+    return {
+      code: category.code === null ? null : text(category.code, `${path}.code`, { max: 200 }),
+      name: text(category.name, `${path}.name`, { max: 300, allowEmpty }),
+    };
+  };
+  const legacyDifferentiators = stringList(
+    valueProposition.differentiators,
+    "valueProposition.differentiators",
+    { allowEmpty: !requireLegacy },
+  );
+  const canonical = hasCanonical ? {
+    companyOverview: text(source.companyOverview, "companyOverview", { allowEmpty: !approval }),
+    businessDescription: text(source.businessDescription, "businessDescription", { allowEmpty: !approval }),
+    primaryCategory: parseCategory(source.primaryCategory, "primaryCategory", !approval),
+    subcategories: Array.isArray(source.subcategories)
+      ? source.subcategories.map((item, index) => parseCategory(item, `subcategories[${index}]`, false))
+      : invalid("subcategories"),
+    primaryTarget: text(source.primaryTarget, "primaryTarget", { allowEmpty: !approval }),
+    differentiators: stringList(source.differentiators, "differentiators", { allowEmpty: !approval }),
+    coreAppeal: text(source.coreAppeal, "coreAppeal", { allowEmpty: !approval }),
+  } : null;
 
   return {
     contractVersion: "brand-core.v1",
+    ...(canonical ?? {}),
     summary: {
-      oneLine: text(summary.oneLine, "summary.oneLine", { max: 300, allowEmpty: !approval }),
-      description: text(summary.description, "summary.description", { allowEmpty: !approval }),
+      oneLine: text(summary.oneLine, "summary.oneLine", { max: 300, allowEmpty: !requireLegacy }),
+      description: text(summary.description, "summary.description", { allowEmpty: !requireLegacy }),
     },
     audiences: parsedAudiences,
     valueProposition: {
       primary: text(valueProposition.primary, "valueProposition.primary", { allowEmpty: !approval }),
-      differentiators: stringList(valueProposition.differentiators, "valueProposition.differentiators", {
-        allowEmpty: !approval,
-      }),
+      differentiators: legacyDifferentiators,
       proofPoints: stringList(valueProposition.proofPoints, "valueProposition.proofPoints", {
-        allowEmpty: !approval,
+        allowEmpty: !requireLegacy,
       }),
     },
     messaging: {
-      appeals: stringList(messaging.appeals, "messaging.appeals", { allowEmpty: !approval }),
-      tone: stringList(messaging.tone, "messaging.tone", { allowEmpty: !approval }),
+      appeals: stringList(messaging.appeals, "messaging.appeals", { allowEmpty: !requireLegacy }),
+      tone: stringList(messaging.tone, "messaging.tone", { allowEmpty: !requireLegacy }),
       preferredPhrases: stringList(messaging.preferredPhrases, "messaging.preferredPhrases", {
-        allowEmpty: !approval,
+        allowEmpty: !requireLegacy,
       }),
       brandDirection: text(messaging.brandDirection, "messaging.brandDirection", {
-        allowEmpty: !approval,
+        allowEmpty: !requireLegacy,
       }),
       priorityMessages: stringList(messaging.priorityMessages, "messaging.priorityMessages", {
-        allowEmpty: !approval,
+        allowEmpty: !requireLegacy,
       }),
     },
   };
@@ -439,6 +474,13 @@ export function mapAnalysisToBrandCoreDraft(
 ): BrandCoreDraftMapping {
   const core = parseBrandCoreDraft({
     contractVersion: "brand-core.v1",
+    companyOverview: analysis.companyOverview,
+    businessDescription: analysis.businessDescription,
+    primaryCategory: analysis.primaryCategory,
+    subcategories: analysis.subcategories,
+    primaryTarget: analysis.primaryTarget,
+    differentiators: analysis.differentiators ? [analysis.differentiators] : [],
+    coreAppeal: analysis.coreAppeal,
     summary: {
       oneLine: analysis.coreAppeal,
       description: analysis.businessDescription || analysis.companyOverview,

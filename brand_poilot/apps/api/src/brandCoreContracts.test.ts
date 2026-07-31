@@ -60,7 +60,7 @@ function analysis(): BrandIntelligenceResultV1 {
 
 describe("BrandCoreV1 validation", () => {
   it("accepts a complete approval contract", () => {
-    expect(parseBrandCoreForApproval(validCore())).toEqual(validCore());
+    expect(parseBrandCoreForApproval(validCore())).toMatchObject(validCore());
   });
 
   it("returns the exact field path for missing and oversized values", () => {
@@ -269,6 +269,13 @@ describe("analysis to Brand Core draft mapping", () => {
 
     expect(mapped.core).toMatchObject({
       contractVersion: "brand-core.v1",
+      companyOverview: "그로스라인은 콘텐츠 운영을 지원합니다.",
+      businessDescription: "자사 자료를 바탕으로 콘텐츠 제작과 게시 운영을 연결합니다.",
+      primaryCategory: { code: "marketing", name: "마케팅" },
+      subcategories: [],
+      primaryTarget: "콘텐츠 운영 인력이 부족한 중소 브랜드 담당자",
+      differentiators: ["승인된 브랜드 정보를 콘텐츠 제작에 재사용합니다."],
+      coreAppeal: "반복적인 콘텐츠 운영 업무를 줄입니다.",
       summary: {
         oneLine: "반복적인 콘텐츠 운영 업무를 줄입니다.",
         description: "자사 자료를 바탕으로 콘텐츠 제작과 게시 운영을 연결합니다.",

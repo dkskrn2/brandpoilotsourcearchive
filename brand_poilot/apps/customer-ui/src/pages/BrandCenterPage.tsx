@@ -11,7 +11,10 @@ import { StyleReferenceImageBoard } from "../components/brand-center/StyleRefere
 import { SupportRequestHistory } from "../components/support/SupportRequestHistory";
 import { brandCenterGateway } from "../features/brand-center/brandCenterGateway";
 import { brandIntelligenceGateway } from "../features/brand-intelligence/brandIntelligenceGateway";
-import type { BrandAnalysis } from "../features/brand-intelligence/types";
+import type {
+  BrandAnalysis,
+  BrandIntelligenceResult,
+} from "../features/brand-intelligence/types";
 import { libraryGateway } from "../features/libraries/libraryGateway";
 import type {
   BrandCenterSummary,
@@ -71,6 +74,47 @@ function readiness(summary: BrandCenterSummary | null) {
     summary.brandCore.state === "approved",
     summary.rules.state === "approved",
   ].filter(Boolean).length}/4`;
+}
+
+function coreWithAnalysisResult(
+  core: BrandCore,
+  result: BrandIntelligenceResult,
+): BrandCore {
+  const isV2 = result.contractVersion === "brand-intelligence-result.v2";
+  const companyOverview = (result.companyOverview ?? "").trim();
+  const businessDescription = (result.businessDescription ?? "").trim();
+  const primaryCategory = result.primaryCategory ?? { code: null, name: "" };
+  const primaryTarget = (result.primaryTarget ?? "").trim();
+  const differentiators = isV2
+    ? result.differentiators
+    : result.differentiators.split("\n").map((item) => item.trim()).filter(Boolean);
+  const coreAppeal = (result.coreAppeal ?? "").trim();
+  const firstAudience = core.audiences[0] ?? { name: "", problem: "", desiredOutcome: "" };
+  return {
+    ...core,
+    companyOverview,
+    businessDescription,
+    primaryCategory,
+    subcategories: result.subcategories,
+    primaryTarget,
+    differentiators,
+    coreAppeal,
+    summary: {
+      oneLine: companyOverview,
+      description: businessDescription,
+    },
+    audiences: [{ ...firstAudience, name: primaryTarget }, ...core.audiences.slice(1)],
+    valueProposition: {
+      ...core.valueProposition,
+      primary: coreAppeal,
+      differentiators,
+    },
+    messaging: {
+      ...core.messaging,
+      appeals: coreAppeal ? [coreAppeal] : core.messaging.appeals,
+      brandDirection: differentiators.join("\n"),
+    },
+  };
 }
 
 function resolveOnboardingView(
@@ -200,8 +244,15 @@ export function BrandCenterPage() {
   const visibleVersion = useMemo(() => {
     if (!workspace) return null;
     const selected = workspace.versions.find((item) => item.id === selectedVersionId);
-    return selected ?? workspace.active ?? workspace.draft ?? null;
-  }, [selectedVersionId, workspace]);
+    const version = selected ?? workspace.active ?? workspace.draft ?? null;
+    if (!version || version.status !== "approved"
+      || !confirmedAnalysis?.effectiveResult
+      || version.sourceAnalysisId !== confirmedAnalysis.id) return version;
+    return {
+      ...version,
+      core: coreWithAnalysisResult(version.core, confirmedAnalysis.effectiveResult),
+    };
+  }, [confirmedAnalysis, selectedVersionId, workspace]);
   const visibleRules = rulesWorkspace?.draft?.rules ?? rulesWorkspace?.active?.rules ?? emptyRules();
   const operationalRules = draftRules ?? visibleRules;
   const serverConflictVersion = serverConflictSnapshot?.draft ?? serverConflictSnapshot?.active ?? null;
@@ -368,8 +419,12 @@ export function BrandCenterPage() {
     setError(null);
     setRetryOperation(null);
     try {
+      const activeCore = confirmedAnalysis?.effectiveResult
+        && workspace.active.sourceAnalysisId === confirmedAnalysis.id
+        ? coreWithAnalysisResult(workspace.active.core, confirmedAnalysis.effectiveResult)
+        : workspace.active.core;
       const created = await brandCenterGateway.createCoreDraft(DEMO_BRAND_ID, {
-        core: workspace.active.core,
+        core: activeCore,
         evidence: workspace.active.evidence,
         reviewState: workspace.active.reviewState,
         sourceAnalysisId: workspace.active.sourceAnalysisId,

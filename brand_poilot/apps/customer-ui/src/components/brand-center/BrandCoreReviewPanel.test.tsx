@@ -48,7 +48,21 @@ describe("BrandCoreReviewPanel", () => {
       onCancel={vi.fn()}
     />);
 
-    expect(screen.getByLabelText("한 줄 소개")).toBeDisabled();
+    for (const label of [
+      "기업 개요",
+      "사업 소개",
+      "대표 분야",
+      "직접 입력 세부 분야",
+      "핵심 타깃",
+      "차별점",
+      "핵심 소구점",
+    ]) {
+      expect(screen.getByLabelText(label)).toBeDisabled();
+    }
+    expect(screen.queryByLabelText("한 줄 소개")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("핵심 가치")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("브랜드 방향성")).not.toBeInTheDocument();
+    expect(screen.queryByText(/근거 \d+개 확인/)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "브랜드 코어 수정" }));
     expect(edit).toHaveBeenCalledOnce();
   });
@@ -66,7 +80,7 @@ describe("BrandCoreReviewPanel", () => {
       onCancel={vi.fn()}
     />);
 
-    expect(screen.getByLabelText("한 줄 소개")).toBeDisabled();
+    expect(screen.getByLabelText("기업 개요")).toBeDisabled();
     expect(screen.queryByRole("button", { name: "브랜드 코어 수정" })).not.toBeInTheDocument();
   });
 
@@ -85,7 +99,7 @@ describe("BrandCoreReviewPanel", () => {
     />);
     await userEvent.click(screen.getByRole("button", { name: "Brand Core 승인" }));
     expect(screen.getByRole("alert")).toHaveTextContent("필수 정보");
-    expect(screen.getByLabelText("한 줄 소개")).toHaveFocus();
+    expect(screen.getByLabelText("기업 개요")).toHaveFocus();
     expect(approve).not.toHaveBeenCalled();
   });
 });

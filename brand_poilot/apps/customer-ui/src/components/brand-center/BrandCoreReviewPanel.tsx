@@ -34,21 +34,27 @@ export function BrandCoreReviewPanel({
   const disabled = !editing || version.status !== "draft";
   const core = version.core;
   const [validationMessage, setValidationMessage] = useState<string | null>(null);
-  const oneLineRef = useRef<HTMLInputElement>(null);
-  const descriptionRef = useRef<HTMLTextAreaElement>(null);
-  const audienceRef = useRef<HTMLInputElement>(null);
-  const primaryValueRef = useRef<HTMLTextAreaElement>(null);
-  const directionRef = useRef<HTMLTextAreaElement>(null);
-  const updateSummary = (field: keyof BrandCore["summary"], value: string) => {
-    onChange({ ...core, summary: { ...core.summary, [field]: value } });
-  };
+  const companyOverview = core.companyOverview ?? core.summary.oneLine;
+  const businessDescription = core.businessDescription ?? core.summary.description;
+  const primaryCategory = core.primaryCategory ?? { code: null, name: "" };
+  const subcategories = core.subcategories ?? [];
+  const primaryTarget = core.primaryTarget ?? core.audiences[0]?.name ?? "";
+  const differentiators = core.differentiators ?? core.valueProposition.differentiators;
+  const coreAppeal = core.coreAppeal ?? core.valueProposition.primary;
+  const companyOverviewRef = useRef<HTMLTextAreaElement>(null);
+  const businessDescriptionRef = useRef<HTMLTextAreaElement>(null);
+  const primaryCategoryRef = useRef<HTMLInputElement>(null);
+  const primaryTargetRef = useRef<HTMLTextAreaElement>(null);
+  const differentiatorsRef = useRef<HTMLTextAreaElement>(null);
+  const coreAppealRef = useRef<HTMLTextAreaElement>(null);
   const validateAndApprove = () => {
     const fields = [
-      { value: core.summary.oneLine, ref: oneLineRef },
-      { value: core.summary.description, ref: descriptionRef },
-      { value: core.audiences[0]?.name, ref: audienceRef },
-      { value: core.valueProposition.primary, ref: primaryValueRef },
-      { value: core.messaging.brandDirection, ref: directionRef },
+      { value: companyOverview, ref: companyOverviewRef },
+      { value: businessDescription, ref: businessDescriptionRef },
+      { value: primaryCategory.name, ref: primaryCategoryRef },
+      { value: primaryTarget, ref: primaryTargetRef },
+      { value: differentiators.join("\n"), ref: differentiatorsRef },
+      { value: coreAppeal, ref: coreAppealRef },
     ];
     const invalid = fields.find((field) => !field.value?.trim());
     if (invalid) {
@@ -85,72 +91,105 @@ export function BrandCoreReviewPanel({
       </div>
       <div className="panel-body brand-core-form">
         <label>
-          한 줄 소개
-          <input
-            ref={oneLineRef}
-            value={core.summary.oneLine}
+          기업 개요
+          <textarea
+            ref={companyOverviewRef}
+            value={companyOverview}
             disabled={disabled}
-            onChange={(event) => updateSummary("oneLine", event.target.value)}
+            onChange={(event) => onChange({
+              ...core,
+              companyOverview: event.target.value,
+              summary: { ...core.summary, oneLine: event.target.value },
+            })}
           />
         </label>
         <label>
-          브랜드 설명
+          사업 소개
           <textarea
-            ref={descriptionRef}
-            value={core.summary.description}
+            ref={businessDescriptionRef}
+            value={businessDescription}
             disabled={disabled}
-            onChange={(event) => updateSummary("description", event.target.value)}
+            onChange={(event) => onChange({
+              ...core,
+              businessDescription: event.target.value,
+              summary: { ...core.summary, description: event.target.value },
+            })}
           />
         </label>
+        <div className="brand-core-category-fields">
+          <label>
+            대표 분야
+            <input
+              ref={primaryCategoryRef}
+              value={primaryCategory.name}
+              disabled={disabled}
+              onChange={(event) => onChange({
+                ...core,
+                primaryCategory: { ...primaryCategory, name: event.target.value },
+              })}
+            />
+          </label>
+          <label>
+            직접 입력 세부 분야
+            <input
+              value={subcategories.map((item) => item.name).join(", ")}
+              disabled={disabled}
+              onChange={(event) => onChange({
+                ...core,
+                subcategories: event.target.value.split(",")
+                  .map((name) => name.normalize("NFKC").trim())
+                  .filter(Boolean)
+                  .map((name) => ({ code: null, name })),
+              })}
+            />
+          </label>
+        </div>
         <label>
           핵심 타깃
-          <input
-            ref={audienceRef}
-            value={core.audiences[0]?.name ?? ""}
+          <textarea
+            ref={primaryTargetRef}
+            value={primaryTarget}
             disabled={disabled}
             onChange={(event) => {
               const first = core.audiences[0] ?? { name: "", problem: "", desiredOutcome: "" };
-              onChange({ ...core, audiences: [{ ...first, name: event.target.value }, ...core.audiences.slice(1)] });
+              onChange({
+                ...core,
+                primaryTarget: event.target.value,
+                audiences: [{ ...first, name: event.target.value }, ...core.audiences.slice(1)],
+              });
             }}
           />
         </label>
         <label>
-          핵심 가치
+          차별점
           <textarea
-            ref={primaryValueRef}
-            value={core.valueProposition.primary}
+            ref={differentiatorsRef}
+            value={differentiators.join("\n")}
+            disabled={disabled}
+            onChange={(event) => {
+              const next = event.target.value.split("\n").map((item) => item.trim()).filter(Boolean);
+              onChange({
+                ...core,
+                differentiators: next,
+                valueProposition: { ...core.valueProposition, differentiators: next },
+                messaging: { ...core.messaging, brandDirection: next.join("\n") },
+              });
+            }}
+          />
+        </label>
+        <label>
+          핵심 소구점
+          <textarea
+            ref={coreAppealRef}
+            value={coreAppeal}
             disabled={disabled}
             onChange={(event) => onChange({
               ...core,
+              coreAppeal: event.target.value,
               valueProposition: { ...core.valueProposition, primary: event.target.value },
             })}
           />
         </label>
-        <label>
-          브랜드 방향성
-          <textarea
-            ref={directionRef}
-            value={core.messaging.brandDirection}
-            disabled={disabled}
-            onChange={(event) => onChange({
-              ...core,
-              messaging: { ...core.messaging, brandDirection: event.target.value },
-            })}
-          />
-        </label>
-        {version.evidence.length > 0 && (
-          <details className="brand-evidence-drawer">
-            <summary>근거 {version.evidence.length}개 확인</summary>
-            {version.evidence.map((item, index) => (
-              <article key={`${item.fieldPath}-${index}`}>
-                <strong>{item.fieldPath}</strong>
-                <p>{item.excerpt}</p>
-                {item.sourceUrl && <a href={item.sourceUrl} target="_blank" rel="noreferrer">원문 열기</a>}
-                <small>신뢰도는 참고 신호이며 제품 사실을 보증하지 않습니다.</small>
-              </article>
-            ))}
-          </details>
-        )}
         {editing && version.status === "draft" && (
           <>
             {validationMessage && <p className="form-error" role="alert">{validationMessage}</p>}

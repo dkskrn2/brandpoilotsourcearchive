@@ -221,8 +221,15 @@
 .brand-core-form,
 .brand-rules-form {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
+}
+
+.brand-core-form {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.brand-rules-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .brand-core-form label,
@@ -239,11 +246,27 @@
   min-height: 110px;
 }
 
+.brand-core-category-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.brand-core-category-fields label {
+  min-width: 0;
+}
+
 .brand-evidence-drawer,
 .brand-core-form .form-actions,
 .brand-rules-form .form-actions,
 .brand-rules-form .form-hint {
   grid-column: 1 / -1;
+}
+
+@media (max-width: 720px) {
+  .brand-core-category-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .brand-evidence-drawer {

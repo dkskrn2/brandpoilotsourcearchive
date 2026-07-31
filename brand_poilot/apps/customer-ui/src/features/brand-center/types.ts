@@ -23,6 +23,13 @@ export interface BrandCenterSummary {
 
 export interface BrandCore {
   contractVersion: "brand-core.v1";
+  companyOverview?: string;
+  businessDescription?: string;
+  primaryCategory?: { code: string | null; name: string };
+  subcategories?: Array<{ code: string | null; name: string }>;
+  primaryTarget?: string;
+  differentiators?: string[];
+  coreAppeal?: string;
   summary: { oneLine: string; description: string };
   audiences: Array<{ name: string; problem: string; desiredOutcome: string }>;
   valueProposition: { primary: string; differentiators: string[]; proofPoints: string[] };

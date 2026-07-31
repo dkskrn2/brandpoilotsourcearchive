@@ -93,16 +93,20 @@ function OfferingEditor({
 }
 
 export function BrandAnalysisReviewStep({
+  companyName,
   draft,
   saving,
   error,
+  onCompanyNameChange,
   onChange,
   onConfirm,
   categories = [],
 }: {
+  companyName?: string;
   draft: BrandIntelligenceResult;
   saving: boolean;
   error: string | null;
+  onCompanyNameChange?(value: string): void;
   onChange(value: BrandIntelligenceResult): void;
   onConfirm(): Promise<void>;
   categories?: ContentCategory[];
@@ -157,6 +161,16 @@ export function BrandAnalysisReviewStep({
       <section className="panel brand-intelligence-step">
         <div className="panel-head"><h2>분석 결과 확인</h2></div>
         <div className="panel-body brand-review-fields">
+          {companyName !== undefined && onCompanyNameChange && (
+            <label className="field-stack">
+              <span className="field-label">회사명</span>
+              <input
+                value={companyName}
+                maxLength={100}
+                onChange={(event) => onCompanyNameChange(event.currentTarget.value)}
+              />
+            </label>
+          )}
           {isV2 && <TextField label="한 줄 정의" value={draft.oneLineDefinition} onChange={(value) => updateV2("oneLineDefinition", value)} />}
           <TextField label="기업 개요" value={draft.companyOverview} onChange={(value) => updateText("companyOverview", value)} />
           <TextField label="사업 소개" value={draft.businessDescription} onChange={(value) => updateText("businessDescription", value)} />
@@ -326,29 +340,12 @@ export function BrandAnalysisReviewStep({
         </div>
       </section>
 
-      <section className="panel">
-        <div className="panel-head"><h2>근거와 추가 확인 항목</h2></div>
-        <div className="panel-body">
-          {draft.evidence.length > 0 && (
-            <ul className="evidence-links">
-              {draft.evidence.map((item, index) => (
-                <li key={`${item.sourceId}-${index}`}>
-                  {"fieldPath" in item ? `${item.fieldPath}: ` : `${item.field}: `}
-                  {item.claim}
-                  {item.sourceUrl && <a href={item.sourceUrl} target="_blank" rel="noreferrer"> 출처 보기</a>}
-                </li>
-              ))}
-            </ul>
-          )}
-          {draft.sourceGaps.length > 0 && <Alert title="근거가 부족한 항목" variant="info">{draft.sourceGaps.join(" · ")}</Alert>}
-          {error && <Alert title="저장하지 못했습니다" variant="bad">{error}</Alert>}
-          <div className="form-actions">
-            <button type="button" className="button primary" disabled={!canConfirm || saving} onClick={() => void onConfirm()}>
-              {saving ? "저장하는 중" : "확인하고 저장"}
-            </button>
-          </div>
-        </div>
-      </section>
+      {error && <Alert title="저장하지 못했습니다" variant="bad">{error}</Alert>}
+      <div className="form-actions">
+        <button type="button" className="button primary" disabled={!canConfirm || saving} onClick={() => void onConfirm()}>
+          {saving ? "저장하는 중" : "확인하고 저장"}
+        </button>
+      </div>
     </section>
   );
 }

@@ -89,15 +89,19 @@ function errorMessage(error: unknown) {
 }
 
 function LiveResultEditor({
+  companyName,
   draft,
   saving,
   error,
+  onCompanyNameChange,
   onChange,
   onComplete,
 }: {
+  companyName: string;
   draft: BrandIntelligenceResult;
   saving: boolean;
   error: string | null;
+  onCompanyNameChange(value: string): void;
   onChange(draft: BrandIntelligenceResult): void;
   onComplete(): void;
 }) {
@@ -107,9 +111,11 @@ function LiveResultEditor({
         <h2>AI 분석 결과를 확인하고 수정하세요</h2>
       </section>
       <BrandAnalysisReviewStep
+        companyName={companyName}
         draft={draft}
         saving={saving}
         error={error}
+        onCompanyNameChange={onCompanyNameChange}
         onChange={onChange}
         onConfirm={async () => onComplete()}
       />
@@ -157,6 +163,7 @@ function LiveBrandCenterOnboardingState({
   );
   const [searchParams, setSearchParams] = useSearchParams();
   const queryAnalysisId = searchParams.get("analysisId");
+  const reanalysisRequested = searchParams.has("from");
   const queryAnalysisIdRef = useRef(queryAnalysisId);
   const serverWorkflowRef = useRef<BrandAnalysis | null>(null);
   const [analysisId, setAnalysisId] = useState<string | null>(null);
@@ -222,6 +229,16 @@ function LiveBrandCenterOnboardingState({
     const restorePointer = () => (
       persistenceKey ? window.localStorage.getItem(persistenceKey) : null
     );
+    const discardPointer = () => {
+      if (persistenceKey) window.localStorage.removeItem(persistenceKey);
+      queryAnalysisIdRef.current = null;
+      setAnalysisId(null);
+      setSearchParams((current) => {
+        const next = new URLSearchParams(current);
+        next.delete("analysisId");
+        return next;
+      }, { replace: true });
+    };
     const resumeById = (nextAnalysisId: string | null) => {
       setAnalysisError(null);
       if (!nextAnalysisId) {
@@ -244,12 +261,28 @@ function LiveBrandCenterOnboardingState({
           companyNameState: "provisional" as const,
           activeAnalysis,
         }));
-    void contextRequest.then((context) => {
+    const currentRequest = gateway.getCurrent(brandId).catch(() => null);
+    void Promise.all([contextRequest, currentRequest]).then(([context, currentAnalysis]) => {
       if (cancelled) return;
       const workflow = context.activeAnalysis;
       setCompanyName(context.companyName);
       serverWorkflowRef.current = workflow;
-      if (queryAnalysisIdRef.current) {
+      if (!workflow && currentAnalysis?.status === "confirmed") {
+        discardPointer();
+        setSourceUrl(currentAnalysis.input.ownedUrl ?? "");
+        setActiveAnalysis(reanalysisRequested ? null : currentAnalysis);
+        setDraft(null);
+        setPollingRequired(false);
+        if (reanalysisRequested) {
+          setConfirmed(false);
+          setCurrentStep("sources");
+          setAnalysisState("idle");
+        } else {
+          setConfirmed(true);
+          setCurrentStep("generation");
+          setAnalysisState("succeeded");
+        }
+      } else if (queryAnalysisIdRef.current) {
         resumeById(queryAnalysisIdRef.current);
       } else if (workflow) {
         resumeWorkflow(workflow);
@@ -270,7 +303,14 @@ function LiveBrandCenterOnboardingState({
     return () => {
       cancelled = true;
     };
-  }, [bootstrapAttempt, brandId, gateway, persistenceKey, resumeWorkflow]);
+  }, [
+    bootstrapAttempt,
+    brandId,
+    gateway,
+    persistenceKey,
+    reanalysisRequested,
+    resumeWorkflow,
+  ]);
 
   useEffect(() => {
     if (analysisId && persistenceKey) {
@@ -660,21 +700,15 @@ function LiveBrandCenterOnboardingState({
         />
       ) : null}
       {currentStep === "analysis" && analysisState === "succeeded" && draft ? (
-        <>
-          <section className="brand-center-preview__card">
-            <div className="brand-center-preview__source-form">
-              <label htmlFor="brand-review-company-name">회사명</label>
-              <input id="brand-review-company-name" value={companyName} maxLength={100} onChange={(event) => setCompanyName(event.currentTarget.value)} />
-            </div>
-          </section>
-          <LiveResultEditor
-            draft={draft}
-            saving={saving}
-            error={analysisError}
-            onChange={setDraft}
-            onComplete={() => void complete()}
-          />
-        </>
+        <LiveResultEditor
+          companyName={companyName}
+          draft={draft}
+          saving={saving}
+          error={analysisError}
+          onCompanyNameChange={setCompanyName}
+          onChange={setDraft}
+          onComplete={() => void complete()}
+        />
       ) : null}
       {currentStep === "generation" && confirmed ? (
         <section className="brand-center-preview__card">

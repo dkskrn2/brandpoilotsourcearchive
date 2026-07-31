@@ -206,6 +206,51 @@ describe("live Brand Center onboarding", () => {
     expect(getWorkflow).toHaveBeenCalledTimes(1);
   });
 
+  it("shows the completed state instead of resuming a stale analysis after confirmation", async () => {
+    localStorage.setItem(persistenceKey, "stale-analysis");
+    const getWorkflow = vi.fn().mockResolvedValue(null);
+    const getCurrent = vi.fn().mockResolvedValue(analysis("confirmed"));
+    const getAnalysis = vi.fn();
+
+    renderLive(
+      gateway({ getWorkflow, getCurrent, getAnalysis }),
+      "/onboarding/brand-intelligence?analysisId=stale-analysis",
+    );
+
+    expect(await screen.findByText("브랜드 준비가 완료되었습니다")).toBeVisible();
+    expect(screen.queryByText("자료를 읽는 중")).not.toBeInTheDocument();
+    expect(getAnalysis).not.toHaveBeenCalled();
+    expect(localStorage.getItem(persistenceKey)).toBeNull();
+    expect(screen.getByTestId("location")).not.toHaveTextContent("analysisId");
+  });
+
+  it("starts a fresh intake when confirmed users explicitly request reanalysis", async () => {
+    localStorage.setItem(persistenceKey, "stale-analysis");
+    const getAnalysis = vi.fn();
+    const getOnboarding = vi.fn().mockResolvedValue({
+      companyName: "Growthline",
+      companyNameState: "confirmed",
+      activeAnalysis: null,
+    });
+
+    renderLive(
+      gateway({
+        getCurrent: vi.fn().mockResolvedValue(analysis("confirmed")),
+        getOnboarding,
+        getAnalysis,
+      }),
+      "/onboarding/brand-intelligence?from=brand-center&analysisId=stale-analysis",
+    );
+
+    expect(await screen.findByRole("textbox", { name: "회사명" })).toHaveValue("Growthline");
+    expect(screen.getByRole("textbox", { name: "브랜드 웹사이트 URL" }))
+      .toHaveValue("https://brand.example");
+    expect(getAnalysis).not.toHaveBeenCalled();
+    expect(localStorage.getItem(persistenceKey)).toBeNull();
+    expect(screen.getByTestId("location")).toHaveTextContent("from=brand-center");
+    expect(screen.getByTestId("location")).not.toHaveTextContent("analysisId");
+  });
+
   it("keeps Step 1 locked when workflow lookup fails and retries the lookup", async () => {
     localStorage.setItem(persistenceKey, "stored-analysis");
     const getWorkflow = vi.fn()
@@ -399,9 +444,18 @@ describe("live Brand Center onboarding", () => {
     expect(screen.queryByLabelText("추가 확인이 필요한 정보")).not.toBeInTheDocument();
     expect(screen.getByLabelText("경쟁사 1 이름")).toBeInTheDocument();
     expect(screen.queryByLabelText("경쟁사 1 근거 URL")).not.toBeInTheDocument();
-    expect(screen.getByText(/기업 근거/)).toBeInTheDocument();
+    const companyInput = screen.getByRole("textbox", { name: "회사명" });
+    const reviewPanel = screen.getByRole("heading", { name: "분석 결과 확인" })
+      .closest(".panel");
+    expect(reviewPanel).toContainElement(companyInput);
+    expect(screen.queryByRole("heading", { name: "근거와 추가 확인 항목" }))
+      .not.toBeInTheDocument();
+    expect(screen.queryByText(/기업 근거/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/가격 정보 부족/)).not.toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "근거 보기" }).length).toBeGreaterThan(0);
 
+    await user.clear(companyInput);
+    await user.type(companyInput, "수정 회사");
     await user.clear(screen.getByLabelText("기업 개요"));
     await user.type(screen.getByLabelText("기업 개요"), "수정 기업 개요");
     await user.click(screen.getByRole("button", { name: "확인하고 저장" }));
@@ -409,7 +463,7 @@ describe("live Brand Center onboarding", () => {
     await waitFor(() => expect(api.confirm).toHaveBeenCalledWith(
       "brand-1",
       "analysis-1",
-      "테스트 회사",
+      "수정 회사",
       expect.objectContaining({
         companyOverview: "수정 기업 개요",
         primaryCategory: { code: "software", name: "소프트웨어" },

@@ -10,6 +10,13 @@ const active = {
   status: "approved" as const,
   core: {
     contractVersion: "brand-core.v1" as const,
+    companyOverview: "브랜드 운영을 단순하게",
+    businessDescription: "승인된 브랜드 설명",
+    primaryCategory: { code: "service", name: "서비스" },
+    subcategories: [],
+    primaryTarget: "브랜드 담당자",
+    differentiators: ["승인 정보 사용"],
+    coreAppeal: "반복 업무 절감",
     summary: { oneLine: "브랜드 운영을 단순하게", description: "승인된 브랜드 설명" },
     audiences: [{ name: "브랜드 담당자", problem: "시간 부족", desiredOutcome: "일관된 운영" }],
     valueProposition: {
@@ -38,6 +45,7 @@ const persistedDraft = {
   status: "draft" as const,
   core: {
     ...active.core,
+    companyOverview: "저장된 수정 초안",
     summary: { ...active.core.summary, oneLine: "저장된 수정 초안" },
   },
   approvedAt: null,
@@ -51,6 +59,7 @@ const superseded = {
   status: "superseded" as const,
   core: {
     ...active.core,
+    companyOverview: "이전 브랜드 코어",
     summary: { ...active.core.summary, oneLine: "이전 브랜드 코어" },
   },
   approvedAt: "2026-07-20T00:00:00.000Z",
@@ -503,6 +512,36 @@ describe("BrandCenterPage", () => {
     expect(screen.queryByRole("tab", { name: "Wiki" })).not.toBeInTheDocument();
   });
 
+  it("shows the seven fields from the confirmed analysis linked to the active core", async () => {
+    const linkedActive = {
+      ...active,
+      sourceAnalysisId: confirmedAnalysis.id,
+    };
+    await renderPage("/brand-center?tab=core", {
+      getCore: vi.fn(async () => ({
+        active: linkedActive,
+        draft: null,
+        versions: [linkedActive],
+      })),
+    });
+
+    expect(await screen.findByRole("textbox", { name: "기업 개요" }))
+      .toHaveValue("승인된 기업 개요");
+    expect(screen.getByRole("textbox", { name: "사업 소개" }))
+      .toHaveValue("승인된 사업 소개");
+    expect(screen.getByRole("textbox", { name: "대표 분야" }))
+      .toHaveValue("서비스");
+    expect(screen.getByRole("textbox", { name: "직접 입력 세부 분야" }))
+      .toHaveValue("");
+    expect(screen.getByRole("textbox", { name: "핵심 타깃" }))
+      .toHaveValue("브랜드 담당자");
+    expect(screen.getByRole("textbox", { name: "차별점" }))
+      .toHaveValue("승인 기반 운영");
+    expect(screen.getByRole("textbox", { name: "핵심 소구점" }))
+      .toHaveValue("일관된 콘텐츠");
+    expect(screen.queryByText(/근거 \d+개 확인/)).not.toBeInTheDocument();
+  });
+
   it("uses reference images instead of the avatar library as the customer-facing style panel", async () => {
     const { gateway, libraryApi } = await renderPage();
     await userEvent.click(await screen.findByRole("tab", { name: "스타일" }));
@@ -623,7 +662,7 @@ describe("BrandCenterPage", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     await renderPage();
     await userEvent.click(await screen.findByRole("button", { name: "브랜드 코어 수정" }));
-    const oneLine = screen.getByRole("textbox", { name: "한 줄 소개" });
+    const oneLine = screen.getByRole("textbox", { name: "기업 개요" });
     await userEvent.clear(oneLine);
     await userEvent.type(oneLine, "아직 저장하지 않은 코어");
     expect(screen.getByText("저장하지 않은 변경")).toBeInTheDocument();
@@ -644,7 +683,7 @@ describe("BrandCenterPage", () => {
 
     expect(await screen.findByDisplayValue("브랜드 운영을 단순하게")).toBeDisabled();
     await userEvent.click(screen.getByRole("button", { name: "브랜드 코어 수정" }));
-    const oneLine = screen.getByRole("textbox", { name: "한 줄 소개" });
+    const oneLine = screen.getByRole("textbox", { name: "기업 개요" });
     expect(oneLine).toHaveValue("저장된 수정 초안");
     await userEvent.clear(oneLine);
     await userEvent.type(oneLine, "버릴 수정");
@@ -652,7 +691,7 @@ describe("BrandCenterPage", () => {
     expect(updateCoreDraft).not.toHaveBeenCalled();
 
     await userEvent.click(screen.getByRole("button", { name: "브랜드 코어 수정" }));
-    expect(screen.getByRole("textbox", { name: "한 줄 소개" })).toHaveValue("저장된 수정 초안");
+    expect(screen.getByRole("textbox", { name: "기업 개요" })).toHaveValue("저장된 수정 초안");
   });
 
   it("saves with the persisted concurrency token and returns to view mode", async () => {
@@ -673,7 +712,7 @@ describe("BrandCenterPage", () => {
     await renderPage("/brand-center?tab=core", { getCore, updateCoreDraft });
 
     await userEvent.click(await screen.findByRole("button", { name: "브랜드 코어 수정" }));
-    const oneLine = screen.getByRole("textbox", { name: "한 줄 소개" });
+    const oneLine = screen.getByRole("textbox", { name: "기업 개요" });
     await userEvent.clear(oneLine);
     await userEvent.type(oneLine, "저장된 최신 코어");
     await userEvent.click(screen.getByRole("button", { name: "저장" }));
@@ -746,13 +785,13 @@ describe("BrandCenterPage", () => {
     });
 
     await userEvent.click(await screen.findByRole("button", { name: "브랜드 코어 수정" }));
-    const oneLine = screen.getByRole("textbox", { name: "한 줄 소개" });
+    const oneLine = screen.getByRole("textbox", { name: "기업 개요" });
     await userEvent.clear(oneLine);
     await userEvent.type(oneLine, "충돌해도 남을 수정");
     await userEvent.click(screen.getByRole("button", { name: "저장" }));
 
     expect(await screen.findByRole("button", { name: "서버 버전 확인" })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "한 줄 소개" })).toHaveValue("충돌해도 남을 수정");
+    expect(screen.getByRole("textbox", { name: "기업 개요" })).toHaveValue("충돌해도 남을 수정");
     expect(screen.getByText("저장하지 않은 변경")).toBeInTheDocument();
   });
 
@@ -786,7 +825,7 @@ describe("BrandCenterPage", () => {
     await renderPage("/brand-center?tab=core", { getCore, updateCoreDraft });
 
     await userEvent.click(await screen.findByRole("button", { name: "브랜드 코어 수정" }));
-    const oneLine = screen.getByRole("textbox", { name: "한 줄 소개" });
+    const oneLine = screen.getByRole("textbox", { name: "기업 개요" });
     await userEvent.clear(oneLine);
     await userEvent.type(oneLine, "내가 계속 편집 중인 초안");
     await userEvent.click(screen.getByRole("button", { name: "저장" }));
@@ -794,7 +833,7 @@ describe("BrandCenterPage", () => {
 
     await waitFor(() => expect(getCore).toHaveBeenCalledTimes(2));
     expect(await screen.findByText("서버에서 갱신된 최신 초안")).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "한 줄 소개" }))
+    expect(screen.getByRole("textbox", { name: "기업 개요" }))
       .toHaveValue("내가 계속 편집 중인 초안");
     expect(screen.getByText("저장하지 않은 변경")).toBeInTheDocument();
   });
@@ -809,7 +848,7 @@ describe("BrandCenterPage", () => {
     });
 
     await userEvent.click(await screen.findByRole("button", { name: "브랜드 코어 수정" }));
-    const oneLine = screen.getByRole("textbox", { name: "한 줄 소개" });
+    const oneLine = screen.getByRole("textbox", { name: "기업 개요" });
     await userEvent.clear(oneLine);
     await userEvent.type(oneLine, "아직 저장하지 않은 현재 초안");
     await userEvent.click(screen.getByRole("button", { name: "버전 0 · 대체됨" }));
@@ -955,7 +994,7 @@ describe("BrandCenterPage", () => {
     await renderPage("/brand-center?tab=core", { getCore, updateCoreDraft });
 
     await userEvent.click(await screen.findByRole("button", { name: "브랜드 코어 수정" }));
-    const oneLine = screen.getByRole("textbox", { name: "한 줄 소개" });
+    const oneLine = screen.getByRole("textbox", { name: "기업 개요" });
     await userEvent.clear(oneLine);
     await userEvent.type(oneLine, "재시도에도 남는 수정");
     await userEvent.click(screen.getByRole("button", { name: "저장" }));
@@ -1000,7 +1039,7 @@ describe("BrandCenterPage", () => {
       })),
     });
     await userEvent.click(await screen.findByRole("button", { name: "브랜드 코어 수정" }));
-    const oneLine = screen.getByRole("textbox", { name: "한 줄 소개" });
+    const oneLine = screen.getByRole("textbox", { name: "기업 개요" });
     await userEvent.clear(oneLine);
     await userEvent.type(oneLine, "재분석 전에 버릴 수정");
 
@@ -1012,7 +1051,7 @@ describe("BrandCenterPage", () => {
     confirm.mockReturnValue(true);
     await userEvent.click(screen.getByRole("button", { name: "AI 재분석" }));
     expect(screen.getByTestId("location")).toHaveTextContent("?from=brand-center");
-    expect(screen.getByRole("textbox", { name: "한 줄 소개" })).toHaveValue("저장된 수정 초안");
+    expect(screen.getByRole("textbox", { name: "기업 개요" })).toHaveValue("저장된 수정 초안");
   });
 
   it("approves a dirty draft with the updated token returned by the preceding save", async () => {
@@ -1020,6 +1059,7 @@ describe("BrandCenterPage", () => {
       ...persistedDraft,
       core: {
         ...persistedDraft.core,
+        companyOverview: "저장 후 즉시 승인",
         summary: { ...persistedDraft.core.summary, oneLine: "저장 후 즉시 승인" },
       },
       updatedAt: "2026-07-29T03:00:00.000Z",
@@ -1041,7 +1081,7 @@ describe("BrandCenterPage", () => {
     });
 
     await userEvent.click(await screen.findByRole("button", { name: "브랜드 코어 수정" }));
-    const oneLine = screen.getByRole("textbox", { name: "한 줄 소개" });
+    const oneLine = screen.getByRole("textbox", { name: "기업 개요" });
     await userEvent.clear(oneLine);
     await userEvent.type(oneLine, "저장 후 즉시 승인");
     await userEvent.click(screen.getByRole("button", { name: "Brand Core 승인" }));
@@ -1088,7 +1128,7 @@ describe("BrandCenterPage", () => {
     });
 
     await userEvent.click(await screen.findByRole("button", { name: "브랜드 코어 수정" }));
-    await userEvent.type(screen.getByRole("textbox", { name: "한 줄 소개" }), " 실패");
+    await userEvent.type(screen.getByRole("textbox", { name: "기업 개요" }), " 실패");
     await userEvent.click(screen.getByRole("button", { name: "저장" }));
     expect(await screen.findByText("초안을 저장하지 못했습니다.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "취소" }));
@@ -1126,7 +1166,7 @@ describe("BrandCenterPage", () => {
     await renderPage("/brand-center?tab=core", { getSummary, getCore });
 
     await userEvent.click(await screen.findByRole("button", { name: "브랜드 코어 수정" }));
-    const oneLine = screen.getByRole("textbox", { name: "한 줄 소개" });
+    const oneLine = screen.getByRole("textbox", { name: "기업 개요" });
     await userEvent.clear(oneLine);
     await userEvent.type(oneLine, "초기 재시도에도 남는 수정");
     await userEvent.click(screen.getByRole("button", { name: "초기 정보 다시 시도" }));
