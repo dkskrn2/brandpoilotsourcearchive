@@ -176,6 +176,7 @@ describe("brand intelligence worker", () => {
     expect(script).toContain('"--disable", "apps"');
     expect(script).toContain('"--ignore-rules"');
     expect(script).toContain('"--output-schema"');
+    expect(script).not.toContain("minProperties");
     expect(script).toContain("brand_intelligence_forbidden_tool_event");
     expect(script).toContain("parseOwnedFactEnvelope(response, registeredSegments)");
     expect(script).toContain("brand_intelligence_offering_registry_mismatch");

@@ -31,7 +31,6 @@ const STAGE_NAMES = [
 const outputSchemaFile = path.join(runtimeDir, "stage-output.schema.json");
 await writeFile(outputSchemaFile, `${JSON.stringify({
   type: "object",
-  minProperties: 1,
   additionalProperties: true,
 })}\n`, "utf8");
 
