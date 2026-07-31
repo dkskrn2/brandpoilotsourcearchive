@@ -10,6 +10,7 @@ import { FeedbackDialog } from "../feedback/FeedbackDialog";
 import { FeedbackProvider } from "../feedback/FeedbackContext";
 import { api, DEMO_BRAND_ID } from "../../lib/apiClient";
 import { FocusTrap } from "../ui/FocusTrap";
+import { SupportRequestHistoryDialog } from "../support/SupportRequestHistoryDialog";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -25,11 +26,24 @@ function initialDesktopSidebarCollapsed() {
   }
 }
 
+function resolvePlanLabel(summary: unknown) {
+  if (!summary || typeof summary !== "object") return null;
+  const subscription = (summary as { subscription?: unknown }).subscription;
+  if (!subscription || typeof subscription !== "object") return null;
+  const planName = (subscription as { planName?: unknown }).planName;
+  return typeof planName === "string" && planName.trim()
+    ? planName.trim()
+    : null;
+}
+
 export function AppShell({ children }: AppShellProps) {
   const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(initialDesktopSidebarCollapsed);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [pendingFeedbackAfterMobile, setPendingFeedbackAfterMobile] = useState(false);
+  const [planLabel, setPlanLabel] = useState("FREE 플랜");
+  const [supportHistoryOpen, setSupportHistoryOpen] = useState(false);
+  const [pendingSupportHistoryAfterMobile, setPendingSupportHistoryAfterMobile] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const wasOpenRef = useRef(false);
   const location = useLocation();
@@ -41,6 +55,29 @@ export function AppShell({ children }: AppShellProps) {
     }
     setFeedbackOpen(true);
   }, [mobileMenuOpen]);
+  const openSupportHistory = useCallback(() => {
+    if (mobileMenuOpen) {
+      setPendingSupportHistoryAfterMobile(true);
+      setMobileMenuOpen(false);
+      return;
+    }
+    setSupportHistoryOpen(true);
+  }, [mobileMenuOpen]);
+
+  useEffect(() => {
+    let active = true;
+    api.getBillingSummary(DEMO_BRAND_ID)
+      .then((summary) => {
+        const nextPlanLabel = resolvePlanLabel(summary);
+        if (active && nextPlanLabel) setPlanLabel(nextPlanLabel);
+      })
+      .catch(() => {
+        // The profile keeps the FREE fallback when billing is unavailable.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!mobileMenuOpen) return;
@@ -68,6 +105,12 @@ export function AppShell({ children }: AppShellProps) {
   }, [mobileMenuOpen, pendingFeedbackAfterMobile]);
 
   useEffect(() => {
+    if (!pendingSupportHistoryAfterMobile || mobileMenuOpen) return;
+    setPendingSupportHistoryAfterMobile(false);
+    setSupportHistoryOpen(true);
+  }, [mobileMenuOpen, pendingSupportHistoryAfterMobile]);
+
+  useEffect(() => {
     setMobileMenuOpen(false);
   }, [location.pathname]);
 
@@ -92,6 +135,8 @@ export function AppShell({ children }: AppShellProps) {
               <Sidebar
                 collapsed={desktopSidebarCollapsed}
                 onToggleCollapsed={toggleDesktopSidebar}
+                planLabel={planLabel}
+                onOpenSupportHistory={openSupportHistory}
               />
               <main className="main">
                 <Topbar
@@ -116,6 +161,8 @@ export function AppShell({ children }: AppShellProps) {
                     variant="mobile"
                     onClose={() => setMobileMenuOpen(false)}
                     onNavigate={() => setMobileMenuOpen(false)}
+                    planLabel={planLabel}
+                    onOpenSupportHistory={openSupportHistory}
                   />
                 </FocusTrap>
               ) : null}
@@ -124,6 +171,12 @@ export function AppShell({ children }: AppShellProps) {
                   bookingUrl={import.meta.env.VITE_FEEDBACK_BOOKING_URL ?? ""}
                   onClose={() => setFeedbackOpen(false)}
                   onSubmit={async (input) => { await api.createSupportRequest(DEMO_BRAND_ID, input); }}
+                />
+              ) : null}
+              {supportHistoryOpen ? (
+                <SupportRequestHistoryDialog
+                  brandId={DEMO_BRAND_ID}
+                  onClose={() => setSupportHistoryOpen(false)}
                 />
               ) : null}
             </div>

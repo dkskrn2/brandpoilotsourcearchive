@@ -9,7 +9,6 @@ import { BrandRulesPanel } from "../components/brand-center/BrandRulesPanel";
 import { KnowledgeCategoryEditorPanel } from "../components/brand-center/KnowledgeCategoryEditorPanel";
 import { ProductServiceLibraryPanel } from "../components/brand-center/ProductServiceLibraryPanel";
 import { StyleReferenceImageBoard } from "../components/brand-center/StyleReferenceImageBoard";
-import { SupportRequestHistory } from "../components/support/SupportRequestHistory";
 import { brandCenterGateway } from "../features/brand-center/brandCenterGateway";
 import { brandIntelligenceGateway } from "../features/brand-intelligence/brandIntelligenceGateway";
 import type {
@@ -929,7 +928,6 @@ export function BrandCenterPage() {
       </div>
         </>
       ) : null}
-      {showConfirmedContent ? <SupportRequestHistory brandId={DEMO_BRAND_ID} /> : null}
     </section>
   );
 }

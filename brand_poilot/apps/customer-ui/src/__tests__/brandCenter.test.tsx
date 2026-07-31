@@ -428,8 +428,8 @@ describe("BrandCenterPage", () => {
 
     expect(await screen.findByRole("tablist", { name: "브랜드 센터 영역" })).toBeVisible();
     expect(screen.getByDisplayValue("브랜드 운영을 단순하게")).toBeDisabled();
-    expect(screen.getByRole("region", { name: "문의 내역" })).toBeVisible();
-    expect(supportApi.listSupportRequests).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("region", { name: "문의 내역" })).not.toBeInTheDocument();
+    expect(supportApi.listSupportRequests).not.toHaveBeenCalled();
   });
 
   it("treats an open workflow as reanalysis for a legacy approved brand", async () => {
@@ -498,14 +498,14 @@ describe("BrandCenterPage", () => {
     expect(screen.getByRole("tablist", { name: "브랜드 센터 영역" })).toBeVisible();
   });
 
-  it("mounts one shared support history below every confirmed tab panel", async () => {
+  it("does not mount support history below confirmed tab panels", async () => {
     const { supportApi } = await renderPage("/brand-center?tab=core");
 
-    expect(await screen.findByRole("region", { name: "문의 내역" })).toBeVisible();
-    expect(screen.getAllByRole("region", { name: "문의 내역" })).toHaveLength(1);
+    expect(await screen.findByRole("tablist", { name: "브랜드 센터 영역" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "문의 내역" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("tab", { name: "스타일" }));
-    expect(screen.getAllByRole("region", { name: "문의 내역" })).toHaveLength(1);
-    expect(supportApi.listSupportRequests).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("region", { name: "문의 내역" })).not.toBeInTheDocument();
+    expect(supportApi.listSupportRequests).not.toHaveBeenCalled();
   });
 
   it("shows the approved core with the final customer-facing tab order", async () => {

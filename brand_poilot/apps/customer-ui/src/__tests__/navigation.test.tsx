@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { router } from "../routes";
 import { Sidebar } from "../components/layout/Sidebar";
 import { Topbar } from "../components/layout/Topbar";
@@ -11,7 +11,7 @@ import { BrandStatusProvider } from "../lib/brandStatus";
 import { AiContentUsageProvider } from "../features/ai-content/AiContentUsageContext";
 import type { AiContentGateway } from "../features/ai-content/types";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
-import type { BrandUiStatus } from "../types";
+import type { BillingSummary, BrandUiStatus } from "../types";
 
 const completeStatus: BrandUiStatus = {
   brandId: "brand-1",
@@ -34,7 +34,127 @@ const completeStatus: BrandUiStatus = {
   }
 };
 
+const freeBillingSummary: BillingSummary = {
+  configured: true,
+  subscription: {
+    status: "none",
+    planName: null,
+    monthlyAmount: null,
+    currency: "KRW",
+    currentPeriodEnd: null,
+    nextBillingAt: null,
+    cancelAtPeriodEnd: false,
+    suspensionReason: null,
+  },
+  entitlement: {
+    active: false,
+    source: null,
+    expiresAt: null,
+  },
+  paymentMethod: null,
+  payments: [],
+};
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("AppShell navigation", () => {
+  it("shows the subscribed plan name in the account profile", async () => {
+    vi.spyOn(api, "getBillingSummary").mockResolvedValue({
+      configured: true,
+      subscription: {
+        status: "active",
+        planName: "팀 운영",
+        monthlyAmount: 49000,
+        currency: "KRW",
+        currentPeriodEnd: null,
+        nextBillingAt: null,
+        cancelAtPeriodEnd: false,
+        suspensionReason: null,
+      },
+      entitlement: {
+        active: true,
+        source: "subscription",
+        expiresAt: null,
+      },
+      paymentMethod: null,
+      payments: [],
+    });
+
+    render(
+      <MemoryRouter>
+        <AppShell><div>페이지 내용</div></AppShell>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("팀 운영")).toBeVisible();
+    expect(api.getBillingSummary).toHaveBeenCalledWith(DEMO_BRAND_ID);
+  });
+
+  it.each([
+    ["미구독 상태", async () => freeBillingSummary],
+    ["누락된 응답", async () => ({} as Awaited<ReturnType<typeof api.getBillingSummary>>)],
+    ["조회 실패", async () => { throw new Error("billing unavailable"); }],
+  ])("uses FREE 플랜 for %s", async (_caseName, response) => {
+    vi.spyOn(api, "getBillingSummary").mockImplementation(response);
+
+    render(
+      <MemoryRouter>
+        <AppShell><div>페이지 내용</div></AppShell>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(api.getBillingSummary).toHaveBeenCalledWith(DEMO_BRAND_ID));
+    expect(screen.getByText("FREE 플랜")).toBeVisible();
+  });
+
+  it("opens support history from the desktop account menu and restores focus on Escape", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getBillingSummary").mockRejectedValue(new Error("billing unavailable"));
+    vi.spyOn(api, "listSupportRequests").mockResolvedValue([]);
+
+    render(
+      <MemoryRouter>
+        <AppShell><div>페이지 내용</div></AppShell>
+      </MemoryRouter>,
+    );
+
+    const accountTrigger = screen.getByRole("button", { name: /계정 메뉴 열기/ });
+    await user.click(accountTrigger);
+    await user.click(screen.getByRole("menuitem", { name: "문의 내역" }));
+
+    expect(await screen.findByRole("dialog", { name: "문의 내역" })).toBeVisible();
+    expect(await screen.findByText("접수한 문의가 없습니다.")).toBeVisible();
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog", { name: "문의 내역" })).not.toBeInTheDocument();
+    expect(accountTrigger).toHaveFocus();
+  });
+
+  it("closes the mobile drawer before opening support history", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getBillingSummary").mockRejectedValue(new Error("billing unavailable"));
+    vi.spyOn(api, "listSupportRequests").mockResolvedValue([]);
+
+    render(
+      <MemoryRouter>
+        <AppShell><div>페이지 내용</div></AppShell>
+      </MemoryRouter>,
+    );
+
+    const mobileMenuTrigger = screen.getByRole("button", { name: "전체 메뉴 열기" });
+    await user.click(mobileMenuTrigger);
+    const mobileMenu = screen.getByRole("dialog", { name: "전체 메뉴" });
+    await user.click(within(mobileMenu).getByRole("button", { name: /계정 메뉴 열기/ }));
+    await user.click(within(mobileMenu).getByRole("menuitem", { name: "문의 내역" }));
+
+    expect(screen.queryByRole("dialog", { name: "전체 메뉴" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "문의 내역" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(mobileMenuTrigger).toHaveFocus());
+  });
+
   it("opens feedback from desktop and mobile sidebar actions", async () => {
     const { unmount } = render(
       <MemoryRouter>

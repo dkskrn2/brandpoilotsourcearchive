@@ -310,7 +310,7 @@ export function StyleReferenceImageBoard({
 
   return (
     <section className="panel style-reference-board">
-      <header className="panel-header style-reference-header">
+      <header className="panel-head style-reference-header">
         <div>
           <p className="brand-center-eyebrow">DESIGN REFERENCES</p>
           <h2>디자인 스타일</h2>

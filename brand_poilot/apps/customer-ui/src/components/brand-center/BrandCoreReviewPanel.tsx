@@ -67,7 +67,7 @@ export function BrandCoreReviewPanel({
   };
   return (
     <section className="brand-core-review panel">
-      <div className="panel-header">
+      <div className="panel-head">
         <div>
           <span className="brand-center-eyebrow">BRAND CORE V{version.version}</span>
           <h2>

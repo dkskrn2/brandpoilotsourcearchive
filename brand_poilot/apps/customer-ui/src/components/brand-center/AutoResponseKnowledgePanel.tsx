@@ -74,21 +74,24 @@ export function AutoResponseKnowledgePanel({
   ));
 
   return (
-    <section className="panel" aria-labelledby="auto-response-knowledge-title">
+    <section
+      className="panel auto-response-knowledge-panel"
+      aria-labelledby="auto-response-knowledge-title"
+    >
       <div className="panel-head">
         <div>
           <h2 id="auto-response-knowledge-title">AI 자동응답 지식</h2>
           <p>DM 자동응답이 사용하는 확정된 브랜드 코어, 제품·서비스, FAQ입니다.</p>
         </div>
       </div>
-      <div className="panel-body">
+      <div className="panel-body auto-response-knowledge-body">
         <section>
           <div className="section-heading-inline">
             <h3>브랜드 코어</h3>
             <Link to="?tab=core">브랜드 코어에서 수정</Link>
           </div>
           {core ? (
-            <dl className="brand-core-grid">
+            <dl className="brand-core-grid brand-core-grid--core">
               {coreRows.map((row) => (
                 <div key={row.label}>
                   <dt>{row.label}</dt>
@@ -117,7 +120,7 @@ export function AutoResponseKnowledgePanel({
             <Link to="?tab=faq">FAQ에서 수정</Link>
           </div>
           {faqs.length ? (
-            <dl className="brand-core-grid">
+            <dl className="brand-core-grid brand-core-grid--faq">
               {faqs.map((item) => (
                 <div key={item.id}>
                   <dt>{item.title}</dt>

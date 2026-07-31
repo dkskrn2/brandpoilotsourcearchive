@@ -7,10 +7,12 @@
   --bp-color-human-review: #c96454;
   --bp-color-canvas: #f7f4ed;
   --bp-color-paper: #fffdfa;
+  --bp-color-surface: #fffdfa;
   --bp-color-ink: #17221e;
   --bp-color-muted: #66736d;
   --bp-color-line: #dedfd8;
   --bp-color-line-strong: #c9ccc4;
+  --bp-shadow-md: 0 18px 42px rgb(15 23 42 / 18%);
   --bp-sidebar-width: 238px;
   --bp-sidebar-collapsed-width: 78px;
   --bp-topbar-height: 64px;

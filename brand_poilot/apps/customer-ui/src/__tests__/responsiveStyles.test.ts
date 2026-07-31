@@ -85,6 +85,8 @@ describe("responsive UI style contracts", () => {
     expect(tokens).toMatch(/--bp-color-sidebar:\s*#102822/);
     expect(tokens).toMatch(/--bp-color-primary:\s*#2f6b55/);
     expect(tokens).toMatch(/--bp-color-canvas:\s*#f7f4ed/);
+    expect(tokens).toMatch(/--bp-color-surface:\s*#fffdfa/);
+    expect(tokens).toMatch(/--bp-shadow-md:\s*0 18px 42px rgb\(15 23 42 \/ 18%\)/);
     expect(tokens).toMatch(/--bp-sidebar-width:\s*238px/);
     expect(tokens).toMatch(/--bp-sidebar-collapsed-width:\s*78px/);
     expect(tokens).toMatch(/--bp-topbar-height:\s*64px/);

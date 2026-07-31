@@ -36,32 +36,42 @@ describe("BrandLogo", () => {
 });
 
 describe("SidebarBrandProfile", () => {
-  it("opens an account menu with the brand center, plan, and logout actions", async () => {
+  it("shows the current plan and opens support history from the four-item account menu", async () => {
     const user = userEvent.setup();
     const onNavigate = vi.fn();
+    const onOpenSupportHistory = vi.fn();
     render(
       <MemoryRouter>
         <SidebarBrandProfile
           brandName="그로스라인"
           logoUrl="https://cdn.example.com/logo.png"
+          planLabel="팀 운영"
+          onOpenSupportHistory={onOpenSupportHistory}
           onNavigate={onNavigate}
         />
       </MemoryRouter>
     );
 
+    expect(screen.getByText("팀 운영")).toBeVisible();
     const trigger = screen.getByRole("button", { name: "그로스라인 계정 메뉴 열기" });
     await user.click(trigger);
 
     const menu = screen.getByRole("menu", { name: "계정 메뉴" });
     const items = within(menu).getAllByRole("menuitem");
-    expect(items).toHaveLength(3);
+    expect(items.map((item) => item.textContent)).toEqual([
+      "브랜드센터",
+      "플랜",
+      "문의 내역",
+      "로그아웃",
+    ]);
     expect(within(menu).getByRole("menuitem", { name: "브랜드센터" }))
       .toHaveAttribute("href", "/brand-center");
     expect(within(menu).getByRole("menuitem", { name: "플랜" }))
       .toHaveAttribute("href", "/billing");
     expect(within(menu).getByRole("menuitem", { name: "로그아웃" })).toBeEnabled();
 
-    await user.click(within(menu).getByRole("menuitem", { name: "브랜드센터" }));
+    await user.click(within(menu).getByRole("menuitem", { name: "문의 내역" }));
+    expect(onOpenSupportHistory).toHaveBeenCalledOnce();
     expect(onNavigate).toHaveBeenCalledOnce();
     expect(screen.queryByRole("menu", { name: "계정 메뉴" })).not.toBeInTheDocument();
   });

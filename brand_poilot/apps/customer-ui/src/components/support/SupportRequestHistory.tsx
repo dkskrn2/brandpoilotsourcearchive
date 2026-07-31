@@ -41,12 +41,14 @@ export interface SupportRequestHistoryProps {
   brandId: string;
   listRequests?: typeof api.listSupportRequests;
   refreshToken?: number;
+  embedded?: boolean;
 }
 
 export function SupportRequestHistory({
   brandId,
   listRequests = api.listSupportRequests,
   refreshToken,
+  embedded = false,
 }: SupportRequestHistoryProps) {
   const [requests, setRequests] = useState<SupportRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -106,6 +108,77 @@ export function SupportRequestHistory({
     };
   }, [load]);
 
+  const content = (
+    <>
+      {refreshWarning ? (
+        <p className="support-history-warning" role="status">
+          최신 문의 내역을 불러오지 못했습니다. 현재 목록을 계속 표시합니다.
+        </p>
+      ) : null}
+      {loading ? (
+        <ListSkeleton rows={3} columns={3} label="문의 내역을 불러오는 중입니다." />
+      ) : initialError ? (
+        <div className="support-history-state" role="alert">
+          <strong>문의 내역을 불러오지 못했습니다.</strong>
+          <span>다른 브랜드 기능은 계속 사용할 수 있습니다.</span>
+          <button className="button" type="button" onClick={() => void load()}>
+            다시 시도
+          </button>
+        </div>
+      ) : requests.length === 0 ? (
+        <p className="support-history-state">접수한 문의가 없습니다.</p>
+      ) : (
+        <div className="support-history-list">
+          {requests.map((request) => {
+            const expanded = request.id === expandedRequestId;
+            const detailId = `support-request-${request.id}`;
+            return (
+              <article className="support-history-item" key={request.id}>
+                <button
+                  className="support-history-summary"
+                  type="button"
+                  aria-expanded={expanded}
+                  aria-controls={detailId}
+                  onClick={() => setExpandedRequestId(expanded ? null : request.id)}
+                >
+                  <span>
+                    <strong>{categoryLabels[request.category]}</strong>
+                    <span>{request.title}</span>
+                    <span className="muted small">접수일 {formatDateTime(request.createdAt)}</span>
+                  </span>
+                  <Badge variant={statusVariant(request.status)}>{statusLabels[request.status]}</Badge>
+                </button>
+                {expanded ? (
+                  <div className="support-history-detail" id={detailId}>
+                    <div>
+                      <strong>문의 내용</strong>
+                      <p>{request.message}</p>
+                    </div>
+                    <div>
+                      <strong>운영자 답변</strong>
+                      <p>{request.responseMessage ?? "아직 등록된 답변이 없습니다."}</p>
+                      {request.respondedAt ? (
+                        <p className="muted small">답변일 {formatDateTime(request.respondedAt)}</p>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="support-request-history support-request-history--embedded">
+        {content}
+      </div>
+    );
+  }
+
   return (
     <section className="support-request-history panel" aria-label="문의 내역">
       <header className="panel-head">
@@ -114,66 +187,7 @@ export function SupportRequestHistory({
           <h2>문의 내역</h2>
         </div>
       </header>
-      <div className="panel-body">
-        {refreshWarning ? (
-          <p className="support-history-warning" role="status">
-            최신 문의 내역을 불러오지 못했습니다. 현재 목록을 계속 표시합니다.
-          </p>
-        ) : null}
-        {loading ? (
-          <ListSkeleton rows={3} columns={3} label="문의 내역을 불러오는 중입니다." />
-        ) : initialError ? (
-          <div className="support-history-state" role="alert">
-            <strong>문의 내역을 불러오지 못했습니다.</strong>
-            <span>다른 브랜드 기능은 계속 사용할 수 있습니다.</span>
-            <button className="button" type="button" onClick={() => void load()}>
-              다시 시도
-            </button>
-          </div>
-        ) : requests.length === 0 ? (
-          <p className="support-history-state">접수한 문의가 없습니다.</p>
-        ) : (
-          <div className="support-history-list">
-            {requests.map((request) => {
-              const expanded = request.id === expandedRequestId;
-              const detailId = `support-request-${request.id}`;
-              return (
-                <article className="support-history-item" key={request.id}>
-                  <button
-                    className="support-history-summary"
-                    type="button"
-                    aria-expanded={expanded}
-                    aria-controls={detailId}
-                    onClick={() => setExpandedRequestId(expanded ? null : request.id)}
-                  >
-                    <span>
-                      <strong>{categoryLabels[request.category]}</strong>
-                      <span>{request.title}</span>
-                      <span className="muted small">접수일 {formatDateTime(request.createdAt)}</span>
-                    </span>
-                    <Badge variant={statusVariant(request.status)}>{statusLabels[request.status]}</Badge>
-                  </button>
-                  {expanded ? (
-                    <div className="support-history-detail" id={detailId}>
-                      <div>
-                        <strong>문의 내용</strong>
-                        <p>{request.message}</p>
-                      </div>
-                      <div>
-                        <strong>운영자 답변</strong>
-                        <p>{request.responseMessage ?? "아직 등록된 답변이 없습니다."}</p>
-                        {request.respondedAt ? (
-                          <p className="muted small">답변일 {formatDateTime(request.respondedAt)}</p>
-                        ) : null}
-                      </div>
-                    </div>
-                  ) : null}
-                </article>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      <div className="panel-body">{content}</div>
     </section>
   );
 }

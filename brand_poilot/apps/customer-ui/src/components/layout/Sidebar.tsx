@@ -40,12 +40,16 @@ export function Sidebar({
   onToggleCollapsed,
   onClose,
   onNavigate,
+  planLabel = "FREE 플랜",
+  onOpenSupportHistory,
 }: {
   variant?: "desktop" | "mobile";
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
   onClose?: () => void;
   onNavigate?: () => void;
+  planLabel?: string;
+  onOpenSupportHistory?: () => void;
 } = {}) {
   const { status } = useBrandStatus();
   const help = useHelp();
@@ -154,6 +158,8 @@ export function Sidebar({
       <SidebarBrandProfile
         brandName={status?.brandName?.trim() || "회사명 미설정"}
         logoUrl={status?.logoUrl ?? null}
+        planLabel={planLabel}
+        onOpenSupportHistory={onOpenSupportHistory}
         onNavigate={onNavigate}
       />
     </aside>

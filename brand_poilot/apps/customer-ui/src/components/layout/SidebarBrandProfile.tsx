@@ -1,4 +1,4 @@
-import { Building2, ChevronDown, CreditCard, LogOut } from "lucide-react";
+import { Building2, ChevronDown, CreditCard, History, LogOut } from "lucide-react";
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "../../lib/auth";
@@ -7,10 +7,18 @@ import { BrandLogo } from "../brand/BrandLogo";
 interface SidebarBrandProfileProps {
   brandName: string;
   logoUrl: string | null;
+  planLabel?: string;
+  onOpenSupportHistory?: () => void;
   onNavigate?: () => void;
 }
 
-export function SidebarBrandProfile({ brandName, logoUrl, onNavigate }: SidebarBrandProfileProps) {
+export function SidebarBrandProfile({
+  brandName,
+  logoUrl,
+  planLabel = "FREE 플랜",
+  onOpenSupportHistory,
+  onNavigate,
+}: SidebarBrandProfileProps) {
   const { logout } = useAuth();
   const location = useLocation();
   const menuId = useId();
@@ -54,6 +62,13 @@ export function SidebarBrandProfile({ brandName, logoUrl, onNavigate }: SidebarB
     onNavigate?.();
   }
 
+  function handleOpenSupportHistory() {
+    setOpen(false);
+    triggerRef.current?.focus();
+    onNavigate?.();
+    onOpenSupportHistory?.();
+  }
+
   async function handleLogout() {
     setLoggingOut(true);
     setOpen(false);
@@ -80,7 +95,7 @@ export function SidebarBrandProfile({ brandName, logoUrl, onNavigate }: SidebarB
         <BrandLogo brandName={brandName} logoUrl={logoUrl} className="sidebar-brand-logo" />
         <span className="sidebar-brand-copy">
           <strong>{brandName}</strong>
-          <small>계정 메뉴</small>
+          <small>{planLabel}</small>
         </span>
         <ChevronDown size={17} aria-hidden="true" />
       </button>
@@ -99,6 +114,10 @@ export function SidebarBrandProfile({ brandName, logoUrl, onNavigate }: SidebarB
             <CreditCard size={16} aria-hidden="true" />
             플랜
           </NavLink>
+          <button role="menuitem" type="button" onClick={handleOpenSupportHistory}>
+            <History size={16} aria-hidden="true" />
+            문의 내역
+          </button>
           <button role="menuitem" type="button" onClick={handleLogout} disabled={loggingOut}>
             <LogOut size={16} aria-hidden="true" />
             {loggingOut ? "로그아웃 중" : "로그아웃"}
