@@ -13,5 +13,6 @@ export function isBrandSetupPath(pathname: string) {
   const path = pathname.split(/[?#]/, 1)[0];
   return path === "/brand-center"
     || path === "/onboarding/brand-intelligence"
+    || path === "/billing"
     || path === "/support";
 }
