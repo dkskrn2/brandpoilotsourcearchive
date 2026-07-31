@@ -53,6 +53,7 @@ function renderGate(status: BrandUiStatus, initialPath = "/sources") {
             <Route path="/onboarding/brand-intelligence" element={<div>브랜드 분석 화면</div>} />
             <Route path="/sources" element={<div>소스 화면</div>} />
             <Route path="/brand-settings" element={<div>브랜드 설정 화면</div>} />
+            <Route path="/billing" element={<div>결제 및 구독 화면</div>} />
             <Route path="/support" element={<div>고객센터 화면</div>} />
             <Route path="/" element={<div>대시보드 화면</div>} />
             <Route path="/ai-content" element={<div>AI 콘텐츠 화면</div>} />
@@ -99,7 +100,13 @@ describe("brand setup gating", () => {
     expect(screen.getByText("고객센터 화면")).toBeInTheDocument();
   });
 
-  it("disables sidebar links except brand analysis and support before analysis is confirmed", () => {
+  it("allows billing before brand analysis is confirmed", () => {
+    renderGate(incompleteStatus, "/billing");
+
+    expect(screen.getByText("결제 및 구독 화면")).toBeInTheDocument();
+  });
+
+  it("disables sidebar links except brand analysis, billing, and support before analysis is confirmed", () => {
     render(
       <MemoryRouter>
         <BrandStatusProvider initialStatus={incompleteStatus}>
@@ -109,6 +116,7 @@ describe("brand setup gating", () => {
     );
 
     expect(screen.getByRole("link", { name: /브랜드 분석/ })).toHaveAttribute("href", "/onboarding/brand-intelligence");
+    expect(screen.getByRole("link", { name: /결제 및 구독/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /고객센터/ })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "브랜드 설정" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /게시 관리/ })).not.toBeInTheDocument();
