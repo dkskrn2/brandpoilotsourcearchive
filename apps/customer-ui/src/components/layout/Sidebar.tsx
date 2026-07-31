@@ -28,8 +28,6 @@ import { SidebarBrandProfile } from "./SidebarBrandProfile";
 import { useHelp } from "../help/HelpContext";
 import { useFeedback } from "../feedback/FeedbackContext";
 
-const pricingUrl = "https://www.danbammsg.co.kr/product/pricing";
-
 interface NavGroup {
   id: string;
   label: string;
@@ -62,7 +60,7 @@ const navGroups: NavGroup[] = [
     label: "설정·지원",
     items: [
       { label: "브랜드 설정", path: "/brand-settings", icon: Settings2 },
-      { label: "결제 및 구독", path: pricingUrl, icon: CreditCard },
+      { label: "결제 및 구독", path: "/billing", icon: CreditCard },
       { label: "고객센터", path: "/support", icon: Headphones }
     ]
   },
