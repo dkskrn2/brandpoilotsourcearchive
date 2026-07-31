@@ -79,7 +79,7 @@ export function createBrandIntelligenceGateway(
         {
           method: "POST",
           body: JSON.stringify({
-            companyName: input.companyName,
+            ...(input.companyName ? { companyName: input.companyName } : {}),
             ownedUrl: input.ownedUrl,
             uploadIds: input.uploadIds ?? [],
             uploads,

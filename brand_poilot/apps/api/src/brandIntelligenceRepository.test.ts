@@ -2,10 +2,7 @@ import { PGlite } from "@electric-sql/pglite";
 import type { Pool } from "pg";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createBrandIntelligenceRepository } from "./brandIntelligenceRepository.js";
-import type {
-  BrandIntelligenceResultV1,
-  BrandIntelligenceResultV2,
-} from "./brandIntelligenceContracts.js";
+import type { BrandIntelligenceResultV2 } from "./brandIntelligenceContracts.js";
 import { hashSourceUrl } from "./sourceUrl.js";
 
 type QueryResult = { rowCount: number; rows: Record<string, unknown>[] };
@@ -24,31 +21,16 @@ function pglitePool(database: PGlite): Pool {
 const workspaceId = "10000000-0000-4000-8000-000000000001";
 const brandId = "20000000-0000-4000-8000-000000000001";
 
-function result(target = "초기 고객"): BrandIntelligenceResultV1 {
-  return {
-    contractVersion: "brand-intelligence-result.v1",
-    companyOverview: "회사 개요",
-    businessDescription: "사업 소개",
-    primaryCategory: { code: "marketing", name: "마케팅" },
-    subcategories: [{ code: null, name: "콘텐츠 자동화" }],
-    primaryTarget: target,
-    differentiators: "차별점",
-    coreAppeal: "소구점",
-    competitors: [{ name: "대안", description: "대안 설명", sourceUrls: ["https://example.com/alternative"] }],
-    evidence: [{ field: "companyOverview", claim: "회사 개요", sourceId: "owned-url", sourceUrl: "https://example.com" }],
-    sourceGaps: [],
-  };
-}
-
-function resultV2(): BrandIntelligenceResultV2 {
+function resultV2(target = "중소 브랜드"): BrandIntelligenceResultV2 {
   return {
     contractVersion: "brand-intelligence-result.v2",
+    companyNameSuggestion: { name: "테스트 회사", sourceFactIds: ["fact-1"] },
     oneLineDefinition: "브랜드 운영 파트너",
     companyOverview: "브랜드 운영을 돕는 회사입니다.",
     businessDescription: "콘텐츠 제작과 운영을 연결합니다.",
     primaryCategory: { code: "marketing", name: "마케팅" },
     subcategories: [],
-    primaryTarget: "중소 브랜드",
+    primaryTarget: target,
     secondaryTargets: [],
     customerNeeds: ["반복 운영 절감"],
     valueProposition: "브랜드 운영 시간을 줄입니다.",
@@ -63,6 +45,12 @@ function resultV2(): BrandIntelligenceResultV2 {
       benefit: "운영 시간 절감",
       priceText: null,
       purchaseUrl: "https://example.com/service",
+      sourceFactIds: ["fact-1"],
+    }],
+    faqSuggestions: [{
+      question: "가격은 얼마인가요?",
+      answer: "상담 후 안내합니다.",
+      category: "price",
       sourceFactIds: ["fact-1"],
     }],
     keywords: ["브랜드"],
@@ -81,6 +69,18 @@ function resultV2(): BrandIntelligenceResultV2 {
   };
 }
 
+function evidenceV2() {
+  return [{
+    sourceId: "owned-page-1",
+    sourceType: "owned_url" as const,
+    title: "회사 소개",
+    sourceUrl: "https://example.com/about",
+    textBlocks: [{ heading: null, text: "콘텐츠 제작과 운영을 연결합니다." }],
+    tables: [],
+    contentHash: "a".repeat(64),
+  }];
+}
+
 async function prepareAnalysis(
   repository: ReturnType<typeof createBrandIntelligenceRepository>,
   input: { ownedUrl: string | null; idempotencyKey: string },
@@ -97,8 +97,9 @@ async function prepareAnalysis(
     analysisId: requested.id,
     workerId: "worker-1",
     leaseToken: claim!.leaseToken,
-    evidence: [],
-    result: result(),
+    evidence: evidenceV2(),
+    result: resultV2("초기 고객"),
+    registry: { ownedFactIds: ["fact-1"], externalSources: [] },
   });
   return requested;
 }
@@ -153,7 +154,11 @@ describe("brand intelligence repository", () => {
       );
       create unique index one_active on brand_analysis_runs(brand_id) where is_active;
       create unique index one_open on brand_analysis_runs(brand_id)
-        where status in ('queued', 'extracting', 'analyzing', 'review_ready');
+        where status in (
+          'queued', 'extracting', 'analyzing', 'accepting_uploads',
+          'waiting_for_resource', 'running', 'finalizing', 'review_ready',
+          'cancel_requested', 'purging'
+        );
       create table brand_analysis_uploads (
         id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null,
         analysis_id uuid, file_name text not null, mime_type text not null, byte_size bigint not null,
@@ -201,6 +206,19 @@ describe("brand intelligence repository", () => {
         target_customer text, benefit text, price_text text, purchase_url text,
         sort_order integer not null
       );
+      create table product_services (
+        id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null,
+        kind text not null, display_name text not null, status text not null default 'active',
+        active_version_id uuid, created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+      );
+      create table product_service_versions (
+        id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null,
+        product_service_id uuid not null, version integer not null, status text not null,
+        profile_json jsonb not null, evidence_json jsonb not null default '[]'::jsonb,
+        created_by_user_id uuid, approved_by_user_id uuid, approved_at timestamptz,
+        created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+        unique (workspace_id, brand_id, product_service_id, version)
+      );
       create table brand_core_versions (
         id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null,
         source_analysis_id uuid, version integer not null, status text not null,
@@ -232,10 +250,14 @@ describe("brand intelligence repository", () => {
       );
       create table knowledge_entries (
         id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null,
-        normalized_question text not null, entry_type text not null, title text, content text,
+        normalized_question text not null, entry_type text not null, question text, answer text,
+        title text, content text, category text,
         aliases text[] not null default '{}', keywords text[] not null default '{}', structured_data jsonb not null default '{}'::jsonb,
         direct_reply_enabled boolean not null default false, enabled boolean not null default true,
-        last_import_id uuid not null, updated_at timestamptz not null default now(),
+        last_import_id uuid, origin text not null default 'import',
+        provenance_json jsonb not null default '{}'::jsonb, status text not null default 'active',
+        created_by_user_id uuid, approved_by_user_id uuid, approved_at timestamptz,
+        updated_at timestamptz not null default now(),
         unique (brand_id, normalized_question)
       );
       create table wiki_build_requests (
@@ -320,6 +342,120 @@ describe("brand intelligence repository", () => {
       offering_type: "service",
       name: "브랜드 운영",
       sort_order: 0,
+    }]);
+    const products = await database.query(
+      `select item.kind, item.display_name, version.status
+         from product_services item
+         join product_service_versions version on version.id = item.active_version_id
+        where item.brand_id = $1`,
+      [brandId],
+    );
+    expect(products.rows).toEqual([{
+      kind: "service",
+      display_name: "브랜드 운영",
+      status: "approved",
+    }]);
+    const faq = await database.query(
+      `select question, answer, category, status, enabled
+         from knowledge_entries
+        where brand_id = $1 and entry_type = 'faq'`,
+      [brandId],
+    );
+    expect(faq.rows).toEqual([{
+      question: "가격은 얼마인가요?",
+      answer: "상담 후 안내합니다.",
+      category: "price",
+      status: "draft",
+      enabled: false,
+    }]);
+  });
+
+  it("preserves user-edited product and FAQ rows when the same suggestions are confirmed again", async () => {
+    await database.query(
+      `insert into product_services (id, workspace_id, brand_id, kind, display_name)
+       values ('30000000-0000-4000-8000-000000000001', $1, $2, 'service', '브랜드 운영')`,
+      [workspaceId, brandId],
+    );
+    await database.query(
+      `insert into product_service_versions (
+         id, workspace_id, brand_id, product_service_id, version, status, profile_json, approved_at
+       ) values (
+         '40000000-0000-4000-8000-000000000001', $1, $2,
+         '30000000-0000-4000-8000-000000000001', 1, 'approved',
+         '{"contractVersion":"product-service.v1","name":"브랜드 운영","kind":"service","description":"사용자가 수정한 설명","features":[],"benefits":[],"cautions":[],"audiences":[],"appealsByTarget":{},"evergreenPurchaseInfo":"","sourceUrls":[]}'::jsonb,
+         now()
+       )`,
+      [workspaceId, brandId],
+    );
+    await database.query(
+      `update product_services
+          set active_version_id = '40000000-0000-4000-8000-000000000001'
+        where id = '30000000-0000-4000-8000-000000000001'`,
+    );
+    await database.query(
+      `insert into knowledge_entries (
+         workspace_id, brand_id, normalized_question, entry_type, question, answer,
+         title, content, category, status, enabled, origin
+       ) values ($1, $2, '가격은 얼마인가요?', 'faq', '가격은 얼마인가요?',
+         '사용자가 수정한 답변', '가격은 얼마인가요?', '사용자가 수정한 답변',
+         'price', 'active', true, 'manual')`,
+      [workspaceId, brandId],
+    );
+
+    const repository = createBrandIntelligenceRepository(pglitePool(database));
+    const requested = await repository.requestBrandAnalysis({
+      workspaceId,
+      brandId,
+      ownedUrl: "https://example.com",
+      uploadIds: [],
+      idempotencyKey: "preserve-user-edits",
+    });
+    const claim = await repository.claimBrandAnalysis({
+      workerId: "worker-preserve",
+      leaseSeconds: 60,
+      supportedPipelineVersions: [2],
+    });
+    await repository.completeBrandAnalysis({
+      analysisId: requested.id,
+      workerId: "worker-preserve",
+      leaseToken: claim!.leaseToken,
+      evidence: [{
+        sourceId: "owned-page-1",
+        sourceType: "owned_url",
+        title: "회사 소개",
+        sourceUrl: "https://example.com/about",
+        textBlocks: [{ heading: null, text: "콘텐츠 제작과 운영을 연결합니다." }],
+        tables: [],
+        contentHash: "a".repeat(64),
+      }],
+      result: resultV2(),
+      registry: { ownedFactIds: ["fact-1"], externalSources: [] },
+    });
+    await repository.confirmBrandAnalysis({
+      workspaceId,
+      brandId,
+      analysisId: requested.id,
+      companyName: "테스트 회사",
+    });
+
+    const products = await database.query(
+      "select display_name from product_services where brand_id = $1",
+      [brandId],
+    );
+    expect(products.rows).toHaveLength(1);
+    const productVersion = await database.query(
+      `select profile_json->>'description' description
+         from product_service_versions
+        where product_service_id = '30000000-0000-4000-8000-000000000001'`,
+    );
+    expect(productVersion.rows[0]).toEqual({ description: "사용자가 수정한 설명" });
+    const faq = await database.query(
+      "select answer, status, enabled from knowledge_entries where entry_type = 'faq'",
+    );
+    expect(faq.rows).toEqual([{
+      answer: "사용자가 수정한 답변",
+      status: "active",
+      enabled: true,
     }]);
   });
 
@@ -555,11 +691,12 @@ describe("brand intelligence repository", () => {
       analysisId: requested.id,
       workerId: "worker-1",
       leaseToken: claim!.leaseToken,
-      evidence: [],
-      result: result(),
+      evidence: evidenceV2(),
+      result: resultV2("초기 고객"),
+      registry: { ownedFactIds: ["fact-1"], externalSources: [] },
     });
     const edited = await repository.updateBrandAnalysisDraft({
-      workspaceId, brandId, analysisId: requested.id, editedResult: result("수정한 고객"),
+      workspaceId, brandId, analysisId: requested.id, editedResult: resultV2("수정한 고객"),
     });
     expect(edited.effectiveResult?.primaryTarget).toBe("수정한 고객");
 
@@ -568,7 +705,11 @@ describe("brand intelligence repository", () => {
     expect(confirmed.isActive).toBe(true);
 
     const profile = await database.query("select primary_customer, description, active_brand_analysis_id from brand_profiles where brand_id = $1", [brandId]);
-    expect(profile.rows[0]).toMatchObject({ primary_customer: "수정한 고객", description: "사업 소개", active_brand_analysis_id: requested.id });
+    expect(profile.rows[0]).toMatchObject({
+      primary_customer: "수정한 고객",
+      description: "콘텐츠 제작과 운영을 연결합니다.",
+      active_brand_analysis_id: requested.id,
+    });
     const core = await database.query(
       "select status, core_json from brand_core_versions where brand_id = $1",
       [brandId],
@@ -611,12 +752,16 @@ describe("brand intelligence repository", () => {
     const open = await database.query(
       `select id from brand_analysis_runs
         where brand_id = $1
-          and status in ('queued', 'extracting', 'analyzing', 'review_ready')`,
+          and status in (
+            'queued', 'extracting', 'analyzing', 'accepting_uploads',
+            'waiting_for_resource', 'running', 'finalizing', 'review_ready',
+            'cancel_requested', 'purging'
+          )`,
       [brandId],
     );
     expect(open.rows).toEqual([{ id: first.id }]);
     await expect(repository.getOpenBrandAnalysis({ workspaceId, brandId }))
-      .resolves.toMatchObject({ id: first.id, status: "queued" });
+      .resolves.toMatchObject({ id: first.id, status: "waiting_for_resource" });
   });
 
   it("keeps the confirmed edited result active when a later analysis completes", async () => {
@@ -629,7 +774,7 @@ describe("brand intelligence repository", () => {
       workspaceId,
       brandId,
       analysisId: first.id,
-      editedResult: result("사용자 확정 고객"),
+      editedResult: resultV2("사용자 확정 고객"),
     });
     await repository.confirmBrandAnalysis({ workspaceId, brandId, analysisId: first.id });
 
@@ -645,8 +790,9 @@ describe("brand intelligence repository", () => {
       analysisId: second.id,
       workerId: "worker-2",
       leaseToken: claim!.leaseToken,
-      evidence: [],
-      result: result("재분석 제안 고객"),
+      evidence: evidenceV2(),
+      result: resultV2("재분석 제안 고객"),
+      registry: { ownedFactIds: ["fact-1"], externalSources: [] },
     });
 
     const current = await repository.getCurrentBrandIntelligence({ workspaceId, brandId });
@@ -703,7 +849,7 @@ describe("brand intelligence repository", () => {
       workspaceId, brandId, ownedUrl: "https://example.com", uploadIds: [], idempotencyKey: "analysis-1",
     });
     await expect(repository.updateBrandAnalysisDraft({
-      workspaceId, brandId, analysisId: requested.id, editedResult: result(),
+      workspaceId, brandId, analysisId: requested.id, editedResult: resultV2(),
     })).rejects.toThrow("brand_analysis_not_review_ready");
     await expect(repository.getBrandAnalysis({ workspaceId, brandId: "20000000-0000-4000-8000-000000000002", analysisId: requested.id }))
       .resolves.toBeNull();

@@ -42,6 +42,31 @@ const result: BrandIntelligenceResult = {
   sourceGaps: ["가격 정보 부족"],
 };
 
+const suggestedResult: BrandIntelligenceResult = {
+  contractVersion: "brand-intelligence-result.v2",
+  companyNameSuggestion: { name: "분석 제안 회사", sourceFactIds: ["fact-company"] },
+  oneLineDefinition: "운영 파트너",
+  companyOverview: "기존 기업 개요",
+  businessDescription: "기존 사업 소개",
+  primaryCategory: { code: "software", name: "소프트웨어" },
+  subcategories: [{ code: "brand-ops", name: "브랜드 운영" }],
+  primaryTarget: "마케팅 팀",
+  secondaryTargets: [],
+  customerNeeds: [],
+  valueProposition: "일관된 운영",
+  differentiators: ["승인 기반 운영"],
+  coreAppeal: "일관된 콘텐츠",
+  supportingAppeals: [],
+  offerings: [],
+  faqSuggestions: [],
+  keywords: [],
+  observedTone: null,
+  competitors: [],
+  marketContext: [],
+  evidence: [],
+  sourceGaps: [],
+};
+
 function analysis(status: BrandAnalysis["status"]): BrandAnalysis {
   const hasResult = status === "review_ready" || status === "confirmed";
   return {
@@ -242,8 +267,8 @@ describe("live Brand Center onboarding", () => {
       "/onboarding/brand-intelligence?from=brand-center&analysisId=stale-analysis",
     );
 
-    expect(await screen.findByRole("textbox", { name: "회사명" })).toHaveValue("Growthline");
-    expect(screen.getByRole("textbox", { name: "브랜드 웹사이트 URL" }))
+    expect(screen.queryByRole("textbox", { name: "회사명" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("textbox", { name: "브랜드 웹사이트 URL" }))
       .toHaveValue("https://brand.example");
     expect(getAnalysis).not.toHaveBeenCalled();
     expect(localStorage.getItem(persistenceKey)).toBeNull();
@@ -355,10 +380,6 @@ describe("live Brand Center onboarding", () => {
     );
 
     await user.type(
-      await screen.findByRole("textbox", { name: "회사명" }),
-      "첫 번째 회사",
-    );
-    await user.type(
       await screen.findByRole("textbox", { name: "브랜드 웹사이트 URL" }),
       "https://first-brand.example",
     );
@@ -416,10 +437,7 @@ describe("live Brand Center onboarding", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderLive(api, "/onboarding/brand-intelligence");
 
-    await user.type(
-      await screen.findByRole("textbox", { name: "회사명" }),
-      "테스트 회사",
-    );
+    expect(screen.queryByRole("textbox", { name: "회사명" })).not.toBeInTheDocument();
     await user.type(
       await screen.findByRole("textbox", { name: "브랜드 웹사이트 URL" }),
       "https://brand.example",
@@ -429,7 +447,6 @@ describe("live Brand Center onboarding", () => {
     await user.click(screen.getByRole("button", { name: "AI 분석 시작" }));
 
     expect(api.requestAnalysis).toHaveBeenCalledWith("brand-1", {
-      companyName: "테스트 회사",
       ownedUrl: "https://brand.example",
       files: [file],
       idempotencyKey: expect.any(String),
@@ -734,10 +751,25 @@ describe("live Brand Center onboarding", () => {
     await user.click(screen.getByRole("button", { name: "입력 다시하기" }));
 
     expect(cancel).toHaveBeenCalledWith("brand-1", "analysis-1");
-    expect(await screen.findByRole("textbox", { name: "회사명" })).toHaveValue("");
+    expect(screen.queryByRole("textbox", { name: "회사명" })).not.toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "브랜드 웹사이트 URL" })).toHaveValue("");
     expect(localStorage.getItem(persistenceKey)).toBeNull();
     expect(screen.getByTestId("location")).not.toHaveTextContent("analysisId");
+  });
+
+  it("uses the analyzed company suggestion only in the review step", async () => {
+    renderLive(gateway({
+      getAnalysis: vi.fn().mockResolvedValue({
+        ...analysis("review_ready"),
+        input: { ownedUrl: "https://brand.example", uploadIds: [] },
+        result: suggestedResult,
+        effectiveResult: suggestedResult,
+      }),
+    }));
+    await flushEffects();
+
+    expect(await screen.findByRole("textbox", { name: "회사명" }))
+      .toHaveValue("분석 제안 회사");
   });
 
   it("keeps the resume pointer while review is ready", async () => {

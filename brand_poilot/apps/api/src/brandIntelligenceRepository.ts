@@ -390,13 +390,11 @@ export function createBrandIntelligenceRepository(
               uploadIds: selectedUploadIds,
             }),
             input.idempotencyKey,
-            input.companyName ? 2 : 1,
+            2,
             declaredUploads.length
               ? "accepting_uploads"
-              : input.companyName ? "waiting_for_resource" : "queued",
-            input.companyName
-              ? "brand-intelligence-result.v2"
-              : "brand-intelligence-result.v1",
+              : "waiting_for_resource",
+            "brand-intelligence-result.v2",
           ],
         );
         if (!inserted.rowCount) {
@@ -1046,6 +1044,96 @@ export function createBrandIntelligenceRepository(
               offering.priceText, offering.purchaseUrl, sortOrder,
             ],
           );
+        }
+        for (const offering of common.offerings.slice(0, 5)) {
+          const existingProduct = await client.query(
+            `select id from product_services
+              where workspace_id = $1 and brand_id = $2 and kind = $3
+                and lower(regexp_replace(trim(display_name), '[[:space:]]+', ' ', 'g'))
+                  = lower(regexp_replace(trim($4), '[[:space:]]+', ' ', 'g'))
+              limit 1 for update`,
+            [input.workspaceId, input.brandId, offering.kind, offering.name],
+          );
+          if (existingProduct.rowCount) continue;
+          const product = await client.query(
+            `insert into product_services (workspace_id, brand_id, kind, display_name)
+             values ($1, $2, $3, $4)
+             returning id`,
+            [input.workspaceId, input.brandId, offering.kind, offering.name],
+          );
+          const profile = {
+            contractVersion: "product-service.v1",
+            name: offering.name,
+            kind: offering.kind,
+            description: offering.description ?? "",
+            features: [],
+            benefits: offering.benefit ? [offering.benefit] : [],
+            cautions: [],
+            audiences: offering.target ? [{ name: offering.target }] : [],
+            appealsByTarget: {},
+            evergreenPurchaseInfo: offering.priceText ?? "",
+            sourceUrls: offering.purchaseUrl ? [offering.purchaseUrl] : [],
+          };
+          const approvedVersion = await client.query(
+            `insert into product_service_versions (
+               workspace_id, brand_id, product_service_id, version, status,
+               profile_json, evidence_json, created_by_user_id,
+               approved_by_user_id, approved_at
+             ) values (
+               $1, $2, $3, 1, 'approved', $4::jsonb, $5::jsonb, $6, $6, now()
+             )
+             returning id`,
+            [
+              input.workspaceId,
+              input.brandId,
+              product.rows[0]!.id,
+              JSON.stringify(profile),
+              JSON.stringify(offering.sourceFactIds.map((sourceFactId) => ({ sourceFactId }))),
+              input.actorUserId ?? null,
+            ],
+          );
+          await client.query(
+            "update product_services set active_version_id = $2 where id = $1",
+            [product.rows[0]!.id, approvedVersion.rows[0]!.id],
+          );
+        }
+        if (effective.contractVersion === "brand-intelligence-result.v2") {
+          for (const faq of effective.faqSuggestions) {
+            const normalizedQuestion = faq.question
+              .normalize("NFKC")
+              .trim()
+              .replace(/\s+/g, " ")
+              .toLocaleLowerCase("ko-KR");
+            await client.query(
+              `insert into knowledge_entries (
+                 workspace_id, brand_id, normalized_question, entry_type,
+                 question, answer, title, content, category,
+                 aliases, keywords, structured_data, direct_reply_enabled,
+                 enabled, last_import_id, origin, provenance_json, status,
+                 created_by_user_id
+               ) values (
+                 $1, $2, $3, 'faq',
+                 $4, $5, $4, $5, $6,
+                 '{}'::text[], '{}'::text[], '{}'::jsonb, true,
+                 false, null, 'manual', $7::jsonb, 'draft', $8
+               )
+               on conflict (brand_id, normalized_question) do nothing`,
+              [
+                input.workspaceId,
+                input.brandId,
+                normalizedQuestion,
+                faq.question,
+                faq.answer,
+                faq.category,
+                JSON.stringify({
+                  source: "brand_intelligence",
+                  analysisId: input.analysisId,
+                  sourceFactIds: faq.sourceFactIds,
+                }),
+                input.actorUserId ?? null,
+              ],
+            );
+          }
         }
         await client.query("delete from brand_profile_subcategories where brand_profile_id = $1", [profileId]);
         for (const subcategory of effective.subcategories) {

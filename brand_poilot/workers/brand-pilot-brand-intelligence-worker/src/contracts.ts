@@ -26,8 +26,29 @@ export interface BrandIntelligenceResultV1 {
   sourceGaps: string[];
 }
 
+export interface CompanyNameSuggestionV2 {
+  name: string;
+  sourceFactIds: string[];
+}
+
+export type FaqSuggestionCategoryV2 =
+  | "service"
+  | "product"
+  | "price"
+  | "location"
+  | "operation"
+  | "other";
+
+export interface FaqSuggestionV2 {
+  question: string;
+  answer: string;
+  category: FaqSuggestionCategoryV2;
+  sourceFactIds: string[];
+}
+
 export interface BrandIntelligenceResultV2 {
   contractVersion: "brand-intelligence-result.v2";
+  companyNameSuggestion: CompanyNameSuggestionV2 | null;
   oneLineDefinition: string | null;
   companyOverview: string | null;
   businessDescription: string | null;
@@ -50,6 +71,7 @@ export interface BrandIntelligenceResultV2 {
     purchaseUrl: string | null;
     sourceFactIds: string[];
   }>;
+  faqSuggestions: FaqSuggestionV2[];
   keywords: string[];
   observedTone: { summary: string; sourceFactIds: string[] } | null;
   competitors: Array<{ name: string; description: string; sourceUrls: string[] }>;

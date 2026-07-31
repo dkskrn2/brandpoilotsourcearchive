@@ -20,7 +20,6 @@ const labels: Record<BrandAnalysisStatus, string> = {
 
 export function BrandAnalysisProgressStep({
   status,
-  companyName,
   currentStage,
   selectedPageCount = 0,
   successfulPageCount = 0,
@@ -33,7 +32,6 @@ export function BrandAnalysisProgressStep({
   onCancel,
 }: {
   status: BrandAnalysisStatus;
-  companyName?: string | null;
   currentStage?: string | null;
   selectedPageCount?: number;
   successfulPageCount?: number;
@@ -68,7 +66,6 @@ export function BrandAnalysisProgressStep({
       <div className="brand-analysis-progress">
         <InlineSpinner label={labels[status]} />
         <h2>{labels[status]}</h2>
-        {companyName && <p><strong>회사명</strong> {companyName}</p>}
         {currentStage && <p><strong>현재 단계</strong> {currentStage}</p>}
         <p><strong>자사 중요 페이지</strong> {successfulPageCount}/20개 수집</p>
         {requiredPageCount > 0 && <p><strong>완료 기준</strong> 최소 {requiredPageCount}개 성공</p>}

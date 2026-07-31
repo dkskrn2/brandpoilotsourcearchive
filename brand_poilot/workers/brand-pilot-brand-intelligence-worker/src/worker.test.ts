@@ -179,6 +179,10 @@ describe("brand intelligence worker", () => {
     expect(script).toContain("brand_intelligence_forbidden_tool_event");
     expect(script).toContain("parseOwnedFactEnvelope(response, registeredSegments)");
     expect(script).toContain("brand_intelligence_offering_registry_mismatch");
+    expect(script).toContain("companyNameSuggestion");
+    expect(script).toContain("faqSuggestions");
+    expect(script.match(/invokeStage\(4,/g)).toHaveLength(1);
+    expect(script).not.toContain("invokeStage(8,");
     expect(script).toMatch(/const keys = \[\s*"APPDATA", "CODEX_HOME", "COMSPEC", "HOME"/);
   });
 });

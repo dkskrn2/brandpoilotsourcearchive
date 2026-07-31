@@ -1,4 +1,7 @@
-import type { BrandIntelligenceResult } from "./contracts.js";
+import type {
+  BrandIntelligenceResult,
+  FaqSuggestionCategoryV2,
+} from "./contracts.js";
 
 export class BrandIntelligenceContractError extends Error {
   readonly retryable = false;
@@ -102,10 +105,10 @@ function nullableHttps(value: unknown, code: string): string | null {
 
 function parseV2(value: unknown): BrandIntelligenceResult {
   const source = exact(value, [
-    "contractVersion", "oneLineDefinition", "companyOverview", "businessDescription",
+    "contractVersion", "companyNameSuggestion", "oneLineDefinition", "companyOverview", "businessDescription",
     "primaryCategory", "subcategories", "primaryTarget", "secondaryTargets",
     "customerNeeds", "valueProposition", "differentiators", "coreAppeal",
-    "supportingAppeals", "offerings", "keywords", "observedTone", "competitors",
+    "supportingAppeals", "offerings", "faqSuggestions", "keywords", "observedTone", "competitors",
     "marketContext", "evidence", "sourceGaps",
   ], "brand_intelligence_result_invalid");
   if (source.contractVersion !== "brand-intelligence-result.v2") {
@@ -131,6 +134,52 @@ function parseV2(value: unknown): BrandIntelligenceResult {
       sourceFactIds: stringList(item.sourceFactIds, "brand_intelligence_offering_invalid"),
     };
   }, 5);
+  const companyNameSource = source.companyNameSuggestion === null
+    || source.companyNameSuggestion === undefined
+    ? null
+    : exact(
+        source.companyNameSuggestion,
+        ["name", "sourceFactIds"],
+        "brand_intelligence_company_name_suggestion_invalid",
+      );
+  const companyNameFactIds = companyNameSource
+    ? stringList(
+        companyNameSource.sourceFactIds,
+        "brand_intelligence_company_name_suggestion_invalid",
+      )
+    : [];
+  if (companyNameSource && companyNameFactIds.length === 0) {
+    fail("brand_intelligence_company_name_suggestion_invalid");
+  }
+  const faqCategories = new Set<FaqSuggestionCategoryV2>([
+    "service", "product", "price", "location", "operation", "other",
+  ]);
+  const faqSuggestions = array(
+    source.faqSuggestions ?? [],
+    "brand_intelligence_faq_limit_exceeded",
+    (entry) => {
+      const item = exact(
+        entry,
+        ["question", "answer", "category", "sourceFactIds"],
+        "brand_intelligence_faq_invalid",
+      );
+      if (!faqCategories.has(item.category as FaqSuggestionCategoryV2)) {
+        fail("brand_intelligence_faq_invalid");
+      }
+      const sourceFactIds = stringList(
+        item.sourceFactIds,
+        "brand_intelligence_faq_invalid",
+      );
+      if (sourceFactIds.length === 0) fail("brand_intelligence_faq_invalid");
+      return {
+        question: stringValue(item.question, "brand_intelligence_faq_invalid", 300),
+        answer: stringValue(item.answer, "brand_intelligence_faq_invalid", 4_000),
+        category: item.category as FaqSuggestionCategoryV2,
+        sourceFactIds,
+      };
+    },
+    20,
+  );
   const competitors = array(source.competitors, "brand_intelligence_competitors_invalid", (entry) => {
     const item = exact(entry, ["name", "description", "sourceUrls"], "brand_intelligence_competitor_invalid");
     const sourceUrls = array(item.sourceUrls, "brand_intelligence_competitor_invalid", (url) => (
@@ -164,6 +213,14 @@ function parseV2(value: unknown): BrandIntelligenceResult {
     : exact(source.observedTone, ["summary", "sourceFactIds"], "brand_intelligence_observed_tone_invalid");
   return {
     contractVersion: "brand-intelligence-result.v2",
+    companyNameSuggestion: companyNameSource ? {
+      name: stringValue(
+        companyNameSource.name,
+        "brand_intelligence_company_name_suggestion_invalid",
+        100,
+      ),
+      sourceFactIds: companyNameFactIds,
+    } : null,
     oneLineDefinition: nullableString(source.oneLineDefinition, "brand_intelligence_one_line_definition_invalid", 500),
     companyOverview: nullableString(source.companyOverview, "brand_intelligence_company_overview_invalid", 4_000),
     businessDescription: nullableString(source.businessDescription, "brand_intelligence_business_description_invalid", 4_000),
@@ -181,6 +238,7 @@ function parseV2(value: unknown): BrandIntelligenceResult {
     coreAppeal: nullableString(source.coreAppeal, "brand_intelligence_core_appeal_invalid", 4_000),
     supportingAppeals: stringList(source.supportingAppeals, "brand_intelligence_supporting_appeals_invalid", 20),
     offerings,
+    faqSuggestions,
     keywords: stringList(source.keywords, "brand_intelligence_keywords_invalid", 50),
     observedTone: observed ? {
       summary: stringValue(observed.summary, "brand_intelligence_observed_tone_invalid", 1_000),

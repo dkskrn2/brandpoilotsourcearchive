@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Alert } from "../components/ui/Alert";
 import { PageSkeleton } from "../components/ui/LoadingState";
 import { BrandCenterHeader } from "../components/brand-center/BrandCenterHeader";
+import { AutoResponseKnowledgePanel } from "../components/brand-center/AutoResponseKnowledgePanel";
 import { BrandCoreReviewPanel } from "../components/brand-center/BrandCoreReviewPanel";
 import { BrandRulesPanel } from "../components/brand-center/BrandRulesPanel";
 import { KnowledgeCategoryEditorPanel } from "../components/brand-center/KnowledgeCategoryEditorPanel";
@@ -26,7 +27,7 @@ import type {
 } from "../features/brand-center/types";
 import { DEMO_BRAND_ID } from "../lib/apiClient";
 
-type BrandCenterTab = "core" | "faq" | "how_to" | "guide" | "products" | "style";
+type BrandCenterTab = "core" | "products" | "faq" | "knowledge" | "style";
 type BrandCenterOnboardingView =
   | "not_started"
   | "initial_in_progress"
@@ -43,10 +44,9 @@ const pendingAnalysisStatuses: BrandAnalysis["status"][] = [
 
 const brandTabs: Array<{ id: BrandCenterTab; label: string }> = [
   { id: "core", label: "브랜드 코어" },
-  { id: "faq", label: "FAQ" },
-  { id: "how_to", label: "이용 방법" },
-  { id: "guide", label: "가이드" },
   { id: "products", label: "제품·서비스" },
+  { id: "faq", label: "FAQ" },
+  { id: "knowledge", label: "AI 자동응답 지식" },
   { id: "style", label: "스타일" },
 ];
 
@@ -203,8 +203,10 @@ export function BrandCenterPage() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const requestedTab = params.get("tab");
-  const tab = requestedTab === "wiki"
-    ? "guide"
+  const tab = requestedTab === "wiki" || requestedTab === "guide"
+    ? "knowledge"
+    : requestedTab === "how_to"
+      ? "faq"
     : brandTabs.some((item) => item.id === requestedTab)
       ? requestedTab as BrandCenterTab
       : "core";
@@ -394,14 +396,8 @@ export function BrandCenterPage() {
       next.delete("item");
       next.delete("analysis");
     }
-    if (nextTab !== "guide") next.delete("issue");
+    if (nextTab !== "knowledge") next.delete("issue");
     setParams(next);
-  }
-
-  function closeWikiIssue() {
-    const next = new URLSearchParams(params);
-    next.delete("issue");
-    setParams(next, { replace: true });
   }
 
   async function editCore() {
@@ -894,22 +890,10 @@ export function BrandCenterPage() {
             onDirtyChange={setChildDirty}
           />
         ) : null}
-        {tab === "how_to" ? (
-          <KnowledgeCategoryEditorPanel
+        {tab === "knowledge" ? (
+          <AutoResponseKnowledgePanel
             brandId={DEMO_BRAND_ID}
-            kind="how_to"
-            title="이용 방법"
-            onDirtyChange={setChildDirty}
-          />
-        ) : null}
-        {tab === "guide" ? (
-          <KnowledgeCategoryEditorPanel
-            brandId={DEMO_BRAND_ID}
-            kind="guide"
-            title="가이드"
-            initialIssueId={params.get("issue")}
-            onCloseIssue={closeWikiIssue}
-            onDirtyChange={setChildDirty}
+            core={workspace?.active?.core ?? null}
           />
         ) : null}
         {tab === "products" ? (

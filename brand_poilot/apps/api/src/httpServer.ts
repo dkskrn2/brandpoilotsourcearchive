@@ -2464,7 +2464,6 @@ export function createServer(
     async (request) => {
       if (!brandIntelligenceRepository) throw new Error("brand_intelligence_not_configured");
       const parsed = parseCreateBrandAnalysisInput(request.body);
-      if (!parsed.companyName) throw new Error("brand_analysis_company_name_required");
       return toPublicBrandAnalysis(await brandIntelligenceRepository.requestBrandAnalysis({
         ...aiContentScope(request, request.params.brandId),
         ...parsed,

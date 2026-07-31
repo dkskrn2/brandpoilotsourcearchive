@@ -49,20 +49,22 @@ export function BrandIntelligenceOnboardingPage() {
   }, [analysisId, gateway, setSearchParams]);
 
   useEffect(() => {
-    if (analysis?.input.companyName) setCompanyName(analysis.input.companyName);
-  }, [analysis?.input.companyName]);
+    const analyzedCompanyName = analysis?.input.companyName
+      ?? (analysis?.effectiveResult?.contractVersion === "brand-intelligence-result.v2"
+        ? analysis.effectiveResult.companyNameSuggestion?.name
+        : undefined);
+    if (analyzedCompanyName) setCompanyName(analyzedCompanyName);
+  }, [analysis]);
 
-  async function start(input: { companyName: string; ownedUrl: string | null; files: File[] }) {
+  async function start(input: { ownedUrl: string | null; files: File[] }) {
     setSubmitting(true);
     setActionError(null);
     try {
       const created = await gateway.requestAnalysis(DEMO_BRAND_ID, {
-        companyName: input.companyName,
         ownedUrl: input.ownedUrl,
         files: input.files,
         idempotencyKey: crypto.randomUUID(),
       });
-      setCompanyName(input.companyName);
       setSearchParams({ analysisId: created.id }, { replace: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
@@ -140,7 +142,6 @@ export function BrandIntelligenceOnboardingPage() {
         <BrandEvidenceInputStep
           busy={submitting}
           error={actionError}
-          initialCompanyName={companyName}
           initialOwnedUrl={ownedUrl}
           onSubmit={start}
         />
@@ -148,7 +149,6 @@ export function BrandIntelligenceOnboardingPage() {
       {step === 2 && analysis && !["failed", "cancelled"].includes(analysis.status) && (
         <BrandAnalysisProgressStep
           status={analysis.status}
-          companyName={analysis.input.companyName}
           currentStage={analysis.currentStage}
           selectedPageCount={analysis.selectedPageCount}
           successfulPageCount={analysis.successfulPageCount}
@@ -164,7 +164,6 @@ export function BrandIntelligenceOnboardingPage() {
       {step === 2 && loading && !analysis && (
         <BrandAnalysisProgressStep
           status="queued"
-          companyName={companyName}
           cancelling={cancelling}
           onCancel={() => void cancel()}
         />
@@ -183,18 +182,16 @@ export function BrandIntelligenceOnboardingPage() {
         </div></section>
       )}
       {step === 3 && draft && (
-        <>
-          <section className="panel brand-intelligence-step">
-            <div className="panel-head"><h2>회사명 확인</h2></div>
-            <div className="panel-body">
-              <label className="field-stack">
-                <span className="field-label">회사명</span>
-                <input value={companyName} maxLength={100} onChange={(event) => setCompanyName(event.target.value)} />
-              </label>
-            </div>
-          </section>
-          <BrandAnalysisReviewStep draft={draft} saving={saving} error={actionError} categories={categories} onChange={setDraft} onConfirm={confirm} />
-        </>
+        <BrandAnalysisReviewStep
+          companyName={companyName}
+          draft={draft}
+          saving={saving}
+          error={actionError}
+          categories={categories}
+          onCompanyNameChange={setCompanyName}
+          onChange={setDraft}
+          onConfirm={confirm}
+        />
       )}
     </section>
   );

@@ -290,13 +290,28 @@ const facts = factOutputs;
 const supportedFacts = facts.filter((fact) => fact.support === "supported");
 
 const offeringsResponse = await invokeStage(4, [
-  "다음 검증된 자사 사실만 사용해 대표 상품과 서비스를 합쳐 최대 5개 추출하라.",
-  "반환 형식: {\"offerings\":[{\"kind\":\"product|service\",\"name\":\"이름\",\"description\":null,\"target\":null,\"benefit\":null,\"priceText\":null,\"purchaseUrl\":null,\"sourceFactIds\":[\"fact id\"]}]}",
-  "sourceFactIds는 입력 fact id만 허용하며 근거가 약하면 항목을 만들지 마라.",
+  "다음 검증된 자사 사실만 사용해 회사명, 대표 상품·서비스, 고객 FAQ를 추출하라.",
+  "반환 형식: {\"companyNameSuggestion\":{\"name\":\"회사명\",\"sourceFactIds\":[\"fact id\"]}|null,\"offerings\":[{\"kind\":\"product|service\",\"name\":\"이름\",\"description\":null,\"target\":null,\"benefit\":null,\"priceText\":null,\"purchaseUrl\":null,\"sourceFactIds\":[\"fact id\"]}],\"faqSuggestions\":[{\"question\":\"질문\",\"answer\":\"답변\",\"category\":\"service|product|price|location|operation|other\",\"sourceFactIds\":[\"fact id\"]}]}",
+  "대표 상품·서비스는 합쳐 최대 5개, FAQ는 최대 20개다.",
+  "회사명·상품·FAQ의 sourceFactIds는 입력 fact id만 허용하며 직접 근거가 약하면 만들지 마라.",
   JSON.stringify({ companyName: job.companyName, facts: supportedFacts }),
 ].join("\n"));
 const factIds = new Set(supportedFacts.map((fact) => fact.id));
-if (!Array.isArray(offeringsResponse.offerings)
+const validFactIds = (ids) => Array.isArray(ids)
+  && ids.length > 0
+  && ids.every((id) => factIds.has(id));
+const validCompanyNameSuggestion = offeringsResponse.companyNameSuggestion === null
+  || (
+    offeringsResponse.companyNameSuggestion
+    && typeof offeringsResponse.companyNameSuggestion === "object"
+    && typeof offeringsResponse.companyNameSuggestion.name === "string"
+    && offeringsResponse.companyNameSuggestion.name.trim()
+    && offeringsResponse.companyNameSuggestion.name.trim().length <= 100
+    && validFactIds(offeringsResponse.companyNameSuggestion.sourceFactIds)
+  );
+const faqCategories = new Set(["service", "product", "price", "location", "operation", "other"]);
+if (!validCompanyNameSuggestion
+  || !Array.isArray(offeringsResponse.offerings)
   || offeringsResponse.offerings.length > 5
   || offeringsResponse.offerings.some((offering) => (
     !offering
@@ -304,19 +319,34 @@ if (!Array.isArray(offeringsResponse.offerings)
     || (offering.kind !== "product" && offering.kind !== "service")
     || typeof offering.name !== "string"
     || !offering.name.trim()
-    || !Array.isArray(offering.sourceFactIds)
-    || offering.sourceFactIds.length === 0
-    || offering.sourceFactIds.some((id) => !factIds.has(id))
+    || !validFactIds(offering.sourceFactIds)
+  ))
+  || !Array.isArray(offeringsResponse.faqSuggestions)
+  || offeringsResponse.faqSuggestions.length > 20
+  || offeringsResponse.faqSuggestions.some((faq) => (
+    !faq
+    || typeof faq !== "object"
+    || typeof faq.question !== "string"
+    || !faq.question.trim()
+    || faq.question.trim().length > 300
+    || typeof faq.answer !== "string"
+    || !faq.answer.trim()
+    || faq.answer.trim().length > 4_000
+    || !faqCategories.has(faq.category)
+    || !validFactIds(faq.sourceFactIds)
   ))) {
   throw new Error("brand_intelligence_offering_registry_mismatch");
 }
+const companyNameSuggestion = offeringsResponse.companyNameSuggestion;
 const offerings = offeringsResponse.offerings;
+const faqSuggestions = offeringsResponse.faqSuggestions;
+const effectiveCompanyName = job.companyName ?? companyNameSuggestion?.name ?? null;
 
 const core = await invokeStage(5, [
   "검증된 사실만 사용해 브랜드 코어를 한국어 JSON으로 정리하라.",
   "필드: oneLineDefinition, companyOverview, businessDescription, primaryCategory({code,name}|null), subcategories, primaryTarget, secondaryTargets, customerNeeds, valueProposition, differentiators, coreAppeal, supportingAppeals, keywords, observedTone({summary,sourceFactIds}|null), sourceGaps.",
   "회사명은 결과 필드에 넣지 말고, 없는 내용은 null 또는 빈 배열로 두어라.",
-  JSON.stringify({ companyName: job.companyName, facts }),
+  JSON.stringify({ companyName: effectiveCompanyName, facts }),
 ].join("\n"));
 
 let external = { competitors: [], marketContext: [], evidence: [] };
@@ -327,7 +357,7 @@ try {
     "반환 형식: {\"competitors\":[{\"name\":\"이름\",\"description\":\"설명\",\"sourceUrls\":[\"https://...\"]}],\"marketContext\":[{\"claim\":\"주장\",\"sourceUrls\":[\"https://...\"]}],\"evidence\":[{\"fieldPath\":\"competitors\",\"claim\":\"주장\",\"sourceId\":\"external:<url>\",\"sourceUrl\":\"https://...\",\"excerpt\":\"근거 요약\",\"sourceKind\":\"external\"}]}",
     "모든 URL은 이번 검색에서 실제 접근한 HTTPS URL이어야 하며 distinct URL은 최대 10개다.",
     JSON.stringify({
-      companyName: job.companyName,
+      companyName: effectiveCompanyName,
       primaryCategory: core.primaryCategory,
       primaryTarget: core.primaryTarget,
       valueProposition: core.valueProposition,
@@ -372,6 +402,7 @@ const ownedEvidence = facts.flatMap((fact) => {
 
 const candidate = {
   contractVersion: "brand-intelligence-result.v2",
+  companyNameSuggestion,
   oneLineDefinition: core.oneLineDefinition ?? null,
   companyOverview: core.companyOverview ?? null,
   businessDescription: core.businessDescription ?? null,
@@ -385,6 +416,7 @@ const candidate = {
   coreAppeal: core.coreAppeal ?? null,
   supportingAppeals: Array.isArray(core.supportingAppeals) ? core.supportingAppeals : [],
   offerings,
+  faqSuggestions,
   keywords: Array.isArray(core.keywords) ? core.keywords : [],
   observedTone: core.observedTone ?? null,
   competitors: Array.isArray(external.competitors) ? external.competitors : [],
@@ -399,7 +431,8 @@ const candidate = {
 const audited = await invokeStage(7, [
   "아래 후보 JSON을 내용 추가 없이 스키마와 근거 무결성만 감사하라.",
   "반드시 brand-intelligence-result.v2 JSON 하나만 반환한다.",
-  "offerings는 최대 5개, 외부 distinct URL은 최대 10개다.",
+  "companyNameSuggestion과 faqSuggestions를 유지하되 근거가 잘못된 항목만 제거하라.",
+  "offerings는 최대 5개, faqSuggestions는 최대 20개, 외부 distinct URL은 최대 10개다.",
   "등록되지 않은 sourceFactIds, 외부 URL, 근거 없는 수치·효능·성과는 제거한다.",
   "companyName 필드를 추가하지 마라.",
   JSON.stringify({
@@ -427,10 +460,26 @@ const auditedExternalUrls = new Set([
     ? audited.marketContext.flatMap((item) => item.sourceUrls ?? [])
     : []),
 ]);
-if (!Array.isArray(audited.offerings) || audited.offerings.length > 5
+if (!(audited.companyNameSuggestion === null || (
+    audited.companyNameSuggestion
+    && typeof audited.companyNameSuggestion.name === "string"
+    && audited.companyNameSuggestion.name.trim()
+    && audited.companyNameSuggestion.name.trim().length <= 100
+    && validFactIds(audited.companyNameSuggestion.sourceFactIds)
+  ))
+  || !Array.isArray(audited.offerings) || audited.offerings.length > 5
   || audited.offerings.some((offering) => (
-    !Array.isArray(offering.sourceFactIds)
-    || offering.sourceFactIds.some((id) => !factIds.has(id))
+    !validFactIds(offering.sourceFactIds)
+  ))
+  || !Array.isArray(audited.faqSuggestions)
+  || audited.faqSuggestions.length > 20
+  || audited.faqSuggestions.some((faq) => (
+    typeof faq.question !== "string"
+    || !faq.question.trim()
+    || typeof faq.answer !== "string"
+    || !faq.answer.trim()
+    || !faqCategories.has(faq.category)
+    || !validFactIds(faq.sourceFactIds)
   ))
   || auditedExternalUrls.size > 10
   || [...auditedExternalUrls].some((url) => !allowedExternalUrls.has(url))) {

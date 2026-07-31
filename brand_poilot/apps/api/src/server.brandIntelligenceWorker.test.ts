@@ -113,7 +113,6 @@ describe("brand intelligence worker routes", () => {
       url: "/brands/brand-1/brand-analyses",
       headers: customerHeaders,
       payload: {
-        companyName: "  테스트 회사  ",
         ownedUrl: "https://example.com",
         uploadIds: [],
         uploads: [],
@@ -126,10 +125,13 @@ describe("brand intelligence worker routes", () => {
     expect(created.json()).not.toHaveProperty("idempotencyKey");
     expect(intelligence.requestBrandAnalysis).toHaveBeenCalledWith(expect.objectContaining({
       brandId: "brand-1",
-      companyName: "테스트 회사",
       ownedUrl: "https://example.com",
       idempotencyKey: "create-v2",
     }));
+    const requestCalls = intelligence.requestBrandAnalysis.mock.calls as unknown as Array<
+      [Record<string, unknown>]
+    >;
+    expect(requestCalls.at(-1)?.[0]).not.toHaveProperty("companyName");
 
     intelligence.getBrandAnalysis.mockResolvedValueOnce({
       ...claim,

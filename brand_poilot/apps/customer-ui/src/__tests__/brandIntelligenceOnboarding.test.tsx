@@ -68,7 +68,6 @@ describe("brand intelligence onboarding review", () => {
     render(<BrandEvidenceInputStep
       busy={false}
       error={null}
-      initialCompanyName="테스트 회사"
       initialOwnedUrl="https://brand.example.com"
       onSubmit={submit}
     />);
@@ -78,7 +77,6 @@ describe("brand intelligence onboarding review", () => {
     expect(submit).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "분석 시작" }));
     expect(submit).toHaveBeenCalledWith({
-      companyName: "테스트 회사",
       ownedUrl: "https://brand.example.com",
       files: [],
     });

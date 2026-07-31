@@ -113,6 +113,18 @@ const faqItem = {
   buildStatus: "active" as const,
 };
 
+const productWikiItem = {
+  ...faqItem,
+  id: "product-1",
+  itemType: "service" as const,
+  title: "콘텐츠 운영",
+  content: "승인된 설명",
+  status: "read_only" as const,
+  origin: "product_service" as const,
+  sourceKind: "product_service" as const,
+  sourceId: "product-1",
+};
+
 const approvedProductVersion = {
   id: "product-version-1",
   workspaceId: "workspace-1",
@@ -502,10 +514,9 @@ describe("BrandCenterPage", () => {
     expect(screen.getByDisplayValue("브랜드 운영을 단순하게")).toBeDisabled();
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       "브랜드 코어",
-      "FAQ",
-      "이용 방법",
-      "가이드",
       "제품·서비스",
+      "FAQ",
+      "AI 자동응답 지식",
       "스타일",
     ]);
     expect(screen.queryByRole("button", { name: "변경 검토" })).not.toBeInTheDocument();
@@ -605,7 +616,7 @@ describe("BrandCenterPage", () => {
     }));
     await userEvent.click(screen.getByRole("button", { name: "수정" }));
     await userEvent.type(screen.getByRole("textbox", { name: "내용" }), " 수정");
-    await userEvent.click(screen.getByRole("tab", { name: "가이드" }));
+    await userEvent.click(screen.getByRole("tab", { name: "AI 자동응답 지식" }));
 
     expect(confirm).toHaveBeenCalledWith("저장하지 않은 변경이 있습니다. 이동할까요?");
     expect(screen.getByRole("tab", { name: "FAQ" })).toHaveAttribute("aria-selected", "true");
@@ -614,37 +625,23 @@ describe("BrandCenterPage", () => {
       .toHaveValue("영업일 기준 2~3일입니다.");
   });
 
-  it("routes legacy Wiki issue links to the guide improvement control", async () => {
+  it("routes legacy Wiki links to the read-only AI response knowledge panel", async () => {
     const issueId = "11111111-1111-4111-8111-111111111111";
-    const issue = {
-      id: issueId,
-      workspaceId: "workspace-1",
-      brandId: "brand-1",
-      issueType: "knowledge_gap",
-      severity: "warning" as const,
-      status: "open" as const,
-      question: "배송 정책을 확인해 주세요",
-      detail: {},
-      sourceKind: null,
-      sourceId: null,
-      activeVersionId: "wiki-version-1",
-      lastBuiltAt: "2026-07-26T00:00:00.000Z",
-      buildStatus: "active" as const,
-      resolvedAt: null,
-    };
     await renderPage(
       `/brand-center?tab=wiki&issue=${issueId}`,
       {},
-      { listWikiIssues: vi.fn(async () => [issue]) },
+      { listWikiItems: vi.fn(async () => [faqItem, productWikiItem]) },
     );
 
-    expect(await screen.findByRole("tab", { name: "가이드" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByTestId("location")).toHaveTextContent(`tab=guide&issue=${issueId}`);
-    expect(await screen.findByRole("group", { name: "가이드 보조 메뉴" })).toBeVisible();
-    expect(await screen.findByRole("region", { name: "지식 개선 상세" })).toBeVisible();
-
-    await userEvent.click(screen.getByRole("button", { name: "닫기" }));
-    expect(screen.getByTestId("location")).not.toHaveTextContent("issue=");
+    expect(await screen.findByRole("tab", { name: "AI 자동응답 지식" }))
+      .toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("location")).toHaveTextContent(`tab=knowledge&issue=${issueId}`);
+    expect(await screen.findByRole("heading", { name: "브랜드 코어" })).toBeVisible();
+    expect(screen.getByText("브랜드 운영을 단순하게")).toBeVisible();
+    expect(screen.getByText("콘텐츠 운영")).toBeVisible();
+    expect(screen.getByText("배송은 얼마나 걸리나요?")).toBeVisible();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /등록|추가|수정|삭제/ })).not.toBeInTheDocument();
   });
 
   it("creates an editable core draft only after the user chooses to edit", async () => {

@@ -19,6 +19,10 @@ const offering = {
 function v2(overrides: Record<string, unknown> = {}) {
   return {
     contractVersion: "brand-intelligence-result.v2",
+    companyNameSuggestion: {
+      name: "모종애드",
+      sourceFactIds: ["fact-1"],
+    },
     oneLineDefinition: "브랜드 콘텐츠 운영 파트너",
     companyOverview: "브랜드 운영을 돕습니다.",
     businessDescription: "콘텐츠 제작과 운영을 연결합니다.",
@@ -32,6 +36,12 @@ function v2(overrides: Record<string, unknown> = {}) {
     coreAppeal: "운영 효율",
     supportingAppeals: [],
     offerings: [offering],
+    faqSuggestions: [{
+      question: "서비스 가격은 어떻게 확인하나요?",
+      answer: "상담 후 범위에 따라 안내합니다.",
+      category: "price",
+      sourceFactIds: ["fact-1"],
+    }],
     keywords: ["브랜드", "콘텐츠"],
     observedTone: { summary: "명확하고 실용적", sourceFactIds: ["fact-1"] },
     competitors: [],
@@ -108,6 +118,33 @@ describe("brand-intelligence-result.v2", () => {
     });
     expect(() => parseBrandIntelligenceResult(external, registry))
       .toThrow("brand_intelligence_external_registry_mismatch");
+  });
+
+  it("validates company name and FAQ suggestion fact registries", () => {
+    const parsed = parseBrandIntelligenceResult(v2(), registry);
+    expect(parsed.contractVersion).toBe("brand-intelligence-result.v2");
+    if (parsed.contractVersion !== "brand-intelligence-result.v2") throw new Error("expected v2");
+    expect(parsed.companyNameSuggestion?.name).toBe("모종애드");
+    expect(parsed.faqSuggestions).toHaveLength(1);
+
+    expect(() => parseBrandIntelligenceResult(v2({
+      faqSuggestions: [{
+        question: "가격은?",
+        answer: "문의하세요.",
+        category: "price",
+        sourceFactIds: ["invented"],
+      }],
+    }), registry)).toThrow("brand_intelligence_owned_fact_registry_mismatch");
+  });
+
+  it("keeps stored v2 results without suggestions compatible", () => {
+    const legacy = { ...v2() } as Partial<ReturnType<typeof v2>>;
+    delete legacy.companyNameSuggestion;
+    delete legacy.faqSuggestions;
+    const parsed = parseBrandIntelligenceResult(legacy, registry);
+    if (parsed.contractVersion !== "brand-intelligence-result.v2") throw new Error("expected v2");
+    expect(parsed.companyNameSuggestion).toBeNull();
+    expect(parsed.faqSuggestions).toEqual([]);
   });
 
   it("limits distinct external URLs to ten", () => {

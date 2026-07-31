@@ -92,7 +92,6 @@ export function createClient(
       if (job && (
         job.pipelineVersion !== 2
         || job.contractVersion !== "brand-intelligence-result.v2"
-        || !job.input.companyName
         || job.executionContract?.ownedPageLimit !== 20
         || job.executionContract?.externalPageLimit !== 10
         || job.executionContract?.offeringLimit !== 5

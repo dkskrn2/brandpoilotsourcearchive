@@ -65,6 +65,12 @@ function previewCore(result: BrandIntelligenceResult): PreviewBrandCore {
   };
 }
 
+function suggestedCompanyName(result: BrandIntelligenceResult | null | undefined) {
+  return result?.contractVersion === "brand-intelligence-result.v2"
+    ? result.companyNameSuggestion?.name?.normalize("NFKC").trim() ?? ""
+    : "";
+}
+
 function errorMessage(error: unknown) {
   const errorCode = error instanceof ApiRequestError
     ? error.errorCode
@@ -190,11 +196,13 @@ function LiveBrandCenterOnboardingState({
     if (persistenceKey) window.localStorage.setItem(persistenceKey, workflow.id);
     setCurrentStep("analysis");
     setSourceUrl(workflow.input.ownedUrl ?? "");
-    if (workflow.input.companyName) setCompanyName(workflow.input.companyName);
     setDraft(null);
     setConfirmed(false);
     setAnalysisError(null);
     if (workflow.status === "review_ready" && workflow.effectiveResult) {
+      const reviewedCompanyName = workflow.input.companyName
+        ?? suggestedCompanyName(workflow.effectiveResult);
+      if (reviewedCompanyName) setCompanyName(reviewedCompanyName);
       setDraft(structuredClone(workflow.effectiveResult));
       setAnalysisState("succeeded");
       setPollingRequired(false);
@@ -428,7 +436,6 @@ function LiveBrandCenterOnboardingState({
 
       setSourceUrl(next.input.ownedUrl ?? "");
       setActiveAnalysis(next);
-      if (next.input.companyName) setCompanyName(next.input.companyName);
       if (pendingStatuses.includes(next.status)) {
         setAnalysisState("loading");
         scheduleNext();
@@ -437,6 +444,9 @@ function LiveBrandCenterOnboardingState({
       if (next.status === "review_ready" && next.effectiveResult) {
         pollingFinished = true;
         setPollingRequired(false);
+        const reviewedCompanyName = next.input.companyName
+          ?? suggestedCompanyName(next.effectiveResult);
+        if (reviewedCompanyName) setCompanyName(reviewedCompanyName);
         setDraft(structuredClone(next.effectiveResult));
         setAnalysisState("succeeded");
         setCurrentStep("analysis");
@@ -506,12 +516,6 @@ function LiveBrandCenterOnboardingState({
   ]);
 
   function validateSources() {
-    const normalizedCompanyName = companyName.normalize("NFKC").trim();
-    if (!normalizedCompanyName || Array.from(normalizedCompanyName).length > 100
-      || /[\u0000-\u001f\u007f]/.test(normalizedCompanyName)) {
-      setSourceError("회사명을 1~100자로 입력해 주세요.");
-      return false;
-    }
     const normalized = sourceUrl.trim();
     if (!normalized && files.length === 0) {
       setSourceError("웹사이트 URL 또는 문서 파일을 등록해 주세요.");
@@ -537,7 +541,6 @@ function LiveBrandCenterOnboardingState({
     setAnalysisError(null);
     try {
       const created = await gateway.requestAnalysis(brandId, {
-        companyName: companyName.normalize("NFKC").trim(),
         ownedUrl: sourceUrl.trim() || null,
         files: files.map((item) => item.file),
         idempotencyKey: crypto.randomUUID(),
@@ -556,7 +559,11 @@ function LiveBrandCenterOnboardingState({
 
   async function complete() {
     const normalizedCompanyName = companyName.normalize("NFKC").trim();
-    if (!analysisId || !draft || saving || !normalizedCompanyName) return;
+    if (!analysisId || !draft || saving) return;
+    if (!normalizedCompanyName) {
+      setAnalysisError("회사명을 입력해 주세요.");
+      return;
+    }
     setSaving(true);
     setAnalysisError(null);
     try {
@@ -631,14 +638,9 @@ function LiveBrandCenterOnboardingState({
     >
       {currentStep === "sources" ? (
         <SourceIntakeStep
-          companyName={companyName}
           url={sourceUrl}
           files={files}
           error={sourceError}
-          onCompanyNameChanged={(value) => {
-            setCompanyName(value);
-            setSourceError(null);
-          }}
           onUrlChanged={(url) => {
             setSourceUrl(url);
             setSourceError(null);
@@ -679,7 +681,6 @@ function LiveBrandCenterOnboardingState({
             ? () => void cancelAnalysis()
             : undefined}
           onComplete={() => undefined}
-          companyName={companyName}
           statusText={activeAnalysis?.currentStage ?? undefined}
           ownedPageProgress={activeAnalysis
             ? `${activeAnalysis.successfulPageCount ?? 0}/20개 수집`
