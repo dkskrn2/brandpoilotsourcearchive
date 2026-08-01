@@ -278,6 +278,137 @@ process.stdin.on("end", () => {
     expect(JSON.stringify(output)).not.toContain("PRIVATE_FINAL_CORE");
   }, 30_000);
 
+  it("canonicalizes reused owned-fact model IDs and drops only offering siblings with unregistered facts", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "brand-pilot-runner-offering-registry-"));
+    temporaryDirectories.push(root);
+    const appData = path.join(root, "appdata");
+    const runtimeDirectory = path.join(root, "runtime");
+    const callsFile = path.join(root, "calls.txt");
+    const fakeCodex = path.join(
+      appData,
+      "npm",
+      "node_modules",
+      "@openai",
+      "codex",
+      "bin",
+      "codex.js",
+    );
+    await mkdir(path.dirname(fakeCodex), { recursive: true });
+    await mkdir(runtimeDirectory, { recursive: true });
+    await writeFile(fakeCodex, [
+      'const fs = require("node:fs");',
+      "const callsFile = " + JSON.stringify(callsFile) + ";",
+      'let prompt = "";',
+      'process.stdin.on("data", (chunk) => { prompt += String(chunk); });',
+      'process.stdin.on("end", () => {',
+      '  const outputIndex = process.argv.indexOf("--output-last-message");',
+      '  const outputFile = process.argv[outputIndex + 1];',
+      '  const write = (value) => fs.writeFileSync(outputFile, JSON.stringify(value));',
+      '  fs.appendFileSync(callsFile, "call\\n");',
+      '  if (prompt.includes("오직 제공된 텍스트")) {',
+      '    const match = prompt.match(/segment-([1-4])/);',
+      '    const index = match && match[1];',
+      '    write({ stageVersion: "owned-facts.v1", output: index ? [{',
+      '      id: "same-model-id",',
+      '      claim: "검증 사실 " + index,',
+      '      sourceId: "owned-" + index,',
+      '      segmentId: "segment-" + index,',
+      '      sourceUrl: null,',
+      '      quotes: ["등록 인용 " + index],',
+      '      category: "business",',
+      '      support: "supported"',
+      '    }] : [] });',
+      '    return;',
+      '  }',
+      '  if (prompt.includes("대표 상품")) {',
+      '    write({',
+      '      companyNameSuggestion: { name: "PRIVATE_INVALID_COMPANY", sourceFactIds: ["invented-company"] },',
+      '      offerings: [',
+      '        { kind: "product", name: "유지 상품", description: null, target: null, benefit: null, priceText: null, purchaseUrl: null, sourceFactIds: ["owned-1-1"] },',
+      '        { kind: "service", name: "PRIVATE_INVALID_OFFERING", description: null, target: null, benefit: null, priceText: null, purchaseUrl: null, sourceFactIds: ["invented-offering"] }',
+      '      ],',
+      '      faqSuggestions: [',
+      '        { question: "유지 FAQ?", answer: "유지 답변", category: "service", sourceFactIds: ["owned-2-1"] },',
+      '        { question: "PRIVATE_INVALID_FAQ?", answer: "PRIVATE_INVALID_ANSWER", category: "service", sourceFactIds: ["invented-faq"] }',
+      '      ]',
+      '    });',
+      '    return;',
+      '  }',
+      '  if (prompt.includes("브랜드 코어")) { write({}); return; }',
+      '  if (prompt.includes("공개 웹검색")) { write({ competitors: [], marketContext: [], evidence: [] }); return; }',
+      '  if (prompt.includes("감사하라")) {',
+      '    const payload = JSON.parse(prompt.trim().split(/\\r?\\n/).at(-1));',
+      '    write(payload.candidate);',
+      '    return;',
+      '  }',
+      '  process.exitCode = 2;',
+      '});',
+    ].join("\n"), "utf8");
+
+    const jobFile = path.join(root, "job.json");
+    const outputFile = path.join(root, "output.json");
+    const progressFile = path.join(root, "progress.jsonl");
+    const errorFile = path.join(root, "terminal-error.json");
+    await writeFile(jobFile, JSON.stringify({
+      analysisId: "analysis-1",
+      brandId: "brand-1",
+      companyName: null,
+      batches: [1, 2, 3, 4].map((index) => ({
+        batchIndex: index - 1,
+        segments: [{
+          id: "segment-" + index,
+          sourceId: "owned-" + index,
+          sourceUrl: null,
+          text: "등록 인용 " + index,
+        }],
+      })),
+      sourceRegistry: [1, 2, 3, 4].map((index) => ({
+        sourceId: "owned-" + index,
+        sourceUrl: null,
+        sourceKind: "upload",
+      })),
+    }), "utf8");
+
+    const runner = fileURLToPath(new URL("../scripts/run-codex-brand-intelligence.mjs", import.meta.url));
+    const result = await runProcess(process.execPath, [
+      runner,
+      "--job-file=" + jobFile,
+      "--output-file=" + outputFile,
+      "--runtime-dir=" + runtimeDirectory,
+      "--progress-file=" + progressFile,
+      "--error-file=" + errorFile,
+    ], {
+      ...process.env,
+      APPDATA: appData,
+      BRAND_INTELLIGENCE_CODEX_COMMAND: "codex",
+      BRAND_INTELLIGENCE_CODEX_FAST_MODE: "false",
+      CODEX_HOME: path.join(root, "codex-home"),
+    });
+
+    const calls = (await readFile(callsFile, "utf8")).trim().split(/\r?\n/);
+    const progressText = await readFile(progressFile, "utf8");
+    const progress = progressText.trim().split(/\r?\n/).map((line) => JSON.parse(line));
+
+    expect(result.code).toBe(0);
+    expect(calls).toHaveLength(8);
+    expect(progress.filter(({ status }) => status === "failed" || status === "retrying")).toEqual([]);
+    expect(progress.filter(({ status }) => status === "succeeded")).toHaveLength(8);
+    const output = JSON.parse(await readFile(outputFile, "utf8"));
+    expect(output.registry.ownedFactIds).toEqual(["owned-1-1", "owned-2-1", "owned-3-1", "owned-4-1"]);
+    expect(output.result.companyNameSuggestion).toBeNull();
+    expect(output.result.offerings.map(({ name }: { name: string }) => name)).toEqual(["유지 상품"]);
+    expect(output.result.faqSuggestions.map(({ question }: { question: string }) => question)).toEqual(["유지 FAQ?"]);
+    expect(output.result.sourceGaps).toContain(
+      "근거 ID가 일치하지 않은 회사명 1건, 상품·서비스 1건, FAQ 1건을 제외함",
+    );
+    expect(output.result.competitors).toEqual([]);
+    expect(output.result.marketContext).toEqual([]);
+    expect(output.result.evidence).toHaveLength(4);
+    expect(output.registry.externalSources).toEqual([]);
+    expect(JSON.stringify(output)).not.toContain("same-model-id");
+    expect(JSON.stringify(output)).not.toContain("PRIVATE_INVALID");
+  }, 30_000);
+
   it("preserves malformed JSON as a terminal contract failure after bounded retries", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "brand-pilot-runner-json-retry-"));
     temporaryDirectories.push(root);

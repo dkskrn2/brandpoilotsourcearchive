@@ -4,7 +4,7 @@ import { appendFile, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { validateFinalAuditResult } from "../dist/finalAuditValidation.js";
 import { ACTIVE_PIPELINE_MS, MAX_PHYSICAL_CLI_CALLS, MAX_RETRY_CLI_CALLS, stageTimeoutMs } from "../dist/limits.js";
-import { parseOwnedFactEnvelope } from "../dist/stageContracts.js";
+import { parseOfferingSuggestions, parseOwnedFactEnvelope } from "../dist/stageContracts.js";
 import { codexFailureDiagnostic, extractJson } from "./codex-output.mjs";
 
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
@@ -270,15 +270,12 @@ const registeredSegments = new Map(job.batches.flatMap((batch) => (
   }])
 )));
 const factOutputs = [];
-const registeredFactIds = new Set();
 let droppedOwnedFactCount = 0;
 for (let batchIndex = 0; batchIndex < 4; batchIndex += 1) {
   const batch = job.batches[batchIndex] ?? { batchIndex, segments: [] };
   const validateOwnedFacts = (response) => {
-    const output = parseOwnedFactEnvelope(response, registeredSegments, { quoteMismatch: "drop-fact" }).output;
-    if (output.some((fact) => registeredFactIds.has(fact.id))) {
-      throw new Error("owned_fact_id_duplicate");
-    }
+    const output = parseOwnedFactEnvelope(response, registeredSegments, { quoteMismatch: "drop-fact" }).output
+      .map((fact, ordinal) => ({ ...fact, id: `owned-${batchIndex + 1}-${ordinal + 1}` }));
     return { output, droppedCount: response.output.length - output.length };
   };
   const parsedFactBatch = await invokeStage(batchIndex, [
@@ -294,7 +291,6 @@ for (let batchIndex = 0; batchIndex < 4; batchIndex += 1) {
   ].join("\n"), { validate: validateOwnedFacts });
   droppedOwnedFactCount += parsedFactBatch.droppedCount;
   for (const fact of parsedFactBatch.output) {
-    registeredFactIds.add(fact.id);
     factOutputs.push(fact);
   }
 }
@@ -309,58 +305,30 @@ const ownedFactSourceGaps = [
     ? ["검증 가능한 자사 사실을 확인하지 못함"]
     : []),
 ];
-const validFactIds = (ids) => Array.isArray(ids)
-  && ids.length > 0
-  && ids.every((id) => factIds.has(id));
-const faqCategories = new Set(["service", "product", "price", "location", "operation", "other"]);
-
-const validateOfferings = (offeringsResponse) => {
-  const validCompanyNameSuggestion = offeringsResponse.companyNameSuggestion === null
-    || (
-      offeringsResponse.companyNameSuggestion
-      && typeof offeringsResponse.companyNameSuggestion === "object"
-      && typeof offeringsResponse.companyNameSuggestion.name === "string"
-      && offeringsResponse.companyNameSuggestion.name.trim()
-      && offeringsResponse.companyNameSuggestion.name.trim().length <= 100
-      && validFactIds(offeringsResponse.companyNameSuggestion.sourceFactIds)
-    );
-  if (!validCompanyNameSuggestion
-    || !Array.isArray(offeringsResponse.offerings)
-    || offeringsResponse.offerings.length > 5
-    || offeringsResponse.offerings.some((offering) => (
-      !offering
-      || typeof offering !== "object"
-      || (offering.kind !== "product" && offering.kind !== "service")
-      || typeof offering.name !== "string"
-      || !offering.name.trim()
-      || !validFactIds(offering.sourceFactIds)
-    ))
-    || !Array.isArray(offeringsResponse.faqSuggestions)
-    || offeringsResponse.faqSuggestions.length > 20
-    || offeringsResponse.faqSuggestions.some((faq) => (
-      !faq
-      || typeof faq !== "object"
-      || typeof faq.question !== "string"
-      || !faq.question.trim()
-      || faq.question.trim().length > 300
-      || typeof faq.answer !== "string"
-      || !faq.answer.trim()
-      || faq.answer.trim().length > 4_000
-      || !faqCategories.has(faq.category)
-      || !validFactIds(faq.sourceFactIds)
-    ))) {
-    throw new Error("brand_intelligence_offering_registry_mismatch");
-  }
-  return offeringsResponse;
-};
-
-const offeringsResponse = await invokeStage(4, [
+const parsedOfferingSuggestions = await invokeStage(4, [
   "다음 검증된 자사 사실만 사용해 회사명, 대표 상품·서비스, 고객 FAQ를 추출하라.",
   "반환 형식: {\"companyNameSuggestion\":{\"name\":\"회사명\",\"sourceFactIds\":[\"fact id\"]}|null,\"offerings\":[{\"kind\":\"product|service\",\"name\":\"이름\",\"description\":null,\"target\":null,\"benefit\":null,\"priceText\":null,\"purchaseUrl\":null,\"sourceFactIds\":[\"fact id\"]}],\"faqSuggestions\":[{\"question\":\"질문\",\"answer\":\"답변\",\"category\":\"service|product|price|location|operation|other\",\"sourceFactIds\":[\"fact id\"]}]}",
   "대표 상품·서비스는 합쳐 최대 5개, FAQ는 최대 20개다.",
-  "회사명·상품·FAQ의 sourceFactIds는 입력 fact id만 허용하며 직접 근거가 약하면 만들지 마라.",
-  JSON.stringify({ companyName: job.companyName, facts: supportedFacts }),
-].join("\n"), { validate: validateOfferings });
+  "회사명·상품·FAQ의 sourceFactIds는 allowedFactIds의 ID만 정확히 복사하고, 직접 근거가 없으면 항목 전체를 생략하라. ID를 유사하게 추정·재매핑하거나 일부만 제거하지 마라.",
+  JSON.stringify({ companyName: job.companyName, allowedFactIds: [...factIds], facts: supportedFacts }),
+].join("\n"), {
+  validate: (response) => parseOfferingSuggestions(response, factIds, { registryMismatch: "drop-item" }),
+});
+const offeringsResponse = parsedOfferingSuggestions.output;
+const { dropped: droppedOfferingSuggestionCounts } = parsedOfferingSuggestions;
+const offeringSourceGaps = (
+  droppedOfferingSuggestionCounts.companyNameSuggestion
+  || droppedOfferingSuggestionCounts.offerings
+  || droppedOfferingSuggestionCounts.faqSuggestions
+) ? [
+  "근거 ID가 일치하지 않은 회사명 " + droppedOfferingSuggestionCounts.companyNameSuggestion
+    + "건, 상품·서비스 " + droppedOfferingSuggestionCounts.offerings
+    + "건, FAQ " + droppedOfferingSuggestionCounts.faqSuggestions + "건을 제외함",
+] : [];
+const trustedSourceGaps = [...new Set([
+  ...ownedFactSourceGaps,
+  ...offeringSourceGaps,
+])];
 const companyNameSuggestion = offeringsResponse.companyNameSuggestion;
 const offerings = offeringsResponse.offerings;
 const faqSuggestions = offeringsResponse.faqSuggestions;
@@ -451,7 +419,7 @@ const candidate = {
     ...(Array.isArray(external.evidence) ? external.evidence : []),
   ],
   sourceGaps: [...new Set([
-    ...ownedFactSourceGaps,
+    ...trustedSourceGaps,
     ...(Array.isArray(core.sourceGaps) ? core.sourceGaps : []),
   ])].slice(0, 50),
 };
@@ -479,7 +447,7 @@ const validateFinalAudit = (audited) => {
     allowedExternalUrls,
   };
   const validated = validateFinalAuditResult(audited, validationOptions);
-  if (supportedFacts.length > 0 && ownedFactSourceGaps.length === 0) return validated;
+  if (supportedFacts.length > 0 && trustedSourceGaps.length === 0) return validated;
   const scrubbed = supportedFacts.length === 0 ? {
     ...validated,
     oneLineDefinition: null,
@@ -500,7 +468,7 @@ const validateFinalAudit = (audited) => {
   return validateFinalAuditResult({
     ...scrubbed,
     sourceGaps: [...new Set([
-      ...ownedFactSourceGaps,
+      ...trustedSourceGaps,
       ...scrubbed.sourceGaps,
     ])].slice(0, 50),
   }, validationOptions);
