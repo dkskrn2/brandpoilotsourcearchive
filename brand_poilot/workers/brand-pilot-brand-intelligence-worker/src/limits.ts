@@ -12,9 +12,9 @@ export const MAX_SOURCE_CHARACTERS = 100_000;
 export const MAX_SEGMENT_CHARACTERS = 20_000;
 
 export const STAGE_BUDGET_SECONDS =
-  [270, 270, 60, 60, 75, 75, 60, 60] as const;
+  [270, 270, 60, 60, 75, 75, 60, 120] as const;
 export const STAGE_RESERVE_SECONDS =
-  [660, 390, 330, 270, 195, 120, 60, 0] as const;
+  [720, 450, 390, 330, 255, 180, 120, 0] as const;
 
 export function codexProcessTimeoutMs(configuredValue: string | undefined): number {
   const configuredMs = Number(configuredValue ?? ACTIVE_PIPELINE_MS);

@@ -15,11 +15,11 @@ describe("brand intelligence pipeline budgets", () => {
     expect(MAX_LOGICAL_CLI_CALLS).toBe(8);
     expect(MAX_RETRY_CLI_CALLS).toBe(2);
     expect(MAX_PHYSICAL_CLI_CALLS).toBe(10);
-    expect(STAGE_BUDGET_SECONDS).toEqual([270, 270, 60, 60, 75, 75, 60, 60]);
-    expect(STAGE_RESERVE_SECONDS).toEqual([660, 390, 330, 270, 195, 120, 60, 0]);
+    expect(STAGE_BUDGET_SECONDS).toEqual([270, 270, 60, 60, 75, 75, 60, 120]);
+    expect(STAGE_RESERVE_SECONDS).toEqual([720, 450, 390, 330, 255, 180, 120, 0]);
     expect(ACTIVE_PIPELINE_MS).toBe(1_200_000);
-    expect(STAGE_BUDGET_SECONDS.reduce((total, seconds) => total + seconds, 0)).toBe(930);
-    expect(ACTIVE_PIPELINE_MS / 1_000 - 930).toBe(270);
+    expect(STAGE_BUDGET_SECONDS.reduce((total, seconds) => total + seconds, 0)).toBe(990);
+    expect(ACTIVE_PIPELINE_MS / 1_000 - 990).toBe(210);
   });
 
   it("never spends downstream reserve", () => {
@@ -29,10 +29,10 @@ describe("brand intelligence pipeline budgets", () => {
 
     expect(STAGE_RESERVE_SECONDS).toEqual(downstreamBudgets);
     expect(stageTimeoutMs(0, 1_200_000)).toBe(270_000);
-    expect(stageTimeoutMs(6, 120_000)).toBe(60_000);
-    expect(() => stageTimeoutMs(6, 60_000)).toThrow("analysis_deadline_exceeded");
-    expect(stageTimeoutMs(7, 1_200_000)).toBe(60_000);
-    expect(stageTimeoutMs(7, 59_999)).toBe(59_999);
+    expect(stageTimeoutMs(6, 180_000)).toBe(60_000);
+    expect(() => stageTimeoutMs(6, 120_000)).toThrow("analysis_deadline_exceeded");
+    expect(stageTimeoutMs(7, 1_200_000)).toBe(120_000);
+    expect(stageTimeoutMs(7, 119_999)).toBe(119_999);
     expect(() => stageTimeoutMs(7, 0)).toThrow("analysis_deadline_exceeded");
   });
 
