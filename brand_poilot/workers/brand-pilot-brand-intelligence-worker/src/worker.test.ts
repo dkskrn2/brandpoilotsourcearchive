@@ -382,7 +382,7 @@ describe("brand intelligence worker", () => {
     expect(script).not.toContain("minProperties");
     expect(script).toContain("brand_intelligence_forbidden_tool_event");
     expect(script).toContain('{ quoteMismatch: "drop-fact" }');
-    expect(script).toContain("brand_intelligence_offering_registry_mismatch");
+    expect(script).toContain("parseOfferingSuggestions");
     expect(script).toContain("companyNameSuggestion");
     expect(script).toContain("faqSuggestions");
     expect(script.match(/invokeStage\(4,/g)).toHaveLength(1);
@@ -398,11 +398,23 @@ describe("brand intelligence worker", () => {
     expect(validationIndex).toBeGreaterThan(-1);
     expect(successIndex).toBeGreaterThan(validationIndex);
     expect(script).toContain("const validateOwnedFacts = (response) => {");
+    expect(script).toContain("parseOfferingSuggestions, parseOwnedFactEnvelope");
     expect(script).toContain(
       'parseOwnedFactEnvelope(response, registeredSegments, { quoteMismatch: "drop-fact" }).output',
     );
     expect(script).toContain("validate: validateOwnedFacts");
-    expect(script).toContain("validate: validateOfferings");
+    expect(script).toContain(
+      'parseOfferingSuggestions(response, factIds, { registryMismatch: "drop-item" })',
+    );
+    expect(script).not.toContain("const validateOfferings");
+    expect(script).not.toContain("const registeredFactIds");
+    expect(script).toContain("id: `owned-${batchIndex + 1}-${ordinal + 1}`");
+    expect(script).toContain("allowedFactIds:");
+    expect(script).toContain("sourceFactIds는 allowedFactIds의 ID만 정확히 복사");
+    expect(script).toContain("근거 ID가 일치하지 않은 회사명 ");
+    expect(script).toContain("상품·서비스 ");
+    expect(script).toContain("FAQ ");
+    expect(script).toContain("trustedSourceGaps");
     expect(script).toContain("validate: validateFinalAudit");
     expect(script).toContain("validateFinalAuditResult(audited");
     expect(script).toContain('kind: "contract"');
