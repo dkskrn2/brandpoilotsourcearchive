@@ -12,9 +12,15 @@ export const MAX_SOURCE_CHARACTERS = 100_000;
 export const MAX_SEGMENT_CHARACTERS = 20_000;
 
 export const STAGE_BUDGET_SECONDS =
-  [270, 270, 60, 60, 75, 75, 60, 15] as const;
+  [270, 270, 60, 60, 75, 75, 60, 60] as const;
 export const STAGE_RESERVE_SECONDS =
-  [615, 345, 285, 225, 150, 75, 15, 0] as const;
+  [660, 390, 330, 270, 195, 120, 60, 0] as const;
+
+export function codexProcessTimeoutMs(configuredValue: string | undefined): number {
+  const configuredMs = Number(configuredValue ?? ACTIVE_PIPELINE_MS);
+  if (!Number.isFinite(configuredMs)) return ACTIVE_PIPELINE_MS;
+  return Math.max(ACTIVE_PIPELINE_MS, Math.floor(configuredMs));
+}
 
 export function stageTimeoutMs(stageIndex: number, remainingMs: number): number {
   const cap = STAGE_BUDGET_SECONDS[stageIndex];

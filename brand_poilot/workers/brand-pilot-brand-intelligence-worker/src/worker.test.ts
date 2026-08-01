@@ -353,10 +353,25 @@ describe("brand intelligence worker", () => {
 
   it("keeps external research fail-closed and isolates every Codex stage", async () => {
     const script = await readFile(new URL("../scripts/run-codex-brand-intelligence.mjs", import.meta.url), "utf8");
+    const entrypoint = await readFile(new URL("./index.ts", import.meta.url), "utf8");
+    const localEnv = await readFile(new URL("../.env.example", import.meta.url), "utf8");
+    const deployEnv = await readFile(new URL("../../../deploy/env/brand-intelligence-worker.env.example", import.meta.url), "utf8");
+    expect(script).toContain("ACTIVE_PIPELINE_MS,");
+    expect(script).toContain("MAX_PHYSICAL_CLI_CALLS,");
+    expect(script).toContain("MAX_RETRY_CLI_CALLS,");
+    expect(script).toContain('stageTimeoutMs } from "../dist/limits.js";');
+    expect(script).not.toContain("const STAGE_BUDGET_SECONDS =");
+    expect(script).not.toContain("const STAGE_RESERVE_SECONDS =");
+    expect(script).not.toContain("const MAX_RETRIES =");
+    expect(script).toContain("return stageTimeoutMs(stageIndex, remaining);");
+    expect(script).toContain("physicalCalls > MAX_PHYSICAL_CLI_CALLS");
+    expect(script).toContain("retriesUsed >= MAX_RETRY_CLI_CALLS");
+    expect(entrypoint).toContain("codexProcessTimeoutMs(process.env.BRAND_INTELLIGENCE_CODEX_TIMEOUT_MS)");
+    expect(entrypoint).not.toContain("?? 900_000");
+    expect(localEnv).toContain("BRAND_INTELLIGENCE_CODEX_TIMEOUT_MS=1200000");
+    expect(deployEnv).toContain("BRAND_INTELLIGENCE_CODEX_TIMEOUT_MS=1200000");
     expect(script).toContain("External research is fail-closed");
     expect(script).not.toContain("실제로 확인한 HTTPS 페이지만");
-    expect(script).toContain("MAX_RETRIES = 2");
-    expect(script).toContain("physicalCalls > 10");
     expect(script).toContain('"--disable", "shell_tool"');
     expect(script).toContain('"--disable", "apps"');
     expect(script).toContain('"--ignore-rules"');

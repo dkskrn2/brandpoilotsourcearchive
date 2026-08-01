@@ -17,6 +17,7 @@ import type {
 import { BrandIntelligenceApiError } from "./client.js";
 import { buildEvidenceBatches } from "./documentPipeline.js";
 import { prepareBrandEvidence } from "./evidencePreparer.js";
+import { ACTIVE_PIPELINE_MS } from "./limits.js";
 import { BrandIntelligenceContractError, parseBrandIntelligenceResult } from "./result.js";
 
 export interface BrandIntelligenceRunner {
@@ -30,7 +31,7 @@ export interface BrandIntelligenceRunner {
   }>;
 }
 
-export const BRAND_INTELLIGENCE_ACTIVE_TIMEOUT_MS = 20 * 60 * 1_000;
+export const BRAND_INTELLIGENCE_ACTIVE_TIMEOUT_MS = ACTIVE_PIPELINE_MS;
 const LEASE_BOUND_API_RETRY_MS = 1_000;
 
 function timestamp(value: string | null | undefined): number | null {

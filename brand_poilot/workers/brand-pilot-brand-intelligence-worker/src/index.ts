@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { createClient } from "./client.js";
+import { codexProcessTimeoutMs } from "./limits.js";
 import {
   createCodexRunner,
   runBrandIntelligenceOnce,
@@ -21,7 +22,7 @@ async function main() {
   const pollMs = Math.max(250, Number(process.env.BRAND_INTELLIGENCE_POLL_MS ?? 5_000));
   const client = createClient(required("BRAND_PILOT_API_URL"), required("WORKER_API_TOKEN"), fetch, apiTimeoutMs);
   const runner = createCodexRunner({
-    timeoutMs: Math.max(1_000, Number(process.env.BRAND_INTELLIGENCE_CODEX_TIMEOUT_MS ?? 900_000)),
+    timeoutMs: codexProcessTimeoutMs(process.env.BRAND_INTELLIGENCE_CODEX_TIMEOUT_MS),
   });
   do {
     const runOnce = () => runBrandIntelligenceOnce({ client, runner, workerId, leaseSeconds, pollMs });

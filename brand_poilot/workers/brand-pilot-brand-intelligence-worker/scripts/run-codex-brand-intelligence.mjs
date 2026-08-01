@@ -3,13 +3,10 @@ import { existsSync } from "node:fs";
 import { appendFile, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { validateFinalAuditResult } from "../dist/finalAuditValidation.js";
+import { ACTIVE_PIPELINE_MS, MAX_PHYSICAL_CLI_CALLS, MAX_RETRY_CLI_CALLS, stageTimeoutMs } from "../dist/limits.js";
 import { parseOwnedFactEnvelope } from "../dist/stageContracts.js";
 import { codexFailureDiagnostic, extractJson } from "./codex-output.mjs";
 
-const STAGE_BUDGET_SECONDS = [270, 270, 60, 60, 75, 75, 60, 15];
-const STAGE_RESERVE_SECONDS = [615, 345, 285, 225, 150, 75, 15, 0];
-const ACTIVE_DEADLINE_MS = 20 * 60 * 1_000;
-const MAX_RETRIES = 2;
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 
 const args = new Map();
@@ -83,10 +80,8 @@ function assertAllowedEvents(value, search) {
 }
 
 function stageTimeout(stageIndex, startedAt) {
-  const remaining = ACTIVE_DEADLINE_MS - (Date.now() - startedAt);
-  const available = remaining - STAGE_RESERVE_SECONDS[stageIndex] * 1_000;
-  if (available <= 0) throw new Error("analysis_deadline_exceeded");
-  return Math.min(STAGE_BUDGET_SECONDS[stageIndex] * 1_000, available);
+  const remaining = ACTIVE_PIPELINE_MS - (Date.now() - startedAt);
+  return stageTimeoutMs(stageIndex, remaining);
 }
 
 async function killChild(child) {
@@ -125,7 +120,9 @@ async function invokeStage(
   for (;;) {
     stageAttempt += 1;
     physicalCalls += 1;
-    if (physicalCalls > 10) throw new Error("brand_intelligence_physical_call_limit_exceeded");
+    if (physicalCalls > MAX_PHYSICAL_CLI_CALLS) {
+      throw new Error("brand_intelligence_physical_call_limit_exceeded");
+    }
     const timeoutMs = stageTimeout(stageIndex, startedAt);
     const stageOutputFile = path.join(runtimeDir, `stage-${stageIndex}-attempt-${physicalCalls}.json`);
     await appendFile(progressFile, `${JSON.stringify({
@@ -248,7 +245,7 @@ async function invokeStage(
         completedCliStageCount: stageIndex,
         totalCliStageCount: 8,
       })}\n`, "utf8");
-      if (retriesUsed >= MAX_RETRIES) {
+      if (retriesUsed >= MAX_RETRY_CLI_CALLS) {
         if (semanticValidationFailure
           || errorCode === "brand_intelligence_codex_json_invalid") {
           await writeFile(errorFile, `${JSON.stringify({
