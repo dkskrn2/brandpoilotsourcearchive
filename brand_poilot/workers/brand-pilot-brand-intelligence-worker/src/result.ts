@@ -43,9 +43,12 @@ const array = <T>(value: unknown, code: string, parser: (entry: unknown) => T, m
   return (value as unknown[]).map(parser);
 };
 
-function category(value: unknown, code: string) {
+function category(value: unknown, code: string, codeMaximum = 300) {
   const source = exact(value, ["code", "name"], code);
-  return { code: nullableString(source.code, code), name: stringValue(source.name, code, 300) };
+  return {
+    code: nullableString(source.code, code, codeMaximum),
+    name: stringValue(source.name, code, 300),
+  };
 }
 
 function parseV1(value: unknown): BrandIntelligenceResult {
@@ -95,8 +98,8 @@ function parseV1(value: unknown): BrandIntelligenceResult {
   };
 }
 
-function stringList(value: unknown, code: string, max = 50): string[] {
-  return array(value, code, (entry) => stringValue(entry, code, 1_000), max);
+function stringList(value: unknown, code: string, max = 50, itemMaximum = 1_000): string[] {
+  return array(value, code, (entry) => stringValue(entry, code, itemMaximum), max);
 }
 
 function nullableHttps(value: unknown, code: string): string | null {
@@ -131,7 +134,12 @@ function parseV2(value: unknown): BrandIntelligenceResult {
       benefit: nullableString(item.benefit, "brand_intelligence_offering_invalid", 1_000),
       priceText: nullableString(item.priceText, "brand_intelligence_offering_invalid", 500),
       purchaseUrl: nullableHttps(item.purchaseUrl, "brand_intelligence_offering_invalid"),
-      sourceFactIds: stringList(item.sourceFactIds, "brand_intelligence_offering_invalid"),
+      sourceFactIds: stringList(
+        item.sourceFactIds,
+        "brand_intelligence_offering_invalid",
+        50,
+        200,
+      ),
     };
   }, 5);
   const companyNameSource = source.companyNameSuggestion === null
@@ -146,6 +154,8 @@ function parseV2(value: unknown): BrandIntelligenceResult {
     ? stringList(
         companyNameSource.sourceFactIds,
         "brand_intelligence_company_name_suggestion_invalid",
+        50,
+        200,
       )
     : [];
   if (companyNameSource && companyNameFactIds.length === 0) {
@@ -169,6 +179,8 @@ function parseV2(value: unknown): BrandIntelligenceResult {
       const sourceFactIds = stringList(
         item.sourceFactIds,
         "brand_intelligence_faq_invalid",
+        50,
+        200,
       );
       if (sourceFactIds.length === 0) fail("brand_intelligence_faq_invalid");
       return {
@@ -226,9 +238,9 @@ function parseV2(value: unknown): BrandIntelligenceResult {
     businessDescription: nullableString(source.businessDescription, "brand_intelligence_business_description_invalid", 4_000),
     primaryCategory: source.primaryCategory === null
       ? null
-      : category(source.primaryCategory, "brand_intelligence_primary_category_invalid"),
+      : category(source.primaryCategory, "brand_intelligence_primary_category_invalid", 200),
     subcategories: array(source.subcategories, "brand_intelligence_subcategories_invalid", (entry) => (
-      category(entry, "brand_intelligence_subcategory_invalid")
+      category(entry, "brand_intelligence_subcategory_invalid", 200)
     ), 20),
     primaryTarget: nullableString(source.primaryTarget, "brand_intelligence_primary_target_invalid", 4_000),
     secondaryTargets: stringList(source.secondaryTargets, "brand_intelligence_secondary_targets_invalid", 20),
@@ -239,10 +251,15 @@ function parseV2(value: unknown): BrandIntelligenceResult {
     supportingAppeals: stringList(source.supportingAppeals, "brand_intelligence_supporting_appeals_invalid", 20),
     offerings,
     faqSuggestions,
-    keywords: stringList(source.keywords, "brand_intelligence_keywords_invalid", 50),
+    keywords: stringList(source.keywords, "brand_intelligence_keywords_invalid", 50, 200),
     observedTone: observed ? {
       summary: stringValue(observed.summary, "brand_intelligence_observed_tone_invalid", 1_000),
-      sourceFactIds: stringList(observed.sourceFactIds, "brand_intelligence_observed_tone_invalid"),
+      sourceFactIds: stringList(
+        observed.sourceFactIds,
+        "brand_intelligence_observed_tone_invalid",
+        50,
+        200,
+      ),
     } : null,
     competitors,
     marketContext,
@@ -262,7 +279,12 @@ function parseV2(value: unknown): BrandIntelligenceResult {
         sourceKind,
       };
     }, 100),
-    sourceGaps: stringList(source.sourceGaps, "brand_intelligence_source_gaps_invalid"),
+    sourceGaps: stringList(
+      source.sourceGaps,
+      "brand_intelligence_source_gaps_invalid",
+      50,
+      4_000,
+    ),
   };
 }
 

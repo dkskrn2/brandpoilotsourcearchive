@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { BrandAnalysisJob, BrandIntelligenceResult, BrandIntelligenceWorkerClient } from "./contracts.js";
 import { BrandIntelligenceApiError } from "./client.js";
 import { BrandIntelligenceContractError } from "./result.js";
 import {
   buildBrandIntelligenceChildEnv,
+  createCodexRunner,
   processBrandIntelligenceJob,
   runBrandIntelligenceOnce,
   runBrandIntelligenceWatchIteration,
@@ -94,6 +97,31 @@ describe("brand intelligence worker", () => {
     };
     await processBrandIntelligenceJob({ client: api, runner, job, leaseSeconds: 900 });
     expect(api.fail).toHaveBeenCalledWith(job, expect.objectContaining({ retryable: false }));
+  });
+
+  it("preserves a terminal semantic validation error across the child boundary", async () => {
+    const runtimeRoot = await mkdtemp(path.join(tmpdir(), "brand-intelligence-terminal-error-"));
+    const runner = createCodexRunner({
+      runtimeRoot,
+      spawnProcess: async (_command, args) => {
+        const errorArgument = args.find((arg) => arg.startsWith("--error-file="));
+        if (!errorArgument) throw new Error("missing_error_file_argument");
+        await writeFile(errorArgument.slice("--error-file=".length), JSON.stringify({
+          kind: "contract",
+          errorCode: "brand_intelligence_evidence_quote_mismatch",
+        }), "utf8");
+        throw new Error("brand_intelligence_codex_process_failed:1");
+      },
+    });
+
+    try {
+      await expect(runner.run(job)).rejects.toMatchObject({
+        name: "BrandIntelligenceContractError",
+        message: "brand_intelligence_evidence_quote_mismatch",
+      });
+    } finally {
+      await rm(runtimeRoot, { recursive: true, force: true });
+    }
   });
 
   it("honors retryable API failures", async () => {
@@ -188,6 +216,24 @@ describe("brand intelligence worker", () => {
     expect(script.match(/invokeStage\(4,/g)).toHaveLength(1);
     expect(script).not.toContain("invokeStage(8,");
     expect(script).toMatch(/const keys = \[\s*"APPDATA", "CODEX_HOME", "COMSPEC", "HOME"/);
+  });
+
+  it("counts semantic validation failures inside the bounded Codex retry loop", async () => {
+    const script = await readFile(new URL("../scripts/run-codex-brand-intelligence.mjs", import.meta.url), "utf8");
+    const validationIndex = script.indexOf("validated = await validate(result);");
+    const successIndex = script.indexOf('status: "succeeded"', validationIndex);
+
+    expect(validationIndex).toBeGreaterThan(-1);
+    expect(successIndex).toBeGreaterThan(validationIndex);
+    expect(script).toContain("const validateOwnedFacts = (response) => {");
+    expect(script).toContain("parseOwnedFactEnvelope(response, registeredSegments).output");
+    expect(script).toContain("validate: validateOwnedFacts");
+    expect(script).toContain("validate: validateOfferings");
+    expect(script).toContain("validate: validateFinalAudit");
+    expect(script).toContain("validateFinalAuditResult(audited");
+    expect(script).toContain('kind: "contract"');
+    expect(script).toContain("이전 응답 검증 오류");
+    expect(script).toContain("sourceUrl이 null인 segment에만 null을 반환하라");
   });
 
   it("ships the Codex output helper in the runtime image", async () => {

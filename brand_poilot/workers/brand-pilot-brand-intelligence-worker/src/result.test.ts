@@ -78,4 +78,19 @@ describe("brand intelligence result suggestions", () => {
     expect(result.companyNameSuggestion).toBeNull();
     expect(result.faqSuggestions).toEqual([]);
   });
+
+  it("matches API v2 category, keyword, fact ID, and source-gap limits", () => {
+    expect(() => parseBrandIntelligenceResult(v2({
+      primaryCategory: { code: "c".repeat(201), name: "브랜드 컨설팅" },
+    }))).toThrow("brand_intelligence_primary_category_invalid");
+    expect(() => parseBrandIntelligenceResult(v2({
+      keywords: ["k".repeat(201)],
+    }))).toThrow("brand_intelligence_keywords_invalid");
+    expect(() => parseBrandIntelligenceResult(v2({
+      observedTone: { summary: "차분한 문체", sourceFactIds: ["f".repeat(201)] },
+    }))).toThrow("brand_intelligence_observed_tone_invalid");
+    expect(() => parseBrandIntelligenceResult(v2({
+      sourceGaps: ["g".repeat(4_000)],
+    }))).not.toThrow();
+  });
 });

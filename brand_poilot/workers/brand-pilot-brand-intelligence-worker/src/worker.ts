@@ -76,6 +76,7 @@ export function createCodexRunner({
       const outputFile = path.join(workDir, "result.json");
       const jobFile = path.join(workDir, "job.txt");
       const progressFile = path.join(workDir, "progress.jsonl");
+      const errorFile = path.join(workDir, "terminal-error.json");
       const progressController = new AbortController();
       const combinedSignal = signal
         ? AbortSignal.any([signal, progressController.signal])
@@ -115,22 +116,40 @@ export function createCodexRunner({
           sourceRegistry: job.evidence.map((document) => ({
             sourceId: document.sourceId,
             sourceUrl: document.sourceUrl,
+            sourceKind: document.sourceType === "owned_url" ? "owned" : "upload",
           })),
         })}\n`, "utf8");
         progressTimer = setInterval(() => { void drainProgress(); }, 250);
-        await spawnProcess(
-          process.execPath,
-          [
-            scriptPath,
-            `--job-file=${jobFile}`,
-            `--output-file=${outputFile}`,
-            `--runtime-dir=${workDir}`,
-            `--progress-file=${progressFile}`,
-          ],
-          timeoutMs,
-          buildBrandIntelligenceChildEnv(process.env),
-          combinedSignal,
-        );
+        try {
+          await spawnProcess(
+            process.execPath,
+            [
+              scriptPath,
+              `--job-file=${jobFile}`,
+              `--output-file=${outputFile}`,
+              `--runtime-dir=${workDir}`,
+              `--progress-file=${progressFile}`,
+              `--error-file=${errorFile}`,
+            ],
+            timeoutMs,
+            buildBrandIntelligenceChildEnv(process.env),
+            combinedSignal,
+          );
+        } catch (error) {
+          clearInterval(progressTimer);
+          progressTimer = undefined;
+          await drainProgress();
+          if (progressError) throw progressError;
+          const terminalError = await readFile(errorFile, "utf8")
+            .then((content) => JSON.parse(content) as { kind?: unknown; errorCode?: unknown })
+            .catch(() => null);
+          if (terminalError?.kind === "contract"
+            && typeof terminalError.errorCode === "string"
+            && /^(?:brand_intelligence|owned_fact)_[a-z0-9_]{1,100}$/.test(terminalError.errorCode)) {
+            throw new BrandIntelligenceContractError(terminalError.errorCode);
+          }
+          throw error;
+        }
         clearInterval(progressTimer);
         progressTimer = undefined;
         await drainProgress();
