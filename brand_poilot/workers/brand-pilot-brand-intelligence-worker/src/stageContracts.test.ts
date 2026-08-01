@@ -79,6 +79,133 @@ describe("brand intelligence stage contracts", () => {
     }, segments)).toThrow("owned_fact_quote_mismatch");
   });
 
+  it("omits only quote-mismatched facts when explicitly requested", () => {
+    const segments = new Map([["segment-1", {
+      sourceId: "owned-1",
+      sourceUrl: null,
+      normalizedText: "등록된 본문과 검증된 사실",
+    }]]);
+    const parsed = parseOwnedFactEnvelope({
+      stageVersion: "owned-facts.v1",
+      output: [{
+        id: "fact-valid",
+        claim: "검증된 사실",
+        sourceId: "owned-1",
+        segmentId: "segment-1",
+        sourceUrl: null,
+        quotes: ["검증된 사실"],
+        category: "business",
+        support: "supported",
+      }, {
+        id: "fact-mismatch",
+        claim: "재서술된 사실",
+        sourceId: "owned-1",
+        segmentId: "segment-1",
+        sourceUrl: null,
+        quotes: ["원문에 없는 인용"],
+        category: "business",
+        support: "supported",
+      }],
+    }, segments, { quoteMismatch: "drop-fact" });
+
+    expect(parsed.output.map(({ id }) => id)).toEqual(["fact-valid"]);
+    expect(parseOwnedFactEnvelope({
+      stageVersion: "owned-facts.v1",
+      output: [{
+        id: "fact-only-mismatch",
+        claim: "재서술된 사실",
+        sourceId: "owned-1",
+        segmentId: "segment-1",
+        sourceUrl: null,
+        quotes: ["원문에 없는 인용"],
+        category: "business",
+        support: "supported",
+      }],
+    }, segments, { quoteMismatch: "drop-fact" }).output).toEqual([]);
+  });
+
+  it("does not let quote omission hide registry, shape, or duplicate-id errors", () => {
+    const segments = new Map([["segment-1", {
+      sourceId: "owned-1",
+      sourceUrl: null,
+      normalizedText: "등록된 본문",
+    }]]);
+    const fact = {
+      id: "fact-1",
+      claim: "주장",
+      sourceId: "owned-1",
+      segmentId: "segment-1",
+      sourceUrl: null,
+      quotes: ["원문에 없는 인용"],
+      category: "business",
+      support: "supported",
+    };
+    const parse = (output: unknown[]) => parseOwnedFactEnvelope({
+      stageVersion: "owned-facts.v1",
+      output,
+    }, segments, { quoteMismatch: "drop-fact" });
+
+    expect(() => parse([{ ...fact, sourceId: "invented" }]))
+      .toThrow("owned_fact_source_registry_mismatch");
+    expect(() => parse([{ ...fact, sourceUrl: "https://example.com/invented" }]))
+      .toThrow("owned_fact_source_registry_mismatch");
+    expect(() => parse([{ ...fact, claim: "" }]))
+      .toThrow("owned_fact_invalid");
+    expect(() => parse([{ ...fact, extra: true }]))
+      .toThrow("owned_fact_invalid");
+    expect(() => parse([fact, { ...fact, quotes: ["등록된 본문"] }]))
+      .toThrow("owned_fact_id_duplicate");
+  });
+
+  it("drops the entire fact when any one of its quotes is mismatched", () => {
+    const segments = new Map([["segment-1", {
+      sourceId: "owned-1",
+      sourceUrl: null,
+      normalizedText: "첫 번째 인용과 두 번째 인용",
+    }]]);
+    const parsed = parseOwnedFactEnvelope({
+      stageVersion: "owned-facts.v1",
+      output: [{
+        id: "fact-1",
+        claim: "주장",
+        sourceId: "owned-1",
+        segmentId: "segment-1",
+        sourceUrl: null,
+        quotes: ["첫 번째 인용", "원문에 없는 인용"],
+        category: "business",
+        support: "conflicting",
+      }],
+    }, segments, { quoteMismatch: "drop-fact" });
+
+    expect(parsed.output).toEqual([]);
+  });
+
+  it("retains missing facts without quotes but omits supported facts without quotes", () => {
+    const segments = new Map([["segment-1", {
+      sourceId: "owned-1",
+      sourceUrl: null,
+      normalizedText: "등록된 본문",
+    }]]);
+    const base = {
+      claim: "확인할 수 없음",
+      sourceId: "owned-1",
+      segmentId: "segment-1",
+      sourceUrl: null,
+      quotes: [],
+      category: "business",
+    };
+    const parsed = parseOwnedFactEnvelope({
+      stageVersion: "owned-facts.v1",
+      output: [{ ...base, id: "fact-missing", support: "missing" }, {
+        ...base,
+        id: "fact-supported",
+        support: "supported",
+      }],
+    }, segments, { quoteMismatch: "drop-fact" });
+
+    expect(parsed.output.map(({ id }) => id)).toEqual(["fact-missing"]);
+  });
+
   it("bounds and normalizes external search candidates", () => {
     const parsed = parseExternalCandidateEnvelope({
       stageVersion: "external-candidates.v1",

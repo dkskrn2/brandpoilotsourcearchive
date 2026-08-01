@@ -381,7 +381,7 @@ describe("brand intelligence worker", () => {
     expect(script).toContain("codexFailureDiagnostic(stderr, stdout)");
     expect(script).not.toContain("minProperties");
     expect(script).toContain("brand_intelligence_forbidden_tool_event");
-    expect(script).toContain("parseOwnedFactEnvelope(response, registeredSegments)");
+    expect(script).toContain('{ quoteMismatch: "drop-fact" }');
     expect(script).toContain("brand_intelligence_offering_registry_mismatch");
     expect(script).toContain("companyNameSuggestion");
     expect(script).toContain("faqSuggestions");
@@ -398,7 +398,9 @@ describe("brand intelligence worker", () => {
     expect(validationIndex).toBeGreaterThan(-1);
     expect(successIndex).toBeGreaterThan(validationIndex);
     expect(script).toContain("const validateOwnedFacts = (response) => {");
-    expect(script).toContain("parseOwnedFactEnvelope(response, registeredSegments).output");
+    expect(script).toContain(
+      'parseOwnedFactEnvelope(response, registeredSegments, { quoteMismatch: "drop-fact" }).output',
+    );
     expect(script).toContain("validate: validateOwnedFacts");
     expect(script).toContain("validate: validateOfferings");
     expect(script).toContain("validate: validateFinalAudit");
@@ -406,6 +408,28 @@ describe("brand intelligence worker", () => {
     expect(script).toContain('kind: "contract"');
     expect(script).toContain("이전 응답 검증 오류");
     expect(script).toContain("sourceUrl이 null인 segment에만 null을 반환하라");
+    expect(script).toContain("segment.text의 연속된 부분 문자열을 그대로 복사");
+    expect(script).toContain(
+      "구두점 변경·생략·재서술하지 말고, 정확히 복사할 수 없으면 fact 전체를 생략",
+    );
+    expect(script).toContain(
+      "supported와 conflicting은 quotes를 1개 이상 넣고 missing은 quotes를 빈 배열",
+    );
+    expect(script).toContain("droppedOwnedFactCount += parsedFactBatch.droppedCount");
+    expect(script).toContain("supportedFacts.length === 0 ? {} : coreResponse");
+    expect(script).toContain(
+      "JSON.stringify({ companyName: effectiveCompanyName, facts: supportedFacts })",
+    );
+    expect(script).not.toContain(
+      "JSON.stringify({ companyName: effectiveCompanyName, facts })",
+    );
+    expect(script).toContain("ownedFactSourceGaps");
+    expect(script).toContain("scrubbed.sourceGaps");
+    expect(script).toContain("oneLineDefinition: null");
+    expect(script).toContain("observedTone: null");
+    expect(script).toContain(
+      "subcategories의 각 항목은 {code:string|null,name:string}, valueProposition은 string|null",
+    );
   });
 
   it("ships the Codex output helper in the runtime image", async () => {

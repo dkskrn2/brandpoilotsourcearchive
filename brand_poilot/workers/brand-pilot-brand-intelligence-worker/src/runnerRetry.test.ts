@@ -126,6 +126,158 @@ process.stdin.on("end", () => {
     expect(result.stderr).not.toContain("PRIVATE_CUSTOMER_FACT");
   }, 30_000);
 
+  it("drops quote-mismatched facts without spending a retry or registering their IDs", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "brand-pilot-runner-quote-filter-"));
+    temporaryDirectories.push(root);
+    const appData = path.join(root, "appdata");
+    const runtimeDirectory = path.join(root, "runtime");
+    const callsFile = path.join(root, "calls.txt");
+    const fakeCodex = path.join(
+      appData,
+      "npm",
+      "node_modules",
+      "@openai",
+      "codex",
+      "bin",
+      "codex.js",
+    );
+    await mkdir(path.dirname(fakeCodex), { recursive: true });
+    await mkdir(runtimeDirectory, { recursive: true });
+    await writeFile(fakeCodex, [
+      'const fs = require("node:fs");',
+      "const callsFile = " + JSON.stringify(callsFile) + ";",
+      'let prompt = "";',
+      'process.stdin.on("data", (chunk) => { prompt += String(chunk); });',
+      'process.stdin.on("end", () => {',
+      '  const outputIndex = process.argv.indexOf("--output-last-message");',
+      '  const outputFile = process.argv[outputIndex + 1];',
+      '  const write = (value) => fs.writeFileSync(outputFile, JSON.stringify(value));',
+      '  fs.appendFileSync(callsFile, "call\\n");',
+      '  if (prompt.includes("오직 제공된 텍스트")) {',
+      '    const output = prompt.includes("segment-1") ? [{',
+      '      id: "fact-mismatch",',
+      '      claim: "PRIVATE_DROPPED_FACT",',
+      '      sourceId: "owned-1",',
+      '      segmentId: "segment-1",',
+      '      sourceUrl: null,',
+      '      quotes: ["PRIVATE_INVENTED_QUOTE"],',
+      '      category: "business",',
+      '      support: "supported"',
+      '    }] : [];',
+      '    write({ stageVersion: "owned-facts.v1", output });',
+      '    return;',
+      '  }',
+      '  if (prompt.includes("대표 상품")) {',
+      '    write({ companyNameSuggestion: null, offerings: [], faqSuggestions: [] });',
+      '    return;',
+      '  }',
+      '  if (prompt.includes("브랜드 코어")) {',
+      '    write({ oneLineDefinition: "PRIVATE_UNGROUNDED_CORE" });',
+      '    return;',
+      '  }',
+      '  if (prompt.includes("공개 웹검색")) {',
+      '    write({ competitors: [], marketContext: [], evidence: [] });',
+      '    return;',
+      '  }',
+      '  if (prompt.includes("감사하라")) {',
+      '    const payload = JSON.parse(prompt.trim().split(/\\r?\\n/).at(-1));',
+      '    write({',
+      '      ...payload.candidate,',
+      '      oneLineDefinition: "PRIVATE_FINAL_CORE",',
+      '      companyOverview: "PRIVATE_FINAL_CORE",',
+      '      businessDescription: "PRIVATE_FINAL_CORE",',
+      '      primaryCategory: { code: null, name: "PRIVATE_FINAL_CORE" },',
+      '      subcategories: [{ code: null, name: "PRIVATE_FINAL_CORE" }],',
+      '      primaryTarget: "PRIVATE_FINAL_CORE",',
+      '      secondaryTargets: ["PRIVATE_FINAL_CORE"],',
+      '      customerNeeds: ["PRIVATE_FINAL_CORE"],',
+      '      valueProposition: "PRIVATE_FINAL_CORE",',
+      '      differentiators: ["PRIVATE_FINAL_CORE"],',
+      '      coreAppeal: "PRIVATE_FINAL_CORE",',
+      '      supportingAppeals: ["PRIVATE_FINAL_CORE"],',
+      '      keywords: ["PRIVATE_FINAL_CORE"],',
+      '      observedTone: { summary: "PRIVATE_FINAL_CORE", sourceFactIds: [] }',
+      '    });',
+      '    return;',
+      '  }',
+      '  process.exitCode = 2;',
+      '});',
+    ].join("\n"), "utf8");
+
+    const jobFile = path.join(root, "job.json");
+    const outputFile = path.join(root, "output.json");
+    const progressFile = path.join(root, "progress.jsonl");
+    const errorFile = path.join(root, "terminal-error.json");
+    await writeFile(jobFile, JSON.stringify({
+      analysisId: "analysis-1",
+      brandId: "brand-1",
+      companyName: null,
+      batches: [{
+        batchIndex: 0,
+        segments: [{
+          id: "segment-1",
+          sourceId: "owned-1",
+          sourceUrl: null,
+          text: "registered text",
+        }],
+      }],
+      sourceRegistry: [{ sourceId: "owned-1", sourceUrl: null, sourceKind: "upload" }],
+    }), "utf8");
+
+    const runner = fileURLToPath(new URL("../scripts/run-codex-brand-intelligence.mjs", import.meta.url));
+    const result = await runProcess(process.execPath, [
+      runner,
+      "--job-file=" + jobFile,
+      "--output-file=" + outputFile,
+      "--runtime-dir=" + runtimeDirectory,
+      "--progress-file=" + progressFile,
+      "--error-file=" + errorFile,
+    ], {
+      ...process.env,
+      APPDATA: appData,
+      BRAND_INTELLIGENCE_CODEX_COMMAND: "codex",
+      BRAND_INTELLIGENCE_CODEX_FAST_MODE: "false",
+      CODEX_HOME: path.join(root, "codex-home"),
+    });
+
+    const calls = (await readFile(callsFile, "utf8")).trim().split(/\r?\n/);
+    const progressText = await readFile(progressFile, "utf8");
+    const progress = progressText.trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    const output = JSON.parse(await readFile(outputFile, "utf8"));
+
+    expect(result.code).toBe(0);
+    expect(calls).toHaveLength(8);
+    expect(progress.filter(({ status }) => status === "failed")).toEqual([]);
+    expect(progress.filter(({ status }) => status === "succeeded")).toHaveLength(8);
+    expect(output.registry.ownedFactIds).toEqual([]);
+    expect(output.result.evidence).toEqual([]);
+    expect(output.result.sourceGaps).toEqual([
+      "직접 인용과 일치하지 않은 자사 사실 1건을 제외함",
+      "검증 가능한 자사 사실을 확인하지 못함",
+    ]);
+    expect(output.result).toMatchObject({
+      oneLineDefinition: null,
+      companyOverview: null,
+      businessDescription: null,
+      primaryCategory: null,
+      subcategories: [],
+      primaryTarget: null,
+      secondaryTargets: [],
+      customerNeeds: [],
+      valueProposition: null,
+      differentiators: [],
+      coreAppeal: null,
+      supportingAppeals: [],
+      keywords: [],
+      observedTone: null,
+    });
+    expect(JSON.stringify(output)).not.toContain("fact-mismatch");
+    expect(JSON.stringify(output)).not.toContain("PRIVATE_DROPPED_FACT");
+    expect(JSON.stringify(output)).not.toContain("PRIVATE_INVENTED_QUOTE");
+    expect(JSON.stringify(output)).not.toContain("PRIVATE_UNGROUNDED_CORE");
+    expect(JSON.stringify(output)).not.toContain("PRIVATE_FINAL_CORE");
+  }, 30_000);
+
   it("preserves malformed JSON as a terminal contract failure after bounded retries", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "brand-pilot-runner-json-retry-"));
     temporaryDirectories.push(root);

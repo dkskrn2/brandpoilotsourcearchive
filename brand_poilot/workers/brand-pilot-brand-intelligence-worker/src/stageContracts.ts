@@ -69,6 +69,7 @@ function httpsUrl(value: unknown, code: string): string {
 export function parseOwnedFactEnvelope(
   value: unknown,
   segments: ReadonlyMap<string, RegisteredSegment>,
+  options: { quoteMismatch?: "reject" | "drop-fact" } = {},
 ): StageEnvelope<OwnedFact[]> {
   const envelope = strictObject(value, ["stageVersion", "output"], "owned_fact_envelope_invalid");
   if (envelope.stageVersion !== "owned-facts.v1" || !Array.isArray(envelope.output)
@@ -76,7 +77,8 @@ export function parseOwnedFactEnvelope(
     fail("owned_fact_envelope_invalid");
   }
   const ids = new Set<string>();
-  const output = envelope.output.map((item): OwnedFact => {
+  const output: OwnedFact[] = [];
+  for (const item of envelope.output) {
     const source = strictObject(item, [
       "id", "claim", "sourceId", "segmentId", "sourceUrl", "quotes", "category", "support",
     ], "owned_fact_invalid");
@@ -96,30 +98,35 @@ export function parseOwnedFactEnvelope(
     if (!Array.isArray(source.quotes) || source.quotes.length > 10) {
       fail("owned_fact_invalid");
     }
-    const normalizedSegment = normalizedForQuote(segment.normalizedText);
     const quotes = source.quotes.map((quote) => {
-      const normalizedQuote = normalizedForQuote(text(quote, "owned_fact_invalid", 2_000));
-      if (!normalizedSegment.includes(normalizedQuote)) fail("owned_fact_quote_mismatch");
-      return normalizedQuote;
+      return normalizedForQuote(text(quote, "owned_fact_invalid", 2_000));
     });
-    if (source.support !== "missing" && quotes.length === 0) fail("owned_fact_quote_mismatch");
     const sourceUrl = source.sourceUrl === null
       ? null
       : httpsUrl(source.sourceUrl, "owned_fact_invalid");
     if (sourceUrl !== segment.sourceUrl) {
       fail("owned_fact_source_registry_mismatch");
     }
-    return {
+    const claim = text(source.claim, "owned_fact_invalid");
+    const category = text(source.category, "owned_fact_invalid", 200);
+    const normalizedSegment = normalizedForQuote(segment.normalizedText);
+    const quoteMismatch = quotes.some((quote) => !normalizedSegment.includes(quote))
+      || (source.support !== "missing" && quotes.length === 0);
+    if (quoteMismatch) {
+      if (options.quoteMismatch === "drop-fact") continue;
+      fail("owned_fact_quote_mismatch");
+    }
+    output.push({
       id,
-      claim: text(source.claim, "owned_fact_invalid"),
+      claim,
       sourceId,
       segmentId,
       sourceUrl,
       quotes,
-      category: text(source.category, "owned_fact_invalid", 200),
+      category,
       support: source.support,
-    };
-  });
+    });
+  }
   return { stageVersion: "owned-facts.v1", output };
 }
 
