@@ -302,6 +302,31 @@ describe("brand intelligence stage contracts", () => {
     expect(parsed.output.faqSuggestions).toEqual([validFaq()]);
   });
 
+  it("rejects or drops every present suggestion when the fact registry is empty", () => {
+    const emptyFactIds = new Set<string>();
+
+    expect(() => parseOfferingSuggestions(
+      validOfferingSuggestions(),
+      emptyFactIds,
+    )).toThrow("brand_intelligence_offering_registry_mismatch");
+    expect(parseOfferingSuggestions(
+      validOfferingSuggestions(),
+      emptyFactIds,
+      { registryMismatch: "drop-item" },
+    )).toEqual({
+      output: {
+        companyNameSuggestion: null,
+        offerings: [],
+        faqSuggestions: [],
+      },
+      dropped: {
+        companyNameSuggestion: 1,
+        offerings: 1,
+        faqSuggestions: 1,
+      },
+    });
+  });
+
   it("normalizes omitted nullable offering fields into the final result shape", () => {
     const parsed = parseOfferingSuggestions({
       companyNameSuggestion: null,
