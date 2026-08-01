@@ -31,6 +31,48 @@ export interface BrandIntelligenceRunner {
 }
 
 export const BRAND_INTELLIGENCE_ACTIVE_TIMEOUT_MS = 20 * 60 * 1_000;
+const LEASE_BOUND_API_RETRY_MS = 1_000;
+
+function timestamp(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function retryDelay(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+async function retryLeaseBoundApiCall<T>(
+  operation: () => Promise<T>,
+  signal: AbortSignal,
+  safeUntil: () => number,
+): Promise<T> {
+  while (true) {
+    if (signal.aborted) throw signal.reason;
+    try {
+      const result = await operation();
+      if (signal.aborted) throw signal.reason;
+      return result;
+    } catch (error) {
+      if (!(error instanceof BrandIntelligenceApiError) || !error.retryable) throw error;
+      const remaining = safeUntil() - Date.now();
+      if (remaining <= 0) throw new Error("brand_analysis_lease_expired");
+      await retryDelay(Math.min(LEASE_BOUND_API_RETRY_MS, remaining), signal);
+    }
+  }
+}
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CHILD_ENV_KEYS = [
@@ -227,18 +269,44 @@ export async function processBrandIntelligenceJob({
   const forwardAbort = () => controller.abort(signal?.reason);
   if (signal?.aborted) forwardAbort();
   else signal?.addEventListener("abort", forwardAbort, { once: true });
-  const persistedRemainingMs = job.deadlineAt
-    ? new Date(job.deadlineAt).getTime() - Date.now()
-    : activeTimeoutMs;
-  const remainingMs = Math.min(activeTimeoutMs, persistedRemainingMs);
+  const startedAt = Date.now();
+  const persistedDeadlineAt = timestamp(job.deadlineAt) ?? startedAt + activeTimeoutMs;
+  const absoluteDeadlineAt = Math.min(startedAt + activeTimeoutMs, persistedDeadlineAt);
+  const remainingMs = absoluteDeadlineAt - startedAt;
   const deadline = setTimeout(() => {
     controller.abort(new Error("analysis_deadline_exceeded"));
   }, Math.max(0, remainingMs));
+  let knownLeaseExpiresAt = Math.min(
+    timestamp(job.leaseExpiresAt) ?? startedAt + leaseSeconds * 1_000,
+    absoluteDeadlineAt,
+  );
+  let leaseDeadline: ReturnType<typeof setTimeout> | undefined;
+  const armLeaseDeadline = (nextExpiresAt: number) => {
+    knownLeaseExpiresAt = Math.min(nextExpiresAt, absoluteDeadlineAt);
+    if (leaseDeadline) clearTimeout(leaseDeadline);
+    const remaining = knownLeaseExpiresAt - Date.now();
+    if (remaining <= 0) {
+      controller.abort(new Error("brand_analysis_lease_expired"));
+      return;
+    }
+    leaseDeadline = setTimeout(() => {
+      controller.abort(new Error("brand_analysis_lease_expired"));
+    }, remaining);
+  };
+  armLeaseDeadline(knownLeaseExpiresAt);
   let heartbeatInFlight = false;
   const heartbeat = setInterval(() => {
     if (heartbeatInFlight) return;
     heartbeatInFlight = true;
-    void client.heartbeat(job, leaseSeconds)
+    void retryLeaseBoundApiCall(
+      () => client.heartbeat(job, leaseSeconds),
+      controller.signal,
+      () => knownLeaseExpiresAt,
+    )
+      .then((renewed) => {
+        const exactLeaseExpiresAt = renewed && timestamp(renewed.leaseExpiresAt);
+        armLeaseDeadline(exactLeaseExpiresAt ?? Date.now() + leaseSeconds * 1_000);
+      })
       .catch((error) => {
         controller.abort(error instanceof Error
           ? error
@@ -247,17 +315,28 @@ export async function processBrandIntelligenceJob({
       .finally(() => { heartbeatInFlight = false; });
   }, heartbeatMs);
   try {
+    if (controller.signal.aborted) {
+      throw controller.signal.reason ?? new Error("brand_analysis_lease_expired");
+    }
     const evidence = job.evidence.length
       ? job.evidence
       : await prepareBrandEvidence(job, {
           signal: controller.signal,
-          progress: (progress) => client.progress(job, progress, leaseSeconds),
+          progress: (progress) => retryLeaseBoundApiCall(
+            () => client.progress(job, progress, leaseSeconds),
+            controller.signal,
+            () => knownLeaseExpiresAt,
+          ),
         });
     const preparedJob = { ...job, evidence };
     const runOutput = await runner.run(
       preparedJob,
       controller.signal,
-      (progress) => client.progress(job, progress, leaseSeconds),
+      (progress) => retryLeaseBoundApiCall(
+        () => client.progress(job, progress, leaseSeconds),
+        controller.signal,
+        () => knownLeaseExpiresAt,
+      ),
     );
     if (controller.signal.aborted) {
       throw controller.signal.reason ?? new Error("brand_analysis_cancelled");
@@ -288,7 +367,9 @@ export async function processBrandIntelligenceJob({
   } finally {
     signal?.removeEventListener("abort", forwardAbort);
     clearTimeout(deadline);
+    if (leaseDeadline) clearTimeout(leaseDeadline);
     clearInterval(heartbeat);
+    if (!controller.signal.aborted) controller.abort(new Error("brand_analysis_job_finished"));
   }
 }
 

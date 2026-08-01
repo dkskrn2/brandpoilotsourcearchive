@@ -62,4 +62,27 @@ describe("worker resource lease API", () => {
       "onboarding",
     );
   });
+
+  it("reports a lost resource lease as a non-retryable conflict", async () => {
+    const repository = {
+      heartbeatWorkerResourceLease: vi.fn(async () => {
+        throw new Error("worker_resource_lease_invalid");
+      }),
+    } as any;
+    const app = createServer({ repository, workerApiToken: "worker-secret" });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/worker/resources/codex-cli/00000000-0000-4000-8000-000000000001/heartbeat",
+      headers: { authorization: "Bearer worker-secret" },
+      payload: {
+        workerId: "onboarding-1",
+        leaseToken: "00000000-0000-4000-8000-000000000002",
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "worker_resource_lease_invalid" });
+  });
 });

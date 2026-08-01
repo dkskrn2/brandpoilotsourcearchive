@@ -905,6 +905,10 @@ export function createServer(
 
   app.setErrorHandler((error, request, reply) => {
     const message = error instanceof Error ? error.message : "unknown_error";
+    if (message === "worker_resource_lease_invalid") {
+      reply.code(409).send({ error: message });
+      return;
+    }
     if ((error as { code?: string }).code === "FST_ERR_CTP_BODY_TOO_LARGE") {
       const errorCode = request.routeOptions.url === "/brands/:brandId/logo"
         ? "brand_logo_request_too_large"
@@ -3681,6 +3685,7 @@ export function createServer(
       });
       const heartbeatAlive = typeof heartbeat === "boolean" ? heartbeat : heartbeat.alive;
       const cancelRequested = typeof heartbeat === "boolean" ? false : heartbeat.cancelRequested;
+      const leaseExpiresAt = typeof heartbeat === "boolean" ? null : heartbeat.leaseExpiresAt;
       const deadlineAt = typeof heartbeat === "boolean" ? null : heartbeat.deadlineAt;
       if (!heartbeatAlive) {
         reply.code(409);
@@ -3689,10 +3694,11 @@ export function createServer(
             ? "brand_analysis_cancel_requested"
             : "brand_analysis_lease_invalid",
           cancelRequested,
+          leaseExpiresAt,
           deadlineAt,
         };
       }
-      return { ok: true, cancelRequested: false, deadlineAt };
+      return { ok: true, cancelRequested: false, leaseExpiresAt, deadlineAt };
     },
   );
 

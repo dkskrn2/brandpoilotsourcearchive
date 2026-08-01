@@ -127,7 +127,12 @@ export interface BrandIntelligenceRepository {
   }): Promise<BrandAnalysisClaim>;
   heartbeatBrandAnalysis(input: {
     analysisId: string; workerId: string; leaseToken: string; leaseSeconds: number;
-  }): Promise<{ alive: boolean; cancelRequested: boolean; deadlineAt: string | null }>;
+  }): Promise<{
+    alive: boolean;
+    cancelRequested: boolean;
+    leaseExpiresAt: string | null;
+    deadlineAt: string | null;
+  }>;
   progressBrandAnalysis(input: {
     analysisId: string; workerId: string; leaseToken: string;
     stage: string; attempt?: number; status?: "running" | "succeeded" | "failed" | "cancelled";
@@ -1357,15 +1362,17 @@ export function createBrandIntelligenceRepository(
           where id = $1 and leased_by = $2 and lease_token = $3
             and status in ('extracting', 'analyzing', 'running', 'finalizing')
             and lease_expires_at > now()
-            and deadline_at > now()`,
+            and deadline_at > now()
+          returning lease_expires_at, deadline_at`,
         [input.analysisId, input.workerId, input.leaseToken, input.leaseSeconds],
       );
       if (updated.rowCount) {
-        const current = await pool.query(
-          "select deadline_at from brand_analysis_runs where id = $1",
-          [input.analysisId],
-        );
-        return { alive: true, cancelRequested: false, deadlineAt: iso(current.rows[0]?.deadline_at) };
+        return {
+          alive: true,
+          cancelRequested: false,
+          leaseExpiresAt: iso(updated.rows[0]?.lease_expires_at),
+          deadlineAt: iso(updated.rows[0]?.deadline_at),
+        };
       }
       const current = await pool.query(
         "select status, deadline_at from brand_analysis_runs where id = $1",
@@ -1374,6 +1381,7 @@ export function createBrandIntelligenceRepository(
       return {
         alive: false,
         cancelRequested: ["cancel_requested", "purging", "cancelled"].includes(String(current.rows[0]?.status)),
+        leaseExpiresAt: null,
         deadlineAt: iso(current.rows[0]?.deadline_at),
       };
     },

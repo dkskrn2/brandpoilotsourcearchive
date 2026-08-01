@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -36,7 +36,7 @@ const job: BrandAnalysisJob = {
   isActive: false,
   leasedBy: "worker-1",
   leaseToken: "lease-1",
-  leaseExpiresAt: "2026-07-21T00:00:00.000Z",
+  leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
   attemptCount: 1,
   availableAt: "2026-07-21T00:00:00.000Z",
   errorCode: null,
@@ -80,6 +80,10 @@ function client(overrides: Partial<BrandIntelligenceWorkerClient> = {}): BrandIn
     ...overrides,
   };
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("brand intelligence worker", () => {
   it("completes one leased analysis", async () => {
@@ -157,6 +161,159 @@ describe("brand intelligence worker", () => {
       expect.any(AbortSignal),
       expect.any(Function),
     );
+  });
+
+  it("never invokes the runner for an already expired job lease", async () => {
+    const expiredJob = { ...job, leaseExpiresAt: new Date(Date.now() - 1).toISOString() };
+    const api = client();
+    const runner: BrandIntelligenceRunner = { run: vi.fn(async () => result) };
+
+    await expect(processBrandIntelligenceJob({
+      client: api,
+      runner,
+      job: expiredJob,
+      leaseSeconds: 900,
+    })).resolves.toEqual({ status: "failed", analysisId: "analysis-1" });
+
+    expect(runner.run).not.toHaveBeenCalled();
+    expect(api.complete).not.toHaveBeenCalled();
+  });
+
+  it("stops an in-flight heartbeat retry when the job completes", async () => {
+    vi.useFakeTimers();
+    const leasedJob = { ...job, leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() };
+    const heartbeat = vi.fn(async () => {
+      throw new BrandIntelligenceApiError("brand_intelligence_api_failed:503", 503);
+    });
+    const api = client({ heartbeat });
+    const runner: BrandIntelligenceRunner = {
+      run: vi.fn(async () => new Promise<BrandIntelligenceResult>((resolve) => {
+        setTimeout(() => resolve(result), 1_500);
+      })),
+    };
+
+    const outcome = processBrandIntelligenceJob({
+      client: api,
+      runner,
+      job: leasedJob,
+      leaseSeconds: 900,
+      heartbeatMs: 1_000,
+    });
+    await vi.advanceTimersByTimeAsync(1_500);
+    await expect(outcome).resolves.toEqual({ status: "completed", analysisId: "analysis-1" });
+    const callsAtCompletion = heartbeat.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(heartbeat).toHaveBeenCalledTimes(callsAtCompletion);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("continues the same runner after a transient job heartbeat 503 recovers", async () => {
+    vi.useFakeTimers();
+    const leasedJob = { ...job, leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() };
+    const heartbeat = vi.fn()
+      .mockRejectedValueOnce(new BrandIntelligenceApiError("brand_intelligence_api_failed:503", 503))
+      .mockResolvedValue(undefined);
+    const api = client({ heartbeat });
+    const runner: BrandIntelligenceRunner = {
+      run: vi.fn(async (_job, signal) => new Promise<BrandIntelligenceResult>((resolve, reject) => {
+        const timer = setTimeout(() => resolve(result), 3_000);
+        signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(signal.reason);
+        }, { once: true });
+      })),
+    };
+
+    const outcome = processBrandIntelligenceJob({
+      client: api,
+      runner,
+      job: leasedJob,
+      leaseSeconds: 900,
+      heartbeatMs: 1_000,
+    });
+    void outcome.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    await expect(outcome).resolves.toEqual({ status: "completed", analysisId: "analysis-1" });
+    expect(runner.run).toHaveBeenCalledOnce();
+    expect(heartbeat.mock.calls.length).toBeGreaterThan(1);
+    expect(api.complete).toHaveBeenCalledOnce();
+    expect(api.fail).not.toHaveBeenCalled();
+  });
+
+  it("uses the API's exact renewed job lease expiry", async () => {
+    vi.useFakeTimers();
+    const exactExpiry = new Date(Date.now() + 6_000).toISOString();
+    const leasedJob = { ...job, leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() };
+    const heartbeat = vi.fn()
+      .mockResolvedValueOnce({ leaseExpiresAt: exactExpiry, deadlineAt: null })
+      .mockRejectedValue(new BrandIntelligenceApiError("brand_intelligence_api_failed:503", 503));
+    const api = client({
+      heartbeat: heartbeat as unknown as BrandIntelligenceWorkerClient["heartbeat"],
+    });
+    const runner: BrandIntelligenceRunner = {
+      run: vi.fn(async (_job, signal) => new Promise<BrandIntelligenceResult>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      })),
+    };
+
+    let settled = false;
+    const outcome = processBrandIntelligenceJob({
+      client: api,
+      runner,
+      job: leasedJob,
+      leaseSeconds: 900,
+      heartbeatMs: 1_000,
+      activeTimeoutMs: 8_000,
+    });
+    void outcome.then(() => { settled = true; }, () => { settled = true; });
+    await vi.advanceTimersByTimeAsync(7_000);
+    const settledBeforeFallbackDeadline = settled;
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(outcome).resolves.toEqual({ status: "failed", analysisId: "analysis-1" });
+    expect(settledBeforeFallbackDeadline).toBe(true);
+  });
+
+  it("retries an idempotent progress write without rerunning the CLI", async () => {
+    vi.useFakeTimers();
+    const leasedJob = { ...job, leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() };
+    const progress = vi.fn()
+      .mockRejectedValueOnce(new BrandIntelligenceApiError("brand_intelligence_api_failed:503", 503))
+      .mockResolvedValue(undefined);
+    const api = client({ progress });
+    const runner: BrandIntelligenceRunner = {
+      run: vi.fn(async (_job, _signal, onProgress) => {
+        await onProgress?.({
+          stage: "owned_facts_1",
+          status: "succeeded",
+          logicalIndex: 1,
+          physicalAttempt: 1,
+          inputCount: 1,
+          successCount: 1,
+          failedCount: 0,
+        });
+        return result;
+      }),
+    };
+
+    const outcome = processBrandIntelligenceJob({
+      client: api,
+      runner,
+      job: leasedJob,
+      leaseSeconds: 900,
+      heartbeatMs: 60_000,
+    });
+    void outcome.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(outcome).resolves.toEqual({ status: "completed", analysisId: "analysis-1" });
+    expect(runner.run).toHaveBeenCalledOnce();
+    expect(progress).toHaveBeenCalledTimes(2);
+    expect(api.complete).toHaveBeenCalledOnce();
+    expect(api.fail).not.toHaveBeenCalled();
   });
 
   it("does not invoke the CLI when no job exists", async () => {

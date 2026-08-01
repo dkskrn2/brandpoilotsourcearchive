@@ -38,7 +38,12 @@ function setup() {
     claimBrandAnalysis: vi.fn(async () => claim),
     listBrandAnalysisUploads: vi.fn(async () => []),
     markBrandEvidenceReady: vi.fn(async () => claim),
-    heartbeatBrandAnalysis: vi.fn(async () => true),
+    heartbeatBrandAnalysis: vi.fn(async () => ({
+      alive: true,
+      cancelRequested: false,
+      leaseExpiresAt: "2026-07-21T00:02:00.000Z",
+      deadlineAt: "2026-07-21T00:10:00.000Z",
+    })),
     completeBrandAnalysis: vi.fn(async () => ({ ...claim, status: "review_ready" })),
     failBrandAnalysis: vi.fn(async () => ({ ...claim, status: "failed" })),
   };
@@ -86,6 +91,11 @@ describe("brand intelligence worker routes", () => {
     const heartbeat = await app.inject({ method: "POST", url: `/worker/brand-analyses/${analysisId}/heartbeat`, headers,
       payload: { workerId: "worker-1", leaseToken: claim.leaseToken, leaseSeconds: 120 } });
     expect(heartbeat.statusCode).toBe(200);
+    expect(heartbeat.json()).toMatchObject({
+      ok: true,
+      leaseExpiresAt: "2026-07-21T00:02:00.000Z",
+      deadlineAt: "2026-07-21T00:10:00.000Z",
+    });
     expect(intelligence.heartbeatBrandAnalysis).toHaveBeenCalledOnce();
     await app.close();
   });

@@ -162,7 +162,10 @@ export interface BrandAnalysisProgress {
 export interface BrandIntelligenceWorkerClient extends WorkerResourceClient {
   cleanup(): Promise<void>;
   claim(workerId: string, leaseSeconds: number): Promise<BrandAnalysisJob | null>;
-  heartbeat(job: BrandAnalysisJob, leaseSeconds: number): Promise<void>;
+  heartbeat(job: BrandAnalysisJob, leaseSeconds: number): Promise<void | {
+    leaseExpiresAt: string | null;
+    deadlineAt: string | null;
+  }>;
   progress(job: BrandAnalysisJob, input: BrandAnalysisProgress, leaseSeconds: number): Promise<void>;
   complete(
     job: BrandAnalysisJob,

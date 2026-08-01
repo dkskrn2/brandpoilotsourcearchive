@@ -5698,7 +5698,14 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       const client = await pool.connect();
       try {
         await client.query("begin");
-        await client.query("select pg_advisory_xact_lock($1, $2)", [4242, 99]);
+        const lock = await client.query(
+          "select pg_try_advisory_xact_lock($1, $2) as acquired",
+          [4242, 99],
+        );
+        if (lock.rows[0]?.acquired !== true) {
+          await client.query("commit");
+          return null;
+        }
         await client.query(
           `delete from worker_resource_leases where resource_type = $1 and expires_at <= now()`,
           [resourceType],

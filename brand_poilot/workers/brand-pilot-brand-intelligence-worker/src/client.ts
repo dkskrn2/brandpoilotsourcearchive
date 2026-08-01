@@ -16,6 +16,10 @@ export class BrandIntelligenceApiError extends Error {
   }
 }
 
+// Lease-aware orchestration owns retries. Bound each individual request so its
+// watchdog can still stop work before the authoritative lease expires.
+const LEASE_BOUND_REQUEST_TIMEOUT_MS = 2_000;
+
 export function createClient(
   apiUrl: string,
   token: string,
@@ -24,18 +28,32 @@ export function createClient(
 ): BrandIntelligenceWorkerClient {
   const base = apiUrl.replace(/\/+$/, "");
 
-  async function request(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async function request(
+    path: string,
+    body: Record<string, unknown>,
+    requestTimeoutMs = timeoutMs,
+  ): Promise<Record<string, unknown>> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let response: Response;
+    const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
     try {
-      response = await fetchImpl(`${base}${path}`, {
+      const response = await fetchImpl(`${base}${path}`, {
         method: "POST",
         headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
         body: JSON.stringify(body),
         signal: controller.signal,
       });
+      if (!response.ok) {
+        let detail = `brand_intelligence_api_failed:${response.status}`;
+        try {
+          const payload = await response.json() as { error?: string };
+          if (payload.error) detail = payload.error;
+        } catch { /* Keep the status-derived message. */ }
+        throw new BrandIntelligenceApiError(detail, response.status);
+      }
+      if (response.status === 204) return {};
+      return await response.json() as Record<string, unknown>;
     } catch (error) {
+      if (error instanceof BrandIntelligenceApiError) throw error;
       throw new BrandIntelligenceApiError(
         error instanceof Error ? error.message : "brand_intelligence_network_failed",
         503,
@@ -43,16 +61,6 @@ export function createClient(
     } finally {
       clearTimeout(timer);
     }
-    if (!response.ok) {
-      let detail = `brand_intelligence_api_failed:${response.status}`;
-      try {
-        const payload = await response.json() as { error?: string };
-        if (payload.error) detail = payload.error;
-      } catch { /* Keep the status-derived message. */ }
-      throw new BrandIntelligenceApiError(detail, response.status);
-    }
-    if (response.status === 204) return {};
-    return await response.json() as Record<string, unknown>;
   }
 
   return {
@@ -74,7 +82,7 @@ export function createClient(
       return request(`/worker/resources/codex-cli/${id}/heartbeat`, {
         workerId,
         leaseToken,
-      });
+      }, Math.min(timeoutMs, LEASE_BOUND_REQUEST_TIMEOUT_MS));
     },
     releaseResource(id, workerId, leaseToken) {
       return request(`/worker/resources/codex-cli/${id}/release`, {
@@ -104,14 +112,18 @@ export function createClient(
       return job;
     },
     async heartbeat(job, leaseSeconds) {
-      await request(`/worker/brand-analyses/${job.id}/heartbeat`, {
+      const payload = await request(`/worker/brand-analyses/${job.id}/heartbeat`, {
         workerId: job.leasedBy, leaseToken: job.leaseToken, leaseSeconds,
-      });
+      }, Math.min(timeoutMs, LEASE_BOUND_REQUEST_TIMEOUT_MS));
+      return {
+        leaseExpiresAt: typeof payload.leaseExpiresAt === "string" ? payload.leaseExpiresAt : null,
+        deadlineAt: typeof payload.deadlineAt === "string" ? payload.deadlineAt : null,
+      };
     },
     async progress(job, input, leaseSeconds) {
       await request(`/worker/brand-analyses/${job.id}/progress`, {
         workerId: job.leasedBy, leaseToken: job.leaseToken, leaseSeconds, ...input,
-      });
+      }, Math.min(timeoutMs, LEASE_BOUND_REQUEST_TIMEOUT_MS));
     },
     async complete(job, result: BrandIntelligenceResult, evidence, leaseSeconds, registry) {
       await request(`/worker/brand-analyses/${job.id}/complete`, {
