@@ -4,8 +4,69 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   parseExternalCandidateEnvelope,
+  parseOfferingSuggestions,
   parseOwnedFactEnvelope,
 } from "./stageContracts.js";
+
+const supportedFactIds = new Set(["fact-valid"]);
+
+function validOffering() {
+  return {
+    kind: "service",
+    name: "브랜드 운영 진단",
+    description: "현재 운영 상태를 진단합니다.",
+    target: "온라인 사업자",
+    benefit: "운영 개선 지점을 확인할 수 있습니다.",
+    priceText: "상담 후 안내",
+    purchaseUrl: "https://example.com/services/diagnosis",
+    sourceFactIds: ["fact-valid"],
+  };
+}
+
+function validFaq() {
+  return {
+    question: "서비스 가격은 어떻게 확인하나요?",
+    answer: "상담 후 범위에 따라 안내합니다.",
+    category: "price",
+    sourceFactIds: ["fact-valid"],
+  };
+}
+
+function validOfferingSuggestions() {
+  return {
+    companyNameSuggestion: {
+      name: "그로스라인",
+      sourceFactIds: ["fact-valid"],
+    },
+    offerings: [validOffering()],
+    faqSuggestions: [validFaq()],
+  };
+}
+
+function mixedRegistryOfferingSuggestions() {
+  return {
+    companyNameSuggestion: {
+      name: "등록되지 않은 회사명",
+      sourceFactIds: ["fact-valid", "fact-unregistered"],
+    },
+    offerings: [
+      validOffering(),
+      {
+        ...validOffering(),
+        name: "근거가 일치하지 않는 서비스",
+        sourceFactIds: ["fact-valid", "fact-unregistered"],
+      },
+    ],
+    faqSuggestions: [
+      validFaq(),
+      {
+        ...validFaq(),
+        question: "근거가 일치하지 않는 질문",
+        sourceFactIds: ["fact-valid", "fact-unregistered"],
+      },
+    ],
+  };
+}
 
 describe("brand intelligence stage contracts", () => {
   it("ships a discoverable v2-only runtime skill contract", async () => {
@@ -215,5 +276,207 @@ describe("brand intelligence stage contracts", () => {
       url: "https://example.com/a",
       reason: "경쟁 대안",
     }]);
+  });
+
+  it("rejects an unregistered offering-stage fact ID by default", () => {
+    expect(() => parseOfferingSuggestions(
+      mixedRegistryOfferingSuggestions(),
+      supportedFactIds,
+    )).toThrow("brand_intelligence_offering_registry_mismatch");
+  });
+
+  it("drops complete registry-mismatched suggestions while retaining valid siblings", () => {
+    const parsed = parseOfferingSuggestions(
+      mixedRegistryOfferingSuggestions(),
+      supportedFactIds,
+      { registryMismatch: "drop-item" },
+    );
+
+    expect(parsed.dropped).toEqual({
+      companyNameSuggestion: 1,
+      offerings: 1,
+      faqSuggestions: 1,
+    });
+    expect(parsed.output.companyNameSuggestion).toBeNull();
+    expect(parsed.output.offerings).toEqual([validOffering()]);
+    expect(parsed.output.faqSuggestions).toEqual([validFaq()]);
+  });
+
+  it("normalizes omitted nullable offering fields into the final result shape", () => {
+    const parsed = parseOfferingSuggestions({
+      companyNameSuggestion: null,
+      offerings: [{
+        kind: "product",
+        name: "운영 템플릿",
+        sourceFactIds: ["fact-valid"],
+      }],
+      faqSuggestions: [],
+    }, supportedFactIds);
+
+    expect(parsed.output.offerings).toEqual([{
+      kind: "product",
+      name: "운영 템플릿",
+      description: null,
+      target: null,
+      benefit: null,
+      priceText: null,
+      purchaseUrl: null,
+      sourceFactIds: ["fact-valid"],
+    }]);
+  });
+
+  it.each([
+    {
+      label: "a malformed scalar",
+      code: "brand_intelligence_offering_invalid",
+      value: () => ({
+        ...validOfferingSuggestions(),
+        offerings: [{ ...validOffering(), name: 123 }],
+      }),
+    },
+    {
+      label: "an unsafe optional URL",
+      code: "brand_intelligence_offering_invalid",
+      value: () => ({
+        ...validOfferingSuggestions(),
+        offerings: [{ ...validOffering(), purchaseUrl: "http://example.com/buy" }],
+      }),
+    },
+    {
+      label: "an unknown top-level key",
+      code: "brand_intelligence_offering_invalid",
+      value: () => ({ ...validOfferingSuggestions(), unexpected: true }),
+    },
+    {
+      label: "an unknown company-name key",
+      code: "brand_intelligence_company_name_suggestion_invalid",
+      value: () => ({
+        ...validOfferingSuggestions(),
+        companyNameSuggestion: {
+          name: "그로스라인",
+          sourceFactIds: ["fact-valid"],
+          unexpected: true,
+        },
+      }),
+    },
+    {
+      label: "an unknown offering key",
+      code: "brand_intelligence_offering_invalid",
+      value: () => ({
+        ...validOfferingSuggestions(),
+        offerings: [{ ...validOffering(), unexpected: true }],
+      }),
+    },
+    {
+      label: "an unknown FAQ key",
+      code: "brand_intelligence_faq_invalid",
+      value: () => ({
+        ...validOfferingSuggestions(),
+        faqSuggestions: [{ ...validFaq(), unexpected: true }],
+      }),
+    },
+    {
+      label: "more than five offerings",
+      code: "brand_intelligence_offering_limit_exceeded",
+      value: () => ({
+        ...validOfferingSuggestions(),
+        offerings: Array.from({ length: 6 }, validOffering),
+      }),
+    },
+    {
+      label: "more than twenty FAQs",
+      code: "brand_intelligence_faq_limit_exceeded",
+      value: () => ({
+        ...validOfferingSuggestions(),
+        faqSuggestions: Array.from({ length: 21 }, validFaq),
+      }),
+    },
+    {
+      label: "more than fifty source fact IDs",
+      code: "brand_intelligence_offering_invalid",
+      value: () => ({
+        ...validOfferingSuggestions(),
+        offerings: [{
+          ...validOffering(),
+          sourceFactIds: Array.from({ length: 51 }, () => "fact-valid"),
+        }],
+      }),
+    },
+    {
+      label: "empty company-name source fact IDs",
+      code: "brand_intelligence_company_name_suggestion_invalid",
+      value: () => ({
+        ...validOfferingSuggestions(),
+        companyNameSuggestion: { name: "그로스라인", sourceFactIds: [] },
+      }),
+    },
+    {
+      label: "empty offering source fact IDs",
+      code: "brand_intelligence_offering_invalid",
+      value: () => ({
+        ...validOfferingSuggestions(),
+        offerings: [{ ...validOffering(), sourceFactIds: [] }],
+      }),
+    },
+    {
+      label: "empty FAQ source fact IDs",
+      code: "brand_intelligence_faq_invalid",
+      value: () => ({
+        ...validOfferingSuggestions(),
+        faqSuggestions: [{ ...validFaq(), sourceFactIds: [] }],
+      }),
+    },
+    {
+      label: "a non-string company-name source fact ID",
+      code: "brand_intelligence_company_name_suggestion_invalid",
+      value: () => ({
+        ...validOfferingSuggestions(),
+        companyNameSuggestion: { name: "그로스라인", sourceFactIds: [123] },
+      }),
+    },
+    {
+      label: "a non-string offering source fact ID",
+      code: "brand_intelligence_offering_invalid",
+      value: () => ({
+        ...validOfferingSuggestions(),
+        offerings: [{ ...validOffering(), sourceFactIds: [123] }],
+      }),
+    },
+    {
+      label: "a non-string FAQ source fact ID",
+      code: "brand_intelligence_faq_invalid",
+      value: () => ({
+        ...validOfferingSuggestions(),
+        faqSuggestions: [{ ...validFaq(), sourceFactIds: [123] }],
+      }),
+    },
+  ])("rejects $label as a structural error in drop-item mode", ({ value, code }) => {
+    expect(() => parseOfferingSuggestions(
+      value(),
+      supportedFactIds,
+      { registryMismatch: "drop-item" },
+    )).toThrow(code);
+  });
+
+  it("completes structural validation before checking registry membership", () => {
+    const value = mixedRegistryOfferingSuggestions();
+    value.offerings.push({ ...validOffering(), name: 123 as unknown as string });
+
+    expect(() => parseOfferingSuggestions(value, supportedFactIds))
+      .toThrow("brand_intelligence_offering_invalid");
+    expect(() => parseOfferingSuggestions(value, supportedFactIds, {
+      registryMismatch: "drop-item",
+    })).toThrow("brand_intelligence_offering_invalid");
+  });
+
+  it("does not trim source fact IDs into registry matches", () => {
+    const value = validOfferingSuggestions();
+    value.offerings[0]!.sourceFactIds = [" fact-valid "];
+
+    expect(() => parseOfferingSuggestions(value, supportedFactIds))
+      .toThrow("brand_intelligence_offering_registry_mismatch");
+    expect(parseOfferingSuggestions(value, supportedFactIds, {
+      registryMismatch: "drop-item",
+    }).output.offerings).toEqual([]);
   });
 });
