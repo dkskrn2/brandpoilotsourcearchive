@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Preserve valid representative offerings and FAQs when a model emits one unregistered fact reference, without weakening structural or evidence validation.
+**Goal:** Prevent cross-batch fact-ID retry waste and preserve valid representative offerings and FAQs when a model emits one unregistered fact reference, without weakening structural or evidence validation.
 
-**Architecture:** Add one typed parser beside the owned-fact parser. It validates structure first, then either rejects registry mismatches by default or drops the complete invalid suggestion when the runner explicitly requests `drop-item`. The runner records trusted removal counts and passes only filtered data downstream.
+**Architecture:** Canonicalize strictly validated owned-fact IDs at the server boundary so independent model calls cannot collide. Add one typed parser beside the owned-fact parser; it validates structure first, then either rejects registry mismatches by default or drops the complete invalid suggestion when the runner explicitly requests `drop-item`. The runner records trusted removal counts and passes only filtered data downstream.
 
 **Tech Stack:** TypeScript, Node.js ESM runner, Vitest, existing worker integration harness
 
@@ -76,7 +76,7 @@ git commit -m "fix: filter ungrounded offering suggestions"
 
 - [ ] **Step 1: Write a failing runner regression test**
 
-Extend the fake Codex sequence so the offering stage returns valid siblings plus invalid company, offering, and FAQ references after earlier retries have consumed the global budget. Assert the run still makes all eight logical stage calls, the invalid items are absent, the valid siblings remain, and `sourceGaps` contains only a trusted count message, never fixture content.
+Make all four owned-fact fake responses reuse the same model ID, then make the offering stage return valid siblings plus invalid company, offering, and FAQ references. Assert the runner creates unique canonical IDs, uses no duplicate-ID retry, still makes all eight logical stage calls, removes invalid items, preserves valid siblings, and adds only a trusted count message to `sourceGaps`.
 
 ```ts
 expect(output.result.offerings).toEqual([validOffering]);
@@ -84,6 +84,8 @@ expect(output.result.faqSuggestions).toEqual([validFaq]);
 expect(output.result.sourceGaps).toContain(
   "근거 ID가 일치하지 않은 회사명 1건, 상품·서비스 1건, FAQ 1건을 제외함",
 );
+expect(progress.filter((event) => event.physicalAttempt === 2)).toEqual([]);
+expect(new Set(output.registry.ownedFactIds).size).toBe(output.registry.ownedFactIds.length);
 ```
 
 - [ ] **Step 2: Run the focused runner tests and observe failure**
@@ -96,9 +98,18 @@ npm --workspace workers/brand-pilot-brand-intelligence-worker test -- --run src/
 
 Expected: the runner throws `brand_intelligence_offering_registry_mismatch`.
 
-- [ ] **Step 3: Use the parser and add the trusted gap**
+- [ ] **Step 3: Canonicalize fact IDs, use the parser, and add the trusted gap**
 
-Import `parseOfferingSuggestions`, parse with `{ registryMismatch: "drop-item" }`, and derive the three runner values from `parsed.output`. Add one server-authored source gap only when the total dropped count is positive:
+After a fact batch validates, replace each accepted model ID before registration:
+
+```js
+const canonicalFacts = parsedFactBatch.output.map((fact, ordinal) => ({
+  ...fact,
+  id: `owned-${batchIndex + 1}-${ordinal + 1}`,
+}));
+```
+
+Then import `parseOfferingSuggestions`, parse with `{ registryMismatch: "drop-item" }`, and derive the three runner values from `parsed.output`. Add one server-authored source gap only when the total dropped count is positive:
 
 ```js
 const parsedOfferings = parseOfferingSuggestions(response, factIds, {
