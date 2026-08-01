@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { appendFile, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseOwnedFactEnvelope } from "../dist/stageContracts.js";
+import { codexFailureDiagnostic, extractJson } from "./codex-output.mjs";
 
 const STAGE_BUDGET_SECONDS = [270, 270, 60, 60, 75, 75, 60, 15];
 const STAGE_RESERVE_SECONDS = [615, 345, 285, 225, 150, 75, 15, 0];
@@ -28,11 +29,6 @@ const STAGE_NAMES = [
   "owned_facts_1", "owned_facts_2", "owned_facts_3", "owned_facts_4",
   "representative_offerings", "brand_core", "external_research", "final_audit",
 ];
-const outputSchemaFile = path.join(runtimeDir, "stage-output.schema.json");
-await writeFile(outputSchemaFile, `${JSON.stringify({
-  type: "object",
-  additionalProperties: true,
-})}\n`, "utf8");
 
 function codexInvocation() {
   const override = process.env.BRAND_INTELLIGENCE_CODEX_COMMAND?.trim();
@@ -54,23 +50,6 @@ function childEnvironment(source) {
   return Object.fromEntries(keys.flatMap((key) => (
     source[key] === undefined ? [] : [[key, source[key]]]
   )));
-}
-
-function extractJson(value) {
-  for (const line of value.trim().split(/\r?\n/).reverse()) {
-    try {
-      const parsed = JSON.parse(line);
-      for (const candidate of [parsed.text, parsed.output, parsed.item?.text]) {
-        if (typeof candidate !== "string") continue;
-        const unfenced = candidate
-          .replace(/^```(?:json)?\s*/i, "")
-          .replace(/\s*```$/i, "");
-        try { return JSON.parse(unfenced); } catch { /* continue */ }
-      }
-      if (parsed && typeof parsed === "object" && parsed.contractVersion) return parsed;
-    } catch { /* Codex emits non-result progress events too. */ }
-  }
-  throw new Error("brand_intelligence_codex_json_invalid");
 }
 
 const observedExternalUrls = new Set();
@@ -173,7 +152,6 @@ async function invokeStage(stageIndex, prompt, { search = false } = {}) {
           "--disable", "plugins",
           "--disable", "code_mode_host",
           "--skip-git-repo-check", "--ephemeral", "--json", "--sandbox", "read-only",
-          "--output-schema", outputSchemaFile,
           "--output-last-message", stageOutputFile,
           "-C", runtimeDir, "-",
         ], {
@@ -212,7 +190,8 @@ async function invokeStage(stageIndex, prompt, { search = false } = {}) {
         child.once("error", (error) => finish(() => reject(error)));
         child.once("close", (code) => finish(async () => {
           if (code !== 0) {
-            reject(new Error(`brand_intelligence_codex_failed:${code}:${stderr.slice(0, 500)}`));
+            const diagnostic = codexFailureDiagnostic(stderr, stdout);
+            reject(new Error(`brand_intelligence_codex_failed:${code}:${diagnostic}`));
             return;
           }
           try {

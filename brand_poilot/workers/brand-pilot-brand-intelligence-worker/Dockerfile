@@ -25,6 +25,7 @@ COPY --from=build --chown=node:node /app/workers/brand-pilot-worker-runtime/pack
 COPY --from=build --chown=node:node /app/workers/brand-pilot-worker-runtime/dist ./workers/brand-pilot-worker-runtime/dist
 COPY --from=build --chown=node:node /app/workers/brand-pilot-brand-intelligence-worker/package.json ./workers/brand-pilot-brand-intelligence-worker/package.json
 COPY --from=build --chown=node:node /app/workers/brand-pilot-brand-intelligence-worker/dist ./workers/brand-pilot-brand-intelligence-worker/dist
+COPY --from=build --chown=node:node /app/workers/brand-pilot-brand-intelligence-worker/scripts/codex-output.mjs ./workers/brand-pilot-brand-intelligence-worker/scripts/codex-output.mjs
 COPY --from=build --chown=node:node /app/workers/brand-pilot-brand-intelligence-worker/scripts/run-codex-brand-intelligence.mjs ./workers/brand-pilot-brand-intelligence-worker/scripts/run-codex-brand-intelligence.mjs
 COPY --from=build --chown=node:node /app/workers/brand-pilot-brand-intelligence-worker/.agents/skills/brand-intelligence/SKILL.md ./workers/brand-pilot-brand-intelligence-worker/.agents/skills/brand-intelligence/SKILL.md
 RUN node node_modules/playwright/cli.js install --with-deps chromium \

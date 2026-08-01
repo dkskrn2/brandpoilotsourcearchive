@@ -175,7 +175,10 @@ describe("brand intelligence worker", () => {
     expect(script).toContain('"--disable", "shell_tool"');
     expect(script).toContain('"--disable", "apps"');
     expect(script).toContain('"--ignore-rules"');
-    expect(script).toContain('"--output-schema"');
+    expect(script).not.toContain('"--output-schema"');
+    expect(script).not.toContain("outputSchemaFile");
+    expect(script).not.toContain("additionalProperties: true");
+    expect(script).toContain("codexFailureDiagnostic(stderr, stdout)");
     expect(script).not.toContain("minProperties");
     expect(script).toContain("brand_intelligence_forbidden_tool_event");
     expect(script).toContain("parseOwnedFactEnvelope(response, registeredSegments)");
@@ -185,5 +188,12 @@ describe("brand intelligence worker", () => {
     expect(script.match(/invokeStage\(4,/g)).toHaveLength(1);
     expect(script).not.toContain("invokeStage(8,");
     expect(script).toMatch(/const keys = \[\s*"APPDATA", "CODEX_HOME", "COMSPEC", "HOME"/);
+  });
+
+  it("ships the Codex output helper in the runtime image", async () => {
+    const dockerfile = await readFile(new URL("../Dockerfile", import.meta.url), "utf8");
+    expect(dockerfile).toContain(
+      "scripts/codex-output.mjs ./workers/brand-pilot-brand-intelligence-worker/scripts/codex-output.mjs",
+    );
   });
 });
