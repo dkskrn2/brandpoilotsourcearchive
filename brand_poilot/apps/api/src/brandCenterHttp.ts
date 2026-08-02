@@ -16,6 +16,10 @@ import {
   parseUpdateWikiItem,
 } from "./wikiManagementContracts.js";
 import {
+  parseFaqSuggestionItemUpdate,
+  parseFaqSuggestionReviewAction,
+} from "./faqSuggestionContracts.js";
+import {
   parseAssetUploadInput,
   parseAvatarInput,
   parseCreateAvatarInput,
@@ -422,6 +426,100 @@ export function registerBrandCenterRoutes(
         },
         parseResolveWikiIssue(request.body),
       );
+    },
+  );
+
+  app.post<{ Params: { brandId: string } }>(
+    "/brands/:brandId/faq-suggestions",
+    async (request, reply) => {
+      if (!repository.createFaqSuggestionRun) throw new Error("faq_suggestion_not_configured");
+      const result = await repository.createFaqSuggestionRun({
+        ...options.scope(request, request.params.brandId),
+        actorUserId: requireActor(options, request),
+      });
+      reply.code(result.created ? 202 : 200);
+      return { run: result.run };
+    },
+  );
+
+  app.get<{ Params: { brandId: string } }>(
+    "/brands/:brandId/faq-suggestions/latest",
+    async (request) => {
+      if (!repository.getLatestFaqSuggestionRun) throw new Error("faq_suggestion_not_configured");
+      return {
+        run: await repository.getLatestFaqSuggestionRun(
+          options.scope(request, request.params.brandId),
+        ),
+      };
+    },
+  );
+
+  app.get<{ Params: { brandId: string; runId: string } }>(
+    "/brands/:brandId/faq-suggestions/:runId",
+    async (request) => {
+      if (!repository.getFaqSuggestionRun) throw new Error("faq_suggestion_not_configured");
+      const run = await repository.getFaqSuggestionRun({
+        ...options.scope(request, request.params.brandId),
+        runId: request.params.runId,
+      });
+      if (!run) throw new Error("faq_suggestion_run_not_found");
+      return { run };
+    },
+  );
+
+  app.patch<{
+    Params: { brandId: string; runId: string; itemId: string };
+    Body: unknown;
+  }>(
+    "/brands/:brandId/faq-suggestions/:runId/items/:itemId",
+    async (request) => {
+      if (!repository.updateFaqSuggestionItem) throw new Error("faq_suggestion_not_configured");
+      const input = parseFaqSuggestionItemUpdate(request.body);
+      return {
+        item: await repository.updateFaqSuggestionItem({
+          ...options.scope(request, request.params.brandId),
+          actorUserId: requireActor(options, request),
+          runId: request.params.runId,
+          itemId: request.params.itemId,
+          ...input,
+        }),
+      };
+    },
+  );
+
+  app.post<{
+    Params: { brandId: string; runId: string; itemId: string };
+    Body: unknown;
+  }>(
+    "/brands/:brandId/faq-suggestions/:runId/items/:itemId/approve",
+    async (request) => {
+      if (!repository.approveFaqSuggestionItem) throw new Error("faq_suggestion_not_configured");
+      return repository.approveFaqSuggestionItem({
+        ...options.scope(request, request.params.brandId),
+        actorUserId: requireActor(options, request),
+        runId: request.params.runId,
+        itemId: request.params.itemId,
+        ...parseFaqSuggestionReviewAction(request.body),
+      });
+    },
+  );
+
+  app.post<{
+    Params: { brandId: string; runId: string; itemId: string };
+    Body: unknown;
+  }>(
+    "/brands/:brandId/faq-suggestions/:runId/items/:itemId/dismiss",
+    async (request) => {
+      if (!repository.dismissFaqSuggestionItem) throw new Error("faq_suggestion_not_configured");
+      return {
+        item: await repository.dismissFaqSuggestionItem({
+          ...options.scope(request, request.params.brandId),
+          actorUserId: requireActor(options, request),
+          runId: request.params.runId,
+          itemId: request.params.itemId,
+          ...parseFaqSuggestionReviewAction(request.body),
+        }),
+      };
     },
   );
 

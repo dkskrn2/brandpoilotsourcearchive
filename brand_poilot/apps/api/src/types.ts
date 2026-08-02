@@ -3,6 +3,7 @@ import type { DmAttentionType, DmDecision, DmJobRoute, DmReasonCode } from "./dm
 import type { BrandCoreRepository } from "./brandCoreRepository.js";
 import type { ProductLibraryRepository } from "./productLibraryRepository.js";
 import type { WikiManagementRepository } from "./wikiManagementContracts.js";
+import type { FaqSuggestionRepository } from "./faqSuggestionRepository.js";
 import type {
   AiContentGenerationRecord,
   AiContentJobRecord,
@@ -1065,6 +1066,7 @@ export interface ApiRepository
     Partial<BrandCoreRepository>,
     Partial<ProductLibraryRepository>,
     Partial<WikiManagementRepository>,
+    Partial<FaqSuggestionRepository>,
     Partial<import("./assetLibraryRepository.js").AssetLibraryRepository>,
     Partial<import("./aiContentAttachmentRepository.js").AiContentAttachmentLifecycleRepository>,
     Partial<import("./aiContentAttachmentGcRepository.js").AiContentAttachmentGcRepository>,

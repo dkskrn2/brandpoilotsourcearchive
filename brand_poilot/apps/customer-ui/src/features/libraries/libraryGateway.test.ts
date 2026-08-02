@@ -105,6 +105,56 @@ describe("library gateway", () => {
     );
   });
 
+  it("uses the FAQ suggestion run and review endpoints", async () => {
+    const requestJson = vi.fn().mockResolvedValue({});
+    const gateway = createLibraryGateway({ requestJson } as never);
+    const update = {
+      category: "product" as const,
+      question: "제품은 어디에서 구매하나요?",
+      answer: "공식 스토어에서 구매할 수 있습니다.",
+      expectedUpdatedAt: "2026-08-02T00:00:00.000Z",
+    };
+    const review = { expectedUpdatedAt: "2026-08-02T00:01:00.000Z" };
+
+    await gateway.createFaqSuggestionRun("brand-1");
+    await gateway.getLatestFaqSuggestionRun("brand-1");
+    await gateway.getFaqSuggestionRun("brand-1", "run-1");
+    await gateway.updateFaqSuggestionItem("brand-1", "run-1", "item-1", update);
+    await gateway.approveFaqSuggestionItem("brand-1", "run-1", "item-1", review);
+    await gateway.dismissFaqSuggestionItem("brand-1", "run-1", "item-2", review);
+
+    expect(requestJson).toHaveBeenNthCalledWith(
+      1,
+      "/brands/brand-1/faq-suggestions",
+      { method: "POST" },
+    );
+    expect(requestJson).toHaveBeenNthCalledWith(
+      2,
+      "/brands/brand-1/faq-suggestions/latest",
+      { method: "GET" },
+    );
+    expect(requestJson).toHaveBeenNthCalledWith(
+      3,
+      "/brands/brand-1/faq-suggestions/run-1",
+      { method: "GET" },
+    );
+    expect(requestJson).toHaveBeenNthCalledWith(
+      4,
+      "/brands/brand-1/faq-suggestions/run-1/items/item-1",
+      { method: "PATCH", body: JSON.stringify(update) },
+    );
+    expect(requestJson).toHaveBeenNthCalledWith(
+      5,
+      "/brands/brand-1/faq-suggestions/run-1/items/item-1/approve",
+      { method: "POST", body: JSON.stringify(review) },
+    );
+    expect(requestJson).toHaveBeenNthCalledWith(
+      6,
+      "/brands/brand-1/faq-suggestions/run-1/items/item-2/dismiss",
+      { method: "POST", body: JSON.stringify(review) },
+    );
+  });
+
   it("uses the reserved avatar lifecycle and staged upload session endpoints", async () => {
     const token = {
       pathname: "brands/brand-1/asset-library/avatars/avatar-1/session-1/checksum-face.png",

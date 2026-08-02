@@ -1,4 +1,4 @@
-export type WorkerResourceWorkload = "dm" | "wiki" | "content";
+export type WorkerResourceWorkload = "dm" | "wiki" | "content" | "faq";
 
 export interface WorkerResourceLease {
   id: string;

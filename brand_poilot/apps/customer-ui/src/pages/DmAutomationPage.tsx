@@ -45,6 +45,7 @@ function isActivationBlocked(error: unknown) {
 
 export function DmAutomationPage() {
   const [settings, setSettings] = useState<InstagramDmSettings | null>(null);
+  const [llmPreviewEnabled, setLlmPreviewEnabled] = useState(false);
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsUpdating, setSettingsUpdating] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
@@ -196,13 +197,13 @@ export function DmAutomationPage() {
 
   return (
     <section className="content dm-automation-page">
-      <PageHeader title="Instagram 고객응대" description="자동답변 준비 상태를 확인하고 고객 대화와 상담 필요 요청을 한곳에서 처리합니다." />
+      <PageHeader title="Instagram 고객응대" description="FAQ 우선 자동답변 상태를 확인하고 고객 대화와 수동 상담을 한곳에서 처리합니다." />
 
       <section className="panel dm-readiness-panel" aria-label="DM 자동답변 준비도">
         <div className="panel-head">
           <div>
-            <h2>자동답변</h2>
-            <p className="muted small">준비 조건을 모두 충족해야 켤 수 있습니다.</p>
+            <h2>자동답변 설정</h2>
+            <p className="muted small">FAQ를 먼저 확인하고, 선택한 경우에만 Wiki 기반 답변을 사용합니다.</p>
           </div>
           {settings ? (
             <div className="actions">
@@ -225,10 +226,32 @@ export function DmAutomationPage() {
                 첫 Wiki를 준비하고 있습니다. 기존 설정은 꺼진 상태이며 준비가 끝난 뒤 다시 활성화할 수 있습니다.
               </Alert>
             ) : null}
+            <div className="dm-control-grid">
+              <article className="dm-control-item">
+                <div className="dm-control-copy">
+                  <div className="dm-control-title"><strong>FAQ 답변</strong><Badge variant="ok">항상 우선</Badge></div>
+                  <p>활성 FAQ와 일치하면 저장된 답변을 그대로 보냅니다.</p>
+                </div>
+                <a className="button" href="/brand-center?tab=faq">FAQ 관리 <ExternalLink size={14} /></a>
+              </article>
+              <article className="dm-control-item dm-control-item--llm">
+                <div className="dm-control-copy">
+                  <div className="dm-control-title"><strong>LLM 답변</strong><Badge variant="info">UI 미리보기</Badge></div>
+                  <p>FAQ에 없을 때 활성 Wiki를 근거로 답변합니다.</p>
+                </div>
+                <Switch
+                  label="LLM 답변"
+                  checked={llmPreviewEnabled}
+                  disabled={!settings.enabled || !settings.wikiReady}
+                  onChange={setLlmPreviewEnabled}
+                />
+              </article>
+            </div>
+            <p className="dm-preview-note">UI 미리보기입니다. LLM 설정은 저장되지 않습니다.</p>
             <div className="dm-readiness-summary">
               <strong>{ready ? "자동답변 준비 완료" : "자동답변을 켤 수 없습니다"}</strong>
               <div className="actions">
-                <Badge variant={settings.wikiReady ? "ok" : "warn"}>Wiki {settings.wikiReady ? "준비됨" : "보완 필요"}</Badge>
+                <Badge variant={settings.wikiReady ? "ok" : "warn"}>LLM 정보 {settings.wikiReady ? "준비됨" : "생성 필요"}</Badge>
                 <Badge variant={settings.messagePermissionReady ? "ok" : "warn"}>메시지 권한 {settings.messagePermissionReady ? "확인됨" : "필요"}</Badge>
                 <Badge variant={settings.workerStatus === "online" ? "ok" : "warn"}>워커 {settings.workerStatus === "online" ? "온라인" : "확인 필요"}</Badge>
                 <Badge variant={settings.webhookStatus === "connected" ? "ok" : "neutral"}>Webhook {settings.webhookStatus === "connected" ? "연결됨" : "확인 필요"}</Badge>
@@ -236,13 +259,13 @@ export function DmAutomationPage() {
             </div>
             {!ready ? <Alert title="해결 후 활성화하세요" variant="warn">
               <span className="dm-repair-links">
-                {!settings.brandCoreReady || !settings.wikiReady ? <a href="/brand-center?tab=wiki">Wiki 보완하기 <ExternalLink size={14} /></a> : null}
+                {!settings.brandCoreReady || !settings.wikiReady ? <a href="/brand-center?tab=knowledge">Wiki 보완하기 <ExternalLink size={14} /></a> : null}
                 {!settings.messagePermissionReady || settings.webhookStatus !== "connected" || settings.workerStatus !== "online" ? <a href="/channels">Instagram 연결 확인 <ExternalLink size={14} /></a> : null}
               </span>
             </Alert> : null}
             <p className="dm-wiki-link">
-              DM 답변 지식은 브랜드 센터에서 관리합니다.
-              <a href="/brand-center?tab=wiki">Wiki에서 보완 <ExternalLink size={14} /></a>
+              답변 내용은 브랜드 센터에서 관리합니다.
+              <a href="/brand-center?tab=knowledge">LLM 답변 정보 관리 <ExternalLink size={14} /></a>
             </p>
           </> : null}
           {settingsUpdating ? <div role="status"><InlineSpinner label="자동답변 상태 저장 중" /> 상태 저장 중</div> : null}

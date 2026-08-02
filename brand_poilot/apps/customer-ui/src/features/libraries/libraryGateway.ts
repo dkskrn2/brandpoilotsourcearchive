@@ -90,6 +90,85 @@ export interface WikiIssue {
   resolvedAt: string | null;
 }
 
+export type FaqSuggestionCategory =
+  | "service"
+  | "product"
+  | "price_payment"
+  | "location_visit"
+  | "hours"
+  | "shipping"
+  | "exchange_refund"
+  | "reservation_usage"
+  | "account_membership"
+  | "other";
+
+export type FaqSuggestionRunStatus =
+  | "queued"
+  | "running"
+  | "review_ready"
+  | "partial"
+  | "failed"
+  | "completed";
+
+export type FaqSuggestionItemStatus = "review" | "approved" | "dismissed" | "duplicate";
+export type FaqSuggestionSourceType =
+  | "brand_core"
+  | "product_service"
+  | "owned_snapshot"
+  | "document"
+  | "faq";
+
+export interface FaqSuggestionEvidence {
+  sourceType: FaqSuggestionSourceType;
+  sourceId: string;
+  label: string;
+}
+
+export interface FaqSuggestionItem {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  runId: string;
+  position: number;
+  category: FaqSuggestionCategory;
+  question: string;
+  answer: string;
+  evidence: FaqSuggestionEvidence[];
+  confidence: number;
+  status: FaqSuggestionItemStatus;
+  duplicateOfKnowledgeEntryId: string | null;
+  approvedKnowledgeEntryId: string | null;
+  reviewedByUserId: string | null;
+  reviewedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FaqSuggestionRun {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  status: FaqSuggestionRunStatus;
+  errorCode: string | null;
+  createdByUserId: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  items: FaqSuggestionItem[];
+}
+
+export interface FaqSuggestionItemUpdate {
+  category: FaqSuggestionCategory;
+  question: string;
+  answer: string;
+  expectedUpdatedAt: string;
+}
+
+export interface FaqSuggestionReviewAction {
+  expectedUpdatedAt: string;
+}
+
 export interface AvatarImage {
   id: string;
   position: number;
@@ -292,6 +371,57 @@ export function createLibraryGateway(client: Client = apiClient(), blobPut: type
         method: "POST",
         body: JSON.stringify(input),
       });
+    },
+    createFaqSuggestionRun(brandId: string) {
+      return client.requestJson<{ run: FaqSuggestionRun }>(
+        `/brands/${brandId}/faq-suggestions`,
+        { method: "POST" },
+      );
+    },
+    getLatestFaqSuggestionRun(brandId: string) {
+      return client.requestJson<{ run: FaqSuggestionRun | null }>(
+        `/brands/${brandId}/faq-suggestions/latest`,
+        { method: "GET" },
+      );
+    },
+    getFaqSuggestionRun(brandId: string, runId: string) {
+      return client.requestJson<{ run: FaqSuggestionRun }>(
+        `/brands/${brandId}/faq-suggestions/${runId}`,
+        { method: "GET" },
+      );
+    },
+    updateFaqSuggestionItem(
+      brandId: string,
+      runId: string,
+      itemId: string,
+      input: FaqSuggestionItemUpdate,
+    ) {
+      return client.requestJson<{ item: FaqSuggestionItem }>(
+        `/brands/${brandId}/faq-suggestions/${runId}/items/${itemId}`,
+        { method: "PATCH", body: JSON.stringify(input) },
+      );
+    },
+    approveFaqSuggestionItem(
+      brandId: string,
+      runId: string,
+      itemId: string,
+      input: FaqSuggestionReviewAction,
+    ) {
+      return client.requestJson<{ item: FaqSuggestionItem; wikiItem: WikiItem | null }>(
+        `/brands/${brandId}/faq-suggestions/${runId}/items/${itemId}/approve`,
+        { method: "POST", body: JSON.stringify(input) },
+      );
+    },
+    dismissFaqSuggestionItem(
+      brandId: string,
+      runId: string,
+      itemId: string,
+      input: FaqSuggestionReviewAction,
+    ) {
+      return client.requestJson<{ item: FaqSuggestionItem }>(
+        `/brands/${brandId}/faq-suggestions/${runId}/items/${itemId}/dismiss`,
+        { method: "POST", body: JSON.stringify(input) },
+      );
     },
     listAvatars(brandId: string) {
       return client.requestJson<Avatar[]>(`/brands/${brandId}/avatars`, { method: "GET" });

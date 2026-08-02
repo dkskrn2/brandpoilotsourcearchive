@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   libraryGateway,
   type LibraryGateway,
@@ -7,6 +8,7 @@ import {
   WikiLibraryPanel,
   type KnowledgeApi,
 } from "./WikiLibraryPanel";
+import { FaqSuggestionPreviewPanel } from "./FaqSuggestionPreviewPanel";
 
 interface Props {
   brandId: string;
@@ -29,14 +31,23 @@ export function KnowledgeCategoryEditorPanel({
   onCloseIssue,
   onDirtyChange,
 }: Props) {
-  return <WikiLibraryPanel
-    brandId={brandId}
-    category={kind}
-    title={title}
-    gateway={gateway}
-    knowledgeApi={knowledgeApi}
-    initialIssueId={initialIssueId}
-    onCloseIssue={onCloseIssue}
-    onDirtyChange={onDirtyChange}
-  />;
+  const [faqRefreshToken, setFaqRefreshToken] = useState(0);
+  return <div className="knowledge-category-stack">
+    {kind === "faq" ? <FaqSuggestionPreviewPanel
+      brandId={brandId}
+      gateway={gateway}
+      onApproved={() => setFaqRefreshToken((current) => current + 1)}
+    /> : null}
+    <WikiLibraryPanel
+      brandId={brandId}
+      category={kind}
+      title={title}
+      gateway={gateway}
+      knowledgeApi={knowledgeApi}
+      initialIssueId={initialIssueId}
+      onCloseIssue={onCloseIssue}
+      onDirtyChange={onDirtyChange}
+      refreshToken={faqRefreshToken}
+    />
+  </div>;
 }

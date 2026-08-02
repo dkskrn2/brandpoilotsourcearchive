@@ -185,36 +185,13 @@ describe("ChannelsPage", () => {
     expect(screen.queryByText("연결 상태를 불러올 수 없습니다")).not.toBeInTheDocument();
   });
 
-  it("refreshes blocked DM activation and explains that the first Wiki is building", async () => {
-    const ready = {
-      brandId: "brand-1",
-      enabled: false,
-      fallbackMessage: "담당자가 확인하겠습니다.",
-      errorMessage: "잠시 후 다시 문의해 주세요.",
-      brandCoreReady: true,
-      wikiStatus: "active",
-      wikiReady: true,
-      messagePermissionReady: true,
-      webhookStatus: "connected",
-      workerStatus: "online",
-    };
-    const getInstagramDmSettings = vi.fn()
-      .mockResolvedValueOnce(ready)
-      .mockResolvedValueOnce({ ...ready, wikiStatus: "building", wikiReady: false });
-    const updateInstagramDmSettings = vi.fn(async () => {
-      throw { errorCode: "dm_activation_blocked" };
-    });
-    const api = await renderChannelsPage({ getInstagramDmSettings, updateInstagramDmSettings });
+  it("keeps Instagram connection management without duplicating DM auto reply controls", async () => {
+    const api = await renderChannelsPage();
 
-    await screen.findByRole("heading", { name: "Instagram DM 자동답변" });
-    await userEvent.click(screen.getByRole("switch", { name: "DM 자동답변" }));
-
-    expect(api.updateInstagramDmSettings).toHaveBeenCalledWith("brand-1", { enabled: true });
-    expect(getInstagramDmSettings).toHaveBeenCalledTimes(2);
-    expect(await screen.findByText(
-      "첫 Wiki를 준비하고 있습니다. 기존 설정은 꺼진 상태이며 준비가 끝난 뒤 다시 활성화할 수 있습니다.",
-    )).toBeVisible();
-    expect(screen.getByRole("switch", { name: "DM 자동답변" })).not.toBeChecked();
+    expect(await screen.findByText("Instagram")).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Instagram DM 자동답변" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "DM 자동답변" })).not.toBeInTheDocument();
+    expect(api.getInstagramDmSettings).not.toHaveBeenCalled();
   });
 
   it("renders four independent capability rows for every catalog channel", async () => {

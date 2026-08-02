@@ -33,6 +33,7 @@ interface Props {
   category?: CanonicalKnowledgeTab;
   title?: string;
   onDirtyChange?(dirty: boolean): void;
+  refreshToken?: number;
 }
 
 async function fileToBase64(file: File) {
@@ -68,6 +69,7 @@ export function WikiLibraryPanel({
   category,
   title = "Wiki",
   onDirtyChange,
+  refreshToken = 0,
 }: Props) {
   const [items, setItems] = useState<WikiItem[]>([]);
   const [issues, setIssues] = useState<WikiIssue[]>([]);
@@ -140,6 +142,15 @@ export function WikiLibraryPanel({
       setKnowledgeLoading(false);
     }
   }, [brandId, showKnowledgeOperations]);
+
+  useEffect(() => {
+    if (refreshToken < 1) return;
+    let active = true;
+    void gateway.listWikiItems(brandId)
+      .then((nextItems) => { if (active) setItems(nextItems); })
+      .catch(() => { if (active) setErrorKind("retryable"); });
+    return () => { active = false; };
+  }, [brandId, gateway, refreshToken]);
 
   useEffect(() => {
     setFilter(category ?? "all");

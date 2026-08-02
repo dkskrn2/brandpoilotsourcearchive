@@ -429,6 +429,268 @@
   color: var(--bp-color-muted);
 }
 
+.knowledge-category-stack,
+.auto-response-knowledge-stack {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.faq-suggestion-head,
+.llm-knowledge-head {
+  align-items: center;
+}
+
+.faq-suggestion-head h2,
+.faq-suggestion-head p,
+.llm-knowledge-head h2,
+.llm-knowledge-head p {
+  margin: 0;
+}
+
+.faq-suggestion-head p,
+.llm-knowledge-head p {
+  margin-top: 5px;
+  color: var(--bp-color-muted);
+}
+
+.faq-suggestion-title-row,
+.llm-knowledge-title-row,
+.llm-source-card-title {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.faq-suggestion-icon,
+.llm-knowledge-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--bp-color-primary) 12%, var(--bp-color-paper));
+  color: var(--bp-color-primary);
+}
+
+.llm-knowledge-icon {
+  background: color-mix(in srgb, var(--bp-color-ai) 10%, var(--bp-color-paper));
+  color: var(--bp-color-ai);
+}
+
+.faq-suggestion-body,
+.faq-suggestion-list,
+.llm-knowledge-body {
+  display: grid;
+  gap: 16px;
+}
+
+.faq-source-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.faq-source-summary span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bp-color-primary) 9%, var(--bp-color-paper));
+  color: var(--bp-color-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.faq-suggestion-hint {
+  margin: 0;
+}
+
+.faq-suggestion-review {
+  display: grid;
+  gap: 16px;
+  padding-top: 18px;
+  border-top: 1px solid var(--bp-color-line);
+}
+
+.faq-review-head,
+.faq-suggestion-card > header,
+.faq-suggestion-card > footer,
+.llm-build-action,
+.llm-document-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.faq-review-head h3,
+.faq-review-head p,
+.faq-suggestion-card p,
+.llm-source-card h3,
+.llm-source-card p,
+.llm-build-action p {
+  margin: 0;
+}
+
+.faq-review-head p,
+.llm-source-card p,
+.llm-build-action p {
+  margin-top: 5px;
+  color: var(--bp-color-muted);
+  font-size: 13px;
+}
+
+.faq-preview-notice,
+.llm-preview-notice {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bp-color-ai) 8%, var(--bp-color-paper));
+  color: var(--bp-color-ai);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.faq-suggestion-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--bp-color-line);
+  border-radius: 14px;
+  background: var(--bp-color-paper);
+}
+
+.faq-suggestion-card.is-approved {
+  border-color: color-mix(in srgb, var(--bp-color-primary) 48%, var(--bp-color-line));
+  background: color-mix(in srgb, var(--bp-color-primary) 4%, var(--bp-color-paper));
+}
+
+.faq-suggestion-card.is-dismissed {
+  opacity: .72;
+}
+
+.faq-suggestion-card.is-duplicate {
+  opacity: .78;
+  border-style: dashed;
+}
+
+.faq-preview-notice.is-error {
+  background: color-mix(in srgb, var(--bp-color-danger) 9%, var(--bp-color-paper));
+  color: var(--bp-color-danger);
+}
+
+.faq-suggestion-card > header label,
+.faq-editor-grid label,
+.llm-source-field {
+  display: grid;
+  gap: 7px;
+  color: var(--bp-color-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.faq-suggestion-card > header label {
+  width: min(220px, 100%);
+}
+
+.faq-suggestion-card :is(select, textarea),
+.llm-source-field input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--bp-color-line);
+  border-radius: 9px;
+  background: var(--bp-color-paper);
+  padding: 10px 11px;
+  color: var(--bp-color-ink);
+  font: inherit;
+  font-weight: 400;
+}
+
+.faq-suggestion-card textarea {
+  min-height: 72px;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+.faq-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, .7fr) minmax(320px, 1.3fr);
+  gap: 14px;
+}
+
+.faq-suggestion-card > footer p {
+  color: var(--bp-color-muted);
+  font-size: 12px;
+}
+
+.faq-suggestion-card > footer p strong {
+  margin-right: 5px;
+  color: var(--bp-color-ink);
+}
+
+.llm-build-state {
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bp-color-ai) 10%, var(--bp-color-paper));
+  color: var(--bp-color-ai);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.llm-source-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.llm-source-card {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-width: 0;
+  padding: 17px;
+  border: 1px solid var(--bp-color-line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bp-color-paper) 97%, var(--bp-color-ai));
+}
+
+.llm-source-card-title {
+  color: var(--bp-color-ai);
+}
+
+.llm-source-card-title h3 {
+  color: var(--bp-color-ink);
+  font-size: 15px;
+}
+
+.llm-source-field > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.llm-document-row > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.llm-document-row span {
+  color: var(--bp-color-muted);
+  font-size: 12px;
+}
+
+.llm-build-action {
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--bp-color-ai) 24%, var(--bp-color-line));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bp-color-ai) 5%, var(--bp-color-paper));
+}
+
 .brand-version-list {
   display: grid;
   gap: 10px;
@@ -1065,6 +1327,11 @@
   .style-reference-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .faq-editor-grid,
+  .llm-source-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 620px) {
@@ -1075,6 +1342,36 @@
   .auto-response-knowledge-body .section-heading-inline {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .faq-suggestion-head,
+  .faq-review-head,
+  .faq-suggestion-card > header,
+  .faq-suggestion-card > footer,
+  .llm-knowledge-head,
+  .llm-build-action,
+  .llm-document-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .faq-suggestion-head .button,
+  .faq-suggestion-card > footer .actions,
+  .llm-build-action .button,
+  .llm-document-row .button {
+    width: 100%;
+  }
+
+  .faq-suggestion-card > footer .actions .button {
+    flex: 1;
+  }
+
+  .faq-editor-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .llm-source-field > div {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

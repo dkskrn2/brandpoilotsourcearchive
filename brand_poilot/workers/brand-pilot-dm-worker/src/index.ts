@@ -15,8 +15,9 @@ import { runDmWorkerOnce } from "./worker.js";
 import { runProfileRefreshOnce } from "./profileRefresh.js";
 import { runWikiMaintenanceOnce } from "./wikiMaintenance.js";
 import { runWikiRefreshOutboxOnce } from "./wikiRefreshOutbox.js";
+import { runFaqSuggestionOnce } from "./faqSuggestionWorker.js";
 import { withWorkerResourceLease } from "./resourceLease.js";
-import { resolveWorkerMode } from "./workerMode.js";
+import { resolveWorkerMode, selectWorkerLane, usesDmWorkerHeartbeat } from "./workerMode.js";
 
 const required = (name: string) => {
   const value = process.env[name]?.trim();
@@ -34,6 +35,7 @@ const resourceHeartbeatIntervalMs = Math.max(1_000, Number(process.env.WORKER_RE
 const timeoutMs = Math.max(1_000, Number(process.env.DM_CLI_TIMEOUT_MS ?? 30_000));
 const curatorTimeoutMs = Math.max(1_000, Number(process.env.KNOWLEDGE_CURATOR_TIMEOUT_MS ?? 30_000));
 const wikiTimeoutMs = Math.max(1_000, Number(process.env.WIKI_CODEX_TIMEOUT_MS ?? 120_000));
+const faqTimeoutMs = Math.max(1_000, Number(process.env.FAQ_CODEX_TIMEOUT_MS ?? 60_000));
 const runtimeDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../runtime");
 const api = createDmWorkerClient({ apiUrl: required("BRAND_PILOT_API_URL"), token: required("WORKER_API_TOKEN") });
 const databaseConfig = resolveDmWorkerDatabaseConfig(process.env);
@@ -63,6 +65,12 @@ const runWikiCodex = (input: { prompt: string; runtimeDirectory: string; timeout
   model: process.env.WIKI_CODEX_MODEL?.trim() || "gpt-5.4",
   reasoningEffort: process.env.WIKI_CODEX_REASONING_EFFORT?.trim() || "low",
   fastMode: process.env.WIKI_CODEX_FAST_MODE?.trim().toLowerCase() !== "false",
+});
+const runFaqCodex = (input: { prompt: string; runtimeDirectory: string; timeoutMs: number }) => runCodexJson({
+  ...input,
+  model: process.env.FAQ_CODEX_MODEL?.trim() || "gpt-5.4",
+  reasoningEffort: process.env.FAQ_CODEX_REASONING_EFFORT?.trim() || "low",
+  fastMode: process.env.FAQ_CODEX_FAST_MODE?.trim().toLowerCase() !== "false",
 });
 
 async function runDmLaneOnce() {
@@ -114,6 +122,24 @@ function runWikiLaneOnce() {
   }, runWikiLaneWithoutResource);
 }
 
+function runFaqLaneOnce() {
+  return withWorkerResourceLease({
+    client: api,
+    workerId,
+    workload: "faq",
+    pollIntervalMs: resourcePollIntervalMs,
+    heartbeatIntervalMs: resourceHeartbeatIntervalMs,
+    onWait: () => db.heartbeatFaqSuggestionWorker(workerId),
+  }, () => runFaqSuggestionOnce({
+    workerId,
+    db,
+    runtimeDirectory,
+    timeoutMs: faqTimeoutMs,
+    heartbeatIntervalMs: common.heartbeatIntervalMs,
+    runCodex: runFaqCodex,
+  }));
+}
+
 async function runLane(run: () => Promise<{ status: string }>, label: string) {
   while (true) {
     await run().catch((error) => console.error(`${label}_cycle_failed`, error));
@@ -122,18 +148,24 @@ async function runLane(run: () => Promise<{ status: string }>, label: string) {
 }
 
 async function main() {
-  const runSelectedLane = workerMode === "dm" ? runDmLaneOnce : runWikiLaneOnce;
+  const runSelectedLane = selectWorkerLane(workerMode, {
+    dm: runDmLaneOnce,
+    wiki: runWikiLaneOnce,
+    faq: runFaqLaneOnce,
+  });
   if (command === "once") {
-    await api.heartbeatWorker(workerId);
+    if (usesDmWorkerHeartbeat(workerMode)) await api.heartbeatWorker(workerId);
     console.log(await runSelectedLane());
     await db.close();
     return;
   }
-  const stopHeartbeat = startWorkerInstanceHeartbeat({
-    heartbeat: api.heartbeatWorker,
-    workerId,
-    intervalMs: common.heartbeatIntervalMs,
-  });
+  const stopHeartbeat = usesDmWorkerHeartbeat(workerMode)
+    ? startWorkerInstanceHeartbeat({
+      heartbeat: api.heartbeatWorker,
+      workerId,
+      intervalMs: common.heartbeatIntervalMs,
+    })
+    : () => undefined;
   try {
     await runLane(runSelectedLane, `${workerMode}_worker`);
   } finally {

@@ -6,7 +6,9 @@ describe("worker resource policy", () => {
     const limits = resolveWorkerResourceLimits({ total: 2, dmReserved: 1 });
 
     expect(canAcquireWorkerResource({ workload: "content", activeTotal: 0, activeNonDm: 0, limits })).toBe(true);
+    expect(canAcquireWorkerResource({ workload: "faq", activeTotal: 0, activeNonDm: 0, limits })).toBe(true);
     expect(canAcquireWorkerResource({ workload: "wiki", activeTotal: 1, activeNonDm: 1, limits })).toBe(false);
+    expect(canAcquireWorkerResource({ workload: "faq", activeTotal: 1, activeNonDm: 1, limits })).toBe(false);
     expect(canAcquireWorkerResource({ workload: "dm", activeTotal: 1, activeNonDm: 1, limits })).toBe(true);
     expect(canAcquireWorkerResource({ workload: "dm", activeTotal: 2, activeNonDm: 1, limits })).toBe(false);
   });

@@ -129,7 +129,7 @@ const instagramLoginStateCookie = "bp_instagram_login_state";
 const instagramLoginBindingCookie = "bp_instagram_login_binding";
 const instagramTrendStateCookie = "bp_instagram_trend_state";
 const uuidPattern = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
-const workerResourceWorkloads = new Set(["dm", "wiki", "content", "onboarding"]);
+const workerResourceWorkloads = new Set(["dm", "wiki", "content", "onboarding", "faq"]);
 const contentTypeByWorkerSlug = {
   "card-news": "card_news",
   blog: "blog",
@@ -981,6 +981,10 @@ export function createServer(
       reply.code(403).send({ error: message });
       return;
     }
+    if (message === "faq_suggestion_approval_forbidden" || message === "faq_suggestion_access_forbidden") {
+      reply.code(403).send({ error: message });
+      return;
+    }
     if (message === "wiki_item_approval_forbidden" || message === "wiki_item_access_forbidden"
       || message === "wiki_issue_resolution_forbidden") {
       reply.code(403).send({ error: message });
@@ -993,16 +997,23 @@ export function createServer(
       "brand_rules_version_conflict",
       "wiki_issue_not_open",
       "wiki_issue_source_ineligible",
+      "faq_suggestion_sources_missing",
+      "faq_suggestion_item_conflict",
     ].includes(message)) {
       reply.code(409).send({ error: message });
       return;
     }
     if (message === "brand_center_not_configured" || message === "product_library_not_configured"
-      || message === "wiki_management_not_configured") {
+      || message === "wiki_management_not_configured" || message === "faq_suggestion_not_configured") {
       reply.code(503).send({ error: message });
       return;
     }
     if (message.startsWith("wiki_item_validation_failed:") || message.startsWith("wiki_issue_validation_failed:")) {
+      const separator = message.indexOf(":");
+      reply.code(400).send({ error: message.slice(0, separator), field: message.slice(separator + 1) });
+      return;
+    }
+    if (message.startsWith("faq_suggestion_validation_failed:")) {
       const separator = message.indexOf(":");
       reply.code(400).send({ error: message.slice(0, separator), field: message.slice(separator + 1) });
       return;
@@ -4236,7 +4247,7 @@ export function createServer(
     const lease = await repository.acquireWorkerResourceLease(
       "codex_cli",
       request.body.workerId.trim(),
-      request.body.workload as "dm" | "wiki" | "content" | "onboarding",
+      request.body.workload as "dm" | "wiki" | "content" | "onboarding" | "faq",
     );
     if (!lease) {
       reply.code(204);

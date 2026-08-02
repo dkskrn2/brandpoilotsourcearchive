@@ -63,6 +63,28 @@ describe("worker resource lease API", () => {
     );
   });
 
+  it("accepts FAQ as a non-DM Codex workload", async () => {
+    const repository = {
+      acquireWorkerResourceLease: vi.fn(async () => ({ id: "lease-faq", leaseToken: "token-faq" })),
+    } as any;
+    const app = createServer({ repository, workerApiToken: "worker-secret" });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/worker/resources/codex-cli/acquire",
+      headers: { authorization: "Bearer worker-secret" },
+      payload: { workerId: "faq-worker-1", workload: "faq" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.acquireWorkerResourceLease).toHaveBeenCalledWith(
+      "codex_cli",
+      "faq-worker-1",
+      "faq",
+    );
+  });
+
   it("reports a lost resource lease as a non-retryable conflict", async () => {
     const repository = {
       heartbeatWorkerResourceLease: vi.fn(async () => {

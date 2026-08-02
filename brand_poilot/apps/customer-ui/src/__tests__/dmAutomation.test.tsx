@@ -115,9 +115,14 @@ describe("DmAutomationPage", () => {
   it("shows readiness, toggles automation, and links Wiki management to Brand Center", async () => {
     const api = await renderPage();
 
+    expect(await screen.findByRole("heading", { name: "자동답변 설정" })).toBeVisible();
+    expect(screen.getByText("FAQ 답변")).toBeVisible();
+    expect(screen.getByText("LLM 답변")).toBeVisible();
     expect(await screen.findByText("자동답변 준비 완료")).toBeVisible();
-    expect(screen.getByText("Wiki 준비됨")).toBeVisible();
-    expect(screen.getByRole("link", { name: "Wiki에서 보완" })).toHaveAttribute("href", "/brand-center?tab=wiki");
+    expect(screen.getByRole("link", { name: /FAQ 관리/ })).toHaveAttribute("href", "/brand-center?tab=faq");
+    expect(screen.getByRole("link", { name: /LLM 답변 정보 관리/ })).toHaveAttribute("href", "/brand-center?tab=knowledge");
+    expect(screen.getByRole("switch", { name: "LLM 답변" })).toBeDisabled();
+    expect(screen.getByText("UI 미리보기입니다. LLM 설정은 저장되지 않습니다.")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Wiki 다시 만들기" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("FAQ 파일")).not.toBeInTheDocument();
 
@@ -197,7 +202,7 @@ describe("DmAutomationPage", () => {
 
     expect(await screen.findByText("자동답변을 켤 수 없습니다")).toBeVisible();
     expect(screen.getByRole("switch", { name: "DM 자동답변" })).toBeDisabled();
-    expect(screen.getByRole("link", { name: "Wiki 보완하기" })).toHaveAttribute("href", "/brand-center?tab=wiki");
+    expect(screen.getByRole("link", { name: "Wiki 보완하기" })).toHaveAttribute("href", "/brand-center?tab=knowledge");
     expect(screen.getByRole("link", { name: "Instagram 연결 확인" })).toHaveAttribute("href", "/channels");
     expect(updateInstagramDmSettings).not.toHaveBeenCalled();
   });

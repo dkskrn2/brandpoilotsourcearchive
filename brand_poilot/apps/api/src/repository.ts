@@ -32,6 +32,7 @@ import { createBrandIntelligenceProvider } from "./brandIntelligenceProvider.js"
 import { createBrandCoreRepository } from "./brandCoreRepository.js";
 import { createProductLibraryRepository } from "./productLibraryRepository.js";
 import { createAssetLibraryRepository } from "./assetLibraryRepository.js";
+import { createFaqSuggestionRepository } from "./faqSuggestionRepository.js";
 import { deliveryFormatToRenderJobType } from "./instagramFormats.js";
 import { kstDateKey, nextAvailablePolicySlot } from "./publishSchedule.js";
 import { MetaGraphRequestError, classifyMetaGraphPublishError } from "./metaGraph.js";
@@ -1353,6 +1354,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
   const brandCore = createBrandCoreRepository(pool);
   const productLibrary = createProductLibraryRepository(pool);
   const assetLibrary = createAssetLibraryRepository(pool);
+  const faqSuggestions = createFaqSuggestionRepository(pool);
   const brandIntelligenceProvider = createBrandIntelligenceProvider(createBrandIntelligenceRepository(pool));
   const aiContent = createAiContentRepository(pool, {
     brandIntelligenceProvider,
@@ -1897,6 +1899,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     ...brandCore,
     ...productLibrary,
     ...assetLibrary,
+    ...faqSuggestions,
     ...instagramTrendRepository,
     ...aiContent,
     ...aiContentAttachmentGc,

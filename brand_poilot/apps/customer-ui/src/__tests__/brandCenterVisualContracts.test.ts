@@ -67,4 +67,13 @@ describe("brand center visual contracts", () => {
       /\.style-reference-dropzone\s+input::file-selector-button\s*\{(?=[^}]*border:)(?=[^}]*border-radius:)(?=[^}]*background:)(?=[^}]*padding:)[^}]*\}/s,
     );
   });
+
+  it("gives FAQ suggestions and LLM sources responsive editing surfaces", async () => {
+    const css = await readFile(brandCenterCssPath, "utf8");
+
+    expect(css).toMatch(/\.faq-suggestion-review\s*\{[^}]*display:\s*grid[^}]*gap:/s);
+    expect(css).toMatch(/\.faq-editor-grid\s*\{[^}]*grid-template-columns:/s);
+    expect(css).toMatch(/\.llm-source-grid\s*\{[^}]*grid-template-columns:/s);
+    expect(css).toMatch(/@media\s*\(max-width:\s*620px\)[\s\S]*\.faq-editor-grid[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s);
+  });
 });

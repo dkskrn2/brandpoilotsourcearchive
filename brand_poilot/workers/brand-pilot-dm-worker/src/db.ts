@@ -1,4 +1,10 @@
+import crypto from "node:crypto";
 import { Pool, type PoolConfig } from "pg";
+import type {
+  FaqSuggestionWorkerInput,
+  FaqSuggestionWorkerResult,
+  FaqSuggestionWorkerSource,
+} from "./faqSuggestionContracts.js";
 import type {
   ClaimedWikiValidationItem,
   FinalizedWikiChunk,
@@ -52,6 +58,24 @@ function wikiBuildSource(row: Record<string, unknown>): WikiBuildSource {
     ...row,
     source_kind: parseWikiSourceKind(row.source_kind),
   } as WikiBuildSource;
+}
+
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, stableValue(item)]));
+  }
+  return value;
+}
+
+function faqContentHash(value: unknown) {
+  return crypto.createHash("sha256").update(JSON.stringify(stableValue(value))).digest("hex");
+}
+
+function json<T>(value: unknown): T {
+  return (typeof value === "string" ? JSON.parse(value) : value) as T;
 }
 
 function removeSslQueryOverrides(url: URL) {
@@ -138,6 +162,230 @@ type DmWorkerPool = Pick<Pool, "query" | "connect"> & { end?: Pool["end"] };
 
 export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
   return {
+    async claimFaqSuggestionRun(workerId: string): Promise<FaqSuggestionWorkerInput | null> {
+      const client = await pool.connect();
+      let output: FaqSuggestionWorkerInput | null = null;
+      let postCommitError: Error | null = null;
+      try {
+        await client.query("begin");
+        const claimed = await client.query(
+          `with candidate as (
+             select id from faq_suggestion_runs
+              where attempt_count < max_attempts
+                and (
+                  (status = 'queued' and available_at <= now())
+                  or (status = 'running' and lease_expires_at < now())
+                )
+              order by available_at, created_at
+              for update skip locked limit 1
+           )
+           update faq_suggestion_runs run
+              set status = 'running', attempt_count = run.attempt_count + 1,
+                  lease_owner = $1, lease_token = gen_random_uuid(),
+                  lease_expires_at = now() + interval '60 seconds',
+                  started_at = coalesce(run.started_at, now()), completed_at = null,
+                  error_code = null, updated_at = now()
+             from candidate where run.id = candidate.id
+           returning run.id, run.workspace_id, run.brand_id,
+                     run.lease_token, run.source_snapshot_json`,
+          [workerId],
+        );
+        if (!claimed.rowCount) {
+          await client.query("commit");
+          return null;
+        }
+        const row = claimed.rows[0];
+        const snapshot = json<{
+          sources: Array<{
+            sourceType: FaqSuggestionWorkerSource["sourceType"];
+            sourceId: string;
+            contentHash: string;
+            label: string;
+          }>;
+        }>(row.source_snapshot_json);
+        const sources: FaqSuggestionWorkerSource[] = [];
+        for (const descriptor of snapshot.sources) {
+          let source: { content: string; contentHash: string } | null = null;
+          if (descriptor.sourceType === "brand_core") {
+            const result = await client.query(
+              `select core_json from brand_core_versions
+                where id=$1::uuid and workspace_id=$2::uuid and brand_id=$3::uuid
+                  and status='approved'`,
+              [descriptor.sourceId, row.workspace_id, row.brand_id],
+            );
+            if (result.rowCount) {
+              const core = json(result.rows[0].core_json);
+              source = { content: JSON.stringify(core), contentHash: faqContentHash(core) };
+            }
+          } else if (descriptor.sourceType === "product_service") {
+            const result = await client.query(
+              `select profile_json from product_service_versions
+                where id=$1::uuid and workspace_id=$2::uuid and brand_id=$3::uuid
+                  and status='approved'`,
+              [descriptor.sourceId, row.workspace_id, row.brand_id],
+            );
+            if (result.rowCount) {
+              const profile = json(result.rows[0].profile_json);
+              source = { content: JSON.stringify(profile), contentHash: faqContentHash(profile) };
+            }
+          } else if (descriptor.sourceType === "owned_snapshot") {
+            const result = await client.query(
+              `select extracted_text, content_hash from source_snapshots
+                where id=$1::uuid and workspace_id=$2::uuid and brand_id=$3::uuid
+                  and status='succeeded' and length(trim(coalesce(extracted_text,''))) > 0`,
+              [descriptor.sourceId, row.workspace_id, row.brand_id],
+            );
+            if (result.rowCount) source = {
+              content: String(result.rows[0].extracted_text),
+              contentHash: String(result.rows[0].content_hash
+                || faqContentHash(String(result.rows[0].extracted_text))),
+            };
+          } else if (descriptor.sourceType === "document") {
+            const result = await client.query(
+              `select string_agg(unit.content, E'\n' order by unit.stable_key) content
+                 from wiki_source_units unit join wiki_versions version on version.id=unit.wiki_version_id
+                where unit.source_id=$1::uuid and unit.workspace_id=$2::uuid and unit.brand_id=$3::uuid
+                  and unit.source_kind in ('policy','guide') and version.status='active'`,
+              [descriptor.sourceId, row.workspace_id, row.brand_id],
+            );
+            if (result.rows[0]?.content) source = {
+              content: String(result.rows[0].content),
+              contentHash: faqContentHash(String(result.rows[0].content)),
+            };
+          } else if (descriptor.sourceType === "faq") {
+            const result = await client.query(
+              `select question,answer from knowledge_entries
+                where id=$1::uuid and workspace_id=$2::uuid and brand_id=$3::uuid
+                  and entry_type='faq' and status='active' and enabled=true`,
+              [descriptor.sourceId, row.workspace_id, row.brand_id],
+            );
+            if (result.rowCount) source = {
+              content: `질문: ${result.rows[0].question}\n답변: ${result.rows[0].answer}`,
+              contentHash: faqContentHash({
+                question: result.rows[0].question,
+                answer: result.rows[0].answer,
+              }),
+            };
+          }
+          if (!source || source.contentHash !== descriptor.contentHash) {
+            await client.query(
+              `update faq_suggestion_runs set status='failed', error_code='faq_suggestion_source_changed',
+                 lease_owner=null,lease_token=null,lease_expires_at=null,completed_at=now(),updated_at=now()
+               where id=$1::uuid`,
+              [row.id],
+            );
+            postCommitError = new Error("faq_suggestion_source_changed");
+            break;
+          }
+          sources.push({ ...descriptor, content: source.content });
+        }
+        if (!postCommitError) {
+          const faqs = await client.query(
+            `select id,question,answer from knowledge_entries
+              where workspace_id=$1::uuid and brand_id=$2::uuid
+                and entry_type='faq' and status='active' and enabled=true order by id`,
+            [row.workspace_id, row.brand_id],
+          );
+          output = {
+            contractVersion: "faq-suggestion-input.v1",
+            runId: String(row.id),
+            workspaceId: String(row.workspace_id),
+            brandId: String(row.brand_id),
+            leaseToken: String(row.lease_token),
+            sources,
+            existingFaqs: faqs.rows.map((faq) => ({
+              id: String(faq.id), question: String(faq.question), answer: String(faq.answer),
+            })),
+          };
+        }
+        await client.query("commit");
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
+      if (postCommitError) throw postCommitError;
+      return output;
+    },
+
+    async heartbeatFaqSuggestionRun(runId: string, workerId: string, leaseToken: string) {
+      const result = await pool.query(
+        `update faq_suggestion_runs set lease_expires_at=now()+interval '60 seconds',updated_at=now()
+          where id=$1::uuid and status='running' and lease_owner=$2 and lease_token=$3::uuid`,
+        [runId, workerId, leaseToken],
+      );
+      if (result.rowCount !== 1) throw new Error("faq_suggestion_lease_lost");
+    },
+
+    async completeFaqSuggestionRun(
+      runId: string,
+      workerId: string,
+      leaseToken: string,
+      result: FaqSuggestionWorkerResult,
+    ) {
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const locked = await client.query(
+          `select workspace_id,brand_id from faq_suggestion_runs
+            where id=$1::uuid and status='running' and lease_owner=$2 and lease_token=$3::uuid
+            for update`,
+          [runId, workerId, leaseToken],
+        );
+        if (!locked.rowCount) throw new Error("faq_suggestion_lease_lost");
+        for (const [position, suggestion] of result.suggestions.entries()) {
+          await client.query(
+            `insert into faq_suggestion_items(
+               workspace_id,brand_id,run_id,position,category,question,answer,evidence_json,confidence
+             ) values($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)`,
+            [locked.rows[0].workspace_id, locked.rows[0].brand_id, runId, position,
+              suggestion.category, suggestion.question, suggestion.answer,
+              JSON.stringify(suggestion.evidence), suggestion.confidence],
+          );
+        }
+        const completed = await client.query(
+          `update faq_suggestion_runs set status=$4,error_code=null,lease_owner=null,lease_token=null,
+             lease_expires_at=null,completed_at=now(),updated_at=now()
+           where id=$1::uuid and lease_owner=$2 and lease_token=$3::uuid`,
+          [runId, workerId, leaseToken, result.rejections.length ? "partial" : "review_ready"],
+        );
+        if (completed.rowCount !== 1) throw new Error("faq_suggestion_lease_lost");
+        await client.query("commit");
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally { client.release(); }
+    },
+
+    async failFaqSuggestionRun(
+      runId: string, workerId: string, leaseToken: string,
+      errorCode: string, retryable: boolean,
+    ) {
+      const result = await pool.query(
+        `update faq_suggestion_runs
+            set status=case when $5 and attempt_count < max_attempts then 'queued' else 'failed' end,
+                available_at=case when $5 and attempt_count < max_attempts then updated_at +
+                  case attempt_count when 1 then interval '5 seconds' when 2 then interval '30 seconds'
+                    else interval '120 seconds' end else available_at end,
+                error_code=$4,lease_owner=null,lease_token=null,lease_expires_at=null,
+                completed_at=case when $5 and attempt_count < max_attempts then null else now() end,
+                updated_at=now()
+          where id=$1::uuid and status='running' and lease_owner=$2 and lease_token=$3::uuid`,
+        [runId, workerId, leaseToken, errorCode.slice(0, 2000), retryable],
+      );
+      if (result.rowCount !== 1) throw new Error("faq_suggestion_lease_lost");
+    },
+
+    async heartbeatFaqSuggestionWorker(workerId: string) {
+      await pool.query(
+        `insert into worker_instances(worker_id,worker_type,last_heartbeat_at)
+         values($1,'faq',now()) on conflict(worker_id) do update
+           set worker_type='faq',last_heartbeat_at=now(),updated_at=now()`,
+        [workerId],
+      );
+    },
+
     async dispatchWikiRefreshOutboxOnce(workerId: string) {
       const client = await pool.connect();
       let claimed: {

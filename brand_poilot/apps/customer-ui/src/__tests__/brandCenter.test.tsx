@@ -293,6 +293,12 @@ async function renderPage(
     })),
     listWikiIssues: vi.fn(async () => []),
     resolveWikiIssue: vi.fn(),
+    getLatestFaqSuggestionRun: vi.fn(async () => ({ run: null })),
+    getFaqSuggestionRun: vi.fn(),
+    createFaqSuggestionRun: vi.fn(),
+    updateFaqSuggestionItem: vi.fn(),
+    approveFaqSuggestionItem: vi.fn(),
+    dismissFaqSuggestionItem: vi.fn(),
     getReference: vi.fn(async () => ({
       id: "11111111-1111-4111-8111-111111111111",
       workspaceId: "workspace-1",
@@ -625,7 +631,7 @@ describe("BrandCenterPage", () => {
       .toHaveValue("영업일 기준 2~3일입니다.");
   });
 
-  it("routes legacy Wiki links to the read-only AI response knowledge panel", async () => {
+  it("routes legacy Wiki links to LLM source controls while preserving confirmed knowledge cards", async () => {
     const issueId = "11111111-1111-4111-8111-111111111111";
     await renderPage(
       `/brand-center?tab=wiki&issue=${issueId}`,
@@ -640,8 +646,9 @@ describe("BrandCenterPage", () => {
     expect(screen.getByText("브랜드 운영을 단순하게")).toBeVisible();
     expect(screen.getByText("콘텐츠 운영")).toBeVisible();
     expect(screen.getByText("배송은 얼마나 걸리나요?")).toBeVisible();
-    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /등록|추가|수정|삭제/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "LLM 답변 정보" })).toBeVisible();
+    expect(screen.getByLabelText("참고 URL")).toBeVisible();
+    expect(screen.getByRole("button", { name: "LLM 답변 정보 생성" })).toBeVisible();
   });
 
   it("creates an editable core draft only after the user chooses to edit", async () => {

@@ -4377,7 +4377,7 @@ test("061 deterministically removes legacy duplicate avatar bytes and prevents n
   });
 });
 
-test("migration runner records forward-only 060 through 071 without changing the applied 058 checksum", async () => {
+test("migration runner records forward-only 060 through 072 without changing the applied 058 checksum", async () => {
   const migrations = await loadMigrations();
   const runnableMigrations = migrations.filter(
     (migration) => !migration.sql.startsWith("-- requires: pgvector")
@@ -4403,7 +4403,7 @@ test("migration runner records forward-only 060 through 071 without changing the
       client,
       migrations: runnableMigrations,
     });
-    assert.deepEqual(upgraded.pending.slice(-12), [
+    assert.deepEqual(upgraded.pending.slice(-13), [
       "060_content_orchestration.sql",
       "061_avatar_image_checksum_uniqueness.sql",
       "062_avatar_upload_cancellation.sql",
@@ -4416,9 +4416,10 @@ test("migration runner records forward-only 060 through 071 without changing the
       "069_brand_analysis_one_open_workflow.sql",
       "070_remove_embedding_runtime.sql",
       "071_brand_intelligence_onboarding_worker_v2.sql",
+      "072_faq_suggestion_worker.sql",
     ]);
     const recorded = await database.query(
-      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) order by id",
+      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) order by id",
       [
         "058_avatar_and_reference_libraries.sql",
         "060_content_orchestration.sql",
@@ -4433,6 +4434,7 @@ test("migration runner records forward-only 060 through 071 without changing the
         "069_brand_analysis_one_open_workflow.sql",
         "070_remove_embedding_runtime.sql",
         "071_brand_intelligence_onboarding_worker_v2.sql",
+        "072_faq_suggestion_worker.sql",
       ],
     );
     assert.deepEqual(recorded.rows, [
@@ -4487,6 +4489,10 @@ test("migration runner records forward-only 060 through 071 without changing the
       {
         id: "071_brand_intelligence_onboarding_worker_v2.sql",
         checksum: migrations.find((migration) => migration.id === "071_brand_intelligence_onboarding_worker_v2.sql")?.checksum,
+      },
+      {
+        id: "072_faq_suggestion_worker.sql",
+        checksum: migrations.find((migration) => migration.id === "072_faq_suggestion_worker.sql")?.checksum,
       },
     ]);
     const repeated = await runMigrationsWithClient({
@@ -4945,6 +4951,7 @@ test("065 direct SQL and migration runner pending-tail paths converge on lifecyc
       "069_brand_analysis_one_open_workflow.sql",
       "070_remove_embedding_runtime.sql",
       "071_brand_intelligence_onboarding_worker_v2.sql",
+      "072_faq_suggestion_worker.sql",
     ]);
     return attachmentLifecycleRowState(database, fixture);
   });
@@ -6427,5 +6434,151 @@ test("071 creates the onboarding worker v2 lifecycle and remains idempotent", as
         where conname = 'worker_resource_leases_workload_check'`,
     );
     assert.match(resourceConstraint.rows[0].definition, /onboarding/);
+  });
+});
+
+test("072 creates the isolated FAQ suggestion queue and remains idempotent", async () => {
+  const migrations = await loadMigrations();
+  const migration072 = migrations.find(
+    (migration) => migration.id === "072_faq_suggestion_worker.sql",
+  );
+  assert.ok(migration072);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "071_brand_intelligence_onboarding_worker_v2.sql",
+    );
+    await database.exec(migration072.sql);
+    await database.exec(migration072.sql);
+
+    const tables = await database.query(
+      `select table_name
+         from information_schema.tables
+        where table_schema = 'public'
+          and table_name in ('faq_suggestion_runs', 'faq_suggestion_items')
+        order by table_name`,
+    );
+    assert.deepEqual(tables.rows.map((row) => row.table_name), [
+      "faq_suggestion_items",
+      "faq_suggestion_runs",
+    ]);
+
+    const workerTypeConstraint = await database.query(
+      `select pg_get_constraintdef(oid) as definition
+         from pg_constraint
+        where conname = 'worker_instances_type_check'`,
+    );
+    assert.match(workerTypeConstraint.rows[0].definition, /faq/);
+
+    const resourceConstraint = await database.query(
+      `select pg_get_constraintdef(oid) as definition
+         from pg_constraint
+        where conname = 'worker_resource_leases_workload_check'`,
+    );
+    assert.match(resourceConstraint.rows[0].definition, /faq/);
+    assert.match(resourceConstraint.rows[0].definition, /onboarding/);
+
+    const actor = await database.query(
+      `insert into app_users (email)
+       values ($1)
+       returning id`,
+      [`faq-worker-${randomUUID()}@example.com`],
+    );
+    const workspace = await database.query(
+      `insert into workspaces (name, slug)
+       values ('FAQ Worker', $1)
+       returning id`,
+      [`faq-worker-${randomUUID()}`],
+    );
+    await database.query(
+      `insert into workspace_members (workspace_id, user_id, role, status)
+       values ($1, $2, 'owner', 'active')`,
+      [workspace.rows[0].id, actor.rows[0].id],
+    );
+    const brand = await database.query(
+      `insert into brands (workspace_id, name)
+       values ($1, 'FAQ Brand')
+       returning id`,
+      [workspace.rows[0].id],
+    );
+
+    const run = await database.query(
+      `insert into faq_suggestion_runs (
+         workspace_id, brand_id, input_fingerprint, source_snapshot_json,
+         created_by_user_id
+       ) values ($1, $2, $3, $4::jsonb, $5)
+       returning id`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        "a".repeat(64),
+        JSON.stringify({
+          contractVersion: "faq-suggestion-sources.v1",
+          sources: [{
+            sourceType: "brand_core",
+            sourceId: randomUUID(),
+            contentHash: "b".repeat(64),
+            label: "브랜드 코어",
+          }],
+        }),
+        actor.rows[0].id,
+      ],
+    );
+
+    await assert.rejects(
+      database.query(
+        `insert into faq_suggestion_runs (
+           workspace_id, brand_id, input_fingerprint, source_snapshot_json,
+           created_by_user_id
+         ) values ($1, $2, $3, $4::jsonb, $5)`,
+        [
+          workspace.rows[0].id,
+          brand.rows[0].id,
+          "c".repeat(64),
+          JSON.stringify({
+            contractVersion: "faq-suggestion-sources.v1",
+            sources: [{
+              sourceType: "brand_core",
+              sourceId: randomUUID(),
+              contentHash: "d".repeat(64),
+              label: "브랜드 코어",
+            }],
+          }),
+          actor.rows[0].id,
+        ],
+      ),
+      /faq_suggestion_runs_one_active_per_brand_uq/,
+    );
+
+    await database.query(
+      `insert into faq_suggestion_items (
+         workspace_id, brand_id, run_id, position, category, question,
+         answer, evidence_json, confidence
+       ) values ($1, $2, $3, 0, 'service', '상담이 가능한가요?',
+         '브랜드 상담 채널에서 문의할 수 있습니다.', $4::jsonb, 0.9)`,
+      [
+        workspace.rows[0].id,
+        brand.rows[0].id,
+        run.rows[0].id,
+        JSON.stringify([{
+          sourceType: "brand_core",
+          sourceId: randomUUID(),
+          label: "브랜드 코어",
+        }]),
+      ],
+    );
+
+    await database.query(
+      `insert into worker_instances (worker_id, worker_type)
+       values ('faq-migration-test', 'faq')`,
+    );
+    await database.query(
+      `insert into worker_resource_leases (
+         resource_type, worker_id, workload_type, lease_token, expires_at
+       ) values ('codex_cli', 'faq-migration-test', 'faq', gen_random_uuid(), now() + interval '1 minute')`,
+    );
   });
 });

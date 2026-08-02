@@ -142,6 +142,12 @@ function gateway(overrides: Record<string, unknown> = {}) {
     updateWikiItem: vi.fn(async () => items[0]),
     listWikiIssues: vi.fn(async () => [resolvedIssue]),
     resolveWikiIssue: vi.fn(async () => resolvedIssue),
+    getLatestFaqSuggestionRun: vi.fn(async () => ({ run: null })),
+    getFaqSuggestionRun: vi.fn(),
+    createFaqSuggestionRun: vi.fn(),
+    updateFaqSuggestionItem: vi.fn(),
+    approveFaqSuggestionItem: vi.fn(),
+    dismissFaqSuggestionItem: vi.fn(),
     ...overrides,
   };
 }
@@ -184,6 +190,74 @@ function IssueRouteHarness({ onCloseIssue }: { onCloseIssue(): void }) {
 }
 
 describe("WikiLibraryPanel", () => {
+  it("refreshes the FAQ list after approval without losing a manual edit", async () => {
+    const suggestion = {
+      id: "suggestion-1",
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      runId: "run-1",
+      position: 0,
+      category: "shipping" as const,
+      question: "택배사는 어디인가요?",
+      answer: "계약된 택배사로 발송합니다.",
+      evidence: [{ sourceType: "brand_core" as const, sourceId: "source-1", label: "브랜드 코어" }],
+      confidence: 0.9,
+      status: "review" as const,
+      duplicateOfKnowledgeEntryId: null,
+      approvedKnowledgeEntryId: null,
+      reviewedByUserId: null,
+      reviewedAt: null,
+      createdAt: "2026-08-02T00:00:00.000Z",
+      updatedAt: "2026-08-02T00:00:00.000Z",
+    };
+    const run = {
+      id: "run-1",
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      status: "review_ready" as const,
+      errorCode: null,
+      createdByUserId: "user-1",
+      startedAt: "2026-08-02T00:00:00.000Z",
+      completedAt: "2026-08-02T00:01:00.000Z",
+      createdAt: "2026-08-02T00:00:00.000Z",
+      updatedAt: "2026-08-02T00:01:00.000Z",
+      items: [suggestion],
+    };
+    const approvedWiki = {
+      ...items[0],
+      id: "wiki-approved",
+      sourceId: "wiki-approved",
+      title: suggestion.question,
+      content: suggestion.answer,
+    };
+    const listWikiItems = vi.fn()
+      .mockResolvedValueOnce(items)
+      .mockResolvedValue([approvedWiki, ...items]);
+    const api = gateway({
+      listWikiItems,
+      getLatestFaqSuggestionRun: vi.fn(async () => ({ run })),
+      approveFaqSuggestionItem: vi.fn(async () => ({
+        item: { ...suggestion, status: "approved" as const },
+        wikiItem: approvedWiki,
+      })),
+    });
+    renderPanel(<KnowledgeCategoryEditorPanel
+      brandId="brand-1"
+      kind="faq"
+      title="FAQ"
+      gateway={api as never}
+    />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /배송 기간/ }));
+    await userEvent.click(screen.getByRole("button", { name: "수정" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "내용" }), " 저장 전 수정");
+    await userEvent.click(screen.getByRole("button", { name: "승인" }));
+
+    await waitFor(() => expect(listWikiItems).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("button", { name: /택배사는 어디인가요/ })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "내용" })).toHaveValue("영업일 기준 2일 저장 전 수정");
+  });
+
   it("opens an existing category item in view mode and cancel restores the persisted draft", async () => {
     const onDirtyChange = vi.fn();
     const api = gateway();

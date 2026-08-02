@@ -1847,6 +1847,30 @@ details.panel > summary.panel-head::-webkit-details-marker {
 .dm-conversation-toolbar h2 { margin: 0; }
 .dm-readiness-panel .panel-head p,
 .dm-conversation-toolbar p { margin: 4px 0 0; }
+.dm-control-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+.dm-control-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 92%, var(--success) 8%);
+}
+.dm-control-item--llm {
+  background: color-mix(in srgb, var(--surface) 94%, var(--info) 6%);
+}
+.dm-control-copy { min-width: 0; }
+.dm-control-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.dm-control-copy p { margin: 7px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.dm-control-item .button { flex: 0 0 auto; white-space: nowrap; }
+.dm-preview-note { margin: -2px 0 0; color: var(--muted); font-size: 12px; }
 .dm-readiness-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .dm-repair-links,
 .dm-wiki-link { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
@@ -1854,6 +1878,21 @@ details.panel > summary.panel-head::-webkit-details-marker {
 .dm-wiki-link a { display: inline-flex; align-items: center; gap: 4px; font-weight: 700; }
 .dm-wiki-link { margin: 0; color: var(--muted); }
 .dm-conversation-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 18px 0 10px; }
+
+@media (max-width: 800px) {
+  .dm-control-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 620px) {
+  .dm-readiness-panel .panel-head,
+  .dm-control-item,
+  .dm-readiness-summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .dm-readiness-panel .panel-head > .actions { justify-content: space-between; }
+  .dm-control-item .button { justify-content: center; width: 100%; }
+}
 
 .dm-conversation-layout {
   display: grid;
