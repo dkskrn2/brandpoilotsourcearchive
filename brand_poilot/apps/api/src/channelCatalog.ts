@@ -2,7 +2,13 @@ import type { Channel, DeliveryFormat } from "./types.js";
 
 export type ChannelArtifactKind = "text" | "image" | "video";
 export type OAuthProvider = "meta" | "x" | "linkedin" | "google" | "tiktok";
-export type ChannelGenerationFormat = "card_news" | "blog" | "single_image" | "channel_text";
+export type ChannelGenerationFormat =
+  | "card_news"
+  | "blog"
+  | "reel"
+  | "marketing_content"
+  | "single_image"
+  | "channel_text";
 export type ChannelExportMode = "image" | "html" | "text";
 
 export interface ChannelCatalogEntry {
@@ -32,7 +38,7 @@ export const channelCatalog = [
     oauth: { provider: "meta", credentialType: "oauth" },
     generationConstraints: { maxAssetCount: 5, aspectRatio: "1:1" },
     generationReady: true,
-    generationFormats: ["card_news", "single_image"],
+    generationFormats: ["card_news", "single_image", "reel", "marketing_content"],
     exportModes: ["image"],
     displayOrder: 1
   },

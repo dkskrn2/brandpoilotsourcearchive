@@ -49,7 +49,7 @@ function orchestration(outputFormat: unknown) {
   return {
     contractVersion: "content-orchestration.v1",
     contentFamily: "informational",
-    subject: { mode: "brand_topic", topic: "여름", wikiItemIds: [] },
+    subject: { mode: "brand_topic", topic: "여름" },
     target: { id: null, snapshot: {} },
     strategy: "how_to",
     outputFormat,

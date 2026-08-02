@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseWorkerManifest } from "./manifest.js";
+import { buildAiContentReelManifest, parseWorkerManifest } from "./manifest.js";
 
 const hashtags = ["#제주여행", "#가족여행", "#제주숙소", "#여행동선", "#여행준비"];
 
@@ -74,6 +74,25 @@ describe("parseWorkerManifest", () => {
     expect(result.selectedAssetCount).toBe(1);
     expect(result.assets).toHaveLength(1);
     expect(result.validation).toEqual({ passed: true });
+  });
+
+  it("keeps legacy Reel parsing at exactly one image while building a 1-5 scene V2 manifest", () => {
+    expect(() => parseWorkerManifest(reel(2))).toThrow("reel_asset_count_invalid");
+    const manifest = buildAiContentReelManifest({
+      purpose: "marketing",
+      title: "릴스",
+      scenes: [1, 2].map((index) => ({ index, url: `https://blob.example/${index}.png`, width: 1080, height: 1920 })),
+      video: { url: "https://blob.example/reel.mp4", durationSeconds: 8 },
+      content: { caption: "Caption", hashtags: ["#one"], cta: "CTA" }
+    });
+    expect(manifest).toMatchObject({
+      version: "ai-content.v2", type: "marketing", outputFormat: "reel",
+      assets: [
+        { role: "scene", index: 1 },
+        { role: "scene", index: 2 },
+        { role: "video", index: 1, durationSeconds: 8, videoCodec: "h264", fps: 30, audioCodec: null }
+      ]
+    });
   });
 
   it.each([

@@ -19,6 +19,14 @@ import {
 } from "./promptBuilder.js";
 import { readRepresentativeSource, type SourceReadResult } from "./sourceReader.js";
 import { requireQualityBrief } from "./qualityBrief.js";
+import type { AiContentAssetRenderer, LocallyRenderedAiContentAsset } from "./aiContentAssetRenderer.js";
+import type {
+  AiContentImageAssetJob,
+  AiContentPackageFinalizeJob,
+  AiContentRenderClient,
+  AiContentRenderedAsset,
+} from "./aiContentRenderClient.js";
+import { AiContentFinalizerError, type AiContentManifestV2 } from "./aiContentFinalizer.js";
 
 export interface RenderedImage {
   index: number;
@@ -82,6 +90,145 @@ export type WorkerRunResult =
   | { status: "idle" }
   | { status: "completed"; jobId: string }
   | { status: "failed"; jobId: string };
+
+export interface AiContentAssetStorage {
+  uploadAsset(input: LocallyRenderedAiContentAsset & { path: string }): Promise<AiContentRenderedAsset>;
+}
+
+type AiContentFinalizer = (job: AiContentPackageFinalizeJob, signal: AbortSignal) => Promise<{ manifest: AiContentManifestV2; manifestUrl: string }>;
+
+class AiContentLeaseLostError extends Error {
+  constructor() { super("ai_content_render_job_lease_lost"); }
+}
+
+class AiContentShutdownError extends Error {
+  constructor() { super("ai_content_worker_shutdown"); }
+}
+
+export function resolveAiContentLeaseTiming(input: {
+  leaseSeconds?: number;
+  heartbeatIntervalMs?: number;
+}) {
+  const leaseSeconds = Number.isSafeInteger(input.leaseSeconds)
+    && input.leaseSeconds! >= 30
+    && input.leaseSeconds! <= 300
+    ? input.leaseSeconds!
+    : 180;
+  const configuredHeartbeatMs = Number.isFinite(input.heartbeatIntervalMs)
+    && input.heartbeatIntervalMs! > 0
+    ? Math.floor(input.heartbeatIntervalMs!)
+    : 60_000;
+  const maximumHeartbeatMs = Math.floor((leaseSeconds * 1_000) / 3);
+  return {
+    leaseSeconds,
+    heartbeatIntervalMs: Math.min(Math.max(1_000, configuredHeartbeatMs), maximumHeartbeatMs),
+  };
+}
+
+function startAiContentHeartbeat(input: {
+  job: AiContentImageAssetJob | AiContentPackageFinalizeJob;
+  workerId: string;
+  client: AiContentRenderClient;
+  intervalMs: number;
+  leaseSeconds: number;
+  controller: AbortController;
+}) {
+  const intervalMs = Math.max(1, Math.min(input.intervalMs, 299_000));
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let active = Promise.resolve();
+  const schedule = () => {
+    timer = setTimeout(() => {
+      if (stopped) return;
+      active = input.client.heartbeat(input.job, input.workerId, input.leaseSeconds)
+        .then((alive) => {
+          if (!alive && !input.controller.signal.aborted) input.controller.abort(new AiContentLeaseLostError());
+        })
+        .catch(() => {
+          if (!input.controller.signal.aborted) input.controller.abort(new AiContentLeaseLostError());
+        })
+        .then(() => { if (!stopped && !input.controller.signal.aborted) schedule(); });
+    }, intervalMs);
+  };
+  schedule();
+  return async () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    await active;
+  };
+}
+
+function retryableAiContentError(error: unknown, message: string): boolean {
+  if (error instanceof AiContentFinalizerError) return error.retryable;
+  const record = typeof error === "object" && error !== null
+    ? error as Record<string, unknown>
+    : {};
+  const details = [record.name, record.code, message]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ");
+  if (/(?:conflict|checksum|validation|invalid|mismatch)/i.test(details)) return false;
+  return /(?:too many requests|\b429\b|currently not available|service unavailable|\b503\b|fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|\bnetwork\b|timeout|rate_limit|temporar|unavailable|render_failed|output_missing|api_failed:5)/i.test(details);
+}
+
+async function runAiContentOnce(input: {
+  workerId: string;
+  client: AiContentRenderClient;
+  renderer: AiContentAssetRenderer;
+  storage: AiContentAssetStorage;
+  finalizer: AiContentFinalizer;
+  heartbeatIntervalMs: number;
+  leaseSeconds: number;
+  signal?: AbortSignal;
+  onAiContentActivityChange?: (active: boolean) => void;
+}): Promise<WorkerRunResult | null> {
+  const job = await input.client.claim(input.workerId, input.leaseSeconds);
+  if (!job) return null;
+  input.onAiContentActivityChange?.(true);
+  const controller = new AbortController();
+  const requestShutdown = () => controller.abort(new AiContentShutdownError());
+  input.signal?.addEventListener("abort", requestShutdown, { once: true });
+  if (input.signal?.aborted) requestShutdown();
+  const stopHeartbeat = startAiContentHeartbeat({ job, workerId: input.workerId, client: input.client, intervalMs: input.heartbeatIntervalMs, leaseSeconds: input.leaseSeconds, controller });
+  try {
+    if (controller.signal.aborted) throw controller.signal.reason;
+    if (job.jobKind === "image_asset") {
+      const rendered = await input.renderer.renderAsset(job, controller.signal);
+      if (controller.signal.aborted) throw controller.signal.reason;
+      const uploaded = await input.storage.uploadAsset({ ...rendered, path: job.payload.storagePath });
+      if (
+        uploaded.index !== job.assetIndex || uploaded.storagePath !== job.payload.storagePath
+        || uploaded.mimeType !== "image/png" || uploaded.width !== rendered.width || uploaded.height !== rendered.height
+        || uploaded.checksum !== rendered.checksum
+      ) throw new Error("ai_content_asset_upload_invalid");
+      if (controller.signal.aborted) throw controller.signal.reason;
+      await input.client.completeAsset(job, input.workerId, uploaded);
+    } else {
+      const completed = await input.finalizer(job, controller.signal);
+      if (controller.signal.aborted) throw controller.signal.reason;
+      await input.client.completePackage(job, input.workerId, completed);
+    }
+    return { status: "completed", jobId: job.id };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "ai_content_render_failed";
+    const stoppedExternally = error instanceof AiContentShutdownError
+      || controller.signal.reason instanceof AiContentShutdownError;
+    if (!stoppedExternally && !(error instanceof AiContentLeaseLostError) && !(controller.signal.reason instanceof AiContentLeaseLostError)) {
+      await input.client.fail(job, input.workerId, {
+        errorCode: message.split(":", 1)[0]!.slice(0, 120),
+        errorMessage: message.slice(0, 2_000),
+        retryable: retryableAiContentError(error, message),
+      }).catch(() => undefined);
+    }
+    return { status: "failed", jobId: job.id };
+  } finally {
+    try {
+      input.signal?.removeEventListener("abort", requestShutdown);
+      await stopHeartbeat();
+    } finally {
+      input.onAiContentActivityChange?.(false);
+    }
+  }
+}
 
 function maxImagesFor(job: ClaimedImageJob) {
   const maxImages = Number(job.payload.maxImages);
@@ -237,6 +384,14 @@ export async function runOnce({
   readSource = readRepresentativeSource,
   buildPrompt = buildWorkerPrompt,
   runTextJob,
+  aiContentClient,
+  aiContentRenderer,
+  aiContentStorage,
+  aiContentFinalizer,
+  aiContentHeartbeatIntervalMs = 60_000,
+  aiContentLeaseSeconds = 180,
+  signal,
+  onAiContentActivityChange,
   heartbeatIntervalMs = 5 * 60 * 1000,
   retryDelayMs = 5 * 60 * 1000
 }: {
@@ -248,9 +403,32 @@ export async function runOnce({
   readSource?: (url: string | null | undefined) => Promise<SourceReadResult>;
   buildPrompt?: typeof buildWorkerPrompt;
   runTextJob?: () => Promise<WorkerRunResult>;
+  aiContentClient?: AiContentRenderClient;
+  aiContentRenderer?: AiContentAssetRenderer;
+  aiContentStorage?: AiContentAssetStorage;
+  aiContentFinalizer?: AiContentFinalizer;
+  aiContentHeartbeatIntervalMs?: number;
+  aiContentLeaseSeconds?: number;
+  signal?: AbortSignal;
+  onAiContentActivityChange?: (active: boolean) => void;
   heartbeatIntervalMs?: number;
   retryDelayMs?: number;
 }): Promise<WorkerRunResult> {
+  if (signal?.aborted) return { status: "idle" };
+  if (aiContentClient) {
+    if (!aiContentRenderer || !aiContentStorage || !aiContentFinalizer) throw new Error("ai_content_render_runtime_required");
+    const aiContentLeaseTiming = resolveAiContentLeaseTiming({
+      leaseSeconds: aiContentLeaseSeconds,
+      heartbeatIntervalMs: aiContentHeartbeatIntervalMs,
+    });
+    const result = await runAiContentOnce({
+      workerId, client: aiContentClient, renderer: aiContentRenderer, storage: aiContentStorage,
+      finalizer: aiContentFinalizer, heartbeatIntervalMs: aiContentLeaseTiming.heartbeatIntervalMs,
+      leaseSeconds: aiContentLeaseTiming.leaseSeconds, signal, onAiContentActivityChange,
+    });
+    if (result) return result;
+  }
+  if (signal?.aborted) return { status: "idle" };
   const job = await client.claim(workerId);
   if (!job) return runTextJob ? await runTextJob() : { status: "idle" };
   const stopHeartbeat = startHeartbeat({ job, workerId, client, heartbeatIntervalMs });

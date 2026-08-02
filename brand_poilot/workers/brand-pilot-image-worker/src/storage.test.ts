@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { put } from "@vercel/blob";
+import { get, put } from "@vercel/blob";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import sharp from "sharp";
 import { parseWorkerManifest } from "./manifest.js";
-import { createBlobStorage } from "./storage.js";
+import { createAiContentBlobStorage, createBlobStorage } from "./storage.js";
 import type { ClaimedImageJob, RenderedInstagramPackage } from "./worker.js";
 
-vi.mock("@vercel/blob", () => ({ put: vi.fn() }));
+vi.mock("@vercel/blob", () => ({ get: vi.fn(), put: vi.fn() }));
 
 const hashtags = ["#one", "#two", "#three", "#four", "#five"];
 
@@ -250,5 +251,97 @@ describe("Blob image storage", () => {
 
     await expect(storage.upload(job("instagram_feed_carousel"), renderedFeed()))
       .rejects.toThrow("blob_upload_failed:Access denied");
+  });
+});
+
+describe("V3 AI content Blob storage", () => {
+  beforeEach(() => {
+    vi.mocked(get).mockReset();
+    vi.mocked(put).mockReset();
+    vi.mocked(put).mockImplementation(async (pathname: string) => ({
+      url: `https://blob.example.com/${pathname}`, downloadUrl: `https://blob.example.com/${pathname}?download=1`, pathname,
+      etag: "etag", contentType: pathname.endsWith(".png") ? "image/png" : "application/json", contentDisposition: "inline",
+    }));
+  });
+
+  it("reads only by owned pathname and idempotently reuses identical asset bytes", async () => {
+    const bytes = await sharp({ create: { width: 1080, height: 1350, channels: 4, background: "white" } }).png().toBuffer();
+    vi.mocked(get).mockImplementation(async () => ({ statusCode: 200, stream: new Blob([bytes]).stream(), headers: new Headers(), blob: { url: "https://blob.example.com/path", downloadUrl: "https://blob.example.com/path?download=1", pathname: "path", contentType: "image/png", size: bytes.length, uploadedAt: new Date() } } as never));
+    const storage = createAiContentBlobStorage({ token: "token" });
+
+    await expect(storage.readOwned("owned/input.png")).resolves.toEqual(bytes);
+    await expect(storage.uploadAsset({ path: "path", bytes, index: 2, width: 1080, height: 1350 })).resolves.toMatchObject({ index: 2, url: "https://blob.example.com/path", storagePath: "path", checksum: checksum(bytes) });
+    expect(get).toHaveBeenCalledWith("owned/input.png", expect.objectContaining({ token: "token", access: "public", useCache: false }));
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it("refuses to overwrite a deterministic asset when existing bytes differ", async () => {
+    const existing = Buffer.from("existing");
+    vi.mocked(get).mockResolvedValue({ statusCode: 200, stream: new Blob([existing]).stream(), headers: new Headers(), blob: { url: "https://blob.example.com/path", downloadUrl: "", pathname: "path", contentType: "image/png", size: existing.length, uploadedAt: new Date() } } as never);
+    const storage = createAiContentBlobStorage({ token: "token" });
+
+    await expect(storage.uploadAsset({ path: "path", bytes: Buffer.from("different"), index: 1, width: 1080, height: 1080 }))
+      .rejects.toThrow("ai_content_asset_storage_conflict");
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it("uploads absent assets without overwrite and returns immutable metadata", async () => {
+    vi.mocked(get).mockResolvedValue(null);
+    const bytes = Buffer.from("new");
+    const storage = createAiContentBlobStorage({ token: "token" });
+    await expect(storage.uploadAsset({ path: "ai-content/b/g/o/assets/02.png", bytes, index: 2, width: 1920, height: 1080 })).resolves.toMatchObject({ index: 2, width: 1920, height: 1080, checksum: checksum(bytes) });
+    expect(put).toHaveBeenCalledWith("ai-content/b/g/o/assets/02.png", bytes, expect.objectContaining({ allowOverwrite: false, addRandomSuffix: false, contentType: "image/png" }));
+  });
+
+  it("uploads deterministic MP4 bytes and only reuses an identical existing video", async () => {
+    const bytes = Buffer.from("silent-mp4");
+    vi.mocked(get).mockResolvedValueOnce(null);
+    const storage = createAiContentBlobStorage({ token: "token" });
+    const video = { path: "ai-content/b/g/o/reel.mp4", bytes, width: 1080 as const, height: 1920 as const, durationSeconds: 8, videoCodec: "h264" as const, audioCodec: null, fps: 30 as const };
+    await expect(storage.uploadVideo(video)).resolves.toMatchObject({
+      url: "https://blob.example.com/ai-content/b/g/o/reel.mp4", checksum: checksum(bytes)
+    });
+    expect(put).toHaveBeenCalledWith("ai-content/b/g/o/reel.mp4", bytes, expect.objectContaining({ allowOverwrite: false, addRandomSuffix: false, contentType: "video/mp4" }));
+
+    vi.mocked(get).mockResolvedValueOnce({ statusCode: 200, stream: new Blob([Buffer.from("different")]).stream(), headers: new Headers(), blob: { url: "https://blob.example.com/ai-content/b/g/o/reel.mp4", downloadUrl: "", pathname: "ai-content/b/g/o/reel.mp4", contentType: "video/mp4", size: 9, uploadedAt: new Date() } } as never);
+    await expect(storage.uploadVideo(video)).rejects.toThrow("ai_content_package_storage_conflict");
+  });
+
+  it("recovers an identical canonical MP4 when a concurrent create wins after the initial miss", async () => {
+    const bytes = Buffer.from("silent-mp4");
+    const blob = { url: "https://blob.example.com/ai-content/b/g/o/reel.mp4", downloadUrl: "", pathname: "ai-content/b/g/o/reel.mp4", contentType: "video/mp4", size: bytes.length, uploadedAt: new Date() };
+    vi.mocked(get).mockResolvedValueOnce(null).mockResolvedValueOnce({ statusCode: 200, stream: new Blob([bytes]).stream(), headers: new Headers(), blob } as never);
+    vi.mocked(put).mockRejectedValueOnce(Object.assign(new Error("already exists"), { status: 409 }));
+    const storage = createAiContentBlobStorage({ token: "token" });
+    const video = { path: blob.pathname, bytes, width: 1080 as const, height: 1920 as const, durationSeconds: 8, videoCodec: "h264" as const, audioCodec: null, fps: 30 as const };
+
+    await expect(storage.uploadVideo(video)).resolves.toEqual({ url: blob.url, checksum: checksum(bytes) });
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a different canonical MP4 when a concurrent create wins after the initial miss", async () => {
+    const bytes = Buffer.from("silent-mp4");
+    const existing = Buffer.from("different");
+    const blob = { url: "https://blob.example.com/reel.mp4", downloadUrl: "", pathname: "ai-content/b/g/o/reel.mp4", contentType: "video/mp4", size: existing.length, uploadedAt: new Date() };
+    vi.mocked(get).mockResolvedValueOnce(null).mockResolvedValueOnce({ statusCode: 200, stream: new Blob([existing]).stream(), headers: new Headers(), blob } as never);
+    vi.mocked(put).mockRejectedValueOnce(Object.assign(new Error("already exists"), { status: 409 }));
+    const storage = createAiContentBlobStorage({ token: "token" });
+    const video = { path: blob.pathname, bytes, width: 1080 as const, height: 1920 as const, durationSeconds: 8, videoCodec: "h264" as const, audioCodec: null, fps: 30 as const };
+
+    await expect(storage.uploadVideo(video)).rejects.toThrow("ai_content_package_storage_conflict");
+  });
+
+  it.each([
+    ["non-conflict put error", Object.assign(new Error("permission denied"), { status: 403 }), false],
+    ["conflict without a canonical blob", Object.assign(new Error("already exists"), { status: 409 }), true]
+  ])("rethrows the original %s", async (_name, failure, secondRead) => {
+    const bytes = Buffer.from("silent-mp4");
+    vi.mocked(get).mockResolvedValue(null);
+    vi.mocked(put).mockRejectedValueOnce(failure);
+    const storage = createAiContentBlobStorage({ token: "token" });
+    const video = { path: "ai-content/b/g/o/reel.mp4", bytes, width: 1080 as const, height: 1920 as const, durationSeconds: 8, videoCodec: "h264" as const, audioCodec: null, fps: 30 as const };
+
+    await expect(storage.uploadVideo(video)).rejects.toBe(failure);
+    expect(get).toHaveBeenCalledTimes(secondRead ? 2 : 1);
   });
 });

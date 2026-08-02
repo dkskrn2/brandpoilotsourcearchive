@@ -1,8 +1,81 @@
 import { parseContentGenerationInput, type MarketingJob } from "./contracts.js";
 import { requestedDimensions } from "./manifest.js";
 import { buildAiContentRevisionInstruction } from "@brand-pilot/worker-runtime";
+import type { ContentGenerationInputV3 } from "@brand-pilot/worker-runtime";
 
 export const marketingSkillVersion = "marketing-creative-skill.v5";
+export const marketingPlanSkillVersion = "marketing-plan-skill.v2";
+
+const fixedLogoPolicy = {
+  allowGeneratedLogo: false,
+  allowReservedLogoArea: false,
+  allowExternalReferenceLogo: false,
+  allowExistingProductPackagingLogo: true,
+} as const;
+
+export function buildMarketingPlanPrompt(
+  job: MarketingJob,
+  input: ContentGenerationInputV3,
+  repairError?: string,
+): string {
+  if (job.generationId !== input.generationId) throw new Error("content_generation_input_generation_mismatch");
+  const lockedCount = input.selectedProposal.assetCount;
+  if (lockedCount === null) throw new Error("marketing_plan_asset_count_invalid");
+  const purposeRules = input.outputSettings.purpose === "informational"
+    ? [
+      "정보성 목적은 brandCore와 고정 researchEvidence를 사용해 정보 제공, 인지도, 참여 중심으로 기획하세요.",
+      "제품을 언급하거나 판매 CTA를 작성하지 마세요. product는 반드시 null이며 저장, 공유, 질문 같은 비판매 참여 CTA만 허용됩니다.",
+    ]
+    : [
+      "마케팅성 목적은 선택 proposal의 목적, 고객 상황과 니즈, 고정 제품 분석, 알려진 장점과 한계, 고효율 target segment, appeal, barrier, CTA를 구체화하세요.",
+      "제품 사실은 고정 product 스냅샷만 사용하세요. researchEvidence나 시장 검색 근거로 제품 사실을 보강하거나 기능, 가격, 성과, 구매 조건을 추측하지 마세요.",
+    ];
+  const formatRules = input.outputSettings.outputFormat === "reel"
+    ? [
+      "릴스는 9:16 세로 장면 패키지입니다. 각 asset에 모바일 세로 구도를 명확히 하는 vertical visualDirection과 해당 장면 copy를 작성하세요.",
+      "영상 길이, 전환, FFmpeg 조립은 후속 finalizer 책임이며 여기서는 이미지나 영상을 생성하지 마세요.",
+    ]
+    : [
+      "marketing_content는 선택 채널에 바로 사용할 channel copy와 이미지 자산을 하나의 imagePackage로 기획하세요.",
+      "이미지나 파일은 생성하지 말고 채널 caption, hashtags, CTA와 장면별 시각 지시만 반환하세요.",
+    ];
+  const fixedInput = {
+    generationId: input.generationId,
+    brandCore: input.brandCore,
+    subject: input.subject,
+    contentInstruction: input.contentInstruction,
+    product: input.product,
+    researchEvidence: input.researchEvidence,
+    references: input.references,
+    selectedProposal: input.selectedProposal,
+    userImageInstruction: input.userImageInstruction,
+    outputSettings: input.outputSettings,
+    logoPolicy: fixedLogoPolicy,
+  };
+  return [
+    "V3 릴스·마케팅 콘텐츠 상세 기획 규칙을 따르세요.",
+    `계약 버전: ${marketingPlanSkillVersion}`,
+    "응답은 marketing-plan.v2 JSON 하나만 반환하세요. 이미지, 영상, 텍스트 파일이나 다른 산출물은 만들지 마세요.",
+    `선택 구성안에 잠긴 정확히 ${lockedCount}개 asset을 유지하고 outline의 index, role, order를 그대로 복사하세요. 장수를 다시 판단하거나 deterministic 장수 규칙을 적용하거나 장면을 추가·삭제·병합하지 마세요.`,
+    ...purposeRules,
+    ...formatRules,
+    "각 장이 부실하지 않게 핵심 정보와 근거를 충분히 압축하되, 문장과 정보를 과밀하게 넣어 모바일 가독성을 해치지 마세요.",
+    "각 사실, 수치, 최신 주장에는 researchEvidence.items에 실제 존재하는 UUID만 evidenceIds로 연결하고, 근거가 필요 없는 훅이나 CTA는 []를 사용하세요.",
+    "제품 사실에는 evidenceIds를 발명하지 말고 product 스냅샷만 사용하세요.",
+    "contentInstruction은 전체 카피, 메시지 구조와 채널 문구에 적용하세요.",
+    "userImageInstruction은 모든 생성 이미지의 공통 시각 지시로 imagePackage에 그대로 복사하고, 카피 사실이나 전체 콘텐츠 지시로 해석하지 마세요.",
+    "references.selected의 역할과 고정 스냅샷, 업로드 이미지인 brandStyleImages, avatarStyleImageId, attachments를 그대로 imagePackage에 복사하세요.",
+    "각 asset에서 실제로 필요한 productImageAssetIds와 attachmentIds만 고정 목록에서 선택하세요.",
+    "Wiki, FAQ, 브랜드 규칙의 색상, 폰트, 메모는 사용하지 마세요. 제공된 brandCore, product, researchEvidence, reference/style/avatar/attachment 스냅샷 외의 데이터는 조회하거나 추측하지 마세요.",
+    "logoPolicy의 false/false/false/true literal을 그대로 유지하세요. 로고, 워드마크, 심볼, 워터마크, 가짜 로고, 로고용 빈 영역을 만들거나 외부 레퍼런스 로고를 복제하지 마세요. 실제 제품 포장에 원래 인쇄된 로고는 지우라고 요구하지 마세요.",
+    "파일, 웹, shell, image_generation 도구를 호출하지 마세요. 제공된 고정 JSON만 사용하세요.",
+    repairError
+      ? `이전 출력 검증 오류: ${repairError}\n해당 오류를 고쳐 전체 JSON을 다시 반환하세요. 보정 기회는 이번 한 번뿐입니다.`
+      : "첫 출력부터 exact schema와 잠긴 계약을 만족하세요.",
+    "고정 입력(JSON):",
+    JSON.stringify(fixedInput, null, 2),
+  ].join("\n");
+}
 
 export function buildPrompt(job: MarketingJob) {
   const input = job.jobType === "generate" ? parseContentGenerationInput(job.payload.contentGenerationInput) : null;
@@ -31,7 +104,7 @@ export function buildPrompt(job: MarketingJob) {
     ".agents/skills/marketing-creative/SKILL.md를 읽고 따르세요.",
     `계약 버전: ${marketingSkillVersion}`,
     `현재 작업 유형: ${job.jobType}`,
-    "입력 우선순위는 다음과 같이 고정합니다: 승인 Brand Core와 실행 규칙 > 승인 제품·서비스 또는 선택 Wiki 사실 > 사용자가 확정한 target, strategy, brief > 레퍼런스의 패턴 영감.",
+    "입력 우선순위는 다음과 같이 고정합니다: 승인 Brand Core > 승인 제품·서비스 > 사용자가 확정한 target, strategy, brief > 선택 레퍼런스의 패턴 영감.",
     "마케팅성 콘텐츠는 효익·신뢰·CTA 톤을 사용하세요.",
     "generate 작업에서는 content-generation-input.v2 봉투만 입력으로 사용하세요.",
     "subject.analysisResult의 제품·서비스 프로필, subtype, 대안, 장벽과 VOC를 광고 가설의 맥락에 사용하세요.",

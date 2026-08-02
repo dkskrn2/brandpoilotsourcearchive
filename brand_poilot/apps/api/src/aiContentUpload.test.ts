@@ -7,6 +7,7 @@ import {
   parseCancelUploadSessionInput,
   parseConfirmAttachmentInput,
   parseLegacyConfirmAttachmentInput,
+  parseV3AttachmentUploadTokenInput,
 } from "./aiContentContracts.js";
 import {
   AI_CONTENT_ATTACHMENT_POLICY,
@@ -19,7 +20,8 @@ import {
   issueAiContentUploadSessionToken,
   verifyAiContentUploadSessionBlob,
   verifyAiContentAttachmentBlob,
-  validateAiContentAttachment
+  validateAiContentAttachment,
+  validateAiContentAttachmentV3,
 } from "./aiContentUpload.js";
 
 const base = {
@@ -39,6 +41,43 @@ const ids = {
 };
 
 describe("AI content attachment upload policy", () => {
+  it.each(["product_image", "visual_reference", "supporting_image"] as const)(
+    "accepts the V3 image-only role %s",
+    (role) => {
+      const body = {
+        contractVersion: "ai-content-attachment-upload.v3",
+        role,
+        fileName: `${role}.png`,
+        mimeType: "image/png",
+        sizeBytes: 100,
+        checksum: "b".repeat(64),
+      };
+      const parsed = parseV3AttachmentUploadTokenInput(body);
+      expect(validateAiContentAttachmentV3(parsed)).toEqual(body);
+    },
+  );
+
+  it("rejects legacy roles, documents, PDFs, and unknown keys on the V3 upload contract", () => {
+    const body = {
+      contractVersion: "ai-content-attachment-upload.v3",
+      role: "supporting_image",
+      fileName: "support.png",
+      mimeType: "image/png",
+      sizeBytes: 100,
+      checksum: "b".repeat(64),
+    };
+    for (const role of ["product", "person", "scale", "document"]) {
+      expect(() => parseV3AttachmentUploadTokenInput({ ...body, role }))
+        .toThrow("ai_content_attachment_role_invalid");
+    }
+    for (const mimeType of ["application/pdf", "text/plain", "text/markdown"]) {
+      expect(() => validateAiContentAttachmentV3(parseV3AttachmentUploadTokenInput({ ...body, mimeType })))
+        .toThrow("ai_content_attachment_role_mime_invalid");
+    }
+    expect(() => parseV3AttachmentUploadTokenInput({ ...body, logoUrl: "https://example.test/logo.png" }))
+      .toThrow("ai_content_invalid_body");
+  });
+
   it.each([
     [parseAiContentGenerationId, "not-a-generation", "ai_content_generation_id_invalid"],
     [parseAiContentAttachmentId, "not-an-attachment", "ai_content_attachment_id_invalid"],

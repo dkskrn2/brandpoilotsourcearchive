@@ -171,13 +171,93 @@
 }
 
 .content-subject-step input,
-.content-strategy-step select,
-.content-strategy-step textarea {
+.content-subject-step select,
+.content-subject-step textarea {
   width: 100%;
   padding: 12px;
   border: 1px solid #bcc9c2;
   border-radius: 10px;
   font: inherit;
+}
+
+.content-reference-tabs,
+.content-reference-role-toggles,
+.content-format-options,
+.content-channel-logo-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.content-reference-tabs button,
+.content-reference-role-toggles button,
+.content-channel-logo-options button {
+  border: 1px solid var(--proposal-line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 9px 12px;
+}
+
+.content-reference-tabs button[aria-selected="true"],
+.content-reference-role-toggles button[aria-pressed="true"],
+.content-channel-logo-options button[aria-pressed="true"] {
+  border-color: #196747;
+  background: #edf8f2;
+  box-shadow: 0 0 0 2px #d8efe4;
+}
+
+.content-reference-seed-list,
+.content-reference-trend-results {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.content-reference-seed-card,
+.content-reference-trend-results article {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--proposal-line);
+  border-radius: 12px;
+}
+
+.content-reference-seed-card img {
+  width: 64px;
+  height: 64px;
+  border-radius: 9px;
+  object-fit: cover;
+}
+
+.content-reference-seed-card > div:first-of-type,
+.content-reference-trend-results article > :first-child {
+  display: grid;
+}
+
+.content-reference-role-toggles {
+  grid-column: 2 / -1;
+}
+
+.content-format-options label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid var(--proposal-line);
+  border-radius: 10px;
+}
+
+.content-channel-logo-options button {
+  display: inline-grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+}
+
+.content-channel-logo-options p {
+  flex-basis: 100%;
 }
 
 .proposal-comparison > header { margin: 24px 0 16px; }
@@ -206,9 +286,11 @@
 .content-proposal-card header > span { color: #287154; font-size: .82rem; font-weight: 750; }
 .proposal-reason { padding: 12px; border-radius: 10px; background: #f5f8f6; }
 .content-proposal-card dl { display: grid; gap: 8px; margin: 0; }
-.content-proposal-card dl div { display: grid; grid-template-columns: 85px 1fr; gap: 8px; }
+.content-proposal-card dl div { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 8px; }
 .content-proposal-card dt { color: #637069; }
 .content-proposal-card dd { margin: 0; font-weight: 600; }
+.content-proposal-card dd ul { margin: 0; padding-left: 18px; }
+.content-proposal-card h4 { margin: 0 0 8px; }
 .proposal-outline { display: grid; gap: 6px; padding-left: 22px; }
 .proposal-outline span { margin-left: 8px; color: #637069; }
 
@@ -226,6 +308,57 @@
 .avatar-choice { display: grid; grid-template-columns: auto 44px 1fr; align-items: center; gap: 8px; }
 .avatar-choice img { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; }
 .avatar-choice span { display: grid; }
+
+.brand-style-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.brand-style-preview-grid article {
+  padding: 12px;
+  border: 1px solid var(--proposal-line);
+  border-radius: 14px;
+}
+
+.brand-style-preview-grid img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 10px;
+  object-fit: cover;
+}
+
+.brand-style-preview-grid h4 { margin: 10px 0 4px; }
+.brand-style-preview-grid p { margin: 4px 0; color: #637069; }
+
+.avatar-style-options {
+  display: grid;
+  gap: 9px;
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid var(--proposal-line);
+  border-radius: 14px;
+}
+
+.avatar-style-options label { display: flex; gap: 8px; align-items: center; }
+
+.common-image-instruction {
+  display: grid;
+  gap: 7px;
+  margin: 18px 0;
+  font-weight: 650;
+}
+
+.common-image-instruction textarea {
+  min-height: 110px;
+  padding: 12px;
+  border: 1px solid #bcc9c2;
+  border-radius: 10px;
+  font: inherit;
+  resize: vertical;
+}
+
+.reference-avatar-step > .button.primary { margin-top: 18px; }
 
 @media (max-width: 1080px) {
   .content-setup-layout,

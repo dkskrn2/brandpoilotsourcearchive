@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAiContentRepository } from "./aiContentRepository.js";
+import type { ProposalBaseInputSnapshotV2 } from "./contentOrchestration.js";
+import type { AiContentSnapshotRepository } from "./aiContentSnapshotRepository.js";
 import { kstDateKey } from "./publishSchedule.js";
 
 function row(id: string, status = "analyzing") {
@@ -213,17 +215,22 @@ function createWorkerPool(options: {
   retryable?: boolean;
   retryBoundary?: "before" | "equal" | "after";
   deletionStatus?: "deleting" | "deleted" | null;
+  finalInputV3?: Record<string, unknown>;
+  existingPlan?: Record<string, unknown> | null;
+  generationId?: string;
+  outputId?: string;
 } = {}) {
   const sql: string[] = [];
   const generatedJobPayloads: unknown[] = [];
   const completedOutputManifests: Record<string, unknown>[] = [];
   const completedOutputContents: Record<string, unknown>[] = [];
   let leaseAtBoundary = false;
-  let generation = row("generation-1", options.jobType === "analyze" ? "analyzing" : "generating");
+  let generation = row(options.generationId ?? "generation-1", options.jobType === "analyze" ? "analyzing" : "generating");
   let pendingCleanup = false;
   let outputStatus = options.outputStatus ?? "generating";
+  let storedPlan = options.existingPlan ?? null;
   const job: Record<string, unknown> = {
-    id: "job-1", generation_id: "generation-1", output_id: options.jobType === "analyze" ? null : "output-1",
+    id: "job-1", generation_id: options.generationId ?? "generation-1", output_id: options.jobType === "analyze" ? null : options.outputId ?? "output-1",
     workspace_id: "workspace-1", brand_id: "brand-1", job_type: options.jobType ?? "generate", content_type: "card_news",
     status: options.exhaustedJob ? "processing" : "queued", payload_json: {
       ...(options.finalizeGeneration ? { finalizeGeneration: true } : {}),
@@ -300,6 +307,20 @@ function createWorkerPool(options: {
       if (query.includes("from wiki_versions version")) {
         return { rows: [{ id: "wiki-1", wiki_updated_at: "2026-07-18T00:10:00.000Z", pages: [{ type: "brand_overview", title: "브랜드 개요", summary: "자사 분석", content: "브랜드 근거", structuredData: {} }] }], rowCount: 1 };
       }
+      if (query.includes("from ai_content_generation_input_snapshots") && query.includes("contract_version")) {
+        return options.finalInputV3 ? { rows: [{ contract_version: "content-generation-input.v3" }], rowCount: 1 } : { rows: [], rowCount: 0 };
+      }
+      if (query.includes("from ai_content_generation_input_snapshots") && query.includes("input_json")) {
+        return options.finalInputV3 ? { rows: [{ input_json: structuredClone(options.finalInputV3) }], rowCount: 1 } : { rows: [], rowCount: 0 };
+      }
+      if (query.includes("select plan_json from ai_content_generation_outputs")) {
+        return { rows: [{ plan_json: storedPlan }], rowCount: 1 };
+      }
+      if (query.includes("update ai_content_generation_outputs") && query.includes("plan_json=coalesce")) {
+        storedPlan ??= JSON.parse(String(params[1]));
+        outputStatus = "generating";
+        return { rows: [], rowCount: 1 };
+      }
       if (query.includes("select generation.draft_json")) return { rows: [{ draft_json: {}, analysis_json: options.qualityBrief ? { qualityBrief: options.qualityBrief } : {}, subject_analysis_snapshot: options.subjectAnalysisSnapshot ?? null, generation_title: "여름 추천", generation_type: "card_news", output_index: 1, reference_snapshots: [], attachments: [] }], rowCount: 1 };
       if (
         query.includes("select id")
@@ -370,7 +391,7 @@ function createWorkerPool(options: {
         && query.includes("for update")
       ) {
         return {
-          rows: [{ id: "output-1", generation_id: "generation-1" }],
+          rows: [{ id: job.output_id, generation_id: job.generation_id }],
           rowCount: 1,
         };
       }
@@ -605,6 +626,55 @@ const contentGenerationInputV2Fixture = {
   attachments: [],
 };
 
+const v3GenerationId = "30000000-0000-4000-8000-000000000009";
+const v3OutputId = "40000000-0000-4000-8000-000000000009";
+const v3EvidenceId = "50000000-0000-4000-8000-000000000009";
+const v3FinalInputFixture = {
+  contractVersion: "content-generation-input.v3",
+  generationId: v3GenerationId,
+  brandCore: {
+    versionId: "60000000-0000-4000-8000-000000000009",
+    companyOverview: "Company", businessDescription: "Description", primaryCategory: "Food",
+    detailedCategory: "Tea", primaryTarget: "Adults", differentiator: "Direct", coreAppeal: "Calm",
+  },
+  subject: { kind: "topic_text", title: "Tea" }, contentInstruction: null, product: null,
+  researchEvidence: {
+    contractVersion: "research-evidence.v1", decision: "searched", reason: "Needed", queries: ["tea"],
+    capturedAt: "2026-07-31T00:00:00.000Z",
+    items: [{
+      id: v3EvidenceId, title: "Study", url: "https://source.example/study", publisher: "Source",
+      publishedAt: "2026-07-31T00:00:00.000Z", capturedAt: "2026-07-31T00:00:00.000Z",
+      claimSummary: "Claim", contentHash: "a".repeat(64),
+    }],
+  },
+  references: { selected: [], brandStyleImages: [], avatarStyleImageId: null, attachments: [] },
+  selectedProposal: {
+    id: "70000000-0000-4000-8000-000000000009", conceptKey: "tea-guide", title: "Tea guide",
+    informationalType: "how_to", oneLineIntent: "Teach", differentiator: "Simple",
+    differentiationAxes: ["target"], target: "Adults", customerContext: "Choosing tea",
+    keyMessage: "Tea helps", hook: "Try tea", selectionReason: "Useful", evidenceIds: [v3EvidenceId],
+    referenceIds: [], outputFormat: "card_news", channelTargets: ["instagram"], assetCount: 1,
+    outline: [{ index: 1, role: "cover", headline: "Tea", purpose: "Introduce" }],
+    purposeDetails: { kind: "informational", question: "Which tea?", value: "Clarity", whyNow: "Summer", learningPoints: ["Choose tea"] },
+  },
+  userImageInstruction: null,
+  outputSettings: { outputFormat: "card_news", channelTargets: ["instagram"], aspectRatio: "1:1", outputCount: 1, purpose: "informational" },
+  capturedAt: "2026-07-31T00:00:00.000Z",
+};
+
+const v3CardPlanFixture = {
+  contractVersion: "card-news-plan.v2",
+  content: { caption: "Tea", hashtags: ["#tea"], cta: "Read" },
+  imagePackage: {
+    contractVersion: "image-generation-package.v1", generationId: v3GenerationId,
+    outputFormat: "card_news", purpose: "informational", assetCount: 1, aspectRatio: "1:1",
+    channelTargets: ["instagram"],
+    assets: [{ index: 1, role: "cover", copy: "Tea facts", visualDirection: "Editorial tea", evidenceIds: [], productImageAssetIds: [], attachmentIds: [] }],
+    product: null, references: [], brandStyleImages: [], avatarStyleImageId: null, attachments: [], userImageInstruction: null,
+    logoPolicy: { allowGeneratedLogo: false, allowReservedLogoArea: false, allowExternalReferenceLogo: false, allowExistingProductPackagingLogo: true },
+  },
+};
+
 describe("AI content repository", () => {
   it("rejects repository writes when the authenticated actor is missing", async () => {
     const pool = createPool();
@@ -837,7 +907,7 @@ describe("AI content repository", () => {
   });
 
   it.each([
-    ["brand_topic", { mode: "brand_topic", topic: "여름 관리", wikiItemIds: [] }, null],
+    ["brand_topic", { mode: "brand_topic", topic: "여름 관리" }, null],
     ["product_service", { mode: "product_service", productServiceId: "60000000-0000-4000-8000-000000000006" }, "60000000-0000-4000-8000-000000000006"],
     ["new_subject", { mode: "new_subject", subjectAnalysisId: "70000000-0000-4000-8000-000000000007" }, null],
   ])("persists %s canonical subject columns while updating a locked draft", async (mode, subject, productServiceId) => {
@@ -986,7 +1056,7 @@ describe("AI content repository", () => {
     const orchestration = {
       contractVersion: "content-orchestration.v1",
       contentFamily: "informational",
-      subject: { mode: "brand_topic", topic: "여름 관리", wikiItemIds: [] },
+      subject: { mode: "brand_topic", topic: "여름 관리" },
       target: { id: null, snapshot: {} },
       strategy: "how_to",
       outputFormat: "blog",
@@ -1319,14 +1389,258 @@ describe("AI content repository", () => {
     expect(JSON.stringify(generation)).not.toContain("private/path.png");
   });
 
-  it("returns source URL ids for blog references so they can be snapshotted later", async () => {
+  it("reads legacy multi-output results beside v2 formats without marking a v2 reel as legacy", async () => {
+    const outputRow = (
+      id: string,
+      outputIndex: number,
+      manifest: Record<string, unknown>,
+      title = id,
+    ) => ({
+      id,
+      generation_id: "generation-1",
+      output_index: outputIndex,
+      title,
+      status: "completed",
+      content_json: manifest.content ?? {},
+      artifact_manifest_json: manifest,
+      manifest_url: `https://assets.public.blob.vercel-storage.com/${id}/manifest.json`,
+      failure_code: null,
+      failure_message: null,
+      downloaded_at: null,
+      created_at: "2026-08-01T00:00:00.000Z",
+      updated_at: "2026-08-01T00:00:00.000Z",
+      completed_at: "2026-08-01T00:00:00.000Z",
+    });
+    const image = (role: string, index: number) => ({
+      role,
+      index,
+      url: `https://assets.public.blob.vercel-storage.com/${role}-${index}.png`,
+      fileName: `${role}-${index}.png`,
+      mimeType: "image/png",
+      width: 1080,
+      height: role === "scene" ? 1920 : 1080,
+    });
+    const v1Card = (index: number) => ({
+      version: "ai-content.v1",
+      type: "card_news",
+      title: `legacy-card-${index}`,
+      assets: [image("slide", 1)],
+      content: { caption: "legacy", hashtags: [], cta: "save" },
+    });
+    const v2 = (outputFormat: "card_news" | "blog" | "reel" | "marketing_content", assets: unknown[]) => ({
+      version: "ai-content.v2",
+      type: outputFormat === "card_news" ? "card_news" : outputFormat === "blog" ? "blog" : "marketing",
+      purpose: "marketing",
+      outputFormat,
+      title: outputFormat,
+      assets,
+      content: { caption: outputFormat },
+    });
+    const outputs = [
+      outputRow("legacy-card-1", 1, v1Card(1)),
+      outputRow("legacy-card-2", 2, v1Card(2)),
+      outputRow("legacy-card-3", 3, v1Card(3)),
+      outputRow("legacy-blog", 4, {
+        version: "ai-content.v1",
+        type: "blog",
+        title: "legacy-blog",
+        assets: [image("cover", 1), { role: "html", index: 2, url: "https://assets.public.blob.vercel-storage.com/article.html", fileName: "article.html", mimeType: "text/html" }],
+        content: { title: "legacy", summary: "summary", html: "<article></article>", metaTitle: "legacy", metaDescription: "legacy" },
+      }),
+      outputRow("legacy-reel", 5, { version: "ai-content.v1", deliveryFormat: "instagram_reel", assets: [] }),
+      outputRow("versionless-legacy-reel", 6, { deliveryFormat: "instagram_reel", assets: [] }),
+      outputRow("unknown-reel", 7, { version: "ai-content.v999", type: "marketing", outputFormat: "reel", assets: [] }),
+      outputRow("v2-card", 8, v2("card_news", [image("slide", 1)])),
+      outputRow("v2-blog", 9, v2("blog", [{ role: "html", index: 1, url: "https://assets.public.blob.vercel-storage.com/content.html", fileName: "content.html", mimeType: "text/html" }])),
+      outputRow("v2-reel", 10, v2("reel", [
+        image("scene", 1),
+        { role: "video", index: 1, url: "https://assets.public.blob.vercel-storage.com/reel.mp4", fileName: "reel.mp4", mimeType: "video/mp4", width: 1080, height: 1920, durationSeconds: 4, videoCodec: "h264", fps: 30, audioCodec: null },
+      ])),
+      outputRow("v2-marketing", 11, v2("marketing_content", [image("creative", 1)])),
+    ];
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("from ai_content_generation_outputs")) return { rows: outputs, rowCount: outputs.length };
+      if (sql.includes("from ai_content_generation_references")) return { rows: [], rowCount: 0 };
+      return { rows: [{ ...row("generation-1", "completed") }], rowCount: 1 };
+    });
+
+    const generation = await createAiContentRepository({ query } as never).getAiContentGeneration({
+      ...scope,
+      generationId: "generation-1",
+    });
+
+    expect(generation?.outputs?.filter((output) => output.id.startsWith("legacy-card"))).toHaveLength(3);
+    expect(generation?.outputs?.find((output) => output.id === "legacy-blog")?.manifest).toMatchObject({ version: "ai-content.v1" });
+    expect(generation?.outputs?.find((output) => output.id === "legacy-reel")).toMatchObject({ manifestVersion: "ai-content.v1", legacyReadOnly: true, revisionCapabilities: [] });
+    expect(generation?.outputs?.find((output) => output.id === "versionless-legacy-reel")).toMatchObject({ manifestVersion: "ai-content.v1", legacyReadOnly: true, revisionCapabilities: [] });
+    expect(generation?.outputs?.find((output) => output.id === "unknown-reel")).toMatchObject({ manifestVersion: null, legacyReadOnly: false });
+    expect(generation?.outputs?.find((output) => output.id === "v2-reel")).toMatchObject({
+      manifestVersion: "ai-content.v2",
+      legacyReadOnly: false,
+      manifest: { version: "ai-content.v2", outputFormat: "reel" },
+    });
+    expect(generation?.outputs?.filter((output) => output.id.startsWith("v2-"))).toHaveLength(4);
+  });
+
+  it("returns canonical reference item ids for all three legacy reference source branches", async () => {
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, params: unknown[] = []) => {
+      calls.push({ sql, params });
+      if (sql.includes("'brand_output' as source")) {
+        return {
+          rows: [
+            {
+              id: "10000000-0000-4000-8000-000000000001",
+              underlying_id: "20000000-0000-4000-8000-000000000001",
+              source: "brand_output",
+              title: "Owned result",
+              url: null,
+              preview_url: null,
+              metrics: { exposureCount: 100 },
+              checked_at: "2026-07-31T00:00:00.000Z",
+            },
+            {
+              id: "10000000-0000-4000-8000-000000000002",
+              underlying_id: "20000000-0000-4000-8000-000000000002",
+              source: "saved_trend",
+              title: "Saved trend",
+              url: "https://instagram.example/p/1",
+              preview_url: "https://cdn.example/trend.jpg",
+              metrics: { likeCount: 90, commentsCount: 8 },
+              checked_at: "2026-07-30T00:00:00.000Z",
+            },
+          ],
+          rowCount: 2,
+        };
+      }
+      return {
+        rows: [{
+          id: "10000000-0000-4000-8000-000000000003",
+          underlying_id: "20000000-0000-4000-8000-000000000003",
+          source: "saved_url",
+          title: "Saved URL",
+          url: "https://example.com/reference",
+          preview_url: null,
+          metrics: {},
+          checked_at: "2026-07-29T00:00:00.000Z",
+        }],
+        rowCount: 1,
+      };
+    });
+    const repository = createAiContentRepository({ query } as never);
+
+    const visual = await repository.listAiContentReferences({ ...scope, type: "card_news" });
+    const blog = await repository.listAiContentReferences({ ...scope, type: "blog" });
+
+    expect([...visual, ...blog].map((item) => item.id)).toEqual([
+      "10000000-0000-4000-8000-000000000001",
+      "10000000-0000-4000-8000-000000000002",
+      "10000000-0000-4000-8000-000000000003",
+    ]);
+    const visualSql = calls[0]?.sql ?? "";
+    expect(visualSql.match(/select reference_filter\.id/g)).toHaveLength(2);
+    expect(visualSql).not.toContain("select co.id, 'brand_output' as source");
+    expect(visualSql).not.toContain("select saved.id, 'saved_trend' as source");
+    const blogSql = calls[1]?.sql ?? "";
+    expect(blogSql).toContain("select item.id, 'saved_url' as source");
+    expect(blogSql).not.toContain("select source.id, 'saved_url' as source");
+  });
+
+  it("keeps blog content-purpose filtering while selecting the canonical item id", async () => {
     const pool = createPool();
     const repository = createAiContentRepository(pool as never);
 
     await repository.listAiContentReferences({ ...scope, type: "blog" });
 
-    expect(pool.sql.join("\n")).toContain("select source.id, 'saved_url' as source");
+    expect(pool.sql.join("\n")).toContain("select item.id, 'saved_url' as source");
     expect(pool.sql.join("\n")).toContain("item.content_purpose in ('informational', 'both')");
+  });
+
+  it("lists only tenant-scoped, available, same-category, format-compatible reference seeds with comparable metrics", async () => {
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, params: unknown[] = []) => {
+      calls.push({ sql, params });
+      return {
+        rows: [
+          { id: "10000000-0000-4000-8000-000000000005", workspace_id: scope.workspaceId, brand_id: scope.brandId, archived_at: null, source_availability: "available", source: "saved_trend", title: "E", url: null, preview_url: null, format: "reel", primary_category: "MARKETING", exposure_count: "100", like_count: "20", comments_count: "2", checked_at: "2026-07-31T00:00:00.000Z" },
+          { id: "10000000-0000-4000-8000-000000000004", workspace_id: scope.workspaceId, brand_id: scope.brandId, archived_at: null, source_availability: "available", source: "saved_trend", title: "D", url: null, preview_url: null, format: "reel", primary_category: " marketing ", exposure_count: "100", like_count: "20", comments_count: "2", checked_at: "2026-07-31T00:00:00.000Z" },
+          { id: "10000000-0000-4000-8000-000000000003", workspace_id: scope.workspaceId, brand_id: scope.brandId, archived_at: null, source_availability: "available", source: "saved_trend", title: "C", url: null, preview_url: null, format: "reel", primary_category: "marketing", exposure_count: "100", like_count: "20", comments_count: "3", checked_at: "2026-07-29T00:00:00.000Z" },
+          { id: "10000000-0000-4000-8000-000000000002", workspace_id: scope.workspaceId, brand_id: scope.brandId, archived_at: null, source_availability: "available", source: "saved_trend", title: "B", url: null, preview_url: null, format: "reel", primary_category: "marketing", exposure_count: "100", like_count: "21", comments_count: "1", checked_at: "2026-07-28T00:00:00.000Z" },
+          { id: "10000000-0000-4000-8000-000000000001", workspace_id: scope.workspaceId, brand_id: scope.brandId, archived_at: null, source_availability: "available", source: "brand_output", title: "A", url: null, preview_url: null, format: "reel", primary_category: "marketing", exposure_count: "101", like_count: null, comments_count: null, checked_at: "2026-07-27T00:00:00.000Z" },
+          { id: "90000000-0000-4000-8000-000000000001", workspace_id: scope.workspaceId, brand_id: "other-brand", archived_at: null, source_availability: "available", source: "saved_trend", title: "Other brand", format: "reel", primary_category: "marketing", exposure_count: "999", like_count: "999", comments_count: "999", checked_at: "2026-08-01T00:00:00.000Z" },
+          { id: "90000000-0000-4000-8000-000000000002", workspace_id: scope.workspaceId, brand_id: scope.brandId, archived_at: "2026-07-01T00:00:00.000Z", source_availability: "available", source: "saved_trend", title: "Archived", format: "reel", primary_category: "marketing", exposure_count: "999", like_count: "999", comments_count: "999", checked_at: "2026-08-01T00:00:00.000Z" },
+          { id: "90000000-0000-4000-8000-000000000003", workspace_id: scope.workspaceId, brand_id: scope.brandId, archived_at: null, source_availability: "unavailable", source: "saved_trend", title: "Unavailable", format: "reel", primary_category: "marketing", exposure_count: "999", like_count: "999", comments_count: "999", checked_at: "2026-08-01T00:00:00.000Z" },
+          { id: "90000000-0000-4000-8000-000000000004", workspace_id: scope.workspaceId, brand_id: scope.brandId, archived_at: null, source_availability: "available", source: "saved_trend", title: "No category", format: "reel", primary_category: null, exposure_count: "999", like_count: "999", comments_count: "999", checked_at: "2026-08-01T00:00:00.000Z" },
+          { id: "90000000-0000-4000-8000-000000000005", workspace_id: scope.workspaceId, brand_id: scope.brandId, archived_at: null, source_availability: "available", source: "saved_trend", title: "Wrong category", format: "reel", primary_category: "retail", exposure_count: "999", like_count: "999", comments_count: "999", checked_at: "2026-08-01T00:00:00.000Z" },
+          { id: "90000000-0000-4000-8000-000000000006", workspace_id: scope.workspaceId, brand_id: scope.brandId, archived_at: null, source_availability: "available", source: "saved_trend", title: "Wrong format", format: "card_news", primary_category: "marketing", exposure_count: "999", like_count: "999", comments_count: "999", checked_at: "2026-08-01T00:00:00.000Z" },
+          { id: "90000000-0000-4000-8000-000000000007", workspace_id: scope.workspaceId, brand_id: scope.brandId, archived_at: null, source_availability: "available", source: "saved_trend", title: "No metrics", format: "reel", primary_category: "marketing", exposure_count: null, like_count: null, comments_count: null, checked_at: "2026-08-01T00:00:00.000Z" },
+          { id: "90000000-0000-4000-8000-000000000008", workspace_id: scope.workspaceId, brand_id: scope.brandId, archived_at: null, source_availability: "available", source: "saved_trend", title: "Unsafe metric", format: "reel", primary_category: "marketing", exposure_count: "1e9", like_count: null, comments_count: null, checked_at: "2026-08-01T00:00:00.000Z" },
+        ],
+        rowCount: 13,
+      };
+    });
+    const repository = createAiContentRepository({ query } as never);
+
+    const result = await repository.listAiContentReferenceSeeds({
+      ...scope,
+      primaryCategory: "  Marketing ",
+      format: "reel",
+      limit: 99,
+    });
+
+    expect(result.map((item) => item.id)).toEqual([
+      "10000000-0000-4000-8000-000000000001",
+      "10000000-0000-4000-8000-000000000002",
+      "10000000-0000-4000-8000-000000000003",
+      "10000000-0000-4000-8000-000000000004",
+      "10000000-0000-4000-8000-000000000005",
+    ]);
+    expect(result[0]).toEqual({
+      id: "10000000-0000-4000-8000-000000000001",
+      source: "brand_output",
+      title: "A",
+      url: null,
+      previewUrl: null,
+      format: "reel",
+      primaryCategory: "marketing",
+      metrics: { exposureCount: 101, likeCount: null, commentsCount: null },
+      checkedAt: "2026-07-27T00:00:00.000Z",
+    });
+    expect(calls[0]?.params).toEqual([scope.workspaceId, scope.brandId, "marketing", "reel", 50]);
+    expect(calls[0]?.sql).toContain("from reference_items item");
+    expect(calls[0]?.sql).toContain("reference_snapshots");
+    expect(calls[0]?.sql).toContain("reference_pattern_versions");
+    expect(calls[0]?.sql).toContain("item.workspace_id = $1");
+    expect(calls[0]?.sql).toContain("item.brand_id = $2");
+    expect(calls[0]?.sql).toContain("item.archived_at is null");
+    expect(calls[0]?.sql).toContain("sourceAvailability");
+    expect(calls[0]?.sql).toContain("item.metadata->>'primaryCategory'");
+    expect(calls[0]?.sql).toContain("latest_pattern.pattern_json->>'primaryCategory'");
+    expect(calls[0]?.sql).toContain("performance.content_features->>'format'");
+    expect(calls[0]?.sql).toContain("media.raw_metadata->>'_trendKind'");
+    expect(calls[0]?.sql).toContain("content_performance_snapshots");
+    expect(calls[0]?.sql).toContain("instagram_trend_media");
+    expect(calls[0]?.sql).toContain("limit $5");
+  });
+
+  it("returns no reference seeds without an approved primary category and rejects unsupported formats", async () => {
+    const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
+    const repository = createAiContentRepository({ query } as never);
+
+    await expect(repository.listAiContentReferenceSeeds({
+      ...scope,
+      primaryCategory: "  ",
+      format: "card_news",
+      limit: 10,
+    })).resolves.toEqual([]);
+    expect(query).not.toHaveBeenCalled();
+
+    await expect(repository.listAiContentReferenceSeeds({
+      ...scope,
+      primaryCategory: "marketing",
+      format: "story" as never,
+      limit: 10,
+    })).rejects.toThrow("ai_content_reference_seed_format_invalid");
   });
 
   it("applies recommended strategy, format, and tag filters inside the tenant-scoped reference query", async () => {
@@ -1397,8 +1711,9 @@ describe("AI content repository", () => {
     const context = await repository.getAiContentBrandContext(scope);
     const result = await repository.createAiContentAnalysis({ ...input, draft: { analysisSource: "owned" } });
 
-    expect(context).toMatchObject({ ready: true, ownedUrl: "https://example.com", wikiVersionId: "wiki-1", pageCount: 1 });
-    expect(result).toMatchObject({ status: "analysis_ready", analysis: { source: "owned", contextReady: true, wikiVersionId: "wiki-1" } });
+    expect(context).toMatchObject({ ready: true, ownedUrl: "https://example.com", wikiVersionId: null, pageCount: 0 });
+    expect(result).toMatchObject({ status: "analysis_ready", analysis: { source: "owned", contextReady: true } });
+    expect(result.analysis).not.toHaveProperty("wikiVersionId");
     expect(pool.analyzeJobInsertCount).toBe(0);
   });
 
@@ -1512,13 +1827,13 @@ describe("AI content repository", () => {
     expect(pool.analyzeJobInsertCount).toBe(0);
   });
 
-  it("allows owned context selection before the first wiki is built", async () => {
+  it("allows owned context selection without waiting for Wiki data", async () => {
     const pool = createPool({ wikiReady: false });
     const repository = createAiContentRepository(pool as never);
 
     const result = await repository.createAiContentAnalysis({ ...input, draft: { analysisSource: "owned" } });
 
-    expect(result).toMatchObject({ status: "analysis_ready", analysis: { source: "owned", contextReady: false } });
+    expect(result).toMatchObject({ status: "analysis_ready", analysis: { source: "owned", contextReady: true } });
     expect(pool.analyzeJobInsertCount).toBe(0);
   });
 
@@ -1558,6 +1873,24 @@ describe("AI content repository", () => {
       previewUrl: "https://cdn.example.com/preview.jpg",
       username: "reference_account",
     });
+  });
+
+  it("rejects a legacy draft update for a proposal-v2 generation", async () => {
+    const pool = createPool();
+    pool.setGenerationDraft({
+      origin: "proposal-v2",
+      proposalId: "74000000-0000-4000-8000-000000000007",
+      approvedProposalVersionId: "77000000-0000-4000-8000-000000000007",
+    });
+    const repository = createAiContentRepository(pool as never);
+
+    await expect(repository.updateAiContentDraft({
+      ...scope,
+      generationId: "generation-1",
+      draft: {},
+      referenceIds: [],
+    })).rejects.toThrow(/^ai_content_v3_contract_required$/);
+    expect(pool.sql.some((sql) => sql.includes("set draft_json"))).toBe(false);
   });
 
   it("rejects references that do not belong to the scoped brand", async () => {
@@ -1621,16 +1954,37 @@ describe("AI content repository", () => {
     expect(pool.sql.join("\n")).toContain("insert into ai_content_usage_ledger");
   });
 
-  it("requests the first wiki build at final confirmation when owned context is missing", async () => {
+  it("rejects a legacy generation start for a proposal-v2 generation", async () => {
+    const pool = createPool();
+    pool.setGenerationStatus("draft");
+    pool.setGenerationDraft({
+      origin: "proposal-v2",
+      proposalId: "74000000-0000-4000-8000-000000000007",
+      approvedProposalVersionId: "77000000-0000-4000-8000-000000000007",
+    });
+    const repository = createAiContentRepository(pool as never);
+
+    await expect(repository.startAiContentGeneration({
+      ...scope,
+      generationId: "generation-1",
+      idempotencyKey: "legacy-start",
+      outputCount: 1,
+      usageDate: "2026-08-01",
+      dailyGenerationLimit: 10,
+    })).rejects.toThrow(/^ai_content_v3_contract_required$/);
+    expect(pool.sql.some((sql) => sql.includes("insert into ai_content_generation_outputs"))).toBe(false);
+  });
+
+  it("starts final generation without requesting or waiting for Wiki data", async () => {
     const pool = createPool({ wikiReady: false });
     const repository = createAiContentRepository(pool as never);
     await repository.createAiContentAnalysis({ ...input, draft: { analysisSource: "owned" } });
 
     const result = await repository.startAiContentGeneration({ ...scope, generationId: "generation-1", idempotencyKey: "generation-wiki", outputCount: 1, usageDate: "2026-07-18", dailyGenerationLimit: 10 });
 
-    expect(pool.sql.join("\n")).toContain("insert into wiki_build_requests");
+    expect(pool.sql.join("\n")).not.toContain("insert into wiki_build_requests");
     expect(pool.sql.join("\n")).toContain("'waitForOwnedContext', $5::boolean");
-    expect(result.currentStage).toBe("owned_context");
+    expect(result.currentStage).toBe("analysis");
   });
 
   it("serializes and rejects a generation that would exceed the daily limit", async () => {
@@ -1764,6 +2118,42 @@ describe("AI content repository", () => {
     expect(pool.sql.join("\n")).not.toContain("from brands brand");
   });
 
+  it("strips Wiki and FAQ data from already queued legacy worker payloads", async () => {
+    const queued = structuredClone(contentGenerationInputV2Fixture) as Record<string, unknown>;
+    queued.brandContext = {
+      wikiVersionId: "wiki-legacy",
+      context: {
+        wiki: { pages: [{ content: "legacy wiki body" }] },
+        nested: { faqData: [{ answer: "legacy faq body" }] },
+      },
+    };
+    const pool = createWorkerPool({ subjectAnalysisSnapshot: queued });
+    const repository = createAiContentRepository(pool as never);
+
+    const job = await repository.claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-legacy",
+      leaseSeconds: 180,
+    });
+
+    expect(JSON.stringify(job?.payload.contentGenerationInput)).not.toMatch(/wiki|faq/i);
+  });
+
+  it("claims generation jobs without a Wiki readiness gate", async () => {
+    const pool = createWorkerPool();
+    const repository = createAiContentRepository(pool as never);
+
+    await repository.claimAiContentJob({
+      contentType: "card_news",
+      workerId: "card-worker-v3",
+      leaseSeconds: 180,
+    });
+
+    const candidateSql = pool.sql.find((sql) => sql.includes("limit 25"))!;
+    expect(candidateSql).not.toContain("wiki_versions");
+    expect(candidateSql).not.toContain("wiki_pages");
+  });
+
   it("rejects a heartbeat from a different lease owner", async () => {
     const pool = createWorkerPool();
     const repository = createAiContentRepository(pool as never);
@@ -1877,6 +2267,63 @@ describe("AI content repository", () => {
     expect(outputLock).toBeGreaterThan(generationLock);
     expect(jobLock).toBeGreaterThan(outputLock);
     expect(outputAggregate).toBeGreaterThan(generationLock);
+  });
+
+  it("stores a V3 planner result once and queues only per-asset render work without completing the output", async () => {
+    const pool = createWorkerPool({
+      generationId: v3GenerationId,
+      outputId: v3OutputId,
+      finalInputV3: v3FinalInputFixture,
+    });
+    const repository = createAiContentRepository(pool as never);
+    const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "planner-1", leaseSeconds: 180 });
+    const completion = {
+      jobId: "job-1", workerId: "planner-1", leaseToken: claimed!.leaseToken!,
+      skillVersion: "card-news-plan.v2", jobType: "generate" as const,
+      plan: v3CardPlanFixture as never,
+    };
+
+    await expect(repository.completeAiContentJob(completion)).resolves.toMatchObject({ id: v3GenerationId });
+    await expect(repository.completeAiContentJob(completion)).resolves.toMatchObject({ id: v3GenerationId });
+    expect(pool.sql.join("\n")).toContain("plan_json=coalesce");
+    expect(pool.sql.join("\n")).toContain("insert into ai_content_generation_render_jobs");
+    expect(pool.sql.join("\n")).not.toContain("artifact_manifest_json = $4::jsonb");
+
+    await expect(repository.completeAiContentJob({
+      ...completion,
+      plan: { ...v3CardPlanFixture, content: { ...v3CardPlanFixture.content, caption: "Different" } } as never,
+    })).rejects.toThrow("ai_content_plan_completion_conflict");
+  });
+
+  it("binds generate completion shape to the locked generation input contract version", async () => {
+    const v3Pool = createWorkerPool({
+      generationId: v3GenerationId,
+      outputId: v3OutputId,
+      finalInputV3: v3FinalInputFixture,
+    });
+    const v3Repository = createAiContentRepository(v3Pool as never);
+    const v3Claim = await v3Repository.claimAiContentJob({ contentType: "card_news", workerId: "planner-1", leaseSeconds: 180 });
+
+    await expect(v3Repository.completeAiContentJob({
+      jobId: "job-1", workerId: "planner-1", leaseToken: v3Claim!.leaseToken!,
+      skillVersion: "legacy-card.v1", jobType: "generate",
+      manifestUrl: "https://blob.example.com/manifest.json",
+      manifest: {
+        version: "ai-content.v1", type: "card_news", title: "Legacy bypass",
+        assets: [{ role: "slide", index: 1, url: "https://blob.example.com/slide.png", fileName: "slide.png", mimeType: "image/png", width: 1080, height: 1080 }],
+        content: { caption: "Bypass", hashtags: [], cta: "Read" },
+      },
+    })).rejects.toThrow("ai_content_job_completion_contract_mismatch");
+    expect(v3Pool.sql.join("\n")).not.toContain("artifact_manifest_json = $4::jsonb");
+
+    const legacyPool = createWorkerPool();
+    const legacyRepository = createAiContentRepository(legacyPool as never);
+    const legacyClaim = await legacyRepository.claimAiContentJob({ contentType: "card_news", workerId: "legacy-worker", leaseSeconds: 180 });
+    await expect(legacyRepository.completeAiContentJob({
+      jobId: "job-1", workerId: "legacy-worker", leaseToken: legacyClaim!.leaseToken!,
+      skillVersion: "card-news-plan.v2", jobType: "generate", plan: v3CardPlanFixture as never,
+    })).rejects.toThrow("ai_content_job_completion_contract_mismatch");
+    expect(legacyPool.sql.join("\n")).not.toContain("insert into ai_content_generation_render_jobs");
   });
 
   it("merges an individual-card revision without replacing successful sibling cards or copy", async () => {
@@ -2177,6 +2624,18 @@ describe("AI content repository", () => {
     await repository.failAiContentJob({ jobId: "job-1", workerId: "card-worker-1", leaseToken: claimed!.leaseToken!, errorCode: "codex_timeout", errorMessage: "timeout", retryable: true });
     expect(pool.job.status).toBe("queued");
     expect(pool.sql.join("\n")).toContain("interval '60 seconds'");
+  });
+
+  it("authenticates terminal generation failure replays with the original worker and lease", async () => {
+    const pool = createWorkerPool();
+    const repository = createAiContentRepository(pool as never);
+    const claimed = await repository.claimAiContentJob({ contentType: "card_news", workerId: "card-worker-1", leaseSeconds: 180 });
+    const failure = { jobId: "job-1", workerId: "card-worker-1", leaseToken: claimed!.leaseToken!, errorCode: "render_failed", errorMessage: "failed", retryable: false };
+    await repository.failAiContentJob(failure);
+
+    await expect(repository.failAiContentJob({ ...failure, workerId: "other-worker" })).rejects.toThrow("ai_content_job_lease_invalid");
+    await expect(repository.failAiContentJob({ ...failure, leaseToken: "wrong-token" })).rejects.toThrow("ai_content_job_lease_invalid");
+    await expect(repository.failAiContentJob(failure)).resolves.toMatchObject({ id: "generation-1" });
   });
 
   it("marks the linked automatic output failed after the final card-news attempt", async () => {
@@ -2704,5 +3163,1179 @@ describe("AI content repository", () => {
     expect(sql).toContain("lease_expires_at > now()");
     expect(sql).toContain("superseded_at is null");
     expect(params).toEqual(["analysis-1", "subject-worker-1", "subject-lease-1"]);
+  });
+});
+
+const proposalV2Scope = {
+  workspaceId: "10000000-0000-4000-8000-000000000001",
+  brandId: "20000000-0000-4000-8000-000000000002",
+  actorUserId: "30000000-0000-4000-8000-000000000003",
+};
+
+const proposalBaseInputV2: ProposalBaseInputSnapshotV2 = {
+  contractVersion: "proposal-base-input.v2",
+  brandCore: {
+    versionId: "40000000-0000-4000-8000-000000000004",
+    companyOverview: "브랜드 개요",
+    businessDescription: "사업 설명",
+    primaryCategory: "교육",
+    detailedCategory: "온라인 교육",
+    primaryTarget: "초기 창업자",
+    differentiator: "실전형",
+    coreAppeal: "바로 적용",
+  },
+  subject: { kind: "topic_text", title: "운영 체크리스트" },
+  contentInstruction: "실무 중심으로",
+  product: null,
+  references: [],
+  outputSettings: {
+    outputFormat: "card_news",
+    channelTargets: ["instagram"],
+    aspectRatio: "4:5",
+    outputCount: 1,
+    purpose: "informational",
+  },
+  capturedAt: "2026-08-01T03:00:00.000Z",
+};
+
+function proposalV2BatchRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "50000000-0000-4000-8000-000000000005",
+    workspace_id: proposalV2Scope.workspaceId,
+    brand_id: proposalV2Scope.brandId,
+    origin: "manual",
+    content_family: "informational",
+    request_json: {
+      contractVersion: "content-proposal-request.v2",
+      purpose: "informational",
+      outputFormat: "card_news",
+      channelTargets: ["instagram"],
+    },
+    source_snapshot_json: [],
+    input_snapshot_json: proposalBaseInputV2,
+    status: "queued",
+    error_code: null,
+    error_message: null,
+    created_at: "2026-08-01T03:00:00.000Z",
+    updated_at: "2026-08-01T03:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function proposalV2Transaction(options: {
+  existing?: boolean;
+  existingActorMatches?: boolean;
+  existingRequestMatches?: boolean;
+  failAt?: "snapshot" | "job";
+} = {}) {
+  const statements: Array<{ sql: string; params: unknown[] }> = [];
+  const client = {
+    query: vi.fn(async (sql: string, params: unknown[] = []) => {
+      statements.push({ sql, params });
+      if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+      if (sql.includes("from workspace_members member")) {
+        return { rows: [{ ok: 1 }], rowCount: 1 };
+      }
+      if (sql.includes("from ai_content_proposal_batches") && sql.includes("request_fingerprint_matches")) {
+        return options.existing
+          ? {
+            rows: [proposalV2BatchRow({
+              actor_matches: options.existingActorMatches ?? true,
+              request_fingerprint_matches: options.existingRequestMatches ?? true,
+            })],
+            rowCount: 1,
+          }
+          : { rows: [], rowCount: 0 };
+      }
+      if (sql.includes("insert into ai_content_proposal_batches")) {
+        if (options.failAt === "snapshot") throw new Error("input_snapshot_json_write_failed");
+        return {
+          rows: [proposalV2BatchRow({
+            request_json: JSON.parse(String(params[4])),
+            input_snapshot_json: JSON.parse(String(params[5])),
+          })],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("insert into ai_content_proposal_jobs")) {
+        if (options.failAt === "job") throw new Error("proposal_job_insert_failed");
+        return { rows: [{ id: "60000000-0000-4000-8000-000000000006" }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    }),
+    release: vi.fn(),
+  };
+  return {
+    statements,
+    client,
+    repository: createAiContentRepository({ connect: async () => client, query: client.query } as never),
+  };
+}
+
+function createProposalBatchV2Input() {
+  return {
+    ...proposalV2Scope,
+    origin: "manual" as const,
+    idempotencyKey: "proposal-v2-1",
+    purpose: "informational" as const,
+    outputFormat: "card_news" as const,
+    channelTarget: "instagram" as const,
+    requestFingerprint: "f".repeat(64),
+    inputSnapshot: proposalBaseInputV2,
+  };
+}
+
+describe("AI content V2 proposal batch persistence", () => {
+  it("persists the trusted base snapshot and exactly one proposal job in one transaction", async () => {
+    const fixture = proposalV2Transaction();
+
+    const result = await fixture.repository.createAiContentProposalBatchV2(
+      createProposalBatchV2Input(),
+    );
+
+    expect(result).toMatchObject({
+      id: "50000000-0000-4000-8000-000000000005",
+      status: "queued",
+      contentFamily: "informational",
+      sourceSnapshots: [],
+    });
+    const sqlOrder = fixture.statements.map(({ sql }) => sql);
+    expect(sqlOrder[0]).toBe("BEGIN");
+    expect(sqlOrder.at(-1)).toBe("COMMIT");
+    const batchIndex = sqlOrder.findIndex((sql) => sql.includes("insert into ai_content_proposal_batches"));
+    const jobIndexes = sqlOrder
+      .map((sql, index) => sql.includes("insert into ai_content_proposal_jobs") ? index : -1)
+      .filter((index) => index >= 0);
+    expect(jobIndexes).toEqual([batchIndex + 1]);
+
+    const insert = fixture.statements[batchIndex]!;
+    expect(insert.sql).toContain("input_snapshot_json");
+    expect(insert.sql).toContain("source_snapshot_json");
+    expect(insert.params.slice(0, 5)).toEqual([
+      proposalV2Scope.workspaceId,
+      proposalV2Scope.brandId,
+      "manual",
+      "informational",
+      JSON.stringify({
+        contractVersion: "content-proposal-request.v2",
+        purpose: "informational",
+        outputFormat: "card_news",
+        channelTargets: ["instagram"],
+        requestFingerprint: "f".repeat(64),
+      }),
+    ]);
+    expect(JSON.parse(String(insert.params[5]))).toEqual(proposalBaseInputV2);
+    expect(fixture.statements[jobIndexes[0]!]!.params).toEqual([
+      proposalV2Scope.workspaceId,
+      proposalV2Scope.brandId,
+      "50000000-0000-4000-8000-000000000005",
+    ]);
+    expect(fixture.client.release).toHaveBeenCalledOnce();
+  });
+
+  it("stores only the proposal base fields without research, Wiki, FAQ, or logo data", async () => {
+    const fixture = proposalV2Transaction();
+
+    await fixture.repository.createAiContentProposalBatchV2(createProposalBatchV2Input());
+
+    const insert = fixture.statements.find(({ sql }) => sql.includes("insert into ai_content_proposal_batches"))!;
+    const snapshot = JSON.parse(String(insert.params[5]));
+    expect(Object.keys(snapshot).sort()).toEqual([
+      "brandCore",
+      "capturedAt",
+      "contentInstruction",
+      "contractVersion",
+      "outputSettings",
+      "product",
+      "references",
+      "subject",
+    ]);
+    expect(snapshot).not.toHaveProperty("researchEvidence");
+    expect(JSON.stringify(snapshot)).not.toMatch(/wiki|faq|logo/i);
+  });
+
+  it("returns only UI-safe research and selected-reference summaries for a V2 batch", async () => {
+    const referenceId = "70000000-0000-4000-8000-000000000007";
+    const query = vi.fn(async (_sql: string, _params: unknown[] = []) => ({
+      rows: [proposalV2BatchRow({
+        input_snapshot_json: {
+          ...proposalBaseInputV2,
+          references: [{
+            referenceItemId: referenceId,
+            snapshotId: "80000000-0000-4000-8000-000000000008",
+            roles: ["planning"],
+            title: "선택 레퍼런스",
+            sourceUrl: "https://reference.example/private-source",
+            capturedAt: "2026-08-01T03:00:00.000Z",
+            contentHash: "b".repeat(64),
+            text: "고객에게 다시 내려가면 안 되는 긴 레퍼런스 원문",
+            image: {
+              storageUrl: "https://blob.example/reference.webp",
+              storagePath: "owned/reference.webp",
+              mimeType: "image/webp",
+              checksum: "c".repeat(64),
+            },
+          }],
+        },
+        evidence_json: {
+          contractVersion: "research-evidence.v1",
+          decision: "searched",
+          reason: "내부 판단 이유",
+          queries: ["내부 검색어"],
+          capturedAt: "2026-08-01T04:00:00.000Z",
+          items: [{
+            id: "90000000-0000-4000-8000-000000000009",
+            title: "검색 자료", url: "https://source.example/article", publisher: "Source",
+            publishedAt: null, capturedAt: "2026-08-01T04:00:00.000Z",
+            claimSummary: "응답에 포함하지 않을 긴 내부 요약", contentHash: "d".repeat(64),
+          }],
+        },
+        proposals: [],
+      })],
+      rowCount: 1,
+    }));
+    const repository = createAiContentRepository({ query } as never);
+
+    const result = await repository.getAiContentProposalBatch!({
+      workspaceId: proposalV2Scope.workspaceId,
+      brandId: proposalV2Scope.brandId,
+      batchId: "50000000-0000-4000-8000-000000000005",
+    });
+
+    expect(result).toMatchObject({
+      researchEvidence: {
+        items: [{
+          id: "90000000-0000-4000-8000-000000000009",
+          title: "검색 자료",
+          url: "https://source.example/article",
+          publisher: "Source",
+        }],
+      },
+      selectedReferences: [{
+        id: referenceId,
+        title: "선택 레퍼런스",
+        preview: { url: "https://blob.example/reference.webp", mimeType: "image/webp" },
+      }],
+    });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("긴 레퍼런스 원문");
+    expect(serialized).not.toContain("내부 검색어");
+    expect(serialized).not.toContain("긴 내부 요약");
+    expect(serialized).not.toContain("private-source");
+    expect(query.mock.calls[0]![0]).toContain("ai_content_proposal_research_snapshots");
+  });
+
+  it.each([
+    ["snapshot", "input_snapshot_json_write_failed"],
+    ["job", "proposal_job_insert_failed"],
+  ] as const)("rolls back a %s write failure and always releases the client", async (failAt, message) => {
+    const fixture = proposalV2Transaction({ failAt });
+
+    await expect(fixture.repository.createAiContentProposalBatchV2(createProposalBatchV2Input()))
+      .rejects.toThrow(message);
+
+    expect(fixture.statements.map(({ sql }) => sql)).toContain("ROLLBACK");
+    expect(fixture.statements.map(({ sql }) => sql)).not.toContain("COMMIT");
+    expect(fixture.client.release).toHaveBeenCalledOnce();
+  });
+
+  it("returns an idempotent existing batch without creating another batch or job", async () => {
+    const fixture = proposalV2Transaction({ existing: true });
+
+    const result = await fixture.repository.createAiContentProposalBatchV2(
+      createProposalBatchV2Input(),
+    );
+
+    expect(result.id).toBe("50000000-0000-4000-8000-000000000005");
+    expect(fixture.statements.filter(({ sql }) => sql.includes("insert into ai_content_proposal_batches")))
+      .toHaveLength(0);
+    expect(fixture.statements.filter(({ sql }) => sql.includes("insert into ai_content_proposal_jobs")))
+      .toHaveLength(0);
+    expect(fixture.statements.map(({ sql }) => sql).at(-1)).toBe("COMMIT");
+    expect(fixture.client.release).toHaveBeenCalledOnce();
+  });
+
+  it("replays the same normalized request even when the newly captured snapshot time differs", async () => {
+    const fixture = proposalV2Transaction({ existing: true });
+
+    const result = await fixture.repository.createAiContentProposalBatchV2({
+      ...createProposalBatchV2Input(),
+      inputSnapshot: {
+        ...proposalBaseInputV2,
+        capturedAt: "2026-08-02T04:00:00.000Z",
+      },
+    });
+
+    expect(result.id).toBe("50000000-0000-4000-8000-000000000005");
+    expect(fixture.statements.some(({ sql }) => sql.includes("input_snapshot_matches"))).toBe(false);
+    expect(fixture.statements.filter(({ sql }) => sql.includes("insert into ai_content_proposal_batches")))
+      .toHaveLength(0);
+  });
+
+  it.each([
+    ["changed request", { existingRequestMatches: false }],
+    ["different actor", { existingActorMatches: false }],
+  ])("rejects a %s without returning the existing batch", async (_label, options) => {
+    const fixture = proposalV2Transaction({ existing: true, ...options });
+
+    await expect(fixture.repository.createAiContentProposalBatchV2(createProposalBatchV2Input()))
+      .rejects.toThrow("ai_content_proposal_batch_conflict");
+
+    expect(fixture.statements.map(({ sql }) => sql)).toContain("ROLLBACK");
+    expect(fixture.statements.filter(({ sql }) => sql.includes("insert into ai_content_proposal_jobs")))
+      .toHaveLength(0);
+  });
+
+  it("looks up a same-actor same-request replay without creating or exposing another scope", async () => {
+    const fixture = proposalV2Transaction({ existing: true });
+
+    const replay = await fixture.repository.getAiContentProposalBatchV2Replay({
+      ...proposalV2Scope,
+      idempotencyKey: "proposal-v2-1",
+      requestFingerprint: "f".repeat(64),
+    });
+
+    expect(replay?.id).toBe("50000000-0000-4000-8000-000000000005");
+    const lookup = fixture.statements.find(({ sql }) => sql.includes("request_fingerprint_matches"))!;
+    expect(lookup.sql).toContain("workspace_id=$1 and brand_id=$2 and idempotency_key=$3");
+    expect(lookup.params).toEqual([
+      proposalV2Scope.workspaceId,
+      proposalV2Scope.brandId,
+      "proposal-v2-1",
+      proposalV2Scope.actorUserId,
+      "f".repeat(64),
+    ]);
+    expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_proposal_batches")))
+      .toBe(false);
+  });
+});
+
+describe("AI content V2 proposal selection sealing", () => {
+  it("seals the selected proposal and copies the batch reference lineage in exact order", async () => {
+    const referenceA = "70000000-0000-4000-8000-000000000007";
+    const referenceB = "70000000-0000-4000-8000-000000000008";
+    const snapshotA = "71000000-0000-4000-8000-000000000007";
+    const snapshotB = "71000000-0000-4000-8000-000000000008";
+    const patternA = "72000000-0000-4000-8000-000000000007";
+    const patternB = "72000000-0000-4000-8000-000000000008";
+    const evidence = {
+      contractVersion: "research-evidence.v1",
+      decision: "searched",
+      reason: "required",
+      queries: ["operations"],
+      capturedAt: "2026-08-01T04:00:00.000Z",
+      items: [{
+        id: "73000000-0000-4000-8000-000000000007",
+        title: "Evidence",
+        url: "https://evidence.example/article",
+        publisher: null,
+        publishedAt: null,
+        capturedAt: "2026-08-01T04:00:00.000Z",
+        claimSummary: "Useful claim",
+        contentHash: "e".repeat(64),
+      }],
+    };
+    const frozenReference = (referenceItemId: string, snapshotId: string, roles: string[]) => ({
+      referenceItemId,
+      snapshotId,
+      roles,
+      title: `Reference ${referenceItemId}`,
+      sourceUrl: "https://reference.example/item",
+      capturedAt: "2026-08-01T03:00:00.000Z",
+      contentHash: "a".repeat(64),
+      text: "frozen text",
+      image: null,
+    });
+    const inputSnapshot = {
+      ...proposalBaseInputV2,
+      references: [
+        frozenReference(referenceB, snapshotB, ["copy_pattern"]),
+        frozenReference(referenceA, snapshotA, ["planning", "visual_composition"]),
+      ],
+    };
+    const proposalJson = {
+      conceptKey: "operations-guide",
+      title: "Operations guide",
+      informationalType: "how_to",
+      oneLineIntent: "Teach operations",
+      differentiator: "Practical",
+      differentiationAxes: ["target"],
+      target: "Operators",
+      customerContext: "Daily work",
+      keyMessage: "Use a checklist",
+      hook: "Start today",
+      selectionReason: "Useful",
+      evidenceIds: [evidence.items[0].id],
+      referenceIds: [referenceB, referenceA],
+      outputFormat: "card_news",
+      channelTargets: ["instagram"],
+      assetCount: 1,
+      outline: [{ index: 1, role: "cover", headline: "Checklist", purpose: "Introduce" }],
+      purposeDetails: {
+        kind: "informational",
+        question: "How?",
+        value: "Clarity",
+        whyNow: "Today",
+        learningPoints: ["Checklist"],
+      },
+    };
+    const canonical = (itemId: string, snapshotId: string) => ({
+      snapshotId,
+      itemId,
+      version: 1,
+      sourceUrl: "https://reference.example/item",
+      capturedAt: "2026-08-01T03:00:00.000Z",
+      contentHash: "a".repeat(64),
+      content: { text: "frozen text" },
+      media: {},
+      sourceAvailability: "available",
+      provenance: {},
+      permittedUse: { displayPreview: true, archiveBytes: true, modelInput: true, derivativeInspiration: true },
+    });
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        statements.push({ sql, params });
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (sql.includes("select select_ai_content_proposal")) return { rows: [{ selected: params[0] }], rowCount: 1 };
+        if (sql.includes("from ai_content_proposals proposal") && sql.includes("join ai_content_proposal_batches")) {
+          return { rows: [{
+            id: params[0], proposal_json: proposalJson, generation_id: null,
+            content_family: "informational", input_snapshot_json: inputSnapshot,
+            evidence_json: evidence,
+          }], rowCount: 1 };
+        }
+        if (sql.includes("join reference_snapshots snapshot")) return { rows: [
+          { reference_item_id: referenceA, reference_snapshot_id: snapshotA, pattern_version_id: patternA, snapshot_json: canonical(referenceA, snapshotA) },
+          { reference_item_id: referenceB, reference_snapshot_id: snapshotB, pattern_version_id: patternB, snapshot_json: canonical(referenceB, snapshotB) },
+        ], rowCount: 2 };
+        if (sql.includes("insert into ai_content_generations")) return { rows: [row("generation-1", "draft")], rowCount: 1 };
+        if (sql.includes("insert into ai_content_approved_proposal_versions")) return { rows: [], rowCount: 1 };
+        if (sql.includes("insert into ai_content_generation_references")) return { rows: [], rowCount: 1 };
+        if (sql.includes("update ai_content_proposals")) return { rows: [], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+
+    await repository.selectAiContentProposal({
+      ...proposalV2Scope,
+      proposalId: "74000000-0000-4000-8000-000000000007",
+      idempotencyKey: "select-v2",
+    });
+
+    const selectedRead = statements.find(({ sql }) => sql.includes("from ai_content_proposals proposal") && sql.includes("join ai_content_proposal_batches"))!;
+    expect(selectedRead.sql).toContain("input_snapshot_json");
+    expect(selectedRead.sql).toContain("ai_content_proposal_research_snapshots");
+    const referenceInserts = statements.filter(({ sql }) => sql.includes("insert into ai_content_generation_references"));
+    expect(referenceInserts).toHaveLength(2);
+    expect(referenceInserts.map(({ params }) => params.slice(4))).toEqual([
+      [1, JSON.stringify(canonical(referenceB, snapshotB)), referenceB, snapshotB, patternB, JSON.stringify(["copy_pattern"])],
+      [2, JSON.stringify(canonical(referenceA, snapshotA)), referenceA, snapshotA, patternA, JSON.stringify(["planning", "visual_composition"])],
+    ]);
+    expect(referenceInserts[0]!.params[5]).toBe(JSON.stringify(canonical(referenceB, snapshotB)));
+    expect(referenceInserts[1]!.params[5]).toBe(JSON.stringify(canonical(referenceA, snapshotA)));
+  });
+});
+
+describe("AI content V2 finalization draft", () => {
+  it("updates only avatar, common instruction, and current-generation V3 attachment IDs", async () => {
+    const attachmentId = "75000000-0000-4000-8000-000000000007";
+    const generation = {
+      ...row("76000000-0000-4000-8000-000000000007", "draft"),
+      draft_json: {
+        origin: "proposal-v2",
+        proposalId: "74000000-0000-4000-8000-000000000007",
+        approvedProposalVersionId: "77000000-0000-4000-8000-000000000007",
+        finalization: {
+          contractVersion: "content-finalization-draft.v2",
+          avatarStyleImageId: null,
+          userImageInstruction: null,
+          attachmentIds: [],
+        },
+      },
+    };
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        statements.push({ sql, params });
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (sql.includes("from ai_content_generations") && sql.includes("for update")) return { rows: [generation], rowCount: 1 };
+        if (sql.includes("from ai_content_generation_attachments")) {
+          return { rows: [{ id: attachmentId }], rowCount: 1 };
+        }
+        if (sql.includes("update ai_content_generations")) {
+          return { rows: [{
+            ...generation,
+            draft_json: JSON.parse(String(params[3])),
+          }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+    const draft = {
+      contractVersion: "content-finalization-draft.v2" as const,
+      avatarStyleImageId: "78000000-0000-4000-8000-000000000007",
+      userImageInstruction: "editorial light",
+      attachmentIds: [attachmentId],
+    };
+
+    const result = await repository.updateAiContentFinalizationDraft({
+      ...proposalV2Scope,
+      generationId: generation.id,
+      draft,
+    });
+
+    expect(result.draft.finalization).toEqual(draft);
+    const attachmentRead = statements.find(({ sql }) => sql.includes("from ai_content_generation_attachments"))!;
+    expect(attachmentRead.sql).toContain("generation_id=$1");
+    expect(attachmentRead.sql).toContain("role in ('product_image','visual_reference','supporting_image')");
+    expect(attachmentRead.sql).toContain("lower(mime_type) in ('image/png','image/jpeg','image/webp')");
+    expect(statements.some(({ sql }) => sql.includes("ai_content_generation_references"))).toBe(false);
+  });
+
+  it("uses one public unavailable error for an attachment outside the generation", async () => {
+    const generation = {
+      ...row("76000000-0000-4000-8000-000000000007", "draft"),
+      draft_json: { origin: "proposal-v2", proposalId: "74000000-0000-4000-8000-000000000007" },
+    };
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (sql.includes("from ai_content_generations") && sql.includes("for update")) return { rows: [generation], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+    await expect(repository.updateAiContentFinalizationDraft({
+      ...proposalV2Scope,
+      generationId: generation.id,
+      draft: {
+        contractVersion: "content-finalization-draft.v2",
+        avatarStyleImageId: null,
+        userImageInstruction: null,
+        attachmentIds: ["75000000-0000-4000-8000-000000000099"],
+      },
+    })).rejects.toThrow(/^RESOURCE_NOT_AVAILABLE$/);
+  });
+});
+
+function v3FinalizationHarness(options: {
+  avatarStyleImageId?: string | null;
+  styleImages?: unknown[];
+  revalidateError?: Error;
+  existingSnapshot?: { input_json: unknown; content_hash: string };
+  inputSnapshot?: ProposalBaseInputSnapshotV2;
+  proposalJson?: Record<string, unknown>;
+} = {}) {
+  const generationId = "76000000-0000-4000-8000-000000000007";
+  const proposalId = "74000000-0000-4000-8000-000000000007";
+  const batchId = "75000000-0000-4000-8000-000000000007";
+  const approvedId = "77000000-0000-4000-8000-000000000007";
+  const evidence = {
+    contractVersion: "research-evidence.v1",
+    decision: "searched",
+    reason: "required",
+    queries: ["operations"],
+    capturedAt: "2026-08-01T04:00:00.000Z",
+    items: [{
+      id: "73000000-0000-4000-8000-000000000007",
+      title: "Evidence",
+      url: "https://evidence.example/article",
+      publisher: null,
+      publishedAt: null,
+      capturedAt: "2026-08-01T04:00:00.000Z",
+      claimSummary: "Useful claim",
+      contentHash: "e".repeat(64),
+    }],
+  };
+  const proposalJson = options.proposalJson ?? {
+    conceptKey: "operations-guide",
+    title: "Operations guide",
+    informationalType: "how_to",
+    oneLineIntent: "Teach operations",
+    differentiator: "Practical",
+    differentiationAxes: ["target"],
+    target: "Operators",
+    customerContext: "Daily work",
+    keyMessage: "Use a checklist",
+    hook: "Start today",
+    selectionReason: "Useful",
+    evidenceIds: [evidence.items[0].id],
+    referenceIds: [],
+    outputFormat: "card_news",
+    channelTargets: ["instagram"],
+    assetCount: 1,
+    outline: [{ index: 1, role: "cover", headline: "Checklist", purpose: "Introduce" }],
+    purposeDetails: {
+      kind: "informational",
+      question: "How?",
+      value: "Clarity",
+      whyNow: "Today",
+      learningPoints: ["Checklist"],
+    },
+  };
+  const generation = {
+    ...row(generationId, "draft"),
+    workspace_id: proposalV2Scope.workspaceId,
+    brand_id: proposalV2Scope.brandId,
+    draft_json: {
+      origin: "proposal-v2",
+      proposalId,
+      approvedProposalVersionId: approvedId,
+      finalization: {
+        contractVersion: "content-finalization-draft.v2",
+        avatarStyleImageId: options.avatarStyleImageId ?? null,
+        userImageInstruction: null,
+        attachmentIds: [],
+      },
+    },
+  };
+  const statements: Array<{ sql: string; params: unknown[] }> = [];
+  const client = {
+    query: vi.fn(async (sql: string, params: unknown[] = []) => {
+      statements.push({ sql, params });
+      if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+      if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+      if (sql.includes("from ai_content_generations")) return { rows: [generation], rowCount: 1 };
+      if (sql.includes("from ai_content_proposals proposal") && !sql.includes("for update") && !sql.includes("approved_proposal_snapshot")) {
+        return { rows: [{ proposal_id: proposalId, batch_id: batchId }], rowCount: 1 };
+      }
+      if (sql.includes("from ai_content_proposal_batches batch") && sql.includes("for update")) {
+        return { rows: [{ id: batchId, status: "ready" }], rowCount: 1 };
+      }
+      if (sql.includes("from ai_content_proposals proposal") && sql.includes("proposal.batch_id") && sql.includes("for update") && !sql.includes("approved_proposal_snapshot")) {
+        return { rows: [{ id: proposalId, batch_id: batchId, status: "selected", generation_id: generationId }], rowCount: 1 };
+      }
+      if (sql.includes("from ai_content_approved_proposal_versions approved") && sql.includes("for update")) {
+        return { rows: [{ id: approvedId }], rowCount: 1 };
+      }
+      if (sql.includes("from ai_content_proposals proposal") && sql.includes("approved_proposal_snapshot")) {
+        return { rows: [{
+          proposal_json: proposalJson,
+          approved_proposal_snapshot: { effectiveProposal: proposalJson },
+          input_snapshot_json: options.inputSnapshot ?? proposalBaseInputV2,
+          evidence_json: evidence,
+        }], rowCount: 1 };
+      }
+      if (sql.includes("from ai_content_generation_input_snapshots") && sql.includes("for update")) {
+        return options.existingSnapshot
+          ? { rows: [options.existingSnapshot], rowCount: 1 }
+          : { rows: [], rowCount: 0 };
+      }
+      if (sql.includes("pg_advisory_xact_lock")) return { rows: [], rowCount: 1 };
+      if (sql.includes("from ai_content_usage_ledger")) return { rows: [{ generation_count: 0 }], rowCount: 1 };
+      if (sql.includes("insert into ai_content_generation_input_snapshots")) return { rows: [], rowCount: 1 };
+      if (sql.includes("insert into ai_content_generation_outputs")) {
+        return { rows: [{ id: "79000000-0000-4000-8000-000000000007" }], rowCount: 1 };
+      }
+      if (sql.includes("update ai_content_generations")) {
+        return { rows: [{ ...generation, status: "queued", generation_idempotency_key: params[3] }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 1 };
+    }),
+    release: vi.fn(),
+  };
+  const revalidateFrozenResources = vi.fn(async () => {
+    if (options.revalidateError) throw options.revalidateError;
+  });
+  const loadApprovedStyleImages = vi.fn(async () => options.styleImages ?? []);
+  const snapshots = { revalidateFrozenResources, loadApprovedStyleImages } as unknown as AiContentSnapshotRepository;
+  return {
+    generationId,
+    evidence,
+    client,
+    statements,
+    snapshots,
+    repository: createAiContentRepository({ connect: async () => client, query: client.query } as never),
+  };
+}
+
+describe("AI content V3 final input sealing", () => {
+  it("locks the selected batch, proposal, and generation in one global order before finalization side effects", async () => {
+    const fixture = v3FinalizationHarness();
+
+    await fixture.repository.startAiContentGenerationV3({
+      ...proposalV2Scope,
+      generationId: fixture.generationId,
+      contractVersion: "content-generation-start.v2",
+      idempotencyKey: "global-lock-order",
+      usageDate: "2026-08-01",
+      dailyGenerationLimit: 10,
+    }, fixture.snapshots);
+
+    const transactionStart = fixture.statements.findIndex(({ sql }) => sql === "BEGIN");
+    const batchLock = fixture.statements.findIndex(({ sql }) => (
+      sql.includes("from ai_content_proposal_batches batch") && sql.includes("for update")
+    ));
+    const proposalLock = fixture.statements.findIndex(({ sql }) => (
+      sql.includes("from ai_content_proposals proposal")
+        && sql.includes("proposal.batch_id")
+        && sql.includes("for update")
+    ));
+    const generationLock = fixture.statements.findIndex(({ sql }) => (
+      sql.includes("from ai_content_generations") && sql.includes("for update")
+    ));
+    const firstSideEffect = fixture.statements.findIndex(({ sql }) => (
+      sql.includes("insert into ai_content_generation_input_snapshots")
+    ));
+
+    expect(transactionStart).toBeGreaterThanOrEqual(0);
+    expect(batchLock).toBeGreaterThan(transactionStart);
+    expect(proposalLock).toBeGreaterThan(batchLock);
+    expect(generationLock).toBeGreaterThan(proposalLock);
+    expect(firstSideEffect).toBeGreaterThan(generationLock);
+  });
+
+  it("builds one immutable input and one generate job from the selected proposal snapshot", async () => {
+    const generationId = "76000000-0000-4000-8000-000000000007";
+    const proposalId = "74000000-0000-4000-8000-000000000007";
+    const batchId = "75000000-0000-4000-8000-000000000007";
+    const approvedId = "77000000-0000-4000-8000-000000000007";
+    const outputId = "79000000-0000-4000-8000-000000000007";
+    const evidence = {
+      contractVersion: "research-evidence.v1",
+      decision: "searched",
+      reason: "required",
+      queries: ["operations"],
+      capturedAt: "2026-08-01T04:00:00.000Z",
+      items: [{
+        id: "73000000-0000-4000-8000-000000000007",
+        title: "Evidence",
+        url: "https://evidence.example/article",
+        publisher: null,
+        publishedAt: null,
+        capturedAt: "2026-08-01T04:00:00.000Z",
+        claimSummary: "Useful claim",
+        contentHash: "e".repeat(64),
+      }],
+    };
+    const proposalJson = {
+      conceptKey: "operations-guide",
+      title: "Operations guide",
+      informationalType: "how_to",
+      oneLineIntent: "Teach operations",
+      differentiator: "Practical",
+      differentiationAxes: ["target"],
+      target: "Operators",
+      customerContext: "Daily work",
+      keyMessage: "Use a checklist",
+      hook: "Start today",
+      selectionReason: "Useful",
+      evidenceIds: [evidence.items[0].id],
+      referenceIds: [],
+      outputFormat: "card_news",
+      channelTargets: ["instagram"],
+      assetCount: 1,
+      outline: [{ index: 1, role: "cover", headline: "Checklist", purpose: "Introduce" }],
+      purposeDetails: {
+        kind: "informational",
+        question: "How?",
+        value: "Clarity",
+        whyNow: "Today",
+        learningPoints: ["Checklist"],
+      },
+    };
+    const generation = {
+      ...row(generationId, "draft"),
+      workspace_id: proposalV2Scope.workspaceId,
+      brand_id: proposalV2Scope.brandId,
+      draft_json: {
+        origin: "proposal-v2",
+        proposalId,
+        approvedProposalVersionId: approvedId,
+        finalization: {
+          contractVersion: "content-finalization-draft.v2",
+          avatarStyleImageId: null,
+          userImageInstruction: null,
+          attachmentIds: [],
+        },
+      },
+      content_family: "informational",
+      output_format: "card_news",
+    };
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        statements.push({ sql, params });
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (sql.includes("from ai_content_generations")) return { rows: [generation], rowCount: 1 };
+        if (sql.includes("from ai_content_proposals proposal") && !sql.includes("for update") && !sql.includes("approved_proposal_snapshot")) {
+          return { rows: [{ proposal_id: proposalId, batch_id: batchId }], rowCount: 1 };
+        }
+        if (sql.includes("from ai_content_proposal_batches batch") && sql.includes("for update")) {
+          return { rows: [{ id: batchId, status: "ready" }], rowCount: 1 };
+        }
+        if (sql.includes("from ai_content_proposals proposal") && sql.includes("for update") && !sql.includes("approved_proposal_snapshot")) {
+          return { rows: [{ id: proposalId, batch_id: batchId, status: "selected", generation_id: generationId }], rowCount: 1 };
+        }
+        if (sql.includes("from ai_content_approved_proposal_versions approved") && sql.includes("for update")) {
+          return { rows: [{ id: approvedId }], rowCount: 1 };
+        }
+        if (sql.includes("from ai_content_proposals proposal") && sql.includes("approved_proposal_snapshot")) {
+          return { rows: [{
+            proposal_json: proposalJson,
+            approved_proposal_snapshot: { effectiveProposal: proposalJson },
+            input_snapshot_json: proposalBaseInputV2,
+            evidence_json: evidence,
+          }], rowCount: 1 };
+        }
+        if (sql.includes("pg_advisory_xact_lock")) return { rows: [], rowCount: 1 };
+        if (sql.includes("from ai_content_usage_ledger")) return { rows: [{ generation_count: 0 }], rowCount: 1 };
+        if (sql.includes("from ai_content_generation_input_snapshots") && sql.includes("for update")) return { rows: [], rowCount: 0 };
+        if (sql.includes("insert into ai_content_generation_input_snapshots")) return { rows: [{ id: "80000000-0000-4000-8000-000000000008" }], rowCount: 1 };
+        if (sql.includes("insert into ai_content_generation_outputs")) return { rows: [{ id: outputId }], rowCount: 1 };
+        if (sql.includes("insert into ai_content_output_research_snapshots")) return { rows: [], rowCount: 1 };
+        if (sql.includes("insert into ai_content_generation_jobs")) return { rows: [{ id: "81000000-0000-4000-8000-000000000008" }], rowCount: 1 };
+        if (sql.includes("insert into ai_content_usage_ledger")) return { rows: [], rowCount: 1 };
+        if (sql.includes("update ai_content_generations")) return { rows: [{
+          ...generation,
+          status: "queued",
+          current_stage: "generation",
+          generation_idempotency_key: params[3],
+        }], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const revalidateFrozenResources = vi.fn(async () => undefined);
+    const loadApprovedStyleImages = vi.fn(async () => []);
+    const snapshots = {
+      revalidateFrozenResources,
+      loadApprovedStyleImages,
+    } as unknown as AiContentSnapshotRepository;
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+
+    const result = await repository.startAiContentGenerationV3({
+      ...proposalV2Scope,
+      generationId,
+      contractVersion: "content-generation-start.v2",
+      idempotencyKey: "start-v3-1",
+      usageDate: "2026-08-01",
+      dailyGenerationLimit: 10,
+    }, snapshots, () => new Date("2026-08-01T05:00:00.000Z"));
+
+    expect(result).toMatchObject({ id: generationId, status: "queued" });
+    expect(revalidateFrozenResources).toHaveBeenCalledWith(expect.objectContaining({
+      coreVersionId: proposalBaseInputV2.brandCore.versionId,
+      product: null,
+      references: [],
+      database: client,
+    }));
+    expect(loadApprovedStyleImages).toHaveBeenCalledWith({
+      workspaceId: proposalV2Scope.workspaceId,
+      brandId: proposalV2Scope.brandId,
+    }, client);
+    const inputInsert = statements.find(({ sql }) => sql.includes("insert into ai_content_generation_input_snapshots"))!;
+    const finalInput = JSON.parse(String(inputInsert.params[4]));
+    expect(finalInput.brandCore).toEqual(proposalBaseInputV2.brandCore);
+    expect(finalInput.product).toEqual(proposalBaseInputV2.product);
+    expect(finalInput.references.selected).toEqual(proposalBaseInputV2.references);
+    expect(finalInput.researchEvidence).toEqual(evidence);
+    expect(finalInput).toMatchObject({
+      contractVersion: "content-generation-input.v3",
+      generationId,
+      brandCore: proposalBaseInputV2.brandCore,
+      product: null,
+      researchEvidence: evidence,
+      references: { selected: [], brandStyleImages: [], avatarStyleImageId: null, attachments: [] },
+      selectedProposal: { id: proposalId, title: proposalJson.title },
+      outputSettings: proposalBaseInputV2.outputSettings,
+    });
+    expect(JSON.stringify(finalInput)).not.toMatch(/wiki|faq|logo|avatarSnapshot/i);
+    expect(String(inputInsert.params[5])).toMatch(/^[0-9a-f]{64}$/);
+    expect(statements.filter(({ sql }) => sql.includes("insert into ai_content_generation_outputs"))).toHaveLength(1);
+    const jobs = statements.filter(({ sql }) => sql.includes("insert into ai_content_generation_jobs"));
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]!.sql).toContain("'generate'");
+    expect(jobs[0]!.sql).not.toContain("'analyze'");
+  });
+
+  it("returns the existing V3 generation for the same key without revalidating, charging, or creating another output", async () => {
+    const generationId = "76000000-0000-4000-8000-000000000007";
+    const proposalId = "74000000-0000-4000-8000-000000000007";
+    const batchId = "75000000-0000-4000-8000-000000000007";
+    const generation = {
+      ...row(generationId, "queued"),
+      workspace_id: proposalV2Scope.workspaceId,
+      brand_id: proposalV2Scope.brandId,
+      generation_idempotency_key: "same-final-start",
+      draft_json: {
+        origin: "proposal-v2",
+        proposalId,
+        approvedProposalVersionId: "77000000-0000-4000-8000-000000000007",
+      },
+    };
+    const statements: string[] = [];
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        statements.push(sql);
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (sql.includes("from ai_content_generations")) {
+          return { rows: [generation], rowCount: 1 };
+        }
+        if (sql.includes("from ai_content_proposals proposal") && !sql.includes("for update")) {
+          return { rows: [{ proposal_id: proposalId, batch_id: batchId }], rowCount: 1 };
+        }
+        if (sql.includes("from ai_content_proposal_batches batch") && sql.includes("for update")) {
+          return { rows: [{ id: batchId, status: "ready" }], rowCount: 1 };
+        }
+        if (sql.includes("from ai_content_proposals proposal") && sql.includes("for update")) {
+          return { rows: [{ id: proposalId, batch_id: batchId, status: "selected", generation_id: generationId }], rowCount: 1 };
+        }
+        if (sql.includes("from ai_content_approved_proposal_versions approved") && sql.includes("for update")) {
+          return { rows: [{ id: generation.draft_json.approvedProposalVersionId }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const snapshots = {
+      revalidateFrozenResources: vi.fn(),
+      loadApprovedStyleImages: vi.fn(),
+    } as unknown as AiContentSnapshotRepository;
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+
+    await expect(repository.startAiContentGenerationV3({
+      ...proposalV2Scope,
+      generationId,
+      contractVersion: "content-generation-start.v2",
+      idempotencyKey: "same-final-start",
+      usageDate: "2026-08-01",
+      dailyGenerationLimit: 0,
+    }, snapshots)).resolves.toMatchObject({ id: generationId, status: "queued" });
+
+    expect(snapshots.revalidateFrozenResources).not.toHaveBeenCalled();
+    expect(snapshots.loadApprovedStyleImages).not.toHaveBeenCalled();
+    expect(statements.some((sql) => sql.includes("ai_content_usage_ledger"))).toBe(false);
+    expect(statements.some((sql) => sql.includes("insert into ai_content_generation_outputs"))).toBe(false);
+    expect(statements.some((sql) => sql.includes("insert into ai_content_generation_jobs"))).toBe(false);
+    const batchLock = statements.findIndex((sql) => sql.includes("from ai_content_proposal_batches batch") && sql.includes("for update"));
+    const proposalLock = statements.findIndex((sql) => sql.includes("from ai_content_proposals proposal") && sql.includes("for update"));
+    const generationLock = statements.findIndex((sql) => sql.includes("from ai_content_generations") && sql.includes("for update"));
+    expect(batchLock).toBeGreaterThanOrEqual(0);
+    expect(proposalLock).toBeGreaterThan(batchLock);
+    expect(generationLock).toBeGreaterThan(proposalLock);
+    expect(statements.some((sql) => (
+      sql.includes("from ai_content_approved_proposal_versions approved") && sql.includes("for update")
+    ))).toBe(true);
+  });
+
+  it("seals the non-empty proposal-time core, product, references, and research without substituting newer resources", async () => {
+    const product = {
+      id: "82000000-0000-4000-8000-000000000008",
+      versionId: "83000000-0000-4000-8000-000000000008",
+      kind: "service" as const,
+      name: "Frozen service",
+      description: "Proposal-time approved service",
+      features: ["Frozen feature"],
+      benefits: ["Frozen benefit"],
+      cautions: [],
+      evergreenPurchaseInfo: "Always available",
+      images: [],
+    };
+    const references = [
+      {
+        referenceItemId: "84000000-0000-4000-8000-000000000008",
+        snapshotId: "85000000-0000-4000-8000-000000000008",
+        roles: ["copy_pattern" as const],
+        title: "Frozen conversion copy",
+        sourceUrl: "https://reference.example/frozen-copy",
+        capturedAt: "2026-08-01T03:00:00.000Z",
+        contentHash: "8".repeat(64),
+        text: "Proposal-time copy pattern",
+        image: null,
+      },
+      {
+        referenceItemId: "84000000-0000-4000-8000-000000000009",
+        snapshotId: "85000000-0000-4000-8000-000000000009",
+        roles: ["planning" as const, "visual_composition" as const],
+        title: "Frozen visual plan",
+        sourceUrl: "https://reference.example/frozen-visual",
+        capturedAt: "2026-08-01T03:01:00.000Z",
+        contentHash: "9".repeat(64),
+        text: "Proposal-time visual structure",
+        image: {
+          storageUrl: "https://blob.example/ai-content/snapshots/frozen-visual.webp",
+          storagePath: "ai-content/snapshots/frozen-visual.webp",
+          mimeType: "image/webp" as const,
+          checksum: "a".repeat(64),
+        },
+      },
+    ];
+    const inputSnapshot: ProposalBaseInputSnapshotV2 = {
+      ...proposalBaseInputV2,
+      product,
+      references,
+      outputSettings: {
+        outputFormat: "marketing_content",
+        channelTargets: ["instagram"],
+        aspectRatio: "4:5",
+        outputCount: 1,
+        purpose: "marketing",
+      },
+    };
+    const proposalJson = {
+      conceptKey: "frozen-service-campaign",
+      title: "Frozen service campaign",
+      informationalType: null,
+      oneLineIntent: "Present the frozen service",
+      differentiator: "Proposal-time positioning",
+      differentiationAxes: ["appeal"],
+      target: "Operators",
+      customerContext: "Needs a reliable workflow",
+      keyMessage: "Use the frozen service",
+      hook: "Start now",
+      selectionReason: "High conversion potential",
+      evidenceIds: ["73000000-0000-4000-8000-000000000007"],
+      referenceIds: references.map(({ referenceItemId }) => referenceItemId),
+      outputFormat: "marketing_content",
+      channelTargets: ["instagram"],
+      assetCount: 1,
+      outline: [{ index: 1, role: "hero", headline: "Frozen service", purpose: "Convert" }],
+      purposeDetails: {
+        kind: "marketing",
+        campaignObjective: "Generate inquiries",
+        situationAndNeed: "Operators need consistency",
+        productId: product.id,
+        targetSegment: "High-intent operators",
+        strengths: ["Frozen strength"],
+        limitations: [],
+        appeal: "Reliable execution",
+        buyingBarriers: [],
+        cta: "Contact us",
+      },
+    };
+    const fixture = v3FinalizationHarness({ inputSnapshot, proposalJson });
+
+    await fixture.repository.startAiContentGenerationV3({
+      ...proposalV2Scope,
+      generationId: fixture.generationId,
+      contractVersion: "content-generation-start.v2",
+      idempotencyKey: "frozen-marketing",
+      usageDate: "2026-08-01",
+      dailyGenerationLimit: 10,
+    }, fixture.snapshots, () => new Date("2026-08-01T05:00:00.000Z"));
+
+    expect(fixture.snapshots.revalidateFrozenResources).toHaveBeenCalledWith(expect.objectContaining({
+      coreVersionId: proposalBaseInputV2.brandCore.versionId,
+      product,
+      references,
+      database: fixture.client,
+    }));
+    const insert = fixture.statements.find(({ sql }) => sql.includes("insert into ai_content_generation_input_snapshots"))!;
+    const finalInput = JSON.parse(String(insert.params[4]));
+    expect(finalInput.brandCore).toEqual(proposalBaseInputV2.brandCore);
+    expect(finalInput.product).toEqual(product);
+    expect(finalInput.references.selected).toEqual(references);
+    expect(finalInput.references.selected.map((reference: { referenceItemId: string; roles: string[] }) => ({
+      referenceItemId: reference.referenceItemId,
+      roles: reference.roles,
+    }))).toEqual([
+      { referenceItemId: references[0]!.referenceItemId, roles: ["copy_pattern"] },
+      { referenceItemId: references[1]!.referenceItemId, roles: ["planning", "visual_composition"] },
+    ]);
+    expect(finalInput.researchEvidence).toEqual(fixture.evidence);
+  });
+
+  it("seals the exact approved style image set and an avatar selected from that set without style metadata", async () => {
+    const avatarStyleImageId = "78000000-0000-4000-8000-000000000007";
+    const styleImages = [{
+      referenceItemId: avatarStyleImageId,
+      description: "Frozen editorial lighting",
+      tags: ["editorial", "soft-light"],
+      storageUrl: "https://blob.example/ai-content/snapshots/style-avatar.webp",
+      storagePath: "ai-content/snapshots/style-avatar.webp",
+      mimeType: "image/webp" as const,
+      checksum: "7".repeat(64),
+    }, {
+      referenceItemId: "78000000-0000-4000-8000-000000000008",
+      description: "Frozen composition reference",
+      tags: ["balanced"],
+      storageUrl: "https://blob.example/ai-content/snapshots/style-layout.png",
+      storagePath: "ai-content/snapshots/style-layout.png",
+      mimeType: "image/png" as const,
+      checksum: "8".repeat(64),
+    }];
+    const fixture = v3FinalizationHarness({ avatarStyleImageId, styleImages });
+
+    await fixture.repository.startAiContentGenerationV3({
+      ...proposalV2Scope,
+      generationId: fixture.generationId,
+      contractVersion: "content-generation-start.v2",
+      idempotencyKey: "approved-style-avatar",
+      usageDate: "2026-08-01",
+      dailyGenerationLimit: 10,
+    }, fixture.snapshots, () => new Date("2026-08-01T05:00:00.000Z"));
+
+    const insert = fixture.statements.find(({ sql }) => sql.includes("insert into ai_content_generation_input_snapshots"))!;
+    const finalInput = JSON.parse(String(insert.params[4]));
+    expect(finalInput.references.brandStyleImages).toEqual(styleImages);
+    expect(finalInput.references.avatarStyleImageId).toBe(avatarStyleImageId);
+    expect(finalInput.references.brandStyleImages.every((image: Record<string, unknown>) => (
+      !("colors" in image) && !("fonts" in image) && !("notes" in image)
+    ))).toBe(true);
+  });
+
+  it("blocks final start when frozen resource eligibility revalidation fails", async () => {
+    const fixture = v3FinalizationHarness({ revalidateError: new Error("RESOURCE_NOT_AVAILABLE") });
+
+    await expect(fixture.repository.startAiContentGenerationV3({
+      ...proposalV2Scope,
+      generationId: fixture.generationId,
+      contractVersion: "content-generation-start.v2",
+      idempotencyKey: "revoked-resource",
+      usageDate: "2026-08-01",
+      dailyGenerationLimit: 10,
+    }, fixture.snapshots)).rejects.toThrow(/^RESOURCE_NOT_AVAILABLE$/);
+
+    expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generation_input_snapshots"))).toBe(false);
+    expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generation_outputs"))).toBe(false);
+  });
+
+  it("rejects an avatar from another brand or outside the current approved style set", async () => {
+    const fixture = v3FinalizationHarness({
+      avatarStyleImageId: "78000000-0000-4000-8000-000000000007",
+      styleImages: [],
+    });
+
+    await expect(fixture.repository.startAiContentGenerationV3({
+      ...proposalV2Scope,
+      generationId: fixture.generationId,
+      contractVersion: "content-generation-start.v2",
+      idempotencyKey: "foreign-avatar",
+      usageDate: "2026-08-01",
+      dailyGenerationLimit: 10,
+    }, fixture.snapshots)).rejects.toThrow(/^RESOURCE_NOT_AVAILABLE$/);
+    expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generation_input_snapshots"))).toBe(false);
+  });
+
+  it("rejects a second canonical final input with a different immutable snapshot hash", async () => {
+    const fixture = v3FinalizationHarness({
+      existingSnapshot: {
+        input_json: { contractVersion: "content-generation-input.v3", generationId: "changed" },
+        content_hash: "f".repeat(64),
+      },
+    });
+
+    await expect(fixture.repository.startAiContentGenerationV3({
+      ...proposalV2Scope,
+      generationId: fixture.generationId,
+      contractVersion: "content-generation-start.v2",
+      idempotencyKey: "hash-conflict",
+      usageDate: "2026-08-01",
+      dailyGenerationLimit: 10,
+    }, fixture.snapshots, () => new Date("2026-08-01T05:00:00.000Z")))
+      .rejects.toThrow(/^ai_content_generation_input_conflict$/);
+    expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_generation_outputs"))).toBe(false);
   });
 });

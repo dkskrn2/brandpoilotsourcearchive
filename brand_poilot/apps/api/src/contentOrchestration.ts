@@ -1,14 +1,35 @@
+import { createHash } from "node:crypto";
 import type {
+  ApprovedBrandCoreSnapshotV2,
+  ApprovedProductSnapshotV2,
   AiContentType,
   ContentChannelTarget,
   ContentOrchestrationV1,
+  ContentOrchestrationV2,
+  ContentPurposeV2,
+  ContentSeedV2,
+  FrozenReferenceSnapshotV2,
   OutputFormat,
 } from "./aiContentContracts.js";
-import type { ChannelCapability } from "./channelCapabilities.js";
+import {
+  isChannelGenerationReady,
+  type ChannelCapability,
+} from "./channelCapabilities.js";
 import type {
   ChannelExportMode,
   ChannelGenerationFormat,
 } from "./channelCatalog.js";
+import { parseContentOrchestrationV2 } from "./aiContentGenerationInputV3.js";
+import type {
+  AiContentProposalBatchRecord,
+  AiContentRepository,
+  AuthenticatedBrandScope,
+  BrandScope,
+} from "./aiContentRepository.js";
+import type {
+  ResolvedAiContentSubjectV2,
+} from "./aiContentSeedResolver.js";
+import type { AiContentSnapshotRepository } from "./aiContentSnapshotRepository.js";
 import type { DeliveryFormat } from "./types.js";
 
 const informationalStrategies = new Set([
@@ -40,9 +61,55 @@ const referenceRoles = new Set([
   "copy_pattern",
   "visual_composition",
 ]);
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export interface ProposalBaseInputSnapshotV2 {
+  contractVersion: "proposal-base-input.v2";
+  brandCore: ApprovedBrandCoreSnapshotV2;
+  subject: ResolvedAiContentSubjectV2;
+  contentInstruction: string | null;
+  product: ApprovedProductSnapshotV2 | null;
+  references: FrozenReferenceSnapshotV2[];
+  outputSettings: ContentOrchestrationV2["outputSettings"] & { purpose: ContentPurposeV2 };
+  capturedAt: string;
+}
+
+export interface OrchestrateContentProposalBatchV2Input {
+  routeBrandId: string;
+  scope: AuthenticatedBrandScope;
+  body: unknown;
+  idempotencyKey: string;
+}
+
+export interface ContentProposalOrchestrationV2Dependencies {
+  getAiContentProposalBatchV2Replay(
+    input: Parameters<AiContentRepository["getAiContentProposalBatchV2Replay"]>[0],
+  ): Promise<AiContentProposalBatchRecord | null>;
+  loadChannelCapability(
+    scope: BrandScope,
+    channel: ChannelCapability["channel"],
+  ): Promise<ChannelCapability | null>;
+  resolveAiContentSeed(seed: ContentSeedV2): Promise<ResolvedAiContentSubjectV2>;
+  snapshotRepository: AiContentSnapshotRepository;
+  createAiContentProposalBatchV2(
+    input: Parameters<AiContentRepository["createAiContentProposalBatchV2"]>[0],
+  ): Promise<AiContentProposalBatchRecord>;
+  now(): Date;
+}
 
 function invalid(): never {
   throw new Error("content_orchestration_invalid");
+}
+
+function invalidV2(): never {
+  throw new Error("content_orchestration_v2_invalid");
+}
+
+function normalizedBrandId(value: unknown): string {
+  if (typeof value !== "string") invalidV2();
+  const normalized = value.trim().toLowerCase();
+  if (!uuidPattern.test(normalized)) invalidV2();
+  return normalized;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -118,8 +185,7 @@ export function parseContentOrchestrationV1(value: unknown): ContentOrchestratio
   if (
     subject.mode === "brand_topic"
       ? !nonempty(subject.topic)
-        || !Array.isArray(subject.wikiItemIds)
-        || subject.wikiItemIds.some((item) => !nonempty(item))
+        || Object.prototype.hasOwnProperty.call(subject, "wikiItemIds")
       : subject.mode === "product_service"
         ? !nonempty(subject.productServiceId)
         : subject.mode === "new_subject"
@@ -178,7 +244,6 @@ export function parseContentOrchestrationV1(value: unknown): ContentOrchestratio
     ? {
       mode: "brand_topic" as const,
       topic: subject.topic as string,
-      wikiItemIds: clone(subject.wikiItemIds as string[]),
     }
     : subject.mode === "product_service"
       ? {
@@ -257,4 +322,86 @@ export function assertContentGenerationStartAllowed(
       throw new Error("content_orchestration_channel_capability_mismatch");
     }
   }
+}
+
+export async function orchestrateContentProposalBatchV2(
+  input: OrchestrateContentProposalBatchV2Input,
+  dependencies: ContentProposalOrchestrationV2Dependencies,
+): Promise<AiContentProposalBatchRecord> {
+  const request = parseContentOrchestrationV2(input.body);
+  const routeBrandId = normalizedBrandId(input.routeBrandId);
+  const scopeBrandId = normalizedBrandId(input.scope.brandId);
+  if (request.brandId !== routeBrandId || request.brandId !== scopeBrandId) invalidV2();
+
+  const scope = { workspaceId: input.scope.workspaceId, brandId: scopeBrandId };
+  const requestFingerprint = createHash("sha256")
+    .update(JSON.stringify(request))
+    .digest("hex");
+  const replay = await dependencies.getAiContentProposalBatchV2Replay({
+    ...scope,
+    actorUserId: input.scope.actorUserId,
+    idempotencyKey: input.idempotencyKey,
+    requestFingerprint,
+  });
+  if (replay) return replay;
+
+  const channelTarget = request.outputSettings.channelTargets[0];
+  if (channelTarget !== "blog_export") {
+    const capability = await dependencies.loadChannelCapability(scope, channelTarget);
+    if (
+      !capability
+      || capability.channel !== channelTarget
+      || !isChannelGenerationReady(capability, request.outputSettings.outputFormat)
+    ) {
+      throw new Error("content_orchestration_channel_capability_mismatch");
+    }
+  }
+
+  const subject = await dependencies.resolveAiContentSeed(request.seed);
+  const brandCore = await dependencies.snapshotRepository.loadApprovedCore(scope);
+  const product = request.purpose === "marketing"
+    ? await dependencies.snapshotRepository.loadApprovedProduct(scope, request.productId!)
+    : null;
+  let references: FrozenReferenceSnapshotV2[] = [];
+  if (request.seed.kind === "reference") {
+    const referenceSeed = request.seed;
+    if (subject.kind !== "reference" || subject.referenceIds.length !== referenceSeed.items.length) {
+      throw new Error("ai_content_seed_resolution_failed");
+    }
+    references = await dependencies.snapshotRepository.freezeReferences(
+      scope,
+      subject.referenceIds.map((referenceId, index) => ({
+        referenceId,
+        roles: [...referenceSeed.items[index]!.roles],
+      })),
+    );
+  }
+
+  const inputSnapshot: ProposalBaseInputSnapshotV2 = {
+    contractVersion: "proposal-base-input.v2",
+    brandCore,
+    subject,
+    contentInstruction: request.contentInstruction,
+    product,
+    references,
+    outputSettings: {
+      ...request.outputSettings,
+      channelTargets: [channelTarget],
+      purpose: request.purpose,
+    },
+    capturedAt: dependencies.now().toISOString(),
+  };
+
+  return dependencies.createAiContentProposalBatchV2({
+    workspaceId: input.scope.workspaceId,
+    brandId: scopeBrandId,
+    actorUserId: input.scope.actorUserId,
+    origin: "manual",
+    idempotencyKey: input.idempotencyKey,
+    requestFingerprint,
+    purpose: request.purpose,
+    outputFormat: request.outputSettings.outputFormat,
+    channelTarget,
+    inputSnapshot,
+  });
 }

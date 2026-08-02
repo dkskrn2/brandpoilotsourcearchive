@@ -15,6 +15,7 @@ export interface ExtractedSnapshot {
 export interface CrawledSnapshot extends ExtractedSnapshot {
   httpStatus: number;
   rawText: string;
+  finalUrl?: string;
 }
 
 export interface DiscoveredContentUrl {
@@ -487,7 +488,10 @@ export async function crawlSourceUrl(
     const rawText = await readBoundedResponse(response, maxResponseBytes);
     const finalUrl = target.toString();
     await dispatcher?.close();
-    return { ...extractPageSnapshot(rawText, finalUrl), httpStatus: response.status, rawText };
+    return { ...extractPageSnapshot(rawText, finalUrl), httpStatus: response.status, rawText, finalUrl };
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("crawl_request_timeout");
+    throw error;
   } finally {
     await dispatcher?.close().catch(() => undefined);
     clearTimeout(timeout);

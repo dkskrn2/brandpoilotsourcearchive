@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { put } from "@vercel/blob";
+import { get, put } from "@vercel/blob";
+import sharp from "sharp";
+import type { AiContentRenderedAsset } from "./aiContentRenderClient.js";
 import type { InstagramDeliveryFormat } from "./promptBuilder.js";
 import type { ClaimedImageJob, ImageStorage, RenderedInstagramPackage } from "./worker.js";
 
@@ -168,5 +170,101 @@ export function createBlobStorage({ token, model }: { token: string; model: stri
         throw new Error(`blob_upload_failed:${message}`);
       }
     }
+  };
+}
+
+export interface AiContentBlobStorage {
+  readOwned(storagePath: string): Promise<Buffer>;
+  uploadAsset(input: { path: string; bytes: Buffer; index: number; width: number; height: number }): Promise<AiContentRenderedAsset>;
+  uploadVideo(input: { path: string; bytes: Buffer; width: 1080; height: 1920; durationSeconds: number; videoCodec: "h264"; audioCodec: null; fps: 30 }): Promise<{ url: string; checksum: string }>;
+  uploadText(input: { path: string; text: string; contentType: "text/html; charset=utf-8" | "application/json" }): Promise<{ url: string; checksum: string }>;
+}
+
+function ownedPath(value: string): string {
+  if (!value || value.startsWith("/") || value.includes("\\") || value.split("/").some((segment) => !segment || segment === "." || segment === "..") || /^[a-z][a-z0-9+.-]*:/i.test(value)) {
+    throw new Error("ai_content_owned_blob_path_invalid");
+  }
+  return value;
+}
+
+function isBlobAlreadyExists(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const value = error as Record<string, unknown>;
+  const status = Number(value.status ?? value.statusCode);
+  const code = typeof value.code === "string" ? value.code : "";
+  const message = error instanceof Error ? error.message : "";
+  return status === 409 || /already.?exists|conflict/i.test(`${code} ${message}`);
+}
+
+async function bufferFromBlobResult(result: Awaited<ReturnType<typeof get>>): Promise<Buffer | null> {
+  if (!result || result.statusCode === 304 || !result.stream) return null;
+  return Buffer.from(await new Response(result.stream).arrayBuffer());
+}
+
+export function createAiContentBlobStorage({ token }: { token: string }): AiContentBlobStorage {
+  const read = async (storagePath: string) => {
+    const pathname = ownedPath(storagePath);
+    const result = await get(pathname, { access: "public", token, useCache: false });
+    const bytes = await bufferFromBlobResult(result);
+    return { result, bytes };
+  };
+  return {
+    async readOwned(storagePath) {
+      const { bytes } = await read(storagePath);
+      if (!bytes) throw new Error("ai_content_owned_blob_unavailable");
+      return bytes;
+    },
+    async uploadAsset(input) {
+      const pathname = ownedPath(input.path);
+      const checksum = sha256(input.bytes);
+      const existing = await read(pathname);
+      if (existing.bytes) {
+        const metadata = await sharp(existing.bytes, { failOn: "error" }).metadata().catch(() => null);
+        if (
+          sha256(existing.bytes) !== checksum || metadata?.format !== "png"
+          || metadata.width !== input.width || metadata.height !== input.height
+          || existing.result?.blob.contentType !== "image/png"
+        ) throw new Error("ai_content_asset_storage_conflict");
+        return { index: input.index, url: existing.result.blob.url, storagePath: pathname, mimeType: "image/png", width: input.width, height: input.height, checksum };
+      }
+      const uploaded = await put(pathname, input.bytes, { access: "public", token, contentType: "image/png", addRandomSuffix: false, allowOverwrite: false });
+      return { index: input.index, url: uploaded.url, storagePath: pathname, mimeType: "image/png", width: input.width, height: input.height, checksum };
+    },
+    async uploadVideo(input) {
+      const pathname = ownedPath(input.path);
+      const checksum = sha256(input.bytes);
+      const existing = await read(pathname);
+      if (existing.bytes) {
+        if (sha256(existing.bytes) !== checksum || existing.result?.blob.contentType !== "video/mp4") {
+          throw new Error("ai_content_package_storage_conflict");
+        }
+        return { url: existing.result.blob.url, checksum };
+      }
+      try {
+        const uploaded = await put(pathname, input.bytes, { access: "public", token, contentType: "video/mp4", addRandomSuffix: false, allowOverwrite: false });
+        return { url: uploaded.url, checksum };
+      } catch (error) {
+        if (!isBlobAlreadyExists(error)) throw error;
+        let concurrent: Awaited<ReturnType<typeof read>>;
+        try { concurrent = await read(pathname); } catch { throw error; }
+        if (!concurrent.bytes) throw error;
+        if (sha256(concurrent.bytes) !== checksum || concurrent.result?.blob.contentType !== "video/mp4") {
+          throw new Error("ai_content_package_storage_conflict");
+        }
+        return { url: concurrent.result.blob.url, checksum };
+      }
+    },
+    async uploadText(input) {
+      const pathname = ownedPath(input.path);
+      const bytes = Buffer.from(input.text, "utf8");
+      const checksum = sha256(bytes);
+      const existing = await read(pathname);
+      if (existing.bytes) {
+        if (sha256(existing.bytes) !== checksum) throw new Error("ai_content_package_storage_conflict");
+        return { url: existing.result!.blob.url, checksum };
+      }
+      const uploaded = await put(pathname, bytes, { access: "public", token, contentType: input.contentType, addRandomSuffix: false, allowOverwrite: false });
+      return { url: uploaded.url, checksum };
+    },
   };
 }

@@ -1,6 +1,7 @@
 import type {
   AiContentAsset,
   AiContentManifest,
+  AiContentManifestV2,
   AiContentType,
   BlogContent,
   CardNewsContent,
@@ -214,7 +215,7 @@ function parseMarketingContent(value: unknown): MarketingContent {
   };
 }
 
-export function parseAiContentManifest(
+function parseV1(
   type: AiContentType,
   value: unknown,
   requestedDimensions?: { width: number; height: number },
@@ -294,4 +295,231 @@ export function parseAiContentManifest(
     fail("ai_content_marketing_dimensions_mismatch");
   }
   return { version: "ai-content.v1", type, title, assets, content: parseMarketingContent(source.content), ...metadata };
+}
+
+type V2Asset = AiContentManifestV2["assets"][number];
+
+function exactObject(
+  value: unknown,
+  requiredKeys: readonly string[],
+  optionalKeys: readonly string[],
+  code: string,
+): UnknownObject {
+  const source = object(value, code);
+  const allowedKeys = new Set([...requiredKeys, ...optionalKeys]);
+  const keys = Object.keys(source);
+  if (keys.some((key) => !allowedKeys.has(key)) || requiredKeys.some((key) => !(key in source))) fail(code);
+  return source;
+}
+
+function hasKey(source: UnknownObject, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(source, key);
+}
+
+function parseV2Url(value: unknown): string {
+  const url = text(value, "ai_content_asset_url_invalid");
+  try {
+    if (new URL(url).protocol !== "https:") fail("ai_content_asset_url_invalid");
+  } catch {
+    fail("ai_content_asset_url_invalid");
+  }
+  return url;
+}
+
+function parseV2FileName(value: unknown): string {
+  const fileName = text(value, "ai_content_asset_file_name_invalid");
+  const decodedFileName = decodePercentEncoding(fileName);
+  if (
+    decodedFileName.includes("/")
+    || decodedFileName.includes("\\")
+    || decodedFileName.includes("..")
+    || /[\u0000-\u001f\u007f]/.test(decodedFileName)
+  ) {
+    fail("ai_content_asset_file_name_invalid");
+  }
+  return fileName;
+}
+
+function parseV2Asset(value: unknown): V2Asset {
+  const source = exactObject(
+    value,
+    ["role", "index", "url", "fileName", "mimeType"],
+    ["width", "height", "durationSeconds", "videoCodec", "fps", "audioCodec"],
+    "ai_content_asset_invalid",
+  );
+  if (!( ["slide", "inline", "html", "creative", "scene", "video"] as unknown[]).includes(source.role)) {
+    fail("ai_content_asset_role_invalid");
+  }
+  if (!( ["image/png", "text/html", "video/mp4"] as unknown[]).includes(source.mimeType)) {
+    fail("ai_content_asset_mime_type_invalid");
+  }
+  const hasWidth = hasKey(source, "width");
+  const hasHeight = hasKey(source, "height");
+  const hasVideoMetadata = ["durationSeconds", "videoCodec", "fps", "audioCodec"].some((key) => hasKey(source, key));
+  const width = hasWidth ? positiveInteger(source.width, "ai_content_asset_dimensions_invalid") : undefined;
+  const height = hasHeight ? positiveInteger(source.height, "ai_content_asset_dimensions_invalid") : undefined;
+
+  if (source.mimeType === "image/png") {
+    if (!hasWidth || !hasHeight || hasVideoMetadata) fail("ai_content_asset_dimensions_invalid");
+    return {
+      role: source.role as V2Asset["role"],
+      index: positiveInteger(source.index, "ai_content_asset_index_invalid"),
+      url: parseV2Url(source.url),
+      fileName: parseV2FileName(source.fileName),
+      mimeType: "image/png",
+      width,
+      height,
+    };
+  }
+
+  if (source.mimeType === "text/html") {
+    if (hasWidth || hasHeight || hasVideoMetadata) fail("ai_content_asset_dimensions_invalid");
+    return {
+      role: source.role as V2Asset["role"],
+      index: positiveInteger(source.index, "ai_content_asset_index_invalid"),
+      url: parseV2Url(source.url),
+      fileName: parseV2FileName(source.fileName),
+      mimeType: "text/html",
+    };
+  }
+
+  if (!hasWidth || !hasHeight || !hasKey(source, "durationSeconds") || !hasKey(source, "videoCodec") || !hasKey(source, "fps") || !hasKey(source, "audioCodec")) {
+    fail("ai_content_asset_video_metadata_invalid");
+  }
+  if (
+    typeof source.durationSeconds !== "number"
+    || !Number.isFinite(source.durationSeconds)
+    || source.durationSeconds <= 0
+    || source.videoCodec !== "h264"
+    || source.fps !== 30
+    || source.audioCodec !== null
+  ) {
+    fail("ai_content_asset_video_metadata_invalid");
+  }
+  return {
+    role: source.role as V2Asset["role"],
+    index: positiveInteger(source.index, "ai_content_asset_index_invalid"),
+    url: parseV2Url(source.url),
+    fileName: parseV2FileName(source.fileName),
+    mimeType: "video/mp4",
+    width,
+    height,
+    durationSeconds: source.durationSeconds,
+    videoCodec: "h264",
+    fps: 30,
+    audioCodec: null,
+  };
+}
+
+function continuousIndexes(assets: V2Asset[]): boolean {
+  return assets.every((asset, position) => asset.index === position + 1);
+}
+
+function parseV2(
+  type: AiContentType,
+  value: UnknownObject,
+  requestedDimensions?: { width: number; height: number },
+): AiContentManifestV2 {
+  const source = exactObject(
+    value,
+    ["version", "type", "purpose", "outputFormat", "title", "assets", "content"],
+    [],
+    "ai_content_manifest_invalid",
+  );
+  if (source.type !== type) fail("ai_content_manifest_type_mismatch");
+  if (source.purpose !== "informational" && source.purpose !== "marketing") fail("ai_content_manifest_purpose_invalid");
+  if (!( ["card_news", "blog", "reel", "marketing_content"] as unknown[]).includes(source.outputFormat)) {
+    fail("ai_content_manifest_output_format_invalid");
+  }
+  if (
+    (source.outputFormat === "card_news" && source.type !== "card_news")
+    || (source.outputFormat === "blog" && source.type !== "blog")
+    || ((source.outputFormat === "reel" || source.outputFormat === "marketing_content") && source.type !== "marketing")
+  ) {
+    fail("ai_content_manifest_output_format_invalid");
+  }
+  if (!Array.isArray(source.assets)) fail("ai_content_assets_invalid");
+  const assets = source.assets.map(parseV2Asset);
+  const content = object(source.content, "ai_content_manifest_content_invalid");
+
+  if (source.outputFormat === "card_news") {
+    if (assets.length < 1 || assets.length > 5) fail("ai_content_card_news_slide_count_invalid");
+    if (assets.some((asset) => asset.role !== "slide")) fail("ai_content_card_news_slide_role_invalid");
+    if (assets.some((asset) => asset.mimeType !== "image/png")) fail("ai_content_card_news_mime_type_invalid");
+    if (
+      requestedDimensions !== undefined
+      && assets.some((asset) => (
+        asset.width === undefined
+        || asset.height === undefined
+        || asset.width * requestedDimensions.height !== asset.height * requestedDimensions.width
+      ))
+    ) {
+      fail("ai_content_card_news_dimensions_invalid");
+    }
+    if (!continuousIndexes(assets)) fail("ai_content_asset_index_invalid");
+  } else if (source.outputFormat === "blog") {
+    const htmlAssets = assets.filter((asset) => asset.role === "html" && asset.mimeType === "text/html");
+    const inlineAssets = assets.filter((asset) => asset.role === "inline" && asset.mimeType === "image/png");
+    if (htmlAssets.length !== 1) fail("ai_content_blog_html_asset_required");
+    if (inlineAssets.length > 5) fail("ai_content_blog_inline_asset_count_invalid");
+    if (assets.length !== htmlAssets.length + inlineAssets.length) fail("ai_content_blog_asset_count_invalid");
+    if (htmlAssets[0].index !== 1) fail("ai_content_asset_index_invalid");
+    if (!continuousIndexes(inlineAssets)) fail("ai_content_asset_index_invalid");
+  } else if (source.outputFormat === "marketing_content") {
+    if (assets.length < 1 || assets.length > 5) fail("ai_content_marketing_asset_invalid");
+    if (assets.some((asset) => asset.role !== "creative" || asset.mimeType !== "image/png")) {
+      fail("ai_content_marketing_asset_invalid");
+    }
+    if (
+      requestedDimensions !== undefined
+      && assets.some((asset) => (
+        asset.width !== requestedDimensions.width || asset.height !== requestedDimensions.height
+      ))
+    ) {
+      fail("ai_content_marketing_dimensions_mismatch");
+    }
+    if (!continuousIndexes(assets)) fail("ai_content_asset_index_invalid");
+  } else {
+    const scenes = assets.filter((asset) => asset.role === "scene" && asset.mimeType === "image/png");
+    const videos = assets.filter((asset) => asset.role === "video" && asset.mimeType === "video/mp4");
+    if (videos.length !== 1) fail("ai_content_reel_video_asset_required");
+    if (scenes.length < 1 || scenes.length > 5 || assets.length !== scenes.length + videos.length) {
+      fail("ai_content_reel_asset_invalid");
+    }
+    if (!continuousIndexes(scenes)) fail("ai_content_asset_index_invalid");
+    if (scenes.some((asset) => asset.width !== 1080 || asset.height !== 1920)) fail("ai_content_reel_scene_dimensions_invalid");
+    const video = videos[0];
+    if (
+      video.index !== 1
+      || video.width !== 1080
+      || video.height !== 1920
+      || video.videoCodec !== "h264"
+      || video.fps !== 30
+      || video.audioCodec !== null
+    ) {
+      fail("ai_content_reel_video_metadata_invalid");
+    }
+    if (Math.abs((video.durationSeconds ?? 0) - scenes.length * 4) > 1 / 30) fail("ai_content_reel_duration_invalid");
+  }
+
+  return {
+    version: "ai-content.v2",
+    type: source.type as AiContentType,
+    purpose: source.purpose,
+    outputFormat: source.outputFormat as AiContentManifestV2["outputFormat"],
+    title: text(source.title, "ai_content_manifest_title_invalid"),
+    assets,
+    content,
+  };
+}
+
+export function parseAiContentManifest(
+  type: AiContentType,
+  value: unknown,
+  requestedDimensions?: { width: number; height: number },
+): AiContentManifest {
+  const source = object(value, "ai_content_manifest_invalid");
+  if (source.version === "ai-content.v1") return parseV1(type, source, requestedDimensions);
+  if (source.version === "ai-content.v2") return parseV2(type, source, requestedDimensions);
+  fail("ai_content_manifest_version_invalid");
 }

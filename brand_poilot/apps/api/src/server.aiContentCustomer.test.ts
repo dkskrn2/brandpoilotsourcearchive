@@ -400,7 +400,7 @@ describe("AI content customer routes", () => {
     const orchestration = {
       contractVersion: "content-orchestration.v1",
       contentFamily: "informational",
-      subject: { mode: "brand_topic", topic: "여름 관리", wikiItemIds: [] },
+      subject: { mode: "brand_topic", topic: "여름 관리" },
       target: { id: null, snapshot: {} },
       strategy: "how_to",
       outputFormat: "blog",
@@ -753,6 +753,105 @@ describe("AI content customer routes", () => {
       uploadExpiresAt: new Date(Date.parse(sessionExpiresAt) - 60_000).toISOString(),
       sessionExpiresAt,
     });
+    await app.close();
+  });
+
+  it.each(["product_image", "visual_reference", "supporting_image"] as const)(
+    "accepts the V3 image-only upload role %s",
+    async (role) => {
+      const { app, repository } = setup(true, { uploadSessionsEnabled: true });
+      const attachment = {
+        contractVersion: "ai-content-attachment-upload.v3",
+        role,
+        fileName: `${role}.png`,
+        mimeType: "image/png",
+        sizeBytes: 100,
+        checksum: "a".repeat(64),
+      };
+      const response = await app.inject({
+        method: "POST",
+        url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+        headers: auth,
+        payload: attachment,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(repository.createAiContentUploadSession).toHaveBeenCalledWith(expect.objectContaining({
+        workspaceId,
+        brandId,
+        generationId,
+        attachment,
+      }));
+      await app.close();
+    },
+  );
+
+  it("keeps legacy document upload behavior but rejects it on the V3 contract", async () => {
+    const { app } = setup(true, { uploadSessionsEnabled: true });
+    const v3 = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+      headers: auth,
+      payload: {
+        contractVersion: "ai-content-attachment-upload.v3",
+        role: "supporting_image",
+        fileName: "brief.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 100,
+        checksum: "b".repeat(64),
+      },
+    });
+    expect(v3.statusCode).toBe(400);
+    expect(v3.json()).toEqual({ error: "ai_content_attachment_role_mime_invalid" });
+
+    const legacy = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+      headers: auth,
+      payload: {
+        role: "document",
+        fileName: "brief.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 100,
+        checksum: "c".repeat(64),
+      },
+    });
+    expect(legacy.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("rejects an explicit unknown attachment contract before accepting a legacy role", async () => {
+    const { app, repository } = setup(true, { uploadSessionsEnabled: true });
+    const unknown = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+      headers: auth,
+      payload: {
+        contractVersion: "ai-content-attachment-upload.v99",
+        role: "document",
+        fileName: "brief.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 100,
+        checksum: "d".repeat(64),
+      },
+    });
+
+    expect(unknown.statusCode).toBe(400);
+    expect(unknown.json()).toEqual({ error: "ai_content_contract_version_unsupported" });
+    expect(repository.createAiContentUploadSession).not.toHaveBeenCalled();
+
+    const legacy = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/attachments/token`,
+      headers: auth,
+      payload: {
+        role: "document",
+        fileName: "brief.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 100,
+        checksum: "e".repeat(64),
+      },
+    });
+    expect(legacy.statusCode).toBe(200);
     await app.close();
   });
 

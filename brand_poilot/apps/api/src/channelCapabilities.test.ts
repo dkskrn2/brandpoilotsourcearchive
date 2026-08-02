@@ -2,6 +2,7 @@ import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { Pool } from "pg";
 import {
   buildChannelCapabilities,
+  isChannelGenerationReady,
   type ChannelCapability,
   type InstagramChannelCapabilityContext,
 } from "./channelCapabilities.js";
@@ -23,10 +24,11 @@ const brandId = "11111111-1111-1111-1111-111111111111";
 function channel(
   name: Channel,
   status: ChannelStatus = "not_connected",
+  enabled = status === "connected",
 ): ChannelDto {
   return {
     channel: name,
-    enabled: status === "connected",
+    enabled,
     oauthState: status === "connected"
       ? "connected"
       : status === "not_connected"
@@ -89,9 +91,10 @@ describe("channel capability aggregate", () => {
     expectTypeOf<ChannelCapability>().toEqualTypeOf<{
       channel: "instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok";
       catalogStatus: "available" | "planned";
+      enabled: boolean;
       connectionStatus: ChannelStatus;
       canGenerate: boolean;
-      generationFormats: Array<"card_news" | "blog" | "single_image" | "channel_text">;
+      generationFormats: Array<"card_news" | "blog" | "reel" | "marketing_content" | "single_image" | "channel_text">;
       exportModes: Array<"image" | "html" | "text">;
       publishModes: DeliveryFormat[];
       readiness: "ready" | "needs_connection" | "needs_permission" | "not_supported";
@@ -109,9 +112,10 @@ describe("channel capability aggregate", () => {
     expect(result[0]).toEqual({
       channel: "instagram",
       catalogStatus: "available",
+      enabled: false,
       connectionStatus: "not_connected",
       canGenerate: true,
-      generationFormats: ["card_news", "single_image"],
+      generationFormats: ["card_news", "single_image", "reel", "marketing_content"],
       exportModes: ["image"],
       publishModes: [],
       readiness: "needs_connection",
@@ -241,9 +245,10 @@ describe("channel capability aggregate", () => {
     expect(result[0]).toEqual({
       channel: "instagram",
       catalogStatus: "available",
+      enabled: true,
       connectionStatus: "connected",
       canGenerate: true,
-      generationFormats: ["card_news", "single_image"],
+      generationFormats: ["card_news", "single_image", "reel", "marketing_content"],
       exportModes: ["image"],
       publishModes: [],
       readiness: "not_supported",
@@ -261,6 +266,7 @@ describe("channel capability aggregate", () => {
     expect(result[1]).toEqual({
       channel: "threads",
       catalogStatus: "available",
+      enabled: true,
       connectionStatus: "connected",
       canGenerate: true,
       generationFormats: ["channel_text"],
@@ -269,6 +275,42 @@ describe("channel capability aggregate", () => {
       readiness: "not_supported",
       reasonCode: "provider_not_implemented",
     });
+  });
+
+  it("requires enabled, connected, ready, implemented, available, and format-compatible state for generation", () => {
+    const enabled = buildChannelCapabilities({
+      channels: [channel("instagram", "connected", true)],
+      instagramFormats: defaultFormats,
+      instagramContext: instagramContext(),
+    })[0]!;
+    const disabled = buildChannelCapabilities({
+      channels: [channel("instagram", "connected", false)],
+      instagramFormats: defaultFormats,
+      instagramContext: instagramContext(),
+    })[0]!;
+    const disconnected = buildChannelCapabilities({
+      channels: [channel("instagram", "not_connected", true)],
+      instagramFormats: defaultFormats,
+      instagramContext: instagramContext({
+        channelStatus: "not_connected",
+        credentialId: null,
+        credentialStatus: null,
+        scopes: [],
+      }),
+    })[0]!;
+    const planned = buildChannelCapabilities({
+      channels: [channel("x", "connected", true)],
+      instagramFormats: defaultFormats,
+      instagramContext: instagramContext(),
+    })[2]!;
+
+    expect(enabled.enabled).toBe(true);
+    expect(isChannelGenerationReady(enabled, "card_news")).toBe(true);
+    expect(isChannelGenerationReady(enabled, "blog")).toBe(false);
+    expect(disabled).toMatchObject({ enabled: false, connectionStatus: "connected" });
+    expect(isChannelGenerationReady(disabled, "card_news")).toBe(false);
+    expect(isChannelGenerationReady(disconnected, "card_news")).toBe(false);
+    expect(isChannelGenerationReady(planned, "channel_text")).toBe(false);
   });
 
   it("never promotes catalog-only adapters to supported publishing", () => {

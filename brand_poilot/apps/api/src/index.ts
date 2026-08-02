@@ -1,6 +1,12 @@
 import "dotenv/config";
 import Fastify from "fastify";
-import { del as deleteBlob, put as putBlob } from "@vercel/blob";
+import {
+  BlobNotFoundError,
+  del as deleteBlob,
+  get as getBlob,
+  head as headBlob,
+  put as putBlob,
+} from "@vercel/blob";
 import { createPool } from "./db.js";
 import { createRepository } from "./repository.js";
 import { resolveServerHost } from "./runtime.js";
@@ -14,6 +20,11 @@ import { registerAdminRoutes } from "./adminServer.js";
 import { createBrandIntelligenceRepository } from "./brandIntelligenceRepository.js";
 import { loadApiRuntimeConfig } from "./runtimeConfig.js";
 import { createShutdown, logShutdownFailure } from "./shutdown.js";
+import { createAiContentSnapshotBlob, type AiContentSnapshotStorage } from "./aiContentSnapshotBlob.js";
+import { createAiContentSnapshotRepository } from "./aiContentSnapshotRepository.js";
+import { resolveAiContentSeed } from "./aiContentSeedResolver.js";
+import { crawlSourceUrl } from "./sourceCrawler.js";
+import { buildChannelCapabilities } from "./channelCapabilities.js";
 
 const runtimeConfig = loadApiRuntimeConfig();
 const port = Number(process.env.PORT ?? 4000);
@@ -25,6 +36,113 @@ const repository = createRepository(pool, {
     enabled: runtimeConfig.instagramPublishEnabled,
   },
 });
+const ownedBlobPath = (value: string) => {
+  const normalized = value.trim();
+  if (
+    !normalized
+    || /^https?:\/\//i.test(normalized)
+    || /^[a-z][a-z0-9+.-]*:\/\//i.test(normalized)
+    || normalized.startsWith("/")
+    || normalized.includes("\\")
+    || normalized.split("/").some((part) => !part || part === "." || part === "..")
+  ) {
+    throw new Error("RESOURCE_NOT_AVAILABLE");
+  }
+  return normalized;
+};
+const snapshotStorage: AiContentSnapshotStorage = {
+  async stat(storagePath) {
+    const pathname = ownedBlobPath(storagePath);
+    try {
+      const metadata = await headBlob(pathname, {
+        token: blobReadWriteToken,
+        abortSignal: AbortSignal.timeout(15_000),
+      });
+      if (metadata.pathname !== pathname) throw new Error("RESOURCE_NOT_AVAILABLE");
+      return {
+        storageUrl: metadata.url,
+        storagePath: metadata.pathname,
+        sizeBytes: metadata.size,
+      };
+    } catch (error) {
+      if (error instanceof BlobNotFoundError) return null;
+      throw error;
+    }
+  },
+  async read(storagePath, { maxBytes }) {
+    const pathname = ownedBlobPath(storagePath);
+    const result = await getBlob(pathname, {
+      token: blobReadWriteToken,
+      access: "public",
+      useCache: false,
+      abortSignal: AbortSignal.timeout(15_000),
+    });
+    if (
+      !result
+      || result.statusCode !== 200
+      || result.blob.pathname !== pathname
+      || result.blob.size > maxBytes
+    ) {
+      throw new Error("RESOURCE_NOT_AVAILABLE");
+    }
+    return (async function* boundedOwnedBlob() {
+      const reader = result.stream.getReader();
+      let size = 0;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) return;
+          size += value.byteLength;
+          if (size > maxBytes) {
+            await reader.cancel();
+            throw new Error("RESOURCE_NOT_AVAILABLE");
+          }
+          yield value;
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    })();
+  },
+  async put(storagePath, bytes, { contentType }) {
+    const pathname = ownedBlobPath(storagePath);
+    const stored = await putBlob(pathname, Buffer.from(bytes), {
+      token: blobReadWriteToken,
+      access: "public",
+      contentType,
+      addRandomSuffix: false,
+      allowOverwrite: false,
+    });
+    if (stored.pathname !== pathname) throw new Error("RESOURCE_NOT_AVAILABLE");
+    return { storageUrl: stored.url, storagePath: stored.pathname, sizeBytes: bytes.byteLength };
+  },
+};
+const aiContentSnapshotRepository = createAiContentSnapshotRepository(
+  pool,
+  createAiContentSnapshotBlob(snapshotStorage),
+);
+const aiContentProposalV2 = {
+  async loadChannelCapability(scope: { brandId: string }, channel: Parameters<typeof buildChannelCapabilities>[0]["channels"][number]["channel"]) {
+    const [channels, instagramSettings, instagramContext] = await Promise.all([
+      repository.listChannels(scope.brandId),
+      repository.listInstagramFormats(scope.brandId),
+      repository.getInstagramChannelCapabilityContext(scope.brandId),
+    ]);
+    return buildChannelCapabilities({
+      channels,
+      instagramFormats: instagramSettings.formats,
+      instagramContext,
+    }).find((capability) => capability.channel === channel) ?? null;
+  },
+  resolveAiContentSeed: (seed: Parameters<typeof resolveAiContentSeed>[0]) => resolveAiContentSeed(seed, {
+    crawlUrl: crawlSourceUrl,
+    now: () => new Date(),
+  }),
+  snapshotRepository: aiContentSnapshotRepository,
+  getAiContentProposalBatchV2Replay: repository.getAiContentProposalBatchV2Replay.bind(repository),
+  createAiContentProposalBatchV2: repository.createAiContentProposalBatchV2.bind(repository),
+  now: () => new Date(),
+};
 const adminRepository = createAdminRepository(pool);
 const brandIntelligenceRepository = createBrandIntelligenceRepository(pool, {
   deleteBlobs: (urls) => deleteBlob(urls, { token: blobReadWriteToken }),
@@ -39,6 +157,7 @@ const serverOptions: Parameters<typeof createServer>[0] & {
     runtimePolicy: runtimeConfig.http,
     readinessPolicy: runtimeConfig.readiness,
     repository,
+    aiContentProposalV2,
     brandLogoService,
     workerApiToken: process.env.WORKER_API_TOKEN,
     contentProposalWorkerApiToken: process.env.CONTENT_PROPOSAL_WORKER_API_TOKEN,

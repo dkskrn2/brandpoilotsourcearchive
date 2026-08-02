@@ -17,6 +17,7 @@ import type {
 export interface ChannelCapability {
   channel: "instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok";
   catalogStatus: "available" | "planned";
+  enabled: boolean;
   connectionStatus: ChannelStatus;
   canGenerate: boolean;
   generationFormats: ChannelGenerationFormat[];
@@ -81,6 +82,7 @@ export function buildChannelCapabilities(
     const base = {
       channel: catalog.channel,
       catalogStatus: catalog.catalogStatus,
+      enabled: connection.enabled,
       connectionStatus: adapterUnsupported ? "not_connected" as const : connection.status,
       canGenerate: catalog.generationReady,
       generationFormats: [...catalog.generationFormats],
@@ -109,4 +111,16 @@ export function buildChannelCapabilities(
         : "provider_not_implemented",
     };
   });
+}
+
+export function isChannelGenerationReady(
+  capability: ChannelCapability,
+  requestedFormat: ChannelGenerationFormat,
+): boolean {
+  return capability.catalogStatus === "available"
+    && capability.enabled
+    && capability.connectionStatus === "connected"
+    && capability.canGenerate
+    && capability.readiness === "ready"
+    && capability.generationFormats.includes(requestedFormat);
 }

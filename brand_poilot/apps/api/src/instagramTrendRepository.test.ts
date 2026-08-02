@@ -23,6 +23,8 @@ function poolWith(handler: (sql: string, values: unknown[]) => Promise<Result> |
 }
 
 const now = new Date("2026-07-15T03:00:00.000Z");
+const actorUserId = "22222222-2222-4222-8222-222222222222";
+const referenceItemId = "33333333-3333-4333-8333-333333333333";
 const connected = {
   workspace_id: "workspace-1",
   brand_channel_id: "channel-1",
@@ -587,7 +589,7 @@ describe("createInstagramTrendRepository", () => {
   it("creates one reference source and snapshot and returns it on duplicate save", async () => {
     let saved = false;
     let sourceCreated = false;
-    const fixture = poolWith((sql) => {
+    const fixture = poolWith((sql, values) => {
       if (sql.includes("select workspace_id from brands")) return result([{ workspace_id: "workspace-1" }]);
       if (sql.includes("from instagram_trend_media") && sql.includes("for update")) return result([{ ...media, id: "media-1" }]);
       if (sql.includes("from source_urls") && sql.includes("url_hash")) return result(sourceCreated ? [{ id: "source-1", brand_id: "brand-1", source_type: "reference", url: media.permalink, title: media.caption, status: "crawled", enabled: true, last_crawled_at: now, last_error: null }] : []);
@@ -601,17 +603,60 @@ describe("createInstagramTrendRepository", () => {
         return result([{ id: "saved-1" }]);
       }
       if (sql.includes("select id") && sql.includes("from brand_trend_saved_media")) return result([{ id: "saved-1" }]);
-      if (sql.includes("upsert_brand_trend_saved_reference")) return result([{ reference_item_id: "reference-1" }]);
+      if (sql.includes("upsert_brand_trend_saved_reference")) {
+        expect(sql.replace(/\s+/g, " ").trim()).toBe(
+          "select upsert_brand_trend_saved_reference($1, $2) as reference_item_id",
+        );
+        expect(values).toEqual(["saved-1", actorUserId]);
+        return result([{ reference_item_id: referenceItemId }]);
+      }
       if (sql.includes("insert into source_snapshots")) return result([{ id: "snapshot-1" }]);
       if (sql.includes("select id, brand_id, source_type")) return result([{ id: "source-1", brand_id: "brand-1", source_type: "reference", url: media.permalink, title: media.caption, status: "crawled", enabled: true, last_crawled_at: now, last_error: null }]);
       throw new Error(`unexpected query: ${sql}`);
     });
     const repository = createInstagramTrendRepository({ pool: fixture.pool, decryptCredential: String, fetchTopMedia: vi.fn() as any, now: () => now });
-    const first = await repository.saveInstagramTrendSource("brand-1", "media-1");
-    const second = await repository.saveInstagramTrendSource("brand-1", "media-1");
-    expect(first.alreadySaved).toBe(false);
-    expect(second.alreadySaved).toBe(true);
+    const first = await repository.saveInstagramTrendSource("brand-1", "media-1", actorUserId);
+    const second = await repository.saveInstagramTrendSource("brand-1", "media-1", actorUserId);
+    expect(first).toEqual({
+      source: expect.objectContaining({ id: "source-1", sourceType: "reference" }),
+      referenceItemId,
+      alreadySaved: false,
+    });
+    expect(second).toEqual({
+      source: expect.objectContaining({ id: "source-1", sourceType: "reference" }),
+      referenceItemId,
+      alreadySaved: true,
+    });
+    expect(fixture.statements.filter(({ sql, values }) => {
+      if (!sql.includes("upsert_brand_trend_saved_reference")) return false;
+      expect(values).toEqual(["saved-1", actorUserId]);
+      return true;
+    })).toHaveLength(2);
     expect(fixture.statements.filter(({ sql }) => sql.includes("insert into source_snapshots"))).toHaveLength(1);
+  });
+
+  it.each([
+    ["missing row", []],
+    ["missing ID", [{}]],
+    ["empty ID", [{ reference_item_id: "" }]],
+    ["non-UUID ID", [{ reference_item_id: "reference-1" }]],
+  ])("rolls back with a stable failure for a %s from the canonical reference upsert", async (_case, referenceRows) => {
+    const fixture = poolWith((sql) => {
+      if (sql.includes("select workspace_id from brands")) return result([{ workspace_id: "workspace-1" }]);
+      if (sql.includes("from instagram_trend_media") && sql.includes("for update")) return result([{ ...media, id: "media-1" }]);
+      if (sql.includes("from source_urls") && sql.includes("url_hash")) return result([{ id: "source-1", brand_id: "brand-1", source_type: "reference", url: media.permalink, title: media.caption, status: "crawled", enabled: true, last_crawled_at: now, last_error: null }]);
+      if (sql.includes("update source_urls") && sql.includes("disabled_at = null")) return result([{ id: "source-1", brand_id: "brand-1", source_type: "reference", url: media.permalink, title: media.caption, status: "crawled", enabled: true, last_crawled_at: now, last_error: null }]);
+      if (sql.includes("insert into brand_trend_saved_media")) return result([{ id: "saved-1" }]);
+      if (sql.includes("upsert_brand_trend_saved_reference")) return result(referenceRows);
+      if (sql.includes("insert into source_snapshots")) return result([{ id: "snapshot-1" }]);
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const repository = createInstagramTrendRepository({ pool: fixture.pool, decryptCredential: String, fetchTopMedia: vi.fn() as any, now: () => now });
+
+    await expect(repository.saveInstagramTrendSource("brand-1", "media-1", actorUserId))
+      .rejects.toThrow("instagram_trend_source_save_failed");
+    expect(fixture.statements.map(({ sql }) => sql.trim().toLowerCase())).toContain("rollback");
+    expect(fixture.statements.map(({ sql }) => sql.trim().toLowerCase())).not.toContain("commit");
   });
 
   it("lists a brand archive newest-first from saved media and source infrastructure", async () => {

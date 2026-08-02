@@ -9,12 +9,14 @@ import type {
   AiContentJobRecord,
   AiContentAttachmentRecord,
   AiContentReferenceRecord,
+  AiContentReferenceSeedRecord,
   AiContentProposalBatchRecord,
   AiContentProposalRecord,
   AiContentDraftReferenceRecord,
   AiContentUsageRecord,
   AiContentBrandContextRecord,
   AppealRecord,
+  AuthenticatedBrandScope,
   AudienceRecord,
   BrandGenerationScope,
   BrandScope,
@@ -23,13 +25,17 @@ import type {
   SubjectAnalysisBrandContext,
   SubjectAnalysisWorkerLease,
   AiContentRevisionAction,
+  CreateAiContentProposalBatchV2Input,
 } from "./aiContentRepository.js";
 
 export type AiContentGenerationDto = AiContentGenerationRecord;
+export type AiContentReferenceSeedDto = AiContentReferenceSeedRecord;
+export type AiContentReferenceSeedListDto = AiContentReferenceSeedDto[];
 import type { LoadSubjectEvidenceInput, SubjectEvidenceAttachment } from "./aiContentSubjectEvidence.js";
 import type {
   AiContentType,
   CompleteAiContentJobInput,
+  ContentOutputFormatV2,
   CreateAiContentAnalysisInput,
   FailAiContentJobInput,
   StartAiContentGenerationInput,
@@ -237,6 +243,7 @@ export interface InstagramTrendFavoriteInput {
 
 export interface InstagramTrendSaveSourceDto {
   source: SourceDto;
+  referenceItemId: string;
   alreadySaved: boolean;
 }
 
@@ -1090,6 +1097,12 @@ export interface ApiRepository
   }): Promise<SubjectAnalysisWorkerLease | null>;
   createAiContentAnalysis(input: BrandScope & { actorUserId: string } & CreateAiContentAnalysisInput): Promise<AiContentGenerationRecord>;
   updateAiContentDraft(input: BrandGenerationScope & { actorUserId: string } & UpdateAiContentDraftInput): Promise<AiContentGenerationRecord>;
+  updateAiContentFinalizationDraft(input: BrandGenerationScope & { actorUserId: string; draft: import("./aiContentContracts.js").ContentFinalizationDraftV2 }): Promise<AiContentGenerationRecord>;
+  startAiContentGenerationV3(
+    input: BrandGenerationScope & { actorUserId: string; usageDate: string; dailyGenerationLimit: number } & import("./aiContentContracts.js").ContentGenerationStartV2,
+    snapshots: import("./aiContentSnapshotRepository.js").AiContentSnapshotRepository,
+    now?: () => Date,
+  ): Promise<AiContentGenerationRecord>;
   startAiContentGeneration(input: BrandGenerationScope & { actorUserId: string } & StartAiContentGenerationInput & { usageDate: string; dailyGenerationLimit: number }): Promise<AiContentGenerationRecord>;
   listAiContentGenerations(input: BrandScope): Promise<AiContentGenerationRecord[]>;
   getAiContentGeneration(input: BrandGenerationScope): Promise<AiContentGenerationRecord | null>;
@@ -1100,6 +1113,11 @@ export interface ApiRepository
     formats?: string[];
     tags?: string[];
   }): Promise<AiContentReferenceRecord[]>;
+  listAiContentReferenceSeeds(input: BrandScope & {
+    primaryCategory: string;
+    format: ContentOutputFormatV2;
+    limit: number;
+  }): Promise<AiContentReferenceSeedRecord[]>;
   listBrandAudiences(input: BrandScope): Promise<AudienceRecord[]>;
   saveBrandAudience(input: SaveAudienceInput): Promise<AudienceRecord>;
   listBrandAppeals(input: BrandScope): Promise<AppealRecord[]>;
@@ -1110,6 +1128,12 @@ export interface ApiRepository
   heartbeatAiContentJob(input: { jobId: string; workerId: string; leaseToken: string; leaseSeconds: number }): Promise<boolean>;
   completeAiContentJob(input: CompleteAiContentJobInput): Promise<AiContentGenerationRecord>;
   failAiContentJob(input: FailAiContentJobInput): Promise<AiContentGenerationRecord>;
+  claimAiContentRenderJob?(input: { workerId: string; leaseSeconds: number }): Promise<import("./aiContentRenderJobs.js").AiContentRenderJob | null>;
+  heartbeatAiContentRenderJob?(input: import("./aiContentRenderJobs.js").RenderLeaseInput): Promise<boolean>;
+  completeAiContentRenderAsset?(input: import("./aiContentRenderJobs.js").RenderAssetCompletion): Promise<void>;
+  completeAiContentRenderPackage?(input: import("./aiContentRenderJobs.js").RenderPackageCompletion): Promise<AiContentGenerationRecord>;
+  failAiContentRenderJob?(input: import("./aiContentRenderJobs.js").RenderFailure): Promise<void>;
+  saveAiContentOutputResearch?(input: { jobId: string; outputId: string; workerId: string; leaseToken: string; evidence: Record<string, unknown> }): Promise<void>;
   retryAiContentOutput(input: BrandScope & { outputId: string }): Promise<AiContentGenerationRecord>;
   reviseAiContentOutput(input: BrandScope & {
     outputId: string;
@@ -1128,6 +1152,11 @@ export interface ApiRepository
     idempotencyKey: string;
     request: import("./aiContentContracts.js").ContentProposalRequestV1;
   }): Promise<AiContentProposalBatchRecord>;
+  createAiContentProposalBatchV2(input: CreateAiContentProposalBatchV2Input): Promise<AiContentProposalBatchRecord>;
+  getAiContentProposalBatchV2Replay(input: AuthenticatedBrandScope & {
+    idempotencyKey: string;
+    requestFingerprint: string;
+  }): Promise<AiContentProposalBatchRecord | null>;
   getAiContentProposalBatch?(input: BrandScope & { batchId: string }): Promise<AiContentProposalBatchRecord | null>;
   listAiContentProposals?(input: BrandScope & {
     status: "suggested" | "selected" | "dismissed";

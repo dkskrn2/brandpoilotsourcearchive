@@ -118,6 +118,19 @@ function outputCopy(manifest: AiContentManifest) {
     };
   }
   if (manifest.type === "marketing") {
+    if (manifest.version === "ai-content.v2" && manifest.outputFormat === "marketing_content") {
+      const caption = text(manifest.content.caption);
+      const cta = text(manifest.content.cta);
+      const hashtags = Array.isArray(manifest.content.hashtags)
+        ? manifest.content.hashtags.filter((tag): tag is string => typeof tag === "string")
+        : [];
+      return {
+        angle: caption || manifest.title,
+        previewBody: caption,
+        draft: { title: manifest.title, caption, hashtags, cta },
+        output: { caption, hashtags, cta },
+      };
+    }
     const content = manifest.content as MarketingContent;
     return {
       angle: text(content.body) || content.headline,
@@ -134,6 +147,16 @@ function outputCopy(manifest: AiContentManifest) {
     };
   }
   throw new Error("ai_content_publish_type_not_supported");
+}
+
+function assertPublishableManifest(manifest: AiContentManifest) {
+  if (manifest.version !== "ai-content.v2") return;
+  if (manifest.outputFormat !== "card_news" && manifest.outputFormat !== "marketing_content") {
+    throw new Error("ai_content_publish_type_not_supported");
+  }
+  if (manifest.assets.some((asset) => asset.mimeType !== "image/png")) {
+    throw new Error("ai_content_publish_type_not_supported");
+  }
 }
 
 function legacyAssets(manifest: AiContentManifest, target: AiContentPublishTarget) {
@@ -208,10 +231,20 @@ async function storeManifestArtifact(client: PoolClient, input: BrandOutputScope
     `insert into storage_artifacts (workspace_id, brand_id, artifact_type, bucket, path, public_url, mime_type, byte_size)
      values ($1, $2, 'generated_manifest', 'vercel-blob', $3, $4, 'application/json', 0)
      on conflict (bucket, path) do update set public_url = excluded.public_url
-     returning id`,
+       where storage_artifacts.workspace_id = excluded.workspace_id
+         and storage_artifacts.brand_id = excluded.brand_id
+     returning id, workspace_id, brand_id`,
     [input.workspaceId, input.brandId, artifactPath, String(manifestUrlValue)],
   );
-  return String(artifact.rows[0].id);
+  const row = artifact.rows[0];
+  if (
+    !row
+    || String(row.workspace_id).toLowerCase() !== input.workspaceId.toLowerCase()
+    || String(row.brand_id).toLowerCase() !== input.brandId.toLowerCase()
+  ) {
+    throw new Error("ai_content_manifest_artifact_ownership_conflict");
+  }
+  return String(row.id);
 }
 
 async function enqueueReelRenderJob(
@@ -358,8 +391,14 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
       if (output.status !== "completed") throw new Error("ai_content_output_not_completed");
 
       const manifest = parseAiContentManifest(output.type, output.artifact_manifest_json);
+      assertPublishableManifest(manifest);
       const normalizedTargets = input.targets.map((target) => {
-        const resolution = resolveAiContentPublishTarget({ type: output.type, assetCount: manifest.assets.length }, target);
+        const adapterType = manifest.version === "ai-content.v2"
+          && manifest.outputFormat === "marketing_content"
+          && manifest.assets.length > 1
+          ? "card_news"
+          : output.type;
+        const resolution = resolveAiContentPublishTarget({ type: adapterType, assetCount: manifest.assets.length }, target);
         if (!resolution.supported) throw new Error(resolution.reason);
         return resolution.target;
       });

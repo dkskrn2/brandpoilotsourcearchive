@@ -75,6 +75,7 @@ const apiCapabilities: ChannelCapability[] = [
   {
     channel: "instagram",
     catalogStatus: "available",
+    enabled: true,
     connectionStatus: "connected",
     canGenerate: true,
     generationFormats: ["card_news", "single_image"],
@@ -86,6 +87,7 @@ const apiCapabilities: ChannelCapability[] = [
   {
     channel: "threads",
     catalogStatus: "available",
+    enabled: true,
     connectionStatus: "not_connected",
     canGenerate: true,
     generationFormats: ["channel_text"],
@@ -97,6 +99,7 @@ const apiCapabilities: ChannelCapability[] = [
   ...(["x", "linkedin"] as const).map((channel): ChannelCapability => ({
     channel,
     catalogStatus: "planned",
+    enabled: true,
     connectionStatus: "not_connected",
     canGenerate: false,
     generationFormats: [],
@@ -108,6 +111,7 @@ const apiCapabilities: ChannelCapability[] = [
   ...(["youtube", "tiktok"] as const).map((channel): ChannelCapability => ({
     channel,
     catalogStatus: "planned",
+    enabled: true,
     connectionStatus: "not_connected",
     canGenerate: false,
     generationFormats: [],

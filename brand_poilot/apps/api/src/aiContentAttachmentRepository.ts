@@ -1,6 +1,10 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import type { AttachmentUploadTokenInput, LegacyConfirmAttachmentInput } from "./aiContentContracts.js";
+import type {
+  AttachmentUploadTokenInput,
+  LegacyConfirmAttachmentInput,
+  V3AttachmentUploadTokenInput,
+} from "./aiContentContracts.js";
 import { AI_CONTENT_TOTAL_ATTACHMENT_LIMIT, buildAiContentUploadSessionPath } from "./aiContentUpload.js";
 import type {
   AiContentAttachmentRecord,
@@ -11,6 +15,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const CONFIRM_TIMEOUT_MS = 15_000;
 
 type Queryable = Pick<PoolClient, "query">;
+type ContentUploadAttachment = AttachmentUploadTokenInput | V3AttachmentUploadTokenInput;
+type ContentUploadRole = ContentUploadAttachment["role"];
 
 export interface AiContentUploadSessionRecord {
   id: string;
@@ -19,7 +25,7 @@ export interface AiContentUploadSessionRecord {
   brandId: string;
   createdByUserId: string;
   nonce: string;
-  role: AttachmentUploadTokenInput["role"];
+  role: ContentUploadRole;
   fileName: string;
   mimeType: string;
   sizeBytes: number;
@@ -35,7 +41,7 @@ export interface AiContentUploadVerificationSession {
   generationId: string;
   workspaceId: string;
   brandId: string;
-  role: AttachmentUploadTokenInput["role"];
+  role: ContentUploadRole;
   fileName: string;
   mimeType: string;
   sizeBytes: number;
@@ -56,7 +62,7 @@ export interface AiContentAttachmentLifecycleRepository {
   createAiContentUploadSession(
     input: BrandGenerationScope & {
       createdByUserId: string;
-      attachment: AttachmentUploadTokenInput;
+      attachment: ContentUploadAttachment;
     },
   ): Promise<AiContentUploadSessionRecord>;
   failAiContentUploadSession(

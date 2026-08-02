@@ -1,12 +1,94 @@
-import type { ChannelConnection, ChannelType, DeliveryFormat, PublishArtifact } from "../../types";
+import type {
+  AiContentReferenceSeed,
+  ChannelConnection,
+  ChannelType,
+  DeliveryFormat,
+  PublishArtifact,
+} from "../../types";
 
 export type AiContentType = "card_news" | "blog" | "marketing";
 export type AiContentWizardStep = 1 | 2 | 3 | 4 | 5;
 export type ContentCreationPhase = "setup" | "proposal_selection" | "generating" | "reviewing";
 export type ContentSetupSection = "intent" | "sources" | "delivery";
 export type ContentFamily = "informational" | "marketing";
+export type ContentPurposeV2 = ContentFamily;
+export type ContentOutputFormatV2 = "card_news" | "blog" | "reel" | "marketing_content";
 export type ContentOutputFormat = "card_news" | "blog" | "single_image" | "channel_text";
 export type ContentChannelTarget = "instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok" | "blog_export";
+export type ContentReferenceRoleV2 = "planning" | "copy_pattern" | "visual_composition";
+export type ContentAspectRatioV2 = "1:1" | "4:5" | "16:9" | "9:16";
+
+export interface ContentReferenceSelectionV2 {
+  referenceId: string;
+  roles: ContentReferenceRoleV2[];
+}
+
+export type ContentSeedV2 =
+  | { kind: "topic_text"; title: string }
+  | { kind: "topic_url"; url: string }
+  | { kind: "reference"; items: ContentReferenceSelectionV2[] };
+
+export interface ContentOrchestrationV2 {
+  contractVersion: "content-orchestration.v2";
+  brandId: string;
+  purpose: ContentPurposeV2;
+  seed: ContentSeedV2;
+  contentInstruction: string | null;
+  productId: string | null;
+  outputSettings: {
+    outputFormat: ContentOutputFormatV2;
+    channelTargets: [ContentChannelTarget];
+    aspectRatio: ContentAspectRatioV2 | null;
+    outputCount: 1;
+  };
+}
+
+export interface ContentProposalV2 {
+  conceptKey: string;
+  title: string;
+  informationalType: "problem_solution" | "how_to" | "checklist" | "comparison" | "trend_insight" | "q_and_a" | "myth_fact" | null;
+  oneLineIntent: string;
+  differentiator: string;
+  differentiationAxes: Array<"target" | "situation" | "question" | "appeal" | "narrative" | "informational_type">;
+  target: string;
+  customerContext: string;
+  keyMessage: string;
+  hook: string;
+  selectionReason: string;
+  evidenceIds: string[];
+  referenceIds: string[];
+  outputFormat: ContentOutputFormatV2;
+  channelTargets: [ContentChannelTarget];
+  assetCount: number | null;
+  outline: Array<{ index: number; role: string; headline: string; purpose: string }>;
+  purposeDetails:
+    | {
+        kind: "informational";
+        question: string;
+        value: string;
+        whyNow: string;
+        learningPoints: string[];
+      }
+    | {
+        kind: "marketing";
+        campaignObjective: string;
+        situationAndNeed: string;
+        productId: string;
+        targetSegment: string;
+        strengths: string[];
+        limitations: string[];
+        appeal: string;
+        buyingBarriers: string[];
+        cta: string;
+      };
+}
+
+export interface AiContentFinalizationDraftV2 {
+  contractVersion: "content-finalization-draft.v2";
+  avatarStyleImageId: string | null;
+  userImageInstruction: string | null;
+  attachmentIds: string[];
+}
 export type ContentMessageStrategy =
   | "problem_solution" | "how_to" | "comparison" | "faq" | "insight"
   | "benefit" | "social_proof" | "brand_story" | "cta";
@@ -175,7 +257,7 @@ export interface ContentOrchestration {
   contractVersion: "content-orchestration.v1";
   contentFamily: ContentFamily;
   subject:
-    | { mode: "brand_topic"; topic: string; wikiItemIds: string[] }
+    | { mode: "brand_topic"; topic: string }
     | { mode: "product_service"; productServiceId: string }
     | { mode: "new_subject"; subjectAnalysisId: string };
   target: { id: string | null; snapshot: Record<string, unknown> };
@@ -203,6 +285,10 @@ export interface ContentProposalRecord {
   createdAt: string;
 }
 
+export interface ContentProposalRecordV2 extends Omit<ContentProposalRecord, "proposal"> {
+  proposal: ContentProposalV2;
+}
+
 export interface ContentProposalBatch {
   id: string;
   workspaceId: string;
@@ -212,7 +298,15 @@ export interface ContentProposalBatch {
   request: Record<string, unknown>;
   sourceSnapshots: Record<string, unknown>[];
   status: "queued" | "building" | "ready" | "failed";
-  proposals?: ContentProposalRecord[];
+  proposals?: Array<ContentProposalRecord | ContentProposalRecordV2>;
+  researchEvidence?: {
+    items: Array<{ id: string; title: string; url: string; publisher: string | null }>;
+  };
+  selectedReferences?: Array<{
+    id: string;
+    title: string;
+    preview: { url: string | null; mimeType: string | null };
+  }>;
   errorCode: string | null;
   errorMessage: string | null;
   createdAt: string;
@@ -228,7 +322,8 @@ export interface AiContentDraftReference {
 
 export interface GenerationAttachment {
   id: string;
-  role: "product" | "person" | "scale" | "visual_reference" | "document";
+  role: "product" | "person" | "scale" | "visual_reference" | "document"
+    | "product_image" | "supporting_image";
   fileName: string;
   mimeType: string;
   size: number;
@@ -324,6 +419,9 @@ export interface AiGenerationOutput {
   downloadedAt: string | null;
   revisionCapabilities?: Array<"save_copy" | "regenerate_hook" | "regenerate_copy" | "regenerate_card">;
   legacyReadOnly?: boolean;
+  manifestVersion?: "ai-content.v1" | "ai-content.v2" | null;
+  outputFormat?: ContentOutputFormatV2 | ContentOutputFormat | null;
+  publishSupported?: boolean;
 }
 
 export interface AiContentCopyFields {
@@ -395,6 +493,7 @@ export interface AiContentGateway {
   listAppealPresets(brandId: string): Promise<AppealPreset[]>;
   saveAppealPreset(brandId: string, input: Omit<AppealPreset, "id" | "useCount" | "lastUsedAt">): Promise<AppealPreset>;
   listReferences(brandId: string, query?: AiContentType | AiContentReferenceQuery): Promise<AiContentReference[]>;
+  listReferenceSeeds(brandId: string, format: ContentOutputFormatV2): Promise<AiContentReferenceSeed[]>;
   retryOutput(brandId: string, outputId: string, reason: string): Promise<AiGenerationOutput>;
   reviseOutput(brandId: string, outputId: string, input: {
     action: "regenerate_hook" | "regenerate_copy" | "regenerate_card";
@@ -420,11 +519,21 @@ export interface AiContentGateway {
   selectSubjectImage(brandId: string, analysisId: string, imageId: string): Promise<SubjectAnalysis>;
   createProposalBatch(brandId: string, input: {
     idempotencyKey: string;
-    request: ContentProposalRequest;
+    request: ContentOrchestrationV2;
   }): Promise<{ batchId: string; status: ContentProposalBatch["status"] }>;
   getProposalBatch(brandId: string, batchId: string, signal?: AbortSignal): Promise<ContentProposalBatch>;
   listSuggestedProposals(brandId: string, signal?: AbortSignal): Promise<ContentProposalRecord[]>;
   selectProposal(brandId: string, proposalId: string, idempotencyKey: string): Promise<AiContentGeneration>;
+  updateFinalizationDraft?(
+    brandId: string,
+    generationId: string,
+    draft: AiContentFinalizationDraftV2,
+  ): Promise<AiContentGeneration>;
+  startGenerationV2?(
+    brandId: string,
+    generationId: string,
+    idempotencyKey: string,
+  ): Promise<AiContentGeneration>;
   dismissProposal(brandId: string, proposalId: string): Promise<ContentProposalRecord>;
   listDraftReferences(brandId: string, assetType: AiContentDraftReference["assetType"], assetId: string, signal?: AbortSignal): Promise<AiContentDraftReference[]>;
 }

@@ -26,7 +26,7 @@ export interface ContentGenerationInputV2 {
   contractVersion: "content-generation-input.v2";
   contentType: AiContentType;
   orchestration: ContentOrchestrationV1 | null;
-  brandContext: AiContentBrandContextRecord;
+  brandContext: ContentGenerationBrandContextV2;
   subject: {
     analysisId: string;
     analysisVersion: number;
@@ -54,6 +54,16 @@ export interface ContentGenerationInputV2 {
   };
   references: AiContentReferenceRecord[];
   attachments: AiContentAttachmentRecord[];
+}
+
+export interface ContentGenerationBrandContextV2 {
+  ready: boolean;
+  brandName: string;
+  ownedUrl: string | null;
+  sourceStatus: string | null;
+  lastCrawledAt: string | null;
+  context: Record<string, unknown>;
+  brandIntelligenceVersionId?: string | null;
 }
 
 export interface ContentGenerationInputDependencies {
@@ -104,6 +114,31 @@ function outputCount(value: unknown): 1 | 2 | 3 {
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+const prohibitedKnowledgeKeys = new Set([
+  "wiki",
+  "wikiitemids",
+  "wikisnapshots",
+  "wikiversionid",
+  "wikiupdatedat",
+  "faq",
+  "faqdata",
+]);
+
+export function stripContentKnowledgeData(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripContentKnowledgeData);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !prohibitedKnowledgeKeys.has(key.toLowerCase()))
+      .map(([key, item]) => [key, stripContentKnowledgeData(item)]),
+  );
+}
+
+export function contentGenerationBrandContext(value: unknown): ContentGenerationBrandContextV2 {
+  const source = object(value, "ai_content_brand_context_invalid");
+  return stripContentKnowledgeData(source) as ContentGenerationBrandContextV2;
 }
 
 function generationFacts(value: unknown): unknown[] {
@@ -278,7 +313,7 @@ export function parseContentGenerationInputV2(value: unknown): ContentGeneration
     contractVersion: "content-generation-input.v2",
     contentType: source.contentType,
     orchestration,
-    brandContext: object(source.brandContext, "ai_content_brand_context_invalid") as unknown as AiContentBrandContextRecord,
+    brandContext: contentGenerationBrandContext(source.brandContext),
     subject: {
       analysisId: text(subject.analysisId, "ai_content_subject_analysis_required"),
       analysisVersion,
@@ -357,7 +392,7 @@ export async function buildContentGenerationInput(
     contractVersion: "content-generation-input.v2",
     contentType: generation.type,
     orchestration: null,
-    brandContext: clone(brandContext),
+    brandContext: contentGenerationBrandContext(brandContext),
     subject: {
       analysisId: analysis.id,
       analysisVersion: analysis.analysisVersion,

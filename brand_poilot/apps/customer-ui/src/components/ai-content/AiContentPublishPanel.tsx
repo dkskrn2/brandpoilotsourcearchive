@@ -14,6 +14,8 @@ import type { ChannelConnection, ChannelType } from "../../types";
 
 interface AiContentPublishPanelProps {
   type: AiContentType;
+  manifestVersion?: "ai-content.v1" | "ai-content.v2" | null;
+  outputFormat?: string | null;
   assetCount: number;
   channels: readonly ChannelConnection[];
   publishing: boolean;
@@ -86,6 +88,8 @@ function ConnectionAction({
 
 export function AiContentPublishPanel({
   type,
+  manifestVersion,
+  outputFormat,
   assetCount,
   channels,
   publishing,
@@ -95,16 +99,21 @@ export function AiContentPublishPanel({
 }: AiContentPublishPanelProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pendingChannel, setPendingChannel] = useState<ChannelType | null>(null);
+  const v2ImageFormat = manifestVersion === "ai-content.v2"
+    && (outputFormat === "card_news" || outputFormat === "marketing_content");
+  const adapterType = v2ImageFormat
+    ? assetCount > 1 ? "card_news" : "marketing"
+    : type;
   const options = useMemo(
-    () => buildAiContentPublishOptions({ type, assetCount, channels }),
-    [type, assetCount, channels],
+    () => buildAiContentPublishOptions({ type: adapterType, assetCount, channels }),
+    [adapterType, assetCount, channels],
   );
   const resultMap = useMemo(() => new Map(results.map((result) => [targetKey(result), result])), [results]);
   const targets = options.flatMap((option) => option.formats
     .filter((format) => selected.has(`${option.channel}:${format.deliveryFormat}`))
     .map((format) => ({ channel: option.channel, deliveryFormat: format.deliveryFormat })));
 
-  if (type === "blog") {
+  if (type === "blog" || outputFormat === "blog" || outputFormat === "reel") {
     return <p className="small muted ai-publish-panel__unsupported">현재 HTML 결과는 SNS 직접 게시를 지원하지 않습니다.</p>;
   }
 

@@ -7,6 +7,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import { terminateProcessTree as terminateWorkerProcessTree } from "@brand-pilot/worker-runtime";
 
 export interface ContentProposalModelClient {
@@ -49,6 +50,7 @@ const CHILD_ENV_KEYS = [
 ] as const;
 
 const MAX_STDERR_LENGTH = 2_000;
+const MAX_STDOUT_BYTES = 1024 * 1024;
 
 export function buildContentProposalCodexChildEnv(
   source: NodeJS.ProcessEnv,
@@ -68,15 +70,19 @@ function finalMessageFromJsonLine(line: string): string | null {
     }
     const item = event.item as Record<string, unknown>;
     return item.type === "agent_message" && typeof item.text === "string" && item.text.trim()
-      ? item.text.trim()
+      ? item.text
       : null;
   } catch {
     return null;
   }
 }
 
-function invalidModelOutput(): SyntaxError {
-  return new SyntaxError("content_proposal_model_output_invalid");
+function invalidModelOutput(rawOutput?: string): SyntaxError {
+  const error = new SyntaxError("content_proposal_model_output_invalid") as SyntaxError & {
+    rawOutput?: string;
+  };
+  if (rawOutput !== undefined) error.rawOutput = rawOutput;
+  return error;
 }
 
 function processFailure(code: string | number | null, stderr: string): Error {
@@ -132,7 +138,7 @@ export function createCodexContentProposalModel({
               "-c",
               "default_permissions=\"worker\"",
               "-c",
-              "permissions.worker.filesystem={\":minimal\"=\"read\",\"/codex\"=\"deny\",\":workspace_roots\"={\".\"=\"read\"}}",
+              "permissions.worker.filesystem={\":minimal\"=\"deny\",\"/codex\"=\"deny\",\":workspace_roots\"={\".\"=\"deny\"}}",
               "-c",
               "permissions.worker.network.enabled=false",
               "--disable",
@@ -163,8 +169,10 @@ export function createCodexContentProposalModel({
           let settled = false;
           let stopping = false;
           let stderr = "";
+          let stdoutBytes = 0;
           let pendingStdout = "";
           let finalMessage: string | null = null;
+          const stdoutDecoder = new StringDecoder("utf8");
           let timer: ReturnType<typeof setTimeout>;
 
           const cleanup = () => {
@@ -181,8 +189,13 @@ export function createCodexContentProposalModel({
             if (settled || stopping) return;
             stopping = true;
             cleanup();
-            void Promise.resolve()
-              .then(() => terminateProcessTree(child))
+            let termination: Promise<void>;
+            try {
+              termination = Promise.resolve(terminateProcessTree(child));
+            } catch {
+              termination = Promise.resolve();
+            }
+            void termination
               .catch(() => undefined)
               .finally(() => {
                 settled = true;
@@ -191,6 +204,7 @@ export function createCodexContentProposalModel({
           };
           const abort = () => stop(new Error("content_proposal_model_aborted"));
           const consumeStdout = (chunk: string) => {
+            if (settled || stopping) return;
             pendingStdout += chunk;
             const lines = pendingStdout.split(/\r?\n/);
             pendingStdout = lines.pop() ?? "";
@@ -203,9 +217,17 @@ export function createCodexContentProposalModel({
             () => stop(new Error("content_proposal_model_timeout")),
             timeoutMs,
           );
-          child.stdout?.setEncoding("utf8");
           child.stderr?.setEncoding("utf8");
-          child.stdout?.on("data", (chunk) => consumeStdout(String(chunk)));
+          child.stdout?.on("data", (chunk) => {
+            if (settled || stopping) return;
+            const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+            stdoutBytes += bytes.byteLength;
+            if (stdoutBytes > MAX_STDOUT_BYTES) {
+              stop(new Error("content_proposal_model_output_limit_exceeded"));
+              return;
+            }
+            consumeStdout(stdoutDecoder.write(bytes));
+          });
           child.stderr?.on("data", (chunk) => {
             if (stderr.length < MAX_STDERR_LENGTH) {
               stderr += String(chunk).slice(0, MAX_STDERR_LENGTH - stderr.length);
@@ -218,6 +240,8 @@ export function createCodexContentProposalModel({
             )));
           });
           child.once("close", (code) => {
+            if (settled || stopping) return;
+            consumeStdout(stdoutDecoder.end());
             if (pendingStdout) {
               finalMessage = finalMessageFromJsonLine(pendingStdout) ?? finalMessage;
             }
@@ -233,7 +257,7 @@ export function createCodexContentProposalModel({
               const output: unknown = JSON.parse(finalMessage);
               finish(() => resolve(output));
             } catch {
-              finish(() => reject(invalidModelOutput()));
+              finish(() => reject(invalidModelOutput(finalMessage ?? undefined)));
             }
           });
           if (!child.stdin) {

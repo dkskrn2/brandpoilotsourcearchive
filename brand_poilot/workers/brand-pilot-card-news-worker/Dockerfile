@@ -29,7 +29,9 @@ COPY --from=build --chown=node:node /app/workers/brand-pilot-card-news-worker/di
 COPY --from=build --chown=node:node /app/workers/brand-pilot-card-news-worker/scripts/codex-runtime.mjs ./workers/brand-pilot-card-news-worker/scripts/codex-runtime.mjs
 COPY --from=build --chown=node:node /app/workers/brand-pilot-card-news-worker/scripts/run-codex-card-news.mjs ./workers/brand-pilot-card-news-worker/scripts/run-codex-card-news.mjs
 COPY --from=build --chown=node:node /app/workers/brand-pilot-card-news-worker/scripts/run-codex-card-news-plan.mjs ./workers/brand-pilot-card-news-worker/scripts/run-codex-card-news-plan.mjs
+COPY --from=build --chown=node:node /app/workers/brand-pilot-card-news-worker/scripts/run-codex-card-news-v2-plan.mjs ./workers/brand-pilot-card-news-worker/scripts/run-codex-card-news-v2-plan.mjs
 COPY --from=build --chown=node:node /app/workers/brand-pilot-card-news-worker/scripts/editorial-plan.schema.json ./workers/brand-pilot-card-news-worker/scripts/editorial-plan.schema.json
+COPY --from=build --chown=node:node /app/workers/brand-pilot-card-news-worker/scripts/card-news-plan-v2.schema.json ./workers/brand-pilot-card-news-worker/scripts/card-news-plan-v2.schema.json
 COPY --from=build --chown=node:node /app/workers/brand-pilot-card-news-worker/.agents/skills/card-news-creator/SKILL.md ./workers/brand-pilot-card-news-worker/.agents/skills/card-news-creator/SKILL.md
 
 WORKDIR /app/workers/brand-pilot-card-news-worker

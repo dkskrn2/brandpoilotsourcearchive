@@ -88,6 +88,7 @@ describe("apiClient", () => {
     const response = [{
       channel: "instagram",
       catalogStatus: "available",
+      enabled: true,
       connectionStatus: "connected",
       canGenerate: true,
       generationFormats: ["card_news"],
@@ -197,7 +198,7 @@ describe("apiClient", () => {
       [{ hashtagId: "hashtag-1", displayTag: "#콘텐츠 마케팅", isFavorite: false, lastSearchedAt: "2026-07-15T00:00:00.000Z", searchCount: 1 }],
       { hashtagId: "hashtag-1" },
       { hashtagId: "hashtag-1", isFavorite: true },
-      { source: { id: "source-1" }, alreadySaved: false },
+      { source: { id: "source-1" }, referenceItemId: "33333333-3333-4333-8333-333333333333", alreadySaved: false },
       { mediaId: "media-1", removed: true }
     ];
     const fetchMock = vi.fn(async () => new Response(JSON.stringify(responses.shift()), { status: 200 }));
@@ -215,7 +216,11 @@ describe("apiClient", () => {
     await client.listInstagramTrendSearches("brand-1");
     await client.deleteInstagramTrendSearch("brand-1", "hashtag-1");
     await client.setInstagramTrendFavorite("brand-1", "hashtag-1", true);
-    await client.saveInstagramTrendSource("brand-1", "media-1");
+    await expect(client.saveInstagramTrendSource("brand-1", "media-1")).resolves.toEqual({
+      source: { id: "source-1" },
+      referenceItemId: "33333333-3333-4333-8333-333333333333",
+      alreadySaved: false,
+    });
     await client.removeInstagramTrendSource("brand-1", "media-1");
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "http://api.test/content-categories", expect.objectContaining({
@@ -257,6 +262,81 @@ describe("apiClient", () => {
       method: "DELETE",
       credentials: "include"
     }));
+  });
+
+  it.each([
+    ["missing", { source: { id: "source-1" }, alreadySaved: false }],
+    ["empty", { source: { id: "source-1" }, referenceItemId: "", alreadySaved: false }],
+  ])("rejects an Instagram trend save response with a %s referenceItemId", async (_case, response) => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(response), { status: 200 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await expect(client.saveInstagramTrendSource("brand-1", "media-1"))
+      .rejects.toThrow("instagram_trend_reference_invalid");
+  });
+
+  it("requests canonical AI-content reference seeds with only the encoded V2 format", async () => {
+    const response = [{
+      id: "33333333-3333-4333-8333-333333333333",
+      source: "saved_trend",
+      title: "인기 릴스",
+      url: "https://instagram.example/reel/1",
+      previewUrl: "https://cdn.example/reel.jpg",
+      format: "reel",
+      primaryCategory: "마케팅",
+      metrics: { exposureCount: 1000, likeCount: 120, commentsCount: 8 },
+      checkedAt: "2026-07-31T00:00:00.000Z",
+    }];
+    let requestedUrl = "";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      requestedUrl = String(input);
+      return new Response(JSON.stringify(response), { status: 200 });
+    });
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await expect(client.listAiContentReferenceSeeds("brand-1", "reel")).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/brands/brand-1/ai-content/reference-seeds?format=reel",
+      expect.objectContaining({ method: "GET", credentials: "include" }),
+    );
+    expect(requestedUrl).not.toContain("category");
+    expect(requestedUrl).not.toContain("workspace");
+    expect(requestedUrl).not.toContain("search");
+  });
+
+  it.each(["card_news", "blog", "reel", "marketing_content"] as const)(
+    "accepts the supported %s reference seed format",
+    async (format) => {
+      const fetchMock = vi.fn(async () => new Response("[]", { status: 200 }));
+      const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+      await expect(client.listAiContentReferenceSeeds("brand-1", format)).resolves.toEqual([]);
+      expect(fetchMock).toHaveBeenCalledWith(
+        `http://api.test/brands/brand-1/ai-content/reference-seeds?format=${encodeURIComponent(format)}`,
+        expect.objectContaining({ method: "GET" }),
+      );
+    },
+  );
+
+  it("rejects unsupported reference seed formats before issuing a request", async () => {
+    const fetchMock = vi.fn();
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await expect(client.listAiContentReferenceSeeds("brand-1", "story" as never))
+      .rejects.toThrow("ai_content_reference_seed_format_invalid");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["missing id", [{ source: "saved_trend", title: "No ID", url: null, previewUrl: null, format: "reel", primaryCategory: "마케팅", metrics: { exposureCount: null, likeCount: 10, commentsCount: 1 }, checkedAt: null }]],
+    ["underlying id", [{ id: "saved-trend-1", source: "saved_trend", title: "Underlying", url: null, previewUrl: null, format: "reel", primaryCategory: "마케팅", metrics: { exposureCount: null, likeCount: 10, commentsCount: 1 }, checkedAt: null }]],
+    ["malformed metrics", [{ id: "33333333-3333-4333-8333-333333333333", source: "saved_trend", title: "Bad metrics", url: null, previewUrl: null, format: "reel", primaryCategory: "마케팅", metrics: { likeCount: "10" }, checkedAt: null }]],
+  ])("rejects a reference seed response with %s", async (_case, response) => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(response), { status: 200 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await expect(client.listAiContentReferenceSeeds("brand-1", "reel"))
+      .rejects.toThrow("ai_content_reference_seed_invalid");
   });
 
   it("requests a paged Instagram trend archive", async () => {

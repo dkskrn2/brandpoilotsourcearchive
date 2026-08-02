@@ -14,6 +14,7 @@ function capability(
   return {
     channel,
     catalogStatus: "available",
+    enabled: true,
     connectionStatus: "connected",
     canGenerate: true,
     generationFormats,
@@ -58,6 +59,24 @@ describe("supportedChannelsForFormat", () => {
       [unavailableInstagram],
       "card_news",
     )).toEqual([]);
+  });
+
+  it.each([
+    ["disabled", { enabled: false }],
+    ["planned", { catalogStatus: "planned" as const }],
+    ["not connected", { connectionStatus: "not_connected" as const }],
+    ["not ready", { readiness: "needs_connection" as const }],
+  ])("does not expose a remote channel when it is %s", (_case, overrides) => {
+    const item = capability("instagram", ["reel"], overrides);
+
+    expect(supportedChannelsForFormat([item], "reel")).toEqual([]);
+  });
+
+  it("supports the V2 reel and marketing content formats", () => {
+    const instagram = capability("instagram", ["reel", "marketing_content"]);
+
+    expect(supportedChannelsForFormat([instagram], "reel")).toEqual([instagram]);
+    expect(supportedChannelsForFormat([instagram], "marketing_content")).toEqual([instagram]);
   });
 });
 

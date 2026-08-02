@@ -3,6 +3,8 @@ import type { ChannelCapability } from "../../types";
 export type ChannelContentFormat =
   | "card_news"
   | "blog"
+  | "reel"
+  | "marketing_content"
   | "single_image"
   | "channel_text";
 
@@ -94,6 +96,7 @@ function isChannelCapability(value: unknown): value is ChannelCapability {
     "tiktok",
   ])
     && isOneOf(candidate.catalogStatus, ["available", "planned"])
+    && typeof candidate.enabled === "boolean"
     && isOneOf(candidate.connectionStatus, [
       "connected",
       "not_connected",
@@ -108,6 +111,8 @@ function isChannelCapability(value: unknown): value is ChannelCapability {
     && candidate.generationFormats.every((format) => isOneOf(format, [
       "card_news",
       "blog",
+      "reel",
+      "marketing_content",
       "single_image",
       "channel_text",
     ]))
@@ -162,7 +167,12 @@ function supportsFormat(
   capability: ChannelCapability,
   format: ChannelContentFormat,
 ) {
-  return capability.canGenerate && capability.generationFormats.includes(format);
+  return capability.catalogStatus === "available"
+    && capability.enabled
+    && capability.canGenerate
+    && capability.readiness === "ready"
+    && capability.connectionStatus === "connected"
+    && capability.generationFormats.includes(format);
 }
 
 function disabledReasonForFormat(
@@ -174,6 +184,9 @@ function disabledReasonForFormat(
   }
   if (capability.catalogStatus === "planned") {
     return "이 채널의 콘텐츠 생성 기능은 아직 준비 중입니다.";
+  }
+  if (!capability.enabled) {
+    return "이 채널은 현재 비활성화되어 있습니다.";
   }
   if (capability.readiness === "needs_connection") {
     return "콘텐츠 생성을 사용하려면 먼저 채널을 연결해 주세요.";

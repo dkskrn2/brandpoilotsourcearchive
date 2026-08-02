@@ -6,8 +6,13 @@ import { createCodexTextGenerator } from "./codexTextRunner.js";
 import { createConfiguredRenderer } from "./renderer.js";
 import { createReelRenderer } from "./reelRenderer.js";
 import { createBlobStorage } from "./storage.js";
+import { createAiContentBlobStorage } from "./storage.js";
+import { createAiContentRenderClient } from "./aiContentRenderClient.js";
+import { createAiContentAssetRenderer } from "./aiContentAssetRenderer.js";
+import { finalizeAiContentPackage } from "./aiContentFinalizer.js";
+import { createAiContentShutdownCoordinator, type AiContentWorkerExitSignal } from "./aiContentShutdown.js";
 import { runTextOnce } from "./textWorker.js";
-import { runOnce } from "./worker.js";
+import { resolveAiContentLeaseTiming, runOnce } from "./worker.js";
 import { withWorkerResourceLease } from "./resourceLease.js";
 
 function required(name: string) {
@@ -16,15 +21,64 @@ function required(name: string) {
   return value;
 }
 
+function waitForShutdownOrTimeout(timeoutMs: number, signal: AbortSignal) {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    signal.addEventListener("abort", finish, { once: true });
+  });
+}
+
 async function main() {
+  let sigtermHandler: () => void = () => undefined;
+  let sigintHandler: () => void = () => undefined;
+  let signalListenersInstalled = false;
+  const removeSignalListeners = () => {
+    if (!signalListenersInstalled) return;
+    signalListenersInstalled = false;
+    process.removeListener("SIGTERM", sigtermHandler);
+    process.removeListener("SIGINT", sigintHandler);
+  };
+  const configuredGraceMs = Number(process.env.AI_CONTENT_SHUTDOWN_GRACE_MS ?? "15000");
+  const graceMs = Number.isFinite(configuredGraceMs)
+    ? Math.min(60_000, Math.max(1_000, Math.floor(configuredGraceMs)))
+    : 15_000;
+  const shutdown = createAiContentShutdownCoordinator({
+    graceMs,
+    relaySignal: (signal: AiContentWorkerExitSignal) => {
+      removeSignalListeners();
+      process.kill(process.pid, signal);
+    },
+    setGraceTimer: (callback, delayMs) => setTimeout(callback, delayMs),
+    clearGraceTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+  });
+  sigtermHandler = () => shutdown.handleSignal("SIGTERM");
+  sigintHandler = () => shutdown.handleSignal("SIGINT");
+  process.once("SIGTERM", sigtermHandler);
+  process.once("SIGINT", sigintHandler);
+  signalListenersInstalled = true;
+  try {
   const mode = process.argv[2] ?? "run-once";
   const workerId = process.env.WORKER_ID ?? `image-worker-${process.pid}`;
   const apiConfig = { apiUrl: required("BRAND_PILOT_API_URL"), token: required("WORKER_API_TOKEN") };
   const client = createWorkerClient(apiConfig);
+  const aiContentClient = createAiContentRenderClient(apiConfig);
   const textClient = createTextWorkerClient(apiConfig);
   const resourceClient = createWorkerResourceClient(apiConfig);
   const workerRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const textGenerator = createCodexTextGenerator({ rootDir: workerRoot });
+  const blobToken = required("BLOB_READ_WRITE_TOKEN");
+  const aiContentStorage = createAiContentBlobStorage({ token: blobToken });
+  const aiContentRenderer = createAiContentAssetRenderer({
+    workerRoot,
+    readOwned: (storagePath) => aiContentStorage.readOwned(storagePath),
+    timeoutMs: Math.max(1000, Number(process.env.AI_CONTENT_ASSET_TIMEOUT_MS ?? "1200000")),
+  });
   const renderer = createConfiguredRenderer({
     provider: process.env.IMAGE_PROVIDER ?? "command",
     commandTemplate: process.env.IMAGE_RENDER_COMMAND,
@@ -32,7 +86,11 @@ async function main() {
     nodeEnv: process.env.NODE_ENV
   });
   const reelRenderer = createReelRenderer();
-  const storage = createBlobStorage({ token: required("BLOB_READ_WRITE_TOKEN"), model: process.env.IMAGE_MODEL ?? "external-image-cli" });
+  const storage = createBlobStorage({ token: blobToken, model: process.env.IMAGE_MODEL ?? "external-image-cli" });
+  const aiContentLeaseTiming = resolveAiContentLeaseTiming({
+    heartbeatIntervalMs: Number(process.env.AI_CONTENT_HEARTBEAT_INTERVAL_MS ?? "60000"),
+    leaseSeconds: Number(process.env.AI_CONTENT_LEASE_SECONDS ?? "180"),
+  });
   const executeJob = async () => {
     const result = await runOnce({
       workerId,
@@ -40,6 +98,14 @@ async function main() {
       renderer,
       reelRenderer,
       storage,
+      aiContentClient,
+      aiContentRenderer,
+      aiContentStorage,
+      aiContentFinalizer: (job, signal) => finalizeAiContentPackage(job, aiContentStorage, undefined, signal),
+      aiContentHeartbeatIntervalMs: aiContentLeaseTiming.heartbeatIntervalMs,
+      aiContentLeaseSeconds: aiContentLeaseTiming.leaseSeconds,
+      signal: shutdown.signal,
+      onAiContentActivityChange: shutdown.onAiContentActivityChange,
       runTextJob: () => runTextOnce({
         workerId,
         client: textClient,
@@ -61,14 +127,20 @@ async function main() {
   }, executeJob);
   if (mode === "watch") {
     const interval = Math.max(1000, Number(process.env.POLL_INTERVAL_MS ?? "10000"));
-    for (;;) {
+    while (!shutdown.signal.aborted) {
       await execute().catch((error) => {
         process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
       });
-      await new Promise((resolve) => setTimeout(resolve, interval));
+      if (shutdown.signal.aborted) break;
+      await waitForShutdownOrTimeout(interval, shutdown.signal);
     }
+    return;
   }
-  await execute();
+  if (!shutdown.signal.aborted) await execute();
+  } finally {
+    shutdown.dispose();
+    removeSignalListeners();
+  }
 }
 
 main().catch((error) => {

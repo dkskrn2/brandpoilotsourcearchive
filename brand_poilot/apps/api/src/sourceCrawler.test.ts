@@ -250,4 +250,34 @@ describe("sourceCrawler", () => {
       maxResponseBytes: 10,
     })).rejects.toThrow("crawl_response_too_large");
   });
+
+  it("revalidates a redirect target before fetching a private address", async () => {
+    const fetcher = vi.fn(async () => new Response(null, {
+      status: 302,
+      headers: { location: "http://private.example.com/internal" },
+    }));
+
+    await expect(crawlSourceUrl("https://example.com/start", {
+      fetcher: fetcher as typeof fetch,
+      resolveHostname: async (hostname) => hostname === "example.com"
+        ? [{ address: "93.184.216.34" }]
+        : [{ address: "10.0.0.8" }],
+    })).rejects.toThrow("crawl_url_unsafe_address");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a stable timeout error when the request abort signal expires", async () => {
+    let requestSignal: AbortSignal | undefined;
+    const fetcher = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      requestSignal = init?.signal ?? undefined;
+      requestSignal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    }));
+
+    await expect(crawlSourceUrl("https://example.com/slow", {
+      fetcher: fetcher as typeof fetch,
+      resolveHostname: async () => [{ address: "93.184.216.34" }],
+      timeoutMs: 5,
+    })).rejects.toThrow("crawl_request_timeout");
+    expect(requestSignal?.aborted).toBe(true);
+  });
 });

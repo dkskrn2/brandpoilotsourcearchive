@@ -7,10 +7,10 @@ import {
   runShellCommandWithTimeout,
   type AttachmentHead,
 } from "@brand-pilot/worker-runtime";
-import { parseContentGenerationInput, type AiContentJob, type WorkerClient } from "./contracts.js";
+import { parseCardNewsInput, parseContentGenerationInput, type AiContentJob, type WorkerClient } from "./contracts.js";
 import { loadAnalysis, loadCardNewsResult } from "./manifest.js";
-import { buildPrompt, cardNewsSkillVersion } from "./promptBuilder.js";
-import { buildEditorialEvidencePool, buildEditorialPrompt, loadEditorialPlan } from "./editorialPlan.js";
+import { buildCardNewsPlanPrompt, buildPrompt, cardNewsPlanSkillVersion, cardNewsSkillVersion } from "./promptBuilder.js";
+import { buildEditorialEvidencePool, buildEditorialPrompt, loadCardNewsPlanV2, loadEditorialPlan } from "./editorialPlan.js";
 import { withResource } from "./resourceLease.js";
 import type { CardNewsStorage } from "./storage.js";
 
@@ -19,6 +19,18 @@ export interface CodexRunner {
     outputDir: string;
     cleanup(): Promise<void>;
   }>;
+}
+
+function commandTemplateForJob(commandTemplate: string, job: AiContentJob): string {
+  const rawInput = job.payload?.contentGenerationInput;
+  const isV3 = rawInput && typeof rawInput === "object" && !Array.isArray(rawInput)
+    && (rawInput as Record<string, unknown>).contractVersion === "content-generation-input.v3";
+  if (!isV3) return commandTemplate;
+  if (commandTemplate.includes("run-codex-card-news-v2-plan.mjs")) return commandTemplate;
+  if (commandTemplate.includes("run-codex-card-news-plan.mjs")) {
+    return commandTemplate.replaceAll("run-codex-card-news-plan.mjs", "run-codex-card-news-v2-plan.mjs");
+  }
+  throw new Error("card_news_v3_plan_command_invalid");
 }
 
 async function sessionDirectories(directory: string): Promise<Set<string>> {
@@ -67,7 +79,8 @@ export function createCommandRunner(
         await copyFile(skillFile, stagedSkill);
         const jobFile = path.join(workDir, "job.json");
         await writeFile(jobFile, JSON.stringify({ job, prompt }, null, 2), "utf8");
-        const command = commandTemplate.replaceAll("{{jobFile}}", jobFile).replaceAll("{{outputDir}}", outputDir);
+        const selectedTemplate = commandTemplateForJob(commandTemplate, job);
+        const command = selectedTemplate.replaceAll("{{jobFile}}", jobFile).replaceAll("{{outputDir}}", outputDir);
         await runShellCommandWithTimeout({
           command,
           timeoutMs,
@@ -92,13 +105,13 @@ export async function runOnce({ workerId, client, planner, runner, storage, head
     const job = await client.claim(workerId);
     if (!job) return { status: "idle" as const };
     let heartbeat: ReturnType<typeof setInterval> | undefined;
-    let planned: Awaited<ReturnType<CodexRunner["run"]>> | undefined;
+    const planned: Array<Awaited<ReturnType<CodexRunner["run"]>>> = [];
     let output: Awaited<ReturnType<CodexRunner["run"]>> | undefined;
     try {
       heartbeat = setInterval(() => void client.heartbeat(job.id, workerId, job.leaseToken).catch(() => undefined), 30_000);
       const rawInput = job.payload.contentGenerationInput;
-      const parsedInput = rawInput === undefined ? null : parseContentGenerationInput(rawInput);
-      if (parsedInput?.attachments.length) {
+      const parsedInput = rawInput === undefined ? null : parseCardNewsInput(rawInput, job.contentType);
+      if (parsedInput?.contractVersion === "content-generation-input.v2" && parsedInput.attachments.length) {
         if (!head) throw new Error("ai_content_attachment_storage_unavailable");
         await preflightAttachmentSnapshots(parsedInput.attachments, { head });
       }
@@ -107,10 +120,36 @@ export async function runOnce({ workerId, client, planner, runner, storage, head
         await client.complete(job.id, { workerId, leaseToken: job.leaseToken, skillVersion: cardNewsSkillVersion, jobType: "analyze", analysisJson: await loadAnalysis(output.outputDir) });
       } else {
         if (!job.outputId) throw new Error("card_news_output_id_required");
+        if (parsedInput?.contractVersion === "content-generation-input.v3") {
+          let repairError: string | undefined;
+          let plan: Awaited<ReturnType<typeof loadCardNewsPlanV2>> | undefined;
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            const current = await planner.run(job, buildCardNewsPlanPrompt(job, parsedInput, repairError));
+            planned.push(current);
+            try {
+              plan = await loadCardNewsPlanV2(current.outputDir, parsedInput);
+              break;
+            } catch (error) {
+              if (attempt === 1) throw error;
+              repairError = error instanceof Error ? error.message : String(error);
+            }
+          }
+          if (!plan) throw new Error("card_news_plan_invalid");
+          await client.complete(job.id, {
+            workerId,
+            leaseToken: job.leaseToken,
+            skillVersion: cardNewsPlanSkillVersion,
+            jobType: "generate",
+            plan,
+          });
+          return { status: "completed" as const, jobId: job.id };
+        }
         const input = parsedInput ?? parseContentGenerationInput(job.payload.contentGenerationInput);
+        if (input.contractVersion !== "content-generation-input.v2") throw new Error("content_generation_input_version_invalid");
         const evidencePool = buildEditorialEvidencePool(job);
-        planned = await planner.run(job, buildEditorialPrompt(job));
-        const editorialPlan = await loadEditorialPlan(planned.outputDir, evidencePool);
+        const legacyPlan = await planner.run(job, buildEditorialPrompt(job));
+        planned.push(legacyPlan);
+        const editorialPlan = await loadEditorialPlan(legacyPlan.outputDir, evidencePool);
         output = await runner.run(job, buildPrompt(job, editorialPlan));
         const stored = await storage.upload({ brandId: job.brandId, generationId: job.generationId, outputId: job.outputId, result: await loadCardNewsResult(output.outputDir, input.creativeDirection.aspectRatio) });
         await client.complete(job.id, { workerId, leaseToken: job.leaseToken, skillVersion: cardNewsSkillVersion, jobType: "generate", ...stored });
@@ -121,7 +160,7 @@ export async function runOnce({ workerId, client, planner, runner, storage, head
       return { status: "failed" as const, jobId: job.id };
     } finally {
       if (heartbeat) clearInterval(heartbeat);
-      await planned?.cleanup();
+      await Promise.all(planned.map((item) => item.cleanup()));
       await output?.cleanup();
     }
   });

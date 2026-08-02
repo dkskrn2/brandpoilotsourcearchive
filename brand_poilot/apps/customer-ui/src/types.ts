@@ -32,9 +32,10 @@ export type ChannelStatus =
 export interface ChannelCapability {
   channel: ChannelType;
   catalogStatus: "available" | "planned";
+  enabled: boolean;
   connectionStatus: ChannelStatus;
   canGenerate: boolean;
-  generationFormats: Array<"card_news" | "blog" | "single_image" | "channel_text">;
+  generationFormats: Array<"card_news" | "blog" | "reel" | "marketing_content" | "single_image" | "channel_text">;
   exportModes: Array<"image" | "html" | "text">;
   publishModes: DeliveryFormat[];
   readiness: "ready" | "needs_connection" | "needs_permission" | "not_supported";
@@ -339,8 +340,29 @@ export interface InstagramTrendFavoriteInput {
 
 export interface InstagramTrendSaveSource {
   source: SourceUrl;
+  referenceItemId: string;
   alreadySaved: boolean;
 }
+
+export type AiContentReferenceSeedFormat = "card_news" | "blog" | "reel" | "marketing_content";
+
+export interface AiContentReferenceSeed {
+  id: string;
+  source: "brand_output" | "saved_trend" | "saved_url";
+  title: string;
+  url: string | null;
+  previewUrl: string | null;
+  format: AiContentReferenceSeedFormat;
+  primaryCategory: string;
+  metrics: {
+    exposureCount: number | null;
+    likeCount: number | null;
+    commentsCount: number | null;
+  };
+  checkedAt: string | null;
+}
+
+export type AiContentReferenceSeedList = AiContentReferenceSeed[];
 
 export interface InstagramTrendRemoveSource {
   mediaId: string;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPrompt } from "./promptBuilder.js";
+import { buildBlogPlanPrompt, buildPrompt } from "./promptBuilder.js";
 import { parseContentGenerationInput } from "./contracts.js";
 
 const job = {
@@ -12,6 +12,18 @@ const job = {
     creativeDirection: { prompts: ["첫 번째 블로그 지시"], brandColor: "#0057B8", selectedColor: "#0F766E", aspectRatio: "16:9", outputCount: 1 },
     references: [{ previewUrl: "https://cdn.example/reference.png" }], attachments: [],
   } },
+};
+
+const uid = (n: number) => `10000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const v3Input = {
+  contractVersion: "content-generation-input.v3" as const, generationId: uid(1),
+  brandCore: { versionId: uid(2), companyOverview: "Overview", businessDescription: "Business", primaryCategory: "Category", detailedCategory: "Detail", primaryTarget: "Reader", differentiator: "Clear", coreAppeal: "Useful" },
+  subject: { kind: "topic_text" as const, title: "좋은 글 구조" }, contentInstruction: "구체적으로 작성",
+  product: null,
+  researchEvidence: { contractVersion: "research-evidence.v1" as const, decision: "searched" as const, reason: "Evidence", queries: ["query"], capturedAt: "2026-07-31T00:00:00.000Z", items: [{ id: uid(5), title: "Source", url: "https://example.com/source", publisher: null, publishedAt: null, capturedAt: "2026-07-31T00:00:00.000Z", claimSummary: "Claim", contentHash: "a".repeat(64) }] },
+  references: { selected: [], brandStyleImages: [], avatarStyleImageId: null, attachments: [] },
+  selectedProposal: { id: uid(6), conceptKey: "guide", title: "Guide", informationalType: "how_to" as const, oneLineIntent: "Explain", differentiator: "Direct", differentiationAxes: ["question"], target: "Reader", customerContext: "Need answer", keyMessage: "Answer", hook: "Question", selectionReason: "Useful", evidenceIds: [uid(5)], referenceIds: [], outputFormat: "blog" as const, channelTargets: ["blog_export"] as ["blog_export"], assetCount: null, outline: [{ index: 1, role: "article", headline: "Structure", purpose: "Guide" }], purposeDetails: { kind: "informational" as const, question: "What?", value: "Answer", whyNow: "Now", learningPoints: ["Point"] } },
+  userImageInstruction: "Clean editorial", outputSettings: { purpose: "informational" as const, outputFormat: "blog" as const, channelTargets: ["blog_export"] as ["blog_export"], aspectRatio: null, outputCount: 1 as const }, capturedAt: "2026-07-31T00:00:00.000Z",
 };
 
 describe("blog prompt", () => {
@@ -76,7 +88,7 @@ describe("blog prompt", () => {
           orchestration: {
             contractVersion: "content-orchestration.v1",
             contentFamily: "informational",
-            subject: { mode: "brand_topic", topic: "FAQ", wikiItemIds: ["wiki-1"] },
+            subject: { mode: "brand_topic", topic: "FAQ" },
             target: { id: "target-1", snapshot: { name: "초보 고객" } },
             strategy: "faq",
             outputFormat: "blog",
@@ -97,12 +109,42 @@ describe("blog prompt", () => {
         },
       },
     });
-    expect(prompt).toContain("승인 Brand Core와 실행 규칙");
+    expect(prompt).toContain("승인 Brand Core");
+    expect(prompt).toContain("승인 제품·서비스");
     expect(prompt).toContain("사용자가 확정한 target, strategy, brief");
     expect(prompt).toContain("교육·문제 해결·가이드 톤");
     expect(prompt).toContain("원문 문장을 그대로 복제하지 마세요");
     const promptData = JSON.parse(prompt.split("작업 데이터(JSON):\n")[1]!);
     expect(promptData.visualDirection.avatar.snapshot.assetUrl).toBe("https://cdn.example/avatar.png");
     expect(promptData.factualDirection).not.toHaveProperty("avatar");
+  });
+
+  it("builds a v3 HTML writer prompt without Wiki, FAQ, logos, or experience-story instructions", () => {
+    const prompt = buildBlogPlanPrompt({ ...job, payload: { contentGenerationInput: v3Input } }, v3Input, null);
+    expect(prompt).toContain("blog-plan.v2");
+    expect(prompt).toContain("3,000~10,000자");
+    expect(prompt).toContain("정확히 3개");
+    expect(prompt).toContain("300자 이하");
+    expect(prompt).toContain("SEO");
+    expect(prompt).toContain("GEO");
+    expect(prompt).toContain("data-evidence-id");
+    expect(prompt).toContain("0~5개");
+    expect(prompt).toContain("로고를 생성하거나 배치하지 마세요");
+    expect(prompt).toContain("contentInstruction");
+    expect(prompt).toContain("제품 사실은 input.product");
+    expect(prompt).toContain("title 500자");
+    expect(prompt).toContain("metaTitle 500자");
+    expect(prompt).toContain("metaDescription 2,000자");
+    expect(prompt).not.toMatch(/경험담|가상 경험|합성 경험|1인칭 체험/);
+    expect(prompt).not.toMatch(/wiki|faq/i);
+  });
+
+  it("includes frozen supplement and targeted validation errors in repair prompts", () => {
+    const supplemental = { ...v3Input.researchEvidence, items: [{ ...v3Input.researchEvidence.items[0]!, id: uid(7), url: "https://example.com/supplement" }] };
+    const prompt = buildBlogPlanPrompt({ ...job, payload: { contentGenerationInput: v3Input } }, v3Input, supplemental, ["blog_html_summary_invalid", "blog_html_length_invalid"]);
+    expect(prompt).toContain(uid(7));
+    expect(prompt).toContain("blog_html_summary_invalid");
+    expect(prompt).toContain("blog_html_length_invalid");
+    expect(prompt).toContain("이 오류만 보정");
   });
 });

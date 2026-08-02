@@ -4,15 +4,19 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "npm run build --workspace @brand-pilot/worker-runtime",
     "dev": "tsx src/index.ts watch",
+    "prerun-once": "npm run build --workspace @brand-pilot/worker-runtime",
     "run-once": "tsx src/index.ts run-once",
     "control": "tsx src/control/index.ts",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "npm run build --workspace @brand-pilot/worker-runtime && tsc -p tsconfig.build.json",
     "start": "node dist/index.js watch",
+    "pretest": "npm run build --workspace @brand-pilot/worker-runtime",
     "test": "vitest run",
     "verify:reel": "node scripts/verify-reel.mjs"
   },
   "dependencies": {
+    "@brand-pilot/worker-runtime": "0.1.0",
     "@vercel/blob": "^2.6.1",
     "cheerio": "^1.2.0",
     "dotenv": "^17.2.3",

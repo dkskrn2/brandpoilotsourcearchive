@@ -142,8 +142,6 @@ export function AiGenerationOutputList({
   const completedCount = generation.outputs.filter((output) => output.status === "completed").length;
   const type = generation.type;
   const retryRetention = useRetryRetentionState(generation.retryableUntil);
-  const orchestrationFormat = generation.draft.orchestration?.outputFormat;
-  const directPublishSupported = orchestrationFormat !== "channel_text";
 
   return (
     <section className="ai-generation-output-list" aria-labelledby="ai-generation-result-title">
@@ -173,7 +171,7 @@ export function AiGenerationOutputList({
               <AiContentArtifactPreview type={type} output={output} />
             </div>
 
-            {output.legacyReadOnly || output.artifact?.deliveryFormat === "instagram_reel" ? (
+            {output.legacyReadOnly ? (
               <p className="small muted" role="status">과거 Reel 결과는 읽기 전용입니다.</p>
             ) : null}
 
@@ -216,11 +214,13 @@ export function AiGenerationOutputList({
             ) : null}
 
             {output.status === "completed"
-              && directPublishSupported
+              && (output.publishSupported ?? (type !== "blog" && output.outputFormat !== "reel"))
               && !output.legacyReadOnly
               && output.artifact?.deliveryFormat !== "instagram_reel" ? (
               <AiContentPublishPanel
                 type={type}
+                manifestVersion={output.manifestVersion}
+                outputFormat={output.outputFormat}
                 assetCount={output.artifact?.assets.length ?? 0}
                 channels={channels}
                 publishing={publishingOutputIds.has(output.id)}

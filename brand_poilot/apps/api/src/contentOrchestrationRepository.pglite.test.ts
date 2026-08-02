@@ -401,6 +401,30 @@ afterAll(async () => {
 });
 
 describe("content orchestration PostgreSQL contract", () => {
+  it("keeps the legacy repository fixture queryable after migration 072", async () => {
+    const persisted = await database!.query(
+      `select output_format,generation_input_snapshot
+         from ai_content_generations
+        where id=$1`,
+      [ids.generation],
+    );
+    expect(persisted.rows).toEqual([{
+      output_format: "single_image",
+      generation_input_snapshot: {
+        contractVersion: "content-generation-input.v2",
+        contentType: "marketing",
+      },
+    }]);
+
+    const migrationColumns = await database!.query(
+      `select input_snapshot_json
+         from ai_content_proposal_batches
+        where id=$1`,
+      [ids.batch],
+    );
+    expect(migrationColumns.rows).toEqual([{ input_snapshot_json: null }]);
+  });
+
   it("starts with a frozen ready analyzed-subject snapshot without masquerading as a product or topic", async () => {
     await database!.exec("begin");
     try {

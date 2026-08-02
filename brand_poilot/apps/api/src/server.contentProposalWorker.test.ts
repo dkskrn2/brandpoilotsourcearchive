@@ -23,6 +23,46 @@ function proposal(title: string) {
   };
 }
 
+function workerEvidence() {
+  return {
+    contractVersion: "research-evidence.v1",
+    decision: "searched",
+    reason: "최신 근거 필요",
+    queries: ["브랜드 운영"],
+    capturedAt: "2026-08-01T04:00:00.000Z",
+    items: [{
+      id: "70000000-0000-4000-8000-000000000007",
+      title: "검증 자료", url: "https://source.example/article", publisher: "Source",
+      publishedAt: null, capturedAt: "2026-08-01T04:00:00.000Z",
+      claimSummary: "실무 적용 근거", contentHash: "a".repeat(64),
+    }],
+  };
+}
+
+function workerProposal(conceptKey: string) {
+  const suffix = conceptKey.at(-1)!;
+  return {
+    conceptKey, title: `구성안 ${suffix}`, informationalType: "how_to",
+    oneLineIntent: `의도 ${suffix}`, differentiator: `차별점 ${suffix}`,
+    differentiationAxes: ["narrative"], target: "창업자", customerContext: "운영 시작",
+    keyMessage: `메시지 ${suffix}`, hook: `훅 ${suffix}`, selectionReason: `이유 ${suffix}`,
+    evidenceIds: ["70000000-0000-4000-8000-000000000007"], referenceIds: [],
+    outputFormat: "card_news", channelTargets: ["instagram"], assetCount: 1,
+    outline: [{ index: 1, role: "hook", headline: `제목 ${suffix}`, purpose: `목적 ${suffix}` }],
+    purposeDetails: {
+      kind: "informational", question: `질문 ${suffix}`, value: `가치 ${suffix}`,
+      whyNow: `시점 ${suffix}`, learningPoints: [`학습 ${suffix}`],
+    },
+  };
+}
+
+function workerProposalSet() {
+  return {
+    contractVersion: "content-proposal.v2",
+    proposals: [workerProposal("concept-a"), workerProposal("concept-b"), workerProposal("concept-c")],
+  };
+}
+
 function setup() {
   const repository = {
     claimContentProposalJob: vi.fn(async (input) => ({
@@ -45,6 +85,10 @@ function setup() {
       id: "10000000-0000-4000-8000-000000000001",
       batchId: "40000000-0000-4000-8000-000000000004",
       status: "completed" as const,
+    })),
+    completeContentProposalResearch: vi.fn(async (input) => ({
+      contractVersion: "proposal-input.v2",
+      researchEvidence: input.evidence,
     })),
     failContentProposalJob: vi.fn(async () => ({
       id: "10000000-0000-4000-8000-000000000001",
@@ -179,6 +223,93 @@ describe("content proposal worker routes", () => {
     expect(repository.failContentProposalJob).toHaveBeenCalledWith(expect.objectContaining({
       jobId, retryable: true,
     }));
+    await app.close();
+  });
+
+  it("accepts the exact research-complete body and forwards only the worker lease and evidence", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST",
+      url: `/worker/content-proposal-jobs/${jobId}/research-complete`,
+      headers: { authorization: "Bearer proposal-worker-token" },
+      payload: {
+        workerId: "proposal-worker-1",
+        leaseToken: "50000000-0000-4000-8000-000000000005",
+        evidence: workerEvidence(),
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.completeContentProposalResearch).toHaveBeenCalledWith({
+      jobId,
+      workerId: "proposal-worker-1",
+      leaseToken: "50000000-0000-4000-8000-000000000005",
+      evidence: workerEvidence(),
+    });
+    await app.close();
+  });
+
+  it("rejects extra research-complete fields before repository access", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST",
+      url: `/worker/content-proposal-jobs/${jobId}/research-complete`,
+      headers: { authorization: "Bearer proposal-worker-token" },
+      payload: {
+        workerId: "proposal-worker-1",
+        leaseToken: "50000000-0000-4000-8000-000000000005",
+        evidence: workerEvidence(),
+        workspaceId: "attacker-workspace",
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(repository.completeContentProposalResearch).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("accepts the exact V2 proposalSet completion while preserving the V1 proposals body", async () => {
+    const { app, repository } = setup();
+    const headers = { authorization: "Bearer proposal-worker-token" };
+    const lease = {
+      workerId: "proposal-worker-1",
+      leaseToken: "50000000-0000-4000-8000-000000000005",
+    };
+    const v2 = await app.inject({
+      method: "POST", url: `/worker/content-proposal-jobs/${jobId}/complete`, headers,
+      payload: { ...lease, proposalSet: workerProposalSet() },
+    });
+    expect(v2.statusCode).toBe(200);
+    expect(repository.completeContentProposalJob).toHaveBeenCalledWith({
+      jobId, ...lease, proposalSet: workerProposalSet(),
+    });
+
+    const v1 = await app.inject({
+      method: "POST", url: `/worker/content-proposal-jobs/${jobId}/complete`, headers,
+      payload: { ...lease, proposals: [proposal("A"), proposal("B")] },
+    });
+    expect(v1.statusCode).toBe(200);
+    expect(repository.completeContentProposalJob).toHaveBeenCalledWith({
+      jobId, ...lease, proposals: [proposal("A"), proposal("B")],
+    });
+    await app.close();
+  });
+
+  it.each([
+    { proposalSet: workerProposalSet(), proposals: [proposal("A"), proposal("B")] },
+    { proposalSet: { ...workerProposalSet(), extra: true } },
+  ])("rejects an inexact V2 completion body before repository access", async (body) => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST", url: `/worker/content-proposal-jobs/${jobId}/complete`,
+      headers: { authorization: "Bearer proposal-worker-token" },
+      payload: {
+        workerId: "proposal-worker-1",
+        leaseToken: "50000000-0000-4000-8000-000000000005",
+        ...body,
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(repository.completeContentProposalJob).not.toHaveBeenCalled();
     await app.close();
   });
 

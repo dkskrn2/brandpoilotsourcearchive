@@ -125,6 +125,54 @@ describe("marketing production runtime", () => {
     });
   });
 
+  it("uses an exact-schema, no-network, no-tool ephemeral v3 planning runner", async () => {
+    const runnerUrl = new URL("../scripts/run-codex-marketing-v2-plan.mjs", import.meta.url).href;
+    const runner = await import(runnerUrl) as {
+      buildCodexPrompt(prompt: string): string;
+      buildCodexArgs(outputDir: string): string[];
+    };
+    const args = runner.buildCodexArgs(path.resolve("v3-plan-output"));
+    const prompt = runner.buildCodexPrompt("고정 기획 입력");
+    const schema = JSON.parse(await read("../scripts/marketing-plan-v2.schema.json")) as Record<string, unknown>;
+
+    expect(args.join(" ")).toContain("permissions.planner.network.enabled=false");
+    expect(args.join(" ")).toContain('permissions.planner.filesystem={":minimal"="read","/codex"="deny",":workspace_roots"={"."="deny"}}');
+    for (const feature of ["shell_tool", "image_generation", "shell_snapshot", "apps", "browser_use", "browser_use_external", "in_app_browser", "computer_use", "multi_agent", "plugins"]) {
+      expect(args).toEqual(expect.arrayContaining(["--disable", feature]));
+    }
+    expect(args).toContain("--ephemeral");
+    expect(args).toContain("--output-schema");
+    expect(args).toContain("--output-last-message");
+    expect(args.join(" ")).not.toContain("--search");
+    expect(prompt).toContain("제공된 고정 JSON만 사용");
+    expect(prompt).toContain("파일이나 웹을 조회하지 마세요");
+    expect(prompt).toContain("JSON 외의 설명을 반환하지 마세요");
+    expect(schema).toMatchObject({ type: "object", additionalProperties: false, required: ["contractVersion", "outputFormat", "content", "imagePackage"] });
+    const defs = schema.$defs as Record<string, Record<string, unknown>>;
+    expect(defs.asset?.required).toContain("evidenceIds");
+    expect((defs.asset?.properties as Record<string, unknown>).evidenceIds).toMatchObject({ type: "array", maxItems: 8, uniqueItems: true });
+    expect((schema.properties as Record<string, unknown>).outputFormat).toEqual({ enum: ["reel", "marketing_content"] });
+  });
+
+  it.each(["run-codex-marketing.mjs", "run-codex-marketing-v2-plan.mjs"])(
+    "routes v3 jobs only through the plan runner when configured with %s",
+    async (configuredRunner) => {
+      const probeRoot = await mkdtemp(path.join(os.tmpdir(), "marketing-v3-command-probe-"));
+      const probeFile = path.join(probeRoot, "probe.mjs");
+      const markerFile = path.join(probeRoot, "runner.txt");
+      await writeFile(probeFile, ['import { writeFile } from "node:fs/promises";', "const [runnerName, markerFile] = process.argv.slice(2);", "await writeFile(markerFile, runnerName, 'utf8');"].join("\n"), "utf8");
+      const command = [JSON.stringify(process.execPath), JSON.stringify(probeFile), configuredRunner, JSON.stringify(markerFile), '"{{outputDir}}"'].join(" ");
+      const runner = createCommandRunner(command, 5_000);
+      try {
+        const output = await runner.run({ payload: { contentGenerationInput: { contractVersion: "content-generation-input.v3" } } } as never, "prompt");
+        expect(await readFile(markerFile, "utf8")).toBe("run-codex-marketing-v2-plan.mjs");
+        await output.cleanup();
+      } finally {
+        await rm(probeRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("stages the marketing skill and removes only image sessions created by that job", async () => {
     const probeRoot = await mkdtemp(path.join(os.tmpdir(), "marketing-runtime-probe-"));
     const generatedImagesDirectory = path.join(probeRoot, "generated_images");
@@ -172,10 +220,25 @@ describe("marketing production runtime", () => {
     expect(dockerfile).toContain("@openai/codex@0.145.0");
     expect(dockerfile).toContain("CODEX_HOME=/codex");
     expect(dockerfile).toContain("run-codex-marketing.mjs");
+    expect(dockerfile).toContain("run-codex-marketing-v2-plan.mjs");
+    expect(dockerfile).toContain("marketing-plan-v2.schema.json");
     expect(dockerfile).toContain("marketing-creative/SKILL.md");
     expect(dockerfile).toContain("workers/brand-pilot-marketing-worker/dist/index.js");
     expect(dockerfile).toMatch(/^USER node$/m);
     expect(dockerfile).not.toMatch(/OPENAI_API_KEY|docker\.sock|tsx\/esm\/api/);
+  });
+
+  it("documents two formats by two purposes and separates v3 planning from image rendering", async () => {
+    const skill = await read("../.agents/skills/marketing-creative/SKILL.md");
+    expect(skill).toContain("content-generation-input.v3");
+    expect(skill).toContain("reel");
+    expect(skill).toContain("marketing_content");
+    expect(skill).toContain("informational");
+    expect(skill).toContain("marketing");
+    expect(skill).toContain("워커 이름");
+    expect(skill).toContain("이미지 워커");
+    expect(skill).toContain("content-generation-input.v2");
+    expect(skill).toContain("creative.png");
   });
 
   it.each(["failure", "timeout"] as const)(

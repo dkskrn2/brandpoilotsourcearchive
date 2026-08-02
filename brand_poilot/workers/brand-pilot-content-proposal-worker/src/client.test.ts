@@ -102,6 +102,81 @@ describe("content proposal clients", () => {
     }
   });
 
+  it("completes V2 research with the exact lease body and parses the composed snapshot", async () => {
+    const evidence = {
+      contractVersion: "research-evidence.v1" as const,
+      decision: "not_needed" as const,
+      reason: "시장 맥락 보충이 필요하지 않음",
+      queries: [],
+      capturedAt: "2026-08-01T04:00:00.000Z",
+      items: [],
+    };
+    const composed = {
+      contractVersion: "proposal-input.v2",
+      brandCore: {
+        versionId: "40000000-0000-4000-8000-000000000004",
+        companyOverview: "개요", businessDescription: "사업", primaryCategory: "교육",
+        detailedCategory: "온라인", primaryTarget: "창업자", differentiator: "실전",
+        coreAppeal: "적용",
+      },
+      subject: { kind: "topic_text", title: "캠페인" },
+      contentInstruction: null,
+      product: {
+        id: "60000000-0000-4000-8000-000000000006",
+        versionId: "61000000-0000-4000-8000-000000000006",
+        kind: "service", name: "컨설팅", description: "설명", features: ["진단"],
+        benefits: ["정리"], cautions: ["결과는 상황별 상이"], evergreenPurchaseInfo: "문의",
+        images: [],
+      },
+      references: [], researchEvidence: evidence,
+      outputSettings: {
+        outputFormat: "marketing_content", channelTargets: ["instagram"],
+        aspectRatio: "4:5", outputCount: 1, purpose: "marketing",
+      },
+      capturedAt: "2026-08-01T03:00:00.000Z",
+    };
+    const rawV2Job = {
+      ...rawJob,
+      request: {
+        contractVersion: "content-proposal-request.v2", purpose: "marketing",
+        outputFormat: "marketing_content", channelTargets: ["instagram"],
+        requestFingerprint: "fingerprint",
+      },
+      inputSnapshot: { ...composed, contractVersion: "proposal-base-input.v2", researchEvidence: undefined },
+    };
+    const v2Job = parseContentProposalJob(JSON.parse(JSON.stringify(rawV2Job)));
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/research-complete")) {
+        return new Response(JSON.stringify(composed), { status: 200 });
+      }
+      return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+    });
+    const client = createContentProposalApiClient(
+      "https://api.example", "token", fetchMock as unknown as typeof fetch,
+    );
+
+    await expect(client.completeResearch(v2Job, evidence)).resolves.toEqual(composed);
+    await client.complete(v2Job, {
+      contractVersion: "content-proposal.v2",
+      proposals: [],
+    } as never);
+
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      `https://api.example/worker/content-proposal-jobs/${v2Job.id}/research-complete`,
+      `https://api.example/worker/content-proposal-jobs/${v2Job.id}/complete`,
+    ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      workerId: v2Job.workerId,
+      leaseToken: v2Job.leaseToken,
+      evidence,
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      workerId: v2Job.workerId,
+      leaseToken: v2Job.leaseToken,
+      proposalSet: { contractVersion: "content-proposal.v2", proposals: [] },
+    });
+  });
+
   it("marks lease loss terminal while keeping timeout and 5xx retryable", async () => {
     const leaseClient = createContentProposalApiClient(
       "https://api.example",

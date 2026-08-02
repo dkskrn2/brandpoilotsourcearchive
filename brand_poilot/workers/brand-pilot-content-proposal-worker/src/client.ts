@@ -1,5 +1,7 @@
 import {
+  isContentProposalJobV2,
   parseContentProposalJob,
+  parseProposalInputSnapshotV2,
   type ContentProposalWorkerClient,
 } from "./contracts.js";
 
@@ -104,11 +106,19 @@ export function createContentProposalApiClient(
         leaseSeconds,
       });
     },
+    async completeResearch(job, evidence) {
+      const payload = await request(`/worker/content-proposal-jobs/${job.id}/research-complete`, {
+        workerId: job.workerId,
+        leaseToken: job.leaseToken,
+        evidence,
+      });
+      return parseProposalInputSnapshotV2(payload);
+    },
     async complete(job, proposals) {
       await request(`/worker/content-proposal-jobs/${job.id}/complete`, {
         workerId: job.workerId,
         leaseToken: job.leaseToken,
-        proposals,
+        ...(isContentProposalJobV2(job) ? { proposalSet: proposals } : { proposals }),
       });
     },
     async fail(job, input) {

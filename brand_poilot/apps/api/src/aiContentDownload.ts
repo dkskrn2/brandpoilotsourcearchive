@@ -49,14 +49,34 @@ async function fetchAsset(url: string, fetchImpl: typeof fetch, maxBytes: number
   return bytes;
 }
 
-async function outputEntries(row: OutputRow, fetchImpl: typeof fetch, maxAssetBytes: number) {
+function validateV2AssetPath(
+  input: Pick<Scope, "brandId">,
+  row: OutputRow,
+  asset: AiContentManifest["assets"][number],
+) {
+  const manifest = row.artifact_manifest_json as { version?: unknown };
+  if (manifest?.version !== "ai-content.v2") return;
+  const path = decodeURIComponent(blobUrl(asset.url).pathname).replace(/^\/+/, "");
+  const prefix = `ai-content/${input.brandId}/${row.generation_id}/${row.id}/`;
+  const expected = asset.role === "html"
+    ? `${prefix}content.html`
+    : asset.role === "video"
+      ? `${prefix}reel.mp4`
+      : `${prefix}assets/${String(asset.index).padStart(2, "0")}.png`;
+  if (path !== expected) throw new Error("ai_content_download_asset_path_invalid");
+}
+
+async function outputEntries(row: OutputRow, input: Scope, fetchImpl: typeof fetch, maxAssetBytes: number) {
   if (row.status !== "completed") throw new Error("ai_content_output_not_completed");
   const manifest = parseAiContentManifest(row.type, row.artifact_manifest_json) as AiContentManifest;
   const folder = `${String(row.output_index).padStart(2, "0")}-${safeSegment(row.title, "result")}`;
-  const assets = await Promise.all(manifest.assets.map(async (asset) => ({
-    name: `${folder}/${safeSegment(asset.fileName, `asset-${asset.index}`)}`,
-    data: await fetchAsset(asset.url, fetchImpl, maxAssetBytes),
-  })));
+  const assets = await Promise.all(manifest.assets.map(async (asset) => {
+    validateV2AssetPath(input, row, asset);
+    return {
+      name: `${folder}/${safeSegment(asset.fileName, `asset-${asset.index}`)}`,
+      data: await fetchAsset(asset.url, fetchImpl, maxAssetBytes),
+    };
+  }));
   return [
     { name: `${folder}/manifest.json`, data: Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, "utf8") },
     { name: `${folder}/content.json`, data: Buffer.from(`${JSON.stringify(row.content_json ?? manifest.content, null, 2)}\n`, "utf8") },
@@ -108,7 +128,7 @@ export function createAiContentDownloadRepository(pool: Pool, options: {
 
   async function packageRows(input: Scope, rows: OutputRow[], fileName: string) {
     if (!rows.length) throw new Error("ai_content_output_not_found");
-    const entries = (await Promise.all(rows.map((row) => outputEntries(row, fetchImpl, maxAssetBytes)))).flat();
+    const entries = (await Promise.all(rows.map((row) => outputEntries(row, input, fetchImpl, maxAssetBytes)))).flat();
     const buffer = zipBuilder(entries);
     const client = await pool.connect();
     try {

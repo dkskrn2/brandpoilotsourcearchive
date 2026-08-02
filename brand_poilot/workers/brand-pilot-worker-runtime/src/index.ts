@@ -1,5 +1,37 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 
+export {
+  runControlledSearch,
+  type ControlledSearchDependencies,
+  type ControlledSearchInput,
+} from "./controlledSearch.js";
+
+export {
+  parseContentGenerationInputV3,
+  parseImageGenerationPackageV1,
+  type ContentPurposeV2,
+  type ContentOutputFormatV2,
+  type ContentChannelTargetV2,
+  type ReferenceRoleV2,
+  type ContentAspectRatioV2,
+  type ApprovedBrandCoreSnapshotV2,
+  type ApprovedProductSnapshotV2,
+  type FrozenReferenceSnapshotV2,
+  type ResearchEvidenceSnapshotV1,
+  type InformationalProposalTypeV2,
+  type ContentProposalV2,
+  type FrozenStyleImageSnapshotV1,
+  type FinalAttachmentSnapshotV1,
+  type ContentGenerationInputV3,
+  type ImageGenerationPackageV1,
+  type WorkerContentPurposeV3,
+  type WorkerOutputFormatV3,
+  type WorkerChannelV3,
+  type WorkerRatioV3,
+  type WorkerReferenceRoleV3,
+  type WorkerInformationTypeV3,
+} from "./aiContentV3.js";
+
 export interface AiContentAttachmentSnapshot {
   id: string;
   generationId: string;
@@ -41,7 +73,7 @@ export interface WorkerContentOrchestrationV1 {
   contractVersion: "content-orchestration.v1";
   contentFamily: WorkerContentFamily;
   subject:
-    | { mode: "brand_topic"; topic: string; wikiItemIds: string[] }
+    | { mode: "brand_topic"; topic: string }
     | { mode: "product_service"; productServiceId: string }
     | { mode: "new_subject"; subjectAnalysisId: string };
   target: { id: string | null; snapshot: Record<string, unknown> };
@@ -188,8 +220,7 @@ export function parseWorkerContentOrchestration(
   if (
     subject.mode === "brand_topic"
       ? !orchestrationText(subject.topic)
-        || !Array.isArray(subject.wikiItemIds)
-        || subject.wikiItemIds.some((id) => !orchestrationText(id))
+        || Object.prototype.hasOwnProperty.call(subject, "wikiItemIds")
       : subject.mode === "product_service"
         ? !orchestrationText(subject.productServiceId)
         : subject.mode === "new_subject"

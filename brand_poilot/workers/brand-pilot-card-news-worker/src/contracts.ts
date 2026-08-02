@@ -35,6 +35,8 @@ export interface ContentGenerationInputV2 {
   attachments: AiContentAttachmentSnapshot[];
 }
 
+export type CardNewsGenerationInput = ContentGenerationInputV2 | ContentGenerationInputV3;
+
 const asRecord = (value: unknown, code: string): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(code);
   return value as Record<string, unknown>;
@@ -118,6 +120,17 @@ export function parseContentGenerationInput(value: unknown): ContentGenerationIn
   };
 }
 
+export function parseCardNewsInput(value: unknown, legacyWorkerType: unknown): CardNewsGenerationInput {
+  if (legacyWorkerType !== "card_news") throw new Error("content_generation_input_type_invalid");
+  const source = asRecord(value, "content_generation_input_invalid");
+  if (source.contractVersion !== "content-generation-input.v3") return parseContentGenerationInput(value);
+  const input = parseContentGenerationInputV3(value);
+  if (input.outputSettings.outputFormat !== "card_news") {
+    throw new Error("content_generation_input_type_invalid");
+  }
+  return input;
+}
+
 export interface CardNewsAsset {
   role: "slide";
   fileName: string;
@@ -151,8 +164,10 @@ export interface WorkerClient {
   releaseResource(id: string, workerId: string, leaseToken: string): Promise<void>;
 }
 import {
+  parseContentGenerationInputV3,
   parseAttachmentSnapshots,
   parseWorkerContentOrchestration,
   type AiContentAttachmentSnapshot,
+  type ContentGenerationInputV3,
   type WorkerContentOrchestrationV1,
 } from "@brand-pilot/worker-runtime";

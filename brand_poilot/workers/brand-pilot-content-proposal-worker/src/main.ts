@@ -7,6 +7,7 @@ import {
   runContentProposalWatchIteration,
 } from "./worker.js";
 import { startWorkerInstanceHeartbeat } from "./instanceHeartbeat.js";
+import { createContentProposalResearch } from "./research.js";
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -62,9 +63,11 @@ async function main(): Promise<void> {
       900_000,
     ),
   }));
+  const research = createContentProposalResearch();
   const runOnce = () => runContentProposalOnce({
     client,
     runner,
+    research,
     workerId,
     leaseSeconds,
     heartbeatMs,

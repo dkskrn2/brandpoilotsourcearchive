@@ -2,11 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import { parseWorkerManifest } from "./manifest.js";
 import type { SourceReadResult } from "./sourceReader.js";
 import {
+  resolveAiContentLeaseTiming,
   runOnce,
   type ClaimedImageJob,
   type RenderedInstagramPackage,
   type RenderedReelMedia
 } from "./worker.js";
+import type { AiContentImageAssetJob, AiContentPackageFinalizeJob } from "./aiContentRenderClient.js";
+import { createAiContentShutdownCoordinator } from "./aiContentShutdown.js";
 
 const hashtags = ["#one", "#two", "#three", "#four", "#five"];
 const qualityBrief = {
@@ -408,5 +411,245 @@ describe("image worker", () => {
     await vi.waitFor(() => expect(client.heartbeat.mock.calls.length).toBeGreaterThan(1));
     renderGate.resolve(feedPackage());
     await expect(running).resolves.toEqual({ status: "completed", jobId: "job-1" });
+  });
+});
+
+const v3id = (n: number) => `50000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+
+function v3AssetJob(): AiContentImageAssetJob {
+  return {
+    id: v3id(1), generationId: v3id(2), outputId: v3id(3), workspaceId: v3id(4), brandId: v3id(5),
+    jobKind: "image_asset", assetIndex: 2, leaseToken: "v3-lease", attemptCount: 1,
+    payload: {
+      contractVersion: "ai-content-render-job.v1", jobKind: "image_asset", generationId: v3id(2), outputId: v3id(3), assetIndex: 2,
+      assetKey: `${v3id(2)}:2`, storagePath: `ai-content/${v3id(5)}/${v3id(2)}/${v3id(3)}/assets/02.png`,
+      imagePackage: {
+        contractVersion: "image-generation-package.v1", generationId: v3id(2), outputFormat: "card_news", purpose: "informational", assetCount: 3, aspectRatio: "1:1", channelTargets: ["instagram"],
+        assets: [1, 2, 3].map((index) => ({ index, role: `role-${index}`, copy: `copy-${index}`, visualDirection: `visual-${index}`, evidenceIds: [], productImageAssetIds: [], attachmentIds: [] })),
+        product: null, references: [], brandStyleImages: [], avatarStyleImageId: null, attachments: [], userImageInstruction: null,
+        logoPolicy: { allowGeneratedLogo: false, allowReservedLogoArea: false, allowExternalReferenceLogo: false, allowExistingProductPackagingLogo: true },
+      },
+    },
+  };
+}
+
+function v3Client(claimed: AiContentImageAssetJob | AiContentPackageFinalizeJob | null = v3AssetJob()) {
+  return {
+    claim: vi.fn(async () => claimed), heartbeat: vi.fn(async () => true), completeAsset: vi.fn(async () => undefined),
+    completePackage: vi.fn(async () => undefined), fail: vi.fn(async () => undefined),
+  };
+}
+
+describe("V3 AI content render priority", () => {
+  it("falls through unchanged to the legacy image queue when V3 is empty", async () => {
+    const aiContentClient = v3Client(null);
+    const client = workerClient();
+    const renderer = { renderJob: vi.fn(async () => feedPackage()) };
+    const storage = { upload: vi.fn(async () => ({ manifestUrl: "https://blob.example/legacy.json" })) };
+
+    await expect(runOnce({ workerId: "worker", aiContentClient, aiContentRenderer: { renderAsset: vi.fn() }, aiContentStorage: { uploadAsset: vi.fn() }, aiContentFinalizer: vi.fn(), client, renderer, storage, readSource: vi.fn(async () => fetchedSource) }))
+      .resolves.toEqual({ status: "completed", jobId: "job-1" });
+    expect(aiContentClient.claim).toHaveBeenCalledBefore(client.claim);
+    expect(renderer.renderJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders and uploads only the exact V3 asset index, never its successful siblings", async () => {
+    const aiContentClient = v3Client();
+    const aiContentRenderer = { renderAsset: vi.fn(async (job: AiContentImageAssetJob) => ({ index: job.assetIndex, bytes: Buffer.from("asset-2"), mimeType: "image/png" as const, width: 1080, height: 1080, checksum: "a".repeat(64) })) };
+    const aiContentStorage = { uploadAsset: vi.fn(async (input: { path: string }) => ({ index: 2, url: "https://blob.example/02.png", storagePath: input.path, mimeType: "image/png" as const, width: 1080, height: 1080, checksum: "a".repeat(64) })) };
+    const client = workerClient();
+
+    await expect(runOnce({ workerId: "worker", aiContentClient, aiContentRenderer, aiContentStorage, aiContentFinalizer: vi.fn(), client, renderer: { renderJob: vi.fn() }, storage: { upload: vi.fn() } }))
+      .resolves.toEqual({ status: "completed", jobId: v3id(1) });
+    expect(aiContentRenderer.renderAsset).toHaveBeenCalledTimes(1);
+    expect(aiContentRenderer.renderAsset).toHaveBeenCalledWith(expect.objectContaining({ assetIndex: 2 }), expect.any(AbortSignal));
+    expect(aiContentStorage.uploadAsset).toHaveBeenCalledWith(expect.objectContaining({ path: expect.stringMatching(/\/assets\/02\.png$/), index: 2 }));
+    expect(aiContentClient.completeAsset).toHaveBeenCalledWith(expect.objectContaining({ id: v3id(1) }), "worker", expect.objectContaining({ index: 2 }));
+    expect(client.claim).not.toHaveBeenCalled();
+  });
+
+  it("isolates V3 failure from legacy job state", async () => {
+    const aiContentClient = v3Client();
+    const client = workerClient();
+    await expect(runOnce({ workerId: "worker", aiContentClient, aiContentRenderer: { renderAsset: vi.fn(async () => { throw new Error("ai_content_asset_render_failed"); }) }, aiContentStorage: { uploadAsset: vi.fn() }, aiContentFinalizer: vi.fn(), client, renderer: { renderJob: vi.fn() }, storage: { upload: vi.fn() } }))
+      .resolves.toEqual({ status: "failed", jobId: v3id(1) });
+    expect(aiContentClient.fail).toHaveBeenCalledWith(expect.objectContaining({ id: v3id(1) }), "worker", expect.objectContaining({ errorCode: "ai_content_asset_render_failed" }));
+    expect(client.fail).not.toHaveBeenCalled();
+    expect(client.claim).not.toHaveBeenCalled();
+  });
+
+  it("aborts the active child signal when a heartbeat loses the lease", async () => {
+    const aiContentClient = v3Client();
+    aiContentClient.heartbeat.mockResolvedValue(false);
+    const aiContentRenderer = { renderAsset: vi.fn((_job: AiContentImageAssetJob, signal: AbortSignal) => new Promise((_, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    })) };
+    await expect(runOnce({ workerId: "worker", aiContentClient, aiContentRenderer, aiContentStorage: { uploadAsset: vi.fn() }, aiContentFinalizer: vi.fn(), client: workerClient(), renderer: { renderJob: vi.fn() }, storage: { upload: vi.fn() }, aiContentHeartbeatIntervalMs: 2 }))
+      .resolves.toEqual({ status: "failed", jobId: v3id(1) });
+    expect(aiContentClient.fail).not.toHaveBeenCalled();
+  });
+});
+
+describe("V3 lease timing and shutdown", () => {
+  it("caps heartbeats at one third of the validated lease and safely normalizes invalid configuration", () => {
+    expect(resolveAiContentLeaseTiming({ leaseSeconds: 180, heartbeatIntervalMs: 60_000 })).toEqual({ leaseSeconds: 180, heartbeatIntervalMs: 60_000 });
+    expect(resolveAiContentLeaseTiming({ leaseSeconds: 30, heartbeatIntervalMs: 60_000 })).toEqual({ leaseSeconds: 30, heartbeatIntervalMs: 10_000 });
+    expect(resolveAiContentLeaseTiming({ leaseSeconds: 30, heartbeatIntervalMs: 100 })).toEqual({ leaseSeconds: 30, heartbeatIntervalMs: 1_000 });
+    expect(resolveAiContentLeaseTiming({ leaseSeconds: Number.NaN, heartbeatIntervalMs: Number.POSITIVE_INFINITY })).toEqual({ leaseSeconds: 180, heartbeatIntervalMs: 60_000 });
+  });
+
+  it("does not claim new work when shutdown was already requested", async () => {
+    const shutdown = new AbortController();
+    shutdown.abort(new Error("shutdown"));
+    const aiContentClient = v3Client();
+    const client = workerClient();
+    await expect(runOnce({ workerId: "worker", signal: shutdown.signal, aiContentClient, aiContentRenderer: { renderAsset: vi.fn() }, aiContentStorage: { uploadAsset: vi.fn() }, aiContentFinalizer: vi.fn(), client, renderer: { renderJob: vi.fn() }, storage: { upload: vi.fn() } }))
+      .resolves.toEqual({ status: "idle" });
+    expect(aiContentClient.claim).not.toHaveBeenCalled();
+    expect(client.claim).not.toHaveBeenCalled();
+  });
+
+  it("links external shutdown to the active renderer and removes the listener without reporting a stale failure", async () => {
+    const shutdown = new AbortController();
+    const add = vi.spyOn(shutdown.signal, "addEventListener");
+    const remove = vi.spyOn(shutdown.signal, "removeEventListener");
+    const onAiContentActivityChange = vi.fn();
+    const aiContentClient = v3Client();
+    const aiContentRenderer = { renderAsset: vi.fn((_job: AiContentImageAssetJob, signal: AbortSignal) => new Promise((_, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    })) };
+    const running = runOnce({ workerId: "worker", signal: shutdown.signal, onAiContentActivityChange, aiContentClient, aiContentRenderer, aiContentStorage: { uploadAsset: vi.fn() }, aiContentFinalizer: vi.fn(), client: workerClient(), renderer: { renderJob: vi.fn() }, storage: { upload: vi.fn() } });
+    await vi.waitFor(() => expect(aiContentRenderer.renderAsset).toHaveBeenCalled());
+
+    shutdown.abort(new Error("shutdown"));
+
+    await expect(running).resolves.toEqual({ status: "failed", jobId: v3id(1) });
+    expect(aiContentClient.fail).not.toHaveBeenCalled();
+    expect(add).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(onAiContentActivityChange.mock.calls).toEqual([[true], [false]]);
+  });
+});
+
+describe("V3 process shutdown coordination", () => {
+  it("immediately relays a signal while V3 is inactive, including legacy work and resource waits", () => {
+    const relaySignal = vi.fn();
+    const setGraceTimer = vi.fn();
+    const coordinator = createAiContentShutdownCoordinator({
+      graceMs: 5_000,
+      relaySignal,
+      setGraceTimer,
+      clearGraceTimer: vi.fn(),
+    });
+
+    coordinator.handleSignal("SIGTERM");
+
+    expect(coordinator.signal.aborted).toBe(false);
+    expect(setGraceTimer).not.toHaveBeenCalled();
+    expect(relaySignal).toHaveBeenCalledTimes(1);
+    expect(relaySignal).toHaveBeenCalledWith("SIGTERM");
+    coordinator.dispose();
+  });
+
+  it("aborts active V3 work and cancels the grace fallback after normal cleanup", () => {
+    const relaySignal = vi.fn();
+    const timerHandle = Symbol("grace-timer");
+    const setGraceTimer = vi.fn(() => timerHandle);
+    const clearGraceTimer = vi.fn();
+    const coordinator = createAiContentShutdownCoordinator({
+      graceMs: 5_000,
+      relaySignal,
+      setGraceTimer,
+      clearGraceTimer,
+    });
+    coordinator.onAiContentActivityChange(true);
+
+    coordinator.handleSignal("SIGINT");
+
+    expect(coordinator.signal.aborted).toBe(true);
+    expect(relaySignal).not.toHaveBeenCalled();
+    expect(setGraceTimer).toHaveBeenCalledWith(expect.any(Function), 5_000);
+    coordinator.onAiContentActivityChange(false);
+    coordinator.dispose();
+    expect(clearGraceTimer).toHaveBeenCalledTimes(1);
+    expect(clearGraceTimer).toHaveBeenCalledWith(timerHandle);
+  });
+
+  it("relays the original signal when active V3 cleanup exceeds the grace period", () => {
+    const relaySignal = vi.fn();
+    let expireGrace: (() => void) | undefined;
+    const coordinator = createAiContentShutdownCoordinator({
+      graceMs: 5_000,
+      relaySignal,
+      setGraceTimer: vi.fn((callback) => {
+        expireGrace = callback;
+        return Symbol("grace-timer");
+      }),
+      clearGraceTimer: vi.fn(),
+    });
+    coordinator.onAiContentActivityChange(true);
+    coordinator.handleSignal("SIGTERM");
+
+    expireGrace?.();
+
+    expect(relaySignal).toHaveBeenCalledTimes(1);
+    expect(relaySignal).toHaveBeenCalledWith("SIGTERM");
+    coordinator.dispose();
+  });
+});
+
+describe("V3 transient failure classification", () => {
+  it("reports a Reel FFmpeg finalizer failure as retryable without invoking image rendering or upload", async () => {
+    const assetJob = v3AssetJob();
+    const finalizerJob: AiContentPackageFinalizeJob = { ...assetJob, jobKind: "package_finalize", assetIndex: null, payload: { contractVersion: "ai-content-render-job.v1", jobKind: "package_finalize", generationId: assetJob.generationId, outputId: assetJob.outputId, plan: {}, finalInput: {}, supplementalResearch: null, assets: [] } };
+    const aiContentClient = v3Client(finalizerJob);
+    const aiContentRenderer = { renderAsset: vi.fn() };
+    const aiContentStorage = { uploadAsset: vi.fn() };
+    await runOnce({ workerId: "worker", aiContentClient, aiContentRenderer, aiContentStorage, aiContentFinalizer: vi.fn(async () => { throw new Error("ai_content_reel_render_failed:ffmpeg_failed"); }), client: workerClient(), renderer: { renderJob: vi.fn() }, storage: { upload: vi.fn() } });
+    expect(aiContentRenderer.renderAsset).not.toHaveBeenCalled();
+    expect(aiContentStorage.uploadAsset).not.toHaveBeenCalled();
+    expect(aiContentClient.fail).toHaveBeenCalledWith(expect.anything(), "worker", expect.objectContaining({ errorCode: "ai_content_reel_render_failed", retryable: true }));
+  });
+
+  it("passes lease-loss cancellation into a Reel finalizer and never uploads or completes afterward", async () => {
+    const assetJob = v3AssetJob();
+    const finalizerJob: AiContentPackageFinalizeJob = { ...assetJob, jobKind: "package_finalize", assetIndex: null, payload: { contractVersion: "ai-content-render-job.v1", jobKind: "package_finalize", generationId: assetJob.generationId, outputId: assetJob.outputId, plan: {}, finalInput: {}, supplementalResearch: null, assets: [] } };
+    const aiContentClient = v3Client(finalizerJob);
+    aiContentClient.heartbeat.mockResolvedValue(false);
+    const aiContentRenderer = { renderAsset: vi.fn() };
+    const aiContentStorage = { uploadAsset: vi.fn() };
+    const aiContentFinalizer = vi.fn((_job: AiContentPackageFinalizeJob, signal: AbortSignal) => new Promise<never>((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }));
+
+    await expect(runOnce({ workerId: "worker", aiContentClient, aiContentRenderer, aiContentStorage, aiContentFinalizer, client: workerClient(), renderer: { renderJob: vi.fn() }, storage: { upload: vi.fn() }, aiContentHeartbeatIntervalMs: 2 })).resolves.toEqual({ status: "failed", jobId: finalizerJob.id });
+    expect(aiContentRenderer.renderAsset).not.toHaveBeenCalled();
+    expect(aiContentStorage.uploadAsset).not.toHaveBeenCalled();
+    expect(aiContentClient.completePackage).not.toHaveBeenCalled();
+    expect(aiContentClient.fail).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["Too many requests", undefined, "Error"],
+    ["request failed", "429", "Error"],
+    ["service is currently not available", undefined, "BlobServiceNotAvailable"],
+    ["upstream returned 503", undefined, "Error"],
+    ["fetch failed", undefined, "TypeError"],
+    ["socket hang up", "ECONNRESET", "Error"],
+    ["connect failed", "ECONNREFUSED", "Error"],
+    ["timed out", "ETIMEDOUT", "Error"],
+    ["dns failed", "EAI_AGAIN", "Error"],
+    ["network error", undefined, "Error"],
+  ])("marks transport failure %s / %s retryable", async (message, code, name) => {
+    const error = Object.assign(new Error(message), { code, name });
+    const aiContentClient = v3Client();
+    await runOnce({ workerId: "worker", aiContentClient, aiContentRenderer: { renderAsset: vi.fn(async () => { throw error; }) }, aiContentStorage: { uploadAsset: vi.fn() }, aiContentFinalizer: vi.fn(), client: workerClient(), renderer: { renderJob: vi.fn() }, storage: { upload: vi.fn() } });
+    expect(aiContentClient.fail).toHaveBeenCalledWith(expect.anything(), "worker", expect.objectContaining({ retryable: true }));
+  });
+
+  it.each(["ai_content_asset_storage_conflict", "ai_content_owned_blob_checksum_mismatch", "worker_ai_content_v3_invalid"])("keeps deterministic failure %s terminal", async (message) => {
+    const aiContentClient = v3Client();
+    await runOnce({ workerId: "worker", aiContentClient, aiContentRenderer: { renderAsset: vi.fn(async () => { throw new Error(message); }) }, aiContentStorage: { uploadAsset: vi.fn() }, aiContentFinalizer: vi.fn(), client: workerClient(), renderer: { renderJob: vi.fn() }, storage: { upload: vi.fn() } });
+    expect(aiContentClient.fail).toHaveBeenCalledWith(expect.anything(), "worker", expect.objectContaining({ retryable: false }));
   });
 });

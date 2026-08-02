@@ -11,7 +11,13 @@ const fields: Array<[GenerationAttachment["role"], string, typeof Package]> = [
   ["scale", "크기·비율 참고 이미지", ZoomIn],
   ["visual_reference", "시각 참고 이미지", Image],
   ["document", "문서", FileText],
+  ["product_image", "제품 이미지", Package],
+  ["supporting_image", "보조 이미지", Image],
 ];
+
+const legacyRoles = new Set<GenerationAttachment["role"]>([
+  "product", "person", "scale", "visual_reference", "document",
+]);
 
 interface Props {
   gateway: AiContentGateway;
@@ -49,8 +55,8 @@ function normalizedMimeType(role: GenerationAttachment["role"], file: File) {
 function validateFile(role: GenerationAttachment["role"], file: File, attachments: GenerationAttachment[], attachmentCount: number, replacingFailedId?: string) {
   const isDocument = role === "document";
   const mimeType = normalizedMimeType(role, file);
-  if (isDocument ? !documentMimeTypes.has(mimeType) : !["image/png", "image/jpeg"].includes(mimeType)) {
-    return isDocument ? "PDF, TXT, MD, CSV, XLSX 파일만 첨부할 수 있습니다." : "PNG, JPEG 파일만 첨부할 수 있습니다.";
+  if (isDocument ? !documentMimeTypes.has(mimeType) : !["image/png", "image/jpeg", "image/webp"].includes(mimeType)) {
+    return isDocument ? "PDF, TXT, MD, CSV, XLSX 파일만 첨부할 수 있습니다." : "PNG, JPEG, WebP 이미지만 첨부할 수 있습니다.";
   }
   const maxBytes = mimeType === "application/pdf" || mimeType.includes("spreadsheetml") ? 10_000_000 : 5_000_000;
   if (file.size > maxBytes) return isDocument ? "문서는 형식에 따라 5~10MB 이하여야 합니다." : "이미지는 5MB 이하여야 합니다.";
@@ -207,12 +213,12 @@ export function AiContentAttachmentUploader({ gateway, brandId, generationId, at
 
   return <div className="ai-content-attachment-uploader">
     <div className="attachment-grid">
-      {fields.filter(([role]) => !allowedRoles || allowedRoles.includes(role)).map(([role, label, Icon]) => <div className="attachment-picker" key={role}>
+      {fields.filter(([role]) => allowedRoles ? allowedRoles.includes(role) : legacyRoles.has(role)).map(([role, label, Icon]) => <div className="attachment-picker" key={role}>
         <div className="attachment-picker__label"><Icon size={18} aria-hidden="true" /><span>{label}</span></div>
         <FileUploadButton
           inputLabel={label}
           buttonLabel={`${label} 추가`}
-          accept={role === "document" ? ".pdf,.txt,.md,.csv,.xlsx,application/pdf,text/plain,text/markdown,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "image/png,image/jpeg"}
+          accept={role === "document" ? ".pdf,.txt,.md,.csv,.xlsx,application/pdf,text/plain,text/markdown,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "image/png,image/jpeg,image/webp"}
           disabled={disabled}
           items={attachments.filter((item) => item.role === role).map((item) => ({
             id: item.id,

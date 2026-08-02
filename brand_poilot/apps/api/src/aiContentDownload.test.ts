@@ -162,4 +162,122 @@ describe("createAiContentDownloadRepository", () => {
     expect(keys.size).toBe(20);
     expect(updatedOutputs).toBe(1);
   });
+
+  it("packages a v2 blog with HTML and zero or optional inline images from its owned prefix", async () => {
+    const entriesByCall: string[][] = [];
+    const v2Blog = {
+      ...output,
+      type: "blog",
+      artifact_manifest_json: {
+        version: "ai-content.v2",
+        type: "blog",
+        purpose: "informational",
+        outputFormat: "blog",
+        title: "검색형 블로그",
+        assets: [{
+          role: "html",
+          index: 1,
+          url: `https://assets.public.blob.vercel-storage.com/ai-content/brand-1/${output.generation_id}/${output.id}/content.html`,
+          fileName: "content.html",
+          mimeType: "text/html",
+        }],
+        content: { title: "검색형 블로그", html: "<article><h1>검색형 블로그</h1></article>" },
+      },
+      content_json: { title: "검색형 블로그", html: "<article><h1>검색형 블로그</h1></article>" },
+    };
+    const { client } = setup();
+    const pool = {
+      query: vi.fn(async () => ({ rows: [v2Blog] })),
+      connect: vi.fn(async () => client),
+    };
+    const repository = createAiContentDownloadRepository(pool as never, {
+      fetchImpl: vi.fn(async () => new Response(Buffer.from("html"), { status: 200 })) as never,
+      zipBuilder: (entries) => {
+        entriesByCall.push(entries.map((entry) => entry.name));
+        return Buffer.from("zip");
+      },
+    });
+
+    await repository.downloadAiContentOutput({ workspaceId: "workspace-1", brandId: "brand-1", outputId: output.id, usageDate: "2026-08-01", dailyDownloadLimit: 20 });
+    expect(entriesByCall[0]).toEqual(expect.arrayContaining([
+      expect.stringMatching(/manifest\.json$/),
+      expect.stringMatching(/content\.json$/),
+      expect.stringMatching(/content\.html$/),
+    ]));
+    expect(entriesByCall[0]?.filter((name) => name.endsWith(".png"))).toHaveLength(0);
+
+    v2Blog.artifact_manifest_json.assets.push({
+      role: "inline",
+      index: 1,
+      url: `https://assets.public.blob.vercel-storage.com/ai-content/brand-1/${output.generation_id}/${output.id}/assets/01.png`,
+      fileName: "inline-01.png",
+      mimeType: "image/png",
+      width: 1200,
+      height: 800,
+    } as never);
+    await repository.downloadAiContentOutput({ workspaceId: "workspace-1", brandId: "brand-1", outputId: output.id, usageDate: "2026-08-01", dailyDownloadLimit: 20 });
+    expect(entriesByCall[1]).toEqual(expect.arrayContaining([expect.stringMatching(/inline-01\.png$/)]));
+  });
+
+  it("packages v2 reel scenes and the final MP4 while retaining the first scene as the cover asset", async () => {
+    const names: string[] = [];
+    const v2Reel = {
+      ...output,
+      type: "marketing",
+      artifact_manifest_json: {
+        version: "ai-content.v2",
+        type: "marketing",
+        purpose: "marketing",
+        outputFormat: "reel",
+        title: "릴스",
+        assets: [
+          { role: "scene", index: 1, url: `https://assets.public.blob.vercel-storage.com/ai-content/brand-1/${output.generation_id}/${output.id}/assets/01.png`, fileName: "scene-01.png", mimeType: "image/png", width: 1080, height: 1920 },
+          { role: "scene", index: 2, url: `https://assets.public.blob.vercel-storage.com/ai-content/brand-1/${output.generation_id}/${output.id}/assets/02.png`, fileName: "scene-02.png", mimeType: "image/png", width: 1080, height: 1920 },
+          { role: "video", index: 1, url: `https://assets.public.blob.vercel-storage.com/ai-content/brand-1/${output.generation_id}/${output.id}/reel.mp4`, fileName: "reel.mp4", mimeType: "video/mp4", width: 1080, height: 1920, durationSeconds: 8, videoCodec: "h264", fps: 30, audioCodec: null },
+        ],
+        content: { caption: "릴스" },
+      },
+    };
+    const { client } = setup();
+    const repository = createAiContentDownloadRepository({
+      query: vi.fn(async () => ({ rows: [v2Reel] })),
+      connect: vi.fn(async () => client),
+    } as never, {
+      fetchImpl: vi.fn(async () => new Response(Buffer.from("asset"), { status: 200 })) as never,
+      zipBuilder: (entries) => { names.push(...entries.map((entry) => entry.name)); return Buffer.from("zip"); },
+    });
+
+    await repository.downloadAiContentOutput({ workspaceId: "workspace-1", brandId: "brand-1", outputId: output.id, usageDate: "2026-08-01", dailyDownloadLimit: 20 });
+
+    expect(names).toEqual(expect.arrayContaining([
+      expect.stringMatching(/scene-01\.png$/),
+      expect.stringMatching(/scene-02\.png$/),
+      expect.stringMatching(/reel\.mp4$/),
+    ]));
+  });
+
+  it("rejects a v2 asset outside the scoped deterministic brand, generation, and output prefix", async () => {
+    const foreign = {
+      ...output,
+      artifact_manifest_json: {
+        version: "ai-content.v2",
+        type: "card_news",
+        purpose: "informational",
+        outputFormat: "card_news",
+        title: "외부 자산",
+        assets: [{ role: "slide", index: 1, url: `https://assets.public.blob.vercel-storage.com/ai-content/other-brand/${output.generation_id}/${output.id}/assets/01.png`, fileName: "slide-01.png", mimeType: "image/png", width: 1080, height: 1080 }],
+        content: { caption: "외부" },
+      },
+    };
+    const { client } = setup();
+    const fetchImpl = vi.fn();
+    const repository = createAiContentDownloadRepository({
+      query: vi.fn(async () => ({ rows: [foreign] })),
+      connect: vi.fn(async () => client),
+    } as never, { fetchImpl: fetchImpl as never });
+
+    await expect(repository.downloadAiContentOutput({ workspaceId: "workspace-1", brandId: "brand-1", outputId: output.id, usageDate: "2026-08-01", dailyDownloadLimit: 20 }))
+      .rejects.toThrow("ai_content_download_asset_path_invalid");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });

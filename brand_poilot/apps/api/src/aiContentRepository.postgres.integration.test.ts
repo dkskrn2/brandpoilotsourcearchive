@@ -1,5 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1019,3 +1020,193 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
     });
   },
 );
+
+describe.skipIf(!process.env.DATABASE_URL)("AI content V3 lock order on direct PostgreSQL", () => {
+  it("lets a selection replay finish while final start waits on the shared batch lock", async () => {
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 6 });
+    const ids = {
+      actor: randomUUID(),
+      workspace: randomUUID(),
+      brand: randomUUID(),
+      batch: randomUUID(),
+      proposal: randomUUID(),
+      generation: randomUUID(),
+      approved: randomUUID(),
+      core: randomUUID(),
+    };
+    const evidence = {
+      contractVersion: "research-evidence.v1",
+      decision: "searched",
+      reason: "required",
+      queries: ["lock order"],
+      capturedAt: "2026-08-01T00:00:00.000Z",
+      items: [],
+    };
+    const baseInput = {
+      contractVersion: "proposal-base-input.v2",
+      brandCore: {
+        versionId: ids.core,
+        companyOverview: "Lock order brand",
+        businessDescription: "Concurrency verification",
+        primaryCategory: "software",
+        detailedCategory: "testing",
+        primaryTarget: "operators",
+        differentiator: "deterministic",
+        coreAppeal: "safe concurrency",
+      },
+      subject: { kind: "topic_text", title: "Lock ordering" },
+      contentInstruction: null,
+      product: null,
+      references: [],
+      outputSettings: {
+        outputFormat: "card_news",
+        channelTargets: ["instagram"],
+        aspectRatio: "4:5",
+        outputCount: 1,
+        purpose: "informational",
+      },
+      capturedAt: "2026-08-01T00:00:00.000Z",
+    };
+    const proposal = {
+      conceptKey: "lock-order",
+      title: "Safe lock order",
+      informationalType: "how_to",
+      oneLineIntent: "Explain safe locking",
+      differentiator: "Concrete ordering",
+      differentiationAxes: ["method"],
+      target: "operators",
+      customerContext: "concurrent selection and generation",
+      keyMessage: "Lock ancestry first",
+      hook: "Avoid deadlocks",
+      selectionReason: "Operational safety",
+      evidenceIds: [],
+      referenceIds: [],
+      outputFormat: "card_news",
+      channelTargets: ["instagram"],
+      assetCount: 1,
+      outline: [{ index: 1, role: "cover", headline: "Safe locks", purpose: "Explain" }],
+      purposeDetails: {
+        kind: "informational",
+        question: "How do concurrent actions avoid deadlocks?",
+        value: "Reliable execution",
+        whyNow: "Before release",
+        learningPoints: ["batch then proposal then generation"],
+      },
+    };
+    const approval = {
+      contractVersion: "approved-proposal.v1",
+      sourceProposalId: ids.proposal,
+      revision: 1,
+      effectiveProposal: proposal,
+      editPatch: [],
+      validationResultId: "direct-postgres-lock-order",
+      approvedBy: ids.actor,
+      approvedAt: "2026-08-01T00:00:00.000Z",
+    };
+    const gate = await pool.connect();
+    let gateOpen = false;
+    let start: Promise<unknown> | null = null;
+    try {
+      await pool.query("insert into app_users (id,email) values ($1,$2)", [ids.actor, `${ids.actor}@example.test`]);
+      await pool.query(
+        "insert into workspaces (id,name,slug,created_by_user_id) values ($1,'V3 lock order',$2,$3)",
+        [ids.workspace, `v3-lock-${ids.workspace}`, ids.actor],
+      );
+      await pool.query(
+        "insert into workspace_members (workspace_id,user_id,role,status) values ($1,$2,'owner','active')",
+        [ids.workspace, ids.actor],
+      );
+      await pool.query(
+        "insert into brands (id,workspace_id,name,created_by_user_id) values ($1,$2,'V3 lock brand',$3)",
+        [ids.brand, ids.workspace, ids.actor],
+      );
+      await pool.query(
+        `insert into ai_content_proposal_batches (
+           id,workspace_id,brand_id,origin,content_family,request_json,source_snapshot_json,
+           input_snapshot_json,status,idempotency_key,created_by_user_id
+         ) values ($1,$2,$3,'manual','informational','{}','[]',$4::jsonb,'ready',$5,$6)`,
+        [ids.batch, ids.workspace, ids.brand, JSON.stringify(baseInput), `batch-${ids.batch}`, ids.actor],
+      );
+      await pool.query(
+        `insert into ai_content_proposal_research_snapshots
+           (id,workspace_id,brand_id,batch_id,evidence_json)
+         values ($1,$2,$3,$4,$5::jsonb)`,
+        [randomUUID(), ids.workspace, ids.brand, ids.batch, JSON.stringify(evidence)],
+      );
+      await pool.query(
+        `insert into ai_content_proposals (
+           id,workspace_id,brand_id,batch_id,position,proposal_json,status,selected_by_user_id,selected_at
+         ) values ($1,$2,$3,$4,1,$5::jsonb,'selected',$6,now())`,
+        [ids.proposal, ids.workspace, ids.brand, ids.batch, JSON.stringify(proposal), ids.actor],
+      );
+      await pool.query(
+        `insert into ai_content_generations (
+           id,workspace_id,brand_id,type,title,status,current_stage,draft_json,
+           analysis_idempotency_key,content_family,output_format,created_by_user_id,updated_by_user_id
+         ) values ($1,$2,$3,'card_news','Lock order','draft','draft',$4::jsonb,$5,
+                   'informational','card_news',$6,$6)`,
+        [ids.generation, ids.workspace, ids.brand, JSON.stringify({
+          origin: "proposal-v2",
+          proposalId: ids.proposal,
+          approvedProposalVersionId: ids.approved,
+          finalization: {
+            contractVersion: "content-finalization-draft.v2",
+            avatarStyleImageId: null,
+            userImageInstruction: null,
+            attachmentIds: [],
+          },
+        }), `proposal:${ids.proposal}:select-replay`, ids.actor],
+      );
+      await pool.query("update ai_content_proposals set generation_id=$1 where id=$2", [ids.generation, ids.proposal]);
+      await pool.query(
+        `insert into ai_content_approved_proposal_versions (
+           id,workspace_id,brand_id,proposal_id,revision,approved_proposal_snapshot,
+           validation_result_id,approved_by_user_id,approved_at
+         ) values ($1,$2,$3,$4,1,$5::jsonb,$6,$7,$8::timestamptz)`,
+        [ids.approved, ids.workspace, ids.brand, ids.proposal, JSON.stringify(approval),
+          approval.validationResultId, ids.actor, approval.approvedAt],
+      );
+
+      await gate.query("BEGIN");
+      gateOpen = true;
+      await gate.query("select id from ai_content_proposal_batches where id=$1 for update", [ids.batch]);
+      const blockerPid = Number((await gate.query("select pg_backend_pid() pid")).rows[0]?.pid);
+      const repository = createAiContentRepository(pool);
+      start = repository.startAiContentGenerationV3({
+        workspaceId: ids.workspace,
+        brandId: ids.brand,
+        actorUserId: ids.actor,
+        generationId: ids.generation,
+        contractVersion: "content-generation-start.v2",
+        idempotencyKey: "start-after-selection-replay",
+        usageDate: "2026-08-01",
+        dailyGenerationLimit: 10,
+      }, {
+        revalidateFrozenResources: vi.fn(async () => undefined),
+        loadApprovedStyleImages: vi.fn(async () => []),
+      } as never);
+      const startState = start.then(() => "completed" as const, () => "rejected" as const);
+      expect(await observeBackendBlockedBy(pool, blockerPid, startState)).toBe(true);
+
+      const gateRepository = createAiContentRepository(poolWithinExistingTransaction(gate) as never);
+      await expect(gateRepository.selectAiContentProposal({
+        workspaceId: ids.workspace,
+        brandId: ids.brand,
+        actorUserId: ids.actor,
+        proposalId: ids.proposal,
+        idempotencyKey: "select-replay",
+      })).resolves.toMatchObject({ id: ids.generation, status: "draft" });
+
+      await gate.query("COMMIT");
+      gateOpen = false;
+      await expect(start).resolves.toMatchObject({ id: ids.generation, status: "queued" });
+    } finally {
+      if (gateOpen) await gate.query("ROLLBACK").catch(() => undefined);
+      gate.release();
+      if (start) await start.catch(() => undefined);
+      await pool.query("delete from workspaces where id=$1", [ids.workspace]).catch(() => undefined);
+      await pool.query("delete from app_users where id=$1", [ids.actor]).catch(() => undefined);
+      await pool.end();
+    }
+  }, 30_000);
+});

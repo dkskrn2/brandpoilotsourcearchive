@@ -1,0 +1,836 @@
+import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import type { Pool, PoolClient } from "pg";
+import { load } from "cheerio";
+import type {
+  AiContentManifestV2,
+  ContentGenerationInputV3,
+  ContentRatioV2,
+  ImageGenerationPackageV1,
+} from "./aiContentContracts.js";
+import type { AiContentGenerationRecord, BrandScope } from "./aiContentRepository.js";
+import {
+  BLOG_PASSIVE_HTML_FORBIDDEN_ATTRIBUTES,
+  BLOG_PASSIVE_HTML_FORBIDDEN_TAGS,
+  parseContentPlanResultV2,
+  type ContentPlanResultV2,
+} from "./aiContentPlanContracts.js";
+import { parseAiContentManifest } from "./aiContentManifest.js";
+import { parseContentGenerationInputV3, parseResearchEvidenceSnapshotV1 } from "./aiContentGenerationInputV3.js";
+
+type Queryable = Pick<PoolClient, "query">;
+
+export interface AiContentRenderedAsset {
+  index: number;
+  url: string;
+  storagePath: string;
+  mimeType: "image/png";
+  width: number;
+  height: number;
+  checksum: string;
+}
+
+export interface AiContentRenderJob {
+  id: string;
+  generationId: string;
+  outputId: string;
+  brandId: string;
+  workspaceId: string;
+  jobKind: "image_asset" | "package_finalize";
+  assetIndex: number | null;
+  leaseToken: string;
+  attemptCount: number;
+  payload: Record<string, unknown>;
+}
+
+export interface RenderLeaseInput {
+  jobId: string;
+  workerId: string;
+  leaseToken: string;
+  leaseSeconds: number;
+}
+
+export interface RenderAssetCompletion {
+  jobId: string;
+  workerId: string;
+  leaseToken: string;
+  jobKind: "image_asset";
+  asset: AiContentRenderedAsset;
+}
+
+export interface RenderPackageCompletion {
+  jobId: string;
+  workerId: string;
+  leaseToken: string;
+  jobKind: "package_finalize";
+  manifest: AiContentManifestV2;
+  manifestUrl: string;
+}
+
+export interface RenderFailure {
+  jobId: string;
+  workerId: string;
+  leaseToken: string;
+  errorCode: string;
+  errorMessage: string;
+  retryable: boolean;
+}
+
+export interface AiContentRenderJobsRepository {
+  claim(input: { workerId: string; leaseSeconds: number }): Promise<AiContentRenderJob | null>;
+  heartbeat(input: RenderLeaseInput): Promise<boolean>;
+  completeAsset(input: RenderAssetCompletion): Promise<void>;
+  completePackage(input: RenderPackageCompletion): Promise<AiContentGenerationRecord>;
+  fail(input: RenderFailure): Promise<void>;
+  retryFailedOutput(input: BrandScope & { outputId: string }): Promise<AiContentGenerationRecord>;
+  saveOutputResearch(input: {
+    jobId: string;
+    outputId: string;
+    workerId: string;
+    leaseToken: string;
+    evidence: Record<string, unknown>;
+  }): Promise<void>;
+}
+
+export function expectedAiContentAssetStoragePath(input: {
+  brandId: string;
+  generationId: string;
+  outputId: string;
+  assetIndex: number;
+}): string {
+  return `ai-content/${input.brandId}/${input.generationId}/${input.outputId}/assets/${String(input.assetIndex).padStart(2, "0")}.png`;
+}
+
+export function expectedAiContentManifestStoragePath(input: {
+  brandId: string;
+  generationId: string;
+  outputId: string;
+}): string {
+  return `ai-content/${input.brandId}/${input.generationId}/${input.outputId}/manifest.json`;
+}
+
+export function expectedAiContentAssetDimensions(ratio: ContentRatioV2): { width: number; height: number } {
+  switch (ratio) {
+    case "4:5": return { width: 1080, height: 1350 };
+    case "16:9": return { width: 1920, height: 1080 };
+    case "9:16": return { width: 1080, height: 1920 };
+    default: return { width: 1080, height: 1080 };
+  }
+}
+
+function exactVercelBlobPath(value: unknown, expectedPath: string): boolean {
+  const rawUrl = String(value);
+  let url: URL;
+  try { url = new URL(rawUrl); } catch { return false; }
+  if (url.protocol !== "https:" || url.port !== "" || !url.hostname.endsWith(".public.blob.vercel-storage.com")) return false;
+  return rawUrl === `${url.origin}/${expectedPath}`;
+}
+
+function validateRenderManifestArtifactUrls(
+  manifest: AiContentManifestV2,
+  context: { brandId: string; generationId: string; outputId: string },
+): void {
+  const prefix = `ai-content/${context.brandId}/${context.generationId}/${context.outputId}`;
+  for (const asset of manifest.assets) {
+    const expectedPath = asset.mimeType === "text/html"
+      ? `${prefix}/content.html`
+      : asset.mimeType === "video/mp4"
+        ? `${prefix}/reel.mp4`
+        : null;
+    if (expectedPath !== null && !exactVercelBlobPath(asset.url, expectedPath)) {
+      throw new Error("ai_content_render_manifest_invalid");
+    }
+  }
+}
+
+export function parseRenderManifestUrl(
+  value: unknown,
+  context: { brandId: string; generationId: string; outputId: string },
+): URL {
+  if (!exactVercelBlobPath(value, expectedAiContentManifestStoragePath(context))) {
+    throw new Error("ai_content_render_manifest_invalid");
+  }
+  return new URL(String(value));
+}
+
+export function parseRenderAssetResult(
+  value: unknown,
+  context: { brandId: string; generationId: string; outputId: string; assetIndex: number; aspectRatio: ContentRatioV2 },
+): AiContentRenderedAsset {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
+    const source = value as Record<string, unknown>;
+    const allowed = ["index", "url", "storagePath", "mimeType", "width", "height", "checksum"];
+    if (Object.keys(source).some((key) => !allowed.includes(key)) || allowed.some((key) => !(key in source))) throw new Error();
+    const dimensions = expectedAiContentAssetDimensions(context.aspectRatio);
+    const expectedStoragePath = expectedAiContentAssetStoragePath(context);
+    if (
+      source.index !== context.assetIndex
+      || source.storagePath !== expectedStoragePath
+      || !exactVercelBlobPath(source.url, expectedStoragePath)
+      || source.mimeType !== "image/png"
+      || source.width !== dimensions.width
+      || source.height !== dimensions.height
+      || typeof source.checksum !== "string"
+      || !/^[0-9a-f]{64}$/.test(source.checksum)
+    ) throw new Error();
+    return source as unknown as AiContentRenderedAsset;
+  } catch {
+    throw new Error("ai_content_render_asset_invalid");
+  }
+}
+
+export async function enqueueAiContentRenderJobs(client: Queryable, input: {
+  workspaceId: string;
+  brandId: string;
+  generationId: string;
+  outputId: string;
+  plan: ContentPlanResultV2;
+  finalInput: ContentGenerationInputV3;
+}): Promise<void> {
+  const imagePackage = input.plan.imagePackage;
+  if (imagePackage) {
+    for (const asset of imagePackage.assets) {
+      const payload = {
+        contractVersion: "ai-content-render-job.v1",
+        jobKind: "image_asset",
+        generationId: input.generationId,
+        outputId: input.outputId,
+        imagePackage,
+        assetIndex: asset.index,
+        assetKey: `${input.generationId}:${asset.index}`,
+        storagePath: expectedAiContentAssetStoragePath({ ...input, assetIndex: asset.index }),
+      };
+      await client.query(
+        `insert into ai_content_generation_render_jobs
+           (generation_id,output_id,workspace_id,brand_id,job_kind,asset_index,status,payload_json)
+         values($1,$2,$3,$4,'image_asset',$5,'queued',$6::jsonb)
+         on conflict (output_id,asset_index) where job_kind='image_asset' do nothing`,
+        [input.generationId, input.outputId, input.workspaceId, input.brandId, asset.index, JSON.stringify(payload)],
+      );
+    }
+  } else {
+    await insertFinalizer(client, input);
+  }
+}
+
+async function insertFinalizer(client: Queryable, input: {
+  workspaceId: string; brandId: string; generationId: string; outputId: string;
+}): Promise<void> {
+  await client.query(
+    `insert into ai_content_generation_render_jobs
+       (generation_id,output_id,workspace_id,brand_id,job_kind,asset_index,status,payload_json)
+     values($1,$2,$3,$4,'package_finalize',null,'queued',$5::jsonb)
+     on conflict (output_id) where job_kind='package_finalize' do nothing`,
+    [input.generationId, input.outputId, input.workspaceId, input.brandId, JSON.stringify({
+      contractVersion: "ai-content-render-job.v1", jobKind: "package_finalize",
+      generationId: input.generationId, outputId: input.outputId,
+    })],
+  );
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function renderJob(row: Record<string, unknown>, payload: Record<string, unknown>): AiContentRenderJob {
+  return {
+    id: String(row.id), generationId: String(row.generation_id), outputId: String(row.output_id),
+    workspaceId: String(row.workspace_id), brandId: String(row.brand_id),
+    jobKind: row.job_kind as AiContentRenderJob["jobKind"], assetIndex: row.asset_index === null ? null : Number(row.asset_index),
+    leaseToken: String(row.lease_token), attemptCount: Number(row.attempt_count), payload,
+  };
+}
+
+async function finalizerPayload(client: Queryable, row: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const state = await client.query(
+    `select output.plan_json,input.input_json,research.evidence_json
+       from ai_content_generation_outputs output
+       join ai_content_generation_input_snapshots input
+         on input.generation_id=output.generation_id and input.workspace_id=output.workspace_id and input.brand_id=output.brand_id
+       left join ai_content_output_research_snapshots research
+         on research.output_id=output.id and research.generation_id=output.generation_id
+      where output.id=$1 and output.generation_id=$2 and output.workspace_id=$3 and output.brand_id=$4`,
+    [row.output_id, row.generation_id, row.workspace_id, row.brand_id],
+  );
+  if (!state.rows.length || !state.rows[0]?.plan_json || !state.rows[0]?.input_json) {
+    throw new Error("ai_content_render_snapshot_missing");
+  }
+  const assets = await client.query(
+    `select asset_index,result_json from ai_content_generation_render_jobs
+      where output_id=$1 and generation_id=$2 and workspace_id=$3 and brand_id=$4
+        and job_kind='image_asset' and status='succeeded'
+      order by asset_index`,
+    [row.output_id, row.generation_id, row.workspace_id, row.brand_id],
+  );
+  return {
+    contractVersion: "ai-content-render-job.v1", jobKind: "package_finalize",
+    generationId: String(row.generation_id), outputId: String(row.output_id),
+    plan: state.rows[0].plan_json, finalInput: state.rows[0].input_json,
+    supplementalResearch: state.rows[0].evidence_json ?? null,
+    assets: assets.rows.map((asset) => asset.result_json),
+  };
+}
+
+async function lockedRenderJob(client: Queryable, jobId: string): Promise<Record<string, unknown>> {
+  const result = await client.query(
+    `select *,lease_expires_at<=clock_timestamp() as lease_expired
+       from ai_content_generation_render_jobs where id=$1 for update`,
+    [jobId],
+  );
+  if (!result.rows.length) throw new Error("ai_content_render_job_not_found");
+  return result.rows[0] as Record<string, unknown>;
+}
+
+async function lockRenderOutputForJob(client: Queryable, jobId: string): Promise<void> {
+  const scope = await client.query(
+    `select output_id,generation_id,workspace_id,brand_id
+       from ai_content_generation_render_jobs where id=$1`,
+    [jobId],
+  );
+  if (!scope.rows.length) throw new Error("ai_content_render_job_not_found");
+  const row = scope.rows[0] as Record<string, unknown>;
+  const output = await client.query(
+    `select id from ai_content_generation_outputs
+      where id=$1 and generation_id=$2 and workspace_id=$3 and brand_id=$4 for update`,
+    [row.output_id, row.generation_id, row.workspace_id, row.brand_id],
+  );
+  if (!output.rows.length) throw new Error("ai_content_render_snapshot_missing");
+}
+
+function requireLease(row: Record<string, unknown>, input: { workerId: string; leaseToken: string }): void {
+  if (
+    row.status !== "processing" || row.worker_id !== input.workerId || String(row.lease_token) !== input.leaseToken
+    || !row.lease_expires_at || row.lease_expired === true
+  ) throw new Error("ai_content_render_job_lease_invalid");
+}
+
+function planImagePackage(value: unknown): ImageGenerationPackageV1 | null {
+  const plan = record(value);
+  return plan.imagePackage && typeof plan.imagePackage === "object" ? plan.imagePackage as ImageGenerationPackageV1 : null;
+}
+
+function normalizedVisibleText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function validateBlogFinalHtml(
+  html: unknown,
+  planValue: unknown,
+  finalInputValue: unknown,
+  supplementalResearchValue: unknown,
+): void {
+  if (typeof html !== "string" || /asset:\/\//.test(html)) throw new Error("ai_content_render_manifest_invalid");
+  const $ = load(html);
+  $("script,style,noscript").remove();
+  const article = $("article");
+  if (article.length !== 1 || article.find("h1").length !== 1) throw new Error("ai_content_render_manifest_invalid");
+  const h1 = article.find("h1").first();
+  const summary = h1.next();
+  const summaryParagraphs = summary.children("p");
+  if (!summary.length || summaryParagraphs.length !== 3 || summary.children().length !== 3) {
+    throw new Error("ai_content_render_manifest_invalid");
+  }
+  const summaryLength = normalizedVisibleText(summaryParagraphs.toArray().map((element) => $(element).text()).join(" ")).length;
+  const visibleLength = normalizedVisibleText(article.text()).length;
+  if (summaryLength > 300 || visibleLength < 3_000 || visibleLength > 10_000) throw new Error("ai_content_render_manifest_invalid");
+  for (const heading of article.find("h2,h3").toArray()) {
+    if (!normalizedVisibleText($(heading).text()).endsWith("?") || !$(heading).next().is("p")) {
+      throw new Error("ai_content_render_manifest_invalid");
+    }
+  }
+  const forbiddenExperience = [/제가 직접 (?:써|사용해) ?보니/, /실제 고객의 경험을 재구성/, /가상의 경험담/, /합성된 경험/];
+  if (forbiddenExperience.some((pattern) => pattern.test(article.text()))) throw new Error("ai_content_render_manifest_invalid");
+  const plan = record(planValue);
+  const content = record(plan.content);
+  const usedEvidenceIds = new Set(Array.isArray(content.usedEvidenceIds) ? content.usedEvidenceIds.map(String) : []);
+  const finalInput = record(finalInputValue);
+  const baseEvidence = record(finalInput.researchEvidence);
+  const supplementalEvidence = supplementalResearchValue === null || supplementalResearchValue === undefined
+    ? null
+    : parseResearchEvidenceSnapshotV1(supplementalResearchValue);
+  const evidenceUrls = new Map<string, string>();
+  for (const item of [
+    ...(Array.isArray(baseEvidence.items) ? baseEvidence.items : []),
+    ...(supplementalEvidence?.items ?? []),
+  ]) {
+    const evidence = record(item);
+    const evidenceId = String(evidence.id);
+    const frozenUrl = String(evidence.url);
+    const existingUrl = evidenceUrls.get(evidenceId);
+    if (existingUrl !== undefined && existingUrl !== frozenUrl) throw new Error("ai_content_render_manifest_invalid");
+    evidenceUrls.set(evidenceId, frozenUrl);
+  }
+  const allLinks = article.find("a[data-evidence-id]").toArray();
+  for (const link of allLinks) {
+    const href = $(link).attr("href");
+    const evidenceId = $(link).attr("data-evidence-id");
+    let parsedHref: URL;
+    try { parsedHref = new URL(String(href)); } catch { throw new Error("ai_content_render_manifest_invalid"); }
+    if (!evidenceId || parsedHref.protocol !== "https:" || href !== evidenceUrls.get(evidenceId)) {
+      throw new Error("ai_content_render_manifest_invalid");
+    }
+  }
+  const referenceSection = article.find("#references,[data-references],.references").last();
+  if (usedEvidenceIds.size) {
+    if (!referenceSection.length) throw new Error("ai_content_render_manifest_invalid");
+    const referenceIds = new Set(referenceSection.find("a[data-evidence-id]").toArray().map((link) => String($(link).attr("data-evidence-id"))));
+    const bodyIds = new Set(allLinks.filter((link) => !referenceSection.find(link).length).map((link) => String($(link).attr("data-evidence-id"))));
+    if (!isDeepStrictEqual([...referenceIds].sort(), [...usedEvidenceIds].sort()) || !isDeepStrictEqual([...bodyIds].sort(), [...usedEvidenceIds].sort())) {
+      throw new Error("ai_content_render_manifest_invalid");
+    }
+  }
+}
+
+function validateManifestAgainstPlan(
+  manifest: AiContentManifestV2,
+  planValue: unknown,
+  finalInputValue: unknown,
+  supplementalResearchValue: unknown,
+): void {
+  const plan = record(planValue);
+  const content = record(plan.content);
+  if (plan.contractVersion === "card-news-plan.v2" || plan.contractVersion === "marketing-plan.v2") {
+    for (const key of ["caption", "hashtags", "cta"] as const) {
+      if (!isDeepStrictEqual(manifest.content[key], content[key])) throw new Error("ai_content_render_manifest_invalid");
+    }
+  } else if (plan.contractVersion === "blog-plan.v2") {
+    if (
+      manifest.title !== content.title
+      || manifest.content.title !== content.title
+      || manifest.content.metaTitle !== content.metaTitle
+      || manifest.content.metaDescription !== content.metaDescription
+    ) throw new Error("ai_content_render_manifest_invalid");
+    validateBlogFinalHtml(manifest.content.html, plan, finalInputValue, supplementalResearchValue);
+  } else {
+    throw new Error("ai_content_render_manifest_invalid");
+  }
+}
+
+function validateBlogImageBindings(manifest: AiContentManifestV2, expectedUrls: string[]): void {
+  if (manifest.outputFormat !== "blog") return;
+  if (new Set(expectedUrls).size !== expectedUrls.length) throw new Error("ai_content_render_manifest_invalid");
+  const manifestUrls = manifest.assets
+    .filter((asset) => asset.mimeType === "image/png")
+    .map((asset) => asset.url);
+  const content = record(manifest.content);
+  if (typeof content.html !== "string") throw new Error("ai_content_render_manifest_invalid");
+  const $ = load(content.html);
+  if ($(BLOG_PASSIVE_HTML_FORBIDDEN_TAGS.join(",")).length) throw new Error("ai_content_render_manifest_invalid");
+  for (const element of $("*").toArray()) {
+    const tagName = String($(element).prop("tagName") ?? "").toLowerCase();
+    const src = $(element).attr("src");
+    const href = $(element).attr("href");
+    const attributeNames = Object.keys((element as { attribs?: Record<string, string> }).attribs ?? {});
+    if (
+      (src !== undefined && tagName !== "img")
+      || (href !== undefined && tagName !== "a")
+      || attributeNames.some((attribute) => /^on/i.test(attribute))
+      || [...BLOG_PASSIVE_HTML_FORBIDDEN_ATTRIBUTES].some((attribute) => $(element).attr(attribute) !== undefined)
+      || [href, src].some((value) => typeof value === "string" && /^\s*javascript:/i.test(value))
+    ) {
+      throw new Error("ai_content_render_manifest_invalid");
+    }
+  }
+  const htmlUrls = $("img").toArray().map((element) => $(element).attr("src"));
+  if (
+    htmlUrls.some((url) => typeof url !== "string")
+    || !isDeepStrictEqual(manifestUrls, expectedUrls)
+    || !isDeepStrictEqual(htmlUrls, expectedUrls)
+  ) {
+    throw new Error("ai_content_render_manifest_invalid");
+  }
+}
+
+export function createAiContentRenderJobsRepository(
+  pool: Pool,
+  loadGeneration: (client: Queryable, generationId: string) => Promise<AiContentGenerationRecord>,
+): AiContentRenderJobsRepository {
+  return {
+    async claim(input) {
+      if (!input.workerId?.trim() || !Number.isSafeInteger(input.leaseSeconds) || input.leaseSeconds < 30 || input.leaseSeconds > 300) {
+        throw new Error("ai_content_render_claim_invalid");
+      }
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const exhausted = await client.query(
+          `update ai_content_generation_render_jobs
+              set status='failed',
+                  worker_id=null,lease_token=null,lease_expires_at=null,
+                  error_code='ai_content_render_lease_expired',updated_at=now()
+            where status='processing' and lease_expires_at<=clock_timestamp() and attempt_count>=max_attempts
+            returning generation_id,output_id`,
+        );
+        for (const expired of exhausted.rows) {
+          await client.query(
+            `update ai_content_generation_outputs set status='failed',failure_code='ai_content_render_lease_expired',
+                    failure_message='Render worker lease expired after the final attempt',updated_at=now() where id=$1`,
+            [expired.output_id],
+          );
+          await client.query(
+            `update ai_content_generations set status='partial_failed',current_stage='completed',
+                    terminal_at=coalesce(terminal_at,now()),retryable_until=coalesce(retryable_until,now()+interval '15 days'),
+                    error_code='ai_content_render_lease_expired',error_message='Render worker lease expired after the final attempt',updated_at=now()
+              where id=$1`,
+            [expired.generation_id],
+          );
+        }
+        await client.query(
+          `update ai_content_generation_render_jobs
+              set status='queued',available_at=now(),worker_id=null,lease_token=null,lease_expires_at=null,
+                  error_code='ai_content_render_lease_expired',updated_at=now()
+            where status='processing' and lease_expires_at<=clock_timestamp() and attempt_count<max_attempts`,
+        );
+        const candidate = await client.query(
+          `select id from ai_content_generation_render_jobs
+            where status='queued' and available_at<=clock_timestamp() and attempt_count<max_attempts
+            order by available_at,created_at,id for update skip locked limit 1`,
+        );
+        if (!candidate.rows.length) {
+          await client.query("COMMIT");
+          return null;
+        }
+        const token = randomUUID();
+        const claimed = await client.query(
+          `update ai_content_generation_render_jobs
+              set status='processing',worker_id=$2,lease_token=$3,
+                  lease_expires_at=clock_timestamp()+($4::text||' seconds')::interval,
+                  attempt_count=attempt_count+1,error_code=null,error_message=null,updated_at=now()
+            where id=$1 and status='queued' returning *`,
+          [candidate.rows[0].id, input.workerId, token, input.leaseSeconds],
+        );
+        if (!claimed.rows.length) {
+          await client.query("COMMIT");
+          return null;
+        }
+        const row = claimed.rows[0] as Record<string, unknown>;
+        const payload = row.job_kind === "package_finalize" ? await finalizerPayload(client, row) : record(row.payload_json);
+        await client.query("COMMIT");
+        return renderJob(row, payload);
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally { client.release(); }
+    },
+
+    async heartbeat(input) {
+      const result = await pool.query(
+        `update ai_content_generation_render_jobs
+            set lease_expires_at=clock_timestamp()+($4::text||' seconds')::interval,updated_at=now()
+          where id=$1 and status='processing' and worker_id=$2 and lease_token=$3
+            and lease_expires_at>clock_timestamp() returning id`,
+        [input.jobId, input.workerId, input.leaseToken, input.leaseSeconds],
+      );
+      return Boolean(result.rows.length);
+    },
+
+    async completeAsset(input) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await lockRenderOutputForJob(client, input.jobId);
+        const row = await lockedRenderJob(client, input.jobId);
+        if (row.status === "succeeded") {
+          if (row.worker_id !== input.workerId || String(row.lease_token) !== input.leaseToken) {
+            throw new Error("ai_content_render_job_lease_invalid");
+          }
+          if (!isDeepStrictEqual(row.result_json, input.asset)) throw new Error("ai_content_render_completion_conflict");
+          await client.query("COMMIT");
+          return;
+        }
+        requireLease(row, input);
+        if (row.job_kind !== "image_asset" || Number(row.asset_index) !== input.asset.index) throw new Error("ai_content_render_job_kind_invalid");
+        const imagePackage = record(row.payload_json).imagePackage as ImageGenerationPackageV1 | undefined;
+        if (!imagePackage) throw new Error("ai_content_render_snapshot_missing");
+        const asset = parseRenderAssetResult(input.asset, {
+          brandId: String(row.brand_id), generationId: String(row.generation_id), outputId: String(row.output_id),
+          assetIndex: Number(row.asset_index), aspectRatio: imagePackage.aspectRatio,
+        });
+        await client.query(
+          `update ai_content_generation_render_jobs set status='succeeded',result_json=$2::jsonb,
+             lease_expires_at=null,error_code=null,error_message=null,completed_at=coalesce(completed_at,now()),updated_at=now()
+           where id=$1`,
+          [input.jobId, JSON.stringify(asset)],
+        );
+        const remaining = await client.query(
+          `select count(*) filter(where status<>'succeeded')::integer as remaining
+             from ai_content_generation_render_jobs where output_id=$1 and generation_id=$2
+               and workspace_id=$3 and brand_id=$4 and job_kind='image_asset'`,
+          [row.output_id, row.generation_id, row.workspace_id, row.brand_id],
+        );
+        if (Number(remaining.rows[0]?.remaining ?? 0) === 0) {
+          await insertFinalizer(client, {
+            workspaceId: String(row.workspace_id), brandId: String(row.brand_id),
+            generationId: String(row.generation_id), outputId: String(row.output_id),
+          });
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally { client.release(); }
+    },
+
+    async completePackage(input) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const row = await lockedRenderJob(client, input.jobId);
+        if (row.status === "succeeded") {
+          if (row.worker_id !== input.workerId || String(row.lease_token) !== input.leaseToken) {
+            throw new Error("ai_content_render_job_lease_invalid");
+          }
+        } else requireLease(row, input);
+        if (row.job_kind !== "package_finalize") throw new Error("ai_content_render_job_kind_invalid");
+        parseRenderManifestUrl(input.manifestUrl, {
+          brandId: String(row.brand_id),
+          generationId: String(row.generation_id),
+          outputId: String(row.output_id),
+        });
+        const state = await client.query(
+          `select output.plan_json,input.input_json,generation.type,research.evidence_json
+             from ai_content_generation_outputs output
+             join ai_content_generations generation on generation.id=output.generation_id
+               and generation.workspace_id=output.workspace_id and generation.brand_id=output.brand_id
+             join ai_content_generation_input_snapshots input on input.generation_id=output.generation_id
+               and input.workspace_id=output.workspace_id and input.brand_id=output.brand_id
+             left join ai_content_output_research_snapshots research
+               on research.output_id=output.id and research.generation_id=output.generation_id
+              and research.workspace_id=output.workspace_id and research.brand_id=output.brand_id
+            where output.id=$1 and output.generation_id=$2 and output.workspace_id=$3 and output.brand_id=$4 for update of output`,
+          [row.output_id, row.generation_id, row.workspace_id, row.brand_id],
+        );
+        if (!state.rows.length) throw new Error("ai_content_render_snapshot_missing");
+        const finalInput = parseContentGenerationInputV3(state.rows[0].input_json);
+        if (finalInput.generationId !== String(row.generation_id)) throw new Error("ai_content_generation_input_mismatch");
+        const plan = parseContentPlanResultV2(state.rows[0].plan_json, finalInput, state.rows[0].evidence_json);
+        const settings = finalInput.outputSettings;
+        const imagePackage = planImagePackage(plan);
+        const manifest = parseAiContentManifest(
+          String(state.rows[0].type) as "card_news" | "blog" | "marketing",
+          input.manifest,
+          imagePackage ? expectedAiContentAssetDimensions(imagePackage.aspectRatio) : undefined,
+        ) as AiContentManifestV2;
+        if (
+          manifest.version !== "ai-content.v2" || manifest.outputFormat !== settings.outputFormat
+          || manifest.purpose !== settings.purpose || /asset:\/\//.test(JSON.stringify(manifest))
+        ) throw new Error("ai_content_render_manifest_invalid");
+        validateRenderManifestArtifactUrls(manifest, {
+          brandId: String(row.brand_id),
+          generationId: String(row.generation_id),
+          outputId: String(row.output_id),
+        });
+        validateManifestAgainstPlan(manifest, plan, finalInput, state.rows[0].evidence_json);
+        if (imagePackage) {
+          const results = await client.query(
+            `select asset_index,result_json from ai_content_generation_render_jobs where output_id=$1 and generation_id=$2
+               and workspace_id=$3 and brand_id=$4 and job_kind='image_asset' and status='succeeded' order by asset_index`,
+            [row.output_id, row.generation_id, row.workspace_id, row.brand_id],
+          );
+          if (results.rows.length !== imagePackage.assetCount) throw new Error("ai_content_render_manifest_invalid");
+          const imageAssets = manifest.assets.filter((asset) => asset.mimeType === "image/png");
+          if (
+            imageAssets.length !== imagePackage.assetCount
+            || imageAssets.some((asset, position) => {
+              const result = results.rows[position];
+              const rendered = record(result?.result_json);
+              return Number(result?.asset_index) !== position + 1
+                || asset.index !== position + 1
+                || asset.url !== rendered.url
+                || asset.mimeType !== rendered.mimeType
+                || asset.width !== rendered.width
+                || asset.height !== rendered.height;
+            })
+          ) {
+            throw new Error("ai_content_render_manifest_invalid");
+          }
+          validateBlogImageBindings(
+            manifest,
+            results.rows.map((result) => String(record(result.result_json).url)),
+          );
+        } else {
+          validateBlogImageBindings(manifest, []);
+        }
+        const resultJson = { manifest, manifestUrl: input.manifestUrl };
+        if (row.status === "succeeded") {
+          if (!isDeepStrictEqual(row.result_json, resultJson)) throw new Error("ai_content_render_completion_conflict");
+          const generation = await loadGeneration(client, String(row.generation_id));
+          await client.query("COMMIT");
+          return generation;
+        }
+        const billing = await client.query(
+          `select payload_json->>'usageDate' as usage_date,
+                  payload_json->>'usageIdempotencyKey' as usage_idempotency_key
+             from ai_content_generation_jobs
+            where generation_id=$1 and output_id=$2 and workspace_id=$3 and brand_id=$4
+              and job_type='generate' and payload_json->>'planningMode'='selected_proposal'
+            order by created_at,id limit 1`,
+          [row.generation_id, row.output_id, row.workspace_id, row.brand_id],
+        );
+        const usageDate = billing.rows[0]?.usage_date;
+        const usageIdempotencyKey = billing.rows[0]?.usage_idempotency_key;
+        if (typeof usageDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(usageDate) || typeof usageIdempotencyKey !== "string" || !usageIdempotencyKey) {
+          throw new Error("ai_content_render_usage_snapshot_missing");
+        }
+        await client.query(
+          `update ai_content_generation_render_jobs set status='succeeded',result_json=$2::jsonb,lease_expires_at=null,
+             error_code=null,error_message=null,completed_at=coalesce(completed_at,now()),updated_at=now() where id=$1`,
+          [input.jobId, JSON.stringify(resultJson)],
+        );
+        await client.query(
+          `update ai_content_generation_outputs set title=$2,status='completed',content_json=$3::jsonb,
+             artifact_manifest_json=$4::jsonb,manifest_url=$5,failure_code=null,failure_message=null,
+             completed_at=coalesce(completed_at,now()),updated_at=now() where id=$1`,
+          [row.output_id, manifest.title, JSON.stringify(manifest.content), JSON.stringify(manifest), input.manifestUrl],
+        );
+        await client.query(
+          `insert into ai_content_usage_ledger
+             (workspace_id,brand_id,generation_id,output_id,usage_type,quantity,usage_date,idempotency_key)
+           values($1,$2,$3,$4,'generation',1,$5::date,$6)
+           on conflict (brand_id,idempotency_key) do nothing`,
+          [row.workspace_id, row.brand_id, row.generation_id, row.output_id, usageDate, usageIdempotencyKey],
+        );
+        const counts = await client.query(
+          `select count(*)::integer total,count(*) filter(where status='completed')::integer completed,
+                  count(*) filter(where status='failed')::integer failed
+             from ai_content_generation_outputs where generation_id=$1`,
+          [row.generation_id],
+        );
+        const total = Number(counts.rows[0]?.total ?? 0);
+        const completed = Number(counts.rows[0]?.completed ?? 0);
+        const failed = Number(counts.rows[0]?.failed ?? 0);
+        const status = total > 0 && completed === total ? "completed" : failed > 0 && completed + failed === total ? "partial_failed" : "generating";
+        await client.query(
+          `update ai_content_generations set status=$2,current_stage=case when $2='generating' then 'generation' else 'completed' end,
+             completed_at=case when $2<>'generating' then coalesce(completed_at,now()) else null end,
+             terminal_at=case when $2<>'generating' then coalesce(terminal_at,now()) else terminal_at end,
+             retryable_until=case when $2<>'generating' then coalesce(retryable_until,now()+interval '15 days') else retryable_until end,
+             error_code=null,error_message=null,updated_at=now() where id=$1`,
+          [row.generation_id, status],
+        );
+        const generation = await loadGeneration(client, String(row.generation_id));
+        await client.query("COMMIT");
+        return generation;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally { client.release(); }
+    },
+
+    async fail(input) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const row = await lockedRenderJob(client, input.jobId);
+        if (row.status === "failed" && row.error_code === input.errorCode) {
+          if (row.worker_id !== input.workerId || String(row.lease_token) !== input.leaseToken) {
+            throw new Error("ai_content_render_job_lease_invalid");
+          }
+          await client.query("COMMIT");
+          return;
+        }
+        requireLease(row, input);
+        const retry = input.retryable && Number(row.attempt_count) < Number(row.max_attempts);
+        await client.query(
+          `update ai_content_generation_render_jobs set status=$2,
+             available_at=case when $2='queued' then now()+interval '60 seconds' else available_at end,
+             worker_id=case when $2='failed' then worker_id else null end,
+             lease_token=case when $2='failed' then lease_token else null end,
+             lease_expires_at=null,error_code=$3,error_message=$4,
+             completed_at=case when $2='failed' then now() else null end,updated_at=now() where id=$1`,
+          [input.jobId, retry ? "queued" : "failed", input.errorCode, input.errorMessage],
+        );
+        if (!retry) {
+          await client.query(
+            `update ai_content_generation_outputs set status='failed',failure_code=$2,failure_message=$3,updated_at=now() where id=$1`,
+            [row.output_id, input.errorCode, input.errorMessage],
+          );
+          await client.query(
+            `update ai_content_generations set status='partial_failed',current_stage='completed',
+               terminal_at=coalesce(terminal_at,now()),retryable_until=coalesce(retryable_until,now()+interval '15 days'),
+               error_code=$2,error_message=$3,updated_at=now() where id=$1`,
+            [row.generation_id, input.errorCode, input.errorMessage],
+          );
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally { client.release(); }
+    },
+
+    async retryFailedOutput(input) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const output = await client.query(
+          `select generation_id from ai_content_generation_outputs
+            where id=$1 and workspace_id=$2 and brand_id=$3 and status='failed' for update`,
+          [input.outputId, input.workspaceId, input.brandId],
+        );
+        if (!output.rows.length) throw new Error("ai_content_output_not_failed");
+        const failed = await client.query(
+          `select job_kind from ai_content_generation_render_jobs where output_id=$1 and workspace_id=$2 and brand_id=$3 and status='failed' for update`,
+          [input.outputId, input.workspaceId, input.brandId],
+        );
+        if (!failed.rows.length) throw new Error("ai_content_render_retry_not_available");
+        await client.query(
+          `update ai_content_generation_render_jobs set status='queued',attempt_count=0,result_json=null,
+             available_at=now(),worker_id=null,lease_token=null,lease_expires_at=null,error_code=null,error_message=null,
+             completed_at=null,updated_at=now() where output_id=$1 and workspace_id=$2 and brand_id=$3 and status='failed'`,
+          [input.outputId, input.workspaceId, input.brandId],
+        );
+        await client.query(
+          `update ai_content_generation_outputs set status='generating',failure_code=null,failure_message=null,completed_at=null,updated_at=now() where id=$1`,
+          [input.outputId],
+        );
+        await client.query(
+          `update ai_content_generations set status='generating',current_stage='generation',completed_at=null,
+             error_code=null,error_message=null,updated_at=now() where id=$1`,
+          [output.rows[0].generation_id],
+        );
+        const generation = await loadGeneration(client, String(output.rows[0].generation_id));
+        await client.query("COMMIT");
+        return generation;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally { client.release(); }
+    },
+
+    async saveOutputResearch(input) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const job = await client.query(
+          `select *,(lease_expires_at<=clock_timestamp()) as lease_expired from ai_content_generation_jobs
+            where id=$1 and output_id=$2 for update`,
+          [input.jobId, input.outputId],
+        );
+        const row = job.rows[0] as Record<string, unknown> | undefined;
+        if (!row || row.job_type !== "generate" || row.content_type !== "blog") throw new Error("ai_content_research_job_invalid");
+        requireLease(row, input);
+        const evidence = parseResearchEvidenceSnapshotV1(input.evidence);
+        if (evidence.decision !== "searched") throw new Error("ai_content_research_snapshot_invalid");
+        const existing = await client.query(
+          "select evidence_json from ai_content_output_research_snapshots where output_id=$1 for update",
+          [input.outputId],
+        );
+        if (existing.rows.length) {
+          if (!isDeepStrictEqual(existing.rows[0].evidence_json, evidence)) throw new Error("ai_content_research_snapshot_conflict");
+        } else {
+          await client.query(
+            `insert into ai_content_output_research_snapshots(workspace_id,brand_id,generation_id,output_id,evidence_json)
+             values($1,$2,$3,$4,$5::jsonb)`,
+            [row.workspace_id, row.brand_id, row.generation_id, row.output_id, JSON.stringify(evidence)],
+          );
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally { client.release(); }
+    },
+  };
+}

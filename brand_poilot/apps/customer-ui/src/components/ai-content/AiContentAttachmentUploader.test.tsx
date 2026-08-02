@@ -43,6 +43,52 @@ function renderControlled(api: AiContentGateway, initial: Parameters<typeof AiCo
 }
 
 describe("AiContentAttachmentUploader", () => {
+  it("shows only the three V3 image roles and does not expose legacy attachments", async () => {
+    const api = gateway();
+    render(<AiContentAttachmentUploader
+      gateway={api}
+      brandId="brand-1"
+      generationId="generation-1"
+      attachments={[
+        { id: "legacy-person", role: "person", fileName: "old-avatar.png", mimeType: "image/png", size: 4, storageUrl: "https://blob/old", storagePath: "old" },
+        { id: "v3-product", role: "product_image", fileName: "product.png", mimeType: "image/png", size: 4, storageUrl: "https://blob/product", storagePath: "product" },
+      ] as never}
+      allowedRoles={["product_image", "visual_reference", "supporting_image"] as never}
+      onChange={vi.fn()}
+    />);
+
+    expect(screen.getByLabelText("제품 이미지")).toBeInTheDocument();
+    expect(screen.getByLabelText("시각 참고 이미지")).toBeInTheDocument();
+    expect(screen.getByLabelText("보조 이미지")).toBeInTheDocument();
+    expect(screen.queryByLabelText("인물 이미지")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("문서")).not.toBeInTheDocument();
+    expect(screen.queryByText("old-avatar.png")).not.toBeInTheDocument();
+    expect(screen.getByText("product.png")).toBeVisible();
+  });
+
+  it("accepts image MIME only for all V3 finalization roles", async () => {
+    const api = gateway();
+    const onChange = vi.fn();
+    render(<AiContentAttachmentUploader
+      gateway={api}
+      brandId="brand-1"
+      generationId="generation-1"
+      attachments={[]}
+      allowedRoles={["product_image", "visual_reference", "supporting_image"] as never}
+      onChange={onChange}
+    />);
+
+    expect(screen.getByLabelText("제품 이미지")).toHaveAttribute("accept", "image/png,image/jpeg,image/webp");
+    await userEvent.upload(
+      screen.getByLabelText("보조 이미지"),
+      new File(["notes"], "notes.txt", { type: "text/plain" }),
+      { applyAccept: false },
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("PNG, JPEG, WebP 이미지만 첨부할 수 있습니다");
+    expect(api.uploadAttachment).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("uploads through pending and confirmed state under React StrictMode", async () => {
     let resolveUpload: ((attachment: GenerationAttachment) => void) | undefined;
     const api = gateway({

@@ -57,8 +57,7 @@ describe("legacy customer routes", () => {
     render(
       <ContentStrategyStep
         outputFormat="card_news"
-        channelTargets={[]}
-        brief=""
+        channelTarget={null}
         loading={false}
         capabilityState={{
           status: "ready",
@@ -70,18 +69,16 @@ describe("legacy customer routes", () => {
           },
         }}
         onFormatChange={() => undefined}
-        onChannelsChange={() => undefined}
-        onBriefChange={() => undefined}
+        onChannelChange={() => undefined}
         onSubmit={() => undefined}
       />,
     );
 
-    expect(screen.getAllByRole("option").map((option) => (option as HTMLOptionElement).value)).toEqual([
-      "",
+    expect(screen.getAllByRole("radio").map((option) => (option as HTMLInputElement).value)).toEqual([
       "card_news",
       "blog",
-      "single_image",
-      "channel_text",
+      "reel",
+      "marketing_content",
     ]);
     expect(screen.queryByText(/Reel|Shorts|TikTok 영상|영상 Story|AI 아바타|얼굴 합성|음성 복제/)).not.toBeInTheDocument();
   });

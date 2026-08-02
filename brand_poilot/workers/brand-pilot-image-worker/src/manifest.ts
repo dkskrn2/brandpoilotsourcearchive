@@ -54,6 +54,50 @@ export class WorkerManifestValidationError extends Error {
   }
 }
 
+export interface AiContentReelManifestV2 {
+  version: "ai-content.v2";
+  type: "marketing";
+  purpose: "informational" | "marketing";
+  outputFormat: "reel";
+  title: string;
+  assets: Array<Record<string, unknown>>;
+  content: Record<string, unknown>;
+}
+
+export function buildAiContentReelManifest(input: {
+  purpose: "informational" | "marketing";
+  title: string;
+  scenes: Array<{ index: number; url: string; width: number; height: number }>;
+  video: { url: string; durationSeconds: number };
+  content: Record<string, unknown>;
+}): AiContentReelManifestV2 {
+  if (!input.title.trim() || input.scenes.length < 1 || input.scenes.length > 5) throw new Error("ai_content_reel_manifest_invalid");
+  input.scenes.forEach((scene, offset) => {
+    let url: URL;
+    try { url = new URL(scene.url); } catch { throw new Error("ai_content_reel_manifest_invalid"); }
+    if (scene.index !== offset + 1 || scene.width !== 1080 || scene.height !== 1920 || url.protocol !== "https:") {
+      throw new Error("ai_content_reel_manifest_invalid");
+    }
+  });
+  let videoUrl: URL;
+  try { videoUrl = new URL(input.video.url); } catch { throw new Error("ai_content_reel_manifest_invalid"); }
+  if (videoUrl.protocol !== "https:" || Math.abs(input.video.durationSeconds - input.scenes.length * 4) > 1 / 30) {
+    throw new Error("ai_content_reel_manifest_invalid");
+  }
+  return {
+    version: "ai-content.v2",
+    type: "marketing",
+    purpose: input.purpose,
+    outputFormat: "reel",
+    title: input.title.trim(),
+    assets: [
+      ...input.scenes.map((scene) => ({ role: "scene", index: scene.index, url: scene.url, fileName: `scene-${String(scene.index).padStart(2, "0")}.png`, mimeType: "image/png", width: 1080, height: 1920 })),
+      { role: "video", index: 1, url: input.video.url, fileName: "reel.mp4", mimeType: "video/mp4", width: 1080, height: 1920, durationSeconds: input.video.durationSeconds, videoCodec: "h264", fps: 30, audioCodec: null }
+    ],
+    content: input.content
+  };
+}
+
 function invalid(code: string): never {
   throw new WorkerManifestValidationError(code);
 }

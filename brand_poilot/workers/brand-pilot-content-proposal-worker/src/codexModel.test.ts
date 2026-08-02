@@ -93,7 +93,7 @@ describe("Codex content proposal model", () => {
         "-c",
         "default_permissions=\"worker\"",
         "-c",
-        "permissions.worker.filesystem={\":minimal\"=\"read\",\"/codex\"=\"deny\",\":workspace_roots\"={\".\"=\"read\"}}",
+        "permissions.worker.filesystem={\":minimal\"=\"deny\",\"/codex\"=\"deny\",\":workspace_roots\"={\".\"=\"deny\"}}",
         "-c",
         "permissions.worker.network.enabled=false",
         "--disable",
@@ -130,6 +130,16 @@ describe("Codex content proposal model", () => {
     expect(childEnv).not.toHaveProperty("HTTPS_PROXY");
     expect(spawnProcess.mock.calls[0]?.[1]).not.toContain("--output-schema");
     expect(spawnProcess.mock.calls[0]?.[1]).not.toContain("--sandbox");
+    expect(spawnProcess.mock.calls[0]?.[1]).not.toContain("--search");
+    expect(spawnProcess.mock.calls[0]?.[1]).toContain("exec");
+    expect(spawnProcess.mock.calls[0]?.[1]).toContain("--ephemeral");
+    expect(spawnProcess.mock.calls[0]?.[1]?.join(" ")).toContain("network.enabled=false");
+    const args = spawnProcess.mock.calls[0]?.[1] ?? [];
+    for (const feature of ["shell_tool", "shell_snapshot", "image_generation"]) {
+      const featureIndex = args.indexOf(feature);
+      expect(featureIndex).toBeGreaterThan(0);
+      expect(args[featureIndex - 1]).toBe("--disable");
+    }
     expect(runtimeDirectory.removeRuntimeDirectory)
       .toHaveBeenCalledWith(runtimeDirectory.directory);
   });
@@ -165,10 +175,63 @@ describe("Codex content proposal model", () => {
       expect.objectContaining({
         name: "SyntaxError",
         message: "content_proposal_model_output_invalid",
+        rawOutput: "not-json",
       }),
     );
     expect(runtimeDirectory.removeRuntimeDirectory)
       .toHaveBeenCalledWith(runtimeDirectory.directory);
+  });
+
+  it("preserves the complete bounded invalid final response for repair", async () => {
+    const child = createTestChild();
+    const runtimeDirectory = runtime();
+    const model = createCodexContentProposalModel({
+      command: "codex",
+      timeoutMs: 10_000,
+      spawnProcess: vi.fn(() => child),
+      createRuntimeDirectory: runtimeDirectory.createRuntimeDirectory,
+      removeRuntimeDirectory: runtimeDirectory.removeRuntimeDirectory,
+    });
+    const markerAfterTheOldBoundary = "MARKER_AFTER_100K_BOUNDARY";
+    const rawOutput = `${"x".repeat(100_001)}${markerAfterTheOldBoundary}`;
+
+    const generated = model.generate("prompt");
+    await Promise.resolve();
+    child.stdout.write(completedMessage(rawOutput));
+    child.emit("close", 0, null);
+
+    await expect(generated).rejects.toEqual(expect.objectContaining({
+      name: "SyntaxError",
+      message: "content_proposal_model_output_invalid",
+      rawOutput,
+    }));
+  });
+
+  it("stops the process tree when chunked unterminated stdout exceeds one MiB by bytes", async () => {
+    const child = createTestChild();
+    const runtimeDirectory = runtime();
+    let finishTermination: (() => void) | undefined;
+    const terminateProcessTree = vi.fn(() => new Promise<void>((resolve) => {
+      finishTermination = resolve;
+    }));
+    const model = createCodexContentProposalModel({
+      command: "codex",
+      timeoutMs: 10_000,
+      spawnProcess: vi.fn(() => child),
+      terminateProcessTree,
+      createRuntimeDirectory: runtimeDirectory.createRuntimeDirectory,
+      removeRuntimeDirectory: runtimeDirectory.removeRuntimeDirectory,
+    });
+
+    const generated = model.generate("prompt");
+    await Promise.resolve();
+    const multibyteChunk = "가".repeat(90_000);
+    for (let index = 0; index < 4; index += 1) child.stdout.write(multibyteChunk);
+    child.stdout.write("ignored after stopping");
+
+    expect(terminateProcessTree).toHaveBeenCalledTimes(1);
+    finishTermination?.();
+    await expect(generated).rejects.toThrow("content_proposal_model_output_limit_exceeded");
   });
 
   it("preserves UTF-8 model JSON split across stdout chunks", async () => {

@@ -20,6 +20,9 @@ import type {
   InstagramTrendPage,
   InstagramTrendSaveSource,
   InstagramTrendSearchHistory,
+  AiContentReferenceSeed,
+  AiContentReferenceSeedFormat,
+  AiContentReferenceSeedList,
   InstagramDmHistory,
   InstagramDmSettings,
   DmAttentionItem,
@@ -130,6 +133,77 @@ interface ApiPublishQueueItem {
 
 function apiBaseUrl() {
   return import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const AI_CONTENT_REFERENCE_SEED_FORMATS = new Set<AiContentReferenceSeedFormat>([
+  "card_news",
+  "blog",
+  "reel",
+  "marketing_content",
+]);
+
+function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function nullableNonnegativeNumber(value: unknown): value is number | null {
+  return value === null || typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function aiContentReferenceSeed(value: unknown): AiContentReferenceSeed {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("ai_content_reference_seed_invalid");
+  }
+  const row = value as Record<string, unknown>;
+  const metrics = row.metrics;
+  if (
+    !exactKeys(row, ["id", "source", "title", "url", "previewUrl", "format", "primaryCategory", "metrics", "checkedAt"])
+    || typeof row.id !== "string"
+    || !UUID.test(row.id)
+    || !(["brand_output", "saved_trend", "saved_url"] as unknown[]).includes(row.source)
+    || typeof row.title !== "string"
+    || !(row.url === null || typeof row.url === "string")
+    || !(row.previewUrl === null || typeof row.previewUrl === "string")
+    || !AI_CONTENT_REFERENCE_SEED_FORMATS.has(row.format as AiContentReferenceSeedFormat)
+    || typeof row.primaryCategory !== "string"
+    || !row.primaryCategory.trim()
+    || !(row.checkedAt === null || typeof row.checkedAt === "string")
+    || !metrics
+    || typeof metrics !== "object"
+    || Array.isArray(metrics)
+  ) {
+    throw new Error("ai_content_reference_seed_invalid");
+  }
+  const metricRow = metrics as Record<string, unknown>;
+  if (
+    !exactKeys(metricRow, ["exposureCount", "likeCount", "commentsCount"])
+    || !nullableNonnegativeNumber(metricRow.exposureCount)
+    || !nullableNonnegativeNumber(metricRow.likeCount)
+    || !nullableNonnegativeNumber(metricRow.commentsCount)
+  ) {
+    throw new Error("ai_content_reference_seed_invalid");
+  }
+  return value as AiContentReferenceSeed;
+}
+
+function aiContentReferenceSeedList(value: unknown): AiContentReferenceSeedList {
+  if (!Array.isArray(value)) throw new Error("ai_content_reference_seed_invalid");
+  return value.map(aiContentReferenceSeed);
+}
+
+function instagramTrendSaveSource(value: unknown): InstagramTrendSaveSource {
+  if (
+    !value
+    || typeof value !== "object"
+    || typeof (value as { referenceItemId?: unknown }).referenceItemId !== "string"
+    || !UUID.test((value as { referenceItemId: string }).referenceItemId)
+  ) {
+    throw new Error("instagram_trend_reference_invalid");
+  }
+  return value as InstagramTrendSaveSource;
 }
 
 async function request<T>(fetcher: typeof fetch, url: string, init: RequestInit): Promise<T> {
@@ -319,7 +393,20 @@ export function apiClient(options: ApiClientOptions = {}) {
       );
     },
     saveInstagramTrendSource(brandId: string, mediaId: string) {
-      return request<InstagramTrendSaveSource>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trends/${mediaId}/save-source`, { method: "POST" });
+      return request<unknown>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trends/${mediaId}/save-source`, { method: "POST" })
+        .then(instagramTrendSaveSource);
+    },
+    async listAiContentReferenceSeeds(brandId: string, format: AiContentReferenceSeedFormat) {
+      if (!AI_CONTENT_REFERENCE_SEED_FORMATS.has(format)) {
+        throw new Error("ai_content_reference_seed_format_invalid");
+      }
+      const query = new URLSearchParams({ format });
+      const result = await request<unknown>(
+        fetcher,
+        `${baseUrl}/brands/${brandId}/ai-content/reference-seeds?${query.toString()}`,
+        { method: "GET" },
+      );
+      return aiContentReferenceSeedList(result);
     },
     removeInstagramTrendSource(brandId: string, mediaId: string) {
       return request<{ mediaId: string; removed: boolean }>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trends/${mediaId}/save-source`, { method: "DELETE" });

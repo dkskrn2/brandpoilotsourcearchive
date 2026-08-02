@@ -354,6 +354,9 @@ export function createMockAiContentGateway(): AiContentGateway {
     async listReferences() {
       return copy(references);
     },
+    async listReferenceSeeds() {
+      return [];
+    },
     async retryOutput(_brandId, outputId, reason) {
       if (!reason.trim()) throw new Error("retry_reason_required");
       const output = generationRows.flatMap((job) => job.outputs).find((item) => item.id === outputId);

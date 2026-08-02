@@ -27,6 +27,8 @@ COPY --from=build --chown=node:node /app/workers/brand-pilot-worker-runtime/dist
 COPY --from=build --chown=node:node /app/workers/brand-pilot-marketing-worker/package.json ./workers/brand-pilot-marketing-worker/package.json
 COPY --from=build --chown=node:node /app/workers/brand-pilot-marketing-worker/dist ./workers/brand-pilot-marketing-worker/dist
 COPY --from=build --chown=node:node /app/workers/brand-pilot-marketing-worker/scripts/run-codex-marketing.mjs ./workers/brand-pilot-marketing-worker/scripts/run-codex-marketing.mjs
+COPY --from=build --chown=node:node /app/workers/brand-pilot-marketing-worker/scripts/run-codex-marketing-v2-plan.mjs ./workers/brand-pilot-marketing-worker/scripts/run-codex-marketing-v2-plan.mjs
+COPY --from=build --chown=node:node /app/workers/brand-pilot-marketing-worker/scripts/marketing-plan-v2.schema.json ./workers/brand-pilot-marketing-worker/scripts/marketing-plan-v2.schema.json
 COPY --from=build --chown=node:node /app/workers/brand-pilot-marketing-worker/.agents/skills/marketing-creative/SKILL.md ./workers/brand-pilot-marketing-worker/.agents/skills/marketing-creative/SKILL.md
 
 WORKDIR /app/workers/brand-pilot-marketing-worker

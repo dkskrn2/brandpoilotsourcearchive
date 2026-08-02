@@ -4,6 +4,8 @@ import {
   ContentProposalContractError,
   parseContentProposalJob,
   type ContentProposalV1,
+  type ContentProposalJobV2,
+  type ContentProposalSetV2,
   type ContentProposalWorkerClient,
 } from "./contracts.js";
 import {
@@ -64,6 +66,7 @@ function api(overrides: Partial<ContentProposalWorkerClient> = {}): ContentPropo
     heartbeatWorker: vi.fn(async () => undefined),
     claim: vi.fn(async () => job),
     heartbeat: vi.fn(async () => undefined),
+    completeResearch: vi.fn(async () => { throw new Error("unexpected_v2_research"); }),
     complete: vi.fn(async () => undefined),
     fail: vi.fn(async () => undefined),
     ...overrides,
@@ -207,5 +210,207 @@ describe("content proposal worker", () => {
     expect(() => {
       throw new ContentProposalContractError("content_proposal_result_invalid");
     }).toThrow("content_proposal_result_invalid");
+  });
+});
+
+const searchedEvidence = {
+  contractVersion: "research-evidence.v1" as const,
+  decision: "searched" as const,
+  reason: "최신 근거 필요",
+  queries: ["운영 최신 동향"],
+  capturedAt: "2026-08-01T04:00:00.000Z",
+  items: [{
+    id: "70000000-0000-4000-8000-000000000007", title: "근거",
+    url: "https://source.example/a", publisher: null, publishedAt: null,
+    capturedAt: "2026-08-01T04:00:00.000Z", claimSummary: "근거 요약",
+    contentHash: "a".repeat(64),
+  }],
+};
+
+function v2Snapshot(
+  purpose: "informational" | "marketing",
+  contractVersion: "proposal-base-input.v2" | "proposal-input.v2",
+  evidence = searchedEvidence,
+) {
+  return {
+    contractVersion,
+    brandCore: {
+      versionId: "40000000-0000-4000-8000-000000000004", companyOverview: "개요",
+      businessDescription: "사업", primaryCategory: "교육", detailedCategory: "온라인",
+      primaryTarget: "창업자", differentiator: "실전", coreAppeal: "적용",
+    },
+    subject: { kind: "topic_text", title: "운영" }, contentInstruction: "실무 중심",
+    product: purpose === "marketing" ? {
+      id: "60000000-0000-4000-8000-000000000006", versionId: "61000000-0000-4000-8000-000000000006",
+      kind: "product", name: "제품", description: "설명", features: ["특징"], benefits: ["장점"],
+      cautions: ["한계"], evergreenPurchaseInfo: "문의", images: [],
+    } : null,
+    references: [],
+    ...(contractVersion === "proposal-input.v2" ? { researchEvidence: evidence } : {}),
+    outputSettings: {
+      outputFormat: "card_news", channelTargets: ["instagram"], aspectRatio: "4:5",
+      outputCount: 1, purpose,
+    }, capturedAt: "2026-08-01T03:00:00.000Z",
+  };
+}
+
+function v2Job(
+  purpose: "informational" | "marketing" = "informational",
+  composed = false,
+  evidence = searchedEvidence,
+): ContentProposalJobV2 {
+  return parseContentProposalJob({
+    ...job,
+    request: {
+      contractVersion: "content-proposal-request.v2", purpose, outputFormat: "card_news",
+      channelTargets: ["instagram"], requestFingerprint: "fp",
+    },
+    inputSnapshot: v2Snapshot(purpose, composed ? "proposal-input.v2" : "proposal-base-input.v2", evidence),
+    ...(composed ? { researchEvidence: evidence } : {}),
+  }) as ContentProposalJobV2;
+}
+
+function v2Proposal(key: string) {
+  return {
+    conceptKey: key, title: `제목 ${key}`, informationalType: "how_to" as const,
+    oneLineIntent: `의도 ${key}`, differentiator: `차별 ${key}`,
+    differentiationAxes: ["target" as const], target: `타깃 ${key}`,
+    customerContext: `상황 ${key}`, keyMessage: `메시지 ${key}`, hook: `훅 ${key}`,
+    selectionReason: `이유 ${key}`, evidenceIds: [searchedEvidence.items[0].id], referenceIds: [],
+    outputFormat: "card_news" as const, channelTargets: ["instagram"] as ["instagram"],
+    assetCount: 2,
+    outline: [
+      { index: 1, role: "hook", headline: `제목1 ${key}`, purpose: `목적1 ${key}` },
+      { index: 2, role: "body", headline: `제목2 ${key}`, purpose: `목적2 ${key}` },
+    ],
+    purposeDetails: {
+      kind: "informational" as const, question: `질문 ${key}`, value: `가치 ${key}`,
+      whyNow: `시점 ${key}`, learningPoints: [`학습 ${key}`],
+    },
+  };
+}
+
+const v2Set: ContentProposalSetV2 = {
+  contractVersion: "content-proposal.v2",
+  proposals: [v2Proposal("a"), v2Proposal("b"), v2Proposal("c")],
+};
+
+describe("content proposal V2 worker", () => {
+  it("freezes required research before the network-disabled model and completes exactly three", async () => {
+    const activeJob = v2Job();
+    const order: string[] = [];
+    const research = { run: vi.fn(async () => { order.push("search"); return searchedEvidence; }) };
+    const client = api({
+      completeResearch: vi.fn(async () => { order.push("freeze"); return v2Snapshot("informational", "proposal-input.v2") as never; }),
+      complete: vi.fn(async () => { order.push("complete"); }),
+    });
+    const model: ContentProposalModelClient = {
+      generate: vi.fn(async () => { order.push("model"); return v2Set; }),
+    };
+
+    await expect(processContentProposalJob({
+      client, research, runner: createContentProposalRunner(model), job: activeJob,
+      leaseSeconds: 180, heartbeatMs: 100_000,
+    })).resolves.toEqual({ status: "completed", jobId: activeJob.id });
+
+    expect(order).toEqual(["search", "freeze", "model", "complete"]);
+    expect(research.run).toHaveBeenCalledTimes(1);
+    expect(client.completeResearch).toHaveBeenCalledWith(activeJob, searchedEvidence);
+    expect(model.generate).toHaveBeenCalledWith(
+      expect.stringContaining('"contractVersion":"proposal-input.v2"'),
+      expect.any(AbortSignal),
+    );
+    expect(client.complete).toHaveBeenCalledWith(activeJob, v2Set);
+  });
+
+  it("reuses frozen research and composed input on a retry claim", async () => {
+    const activeJob = v2Job("informational", true);
+    const client = api();
+    const research = { run: vi.fn(async () => searchedEvidence) };
+    const model = { generate: vi.fn(async () => v2Set) };
+    await processContentProposalJob({
+      client, research, runner: createContentProposalRunner(model), job: activeJob,
+      leaseSeconds: 180, heartbeatMs: 100_000,
+    });
+    expect(research.run).not.toHaveBeenCalled();
+    expect(client.completeResearch).not.toHaveBeenCalled();
+    expect(model.generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists marketing not_needed without a second worker-side search", async () => {
+    const notNeeded = {
+      contractVersion: "research-evidence.v1" as const, decision: "not_needed" as const,
+      reason: "검색 불필요", queries: [], capturedAt: "2026-08-01T04:00:00.000Z", items: [],
+    };
+    const activeJob = v2Job("marketing", false, notNeeded as never);
+    const marketingSet = {
+      contractVersion: "content-proposal.v2" as const,
+      proposals: v2Set.proposals.map((proposal, index) => ({
+        ...proposal,
+        informationalType: null,
+        evidenceIds: [],
+        purposeDetails: {
+          kind: "marketing" as const, campaignObjective: `목표 ${index}`, situationAndNeed: `니즈 ${index}`,
+          productId: "60000000-0000-4000-8000-000000000006", targetSegment: `세그먼트 ${index}`,
+          strengths: ["강점"], limitations: ["한계"], appeal: `소구 ${index}`,
+          buyingBarriers: ["장벽"], cta: `CTA ${index}`,
+        },
+      })) as never,
+    };
+    const research = { run: vi.fn(async () => notNeeded) };
+    const client = api({
+      completeResearch: vi.fn(async () => v2Snapshot("marketing", "proposal-input.v2", notNeeded as never) as never),
+    });
+    await processContentProposalJob({
+      client, research, runner: createContentProposalRunner({ generate: vi.fn(async () => marketingSet) }),
+      job: activeJob, leaseSeconds: 180, heartbeatMs: 100_000,
+    });
+    expect(research.run).toHaveBeenCalledTimes(1);
+    expect(client.completeResearch).toHaveBeenCalledWith(activeJob, notNeeded);
+  });
+
+  it("repairs a V2 contract failure exactly once with the code and first raw output", async () => {
+    const activeJob = v2Job("informational", true);
+    const invalid = { contractVersion: "content-proposal.v2", proposals: v2Set.proposals.slice(0, 2) };
+    const model = { generate: vi.fn().mockResolvedValueOnce(invalid).mockResolvedValueOnce(v2Set) };
+    const client = api();
+    await processContentProposalJob({
+      client, research: { run: vi.fn() }, runner: createContentProposalRunner(model),
+      job: activeJob, leaseSeconds: 180, heartbeatMs: 100_000,
+    });
+    expect(model.generate).toHaveBeenCalledTimes(2);
+    const repairPrompt = model.generate.mock.calls[1]?.[0] ?? "";
+    expect(repairPrompt).toContain("content_proposal_result_invalid");
+    const encodedRaw = repairPrompt.split("<first_raw_output>\n")[1]?.split("\n</first_raw_output>")[0];
+    expect(JSON.parse(encodedRaw ?? "null")).toBe(JSON.stringify(invalid));
+    expect(repairPrompt.match(/^<first_raw_output>$/gm)).toHaveLength(1);
+    expect(repairPrompt.match(/^<\/first_raw_output>$/gm)).toHaveLength(1);
+    expect(client.complete).toHaveBeenCalledWith(activeJob, v2Set);
+  });
+
+  it("fails non-retryably after one invalid repair without padding or a third call", async () => {
+    const activeJob = v2Job("informational", true);
+    const invalid = { contractVersion: "content-proposal.v2", proposals: [] };
+    const model = { generate: vi.fn(async () => invalid) };
+    const client = api();
+    await processContentProposalJob({
+      client, research: { run: vi.fn() }, runner: createContentProposalRunner(model),
+      job: activeJob, leaseSeconds: 180, heartbeatMs: 100_000,
+    });
+    expect(model.generate).toHaveBeenCalledTimes(2);
+    expect(client.complete).not.toHaveBeenCalled();
+    expect(client.fail).toHaveBeenCalledWith(activeJob, expect.objectContaining({
+      errorCode: "content_proposal_result_invalid",
+      retryable: false,
+    }));
+  });
+
+  it("keeps V1 on its existing single model call", async () => {
+    const model = { generate: vi.fn(async () => validResult) };
+    await processContentProposalJob({
+      client: api(), research: { run: vi.fn() }, runner: createContentProposalRunner(model),
+      job, leaseSeconds: 180, heartbeatMs: 100_000,
+    });
+    expect(model.generate).toHaveBeenCalledTimes(1);
   });
 });

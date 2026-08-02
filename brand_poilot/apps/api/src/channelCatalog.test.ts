@@ -1,6 +1,10 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { Pool } from "pg";
-import { channelCatalog, type OAuthProvider } from "./channelCatalog.js";
+import {
+  channelCatalog,
+  type ChannelGenerationFormat,
+  type OAuthProvider,
+} from "./channelCatalog.js";
 import { createServer } from "./httpServer.js";
 import { createPublishAdapterRegistry } from "./publishAdapters.js";
 import { createRepository } from "./repository.js";
@@ -57,6 +61,49 @@ describe("channel catalog", () => {
     expect(channelCatalog.filter((entry) => entry.generationReady).map((entry) => entry.channel)).toEqual([
       "instagram",
       "threads"
+    ]);
+  });
+
+  it("adds the exact Instagram V2 generation formats without removing legacy compatibility", () => {
+    const instagram = channelCatalog.find((entry) => entry.channel === "instagram");
+    const v2Formats = new Set<ChannelGenerationFormat>([
+      "card_news",
+      "blog",
+      "reel",
+      "marketing_content",
+    ]);
+
+    expect(instagram?.generationFormats).toEqual([
+      "card_news",
+      "single_image",
+      "reel",
+      "marketing_content",
+    ]);
+    expect(instagram?.generationFormats.filter((format) => v2Formats.has(format))).toEqual([
+      "card_news",
+      "reel",
+      "marketing_content",
+    ]);
+    expect(channelCatalog.some((entry) =>
+      (["blog", "blog_export"] as string[]).includes(entry.channel)
+    )).toBe(false);
+  });
+
+  it("keeps Threads and planned remote channels at their existing availability", () => {
+    expect(channelCatalog.find((entry) => entry.channel === "threads")).toMatchObject({
+      catalogStatus: "available",
+      generationReady: true,
+      generationFormats: ["channel_text"],
+    });
+    expect(channelCatalog.filter((entry) => entry.catalogStatus === "planned").map((entry) => ({
+      channel: entry.channel,
+      generationReady: entry.generationReady,
+      generationFormats: entry.generationFormats,
+    }))).toEqual([
+      { channel: "x", generationReady: false, generationFormats: [] },
+      { channel: "linkedin", generationReady: false, generationFormats: [] },
+      { channel: "youtube", generationReady: false, generationFormats: [] },
+      { channel: "tiktok", generationReady: false, generationFormats: [] },
     ]);
   });
 

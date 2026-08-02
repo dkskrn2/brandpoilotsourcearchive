@@ -17,6 +17,7 @@ function capability(overrides: Partial<ChannelCapability> = {}): ChannelCapabili
   return {
     channel: "instagram",
     catalogStatus: "available",
+    enabled: true,
     connectionStatus: "connected",
     canGenerate: true,
     generationFormats: ["card_news", "single_image"],
@@ -47,6 +48,14 @@ describe("channelCapabilityViewModel", () => {
     expect(view.rows[3].detail).toContain("Instagram 피드");
     expect(view.rows[3].detail).toContain("정적 Story");
     expect(view.repairAction).toEqual({ kind: "oauth", label: "Meta 다시 연결" });
+  });
+
+  it("labels the V2 reel and marketing content generation formats", () => {
+    const view = channelCapabilityViewModel(capability({
+      generationFormats: ["reel", "marketing_content"],
+    }), connectedInstagram);
+
+    expect(view.rows[1].detail).toBe("릴스(세로 이미지), 마케팅 콘텐츠");
   });
 
   it.each([

@@ -20,6 +20,8 @@ import type {
   SourceDto,
 } from "./types.js";
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 type FetchTopMedia = (input: FetchInstagramHashtagTopMediaInput) => Promise<FetchInstagramHashtagTopMediaResult>;
 type Queryable = Pick<Pool, "query"> | Pick<PoolClient, "query">;
 type Row = Record<string, any>;
@@ -732,10 +734,12 @@ export function createInstagramTrendRepository(input: {
         savedId = existingSaved.rows[0]?.id;
       }
       if (!savedId) throw new Error("instagram_trend_source_save_failed");
-      await client.query(
+      const referenceResult = await client.query(
         "select upsert_brand_trend_saved_reference($1, $2) as reference_item_id",
         [savedId, actorUserId],
       );
+      const referenceItemId = String(referenceResult.rows[0]?.reference_item_id ?? "").trim();
+      if (!UUID.test(referenceItemId)) throw new Error("instagram_trend_source_save_failed");
       if (!alreadySaved) {
         const caption = item.caption ?? "";
         const hashtags = [...caption.matchAll(/#[\p{L}\p{N}_]+/gu)].map((match: RegExpMatchArray) => match[0]);
@@ -759,7 +763,7 @@ export function createInstagramTrendRepository(input: {
         );
       }
       await client.query("commit");
-      return { source: mapSource(source), alreadySaved };
+      return { source: mapSource(source), referenceItemId, alreadySaved };
     } catch (error) {
       await client.query("rollback");
       throw error;

@@ -37,6 +37,8 @@ const channelLabels: Record<ChannelType, string> = {
 const generationLabels: Record<ChannelCapability["generationFormats"][number], string> = {
   card_news: "카드뉴스",
   blog: "블로그",
+  reel: "릴스(세로 이미지)",
+  marketing_content: "마케팅 콘텐츠",
   single_image: "단일 이미지",
   channel_text: "채널 텍스트",
 };

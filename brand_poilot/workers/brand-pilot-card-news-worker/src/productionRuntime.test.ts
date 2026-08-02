@@ -71,6 +71,7 @@ describe("card-news production runtime", () => {
   it.each([
     "run-codex-card-news.mjs",
     "run-codex-card-news-plan.mjs",
+    "run-codex-card-news-v2-plan.mjs",
   ])("runs %s in the job workspace with a secret-free environment", async (script) => {
     const runnerUrl = new URL(`../scripts/${script}`, import.meta.url).href;
     const runner = await import(runnerUrl) as {
@@ -82,6 +83,8 @@ describe("card-news production runtime", () => {
         shell: boolean;
       };
     };
+    const planner = script !== "run-codex-card-news.mjs";
+    const v3Planner = script === "run-codex-card-news-v2-plan.mjs";
     const outputDir = path.resolve("job-output");
     const source = {
       PATH: "/usr/bin",
@@ -101,20 +104,22 @@ describe("card-news production runtime", () => {
     expect(args).not.toContain("danger-full-access");
     expect(args).toEqual(expect.arrayContaining([
       "-c",
-      script === "run-codex-card-news-plan.mjs"
+      planner
         ? 'default_permissions="planner"'
         : 'default_permissions="worker"',
     ]));
     expect(args).toEqual(expect.arrayContaining([
       "-c",
-      script === "run-codex-card-news-plan.mjs"
+      v3Planner
+        ? 'permissions.planner.filesystem={":minimal"="read","/codex"="deny",":workspace_roots"={"."="deny"}}'
+        : planner
         ? 'permissions.planner.filesystem={":minimal"="read","/codex"="deny",":workspace_roots"={"."="read"}}'
         : 'permissions.worker.filesystem={":minimal"="read","/codex"="deny","/codex/generated_images"="read",":workspace_roots"={"."="write"}}',
     ]));
     expect(args.join(" ")).not.toMatch(/permissions\.(?:planner|worker)\.filesystem\.":workspace_roots"/);
     expect(args).toEqual(expect.arrayContaining([
       "-c",
-      script === "run-codex-card-news-plan.mjs"
+      planner
         ? "permissions.planner.network.enabled=false"
         : "permissions.worker.network.enabled=false",
     ]));
@@ -158,6 +163,68 @@ describe("card-news production runtime", () => {
     expect(plannerArgs.join(" ")).toContain("--disable shell_tool");
     expect(plannerArgs.join(" ")).toContain("--disable image_generation");
     expect(plannerArgs.join(" ")).toContain("--disable shell_snapshot");
+  });
+
+  it("runs the v3 card-news planner with an exact schema and no file, web, shell, or image tools", async () => {
+    const runnerUrl = new URL("../scripts/run-codex-card-news-v2-plan.mjs", import.meta.url).href;
+    const runner = await import(runnerUrl) as {
+      buildCodexPrompt(prompt: string): string;
+      buildCodexArgs(outputDir: string): string[];
+    };
+    const args = runner.buildCodexArgs(path.resolve("v3-plan-output"));
+    const prompt = runner.buildCodexPrompt("상세 기획 입력");
+    const schema = JSON.parse(await read("../scripts/card-news-plan-v2.schema.json")) as Record<string, unknown>;
+
+    expect(args.join(" ")).toContain("permissions.planner.network.enabled=false");
+    expect(args.join(" ")).toContain('permissions.planner.filesystem={":minimal"="read","/codex"="deny",":workspace_roots"={"."="deny"}}');
+    for (const feature of ["shell_tool", "image_generation", "shell_snapshot"]) {
+      expect(args).toEqual(expect.arrayContaining(["--disable", feature]));
+    }
+    expect(args.join(" ")).not.toContain("--search");
+    expect(prompt).toContain("파일이나 웹을 조회하지 마세요");
+    expect(prompt).toContain("JSON 외의 설명을 포함하지 마세요");
+    expect(schema).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["contractVersion", "content", "imagePackage"],
+    });
+    const defs = schema.$defs as Record<string, Record<string, unknown>>;
+    const styleProperties = defs.styleImage?.properties as Record<string, Record<string, unknown>>;
+    expect(styleProperties.description).toMatchObject({ type: "string" });
+    expect(styleProperties.description).not.toHaveProperty("minLength");
+    expect(styleProperties.tags).toMatchObject({ type: "array", maxItems: 20, uniqueItems: true });
+    expect(styleProperties.tags).not.toHaveProperty("minItems");
+    expect(defs.asset?.required).toContain("evidenceIds");
+    expect((defs.asset?.properties as Record<string, unknown>).evidenceIds).toMatchObject({
+      type: "array", maxItems: 8, uniqueItems: true,
+    });
+  });
+
+  it.each([
+    "run-codex-card-news-plan.mjs",
+    "run-codex-card-news-v2-plan.mjs",
+  ])("routes a v3 planning job through only the v3 planner when configured with %s", async (configuredRunner) => {
+    const probeRoot = await mkdtemp(path.join(os.tmpdir(), "card-v3-command-probe-"));
+    const probeFile = path.join(probeRoot, "probe.mjs");
+    const markerFile = path.join(probeRoot, "runner.txt");
+    await writeFile(probeFile, [
+      'import { writeFile } from "node:fs/promises";',
+      "const [runnerName, markerFile] = process.argv.slice(2);",
+      "await writeFile(markerFile, runnerName, 'utf8');",
+    ].join("\n"), "utf8");
+    const command = [
+      JSON.stringify(process.execPath), JSON.stringify(probeFile),
+      configuredRunner, JSON.stringify(markerFile),
+      '"{{outputDir}}"',
+    ].join(" ");
+    const runner = createCommandRunner(command, 5_000);
+    try {
+      const output = await runner.run({ payload: { contentGenerationInput: { contractVersion: "content-generation-input.v3" } } } as never, "prompt");
+      expect(await readFile(markerFile, "utf8")).toBe("run-codex-card-news-v2-plan.mjs");
+      await output.cleanup();
+    } finally {
+      await rm(probeRoot, { recursive: true, force: true });
+    }
   });
 
   it("stages the card skill in the job workspace and removes only new image sessions after cleanup", async () => {
@@ -208,11 +275,26 @@ describe("card-news production runtime", () => {
     expect(dockerfile).toContain("CODEX_HOME=/codex");
     expect(dockerfile).toContain("run-codex-card-news.mjs");
     expect(dockerfile).toContain("run-codex-card-news-plan.mjs");
+    expect(dockerfile).toContain("run-codex-card-news-v2-plan.mjs");
     expect(dockerfile).toContain("editorial-plan.schema.json");
+    expect(dockerfile).toContain("card-news-plan-v2.schema.json");
     expect(dockerfile).toContain("card-news-creator/SKILL.md");
     expect(dockerfile).toContain("workers/brand-pilot-card-news-worker/dist/index.js");
     expect(dockerfile).toMatch(/^USER node$/m);
     expect(dockerfile).not.toMatch(/OPENAI_API_KEY|docker\.sock|tsx\/esm\/api/);
+  });
+
+  it("documents the v3 plan-only responsibility while retaining legacy v2 rendering", async () => {
+    const skill = await read("../.agents/skills/card-news-creator/SKILL.md");
+    expect(skill).toContain("content-generation-input.v3");
+    expect(skill).toContain("ImageGenerationPackageV1");
+    expect(skill).toContain("이미지 파일을 생성하지 않습니다");
+    expect(skill).toContain("1~5장");
+    expect(skill).toContain("장수와 순서");
+    expect(skill).toContain("로고");
+    expect(skill).toContain("부실하지 않게");
+    expect(skill).toContain("content-generation-input.v2");
+    expect(skill).toContain("slide-01.png");
   });
 
   it.each(["failure", "timeout"] as const)(

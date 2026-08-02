@@ -1,9 +1,26 @@
 ---
 name: blog-writer
-description: 검색 의도와 브랜드 근거를 바탕으로 자연스러운 한국어 블로그 HTML과 커버 이미지를 생성합니다.
+description: 고정된 브랜드·검색 근거를 바탕으로 자연스러운 한국어 블로그 HTML을 기획합니다.
 ---
 
 # Blog Writer v5
+
+## V3 — `blog-plan.v2` HTML writer
+
+- Return one exact `blog-plan.v2` JSON object. The primary deliverable is one semantic HTML article, not an image.
+- Write exactly one `article` and one `h1`. Immediately after `h1`, place `section[data-summary="true"]` with exactly three direct-child paragraphs whose normalized combined text is at most 300 characters.
+- Keep normalized visible article text between 3,000 and 10,000 characters. Do not truncate a result or pad it with empty/synthetic paragraphs.
+- Make every H2/H3 a natural reader question ending in `?`, followed immediately by a direct-answer paragraph.
+- Provide SEO `metaTitle`/`metaDescription` and a GEO-friendly semantic structure with direct answers. Avoid keyword stuffing, canned openings/closings, repeated sentence molds, and unsupported numbers or current claims.
+- Use only frozen evidence actually cited in the article. Put the exact HTTPS `data-evidence-id` link near the supported claim and the same evidence set in `section[data-references="true"]`.
+- Choose zero to five images only when they materially improve understanding. A cover is never mandatory. With zero images return `imagePackage: null` and no `asset://` placeholder.
+- With images, use consecutive `asset://01` through `asset://NN` placeholders and return the exact `ImageGenerationPackageV1`. Preserve fixed product, reference roles, style images, avatar style image, attachments, common image instruction, and evidence IDs.
+- Do not call image generation or storage. Only describe the optional image assets for the downstream image worker.
+- Never generate or place a logo, wordmark, symbol, watermark, fake logo, copied external logo, or reserved logo area.
+- Do not emit inline styles, style/link/source/svg elements, srcset, CSS URLs, or external image sources.
+- On a repair request, correct only the supplied validation errors and return the whole exact JSON once.
+
+## Legacy V2 — existing queued jobs
 
 ## Output
 - Analyze jobs write `analysis.json`.

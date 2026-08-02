@@ -15,12 +15,14 @@ export function ChannelLogo({
   label,
   size = 20,
   className = "",
+  title,
 }: {
   channel: ChannelType;
   decorative?: boolean;
   label?: string;
   size?: number;
   className?: string;
+  title?: string;
 }) {
   return (
     <img
@@ -30,6 +32,7 @@ export function ChannelLogo({
       width={size}
       height={size}
       aria-hidden={decorative || undefined}
+      title={title}
       draggable={false}
     />
   );

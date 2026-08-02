@@ -105,15 +105,27 @@ describe("createAiContentApiGateway", () => {
       .mockResolvedValueOnce(generation("analyzing"))
       .mockResolvedValueOnce(proposal)
       .mockResolvedValueOnce([{ assetType: "reference", assetId: "ref-1", generationId: "generation-1", title: "초안" }]);
-    const gateway = createAiContentApiGateway(clientWith(requestJson));
+    const listAiContentReferenceSeeds = vi.fn().mockResolvedValue([]);
+    const gateway = createAiContentApiGateway({
+      ...clientWith(requestJson),
+      listAiContentReferenceSeeds,
+    });
     const request = {
-      contractVersion: "content-proposal-request.v1" as const,
-      contentFamily: "informational" as const,
-      subjectInput: { topic: "여름 관리" },
-      channelTargets: ["blog_export"],
-      outputFormats: ["blog" as const],
-      sourceSnapshotIds: [],
-      performanceSnapshotIds: [],
+      contractVersion: "content-orchestration.v2" as const,
+      brandId: "brand-1",
+      purpose: "informational" as const,
+      seed: {
+        kind: "reference" as const,
+        items: [{ referenceId: "reference-1", roles: ["planning" as const] }],
+      },
+      contentInstruction: "근거를 간결하게",
+      productId: null,
+      outputSettings: {
+        outputFormat: "blog" as const,
+        channelTargets: ["blog_export"] as ["blog_export"],
+        aspectRatio: null,
+        outputCount: 1 as const,
+      },
     };
 
     await expect(gateway.createProposalBatch("brand-1", { idempotencyKey: "batch-key", request }))
@@ -123,15 +135,22 @@ describe("createAiContentApiGateway", () => {
     await gateway.selectProposal("brand-1", "proposal-1", "select-key");
     await gateway.dismissProposal("brand-1", "proposal-1");
     await gateway.listDraftReferences("brand-1", "reference", "ref-1");
+    await gateway.listReferenceSeeds("brand-1", "blog");
 
     expect(requestJson.mock.calls).toEqual([
-      ["/brands/brand-1/ai-content/proposal-batches", { method: "POST", body: JSON.stringify({ idempotencyKey: "batch-key", request }) }],
+      ["/brands/brand-1/ai-content/proposal-batches", {
+        method: "POST",
+        headers: { "Idempotency-Key": "batch-key" },
+        body: JSON.stringify(request),
+      }],
       ["/brands/brand-1/ai-content/proposal-batches/batch-1", { method: "GET" }],
       ["/brands/brand-1/ai-content/proposals?status=suggested", { method: "GET" }],
       ["/brands/brand-1/ai-content/proposals/proposal-1/select", { method: "POST", body: JSON.stringify({ idempotencyKey: "select-key" }) }],
       ["/brands/brand-1/ai-content/proposals/proposal-1/dismiss", { method: "POST" }],
       ["/brands/brand-1/ai-content/draft-references?assetType=reference&assetId=ref-1", { method: "GET" }],
     ]);
+    expect(listAiContentReferenceSeeds).toHaveBeenCalledWith("brand-1", "blog");
+    expect(JSON.stringify(request)).not.toMatch(/wiki|faq|logo|companyOverview|productDescription/i);
   });
 
   it("keeps the subject analysis input identical to the v2 customer contract", () => {
@@ -192,7 +211,7 @@ describe("createAiContentApiGateway", () => {
     const orchestration = {
       contractVersion: "content-orchestration.v1" as const,
       contentFamily: "informational" as const,
-      subject: { mode: "brand_topic" as const, topic: "여름 피부 관리", wikiItemIds: ["wiki-1"] },
+      subject: { mode: "brand_topic" as const, topic: "여름 피부 관리" },
       target: { id: "target-1", snapshot: { name: "민감성 피부 고객" } },
       strategy: "how_to" as const,
       outputFormat: "card_news" as const,
@@ -269,7 +288,7 @@ describe("createAiContentApiGateway", () => {
     const orchestration = {
       contractVersion: "content-orchestration.v1" as const,
       contentFamily: "informational" as const,
-      subject: { mode: "brand_topic" as const, topic: "운영 가이드", wikiItemIds: [] },
+      subject: { mode: "brand_topic" as const, topic: "운영 가이드" },
       target: { id: null, snapshot: {} },
       strategy: "how_to" as const,
       outputFormat: "blog" as const,
@@ -393,6 +412,92 @@ describe("createAiContentApiGateway", () => {
     });
   });
 
+  it("preserves v2 output formats and maps final card, blog, reel, and marketing artifacts by format", async () => {
+    const asset = (role: string, index: number, mimeType = "image/png") => ({
+      role,
+      index,
+      url: `https://cdn.example.com/${role}-${index}.${mimeType === "video/mp4" ? "mp4" : mimeType === "text/html" ? "html" : "png"}`,
+      fileName: `${role}-${index}`,
+      mimeType,
+      ...(mimeType === "image/png" ? { width: 1080, height: role === "scene" ? 1920 : 1080 } : {}),
+    });
+    const apiOutput = (
+      id: string,
+      outputFormat: "card_news" | "blog" | "reel" | "marketing_content",
+      assets: unknown[],
+      status: "completed" | "generating" = "completed",
+    ) => ({
+      id,
+      generationId: "generation-1",
+      outputIndex: 1,
+      title: id,
+      status,
+      content: outputFormat === "blog"
+        ? { title: "블로그", summary: "요약", html: "<article><h1>블로그</h1></article>" }
+        : { caption: id, hashtags: [], cta: "확인" },
+      manifest: {
+        version: "ai-content.v2",
+        outputFormat,
+        assets,
+      },
+      manifestUrl: null,
+      failureCode: null,
+      failureMessage: null,
+      downloadedAt: null,
+      legacyReadOnly: false,
+    });
+    const requestJson = vi.fn(async () => ({
+      ...generation("completed"),
+      type: "marketing",
+      outputs: [
+        apiOutput("card", "card_news", [asset("slide", 1)]),
+        apiOutput("blog", "blog", [asset("html", 1, "text/html")]),
+        apiOutput("reel", "reel", [
+          asset("scene", 1),
+          { ...asset("video", 1, "video/mp4"), width: 1080, height: 1920, durationSeconds: 4 },
+        ]),
+        apiOutput("marketing", "marketing_content", [asset("creative", 1), asset("creative", 2)]),
+        apiOutput("partial", "card_news", [asset("slide", 1)], "generating"),
+        {
+          ...apiOutput("legacy-text", "marketing_content", [asset("text", 1)]),
+          manifest: { version: "ai-content.v1", type: "marketing", outputFormat: "channel_text", assets: [asset("text", 1)] },
+        },
+        {
+          ...apiOutput("v1-reel", "reel", [asset("scene", 1)]),
+          manifest: { version: "ai-content.v1", type: "marketing", outputFormat: "reel", assets: [asset("scene", 1)] },
+          legacyReadOnly: false,
+        },
+        {
+          ...apiOutput("versionless-reel", "reel", [asset("scene", 1)]),
+          manifest: { type: "marketing", outputFormat: "reel", deliveryFormat: "instagram_reel", assets: [asset("scene", 1)] },
+          legacyReadOnly: false,
+        },
+        {
+          ...apiOutput("unknown-reel", "reel", [asset("scene", 1)]),
+          manifest: { version: "ai-content.v999", type: "marketing", outputFormat: "reel", deliveryFormat: "instagram_reel", assets: [asset("scene", 1)] },
+          legacyReadOnly: false,
+        },
+      ],
+    }));
+
+    const result = await createAiContentApiGateway(clientWith(requestJson)).getGeneration("brand-1", "generation-1");
+
+    expect(result.outputs.find((output) => output.id === "card")).toMatchObject({ outputFormat: "card_news", artifact: { kind: "image_gallery" }, publishSupported: true });
+    expect(result.outputs.find((output) => output.id === "blog")).toMatchObject({ outputFormat: "blog", artifact: { kind: "html", assets: [] }, publishSupported: false });
+    expect(result.outputs.find((output) => output.id === "reel")).toMatchObject({
+      outputFormat: "reel",
+      legacyReadOnly: false,
+      publishSupported: false,
+      artifact: { kind: "video", posterUrl: "https://cdn.example.com/scene-1.png" },
+    });
+    expect(result.outputs.find((output) => output.id === "marketing")).toMatchObject({ outputFormat: "marketing_content", artifact: { kind: "image_gallery" }, publishSupported: true });
+    expect(result.outputs.find((output) => output.id === "partial")?.artifact).toBeNull();
+    expect(result.outputs.find((output) => output.id === "legacy-text")).toMatchObject({ outputFormat: "channel_text", publishSupported: false });
+    expect(result.outputs.find((output) => output.id === "v1-reel")).toMatchObject({ manifestVersion: "ai-content.v1", legacyReadOnly: true, publishSupported: false });
+    expect(result.outputs.find((output) => output.id === "versionless-reel")).toMatchObject({ manifestVersion: "ai-content.v1", legacyReadOnly: true, publishSupported: false });
+    expect(result.outputs.find((output) => output.id === "unknown-reel")).toMatchObject({ manifestVersion: null, legacyReadOnly: false, publishSupported: false });
+  });
+
   it("queues supported partial revisions through the output revision endpoint", async () => {
     const requestJson = vi.fn(async () => ({
       ...generation("generating"),
@@ -477,6 +582,29 @@ describe("createAiContentApiGateway", () => {
     await expect(gateway.listReferences("brand-1", "marketing")).resolves.toEqual([
       expect.objectContaining({ id: "reference-1", format: "marketing", source: "saved_trend" }),
     ]);
+  });
+
+  it("uses the API client's strict reference-seed parser", async () => {
+    const requestJson = vi.fn();
+    const listAiContentReferenceSeeds = vi.fn().mockResolvedValue([{
+      id: "11111111-1111-4111-8111-111111111111",
+      source: "brand_output",
+      title: "인기 콘텐츠",
+      url: null,
+      previewUrl: null,
+      format: "card_news",
+      primaryCategory: "뷰티",
+      metrics: { exposureCount: 10, likeCount: 2, commentsCount: 1 },
+      checkedAt: null,
+    }]);
+    const gateway = createAiContentApiGateway({
+      ...clientWith(requestJson),
+      listAiContentReferenceSeeds,
+    });
+
+    await expect(gateway.listReferenceSeeds("brand-1", "card_news")).resolves.toHaveLength(1);
+    expect(listAiContentReferenceSeeds).toHaveBeenCalledWith("brand-1", "card_news");
+    expect(requestJson).not.toHaveBeenCalled();
   });
 
   it("uses the legacy metadata confirm body for a legacy token", async () => {
@@ -811,5 +939,142 @@ describe("createAiContentApiGateway", () => {
     expect(requestJson).toHaveBeenNthCalledWith(2, "/brands/brand-1/ai-content/subject-analyses", expect.objectContaining({ method: "POST", body: expect.stringContaining('"idempotencyKey":"request-1"') }));
     expect(requestJson).toHaveBeenNthCalledWith(4, "/brands/brand-1/ai-content/subject-analyses/analysis-1/reanalyze", expect.objectContaining({ method: "POST" }));
     expect(requestJson).toHaveBeenNthCalledWith(5, "/brands/brand-1/ai-content/subject-analyses/analysis-1/selection", expect.objectContaining({ method: "PATCH" }));
+  });
+
+  it("serializes the V2 finalization draft and start body without sealed inputs", async () => {
+    const requestJson = vi.fn().mockResolvedValue(generation("draft"));
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await gateway.updateFinalizationDraft!("brand-1", "generation-1", {
+      contractVersion: "content-finalization-draft.v2",
+      avatarStyleImageId: "11111111-1111-4111-8111-111111111111",
+      userImageInstruction: "밝고 정돈된 편집 디자인",
+      attachmentIds: ["22222222-2222-4222-8222-222222222222"],
+    });
+    await gateway.startGenerationV2!("brand-1", "generation-1", "final-key");
+
+    const draftBody = JSON.parse(requestJson.mock.calls[0]![1].body as string);
+    const startBody = JSON.parse(requestJson.mock.calls[1]![1].body as string);
+    expect(draftBody).toEqual({
+      contractVersion: "content-finalization-draft.v2",
+      avatarStyleImageId: "11111111-1111-4111-8111-111111111111",
+      userImageInstruction: "밝고 정돈된 편집 디자인",
+      attachmentIds: ["22222222-2222-4222-8222-222222222222"],
+    });
+    expect(startBody).toEqual({
+      idempotencyKey: "final-key",
+      contractVersion: "content-generation-start.v2",
+    });
+    expect(JSON.stringify(startBody)).not.toMatch(/outputCount|wiki|faq|logo|avatarSnapshot|referenceIds|product|proposal/i);
+  });
+
+  it("marks V3 image attachment token requests with the exact finalization role", async () => {
+    if (!globalThis.crypto?.subtle) Object.defineProperty(globalThis, "crypto", { value: webcrypto });
+    const requestJson = vi.fn()
+      .mockResolvedValueOnce({ pathname: "owned/supporting.webp", clientToken: "client-token" })
+      .mockResolvedValueOnce({ id: "attachment-1", storageUrl: "https://blob.example/supporting.webp", storagePath: "owned/supporting.webp" });
+    const blobPut = vi.fn(async () => ({ url: "https://blob.example/supporting.webp" }));
+    const gateway = createAiContentApiGateway(clientWith(requestJson), blobPut as never);
+    const file = new File(["image"], "supporting.webp", { type: "image/webp" });
+
+    await gateway.uploadAttachment("brand-1", "generation-1", {
+      id: "local-supporting",
+      role: "supporting_image",
+      fileName: file.name,
+      mimeType: file.type,
+      size: file.size,
+      file,
+      uploadStatus: "pending",
+    } as never);
+
+    expect(JSON.parse(requestJson.mock.calls[0]![1].body as string)).toEqual({
+      contractVersion: "ai-content-attachment-upload.v3",
+      role: "supporting_image",
+      fileName: "supporting.webp",
+      mimeType: "image/webp",
+      sizeBytes: file.size,
+      checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+  });
+
+  it("rejects a malformed V2 proposal batch response instead of rendering partial cards", async () => {
+    const requestJson = vi.fn().mockResolvedValue({
+      id: "batch-1",
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      origin: "manual",
+      contentFamily: "informational",
+      request: { contractVersion: "content-proposal-request.v2" },
+      sourceSnapshots: [],
+      status: "ready",
+      proposals: [{ id: "proposal-1", proposal: { title: "불완전한 안" } }],
+      researchEvidence: { items: [] },
+      selectedReferences: [],
+      errorCode: null,
+      errorMessage: null,
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+    });
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await expect(gateway.getProposalBatch("brand-1", "batch-1"))
+      .rejects.toThrow("ai_content_proposal_batch_response_invalid");
+  });
+
+  it("rejects an unknown V2 proposal channel target before casting the tuple", async () => {
+    const proposal = {
+      conceptKey: "concept-a",
+      title: "피부 장벽 가이드",
+      informationalType: "how_to",
+      oneLineIntent: "관리 순서를 안내합니다.",
+      differentiator: "상황별 순서로 설명합니다.",
+      differentiationAxes: ["situation"],
+      target: "민감 피부 고객",
+      customerContext: "관리법을 찾는 상황",
+      keyMessage: "세 단계로 관리하세요.",
+      hook: "첫 단계부터 바꿔보세요.",
+      selectionReason: "바로 실천할 수 있습니다.",
+      evidenceIds: [],
+      referenceIds: [],
+      outputFormat: "card_news",
+      channelTargets: ["email"],
+      assetCount: 1,
+      outline: [{ index: 1, role: "guide", headline: "관리 순서", purpose: "실행 안내" }],
+      purposeDetails: {
+        kind: "informational",
+        question: "무엇부터 관리해야 하나요?",
+        value: "실천 순서",
+        whyNow: "계절이 바뀌는 시기",
+        learningPoints: ["순한 세안"],
+      },
+    };
+    const requestJson = vi.fn().mockResolvedValue({
+      id: "batch-1",
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      origin: "manual",
+      contentFamily: "informational",
+      request: { contractVersion: "content-proposal-request.v2" },
+      sourceSnapshots: [],
+      status: "building",
+      proposals: [{
+        id: "proposal-1",
+        batchId: "batch-1",
+        proposal,
+        status: "suggested",
+        generationId: null,
+        createdAt: "2026-08-01T00:00:00.000Z",
+      }],
+      researchEvidence: { items: [] },
+      selectedReferences: [],
+      errorCode: null,
+      errorMessage: null,
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+    });
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await expect(gateway.getProposalBatch("brand-1", "batch-1"))
+      .rejects.toThrow("ai_content_proposal_batch_response_invalid");
   });
 });

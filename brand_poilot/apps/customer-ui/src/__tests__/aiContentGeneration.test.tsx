@@ -287,6 +287,7 @@ describe("AiContentGenerationPage", () => {
   });
 
   it("shows blog/download-only contracts", async () => {
+    const user = userEvent.setup();
     renderGeneration("generation-completed");
 
     expect(await screen.findByRole("heading", { name: "생성 결과 상세" })).toBeVisible();
@@ -294,7 +295,8 @@ describe("AiContentGenerationPage", () => {
     expect(screen.queryByRole("button", { name: "게시 관리로 보내기" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "운영 가이드 결과 ZIP 다운로드" })).toBeEnabled();
     expect(screen.getByTitle("블로그 미리보기")).toBeVisible();
-    expect(screen.getByText("현재 HTML 결과는 SNS 직접 게시를 지원하지 않습니다.")).toBeVisible();
+    await user.click(screen.getByRole("tab", { name: "게시" }));
+    expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
   });
 
   it("shows planning state", async () => {
@@ -348,7 +350,7 @@ describe("AiContentGenerationPage", () => {
             orchestration: {
               contractVersion: "content-orchestration.v1",
               contentFamily: "informational",
-              subject: { mode: "brand_topic", topic: "여름 피부 관리", wikiItemIds: ["wiki-1"] },
+              subject: { mode: "brand_topic", topic: "여름 피부 관리" },
               target: { id: "target-1", snapshot: { name: "민감성 피부 고객" } },
               strategy: "how_to",
               outputFormat: "card_news",

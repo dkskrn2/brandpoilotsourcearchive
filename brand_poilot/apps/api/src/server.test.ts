@@ -73,11 +73,16 @@ function createRepository(): ApiRepository {
     getAiContentBrandContext: vi.fn(async () => ({ ready: true, brandName: "Growthline", ownedUrl: "https://example.com", sourceStatus: "crawled", lastCrawledAt: null, wikiVersionId: "wiki-1", wikiUpdatedAt: null, summary: "자사 분석", pageCount: 1, context: {} })),
     createAiContentAnalysis: vi.fn(async () => { throw new Error("not_implemented"); }),
     updateAiContentDraft: vi.fn(async () => { throw new Error("not_implemented"); }),
+    updateAiContentFinalizationDraft: vi.fn(async () => { throw new Error("not_implemented"); }),
+    startAiContentGenerationV3: vi.fn(async () => { throw new Error("not_implemented"); }),
     startAiContentGeneration: vi.fn(async () => { throw new Error("not_implemented"); }),
     listAiContentGenerations: vi.fn(async () => []),
     getAiContentGeneration: vi.fn(async () => null),
     listAiContentUsage: vi.fn(async (_input) => ({ usageDate: _input.usageDate, generationCount: 0, downloadCount: 0 })),
     listAiContentReferences: vi.fn(async () => []),
+    listAiContentReferenceSeeds: vi.fn(async () => []),
+    getAiContentProposalBatchV2Replay: vi.fn(async () => null),
+    createAiContentProposalBatchV2: vi.fn(async () => { throw new Error("not_implemented"); }),
     listBrandAudiences: vi.fn(async () => []),
     saveBrandAudience: vi.fn(async () => { throw new Error("not_implemented"); }),
     listBrandAppeals: vi.fn(async () => []),
@@ -3029,6 +3034,7 @@ describe("API server", () => {
         lastCrawledAt: null,
         lastError: null
       },
+      referenceItemId: "reference-item-1",
       alreadySaved: false
     });
     const app = createServer({ repository, logger: false });

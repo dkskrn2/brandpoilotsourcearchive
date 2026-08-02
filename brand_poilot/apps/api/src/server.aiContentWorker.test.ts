@@ -144,6 +144,19 @@ describe("AI content worker routes", () => {
     await app.close();
   });
 
+  it("forwards a V3 planner completion without treating it as a legacy manifest", async () => {
+    const { app, repository } = setup();
+    const plan = { contractVersion: "blog-plan.v2", content: { title: "Tea" }, imagePackage: null };
+    const response = await app.inject({
+      method: "POST", url: "/worker/ai-content-jobs/job-1/complete",
+      headers: { authorization: "Bearer worker-token" },
+      payload: { workerId: "worker-1", leaseToken: "lease-1", skillVersion: "blog-plan.v2", jobType: "generate", plan },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(repository.completeAiContentJob).toHaveBeenCalledWith(expect.objectContaining({ jobType: "generate", plan }));
+    await app.close();
+  });
+
   it("leases, extracts, archives, persists, and returns a subject-analysis.v1 payload", async () => {
     const { app, repository, extractPage, archiveImage } = setup();
     const response = await app.inject({

@@ -37,6 +37,8 @@ function setup(options: {
   queueResultFormat?: string;
   queueResultStatus?: string;
   queueResultError?: string;
+  outputManifest?: Record<string, unknown>;
+  artifactOwner?: { workspaceId: string; brandId: string };
 } = {}) {
   const statements: string[] = [];
   let outputInsert = 0;
@@ -48,7 +50,7 @@ function setup(options: {
     if (sql.includes("from ai_content_generation_outputs output")) return { rowCount: 1, rows: [{
       id: "output-1",
       status: options.status ?? "completed",
-      artifact_manifest_json: manifest,
+      artifact_manifest_json: options.outputManifest ?? manifest,
       manifest_url: options.manifestUrl ?? manifestUrl,
       type: options.type ?? "card_news",
       title: manifest.title,
@@ -61,7 +63,11 @@ function setup(options: {
     if (sql.includes("insert into content_topics")) return { rowCount: 1, rows: [{ id: "topic-1" }] };
     if (sql.includes("insert into master_drafts")) return { rowCount: 1, rows: [{ id: "master-1" }] };
     if (sql.includes("insert into topic_publish_groups")) return { rowCount: 1, rows: [{ id: "publish-group-1" }] };
-    if (sql.includes("insert into storage_artifacts")) return { rowCount: 1, rows: [{ id: "artifact-1" }] };
+    if (sql.includes("insert into storage_artifacts")) return { rowCount: 1, rows: [{
+      id: "artifact-1",
+      workspace_id: options.artifactOwner?.workspaceId ?? staticPublishActionFixture.workspaceId,
+      brand_id: options.artifactOwner?.brandId ?? staticPublishActionFixture.brandId,
+    }] };
     if (sql.includes("from brands brand") && sql.includes("join brand_profiles profile")) return { rowCount: 1, rows: [{
       brand_name: "Growthline",
       category_context: "마케팅",
@@ -139,6 +145,41 @@ describe("AI content direct publishing", () => {
     const channelLookup = statements.find((sql) => sql.includes("from brand_channels channel"));
     expect(channelLookup).toContain("credential.expires_at is null");
     expect(channelLookup).toContain("credential.expires_at > now()");
+  });
+
+  it("rejects a colliding manifest artifact owned by another tenant before attaching it to channel outputs", async () => {
+    const { repository, statements } = setup({
+      artifactOwner: { workspaceId: "workspace-other", brandId: "brand-other" },
+    });
+
+    await expect(repository.prepareAiContentPublish(staticPublishActionFixture))
+      .rejects.toThrow("ai_content_manifest_artifact_ownership_conflict");
+    expect(statements).toContain("ROLLBACK");
+    expect(statements.some((sql) => sql.includes("insert into channel_outputs"))).toBe(false);
+  });
+
+  it("preserves same-tenant manifest artifact idempotency", async () => {
+    const { repository, query } = setup();
+
+    await expect(repository.prepareAiContentPublish(staticPublishActionFixture)).resolves.toMatchObject({
+      publishGroupId: "publish-group-1",
+    });
+    const channelInsert = query.mock.calls.find(([sql]) => String(sql).includes("insert into channel_outputs"));
+    expect(channelInsert?.[1]?.[9]).toBe("artifact-1");
+  });
+
+  it("treats uppercase request UUIDs and lowercase PostgreSQL owner UUIDs as the same tenant", async () => {
+    const workspaceId = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA";
+    const brandId = "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB";
+    const { repository } = setup({
+      artifactOwner: { workspaceId: workspaceId.toLowerCase(), brandId: brandId.toLowerCase() },
+    });
+
+    await expect(repository.prepareAiContentPublish({
+      ...staticPublishActionFixture,
+      workspaceId,
+      brandId,
+    })).resolves.toMatchObject({ publishGroupId: "publish-group-1" });
   });
 
   it("reuses an existing target while creating a new target", async () => {
@@ -307,5 +348,104 @@ describe("AI content direct publishing", () => {
 
   it("lets the Instagram publisher read ai-content.v1 image assets", () => {
     expect(extractManifestImageUrls(manifest)).toEqual(manifest.assets.map((asset) => asset.url));
+  });
+
+  it("publishes v2 card images through the existing image artifact adapter", async () => {
+    const v2Card = {
+      version: "ai-content.v2",
+      type: "card_news",
+      purpose: "informational",
+      outputFormat: "card_news",
+      title: "V2 카드",
+      assets: manifest.assets.map((asset) => ({ ...asset, role: "slide" })),
+      content: { caption: "V2 카드 설명", hashtags: ["#v2"], cta: "저장" },
+    };
+    const { repository, statements } = setup({ outputManifest: v2Card });
+
+    await expect(repository.prepareAiContentPublish({
+      ...staticPublishActionFixture,
+      targets: [{ channel: "instagram", deliveryFormat: "instagram_feed_carousel" }],
+    })).resolves.toMatchObject({ targets: [{ deliveryFormat: "instagram_feed_carousel", status: "scheduled" }] });
+    expect(statements.filter((sql) => sql.includes("insert into channel_outputs"))).toHaveLength(1);
+  });
+
+  it("publishes a one-image v2 card through the existing instagram feed single adapter", async () => {
+    const v2Card = {
+      version: "ai-content.v2",
+      type: "card_news",
+      purpose: "informational",
+      outputFormat: "card_news",
+      title: "V2 단일 카드",
+      assets: [{ ...manifest.assets[0], role: "slide" }],
+      content: { caption: "V2 단일 카드 설명", hashtags: ["#v2"], cta: "저장" },
+    };
+    const { repository, query } = setup({ outputManifest: v2Card });
+
+    await expect(repository.prepareAiContentPublish({
+      ...staticPublishActionFixture,
+      targets: [{ channel: "instagram", deliveryFormat: "instagram_feed_single" }],
+    })).resolves.toMatchObject({ targets: [{ deliveryFormat: "instagram_feed_single", status: "scheduled" }] });
+    const insert = query.mock.calls.find(([sql]) => String(sql).includes("insert into channel_outputs"));
+    expect(JSON.parse(String(insert?.[1]?.[8]))).toMatchObject({
+      deliveryFormat: "instagram_feed_single",
+      cards: [{ mimeType: "image/png" }],
+    });
+  });
+
+  it("publishes a multi-image v2 marketing_content as an existing image carousel", async () => {
+    const v2Marketing = {
+      version: "ai-content.v2",
+      type: "marketing",
+      purpose: "marketing",
+      outputFormat: "marketing_content",
+      title: "V2 마케팅",
+      assets: manifest.assets.map((asset) => ({ ...asset, role: "creative" })),
+      content: { caption: "전환 카피", hashtags: ["#전환"], cta: "확인" },
+    };
+    const { repository, query } = setup({ type: "marketing", outputManifest: v2Marketing });
+
+    await expect(repository.prepareAiContentPublish({
+      ...staticPublishActionFixture,
+      targets: [{ channel: "instagram", deliveryFormat: "instagram_feed_carousel" }],
+    })).resolves.toMatchObject({ targets: [{ deliveryFormat: "instagram_feed_carousel", status: "scheduled" }] });
+    const insert = query.mock.calls.find(([sql]) => String(sql).includes("insert into channel_outputs"));
+    expect(JSON.parse(String(insert?.[1]?.[8]))).toMatchObject({
+      caption: "전환 카피",
+      hashtags: ["#전환"],
+      cta: "확인",
+      cards: [{ mimeType: "image/png" }, { mimeType: "image/png" }],
+    });
+  });
+
+  it.each([
+    ["reel", {
+      version: "ai-content.v2",
+      type: "marketing",
+      purpose: "marketing",
+      outputFormat: "reel",
+      title: "V2 릴스",
+      assets: [
+        { role: "scene", index: 1, url: "https://assets.public.blob.vercel-storage.com/scene-1.png", fileName: "scene-1.png", mimeType: "image/png", width: 1080, height: 1920 },
+        { role: "video", index: 1, url: "https://assets.public.blob.vercel-storage.com/reel.mp4", fileName: "reel.mp4", mimeType: "video/mp4", width: 1080, height: 1920, durationSeconds: 4, videoCodec: "h264", fps: 30, audioCodec: null },
+      ],
+      content: { caption: "릴스" },
+    }],
+    ["blog", {
+      version: "ai-content.v2",
+      type: "blog",
+      purpose: "informational",
+      outputFormat: "blog",
+      title: "V2 블로그",
+      assets: [{ role: "html", index: 1, url: "https://assets.public.blob.vercel-storage.com/content.html", fileName: "content.html", mimeType: "text/html" }],
+      content: { title: "V2 블로그", html: "<article></article>" },
+    }],
+  ] as const)("rejects unsupported v2 %s publishing with a stable error and no sample success", async (_format, outputManifest) => {
+    const { repository, statements } = setup({ type: outputManifest.type, outputManifest });
+
+    await expect(repository.prepareAiContentPublish({
+      ...staticPublishActionFixture,
+      targets: [{ channel: "instagram", deliveryFormat: "instagram_feed_single" }],
+    })).rejects.toThrow("ai_content_publish_type_not_supported");
+    expect(statements).not.toContain(expect.stringContaining("insert into channel_outputs"));
   });
 });

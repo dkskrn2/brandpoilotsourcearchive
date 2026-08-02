@@ -8,27 +8,28 @@ import {
 } from "../../features/channels/channelCapabilityGateway";
 import type {
   AiContentGateway,
-  AiContentReference,
   ContentChannelTarget,
   ContentFamily,
-  ContentOrchestration,
-  ContentOutputFormat,
+  ContentOutputFormatV2,
   ContentProposalBatch,
   ContentProposalRecord,
+  ContentProposalRecordV2,
+  ContentReferenceSelectionV2,
   ContentSetupSection,
+  GenerationAttachment,
 } from "../../features/ai-content/types";
 import { createContentWizardState, transitionContentWizard } from "../../features/ai-content/contentWizardMachine";
 import { contentGenerationFieldError } from "../../features/ai-content/aiContentApiGateway";
 import { ContentFamilyStep } from "./ContentFamilyStep";
-import { ContentSubjectStep, type ContentSubjectMode } from "./ContentSubjectStep";
+import { ContentSubjectStep, isApprovedActiveProduct, type ContentSubjectMode } from "./ContentSubjectStep";
+import { ContentReferenceSeedPicker } from "./ContentReferenceSeedPicker";
 import { ContentStrategyStep } from "./ContentStrategyStep";
 import { ContentProposalComparison } from "./ContentProposalComparison";
-import { ReferenceAvatarStep, type SelectedReference } from "./ReferenceAvatarStep";
-import { ReferenceUploadDialog } from "../references/ReferenceUploadDialog";
-import { AvatarEditorDialog } from "../brand-center/AvatarEditorDialog";
-import type { ReferenceItem } from "../../types";
+import { ReferenceAvatarStep, type BrandStyleImagePreview } from "./ReferenceAvatarStep";
+import { AiContentAttachmentUploader } from "./AiContentAttachmentUploader";
 import { PageGuideButton } from "../layout/PageHeader";
-import { ApiRequestError } from "../../lib/apiClient";
+import { api, ApiRequestError } from "../../lib/apiClient";
+import { brandCenterGateway } from "../../features/brand-center/brandCenterGateway";
 
 const phases = ["콘텐츠 생성", "구현안 선택", "생성", "변경·검토·보완"];
 const sections: Array<[ContentSetupSection, string]> = [
@@ -53,8 +54,11 @@ function validationMessage(error: unknown) {
   return mapped ? `${validationFieldLabels[mapped.field]} 입력을 확인해 주세요.` : null;
 }
 
-type ContentLibraries = Pick<LibraryGateway, "listProductServices" | "listWikiItems" | "listAvatars">;
+type ContentLibraries = Pick<LibraryGateway, "listProductServices">;
 type ChannelCapabilityGateway = ReturnType<typeof createChannelCapabilityGateway>;
+type ReferenceTrendGateway = Pick<typeof api, "searchInstagramTrends" | "saveInstagramTrendSource">;
+type RulesGateway = Pick<typeof brandCenterGateway, "getRules">;
+type StyleAssetGateway = Pick<LibraryGateway, "getReference">;
 
 function requestRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -71,8 +75,10 @@ export function ContentProposalFlow({
   initialSeedReferenceId = null,
   onSeedReferenceInvalid,
   assetGateway = libraryGateway,
+  rulesGateway = brandCenterGateway,
   initialAnalyzedSubjectId = null,
   initialSetup,
+  referenceTrendGateway = api,
 }: {
   brandId: string;
   gateway: AiContentGateway;
@@ -81,12 +87,14 @@ export function ContentProposalFlow({
   initialBatchId?: string | null;
   initialSeedReferenceId?: string | null;
   onSeedReferenceInvalid?(): void;
-  assetGateway?: LibraryGateway;
+  assetGateway?: StyleAssetGateway;
+  rulesGateway?: RulesGateway;
   initialAnalyzedSubjectId?: string | null;
+  referenceTrendGateway?: ReferenceTrendGateway;
   initialSetup?: {
     family: ContentFamily | null;
     topic: string;
-    format: ContentOutputFormat | null;
+    format: ContentOutputFormatV2 | "single_image" | "channel_text" | null;
     channels: ContentChannelTarget[];
     brief: string;
   };
@@ -95,101 +103,105 @@ export function ContentProposalFlow({
   const capabilityGateway = useRef(channelCapabilities ?? createChannelCapabilityGateway());
   const [machine, setMachine] = useState(createContentWizardState);
   const [family, setFamily] = useState<ContentFamily | null>(initialSetup?.family ?? null);
-  const [subjectMode, setSubjectMode] = useState<ContentSubjectMode>("brand_topic");
+  const [subjectMode, setSubjectMode] = useState<ContentSubjectMode>("topic_text");
   const [topic, setTopic] = useState(initialSetup?.topic ?? "");
-  const [analyzedSubjectId, setAnalyzedSubjectId] = useState<string | null>(null);
-  const [analyzedSubjectTitle, setAnalyzedSubjectTitle] = useState<string | null>(null);
+  const [topicUrl, setTopicUrl] = useState("");
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
-  const [selectedWikiIds, setSelectedWikiIds] = useState<string[]>([]);
   const [products, setProducts] = useState<Awaited<ReturnType<ContentLibraries["listProductServices"]>>>([]);
-  const [wikiItems, setWikiItems] = useState<Awaited<ReturnType<ContentLibraries["listWikiItems"]>>>([]);
   const [loadingSubjects, setLoadingSubjects] = useState(false);
-  const [format, setFormat] = useState<ContentOutputFormat>(initialSetup?.format ?? "" as ContentOutputFormat);
-  const [channels, setChannels] = useState<ContentChannelTarget[]>(initialSetup?.channels ?? []);
-  const [brief, setBrief] = useState(initialSetup?.brief ?? "");
+  const [format, setFormat] = useState<ContentOutputFormatV2>(
+    initialSetup?.format === "card_news" || initialSetup?.format === "blog" || initialSetup?.format === "reel" || initialSetup?.format === "marketing_content"
+      ? initialSetup.format
+      : "card_news",
+  );
+  const [channel, setChannel] = useState<ContentChannelTarget | null>(initialSetup?.channels[0] ?? null);
+  const [contentInstruction, setContentInstruction] = useState(initialSetup?.brief ?? "");
   const [batch, setBatch] = useState<ContentProposalBatch | null>(null);
-  const [selectedProposal, setSelectedProposal] = useState<ContentProposalRecord | null>(null);
-  const [references, setReferences] = useState<AiContentReference[]>([]);
-  const [avatars, setAvatars] = useState<Awaited<ReturnType<LibraryGateway["listAvatars"]>>>([]);
-  const [selectedReferences, setSelectedReferences] = useState<SelectedReference[]>([]);
-  const [selectedAvatarId, setSelectedAvatarId] = useState<string | null>(null);
-  const [oneTimeAvatar, setOneTimeAvatar] = useState<File | null>(null);
-  const [oneTimeReceipt, setOneTimeReceipt] = useState<{
-    generationId: string;
-    attachment: Awaited<ReturnType<AiContentGateway["uploadAttachment"]>>;
-  } | null>(null);
+  const [selectedProposal, setSelectedProposal] = useState<ContentProposalRecord | ContentProposalRecordV2 | null>(null);
+  const [selectedReferences, setSelectedReferences] = useState<ContentReferenceSelectionV2[]>([]);
+  const [selectedGenerationId, setSelectedGenerationId] = useState<string | null>(null);
+  const [styleImages, setStyleImages] = useState<BrandStyleImagePreview[]>([]);
+  const [selectedAvatarStyleImageId, setSelectedAvatarStyleImageId] = useState<string | null>(null);
+  const [userImageInstruction, setUserImageInstruction] = useState("");
+  const [attachments, setAttachments] = useState<GenerationAttachment[]>([]);
+  const [styleLoadError, setStyleLoadError] = useState<string | null>(null);
   const [loadingProposal, setLoadingProposal] = useState(false);
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [addingReference, setAddingReference] = useState(false);
-  const [addingAvatar, setAddingAvatar] = useState(false);
-  const [assetReturnFocus, setAssetReturnFocus] = useState<HTMLElement | null>(null);
   const [capabilityState, setCapabilityState] = useState<ChannelCapabilityState>(
     capabilityGateway.current.getState(),
   );
   const idempotencyKey = useRef(crypto.randomUUID());
   const selectionKey = useRef(crypto.randomUUID());
-
-  function uploadedReference(item: ReferenceItem): AiContentReference {
-    const format = item.format === "card_news" || item.format === "blog" || item.format === "marketing"
-      ? item.format
-      : "image";
-    return {
-      id: item.id,
-      title: item.title,
-      previewUrl: item.previewUrl,
-      source: "uploaded",
-      format,
-      primaryCategory: null,
-      subcategory: null,
-      appealIds: [],
-      comparableMetric: null,
-    };
-  }
+  const generationStartKey = useRef(crypto.randomUUID());
+  const previousBrandId = useRef(brandId);
+  const activeBrandId = useRef(brandId);
+  const resumableBatchScope = useRef({ batchId: initialBatchId, brandId });
+  activeBrandId.current = brandId;
 
   const proposals = batch?.proposals ?? [];
   const selectedProduct = products.find((item) => item.id === selectedProductId);
   const summary = useMemo(() => [
     family === "informational" ? "정보성" : family === "marketing" ? "마케팅성" : "목적 미정",
-    subjectMode === "product_service" ? selectedProduct?.displayName ?? "제품·서비스 미정" : topic || "주제 미정",
+    subjectMode === "reference"
+      ? `레퍼런스 ${selectedReferences.length}개`
+      : subjectMode === "topic_url"
+        ? topicUrl || "URL 미정"
+        : topic || "주제 미정",
+    family === "marketing" ? selectedProduct?.displayName ?? "제품·서비스 미정" : null,
     format || "형식 미정",
-    channels.length ? channels.join(", ") : "채널 미정",
-  ], [channels, family, format, selectedProduct?.displayName, subjectMode, topic]);
+    channel ?? "업로드 방식 미정",
+  ].filter((item): item is string => Boolean(item)), [channel, family, format, selectedProduct?.displayName, selectedReferences.length, subjectMode, topic, topicUrl]);
 
-  async function loadBatch(batchId: string, signal?: AbortSignal) {
-    const next = await gateway.getProposalBatch(brandId, batchId, signal);
+  async function loadBatch(batchId: string, signal?: AbortSignal, requestedBrandId = brandId) {
+    const next = await gateway.getProposalBatch(requestedBrandId, batchId, signal);
+    if (signal?.aborted || activeBrandId.current !== requestedBrandId) return;
     const request = requestRecord(next.request);
-    const subjectInput = requestRecord(request.subjectInput);
-    if (request.contentFamily === "informational" || request.contentFamily === "marketing") {
-      setFamily(request.contentFamily);
+    if (request.contractVersion === "content-orchestration.v2") {
+      if (request.purpose === "informational" || request.purpose === "marketing") setFamily(request.purpose);
+      const seed = requestRecord(request.seed);
+      if (seed.kind === "topic_text" && typeof seed.title === "string") {
+        setSubjectMode("topic_text");
+        setTopic(seed.title);
+      } else if (seed.kind === "topic_url" && typeof seed.url === "string") {
+        setSubjectMode("topic_url");
+        setTopicUrl(seed.url);
+      } else if (seed.kind === "reference" && Array.isArray(seed.items)) {
+        setSubjectMode("reference");
+        setSelectedReferences(seed.items.flatMap((item) => {
+          const row = requestRecord(item);
+          const roles = Array.isArray(row.roles)
+            ? row.roles.filter((role): role is ContentReferenceSelectionV2["roles"][number] =>
+              role === "planning" || role === "copy_pattern" || role === "visual_composition")
+            : [];
+          return typeof row.referenceId === "string" && roles.length > 0
+            ? [{ referenceId: row.referenceId, roles }]
+            : [];
+        }));
+      }
+      if (typeof request.contentInstruction === "string") setContentInstruction(request.contentInstruction);
+      else setContentInstruction("");
+      setSelectedProductId(typeof request.productId === "string" ? request.productId : null);
+      const settings = requestRecord(request.outputSettings);
+      if (settings.outputFormat === "card_news" || settings.outputFormat === "blog" || settings.outputFormat === "reel" || settings.outputFormat === "marketing_content") {
+        setFormat(settings.outputFormat);
+      }
+      if (Array.isArray(settings.channelTargets) && typeof settings.channelTargets[0] === "string") {
+        setChannel(settings.channelTargets[0] as ContentChannelTarget);
+      }
     } else {
-      setFamily(next.contentFamily);
+      const subjectInput = requestRecord(request.subjectInput);
+      setFamily(request.contentFamily === "informational" || request.contentFamily === "marketing" ? request.contentFamily : next.contentFamily);
+      setSubjectMode("topic_text");
+      if (typeof subjectInput.topic === "string") setTopic(subjectInput.topic);
+      if (subjectInput.mode === "product_service" && typeof subjectInput.productServiceId === "string") setSelectedProductId(subjectInput.productServiceId);
+      const outputFormat = Array.isArray(request.outputFormats) ? request.outputFormats[0] : null;
+      if (outputFormat === "card_news" || outputFormat === "blog" || outputFormat === "reel" || outputFormat === "marketing_content") setFormat(outputFormat);
+      if (Array.isArray(request.channelTargets) && typeof request.channelTargets[0] === "string") setChannel(request.channelTargets[0] as ContentChannelTarget);
+      if (typeof request.brief === "string") setContentInstruction(request.brief);
     }
-    if (typeof subjectInput.topic === "string") setTopic(subjectInput.topic);
-    if (subjectInput.mode === "new_subject" && typeof subjectInput.subjectAnalysisId === "string") {
-      setSubjectMode("new_subject");
-      setAnalyzedSubjectId(subjectInput.subjectAnalysisId);
-    } else if (subjectInput.mode === "product_service" && typeof subjectInput.productServiceId === "string") {
-      setSubjectMode("product_service");
-      setSelectedProductId(subjectInput.productServiceId);
-    } else {
-      setSubjectMode("brand_topic");
-      setSelectedWikiIds(Array.isArray(subjectInput.wikiItemIds)
-        ? subjectInput.wikiItemIds.filter((item): item is string => typeof item === "string")
-        : []);
-    }
-    const outputFormat = Array.isArray(request.outputFormats) ? request.outputFormats[0] : null;
-    if (outputFormat === "card_news" || outputFormat === "blog" || outputFormat === "single_image" || outputFormat === "channel_text") {
-      setFormat(outputFormat);
-    }
-    if (Array.isArray(request.channelTargets)) {
-      setChannels(request.channelTargets.filter((item): item is ContentChannelTarget =>
-        typeof item === "string" && ["instagram", "threads", "x", "linkedin", "youtube", "tiktok", "blog_export"].includes(item),
-      ));
-    }
-    if (typeof request.brief === "string") setBrief(request.brief);
     setBatch(next);
     if (next.status === "failed") throw new Error(next.errorCode ?? "proposal_failed");
     if (next.status === "ready") {
@@ -197,39 +209,71 @@ export function ContentProposalFlow({
       setMachine((current) => ({ ...current, phase: "proposal_selection", completedSections: ["intent", "sources", "delivery"] }));
       return;
     }
-    window.setTimeout(() => { if (!signal?.aborted) void loadBatch(batchId, signal).catch(handleBatchError); }, 900);
+    window.setTimeout(() => {
+      if (!signal?.aborted && activeBrandId.current === requestedBrandId) {
+        void loadBatch(batchId, signal, requestedBrandId).catch(() => handleBatchError(requestedBrandId));
+      }
+    }, 900);
   }
 
-  function handleBatchError() {
+  function handleBatchError(requestedBrandId = brandId) {
+    if (activeBrandId.current !== requestedBrandId) return;
     setLoadingProposal(false);
     setError("AI 구성안을 불러오지 못했습니다. 입력을 유지한 채 다시 시도해 주세요.");
     setMachine((current) => transitionContentWizard(current, { type: "resume_batch_failed" }));
   }
 
   useEffect(() => {
+    if (previousBrandId.current === brandId) return;
+    previousBrandId.current = brandId;
+    capabilityGateway.current.cancel();
+    setMachine(createContentWizardState());
+    setFamily(null);
+    setSubjectMode("topic_text");
+    setTopic("");
+    setTopicUrl("");
+    setSelectedProductId(null);
+    setProducts([]);
+    setFormat("card_news");
+    setChannel(null);
+    setContentInstruction("");
+    setBatch(null);
+    setSelectedProposal(null);
+    setSelectedReferences([]);
+    setSelectedGenerationId(null);
+    setStyleImages([]);
+    setSelectedAvatarStyleImageId(null);
+    setUserImageInstruction("");
+    setAttachments([]);
+    setStyleLoadError(null);
+    setLoadingProposal(false);
+    setLoadingSubjects(false);
+    setLoadingAssets(false);
+    setSubmitting(false);
+    setError(null);
+    setNotice(null);
+    setCapabilityState(capabilityGateway.current.getState());
+    idempotencyKey.current = crypto.randomUUID();
+    selectionKey.current = crypto.randomUUID();
+    generationStartKey.current = crypto.randomUUID();
+  }, [brandId]);
+
+  useEffect(() => {
+    if (resumableBatchScope.current.batchId !== initialBatchId) {
+      resumableBatchScope.current = { batchId: initialBatchId, brandId };
+    }
     if (!initialBatchId) return;
+    if (resumableBatchScope.current.brandId !== brandId) return;
     const controller = new AbortController();
+    const requestedBrandId = brandId;
     setLoadingProposal(true);
-    void loadBatch(initialBatchId, controller.signal).catch(handleBatchError);
+    void loadBatch(initialBatchId, controller.signal, requestedBrandId).catch(() => handleBatchError(requestedBrandId));
     return () => controller.abort();
   // initialBatchId identifies the one resumable request; gateway identity must not restart polling.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId, initialBatchId]);
 
-  useEffect(() => {
-    if (!initialAnalyzedSubjectId) return;
-    let current = true;
-    void gateway.getSubjectAnalysis(brandId, initialAnalyzedSubjectId).then((analysis) => {
-      if (!current || (analysis.status !== "ready" && analysis.status !== "partial")) return;
-      setAnalyzedSubjectId(analysis.id);
-      setAnalyzedSubjectTitle(analysis.input.name || analysis.sourceUrl || "새 제품·서비스 분석");
-      setSubjectMode("new_subject");
-      setMachine((state) => ({ ...state, activeSection: "sources", completedSections: ["intent"] }));
-    }).catch(() => {
-      if (current) setError("완료한 새 분석을 불러오지 못했습니다. 다시 분석해 주세요.");
-    });
-    return () => { current = false; };
-  }, [brandId, gateway, initialAnalyzedSubjectId]);
+  void initialAnalyzedSubjectId;
 
   useEffect(() => {
     if (machine.phase !== "setup" || machine.activeSection !== "delivery") return;
@@ -247,59 +291,74 @@ export function ContentProposalFlow({
   useEffect(() => {
     if (machine.phase !== "setup" || machine.activeSection !== "sources") return;
     let current = true;
+    if (family !== "marketing") {
+      setLoadingSubjects(false);
+      return;
+    }
     setLoadingSubjects(true);
-    void Promise.all([
-      libraries.listProductServices(brandId),
-      libraries.listWikiItems(brandId),
-    ]).then(([nextProducts, nextWikiItems]) => {
+    void libraries.listProductServices(brandId).then((nextProducts) => {
       if (!current) return;
       setProducts(nextProducts);
-      setWikiItems(nextWikiItems);
+      setSelectedProductId((currentId) => currentId && !nextProducts.some((item) =>
+        item.id === currentId && isApprovedActiveProduct(item),
+      ) ? null : currentId);
       setLoadingSubjects(false);
     }).catch(() => {
       if (!current) return;
       setLoadingSubjects(false);
-      setError("제품·서비스와 Wiki를 불러오지 못했습니다. 다시 단계를 열어 시도해 주세요.");
+      setError("승인된 제품·서비스를 불러오지 못했습니다. 다시 단계를 열어 시도해 주세요.");
     });
     return () => { current = false; };
-  }, [brandId, libraries, machine.activeSection, machine.phase]);
+  }, [brandId, family, libraries, machine.activeSection, machine.phase]);
 
   const complete = (section: ContentSetupSection) => setMachine((current) =>
     transitionContentWizard(current, { type: "complete_section", section }),
   );
 
   async function createProposal() {
+    const requestedBrandId = brandId;
+    const approvedProduct = family === "marketing"
+      ? products.find((item) => item.id === selectedProductId && isApprovedActiveProduct(item))
+      : null;
     if (
       !family
-      || (subjectMode === "brand_topic"
+      || (subjectMode === "topic_text"
         ? !topic.trim()
-        : subjectMode === "product_service"
-          ? !selectedProductId
-          : !analyzedSubjectId)
+        : subjectMode === "topic_url"
+          ? !topicUrl.trim()
+          : selectedReferences.length === 0 || selectedReferences.some((item) => item.roles.length === 0))
+      || (family === "marketing" && !approvedProduct)
       || !format
-      || channels.length === 0
+      || !channel
     ) return;
     setLoadingProposal(true);
     setError(null);
     try {
-      const created = await gateway.createProposalBatch(brandId, {
+      const created = await gateway.createProposalBatch(requestedBrandId, {
         idempotencyKey: idempotencyKey.current,
         request: {
-          contractVersion: "content-proposal-request.v1",
-          contentFamily: family,
-          subjectInput: subjectMode === "product_service"
-            ? { mode: "product_service", productServiceId: selectedProductId, brief }
-            : subjectMode === "new_subject"
-              ? { mode: "new_subject", subjectAnalysisId: analyzedSubjectId, brief }
-              : { mode: "brand_topic", topic: topic.trim(), wikiItemIds: selectedWikiIds, brief },
-          channelTargets: channels,
-          outputFormats: [format],
-          sourceSnapshotIds: [],
-          performanceSnapshotIds: [],
+          contractVersion: "content-orchestration.v2",
+          brandId,
+          purpose: family,
+          seed: subjectMode === "topic_text"
+            ? { kind: "topic_text", title: topic.trim() }
+            : subjectMode === "topic_url"
+              ? { kind: "topic_url", url: topicUrl.trim() }
+              : { kind: "reference", items: selectedReferences },
+          contentInstruction: contentInstruction.trim() || null,
+          productId: family === "marketing" ? approvedProduct?.id ?? null : null,
+          outputSettings: {
+            outputFormat: format,
+            channelTargets: [channel],
+            aspectRatio: format === "blog" ? null : format === "reel" ? "9:16" : format === "card_news" ? "4:5" : "1:1",
+            outputCount: 1,
+          },
         },
       });
-      await loadBatch(created.batchId);
+      if (activeBrandId.current !== requestedBrandId) return;
+      await loadBatch(created.batchId, undefined, requestedBrandId);
     } catch (caught) {
+      if (activeBrandId.current !== requestedBrandId) return;
       const mapped = validationMessage(caught);
       if (mapped) {
         setLoadingProposal(false);
@@ -310,120 +369,104 @@ export function ContentProposalFlow({
     }
   }
 
-  async function chooseProposal(item: ContentProposalRecord) {
-    setSelectedProposal(item);
-    setMachine((current) => transitionContentWizard(current, { type: "select_proposal", proposalId: item.id }));
+  async function loadApprovedStyleImages(requestedBrandId = brandId) {
     setLoadingAssets(true);
-    setError(null);
+    setStyleLoadError(null);
     try {
-      const [nextReferences, nextAvatars] = await Promise.all([
-        gateway.listReferences(brandId, item.proposal.recommendedReferenceQuery),
-        libraries.listAvatars(brandId),
-      ]);
-      setReferences(nextReferences);
-      setAvatars(nextAvatars);
-      if (initialSeedReferenceId && selectedReferences.length === 0) {
-        const seed = nextReferences.find((reference) => reference.id === initialSeedReferenceId);
-        if (seed) {
-          setSelectedReferences([{ referenceItemId: seed.id, roles: ["planning"] }]);
-          setNotice(`보관함에서 가져온 ${seed.title} 레퍼런스를 먼저 선택했습니다.`);
-        } else {
-          setNotice("요청한 자료가 현재 브랜드의 활성 레퍼런스가 아니어서 선택에서 제거했습니다.");
-          onSeedReferenceInvalid?.();
-        }
-      }
+      const workspace = await rulesGateway.getRules(requestedBrandId);
+      if (activeBrandId.current !== requestedBrandId) return;
+      const rules = workspace.active?.status === "approved" ? workspace.active.rules : null;
+      const configured = rules?.designRules.referenceImages ?? [];
+      const candidates = await Promise.all(configured.map(async (style): Promise<BrandStyleImagePreview | null> => {
+        const reference = await assetGateway.getReference(requestedBrandId, style.referenceItemId);
+        if (
+          reference.kind !== "upload"
+          || reference.archivedAt !== null
+          || typeof reference.previewUrl !== "string"
+          || !reference.previewUrl.trim()
+        ) return null;
+        return {
+          referenceItemId: style.referenceItemId,
+          title: reference.title,
+          description: style.description,
+          tags: style.tags,
+          previewUrl: reference.previewUrl,
+        };
+      }));
+      const loaded = candidates.filter((image): image is BrandStyleImagePreview => image !== null);
+      if (activeBrandId.current !== requestedBrandId) return;
+      setStyleImages(loaded);
+      setSelectedAvatarStyleImageId((current) => current && loaded.some((image) => image.referenceItemId === current) ? current : null);
     } catch {
-      setError("레퍼런스 또는 아바타를 불러오지 못했습니다. 다시 선택해 주세요.");
+      if (activeBrandId.current !== requestedBrandId) return;
+      setStyleImages([]);
+      setSelectedAvatarStyleImageId(null);
+      setStyleLoadError("브랜드 스타일 이미지를 불러오지 못했습니다. 다시 시도해 주세요.");
     } finally {
-      setLoadingAssets(false);
+      if (activeBrandId.current === requestedBrandId) setLoadingAssets(false);
     }
   }
 
+  async function chooseProposal(item: ContentProposalRecord | ContentProposalRecordV2) {
+    if (submitting || loadingAssets || selectedGenerationId) return;
+    const requestedBrandId = brandId;
+    setError(null);
+    setLoadingAssets(true);
+    try {
+      const generation = await gateway.selectProposal(requestedBrandId, item.id, selectionKey.current);
+      if (activeBrandId.current !== requestedBrandId) return;
+      setSelectedProposal(item);
+      setSelectedGenerationId(generation.id);
+      setStyleImages([]);
+      setSelectedAvatarStyleImageId(null);
+      setUserImageInstruction("");
+      setAttachments([]);
+      setMachine((current) => transitionContentWizard(current, { type: "select_proposal", proposalId: item.id }));
+      await loadApprovedStyleImages(requestedBrandId);
+    } catch (caught) {
+      if (activeBrandId.current !== requestedBrandId) return;
+      setLoadingAssets(false);
+      setError(validationMessage(caught) ?? "구성안을 선택하지 못했습니다. 입력을 유지한 채 다시 시도해 주세요.");
+    }
+  }
+
+  const finalAttachmentRoles = new Set<GenerationAttachment["role"]>([
+    "product_image", "visual_reference", "supporting_image",
+  ]);
+  const attachmentsReady = attachments.every((attachment) => (
+    finalAttachmentRoles.has(attachment.role)
+    && attachment.uploadStatus !== "pending"
+    && attachment.uploadStatus !== "failed"
+    && Boolean(attachment.storagePath && attachment.storageUrl)
+  ));
+
   async function generate() {
-    if (!selectedProposal || submitting) return;
+    if (!selectedProposal || !selectedGenerationId || submitting || !attachmentsReady) return;
+    const requestedBrandId = brandId;
+    if (!gateway.updateFinalizationDraft || !gateway.startGenerationV2) {
+      setError("최종 생성 API를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.");
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
-      const [activeReferences, activeAvatars] = await Promise.all([
-        gateway.listReferences(brandId),
-        libraries.listAvatars(brandId),
-      ]);
-      const activeReferenceIds = new Set(activeReferences.map((item) => item.id));
-      const missingReference = selectedReferences.find((item) => !activeReferenceIds.has(item.referenceItemId));
-      const activeAvatar = selectedAvatarId
-        ? activeAvatars.find((item) => item.id === selectedAvatarId && item.status === "active")
-        : null;
-      if (missingReference || selectedAvatarId && !activeAvatar) {
-        setError("선택한 레퍼런스 또는 아바타가 보관되었거나 찾을 수 없습니다. 해당 항목을 교체하거나 제거한 뒤 다시 시도해 주세요.");
-        setSubmitting(false);
-        return;
-      }
-      const generation = await gateway.selectProposal(brandId, selectedProposal.id, selectionKey.current);
-      const selectedAvatar = activeAvatar ?? null;
-      let preparedOneTimeReceipt = oneTimeAvatar && oneTimeReceipt?.generationId === generation.id
-        ? oneTimeReceipt
-        : null;
-      if (oneTimeAvatar && !preparedOneTimeReceipt) {
-        const attachment = await gateway.uploadAttachment(brandId, generation.id, {
-          id: crypto.randomUUID(),
-          role: "person",
-          fileName: oneTimeAvatar.name,
-          mimeType: oneTimeAvatar.type,
-          size: oneTimeAvatar.size,
-          file: oneTimeAvatar,
-          uploadStatus: "pending",
-        });
-        preparedOneTimeReceipt = { generationId: generation.id, attachment };
-        setOneTimeReceipt(preparedOneTimeReceipt);
-      }
-      const orchestration: ContentOrchestration = {
-        contractVersion: "content-orchestration.v1",
-        contentFamily: selectedProposal.proposal.contentFamily,
-        subject: subjectMode === "product_service" && selectedProductId
-          ? { mode: "product_service", productServiceId: selectedProductId }
-          : subjectMode === "new_subject" && analyzedSubjectId
-            ? { mode: "new_subject", subjectAnalysisId: analyzedSubjectId }
-            : { mode: "brand_topic", topic, wikiItemIds: selectedWikiIds },
-        target: { id: null, snapshot: selectedProposal.proposal.target },
-        strategy: selectedProposal.proposal.messageStrategy,
-        outputFormat: selectedProposal.proposal.outputFormat,
-        channelTargets: selectedProposal.proposal.channelTargets,
-        brief: { instruction: brief },
-        references: selectedReferences,
-        avatar: preparedOneTimeReceipt ? {
-          mode: "one_time",
-          id: preparedOneTimeReceipt.attachment.id,
-          snapshot: {
-            fileName: preparedOneTimeReceipt.attachment.fileName,
-            mimeType: preparedOneTimeReceipt.attachment.mimeType,
-            size: preparedOneTimeReceipt.attachment.size,
-            storageUrl: preparedOneTimeReceipt.attachment.storageUrl ?? null,
-            storagePath: preparedOneTimeReceipt.attachment.storagePath ?? null,
-          },
-        } : selectedAvatar ? {
-          mode: "library",
-          id: selectedAvatar.id,
-          snapshot: {
-            name: selectedAvatar.name,
-            description: selectedAvatar.description,
-            representativeImageUrl: (selectedAvatar.images.find((item) => item.representative) ?? selectedAvatar.images[0])?.storageUrl ?? null,
-          },
-        } : null,
-      };
-      await gateway.updateGeneration(brandId, generation.id, {
-        draft: generation.draft,
-        referenceIds: selectedReferences.map((item) => item.referenceItemId),
-        orchestration,
+      const attachmentIds = attachments
+        .filter((attachment) => finalAttachmentRoles.has(attachment.role))
+        .map((attachment) => attachment.id);
+      await gateway.updateFinalizationDraft(requestedBrandId, selectedGenerationId, {
+        contractVersion: "content-finalization-draft.v2",
+        avatarStyleImageId: selectedAvatarStyleImageId,
+        userImageInstruction: userImageInstruction.trim() || null,
+        attachmentIds,
       });
-      await gateway.startGeneration(brandId, generation.id, {
-        idempotencyKey: selectionKey.current,
-        outputCount: 1,
-        orchestration,
-      });
+      if (activeBrandId.current !== requestedBrandId) return;
+      await gateway.startGenerationV2(requestedBrandId, selectedGenerationId, generationStartKey.current);
+      if (activeBrandId.current !== requestedBrandId) return;
       setMachine((current) => transitionContentWizard(current, { type: "start_generation" }));
-      navigate(`/ai-content/${generation.id}`);
+      navigate(`/ai-content/${selectedGenerationId}`);
     } catch (caught) {
-      setError(validationMessage(caught) ?? "선택한 구현안으로 생성을 시작하지 못했습니다. 다시 시도해 주세요.");
+      if (activeBrandId.current !== requestedBrandId) return;
+      setError(validationMessage(caught) ?? "선택한 구성안으로 생성을 시작하지 못했습니다. 다시 시도해 주세요.");
       setSubmitting(false);
     }
   }
@@ -447,115 +490,105 @@ export function ContentProposalFlow({
             <span>{title}</span>{completeSection ? <small>완료 · 수정 가능</small> : null}
           </button>
           {open ? <div className="content-accordion-panel">
-            {section === "intent" ? <ContentFamilyStep value={family} onChange={setFamily} onComplete={() => complete("intent")} /> : null}
+            {section === "intent" ? <ContentFamilyStep value={family} onChange={(next) => {
+              setFamily(next);
+              if (next === "informational") setSelectedProductId(null);
+            }} onComplete={() => complete("intent")} /> : null}
             {section === "sources" ? <ContentSubjectStep
+              purpose={family ?? "informational"}
               mode={subjectMode}
-              topic={topic}
+              topicText={topic}
+              topicUrl={topicUrl}
+              contentInstruction={contentInstruction}
               products={products}
-              wikiItems={wikiItems}
-              selectedWikiIds={selectedWikiIds}
               selectedProductId={selectedProductId}
-              analyzedSubjectTitle={analyzedSubjectTitle}
+              referencePicker={<ContentReferenceSeedPicker
+                key={`${brandId}:${format}`}
+                brandId={brandId}
+                format={format}
+                selected={selectedReferences}
+                onChange={setSelectedReferences}
+                referenceGateway={gateway}
+                trendGateway={referenceTrendGateway}
+                initialReferenceId={initialSeedReferenceId}
+                onInitialReferenceInvalid={() => {
+                  setNotice("요청한 레퍼런스는 현재 사용할 수 없어 선택에서 제거했습니다.");
+                  onSeedReferenceInvalid?.();
+                }}
+              />}
+              referenceValid={selectedReferences.length > 0 && selectedReferences.every((item) => item.roles.length > 0)}
               loading={loadingSubjects}
-              onModeChange={(next) => {
-                setSubjectMode(next);
-                if (next === "brand_topic") setSelectedProductId(null);
-              }}
-              onTopicChange={setTopic}
-              onWikiIdsChange={setSelectedWikiIds}
+              onModeChange={setSubjectMode}
+              onTopicTextChange={setTopic}
+              onTopicUrlChange={setTopicUrl}
+              onContentInstructionChange={setContentInstruction}
               onProductChange={setSelectedProductId}
-              onStartNewAnalysis={() => navigate(`/ai-content/new?${new URLSearchParams({
-                type: family === "marketing" ? "marketing" : "blog",
-                returnTo: "content-proposal",
-                proposalFamily: family ?? "",
-                proposalTopic: topic,
-                proposalFormat: format,
-                proposalChannels: channels.join(","),
-                proposalBrief: brief,
-              }).toString()}`)}
               onComplete={() => complete("sources")}
             /> : null}
             {section === "delivery" ? <ContentStrategyStep
               outputFormat={format}
-              channelTargets={channels}
-              brief={brief}
+              channelTarget={channel}
               loading={loadingProposal}
               capabilityState={capabilityState}
               onFormatChange={(next) => {
+                if (next !== format && subjectMode === "reference") {
+                  setSelectedReferences([]);
+                  setMachine((current) => current.phase === "setup"
+                    ? {
+                      ...current,
+                      activeSection: "sources",
+                      completedSections: current.completedSections.filter((section) => section !== "sources" && section !== "delivery"),
+                      selectedProposalId: null,
+                    }
+                    : current);
+                }
                 setFormat(next);
-                setChannels((current) => current.filter((channel) => channel === "blog_export" && next === "blog"));
               }}
-              onChannelsChange={setChannels}
-              onBriefChange={setBrief}
+              onChannelChange={setChannel}
               onSubmit={() => void createProposal()}
             /> : null}
           </div> : null}
         </section>;
       })}</main>
-      <aside className="content-input-summary"><h2>입력 요약</h2><ul>{summary.map((item) => <li key={item}>{item}</li>)}</ul>{loadingProposal ? <p>사용 가능한 crawl snapshot으로 구성안을 만들고 있습니다.</p> : null}</aside>
+      <aside className="content-input-summary"><h2>입력 요약</h2><ul>{summary.map((item) => <li key={item}>{item}</li>)}</ul>{loadingProposal ? <p>검증된 입력으로 구성안을 만들고 있습니다.</p> : null}</aside>
     </div> : null}
     {machine.phase === "proposal_selection" && proposals.length
       ? <><aside className="content-input-summary proposal-input-summary" aria-label="복원된 입력 요약">
           <h2>입력 요약</h2><ul>{summary.map((item) => <li key={item}>{item}</li>)}</ul>
         </aside>
-        <div data-guide="content-proposal-selection"><ContentProposalComparison proposals={proposals} selectedId={selectedProposal?.id ?? null} onSelect={(item) => void chooseProposal(item)} /></div>
+        <div data-guide="content-proposal-selection"><ContentProposalComparison
+          proposals={proposals}
+          selectedId={selectedProposal?.id ?? null}
+          evidence={batch?.researchEvidence?.items ?? []}
+          references={batch?.selectedReferences ?? []}
+          disabled={loadingAssets || submitting || Boolean(selectedGenerationId)}
+          onSelect={(item) => void chooseProposal(item)}
+        /></div>
         {selectedProposal ? <ReferenceAvatarStep
-          references={references}
-          avatars={avatars}
-          selectedReferences={selectedReferences}
-          selectedAvatarId={selectedAvatarId}
-          oneTimeAvatar={oneTimeAvatar}
+          styleImages={styleImages}
+          selectedAvatarStyleImageId={selectedAvatarStyleImageId}
+          userImageInstruction={userImageInstruction}
+          outputFormat={"conceptKey" in selectedProposal.proposal ? selectedProposal.proposal.outputFormat : format}
           loading={loadingAssets}
+          loadError={styleLoadError}
           submitting={submitting}
-          onReferencesChange={setSelectedReferences}
-          onAvatarChange={setSelectedAvatarId}
-          onOneTimeAvatarChange={(file) => {
-            setOneTimeAvatar(file);
-            if (file) setSelectedAvatarId(null);
-            if (!file && oneTimeReceipt) {
-              void gateway.removeAttachment(brandId, oneTimeReceipt.generationId, oneTimeReceipt.attachment.id)
-                .then(() => setOneTimeReceipt(null))
-                .catch(() => setError("이번 생성용 아바타를 취소하지 못했습니다. 다시 시도해 주세요."));
-            }
-          }}
-          onAddReference={() => {
-            setAssetReturnFocus(document.activeElement instanceof HTMLElement ? document.activeElement : null);
-            setAddingReference(true);
-          }}
-          onAddAvatar={() => {
-            setAssetReturnFocus(document.activeElement instanceof HTMLElement ? document.activeElement : null);
-            setAddingAvatar(true);
-          }}
+          attachmentsReady={attachmentsReady && Boolean(selectedGenerationId)}
+          attachmentUploader={<AiContentAttachmentUploader
+            gateway={gateway}
+            brandId={brandId}
+            generationId={selectedGenerationId}
+            attachments={attachments}
+            totalAttachmentCount={attachments.length}
+            allowedRoles={["product_image", "visual_reference", "supporting_image"]}
+            disabled={submitting || !selectedGenerationId}
+            onChange={setAttachments}
+          />}
+          onAvatarStyleImageChange={setSelectedAvatarStyleImageId}
+          onUserImageInstructionChange={setUserImageInstruction}
+          onRetry={() => void loadApprovedStyleImages()}
           onGenerate={() => void generate()}
         /> : null}</>
       : null}
-    {addingReference ? <ReferenceUploadDialog
-      brandId={brandId}
-      gateway={assetGateway}
-      onClose={() => {
-        setAddingReference(false);
-        queueMicrotask(() => assetReturnFocus?.focus());
-      }}
-      onUploaded={(item) => {
-        const mapped = uploadedReference(item);
-        setReferences((current) => [mapped, ...current.filter((reference) => reference.id !== mapped.id)]);
-        setSelectedReferences((current) => current.some((reference) => reference.referenceItemId === mapped.id)
-          ? current
-          : [...current, { referenceItemId: mapped.id, roles: ["planning"] }]);
-        setNotice(`${mapped.title} 파일을 업로드하고 레퍼런스로 선택했습니다.`);
-      }}
-    /> : null}
-    {addingAvatar ? <AvatarEditorDialog
-      brandId={brandId}
-      gateway={assetGateway}
-      returnFocus={assetReturnFocus}
-      onClose={() => setAddingAvatar(false)}
-      onSaved={(saved) => {
-        setAvatars((current) => [saved, ...current.filter((avatar) => avatar.id !== saved.id)]);
-        setSelectedAvatarId(saved.id);
-        setNotice(`${saved.name} 아바타를 저장하고 선택했습니다.`);
-      }}
-    /> : null}
     {notice ? <p className="wizard-notice" role="alert">{notice}</p> : null}
     {error ? <p className="wizard-error" role="alert">{error}</p> : null}
   </div>;

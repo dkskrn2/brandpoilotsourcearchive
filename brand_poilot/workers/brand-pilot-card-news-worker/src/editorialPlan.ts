@@ -1,6 +1,12 @@
 import { readFile } from "node:fs/promises";
+import { isDeepStrictEqual } from "node:util";
 import path from "node:path";
 import { parseContentGenerationInput, type AiContentJob } from "./contracts.js";
+import {
+  parseImageGenerationPackageV1,
+  type ContentGenerationInputV3,
+  type ImageGenerationPackageV1,
+} from "@brand-pilot/worker-runtime";
 
 export const editorialIntents = [
   "information", "how_to", "checklist", "comparison", "news", "update",
@@ -11,7 +17,7 @@ export type EditorialIntent = typeof editorialIntents[number];
 
 export interface EditorialEvidence {
   id: string;
-  kind: "user_input" | "subject_fact" | "quality_brief" | "target_evidence" | "wiki" | "research";
+  kind: "user_input" | "subject_fact" | "quality_brief" | "target_evidence" | "research";
   claim: string;
   support?: string;
   sourceUrl?: string;
@@ -44,34 +50,12 @@ function compactObject(value: unknown): string {
     .join(" / ");
 }
 
-function wikiPages(input: ReturnType<typeof parseContentGenerationInput>, query: string) {
-  const context = record(input.brandContext.context);
-  const wiki = record(context?.wiki);
-  const pages = Array.isArray(wiki?.pages) ? wiki.pages.map(record).filter(Boolean) as Record<string, unknown>[] : [];
-  const stopWords = new Set(["서비스", "콘텐츠", "브랜드", "운영", "정보", "설명", "대한", "위한", "그리고"]);
-  const terms = query.toLocaleLowerCase().split(/[^0-9a-zA-Z가-힣]+/u).filter((term) => term.length >= 2 && !stopWords.has(term));
-  return pages
-    .map((page) => {
-      const title = text(page.title);
-      const summary = text(page.summary);
-      const content = text(page.content);
-      const searchable = `${title} ${summary}`.toLocaleLowerCase();
-      const score = terms.reduce((total, term) => total + (searchable.includes(term) ? (title.toLocaleLowerCase().includes(term) ? 3 : 1) : 0), 0);
-      return { title, summary, content, score };
-    })
-    .filter((page) => page.title && (page.score > 0 || pages.length <= 4))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 6);
-}
-
 export function buildEditorialEvidencePool(job: AiContentJob): EditorialEvidence[] {
   const input = parseContentGenerationInput(job.payload.contentGenerationInput);
   const draft = record(job.payload.draft) ?? {};
   const subjectInput = record(draft.subjectInput) ?? {};
   const subjectName = text(subjectInput.name) || text(job.payload.title);
   const subjectDescription = text(subjectInput.description);
-  const appealTitle = text(input.message.appeal.title);
-  const appealDescription = text(input.message.appeal.description);
   const evidence: EditorialEvidence[] = [];
   const add = (item: EditorialEvidence) => { if (item.claim && !evidence.some((entry) => entry.claim === item.claim && entry.sourceUrl === item.sourceUrl)) evidence.push(item); };
 
@@ -91,12 +75,6 @@ export function buildEditorialEvidencePool(job: AiContentJob): EditorialEvidence
     const source = record(item);
     if (text(source?.claim)) add({ id: `target-${index + 1}`, kind: "target_evidence", claim: text(source?.claim), support: text(source?.support) || undefined, sourceUrl: text(source?.sourceUrl) || undefined });
   });
-
-  const query = [text(job.payload.title), subjectName, subjectDescription, appealTitle, appealDescription].filter(Boolean).join(" ");
-  wikiPages(input, query).forEach((page, index) => add({
-    id: `wiki-${index + 1}`, kind: "wiki", claim: page.title,
-    support: truncate(page.summary || page.content),
-  }));
 
   const researchGroups = ["usps", "needs", "voc"] as const;
   let researchIndex = 0;
@@ -189,4 +167,115 @@ export function parseEditorialPlan(value: unknown, allowedEvidenceIds: Set<strin
 export async function loadEditorialPlan(outputDir: string, evidencePool: EditorialEvidence[]) {
   const raw = JSON.parse(await readFile(path.join(outputDir, "editorial-plan.json"), "utf8"));
   return parseEditorialPlan(raw, new Set(evidencePool.map((item) => item.id)));
+}
+
+export interface CardNewsPlanV2 {
+  contractVersion: "card-news-plan.v2";
+  content: { caption: string; hashtags: string[]; cta: string };
+  imagePackage: ImageGenerationPackageV1;
+}
+
+function exactObject(value: unknown, keys: readonly string[]): Record<string, unknown> {
+  const source = record(value);
+  if (!source || Object.keys(source).length !== keys.length || Object.keys(source).some((key) => !keys.includes(key))) {
+    throw new Error("card_news_plan_invalid");
+  }
+  return source;
+}
+
+function requiredText(value: unknown, max: number): string {
+  if (typeof value !== "string" || !value.trim() || value.length > max) throw new Error("card_news_plan_invalid");
+  return value.trim();
+}
+
+function planMismatch(detail: string): never {
+  throw new Error(`card_news_plan_invalid:${detail}`);
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function validateAssetEvidenceIds(value: unknown, allowedEvidenceIds: Set<string>): void {
+  const asset = record(value);
+  if (!asset || !Array.isArray(asset.evidenceIds) || asset.evidenceIds.length > 8) {
+    planMismatch("evidence_ids_malformed");
+  }
+  if (asset.evidenceIds.some((id) => typeof id !== "string" || !UUID.test(id))) {
+    planMismatch("evidence_ids_malformed");
+  }
+  if (new Set(asset.evidenceIds).size !== asset.evidenceIds.length) {
+    planMismatch("evidence_id_duplicate");
+  }
+  if (asset.evidenceIds.some((id) => !allowedEvidenceIds.has(id as string))) {
+    planMismatch("evidence_id_unknown");
+  }
+}
+
+export function parseCardNewsPlanV2(value: unknown, input: ContentGenerationInputV3): CardNewsPlanV2 {
+  try {
+    const source = exactObject(value, ["contractVersion", "content", "imagePackage"]);
+    if (source.contractVersion !== "card-news-plan.v2") throw new Error();
+    const contentSource = exactObject(source.content, ["caption", "hashtags", "cta"]);
+    if (!Array.isArray(contentSource.hashtags) || contentSource.hashtags.length > 30) throw new Error();
+    const hashtags = contentSource.hashtags.map((item) => requiredText(item, 100));
+    if (new Set(hashtags).size !== hashtags.length) throw new Error();
+    const rawPackage = exactObject(source.imagePackage, ["contractVersion", "generationId", "outputFormat", "purpose", "assetCount", "aspectRatio", "channelTargets", "assets", "product", "references", "brandStyleImages", "avatarStyleImageId", "attachments", "userImageInstruction", "logoPolicy"]);
+    if (rawPackage.assetCount !== input.selectedProposal.assetCount) planMismatch("asset_count_mismatch");
+    if (!Array.isArray(rawPackage.assets) || rawPackage.assets.length !== input.selectedProposal.outline.length) {
+      planMismatch("asset_count_mismatch");
+    }
+    const allowedEvidenceIds = new Set(input.researchEvidence.items.map((item) => item.id));
+    rawPackage.assets.forEach((value, offset) => {
+      const asset = record(value);
+      const locked = input.selectedProposal.outline[offset];
+      if (!asset || !locked || asset.index !== locked.index) planMismatch("asset_index_mismatch");
+      if (asset.role !== locked.role) planMismatch("asset_role_mismatch");
+      validateAssetEvidenceIds(value, allowedEvidenceIds);
+    });
+    const rawLogoPolicy = record(rawPackage.logoPolicy);
+    if (
+      !rawLogoPolicy
+      || rawLogoPolicy.allowGeneratedLogo !== false
+      || rawLogoPolicy.allowReservedLogoArea !== false
+      || rawLogoPolicy.allowExternalReferenceLogo !== false
+      || rawLogoPolicy.allowExistingProductPackagingLogo !== true
+    ) planMismatch("logo_policy_mismatch");
+    const imagePackage = parseImageGenerationPackageV1(rawPackage);
+    if (
+      input.outputSettings.outputFormat !== "card_news"
+      || imagePackage.generationId !== input.generationId
+      || imagePackage.outputFormat !== "card_news"
+      || imagePackage.purpose !== input.outputSettings.purpose
+      || imagePackage.assetCount !== input.selectedProposal.assetCount
+      || imagePackage.aspectRatio !== input.outputSettings.aspectRatio
+      || !isDeepStrictEqual(imagePackage.channelTargets, input.outputSettings.channelTargets)
+      || !isDeepStrictEqual(imagePackage.product, input.product)
+      || !isDeepStrictEqual(imagePackage.references, input.references.selected)
+      || !isDeepStrictEqual(imagePackage.brandStyleImages, input.references.brandStyleImages)
+      || imagePackage.avatarStyleImageId !== input.references.avatarStyleImageId
+      || !isDeepStrictEqual(imagePackage.attachments, input.references.attachments)
+      || imagePackage.userImageInstruction !== input.userImageInstruction
+      || imagePackage.assets.length !== input.selectedProposal.outline.length
+      || imagePackage.assets.some((asset, offset) => {
+        const locked = input.selectedProposal.outline[offset];
+        return !locked || asset.index !== locked.index || asset.role !== locked.role;
+      })
+    ) planMismatch("fixed_input_mismatch");
+    return {
+      contractVersion: "card-news-plan.v2",
+      content: {
+        caption: requiredText(contentSource.caption, 20_000),
+        hashtags,
+        cta: requiredText(contentSource.cta, 2_000),
+      },
+      imagePackage,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("card_news_plan_invalid:")) throw error;
+    throw new Error("card_news_plan_invalid");
+  }
+}
+
+export async function loadCardNewsPlanV2(outputDir: string, input: ContentGenerationInputV3) {
+  const raw = JSON.parse(await readFile(path.join(outputDir, "card-news-plan.json"), "utf8"));
+  return parseCardNewsPlanV2(raw, input);
 }

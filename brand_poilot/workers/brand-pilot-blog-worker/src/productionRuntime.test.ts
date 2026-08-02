@@ -125,6 +125,26 @@ describe("blog production runtime", () => {
     });
   });
 
+  it("runs the v3 HTML planner with an exact schema and no network, file, shell, or image tools", async () => {
+    const runnerUrl = new URL("../scripts/run-codex-blog-v2-plan.mjs", import.meta.url).href;
+    const runner = await import(runnerUrl) as { buildCodexArgs(outputDir: string): string[]; buildCodexPrompt(prompt: string): string };
+    const args = runner.buildCodexArgs(path.resolve("v3-blog-output"));
+    const prompt = runner.buildCodexPrompt("writer input");
+    const schema = JSON.parse(await read("../scripts/blog-plan-v2.schema.json")) as Record<string, unknown>;
+    expect(args.join(" ")).toContain("permissions.writer.network.enabled=false");
+    expect(args.join(" ")).toContain('permissions.writer.filesystem={":minimal"="read","/codex"="deny",":workspace_roots"={"."="deny"}}');
+    for (const feature of ["shell_tool", "image_generation", "shell_snapshot"]) expect(args).toEqual(expect.arrayContaining(["--disable", feature]));
+    expect(args.join(" ")).not.toContain("--search");
+    expect(prompt).toContain("파일이나 웹을 조회하지 마세요");
+    expect(schema).toMatchObject({ type: "object", additionalProperties: false, required: ["contractVersion", "content", "imagePackage"] });
+    const properties = schema.properties as Record<string, Record<string, unknown>>;
+    expect(properties.imagePackage.oneOf).toBeTruthy();
+    const contentProperties = (properties.content.properties as Record<string, Record<string, unknown>>);
+    expect(contentProperties.title.maxLength).toBe(500);
+    expect(contentProperties.metaTitle.maxLength).toBe(500);
+    expect(contentProperties.metaDescription.maxLength).toBe(2_000);
+  });
+
   it("stages the blog skill and removes only image sessions created by that job", async () => {
     const probeRoot = await mkdtemp(path.join(os.tmpdir(), "blog-runtime-probe-"));
     const generatedImagesDirectory = path.join(probeRoot, "generated_images");
@@ -172,6 +192,8 @@ describe("blog production runtime", () => {
     expect(dockerfile).toContain("@openai/codex@0.145.0");
     expect(dockerfile).toContain("CODEX_HOME=/codex");
     expect(dockerfile).toContain("run-codex-blog.mjs");
+    expect(dockerfile).toContain("run-codex-blog-v2-plan.mjs");
+    expect(dockerfile).toContain("blog-plan-v2.schema.json");
     expect(dockerfile).toContain("blog-writer/SKILL.md");
     expect(dockerfile).toContain("workers/brand-pilot-blog-worker/dist/index.js");
     expect(dockerfile).toMatch(/^USER node$/m);

@@ -49,4 +49,139 @@ export interface LocalMarketingTextResult extends LocalMarketingResultBase {
   text: string;
 }
 export type LocalMarketingResult = LocalMarketingImageResult | LocalMarketingTextResult;
-import { parseAttachmentSnapshots, parseWorkerContentOrchestration, type AiContentAttachmentSnapshot, type WorkerContentOrchestrationV1 } from "@brand-pilot/worker-runtime";
+export type MarketingGenerationInput = ContentGenerationInputV2 | ContentGenerationInputV3;
+
+export interface MarketingPlanV2 {
+  contractVersion: "marketing-plan.v2";
+  outputFormat: "reel" | "marketing_content";
+  content: { caption: string; hashtags: string[]; cta: string };
+  imagePackage: ImageGenerationPackageV1;
+}
+
+export function parseMarketingInput(value: unknown, legacyWorkerType: unknown): MarketingGenerationInput {
+  if (legacyWorkerType !== "marketing") throw new Error("content_generation_input_type_invalid");
+  const source = asRecord(value, "content_generation_input_invalid");
+  if (source.contractVersion !== "content-generation-input.v3") return parseContentGenerationInput(value);
+  const input = parseContentGenerationInputV3(value);
+  if (input.outputSettings.outputFormat !== "reel" && input.outputSettings.outputFormat !== "marketing_content") {
+    throw new Error("content_generation_input_type_invalid");
+  }
+  return input;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function exactObject(value: unknown, keys: readonly string[]): Record<string, unknown> {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  if (!source || Object.keys(source).length !== keys.length || Object.keys(source).some((key) => !keys.includes(key))) {
+    throw new Error("marketing_plan_invalid");
+  }
+  return source;
+}
+
+function requiredText(value: unknown, max: number): string {
+  if (typeof value !== "string" || !value.trim() || value.length > max) throw new Error("marketing_plan_invalid");
+  return value.trim();
+}
+
+function planMismatch(detail: string): never {
+  throw new Error(`marketing_plan_invalid:${detail}`);
+}
+
+function validateAssetEvidenceIds(value: unknown, allowedEvidenceIds: Set<string>): void {
+  const asset = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  if (!asset || !Array.isArray(asset.evidenceIds) || asset.evidenceIds.length > 8
+    || asset.evidenceIds.some((id) => typeof id !== "string" || !UUID.test(id))) {
+    planMismatch("evidence_ids_malformed");
+  }
+  if (new Set(asset.evidenceIds).size !== asset.evidenceIds.length) planMismatch("evidence_id_duplicate");
+  if (asset.evidenceIds.some((id) => !allowedEvidenceIds.has(id as string))) planMismatch("evidence_id_unknown");
+}
+
+export function parseMarketingPlanV2(value: unknown, input: ContentGenerationInputV3): MarketingPlanV2 {
+  try {
+    const source = exactObject(value, ["contractVersion", "outputFormat", "content", "imagePackage"]);
+    if (source.contractVersion !== "marketing-plan.v2") throw new Error();
+    if (source.outputFormat !== "reel" && source.outputFormat !== "marketing_content") planMismatch("output_format_mismatch");
+    if (source.outputFormat !== input.outputSettings.outputFormat) planMismatch("output_format_mismatch");
+    const contentSource = exactObject(source.content, ["caption", "hashtags", "cta"]);
+    if (!Array.isArray(contentSource.hashtags) || contentSource.hashtags.length > 30) throw new Error();
+    const hashtags = contentSource.hashtags.map((item) => requiredText(item, 100));
+    if (new Set(hashtags).size !== hashtags.length) throw new Error();
+
+    const rawPackage = exactObject(source.imagePackage, ["contractVersion", "generationId", "outputFormat", "purpose", "assetCount", "aspectRatio", "channelTargets", "assets", "product", "references", "brandStyleImages", "avatarStyleImageId", "attachments", "userImageInstruction", "logoPolicy"]);
+    if (rawPackage.outputFormat !== source.outputFormat) planMismatch("output_format_mismatch");
+    if (input.selectedProposal.assetCount === null || rawPackage.assetCount !== input.selectedProposal.assetCount) {
+      planMismatch("asset_count_mismatch");
+    }
+    if (!Array.isArray(rawPackage.assets) || rawPackage.assets.length !== input.selectedProposal.outline.length) {
+      planMismatch("asset_count_mismatch");
+    }
+    const allowedEvidenceIds = new Set(input.researchEvidence.items.map((item) => item.id));
+    rawPackage.assets.forEach((value, offset) => {
+      const asset = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+      const locked = input.selectedProposal.outline[offset];
+      if (!asset || !locked || asset.index !== locked.index) planMismatch("asset_index_mismatch");
+      if (asset.role !== locked.role) planMismatch("asset_role_mismatch");
+      validateAssetEvidenceIds(value, allowedEvidenceIds);
+    });
+    const logoPolicy = rawPackage.logoPolicy && typeof rawPackage.logoPolicy === "object" && !Array.isArray(rawPackage.logoPolicy)
+      ? rawPackage.logoPolicy as Record<string, unknown>
+      : null;
+    if (!logoPolicy
+      || logoPolicy.allowGeneratedLogo !== false
+      || logoPolicy.allowReservedLogoArea !== false
+      || logoPolicy.allowExternalReferenceLogo !== false
+      || logoPolicy.allowExistingProductPackagingLogo !== true) {
+      planMismatch("logo_policy_mismatch");
+    }
+
+    const imagePackage = parseImageGenerationPackageV1(rawPackage);
+    if (imagePackage.generationId !== input.generationId
+      || imagePackage.outputFormat !== input.outputSettings.outputFormat
+      || imagePackage.purpose !== input.outputSettings.purpose
+      || imagePackage.assetCount !== input.selectedProposal.assetCount
+      || imagePackage.aspectRatio !== input.outputSettings.aspectRatio
+      || !isDeepStrictEqual(imagePackage.channelTargets, input.outputSettings.channelTargets)
+      || !isDeepStrictEqual(imagePackage.product, input.product)
+      || !isDeepStrictEqual(imagePackage.references, input.references.selected)
+      || !isDeepStrictEqual(imagePackage.brandStyleImages, input.references.brandStyleImages)
+      || imagePackage.avatarStyleImageId !== input.references.avatarStyleImageId
+      || !isDeepStrictEqual(imagePackage.attachments, input.references.attachments)
+      || imagePackage.userImageInstruction !== input.userImageInstruction
+      || imagePackage.assets.some((asset, offset) => {
+        const locked = input.selectedProposal.outline[offset];
+        return !locked || asset.index !== locked.index || asset.role !== locked.role;
+      })) {
+      planMismatch("fixed_input_mismatch");
+    }
+    return {
+      contractVersion: "marketing-plan.v2",
+      outputFormat: source.outputFormat,
+      content: { caption: requiredText(contentSource.caption, 20_000), hashtags, cta: requiredText(contentSource.cta, 2_000) },
+      imagePackage,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("marketing_plan_invalid:")) throw error;
+    throw new Error("marketing_plan_invalid");
+  }
+}
+
+export async function loadMarketingPlanV2(outputDir: string, input: ContentGenerationInputV3): Promise<MarketingPlanV2> {
+  const value = JSON.parse(await readFile(path.join(outputDir, "marketing-plan.json"), "utf8"));
+  return parseMarketingPlanV2(value, input);
+}
+
+import { isDeepStrictEqual } from "node:util";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import {
+  parseAttachmentSnapshots,
+  parseContentGenerationInputV3,
+  parseImageGenerationPackageV1,
+  parseWorkerContentOrchestration,
+  type AiContentAttachmentSnapshot,
+  type ContentGenerationInputV3,
+  type ImageGenerationPackageV1,
+  type WorkerContentOrchestrationV1,
+} from "@brand-pilot/worker-runtime";

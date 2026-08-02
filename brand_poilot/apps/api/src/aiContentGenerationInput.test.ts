@@ -86,7 +86,6 @@ describe("content-generation-input.v2", () => {
       subject: {
         mode: "brand_topic" as const,
         topic: "승인 브랜드 토픽",
-        wikiItemIds: ["wiki-1"],
       },
       target: { id: null, snapshot: { label: "학습 고객" } },
       strategy: "insight" as const,
@@ -159,6 +158,26 @@ describe("content-generation-input.v2", () => {
     expect(envelope.creativeDirection.prompts).toHaveLength(2);
     expect(envelope.creativeDirection.prompts[0]).toContain("정보를 쉽게 전달");
     expect(envelope.creativeDirection.prompts[1]).toContain("결과 2");
+    expect(envelope.brandContext).not.toHaveProperty("wikiVersionId");
+    expect(JSON.stringify(envelope.brandContext)).not.toMatch(/wiki|faq/i);
+  });
+
+  it("strips legacy Wiki and FAQ data when an immutable v2 snapshot is replayed", async () => {
+    const envelope = await buildContentGenerationInput(deps(), generation(), { outputCount: 1 });
+    const parsed = parseContentGenerationInputV2({
+      ...envelope,
+      brandContext: {
+        ...envelope.brandContext,
+        wikiVersionId: "wiki-legacy",
+        context: {
+          ...envelope.brandContext.context,
+          wiki: { pages: [{ content: "legacy wiki body" }] },
+          nested: { faqData: [{ answer: "legacy faq body" }] },
+        },
+      },
+    });
+
+    expect(JSON.stringify(parsed.brandContext)).not.toMatch(/wiki|faq/i);
   });
 
   it("freezes a user-added appeal override instead of requiring the original appeal list", async () => {

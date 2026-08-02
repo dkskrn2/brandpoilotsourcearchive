@@ -5,6 +5,14 @@ description: 확인된 혜택과 타겟을 바탕으로 한국어 마케팅 소�
 
 # Marketing Creative v3
 
+## Version routing
+
+- 워커 이름의 `marketing`은 콘텐츠 목적을 고정하지 않습니다.
+- `content-generation-input.v3`에서는 `reel | marketing_content` 두 출력 형식을 각각 `informational | marketing` 두 목적으로 처리합니다.
+- V3 작업은 선택 구성안에 잠긴 1~5개 자산의 장수와 순서를 유지한 `marketing-plan.v2` JSON만 작성합니다.
+- V3 상세 기획에서는 이미지나 영상을 생성하지 않습니다. 실제 장면 렌더링은 이미지 워커가 담당합니다.
+- 기존 `content-generation-input.v2`의 `single_image | channel_text` 동작은 아래 기존 규칙과 `creative.png` 계약을 그대로 유지합니다.
+
 ## Grounding
 - Use `brandContext` as the primary factual source when it is present.
 - For `product_url`, inspect the public `productUrl` and add only facts directly verified on that page. If it cannot be read, do not infer missing facts.

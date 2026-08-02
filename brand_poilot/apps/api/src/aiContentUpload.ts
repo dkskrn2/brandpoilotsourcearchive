@@ -1,6 +1,10 @@
 import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client";
 import { BlobNotFoundError, head, type HeadBlobResult } from "@vercel/blob";
-import type { AttachmentUploadTokenInput, AiContentAttachmentRole } from "./aiContentContracts.js";
+import type {
+  AttachmentUploadTokenInput,
+  AiContentAttachmentRole,
+  V3AttachmentUploadTokenInput,
+} from "./aiContentContracts.js";
 
 export const AI_CONTENT_IMAGE_MAX_BYTES = 5_000_000;
 export const AI_CONTENT_DOCUMENT_MAX_BYTES = 10_000_000;
@@ -27,6 +31,12 @@ export const AI_CONTENT_ATTACHMENT_POLICY: Readonly<Record<AiContentAttachmentRo
   scale: IMAGE_ATTACHMENT_POLICY,
   visual_reference: IMAGE_ATTACHMENT_POLICY,
   document: DOCUMENT_ATTACHMENT_POLICY,
+});
+
+export const AI_CONTENT_ATTACHMENT_POLICY_V3 = Object.freeze({
+  product_image: IMAGE_ATTACHMENT_POLICY,
+  visual_reference: IMAGE_ATTACHMENT_POLICY,
+  supporting_image: IMAGE_ATTACHMENT_POLICY,
 });
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -66,6 +76,24 @@ export function validateAiContentAttachment(input: AiContentAttachmentPolicy): A
   if (!Number.isSafeInteger(input.sizeBytes) || input.sizeBytes <= 0 || input.sizeBytes > maximumSizeInBytes) fail("ai_content_attachment_size_invalid");
   if (!SHA256.test(input.checksum.trim())) fail("ai_content_attachment_checksum_invalid");
   return { ...input, fileName: safeFileName(input.fileName), mimeType, checksum: input.checksum.trim().toLowerCase() };
+}
+
+export function validateAiContentAttachmentV3(
+  input: V3AttachmentUploadTokenInput,
+): V3AttachmentUploadTokenInput {
+  const mimeType = input.mimeType.trim().toLowerCase();
+  const maximumSizeInBytes = AI_CONTENT_ATTACHMENT_POLICY_V3[input.role][mimeType];
+  if (maximumSizeInBytes === undefined) fail("ai_content_attachment_role_mime_invalid");
+  if (!Number.isSafeInteger(input.sizeBytes) || input.sizeBytes <= 0 || input.sizeBytes > maximumSizeInBytes) {
+    fail("ai_content_attachment_size_invalid");
+  }
+  if (!SHA256.test(input.checksum.trim())) fail("ai_content_attachment_checksum_invalid");
+  return {
+    ...input,
+    fileName: safeFileName(input.fileName),
+    mimeType,
+    checksum: input.checksum.trim().toLowerCase(),
+  };
 }
 
 export function buildAiContentUploadSessionPath(input: {
@@ -127,12 +155,18 @@ export async function issueAiContentAttachmentToken(input: { brandId: string; ge
   }, options);
 }
 
-export async function issueValidatedAiContentAttachmentToken(input: { brandId: string; generationId: string; attachment: AiContentAttachmentPolicy }, options: AiContentTokenOptions): Promise<AiContentAttachmentTokenResult> {
+export async function issueValidatedAiContentAttachmentToken(input: {
+  brandId: string;
+  generationId: string;
+  attachment: AiContentAttachmentPolicy | V3AttachmentUploadTokenInput;
+}, options: AiContentTokenOptions): Promise<AiContentAttachmentTokenResult> {
   if (!options.token.trim()) fail("ai_content_attachment_storage_not_configured");
   const attachment = input.attachment;
   const pathname = buildAiContentAttachmentPath({ brandId: input.brandId, generationId: input.generationId, checksum: attachment.checksum, fileName: attachment.fileName });
   const generate = options.generateClientToken ?? generateClientTokenFromReadWriteToken;
-  const maximumSizeInBytes = AI_CONTENT_ATTACHMENT_POLICY[attachment.role][attachment.mimeType]!;
+  const maximumSizeInBytes = attachment.role in AI_CONTENT_ATTACHMENT_POLICY_V3
+    ? AI_CONTENT_ATTACHMENT_POLICY_V3[attachment.role as keyof typeof AI_CONTENT_ATTACHMENT_POLICY_V3][attachment.mimeType]!
+    : AI_CONTENT_ATTACHMENT_POLICY[attachment.role as AiContentAttachmentRole][attachment.mimeType]!;
   const clientToken = await generate({ token: options.token, pathname, allowedContentTypes: [attachment.mimeType], maximumSizeInBytes, addRandomSuffix: false, allowOverwrite: false, validUntil: Date.now() + 10 * 60 * 1000 });
   return { pathname, clientToken };
 }

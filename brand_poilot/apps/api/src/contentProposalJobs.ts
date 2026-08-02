@@ -1,6 +1,17 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { Pool } from "pg";
-import type { ContentProposalV1 } from "./aiContentContracts.js";
+import type {
+  ContentProposalSetV2,
+  ContentProposalV1,
+  ProposalInputSnapshotV2,
+  ResearchEvidenceSnapshotV1,
+} from "./aiContentContracts.js";
+import {
+  parseContentProposalSetV2,
+  parseProposalInputSnapshotV2,
+  parseResearchEvidenceSnapshotV1,
+} from "./aiContentGenerationInputV3.js";
 
 export interface ContentProposalJobRecord {
   id: string;
@@ -16,6 +27,8 @@ export interface ContentProposalJobRecord {
   leaseToken: string | null;
   leaseExpiresAt: string | null;
   availableAt: string;
+  inputSnapshot?: Record<string, unknown> | ProposalInputSnapshotV2;
+  researchEvidence?: ResearchEvidenceSnapshotV1;
 }
 
 export interface ContentProposalJobsRepository {
@@ -33,8 +46,15 @@ export interface ContentProposalJobsRepository {
     jobId: string;
     workerId: string;
     leaseToken: string;
-    proposals: unknown[];
+    proposals?: unknown[];
+    proposalSet?: unknown;
   }): Promise<{ id: string; batchId: string; status: "completed" }>;
+  completeContentProposalResearch(input: {
+    jobId: string;
+    workerId: string;
+    leaseToken: string;
+    evidence: ResearchEvidenceSnapshotV1;
+  }): Promise<ProposalInputSnapshotV2>;
   failContentProposalJob(input: {
     jobId: string;
     workerId: string;
@@ -51,6 +71,11 @@ function iso(value: unknown): string | null {
 }
 
 function mapJob(row: Record<string, unknown>): ContentProposalJobRecord {
+  const inputSnapshot = isObject(row.input_snapshot_json) ? row.input_snapshot_json : null;
+  const evidence = isObject(row.evidence_json) ? validateResearchEvidence(row.evidence_json) : null;
+  const composed = inputSnapshot?.contractVersion === "proposal-base-input.v2" && evidence
+    ? composeProposalInput(inputSnapshot, evidence)
+    : inputSnapshot;
   return {
     id: String(row.id),
     workspaceId: String(row.workspace_id),
@@ -67,11 +92,59 @@ function mapJob(row: Record<string, unknown>): ContentProposalJobRecord {
     leaseToken: row.lease_token ? String(row.lease_token) : null,
     leaseExpiresAt: iso(row.lease_expires_at),
     availableAt: iso(row.available_at) ?? "",
+    ...(composed ? { inputSnapshot: composed } : {}),
+    ...(evidence ? { researchEvidence: evidence } : {}),
   };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function evidenceItemHash(item: ResearchEvidenceSnapshotV1["items"][number]): string {
+  return createHash("sha256").update(JSON.stringify({
+    title: item.title,
+    url: item.url,
+    publisher: item.publisher,
+    publishedAt: item.publishedAt,
+    claimSummary: item.claimSummary,
+  })).digest("hex");
+}
+
+function validateResearchEvidence(value: unknown): ResearchEvidenceSnapshotV1 {
+  let parsed: ResearchEvidenceSnapshotV1;
+  try {
+    parsed = parseResearchEvidenceSnapshotV1(value);
+  } catch {
+    throw new Error("content_proposal_research_invalid");
+  }
+  if (parsed.queries.length > 4 || parsed.items.some((item) => {
+    try {
+      return new URL(item.url).protocol !== "https:" || evidenceItemHash(item) !== item.contentHash;
+    } catch {
+      return true;
+    }
+  })) {
+    throw new Error("content_proposal_research_invalid");
+  }
+  return parsed;
+}
+
+function composeProposalInput(
+  base: Record<string, unknown>,
+  evidence: ResearchEvidenceSnapshotV1,
+): ProposalInputSnapshotV2 {
+  try {
+    const { contractVersion: _contractVersion, ...fields } = base;
+    return parseProposalInputSnapshotV2({
+      ...fields,
+      contractVersion: "proposal-input.v2",
+      researchEvidence: evidence,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("content_proposal_")) throw error;
+    throw new Error("content_proposal_research_invalid");
+  }
 }
 
 function nonEmptyText(value: unknown): boolean {
@@ -144,6 +217,40 @@ export function parseContentProposalResult(value: unknown[]): ContentProposalV1[
   return value as ContentProposalV1[];
 }
 
+function parseContentProposalSetResult(
+  value: unknown,
+  errorCode: "content_proposal_result_invalid" | "content_proposal_completion_conflict",
+): ContentProposalSetV2 {
+  try {
+    return parseContentProposalSetV2(value);
+  } catch {
+    throw new Error(errorCode);
+  }
+}
+
+type ContentProposalRequestContract = "v1" | "v2" | "invalid";
+
+function classifyContentProposalRequest(value: unknown): ContentProposalRequestContract {
+  if (!isObject(value)) return "invalid";
+  if (value.contractVersion === "content-proposal-request.v1") return "v1";
+  if (value.contractVersion === "content-proposal-request.v2") return "v2";
+  return "invalid";
+}
+
+type DeferredParse<T> =
+  | { status: "absent" }
+  | { status: "valid"; value: T }
+  | { status: "invalid" };
+
+function deferParse<T>(value: unknown, parser: (input: unknown) => T): DeferredParse<T> {
+  if (value === undefined) return { status: "absent" };
+  try {
+    return { status: "valid", value: parser(value) };
+  } catch {
+    return { status: "invalid" };
+  }
+}
+
 function assertProposalsMatchBatch(
   proposals: ContentProposalV1[],
   job: Record<string, unknown>,
@@ -169,6 +276,41 @@ function assertProposalsMatchBatch(
       || proposal.evidence.some((evidence) => !requestedSourceIds.has(evidence.sourceSnapshotId)
         || !frozenSourceIds.has(evidence.sourceSnapshotId)))) {
     throw new Error("content_proposal_batch_mismatch");
+  }
+}
+
+function assertProposalSetMatchesBatch(
+  proposalSet: ContentProposalSetV2,
+  snapshot: ProposalInputSnapshotV2,
+  request: Record<string, unknown>,
+  contentFamily: unknown,
+): void {
+  const settings = snapshot.outputSettings;
+  if (contentFamily !== settings.purpose
+    || request.purpose !== settings.purpose
+    || request.outputFormat !== settings.outputFormat
+    || !Array.isArray(request.channelTargets)
+    || request.channelTargets.length !== 1
+    || request.channelTargets[0] !== settings.channelTargets[0]) {
+    throw new Error("content_proposal_batch_mismatch");
+  }
+  const evidenceIds = new Set(snapshot.researchEvidence.items.map((item) => item.id));
+  const referenceIds = new Set(snapshot.references.map((reference) => reference.referenceItemId));
+  for (const proposal of proposalSet.proposals) {
+    if (proposal.outputFormat !== settings.outputFormat
+      || proposal.channelTargets.length !== 1
+      || proposal.channelTargets[0] !== settings.channelTargets[0]
+      || proposal.purposeDetails.kind !== settings.purpose
+      || proposal.evidenceIds.some((id) => !evidenceIds.has(id))
+      || proposal.referenceIds.some((id) => !referenceIds.has(id))
+      || (settings.purpose === "marketing"
+        && (snapshot.product === null
+          || proposal.purposeDetails.kind !== "marketing"
+          || proposal.purposeDetails.productId !== snapshot.product.id))
+      || (settings.purpose === "informational"
+        && (snapshot.product !== null || proposal.purposeDetails.kind !== "informational"))) {
+      throw new Error("content_proposal_batch_mismatch");
+    }
   }
 }
 
@@ -236,7 +378,13 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
               and batch.id = job.batch_id
               and batch.workspace_id = job.workspace_id
               and batch.brand_id = job.brand_id
-            returning job.*, batch.request_json, batch.source_snapshot_json`,
+            returning job.*, batch.request_json, batch.source_snapshot_json,
+                      batch.input_snapshot_json,
+                      (select research.evidence_json
+                         from ai_content_proposal_research_snapshots research
+                        where research.batch_id=batch.id
+                          and research.workspace_id=batch.workspace_id
+                          and research.brand_id=batch.brand_id) evidence_json`,
           [selected.rows[0]?.id, input.workerId, leaseToken, input.leaseSeconds],
         );
         if (claimed.rowCount) {
@@ -276,31 +424,145 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
       return Boolean(result.rowCount);
     },
 
-    async completeContentProposalJob(input) {
-      const proposals = parseContentProposalResult(input.proposals);
+    async completeContentProposalResearch(input) {
+      const evidence = validateResearchEvidence(input.evidence);
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
         const result = await client.query(
           `select job.*,batch.content_family,batch.request_json,batch.source_snapshot_json,
+                  batch.input_snapshot_json,research.evidence_json,
                   job.lease_expires_at <= clock_timestamp() as lease_expired
              from ai_content_proposal_jobs job
              join ai_content_proposal_batches batch
                on batch.id=job.batch_id and batch.workspace_id=job.workspace_id
               and batch.brand_id=job.brand_id
+             left join ai_content_proposal_research_snapshots research
+               on research.batch_id=batch.id and research.workspace_id=batch.workspace_id
+              and research.brand_id=batch.brand_id
             where job.id=$1
             for update of job,batch`,
           [input.jobId],
         );
         const job = result.rows[0] as Record<string, unknown> | undefined;
         if (!job) throw new Error("content_proposal_job_not_found");
+        if (job.status !== "processing"
+          || job.lease_owner !== input.workerId
+          || String(job.lease_token) !== input.leaseToken
+          || job.lease_expired === true) {
+          throw new Error("content_proposal_job_lease_invalid");
+        }
+        const request = isObject(job.request_json) ? job.request_json : {};
+        const base = isObject(job.input_snapshot_json) ? job.input_snapshot_json : null;
+        if (request.contractVersion !== "content-proposal-request.v2"
+          || base?.contractVersion !== "proposal-base-input.v2") {
+          throw new Error("content_proposal_research_v2_required");
+        }
+        if (job.content_family === "informational"
+          && (evidence.decision !== "searched" || evidence.items.length === 0)) {
+          throw new Error("content_proposal_research_invalid");
+        }
+        const existing = isObject(job.evidence_json)
+          ? validateResearchEvidence(job.evidence_json)
+          : null;
+        if (existing && !isDeepStrictEqual(existing, evidence)) {
+          throw new Error("content_proposal_research_snapshot_conflict");
+        }
+        if (!existing) {
+          await client.query(
+            `insert into ai_content_proposal_research_snapshots (
+               workspace_id,brand_id,batch_id,evidence_json
+             ) select job.workspace_id,job.brand_id,job.batch_id,$2::jsonb
+                 from ai_content_proposal_jobs job
+                where job.id=$1`,
+            [input.jobId, JSON.stringify(evidence)],
+          );
+        }
+        const snapshot = composeProposalInput(base, evidence);
+        await client.query("COMMIT");
+        return snapshot;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async completeContentProposalJob(input) {
+      const parsedV1 = deferParse(input.proposals, (value) => {
+        if (!Array.isArray(value)) throw new Error("content_proposal_result_invalid");
+        return parseContentProposalResult(value);
+      });
+      const parsedV2 = deferParse(input.proposalSet, parseContentProposalSetV2);
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const result = await client.query(
+          `select job.*,batch.content_family,batch.request_json,batch.source_snapshot_json,
+                  batch.input_snapshot_json,research.evidence_json,
+                  job.lease_expires_at <= clock_timestamp() as lease_expired
+             from ai_content_proposal_jobs job
+             join ai_content_proposal_batches batch
+               on batch.id=job.batch_id and batch.workspace_id=job.workspace_id
+              and batch.brand_id=job.brand_id
+             left join ai_content_proposal_research_snapshots research
+               on research.batch_id=batch.id and research.workspace_id=batch.workspace_id
+              and research.brand_id=batch.brand_id
+            where job.id=$1
+            for update of job,batch`,
+          [input.jobId],
+        );
+        const job = result.rows[0] as Record<string, unknown> | undefined;
+        if (!job) throw new Error("content_proposal_job_not_found");
+        const requestContract = classifyContentProposalRequest(job.request_json);
+        const request = isObject(job.request_json) ? job.request_json : {};
+        if (requestContract === "v1"
+          && (parsedV1.status === "invalid" || parsedV2.status === "invalid")) {
+          throw new Error("content_proposal_result_invalid");
+        }
         if (job.status === "completed") {
           if (job.completion_lease_owner !== input.workerId
             || String(job.completion_lease_token) !== input.leaseToken) {
             throw new Error("content_proposal_job_lease_invalid");
           }
+          if (requestContract === "invalid") {
+            throw new Error("content_proposal_completion_conflict");
+          }
+          if (requestContract === "v2") {
+            if (input.proposals !== undefined || input.proposalSet === undefined) {
+              throw new Error("content_proposal_completion_conflict");
+            }
+            if (parsedV2.status !== "valid") throw new Error("content_proposal_completion_conflict");
+            const retryProposalSet = parsedV2.value;
+            const stored = await client.query(
+              `select position,proposal_json
+                 from ai_content_proposals
+                where batch_id=$1 and workspace_id=$2 and brand_id=$3
+                order by position`,
+              [job.batch_id, job.workspace_id, job.brand_id],
+            );
+            if (stored.rows.length !== 3
+              || stored.rows.some((row, index) => Number(row.position) !== index + 1)) {
+              throw new Error("content_proposal_completion_conflict");
+            }
+            const storedProposalSet = parseContentProposalSetResult(
+              {
+                contractVersion: "content-proposal.v2",
+                proposals: stored.rows.map((row) => row.proposal_json),
+              },
+              "content_proposal_completion_conflict",
+            );
+            if (!isDeepStrictEqual(storedProposalSet, retryProposalSet)) {
+              throw new Error("content_proposal_completion_conflict");
+            }
+          }
           await client.query("COMMIT");
           return { id: String(job.id), batchId: String(job.batch_id), status: "completed" };
+        }
+        if (requestContract === "v2"
+          && (parsedV1.status === "invalid" || parsedV2.status === "invalid")) {
+          throw new Error("content_proposal_result_invalid");
         }
         if (job.status !== "processing"
           || job.lease_owner !== input.workerId
@@ -308,8 +570,31 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
           || job.lease_expired === true) {
           throw new Error("content_proposal_job_lease_invalid");
         }
-        assertProposalsMatchBatch(proposals, job);
-        await client.query(
+        if (requestContract === "invalid") throw new Error("content_proposal_result_invalid");
+        let proposals: ContentProposalV1[] | ContentProposalSetV2["proposals"];
+        if (requestContract === "v2") {
+          if (input.proposals !== undefined || input.proposalSet === undefined) {
+            throw new Error("content_proposal_result_invalid");
+          }
+          if (parsedV2.status !== "valid") throw new Error("content_proposal_result_invalid");
+          const proposalSet = parsedV2.value;
+          const base = isObject(job.input_snapshot_json) ? job.input_snapshot_json : null;
+          const evidence = isObject(job.evidence_json) ? validateResearchEvidence(job.evidence_json) : null;
+          if (!base || base.contractVersion !== "proposal-base-input.v2" || !evidence) {
+            throw new Error("content_proposal_research_required");
+          }
+          const snapshot = composeProposalInput(base, evidence);
+          assertProposalSetMatchesBatch(proposalSet, snapshot, request, job.content_family);
+          proposals = proposalSet.proposals;
+        } else {
+          if (input.proposalSet !== undefined || !Array.isArray(input.proposals)) {
+            throw new Error("content_proposal_result_invalid");
+          }
+          if (parsedV1.status !== "valid") throw new Error("content_proposal_result_invalid");
+          assertProposalsMatchBatch(parsedV1.value, job);
+          proposals = parsedV1.value;
+        }
+        const inserted = await client.query(
           `insert into ai_content_proposals (
              workspace_id, brand_id, batch_id, position, proposal_json
            )
@@ -321,6 +606,9 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
            on conflict (batch_id,position) do nothing`,
           [input.jobId, JSON.stringify(proposals)],
         );
+        if (requestContract === "v2" && inserted.rowCount !== 3) {
+          throw new Error("content_proposal_result_invalid");
+        }
         await client.query(
           `update ai_content_proposal_batches batch
               set status='ready', updated_at=now()

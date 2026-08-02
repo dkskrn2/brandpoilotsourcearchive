@@ -807,4 +807,39 @@ describe("AI content attachment lifecycle in PostgreSQL", () => {
       sizeBytes: stored.sizeBytes,
     }))).resolves.toMatchObject({ storagePath: "before/expiry/path" });
   });
+
+  it.each(["product_image", "visual_reference", "supporting_image"] as const)(
+    "persists and confirms the V3 role %s without changing legacy roles",
+    async (role) => {
+      const repository = createAiContentAttachmentRepository(pglitePool(database));
+      const session = await repository.createAiContentUploadSession({
+        workspaceId: WORKSPACE_ID,
+        brandId: BRAND_ID,
+        generationId: GENERATION_ID,
+        createdByUserId: USER_ID,
+        attachment: {
+          contractVersion: "ai-content-attachment-upload.v3",
+          role,
+          fileName: `${role}.png`,
+          mimeType: "image/png",
+          sizeBytes: 100,
+          checksum: "9".repeat(64),
+        },
+      });
+      const confirmed = await repository.confirmAiContentUploadSession({
+        workspaceId: WORKSPACE_ID,
+        brandId: BRAND_ID,
+        generationId: GENERATION_ID,
+        createdByUserId: USER_ID,
+        sessionId: session.id,
+        nonce: session.nonce,
+      }, async (stored) => ({
+        storagePath: stored.storagePath,
+        storageUrl: `https://test.public.blob.vercel-storage.com/${stored.storagePath}`,
+        mimeType: stored.mimeType,
+        sizeBytes: stored.sizeBytes,
+      }));
+      expect(confirmed).toMatchObject({ role, mimeType: "image/png" });
+    },
+  );
 });

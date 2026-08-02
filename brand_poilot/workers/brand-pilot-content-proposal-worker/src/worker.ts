@@ -2,15 +2,26 @@ import type { ContentProposalModelClient } from "./codexModel.js";
 import { ContentProposalApiError } from "./client.js";
 import {
   ContentProposalContractError,
+  isContentProposalJobV2,
   parseContentProposalResult,
+  parseContentProposalSetV2,
   type ContentProposalJob,
+  type ContentProposalJobV2,
+  type ContentProposalSetV2,
   type ContentProposalV1,
   type ContentProposalWorkerClient,
 } from "./contracts.js";
-import { buildContentProposalPrompt } from "./promptBuilder.js";
+import {
+  buildContentProposalPrompt,
+  buildContentProposalRepairPrompt,
+} from "./promptBuilder.js";
+import type { ContentProposalResearch } from "./research.js";
 
 export interface ContentProposalRunner {
-  run(job: ContentProposalJob, signal?: AbortSignal): Promise<ContentProposalV1[]>;
+  run(
+    job: ContentProposalJob,
+    signal?: AbortSignal,
+  ): Promise<ContentProposalV1[] | ContentProposalSetV2>;
 }
 
 export type ContentProposalJobResult = {
@@ -27,8 +38,47 @@ export type ContentProposalIterationResult =
 export function createContentProposalRunner(model: ContentProposalModelClient): ContentProposalRunner {
   return {
     async run(job, signal) {
-      const output = await model.generate(buildContentProposalPrompt(job), signal);
-      return parseContentProposalResult(output, job);
+      const prompt = buildContentProposalPrompt(job);
+      if (!isContentProposalJobV2(job)) {
+        const output = await model.generate(prompt, signal);
+        return parseContentProposalResult(output, job);
+      }
+      if (job.inputSnapshot.contractVersion !== "proposal-input.v2") {
+        throw new ContentProposalContractError("content_proposal_research_required");
+      }
+      let firstOutput: unknown;
+      let firstError: unknown;
+      try {
+        firstOutput = await model.generate(prompt, signal);
+        return parseContentProposalSetV2(firstOutput, job);
+      } catch (error) {
+        if (!(error instanceof ContentProposalContractError) && !(error instanceof SyntaxError)) throw error;
+        firstError = error;
+      }
+      const rawOutput = firstOutput === undefined
+        ? String((firstError as SyntaxError & { rawOutput?: string }).rawOutput ?? "")
+        : JSON.stringify(firstOutput);
+      const errorCode = firstError instanceof Error
+        ? firstError.message.split(":")[0]
+        : "content_proposal_result_invalid";
+      let repaired: unknown;
+      try {
+        repaired = await model.generate(
+          buildContentProposalRepairPrompt(prompt, errorCode, rawOutput),
+          signal,
+        );
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          throw new ContentProposalContractError(error.message);
+        }
+        throw error;
+      }
+      try {
+        return parseContentProposalSetV2(repaired, job);
+      } catch (error) {
+        if (error instanceof ContentProposalContractError) throw error;
+        throw new ContentProposalContractError("content_proposal_result_invalid");
+      }
     },
   };
 }
@@ -55,6 +105,7 @@ function isLeaseLost(error: unknown): boolean {
 export async function processContentProposalJob({
   client,
   runner,
+  research,
   job,
   leaseSeconds,
   heartbeatMs = 30_000,
@@ -62,6 +113,7 @@ export async function processContentProposalJob({
 }: {
   client: ContentProposalWorkerClient;
   runner: ContentProposalRunner;
+  research?: ContentProposalResearch;
   job: ContentProposalJob;
   leaseSeconds: number;
   heartbeatMs?: number;
@@ -89,7 +141,21 @@ export async function processContentProposalJob({
   }, heartbeatMs);
 
   try {
-    const proposals = await runner.run(job, controller.signal);
+    let runnableJob = job;
+    if (isContentProposalJobV2(job)
+      && job.inputSnapshot.contractVersion === "proposal-base-input.v2") {
+      if (!research) {
+        throw new ContentProposalContractError("content_proposal_research_runner_required");
+      }
+      const evidence = await research.run(job, controller.signal);
+      const inputSnapshot = await client.completeResearch(job, evidence);
+      runnableJob = {
+        ...job,
+        inputSnapshot,
+        researchEvidence: inputSnapshot.researchEvidence,
+      } as ContentProposalJobV2;
+    }
+    const proposals = await runner.run(runnableJob, controller.signal);
     if (heartbeatLeaseLost) return { status: "lease_lost", jobId: job.id };
     if (signal?.aborted) return { status: "stopped", jobId: job.id };
     await client.complete(job, proposals);
@@ -134,6 +200,7 @@ const abortableWait = async (ms: number, signal?: AbortSignal): Promise<void> =>
 export async function runContentProposalOnce({
   client,
   runner,
+  research,
   workerId,
   leaseSeconds,
   heartbeatMs,
@@ -143,6 +210,7 @@ export async function runContentProposalOnce({
 }: {
   client: ContentProposalWorkerClient;
   runner: ContentProposalRunner;
+  research?: ContentProposalResearch;
   workerId: string;
   leaseSeconds: number;
   heartbeatMs?: number;
@@ -157,7 +225,7 @@ export async function runContentProposalOnce({
     await wait(pollMs, signal);
     return signal?.aborted ? { status: "stopped" } : { status: "idle" };
   }
-  return processContentProposalJob({ client, runner, job, leaseSeconds, heartbeatMs, signal });
+  return processContentProposalJob({ client, runner, research, job, leaseSeconds, heartbeatMs, signal });
 }
 
 export async function runContentProposalWatchIteration({

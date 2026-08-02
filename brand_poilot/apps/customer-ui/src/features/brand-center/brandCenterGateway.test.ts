@@ -100,4 +100,58 @@ describe("brand center gateway", () => {
     await expect(gateway.getCore("brand-1")).rejects.toBe(conflict);
     expect(requestJson).toHaveBeenCalledTimes(2);
   });
+
+  it("strictly parses approved Brand Rules style image metadata", async () => {
+    const active = {
+      id: "rules-1",
+      version: 1,
+      status: "approved",
+      rules: {
+        contractVersion: "brand-rules.v1",
+        requiredPhrases: [],
+        forbiddenPhrases: [],
+        exaggerationRules: [],
+        ctaRules: { defaultCta: "", allowed: [] },
+        channelRules: {},
+        designRules: {
+          colors: [],
+          fonts: [],
+          notes: [],
+          referenceImages: [{
+            referenceItemId: "11111111-1111-4111-8111-111111111111",
+            description: "차분한 편집 스타일",
+            tags: ["차분함"],
+          }],
+        },
+        autoApprovalRules: { enabled: false, conditions: [] },
+      },
+      approvedAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+    };
+    const requestJson = vi.fn().mockResolvedValue({ active, draft: null, versions: [active] });
+    const gateway = createBrandCenterGateway({ requestJson } as never);
+
+    await expect(gateway.getRules("brand-1")).resolves.toEqual({ active, draft: null, versions: [active] });
+  });
+
+  it("rejects malformed Brand Rules responses and preserves transport errors", async () => {
+    const malformedRequest = vi.fn().mockResolvedValue({
+      active: {
+        id: "rules-1",
+        version: 1,
+        status: "approved",
+        rules: { contractVersion: "brand-rules.v1", designRules: { referenceImages: [{ referenceItemId: 123 }] } },
+        approvedAt: null,
+        updatedAt: "bad",
+      },
+      draft: null,
+      versions: [],
+    });
+    const malformedGateway = createBrandCenterGateway({ requestJson: malformedRequest } as never);
+    await expect(malformedGateway.getRules("brand-1")).rejects.toThrow("brand_rules_response_invalid");
+
+    const transportError = new ApiRequestError({ status: 503, errorCode: "brand_rules_unavailable" });
+    const rejectedGateway = createBrandCenterGateway({ requestJson: vi.fn().mockRejectedValue(transportError) } as never);
+    await expect(rejectedGateway.getRules("brand-1")).rejects.toBe(transportError);
+  });
 });
