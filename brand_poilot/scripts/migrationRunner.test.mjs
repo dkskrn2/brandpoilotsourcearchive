@@ -863,6 +863,7 @@ test("an installation applied through 064 has every later migration pending", as
       "070_remove_embedding_runtime.sql",
       "071_brand_intelligence_onboarding_worker_v2.sql",
       "072_faq_suggestion_worker.sql",
+      "073_ai_content_generation_v2_render_pipeline.sql",
     ],
   );
 });

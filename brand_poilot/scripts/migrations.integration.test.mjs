@@ -4377,7 +4377,7 @@ test("061 deterministically removes legacy duplicate avatar bytes and prevents n
   });
 });
 
-test("migration runner records forward-only 060 through 072 without changing the applied 058 checksum", async () => {
+test("migration runner records forward-only 060 through 073 without changing the applied 058 checksum", async () => {
   const migrations = await loadMigrations();
   const runnableMigrations = migrations.filter(
     (migration) => !migration.sql.startsWith("-- requires: pgvector")
@@ -4403,7 +4403,7 @@ test("migration runner records forward-only 060 through 072 without changing the
       client,
       migrations: runnableMigrations,
     });
-    assert.deepEqual(upgraded.pending.slice(-13), [
+    assert.deepEqual(upgraded.pending.slice(-14), [
       "060_content_orchestration.sql",
       "061_avatar_image_checksum_uniqueness.sql",
       "062_avatar_upload_cancellation.sql",
@@ -4417,9 +4417,10 @@ test("migration runner records forward-only 060 through 072 without changing the
       "070_remove_embedding_runtime.sql",
       "071_brand_intelligence_onboarding_worker_v2.sql",
       "072_faq_suggestion_worker.sql",
+      "073_ai_content_generation_v2_render_pipeline.sql",
     ]);
     const recorded = await database.query(
-      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) order by id",
+      "select id, checksum from schema_migrations where id in ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) order by id",
       [
         "058_avatar_and_reference_libraries.sql",
         "060_content_orchestration.sql",
@@ -4435,6 +4436,7 @@ test("migration runner records forward-only 060 through 072 without changing the
         "070_remove_embedding_runtime.sql",
         "071_brand_intelligence_onboarding_worker_v2.sql",
         "072_faq_suggestion_worker.sql",
+        "073_ai_content_generation_v2_render_pipeline.sql",
       ],
     );
     assert.deepEqual(recorded.rows, [
@@ -4493,6 +4495,10 @@ test("migration runner records forward-only 060 through 072 without changing the
       {
         id: "072_faq_suggestion_worker.sql",
         checksum: migrations.find((migration) => migration.id === "072_faq_suggestion_worker.sql")?.checksum,
+      },
+      {
+        id: "073_ai_content_generation_v2_render_pipeline.sql",
+        checksum: migrations.find((migration) => migration.id === "073_ai_content_generation_v2_render_pipeline.sql")?.checksum,
       },
     ]);
     const repeated = await runMigrationsWithClient({
@@ -4952,6 +4958,7 @@ test("065 direct SQL and migration runner pending-tail paths converge on lifecyc
       "070_remove_embedding_runtime.sql",
       "071_brand_intelligence_onboarding_worker_v2.sql",
       "072_faq_suggestion_worker.sql",
+      "073_ai_content_generation_v2_render_pipeline.sql",
     ]);
     return attachmentLifecycleRowState(database, fixture);
   });
