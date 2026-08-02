@@ -294,7 +294,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션 registry는 FAQ suggestion worker 072까지 포함한다", async () => {
+test("데이터베이스 마이그레이션 registry는 콘텐츠 생성 pipeline 073까지 포함한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -373,6 +373,7 @@ test("데이터베이스 마이그레이션 registry는 FAQ suggestion worker 07
     "070_remove_embedding_runtime.sql",
     "071_brand_intelligence_onboarding_worker_v2.sql",
     "072_faq_suggestion_worker.sql",
+    "073_ai_content_generation_v2_render_pipeline.sql",
   ]);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("059_")).length <= 1);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("060_")).length <= 1);
