@@ -53,7 +53,8 @@ describe("automated card news input", () => {
       },
     });
     expect(JSON.stringify(result.subject.facts)).toContain("승인 담당자");
-    expect(JSON.stringify(result.brandContext.context)).toContain("https://example.com/service");
+    expect(JSON.stringify(result.subject.facts)).toContain("https://example.com/service");
+    expect(result.brandContext.context).not.toHaveProperty("wiki");
     expect(result.brandContext.context).toMatchObject({
       brandIntelligence: {
         versionId: "analysis-1",

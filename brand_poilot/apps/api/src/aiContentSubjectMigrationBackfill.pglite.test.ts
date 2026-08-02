@@ -175,6 +175,10 @@ describe("migration 065 subject attachment snapshot backfill", () => {
         "utf8",
       ),
     );
+    for (const name of migrationFiles) {
+      if (name <= "065_ai_content_attachment_upload_sessions.sql" || VECTOR_MIGRATIONS.has(name)) continue;
+      await database.exec(await readFile(resolve(migrationDirectory, name), "utf8"));
+    }
   }, 120_000);
 
   afterAll(async () => {
