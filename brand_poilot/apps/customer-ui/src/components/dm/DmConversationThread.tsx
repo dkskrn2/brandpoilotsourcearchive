@@ -39,7 +39,7 @@ function manualReplyErrorMessage(error: unknown) {
     return "Instagram 연결 토큰이 만료되었거나 메시지 권한이 없습니다. 채널을 다시 연결해 주세요.";
   }
   if (["meta_graph_403", "meta_permission_denied"].includes(errorCode)) {
-    return "Instagram의 24시간 응답 시간이 지났거나 Meta 앱에 Human Agent 권한이 없습니다. Human Agent 권한을 승인한 뒤 다시 시도해 주세요.";
+    return "Instagram 메시지 권한이 없거나 Meta가 이 답변 전송을 허용하지 않았습니다. Instagram 채널을 다시 연결한 뒤 다시 시도해 주세요.";
   }
   if (errorCode === "meta_graph_400" || errorCode === "meta_recipient_unavailable") {
     return "Instagram의 24시간 응답 가능 시간이 지났거나 수신자에게 메시지를 보낼 수 없습니다.";

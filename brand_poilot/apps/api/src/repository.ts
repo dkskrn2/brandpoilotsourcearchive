@@ -7449,7 +7449,6 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           instagramBusinessAccountId: row.external_account_id,
           recipientId: row.external_participant_id,
           text: body,
-          tag: "HUMAN_AGENT",
         });
         externalMessageId = sent.externalMessageId;
       } catch (error) {

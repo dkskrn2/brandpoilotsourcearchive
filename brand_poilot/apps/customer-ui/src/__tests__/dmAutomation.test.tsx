@@ -286,7 +286,7 @@ describe("DmAutomationPage", () => {
   it.each([
     ["dm_manual_reply_channel_not_ready", null, "Instagram 채널 인증이 준비되지 않았습니다. 채널 연결 상태를 확인해 주세요."],
     ["meta_graph_401", "failed", "Instagram 연결 토큰이 만료되었거나 메시지 권한이 없습니다. 채널을 다시 연결해 주세요."],
-    ["meta_graph_403", "failed", "Instagram의 24시간 응답 시간이 지났거나 Meta 앱에 Human Agent 권한이 없습니다. Human Agent 권한을 승인한 뒤 다시 시도해 주세요."],
+    ["meta_graph_403", "failed", "Instagram 메시지 권한이 없거나 Meta가 이 답변 전송을 허용하지 않았습니다. Instagram 채널을 다시 연결한 뒤 다시 시도해 주세요."],
     ["meta_graph_400", "failed", "Instagram의 24시간 응답 가능 시간이 지났거나 수신자에게 메시지를 보낼 수 없습니다."],
     ["meta_graph_503", "unknown", "Meta 응답을 확인하지 못해 발송 여부가 불명확합니다. 중복 발송을 피하려면 Instagram에서 먼저 확인해 주세요."],
   ] as const)("shows a Korean manual reply error for %s", async (errorCode, deliveryStatus, expectedMessage) => {

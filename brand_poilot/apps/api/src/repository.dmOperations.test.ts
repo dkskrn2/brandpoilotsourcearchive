@@ -109,7 +109,6 @@ describe("DM operations repository", () => {
       instagramBusinessAccountId: "instagram-account-1",
       recipientId: "recipient-1",
       text: "직접 답변",
-      tag: "HUMAN_AGENT"
     });
     const prepared = statements.findIndex(({ sql }) => sql.includes("insert into dm_delivery_attempts"));
     const sending = statements.findIndex(({ sql }) => sql.includes("update dm_delivery_attempts") && sql.includes("status = 'sending'"));
