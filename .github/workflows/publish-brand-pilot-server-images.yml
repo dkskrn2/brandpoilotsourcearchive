@@ -38,7 +38,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-          persist-credentials: false
+          # The impact job fetches the private base branch (PR) or current main
+          # (release). Keep the job's read-only contents token available only
+          # for this checkout; build and publish jobs still discard it.
+          persist-credentials: true
 
       - name: Verify release ancestry and current main
         if: github.event_name != 'pull_request'
