@@ -342,8 +342,10 @@ validate_state_release_directory() {
   local root="$1"
   local release_sha="$2"
   local validation_role="candidate"
+  local release_manifest="$root/releases/$release_sha/release.env"
   require_release_sha "$release_sha"
-  if [[ "$release_sha" == "$LEGACY_RELEASE_SHA" ]]; then
+  if [[ "$release_sha" == "$LEGACY_RELEASE_SHA" ]] ||
+     [[ -f "$release_manifest" && "$(grep -Ec '^RELEASE_SCHEMA=1$' "$release_manifest")" == "1" ]]; then
     validation_role="legacy-current"
   fi
   validate_release_directory "$root/releases/$release_sha" "$validation_role"
@@ -364,12 +366,19 @@ release_file_specs() {
     "755 scripts/verify-canary.sh" \
     "755 scripts/promote.sh" \
     "755 scripts/rollback.sh"
-  if [[ "$validation_role" != "legacy-current" ||
-        "$(basename -- "$release_directory")" != "$LEGACY_RELEASE_SHA" ]]; then
+  if [[ "$validation_role" != "legacy-current" ]]; then
     printf '%s\n' \
       "755 scripts/rollout-workers.sh" \
       "755 scripts/backup-state.sh" \
       "755 scripts/restore-state.sh"
+  else
+    local optional_path
+    for optional_path in scripts/rollout-workers.sh scripts/backup-state.sh scripts/restore-state.sh; do
+      if [[ -f "$release_directory/release-integrity.sha256" ]] &&
+         grep -Eq "^[a-f0-9]{64}  755  ${optional_path}$" "$release_directory/release-integrity.sha256"; then
+        printf '755 %s\n' "$optional_path"
+      fi
+    done
   fi
 }
 
