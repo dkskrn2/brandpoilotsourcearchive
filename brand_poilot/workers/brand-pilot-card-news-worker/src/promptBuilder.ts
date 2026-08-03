@@ -40,6 +40,8 @@ export function buildCardNewsPlanPrompt(
     "V3 카드뉴스 상세 기획 규칙을 따르세요.",
     `계약 버전: ${cardNewsPlanSkillVersion}`,
     "응답은 card-news-plan.v2 JSON 하나만 반환하세요. 이미지 파일이나 다른 산출물은 만들지 마세요.",
+    "카드뉴스 imagePackage의 aspectRatio은 반드시 1:1로 유지하세요. 픽셀 해상도를 특정 값으로 고정하지 마세요.",
+    "후속 이미지 렌더링은 Codex 내장 image_generation의 gpt-image-2를 사용합니다. 다른 이미지 모델이나 외부 이미지 API를 지시하지 마세요.",
     `선택 구성안에 잠긴 정확히 ${lockedCount}장을 유지하고 outline의 index, role, order를 한 글자도 바꾸지 마세요. 장수를 다시 판단하거나 장면을 추가·삭제·병합하지 마세요.`,
     "각 장에는 모바일에서 바로 이해할 수 있는 구체적인 copy와 visualDirection을 작성하세요.",
     "한 장이 부실하지 않게 핵심 정보와 근거를 압축하되, 과도한 문장과 정보 밀도로 모바일 가독성을 해치지 마세요.",

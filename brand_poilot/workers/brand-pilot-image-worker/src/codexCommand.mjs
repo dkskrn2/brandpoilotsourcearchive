@@ -18,6 +18,7 @@ export function resolveCodexInvocation({
 
 export function buildCodexExecArguments({ rootDir }) {
   return [
+    "--model", "gpt-5.6-terra",
     "exec",
     "--ignore-user-config",
     "--strict-config",

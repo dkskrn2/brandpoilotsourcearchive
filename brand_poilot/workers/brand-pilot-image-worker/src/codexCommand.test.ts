@@ -32,6 +32,8 @@ describe("resolveCodexInvocation", () => {
     const args = buildCodexExecArguments({ rootDir: "C:\\worker" });
 
     expect(args).toEqual([
+      "--model",
+      "gpt-5.6-terra",
       "exec",
       "--ignore-user-config",
       "--strict-config",
@@ -55,6 +57,7 @@ describe("resolveCodexInvocation", () => {
       "-"
     ]);
     expect(args).not.toContain("--sandbox");
+    expect(args.indexOf("gpt-5.6-terra")).toBeLessThan(args.indexOf("exec"));
     expect(args.join(" ")).not.toContain("creative brief");
   });
 

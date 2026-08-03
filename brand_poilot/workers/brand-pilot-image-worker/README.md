@@ -22,7 +22,7 @@ BLOB_READ_WRITE_TOKEN=valid-read-write-token-for-brandpilot-Blob-store
 IMAGE_PROVIDER=command
 IMAGE_RENDER_COMMAND=node scripts/run-codex-image-render.mjs --job "{{jobFile}}" --output "{{outputDir}}"
 IMAGE_JOB_TIMEOUT_MS=1200000
-IMAGE_MODEL=codex-imagegen
+IMAGE_MODEL=gpt-image-2
 ```
 
 The rendering command is invoked once per claimed job. Codex decides whether the brief needs one to five cards, generates the final Instagram title, caption, up to five hashtags, and card-by-card copy, then creates each card as a separate PNG. The wrapper writes `slide-01.png` through the final card and `content.json` to `{{outputDir}}`. The worker uploads the images and a combined `manifest.json` to Vercel Blob, then reports the manifest URL to the central API.

@@ -26,9 +26,23 @@ export function buildAiContentAssetPrompt({ imagePackage, assetIndex, staged }: 
     evergreenPurchaseInfo: imagePackage.product.evergreenPurchaseInfo,
     selectedImages: staged.productImages,
   };
+  const renderContract = imagePackage.outputFormat === "blog"
+    ? `1. 강제 계약: 전체 ${imagePackage.assetCount}장 중 exact index ${asset.index}, role ${asset.role} 한 장만 렌더링합니다. 비율과 픽셀 해상도는 모델 원본을 유지하고 특정 값으로 고정하지 마세요. 사실, 수량, 장수, 순서, 출력 형식과 로고 금지 정책은 절대 바꾸지 마세요.`
+    : imagePackage.outputFormat === "card_news"
+      ? `1. 강제 계약: 전체 ${imagePackage.assetCount}장 중 exact index ${asset.index}, role ${asset.role}, aspect ratio 1:1인 정방형 한 장만 렌더링합니다. 픽셀 해상도는 모델 원본을 유지하고 특정 값으로 고정하지 마세요. 사실, 수량, 장수, 순서, 출력 형식과 로고 금지 정책은 절대 바꾸지 마세요.`
+      : imagePackage.outputFormat === "reel"
+        ? `1. 강제 계약: 전체 ${imagePackage.assetCount}장 중 exact index ${asset.index}, role ${asset.role}, aspect ratio 9:16인 세로형 한 장만 렌더링합니다. 픽셀 해상도는 모델 원본을 유지하고 특정 값으로 고정하지 마세요. 사실, 수량, 장수, 순서, 출력 형식과 로고 금지 정책은 절대 바꾸지 마세요.`
+        : `1. 강제 계약: 전체 ${imagePackage.assetCount}장 중 exact index ${asset.index}, role ${asset.role}, aspect ratio ${imagePackage.aspectRatio}, exact ${dimensions[imagePackage.aspectRatio]} 한 장만 렌더링합니다. 사실, 수량, 장수, 순서, 출력 형식과 로고 금지 정책은 절대 바꾸지 마세요.`;
   return [
-    "내장 image_generation 도구만 사용하여 작업 하나당 정확히 완성된 PNG 한 장을 생성하세요. 콜라주나 여러 장면을 한 파일에 합치지 마세요.",
-    `1. 강제 계약: 전체 ${imagePackage.assetCount}장 중 exact index ${asset.index}, role ${asset.role}, aspect ratio ${imagePackage.aspectRatio}, exact ${dimensions[imagePackage.aspectRatio]} 한 장만 렌더링합니다. 사실, 수량, 장수, 순서, 출력 형식과 로고 금지 정책은 절대 바꾸지 마세요.`,
+    "Codex 내장 image_generation의 gpt-image-2만 사용하여 작업 하나당 정확히 완성된 PNG 한 장을 생성하세요. 다른 이미지 모델이나 외부 이미지 API를 사용하지 마세요. 콜라주나 여러 장면을 한 파일에 합치지 마세요.",
+    imagePackage.outputFormat === "blog"
+      ? "블로그 이미지 강제 형식 없음: 비율과 픽셀 해상도를 변경하지 말고 모델이 생성한 원본 PNG를 유지하세요."
+      : imagePackage.outputFormat === "card_news"
+      ? "카드뉴스 강제 형식: 1:1 정방형 PNG입니다. 픽셀 해상도는 특정 값으로 고정하지 말고 세로형 4:5로 바꾸지 마세요."
+      : imagePackage.outputFormat === "reel"
+        ? "릴스 강제 형식: 9:16 세로형 PNG입니다. 픽셀 해상도는 특정 값으로 고정하지 마세요."
+      : `출력 형식 강제 비율: ${imagePackage.aspectRatio}, 최종 ${dimensions[imagePackage.aspectRatio]} PNG입니다.`,
+    renderContract,
     `2. 사용자 공통 이미지 지시: ${imagePackage.userImageInstruction ?? "없음"}`,
     `3. 브랜드 스타일 이미지(현재 등록된 업로드 이미지, avatar=true는 exact 아바타 역할): ${JSON.stringify(styles)}`,
     `4. 역할별 선택 레퍼런스의 고정 스냅샷: ${JSON.stringify(staged.references)}`,

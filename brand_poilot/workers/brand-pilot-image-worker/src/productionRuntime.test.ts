@@ -57,6 +57,7 @@ describe("production image worker runtime", () => {
     expect(indexSource).toContain("createAiContentShutdownCoordinator");
     expect(indexSource).toContain("process.kill(process.pid, signal)");
     expect(indexSource).toContain("waitForShutdownOrTimeout");
+    expect(indexSource).toContain('process.env.IMAGE_MODEL ?? "gpt-image-2"');
     expect(indexSource).toMatch(/process\.removeListener\("SIGTERM"/);
     expect(indexSource).toMatch(/process\.removeListener\("SIGINT"/);
   });
@@ -80,6 +81,7 @@ describe("production image worker runtime", () => {
     expect(runnerSource).not.toMatch(/fixture|OPENAI_API_KEY|external image api/i);
     expect(runnerSource).toContain("rm(path.join(imagegenOutputDir, ownedSessionId)");
     expect(skillSource).toContain("작업 하나당 정확히 PNG 한 장");
+    expect(skillSource).toContain("gpt-image-2");
     expect(skillSource).toContain("1:1");
     expect(skillSource).toContain("4:5");
     expect(skillSource).toContain("16:9");

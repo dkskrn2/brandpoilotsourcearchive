@@ -319,7 +319,7 @@ describe("ContentProposalFlow", () => {
         outputSettings: {
           outputFormat: "card_news",
           channelTargets: ["instagram"],
-          aspectRatio: "4:5",
+          aspectRatio: "1:1",
           outputCount: 1,
         },
       },
@@ -478,7 +478,7 @@ describe("ContentProposalFlow", () => {
         },
         contentInstruction: null,
         productId: null,
-        outputSettings: { outputFormat: "card_news", channelTargets: ["instagram"], aspectRatio: "4:5", outputCount: 1 },
+        outputSettings: { outputFormat: "card_news", channelTargets: ["instagram"], aspectRatio: "1:1", outputCount: 1 },
       },
     });
 

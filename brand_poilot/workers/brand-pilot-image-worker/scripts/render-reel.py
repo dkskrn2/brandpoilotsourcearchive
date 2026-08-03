@@ -34,6 +34,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--audio-volume", type=positive_number)
     parser.add_argument("--audio-fade-seconds", type=positive_number)
     parser.add_argument("--fps", type=positive_integer, required=True)
+    parser.add_argument("--width", type=positive_integer)
+    parser.add_argument("--height", type=positive_integer)
     return parser.parse_args()
 
 
@@ -60,6 +62,8 @@ def main() -> None:
     if is_v3:
         if args.seconds_per_scene != 4 or args.fade_seconds != 0.25 or args.fps != 30:
             fail("Invalid ai-content.v2 Reel timing settings.")
+        if args.width is None or args.height is None or args.width * 16 != args.height * 9:
+            fail("Invalid ai-content.v2 Reel aspect ratio.")
     elif args.audio is None or args.audio_volume is None or args.audio_fade_seconds is None or not args.audio.is_file() or args.audio.stat().st_size == 0:
         fail(f"Missing Reel audio: {args.audio}")
 
@@ -86,11 +90,13 @@ def main() -> None:
     if not is_v3:
         command.extend(["-stream_loop", "-1", "-i", str(args.audio)])
 
+    target_width = args.width if is_v3 else 1080
+    target_height = args.height if is_v3 else 1920
     filters = []
     for index in range(len(scene_paths)):
         filters.append(
-            f"[{index}:v]scale=1080:1920:force_original_aspect_ratio=decrease,"
-            f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={args.fps},"
+            f"[{index}:v]scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
+            f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={args.fps},"
             f"format=yuv420p,setpts=PTS-STARTPTS[v{index}]"
         )
     video_label = "v0"

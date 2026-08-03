@@ -16,7 +16,7 @@ function job(): AiContentImageAssetJob {
       contractVersion: "ai-content-render-job.v1", jobKind: "image_asset", generationId: uid(2), outputId: uid(3), assetIndex: 2,
       assetKey: `${uid(2)}:2`, storagePath: `ai-content/${uid(5)}/${uid(2)}/${uid(3)}/assets/02.png`,
       imagePackage: {
-        contractVersion: "image-generation-package.v1", generationId: uid(2), outputFormat: "card_news", purpose: "marketing", assetCount: 3, aspectRatio: "4:5", channelTargets: ["instagram"],
+        contractVersion: "image-generation-package.v1", generationId: uid(2), outputFormat: "card_news", purpose: "marketing", assetCount: 3, aspectRatio: "1:1", channelTargets: ["instagram"],
         assets: [
           { index: 1, role: "hook", copy: "one", visualDirection: "one", evidenceIds: [], productImageAssetIds: [], attachmentIds: [] },
           { index: 2, role: "detail", copy: "two", visualDirection: "two", evidenceIds: [], productImageAssetIds: [uid(10)], attachmentIds: [uid(20)] },
@@ -41,7 +41,7 @@ describe("V3 single asset renderer", () => {
     expect(dimensionsForAspectRatio("9:16")).toEqual({ width: 1080, height: 1920 });
   });
 
-  it("reads only owned storage paths, verifies checksums, stages read-only files, and normalizes one model-native PNG to the contract ratio", async () => {
+  it("reads only owned storage paths, verifies checksums, stages read-only files, and keeps model-native resolution while normalizing card news to square", async () => {
     const product = await sharp({ create: { width: 4, height: 5, channels: 4, background: "red" } }).png().toBuffer();
     const attachment = await sharp({ create: { width: 4, height: 5, channels: 4, background: "blue" } }).png().toBuffer();
     const style = await sharp({ create: { width: 4, height: 5, channels: 4, background: "green" } }).png().toBuffer();
@@ -73,8 +73,8 @@ describe("V3 single asset renderer", () => {
     expect(inspected).toBe(true);
     expect(readOwned.mock.calls.map(([value]) => value)).toEqual(["owned/product.png", "owned/style.png", "owned/reference.png", "owned/attachment.png"]);
     expect(runChild).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ index: 2, mimeType: "image/png", width: 1080, height: 1350 });
-    expect((await sharp(result.bytes).metadata())).toMatchObject({ width: 1080, height: 1350, format: "png" });
+    expect(result).toMatchObject({ index: 2, mimeType: "image/png", width: 8, height: 8 });
+    expect((await sharp(result.bytes).metadata())).toMatchObject({ width: 8, height: 8, format: "png" });
   });
 
   it("rejects staged checksum mismatches before starting the child", async () => {

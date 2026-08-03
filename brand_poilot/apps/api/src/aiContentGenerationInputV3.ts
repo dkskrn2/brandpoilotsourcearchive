@@ -257,6 +257,7 @@ function parseOutputSettings(value: unknown): ContentOutputSettingsV2 {
   };
   validateOutputChannel(result.outputFormat, result.channelTargets[0]);
   if (result.outputFormat === "blog" && result.aspectRatio !== null) fail();
+  if (result.outputFormat === "card_news" && result.aspectRatio !== "1:1") fail();
   if (result.outputFormat === "reel" && result.aspectRatio !== "9:16") fail();
   if (result.outputFormat !== "blog" && result.aspectRatio === null) fail();
   return result;
@@ -279,6 +280,7 @@ function parseFinalOutputSettings(value: unknown): ContentGenerationOutputSettin
   };
   validateOutputChannel(result.outputFormat, result.channelTargets[0]);
   if (result.outputFormat === "blog" && result.aspectRatio !== null) fail();
+  if (result.outputFormat === "card_news" && result.aspectRatio !== "1:1") fail();
   if (result.outputFormat === "reel" && result.aspectRatio !== "9:16") fail();
   if (result.outputFormat !== "blog" && result.aspectRatio === null) fail();
   return result;
@@ -1012,6 +1014,7 @@ export function parseImageGenerationPackageV1(value: unknown): ImageGenerationPa
   const aspectRatio = parseAspectRatio(source.aspectRatio);
   const channelTargets = channelTuple(source.channelTargets);
   validateOutputChannel(parsedOutputFormat, channelTargets[0]);
+  if (parsedOutputFormat === "card_news" && aspectRatio !== "1:1") fail();
   if (parsedOutputFormat === "reel" && aspectRatio !== "9:16") fail();
   const references = boundedArray(source.references, 0, 5).map(parseReference);
   const brandStyleImages = boundedArray(source.brandStyleImages, 0, 5).map(parseStyleImage);

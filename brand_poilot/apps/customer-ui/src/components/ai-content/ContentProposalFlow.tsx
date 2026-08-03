@@ -350,7 +350,7 @@ export function ContentProposalFlow({
           outputSettings: {
             outputFormat: format,
             channelTargets: [channel],
-            aspectRatio: format === "blog" ? null : format === "reel" ? "9:16" : format === "card_news" ? "4:5" : "1:1",
+            aspectRatio: format === "blog" ? null : format === "reel" ? "9:16" : "1:1",
             outputCount: 1,
           },
         },

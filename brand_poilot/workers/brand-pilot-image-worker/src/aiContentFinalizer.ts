@@ -14,7 +14,7 @@ export class AiContentFinalizerError extends Error {
 
 export interface AiContentFinalizerStorage {
   readOwned(storagePath: string): Promise<Buffer>;
-  uploadVideo(input: { path: string; bytes: Buffer; width: 1080; height: 1920; durationSeconds: number; videoCodec: "h264"; audioCodec: null; fps: 30 }): Promise<{ url: string; checksum: string }>;
+  uploadVideo(input: { path: string; bytes: Buffer; width: number; height: number; durationSeconds: number; videoCodec: "h264"; audioCodec: null; fps: 30 }): Promise<{ url: string; checksum: string }>;
   uploadText(input: { path: string; text: string; contentType: "text/html; charset=utf-8" | "application/json" }): Promise<{ url: string; checksum: string }>;
 }
 
@@ -153,7 +153,7 @@ export async function finalizeAiContentPackage(job: AiContentPackageFinalizeJob,
   let manifest: AiContentManifestV2;
   if (format === "reel") {
     if (plan.contractVersion !== "marketing-plan.v2" || plan.outputFormat !== "reel") throw new Error("ai_content_finalizer_plan_invalid");
-    if (assets.some((asset) => asset.width !== 1080 || asset.height !== 1920)) throw new Error("ai_content_finalizer_asset_dimensions_invalid");
+    if (assets.some((asset) => asset.width * 16 !== asset.height * 9)) throw new Error("ai_content_finalizer_asset_dimensions_invalid");
     const assetPrefix = `ai-content/${job.brandId}/${job.generationId}/${job.outputId}/assets`;
     if (assets.some((asset) => asset.storagePath !== `${assetPrefix}/${String(asset.index).padStart(2, "0")}.png`)) {
       throw new Error("ai_content_finalizer_asset_path_invalid");
@@ -176,7 +176,7 @@ export async function finalizeAiContentPackage(job: AiContentPackageFinalizeJob,
       purpose: finalInput.outputSettings.purpose,
       title: finalInput.selectedProposal.title,
       scenes: assets.map((asset) => ({ index: asset.index, url: asset.url, width: asset.width, height: asset.height })),
-      video: { url: uploadedVideo.url, durationSeconds: rendered.video.durationSeconds },
+      video: { url: uploadedVideo.url, width: rendered.video.width, height: rendered.video.height, durationSeconds: rendered.video.durationSeconds },
       content: record(plan.content)
     });
   } else if (format === "card_news" || format === "marketing_content") {

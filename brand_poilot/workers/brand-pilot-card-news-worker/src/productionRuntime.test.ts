@@ -98,6 +98,8 @@ describe("card-news production runtime", () => {
     };
 
     const args = runner.buildCodexArgs(outputDir);
+    expect(args.slice(0, 3)).toEqual(["--model", "gpt-5.6-terra", "--strict-config"]);
+    expect(args.indexOf("gpt-5.6-terra")).toBeLessThan(args.indexOf("exec"));
     expect(args).toEqual(expect.arrayContaining(["--strict-config", "-C", outputDir]));
     expect(args).toContain("--ignore-user-config");
     expect(args).not.toContain("--sandbox");

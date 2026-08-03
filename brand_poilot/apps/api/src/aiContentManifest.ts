@@ -487,12 +487,13 @@ function parseV2(
       fail("ai_content_reel_asset_invalid");
     }
     if (!continuousIndexes(scenes)) fail("ai_content_asset_index_invalid");
-    if (scenes.some((asset) => asset.width !== 1080 || asset.height !== 1920)) fail("ai_content_reel_scene_dimensions_invalid");
+    if (scenes.some((asset) => asset.width === undefined || asset.height === undefined || asset.width * 16 !== asset.height * 9)) fail("ai_content_reel_scene_dimensions_invalid");
     const video = videos[0];
     if (
       video.index !== 1
-      || video.width !== 1080
-      || video.height !== 1920
+      || video.width === undefined
+      || video.height === undefined
+      || video.width * 16 !== video.height * 9
       || video.videoCodec !== "h264"
       || video.fps !== 30
       || video.audioCodec !== null
