@@ -1843,6 +1843,12 @@ test("release validation accepts signed schema-1 layouts while requiring the ful
     lib,
     /validate_state_release_directory "\$root" "\$from_current"[\s\S]*validate_state_release_directory "\$root" "\$from_candidate"[\s\S]*validate_state_release_directory "\$root" "\$from_previous"/,
   );
+  const promote = read("deploy/scripts/promote.sh");
+  assert.match(
+    promote,
+    /validate_state_release_directory "\$ROOT" "\$ORIGINAL_PREVIOUS_SHA"/,
+    "promotion must accept a signed schema-1 release referenced by state/previous",
+  );
   const current = run("95a975bf263756fbc13fb6ac16b1a3962e303d8e");
   assert.equal(current.status, 0, current.stderr);
   assert.doesNotMatch(current.stdout, /rollout-workers\.sh|backup-state\.sh|restore-state\.sh/);

@@ -53,7 +53,7 @@ ORIGINAL_PREVIOUS_SHA=""
 ORIGINAL_PREVIOUS_EXISTS=false
 if load_optional_state_sha "$ROOT/state/previous" ORIGINAL_PREVIOUS_SHA; then
   ORIGINAL_PREVIOUS_EXISTS=true
-  validate_release_directory "$ROOT/releases/$ORIGINAL_PREVIOUS_SHA"
+  validate_state_release_directory "$ROOT" "$ORIGINAL_PREVIOUS_SHA"
 fi
 
 validate_release_directory "$ROOT/releases/$CANDIDATE_SHA"
