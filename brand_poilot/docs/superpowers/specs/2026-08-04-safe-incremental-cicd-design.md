@@ -1,7 +1,7 @@
 # Safe Incremental CI/CD Design
 
-**Date:** 2026-08-04  
-**Status:** Approved in conversation  
+**Date:** 2026-08-04
+**Status:** Approved in conversation
 **Production baseline:** `e818aaa198cf5ffcef1aece1248bb12e86cab55f`
 
 ## Goal
