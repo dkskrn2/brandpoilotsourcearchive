@@ -153,7 +153,7 @@ describe("AiContentWizardPage", () => {
     );
   });
 
-  it("round-trips a completed new analysis into proposal setup without losing prior inputs", async () => {
+  it("returns from a completed legacy analysis without binding it to informational proposal setup", async () => {
     const user = userEvent.setup();
     renderWizard(
       `/ai-content/new?${new URLSearchParams({
@@ -172,8 +172,8 @@ describe("AiContentWizardPage", () => {
     await user.type(screen.getByLabelText("제품·서비스 URL (선택)"), "https://example.com/new-product");
     await user.click(screen.getByRole("button", { name: "분석하고 소구점 만들기" }));
 
-    expect(await screen.findByText("새 분석 완료")).toBeVisible();
-    expect(screen.getByText("보존할 여름 주제")).toBeVisible();
+    expect(await screen.findByText("보존할 여름 주제")).toBeVisible();
+    expect(screen.queryByText("새 분석 완료")).not.toBeInTheDocument();
     expect(screen.getByText("blog")).toBeVisible();
     expect(screen.getByText("blog_export")).toBeVisible();
   });

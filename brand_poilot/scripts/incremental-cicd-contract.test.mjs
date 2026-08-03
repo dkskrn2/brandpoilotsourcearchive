@@ -34,6 +34,7 @@ test("workflow detects production impact and builds an affected image matrix", (
   assert.match(workflow, /deploy_bundle_changed: \$\{\{ steps\.impact\.outputs\.deploy_bundle_changed \}\}/);
   assert.match(workflow, /needs\.impact\.outputs\.deploy_bundle_changed == 'true'/);
   assert.match(workflow, /mkdir -p built-images/);
+  assert.match(workflow, /name: Verify customer UI[\s\S]*TZ: Asia\/Seoul[\s\S]*npm run test --workspace @brand-pilot\/customer-ui/);
 });
 
 test("workflow assembles schema-2 provenance and blocks unapproved migrations", () => {

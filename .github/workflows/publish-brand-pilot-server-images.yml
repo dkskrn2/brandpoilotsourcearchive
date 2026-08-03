@@ -150,6 +150,8 @@ jobs:
       - name: Verify customer UI
         if: fromJSON(needs.impact.outputs.components).customerUi
         working-directory: brand_poilot
+        env:
+          TZ: Asia/Seoul
         run: |
           npm run test --workspace @brand-pilot/customer-ui
           npm run build --workspace @brand-pilot/customer-ui
