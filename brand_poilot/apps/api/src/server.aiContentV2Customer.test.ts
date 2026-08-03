@@ -69,7 +69,7 @@ function v2Body(overrides: Partial<ContentOrchestrationV2> = {}): ContentOrchest
     outputSettings: {
       outputFormat: "card_news",
       channelTargets: ["instagram"],
-      aspectRatio: "4:5",
+      aspectRatio: "1:1",
       outputCount: 1,
     },
     ...overrides,
@@ -236,7 +236,7 @@ async function postV2(app: ReturnType<typeof createServer>, payload: object = v2
 
 describe("V2 customer proposal batches", () => {
   it.each([
-    ["card_news", "informational", null, "4:5"],
+    ["card_news", "informational", null, "1:1"],
     ["reel", "informational", null, "9:16"],
     ["marketing_content", "marketing", productId, "1:1"],
   ] as const)("creates a connected Instagram %s batch", async (outputFormat, purpose, selectedProductId, aspectRatio) => {
