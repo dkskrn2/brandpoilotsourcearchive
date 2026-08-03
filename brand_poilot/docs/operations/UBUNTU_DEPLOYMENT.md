@@ -1205,7 +1205,7 @@ trap 'rm -f -- "$tmp_env"' EXIT
 awk '/^INSTAGRAM_PUBLISH_ENABLED=/{print "INSTAGRAM_PUBLISH_ENABLED=true"; next} {print}' \
   "$api_env" > "$tmp_env"
 chmod --reference="$api_env" "$tmp_env"
-chown --reference="$api_env" "$tmp_env"
+[[ "$(stat -c '%U:%G' "$tmp_env")" == "$(stat -c '%U:%G' "$api_env")" ]]
 [[ "$(grep -Ec '^INSTAGRAM_PUBLISH_ENABLED=true$' "$tmp_env")" == "1" ]]
 [[ "$(grep -Ec '^INSTAGRAM_PUBLISH_ENABLED=' "$tmp_env")" == "1" ]]
 mv -- "$tmp_env" "$api_env"
@@ -1269,7 +1269,7 @@ rollback_env="$(mktemp /opt/brand-pilot/shared/env/api.env.rollback.XXXXXX)"
 trap 'rm -f -- "$rollback_env"' EXIT
 cp -- "$backup" "$rollback_env"
 chmod --reference="$api_env" "$rollback_env"
-chown --reference="$api_env" "$rollback_env"
+[[ "$(stat -c '%U:%G' "$rollback_env")" == "$(stat -c '%U:%G' "$api_env")" ]]
 [[ "$(grep -Ec '^INSTAGRAM_PUBLISH_ENABLED=false$' "$rollback_env")" == "1" ]]
 [[ "$(grep -Ec '^INSTAGRAM_PUBLISH_ENABLED=' "$rollback_env")" == "1" ]]
 mv -- "$rollback_env" "$api_env"

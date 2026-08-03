@@ -521,6 +521,16 @@ test("Ubuntu runbook documents the bounded Instagram publication activation and 
     exportMetadata > backupMetadata && preparePromotion > exportMetadata,
     "Instagram activation must export fresh metadata before promotion",
   );
+  assert.doesNotMatch(
+    activation,
+    /\bchown\b/,
+    "bpdeploy activation and rollback must not require ownership changes",
+  );
+  assert.match(
+    activation,
+    /stat -c '%U:%G' "\$(?:tmp_env|rollback_env)"/,
+    "temporary env files must prove they retain the api.env owner",
+  );
 });
 
 test("Ubuntu runbook documents the fail-closed first TLS cutover and recovery sequence", () => {
