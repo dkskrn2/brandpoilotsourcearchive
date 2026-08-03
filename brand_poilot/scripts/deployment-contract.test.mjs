@@ -2009,7 +2009,10 @@ test("CI publishing has narrow triggers, permissions, and an Ubuntu 24.04 runner
   assert.match(verifyJob, /^ {4}permissions:\n {6}contents: read$/m);
   assert.doesNotMatch(verifyJob, /packages: write|docker\/login-action|docker\/build-push-action/);
   assert.match(publishJob, /^ {4}needs: verify$/m);
-  assert.match(publishJob, /^ {4}if: github\.ref == 'refs\/heads\/main'$/m);
+  assert.match(
+    publishJob,
+    /^ {4}if: github\.ref == 'refs\/heads\/main' \|\| \(github\.event_name == 'workflow_dispatch' && github\.ref == 'refs\/heads\/codex\/instagram-production-base-hotfix'\)$/m,
+  );
   assert.match(publishJob, /^ {4}permissions:\n {6}contents: read\n {6}packages: write$/m);
   assert.match(verifyJob, /^ {4}runs-on: ubuntu-24\.04$/m);
   assert.match(publishJob, /^ {4}runs-on: ubuntu-24\.04$/m);
