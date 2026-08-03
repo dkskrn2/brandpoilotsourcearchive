@@ -26,6 +26,13 @@ const WORKER_PATHS = Object.freeze([
   ["workers/brand-pilot-marketing-worker/", "marketingWorker"],
 ]);
 
+const RELEASE_TOOLING_TEST_PATHS = new Set([
+  "scripts/deployment-contract.test.mjs",
+  "scripts/incremental-cicd-contract.test.mjs",
+  "scripts/assemble-release-manifest.test.mjs",
+  "scripts/release-impact.test.mjs",
+]);
+
 const normalizePath = (value) => {
   const path = String(value ?? "").trim().replaceAll("\\", "/").replace(/^\.\//, "");
   return path.startsWith("brand_poilot/") ? path.slice("brand_poilot/".length) : path;
@@ -86,8 +93,12 @@ export function classifyChangedPaths(values) {
       continue;
     }
 
-    if (path === "scripts/deployment-contract.test.mjs" || path.endsWith("release-impact.test.mjs")) continue;
-    if (path === "scripts/release-impact.mjs" || path === "scripts/assemble-release-manifest.mjs" || path.startsWith("../.github/workflows/") || path.startsWith(".github/workflows/")) {
+    if (RELEASE_TOOLING_TEST_PATHS.has(path)) continue;
+    if (path === "scripts/release-impact.mjs" || path === "scripts/assemble-release-manifest.mjs") {
+      deployBundleChanged = true;
+      continue;
+    }
+    if (path.startsWith("../.github/workflows/") || path.startsWith(".github/workflows/")) {
       buildAllServer = true;
       enableAllServer(components);
       continue;
