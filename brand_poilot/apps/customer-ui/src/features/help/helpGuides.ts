@@ -71,12 +71,12 @@ export const helpGuides: HelpGuide[] = [
     id: "ai-content-new",
     path: "/ai-content/new",
     title: "새 AI 콘텐츠",
-    summary: "목적·주제 자료·채널 형식을 먼저 정하고, AI 구현안을 고른 뒤 실제 레퍼런스와 아바타를 선택합니다.",
-    sections: [{ title: "생성 전 확인", items: ["첫 세 구역에서 정보성·마케팅성 목적, 브랜드 주제·승인 제품·Wiki, 실제 채널 지원 범위와 결과 형식을 순서대로 저장합니다.", "AI 구현안은 근거·타겟·전략·훅·구성을 비교한 뒤 하나를 선택하며, 레퍼런스와 아바타는 이때만 지연 조회됩니다.", "선택한 자료의 활용 역할과 사용량을 확인해 생성을 시작하면 전용 워커 대기열과 생성 이력에 상태가 표시됩니다."] }],
+    summary: "목적·주제 자료·채널 형식을 먼저 정하고, AI 구성안을 고른 뒤 실제 레퍼런스와 아바타를 선택합니다.",
+    sections: [{ title: "생성 전 확인", items: ["첫 세 구역에서 정보성·마케팅성 목적, 주제 또는 레퍼런스, 승인 제품, 실제 채널 지원 범위와 결과 형식을 순서대로 저장합니다.", "AI 구성안은 근거·타겟·전략·훅·구성을 비교한 뒤 하나를 선택하며, 레퍼런스와 아바타는 이때만 지연 조회됩니다.", "선택한 자료의 활용 역할과 사용량을 확인해 생성을 시작하면 전용 워커 대기열과 생성 이력에 상태가 표시됩니다."] }],
     tour: [
-      { selector: ".wizard-header", title: "콘텐츠 생성 방식 확인", description: "새 4단계 구현안 흐름과 기존 5단계 생성 흐름 모두 여기서 현재 작업을 확인합니다." },
-      { selector: ":is(.content-setup-accordions,.wizard-progress)", title: "필요한 입력만 순서대로", description: "목적 다음에 승인 제품·Wiki를, 그 다음 실제 채널 capability와 형식을 확인해 저장합니다." },
-      { selector: ":is(.proposal-comparison,.wizard-workspace)", title: "구현안과 실제 자료 선택", description: "구현안 선택 뒤에만 활성 레퍼런스와 아바타를 조회하고, 누락·보관 자산은 교체하거나 제거한 뒤 생성합니다." },
+      { selector: ".wizard-header", title: "콘텐츠 생성 방식 확인", description: "새 4단계 구성안 흐름과 기존 5단계 생성 흐름 모두 여기서 현재 작업을 확인합니다." },
+      { selector: ":is(.content-setup-accordions,.wizard-progress)", title: "필요한 입력만 순서대로", description: "목적 다음에 주제 또는 레퍼런스와 승인 제품을, 그 다음 실제 채널 capability와 형식을 확인해 저장합니다." },
+      { selector: ":is(.proposal-comparison,.wizard-workspace)", title: "구성안과 실제 자료 선택", description: "구성안 선택 뒤에만 활성 레퍼런스와 아바타를 조회하고, 누락·보관 자산은 교체하거나 제거한 뒤 생성합니다." },
     ]
   },
   {

@@ -118,7 +118,7 @@ describe("ContentProposalCard", () => {
     expect(screen.getByText("여름철 피부 자극 자료")).toBeVisible();
     expect(screen.getByText("피부 장벽 신호")).toBeVisible();
     expect(screen.getByText("문제 인식")).toBeVisible();
-    expect(screen.getByRole("button", { name: "구현안 선택: 여름 피부 관리" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "구성안 선택: 여름 피부 관리" })).toBeVisible();
   });
 
   it("shows the complete informational text plan without an image or placeholder", () => {

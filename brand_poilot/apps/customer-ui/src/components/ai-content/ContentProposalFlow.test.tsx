@@ -284,7 +284,7 @@ describe("ContentProposalFlow", () => {
     const { create, listReferences, listReferenceSeeds, getRules } = renderFlow();
 
     expect(screen.getAllByRole("listitem").slice(0, 4).map((item) => item.textContent)).toEqual([
-      "1콘텐츠 생성", "2구현안 선택", "3생성", "4변경·검토·보완",
+      "1콘텐츠 생성", "2구성안 선택", "3생성", "4변경·검토·보완",
     ]);
     expect(screen.getByRole("button", { name: "1. 목적" })).toBeVisible();
     expect(screen.getByRole("button", { name: "2. 주제·자료" })).toBeVisible();

@@ -389,6 +389,40 @@ describe("AiContentGenerationPage", () => {
     expect(gateway.retryOutput).not.toHaveBeenCalled();
   });
 
+  it("shows v3 immutable planning evidence instead of calling it a legacy generation", async () => {
+    renderGeneration("generation-card-complete", false, (configuredGateway) => {
+      const getGeneration = configuredGateway.getGeneration.bind(configuredGateway);
+      configuredGateway.getGeneration = vi.fn(async (brandId, generationId) => ({
+        ...await getGeneration(brandId, generationId),
+        evidenceSnapshot: {
+          orchestration: {},
+          generationInput: {
+            contractVersion: "content-generation-input.v3",
+            subject: { kind: "topic_url", title: "동결된 URL 주제", canonicalUrl: "https://example.com/topic" },
+            product: null,
+            selectedProposal: { id: "proposal-v3", title: "동결된 v3 구성안" },
+            outputSettings: { purpose: "informational", outputFormat: "card_news", channelTargets: ["instagram"], aspectRatio: "1:1", outputCount: 1 },
+          },
+          references: [{
+            id: "reference-v3",
+            title: "동결된 v3 레퍼런스",
+            url: "https://example.com/reference-v3",
+            previewUrl: null,
+            roles: ["planning"],
+          }],
+          avatar: null,
+          proposal: { id: "proposal-v3", title: "동결된 v3 구성안" },
+        },
+      }));
+    });
+
+    expect(await screen.findByRole("tab", { name: "기획 근거" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("동결된 URL 주제")).toBeVisible();
+    expect(screen.getByText("동결된 v3 구성안")).toBeVisible();
+    expect(screen.getByText(/동결된 v3 레퍼런스/)).toBeVisible();
+    expect(screen.queryByText(/기존 생성 건에는 orchestration snapshot이 없어/)).not.toBeInTheDocument();
+  });
+
   it("edits and saves structured copy separately from worker-backed regeneration", async () => {
     const user = userEvent.setup();
     const { gateway } = renderGeneration("generation-card-complete", false, (configuredGateway) => {

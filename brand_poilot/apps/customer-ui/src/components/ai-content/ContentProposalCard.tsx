@@ -64,7 +64,7 @@ export function ContentProposalCard({
       {proposal.evidence.length ? <div><strong>근거</strong><ul>{proposal.evidence.map((source) => <li key={source.sourceSnapshotId}>{source.summary}</li>)}</ul></div> : null}
       <ol className="proposal-outline">{proposal.outline.map((outline) => <li key={`${outline.heading}-${outline.purpose}`}><strong>{outline.heading}</strong><span>{outline.purpose}</span></li>)}</ol>
       <button type="button" className="button primary" aria-pressed={selected} disabled={disabled} onClick={onSelect}>
-        구현안 선택: {proposal.title}
+        구성안 선택: {proposal.title}
       </button>
     </article>;
   }

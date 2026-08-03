@@ -1389,6 +1389,68 @@ describe("AI content repository", () => {
     expect(JSON.stringify(generation)).not.toContain("private/path.png");
   });
 
+  it("returns sanitized v3 evidence from the immutable generation input table", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("from ai_content_generation_outputs")) return { rows: [], rowCount: 0 };
+      if (sql.includes("from ai_content_generation_references")) return { rows: [], rowCount: 0 };
+      if (sql.includes("from ai_content_generation_input_snapshots")) {
+        return {
+          rows: [{
+            input_json: {
+              contractVersion: "content-generation-input.v3",
+              generationId: "generation-1",
+              brandCore: { versionId: "core-version-1", companyOverview: "브랜드 소개" },
+              subject: { kind: "topic_text", title: "동결된 주제" },
+              contentInstruction: "간결하게",
+              product: null,
+              researchEvidence: { contractVersion: "research-evidence.v1", items: [] },
+              references: {
+                selected: [{ referenceItemId: "reference-1", title: "동결 레퍼런스", url: "https://example.com/reference", roles: ["planning"] }],
+                brandStyleImages: [],
+                avatarStyleImageId: null,
+                attachments: [{ id: "attachment-1", storagePath: "private/path.png", storageUrl: "https://blob.example/private.png" }],
+              },
+              selectedProposal: { id: "proposal-1", title: "동결된 구성안" },
+              userImageInstruction: "로고 금지",
+              outputSettings: { purpose: "informational", outputFormat: "card_news", channelTargets: ["instagram"], aspectRatio: "1:1", outputCount: 1 },
+              capturedAt: "2026-08-04T00:00:00.000Z",
+            },
+          }],
+          rowCount: 1,
+        };
+      }
+      return {
+        rows: [{
+          ...row("generation-1", "partial_failed"),
+          orchestration_snapshot: null,
+          generation_input_snapshot: null,
+          avatar_snapshot: null,
+        }],
+        rowCount: 1,
+      };
+    });
+
+    const generation = await createAiContentRepository({ query } as never).getAiContentGeneration({
+      ...scope,
+      generationId: "generation-1",
+    });
+
+    expect(generation).toMatchObject({
+      evidenceSnapshot: {
+        generationInput: {
+          contractVersion: "content-generation-input.v3",
+          subject: { kind: "topic_text", title: "동결된 주제" },
+          outputSettings: { outputFormat: "card_news", aspectRatio: "1:1" },
+        },
+        references: [{ id: "reference-1", title: "동결 레퍼런스", roles: ["planning"] }],
+        avatar: null,
+        proposal: { id: "proposal-1", title: "동결된 구성안" },
+      },
+    });
+    expect(JSON.stringify(generation)).not.toContain("private/path.png");
+    expect(JSON.stringify(generation)).not.toContain("private.png");
+  });
+
   it("reads legacy multi-output results beside v2 formats without marking a v2 reel as legacy", async () => {
     const outputRow = (
       id: string,

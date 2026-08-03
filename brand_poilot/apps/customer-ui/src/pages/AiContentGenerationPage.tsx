@@ -68,6 +68,13 @@ const formatLabels: Record<ContentOrchestration["outputFormat"], string> = {
   channel_text: "채널 텍스트",
 };
 
+const v3FormatLabels: Record<string, string> = {
+  card_news: "카드뉴스",
+  blog: "블로그",
+  reel: "릴스",
+  marketing_content: "마케팅 콘텐츠",
+};
+
 const referenceRoleLabels: Record<ContentOrchestration["references"][number]["roles"][number], string> = {
   planning: "기획",
   copy_pattern: "카피 패턴",
@@ -79,6 +86,12 @@ function snapshotName(value: Record<string, unknown>) {
     if (typeof value[key] === "string" && value[key]) return String(value[key]);
   }
   return Object.keys(value).length ? JSON.stringify(value) : "저장된 snapshot";
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 function subjectLabel(orchestration: ContentOrchestration) {
@@ -191,7 +204,11 @@ export function AiContentGenerationPage({
   );
   const orchestration = generation.draft.orchestration ?? null;
   const evidenceSnapshot = generation.evidenceSnapshot ?? null;
-  const activeReviewTab = selectedReviewTab ?? (orchestration ? "planning" : "final");
+  const frozenGenerationInput = record(evidenceSnapshot?.generationInput);
+  const v3Planning = frozenGenerationInput.contractVersion === "content-generation-input.v3"
+    ? frozenGenerationInput
+    : null;
+  const activeReviewTab = selectedReviewTab ?? (orchestration || v3Planning ? "planning" : "final");
 
   function toggleSelection(outputId: string) {
     setSelectedForZip((current) => {
@@ -420,7 +437,7 @@ export function AiContentGenerationPage({
                   <>
                     <dl>
                       <div><dt>콘텐츠 성격</dt><dd>{familyLabels[orchestration.contentFamily]}</dd></div>
-                      <div><dt>선택 구현안</dt><dd>{evidenceSnapshot?.proposal ? snapshotName(evidenceSnapshot.proposal) : generation.title}</dd></div>
+                      <div><dt>선택 구성안</dt><dd>{evidenceSnapshot?.proposal ? snapshotName(evidenceSnapshot.proposal) : generation.title}</dd></div>
                       <div><dt>전략</dt><dd>{strategyLabels[orchestration.strategy]}</dd></div>
                       <div><dt>형식</dt><dd>{formatLabels[orchestration.outputFormat]}</dd></div>
                       <div><dt>주제</dt><dd>{subjectLabel(orchestration)}</dd></div>
@@ -450,6 +467,30 @@ export function AiContentGenerationPage({
                     <p>{evidenceSnapshot?.avatar
                       ? snapshotName(evidenceSnapshot.avatar)
                       : orchestration.avatar ? snapshotName(orchestration.avatar.snapshot) : "사용하지 않음"}</p>
+                  </>
+                ) : v3Planning ? (
+                  <>
+                    <dl>
+                      <div><dt>콘텐츠 성격</dt><dd>{record(v3Planning.outputSettings).purpose === "marketing" ? "마케팅성" : "정보성"}</dd></div>
+                      <div><dt>선택 구성안</dt><dd>{evidenceSnapshot?.proposal ? snapshotName(evidenceSnapshot.proposal) : snapshotName(record(v3Planning.selectedProposal))}</dd></div>
+                      <div><dt>형식</dt><dd>{v3FormatLabels[String(record(v3Planning.outputSettings).outputFormat)] ?? String(record(v3Planning.outputSettings).outputFormat ?? "저장된 형식")}</dd></div>
+                      <div><dt>주제</dt><dd>{snapshotName(record(v3Planning.subject))}</dd></div>
+                      <div><dt>제품·서비스</dt><dd>{v3Planning.product === null ? "사용하지 않음" : snapshotName(record(v3Planning.product))}</dd></div>
+                    </dl>
+                    <h3>URL·레퍼런스 근거 snapshot</h3>
+                    {(evidenceSnapshot?.references.length ?? 0) > 0 ? (
+                      <ul>
+                        {evidenceSnapshot!.references.map((reference) => (
+                          <li key={reference.id}>
+                            {reference.title}
+                            {reference.url ? <> · <a href={reference.url} target="_blank" rel="noreferrer">원본 URL</a></> : null}
+                            {reference.roles.length ? ` · ${reference.roles.map((role) => referenceRoleLabels[role as keyof typeof referenceRoleLabels] ?? role).join(", ")}` : ""}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : <p className="muted">선택한 레퍼런스가 없습니다.</p>}
+                    <h3>아바타 snapshot</h3>
+                    <p>{evidenceSnapshot?.avatar ? snapshotName(evidenceSnapshot.avatar) : "사용하지 않음"}</p>
                   </>
                 ) : (
                   <p className="muted">기존 생성 건에는 orchestration snapshot이 없어 저장된 초안과 결과만 표시합니다.</p>

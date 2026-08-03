@@ -108,7 +108,8 @@ describe("통합형 도움말", () => {
   it("AI 콘텐츠 생성 가이드가 입력값의 실제 사용처를 설명한다", () => {
     const guide = guideForPath("/ai-content/new");
     expect(guide?.sections.flatMap((section) => section.items).join(" ")).toContain("실제 채널 지원 범위");
-    expect(guide?.tour.map((step) => step.description).join(" ")).toContain("구현안 선택 뒤에만 활성 레퍼런스와 아바타");
+    expect(guide?.tour.map((step) => step.description).join(" ")).toContain("구성안 선택 뒤에만 활성 레퍼런스와 아바타");
+    expect(guide?.sections.flatMap((section) => section.items).join(" ")).not.toContain("Wiki");
   });
 
   it("채널별 연결 가이드가 OAuth 준비부터 문제 해결까지 제공한다", () => {

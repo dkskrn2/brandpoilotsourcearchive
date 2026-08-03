@@ -158,7 +158,7 @@ status_ok "shared_env_files"
 
 require_exact_boolean "LOCAL_SCHEDULER_ENABLED" "false" "$API_ENV_FILE"
 require_exact_boolean "INSTAGRAM_PUBLISH_ENABLED" "true" "$API_ENV_FILE"
-require_exact_boolean "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED" "false" "$API_ENV_FILE"
+require_exact_boolean "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED" "true" "$API_ENV_FILE"
 require_exact_boolean "AUTOMATED_CONTENT_ENABLED" "false" "$API_ENV_FILE"
 require_exact_boolean "CONTENT_PROPOSALS_ENABLED" "false" "$API_ENV_FILE"
 require_exact_boolean "DM_WORKERS_ENABLED" "false" "$API_ENV_FILE"

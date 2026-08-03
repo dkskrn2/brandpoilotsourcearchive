@@ -31,7 +31,7 @@ import { PageGuideButton } from "../layout/PageHeader";
 import { api, ApiRequestError } from "../../lib/apiClient";
 import { brandCenterGateway } from "../../features/brand-center/brandCenterGateway";
 
-const phases = ["콘텐츠 생성", "구현안 선택", "생성", "변경·검토·보완"];
+const phases = ["콘텐츠 생성", "구성안 선택", "생성", "변경·검토·보완"];
 const sections: Array<[ContentSetupSection, string]> = [
   ["intent", "1. 목적"], ["sources", "2. 주제·자료"], ["delivery", "3. 채널·형식"],
 ];

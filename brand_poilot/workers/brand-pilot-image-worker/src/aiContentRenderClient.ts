@@ -126,11 +126,24 @@ function parseJob(value: unknown): AiContentRenderJob {
   throw new Error("ai_content_render_job_invalid");
 }
 
+async function apiFailure(response: Response): Promise<Error> {
+  let code = "";
+  try {
+    const body = await response.json() as { error?: unknown };
+    if (typeof body.error === "string" && /^[a-z0-9_]{1,120}$/.test(body.error)) {
+      code = `:${body.error}`;
+    }
+  } catch {
+    // The status remains sufficient when the API did not return its stable JSON error contract.
+  }
+  return new Error(`ai_content_render_api_failed:${response.status}${code}`);
+}
+
 export function createAiContentRenderClient({ apiUrl, token, fetchImpl = fetch }: { apiUrl: string; token: string; fetchImpl?: typeof fetch }): AiContentRenderClient {
   const baseUrl = apiUrl.replace(/\/+$/, "");
   async function request(path: string, body: Record<string, unknown>): Promise<Response> {
     const response = await fetchImpl(`${baseUrl}${path}`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
-    if (!response.ok && response.status !== 204) throw new Error(`ai_content_render_api_failed:${response.status}`);
+    if (!response.ok && response.status !== 204) throw await apiFailure(response);
     return response;
   }
   return {
@@ -143,7 +156,7 @@ export function createAiContentRenderClient({ apiUrl, token, fetchImpl = fetch }
     async heartbeat(job, workerId, leaseSeconds) {
       const response = await fetchImpl(`${baseUrl}/worker/ai-content-render-jobs/${encodeURIComponent(job.id)}/heartbeat`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ workerId, leaseToken: job.leaseToken, leaseSeconds }) });
       if (response.status === 409) return false;
-      if (!response.ok) throw new Error(`ai_content_render_api_failed:${response.status}`);
+      if (!response.ok) throw await apiFailure(response);
       return true;
     },
     async completeAsset(job, workerId, asset) {

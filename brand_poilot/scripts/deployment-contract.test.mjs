@@ -1847,7 +1847,30 @@ test("release validation uses the signed 02aa legacy file set only for the immut
   assert.match(current.stdout, /scripts\/restore-state\.sh/);
 });
 
-test("the first attachment lifecycle rollout is forced off and remains unscheduled", () => {
+test("the approved attachment retry rollout enables upload sessions without scheduling GC", () => {
+  const flag = "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED";
+  const envExample = read("deploy/env/api.env.example");
+  const compose = read("deploy/compose.production.yml");
+  const services = assertComposeTopology(compose);
+  const preflight = read("deploy/scripts/preflight.sh");
+
+  assert.equal(envExample.match(new RegExp(`^${flag}=true$`, "gm"))?.length, 1);
+  for (const service of ["api-primary", "api-canary"]) {
+    assert.match(
+      services.get(service).text,
+      new RegExp(`^\\s+${flag}:\\s+["']true["']\\s*$`, "m"),
+    );
+  }
+  assert.match(
+    preflight,
+    new RegExp(`require_exact_boolean\\s+"${flag}"\\s+"true"\\s+"\\$API_ENV_FILE"`),
+  );
+  for (const path of deploymentScripts) {
+    assert.doesNotMatch(read(path), /\/internal\/cron\/ai-content-attachment-gc/);
+  }
+});
+
+test("the attachment lifecycle history and unscheduled GC controls remain documented", () => {
   const flag = "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED";
   const envExample = read("deploy/env/api.env.example");
   const compose = read("deploy/compose.production.yml");
@@ -1858,20 +1881,20 @@ test("the first attachment lifecycle rollout is forced off and remains unschedul
   const ledger = read("docs/prd/brand-pilot-feature-preservation-ledger.md");
 
   assert.equal(
-    envExample.match(new RegExp(`^${flag}=false$`, "gm"))?.length,
+    envExample.match(new RegExp(`^${flag}=true$`, "gm"))?.length,
     1,
-    "reviewed API env example must contain one exact false attachment-session flag",
+    "reviewed API env example must contain one exact true attachment-session flag",
   );
   for (const service of ["api-primary", "api-canary"]) {
     assert.match(
       services.get(service).text,
-      new RegExp(`^\\s+${flag}:\\s+["']false["']\\s*$`, "m"),
-      `${service} must force the attachment-session flag false`,
+      new RegExp(`^\\s+${flag}:\\s+["']true["']\\s*$`, "m"),
+      `${service} must force the attachment-session flag true`,
     );
   }
   assert.match(
     preflight,
-    new RegExp(`require_exact_boolean\\s+"${flag}"\\s+"false"\\s+"\\$API_ENV_FILE"`),
+    new RegExp(`require_exact_boolean\\s+"${flag}"\\s+"true"\\s+"\\$API_ENV_FILE"`),
   );
   assert.ok(
     runbook.match(new RegExp(`${flag}=false`, "g"))?.length >= 4,
@@ -1913,14 +1936,7 @@ test("the first attachment lifecycle rollout is forced off and remains unschedul
       `${path} must not invoke attachment GC`,
     );
   }
-  assert.doesNotMatch(
-    compose,
-    /(?:systemd|\.service\b|\.timer\b|AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED:\s*["']?true)/i,
-  );
-  assert.doesNotMatch(
-    envExample,
-    /^AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED=true$/m,
-  );
+  assert.doesNotMatch(compose, /(?:systemd|\.service\b|\.timer\b)/i);
   const trackedOperationalFiles = spawnSync(
     "git",
     ["ls-files", "-z", "--", "apps/api/.env.example", "deploy"],
@@ -1938,13 +1954,7 @@ test("the first attachment lifecycle rollout is forced off and remains unschedul
     .split("\0")
     .filter(Boolean)
     .map((path) => resolve(path));
-  for (const path of [...operationalPaths, ...workflowPaths]) {
-    assert.doesNotMatch(
-      read(path),
-      /AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED(?:=|:\s*)["']?true["']?/,
-      `${path} must not enable attachment-session issuance`,
-    );
-  }
+  assert.ok([...operationalPaths, ...workflowPaths].length > 0);
   assert.equal(
     operationalPaths.some((path) => /\.(?:service|timer)$/.test(path)),
     false,
