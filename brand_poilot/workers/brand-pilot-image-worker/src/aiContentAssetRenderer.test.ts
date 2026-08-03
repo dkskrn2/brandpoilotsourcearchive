@@ -41,12 +41,12 @@ describe("V3 single asset renderer", () => {
     expect(dimensionsForAspectRatio("9:16")).toEqual({ width: 1080, height: 1920 });
   });
 
-  it("reads only owned storage paths, verifies checksums, stages read-only files, and normalizes exactly one PNG", async () => {
+  it("reads only owned storage paths, verifies checksums, stages read-only files, and normalizes one model-native PNG to the contract ratio", async () => {
     const product = await sharp({ create: { width: 4, height: 5, channels: 4, background: "red" } }).png().toBuffer();
     const attachment = await sharp({ create: { width: 4, height: 5, channels: 4, background: "blue" } }).png().toBuffer();
     const style = await sharp({ create: { width: 4, height: 5, channels: 4, background: "green" } }).png().toBuffer();
     const reference = await sharp({ create: { width: 4, height: 5, channels: 4, background: "yellow" } }).png().toBuffer();
-    const rendered = await sharp({ create: { width: 8, height: 10, channels: 4, background: "white" } }).png().toBuffer();
+    const rendered = await sharp({ create: { width: 8, height: 12, channels: 4, background: "white" } }).png().toBuffer();
     const input = job();
     input.payload.imagePackage.product!.images[0]!.checksum = (await import("node:crypto")).createHash("sha256").update(product).digest("hex");
     input.payload.imagePackage.attachments[0]!.checksum = (await import("node:crypto")).createHash("sha256").update(attachment).digest("hex");

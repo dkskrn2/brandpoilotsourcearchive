@@ -172,8 +172,10 @@ async function defaultChildRunner(input: {
 async function normalizedPng(bytes: Buffer, dimensions: { width: number; height: number }): Promise<Buffer> {
   const metadata = await sharp(bytes, { failOn: "error" }).metadata().catch(() => { throw new Error("ai_content_asset_output_not_png"); });
   if (metadata.format !== "png" || !metadata.width || !metadata.height) throw new Error("ai_content_asset_output_not_png");
-  if (metadata.width * dimensions.height !== metadata.height * dimensions.width) throw new Error("ai_content_asset_output_aspect_ratio_invalid");
-  return sharp(bytes, { failOn: "error" }).resize(dimensions.width, dimensions.height, { fit: "fill" }).png({ compressionLevel: 9 }).toBuffer();
+  return sharp(bytes, { failOn: "error" })
+    .resize(dimensions.width, dimensions.height, { fit: "cover", position: "centre" })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
 }
 
 export function createAiContentAssetRenderer({
