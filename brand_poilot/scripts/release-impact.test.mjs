@@ -51,6 +51,32 @@ test("keeps deploy-only and docs-only changes out of application images", () => 
   assert.deepEqual(enabled(docs), []);
 });
 
+test("keeps release tooling contract tests out of runtime images", () => {
+  for (const path of [
+    "brand_poilot/scripts/deployment-contract.test.mjs",
+    "brand_poilot/scripts/incremental-cicd-contract.test.mjs",
+    "brand_poilot/scripts/assemble-release-manifest.test.mjs",
+    "brand_poilot/scripts/release-impact.test.mjs",
+  ]) {
+    const impact = classifyChangedPaths([path]);
+    assert.equal(impact.buildAllServer, false, path);
+    assert.deepEqual(enabled(impact), [], path);
+    assert.deepEqual(impact.unknownPaths, [], path);
+  }
+});
+
+test("updates the release bundle without rebuilding images for CI-only release tools", () => {
+  for (const path of [
+    "brand_poilot/scripts/release-impact.mjs",
+    "brand_poilot/scripts/assemble-release-manifest.mjs",
+  ]) {
+    const impact = classifyChangedPaths([path]);
+    assert.equal(impact.deployBundleChanged, true, path);
+    assert.equal(impact.buildAllServer, false, path);
+    assert.deepEqual(enabled(impact), [], path);
+  }
+});
+
 test("fails closed to all server images for an unknown runtime-capable path", () => {
   const impact = classifyChangedPaths(["brand_poilot/runtime/new-entrypoint.sh"]);
   assert.equal(impact.buildAllServer, true);
