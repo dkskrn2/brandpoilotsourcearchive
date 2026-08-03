@@ -206,8 +206,9 @@ for release_image_key in API_IMAGE "${WORKER_IMAGE_KEYS[@]}"; do
     fail "release_image_pull_failed"
   verify_release_image_revision \
     "$release_image" \
-    "${RELEASE_MANIFEST[RELEASE_SHA]}"
+    "$(release_image_source_revision "$release_image_key")"
 done
+status_ok "component_source_revision"
 status_ok "release_image_revisions"
 
 CODEX_WORKER_IMAGE_KEYS=(

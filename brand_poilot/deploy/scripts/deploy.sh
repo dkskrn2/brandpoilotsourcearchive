@@ -117,7 +117,7 @@ else
   "${compose[@]}" pull api-canary
 fi
 
-verify_release_image_revision "$CANDIDATE_API_IMAGE" "$RELEASE_SHA"
+verify_release_image_revision "$CANDIDATE_API_IMAGE" "$(release_image_source_revision API_IMAGE)"
 
 state_value_or_none "$ROOT/state/current" TRANSITION_CURRENT
 state_value_or_none "$ROOT/state/candidate" TRANSITION_CANDIDATE

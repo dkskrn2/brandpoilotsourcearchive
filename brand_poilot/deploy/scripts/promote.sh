@@ -116,7 +116,7 @@ verify_local_release_images() {
   revision="$(docker image inspect \
     --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
     "$CANDIDATE_API_IMAGE")"
-  [[ "$revision" == "$CANDIDATE_SHA" ]] || fail "api_image_revision_mismatch"
+  [[ "$revision" == "$(release_image_source_revision API_IMAGE)" ]] || fail "api_image_revision_mismatch"
   docker image inspect "$CANDIDATE_CADDY_IMAGE" >/dev/null ||
     fail "caddy_image_missing"
 }

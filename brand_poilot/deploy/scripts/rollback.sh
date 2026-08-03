@@ -117,7 +117,7 @@ compose=(docker compose -p brand-pilot -f "$TARGET_DIR/compose.production.yml" -
 OCI_REVISION="$(docker image inspect \
   --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
   "$TARGET_API_IMAGE")"
-[[ "$OCI_REVISION" == "$TARGET_SHA" ]] || fail "api_image_revision_mismatch"
+[[ "$OCI_REVISION" == "$(release_image_source_revision API_IMAGE)" ]] || fail "api_image_revision_mismatch"
 
 state_value_or_none "$ROOT/state/current" TRANSITION_CURRENT
 state_value_or_none "$ROOT/state/candidate" TRANSITION_CANDIDATE
