@@ -1173,6 +1173,110 @@ Record only checksums, immutable SHAs/digests, backup identifiers, safe canary
 status, and row-count results. Never record cookies, tokens, database URLs, or
 environment plaintext.
 
+### Instagram publication activation (2026-08-03)
+
+This dated gate supersedes only the publication-disabled instruction in the
+earlier first-release baseline. Keep `LOCAL_SCHEDULER_ENABLED=false`, every
+worker/profile gate unchanged, and set only
+`INSTAGRAM_PUBLISH_ENABLED=true`. The API hostname remains
+`https://api.danbammsg.co.kr`; this is not an API-address change. The canary
+verification is read-only: make no unsolicited live Instagram post. Publishing
+a generated artifact still requires a separately approved artifact and caption.
+
+Before changing the shared environment, verify the exact regular file, owner,
+mode, and single-key contract without printing its contents. Create a
+recoverable mode-0600 backup under `state` and replace the one publication line
+atomically:
+
+```bash
+api_env=/opt/brand-pilot/shared/env/api.env
+backup=/opt/brand-pilot/state/api.env.instagram-publish-backup-<VERIFIED_RELEASE_SHA>
+[[ -f "$api_env" && ! -L "$api_env" ]]
+[[ "$(stat -c '%U:%G' "$api_env")" == "bpdeploy:bpdeploy" ]]
+[[ "$(stat -c '%a' "$api_env")" == "600" ]]
+[[ "$(grep -Ec '^INSTAGRAM_PUBLISH_ENABLED=' "$api_env")" == "1" ]]
+[[ "$(grep -Ec '^LOCAL_SCHEDULER_ENABLED=false$' "$api_env")" == "1" ]]
+[[ ! -e "$backup" ]]
+cp --preserve=mode,ownership -- "$api_env" "$backup"
+chmod 600 "$backup"
+
+tmp_env="$(mktemp /opt/brand-pilot/shared/env/api.env.instagram-publish.XXXXXX)"
+trap 'rm -f -- "$tmp_env"' EXIT
+awk '/^INSTAGRAM_PUBLISH_ENABLED=/{print "INSTAGRAM_PUBLISH_ENABLED=true"; next} {print}' \
+  "$api_env" > "$tmp_env"
+chmod --reference="$api_env" "$tmp_env"
+[[ "$(stat -c '%U:%G' "$tmp_env")" == "$(stat -c '%U:%G' "$api_env")" ]]
+[[ "$(grep -Ec '^INSTAGRAM_PUBLISH_ENABLED=true$' "$tmp_env")" == "1" ]]
+[[ "$(grep -Ec '^INSTAGRAM_PUBLISH_ENABLED=' "$tmp_env")" == "1" ]]
+mv -- "$tmp_env" "$api_env"
+trap - EXIT
+```
+
+Use the exact verified release. Preflight must accept publication enabled while
+rejecting an enabled local scheduler or any other dark flag. Deploy canary only,
+then run the authenticated read-only verifier:
+
+```bash
+cd /opt/brand-pilot/releases/<VERIFIED_RELEASE_SHA>
+./scripts/preflight.sh "/opt/brand-pilot/releases/<VERIFIED_RELEASE_SHA>/release.env"
+./scripts/deploy.sh /opt/brand-pilot/incoming/release.env --phase canary
+export CANARY_SESSION_COOKIE_FILE=/opt/brand-pilot/shared/canary/session.cookies
+export CANARY_BRAND_ID=<TEST_BRAND_UUID>
+./scripts/verify-canary.sh https://canary-api.danbammsg.co.kr https://app.danbammsg.co.kr
+```
+
+Canary `/ready` must report configuration/database OK, publishing enabled,
+scheduler disabled, and DM disabled. The authenticated capability response must
+show the connected Instagram professional account as publication-ready. Do not
+call a generation, download, publish, or other write endpoint during this gate.
+
+After the `api.env` mutation and successful canary, create a fresh provider
+database backup and encrypted/provider-managed Caddy data backup. Then record
+new promotion metadata so its `EXTERNAL_ENV_SHA256` binds the enabled
+environment. Metadata created before the mutation is invalid and must not be
+reused. The backup tools and restore-rehearsal rules in Section 12 still apply:
+
+```bash
+candidate_sha="$(cat /opt/brand-pilot/state/candidate)"
+./scripts/backup-state.sh \
+  --provider-backup-id <FRESH_PROVIDER_BACKUP_ID> \
+  --caddy-backup-id <FRESH_ENCRYPTED_CADDY_BACKUP_ID> \
+  --caddy-data-sha256 <FRESH_CADDY_DATA_SHA256> \
+  --output "/opt/brand-pilot/state/backups/pre-instagram-promote-${candidate_sha}.env"
+export PROMOTION_BACKUP_METADATA="/opt/brand-pilot/state/backups/pre-instagram-promote-${candidate_sha}.env"
+```
+
+Promote only the same immutable candidate after those checks and the fresh
+metadata step pass:
+
+```bash
+./scripts/promote.sh --prepare
+./scripts/promote.sh --commit --dns-cutover-confirmed
+curl --fail https://api.danbammsg.co.kr/ready
+```
+
+If canary or primary verification fails, roll back to the previous immutable
+release and restore the backed-up api.env. The historical release forces
+publication off; restoring the backup also returns the shared configuration to
+the prior state. Do not print or diff either environment file:
+
+```bash
+cd /opt/brand-pilot/releases/<VERIFIED_RELEASE_SHA>
+./scripts/rollback.sh --previous --phase production
+api_env=/opt/brand-pilot/shared/env/api.env
+backup=/opt/brand-pilot/state/api.env.instagram-publish-backup-<VERIFIED_RELEASE_SHA>
+rollback_env="$(mktemp /opt/brand-pilot/shared/env/api.env.rollback.XXXXXX)"
+trap 'rm -f -- "$rollback_env"' EXIT
+cp -- "$backup" "$rollback_env"
+chmod --reference="$api_env" "$rollback_env"
+[[ "$(stat -c '%U:%G' "$rollback_env")" == "$(stat -c '%U:%G' "$api_env")" ]]
+[[ "$(grep -Ec '^INSTAGRAM_PUBLISH_ENABLED=false$' "$rollback_env")" == "1" ]]
+[[ "$(grep -Ec '^INSTAGRAM_PUBLISH_ENABLED=' "$rollback_env")" == "1" ]]
+mv -- "$rollback_env" "$api_env"
+trap - EXIT
+curl --fail https://api.danbammsg.co.kr/ready
+```
+
 ## 13. Incremental Codex worker activation
 
 This gate is separate from API DNS cutover. Do not begin it until the immutable
