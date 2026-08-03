@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { ContentSeedV2 } from "./aiContentContracts";
 import { resolveAiContentSeed } from "./aiContentSeedResolver";
@@ -120,6 +121,35 @@ describe("resolveAiContentSeed", () => {
       { crawlUrl, ...clock },
     )).rejects.toThrow("ai_content_seed_invalid");
     expect(crawlUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a public URL usable through required research when the publisher blocks the crawler", async () => {
+    const crawlUrl = vi.fn(async () => { throw new Error("HTTP 403"); }) as unknown as typeof crawlSourceUrl;
+    const url = "https://www.allrecipes.com/oscar-mayer-hot-dog-birthday-cake-12024567";
+    const fallbackText = "원문 URL을 수집하지 못했습니다. 온라인 검색으로 확인할 주제: oscar mayer hot dog birthday cake";
+
+    await expect(resolveAiContentSeed(
+      { kind: "topic_url", url },
+      { crawlUrl, ...clock },
+    )).resolves.toEqual({
+      kind: "topic_url",
+      requestedUrl: url,
+      canonicalUrl: url,
+      title: "oscar mayer hot dog birthday cake",
+      text: fallbackText,
+      contentHash: createHash("sha256").update(fallbackText, "utf8").digest("hex"),
+      capturedAt,
+    });
+    expect(crawlUrl).toHaveBeenCalledOnce();
+  });
+
+  it("does not turn a missing publisher page into a synthetic topic", async () => {
+    const crawlUrl = vi.fn(async () => { throw new Error("HTTP 404"); }) as unknown as typeof crawlSourceUrl;
+
+    await expect(resolveAiContentSeed(
+      { kind: "topic_url", url: "https://example.com/missing" },
+      { crawlUrl, ...clock },
+    )).rejects.toThrow("ai_content_seed_resolution_failed");
   });
 
   it.each([

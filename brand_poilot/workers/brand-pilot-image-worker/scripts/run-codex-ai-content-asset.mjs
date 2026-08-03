@@ -22,7 +22,7 @@ async function main() {
   if (job.selectedAssetCount !== 1 || typeof job.prompt !== "string" || !job.prompt.trim()) throw new Error("ai_content_asset_job_invalid");
   await Promise.all([
     readFile(path.join(workspaceDir, "AGENTS.md"), "utf8"),
-    readFile(path.join(workspaceDir, ".codex", "skills", "image-render", "SKILL.md"),
+    readFile(path.join(workspaceDir, ".codex", "skills", "image-render", "SKILL.md"), "utf8"),
   ]).catch(() => { throw new Error("ai_content_asset_workspace_invalid"); });
 
   const generatedImagesDirectory = resolveGeneratedImagesDirectory(process.env, os.homedir());

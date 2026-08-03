@@ -922,6 +922,30 @@ function mergeRevisionManifest(
 function publicGenerationInputSnapshot(value: unknown): Record<string, unknown> {
   const source = object(value);
   const result: Record<string, unknown> = {};
+  if (source.contractVersion === "content-generation-input.v3") {
+    for (const key of [
+      "contractVersion",
+      "generationId",
+      "brandCore",
+      "subject",
+      "contentInstruction",
+      "researchEvidence",
+      "selectedProposal",
+      "userImageInstruction",
+      "outputSettings",
+      "capturedAt",
+    ]) {
+      if (source[key] !== undefined) result[key] = source[key];
+    }
+    const product = object(source.product);
+    if (Object.keys(product).length) {
+      const { images: _images, ...publicProduct } = product;
+      result.product = publicProduct;
+    } else if (source.product === null) {
+      result.product = null;
+    }
+    return result;
+  }
   for (const key of [
     "contractVersion",
     "contentType",
@@ -941,9 +965,30 @@ async function generationEvidenceSnapshot(
   row: Record<string, unknown>,
 ): Promise<NonNullable<AiContentGenerationRecord["evidenceSnapshot"]> | undefined> {
   const orchestration = object(row.orchestration_snapshot);
-  const generationInput = publicGenerationInputSnapshot(row.generation_input_snapshot);
-  const avatarSource = object(row.avatar_snapshot);
-  const proposalSource = object(orchestration.approvedProposalSnapshot);
+  let generationInputSource = row.generation_input_snapshot;
+  if (Object.keys(object(generationInputSource)).length === 0) {
+    const immutableInput = await client.query(
+      `select input_json
+         from ai_content_generation_input_snapshots
+        where generation_id = $1 and workspace_id = $2 and brand_id = $3`,
+      [input.generationId, input.workspaceId, input.brandId],
+    );
+    generationInputSource = immutableInput.rows[0]?.input_json;
+  }
+  const rawGenerationInput = object(generationInputSource);
+  const generationInput = publicGenerationInputSnapshot(rawGenerationInput);
+  const inputReferences = object(rawGenerationInput.references);
+  const avatarStyleImageId = typeof inputReferences.avatarStyleImageId === "string"
+    ? inputReferences.avatarStyleImageId
+    : null;
+  const storedAvatar = object(row.avatar_snapshot);
+  const avatarSource = Object.keys(storedAvatar).length
+    ? storedAvatar
+    : avatarStyleImageId ? { id: avatarStyleImageId } : {};
+  const storedProposal = object(orchestration.approvedProposalSnapshot);
+  const proposalSource = Object.keys(storedProposal).length
+    ? storedProposal
+    : object(rawGenerationInput.selectedProposal);
   const references = await client.query(
     `select reference_id, reference_snapshot_json, roles_json
        from ai_content_generation_references
@@ -959,10 +1004,8 @@ async function generationEvidenceSnapshot(
   ) {
     return undefined;
   }
-  return {
-    orchestration,
-    generationInput,
-    references: references.rows.map((reference) => {
+  const frozenReferences = references.rows.length
+    ? references.rows.map((reference) => {
       const snapshot = object(reference.reference_snapshot_json);
       return {
         id: String(reference.reference_id),
@@ -973,7 +1016,25 @@ async function generationEvidenceSnapshot(
           ? reference.roles_json.filter((role: unknown): role is string => typeof role === "string")
           : [],
       };
-    }),
+    })
+    : (Array.isArray(inputReferences.selected) ? inputReferences.selected : []).flatMap((value) => {
+      const reference = object(value);
+      const id = reference.referenceItemId ?? reference.id;
+      if (typeof id !== "string") return [];
+      return [{
+        id,
+        title: String(reference.title ?? reference.url ?? id),
+        url: typeof reference.url === "string" ? reference.url : null,
+        previewUrl: null,
+        roles: Array.isArray(reference.roles)
+          ? reference.roles.filter((role: unknown): role is string => typeof role === "string")
+          : [],
+      }];
+    });
+  return {
+    orchestration,
+    generationInput,
+    references: frozenReferences,
     avatar: Object.keys(avatarSource).length ? avatarSource : null,
     proposal: Object.keys(proposalSource).length ? proposalSource : null,
   };

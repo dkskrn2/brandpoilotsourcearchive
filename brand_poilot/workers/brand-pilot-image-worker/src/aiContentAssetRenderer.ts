@@ -172,8 +172,46 @@ async function defaultChildRunner(input: {
 async function normalizedPng(bytes: Buffer, dimensions: { width: number; height: number }): Promise<Buffer> {
   const metadata = await sharp(bytes, { failOn: "error" }).metadata().catch(() => { throw new Error("ai_content_asset_output_not_png"); });
   if (metadata.format !== "png" || !metadata.width || !metadata.height) throw new Error("ai_content_asset_output_not_png");
-  if (metadata.width * dimensions.height !== metadata.height * dimensions.width) throw new Error("ai_content_asset_output_aspect_ratio_invalid");
-  return sharp(bytes, { failOn: "error" }).resize(dimensions.width, dimensions.height, { fit: "fill" }).png({ compressionLevel: 9 }).toBuffer();
+  return sharp(bytes, { failOn: "error" })
+    .resize(dimensions.width, dimensions.height, { fit: "cover", position: "centre" })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+}
+
+async function normalizedSquarePng(bytes: Buffer): Promise<{ bytes: Buffer; width: number; height: number }> {
+  const metadata = await sharp(bytes, { failOn: "error" }).metadata().catch(() => { throw new Error("ai_content_asset_output_not_png"); });
+  if (metadata.format !== "png" || !metadata.width || !metadata.height) throw new Error("ai_content_asset_output_not_png");
+  const size = Math.min(metadata.width, metadata.height);
+  const normalized = await sharp(bytes, { failOn: "error" })
+    .extract({
+      left: Math.floor((metadata.width - size) / 2),
+      top: Math.floor((metadata.height - size) / 2),
+      width: size,
+      height: size,
+    })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+  return { bytes: normalized, width: size, height: size };
+}
+
+async function preservedPng(bytes: Buffer): Promise<{ bytes: Buffer; width: number; height: number }> {
+  const metadata = await sharp(bytes, { failOn: "error" }).metadata().catch(() => { throw new Error("ai_content_asset_output_not_png"); });
+  if (metadata.format !== "png" || !metadata.width || !metadata.height) throw new Error("ai_content_asset_output_not_png");
+  return { bytes, width: metadata.width, height: metadata.height };
+}
+
+async function normalizedVerticalPng(bytes: Buffer): Promise<{ bytes: Buffer; width: number; height: number }> {
+  const metadata = await sharp(bytes, { failOn: "error" }).metadata().catch(() => { throw new Error("ai_content_asset_output_not_png"); });
+  if (metadata.format !== "png" || !metadata.width || !metadata.height) throw new Error("ai_content_asset_output_not_png");
+  const unit = Math.floor(Math.min(metadata.width / 9, metadata.height / 16) / 2) * 2;
+  if (unit < 1) throw new Error("ai_content_asset_output_aspect_ratio_invalid");
+  const width = unit * 9;
+  const height = unit * 16;
+  const normalized = await sharp(bytes, { failOn: "error" })
+    .extract({ left: Math.floor((metadata.width - width) / 2), top: Math.floor((metadata.height - height) / 2), width, height })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+  return { bytes: normalized, width, height };
 }
 
 export function createAiContentAssetRenderer({
@@ -240,9 +278,18 @@ export function createAiContentAssetRenderer({
 
         const prompt = buildAiContentAssetPrompt({ imagePackage, assetIndex: job.assetIndex, staged });
         await (runChild ?? ((input) => defaultChildRunner({ ...input, workerRoot, timeoutMs })))({ workspaceDir, outputFile, prompt, signal });
-        const normalized = await normalizedPng(await readFile(outputFile), dimensionsForAspectRatio(imagePackage.aspectRatio));
-        const dimensions = dimensionsForAspectRatio(imagePackage.aspectRatio);
-        return { index: job.assetIndex, bytes: normalized, mimeType: "image/png", ...dimensions, checksum: sha256(normalized) };
+        const outputBytes = await readFile(outputFile);
+        const rendered = imagePackage.outputFormat === "blog"
+          ? await preservedPng(outputBytes)
+          : imagePackage.outputFormat === "card_news"
+            ? await normalizedSquarePng(outputBytes)
+            : imagePackage.outputFormat === "reel"
+              ? await normalizedVerticalPng(outputBytes)
+              : await (async () => {
+            const dimensions = dimensionsForAspectRatio(imagePackage.aspectRatio);
+            return { bytes: await normalizedPng(outputBytes, dimensions), ...dimensions };
+          })();
+        return { index: job.assetIndex, mimeType: "image/png", ...rendered, checksum: sha256(rendered.bytes) };
       } finally {
         await rm(workDir, { recursive: true, force: true });
       }

@@ -15,6 +15,8 @@ export function buildCodexArgs(outputDir) {
   const schemaFile = path.resolve(import.meta.dirname, "editorial-plan.schema.json");
   const outputFile = path.join(outputDir, "editorial-plan.json");
   return [
+    "--model",
+    "gpt-5.6-terra",
     "--strict-config",
     "-c",
     'default_permissions="planner"',

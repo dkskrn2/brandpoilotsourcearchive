@@ -81,7 +81,7 @@ BLOB_READ_WRITE_TOKEN=vercel_blob_rw_token
 
 IMAGE_PROVIDER=command
 IMAGE_RENDER_COMMAND=node scripts/run-codex-image-render.mjs --job "{{jobFile}}" --output "{{outputDir}}"
-IMAGE_MODEL=codex-imagegen
+IMAGE_MODEL=gpt-image-2
 
 # Retry only retryable rendering or upload failures after five minutes.
 IMAGE_RETRY_DELAY_MS=300000

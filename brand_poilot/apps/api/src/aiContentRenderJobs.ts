@@ -4,6 +4,7 @@ import type { Pool, PoolClient } from "pg";
 import { load } from "cheerio";
 import type {
   AiContentManifestV2,
+  ContentOutputFormatV2,
   ContentGenerationInputV3,
   ContentRatioV2,
   ImageGenerationPackageV1,
@@ -155,22 +156,36 @@ export function parseRenderManifestUrl(
 
 export function parseRenderAssetResult(
   value: unknown,
-  context: { brandId: string; generationId: string; outputId: string; assetIndex: number; aspectRatio: ContentRatioV2 },
+  context: {
+    brandId: string;
+    generationId: string;
+    outputId: string;
+    assetIndex: number;
+    outputFormat: ContentOutputFormatV2;
+    aspectRatio: ContentRatioV2;
+  },
 ): AiContentRenderedAsset {
   try {
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
     const source = value as Record<string, unknown>;
     const allowed = ["index", "url", "storagePath", "mimeType", "width", "height", "checksum"];
     if (Object.keys(source).some((key) => !allowed.includes(key)) || allowed.some((key) => !(key in source))) throw new Error();
-    const dimensions = expectedAiContentAssetDimensions(context.aspectRatio);
+    const width = Number(source.width);
+    const height = Number(source.height);
+    const validDimensions = Number.isSafeInteger(width) && width > 0
+      && Number.isSafeInteger(height) && height > 0
+      && (context.outputFormat === "blog"
+        || (context.outputFormat === "card_news" && width === height)
+        || (context.outputFormat === "reel" && BigInt(width) * 16n === BigInt(height) * 9n)
+        || (context.outputFormat === "marketing_content"
+          && isDeepStrictEqual({ width, height }, expectedAiContentAssetDimensions(context.aspectRatio))));
     const expectedStoragePath = expectedAiContentAssetStoragePath(context);
     if (
       source.index !== context.assetIndex
       || source.storagePath !== expectedStoragePath
       || !exactVercelBlobPath(source.url, expectedStoragePath)
       || source.mimeType !== "image/png"
-      || source.width !== dimensions.width
-      || source.height !== dimensions.height
+      || !validDimensions
       || typeof source.checksum !== "string"
       || !/^[0-9a-f]{64}$/.test(source.checksum)
     ) throw new Error();
@@ -545,7 +560,8 @@ export function createAiContentRenderJobsRepository(
         if (!imagePackage) throw new Error("ai_content_render_snapshot_missing");
         const asset = parseRenderAssetResult(input.asset, {
           brandId: String(row.brand_id), generationId: String(row.generation_id), outputId: String(row.output_id),
-          assetIndex: Number(row.asset_index), aspectRatio: imagePackage.aspectRatio,
+          assetIndex: Number(row.asset_index), outputFormat: imagePackage.outputFormat,
+          aspectRatio: imagePackage.aspectRatio,
         });
         await client.query(
           `update ai_content_generation_render_jobs set status='succeeded',result_json=$2::jsonb,

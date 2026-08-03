@@ -111,6 +111,18 @@ describe("ContentSubjectStep", () => {
     expect(screen.getByRole("button", { name: "주제·자료 완료" })).toBeDisabled();
   });
 
+  it("does not complete the URL material step with a malformed URL", () => {
+    render(<ContentSubjectStep
+      {...baseProps}
+      purpose="informational"
+      mode="topic_url"
+      topicUrl="not-a-url"
+      referencePicker={<p>레퍼런스 목록</p>}
+    />);
+
+    expect(screen.getByRole("button", { name: "주제·자료 완료" })).toBeDisabled();
+  });
+
   it("keeps direct text, URL, and reference mutually exclusive and leaves today disabled", async () => {
     const user = userEvent.setup();
     const onModeChange = vi.fn();

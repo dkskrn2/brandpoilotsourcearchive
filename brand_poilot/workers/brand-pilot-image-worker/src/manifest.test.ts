@@ -82,7 +82,7 @@ describe("parseWorkerManifest", () => {
       purpose: "marketing",
       title: "릴스",
       scenes: [1, 2].map((index) => ({ index, url: `https://blob.example/${index}.png`, width: 1080, height: 1920 })),
-      video: { url: "https://blob.example/reel.mp4", durationSeconds: 8 },
+      video: { url: "https://blob.example/reel.mp4", width: 1080, height: 1920, durationSeconds: 8 },
       content: { caption: "Caption", hashtags: ["#one"], cta: "CTA" }
     });
     expect(manifest).toMatchObject({

@@ -86,7 +86,7 @@ async function main() {
     nodeEnv: process.env.NODE_ENV
   });
   const reelRenderer = createReelRenderer();
-  const storage = createBlobStorage({ token: blobToken, model: process.env.IMAGE_MODEL ?? "external-image-cli" });
+  const storage = createBlobStorage({ token: blobToken, model: process.env.IMAGE_MODEL ?? "gpt-image-2" });
   const aiContentLeaseTiming = resolveAiContentLeaseTiming({
     heartbeatIntervalMs: Number(process.env.AI_CONTENT_HEARTBEAT_INTERVAL_MS ?? "60000"),
     leaseSeconds: Number(process.env.AI_CONTENT_LEASE_SECONDS ?? "180"),

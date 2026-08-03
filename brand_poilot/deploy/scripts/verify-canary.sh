@@ -51,8 +51,9 @@ request_headers() {
 }
 
 request_headers "$ALLOWED_ORIGIN" "$TMP_DIR/allowed.headers"
-grep -Eiq "^access-control-allow-origin:[[:space:]]*${ALLOWED_ORIGIN//./\\.}\r?$" \
-  "$TMP_DIR/allowed.headers" || fail "canary_cors_allowed_origin_missing"
+tr -d '\r' < "$TMP_DIR/allowed.headers" \
+  | grep -Eiq "^access-control-allow-origin:[[:space:]]*${ALLOWED_ORIGIN//./\\.}$" \
+  || fail "canary_cors_allowed_origin_missing"
 status_ok "cors_allowed"
 
 request_headers "$EVIL_ORIGIN" "$TMP_DIR/evil.headers"

@@ -63,21 +63,27 @@ Vercel은 merge된 repository commit을 build하고 배포합니다. Windows가 
 
 ### Server: GitHub Actions와 GHCR
 
-`.github/workflows/publish-brand-pilot-server-images.yml`은 `main`의 `brand_poilot/**` 변경을 검증하고 Linux/amd64 API image를 다음 immutable tag로 GHCR에 게시합니다.
+`.github/workflows/publish-brand-pilot-server-images.yml`은 PR에서는 변경 범위에 해당하는 검증만 수행하고, `main`에서는 현재 운영 SHA와 새 SHA 사이의 영향을 계산해 필요한 Linux/amd64 image만 GHCR에 게시합니다. 첫 schema-2 릴리스, 운영 기준 SHA를 알 수 없는 경우, root lockfile·공용 worker runtime·미분류 server 경로가 바뀐 경우에는 안전하게 전체 server image를 다시 만듭니다.
 
 ```text
 ghcr.io/dkskrn2/brand-pilot-api:sha-<40-character-commit>
 ```
 
-즉 릴리스 표기 규칙은 `sha-<commit>`입니다. workflow가 만드는 `release.env`에는 실제 배포에 사용하는 `API_IMAGE=...@sha256:...`가 들어갑니다. tag는 추적용이고, Ubuntu의 실행 단위는 digest입니다. `latest`만 가리키는 image 또는 digest가 없는 manifest로 배포하지 않습니다.
+즉 릴리스 표기 규칙은 `sha-<commit>`입니다. workflow가 만드는 schema-2 `release.env`에는 API와 각 worker의 digest, 그 image를 실제로 만든 source SHA, 이번 릴리스에서 변경됐는지가 함께 들어갑니다. 변경되지 않은 구성요소는 직전 운영 manifest의 digest와 source SHA를 그대로 재사용합니다. tag는 추적용이고, Ubuntu의 실행 단위는 digest입니다. `latest`만 가리키는 image 또는 digest가 없는 manifest로 배포하지 않습니다.
 
-현재 workflow artifact는 다음 두 파일입니다.
+현재 workflow artifact는 배포 정의와 manifest를 함께 고정한 bundle입니다.
 
 ```text
-brand-pilot-api-release-<RELEASE_SHA>/
-  release.env
-  release.env.sha256
+brand-pilot-release-<RELEASE_SHA>/
+  release-bundle-<RELEASE_SHA>.tar.gz
+  release-bundle-<RELEASE_SHA>.tar.gz.sha256
 ```
+
+`RELEASE_SCHEMA=1` manifest는 기존 릴리스 롤백에만 계속 읽을 수 있습니다. 새 릴리스는 `RELEASE_SCHEMA=2`만 생성합니다. migration 경로가 감지되면 image와 검증 결과는 만들 수 있어도 운영 배포 단계는 차단되며, migration 승인·backup·적용은 기존 별도 절차를 따릅니다.
+
+GitHub `Production` 환경의 `BRAND_PILOT_CD_ENABLED=true`와 전용 SSH·authenticated canary 자격 증명이 모두 준비되기 전에는 workflow가 운영 서버를 변경하지 않습니다. 현재 activation gate는 provider DB backup과 암호화된 Caddy backup의 외부 승인이 필요한 지점에서 의도적으로 중단됩니다. 이 gate를 제거하거나 변수를 켜는 것은 코드 merge와 별개의 운영 승인 작업입니다.
+
+worker 배포 시 `rollout-workers.sh`는 schema-2 manifest에서 `*_CHANGED=true`이면서 직전 릴리스에서 이미 실행 중이던 worker service만 digest로 pull하고 `--no-deps`로 재생성합니다. 변경되지 않은 worker는 재기동하지 않고, 비활성 profile을 새로 시작하지도 않습니다. 실제 실행 전에는 실행 중인 container image가 직전 manifest의 digest와 정확히 같은지 확인하고, 직전 image를 로컬에 확보하고, 운영 lock을 획득합니다. 일치하지 않거나 별도 heartbeat 검증 실행 파일이 없으면 mutation 전에 실패합니다. 실행 후 service 상태나 heartbeat 검증이 실패하면 영향받은 worker만 검증된 직전 manifest로 복원합니다. API/Caddy와 다른 worker를 함께 내리는 `docker compose down`은 사용하지 않습니다.
 
 ### Ubuntu와 Tailscale
 
@@ -101,7 +107,7 @@ curl --fail https://api.danbammsg.co.kr/ready
 - `docker compose config`처럼 secret-bearing resolved environment를 출력하는 명령
 - `latest` 단독 배포 또는 기존 release directory 수정
 
-현재 Ubuntu 런북은 deploy script와 Compose/Caddy 파일을 얻기 위해 `/opt/brand-pilot/repo`를 정확한 `RELEASE_SHA`에 detached checkout하는 단계가 있습니다. 이 checkout은 애플리케이션 build나 코드 동기화 경로가 아니라, 현재 release artifact에 포함되지 않은 배포 도구를 읽기 위한 의존성입니다. 서버가 manifest와 image digest만으로 완전히 동작하려면 workflow artifact에 검증된 deploy bundle을 포함하고 그 무결성을 검증하는 후속 작업이 필요합니다.
+새 schema-2 artifact는 deploy script와 Compose/Caddy 파일까지 포함하므로 새 릴리스는 Git checkout에서 배포 도구를 읽지 않습니다. 다만 기존 schema-1 릴리스의 롤백은 그 당시 서명된 파일 집합과 절차를 그대로 유지합니다.
 
 ## 4. 릴리스 유형별 검증
 
@@ -155,15 +161,19 @@ trusted operator machine의 Git Bash 또는 WSL에서 exact-SHA artifact를 검�
 
 ```bash
 gh run download <RUN_ID> \
-  --name "brand-pilot-api-release-<RELEASE_SHA>" \
+  --name "brand-pilot-release-<RELEASE_SHA>" \
   --dir ./brand-pilot-release-download
 cd ./brand-pilot-release-download
+sha256sum --check "release-bundle-<RELEASE_SHA>.tar.gz.sha256"
+mkdir verified-release
+tar -xzf "release-bundle-<RELEASE_SHA>.tar.gz" -C verified-release
+cd verified-release
 sha256sum --check release.env.sha256
 grep -Fx "RELEASE_SHA=<RELEASE_SHA>" release.env
 grep -E '^API_IMAGE=ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$' release.env
 ```
 
-검증된 두 파일만 `/opt/brand-pilot/incoming/`으로 전송합니다. 이후 `[bpdeploy Tailscale SSH]`에서 Ubuntu 런북의 canary, verify, prepare, commit 순서를 사용합니다.
+검증된 bundle만 `/opt/brand-pilot/incoming/`으로 전송합니다. 이후 `[bpdeploy Tailscale SSH]`에서 checksum을 다시 확인하고 Ubuntu 런북의 canary, verify, backup, prepare, commit 순서를 사용합니다.
 
 ```bash
 cd /opt/brand-pilot/repo/brand_poilot/deploy

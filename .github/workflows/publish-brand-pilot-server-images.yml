@@ -2,6 +2,11 @@ name: Publish Brand Pilot server images
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "brand_poilot/**"
+      - ".github/workflows/publish-brand-pilot-server-images.yml"
   push:
     branches: [main]
     paths:
@@ -13,19 +18,98 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  API_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-api
-  DM_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-dm-worker
-  WIKI_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-wiki-worker
-  CONTENT_PROPOSAL_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-content-proposal-worker
-  BRAND_INTELLIGENCE_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-brand-intelligence-worker
-  SUBJECT_ANALYSIS_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-subject-analysis-worker
-  IMAGE_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-image-worker
-  CARD_NEWS_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-card-news-worker
-  BLOG_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-blog-worker
-  MARKETING_WORKER_IMAGE_NAME: ${{ github.repository_owner }}/brand-pilot-marketing-worker
+  PRODUCTION_RELEASE_SHA: ${{ vars.PRODUCTION_RELEASE_SHA }}
 
 jobs:
+  impact:
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.impact.outputs.matrix }}
+      components: ${{ steps.impact.outputs.components }}
+      migration_changed: ${{ steps.impact.outputs.migration_changed }}
+      production_deploy_allowed: ${{ steps.impact.outputs.production_deploy_allowed }}
+      server_changed: ${{ steps.impact.outputs.server_changed }}
+      deploy_bundle_changed: ${{ steps.impact.outputs.deploy_bundle_changed }}
+      ui_changed: ${{ steps.impact.outputs.ui_changed }}
+      bootstrap: ${{ steps.impact.outputs.bootstrap }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          # The impact job fetches the private base branch (PR) or current main
+          # (release). Keep the job's read-only contents token available only
+          # for this checkout; build and publish jobs still discard it.
+          persist-credentials: true
+
+      - name: Verify release ancestry and current main
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/main" ]] || { echo "main_release_required" >&2; exit 1; }
+          git fetch --no-tags origin main
+          [[ "$(git rev-parse origin/main)" == "$GITHUB_SHA" ]] || { echo "stale_main_release" >&2; exit 1; }
+          if [[ -n "$PRODUCTION_RELEASE_SHA" ]]; then
+            [[ "$PRODUCTION_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "production_release_sha_invalid" >&2; exit 1; }
+            git cat-file -e "${PRODUCTION_RELEASE_SHA}^{commit}"
+            git merge-base --is-ancestor "$PRODUCTION_RELEASE_SHA" "$GITHUB_SHA" || {
+              echo "candidate_not_descendant_of_production" >&2
+              exit 1
+            }
+          fi
+
+      - name: Detect affected components
+        id: impact
+        working-directory: brand_poilot
+        shell: bash
+        env:
+          SCHEMA2_READY: ${{ vars.PRODUCTION_RELEASE_SCHEMA2_READY }}
+        run: |
+          set -Eeuo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            git fetch --no-tags origin "$GITHUB_BASE_REF"
+            base_sha="$(git merge-base "origin/$GITHUB_BASE_REF" "$GITHUB_SHA")"
+            impact_json="$(node scripts/release-impact.mjs --base "$base_sha" --head "$GITHUB_SHA")"
+            bootstrap=false
+          elif [[ -z "$PRODUCTION_RELEASE_SHA" || "$SCHEMA2_READY" != "true" ]]; then
+            impact_json="$(node --input-type=module -e 'import { classifyChangedPaths } from "./scripts/release-impact.mjs"; console.log(JSON.stringify(classifyChangedPaths(["package-lock.json"])))')"
+            bootstrap=true
+          else
+            impact_json="$(node scripts/release-impact.mjs --base "$PRODUCTION_RELEASE_SHA" --head "$GITHUB_SHA")"
+            bootstrap=false
+          fi
+          IMPACT_JSON="$impact_json" node --input-type=module <<'NODE' > impact.outputs
+          const impact = JSON.parse(process.env.IMPACT_JSON);
+          const specs = [
+            { component: "api", dockerfile: "apps/api/Dockerfile", imageKeys: ["API_IMAGE"], repositories: ["brand-pilot-api"] },
+            { component: "dmWikiWorker", dockerfile: "workers/brand-pilot-dm-worker/Dockerfile", imageKeys: ["DM_WORKER_IMAGE", "WIKI_WORKER_IMAGE"], repositories: ["brand-pilot-dm-worker", "brand-pilot-wiki-worker"] },
+            { component: "contentProposalWorker", dockerfile: "workers/brand-pilot-content-proposal-worker/Dockerfile", imageKeys: ["CONTENT_PROPOSAL_WORKER_IMAGE"], repositories: ["brand-pilot-content-proposal-worker"] },
+            { component: "brandIntelligenceWorker", dockerfile: "workers/brand-pilot-brand-intelligence-worker/Dockerfile", imageKeys: ["BRAND_INTELLIGENCE_WORKER_IMAGE"], repositories: ["brand-pilot-brand-intelligence-worker"] },
+            { component: "subjectAnalysisWorker", dockerfile: "workers/brand-pilot-subject-analysis-worker/Dockerfile", imageKeys: ["SUBJECT_ANALYSIS_WORKER_IMAGE"], repositories: ["brand-pilot-subject-analysis-worker"] },
+            { component: "imageWorker", dockerfile: "workers/brand-pilot-image-worker/Dockerfile", imageKeys: ["IMAGE_WORKER_IMAGE"], repositories: ["brand-pilot-image-worker"] },
+            { component: "cardNewsWorker", dockerfile: "workers/brand-pilot-card-news-worker/Dockerfile", imageKeys: ["CARD_NEWS_WORKER_IMAGE"], repositories: ["brand-pilot-card-news-worker"] },
+            { component: "blogWorker", dockerfile: "workers/brand-pilot-blog-worker/Dockerfile", imageKeys: ["BLOG_WORKER_IMAGE"], repositories: ["brand-pilot-blog-worker"] },
+            { component: "marketingWorker", dockerfile: "workers/brand-pilot-marketing-worker/Dockerfile", imageKeys: ["MARKETING_WORKER_IMAGE"], repositories: ["brand-pilot-marketing-worker"] },
+          ];
+          const include = specs.filter((entry) => impact.components[entry.component]);
+          const out = {
+            matrix: JSON.stringify({ include }),
+            components: JSON.stringify(impact.components),
+            migration_changed: String(impact.migrationChanged),
+            production_deploy_allowed: String(impact.productionDeployAllowed),
+            server_changed: String(include.length > 0),
+            deploy_bundle_changed: String(impact.deployBundleChanged),
+            ui_changed: String(impact.components.customerUi),
+          };
+          for (const [key, value] of Object.entries(out)) console.log(`${key}=${value}`);
+          NODE
+          cat impact.outputs >> "$GITHUB_OUTPUT"
+          printf 'bootstrap=%s\n' "$bootstrap" >> "$GITHUB_OUTPUT"
+
   verify:
+    needs: impact
     permissions:
       contents: read
     runs-on: ubuntu-24.04
@@ -33,295 +117,262 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.23.1
           cache: npm
           cache-dependency-path: brand_poilot/package-lock.json
-
       - name: Install
         working-directory: brand_poilot
         run: npm ci
-
-      - name: Verify
+      - name: Verify release tooling and deployment contracts
         working-directory: brand_poilot
         run: |
+          node --test scripts/release-impact.test.mjs
+          node --test scripts/assemble-release-manifest.test.mjs
+          node --test scripts/incremental-cicd-contract.test.mjs
           npm run test:contract
+          npm run test:deployment
+          shellcheck --exclude=SC1091,SC2016,SC2034,SC2317 deploy/scripts/*.sh
+      - name: Verify migrations
+        if: needs.impact.outputs.migration_changed == 'true'
+        working-directory: brand_poilot
+        run: |
           node --test scripts/migrationRunner.test.mjs
           npm run test:migrations
+          echo "migration_approval_required"
+      - name: Verify API
+        if: fromJSON(needs.impact.outputs.components).api
+        working-directory: brand_poilot
+        run: |
           npm run test --workspace @brand-pilot/api
-          npm run test --workspace @brand-pilot/dm-worker
-          npm run test --workspace @brand-pilot/content-proposal-worker
-          npm run test --workspace @brand-pilot/brand-intelligence-worker
-          npm run test --workspace @brand-pilot/subject-analysis-worker
-          npm run test --workspace @brand-pilot/image-worker
-          npm run test --workspace @brand-pilot/card-news-worker
-          npm run test --workspace @brand-pilot/blog-worker
-          npm run test --workspace @brand-pilot/marketing-worker
           npm run build --workspace @brand-pilot/api
-          npm run build --workspace @brand-pilot/dm-worker
-          npm run build --workspace @brand-pilot/content-proposal-worker
-          npm run build --workspace @brand-pilot/brand-intelligence-worker
-          npm run build --workspace @brand-pilot/subject-analysis-worker
-          npm run build --workspace @brand-pilot/image-worker
-          npm run build --workspace @brand-pilot/card-news-worker
-          npm run build --workspace @brand-pilot/blog-worker
-          npm run build --workspace @brand-pilot/marketing-worker
-          shellcheck --exclude=SC1091,SC2016,SC2034,SC2317 deploy/scripts/*.sh
-          npm run test:deployment
+      - name: Verify customer UI
+        if: fromJSON(needs.impact.outputs.components).customerUi
+        working-directory: brand_poilot
+        env:
+          TZ: Asia/Seoul
+        run: |
+          npm run test --workspace @brand-pilot/customer-ui
+          npm run build --workspace @brand-pilot/customer-ui
+      - name: Verify DM and Wiki worker
+        if: fromJSON(needs.impact.outputs.components).dmWikiWorker
+        working-directory: brand_poilot
+        run: npm run test --workspace @brand-pilot/dm-worker && npm run build --workspace @brand-pilot/dm-worker
+      - name: Verify content proposal worker
+        if: fromJSON(needs.impact.outputs.components).contentProposalWorker
+        working-directory: brand_poilot
+        run: npm run test --workspace @brand-pilot/content-proposal-worker && npm run build --workspace @brand-pilot/content-proposal-worker
+      - name: Verify brand intelligence worker
+        if: fromJSON(needs.impact.outputs.components).brandIntelligenceWorker
+        working-directory: brand_poilot
+        run: npm run test --workspace @brand-pilot/brand-intelligence-worker && npm run build --workspace @brand-pilot/brand-intelligence-worker
+      - name: Verify subject analysis worker
+        if: fromJSON(needs.impact.outputs.components).subjectAnalysisWorker
+        working-directory: brand_poilot
+        run: npm run test --workspace @brand-pilot/subject-analysis-worker && npm run build --workspace @brand-pilot/subject-analysis-worker
+      - name: Verify image worker
+        if: fromJSON(needs.impact.outputs.components).imageWorker
+        working-directory: brand_poilot
+        run: npm run test --workspace @brand-pilot/image-worker && npm run build --workspace @brand-pilot/image-worker
+      - name: Verify card-news worker
+        if: fromJSON(needs.impact.outputs.components).cardNewsWorker
+        working-directory: brand_poilot
+        run: npm run test --workspace @brand-pilot/card-news-worker && npm run build --workspace @brand-pilot/card-news-worker
+      - name: Verify blog worker
+        if: fromJSON(needs.impact.outputs.components).blogWorker
+        working-directory: brand_poilot
+        run: npm run test --workspace @brand-pilot/blog-worker && npm run build --workspace @brand-pilot/blog-worker
+      - name: Verify marketing worker
+        if: fromJSON(needs.impact.outputs.components).marketingWorker
+        working-directory: brand_poilot
+        run: npm run test --workspace @brand-pilot/marketing-worker && npm run build --workspace @brand-pilot/marketing-worker
 
   publish:
-    needs: verify
-    if: github.ref == 'refs/heads/main'
+    needs: [impact, verify]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.impact.outputs.server_changed == 'true'
     permissions:
       contents: read
       packages: write
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.impact.outputs.matrix) }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Compute image name
-        id: image
+      - name: Compute immutable tags
+        id: tags
+        shell: bash
+        env:
+          REPOSITORIES_JSON: ${{ toJSON(matrix.repositories) }}
+        run: |
+          set -Eeuo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          {
+            echo 'value<<EOF'
+            jq -r '.[]' <<<"$REPOSITORIES_JSON" | while read -r repository; do
+              [[ "$repository" =~ ^[a-z0-9-]+$ ]]
+              printf 'ghcr.io/%s/%s:sha-%s\n' "$owner" "$repository" "$GITHUB_SHA"
+            done
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+      - name: Build and push affected image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: brand_poilot
+          file: brand_poilot/${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.value }}
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+      - name: Record component digests
         shell: bash
         run: |
           set -Eeuo pipefail
-          image="${REGISTRY}/${API_IMAGE_NAME,,}"
-          dm_worker_image="${REGISTRY}/${DM_WORKER_IMAGE_NAME,,}"
-          wiki_worker_image="${REGISTRY}/${WIKI_WORKER_IMAGE_NAME,,}"
-          content_proposal_worker_image="${REGISTRY}/${CONTENT_PROPOSAL_WORKER_IMAGE_NAME,,}"
-          brand_intelligence_worker_image="${REGISTRY}/${BRAND_INTELLIGENCE_WORKER_IMAGE_NAME,,}"
-          subject_analysis_worker_image="${REGISTRY}/${SUBJECT_ANALYSIS_WORKER_IMAGE_NAME,,}"
-          image_worker_image="${REGISTRY}/${IMAGE_WORKER_IMAGE_NAME,,}"
-          card_news_worker_image="${REGISTRY}/${CARD_NEWS_WORKER_IMAGE_NAME,,}"
-          blog_worker_image="${REGISTRY}/${BLOG_WORKER_IMAGE_NAME,,}"
-          marketing_worker_image="${REGISTRY}/${MARKETING_WORKER_IMAGE_NAME,,}"
-          for value in "$image" "$dm_worker_image" "$wiki_worker_image" "$content_proposal_worker_image" "$brand_intelligence_worker_image" "$subject_analysis_worker_image" "$image_worker_image" "$card_news_worker_image" "$blog_worker_image" "$marketing_worker_image"; do
-            [[ "$value" =~ ^ghcr\.io/[a-z0-9._/-]+$ ]]
-            [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]]
-          done
-          printf 'name=%s\n' "$image" >> "$GITHUB_OUTPUT"
-          printf 'dm_worker=%s\n' "$dm_worker_image" >> "$GITHUB_OUTPUT"
-          printf 'wiki_worker=%s\n' "$wiki_worker_image" >> "$GITHUB_OUTPUT"
-          printf 'content_proposal_worker=%s\n' "$content_proposal_worker_image" >> "$GITHUB_OUTPUT"
-          printf 'brand_intelligence_worker=%s\n' "$brand_intelligence_worker_image" >> "$GITHUB_OUTPUT"
-          printf 'subject_analysis_worker=%s\n' "$subject_analysis_worker_image" >> "$GITHUB_OUTPUT"
-          printf 'image_worker=%s\n' "$image_worker_image" >> "$GITHUB_OUTPUT"
-          printf 'card_news_worker=%s\n' "$card_news_worker_image" >> "$GITHUB_OUTPUT"
-          printf 'blog_worker=%s\n' "$blog_worker_image" >> "$GITHUB_OUTPUT"
-          printf 'marketing_worker=%s\n' "$marketing_worker_image" >> "$GITHUB_OUTPUT"
-
-      - name: Build and push API
-        id: api
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          IMAGE_KEYS_JSON="$IMAGE_KEYS_JSON" REPOSITORIES_JSON="$REPOSITORIES_JSON" IMAGE_DIGEST="$IMAGE_DIGEST" node <<'NODE'
+          const keys = JSON.parse(process.env.IMAGE_KEYS_JSON);
+          const repositories = JSON.parse(process.env.REPOSITORIES_JSON);
+          if (keys.length !== repositories.length) throw new Error("component_metadata_mismatch");
+          const owner = process.env.GITHUB_REPOSITORY_OWNER.toLowerCase();
+          const result = Object.fromEntries(keys.map((key, index) => [key, {
+            image: `ghcr.io/${owner}/${repositories[index]}@${process.env.IMAGE_DIGEST}`,
+            sourceSha: process.env.GITHUB_SHA,
+          }]));
+          require("node:fs").writeFileSync(`built-${process.env.MATRIX_COMPONENT}.json`, `${JSON.stringify(result)}\n`);
+          NODE
+        env:
+          IMAGE_KEYS_JSON: ${{ toJSON(matrix.imageKeys) }}
+          REPOSITORIES_JSON: ${{ toJSON(matrix.repositories) }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          MATRIX_COMPONENT: ${{ matrix.component }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          context: brand_poilot
-          file: brand_poilot/apps/api/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          name: brand-pilot-image-${{ matrix.component }}-${{ github.sha }}
+          path: built-${{ matrix.component }}.json
+          if-no-files-found: error
+          retention-days: 30
 
-      - name: Build and push DM worker
-        id: dm_worker
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+  manifest:
+    needs: [impact, verify, publish]
+    if: ${{ always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.verify.result == 'success' && (needs.publish.result == 'success' || needs.publish.result == 'skipped') && (needs.impact.outputs.server_changed == 'true' || needs.impact.outputs.deploy_bundle_changed == 'true') }}
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          context: brand_poilot
-          file: brand_poilot/workers/brand-pilot-dm-worker/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.image.outputs.dm_worker }}:sha-${{ github.sha }}
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-
-      - name: Build and push Wiki worker
-        id: wiki_worker
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: needs.impact.outputs.server_changed == 'true'
         with:
-          context: brand_poilot
-          file: brand_poilot/workers/brand-pilot-dm-worker/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.image.outputs.wiki_worker }}:sha-${{ github.sha }}
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-
-      - name: Build and push content proposal worker
-        id: content_proposal_worker
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: brand_poilot
-          file: brand_poilot/workers/brand-pilot-content-proposal-worker/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.image.outputs.content_proposal_worker }}:sha-${{ github.sha }}
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-
-      - name: Build and push brand intelligence worker
-        id: brand_intelligence_worker
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: brand_poilot
-          file: brand_poilot/workers/brand-pilot-brand-intelligence-worker/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.image.outputs.brand_intelligence_worker }}:sha-${{ github.sha }}
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-
-      - name: Build and push subject analysis worker
-        id: subject_analysis_worker
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: brand_poilot
-          file: brand_poilot/workers/brand-pilot-subject-analysis-worker/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.image.outputs.subject_analysis_worker }}:sha-${{ github.sha }}
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-
-      - name: Build and push image worker
-        id: image_worker
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: brand_poilot
-          file: brand_poilot/workers/brand-pilot-image-worker/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.image.outputs.image_worker }}:sha-${{ github.sha }}
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-
-      - name: Build and push card news worker
-        id: card_news_worker
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: brand_poilot
-          file: brand_poilot/workers/brand-pilot-card-news-worker/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.image.outputs.card_news_worker }}:sha-${{ github.sha }}
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-
-      - name: Build and push blog worker
-        id: blog_worker
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: brand_poilot
-          file: brand_poilot/workers/brand-pilot-blog-worker/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.image.outputs.blog_worker }}:sha-${{ github.sha }}
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-
-      - name: Build and push marketing worker
-        id: marketing_worker
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: brand_poilot
-          file: brand_poilot/workers/brand-pilot-marketing-worker/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.image.outputs.marketing_worker }}:sha-${{ github.sha }}
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-
-      - name: Create release manifest
+          pattern: brand-pilot-image-*-${{ github.sha }}
+          path: brand_poilot/built-images
+          merge-multiple: true
+      - name: Resolve current production manifest
+        if: needs.impact.outputs.bootstrap != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$PRODUCTION_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/publish-brand-pilot-server-images.yml/runs?head_sha=$PRODUCTION_RELEASE_SHA&status=success&per_page=100" --jq '.workflow_runs[0].id')"
+          [[ "$run_id" =~ ^[0-9]+$ ]] || { echo "production_manifest_run_missing" >&2; exit 1; }
+          artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" --jq ".artifacts[] | select(.name == \"brand-pilot-release-$PRODUCTION_RELEASE_SHA\") | .id" | head -n1)"
+          [[ "$artifact_id" =~ ^[0-9]+$ ]] || { echo "production_manifest_artifact_missing" >&2; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > current-release.zip
+          unzip -q current-release.zip -d current-release
+          (
+            cd current-release
+            sha256sum --check "release-bundle-$PRODUCTION_RELEASE_SHA.tar.gz.sha256"
+            tar -xzf "release-bundle-$PRODUCTION_RELEASE_SHA.tar.gz"
+          )
+          cp "current-release/release.env" brand_poilot/current-release.env
+      - name: Assemble immutable release bundle
         working-directory: brand_poilot
         shell: bash
         env:
-          RELEASE_SHA: ${{ github.sha }}
-          API_IMAGE: ${{ steps.image.outputs.name }}
-          API_DIGEST: ${{ steps.api.outputs.digest }}
-          DM_WORKER_IMAGE: ${{ steps.image.outputs.dm_worker }}
-          DM_WORKER_DIGEST: ${{ steps.dm_worker.outputs.digest }}
-          WIKI_WORKER_IMAGE: ${{ steps.image.outputs.wiki_worker }}
-          WIKI_WORKER_DIGEST: ${{ steps.wiki_worker.outputs.digest }}
-          CONTENT_PROPOSAL_WORKER_IMAGE: ${{ steps.image.outputs.content_proposal_worker }}
-          CONTENT_PROPOSAL_WORKER_DIGEST: ${{ steps.content_proposal_worker.outputs.digest }}
-          BRAND_INTELLIGENCE_WORKER_IMAGE: ${{ steps.image.outputs.brand_intelligence_worker }}
-          BRAND_INTELLIGENCE_WORKER_DIGEST: ${{ steps.brand_intelligence_worker.outputs.digest }}
-          SUBJECT_ANALYSIS_WORKER_IMAGE: ${{ steps.image.outputs.subject_analysis_worker }}
-          SUBJECT_ANALYSIS_WORKER_DIGEST: ${{ steps.subject_analysis_worker.outputs.digest }}
-          IMAGE_WORKER_IMAGE: ${{ steps.image.outputs.image_worker }}
-          IMAGE_WORKER_DIGEST: ${{ steps.image_worker.outputs.digest }}
-          CARD_NEWS_WORKER_IMAGE: ${{ steps.image.outputs.card_news_worker }}
-          CARD_NEWS_WORKER_DIGEST: ${{ steps.card_news_worker.outputs.digest }}
-          BLOG_WORKER_IMAGE: ${{ steps.image.outputs.blog_worker }}
-          BLOG_WORKER_DIGEST: ${{ steps.blog_worker.outputs.digest }}
-          MARKETING_WORKER_IMAGE: ${{ steps.image.outputs.marketing_worker }}
-          MARKETING_WORKER_DIGEST: ${{ steps.marketing_worker.outputs.digest }}
+          BOOTSTRAP: ${{ needs.impact.outputs.bootstrap }}
         run: |
           set -Eeuo pipefail
-          caddy_line="$(cat deploy/caddy-image.env)"
-          [[ "$(wc -l < deploy/caddy-image.env)" -eq 1 ]]
-          [[ "$caddy_line" == 'CADDY_IMAGE=docker.io/library/caddy@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648' ]]
-          source deploy/caddy-image.env
-
-          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$API_IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+$ ]]
-          for image in "$API_IMAGE" "$DM_WORKER_IMAGE" "$WIKI_WORKER_IMAGE" "$CONTENT_PROPOSAL_WORKER_IMAGE" "$BRAND_INTELLIGENCE_WORKER_IMAGE" "$SUBJECT_ANALYSIS_WORKER_IMAGE" "$IMAGE_WORKER_IMAGE" "$CARD_NEWS_WORKER_IMAGE" "$BLOG_WORKER_IMAGE" "$MARKETING_WORKER_IMAGE"; do
-            [[ "$image" =~ ^ghcr\.io/[a-z0-9._/-]+$ ]]
-          done
-          for digest in "$API_DIGEST" "$DM_WORKER_DIGEST" "$WIKI_WORKER_DIGEST" "$CONTENT_PROPOSAL_WORKER_DIGEST" "$BRAND_INTELLIGENCE_WORKER_DIGEST" "$SUBJECT_ANALYSIS_WORKER_DIGEST" "$IMAGE_WORKER_DIGEST" "$CARD_NEWS_WORKER_DIGEST" "$BLOG_WORKER_DIGEST" "$MARKETING_WORKER_DIGEST"; do
-            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          done
-          [[ "$CADDY_IMAGE" =~ ^docker\.io/library/caddy@sha256:[0-9a-f]{64}$ ]]
-          for value in "$RELEASE_SHA" "$API_IMAGE" "$API_DIGEST" "$DM_WORKER_IMAGE" "$DM_WORKER_DIGEST" "$WIKI_WORKER_IMAGE" "$WIKI_WORKER_DIGEST" "$CONTENT_PROPOSAL_WORKER_IMAGE" "$CONTENT_PROPOSAL_WORKER_DIGEST" "$BRAND_INTELLIGENCE_WORKER_IMAGE" "$BRAND_INTELLIGENCE_WORKER_DIGEST" "$SUBJECT_ANALYSIS_WORKER_IMAGE" "$SUBJECT_ANALYSIS_WORKER_DIGEST" "$IMAGE_WORKER_IMAGE" "$IMAGE_WORKER_DIGEST" "$CARD_NEWS_WORKER_IMAGE" "$CARD_NEWS_WORKER_DIGEST" "$BLOG_WORKER_IMAGE" "$BLOG_WORKER_DIGEST" "$MARKETING_WORKER_IMAGE" "$MARKETING_WORKER_DIGEST" "$CADDY_IMAGE"; do
-            [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]]
-          done
-
-          {
-            printf 'RELEASE_SCHEMA=1\n'
-            printf 'RELEASE_SHA=%s\n' "$RELEASE_SHA"
-            printf 'API_IMAGE=%s@%s\n' "$API_IMAGE" "$API_DIGEST"
-            printf 'DM_WORKER_IMAGE=%s@%s\n' "$DM_WORKER_IMAGE" "$DM_WORKER_DIGEST"
-            printf 'WIKI_WORKER_IMAGE=%s@%s\n' "$WIKI_WORKER_IMAGE" "$WIKI_WORKER_DIGEST"
-            printf 'CONTENT_PROPOSAL_WORKER_IMAGE=%s@%s\n' "$CONTENT_PROPOSAL_WORKER_IMAGE" "$CONTENT_PROPOSAL_WORKER_DIGEST"
-            printf 'BRAND_INTELLIGENCE_WORKER_IMAGE=%s@%s\n' "$BRAND_INTELLIGENCE_WORKER_IMAGE" "$BRAND_INTELLIGENCE_WORKER_DIGEST"
-            printf 'SUBJECT_ANALYSIS_WORKER_IMAGE=%s@%s\n' "$SUBJECT_ANALYSIS_WORKER_IMAGE" "$SUBJECT_ANALYSIS_WORKER_DIGEST"
-            printf 'IMAGE_WORKER_IMAGE=%s@%s\n' "$IMAGE_WORKER_IMAGE" "$IMAGE_WORKER_DIGEST"
-            printf 'CARD_NEWS_WORKER_IMAGE=%s@%s\n' "$CARD_NEWS_WORKER_IMAGE" "$CARD_NEWS_WORKER_DIGEST"
-            printf 'BLOG_WORKER_IMAGE=%s@%s\n' "$BLOG_WORKER_IMAGE" "$BLOG_WORKER_DIGEST"
-            printf 'MARKETING_WORKER_IMAGE=%s@%s\n' "$MARKETING_WORKER_IMAGE" "$MARKETING_WORKER_DIGEST"
-            printf 'CADDY_IMAGE=%s\n' "$CADDY_IMAGE"
-            printf 'CANARY_HOST=canary-api.danbammsg.co.kr\n'
-            printf 'PRIMARY_HOST=api.danbammsg.co.kr\n'
-            printf 'ACME_EMAIL=ops@danbammsg.co.kr\n'
-            printf 'API_ENV_FILE=/opt/brand-pilot/shared/env/api.env\n'
-          } > release.env
+          mkdir -p built-images
+          node --input-type=module <<'NODE'
+          import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+          import { assembleReleaseManifest } from "./scripts/assemble-release-manifest.mjs";
+          const builtImages = {};
+          for (const file of readdirSync("built-images").filter((name) => name.endsWith(".json")).sort()) {
+            Object.assign(builtImages, JSON.parse(readFileSync(`built-images/${file}`, "utf8")));
+          }
+          const currentManifest = process.env.BOOTSTRAP === "true" ? null : readFileSync("current-release.env", "utf8");
+          const caddy = readFileSync("deploy/caddy-image.env", "utf8").trim().split("=")[1];
+          const release = assembleReleaseManifest({
+            releaseSha: process.env.GITHUB_SHA,
+            currentManifest,
+            builtImages,
+            changedImageKeys: Object.keys(builtImages),
+            staticValues: {
+              CADDY_IMAGE: caddy,
+              CANARY_HOST: "canary-api.danbammsg.co.kr",
+              PRIMARY_HOST: "api.danbammsg.co.kr",
+              ACME_EMAIL: "ops@danbammsg.co.kr",
+              API_ENV_FILE: "/opt/brand-pilot/shared/env/api.env",
+            },
+          });
+          writeFileSync("release.env", release, { mode: 0o600 });
+          NODE
+          grep -Fx 'RELEASE_SCHEMA=2' release.env
           sha256sum release.env > release.env.sha256
-
+          tar -czf "release-bundle-$GITHUB_SHA.tar.gz" deploy release.env release.env.sha256
+          sha256sum "release-bundle-$GITHUB_SHA.tar.gz" > "release-bundle-$GITHUB_SHA.tar.gz.sha256"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: brand-pilot-api-release-${{ github.sha }}
+          name: brand-pilot-release-${{ github.sha }}
           path: |
-            brand_poilot/release.env
-            brand_poilot/release.env.sha256
+            brand_poilot/release-bundle-${{ github.sha }}.tar.gz
+            brand_poilot/release-bundle-${{ github.sha }}.tar.gz.sha256
           if-no-files-found: error
           retention-days: 30
+
+  deploy:
+    needs: [impact, manifest]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.BRAND_PILOT_CD_ENABLED == 'true' && needs.impact.outputs.production_deploy_allowed == 'true'
+    permissions:
+      actions: read
+      contents: read
+    environment: Production
+    concurrency:
+      group: brand-pilot-production
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Verify production deployment credentials
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.BRAND_PILOT_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.BRAND_PILOT_DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.BRAND_PILOT_DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.BRAND_PILOT_DEPLOY_KNOWN_HOSTS }}
+          CANARY_SESSION_COOKIE: ${{ secrets.CANARY_SESSION_COOKIE }}
+          CANARY_BRAND_ID: ${{ secrets.CANARY_BRAND_ID }}
+        run: |
+          set -Eeuo pipefail
+          for value in "$DEPLOY_HOST" "$DEPLOY_USER" "$DEPLOY_SSH_KEY" "$DEPLOY_KNOWN_HOSTS" "$CANARY_SESSION_COOKIE" "$CANARY_BRAND_ID"; do
+            [[ -n "$value" ]] || { echo "cd_credentials_missing" >&2; exit 1; }
+          done
+          echo "production_deploy_handoff_requires_provider_backup_approval"
+          exit 1

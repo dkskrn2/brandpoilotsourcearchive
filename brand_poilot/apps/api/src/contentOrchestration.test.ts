@@ -343,7 +343,7 @@ function orchestrationV2(
     outputSettings: {
       outputFormat: "card_news",
       channelTargets: ["instagram"],
-      aspectRatio: "4:5",
+      aspectRatio: "1:1",
       outputCount: 1,
     },
     ...overrides,
@@ -534,7 +534,7 @@ describe("V2 proposal orchestration service", () => {
         outputSettings: {
           outputFormat: "card_news",
           channelTargets: ["instagram"],
-          aspectRatio: "4:5",
+          aspectRatio: "1:1",
           outputCount: 1,
           purpose: "informational",
         },

@@ -10,6 +10,14 @@ export function isApprovedActiveProduct(item: ProductServiceItem) {
     && item.activeVersion?.status === "approved";
 }
 
+function isHttpUrl(value: string) {
+  try {
+    return ["http:", "https:"].includes(new URL(value.trim()).protocol);
+  } catch {
+    return false;
+  }
+}
+
 export function ContentSubjectStep({
   purpose,
   mode,
@@ -49,7 +57,7 @@ export function ContentSubjectStep({
   const materialValid = mode === "topic_text"
     ? Boolean(topicText.trim())
     : mode === "topic_url"
-      ? Boolean(topicUrl.trim())
+      ? isHttpUrl(topicUrl)
       : referenceValid;
   const selectedProductValid = approvedActiveProducts.some((item) => item.id === selectedProductId);
   const valid = materialValid && (purpose === "informational" || selectedProductValid);

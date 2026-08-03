@@ -1306,7 +1306,7 @@ async function markChannelOutputsGenerationFailed(
          output_json = jsonb_set(
            coalesce(output_json, '{}'::jsonb),
            '{generationError}',
-           jsonb_build_object('code', $2, 'message', $3, 'failedAt', now()),
+           jsonb_build_object('code', $2::text, 'message', $3::text, 'failedAt', now()),
            true
          ),
          block_reasons = case

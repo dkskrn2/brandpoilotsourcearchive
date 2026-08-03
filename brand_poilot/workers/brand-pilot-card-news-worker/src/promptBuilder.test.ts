@@ -180,10 +180,13 @@ describe("card-news prompt", () => {
         purposeDetails: { kind: "marketing", campaignObjective: "Sales", situationAndNeed: "Afternoon focus", productId: uid(2), targetSegment: "Office workers", strengths: ["Fresh leaves"], limitations: ["Contains caffeine"], appeal: "Calm focus", buyingBarriers: ["Price"], cta: "Buy now" },
       },
       userImageInstruction: "Soft natural light for every image",
-      outputSettings: { purpose: "marketing", outputFormat: "card_news", channelTargets: ["instagram"], aspectRatio: "4:5", outputCount: 1 },
+      outputSettings: { purpose: "marketing", outputFormat: "card_news", channelTargets: ["instagram"], aspectRatio: "1:1", outputCount: 1 },
     };
     const prompt = buildCardNewsPlanPrompt({ ...job, generationId: input.generationId }, input);
     expect(prompt).toContain("card-news-plan.v2");
+    expect(prompt).toContain("gpt-image-2");
+    expect(prompt).toContain("1:1");
+    expect(prompt).not.toContain("1080×1080");
     expect(prompt).toContain("정확히 2장");
     expect(prompt).toContain("index, role, order");
     expect(prompt).toContain("한 장이 부실하지 않게");

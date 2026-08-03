@@ -118,7 +118,36 @@ readonly -a WORKER_IMAGE_KEYS=(
   BLOG_WORKER_IMAGE
   MARKETING_WORKER_IMAGE
 )
+readonly -a RELEASE_IMAGE_KEYS=(API_IMAGE "${WORKER_IMAGE_KEYS[@]}")
 readonly LEGACY_RELEASE_SHA="02aa2bcae3f66d494f16a26bec9055cac17464f9"
+
+component_manifest_prefix() {
+  local image_key="$1"
+  [[ "$image_key" == *_IMAGE ]] || fail "component_image_key_invalid"
+  printf '%s' "${image_key%_IMAGE}"
+}
+
+release_image_source_revision() {
+  local image_key="$1"
+  local prefix
+  prefix="$(component_manifest_prefix "$image_key")"
+  if [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "2" ]]; then
+    printf '%s' "${RELEASE_MANIFEST[${prefix}_SOURCE_SHA]}"
+  else
+    printf '%s' "${RELEASE_MANIFEST[RELEASE_SHA]}"
+  fi
+}
+
+release_image_changed() {
+  local image_key="$1"
+  local prefix
+  prefix="$(component_manifest_prefix "$image_key")"
+  if [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "2" ]]; then
+    [[ "${RELEASE_MANIFEST[${prefix}_CHANGED]}" == "true" ]]
+  else
+    return 0
+  fi
+}
 
 require_worker_image_manifest() {
   local required_image_key
@@ -227,7 +256,7 @@ parse_release_manifest() {
     key="${BASH_REMATCH[1]}"
     value="${BASH_REMATCH[2]}"
     case "$key" in
-      RELEASE_SCHEMA|RELEASE_SHA|API_IMAGE|DM_WORKER_IMAGE|WIKI_WORKER_IMAGE|CONTENT_PROPOSAL_WORKER_IMAGE|BRAND_INTELLIGENCE_WORKER_IMAGE|SUBJECT_ANALYSIS_WORKER_IMAGE|IMAGE_WORKER_IMAGE|CARD_NEWS_WORKER_IMAGE|BLOG_WORKER_IMAGE|MARKETING_WORKER_IMAGE|CADDY_IMAGE|CANARY_HOST|PRIMARY_HOST|ACME_EMAIL|API_ENV_FILE) ;;
+      RELEASE_SCHEMA|RELEASE_SHA|API_IMAGE|API_SOURCE_SHA|API_CHANGED|DM_WORKER_IMAGE|DM_WORKER_SOURCE_SHA|DM_WORKER_CHANGED|WIKI_WORKER_IMAGE|WIKI_WORKER_SOURCE_SHA|WIKI_WORKER_CHANGED|CONTENT_PROPOSAL_WORKER_IMAGE|CONTENT_PROPOSAL_WORKER_SOURCE_SHA|CONTENT_PROPOSAL_WORKER_CHANGED|BRAND_INTELLIGENCE_WORKER_IMAGE|BRAND_INTELLIGENCE_WORKER_SOURCE_SHA|BRAND_INTELLIGENCE_WORKER_CHANGED|SUBJECT_ANALYSIS_WORKER_IMAGE|SUBJECT_ANALYSIS_WORKER_SOURCE_SHA|SUBJECT_ANALYSIS_WORKER_CHANGED|IMAGE_WORKER_IMAGE|IMAGE_WORKER_SOURCE_SHA|IMAGE_WORKER_CHANGED|CARD_NEWS_WORKER_IMAGE|CARD_NEWS_WORKER_SOURCE_SHA|CARD_NEWS_WORKER_CHANGED|BLOG_WORKER_IMAGE|BLOG_WORKER_SOURCE_SHA|BLOG_WORKER_CHANGED|MARKETING_WORKER_IMAGE|MARKETING_WORKER_SOURCE_SHA|MARKETING_WORKER_CHANGED|CADDY_IMAGE|CANARY_HOST|PRIMARY_HOST|ACME_EMAIL|API_ENV_FILE) ;;
       *) fail "manifest_unknown_key" ;;
     esac
     [[ ! -v "RELEASE_MANIFEST[$key]" ]] || fail "manifest_duplicate_key"
@@ -241,7 +270,8 @@ parse_release_manifest() {
     [[ -v "RELEASE_MANIFEST[$required_key]" ]] || fail "manifest_required_key_missing"
   done
 
-  [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "1" ]] || fail "release_schema_unsupported"
+  [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "1" ||
+    "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "2" ]] || fail "release_schema_unsupported"
   require_release_sha "${RELEASE_MANIFEST[RELEASE_SHA]}"
   require_digest_image "${RELEASE_MANIFEST[API_IMAGE]}"
   for optional_image_key in "${WORKER_IMAGE_KEYS[@]}"; do
@@ -250,6 +280,24 @@ parse_release_manifest() {
     fi
   done
   require_digest_image "${RELEASE_MANIFEST[CADDY_IMAGE]}"
+  if [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "2" ]]; then
+    local release_image_key prefix source_key changed_key
+    for release_image_key in "${RELEASE_IMAGE_KEYS[@]}"; do
+      prefix="$(component_manifest_prefix "$release_image_key")"
+      source_key="${prefix}_SOURCE_SHA"
+      changed_key="${prefix}_CHANGED"
+      [[ -v "RELEASE_MANIFEST[$source_key]" && -v "RELEASE_MANIFEST[$changed_key]" ]] ||
+        fail "component_provenance_missing"
+      require_release_sha "${RELEASE_MANIFEST[$source_key]}"
+      [[ "${RELEASE_MANIFEST[$changed_key]}" == "true" ||
+        "${RELEASE_MANIFEST[$changed_key]}" == "false" ]] ||
+        fail "component_changed_invalid"
+      if [[ "${RELEASE_MANIFEST[$changed_key]}" == "true" ]]; then
+        [[ "${RELEASE_MANIFEST[$source_key]}" == "${RELEASE_MANIFEST[RELEASE_SHA]}" ]] ||
+          fail "component_source_revision_mismatch"
+      fi
+    done
+  fi
   require_hostname "${RELEASE_MANIFEST[CANARY_HOST]}"
   require_hostname "${RELEASE_MANIFEST[PRIMARY_HOST]}"
   [[ "${RELEASE_MANIFEST[CANARY_HOST]}" != "${RELEASE_MANIFEST[PRIMARY_HOST]}" ]] ||
@@ -319,6 +367,7 @@ release_file_specs() {
   if [[ "$validation_role" != "legacy-current" ||
         "$(basename -- "$release_directory")" != "$LEGACY_RELEASE_SHA" ]]; then
     printf '%s\n' \
+      "755 scripts/rollout-workers.sh" \
       "755 scripts/backup-state.sh" \
       "755 scripts/restore-state.sh"
   fi
@@ -692,11 +741,14 @@ release_preparation_fingerprint() {
   local worker_image_key
   integrity_checksum="$(sha256sum -- "$release_directory/release-integrity.sha256" | awk '{print $1}')"
   {
-    printf '%s\n%s\n' \
+    printf '%s\n%s\n%s\n' \
       "${RELEASE_MANIFEST[RELEASE_SHA]}" \
-      "${RELEASE_MANIFEST[API_IMAGE]}"
+      "${RELEASE_MANIFEST[API_IMAGE]}" \
+      "$(release_image_source_revision API_IMAGE)"
     for worker_image_key in "${WORKER_IMAGE_KEYS[@]}"; do
-      printf '%s\n' "${RELEASE_MANIFEST[$worker_image_key]-}"
+      printf '%s\n%s\n' \
+        "${RELEASE_MANIFEST[$worker_image_key]-}" \
+        "$(release_image_source_revision "$worker_image_key")"
     done
     printf '%s\n%s\n' \
       "${RELEASE_MANIFEST[CADDY_IMAGE]}" \

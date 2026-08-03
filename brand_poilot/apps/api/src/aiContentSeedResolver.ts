@@ -65,6 +65,26 @@ function normalizedSnapshotTitle(value: unknown): string | null {
   return normalized;
 }
 
+function publisherBlocked(error: unknown): boolean {
+  return error instanceof Error && /^HTTP (?:402|403|429)$/.test(error.message);
+}
+
+function urlTopicHint(value: string): string {
+  const url = new URL(value);
+  const encodedSegment = url.pathname.split("/").filter(Boolean).at(-1) ?? "";
+  let segment = encodedSegment;
+  try {
+    segment = decodeURIComponent(encodedSegment);
+  } catch { /* Keep the encoded public path as the bounded fallback hint. */ }
+  const title = segment
+    .replace(/\.[a-z0-9]{1,5}$/i, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\s+\d{5,}$/, "")
+    .trim();
+  return (title || url.hostname.replace(/^www\./i, "")).slice(0, 500);
+}
+
 function canonicalReferenceIds(seed: Extract<ContentSeedV2, { kind: "reference" }>): string[] {
   exactKeys(seed, ["kind", "items"]);
   if (!Array.isArray(seed.items) || seed.items.length < 1 || seed.items.length > 5) invalidSeed();
@@ -108,8 +128,19 @@ export async function resolveAiContentSeed(
   let snapshot: Awaited<ReturnType<typeof crawlSourceUrl>>;
   try {
     snapshot = await deps.crawlUrl(requestedUrl);
-  } catch {
-    return resolutionFailed();
+  } catch (error) {
+    if (!publisherBlocked(error)) return resolutionFailed();
+    const title = urlTopicHint(requestedUrl);
+    const text = `원문 URL을 수집하지 못했습니다. 온라인 검색으로 확인할 주제: ${title}`;
+    return {
+      kind: "topic_url",
+      requestedUrl,
+      canonicalUrl: requestedUrl,
+      title,
+      text,
+      contentHash: createHash("sha256").update(text, "utf8").digest("hex"),
+      capturedAt: deps.now().toISOString(),
+    };
   }
 
   try {

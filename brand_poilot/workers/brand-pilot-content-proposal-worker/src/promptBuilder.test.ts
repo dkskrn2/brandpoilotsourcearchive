@@ -145,6 +145,8 @@ describe("content proposal V2 prompt", () => {
     expect(prompt).toContain("q_and_a");
     expect(prompt).toContain("myth_fact");
     expect(prompt).toContain("타깃·상황·질문·소구·서사·정보 유형");
+    expect(prompt).toContain("target, situation, question, appeal, narrative, informational_type");
+    expect(prompt).toContain("그 외 값은 사용하지 마라");
     expect(prompt).toContain("고정 라벨");
     expect(prompt).toContain("제품 중심 판매 CTA를 만들지 마라");
     expect(prompt).toContain("세 안 모두 실무 중심");

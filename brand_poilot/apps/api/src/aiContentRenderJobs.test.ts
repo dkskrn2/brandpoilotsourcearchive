@@ -16,7 +16,7 @@ describe("ai-content render job boundary helpers", () => {
   });
 
   it("accepts only the leased asset index, deterministic path, png dimensions, checksum, and https URL", () => {
-    const context = { brandId: "brand", generationId: "generation", outputId: "output", assetIndex: 2, aspectRatio: "4:5" as const };
+    const context = { brandId: "brand", generationId: "generation", outputId: "output", assetIndex: 2, outputFormat: "marketing_content" as const, aspectRatio: "4:5" as const };
     const storagePath = "ai-content/brand/generation/output/assets/02.png";
     const asset = {
       index: 2, url: `https://assets.public.blob.vercel-storage.com/${storagePath}`,
@@ -33,6 +33,55 @@ describe("ai-content render job boundary helpers", () => {
   });
 
   it.each([
+    ["card_news", "1:1", 1024, 1024],
+    ["reel", "9:16", 720, 1280],
+    ["blog", "16:9", 1600, 900],
+  ] as const)("accepts provider-sized %s assets without forcing fixed pixels", (outputFormat, aspectRatio, width, height) => {
+    const storagePath = "ai-content/brand/generation/output/assets/02.png";
+    const asset = {
+      index: 2,
+      url: `https://assets.public.blob.vercel-storage.com/${storagePath}`,
+      storagePath,
+      mimeType: "image/png" as const,
+      width,
+      height,
+      checksum: "a".repeat(64),
+    };
+
+    expect(parseRenderAssetResult(asset, {
+      brandId: "brand",
+      generationId: "generation",
+      outputId: "output",
+      assetIndex: 2,
+      outputFormat,
+      aspectRatio,
+    })).toEqual(asset);
+  });
+
+  it.each([
+    ["card_news", "1:1", 1024, 1023],
+    ["reel", "9:16", 720, 1279],
+  ] as const)("rejects a %s asset that violates its required ratio", (outputFormat, aspectRatio, width, height) => {
+    const storagePath = "ai-content/brand/generation/output/assets/02.png";
+    expect(() => parseRenderAssetResult({
+      index: 2,
+      url: `https://assets.public.blob.vercel-storage.com/${storagePath}`,
+      storagePath,
+      mimeType: "image/png",
+      width,
+      height,
+      checksum: "a".repeat(64),
+    }, {
+      brandId: "brand",
+      generationId: "generation",
+      outputId: "output",
+      assetIndex: 2,
+      outputFormat,
+      aspectRatio,
+    })).toThrow("ai_content_render_asset_invalid");
+  });
+
+  it.each([
     ["different pathname", "https://assets.public.blob.vercel-storage.com/ai-content/brand/generation/output/assets/01.png"],
     ["encoded path confusion", "https://assets.public.blob.vercel-storage.com/ai-content/brand/generation/output/assets%252F02.png"],
     ["unapproved host", "https://attacker.blob.vercel-storage.com/ai-content/brand/generation/output/assets/02.png"],
@@ -43,7 +92,7 @@ describe("ai-content render job boundary helpers", () => {
     ["fragment", "https://assets.public.blob.vercel-storage.com/ai-content/brand/generation/output/assets/02.png#worker-result"],
     ["non-default HTTPS port", "https://assets.public.blob.vercel-storage.com:444/ai-content/brand/generation/output/assets/02.png"],
   ])("rejects an asset URL with %s using the stable boundary error", (_case, url) => {
-    const context = { brandId: "brand", generationId: "generation", outputId: "output", assetIndex: 2, aspectRatio: "4:5" as const };
+    const context = { brandId: "brand", generationId: "generation", outputId: "output", assetIndex: 2, outputFormat: "marketing_content" as const, aspectRatio: "4:5" as const };
     expect(() => parseRenderAssetResult({
       index: 2,
       url,
@@ -82,7 +131,7 @@ describe("ai-content render job boundary helpers", () => {
 
   it("serializes concurrent last-asset completions per output so exactly one finalizer is created", async () => {
     const identity = { workspace: "workspace", brand: "brand", generation: "generation", output: "output" };
-    const imagePackage = { aspectRatio: "1:1" };
+    const imagePackage = { outputFormat: "marketing_content", aspectRatio: "1:1" };
     const committed = new Map([
       ["job-1", { status: "processing", assetIndex: 1, leaseToken: "lease-1" }],
       ["job-2", { status: "processing", assetIndex: 2, leaseToken: "lease-2" }],

@@ -325,6 +325,7 @@ describe("createAiContentApiGateway", () => {
 
   it.each([
     ["content_orchestration_channel_unsupported", { phase: "setup", field: "channelTargets" }],
+    ["ai_content_seed_resolution_failed", { phase: "setup", field: "subject" }],
     ["ai_content_reference_not_found", { phase: "proposal_selection", field: "references" }],
     ["content_orchestration_avatar_invalid", { phase: "proposal_selection", field: "avatar" }],
     ["ai_content_output_count_invalid", { phase: "generating", field: "outputCount" }],

@@ -37,12 +37,12 @@ export interface AiContentReelRenderInput {
 }
 
 export interface AiContentRenderedReelMedia {
-  cover: { bytes: Buffer; mimeType: "image/png"; width: 1080; height: 1920 };
+  cover: { bytes: Buffer; mimeType: "image/png"; width: number; height: number };
   video: {
     bytes: Buffer;
     mimeType: "video/mp4";
-    width: 1080;
-    height: 1920;
+    width: number;
+    height: number;
     videoCodec: "h264";
     audioCodec: null;
     fps: 30;
@@ -208,15 +208,16 @@ function validateAiContentScenes(input: AiContentReelRenderInput) {
   input.scenes.forEach((scene, offset) => {
     if (
       scene.index !== offset + 1 || scene.mimeType !== "image/png" || scene.bytes.length === 0
-      || scene.width !== 1080 || scene.height !== 1920
+      || !Number.isSafeInteger(scene.width) || !Number.isSafeInteger(scene.height)
+      || scene.width < 1 || scene.height < 1 || scene.width * 16 !== scene.height * 9
     ) throw new Error("invalid_ai_content_reel_scene");
   });
 }
 
-function validateAiContentProbe(probe: ReelProbe, sceneCount: number) {
+function validateAiContentProbe(probe: ReelProbe, sceneCount: number, width: number, height: number) {
   if (probe.videoStreamCount !== 1 || probe.audioStreamCount !== 0) throw new Error("invalid_ai_content_reel_streams");
   if (probe.videoCodec !== "h264" || probe.audioCodec !== null) throw new Error("invalid_ai_content_reel_codec");
-  if (probe.width !== 1080 || probe.height !== 1920) throw new Error("invalid_ai_content_reel_dimensions");
+  if (probe.width !== width || probe.height !== height || probe.width * 16 !== probe.height * 9) throw new Error("invalid_ai_content_reel_dimensions");
   if (!Number.isFinite(probe.fps) || Math.abs(probe.fps - reelFps) > 0.001) throw new Error("invalid_ai_content_reel_fps");
   const expectedDuration = sceneCount * 4;
   if (!Number.isFinite(probe.duration) || Math.abs(probe.duration - expectedDuration) > 1 / reelFps) {
@@ -248,6 +249,8 @@ export function createAiContentReelRenderer({
       const manifestPath = path.join(workDir, "content.json");
       const outputPath = path.join(workDir, "reel.mp4");
       const coverPath = path.join(workDir, "cover.png");
+      const width = input.scenes[0]!.width;
+      const height = input.scenes[0]!.height;
       try {
         await mkdir(inputDir);
         await Promise.all(input.scenes.map((scene) => writeFile(path.join(inputDir, `scene-${String(scene.index).padStart(2, "0")}.png`), scene.bytes)));
@@ -262,7 +265,9 @@ export function createAiContentReelRenderer({
             "--cover", coverPath,
             "--seconds-per-scene", "4",
             "--fade-seconds", String(fadeSeconds),
-            "--fps", String(reelFps)
+            "--fps", String(reelFps),
+            "--width", String(width),
+            "--height", String(height)
           ], { signal, timeoutMs: processTimeoutMs });
         } catch (error) {
           if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("ai_content_reel_aborted");
@@ -273,10 +278,10 @@ export function createAiContentReelRenderer({
         if (videoBytes.length === 0) throw new Error("invalid_ai_content_reel_output_empty");
         const probeResult = await probe(ffprobeExecutable, ["-v", "error", "-show_streams", "-show_format", "-of", "json", outputPath], { signal, timeoutMs: processTimeoutMs });
         if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("ai_content_reel_aborted");
-        validateAiContentProbe(probeResult, input.scenes.length);
+        validateAiContentProbe(probeResult, input.scenes.length, width, height);
         return {
-          cover: { bytes: coverBytes, mimeType: "image/png", width: 1080, height: 1920 },
-          video: { bytes: videoBytes, mimeType: "video/mp4", width: 1080, height: 1920, videoCodec: "h264", audioCodec: null, fps: 30, durationSeconds: probeResult.duration }
+          cover: { bytes: coverBytes, mimeType: "image/png", width, height },
+          video: { bytes: videoBytes, mimeType: "video/mp4", width, height, videoCodec: "h264", audioCodec: null, fps: 30, durationSeconds: probeResult.duration }
         };
       } finally {
         await rm(workDir, { recursive: true, force: true });

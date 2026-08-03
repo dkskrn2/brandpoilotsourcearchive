@@ -98,6 +98,8 @@ describe("card-news production runtime", () => {
     };
 
     const args = runner.buildCodexArgs(outputDir);
+    expect(args.slice(0, 3)).toEqual(["--model", "gpt-5.6-terra", "--strict-config"]);
+    expect(args.indexOf("gpt-5.6-terra")).toBeLessThan(args.indexOf("exec"));
     expect(args).toEqual(expect.arrayContaining(["--strict-config", "-C", outputDir]));
     expect(args).toContain("--ignore-user-config");
     expect(args).not.toContain("--sandbox");
@@ -188,15 +190,32 @@ describe("card-news production runtime", () => {
       additionalProperties: false,
       required: ["contractVersion", "content", "imagePackage"],
     });
+    expect(JSON.stringify(schema)).not.toContain('"oneOf"');
+    expect(JSON.stringify(schema)).not.toContain('"uniqueItems"');
+    const constSchemasWithoutType: Record<string, unknown>[] = [];
+    const visitSchema = (value: unknown): void => {
+      if (!value || typeof value !== "object") return;
+      if (Array.isArray(value)) {
+        value.forEach(visitSchema);
+        return;
+      }
+      const entry = value as Record<string, unknown>;
+      if (Object.hasOwn(entry, "const") && !Object.hasOwn(entry, "type")) {
+        constSchemasWithoutType.push(entry);
+      }
+      Object.values(entry).forEach(visitSchema);
+    };
+    visitSchema(schema);
+    expect(constSchemasWithoutType).toEqual([]);
     const defs = schema.$defs as Record<string, Record<string, unknown>>;
     const styleProperties = defs.styleImage?.properties as Record<string, Record<string, unknown>>;
     expect(styleProperties.description).toMatchObject({ type: "string" });
     expect(styleProperties.description).not.toHaveProperty("minLength");
-    expect(styleProperties.tags).toMatchObject({ type: "array", maxItems: 20, uniqueItems: true });
+    expect(styleProperties.tags).toMatchObject({ type: "array", maxItems: 20 });
     expect(styleProperties.tags).not.toHaveProperty("minItems");
     expect(defs.asset?.required).toContain("evidenceIds");
     expect((defs.asset?.properties as Record<string, unknown>).evidenceIds).toMatchObject({
-      type: "array", maxItems: 8, uniqueItems: true,
+      type: "array", maxItems: 8,
     });
   });
 

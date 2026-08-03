@@ -6,8 +6,8 @@ const uid = (n: number) => `20000000-0000-4000-8000-${String(n).padStart(12, "0"
 
 function imagePackage(): ImageGenerationPackageV1 {
   return {
-    contractVersion: "image-generation-package.v1", generationId: uid(1), outputFormat: "marketing_content", purpose: "marketing",
-    assetCount: 3, aspectRatio: "4:5", channelTargets: ["instagram"],
+    contractVersion: "image-generation-package.v1", generationId: uid(1), outputFormat: "card_news", purpose: "marketing",
+    assetCount: 3, aspectRatio: "1:1", channelTargets: ["instagram"],
     assets: [
       { index: 1, role: "hook", copy: "one", visualDirection: "one visual", evidenceIds: [], productImageAssetIds: [], attachmentIds: [] },
       { index: 2, role: "benefit", copy: "두 개를 이 순서로 보여준다", visualDirection: "제품을 중앙에 둔다", evidenceIds: [uid(9)], productImageAssetIds: [uid(4)], attachmentIds: [uid(8)] },
@@ -35,9 +35,10 @@ describe("V3 asset prompt", () => {
       },
     });
 
-    for (const text of ["index 2", "benefit", "4:5", "1080×1350", "모든 장면에 부드러운 자연광", "Soft editorial", "visual_composition", "제품을 중앙에 둔다", uid(9), "두 개를 이 순서로 보여준다", "inputs/product-01.png", "inputs/attachment-01.png"]) {
+    for (const text of ["gpt-image-2", "index 2", "benefit", "1:1", "모델 원본", "모든 장면에 부드러운 자연광", "Soft editorial", "visual_composition", "제품을 중앙에 둔다", uid(9), "두 개를 이 순서로 보여준다", "inputs/product-01.png", "inputs/attachment-01.png"]) {
       expect(prompt).toContain(text);
     }
+    expect(prompt).not.toContain("1080×1080");
     expect(prompt.indexOf("강제 계약")).toBeLessThan(prompt.indexOf("사용자 공통 이미지 지시"));
     expect(prompt.indexOf("사용자 공통 이미지 지시")).toBeLessThan(prompt.indexOf("브랜드 스타일 이미지"));
     expect(prompt).toMatch(/로고.*워드마크.*심볼.*워터마크.*가짜 로고/s);

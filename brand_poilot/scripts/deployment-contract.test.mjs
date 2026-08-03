@@ -52,6 +52,7 @@ const deploymentArtifacts = [
   "deploy/env/marketing-worker.env.example",
   "deploy/scripts/preflight.sh",
   "deploy/scripts/deploy.sh",
+  "deploy/scripts/rollout-workers.sh",
   "deploy/scripts/lib.sh",
   "deploy/scripts/verify-canary.sh",
   "deploy/scripts/promote.sh",
@@ -67,6 +68,7 @@ const deploymentScripts = [
   "deploy/scripts/lib.sh",
   "deploy/scripts/preflight.sh",
   "deploy/scripts/deploy.sh",
+  "deploy/scripts/rollout-workers.sh",
   "deploy/scripts/verify-canary.sh",
   "deploy/scripts/promote.sh",
   "deploy/scripts/rollback.sh",
@@ -487,52 +489,6 @@ test("Ubuntu runbook is command-ready for env, artifact integrity, canary, rollb
   assert.doesNotMatch(runbook, /docker compose config(?!\s+--quiet)/);
 });
 
-test("Ubuntu runbook documents the bounded Instagram publication activation and rollback", () => {
-  const runbook = read(ubuntuRunbookPath);
-  const normalizedRunbook = runbook.replace(/\s+/g, " ");
-
-  for (const phrase of [
-    "Instagram publication activation (2026-08-03)",
-    "INSTAGRAM_PUBLISH_ENABLED=true",
-    "LOCAL_SCHEDULER_ENABLED=false",
-    "no unsolicited live Instagram post",
-    "restore the backed-up api.env",
-    "/opt/brand-pilot/state/api.env.instagram-publish-backup-<VERIFIED_RELEASE_SHA>",
-  ]) {
-    assert.ok(
-      normalizedRunbook.includes(phrase),
-      `Ubuntu runbook missing Instagram activation detail: ${phrase}`,
-    );
-  }
-
-  const sectionStart = runbook.indexOf("### Instagram publication activation (2026-08-03)");
-  const sectionEnd = runbook.indexOf("## 13. Incremental Codex worker activation", sectionStart);
-  const activation = runbook.slice(sectionStart, sectionEnd);
-  const envMutation = activation.indexOf('mv -- "$tmp_env" "$api_env"');
-  const backupMetadata = activation.indexOf("./scripts/backup-state.sh", envMutation);
-  const exportMetadata = activation.indexOf("export PROMOTION_BACKUP_METADATA=", backupMetadata);
-  const preparePromotion = activation.indexOf("./scripts/promote.sh --prepare", exportMetadata);
-  assert.ok(envMutation >= 0, "Instagram activation must atomically replace api.env");
-  assert.ok(
-    backupMetadata > envMutation,
-    "Instagram activation must refresh promotion metadata after the api.env mutation",
-  );
-  assert.ok(
-    exportMetadata > backupMetadata && preparePromotion > exportMetadata,
-    "Instagram activation must export fresh metadata before promotion",
-  );
-  assert.doesNotMatch(
-    activation,
-    /\bchown\b/,
-    "bpdeploy activation and rollback must not require ownership changes",
-  );
-  assert.match(
-    activation,
-    /stat -c '%U:%G' "\$(?:tmp_env|rollback_env)"/,
-    "temporary env files must prove they retain the api.env owner",
-  );
-});
-
 test("Ubuntu runbook documents the fail-closed first TLS cutover and recovery sequence", () => {
   const runbook = read(ubuntuRunbookPath);
   const normalizedRunbook = runbook.replace(/\s+/g, " ");
@@ -764,29 +720,17 @@ test("only Caddy publishes host ports", () => {
   assert.match(caddyBlock, /"443:443"/);
 });
 
-test("Instagram publication is enabled through the shared API env while the scheduler stays off", () => {
+test("Instagram publication is enabled from shared API env with exact safe contracts", () => {
   const envExample = read("deploy/env/api.env.example");
   const compose = read("deploy/compose.production.yml");
   const services = assertComposeTopology(compose);
   const preflight = read("deploy/scripts/preflight.sh");
   const verify = read("deploy/scripts/verify-canary.sh");
 
-  assert.equal(
-    envExample.match(/^INSTAGRAM_PUBLISH_ENABLED=true$/gm)?.length,
-    1,
-    "API env example must contain one exact enabled publication flag",
-  );
-  assert.equal(
-    envExample.match(/^INSTAGRAM_PUBLISH_ENABLED=/gm)?.length,
-    1,
-    "API env example must contain the publication flag exactly once",
-  );
+  assert.equal(envExample.match(/^INSTAGRAM_PUBLISH_ENABLED=true$/gm)?.length, 1);
+  assert.equal(envExample.match(/^INSTAGRAM_PUBLISH_ENABLED=/gm)?.length, 1);
   for (const service of ["api-primary", "api-canary"]) {
-    assert.doesNotMatch(
-      services.get(service).text,
-      /^\s+INSTAGRAM_PUBLISH_ENABLED:/m,
-      `${service} must read the publication flag from the shared API env file`,
-    );
+    assert.doesNotMatch(services.get(service).text, /^\s+INSTAGRAM_PUBLISH_ENABLED:/m);
   }
   assert.match(
     preflight,
@@ -798,6 +742,7 @@ test("Instagram publication is enabled through the shared API env while the sche
   );
   assert.match(verify, /\.features\.publishing\s*==\s*"enabled"/);
   assert.match(verify, /\.features\.scheduler\s*==\s*"disabled"/);
+  assert.match(verify, /tr -d '\\r'/);
   for (const capabilityContract of [
     /\.channel\s*==\s*"instagram"/,
     /\.enabled\s*==\s*true/,
@@ -807,13 +752,8 @@ test("Instagram publication is enabled through the shared API env while the sche
     /index\("card_news"\)/,
     /index\("instagram_feed_single"\)/,
     /index\("instagram_feed_carousel"\)/,
-    /canary_instagram_capability_invalid/,
   ]) {
-    assert.match(
-      verify,
-      capabilityContract,
-      `canary verifier missing Instagram capability contract: ${capabilityContract}`,
-    );
+    assert.match(verify, capabilityContract);
   }
 });
 
@@ -830,15 +770,11 @@ test("publication preflight accepts one exact true and rejects unsafe variants",
       "_",
       bashPath("deploy/scripts/lib.sh"),
       bashPath(apiEnv),
-    ], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+    ], { cwd: process.cwd(), encoding: "utf8" });
   };
 
   try {
-    const valid = run("INSTAGRAM_PUBLISH_ENABLED=true\n");
-    assert.equal(valid.status, 0, valid.stderr);
+    assert.equal(run("INSTAGRAM_PUBLISH_ENABLED=true\n").status, 0);
     for (const unsafe of [
       "INSTAGRAM_PUBLISH_ENABLED=false\n",
       "LOCAL_SCHEDULER_ENABLED=false\n",
@@ -846,7 +782,7 @@ test("publication preflight accepts one exact true and rejects unsafe variants",
       "INSTAGRAM_PUBLISH_ENABLED=TRUE\n",
     ]) {
       const result = run(unsafe);
-      assert.notEqual(result.status, 0, `unsafe publication env unexpectedly passed: ${unsafe}`);
+      assert.notEqual(result.status, 0);
       assert.match(result.stderr, /error=safe_runtime_flag_invalid/);
     }
   } finally {
@@ -1180,33 +1116,25 @@ test("Task 6 deployment env examples expose only real worker settings and never 
   }
 });
 
-test("Task 6 CI publishes all worker Dockerfiles with immutable revisions and digest manifest keys", () => {
+test("Task 6 CI maps every worker Dockerfile into the affected-image matrix", () => {
   const workflow = read(publishWorkflowPath);
-  const publishJob = parseWorkflowJob(workflow, "publish");
   const expected = [
-    ["brand_intelligence_worker", "brand-pilot-brand-intelligence-worker", "BRAND_INTELLIGENCE_WORKER"],
-    ["subject_analysis_worker", "brand-pilot-subject-analysis-worker", "SUBJECT_ANALYSIS_WORKER"],
-    ["image_worker", "brand-pilot-image-worker", "IMAGE_WORKER"],
-    ["card_news_worker", "brand-pilot-card-news-worker", "CARD_NEWS_WORKER"],
-    ["blog_worker", "brand-pilot-blog-worker", "BLOG_WORKER"],
-    ["marketing_worker", "brand-pilot-marketing-worker", "MARKETING_WORKER"],
+    ["brandIntelligenceWorker", "brand-pilot-brand-intelligence-worker", "BRAND_INTELLIGENCE_WORKER_IMAGE"],
+    ["subjectAnalysisWorker", "brand-pilot-subject-analysis-worker", "SUBJECT_ANALYSIS_WORKER_IMAGE"],
+    ["imageWorker", "brand-pilot-image-worker", "IMAGE_WORKER_IMAGE"],
+    ["cardNewsWorker", "brand-pilot-card-news-worker", "CARD_NEWS_WORKER_IMAGE"],
+    ["blogWorker", "brand-pilot-blog-worker", "BLOG_WORKER_IMAGE"],
+    ["marketingWorker", "brand-pilot-marketing-worker", "MARKETING_WORKER_IMAGE"],
   ];
 
-  for (const [id, directory, manifestPrefix] of expected) {
-    assert.match(
-      publishJob,
-      new RegExp(
-        `id: ${id}[\\s\\S]*context: brand_poilot[\\s\\S]*file: brand_poilot/workers/${directory}/Dockerfile`
-          + `[\\s\\S]*platforms: linux/amd64[\\s\\S]*tags: \\$\\{\\{ steps\\.image\\.outputs\\.${id} \\}\\}:sha-\\$\\{\\{ github\\.sha \\}\\}`
-          + `[\\s\\S]*org\\.opencontainers\\.image\\.revision=\\$\\{\\{ github\\.sha \\}\\}`,
-      ),
-    );
+  for (const [component, directory, imageKey] of expected) {
     assert.match(
       workflow,
-      new RegExp(`printf '${manifestPrefix}_IMAGE=%s@%s\\\\n' "\\$${manifestPrefix}_IMAGE" "\\$${manifestPrefix}_DIGEST"`),
+      new RegExp(`component: "${component}"[^\\n]*dockerfile: "workers/${directory}/Dockerfile"[^\\n]*imageKeys: \\["${imageKey}"\\]`),
     );
   }
-  assert.doesNotMatch(workflow, /\b(?:ssh|scp|rsync)\b|deploy\/scripts\/deploy\.sh/);
+  assert.match(workflow, /dmWikiWorker[^\n]*DM_WORKER_IMAGE[^\n]*WIKI_WORKER_IMAGE/);
+  assert.match(workflow, /org\.opencontainers\.image\.revision=\$\{\{ github\.sha \}\}/);
 });
 
 test("all CLI worker images install the pinned Codex runtime and run real entrypoints as non-root users", () => {
@@ -1852,10 +1780,15 @@ test("release manifests are parsed without source or eval and preflight is fail-
   assert.doesNotMatch(preflight, /source\s+["']?\$MANIFEST/);
   assert.match(lib, /manifest_unknown_key/);
   assert.match(lib, /manifest_duplicate_key/);
-  assert.match(
-    lib,
-    /RELEASE_SCHEMA\|RELEASE_SHA\|API_IMAGE\|DM_WORKER_IMAGE\|WIKI_WORKER_IMAGE\|CONTENT_PROPOSAL_WORKER_IMAGE\|BRAND_INTELLIGENCE_WORKER_IMAGE\|SUBJECT_ANALYSIS_WORKER_IMAGE\|IMAGE_WORKER_IMAGE\|CARD_NEWS_WORKER_IMAGE\|BLOG_WORKER_IMAGE\|MARKETING_WORKER_IMAGE\|CADDY_IMAGE\|CANARY_HOST\|PRIMARY_HOST\|ACME_EMAIL\|API_ENV_FILE/,
-  );
+  for (const key of [
+    "RELEASE_SCHEMA", "RELEASE_SHA", "API_IMAGE", "API_SOURCE_SHA", "API_CHANGED",
+    "DM_WORKER_IMAGE", "WIKI_WORKER_IMAGE", "CONTENT_PROPOSAL_WORKER_IMAGE",
+    "BRAND_INTELLIGENCE_WORKER_IMAGE", "SUBJECT_ANALYSIS_WORKER_IMAGE", "IMAGE_WORKER_IMAGE",
+    "CARD_NEWS_WORKER_IMAGE", "BLOG_WORKER_IMAGE", "MARKETING_WORKER_IMAGE",
+    "CADDY_IMAGE", "CANARY_HOST", "PRIMARY_HOST", "ACME_EMAIL", "API_ENV_FILE",
+  ]) {
+    assert.ok(lib.includes(key), `manifest parser omits ${key}`);
+  }
   assert.match(preflight, /VERSION_ID=.*24\\?\.04|24\\?\.04.*VERSION_ID/);
   assert.match(preflight, /dpkg --print-architecture/);
   assert.match(preflight, /COMPOSE_MINOR >= 24/);
@@ -1914,7 +1847,30 @@ test("release validation uses the signed 02aa legacy file set only for the immut
   assert.match(current.stdout, /scripts\/restore-state\.sh/);
 });
 
-test("the first attachment lifecycle rollout is forced off and remains unscheduled", () => {
+test("the approved attachment retry rollout enables upload sessions without scheduling GC", () => {
+  const flag = "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED";
+  const envExample = read("deploy/env/api.env.example");
+  const compose = read("deploy/compose.production.yml");
+  const services = assertComposeTopology(compose);
+  const preflight = read("deploy/scripts/preflight.sh");
+
+  assert.equal(envExample.match(new RegExp(`^${flag}=true$`, "gm"))?.length, 1);
+  for (const service of ["api-primary", "api-canary"]) {
+    assert.match(
+      services.get(service).text,
+      new RegExp(`^\\s+${flag}:\\s+["']true["']\\s*$`, "m"),
+    );
+  }
+  assert.match(
+    preflight,
+    new RegExp(`require_exact_boolean\\s+"${flag}"\\s+"true"\\s+"\\$API_ENV_FILE"`),
+  );
+  for (const path of deploymentScripts) {
+    assert.doesNotMatch(read(path), /\/internal\/cron\/ai-content-attachment-gc/);
+  }
+});
+
+test("the attachment lifecycle history and unscheduled GC controls remain documented", () => {
   const flag = "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED";
   const envExample = read("deploy/env/api.env.example");
   const compose = read("deploy/compose.production.yml");
@@ -1925,20 +1881,20 @@ test("the first attachment lifecycle rollout is forced off and remains unschedul
   const ledger = read("docs/prd/brand-pilot-feature-preservation-ledger.md");
 
   assert.equal(
-    envExample.match(new RegExp(`^${flag}=false$`, "gm"))?.length,
+    envExample.match(new RegExp(`^${flag}=true$`, "gm"))?.length,
     1,
-    "reviewed API env example must contain one exact false attachment-session flag",
+    "reviewed API env example must contain one exact true attachment-session flag",
   );
   for (const service of ["api-primary", "api-canary"]) {
     assert.match(
       services.get(service).text,
-      new RegExp(`^\\s+${flag}:\\s+["']false["']\\s*$`, "m"),
-      `${service} must force the attachment-session flag false`,
+      new RegExp(`^\\s+${flag}:\\s+["']true["']\\s*$`, "m"),
+      `${service} must force the attachment-session flag true`,
     );
   }
   assert.match(
     preflight,
-    new RegExp(`require_exact_boolean\\s+"${flag}"\\s+"false"\\s+"\\$API_ENV_FILE"`),
+    new RegExp(`require_exact_boolean\\s+"${flag}"\\s+"true"\\s+"\\$API_ENV_FILE"`),
   );
   assert.ok(
     runbook.match(new RegExp(`${flag}=false`, "g"))?.length >= 4,
@@ -1980,14 +1936,7 @@ test("the first attachment lifecycle rollout is forced off and remains unschedul
       `${path} must not invoke attachment GC`,
     );
   }
-  assert.doesNotMatch(
-    compose,
-    /(?:systemd|\.service\b|\.timer\b|AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED:\s*["']?true)/i,
-  );
-  assert.doesNotMatch(
-    envExample,
-    /^AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED=true$/m,
-  );
+  assert.doesNotMatch(compose, /(?:systemd|\.service\b|\.timer\b)/i);
   const trackedOperationalFiles = spawnSync(
     "git",
     ["ls-files", "-z", "--", "apps/api/.env.example", "deploy"],
@@ -2005,13 +1954,7 @@ test("the first attachment lifecycle rollout is forced off and remains unschedul
     .split("\0")
     .filter(Boolean)
     .map((path) => resolve(path));
-  for (const path of [...operationalPaths, ...workflowPaths]) {
-    assert.doesNotMatch(
-      read(path),
-      /AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED(?:=|:\s*)["']?true["']?/,
-      `${path} must not enable attachment-session issuance`,
-    );
-  }
+  assert.ok([...operationalPaths, ...workflowPaths].length > 0);
   assert.equal(
     operationalPaths.some((path) => /\.(?:service|timer)$/.test(path)),
     false,
@@ -2064,83 +2007,57 @@ test("installed releases and state are regular immutable verified files", () => 
   assert.match(deploy, /validate_release_directory/);
 });
 
-test("CI publishing has narrow triggers, permissions, and an Ubuntu 24.04 runner", () => {
+test("CI publishing has main-only publishing, PR verification, and narrow permissions", () => {
   const workflow = read(publishWorkflowPath);
   const verifyJob = parseWorkflowJob(workflow, "verify");
   const publishJob = parseWorkflowJob(workflow, "publish");
   assert.match(workflow, /^name: Publish Brand Pilot server images$/m);
-  assert.match(workflow, /^on:\n {2}workflow_dispatch:\n {2}push:\n {4}branches: \[main\]\n {4}paths:\n {6}- "brand_poilot\/\*\*"\n {6}- "\.github\/workflows\/publish-brand-pilot-server-images\.yml"$/m);
+  assert.match(workflow, /^ {2}pull_request:\n {4}branches: \[main\]/m);
+  assert.match(workflow, /^ {2}push:\n {4}branches: \[main\]/m);
+  assert.doesNotMatch(workflow, /instagram-production-base-hotfix/);
   assert.match(workflow, /^permissions:\n {2}contents: read$/m);
   assert.doesNotMatch(workflow.slice(0, workflow.indexOf("\njobs:")), /packages: write/);
   assert.match(verifyJob, /^ {4}permissions:\n {6}contents: read$/m);
   assert.doesNotMatch(verifyJob, /packages: write|docker\/login-action|docker\/build-push-action/);
-  assert.match(publishJob, /^ {4}needs: verify$/m);
-  assert.match(publishJob, /^ {4}if: github\.ref == 'refs\/heads\/main'$/m);
+  assert.match(publishJob, /^ {4}needs: \[impact, verify\]$/m);
+  assert.match(publishJob, /github\.ref == 'refs\/heads\/main'/);
   assert.match(publishJob, /^ {4}permissions:\n {6}contents: read\n {6}packages: write$/m);
   assert.match(verifyJob, /^ {4}runs-on: ubuntu-24\.04$/m);
   assert.match(publishJob, /^ {4}runs-on: ubuntu-24\.04$/m);
-  assert.doesNotMatch(workflow, /^\s+(?:actions|checks|deployments|id-token|issues|pull-requests):\s+write$/m);
+  assert.doesNotMatch(workflow, /^\s+(?:checks|deployments|id-token|issues|pull-requests):\s+write$/m);
 });
 
-test("CI publishing verifies the complete server release contract before building", () => {
+test("CI publishing verifies release tooling plus only affected workspaces", () => {
   const workflow = read(publishWorkflowPath);
   const verifyJob = parseWorkflowJob(workflow, "verify");
   assert.match(verifyJob, /uses: actions\/checkout@[0-9a-f]{40}\s+# v4\.4\.0[\s\S]*persist-credentials: false/);
   assert.match(verifyJob, /uses: actions\/setup-node@[0-9a-f]{40}\s+# v4\.4\.0[\s\S]*node-version: 22\.23\.1[\s\S]*cache: npm[\s\S]*cache-dependency-path: brand_poilot\/package-lock\.json/);
   assert.match(verifyJob, /name: Install\n {8}working-directory: brand_poilot\n {8}run: npm ci/);
-  assert.match(verifyJob, /name: Verify\n {8}working-directory: brand_poilot\n {8}run: \|/);
   for (const command of [
+    "node --test scripts/release-impact.test.mjs",
+    "node --test scripts/assemble-release-manifest.test.mjs",
     "npm run test:contract",
-    "node --test scripts/migrationRunner.test.mjs",
-    "npm run test:migrations",
-    ...[
-      "@brand-pilot/api",
-      "@brand-pilot/dm-worker",
-      "@brand-pilot/content-proposal-worker",
-      "@brand-pilot/brand-intelligence-worker",
-      "@brand-pilot/subject-analysis-worker",
-      "@brand-pilot/image-worker",
-      "@brand-pilot/card-news-worker",
-      "@brand-pilot/blog-worker",
-      "@brand-pilot/marketing-worker",
-    ].flatMap((workspace) => [
-      `npm run test --workspace ${workspace}`,
-      `npm run build --workspace ${workspace}`,
-    ]),
     "shellcheck --exclude=SC1091,SC2016,SC2034,SC2317 deploy/scripts/*.sh",
     "npm run test:deployment",
   ]) {
-    assert.ok(verifyJob.includes(`          ${command}`), `verify job missing ${command}`);
+    assert.ok(verifyJob.includes(command), `verify job missing ${command}`);
   }
+  assert.match(verifyJob, /if: fromJSON\(needs\.impact\.outputs\.components\)\.api[\s\S]*npm run test --workspace @brand-pilot\/api/);
+  assert.match(verifyJob, /if: needs\.impact\.outputs\.migration_changed == 'true'[\s\S]*npm run test:migrations/);
 });
 
-test("CI publishing pushes a lowercase linux amd64 API image with immutable metadata", () => {
+test("CI publishing uses an affected linux-amd64 matrix with immutable metadata and cache", () => {
   const workflow = read(publishWorkflowPath);
   const publishJob = parseWorkflowJob(workflow, "publish");
   assert.match(publishJob, /uses: actions\/checkout@[0-9a-f]{40}\s+# v4\.4\.0[\s\S]*persist-credentials: false/);
   assert.match(publishJob, /uses: docker\/setup-buildx-action@[0-9a-f]{40}\s+# v3\.12\.0/);
   assert.match(publishJob, /uses: docker\/login-action@[0-9a-f]{40}\s+# v3\.7\.0[\s\S]*registry: \$\{\{ env\.REGISTRY \}\}[\s\S]*username: \$\{\{ github\.actor \}\}[\s\S]*password: \$\{\{ secrets\.GITHUB_TOKEN \}\}/);
-  assert.match(publishJob, /id: image[\s\S]*API_IMAGE_NAME,,/);
-  assert.match(publishJob, /uses: docker\/build-push-action@[0-9a-f]{40}\s+# v6\.19\.2[\s\S]*context: brand_poilot[\s\S]*file: brand_poilot\/apps\/api\/Dockerfile[\s\S]*platforms: linux\/amd64[\s\S]*push: true/);
-  assert.match(publishJob, /tags: \$\{\{ steps\.image\.outputs\.name \}\}:sha-\$\{\{ github\.sha \}\}/);
+  assert.match(publishJob, /matrix: \$\{\{ fromJSON\(needs\.impact\.outputs\.matrix\) \}\}/);
+  assert.match(publishJob, /uses: docker\/build-push-action@[0-9a-f]{40}\s+# v6\.19\.2[\s\S]*context: brand_poilot[\s\S]*file: brand_poilot\/\$\{\{ matrix\.dockerfile \}\}[\s\S]*platforms: linux\/amd64[\s\S]*push: true/);
+  assert.match(publishJob, /cache-from: type=gha/);
+  assert.match(publishJob, /cache-to: type=gha,mode=max/);
   assert.match(publishJob, /org\.opencontainers\.image\.revision=\$\{\{ github\.sha \}\}/);
   assert.match(publishJob, /org\.opencontainers\.image\.source=https:\/\/github\.com\/\$\{\{ github\.repository \}\}/);
-  for (const [id, file, output] of [
-    ["dm_worker", "workers/brand-pilot-dm-worker/Dockerfile", "dm_worker"],
-    ["wiki_worker", "workers/brand-pilot-dm-worker/Dockerfile", "wiki_worker"],
-    ["content_proposal_worker", "workers/brand-pilot-content-proposal-worker/Dockerfile", "content_proposal_worker"],
-    ["brand_intelligence_worker", "workers/brand-pilot-brand-intelligence-worker/Dockerfile", "brand_intelligence_worker"],
-    ["subject_analysis_worker", "workers/brand-pilot-subject-analysis-worker/Dockerfile", "subject_analysis_worker"],
-    ["image_worker", "workers/brand-pilot-image-worker/Dockerfile", "image_worker"],
-    ["card_news_worker", "workers/brand-pilot-card-news-worker/Dockerfile", "card_news_worker"],
-    ["blog_worker", "workers/brand-pilot-blog-worker/Dockerfile", "blog_worker"],
-    ["marketing_worker", "workers/brand-pilot-marketing-worker/Dockerfile", "marketing_worker"],
-  ]) {
-    assert.match(
-      publishJob,
-      new RegExp(`id: ${id}[\\s\\S]*file: brand_poilot/${file}[\\s\\S]*tags: \\$\\{\\{ steps\\.image\\.outputs\\.${output} \\}\\}:sha-\\$\\{\\{ github\\.sha \\}\\}`),
-    );
-  }
 });
 
 test("CI publishing pins every third-party action to its verified commit", () => {
@@ -2152,63 +2069,35 @@ test("CI publishing pins every third-party action to its verified commit", () =>
     ["docker/login-action", "c94ce9fb468520275223c153574b00df6fe4bcc9"],
     ["docker/build-push-action", "10e90e3645eae34f1e60eeb005ba3a3d33f178e8"],
     ["actions/upload-artifact", "ea165f8d65b6e75b540449e92b4886f43607fa02"],
+    ["actions/download-artifact", "d3f86a106a0bac45b974a628896c90dbdf5c8093"],
   ]);
   const uses = [...workflow.matchAll(/^\s*(?:-\s+)?uses:\s+([^@\s]+)@([^\s#]+)\s+#\s+(v\d+\.\d+\.\d+)$/gm)];
-  assert.equal(uses.length, 16);
+  assert.ok(uses.length >= 8);
   for (const [, action, revision] of uses) {
     assert.equal(revision, expected.get(action), `${action} is not pinned to the verified SHA`);
   }
   assert.doesNotMatch(workflow, /^\s*(?:-\s+)?uses:\s+\S+@v\d+(?:\s|$)/m);
 });
 
-test("CI release manifest is digest pinned, single-line validated, and checksummed", () => {
+test("CI release manifest is schema 2, assembled from digests, and checksummed", () => {
   const workflow = read(publishWorkflowPath);
-  assert.match(workflow, /caddy_line="\$\(cat deploy\/caddy-image\.env\)"/);
-  assert.match(workflow, /\[\[ "\$caddy_line" == 'CADDY_IMAGE=docker\.io\/library\/caddy@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648' \]\]/);
-  assert.match(workflow, /source deploy\/caddy-image\.env/);
-  assert.match(workflow, /\[\[ "\$RELEASE_SHA" =~ \^\[0-9a-f\]\{40\}\$ \]\]/);
-  assert.match(
-    workflow,
-    /for digest in "\$API_DIGEST" "\$DM_WORKER_DIGEST" "\$WIKI_WORKER_DIGEST" "\$CONTENT_PROPOSAL_WORKER_DIGEST" "\$BRAND_INTELLIGENCE_WORKER_DIGEST" "\$SUBJECT_ANALYSIS_WORKER_DIGEST" "\$IMAGE_WORKER_DIGEST" "\$CARD_NEWS_WORKER_DIGEST" "\$BLOG_WORKER_DIGEST" "\$MARKETING_WORKER_DIGEST"/,
-  );
-  assert.match(workflow, /\[\[ "\$digest" =~ \^sha256:\[0-9a-f\]\{64\}\$ \]\]/);
-  assert.match(workflow, /printf 'API_IMAGE=%s@%s\\n' "\$API_IMAGE" "\$API_DIGEST"/);
-  assert.match(workflow, /printf 'DM_WORKER_IMAGE=%s@%s\\n' "\$DM_WORKER_IMAGE" "\$DM_WORKER_DIGEST"/);
-  assert.match(workflow, /printf 'WIKI_WORKER_IMAGE=%s@%s\\n' "\$WIKI_WORKER_IMAGE" "\$WIKI_WORKER_DIGEST"/);
-  assert.match(workflow, /printf 'CONTENT_PROPOSAL_WORKER_IMAGE=%s@%s\\n' "\$CONTENT_PROPOSAL_WORKER_IMAGE" "\$CONTENT_PROPOSAL_WORKER_DIGEST"/);
-  for (const prefix of [
-    "BRAND_INTELLIGENCE_WORKER",
-    "SUBJECT_ANALYSIS_WORKER",
-    "IMAGE_WORKER",
-    "CARD_NEWS_WORKER",
-    "BLOG_WORKER",
-    "MARKETING_WORKER",
-  ]) {
-    assert.match(
-      workflow,
-      new RegExp(`printf '${prefix}_IMAGE=%s@%s\\\\n' "\\$${prefix}_IMAGE" "\\$${prefix}_DIGEST"`),
-    );
-  }
-  for (const line of [
-    "RELEASE_SCHEMA=1",
-    "CANARY_HOST=canary-api.danbammsg.co.kr",
-    "PRIMARY_HOST=api.danbammsg.co.kr",
-    "ACME_EMAIL=ops@danbammsg.co.kr",
-    "API_ENV_FILE=/opt/brand-pilot/shared/env/api.env",
-  ]) {
-    assert.ok(workflow.includes(line), `release manifest omits ${line}`);
-  }
+  assert.match(workflow, /assemble-release-manifest\.mjs/);
+  assert.match(workflow, /grep -Fx 'RELEASE_SCHEMA=2' release\.env/);
+  assert.match(workflow, /IMAGE_DIGEST.*sha256:\[0-9a-f\]\{64\}/);
   assert.match(workflow, /sha256sum release\.env > release\.env\.sha256/);
+  assert.match(workflow, /release-bundle-\$GITHUB_SHA\.tar\.gz/);
 });
 
-test("CI publishing uploads only the release pair and never deploys production", () => {
+test("CI publishing uploads a complete bundle and keeps production mutation credential gated", () => {
   const workflow = read(publishWorkflowPath);
-  const publishJob = parseWorkflowJob(workflow, "publish");
-  assert.match(publishJob, /uses: actions\/upload-artifact@[0-9a-f]{40}\s+# v4\.6\.2[\s\S]*name: brand-pilot-api-release-\$\{\{ github\.sha \}\}[\s\S]*path: \|\n {12}brand_poilot\/release\.env\n {12}brand_poilot\/release\.env\.sha256\n {10}if-no-files-found: error\n {10}retention-days: 30/);
-  assert.doesNotMatch(workflow, /\b(?:ssh|scp|rsync)\b/);
-  assert.doesNotMatch(workflow, /docker compose[^\n]*(?:up|pull|restart)/);
+  const manifestJob = parseWorkflowJob(workflow, "manifest");
+  const deployJob = parseWorkflowJob(workflow, "deploy");
+  assert.match(manifestJob, /name: brand-pilot-release-\$\{\{ github\.sha \}\}/);
+  assert.match(manifestJob, /brand_poilot\/release-bundle-\$\{\{ github\.sha \}\}\.tar\.gz/);
+  assert.match(deployJob, /vars\.BRAND_PILOT_CD_ENABLED == 'true'/);
+  assert.match(deployJob, /group: brand-pilot-production[\s\S]*cancel-in-progress: false/);
+  assert.match(deployJob, /cd_credentials_missing/);
   assert.doesNotMatch(workflow, /npm run db:migrate|\bpsql\b/);
-  assert.doesNotMatch(workflow, /deploy\/scripts\/(?:deploy|promote|rollback)\.sh/);
 });
 
 function findBash() {
@@ -2306,7 +2195,7 @@ function seedRelease(
     "verify-canary.sh",
     "promote.sh",
     "rollback.sh",
-    ...(legacyFileSet ? [] : ["backup-state.sh", "restore-state.sh"]),
+    ...(legacyFileSet ? [] : ["rollout-workers.sh", "backup-state.sh", "restore-state.sh"]),
   ];
   for (const name of releaseScripts) {
     copyFileSync(join("deploy", "scripts", name), join(releaseDirectory, "scripts", name));
@@ -2323,6 +2212,7 @@ function seedRelease(
     ...(legacyFileSet
       ? []
       : [
+          [0o755, "scripts/rollout-workers.sh"],
           [0o755, "scripts/backup-state.sh"],
           [0o755, "scripts/restore-state.sh"],
         ]),

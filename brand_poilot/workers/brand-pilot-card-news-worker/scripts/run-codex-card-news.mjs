@@ -8,6 +8,8 @@ export { codexChildEnv, codexSpawnOptions };
 
 export function buildCodexArgs(outputDir) {
   return [
+    "--model",
+    "gpt-5.6-terra",
     "--strict-config",
     "-c",
     'default_permissions="worker"',

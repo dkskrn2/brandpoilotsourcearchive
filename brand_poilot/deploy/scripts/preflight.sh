@@ -158,7 +158,7 @@ status_ok "shared_env_files"
 
 require_exact_boolean "LOCAL_SCHEDULER_ENABLED" "false" "$API_ENV_FILE"
 require_exact_boolean "INSTAGRAM_PUBLISH_ENABLED" "true" "$API_ENV_FILE"
-require_exact_boolean "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED" "false" "$API_ENV_FILE"
+require_exact_boolean "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED" "true" "$API_ENV_FILE"
 require_exact_boolean "AUTOMATED_CONTENT_ENABLED" "false" "$API_ENV_FILE"
 require_exact_boolean "CONTENT_PROPOSALS_ENABLED" "false" "$API_ENV_FILE"
 require_exact_boolean "DM_WORKERS_ENABLED" "false" "$API_ENV_FILE"
@@ -206,8 +206,9 @@ for release_image_key in API_IMAGE "${WORKER_IMAGE_KEYS[@]}"; do
     fail "release_image_pull_failed"
   verify_release_image_revision \
     "$release_image" \
-    "${RELEASE_MANIFEST[RELEASE_SHA]}"
+    "$(release_image_source_revision "$release_image_key")"
 done
+status_ok "component_source_revision"
 status_ok "release_image_revisions"
 
 CODEX_WORKER_IMAGE_KEYS=(

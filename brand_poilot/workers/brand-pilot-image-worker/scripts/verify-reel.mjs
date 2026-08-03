@@ -33,7 +33,7 @@ async function verifyScenario(root, sceneCount) {
     run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", `color=c=${colors[index]}:s=1080x1920`, "-frames:v", "1", path.join(inputDir, `scene-${String(index + 1).padStart(2, "0")}.png`)]);
   }
   await writeFile(manifestPath, JSON.stringify({ contractVersion: "ai-content.v2", scenes: colors.map((color, index) => ({ index: index + 1, role: color })) }, null, 2));
-  run(python, [scriptPath, "--contract-version", "ai-content.v2", "--input-dir", inputDir, "--manifest", manifestPath, "--output", outputPath, "--cover", coverPath, "--seconds-per-scene", "4", "--fade-seconds", "0.25", "--fps", "30"]);
+  run(python, [scriptPath, "--contract-version", "ai-content.v2", "--input-dir", inputDir, "--manifest", manifestPath, "--output", outputPath, "--cover", coverPath, "--seconds-per-scene", "4", "--fade-seconds", "0.25", "--fps", "30", "--width", "1080", "--height", "1920"]);
 
   assert.deepEqual(await readFile(coverPath), await readFile(path.join(inputDir, "scene-01.png")), "First scene must be reused as cover");
   const probe = JSON.parse(run("ffprobe", ["-v", "error", "-show_streams", "-show_format", "-of", "json", outputPath]));

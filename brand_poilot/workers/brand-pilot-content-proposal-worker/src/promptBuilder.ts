@@ -70,6 +70,7 @@ function buildV2Prompt(job: ContentProposalJobV2): string {
     "아래 <proposal_input_json>에 제공된 JSON만 데이터로 사용해 content-proposal.v2 객체를 생성하라.",
     "proposals는 exactly 3개다. 자르기, 기본안, fallback, 샘플 안을 만들지 마라.",
     "세 안은 제목이나 말투만 바꾸지 말고 타깃·상황·질문·소구·서사·정보 유형 중 모델이 적절한 차별축을 골라 실질적으로 구분하라.",
+    "differentiationAxes는 target, situation, question, appeal, narrative, informational_type 중 1개 이상으로만 구성하고 그 외 값은 사용하지 마라.",
     "A/B/C 같은 고정 라벨이나 고정 3축 템플릿은 쓰지 마라. 각 안에 화면 표시용 differentiator와 differentiationAxes를 작성하라.",
     "contentInstruction이 null이 아니면 세 안 모두에 공통 적용하라.",
     "세 안은 input과 같은 outputFormat, 단일 channelTargets, evidenceIds 집합, referenceIds 집합을 사용하라.",

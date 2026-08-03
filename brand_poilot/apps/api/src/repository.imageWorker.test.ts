@@ -138,6 +138,8 @@ describe("image worker completion", () => {
       "image_render_job_attempts_exhausted",
       "image_render_job_attempts_exhausted"
     ]);
+    expect(terminalOutput?.[0]).toContain("'code', $2::text");
+    expect(terminalOutput?.[0]).toContain("'message', $3::text");
     expect(terminalOutput?.[0]).toContain("status = 'generation_failed'");
     const outputIndex = query.mock.calls.findIndex(([sql]) => String(sql).includes("update channel_outputs"));
     const claimIndex = query.mock.calls.findIndex(([sql]) => String(sql).includes("update jobs job"));
@@ -299,7 +301,7 @@ describe("image worker completion", () => {
     ]);
     expect(terminalOutput?.[0]).toContain("status = 'generation_failed'");
     expect(terminalOutput?.[0]).toContain("block_reasons ? 'generation_failed'");
-    expect(terminalOutput?.[0]).toContain("jsonb_build_object('code', $2, 'message', $3, 'failedAt', now())");
+    expect(terminalOutput?.[0]).toContain("jsonb_build_object('code', $2::text, 'message', $3::text, 'failedAt', now())");
     expect(clientQuery.mock.calls.some(([sql]) => String(sql).includes("insert into publish_queue"))).toBe(false);
   });
 
@@ -469,7 +471,7 @@ describe("image worker failure", () => {
     const outputUpdate = findSqlCall(clientQuery.mock.calls, (sql) => sql.includes("update channel_outputs"));
     expect(String(outputUpdate?.[0])).toContain("status = 'generation_failed'");
     expect(String(outputUpdate?.[0])).toContain("'{generationError}'");
-    expect(String(outputUpdate?.[0])).toContain("jsonb_build_object('code', $2, 'message', $3, 'failedAt', now())");
+    expect(String(outputUpdate?.[0])).toContain("jsonb_build_object('code', $2::text, 'message', $3::text, 'failedAt', now())");
     expect(String(outputUpdate?.[0])).toContain("block_reasons ? 'generation_failed'");
     expect(outputUpdate?.[1]?.[0]).toEqual(["output-1"]);
     expect(outputUpdate?.[1]?.[1]).toBe("image_render_failed");

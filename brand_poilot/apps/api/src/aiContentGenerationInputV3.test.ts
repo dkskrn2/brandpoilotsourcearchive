@@ -228,6 +228,13 @@ describe("ContentOrchestrationV2", () => {
     expect(parsed.outputSettings.aspectRatio).toBe("1:1");
   });
 
+  it("rejects a non-square card-news request", () => {
+    expect(() => parseContentOrchestrationV2({
+      ...orchestration(),
+      outputSettings: { ...requestSettings(), aspectRatio: "4:5" },
+    })).toThrow("content_orchestration_v2_invalid");
+  });
+
   it("rejects the stale ratio settings alias", () => {
     const { aspectRatio: _aspectRatio, ...settingsWithoutAspectRatio } = requestSettings();
 
@@ -499,6 +506,17 @@ describe("snapshot and proposal contracts", () => {
 });
 
 describe("final input and image package contracts", () => {
+  it("keeps existing non-square card-news snapshots readable for retry compatibility", () => {
+    expect(parseContentGenerationInputV3({
+      ...finalInput(),
+      outputSettings: { ...finalSettings(), aspectRatio: "4:5" },
+    }).outputSettings.aspectRatio).toBe("4:5");
+    expect(parseImageGenerationPackageV1({
+      ...imagePackage(),
+      aspectRatio: "4:5",
+    }).aspectRatio).toBe("4:5");
+  });
+
   it("accepts only the narrow post-selection draft and start contracts", () => {
     const draft = {
       contractVersion: "content-finalization-draft.v2",

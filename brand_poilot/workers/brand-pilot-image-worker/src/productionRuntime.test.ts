@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +7,13 @@ import { describe, expect, it } from "vitest";
 const workerRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 describe("production image worker runtime", () => {
+  it("ships syntactically valid ai-content asset runner JavaScript", () => {
+    const runner = path.join(workerRoot, "scripts", "run-codex-ai-content-asset.mjs");
+    const result = spawnSync(process.execPath, ["--check", runner], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("emits runnable JavaScript and loads only compiled runtime modules", async () => {
     const [packageSource, runnerSource, textRunnerSource, rendererSource, indexSource, shutdownSource] = await Promise.all([
       readFile(path.join(workerRoot, "package.json"), "utf8"),
@@ -49,6 +57,7 @@ describe("production image worker runtime", () => {
     expect(indexSource).toContain("createAiContentShutdownCoordinator");
     expect(indexSource).toContain("process.kill(process.pid, signal)");
     expect(indexSource).toContain("waitForShutdownOrTimeout");
+    expect(indexSource).toContain('process.env.IMAGE_MODEL ?? "gpt-image-2"');
     expect(indexSource).toMatch(/process\.removeListener\("SIGTERM"/);
     expect(indexSource).toMatch(/process\.removeListener\("SIGINT"/);
   });
@@ -72,6 +81,7 @@ describe("production image worker runtime", () => {
     expect(runnerSource).not.toMatch(/fixture|OPENAI_API_KEY|external image api/i);
     expect(runnerSource).toContain("rm(path.join(imagegenOutputDir, ownedSessionId)");
     expect(skillSource).toContain("작업 하나당 정확히 PNG 한 장");
+    expect(skillSource).toContain("gpt-image-2");
     expect(skillSource).toContain("1:1");
     expect(skillSource).toContain("4:5");
     expect(skillSource).toContain("16:9");
