@@ -80,7 +80,7 @@ export function contentGenerationFieldError(error: unknown): ContentGenerationFi
   if (errorCode.includes("output_format") || errorCode.includes("type_mapping")) {
     return { phase: "setup", field: "outputFormat", errorCode };
   }
-  if (errorCode.includes("subject")) {
+  if (errorCode.includes("subject") || errorCode.includes("seed")) {
     return { phase: "setup", field: "subject", errorCode };
   }
   if (errorCode.includes("family")) {
