@@ -240,7 +240,7 @@ describe("Threads text worker repository", () => {
     const outputUpdate = findSqlCall(clientQuery.mock.calls, (sql) => sql.includes("update channel_outputs"));
     expect(String(outputUpdate?.[0])).toContain("status = 'generation_failed'");
     expect(String(outputUpdate?.[0])).toContain("'{generationError}'");
-    expect(String(outputUpdate?.[0])).toContain("jsonb_build_object('code', $2, 'message', $3, 'failedAt', now())");
+    expect(String(outputUpdate?.[0])).toContain("jsonb_build_object('code', $2::text, 'message', $3::text, 'failedAt', now())");
     expect(String(outputUpdate?.[0])).toContain("block_reasons ? 'generation_failed'");
     expect(outputUpdate?.[1]?.[0]).toEqual(["output-1"]);
     expect(outputUpdate?.[1]?.[1]).toBe("text_render_failed");
