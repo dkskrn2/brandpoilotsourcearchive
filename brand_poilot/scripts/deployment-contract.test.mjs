@@ -1802,7 +1802,7 @@ test("release manifests are parsed without source or eval and preflight is fail-
   assert.match(preflight, /config --quiet/);
 });
 
-test("release validation uses the signed 02aa legacy file set only for the immutable 02aa release", () => {
+test("release validation accepts signed schema-1 layouts while requiring the full candidate layout", () => {
   const bash = findBash();
   assert.ok(bash, "Bash is required for the legacy release contract");
   const run = (sha) => spawnSync(bash, [
@@ -1835,16 +1835,17 @@ test("release validation uses the signed 02aa legacy file set only for the immut
   );
   assert.match(
     lib,
-    /validate_state_release_directory\(\)[\s\S]*validation_role="candidate"[\s\S]*"\$release_sha" == "\$LEGACY_RELEASE_SHA"[\s\S]*validation_role="legacy-current"/,
+    /validate_state_release_directory\(\)[\s\S]*validation_role="candidate"[\s\S]*RELEASE_SCHEMA=1[\s\S]*validation_role="legacy-current"/,
   );
+  assert.match(lib, /release-integrity\.sha256/);
+  assert.match(lib, /scripts\/rollout-workers\.sh[\s\S]*scripts\/backup-state\.sh[\s\S]*scripts\/restore-state\.sh/);
   assert.match(
     lib,
     /validate_state_release_directory "\$root" "\$from_current"[\s\S]*validate_state_release_directory "\$root" "\$from_candidate"[\s\S]*validate_state_release_directory "\$root" "\$from_previous"/,
   );
   const current = run("95a975bf263756fbc13fb6ac16b1a3962e303d8e");
   assert.equal(current.status, 0, current.stderr);
-  assert.match(current.stdout, /scripts\/backup-state\.sh/);
-  assert.match(current.stdout, /scripts\/restore-state\.sh/);
+  assert.doesNotMatch(current.stdout, /rollout-workers\.sh|backup-state\.sh|restore-state\.sh/);
 });
 
 test("the approved attachment retry rollout enables upload sessions without scheduling GC", () => {

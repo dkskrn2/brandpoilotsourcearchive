@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -96,6 +96,43 @@ test("bash parser accepts schema 2 and returns each component source revision", 
     ? path.replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`).replaceAll("\\", "/")
     : path;
   const result = spawnSync(bash, ["-lc", `source deploy/scripts/lib.sh; parse_release_manifest \"$1\"; [[ \"$(release_image_source_revision API_IMAGE)\" == \"${sha}\" ]]; release_image_changed API_IMAGE`, "schema2-test", toBashPath(manifestPath)], {
+    cwd: resolve("."),
+    encoding: "utf8",
+  });
+  rmSync(directory, { recursive: true, force: true });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("legacy-current validation accepts any immutable pre-rollout release", (t) => {
+  const bash = process.platform === "win32"
+    ? ["C:\\Program Files\\Git\\bin\\bash.exe", "C:\\Program Files\\Git\\usr\\bin\\bash.exe"].find(existsSync)
+    : ["/usr/bin/bash", "/bin/bash"].find(existsSync);
+  if (!bash) return t.skip("bash unavailable");
+
+  const directory = mkdtempSync(join(tmpdir(), "brand-pilot-legacy-current-"));
+  const releaseSha = "a".repeat(40);
+  const releaseDirectory = join(directory, "releases", releaseSha);
+  mkdirSync(releaseDirectory, { recursive: true });
+  writeFileSync(join(releaseDirectory, "release.env"), "RELEASE_SCHEMA=1\n", { mode: 0o600 });
+  writeFileSync(join(releaseDirectory, "release-integrity.sha256"), [
+    `${"b".repeat(64)}  755  scripts/backup-state.sh`,
+    `${"c".repeat(64)}  755  scripts/restore-state.sh`,
+    "",
+  ].join("\n"), { mode: 0o600 });
+  const toBashPath = (path) => process.platform === "win32"
+    ? path.replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`).replaceAll("\\", "/")
+    : path;
+  const bashReleaseDirectory = toBashPath(releaseDirectory);
+  const bashRoot = toBashPath(directory);
+  const result = spawnSync(bash, ["-lc", [
+    "source deploy/scripts/lib.sh",
+    `specs=\"$(release_file_specs '${bashReleaseDirectory}' legacy-current)\"`,
+    "[[ \"$specs\" != *rollout-workers.sh* ]]",
+    "[[ \"$specs\" == *backup-state.sh* ]]",
+    "[[ \"$specs\" == *restore-state.sh* ]]",
+    "validate_release_directory(){ [[ \"$2\" == legacy-current ]]; }",
+    `validate_state_release_directory '${bashRoot}' '${releaseSha}'`,
+  ].join("; ")], {
     cwd: resolve("."),
     encoding: "utf8",
   });
