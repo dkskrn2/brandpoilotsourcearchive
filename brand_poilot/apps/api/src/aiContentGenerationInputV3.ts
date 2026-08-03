@@ -247,7 +247,10 @@ function validateOutputChannel(output: ContentOutputFormatV2, channel: ContentCh
   if ((output === "blog") !== (channel === "blog_export")) fail();
 }
 
-function parseOutputSettings(value: unknown): ContentOutputSettingsV2 {
+function parseOutputSettings(
+  value: unknown,
+  options: { requireSquareCardNews?: boolean } = {},
+): ContentOutputSettingsV2 {
   const source = exactObject(value, ["outputFormat", "channelTargets", "aspectRatio", "outputCount"]);
   const result: ContentOutputSettingsV2 = {
     outputFormat: outputFormat(source.outputFormat),
@@ -257,7 +260,7 @@ function parseOutputSettings(value: unknown): ContentOutputSettingsV2 {
   };
   validateOutputChannel(result.outputFormat, result.channelTargets[0]);
   if (result.outputFormat === "blog" && result.aspectRatio !== null) fail();
-  if (result.outputFormat === "card_news" && result.aspectRatio !== "1:1") fail();
+  if (options.requireSquareCardNews && result.outputFormat === "card_news" && result.aspectRatio !== "1:1") fail();
   if (result.outputFormat === "reel" && result.aspectRatio !== "9:16") fail();
   if (result.outputFormat !== "blog" && result.aspectRatio === null) fail();
   return result;
@@ -280,7 +283,6 @@ function parseFinalOutputSettings(value: unknown): ContentGenerationOutputSettin
   };
   validateOutputChannel(result.outputFormat, result.channelTargets[0]);
   if (result.outputFormat === "blog" && result.aspectRatio !== null) fail();
-  if (result.outputFormat === "card_news" && result.aspectRatio !== "1:1") fail();
   if (result.outputFormat === "reel" && result.aspectRatio !== "9:16") fail();
   if (result.outputFormat !== "blog" && result.aspectRatio === null) fail();
   return result;
@@ -332,7 +334,7 @@ export function parseContentOrchestrationV2(value: unknown): ContentOrchestratio
     seed: parseSeed(source.seed),
     contentInstruction: nullableString(source.contentInstruction, 4_000),
     productId: source.productId === null ? null : uuid(source.productId),
-    outputSettings: parseOutputSettings(source.outputSettings),
+    outputSettings: parseOutputSettings(source.outputSettings, { requireSquareCardNews: true }),
   };
   if ((result.purpose === "informational") !== (result.productId === null)) fail();
   return result;
@@ -1014,7 +1016,6 @@ export function parseImageGenerationPackageV1(value: unknown): ImageGenerationPa
   const aspectRatio = parseAspectRatio(source.aspectRatio);
   const channelTargets = channelTuple(source.channelTargets);
   validateOutputChannel(parsedOutputFormat, channelTargets[0]);
-  if (parsedOutputFormat === "card_news" && aspectRatio !== "1:1") fail();
   if (parsedOutputFormat === "reel" && aspectRatio !== "9:16") fail();
   const references = boundedArray(source.references, 0, 5).map(parseReference);
   const brandStyleImages = boundedArray(source.brandStyleImages, 0, 5).map(parseStyleImage);

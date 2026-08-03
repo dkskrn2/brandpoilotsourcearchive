@@ -506,15 +506,15 @@ describe("snapshot and proposal contracts", () => {
 });
 
 describe("final input and image package contracts", () => {
-  it("rejects non-square card-news final inputs and image packages", () => {
-    expect(() => parseContentGenerationInputV3({
+  it("keeps existing non-square card-news snapshots readable for retry compatibility", () => {
+    expect(parseContentGenerationInputV3({
       ...finalInput(),
       outputSettings: { ...finalSettings(), aspectRatio: "4:5" },
-    })).toThrow("content_orchestration_v2_invalid");
-    expect(() => parseImageGenerationPackageV1({
+    }).outputSettings.aspectRatio).toBe("4:5");
+    expect(parseImageGenerationPackageV1({
       ...imagePackage(),
       aspectRatio: "4:5",
-    })).toThrow("content_orchestration_v2_invalid");
+    }).aspectRatio).toBe("4:5");
   });
 
   it("accepts only the narrow post-selection draft and start contracts", () => {
