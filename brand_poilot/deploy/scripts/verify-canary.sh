@@ -33,7 +33,7 @@ jq -e '
   .ok == true
   and .database == "ok"
   and .features.scheduler == "disabled"
-  and .features.publishing == "disabled"
+  and .features.publishing == "enabled"
   and .features.dm == "disabled"
 ' "$TMP_DIR/ready.json" >/dev/null || fail "canary_safe_flags_invalid"
 status_ok "health"
@@ -51,8 +51,9 @@ request_headers() {
 }
 
 request_headers "$ALLOWED_ORIGIN" "$TMP_DIR/allowed.headers"
-grep -Eiq "^access-control-allow-origin:[[:space:]]*${ALLOWED_ORIGIN//./\\.}\r?$" \
-  "$TMP_DIR/allowed.headers" || fail "canary_cors_allowed_origin_missing"
+tr -d '\r' < "$TMP_DIR/allowed.headers" \
+  | grep -Eiq "^access-control-allow-origin:[[:space:]]*${ALLOWED_ORIGIN//./\\.}$" \
+  || fail "canary_cors_allowed_origin_missing"
 status_ok "cors_allowed"
 
 request_headers "$EVIL_ORIGIN" "$TMP_DIR/evil.headers"
@@ -99,3 +100,16 @@ readonly_get "/brands/$CANARY_BRAND_ID/product-services" "product_services"
 readonly_get "/brands/$CANARY_BRAND_ID/wiki/status" "wiki"
 readonly_get "/brands/$CANARY_BRAND_ID/ai-content/usage" "generation_usage"
 readonly_get "/brands/$CANARY_BRAND_ID/channels/capabilities" "channel_capabilities"
+jq -e '
+  (map(select(.channel == "instagram"))) as $instagram
+  | ($instagram | length) == 1
+    and $instagram[0].enabled == true
+    and $instagram[0].connectionStatus == "connected"
+    and $instagram[0].readiness == "ready"
+    and $instagram[0].reasonCode == null
+    and (($instagram[0].generationFormats | index("card_news")) != null)
+    and (($instagram[0].publishModes | index("instagram_feed_single")) != null)
+    and (($instagram[0].publishModes | index("instagram_feed_carousel")) != null)
+' "$TMP_DIR/channel_capabilities.json" >/dev/null ||
+  fail "canary_instagram_capability_invalid"
+status_ok "instagram_capability"

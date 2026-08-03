@@ -156,23 +156,12 @@ require_file_mode_600 "$BLOG_WORKER_1_ENV_FILE" "bpdeploy"
 require_file_mode_600 "$MARKETING_WORKER_1_ENV_FILE" "bpdeploy"
 status_ok "shared_env_files"
 
-require_exact_false() {
-  local key="$1"
-  local file="$2"
-  local exact_count
-  local key_count
-  exact_count="$(grep -Ec "^${key}=false$" "$file" || true)"
-  key_count="$(grep -Ec "^${key}=" "$file" || true)"
-  [[ "$exact_count" == "1" && "$key_count" == "1" ]] || fail "safe_runtime_flag_invalid"
-  status_ok "$key"
-}
-
-require_exact_false "LOCAL_SCHEDULER_ENABLED" "$API_ENV_FILE"
-require_exact_false "INSTAGRAM_PUBLISH_ENABLED" "$API_ENV_FILE"
-require_exact_false "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED" "$API_ENV_FILE"
-require_exact_false "AUTOMATED_CONTENT_ENABLED" "$API_ENV_FILE"
-require_exact_false "CONTENT_PROPOSALS_ENABLED" "$API_ENV_FILE"
-require_exact_false "DM_WORKERS_ENABLED" "$API_ENV_FILE"
+require_exact_boolean "LOCAL_SCHEDULER_ENABLED" "false" "$API_ENV_FILE"
+require_exact_boolean "INSTAGRAM_PUBLISH_ENABLED" "true" "$API_ENV_FILE"
+require_exact_boolean "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED" "false" "$API_ENV_FILE"
+require_exact_boolean "AUTOMATED_CONTENT_ENABLED" "false" "$API_ENV_FILE"
+require_exact_boolean "CONTENT_PROPOSALS_ENABLED" "false" "$API_ENV_FILE"
+require_exact_boolean "DM_WORKERS_ENABLED" "false" "$API_ENV_FILE"
 require_matching_env_secret \
   "CONTENT_PROPOSAL_WORKER_API_TOKEN" \
   "$API_ENV_FILE" \

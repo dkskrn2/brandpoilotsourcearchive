@@ -186,7 +186,6 @@ export function loadApiRuntimeConfig(
     if (!cookieSecure) invalid("COOKIE_SECURE");
     if (devAuthEnabled) invalid("DEV_AUTH_ENABLED");
     if (schedulerEnabled) invalid("LOCAL_SCHEDULER_ENABLED");
-    if (instagramPublishEnabled) invalid("INSTAGRAM_PUBLISH_ENABLED");
 
     if (!corsAllowedOrigins.includes(frontendOrigin!)) {
       invalid("AUTH_FRONTEND_URL");

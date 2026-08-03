@@ -194,14 +194,27 @@ describe("loadApiRuntimeConfig", () => {
     },
   );
 
-  it.each(["LOCAL_SCHEDULER_ENABLED", "INSTAGRAM_PUBLISH_ENABLED"])(
-    "forces %s off in production",
-    (key) => {
-      const env = validProductionEnv();
-      env[key] = "true";
-      expect(() => loadApiRuntimeConfig(env)).toThrow(key);
-    },
-  );
+  it("forces LOCAL_SCHEDULER_ENABLED off in production", () => {
+    const env = validProductionEnv();
+    env.LOCAL_SCHEDULER_ENABLED = "true";
+
+    expect(() => loadApiRuntimeConfig(env)).toThrow("LOCAL_SCHEDULER_ENABLED");
+  });
+
+  it("allows Instagram publishing in production while the local scheduler stays off", () => {
+    const env = validProductionEnv();
+    env.INSTAGRAM_PUBLISH_ENABLED = "true";
+    env.LOCAL_SCHEDULER_ENABLED = "false";
+
+    expect(loadApiRuntimeConfig(env)).toMatchObject({
+      schedulerEnabled: false,
+      instagramPublishEnabled: true,
+      readiness: {
+        schedulerEnabled: false,
+        publishingEnabled: true,
+      },
+    });
+  });
 
   it("defaults the database pool to three connections", () => {
     expect(loadApiRuntimeConfig({}).db.max).toBe(3);

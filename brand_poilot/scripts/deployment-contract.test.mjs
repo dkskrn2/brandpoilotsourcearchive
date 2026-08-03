@@ -695,7 +695,7 @@ test("only Caddy publishes host ports", () => {
   const caddyBlock = services.get("caddy").text;
   for (const apiBlock of [primaryBlock, canaryBlock]) {
     assert.match(apiBlock, /LOCAL_SCHEDULER_ENABLED:\s*"false"/);
-    assert.match(apiBlock, /INSTAGRAM_PUBLISH_ENABLED:\s*"false"/);
+    assert.doesNotMatch(apiBlock, /^\s+INSTAGRAM_PUBLISH_ENABLED:/m);
     assert.match(apiBlock, /^ {4}expose:\s*\r?\n {6}- "4000"$/m);
   }
   for (const [name, service] of services) {
@@ -716,6 +716,76 @@ test("only Caddy publishes host ports", () => {
   );
   assert.match(caddyBlock, /"80:80"/);
   assert.match(caddyBlock, /"443:443"/);
+});
+
+test("Instagram publication is enabled from shared API env with exact safe contracts", () => {
+  const envExample = read("deploy/env/api.env.example");
+  const compose = read("deploy/compose.production.yml");
+  const services = assertComposeTopology(compose);
+  const preflight = read("deploy/scripts/preflight.sh");
+  const verify = read("deploy/scripts/verify-canary.sh");
+
+  assert.equal(envExample.match(/^INSTAGRAM_PUBLISH_ENABLED=true$/gm)?.length, 1);
+  assert.equal(envExample.match(/^INSTAGRAM_PUBLISH_ENABLED=/gm)?.length, 1);
+  for (const service of ["api-primary", "api-canary"]) {
+    assert.doesNotMatch(services.get(service).text, /^\s+INSTAGRAM_PUBLISH_ENABLED:/m);
+  }
+  assert.match(
+    preflight,
+    /require_exact_boolean\s+"INSTAGRAM_PUBLISH_ENABLED"\s+"true"\s+"\$API_ENV_FILE"/,
+  );
+  assert.match(
+    preflight,
+    /require_exact_boolean\s+"LOCAL_SCHEDULER_ENABLED"\s+"false"\s+"\$API_ENV_FILE"/,
+  );
+  assert.match(verify, /\.features\.publishing\s*==\s*"enabled"/);
+  assert.match(verify, /\.features\.scheduler\s*==\s*"disabled"/);
+  assert.match(verify, /tr -d '\\r'/);
+  for (const capabilityContract of [
+    /\.channel\s*==\s*"instagram"/,
+    /\.enabled\s*==\s*true/,
+    /\.connectionStatus\s*==\s*"connected"/,
+    /\.readiness\s*==\s*"ready"/,
+    /\.reasonCode\s*==\s*null/,
+    /index\("card_news"\)/,
+    /index\("instagram_feed_single"\)/,
+    /index\("instagram_feed_carousel"\)/,
+  ]) {
+    assert.match(verify, capabilityContract);
+  }
+});
+
+test("publication preflight accepts one exact true and rejects unsafe variants", () => {
+  const bash = findBash();
+  assert.ok(bash, "Bash is required for the publication flag contract");
+  const fixture = mkdtempSync(join(tmpdir(), "brand-pilot-publication-flag-"));
+  const apiEnv = join(fixture, "api.env");
+  const run = (contents) => {
+    writeFileSync(apiEnv, contents, { mode: 0o600 });
+    return spawnSync(bash, [
+      "-c",
+      'source "$1"; require_exact_boolean "INSTAGRAM_PUBLISH_ENABLED" "true" "$2"',
+      "_",
+      bashPath("deploy/scripts/lib.sh"),
+      bashPath(apiEnv),
+    ], { cwd: process.cwd(), encoding: "utf8" });
+  };
+
+  try {
+    assert.equal(run("INSTAGRAM_PUBLISH_ENABLED=true\n").status, 0);
+    for (const unsafe of [
+      "INSTAGRAM_PUBLISH_ENABLED=false\n",
+      "LOCAL_SCHEDULER_ENABLED=false\n",
+      "INSTAGRAM_PUBLISH_ENABLED=true\nINSTAGRAM_PUBLISH_ENABLED=true\n",
+      "INSTAGRAM_PUBLISH_ENABLED=TRUE\n",
+    ]) {
+      const result = run(unsafe);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /error=safe_runtime_flag_invalid/);
+    }
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 });
 
 test("optional workers use dedicated profiles, identities, env files, and hardened containers", () => {
@@ -1802,7 +1872,7 @@ test("the first attachment lifecycle rollout is forced off and remains unschedul
   }
   assert.match(
     preflight,
-    new RegExp(`require_exact_false\\s+"${flag}"\\s+"\\$API_ENV_FILE"`),
+    new RegExp(`require_exact_boolean\\s+"${flag}"\\s+"false"\\s+"\\$API_ENV_FILE"`),
   );
   assert.ok(
     runbook.match(new RegExp(`${flag}=false`, "g"))?.length >= 4,

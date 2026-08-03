@@ -39,6 +39,19 @@ require_file_mode_600() {
   fi
 }
 
+require_exact_boolean() {
+  local key="$1"
+  local expected="$2"
+  local file="$3"
+  local exact_count
+  local key_count
+  [[ "$expected" == "true" || "$expected" == "false" ]] || fail "safe_runtime_flag_expectation_invalid"
+  exact_count="$(grep -Ec "^${key}=${expected}$" "$file" || true)"
+  key_count="$(grep -Ec "^${key}=" "$file" || true)"
+  [[ "$exact_count" == "1" && "$key_count" == "1" ]] || fail "safe_runtime_flag_invalid"
+  status_ok "$key"
+}
+
 env_secret_value_digest() {
   local key="$1"
   local file="$2"

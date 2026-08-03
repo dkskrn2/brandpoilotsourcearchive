@@ -73,7 +73,7 @@ jobs:
 
   publish:
     needs: verify
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/instagram-production-base-hotfix')
     permissions:
       contents: read
       packages: write
