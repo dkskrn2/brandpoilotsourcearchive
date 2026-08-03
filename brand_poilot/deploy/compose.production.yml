@@ -7,7 +7,6 @@ services:
       - ${API_ENV_FILE:-/opt/brand-pilot/shared/env/api.env}
     environment:
       LOCAL_SCHEDULER_ENABLED: "false"
-      INSTAGRAM_PUBLISH_ENABLED: "false"
       AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED: "false"
     restart: unless-stopped
     init: true
@@ -39,7 +38,6 @@ services:
       - ${API_ENV_FILE:-/opt/brand-pilot/shared/env/api.env}
     environment:
       LOCAL_SCHEDULER_ENABLED: "false"
-      INSTAGRAM_PUBLISH_ENABLED: "false"
       AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED: "false"
     restart: unless-stopped
     init: true
