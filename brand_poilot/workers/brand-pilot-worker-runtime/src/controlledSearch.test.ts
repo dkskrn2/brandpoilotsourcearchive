@@ -27,6 +27,15 @@ const webEvent = (url = "https://source.example/article") => JSON.stringify({
   item: { type: "web_search", action: { type: "open_page", url } },
 });
 
+const queryOnlyWebEvent = (query = "브랜드 운영 최신 동향") => JSON.stringify({
+  type: "item.completed",
+  item: {
+    type: "web_search",
+    query,
+    action: { type: "search", queries: [query] },
+  },
+});
+
 function injectedRunner(stdout: string) {
   const calls: Array<{ args: string[]; prompt: string }> = [];
   return {
@@ -211,6 +220,30 @@ describe("controlled proposal search", () => {
     expect(evidence.items[0]!.contentHash).toMatch(/^[0-9a-f]{64}$/);
     expect(Object.keys(evidence.items[0]!)).not.toContain("productClaim");
     expect(runner.calls[0]!.prompt).toContain("최대 4개");
+  });
+
+  it("accepts current Codex query-only search audit events when the reported query matches", async () => {
+    const runner = injectedRunner(`${queryOnlyWebEvent()}\n${searchedResult()}`);
+
+    await expect(runControlledSearch({
+      purpose: "informational",
+      mode: "required",
+      publicResearchContext: publicContext("informational"),
+    }, { runChild: runner.run })).resolves.toMatchObject({
+      decision: "searched",
+      queries: ["브랜드 운영 최신 동향"],
+      items: [{ url: "https://source.example/article" }],
+    });
+  });
+
+  it("rejects query-only search audit events when the reported query was not executed", async () => {
+    const runner = injectedRunner(`${queryOnlyWebEvent("다른 검색어")}\n${searchedResult()}`);
+
+    await expect(runControlledSearch({
+      purpose: "informational",
+      mode: "required",
+      publicResearchContext: publicContext("informational"),
+    }, { runChild: runner.run })).rejects.toThrow("controlled_search_unobserved_source");
   });
 
   it("canonicalizes publishedAt before hashing the evidence item", async () => {

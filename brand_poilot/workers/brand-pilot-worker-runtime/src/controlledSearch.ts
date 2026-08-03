@@ -412,19 +412,33 @@ function observedWebSearchUrls(event: Record<string, unknown>): string[] {
   return values;
 }
 
+function observedWebSearchQueries(event: Record<string, unknown>): string[] {
+  const item = object(event.item);
+  const values: string[] = [];
+  for (const action of [object(event.action), object(item.action)]) {
+    if (action.type !== "search" || !Array.isArray(action.queries)) continue;
+    values.push(...action.queries.filter((value): value is string => (
+      typeof value === "string" && Boolean(value.trim())
+    )));
+  }
+  return values.map((value) => value.trim());
+}
+
 function auditEvents(
   events: Record<string, unknown>[],
   search: boolean,
-): { observed: Set<string>; webSearchSeen: boolean } {
+): { observed: Set<string>; executedQueries: Set<string>; webSearchSeen: boolean } {
   const observed = new Set<string>();
+  const executedQueries = new Set<string>();
   let webSearchSeen = false;
   for (const event of events) {
     if (auditEventSafety(event, search)) {
       webSearchSeen = true;
       for (const url of observedWebSearchUrls(event)) observed.add(normalizeUrl(url));
+      for (const query of observedWebSearchQueries(event)) executedQueries.add(query);
     }
   }
-  return { observed, webSearchSeen };
+  return { observed, executedQueries, webSearchSeen };
 }
 
 function auditStdoutLine(line: string, search: boolean): void {
@@ -482,6 +496,7 @@ function queries(value: unknown): string[] {
 function composeEvidence(
   model: Record<string, unknown>,
   observed: Set<string>,
+  executedQueries: Set<string>,
   capturedAt: string,
   required: boolean,
   webSearchSeen: boolean,
@@ -500,12 +515,16 @@ function composeEvidence(
   }
   if (required && !webSearchSeen) throw new Error("controlled_search_evidence_required");
   if (!Array.isArray(model.items)) throw new Error("controlled_search_result_invalid");
+  const queryOnlyAuditMatched = observed.size === 0
+    && normalizedQueries.some((query) => executedQueries.has(query));
   const byUrl = new Map<string, ResearchEvidenceSnapshotV1["items"][number]>();
   for (const raw of model.items) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("controlled_search_result_invalid");
     const source = raw as Record<string, unknown>;
     const url = normalizeUrl(text(source.url, 2_000));
-    if (!observed.has(url)) throw new Error("controlled_search_unobserved_source");
+    if ((observed.size > 0 && !observed.has(url)) || (observed.size === 0 && !queryOnlyAuditMatched)) {
+      throw new Error("controlled_search_unobserved_source");
+    }
     if (byUrl.has(url)) continue;
     const title = text(source.title, 500);
     const publisher = nullableText(source.publisher, 500);
@@ -524,7 +543,7 @@ function composeEvidence(
     });
   }
   const items = [...byUrl.values()].slice(0, 8);
-  if (required && (observed.size === 0 || items.length === 0)) {
+  if (required && (items.length === 0 || (observed.size === 0 && !queryOnlyAuditMatched))) {
     throw new Error("controlled_search_evidence_required");
   }
   return {
@@ -538,7 +557,12 @@ async function invoke(
   dependencies: ControlledSearchDependencies,
   search: boolean,
   prompt: string,
-): Promise<{ model: Record<string, unknown>; observed: Set<string>; webSearchSeen: boolean }> {
+): Promise<{
+  model: Record<string, unknown>;
+  observed: Set<string>;
+  executedQueries: Set<string>;
+  webSearchSeen: boolean;
+}> {
   const result = await (dependencies.runChild ?? productionRunner(dependencies))({
     args: cliArgs(search),
     prompt,
@@ -554,6 +578,7 @@ async function invoke(
   return {
     model: extractModelResult(events),
     observed: audited.observed,
+    executedQueries: audited.executedQueries,
     webSearchSeen: audited.webSearchSeen,
   };
 }
@@ -574,18 +599,21 @@ export async function runControlledSearch(
   if (input.purpose === "marketing" && input.mode === "automatic") {
     const decision = await invoke(input, dependencies, false, promptFor(input, true));
     const decisionEvidence = composeEvidence(
-      decision.model, decision.observed, capturedAt, false, decision.webSearchSeen,
+      decision.model, decision.observed, decision.executedQueries,
+      capturedAt, false, decision.webSearchSeen,
     );
     if (decisionEvidence.decision === "not_needed") return decisionEvidence;
     const searched = await invoke(
       input, dependencies, true, promptFor(input, false),
     );
     return composeEvidence(
-      searched.model, searched.observed, capturedAt, true, searched.webSearchSeen,
+      searched.model, searched.observed, searched.executedQueries,
+      capturedAt, true, searched.webSearchSeen,
     );
   }
   const searched = await invoke(input, dependencies, true, promptFor(input, false));
   return composeEvidence(
-    searched.model, searched.observed, capturedAt, true, searched.webSearchSeen,
+    searched.model, searched.observed, searched.executedQueries,
+    capturedAt, true, searched.webSearchSeen,
   );
 }
