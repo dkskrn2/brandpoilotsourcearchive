@@ -116,11 +116,18 @@ function useRetryRetentionState(retryableUntil: string | null) {
 }
 
 function localizedRetryDeadline(deadline: number) {
-  return new Intl.DateTimeFormat("ko-KR", {
-    dateStyle: "long",
-    timeStyle: "short",
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Seoul",
-  }).format(deadline);
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(deadline).map((part) => [part.type, part.value]));
+  const hour = Number(parts.hour);
+  const displayHour = hour % 12 || 12;
+  return `${parts.year}년 ${Number(parts.month)}월 ${Number(parts.day)}일 ${hour < 12 ? "오전" : "오후"} ${displayHour}:${parts.minute}`;
 }
 
 export function AiGenerationOutputList({
