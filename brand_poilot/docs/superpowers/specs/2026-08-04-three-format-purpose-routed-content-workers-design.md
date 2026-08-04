@@ -1,7 +1,7 @@
 # Three-Format Purpose-Routed Content Workers Design
 
 **Date:** 2026-08-04
-**Status:** Direction and model policy approved in conversation; independently reviewed written specification awaiting user review
+**Status:** Approved by the user on 2026-08-04 after independent written-specification review
 **Scope:** Replace the overloaded marketing generation lane with three format-owned workers whose prompts are selected by content purpose.
 
 ## 1. Decision

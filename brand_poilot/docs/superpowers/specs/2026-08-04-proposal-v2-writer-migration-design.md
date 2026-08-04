@@ -1,7 +1,7 @@
 # Proposal V2 Writer Migration Design
 
 **Date:** 2026-08-04
-**Status:** Direction approved in conversation; self-reviewed written revision awaiting user review
+**Status:** Approved as amended by the three-format design on 2026-08-04
 **Scope:** Convert the performance experiment and automated card-news proposal writers from V1 to the existing Proposal V2 pipeline.
 
 > **2026-08-04 architecture amendment:** The downstream worker/model-routing non-goals, `marketing` worker/type references, active relational `content_family` naming, artifact-manifest V2 assumptions, selection-time V3 assembly/start timing, broader V1 read/parser compatibility non-goal, generation-quota reservation/reversal deferral, server-owned fixed-data assembly deferral, data-preserving rollout assumptions, compatibility-release A/writer-release B deployment split, and card-news-only completion canary in this document are superseded by `2026-08-04-three-format-purpose-routed-content-workers-design.md`. The replacement is one maintenance-gated, forward-only three-format cutover, preceded only by a compatibility-safe write-fence deployment; it is not the writer A/B rollout described below. Sections 5 through 16 otherwise remain binding and additive, including the common-service readiness gate, exact adapters, safe performance provenance, automated-run state/locking, transaction/idempotency/failure semantics, `resumeInput`, scheduled-inbox discriminator, carousel regeneration response, UI/static harness, deterministic repetition/concurrency, and performance/automated production canaries. The newer document may strengthen those gates but may not silently omit them.

@@ -1,3 +1,5 @@
+> **SUPERSEDED 2026-08-04:** Do not execute this plan. It is replaced by `docs/superpowers/plans/2026-08-04-three-format-content-cutover-master.md`; its V1/legacy compatibility requirements conflict with the approved three-format forward-only cutover.
+
 # AI Content Generation Flow and Worker Contract V2/V3 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
