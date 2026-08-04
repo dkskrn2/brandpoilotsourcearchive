@@ -213,6 +213,13 @@ function text(value: unknown, code: string, max = 2_000): string {
   return normalized;
 }
 
+function textAllowEmpty(value: unknown, code: string, max = 2_000): string {
+  if (typeof value !== "string") fail(code);
+  const normalized = value.trim();
+  if (normalized.length > max) fail(code);
+  return normalized;
+}
+
 function uuid(value: unknown, code: string): string {
   const normalized = text(value, code, 36);
   if (!UUID.test(normalized)) fail(code);
@@ -383,7 +390,7 @@ function parseProduct(value: unknown): ApprovedProductSnapshotV2 | null {
     features: boundedStrings(source.features, code, 0, 50),
     benefits: boundedStrings(source.benefits, code, 0, 50),
     cautions: boundedStrings(source.cautions, code, 0, 50),
-    evergreenPurchaseInfo: text(source.evergreenPurchaseInfo, code, 4_000),
+    evergreenPurchaseInfo: textAllowEmpty(source.evergreenPurchaseInfo, code, 4_000),
     images,
   };
 }

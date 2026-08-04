@@ -290,6 +290,17 @@ function marketingV2Proposal(conceptKey: string, patch: Record<string, unknown> 
 }
 
 describe("content proposal V2 contracts", () => {
+  it("accepts an approved marketing product without evergreen purchase information", () => {
+    const input = mutableClone(v2JobInput) as any;
+    input.request.purpose = "marketing";
+    input.inputSnapshot.product = { ...mutableClone(marketingProduct), evergreenPurchaseInfo: "" };
+    input.inputSnapshot.outputSettings.purpose = "marketing";
+
+    const parsed = parseContentProposalJob(input);
+
+    expect(parsed.inputSnapshot.product?.evergreenPurchaseInfo).toBe("");
+  });
+
   it("accepts canonical API bounds, HTTP snapshot URLs, and lowercase-normalized hashes", () => {
     const input = mutableClone(v2JobInput) as any;
     input.inputSnapshot.brandCore.companyOverview = "가".repeat(3_001);

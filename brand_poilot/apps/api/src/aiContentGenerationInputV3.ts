@@ -425,7 +425,7 @@ function parseProduct(value: unknown): ApprovedProductSnapshotV2 {
     features: boundedStrings(source.features, 0, 50),
     benefits: boundedStrings(source.benefits, 0, 50),
     cautions: boundedStrings(source.cautions, 0, 50),
-    evergreenPurchaseInfo: boundedString(source.evergreenPurchaseInfo, 4_000),
+    evergreenPurchaseInfo: boundedStringAllowEmpty(source.evergreenPurchaseInfo, 4_000),
     images,
   };
 }

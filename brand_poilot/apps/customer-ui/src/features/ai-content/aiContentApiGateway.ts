@@ -728,8 +728,15 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
     },
     async retryOutput(brandId, outputId, reason) {
       if (!reason.trim()) throw new Error("retry_reason_required");
-      const generation = mapGeneration(await client.requestJson<ApiGeneration>(`/brands/${brandId}/ai-content/outputs/${outputId}/retry`, { method: "POST", body: JSON.stringify({ reason }) }));
-      const output = generation.outputs.find((item) => item.id === outputId);
+      let generation = mapGeneration(await client.requestJson<ApiGeneration>(`/brands/${brandId}/ai-content/outputs/${outputId}/retry`, { method: "POST", body: JSON.stringify({ reason }) }));
+      let output = generation.outputs.find((item) => item.id === outputId);
+      if (!output) {
+        generation = mapGeneration(await client.requestJson<ApiGeneration>(
+          `/brands/${brandId}/ai-content/generations/${generation.id}`,
+          { method: "GET" },
+        ));
+        output = generation.outputs.find((item) => item.id === outputId);
+      }
       if (!output) throw new Error("ai_content_output_not_found");
       return output;
     },
