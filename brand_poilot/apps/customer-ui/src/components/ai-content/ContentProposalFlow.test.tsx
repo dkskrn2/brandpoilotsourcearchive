@@ -279,6 +279,32 @@ describe("ContentProposalFlow", () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  it("uses a new idempotency key after the proposal request changes", async () => {
+    const user = userEvent.setup();
+    const { create } = renderFlow();
+    create.mockRejectedValue(new Error("proposal_unavailable"));
+
+    await user.click(screen.getByRole("radio", { name: /^정보성/ }));
+    await user.click(screen.getByRole("button", { name: "목적 완료" }));
+    await user.type(screen.getByLabelText("콘텐츠 주제"), "첫 번째 주제");
+    await user.click(screen.getByRole("button", { name: "주제·자료 완료" }));
+    await user.click(await screen.findByRole("button", { name: "Instagram" }));
+    await user.click(screen.getByRole("button", { name: "AI 구성안 만들기" }));
+    await screen.findByRole("alert");
+
+    await user.click(screen.getByRole("button", { name: /2\. 주제·자료/ }));
+    await user.clear(screen.getByLabelText("콘텐츠 주제"));
+    await user.type(screen.getByLabelText("콘텐츠 주제"), "두 번째 주제");
+    await user.click(screen.getByRole("button", { name: "주제·자료 완료" }));
+    await user.click(screen.getByRole("button", { name: "Instagram" }));
+    await user.click(screen.getByRole("button", { name: "AI 구성안 만들기" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    const firstKey = create.mock.calls[0]?.[1].idempotencyKey;
+    const secondKey = create.mock.calls[1]?.[1].idempotencyKey;
+    expect(firstKey).not.toBe(secondKey);
+  });
+
   it("serializes the selected reference before proposal creation and loads styles only after proposal selection", async () => {
     const user = userEvent.setup();
     const { create, listReferences, listReferenceSeeds, getRules } = renderFlow();

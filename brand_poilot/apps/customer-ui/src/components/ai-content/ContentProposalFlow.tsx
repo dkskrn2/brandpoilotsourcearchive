@@ -11,6 +11,7 @@ import type {
   ContentChannelTarget,
   ContentFamily,
   ContentOutputFormatV2,
+  ContentOrchestrationV2,
   ContentProposalBatch,
   ContentProposalRecord,
   ContentProposalRecordV2,
@@ -35,6 +36,16 @@ const phases = ["콘텐츠 생성", "구성안 선택", "생성", "변경·검�
 const sections: Array<[ContentSetupSection, string]> = [
   ["intent", "1. 목적"], ["sources", "2. 주제·자료"], ["delivery", "3. 채널·형식"],
 ];
+
+type IdempotencyKeySlot = { fingerprint: string; key: string };
+
+function keyForRequest(slot: { current: IdempotencyKeySlot | null }, request: unknown) {
+  const fingerprint = JSON.stringify(request);
+  if (slot.current?.fingerprint !== fingerprint) {
+    slot.current = { fingerprint, key: crypto.randomUUID() };
+  }
+  return slot.current.key;
+}
 
 const validationFieldLabels = {
   contentFamily: "목적",
@@ -133,9 +144,9 @@ export function ContentProposalFlow({
   const [capabilityState, setCapabilityState] = useState<ChannelCapabilityState>(
     capabilityGateway.current.getState(),
   );
-  const idempotencyKey = useRef(crypto.randomUUID());
-  const selectionKey = useRef(crypto.randomUUID());
-  const generationStartKey = useRef(crypto.randomUUID());
+  const proposalKey = useRef<IdempotencyKeySlot | null>(null);
+  const selectionKey = useRef<IdempotencyKeySlot | null>(null);
+  const generationStartKey = useRef<IdempotencyKeySlot | null>(null);
   const previousBrandId = useRef(brandId);
   const activeBrandId = useRef(brandId);
   const resumableBatchScope = useRef({ batchId: initialBatchId, brandId });
@@ -253,9 +264,9 @@ export function ContentProposalFlow({
     setError(null);
     setNotice(null);
     setCapabilityState(capabilityGateway.current.getState());
-    idempotencyKey.current = crypto.randomUUID();
-    selectionKey.current = crypto.randomUUID();
-    generationStartKey.current = crypto.randomUUID();
+    proposalKey.current = null;
+    selectionKey.current = null;
+    generationStartKey.current = null;
   }, [brandId]);
 
   useEffect(() => {
@@ -334,26 +345,27 @@ export function ContentProposalFlow({
     setLoadingProposal(true);
     setError(null);
     try {
-      const created = await gateway.createProposalBatch(requestedBrandId, {
-        idempotencyKey: idempotencyKey.current,
-        request: {
-          contractVersion: "content-orchestration.v2",
-          brandId,
-          purpose: family,
-          seed: subjectMode === "topic_text"
-            ? { kind: "topic_text", title: topic.trim() }
-            : subjectMode === "topic_url"
-              ? { kind: "topic_url", url: topicUrl.trim() }
-              : { kind: "reference", items: selectedReferences },
-          contentInstruction: contentInstruction.trim() || null,
-          productId: family === "marketing" ? approvedProduct?.id ?? null : null,
-          outputSettings: {
-            outputFormat: format,
-            channelTargets: [channel],
-            aspectRatio: format === "blog" ? null : format === "reel" ? "9:16" : "1:1",
-            outputCount: 1,
-          },
+      const request: ContentOrchestrationV2 = {
+        contractVersion: "content-orchestration.v2",
+        brandId,
+        purpose: family,
+        seed: subjectMode === "topic_text"
+          ? { kind: "topic_text", title: topic.trim() }
+          : subjectMode === "topic_url"
+            ? { kind: "topic_url", url: topicUrl.trim() }
+            : { kind: "reference", items: selectedReferences },
+        contentInstruction: contentInstruction.trim() || null,
+        productId: family === "marketing" ? approvedProduct?.id ?? null : null,
+        outputSettings: {
+          outputFormat: format,
+          channelTargets: [channel],
+          aspectRatio: format === "blog" ? null : format === "reel" ? "9:16" : "1:1",
+          outputCount: 1,
         },
+      };
+      const created = await gateway.createProposalBatch(requestedBrandId, {
+        idempotencyKey: keyForRequest(proposalKey, request),
+        request,
       });
       if (activeBrandId.current !== requestedBrandId) return;
       await loadBatch(created.batchId, undefined, requestedBrandId);
@@ -413,7 +425,11 @@ export function ContentProposalFlow({
     setError(null);
     setLoadingAssets(true);
     try {
-      const generation = await gateway.selectProposal(requestedBrandId, item.id, selectionKey.current);
+      const generation = await gateway.selectProposal(
+        requestedBrandId,
+        item.id,
+        keyForRequest(selectionKey, { brandId: requestedBrandId, proposalId: item.id }),
+      );
       if (activeBrandId.current !== requestedBrandId) return;
       setSelectedProposal(item);
       setSelectedGenerationId(generation.id);
@@ -453,14 +469,19 @@ export function ContentProposalFlow({
       const attachmentIds = attachments
         .filter((attachment) => finalAttachmentRoles.has(attachment.role))
         .map((attachment) => attachment.id);
-      await gateway.updateFinalizationDraft(requestedBrandId, selectedGenerationId, {
+      const finalizationDraft = {
         contractVersion: "content-finalization-draft.v2",
         avatarStyleImageId: selectedAvatarStyleImageId,
         userImageInstruction: userImageInstruction.trim() || null,
         attachmentIds,
-      });
+      } as const;
+      await gateway.updateFinalizationDraft(requestedBrandId, selectedGenerationId, finalizationDraft);
       if (activeBrandId.current !== requestedBrandId) return;
-      await gateway.startGenerationV2(requestedBrandId, selectedGenerationId, generationStartKey.current);
+      await gateway.startGenerationV2(
+        requestedBrandId,
+        selectedGenerationId,
+        keyForRequest(generationStartKey, { generationId: selectedGenerationId, finalizationDraft }),
+      );
       if (activeBrandId.current !== requestedBrandId) return;
       setMachine((current) => transitionContentWizard(current, { type: "start_generation" }));
       navigate(`/ai-content/${selectedGenerationId}`);
