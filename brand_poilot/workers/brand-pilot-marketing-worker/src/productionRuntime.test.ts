@@ -150,8 +150,11 @@ describe("marketing production runtime", () => {
     expect(schema).toMatchObject({ type: "object", additionalProperties: false, required: ["contractVersion", "outputFormat", "content", "imagePackage"] });
     const defs = schema.$defs as Record<string, Record<string, unknown>>;
     expect(defs.asset?.required).toContain("evidenceIds");
-    expect((defs.asset?.properties as Record<string, unknown>).evidenceIds).toMatchObject({ type: "array", maxItems: 8, uniqueItems: true });
+    expect((defs.asset?.properties as Record<string, unknown>).evidenceIds).toMatchObject({ type: "array", maxItems: 8 });
     expect((schema.properties as Record<string, unknown>).outputFormat).toEqual({ enum: ["reel", "marketing_content"] });
+    const serializedSchema = JSON.stringify(schema);
+    expect(serializedSchema).not.toContain('"oneOf"');
+    expect(serializedSchema).not.toContain('"uniqueItems"');
   });
 
   it.each(["run-codex-marketing.mjs", "run-codex-marketing-v2-plan.mjs"])(

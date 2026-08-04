@@ -138,12 +138,14 @@ describe("blog production runtime", () => {
     expect(prompt).toContain("파일이나 웹을 조회하지 마세요");
     expect(schema).toMatchObject({ type: "object", additionalProperties: false, required: ["contractVersion", "content", "imagePackage"] });
     const properties = schema.properties as Record<string, Record<string, unknown>>;
-    expect(properties.imagePackage.oneOf).toBeTruthy();
+    expect(properties.imagePackage.anyOf).toBeTruthy();
     const contentProperties = (properties.content.properties as Record<string, Record<string, unknown>>);
     expect(contentProperties.title.maxLength).toBe(500);
     expect(contentProperties.metaTitle.maxLength).toBe(500);
     expect(contentProperties.metaDescription.maxLength).toBe(2_000);
-    expect(JSON.stringify(schema)).not.toContain('"uniqueItems"');
+    const serializedSchema = JSON.stringify(schema);
+    expect(serializedSchema).not.toContain('"oneOf"');
+    expect(serializedSchema).not.toContain('"uniqueItems"');
   });
 
   it("stages the blog skill and removes only image sessions created by that job", async () => {
