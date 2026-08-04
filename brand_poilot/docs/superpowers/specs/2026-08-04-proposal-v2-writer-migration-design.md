@@ -4,6 +4,8 @@
 **Status:** Direction approved in conversation; self-reviewed written revision awaiting user review
 **Scope:** Convert the performance experiment and automated card-news proposal writers from V1 to the existing Proposal V2 pipeline.
 
+> **2026-08-04 architecture amendment:** The downstream worker/model-routing non-goals, `marketing` worker/type references, active relational `content_family` naming, artifact-manifest V2 assumptions, selection-time V3 assembly/start timing, broader V1 read/parser compatibility non-goal, generation-quota reservation/reversal deferral, server-owned fixed-data assembly deferral, data-preserving rollout assumptions, compatibility-release A/writer-release B deployment split, and card-news-only completion canary in this document are superseded by `2026-08-04-three-format-purpose-routed-content-workers-design.md`. The replacement is one maintenance-gated, forward-only three-format cutover, preceded only by a compatibility-safe write-fence deployment; it is not the writer A/B rollout described below. Sections 5 through 16 otherwise remain binding and additive, including the common-service readiness gate, exact adapters, safe performance provenance, automated-run state/locking, transaction/idempotency/failure semantics, `resumeInput`, scheduled-inbox discriminator, carousel regeneration response, UI/static harness, deterministic repetition/concurrency, and performance/automated production canaries. The newer document may strengthen those gates but may not silently omit them.
+
 ## 1. Context
 
 The repository currently has two first-party producers of new `content-proposal-request.v1` jobs:
@@ -284,9 +286,9 @@ The shared read contract is corrected as part of this migration:
 - Performance batch responses add `provenance: { kind: "performance_experiment", experimentId, evidenceVersion, snapshotCount, capturedFrom, capturedTo }`; no raw metrics are returned.
 - The UI hydrates V2 state from `resumeInput`, never by pretending `content-proposal-request.v2` is an orchestration request.
 - Batch DTO origin parsing remains `manual | scheduled_crawl`; performance provenance comes from the safe audit projection, not a third persistence origin.
-- The scheduled proposal-list response carries an explicit proposal contract-version discriminator plus batch origin and content family. It does not infer V1 versus V2 from optional proposal fields.
+- The scheduled proposal-list response carries an explicit proposal contract-version discriminator plus batch origin and purpose. It does not infer V1 versus V2 from optional proposal fields.
 - The inbox renders V2 `title`, `selectionReason`/`oneLineIntent`, output format, and server-resolved evidence preview. V1 rendering remains only as temporary read compatibility.
-- Selecting either migrated V2 proposal continues through the existing Proposal V2 selection/finalization path and produces `content-generation-input.v3`.
+- Selecting either migrated V2 proposal creates/returns the selected run and draft generation only. A separate idempotent start locks that draft and atomically produces `content-generation-input.v3`, freezes its prompt binding, reserves allowance, and creates the first job.
 
 Targeted tests cover a performance batch reopen, a scheduled V2 inbox item, and selection from both. This is migration compatibility work, not a redesign of the wizard or inbox.
 
@@ -418,9 +420,9 @@ Required cases:
 
 ### 13.4 Proposal-worker protocol harness
 
-A deterministic fake model claims and completes jobs from both adapters. It verifies both use the standard V2 worker path, save exactly three proposals, preserve output format/channel, reject malformed results, transition a linked automated run monotonically to `ready` or `failed`, and can feed the existing pure V3 input builder plus a `selected` run after manual selection. The harness builds and validates `content-generation-input.v3` without enqueuing or starting a card, blog, marketing, or image worker.
+A deterministic fake model claims and completes jobs from both adapters. It verifies both use the standard V2 worker path, save exactly three proposals, preserve output format/channel, reject malformed results, and transition a linked automated run monotonically to `ready` or `failed`. It then verifies manual selection creates a draft generation without V3/job/reservation side effects and exercises the start service with fake persistence to build/validate `content-generation-input.v3`, prompt binding, reservation, and first queued job atomically.
 
-No real card, blog, marketing, image, DM, Wiki, FAQ, brand-intelligence, or subject-analysis worker is started by this deterministic harness. The later production canary separately exercises only the content-generation workers required by the two selected card-news cases.
+No real card-news, blog, reel, image, DM, Wiki, FAQ, brand-intelligence, or subject-analysis worker is started by this deterministic harness. The later production canary separately exercises only the content-generation workers required by the selected cases.
 
 ### 13.5 One schema-only Codex preflight
 
