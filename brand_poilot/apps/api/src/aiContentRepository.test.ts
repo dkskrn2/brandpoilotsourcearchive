@@ -1928,6 +1928,9 @@ describe("AI content repository", () => {
     expect(pool.sql.join("\n")).toContain("updated_by_user_id");
     expect(pool.sql.join("\n")).toContain("media.media_url");
     expect(pool.sql.join("\n")).toContain("_previewUrl");
+    const referenceSnapshotSql = pool.sql.find((sql) => sql.includes("'saved_trend'"));
+    expect(referenceSnapshotSql).toContain("select reference_filter.id");
+    expect(referenceSnapshotSql).toContain("saved.id = reference_filter.saved_trend_id");
     expect(pool.referenceSnapshots[0]).toMatchObject({
       source: "saved_trend",
       mediaType: "IMAGE",

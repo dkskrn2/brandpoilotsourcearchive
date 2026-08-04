@@ -1110,10 +1110,16 @@ async function snapshotReferences(client: Queryable, input: BrandGenerationScope
   );
   const snapshotRows = referenceIds.length === 0 ? [] : (await client.query(
     `select id, snapshot from (
-       select co.id, jsonb_build_object('source', 'brand_output', 'title', co.title, 'outputJson', co.output_json) as snapshot
-         from channel_outputs co where co.workspace_id = $1 and co.brand_id = $2
+       select reference_filter.id, jsonb_build_object('source', 'brand_output', 'title', co.title, 'outputJson', co.output_json) as snapshot
+         from reference_items reference_filter
+         join channel_outputs co
+           on co.id = reference_filter.channel_output_id
+          and co.workspace_id = reference_filter.workspace_id
+          and co.brand_id = reference_filter.brand_id
+        where reference_filter.workspace_id = $1 and reference_filter.brand_id = $2
+          and reference_filter.archived_at is null
        union all
-       select saved.id, jsonb_build_object(
+       select reference_filter.id, jsonb_build_object(
          'source', 'saved_trend',
          'permalink', media.permalink,
          'caption', media.caption,
@@ -1125,11 +1131,23 @@ async function snapshotReferences(client: Queryable, input: BrandGenerationScope
          'likeCount', media.like_count,
          'commentsCount', media.comments_count
        ) as snapshot
-         from brand_trend_saved_media saved join instagram_trend_media media on media.id = saved.trend_media_id
-        where saved.workspace_id = $1 and saved.brand_id = $2
+         from reference_items reference_filter
+         join brand_trend_saved_media saved
+           on saved.id = reference_filter.saved_trend_id
+          and saved.workspace_id = reference_filter.workspace_id
+          and saved.brand_id = reference_filter.brand_id
+         join instagram_trend_media media on media.id = saved.trend_media_id
+        where reference_filter.workspace_id = $1 and reference_filter.brand_id = $2
+          and reference_filter.archived_at is null
        union all
-       select source.id, jsonb_build_object('source', 'saved_url', 'url', source.url, 'title', source.title) as snapshot
-         from source_urls source where source.workspace_id = $1 and source.brand_id = $2 and source.deleted_at is null
+       select reference_filter.id, jsonb_build_object('source', 'saved_url', 'url', source.url, 'title', source.title) as snapshot
+         from reference_items reference_filter
+         join source_urls source
+           on source.id = reference_filter.source_url_id
+          and source.workspace_id = reference_filter.workspace_id
+          and source.brand_id = reference_filter.brand_id
+        where reference_filter.workspace_id = $1 and reference_filter.brand_id = $2
+          and reference_filter.archived_at is null and source.deleted_at is null
      ) reference_rows where id = any($3::uuid[])`,
     [input.workspaceId, input.brandId, referenceIds],
   )).rows;
