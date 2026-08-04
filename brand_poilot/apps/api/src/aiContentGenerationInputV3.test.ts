@@ -347,6 +347,16 @@ describe("ContentOrchestrationV2", () => {
 });
 
 describe("snapshot and proposal contracts", () => {
+  it("accepts an approved marketing product without evergreen purchase information", () => {
+    const value = {
+      ...proposalInput(),
+      outputSettings: { ...requestSettings(), purpose: "marketing" },
+      product: { ...product(), evergreenPurchaseInfo: "" },
+    };
+
+    expect(parseProposalInputSnapshotV2(value).product?.evergreenPurchaseInfo).toBe("");
+  });
+
   it("rejects cosmetically distinct proposals with no substantive target difference", () => {
     const base = { ...proposal("base"), differentiationAxes: ["target"] };
 

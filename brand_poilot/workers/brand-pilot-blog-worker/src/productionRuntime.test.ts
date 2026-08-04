@@ -143,6 +143,7 @@ describe("blog production runtime", () => {
     expect(contentProperties.title.maxLength).toBe(500);
     expect(contentProperties.metaTitle.maxLength).toBe(500);
     expect(contentProperties.metaDescription.maxLength).toBe(2_000);
+    expect(JSON.stringify(schema)).not.toContain('"uniqueItems"');
   });
 
   it("stages the blog skill and removes only image sessions created by that job", async () => {

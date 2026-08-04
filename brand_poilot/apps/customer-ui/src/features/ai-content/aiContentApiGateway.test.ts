@@ -195,6 +195,37 @@ describe("createAiContentApiGateway", () => {
     });
   });
 
+  it("refetches the generation when a retry response omits outputs", async () => {
+    const retriedOutput = {
+      id: "output-1",
+      generationId: "generation-1",
+      outputIndex: 1,
+      title: "다시 생성 중",
+      status: "planning",
+      content: {},
+      manifest: {},
+      manifestUrl: null,
+      failureCode: null,
+      failureMessage: null,
+      downloadedAt: null,
+      revisionCapabilities: [],
+    };
+    const requestJson = vi.fn()
+      .mockResolvedValueOnce({ ...generation("planning"), outputs: undefined })
+      .mockResolvedValueOnce({ ...generation("planning"), outputs: [retriedOutput] });
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await expect(gateway.retryOutput("brand-1", "output-1", "다시 생성"))
+      .resolves.toMatchObject({ id: "output-1", status: "planning" });
+    expect(requestJson.mock.calls).toEqual([
+      ["/brands/brand-1/ai-content/outputs/output-1/retry", {
+        method: "POST",
+        body: JSON.stringify({ reason: "다시 생성" }),
+      }],
+      ["/brands/brand-1/ai-content/generations/generation-1", { method: "GET" }],
+    ]);
+  });
+
   it("maps missing legacy lifecycle timestamps to null", async () => {
     const requestJson = vi.fn(async () => generation("failed"));
     const gateway = createAiContentApiGateway(clientWith(requestJson));
