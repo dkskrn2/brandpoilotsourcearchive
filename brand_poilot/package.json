@@ -2,10 +2,7 @@
   "name": "brand-pilot",
   "private": true,
   "version": "0.1.0",
-  "workspaces": [
-    "apps/*",
-    "workers/*"
-  ],
+  "workspaces": ["packages/*", "apps/*", "workers/*"],
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
   },
