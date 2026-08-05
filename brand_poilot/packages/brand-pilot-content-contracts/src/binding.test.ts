@@ -40,6 +40,23 @@ function bindingFor(
 }
 
 describe("ContentPromptBindingSchema", () => {
+  it("prevents post-call catalog mutation from changing a verified proposal hash", async () => {
+    const artifacts = await generateArtifactSet();
+    const raw = JSON.parse(artifacts.get("content-catalog.json")!);
+    const originalHash = raw.schemas.contentProposalV2.sha256;
+    const verification = {
+      contractSourceHash: raw.contractSourceHash,
+      schemaArtifacts: Object.fromEntries([...artifacts].filter(([filename]) => filename !== "content-catalog.json")),
+    };
+    const promise = parseGeneratedContentCatalog(raw, verification);
+    raw.schemas.contentProposalV2.sha256 = "f".repeat(64);
+    raw.proposalContracts.outputSchemaSha256 = "f".repeat(64);
+
+    const catalog = await promise;
+    expect(promptBindingFor("blog", "marketing", catalog).proposalSchemaSha256).toBe(originalHash);
+    expect(catalog.schemas.contentProposalV2.sha256).toBe(originalHash);
+  });
+
   it.each(CONTENT_OUTPUT_FORMATS.flatMap((format) => CONTENT_PURPOSES.map((purpose) => [format, purpose] as const)))(
     "constructs %s/%s only from a verified generated catalog",
     async (format, purpose) => {

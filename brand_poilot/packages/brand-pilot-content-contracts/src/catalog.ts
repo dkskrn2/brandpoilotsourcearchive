@@ -227,19 +227,49 @@ export type GeneratedContentCatalogVerificationInput = {
   readonly schemaArtifacts: Readonly<Record<string, string>>;
 };
 
-async function sha256Utf8(value: string): Promise<string> {
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+function invalidGeneratedContentCatalog(): Error {
+  return new Error("generated_content_catalog_invalid");
+}
+
+function freezeRecursively<T>(value: T, seen = new WeakSet<object>()): T {
+  if (!value || typeof value !== "object" || seen.has(value)) return value;
+  seen.add(value);
+  for (const child of Object.values(value)) freezeRecursively(child, seen);
+  return Object.freeze(value);
 }
 
 export async function parseGeneratedContentCatalog(
   value: unknown,
   verification: GeneratedContentCatalogVerificationInput,
 ): Promise<VerifiedGeneratedContentCatalog> {
-  if (!Value.Check(GeneratedContentCatalogSchema, value)) {
-    throw new Error("generated_content_catalog_invalid");
+  const clone = globalThis.structuredClone;
+  const cryptoApi = globalThis.crypto;
+  const Encoder = globalThis.TextEncoder;
+  if (typeof clone !== "function" || typeof Encoder !== "function"
+    || !cryptoApi?.subtle || typeof cryptoApi.subtle.digest !== "function") {
+    throw invalidGeneratedContentCatalog();
   }
-  const catalog = value as GeneratedContentCatalogData;
+  let valueSnapshot: unknown;
+  let verificationSnapshot: GeneratedContentCatalogVerificationInput;
+  let encoder: TextEncoder;
+  let digest: (algorithm: AlgorithmIdentifier, data: BufferSource) => Promise<ArrayBuffer>;
+  try {
+    valueSnapshot = clone(value);
+    verificationSnapshot = clone(verification);
+    encoder = new Encoder();
+    digest = cryptoApi.subtle.digest.bind(cryptoApi.subtle);
+  } catch {
+    throw invalidGeneratedContentCatalog();
+  }
+  let catalog: GeneratedContentCatalogData;
+  try {
+    if (!Value.Check(GeneratedContentCatalogSchema, valueSnapshot)) {
+      throw invalidGeneratedContentCatalog();
+    }
+    catalog = valueSnapshot as GeneratedContentCatalogData;
+  } catch {
+    throw invalidGeneratedContentCatalog();
+  }
   const schemaLeaves = [
     catalog.schemas.contentOrchestrationV2,
     catalog.schemas.contentProposalRequestV2,
@@ -275,24 +305,32 @@ export async function parseGeneratedContentCatalog(
     && catalog.promptBinding.schemaSha256 === catalog.schemas.contentPromptBindingV1.sha256;
   if (JSON.stringify(actualFilenames) !== JSON.stringify(expectedFilenames)
     || !formatCatalogAgrees || !proposalAgrees || !duplicateHashesAgree) {
-    throw new Error("generated_content_catalog_invalid");
+    throw invalidGeneratedContentCatalog();
   }
-  if (!verification || verification.contractSourceHash !== catalog.contractSourceHash
-    || !verification.schemaArtifacts || typeof verification.schemaArtifacts !== "object") {
-    throw new Error("generated_content_catalog_invalid");
+  if (!verificationSnapshot || verificationSnapshot.contractSourceHash !== catalog.contractSourceHash
+    || !verificationSnapshot.schemaArtifacts || typeof verificationSnapshot.schemaArtifacts !== "object") {
+    throw invalidGeneratedContentCatalog();
   }
-  const artifactFilenames = Object.keys(verification.schemaArtifacts).sort(compareUnicodeCodePoints);
+  const artifactFilenames = Object.keys(verificationSnapshot.schemaArtifacts).sort(compareUnicodeCodePoints);
   if (JSON.stringify(artifactFilenames) !== JSON.stringify(expectedFilenames)) {
-    throw new Error("generated_content_catalog_invalid");
+    throw invalidGeneratedContentCatalog();
   }
   const expectedHashes = new Map(schemaLeaves.map((leaf) => [leaf.filename, leaf.sha256]));
   for (const filename of expectedFilenames) {
-    const artifact = verification.schemaArtifacts[filename];
-    if (typeof artifact !== "string" || await sha256Utf8(artifact) !== expectedHashes.get(filename)) {
-      throw new Error("generated_content_catalog_invalid");
+    const artifact = verificationSnapshot.schemaArtifacts[filename];
+    if (typeof artifact !== "string") throw invalidGeneratedContentCatalog();
+    let actualHash: string;
+    try {
+      const hashBytes = await digest("SHA-256", encoder.encode(artifact));
+      actualHash = Array.from(new Uint8Array(hashBytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    } catch {
+      throw invalidGeneratedContentCatalog();
+    }
+    if (actualHash !== expectedHashes.get(filename)) {
+      throw invalidGeneratedContentCatalog();
     }
   }
-  return catalog as VerifiedGeneratedContentCatalog;
+  return freezeRecursively(catalog) as VerifiedGeneratedContentCatalog;
 }
 
 export type ContentFormatDescriptor =

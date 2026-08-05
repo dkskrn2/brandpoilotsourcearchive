@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CONTENT_FORMAT_CATALOG,
   CONTENT_OUTPUT_FORMATS,
@@ -33,6 +33,8 @@ describe("canonical content catalog", () => {
 });
 
 describe("generated content catalog", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   async function fixture() {
     const artifacts = await generateArtifactSet();
     const raw = JSON.parse(artifacts.get("content-catalog.json")!);
@@ -106,5 +108,46 @@ describe("generated content catalog", () => {
         [raw.schemas.plans.blog.filename]: `${verification.schemaArtifacts[raw.schemas.plans.blog.filename]} `,
       },
     })).rejects.toThrow("generated_content_catalog_invalid");
+  });
+
+  it("detaches both inputs synchronously and recursively freezes the verified snapshot", async () => {
+    const { raw, verification } = await fixture();
+    const originalTitleHash = raw.schemas.aiContentV3.sha256;
+    const originalArtifact = verification.schemaArtifacts[raw.schemas.aiContentV3.filename];
+    const promise = parseGeneratedContentCatalog(raw, verification);
+
+    raw.schemas.aiContentV3.sha256 = "f".repeat(64);
+    verification.contractSourceHash = "f".repeat(64);
+    verification.schemaArtifacts[raw.schemas.aiContentV3.filename] = `${originalArtifact} `;
+
+    const verified = await promise;
+    expect(verified.schemas.aiContentV3.sha256).toBe(originalTitleHash);
+    expect(verified.contractSourceHash).not.toBe(verification.contractSourceHash);
+    const everyNestedValueIsFrozen = (value: unknown): boolean => {
+      if (!value || typeof value !== "object") return true;
+      return Object.isFrozen(value) && Object.values(value).every(everyNestedValueIsFrozen);
+    };
+    expect(everyNestedValueIsFrozen(verified)).toBe(true);
+    expect(() => {
+      (verified.schemas.plans.blog as { sha256: string }).sha256 = "e".repeat(64);
+    }).toThrow();
+    expect(verified.schemas.plans.blog.sha256).not.toBe("e".repeat(64));
+
+    raw.schemas.plans.blog.sha256 = "d".repeat(64);
+    expect(verified.schemas.plans.blog.sha256).not.toBe(raw.schemas.plans.blog.sha256);
+  });
+
+  it.each([
+    ["structuredClone", undefined],
+    ["crypto", undefined],
+    ["crypto.subtle", { subtle: {} }],
+    ["TextEncoder", undefined],
+  ] as const)("fails closed with a stable error when %s is unavailable", async (_feature, replacement) => {
+    const { raw, verification } = await fixture();
+    if (_feature === "structuredClone") vi.stubGlobal("structuredClone", replacement);
+    else if (_feature === "TextEncoder") vi.stubGlobal("TextEncoder", replacement);
+    else vi.stubGlobal("crypto", replacement);
+    await expect(parseGeneratedContentCatalog(raw, verification))
+      .rejects.toThrow("generated_content_catalog_invalid");
   });
 });
