@@ -119,6 +119,19 @@ describe("proposal V2 schemas", () => {
     expect(source).not.toMatch(/Type\.Literal\("(?:informational|marketing)"\)/);
   });
 
+  it("derives parser helper results from checked schemas and reuses the UUID schema", () => {
+    for (const fileName of ["proposal.ts", "generation.ts", "plans.ts"]) {
+      const source = readFileSync(new URL(`./${fileName}`, import.meta.url), "utf8");
+      expect(source, fileName).toContain("function parse<S extends TSchema>");
+      expect(source, fileName).toContain("): Static<S> {");
+      expect(source, fileName).not.toContain("function parse<T>");
+    }
+
+    const proposalSource = readFileSync(new URL("./proposal.ts", import.meta.url), "utf8");
+    expect(proposalSource).toContain("UuidSchema");
+    expect(proposalSource).not.toContain('pattern: "^[0-9a-fA-F]{8}');
+  });
+
   it("parses the exact persisted request and lowercase fingerprint", () => {
     const request = {
       contractVersion: CONTENT_PROPOSAL_CONTRACT_VERSIONS.request,

@@ -56,9 +56,9 @@ export const ContentPlanResultV2Schema = Type.Union([
 ]);
 export type ContentPlanResultV2 = Static<typeof ContentPlanResultV2Schema>;
 
-function parse<T>(schema: TSchema, value: unknown, code: string): T {
+function parse<S extends TSchema>(schema: S, value: unknown, code: string): Static<S> {
   if (!Value.Check(schema, value)) throw new Error(code);
-  return value as T;
+  return value as Static<S>;
 }
 
 export function parseCardNewsPlanV2(value: unknown): CardNewsPlanV2 {

@@ -1,4 +1,4 @@
-import { Type, type Static } from "@sinclair/typebox";
+import { Type, type Static, type TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import {
   CONTENT_PURPOSES,
@@ -17,6 +17,7 @@ import {
   type ResearchEvidenceSnapshotV1,
   Sha256Schema,
   UtcTimestampSchema,
+  UuidSchema,
 } from "./snapshots.js";
 
 export const ContentProposalRequestV2Schema = Type.Object({
@@ -44,12 +45,7 @@ export const ProposalSubjectV2Schema = Type.Union([
   }, { additionalProperties: false }),
   Type.Object({
     kind: Type.Literal("reference"),
-    referenceIds: Type.Array(
-      Type.String({
-        pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
-      }),
-      { minItems: 1, maxItems: 5 },
-    ),
+    referenceIds: Type.Array(UuidSchema, { minItems: 1, maxItems: 5 }),
   }, { additionalProperties: false }),
 ]);
 export type ProposalSubjectV2 = Static<typeof ProposalSubjectV2Schema>;
@@ -134,9 +130,7 @@ export const MarketingPurposeDetailsV2Schema = Type.Object({
   kind: Type.Literal(CONTENT_PURPOSES[1]),
   campaignObjective: Type.String({ minLength: 1, maxLength: 4_000 }),
   situationAndNeed: Type.String({ minLength: 1, maxLength: 4_000 }),
-  productId: Type.String({
-    pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
-  }),
+  productId: UuidSchema,
   targetSegment: Type.String({ minLength: 1, maxLength: 4_000 }),
   strengths: Type.Array(Type.String({ minLength: 1, maxLength: 2_000 }), { maxItems: 20 }),
   limitations: Type.Array(Type.String({ minLength: 1, maxLength: 2_000 }), { maxItems: 20 }),
@@ -158,12 +152,8 @@ export const ContentProposalV2Properties = {
   keyMessage: Type.String({ minLength: 1, maxLength: 4_000 }),
   hook: Type.String({ minLength: 1, maxLength: 4_000 }),
   selectionReason: Type.String({ minLength: 1, maxLength: 4_000 }),
-  evidenceIds: Type.Array(Type.String({
-    pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
-  }), { maxItems: 8 }),
-  referenceIds: Type.Array(Type.String({
-    pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
-  }), { maxItems: 5 }),
+  evidenceIds: Type.Array(UuidSchema, { maxItems: 8 }),
+  referenceIds: Type.Array(UuidSchema, { maxItems: 5 }),
   outputFormat: ContentStudioOutputFormatSchema,
   channelTargets: Type.Array(ContentChannelTargetSchema, { minItems: 1, maxItems: 1 }),
   assetCount: Type.Union([Type.Integer({ minimum: 1, maximum: 5 }), Type.Null()]),
@@ -183,9 +173,9 @@ export const ContentProposalSetV2Schema = Type.Object({
 }, { additionalProperties: false });
 export type ContentProposalSetV2 = Static<typeof ContentProposalSetV2Schema>;
 
-function parse<T>(schema: Parameters<typeof Value.Check>[0], value: unknown, code: string): T {
+function parse<S extends TSchema>(schema: S, value: unknown, code: string): Static<S> {
   if (!Value.Check(schema, value)) throw new Error(code);
-  return value as T;
+  return value as Static<S>;
 }
 
 export function parseContentProposalRequestV2(value: unknown): ContentProposalRequestV2 {

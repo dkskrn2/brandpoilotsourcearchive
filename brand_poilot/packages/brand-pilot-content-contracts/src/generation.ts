@@ -100,9 +100,9 @@ export const ImageGenerationPackageV1Schema = Type.Object({
 }, { additionalProperties: false });
 export type ImageGenerationPackageV1 = Static<typeof ImageGenerationPackageV1Schema>;
 
-function parse<T>(schema: TSchema, value: unknown, code: string): T {
+function parse<S extends TSchema>(schema: S, value: unknown, code: string): Static<S> {
   if (!Value.Check(schema, value)) throw new Error(code);
-  return value as T;
+  return value as Static<S>;
 }
 
 export function parseContentGenerationInputV3(value: unknown): ContentGenerationInputV3 {
