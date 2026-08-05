@@ -40,6 +40,7 @@ const ids = {
   batch: "00000000-0000-4000-8000-00000000000b",
 } as const;
 const OTHER_ID = "00000000-0000-4000-8000-00000000000c";
+const ATTACHMENT_ID = "00000000-0000-4000-8000-00000000000d";
 const NOW = "2026-08-05T00:00:00Z";
 const HASH = "a".repeat(64);
 
@@ -68,6 +69,7 @@ function product() {
 
 function inputFor(outputFormat: ContentStudioOutputFormat, purpose: ContentPurpose): ContentGenerationInputV3 {
   const marketing = purpose === "marketing";
+  const assetCount = outputFormat === "blog" ? 2 : 3;
   return {
     contractVersion: "content-generation-input.v3",
     generationId: ids.generation,
@@ -134,8 +136,13 @@ function inputFor(outputFormat: ContentStudioOutputFormat, purpose: ContentPurpo
       referenceIds: [ids.reference],
       outputFormat,
       channelTargets: [outputFormat === "blog" ? "blog_export" : "instagram"],
-      assetCount: outputFormat === "blog" ? 2 : 3,
-      outline: [{ index: 1, role: "도입", headline: "제목", purpose: "목적" }],
+      assetCount,
+      outline: Array.from({ length: outputFormat === "blog" ? 1 : assetCount }, (_, index) => ({
+        index: index + 1,
+        role: outputFormat === "card_news" ? "slide" : outputFormat === "reel" ? "scene" : "article_section",
+        headline: `제목 ${index + 1}`,
+        purpose: `목적 ${index + 1}`,
+      })),
       purposeDetails: marketing ? {
         kind: "marketing",
         campaignObjective: "목표",
@@ -221,7 +228,9 @@ function imagePackageFor(input: ContentGenerationInputV3): ImageGenerationPackag
     channelTargets: input.outputSettings.channelTargets,
     assets: Array.from({ length: count }, (_, index) => ({
       index: index + 1,
-      role: "asset",
+      role: input.outputSettings.outputFormat === "blog"
+        ? (index === 0 ? "cover" : "explanation")
+        : input.selectedProposal.outline[index]?.role ?? "missing-outline",
       copy: `copy-${index + 1}`,
       visualDirection: `visual-${index + 1}`,
       evidenceIds: [ids.evidence],
@@ -318,7 +327,7 @@ describe("content pipeline semantic bindings", () => {
     expect(() => assertPlannerPromptBinding(value.input, { ...value.binding, planContractVersion: "blog-plan.v2" })).toThrow("binding_plan_version_mismatch");
     expect(() => assertPlannerPromptBinding(value.input, { ...value.binding, plannerPromptVersion: "planner.blog.marketing.v1" })).toThrow("binding_planner_prompt_mismatch");
     expect(() => assertPlannerPromptBinding(value.input, { ...value.binding, imagePromptVersion: "image.blog.marketing.v1" })).toThrow("binding_image_prompt_mismatch");
-    expect(() => assertPlannerPromptBinding(value.input, { ...value.binding, model: "gpt-5.6-sol" as "gpt-5.6-terra" })).toThrow("binding_model_mismatch");
+    expect(() => assertPlannerPromptBinding(value.input, { ...value.binding, model: "gpt-5.6-sol" as "gpt-5.6-terra" })).toThrow("content_prompt_binding_invalid");
   });
 
   it("enforces channel/aspect format rules and outputCount as one final content", () => {
@@ -331,7 +340,7 @@ describe("content pipeline semantic bindings", () => {
     const value = pipelineFor("reel", "informational");
     expect(value.imagePackage.assetCount).toBe(3);
     expect(() => assertContentPipelineBindings(value.input, value.authority, value.binding, value.plan, value.imagePackage, value.rendered, value.manifest)).not.toThrow();
-    expect(() => assertContentPipelineBindings({ ...value.input, outputSettings: { ...value.input.outputSettings, channelTargets: ["youtube"] } }, value.authority, value.binding, value.plan, value.imagePackage, value.rendered, value.manifest)).toThrow("input_channel_mismatch");
+    expect(() => assertContentPipelineBindings({ ...value.input, selectedProposal: { ...value.input.selectedProposal, channelTargets: ["youtube"] }, outputSettings: { ...value.input.outputSettings, channelTargets: ["youtube"] } }, value.authority, value.binding, value.plan, value.imagePackage, value.rendered, value.manifest)).toThrow("input_channel_mismatch");
     expect(() => assertContentPipelineBindings({ ...value.input, outputSettings: { ...value.input.outputSettings, outputCount: 2 as 1 } }, value.authority, value.binding, value.plan, value.imagePackage, value.rendered, value.manifest)).toThrow("input_output_count_mismatch");
   });
 
@@ -465,5 +474,104 @@ describe("content pipeline semantic bindings", () => {
       const url = `https://assets.example.com/${storagePath}`;
       expect(() => parseRenderedAssetInventory({ ...value.rendered, assets: [{ ...first, storagePath, url }] })).toThrow("rendered_storage_path_invalid");
     }
+  });
+
+  it("binds image-package references to frozen V3 identifiers without duplicates", () => {
+    const value = pipelineFor("card_news", "informational");
+    const assertPackageFails = (assetPatch: Partial<ImageGenerationPackageV1["assets"][number]>, error: string) => {
+      const imagePackage = { ...value.imagePackage, assets: value.imagePackage.assets.map((asset, index) => index === 0 ? { ...asset, ...assetPatch } : asset) };
+      const plan = { ...value.plan, imagePackage } as ContentPlanResultV2;
+      expect(() => assertContentPipelineBindings(value.input, value.authority, value.binding, plan, imagePackage, value.rendered, value.manifest)).toThrow(error);
+    };
+    assertPackageFails({ evidenceIds: [OTHER_ID] }, "image_asset_evidence_not_frozen");
+    assertPackageFails({ evidenceIds: [ids.evidence, ids.evidence] }, "image_asset_evidence_duplicate");
+    assertPackageFails({ productImageAssetIds: [OTHER_ID] }, "image_asset_product_image_not_frozen");
+    assertPackageFails({ productImageAssetIds: [OTHER_ID, OTHER_ID] }, "image_asset_product_image_duplicate");
+    assertPackageFails({ attachmentIds: [OTHER_ID] }, "image_asset_attachment_not_frozen");
+    assertPackageFails({ attachmentIds: [OTHER_ID, OTHER_ID] }, "image_asset_attachment_duplicate");
+  });
+
+  it("accepts approved product-image and finalized attachment references", () => {
+    const value = pipelineFor("card_news", "marketing");
+    const productImage = {
+      assetId: OTHER_ID,
+      role: "hero" as const,
+      storageUrl: "https://example.com/product.png",
+      storagePath: "product.png",
+      mimeType: "image/png",
+      checksum: HASH,
+    };
+    const attachment = {
+      id: ATTACHMENT_ID,
+      role: "supporting_image" as const,
+      fileName: "attachment.png",
+      mimeType: "image/png" as const,
+      sizeBytes: 100,
+      checksum: HASH,
+      storageUrl: "https://example.com/attachment.png",
+      storagePath: "attachment.png",
+    };
+    const input = {
+      ...value.input,
+      product: { ...value.input.product!, images: [productImage] },
+      references: { ...value.input.references, attachments: [attachment] },
+    };
+    const imagePackage = {
+      ...value.imagePackage,
+      product: input.product,
+      attachments: input.references.attachments,
+      assets: value.imagePackage.assets.map((asset, index) => index === 0
+        ? { ...asset, productImageAssetIds: [OTHER_ID], attachmentIds: [ATTACHMENT_ID] }
+        : asset),
+    };
+    const plan = { ...value.plan, imagePackage } as ContentPlanResultV2;
+    expect(() => assertContentPipelineBindings(input, value.authority, value.binding, plan, imagePackage, value.rendered, value.manifest)).not.toThrow();
+  });
+
+  it("requires card-news and reel image indices and roles to match a contiguous selected outline", () => {
+    for (const format of ["card_news", "reel"] as const) {
+      const value = pipelineFor(format, "informational");
+      const roleDriftPackage = { ...value.imagePackage, assets: value.imagePackage.assets.map((asset, index) => index === 0 ? { ...asset, role: "drift" } : asset) };
+      expect(() => assertContentPipelineBindings(value.input, value.authority, value.binding, { ...value.plan, imagePackage: roleDriftPackage } as ContentPlanResultV2, roleDriftPackage, value.rendered, value.manifest)).toThrow("image_asset_outline_mismatch");
+      const badOutlineInput = { ...value.input, selectedProposal: { ...value.input.selectedProposal, outline: value.input.selectedProposal.outline.map((item, index) => index === 1 ? { ...item, index: 1 } : item) } };
+      expect(() => assertContentPipelineBindings(badOutlineInput, value.authority, value.binding, value.plan, value.imagePackage, value.rendered, value.manifest)).toThrow("proposal_outline_index_mismatch");
+    }
+  });
+
+  it("preserves independent nonblank blog image roles", () => {
+    const value = pipelineFor("blog", "informational");
+    expect(value.imagePackage.assets.map((asset) => asset.role)).toEqual(["cover", "explanation"]);
+    expect(() => assertContentPipelineBindings(value.input, value.authority, value.binding, value.plan, value.imagePackage, value.rendered, value.manifest)).not.toThrow();
+    for (const role of ["", "   ", "bad\u0000role", "bad\u0085role"]) {
+      const imagePackage = { ...value.imagePackage, assets: value.imagePackage.assets.map((asset, index) => index === 0 ? { ...asset, role } : asset) };
+      expect(() => assertContentPipelineBindings(value.input, value.authority, value.binding, { ...value.plan, imagePackage } as ContentPlanResultV2, imagePackage, value.rendered, value.manifest)).toThrow("blog_image_asset_role_invalid");
+    }
+  });
+
+  it("rejects unsafe public file names even when rendered and manifest values agree", () => {
+    const value = pipelineFor("blog", "informational");
+    const withFileName = (fileName: string) => ({
+      rendered: { ...value.rendered, assets: value.rendered.assets.map((asset, index) => index === 0 ? { ...asset, fileName } : asset) },
+      manifest: { ...value.manifest, assets: value.manifest.assets.map((asset, index) => index === 0 ? { ...asset, fileName } : asset) } as AiContentManifestV3,
+    });
+    for (const fileName of ["../../evil.png", "dir/file.png", "dir\\file.png", "bad\u0000name.png", "bad\u0085name.png", ".", "..", " padded.png "]) {
+      const changed = withFileName(fileName);
+      expect(() => assertContentPipelineBindings(value.input, value.authority, value.binding, value.plan, value.imagePackage, changed.rendered, changed.manifest)).toThrow("rendered_file_name_invalid");
+    }
+    const distinctPublicName = withFileName("public-index.html");
+    expect(() => assertContentPipelineBindings(value.input, value.authority, value.binding, value.plan, value.imagePackage, distinctPublicName.rendered, distinctPublicName.manifest)).not.toThrow();
+  });
+
+  it("requires selected proposal channel targets to equal V3 output settings", () => {
+    const value = pipelineFor("reel", "informational");
+    const input = { ...value.input, selectedProposal: { ...value.input.selectedProposal, channelTargets: ["youtube" as const] } };
+    expect(() => assertContentPipelineBindings(input, value.authority, value.binding, value.plan, value.imagePackage, value.rendered, value.manifest)).toThrow("selected_proposal_channel_mismatch");
+  });
+
+  it("rejects malformed prompt bindings before reporting semantic drift", () => {
+    const value = pipelineFor("card_news", "marketing");
+    const { model: _model, ...missing } = value.binding;
+    expect(() => assertPlannerPromptBinding(value.input, missing as ContentPromptBinding)).toThrow("content_prompt_binding_invalid");
+    expect(() => assertPlannerPromptBinding(value.input, { ...value.binding, outputFormat: "blog", extra: true } as ContentPromptBinding)).toThrow("content_prompt_binding_invalid");
   });
 });

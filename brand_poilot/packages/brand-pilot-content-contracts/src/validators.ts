@@ -155,6 +155,14 @@ function rawHttpsPath(url: string): string {
 }
 
 function assertCanonicalRenderedAssetPath(asset: RenderedAssetInventory["assets"][number]): void {
+  if (asset.fileName !== asset.fileName.trim()
+    || asset.fileName === "."
+    || asset.fileName === ".."
+    || asset.fileName.includes("/")
+    || asset.fileName.includes("\\")
+    || /[\u0000-\u001f\u007f-\u009f]/.test(asset.fileName)) {
+    fail("rendered_file_name_invalid");
+  }
   const segments = asset.storagePath.split("/");
   if (asset.storagePath.startsWith("/")
     || hasForbiddenPathSyntax(asset.storagePath)
@@ -304,12 +312,16 @@ export function assertSelectedProposalInvariant(
     || input.selectedProposal.purposeDetails.kind !== authority.selection.purpose) {
     fail("selected_proposal_purpose_mismatch");
   }
+  if (!same(input.selectedProposal.channelTargets, input.outputSettings.channelTargets)) {
+    fail("selected_proposal_channel_mismatch");
+  }
 }
 
 export function assertPlannerPromptBinding(
   input: ContentGenerationInputV3,
   binding: ContentPromptBinding,
 ): void {
+  if (!Value.Check(ContentPromptBindingSchema, binding)) fail("content_prompt_binding_invalid");
   const format = input.outputSettings.outputFormat;
   const purpose = input.outputSettings.purpose;
   const catalog = CONTENT_FORMAT_CATALOG[format];
@@ -328,11 +340,72 @@ export function assertPlannerPromptBinding(
   if (binding.imagePromptVersion !== CONTENT_IMAGE_PROMPT_VERSIONS[format][purpose]) fail("binding_image_prompt_mismatch");
   if (binding.manifestVersion !== AI_CONTENT_MANIFEST_VERSION) fail("binding_manifest_version_mismatch");
   if (binding.model !== CONTENT_PLANNER_MODEL_ID) fail("binding_model_mismatch");
-  if (!Value.Check(ContentPromptBindingSchema, binding)) fail("content_prompt_binding_invalid");
 }
 
 function planImagePackage(plan: ContentPlanResultV2): ImageGenerationPackageV1 | null {
   return plan.imagePackage;
+}
+
+function assertDuplicateFreeSubset(
+  values: readonly string[],
+  allowedValues: ReadonlySet<string>,
+  duplicateCode: string,
+  unknownCode: string,
+): void {
+  if (new Set(values).size !== values.length) fail(duplicateCode);
+  for (const value of values) {
+    if (!allowedValues.has(value)) fail(unknownCode);
+  }
+}
+
+function assertImagePackageAssetBindings(
+  input: ContentGenerationInputV3,
+  imagePackage: ImageGenerationPackageV1,
+): void {
+  const evidenceIds = new Set(input.researchEvidence.items.map((item) => item.id));
+  const productImageAssetIds = new Set(input.product?.images.map((image) => image.assetId) ?? []);
+  const attachmentIds = new Set(input.references.attachments.map((attachment) => attachment.id));
+  for (const asset of imagePackage.assets) {
+    assertDuplicateFreeSubset(
+      asset.evidenceIds,
+      evidenceIds,
+      "image_asset_evidence_duplicate",
+      "image_asset_evidence_not_frozen",
+    );
+    assertDuplicateFreeSubset(
+      asset.productImageAssetIds,
+      productImageAssetIds,
+      "image_asset_product_image_duplicate",
+      "image_asset_product_image_not_frozen",
+    );
+    assertDuplicateFreeSubset(
+      asset.attachmentIds,
+      attachmentIds,
+      "image_asset_attachment_duplicate",
+      "image_asset_attachment_not_frozen",
+    );
+  }
+
+  if (input.outputSettings.outputFormat === "blog") {
+    for (const asset of imagePackage.assets) {
+      if (asset.role !== asset.role.trim()
+        || asset.role.trim().length === 0
+        || /[\u0000-\u001f\u007f-\u009f]/.test(asset.role)) fail("blog_image_asset_role_invalid");
+    }
+    return;
+  }
+
+  const expectedCount = imagePackage.assetCount;
+  const outline = input.selectedProposal.outline;
+  const outlineIndices = outline.map((item) => item.index).sort((left, right) => left - right);
+  if (outline.length !== expectedCount
+    || !same(outlineIndices, Array.from({ length: expectedCount }, (_, index) => index + 1))) {
+    fail("proposal_outline_index_mismatch");
+  }
+  const outlineByIndex = new Map(outline.map((item) => [item.index, item]));
+  for (const asset of imagePackage.assets) {
+    if (outlineByIndex.get(asset.index)?.role !== asset.role) fail("image_asset_outline_mismatch");
+  }
 }
 
 export function assertPlanMatchesInput(
@@ -364,6 +437,7 @@ export function assertPlanMatchesInput(
   if (imagePackage.avatarStyleImageId !== input.references.avatarStyleImageId) fail("image_avatar_mismatch");
   if (!same(imagePackage.attachments, input.references.attachments)) fail("image_attachments_mismatch");
   if (imagePackage.userImageInstruction !== input.userImageInstruction) fail("image_instruction_mismatch");
+  assertImagePackageAssetBindings(input, imagePackage);
 }
 
 type AssetIdentity = { role: RenderedAssetInventory["assets"][number]["role"]; index: number };
