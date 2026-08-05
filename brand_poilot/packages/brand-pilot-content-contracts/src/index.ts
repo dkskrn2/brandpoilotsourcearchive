@@ -5,6 +5,8 @@ export * from "./proposal.js";
 export * from "./generation.js";
 export * from "./plans.js";
 export * from "./manifest.js";
+export * from "./binding.js";
+export * from "./validators.js";
 
 import { ContentOrchestrationV2Schema } from "./orchestration.js";
 import {
