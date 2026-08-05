@@ -5,6 +5,14 @@ import { test } from "node:test";
 import { Client } from "pg";
 import * as migrationRunner from "./migrationRunner.mjs";
 
+const noProviderRoleCapabilities = Object.freeze({
+  is_superuser: false,
+  bypass_rls: false,
+  can_create_db: false,
+  can_create_role: false,
+  can_replicate: false,
+});
+
 const { buildMigrationPlan } = migrationRunner;
 
 function createEd25519Identity(keyId) {
@@ -77,11 +85,11 @@ test("074 runner exposes no signing primitive or private-key input", () => {
 
 test("074 canonical live role and object catalog hashes are order-independent and drift-sensitive", () => {
   const roles = [
-    { role_name: "content_schema_owner", can_login: false, is_superuser: false, bypass_rls: false, inherit: true },
-    { role_name: "content_migration", can_login: true, is_superuser: false, bypass_rls: false, inherit: false },
-    { role_name: "content_application", can_login: true, is_superuser: false, bypass_rls: false, inherit: true },
-    { role_name: "content_operator", can_login: true, is_superuser: false, bypass_rls: false, inherit: true },
-    { role_name: "content_cleanup", can_login: true, is_superuser: false, bypass_rls: false, inherit: true },
+    { role_name: "content_schema_owner", can_login: false, ...noProviderRoleCapabilities, inherit: true },
+    { role_name: "content_migration", can_login: true, ...noProviderRoleCapabilities, inherit: false },
+    { role_name: "content_application", can_login: true, ...noProviderRoleCapabilities, inherit: true },
+    { role_name: "content_operator", can_login: true, ...noProviderRoleCapabilities, inherit: true },
+    { role_name: "content_cleanup", can_login: true, ...noProviderRoleCapabilities, inherit: true },
   ];
   const membershipEdges = [{
     member_role_name: "content_migration", parent_role_name: "content_schema_owner",
@@ -102,6 +110,7 @@ test("074 canonical live role and object catalog hashes are order-independent an
   assert.equal(migrationRunner.hashBootstrapRoleCatalog({ roles: roles.toReversed(), membershipEdges: membershipEdges.toReversed() }), roleHash);
   assert.equal(migrationRunner.hashBootstrapObjectCatalog(objects.toReversed().map((row) => ({ ...row, columns: row.columns.toReversed() }))), objectHash);
   assert.notEqual(migrationRunner.hashBootstrapRoleCatalog({ roles: roles.map((row) => row.role_name === "content_application" ? { ...row, bypass_rls: true } : row), membershipEdges }), roleHash);
+  assert.notEqual(migrationRunner.hashBootstrapRoleCatalog({ roles: roles.map((row) => row.role_name === "content_operator" ? { ...row, can_create_role: true } : row), membershipEdges }), roleHash);
   assert.notEqual(migrationRunner.hashBootstrapRoleCatalog({ roles, membershipEdges: membershipEdges.map((edge) => ({ ...edge, inherit_option: true })) }), roleHash);
   assert.notEqual(migrationRunner.hashBootstrapObjectCatalog(objects.map((row) => row.relation_name === "topic_rows" ? { ...row, owner_role_name: "content_application" } : row)), objectHash);
 });
@@ -115,15 +124,24 @@ test("074 role safety seals both directions and rejects every non-approved PG16 
     cleanupRoleName: "content_cleanup",
   };
   const safe = [
-    { role_name: names.schemaOwnerRoleName, can_login: false, is_superuser: false, bypass_rls: false, inherit: true },
-    { role_name: names.applicationRoleName, can_login: true, is_superuser: false, bypass_rls: false, inherit: true },
-    { role_name: names.operatorRoleName, can_login: true, is_superuser: false, bypass_rls: false, inherit: true },
-    { role_name: names.migrationRoleName, can_login: true, is_superuser: false, bypass_rls: false, inherit: false },
-    { role_name: names.cleanupRoleName, can_login: true, is_superuser: false, bypass_rls: false, inherit: true },
+    { role_name: names.schemaOwnerRoleName, can_login: false, ...noProviderRoleCapabilities, inherit: true },
+    { role_name: names.applicationRoleName, can_login: true, ...noProviderRoleCapabilities, inherit: true },
+    { role_name: names.operatorRoleName, can_login: true, ...noProviderRoleCapabilities, inherit: true },
+    { role_name: names.migrationRoleName, can_login: true, ...noProviderRoleCapabilities, inherit: false },
+    { role_name: names.cleanupRoleName, can_login: true, ...noProviderRoleCapabilities, inherit: true },
   ];
   const soleEdge = [{ member_role_name: names.migrationRoleName, parent_role_name: names.schemaOwnerRoleName,
     set_option: true, inherit_option: false, admin_option: false }];
   assert.doesNotThrow(() => migrationRunner.validateBootstrapRoleSafety({ roles: safe, membershipEdges: soleEdge }, names));
+  for (const capability of ["can_create_db", "can_create_role", "can_replicate"]) {
+    for (const roleName of safe.map((row) => row.role_name)) {
+      const attacked = safe.map((row) => row.role_name === roleName ? { ...row, [capability]: true } : row);
+      assert.throws(() => migrationRunner.validateBootstrapRoleSafety({ roles: attacked, membershipEdges: soleEdge }, names), /bootstrap_role_catalog_invalid/);
+    }
+  }
+  const missingCapability = safe.map((row) => ({ ...row }));
+  delete missingCapability[0].can_create_role;
+  assert.throws(() => migrationRunner.validateBootstrapRoleSafety({ roles: missingCapability, membershipEdges: soleEdge }, names), /bootstrap_role_catalog_invalid/);
   for (const target of [names.schemaOwnerRoleName, names.operatorRoleName, names.migrationRoleName, names.cleanupRoleName, names.applicationRoleName]) {
     const attacked = [...soleEdge, { member_role_name: "rogue_login", parent_role_name: target,
       set_option: true, inherit_option: false, admin_option: false }];
@@ -400,11 +418,11 @@ test("074 migration source contains no provider-only event-trigger DDL", async (
 test("074 bootstrap role authorization applies stage one then independently consumes provider evidence", async () => {
   const migration = { id: "074_ai_content_maintenance_write_fence.sql", checksum: "1".repeat(64), sql: "select 1" };
   const stageRoleRows = [
-    { role_name: "content_schema_owner", can_login: false, is_superuser: false, bypass_rls: false, inherit: true },
-    { role_name: "content_application", can_login: true, is_superuser: false, bypass_rls: false, inherit: true },
-    { role_name: "content_operator", can_login: true, is_superuser: false, bypass_rls: false, inherit: true },
-    { role_name: "content_migration", can_login: true, is_superuser: false, bypass_rls: false, inherit: false },
-    { role_name: "content_cleanup", can_login: true, is_superuser: false, bypass_rls: false, inherit: true },
+    { role_name: "content_schema_owner", can_login: false, ...noProviderRoleCapabilities, inherit: true },
+    { role_name: "content_application", can_login: true, ...noProviderRoleCapabilities, inherit: true },
+    { role_name: "content_operator", can_login: true, ...noProviderRoleCapabilities, inherit: true },
+    { role_name: "content_migration", can_login: true, ...noProviderRoleCapabilities, inherit: false },
+    { role_name: "content_cleanup", can_login: true, ...noProviderRoleCapabilities, inherit: true },
   ];
   const stageMembershipEdges = [{ member_role_name: "content_migration", parent_role_name: "content_schema_owner",
     set_option: true, inherit_option: false, admin_option: false }];
@@ -467,7 +485,7 @@ test("074 bootstrap role authorization applies stage one then independently cons
       if (normalized === "select session_user, current_user") {
         return { rows: [{ session_user: authorization.migrationRoleName, current_user: authorization.migrationRoleName }] };
       }
-      if (normalized.includes("bootstrap_role_catalog_v2")) return { rows: stageRoleRows };
+      if (normalized.includes("bootstrap_role_catalog_v3")) return { rows: stageRoleRows };
       if (normalized.includes("bootstrap_role_membership_catalog_v2")) return { rows: stageMembershipEdges };
       if (normalized.includes("bootstrap_object_catalog_v1")) return { rows: stageObjectRows };
       if (normalized.includes("full_event_trigger_catalog_v1")) return { rows: liveEventRows };

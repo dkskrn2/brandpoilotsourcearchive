@@ -76,6 +76,9 @@ export function canonicalBootstrapRoleCatalog({ roles: roleRows, membershipEdges
     canLogin: row.can_login === true,
     isSuperuser: row.is_superuser === true,
     bypassRls: row.bypass_rls === true,
+    canCreateDatabase: row.can_create_db === true,
+    canCreateRole: row.can_create_role === true,
+    canReplicate: row.can_replicate === true,
     inherit: row.inherit === true,
   })).sort((left, right) => lexicalCompare(left.roleName, right.roleName));
   const membershipEdges = edgeRows.map((row) => ({
@@ -88,7 +91,7 @@ export function canonicalBootstrapRoleCatalog({ roles: roleRows, membershipEdges
     `${left.memberRoleName}\0${left.parentRoleName}`,
     `${right.memberRoleName}\0${right.parentRoleName}`,
   ));
-  return JSON.stringify({ contractVersion: "ai-content-bootstrap-role-catalog.v2", roles, membershipEdges });
+  return JSON.stringify({ contractVersion: "ai-content-bootstrap-role-catalog.v3", roles, membershipEdges });
 }
 
 export function hashBootstrapRoleCatalog(catalog) {
@@ -121,7 +124,11 @@ export function validateBootstrapRoleSafety({ roles: rows, membershipEdges }, na
   const exactNames = [names.schemaOwnerRoleName, names.applicationRoleName, names.operatorRoleName,
     names.migrationRoleName, names.cleanupRoleName];
   if (rows.length !== 5 || byName.size !== 5 || exactNames.some((name) => !byName.has(name))) throw new Error("bootstrap_role_catalog_invalid");
-  if (rows.some((row) => row.is_superuser === true || row.bypass_rls === true)) throw new Error("bootstrap_role_catalog_invalid");
+  const booleanRoleFields = ["can_login", "is_superuser", "bypass_rls", "can_create_db", "can_create_role", "can_replicate", "inherit"];
+  if (rows.some((row) => booleanRoleFields.some((field) => typeof row[field] !== "boolean")
+    || row.is_superuser || row.bypass_rls || row.can_create_db || row.can_create_role || row.can_replicate)) {
+    throw new Error("bootstrap_role_catalog_invalid");
+  }
   if (byName.get(names.schemaOwnerRoleName).can_login !== false
     || byName.get(names.applicationRoleName).can_login !== true
     || byName.get(names.operatorRoleName).can_login !== true
@@ -497,9 +504,11 @@ export async function readCanonicalBootstrapCatalogs(client, names) {
   const roleNames = [names.schemaOwnerRoleName, names.applicationRoleName, names.operatorRoleName,
     names.migrationRoleName, names.cleanupRoleName];
   const roleResult = await client.query(
-    `/* bootstrap_role_catalog_v2 */
+    `/* bootstrap_role_catalog_v3 */
      select role.rolname as role_name,role.rolcanlogin as can_login,role.rolsuper as is_superuser,
-             role.rolbypassrls as bypass_rls,role.rolinherit as inherit
+             role.rolbypassrls as bypass_rls,role.rolcreatedb as can_create_db,
+             role.rolcreaterole as can_create_role,role.rolreplication as can_replicate,
+             role.rolinherit as inherit
        from pg_roles role
       where role.rolname=any($1::name[])
        order by role.rolname`,
