@@ -184,6 +184,8 @@ git commit -m "feat(db): add AI content maintenance write fence"
 
 Record this exact commit SHA. Phase 5 deploys this compatibility release before it ever makes migration `075` available to the production migrator.
 
+Recorded compatibility release F: `893242d9a10b2a0af6b238297c124dcb666caf49`. This is the final Task 1 source reviewed with Critical/Important/Minor all zero; later Task 2+ commits do not change the Phase 5 fence-release identity.
+
 ## Task 2: Build checksummed incident and preserved-data evidence
 
 **Files:**
