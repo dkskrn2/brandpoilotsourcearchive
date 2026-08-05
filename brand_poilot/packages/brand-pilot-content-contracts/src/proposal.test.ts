@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   CONTENT_PROPOSAL_CONTRACT_VERSIONS,
@@ -113,6 +114,11 @@ function proposal(index: number) {
 }
 
 describe("proposal V2 schemas", () => {
+  it("sources purpose-detail discriminators from the catalog", () => {
+    const source = readFileSync(new URL("./proposal.ts", import.meta.url), "utf8");
+    expect(source).not.toMatch(/Type\.Literal\("(?:informational|marketing)"\)/);
+  });
+
   it("parses the exact persisted request and lowercase fingerprint", () => {
     const request = {
       contractVersion: CONTENT_PROPOSAL_CONTRACT_VERSIONS.request,
@@ -164,11 +170,6 @@ describe("proposal V2 schemas", () => {
 
   it("parses research evidence only at its catalog version", () => {
     expect(parseResearchEvidenceSnapshotV1(researchEvidence)).toEqual(researchEvidence);
-    expect(() => parseResearchEvidenceSnapshotV1({ ...researchEvidence, contractVersion: "research-evidence.v0" }))
-      .toThrow("research_evidence_v1_invalid");
-    const { contractVersion: _version, ...withoutVersion } = researchEvidence;
-    expect(() => parseResearchEvidenceSnapshotV1(withoutVersion))
-      .toThrow("research_evidence_v1_invalid");
   });
 
   it("requires exactly three structurally valid proposals at the output version", () => {
@@ -189,17 +190,66 @@ describe("proposal V2 schemas", () => {
   });
 
   it.each([
-    ["request", parseContentProposalRequestV2, {
-      purpose: "informational", outputFormat: "card_news", channelTargets: ["instagram"], requestFingerprint: "a".repeat(64),
-    }],
-    ["base", parseProposalBaseInputSnapshotV2, (() => {
-      const { contractVersion: _version, ...value } = baseInput(); return value;
-    })()],
-    ["composed", parseProposalInputSnapshotV2, (() => {
-      const { contractVersion: _version, ...value } = baseInput(); return { ...value, researchEvidence };
-    })()],
-    ["output", parseContentProposalSetV2, { proposals: [proposal(1), proposal(2), proposal(3)] }],
-  ] as const)("rejects omitted %s contract version", (_name, parser, value) => {
-    expect(() => parser(value)).toThrow();
+    {
+      name: "request",
+      parser: parseContentProposalRequestV2,
+      valid: {
+        contractVersion: CONTENT_PROPOSAL_CONTRACT_VERSIONS.request,
+        purpose: "informational",
+        outputFormat: "card_news",
+        channelTargets: ["instagram"],
+        requestFingerprint: "a".repeat(64),
+      },
+      legacyVersion: "content-proposal-request.v1",
+      errorCode: "content_proposal_request_v2_invalid",
+    },
+    {
+      name: "base",
+      parser: parseProposalBaseInputSnapshotV2,
+      valid: baseInput(),
+      legacyVersion: "proposal-base-input.v1",
+      errorCode: "proposal_base_input_v2_invalid",
+    },
+    {
+      name: "composed",
+      parser: parseProposalInputSnapshotV2,
+      valid: (() => {
+        const { contractVersion: _version, ...shared } = baseInput();
+        return {
+          contractVersion: CONTENT_PROPOSAL_CONTRACT_VERSIONS.composedInput,
+          ...shared,
+          researchEvidence,
+        };
+      })(),
+      legacyVersion: "proposal-input.v1",
+      errorCode: "proposal_input_v2_invalid",
+    },
+    {
+      name: "output",
+      parser: parseContentProposalSetV2,
+      valid: {
+        contractVersion: CONTENT_PROPOSAL_CONTRACT_VERSIONS.output,
+        proposals: [proposal(1), proposal(2), proposal(3)],
+      },
+      legacyVersion: "content-proposal.v1",
+      errorCode: "content_proposal_set_v2_invalid",
+    },
+    {
+      name: "research",
+      parser: parseResearchEvidenceSnapshotV1,
+      valid: researchEvidence,
+      legacyVersion: "research-evidence.v0",
+      errorCode: "research_evidence_v1_invalid",
+    },
+  ])("rejects omitted, unknown, and legacy $name contract versions", ({
+    parser,
+    valid,
+    legacyVersion,
+    errorCode,
+  }) => {
+    const { contractVersion: _version, ...withoutVersion } = valid;
+    expect(() => parser(withoutVersion)).toThrow(errorCode);
+    expect(() => parser({ ...valid, contractVersion: "unknown.contract.v999" })).toThrow(errorCode);
+    expect(() => parser({ ...valid, contractVersion: legacyVersion })).toThrow(errorCode);
   });
 });

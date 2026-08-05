@@ -1,6 +1,7 @@
 import { Type, type Static } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import {
+  CONTENT_PURPOSES,
   CONTENT_PROPOSAL_CONTRACT_VERSIONS,
   ContentPurposeSchema,
   ContentStudioOutputFormatSchema,
@@ -121,7 +122,7 @@ export const ContentProposalOutlineItemV2Schema = Type.Object({
 export type ContentProposalOutlineItemV2 = Static<typeof ContentProposalOutlineItemV2Schema>;
 
 export const InformationalPurposeDetailsV2Schema = Type.Object({
-  kind: Type.Literal("informational"),
+  kind: Type.Literal(CONTENT_PURPOSES[0]),
   question: Type.String({ minLength: 1, maxLength: 4_000 }),
   value: Type.String({ minLength: 1, maxLength: 4_000 }),
   whyNow: Type.String({ minLength: 1, maxLength: 4_000 }),
@@ -130,7 +131,7 @@ export const InformationalPurposeDetailsV2Schema = Type.Object({
 export type InformationalPurposeDetailsV2 = Static<typeof InformationalPurposeDetailsV2Schema>;
 
 export const MarketingPurposeDetailsV2Schema = Type.Object({
-  kind: Type.Literal("marketing"),
+  kind: Type.Literal(CONTENT_PURPOSES[1]),
   campaignObjective: Type.String({ minLength: 1, maxLength: 4_000 }),
   situationAndNeed: Type.String({ minLength: 1, maxLength: 4_000 }),
   productId: Type.String({
