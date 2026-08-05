@@ -1,5 +1,6 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { open, readFile, readdir, lstat, link, unlink } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
@@ -374,9 +375,12 @@ const fenceSecurityFunctions = Object.freeze([
   { identity: "public.enforce_ai_content_ddl_allowlist()", securityDefiner: true, config: ["search_path=pg_catalog,public"] },
   { identity: "public.enforce_ai_content_write_fence()", securityDefiner: true, config: ["search_path=pg_catalog,public"] },
   { identity: "public.forbid_ai_content_cutover_event_mutation()", securityDefiner: false, config: ["search_path=pg_catalog,public"] },
+  { identity: "public.lock_ai_content_cutover_transaction_state(uuid)", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "migration" },
   { identity: "public.prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamp with time zone,text,text,text,text,text)", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "operator" },
   { identity: "public.set_ai_content_maintenance(uuid,boolean)", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "operator" },
-  { identity: "public.transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamp with time zone,text)", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "operator" },
+  { identity: "public.transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamp with time zone,text)", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "operator", executeAlso: "migration" },
+  { identity: "public.verify_ai_content_cutover_status_chain(uuid)", securityDefiner: true, config: ["search_path=pg_catalog,public"] },
+  { identity: "public.verify_ai_content_cutover_status_chain_locked(ai_content_cutovers)", securityDefiner: true, config: ["search_path=pg_catalog,public"] },
   { identity: "public.verify_ai_content_write_fence_catalog()", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "migration" },
 ]);
 const fenceControlRelations = Object.freeze([
@@ -390,7 +394,7 @@ export const providerEnforcementBundle = Object.freeze({
   controlRelations: [...fenceControlRelations].sort(lexicalCompare),
 });
 export const providerEnforcementBundleSha256 = checksum(JSON.stringify(providerEnforcementBundle));
-const tableOwnerPrivileges = Object.freeze(["DELETE", "INSERT", "MAINTAIN", "REFERENCES", "SELECT", "TRIGGER", "TRUNCATE", "UPDATE"]);
+const tableOwnerPrivileges = Object.freeze(["DELETE", "INSERT", "REFERENCES", "SELECT", "TRIGGER", "TRUNCATE", "UPDATE"]);
 
 function expectedAcl(owner, extra = []) {
   return normalizeAcl([{ grantee: owner, privilege: "EXECUTE", grantable: false }, ...extra]);
@@ -424,7 +428,8 @@ export async function readFenceSecurityCatalog(client, names, { ownerRoleName = 
   const roleByKey = { application: names.applicationRoleName, operator: names.operatorRoleName, migration: names.migrationRoleName };
   for (const expected of fenceSecurityFunctions) {
     const actual = functionByIdentity.get(expected.identity);
-    const extras = expected.execute ? [{ grantee: roleByKey[expected.execute], privilege: "EXECUTE", grantable: false }] : [];
+    const extras = [expected.execute, expected.executeAlso].filter(Boolean)
+      .map((role) => ({ grantee: roleByKey[role], privilege: "EXECUTE", grantable: false }));
     if (!actual || actual.owner_role_name !== ownerRoleName
       || actual.security_definer !== expected.securityDefiner
       || exactJson([...(actual.config ?? [])].map((item) => String(item).replace(/\s+/g, "")).sort(lexicalCompare)) !== exactJson(expected.config)
@@ -457,7 +462,7 @@ export async function readFenceSecurityCatalog(client, names, { ownerRoleName = 
   const catalogResult = await client.query(
     `/* fence_security_catalog_rows_v1 */
      select relation_name,relation_class,row_classifier
-       from ai_content_write_fence_catalog order by relation_name`,
+       from ai_content_write_fence_catalog order by relation_name collate "C"`,
   );
   const catalogText = catalogResult.rows.map((row) => `${row.relation_name}|${row.relation_class}|${row.row_classifier}`).join("\n");
   if (catalogResult.rows.length !== 49 || checksum(catalogText) !== "82b7d45786d6fd94d6b3d2487dc2456c762e5da5430db79b870d4d2dc0284f2f") {
@@ -500,7 +505,7 @@ export async function readFenceSecurityCatalog(client, names, { ownerRoleName = 
   return { ...catalog, canonicalJson: canonicalFenceSecurityCatalog(catalog), catalogSha256: hashFenceSecurityCatalog(catalog) };
 }
 
-export async function readCanonicalBootstrapCatalogs(client, names) {
+export async function readCanonicalBootstrapRoleCatalog(client, names) {
   const roleNames = [names.schemaOwnerRoleName, names.applicationRoleName, names.operatorRoleName,
     names.migrationRoleName, names.cleanupRoleName];
   const roleResult = await client.query(
@@ -536,6 +541,17 @@ export async function readCanonicalBootstrapCatalogs(client, names) {
   );
   const roleCatalog = { roles: roleResult.rows, membershipEdges: membershipResult.rows };
   validateBootstrapRoleSafety(roleCatalog, names);
+  return {
+    roleRows: roleResult.rows,
+    membershipEdges: membershipResult.rows,
+    roleCatalogSha256: hashBootstrapRoleCatalog(roleCatalog),
+  };
+}
+
+export async function readCanonicalBootstrapCatalogs(client, names) {
+  const roleNames = [names.schemaOwnerRoleName, names.applicationRoleName, names.operatorRoleName,
+    names.migrationRoleName, names.cleanupRoleName];
+  const roleCatalog = await readCanonicalBootstrapRoleCatalog(client, names);
   const objectResult = await client.query(
     `/* bootstrap_object_catalog_v1 */
      select namespace.nspname as schema_name,relation.relname as relation_name,
@@ -559,10 +575,10 @@ export async function readCanonicalBootstrapCatalogs(client, names) {
     throw new Error("bootstrap_object_catalog_invalid");
   }
   return {
-    roleRows: roleResult.rows,
-    membershipEdges: membershipResult.rows,
+    roleRows: roleCatalog.roleRows,
+    membershipEdges: roleCatalog.membershipEdges,
     objectRows: objectResult.rows,
-    roleCatalogSha256: hashBootstrapRoleCatalog(roleCatalog),
+    roleCatalogSha256: roleCatalog.roleCatalogSha256,
     objectCatalogSha256: hashBootstrapObjectCatalog(objectResult.rows),
   };
 }
@@ -581,6 +597,451 @@ const bootstrapAuthorizationPayloadKeys = Object.freeze([
   ]);
 const bootstrapAuthorizationEnvelopeKeys = Object.freeze([...bootstrapAuthorizationPayloadKeys, "signature"]);
 
+const cutover075MigrationId = "075_ai_content_three_format_cutover.sql";
+const cutoverAllowlistAuthorizationPayloadKeys = Object.freeze([
+  "contractVersion", "algorithm", "keyId", "providerAttestationKeyId",
+  "providerAttestationPublicKeySha256", "requestId", "cutoverId", "migrationId",
+  "migrationSha256", "rows", "rowsSha256", "enforcementCatalogSha256", "issuedAt", "expiresAt",
+]);
+const cutoverAllowlistAuthorizationEnvelopeKeys = Object.freeze([
+  ...cutoverAllowlistAuthorizationPayloadKeys,
+  "signature",
+]);
+const cutoverAllowlistAttestationPayloadKeys = Object.freeze([
+  "contractVersion", "algorithm", "keyId", "action", "requestId", "requestSha256",
+  "cutoverId", "migrationId", "migrationSha256", "rowsSha256", "beforeCount",
+  "beforeSha256", "afterCount", "afterSha256", "issuedAt",
+]);
+const cutoverAllowlistAttestationEnvelopeKeys = Object.freeze([
+  ...cutoverAllowlistAttestationPayloadKeys,
+  "signature",
+]);
+
+function normalizeCutoverDdlAllowlist(rows, errorCode = "cutover_075_allowlist_rows_invalid") {
+  if (!Array.isArray(rows)) throw new Error(errorCode);
+  const normalized = rows.map((row) => {
+    assertExactObjectKeys(row, ["commandTag", "objectIdentityPattern"], errorCode);
+    if (typeof row.commandTag !== "string" || !/^[A-Z][A-Z _]{1,63}$/.test(row.commandTag)
+      || typeof row.objectIdentityPattern !== "string" || row.objectIdentityPattern.length === 0
+      || row.objectIdentityPattern.length > 512) {
+      throw new Error(errorCode);
+    }
+    return { commandTag: row.commandTag, objectIdentityPattern: row.objectIdentityPattern };
+  }).sort((left, right) => lexicalCompare(
+    `${left.commandTag}\0${left.objectIdentityPattern}`,
+    `${right.commandTag}\0${right.objectIdentityPattern}`,
+  ));
+  if (new Set(normalized.map((row) => `${row.commandTag}\0${row.objectIdentityPattern}`)).size !== normalized.length) {
+    throw new Error(errorCode);
+  }
+  return normalized;
+}
+
+export function canonicalCutoverDdlAllowlist(rows) {
+  return JSON.stringify({
+    contractVersion: "ai-content-075-ddl-allowlist-row-set.v1",
+    rows: normalizeCutoverDdlAllowlist(rows),
+  });
+}
+
+export function hashCutoverDdlAllowlist(rows) {
+  return checksum(canonicalCutoverDdlAllowlist(rows));
+}
+
+export function canonicalCutoverAllowlistAuthorizationPayload(value) {
+  assertExactObjectKeys(
+    value,
+    cutoverAllowlistAuthorizationPayloadKeys,
+    "cutover_075_allowlist_authorization_envelope_invalid",
+  );
+  const payload = Object.fromEntries(
+    cutoverAllowlistAuthorizationPayloadKeys.map((key) => [key, value[key]]),
+  );
+  payload.rows = normalizeCutoverDdlAllowlist(value.rows);
+  if (JSON.stringify(value.rows) !== JSON.stringify(payload.rows)) {
+    throw new Error("cutover_075_allowlist_rows_invalid");
+  }
+  return JSON.stringify(payload);
+}
+
+function cutoverAllowlistAuthorizationPayload(value) {
+  assertExactObjectKeys(
+    value,
+    cutoverAllowlistAuthorizationEnvelopeKeys,
+    "cutover_075_allowlist_authorization_envelope_invalid",
+  );
+  return Object.fromEntries(
+    cutoverAllowlistAuthorizationPayloadKeys.map((key) => [key, value[key]]),
+  );
+}
+
+function canonicalCutoverAllowlistAuthorizationEnvelope(value) {
+  const payload = cutoverAllowlistAuthorizationPayload(value);
+  decodeCanonicalEd25519Signature(value.signature, "cutover_075_allowlist_authorization");
+  return JSON.stringify({
+    ...JSON.parse(canonicalCutoverAllowlistAuthorizationPayload(payload)),
+    signature: value.signature,
+  });
+}
+
+export function hashCutoverAllowlistAuthorizationEnvelope(value) {
+  return checksum(canonicalCutoverAllowlistAuthorizationEnvelope(value));
+}
+
+export function validateCutoverAllowlistAuthorization(authorization, context) {
+  const payload = cutoverAllowlistAuthorizationPayload(authorization);
+  if (authorization.contractVersion !== "ai-content-075-ddl-allowlist-authorization.v1") {
+    throw new Error("cutover_075_allowlist_authorization_contract_invalid");
+  }
+  verifyPinnedEd25519(
+    canonicalCutoverAllowlistAuthorizationPayload(payload),
+    authorization,
+    context.authorizationVerification,
+    "cutover_075_allowlist_authorization",
+  );
+  loadPinnedEd25519PublicKey(
+    context.providerAttestationVerification,
+    "cutover_075_allowlist_authorization_provider",
+  );
+  if (authorization.providerAttestationKeyId !== context.providerAttestationVerification?.expectedKeyId
+    || authorization.providerAttestationPublicKeySha256
+      !== context.providerAttestationVerification?.expectedPublicKeySha256) {
+    throw new Error("cutover_075_allowlist_authorization_provider_identity_mismatch");
+  }
+  const now = new Date(context.now ?? Date.now()).getTime();
+  const issued = Date.parse(authorization.issuedAt);
+  const expires = Date.parse(authorization.expiresAt);
+  if (!Number.isFinite(issued) || issued > now) {
+    throw new Error("cutover_075_allowlist_authorization_not_yet_valid");
+  }
+  if (!Number.isFinite(expires) || (!context.allowExpiredSealed && expires < now)
+    || expires <= issued || expires-issued > 15*60*1000) {
+    throw new Error("cutover_075_allowlist_authorization_expired");
+  }
+  if (!exactUuid(authorization.requestId)
+    || !exactUuid(authorization.cutoverId)
+    || authorization.cutoverId !== context.cutoverId
+    || authorization.migrationId !== cutover075MigrationId
+    || authorization.migrationId !== context.migration?.id
+    || authorization.migrationSha256 !== context.migration?.checksum
+    || !exactHex(authorization.migrationSha256, 64)
+    || !exactHex(authorization.rowsSha256, 64)
+    || authorization.rowsSha256 !== hashCutoverDdlAllowlist(authorization.rows)
+    || !exactHex(authorization.enforcementCatalogSha256, 64)
+    || authorization.enforcementCatalogSha256 !== context.enforcementCatalogSha256) {
+    throw new Error("cutover_075_allowlist_authorization_identity_invalid");
+  }
+  return JSON.parse(canonicalCutoverAllowlistAuthorizationEnvelope(authorization));
+}
+
+export function canonicalCutoverAllowlistAttestationPayload(value) {
+  assertExactObjectKeys(
+    value,
+    cutoverAllowlistAttestationPayloadKeys,
+    "cutover_075_allowlist_attestation_envelope_invalid",
+  );
+  return JSON.stringify(Object.fromEntries(
+    cutoverAllowlistAttestationPayloadKeys.map((key) => [key, value[key]]),
+  ));
+}
+
+function cutoverAllowlistAttestationPayload(value) {
+  assertExactObjectKeys(
+    value,
+    cutoverAllowlistAttestationEnvelopeKeys,
+    "cutover_075_allowlist_attestation_envelope_invalid",
+  );
+  return Object.fromEntries(
+    cutoverAllowlistAttestationPayloadKeys.map((key) => [key, value[key]]),
+  );
+}
+
+export function hashCutoverAllowlistAttestationEnvelope(value) {
+  const payload = cutoverAllowlistAttestationPayload(value);
+  decodeCanonicalEd25519Signature(value.signature, "cutover_075_allowlist_attestation");
+  return checksum(JSON.stringify({
+    ...JSON.parse(canonicalCutoverAllowlistAttestationPayload(payload)),
+    signature: value.signature,
+  }));
+}
+
+export function validateCutoverAllowlistAttestation(attestation, {
+  authorization,
+  providerAttestationVerification,
+  now,
+}) {
+  const payload = cutoverAllowlistAttestationPayload(attestation);
+  if (attestation.contractVersion !== "ai-content-075-ddl-allowlist-attestation.v1") {
+    throw new Error("cutover_075_allowlist_attestation_contract_invalid");
+  }
+  verifyPinnedEd25519(
+    canonicalCutoverAllowlistAttestationPayload(payload),
+    attestation,
+    providerAttestationVerification,
+    "cutover_075_allowlist_attestation",
+  );
+  const issued = Date.parse(attestation.issuedAt);
+  const currentTime = new Date(now ?? Date.now()).getTime();
+  if (!Number.isFinite(issued) || issued < Date.parse(authorization.issuedAt)
+    || issued > Date.parse(authorization.expiresAt) || issued > currentTime) {
+    throw new Error("cutover_075_allowlist_attestation_stale");
+  }
+  const requestSha256 = hashCutoverAllowlistAuthorizationEnvelope(authorization);
+  const expected = {
+    action: "install_verify_075_ddl_allowlist",
+    requestId: authorization.requestId,
+    requestSha256,
+    cutoverId: authorization.cutoverId,
+    migrationId: authorization.migrationId,
+    migrationSha256: authorization.migrationSha256,
+    rowsSha256: authorization.rowsSha256,
+    afterCount: authorization.rows.length,
+    afterSha256: authorization.rowsSha256,
+  };
+  for (const [key, value] of Object.entries(expected)) {
+    if (attestation[key] !== value) {
+      throw new Error(`cutover_075_allowlist_attestation_${key}_mismatch`);
+    }
+  }
+  const emptySha256 = hashCutoverDdlAllowlist([]);
+  const recoveredExact = attestation.beforeCount === authorization.rows.length
+    && attestation.beforeSha256 === authorization.rowsSha256;
+  const freshInstall = attestation.beforeCount === 0 && attestation.beforeSha256 === emptySha256;
+  if ((!freshInstall && !recoveredExact) || !Number.isInteger(attestation.beforeCount)
+    || !exactHex(attestation.beforeSha256, 64)) {
+    throw new Error("cutover_075_allowlist_attestation_before_state_invalid");
+  }
+  return JSON.parse(JSON.stringify(attestation));
+}
+
+const defaultJournalFilesystem = Object.freeze({ lstat, open, link, unlink });
+
+async function assertSecureJournalDirectory(directory, { platform, uid }, filesystem) {
+  if (platform === "win32" || uid !== 0) {
+    throw new Error("cutover_075_secure_journal_platform_unsupported");
+  }
+  const metadata = await filesystem.lstat(directory);
+  if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== 0
+    || (metadata.mode & 0o077) !== 0) {
+    throw new Error("cutover_075_secure_journal_directory_invalid");
+  }
+}
+
+async function readJournalRecord(fileName, security, filesystem) {
+  let pathMetadata;
+  try {
+    pathMetadata = await filesystem.lstat(fileName);
+  } catch (error) {
+    if (error?.code === "ENOENT") return undefined;
+    throw error;
+  }
+  if (pathMetadata.isSymbolicLink()) {
+    throw new Error("cutover_075_secure_journal_record_invalid");
+  }
+  let handle;
+  try {
+    handle = await filesystem.open(fileName, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  } catch (error) {
+    if (error?.code === "ENOENT") return undefined;
+    throw error;
+  }
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile() || metadata.uid !== security.uid || (metadata.mode & 0o077) !== 0
+      || metadata.size <= 0 || metadata.size > 64*1024) {
+      throw new Error("cutover_075_secure_journal_record_invalid");
+    }
+    return JSON.parse(await handle.readFile("utf8"));
+  } finally {
+    await handle.close();
+  }
+}
+
+async function writeExclusiveJournalRecord(fileName, value, filesystem) {
+  const temporaryName = `${fileName}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
+  const handle = await filesystem.open(temporaryName, "wx", 0o600);
+  try {
+    await handle.writeFile(`${JSON.stringify(value)}\n`, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await filesystem.link(temporaryName, fileName);
+  } finally {
+    await filesystem.unlink(temporaryName).catch((error) => {
+      if (error?.code !== "ENOENT") throw error;
+    });
+  }
+  const directoryHandle = await filesystem.open(path.dirname(fileName), fsConstants.O_RDONLY);
+  try { await directoryHandle.sync(); } finally { await directoryHandle.close(); }
+}
+
+export function createCutover075ProviderJournal({
+  directory,
+  platform = process.platform,
+  uid = process.getuid?.(),
+  filesystem = defaultJournalFilesystem,
+}) {
+  if (typeof directory !== "string" || directory.length === 0) {
+    throw new Error("cutover_075_secure_journal_directory_required");
+  }
+  const security = { platform, uid };
+  const fileName = (requestId, state) => path.join(directory, `${requestId}.${state}.json`);
+  const assertDirectory = () => assertSecureJournalDirectory(directory, security, filesystem);
+  return {
+    async read(requestId) {
+      if (!exactUuid(requestId)) throw new Error("cutover_075_journal_request_invalid");
+      await assertDirectory();
+      const committed = await readJournalRecord(fileName(requestId, "committed"), security, filesystem);
+      if (committed) return { state: "committed", value: committed };
+      const prepared = await readJournalRecord(fileName(requestId, "prepared"), security, filesystem);
+      return prepared ? { state: "prepared", value: prepared } : undefined;
+    },
+    async prepare(requestId, value) {
+      await assertDirectory();
+      await writeExclusiveJournalRecord(fileName(requestId, "prepared"), value, filesystem);
+    },
+    async commit(requestId, value) {
+      await assertDirectory();
+      try {
+        await writeExclusiveJournalRecord(fileName(requestId, "committed"), value, filesystem);
+      } catch (error) {
+        if (error?.code !== "EEXIST") throw error;
+        const existing = await readJournalRecord(fileName(requestId, "committed"), security, filesystem);
+        if (JSON.stringify(existing) !== JSON.stringify(value)) {
+          throw new Error("cutover_075_journal_reused");
+        }
+      }
+    },
+  };
+}
+
+export async function installCutover075AllowlistWithProvider({
+  client,
+  migration,
+  authorization,
+  attestation,
+  authorizationVerification,
+  providerAttestationVerification,
+  now,
+  journal,
+}) {
+  if (!journal || typeof journal.read !== "function" || typeof journal.prepare !== "function"
+    || typeof journal.commit !== "function") {
+    throw new Error("cutover_075_provider_journal_required");
+  }
+  const journalValue = {
+    contractVersion: "ai-content-075-provider-journal.v1",
+    requestSha256: hashCutoverAllowlistAuthorizationEnvelope(authorization),
+    attestationSha256: hashCutoverAllowlistAttestationEnvelope(attestation),
+  };
+  const identity = await client.query("select session_user,current_user");
+  if (identity.rows[0]?.session_user !== "postgres" || identity.rows[0]?.current_user !== "postgres") {
+    throw new Error("cutover_075_provider_identity_invalid");
+  }
+  await client.query("begin");
+  try {
+    await client.query("lock table public.ai_content_ddl_allowlist in access exclusive mode");
+    const stateResult = await client.query(
+      `/* provider_075_sealed_state_v1 */
+       select bootstrap.final_fence_security_catalog_sha256,
+              cutover.status as cutover_status,cutover.migration_id as cutover_migration_id,
+              exists(select 1 from public.schema_migrations where id=$2) as marker_present
+         from public.ai_content_bootstrap_state bootstrap
+         join public.ai_content_cutovers cutover on cutover.id=$1
+        where bootstrap.singleton
+        for update of cutover`,
+      [authorization.cutoverId, migration.id],
+    );
+    const state = stateResult.rows[0];
+    if (!state || state.cutover_status !== "maintenance_verified"
+      || state.cutover_migration_id !== migration.id || state.marker_present !== false
+      || !exactHex(state.final_fence_security_catalog_sha256, 64)) {
+      throw new Error("cutover_075_provider_state_invalid");
+    }
+    const readRows = async () => {
+      const result = await client.query(
+        `select command_tag,object_identity_pattern
+           from public.ai_content_ddl_allowlist where migration_id=$1
+          order by command_tag,object_identity_pattern`,
+        [migration.id],
+      );
+      return result.rows.map((row) => ({
+        commandTag: String(row.command_tag),
+        objectIdentityPattern: String(row.object_identity_pattern),
+      }));
+    };
+    const beforeRows = await readRows();
+    const existingJournal = await journal.read(authorization.requestId);
+    const exactJournal = existingJournal
+      && ['prepared', 'committed'].includes(existingJournal.state)
+      && JSON.stringify(existingJournal.value) === JSON.stringify(journalValue);
+    if (existingJournal) {
+      if (!exactJournal) {
+        throw new Error("cutover_075_journal_reused");
+      }
+    }
+    const beforeIsEmpty = beforeRows.length === 0;
+    const claimedBeforeIsExact = Array.isArray(authorization.rows)
+      && beforeRows.length === authorization.rows.length
+      && hashCutoverDdlAllowlist(beforeRows) === authorization.rowsSha256;
+    if (!beforeIsEmpty && !claimedBeforeIsExact) throw new Error("cutover_075_provider_allowlist_partial_or_extra");
+    if (!existingJournal && claimedBeforeIsExact) throw new Error("cutover_075_direct_allowlist_insert_forbidden");
+    if (existingJournal?.state === "committed" && !claimedBeforeIsExact) {
+      throw new Error("cutover_075_committed_journal_live_state_invalid");
+    }
+    const validatedAuthorization = validateCutoverAllowlistAuthorization(authorization, {
+      migration,
+      cutoverId: authorization.cutoverId,
+      enforcementCatalogSha256: state.final_fence_security_catalog_sha256,
+      authorizationVerification,
+      providerAttestationVerification,
+      now,
+      allowExpiredSealed: Boolean(exactJournal && claimedBeforeIsExact),
+    });
+    const validatedAttestation = validateCutoverAllowlistAttestation(attestation, {
+      authorization: validatedAuthorization,
+      providerAttestationVerification,
+      now,
+    });
+    const beforeIsExact = beforeRows.length === validatedAuthorization.rows.length
+      && hashCutoverDdlAllowlist(beforeRows) === validatedAuthorization.rowsSha256;
+    if (!existingJournal) {
+      if (!beforeIsEmpty) throw new Error("cutover_075_direct_allowlist_insert_forbidden");
+      if (validatedAttestation.beforeCount !== beforeRows.length
+        || validatedAttestation.beforeSha256 !== hashCutoverDdlAllowlist(beforeRows)) {
+        throw new Error("cutover_075_allowlist_attestation_before_live_mismatch");
+      }
+      await journal.prepare(authorization.requestId, journalValue);
+    } else if (existingJournal.state === "prepared" && beforeIsEmpty
+      && (validatedAttestation.beforeCount !== 0
+        || validatedAttestation.beforeSha256 !== hashCutoverDdlAllowlist([]))) {
+      throw new Error("cutover_075_allowlist_attestation_before_live_mismatch");
+    }
+    if (beforeIsEmpty) {
+      await client.query(
+        `insert into public.ai_content_ddl_allowlist (migration_id,command_tag,object_identity_pattern)
+         select $1,rows.command_tag,rows.object_identity_pattern
+           from unnest($2::text[],$3::text[]) rows(command_tag,object_identity_pattern)`,
+        [migration.id, validatedAuthorization.rows.map((row) => row.commandTag),
+          validatedAuthorization.rows.map((row) => row.objectIdentityPattern)],
+      );
+    }
+    const afterRows = await readRows();
+    if (afterRows.length !== validatedAuthorization.rows.length
+      || hashCutoverDdlAllowlist(afterRows) !== validatedAuthorization.rowsSha256) {
+      throw new Error("cutover_075_provider_allowlist_after_mismatch");
+    }
+    await client.query("commit");
+    await journal.commit(authorization.requestId, journalValue);
+    return JSON.parse(JSON.stringify(validatedAttestation));
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  }
+}
+
 export function canonicalBootstrapAuthorizationPayload(value) {
   assertExactObjectKeys(value, bootstrapAuthorizationPayloadKeys, "bootstrap_role_authorization_envelope_invalid");
   return JSON.stringify(Object.fromEntries(bootstrapAuthorizationPayloadKeys.map((key) => [key, value[key]])));
@@ -593,6 +1054,11 @@ function bootstrapAuthorizationPayload(value) {
 
 function exactHex(value, size) {
   return typeof value === "string" && new RegExp(`^[0-9a-f]{${size}}$`).test(value);
+}
+
+function exactUuid(value) {
+  return typeof value === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 }
 
 function loadPinnedEd25519PublicKey(verification, errorPrefix) {
@@ -654,7 +1120,7 @@ export function validateBootstrapRoleAuthorization(authorization, context) {
   const now = new Date(context.now ?? Date.now()).getTime();
   const issued = Date.parse(authorization.issuedAt);
   const expires = Date.parse(authorization.expiresAt);
-  if (!Number.isFinite(issued) || !Number.isFinite(expires) || (!context.allowExpiredSealed && issued > now)) {
+  if (!Number.isFinite(issued) || !Number.isFinite(expires) || issued > now) {
     throw new Error("bootstrap_role_authorization_not_yet_valid");
   }
   if ((!context.allowExpiredSealed && expires < now) || expires <= issued || expires-issued > 15*60*1000) {
@@ -1229,12 +1695,360 @@ async function baselineExistingSchema(client, migrations, baselineUpTo) {
   }
 }
 
+function buildCutoverBodyEvidence(migration, cutover) {
+  return checksum(JSON.stringify({
+    contractVersion: "ai-content-075-migration-body-evidence.v1",
+    cutoverId: cutover.cutoverId,
+    migrationId: migration.id,
+    migrationSha256: migration.checksum,
+    databaseRoleName: cutover.expectedDatabaseRole,
+    schemaOwnerRoleName: cutover.schemaOwnerRoleName,
+    allowlistRowsSha256: cutover.allowlistRowsSha256,
+    allowlistAuthorizationSha256: cutover.allowlistAuthorizationSha256,
+    allowlistAttestationSha256: cutover.allowlistAttestationSha256,
+    enforcementCatalogSha256: cutover.enforcementCatalogSha256,
+    provider074AttestationSha256: cutover.provider074AttestationSha256,
+  }));
+}
+
+export function hashCutover075BootstrapEnvelopeState(state) {
+  return checksum(JSON.stringify({
+    authorizationRequestId: state.authorization_request_id,
+    authorizationSha256: state.authorization_sha256,
+    installRequestJson: state.install_request_json,
+    installRequestSha256: state.install_request_sha256,
+    providerAttestationJson: state.provider_attestation_json,
+    providerAttestationSha256: state.provider_attestation_sha256,
+    revocationRequestJson: state.revocation_request_json,
+    revocationRequestSha256: state.revocation_request_sha256,
+  }));
+}
+
+async function verifyCutover075Preconditions({ client, migration, cutover, bootstrap074, migration074, recovery = false }) {
+  if (!cutover?.allowlistAuthorization || !cutover?.allowlistAttestation
+    || !cutover.authorizationVerification || !cutover.providerAttestationVerification) {
+    throw new Error("cutover_075_allowlist_attestation_required");
+  }
+  const identity = await client.query("select session_user, current_user");
+  if (identity.rows[0]?.session_user !== cutover.expectedDatabaseRole
+    || identity.rows[0]?.current_user !== cutover.expectedDatabaseRole
+    || cutover.expectedDatabaseRole === "postgres") {
+    throw new Error("cutover_075_database_role_invalid");
+  }
+  const stateResult = await client.query(
+    `/* cutover_075_sealed_state_v1 */
+     select bootstrap.migration_role_name as bootstrap_migration_role_name,
+            bootstrap.authorization_request_id,bootstrap.authorization_sha256,
+            bootstrap.schema_owner_role_name,bootstrap.application_role_name,
+            bootstrap.operator_role_name,bootstrap.cleanup_role_name,
+             bootstrap.role_catalog_sha256,
+             bootstrap.final_fence_security_catalog_sha256,
+            bootstrap.provider_attestation_sha256,bootstrap.attestation_consumed_at,
+            bootstrap.install_request_json,bootstrap.install_request_sha256,
+            bootstrap.provider_attestation_json,
+            bootstrap.revocation_request_json,bootstrap.revocation_request_sha256,
+            bootstrap.event_trigger_catalog_after_sha256,bootstrap.event_trigger_catalog_after_count
+       from public.ai_content_bootstrap_state bootstrap where bootstrap.singleton`,
+  );
+  const state = stateResult.rows[0];
+  if (!state || state.bootstrap_migration_role_name !== cutover.expectedDatabaseRole
+    || !exactHex(state.role_catalog_sha256, 64)
+    || !exactHex(state.final_fence_security_catalog_sha256, 64)
+    || !exactHex(state.provider_attestation_sha256, 64) || !state.attestation_consumed_at
+    || !exactHex(state.event_trigger_catalog_after_sha256, 64)
+    || !Number.isInteger(state.event_trigger_catalog_after_count)) {
+    throw new Error("cutover_075_sealed_state_invalid");
+  }
+  if (!bootstrap074?.authorization || !migration074) {
+    throw new Error("cutover_075_sealed_074_authorization_required");
+  }
+  const authorization074 = validateBootstrapRoleAuthorization(bootstrap074.authorization, {
+    ...bootstrap074,
+    migration: migration074,
+    roleCatalogSha256: bootstrap074.authorization.roleCatalogSha256,
+    objectCatalogSha256: bootstrap074.authorization.objectCatalogSha256,
+    allowExpiredSealed: true,
+  });
+  const authorization074Sha256 = checksum(canonicalBootstrapAuthorizationPayload(
+    bootstrapAuthorizationPayload(authorization074),
+  ));
+  const storedInstall = validateProviderEventTriggerInstallRequest(
+    state.install_request_json,
+    state.install_request_sha256,
+  );
+  const storedProviderAttestation = validateProviderEventTriggerAttestation(state.provider_attestation_json, {
+    authorization: authorization074,
+    installRequest: storedInstall,
+    providerAttestationVerification: bootstrap074.providerAttestationVerification,
+    finalFenceSecurityCatalogSha256: state.final_fence_security_catalog_sha256,
+    now: bootstrap074.now,
+  });
+  const storedProviderAttestationSha256 = hashProviderAttestationEnvelope(storedProviderAttestation);
+  const expectedRevocation = buildMembershipRevocationRequest(
+    authorization074,
+    storedInstall,
+    storedProviderAttestationSha256,
+  );
+  validateMembershipRevocationEvidence(
+    state.revocation_request_json,
+    expectedRevocation,
+    state.revocation_request_sha256,
+  );
+  if (state.authorization_request_id !== authorization074.requestId
+    || state.authorization_sha256 !== authorization074Sha256
+    || state.provider_attestation_sha256 !== storedProviderAttestationSha256
+    || storedInstall.authorizationRequestId !== authorization074.requestId
+    || storedInstall.roleCatalogSha256 !== state.role_catalog_sha256
+    || storedInstall.expectedFinalFenceSecurityCatalogSha256 !== state.final_fence_security_catalog_sha256) {
+    throw new Error("cutover_075_sealed_074_envelope_mismatch");
+  }
+  const authorization = validateCutoverAllowlistAuthorization(cutover.allowlistAuthorization, {
+    migration,
+    cutoverId: cutover.cutoverId,
+    enforcementCatalogSha256: state.final_fence_security_catalog_sha256,
+    authorizationVerification: cutover.authorizationVerification,
+    providerAttestationVerification: cutover.providerAttestationVerification,
+    now: cutover.now,
+    allowExpiredSealed: recovery,
+  });
+  validateCutoverAllowlistAttestation(cutover.allowlistAttestation, {
+    authorization,
+    providerAttestationVerification: cutover.providerAttestationVerification,
+    now: cutover.now,
+  });
+  const marker = await client.query(
+    "select exists(select 1 from schema_migrations where id=$1) as marker_present",
+    [migration.id],
+  );
+  if (marker.rows[0]?.marker_present !== recovery) {
+    throw new Error(recovery ? "cutover_075_recovery_marker_missing" : "cutover_075_marker_already_present");
+  }
+  const liveAllowlist = await client.query(
+    `select command_tag,object_identity_pattern
+       from public.ai_content_ddl_allowlist where migration_id=$1
+      order by command_tag,object_identity_pattern`,
+    [migration.id],
+  );
+  const liveRows = liveAllowlist.rows.map((row) => ({
+    commandTag: String(row.command_tag),
+    objectIdentityPattern: String(row.object_identity_pattern),
+  }));
+  if (liveRows.length !== authorization.rows.length
+    || hashCutoverDdlAllowlist(liveRows) !== authorization.rowsSha256
+    || JSON.stringify(normalizeCutoverDdlAllowlist(liveRows)) !== JSON.stringify(authorization.rows)) {
+    throw new Error("cutover_075_live_allowlist_mismatch");
+  }
+  const verifiedFence = await client.query("select verify_ai_content_write_fence_catalog() as verified");
+  if (verifiedFence.rows[0]?.verified !== true) throw new Error("cutover_075_fence_catalog_invalid");
+  const names = {
+    migrationRoleName: state.bootstrap_migration_role_name,
+    schemaOwnerRoleName: state.schema_owner_role_name,
+    applicationRoleName: state.application_role_name,
+    operatorRoleName: state.operator_role_name,
+    cleanupRoleName: state.cleanup_role_name,
+  };
+  const liveRoles = await readCanonicalBootstrapRoleCatalog(client, names);
+  if (liveRoles.roleCatalogSha256 !== state.role_catalog_sha256) {
+    throw new Error("cutover_075_live_role_catalog_mismatch");
+  }
+  const liveFence = await readFenceSecurityCatalog(client, names, { ownerRoleName: "postgres" });
+  if (liveFence.catalogSha256 !== state.final_fence_security_catalog_sha256) {
+    throw new Error("cutover_075_enforcement_catalog_mismatch");
+  }
+  const liveEventTriggers = await readCanonicalEventTriggerCatalog(client);
+  if (liveEventTriggers.catalogSha256 !== state.event_trigger_catalog_after_sha256
+    || liveEventTriggers.count !== state.event_trigger_catalog_after_count) {
+    throw new Error("cutover_075_event_trigger_catalog_mismatch");
+  }
+  return {
+    ...cutover,
+    schemaOwnerRoleName: state.schema_owner_role_name,
+    allowlistRowsSha256: authorization.rowsSha256,
+    allowlistAuthorizationSha256: hashCutoverAllowlistAuthorizationEnvelope(authorization),
+    allowlistAttestationSha256: hashCutoverAllowlistAttestationEnvelope(cutover.allowlistAttestation),
+    enforcementCatalogSha256: state.final_fence_security_catalog_sha256,
+    provider074AttestationSha256: state.provider_attestation_sha256,
+    roleCatalogSha256: state.role_catalog_sha256,
+    roleNames: names,
+    sealed074Context: { bootstrap074, migration074 },
+    eventTriggerCatalogSha256: state.event_trigger_catalog_after_sha256,
+    eventTriggerCatalogCount: state.event_trigger_catalog_after_count,
+    sealedBootstrapEnvelopeSha256: hashCutover075BootstrapEnvelopeState(state),
+  };
+}
+
+async function revalidateAtomicCutoverDatabaseState({ client, migration, cutover }) {
+  if (!cutover.sealed074Context?.bootstrap074 || !cutover.sealed074Context?.migration074
+    || !cutover.roleNames || !exactHex(cutover.roleCatalogSha256, 64)) {
+    throw new Error("cutover_075_transaction_seal_required");
+  }
+  const locked = await client.query("select lock_ai_content_cutover_transaction_state($1) as locked", [cutover.cutoverId]);
+  if (locked.rows[0]?.locked !== true) throw new Error("cutover_075_transaction_lock_failed");
+  const bootstrap = await client.query(
+    `/* cutover_075_transaction_bootstrap_lock_v1 */
+     select migration_role_name,schema_owner_role_name,application_role_name,operator_role_name,
+            cleanup_role_name,role_catalog_sha256,final_fence_security_catalog_sha256,
+            authorization_request_id,authorization_sha256,install_request_json,install_request_sha256,
+            provider_attestation_json,provider_attestation_sha256,attestation_consumed_at,
+            revocation_request_json,revocation_request_sha256,
+            event_trigger_catalog_after_sha256,event_trigger_catalog_after_count
+       from public.ai_content_bootstrap_state where singleton`,
+  );
+  const state = bootstrap.rows[0];
+  if (!state || state.migration_role_name !== cutover.expectedDatabaseRole
+    || state.schema_owner_role_name !== cutover.schemaOwnerRoleName
+    || state.application_role_name !== cutover.roleNames.applicationRoleName
+    || state.operator_role_name !== cutover.roleNames.operatorRoleName
+    || state.cleanup_role_name !== cutover.roleNames.cleanupRoleName
+    || state.role_catalog_sha256 !== cutover.roleCatalogSha256
+    || state.final_fence_security_catalog_sha256 !== cutover.enforcementCatalogSha256
+    || state.provider_attestation_sha256 !== cutover.provider074AttestationSha256
+    || !state.attestation_consumed_at
+    || state.event_trigger_catalog_after_sha256 !== cutover.eventTriggerCatalogSha256
+    || state.event_trigger_catalog_after_count !== cutover.eventTriggerCatalogCount
+    || hashCutover075BootstrapEnvelopeState(state) !== cutover.sealedBootstrapEnvelopeSha256) {
+    throw new Error("cutover_075_transaction_bootstrap_drift");
+  }
+  const allowlist = await client.query(
+    `/* cutover_075_transaction_allowlist_lock_v1 */
+     select command_tag,object_identity_pattern from public.ai_content_ddl_allowlist
+      where migration_id=$1 order by command_tag,object_identity_pattern`,
+    [migration.id],
+  );
+  const allowlistRows = allowlist.rows.map((row) => ({
+    commandTag: String(row.command_tag), objectIdentityPattern: String(row.object_identity_pattern),
+  }));
+  if (allowlistRows.length !== cutover.allowlistAuthorization.rows.length
+    || hashCutoverDdlAllowlist(allowlistRows) !== cutover.allowlistRowsSha256) {
+    throw new Error("cutover_075_transaction_allowlist_drift");
+  }
+  const liveRoles = await readCanonicalBootstrapRoleCatalog(client, cutover.roleNames);
+  if (liveRoles.roleCatalogSha256 !== cutover.roleCatalogSha256) {
+    throw new Error("cutover_075_transaction_role_catalog_drift");
+  }
+  const verifiedFence = await client.query("select verify_ai_content_write_fence_catalog() as verified");
+  if (verifiedFence.rows[0]?.verified !== true) throw new Error("cutover_075_transaction_fence_invalid");
+  const liveFence = await readFenceSecurityCatalog(client, cutover.roleNames, { ownerRoleName: "postgres" });
+  if (liveFence.catalogSha256 !== cutover.enforcementCatalogSha256) {
+    throw new Error("cutover_075_transaction_enforcement_catalog_drift");
+  }
+  const liveEvents = await readCanonicalEventTriggerCatalog(client);
+  if (liveEvents.catalogSha256 !== cutover.eventTriggerCatalogSha256
+    || liveEvents.count !== cutover.eventTriggerCatalogCount) {
+    throw new Error("cutover_075_transaction_event_trigger_drift");
+  }
+  return cutover;
+}
+
+export async function executeAtomicCutoverMigration({ client, migration, cutover }) {
+  if (migration?.id !== cutover075MigrationId || !exactHex(migration?.checksum, 64)
+    || typeof migration?.sql !== "string" || !cutover
+    || !exactUuid(cutover.cutoverId)
+    || typeof cutover.bypassToken !== "string" || cutover.bypassToken.length === 0
+    || !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(cutover.expectedDatabaseRole ?? "")
+    || !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(cutover.schemaOwnerRoleName ?? "")
+    || cutover.allowlistAuthorization?.migrationSha256 !== migration.checksum
+    || cutover.allowlistAuthorization?.migrationId !== migration.id
+    || cutover.allowlistAuthorization?.cutoverId !== cutover.cutoverId
+    || !cutover.sealed074Context?.bootstrap074 || !cutover.sealed074Context?.migration074
+    || !cutover.roleNames || !exactHex(cutover.roleCatalogSha256, 64)
+    || !exactHex(cutover.eventTriggerCatalogSha256, 64)
+    || !Number.isInteger(cutover.eventTriggerCatalogCount)
+    || !exactHex(cutover.sealedBootstrapEnvelopeSha256, 64)
+    || !exactHex(cutover.allowlistRowsSha256, 64)
+    || ["allowlistAuthorizationSha256", "allowlistAttestationSha256", "enforcementCatalogSha256",
+      "provider074AttestationSha256"].some((field) => !exactHex(cutover[field], 64))) {
+    throw new Error("cutover_075_config_invalid");
+  }
+  await client.query("begin");
+  try {
+    await client.query("select set_config('app.ai_content_cutover_id',$1,true)", [cutover.cutoverId]);
+    await client.query("select set_config('app.ai_content_cutover_token',$1,true)", [cutover.bypassToken]);
+    await client.query("select set_config('app.ai_content_migration_id',$1,true)", [migration.id]);
+    const bypass = await client.query("select ai_content_cutover_bypass_allowed() as allowed");
+    if (bypass.rows[0]?.allowed !== true) throw new Error("cutover_075_transaction_revalidation_failed");
+    const authoritativeCutover = await revalidateAtomicCutoverDatabaseState({ client, migration, cutover });
+    const bodyEvidenceSha256 = buildCutoverBodyEvidence(migration, authoritativeCutover);
+    await client.query(`set local role ${quoteIdentifier(authoritativeCutover.schemaOwnerRoleName)}`);
+    await client.query(unwrapFileTransaction(migration.sql));
+    await client.query("reset role");
+    await client.query(
+      "insert into schema_migrations (id, checksum) values ($1, $2)",
+      [migration.id, migration.checksum],
+    );
+    const transition = await client.query(
+      "select transition_ai_content_cutover_status($1,'maintenance_verified','migration_body_complete',$2) as event_sha256",
+      [cutover.cutoverId, bodyEvidenceSha256],
+    );
+    const statusEventSha256 = transition.rows[0]?.event_sha256;
+    if (!exactHex(statusEventSha256, 64)) throw new Error("cutover_075_status_evidence_invalid");
+    await client.query("commit");
+    return {
+      cutoverId: cutover.cutoverId,
+      migrationId: migration.id,
+      status: "migration_body_complete",
+      bodyEvidenceSha256,
+      statusEventSha256,
+    };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  }
+}
+
+export async function recoverAtomicCutoverMigration({ client, migration, cutover }) {
+  if (migration?.id !== cutover075MigrationId || !exactHex(migration?.checksum, 64)
+    || !cutover || !exactUuid(cutover.cutoverId)
+    || typeof cutover.bypassToken !== "string" || cutover.bypassToken.length === 0
+    || !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(cutover.expectedDatabaseRole ?? "")
+    || !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(cutover.schemaOwnerRoleName ?? "")
+    || cutover.allowlistAuthorization?.migrationSha256 !== migration.checksum
+    || cutover.allowlistAuthorization?.migrationId !== migration.id
+    || cutover.allowlistAuthorization?.cutoverId !== cutover.cutoverId
+    || !cutover.sealed074Context?.bootstrap074 || !cutover.sealed074Context?.migration074
+    || !cutover.roleNames || !exactHex(cutover.roleCatalogSha256, 64)
+    || !exactHex(cutover.eventTriggerCatalogSha256, 64)
+    || !Number.isInteger(cutover.eventTriggerCatalogCount)
+    || !exactHex(cutover.sealedBootstrapEnvelopeSha256, 64)
+    || !exactHex(cutover.allowlistRowsSha256, 64)
+    || ["allowlistAuthorizationSha256", "allowlistAttestationSha256", "enforcementCatalogSha256",
+      "provider074AttestationSha256"].some((field) => !exactHex(cutover[field], 64))) {
+    throw new Error("cutover_075_recovery_config_invalid");
+  }
+  await client.query("begin");
+  try {
+    await client.query("select set_config('app.ai_content_cutover_id',$1,true)", [cutover.cutoverId]);
+    await client.query("select set_config('app.ai_content_cutover_token',$1,true)", [cutover.bypassToken]);
+    await client.query("select set_config('app.ai_content_migration_id',$1,true)", [migration.id]);
+    const authoritativeCutover = await revalidateAtomicCutoverDatabaseState({ client, migration, cutover });
+    const bodyEvidenceSha256 = buildCutoverBodyEvidence(migration, authoritativeCutover);
+    const transition = await client.query(
+      "select transition_ai_content_cutover_status($1,'maintenance_verified','migration_body_complete',$2) as event_sha256",
+      [cutover.cutoverId, bodyEvidenceSha256],
+    );
+    const statusEventSha256 = transition.rows[0]?.event_sha256;
+    if (!exactHex(statusEventSha256, 64)) throw new Error("cutover_075_recovery_status_evidence_invalid");
+    await client.query("commit");
+    return {
+      cutoverId: cutover.cutoverId,
+      migrationId: migration.id,
+      status: "migration_body_complete",
+      bodyEvidenceSha256,
+      statusEventSha256,
+    };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  }
+}
+
 export async function runMigrationsWithClient({
   client,
   migrations,
   baselineUpTo,
   dryRun = false,
   bootstrap074,
+  cutover,
 }) {
   await client.query("select pg_advisory_lock(hashtext($1))", [migrationAdvisoryLockName]);
   try {
@@ -1248,7 +2062,7 @@ export async function runMigrationsWithClient({
     }
     const migration074 = migrations.find((migration) => migration.id === bootstrap074MigrationId);
     const contains074 = Boolean(migration074);
-    if (contains074 && migrations.some((migration) => migration.id === "075_ai_content_three_format_cutover.sql")) {
+    if (contains074 && migrations.some((migration) => migration.id === cutover075MigrationId) && !cutover) {
       throw new Error("bootstrap_075_present_forbidden");
     }
     let history;
@@ -1257,14 +2071,15 @@ export async function runMigrationsWithClient({
       const historyTable = await client.query("select to_regclass('public.schema_migrations') as relation");
       if (!historyTable.rows[0]?.relation) throw new Error("bootstrap_074_pending_set_invalid");
       history = await readHistory(client);
-      if (history.some((migration) => migration.id === "075_ai_content_three_format_cutover.sql")) {
+      if (history.some((migration) => migration.id === cutover075MigrationId) && !cutover) {
         throw new Error("bootstrap_075_present_forbidden");
       }
       plan = buildMigrationPlan(migrations, history);
       const pendingIds = plan.pending.map((migration) => migration.id);
       const applying074 = pendingIds.includes(bootstrap074MigrationId);
       if ((applying074 && (pendingIds.length !== 1 || pendingIds[0] !== bootstrap074MigrationId))
-        || (!applying074 && pendingIds.length !== 0)) {
+        || (!applying074 && pendingIds.length !== 0
+          && (!cutover || pendingIds.length !== 1 || pendingIds[0] !== cutover075MigrationId))) {
         throw new Error("bootstrap_074_pending_set_invalid");
       }
     } else {
@@ -1282,6 +2097,7 @@ export async function runMigrationsWithClient({
     let revocationRequest;
     let eventTriggerCatalog;
     let fenceSecurityCatalog;
+    let cutoverResult;
     if (plan.pending.some((migration) => migration.id === bootstrap074MigrationId)) {
       if (!bootstrap074?.authorization) throw new Error("bootstrap_role_authorization_required");
       authorization = validateBootstrapRoleAuthorization(bootstrap074.authorization, {
@@ -1310,7 +2126,25 @@ export async function runMigrationsWithClient({
         throw new Error("bootstrap_role_authorization_event_trigger_catalog_mismatch");
       }
     }
+    const pending075 = plan.pending.find((migration) => migration.id === cutover075MigrationId);
+    const migration075 = migrations.find((migration) => migration.id === cutover075MigrationId);
+    const recovering075 = Boolean(cutover && migration075
+      && history.some((migration) => migration.id === cutover075MigrationId) && !pending075);
+    if (pending075 && !contains074) {
+      throw new Error("cutover_075_requires_074_source_and_history");
+    }
+    if (pending075 && !bootstrap074?.authorization) {
+      throw new Error("cutover_075_sealed_074_authorization_required");
+    }
+    const preparedCutover = pending075
+      ? await verifyCutover075Preconditions({ client, migration: pending075, cutover, bootstrap074, migration074 })
+      : recovering075
+        ? await verifyCutover075Preconditions({ client, migration: migration075, cutover, bootstrap074, migration074, recovery: true })
+        : undefined;
     for (const migration of plan.pending) {
+      if (migration.id === cutover075MigrationId) {
+        continue;
+      }
       await client.query("begin");
       try {
         if (migration.id === bootstrap074MigrationId) {
@@ -1327,7 +2161,8 @@ export async function runMigrationsWithClient({
           await client.query(`grant execute on function assert_ai_content_writable() to ${appRole}`);
           await client.query(`grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,text,text,text),set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text) to ${operatorRole}`);
           await client.query(`grant select on table ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog to ${migrationRole}`);
-          await client.query(`grant execute on function ai_content_cutover_bypass_allowed(),verify_ai_content_write_fence_catalog(),consume_ai_content_provider_attestation() to ${migrationRole}`);
+          await client.query(`grant execute on function ai_content_cutover_bypass_allowed(),lock_ai_content_cutover_transaction_state(uuid),verify_ai_content_write_fence_catalog(),consume_ai_content_provider_attestation() to ${migrationRole}`);
+          await client.query(`grant execute on function transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text) to ${migrationRole}`);
           const roleSafety = await client.query(
             `/* bootstrap_application_privileges_v1 */
              select exists (
@@ -1516,12 +2351,26 @@ export async function runMigrationsWithClient({
         }
       }
     }
+    if (pending075) {
+      cutoverResult = await executeAtomicCutoverMigration({
+        client,
+        migration: pending075,
+        cutover: preparedCutover,
+      });
+    } else if (recovering075) {
+      cutoverResult = await recoverAtomicCutoverMigration({
+        client,
+        migration: migration075,
+        cutover: preparedCutover,
+      });
+    }
     return {
       migrations,
       pending: plan.pending.map((migration) => migration.id),
       baselineRequired: false,
       ...(providerInstallRequest ? { providerInstallRequest } : {}),
       ...(revocationRequest ? { revocationRequest } : {}),
+      ...(cutoverResult ? { cutover: cutoverResult } : {}),
     };
   } finally {
     await client.query("select pg_advisory_unlock(hashtext($1))", [migrationAdvisoryLockName]);
@@ -1535,6 +2384,7 @@ export async function runMigrations({
   dryRun = false,
   caCertificate,
   bootstrap074,
+  cutover,
 }) {
   if (!connectionString) throw new Error("database_url_required");
   const migrations = await loadMigrations(migrationsDirectory);
@@ -1549,6 +2399,7 @@ export async function runMigrations({
       baselineUpTo,
       dryRun,
       bootstrap074,
+      cutover,
     });
   } finally {
     await client.end();

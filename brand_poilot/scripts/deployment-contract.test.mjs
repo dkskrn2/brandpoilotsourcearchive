@@ -97,7 +97,14 @@ test("fence API image contains 074 and excludes 075", () => {
   assert.match(migration074, /current_setting\('role',\s*true\)/);
   assert.equal(existsSync("scripts/ai-content-074.postgres.integration.test.mjs"), true);
   const postgresHarness = read("scripts/ai-content-074.postgres.integration.test.mjs");
-  assert.match(postgresHarness, /AI_CONTENT_074_REAL_POSTGRES_URL/);
+  assert.match(postgresHarness, /from\s+["']@testcontainers\/postgresql["']/);
+  assert.match(postgresHarness, /new\s+PostgreSqlContainer\(["']postgres:16-alpine["']\)/);
+  assert.doesNotMatch(postgresHarness, /AI_CONTENT_074_(?:REAL_POSTGRES_URL|ENABLE_REAL_POSTGRES_TESTS)/);
+  assert.doesNotMatch(postgresHarness, /\bt\.skip\s*\(|\bskip\s*:/);
+  assert.match(postgresHarness, /assert\.match\([^\n]*version[^\n]*PostgreSQL 16\\\./);
+  assert.match(postgresHarness, /requires an empty disposable database/);
+  assert.match(postgresHarness, /to_regclass\('public\.workspaces'\)/);
+  assert.match(postgresHarness, /finally\s*\{[\s\S]*Promise\.allSettled[\s\S]*container\.stop\(\)[\s\S]*AggregateError/);
   assert.match(postgresHarness, /AI_CONTENT_074_BULK_DML_MAX_OVERHEAD_RATIO/);
   assert.match(postgresHarness, /migration.*schema_owner/is);
   assert.match(postgresHarness, /disable trigger|drop trigger|ai_content_ddl_allowlist|ai_content_bootstrap_state|ai_content_maintenance_state|ai_content_cutovers/is);

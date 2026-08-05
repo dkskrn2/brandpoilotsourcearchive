@@ -217,23 +217,109 @@ begin
 end;
 $$;
 
+create function verify_ai_content_cutover_status_chain_locked(p_cutover public.ai_content_cutovers) returns boolean
+language plpgsql security definer set search_path=pg_catalog,public as $$
+declare event_row public.ai_content_cutover_status_events%rowtype;
+declare previous_hash text;
+declare previous_status text;
+declare expected_sequence integer := 0;
+declare expected_hash text;
+begin
+  for event_row in
+    select * from public.ai_content_cutover_status_events
+     where cutover_id=p_cutover.id order by sequence_number for update
+  loop
+    if event_row.sequence_number<>expected_sequence
+       or event_row.previous_event_sha256 is distinct from previous_hash
+       or (expected_sequence=0 and (event_row.from_status is not null or event_row.to_status<>'prepared'))
+       or (expected_sequence>0 and event_row.from_status is distinct from previous_status) then
+      raise exception 'ai_content_cutover_status_chain_invalid';
+    end if;
+    if expected_sequence=0 then
+      expected_hash := encode(digest(concat_ws('|',p_cutover.id::text,'0','', 'prepared',
+        event_row.evidence_sha256,p_cutover.schema_owner_role_name::text,
+        p_cutover.application_role_name::text,p_cutover.operator_role_name::text,
+        p_cutover.migration_role_name::text,p_cutover.cleanup_role_name::text,
+        p_cutover.bypass_token_sha256,p_cutover.cleanup_token_sha256,
+        p_cutover.database_role_catalog_sha256),'sha256'),'hex');
+    else
+      expected_hash := encode(digest(concat_ws('|',p_cutover.id::text,event_row.sequence_number::text,
+        event_row.from_status,event_row.to_status,event_row.evidence_sha256,
+        event_row.previous_event_sha256),'sha256'),'hex');
+    end if;
+    if event_row.event_sha256<>expected_hash then
+      raise exception 'ai_content_cutover_status_chain_hash_invalid';
+    end if;
+    previous_hash := event_row.event_sha256;
+    previous_status := event_row.to_status;
+    expected_sequence := expected_sequence+1;
+  end loop;
+  if expected_sequence=0 or p_cutover.latest_status_event_sha256 is distinct from previous_hash
+     or p_cutover.status is distinct from previous_status then
+    raise exception 'ai_content_cutover_status_chain_pointer_invalid';
+  end if;
+  return true;
+end;
+$$;
+
+create function verify_ai_content_cutover_status_chain(p_cutover_id uuid) returns boolean
+language plpgsql security definer set search_path=pg_catalog,public as $$
+declare cutover_row public.ai_content_cutovers%rowtype;
+begin
+  select * into strict cutover_row from public.ai_content_cutovers where id=p_cutover_id for update;
+  return public.verify_ai_content_cutover_status_chain_locked(cutover_row);
+end;
+$$;
+
+create function lock_ai_content_cutover_transaction_state(p_cutover_id uuid) returns boolean
+language plpgsql security definer set search_path=pg_catalog,public as $$
+declare bootstrap public.ai_content_bootstrap_state%rowtype;
+begin
+  select * into strict bootstrap from public.ai_content_bootstrap_state where singleton for share;
+  if session_user<>bootstrap.migration_role_name::text then
+    raise exception 'ai_content_cutover_lock_identity_invalid';
+  end if;
+  lock table public.ai_content_ddl_allowlist in share mode;
+  perform 1 from public.ai_content_cutovers where id=p_cutover_id for update;
+  if not found then raise exception 'ai_content_cutover_lock_missing'; end if;
+  perform 1 from public.ai_content_maintenance_state where singleton for share;
+  return true;
+end;
+$$;
+
 create function ai_content_cutover_bypass_allowed() returns boolean
 language plpgsql security definer set search_path=pg_catalog,public as $$
 declare cutover uuid;
 declare supplied_token text;
+declare cutover_row public.ai_content_cutovers%rowtype;
+declare bootstrap public.ai_content_bootstrap_state%rowtype;
+declare locked_state record;
 begin
   cutover := nullif(current_setting('app.ai_content_cutover_id', true), '')::uuid;
   supplied_token := nullif(current_setting('app.ai_content_cutover_token', true), '');
   if cutover is null or supplied_token is null then return false; end if;
-  return exists (
-    select 1
+  lock table public.ai_content_ddl_allowlist in share mode;
+  select c as cutover_row,b as bootstrap into locked_state
       from public.ai_content_cutovers c
       join public.ai_content_maintenance_state m on m.singleton and m.enabled and m.cutover_id=c.id
-     where c.id=cutover and c.status='maintenance_verified'
-       and c.migration_role_name=session_user
-       and c.bypass_token_sha256=encode(digest(supplied_token,'sha256'),'hex')
-       and not exists (select 1 from public.schema_migrations where id='075_ai_content_three_format_cutover.sql')
-  );
+      join public.ai_content_bootstrap_state b on b.singleton
+     where c.id=cutover
+     for update of c for share of m,b;
+  if not found then return false; end if;
+  cutover_row := locked_state.cutover_row;
+  bootstrap := locked_state.bootstrap;
+  if cutover_row.status is distinct from 'maintenance_verified'
+     or cutover_row.migration_role_name is distinct from session_user
+     or cutover_row.schema_owner_role_name is distinct from bootstrap.schema_owner_role_name
+     or cutover_row.application_role_name is distinct from bootstrap.application_role_name
+     or cutover_row.operator_role_name is distinct from bootstrap.operator_role_name
+     or cutover_row.cleanup_role_name is distinct from bootstrap.cleanup_role_name
+     or cutover_row.database_role_catalog_sha256 is distinct from bootstrap.role_catalog_sha256
+     or cutover_row.bypass_token_sha256 is distinct from encode(digest(supplied_token,'sha256'),'hex')
+     or exists (select 1 from public.schema_migrations where id='075_ai_content_three_format_cutover.sql') then
+    return false;
+  end if;
+  return public.verify_ai_content_cutover_status_chain_locked(cutover_row);
 end;
 $$;
 
@@ -315,6 +401,8 @@ begin
   elsif classifier='ai_content_scheduled_publish' then
     if tg_op='INSERT' then should_fence := exists (select 1 from public.channel_outputs output where output.id=new.channel_output_id and output.ai_content_generation_output_id is not null);
     elsif tg_op='DELETE' then should_fence := exists (select 1 from public.channel_outputs output where output.id=old.channel_output_id and output.ai_content_generation_output_id is not null);
+    elsif old.channel_output_id is not distinct from new.channel_output_id then
+      should_fence := exists (select 1 from public.channel_outputs output where output.id=old.channel_output_id and output.ai_content_generation_output_id is not null);
     else should_fence := exists (select 1 from public.channel_outputs output where output.id=old.channel_output_id and output.ai_content_generation_output_id is not null)
       or exists (select 1 from public.channel_outputs output where output.id=new.channel_output_id and output.ai_content_generation_output_id is not null); end if;
   elsif classifier='ai_content_publish_attempt' then
@@ -322,6 +410,9 @@ begin
       select 1 from public.publish_queue queue join public.channel_outputs output on output.id=queue.channel_output_id
        where queue.id=new.publish_queue_id and output.ai_content_generation_output_id is not null);
     elsif tg_op='DELETE' then should_fence := exists (
+      select 1 from public.publish_queue queue join public.channel_outputs output on output.id=queue.channel_output_id
+       where queue.id=old.publish_queue_id and output.ai_content_generation_output_id is not null);
+    elsif old.publish_queue_id is not distinct from new.publish_queue_id then should_fence := exists (
       select 1 from public.publish_queue queue join public.channel_outputs output on output.id=queue.channel_output_id
        where queue.id=old.publish_queue_id and output.ai_content_generation_output_id is not null);
     else should_fence := exists (
@@ -470,8 +561,40 @@ declare previous_event public.ai_content_cutover_status_events%rowtype;
 declare next_sequence integer;
 declare next_hash text;
 declare marker_present boolean;
+declare bootstrap public.ai_content_bootstrap_state%rowtype;
+declare supplied_cutover uuid;
+declare supplied_token text;
+declare supplied_migration text;
 begin
   select * into strict current_row from public.ai_content_cutovers where id=p_cutover_id for update;
+  perform public.verify_ai_content_cutover_status_chain(p_cutover_id);
+  marker_present := exists (select 1 from public.schema_migrations where id='075_ai_content_three_format_cutover.sql');
+  select * into strict bootstrap from public.ai_content_bootstrap_state where singleton;
+  if session_user=bootstrap.migration_role_name::text then
+    supplied_cutover := nullif(current_setting('app.ai_content_cutover_id',true),'')::uuid;
+    supplied_token := nullif(current_setting('app.ai_content_cutover_token',true),'');
+    supplied_migration := nullif(current_setting('app.ai_content_migration_id',true),'');
+    if p_from_status<>'maintenance_verified' or p_to_status<>'migration_body_complete'
+       or p_abandoned_reason is not null or p_successor_cutover_id is not null
+       or p_cleanup_revoked_at is not null or p_cleanup_revocation_sha256 is not null
+       or supplied_cutover is distinct from p_cutover_id or supplied_token is null
+       or supplied_migration<>'075_ai_content_three_format_cutover.sql'
+       or current_row.migration_id<>supplied_migration
+       or current_row.migration_role_name<>bootstrap.migration_role_name
+       or current_row.schema_owner_role_name<>bootstrap.schema_owner_role_name
+       or current_row.application_role_name<>bootstrap.application_role_name
+       or current_row.operator_role_name<>bootstrap.operator_role_name
+       or current_row.cleanup_role_name<>bootstrap.cleanup_role_name
+       or current_row.database_role_catalog_sha256<>bootstrap.role_catalog_sha256
+       or current_row.bypass_token_sha256<>encode(digest(supplied_token,'sha256'),'hex')
+       or not marker_present
+       or not exists (
+         select 1 from public.ai_content_maintenance_state maintenance
+          where maintenance.singleton and maintenance.enabled and maintenance.cutover_id=p_cutover_id
+       ) then
+      raise exception 'ai_content_cutover_migration_transition_invalid';
+    end if;
+  end if;
   if current_row.status<>p_from_status then
     select event_sha256 into next_hash from public.ai_content_cutover_status_events
      where cutover_id=p_cutover_id and from_status=p_from_status and to_status=p_to_status
@@ -481,7 +604,6 @@ begin
   end if;
   select * into strict previous_event from public.ai_content_cutover_status_events
    where cutover_id=p_cutover_id and event_sha256=current_row.latest_status_event_sha256 for update;
-  marker_present := exists (select 1 from public.schema_migrations where id='075_ai_content_three_format_cutover.sql');
   if p_to_status='abandoned_pre_marker' then
     if marker_present or p_from_status not in ('prepared','maintenance_verified') or p_abandoned_reason is null then
       raise exception 'ai_content_cutover_transition_invalid';
@@ -517,7 +639,7 @@ declare catalog_hash text;
 begin
   select encode(digest(string_agg(
            concat_ws('|',relation_name,relation_class,row_classifier), E'\n'
-           order by relation_name
+           order by relation_name collate "C"
          ),'sha256'),'hex')
     into catalog_hash
     from public.ai_content_write_fence_catalog;
@@ -582,6 +704,8 @@ revoke all on table ai_content_cutovers,ai_content_cutover_status_events,
   ai_content_maintenance_state,ai_content_bootstrap_state,ai_content_ddl_allowlist,
   ai_content_write_fence_catalog from public;
 revoke execute on function ai_content_cutover_bypass_allowed(),assert_ai_content_writable(),
+  lock_ai_content_cutover_transaction_state(uuid),verify_ai_content_cutover_status_chain(uuid),
+  verify_ai_content_cutover_status_chain_locked(ai_content_cutovers),
   enforce_ai_content_write_fence(),enforce_ai_content_ddl_allowlist(),ai_content_fence_trigger_name(text),
   forbid_ai_content_cutover_event_mutation(),prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,text,text,text),
   set_ai_content_maintenance(uuid,boolean),

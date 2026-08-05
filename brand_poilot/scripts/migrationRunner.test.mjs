@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, open, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import { Client } from "pg";
 import * as migrationRunner from "./migrationRunner.mjs";
+import { resolveMigrationRuntimeConfig, validateSecureCutoverFileMetadata } from "./migrate.mjs";
 
 const noProviderRoleCapabilities = Object.freeze({
   is_superuser: false,
@@ -53,6 +56,36 @@ function signProviderAttestation(payload, identity = providerIdentity) {
   };
 }
 
+function signCutoverAllowlistAuthorization(payload, identity = authorizationIdentity) {
+  const unsigned = {
+    ...payload,
+    algorithm: "Ed25519",
+    keyId: identity.keyId,
+    providerAttestationKeyId: providerIdentity.keyId,
+    providerAttestationPublicKeySha256: providerIdentity.publicKeySha256,
+  };
+  return {
+    ...unsigned,
+    signature: sign(
+      null,
+      Buffer.from(migrationRunner.canonicalCutoverAllowlistAuthorizationPayload(unsigned)),
+      identity.privateKey,
+    ).toString("base64"),
+  };
+}
+
+function signCutoverAllowlistAttestation(payload, identity = providerIdentity) {
+  const unsigned = { ...payload, algorithm: "Ed25519", keyId: identity.keyId };
+  return {
+    ...unsigned,
+    signature: sign(
+      null,
+      Buffer.from(migrationRunner.canonicalCutoverAllowlistAttestationPayload(unsigned)),
+      identity.privateKey,
+    ).toString("base64"),
+  };
+}
+
 function makeInterimFenceSecurityCatalog(schemaOwnerRoleName = "content_schema_owner") {
   const ownerAcl = [{ grantee: schemaOwnerRoleName, privilege: "EXECUTE", grantable: false }];
   return {
@@ -76,7 +109,7 @@ function makeInterimFenceSecurityCatalog(schemaOwnerRoleName = "content_schema_o
         relationName,
         ownerRoleName: schemaOwnerRoleName,
         acl: [
-          ...["DELETE", "INSERT", "MAINTAIN", "REFERENCES", "SELECT", "TRIGGER", "TRUNCATE", "UPDATE"]
+          ...["DELETE", "INSERT", "REFERENCES", "SELECT", "TRIGGER", "TRUNCATE", "UPDATE"]
             .map((privilege) => ({ grantee: schemaOwnerRoleName, privilege, grantable: false })),
           ...extras,
         ],
@@ -85,11 +118,848 @@ function makeInterimFenceSecurityCatalog(schemaOwnerRoleName = "content_schema_o
   };
 }
 
+test("074 standalone PostgreSQL dependency bootstrap pins verified pgvector source", async () => {
+  const source = await readFile(new URL("./ai-content-074.postgres.integration.test.mjs", import.meta.url), "utf8");
+  assert.match(source, /778dacf20c07caf904557a88705142631818d8cb/);
+  assert.match(source, /4c33cf053329784ba6d992d05c9588b93789e907a7511f20ff5a5a5b8a0703c1/i);
+  assert.match(source, /sha256sum\s+-c/);
+  assert.match(source, /pgvector-778dacf20c07caf904557a88705142631818d8cb/);
+  assert.doesNotMatch(source, /git\s+clone|refs\/tags\/v0\.8\.1/);
+  assert.ok(source.indexOf("sha256sum -c") < source.indexOf("tar -xzf"), "archive must be verified before extraction");
+});
+
 test("074 runner exposes no signing primitive or private-key input", () => {
   assert.equal(migrationRunner.signBootstrapRoleAuthorization, undefined);
   assert.equal(migrationRunner.signProviderEventTriggerAttestation, undefined);
   assert.equal("privateKey" in authorizationIdentity.verification, false);
   assert.equal("privateKey" in providerIdentity.verification, false);
+});
+
+test("075 allowlist authorization and provider attestation are closed signed contracts", () => {
+  const migration = {
+    id: "075_ai_content_three_format_cutover.sql",
+    checksum: "7".repeat(64),
+  };
+  const rows = [
+    { commandTag: "ALTER TABLE", objectIdentityPattern: "public.ai_content_%" },
+    { commandTag: "CREATE TABLE", objectIdentityPattern: "public.ai_content_%" },
+  ];
+  const rowsSha256 = migrationRunner.hashCutoverDdlAllowlist(rows);
+  const unsignedAuthorization = {
+    contractVersion: "ai-content-075-ddl-allowlist-authorization.v1",
+    requestId: "4c1758c0-633a-43cf-9a1b-6e1c9517d816",
+    cutoverId: "7b7c8ed7-e046-4bcd-8592-38606f547493",
+    migrationId: migration.id,
+    migrationSha256: migration.checksum,
+    rows,
+    rowsSha256,
+    enforcementCatalogSha256: "8".repeat(64),
+    issuedAt: "2026-08-05T00:00:00.000Z",
+    expiresAt: "2026-08-05T00:10:00.000Z",
+  };
+  const authorization = signCutoverAllowlistAuthorization(unsignedAuthorization);
+  const requestSha256 = migrationRunner.hashCutoverAllowlistAuthorizationEnvelope(authorization);
+  const emptyRowsSha256 = migrationRunner.hashCutoverDdlAllowlist([]);
+  const attestation = signCutoverAllowlistAttestation({
+    contractVersion: "ai-content-075-ddl-allowlist-attestation.v1",
+    action: "install_verify_075_ddl_allowlist",
+    requestId: authorization.requestId,
+    requestSha256,
+    cutoverId: authorization.cutoverId,
+    migrationId: migration.id,
+    migrationSha256: migration.checksum,
+    rowsSha256,
+    beforeCount: 0,
+    beforeSha256: emptyRowsSha256,
+    afterCount: rows.length,
+    afterSha256: rowsSha256,
+    issuedAt: "2026-08-05T00:00:01.000Z",
+  });
+  const context = {
+    migration,
+    cutoverId: authorization.cutoverId,
+    enforcementCatalogSha256: authorization.enforcementCatalogSha256,
+    authorizationVerification: authorizationIdentity.verification,
+    providerAttestationVerification: providerIdentity.verification,
+    now: new Date("2026-08-05T00:02:00.000Z"),
+  };
+
+  const validatedAuthorization = migrationRunner.validateCutoverAllowlistAuthorization(authorization, context);
+  assert.deepEqual(validatedAuthorization.rows, rows);
+  assert.equal(
+    migrationRunner.validateCutoverAllowlistAttestation(attestation, {
+      authorization: validatedAuthorization,
+      providerAttestationVerification: providerIdentity.verification,
+      now: context.now,
+    }).requestSha256,
+    requestSha256,
+  );
+
+  assert.throws(
+    () => migrationRunner.validateCutoverAllowlistAuthorization(
+      { ...authorization, rows: rows.toReversed() },
+      context,
+    ),
+    /cutover_075_allowlist_(?:signature|rows)_invalid/,
+  );
+  assert.throws(
+    () => migrationRunner.validateCutoverAllowlistAuthorization(
+      signCutoverAllowlistAuthorization({ ...unsignedAuthorization, expiresAt: "2026-08-05T00:01:00.000Z" }),
+      context,
+    ),
+    /cutover_075_allowlist_authorization_expired/,
+  );
+  assert.throws(
+    () => migrationRunner.validateCutoverAllowlistAttestation(
+      { ...attestation, afterCount: 1 },
+      { authorization, providerAttestationVerification: providerIdentity.verification, now: context.now },
+    ),
+    /cutover_075_allowlist_attestation_signature_invalid/,
+  );
+  assert.throws(
+    () => {
+      const { signature: _signature, ...attestationPayload } = attestation;
+      return migrationRunner.validateCutoverAllowlistAttestation(
+        signCutoverAllowlistAttestation({ ...attestationPayload, requestId: "reused-request" }),
+        { authorization, providerAttestationVerification: providerIdentity.verification, now: context.now },
+      );
+    },
+    /cutover_075_allowlist_attestation_requestId_mismatch/,
+  );
+});
+
+test("075 atomic execution rejects an unsealed direct caller before transaction mutation", async () => {
+  const migration = { id: "075_ai_content_three_format_cutover.sql", checksum: "7".repeat(64), sql: "select cutover_body" };
+  const calls = [];
+  const client = { async query(sql) { calls.push(String(sql)); return { rows: [] }; } };
+  await assert.rejects(
+    migrationRunner.executeAtomicCutoverMigration({ client, migration, cutover: {
+      cutoverId: "7b7c8ed7-e046-4bcd-8592-38606f547493", bypassToken: "never-log-this-token",
+      expectedDatabaseRole: "content_migration", schemaOwnerRoleName: "content_schema_owner",
+      allowlistAuthorization: { migrationId: migration.id, migrationSha256: migration.checksum,
+        cutoverId: "7b7c8ed7-e046-4bcd-8592-38606f547493" },
+      allowlistRowsSha256: "8".repeat(64), allowlistAuthorizationSha256: "a".repeat(64),
+      allowlistAttestationSha256: "b".repeat(64), enforcementCatalogSha256: "c".repeat(64),
+      provider074AttestationSha256: "d".repeat(64),
+    } }),
+    /cutover_075_config_invalid/,
+  );
+  assert.equal(calls.some((sql) => sql.includes("select cutover_body")), false);
+  assert.equal(calls.length, 0);
+});
+
+test("075 atomic source keeps authoritative revalidation before role, body, marker, transition and commit", async () => {
+  const source = await readFile("scripts/migrationRunner.mjs", "utf8");
+  const begin = source.indexOf('await client.query("begin")', source.indexOf("export async function executeAtomicCutoverMigration"));
+  const revalidate = source.indexOf("revalidateAtomicCutoverDatabaseState", begin);
+  const role = source.indexOf("set local role", revalidate);
+  const body = source.indexOf("unwrapFileTransaction(migration.sql)", role);
+  const marker = source.indexOf("insert into schema_migrations", body);
+  const transition = source.indexOf("transition_ai_content_cutover_status", marker);
+  const commit = source.indexOf('await client.query("commit")', transition);
+  assert.ok(begin < revalidate && revalidate < role && role < body && body < marker && marker < transition && transition < commit);
+});
+
+test("075 ACL blocker: migration identity has an authorized migration_body_complete transition path", async () => {
+  const sql = await readFile("db/migrations/074_ai_content_maintenance_write_fence.sql", "utf8");
+  const runner = await readFile("scripts/migrationRunner.mjs", "utf8");
+  assert.match(
+    sql,
+    /session_user\s*=\s*bootstrap\.migration_role_name[\s\S]*maintenance_verified[\s\S]*migration_body_complete/i,
+    "074 transition function must restrict the migration session to the one approved edge",
+  );
+  assert.match(
+    runner,
+    /grant execute on function transition_ai_content_cutover_status\([^;]+to \$\{migrationRole\}/i,
+    "074 runner must grant only the guarded transition function to migration",
+  );
+});
+
+test("075 PostgreSQL harness teardown settles every client and always stops its container", async () => {
+  const source = await readFile(new URL("./migrationRunner.test.mjs", import.meta.url), "utf8");
+  const harnessStart = source.lastIndexOf('test("075 PostgreSQL harness applies 074 ACLs');
+  const harness = source.slice(harnessStart, source.indexOf('test("075 CLI config accepts', harnessStart));
+  assert.match(harness, /Promise\.allSettled/);
+  assert.match(harness, /AggregateError\(teardownFailures/);
+  assert.match(harness, /finally\s*\{[\s\S]*container\.stop\(\)/);
+});
+
+test("075 PostgreSQL harness applies 074 ACLs and proves atomic rollback and recovery", { timeout: 180_000 }, async () => {
+  const { PostgreSqlContainer } = await import("@testcontainers/postgresql");
+  let container;
+  let client;
+  let migrationClient;
+  let recoveryClient;
+  try {
+    container = await new PostgreSqlContainer("postgres:16-alpine")
+      .withUsername("postgres")
+      .withPassword("postgres")
+      .withDatabase("ai_content_075_harness")
+      .withEnvironment("POSTGRES_INITDB_ARGS", "--locale=C")
+      .start();
+    client = new Client({ connectionString: container.getConnectionUri() });
+    await client.connect();
+    const result = await client.query(
+      "select current_setting('server_version_num')::integer as version_num, to_regclass('public.workspaces') as workspaces",
+    );
+    assert.ok(result.rows[0].version_num >= 160000 && result.rows[0].version_num < 170000);
+    assert.equal(result.rows[0].workspaces, null);
+    const quote = (value) => `"${String(value).replaceAll('"', '""')}"`;
+    await client.query("create extension pgcrypto");
+    await client.query("create table schema_migrations(id text primary key,checksum text not null)");
+    await client.query(`
+      create role content_schema_owner nologin;
+      create role content_application login password 'application-secret';
+      create role content_operator login password 'operator-secret';
+      create role content_migration login noinherit password 'migration-secret';
+      create role content_cleanup login password 'cleanup-secret';
+      grant content_schema_owner to content_migration with set true;
+      grant content_schema_owner to content_migration with inherit false;
+      grant content_schema_owner to content_migration with admin false;
+      grant usage,create on schema public to content_schema_owner;
+    `);
+    for (const relation of migrationRunner.bootstrapFenceRelations) {
+      await client.query(`create table public.${quote(relation)}(id bigint)`);
+      await client.query(`alter table public.${quote(relation)} owner to content_schema_owner`);
+    }
+    const migration074 = (await migrationRunner.loadMigrations())
+      .find(({ id }) => id === "074_ai_content_maintenance_write_fence.sql");
+    assert.ok(migration074);
+    await client.query("set role content_schema_owner");
+    await client.query(migration074.sql);
+    await client.query("reset role");
+    await client.query(`
+      revoke all on table ai_content_cutovers,ai_content_cutover_status_events,ai_content_maintenance_state,
+        ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog from content_application;
+      grant select on table ai_content_maintenance_state to content_application;
+      grant execute on function assert_ai_content_writable() to content_application;
+      grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,text,text,text),
+        set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text) to content_operator;
+      grant select on table ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog to content_migration;
+      grant select,insert on table schema_migrations to content_migration;
+      grant execute on function ai_content_cutover_bypass_allowed(),verify_ai_content_write_fence_catalog(),
+        lock_ai_content_cutover_transaction_state(uuid),consume_ai_content_provider_attestation(),
+        transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text) to content_migration;
+    `);
+    const names = {
+      schemaOwnerRoleName: "content_schema_owner", applicationRoleName: "content_application",
+      operatorRoleName: "content_operator", migrationRoleName: "content_migration", cleanupRoleName: "content_cleanup",
+    };
+    const bootstrapCatalogs = await migrationRunner.readCanonicalBootstrapCatalogs(client, names);
+    const eventBaseline = await migrationRunner.readCanonicalEventTriggerCatalog(client);
+    assert.equal(eventBaseline.count, 0);
+    const interimFence = await migrationRunner.readFenceSecurityCatalog(client, names);
+    const eventFunctionSha256 = (await client.query(
+      "select encode(digest(pg_get_functiondef('public.enforce_ai_content_ddl_allowlist()'::regprocedure),'sha256'),'hex') as sha256",
+    )).rows[0].sha256;
+    const bootstrapIssued = new Date(Date.now()-60_000);
+    const bootstrapAuthorizationBase = {
+      contractVersion: "ai-content-bootstrap-role-authorization.v3", requestId: "bootstrap-074-harness",
+      migrationId: migration074.id, migrationSha256: migration074.checksum,
+      imageDigest: `sha256:${"2".repeat(64)}`, imageSourceLabel: "3".repeat(40),
+      roleCatalogSha256: bootstrapCatalogs.roleCatalogSha256,
+      objectCatalogSha256: bootstrapCatalogs.objectCatalogSha256,
+      migrationRoleName: names.migrationRoleName, schemaOwnerRoleName: names.schemaOwnerRoleName,
+      applicationRoleName: names.applicationRoleName, operatorRoleName: names.operatorRoleName,
+      cleanupRoleName: names.cleanupRoleName, eventTriggerName: "ai_content_ddl_guard_074",
+      eventTriggerFunction: "public.enforce_ai_content_ddl_allowlist",
+      eventTriggerFunctionSha256: eventFunctionSha256, eventTriggerEvent: "ddl_command_end",
+      eventTriggerOwner: "postgres", eventTriggerTags: migrationRunner.required074DdlGuardTags,
+      eventTriggerDefinitionSha256: "0".repeat(64),
+      eventTriggerCatalogBeforeSha256: eventBaseline.catalogSha256,
+      eventTriggerCatalogBeforeCount: eventBaseline.count,
+      issuedAt: bootstrapIssued.toISOString(), expiresAt: new Date(bootstrapIssued.getTime()+10*60_000).toISOString(),
+    };
+    bootstrapAuthorizationBase.eventTriggerDefinitionSha256 = migrationRunner.hashEventTriggerDefinition({
+      ...bootstrapAuthorizationBase, eventTriggerEnabled: "enabled",
+    });
+    const bootstrapAuthorization = signAuthorization(bootstrapAuthorizationBase);
+    const providerInstallRequest = migrationRunner.buildProviderEventTriggerInstallRequest(bootstrapAuthorization, {
+      fenceSecurityCatalogSha256: interimFence.catalogSha256,
+      fenceSecurityCatalogCanonicalJson: interimFence.canonicalJson,
+      eventTriggerCatalogBeforeCanonicalJson: eventBaseline.canonicalJson,
+    });
+    for (const identity of migrationRunner.providerEnforcementBundle.functions) {
+      await client.query(`alter function ${identity} owner to postgres`);
+      await client.query(`revoke all on function ${identity} from public,content_schema_owner,content_application,content_operator,content_migration,content_cleanup`);
+      if (identity.includes("assert_ai_content_writable")) await client.query(`grant execute on function ${identity} to content_application`);
+      if (/prepare_ai_content_cutover|set_ai_content_maintenance/.test(identity)) await client.query(`grant execute on function ${identity} to content_operator`);
+      if (identity.includes("transition_ai_content_cutover_status")) await client.query(`grant execute on function ${identity} to content_operator,content_migration`);
+      if (/ai_content_cutover_bypass_allowed|lock_ai_content_cutover_transaction_state|verify_ai_content_write_fence_catalog|consume_ai_content_provider_attestation/.test(identity)) {
+        await client.query(`grant execute on function ${identity} to content_migration`);
+      }
+    }
+    for (const relation of migrationRunner.providerEnforcementBundle.controlRelations) {
+      await client.query(`alter table public.${quote(relation)} owner to postgres`);
+      await client.query(`revoke all on table public.${quote(relation)} from public,content_schema_owner,content_application,content_operator,content_migration,content_cleanup`);
+      if (relation === "ai_content_maintenance_state") await client.query(`grant select on table public.${quote(relation)} to content_application`);
+      if (["ai_content_bootstrap_state", "ai_content_ddl_allowlist", "ai_content_write_fence_catalog"].includes(relation)) {
+        await client.query(`grant select on table public.${quote(relation)} to content_migration`);
+      }
+    }
+    const liveRoles = await migrationRunner.readCanonicalBootstrapRoleCatalog(client, names);
+    const finalFence = await migrationRunner.readFenceSecurityCatalog(client, names, { ownerRoleName: "postgres" });
+    await client.query("create event trigger ai_content_ddl_guard_074 on ddl_command_end execute function public.enforce_ai_content_ddl_allowlist()");
+    await client.query("alter event trigger ai_content_ddl_guard_074 enable");
+    const liveEvents = await migrationRunner.readCanonicalEventTriggerCatalog(client);
+    assert.equal(liveEvents.count, 1);
+    assert.equal(finalFence.catalogSha256, providerInstallRequest.expectedFinalFenceSecurityCatalogSha256);
+    const providerAttestation074 = signProviderAttestation({
+      contractVersion: "ai-content-074-provider-attestation.v3",
+      providerRequestSha256: providerInstallRequest.requestSha256,
+      authorizationRequestId: bootstrapAuthorization.requestId,
+      action: providerInstallRequest.action,
+      eventTriggerName: bootstrapAuthorization.eventTriggerName,
+      eventTriggerFunction: bootstrapAuthorization.eventTriggerFunction,
+      eventTriggerFunctionSha256: bootstrapAuthorization.eventTriggerFunctionSha256,
+      eventTriggerEvent: bootstrapAuthorization.eventTriggerEvent,
+      eventTriggerTags: bootstrapAuthorization.eventTriggerTags,
+      eventTriggerDefinitionSha256: bootstrapAuthorization.eventTriggerDefinitionSha256,
+      eventTriggerOwner: "postgres", eventTriggerEnabled: "enabled",
+      migrationId: migration074.id, migrationSha256: migration074.checksum,
+      imageDigest: bootstrapAuthorization.imageDigest, imageSourceLabel: bootstrapAuthorization.imageSourceLabel,
+      roleCatalogSha256: bootstrapCatalogs.roleCatalogSha256,
+      objectCatalogSha256: bootstrapCatalogs.objectCatalogSha256,
+      fenceSecurityCatalogSha256: interimFence.catalogSha256,
+      finalFenceSecurityCatalogSha256: finalFence.catalogSha256,
+      eventTriggerCatalogBeforeSha256: eventBaseline.catalogSha256,
+      eventTriggerCatalogBeforeCount: eventBaseline.count,
+      eventTriggerCatalogAfterSha256: liveEvents.catalogSha256,
+      eventTriggerCatalogAfterCount: liveEvents.count,
+      issuedAt: new Date(bootstrapIssued.getTime()+1_000).toISOString(),
+    });
+    const provider074Sha = migrationRunner.hashProviderAttestationEnvelope(providerAttestation074);
+    const revocation074 = migrationRunner.buildMembershipRevocationRequest(
+      bootstrapAuthorization, providerInstallRequest, provider074Sha,
+    );
+    const bootstrapAuthorizationSha256 = createHash("sha256")
+      .update(migrationRunner.canonicalBootstrapAuthorizationPayload(
+        Object.fromEntries(Object.entries(bootstrapAuthorization).filter(([key]) => key !== "signature")),
+      )).digest("hex");
+    await client.query(`insert into ai_content_bootstrap_state(
+      singleton,authorization_request_id,authorization_sha256,migration_role_name,schema_owner_role_name,
+      application_role_name,operator_role_name,cleanup_role_name,migration_sha256,role_catalog_sha256,
+      object_catalog_sha256,fence_security_catalog_sha256,final_fence_security_catalog_sha256,
+      event_trigger_catalog_before_json,event_trigger_catalog_before_sha256,event_trigger_catalog_before_count,
+      event_trigger_catalog_after_sha256,event_trigger_catalog_after_count,install_request_json,install_request_sha256,
+      provider_attestation_json,provider_attestation_sha256,attestation_consumed_at,
+      revocation_request_json,revocation_request_sha256)
+      values(true,$1,$2,'content_migration','content_schema_owner','content_application','content_operator',
+      'content_cleanup',$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13::jsonb,$14,$15::jsonb,$16,now(),$17::jsonb,$18)`,
+    [bootstrapAuthorization.requestId, bootstrapAuthorizationSha256, migration074.checksum,
+      liveRoles.roleCatalogSha256, bootstrapCatalogs.objectCatalogSha256, interimFence.catalogSha256,
+      finalFence.catalogSha256, eventBaseline.canonicalJson, eventBaseline.catalogSha256, eventBaseline.count,
+      liveEvents.catalogSha256, liveEvents.count, JSON.stringify(providerInstallRequest), providerInstallRequest.requestSha256,
+      JSON.stringify(providerAttestation074), provider074Sha, JSON.stringify(revocation074),
+      migrationRunner.hashMembershipRevocationEnvelope(revocation074)]);
+    await client.query("insert into schema_migrations(id,checksum) values($1,$2)", [migration074.id, migration074.checksum]);
+    const cutoverId = "7b7c8ed7-e046-4bcd-8592-38606f547493";
+    const bypassToken = "harness-never-log-token";
+    const tokenSha = createHash("sha256").update(bypassToken).digest("hex");
+    await client.query("set session authorization content_operator");
+    await client.query(`select prepare_ai_content_cutover($1,'content_schema_owner','content_application','content_operator',
+      'content_migration','content_cleanup',$2,$2,$3,'backup',now(),$4,$4,$4,$5,$4)`,
+    [cutoverId, tokenSha, liveRoles.roleCatalogSha256, "e".repeat(64), "f".repeat(40)]);
+    await client.query("select set_ai_content_maintenance($1,true)", [cutoverId]);
+    await client.query("select transition_ai_content_cutover_status($1,'prepared','maintenance_verified',$2)", [cutoverId, "f".repeat(64)]);
+    await client.query("reset session authorization");
+
+    const migration075 = {
+      id: "075_ai_content_three_format_cutover.sql",
+      sql: "create table public.ai_content_075_probe(id integer)",
+    };
+    migration075.checksum = createHash("sha256").update(migration075.sql).digest("hex");
+    const rows = [{ commandTag: "CREATE TABLE", objectIdentityPattern: "public.ai_content_075_probe" }];
+    const issued = new Date(Date.now()-60_000);
+    const authorization = signCutoverAllowlistAuthorization({
+      contractVersion: "ai-content-075-ddl-allowlist-authorization.v1", requestId: "4c1758c0-633a-43cf-9a1b-6e1c9517d816",
+      cutoverId, migrationId: migration075.id, migrationSha256: migration075.checksum, rows,
+      rowsSha256: migrationRunner.hashCutoverDdlAllowlist(rows), enforcementCatalogSha256: finalFence.catalogSha256,
+      issuedAt: issued.toISOString(), expiresAt: new Date(issued.getTime()+10*60_000).toISOString(),
+    });
+    const attestation = signCutoverAllowlistAttestation({
+      contractVersion: "ai-content-075-ddl-allowlist-attestation.v1", action: "install_verify_075_ddl_allowlist",
+      requestId: authorization.requestId, requestSha256: migrationRunner.hashCutoverAllowlistAuthorizationEnvelope(authorization),
+      cutoverId, migrationId: migration075.id, migrationSha256: migration075.checksum,
+      rowsSha256: authorization.rowsSha256, beforeCount: 0,
+      beforeSha256: migrationRunner.hashCutoverDdlAllowlist([]), afterCount: rows.length,
+      afterSha256: authorization.rowsSha256, issuedAt: new Date(issued.getTime()+1_000).toISOString(),
+    });
+    const records = new Map();
+    const journal = {
+      async read(id) { return records.get(id); },
+      async prepare(id, value) { records.set(id, { state: "prepared", value }); },
+      async commit(id, value) { records.set(id, { state: "committed", value }); },
+    };
+    const providerOptions = {
+      client, migration: migration075, authorization, attestation,
+      authorizationVerification: authorizationIdentity.verification,
+      providerAttestationVerification: providerIdentity.verification, journal,
+    };
+    await client.query(`insert into ai_content_ddl_allowlist values($1,'CREATE TABLE','public.ai_content_075_probe')`, [migration075.id]);
+    await assert.rejects(migrationRunner.installCutover075AllowlistWithProvider(providerOptions), /direct_allowlist_insert_forbidden/);
+    await client.query("delete from ai_content_ddl_allowlist");
+    const journalValue = {
+      contractVersion: "ai-content-075-provider-journal.v1",
+      requestSha256: migrationRunner.hashCutoverAllowlistAuthorizationEnvelope(authorization),
+      attestationSha256: migrationRunner.hashCutoverAllowlistAttestationEnvelope(attestation),
+    };
+    records.set(authorization.requestId, { state: "prepared", value: journalValue });
+    await client.query(`insert into ai_content_ddl_allowlist values($1,'CREATE TABLE','public.rogue')`, [migration075.id]);
+    await assert.rejects(migrationRunner.installCutover075AllowlistWithProvider(providerOptions), /partial_or_extra/);
+    await client.query("delete from ai_content_ddl_allowlist");
+    records.clear();
+    await migrationRunner.installCutover075AllowlistWithProvider(providerOptions);
+
+    const cutoverInput = {
+      cutoverId, bypassToken, expectedDatabaseRole: "content_migration",
+      allowlistAuthorization: authorization, allowlistAttestation: attestation,
+      authorizationVerification: authorizationIdentity.verification,
+      providerAttestationVerification: providerIdentity.verification,
+    };
+    const bootstrap074Config = {
+      authorization: bootstrapAuthorization,
+      authorizationVerification: authorizationIdentity.verification,
+      providerAttestation: providerAttestation074,
+      providerAttestationVerification: providerIdentity.verification,
+      imageDigest: bootstrapAuthorization.imageDigest,
+      imageSourceLabel: bootstrapAuthorization.imageSourceLabel,
+    };
+    const productionMigrations = [migration074, migration075];
+    const migrationUri = new URL(container.getConnectionUri());
+    migrationUri.username = "content_migration";
+    migrationUri.password = "migration-secret";
+    migrationClient = new Client({ connectionString: migrationUri.toString() });
+    await migrationClient.connect();
+    await client.query("create role content_rogue login");
+    await client.query("grant content_schema_owner to content_rogue with set true");
+    await client.query("grant content_schema_owner to content_rogue with inherit false");
+    await client.query("grant content_schema_owner to content_rogue with admin false");
+    await assert.rejects(
+      migrationRunner.runMigrationsWithClient({ client: migrationClient, migrations: productionMigrations,
+        bootstrap074: bootstrap074Config, cutover: cutoverInput }),
+      /bootstrap_(?:role_catalog|074_live_catalog|074_live)_|cutover_075_live_role_catalog_mismatch/,
+    );
+    await client.query("revoke content_schema_owner from content_rogue");
+    await client.query("drop role content_rogue");
+    const failurePoints = [
+      ["set-cutover", (sql) => sql.startsWith("select set_config('app.ai_content_cutover_id'")],
+      ["set-token", (sql) => sql.startsWith("select set_config('app.ai_content_cutover_token'")],
+      ["set-migration", (sql) => sql.startsWith("select set_config('app.ai_content_migration_id'")],
+      ["bypass", (sql) => sql === "select ai_content_cutover_bypass_allowed() as allowed"],
+      ["inner-lock", (sql) => sql.startsWith("select lock_ai_content_cutover_transaction_state")],
+      ["set-role", (sql) => sql.startsWith('set local role "content_schema_owner"')],
+      ["body", (sql) => sql === migration075.sql],
+      ["reset-role", (sql) => sql === "reset role"],
+      ["marker", (sql) => sql.startsWith("insert into schema_migrations")],
+      ["transition", (sql) => sql.startsWith("select transition_ai_content_cutover_status")],
+    ];
+    for (const [label, matches] of failurePoints) {
+      let injected = false;
+      const failureClient = {
+        async query(sql, parameters) {
+          const normalized = String(sql).replace(/\s+/g, " ").trim();
+          const result = await migrationClient.query(sql, parameters);
+          if (!injected && matches(normalized)) {
+            injected = true;
+            throw new Error(`injected-${label}`);
+          }
+          return result;
+        },
+      };
+      await assert.rejects(
+        migrationRunner.runMigrationsWithClient({ client: failureClient, migrations: productionMigrations,
+          bootstrap074: bootstrap074Config, cutover: cutoverInput }),
+        new RegExp(`injected-${label}`),
+      );
+      assert.equal(injected, true, label);
+      assert.equal((await client.query("select to_regclass('public.ai_content_075_probe') as relation")).rows[0].relation, null, label);
+      assert.equal((await client.query("select exists(select 1 from schema_migrations where id=$1) as marker", [migration075.id])).rows[0].marker, false, label);
+      assert.equal((await client.query("select status from ai_content_cutovers where id=$1", [cutoverId])).rows[0].status, "maintenance_verified", label);
+    }
+
+    const commitLossClient = {
+      async query(sql, parameters) {
+        const result = await migrationClient.query(sql, parameters);
+        if (String(sql).trim().toLowerCase() === "commit") throw new Error("commit_response_lost");
+        return result;
+      },
+    };
+    await assert.rejects(
+      migrationRunner.runMigrationsWithClient({ client: commitLossClient, migrations: productionMigrations,
+        bootstrap074: bootstrap074Config, cutover: cutoverInput }),
+      /commit_response_lost/,
+    );
+    assert.equal((await client.query("select exists(select 1 from schema_migrations where id=$1) as marker", [migration075.id])).rows[0].marker, true);
+    assert.equal((await client.query("select status from ai_content_cutovers where id=$1", [cutoverId])).rows[0].status, "migration_body_complete");
+    await migrationClient.end();
+    migrationClient = undefined;
+    recoveryClient = new Client({ connectionString: migrationUri.toString() });
+    await recoveryClient.connect();
+    const recovered = await migrationRunner.runMigrationsWithClient({ client: recoveryClient,
+      migrations: productionMigrations, bootstrap074: bootstrap074Config, cutover: cutoverInput });
+    assert.equal(recovered.cutover.status, "migration_body_complete");
+    assert.equal((await client.query("select status from ai_content_cutovers where id=$1", [cutoverId])).rows[0].status, "migration_body_complete");
+    let releaseRecoveryLock;
+    let reportRecoveryLock;
+    const recoveryLockHeld = new Promise((resolve) => { reportRecoveryLock = resolve; });
+    const recoveryLockRelease = new Promise((resolve) => { releaseRecoveryLock = resolve; });
+    const blockingRecoveryClient = {
+      async query(sql, parameters) {
+        const result = await recoveryClient.query(sql, parameters);
+        if (String(sql).includes("lock_ai_content_cutover_transaction_state")) {
+          reportRecoveryLock();
+          await recoveryLockRelease;
+        }
+        return result;
+      },
+    };
+    const blockedRecovery = migrationRunner.runMigrationsWithClient({
+      client: blockingRecoveryClient, migrations: productionMigrations,
+      bootstrap074: bootstrap074Config, cutover: cutoverInput,
+    });
+    await recoveryLockHeld;
+    await client.query("set lock_timeout='250ms'");
+    await assert.rejects(
+      client.query("update ai_content_bootstrap_state set authorization_request_id=authorization_request_id where singleton"),
+      /lock timeout/,
+    );
+    await client.query("reset lock_timeout");
+    releaseRecoveryLock();
+    assert.equal((await blockedRecovery).cutover.status, "migration_body_complete");
+    await client.query("set session authorization content_application");
+    await assert.rejects(client.query("select transition_ai_content_cutover_status($1,'migration_body_complete','backend_verified',$2)", [cutoverId, "a".repeat(64)]), /permission denied/);
+    await client.query("reset session authorization");
+    await assert.rejects(migrationRunner.installCutover075AllowlistWithProvider(providerOptions), /provider_state_invalid/);
+    await client.query("create role content_rogue login");
+    await client.query("grant content_schema_owner to content_rogue with set true");
+    await client.query("grant content_schema_owner to content_rogue with inherit false");
+    await client.query("grant content_schema_owner to content_rogue with admin false");
+    await assert.rejects(migrationRunner.readCanonicalBootstrapRoleCatalog(client, names), /bootstrap_role_catalog_invalid/);
+    await client.query("revoke content_schema_owner from content_rogue");
+    await client.query("drop role content_rogue");
+    await client.query(`insert into ai_content_cutover_status_events(
+      cutover_id,sequence_number,from_status,to_status,evidence_sha256,previous_event_sha256,event_sha256)
+      values($1,99,'migration_body_complete','backend_verified',$2,$2,$2)`, [cutoverId, "a".repeat(64)]);
+    await assert.rejects(
+      migrationRunner.runMigrationsWithClient({ client: recoveryClient, migrations: productionMigrations,
+        bootstrap074: bootstrap074Config, cutover: cutoverInput }),
+      /status_chain_invalid|status_chain_pointer_invalid/,
+    );
+  } finally {
+    const teardownFailures = [];
+    try {
+      const clientResults = await Promise.allSettled(
+        [recoveryClient, migrationClient, client].filter(Boolean).map((activeClient) => activeClient.end()),
+      );
+      teardownFailures.push(...clientResults
+        .filter(({ status }) => status === "rejected")
+        .map(({ reason }) => reason));
+    } finally {
+      if (container) {
+        try { await container.stop(); } catch (error) { teardownFailures.push(error); }
+      }
+    }
+    if (teardownFailures.length > 0) throw new AggregateError(teardownFailures, "075_harness_teardown_failed");
+  }
+});
+
+test("075 CLI config accepts only file-backed token and pinned public verification material", () => {
+  const config = resolveMigrationRuntimeConfig({
+    DATABASE_URL: "postgresql://content_migration:secret@localhost/postgres",
+    AI_CONTENT_075_CUTOVER_ID: "7b7c8ed7-e046-4bcd-8592-38606f547493",
+    AI_CONTENT_075_BYPASS_TOKEN_FILE: "C:/sealed/cutover-token",
+    AI_CONTENT_075_EXPECTED_DATABASE_ROLE: "content_migration",
+    AI_CONTENT_075_ALLOWLIST_AUTHORIZATION_FILE: "C:/sealed/075-authorization.json",
+    AI_CONTENT_075_ALLOWLIST_ATTESTATION_FILE: "C:/sealed/075-attestation.json",
+    AI_CONTENT_075_AUTHORIZATION_PUBLIC_KEY_FILE: "C:/sealed/authorization-public.pem",
+    AI_CONTENT_075_AUTHORIZATION_KEY_ID: authorizationIdentity.keyId,
+    AI_CONTENT_075_AUTHORIZATION_PUBLIC_KEY_SHA256: authorizationIdentity.publicKeySha256,
+    AI_CONTENT_075_PROVIDER_ATTESTATION_PUBLIC_KEY_FILE: "C:/sealed/provider-public.pem",
+    AI_CONTENT_075_PROVIDER_ATTESTATION_KEY_ID: providerIdentity.keyId,
+    AI_CONTENT_075_PROVIDER_ATTESTATION_PUBLIC_KEY_SHA256: providerIdentity.publicKeySha256,
+  }, ["node", "scripts/migrate.mjs"]);
+
+  assert.equal(config.cutover075Files.bypassTokenFile, "C:/sealed/cutover-token");
+  assert.equal("bypassToken" in config.cutover075Files, false);
+  assert.throws(
+    () => resolveMigrationRuntimeConfig({
+      AI_CONTENT_075_CUTOVER_ID: "7b7c8ed7-e046-4bcd-8592-38606f547493",
+      AI_CONTENT_075_BYPASS_TOKEN: "plaintext-forbidden",
+    }),
+    /private_key_input_forbidden|cutover_075_secret_input_forbidden/,
+  );
+});
+
+test("075 secret and public files fail closed on symlink owner mode size and Windows ambiguity", () => {
+  const regular = { isFile: () => true, isSymbolicLink: () => false, uid: 1000, mode: 0o100600, size: 64 };
+  assert.doesNotThrow(() => validateSecureCutoverFileMetadata(regular, { platform: "linux", uid: 1000, maxBytes: 128 }));
+  for (const metadata of [
+    { ...regular, isFile: () => false },
+    { ...regular, isSymbolicLink: () => true },
+    { ...regular, uid: 1001 },
+    { ...regular, mode: 0o100640 },
+    { ...regular, size: 129 },
+  ]) {
+    assert.throws(
+      () => validateSecureCutoverFileMetadata(metadata, { platform: "linux", uid: 1000, maxBytes: 128 }),
+      /cutover_075_secure_file_invalid/,
+    );
+  }
+  assert.throws(
+    () => validateSecureCutoverFileMetadata(regular, { platform: "win32", uid: undefined, maxBytes: 128 }),
+    /cutover_075_secure_file_platform_unsupported/,
+  );
+});
+
+test("075 runner rejects a harness-only allowlist insert without signed provider attestation before body execution", async () => {
+  const calls = [];
+  const client = {
+    async query(sql) {
+      const normalized = sql.replace(/\s+/g, " ").trim();
+      calls.push(normalized);
+      if (normalized === "select id, checksum from schema_migrations order by id asc") {
+        return { rows: [{ id: "074_ai_content_maintenance_write_fence.sql", checksum: "6".repeat(64) }] };
+      }
+      if (normalized.includes("to_regclass('public.schema_migrations')")) {
+        return { rows: [{ relation: "schema_migrations" }] };
+      }
+      if (normalized.includes("to_regclass('public.workspaces')")) return { rows: [{ relation: null }] };
+      return { rows: [] };
+    },
+  };
+  await assert.rejects(
+    migrationRunner.runMigrationsWithClient({
+      client,
+      migrations: [
+        {
+          id: "074_ai_content_maintenance_write_fence.sql",
+          checksum: "6".repeat(64),
+          sql: "select fence_body",
+        },
+        {
+          id: "075_ai_content_three_format_cutover.sql",
+          checksum: "7".repeat(64),
+          sql: "select cutover_body",
+        },
+      ],
+      bootstrap074: { authorization: {} },
+      cutover: {
+        cutoverId: "7b7c8ed7-e046-4bcd-8592-38606f547493",
+        bypassToken: "never-log-this-token",
+        expectedDatabaseRole: "content_migration",
+      },
+    }),
+    /cutover_075_allowlist_attestation_required/,
+  );
+  assert.equal(calls.includes("select cutover_body"), false);
+  assert.equal(calls.includes("begin"), false);
+});
+
+test("075 provider journal uses exclusive durable files and rejects corrupt or linked records", async () => {
+  const temporaryRoot = await mkdtemp(path.join(tmpdir(), "ai-content-075-journal-"));
+  const directory = path.join(temporaryRoot, "journal");
+  await mkdir(directory);
+  const requestId = "f7071995-0efc-4930-a6ac-9b29d5557460";
+  const linkedRequestId = "f7071995-0efc-4930-a6ac-9b29d5557461";
+  const corruptRequestId = "f7071995-0efc-4930-a6ac-9b29d5557462";
+  const linkedFile = path.join(directory, `${linkedRequestId}.prepared.json`);
+  const value = { contractVersion: "ai-content-075-provider-journal.v1", requestSha256: "a".repeat(64), attestationSha256: "b".repeat(64) };
+  let fileSyncCount = 0;
+  let directorySyncCount = 0;
+  const filesystem = {
+    lstat: async (target) => {
+      const metadata = await lstat(target);
+      if (target === linkedFile) return { isSymbolicLink: () => true };
+      if (target === directory) return {
+        isDirectory: () => true, isSymbolicLink: () => false, uid: 0, mode: 0o40700,
+      };
+      return metadata;
+    },
+    open: async (target, flags, mode) => {
+      if (target === directory) return {
+        sync: async () => { directorySyncCount += 1; }, close: async () => {},
+      };
+      const handle = await open(target, flags, mode);
+      return {
+        writeFile: (...args) => handle.writeFile(...args),
+        readFile: (...args) => handle.readFile(...args),
+        sync: async () => { fileSyncCount += 1; await handle.sync(); }, close: () => handle.close(),
+        stat: async () => {
+          const metadata = await handle.stat();
+          return { isFile: () => metadata.isFile(), uid: 0, mode: 0o100600, size: metadata.size };
+        },
+      };
+    },
+    link, unlink,
+  };
+  try {
+    const journal = migrationRunner.createCutover075ProviderJournal({ directory, platform: "linux", uid: 0, filesystem });
+    await journal.prepare(requestId, value);
+    assert.ok(fileSyncCount > 0, "journal record must be fsynced before publication");
+    assert.ok(directorySyncCount > 0, "journal directory must be fsynced after publication");
+    assert.deepEqual(await journal.read(requestId), { state: "prepared", value });
+    assert.equal((await readdir(directory)).some((name) => name.endsWith(".tmp")), false);
+    await assert.rejects(journal.prepare(requestId, value), (error) => error?.code === "EEXIST");
+    await journal.commit(requestId, value);
+    assert.deepEqual(await journal.read(requestId), { state: "committed", value });
+    await journal.commit(requestId, value);
+    await assert.rejects(journal.commit(requestId, { ...value, requestSha256: "c".repeat(64) }), /cutover_075_journal_reused/);
+
+    await writeFile(linkedFile, `${JSON.stringify(value)}\n`, "utf8");
+    await assert.rejects(journal.read(linkedRequestId), /cutover_075_secure_journal_record_invalid/);
+    await writeFile(path.join(directory, `${corruptRequestId}.prepared.json`), "{", "utf8");
+    await assert.rejects(journal.read(corruptRequestId), SyntaxError);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("075 provider action installs only a signed exact allowlist and replays committed response loss", async () => {
+  const migration = { id: "075_ai_content_three_format_cutover.sql", checksum: "7".repeat(64) };
+  const rows = [{ commandTag: "ALTER TABLE", objectIdentityPattern: "public.ai_content_%" }];
+  const unsignedAuthorization = {
+    contractVersion: "ai-content-075-ddl-allowlist-authorization.v1",
+    requestId: "4c1758c0-633a-43cf-9a1b-6e1c9517d816",
+    cutoverId: "7b7c8ed7-e046-4bcd-8592-38606f547493",
+    migrationId: migration.id,
+    migrationSha256: migration.checksum,
+    rows,
+    rowsSha256: migrationRunner.hashCutoverDdlAllowlist(rows),
+    enforcementCatalogSha256: "8".repeat(64),
+    issuedAt: "2026-08-05T00:00:00.000Z",
+    expiresAt: "2026-08-05T00:10:00.000Z",
+  };
+  const authorization = signCutoverAllowlistAuthorization(unsignedAuthorization);
+  const attestation = signCutoverAllowlistAttestation({
+    contractVersion: "ai-content-075-ddl-allowlist-attestation.v1",
+    action: "install_verify_075_ddl_allowlist",
+    requestId: authorization.requestId,
+    requestSha256: migrationRunner.hashCutoverAllowlistAuthorizationEnvelope(authorization),
+    cutoverId: authorization.cutoverId,
+    migrationId: migration.id,
+    migrationSha256: migration.checksum,
+    rowsSha256: authorization.rowsSha256,
+    beforeCount: 0,
+    beforeSha256: migrationRunner.hashCutoverDdlAllowlist([]),
+    afterCount: rows.length,
+    afterSha256: authorization.rowsSha256,
+    issuedAt: "2026-08-05T00:00:01.000Z",
+  });
+  let liveRows = [];
+  let markerPresent = false;
+  let providerIdentityAllowed = true;
+  const calls = [];
+  const client = {
+    async query(sql, parameters = []) {
+      const normalized = sql.replace(/\s+/g, " ").trim();
+      calls.push({ sql: normalized, parameters });
+      if (normalized === "select session_user,current_user") {
+        return { rows: [{ session_user: "postgres", current_user: providerIdentityAllowed ? "postgres" : "content_operator" }] };
+      }
+      if (normalized.includes("provider_075_sealed_state_v1")) return { rows: [{
+        final_fence_security_catalog_sha256: "8".repeat(64),
+        cutover_status: "maintenance_verified",
+        cutover_migration_id: migration.id,
+        marker_present: markerPresent,
+      }] };
+      if (normalized.startsWith("select command_tag,object_identity_pattern")) {
+        return { rows: liveRows.map((row) => ({ command_tag: row.commandTag, object_identity_pattern: row.objectIdentityPattern })) };
+      }
+      if (normalized.startsWith("insert into public.ai_content_ddl_allowlist")) {
+        liveRows = rows.map((row) => ({ ...row }));
+        return { rows: [], rowCount: rows.length };
+      }
+      return { rows: [], rowCount: 0 };
+    },
+  };
+  const records = new Map();
+  const journal = {
+    async read(requestId) { return records.get(requestId); },
+    async prepare(requestId, value) {
+      if (records.has(requestId)) throw new Error("journal_exists");
+      records.set(requestId, { state: "prepared", value });
+    },
+    async commit(requestId, value) { records.set(requestId, { state: "committed", value }); },
+  };
+  const options = {
+    client, migration, authorization, attestation,
+    authorizationVerification: authorizationIdentity.verification,
+    providerAttestationVerification: providerIdentity.verification,
+    now: new Date("2026-08-05T00:02:00.000Z"), journal,
+  };
+
+  const installed = await migrationRunner.installCutover075AllowlistWithProvider(options);
+  assert.equal(installed.requestSha256, attestation.requestSha256);
+  assert.deepEqual(liveRows, rows);
+  assert.equal(records.get(authorization.requestId).state, "committed");
+  assert.ok(calls.some(({ sql }) => sql === "lock table public.ai_content_ddl_allowlist in access exclusive mode"));
+
+  const inserts = calls.filter(({ sql }) => sql.startsWith("insert into public.ai_content_ddl_allowlist")).length;
+  const replay = await migrationRunner.installCutover075AllowlistWithProvider(options);
+  assert.deepEqual(replay, installed);
+  assert.equal(calls.filter(({ sql }) => sql.startsWith("insert into public.ai_content_ddl_allowlist")).length, inserts);
+
+  markerPresent = true;
+  await assert.rejects(
+    migrationRunner.installCutover075AllowlistWithProvider(options),
+    /cutover_075_provider_state_invalid/,
+  );
+  markerPresent = false;
+
+  records.clear();
+  await assert.rejects(
+    migrationRunner.installCutover075AllowlistWithProvider(options),
+    /cutover_075_direct_allowlist_insert_forbidden/,
+  );
+
+  records.set(authorization.requestId, { state: "prepared", value: {
+    contractVersion: "ai-content-075-provider-journal.v1",
+    requestSha256: migrationRunner.hashCutoverAllowlistAuthorizationEnvelope(authorization),
+    attestationSha256: migrationRunner.hashCutoverAllowlistAttestationEnvelope(attestation),
+  } });
+  liveRows = [...rows, { commandTag: "CREATE TABLE", objectIdentityPattern: "public.rogue" }];
+  await assert.rejects(
+    migrationRunner.installCutover075AllowlistWithProvider(options),
+    /cutover_075_provider_allowlist_partial_or_extra/,
+  );
+
+  records.set(authorization.requestId, { state: "prepared", value: { reused: true } });
+  liveRows = rows;
+  await assert.rejects(
+    migrationRunner.installCutover075AllowlistWithProvider(options),
+    /cutover_075_journal_reused/,
+  );
+
+  providerIdentityAllowed = false;
+  await assert.rejects(
+    migrationRunner.installCutover075AllowlistWithProvider(options),
+    /cutover_075_provider_identity_invalid/,
+  );
+  providerIdentityAllowed = true;
+
+  const journalValue = {
+    contractVersion: "ai-content-075-provider-journal.v1",
+    requestSha256: migrationRunner.hashCutoverAllowlistAuthorizationEnvelope(authorization),
+    attestationSha256: migrationRunner.hashCutoverAllowlistAttestationEnvelope(attestation),
+  };
+  records.set(authorization.requestId, { state: "committed", value: journalValue });
+  liveRows = [];
+  await assert.rejects(
+    migrationRunner.installCutover075AllowlistWithProvider(options),
+    /cutover_075_committed_journal_live_state_invalid/,
+  );
+
+  const mismatchedBeforeAttestation = signCutoverAllowlistAttestation({
+    ...Object.fromEntries(Object.entries(attestation).filter(([key]) => !["signature", "algorithm", "keyId"].includes(key))),
+    beforeCount: rows.length,
+    beforeSha256: authorization.rowsSha256,
+  });
+  records.clear();
+  await assert.rejects(
+    migrationRunner.installCutover075AllowlistWithProvider({ ...options, attestation: mismatchedBeforeAttestation }),
+    /cutover_075_allowlist_attestation_before_live_mismatch/,
+  );
 });
 
 test("074 canonical live role and object catalog hashes are order-independent and drift-sensitive", () => {
@@ -504,9 +1374,11 @@ test("074 bootstrap role authorization applies stage one then independently cons
         return { rows: parameters[0].map((identity) => {
           const extra = identity.includes("assert_ai_content_writable")
             ? [{ grantee: "content_application", privilege: "EXECUTE", grantable: false }]
-            : identity.includes("prepare_ai_content_cutover") || identity.includes("set_ai_content_maintenance") || identity.includes("transition_ai_content_cutover_status")
+            : identity.includes("transition_ai_content_cutover_status")
+              ? [{ grantee: "content_migration", privilege: "EXECUTE", grantable: false }, { grantee: "content_operator", privilege: "EXECUTE", grantable: false }]
+              : identity.includes("prepare_ai_content_cutover") || identity.includes("set_ai_content_maintenance")
               ? [{ grantee: "content_operator", privilege: "EXECUTE", grantable: false }]
-              : identity.includes("ai_content_cutover_bypass_allowed") || identity.includes("verify_ai_content_write_fence_catalog") || identity.includes("consume_ai_content_provider_attestation")
+              : identity.includes("ai_content_cutover_bypass_allowed") || identity.includes("lock_ai_content_cutover_transaction_state") || identity.includes("verify_ai_content_write_fence_catalog") || identity.includes("consume_ai_content_provider_attestation")
                 ? [{ grantee: "content_migration", privilege: "EXECUTE", grantable: false }]
                 : [];
           const invoker = identity.includes("ai_content_fence_trigger_name") || identity.includes("forbid_ai_content_cutover_event_mutation");
@@ -525,7 +1397,7 @@ test("074 bootstrap role authorization applies stage one then independently cons
       if (normalized.includes("fence_security_catalog_rows_v1")) return { rows: migrationRunner.bootstrapFenceCatalog };
       if (normalized.includes("fence_security_control_relations_v1")) return { rows: parameters[0].map((relation_name) => ({
         relation_name, owner_role_name: providerBundleInstalled ? "postgres" : "content_schema_owner",
-        acl: ["DELETE", "INSERT", "MAINTAIN", "REFERENCES", "SELECT", "TRIGGER", "TRUNCATE", "UPDATE"].map((privilege) => ({ grantee: providerBundleInstalled ? "postgres" : "content_schema_owner", privilege, grantable: false })).concat(
+        acl: ["DELETE", "INSERT", "REFERENCES", "SELECT", "TRIGGER", "TRUNCATE", "UPDATE"].map((privilege) => ({ grantee: providerBundleInstalled ? "postgres" : "content_schema_owner", privilege, grantable: false })).concat(
           relation_name === "ai_content_maintenance_state" ? [{ grantee: "content_application", privilege: "SELECT", grantable: false }]
             : ["ai_content_bootstrap_state", "ai_content_ddl_allowlist", "ai_content_write_fence_catalog"].includes(relation_name)
               ? [{ grantee: "content_migration", privilege: "SELECT", grantable: false }] : [],

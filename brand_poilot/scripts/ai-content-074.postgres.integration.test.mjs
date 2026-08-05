@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { test } from "node:test";
 import { Client } from "pg";
+import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import {
   bootstrapFenceCatalog,
   bootstrapFenceRelations,
@@ -13,8 +14,6 @@ import {
   readFenceSecurityCatalog,
 } from "./migrationRunner.mjs";
 
-const connectionString = process.env.AI_CONTENT_074_REAL_POSTGRES_URL;
-const enabled = typeof connectionString === "string" && connectionString.length > 0;
 const maxOverheadRatio = Number(process.env.AI_CONTENT_074_BULK_DML_MAX_OVERHEAD_RATIO ?? "8");
 const benchmarkRowCount = Number(process.env.AI_CONTENT_074_BENCHMARK_ROW_COUNT ?? "250");
 const classifierNames = Object.freeze([
@@ -86,10 +85,13 @@ async function transferProviderBundle(client) {
     await client.query(`alter function ${identity} owner to postgres`);
     await client.query(`revoke all on function ${identity} from public,content_schema_owner,content_application,content_operator,content_migration,content_cleanup`);
     const grantee = identity.includes("assert_ai_content_writable") ? "content_application"
-      : /prepare_ai_content_cutover|set_ai_content_maintenance|transition_ai_content_cutover_status/.test(identity) ? "content_operator"
-        : /ai_content_cutover_bypass_allowed|verify_ai_content_write_fence_catalog|consume_ai_content_provider_attestation/.test(identity) ? "content_migration"
+      : /prepare_ai_content_cutover|set_ai_content_maintenance/.test(identity) ? "content_operator"
+        : /ai_content_cutover_bypass_allowed|lock_ai_content_cutover_transaction_state|verify_ai_content_write_fence_catalog|consume_ai_content_provider_attestation/.test(identity) ? "content_migration"
           : null;
     if (grantee) await client.query(`grant execute on function ${identity} to ${quoteIdentifier(grantee)}`);
+    if (identity.includes("transition_ai_content_cutover_status")) {
+      await client.query(`grant execute on function ${identity} to content_operator,content_migration`);
+    }
   }
   for (const relation of providerEnforcementBundle.controlRelations) {
     await client.query(`alter table public.${quoteIdentifier(relation)} owner to postgres`);
@@ -103,7 +105,6 @@ async function transferProviderBundle(client) {
 }
 
 test("074 real PostgreSQL provider-owned bundle blocks migration-to-schema-owner exploits and meets bulk threshold", {
-  skip: enabled ? false : "AI_CONTENT_074_REAL_POSTGRES_URL is not configured; real PostgreSQL evidence not claimed",
   timeout: 10 * 60_000,
 }, async (t) => {
   assert.ok(Number.isFinite(maxOverheadRatio) && maxOverheadRatio >= 1 && maxOverheadRatio <= 100,
@@ -114,15 +115,29 @@ test("074 real PostgreSQL provider-owned bundle blocks migration-to-schema-owner
     assert.ok(Number.isFinite(threshold) && threshold >= 1 && threshold <= 100,
       `${classifier} threshold must be between 1 and 100`);
   }
-  const client = new Client({ connectionString });
-  await client.connect();
+  let container;
+  let client;
   try {
+    container = await new PostgreSqlContainer("postgres:16-alpine")
+      .withUsername("postgres")
+      .withPassword("postgres")
+      .withDatabase("ai_content_074_harness")
+      .withEnvironment("POSTGRES_INITDB_ARGS", "--locale=C")
+      .start();
+    const extensionInstall = await container.exec([
+      "sh", "-lc",
+      "apk update >/dev/null && apk add --no-cache build-base postgresql16-dev clang21 llvm21 >/dev/null && wget -q -O /tmp/pgvector.tar.gz https://codeload.github.com/pgvector/pgvector/tar.gz/778dacf20c07caf904557a88705142631818d8cb && echo '4c33cf053329784ba6d992d05c9588b93789e907a7511f20ff5a5a5b8a0703c1  /tmp/pgvector.tar.gz' | sha256sum -c - >/dev/null && test \"$(tar -tzf /tmp/pgvector.tar.gz | head -n 1)\" = 'pgvector-778dacf20c07caf904557a88705142631818d8cb/' && tar -xzf /tmp/pgvector.tar.gz -C /tmp && make -C /tmp/pgvector-778dacf20c07caf904557a88705142631818d8cb OPTFLAGS='' >/dev/null && make -C /tmp/pgvector-778dacf20c07caf904557a88705142631818d8cb install >/dev/null",
+    ]);
+    assert.equal(extensionInstall.exitCode, 0, `pgvector install failed: ${extensionInstall.stderr}`);
+    client = new Client({ connectionString: container.getConnectionUri() });
+    await client.connect();
     const identity = await client.query("select current_user,current_database() as database_name,version() as version");
     assert.equal(identity.rows[0].current_user, "postgres", "provider fixture must authenticate as platform postgres");
-    assert.match(identity.rows[0].version, /PostgreSQL 1[6-9]/);
+    assert.match(identity.rows[0].version, /PostgreSQL 16\./);
     assert.match(identity.rows[0].database_name, /(?:074|harness|test)/i, "refusing a database not explicitly named as a test harness");
     const existing = await client.query("select count(*)::integer as count from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r'");
     assert.equal(existing.rows[0].count, 0, "real PostgreSQL harness requires an empty disposable database");
+    assert.equal((await client.query("select to_regclass('public.workspaces') as workspaces")).rows[0].workspaces, null);
 
     const migrations = await loadMigrations();
     const migration074 = migrations.find(({ id }) => id === "074_ai_content_maintenance_write_fence.sql");
@@ -152,7 +167,7 @@ test("074 real PostgreSQL provider-owned bundle blocks migration-to-schema-owner
       grant execute on function assert_ai_content_writable() to content_application;
       grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,text,text,text),set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text) to content_operator;
       grant select on table ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog to content_migration;
-      grant execute on function ai_content_cutover_bypass_allowed(),verify_ai_content_write_fence_catalog(),consume_ai_content_provider_attestation() to content_migration;
+      grant execute on function transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text),ai_content_cutover_bypass_allowed(),lock_ai_content_cutover_transaction_state(uuid),verify_ai_content_write_fence_catalog(),consume_ai_content_provider_attestation() to content_migration;
     `);
     const interim = await readFenceSecurityCatalog(client, names);
     assert.equal(interim.ordinaryTriggers.length, 43);
@@ -167,7 +182,7 @@ test("074 real PostgreSQL provider-owned bundle blocks migration-to-schema-owner
       'content_cleanup',$1,$1,$1,$2,'{"contractVersion":"ai-content-event-trigger-catalog.v1","eventTriggers":[]}',
       $1,0,'{}',$1)`, ["a".repeat(64), interim.catalogSha256]);
     await client.query("create event trigger ai_content_ddl_guard_074 on ddl_command_end execute function public.enforce_ai_content_ddl_allowlist()");
-    await client.query("alter event trigger ai_content_ddl_guard_074 enable always");
+    await client.query("alter event trigger ai_content_ddl_guard_074 enable");
     const finalCatalog = await readFenceSecurityCatalog(client, names, { ownerRoleName: "postgres" });
     assert.deepEqual(finalCatalog.functions.map((row) => row.definition_sha256), interim.functions.map((row) => row.definition_sha256));
     const eventCatalog = await readCanonicalEventTriggerCatalog(client);
@@ -254,28 +269,34 @@ test("074 real PostgreSQL provider-owned bundle blocks migration-to-schema-owner
       { classifier: "ai_content_publish_attempt", query: "update publish_attempts set response_metadata=response_metadata where brand_id=$1 and publish_queue_id in (select id from publish_queue where idempotency_key like '074-publish-queue-%')" },
       { classifier: "daily_generation_automation", query: "update automation_runs set result_json=result_json where brand_id=$1 and run_key like '074-daily-%'" },
     ]);
-    const measureBranch = async ({ classifier, query }) => {
+    const measureBranch = async ({ classifier, query }, repetitions = 1) => {
       const started = performance.now();
-      const result = await client.query(query, [brand.id]);
-      assert.equal(result.rowCount, benchmarkRowCount, `${classifier} benchmark fixture count drift`);
+      for (let repetition = 0; repetition < repetitions; repetition += 1) {
+        const result = await client.query(query, [brand.id]);
+        assert.equal(result.rowCount, benchmarkRowCount, `${classifier} benchmark fixture count drift`);
+      }
       return performance.now()-started;
+    };
+    const measureStableBranch = async (branch) => {
+      await measureBranch(branch);
+      const samples = [];
+      for (let sample = 0; sample < 5; sample += 1) samples.push(await measureBranch(branch, 3));
+      return median(samples);
     };
     const maintenanceOff = {};
     for (const branch of benchmarkBranches) {
-      maintenanceOff[branch.classifier] = median([await measureBranch(branch), await measureBranch(branch), await measureBranch(branch)]);
+      maintenanceOff[branch.classifier] = await measureStableBranch(branch);
     }
     const cutoverId = randomUUID();
     const token = `074-token-${randomUUID()}`;
     const tokenHash = createHash("sha256").update(token).digest("hex");
-    await client.query(`insert into ai_content_cutovers(
-      id,status,migration_id,schema_owner_role_name,application_role_name,operator_role_name,migration_role_name,
-      cleanup_role_name,bypass_token_sha256,cleanup_token_sha256,database_role_catalog_sha256,provider_backup_id,
-      provider_snapshot_created_at,incident_bundle_sha256,preserved_data_manifest_sha256,
-      proposal_preflight_transfer_sha256,intended_release_sha,latest_status_event_sha256
-    ) values($1,'maintenance_verified','075_ai_content_three_format_cutover.sql','content_schema_owner','content_application',
-      'content_operator','content_migration','content_cleanup',$2,$2,$3,'harness',now(),$3,$3,$3,$4,$3)`,
-    [cutoverId, tokenHash, "b".repeat(64), "c".repeat(40)]);
-    await client.query("update ai_content_maintenance_state set enabled=true,cutover_id=$1,enabled_at=now() where singleton", [cutoverId]);
+    await client.query("set session authorization content_operator");
+    await client.query(`select prepare_ai_content_cutover($1,'content_schema_owner','content_application','content_operator',
+      'content_migration','content_cleanup',$2,$2,$3,'harness',now(),$3,$3,$3,$4,$3)`,
+    [cutoverId, tokenHash, "a".repeat(64), "c".repeat(40)]);
+    await client.query("select set_ai_content_maintenance($1,true)", [cutoverId]);
+    await client.query("select transition_ai_content_cutover_status($1,'prepared','maintenance_verified',$2)", [cutoverId, "a".repeat(64)]);
+    await client.query("reset session authorization");
     await client.query(`insert into ai_content_ddl_allowlist(migration_id,command_tag,object_identity_pattern)
       values('075_ai_content_three_format_cutover.sql','CREATE TABLE','public.ai_content_075_allowlisted_probe')`);
     await runPositiveAllowlistedDdl(client, "create table public.ai_content_075_allowlisted_probe(id integer)", { cutoverId, token });
@@ -326,7 +347,7 @@ test("074 real PostgreSQL provider-owned bundle blocks migration-to-schema-owner
       await client.query("set role content_schema_owner");
       await client.query("select set_config('app.ai_content_cutover_id',$1,false),set_config('app.ai_content_cutover_token',$2,false)", [cutoverId, token]);
       for (const branch of benchmarkBranches) {
-        maintenanceOn[branch.classifier] = median([await measureBranch(branch), await measureBranch(branch), await measureBranch(branch)]);
+        maintenanceOn[branch.classifier] = await measureStableBranch(branch);
       }
     } finally {
       await client.query("reset session authorization");
@@ -348,6 +369,15 @@ test("074 real PostgreSQL provider-owned bundle blocks migration-to-schema-owner
       `maximum classifier overhead ${maxObservedRatio.toFixed(3)} exceeds ${maxOverheadRatio}`);
     t.diagnostic(JSON.stringify({ perBranchThreshold, maxObservedRatio, benchmarkEvidence }));
   } finally {
-    await client.end();
+    const teardownFailures = [];
+    try {
+      const clientResults = await Promise.allSettled(client ? [client.end()] : []);
+      teardownFailures.push(...clientResults.filter(({ status }) => status === "rejected").map(({ reason }) => reason));
+    } finally {
+      if (container) {
+        try { await container.stop(); } catch (error) { teardownFailures.push(error); }
+      }
+    }
+    if (teardownFailures.length > 0) throw new AggregateError(teardownFailures, "074_harness_teardown_failed");
   }
 });
