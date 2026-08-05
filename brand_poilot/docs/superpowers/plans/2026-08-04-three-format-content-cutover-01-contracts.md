@@ -486,6 +486,25 @@ git commit -m "feat: centralize content generation schemas"
 - Create: `packages/brand-pilot-content-contracts/src/binding.test.ts`
 - Modify: `packages/brand-pilot-content-contracts/src/index.ts`
 
+Task 3 ownership validation uses the server-owned authority envelope from the approved Phase 3 fixed-input assembler; it does not add workspace, brand, or proposal-batch fields to the planner's V3 JSON. This preserves the rule that V3 plus prompt binding are the only planner inputs while still making cross-scope provenance testable before model execution. Define a closed TypeBox `ContentPipelineAuthorityContextSchema` in `validators.ts` with these exact closed nested records:
+
+```ts
+{
+  scope: { workspaceId, brandId },
+  selection: {
+    workspaceId, brandId, proposalBatchId, proposalId, outputFormat, purpose,
+  },
+  evidence: Array<{
+    workspaceId, brandId, proposalBatchId, evidenceId,
+  }>,
+  references: Array<{
+    workspaceId, brandId, proposalBatchId, referenceItemId, snapshotId,
+  }>,
+}
+```
+
+All IDs use the canonical UUID schema and format/purpose use the catalog schemas. The API constructs this envelope only after its scoped transaction has proved that the selection belongs to the batch and every evidence/reference row belongs to that selection's frozen set. `assertEvidenceOwnership` still independently rejects any envelope row whose scope/batch differs from `scope`/`selection`, any V3 evidence/reference identity absent from the envelope, and any selected-proposal evidence/reference identity absent from the frozen V3 sets. `assertSelectedProposalInvariant` compares the V3 proposal ID, format, and purpose with `selection`. The authority envelope is claim/validation metadata only and is never passed to Codex or image generation.
+
 - [ ] **Step 1: Write RED tests for format, purpose, product, plan, and manifest drift**
 
 Tests must prove:
@@ -550,7 +569,7 @@ export type ContentPromptBinding = Static<typeof ContentPromptBindingSchema>;
 
 Task 3 deliberately does not add `promptBindingFor`: the verified generated-catalog parser and its exact `schemas` shape do not exist until Task 4. Binding tests here use explicit parser-valid six-cell fixtures with named 64-hex hashes; they test schema/semantic rejection but may not claim that hashes came from a catalog. Task 4 adds the sole constructor after it can consume a branded, parser-verified catalog. The binding's `model` is the format planner's fixed Terra model; the proposal model/command remain in proposal-job audit and preflight evidence, so the two model boundaries cannot be confused.
 
-Implement and export `assertPurposeProductInvariant`, `assertEvidenceOwnership`, `assertSelectedProposalInvariant`, `assertPlannerPromptBinding`, `assertPlanMatchesInput`, `assertAssetCountInvariant`, `assertManifestMatchesInput`, and the composing `assertContentPipelineBindings`. The composing validator accepts parsed V3, binding, plan, image package, rendered-asset inventory, and manifest; it compares every identity/format/purpose/version/hash/count field and throws a stable boundary error on the first disagreement. It must never repair or default a value. Tests require every binding field and reject a generic `schemaHash`; catalog-origin proof for the three specific schema hashes plus `contractSourceHash` is owned by Task 4.
+Implement and export `assertPurposeProductInvariant`, `assertEvidenceOwnership`, `assertSelectedProposalInvariant`, `assertPlannerPromptBinding`, `assertPlanMatchesInput`, `assertAssetCountInvariant`, `assertManifestMatchesInput`, and the composing `assertContentPipelineBindings`. The composing validator accepts parsed V3, parsed authority context, binding, plan, image package, rendered-asset inventory, and manifest; it compares every identity/format/purpose/version/hash/count field and throws a stable boundary error on the first disagreement. It must never repair or default a value. Tests require every binding field and reject a generic `schemaHash`; catalog-origin proof for the three specific schema hashes plus `contractSourceHash` is owned by Task 4.
 
 - [ ] **Step 4: Run GREEN and commit**
 
