@@ -727,7 +727,11 @@ sudo docker run --rm \
   --env MIGRATION_DATABASE_URL_FILE=/run/secrets/migration_database_url \
   --env AI_CONTENT_074_AUTHORIZATION_FILE=/run/secrets/074_authorization.json \
   --env AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_FILE=/run/secrets/074_authorization_public.pem \
+  --env AI_CONTENT_074_AUTHORIZATION_KEY_ID="$AI_CONTENT_074_AUTHORIZATION_KEY_ID" \
+  --env AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_SHA256="$AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_SHA256" \
   --env AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_FILE=/run/secrets/074_provider_attestation_public.pem \
+  --env AI_CONTENT_074_PROVIDER_ATTESTATION_KEY_ID="$AI_CONTENT_074_PROVIDER_ATTESTATION_KEY_ID" \
+  --env AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_SHA256="$AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_SHA256" \
   --mount type=bind,src=/opt/brand-pilot/state/cutovers/074-migration-database-url.container,dst=/run/secrets/migration_database_url,readonly \
   --mount type=bind,src=/opt/brand-pilot/state/cutovers/074-authorization.container.json,dst=/run/secrets/074_authorization.json,readonly \
   --mount type=bind,src=/opt/brand-pilot/state/cutovers/074-authorization-public.pem,dst=/run/secrets/074_authorization_public.pem,readonly \
