@@ -11,6 +11,7 @@ import {
   CONTENT_PROPOSAL_PROMPT_VERSION,
   CONTENT_PROMPT_BINDING_VERSION,
   CONTENT_PURPOSES,
+  compareUnicodeCodePoints,
   GENERATED_CONTENT_CATALOG_VERSION,
   RESEARCH_EVIDENCE_VERSION,
   type GeneratedContentCatalogData,
@@ -32,17 +33,13 @@ import { ResearchEvidenceSnapshotV1Schema } from "./snapshots.js";
 const SOURCE_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_OUTPUT_DIRECTORY = resolve(SOURCE_DIRECTORY, "../generated");
 
-function codePointCompare(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
 export function stableJson(value: unknown): string {
   const normalize = (item: unknown): unknown => {
     if (Array.isArray(item)) return item.map(normalize);
     if (!item || typeof item !== "object") return item;
     return Object.fromEntries(
       Object.entries(item as Record<string, unknown>)
-        .sort(([left], [right]) => codePointCompare(left, right))
+        .sort(([left], [right]) => compareUnicodeCodePoints(left, right))
         .map(([key, child]) => [key, normalize(child)]),
     );
   };
@@ -52,7 +49,7 @@ export function stableJson(value: unknown): string {
 function authoredSourceFiles(directory: string): string[] {
   const files: string[] = [];
   const visit = (current: string): void => {
-    for (const entry of readdirSync(current).sort(codePointCompare)) {
+    for (const entry of readdirSync(current).sort(compareUnicodeCodePoints)) {
       const absolute = join(current, entry);
       if (statSync(absolute).isDirectory()) visit(absolute);
       else if (entry.endsWith(".ts")
@@ -62,7 +59,7 @@ function authoredSourceFiles(directory: string): string[] {
     }
   };
   visit(directory);
-  return files.sort((left, right) => codePointCompare(
+  return files.sort((left, right) => compareUnicodeCodePoints(
     relative(directory, left).replaceAll("\\", "/"),
     relative(directory, right).replaceAll("\\", "/"),
   ));
@@ -126,9 +123,10 @@ export async function generateArtifactSet(sourceDirectory = SOURCE_DIRECTORY): P
   const aiContentV3 = leafFor("ai-content-v3.schema.json");
   const contentPromptBindingV1 = leafFor("content-prompt-binding-v1.schema.json");
 
+  const contractSourceHash = computeContractSourceHash(sourceDirectory);
   const catalog = {
     catalogVersion: GENERATED_CONTENT_CATALOG_VERSION,
-    contractSourceHash: computeContractSourceHash(sourceDirectory),
+    contractSourceHash,
     formats: [...CONTENT_OUTPUT_FORMATS],
     purposes: [...CONTENT_PURPOSES],
     claimSlugs: {
@@ -194,9 +192,10 @@ export async function generateArtifactSet(sourceDirectory = SOURCE_DIRECTORY): P
     },
     manifestContractVersion: AI_CONTENT_MANIFEST_VERSION,
   } as const satisfies GeneratedContentCatalogData;
-  const verifiedCatalog = parseGeneratedContentCatalog(catalog);
+  const schemaArtifacts = Object.fromEntries(artifacts);
+  const verifiedCatalog = await parseGeneratedContentCatalog(catalog, { contractSourceHash, schemaArtifacts });
   artifacts.set("content-catalog.json", stableJson(verifiedCatalog));
-  return new Map([...artifacts].sort(([left], [right]) => codePointCompare(left, right)));
+  return new Map([...artifacts].sort(([left], [right]) => compareUnicodeCodePoints(left, right)));
 }
 
 export async function generateArtifacts(outputDirectory = DEFAULT_OUTPUT_DIRECTORY): Promise<void> {

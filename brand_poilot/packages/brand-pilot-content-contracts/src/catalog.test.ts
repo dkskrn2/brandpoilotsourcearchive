@@ -33,30 +33,78 @@ describe("canonical content catalog", () => {
 });
 
 describe("generated content catalog", () => {
-  it("parses the generated catalog and rejects filename, hash, and cross-field drift", async () => {
+  async function fixture() {
     const artifacts = await generateArtifactSet();
     const raw = JSON.parse(artifacts.get("content-catalog.json")!);
-    expect(parseGeneratedContentCatalog(raw)).toEqual(raw);
+    const schemaArtifacts = Object.fromEntries([...artifacts].filter(([filename]) => filename !== "content-catalog.json"));
+    return { raw, verification: { contractSourceHash: raw.contractSourceHash, schemaArtifacts } };
+  }
 
-    expect(() => parseGeneratedContentCatalog({
+  it("requires actual schema bytes and the independently supplied source hash", async () => {
+    const { raw, verification } = await fixture();
+    await expect(parseGeneratedContentCatalog(raw, verification)).resolves.toEqual(raw);
+    await expect(parseGeneratedContentCatalog(raw, undefined as never))
+      .rejects.toThrow("generated_content_catalog_invalid");
+    await expect(parseGeneratedContentCatalog(raw, {
+      ...verification,
+      contractSourceHash: "f".repeat(64),
+    })).rejects.toThrow("generated_content_catalog_invalid");
+  });
+
+  it("rejects filename, key, hash, and cross-field drift", async () => {
+    const { raw, verification } = await fixture();
+
+    await expect(parseGeneratedContentCatalog({
       ...raw,
       schemas: { ...raw.schemas, aiContentV3: { ...raw.schemas.aiContentV3, filename: "wrong.json" } },
-    })).toThrow("generated_content_catalog_invalid");
-    expect(() => parseGeneratedContentCatalog({
+    }, verification)).rejects.toThrow("generated_content_catalog_invalid");
+    await expect(parseGeneratedContentCatalog({
       ...raw,
       schemas: { ...raw.schemas, legacyV1: raw.schemas.aiContentV3 },
-    })).toThrow("generated_content_catalog_invalid");
-    expect(() => parseGeneratedContentCatalog({
+    }, verification)).rejects.toThrow("generated_content_catalog_invalid");
+    await expect(parseGeneratedContentCatalog({
       ...raw,
-      schemas: { ...raw.schemas, contentProposalV2: { ...raw.schemas.contentProposalV2, sha256: "f".repeat(64) } },
-    })).toThrow("generated_content_catalog_invalid");
-    expect(() => parseGeneratedContentCatalog({
+      schemas: { ...raw.schemas, aiContentV3: { ...raw.schemas.aiContentV3, sha256: "f".repeat(64) } },
+    }, verification)).rejects.toThrow("generated_content_catalog_invalid");
+    await expect(parseGeneratedContentCatalog({
+      ...raw,
+      schemas: {
+        ...raw.schemas,
+        imageGenerationPackageV1: { ...raw.schemas.imageGenerationPackageV1, sha256: "f".repeat(64) },
+      },
+    }, verification)).rejects.toThrow("generated_content_catalog_invalid");
+    await expect(parseGeneratedContentCatalog({
+      ...raw,
+      schemas: {
+        ...raw.schemas,
+        plans: { ...raw.schemas.plans, blog: { ...raw.schemas.plans.blog, sha256: "f".repeat(64) } },
+      },
+    }, verification)).rejects.toThrow("generated_content_catalog_invalid");
+    await expect(parseGeneratedContentCatalog({
       ...raw,
       proposalContracts: { ...raw.proposalContracts, outputSchemaSha256: "f".repeat(64) },
-    })).toThrow("generated_content_catalog_invalid");
-    expect(() => parseGeneratedContentCatalog({
+    }, verification)).rejects.toThrow("generated_content_catalog_invalid");
+    await expect(parseGeneratedContentCatalog({
       ...raw,
       planContractVersions: { ...raw.planContractVersions, reel: "card-news-plan.v2" },
-    })).toThrow("generated_content_catalog_invalid");
+    }, verification)).rejects.toThrow("generated_content_catalog_invalid");
+  });
+
+  it("rejects missing, extra, or mutated actual artifact bytes", async () => {
+    const { raw, verification } = await fixture();
+    const { [raw.schemas.aiContentV3.filename]: _missing, ...missing } = verification.schemaArtifacts;
+    await expect(parseGeneratedContentCatalog(raw, { ...verification, schemaArtifacts: missing }))
+      .rejects.toThrow("generated_content_catalog_invalid");
+    await expect(parseGeneratedContentCatalog(raw, {
+      ...verification,
+      schemaArtifacts: { ...verification.schemaArtifacts, "legacy.schema.json": "{}\n" },
+    })).rejects.toThrow("generated_content_catalog_invalid");
+    await expect(parseGeneratedContentCatalog(raw, {
+      ...verification,
+      schemaArtifacts: {
+        ...verification.schemaArtifacts,
+        [raw.schemas.plans.blog.filename]: `${verification.schemaArtifacts[raw.schemas.plans.blog.filename]} `,
+      },
+    })).rejects.toThrow("generated_content_catalog_invalid");
   });
 });

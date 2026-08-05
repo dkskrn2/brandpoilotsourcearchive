@@ -210,11 +210,32 @@ const EXPECTED_GENERATED_SCHEMA_FILENAMES = [
   "content-prompt-binding-v1.schema.json",
 ] as const;
 
-function codePointCompare(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
+export function compareUnicodeCodePoints(left: string, right: string): number {
+  const leftPoints = Array.from(left);
+  const rightPoints = Array.from(right);
+  const sharedLength = Math.min(leftPoints.length, rightPoints.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    const leftPoint = leftPoints[index]!.codePointAt(0)!;
+    const rightPoint = rightPoints[index]!.codePointAt(0)!;
+    if (leftPoint !== rightPoint) return leftPoint < rightPoint ? -1 : 1;
+  }
+  return leftPoints.length < rightPoints.length ? -1 : leftPoints.length > rightPoints.length ? 1 : 0;
 }
 
-export function parseGeneratedContentCatalog(value: unknown): VerifiedGeneratedContentCatalog {
+export type GeneratedContentCatalogVerificationInput = {
+  readonly contractSourceHash: string;
+  readonly schemaArtifacts: Readonly<Record<string, string>>;
+};
+
+async function sha256Utf8(value: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export async function parseGeneratedContentCatalog(
+  value: unknown,
+  verification: GeneratedContentCatalogVerificationInput,
+): Promise<VerifiedGeneratedContentCatalog> {
   if (!Value.Check(GeneratedContentCatalogSchema, value)) {
     throw new Error("generated_content_catalog_invalid");
   }
@@ -234,8 +255,8 @@ export function parseGeneratedContentCatalog(value: unknown): VerifiedGeneratedC
     catalog.schemas.aiContentV3,
     catalog.schemas.contentPromptBindingV1,
   ];
-  const actualFilenames = schemaLeaves.map(({ filename }) => filename).sort(codePointCompare);
-  const expectedFilenames = [...EXPECTED_GENERATED_SCHEMA_FILENAMES].sort(codePointCompare);
+  const actualFilenames = schemaLeaves.map(({ filename }) => filename).sort(compareUnicodeCodePoints);
+  const expectedFilenames = [...EXPECTED_GENERATED_SCHEMA_FILENAMES].sort(compareUnicodeCodePoints);
   const formatCatalogAgrees = CONTENT_OUTPUT_FORMATS.every((format) =>
     catalog.claimSlugs[format] === CONTENT_FORMAT_CATALOG[format].claimSlug
     && catalog.services[format] === CONTENT_FORMAT_CATALOG[format].service
@@ -255,6 +276,21 @@ export function parseGeneratedContentCatalog(value: unknown): VerifiedGeneratedC
   if (JSON.stringify(actualFilenames) !== JSON.stringify(expectedFilenames)
     || !formatCatalogAgrees || !proposalAgrees || !duplicateHashesAgree) {
     throw new Error("generated_content_catalog_invalid");
+  }
+  if (!verification || verification.contractSourceHash !== catalog.contractSourceHash
+    || !verification.schemaArtifacts || typeof verification.schemaArtifacts !== "object") {
+    throw new Error("generated_content_catalog_invalid");
+  }
+  const artifactFilenames = Object.keys(verification.schemaArtifacts).sort(compareUnicodeCodePoints);
+  if (JSON.stringify(artifactFilenames) !== JSON.stringify(expectedFilenames)) {
+    throw new Error("generated_content_catalog_invalid");
+  }
+  const expectedHashes = new Map(schemaLeaves.map((leaf) => [leaf.filename, leaf.sha256]));
+  for (const filename of expectedFilenames) {
+    const artifact = verification.schemaArtifacts[filename];
+    if (typeof artifact !== "string" || await sha256Utf8(artifact) !== expectedHashes.get(filename)) {
+      throw new Error("generated_content_catalog_invalid");
+    }
   }
   return catalog as VerifiedGeneratedContentCatalog;
 }

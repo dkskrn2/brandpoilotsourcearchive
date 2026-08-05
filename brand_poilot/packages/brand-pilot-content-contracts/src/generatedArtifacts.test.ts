@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { compareUnicodeCodePoints } from "./catalog.js";
 import { computeContractSourceHash, generateArtifacts, stableJson } from "./generateArtifacts.js";
 
 const SCHEMA_FILENAMES = [
@@ -27,7 +28,7 @@ function objectKeysAreSorted(value: unknown): boolean {
   if (!value || typeof value !== "object") return true;
   const entries = Object.entries(value as Record<string, unknown>);
   const keys = entries.map(([key]) => key);
-  const sorted = [...keys].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+  const sorted = [...keys].sort(compareUnicodeCodePoints);
   return JSON.stringify(keys) === JSON.stringify(sorted)
     && entries.every(([, child]) => objectKeysAreSorted(child));
 }
@@ -51,6 +52,10 @@ function schemaProblems(value: unknown): { oneOf: boolean; uniqueItems: boolean;
 }
 
 describe("generated content contract artifacts", () => {
+  it("orders Unicode scalar values instead of UTF-16 code units", () => {
+    expect(["\u{10000}", "\uE000"].sort(compareUnicodeCodePoints)).toEqual(["\uE000", "\u{10000}"]);
+  });
+
   it("stableJson recursively sorts by code point and emits exactly one final LF", () => {
     expect(stableJson({ z: 1, a: { ä: 2, Z: 1 }, list: [{ b: 2, a: 1 }] }))
       .toBe('{\n  "a": {\n    "Z": 1,\n    "ä": 2\n  },\n  "list": [\n    {\n      "a": 1,\n      "b": 2\n    }\n  ],\n  "z": 1\n}\n');
@@ -62,9 +67,9 @@ describe("generated content contract artifacts", () => {
     await generateArtifacts(left);
     await generateArtifacts(right);
 
-    const expected = ["content-catalog.json", ...SCHEMA_FILENAMES].sort();
-    expect(readdirSync(left).sort()).toEqual(expected);
-    expect(readdirSync(right).sort()).toEqual(expected);
+    const expected = ["content-catalog.json", ...SCHEMA_FILENAMES].sort(compareUnicodeCodePoints);
+    expect(readdirSync(left).sort(compareUnicodeCodePoints)).toEqual(expected);
+    expect(readdirSync(right).sort(compareUnicodeCodePoints)).toEqual(expected);
     for (const filename of expected) {
       expect(readFileSync(join(left, filename))).toEqual(readFileSync(join(right, filename)));
     }
@@ -85,11 +90,10 @@ describe("generated content contract artifacts", () => {
       }
     };
     visit(sourceDirectory);
-    files.sort((left, right) => {
-      const leftPath = relative(sourceDirectory, left).replaceAll("\\", "/");
-      const rightPath = relative(sourceDirectory, right).replaceAll("\\", "/");
-      return leftPath < rightPath ? -1 : leftPath > rightPath ? 1 : 0;
-    });
+    files.sort((left, right) => compareUnicodeCodePoints(
+      relative(sourceDirectory, left).replaceAll("\\", "/"),
+      relative(sourceDirectory, right).replaceAll("\\", "/"),
+    ));
     const hash = createHash("sha256");
     for (const absolute of files) {
       hash.update(relative(sourceDirectory, absolute).replaceAll("\\", "/"));
@@ -118,7 +122,7 @@ describe("generated content contract artifacts", () => {
       // Nested plan leaves are flattened below; the catalog itself is deliberately not hashed.
     const planLeaves = Object.values((catalog.schemas as Record<string, Record<string, unknown>>).plans);
     const schemaLeaves = [...leaves.filter((leaf) => "filename" in (leaf as object)), ...planLeaves] as Array<{ filename: string; sha256: string }>;
-    expect(schemaLeaves.map(({ filename }) => filename).sort()).toEqual([...SCHEMA_FILENAMES]);
+    expect(schemaLeaves.map(({ filename }) => filename).sort(compareUnicodeCodePoints)).toEqual([...SCHEMA_FILENAMES]);
     for (const leaf of schemaLeaves) {
       expect(leaf.sha256).toBe(createHash("sha256").update(readFileSync(join(output, leaf.filename))).digest("hex"));
     }

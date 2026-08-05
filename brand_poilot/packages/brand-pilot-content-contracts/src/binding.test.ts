@@ -44,7 +44,11 @@ describe("ContentPromptBindingSchema", () => {
     "constructs %s/%s only from a verified generated catalog",
     async (format, purpose) => {
       const artifacts = await generateArtifactSet();
-      const catalog = parseGeneratedContentCatalog(JSON.parse(artifacts.get("content-catalog.json")!));
+      const raw = JSON.parse(artifacts.get("content-catalog.json")!);
+      const catalog = await parseGeneratedContentCatalog(raw, {
+        contractSourceHash: raw.contractSourceHash,
+        schemaArtifacts: Object.fromEntries([...artifacts].filter(([filename]) => filename !== "content-catalog.json")),
+      });
       const binding = promptBindingFor(format, purpose, catalog);
       expect(binding.proposalSchemaSha256).toBe(catalog.schemas.contentProposalV2.sha256);
       expect(binding.generationSchemaSha256).toBe(catalog.schemas.contentGenerationInputV3.sha256);
