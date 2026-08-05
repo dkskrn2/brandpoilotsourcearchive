@@ -284,7 +284,6 @@ describe("AI content maintenance HTTP fence", () => {
     repository.assertAiContentWritable = vi.fn(async () => {
       throw new Error("ai_content_maintenance");
     });
-
     const response = await harness.app.inject({
       method: "POST",
       url: `/brands/${brandId}/ai-content/generations`,
@@ -296,6 +295,89 @@ describe("AI content maintenance HTTP fence", () => {
     expect(response.json()).toEqual({ error: "ai_content_maintenance" });
     expect(repository.assertAiContentWritable).toHaveBeenCalledTimes(1);
     expect(repository.createAiContentAnalysis).not.toHaveBeenCalled();
+    await harness.app.close();
+  });
+
+  it.each([
+    ["output", `/brands/${brandId}/ai-content/outputs/output-1/download`, "downloadAiContentOutput"],
+    ["generation", `/brands/${brandId}/ai-content/generations/${generationId}/download`, "downloadAiContentGeneration"],
+  ] as const)("returns 503 before the %s download service can fetch or package assets", async (_label, url, method) => {
+    const harness = setup();
+    const repository = harness.repository as ApiRepository & {
+      assertAiContentWritable: ReturnType<typeof vi.fn>;
+    };
+    repository.assertAiContentWritable = vi.fn(async () => {
+      throw new Error("ai_content_maintenance");
+    });
+
+    const response = await harness.app.inject({
+      method: "GET",
+      url,
+      headers: { cookie: "bp_session=session-1" },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "ai_content_maintenance" });
+    expect(repository.assertAiContentWritable).toHaveBeenCalledTimes(1);
+    expect(repository[method]).not.toHaveBeenCalled();
+    await harness.app.close();
+  });
+
+  it.each([
+    ["proposal create", "POST", `/brands/${brandId}/ai-content/proposal-batches`, "createAiContentProposalBatch", {}],
+    ["proposal select", "POST", `/brands/${brandId}/ai-content/proposals/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/select`, "selectAiContentProposal", {}],
+    ["generation start", "POST", `/brands/${brandId}/ai-content/generations/${generationId}/generate`, "startAiContentGeneration", {}],
+    ["output retry", "POST", `/brands/${brandId}/ai-content/outputs/output-1/retry`, "retryAiContentOutput", {}],
+    ["output regenerate", "POST", `/brands/${brandId}/ai-content/outputs/output-1/revisions`, "reviseAiContentOutput", {}],
+    ["finalization", "PATCH", `/brands/${brandId}/ai-content/generations/${generationId}`, "updateAiContentFinalizationDraft", {}],
+    ["attachment confirm", "POST", `/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`, "confirmLegacyAiContentAttachment", {}],
+    ["attachment delete", "DELETE", `/brands/${brandId}/ai-content/generations/${generationId}/attachments/${attachmentId}`, "removeAiContentAttachment", undefined],
+  ] as const)("blocks %s at the request fence with unchanged service state", async (_label, method, url, repositoryMethod, payload) => {
+    const harness = setup();
+    const repository = harness.repository as ApiRepository & {
+      assertAiContentWritable: ReturnType<typeof vi.fn>;
+    };
+    repository.assertAiContentWritable = vi.fn(async () => {
+      throw new Error("ai_content_maintenance");
+    });
+    const mutation = vi.fn();
+    (repository as unknown as Record<string, unknown>)[repositoryMethod] = mutation;
+
+    const response = await harness.app.inject({
+      method,
+      url,
+      headers: { cookie: "bp_session=session-1", "idempotency-key": "maintenance-boundary" },
+      ...(payload === undefined ? {} : { payload }),
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "ai_content_maintenance" });
+    expect(repository.assertAiContentWritable).toHaveBeenCalledTimes(1);
+    expect(mutation).not.toHaveBeenCalled();
+    await harness.app.close();
+  });
+
+  it("blocks an internal render mutation before worker authentication or repository work", async () => {
+    const harness = setup();
+    const repository = harness.repository as ApiRepository & {
+      assertAiContentWritable: ReturnType<typeof vi.fn>;
+    };
+    repository.assertAiContentWritable = vi.fn(async () => {
+      throw new Error("ai_content_maintenance");
+    });
+    const claim = vi.fn();
+    (repository as unknown as Record<string, unknown>).claimAiContentRenderJob = claim;
+
+    const response = await harness.app.inject({
+      method: "POST",
+      url: "/worker/ai-content-render-jobs/claim",
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "ai_content_maintenance" });
+    expect(repository.assertAiContentWritable).toHaveBeenCalledTimes(1);
+    expect(claim).not.toHaveBeenCalled();
     await harness.app.close();
   });
 });

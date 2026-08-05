@@ -84,14 +84,42 @@ on conflict (singleton) do nothing;
 create table ai_content_bootstrap_state (
   singleton boolean primary key default true check (singleton),
   authorization_request_id text not null,
+  authorization_sha256 text not null check (authorization_sha256 ~ '^[0-9a-f]{64}$'),
   migration_role_name name not null,
   schema_owner_role_name name not null,
+  application_role_name name not null,
+  operator_role_name name not null,
+  cleanup_role_name name not null,
   migration_sha256 text not null check (migration_sha256 ~ '^[0-9a-f]{64}$'),
   role_catalog_sha256 text not null check (role_catalog_sha256 ~ '^[0-9a-f]{64}$'),
   object_catalog_sha256 text not null check (object_catalog_sha256 ~ '^[0-9a-f]{64}$'),
+  install_request_json jsonb not null check (jsonb_typeof(install_request_json)='object'),
+  install_request_sha256 text not null check (install_request_sha256 ~ '^[0-9a-f]{64}$'),
+  provider_attestation_json jsonb null check (provider_attestation_json is null or jsonb_typeof(provider_attestation_json)='object'),
+  provider_attestation_sha256 text null check (provider_attestation_sha256 is null or provider_attestation_sha256 ~ '^[0-9a-f]{64}$'),
+  attestation_consumed_at timestamptz null,
+  revocation_request_json jsonb null check (revocation_request_json is null or jsonb_typeof(revocation_request_json)='object'),
+  revocation_request_sha256 text null check (revocation_request_sha256 is null or revocation_request_sha256 ~ '^[0-9a-f]{64}$'),
   created_at timestamptz not null default now(),
+  constraint ai_content_bootstrap_provider_evidence_pair_check check (
+    (provider_attestation_json is null and provider_attestation_sha256 is null and attestation_consumed_at is null
+      and revocation_request_json is null and revocation_request_sha256 is null)
+    or (provider_attestation_json is not null and provider_attestation_sha256 is not null and attestation_consumed_at is not null
+      and revocation_request_json is not null and revocation_request_sha256 is not null)
+  ),
   constraint ai_content_bootstrap_roles_distinct_check
-    check (migration_role_name<>schema_owner_role_name)
+    check (
+      schema_owner_role_name<>application_role_name
+      and schema_owner_role_name<>operator_role_name
+      and schema_owner_role_name<>migration_role_name
+      and schema_owner_role_name<>cleanup_role_name
+      and application_role_name<>operator_role_name
+      and application_role_name<>migration_role_name
+      and application_role_name<>cleanup_role_name
+      and operator_role_name<>migration_role_name
+      and operator_role_name<>cleanup_role_name
+      and migration_role_name<>cleanup_role_name
+    )
 );
 
 create table ai_content_ddl_allowlist (
@@ -107,7 +135,8 @@ create table ai_content_write_fence_catalog (
   relation_name text primary key,
   relation_class text not null check (relation_class in ('customer_execution','cutover_control')),
   row_classifier text not null check (row_classifier in (
-    'whole_relation','legacy_automated_use','scheduled_proposal_refresh','legacy_content_job'
+    'whole_relation','legacy_automated_topic','scheduled_proposal_refresh','legacy_content_job',
+    'ai_content_generated_artifact','ai_content_scheduled_publish'
   )),
   reviewed_at timestamptz not null default now()
 );
@@ -149,9 +178,11 @@ insert into ai_content_write_fence_catalog (relation_name, relation_class, row_c
   ('review_events','customer_execution','whole_relation'),
   ('regeneration_requests','customer_execution','whole_relation'),
   ('brand_format_rotation_states','customer_execution','whole_relation'),
-  ('topic_rows','customer_execution','legacy_automated_use'),
+  ('topic_rows','customer_execution','legacy_automated_topic'),
   ('source_crawl_runs','customer_execution','scheduled_proposal_refresh'),
   ('jobs','customer_execution','legacy_content_job'),
+  ('storage_artifacts','customer_execution','ai_content_generated_artifact'),
+  ('publish_queue','customer_execution','ai_content_scheduled_publish'),
   ('ai_content_cutovers','cutover_control','whole_relation'),
   ('ai_content_cutover_status_events','cutover_control','whole_relation'),
   ('ai_content_maintenance_state','cutover_control','whole_relation'),
@@ -242,19 +273,28 @@ create function enforce_ai_content_write_fence() returns trigger
 language plpgsql security definer set search_path=pg_catalog,public as $$
 declare classifier text;
 declare should_fence boolean := false;
+declare candidate record;
 begin
+  if tg_op='DELETE' then candidate := old; else candidate := new; end if;
   select c.row_classifier into strict classifier
     from public.ai_content_write_fence_catalog c
    where c.relation_class='customer_execution' and c.relation_name=tg_table_name;
   if classifier='whole_relation' then
     should_fence := true;
-  elsif classifier='legacy_automated_use' then
-    should_fence := tg_op='UPDATE' and coalesce(new.status::text,'')='used';
+  elsif classifier='legacy_automated_topic' then
+    should_fence := coalesce(candidate.status::text,'') in ('uploaded','queued','used');
   elsif classifier='scheduled_proposal_refresh' then
-    should_fence := tg_op<>'DELETE' and coalesce(new.run_key::text,'') like 'scheduled-proposal-refresh:%';
+    should_fence := coalesce(candidate.run_key::text,'') like 'scheduled-proposal-refresh:%';
   elsif classifier='legacy_content_job' then
-    should_fence := tg_op<>'DELETE' and coalesce(new.job_type::text,'') in (
+    should_fence := coalesce(candidate.job_type::text,'') in (
       'instagram_feed_render','instagram_story_render','instagram_reel_render','threads_text_render'
+    );
+  elsif classifier='ai_content_generated_artifact' then
+    should_fence := coalesce(candidate.artifact_type::text,'')='generated_manifest';
+  elsif classifier='ai_content_scheduled_publish' then
+    should_fence := exists (
+      select 1 from public.channel_outputs output
+       where output.id=candidate.channel_output_id and output.ai_content_generation_output_id is not null
     );
   end if;
   if should_fence then perform public.assert_ai_content_writable(); end if;
@@ -316,7 +356,17 @@ create function prepare_ai_content_cutover(
 ) returns text
 language plpgsql security definer set search_path=pg_catalog,public as $$
 declare event_hash text;
+declare bootstrap public.ai_content_bootstrap_state%rowtype;
 begin
+  select * into strict bootstrap from public.ai_content_bootstrap_state where singleton for update;
+  if p_schema_owner<>bootstrap.schema_owner_role_name
+     or p_application_role<>bootstrap.application_role_name
+     or p_operator_role<>bootstrap.operator_role_name
+     or p_migration_role<>bootstrap.migration_role_name
+     or p_cleanup_role<>bootstrap.cleanup_role_name
+     or p_role_catalog_sha256<>bootstrap.role_catalog_sha256 then
+    raise exception 'ai_content_cutover_roles_not_sealed';
+  end if;
   event_hash := encode(digest(concat_ws('|',p_cutover_id::text,'0','', 'prepared',
     p_evidence_sha256,p_schema_owner::text,p_application_role::text,p_operator_role::text,
     p_migration_role::text,p_cleanup_role::text,p_bypass_token_sha256,p_cleanup_token_sha256,
@@ -424,15 +474,42 @@ $$;
 create function verify_ai_content_write_fence_catalog() returns boolean
 language plpgsql security definer set search_path=pg_catalog,public as $$
 declare mismatch integer;
+declare catalog_hash text;
 begin
+  select encode(digest(string_agg(
+           concat_ws('|',relation_name,relation_class,row_classifier), E'\n'
+           order by relation_name
+         ),'sha256'),'hex')
+    into catalog_hash
+    from public.ai_content_write_fence_catalog;
+  if catalog_hash<>'2d687a828e0da7383f7e80343e6dd8748535730a63a34fccf0aed0796b3b280a' then
+    raise exception 'ai_content_write_fence_catalog_exact_mismatch';
+  end if;
   select count(*) into mismatch
     from public.ai_content_write_fence_catalog c
     left join pg_class rel on rel.oid=to_regclass('public.' || c.relation_name)
     left join pg_trigger t on t.tgrelid=rel.oid
       and t.tgname=public.ai_content_fence_trigger_name(c.relation_name)
-      and t.tgenabled='A' and not t.tgisinternal
-   where c.relation_class='customer_execution' and t.oid is null;
+      and not t.tgisinternal
+   where c.relation_class='customer_execution'
+     and (
+       t.oid is null
+       or t.tgenabled<>'A'
+       or t.tgtype<>31
+       or t.tgfoid<>'public.enforce_ai_content_write_fence()'::regprocedure
+     );
   if mismatch<>0 then raise exception 'ai_content_write_fence_catalog_mismatch'; end if;
+  select count(*) into mismatch
+    from pg_trigger t
+   where not t.tgisinternal
+     and t.tgfoid='public.enforce_ai_content_write_fence()'::regprocedure
+     and not exists (
+       select 1 from public.ai_content_write_fence_catalog c
+        where c.relation_class='customer_execution'
+          and t.tgrelid=to_regclass('public.' || c.relation_name)
+          and t.tgname=public.ai_content_fence_trigger_name(c.relation_name)
+     );
+  if mismatch<>0 then raise exception 'ai_content_write_fence_extra_trigger'; end if;
   return true;
 end;
 $$;

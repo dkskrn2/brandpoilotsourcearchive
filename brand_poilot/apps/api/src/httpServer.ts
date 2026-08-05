@@ -1293,6 +1293,10 @@ export function createServer(
       || (method === "POST" && route === "/brands/:brandId/content-generation/run")
       || (method === "GET" && route === "/internal/cron/daily-generation")
       || (method === "POST" && route === "/internal/cron/ai-content-attachment-gc")
+      || (method === "GET" && (
+        route === "/brands/:brandId/ai-content/outputs/:outputId/download"
+        || route === "/brands/:brandId/ai-content/generations/:generationId/download"
+      ))
       || (["POST", "PUT", "PATCH", "DELETE"].includes(method) && route.startsWith("/worker/ai-content-"))
     );
     if (maintenanceRepository.assertAiContentWritable

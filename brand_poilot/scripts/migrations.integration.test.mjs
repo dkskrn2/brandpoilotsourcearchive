@@ -4,7 +4,12 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
-import { loadMigrations, runMigrationsWithClient } from "./migrationRunner.mjs";
+import {
+  bootstrapFenceRelations,
+  loadMigrations,
+  readCanonicalBootstrapCatalogs,
+  runMigrationsWithClient,
+} from "./migrationRunner.mjs";
 
 const legacyInstagramDeliveryChecksum =
   "7e45bc297cf35128368700b49f34974690d699198e465ecfb608ac9922cb1882";
@@ -40,6 +45,56 @@ const runMigrationRange = async (database, migrations, firstId, lastId) => {
   }
 };
 
+const expected074FenceCatalog = Object.freeze([
+  ["ai_content_analyzed_subject_snapshots", "customer_execution", "whole_relation"],
+  ["ai_content_approved_proposal_versions", "customer_execution", "whole_relation"],
+  ["ai_content_attachment_deletion_jobs", "customer_execution", "whole_relation"],
+  ["ai_content_attachment_storage_path_guards", "customer_execution", "whole_relation"],
+  ["ai_content_attachment_upload_sessions", "customer_execution", "whole_relation"],
+  ["ai_content_create_idempotency_records", "customer_execution", "whole_relation"],
+  ["ai_content_generation_attachments", "customer_execution", "whole_relation"],
+  ["ai_content_generation_briefs", "customer_execution", "whole_relation"],
+  ["ai_content_generation_input_snapshots", "customer_execution", "whole_relation"],
+  ["ai_content_generation_jobs", "customer_execution", "whole_relation"],
+  ["ai_content_generation_outputs", "customer_execution", "whole_relation"],
+  ["ai_content_generation_reference_migration_audits", "customer_execution", "whole_relation"],
+  ["ai_content_generation_references", "customer_execution", "whole_relation"],
+  ["ai_content_generation_render_jobs", "customer_execution", "whole_relation"],
+  ["ai_content_generations", "customer_execution", "whole_relation"],
+  ["ai_content_one_time_avatar_receipts", "customer_execution", "whole_relation"],
+  ["ai_content_one_time_avatar_revocations", "customer_execution", "whole_relation"],
+  ["ai_content_output_research_snapshots", "customer_execution", "whole_relation"],
+  ["ai_content_proposal_batches", "customer_execution", "whole_relation"],
+  ["ai_content_proposal_jobs", "customer_execution", "whole_relation"],
+  ["ai_content_proposal_research_snapshots", "customer_execution", "whole_relation"],
+  ["ai_content_proposals", "customer_execution", "whole_relation"],
+  ["ai_content_subject_analyses", "customer_execution", "whole_relation"],
+  ["ai_content_subject_appeal_regeneration_keys", "customer_execution", "whole_relation"],
+  ["ai_content_subject_images", "customer_execution", "whole_relation"],
+  ["ai_content_usage_ledger", "customer_execution", "whole_relation"],
+  ["ai_content_wiki_version_snapshots", "customer_execution", "whole_relation"],
+  ["auto_approval_checks", "customer_execution", "whole_relation"],
+  ["brand_format_rotation_states", "customer_execution", "whole_relation"],
+  ["channel_outputs", "customer_execution", "whole_relation"],
+  ["content_topics", "customer_execution", "whole_relation"],
+  ["jobs", "customer_execution", "legacy_content_job"],
+  ["llm_runs", "customer_execution", "whole_relation"],
+  ["master_drafts", "customer_execution", "whole_relation"],
+  ["publish_queue", "customer_execution", "ai_content_scheduled_publish"],
+  ["regeneration_requests", "customer_execution", "whole_relation"],
+  ["review_events", "customer_execution", "whole_relation"],
+  ["source_crawl_runs", "customer_execution", "scheduled_proposal_refresh"],
+  ["storage_artifacts", "customer_execution", "ai_content_generated_artifact"],
+  ["topic_publish_groups", "customer_execution", "whole_relation"],
+  ["topic_rows", "customer_execution", "legacy_automated_topic"],
+  ["ai_content_bootstrap_state", "cutover_control", "whole_relation"],
+  ["ai_content_cutover_status_events", "cutover_control", "whole_relation"],
+  ["ai_content_cutovers", "cutover_control", "whole_relation"],
+  ["ai_content_ddl_allowlist", "cutover_control", "whole_relation"],
+  ["ai_content_maintenance_state", "cutover_control", "whole_relation"],
+  ["ai_content_write_fence_catalog", "cutover_control", "whole_relation"],
+].map(([relation_name, relation_class, row_classifier]) => ({ relation_name, relation_class, row_classifier })));
+
 test("074 maintenance write fence is default-off and installs the exact execution catalog", async () => {
   const migrations = await loadMigrations();
   const migration074 = migrations.find((migration) => migration.id === "074_ai_content_maintenance_write_fence.sql");
@@ -51,11 +106,37 @@ test("074 maintenance write fence is default-off and installs the exact executio
     const state = await database.query("select enabled, cutover_id, enabled_at from ai_content_maintenance_state where singleton");
     assert.deepEqual(state.rows, [{ enabled: false, cutover_id: null, enabled_at: null }]);
     const catalog = await database.query("select relation_name, relation_class, row_classifier from ai_content_write_fence_catalog order by relation_name");
-    assert.ok(catalog.rows.length >= 25);
-    assert.ok(catalog.rows.some((row) => row.relation_name === "ai_content_generations" && row.relation_class === "customer_execution"));
-    assert.ok(catalog.rows.some((row) => row.relation_name === "topic_rows" && row.row_classifier === "legacy_automated_use"));
-    const triggers = await database.query("select count(*)::integer as count from pg_trigger where tgname like 'ai_content_fence_%' and tgenabled = 'A'");
-    assert.equal(triggers.rows[0].count, catalog.rows.filter((row) => row.relation_class === "customer_execution").length);
+    assert.deepEqual(catalog.rows, expected074FenceCatalog.toSorted((left, right) => left.relation_name.localeCompare(right.relation_name)));
+    const triggers = await database.query(`
+      select catalog.relation_name, trigger.tgenabled,
+             trigger.tgtype::integer as trigger_type,
+             trigger.tgfoid = 'enforce_ai_content_write_fence()'::regprocedure as function_matches
+        from ai_content_write_fence_catalog catalog
+        join pg_trigger trigger
+          on trigger.tgrelid=to_regclass('public.' || catalog.relation_name)
+         and trigger.tgname=ai_content_fence_trigger_name(catalog.relation_name)
+       where catalog.relation_class='customer_execution'
+       order by catalog.relation_name
+    `);
+    assert.deepEqual(triggers.rows, expected074FenceCatalog
+      .filter((row) => row.relation_class === "customer_execution")
+      .map((row) => ({ relation_name: row.relation_name, tgenabled: "A", trigger_type: 31, function_matches: true })));
+    const extras = await database.query(`
+      select count(*)::integer as count
+        from pg_trigger trigger
+       where not trigger.tgisinternal
+         and trigger.tgfoid='enforce_ai_content_write_fence()'::regprocedure
+         and not exists (
+           select 1 from ai_content_write_fence_catalog catalog
+            where catalog.relation_class='customer_execution'
+              and trigger.tgrelid=to_regclass('public.' || catalog.relation_name)
+              and trigger.tgname=ai_content_fence_trigger_name(catalog.relation_name)
+         )
+    `);
+    assert.equal(extras.rows[0].count, 0);
+    await database.query("update ai_content_write_fence_catalog set row_classifier='scheduled_proposal_refresh' where relation_name='topic_rows'");
+    await assert.rejects(database.query("select verify_ai_content_write_fence_catalog()"), /ai_content_write_fence_catalog_exact_mismatch/);
+    await database.query("update ai_content_write_fence_catalog set row_classifier='legacy_automated_topic' where relation_name='topic_rows'");
 
     const workspace = await database.query(
       "insert into workspaces (name, slug) values ('Fence', $1) returning id",
@@ -106,15 +187,244 @@ test("074 maintenance write fence is default-off and installs the exact executio
     );
     const topic = await database.query(
       `insert into topic_rows (
-         workspace_id,brand_id,topic_upload_id,row_number,topic_title,topic_angle,topic_key
-       ) values ($1,$2,$3,1,'unrelated','manual','unrelated-key') returning id`,
+         workspace_id,brand_id,topic_upload_id,row_number,status,topic_title,topic_angle,topic_key
+       ) values ($1,$2,$3,1,'skipped','unrelated','manual','unrelated-key') returning id`,
       [workspace.rows[0].id, brand.rows[0].id, upload.rows[0].id],
     );
-    await database.query("update topic_rows set status='skipped' where id=$1", [topic.rows[0].id]);
+    await database.query("update topic_rows set status='invalid' where id=$1", [topic.rows[0].id]);
     await assert.rejects(
       database.query("update topic_rows set status='used',used_at=now() where id=$1", [topic.rows[0].id]),
       /ai_content_maintenance/,
     );
+  });
+});
+
+test("074 maintenance write fence classifies every shared execution row for insert update and delete", async () => {
+  const migrations = await loadMigrations();
+  const migration074 = migrations.find((migration) => migration.id === "074_ai_content_maintenance_write_fence.sql");
+  assert.ok(migration074);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(database, migrations, "001_initial_schema.sql", "073_ai_content_generation_v2_render_pipeline.sql");
+    await database.exec(migration074.sql);
+    const publishing = await insertPublishingFixture(database);
+
+    const upload = await database.query(
+      "insert into topic_uploads(workspace_id,brand_id,file_name) values($1,$2,'fence.csv') returning id",
+      [publishing.workspaceId, publishing.brandId],
+    );
+    const topicRows = [];
+    for (const [rowNumber, status] of [[1, "uploaded"], [2, "uploaded"], [3, "skipped"]]) {
+      const result = await database.query(
+        `insert into topic_rows(workspace_id,brand_id,topic_upload_id,row_number,status,topic_title,topic_angle,topic_key)
+         values($1,$2,$3,$4,$5,$6,'angle',$7) returning id`,
+        [publishing.workspaceId, publishing.brandId, upload.rows[0].id, rowNumber, status, `topic-${rowNumber}`, `key-${randomUUID()}`],
+      );
+      topicRows.push(result.rows[0].id);
+    }
+
+    const source = await database.query(
+      `insert into source_urls(workspace_id,brand_id,source_type,url,url_hash)
+       values($1,$2,'owned','https://example.com/fence',$3) returning id`,
+      [publishing.workspaceId, publishing.brandId, randomUUID()],
+    );
+    const crawlRows = [];
+    for (const runKey of [`scheduled-proposal-refresh:${randomUUID()}`, `scheduled-proposal-refresh:${randomUUID()}`, `manual:${randomUUID()}`]) {
+      const result = await database.query(
+        `insert into source_crawl_runs(workspace_id,brand_id,source_url_id,trigger,run_key)
+         values($1,$2,$3,'manual',$4) returning id`,
+        [publishing.workspaceId, publishing.brandId, source.rows[0].id, runKey],
+      );
+      crawlRows.push(result.rows[0].id);
+    }
+
+    const jobRows = [];
+    for (const jobType of ["instagram_feed_render", "instagram_feed_render", "source_crawl"]) {
+      const result = await database.query(
+        "insert into jobs(workspace_id,brand_id,job_type) values($1,$2,$3) returning id",
+        [publishing.workspaceId, publishing.brandId, jobType],
+      );
+      jobRows.push(result.rows[0].id);
+    }
+
+    const generatedArtifacts = [];
+    for (const index of [1, 2]) {
+      const result = await database.query(
+        `insert into storage_artifacts(workspace_id,brand_id,artifact_type,bucket,path)
+         values($1,$2,'generated_manifest','vercel-blob',$3) returning id`,
+        [publishing.workspaceId, publishing.brandId, `ai-content/${publishing.brandId}/${randomUUID()}/manifest-${index}.json`],
+      );
+      generatedArtifacts.push(result.rows[0].id);
+    }
+    const brandArtifact = await database.query(
+      `insert into storage_artifacts(workspace_id,brand_id,artifact_type,bucket,path)
+       values($1,$2,'brand_asset','vercel-blob',$3) returning id`,
+      [publishing.workspaceId, publishing.brandId, `brands/${publishing.brandId}/${randomUUID()}.png`],
+    );
+
+    const queueRows = await database.query(
+      `select queue.*, output.id as linked_output_id
+         from publish_queue queue join channel_outputs output on output.id=queue.channel_output_id
+        where queue.workspace_id=$1 order by queue.created_at,queue.id`,
+      [publishing.workspaceId],
+    );
+    assert.ok(queueRows.rows.length >= 4);
+    for (let index = 0; index < 3; index += 1) {
+      const generation = await database.query(
+        `insert into ai_content_generations(workspace_id,brand_id,type,title,status,analysis_idempotency_key)
+         values($1,$2,'card_news',$3,'completed',$4) returning id`,
+        [publishing.workspaceId, publishing.brandId, `fence-${index}`, `analysis-${randomUUID()}`],
+      );
+      const output = await database.query(
+        `insert into ai_content_generation_outputs(workspace_id,brand_id,generation_id,output_index,title,status)
+         values($1,$2,$3,1,$4,'completed') returning id`,
+        [publishing.workspaceId, publishing.brandId, generation.rows[0].id, `fence-${index}`],
+      );
+      await database.query("update channel_outputs set ai_content_generation_output_id=$1 where id=$2", [output.rows[0].id, queueRows.rows[index].channel_output_id]);
+    }
+    const relatedInsertRow = queueRows.rows[2];
+    await database.query("delete from publish_queue where id=$1", [relatedInsertRow.id]);
+    const unrelatedRow = queueRows.rows[3];
+
+    const cutoverId = randomUUID();
+    const digest = "b".repeat(64);
+    const eventHash = "a".repeat(64);
+    await database.query(
+      `insert into ai_content_cutovers(
+         id,status,migration_id,schema_owner_role_name,application_role_name,operator_role_name,migration_role_name,
+         cleanup_role_name,bypass_token_sha256,cleanup_token_sha256,database_role_catalog_sha256,provider_backup_id,
+         provider_snapshot_created_at,incident_bundle_sha256,preserved_data_manifest_sha256,proposal_preflight_transfer_sha256,
+         intended_release_sha,latest_status_event_sha256)
+       values($1,'prepared','075_ai_content_three_format_cutover.sql','content_owner','content_app','content_operator',
+         'content_migration','content_cleanup',$2,$2,$2,'backup',now(),$2,$2,$2,$3,$4)`,
+      [cutoverId, digest, "c".repeat(40), eventHash],
+    );
+    await database.query(
+      `insert into ai_content_cutover_status_events(cutover_id,sequence_number,from_status,to_status,evidence_sha256,event_sha256)
+       values($1,0,null,'prepared',$2,$3)`,
+      [cutoverId, "d".repeat(64), eventHash],
+    );
+    await database.query("update ai_content_maintenance_state set enabled=true,cutover_id=$1,enabled_at=now() where singleton", [cutoverId]);
+
+    await assert.rejects(database.query(
+      `insert into topic_rows(workspace_id,brand_id,topic_upload_id,row_number,status,topic_title,topic_angle,topic_key)
+       values($1,$2,$3,10,'uploaded','blocked','angle',$4)`,
+      [publishing.workspaceId, publishing.brandId, upload.rows[0].id, `key-${randomUUID()}`],
+    ), /ai_content_maintenance/);
+    await assert.rejects(database.query("update topic_rows set status='used',used_at=now() where id=$1", [topicRows[0]]), /ai_content_maintenance/);
+    await assert.rejects(database.query("delete from topic_rows where id=$1", [topicRows[1]]), /ai_content_maintenance/);
+    await database.query("update topic_rows set status='invalid' where id=$1", [topicRows[2]]);
+    await database.query("delete from topic_rows where id=$1", [topicRows[2]]);
+
+    await assert.rejects(database.query(
+      `insert into source_crawl_runs(workspace_id,brand_id,source_url_id,trigger,run_key)
+       values($1,$2,$3,'scheduled',$4)`,
+      [publishing.workspaceId, publishing.brandId, source.rows[0].id, `scheduled-proposal-refresh:${randomUUID()}`],
+    ), /ai_content_maintenance/);
+    await assert.rejects(database.query("update source_crawl_runs set status='running' where id=$1", [crawlRows[0]]), /ai_content_maintenance/);
+    await assert.rejects(database.query("delete from source_crawl_runs where id=$1", [crawlRows[1]]), /ai_content_maintenance/);
+    await database.query("update source_crawl_runs set status='failed' where id=$1", [crawlRows[2]]);
+    await database.query("delete from source_crawl_runs where id=$1", [crawlRows[2]]);
+
+    await assert.rejects(database.query("insert into jobs(workspace_id,brand_id,job_type) values($1,$2,'instagram_feed_render')", [publishing.workspaceId, publishing.brandId]), /ai_content_maintenance/);
+    await assert.rejects(database.query("update jobs set status='running' where id=$1", [jobRows[0]]), /ai_content_maintenance/);
+    await assert.rejects(database.query("delete from jobs where id=$1", [jobRows[1]]), /ai_content_maintenance/);
+    await database.query("update jobs set status='running' where id=$1", [jobRows[2]]);
+    await database.query("delete from jobs where id=$1", [jobRows[2]]);
+
+    await assert.rejects(database.query(
+      `insert into storage_artifacts(workspace_id,brand_id,artifact_type,bucket,path)
+       values($1,$2,'generated_manifest','vercel-blob',$3)`,
+      [publishing.workspaceId, publishing.brandId, `ai-content/${publishing.brandId}/${randomUUID()}/manifest.json`],
+    ), /ai_content_maintenance/);
+    await assert.rejects(database.query("update storage_artifacts set byte_size=1 where id=$1", [generatedArtifacts[0]]), /ai_content_maintenance/);
+    await assert.rejects(database.query("delete from storage_artifacts where id=$1", [generatedArtifacts[1]]), /ai_content_maintenance/);
+    await database.query("update storage_artifacts set byte_size=1 where id=$1", [brandArtifact.rows[0].id]);
+    await database.query("delete from storage_artifacts where id=$1", [brandArtifact.rows[0].id]);
+
+    await assert.rejects(database.query("update publish_queue set status='deferred' where id=$1", [queueRows.rows[0].id]), /ai_content_maintenance/);
+    await assert.rejects(database.query("delete from publish_queue where id=$1", [queueRows.rows[1].id]), /ai_content_maintenance/);
+    await assert.rejects(database.query(
+      `insert into publish_queue(id,workspace_id,brand_id,channel_output_id,topic_publish_group_id,brand_channel_id,channel,status,approval_type,idempotency_key)
+       values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [relatedInsertRow.id, relatedInsertRow.workspace_id, relatedInsertRow.brand_id, relatedInsertRow.channel_output_id,
+        relatedInsertRow.topic_publish_group_id, relatedInsertRow.brand_channel_id, relatedInsertRow.channel,
+        relatedInsertRow.status, relatedInsertRow.approval_type, relatedInsertRow.idempotency_key],
+    ), /ai_content_maintenance/);
+    await database.query("update publish_queue set status='deferred' where id=$1", [unrelatedRow.id]);
+    await database.query("delete from publish_queue where id=$1", [unrelatedRow.id]);
+    await database.query(
+      `insert into publish_queue(id,workspace_id,brand_id,channel_output_id,topic_publish_group_id,brand_channel_id,channel,status,approval_type,idempotency_key)
+       values($1,$2,$3,$4,$5,$6,$7,'queued',$8,$9)`,
+      [unrelatedRow.id, unrelatedRow.workspace_id, unrelatedRow.brand_id, unrelatedRow.channel_output_id,
+        unrelatedRow.topic_publish_group_id, unrelatedRow.brand_channel_id, unrelatedRow.channel,
+        unrelatedRow.approval_type, unrelatedRow.idempotency_key],
+    );
+  });
+});
+
+test("074 prepare cutover accepts only the five roles sealed by bootstrap", async () => {
+  const migrations = await loadMigrations();
+  const migration074 = migrations.find((migration) => migration.id === "074_ai_content_maintenance_write_fence.sql");
+  assert.ok(migration074);
+  await withDatabase(async (database) => {
+    await runMigrationRange(database, migrations, "001_initial_schema.sql", "073_ai_content_generation_v2_render_pipeline.sql");
+    await database.exec(migration074.sql);
+    await database.query(
+      `insert into ai_content_bootstrap_state(
+         singleton,authorization_request_id,authorization_sha256,migration_role_name,schema_owner_role_name,
+         application_role_name,operator_role_name,cleanup_role_name,migration_sha256,role_catalog_sha256,
+         object_catalog_sha256,install_request_json,install_request_sha256)
+       values(true,'request-074',$1,'content_migration','content_owner','content_app','content_operator','content_cleanup',
+         $1,$1,$1,'{}'::jsonb,$1)`,
+      ["a".repeat(64)],
+    );
+    await assert.rejects(database.query(
+      `select prepare_ai_content_cutover($1,'content_owner','content_app','content_operator','content_app','content_cleanup',
+         $2,$2,$2,'backup',now(),$2,$2,$2,$3,$2)`,
+      [randomUUID(), "b".repeat(64), "c".repeat(40)],
+    ), /ai_content_cutover_roles_not_sealed/);
+  });
+});
+
+test("074 canonical authorization hashes are recomputed from the live PostgreSQL catalogs", async () => {
+  const migrations = await loadMigrations();
+  await withDatabase(async (database) => {
+    await runMigrationRange(database, migrations, "001_initial_schema.sql", "073_ai_content_generation_v2_render_pipeline.sql");
+    await database.exec(`
+      create role content_schema_owner nologin;
+      create role content_application login;
+      create role content_operator login;
+      create role content_migration login noinherit;
+      create role content_cleanup login;
+      grant content_schema_owner to content_migration;
+    `);
+    for (const relation of bootstrapFenceRelations) {
+      await database.exec(`alter table public."${relation}" owner to content_schema_owner`);
+    }
+    const catalogs = await readCanonicalBootstrapCatalogs({
+      query: (sql, parameters = []) => database.query(sql, parameters),
+    }, {
+      schemaOwnerRoleName: "content_schema_owner",
+      applicationRoleName: "content_application",
+      operatorRoleName: "content_operator",
+      migrationRoleName: "content_migration",
+      cleanupRoleName: "content_cleanup",
+    });
+    assert.equal(catalogs.roleRows.length, 5);
+    assert.equal(catalogs.objectRows.length, 41);
+    assert.equal(catalogs.roleCatalogSha256, "cc34b17e777ba882b7677bf1ef2de508aade9c62f0a23d51b7759b70b5551121");
+    assert.equal(catalogs.objectCatalogSha256, "e6ad5ff26bd5ee8a06bda44fa15d94b83b890cb5619baeca43e8f932192769fa");
+    await database.exec("grant content_schema_owner to content_application");
+    await assert.rejects(readCanonicalBootstrapCatalogs({
+      query: (sql, parameters = []) => database.query(sql, parameters),
+    }, {
+      schemaOwnerRoleName: "content_schema_owner",
+      applicationRoleName: "content_application",
+      operatorRoleName: "content_operator",
+      migrationRoleName: "content_migration",
+      cleanupRoleName: "content_cleanup",
+    }), /bootstrap_role_catalog_invalid/);
   });
 });
 

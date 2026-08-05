@@ -7,7 +7,77 @@ import * as migrationRunner from "./migrationRunner.mjs";
 
 const { buildMigrationPlan } = migrationRunner;
 
-test("074 bootstrap role authorization rejects unsigned, replayed, stale, wrong image, and wrong migration requests", () => {
+test("074 canonical live role and object catalog hashes are order-independent and drift-sensitive", () => {
+  const roles = [
+    { role_name: "content_schema_owner", can_login: false, is_superuser: false, bypass_rls: false, inherit: true, memberships: [] },
+    { role_name: "content_migration", can_login: true, is_superuser: false, bypass_rls: false, inherit: false, memberships: ["content_schema_owner"] },
+    { role_name: "content_application", can_login: true, is_superuser: false, bypass_rls: false, inherit: true, memberships: [] },
+    { role_name: "content_operator", can_login: true, is_superuser: false, bypass_rls: false, inherit: true, memberships: [] },
+    { role_name: "content_cleanup", can_login: true, is_superuser: false, bypass_rls: false, inherit: true, memberships: [] },
+  ];
+  const objects = [
+    { schema_name: "public", relation_name: "ai_content_generations", relation_kind: "r", owner_role_name: "content_schema_owner", columns: [
+      { ordinal_position: 2, column_name: "brand_id", type_identity: "uuid", not_null: true },
+      { ordinal_position: 1, column_name: "id", type_identity: "uuid", not_null: true },
+    ] },
+    { schema_name: "public", relation_name: "topic_rows", relation_kind: "r", owner_role_name: "content_schema_owner", columns: [
+      { ordinal_position: 1, column_name: "id", type_identity: "uuid", not_null: true },
+    ] },
+  ];
+
+  const roleHash = migrationRunner.hashBootstrapRoleCatalog(roles);
+  const objectHash = migrationRunner.hashBootstrapObjectCatalog(objects);
+  assert.equal(migrationRunner.hashBootstrapRoleCatalog(roles.toReversed()), roleHash);
+  assert.equal(migrationRunner.hashBootstrapObjectCatalog(objects.toReversed().map((row) => ({ ...row, columns: row.columns.toReversed() }))), objectHash);
+  assert.notEqual(migrationRunner.hashBootstrapRoleCatalog(roles.map((row) => row.role_name === "content_application" ? { ...row, bypass_rls: true } : row)), roleHash);
+  assert.notEqual(migrationRunner.hashBootstrapObjectCatalog(objects.map((row) => row.relation_name === "topic_rows" ? { ...row, owner_role_name: "content_application" } : row)), objectHash);
+});
+
+test("074 role safety rejects application owner membership and every non-approved role edge", () => {
+  const names = {
+    schemaOwnerRoleName: "content_schema_owner",
+    applicationRoleName: "content_application",
+    operatorRoleName: "content_operator",
+    migrationRoleName: "content_migration",
+    cleanupRoleName: "content_cleanup",
+  };
+  const safe = [
+    { role_name: names.schemaOwnerRoleName, can_login: false, is_superuser: false, bypass_rls: false, inherit: true, memberships: [] },
+    { role_name: names.applicationRoleName, can_login: true, is_superuser: false, bypass_rls: false, inherit: true, memberships: [] },
+    { role_name: names.operatorRoleName, can_login: true, is_superuser: false, bypass_rls: false, inherit: true, memberships: [] },
+    { role_name: names.migrationRoleName, can_login: true, is_superuser: false, bypass_rls: false, inherit: false, memberships: [names.schemaOwnerRoleName] },
+    { role_name: names.cleanupRoleName, can_login: true, is_superuser: false, bypass_rls: false, inherit: true, memberships: [] },
+  ];
+  assert.doesNotThrow(() => migrationRunner.validateBootstrapRoleSafety(safe, names));
+  for (const target of [names.schemaOwnerRoleName, names.operatorRoleName, names.migrationRoleName, names.cleanupRoleName]) {
+    const attacked = safe.map((row) => row.role_name === names.applicationRoleName ? { ...row, memberships: [target] } : row);
+    assert.throws(() => migrationRunner.validateBootstrapRoleSafety(attacked, names), /bootstrap_role_catalog_invalid/);
+  }
+  const extraEdge = safe.map((row) => row.role_name === names.operatorRoleName ? { ...row, memberships: [names.schemaOwnerRoleName] } : row);
+  assert.throws(() => migrationRunner.validateBootstrapRoleSafety(extraEdge, names), /bootstrap_role_catalog_invalid/);
+});
+
+test("074 event-trigger definition hash binds event owner enabled state function and sorted WHEN tags", () => {
+  const definition = {
+    eventTriggerName: "ai_content_ddl_guard_074",
+    eventTriggerEvent: "ddl_command_end",
+    eventTriggerEnabled: "enabled",
+    eventTriggerFunction: "public.enforce_ai_content_ddl_allowlist",
+    eventTriggerFunctionSha256: "6".repeat(64),
+    eventTriggerOwner: "postgres",
+    eventTriggerTags: ["CREATE TABLE", "ALTER TABLE"],
+  };
+  const expected = migrationRunner.hashEventTriggerDefinition(definition);
+  assert.equal(migrationRunner.hashEventTriggerDefinition({ ...definition, eventTriggerTags: definition.eventTriggerTags.toReversed() }), expected);
+  for (const altered of [
+    { ...definition, eventTriggerEvent: "sql_drop" },
+    { ...definition, eventTriggerEnabled: "disabled" },
+    { ...definition, eventTriggerOwner: "content_schema_owner" },
+    { ...definition, eventTriggerTags: ["DROP TABLE"] },
+  ]) assert.notEqual(migrationRunner.hashEventTriggerDefinition(altered), expected);
+});
+
+test("074 bootstrap role authorization rejects unsigned, stale, wrong image, and wrong migration requests", () => {
   const now = new Date("2026-08-05T00:00:00.000Z");
   const base = {
     contractVersion: "ai-content-bootstrap-role-authorization.v1",
@@ -26,10 +96,17 @@ test("074 bootstrap role authorization rejects unsigned, replayed, stale, wrong 
     eventTriggerName: "ai_content_ddl_guard_074",
     eventTriggerFunction: "public.enforce_ai_content_ddl_allowlist",
     eventTriggerFunctionSha256: "6".repeat(64),
+    eventTriggerEvent: "ddl_command_end",
+    eventTriggerOwner: "postgres",
+    eventTriggerTags: ["ALTER TABLE", "CREATE TABLE"],
     eventTriggerDefinitionSha256: "7".repeat(64),
     issuedAt: "2026-08-04T23:59:00.000Z",
     expiresAt: "2026-08-05T00:01:00.000Z",
   };
+  base.eventTriggerDefinitionSha256 = migrationRunner.hashEventTriggerDefinition({
+    ...base,
+    eventTriggerEnabled: "enabled",
+  });
   const signingKey = "bootstrap-test-signing-key";
   const authorization = {
     ...base,
@@ -48,10 +125,14 @@ test("074 bootstrap role authorization rejects unsigned, replayed, stale, wrong 
 
   assert.equal(migrationRunner.validateBootstrapRoleAuthorization(authorization, context).requestId, base.requestId);
   assert.throws(() => migrationRunner.validateBootstrapRoleAuthorization({ ...authorization, signature: "0".repeat(64) }, context), /bootstrap_role_authorization_signature_invalid/);
-  assert.throws(() => migrationRunner.validateBootstrapRoleAuthorization(authorization, { ...context, usedRequestIds: new Set([base.requestId]) }), /bootstrap_role_authorization_replayed/);
   assert.throws(() => migrationRunner.validateBootstrapRoleAuthorization(authorization, { ...context, now: new Date("2026-08-05T00:02:00.000Z") }), /bootstrap_role_authorization_expired/);
   assert.throws(() => migrationRunner.validateBootstrapRoleAuthorization(authorization, { ...context, imageDigest: `sha256:${"9".repeat(64)}` }), /bootstrap_role_authorization_image_mismatch/);
   assert.throws(() => migrationRunner.validateBootstrapRoleAuthorization(authorization, { ...context, migration: { id: "075_ai_content_three_format_cutover.sql", checksum: base.migrationSha256 } }), /bootstrap_role_authorization_migration_mismatch/);
+  const inconsistent = { ...base, eventTriggerDefinitionSha256: "7".repeat(64) };
+  assert.throws(() => migrationRunner.validateBootstrapRoleAuthorization({
+    ...inconsistent,
+    signature: migrationRunner.signBootstrapRoleAuthorization(inconsistent, signingKey),
+  }, context), /bootstrap_role_authorization_event_trigger_invalid/);
 });
 
 test("074 bootstrap role authorization seals provider install and consumes exact one-shot trigger evidence", () => {
@@ -74,12 +155,22 @@ test("074 bootstrap role authorization seals provider install and consumes exact
     eventTriggerName: "ai_content_ddl_guard_074",
     eventTriggerFunction: "public.enforce_ai_content_ddl_allowlist",
     eventTriggerFunctionSha256: "6".repeat(64),
+    eventTriggerEvent: "ddl_command_end",
+    eventTriggerOwner: "postgres",
+    eventTriggerTags: ["ALTER TABLE", "CREATE TABLE"],
     eventTriggerDefinitionSha256: "7".repeat(64),
     issuedAt: "2026-08-04T23:59:00.000Z",
     expiresAt: "2026-08-05T00:01:00.000Z",
   };
+  base.eventTriggerDefinitionSha256 = migrationRunner.hashEventTriggerDefinition({
+    ...base,
+    eventTriggerEnabled: "enabled",
+  });
   const authorization = { ...base, signature: migrationRunner.signBootstrapRoleAuthorization(base, signingKey) };
   const install = migrationRunner.buildProviderEventTriggerInstallRequest(authorization);
+  assert.equal(install.eventTriggerOwner, "postgres");
+  assert.equal(install.eventTriggerEnabled, "enabled");
+  assert.deepEqual(install.eventTriggerTags, ["ALTER TABLE", "CREATE TABLE"]);
   const unsigned = {
     contractVersion: "ai-content-074-provider-attestation.v1",
     providerRequestSha256: install.requestSha256,
@@ -88,6 +179,8 @@ test("074 bootstrap role authorization seals provider install and consumes exact
     eventTriggerName: authorization.eventTriggerName,
     eventTriggerFunction: authorization.eventTriggerFunction,
     eventTriggerFunctionSha256: authorization.eventTriggerFunctionSha256,
+    eventTriggerEvent: authorization.eventTriggerEvent,
+    eventTriggerTags: authorization.eventTriggerTags,
     eventTriggerDefinitionSha256: authorization.eventTriggerDefinitionSha256,
     eventTriggerOwner: "postgres",
     eventTriggerEnabled: "enabled",
@@ -105,7 +198,7 @@ test("074 bootstrap role authorization seals provider install and consumes exact
   assert.equal(migrationRunner.validateProviderEventTriggerAttestation(attestation, context).eventTriggerOwner, "postgres");
   assert.throws(() => migrationRunner.validateProviderEventTriggerAttestation({ ...attestation, action: "arbitrary_sql" }, context), /provider_attestation_signature_invalid|provider_attestation_action_mismatch/);
   assert.throws(() => migrationRunner.validateProviderEventTriggerAttestation({ ...attestation, eventTriggerOwner: "content_schema_owner" }, context), /provider_attestation_signature_invalid|provider_attestation_eventTriggerOwner_mismatch/);
-  assert.throws(() => migrationRunner.validateProviderEventTriggerAttestation(attestation, { ...context, usedAttestationIds: new Set([install.requestSha256]) }), /provider_attestation_replayed/);
+  assert.throws(() => migrationRunner.validateProviderEventTriggerAttestation({ ...attestation, eventTriggerTags: ["DROP TABLE"] }, context), /provider_attestation_signature_invalid/);
   assert.throws(() => migrationRunner.validateProviderEventTriggerAttestation({
     ...attestation,
     issuedAt: "2026-08-04T22:00:00.000Z",
@@ -126,16 +219,35 @@ test("074 bootstrap role authorization applies stage one then independently cons
   const migration = { id: "074_ai_content_maintenance_write_fence.sql", checksum: "1".repeat(64), sql: "select 1" };
   const signingKey = "bootstrap-stage-key";
   const providerSigningKey = "provider-stage-key";
+  const stageRoleRows = [
+    { role_name: "content_schema_owner", can_login: false, is_superuser: false, bypass_rls: false, inherit: true, memberships: [] },
+    { role_name: "content_application", can_login: true, is_superuser: false, bypass_rls: false, inherit: true, memberships: [] },
+    { role_name: "content_operator", can_login: true, is_superuser: false, bypass_rls: false, inherit: true, memberships: [] },
+    { role_name: "content_migration", can_login: true, is_superuser: false, bypass_rls: false, inherit: false, memberships: ["content_schema_owner"] },
+    { role_name: "content_cleanup", can_login: true, is_superuser: false, bypass_rls: false, inherit: true, memberships: [] },
+  ];
+  const stageObjectRows = migrationRunner.bootstrapFenceRelations.map((relation_name) => ({
+    schema_name: "public", relation_name, relation_kind: "r", owner_role_name: "content_schema_owner", columns: [],
+  }));
+  const stageEventDefinition = {
+    eventTriggerName: "ai_content_ddl_guard_074", eventTriggerEvent: "ddl_command_end",
+    eventTriggerOwner: "postgres", eventTriggerEnabled: "enabled",
+    eventTriggerFunction: "public.enforce_ai_content_ddl_allowlist",
+    eventTriggerFunctionSha256: "6".repeat(64), eventTriggerTags: ["ALTER TABLE", "CREATE TABLE"],
+  };
   const unsignedAuthorization = {
     contractVersion: "ai-content-bootstrap-role-authorization.v1", requestId: "stage-074",
     migrationId: migration.id, migrationSha256: migration.checksum,
     imageDigest: `sha256:${"2".repeat(64)}`, imageSourceLabel: "3".repeat(40),
-    roleCatalogSha256: "4".repeat(64), objectCatalogSha256: "5".repeat(64),
+    roleCatalogSha256: migrationRunner.hashBootstrapRoleCatalog(stageRoleRows),
+    objectCatalogSha256: migrationRunner.hashBootstrapObjectCatalog(stageObjectRows),
     migrationRoleName: "content_migration", schemaOwnerRoleName: "content_schema_owner",
     applicationRoleName: "content_application", operatorRoleName: "content_operator",
     cleanupRoleName: "content_cleanup", eventTriggerName: "ai_content_ddl_guard_074",
     eventTriggerFunction: "public.enforce_ai_content_ddl_allowlist",
-    eventTriggerFunctionSha256: "6".repeat(64), eventTriggerDefinitionSha256: "7".repeat(64),
+    eventTriggerFunctionSha256: "6".repeat(64), eventTriggerEvent: "ddl_command_end",
+    eventTriggerOwner: "postgres", eventTriggerTags: ["ALTER TABLE", "CREATE TABLE"],
+    eventTriggerDefinitionSha256: migrationRunner.hashEventTriggerDefinition(stageEventDefinition),
     issuedAt: "2026-08-04T23:59:00.000Z", expiresAt: "2026-08-05T00:01:00.000Z",
   };
   const authorization = {
@@ -144,6 +256,17 @@ test("074 bootstrap role authorization applies stage one then independently cons
   };
   const calls = [];
   let applied = false;
+  let sealedState = null;
+  const approvedLiveEvent = {
+    event_trigger_name: authorization.eventTriggerName,
+    event_trigger_event: authorization.eventTriggerEvent,
+    event_trigger_tags: authorization.eventTriggerTags,
+    event_trigger_owner: authorization.eventTriggerOwner,
+    event_trigger_enabled: "enabled",
+    event_trigger_function: authorization.eventTriggerFunction,
+    event_trigger_function_sha256: authorization.eventTriggerFunctionSha256,
+  };
+  let liveEventRows = [approvedLiveEvent];
   const client = {
     async query(sql, parameters = []) {
       const normalized = sql.replace(/\s+/g, " ").trim();
@@ -151,25 +274,38 @@ test("074 bootstrap role authorization applies stage one then independently cons
       if (normalized.includes("select id, checksum from schema_migrations")) {
         return { rows: applied ? [{ id: migration.id, checksum: migration.checksum }] : [] };
       }
+      if (normalized.includes("to_regclass('public.schema_migrations')")) return { rows: [{ relation: "schema_migrations" }] };
       if (normalized.includes("to_regclass('public.workspaces')")) return { rows: [{ relation: null }] };
       if (normalized === "select session_user, current_user") {
         return { rows: [{ session_user: authorization.migrationRoleName, current_user: authorization.migrationRoleName }] };
       }
-      if (normalized.includes("migration_noinherit")) {
-        return { rows: [{ migration_noinherit: true, owner_nologin: true, exact_owner_membership: true, other_memberships: 0 }] };
+      if (normalized.includes("bootstrap_role_catalog_v1")) return { rows: stageRoleRows };
+      if (normalized.includes("bootstrap_object_catalog_v1")) return { rows: stageObjectRows };
+      if (normalized.startsWith("insert into ai_content_bootstrap_state")) {
+        sealedState = {
+          authorization_request_id: parameters[0], authorization_sha256: parameters[1],
+          migration_role_name: parameters[2], schema_owner_role_name: parameters[3],
+          application_role_name: parameters[4], operator_role_name: parameters[5], cleanup_role_name: parameters[6],
+          migration_sha256: parameters[7], role_catalog_sha256: parameters[8], object_catalog_sha256: parameters[9],
+          install_request_json: JSON.parse(parameters[10]), install_request_sha256: parameters[11],
+          provider_attestation_json: null, provider_attestation_sha256: null, attestation_consumed_at: null,
+          revocation_request_json: null, revocation_request_sha256: null,
+        };
+        return { rows: [], rowCount: 1 };
       }
-      if (normalized.includes("from ai_content_bootstrap_state where singleton")) {
-        return { rows: [{
-          authorization_request_id: authorization.requestId,
-          migration_role_name: authorization.migrationRoleName,
-          schema_owner_role_name: authorization.schemaOwnerRoleName,
-          migration_sha256: authorization.migrationSha256,
-          role_catalog_sha256: authorization.roleCatalogSha256,
-          object_catalog_sha256: authorization.objectCatalogSha256,
-        }] };
+      if (normalized.includes("bootstrap_durable_state_v1")) return { rows: sealedState ? [sealedState] : [] };
+      if (normalized.includes("bootstrap_application_privileges_v1")) {
+        return { rows: [{ app_owns_fenced_relation: false, app_control_dml: false, app_missing_minimum: false, app_forbidden_execute: false }] };
       }
-      if (normalized.includes("app_superuser")) {
-        return { rows: [{ app_superuser: false, app_bypassrls: false, app_inherit: false, app_privileged_membership: false, app_owns_fenced_relation: false }] };
+      if (normalized.includes("bootstrap_event_trigger_catalog_v1")) return { rowCount: liveEventRows.length, rows: liveEventRows };
+      if (normalized.startsWith("update ai_content_bootstrap_state") && normalized.includes("provider_attestation_json")) {
+        if (sealedState.provider_attestation_sha256) return { rows: [], rowCount: 0 };
+        sealedState.provider_attestation_json = JSON.parse(parameters[0]);
+        sealedState.provider_attestation_sha256 = parameters[1];
+        sealedState.attestation_consumed_at = "2026-08-05T00:00:00.000Z";
+        sealedState.revocation_request_json = JSON.parse(parameters[2]);
+        sealedState.revocation_request_sha256 = parameters[3];
+        return { rows: [{ singleton: true }], rowCount: 1 };
       }
       if (normalized.startsWith("insert into schema_migrations")) applied = true;
       return { rows: [], rowCount: 0 };
@@ -184,14 +320,33 @@ test("074 bootstrap role authorization applies stage one then independently cons
   assert.equal(stageOne.providerInstallRequest.action, "create_enable_verify_074_event_trigger");
   assert.ok(calls.some(({ sql }) => sql === 'set local role "content_schema_owner"'));
   assert.ok(calls.some(({ sql }) => sql === "select verify_ai_content_write_fence_catalog()"));
+  assert.ok(calls.some(({ sql }) => sql.includes("authorization_sha256") && sql.includes("install_request_json")));
+  assert.ok(calls.some(({ sql }) => sql === 'grant select on table ai_content_bootstrap_state to "content_migration"'));
 
   const install = stageOne.providerInstallRequest;
+  const bootstrapInsertCount = () => calls.filter(({ sql }) => sql.startsWith("insert into ai_content_bootstrap_state")).length;
+  const insertsAfterStageOne = bootstrapInsertCount();
+  const recoveredInstall = await migrationRunner.runMigrationsWithClient({ client, migrations: [migration], bootstrap074: bootstrap });
+  assert.deepEqual(recoveredInstall.providerInstallRequest, install);
+  assert.equal(bootstrapInsertCount(), insertsAfterStageOne);
+  const alteredUnsignedAuthorization = { ...unsignedAuthorization, requestId: "stage-074-altered" };
+  const alteredAuthorization = {
+    ...alteredUnsignedAuthorization,
+    signature: migrationRunner.signBootstrapRoleAuthorization(alteredUnsignedAuthorization, signingKey),
+  };
+  await assert.rejects(migrationRunner.runMigrationsWithClient({
+    client,
+    migrations: [migration],
+    bootstrap074: { ...bootstrap, authorization: alteredAuthorization },
+  }), /bootstrap_074_state_mismatch/);
   const unsignedAttestation = {
     contractVersion: "ai-content-074-provider-attestation.v1",
     providerRequestSha256: install.requestSha256, authorizationRequestId: authorization.requestId,
     action: install.action, eventTriggerName: authorization.eventTriggerName,
     eventTriggerFunction: authorization.eventTriggerFunction,
     eventTriggerFunctionSha256: authorization.eventTriggerFunctionSha256,
+    eventTriggerEvent: authorization.eventTriggerEvent,
+    eventTriggerTags: authorization.eventTriggerTags,
     eventTriggerDefinitionSha256: authorization.eventTriggerDefinitionSha256,
     eventTriggerOwner: "postgres", eventTriggerEnabled: "enabled",
     migrationId: authorization.migrationId, migrationSha256: authorization.migrationSha256,
@@ -203,17 +358,12 @@ test("074 bootstrap role authorization applies stage one then independently cons
     ...unsignedAttestation,
     signature: migrationRunner.signProviderEventTriggerAttestation(unsignedAttestation, providerSigningKey),
   };
-  const originalQuery = client.query.bind(client);
-  client.query = async (sql, parameters = []) => {
-    if (sql.includes("from pg_event_trigger e")) return { rowCount: 1, rows: [{
-      event_trigger_name: authorization.eventTriggerName,
-      event_trigger_owner: "postgres", event_trigger_enabled: "enabled",
-      event_trigger_function: authorization.eventTriggerFunction,
-      event_trigger_function_sha256: authorization.eventTriggerFunctionSha256,
-      event_trigger_definition_sha256: authorization.eventTriggerDefinitionSha256,
-    }] };
-    return originalQuery(sql, parameters);
-  };
+  liveEventRows = [approvedLiveEvent, { ...approvedLiveEvent, event_trigger_name: "ai_content_ddl_guard_conflict" }];
+  await assert.rejects(migrationRunner.runMigrationsWithClient({
+    client, migrations: [migration], bootstrap074: { ...bootstrap, providerAttestation, providerSigningKey },
+  }), /bootstrap_074_live_event_trigger_conflict/);
+  assert.equal(sealedState.provider_attestation_sha256, null);
+  liveEventRows = [approvedLiveEvent];
   const stageTwo = await migrationRunner.runMigrationsWithClient({
     client, migrations: [migration], bootstrap074: {
       ...bootstrap, providerAttestation, providerSigningKey,
@@ -221,15 +371,64 @@ test("074 bootstrap role authorization applies stage one then independently cons
   });
   assert.equal(stageTwo.pending.length, 0);
   assert.equal(stageTwo.revocationRequest.migrationRoleName, authorization.migrationRoleName);
+  assert.ok(calls.some(({ sql }) => sql.includes("provider_attestation_json") && sql.includes("attestation_consumed_at")));
+  assert.equal(calls.filter(({ sql }) => sql === 'set local role "content_schema_owner"').length, 2);
+  const durableUpdates = () => calls.filter(({ sql }) => sql.startsWith("update ai_content_bootstrap_state") && sql.includes("provider_attestation_json")).length;
+  const updatesAfterConsumption = durableUpdates();
+  const recovered = await migrationRunner.runMigrationsWithClient({
+    client, migrations: [migration], bootstrap074: { ...bootstrap, providerAttestation, providerSigningKey },
+  });
+  assert.deepEqual(recovered.revocationRequest, stageTwo.revocationRequest);
+  assert.equal(durableUpdates(), updatesAfterConsumption);
+  const alteredAttestation = { ...providerAttestation, issuedAt: "2026-08-05T00:00:01.000Z" };
+  alteredAttestation.signature = migrationRunner.signProviderEventTriggerAttestation(alteredAttestation, providerSigningKey);
+  await assert.rejects(migrationRunner.runMigrationsWithClient({
+    client, migrations: [migration], bootstrap074: { ...bootstrap, providerAttestation: alteredAttestation, providerSigningKey },
+  }), /provider_attestation_replayed/);
   await assert.rejects(
     migrationRunner.runMigrationsWithClient({
       client,
       migrations: [migration, { id: "075_ai_content_three_format_cutover.sql", checksum: "8".repeat(64), sql: "select forbidden_075" }],
       bootstrap074: { ...bootstrap, providerAttestation, providerSigningKey },
     }),
-    /bootstrap_075_not_supported_before_cutover_runner/,
+    /bootstrap_075_present_forbidden/,
   );
   assert.equal(calls.some(({ sql }) => sql.includes("select forbidden_075")), false);
+});
+
+test("074 bootstrap rejects an earlier or extra pending migration and any 075 presence before mutation", async () => {
+  const migration074 = { id: "074_ai_content_maintenance_write_fence.sql", checksum: "7".repeat(64), sql: "select 74" };
+  const mutationPattern = /^(?:create|alter|insert|update|delete|begin|commit|rollback)\b/i;
+  const makeClient = (history) => {
+    const calls = [];
+    return {
+      calls,
+      async query(sql) {
+        const normalized = sql.replace(/\s+/g, " ").trim();
+        calls.push(normalized);
+        if (normalized.startsWith("select pg_advisory_lock") || normalized.startsWith("select pg_advisory_unlock")) return { rows: [] };
+        if (normalized.includes("to_regclass('public.schema_migrations')")) return { rows: [{ relation: "schema_migrations" }] };
+        if (normalized.includes("select id, checksum from schema_migrations")) return { rows: history };
+        return { rows: [] };
+      },
+    };
+  };
+
+  const earlier = { id: "073_before.sql", checksum: "3".repeat(64), sql: "select 73" };
+  const earlierClient = makeClient([]);
+  await assert.rejects(
+    migrationRunner.runMigrationsWithClient({ client: earlierClient, migrations: [earlier, migration074], bootstrap074: {} }),
+    /bootstrap_074_pending_set_invalid/,
+  );
+  assert.equal(earlierClient.calls.some((sql) => mutationPattern.test(sql)), false);
+
+  const migration075 = { id: "075_ai_content_three_format_cutover.sql", checksum: "8".repeat(64), sql: "select 75" };
+  const presentClient = makeClient([{ id: migration074.id, checksum: migration074.checksum }]);
+  await assert.rejects(
+    migrationRunner.runMigrationsWithClient({ client: presentClient, migrations: [migration074, migration075], bootstrap074: {} }),
+    /bootstrap_075_present_forbidden/,
+  );
+  assert.equal(presentClient.calls.some((sql) => mutationPattern.test(sql)), false);
 });
 
 const migrations = [
@@ -1089,6 +1288,7 @@ test("an installation applied through 064 has every later migration pending", as
       "071_brand_intelligence_onboarding_worker_v2.sql",
       "072_faq_suggestion_worker.sql",
       "073_ai_content_generation_v2_render_pipeline.sql",
+      "074_ai_content_maintenance_write_fence.sql",
     ],
   );
 });

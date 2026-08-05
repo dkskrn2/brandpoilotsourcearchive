@@ -17,6 +17,149 @@ const compatibleMigrationChecksums = Object.freeze({
 const migrationAdvisoryLockName = "brand-pilot:schema-migrations:v1";
 const bootstrap074MigrationId = "074_ai_content_maintenance_write_fence.sql";
 const providerAttestationContract = "ai-content-074-provider-attestation.v1";
+export const bootstrapFenceRelations = Object.freeze([
+  "ai_content_analyzed_subject_snapshots", "ai_content_approved_proposal_versions",
+  "ai_content_attachment_deletion_jobs", "ai_content_attachment_storage_path_guards",
+  "ai_content_attachment_upload_sessions", "ai_content_create_idempotency_records",
+  "ai_content_generation_attachments", "ai_content_generation_briefs",
+  "ai_content_generation_input_snapshots", "ai_content_generation_jobs",
+  "ai_content_generation_outputs", "ai_content_generation_reference_migration_audits",
+  "ai_content_generation_references", "ai_content_generation_render_jobs",
+  "ai_content_generations", "ai_content_one_time_avatar_receipts",
+  "ai_content_one_time_avatar_revocations", "ai_content_output_research_snapshots",
+  "ai_content_proposal_batches", "ai_content_proposal_jobs",
+  "ai_content_proposal_research_snapshots", "ai_content_proposals",
+  "ai_content_subject_analyses", "ai_content_subject_appeal_regeneration_keys",
+  "ai_content_subject_images", "ai_content_usage_ledger", "ai_content_wiki_version_snapshots",
+  "auto_approval_checks", "brand_format_rotation_states", "channel_outputs", "content_topics",
+  "jobs", "llm_runs", "master_drafts", "publish_queue", "regeneration_requests",
+  "review_events", "source_crawl_runs", "storage_artifacts", "topic_publish_groups", "topic_rows",
+]);
+
+const lexicalCompare = (left, right) => left < right ? -1 : left > right ? 1 : 0;
+
+export function canonicalBootstrapRoleCatalog(rows) {
+  const roles = rows.map((row) => ({
+    roleName: String(row.role_name),
+    canLogin: row.can_login === true,
+    isSuperuser: row.is_superuser === true,
+    bypassRls: row.bypass_rls === true,
+    inherit: row.inherit === true,
+    memberships: [...(row.memberships ?? [])].map(String).sort(lexicalCompare),
+  })).sort((left, right) => lexicalCompare(left.roleName, right.roleName));
+  return JSON.stringify({ contractVersion: "ai-content-bootstrap-role-catalog.v1", roles });
+}
+
+export function hashBootstrapRoleCatalog(rows) {
+  return checksum(canonicalBootstrapRoleCatalog(rows));
+}
+
+export function canonicalBootstrapObjectCatalog(rows) {
+  const objects = rows.map((row) => ({
+    schemaName: String(row.schema_name),
+    relationName: String(row.relation_name),
+    relationKind: String(row.relation_kind),
+    ownerRoleName: String(row.owner_role_name),
+    columns: [...(row.columns ?? [])].map((column) => ({
+      ordinalPosition: Number(column.ordinal_position),
+      columnName: String(column.column_name),
+      typeIdentity: String(column.type_identity),
+      notNull: column.not_null === true,
+    })).sort((left, right) => left.ordinalPosition-right.ordinalPosition || lexicalCompare(left.columnName, right.columnName)),
+  })).sort((left, right) => lexicalCompare(`${left.schemaName}.${left.relationName}`, `${right.schemaName}.${right.relationName}`));
+  return JSON.stringify({ contractVersion: "ai-content-bootstrap-object-catalog.v1", objects });
+}
+
+export function hashBootstrapObjectCatalog(rows) {
+  return checksum(canonicalBootstrapObjectCatalog(rows));
+}
+
+export function validateBootstrapRoleSafety(rows, names) {
+  const byName = new Map(rows.map((row) => [String(row.role_name), row]));
+  const exactNames = [names.schemaOwnerRoleName, names.applicationRoleName, names.operatorRoleName,
+    names.migrationRoleName, names.cleanupRoleName];
+  if (byName.size !== 5 || exactNames.some((name) => !byName.has(name))) throw new Error("bootstrap_role_catalog_invalid");
+  if (rows.some((row) => row.is_superuser === true || row.bypass_rls === true)) throw new Error("bootstrap_role_catalog_invalid");
+  if (byName.get(names.schemaOwnerRoleName).can_login !== false
+    || byName.get(names.applicationRoleName).can_login !== true
+    || byName.get(names.operatorRoleName).can_login !== true
+    || byName.get(names.migrationRoleName).can_login !== true
+    || byName.get(names.cleanupRoleName).can_login !== true
+    || byName.get(names.migrationRoleName).inherit !== false) {
+    throw new Error("bootstrap_role_catalog_invalid");
+  }
+  for (const row of rows) {
+    const memberships = [...(row.memberships ?? [])].map(String).sort(lexicalCompare);
+    const expected = row.role_name === names.migrationRoleName ? [names.schemaOwnerRoleName] : [];
+    if (JSON.stringify(memberships) !== JSON.stringify(expected)) throw new Error("bootstrap_role_catalog_invalid");
+  }
+  return true;
+}
+
+export function canonicalEventTriggerDefinition(value) {
+  return JSON.stringify({
+    contractVersion: "ai-content-074-event-trigger-definition.v1",
+    eventTriggerName: value.eventTriggerName,
+    eventTriggerEvent: value.eventTriggerEvent,
+    eventTriggerEnabled: value.eventTriggerEnabled,
+    eventTriggerFunction: value.eventTriggerFunction,
+    eventTriggerFunctionSha256: value.eventTriggerFunctionSha256,
+    eventTriggerOwner: value.eventTriggerOwner,
+    eventTriggerTags: [...(value.eventTriggerTags ?? [])].map(String).sort(lexicalCompare),
+  });
+}
+
+export function hashEventTriggerDefinition(value) {
+  return checksum(canonicalEventTriggerDefinition(value));
+}
+
+export async function readCanonicalBootstrapCatalogs(client, names) {
+  const roleNames = [names.schemaOwnerRoleName, names.applicationRoleName, names.operatorRoleName,
+    names.migrationRoleName, names.cleanupRoleName];
+  const roleResult = await client.query(
+    `/* bootstrap_role_catalog_v1 */
+     select role.rolname as role_name,role.rolcanlogin as can_login,role.rolsuper as is_superuser,
+            role.rolbypassrls as bypass_rls,role.rolinherit as inherit,
+            coalesce(array_agg(parent.rolname order by parent.rolname)
+              filter (where parent.rolname is not null),'{}'::name[]) as memberships
+       from pg_roles role
+       left join pg_auth_members membership on membership.member=role.oid
+       left join pg_roles parent on parent.oid=membership.roleid
+      where role.rolname=any($1::name[])
+      group by role.oid,role.rolname,role.rolcanlogin,role.rolsuper,role.rolbypassrls,role.rolinherit
+      order by role.rolname`,
+    [roleNames],
+  );
+  validateBootstrapRoleSafety(roleResult.rows, names);
+  const objectResult = await client.query(
+    `/* bootstrap_object_catalog_v1 */
+     select namespace.nspname as schema_name,relation.relname as relation_name,
+            relation.relkind as relation_kind,owner.rolname as owner_role_name,
+            coalesce(jsonb_agg(jsonb_build_object(
+              'ordinal_position',attribute.attnum,'column_name',attribute.attname,
+              'type_identity',format_type(attribute.atttypid,attribute.atttypmod),
+              'not_null',attribute.attnotnull
+            ) order by attribute.attnum) filter (where attribute.attnum is not null),'[]'::jsonb) as columns
+       from pg_class relation
+       join pg_namespace namespace on namespace.oid=relation.relnamespace and namespace.nspname='public'
+       join pg_roles owner on owner.oid=relation.relowner
+       left join pg_attribute attribute on attribute.attrelid=relation.oid and attribute.attnum>0 and not attribute.attisdropped
+      where relation.relname=any($1::name[])
+      group by namespace.nspname,relation.relname,relation.relkind,owner.rolname
+      order by relation.relname`,
+    [bootstrapFenceRelations],
+  );
+  if (objectResult.rows.length !== bootstrapFenceRelations.length
+    || objectResult.rows.some((row) => row.relation_kind !== "r" || row.owner_role_name !== names.schemaOwnerRoleName)) {
+    throw new Error("bootstrap_object_catalog_invalid");
+  }
+  return {
+    roleRows: roleResult.rows,
+    objectRows: objectResult.rows,
+    roleCatalogSha256: hashBootstrapRoleCatalog(roleResult.rows),
+    objectCatalogSha256: hashBootstrapObjectCatalog(objectResult.rows),
+  };
+}
 
 function canonicalBootstrapAuthorization(value) {
   const keys = [
@@ -25,6 +168,7 @@ function canonicalBootstrapAuthorization(value) {
     "migrationRoleName", "schemaOwnerRoleName", "applicationRoleName",
     "operatorRoleName", "cleanupRoleName", "eventTriggerName",
     "eventTriggerFunction", "eventTriggerFunctionSha256",
+    "eventTriggerEvent", "eventTriggerOwner", "eventTriggerTags",
     "eventTriggerDefinitionSha256", "issuedAt", "expiresAt",
   ];
   return JSON.stringify(Object.fromEntries(keys.map((key) => [key, value[key]])));
@@ -56,16 +200,13 @@ export function validateBootstrapRoleAuthorization(authorization, context) {
   if (!safeEqualHex(authorization.signature, expectedSignature)) {
     throw new Error("bootstrap_role_authorization_signature_invalid");
   }
-  if (context.usedRequestIds?.has(authorization.requestId)) {
-    throw new Error("bootstrap_role_authorization_replayed");
-  }
   const now = new Date(context.now ?? Date.now()).getTime();
   const issued = Date.parse(authorization.issuedAt);
   const expires = Date.parse(authorization.expiresAt);
-  if (!Number.isFinite(issued) || !Number.isFinite(expires) || issued > now) {
+  if (!Number.isFinite(issued) || !Number.isFinite(expires) || (!context.allowExpiredSealed && issued > now)) {
     throw new Error("bootstrap_role_authorization_not_yet_valid");
   }
-  if (expires < now || expires <= issued || expires-issued > 15*60*1000) {
+  if ((!context.allowExpiredSealed && expires < now) || expires <= issued || expires-issued > 15*60*1000) {
     throw new Error("bootstrap_role_authorization_expired");
   }
   if (typeof authorization.requestId !== "string"
@@ -101,7 +242,17 @@ export function validateBootstrapRoleAuthorization(authorization, context) {
   if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(authorization.eventTriggerName)
     || !/^[A-Za-z_][A-Za-z0-9_.]{0,126}$/.test(authorization.eventTriggerFunction)
     || !exactHex(authorization.eventTriggerFunctionSha256, 64)
-    || !exactHex(authorization.eventTriggerDefinitionSha256, 64)) {
+    || authorization.eventTriggerEvent !== "ddl_command_end"
+    || authorization.eventTriggerOwner !== "postgres"
+    || !Array.isArray(authorization.eventTriggerTags)
+    || authorization.eventTriggerTags.length === 0
+    || authorization.eventTriggerTags.some((tag) => typeof tag !== "string" || !/^[A-Z][A-Z _]{1,63}$/.test(tag))
+    || new Set(authorization.eventTriggerTags).size !== authorization.eventTriggerTags.length
+    || !exactHex(authorization.eventTriggerDefinitionSha256, 64)
+    || authorization.eventTriggerDefinitionSha256 !== hashEventTriggerDefinition({
+      ...authorization,
+      eventTriggerEnabled: "enabled",
+    })) {
     throw new Error("bootstrap_role_authorization_event_trigger_invalid");
   }
   return authorization;
@@ -110,7 +261,7 @@ export function validateBootstrapRoleAuthorization(authorization, context) {
 function canonicalProviderAttestation(value) {
   const keys = ["contractVersion", "providerRequestSha256", "authorizationRequestId",
     "action", "eventTriggerName", "eventTriggerFunction", "eventTriggerFunctionSha256",
-    "eventTriggerDefinitionSha256", "eventTriggerOwner", "eventTriggerEnabled",
+    "eventTriggerEvent", "eventTriggerTags", "eventTriggerDefinitionSha256", "eventTriggerOwner", "eventTriggerEnabled",
     "migrationId", "migrationSha256", "imageDigest", "imageSourceLabel",
     "roleCatalogSha256", "objectCatalogSha256", "issuedAt"];
   return JSON.stringify(Object.fromEntries(keys.map((key) => [key, value[key]])));
@@ -124,6 +275,10 @@ export function buildProviderEventTriggerInstallRequest(authorization) {
     eventTriggerName: authorization.eventTriggerName,
     eventTriggerFunction: authorization.eventTriggerFunction,
     eventTriggerFunctionSha256: authorization.eventTriggerFunctionSha256,
+    eventTriggerEvent: authorization.eventTriggerEvent,
+    eventTriggerTags: [...authorization.eventTriggerTags].sort(lexicalCompare),
+    eventTriggerOwner: authorization.eventTriggerOwner,
+    eventTriggerEnabled: "enabled",
     eventTriggerDefinitionSha256: authorization.eventTriggerDefinitionSha256,
     migrationId: authorization.migrationId,
     migrationSha256: authorization.migrationSha256,
@@ -140,12 +295,9 @@ export function signProviderEventTriggerAttestation(attestation, signingKey) {
   return hmac(canonicalProviderAttestation(attestation), signingKey);
 }
 
-export function validateProviderEventTriggerAttestation(attestation, { authorization, installRequest, signingKey, usedAttestationIds, now }) {
+export function validateProviderEventTriggerAttestation(attestation, { authorization, installRequest, signingKey, now }) {
   if (!attestation || attestation.contractVersion !== providerAttestationContract) {
     throw new Error("provider_attestation_contract_invalid");
-  }
-  if (usedAttestationIds?.has(attestation.providerRequestSha256)) {
-    throw new Error("provider_attestation_replayed");
   }
   const signature = signProviderEventTriggerAttestation(attestation, signingKey);
   if (!safeEqualHex(attestation.signature, signature)) throw new Error("provider_attestation_signature_invalid");
@@ -164,6 +316,8 @@ export function validateProviderEventTriggerAttestation(attestation, { authoriza
     eventTriggerName: authorization.eventTriggerName,
     eventTriggerFunction: authorization.eventTriggerFunction,
     eventTriggerFunctionSha256: authorization.eventTriggerFunctionSha256,
+    eventTriggerEvent: authorization.eventTriggerEvent,
+    eventTriggerTags: [...authorization.eventTriggerTags].sort(lexicalCompare),
     eventTriggerDefinitionSha256: authorization.eventTriggerDefinitionSha256,
     eventTriggerOwner: "postgres",
     eventTriggerEnabled: "enabled",
@@ -175,7 +329,10 @@ export function validateProviderEventTriggerAttestation(attestation, { authoriza
     objectCatalogSha256: authorization.objectCatalogSha256,
   };
   for (const [key, value] of Object.entries(expected)) {
-    if (attestation[key] !== value) throw new Error(`provider_attestation_${key}_mismatch`);
+    const matches = Array.isArray(value)
+      ? JSON.stringify([...(attestation[key] ?? [])].sort(lexicalCompare)) === JSON.stringify(value)
+      : attestation[key] === value;
+    if (!matches) throw new Error(`provider_attestation_${key}_mismatch`);
   }
   return attestation;
 }
@@ -183,6 +340,51 @@ export function validateProviderEventTriggerAttestation(attestation, { authoriza
 function quoteIdentifier(identifier) {
   if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(identifier)) throw new Error("bootstrap_role_identifier_invalid");
   return `"${identifier}"`;
+}
+
+async function readLiveEventTriggerEvidence(client, authorization) {
+  const live = await client.query(
+    `/* bootstrap_event_trigger_catalog_v1 */
+     select event_trigger.evtname as event_trigger_name,
+            event_trigger.evtevent as event_trigger_event,
+            coalesce(event_trigger.evttags,'{}'::text[]) as event_trigger_tags,
+            owner.rolname as event_trigger_owner,
+            case event_trigger.evtenabled when 'O' then 'enabled' else event_trigger.evtenabled::text end as event_trigger_enabled,
+            namespace.nspname || '.' || function.proname as event_trigger_function,
+            encode(digest(pg_get_functiondef(function.oid),'sha256'),'hex') as event_trigger_function_sha256
+       from pg_event_trigger event_trigger
+       join pg_roles owner on owner.oid=event_trigger.evtowner
+       join pg_proc function on function.oid=event_trigger.evtfoid
+       join pg_namespace namespace on namespace.oid=function.pronamespace
+      where event_trigger.evtname=$1
+         or event_trigger.evtname like 'ai_content_ddl_guard_%'
+         or event_trigger.evtfoid=to_regprocedure($2)
+      order by event_trigger.evtname`,
+    [authorization.eventTriggerName, `${authorization.eventTriggerFunction}()`],
+  );
+  if (live.rows.length !== 1) throw new Error("bootstrap_074_live_event_trigger_conflict");
+  const row = live.rows[0];
+  const evidence = {
+    eventTriggerName: row.event_trigger_name,
+    eventTriggerEvent: row.event_trigger_event,
+    eventTriggerTags: [...(row.event_trigger_tags ?? [])].map(String).sort(lexicalCompare),
+    eventTriggerOwner: row.event_trigger_owner,
+    eventTriggerEnabled: row.event_trigger_enabled,
+    eventTriggerFunction: row.event_trigger_function,
+    eventTriggerFunctionSha256: row.event_trigger_function_sha256,
+  };
+  const definitionSha256 = hashEventTriggerDefinition(evidence);
+  if (evidence.eventTriggerName !== authorization.eventTriggerName
+    || evidence.eventTriggerEvent !== authorization.eventTriggerEvent
+    || JSON.stringify(evidence.eventTriggerTags) !== JSON.stringify([...authorization.eventTriggerTags].sort(lexicalCompare))
+    || evidence.eventTriggerOwner !== authorization.eventTriggerOwner
+    || evidence.eventTriggerEnabled !== "enabled"
+    || evidence.eventTriggerFunction !== authorization.eventTriggerFunction
+    || evidence.eventTriggerFunctionSha256 !== authorization.eventTriggerFunctionSha256
+    || definitionSha256 !== authorization.eventTriggerDefinitionSha256) {
+    throw new Error("bootstrap_074_live_event_trigger_mismatch");
+  }
+  return { ...evidence, eventTriggerDefinitionSha256: definitionSha256 };
 }
 
 function containsEventTriggerDdl(sql) {
@@ -429,15 +631,38 @@ export async function runMigrationsWithClient({
       const plan = buildMigrationPlan(migrations, await readHistory(client));
       return { migrations, pending: plan.pending.map((migration) => migration.id), baselineRequired: false };
     }
-    await ensureMigrationHistory(client);
-    let history = await readHistory(client);
-    if (history.length === 0 && await hasExistingApplicationSchema(client)) {
-      await baselineExistingSchema(client, migrations, baselineUpTo);
-      history = await readHistory(client);
-    }
-    const plan = buildMigrationPlan(migrations, history);
     const migration074 = migrations.find((migration) => migration.id === bootstrap074MigrationId);
+    const contains074 = Boolean(migration074);
+    if (contains074 && migrations.some((migration) => migration.id === "075_ai_content_three_format_cutover.sql")) {
+      throw new Error("bootstrap_075_present_forbidden");
+    }
+    let history;
+    let plan;
+    if (contains074) {
+      const historyTable = await client.query("select to_regclass('public.schema_migrations') as relation");
+      if (!historyTable.rows[0]?.relation) throw new Error("bootstrap_074_pending_set_invalid");
+      history = await readHistory(client);
+      if (history.some((migration) => migration.id === "075_ai_content_three_format_cutover.sql")) {
+        throw new Error("bootstrap_075_present_forbidden");
+      }
+      plan = buildMigrationPlan(migrations, history);
+      const pendingIds = plan.pending.map((migration) => migration.id);
+      const applying074 = pendingIds.includes(bootstrap074MigrationId);
+      if ((applying074 && (pendingIds.length !== 1 || pendingIds[0] !== bootstrap074MigrationId))
+        || (!applying074 && pendingIds.length !== 0)) {
+        throw new Error("bootstrap_074_pending_set_invalid");
+      }
+    } else {
+      await ensureMigrationHistory(client);
+      history = await readHistory(client);
+      if (history.length === 0 && await hasExistingApplicationSchema(client)) {
+        await baselineExistingSchema(client, migrations, baselineUpTo);
+        history = await readHistory(client);
+      }
+      plan = buildMigrationPlan(migrations, history);
+    }
     let authorization;
+    let liveCatalogs;
     let providerInstallRequest;
     let providerAttestation;
     let revocationRequest;
@@ -446,6 +671,8 @@ export async function runMigrationsWithClient({
       authorization = validateBootstrapRoleAuthorization(bootstrap074.authorization, {
         ...bootstrap074,
         migration: migration074,
+        roleCatalogSha256: bootstrap074.authorization.roleCatalogSha256,
+        objectCatalogSha256: bootstrap074.authorization.objectCatalogSha256,
       });
       const identity = await client.query("select session_user, current_user");
       if (identity.rows[0]?.session_user !== authorization.migrationRoleName
@@ -454,27 +681,13 @@ export async function runMigrationsWithClient({
         || identity.rows[0]?.session_user === "postgres") {
         throw new Error("bootstrap_role_session_identity_invalid");
       }
-      const bootstrapRoles = await client.query(
-        `select not migration.rolinherit as migration_noinherit,
-                not owner.rolcanlogin as owner_nologin,
-                exists (
-                  select 1 from pg_auth_members membership
-                   where membership.member=migration.oid and membership.roleid=owner.oid
-                ) as exact_owner_membership,
-                (select count(*)::integer from pg_auth_members membership
-                  where membership.member=migration.oid and membership.roleid<>owner.oid) as other_memberships
-           from pg_roles migration cross join pg_roles owner
-          where migration.rolname=$1 and owner.rolname=$2`,
-        [authorization.migrationRoleName, authorization.schemaOwnerRoleName],
-      );
-      const roleRow = bootstrapRoles.rows[0];
-      if (!roleRow?.migration_noinherit || !roleRow?.owner_nologin
-        || !roleRow?.exact_owner_membership || Number(roleRow.other_memberships)!==0) {
-        throw new Error("bootstrap_role_catalog_invalid");
+      liveCatalogs = await readCanonicalBootstrapCatalogs(client, authorization);
+      if (authorization.roleCatalogSha256 !== liveCatalogs.roleCatalogSha256) {
+        throw new Error("bootstrap_role_authorization_role_catalog_mismatch");
       }
-    }
-    if (plan.pending.some((migration) => migration.id === "075_ai_content_three_format_cutover.sql")) {
-      throw new Error("bootstrap_075_not_supported_before_cutover_runner");
+      if (authorization.objectCatalogSha256 !== liveCatalogs.objectCatalogSha256) {
+        throw new Error("bootstrap_role_authorization_object_catalog_mismatch");
+      }
     }
     for (const migration of plan.pending) {
       await client.query("begin");
@@ -488,46 +701,59 @@ export async function runMigrationsWithClient({
           const appRole = quoteIdentifier(authorization.applicationRoleName);
           const operatorRole = quoteIdentifier(authorization.operatorRoleName);
           const migrationRole = quoteIdentifier(authorization.migrationRoleName);
+          providerInstallRequest = buildProviderEventTriggerInstallRequest(authorization);
+          const authorizationSha256 = checksum(canonicalBootstrapAuthorization(authorization));
           await client.query(
             `insert into ai_content_bootstrap_state (
-               singleton,authorization_request_id,migration_role_name,schema_owner_role_name,
-               migration_sha256,role_catalog_sha256,object_catalog_sha256
-             ) values (true,$1,$2,$3,$4,$5,$6)`,
-            [authorization.requestId,authorization.migrationRoleName,authorization.schemaOwnerRoleName,
-              authorization.migrationSha256,authorization.roleCatalogSha256,authorization.objectCatalogSha256],
+               singleton,authorization_request_id,authorization_sha256,
+               migration_role_name,schema_owner_role_name,application_role_name,operator_role_name,cleanup_role_name,
+               migration_sha256,role_catalog_sha256,object_catalog_sha256,
+               install_request_json,install_request_sha256
+             ) values (true,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)`,
+            [authorization.requestId,authorizationSha256,authorization.migrationRoleName,
+              authorization.schemaOwnerRoleName,authorization.applicationRoleName,authorization.operatorRoleName,
+              authorization.cleanupRoleName,authorization.migrationSha256,authorization.roleCatalogSha256,
+              authorization.objectCatalogSha256,JSON.stringify(providerInstallRequest),providerInstallRequest.requestSha256],
           );
           await client.query(`revoke all on table ai_content_cutovers,ai_content_cutover_status_events,ai_content_maintenance_state,ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog from ${appRole}`);
           await client.query(`grant select on table ai_content_maintenance_state to ${appRole}`);
           await client.query(`grant execute on function assert_ai_content_writable() to ${appRole}`);
           await client.query(`grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,text,text,text),set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text) to ${operatorRole}`);
+          await client.query(`grant select on table ai_content_bootstrap_state to ${migrationRole}`);
           await client.query(`grant execute on function ai_content_cutover_bypass_allowed(),verify_ai_content_write_fence_catalog() to ${migrationRole}`);
           const roleSafety = await client.query(
-            `select app.rolsuper as app_superuser,app.rolbypassrls as app_bypassrls,
-                    app.rolinherit as app_inherit,
-                    exists (
-                      select 1 from pg_auth_members membership
-                       where membership.member=app.oid
-                         and membership.roleid in ($2::regrole,$3::regrole,$4::regrole)
-                    ) as app_privileged_membership,
-                    exists (
+            `/* bootstrap_application_privileges_v1 */
+             select exists (
                       select 1 from public.ai_content_write_fence_catalog catalog
                       join pg_class relation on relation.oid=to_regclass('public.' || catalog.relation_name)
                        where catalog.relation_class='customer_execution' and relation.relowner=app.oid
-                    ) as app_owns_fenced_relation
+                    ) as app_owns_fenced_relation,
+                    exists (
+                      select 1 from (values
+                        ('ai_content_cutovers'),('ai_content_cutover_status_events'),('ai_content_maintenance_state'),
+                        ('ai_content_bootstrap_state'),('ai_content_ddl_allowlist'),('ai_content_write_fence_catalog')
+                      ) control(relation_name)
+                       where has_table_privilege(app.rolname,'public.' || control.relation_name,'INSERT,UPDATE,DELETE,TRUNCATE')
+                    ) as app_control_dml,
+                    not has_table_privilege(app.rolname,'public.ai_content_maintenance_state','SELECT')
+                      or not has_function_privilege(app.rolname,'public.assert_ai_content_writable()','EXECUTE') as app_missing_minimum,
+                    has_function_privilege(app.rolname,'public.ai_content_cutover_bypass_allowed()','EXECUTE')
+                      or has_function_privilege(app.rolname,'public.prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamp with time zone,text,text,text,text,text)','EXECUTE')
+                      or has_function_privilege(app.rolname,'public.set_ai_content_maintenance(uuid,boolean)','EXECUTE')
+                      or has_function_privilege(app.rolname,'public.transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamp with time zone,text)','EXECUTE')
+                      as app_forbidden_execute
                from pg_roles app where app.rolname=$1`,
-            [authorization.applicationRoleName, authorization.operatorRoleName,
-              authorization.migrationRoleName, authorization.cleanupRoleName],
+            [authorization.applicationRoleName],
           );
           const safety = roleSafety.rows[0];
-          if (!safety || safety.app_superuser || safety.app_bypassrls
-            || safety.app_privileged_membership || safety.app_owns_fenced_relation) {
+          if (!safety || safety.app_owns_fenced_relation || safety.app_control_dml
+            || safety.app_missing_minimum || safety.app_forbidden_execute) {
             throw new Error("bootstrap_074_application_role_unsafe");
           }
         }
         await client.query("insert into schema_migrations (id, checksum) values ($1, $2)", [migration.id, migration.checksum]);
         if (migration.id === bootstrap074MigrationId) {
           await client.query("select verify_ai_content_write_fence_catalog()");
-          providerInstallRequest = buildProviderEventTriggerInstallRequest(authorization);
         }
         await client.query("commit");
       } catch (error) {
@@ -535,10 +761,14 @@ export async function runMigrationsWithClient({
         throw error;
       }
     }
-    if (bootstrap074?.providerAttestation) {
-      authorization ??= validateBootstrapRoleAuthorization(bootstrap074.authorization, {
+    if (contains074 && !plan.pending.some((migration) => migration.id === bootstrap074MigrationId)
+      && bootstrap074?.authorization) {
+      authorization = validateBootstrapRoleAuthorization(bootstrap074.authorization, {
         ...bootstrap074,
         migration: migration074,
+        roleCatalogSha256: bootstrap074.authorization.roleCatalogSha256,
+        objectCatalogSha256: bootstrap074.authorization.objectCatalogSha256,
+        allowExpiredSealed: true,
       });
       const verifierIdentity = await client.query("select session_user, current_user");
       if (verifierIdentity.rows[0]?.session_user !== authorization.migrationRoleName
@@ -546,60 +776,89 @@ export async function runMigrationsWithClient({
         throw new Error("bootstrap_role_session_identity_invalid");
       }
       const bootstrapState = await client.query(
-        `select authorization_request_id,migration_role_name,schema_owner_role_name,
-                migration_sha256,role_catalog_sha256,object_catalog_sha256
+        `/* bootstrap_durable_state_v1 */
+         select authorization_request_id,authorization_sha256,
+                migration_role_name,schema_owner_role_name,application_role_name,operator_role_name,cleanup_role_name,
+                migration_sha256,role_catalog_sha256,object_catalog_sha256,
+                install_request_json,install_request_sha256,
+                provider_attestation_json,provider_attestation_sha256,attestation_consumed_at,
+                revocation_request_json,revocation_request_sha256
            from ai_content_bootstrap_state where singleton`,
       );
       const sealed = bootstrapState.rows[0];
+      const authorizationSha256 = checksum(canonicalBootstrapAuthorization(authorization));
+      const expectedInstall = buildProviderEventTriggerInstallRequest(authorization);
       if (!sealed
         || sealed.authorization_request_id!==authorization.requestId
+        || sealed.authorization_sha256!==authorizationSha256
         || sealed.migration_role_name!==authorization.migrationRoleName
         || sealed.schema_owner_role_name!==authorization.schemaOwnerRoleName
+        || sealed.application_role_name!==authorization.applicationRoleName
+        || sealed.operator_role_name!==authorization.operatorRoleName
+        || sealed.cleanup_role_name!==authorization.cleanupRoleName
         || sealed.migration_sha256!==authorization.migrationSha256
         || sealed.role_catalog_sha256!==authorization.roleCatalogSha256
-        || sealed.object_catalog_sha256!==authorization.objectCatalogSha256) {
+        || sealed.object_catalog_sha256!==authorization.objectCatalogSha256
+        || sealed.install_request_sha256!==expectedInstall.requestSha256) {
         throw new Error("bootstrap_074_state_mismatch");
       }
-      providerInstallRequest ??= buildProviderEventTriggerInstallRequest(authorization);
-      providerAttestation = validateProviderEventTriggerAttestation(bootstrap074.providerAttestation, {
-        authorization,
-        installRequest: providerInstallRequest,
-        signingKey: bootstrap074.providerSigningKey,
-        usedAttestationIds: bootstrap074.usedAttestationIds,
-        now: bootstrap074.now,
-      });
-      const live = await client.query(
-        `select e.evtname as event_trigger_name,
-                owner.rolname as event_trigger_owner,
-                case e.evtenabled when 'O' then 'enabled' else e.evtenabled::text end as event_trigger_enabled,
-                n.nspname || '.' || p.proname as event_trigger_function,
-                encode(digest(pg_get_functiondef(p.oid),'sha256'),'hex') as event_trigger_function_sha256,
-                encode(digest(concat_ws('|',e.evtname,e.evtevent,e.evtenabled::text,n.nspname,p.proname),'sha256'),'hex') as event_trigger_definition_sha256
-           from pg_event_trigger e
-           join pg_roles owner on owner.oid=e.evtowner
-           join pg_proc p on p.oid=e.evtfoid
-           join pg_namespace n on n.oid=p.pronamespace
-          where e.evtname=$1`,
-        [authorization.eventTriggerName],
-      );
-      const row = live.rows[0];
-      if (live.rowCount !== 1
-        || row.event_trigger_owner !== "postgres"
-        || row.event_trigger_enabled !== "enabled"
-        || row.event_trigger_function !== authorization.eventTriggerFunction
-        || row.event_trigger_function_sha256 !== authorization.eventTriggerFunctionSha256
-        || row.event_trigger_definition_sha256 !== authorization.eventTriggerDefinitionSha256) {
-        throw new Error("bootstrap_074_live_event_trigger_mismatch");
+      providerInstallRequest = sealed.install_request_json;
+      const suppliedAttestationSha256 = bootstrap074.providerAttestation
+        ? checksum(canonicalProviderAttestation(bootstrap074.providerAttestation))
+        : null;
+      if (sealed.provider_attestation_sha256) {
+        if (bootstrap074.providerAttestation) {
+          if (sealed.provider_attestation_sha256!==suppliedAttestationSha256
+            || !sealed.revocation_request_json) {
+            throw new Error("provider_attestation_replayed");
+          }
+          revocationRequest = sealed.revocation_request_json;
+        }
+      } else {
+        liveCatalogs = await readCanonicalBootstrapCatalogs(client, authorization);
+        if (authorization.roleCatalogSha256 !== liveCatalogs.roleCatalogSha256
+          || authorization.objectCatalogSha256 !== liveCatalogs.objectCatalogSha256) {
+          throw new Error("bootstrap_074_live_catalog_mismatch");
+        }
+        if (bootstrap074.providerAttestation) {
+          providerAttestation = validateProviderEventTriggerAttestation(bootstrap074.providerAttestation, {
+            authorization,
+            installRequest: providerInstallRequest,
+            signingKey: bootstrap074.providerSigningKey,
+            now: bootstrap074.now,
+          });
+          await readLiveEventTriggerEvidence(client, authorization);
+          await client.query("select verify_ai_content_write_fence_catalog()");
+          const revocation = {
+            contractVersion: "ai-content-074-membership-revocation-request.v1",
+            authorizationRequestId: authorization.requestId,
+            providerRequestSha256: providerInstallRequest.requestSha256,
+            migrationRoleName: authorization.migrationRoleName,
+            schemaOwnerRoleName: authorization.schemaOwnerRoleName,
+            evidenceSha256: suppliedAttestationSha256,
+          };
+          revocationRequest = { ...revocation, requestSha256: checksum(JSON.stringify(revocation)) };
+          await client.query("begin");
+          try {
+            await client.query(`set local role ${quoteIdentifier(authorization.schemaOwnerRoleName)}`);
+            const consumed = await client.query(
+              `update ai_content_bootstrap_state
+                  set provider_attestation_json=$1::jsonb,provider_attestation_sha256=$2,
+                      attestation_consumed_at=now(),revocation_request_json=$3::jsonb,
+                      revocation_request_sha256=$4
+                where singleton and provider_attestation_sha256 is null
+                returning singleton`,
+              [JSON.stringify(providerAttestation),suppliedAttestationSha256,
+                JSON.stringify(revocationRequest),revocationRequest.requestSha256],
+            );
+            if (consumed.rowCount !== 1) throw new Error("provider_attestation_replayed");
+            await client.query("commit");
+          } catch (error) {
+            await client.query("rollback");
+            throw error;
+          }
+        }
       }
-      await client.query("select verify_ai_content_write_fence_catalog()");
-      revocationRequest = {
-        contractVersion: "ai-content-074-membership-revocation-request.v1",
-        authorizationRequestId: authorization.requestId,
-        providerRequestSha256: providerInstallRequest.requestSha256,
-        migrationRoleName: authorization.migrationRoleName,
-        schemaOwnerRoleName: authorization.schemaOwnerRoleName,
-        evidenceSha256: checksum(canonicalProviderAttestation(providerAttestation)),
-      };
     }
     return {
       migrations,

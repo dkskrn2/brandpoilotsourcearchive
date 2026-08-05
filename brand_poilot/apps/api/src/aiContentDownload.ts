@@ -3,6 +3,7 @@ import { createZipBuffer } from "./downloadPackage.js";
 import { parseAiContentManifest } from "./aiContentManifest.js";
 import type { AiContentManifest } from "./aiContentContracts.js";
 import type { DownloadPackageDto } from "./types.js";
+import { assertAiContentWritable } from "./aiContentMaintenance.js";
 
 interface Scope {
   workspaceId: string;
@@ -133,6 +134,7 @@ export function createAiContentDownloadRepository(pool: Pool, options: {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      await assertAiContentWritable(client);
       await recordDownloads(client, input, rows);
       await client.query("COMMIT");
     } catch (error) {
@@ -146,6 +148,7 @@ export function createAiContentDownloadRepository(pool: Pool, options: {
 
   return {
     async downloadAiContentOutput(input) {
+      await assertAiContentWritable(pool);
       const result = await pool.query<OutputRow>(
         `select output.id, output.generation_id, output.output_index, generation.type, coalesce(output.title, generation.title) as title,
                 output.status, output.artifact_manifest_json, output.content_json
@@ -158,6 +161,7 @@ export function createAiContentDownloadRepository(pool: Pool, options: {
     },
 
     async downloadAiContentGeneration(input) {
+      await assertAiContentWritable(pool);
       const result = await pool.query<OutputRow>(
         `select output.id, output.generation_id, output.output_index, generation.type, coalesce(output.title, generation.title) as title,
                 output.status, output.artifact_manifest_json, output.content_json

@@ -87,6 +87,32 @@ test("fence API image contains 074 and excludes 075", () => {
   assert.equal(existsSync("db/migrations/075_ai_content_three_format_cutover.sql"), false);
 });
 
+test("fence API image contains 074 and excludes 075 in an actual no-network container", {
+  skip: process.env.RUN_DOCKER_FENCE_IMAGE_INSPECTION !== "1",
+}, () => {
+  const tag = `brand-pilot-fence-contract:${process.pid}`;
+  const build = spawnSync("docker", ["build", "--file", "apps/api/Dockerfile", "--tag", tag, "."], {
+    encoding: "utf8",
+    timeout: 15 * 60_000,
+  });
+  assert.equal(build.status, 0, `${build.stdout}\n${build.stderr}`);
+  try {
+    const script = [
+      "const fs=require('node:fs');",
+      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
+      "for(const path of required)if(!fs.existsSync(path))throw new Error('missing:'+path);",
+      "if(fs.existsSync('/app/db/migrations/075_ai_content_three_format_cutover.sql'))throw new Error('unexpected:075');",
+    ].join("");
+    const inspect = spawnSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "node", tag, "-e", script], {
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    assert.equal(inspect.status, 0, `${inspect.stdout}\n${inspect.stderr}`);
+  } finally {
+    spawnSync("docker", ["image", "rm", "--force", tag], { encoding: "utf8", timeout: 60_000 });
+  }
+});
+
 test("Task 10 canary is read-only, authenticated, and proves safe feature flags", () => {
   const verify = read("deploy/scripts/verify-canary.sh");
   for (const marker of [

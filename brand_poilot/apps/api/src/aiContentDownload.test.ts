@@ -46,6 +46,71 @@ function setup() {
 }
 
 describe("createAiContentDownloadRepository", () => {
+  it("rejects maintenance before output reads, remote fetches, or ZIP construction", async () => {
+    const fetchImpl = vi.fn();
+    const zipBuilder = vi.fn(() => Buffer.from("zip"));
+    const client = { query: vi.fn(), release: vi.fn() };
+    const pool = {
+      query: vi.fn(async (sql: string) => {
+        if (sql === "select assert_ai_content_writable()") throw new Error("ai_content_maintenance");
+        throw new Error(`unexpected_query:${sql}`);
+      }),
+      connect: vi.fn(async () => client),
+    };
+    const repository = createAiContentDownloadRepository(pool as never, {
+      fetchImpl: fetchImpl as never,
+      zipBuilder,
+    });
+
+    await expect(repository.downloadAiContentOutput({
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      outputId: output.id,
+      usageDate: "2026-08-05",
+      dailyDownloadLimit: 20,
+    })).rejects.toThrow("ai_content_maintenance");
+
+    expect(pool.query).toHaveBeenCalledTimes(1);
+    expect(pool.query).toHaveBeenCalledWith("select assert_ai_content_writable()");
+    expect(pool.connect).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(zipBuilder).not.toHaveBeenCalled();
+  });
+
+  it("checks maintenance immediately after BEGIN before recording a download", async () => {
+    const statements: string[] = [];
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        statements.push(sql);
+        if (sql === "select assert_ai_content_writable()") throw new Error("ai_content_maintenance");
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const pool = {
+      query: vi.fn(async (sql: string) => {
+        if (sql === "select assert_ai_content_writable()") return { rows: [], rowCount: 1 };
+        return { rows: [output], rowCount: 1 };
+      }),
+      connect: vi.fn(async () => client),
+    };
+    const repository = createAiContentDownloadRepository(pool as never, {
+      fetchImpl: vi.fn(async () => new Response(Buffer.from("png"), { status: 200 })) as never,
+      zipBuilder: () => Buffer.from("zip"),
+    });
+
+    await expect(repository.downloadAiContentOutput({
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      outputId: output.id,
+      usageDate: "2026-08-05",
+      dailyDownloadLimit: 20,
+    })).rejects.toThrow("ai_content_maintenance");
+
+    expect(statements.slice(0, 2)).toEqual(["BEGIN", "select assert_ai_content_writable()"]);
+    expect(statements.some((sql) => /insert into ai_content_usage_ledger|update ai_content_generation_outputs/i.test(sql))).toBe(false);
+  });
+
   it("builds a ZIP and records a new download only once", async () => {
     const { repository, client, ledgerInserts } = setup();
     const input = { workspaceId: "workspace-1", brandId: "brand-1", outputId: output.id, usageDate: "2026-07-18", dailyDownloadLimit: 20 };
