@@ -142,6 +142,8 @@ test("074 role safety seals both directions and rejects every non-approved PG16 
 });
 
 test("074 event-trigger definition hash binds event owner enabled state function and sorted WHEN tags", () => {
+  assert.deepEqual(migrationRunner.required074DdlGuardTags, [],
+    "the hard gate must observe every ddl_command_end tag and allowlist inside the guard");
   const definition = {
     eventTriggerName: "ai_content_ddl_guard_074",
     eventTriggerEvent: "ddl_command_end",

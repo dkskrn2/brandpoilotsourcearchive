@@ -17,10 +17,10 @@ const compatibleMigrationChecksums = Object.freeze({
 const migrationAdvisoryLockName = "brand-pilot:schema-migrations:v1";
 const bootstrap074MigrationId = "074_ai_content_maintenance_write_fence.sql";
 const providerAttestationContract = "ai-content-074-provider-attestation.v3";
-export const required074DdlGuardTags = Object.freeze([
-  "ALTER FUNCTION", "ALTER TABLE", "CREATE FUNCTION", "CREATE TABLE",
-  "CREATE TRIGGER", "DROP FUNCTION", "DROP TABLE", "DROP TRIGGER",
-]);
+// An empty tag catalog is intentional: the provider event trigger observes every
+// ddl_command_end command and the security-definer guard applies the exact DB
+// allowlist. A WHEN TAG filter would leave unlisted DDL as an unguarded bypass.
+export const required074DdlGuardTags = Object.freeze([]);
 export const bootstrapFenceRelations = Object.freeze([
   "ai_content_analyzed_subject_snapshots", "ai_content_approved_proposal_versions",
   "ai_content_attachment_deletion_jobs", "ai_content_attachment_storage_path_guards",

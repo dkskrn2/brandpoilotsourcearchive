@@ -103,6 +103,9 @@ test("fence API image contains 074 and excludes 075", () => {
   assert.match(postgresHarness, /disable trigger|drop trigger|ai_content_ddl_allowlist|ai_content_bootstrap_state|ai_content_maintenance_state|ai_content_cutovers/is);
   assert.match(postgresHarness, /allowlisted.*ddl.*succeed|positive.*allowlist/is);
   assert.match(postgresHarness, /rogue.*schema.*owner|schema.*owner.*rogue/is);
+  assert.doesNotMatch(postgresHarness, /ddl_command_end\s+when\s+tag\s+in/i);
+  assert.doesNotMatch(postgresHarness, /with\s+set\s+true\s*,/i);
+  assert.match(postgresHarness, /create index public\.ai_content_074_arbitrary_index/i);
   for (const classifier of ["whole_relation", "legacy_automated_topic", "scheduled_proposal_refresh",
     "legacy_content_job", "ai_content_generated_artifact", "ai_content_scheduled_publish",
     "ai_content_publish_attempt", "daily_generation_automation"]) {

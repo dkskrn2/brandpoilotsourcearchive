@@ -11,7 +11,6 @@ import {
   providerEnforcementBundle,
   readCanonicalEventTriggerCatalog,
   readFenceSecurityCatalog,
-  required074DdlGuardTags,
 } from "./migrationRunner.mjs";
 
 const connectionString = process.env.AI_CONTENT_074_REAL_POSTGRES_URL;
@@ -140,7 +139,9 @@ test("074 real PostgreSQL provider-owned bundle blocks migration-to-schema-owner
       create role content_operator login;
       create role content_migration login noinherit;
       create role content_cleanup login;
-      grant content_schema_owner to content_migration with set true, inherit false, admin false;
+      grant content_schema_owner to content_migration with set true;
+      grant content_schema_owner to content_migration with inherit false;
+      grant content_schema_owner to content_migration with admin false;
       grant usage,create on schema public to content_schema_owner;
     `);
     for (const relation of bootstrapFenceRelations) await client.query(`alter table public.${quoteIdentifier(relation)} owner to content_schema_owner`);
@@ -165,8 +166,7 @@ test("074 real PostgreSQL provider-owned bundle blocks migration-to-schema-owner
     ) values(true,'harness',$1,'content_migration','content_schema_owner','content_application','content_operator',
       'content_cleanup',$1,$1,$1,$2,'{"contractVersion":"ai-content-event-trigger-catalog.v1","eventTriggers":[]}',
       $1,0,'{}',$1)`, ["a".repeat(64), interim.catalogSha256]);
-    const tagSql = required074DdlGuardTags.map((tag) => `'${tag}'`).join(",");
-    await client.query(`create event trigger ai_content_ddl_guard_074 on ddl_command_end when tag in (${tagSql}) execute function public.enforce_ai_content_ddl_allowlist()`);
+    await client.query("create event trigger ai_content_ddl_guard_074 on ddl_command_end execute function public.enforce_ai_content_ddl_allowlist()");
     await client.query("alter event trigger ai_content_ddl_guard_074 enable always");
     const finalCatalog = await readFenceSecurityCatalog(client, names, { ownerRoleName: "postgres" });
     assert.deepEqual(finalCatalog.functions.map((row) => row.definition_sha256), interim.functions.map((row) => row.definition_sha256));
@@ -283,7 +283,9 @@ test("074 real PostgreSQL provider-owned bundle blocks migration-to-schema-owner
     await client.query("drop table public.ai_content_075_allowlisted_probe");
 
     await client.query("create role content_rogue login");
-    await client.query("grant content_schema_owner to content_rogue with set true, inherit false, admin false");
+    await client.query("grant content_schema_owner to content_rogue with set true");
+    await client.query("grant content_schema_owner to content_rogue with inherit false");
+    await client.query("grant content_schema_owner to content_rogue with admin false");
     await assert.rejects(readCanonicalBootstrapCatalogs(client, names), /bootstrap_role_catalog_invalid/);
     await asRoleExpectRejection(client, "content_rogue", "content_schema_owner", "create table public.ai_content_074_rogue_ddl(id integer)");
     await client.query("revoke content_schema_owner from content_rogue");
@@ -307,6 +309,7 @@ test("074 real PostgreSQL provider-owned bundle blocks migration-to-schema-owner
       `alter table public.ai_content_generations disable trigger ${quoteIdentifier(triggerName("ai_content_generations"))}`,
       `drop trigger ${quoteIdentifier(triggerName("ai_content_generations"))} on public.ai_content_generations`,
       "create table public.ai_content_074_arbitrary_ddl(id integer)",
+      "create index public.ai_content_074_arbitrary_index on public.ai_content_generations(id)",
     ];
     for (const statement of exploitStatements) await asMigrationSchemaOwner(client, statement);
     const protectedStateAfter = await client.query(`select
