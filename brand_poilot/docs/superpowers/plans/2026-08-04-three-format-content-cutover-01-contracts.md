@@ -590,6 +590,7 @@ Expected: package suite passes with six valid cells and every mismatch fixture r
 
 **Files:**
 
+- Create: `.gitattributes`
 - Modify: `packages/brand-pilot-content-contracts/src/catalog.ts`
 - Modify: `packages/brand-pilot-content-contracts/src/catalog.test.ts`
 - Modify: `packages/brand-pilot-content-contracts/src/binding.ts`
@@ -627,6 +628,8 @@ Expected: FAIL because generator/checker and generated files do not exist.
 
 - [ ] **Step 3: Implement stable serialization and catalog output**
 
+Pin `packages/brand-pilot-content-contracts/generated/*.json` and `packages/brand-pilot-content-contracts/src/fixtures/*.json` to `text eol=lf` in the root `.gitattributes`. This preserves the exact incident-fixture and generated-artifact bytes across checkout settings; do not add unrelated repository-wide EOL rules.
+
 ```ts
 export function stableJson(value: unknown): string {
   const normalize = (item: unknown): unknown => {
@@ -663,7 +666,7 @@ Expected: generator is idempotent, checker exits 0, and tests report no provider
 - [ ] **Step 5: Commit generated artifacts**
 
 ```powershell
-git add -- packages/brand-pilot-content-contracts/src/catalog.ts packages/brand-pilot-content-contracts/src/catalog.test.ts packages/brand-pilot-content-contracts/src/binding.ts packages/brand-pilot-content-contracts/src/binding.test.ts packages/brand-pilot-content-contracts/src/index.ts packages/brand-pilot-content-contracts/src/generateArtifacts.ts packages/brand-pilot-content-contracts/src/checkGenerated.ts packages/brand-pilot-content-contracts/src/generatedArtifacts.test.ts packages/brand-pilot-content-contracts/generated/content-catalog.json packages/brand-pilot-content-contracts/generated/content-orchestration-v2.schema.json packages/brand-pilot-content-contracts/generated/content-proposal-request-v2.schema.json packages/brand-pilot-content-contracts/generated/proposal-base-input-v2.schema.json packages/brand-pilot-content-contracts/generated/proposal-input-v2.schema.json packages/brand-pilot-content-contracts/generated/research-evidence-v1.schema.json packages/brand-pilot-content-contracts/generated/content-proposal-v2.schema.json packages/brand-pilot-content-contracts/generated/content-generation-input-v3.schema.json packages/brand-pilot-content-contracts/generated/image-generation-package-v1.schema.json packages/brand-pilot-content-contracts/generated/card-news-plan-v2.schema.json packages/brand-pilot-content-contracts/generated/blog-plan-v2.schema.json packages/brand-pilot-content-contracts/generated/reel-plan-v2.schema.json packages/brand-pilot-content-contracts/generated/ai-content-v3.schema.json packages/brand-pilot-content-contracts/generated/content-prompt-binding-v1.schema.json
+git add -- .gitattributes packages/brand-pilot-content-contracts/src/catalog.ts packages/brand-pilot-content-contracts/src/catalog.test.ts packages/brand-pilot-content-contracts/src/binding.ts packages/brand-pilot-content-contracts/src/binding.test.ts packages/brand-pilot-content-contracts/src/index.ts packages/brand-pilot-content-contracts/src/generateArtifacts.ts packages/brand-pilot-content-contracts/src/checkGenerated.ts packages/brand-pilot-content-contracts/src/generatedArtifacts.test.ts packages/brand-pilot-content-contracts/generated/content-catalog.json packages/brand-pilot-content-contracts/generated/content-orchestration-v2.schema.json packages/brand-pilot-content-contracts/generated/content-proposal-request-v2.schema.json packages/brand-pilot-content-contracts/generated/proposal-base-input-v2.schema.json packages/brand-pilot-content-contracts/generated/proposal-input-v2.schema.json packages/brand-pilot-content-contracts/generated/research-evidence-v1.schema.json packages/brand-pilot-content-contracts/generated/content-proposal-v2.schema.json packages/brand-pilot-content-contracts/generated/content-generation-input-v3.schema.json packages/brand-pilot-content-contracts/generated/image-generation-package-v1.schema.json packages/brand-pilot-content-contracts/generated/card-news-plan-v2.schema.json packages/brand-pilot-content-contracts/generated/blog-plan-v2.schema.json packages/brand-pilot-content-contracts/generated/reel-plan-v2.schema.json packages/brand-pilot-content-contracts/generated/ai-content-v3.schema.json packages/brand-pilot-content-contracts/generated/content-prompt-binding-v1.schema.json
 git commit -m "build: generate canonical content contracts"
 ```
 
