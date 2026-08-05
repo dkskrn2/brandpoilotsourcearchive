@@ -57,6 +57,15 @@ export const bootstrapFenceCatalog = Object.freeze([
 
 const lexicalCompare = (left, right) => left < right ? -1 : left > right ? 1 : 0;
 
+function assertExactObjectKeys(value, keys, errorCode) {
+  const prototype = value && typeof value === "object" ? Object.getPrototypeOf(value) : undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || (prototype !== Object.prototype && prototype !== null)
+    || JSON.stringify(Object.keys(value).sort(lexicalCompare)) !== JSON.stringify([...keys].sort(lexicalCompare))) {
+    throw new Error(errorCode);
+  }
+}
+
 export function canonicalBootstrapRoleCatalog(rows) {
   const roles = rows.map((row) => ({
     roleName: String(row.role_name),
@@ -182,6 +191,32 @@ export function canonicalEventTriggerCatalog(rows) {
     eventTriggerFunctionSha256: String(row.event_trigger_function_sha256 ?? row.eventTriggerFunctionSha256),
   })).sort((left, right) => lexicalCompare(left.eventTriggerName, right.eventTriggerName));
   return JSON.stringify({ contractVersion: "ai-content-event-trigger-catalog.v1", eventTriggers });
+}
+
+const eventTriggerCatalogEnvelopeKeys = Object.freeze(["contractVersion", "eventTriggers"]);
+const eventTriggerCatalogRowKeys = Object.freeze(["eventTriggerName", "eventTriggerEvent", "eventTriggerTags",
+  "eventTriggerEnabled", "eventTriggerOwner", "eventTriggerFunction", "eventTriggerFunctionSha256"]);
+
+function validateStoredEventTriggerCatalogEnvelope(value, expectedSha256, expectedCount) {
+  const errorCode = "bootstrap_074_event_trigger_baseline_invalid";
+  assertExactObjectKeys(value, eventTriggerCatalogEnvelopeKeys, errorCode);
+  if (value.contractVersion !== "ai-content-event-trigger-catalog.v1" || !Array.isArray(value.eventTriggers)) {
+    throw new Error(errorCode);
+  }
+  for (const row of value.eventTriggers) {
+    assertExactObjectKeys(row, eventTriggerCatalogRowKeys, errorCode);
+    if (!Array.isArray(row.eventTriggerTags)) throw new Error(errorCode);
+  }
+  const canonicalJson = canonicalEventTriggerCatalog(value.eventTriggers);
+  const canonical = JSON.parse(canonicalJson);
+  const exactRows = value.eventTriggers.map((row) => Object.fromEntries(eventTriggerCatalogRowKeys.map((key) => [key, row[key]])));
+  if (JSON.stringify(exactRows) !== JSON.stringify(canonical.eventTriggers)
+    || value.eventTriggers.length !== expectedCount
+    || !exactHex(expectedSha256, 64)
+    || checksum(canonicalJson) !== expectedSha256) {
+    throw new Error(errorCode);
+  }
+  return canonicalJson;
 }
 
 export function hashEventTriggerCatalog(rows) {
@@ -415,8 +450,7 @@ export async function readCanonicalBootstrapCatalogs(client, names) {
   };
 }
 
-function canonicalBootstrapAuthorization(value) {
-  const keys = [
+const bootstrapAuthorizationPayloadKeys = Object.freeze([
     "contractVersion", "requestId", "migrationId", "migrationSha256",
     "imageDigest", "imageSourceLabel", "roleCatalogSha256", "objectCatalogSha256",
     "migrationRoleName", "schemaOwnerRoleName", "applicationRoleName",
@@ -425,8 +459,17 @@ function canonicalBootstrapAuthorization(value) {
     "eventTriggerEvent", "eventTriggerOwner", "eventTriggerTags",
     "eventTriggerDefinitionSha256", "eventTriggerCatalogBeforeSha256",
     "eventTriggerCatalogBeforeCount", "issuedAt", "expiresAt",
-  ];
-  return JSON.stringify(Object.fromEntries(keys.map((key) => [key, value[key]])));
+  ]);
+const bootstrapAuthorizationEnvelopeKeys = Object.freeze([...bootstrapAuthorizationPayloadKeys, "signature"]);
+
+function canonicalBootstrapAuthorization(value) {
+  assertExactObjectKeys(value, bootstrapAuthorizationPayloadKeys, "bootstrap_role_authorization_envelope_invalid");
+  return JSON.stringify(Object.fromEntries(bootstrapAuthorizationPayloadKeys.map((key) => [key, value[key]])));
+}
+
+function bootstrapAuthorizationPayload(value) {
+  assertExactObjectKeys(value, bootstrapAuthorizationEnvelopeKeys, "bootstrap_role_authorization_envelope_invalid");
+  return Object.fromEntries(bootstrapAuthorizationPayloadKeys.map((key) => [key, value[key]]));
 }
 
 function hmac(value, key) {
@@ -448,10 +491,12 @@ export function signBootstrapRoleAuthorization(authorization, signingKey) {
 }
 
 export function validateBootstrapRoleAuthorization(authorization, context) {
+  assertExactObjectKeys(authorization, bootstrapAuthorizationEnvelopeKeys, "bootstrap_role_authorization_envelope_invalid");
+  if (!exactHex(authorization.signature, 64)) throw new Error("bootstrap_role_authorization_envelope_invalid");
   if (!authorization || authorization.contractVersion !== "ai-content-bootstrap-role-authorization.v2") {
     throw new Error("bootstrap_role_authorization_contract_invalid");
   }
-  const expectedSignature = signBootstrapRoleAuthorization(authorization, context.signingKey);
+  const expectedSignature = signBootstrapRoleAuthorization(bootstrapAuthorizationPayload(authorization), context.signingKey);
   if (!safeEqualHex(authorization.signature, expectedSignature)) {
     throw new Error("bootstrap_role_authorization_signature_invalid");
   }
@@ -531,13 +576,6 @@ const providerAttestationPayloadKeys = Object.freeze(["contractVersion", "provid
     "eventTriggerCatalogAfterSha256", "eventTriggerCatalogAfterCount", "issuedAt"]);
 const providerAttestationEnvelopeKeys = Object.freeze([...providerAttestationPayloadKeys, "signature"]);
 
-function assertExactObjectKeys(value, keys, errorCode) {
-  if (!value || typeof value !== "object" || Array.isArray(value)
-    || JSON.stringify(Object.keys(value).sort(lexicalCompare)) !== JSON.stringify([...keys].sort(lexicalCompare))) {
-    throw new Error(errorCode);
-  }
-}
-
 function canonicalProviderAttestation(value) {
   const payload = Object.fromEntries(providerAttestationPayloadKeys.map((key) => [key, value[key]]));
   payload.eventTriggerTags = [...(value.eventTriggerTags ?? [])].map(String).sort(lexicalCompare);
@@ -602,20 +640,46 @@ export function validateMembershipRevocationEvidence(value, expected, storedEnve
   return value;
 }
 
-function canonicalProviderInstallRequest(value) {
-  const keys = ["contractVersion", "authorizationRequestId", "action", "eventTriggerName",
+const providerInstallPayloadKeys = Object.freeze(["contractVersion", "authorizationRequestId", "action", "eventTriggerName",
     "eventTriggerFunction", "eventTriggerFunctionSha256", "eventTriggerEvent", "eventTriggerTags",
     "eventTriggerOwner", "eventTriggerEnabled", "eventTriggerDefinitionSha256", "migrationId",
     "migrationSha256", "imageDigest", "imageSourceLabel", "roleCatalogSha256", "objectCatalogSha256",
-    "fenceSecurityCatalogSha256", "eventTriggerCatalogBeforeSha256", "eventTriggerCatalogBeforeCount"];
-  const request = Object.fromEntries(keys.map((key) => [key, value[key]]));
+    "fenceSecurityCatalogSha256", "eventTriggerCatalogBeforeSha256", "eventTriggerCatalogBeforeCount",
+    "eventTriggerCatalogBefore"]);
+const providerInstallEnvelopeKeys = Object.freeze([...providerInstallPayloadKeys, "requestSha256"]);
+
+function canonicalProviderInstallRequest(value) {
+  const errorCode = "bootstrap_074_install_request_invalid";
+  assertExactObjectKeys(value, providerInstallPayloadKeys, errorCode);
+  const request = Object.fromEntries(providerInstallPayloadKeys.map((key) => [key, value[key]]));
   request.eventTriggerTags = [...(value.eventTriggerTags ?? [])].map(String).sort(lexicalCompare);
-  request.eventTriggerCatalogBefore = JSON.parse(canonicalEventTriggerCatalog(value.eventTriggerCatalogBefore?.eventTriggers ?? []));
+  if (JSON.stringify(value.eventTriggerTags) !== JSON.stringify(request.eventTriggerTags)) throw new Error(errorCode);
+  request.eventTriggerCatalogBefore = JSON.parse(validateStoredEventTriggerCatalogEnvelope(
+    value.eventTriggerCatalogBefore, value.eventTriggerCatalogBeforeSha256, value.eventTriggerCatalogBeforeCount,
+  ));
   return JSON.stringify(request);
 }
 
 export function hashProviderEventTriggerInstallRequest(value) {
   return checksum(canonicalProviderInstallRequest(value));
+}
+
+function canonicalProviderInstallEnvelope(value) {
+  const errorCode = "bootstrap_074_install_request_invalid";
+  assertExactObjectKeys(value, providerInstallEnvelopeKeys, errorCode);
+  if (!exactHex(value.requestSha256, 64)) throw new Error(errorCode);
+  const payload = Object.fromEntries(providerInstallPayloadKeys.map((key) => [key, value[key]]));
+  return JSON.stringify({ ...JSON.parse(canonicalProviderInstallRequest(payload)), requestSha256: value.requestSha256 });
+}
+
+function validateProviderEventTriggerInstallRequest(value, storedSha256) {
+  const errorCode = "bootstrap_074_install_request_invalid";
+  const canonicalEnvelope = canonicalProviderInstallEnvelope(value);
+  if (!exactHex(storedSha256, 64)) throw new Error(errorCode);
+  const payload = Object.fromEntries(providerInstallPayloadKeys.map((key) => [key, value[key]]));
+  const requestSha256 = hashProviderEventTriggerInstallRequest(payload);
+  if (value.requestSha256 !== requestSha256 || storedSha256 !== requestSha256) throw new Error(errorCode);
+  return JSON.parse(canonicalEnvelope);
 }
 
 export function buildProviderEventTriggerInstallRequest(authorization, seals) {
@@ -1124,7 +1188,7 @@ export async function runMigrationsWithClient({
             fenceSecurityCatalogSha256: fenceSecurityCatalog.catalogSha256,
             eventTriggerCatalogBeforeCanonicalJson: eventTriggerCatalog.canonicalJson,
           });
-          const authorizationSha256 = checksum(canonicalBootstrapAuthorization(authorization));
+          const authorizationSha256 = checksum(canonicalBootstrapAuthorization(bootstrapAuthorizationPayload(authorization)));
           await client.query(
             `insert into ai_content_bootstrap_state (
                singleton,authorization_request_id,authorization_sha256,
@@ -1177,14 +1241,19 @@ export async function runMigrationsWithClient({
            from ai_content_bootstrap_state where singleton`,
       );
       const sealed = bootstrapState.rows[0];
-      const authorizationSha256 = checksum(canonicalBootstrapAuthorization(authorization));
-      const baselineCanonicalJson = canonicalEventTriggerCatalog(
-        sealed?.event_trigger_catalog_before_json?.eventTriggers ?? [],
-      );
+      const authorizationSha256 = checksum(canonicalBootstrapAuthorization(bootstrapAuthorizationPayload(authorization)));
+      const baselineCanonicalJson = sealed ? validateStoredEventTriggerCatalogEnvelope(
+        sealed.event_trigger_catalog_before_json,
+        sealed.event_trigger_catalog_before_sha256,
+        sealed.event_trigger_catalog_before_count,
+      ) : null;
       const expectedInstall = sealed ? buildProviderEventTriggerInstallRequest(authorization, {
         fenceSecurityCatalogSha256: sealed.fence_security_catalog_sha256,
         eventTriggerCatalogBeforeCanonicalJson: baselineCanonicalJson,
       }) : null;
+      const sealedInstall = sealed
+        ? validateProviderEventTriggerInstallRequest(sealed.install_request_json, sealed.install_request_sha256)
+        : null;
       if (!sealed
         || sealed.authorization_request_id!==authorization.requestId
         || sealed.authorization_sha256!==authorizationSha256
@@ -1199,10 +1268,10 @@ export async function runMigrationsWithClient({
         || sealed.event_trigger_catalog_before_sha256!==authorization.eventTriggerCatalogBeforeSha256
         || sealed.event_trigger_catalog_before_count!==authorization.eventTriggerCatalogBeforeCount
         || sealed.install_request_sha256!==expectedInstall.requestSha256
-        || sealed.install_request_sha256!==hashProviderEventTriggerInstallRequest(sealed.install_request_json)) {
+        || canonicalProviderInstallEnvelope(sealedInstall)!==canonicalProviderInstallEnvelope(expectedInstall)) {
         throw new Error("bootstrap_074_state_mismatch");
       }
-      providerInstallRequest = sealed.install_request_json;
+      providerInstallRequest = sealedInstall;
       liveCatalogs = await readCanonicalBootstrapCatalogs(client, authorization);
       if (authorization.roleCatalogSha256 !== liveCatalogs.roleCatalogSha256
         || authorization.objectCatalogSha256 !== liveCatalogs.objectCatalogSha256) {

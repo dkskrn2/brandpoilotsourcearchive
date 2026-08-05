@@ -157,6 +157,17 @@ test("074 bootstrap role authorization rejects unsigned, stale, wrong image, and
   };
 
   assert.equal(migrationRunner.validateBootstrapRoleAuthorization(authorization, context).requestId, base.requestId);
+  assert.throws(() => migrationRunner.signBootstrapRoleAuthorization({ ...base, unexpected: true }, signingKey), /bootstrap_role_authorization_envelope_invalid/);
+  assert.throws(() => migrationRunner.signBootstrapRoleAuthorization(Object.assign(Object.create({ inherited: true }), base), signingKey), /bootstrap_role_authorization_envelope_invalid/);
+  const unsignedMissing = { ...base };
+  delete unsignedMissing.expiresAt;
+  assert.throws(() => migrationRunner.signBootstrapRoleAuthorization(unsignedMissing, signingKey), /bootstrap_role_authorization_envelope_invalid/);
+  assert.throws(() => migrationRunner.signBootstrapRoleAuthorization(authorization, signingKey), /bootstrap_role_authorization_envelope_invalid/);
+  assert.throws(() => migrationRunner.validateBootstrapRoleAuthorization({ ...authorization, unexpected: true }, context), /bootstrap_role_authorization_envelope_invalid/);
+  const signedMissing = { ...authorization };
+  delete signedMissing.cleanupRoleName;
+  assert.throws(() => migrationRunner.validateBootstrapRoleAuthorization(signedMissing, context), /bootstrap_role_authorization_envelope_invalid/);
+  assert.throws(() => migrationRunner.validateBootstrapRoleAuthorization({ ...authorization, signature: "not-a-sha256" }, { ...context, signingKey: null }), /bootstrap_role_authorization_envelope_invalid/);
   assert.throws(() => migrationRunner.validateBootstrapRoleAuthorization({ ...authorization, signature: "0".repeat(64) }, context), /bootstrap_role_authorization_signature_invalid/);
   assert.throws(() => migrationRunner.validateBootstrapRoleAuthorization(authorization, { ...context, now: new Date("2026-08-05T00:02:00.000Z") }), /bootstrap_role_authorization_expired/);
   assert.throws(() => migrationRunner.validateBootstrapRoleAuthorization(authorization, { ...context, imageDigest: `sha256:${"9".repeat(64)}` }), /bootstrap_role_authorization_image_mismatch/);
@@ -286,6 +297,11 @@ test("074 bootstrap role authorization applies stage one then independently cons
     eventTriggerFunction: "public.enforce_ai_content_ddl_allowlist",
     eventTriggerFunctionSha256: "6".repeat(64), eventTriggerTags: ["ALTER TABLE", "CREATE TABLE"],
   };
+  const preexistingEvent = {
+    event_trigger_name: "provider_preexisting_guard", event_trigger_event: "ddl_command_end",
+    event_trigger_tags: ["ALTER TABLE", "CREATE TABLE"], event_trigger_owner: "postgres", event_trigger_enabled: "enabled",
+    event_trigger_function: "extensions.preexisting_guard", event_trigger_function_sha256: "9".repeat(64),
+  };
   const unsignedAuthorization = {
     contractVersion: "ai-content-bootstrap-role-authorization.v2", requestId: "stage-074",
     migrationId: migration.id, migrationSha256: migration.checksum,
@@ -299,8 +315,8 @@ test("074 bootstrap role authorization applies stage one then independently cons
     eventTriggerFunctionSha256: "6".repeat(64), eventTriggerEvent: "ddl_command_end",
     eventTriggerOwner: "postgres", eventTriggerTags: ["ALTER TABLE", "CREATE TABLE"],
     eventTriggerDefinitionSha256: migrationRunner.hashEventTriggerDefinition(stageEventDefinition),
-    eventTriggerCatalogBeforeSha256: migrationRunner.hashEventTriggerCatalog([]),
-    eventTriggerCatalogBeforeCount: 0,
+    eventTriggerCatalogBeforeSha256: migrationRunner.hashEventTriggerCatalog([preexistingEvent]),
+    eventTriggerCatalogBeforeCount: 1,
     issuedAt: "2026-08-04T23:59:00.000Z", expiresAt: "2026-08-05T00:01:00.000Z",
   };
   const authorization = {
@@ -319,7 +335,7 @@ test("074 bootstrap role authorization applies stage one then independently cons
     event_trigger_function: authorization.eventTriggerFunction,
     event_trigger_function_sha256: authorization.eventTriggerFunctionSha256,
   };
-  let liveEventRows = [];
+  let liveEventRows = [preexistingEvent];
   let securityAttack = null;
   const client = {
     async query(sql, parameters = []) {
@@ -386,7 +402,10 @@ test("074 bootstrap role authorization applies stage one then independently cons
       if (normalized.includes("bootstrap_application_privileges_v1")) {
         return { rows: [{ app_owns_fenced_relation: false, app_control_dml: false, app_missing_minimum: false, app_forbidden_execute: false }] };
       }
-      if (normalized.includes("bootstrap_event_trigger_catalog_v1")) return { rowCount: liveEventRows.length, rows: liveEventRows };
+      if (normalized.includes("bootstrap_event_trigger_catalog_v1")) {
+        const rows = liveEventRows.filter((row) => row.event_trigger_name === authorization.eventTriggerName);
+        return { rowCount: rows.length, rows };
+      }
       if (normalized.startsWith("update ai_content_bootstrap_state") && normalized.includes("provider_attestation_json")) {
         if (sealedState.provider_attestation_sha256) return { rows: [], rowCount: 0 };
         sealedState.provider_attestation_json = JSON.parse(parameters[0]);
@@ -420,9 +439,35 @@ test("074 bootstrap role authorization applies stage one then independently cons
   const recoveredInstall = await migrationRunner.runMigrationsWithClient({ client, migrations: [migration], bootstrap074: bootstrap });
   assert.deepEqual(recoveredInstall.providerInstallRequest, install);
   assert.equal(bootstrapInsertCount(), insertsAfterStageOne);
+  const exactStageOneRecovery = () => migrationRunner.runMigrationsWithClient({ client, migrations: [migration], bootstrap074: bootstrap });
+  const sealedStageOne = () => structuredClone(sealedState);
+  const restoreStageOne = (saved) => { sealedState = saved; };
+  const reorderedJsonb = sealedStageOne();
+  sealedState.install_request_json = Object.fromEntries(Object.entries(sealedState.install_request_json).reverse());
+  sealedState.event_trigger_catalog_before_json = Object.fromEntries(Object.entries(sealedState.event_trigger_catalog_before_json).reverse());
+  assert.deepEqual((await exactStageOneRecovery()).providerInstallRequest, install);
+  restoreStageOne(reorderedJsonb);
+  for (const mutate of [
+    () => { sealedState.install_request_json.unexpected = true; },
+    () => { delete sealedState.install_request_json.requestSha256; },
+    () => { sealedState.install_request_json.requestSha256 = "0".repeat(64); },
+    () => { sealedState.install_request_sha256 = "0".repeat(64); },
+    () => { sealedState.event_trigger_catalog_before_json.unexpected = true; },
+    () => { delete sealedState.event_trigger_catalog_before_json.contractVersion; },
+    () => { sealedState.event_trigger_catalog_before_json.eventTriggers[0].unexpected = true; },
+    () => { delete sealedState.event_trigger_catalog_before_json.eventTriggers[0].eventTriggerTags; },
+    () => { sealedState.event_trigger_catalog_before_json.eventTriggers[0].eventTriggerTags.reverse(); },
+    () => { sealedState.event_trigger_catalog_before_count += 1; },
+    () => { sealedState.event_trigger_catalog_before_sha256 = "0".repeat(64); },
+  ]) {
+    const saved = sealedStageOne();
+    mutate();
+    await assert.rejects(exactStageOneRecovery(), /bootstrap_074_(?:state|install|event_trigger_baseline)/);
+    restoreStageOne(saved);
+  }
   const sealedInstallJson = sealedState.install_request_json;
   sealedState.install_request_json = { ...sealedInstallJson, action: "arbitrary_sql" };
-  await assert.rejects(migrationRunner.runMigrationsWithClient({ client, migrations: [migration], bootstrap074: bootstrap }), /bootstrap_074_state_mismatch/);
+  await assert.rejects(migrationRunner.runMigrationsWithClient({ client, migrations: [migration], bootstrap074: bootstrap }), /bootstrap_074_(?:state_mismatch|install_request_invalid)/);
   sealedState.install_request_json = sealedInstallJson;
   const alteredUnsignedAuthorization = { ...unsignedAuthorization, requestId: "stage-074-altered" };
   const alteredAuthorization = {
@@ -450,20 +495,20 @@ test("074 bootstrap role authorization applies stage one then independently cons
     fenceSecurityCatalogSha256: install.fenceSecurityCatalogSha256,
     eventTriggerCatalogBeforeSha256: install.eventTriggerCatalogBeforeSha256,
     eventTriggerCatalogBeforeCount: install.eventTriggerCatalogBeforeCount,
-    eventTriggerCatalogAfterSha256: migrationRunner.hashEventTriggerCatalog([approvedLiveEvent]),
-    eventTriggerCatalogAfterCount: 1,
+    eventTriggerCatalogAfterSha256: migrationRunner.hashEventTriggerCatalog([preexistingEvent, approvedLiveEvent]),
+    eventTriggerCatalogAfterCount: 2,
     issuedAt: "2026-08-05T00:00:00.000Z",
   };
   const providerAttestation = {
     ...unsignedAttestation,
     signature: migrationRunner.signProviderEventTriggerAttestation(unsignedAttestation, providerSigningKey),
   };
-  liveEventRows = [approvedLiveEvent, { ...approvedLiveEvent, event_trigger_name: "ai_content_ddl_guard_conflict" }];
+  liveEventRows = [preexistingEvent, approvedLiveEvent, { ...approvedLiveEvent, event_trigger_name: "ai_content_ddl_guard_conflict" }];
   await assert.rejects(migrationRunner.runMigrationsWithClient({
     client, migrations: [migration], bootstrap074: { ...bootstrap, providerAttestation, providerSigningKey },
   }), /bootstrap_074_event_trigger_delta_invalid/);
   assert.equal(sealedState.provider_attestation_sha256, null);
-  liveEventRows = [approvedLiveEvent];
+  liveEventRows = [preexistingEvent, approvedLiveEvent];
   for (const attack of ["function_body", "function_owner", "search_path", "security_definer", "trigger", "grant"]) {
     securityAttack = attack;
     await assert.rejects(migrationRunner.runMigrationsWithClient({
@@ -527,15 +572,15 @@ test("074 bootstrap role authorization applies stage one then independently cons
     }), /bootstrap_074_fence_security_/);
   }
   securityAttack = null;
-  liveEventRows = [approvedLiveEvent, { ...approvedLiveEvent, event_trigger_name: "unrelated_wrapper" }];
+  liveEventRows = [preexistingEvent, approvedLiveEvent, { ...approvedLiveEvent, event_trigger_name: "unrelated_wrapper" }];
   await assert.rejects(migrationRunner.runMigrationsWithClient({
     client, migrations: [migration], bootstrap074: { ...bootstrap, providerAttestation, providerSigningKey },
   }), /bootstrap_074_event_trigger_delta_invalid/);
-  liveEventRows = [{ ...approvedLiveEvent, event_trigger_function_sha256: "9".repeat(64) }];
+  liveEventRows = [preexistingEvent, { ...approvedLiveEvent, event_trigger_function_sha256: "9".repeat(64) }];
   await assert.rejects(migrationRunner.runMigrationsWithClient({
     client, migrations: [migration], bootstrap074: { ...bootstrap, providerAttestation, providerSigningKey },
   }), /bootstrap_074_event_trigger_delta_invalid/);
-  liveEventRows = [approvedLiveEvent];
+  liveEventRows = [preexistingEvent, approvedLiveEvent];
   const alteredAttestation = { ...providerAttestation, issuedAt: "2026-08-05T00:00:01.000Z" };
   alteredAttestation.signature = migrationRunner.signProviderEventTriggerAttestation(alteredAttestation, providerSigningKey);
   await assert.rejects(migrationRunner.runMigrationsWithClient({
