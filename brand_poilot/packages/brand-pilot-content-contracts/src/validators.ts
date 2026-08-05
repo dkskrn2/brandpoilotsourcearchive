@@ -135,13 +135,33 @@ function same(left: unknown, right: unknown): boolean {
     && leftKeys.every((key, index) => key === rightKeys[index] && same(leftRecord[key], rightRecord[key]));
 }
 
+const ENCODED_PATH_SEPARATOR = /%(?:2f|5c)/i;
+const DOT_PATH_SEGMENT = /(?:^|\/)(?:(?:\.|%2e){1,2})(?:\/|$)/i;
+
+function hasForbiddenPathSyntax(path: string): boolean {
+  return path.includes("\\") || ENCODED_PATH_SEPARATOR.test(path) || DOT_PATH_SEGMENT.test(path);
+}
+
+function rawHttpsPath(url: string): string {
+  if (!url.startsWith("https://") || url.includes("?") || url.includes("#") || url.includes("\\")) {
+    fail("rendered_asset_url_invalid");
+  }
+  const authorityStart = "https://".length;
+  const pathStart = url.indexOf("/", authorityStart);
+  if (pathStart < 0 || pathStart === authorityStart) fail("rendered_asset_url_invalid");
+  const rawPath = url.slice(pathStart);
+  if (hasForbiddenPathSyntax(rawPath)) fail("rendered_asset_url_invalid");
+  return rawPath;
+}
+
 function assertCanonicalRenderedAssetPath(asset: RenderedAssetInventory["assets"][number]): void {
   const segments = asset.storagePath.split("/");
   if (asset.storagePath.startsWith("/")
-    || asset.storagePath.includes("\\")
+    || hasForbiddenPathSyntax(asset.storagePath)
     || segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
     fail("rendered_storage_path_invalid");
   }
+  const rawPath = rawHttpsPath(asset.url);
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(asset.url);
@@ -149,6 +169,10 @@ function assertCanonicalRenderedAssetPath(asset: RenderedAssetInventory["assets"
     fail("rendered_asset_url_invalid");
   }
   if (parsedUrl.protocol !== "https:") fail("rendered_asset_url_invalid");
+  if (parsedUrl.username !== "" || parsedUrl.password !== "" || parsedUrl.search !== "" || parsedUrl.hash !== "") {
+    fail("rendered_asset_url_invalid");
+  }
+  if (rawPath !== `/${asset.storagePath}`) fail("rendered_url_path_mismatch");
   if (parsedUrl.pathname !== `/${asset.storagePath}`) fail("rendered_url_path_mismatch");
 }
 

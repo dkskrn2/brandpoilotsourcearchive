@@ -432,4 +432,38 @@ describe("content pipeline semantic bindings", () => {
       expect(() => assertContentPipelineBindings(value.input, value.authority, value.binding, value.plan, value.imagePackage, { ...value.rendered, assets: duplicate }, value.manifest)).toThrow("rendered_asset_duplicate");
     }
   });
+
+  it("rejects noncanonical raw asset URLs before WHATWG normalization", () => {
+    const value = pipelineFor("reel", "informational");
+    const first = value.rendered.assets[0];
+    const prefix = `https://assets.example.com/ai-content/${ids.brand}/${ids.generation}`;
+    const invalidUrls = [
+      `${prefix}/dir/../${first.fileName}`,
+      `${prefix}/%2e/${first.fileName}`,
+      `${prefix}/%2E/${first.fileName}`,
+      `${prefix}/dir/%2e%2e/${first.fileName}`,
+      `${prefix}/dir/%2E%2e/${first.fileName}`,
+      `${prefix}\\${first.fileName}`,
+      `${prefix}/scene%2F1.png`,
+      `${prefix}/scene%2f1.png`,
+      `${prefix}/scene%5C1.png`,
+      `${prefix}/scene%5c1.png`,
+      `https://user:pass@assets.example.com/${first.storagePath}`,
+      `${first.url}?download=1`,
+      `${first.url}#fragment`,
+    ];
+    for (const url of invalidUrls) {
+      expect(() => parseRenderedAssetInventory({ ...value.rendered, assets: [{ ...first, url }] })).toThrow("rendered_asset_url_invalid");
+    }
+  });
+
+  it("rejects encoded separators and dot segments in storage paths case-insensitively", () => {
+    const value = pipelineFor("card_news", "informational");
+    const first = value.rendered.assets[0];
+    for (const suffix of ["dir%2Ffile.png", "dir%2ffile.png", "dir%5Cfile.png", "dir%5cfile.png", "%2e/file.png", "%2E/file.png", "dir/%2e%2e/file.png", "dir/%2E%2e/file.png"]) {
+      const storagePath = `ai-content/${ids.brand}/${ids.generation}/${suffix}`;
+      const url = `https://assets.example.com/${storagePath}`;
+      expect(() => parseRenderedAssetInventory({ ...value.rendered, assets: [{ ...first, storagePath, url }] })).toThrow("rendered_storage_path_invalid");
+    }
+  });
 });
