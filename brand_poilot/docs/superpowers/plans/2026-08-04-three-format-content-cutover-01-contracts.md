@@ -369,6 +369,80 @@ export type AiContentManifestV3 = Static<typeof AiContentManifestV3Schema>;
 
 There is no manifest `type`, generation `type`, `marketing_content`, `single_image`, or `channel_text` schema member. Keep `content-generation-input.v3`, `image-generation-package.v1`, three plan V2 versions, and their full existing exact fields.
 
+The following Task 2 tie-breakers were approved on 2026-08-05 after comparing the actual API, repository, worker-runtime, and finalizer contracts:
+
+- `ContentProposalRequestV2Schema` is the closed persisted common-service request `{ contractVersion, purpose, outputFormat, channelTargets, requestFingerprint }`; `requestFingerprint` is lowercase SHA-256. `ProposalBaseInputSnapshotV2Schema` is the closed shape currently assembled by `contentOrchestration.ts`, and the composed input adds only `contractVersion=proposal-input.v2` plus `researchEvidence` to those shared source-level properties.
+- `ApprovedProductSnapshotV2.evergreenPurchaseInfo` permits the normalized empty string, because approved DB/UI snapshots legitimately store it; the worker-runtime non-empty check is drift and is not canonicalized.
+- `brandStyleImages` is an independently loaded, approved same-scope collection. It is not required to be a subset of `references.selected`. Structural parsing keeps the collections separate; Task 3 validates scope/ownership, uniqueness, and that a non-null `avatarStyleImageId` names one of the frozen style images.
+- the former marketing-plan field set is retained only after the approved breaking rename/narrowing to `contractVersion=reel-plan.v2` and `outputFormat=reel`; neither `marketing-plan.v2` nor `marketing_content` is accepted.
+
+Here `asset` means a final generated/downloadable file, not an input attachment, product image, or brand-library asset. The exact closed manifest asset variants are:
+
+```ts
+export const ManifestImageAssetSchema = Type.Object({
+  role: Type.Union([Type.Literal("slide"), Type.Literal("inline"), Type.Literal("scene")]),
+  index: Type.Integer({ minimum: 1 }),
+  url: NonEmptyStringSchema,
+  fileName: NonEmptyStringSchema,
+  mimeType: Type.Literal("image/png"),
+  width: Type.Integer({ minimum: 1 }),
+  height: Type.Integer({ minimum: 1 }),
+}, { additionalProperties: false });
+
+export const ManifestHtmlAssetSchema = Type.Object({
+  role: Type.Literal("html"),
+  index: Type.Integer({ minimum: 1 }),
+  url: NonEmptyStringSchema,
+  fileName: NonEmptyStringSchema,
+  mimeType: Type.Literal("text/html"),
+}, { additionalProperties: false });
+
+export const ManifestVideoAssetSchema = Type.Object({
+  role: Type.Literal("video"),
+  index: Type.Integer({ minimum: 1 }),
+  url: NonEmptyStringSchema,
+  fileName: NonEmptyStringSchema,
+  mimeType: Type.Literal("video/mp4"),
+  width: Type.Integer({ minimum: 1 }),
+  height: Type.Integer({ minimum: 1 }),
+  durationSeconds: Type.Number({ exclusiveMinimum: 0 }),
+  videoCodec: Type.Literal("h264"),
+  fps: Type.Literal(30),
+  audioCodec: Type.Null(),
+}, { additionalProperties: false });
+
+export const ManifestAssetSchema = Type.Union([
+  ManifestImageAssetSchema,
+  ManifestHtmlAssetSchema,
+  ManifestVideoAssetSchema,
+]);
+```
+
+The exact closed manifest content variants are social content for card-news/reel and final blog content:
+
+```ts
+export const SocialManifestContentSchema = Type.Object({
+  caption: NonEmptyStringSchema,
+  hashtags: Type.Array(NonEmptyStringSchema),
+  cta: NonEmptyStringSchema,
+}, { additionalProperties: false });
+
+export const BlogManifestContentSchema = Type.Object({
+  title: NonEmptyStringSchema,
+  summary: NonEmptyStringSchema,
+  html: NonEmptyStringSchema,
+  metaTitle: NonEmptyStringSchema,
+  metaDescription: NonEmptyStringSchema,
+}, { additionalProperties: false });
+
+export const ManifestContentSchema = Type.Union([
+  SocialManifestContentSchema,
+  BlogManifestContentSchema,
+]);
+```
+
+Every variant property is required and every variant is closed; there are no irrelevant nullable/optional superset fields. Task 3 binds `card_news|reel` to social content, `blog` to blog content, and each format to its permitted asset roles/counts. It also validates final HTTPS/storage provenance. Task 2 performs only exact structural parsing.
+
 - [ ] **Step 4: Add exact runtime compilation and parsing**
 
 Use `Value.Check` and one stable error per boundary:
