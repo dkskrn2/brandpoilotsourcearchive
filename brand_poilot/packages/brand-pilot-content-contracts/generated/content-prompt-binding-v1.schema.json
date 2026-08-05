@@ -1,0 +1,183 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "contractSourceHash": {
+      "pattern": "^[0-9a-fA-F]{64}$",
+      "type": "string"
+    },
+    "contractVersion": {
+      "const": "content-prompt-binding.v1",
+      "type": "string"
+    },
+    "generationInputVersion": {
+      "const": "content-generation-input.v3",
+      "type": "string"
+    },
+    "generationSchemaSha256": {
+      "pattern": "^[0-9a-fA-F]{64}$",
+      "type": "string"
+    },
+    "imagePackageVersion": {
+      "const": "image-generation-package.v1",
+      "type": "string"
+    },
+    "imagePromptVersion": {
+      "anyOf": [
+        {
+          "const": "image.card_news.informational.v1",
+          "type": "string"
+        },
+        {
+          "const": "image.card_news.marketing.v1",
+          "type": "string"
+        },
+        {
+          "const": "image.blog.informational.v1",
+          "type": "string"
+        },
+        {
+          "const": "image.blog.marketing.v1",
+          "type": "string"
+        },
+        {
+          "const": "image.reel.informational.v1",
+          "type": "string"
+        },
+        {
+          "const": "image.reel.marketing.v1",
+          "type": "string"
+        }
+      ]
+    },
+    "manifestVersion": {
+      "const": "ai-content.v3",
+      "type": "string"
+    },
+    "model": {
+      "const": "gpt-5.6-terra",
+      "type": "string"
+    },
+    "outputFormat": {
+      "anyOf": [
+        {
+          "const": "card_news",
+          "type": "string"
+        },
+        {
+          "const": "blog",
+          "type": "string"
+        },
+        {
+          "const": "reel",
+          "type": "string"
+        }
+      ]
+    },
+    "planContractVersion": {
+      "anyOf": [
+        {
+          "const": "card-news-plan.v2",
+          "type": "string"
+        },
+        {
+          "const": "blog-plan.v2",
+          "type": "string"
+        },
+        {
+          "const": "reel-plan.v2",
+          "type": "string"
+        }
+      ]
+    },
+    "planSchemaSha256": {
+      "pattern": "^[0-9a-fA-F]{64}$",
+      "type": "string"
+    },
+    "plannerPromptVersion": {
+      "anyOf": [
+        {
+          "const": "planner.card_news.informational.v1",
+          "type": "string"
+        },
+        {
+          "const": "planner.card_news.marketing.v1",
+          "type": "string"
+        },
+        {
+          "const": "planner.blog.informational.v1",
+          "type": "string"
+        },
+        {
+          "const": "planner.blog.marketing.v1",
+          "type": "string"
+        },
+        {
+          "const": "planner.reel.informational.v1",
+          "type": "string"
+        },
+        {
+          "const": "planner.reel.marketing.v1",
+          "type": "string"
+        }
+      ]
+    },
+    "proposalBaseInputVersion": {
+      "const": "proposal-base-input.v2",
+      "type": "string"
+    },
+    "proposalComposedInputVersion": {
+      "const": "proposal-input.v2",
+      "type": "string"
+    },
+    "proposalOutputVersion": {
+      "const": "content-proposal.v2",
+      "type": "string"
+    },
+    "proposalPromptVersion": {
+      "const": "proposal.writer.v2",
+      "type": "string"
+    },
+    "proposalRequestVersion": {
+      "const": "content-proposal-request.v2",
+      "type": "string"
+    },
+    "proposalSchemaSha256": {
+      "pattern": "^[0-9a-fA-F]{64}$",
+      "type": "string"
+    },
+    "purpose": {
+      "anyOf": [
+        {
+          "const": "informational",
+          "type": "string"
+        },
+        {
+          "const": "marketing",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "required": [
+    "contractVersion",
+    "outputFormat",
+    "purpose",
+    "proposalRequestVersion",
+    "proposalBaseInputVersion",
+    "proposalComposedInputVersion",
+    "proposalOutputVersion",
+    "proposalPromptVersion",
+    "proposalSchemaSha256",
+    "generationInputVersion",
+    "generationSchemaSha256",
+    "planContractVersion",
+    "planSchemaSha256",
+    "plannerPromptVersion",
+    "imagePackageVersion",
+    "imagePromptVersion",
+    "manifestVersion",
+    "contractSourceHash",
+    "model"
+  ],
+  "type": "object"
+}

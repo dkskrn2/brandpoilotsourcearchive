@@ -5,7 +5,9 @@ import {
   CONTENT_PURPOSES,
   parseContentStudioOutputFormat,
   parseContentPurpose,
+  parseGeneratedContentCatalog,
 } from "./catalog.js";
+import { generateArtifactSet } from "./generateArtifacts.js";
 
 describe("canonical content catalog", () => {
   it("owns exactly three formats, two purposes, and direct claim slugs", () => {
@@ -27,5 +29,34 @@ describe("canonical content catalog", () => {
     expect(parseContentPurpose("informational")).toBe("informational");
     expect(parseContentPurpose("marketing")).toBe("marketing");
     expect(() => parseContentPurpose("both")).toThrow("content_purpose_invalid");
+  });
+});
+
+describe("generated content catalog", () => {
+  it("parses the generated catalog and rejects filename, hash, and cross-field drift", async () => {
+    const artifacts = await generateArtifactSet();
+    const raw = JSON.parse(artifacts.get("content-catalog.json")!);
+    expect(parseGeneratedContentCatalog(raw)).toEqual(raw);
+
+    expect(() => parseGeneratedContentCatalog({
+      ...raw,
+      schemas: { ...raw.schemas, aiContentV3: { ...raw.schemas.aiContentV3, filename: "wrong.json" } },
+    })).toThrow("generated_content_catalog_invalid");
+    expect(() => parseGeneratedContentCatalog({
+      ...raw,
+      schemas: { ...raw.schemas, legacyV1: raw.schemas.aiContentV3 },
+    })).toThrow("generated_content_catalog_invalid");
+    expect(() => parseGeneratedContentCatalog({
+      ...raw,
+      schemas: { ...raw.schemas, contentProposalV2: { ...raw.schemas.contentProposalV2, sha256: "f".repeat(64) } },
+    })).toThrow("generated_content_catalog_invalid");
+    expect(() => parseGeneratedContentCatalog({
+      ...raw,
+      proposalContracts: { ...raw.proposalContracts, outputSchemaSha256: "f".repeat(64) },
+    })).toThrow("generated_content_catalog_invalid");
+    expect(() => parseGeneratedContentCatalog({
+      ...raw,
+      planContractVersions: { ...raw.planContractVersions, reel: "card-news-plan.v2" },
+    })).toThrow("generated_content_catalog_invalid");
   });
 });

@@ -6,7 +6,9 @@ import {
   CONTENT_PROMPT_DEFINITION_VERSIONS,
   CONTENT_PURPOSES,
 } from "./catalog.js";
-import { parseContentPromptBinding } from "./binding.js";
+import { parseContentPromptBinding, promptBindingFor } from "./binding.js";
+import { parseGeneratedContentCatalog } from "./catalog.js";
+import { generateArtifactSet } from "./generateArtifacts.js";
 
 const HASH = "a".repeat(64);
 
@@ -38,6 +40,18 @@ function bindingFor(
 }
 
 describe("ContentPromptBindingSchema", () => {
+  it.each(CONTENT_OUTPUT_FORMATS.flatMap((format) => CONTENT_PURPOSES.map((purpose) => [format, purpose] as const)))(
+    "constructs %s/%s only from a verified generated catalog",
+    async (format, purpose) => {
+      const artifacts = await generateArtifactSet();
+      const catalog = parseGeneratedContentCatalog(JSON.parse(artifacts.get("content-catalog.json")!));
+      const binding = promptBindingFor(format, purpose, catalog);
+      expect(binding.proposalSchemaSha256).toBe(catalog.schemas.contentProposalV2.sha256);
+      expect(binding.generationSchemaSha256).toBe(catalog.schemas.contentGenerationInputV3.sha256);
+      expect(binding.planSchemaSha256).toBe(catalog.schemas.plans[format].sha256);
+      expect(binding.contractSourceHash).toBe(catalog.contractSourceHash);
+    },
+  );
   it.each(CONTENT_OUTPUT_FORMATS.flatMap((format) => CONTENT_PURPOSES.map((purpose) => [format, purpose] as const)))(
     "parses the literal catalog binding for %s/%s",
     (format, purpose) => {

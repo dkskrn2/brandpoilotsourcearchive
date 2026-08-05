@@ -26,6 +26,7 @@ import {
   ReelPlanV2Schema,
 } from "./plans.js";
 import { AiContentManifestV3Schema } from "./manifest.js";
+import { ContentPromptBindingSchema } from "./binding.js";
 
 export const ALL_CONTENT_SCHEMAS = {
   contentOrchestrationV2: ContentOrchestrationV2Schema,
@@ -42,4 +43,5 @@ export const ALL_CONTENT_SCHEMAS = {
     reel: ReelPlanV2Schema,
   },
   aiContentV3: AiContentManifestV3Schema,
+  contentPromptBindingV1: ContentPromptBindingSchema,
 } as const;

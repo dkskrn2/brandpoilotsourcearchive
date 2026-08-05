@@ -1,0 +1,2 @@
+packages/brand-pilot-content-contracts/generated/*.json text eol=lf
+packages/brand-pilot-content-contracts/src/fixtures/*.json text eol=lf

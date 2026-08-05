@@ -12,6 +12,10 @@ import {
   ContentPurposeSchema,
   ContentStudioOutputFormatSchema,
   IMAGE_GENERATION_PACKAGE_VERSION,
+  CONTENT_FORMAT_CATALOG,
+  type ContentPurpose,
+  type ContentStudioOutputFormat,
+  type VerifiedGeneratedContentCatalog,
 } from "./catalog.js";
 import { PlanContractVersionSchema } from "./plans.js";
 import { Sha256Schema } from "./snapshots.js";
@@ -55,4 +59,32 @@ export function parseContentPromptBinding(value: unknown): ContentPromptBinding 
     throw new Error("content_prompt_binding_invalid");
   }
   return value as ContentPromptBinding;
+}
+
+export function promptBindingFor(
+  outputFormat: ContentStudioOutputFormat,
+  purpose: ContentPurpose,
+  catalog: VerifiedGeneratedContentCatalog,
+): ContentPromptBinding {
+  return parseContentPromptBinding({
+    contractVersion: CONTENT_PROMPT_BINDING_VERSION,
+    outputFormat,
+    purpose,
+    proposalRequestVersion: CONTENT_PROPOSAL_CONTRACT_VERSIONS.request,
+    proposalBaseInputVersion: CONTENT_PROPOSAL_CONTRACT_VERSIONS.baseInput,
+    proposalComposedInputVersion: CONTENT_PROPOSAL_CONTRACT_VERSIONS.composedInput,
+    proposalOutputVersion: CONTENT_PROPOSAL_CONTRACT_VERSIONS.output,
+    proposalPromptVersion: CONTENT_PROPOSAL_PROMPT_VERSION,
+    proposalSchemaSha256: catalog.schemas.contentProposalV2.sha256,
+    generationInputVersion: CONTENT_GENERATION_INPUT_VERSION,
+    generationSchemaSha256: catalog.schemas.contentGenerationInputV3.sha256,
+    planContractVersion: CONTENT_FORMAT_CATALOG[outputFormat].planContractVersion,
+    planSchemaSha256: catalog.schemas.plans[outputFormat].sha256,
+    plannerPromptVersion: CONTENT_PROMPT_DEFINITION_VERSIONS[outputFormat][purpose],
+    imagePackageVersion: IMAGE_GENERATION_PACKAGE_VERSION,
+    imagePromptVersion: CONTENT_IMAGE_PROMPT_VERSIONS[outputFormat][purpose],
+    manifestVersion: AI_CONTENT_MANIFEST_VERSION,
+    contractSourceHash: catalog.contractSourceHash,
+    model: CONTENT_FORMAT_CATALOG[outputFormat].model,
+  });
 }

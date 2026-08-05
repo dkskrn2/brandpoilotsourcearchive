@@ -1,0 +1,271 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "assets": {
+      "items": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "fileName": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "height": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "index": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "mimeType": {
+                "const": "image/png",
+                "type": "string"
+              },
+              "role": {
+                "anyOf": [
+                  {
+                    "const": "slide",
+                    "type": "string"
+                  },
+                  {
+                    "const": "inline",
+                    "type": "string"
+                  },
+                  {
+                    "const": "scene",
+                    "type": "string"
+                  }
+                ]
+              },
+              "url": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "width": {
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "role",
+              "index",
+              "url",
+              "fileName",
+              "mimeType",
+              "width",
+              "height"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "fileName": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "index": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "mimeType": {
+                "const": "text/html",
+                "type": "string"
+              },
+              "role": {
+                "const": "html",
+                "type": "string"
+              },
+              "url": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "role",
+              "index",
+              "url",
+              "fileName",
+              "mimeType"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "audioCodec": {
+                "type": "null"
+              },
+              "durationSeconds": {
+                "exclusiveMinimum": 0,
+                "type": "number"
+              },
+              "fileName": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "fps": {
+                "const": 30,
+                "type": "number"
+              },
+              "height": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "index": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "mimeType": {
+                "const": "video/mp4",
+                "type": "string"
+              },
+              "role": {
+                "const": "video",
+                "type": "string"
+              },
+              "url": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "videoCodec": {
+                "const": "h264",
+                "type": "string"
+              },
+              "width": {
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "role",
+              "index",
+              "url",
+              "fileName",
+              "mimeType",
+              "width",
+              "height",
+              "durationSeconds",
+              "videoCodec",
+              "fps",
+              "audioCodec"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "content": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "caption": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "cta": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "hashtags": {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "caption",
+            "hashtags",
+            "cta"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "html": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "metaDescription": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "metaTitle": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "summary": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "summary",
+            "html",
+            "metaTitle",
+            "metaDescription"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "outputFormat": {
+      "anyOf": [
+        {
+          "const": "card_news",
+          "type": "string"
+        },
+        {
+          "const": "blog",
+          "type": "string"
+        },
+        {
+          "const": "reel",
+          "type": "string"
+        }
+      ]
+    },
+    "purpose": {
+      "anyOf": [
+        {
+          "const": "informational",
+          "type": "string"
+        },
+        {
+          "const": "marketing",
+          "type": "string"
+        }
+      ]
+    },
+    "title": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "version": {
+      "const": "ai-content.v3",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "outputFormat",
+    "purpose",
+    "title",
+    "assets",
+    "content"
+  ],
+  "type": "object"
+}

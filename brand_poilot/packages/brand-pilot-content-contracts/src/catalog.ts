@@ -1,4 +1,5 @@
-import { Type, type Static } from "@sinclair/typebox";
+import { Type, type Static, type TSchema } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 
 export const CONTENT_OUTPUT_FORMATS = ["card_news", "blog", "reel"] as const;
 export const CONTENT_PURPOSES = ["informational", "marketing"] as const;
@@ -16,6 +17,7 @@ export const CONTENT_GENERATION_INPUT_VERSION = "content-generation-input.v3" as
 export const CONTENT_PROMPT_BINDING_VERSION = "content-prompt-binding.v1" as const;
 export const IMAGE_GENERATION_PACKAGE_VERSION = "image-generation-package.v1" as const;
 export const AI_CONTENT_MANIFEST_VERSION = "ai-content.v3" as const;
+export const GENERATED_CONTENT_CATALOG_VERSION = "content-catalog.v1" as const;
 
 export const CONTENT_PROMPT_DEFINITION_VERSIONS = {
   card_news: {
@@ -115,6 +117,147 @@ export const CONTENT_FORMAT_CATALOG = {
     imagePromptVersions: CONTENT_IMAGE_PROMPT_VERSIONS.reel,
   },
 } as const satisfies Record<ContentStudioOutputFormat, ContentFormatDescriptorShape>;
+
+const Sha256PatternSchema = Type.String({ pattern: "^[0-9a-f]{64}$" });
+const ArtifactSchema = (filename: string) => Type.Object({
+  filename: Type.Literal(filename),
+  sha256: Sha256PatternSchema,
+}, { additionalProperties: false });
+const FormatMapSchema = <C extends TSchema, B extends TSchema, R extends TSchema>(cardNews: C, blog: B, reel: R) => Type.Object({
+  card_news: cardNews,
+  blog,
+  reel,
+}, { additionalProperties: false });
+
+export const GeneratedContentCatalogSchema = Type.Object({
+  catalogVersion: Type.Literal(GENERATED_CONTENT_CATALOG_VERSION),
+  contractSourceHash: Sha256PatternSchema,
+  formats: Type.Tuple([Type.Literal("card_news"), Type.Literal("blog"), Type.Literal("reel")]),
+  purposes: Type.Tuple([Type.Literal("informational"), Type.Literal("marketing")]),
+  claimSlugs: FormatMapSchema(Type.Literal("card_news"), Type.Literal("blog"), Type.Literal("reel")),
+  services: FormatMapSchema(Type.Literal("card-news-worker-1"), Type.Literal("blog-worker-1"), Type.Literal("reel-worker-1")),
+  workspaces: FormatMapSchema(Type.Literal("@brand-pilot/card-news-worker"), Type.Literal("@brand-pilot/blog-worker"), Type.Literal("@brand-pilot/reel-worker")),
+  releaseComponentKeys: FormatMapSchema(Type.Literal("cardNewsWorker"), Type.Literal("blogWorker"), Type.Literal("reelWorker")),
+  imageEnvKeys: FormatMapSchema(Type.Literal("CARD_NEWS_WORKER_IMAGE"), Type.Literal("BLOG_WORKER_IMAGE"), Type.Literal("REEL_WORKER_IMAGE")),
+  schemas: Type.Object({
+    contentOrchestrationV2: ArtifactSchema("content-orchestration-v2.schema.json"),
+    contentProposalRequestV2: ArtifactSchema("content-proposal-request-v2.schema.json"),
+    proposalBaseInputV2: ArtifactSchema("proposal-base-input-v2.schema.json"),
+    proposalInputV2: ArtifactSchema("proposal-input-v2.schema.json"),
+    researchEvidenceV1: ArtifactSchema("research-evidence-v1.schema.json"),
+    contentProposalV2: ArtifactSchema("content-proposal-v2.schema.json"),
+    contentGenerationInputV3: ArtifactSchema("content-generation-input-v3.schema.json"),
+    imageGenerationPackageV1: ArtifactSchema("image-generation-package-v1.schema.json"),
+    plans: Type.Object({
+      card_news: ArtifactSchema("card-news-plan-v2.schema.json"),
+      blog: ArtifactSchema("blog-plan-v2.schema.json"),
+      reel: ArtifactSchema("reel-plan-v2.schema.json"),
+    }, { additionalProperties: false }),
+    aiContentV3: ArtifactSchema("ai-content-v3.schema.json"),
+    contentPromptBindingV1: ArtifactSchema("content-prompt-binding-v1.schema.json"),
+  }, { additionalProperties: false }),
+  proposalContracts: Type.Object({
+    requestVersion: Type.Literal(CONTENT_PROPOSAL_CONTRACT_VERSIONS.request),
+    requestSchemaSha256: Sha256PatternSchema,
+    baseInputVersion: Type.Literal(CONTENT_PROPOSAL_CONTRACT_VERSIONS.baseInput),
+    baseInputSchemaSha256: Sha256PatternSchema,
+    composedInputVersion: Type.Literal(CONTENT_PROPOSAL_CONTRACT_VERSIONS.composedInput),
+    composedInputSchemaSha256: Sha256PatternSchema,
+    outputVersion: Type.Literal(CONTENT_PROPOSAL_CONTRACT_VERSIONS.output),
+    outputSchemaSha256: Sha256PatternSchema,
+    promptVersion: Type.Literal(CONTENT_PROPOSAL_PROMPT_VERSION),
+  }, { additionalProperties: false }),
+  researchEvidence: Type.Object({
+    version: Type.Literal(RESEARCH_EVIDENCE_VERSION),
+    schemaSha256: Sha256PatternSchema,
+  }, { additionalProperties: false }),
+  promptBinding: Type.Object({
+    version: Type.Literal(CONTENT_PROMPT_BINDING_VERSION),
+    schemaSha256: Sha256PatternSchema,
+  }, { additionalProperties: false }),
+  planContractVersions: FormatMapSchema(
+    Type.Literal(CONTENT_FORMAT_CATALOG.card_news.planContractVersion),
+    Type.Literal(CONTENT_FORMAT_CATALOG.blog.planContractVersion),
+    Type.Literal(CONTENT_FORMAT_CATALOG.reel.planContractVersion),
+  ),
+  plannerModels: FormatMapSchema(
+    Type.Literal(CONTENT_FORMAT_CATALOG.card_news.model),
+    Type.Literal(CONTENT_FORMAT_CATALOG.blog.model),
+    Type.Literal(CONTENT_FORMAT_CATALOG.reel.model),
+  ),
+  manifestContractVersion: Type.Literal(AI_CONTENT_MANIFEST_VERSION),
+}, { additionalProperties: false });
+
+export type GeneratedContentCatalogData = Static<typeof GeneratedContentCatalogSchema>;
+declare const verifiedGeneratedContentCatalogBrand: unique symbol;
+export type VerifiedGeneratedContentCatalog = GeneratedContentCatalogData & {
+  readonly [verifiedGeneratedContentCatalogBrand]: true;
+};
+
+const EXPECTED_GENERATED_SCHEMA_FILENAMES = [
+  "content-orchestration-v2.schema.json",
+  "content-proposal-request-v2.schema.json",
+  "proposal-base-input-v2.schema.json",
+  "proposal-input-v2.schema.json",
+  "research-evidence-v1.schema.json",
+  "content-proposal-v2.schema.json",
+  "content-generation-input-v3.schema.json",
+  "image-generation-package-v1.schema.json",
+  "card-news-plan-v2.schema.json",
+  "blog-plan-v2.schema.json",
+  "reel-plan-v2.schema.json",
+  "ai-content-v3.schema.json",
+  "content-prompt-binding-v1.schema.json",
+] as const;
+
+function codePointCompare(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+export function parseGeneratedContentCatalog(value: unknown): VerifiedGeneratedContentCatalog {
+  if (!Value.Check(GeneratedContentCatalogSchema, value)) {
+    throw new Error("generated_content_catalog_invalid");
+  }
+  const catalog = value as GeneratedContentCatalogData;
+  const schemaLeaves = [
+    catalog.schemas.contentOrchestrationV2,
+    catalog.schemas.contentProposalRequestV2,
+    catalog.schemas.proposalBaseInputV2,
+    catalog.schemas.proposalInputV2,
+    catalog.schemas.researchEvidenceV1,
+    catalog.schemas.contentProposalV2,
+    catalog.schemas.contentGenerationInputV3,
+    catalog.schemas.imageGenerationPackageV1,
+    catalog.schemas.plans.card_news,
+    catalog.schemas.plans.blog,
+    catalog.schemas.plans.reel,
+    catalog.schemas.aiContentV3,
+    catalog.schemas.contentPromptBindingV1,
+  ];
+  const actualFilenames = schemaLeaves.map(({ filename }) => filename).sort(codePointCompare);
+  const expectedFilenames = [...EXPECTED_GENERATED_SCHEMA_FILENAMES].sort(codePointCompare);
+  const formatCatalogAgrees = CONTENT_OUTPUT_FORMATS.every((format) =>
+    catalog.claimSlugs[format] === CONTENT_FORMAT_CATALOG[format].claimSlug
+    && catalog.services[format] === CONTENT_FORMAT_CATALOG[format].service
+    && catalog.workspaces[format] === CONTENT_FORMAT_CATALOG[format].workspace
+    && catalog.releaseComponentKeys[format] === CONTENT_FORMAT_CATALOG[format].releaseComponentKey
+    && catalog.imageEnvKeys[format] === CONTENT_FORMAT_CATALOG[format].imageEnv
+    && catalog.planContractVersions[format] === CONTENT_FORMAT_CATALOG[format].planContractVersion
+    && catalog.plannerModels[format] === CONTENT_FORMAT_CATALOG[format].model);
+  const proposalAgrees =
+    catalog.proposalContracts.requestSchemaSha256 === catalog.schemas.contentProposalRequestV2.sha256
+    && catalog.proposalContracts.baseInputSchemaSha256 === catalog.schemas.proposalBaseInputV2.sha256
+    && catalog.proposalContracts.composedInputSchemaSha256 === catalog.schemas.proposalInputV2.sha256
+    && catalog.proposalContracts.outputSchemaSha256 === catalog.schemas.contentProposalV2.sha256;
+  const duplicateHashesAgree =
+    catalog.researchEvidence.schemaSha256 === catalog.schemas.researchEvidenceV1.sha256
+    && catalog.promptBinding.schemaSha256 === catalog.schemas.contentPromptBindingV1.sha256;
+  if (JSON.stringify(actualFilenames) !== JSON.stringify(expectedFilenames)
+    || !formatCatalogAgrees || !proposalAgrees || !duplicateHashesAgree) {
+    throw new Error("generated_content_catalog_invalid");
+  }
+  return catalog as VerifiedGeneratedContentCatalog;
+}
 
 export type ContentFormatDescriptor =
   (typeof CONTENT_FORMAT_CATALOG)[ContentStudioOutputFormat];

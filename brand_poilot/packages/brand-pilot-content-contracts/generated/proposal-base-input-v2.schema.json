@@ -1,0 +1,567 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "brandCore": {
+      "additionalProperties": false,
+      "properties": {
+        "businessDescription": {
+          "maxLength": 10000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "companyOverview": {
+          "maxLength": 10000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "coreAppeal": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "detailedCategory": {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        },
+        "differentiator": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "primaryCategory": {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        },
+        "primaryTarget": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "versionId": {
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "versionId",
+        "companyOverview",
+        "businessDescription",
+        "primaryCategory",
+        "detailedCategory",
+        "primaryTarget",
+        "differentiator",
+        "coreAppeal"
+      ],
+      "type": "object"
+    },
+    "capturedAt": {
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z$",
+      "type": "string"
+    },
+    "contentInstruction": {
+      "anyOf": [
+        {
+          "maxLength": 4000,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "contractVersion": {
+      "const": "proposal-base-input.v2",
+      "type": "string"
+    },
+    "outputSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "aspectRatio": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "const": "1:1",
+                  "type": "string"
+                },
+                {
+                  "const": "4:5",
+                  "type": "string"
+                },
+                {
+                  "const": "16:9",
+                  "type": "string"
+                },
+                {
+                  "const": "9:16",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "channelTargets": {
+          "items": {
+            "anyOf": [
+              {
+                "const": "instagram",
+                "type": "string"
+              },
+              {
+                "const": "threads",
+                "type": "string"
+              },
+              {
+                "const": "x",
+                "type": "string"
+              },
+              {
+                "const": "linkedin",
+                "type": "string"
+              },
+              {
+                "const": "youtube",
+                "type": "string"
+              },
+              {
+                "const": "tiktok",
+                "type": "string"
+              },
+              {
+                "const": "blog_export",
+                "type": "string"
+              }
+            ]
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "type": "array"
+        },
+        "outputCount": {
+          "const": 1,
+          "type": "number"
+        },
+        "outputFormat": {
+          "anyOf": [
+            {
+              "const": "card_news",
+              "type": "string"
+            },
+            {
+              "const": "blog",
+              "type": "string"
+            },
+            {
+              "const": "reel",
+              "type": "string"
+            }
+          ]
+        },
+        "purpose": {
+          "anyOf": [
+            {
+              "const": "informational",
+              "type": "string"
+            },
+            {
+              "const": "marketing",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "outputFormat",
+        "channelTargets",
+        "aspectRatio",
+        "outputCount",
+        "purpose"
+      ],
+      "type": "object"
+    },
+    "product": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "benefits": {
+              "items": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 50,
+              "type": "array"
+            },
+            "cautions": {
+              "items": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 50,
+              "type": "array"
+            },
+            "description": {
+              "maxLength": 10000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "evergreenPurchaseInfo": {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            "features": {
+              "items": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 50,
+              "type": "array"
+            },
+            "id": {
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+              "type": "string"
+            },
+            "images": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "assetId": {
+                    "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                    "type": "string"
+                  },
+                  "checksum": {
+                    "pattern": "^[0-9a-fA-F]{64}$",
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "pattern": "^image/",
+                    "type": "string"
+                  },
+                  "role": {
+                    "anyOf": [
+                      {
+                        "const": "hero",
+                        "type": "string"
+                      },
+                      {
+                        "const": "detail",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "storagePath": {
+                    "maxLength": 2000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "storageUrl": {
+                    "maxLength": 2000,
+                    "minLength": 1,
+                    "pattern": "^https?://",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "assetId",
+                  "role",
+                  "storageUrl",
+                  "storagePath",
+                  "mimeType",
+                  "checksum"
+                ],
+                "type": "object"
+              },
+              "maxItems": 20,
+              "type": "array"
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "const": "product",
+                  "type": "string"
+                },
+                {
+                  "const": "service",
+                  "type": "string"
+                }
+              ]
+            },
+            "name": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "versionId": {
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "versionId",
+            "kind",
+            "name",
+            "description",
+            "features",
+            "benefits",
+            "cautions",
+            "evergreenPurchaseInfo",
+            "images"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "references": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "capturedAt": {
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z$",
+            "type": "string"
+          },
+          "contentHash": {
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "type": "string"
+          },
+          "image": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "checksum": {
+                    "pattern": "^[0-9a-fA-F]{64}$",
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "anyOf": [
+                      {
+                        "const": "image/png",
+                        "type": "string"
+                      },
+                      {
+                        "const": "image/jpeg",
+                        "type": "string"
+                      },
+                      {
+                        "const": "image/webp",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "storagePath": {
+                    "maxLength": 2000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "storageUrl": {
+                    "maxLength": 2000,
+                    "minLength": 1,
+                    "pattern": "^https?://",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "storageUrl",
+                  "storagePath",
+                  "mimeType",
+                  "checksum"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "referenceItemId": {
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+            "type": "string"
+          },
+          "roles": {
+            "items": {
+              "anyOf": [
+                {
+                  "const": "planning",
+                  "type": "string"
+                },
+                {
+                  "const": "copy_pattern",
+                  "type": "string"
+                },
+                {
+                  "const": "visual_composition",
+                  "type": "string"
+                }
+              ]
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "type": "array"
+          },
+          "snapshotId": {
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+            "type": "string"
+          },
+          "sourceUrl": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "pattern": "^https?://",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 50000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "referenceItemId",
+          "snapshotId",
+          "roles",
+          "title",
+          "sourceUrl",
+          "capturedAt",
+          "contentHash",
+          "text",
+          "image"
+        ],
+        "type": "object"
+      },
+      "maxItems": 5,
+      "type": "array"
+    },
+    "subject": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "topic_text",
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "canonicalUrl": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "pattern": "^https?://",
+              "type": "string"
+            },
+            "capturedAt": {
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z$",
+              "type": "string"
+            },
+            "contentHash": {
+              "pattern": "^[0-9a-fA-F]{64}$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "topic_url",
+              "type": "string"
+            },
+            "requestedUrl": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "pattern": "^https?://",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 50000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "maxLength": 500,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "requestedUrl",
+            "canonicalUrl",
+            "title",
+            "text",
+            "contentHash",
+            "capturedAt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "reference",
+              "type": "string"
+            },
+            "referenceIds": {
+              "items": {
+                "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                "type": "string"
+              },
+              "maxItems": 5,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "referenceIds"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "required": [
+    "contractVersion",
+    "brandCore",
+    "subject",
+    "contentInstruction",
+    "product",
+    "references",
+    "outputSettings",
+    "capturedAt"
+  ],
+  "type": "object"
+}
