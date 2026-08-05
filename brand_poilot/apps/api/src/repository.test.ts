@@ -327,6 +327,25 @@ function fakePoolWithClient(query: ReturnType<typeof vi.fn>) {
   };
 }
 
+describe("daily generation maintenance boundary", () => {
+  it("checks maintenance before the first brand query and leaves all execution counts unchanged", async () => {
+    const counts = { brands: 0, automation: 0, generation: 0 };
+    const query = vi.fn(async (sql: string) => {
+      if (sql === "select assert_ai_content_writable()") throw new Error("ai_content_maintenance");
+      if (sql.includes("from brands")) counts.brands += 1;
+      if (sql.includes("automation_runs")) counts.automation += 1;
+      if (sql.includes("ai_content_generations") || sql.includes("content_topics")) counts.generation += 1;
+      return { rowCount: 0, rows: [] };
+    });
+    const repository = createRepository(fakePoolWithClient(query) as any);
+
+    await expect(repository.runDailyGeneration()).rejects.toThrow("ai_content_maintenance");
+
+    expect(query.mock.calls.map(([sql]) => sql)).toEqual(["select assert_ai_content_writable()"]);
+    expect(counts).toEqual({ brands: 0, automation: 0, generation: 0 });
+  });
+});
+
 function isConnectedChannelQuery(sql: string) {
   return sql.includes("from brand_channels")
     && sql.includes("enabled = true")

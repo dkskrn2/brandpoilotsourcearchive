@@ -8,6 +8,8 @@ import {
   bootstrapFenceRelations,
   loadMigrations,
   readCanonicalBootstrapCatalogs,
+  readCanonicalEventTriggerCatalog,
+  readFenceSecurityCatalog,
   runMigrationsWithClient,
 } from "./migrationRunner.mjs";
 
@@ -74,6 +76,7 @@ const expected074FenceCatalog = Object.freeze([
   ["ai_content_usage_ledger", "customer_execution", "whole_relation"],
   ["ai_content_wiki_version_snapshots", "customer_execution", "whole_relation"],
   ["auto_approval_checks", "customer_execution", "whole_relation"],
+  ["automation_runs", "customer_execution", "daily_generation_automation"],
   ["brand_format_rotation_states", "customer_execution", "whole_relation"],
   ["channel_outputs", "customer_execution", "whole_relation"],
   ["content_topics", "customer_execution", "whole_relation"],
@@ -286,6 +289,19 @@ test("074 maintenance write fence classifies every shared execution row for inse
     await database.query("delete from publish_queue where id=$1", [relatedInsertRow.id]);
     const unrelatedRow = queueRows.rows[3];
 
+    // The current production constraint only permits daily_generation. Drop it in
+    // this fixture so the narrow shared-table classifier is proven future-safe.
+    await database.query("alter table automation_runs drop constraint automation_runs_type_check");
+    const automationRows = [];
+    for (const runType of ["daily_generation", "daily_generation", "manual_maintenance"]) {
+      const result = await database.query(
+        `insert into automation_runs(workspace_id,brand_id,run_type,run_key,scheduled_date)
+         values($1,$2,$3,$4,current_date) returning id`,
+        [publishing.workspaceId, publishing.brandId, runType, `${runType}:${randomUUID()}`],
+      );
+      automationRows.push(result.rows[0].id);
+    }
+
     const cutoverId = randomUUID();
     const digest = "b".repeat(64);
     const eventHash = "a".repeat(64);
@@ -313,6 +329,7 @@ test("074 maintenance write fence classifies every shared execution row for inse
     ), /ai_content_maintenance/);
     await assert.rejects(database.query("update topic_rows set status='used',used_at=now() where id=$1", [topicRows[0]]), /ai_content_maintenance/);
     await assert.rejects(database.query("delete from topic_rows where id=$1", [topicRows[1]]), /ai_content_maintenance/);
+    await assert.rejects(database.query("update topic_rows set status='skipped' where id=$1", [topicRows[0]]), /ai_content_maintenance/);
     await database.query("update topic_rows set status='invalid' where id=$1", [topicRows[2]]);
     await database.query("delete from topic_rows where id=$1", [topicRows[2]]);
 
@@ -323,12 +340,14 @@ test("074 maintenance write fence classifies every shared execution row for inse
     ), /ai_content_maintenance/);
     await assert.rejects(database.query("update source_crawl_runs set status='running' where id=$1", [crawlRows[0]]), /ai_content_maintenance/);
     await assert.rejects(database.query("delete from source_crawl_runs where id=$1", [crawlRows[1]]), /ai_content_maintenance/);
+    await assert.rejects(database.query("update source_crawl_runs set run_key=$2 where id=$1", [crawlRows[0], `manual:${randomUUID()}`]), /ai_content_maintenance/);
     await database.query("update source_crawl_runs set status='failed' where id=$1", [crawlRows[2]]);
     await database.query("delete from source_crawl_runs where id=$1", [crawlRows[2]]);
 
     await assert.rejects(database.query("insert into jobs(workspace_id,brand_id,job_type) values($1,$2,'instagram_feed_render')", [publishing.workspaceId, publishing.brandId]), /ai_content_maintenance/);
     await assert.rejects(database.query("update jobs set status='running' where id=$1", [jobRows[0]]), /ai_content_maintenance/);
     await assert.rejects(database.query("delete from jobs where id=$1", [jobRows[1]]), /ai_content_maintenance/);
+    await assert.rejects(database.query("update jobs set job_type='source_crawl' where id=$1", [jobRows[0]]), /ai_content_maintenance/);
     await database.query("update jobs set status='running' where id=$1", [jobRows[2]]);
     await database.query("delete from jobs where id=$1", [jobRows[2]]);
 
@@ -339,11 +358,13 @@ test("074 maintenance write fence classifies every shared execution row for inse
     ), /ai_content_maintenance/);
     await assert.rejects(database.query("update storage_artifacts set byte_size=1 where id=$1", [generatedArtifacts[0]]), /ai_content_maintenance/);
     await assert.rejects(database.query("delete from storage_artifacts where id=$1", [generatedArtifacts[1]]), /ai_content_maintenance/);
+    await assert.rejects(database.query("update storage_artifacts set artifact_type='brand_asset' where id=$1", [generatedArtifacts[0]]), /ai_content_maintenance/);
     await database.query("update storage_artifacts set byte_size=1 where id=$1", [brandArtifact.rows[0].id]);
     await database.query("delete from storage_artifacts where id=$1", [brandArtifact.rows[0].id]);
 
     await assert.rejects(database.query("update publish_queue set status='deferred' where id=$1", [queueRows.rows[0].id]), /ai_content_maintenance/);
     await assert.rejects(database.query("delete from publish_queue where id=$1", [queueRows.rows[1].id]), /ai_content_maintenance/);
+    await assert.rejects(database.query("update publish_queue set channel_output_id=$2 where id=$1", [queueRows.rows[0].id, unrelatedRow.channel_output_id]), /ai_content_maintenance/);
     await assert.rejects(database.query(
       `insert into publish_queue(id,workspace_id,brand_id,channel_output_id,topic_publish_group_id,brand_channel_id,channel,status,approval_type,idempotency_key)
        values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
@@ -360,6 +381,17 @@ test("074 maintenance write fence classifies every shared execution row for inse
         unrelatedRow.topic_publish_group_id, unrelatedRow.brand_channel_id, unrelatedRow.channel,
         unrelatedRow.approval_type, unrelatedRow.idempotency_key],
     );
+
+    await assert.rejects(database.query(
+      `insert into automation_runs(workspace_id,brand_id,run_type,run_key,scheduled_date)
+       values($1,$2,'daily_generation',$3,current_date)`,
+      [publishing.workspaceId, publishing.brandId, `daily_generation:${randomUUID()}`],
+    ), /ai_content_maintenance/);
+    await assert.rejects(database.query("update automation_runs set status='failed' where id=$1", [automationRows[0]]), /ai_content_maintenance/);
+    await assert.rejects(database.query("delete from automation_runs where id=$1", [automationRows[1]]), /ai_content_maintenance/);
+    await assert.rejects(database.query("update automation_runs set run_type='manual_maintenance' where id=$1", [automationRows[0]]), /ai_content_maintenance/);
+    await database.query("update automation_runs set status='succeeded' where id=$1", [automationRows[2]]);
+    await database.query("delete from automation_runs where id=$1", [automationRows[2]]);
   });
 });
 
@@ -374,9 +406,10 @@ test("074 prepare cutover accepts only the five roles sealed by bootstrap", asyn
       `insert into ai_content_bootstrap_state(
          singleton,authorization_request_id,authorization_sha256,migration_role_name,schema_owner_role_name,
          application_role_name,operator_role_name,cleanup_role_name,migration_sha256,role_catalog_sha256,
-         object_catalog_sha256,install_request_json,install_request_sha256)
+         object_catalog_sha256,fence_security_catalog_sha256,event_trigger_catalog_before_json,
+         event_trigger_catalog_before_sha256,event_trigger_catalog_before_count,install_request_json,install_request_sha256)
        values(true,'request-074',$1,'content_migration','content_owner','content_app','content_operator','content_cleanup',
-         $1,$1,$1,'{}'::jsonb,$1)`,
+         $1,$1,$1,$1,'{"contractVersion":"ai-content-event-trigger-catalog.v1","eventTriggers":[]}'::jsonb,$1,0,'{}'::jsonb,$1)`,
       ["a".repeat(64)],
     );
     await assert.rejects(database.query(
@@ -398,6 +431,7 @@ test("074 canonical authorization hashes are recomputed from the live PostgreSQL
       create role content_migration login noinherit;
       create role content_cleanup login;
       grant content_schema_owner to content_migration;
+      grant usage,create on schema public to content_schema_owner;
     `);
     for (const relation of bootstrapFenceRelations) {
       await database.exec(`alter table public."${relation}" owner to content_schema_owner`);
@@ -412,9 +446,9 @@ test("074 canonical authorization hashes are recomputed from the live PostgreSQL
       cleanupRoleName: "content_cleanup",
     });
     assert.equal(catalogs.roleRows.length, 5);
-    assert.equal(catalogs.objectRows.length, 41);
+    assert.equal(catalogs.objectRows.length, 42);
     assert.equal(catalogs.roleCatalogSha256, "cc34b17e777ba882b7677bf1ef2de508aade9c62f0a23d51b7759b70b5551121");
-    assert.equal(catalogs.objectCatalogSha256, "e6ad5ff26bd5ee8a06bda44fa15d94b83b890cb5619baeca43e8f932192769fa");
+    assert.equal(catalogs.objectCatalogSha256, "7eda2d5a8d4fa3f98ca921e8bf7ad806609617f3b9035b9d4279d1239a914993");
     await database.exec("grant content_schema_owner to content_application");
     await assert.rejects(readCanonicalBootstrapCatalogs({
       query: (sql, parameters = []) => database.query(sql, parameters),
@@ -425,6 +459,42 @@ test("074 canonical authorization hashes are recomputed from the live PostgreSQL
       migrationRoleName: "content_migration",
       cleanupRoleName: "content_cleanup",
     }), /bootstrap_role_catalog_invalid/);
+  });
+});
+
+test("074 post-migration security catalog is independently read from live PostgreSQL catalogs", async () => {
+  const migrations = await loadMigrations();
+  const migration074 = migrations.find((migration) => migration.id === "074_ai_content_maintenance_write_fence.sql");
+  assert.ok(migration074);
+  await withDatabase(async (database) => {
+    await runMigrationRange(database, migrations, "001_initial_schema.sql", "073_ai_content_generation_v2_render_pipeline.sql");
+    await database.exec(`
+      create role content_schema_owner nologin;
+      create role content_application login;
+      create role content_operator login;
+      create role content_migration login noinherit;
+      create role content_cleanup login;
+      grant content_schema_owner to content_migration;
+      grant usage,create on schema public to content_schema_owner;
+    `);
+    for (const relation of bootstrapFenceRelations) await database.exec(`alter table public."${relation}" owner to content_schema_owner`);
+    await database.exec(`set role content_schema_owner; ${migration074.sql} reset role;`);
+    await database.exec(`
+      revoke all on table ai_content_cutovers,ai_content_cutover_status_events,ai_content_maintenance_state,ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog from content_application;
+      grant select on table ai_content_maintenance_state to content_application;
+      grant execute on function assert_ai_content_writable() to content_application;
+      grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,text,text,text),set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text) to content_operator;
+      grant select on table ai_content_bootstrap_state,ai_content_write_fence_catalog to content_migration;
+      grant execute on function ai_content_cutover_bypass_allowed(),verify_ai_content_write_fence_catalog() to content_migration;
+    `);
+    const names = { schemaOwnerRoleName: "content_schema_owner", applicationRoleName: "content_application", operatorRoleName: "content_operator", migrationRoleName: "content_migration", cleanupRoleName: "content_cleanup" };
+    const catalog = await readFenceSecurityCatalog({ query: (sql, parameters = []) => database.query(sql, parameters) }, names);
+    assert.match(catalog.catalogSha256, /^[0-9a-f]{64}$/);
+    assert.equal(catalog.ordinaryTriggers.length, 42);
+    const eventCatalog = await readCanonicalEventTriggerCatalog({ query: (sql, parameters = []) => database.query(sql, parameters) });
+    assert.equal(eventCatalog.count, 0);
+    await database.exec("alter function assert_ai_content_writable() set search_path=public");
+    await assert.rejects(readFenceSecurityCatalog({ query: (sql, parameters = []) => database.query(sql, parameters) }, names), /bootstrap_074_fence_security_function_mismatch/);
   });
 });
 

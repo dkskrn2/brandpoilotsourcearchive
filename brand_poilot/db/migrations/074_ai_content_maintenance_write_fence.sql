@@ -93,6 +93,12 @@ create table ai_content_bootstrap_state (
   migration_sha256 text not null check (migration_sha256 ~ '^[0-9a-f]{64}$'),
   role_catalog_sha256 text not null check (role_catalog_sha256 ~ '^[0-9a-f]{64}$'),
   object_catalog_sha256 text not null check (object_catalog_sha256 ~ '^[0-9a-f]{64}$'),
+  fence_security_catalog_sha256 text not null check (fence_security_catalog_sha256 ~ '^[0-9a-f]{64}$'),
+  event_trigger_catalog_before_json jsonb not null check (jsonb_typeof(event_trigger_catalog_before_json)='object'),
+  event_trigger_catalog_before_sha256 text not null check (event_trigger_catalog_before_sha256 ~ '^[0-9a-f]{64}$'),
+  event_trigger_catalog_before_count integer not null check (event_trigger_catalog_before_count>=0),
+  event_trigger_catalog_after_sha256 text null check (event_trigger_catalog_after_sha256 is null or event_trigger_catalog_after_sha256 ~ '^[0-9a-f]{64}$'),
+  event_trigger_catalog_after_count integer null check (event_trigger_catalog_after_count is null or event_trigger_catalog_after_count>=1),
   install_request_json jsonb not null check (jsonb_typeof(install_request_json)='object'),
   install_request_sha256 text not null check (install_request_sha256 ~ '^[0-9a-f]{64}$'),
   provider_attestation_json jsonb null check (provider_attestation_json is null or jsonb_typeof(provider_attestation_json)='object'),
@@ -103,9 +109,11 @@ create table ai_content_bootstrap_state (
   created_at timestamptz not null default now(),
   constraint ai_content_bootstrap_provider_evidence_pair_check check (
     (provider_attestation_json is null and provider_attestation_sha256 is null and attestation_consumed_at is null
-      and revocation_request_json is null and revocation_request_sha256 is null)
+      and revocation_request_json is null and revocation_request_sha256 is null
+      and event_trigger_catalog_after_sha256 is null and event_trigger_catalog_after_count is null)
     or (provider_attestation_json is not null and provider_attestation_sha256 is not null and attestation_consumed_at is not null
-      and revocation_request_json is not null and revocation_request_sha256 is not null)
+      and revocation_request_json is not null and revocation_request_sha256 is not null
+      and event_trigger_catalog_after_sha256 is not null and event_trigger_catalog_after_count is not null)
   ),
   constraint ai_content_bootstrap_roles_distinct_check
     check (
@@ -136,7 +144,7 @@ create table ai_content_write_fence_catalog (
   relation_class text not null check (relation_class in ('customer_execution','cutover_control')),
   row_classifier text not null check (row_classifier in (
     'whole_relation','legacy_automated_topic','scheduled_proposal_refresh','legacy_content_job',
-    'ai_content_generated_artifact','ai_content_scheduled_publish'
+    'ai_content_generated_artifact','ai_content_scheduled_publish','daily_generation_automation'
   )),
   reviewed_at timestamptz not null default now()
 );
@@ -174,6 +182,7 @@ insert into ai_content_write_fence_catalog (relation_name, relation_class, row_c
   ('master_drafts','customer_execution','whole_relation'),
   ('channel_outputs','customer_execution','whole_relation'),
   ('auto_approval_checks','customer_execution','whole_relation'),
+  ('automation_runs','customer_execution','daily_generation_automation'),
   ('llm_runs','customer_execution','whole_relation'),
   ('review_events','customer_execution','whole_relation'),
   ('regeneration_requests','customer_execution','whole_relation'),
@@ -273,29 +282,42 @@ create function enforce_ai_content_write_fence() returns trigger
 language plpgsql security definer set search_path=pg_catalog,public as $$
 declare classifier text;
 declare should_fence boolean := false;
-declare candidate record;
 begin
-  if tg_op='DELETE' then candidate := old; else candidate := new; end if;
   select c.row_classifier into strict classifier
     from public.ai_content_write_fence_catalog c
    where c.relation_class='customer_execution' and c.relation_name=tg_table_name;
   if classifier='whole_relation' then
     should_fence := true;
   elsif classifier='legacy_automated_topic' then
-    should_fence := coalesce(candidate.status::text,'') in ('uploaded','queued','used');
+    if tg_op='INSERT' then should_fence := coalesce(new.status::text,'') in ('uploaded','queued','used');
+    elsif tg_op='DELETE' then should_fence := coalesce(old.status::text,'') in ('uploaded','queued','used');
+    else should_fence := coalesce(old.status::text,'') in ('uploaded','queued','used')
+      or coalesce(new.status::text,'') in ('uploaded','queued','used'); end if;
   elsif classifier='scheduled_proposal_refresh' then
-    should_fence := coalesce(candidate.run_key::text,'') like 'scheduled-proposal-refresh:%';
+    if tg_op='INSERT' then should_fence := coalesce(new.run_key::text,'') like 'scheduled-proposal-refresh:%';
+    elsif tg_op='DELETE' then should_fence := coalesce(old.run_key::text,'') like 'scheduled-proposal-refresh:%';
+    else should_fence := coalesce(old.run_key::text,'') like 'scheduled-proposal-refresh:%'
+      or coalesce(new.run_key::text,'') like 'scheduled-proposal-refresh:%'; end if;
   elsif classifier='legacy_content_job' then
-    should_fence := coalesce(candidate.job_type::text,'') in (
-      'instagram_feed_render','instagram_story_render','instagram_reel_render','threads_text_render'
-    );
+    if tg_op='INSERT' then should_fence := coalesce(new.job_type::text,'') in ('instagram_feed_render','instagram_story_render','instagram_reel_render','threads_text_render');
+    elsif tg_op='DELETE' then should_fence := coalesce(old.job_type::text,'') in ('instagram_feed_render','instagram_story_render','instagram_reel_render','threads_text_render');
+    else should_fence := coalesce(old.job_type::text,'') in ('instagram_feed_render','instagram_story_render','instagram_reel_render','threads_text_render')
+      or coalesce(new.job_type::text,'') in ('instagram_feed_render','instagram_story_render','instagram_reel_render','threads_text_render'); end if;
   elsif classifier='ai_content_generated_artifact' then
-    should_fence := coalesce(candidate.artifact_type::text,'')='generated_manifest';
+    if tg_op='INSERT' then should_fence := coalesce(new.artifact_type::text,'')='generated_manifest';
+    elsif tg_op='DELETE' then should_fence := coalesce(old.artifact_type::text,'')='generated_manifest';
+    else should_fence := coalesce(old.artifact_type::text,'')='generated_manifest'
+      or coalesce(new.artifact_type::text,'')='generated_manifest'; end if;
   elsif classifier='ai_content_scheduled_publish' then
-    should_fence := exists (
-      select 1 from public.channel_outputs output
-       where output.id=candidate.channel_output_id and output.ai_content_generation_output_id is not null
-    );
+    if tg_op='INSERT' then should_fence := exists (select 1 from public.channel_outputs output where output.id=new.channel_output_id and output.ai_content_generation_output_id is not null);
+    elsif tg_op='DELETE' then should_fence := exists (select 1 from public.channel_outputs output where output.id=old.channel_output_id and output.ai_content_generation_output_id is not null);
+    else should_fence := exists (select 1 from public.channel_outputs output where output.id=old.channel_output_id and output.ai_content_generation_output_id is not null)
+      or exists (select 1 from public.channel_outputs output where output.id=new.channel_output_id and output.ai_content_generation_output_id is not null); end if;
+  elsif classifier='daily_generation_automation' then
+    if tg_op='INSERT' then should_fence := coalesce(new.run_type::text,'')='daily_generation';
+    elsif tg_op='DELETE' then should_fence := coalesce(old.run_type::text,'')='daily_generation';
+    else should_fence := coalesce(old.run_type::text,'')='daily_generation'
+      or coalesce(new.run_type::text,'')='daily_generation'; end if;
   end if;
   if should_fence then perform public.assert_ai_content_writable(); end if;
   return case when tg_op='DELETE' then old else new end;
@@ -482,7 +504,7 @@ begin
          ),'sha256'),'hex')
     into catalog_hash
     from public.ai_content_write_fence_catalog;
-  if catalog_hash<>'2d687a828e0da7383f7e80343e6dd8748535730a63a34fccf0aed0796b3b280a' then
+  if catalog_hash<>'4a36aebb9b4e56e19ab35ec08e45b3e3f625bb4a87f98359ca08658a4e6e132b' then
     raise exception 'ai_content_write_fence_catalog_exact_mismatch';
   end if;
   select count(*) into mismatch
@@ -520,7 +542,7 @@ revoke all on table ai_content_cutovers,ai_content_cutover_status_events,
   ai_content_maintenance_state,ai_content_bootstrap_state,ai_content_ddl_allowlist,
   ai_content_write_fence_catalog from public;
 revoke execute on function ai_content_cutover_bypass_allowed(),assert_ai_content_writable(),
-  enforce_ai_content_write_fence(),enforce_ai_content_ddl_allowlist(),
+  enforce_ai_content_write_fence(),enforce_ai_content_ddl_allowlist(),ai_content_fence_trigger_name(text),
   forbid_ai_content_cutover_event_mutation(),prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,text,text,text),
   set_ai_content_maintenance(uuid,boolean),
   transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text),

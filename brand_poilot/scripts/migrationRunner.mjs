@@ -16,7 +16,7 @@ const compatibleMigrationChecksums = Object.freeze({
 });
 const migrationAdvisoryLockName = "brand-pilot:schema-migrations:v1";
 const bootstrap074MigrationId = "074_ai_content_maintenance_write_fence.sql";
-const providerAttestationContract = "ai-content-074-provider-attestation.v1";
+const providerAttestationContract = "ai-content-074-provider-attestation.v2";
 export const bootstrapFenceRelations = Object.freeze([
   "ai_content_analyzed_subject_snapshots", "ai_content_approved_proposal_versions",
   "ai_content_attachment_deletion_jobs", "ai_content_attachment_storage_path_guards",
@@ -31,10 +31,28 @@ export const bootstrapFenceRelations = Object.freeze([
   "ai_content_proposal_research_snapshots", "ai_content_proposals",
   "ai_content_subject_analyses", "ai_content_subject_appeal_regeneration_keys",
   "ai_content_subject_images", "ai_content_usage_ledger", "ai_content_wiki_version_snapshots",
-  "auto_approval_checks", "brand_format_rotation_states", "channel_outputs", "content_topics",
+  "auto_approval_checks", "automation_runs", "brand_format_rotation_states", "channel_outputs", "content_topics",
   "jobs", "llm_runs", "master_drafts", "publish_queue", "regeneration_requests",
   "review_events", "source_crawl_runs", "storage_artifacts", "topic_publish_groups", "topic_rows",
 ]);
+const bootstrapSharedClassifiers = Object.freeze({
+  automation_runs: "daily_generation_automation",
+  jobs: "legacy_content_job",
+  publish_queue: "ai_content_scheduled_publish",
+  source_crawl_runs: "scheduled_proposal_refresh",
+  storage_artifacts: "ai_content_generated_artifact",
+  topic_rows: "legacy_automated_topic",
+});
+export const bootstrapFenceCatalog = Object.freeze([
+  ...bootstrapFenceRelations.map((relation_name) => ({
+    relation_name,
+    relation_class: "customer_execution",
+    row_classifier: bootstrapSharedClassifiers[relation_name] ?? "whole_relation",
+  })),
+  ...["ai_content_bootstrap_state", "ai_content_cutover_status_events", "ai_content_cutovers",
+    "ai_content_ddl_allowlist", "ai_content_maintenance_state", "ai_content_write_fence_catalog"]
+    .map((relation_name) => ({ relation_name, relation_class: "cutover_control", row_classifier: "whole_relation" })),
+].sort((left, right) => left.relation_name < right.relation_name ? -1 : left.relation_name > right.relation_name ? 1 : 0));
 
 const lexicalCompare = (left, right) => left < right ? -1 : left > right ? 1 : 0;
 
@@ -113,6 +131,241 @@ export function hashEventTriggerDefinition(value) {
   return checksum(canonicalEventTriggerDefinition(value));
 }
 
+const normalizeAcl = (rows = []) => rows.map((row) => ({
+  grantee: String(row.grantee),
+  privilege: String(row.privilege).toUpperCase(),
+  grantable: row.grantable === true,
+})).sort((left, right) => lexicalCompare(`${left.grantee}|${left.privilege}|${left.grantable}`, `${right.grantee}|${right.privilege}|${right.grantable}`));
+
+export function canonicalFenceSecurityCatalog(value) {
+  const functions = [...(value.functions ?? [])].map((row) => ({
+    identity: String(row.identity),
+    definitionSha256: String(row.definition_sha256 ?? row.definitionSha256),
+    ownerRoleName: String(row.owner_role_name ?? row.ownerRoleName),
+    securityDefiner: (row.security_definer ?? row.securityDefiner) === true,
+    config: [...(row.config ?? [])].map((item) => String(item).replace(/\s+/g, "")).sort(lexicalCompare),
+    acl: normalizeAcl(row.acl),
+  })).sort((left, right) => lexicalCompare(left.identity, right.identity));
+  const ordinaryTriggers = [...(value.ordinaryTriggers ?? [])].map((row) => ({
+    relationName: String(row.relation_name ?? row.relationName),
+    triggerName: String(row.trigger_name ?? row.triggerName),
+    triggerType: Number(row.trigger_type ?? row.triggerType),
+    functionIdentity: String(row.function_identity ?? row.functionIdentity),
+    enabled: String(row.enabled),
+  })).sort((left, right) => lexicalCompare(left.relationName, right.relationName));
+  const fenceCatalog = [...(value.fenceCatalog ?? [])].map((row) => ({
+    relationName: String(row.relation_name ?? row.relationName),
+    relationClass: String(row.relation_class ?? row.relationClass),
+    rowClassifier: String(row.row_classifier ?? row.rowClassifier),
+  })).sort((left, right) => lexicalCompare(left.relationName, right.relationName));
+  const controlRelations = [...(value.controlRelations ?? [])].map((row) => ({
+    relationName: String(row.relation_name ?? row.relationName),
+    ownerRoleName: String(row.owner_role_name ?? row.ownerRoleName),
+    acl: normalizeAcl(row.acl),
+  })).sort((left, right) => lexicalCompare(left.relationName, right.relationName));
+  return JSON.stringify({ contractVersion: "ai-content-074-fence-security-catalog.v1", functions, ordinaryTriggers, fenceCatalog, controlRelations });
+}
+
+export function hashFenceSecurityCatalog(value) {
+  return checksum(canonicalFenceSecurityCatalog(value));
+}
+
+export function canonicalEventTriggerCatalog(rows) {
+  const eventTriggers = rows.map((row) => ({
+    eventTriggerName: String(row.event_trigger_name ?? row.eventTriggerName),
+    eventTriggerEvent: String(row.event_trigger_event ?? row.eventTriggerEvent),
+    eventTriggerTags: [...(row.event_trigger_tags ?? row.eventTriggerTags ?? [])].map(String).sort(lexicalCompare),
+    eventTriggerEnabled: String(row.event_trigger_enabled ?? row.eventTriggerEnabled),
+    eventTriggerOwner: String(row.event_trigger_owner ?? row.eventTriggerOwner),
+    eventTriggerFunction: String(row.event_trigger_function ?? row.eventTriggerFunction),
+    eventTriggerFunctionSha256: String(row.event_trigger_function_sha256 ?? row.eventTriggerFunctionSha256),
+  })).sort((left, right) => lexicalCompare(left.eventTriggerName, right.eventTriggerName));
+  return JSON.stringify({ contractVersion: "ai-content-event-trigger-catalog.v1", eventTriggers });
+}
+
+export function hashEventTriggerCatalog(rows) {
+  return checksum(canonicalEventTriggerCatalog(rows));
+}
+
+export async function readCanonicalEventTriggerCatalog(client) {
+  const result = await client.query(
+    `/* full_event_trigger_catalog_v1 */
+     select event_trigger.evtname as event_trigger_name,event_trigger.evtevent as event_trigger_event,
+            coalesce(event_trigger.evttags,'{}'::text[]) as event_trigger_tags,
+            case event_trigger.evtenabled when 'O' then 'enabled' else event_trigger.evtenabled::text end as event_trigger_enabled,
+            owner.rolname as event_trigger_owner,
+            namespace.nspname || '.' || function.proname as event_trigger_function,
+            encode(digest(pg_get_functiondef(function.oid),'sha256'),'hex') as event_trigger_function_sha256
+       from pg_event_trigger event_trigger
+       join pg_roles owner on owner.oid=event_trigger.evtowner
+       join pg_proc function on function.oid=event_trigger.evtfoid
+       join pg_namespace namespace on namespace.oid=function.pronamespace
+      order by event_trigger.evtname`,
+  );
+  return {
+    rows: result.rows,
+    count: result.rows.length,
+    catalogSha256: hashEventTriggerCatalog(result.rows),
+    canonicalJson: canonicalEventTriggerCatalog(result.rows),
+  };
+}
+
+export function validateEventTriggerCatalogDelta(beforeCanonicalJson, afterRows, authorization) {
+  let before;
+  try { before = JSON.parse(beforeCanonicalJson); } catch { throw new Error("bootstrap_074_event_trigger_baseline_invalid"); }
+  const after = JSON.parse(canonicalEventTriggerCatalog(afterRows));
+  if (before?.contractVersion !== "ai-content-event-trigger-catalog.v1" || !Array.isArray(before.eventTriggers)
+    || after.eventTriggers.length !== before.eventTriggers.length + 1) {
+    throw new Error("bootstrap_074_event_trigger_delta_invalid");
+  }
+  const beforeByName = new Map(before.eventTriggers.map((row) => [row.eventTriggerName, row]));
+  for (const row of after.eventTriggers) {
+    if (beforeByName.has(row.eventTriggerName)
+      && exactJson(beforeByName.get(row.eventTriggerName)) !== exactJson(row)) {
+      throw new Error("bootstrap_074_event_trigger_delta_invalid");
+    }
+  }
+  const added = after.eventTriggers.filter((row) => !beforeByName.has(row.eventTriggerName));
+  if (added.length !== 1) throw new Error("bootstrap_074_event_trigger_delta_invalid");
+  const expected = JSON.parse(canonicalEventTriggerCatalog([{
+    event_trigger_name: authorization.eventTriggerName,
+    event_trigger_event: authorization.eventTriggerEvent,
+    event_trigger_tags: authorization.eventTriggerTags,
+    event_trigger_enabled: "enabled",
+    event_trigger_owner: authorization.eventTriggerOwner,
+    event_trigger_function: authorization.eventTriggerFunction,
+    event_trigger_function_sha256: authorization.eventTriggerFunctionSha256,
+  }])).eventTriggers[0];
+  if (exactJson(added[0]) !== exactJson(expected)) throw new Error("bootstrap_074_event_trigger_delta_invalid");
+  return { catalogSha256: hashEventTriggerCatalog(afterRows), count: after.eventTriggers.length };
+}
+
+const fenceSecurityFunctions = Object.freeze([
+  { identity: "public.ai_content_cutover_bypass_allowed()", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "migration" },
+  { identity: "public.ai_content_fence_trigger_name(text)", securityDefiner: false, config: ["search_path=pg_catalog"] },
+  { identity: "public.assert_ai_content_writable()", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "application" },
+  { identity: "public.enforce_ai_content_ddl_allowlist()", securityDefiner: true, config: ["search_path=pg_catalog,public"] },
+  { identity: "public.enforce_ai_content_write_fence()", securityDefiner: true, config: ["search_path=pg_catalog,public"] },
+  { identity: "public.forbid_ai_content_cutover_event_mutation()", securityDefiner: false, config: ["search_path=pg_catalog,public"] },
+  { identity: "public.prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamp with time zone,text,text,text,text,text)", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "operator" },
+  { identity: "public.set_ai_content_maintenance(uuid,boolean)", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "operator" },
+  { identity: "public.transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamp with time zone,text)", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "operator" },
+  { identity: "public.verify_ai_content_write_fence_catalog()", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "migration" },
+]);
+const fenceControlRelations = Object.freeze([
+  "ai_content_bootstrap_state", "ai_content_cutover_status_events", "ai_content_cutovers",
+  "ai_content_ddl_allowlist", "ai_content_maintenance_state", "ai_content_write_fence_catalog",
+]);
+const tableOwnerPrivileges = Object.freeze(["DELETE", "INSERT", "MAINTAIN", "REFERENCES", "SELECT", "TRIGGER", "TRUNCATE", "UPDATE"]);
+
+function expectedAcl(owner, extra = []) {
+  return normalizeAcl([{ grantee: owner, privilege: "EXECUTE", grantable: false }, ...extra]);
+}
+
+function exactJson(value) {
+  return JSON.stringify(value);
+}
+
+export async function readFenceSecurityCatalog(client, names) {
+  const functionResult = await client.query(
+    `/* fence_security_functions_v1 */
+     select requested.identity,
+            encode(digest(pg_get_functiondef(function.oid),'sha256'),'hex') as definition_sha256,
+            owner.rolname as owner_role_name,function.prosecdef as security_definer,
+            coalesce(function.proconfig,'{}'::text[]) as config,
+            coalesce((select jsonb_agg(jsonb_build_object(
+              'grantee',case acl.grantee when 0 then 'PUBLIC' else grantee.rolname end,
+              'privilege',acl.privilege_type,'grantable',acl.is_grantable
+            ) order by case acl.grantee when 0 then 'PUBLIC' else grantee.rolname end,acl.privilege_type)
+              from aclexplode(coalesce(function.proacl,acldefault('f',function.proowner))) acl
+              left join pg_roles grantee on grantee.oid=acl.grantee),'[]'::jsonb) as acl
+       from unnest($1::text[]) requested(identity)
+       join pg_proc function on function.oid=to_regprocedure(requested.identity)
+       join pg_roles owner on owner.oid=function.proowner
+      order by requested.identity`,
+    [fenceSecurityFunctions.map((item) => item.identity)],
+  );
+  if (functionResult.rows.length !== fenceSecurityFunctions.length) throw new Error("bootstrap_074_fence_security_function_missing");
+  const functionByIdentity = new Map(functionResult.rows.map((row) => [String(row.identity), row]));
+  const roleByKey = { application: names.applicationRoleName, operator: names.operatorRoleName, migration: names.migrationRoleName };
+  for (const expected of fenceSecurityFunctions) {
+    const actual = functionByIdentity.get(expected.identity);
+    const extras = expected.execute ? [{ grantee: roleByKey[expected.execute], privilege: "EXECUTE", grantable: false }] : [];
+    if (!actual || actual.owner_role_name !== names.schemaOwnerRoleName
+      || actual.security_definer !== expected.securityDefiner
+      || exactJson([...(actual.config ?? [])].map((item) => String(item).replace(/\s+/g, "")).sort(lexicalCompare)) !== exactJson(expected.config)
+      || exactJson(normalizeAcl(actual.acl)) !== exactJson(expectedAcl(names.schemaOwnerRoleName, extras))) {
+      throw new Error(`bootstrap_074_fence_security_function_mismatch:${expected.identity}:${JSON.stringify({ owner: actual?.owner_role_name, securityDefiner: actual?.security_definer, config: actual?.config, acl: normalizeAcl(actual?.acl) })}`);
+    }
+  }
+  const triggerResult = await client.query(
+    `/* fence_security_ordinary_triggers_v1 */
+     select relation.relname as relation_name,trigger.tgname as trigger_name,
+            trigger.tgtype::integer as trigger_type,trigger.tgenabled as enabled,
+            namespace.nspname || '.' || function.proname || '(' || pg_get_function_identity_arguments(function.oid) || ')' as function_identity
+       from pg_trigger trigger
+       join pg_class relation on relation.oid=trigger.tgrelid
+       join pg_namespace relation_namespace on relation_namespace.oid=relation.relnamespace and relation_namespace.nspname='public'
+       join pg_proc function on function.oid=trigger.tgfoid
+       join pg_namespace namespace on namespace.oid=function.pronamespace
+      where not trigger.tgisinternal and trigger.tgfoid='public.enforce_ai_content_write_fence()'::regprocedure
+      order by relation.relname`,
+  );
+  if (triggerResult.rows.length !== bootstrapFenceRelations.length) throw new Error("bootstrap_074_fence_security_trigger_mismatch");
+  for (const row of triggerResult.rows) {
+    const expectedName = `ai_content_fence_${String(row.relation_name).slice(0, 30)}_${createHash("md5").update(String(row.relation_name)).digest("hex").slice(0, 12)}`;
+    if (!bootstrapFenceRelations.includes(String(row.relation_name)) || row.trigger_name !== expectedName
+      || Number(row.trigger_type) !== 31 || row.enabled !== "A"
+      || row.function_identity !== "public.enforce_ai_content_write_fence()") {
+      throw new Error("bootstrap_074_fence_security_trigger_mismatch");
+    }
+  }
+  const catalogResult = await client.query(
+    `/* fence_security_catalog_rows_v1 */
+     select relation_name,relation_class,row_classifier
+       from ai_content_write_fence_catalog order by relation_name`,
+  );
+  const catalogText = catalogResult.rows.map((row) => `${row.relation_name}|${row.relation_class}|${row.row_classifier}`).join("\n");
+  if (catalogResult.rows.length !== 48 || checksum(catalogText) !== "4a36aebb9b4e56e19ab35ec08e45b3e3f625bb4a87f98359ca08658a4e6e132b") {
+    throw new Error("bootstrap_074_fence_security_catalog_mismatch");
+  }
+  const controlResult = await client.query(
+    `/* fence_security_control_relations_v1 */
+     select requested.relation_name,owner.rolname as owner_role_name,
+            coalesce((select jsonb_agg(jsonb_build_object(
+              'grantee',case acl.grantee when 0 then 'PUBLIC' else grantee.rolname end,
+              'privilege',acl.privilege_type,'grantable',acl.is_grantable
+            ) order by case acl.grantee when 0 then 'PUBLIC' else grantee.rolname end,acl.privilege_type)
+              from aclexplode(coalesce(relation.relacl,acldefault('r',relation.relowner))) acl
+              left join pg_roles grantee on grantee.oid=acl.grantee),'[]'::jsonb) as acl
+       from unnest($1::text[]) requested(relation_name)
+       join pg_class relation on relation.oid=to_regclass('public.' || requested.relation_name)
+       join pg_roles owner on owner.oid=relation.relowner
+      order by requested.relation_name`,
+    [fenceControlRelations],
+  );
+  if (controlResult.rows.length !== fenceControlRelations.length) throw new Error("bootstrap_074_fence_security_control_mismatch");
+  for (const row of controlResult.rows) {
+    const extra = row.relation_name === "ai_content_maintenance_state"
+      ? [{ grantee: names.applicationRoleName, privilege: "SELECT", grantable: false }]
+      : row.relation_name === "ai_content_bootstrap_state" || row.relation_name === "ai_content_write_fence_catalog"
+        ? [{ grantee: names.migrationRoleName, privilege: "SELECT", grantable: false }]
+        : [];
+    const ownerAcl = tableOwnerPrivileges.map((privilege) => ({ grantee: names.schemaOwnerRoleName, privilege, grantable: false }));
+    if (row.owner_role_name !== names.schemaOwnerRoleName
+      || exactJson(normalizeAcl(row.acl)) !== exactJson(normalizeAcl([...ownerAcl, ...extra]))) {
+      throw new Error(`bootstrap_074_fence_security_control_mismatch:${row.relation_name}:${JSON.stringify({ owner: row.owner_role_name, acl: normalizeAcl(row.acl) })}`);
+    }
+  }
+  const catalog = {
+    functions: functionResult.rows,
+    ordinaryTriggers: triggerResult.rows,
+    fenceCatalog: catalogResult.rows,
+    controlRelations: controlResult.rows,
+  };
+  return { ...catalog, canonicalJson: canonicalFenceSecurityCatalog(catalog), catalogSha256: hashFenceSecurityCatalog(catalog) };
+}
+
 export async function readCanonicalBootstrapCatalogs(client, names) {
   const roleNames = [names.schemaOwnerRoleName, names.applicationRoleName, names.operatorRoleName,
     names.migrationRoleName, names.cleanupRoleName];
@@ -169,7 +422,8 @@ function canonicalBootstrapAuthorization(value) {
     "operatorRoleName", "cleanupRoleName", "eventTriggerName",
     "eventTriggerFunction", "eventTriggerFunctionSha256",
     "eventTriggerEvent", "eventTriggerOwner", "eventTriggerTags",
-    "eventTriggerDefinitionSha256", "issuedAt", "expiresAt",
+    "eventTriggerDefinitionSha256", "eventTriggerCatalogBeforeSha256",
+    "eventTriggerCatalogBeforeCount", "issuedAt", "expiresAt",
   ];
   return JSON.stringify(Object.fromEntries(keys.map((key) => [key, value[key]])));
 }
@@ -193,7 +447,7 @@ export function signBootstrapRoleAuthorization(authorization, signingKey) {
 }
 
 export function validateBootstrapRoleAuthorization(authorization, context) {
-  if (!authorization || authorization.contractVersion !== "ai-content-bootstrap-role-authorization.v1") {
+  if (!authorization || authorization.contractVersion !== "ai-content-bootstrap-role-authorization.v2") {
     throw new Error("bootstrap_role_authorization_contract_invalid");
   }
   const expectedSignature = signBootstrapRoleAuthorization(authorization, context.signingKey);
@@ -233,6 +487,15 @@ export function validateBootstrapRoleAuthorization(authorization, context) {
   if (authorization.objectCatalogSha256 !== context.objectCatalogSha256) {
     throw new Error("bootstrap_role_authorization_object_catalog_mismatch");
   }
+  if (!exactHex(authorization.eventTriggerCatalogBeforeSha256, 64)
+    || !Number.isInteger(authorization.eventTriggerCatalogBeforeCount)
+    || authorization.eventTriggerCatalogBeforeCount < 0
+    || (context.eventTriggerCatalogBeforeSha256 !== undefined
+      && authorization.eventTriggerCatalogBeforeSha256 !== context.eventTriggerCatalogBeforeSha256)
+    || (context.eventTriggerCatalogBeforeCount !== undefined
+      && authorization.eventTriggerCatalogBeforeCount !== context.eventTriggerCatalogBeforeCount)) {
+    throw new Error("bootstrap_role_authorization_event_trigger_catalog_mismatch");
+  }
   const roles = [authorization.schemaOwnerRoleName, authorization.applicationRoleName,
     authorization.operatorRoleName, authorization.migrationRoleName, authorization.cleanupRoleName];
   if (roles.some((role) => typeof role !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(role))
@@ -263,13 +526,35 @@ function canonicalProviderAttestation(value) {
     "action", "eventTriggerName", "eventTriggerFunction", "eventTriggerFunctionSha256",
     "eventTriggerEvent", "eventTriggerTags", "eventTriggerDefinitionSha256", "eventTriggerOwner", "eventTriggerEnabled",
     "migrationId", "migrationSha256", "imageDigest", "imageSourceLabel",
-    "roleCatalogSha256", "objectCatalogSha256", "issuedAt"];
+    "roleCatalogSha256", "objectCatalogSha256", "fenceSecurityCatalogSha256",
+    "eventTriggerCatalogBeforeSha256", "eventTriggerCatalogBeforeCount",
+    "eventTriggerCatalogAfterSha256", "eventTriggerCatalogAfterCount", "issuedAt"];
   return JSON.stringify(Object.fromEntries(keys.map((key) => [key, value[key]])));
 }
 
-export function buildProviderEventTriggerInstallRequest(authorization) {
+function canonicalProviderInstallRequest(value) {
+  const keys = ["contractVersion", "authorizationRequestId", "action", "eventTriggerName",
+    "eventTriggerFunction", "eventTriggerFunctionSha256", "eventTriggerEvent", "eventTriggerTags",
+    "eventTriggerOwner", "eventTriggerEnabled", "eventTriggerDefinitionSha256", "migrationId",
+    "migrationSha256", "imageDigest", "imageSourceLabel", "roleCatalogSha256", "objectCatalogSha256",
+    "fenceSecurityCatalogSha256", "eventTriggerCatalogBeforeSha256", "eventTriggerCatalogBeforeCount"];
+  const request = Object.fromEntries(keys.map((key) => [key, value[key]]));
+  request.eventTriggerTags = [...(value.eventTriggerTags ?? [])].map(String).sort(lexicalCompare);
+  request.eventTriggerCatalogBefore = JSON.parse(canonicalEventTriggerCatalog(value.eventTriggerCatalogBefore?.eventTriggers ?? []));
+  return JSON.stringify(request);
+}
+
+export function hashProviderEventTriggerInstallRequest(value) {
+  return checksum(canonicalProviderInstallRequest(value));
+}
+
+export function buildProviderEventTriggerInstallRequest(authorization, seals) {
+  if (!exactHex(seals?.fenceSecurityCatalogSha256, 64)
+    || typeof seals?.eventTriggerCatalogBeforeCanonicalJson !== "string") {
+    throw new Error("bootstrap_074_install_seals_required");
+  }
   const request = {
-    contractVersion: "ai-content-074-provider-install-request.v1",
+    contractVersion: "ai-content-074-provider-install-request.v2",
     authorizationRequestId: authorization.requestId,
     action: "create_enable_verify_074_event_trigger",
     eventTriggerName: authorization.eventTriggerName,
@@ -286,8 +571,12 @@ export function buildProviderEventTriggerInstallRequest(authorization) {
     imageSourceLabel: authorization.imageSourceLabel,
     roleCatalogSha256: authorization.roleCatalogSha256,
     objectCatalogSha256: authorization.objectCatalogSha256,
+    fenceSecurityCatalogSha256: seals.fenceSecurityCatalogSha256,
+    eventTriggerCatalogBeforeSha256: authorization.eventTriggerCatalogBeforeSha256,
+    eventTriggerCatalogBeforeCount: authorization.eventTriggerCatalogBeforeCount,
+    eventTriggerCatalogBefore: JSON.parse(seals.eventTriggerCatalogBeforeCanonicalJson),
   };
-  return { ...request, requestSha256: checksum(JSON.stringify(request)) };
+  return { ...request, requestSha256: hashProviderEventTriggerInstallRequest(request) };
 }
 
 export function signProviderEventTriggerAttestation(attestation, signingKey) {
@@ -309,6 +598,10 @@ export function validateProviderEventTriggerAttestation(attestation, { authoriza
     || issued > currentTime) {
     throw new Error("provider_attestation_stale");
   }
+  if (!exactHex(attestation.eventTriggerCatalogAfterSha256, 64)
+    || !Number.isInteger(attestation.eventTriggerCatalogAfterCount)) {
+    throw new Error("provider_attestation_event_trigger_catalog_invalid");
+  }
   const expected = {
     providerRequestSha256: installRequest.requestSha256,
     authorizationRequestId: authorization.requestId,
@@ -327,6 +620,11 @@ export function validateProviderEventTriggerAttestation(attestation, { authoriza
     imageSourceLabel: authorization.imageSourceLabel,
     roleCatalogSha256: authorization.roleCatalogSha256,
     objectCatalogSha256: authorization.objectCatalogSha256,
+    fenceSecurityCatalogSha256: installRequest.fenceSecurityCatalogSha256,
+    eventTriggerCatalogBeforeSha256: installRequest.eventTriggerCatalogBeforeSha256,
+    eventTriggerCatalogBeforeCount: installRequest.eventTriggerCatalogBeforeCount,
+    eventTriggerCatalogAfterSha256: attestation.eventTriggerCatalogAfterSha256,
+    eventTriggerCatalogAfterCount: installRequest.eventTriggerCatalogBeforeCount + 1,
   };
   for (const [key, value] of Object.entries(expected)) {
     const matches = Array.isArray(value)
@@ -666,6 +964,8 @@ export async function runMigrationsWithClient({
     let providerInstallRequest;
     let providerAttestation;
     let revocationRequest;
+    let eventTriggerCatalog;
+    let fenceSecurityCatalog;
     if (plan.pending.some((migration) => migration.id === bootstrap074MigrationId)) {
       if (!bootstrap074?.authorization) throw new Error("bootstrap_role_authorization_required");
       authorization = validateBootstrapRoleAuthorization(bootstrap074.authorization, {
@@ -688,6 +988,11 @@ export async function runMigrationsWithClient({
       if (authorization.objectCatalogSha256 !== liveCatalogs.objectCatalogSha256) {
         throw new Error("bootstrap_role_authorization_object_catalog_mismatch");
       }
+      eventTriggerCatalog = await readCanonicalEventTriggerCatalog(client);
+      if (authorization.eventTriggerCatalogBeforeSha256 !== eventTriggerCatalog.catalogSha256
+        || authorization.eventTriggerCatalogBeforeCount !== eventTriggerCatalog.count) {
+        throw new Error("bootstrap_role_authorization_event_trigger_catalog_mismatch");
+      }
     }
     for (const migration of plan.pending) {
       await client.query("begin");
@@ -701,25 +1006,11 @@ export async function runMigrationsWithClient({
           const appRole = quoteIdentifier(authorization.applicationRoleName);
           const operatorRole = quoteIdentifier(authorization.operatorRoleName);
           const migrationRole = quoteIdentifier(authorization.migrationRoleName);
-          providerInstallRequest = buildProviderEventTriggerInstallRequest(authorization);
-          const authorizationSha256 = checksum(canonicalBootstrapAuthorization(authorization));
-          await client.query(
-            `insert into ai_content_bootstrap_state (
-               singleton,authorization_request_id,authorization_sha256,
-               migration_role_name,schema_owner_role_name,application_role_name,operator_role_name,cleanup_role_name,
-               migration_sha256,role_catalog_sha256,object_catalog_sha256,
-               install_request_json,install_request_sha256
-             ) values (true,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)`,
-            [authorization.requestId,authorizationSha256,authorization.migrationRoleName,
-              authorization.schemaOwnerRoleName,authorization.applicationRoleName,authorization.operatorRoleName,
-              authorization.cleanupRoleName,authorization.migrationSha256,authorization.roleCatalogSha256,
-              authorization.objectCatalogSha256,JSON.stringify(providerInstallRequest),providerInstallRequest.requestSha256],
-          );
           await client.query(`revoke all on table ai_content_cutovers,ai_content_cutover_status_events,ai_content_maintenance_state,ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog from ${appRole}`);
           await client.query(`grant select on table ai_content_maintenance_state to ${appRole}`);
           await client.query(`grant execute on function assert_ai_content_writable() to ${appRole}`);
           await client.query(`grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,text,text,text),set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text) to ${operatorRole}`);
-          await client.query(`grant select on table ai_content_bootstrap_state to ${migrationRole}`);
+          await client.query(`grant select on table ai_content_bootstrap_state,ai_content_write_fence_catalog to ${migrationRole}`);
           await client.query(`grant execute on function ai_content_cutover_bypass_allowed(),verify_ai_content_write_fence_catalog() to ${migrationRole}`);
           const roleSafety = await client.query(
             `/* bootstrap_application_privileges_v1 */
@@ -750,6 +1041,31 @@ export async function runMigrationsWithClient({
             || safety.app_missing_minimum || safety.app_forbidden_execute) {
             throw new Error("bootstrap_074_application_role_unsafe");
           }
+          fenceSecurityCatalog = await readFenceSecurityCatalog(client, authorization);
+          const unchangedEventCatalog = await readCanonicalEventTriggerCatalog(client);
+          if (unchangedEventCatalog.catalogSha256 !== eventTriggerCatalog.catalogSha256
+            || unchangedEventCatalog.count !== eventTriggerCatalog.count) {
+            throw new Error("bootstrap_074_event_trigger_catalog_changed_during_stage_one");
+          }
+          providerInstallRequest = buildProviderEventTriggerInstallRequest(authorization, {
+            fenceSecurityCatalogSha256: fenceSecurityCatalog.catalogSha256,
+            eventTriggerCatalogBeforeCanonicalJson: eventTriggerCatalog.canonicalJson,
+          });
+          const authorizationSha256 = checksum(canonicalBootstrapAuthorization(authorization));
+          await client.query(
+            `insert into ai_content_bootstrap_state (
+               singleton,authorization_request_id,authorization_sha256,
+               migration_role_name,schema_owner_role_name,application_role_name,operator_role_name,cleanup_role_name,
+               migration_sha256,role_catalog_sha256,object_catalog_sha256,fence_security_catalog_sha256,
+               event_trigger_catalog_before_json,event_trigger_catalog_before_sha256,event_trigger_catalog_before_count,
+               install_request_json,install_request_sha256
+             ) values (true,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15::jsonb,$16)`,
+            [authorization.requestId,authorizationSha256,authorization.migrationRoleName,
+              authorization.schemaOwnerRoleName,authorization.applicationRoleName,authorization.operatorRoleName,
+              authorization.cleanupRoleName,authorization.migrationSha256,authorization.roleCatalogSha256,
+              authorization.objectCatalogSha256,fenceSecurityCatalog.catalogSha256,eventTriggerCatalog.canonicalJson,
+              eventTriggerCatalog.catalogSha256,eventTriggerCatalog.count,JSON.stringify(providerInstallRequest),providerInstallRequest.requestSha256],
+          );
         }
         await client.query("insert into schema_migrations (id, checksum) values ($1, $2)", [migration.id, migration.checksum]);
         if (migration.id === bootstrap074MigrationId) {
@@ -779,7 +1095,9 @@ export async function runMigrationsWithClient({
         `/* bootstrap_durable_state_v1 */
          select authorization_request_id,authorization_sha256,
                 migration_role_name,schema_owner_role_name,application_role_name,operator_role_name,cleanup_role_name,
-                migration_sha256,role_catalog_sha256,object_catalog_sha256,
+                migration_sha256,role_catalog_sha256,object_catalog_sha256,fence_security_catalog_sha256,
+                event_trigger_catalog_before_json,event_trigger_catalog_before_sha256,event_trigger_catalog_before_count,
+                event_trigger_catalog_after_sha256,event_trigger_catalog_after_count,
                 install_request_json,install_request_sha256,
                 provider_attestation_json,provider_attestation_sha256,attestation_consumed_at,
                 revocation_request_json,revocation_request_sha256
@@ -787,7 +1105,13 @@ export async function runMigrationsWithClient({
       );
       const sealed = bootstrapState.rows[0];
       const authorizationSha256 = checksum(canonicalBootstrapAuthorization(authorization));
-      const expectedInstall = buildProviderEventTriggerInstallRequest(authorization);
+      const baselineCanonicalJson = canonicalEventTriggerCatalog(
+        sealed?.event_trigger_catalog_before_json?.eventTriggers ?? [],
+      );
+      const expectedInstall = sealed ? buildProviderEventTriggerInstallRequest(authorization, {
+        fenceSecurityCatalogSha256: sealed.fence_security_catalog_sha256,
+        eventTriggerCatalogBeforeCanonicalJson: baselineCanonicalJson,
+      }) : null;
       if (!sealed
         || sealed.authorization_request_id!==authorization.requestId
         || sealed.authorization_sha256!==authorizationSha256
@@ -799,27 +1123,42 @@ export async function runMigrationsWithClient({
         || sealed.migration_sha256!==authorization.migrationSha256
         || sealed.role_catalog_sha256!==authorization.roleCatalogSha256
         || sealed.object_catalog_sha256!==authorization.objectCatalogSha256
-        || sealed.install_request_sha256!==expectedInstall.requestSha256) {
+        || sealed.event_trigger_catalog_before_sha256!==authorization.eventTriggerCatalogBeforeSha256
+        || sealed.event_trigger_catalog_before_count!==authorization.eventTriggerCatalogBeforeCount
+        || sealed.install_request_sha256!==expectedInstall.requestSha256
+        || sealed.install_request_sha256!==hashProviderEventTriggerInstallRequest(sealed.install_request_json)) {
         throw new Error("bootstrap_074_state_mismatch");
       }
       providerInstallRequest = sealed.install_request_json;
       const suppliedAttestationSha256 = bootstrap074.providerAttestation
         ? checksum(canonicalProviderAttestation(bootstrap074.providerAttestation))
         : null;
+      liveCatalogs = await readCanonicalBootstrapCatalogs(client, authorization);
+      if (authorization.roleCatalogSha256 !== liveCatalogs.roleCatalogSha256
+        || authorization.objectCatalogSha256 !== liveCatalogs.objectCatalogSha256) {
+        throw new Error("bootstrap_074_live_catalog_mismatch");
+      }
+      fenceSecurityCatalog = await readFenceSecurityCatalog(client, authorization);
+      if (fenceSecurityCatalog.catalogSha256 !== sealed.fence_security_catalog_sha256) {
+        throw new Error("bootstrap_074_fence_security_catalog_mismatch");
+      }
+      await client.query("select verify_ai_content_write_fence_catalog()");
+      eventTriggerCatalog = await readCanonicalEventTriggerCatalog(client);
       if (sealed.provider_attestation_sha256) {
         if (bootstrap074.providerAttestation) {
           if (sealed.provider_attestation_sha256!==suppliedAttestationSha256
             || !sealed.revocation_request_json) {
             throw new Error("provider_attestation_replayed");
           }
+          const delta = validateEventTriggerCatalogDelta(baselineCanonicalJson, eventTriggerCatalog.rows, authorization);
+          if (delta.catalogSha256 !== sealed.event_trigger_catalog_after_sha256
+            || delta.count !== sealed.event_trigger_catalog_after_count) {
+            throw new Error("bootstrap_074_live_event_trigger_catalog_mismatch");
+          }
+          await readLiveEventTriggerEvidence(client, authorization);
           revocationRequest = sealed.revocation_request_json;
         }
       } else {
-        liveCatalogs = await readCanonicalBootstrapCatalogs(client, authorization);
-        if (authorization.roleCatalogSha256 !== liveCatalogs.roleCatalogSha256
-          || authorization.objectCatalogSha256 !== liveCatalogs.objectCatalogSha256) {
-          throw new Error("bootstrap_074_live_catalog_mismatch");
-        }
         if (bootstrap074.providerAttestation) {
           providerAttestation = validateProviderEventTriggerAttestation(bootstrap074.providerAttestation, {
             authorization,
@@ -827,8 +1166,12 @@ export async function runMigrationsWithClient({
             signingKey: bootstrap074.providerSigningKey,
             now: bootstrap074.now,
           });
+          const delta = validateEventTriggerCatalogDelta(baselineCanonicalJson, eventTriggerCatalog.rows, authorization);
+          if (delta.catalogSha256 !== providerAttestation.eventTriggerCatalogAfterSha256
+            || delta.count !== providerAttestation.eventTriggerCatalogAfterCount) {
+            throw new Error("bootstrap_074_live_event_trigger_catalog_mismatch");
+          }
           await readLiveEventTriggerEvidence(client, authorization);
-          await client.query("select verify_ai_content_write_fence_catalog()");
           const revocation = {
             contractVersion: "ai-content-074-membership-revocation-request.v1",
             authorizationRequestId: authorization.requestId,
@@ -845,11 +1188,13 @@ export async function runMigrationsWithClient({
               `update ai_content_bootstrap_state
                   set provider_attestation_json=$1::jsonb,provider_attestation_sha256=$2,
                       attestation_consumed_at=now(),revocation_request_json=$3::jsonb,
-                      revocation_request_sha256=$4
+                      revocation_request_sha256=$4,event_trigger_catalog_after_sha256=$5,
+                      event_trigger_catalog_after_count=$6
                 where singleton and provider_attestation_sha256 is null
                 returning singleton`,
               [JSON.stringify(providerAttestation),suppliedAttestationSha256,
-                JSON.stringify(revocationRequest),revocationRequest.requestSha256],
+                JSON.stringify(revocationRequest),revocationRequest.requestSha256,
+                delta.catalogSha256,delta.count],
             );
             if (consumed.rowCount !== 1) throw new Error("provider_attestation_replayed");
             await client.query("commit");
@@ -857,6 +1202,9 @@ export async function runMigrationsWithClient({
             await client.query("rollback");
             throw error;
           }
+        } else if (eventTriggerCatalog.catalogSha256 !== sealed.event_trigger_catalog_before_sha256
+          || eventTriggerCatalog.count !== sealed.event_trigger_catalog_before_count) {
+          throw new Error("bootstrap_074_live_event_trigger_catalog_mismatch");
         }
       }
     }

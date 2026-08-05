@@ -41,6 +41,68 @@ describe("maintenance write fence", () => {
 
     expect(pool.sql.some((sql) => /insert|update|delete/i.test(sql))).toBe(false);
   });
+
+  it.each([
+    ["proposal-create", (repository: any) => repository.createAiContentProposalBatchV2({ workspaceId: "w", brandId: "b", actorUserId: "u", purpose: "informational", outputFormat: "card_news", channelTarget: "instagram", requestFingerprint: "f".repeat(64), idempotencyKey: "proposal", inputSnapshot: {} })],
+    ["proposal-select", (repository: any) => repository.selectAiContentProposal({ workspaceId: "w", brandId: "b", actorUserId: "u", proposalId: "p", idempotencyKey: "select" })],
+    ["finalization", (repository: any) => repository.updateAiContentFinalizationDraft({ workspaceId: "w", brandId: "b", generationId: "g", actorUserId: "u", draft: { contractVersion: "content-finalization-draft.v2", avatarStyleImageId: null, userImageInstruction: null, attachmentIds: [] } })],
+    ["retry", (repository: any) => repository.retryAiContentOutput({ workspaceId: "w", brandId: "b", outputId: "o" })],
+    ["regenerate", (repository: any) => repository.reviseAiContentOutput({ workspaceId: "w", brandId: "b", outputId: "o", action: "regenerate_copy", idempotencyKey: "revision" })],
+    ["attachment-confirm", (repository: any) => repository.confirmAiContentAttachment({ workspaceId: "00000000-0000-4000-8000-000000000001", brandId: "00000000-0000-4000-8000-000000000002", generationId: "00000000-0000-4000-8000-000000000003", role: "visual_reference", fileName: "asset.png", mimeType: "image/png", sizeBytes: 1, checksum: "a".repeat(64), storageUrl: "https://blob.example/asset.png", storagePath: "asset.png" })],
+    ["attachment-remove", (repository: any) => repository.removeAiContentAttachment({ workspaceId: "00000000-0000-4000-8000-000000000001", brandId: "00000000-0000-4000-8000-000000000002", generationId: "00000000-0000-4000-8000-000000000003", attachmentId: "00000000-0000-4000-8000-000000000004" })],
+    ["internal-claim", (repository: any) => repository.claimAiContentJob({ contentType: "card_news", workerId: "worker", leaseSeconds: 60 })],
+    ["render-claim", (repository: any) => repository.claimAiContentRenderJob({ workerId: "worker", leaseSeconds: 60 })],
+    ["internal-complete", (repository: any) => repository.completeAiContentJob({ jobId: "j", workerId: "worker", leaseToken: "token", jobType: "analyze", analysis: {} })],
+  ] as const)("puts BEGIN then the common guard before any %s mutation", async (_label, invoke) => {
+    const commands: string[] = [];
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        commands.push(sql);
+        if (sql === "select assert_ai_content_writable()") throw new Error("ai_content_maintenance");
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+
+    await expect(invoke(repository)).rejects.toThrow("ai_content_maintenance");
+
+    expect(commands.slice(0, 2)).toEqual(["BEGIN", "select assert_ai_content_writable()"]);
+    expect(commands.slice(2).filter((sql) => /\b(?:insert|update|delete)\b/i.test(sql))).toEqual([]);
+  });
+
+  it.each([
+    ["legacy-start", false],
+    ["v3-start", true],
+  ] as const)("guards the %s owning transaction after read-only preflight", async (_label, v3) => {
+    const transactionCommands: string[] = [];
+    const initial = { ...row("g", v3 ? "draft" : "analysis_ready"), draft_json: v3 ? { origin: "proposal-v2", proposalId: "p" } : {} };
+    const pool = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes("from workspace_members")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (sql.includes("from ai_content_generations")) return { rows: [initial], rowCount: 1 };
+        if (sql.includes("from ai_content_proposals")) return { rows: [{ proposal_id: "p", batch_id: "batch" }], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      }),
+      connect: vi.fn(async () => ({
+        query: vi.fn(async (sql: string) => {
+          transactionCommands.push(sql);
+          if (sql === "select assert_ai_content_writable()") throw new Error("ai_content_maintenance");
+          return { rows: [], rowCount: 0 };
+        }),
+        release: vi.fn(),
+      })),
+    };
+    const repository = createAiContentRepository(pool as never);
+    const scope = { workspaceId: "w", brandId: "b", generationId: "g", actorUserId: "u", idempotencyKey: "start", usageDate: "2026-08-05", dailyGenerationLimit: 10 };
+
+    await expect(v3
+      ? repository.startAiContentGenerationV3({ ...scope, requestFingerprint: "f".repeat(64) } as never, {} as never)
+      : repository.startAiContentGeneration(scope as never)).rejects.toThrow("ai_content_maintenance");
+
+    expect(transactionCommands.slice(0, 2)).toEqual(["BEGIN", "select assert_ai_content_writable()"]);
+    expect(transactionCommands.slice(2).filter((sql) => /\b(?:insert|update|delete)\b/i.test(sql))).toEqual([]);
+  });
 });
 
 function row(id: string, status = "analyzing") {

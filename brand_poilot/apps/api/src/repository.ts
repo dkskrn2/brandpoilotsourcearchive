@@ -22,7 +22,7 @@ import { fetchInstagramMessagingProfile } from "./instagramLoginGraph.js";
 import { fetchInstagramHashtagTopMedia } from "./instagramTrendMeta.js";
 import { createInstagramTrendRepository } from "./instagramTrendRepository.js";
 import { createAiContentRepository } from "./aiContentRepository.js";
-import { assertAiContentWritable } from "./aiContentMaintenance.js";
+import { assertAiContentWritable, withAiContentTransactionFence } from "./aiContentMaintenance.js";
 import { createAiContentAttachmentGcRepository } from "./aiContentAttachmentGcRepository.js";
 import { createAiContentDownloadRepository } from "./aiContentDownload.js";
 import { createAiContentPublishRepository } from "./aiContentPublish.js";
@@ -1351,7 +1351,8 @@ export async function fetchInstagramImageManifest(
 }
 
 export function createRepository(pool: Pool, options: RepositoryOptions = {}): ApiRepository {
-  const subjectAnalysis = createAiContentSubjectRepository(pool);
+  const fencedAiContentSubrepositoryPool = withAiContentTransactionFence(pool);
+  const subjectAnalysis = createAiContentSubjectRepository(fencedAiContentSubrepositoryPool);
   const brandCore = createBrandCoreRepository(pool);
   const productLibrary = createProductLibraryRepository(pool);
   const assetLibrary = createAssetLibraryRepository(pool);
@@ -1360,9 +1361,9 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
   const aiContent = createAiContentRepository(pool, {
     brandIntelligenceProvider,
   });
-  const aiContentAttachmentGc = createAiContentAttachmentGcRepository(pool);
+  const aiContentAttachmentGc = createAiContentAttachmentGcRepository(fencedAiContentSubrepositoryPool);
   const aiContentDownload = createAiContentDownloadRepository(pool, { fetchImpl: options.fetchPublishArtifact ?? fetch });
-  const aiContentPublish = createAiContentPublishRepository(pool);
+  const aiContentPublish = createAiContentPublishRepository(fencedAiContentSubrepositoryPool);
   const instagramPublish = resolveInstagramPublishOptions(options);
   const imageRenderCooldownMs = resolveImageRenderCooldownMs(options);
   const workerResourceLimits = repositoryWorkerResourceLimits(options);
@@ -4430,6 +4431,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     },
 
     async runDailyGeneration(now = new Date()) {
+      await assertAiContentWritable(pool);
       const brands = await pool.query(
         `select b.id, b.workspace_id
          from brands b
