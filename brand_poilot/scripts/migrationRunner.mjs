@@ -482,7 +482,7 @@ export async function readFenceSecurityCatalog(client, names, { ownerRoleName = 
   for (const row of controlResult.rows) {
     const extra = row.relation_name === "ai_content_maintenance_state"
       ? [{ grantee: names.applicationRoleName, privilege: "SELECT", grantable: false }]
-      : row.relation_name === "ai_content_bootstrap_state" || row.relation_name === "ai_content_write_fence_catalog"
+      : ["ai_content_bootstrap_state", "ai_content_ddl_allowlist", "ai_content_write_fence_catalog"].includes(row.relation_name)
         ? [{ grantee: names.migrationRoleName, privilege: "SELECT", grantable: false }]
         : [];
     const ownerAcl = tableOwnerPrivileges.map((privilege) => ({ grantee: ownerRoleName, privilege, grantable: false }));
@@ -1326,7 +1326,7 @@ export async function runMigrationsWithClient({
           await client.query(`grant select on table ai_content_maintenance_state to ${appRole}`);
           await client.query(`grant execute on function assert_ai_content_writable() to ${appRole}`);
           await client.query(`grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,text,text,text),set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text) to ${operatorRole}`);
-          await client.query(`grant select on table ai_content_bootstrap_state,ai_content_write_fence_catalog to ${migrationRole}`);
+          await client.query(`grant select on table ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog to ${migrationRole}`);
           await client.query(`grant execute on function ai_content_cutover_bypass_allowed(),verify_ai_content_write_fence_catalog(),consume_ai_content_provider_attestation() to ${migrationRole}`);
           const roleSafety = await client.query(
             `/* bootstrap_application_privileges_v1 */

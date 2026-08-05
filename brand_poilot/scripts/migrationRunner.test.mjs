@@ -67,12 +67,21 @@ function makeInterimFenceSecurityCatalog(schemaOwnerRoleName = "content_schema_o
     })),
     ordinaryTriggers: [],
     fenceCatalog: [],
-    controlRelations: migrationRunner.providerEnforcementBundle.controlRelations.map((relationName) => ({
-      relationName,
-      ownerRoleName: schemaOwnerRoleName,
-      acl: ["DELETE", "INSERT", "MAINTAIN", "REFERENCES", "SELECT", "TRIGGER", "TRUNCATE", "UPDATE"]
-        .map((privilege) => ({ grantee: schemaOwnerRoleName, privilege, grantable: false })),
-    })),
+    controlRelations: migrationRunner.providerEnforcementBundle.controlRelations.map((relationName) => {
+      const extras = relationName === "ai_content_maintenance_state"
+        ? [{ grantee: "content_application", privilege: "SELECT", grantable: false }]
+        : ["ai_content_bootstrap_state", "ai_content_ddl_allowlist", "ai_content_write_fence_catalog"].includes(relationName)
+          ? [{ grantee: "content_migration", privilege: "SELECT", grantable: false }] : [];
+      return {
+        relationName,
+        ownerRoleName: schemaOwnerRoleName,
+        acl: [
+          ...["DELETE", "INSERT", "MAINTAIN", "REFERENCES", "SELECT", "TRIGGER", "TRUNCATE", "UPDATE"]
+            .map((privilege) => ({ grantee: schemaOwnerRoleName, privilege, grantable: false })),
+          ...extras,
+        ],
+      };
+    }),
   };
 }
 
@@ -518,7 +527,8 @@ test("074 bootstrap role authorization applies stage one then independently cons
         relation_name, owner_role_name: providerBundleInstalled ? "postgres" : "content_schema_owner",
         acl: ["DELETE", "INSERT", "MAINTAIN", "REFERENCES", "SELECT", "TRIGGER", "TRUNCATE", "UPDATE"].map((privilege) => ({ grantee: providerBundleInstalled ? "postgres" : "content_schema_owner", privilege, grantable: false })).concat(
           relation_name === "ai_content_maintenance_state" ? [{ grantee: "content_application", privilege: "SELECT", grantable: false }]
-            : relation_name === "ai_content_bootstrap_state" || relation_name === "ai_content_write_fence_catalog" ? [{ grantee: "content_migration", privilege: "SELECT", grantable: false }] : [],
+            : ["ai_content_bootstrap_state", "ai_content_ddl_allowlist", "ai_content_write_fence_catalog"].includes(relation_name)
+              ? [{ grantee: "content_migration", privilege: "SELECT", grantable: false }] : [],
         ),
       })) };
       if (normalized.startsWith("insert into ai_content_bootstrap_state")) {
@@ -567,7 +577,7 @@ test("074 bootstrap role authorization applies stage one then independently cons
   assert.ok(calls.some(({ sql }) => sql === 'set local role "content_schema_owner"'));
   assert.ok(calls.some(({ sql }) => sql === "select verify_ai_content_write_fence_catalog()"));
   assert.ok(calls.some(({ sql }) => sql.includes("authorization_sha256") && sql.includes("install_request_json")));
-  assert.ok(calls.some(({ sql }) => sql === 'grant select on table ai_content_bootstrap_state,ai_content_write_fence_catalog to "content_migration"'));
+  assert.ok(calls.some(({ sql }) => sql === 'grant select on table ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog to "content_migration"'));
 
   const install = stageOne.providerInstallRequest;
   const bootstrapInsertCount = () => calls.filter(({ sql }) => sql.startsWith("insert into ai_content_bootstrap_state")).length;

@@ -454,7 +454,9 @@ test("074 canonical authorization hashes are recomputed from the live PostgreSQL
       create role content_operator login;
       create role content_migration login noinherit;
       create role content_cleanup login;
-      grant content_schema_owner to content_migration with set true, inherit false, admin false;
+      grant content_schema_owner to content_migration with set true;
+      grant content_schema_owner to content_migration with inherit false;
+      grant content_schema_owner to content_migration with admin false;
       grant usage,create on schema public to content_schema_owner;
     `);
     for (const relation of bootstrapFenceRelations) {
@@ -476,7 +478,7 @@ test("074 canonical authorization hashes are recomputed from the live PostgreSQL
       member_role_name: "content_migration", parent_role_name: "content_schema_owner",
       set_option: true, inherit_option: false, admin_option: false,
     });
-    assert.equal(catalogs.roleCatalogSha256, "a6df51190b28d5e9240cabb6b81368a1856942c27dfe211ab1c3a381f0dc1333");
+    assert.equal(catalogs.roleCatalogSha256, "a754517863491917d61f4e0580fac0a5d313cf00aba393e3fbb647759106de7d");
     assert.equal(catalogs.objectCatalogSha256, "682bc30d1e0c855f62140ed83240248b74507746240376450d7f3db5e1a91503");
     await database.exec("grant content_schema_owner to content_application");
     await assert.rejects(readCanonicalBootstrapCatalogs({

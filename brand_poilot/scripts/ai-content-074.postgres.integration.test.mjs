@@ -96,7 +96,7 @@ async function transferProviderBundle(client) {
     await client.query(`revoke all on table public.${quoteIdentifier(relation)} from public,content_schema_owner,content_application,content_operator,content_migration,content_cleanup`);
     if (relation === "ai_content_maintenance_state") {
       await client.query("grant select on table public.ai_content_maintenance_state to content_application");
-    } else if (relation === "ai_content_bootstrap_state" || relation === "ai_content_write_fence_catalog") {
+    } else if (["ai_content_bootstrap_state", "ai_content_ddl_allowlist", "ai_content_write_fence_catalog"].includes(relation)) {
       await client.query(`grant select on table public.${quoteIdentifier(relation)} to content_migration`);
     }
   }
@@ -151,7 +151,7 @@ test("074 real PostgreSQL provider-owned bundle blocks migration-to-schema-owner
       grant select on table ai_content_maintenance_state to content_application;
       grant execute on function assert_ai_content_writable() to content_application;
       grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,text,text,text),set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text) to content_operator;
-      grant select on table ai_content_bootstrap_state,ai_content_write_fence_catalog to content_migration;
+      grant select on table ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog to content_migration;
       grant execute on function ai_content_cutover_bypass_allowed(),verify_ai_content_write_fence_catalog(),consume_ai_content_provider_attestation() to content_migration;
     `);
     const interim = await readFenceSecurityCatalog(client, names);
