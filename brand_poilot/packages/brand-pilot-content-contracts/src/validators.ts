@@ -22,7 +22,7 @@ import {
 } from "./generation.js";
 import type { AiContentManifestV3 } from "./manifest.js";
 import type { ContentPlanResultV2 } from "./plans.js";
-import { UuidSchema } from "./snapshots.js";
+import { LowercaseSha256Schema, NonEmptyStringSchema, UuidSchema } from "./snapshots.js";
 
 const AuthorityScopeSchema = Type.Object({
   workspaceId: UuidSchema,
@@ -55,20 +55,60 @@ export const ContentPipelineAuthorityContextSchema = Type.Object({
 }, { additionalProperties: false });
 export type ContentPipelineAuthorityContext = Static<typeof ContentPipelineAuthorityContextSchema>;
 
+const RenderedAssetStorageProperties = {
+  storagePath: Type.String({
+    minLength: 1,
+    pattern: "^[^/\\\\]+(?:/[^/\\\\]+)*$",
+  }),
+  checksum: LowercaseSha256Schema,
+} as const;
+
+const RenderedAssetPublicProperties = {
+  index: Type.Integer({ minimum: 1 }),
+  url: Type.String({ minLength: 1, pattern: "^https://" }),
+  fileName: NonEmptyStringSchema,
+} as const;
+
+export const RenderedImageAssetSchema = Type.Object({
+  role: Type.Union([Type.Literal("slide"), Type.Literal("inline"), Type.Literal("scene")]),
+  ...RenderedAssetPublicProperties,
+  mimeType: Type.Literal("image/png"),
+  width: Type.Integer({ minimum: 1 }),
+  height: Type.Integer({ minimum: 1 }),
+  ...RenderedAssetStorageProperties,
+}, { additionalProperties: false });
+
+export const RenderedHtmlAssetSchema = Type.Object({
+  role: Type.Literal("html"),
+  ...RenderedAssetPublicProperties,
+  mimeType: Type.Literal("text/html"),
+  ...RenderedAssetStorageProperties,
+}, { additionalProperties: false });
+
+export const RenderedVideoAssetSchema = Type.Object({
+  role: Type.Literal("video"),
+  ...RenderedAssetPublicProperties,
+  mimeType: Type.Literal("video/mp4"),
+  width: Type.Integer({ minimum: 1 }),
+  height: Type.Integer({ minimum: 1 }),
+  durationSeconds: Type.Number({ exclusiveMinimum: 0 }),
+  videoCodec: Type.Literal("h264"),
+  fps: Type.Literal(30),
+  audioCodec: Type.Null(),
+  ...RenderedAssetStorageProperties,
+}, { additionalProperties: false });
+
+export const RenderedAssetSchema = Type.Union([
+  RenderedImageAssetSchema,
+  RenderedHtmlAssetSchema,
+  RenderedVideoAssetSchema,
+]);
+
 export const RenderedAssetInventorySchema = Type.Object({
   generationId: UuidSchema,
   outputFormat: ContentStudioOutputFormatSchema,
   purpose: ContentPurposeSchema,
-  assets: Type.Array(Type.Object({
-    role: Type.Union([
-      Type.Literal("slide"),
-      Type.Literal("inline"),
-      Type.Literal("scene"),
-      Type.Literal("html"),
-      Type.Literal("video"),
-    ]),
-    index: Type.Integer({ minimum: 1 }),
-  }, { additionalProperties: false }), { minItems: 1 }),
+  assets: Type.Array(RenderedAssetSchema, { minItems: 1 }),
 }, { additionalProperties: false });
 export type RenderedAssetInventory = Static<typeof RenderedAssetInventorySchema>;
 
@@ -93,6 +133,39 @@ function same(left: unknown, right: unknown): boolean {
   const rightKeys = Object.keys(rightRecord).sort();
   return leftKeys.length === rightKeys.length
     && leftKeys.every((key, index) => key === rightKeys[index] && same(leftRecord[key], rightRecord[key]));
+}
+
+function assertCanonicalRenderedAssetPath(asset: RenderedAssetInventory["assets"][number]): void {
+  const segments = asset.storagePath.split("/");
+  if (asset.storagePath.startsWith("/")
+    || asset.storagePath.includes("\\")
+    || segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
+    fail("rendered_storage_path_invalid");
+  }
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(asset.url);
+  } catch {
+    fail("rendered_asset_url_invalid");
+  }
+  if (parsedUrl.protocol !== "https:") fail("rendered_asset_url_invalid");
+  if (parsedUrl.pathname !== `/${asset.storagePath}`) fail("rendered_url_path_mismatch");
+}
+
+export function parseContentPipelineAuthorityContext(value: unknown): ContentPipelineAuthorityContext {
+  if (!Value.Check(ContentPipelineAuthorityContextSchema, value)) {
+    fail("content_pipeline_authority_context_invalid");
+  }
+  return value as ContentPipelineAuthorityContext;
+}
+
+export function parseRenderedAssetInventory(value: unknown): RenderedAssetInventory {
+  if (!Value.Check(RenderedAssetInventorySchema, value)) {
+    fail("rendered_asset_inventory_invalid");
+  }
+  const inventory = value as RenderedAssetInventory;
+  for (const asset of inventory.assets) assertCanonicalRenderedAssetPath(asset);
+  return inventory;
 }
 
 function assertFormatSettings(input: ContentGenerationInputV3): void {
@@ -128,38 +201,70 @@ export function assertEvidenceOwnership(
   const { scope, selection } = authority;
   if (selection.workspaceId !== scope.workspaceId) fail("authority_selection_workspace_mismatch");
   if (selection.brandId !== scope.brandId) fail("authority_selection_brand_mismatch");
+  const authorityEvidenceIds = new Set<string>();
   for (const row of authority.evidence) {
     if (row.workspaceId !== scope.workspaceId) fail("authority_evidence_scope_mismatch");
     if (row.brandId !== scope.brandId) fail("authority_evidence_scope_mismatch");
     if (row.proposalBatchId !== selection.proposalBatchId) fail("authority_evidence_batch_mismatch");
+    if (authorityEvidenceIds.has(row.evidenceId)) fail("authority_evidence_duplicate");
+    authorityEvidenceIds.add(row.evidenceId);
   }
+  const authorityReferenceIdentities = new Set<string>();
   for (const row of authority.references) {
     if (row.workspaceId !== scope.workspaceId) fail("authority_reference_scope_mismatch");
     if (row.brandId !== scope.brandId) fail("authority_reference_scope_mismatch");
     if (row.proposalBatchId !== selection.proposalBatchId) fail("authority_reference_batch_mismatch");
+    const identity = `${row.referenceItemId}:${row.snapshotId}`;
+    if (authorityReferenceIdentities.has(identity)) fail("authority_reference_duplicate");
+    authorityReferenceIdentities.add(identity);
   }
 
   const authorizedEvidence = new Set(authority.evidence.map((row) => row.evidenceId));
+  const inputEvidenceIds = new Set<string>();
   for (const item of input.researchEvidence.items) {
+    if (inputEvidenceIds.has(item.id)) fail("input_evidence_duplicate");
+    inputEvidenceIds.add(item.id);
     if (!authorizedEvidence.has(item.id)) fail("input_evidence_not_authorized");
   }
   const frozenEvidence = new Set(input.researchEvidence.items.map((item) => item.id));
+  const proposalEvidenceIds = new Set<string>();
   for (const evidenceId of input.selectedProposal.evidenceIds) {
+    if (proposalEvidenceIds.has(evidenceId)) fail("proposal_evidence_duplicate");
+    proposalEvidenceIds.add(evidenceId);
     if (!frozenEvidence.has(evidenceId)) fail("proposal_evidence_not_frozen");
   }
 
   const authorizedReferences = new Set(
     authority.references.map((row) => `${row.referenceItemId}:${row.snapshotId}`),
   );
+  const selectedReferenceIdentities = new Set<string>();
+  const selectedReferenceIds = new Set<string>();
   for (const reference of input.references.selected) {
-    if (!authorizedReferences.has(`${reference.referenceItemId}:${reference.snapshotId}`)) {
+    const identity = `${reference.referenceItemId}:${reference.snapshotId}`;
+    if (selectedReferenceIdentities.has(identity) || selectedReferenceIds.has(reference.referenceItemId)) {
+      fail("input_reference_duplicate");
+    }
+    selectedReferenceIdentities.add(identity);
+    selectedReferenceIds.add(reference.referenceItemId);
+    if (!authorizedReferences.has(identity)) {
       fail("input_reference_not_authorized");
     }
   }
   const frozenReferenceIds = new Set(input.references.selected.map((item) => item.referenceItemId));
+  const proposalReferenceIds = new Set<string>();
   for (const referenceId of input.selectedProposal.referenceIds) {
+    if (proposalReferenceIds.has(referenceId)) fail("proposal_reference_duplicate");
+    proposalReferenceIds.add(referenceId);
     if (!frozenReferenceIds.has(referenceId)) fail("proposal_reference_not_frozen");
   }
+
+  const styleImageIds = new Set<string>();
+  for (const styleImage of input.references.brandStyleImages) {
+    if (styleImageIds.has(styleImage.referenceItemId)) fail("brand_style_image_duplicate");
+    styleImageIds.add(styleImage.referenceItemId);
+  }
+  if (input.references.avatarStyleImageId !== null
+    && !styleImageIds.has(input.references.avatarStyleImageId)) fail("avatar_style_image_not_frozen");
 }
 
 export function assertSelectedProposalInvariant(
@@ -259,6 +364,7 @@ function normalizedAssets(assets: readonly AssetIdentity[]): string[] {
 
 export function assertAssetCountInvariant(
   input: ContentGenerationInputV3,
+  authority: ContentPipelineAuthorityContext,
   plan: ContentPlanResultV2,
   imagePackage: ImageGenerationPackageV1 | null,
   rendered: RenderedAssetInventory,
@@ -279,10 +385,38 @@ export function assertAssetCountInvariant(
   if (rendered.generationId !== input.generationId) fail("rendered_generation_id_mismatch");
   if (rendered.outputFormat !== input.outputSettings.outputFormat) fail("rendered_output_format_mismatch");
   if (rendered.purpose !== input.outputSettings.purpose) fail("rendered_purpose_mismatch");
+  const requiredStoragePrefix = `ai-content/${authority.scope.brandId}/${input.generationId}/`;
+  const uniqueness = {
+    identity: new Set<string>(),
+    url: new Set<string>(),
+    fileName: new Set<string>(),
+    storagePath: new Set<string>(),
+    checksum: new Set<string>(),
+  };
+  for (const asset of rendered.assets) {
+    if (!asset.storagePath.startsWith(requiredStoragePrefix)) fail("rendered_storage_prefix_mismatch");
+    const values = {
+      identity: `${asset.role}:${asset.index}`,
+      url: asset.url,
+      fileName: asset.fileName,
+      storagePath: asset.storagePath,
+      checksum: asset.checksum,
+    };
+    for (const key of Object.keys(values) as Array<keyof typeof values>) {
+      if (uniqueness[key].has(values[key])) fail("rendered_asset_duplicate");
+      uniqueness[key].add(values[key]);
+    }
+  }
   const expected = expectedAssetInventory(input.outputSettings.outputFormat, imageCount);
   if (!same(normalizedAssets(rendered.assets), normalizedAssets(expected))) fail("rendered_asset_inventory_mismatch");
   const manifestAssets = manifest.assets.map(({ role, index }) => ({ role, index }));
   if (!same(normalizedAssets(manifestAssets), normalizedAssets(expected))) fail("manifest_asset_inventory_mismatch");
+  const manifestByIdentity = new Map(manifest.assets.map((asset) => [`${asset.role}:${asset.index}`, asset]));
+  for (const renderedAsset of rendered.assets) {
+    const { storagePath: _storagePath, checksum: _checksum, ...publicAsset } = renderedAsset;
+    const manifestAsset = manifestByIdentity.get(`${renderedAsset.role}:${renderedAsset.index}`);
+    if (!same(publicAsset, manifestAsset)) fail("manifest_rendered_asset_mismatch");
+  }
 }
 
 export function assertManifestMatchesInput(
@@ -306,11 +440,13 @@ export function assertContentPipelineBindings(
   rendered: RenderedAssetInventory,
   manifest: AiContentManifestV3,
 ): void {
+  const parsedAuthority = parseContentPipelineAuthorityContext(authority);
+  const parsedRendered = parseRenderedAssetInventory(rendered);
   assertPurposeProductInvariant(input);
-  assertEvidenceOwnership(input, authority);
-  assertSelectedProposalInvariant(input, authority);
+  assertEvidenceOwnership(input, parsedAuthority);
+  assertSelectedProposalInvariant(input, parsedAuthority);
   assertPlannerPromptBinding(input, binding);
   assertPlanMatchesInput(input, binding, plan, imagePackage);
   assertManifestMatchesInput(input, binding, manifest);
-  assertAssetCountInvariant(input, plan, imagePackage, rendered, manifest);
+  assertAssetCountInvariant(input, parsedAuthority, plan, imagePackage, parsedRendered, manifest);
 }

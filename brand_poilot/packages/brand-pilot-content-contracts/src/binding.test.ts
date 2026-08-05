@@ -76,4 +76,13 @@ describe("ContentPromptBindingSchema", () => {
       legacy: true,
     })).toThrow("content_prompt_binding_invalid");
   });
+
+  it.each(Object.keys(bindingFor("card_news", "informational")))(
+    "rejects a binding missing required field %s",
+    (field) => {
+      const value = bindingFor("card_news", "informational") as Record<string, unknown>;
+      delete value[field];
+      expect(() => parseContentPromptBinding(value)).toThrow("content_prompt_binding_invalid");
+    },
+  );
 });

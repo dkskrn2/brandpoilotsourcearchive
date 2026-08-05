@@ -20,6 +20,8 @@ import {
   assertPlannerPromptBinding,
   assertPurposeProductInvariant,
   assertSelectedProposalInvariant,
+  parseContentPipelineAuthorityContext,
+  parseRenderedAssetInventory,
   type ContentPipelineAuthorityContext,
   type RenderedAssetInventory,
 } from "./validators.js";
@@ -40,6 +42,14 @@ const ids = {
 const OTHER_ID = "00000000-0000-4000-8000-00000000000c";
 const NOW = "2026-08-05T00:00:00Z";
 const HASH = "a".repeat(64);
+
+function assetPath(fileName: string): string {
+  return `ai-content/${ids.brand}/${ids.generation}/${fileName}`;
+}
+
+function assetUrl(fileName: string): string {
+  return `https://assets.example.com/${assetPath(fileName)}`;
+}
 
 function product() {
   return {
@@ -241,20 +251,27 @@ function pipelineFor(outputFormat: ContentStudioOutputFormat, purpose: ContentPu
   let rendered: RenderedAssetInventory;
   if (outputFormat === "card_news") {
     plan = { contractVersion: "card-news-plan.v2", content: { caption: "캡션", hashtags: [], cta: "CTA" }, imagePackage };
-    const assets = imagePackage.assets.map(({ index }) => ({ role: "slide" as const, index }));
-    rendered = { generationId: ids.generation, outputFormat, purpose, assets };
-    manifest = { version: "ai-content.v3", outputFormat, purpose, title: "제목", assets: assets.map(({ role, index }) => ({ role, index, url: `https://example.com/${index}.png`, fileName: `${index}.png`, mimeType: "image/png", width: 1080, height: 1080 })), content: { caption: "캡션", hashtags: [], cta: "CTA" } };
+    const assets = imagePackage.assets.map(({ index }) => ({ role: "slide" as const, index, url: assetUrl(`slide-${index}.png`), fileName: `slide-${index}.png`, mimeType: "image/png" as const, width: 1080, height: 1080 }));
+    manifest = { version: "ai-content.v3", outputFormat, purpose, title: "제목", assets, content: { caption: "캡션", hashtags: [], cta: "CTA" } };
   } else if (outputFormat === "blog") {
     plan = { contractVersion: "blog-plan.v2", content: { title: "제목", htmlTemplate: "<p>본문</p>", metaTitle: "메타", metaDescription: "설명", usedEvidenceIds: [ids.evidence] }, imagePackage };
-    const assets = [{ role: "html" as const, index: 1 }, ...imagePackage.assets.map(({ index }) => ({ role: "inline" as const, index }))];
-    rendered = { generationId: ids.generation, outputFormat, purpose, assets };
-    manifest = { version: "ai-content.v3", outputFormat, purpose, title: "제목", assets: [{ role: "html", index: 1, url: "https://example.com/index.html", fileName: "index.html", mimeType: "text/html" }, ...imagePackage.assets.map(({ index }) => ({ role: "inline" as const, index, url: `https://example.com/${index}.png`, fileName: `${index}.png`, mimeType: "image/png" as const, width: 1080, height: 1080 }))], content: { title: "제목", summary: "요약", html: "<p>본문</p>", metaTitle: "메타", metaDescription: "설명" } };
+    const assets = [{ role: "html" as const, index: 1, url: assetUrl("index.html"), fileName: "index.html", mimeType: "text/html" as const }, ...imagePackage.assets.map(({ index }) => ({ role: "inline" as const, index, url: assetUrl(`inline-${index}.png`), fileName: `inline-${index}.png`, mimeType: "image/png" as const, width: 1080, height: 1080 }))];
+    manifest = { version: "ai-content.v3", outputFormat, purpose, title: "제목", assets, content: { title: "제목", summary: "요약", html: "<p>본문</p>", metaTitle: "메타", metaDescription: "설명" } };
   } else {
     plan = { contractVersion: "reel-plan.v2", outputFormat: "reel", content: { caption: "캡션", hashtags: [], cta: "CTA" }, imagePackage };
-    const assets = [...imagePackage.assets.map(({ index }) => ({ role: "scene" as const, index })), { role: "video" as const, index: 1 }];
-    rendered = { generationId: ids.generation, outputFormat, purpose, assets };
-    manifest = { version: "ai-content.v3", outputFormat, purpose, title: "제목", assets: [...imagePackage.assets.map(({ index }) => ({ role: "scene" as const, index, url: `https://example.com/${index}.png`, fileName: `${index}.png`, mimeType: "image/png" as const, width: 1080, height: 1920 })), { role: "video", index: 1, url: "https://example.com/video.mp4", fileName: "video.mp4", mimeType: "video/mp4", width: 1080, height: 1920, durationSeconds: 10, videoCodec: "h264", fps: 30, audioCodec: null }], content: { caption: "캡션", hashtags: [], cta: "CTA" } };
+    const assets = [...imagePackage.assets.map(({ index }) => ({ role: "scene" as const, index, url: assetUrl(`scene-${index}.png`), fileName: `scene-${index}.png`, mimeType: "image/png" as const, width: 1080, height: 1920 })), { role: "video" as const, index: 1, url: assetUrl("video.mp4"), fileName: "video.mp4", mimeType: "video/mp4" as const, width: 1080, height: 1920, durationSeconds: 10, videoCodec: "h264" as const, fps: 30 as const, audioCodec: null }];
+    manifest = { version: "ai-content.v3", outputFormat, purpose, title: "제목", assets, content: { caption: "캡션", hashtags: [], cta: "CTA" } };
   }
+  rendered = {
+    generationId: ids.generation,
+    outputFormat,
+    purpose,
+    assets: manifest.assets.map((asset, index) => ({
+      ...asset,
+      storagePath: assetPath(asset.fileName),
+      checksum: (index + 1).toString(16).padStart(64, "0"),
+    })),
+  };
   return { input, authority: authorityFor(outputFormat, purpose), binding: bindingFor(outputFormat, purpose), plan, imagePackage, rendered, manifest };
 }
 
@@ -315,16 +332,17 @@ describe("content pipeline semantic bindings", () => {
     expect(value.imagePackage.assetCount).toBe(3);
     expect(() => assertContentPipelineBindings(value.input, value.authority, value.binding, value.plan, value.imagePackage, value.rendered, value.manifest)).not.toThrow();
     expect(() => assertContentPipelineBindings({ ...value.input, outputSettings: { ...value.input.outputSettings, channelTargets: ["youtube"] } }, value.authority, value.binding, value.plan, value.imagePackage, value.rendered, value.manifest)).toThrow("input_channel_mismatch");
+    expect(() => assertContentPipelineBindings({ ...value.input, outputSettings: { ...value.input.outputSettings, outputCount: 2 as 1 } }, value.authority, value.binding, value.plan, value.imagePackage, value.rendered, value.manifest)).toThrow("input_output_count_mismatch");
   });
 
   it("derives and cross-checks card, blog, and reel rendered asset inventories", () => {
     for (const format of CONTENT_OUTPUT_FORMATS) {
       const value = pipelineFor(format, "informational");
-      expect(() => assertAssetCountInvariant(value.input, value.plan, value.imagePackage, value.rendered, value.manifest)).not.toThrow();
-      expect(() => assertAssetCountInvariant(value.input, value.plan, value.imagePackage, { ...value.rendered, assets: value.rendered.assets.slice(1) }, value.manifest)).toThrow("rendered_asset_inventory_mismatch");
+      expect(() => assertAssetCountInvariant(value.input, value.authority, value.plan, value.imagePackage, value.rendered, value.manifest)).not.toThrow();
+      expect(() => assertAssetCountInvariant(value.input, value.authority, value.plan, value.imagePackage, { ...value.rendered, assets: value.rendered.assets.slice(1) }, value.manifest)).toThrow("rendered_asset_inventory_mismatch");
       const wrongCountPackage = { ...value.imagePackage, assetCount: value.imagePackage.assetCount - 1 };
       const wrongCountPlan = { ...value.plan, imagePackage: wrongCountPackage } as ContentPlanResultV2;
-      expect(() => assertAssetCountInvariant(value.input, wrongCountPlan, wrongCountPackage, value.rendered, value.manifest)).toThrow("image_asset_count_mismatch");
+      expect(() => assertAssetCountInvariant(value.input, value.authority, wrongCountPlan, wrongCountPackage, value.rendered, value.manifest)).toThrow("image_asset_count_mismatch");
     }
   });
 
@@ -334,7 +352,7 @@ describe("content pipeline semantic bindings", () => {
     expect(() => assertManifestMatchesInput(card.input, card.binding, { ...card.manifest, outputFormat: "blog" })).toThrow("manifest_output_format_mismatch");
     expect(() => assertManifestMatchesInput(card.input, card.binding, { ...card.manifest, content: { title: "블로그", summary: "요약", html: "<p>x</p>", metaTitle: "메타", metaDescription: "설명" } })).toThrow("manifest_content_kind_mismatch");
     const reel = pipelineFor("reel", "informational");
-    expect(() => assertAssetCountInvariant(reel.input, reel.plan, reel.imagePackage, reel.rendered, { ...reel.manifest, assets: reel.manifest.assets.filter((asset) => asset.role !== "video") })).toThrow("manifest_asset_inventory_mismatch");
+    expect(() => assertAssetCountInvariant(reel.input, reel.authority, reel.plan, reel.imagePackage, reel.rendered, { ...reel.manifest, assets: reel.manifest.assets.filter((asset) => asset.role !== "video") })).toThrow("manifest_asset_inventory_mismatch");
   });
 
   it("treats schema-equivalent objects as equal regardless of property insertion order", () => {
@@ -351,6 +369,67 @@ describe("content pipeline semantic bindings", () => {
       assets: value.imagePackage.assets.map((asset) => ({ ...asset, index: asset.index + 1 })),
     };
     const plan = { ...value.plan, imagePackage } as ContentPlanResultV2;
-    expect(() => assertAssetCountInvariant(value.input, plan, imagePackage, value.rendered, value.manifest)).toThrow("image_asset_index_mismatch");
+    expect(() => assertAssetCountInvariant(value.input, value.authority, plan, imagePackage, value.rendered, value.manifest)).toThrow("image_asset_index_mismatch");
+  });
+
+  it("parses only closed authority and rendered boundary records", () => {
+    const value = pipelineFor("reel", "informational");
+    expect(parseContentPipelineAuthorityContext(value.authority)).toEqual(value.authority);
+    expect(parseRenderedAssetInventory(value.rendered)).toEqual(value.rendered);
+    expect(() => parseContentPipelineAuthorityContext({ ...value.authority, extra: true })).toThrow("content_pipeline_authority_context_invalid");
+    expect(() => parseContentPipelineAuthorityContext({ ...value.authority, scope: { ...value.authority.scope, extra: true } })).toThrow("content_pipeline_authority_context_invalid");
+    expect(() => parseContentPipelineAuthorityContext({ ...value.authority, selection: { ...value.authority.selection, extra: true } })).toThrow("content_pipeline_authority_context_invalid");
+    expect(() => parseContentPipelineAuthorityContext({ ...value.authority, evidence: [{ ...value.authority.evidence[0], extra: true }] })).toThrow("content_pipeline_authority_context_invalid");
+    expect(() => parseContentPipelineAuthorityContext({ ...value.authority, references: [{ ...value.authority.references[0], extra: true }] })).toThrow("content_pipeline_authority_context_invalid");
+    expect(() => parseContentPipelineAuthorityContext({ ...value.authority, scope: { ...value.authority.scope, brandId: "bad" } })).toThrow("content_pipeline_authority_context_invalid");
+    expect(() => parseContentPipelineAuthorityContext({ ...value.authority, selection: { ...value.authority.selection, outputFormat: "video" } })).toThrow("content_pipeline_authority_context_invalid");
+    expect(() => parseContentPipelineAuthorityContext({ ...value.authority, selection: { ...value.authority.selection, purpose: "sales" } })).toThrow("content_pipeline_authority_context_invalid");
+    expect(() => parseRenderedAssetInventory({ ...value.rendered, extra: true })).toThrow("rendered_asset_inventory_invalid");
+    expect(() => parseRenderedAssetInventory({ ...value.rendered, assets: [{ ...value.rendered.assets[0], extra: true }] })).toThrow("rendered_asset_inventory_invalid");
+    expect(() => parseRenderedAssetInventory({ ...value.rendered, assets: [{ role: "video", index: 1, url: assetUrl("x.mp4") }] })).toThrow("rendered_asset_inventory_invalid");
+    expect(() => parseRenderedAssetInventory({ ...value.rendered, generationId: "bad" })).toThrow("rendered_asset_inventory_invalid");
+    expect(() => parseRenderedAssetInventory({ ...value.rendered, outputFormat: "video" })).toThrow("rendered_asset_inventory_invalid");
+    expect(() => parseRenderedAssetInventory({ ...value.rendered, purpose: "sales" })).toThrow("rendered_asset_inventory_invalid");
+    expect(() => assertContentPipelineBindings(value.input, { ...value.authority, extra: true } as ContentPipelineAuthorityContext, value.binding, value.plan, value.imagePackage, value.rendered, value.manifest)).toThrow("content_pipeline_authority_context_invalid");
+    expect(() => assertContentPipelineBindings(value.input, value.authority, value.binding, value.plan, value.imagePackage, { ...value.rendered, extra: true } as RenderedAssetInventory, value.manifest)).toThrow("rendered_asset_inventory_invalid");
+  });
+
+  it("rejects duplicate frozen evidence/reference/style identities and unapproved avatars", () => {
+    const value = pipelineFor("card_news", "informational");
+    expect(() => assertEvidenceOwnership(value.input, { ...value.authority, evidence: [...value.authority.evidence, value.authority.evidence[0]] })).toThrow("authority_evidence_duplicate");
+    expect(() => assertEvidenceOwnership({ ...value.input, researchEvidence: { ...value.input.researchEvidence, items: [...value.input.researchEvidence.items, value.input.researchEvidence.items[0]] } }, value.authority)).toThrow("input_evidence_duplicate");
+    expect(() => assertEvidenceOwnership(value.input, { ...value.authority, references: [...value.authority.references, value.authority.references[0]] })).toThrow("authority_reference_duplicate");
+    expect(() => assertEvidenceOwnership({ ...value.input, references: { ...value.input.references, selected: [...value.input.references.selected, value.input.references.selected[0]] } }, value.authority)).toThrow("input_reference_duplicate");
+    const style = { referenceItemId: ids.reference, description: "style", tags: [], storageUrl: "https://example.com/style.png", storagePath: "style.png", mimeType: "image/png" as const, checksum: HASH };
+    expect(() => assertEvidenceOwnership({ ...value.input, references: { ...value.input.references, brandStyleImages: [style, style] } }, value.authority)).toThrow("brand_style_image_duplicate");
+    expect(() => assertEvidenceOwnership({ ...value.input, references: { ...value.input.references, avatarStyleImageId: OTHER_ID } }, value.authority)).toThrow("avatar_style_image_not_frozen");
+    expect(() => assertEvidenceOwnership({ ...value.input, references: { ...value.input.references, brandStyleImages: [style], avatarStyleImageId: ids.reference } }, value.authority)).not.toThrow();
+  });
+
+  it("rejects untrusted rendered paths, public drift, and duplicate artifact provenance", () => {
+    const value = pipelineFor("reel", "informational");
+    const first = value.rendered.assets[0];
+    expect(() => parseRenderedAssetInventory({ ...value.rendered, assets: [{ ...first, url: first.url.replace("https://", "http://") }] })).toThrow("rendered_asset_inventory_invalid");
+    expect(() => parseRenderedAssetInventory({ ...value.rendered, assets: [{ ...first, checksum: "A".repeat(64) }] })).toThrow("rendered_asset_inventory_invalid");
+    for (const [storagePath, error] of [["/absolute.png", "rendered_asset_inventory_invalid"], ["a//b.png", "rendered_asset_inventory_invalid"], ["a/./b.png", "rendered_storage_path_invalid"], ["a/../b.png", "rendered_storage_path_invalid"], ["a\\b.png", "rendered_asset_inventory_invalid"]] as const) {
+      expect(() => parseRenderedAssetInventory({ ...value.rendered, assets: [{ ...first, storagePath }] })).toThrow(error);
+    }
+    expect(() => assertContentPipelineBindings(value.input, value.authority, value.binding, value.plan, value.imagePackage, { ...value.rendered, assets: value.rendered.assets.map((asset, index) => index === 0 ? { ...asset, storagePath: `ai-content/${OTHER_ID}/${ids.generation}/${asset.fileName}`, url: `https://assets.example.com/ai-content/${OTHER_ID}/${ids.generation}/${asset.fileName}` } : asset) }, value.manifest)).toThrow("rendered_storage_prefix_mismatch");
+    expect(() => parseRenderedAssetInventory({ ...value.rendered, assets: [{ ...first, url: assetUrl("different.png") }] })).toThrow("rendered_url_path_mismatch");
+    for (const mutation of [{ url: assetUrl("different.png") }, { fileName: "different.png" }, { width: 720 }]) {
+      expect(() => assertContentPipelineBindings(value.input, value.authority, value.binding, value.plan, value.imagePackage, value.rendered, { ...value.manifest, assets: value.manifest.assets.map((asset, index) => index === 0 ? { ...asset, ...mutation } : asset) } as AiContentManifestV3)).toThrow("manifest_rendered_asset_mismatch");
+    }
+    const duplicateIdentity = value.rendered.assets.map((asset, index) => index === 1 ? { ...asset, role: first.role, index: first.index } : asset);
+    expect(() => assertContentPipelineBindings(value.input, value.authority, value.binding, value.plan, value.imagePackage, { ...value.rendered, assets: duplicateIdentity }, value.manifest)).toThrow("rendered_asset_duplicate");
+    for (const field of ["url", "fileName", "storagePath", "checksum"] as const) {
+      const duplicate = value.rendered.assets.map((asset, index) => {
+        if (index !== 1) return asset;
+        if (field === "url" || field === "storagePath") {
+          return { ...asset, url: first.url, storagePath: first.storagePath };
+        }
+        return { ...asset, [field]: first[field] };
+      });
+      expect(() => assertContentPipelineBindings(value.input, value.authority, value.binding, value.plan, value.imagePackage, { ...value.rendered, assets: duplicate }, value.manifest)).toThrow("rendered_asset_duplicate");
+    }
   });
 });
