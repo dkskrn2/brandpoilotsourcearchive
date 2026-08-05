@@ -505,7 +505,9 @@ test("074 post-migration security catalog is independently read from live Postgr
       create role content_operator login;
       create role content_migration login noinherit;
       create role content_cleanup login;
-      grant content_schema_owner to content_migration with set true, inherit false, admin false;
+      grant content_schema_owner to content_migration with set true;
+      grant content_schema_owner to content_migration with inherit false;
+      grant content_schema_owner to content_migration with admin false;
       grant usage,create on schema public to content_schema_owner;
     `);
     for (const relation of bootstrapFenceRelations) await database.exec(`alter table public."${relation}" owner to content_schema_owner`);
@@ -515,7 +517,7 @@ test("074 post-migration security catalog is independently read from live Postgr
       grant select on table ai_content_maintenance_state to content_application;
       grant execute on function assert_ai_content_writable() to content_application;
       grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,text,text,text),set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text) to content_operator;
-      grant select on table ai_content_bootstrap_state,ai_content_write_fence_catalog to content_migration;
+      grant select on table ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog to content_migration;
       grant execute on function ai_content_cutover_bypass_allowed(),verify_ai_content_write_fence_catalog(),consume_ai_content_provider_attestation() to content_migration;
     `);
     const names = { schemaOwnerRoleName: "content_schema_owner", applicationRoleName: "content_application", operatorRoleName: "content_operator", migrationRoleName: "content_migration", cleanupRoleName: "content_cleanup" };
