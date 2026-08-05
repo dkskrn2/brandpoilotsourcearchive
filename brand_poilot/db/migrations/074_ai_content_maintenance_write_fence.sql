@@ -144,7 +144,7 @@ create table ai_content_write_fence_catalog (
   relation_class text not null check (relation_class in ('customer_execution','cutover_control')),
   row_classifier text not null check (row_classifier in (
     'whole_relation','legacy_automated_topic','scheduled_proposal_refresh','legacy_content_job',
-    'ai_content_generated_artifact','ai_content_scheduled_publish','daily_generation_automation'
+    'ai_content_generated_artifact','ai_content_scheduled_publish','ai_content_publish_attempt','daily_generation_automation'
   )),
   reviewed_at timestamptz not null default now()
 );
@@ -192,6 +192,7 @@ insert into ai_content_write_fence_catalog (relation_name, relation_class, row_c
   ('jobs','customer_execution','legacy_content_job'),
   ('storage_artifacts','customer_execution','ai_content_generated_artifact'),
   ('publish_queue','customer_execution','ai_content_scheduled_publish'),
+  ('publish_attempts','customer_execution','ai_content_publish_attempt'),
   ('ai_content_cutovers','cutover_control','whole_relation'),
   ('ai_content_cutover_status_events','cutover_control','whole_relation'),
   ('ai_content_maintenance_state','cutover_control','whole_relation'),
@@ -313,6 +314,19 @@ begin
     elsif tg_op='DELETE' then should_fence := exists (select 1 from public.channel_outputs output where output.id=old.channel_output_id and output.ai_content_generation_output_id is not null);
     else should_fence := exists (select 1 from public.channel_outputs output where output.id=old.channel_output_id and output.ai_content_generation_output_id is not null)
       or exists (select 1 from public.channel_outputs output where output.id=new.channel_output_id and output.ai_content_generation_output_id is not null); end if;
+  elsif classifier='ai_content_publish_attempt' then
+    if tg_op='INSERT' then should_fence := exists (
+      select 1 from public.publish_queue queue join public.channel_outputs output on output.id=queue.channel_output_id
+       where queue.id=new.publish_queue_id and output.ai_content_generation_output_id is not null);
+    elsif tg_op='DELETE' then should_fence := exists (
+      select 1 from public.publish_queue queue join public.channel_outputs output on output.id=queue.channel_output_id
+       where queue.id=old.publish_queue_id and output.ai_content_generation_output_id is not null);
+    else should_fence := exists (
+      select 1 from public.publish_queue queue join public.channel_outputs output on output.id=queue.channel_output_id
+       where queue.id=old.publish_queue_id and output.ai_content_generation_output_id is not null)
+      or exists (
+      select 1 from public.publish_queue queue join public.channel_outputs output on output.id=queue.channel_output_id
+       where queue.id=new.publish_queue_id and output.ai_content_generation_output_id is not null); end if;
   elsif classifier='daily_generation_automation' then
     if tg_op='INSERT' then should_fence := coalesce(new.run_type::text,'')='daily_generation';
     elsif tg_op='DELETE' then should_fence := coalesce(old.run_type::text,'')='daily_generation';
@@ -504,7 +518,7 @@ begin
          ),'sha256'),'hex')
     into catalog_hash
     from public.ai_content_write_fence_catalog;
-  if catalog_hash<>'4a36aebb9b4e56e19ab35ec08e45b3e3f625bb4a87f98359ca08658a4e6e132b' then
+  if catalog_hash<>'82b7d45786d6fd94d6b3d2487dc2456c762e5da5430db79b870d4d2dc0284f2f' then
     raise exception 'ai_content_write_fence_catalog_exact_mismatch';
   end if;
   select count(*) into mismatch

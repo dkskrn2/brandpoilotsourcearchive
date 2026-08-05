@@ -84,6 +84,7 @@ const expected074FenceCatalog = Object.freeze([
   ["llm_runs", "customer_execution", "whole_relation"],
   ["master_drafts", "customer_execution", "whole_relation"],
   ["publish_queue", "customer_execution", "ai_content_scheduled_publish"],
+  ["publish_attempts", "customer_execution", "ai_content_publish_attempt"],
   ["regeneration_requests", "customer_execution", "whole_relation"],
   ["review_events", "customer_execution", "whole_relation"],
   ["source_crawl_runs", "customer_execution", "scheduled_proposal_refresh"],
@@ -123,6 +124,7 @@ test("074 maintenance write fence is default-off and installs the exact executio
     `);
     assert.deepEqual(triggers.rows, expected074FenceCatalog
       .filter((row) => row.relation_class === "customer_execution")
+      .toSorted((left, right) => left.relation_name.localeCompare(right.relation_name))
       .map((row) => ({ relation_name: row.relation_name, tgenabled: "A", trigger_type: 31, function_matches: true })));
     const extras = await database.query(`
       select count(*)::integer as count
@@ -288,6 +290,16 @@ test("074 maintenance write fence classifies every shared execution row for inse
     const relatedInsertRow = queueRows.rows[2];
     await database.query("delete from publish_queue where id=$1", [relatedInsertRow.id]);
     const unrelatedRow = queueRows.rows[3];
+    const insertAttempt = (queue, attemptNumber) => database.query(
+      `insert into publish_attempts(workspace_id,brand_id,publish_queue_id,attempt_number)
+       values($1,$2,$3,$4) returning id`,
+      [publishing.workspaceId, publishing.brandId, queue.id, attemptNumber],
+    );
+    const relatedAttemptUpdate = await insertAttempt(queueRows.rows[0], 91);
+    const relatedAttemptDelete = await insertAttempt(queueRows.rows[1], 92);
+    const relatedAttemptEscape = await insertAttempt(queueRows.rows[0], 93);
+    const unrelatedAttemptReclassify = await insertAttempt(unrelatedRow, 94);
+    const unrelatedAttemptAllowed = await insertAttempt(unrelatedRow, 95);
 
     // The current production constraint only permits daily_generation. Drop it in
     // this fixture so the narrow shared-table classifier is proven future-safe.
@@ -315,12 +327,24 @@ test("074 maintenance write fence classifies every shared execution row for inse
          'content_migration','content_cleanup',$2,$2,$2,'backup',now(),$2,$2,$2,$3,$4)`,
       [cutoverId, digest, "c".repeat(40), eventHash],
     );
+
     await database.query(
       `insert into ai_content_cutover_status_events(cutover_id,sequence_number,from_status,to_status,evidence_sha256,event_sha256)
        values($1,0,null,'prepared',$2,$3)`,
       [cutoverId, "d".repeat(64), eventHash],
     );
     await database.query("update ai_content_maintenance_state set enabled=true,cutover_id=$1,enabled_at=now() where singleton", [cutoverId]);
+
+    const queueStatusBeforeAttempt = await database.query("select status from publish_queue where id=$1", [queueRows.rows[0].id]);
+    await assert.rejects(insertAttempt(queueRows.rows[0], 99), /ai_content_maintenance/);
+    await assert.rejects(database.query("update publish_attempts set status='succeeded',finished_at=now() where id=$1", [relatedAttemptUpdate.rows[0].id]), /ai_content_maintenance/);
+    await assert.rejects(database.query("delete from publish_attempts where id=$1", [relatedAttemptDelete.rows[0].id]), /ai_content_maintenance/);
+    await assert.rejects(database.query("update publish_attempts set publish_queue_id=$2 where id=$1", [relatedAttemptEscape.rows[0].id, unrelatedRow.id]), /ai_content_maintenance/);
+    await assert.rejects(database.query("update publish_attempts set publish_queue_id=$2 where id=$1", [unrelatedAttemptReclassify.rows[0].id, queueRows.rows[0].id]), /ai_content_maintenance/);
+    await database.query("update publish_attempts set status='succeeded',finished_at=now() where id=$1", [unrelatedAttemptAllowed.rows[0].id]);
+    await database.query("delete from publish_attempts where id=$1", [unrelatedAttemptAllowed.rows[0].id]);
+    const queueStatusAfterAttempt = await database.query("select status from publish_queue where id=$1", [queueRows.rows[0].id]);
+    assert.deepEqual(queueStatusAfterAttempt.rows, queueStatusBeforeAttempt.rows);
 
     await assert.rejects(database.query(
       `insert into topic_rows(workspace_id,brand_id,topic_upload_id,row_number,status,topic_title,topic_angle,topic_key)
@@ -446,9 +470,9 @@ test("074 canonical authorization hashes are recomputed from the live PostgreSQL
       cleanupRoleName: "content_cleanup",
     });
     assert.equal(catalogs.roleRows.length, 5);
-    assert.equal(catalogs.objectRows.length, 42);
+    assert.equal(catalogs.objectRows.length, 43);
     assert.equal(catalogs.roleCatalogSha256, "cc34b17e777ba882b7677bf1ef2de508aade9c62f0a23d51b7759b70b5551121");
-    assert.equal(catalogs.objectCatalogSha256, "7eda2d5a8d4fa3f98ca921e8bf7ad806609617f3b9035b9d4279d1239a914993");
+    assert.equal(catalogs.objectCatalogSha256, "682bc30d1e0c855f62140ed83240248b74507746240376450d7f3db5e1a91503");
     await database.exec("grant content_schema_owner to content_application");
     await assert.rejects(readCanonicalBootstrapCatalogs({
       query: (sql, parameters = []) => database.query(sql, parameters),
@@ -490,7 +514,7 @@ test("074 post-migration security catalog is independently read from live Postgr
     const names = { schemaOwnerRoleName: "content_schema_owner", applicationRoleName: "content_application", operatorRoleName: "content_operator", migrationRoleName: "content_migration", cleanupRoleName: "content_cleanup" };
     const catalog = await readFenceSecurityCatalog({ query: (sql, parameters = []) => database.query(sql, parameters) }, names);
     assert.match(catalog.catalogSha256, /^[0-9a-f]{64}$/);
-    assert.equal(catalog.ordinaryTriggers.length, 42);
+    assert.equal(catalog.ordinaryTriggers.length, 43);
     const eventCatalog = await readCanonicalEventTriggerCatalog({ query: (sql, parameters = []) => database.query(sql, parameters) });
     assert.equal(eventCatalog.count, 0);
     await database.exec("alter function assert_ai_content_writable() set search_path=public");

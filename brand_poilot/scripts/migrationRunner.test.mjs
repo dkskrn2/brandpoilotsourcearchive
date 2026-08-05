@@ -488,6 +488,38 @@ test("074 bootstrap role authorization applies stage one then independently cons
   });
   assert.deepEqual(recovered.revocationRequest, stageTwo.revocationRequest);
   assert.equal(durableUpdates(), updatesAfterConsumption);
+  const exactRecovery = () => migrationRunner.runMigrationsWithClient({
+    client, migrations: [migration], bootstrap074: { ...bootstrap, providerAttestation, providerSigningKey },
+  });
+  const sealedEvidence = () => ({
+    attestation: structuredClone(sealedState.provider_attestation_json),
+    attestationSha256: sealedState.provider_attestation_sha256,
+    revocation: structuredClone(sealedState.revocation_request_json),
+    revocationSha256: sealedState.revocation_request_sha256,
+  });
+  const restoreEvidence = (saved) => {
+    sealedState.provider_attestation_json = saved.attestation;
+    sealedState.provider_attestation_sha256 = saved.attestationSha256;
+    sealedState.revocation_request_json = saved.revocation;
+    sealedState.revocation_request_sha256 = saved.revocationSha256;
+  };
+  for (const mutate of [
+    () => { sealedState.provider_attestation_json.issuedAt = "2026-08-05T00:00:01.000Z"; },
+    () => { sealedState.provider_attestation_json.signature = "0".repeat(64); },
+    () => { sealedState.provider_attestation_json.unexpected = true; },
+    () => { delete sealedState.provider_attestation_json.eventTriggerCatalogAfterSha256; },
+    () => { sealedState.provider_attestation_sha256 = "0".repeat(64); },
+    () => { sealedState.revocation_request_json.migrationRoleName = "content_application"; },
+    () => { sealedState.revocation_request_json.evidenceSha256 = "f".repeat(64); },
+    () => { sealedState.revocation_request_json.requestSha256 = "0".repeat(64); },
+    () => { sealedState.revocation_request_json.unexpected = true; },
+    () => { sealedState.revocation_request_sha256 = "0".repeat(64); },
+  ]) {
+    const saved = sealedEvidence();
+    mutate();
+    await assert.rejects(exactRecovery(), /provider_attestation|bootstrap_074_revocation_evidence/);
+    restoreEvidence(saved);
+  }
   for (const attack of ["function_body", "function_owner", "search_path", "security_definer", "trigger", "grant"]) {
     securityAttack = attack;
     await assert.rejects(migrationRunner.runMigrationsWithClient({
@@ -508,7 +540,7 @@ test("074 bootstrap role authorization applies stage one then independently cons
   alteredAttestation.signature = migrationRunner.signProviderEventTriggerAttestation(alteredAttestation, providerSigningKey);
   await assert.rejects(migrationRunner.runMigrationsWithClient({
     client, migrations: [migration], bootstrap074: { ...bootstrap, providerAttestation: alteredAttestation, providerSigningKey },
-  }), /provider_attestation_replayed/);
+  }), /provider_attestation_(?:replayed|stale)/);
   await assert.rejects(
     migrationRunner.runMigrationsWithClient({
       client,

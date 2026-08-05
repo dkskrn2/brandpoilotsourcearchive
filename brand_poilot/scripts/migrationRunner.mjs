@@ -32,13 +32,14 @@ export const bootstrapFenceRelations = Object.freeze([
   "ai_content_subject_analyses", "ai_content_subject_appeal_regeneration_keys",
   "ai_content_subject_images", "ai_content_usage_ledger", "ai_content_wiki_version_snapshots",
   "auto_approval_checks", "automation_runs", "brand_format_rotation_states", "channel_outputs", "content_topics",
-  "jobs", "llm_runs", "master_drafts", "publish_queue", "regeneration_requests",
+  "jobs", "llm_runs", "master_drafts", "publish_attempts", "publish_queue", "regeneration_requests",
   "review_events", "source_crawl_runs", "storage_artifacts", "topic_publish_groups", "topic_rows",
 ]);
 const bootstrapSharedClassifiers = Object.freeze({
   automation_runs: "daily_generation_automation",
   jobs: "legacy_content_job",
   publish_queue: "ai_content_scheduled_publish",
+  publish_attempts: "ai_content_publish_attempt",
   source_crawl_runs: "scheduled_proposal_refresh",
   storage_artifacts: "ai_content_generated_artifact",
   topic_rows: "legacy_automated_topic",
@@ -326,7 +327,7 @@ export async function readFenceSecurityCatalog(client, names) {
        from ai_content_write_fence_catalog order by relation_name`,
   );
   const catalogText = catalogResult.rows.map((row) => `${row.relation_name}|${row.relation_class}|${row.row_classifier}`).join("\n");
-  if (catalogResult.rows.length !== 48 || checksum(catalogText) !== "4a36aebb9b4e56e19ab35ec08e45b3e3f625bb4a87f98359ca08658a4e6e132b") {
+  if (catalogResult.rows.length !== 49 || checksum(catalogText) !== "82b7d45786d6fd94d6b3d2487dc2456c762e5da5430db79b870d4d2dc0284f2f") {
     throw new Error("bootstrap_074_fence_security_catalog_mismatch");
   }
   const controlResult = await client.query(
@@ -521,15 +522,84 @@ export function validateBootstrapRoleAuthorization(authorization, context) {
   return authorization;
 }
 
-function canonicalProviderAttestation(value) {
-  const keys = ["contractVersion", "providerRequestSha256", "authorizationRequestId",
+const providerAttestationPayloadKeys = Object.freeze(["contractVersion", "providerRequestSha256", "authorizationRequestId",
     "action", "eventTriggerName", "eventTriggerFunction", "eventTriggerFunctionSha256",
     "eventTriggerEvent", "eventTriggerTags", "eventTriggerDefinitionSha256", "eventTriggerOwner", "eventTriggerEnabled",
     "migrationId", "migrationSha256", "imageDigest", "imageSourceLabel",
     "roleCatalogSha256", "objectCatalogSha256", "fenceSecurityCatalogSha256",
     "eventTriggerCatalogBeforeSha256", "eventTriggerCatalogBeforeCount",
-    "eventTriggerCatalogAfterSha256", "eventTriggerCatalogAfterCount", "issuedAt"];
-  return JSON.stringify(Object.fromEntries(keys.map((key) => [key, value[key]])));
+    "eventTriggerCatalogAfterSha256", "eventTriggerCatalogAfterCount", "issuedAt"]);
+const providerAttestationEnvelopeKeys = Object.freeze([...providerAttestationPayloadKeys, "signature"]);
+
+function assertExactObjectKeys(value, keys, errorCode) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || JSON.stringify(Object.keys(value).sort(lexicalCompare)) !== JSON.stringify([...keys].sort(lexicalCompare))) {
+    throw new Error(errorCode);
+  }
+}
+
+function canonicalProviderAttestation(value) {
+  const payload = Object.fromEntries(providerAttestationPayloadKeys.map((key) => [key, value[key]]));
+  payload.eventTriggerTags = [...(value.eventTriggerTags ?? [])].map(String).sort(lexicalCompare);
+  return JSON.stringify(payload);
+}
+
+export function canonicalProviderAttestationEnvelope(value) {
+  assertExactObjectKeys(value, providerAttestationEnvelopeKeys, "provider_attestation_envelope_invalid");
+  if (!exactHex(value.signature, 64)) throw new Error("provider_attestation_envelope_invalid");
+  return JSON.stringify({ ...JSON.parse(canonicalProviderAttestation(value)), signature: value.signature });
+}
+
+export function hashProviderAttestationEnvelope(value) {
+  return checksum(canonicalProviderAttestationEnvelope(value));
+}
+
+const revocationPayloadKeys = Object.freeze(["contractVersion", "authorizationRequestId", "providerRequestSha256",
+  "migrationRoleName", "schemaOwnerRoleName", "evidenceSha256"]);
+const revocationEnvelopeKeys = Object.freeze([...revocationPayloadKeys, "requestSha256"]);
+
+export function canonicalMembershipRevocationPayload(value) {
+  assertExactObjectKeys(value, revocationPayloadKeys, "bootstrap_074_revocation_evidence_invalid");
+  return JSON.stringify(Object.fromEntries(revocationPayloadKeys.map((key) => [key, value[key]])));
+}
+
+export function hashMembershipRevocationPayload(value) {
+  return checksum(canonicalMembershipRevocationPayload(value));
+}
+
+export function canonicalMembershipRevocationEnvelope(value) {
+  assertExactObjectKeys(value, revocationEnvelopeKeys, "bootstrap_074_revocation_evidence_invalid");
+  if (!exactHex(value.requestSha256, 64)) throw new Error("bootstrap_074_revocation_evidence_invalid");
+  const payload = Object.fromEntries(revocationPayloadKeys.map((key) => [key, value[key]]));
+  return JSON.stringify({ ...payload, requestSha256: value.requestSha256 });
+}
+
+export function hashMembershipRevocationEnvelope(value) {
+  return checksum(canonicalMembershipRevocationEnvelope(value));
+}
+
+export function buildMembershipRevocationRequest(authorization, installRequest, evidenceSha256) {
+  const payload = {
+    contractVersion: "ai-content-074-membership-revocation-request.v2",
+    authorizationRequestId: authorization.requestId,
+    providerRequestSha256: installRequest.requestSha256,
+    migrationRoleName: authorization.migrationRoleName,
+    schemaOwnerRoleName: authorization.schemaOwnerRoleName,
+    evidenceSha256,
+  };
+  return { ...payload, requestSha256: hashMembershipRevocationPayload(payload) };
+}
+
+export function validateMembershipRevocationEvidence(value, expected, storedEnvelopeSha256) {
+  const canonical = canonicalMembershipRevocationEnvelope(value);
+  const payload = Object.fromEntries(revocationPayloadKeys.map((key) => [key, value[key]]));
+  if (value.requestSha256 !== hashMembershipRevocationPayload(payload)
+    || !exactHex(storedEnvelopeSha256, 64)
+    || storedEnvelopeSha256 !== checksum(canonical)
+    || canonical !== canonicalMembershipRevocationEnvelope(expected)) {
+    throw new Error("bootstrap_074_revocation_evidence_invalid");
+  }
+  return value;
 }
 
 function canonicalProviderInstallRequest(value) {
@@ -581,6 +651,8 @@ export function buildProviderEventTriggerInstallRequest(authorization, seals) {
 
 export function signProviderEventTriggerAttestation(attestation, signingKey) {
   if (!signingKey) throw new Error("provider_attestation_key_required");
+  const keys = Object.keys(attestation).includes("signature") ? providerAttestationEnvelopeKeys : providerAttestationPayloadKeys;
+  assertExactObjectKeys(attestation, keys, "provider_attestation_envelope_invalid");
   return hmac(canonicalProviderAttestation(attestation), signingKey);
 }
 
@@ -588,6 +660,7 @@ export function validateProviderEventTriggerAttestation(attestation, { authoriza
   if (!attestation || attestation.contractVersion !== providerAttestationContract) {
     throw new Error("provider_attestation_contract_invalid");
   }
+  assertExactObjectKeys(attestation, providerAttestationEnvelopeKeys, "provider_attestation_envelope_invalid");
   const signature = signProviderEventTriggerAttestation(attestation, signingKey);
   if (!safeEqualHex(attestation.signature, signature)) throw new Error("provider_attestation_signature_invalid");
   const issued = Date.parse(attestation.issuedAt);
@@ -1130,9 +1203,6 @@ export async function runMigrationsWithClient({
         throw new Error("bootstrap_074_state_mismatch");
       }
       providerInstallRequest = sealed.install_request_json;
-      const suppliedAttestationSha256 = bootstrap074.providerAttestation
-        ? checksum(canonicalProviderAttestation(bootstrap074.providerAttestation))
-        : null;
       liveCatalogs = await readCanonicalBootstrapCatalogs(client, authorization);
       if (authorization.roleCatalogSha256 !== liveCatalogs.roleCatalogSha256
         || authorization.objectCatalogSha256 !== liveCatalogs.objectCatalogSha256) {
@@ -1145,19 +1215,32 @@ export async function runMigrationsWithClient({
       await client.query("select verify_ai_content_write_fence_catalog()");
       eventTriggerCatalog = await readCanonicalEventTriggerCatalog(client);
       if (sealed.provider_attestation_sha256) {
+        const storedAttestation = validateProviderEventTriggerAttestation(sealed.provider_attestation_json, {
+          authorization, installRequest: providerInstallRequest,
+          signingKey: bootstrap074.providerSigningKey, now: bootstrap074.now,
+        });
+        const storedAttestationSha256 = hashProviderAttestationEnvelope(storedAttestation);
+        if (storedAttestationSha256 !== sealed.provider_attestation_sha256) {
+          throw new Error("provider_attestation_envelope_hash_mismatch");
+        }
         if (bootstrap074.providerAttestation) {
-          if (sealed.provider_attestation_sha256!==suppliedAttestationSha256
-            || !sealed.revocation_request_json) {
+          const suppliedAttestation = validateProviderEventTriggerAttestation(bootstrap074.providerAttestation, {
+            authorization, installRequest: providerInstallRequest,
+            signingKey: bootstrap074.providerSigningKey, now: bootstrap074.now,
+          });
+          if (hashProviderAttestationEnvelope(suppliedAttestation) !== storedAttestationSha256) {
             throw new Error("provider_attestation_replayed");
           }
-          const delta = validateEventTriggerCatalogDelta(baselineCanonicalJson, eventTriggerCatalog.rows, authorization);
-          if (delta.catalogSha256 !== sealed.event_trigger_catalog_after_sha256
-            || delta.count !== sealed.event_trigger_catalog_after_count) {
-            throw new Error("bootstrap_074_live_event_trigger_catalog_mismatch");
-          }
-          await readLiveEventTriggerEvidence(client, authorization);
-          revocationRequest = sealed.revocation_request_json;
         }
+        const delta = validateEventTriggerCatalogDelta(baselineCanonicalJson, eventTriggerCatalog.rows, authorization);
+        if (delta.catalogSha256 !== sealed.event_trigger_catalog_after_sha256
+          || delta.count !== sealed.event_trigger_catalog_after_count) {
+          throw new Error("bootstrap_074_live_event_trigger_catalog_mismatch");
+        }
+        await readLiveEventTriggerEvidence(client, authorization);
+        const expectedRevocation = buildMembershipRevocationRequest(authorization, providerInstallRequest, storedAttestationSha256);
+        validateMembershipRevocationEvidence(sealed.revocation_request_json, expectedRevocation, sealed.revocation_request_sha256);
+        revocationRequest = expectedRevocation;
       } else {
         if (bootstrap074.providerAttestation) {
           providerAttestation = validateProviderEventTriggerAttestation(bootstrap074.providerAttestation, {
@@ -1166,21 +1249,15 @@ export async function runMigrationsWithClient({
             signingKey: bootstrap074.providerSigningKey,
             now: bootstrap074.now,
           });
+          const suppliedAttestationSha256 = hashProviderAttestationEnvelope(providerAttestation);
           const delta = validateEventTriggerCatalogDelta(baselineCanonicalJson, eventTriggerCatalog.rows, authorization);
           if (delta.catalogSha256 !== providerAttestation.eventTriggerCatalogAfterSha256
             || delta.count !== providerAttestation.eventTriggerCatalogAfterCount) {
             throw new Error("bootstrap_074_live_event_trigger_catalog_mismatch");
           }
           await readLiveEventTriggerEvidence(client, authorization);
-          const revocation = {
-            contractVersion: "ai-content-074-membership-revocation-request.v1",
-            authorizationRequestId: authorization.requestId,
-            providerRequestSha256: providerInstallRequest.requestSha256,
-            migrationRoleName: authorization.migrationRoleName,
-            schemaOwnerRoleName: authorization.schemaOwnerRoleName,
-            evidenceSha256: suppliedAttestationSha256,
-          };
-          revocationRequest = { ...revocation, requestSha256: checksum(JSON.stringify(revocation)) };
+          revocationRequest = buildMembershipRevocationRequest(authorization, providerInstallRequest, suppliedAttestationSha256);
+          const revocationEnvelopeSha256 = hashMembershipRevocationEnvelope(revocationRequest);
           await client.query("begin");
           try {
             await client.query(`set local role ${quoteIdentifier(authorization.schemaOwnerRoleName)}`);
@@ -1193,7 +1270,7 @@ export async function runMigrationsWithClient({
                 where singleton and provider_attestation_sha256 is null
                 returning singleton`,
               [JSON.stringify(providerAttestation),suppliedAttestationSha256,
-                JSON.stringify(revocationRequest),revocationRequest.requestSha256,
+                JSON.stringify(revocationRequest),revocationEnvelopeSha256,
                 delta.catalogSha256,delta.count],
             );
             if (consumed.rowCount !== 1) throw new Error("provider_attestation_replayed");
