@@ -137,6 +137,7 @@ function same(left: unknown, right: unknown): boolean {
 
 const ENCODED_PATH_SEPARATOR = /%(?:2f|5c)/i;
 const DOT_PATH_SEGMENT = /(?:^|\/)(?:(?:\.|%2e){1,2})(?:\/|$)/i;
+const BLOG_RESERVED_MANIFEST_ROLES = new Set(["slide", "inline", "scene", "html", "video"]);
 
 function hasForbiddenPathSyntax(path: string): boolean {
   return path.includes("\\") || ENCODED_PATH_SEPARATOR.test(path) || DOT_PATH_SEGMENT.test(path);
@@ -317,11 +318,14 @@ export function assertSelectedProposalInvariant(
   }
 }
 
-export function assertPlannerPromptBinding(
+function assertPromptBindingStructure(binding: ContentPromptBinding): void {
+  if (!Value.Check(ContentPromptBindingSchema, binding)) fail("content_prompt_binding_invalid");
+}
+
+function assertPlannerPromptBindingSemantics(
   input: ContentGenerationInputV3,
   binding: ContentPromptBinding,
 ): void {
-  if (!Value.Check(ContentPromptBindingSchema, binding)) fail("content_prompt_binding_invalid");
   const format = input.outputSettings.outputFormat;
   const purpose = input.outputSettings.purpose;
   const catalog = CONTENT_FORMAT_CATALOG[format];
@@ -340,6 +344,14 @@ export function assertPlannerPromptBinding(
   if (binding.imagePromptVersion !== CONTENT_IMAGE_PROMPT_VERSIONS[format][purpose]) fail("binding_image_prompt_mismatch");
   if (binding.manifestVersion !== AI_CONTENT_MANIFEST_VERSION) fail("binding_manifest_version_mismatch");
   if (binding.model !== CONTENT_PLANNER_MODEL_ID) fail("binding_model_mismatch");
+}
+
+export function assertPlannerPromptBinding(
+  input: ContentGenerationInputV3,
+  binding: ContentPromptBinding,
+): void {
+  assertPromptBindingStructure(binding);
+  assertPlannerPromptBindingSemantics(input, binding);
 }
 
 function planImagePackage(plan: ContentPlanResultV2): ImageGenerationPackageV1 | null {
@@ -391,6 +403,7 @@ function assertImagePackageAssetBindings(
       if (asset.role !== asset.role.trim()
         || asset.role.trim().length === 0
         || /[\u0000-\u001f\u007f-\u009f]/.test(asset.role)) fail("blog_image_asset_role_invalid");
+      if (BLOG_RESERVED_MANIFEST_ROLES.has(asset.role)) fail("blog_image_asset_role_reserved");
     }
     return;
   }
@@ -538,12 +551,13 @@ export function assertContentPipelineBindings(
   rendered: RenderedAssetInventory,
   manifest: AiContentManifestV3,
 ): void {
+  assertPromptBindingStructure(binding);
   const parsedAuthority = parseContentPipelineAuthorityContext(authority);
   const parsedRendered = parseRenderedAssetInventory(rendered);
   assertPurposeProductInvariant(input);
   assertEvidenceOwnership(input, parsedAuthority);
   assertSelectedProposalInvariant(input, parsedAuthority);
-  assertPlannerPromptBinding(input, binding);
+  assertPlannerPromptBindingSemantics(input, binding);
   assertPlanMatchesInput(input, binding, plan, imagePackage);
   assertManifestMatchesInput(input, binding, manifest);
   assertAssetCountInvariant(input, parsedAuthority, plan, imagePackage, parsedRendered, manifest);

@@ -548,6 +548,19 @@ describe("content pipeline semantic bindings", () => {
     }
   });
 
+  it.each(["slide", "inline", "scene", "html", "video"])(
+    "rejects reserved final manifest role %s in a blog image package",
+    (role) => {
+      const value = pipelineFor("blog", "informational");
+      const imagePackage = {
+        ...value.imagePackage,
+        assets: value.imagePackage.assets.map((asset, index) => index === 0 ? { ...asset, role } : asset),
+      };
+      const plan = { ...value.plan, imagePackage } as ContentPlanResultV2;
+      expect(() => assertContentPipelineBindings(value.input, value.authority, value.binding, plan, imagePackage, value.rendered, value.manifest)).toThrow("blog_image_asset_role_reserved");
+    },
+  );
+
   it("rejects unsafe public file names even when rendered and manifest values agree", () => {
     const value = pipelineFor("blog", "informational");
     const withFileName = (fileName: string) => ({
@@ -573,5 +586,12 @@ describe("content pipeline semantic bindings", () => {
     const { model: _model, ...missing } = value.binding;
     expect(() => assertPlannerPromptBinding(value.input, missing as ContentPromptBinding)).toThrow("content_prompt_binding_invalid");
     expect(() => assertPlannerPromptBinding(value.input, { ...value.binding, outputFormat: "blog", extra: true } as ContentPromptBinding)).toThrow("content_prompt_binding_invalid");
+  });
+
+  it("checks the binding boundary before any composite semantic invariant", () => {
+    const value = pipelineFor("blog", "informational");
+    const { model: _model, ...malformedBinding } = value.binding;
+    const semanticDriftInput = { ...value.input, product: product() };
+    expect(() => assertContentPipelineBindings(semanticDriftInput, value.authority, malformedBinding as ContentPromptBinding, value.plan, value.imagePackage, value.rendered, value.manifest)).toThrow("content_prompt_binding_invalid");
   });
 });
