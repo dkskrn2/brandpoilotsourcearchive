@@ -509,7 +509,7 @@ test("074 post-migration security catalog is independently read from live Postgr
       grant execute on function assert_ai_content_writable() to content_application;
       grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,text,text,text),set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text) to content_operator;
       grant select on table ai_content_bootstrap_state,ai_content_write_fence_catalog to content_migration;
-      grant execute on function ai_content_cutover_bypass_allowed(),verify_ai_content_write_fence_catalog() to content_migration;
+      grant execute on function ai_content_cutover_bypass_allowed(),verify_ai_content_write_fence_catalog(),consume_ai_content_provider_attestation() to content_migration;
     `);
     const names = { schemaOwnerRoleName: "content_schema_owner", applicationRoleName: "content_application", operatorRoleName: "content_operator", migrationRoleName: "content_migration", cleanupRoleName: "content_cleanup" };
     const catalog = await readFenceSecurityCatalog({ query: (sql, parameters = []) => database.query(sql, parameters) }, names);

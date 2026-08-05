@@ -1,4 +1,4 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createPublicKey, verify } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,7 +16,11 @@ const compatibleMigrationChecksums = Object.freeze({
 });
 const migrationAdvisoryLockName = "brand-pilot:schema-migrations:v1";
 const bootstrap074MigrationId = "074_ai_content_maintenance_write_fence.sql";
-const providerAttestationContract = "ai-content-074-provider-attestation.v2";
+const providerAttestationContract = "ai-content-074-provider-attestation.v3";
+export const required074DdlGuardTags = Object.freeze([
+  "ALTER FUNCTION", "ALTER TABLE", "CREATE FUNCTION", "CREATE TABLE",
+  "CREATE TRIGGER", "DROP FUNCTION", "DROP TABLE", "DROP TRIGGER",
+]);
 export const bootstrapFenceRelations = Object.freeze([
   "ai_content_analyzed_subject_snapshots", "ai_content_approved_proposal_versions",
   "ai_content_attachment_deletion_jobs", "ai_content_attachment_storage_path_guards",
@@ -180,6 +184,63 @@ export function hashFenceSecurityCatalog(value) {
   return checksum(canonicalFenceSecurityCatalog(value));
 }
 
+const fenceSecurityCatalogKeys = Object.freeze(["contractVersion", "functions", "ordinaryTriggers", "fenceCatalog", "controlRelations"]);
+const fenceSecurityFunctionKeys = Object.freeze(["identity", "definitionSha256", "ownerRoleName", "securityDefiner", "config", "acl"]);
+const fenceSecurityTriggerKeys = Object.freeze(["relationName", "triggerName", "triggerType", "functionIdentity", "enabled"]);
+const fenceSecurityFenceKeys = Object.freeze(["relationName", "relationClass", "rowClassifier"]);
+const fenceSecurityControlKeys = Object.freeze(["relationName", "ownerRoleName", "acl"]);
+const aclKeys = Object.freeze(["grantee", "privilege", "grantable"]);
+
+function validateStoredFenceSecurityCatalog(value, expectedSha256, errorCode = "bootstrap_074_fence_security_catalog_mismatch") {
+  assertExactObjectKeys(value, fenceSecurityCatalogKeys, errorCode);
+  if (value.contractVersion !== "ai-content-074-fence-security-catalog.v1"
+    || !Array.isArray(value.functions) || !Array.isArray(value.ordinaryTriggers)
+    || !Array.isArray(value.fenceCatalog) || !Array.isArray(value.controlRelations)) throw new Error(errorCode);
+  for (const row of value.functions) {
+    assertExactObjectKeys(row, fenceSecurityFunctionKeys, errorCode);
+    if (!Array.isArray(row.config) || !Array.isArray(row.acl)) throw new Error(errorCode);
+    row.acl.forEach((acl) => assertExactObjectKeys(acl, aclKeys, errorCode));
+  }
+  for (const row of value.ordinaryTriggers) assertExactObjectKeys(row, fenceSecurityTriggerKeys, errorCode);
+  for (const row of value.fenceCatalog) assertExactObjectKeys(row, fenceSecurityFenceKeys, errorCode);
+  for (const row of value.controlRelations) {
+    assertExactObjectKeys(row, fenceSecurityControlKeys, errorCode);
+    if (!Array.isArray(row.acl)) throw new Error(errorCode);
+    row.acl.forEach((acl) => assertExactObjectKeys(acl, aclKeys, errorCode));
+  }
+  const canonicalJson = canonicalFenceSecurityCatalog(value);
+  const projectAcl = (acl) => acl.map((item) => Object.fromEntries(aclKeys.map((key) => [key, item[key]])));
+  const exactProjection = {
+    contractVersion: value.contractVersion,
+    functions: value.functions.map((row) => ({ ...Object.fromEntries(fenceSecurityFunctionKeys.map((key) => [key, row[key]])), acl: projectAcl(row.acl) })),
+    ordinaryTriggers: value.ordinaryTriggers.map((row) => Object.fromEntries(fenceSecurityTriggerKeys.map((key) => [key, row[key]]))),
+    fenceCatalog: value.fenceCatalog.map((row) => Object.fromEntries(fenceSecurityFenceKeys.map((key) => [key, row[key]]))),
+    controlRelations: value.controlRelations.map((row) => ({ ...Object.fromEntries(fenceSecurityControlKeys.map((key) => [key, row[key]])), acl: projectAcl(row.acl) })),
+  };
+  if (canonicalJson !== JSON.stringify(exactProjection) || !exactHex(expectedSha256, 64) || checksum(canonicalJson) !== expectedSha256) {
+    throw new Error(errorCode);
+  }
+  return canonicalJson;
+}
+
+function deriveExpectedFinalFenceSecurityCatalog(interimCanonicalJson, schemaOwnerRoleName) {
+  const interim = JSON.parse(interimCanonicalJson);
+  if (JSON.stringify(interim.functions.map((row) => row.identity)) !== JSON.stringify(providerEnforcementBundle.functions)
+    || JSON.stringify(interim.controlRelations.map((row) => row.relationName)) !== JSON.stringify(providerEnforcementBundle.controlRelations)) {
+    throw new Error("bootstrap_074_provider_bundle_manifest_mismatch");
+  }
+  const replaceOwnerAcl = (acl) => acl.map((item) => item.grantee === schemaOwnerRoleName
+    ? { ...item, grantee: "postgres" }
+    : item);
+  const finalCatalog = {
+    ...interim,
+    functions: interim.functions.map((row) => ({ ...row, ownerRoleName: "postgres", acl: replaceOwnerAcl(row.acl) })),
+    controlRelations: interim.controlRelations.map((row) => ({ ...row, ownerRoleName: "postgres", acl: replaceOwnerAcl(row.acl) })),
+  };
+  const canonicalJson = canonicalFenceSecurityCatalog(finalCatalog);
+  return { canonicalJson, catalogSha256: checksum(canonicalJson), catalog: JSON.parse(canonicalJson) };
+}
+
 export function canonicalEventTriggerCatalog(rows) {
   const eventTriggers = rows.map((row) => ({
     eventTriggerName: String(row.event_trigger_name ?? row.eventTriggerName),
@@ -280,6 +341,7 @@ const fenceSecurityFunctions = Object.freeze([
   { identity: "public.ai_content_cutover_bypass_allowed()", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "migration" },
   { identity: "public.ai_content_fence_trigger_name(text)", securityDefiner: false, config: ["search_path=pg_catalog"] },
   { identity: "public.assert_ai_content_writable()", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "application" },
+  { identity: "public.consume_ai_content_provider_attestation()", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "migration" },
   { identity: "public.enforce_ai_content_ddl_allowlist()", securityDefiner: true, config: ["search_path=pg_catalog,public"] },
   { identity: "public.enforce_ai_content_write_fence()", securityDefiner: true, config: ["search_path=pg_catalog,public"] },
   { identity: "public.forbid_ai_content_cutover_event_mutation()", securityDefiner: false, config: ["search_path=pg_catalog,public"] },
@@ -292,6 +354,13 @@ const fenceControlRelations = Object.freeze([
   "ai_content_bootstrap_state", "ai_content_cutover_status_events", "ai_content_cutovers",
   "ai_content_ddl_allowlist", "ai_content_maintenance_state", "ai_content_write_fence_catalog",
 ]);
+export const providerEnforcementBundle = Object.freeze({
+  contractVersion: "ai-content-074-provider-enforcement-bundle.v1",
+  ownerRoleName: "postgres",
+  functions: fenceSecurityFunctions.map(({ identity }) => identity).sort(lexicalCompare),
+  controlRelations: [...fenceControlRelations].sort(lexicalCompare),
+});
+export const providerEnforcementBundleSha256 = checksum(JSON.stringify(providerEnforcementBundle));
 const tableOwnerPrivileges = Object.freeze(["DELETE", "INSERT", "MAINTAIN", "REFERENCES", "SELECT", "TRIGGER", "TRUNCATE", "UPDATE"]);
 
 function expectedAcl(owner, extra = []) {
@@ -302,7 +371,7 @@ function exactJson(value) {
   return JSON.stringify(value);
 }
 
-export async function readFenceSecurityCatalog(client, names) {
+export async function readFenceSecurityCatalog(client, names, { ownerRoleName = names.schemaOwnerRoleName } = {}) {
   const functionResult = await client.query(
     `/* fence_security_functions_v1 */
      select requested.identity,
@@ -327,10 +396,10 @@ export async function readFenceSecurityCatalog(client, names) {
   for (const expected of fenceSecurityFunctions) {
     const actual = functionByIdentity.get(expected.identity);
     const extras = expected.execute ? [{ grantee: roleByKey[expected.execute], privilege: "EXECUTE", grantable: false }] : [];
-    if (!actual || actual.owner_role_name !== names.schemaOwnerRoleName
+    if (!actual || actual.owner_role_name !== ownerRoleName
       || actual.security_definer !== expected.securityDefiner
       || exactJson([...(actual.config ?? [])].map((item) => String(item).replace(/\s+/g, "")).sort(lexicalCompare)) !== exactJson(expected.config)
-      || exactJson(normalizeAcl(actual.acl)) !== exactJson(expectedAcl(names.schemaOwnerRoleName, extras))) {
+      || exactJson(normalizeAcl(actual.acl)) !== exactJson(expectedAcl(ownerRoleName, extras))) {
       throw new Error(`bootstrap_074_fence_security_function_mismatch:${expected.identity}:${JSON.stringify({ owner: actual?.owner_role_name, securityDefiner: actual?.security_definer, config: actual?.config, acl: normalizeAcl(actual?.acl) })}`);
     }
   }
@@ -387,8 +456,8 @@ export async function readFenceSecurityCatalog(client, names) {
       : row.relation_name === "ai_content_bootstrap_state" || row.relation_name === "ai_content_write_fence_catalog"
         ? [{ grantee: names.migrationRoleName, privilege: "SELECT", grantable: false }]
         : [];
-    const ownerAcl = tableOwnerPrivileges.map((privilege) => ({ grantee: names.schemaOwnerRoleName, privilege, grantable: false }));
-    if (row.owner_role_name !== names.schemaOwnerRoleName
+    const ownerAcl = tableOwnerPrivileges.map((privilege) => ({ grantee: ownerRoleName, privilege, grantable: false }));
+    if (row.owner_role_name !== ownerRoleName
       || exactJson(normalizeAcl(row.acl)) !== exactJson(normalizeAcl([...ownerAcl, ...extra]))) {
       throw new Error(`bootstrap_074_fence_security_control_mismatch:${row.relation_name}:${JSON.stringify({ owner: row.owner_role_name, acl: normalizeAcl(row.acl) })}`);
     }
@@ -451,7 +520,9 @@ export async function readCanonicalBootstrapCatalogs(client, names) {
 }
 
 const bootstrapAuthorizationPayloadKeys = Object.freeze([
-    "contractVersion", "requestId", "migrationId", "migrationSha256",
+    "contractVersion", "algorithm", "keyId", "providerAttestationKeyId", "providerAttestationPublicKeySha256",
+    "providerEnforcementBundleSha256",
+    "requestId", "migrationId", "migrationSha256",
     "imageDigest", "imageSourceLabel", "roleCatalogSha256", "objectCatalogSha256",
     "migrationRoleName", "schemaOwnerRoleName", "applicationRoleName",
     "operatorRoleName", "cleanupRoleName", "eventTriggerName",
@@ -462,7 +533,7 @@ const bootstrapAuthorizationPayloadKeys = Object.freeze([
   ]);
 const bootstrapAuthorizationEnvelopeKeys = Object.freeze([...bootstrapAuthorizationPayloadKeys, "signature"]);
 
-function canonicalBootstrapAuthorization(value) {
+export function canonicalBootstrapAuthorizationPayload(value) {
   assertExactObjectKeys(value, bootstrapAuthorizationPayloadKeys, "bootstrap_role_authorization_envelope_invalid");
   return JSON.stringify(Object.fromEntries(bootstrapAuthorizationPayloadKeys.map((key) => [key, value[key]])));
 }
@@ -472,33 +543,65 @@ function bootstrapAuthorizationPayload(value) {
   return Object.fromEntries(bootstrapAuthorizationPayloadKeys.map((key) => [key, value[key]]));
 }
 
-function hmac(value, key) {
-  return createHmac("sha256", key).update(value).digest("hex");
-}
-
 function exactHex(value, size) {
   return typeof value === "string" && new RegExp(`^[0-9a-f]{${size}}$`).test(value);
 }
 
-function safeEqualHex(actual, expected) {
-  if (!exactHex(actual, 64) || !exactHex(expected, 64)) return false;
-  return timingSafeEqual(Buffer.from(actual, "hex"), Buffer.from(expected, "hex"));
+function loadPinnedEd25519PublicKey(verification, errorPrefix) {
+  if (!verification || typeof verification.publicKeyPem !== "string"
+    || !/^[A-Za-z0-9._:-]{1,128}$/.test(verification.expectedKeyId ?? "")
+    || !exactHex(verification.expectedPublicKeySha256, 64)) {
+    throw new Error(`${errorPrefix}_identity_invalid`);
+  }
+  let publicKey;
+  try { publicKey = createPublicKey(verification.publicKeyPem); } catch { throw new Error(`${errorPrefix}_public_key_invalid`); }
+  if (publicKey.asymmetricKeyType !== "ed25519") throw new Error(`${errorPrefix}_algorithm_invalid`);
+  const fingerprint = createHash("sha256").update(publicKey.export({ type: "spki", format: "der" })).digest("hex");
+  if (fingerprint !== verification.expectedPublicKeySha256) throw new Error(`${errorPrefix}_fingerprint_invalid`);
+  return publicKey;
 }
 
-export function signBootstrapRoleAuthorization(authorization, signingKey) {
-  if (!signingKey) throw new Error("bootstrap_role_authorization_key_required");
-  return hmac(canonicalBootstrapAuthorization(authorization), signingKey);
+function decodeCanonicalEd25519Signature(signatureValue, errorPrefix) {
+  if (typeof signatureValue !== "string") throw new Error(`${errorPrefix}_signature_shape_invalid`);
+  const signature = Buffer.from(signatureValue, "base64");
+  if (signature.length !== 64 || signature.toString("base64") !== signatureValue) {
+    throw new Error(`${errorPrefix}_signature_shape_invalid`);
+  }
+  return signature;
+}
+
+function verifyPinnedEd25519(canonicalPayload, envelope, verification, errorPrefix) {
+  if (envelope.algorithm !== "Ed25519" || envelope.keyId !== verification?.expectedKeyId) {
+    throw new Error(`${errorPrefix}_identity_invalid`);
+  }
+  const publicKey = loadPinnedEd25519PublicKey(verification, errorPrefix);
+  const signature = decodeCanonicalEd25519Signature(envelope.signature, errorPrefix);
+  if (!verify(null, Buffer.from(canonicalPayload), publicKey, signature)) {
+    throw new Error(`${errorPrefix}_signature_invalid`);
+  }
 }
 
 export function validateBootstrapRoleAuthorization(authorization, context) {
   assertExactObjectKeys(authorization, bootstrapAuthorizationEnvelopeKeys, "bootstrap_role_authorization_envelope_invalid");
-  if (!exactHex(authorization.signature, 64)) throw new Error("bootstrap_role_authorization_envelope_invalid");
-  if (!authorization || authorization.contractVersion !== "ai-content-bootstrap-role-authorization.v2") {
+  if (!authorization || authorization.contractVersion !== "ai-content-bootstrap-role-authorization.v3") {
     throw new Error("bootstrap_role_authorization_contract_invalid");
   }
-  const expectedSignature = signBootstrapRoleAuthorization(bootstrapAuthorizationPayload(authorization), context.signingKey);
-  if (!safeEqualHex(authorization.signature, expectedSignature)) {
-    throw new Error("bootstrap_role_authorization_signature_invalid");
+  verifyPinnedEd25519(
+    canonicalBootstrapAuthorizationPayload(bootstrapAuthorizationPayload(authorization)),
+    authorization,
+    context.authorizationVerification,
+    "bootstrap_role_authorization",
+  );
+  loadPinnedEd25519PublicKey(
+    context.providerAttestationVerification,
+    "bootstrap_role_authorization_provider",
+  );
+  if (authorization.providerAttestationKeyId !== context.providerAttestationVerification?.expectedKeyId
+    || authorization.providerAttestationPublicKeySha256 !== context.providerAttestationVerification?.expectedPublicKeySha256) {
+    throw new Error("bootstrap_role_authorization_provider_identity_mismatch");
+  }
+  if (authorization.providerEnforcementBundleSha256 !== providerEnforcementBundleSha256) {
+    throw new Error("bootstrap_role_authorization_provider_bundle_mismatch");
   }
   const now = new Date(context.now ?? Date.now()).getTime();
   const issued = Date.parse(authorization.issuedAt);
@@ -554,7 +657,7 @@ export function validateBootstrapRoleAuthorization(authorization, context) {
     || authorization.eventTriggerEvent !== "ddl_command_end"
     || authorization.eventTriggerOwner !== "postgres"
     || !Array.isArray(authorization.eventTriggerTags)
-    || authorization.eventTriggerTags.length === 0
+    || JSON.stringify([...authorization.eventTriggerTags].sort(lexicalCompare)) !== JSON.stringify(required074DdlGuardTags)
     || authorization.eventTriggerTags.some((tag) => typeof tag !== "string" || !/^[A-Z][A-Z _]{1,63}$/.test(tag))
     || new Set(authorization.eventTriggerTags).size !== authorization.eventTriggerTags.length
     || !exactHex(authorization.eventTriggerDefinitionSha256, 64)
@@ -568,15 +671,16 @@ export function validateBootstrapRoleAuthorization(authorization, context) {
 }
 
 const providerAttestationPayloadKeys = Object.freeze(["contractVersion", "providerRequestSha256", "authorizationRequestId",
+    "algorithm", "keyId",
     "action", "eventTriggerName", "eventTriggerFunction", "eventTriggerFunctionSha256",
     "eventTriggerEvent", "eventTriggerTags", "eventTriggerDefinitionSha256", "eventTriggerOwner", "eventTriggerEnabled",
     "migrationId", "migrationSha256", "imageDigest", "imageSourceLabel",
-    "roleCatalogSha256", "objectCatalogSha256", "fenceSecurityCatalogSha256",
+    "roleCatalogSha256", "objectCatalogSha256", "fenceSecurityCatalogSha256", "finalFenceSecurityCatalogSha256",
     "eventTriggerCatalogBeforeSha256", "eventTriggerCatalogBeforeCount",
     "eventTriggerCatalogAfterSha256", "eventTriggerCatalogAfterCount", "issuedAt"]);
 const providerAttestationEnvelopeKeys = Object.freeze([...providerAttestationPayloadKeys, "signature"]);
 
-function canonicalProviderAttestation(value) {
+export function canonicalProviderAttestationPayload(value) {
   const payload = Object.fromEntries(providerAttestationPayloadKeys.map((key) => [key, value[key]]));
   payload.eventTriggerTags = [...(value.eventTriggerTags ?? [])].map(String).sort(lexicalCompare);
   return JSON.stringify(payload);
@@ -584,8 +688,8 @@ function canonicalProviderAttestation(value) {
 
 export function canonicalProviderAttestationEnvelope(value) {
   assertExactObjectKeys(value, providerAttestationEnvelopeKeys, "provider_attestation_envelope_invalid");
-  if (!exactHex(value.signature, 64)) throw new Error("provider_attestation_envelope_invalid");
-  return JSON.stringify({ ...JSON.parse(canonicalProviderAttestation(value)), signature: value.signature });
+  decodeCanonicalEd25519Signature(value.signature, "provider_attestation");
+  return JSON.stringify({ ...JSON.parse(canonicalProviderAttestationPayload(value)), signature: value.signature });
 }
 
 export function hashProviderAttestationEnvelope(value) {
@@ -644,7 +748,11 @@ const providerInstallPayloadKeys = Object.freeze(["contractVersion", "authorizat
     "eventTriggerFunction", "eventTriggerFunctionSha256", "eventTriggerEvent", "eventTriggerTags",
     "eventTriggerOwner", "eventTriggerEnabled", "eventTriggerDefinitionSha256", "migrationId",
     "migrationSha256", "imageDigest", "imageSourceLabel", "roleCatalogSha256", "objectCatalogSha256",
-    "fenceSecurityCatalogSha256", "eventTriggerCatalogBeforeSha256", "eventTriggerCatalogBeforeCount",
+    "schemaOwnerRoleName", "fenceSecurityCatalogSha256", "interimFenceSecurityCatalog",
+    "expectedFinalFenceSecurityCatalogSha256", "expectedFinalFenceSecurityCatalog",
+    "providerAttestationKeyId", "providerAttestationPublicKeySha256",
+    "providerEnforcementBundleSha256",
+    "eventTriggerCatalogBeforeSha256", "eventTriggerCatalogBeforeCount",
     "eventTriggerCatalogBefore"]);
 const providerInstallEnvelopeKeys = Object.freeze([...providerInstallPayloadKeys, "requestSha256"]);
 
@@ -654,6 +762,17 @@ function canonicalProviderInstallRequest(value) {
   const request = Object.fromEntries(providerInstallPayloadKeys.map((key) => [key, value[key]]));
   request.eventTriggerTags = [...(value.eventTriggerTags ?? [])].map(String).sort(lexicalCompare);
   if (JSON.stringify(value.eventTriggerTags) !== JSON.stringify(request.eventTriggerTags)) throw new Error(errorCode);
+  request.interimFenceSecurityCatalog = JSON.parse(validateStoredFenceSecurityCatalog(
+    value.interimFenceSecurityCatalog, value.fenceSecurityCatalogSha256, errorCode,
+  ));
+  request.expectedFinalFenceSecurityCatalog = JSON.parse(validateStoredFenceSecurityCatalog(
+    value.expectedFinalFenceSecurityCatalog, value.expectedFinalFenceSecurityCatalogSha256, errorCode,
+  ));
+  const derivedFinal = deriveExpectedFinalFenceSecurityCatalog(
+    JSON.stringify(request.interimFenceSecurityCatalog), value.schemaOwnerRoleName,
+  );
+  if (derivedFinal.catalogSha256 !== value.expectedFinalFenceSecurityCatalogSha256
+    || derivedFinal.canonicalJson !== JSON.stringify(request.expectedFinalFenceSecurityCatalog)) throw new Error(errorCode);
   request.eventTriggerCatalogBefore = JSON.parse(validateStoredEventTriggerCatalogEnvelope(
     value.eventTriggerCatalogBefore, value.eventTriggerCatalogBeforeSha256, value.eventTriggerCatalogBeforeCount,
   ));
@@ -684,13 +803,14 @@ function validateProviderEventTriggerInstallRequest(value, storedSha256) {
 
 export function buildProviderEventTriggerInstallRequest(authorization, seals) {
   if (!exactHex(seals?.fenceSecurityCatalogSha256, 64)
+    || typeof seals?.fenceSecurityCatalogCanonicalJson !== "string"
     || typeof seals?.eventTriggerCatalogBeforeCanonicalJson !== "string") {
     throw new Error("bootstrap_074_install_seals_required");
   }
   const request = {
-    contractVersion: "ai-content-074-provider-install-request.v2",
+    contractVersion: "ai-content-074-provider-install-request.v3",
     authorizationRequestId: authorization.requestId,
-    action: "create_enable_verify_074_event_trigger",
+    action: "install_verify_074_enforcement_bundle",
     eventTriggerName: authorization.eventTriggerName,
     eventTriggerFunction: authorization.eventTriggerFunction,
     eventTriggerFunctionSha256: authorization.eventTriggerFunctionSha256,
@@ -705,7 +825,18 @@ export function buildProviderEventTriggerInstallRequest(authorization, seals) {
     imageSourceLabel: authorization.imageSourceLabel,
     roleCatalogSha256: authorization.roleCatalogSha256,
     objectCatalogSha256: authorization.objectCatalogSha256,
+    schemaOwnerRoleName: authorization.schemaOwnerRoleName,
     fenceSecurityCatalogSha256: seals.fenceSecurityCatalogSha256,
+    interimFenceSecurityCatalog: JSON.parse(seals.fenceSecurityCatalogCanonicalJson),
+    expectedFinalFenceSecurityCatalogSha256: deriveExpectedFinalFenceSecurityCatalog(
+      seals.fenceSecurityCatalogCanonicalJson, authorization.schemaOwnerRoleName,
+    ).catalogSha256,
+    expectedFinalFenceSecurityCatalog: deriveExpectedFinalFenceSecurityCatalog(
+      seals.fenceSecurityCatalogCanonicalJson, authorization.schemaOwnerRoleName,
+    ).catalog,
+    providerAttestationKeyId: authorization.providerAttestationKeyId,
+    providerAttestationPublicKeySha256: authorization.providerAttestationPublicKeySha256,
+    providerEnforcementBundleSha256: authorization.providerEnforcementBundleSha256,
     eventTriggerCatalogBeforeSha256: authorization.eventTriggerCatalogBeforeSha256,
     eventTriggerCatalogBeforeCount: authorization.eventTriggerCatalogBeforeCount,
     eventTriggerCatalogBefore: JSON.parse(seals.eventTriggerCatalogBeforeCanonicalJson),
@@ -713,20 +844,19 @@ export function buildProviderEventTriggerInstallRequest(authorization, seals) {
   return { ...request, requestSha256: hashProviderEventTriggerInstallRequest(request) };
 }
 
-export function signProviderEventTriggerAttestation(attestation, signingKey) {
-  if (!signingKey) throw new Error("provider_attestation_key_required");
-  const keys = Object.keys(attestation).includes("signature") ? providerAttestationEnvelopeKeys : providerAttestationPayloadKeys;
-  assertExactObjectKeys(attestation, keys, "provider_attestation_envelope_invalid");
-  return hmac(canonicalProviderAttestation(attestation), signingKey);
-}
-
-export function validateProviderEventTriggerAttestation(attestation, { authorization, installRequest, signingKey, now }) {
+export function validateProviderEventTriggerAttestation(attestation, {
+  authorization, installRequest, providerAttestationVerification, finalFenceSecurityCatalogSha256, now,
+}) {
   if (!attestation || attestation.contractVersion !== providerAttestationContract) {
     throw new Error("provider_attestation_contract_invalid");
   }
   assertExactObjectKeys(attestation, providerAttestationEnvelopeKeys, "provider_attestation_envelope_invalid");
-  const signature = signProviderEventTriggerAttestation(attestation, signingKey);
-  if (!safeEqualHex(attestation.signature, signature)) throw new Error("provider_attestation_signature_invalid");
+  verifyPinnedEd25519(
+    canonicalProviderAttestationPayload(Object.fromEntries(providerAttestationPayloadKeys.map((key) => [key, attestation[key]]))),
+    attestation,
+    providerAttestationVerification,
+    "provider_attestation",
+  );
   const issued = Date.parse(attestation.issuedAt);
   const currentTime = new Date(now ?? Date.now()).getTime();
   if (!Number.isFinite(issued)
@@ -736,13 +866,14 @@ export function validateProviderEventTriggerAttestation(attestation, { authoriza
     throw new Error("provider_attestation_stale");
   }
   if (!exactHex(attestation.eventTriggerCatalogAfterSha256, 64)
-    || !Number.isInteger(attestation.eventTriggerCatalogAfterCount)) {
+    || !Number.isInteger(attestation.eventTriggerCatalogAfterCount)
+    || !exactHex(attestation.finalFenceSecurityCatalogSha256, 64)) {
     throw new Error("provider_attestation_event_trigger_catalog_invalid");
   }
   const expected = {
     providerRequestSha256: installRequest.requestSha256,
     authorizationRequestId: authorization.requestId,
-    action: "create_enable_verify_074_event_trigger",
+    action: "install_verify_074_enforcement_bundle",
     eventTriggerName: authorization.eventTriggerName,
     eventTriggerFunction: authorization.eventTriggerFunction,
     eventTriggerFunctionSha256: authorization.eventTriggerFunctionSha256,
@@ -758,6 +889,7 @@ export function validateProviderEventTriggerAttestation(attestation, { authoriza
     roleCatalogSha256: authorization.roleCatalogSha256,
     objectCatalogSha256: authorization.objectCatalogSha256,
     fenceSecurityCatalogSha256: installRequest.fenceSecurityCatalogSha256,
+    finalFenceSecurityCatalogSha256,
     eventTriggerCatalogBeforeSha256: installRequest.eventTriggerCatalogBeforeSha256,
     eventTriggerCatalogBeforeCount: installRequest.eventTriggerCatalogBeforeCount,
     eventTriggerCatalogAfterSha256: attestation.eventTriggerCatalogAfterSha256,
@@ -1099,7 +1231,6 @@ export async function runMigrationsWithClient({
     let authorization;
     let liveCatalogs;
     let providerInstallRequest;
-    let providerAttestation;
     let revocationRequest;
     let eventTriggerCatalog;
     let fenceSecurityCatalog;
@@ -1148,7 +1279,7 @@ export async function runMigrationsWithClient({
           await client.query(`grant execute on function assert_ai_content_writable() to ${appRole}`);
           await client.query(`grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,text,text,text),set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text) to ${operatorRole}`);
           await client.query(`grant select on table ai_content_bootstrap_state,ai_content_write_fence_catalog to ${migrationRole}`);
-          await client.query(`grant execute on function ai_content_cutover_bypass_allowed(),verify_ai_content_write_fence_catalog() to ${migrationRole}`);
+          await client.query(`grant execute on function ai_content_cutover_bypass_allowed(),verify_ai_content_write_fence_catalog(),consume_ai_content_provider_attestation() to ${migrationRole}`);
           const roleSafety = await client.query(
             `/* bootstrap_application_privileges_v1 */
              select exists (
@@ -1186,9 +1317,10 @@ export async function runMigrationsWithClient({
           }
           providerInstallRequest = buildProviderEventTriggerInstallRequest(authorization, {
             fenceSecurityCatalogSha256: fenceSecurityCatalog.catalogSha256,
+            fenceSecurityCatalogCanonicalJson: fenceSecurityCatalog.canonicalJson,
             eventTriggerCatalogBeforeCanonicalJson: eventTriggerCatalog.canonicalJson,
           });
-          const authorizationSha256 = checksum(canonicalBootstrapAuthorization(bootstrapAuthorizationPayload(authorization)));
+          const authorizationSha256 = checksum(canonicalBootstrapAuthorizationPayload(bootstrapAuthorizationPayload(authorization)));
           await client.query(
             `insert into ai_content_bootstrap_state (
                singleton,authorization_request_id,authorization_sha256,
@@ -1233,6 +1365,7 @@ export async function runMigrationsWithClient({
          select authorization_request_id,authorization_sha256,
                 migration_role_name,schema_owner_role_name,application_role_name,operator_role_name,cleanup_role_name,
                 migration_sha256,role_catalog_sha256,object_catalog_sha256,fence_security_catalog_sha256,
+                final_fence_security_catalog_sha256,
                 event_trigger_catalog_before_json,event_trigger_catalog_before_sha256,event_trigger_catalog_before_count,
                 event_trigger_catalog_after_sha256,event_trigger_catalog_after_count,
                 install_request_json,install_request_sha256,
@@ -1241,7 +1374,7 @@ export async function runMigrationsWithClient({
            from ai_content_bootstrap_state where singleton`,
       );
       const sealed = bootstrapState.rows[0];
-      const authorizationSha256 = checksum(canonicalBootstrapAuthorization(bootstrapAuthorizationPayload(authorization)));
+      const authorizationSha256 = checksum(canonicalBootstrapAuthorizationPayload(bootstrapAuthorizationPayload(authorization)));
       const baselineCanonicalJson = sealed ? validateStoredEventTriggerCatalogEnvelope(
         sealed.event_trigger_catalog_before_json,
         sealed.event_trigger_catalog_before_sha256,
@@ -1249,6 +1382,7 @@ export async function runMigrationsWithClient({
       ) : null;
       const expectedInstall = sealed ? buildProviderEventTriggerInstallRequest(authorization, {
         fenceSecurityCatalogSha256: sealed.fence_security_catalog_sha256,
+        fenceSecurityCatalogCanonicalJson: JSON.stringify(sealed.install_request_json?.interimFenceSecurityCatalog),
         eventTriggerCatalogBeforeCanonicalJson: baselineCanonicalJson,
       }) : null;
       const sealedInstall = sealed
@@ -1277,16 +1411,20 @@ export async function runMigrationsWithClient({
         || authorization.objectCatalogSha256 !== liveCatalogs.objectCatalogSha256) {
         throw new Error("bootstrap_074_live_catalog_mismatch");
       }
-      fenceSecurityCatalog = await readFenceSecurityCatalog(client, authorization);
-      if (fenceSecurityCatalog.catalogSha256 !== sealed.fence_security_catalog_sha256) {
-        throw new Error("bootstrap_074_fence_security_catalog_mismatch");
-      }
       await client.query("select verify_ai_content_write_fence_catalog()");
       eventTriggerCatalog = await readCanonicalEventTriggerCatalog(client);
       if (sealed.provider_attestation_sha256) {
+        fenceSecurityCatalog = await readFenceSecurityCatalog(client, authorization, { ownerRoleName: "postgres" });
+        if (fenceSecurityCatalog.catalogSha256 !== providerInstallRequest.expectedFinalFenceSecurityCatalogSha256
+          || fenceSecurityCatalog.canonicalJson !== JSON.stringify(providerInstallRequest.expectedFinalFenceSecurityCatalog)
+          || sealed.final_fence_security_catalog_sha256 !== providerInstallRequest.expectedFinalFenceSecurityCatalogSha256) {
+          throw new Error("bootstrap_074_final_fence_security_catalog_mismatch");
+        }
         const storedAttestation = validateProviderEventTriggerAttestation(sealed.provider_attestation_json, {
           authorization, installRequest: providerInstallRequest,
-          signingKey: bootstrap074.providerSigningKey, now: bootstrap074.now,
+          providerAttestationVerification: bootstrap074.providerAttestationVerification,
+          finalFenceSecurityCatalogSha256: providerInstallRequest.expectedFinalFenceSecurityCatalogSha256,
+          now: bootstrap074.now,
         });
         const storedAttestationSha256 = hashProviderAttestationEnvelope(storedAttestation);
         if (storedAttestationSha256 !== sealed.provider_attestation_sha256) {
@@ -1295,7 +1433,9 @@ export async function runMigrationsWithClient({
         if (bootstrap074.providerAttestation) {
           const suppliedAttestation = validateProviderEventTriggerAttestation(bootstrap074.providerAttestation, {
             authorization, installRequest: providerInstallRequest,
-            signingKey: bootstrap074.providerSigningKey, now: bootstrap074.now,
+            providerAttestationVerification: bootstrap074.providerAttestationVerification,
+            finalFenceSecurityCatalogSha256: providerInstallRequest.expectedFinalFenceSecurityCatalogSha256,
+            now: bootstrap074.now,
           });
           if (hashProviderAttestationEnvelope(suppliedAttestation) !== storedAttestationSha256) {
             throw new Error("provider_attestation_replayed");
@@ -1310,45 +1450,19 @@ export async function runMigrationsWithClient({
         const expectedRevocation = buildMembershipRevocationRequest(authorization, providerInstallRequest, storedAttestationSha256);
         validateMembershipRevocationEvidence(sealed.revocation_request_json, expectedRevocation, sealed.revocation_request_sha256);
         revocationRequest = expectedRevocation;
+        if (!sealed.attestation_consumed_at) {
+          if (!bootstrap074.providerAttestation) throw new Error("provider_attestation_file_required_for_consume");
+          const consumed = await client.query("select consume_ai_content_provider_attestation() as consumed");
+          if (consumed.rows[0]?.consumed !== true) throw new Error("provider_attestation_replayed");
+        }
       } else {
-        if (bootstrap074.providerAttestation) {
-          providerAttestation = validateProviderEventTriggerAttestation(bootstrap074.providerAttestation, {
-            authorization,
-            installRequest: providerInstallRequest,
-            signingKey: bootstrap074.providerSigningKey,
-            now: bootstrap074.now,
-          });
-          const suppliedAttestationSha256 = hashProviderAttestationEnvelope(providerAttestation);
-          const delta = validateEventTriggerCatalogDelta(baselineCanonicalJson, eventTriggerCatalog.rows, authorization);
-          if (delta.catalogSha256 !== providerAttestation.eventTriggerCatalogAfterSha256
-            || delta.count !== providerAttestation.eventTriggerCatalogAfterCount) {
-            throw new Error("bootstrap_074_live_event_trigger_catalog_mismatch");
-          }
-          await readLiveEventTriggerEvidence(client, authorization);
-          revocationRequest = buildMembershipRevocationRequest(authorization, providerInstallRequest, suppliedAttestationSha256);
-          const revocationEnvelopeSha256 = hashMembershipRevocationEnvelope(revocationRequest);
-          await client.query("begin");
-          try {
-            await client.query(`set local role ${quoteIdentifier(authorization.schemaOwnerRoleName)}`);
-            const consumed = await client.query(
-              `update ai_content_bootstrap_state
-                  set provider_attestation_json=$1::jsonb,provider_attestation_sha256=$2,
-                      attestation_consumed_at=now(),revocation_request_json=$3::jsonb,
-                      revocation_request_sha256=$4,event_trigger_catalog_after_sha256=$5,
-                      event_trigger_catalog_after_count=$6
-                where singleton and provider_attestation_sha256 is null
-                returning singleton`,
-              [JSON.stringify(providerAttestation),suppliedAttestationSha256,
-                JSON.stringify(revocationRequest),revocationEnvelopeSha256,
-                delta.catalogSha256,delta.count],
-            );
-            if (consumed.rowCount !== 1) throw new Error("provider_attestation_replayed");
-            await client.query("commit");
-          } catch (error) {
-            await client.query("rollback");
-            throw error;
-          }
-        } else if (eventTriggerCatalog.catalogSha256 !== sealed.event_trigger_catalog_before_sha256
+        fenceSecurityCatalog = await readFenceSecurityCatalog(client, authorization);
+        if (fenceSecurityCatalog.catalogSha256 !== sealed.fence_security_catalog_sha256
+          || fenceSecurityCatalog.canonicalJson !== JSON.stringify(providerInstallRequest.interimFenceSecurityCatalog)) {
+          throw new Error("bootstrap_074_fence_security_catalog_mismatch");
+        }
+        if (bootstrap074.providerAttestation) throw new Error("provider_attestation_not_persisted_by_provider");
+        if (eventTriggerCatalog.catalogSha256 !== sealed.event_trigger_catalog_before_sha256
           || eventTriggerCatalog.count !== sealed.event_trigger_catalog_before_count) {
           throw new Error("bootstrap_074_live_event_trigger_catalog_mismatch");
         }

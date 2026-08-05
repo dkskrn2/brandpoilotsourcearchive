@@ -48,6 +48,44 @@ test("migration CLI rejects invalid CA before returning client options", () => {
   );
 });
 
+test("074 migration CLI exposes only pinned Ed25519 public-key inputs", () => {
+  const config = migrateModule.resolveMigrationRuntimeConfig({
+    SUPABASE_DATABASE_URL: "postgresql://database.example/postgres",
+    AI_CONTENT_074_AUTHORIZATION_FILE: "/run/secrets/authorization.json",
+    AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_FILE: "/run/secrets/authorization-public.pem",
+    AI_CONTENT_074_AUTHORIZATION_KEY_ID: "authorization-2026-08",
+    AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_SHA256: "a".repeat(64),
+    AI_CONTENT_074_PROVIDER_ATTESTATION_FILE: "/run/secrets/provider-attestation.json",
+    AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_FILE: "/run/secrets/provider-public.pem",
+    AI_CONTENT_074_PROVIDER_ATTESTATION_KEY_ID: "provider-2026-08",
+    AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_SHA256: "b".repeat(64),
+  });
+  assert.deepEqual(config.bootstrap074Files, {
+    authorizationFile: "/run/secrets/authorization.json",
+    authorizationPublicKeyFile: "/run/secrets/authorization-public.pem",
+    authorizationKeyId: "authorization-2026-08",
+    authorizationPublicKeySha256: "a".repeat(64),
+    providerAttestationFile: "/run/secrets/provider-attestation.json",
+    providerAttestationPublicKeyFile: "/run/secrets/provider-public.pem",
+    providerAttestationKeyId: "provider-2026-08",
+    providerAttestationPublicKeySha256: "b".repeat(64),
+    imageDigest: undefined,
+    imageSourceLabel: undefined,
+    roleCatalogSha256: undefined,
+    objectCatalogSha256: undefined,
+  });
+  assert.throws(() => migrateModule.resolveMigrationRuntimeConfig({
+    AI_CONTENT_074_AUTHORIZATION_FILE: "/run/secrets/authorization.json",
+    AI_CONTENT_074_AUTHORIZATION_KEY_FILE: "/run/secrets/private.key",
+  }), /private_key_input_forbidden/);
+  assert.throws(() => migrateModule.resolveMigrationRuntimeConfig({
+    AI_CONTENT_074_AUTHORIZATION_FILE: "/run/secrets/authorization.json",
+    AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_FILE: "/run/secrets/authorization-public.pem",
+    AI_CONTENT_074_AUTHORIZATION_KEY_ID: "authorization-2026-08",
+    AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_SHA256: "a".repeat(64),
+  }), /bootstrap_074_public_key_config_required/);
+});
+
 test("migration CLI passes decoded CA to the migration runner without connecting", async () => {
   let receivedOptions;
   const certificate = "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----";

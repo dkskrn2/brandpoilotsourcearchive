@@ -79,12 +79,24 @@ const deploymentScripts = [
 
 test("fence API image contains 074 and excludes 075", () => {
   const dockerfile = read("apps/api/Dockerfile");
+  const migrate = read("scripts/migrate.mjs");
+  const runner = read("scripts/migrationRunner.mjs");
   assert.match(dockerfile, /db\/migrations/);
   assert.match(dockerfile, /scripts\/migrationRunner\.mjs/);
   assert.match(dockerfile, /scripts\/migrate\.mjs/);
   assert.match(dockerfile, /scripts\/databaseTls\.mjs/);
   assert.equal(existsSync("db/migrations/074_ai_content_maintenance_write_fence.sql"), true);
   assert.equal(existsSync("db/migrations/075_ai_content_three_format_cutover.sql"), false);
+  assert.match(migrate, /AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_FILE/);
+  assert.match(migrate, /AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_FILE/);
+  assert.doesNotMatch(migrate, /readFile\([^\n]*(?:PRIVATE|SIGNING)|createPrivateKey|AI_CONTENT_074_(?:AUTHORIZATION|PROVIDER_ATTESTATION)_KEY_FILE/);
+  assert.doesNotMatch(runner, /createPrivateKey|createSign|\bsign\s*\(/);
+  assert.equal(existsSync("scripts/ai-content-074.postgres.integration.test.mjs"), true);
+  const postgresHarness = read("scripts/ai-content-074.postgres.integration.test.mjs");
+  assert.match(postgresHarness, /AI_CONTENT_074_REAL_POSTGRES_URL/);
+  assert.match(postgresHarness, /AI_CONTENT_074_BULK_DML_MAX_OVERHEAD_RATIO/);
+  assert.match(postgresHarness, /migration.*schema_owner/is);
+  assert.match(postgresHarness, /disable trigger|drop trigger|ai_content_ddl_allowlist|ai_content_bootstrap_state|ai_content_maintenance_state|ai_content_cutovers/is);
 });
 
 test("fence API image contains 074 and excludes 075 in an actual no-network container", {

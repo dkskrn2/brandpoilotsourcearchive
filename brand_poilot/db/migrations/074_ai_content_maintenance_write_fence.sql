@@ -94,6 +94,7 @@ create table ai_content_bootstrap_state (
   role_catalog_sha256 text not null check (role_catalog_sha256 ~ '^[0-9a-f]{64}$'),
   object_catalog_sha256 text not null check (object_catalog_sha256 ~ '^[0-9a-f]{64}$'),
   fence_security_catalog_sha256 text not null check (fence_security_catalog_sha256 ~ '^[0-9a-f]{64}$'),
+  final_fence_security_catalog_sha256 text null check (final_fence_security_catalog_sha256 is null or final_fence_security_catalog_sha256 ~ '^[0-9a-f]{64}$'),
   event_trigger_catalog_before_json jsonb not null check (jsonb_typeof(event_trigger_catalog_before_json)='object'),
   event_trigger_catalog_before_sha256 text not null check (event_trigger_catalog_before_sha256 ~ '^[0-9a-f]{64}$'),
   event_trigger_catalog_before_count integer not null check (event_trigger_catalog_before_count>=0),
@@ -110,10 +111,12 @@ create table ai_content_bootstrap_state (
   constraint ai_content_bootstrap_provider_evidence_pair_check check (
     (provider_attestation_json is null and provider_attestation_sha256 is null and attestation_consumed_at is null
       and revocation_request_json is null and revocation_request_sha256 is null
-      and event_trigger_catalog_after_sha256 is null and event_trigger_catalog_after_count is null)
-    or (provider_attestation_json is not null and provider_attestation_sha256 is not null and attestation_consumed_at is not null
+      and event_trigger_catalog_after_sha256 is null and event_trigger_catalog_after_count is null
+      and final_fence_security_catalog_sha256 is null)
+    or (provider_attestation_json is not null and provider_attestation_sha256 is not null
       and revocation_request_json is not null and revocation_request_sha256 is not null
-      and event_trigger_catalog_after_sha256 is not null and event_trigger_catalog_after_count is not null)
+      and event_trigger_catalog_after_sha256 is not null and event_trigger_catalog_after_count is not null
+      and final_fence_security_catalog_sha256 is not null)
   ),
   constraint ai_content_bootstrap_roles_distinct_check
     check (
@@ -550,6 +553,29 @@ begin
 end;
 $$;
 
+create function consume_ai_content_provider_attestation() returns boolean
+language plpgsql security definer set search_path=pg_catalog,public as $$
+declare bootstrap public.ai_content_bootstrap_state%rowtype;
+begin
+  select * into strict bootstrap from public.ai_content_bootstrap_state where singleton for update;
+  if session_user<>bootstrap.migration_role_name::text then
+    raise exception 'bootstrap_074_consume_role_invalid';
+  end if;
+  if bootstrap.provider_attestation_json is null
+     or bootstrap.provider_attestation_sha256 is null
+     or bootstrap.revocation_request_json is null
+     or bootstrap.revocation_request_sha256 is null
+     or bootstrap.final_fence_security_catalog_sha256 is null
+     or bootstrap.event_trigger_catalog_after_sha256 is null
+     or bootstrap.event_trigger_catalog_after_count is null then
+    raise exception 'bootstrap_074_provider_evidence_incomplete';
+  end if;
+  if bootstrap.attestation_consumed_at is not null then return false; end if;
+  update public.ai_content_bootstrap_state set attestation_consumed_at=now() where singleton;
+  return true;
+end;
+$$;
+
 -- The Supabase platform postgres stage creates the sole DDL event trigger later.
 -- This migration intentionally contains no CREATE/ALTER EVENT TRIGGER statement.
 revoke all on table ai_content_cutovers,ai_content_cutover_status_events,
@@ -560,7 +586,7 @@ revoke execute on function ai_content_cutover_bypass_allowed(),assert_ai_content
   forbid_ai_content_cutover_event_mutation(),prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,text,text,text),
   set_ai_content_maintenance(uuid,boolean),
   transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text),
-  verify_ai_content_write_fence_catalog() from public;
+  verify_ai_content_write_fence_catalog(),consume_ai_content_provider_attestation() from public;
 select verify_ai_content_write_fence_catalog();
 
 commit;
