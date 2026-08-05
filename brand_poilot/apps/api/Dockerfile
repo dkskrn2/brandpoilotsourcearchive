@@ -15,6 +15,10 @@ COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/apps/api/package.json ./apps/api/package.json
 COPY --from=build --chown=node:node /app/apps/api/dist ./apps/api/dist
+COPY --from=build --chown=node:node /app/db/migrations ./db/migrations
+COPY --from=build --chown=node:node /app/scripts/migrationRunner.mjs ./scripts/migrationRunner.mjs
+COPY --from=build --chown=node:node /app/scripts/migrate.mjs ./scripts/migrate.mjs
+COPY --from=build --chown=node:node /app/scripts/databaseTls.mjs ./scripts/databaseTls.mjs
 
 USER node
 EXPOSE 4000

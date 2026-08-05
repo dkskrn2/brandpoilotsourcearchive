@@ -22,6 +22,7 @@ import { fetchInstagramMessagingProfile } from "./instagramLoginGraph.js";
 import { fetchInstagramHashtagTopMedia } from "./instagramTrendMeta.js";
 import { createInstagramTrendRepository } from "./instagramTrendRepository.js";
 import { createAiContentRepository } from "./aiContentRepository.js";
+import { assertAiContentWritable } from "./aiContentMaintenance.js";
 import { createAiContentAttachmentGcRepository } from "./aiContentAttachmentGcRepository.js";
 import { createAiContentDownloadRepository } from "./aiContentDownload.js";
 import { createAiContentPublishRepository } from "./aiContentPublish.js";
@@ -3925,6 +3926,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       const client = await pool.connect();
       try {
         await client.query("begin");
+        await assertAiContentWritable(client);
         const brandResult = await client.query(
           `select b.workspace_id,
                   case

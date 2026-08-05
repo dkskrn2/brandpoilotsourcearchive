@@ -275,6 +275,31 @@ function setup(
   return { app, repository, kakaoAuth, generateClientToken, events, sessionExpiresAt };
 }
 
+describe("AI content maintenance HTTP fence", () => {
+  it("returns stable 503 before create mutates repository state", async () => {
+    const harness = setup();
+    const repository = harness.repository as ApiRepository & {
+      assertAiContentWritable: ReturnType<typeof vi.fn>;
+    };
+    repository.assertAiContentWritable = vi.fn(async () => {
+      throw new Error("ai_content_maintenance");
+    });
+
+    const response = await harness.app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations`,
+      headers: { cookie: "bp_session=session-1", "idempotency-key": "maintenance-create" },
+      payload: { type: "card_news", title: "blocked", draft: {} },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "ai_content_maintenance" });
+    expect(repository.assertAiContentWritable).toHaveBeenCalledTimes(1);
+    expect(repository.createAiContentAnalysis).not.toHaveBeenCalled();
+    await harness.app.close();
+  });
+});
+
 const auth = { cookie: "bp_session=session-1" };
 const generationContractFixtures = [
   {

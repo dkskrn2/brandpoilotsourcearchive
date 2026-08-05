@@ -234,6 +234,23 @@ async function postV2(app: ReturnType<typeof createServer>, payload: object = v2
   });
 }
 
+describe("Proposal V2 maintenance fence", () => {
+  it("returns 503 before seed, model, or proposal persistence", async () => {
+    const harness = setup();
+    const guard = vi.fn(async () => { throw new Error("ai_content_maintenance"); });
+    (harness.repository as ApiRepository & { assertAiContentWritable: typeof guard }).assertAiContentWritable = guard;
+
+    const response = await postV2(harness.app);
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "ai_content_maintenance" });
+    expect(guard).toHaveBeenCalledTimes(1);
+    expect(harness.resolveSeed).not.toHaveBeenCalled();
+    expect(harness.createAiContentProposalBatchV2).not.toHaveBeenCalled();
+    await harness.app.close();
+  });
+});
+
 describe("V2 customer proposal batches", () => {
   it.each([
     ["card_news", "informational", null, "1:1"],

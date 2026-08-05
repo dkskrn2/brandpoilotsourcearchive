@@ -4,6 +4,45 @@ import type { ProposalBaseInputSnapshotV2 } from "./contentOrchestration.js";
 import type { AiContentSnapshotRepository } from "./aiContentSnapshotRepository.js";
 import { kstDateKey } from "./publishSchedule.js";
 
+describe("maintenance write fence", () => {
+  it("checks the database guard as the first statement inside create transaction", async () => {
+    const pool = createPool();
+    const repository = createAiContentRepository(pool as never);
+
+    await repository.createAiContentAnalysis({
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      actorUserId: "actor-1",
+      idempotencyKey: "maintenance-order",
+      type: "card_news",
+      title: "guard order",
+      draft: {},
+      orchestration: null,
+    } as never);
+
+    expect(pool.commands[0]).toBe("BEGIN");
+    expect(pool.commands[1]).toBe("select assert_ai_content_writable()");
+  });
+
+  it("performs no execution mutation when the transaction guard rejects", async () => {
+    const pool = createPool({ maintenanceEnabled: true });
+    const repository = createAiContentRepository(pool as never);
+
+    await expect(repository.createAiContentAnalysis({
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      actorUserId: "actor-1",
+      idempotencyKey: "maintenance-reject",
+      type: "card_news",
+      title: "blocked",
+      draft: {},
+      orchestration: null,
+    } as never)).rejects.toThrow("ai_content_maintenance");
+
+    expect(pool.sql.some((sql) => /insert|update|delete/i.test(sql))).toBe(false);
+  });
+});
+
 function row(id: string, status = "analyzing") {
   return {
     id,
@@ -37,6 +76,7 @@ function createPool(options: {
   activeAttachmentPaths?: string[];
   lifecycleEvents?: string[];
   attachmentsLocked?: boolean;
+  maintenanceEnabled?: boolean;
 } = {}) {
   const commands: string[] = [];
   const sql: string[] = [];
@@ -55,6 +95,9 @@ function createPool(options: {
       commands.push(query);
       sql.push(query);
       if (query === "BEGIN" || query === "COMMIT" || query === "ROLLBACK") return { rows: [], rowCount: 0 };
+      if (query === "select assert_ai_content_writable()" && options.maintenanceEnabled) {
+        throw new Error("ai_content_maintenance");
+      }
       if (query.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
       if (query.includes("pg_advisory_xact_lock")) return { rows: [{}], rowCount: 1 };
       if (query.includes("from ai_content_usage_ledger")) {

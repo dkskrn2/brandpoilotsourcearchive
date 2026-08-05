@@ -40,6 +40,84 @@ const runMigrationRange = async (database, migrations, firstId, lastId) => {
   }
 };
 
+test("074 maintenance write fence is default-off and installs the exact execution catalog", async () => {
+  const migrations = await loadMigrations();
+  const migration074 = migrations.find((migration) => migration.id === "074_ai_content_maintenance_write_fence.sql");
+  assert.ok(migration074);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(database, migrations, "001_initial_schema.sql", "073_ai_content_generation_v2_render_pipeline.sql");
+    await database.exec(migration074.sql);
+    const state = await database.query("select enabled, cutover_id, enabled_at from ai_content_maintenance_state where singleton");
+    assert.deepEqual(state.rows, [{ enabled: false, cutover_id: null, enabled_at: null }]);
+    const catalog = await database.query("select relation_name, relation_class, row_classifier from ai_content_write_fence_catalog order by relation_name");
+    assert.ok(catalog.rows.length >= 25);
+    assert.ok(catalog.rows.some((row) => row.relation_name === "ai_content_generations" && row.relation_class === "customer_execution"));
+    assert.ok(catalog.rows.some((row) => row.relation_name === "topic_rows" && row.row_classifier === "legacy_automated_use"));
+    const triggers = await database.query("select count(*)::integer as count from pg_trigger where tgname like 'ai_content_fence_%' and tgenabled = 'A'");
+    assert.equal(triggers.rows[0].count, catalog.rows.filter((row) => row.relation_class === "customer_execution").length);
+
+    const workspace = await database.query(
+      "insert into workspaces (name, slug) values ('Fence', $1) returning id",
+      [`fence-${randomUUID()}`],
+    );
+    const brand = await database.query(
+      "insert into brands (workspace_id, name) values ($1, 'Fence Brand') returning id",
+      [workspace.rows[0].id],
+    );
+    await database.query(
+      "insert into content_topics (workspace_id, brand_id, title, angle) values ($1,$2,'default off','safe')",
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+    const cutoverId = randomUUID();
+    const eventHash = "a".repeat(64);
+    await database.query(
+      `insert into ai_content_cutovers (
+         id,status,migration_id,schema_owner_role_name,application_role_name,
+         operator_role_name,migration_role_name,cleanup_role_name,bypass_token_sha256,
+         cleanup_token_sha256,database_role_catalog_sha256,provider_backup_id,
+         provider_snapshot_created_at,incident_bundle_sha256,preserved_data_manifest_sha256,
+         proposal_preflight_transfer_sha256,intended_release_sha,latest_status_event_sha256
+       ) values ($1,'prepared','075_ai_content_three_format_cutover.sql','content_owner',
+         'content_app','content_operator','content_migration','content_cleanup',$2,$2,$2,
+         'backup-1',now(),$2,$2,$2,$3,$4)`,
+      [cutoverId, "b".repeat(64), "c".repeat(40), eventHash],
+    );
+    await database.query(
+      `insert into ai_content_cutover_status_events (
+         cutover_id,sequence_number,from_status,to_status,evidence_sha256,event_sha256
+       ) values ($1,0,null,'prepared',$2,$3)`,
+      [cutoverId, "d".repeat(64), eventHash],
+    );
+    await database.query(
+      "update ai_content_maintenance_state set enabled=true,cutover_id=$1,enabled_at=now() where singleton",
+      [cutoverId],
+    );
+    await assert.rejects(
+      database.query(
+        "insert into content_topics (workspace_id, brand_id, title, angle) values ($1,$2,'blocked','blocked')",
+        [workspace.rows[0].id, brand.rows[0].id],
+      ),
+      /ai_content_maintenance/,
+    );
+    const upload = await database.query(
+      "insert into topic_uploads (workspace_id,brand_id,file_name) values ($1,$2,'topics.csv') returning id",
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+    const topic = await database.query(
+      `insert into topic_rows (
+         workspace_id,brand_id,topic_upload_id,row_number,topic_title,topic_angle,topic_key
+       ) values ($1,$2,$3,1,'unrelated','manual','unrelated-key') returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, upload.rows[0].id],
+    );
+    await database.query("update topic_rows set status='skipped' where id=$1", [topic.rows[0].id]);
+    await assert.rejects(
+      database.query("update topic_rows set status='used',used_at=now() where id=$1", [topic.rows[0].id]),
+      /ai_content_maintenance/,
+    );
+  });
+});
+
 const createPgliteMigrationClient = (database) => ({
   async query(sql, parameters = []) {
     const normalized = sql.trim().toLowerCase();

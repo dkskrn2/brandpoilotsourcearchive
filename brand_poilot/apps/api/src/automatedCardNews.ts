@@ -1,4 +1,5 @@
 import { parseContentGenerationInputV2, type ContentGenerationInputV2 } from "./aiContentGenerationInput.js";
+import { assertAiContentWritable } from "./aiContentMaintenance.js";
 
 type Queryable = {
   query(sql: string, values?: unknown[]): Promise<{ rows: any[]; rowCount?: number | null }>;
@@ -159,6 +160,7 @@ export async function enqueueAutomatedCardNews(
   if (!options.automatedContentEnabled) {
     return { mode: "disabled" as const };
   }
+  await assertAiContentWritable(client as never);
   if ((options.mode ?? "proposal") === "proposal") {
     const requestedSnapshotIds = [...new Set(
       input.sourceSnapshotIds

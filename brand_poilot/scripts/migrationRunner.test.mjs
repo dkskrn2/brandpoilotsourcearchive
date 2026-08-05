@@ -7,6 +7,231 @@ import * as migrationRunner from "./migrationRunner.mjs";
 
 const { buildMigrationPlan } = migrationRunner;
 
+test("074 bootstrap role authorization rejects unsigned, replayed, stale, wrong image, and wrong migration requests", () => {
+  const now = new Date("2026-08-05T00:00:00.000Z");
+  const base = {
+    contractVersion: "ai-content-bootstrap-role-authorization.v1",
+    requestId: "bootstrap-074-1",
+    migrationId: "074_ai_content_maintenance_write_fence.sql",
+    migrationSha256: "1".repeat(64),
+    imageDigest: `sha256:${"2".repeat(64)}`,
+    imageSourceLabel: "3".repeat(40),
+    roleCatalogSha256: "4".repeat(64),
+    objectCatalogSha256: "5".repeat(64),
+    migrationRoleName: "content_migration",
+    schemaOwnerRoleName: "content_schema_owner",
+    applicationRoleName: "content_application",
+    operatorRoleName: "content_operator",
+    cleanupRoleName: "content_cleanup",
+    eventTriggerName: "ai_content_ddl_guard_074",
+    eventTriggerFunction: "public.enforce_ai_content_ddl_allowlist",
+    eventTriggerFunctionSha256: "6".repeat(64),
+    eventTriggerDefinitionSha256: "7".repeat(64),
+    issuedAt: "2026-08-04T23:59:00.000Z",
+    expiresAt: "2026-08-05T00:01:00.000Z",
+  };
+  const signingKey = "bootstrap-test-signing-key";
+  const authorization = {
+    ...base,
+    signature: migrationRunner.signBootstrapRoleAuthorization(base, signingKey),
+  };
+  const context = {
+    signingKey,
+    now,
+    migration: { id: base.migrationId, checksum: base.migrationSha256 },
+    imageDigest: base.imageDigest,
+    imageSourceLabel: base.imageSourceLabel,
+    roleCatalogSha256: base.roleCatalogSha256,
+    objectCatalogSha256: base.objectCatalogSha256,
+    usedRequestIds: new Set(),
+  };
+
+  assert.equal(migrationRunner.validateBootstrapRoleAuthorization(authorization, context).requestId, base.requestId);
+  assert.throws(() => migrationRunner.validateBootstrapRoleAuthorization({ ...authorization, signature: "0".repeat(64) }, context), /bootstrap_role_authorization_signature_invalid/);
+  assert.throws(() => migrationRunner.validateBootstrapRoleAuthorization(authorization, { ...context, usedRequestIds: new Set([base.requestId]) }), /bootstrap_role_authorization_replayed/);
+  assert.throws(() => migrationRunner.validateBootstrapRoleAuthorization(authorization, { ...context, now: new Date("2026-08-05T00:02:00.000Z") }), /bootstrap_role_authorization_expired/);
+  assert.throws(() => migrationRunner.validateBootstrapRoleAuthorization(authorization, { ...context, imageDigest: `sha256:${"9".repeat(64)}` }), /bootstrap_role_authorization_image_mismatch/);
+  assert.throws(() => migrationRunner.validateBootstrapRoleAuthorization(authorization, { ...context, migration: { id: "075_ai_content_three_format_cutover.sql", checksum: base.migrationSha256 } }), /bootstrap_role_authorization_migration_mismatch/);
+});
+
+test("074 bootstrap role authorization seals provider install and consumes exact one-shot trigger evidence", () => {
+  const signingKey = "bootstrap-key";
+  const providerSigningKey = "provider-key";
+  const base = {
+    contractVersion: "ai-content-bootstrap-role-authorization.v1",
+    requestId: "bootstrap-074-provider",
+    migrationId: "074_ai_content_maintenance_write_fence.sql",
+    migrationSha256: "1".repeat(64),
+    imageDigest: `sha256:${"2".repeat(64)}`,
+    imageSourceLabel: "3".repeat(40),
+    roleCatalogSha256: "4".repeat(64),
+    objectCatalogSha256: "5".repeat(64),
+    migrationRoleName: "content_migration",
+    schemaOwnerRoleName: "content_schema_owner",
+    applicationRoleName: "content_application",
+    operatorRoleName: "content_operator",
+    cleanupRoleName: "content_cleanup",
+    eventTriggerName: "ai_content_ddl_guard_074",
+    eventTriggerFunction: "public.enforce_ai_content_ddl_allowlist",
+    eventTriggerFunctionSha256: "6".repeat(64),
+    eventTriggerDefinitionSha256: "7".repeat(64),
+    issuedAt: "2026-08-04T23:59:00.000Z",
+    expiresAt: "2026-08-05T00:01:00.000Z",
+  };
+  const authorization = { ...base, signature: migrationRunner.signBootstrapRoleAuthorization(base, signingKey) };
+  const install = migrationRunner.buildProviderEventTriggerInstallRequest(authorization);
+  const unsigned = {
+    contractVersion: "ai-content-074-provider-attestation.v1",
+    providerRequestSha256: install.requestSha256,
+    authorizationRequestId: authorization.requestId,
+    action: "create_enable_verify_074_event_trigger",
+    eventTriggerName: authorization.eventTriggerName,
+    eventTriggerFunction: authorization.eventTriggerFunction,
+    eventTriggerFunctionSha256: authorization.eventTriggerFunctionSha256,
+    eventTriggerDefinitionSha256: authorization.eventTriggerDefinitionSha256,
+    eventTriggerOwner: "postgres",
+    eventTriggerEnabled: "enabled",
+    migrationId: authorization.migrationId,
+    migrationSha256: authorization.migrationSha256,
+    imageDigest: authorization.imageDigest,
+    imageSourceLabel: authorization.imageSourceLabel,
+    roleCatalogSha256: authorization.roleCatalogSha256,
+    objectCatalogSha256: authorization.objectCatalogSha256,
+    issuedAt: "2026-08-05T00:00:00.000Z",
+  };
+  const attestation = { ...unsigned, signature: migrationRunner.signProviderEventTriggerAttestation(unsigned, providerSigningKey) };
+  const context = { authorization, installRequest: install, signingKey: providerSigningKey, now: new Date("2026-08-05T00:00:00.000Z") };
+
+  assert.equal(migrationRunner.validateProviderEventTriggerAttestation(attestation, context).eventTriggerOwner, "postgres");
+  assert.throws(() => migrationRunner.validateProviderEventTriggerAttestation({ ...attestation, action: "arbitrary_sql" }, context), /provider_attestation_signature_invalid|provider_attestation_action_mismatch/);
+  assert.throws(() => migrationRunner.validateProviderEventTriggerAttestation({ ...attestation, eventTriggerOwner: "content_schema_owner" }, context), /provider_attestation_signature_invalid|provider_attestation_eventTriggerOwner_mismatch/);
+  assert.throws(() => migrationRunner.validateProviderEventTriggerAttestation(attestation, { ...context, usedAttestationIds: new Set([install.requestSha256]) }), /provider_attestation_replayed/);
+  assert.throws(() => migrationRunner.validateProviderEventTriggerAttestation({
+    ...attestation,
+    issuedAt: "2026-08-04T22:00:00.000Z",
+    signature: migrationRunner.signProviderEventTriggerAttestation({
+      ...unsigned,
+      issuedAt: "2026-08-04T22:00:00.000Z",
+    }, providerSigningKey),
+  }, context), /provider_attestation_stale/);
+});
+
+test("074 migration source contains no provider-only event-trigger DDL", async () => {
+  const migration = (await migrationRunner.loadMigrations()).find(({ id }) => id === "074_ai_content_maintenance_write_fence.sql");
+  assert.ok(migration);
+  assert.doesNotMatch(migration.sql, /^\s*(?:create|alter)\s+event\s+trigger\b/im);
+});
+
+test("074 bootstrap role authorization applies stage one then independently consumes provider evidence", async () => {
+  const migration = { id: "074_ai_content_maintenance_write_fence.sql", checksum: "1".repeat(64), sql: "select 1" };
+  const signingKey = "bootstrap-stage-key";
+  const providerSigningKey = "provider-stage-key";
+  const unsignedAuthorization = {
+    contractVersion: "ai-content-bootstrap-role-authorization.v1", requestId: "stage-074",
+    migrationId: migration.id, migrationSha256: migration.checksum,
+    imageDigest: `sha256:${"2".repeat(64)}`, imageSourceLabel: "3".repeat(40),
+    roleCatalogSha256: "4".repeat(64), objectCatalogSha256: "5".repeat(64),
+    migrationRoleName: "content_migration", schemaOwnerRoleName: "content_schema_owner",
+    applicationRoleName: "content_application", operatorRoleName: "content_operator",
+    cleanupRoleName: "content_cleanup", eventTriggerName: "ai_content_ddl_guard_074",
+    eventTriggerFunction: "public.enforce_ai_content_ddl_allowlist",
+    eventTriggerFunctionSha256: "6".repeat(64), eventTriggerDefinitionSha256: "7".repeat(64),
+    issuedAt: "2026-08-04T23:59:00.000Z", expiresAt: "2026-08-05T00:01:00.000Z",
+  };
+  const authorization = {
+    ...unsignedAuthorization,
+    signature: migrationRunner.signBootstrapRoleAuthorization(unsignedAuthorization, signingKey),
+  };
+  const calls = [];
+  let applied = false;
+  const client = {
+    async query(sql, parameters = []) {
+      const normalized = sql.replace(/\s+/g, " ").trim();
+      calls.push({ sql: normalized, parameters });
+      if (normalized.includes("select id, checksum from schema_migrations")) {
+        return { rows: applied ? [{ id: migration.id, checksum: migration.checksum }] : [] };
+      }
+      if (normalized.includes("to_regclass('public.workspaces')")) return { rows: [{ relation: null }] };
+      if (normalized === "select session_user, current_user") {
+        return { rows: [{ session_user: authorization.migrationRoleName, current_user: authorization.migrationRoleName }] };
+      }
+      if (normalized.includes("migration_noinherit")) {
+        return { rows: [{ migration_noinherit: true, owner_nologin: true, exact_owner_membership: true, other_memberships: 0 }] };
+      }
+      if (normalized.includes("from ai_content_bootstrap_state where singleton")) {
+        return { rows: [{
+          authorization_request_id: authorization.requestId,
+          migration_role_name: authorization.migrationRoleName,
+          schema_owner_role_name: authorization.schemaOwnerRoleName,
+          migration_sha256: authorization.migrationSha256,
+          role_catalog_sha256: authorization.roleCatalogSha256,
+          object_catalog_sha256: authorization.objectCatalogSha256,
+        }] };
+      }
+      if (normalized.includes("app_superuser")) {
+        return { rows: [{ app_superuser: false, app_bypassrls: false, app_inherit: false, app_privileged_membership: false, app_owns_fenced_relation: false }] };
+      }
+      if (normalized.startsWith("insert into schema_migrations")) applied = true;
+      return { rows: [], rowCount: 0 };
+    },
+  };
+  const bootstrap = {
+    authorization, signingKey, now: new Date("2026-08-05T00:00:00.000Z"),
+    imageDigest: authorization.imageDigest, imageSourceLabel: authorization.imageSourceLabel,
+    roleCatalogSha256: authorization.roleCatalogSha256, objectCatalogSha256: authorization.objectCatalogSha256,
+  };
+  const stageOne = await migrationRunner.runMigrationsWithClient({ client, migrations: [migration], bootstrap074: bootstrap });
+  assert.equal(stageOne.providerInstallRequest.action, "create_enable_verify_074_event_trigger");
+  assert.ok(calls.some(({ sql }) => sql === 'set local role "content_schema_owner"'));
+  assert.ok(calls.some(({ sql }) => sql === "select verify_ai_content_write_fence_catalog()"));
+
+  const install = stageOne.providerInstallRequest;
+  const unsignedAttestation = {
+    contractVersion: "ai-content-074-provider-attestation.v1",
+    providerRequestSha256: install.requestSha256, authorizationRequestId: authorization.requestId,
+    action: install.action, eventTriggerName: authorization.eventTriggerName,
+    eventTriggerFunction: authorization.eventTriggerFunction,
+    eventTriggerFunctionSha256: authorization.eventTriggerFunctionSha256,
+    eventTriggerDefinitionSha256: authorization.eventTriggerDefinitionSha256,
+    eventTriggerOwner: "postgres", eventTriggerEnabled: "enabled",
+    migrationId: authorization.migrationId, migrationSha256: authorization.migrationSha256,
+    imageDigest: authorization.imageDigest, imageSourceLabel: authorization.imageSourceLabel,
+    roleCatalogSha256: authorization.roleCatalogSha256, objectCatalogSha256: authorization.objectCatalogSha256,
+    issuedAt: "2026-08-05T00:00:00.000Z",
+  };
+  const providerAttestation = {
+    ...unsignedAttestation,
+    signature: migrationRunner.signProviderEventTriggerAttestation(unsignedAttestation, providerSigningKey),
+  };
+  const originalQuery = client.query.bind(client);
+  client.query = async (sql, parameters = []) => {
+    if (sql.includes("from pg_event_trigger e")) return { rowCount: 1, rows: [{
+      event_trigger_name: authorization.eventTriggerName,
+      event_trigger_owner: "postgres", event_trigger_enabled: "enabled",
+      event_trigger_function: authorization.eventTriggerFunction,
+      event_trigger_function_sha256: authorization.eventTriggerFunctionSha256,
+      event_trigger_definition_sha256: authorization.eventTriggerDefinitionSha256,
+    }] };
+    return originalQuery(sql, parameters);
+  };
+  const stageTwo = await migrationRunner.runMigrationsWithClient({
+    client, migrations: [migration], bootstrap074: {
+      ...bootstrap, providerAttestation, providerSigningKey,
+    },
+  });
+  assert.equal(stageTwo.pending.length, 0);
+  assert.equal(stageTwo.revocationRequest.migrationRoleName, authorization.migrationRoleName);
+  await assert.rejects(
+    migrationRunner.runMigrationsWithClient({
+      client,
+      migrations: [migration, { id: "075_ai_content_three_format_cutover.sql", checksum: "8".repeat(64), sql: "select forbidden_075" }],
+      bootstrap074: { ...bootstrap, providerAttestation, providerSigningKey },
+    }),
+    /bootstrap_075_not_supported_before_cutover_runner/,
+  );
+  assert.equal(calls.some(({ sql }) => sql.includes("select forbidden_075")), false);
+});
+
 const migrations = [
   { id: "001_initial.sql", checksum: "first", sql: "create table first_table();" },
   { id: "002_second.sql", checksum: "second", sql: "create table second_table();" },

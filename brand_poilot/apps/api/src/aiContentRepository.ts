@@ -45,6 +45,7 @@ import {
   createAiContentRenderJobsRepository,
   enqueueAiContentRenderJobs,
 } from "./aiContentRenderJobs.js";
+import { assertAiContentWritable, withAiContentTransactionFence } from "./aiContentMaintenance.js";
 
 export interface BrandScope {
   workspaceId: string;
@@ -287,6 +288,7 @@ export interface SaveAppealInput extends BrandScope {
 }
 
 export interface AiContentRepository extends AiContentAttachmentLifecycleRepository, ContentProposalJobsRepository {
+  assertAiContentWritable(): Promise<void>;
   getAiContentBrandContext(input: BrandScope): Promise<AiContentBrandContextRecord>;
   getConfirmedSubjectAnalysisBrandContext(input: BrandScope): Promise<SubjectAnalysisBrandContext>;
   listSubjectEvidenceAttachments(input: LoadSubjectEvidenceInput): Promise<SubjectEvidenceAttachment[]>;
@@ -1412,11 +1414,13 @@ function generationInputForWorker(
 }
 
 export function createAiContentRepository(pool: Pool, options: AiContentRepositoryOptions = {}): AiContentRepository {
-  const subjectRepository = createAiContentSubjectRepository(pool);
-  const attachmentLifecycle = createAiContentAttachmentRepository(pool);
-  const proposalJobs = createContentProposalJobsRepository(pool);
-  const renderJobs = createAiContentRenderJobsRepository(pool, generationById);
+  const fencedPool = withAiContentTransactionFence(pool);
+  const subjectRepository = createAiContentSubjectRepository(fencedPool);
+  const attachmentLifecycle = createAiContentAttachmentRepository(fencedPool);
+  const proposalJobs = createContentProposalJobsRepository(fencedPool);
+  const renderJobs = createAiContentRenderJobsRepository(fencedPool, generationById);
   return {
+    assertAiContentWritable: () => assertAiContentWritable(pool),
     ...attachmentLifecycle,
     ...proposalJobs,
     claimAiContentRenderJob: renderJobs.claim,
@@ -1478,6 +1482,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         await assertActiveAiContentActor(client, input);
         const existing = await client.query(
     `select id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json, generation_idempotency_key,
@@ -1589,6 +1594,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         await assertActiveAiContentActor(client, input);
         const replay = await client.query(
           `select *,
@@ -1754,6 +1760,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         await assertActiveAiContentActor(client, input);
         const replay = await client.query(
           `select *,
@@ -1799,6 +1806,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       };
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         const requestJson = JSON.stringify(request);
         const inputSnapshotJson = JSON.stringify(input.inputSnapshot);
         await assertActiveAiContentActor(client, input);
@@ -1928,6 +1936,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         await assertActiveAiContentActor(client, input);
         await client.query(
           "select select_ai_content_proposal($1,$2,$3,$4) selected",
@@ -2140,6 +2149,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         await assertActiveAiContentActor(client, input);
         const dismissed = await client.query(
           `update ai_content_proposals
@@ -2239,6 +2249,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         await assertActiveAiContentActor(client, input);
         const generation = await scopedGeneration(client, input, true);
         if (!generation) throw new Error("ai_content_generation_not_found");
@@ -2308,6 +2319,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         await assertActiveAiContentActor(client, input);
         const generation = await scopedGeneration(client, input, true);
         if (!generation) throw new Error("ai_content_generation_not_found");
@@ -2383,6 +2395,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         await assertActiveAiContentActor(client, input);
         const lockedBatch = await client.query(
           `select batch.id,batch.status
@@ -2653,6 +2666,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       try {
         await client.query("BEGIN");
         transactionOpen = true;
+        await assertAiContentWritable(client);
         await assertActiveAiContentActor(client, input);
         const current = await scopedGeneration(client, input, true);
         if (!current) throw new Error("ai_content_generation_not_found");
@@ -3394,6 +3408,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         const exhausted = await client.query(
           `select id
              from ai_content_generation_jobs
@@ -3625,6 +3640,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         const locked = await client.query(
           `select id
              from ai_content_generation_jobs
@@ -3664,6 +3680,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         const job = await lockAiContentJobContext(client, input.jobId);
         if (job.job_type === "generate" && input.jobType === "generate") {
           const inputVersion = await client.query(
@@ -3869,6 +3886,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         const job = await lockAiContentJobContext(client, input.jobId);
         if (job.status === "failed") {
           if (job.worker_id !== input.workerId || job.lease_token !== input.leaseToken) {
@@ -3960,6 +3978,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         const outputScope = await client.query(
           `select generation_id
              from ai_content_generation_outputs
@@ -4148,6 +4167,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         const outputScope = await client.query(
           `select generation_id
              from ai_content_generation_outputs
@@ -4312,6 +4332,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         const outputResult = await client.query(
           `select output.*, generation.type
              from ai_content_generation_outputs output

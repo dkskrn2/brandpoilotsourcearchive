@@ -77,6 +77,16 @@ const deploymentScripts = [
   ubuntuBootstrapPath,
 ];
 
+test("fence API image contains 074 and excludes 075", () => {
+  const dockerfile = read("apps/api/Dockerfile");
+  assert.match(dockerfile, /db\/migrations/);
+  assert.match(dockerfile, /scripts\/migrationRunner\.mjs/);
+  assert.match(dockerfile, /scripts\/migrate\.mjs/);
+  assert.match(dockerfile, /scripts\/databaseTls\.mjs/);
+  assert.equal(existsSync("db/migrations/074_ai_content_maintenance_write_fence.sql"), true);
+  assert.equal(existsSync("db/migrations/075_ai_content_three_format_cutover.sql"), false);
+});
+
 test("Task 10 canary is read-only, authenticated, and proves safe feature flags", () => {
   const verify = read("deploy/scripts/verify-canary.sh");
   for (const marker of [

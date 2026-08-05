@@ -941,6 +941,9 @@ export function createServer(
   };
   const corsAllowedOrigins = new Set(httpPolicy.corsAllowedOrigins);
   const subjectRepository = repository as ApiRepository & SubjectAnalysisRepository & SubjectAnalysisRepositoryV2;
+  const maintenanceRepository = repository as ApiRepository & {
+    assertAiContentWritable?: () => Promise<void>;
+  };
   void app.register(cors, {
     origin: (origin, callback) => callback(null, origin !== undefined && corsAllowedOrigins.has(origin)),
     credentials: true,
@@ -949,6 +952,10 @@ export function createServer(
 
   app.setErrorHandler((error, request, reply) => {
     const message = error instanceof Error ? error.message : "unknown_error";
+    if (message === "ai_content_maintenance") {
+      reply.code(503).send({ error: message });
+      return;
+    }
     if (message === "worker_resource_lease_invalid") {
       reply.code(409).send({ error: message });
       return;
@@ -1279,7 +1286,19 @@ export function createServer(
   });
 
   app.addHook("preHandler", async (request, reply) => {
-    const route = request.routeOptions.url;
+    const route = request.routeOptions.url ?? "";
+    const method = request.method.toUpperCase();
+    const aiContentMutation = (
+      (["POST", "PUT", "PATCH", "DELETE"].includes(method) && route.includes("/ai-content"))
+      || (method === "POST" && route === "/brands/:brandId/content-generation/run")
+      || (method === "GET" && route === "/internal/cron/daily-generation")
+      || (method === "POST" && route === "/internal/cron/ai-content-attachment-gc")
+      || (["POST", "PUT", "PATCH", "DELETE"].includes(method) && route.startsWith("/worker/ai-content-"))
+    );
+    if (maintenanceRepository.assertAiContentWritable
+      && aiContentMutation) {
+      await maintenanceRepository.assertAiContentWritable();
+    }
     if (!kakaoAuth || route === "/health" || route === "/ready" || request.url.startsWith("/auth/") || request.url.startsWith("/admin/v1/") || request.url.startsWith("/webhooks/") || request.url.startsWith("/worker/") || request.url.startsWith("/workers/") || request.url.startsWith("/internal/cron/")) return;
     const token = readCookie(request.headers.cookie, "bp_session");
     const session = token ? await kakaoAuth.getSession(token) : null;
