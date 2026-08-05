@@ -184,7 +184,7 @@ git commit -m "feat(db): add AI content maintenance write fence"
 
 Record this exact commit SHA. Phase 5 deploys this compatibility release before it ever makes migration `075` available to the production migrator.
 
-Recorded compatibility release F: `893242d9a10b2a0af6b238297c124dcb666caf49`. This is the final Task 1 source reviewed with Critical/Important/Minor all zero; later Task 2+ commits do not change the Phase 5 fence-release identity.
+Recorded compatibility release F: `1f1ca92540befb35843913419215589046fa6e15`. This supersedes `893242d9a10b2a0af6b238297c124dcb666caf49` with explicit user approval after the migration-only `maintenance_verified -> migration_body_complete` transition, PG16 ACL/catalog corrections, and the Task 3 atomic runner were re-reviewed together. The replacement source passed Task 1 and Task 3 review with Critical/Important/Minor all zero, the full isolated PostgreSQL 16 fence harness, the no-network API-image inspection, and contains `074` but no `075`; later commits do not change the Phase 5 fence-release identity unless this same replacement-and-reacceptance procedure is repeated.
 
 ## Task 2: Build checksummed incident and preserved-data evidence
 
