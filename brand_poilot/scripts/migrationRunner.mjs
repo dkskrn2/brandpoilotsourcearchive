@@ -70,20 +70,29 @@ function assertExactObjectKeys(value, keys, errorCode) {
   }
 }
 
-export function canonicalBootstrapRoleCatalog(rows) {
-  const roles = rows.map((row) => ({
+export function canonicalBootstrapRoleCatalog({ roles: roleRows, membershipEdges: edgeRows }) {
+  const roles = roleRows.map((row) => ({
     roleName: String(row.role_name),
     canLogin: row.can_login === true,
     isSuperuser: row.is_superuser === true,
     bypassRls: row.bypass_rls === true,
     inherit: row.inherit === true,
-    memberships: [...(row.memberships ?? [])].map(String).sort(lexicalCompare),
   })).sort((left, right) => lexicalCompare(left.roleName, right.roleName));
-  return JSON.stringify({ contractVersion: "ai-content-bootstrap-role-catalog.v1", roles });
+  const membershipEdges = edgeRows.map((row) => ({
+    memberRoleName: String(row.member_role_name),
+    parentRoleName: String(row.parent_role_name),
+    setOption: row.set_option === true,
+    inheritOption: row.inherit_option === true,
+    adminOption: row.admin_option === true,
+  })).sort((left, right) => lexicalCompare(
+    `${left.memberRoleName}\0${left.parentRoleName}`,
+    `${right.memberRoleName}\0${right.parentRoleName}`,
+  ));
+  return JSON.stringify({ contractVersion: "ai-content-bootstrap-role-catalog.v2", roles, membershipEdges });
 }
 
-export function hashBootstrapRoleCatalog(rows) {
-  return checksum(canonicalBootstrapRoleCatalog(rows));
+export function hashBootstrapRoleCatalog(catalog) {
+  return checksum(canonicalBootstrapRoleCatalog(catalog));
 }
 
 export function canonicalBootstrapObjectCatalog(rows) {
@@ -106,11 +115,12 @@ export function hashBootstrapObjectCatalog(rows) {
   return checksum(canonicalBootstrapObjectCatalog(rows));
 }
 
-export function validateBootstrapRoleSafety(rows, names) {
+export function validateBootstrapRoleSafety({ roles: rows, membershipEdges }, names) {
+  if (!Array.isArray(rows) || !Array.isArray(membershipEdges)) throw new Error("bootstrap_role_catalog_invalid");
   const byName = new Map(rows.map((row) => [String(row.role_name), row]));
   const exactNames = [names.schemaOwnerRoleName, names.applicationRoleName, names.operatorRoleName,
     names.migrationRoleName, names.cleanupRoleName];
-  if (byName.size !== 5 || exactNames.some((name) => !byName.has(name))) throw new Error("bootstrap_role_catalog_invalid");
+  if (rows.length !== 5 || byName.size !== 5 || exactNames.some((name) => !byName.has(name))) throw new Error("bootstrap_role_catalog_invalid");
   if (rows.some((row) => row.is_superuser === true || row.bypass_rls === true)) throw new Error("bootstrap_role_catalog_invalid");
   if (byName.get(names.schemaOwnerRoleName).can_login !== false
     || byName.get(names.applicationRoleName).can_login !== true
@@ -120,11 +130,23 @@ export function validateBootstrapRoleSafety(rows, names) {
     || byName.get(names.migrationRoleName).inherit !== false) {
     throw new Error("bootstrap_role_catalog_invalid");
   }
-  for (const row of rows) {
-    const memberships = [...(row.memberships ?? [])].map(String).sort(lexicalCompare);
-    const expected = row.role_name === names.migrationRoleName ? [names.schemaOwnerRoleName] : [];
-    if (JSON.stringify(memberships) !== JSON.stringify(expected)) throw new Error("bootstrap_role_catalog_invalid");
-  }
+  const expectedMembershipEdges = [{
+    member_role_name: names.migrationRoleName,
+    parent_role_name: names.schemaOwnerRoleName,
+    set_option: true,
+    inherit_option: false,
+    admin_option: false,
+  }];
+  const normalizeEdge = (row) => ({
+    member_role_name: String(row.member_role_name), parent_role_name: String(row.parent_role_name),
+    set_option: row.set_option === true, inherit_option: row.inherit_option === true,
+    admin_option: row.admin_option === true,
+  });
+  const edges = membershipEdges.map(normalizeEdge).sort((left, right) => lexicalCompare(
+    `${left.member_role_name}\0${left.parent_role_name}`,
+    `${right.member_role_name}\0${right.parent_role_name}`,
+  ));
+  if (JSON.stringify(edges) !== JSON.stringify(expectedMembershipEdges)) throw new Error("bootstrap_role_catalog_invalid");
   return true;
 }
 
@@ -475,20 +497,36 @@ export async function readCanonicalBootstrapCatalogs(client, names) {
   const roleNames = [names.schemaOwnerRoleName, names.applicationRoleName, names.operatorRoleName,
     names.migrationRoleName, names.cleanupRoleName];
   const roleResult = await client.query(
-    `/* bootstrap_role_catalog_v1 */
+    `/* bootstrap_role_catalog_v2 */
      select role.rolname as role_name,role.rolcanlogin as can_login,role.rolsuper as is_superuser,
-            role.rolbypassrls as bypass_rls,role.rolinherit as inherit,
-            coalesce(array_agg(parent.rolname order by parent.rolname)
-              filter (where parent.rolname is not null),'{}'::name[]) as memberships
+             role.rolbypassrls as bypass_rls,role.rolinherit as inherit
        from pg_roles role
-       left join pg_auth_members membership on membership.member=role.oid
-       left join pg_roles parent on parent.oid=membership.roleid
       where role.rolname=any($1::name[])
-      group by role.oid,role.rolname,role.rolcanlogin,role.rolsuper,role.rolbypassrls,role.rolinherit
-      order by role.rolname`,
+       order by role.rolname`,
     [roleNames],
   );
-  validateBootstrapRoleSafety(roleResult.rows, names);
+  const membershipResult = await client.query(
+    `/* bootstrap_role_membership_catalog_v2 */
+     with recursive connected_roles(oid) as (
+       select role.oid from pg_roles role where role.rolname=any($1::name[])
+       union
+       select case when membership.member=connected.oid then membership.roleid else membership.member end
+         from connected_roles connected
+         join pg_auth_members membership
+           on membership.member=connected.oid or membership.roleid=connected.oid
+     )
+     select member.rolname as member_role_name,parent.rolname as parent_role_name,
+            membership.set_option,membership.inherit_option,membership.admin_option
+       from pg_auth_members membership
+       join connected_roles connected_member on connected_member.oid=membership.member
+       join connected_roles connected_parent on connected_parent.oid=membership.roleid
+       join pg_roles member on member.oid=membership.member
+       join pg_roles parent on parent.oid=membership.roleid
+      order by member.rolname,parent.rolname`,
+    [roleNames],
+  );
+  const roleCatalog = { roles: roleResult.rows, membershipEdges: membershipResult.rows };
+  validateBootstrapRoleSafety(roleCatalog, names);
   const objectResult = await client.query(
     `/* bootstrap_object_catalog_v1 */
      select namespace.nspname as schema_name,relation.relname as relation_name,
@@ -513,8 +551,9 @@ export async function readCanonicalBootstrapCatalogs(client, names) {
   }
   return {
     roleRows: roleResult.rows,
+    membershipEdges: membershipResult.rows,
     objectRows: objectResult.rows,
-    roleCatalogSha256: hashBootstrapRoleCatalog(roleResult.rows),
+    roleCatalogSha256: hashBootstrapRoleCatalog(roleCatalog),
     objectCatalogSha256: hashBootstrapObjectCatalog(objectResult.rows),
   };
 }

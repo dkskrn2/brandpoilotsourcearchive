@@ -81,6 +81,7 @@ test("fence API image contains 074 and excludes 075", () => {
   const dockerfile = read("apps/api/Dockerfile");
   const migrate = read("scripts/migrate.mjs");
   const runner = read("scripts/migrationRunner.mjs");
+  const migration074 = read("db/migrations/074_ai_content_maintenance_write_fence.sql");
   assert.match(dockerfile, /db\/migrations/);
   assert.match(dockerfile, /scripts\/migrationRunner\.mjs/);
   assert.match(dockerfile, /scripts\/migrate\.mjs/);
@@ -91,12 +92,23 @@ test("fence API image contains 074 and excludes 075", () => {
   assert.match(migrate, /AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_FILE/);
   assert.doesNotMatch(migrate, /readFile\([^\n]*(?:PRIVATE|SIGNING)|createPrivateKey|AI_CONTENT_074_(?:AUTHORIZATION|PROVIDER_ATTESTATION)_KEY_FILE/);
   assert.doesNotMatch(runner, /createPrivateKey|createSign|\bsign\s*\(/);
+  assert.match(runner, /bootstrap_role_membership_catalog_v2/);
+  assert.match(runner, /set_option[\s\S]*inherit_option[\s\S]*admin_option/);
+  assert.match(migration074, /current_setting\('role',\s*true\)/);
   assert.equal(existsSync("scripts/ai-content-074.postgres.integration.test.mjs"), true);
   const postgresHarness = read("scripts/ai-content-074.postgres.integration.test.mjs");
   assert.match(postgresHarness, /AI_CONTENT_074_REAL_POSTGRES_URL/);
   assert.match(postgresHarness, /AI_CONTENT_074_BULK_DML_MAX_OVERHEAD_RATIO/);
   assert.match(postgresHarness, /migration.*schema_owner/is);
   assert.match(postgresHarness, /disable trigger|drop trigger|ai_content_ddl_allowlist|ai_content_bootstrap_state|ai_content_maintenance_state|ai_content_cutovers/is);
+  assert.match(postgresHarness, /allowlisted.*ddl.*succeed|positive.*allowlist/is);
+  assert.match(postgresHarness, /rogue.*schema.*owner|schema.*owner.*rogue/is);
+  for (const classifier of ["whole_relation", "legacy_automated_topic", "scheduled_proposal_refresh",
+    "legacy_content_job", "ai_content_generated_artifact", "ai_content_scheduled_publish",
+    "ai_content_publish_attempt", "daily_generation_automation"]) {
+    assert.match(postgresHarness, new RegExp(classifier));
+  }
+  assert.match(postgresHarness, /perBranchThreshold|maxObservedRatio/);
 });
 
 test("fence API image contains 074 and excludes 075 in an actual no-network container", {

@@ -251,15 +251,15 @@ create function enforce_ai_content_ddl_allowlist() returns event_trigger
 language plpgsql security definer set search_path=pg_catalog,public as $$
 declare command record;
 declare expected_migration text;
+declare outer_role text;
 declare bootstrap public.ai_content_bootstrap_state%rowtype;
 begin
   select * into strict bootstrap from public.ai_content_bootstrap_state where singleton;
+  outer_role := nullif(current_setting('role', true), 'none');
   if session_user<>bootstrap.migration_role_name::text
-     and current_user<>bootstrap.schema_owner_role_name::text then
-    return;
-  end if;
+     and outer_role is distinct from bootstrap.schema_owner_role_name::text then return; end if;
   if session_user<>bootstrap.migration_role_name::text
-     or current_user<>bootstrap.schema_owner_role_name::text then
+     or outer_role is distinct from bootstrap.schema_owner_role_name::text then
     raise exception 'ai_content_ddl_role_edge_invalid';
   end if;
   expected_migration := nullif(current_setting('app.ai_content_migration_id', true), '');

@@ -454,7 +454,7 @@ test("074 canonical authorization hashes are recomputed from the live PostgreSQL
       create role content_operator login;
       create role content_migration login noinherit;
       create role content_cleanup login;
-      grant content_schema_owner to content_migration;
+      grant content_schema_owner to content_migration with set true, inherit false, admin false;
       grant usage,create on schema public to content_schema_owner;
     `);
     for (const relation of bootstrapFenceRelations) {
@@ -471,7 +471,12 @@ test("074 canonical authorization hashes are recomputed from the live PostgreSQL
     });
     assert.equal(catalogs.roleRows.length, 5);
     assert.equal(catalogs.objectRows.length, 43);
-    assert.equal(catalogs.roleCatalogSha256, "cc34b17e777ba882b7677bf1ef2de508aade9c62f0a23d51b7759b70b5551121");
+    assert.equal(catalogs.membershipEdges.length, 1);
+    assert.deepEqual(catalogs.membershipEdges[0], {
+      member_role_name: "content_migration", parent_role_name: "content_schema_owner",
+      set_option: true, inherit_option: false, admin_option: false,
+    });
+    assert.equal(catalogs.roleCatalogSha256, "a6df51190b28d5e9240cabb6b81368a1856942c27dfe211ab1c3a381f0dc1333");
     assert.equal(catalogs.objectCatalogSha256, "682bc30d1e0c855f62140ed83240248b74507746240376450d7f3db5e1a91503");
     await database.exec("grant content_schema_owner to content_application");
     await assert.rejects(readCanonicalBootstrapCatalogs({
@@ -498,7 +503,7 @@ test("074 post-migration security catalog is independently read from live Postgr
       create role content_operator login;
       create role content_migration login noinherit;
       create role content_cleanup login;
-      grant content_schema_owner to content_migration;
+      grant content_schema_owner to content_migration with set true, inherit false, admin false;
       grant usage,create on schema public to content_schema_owner;
     `);
     for (const relation of bootstrapFenceRelations) await database.exec(`alter table public."${relation}" owner to content_schema_owner`);
