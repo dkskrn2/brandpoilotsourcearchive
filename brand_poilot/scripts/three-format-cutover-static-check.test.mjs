@@ -53,6 +53,7 @@ const baseline = Object.freeze({
   "workers/brand-pilot-image-worker/src/aiContentFinalizer.ts": `const plans = ["card-news-plan.v2", "blog-plan.v2", "reel-plan.v2"]; const manifest = "ai-content.v3";`,
   "apps/api/src/automatedCardNews.ts": `const intentionallyDeferred = "marketing-plan.v2 ai-content.v2 marketing-worker content_type";`,
   "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts": `
+    import { parseAiContentManifestV3, parseContentStudioOutputFormat, parseContentPurpose } from "@brand-pilot/content-contracts";
     const activeManifestVersion = "ai-content.v3";
     const outputFormats = ["card_news", "blog", "reel"];
   `,
@@ -111,6 +112,9 @@ const violationFixtures = [
   ["missing_active_v3_repository_reader", "apps/api/src/aiContentRepository.ts", baseline["apps/api/src/aiContentRepository.ts"].replace("ai-content.v3", "unknown-manifest")],
   ["missing_active_v3_ui_reader", "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts", "const outputFormats = ['card_news', 'blog', 'reel'];"],
   ["legacy_marketing_content_ui_path", "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts", "const activeManifestVersion = 'ai-content.v3'; const oldFormat = 'marketing_content';"],
+  ["legacy_generation_dto_fallback", "apps/api/src/aiContentRepository.ts", `${baseline["apps/api/src/aiContentRepository.ts"]}\nconst outputFormat = row.output_format ?? row.type;`],
+  ["missing_canonical_v3_ui_parsers", "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts", "const activeManifestVersion = 'ai-content.v3';"],
+  ["legacy_generation_type_ui_fallback", "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts", `${baseline["apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts"]}\nconst kind = value.type;`],
 ];
 
 for (const [expectedId, relativePath, content] of violationFixtures) {

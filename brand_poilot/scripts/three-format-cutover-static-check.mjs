@@ -176,6 +176,9 @@ function checkActiveV3Readers(files, violations) {
   if (!/ai-content\.v3/.test(repository)) {
     violations.push(violation("missing_active_v3_repository_reader", REPOSITORY_FILE, "generation DTOs must recognize active V3 manifests"));
   }
+  if (/row\.output_format\s*\?\?\s*row\.type|row\.purpose\s*\?\?\s*row\.content_family/.test(repository)) {
+    violations.push(violation("legacy_generation_dto_fallback", REPOSITORY_FILE, "generation DTOs must use outputFormat and purpose without legacy aliases"));
+  }
 
   const gateway = files.get(CUSTOMER_UI_GATEWAY_FILE) ?? "";
   if (!/ai-content\.v3/.test(gateway)) {
@@ -183,6 +186,15 @@ function checkActiveV3Readers(files, violations) {
   }
   if (/\bmarketing_content\b/.test(gateway)) {
     violations.push(violation("legacy_marketing_content_ui_path", CUSTOMER_UI_GATEWAY_FILE, "customer UI must not route new output through marketing_content"));
+  }
+  if (!/parseAiContentManifestV3/.test(gateway)
+    || !/parseContentStudioOutputFormat/.test(gateway)
+    || !/parseContentPurpose/.test(gateway)
+    || !/from\s*["']@brand-pilot\/content-contracts["']/.test(gateway)) {
+    violations.push(violation("missing_canonical_v3_ui_parsers", CUSTOMER_UI_GATEWAY_FILE, "customer UI must import canonical V3 manifest, format, and purpose parsers"));
+  }
+  if (/legacyTypeForOrchestration|generation\.type|value\.type/.test(gateway)) {
+    violations.push(violation("legacy_generation_type_ui_fallback", CUSTOMER_UI_GATEWAY_FILE, "customer UI must not use generation type aliases"));
   }
 }
 
