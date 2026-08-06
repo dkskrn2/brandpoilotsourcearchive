@@ -69,6 +69,7 @@ export function resolveMigrationRuntimeConfig(
       env.AI_CONTENT_075_EXPECTED_DATABASE_ROLE,
       env.AI_CONTENT_075_ALLOWLIST_AUTHORIZATION_FILE,
       env.AI_CONTENT_075_ALLOWLIST_ATTESTATION_FILE,
+      env.AI_CONTENT_075_PREFLIGHT_EVIDENCE_FILE,
       env.AI_CONTENT_075_AUTHORIZATION_PUBLIC_KEY_FILE,
       env.AI_CONTENT_075_AUTHORIZATION_KEY_ID,
       env.AI_CONTENT_075_AUTHORIZATION_PUBLIC_KEY_SHA256,
@@ -104,11 +105,37 @@ export function resolveMigrationRuntimeConfig(
     }
   }
   const caCertificate = decodeCaCertificate(env.DB_SSL_CA_BASE64);
+  const prerequisiteRoleValues = [
+    env.AI_CONTENT_074_SCHEMA_OWNER_ROLE,
+    env.AI_CONTENT_074_APPLICATION_ROLE,
+    env.AI_CONTENT_074_OPERATOR_ROLE,
+    env.AI_CONTENT_074_MIGRATION_ROLE,
+    env.AI_CONTENT_074_CLEANUP_ROLE,
+  ];
+  const hasBootstrapPrerequisiteRoles = prerequisiteRoleValues.some(Boolean);
+  const bootstrap074PrerequisiteMode = argv.includes("--bootstrap-074-prerequisite");
+  if (hasBootstrapPrerequisiteRoles && (
+    prerequisiteRoleValues.some((value) => !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(value ?? ""))
+    || new Set(prerequisiteRoleValues).size !== prerequisiteRoleValues.length
+  )) throw new Error("bootstrap_074_prerequisite_roles_invalid");
+  if (bootstrap074PrerequisiteMode && !hasBootstrapPrerequisiteRoles) {
+    throw new Error("bootstrap_074_prerequisite_roles_required");
+  }
   return {
     connectionString: env.SUPABASE_DATABASE_URL || env.DATABASE_URL,
     baselineUpTo: env.MIGRATION_BASELINE_UP_TO,
     dryRun: argv.includes("--dry-run"),
     ...(caCertificate ? { caCertificate } : {}),
+    ...(hasBootstrapPrerequisiteRoles ? {
+      bootstrap074Prerequisite: {
+        schemaOwnerRoleName: env.AI_CONTENT_074_SCHEMA_OWNER_ROLE,
+        applicationRoleName: env.AI_CONTENT_074_APPLICATION_ROLE,
+        operatorRoleName: env.AI_CONTENT_074_OPERATOR_ROLE,
+        migrationRoleName: env.AI_CONTENT_074_MIGRATION_ROLE,
+        cleanupRoleName: env.AI_CONTENT_074_CLEANUP_ROLE,
+      },
+    } : {}),
+    ...(bootstrap074PrerequisiteMode ? { bootstrap074PrerequisiteMode: true } : {}),
     ...(env.AI_CONTENT_074_AUTHORIZATION_FILE ? {
       bootstrap074Files: {
         authorizationFile: env.AI_CONTENT_074_AUTHORIZATION_FILE,
@@ -132,6 +159,7 @@ export function resolveMigrationRuntimeConfig(
         expectedDatabaseRole: env.AI_CONTENT_075_EXPECTED_DATABASE_ROLE,
         authorizationFile: env.AI_CONTENT_075_ALLOWLIST_AUTHORIZATION_FILE,
         attestationFile: env.AI_CONTENT_075_ALLOWLIST_ATTESTATION_FILE,
+        preflightEvidenceFile: env.AI_CONTENT_075_PREFLIGHT_EVIDENCE_FILE,
         authorizationPublicKeyFile: env.AI_CONTENT_075_AUTHORIZATION_PUBLIC_KEY_FILE,
         authorizationKeyId: env.AI_CONTENT_075_AUTHORIZATION_KEY_ID,
         authorizationPublicKeySha256: env.AI_CONTENT_075_AUTHORIZATION_PUBLIC_KEY_SHA256,
@@ -172,22 +200,72 @@ async function loadBootstrap074(files) {
   };
 }
 
+const cutover075PreflightEvidenceKeys = Object.freeze([
+  "contractVersion", "cutoverId", "proposalPreflightIdentity",
+  "proposalPreflightIdentitySha256", "proposalPreflightTransferSha256",
+]);
+const proposalPreflightIdentityKeys = Object.freeze([
+  "preflightCandidateSha", "contentProposalWorkerImageDigest", "proposalWorkerSourceSha",
+  "proposalWorkerTreeSha", "proposalContractSourceSha256", "proposalSchemaSha256",
+  "proposalCatalogSha256", "proposalModelId", "proposalCommandDescriptorSha256", "migrationSha256",
+]);
+
+export function parseCutover075PreflightEvidence(value, { cutoverId, migrationSha256 }) {
+  const keys = value && typeof value === "object" && !Array.isArray(value)
+    ? Object.keys(value).sort() : [];
+  const identity = value?.proposalPreflightIdentity;
+  const identityKeys = identity && typeof identity === "object" && !Array.isArray(identity)
+    ? Object.keys(identity).sort() : [];
+  const exactKeys = (actual, expected) => actual.length === expected.length
+    && actual.every((key, index) => key === [...expected].sort()[index]);
+  const hex = (input, length) => new RegExp(`^[0-9a-f]{${length}}$`).test(input ?? "");
+  if (!exactKeys(keys, cutover075PreflightEvidenceKeys)
+    || !exactKeys(identityKeys, proposalPreflightIdentityKeys)
+    || value.contractVersion !== "ai-content-075-proposal-preflight-evidence.v1"
+    || value.cutoverId !== cutoverId
+    || !hex(identity.preflightCandidateSha, 40)
+    || !/^sha256:[0-9a-f]{64}$/.test(identity.contentProposalWorkerImageDigest ?? "")
+    || !hex(identity.proposalWorkerSourceSha, 40)
+    || !hex(identity.proposalWorkerTreeSha, 40)
+    || !hex(identity.proposalContractSourceSha256, 64)
+    || !hex(identity.proposalSchemaSha256, 64)
+    || !hex(identity.proposalCatalogSha256, 64)
+    || identity.proposalModelId !== "gpt-5.6-terra"
+    || !hex(identity.proposalCommandDescriptorSha256, 64)
+    || identity.migrationSha256 !== migrationSha256
+    || !hex(value.proposalPreflightIdentitySha256, 64)
+    || !hex(value.proposalPreflightTransferSha256, 64)) {
+    throw new Error("cutover_075_preflight_evidence_invalid");
+  }
+  return {
+    proposalPreflightIdentity: identity,
+    proposalPreflightIdentitySha256: value.proposalPreflightIdentitySha256,
+    proposalPreflightTransferSha256: value.proposalPreflightTransferSha256,
+  };
+}
+
 async function loadCutover075(files) {
   if (!files) return undefined;
   const [bypassToken, authorizationText, attestationText, authorizationPublicKeyPem,
-    providerAttestationPublicKeyPem] = await Promise.all([
+    providerAttestationPublicKeyPem, preflightEvidenceText] = await Promise.all([
     readSecureCutoverFile(files.bypassTokenFile, { kind: "token", maxBytes: 4096 }),
     readSecureCutoverFile(files.authorizationFile, { kind: "json", maxBytes: 1024*1024 }),
     readSecureCutoverFile(files.attestationFile, { kind: "json", maxBytes: 1024*1024 }),
     readSecureCutoverFile(files.authorizationPublicKeyFile, { kind: "public-key", maxBytes: 64*1024 }),
     readSecureCutoverFile(files.providerAttestationPublicKeyFile, { kind: "public-key", maxBytes: 64*1024 }),
+    readSecureCutoverFile(files.preflightEvidenceFile, { kind: "json", maxBytes: 1024*1024 }),
   ]);
   if (!bypassToken) throw new Error("cutover_075_bypass_token_empty");
+  const allowlistAuthorization = JSON.parse(authorizationText);
+  const proposalPreflight = parseCutover075PreflightEvidence(JSON.parse(preflightEvidenceText), {
+    cutoverId: files.cutoverId,
+    migrationSha256: allowlistAuthorization?.migrationSha256,
+  });
   return {
     cutoverId: files.cutoverId,
     bypassToken,
     expectedDatabaseRole: files.expectedDatabaseRole,
-    allowlistAuthorization: JSON.parse(authorizationText),
+    allowlistAuthorization,
     allowlistAttestation: JSON.parse(attestationText),
     authorizationVerification: {
       publicKeyPem: authorizationPublicKeyPem,
@@ -199,6 +277,7 @@ async function loadCutover075(files) {
       expectedKeyId: files.providerAttestationKeyId,
       expectedPublicKeySha256: files.providerAttestationPublicKeySha256,
     },
+    ...proposalPreflight,
   };
 }
 
@@ -224,6 +303,14 @@ export async function main({
     applied: result.pending,
     migrationCount: result.migrations.length,
     baselineRequired: result.baselineRequired,
+    ...(result.bootstrap074RestartRequired ? {
+      bootstrap074RestartRequired: true,
+      ...(result.bootstrap074PrerequisiteMigrationId
+        ? { bootstrap074PrerequisiteMigrationId: result.bootstrap074PrerequisiteMigrationId }
+        : {}),
+      ...(result.bootstrap074Stage ? { bootstrap074Stage: result.bootstrap074Stage } : {}),
+      ...(result.cutover075Deferred ? { cutover075Deferred: true } : {}),
+    } : {}),
     ...(result.providerInstallRequest ? { providerInstallRequest: result.providerInstallRequest } : {}),
     ...(result.revocationRequest ? { revocationRequest: result.revocationRequest } : {}),
     ...(result.cutover ? { cutover: result.cutover } : {}),

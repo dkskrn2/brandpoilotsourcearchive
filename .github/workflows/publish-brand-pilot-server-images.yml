@@ -138,7 +138,10 @@ jobs:
         if: needs.impact.outputs.migration_changed == 'true'
         working-directory: brand_poilot
         run: |
+          node --test scripts/migrate.test.mjs
           node --test scripts/migrationRunner.test.mjs
+          node --test scripts/ai-content-three-format-cutover.postgres.integration.test.mjs
+          AI_CONTENT_074_ENFORCE_BENCHMARK=false node --test scripts/ai-content-074.postgres.integration.test.mjs
           npm run test:migrations
           echo "migration_approval_required"
       - name: Verify API

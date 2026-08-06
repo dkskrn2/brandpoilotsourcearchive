@@ -6,6 +6,11 @@ import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import {
   bootstrapFenceRelations,
+  canonicalBootstrapObjectCatalog,
+  cutover075DomainTriggers,
+  legacyTriggerSearchPathFunctionIdentities as runnerLegacyTriggerSearchPathFunctionIdentities,
+  legacyTriggerSearchPathMigrationChecksum,
+  fullSourceMigrationIds,
   loadMigrations,
   readCanonicalBootstrapCatalogs,
   readCanonicalEventTriggerCatalog,
@@ -15,6 +20,28 @@ import {
 
 const legacyInstagramDeliveryChecksum =
   "7e45bc297cf35128368700b49f34974690d699198e465ecfb608ac9922cb1882";
+const legacyTriggerSearchPathMigrationId = "073a_legacy_trigger_function_search_path.sql";
+const legacyTriggerSearchPathFunctionIdentities = Object.freeze([
+  "public.ai_content_attachment_upload_sessions_immutable_metadata()",
+  "public.ai_content_v2_freeze_batch_input_snapshot()",
+  "public.ai_content_v2_freeze_output_plan()",
+  "public.ai_content_v2_reject_snapshot_mutation()",
+  "public.enforce_ai_content_attachment_upload_session_transition()",
+  "public.enqueue_ai_content_attachment_deletion()",
+  "public.enqueue_ai_content_upload_session_deletion()",
+  "public.reject_ai_content_analyzed_subject_snapshot_mutation()",
+  "public.reject_ai_content_approved_proposal_version_mutation()",
+  "public.reject_ai_content_generation_brief_mutation()",
+  "public.reject_ai_content_one_time_avatar_receipt_mutation()",
+  "public.reject_ai_content_one_time_avatar_revocation_mutation()",
+  "public.reject_ai_content_wiki_version_snapshot_mutation()",
+  "public.release_ai_content_attachment_storage_path()",
+  "public.reserve_ai_content_attachment_storage_path()",
+  "public.revoke_ai_content_one_time_avatar_on_attachment_unavailable()",
+  "public.seal_ai_content_one_time_avatar_receipt_from_upload()",
+  "public.set_updated_at()",
+  "public.revoke_ai_content_one_time_avatar_receipt(uuid,text)",
+]);
 const originalProductServiceLibraryChecksum =
   "3b3c9f6887d3f396c106a4a95cea6e4aa321c5dac0784c16a45fe2356a2b1b74";
 const legacyInstagramDeliverySql = await readFile(
@@ -46,6 +73,38 @@ const runMigrationRange = async (database, migrations, firstId, lastId) => {
     }
   }
 };
+
+const run075SchemaBodyForPglite = async (database, migration075) => {
+  const start = migration075.sql.indexOf("-- 075_FENCE_REGISTRATION_BEGIN");
+  const end = migration075.sql.indexOf("-- 075_FENCE_REGISTRATION_END");
+  assert.ok(start > 0 && end > start, "075 must expose one exact registration boundary");
+  const schemaBody = `${migration075.sql.slice(0, start)}${migration075.sql.slice(
+    end + "-- 075_FENCE_REGISTRATION_END".length,
+  )}`;
+  assert.doesNotMatch(schemaBody, /register_ai_content_075_fence_relations/);
+  await database.exec(schemaBody);
+};
+
+test("073a hardens exactly the legacy trigger function closure before 074", async () => {
+  const migrations = await loadMigrations();
+  assert.deepEqual(fullSourceMigrationIds, migrations.map(({ id }) => id));
+  const migrationIndex = migrations.findIndex(({ id }) => id === legacyTriggerSearchPathMigrationId);
+  assert.ok(migrationIndex >= 0, `${legacyTriggerSearchPathMigrationId} must exist`);
+  assert.equal(migrations[migrationIndex - 1]?.id, "073_ai_content_generation_v2_render_pipeline.sql");
+  assert.equal(migrations[migrationIndex + 1]?.id, "074_ai_content_maintenance_write_fence.sql");
+
+  const migration = migrations[migrationIndex];
+  assert.equal(migration.checksum, "5acce238ce19656738aff6e311d7f3db4a9763c5aee8a3ea1d6e338ce6f84001");
+  assert.equal(legacyTriggerSearchPathMigrationChecksum, migration.checksum);
+  assert.deepEqual(runnerLegacyTriggerSearchPathFunctionIdentities, legacyTriggerSearchPathFunctionIdentities);
+  assert.doesNotMatch(migration.sql, /create\s+(?:or\s+replace\s+)?function/i);
+  const alteredFunctions = [...migration.sql.matchAll(
+    /alter\s+function\s+([^;]+?\))\s+set\s+search_path\s*=\s*pg_catalog\s*,\s*public\s*,\s*pg_temp\s*;/gi,
+  )].map((match) => match[1].replace(/\s+/g, "").toLowerCase());
+  assert.deepEqual(alteredFunctions.toSorted(), [...legacyTriggerSearchPathFunctionIdentities].toSorted());
+  assert.equal(new Set(alteredFunctions).size, legacyTriggerSearchPathFunctionIdentities.length);
+  assert.equal((migration.sql.match(/alter\s+function/gi) ?? []).length, legacyTriggerSearchPathFunctionIdentities.length);
+});
 
 const expected074FenceCatalog = Object.freeze([
   ["ai_content_analyzed_subject_snapshots", "customer_execution", "whole_relation"],
@@ -91,6 +150,7 @@ const expected074FenceCatalog = Object.freeze([
   ["storage_artifacts", "customer_execution", "ai_content_generated_artifact"],
   ["topic_publish_groups", "customer_execution", "whole_relation"],
   ["topic_rows", "customer_execution", "legacy_automated_topic"],
+  ["topic_uploads", "customer_execution", "whole_relation"],
   ["ai_content_bootstrap_state", "cutover_control", "whole_relation"],
   ["ai_content_cutover_status_events", "cutover_control", "whole_relation"],
   ["ai_content_cutovers", "cutover_control", "whole_relation"],
@@ -103,6 +163,18 @@ test("074 maintenance write fence is default-off and installs the exact executio
   const migrations = await loadMigrations();
   const migration074 = migrations.find((migration) => migration.id === "074_ai_content_maintenance_write_fence.sql");
   assert.ok(migration074);
+  assert.match(
+    migration074.sql,
+    /join pg_attribute attribute[\s\S]*cross join lateral aclexplode\(attribute\.attacl\) column_acl[\s\S]*ai_content_075_acl_final_catalog_invalid/i,
+  );
+  assert.doesNotMatch(
+    migration074.sql,
+    /aclexplode\(coalesce\(attribute\.attacl\s*,\s*acldefault/i,
+  );
+  assert.match(
+    migration074.sql,
+    /relpersistence<>'p'[\s\S]*relreplident<>'d'[\s\S]*relispartition[\s\S]*pg_inherits[\s\S]*tgisinternal[\s\S]*tgenabled='D'[\s\S]*ai_content_write_fence_relation_structure_mismatch/i,
+  );
 
   await withDatabase(async (database) => {
     await runMigrationRange(database, migrations, "001_initial_schema.sql", "073_ai_content_generation_v2_render_pipeline.sql");
@@ -139,9 +211,140 @@ test("074 maintenance write fence is default-off and installs the exact executio
          )
     `);
     assert.equal(extras.rows[0].count, 0);
+    const managedTriggerName = (await database.query(
+      "select ai_content_fence_trigger_name('content_topics') as trigger_name",
+    )).rows[0].trigger_name;
+    assert.match(managedTriggerName, /^ai_content_fence_[a-z0-9_]+$/);
+    await database.exec(`
+      drop trigger ${managedTriggerName} on content_topics;
+      create trigger ${managedTriggerName}
+        before insert or update or delete on content_topics
+        for each row when (false) execute function enforce_ai_content_write_fence();
+      alter table content_topics enable always trigger ${managedTriggerName};
+    `);
+    await assert.rejects(
+      database.query("select verify_ai_content_write_fence_catalog()"),
+      /ai_content_write_fence_catalog_mismatch/,
+    );
+    await database.exec(`
+      drop trigger ${managedTriggerName} on content_topics;
+      create trigger ${managedTriggerName}
+        before insert or update or delete on content_topics
+        for each row execute function enforce_ai_content_write_fence();
+      alter table content_topics enable always trigger ${managedTriggerName};
+    `);
+    assert.equal((await database.query(
+      "select verify_ai_content_write_fence_catalog() as verified",
+    )).rows[0].verified, true);
+    await database.exec("alter table topic_uploads enable row level security");
+    await assert.rejects(
+      database.query("select verify_ai_content_write_fence_catalog()"),
+      /ai_content_write_fence_relation_structure_mismatch/,
+    );
+    await database.exec("alter table topic_uploads disable row level security");
+    await database.exec(
+      "create rule task3o_topic_uploads_deny_update as on update to topic_uploads do instead nothing",
+    );
+    await assert.rejects(
+      database.query("select verify_ai_content_write_fence_catalog()"),
+      /ai_content_write_fence_relation_structure_mismatch/,
+    );
+    await database.exec("drop rule task3o_topic_uploads_deny_update on topic_uploads");
+    await database.exec("alter table ai_content_attachment_storage_path_guards set unlogged");
+    await assert.rejects(
+      database.query("select verify_ai_content_write_fence_catalog()"),
+      /ai_content_write_fence_relation_structure_mismatch/,
+    );
+    await database.exec("alter table ai_content_attachment_storage_path_guards set logged");
+    await database.exec("alter table topic_uploads replica identity full");
+    await assert.rejects(
+      database.query("select verify_ai_content_write_fence_catalog()"),
+      /ai_content_write_fence_relation_structure_mismatch/,
+    );
+    await database.exec("alter table topic_uploads replica identity default");
+    const internalFenceConstraintTrigger = (await database.query(`
+      select relation.relname as relation_name,trigger.tgname as trigger_name
+        from pg_trigger trigger
+        join pg_class relation on relation.oid=trigger.tgrelid
+       where trigger.tgisinternal and trigger.tgconstraint<>0
+         and relation.relname=any($1::text[])
+       order by relation.relname,trigger.tgname limit 1
+    `, [expected074FenceCatalog.map((row) => row.relation_name)])).rows[0];
+    assert.ok(internalFenceConstraintTrigger);
+    const quoteIdentifier = (value) => `"${String(value).replaceAll('"', '""')}"`;
+    await database.exec(`alter table public.${quoteIdentifier(internalFenceConstraintTrigger.relation_name)}
+      disable trigger ${quoteIdentifier(internalFenceConstraintTrigger.trigger_name)}`);
+    await assert.rejects(
+      database.query("select verify_ai_content_write_fence_catalog()"),
+      /ai_content_write_fence_relation_structure_mismatch/,
+    );
+    await database.exec(`alter table public.${quoteIdentifier(internalFenceConstraintTrigger.relation_name)}
+      enable trigger ${quoteIdentifier(internalFenceConstraintTrigger.trigger_name)}`);
+    assert.equal((await database.query(
+      "select verify_ai_content_write_fence_catalog() as verified",
+    )).rows[0].verified, true);
+    const acceptedControlTriggerBypasses = [];
+    for (const variant of [{
+      label: "status-events-immutable",
+      apply: `
+        drop trigger ai_content_cutover_status_events_immutable on ai_content_cutover_status_events;
+        create trigger ai_content_cutover_status_events_immutable
+          before update or delete on ai_content_cutover_status_events
+          for each row when (false) execute function forbid_ai_content_cutover_event_mutation();
+        alter table ai_content_cutover_status_events
+          enable trigger ai_content_cutover_status_events_immutable;
+      `,
+      restore: `
+        drop trigger ai_content_cutover_status_events_immutable on ai_content_cutover_status_events;
+        create trigger ai_content_cutover_status_events_immutable
+          before update or delete on ai_content_cutover_status_events
+          for each row execute function forbid_ai_content_cutover_event_mutation();
+        alter table ai_content_cutover_status_events
+          enable trigger ai_content_cutover_status_events_immutable;
+      `,
+    }, {
+      label: "bootstrap-registration-seal",
+      apply: `
+        drop trigger ai_content_bootstrap_075_registration_must_clear on ai_content_bootstrap_state;
+        create constraint trigger ai_content_bootstrap_075_registration_must_clear
+          after insert or update on ai_content_bootstrap_state
+          deferrable initially deferred for each row when (false)
+          execute function enforce_ai_content_075_registration_seal_cleared();
+        alter table ai_content_bootstrap_state
+          enable trigger ai_content_bootstrap_075_registration_must_clear;
+      `,
+      restore: `
+        drop trigger ai_content_bootstrap_075_registration_must_clear on ai_content_bootstrap_state;
+        create constraint trigger ai_content_bootstrap_075_registration_must_clear
+          after insert or update on ai_content_bootstrap_state
+          deferrable initially deferred for each row
+          execute function enforce_ai_content_075_registration_seal_cleared();
+        alter table ai_content_bootstrap_state
+          enable trigger ai_content_bootstrap_075_registration_must_clear;
+      `,
+    }]) {
+      await database.exec(variant.apply);
+      try {
+        await database.query("select verify_ai_content_write_fence_catalog()");
+        acceptedControlTriggerBypasses.push(variant.label);
+      } catch (error) {
+        assert.match(String(error), /ai_content_write_fence_control_trigger_mismatch/);
+      } finally {
+        await database.exec(variant.restore);
+      }
+    }
+    assert.deepEqual(acceptedControlTriggerBypasses, []);
+    assert.equal((await database.query(
+      "select verify_ai_content_write_fence_catalog() as verified",
+    )).rows[0].verified, true);
     await database.query("update ai_content_write_fence_catalog set row_classifier='scheduled_proposal_refresh' where relation_name='topic_rows'");
     await assert.rejects(database.query("select verify_ai_content_write_fence_catalog()"), /ai_content_write_fence_catalog_exact_mismatch/);
     await database.query("update ai_content_write_fence_catalog set row_classifier='legacy_automated_topic' where relation_name='topic_rows'");
+    await database.query("begin");
+    await database.query("delete from ai_content_write_fence_catalog");
+    await assert.rejects(database.query("select verify_ai_content_write_fence_catalog()"), /ai_content_write_fence_catalog_exact_mismatch/);
+    await database.query("rollback");
+    assert.equal((await database.query("select count(*)::integer as count from ai_content_write_fence_catalog")).rows[0].count, expected074FenceCatalog.length);
 
     const workspace = await database.query(
       "insert into workspaces (name, slug) values ('Fence', $1) returning id",
@@ -155,19 +358,37 @@ test("074 maintenance write fence is default-off and installs the exact executio
       "insert into content_topics (workspace_id, brand_id, title, angle) values ($1,$2,'default off','safe')",
       [workspace.rows[0].id, brand.rows[0].id],
     );
+    const upload = await database.query(
+      "insert into topic_uploads (workspace_id,brand_id,file_name) values ($1,$2,'topics.csv') returning id",
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+    await database.query("update topic_uploads set file_name='topics-updated.csv' where id=$1", [upload.rows[0].id]);
+    const disposableUpload = await database.query(
+      "insert into topic_uploads (workspace_id,brand_id,file_name) values ($1,$2,'disposable.csv') returning id",
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+    await database.query("delete from topic_uploads where id=$1", [disposableUpload.rows[0].id]);
     const cutoverId = randomUUID();
     const eventHash = "a".repeat(64);
+    const preflightIdentity = JSON.stringify({
+      preflightCandidateSha: "c".repeat(40), contentProposalWorkerImageDigest: `sha256:${"b".repeat(64)}`,
+      proposalWorkerSourceSha: "c".repeat(40), proposalWorkerTreeSha: "d".repeat(40),
+      proposalContractSourceSha256: "b".repeat(64), proposalSchemaSha256: "b".repeat(64),
+      proposalCatalogSha256: "b".repeat(64), proposalModelId: "gpt-5.6-terra",
+      proposalCommandDescriptorSha256: "b".repeat(64), migrationSha256: "b".repeat(64),
+    });
     await database.query(
       `insert into ai_content_cutovers (
          id,status,migration_id,schema_owner_role_name,application_role_name,
          operator_role_name,migration_role_name,cleanup_role_name,bypass_token_sha256,
          cleanup_token_sha256,database_role_catalog_sha256,provider_backup_id,
          provider_snapshot_created_at,incident_bundle_sha256,preserved_data_manifest_sha256,
+         proposal_preflight_identity_json,proposal_preflight_identity_sha256,
          proposal_preflight_transfer_sha256,intended_release_sha,latest_status_event_sha256
        ) values ($1,'prepared','075_ai_content_three_format_cutover.sql','content_owner',
          'content_app','content_operator','content_migration','content_cleanup',$2,$2,$2,
-         'backup-1',now(),$2,$2,$2,$3,$4)`,
-      [cutoverId, "b".repeat(64), "c".repeat(40), eventHash],
+         'backup-1',now(),$2,$2,$5::jsonb,$2,$2,$3,$4)`,
+      [cutoverId, "b".repeat(64), "c".repeat(40), eventHash, preflightIdentity],
     );
     await database.query(
       `insert into ai_content_cutover_status_events (
@@ -186,9 +407,20 @@ test("074 maintenance write fence is default-off and installs the exact executio
       ),
       /ai_content_maintenance/,
     );
-    const upload = await database.query(
-      "insert into topic_uploads (workspace_id,brand_id,file_name) values ($1,$2,'topics.csv') returning id",
-      [workspace.rows[0].id, brand.rows[0].id],
+    await assert.rejects(
+      database.query(
+        "insert into topic_uploads (workspace_id,brand_id,file_name) values ($1,$2,'blocked.csv')",
+        [workspace.rows[0].id, brand.rows[0].id],
+      ),
+      /ai_content_maintenance/,
+    );
+    await assert.rejects(
+      database.query("update topic_uploads set file_name='blocked-update.csv' where id=$1", [upload.rows[0].id]),
+      /ai_content_maintenance/,
+    );
+    await assert.rejects(
+      database.query("delete from topic_uploads where id=$1", [upload.rows[0].id]),
+      /ai_content_maintenance/,
     );
     const topic = await database.query(
       `insert into topic_rows (
@@ -317,15 +549,23 @@ test("074 maintenance write fence classifies every shared execution row for inse
     const cutoverId = randomUUID();
     const digest = "b".repeat(64);
     const eventHash = "a".repeat(64);
+    const preflightIdentity = JSON.stringify({
+      preflightCandidateSha: "c".repeat(40), contentProposalWorkerImageDigest: `sha256:${digest}`,
+      proposalWorkerSourceSha: "c".repeat(40), proposalWorkerTreeSha: "d".repeat(40),
+      proposalContractSourceSha256: digest, proposalSchemaSha256: digest,
+      proposalCatalogSha256: digest, proposalModelId: "gpt-5.6-terra",
+      proposalCommandDescriptorSha256: digest, migrationSha256: digest,
+    });
     await database.query(
       `insert into ai_content_cutovers(
          id,status,migration_id,schema_owner_role_name,application_role_name,operator_role_name,migration_role_name,
          cleanup_role_name,bypass_token_sha256,cleanup_token_sha256,database_role_catalog_sha256,provider_backup_id,
-         provider_snapshot_created_at,incident_bundle_sha256,preserved_data_manifest_sha256,proposal_preflight_transfer_sha256,
+         provider_snapshot_created_at,incident_bundle_sha256,preserved_data_manifest_sha256,
+         proposal_preflight_identity_json,proposal_preflight_identity_sha256,proposal_preflight_transfer_sha256,
          intended_release_sha,latest_status_event_sha256)
        values($1,'prepared','075_ai_content_three_format_cutover.sql','content_owner','content_app','content_operator',
-         'content_migration','content_cleanup',$2,$2,$2,'backup',now(),$2,$2,$2,$3,$4)`,
-      [cutoverId, digest, "c".repeat(40), eventHash],
+         'content_migration','content_cleanup',$2,$2,$2,'backup',now(),$2,$2,$5::jsonb,$2,$2,$3,$4)`,
+      [cutoverId, digest, "c".repeat(40), eventHash, preflightIdentity],
     );
 
     await database.query(
@@ -433,12 +673,12 @@ test("074 prepare cutover accepts only the five roles sealed by bootstrap", asyn
          object_catalog_sha256,fence_security_catalog_sha256,event_trigger_catalog_before_json,
          event_trigger_catalog_before_sha256,event_trigger_catalog_before_count,install_request_json,install_request_sha256)
        values(true,'request-074',$1,'content_migration','content_owner','content_app','content_operator','content_cleanup',
-         $1,$1,$1,$1,'{"contractVersion":"ai-content-event-trigger-catalog.v1","eventTriggers":[]}'::jsonb,$1,0,'{}'::jsonb,$1)`,
+         $1,$1,$1,$1,'{"contractVersion":"ai-content-event-trigger-catalog.v2","eventTriggers":[]}'::jsonb,$1,0,'{}'::jsonb,$1)`,
       ["a".repeat(64)],
     );
     await assert.rejects(database.query(
       `select prepare_ai_content_cutover($1,'content_owner','content_app','content_operator','content_app','content_cleanup',
-         $2,$2,$2,'backup',now(),$2,$2,$2,$3,$2)`,
+         $2,$2,$2,'backup',now(),$2,$2,'{}'::jsonb,$2,$3,$2)`,
       [randomUUID(), "b".repeat(64), "c".repeat(40)],
     ), /ai_content_cutover_roles_not_sealed/);
   });
@@ -447,21 +687,29 @@ test("074 prepare cutover accepts only the five roles sealed by bootstrap", asyn
 test("074 canonical authorization hashes are recomputed from the live PostgreSQL catalogs", async () => {
   const migrations = await loadMigrations();
   await withDatabase(async (database) => {
-    await runMigrationRange(database, migrations, "001_initial_schema.sql", "073_ai_content_generation_v2_render_pipeline.sql");
+    await runMigrationRange(database, migrations, "001_initial_schema.sql", legacyTriggerSearchPathMigrationId);
     await database.exec(`
       create role content_schema_owner nologin;
       create role content_application login;
       create role content_operator login;
       create role content_migration login noinherit;
       create role content_cleanup login;
+      alter role content_schema_owner set search_path=public,pg_catalog,pg_temp;
+      alter role content_application set search_path=pg_catalog,public,pg_temp;
+      alter role content_operator set search_path=pg_catalog,public,pg_temp;
+      alter role content_migration set search_path=public,pg_catalog,pg_temp;
+      alter role content_cleanup set search_path=pg_catalog,public,pg_temp;
       grant content_schema_owner to content_migration with set true;
       grant content_schema_owner to content_migration with inherit false;
       grant content_schema_owner to content_migration with admin false;
+      revoke all on schema public from public;
       grant usage,create on schema public to content_schema_owner;
+      grant usage on schema public to content_application,content_operator,content_migration,content_cleanup;
     `);
     for (const relation of bootstrapFenceRelations) {
       await database.exec(`alter table public."${relation}" owner to content_schema_owner`);
     }
+    await database.exec("set session authorization content_migration; set search_path=public,pg_catalog,pg_temp");
     const catalogs = await readCanonicalBootstrapCatalogs({
       query: (sql, parameters = []) => database.query(sql, parameters),
     }, {
@@ -472,15 +720,202 @@ test("074 canonical authorization hashes are recomputed from the live PostgreSQL
       cleanupRoleName: "content_cleanup",
     });
     assert.equal(catalogs.roleRows.length, 5);
-    assert.equal(catalogs.objectRows.length, 43);
+    assert.equal(catalogs.objectRows.length, 44);
     assert.equal(catalogs.membershipEdges.length, 1);
     assert.deepEqual(catalogs.membershipEdges[0], {
       member_role_name: "content_migration", parent_role_name: "content_schema_owner",
       set_option: true, inherit_option: false, admin_option: false,
     });
-    assert.equal(catalogs.roleCatalogSha256, "a754517863491917d61f4e0580fac0a5d313cf00aba393e3fbb647759106de7d");
-    assert.equal(catalogs.objectCatalogSha256, "682bc30d1e0c855f62140ed83240248b74507746240376450d7f3db5e1a91503");
-    await database.exec("grant content_schema_owner to content_application");
+    assert.equal(catalogs.roleCatalogSha256, "e4ba37a8732ded18b8ccf21766059600062ef24a3eaafa3e5b627cd990793d6b");
+    assert.equal(catalogs.objectCatalogSha256, "e0a668cd048d07833651f3b6607351a001291b39b80e4e5f3f8d469351b6a788");
+    for (const row of catalogs.objectRows) {
+      assert.equal(row.relation_persistence, "p", row.relation_name);
+      assert.equal(row.is_partition, false, row.relation_name);
+      assert.equal(row.partition_bound, null, row.relation_name);
+      assert.deepEqual(row.inheritance_parents, [], row.relation_name);
+      assert.ok(row.internal_constraint_triggers.every((trigger) => trigger.enabled !== "D"));
+    }
+    assert.ok(catalogs.objectRows.some((row) => row.internal_constraint_triggers.length > 0));
+    const sealedObjects = JSON.parse(canonicalBootstrapObjectCatalog(catalogs.objectRows)).objects;
+    const topicUploadsTrigger = sealedObjects
+      .find((row) => row.relationName === "topic_uploads")
+      ?.triggers.find((trigger) => trigger.functionIdentity === "public.set_updated_at()");
+    assert.deepEqual(topicUploadsTrigger?.functionCatalog?.config, ["search_path=pg_catalog,public,pg_temp"]);
+    const avatarDependency = sealedObjects
+      .flatMap((row) => row.triggers)
+      .flatMap((trigger) => trigger.functionCatalog.dependencyFunctions)
+      .find((dependency) => dependency.identity === "public.revoke_ai_content_one_time_avatar_receipt(uuid,text)");
+    assert.deepEqual(avatarDependency?.config, ["search_path=pg_catalog,public,pg_temp"]);
+    await database.exec("set role content_schema_owner; alter table public.topic_uploads replica identity full; reset role");
+    const replicaIdentityDrift = await readCanonicalBootstrapCatalogs({
+      query: (sql, parameters = []) => database.query(sql, parameters),
+    }, {
+      schemaOwnerRoleName: "content_schema_owner", applicationRoleName: "content_application",
+      operatorRoleName: "content_operator", migrationRoleName: "content_migration",
+      cleanupRoleName: "content_cleanup",
+    });
+    assert.notEqual(replicaIdentityDrift.objectCatalogSha256, catalogs.objectCatalogSha256);
+    await database.exec("set role content_schema_owner; alter table public.topic_uploads replica identity default; alter table public.ai_content_attachment_storage_path_guards set unlogged; reset role");
+    await assert.rejects(readCanonicalBootstrapCatalogs({
+      query: (sql, parameters = []) => database.query(sql, parameters),
+    }, {
+      schemaOwnerRoleName: "content_schema_owner", applicationRoleName: "content_application",
+      operatorRoleName: "content_operator", migrationRoleName: "content_migration",
+      cleanupRoleName: "content_cleanup",
+    }), /bootstrap_object_catalog_invalid:ai_content_attachment_storage_path_guards/);
+    await database.exec("set role content_schema_owner; alter table public.ai_content_attachment_storage_path_guards set logged; reset role");
+    const internalConstraintTrigger = (await database.query(`
+      select relation.relname as relation_name,trigger.tgname as trigger_name
+        from pg_trigger trigger
+        join pg_class relation on relation.oid=trigger.tgrelid
+       where trigger.tgisinternal and trigger.tgconstraint<>0
+         and relation.relname=any($1::text[])
+       order by relation.relname,trigger.tgname limit 1
+    `, [bootstrapFenceRelations])).rows[0];
+    assert.ok(internalConstraintTrigger);
+    const quoteIdentifier = (value) => `"${String(value).replaceAll('"', '""')}"`;
+    await database.exec(`set session authorization postgres; alter table public.${quoteIdentifier(internalConstraintTrigger.relation_name)}
+      disable trigger ${quoteIdentifier(internalConstraintTrigger.trigger_name)};
+      set session authorization content_migration; set search_path=public,pg_catalog,pg_temp`);
+    await assert.rejects(readCanonicalBootstrapCatalogs({
+      query: (sql, parameters = []) => database.query(sql, parameters),
+    }, {
+      schemaOwnerRoleName: "content_schema_owner", applicationRoleName: "content_application",
+      operatorRoleName: "content_operator", migrationRoleName: "content_migration",
+      cleanupRoleName: "content_cleanup",
+    }), /bootstrap_object_catalog_invalid/);
+    await database.exec(`set session authorization postgres; alter table public.${quoteIdentifier(internalConstraintTrigger.relation_name)}
+      enable trigger ${quoteIdentifier(internalConstraintTrigger.trigger_name)};
+      set session authorization content_migration; set search_path=public,pg_catalog,pg_temp`);
+    const originalSetUpdatedAtDefinition = (await database.query(
+      "select pg_get_functiondef('public.set_updated_at()'::regprocedure) as definition",
+    )).rows[0].definition;
+    await database.exec(`set session authorization postgres; create or replace function public.set_updated_at() returns trigger
+      language plpgsql as $$ begin return new; end; $$;
+      set session authorization content_migration; set search_path=public,pg_catalog,pg_temp`);
+    const triggerFunctionDriftCatalogs = await readCanonicalBootstrapCatalogs({
+      query: (sql, parameters = []) => database.query(sql, parameters),
+    }, {
+      schemaOwnerRoleName: "content_schema_owner",
+      applicationRoleName: "content_application",
+      operatorRoleName: "content_operator",
+      migrationRoleName: "content_migration",
+      cleanupRoleName: "content_cleanup",
+    });
+    assert.notEqual(triggerFunctionDriftCatalogs.objectCatalogSha256, catalogs.objectCatalogSha256);
+    await database.exec(`set session authorization postgres; ${originalSetUpdatedAtDefinition};
+      set session authorization content_migration; set search_path=public,pg_catalog,pg_temp`);
+    const restoredTriggerFunctionCatalogs = await readCanonicalBootstrapCatalogs({
+      query: (sql, parameters = []) => database.query(sql, parameters),
+    }, {
+      schemaOwnerRoleName: "content_schema_owner",
+      applicationRoleName: "content_application",
+      operatorRoleName: "content_operator",
+      migrationRoleName: "content_migration",
+      cleanupRoleName: "content_cleanup",
+    });
+    assert.equal(restoredTriggerFunctionCatalogs.objectCatalogSha256, catalogs.objectCatalogSha256);
+    const originalAvatarRevocationDefinition = (await database.query(
+      "select pg_get_functiondef('public.revoke_ai_content_one_time_avatar_receipt(uuid,text)'::regprocedure) as definition",
+    )).rows[0].definition;
+    await database.exec(`set session authorization postgres; create or replace function public.revoke_ai_content_one_time_avatar_receipt(
+      target_receipt_id uuid,target_reason text)
+      returns uuid language plpgsql as $$ begin return null; end; $$;
+      set session authorization content_migration; set search_path=public,pg_catalog,pg_temp`);
+    const dependencyFunctionDriftCatalogs = await readCanonicalBootstrapCatalogs({
+      query: (sql, parameters = []) => database.query(sql, parameters),
+    }, {
+      schemaOwnerRoleName: "content_schema_owner",
+      applicationRoleName: "content_application",
+      operatorRoleName: "content_operator",
+      migrationRoleName: "content_migration",
+      cleanupRoleName: "content_cleanup",
+    });
+    assert.notEqual(dependencyFunctionDriftCatalogs.objectCatalogSha256, catalogs.objectCatalogSha256);
+    await database.exec(`set session authorization postgres; ${originalAvatarRevocationDefinition};
+      set session authorization content_migration; set search_path=public,pg_catalog,pg_temp`);
+    const restoredDependencyFunctionCatalogs = await readCanonicalBootstrapCatalogs({
+      query: (sql, parameters = []) => database.query(sql, parameters),
+    }, {
+      schemaOwnerRoleName: "content_schema_owner",
+      applicationRoleName: "content_application",
+      operatorRoleName: "content_operator",
+      migrationRoleName: "content_migration",
+      cleanupRoleName: "content_cleanup",
+    });
+    assert.equal(restoredDependencyFunctionCatalogs.objectCatalogSha256, catalogs.objectCatalogSha256);
+    await database.exec("set role content_schema_owner; grant update on table public.topic_uploads to public; reset role");
+    const tableGrantCatalogs = await readCanonicalBootstrapCatalogs({
+      query: (sql, parameters = []) => database.query(sql, parameters),
+    }, {
+      schemaOwnerRoleName: "content_schema_owner",
+      applicationRoleName: "content_application",
+      operatorRoleName: "content_operator",
+      migrationRoleName: "content_migration",
+      cleanupRoleName: "content_cleanup",
+    });
+    assert.notEqual(tableGrantCatalogs.objectCatalogSha256, catalogs.objectCatalogSha256);
+    assert.ok(
+      tableGrantCatalogs.objectRows.find((row) => row.relation_name === "topic_uploads")
+        .acl.some((item) => item.grantee === "PUBLIC" && item.privilege === "UPDATE" && item.grantable === false),
+    );
+    await database.exec("set role content_schema_owner; revoke update on table public.topic_uploads from public; reset role");
+    assert.equal((await readCanonicalBootstrapCatalogs({
+      query: (sql, parameters = []) => database.query(sql, parameters),
+    }, {
+      schemaOwnerRoleName: "content_schema_owner",
+      applicationRoleName: "content_application",
+      operatorRoleName: "content_operator",
+      migrationRoleName: "content_migration",
+      cleanupRoleName: "content_cleanup",
+    })).objectCatalogSha256, catalogs.objectCatalogSha256);
+    await database.exec("set role content_schema_owner; grant update(file_name) on table public.topic_uploads to content_application; reset role");
+    const columnGrantCatalogs = await readCanonicalBootstrapCatalogs({
+      query: (sql, parameters = []) => database.query(sql, parameters),
+    }, {
+      schemaOwnerRoleName: "content_schema_owner",
+      applicationRoleName: "content_application",
+      operatorRoleName: "content_operator",
+      migrationRoleName: "content_migration",
+      cleanupRoleName: "content_cleanup",
+    });
+    assert.notEqual(columnGrantCatalogs.objectCatalogSha256, catalogs.objectCatalogSha256);
+    assert.deepEqual(
+      columnGrantCatalogs.objectRows.find((row) => row.relation_name === "topic_uploads")
+        .columns.find((column) => column.column_name === "file_name").acl,
+      [{ grantee: "content_application", privilege: "UPDATE", grantable: false }],
+    );
+    await database.exec("set role content_schema_owner; revoke update(file_name) on table public.topic_uploads from content_application; reset role");
+    assert.equal((await readCanonicalBootstrapCatalogs({
+      query: (sql, parameters = []) => database.query(sql, parameters),
+    }, {
+      schemaOwnerRoleName: "content_schema_owner",
+      applicationRoleName: "content_application",
+      operatorRoleName: "content_operator",
+      migrationRoleName: "content_migration",
+      cleanupRoleName: "content_cleanup",
+    })).objectCatalogSha256, catalogs.objectCatalogSha256);
+    const assertRoleBoundaryRejected = async (pattern = /bootstrap_role_/) => assert.rejects(
+      readCanonicalBootstrapCatalogs({ query: (sql, parameters = []) => database.query(sql, parameters) }, {
+        schemaOwnerRoleName: "content_schema_owner", applicationRoleName: "content_application",
+        operatorRoleName: "content_operator", migrationRoleName: "content_migration",
+        cleanupRoleName: "content_cleanup",
+      }),
+      pattern,
+    );
+    await database.exec("set session authorization postgres; alter role content_application set search_path=public; set session authorization content_migration; set search_path=public,pg_catalog,pg_temp");
+    await assertRoleBoundaryRejected(/bootstrap_role_catalog_invalid/);
+    await database.exec("set session authorization postgres; alter role content_application set search_path=pg_catalog,public,pg_temp; set session authorization content_migration; set search_path=public,pg_catalog,pg_temp");
+    const databaseName = (await database.query("select current_database() as name")).rows[0].name;
+    await database.exec(`set session authorization postgres; alter role content_application in database ${quoteIdentifier(databaseName)} set statement_timeout='1s'; set session authorization content_migration; set search_path=public,pg_catalog,pg_temp`);
+    await assertRoleBoundaryRejected(/bootstrap_role_database_settings_invalid/);
+    await database.exec(`set session authorization postgres; alter role content_application in database ${quoteIdentifier(databaseName)} reset statement_timeout; set session authorization content_migration; set search_path=public,pg_catalog,pg_temp`);
+    await database.exec("set session authorization postgres; grant usage on schema public to public; set session authorization content_migration; set search_path=public,pg_catalog,pg_temp");
+    await assertRoleBoundaryRejected(/bootstrap_role_public_schema_acl_invalid/);
+    await database.exec("set session authorization postgres; revoke usage on schema public from public; alter schema public owner to content_schema_owner; set session authorization content_migration; set search_path=public,pg_catalog,pg_temp");
+    await assertRoleBoundaryRejected(/bootstrap_role_database_boundary_invalid/);
+    await database.exec("set session authorization postgres; alter schema public owner to pg_database_owner; set session authorization content_migration; set search_path=public,pg_catalog,pg_temp");
+    await database.exec("set session authorization postgres; grant content_schema_owner to content_application; set session authorization content_migration; set search_path=public,pg_catalog,pg_temp");
     await assert.rejects(readCanonicalBootstrapCatalogs({
       query: (sql, parameters = []) => database.query(sql, parameters),
     }, {
@@ -511,19 +946,33 @@ test("074 post-migration security catalog is independently read from live Postgr
       grant usage,create on schema public to content_schema_owner;
     `);
     for (const relation of bootstrapFenceRelations) await database.exec(`alter table public."${relation}" owner to content_schema_owner`);
+    const topicUploadsAcl = async () => (await database.query(`
+      select case acl.grantee when 0 then 'PUBLIC' else grantee.rolname end as grantee,
+             acl.privilege_type as privilege,acl.is_grantable as grantable
+        from pg_class relation
+        cross join lateral aclexplode(coalesce(relation.relacl,acldefault('r',relation.relowner))) acl
+        left join pg_roles grantee on grantee.oid=acl.grantee
+       where relation.oid='public.topic_uploads'::regclass
+       order by (case acl.grantee when 0 then 'PUBLIC' else grantee.rolname end) collate "C",
+                acl.privilege_type collate "C"
+    `)).rows;
+    const topicUploadsAclBefore074 = await topicUploadsAcl();
     await database.exec(`set role content_schema_owner; ${migration074.sql} reset role;`);
+    assert.deepEqual(await topicUploadsAcl(), topicUploadsAclBefore074,
+      "074 managed fence installation must not mutate customer relation ACLs");
     await database.exec(`
       revoke all on table ai_content_cutovers,ai_content_cutover_status_events,ai_content_maintenance_state,ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog from content_application;
       grant select on table ai_content_maintenance_state to content_application;
       grant execute on function assert_ai_content_writable() to content_application;
-      grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,text,text,text),set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text) to content_operator;
+      grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,jsonb,text,text,text),set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text,text) to content_operator;
       grant select on table ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog to content_migration;
-      grant execute on function ai_content_cutover_bypass_allowed(),verify_ai_content_write_fence_catalog(),consume_ai_content_provider_attestation() to content_migration;
+      grant execute on function ai_content_cutover_bypass_allowed(),lock_ai_content_cutover_transaction_state(uuid),verify_ai_content_cutover_preflight_identity(uuid,jsonb,text,text),verify_ai_content_write_fence_catalog(),consume_ai_content_provider_attestation(),read_ai_content_cutover_migration_body_evidence(uuid),register_ai_content_075_fence_relations(),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text,text) to content_migration;
+      grant execute on function register_ai_content_075_fence_relations() to content_schema_owner;
     `);
     const names = { schemaOwnerRoleName: "content_schema_owner", applicationRoleName: "content_application", operatorRoleName: "content_operator", migrationRoleName: "content_migration", cleanupRoleName: "content_cleanup" };
     const catalog = await readFenceSecurityCatalog({ query: (sql, parameters = []) => database.query(sql, parameters) }, names);
     assert.match(catalog.catalogSha256, /^[0-9a-f]{64}$/);
-    assert.equal(catalog.ordinaryTriggers.length, 43);
+    assert.equal(catalog.ordinaryTriggers.length, 44);
     const eventCatalog = await readCanonicalEventTriggerCatalog({ query: (sql, parameters = []) => database.query(sql, parameters) });
     assert.equal(eventCatalog.count, 0);
     await database.exec("alter function assert_ai_content_writable() set search_path=public");
@@ -5222,6 +5671,66 @@ const createAttachmentLifecycleIdentity = async (database, label) => {
   };
 };
 
+test("073a fixes all 19 function configs and defeats TEMP relation shadowing", async () => {
+  const migrations = await loadMigrations();
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      legacyTriggerSearchPathMigrationId,
+    );
+    const configs = await database.query(
+      `select requested.identity,function.proconfig
+         from unnest($1::text[]) requested(identity)
+         left join pg_proc function on function.oid=to_regprocedure(requested.identity)
+        order by requested.identity`,
+      [legacyTriggerSearchPathFunctionIdentities],
+    );
+    assert.equal(configs.rows.length, legacyTriggerSearchPathFunctionIdentities.length);
+    assert.deepEqual(
+      configs.rows.map((row) => row.identity),
+      [...legacyTriggerSearchPathFunctionIdentities].toSorted(),
+    );
+    for (const row of configs.rows) {
+      assert.deepEqual(
+        row.proconfig?.map((item) => item.replace(/\s+/g, "")),
+        ["search_path=pg_catalog,public,pg_temp"],
+        row.identity,
+      );
+    }
+
+    await database.exec(`
+      create temporary table ai_content_attachment_storage_path_guards (
+        storage_path text primary key,
+        legacy_session_count integer not null default 0,
+        nonlegacy_session_count integer not null default 0
+      )
+    `);
+    const identity = await createAttachmentLifecycleIdentity(database, "search-path-shadow");
+    const storagePath = `generation/${randomUUID()}/shadow-proof.pdf`;
+    await database.query(
+      `insert into ai_content_attachment_upload_sessions(
+         generation_id,workspace_id,brand_id,created_by_user_id,nonce,role,file_name,
+         expected_mime_type,expected_size_bytes,expected_checksum,storage_path,status,
+         token_expires_at,created_at,is_legacy_backfill
+       ) values($1,$2,$3,$4,$5,'document','shadow-proof.pdf','application/pdf',100,$6,$7,
+         'pending',now()+interval '10 minutes',now(),false)`,
+      [identity.generationId, identity.workspaceId, identity.brandId, identity.actorId,
+        randomUUID(), "a".repeat(64), storagePath],
+    );
+    const publicGuard = await database.query(
+      "select nonlegacy_session_count from public.ai_content_attachment_storage_path_guards where storage_path=$1",
+      [storagePath],
+    );
+    const tempGuard = await database.query(
+      "select count(*)::integer as count from pg_temp.ai_content_attachment_storage_path_guards",
+    );
+    assert.deepEqual(publicGuard.rows, [{ nonlegacy_session_count: 1 }]);
+    assert.equal(tempGuard.rows[0].count, 0);
+  });
+});
+
 const seedAttachmentLifecycleUpgradeFixture = async (database, fixture) => {
   await database.query(
     "insert into workspaces(id,name,slug) values($1,'Lifecycle convergence',$2)",
@@ -7078,5 +7587,386 @@ test("072 creates the isolated FAQ suggestion queue and remains idempotent", asy
          resource_type, worker_id, workload_type, lease_token, expires_at
        ) values ('codex_cli', 'faq-migration-test', 'faq', gen_random_uuid(), now() + interval '1 minute')`,
     );
+  });
+});
+
+test("075 creates the durable proposal audit, automated run, prompt binding, cleanup outbox, and topic upload idempotency contract", async () => {
+  const migrations = await loadMigrations();
+  const migration075 = migrations.find(
+    (migration) => migration.id === "075_ai_content_three_format_cutover.sql",
+  );
+  assert.ok(migration075, "075 migration is required");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "074_ai_content_maintenance_write_fence.sql",
+    );
+    await run075SchemaBodyForPglite(database, migration075);
+
+    const liveDomainTriggerDefinitions = await database.query(`
+      select relation.relname as relation_name,trigger.tgname as trigger_name,
+             pg_get_triggerdef(trigger.oid,true) as definition
+        from pg_trigger trigger
+        join pg_class relation on relation.oid=trigger.tgrelid
+       where not trigger.tgisinternal
+         and relation.relname || '|' || trigger.tgname = any($1::text[])
+       order by relation.relname,trigger.tgname
+    `, [cutover075DomainTriggers.map(({ relationName, triggerName }) => `${relationName}|${triggerName}`)]);
+    assert.deepEqual(liveDomainTriggerDefinitions.rows, cutover075DomainTriggers.map((trigger) => ({
+      relation_name: trigger.relationName,
+      trigger_name: trigger.triggerName,
+      definition: trigger.definition,
+    })));
+
+    const requiredTables = [
+      "ai_content_proposal_performance_audits",
+      "automated_content_proposal_runs",
+      "ai_content_proposal_job_contracts",
+      "ai_content_proposal_compositions",
+      "ai_content_proposal_research_attempts",
+      "ai_content_proposal_research_attempt_events",
+      "ai_content_proposal_model_attempts",
+      "ai_content_proposal_attempt_events",
+      "ai_content_generation_prompt_bindings",
+      "ai_content_generation_operations",
+      "ai_content_cutover_release_adoptions",
+      "ai_content_cutover_release_adoption_events",
+      "ai_content_storage_cleanup_outbox",
+    ];
+    const found = await database.query(
+      `select table_name
+         from information_schema.tables
+        where table_schema = 'public'
+          and table_name = any($1::text[])
+        order by table_name`,
+      [requiredTables],
+    );
+    assert.deepEqual(
+      found.rows.map((row) => row.table_name),
+      requiredTables.toSorted(),
+    );
+
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "automated_content_proposal_runs",
+        "automated_content_proposal_runs_status_check",
+      ),
+      ["dismissed", "failed", "queued", "ready", "selected"],
+    );
+    assert.deepEqual(
+      await readConstraintValues(
+        database,
+        "ai_content_storage_cleanup_outbox",
+        "ai_content_storage_cleanup_outbox_status_check",
+      ),
+      ["dead_letter", "deleted", "deleting", "failed", "pending", "retained_reference"],
+    );
+
+    const topicColumns = await database.query(
+      `select column_name
+         from information_schema.columns
+        where table_schema='public' and table_name='topic_uploads'
+          and column_name in ('operation_key','request_fingerprint')
+        order by column_name`,
+    );
+    assert.deepEqual(topicColumns.rows, [
+      { column_name: "operation_key" },
+      { column_name: "request_fingerprint" },
+    ]);
+
+    const failClosedConstraints = await database.query(`
+      select constraint_record.conname,pg_get_constraintdef(constraint_record.oid) as definition
+        from pg_constraint constraint_record
+       where constraint_record.conrelid in (
+         'public.ai_content_proposal_jobs'::regclass,
+         'public.topic_uploads'::regclass,
+         'public.automated_content_proposal_runs'::regclass,
+         'public.ai_content_storage_cleanup_outbox'::regclass,
+         'public.ai_content_proposal_compositions'::regclass,
+         'public.ai_content_generation_prompt_bindings'::regclass
+       ) and constraint_record.conname in (
+         'ai_content_proposal_jobs_lease_check','topic_uploads_operation_identity_check',
+         'automated_content_proposal_runs_state_check',
+         'ai_content_storage_cleanup_outbox_storage_path_check',
+         'ai_content_proposal_compositions_input_contract_check',
+         'ai_content_generation_prompt_bindings_json_check'
+       ) order by constraint_record.conname
+    `);
+    const constraintDefinition = Object.fromEntries(
+      failClosedConstraints.rows.map((row) => [row.conname, row.definition]),
+    );
+    assert.match(constraintDefinition.ai_content_proposal_jobs_lease_check, /IS TRUE/i);
+    assert.match(constraintDefinition.ai_content_proposal_jobs_lease_check, /lease_owner IS NOT NULL/i);
+    assert.match(constraintDefinition.topic_uploads_operation_identity_check, /IS TRUE/i);
+    assert.match(constraintDefinition.topic_uploads_operation_identity_check, /request_fingerprint IS NOT NULL/i);
+    assert.match(
+      constraintDefinition.automated_content_proposal_runs_state_check,
+      /status = 'failed'[\s\S]*selected_proposal_id IS NULL[\s\S]*selected_generation_id IS NULL/i,
+    );
+    assert.match(
+      constraintDefinition.automated_content_proposal_runs_state_check,
+      /status = 'dismissed'[\s\S]*selected_proposal_id IS NULL[\s\S]*selected_generation_id IS NULL/i,
+    );
+    assert.match(
+      constraintDefinition.ai_content_storage_cleanup_outbox_storage_path_check,
+      /storage_path = (?:btrim\(storage_path\)|TRIM\(BOTH FROM storage_path\))[\s\S]*IS TRUE/i,
+    );
+    assert.match(
+      constraintDefinition.ai_content_proposal_compositions_input_contract_check,
+      /contractVersion[\s\S]*composed_contract_version[\s\S]*IS TRUE/i,
+    );
+    assert.match(
+      constraintDefinition.ai_content_generation_prompt_bindings_json_check,
+      /binding_sha256[\s\S]*IS TRUE/i,
+    );
+
+    const beginAdoptionDefinition = (await database.query(
+      "select pg_get_functiondef('public.begin_ai_content_cutover_release_adoption(uuid,uuid,text,text,text,text,text,text)'::regprocedure) as definition",
+    )).rows[0].definition;
+    assert.match(beginAdoptionDefinition, /normalized_reason\s+text/i);
+    assert.match(beginAdoptionDefinition, /normalized_operator_identity\s+text/i);
+    assert.match(
+      beginAdoptionDefinition,
+      /existing\.reason is distinct from normalized_reason/i,
+    );
+    assert.match(
+      beginAdoptionDefinition,
+      /existing\.operator_identity is distinct from normalized_operator_identity/i,
+    );
+
+    const hardenedFunctionDefinitions = Object.fromEntries(await Promise.all([
+      "reject_ai_content_cutover_record_mutation()",
+      "enforce_ai_content_proposal_model_attempt_contract()",
+      "create_ai_content_cutover_topic_upload(uuid,uuid,uuid,text,text,jsonb)",
+      "freeze_automated_content_proposal_run_identity()",
+      "transition_automated_content_proposal_run(uuid,text,text,uuid,uuid,uuid,text,text)",
+    ].map(async (identity) => [identity, (await database.query(
+      "select pg_get_functiondef($1::regprocedure) as definition",
+      [`public.${identity}`],
+    )).rows[0].definition])));
+    assert.match(
+      hardenedFunctionDefinitions["reject_ai_content_cutover_record_mutation()"],
+      /proposal_active_invocation_lease_takeover_invalid/,
+    );
+    assert.match(
+      hardenedFunctionDefinitions["enforce_ai_content_proposal_model_attempt_contract()"],
+      /proposal_model_attempt_unresolved_invocation/,
+    );
+    assert.match(
+      hardenedFunctionDefinitions["create_ai_content_cutover_topic_upload(uuid,uuid,uuid,text,text,jsonb)"],
+      /normalized_topics[\s\S]*stored_topics/i,
+    );
+    assert.match(
+      hardenedFunctionDefinitions["freeze_automated_content_proposal_run_identity()"],
+      /proposal_batch_id[\s\S]*automated_content_proposal_run_batch_immutable/i,
+    );
+    assert.match(
+      hardenedFunctionDefinitions["transition_automated_content_proposal_run(uuid,text,text,uuid,uuid,uuid,text,text)"],
+      /current_run[\s\S]*for update/i,
+    );
+
+    for (const identity of [
+      "enforce_ai_content_proposal_research_attempt_contract()",
+      "append_ai_content_proposal_research_attempt_event(uuid,uuid,integer,text,uuid,jsonb,text,text)",
+      "enforce_ai_content_proposal_model_attempt_contract()",
+      "append_ai_content_proposal_attempt_event(uuid,uuid,integer,integer,text,text,text,text,text,text,text,text,boolean)",
+    ]) {
+      const definition = (await database.query(
+        "select pg_get_functiondef($1::regprocedure) as definition",
+        [`public.${identity}`],
+      )).rows[0].definition;
+      assert.match(definition, /IS DISTINCT FROM/i, `${identity} must reject SQL NULL drift`);
+      assert.match(definition, /lease_expires_at IS NULL/i, `${identity} must reject a NULL lease expiry`);
+    }
+
+    const invocationGuardTriggers = await database.query(`
+      select tgname,tgdeferrable,tginitdeferred
+        from pg_trigger
+       where tgrelid='public.ai_content_proposal_jobs'::regclass
+         and tgname in (
+           'ai_content_proposal_jobs_invocation_reclaim_guard',
+           'ai_content_proposal_jobs_invocation_evidence_guard'
+         ) and not tgisinternal order by tgname
+    `);
+    assert.deepEqual(invocationGuardTriggers.rows, [{
+      tgname: "ai_content_proposal_jobs_invocation_evidence_guard",
+      tgdeferrable: true,
+      tginitdeferred: true,
+    }, {
+      tgname: "ai_content_proposal_jobs_invocation_reclaim_guard",
+      tgdeferrable: false,
+      tginitdeferred: false,
+    }]);
+
+    const readPerformanceAuditTrigger = async () => (await database.query(`
+      select trigger.tgtype::integer as trigger_type,trigger.tgenabled as enabled,
+             trigger.tgdeferrable as deferrable,trigger.tginitdeferred as initially_deferred,
+             namespace.nspname || '.' || function.proname || '(' || pg_get_function_identity_arguments(function.oid) || ')' as function_identity,
+             pg_get_triggerdef(trigger.oid,true) as definition
+        from pg_trigger trigger
+        join pg_proc function on function.oid=trigger.tgfoid
+        join pg_namespace namespace on namespace.oid=function.pronamespace
+       where trigger.tgrelid='public.ai_content_proposal_performance_audits'::regclass
+         and trigger.tgname='ai_content_proposal_performance_audits_immutable'
+         and not trigger.tgisinternal
+    `)).rows[0];
+    const originalPerformanceAuditTrigger = await readPerformanceAuditTrigger();
+    await database.exec(`
+      drop trigger ai_content_proposal_performance_audits_immutable
+        on ai_content_proposal_performance_audits;
+      create trigger ai_content_proposal_performance_audits_immutable
+        before update or delete on ai_content_proposal_performance_audits
+        for each row execute function reject_ai_content_cutover_record_mutation('task3n-inert');
+    `);
+    const inertArgumentPerformanceAuditTrigger = await readPerformanceAuditTrigger();
+    assert.deepEqual(
+      { ...inertArgumentPerformanceAuditTrigger, definition: undefined },
+      { ...originalPerformanceAuditTrigger, definition: undefined },
+      "legacy domain-trigger metadata must demonstrate that inert TG_ARGV is otherwise invisible",
+    );
+    assert.notEqual(
+      inertArgumentPerformanceAuditTrigger.definition,
+      originalPerformanceAuditTrigger.definition,
+    );
+    await database.exec(`
+      drop trigger ai_content_proposal_performance_audits_immutable
+        on ai_content_proposal_performance_audits;
+      create trigger ai_content_proposal_performance_audits_immutable
+        before update or delete on ai_content_proposal_performance_audits
+        for each row execute function reject_ai_content_cutover_record_mutation();
+    `);
+    assert.equal((await readPerformanceAuditTrigger()).definition, originalPerformanceAuditTrigger.definition);
+
+    const researchCompletionFunction = await database.query(`
+      select function.prosecdef as security_definer,
+             pg_get_function_result(function.oid) as result_type,
+             pg_get_functiondef(function.oid) as definition
+        from pg_proc function
+       where function.oid=to_regprocedure(
+         'public.complete_ai_content_proposal_research(uuid,uuid,jsonb,text,jsonb,text,text)'
+       )
+    `);
+    assert.equal(researchCompletionFunction.rows.length, 1);
+    assert.equal(researchCompletionFunction.rows[0].security_definer, true);
+    assert.match(
+      researchCompletionFunction.rows[0].result_type,
+      /ai_content_proposal_compositions$/,
+    );
+    assert.match(researchCompletionFunction.rows[0].definition, /pg_advisory_xact_lock/i);
+    assert.match(researchCompletionFunction.rows[0].definition, /p_evidence_json::text/i);
+    assert.match(researchCompletionFunction.rows[0].definition, /p_composed_input_json::text/i);
+
+    const researchCompletionTrigger = await database.query(`
+      select trigger.tgdeferrable,trigger.tginitdeferred,
+             trigger.tgtype::integer as trigger_type,
+             function.proname as function_name
+        from pg_trigger trigger
+        join pg_proc function on function.oid=trigger.tgfoid
+       where trigger.tgrelid='public.ai_content_proposal_research_attempt_events'::regclass
+         and trigger.tgname='ai_content_proposal_research_attempt_events_completion_pair'
+         and not trigger.tgisinternal
+    `);
+    assert.deepEqual(researchCompletionTrigger.rows, [{
+      tgdeferrable: true,
+      tginitdeferred: true,
+      trigger_type: 21,
+      function_name: "enforce_ai_content_proposal_research_completion_pair",
+    }]);
+
+  });
+});
+
+test("075 makes proposal contracts, compositions, research and model attempt evidence, prompt bindings, and release adoption events immutable", async () => {
+  const migrations = await loadMigrations();
+  const migration075 = migrations.find(
+    (migration) => migration.id === "075_ai_content_three_format_cutover.sql",
+  );
+  assert.ok(migration075, "075 migration is required");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "074_ai_content_maintenance_write_fence.sql",
+    );
+    await run075SchemaBodyForPglite(database, migration075);
+    const guarded = [
+      "ai_content_proposal_job_contracts",
+      "ai_content_proposal_compositions",
+      "ai_content_proposal_research_attempts",
+      "ai_content_proposal_research_attempt_events",
+      "ai_content_proposal_model_attempts",
+      "ai_content_proposal_attempt_events",
+      "ai_content_generation_prompt_bindings",
+      "ai_content_cutover_release_adoptions",
+      "ai_content_cutover_release_adoption_events",
+    ];
+    for (const tableName of guarded) {
+      const trigger = await database.query(
+        `select trigger.tgenabled,
+                trigger.tgtype::integer as trigger_type
+           from pg_trigger trigger
+          where trigger.tgrelid=to_regclass($1)
+            and not trigger.tgisinternal
+            and trigger.tgname=$2`,
+        [`public.${tableName}`, `${tableName}_immutable`],
+      );
+      assert.deepEqual(
+        trigger.rows,
+        [{ tgenabled: "O", trigger_type: 27 }],
+        `${tableName} must reject UPDATE and DELETE`,
+      );
+    }
+  });
+});
+
+test("075 gives usage reservation, one exact reversal, and retry operations durable identities", async () => {
+  const migrations = await loadMigrations();
+  const migration075 = migrations.find(
+    (migration) => migration.id === "075_ai_content_three_format_cutover.sql",
+  );
+  assert.ok(migration075, "075 migration is required");
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "074_ai_content_maintenance_write_fence.sql",
+    );
+    await run075SchemaBodyForPglite(database, migration075);
+    const columns = await database.query(
+      `select column_name
+         from information_schema.columns
+        where table_schema='public' and table_name='ai_content_usage_ledger'
+          and column_name in ('operation_id','reservation_id','reversal_of_ledger_id')
+        order by column_name`,
+    );
+    assert.deepEqual(columns.rows, [
+      { column_name: "operation_id" },
+      { column_name: "reservation_id" },
+      { column_name: "reversal_of_ledger_id" },
+    ]);
+    const indexes = await database.query(
+      `select indexname
+         from pg_indexes
+        where schemaname='public'
+          and indexname in (
+            'ai_content_usage_one_reservation_per_operation_uq',
+            'ai_content_usage_one_reversal_per_reservation_uq',
+            'topic_uploads_brand_operation_key_uq'
+          )
+        order by indexname`,
+    );
+    assert.deepEqual(indexes.rows, [
+      { indexname: "ai_content_usage_one_reservation_per_operation_uq" },
+      { indexname: "ai_content_usage_one_reversal_per_reservation_uq" },
+      { indexname: "topic_uploads_brand_operation_key_uq" },
+    ]);
   });
 });

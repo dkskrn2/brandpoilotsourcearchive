@@ -2121,6 +2121,15 @@ test("CI publishing verifies release tooling plus only affected workspaces", () 
   }
   assert.match(verifyJob, /if: fromJSON\(needs\.impact\.outputs\.components\)\.api[\s\S]*npm run test --workspace @brand-pilot\/api/);
   assert.match(verifyJob, /if: needs\.impact\.outputs\.migration_changed == 'true'[\s\S]*npm run test:migrations/);
+  for (const command of [
+    "node --test scripts/migrate.test.mjs",
+    "node --test scripts/migrationRunner.test.mjs",
+    "node --test scripts/ai-content-three-format-cutover.postgres.integration.test.mjs",
+    "AI_CONTENT_074_ENFORCE_BENCHMARK=false node --test scripts/ai-content-074.postgres.integration.test.mjs",
+  ]) {
+    assert.ok(verifyJob.includes(command), `migration verify job missing ${command}`);
+  }
+  assert.doesNotMatch(verifyJob, /ai-content-074\.postgres\.integration\.test\.mjs[^\n]*--test-name-pattern/);
 });
 
 test("CI publishing uses an affected linux-amd64 matrix with immutable metadata and cache", () => {
