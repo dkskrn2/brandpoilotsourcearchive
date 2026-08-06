@@ -7800,6 +7800,24 @@ test("075 creates the durable proposal audit, automated run, prompt binding, cle
       assert.match(definition, /lease_expires_at IS NULL/i, `${identity} must reject a NULL lease expiry`);
     }
 
+    const reclaimDefinitions = Object.fromEntries(await Promise.all([
+      "reject_ai_content_cutover_record_mutation()",
+      "append_ai_content_proposal_research_attempt_event(uuid,uuid,integer,text,uuid,jsonb,text,text)",
+      "append_ai_content_proposal_attempt_event(uuid,uuid,integer,integer,text,text,text,text,text,text,text,text,boolean)",
+    ].map(async (identity) => [identity, (await database.query(
+      "select pg_get_functiondef($1::regprocedure) as definition",
+      [`public.${identity}`],
+    )).rows[0].definition])));
+    assert.match(reclaimDefinitions["reject_ai_content_cutover_record_mutation()"], /proposal_completion_indeterminate/);
+    assert.match(
+      reclaimDefinitions["append_ai_content_proposal_research_attempt_event(uuid,uuid,integer,text,uuid,jsonb,text,text)"],
+      /research_lease_expired[\s\S]*attempt\.attempt_number\s*<\s*job\.max_attempts[\s\S]*proposal_research_reclaim_lease_renewed/i,
+    );
+    assert.match(
+      reclaimDefinitions["append_ai_content_proposal_attempt_event(uuid,uuid,integer,integer,text,text,text,text,text,text,text,text,boolean)"],
+      /model_lease_expired[\s\S]*attempt\.attempt_number\s*<\s*job\.max_attempts[\s\S]*proposal_model_reclaim_lease_renewed/i,
+    );
+
     const invocationGuardTriggers = await database.query(`
       select tgname,tgdeferrable,tginitdeferred
         from pg_trigger

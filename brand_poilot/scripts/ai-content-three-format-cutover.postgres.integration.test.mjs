@@ -351,7 +351,7 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
     )).rows[0].hash;
     await admin.query(
       `update ai_content_proposal_jobs set lease_started_at=now()-interval '10 minutes',
-         lease_expires_at=now()-interval '1 second' where id=$1`,
+         lease_expires_at=now()+interval '5 minutes' where id=$1`,
       [job.rows[0].id],
     );
     await assert.rejects(
@@ -1590,8 +1590,14 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
       "select append_ai_content_proposal_research_attempt_event($1,$2,1,'research_started',null,null,null,null)",
       [researchRetryAttempt.rows[0].id, researchRetryLease],
     );
+    await admin.query(
+      "update ai_content_proposal_jobs set lease_expires_at=now()-interval '1 second' where id=$1",
+      [researchRetryFixture.job.id],
+    );
     const retryableResearchFailure = JSON.stringify({
-      errorCode: "research_timeout", errorMessage: "retry research later", retryable: true,
+      errorCode: "research_lease_expired",
+      errorMessage: "research lease expired before evidence commit",
+      retryable: true,
     });
     const retryableResearchFailureHash = (await admin.query(
       "select encode(digest($1::jsonb::text,'sha256'),'hex') as hash",
@@ -1642,7 +1648,7 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
     )).rows[0].hash;
     await admin.query("update ai_content_proposal_batches set status='building' where id=$1", [modelFailureFixture.batch.id]);
     await admin.query(
-      `update ai_content_proposal_jobs set status='processing',active_stage='model',attempt_count=max_attempts,
+      `update ai_content_proposal_jobs set status='processing',active_stage='model',max_attempts=1,attempt_count=1,
          lease_owner='model-failure-worker',lease_token=$2,lease_started_at=now(),
          lease_expires_at=now()+interval '5 minutes' where id=$1`,
       [modelFailureFixture.job.id, modelFailureLease],
@@ -1658,35 +1664,39 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
         workspace.rows[0].id, brand.rows[0].id, modelFailureLeaseHash, hash,
         proposalSchema, composedInputHash],
     );
+    await admin.query(
+      "update ai_content_proposal_jobs set lease_expires_at=now()-interval '1 second' where id=$1",
+      [modelFailureFixture.job.id],
+    );
     // 074 fixes this function identity. For the explicit pre-invocation event only,
     // ordinal 0 is a compatibility sentinel and the final four payload arguments are
     // mapped as errorCode, errorMessage, NULL, retryable. The stored row uses proper
     // failure columns and a NULL invocation_ordinal, so no invocation is fabricated.
     const modelFailureEvent = await admin.query(
       `select append_ai_content_proposal_attempt_event(
-         $1,$2,1,0,'pre_invocation_failed',$3,$3,$3,$4,$5,$6,null,true) as event_sha256`,
+         $1,$2,1,0,'pre_invocation_failed',$3,$3,$3,$4,$5,$6,null,false) as event_sha256`,
       [modelFailureAttempt.rows[0].id, modelFailureLease, hash, composedInputHash,
-        "model_spawn_failed", "worker could not start model"],
+        "model_lease_expired", "model lease expired before invocation start"],
     );
     const modelFailure = await admin.query(
       "select status,error_code,error_message from ai_content_proposal_jobs where id=$1",
       [modelFailureFixture.job.id],
     );
     assert.deepEqual(modelFailure.rows, [{
-      status: "failed", error_code: "model_spawn_failed", error_message: "worker could not start model",
+      status: "failed", error_code: "model_lease_expired", error_message: "model lease expired before invocation start",
     }]);
     assert.deepEqual((await admin.query(
       `select append_ai_content_proposal_attempt_event(
-         $1,$2,1,0,'pre_invocation_failed',$3,$3,$3,$4,$5,$6,null,true) as event_sha256`,
+         $1,$2,1,0,'pre_invocation_failed',$3,$3,$3,$4,$5,$6,null,false) as event_sha256`,
       [modelFailureAttempt.rows[0].id, modelFailureLease, hash, composedInputHash,
-        "model_spawn_failed", "worker could not start model"],
+        "model_lease_expired", "model lease expired before invocation start"],
     )).rows, modelFailureEvent.rows);
     await assert.rejects(
       admin.query(
         `select append_ai_content_proposal_attempt_event(
-           $1,$2,1,0,'pre_invocation_failed',$3,$3,$3,$4,$5,$6,null,true)`,
+           $1,$2,1,0,'pre_invocation_failed',$3,$3,$3,$4,$5,$6,null,false)`,
         [modelFailureAttempt.rows[0].id, modelFailureLease, hash, composedInputHash,
-          "model_spawn_failed", "changed message"],
+          "model_lease_expired", "changed message"],
       ),
       /proposal_attempt_event_replay_conflict/,
     );
@@ -1701,14 +1711,14 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
       [modelFailureAttempt.rows[0].id],
     )).rows, [{
       event_type: "pre_invocation_failed", invocation_ordinal: null,
-      error_code: "model_spawn_failed", error_message: "worker could not start model",
-      retryable: true, terminal: true,
+      error_code: "model_lease_expired", error_message: "model lease expired before invocation start",
+      retryable: false, terminal: true,
     }]);
     assert.deepEqual((await admin.query(
       "select status,error_code,error_message from ai_content_proposal_batches where id=$1",
       [modelFailureFixture.batch.id],
     )).rows, [{
-      status: "failed", error_code: "model_spawn_failed", error_message: "worker could not start model",
+      status: "failed", error_code: "model_lease_expired", error_message: "model lease expired before invocation start",
     }]);
 
     const operatorRole = `cutover_operator_${randomUUID().replaceAll("-", "")}`;

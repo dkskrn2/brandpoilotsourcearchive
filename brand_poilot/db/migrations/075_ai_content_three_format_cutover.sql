@@ -99,6 +99,7 @@ create function reject_ai_content_cutover_record_mutation() returns trigger
 language plpgsql set search_path=pg_catalog,public,pg_temp as $$
 declare unresolved_invocation boolean := false;
 declare indeterminate_event boolean := false;
+declare completion_indeterminate boolean := false;
 begin
   if tg_name='ai_content_generation_operations_initial_state' then
     if new.status is distinct from 'reserved' then
@@ -122,7 +123,7 @@ begin
   end if;
   if tg_name='ai_content_proposal_jobs_invocation_reclaim_guard' then
     if tg_op='UPDATE' and old.status='manual_review_required'
-       and old.error_code='invocation_indeterminate' then
+       and old.error_code in ('invocation_indeterminate','proposal_completion_indeterminate') then
       if new is distinct from old then
         raise exception 'proposal_invocation_manual_review_immutable';
       end if;
@@ -180,6 +181,18 @@ begin
                 )
            )
       ) into unresolved_invocation;
+      select exists (
+        select 1
+          from public.ai_content_proposal_model_attempts attempt
+          join public.ai_content_proposal_attempt_events terminal
+            on terminal.model_attempt_id=attempt.id
+           and terminal.event_type='invocation_completed' and terminal.parser_valid=true
+         where attempt.job_id=old.id
+           and not exists (
+             select 1 from public.ai_content_proposal_attempt_events succeeded
+              where succeeded.model_attempt_id=attempt.id and succeeded.event_type='attempt_succeeded'
+           )
+      ) into completion_indeterminate;
       if unresolved_invocation then
         new.status:='manual_review_required';
         new.active_stage:=null;
@@ -191,9 +204,21 @@ begin
         new.error_message:='model invocation outcome is indeterminate';
         new.completed_at:=clock_timestamp();
         new.updated_at:=clock_timestamp();
+      elsif completion_indeterminate then
+        new.status:='manual_review_required';
+        new.active_stage:=null;
+        new.lease_owner:=null;
+        new.lease_token:=null;
+        new.lease_started_at:=null;
+        new.lease_expires_at:=null;
+        new.error_code:='proposal_completion_indeterminate';
+        new.error_message:='valid model output exists without an atomic proposal completion';
+        new.completed_at:=clock_timestamp();
+        new.updated_at:=clock_timestamp();
       end if;
     end if;
-    if new.status='manual_review_required' or new.error_code='invocation_indeterminate' then
+    if new.status='manual_review_required'
+       or new.error_code in ('invocation_indeterminate','proposal_completion_indeterminate') then
       select exists (
         select 1
           from public.ai_content_proposal_model_attempts attempt
@@ -206,10 +231,15 @@ begin
         new.status='manual_review_required' and new.active_stage is null
         and new.lease_owner is null and new.lease_token is null
         and new.lease_started_at is null and new.lease_expires_at is null
-        and new.error_code='invocation_indeterminate'
-        and new.error_message='model invocation outcome is indeterminate'
+        and (
+          (new.error_code='invocation_indeterminate'
+            and new.error_message='model invocation outcome is indeterminate'
+            and (unresolved_invocation or indeterminate_event))
+          or (new.error_code='proposal_completion_indeterminate'
+            and new.error_message='valid model output exists without an atomic proposal completion'
+            and completion_indeterminate)
+        )
         and new.completed_at is not null
-        and (unresolved_invocation or indeterminate_event)
       ) is true then
         raise exception 'proposal_invocation_manual_review_evidence_missing';
       end if;
@@ -240,15 +270,33 @@ begin
          and terminal.event_type='invocation_indeterminate'
        where attempt.job_id=new.id
     ) into indeterminate_event;
-    if new.status='manual_review_required' or new.error_code='invocation_indeterminate' then
+    select exists (
+      select 1
+        from public.ai_content_proposal_model_attempts attempt
+        join public.ai_content_proposal_attempt_events terminal
+          on terminal.model_attempt_id=attempt.id
+         and terminal.event_type='invocation_completed' and terminal.parser_valid=true
+       where attempt.job_id=new.id
+         and not exists (
+           select 1 from public.ai_content_proposal_attempt_events succeeded
+            where succeeded.model_attempt_id=attempt.id and succeeded.event_type='attempt_succeeded'
+         )
+    ) into completion_indeterminate;
+    if new.status='manual_review_required'
+       or new.error_code in ('invocation_indeterminate','proposal_completion_indeterminate') then
       if not (
         new.status='manual_review_required' and new.active_stage is null
         and new.lease_owner is null and new.lease_token is null
         and new.lease_started_at is null and new.lease_expires_at is null
-        and new.error_code='invocation_indeterminate'
-        and new.error_message='model invocation outcome is indeterminate'
+        and (
+          (new.error_code='invocation_indeterminate'
+            and new.error_message='model invocation outcome is indeterminate'
+            and (unresolved_invocation or indeterminate_event))
+          or (new.error_code='proposal_completion_indeterminate'
+            and new.error_message='valid model output exists without an atomic proposal completion'
+            and completion_indeterminate)
+        )
         and new.completed_at is not null
-        and (unresolved_invocation or indeterminate_event)
       ) is true then
         raise exception 'proposal_invocation_manual_review_evidence_missing';
       end if;
@@ -843,6 +891,7 @@ declare replay public.ai_content_proposal_research_attempt_events%rowtype;
 declare job public.ai_content_proposal_jobs%rowtype;
 declare composition public.ai_content_proposal_compositions%rowtype;
 declare next_hash text;
+declare expired_research_reclaim boolean;
 begin
   select * into strict attempt from public.ai_content_proposal_research_attempts
    where id=p_attempt_id for update;
@@ -891,10 +940,22 @@ begin
     raise exception 'proposal_research_attempt_terminal';
   end if;
   select * into strict job from public.ai_content_proposal_jobs where id=attempt.job_id for update;
+  expired_research_reclaim:=p_event_type='attempt_failed'
+    and previous.event_type='research_started'
+    and job.lease_expires_at is not null and job.lease_expires_at<=clock_timestamp()
+    and p_evidence_json->>'errorCode'='research_lease_expired'
+    and p_evidence_json->>'errorMessage'='research lease expired before evidence commit'
+    and (p_evidence_json->>'retryable')::boolean=(attempt.attempt_number<job.max_attempts);
+  if p_event_type='attempt_failed'
+     and p_evidence_json->>'errorCode'='research_lease_expired'
+     and job.lease_expires_at>clock_timestamp() then
+    raise exception 'proposal_research_reclaim_lease_renewed';
+  end if;
   if job.status is distinct from 'processing' or job.active_stage is distinct from 'research'
      or job.lease_owner is null or job.lease_started_at is null
      or job.lease_token is distinct from p_lease_token
-     or job.lease_expires_at is null or job.lease_expires_at<=clock_timestamp()
+     or job.lease_expires_at is null
+     or (job.lease_expires_at<=clock_timestamp() and not expired_research_reclaim)
      or attempt.worker_id is distinct from job.lease_owner
      or attempt.lease_token_sha256 is distinct from encode(digest(p_lease_token::text,'sha256'),'hex') then
     raise exception 'proposal_research_lease_mismatch';
@@ -1307,6 +1368,8 @@ declare job public.ai_content_proposal_jobs%rowtype;
 declare next_hash text;
 declare pre_invocation_failure boolean;
 declare pre_invocation_terminal boolean;
+declare expired_pre_invocation_reclaim boolean;
+declare expired_invalid_invocation_reclaim boolean;
 begin
   select * into strict attempt from public.ai_content_proposal_model_attempts where id=p_attempt_id for update;
   perform pg_advisory_xact_lock(hashtextextended(attempt.job_id::text,0));
@@ -1356,10 +1419,25 @@ begin
     raise exception 'proposal_attempt_terminal';
   end if;
   select * into strict job from public.ai_content_proposal_jobs where id=attempt.job_id for update;
+  expired_pre_invocation_reclaim:=pre_invocation_failure
+    and previous.id is null
+    and job.lease_expires_at is not null and job.lease_expires_at<=clock_timestamp()
+    and p_transcript_sha256='model_lease_expired'
+    and p_output_sha256='model lease expired before invocation start'
+    and p_parser_valid=(attempt.attempt_number<job.max_attempts);
+  expired_invalid_invocation_reclaim:=p_event_type='attempt_failed'
+    and previous.event_type='invocation_completed' and previous.parser_valid=false
+    and job.lease_expires_at is not null and job.lease_expires_at<=clock_timestamp();
+  if pre_invocation_failure and p_transcript_sha256='model_lease_expired'
+     and job.lease_expires_at>clock_timestamp() then
+    raise exception 'proposal_model_reclaim_lease_renewed';
+  end if;
   if job.status is distinct from 'processing' or job.active_stage is distinct from 'model'
      or job.lease_owner is null or job.lease_started_at is null
      or job.lease_token is distinct from p_lease_token
-     or job.lease_expires_at is null or job.lease_expires_at<=clock_timestamp()
+     or job.lease_expires_at is null
+     or (job.lease_expires_at<=clock_timestamp()
+       and not (expired_pre_invocation_reclaim or expired_invalid_invocation_reclaim))
      or attempt.worker_id is distinct from job.lease_owner
      or attempt.lease_token_sha256 is distinct from encode(digest(p_lease_token::text,'sha256'),'hex') then
     raise exception 'proposal_model_lease_mismatch';
@@ -1406,7 +1484,7 @@ begin
        ) then raise exception 'proposal_attempt_failure_precondition_invalid'; end if;
   end if;
   pre_invocation_terminal:=pre_invocation_failure and (
-    not p_parser_valid or job.attempt_count>=job.max_attempts
+    not p_parser_valid or attempt.attempt_number>=job.max_attempts
   );
   next_hash:=encode(digest(jsonb_build_array(
     p_attempt_id,p_event_sequence,p_invocation_ordinal,p_event_type,
@@ -1442,11 +1520,19 @@ begin
     update public.ai_content_proposal_jobs set status='completed',active_stage=null,
       lease_owner=null,lease_token=null,lease_started_at=null,lease_expires_at=null,
       error_code=null,error_message=null,completed_at=now() where id=attempt.job_id;
+  elsif p_event_type='attempt_failed' and attempt.attempt_number<job.max_attempts then
+    update public.ai_content_proposal_jobs set status='queued',active_stage=null,
+      available_at=now()+interval '60 seconds',lease_owner=null,lease_token=null,
+      lease_started_at=null,lease_expires_at=null,error_code=null,error_message=null,
+      completed_at=null,updated_at=now() where id=attempt.job_id;
   elsif p_event_type='attempt_failed' then
     update public.ai_content_proposal_jobs set status='failed',active_stage=null,
       lease_owner=null,lease_token=null,lease_started_at=null,lease_expires_at=null,
-      error_code='model_attempt_failed',error_message='model attempt failed',completed_at=now()
+      error_code='model_attempt_failed',error_message='model attempt failed',completed_at=now(),updated_at=now()
      where id=attempt.job_id;
+    update public.ai_content_proposal_batches set status='failed',error_code='model_attempt_failed',
+      error_message='model attempt failed',updated_at=now()
+     where id=job.batch_id and workspace_id=job.workspace_id and brand_id=job.brand_id;
   elsif pre_invocation_failure and pre_invocation_terminal then
     update public.ai_content_proposal_jobs set status='failed',active_stage=null,
       lease_owner=null,lease_token=null,lease_started_at=null,lease_expires_at=null,
