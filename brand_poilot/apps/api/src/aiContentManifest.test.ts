@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseAiContentManifest } from "./aiContentManifest.js";
+import { parseActiveAiContentManifestV3, parseAiContentManifest } from "./aiContentManifest.js";
 
 function slide(index: number) {
   return {
@@ -581,5 +581,32 @@ describe("parseAiContentManifest", () => {
   it("rejects a manifest type mismatch", () => {
     expect(() => parseAiContentManifest("blog", cardManifest()))
       .toThrow("ai_content_manifest_type_mismatch");
+  });
+});
+
+describe("parseActiveAiContentManifestV3", () => {
+  const reelManifest = {
+    version: "ai-content.v3",
+    outputFormat: "reel",
+    purpose: "marketing",
+    title: "Tea reel",
+    assets: [
+      { role: "scene", index: 1, url: "https://blob.example/scene-01.png", fileName: "scene-01.png", mimeType: "image/png", width: 1080, height: 1920 },
+      { role: "video", index: 1, url: "https://blob.example/reel.mp4", fileName: "reel.mp4", mimeType: "video/mp4", width: 1080, height: 1920, durationSeconds: 4, videoCodec: "h264", fps: 30, audioCodec: null },
+    ],
+    content: { caption: "Caption", hashtags: ["#tea"], cta: "Learn" },
+  };
+
+  it("accepts the canonical V3 reel without a legacy type field", () => {
+    expect(parseActiveAiContentManifestV3(reelManifest)).toEqual(reelManifest);
+  });
+
+  it("rejects retired versions, type fields, and mismatched content shapes", () => {
+    expect(() => parseActiveAiContentManifestV3({ ...reelManifest, version: "ai-content.v2" }))
+      .toThrow("ai_content_manifest_v3_invalid");
+    expect(() => parseActiveAiContentManifestV3({ ...reelManifest, type: "marketing" }))
+      .toThrow("ai_content_manifest_v3_invalid");
+    expect(() => parseActiveAiContentManifestV3({ ...reelManifest, outputFormat: "blog" }))
+      .toThrow("ai_content_manifest_content_invalid");
   });
 });

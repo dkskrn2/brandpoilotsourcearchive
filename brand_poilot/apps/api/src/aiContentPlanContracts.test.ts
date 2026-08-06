@@ -131,8 +131,12 @@ describe("content plan v2 contracts", () => {
       contractVersion: "marketing-plan.v2",
       outputFormat: "marketing_content",
       content: { caption: "Caption", hashtags: [], cta: "Read" },
-      imagePackage: imagePackage("marketing_content"),
-    }, finalInput("marketing_content"))).toThrow("ai_content_plan_invalid");
+      imagePackage: { ...imagePackage("reel"), outputFormat: "marketing_content" },
+    }, {
+      ...finalInput("reel"),
+      selectedProposal: { ...finalInput("reel").selectedProposal, outputFormat: "marketing_content" },
+      outputSettings: { ...finalInput("reel").outputSettings, outputFormat: "marketing_content" },
+    } as unknown as ContentGenerationInputV3)).toThrow("ai_content_plan_invalid");
   });
 
   it("rejects image assets that cite evidence outside the frozen final input", () => {

@@ -16,12 +16,12 @@ describe("ai-content render job boundary helpers", () => {
   });
 
   it("accepts only the leased asset index, deterministic path, png dimensions, checksum, and https URL", () => {
-    const context = { brandId: "brand", generationId: "generation", outputId: "output", assetIndex: 2, outputFormat: "marketing_content" as const, aspectRatio: "4:5" as const };
+    const context = { brandId: "brand", generationId: "generation", outputId: "output", assetIndex: 2, outputFormat: "card_news" as const, aspectRatio: "1:1" as const };
     const storagePath = "ai-content/brand/generation/output/assets/02.png";
     const asset = {
       index: 2, url: `https://assets.public.blob.vercel-storage.com/${storagePath}`,
       storagePath, mimeType: "image/png" as const,
-      width: 1080, height: 1350, checksum: "a".repeat(64),
+      width: 1080, height: 1080, checksum: "a".repeat(64),
     };
     expect(parseRenderAssetResult(asset, context)).toEqual(asset);
     for (const patch of [
@@ -92,14 +92,14 @@ describe("ai-content render job boundary helpers", () => {
     ["fragment", "https://assets.public.blob.vercel-storage.com/ai-content/brand/generation/output/assets/02.png#worker-result"],
     ["non-default HTTPS port", "https://assets.public.blob.vercel-storage.com:444/ai-content/brand/generation/output/assets/02.png"],
   ])("rejects an asset URL with %s using the stable boundary error", (_case, url) => {
-    const context = { brandId: "brand", generationId: "generation", outputId: "output", assetIndex: 2, outputFormat: "marketing_content" as const, aspectRatio: "4:5" as const };
+    const context = { brandId: "brand", generationId: "generation", outputId: "output", assetIndex: 2, outputFormat: "card_news" as const, aspectRatio: "1:1" as const };
     expect(() => parseRenderAssetResult({
       index: 2,
       url,
       storagePath: "ai-content/brand/generation/output/assets/02.png",
       mimeType: "image/png",
       width: 1080,
-      height: 1350,
+      height: 1080,
       checksum: "a".repeat(64),
     }, context)).toThrow("ai_content_render_asset_invalid");
   });
@@ -131,7 +131,7 @@ describe("ai-content render job boundary helpers", () => {
 
   it("serializes concurrent last-asset completions per output so exactly one finalizer is created", async () => {
     const identity = { workspace: "workspace", brand: "brand", generation: "generation", output: "output" };
-    const imagePackage = { outputFormat: "marketing_content", aspectRatio: "1:1" };
+    const imagePackage = { outputFormat: "card_news", aspectRatio: "1:1" };
     const committed = new Map([
       ["job-1", { status: "processing", assetIndex: 1, leaseToken: "lease-1" }],
       ["job-2", { status: "processing", assetIndex: 2, leaseToken: "lease-2" }],

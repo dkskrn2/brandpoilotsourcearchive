@@ -10,6 +10,13 @@ import type {
   OutputFormat,
   ContentFamily,
 } from "./aiContentContracts.js";
+import {
+  parseAiContentManifestV3 as parseCanonicalAiContentManifestV3,
+  type AiContentManifestV3,
+  type ManifestAsset,
+  type ManifestImageAsset,
+  type ManifestVideoAsset,
+} from "@brand-pilot/content-contracts";
 
 type UnknownObject = Record<string, unknown>;
 
@@ -523,4 +530,75 @@ export function parseAiContentManifest(
   if (source.version === "ai-content.v1") return parseV1(type, source, requestedDimensions);
   if (source.version === "ai-content.v2") return parseV2(type, source, requestedDimensions);
   fail("ai_content_manifest_version_invalid");
+}
+
+function activeAssetsWithContinuousIndexes(
+  assets: Array<{ index: number }>,
+): boolean {
+  return assets.every((asset, position) => asset.index === position + 1);
+}
+
+function validateActiveAssetLocation(asset: ManifestAsset): void {
+  parseV2Url(asset.url);
+  parseV2FileName(asset.fileName);
+}
+
+/**
+ * Strict parser for newly generated Studio artifacts.
+ *
+ * V1/V2 remain available only through parseAiContentManifest for explicit
+ * legacy read paths. New render, download, and publish flows must call this
+ * parser so retired versions and the legacy `type` discriminator cannot leak
+ * back into the active contract.
+ */
+export function parseActiveAiContentManifestV3(
+  value: unknown,
+  requestedDimensions?: { width: number; height: number },
+): AiContentManifestV3 {
+  const manifest = parseCanonicalAiContentManifestV3(value);
+  manifest.assets.forEach(validateActiveAssetLocation);
+
+  if (manifest.outputFormat === "card_news") {
+    if (!("caption" in manifest.content)) fail("ai_content_manifest_content_invalid");
+    if (manifest.assets.length < 1 || manifest.assets.length > 5
+      || manifest.assets.some((asset) => asset.role !== "slide" || asset.mimeType !== "image/png")) {
+      fail("ai_content_card_news_slide_count_invalid");
+    }
+    if (!activeAssetsWithContinuousIndexes(manifest.assets)) fail("ai_content_asset_index_invalid");
+    if (requestedDimensions && manifest.assets.some((asset) => (
+      !("width" in asset) || !("height" in asset)
+      || asset.width * requestedDimensions.height !== asset.height * requestedDimensions.width
+    ))) fail("ai_content_card_news_dimensions_invalid");
+    return manifest;
+  }
+
+  if (manifest.outputFormat === "blog") {
+    if (!("html" in manifest.content)) fail("ai_content_manifest_content_invalid");
+    const htmlAssets = manifest.assets.filter((asset) => asset.role === "html");
+    const inlineAssets = manifest.assets.filter((asset) => asset.role === "inline");
+    if (htmlAssets.length !== 1 || htmlAssets[0]!.index !== 1) fail("ai_content_blog_html_asset_required");
+    if (inlineAssets.length > 5 || manifest.assets.length !== htmlAssets.length + inlineAssets.length) {
+      fail("ai_content_blog_asset_count_invalid");
+    }
+    if (!activeAssetsWithContinuousIndexes(inlineAssets)) fail("ai_content_asset_index_invalid");
+    return manifest;
+  }
+
+  if (!("caption" in manifest.content)) fail("ai_content_manifest_content_invalid");
+  const scenes = manifest.assets.filter((asset): asset is ManifestImageAsset => asset.role === "scene");
+  const videos = manifest.assets.filter((asset): asset is ManifestVideoAsset => asset.role === "video");
+  if (scenes.length < 1 || scenes.length > 5 || videos.length !== 1
+    || manifest.assets.length !== scenes.length + videos.length) {
+    fail("ai_content_reel_asset_invalid");
+  }
+  if (!activeAssetsWithContinuousIndexes(scenes)) fail("ai_content_asset_index_invalid");
+  if (scenes.some((asset) => asset.width * 16 !== asset.height * 9)) {
+    fail("ai_content_reel_scene_dimensions_invalid");
+  }
+  const video = videos[0]!;
+  if (video.index !== 1 || video.width * 16 !== video.height * 9
+    || Math.abs(video.durationSeconds - scenes.length * 4) > 1 / 30) {
+    fail("ai_content_reel_video_metadata_invalid");
+  }
+  return manifest;
 }

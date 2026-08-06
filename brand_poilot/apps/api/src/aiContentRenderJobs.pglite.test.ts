@@ -1,7 +1,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ImageGenerationPackageV1 } from "./aiContentContracts.js";
+import type { ImageGenerationPackageV1 } from "@brand-pilot/content-contracts";
 import { createAiContentRenderJobsRepository, enqueueAiContentRenderJobs, type AiContentRenderedAsset } from "./aiContentRenderJobs.js";
 
 const ids = {
@@ -101,17 +101,17 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
   beforeEach(async () => {
     db = await PGlite.create({ extensions: { pgcrypto } });
     await db.exec(`
-      create table ai_content_generations(id uuid primary key,workspace_id uuid,brand_id uuid,type text,title text,status text,current_stage text,draft_json jsonb default '{}',analysis_json jsonb default '{}',error_code text,error_message text,created_at timestamptz default now(),updated_at timestamptz default now(),completed_at timestamptz,attachments_locked_at timestamptz,terminal_at timestamptz,retryable_until timestamptz);
+      create table ai_content_generations(id uuid primary key,workspace_id uuid,brand_id uuid,output_format text,purpose text,title text,status text,current_stage text,draft_json jsonb default '{}',analysis_json jsonb default '{}',error_code text,error_message text,created_at timestamptz default now(),updated_at timestamptz default now(),completed_at timestamptz,attachments_locked_at timestamptz,terminal_at timestamptz,retryable_until timestamptz);
       create table ai_content_generation_outputs(id uuid primary key,generation_id uuid,workspace_id uuid,brand_id uuid,output_index integer default 1,title text,status text,content_json jsonb default '{}',artifact_manifest_json jsonb default '{}',manifest_url text,failure_code text,failure_message text,downloaded_at timestamptz,created_at timestamptz default now(),updated_at timestamptz default now(),completed_at timestamptz,plan_json jsonb);
       create table ai_content_generation_input_snapshots(generation_id uuid,workspace_id uuid,brand_id uuid,input_json jsonb);
       create table ai_content_output_research_snapshots(output_id uuid unique,generation_id uuid,workspace_id uuid,brand_id uuid,evidence_json jsonb,created_at timestamptz default now());
-      create table ai_content_generation_jobs(id uuid primary key,generation_id uuid,output_id uuid,workspace_id uuid,brand_id uuid,job_type text,content_type text,status text,worker_id text,lease_token uuid,lease_expires_at timestamptz,payload_json jsonb default '{}',created_at timestamptz default now());
+      create table ai_content_generation_jobs(id uuid primary key,generation_id uuid,output_id uuid,workspace_id uuid,brand_id uuid,job_type text,output_format text,status text,worker_id text,lease_token uuid,lease_expires_at timestamptz,payload_json jsonb default '{}',created_at timestamptz default now());
       create table ai_content_usage_ledger(workspace_id uuid,brand_id uuid,generation_id uuid,output_id uuid,usage_type text,quantity integer,usage_date date,idempotency_key text,unique(brand_id,idempotency_key));
       create table ai_content_generation_render_jobs(id uuid primary key default gen_random_uuid(),generation_id uuid,output_id uuid,workspace_id uuid,brand_id uuid,job_kind text,asset_index integer,status text default 'queued',payload_json jsonb,result_json jsonb,attempt_count integer default 0,max_attempts integer default 3,available_at timestamptz default now(),worker_id text,lease_token uuid,lease_expires_at timestamptz,error_code text,error_message text,created_at timestamptz default now(),updated_at timestamptz default now(),completed_at timestamptz);
       create unique index render_asset_unique on ai_content_generation_render_jobs(output_id,asset_index) where job_kind='image_asset';
       create unique index render_finalize_unique on ai_content_generation_render_jobs(output_id) where job_kind='package_finalize';
     `);
-    await db.query("insert into ai_content_generations(id,workspace_id,brand_id,type,title,status,current_stage,retryable_until) values($1,$2,$3,'card_news','Tea','generating','generation',now()+interval '15 days')", [ids.generation, ids.workspace, ids.brand]);
+    await db.query("insert into ai_content_generations(id,workspace_id,brand_id,output_format,purpose,title,status,current_stage,retryable_until) values($1,$2,$3,'card_news','informational','Tea','generating','generation',now()+interval '15 days')", [ids.generation, ids.workspace, ids.brand]);
     await db.query("insert into ai_content_generation_outputs(id,generation_id,workspace_id,brand_id,status) values($1,$2,$3,$4,'generating')", [ids.output, ids.generation, ids.workspace, ids.brand]);
     const pool = { query: db.query.bind(db), connect: async () => ({ query: db.query.bind(db), release() {} }) };
     repository = createAiContentRenderJobsRepository(pool as never, async () => ({ id: ids.generation, status: "generating" } as never));
@@ -149,7 +149,7 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     const jobId = "50000000-0000-4000-8000-000000000001";
     const leaseToken = "60000000-0000-4000-8000-000000000001";
     await db.query(
-      "insert into ai_content_generation_jobs(id,generation_id,output_id,workspace_id,brand_id,job_type,content_type,status,worker_id,lease_token,lease_expires_at) values($1,$2,$3,$4,$5,'generate','blog','processing','blog-worker',$6,now()+interval '3 minutes')",
+      "insert into ai_content_generation_jobs(id,generation_id,output_id,workspace_id,brand_id,job_type,output_format,status,worker_id,lease_token,lease_expires_at) values($1,$2,$3,$4,$5,'generate','blog','processing','blog-worker',$6,now()+interval '3 minutes')",
       [jobId, ids.generation, ids.output, ids.workspace, ids.brand, leaseToken],
     );
     const evidence = {
@@ -183,7 +183,7 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     await db.query("update ai_content_generation_outputs set plan_json=$2::jsonb where id=$1", [ids.output, JSON.stringify(plan)]);
     await db.query("insert into ai_content_generation_input_snapshots values($1,$2,$3,$4::jsonb)", [ids.generation, ids.workspace, ids.brand, JSON.stringify(input)]);
     await db.query(
-      "insert into ai_content_generation_jobs(id,generation_id,output_id,workspace_id,brand_id,job_type,content_type,status,payload_json) values($1,$2,$3,$4,$5,'generate','card_news','succeeded',$6::jsonb)",
+      "insert into ai_content_generation_jobs(id,generation_id,output_id,workspace_id,brand_id,job_type,output_format,status,payload_json) values($1,$2,$3,$4,$5,'generate','card_news','succeeded',$6::jsonb)",
       ["50000000-0000-4000-8000-000000000001", ids.generation, ids.output, ids.workspace, ids.brand, JSON.stringify({ planningMode: "selected_proposal", usageDate: "2026-07-31", usageIdempotencyKey: "usage-1" })],
     );
     await enqueueAiContentRenderJobs(db as never, { workspaceId: ids.workspace, brandId: ids.brand, generationId: ids.generation, outputId: ids.output, plan, finalInput: input });
@@ -196,7 +196,7 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     }
     const finalizer = await repository.claim({ workerId: "finalizer", leaseSeconds: 180 });
     const manifest = {
-      version: "ai-content.v2" as const, type: "card_news" as const, purpose: "informational" as const, outputFormat: "card_news" as const,
+      version: "ai-content.v3" as const, purpose: "informational" as const, outputFormat: "card_news" as const,
       title: "Tea", assets: rendered.map((asset) => ({ role: "slide" as const, index: asset.index, url: asset.url, fileName: `slide-${asset.index}.png`, mimeType: asset.mimeType, width: asset.width, height: asset.height })),
       content: plan.content,
     };
@@ -220,12 +220,12 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
       contractVersion: "blog-plan.v2" as const, imagePackage: null,
       content: { title: "Tea", htmlTemplate: blogPlanHtml(0, [input.researchEvidence.items[0], supplemental.items[0]]), metaTitle: "Tea guide", metaDescription: "Tea description", usedEvidenceIds: [baseId, supplementalId] },
     };
-    await db.query("update ai_content_generations set type='blog' where id=$1", [ids.generation]);
+    await db.query("update ai_content_generations set output_format='blog' where id=$1", [ids.generation]);
     await db.query("update ai_content_generation_outputs set plan_json=$2::jsonb where id=$1", [ids.output, JSON.stringify(plan)]);
     await db.query("insert into ai_content_generation_input_snapshots values($1,$2,$3,$4::jsonb)", [ids.generation, ids.workspace, ids.brand, JSON.stringify(input)]);
     await db.query("insert into ai_content_output_research_snapshots(output_id,generation_id,workspace_id,brand_id,evidence_json) values($1,$2,$3,$4,$5::jsonb)", [ids.output, ids.generation, ids.workspace, ids.brand, JSON.stringify(supplemental)]);
     await db.query(
-      "insert into ai_content_generation_jobs(id,generation_id,output_id,workspace_id,brand_id,job_type,content_type,status,payload_json) values($1,$2,$3,$4,$5,'generate','blog','succeeded',$6::jsonb)",
+      "insert into ai_content_generation_jobs(id,generation_id,output_id,workspace_id,brand_id,job_type,output_format,status,payload_json) values($1,$2,$3,$4,$5,'generate','blog','succeeded',$6::jsonb)",
       ["50000000-0000-4000-8000-000000000002", ids.generation, ids.output, ids.workspace, ids.brand, JSON.stringify({ planningMode: "selected_proposal", usageDate: "2026-07-31", usageIdempotencyKey: "usage-blog" })],
     );
     await enqueueAiContentRenderJobs(db as never, { workspaceId: ids.workspace, brandId: ids.brand, generationId: ids.generation, outputId: ids.output, plan, finalInput: input });
@@ -235,7 +235,7 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     const html = `<article><h1>Tea</h1><div><p>한 줄 요약</p><p>두 줄 요약</p><p>세 줄 요약</p></div><h2>차를 어떻게 고를까요?</h2><p>${"충분한 본문 ".repeat(700)} ${link(baseId, input.researchEvidence.items[0].url)} ${link(supplementalId, wrongSupplementUrl)}</p><section id="references">${link(baseId, input.researchEvidence.items[0].url)} ${link(supplementalId, wrongSupplementUrl)}</section></article>`;
     const complete = (finalHtml: string) => repository.completePackage({
       jobId: finalizer!.id, workerId: "blog-finalizer", leaseToken: finalizer!.leaseToken, jobKind: "package_finalize",
-      manifest: { version: "ai-content.v2", type: "blog", purpose: "informational", outputFormat: "blog", title: "Tea", assets: [{ role: "html", index: 1, url: blobHtmlUrl, fileName: "article.html", mimeType: "text/html" }], content: { title: "Tea", metaTitle: "Tea guide", metaDescription: "Tea description", html: finalHtml } },
+      manifest: { version: "ai-content.v3", purpose: "informational", outputFormat: "blog", title: "Tea", assets: [{ role: "html", index: 1, url: blobHtmlUrl, fileName: "article.html", mimeType: "text/html" }], content: { title: "Tea", summary: "Summary", metaTitle: "Tea guide", metaDescription: "Tea description", html: finalHtml } },
       manifestUrl: blobManifestUrl,
     });
     await expect(complete(html)).rejects.toThrow("ai_content_render_manifest_invalid");
@@ -250,11 +250,11 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
       contractVersion: "blog-plan.v2" as const, imagePackage: null,
       content: { title: "Tea", htmlTemplate: blogPlanHtml(0, [input.researchEvidence.items[0]]), metaTitle: "Tea guide", metaDescription: "Tea description", usedEvidenceIds: [evidenceId] },
     };
-    await db.query("update ai_content_generations set type='blog' where id=$1", [ids.generation]);
+    await db.query("update ai_content_generations set output_format='blog' where id=$1", [ids.generation]);
     await db.query("update ai_content_generation_outputs set plan_json=$2::jsonb where id=$1", [ids.output, JSON.stringify(plan)]);
     await db.query("insert into ai_content_generation_input_snapshots values($1,$2,$3,$4::jsonb)", [ids.generation, ids.workspace, ids.brand, JSON.stringify(input)]);
     await db.query(
-      "insert into ai_content_generation_jobs(id,generation_id,output_id,workspace_id,brand_id,job_type,content_type,status,payload_json) values($1,$2,$3,$4,$5,'generate','blog','succeeded',$6::jsonb)",
+      "insert into ai_content_generation_jobs(id,generation_id,output_id,workspace_id,brand_id,job_type,output_format,status,payload_json) values($1,$2,$3,$4,$5,'generate','blog','succeeded',$6::jsonb)",
       ["50000000-0000-4000-8000-000000000003", ids.generation, ids.output, ids.workspace, ids.brand, JSON.stringify({ planningMode: "selected_proposal", usageDate: "2026-07-31", usageIdempotencyKey: "usage-blog-http" })],
     );
     await enqueueAiContentRenderJobs(db as never, { workspaceId: ids.workspace, brandId: ids.brand, generationId: ids.generation, outputId: ids.output, plan, finalInput: input });
@@ -264,7 +264,7 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
 
     await expect(repository.completePackage({
       jobId: finalizer!.id, workerId: "blog-finalizer", leaseToken: finalizer!.leaseToken, jobKind: "package_finalize",
-      manifest: { version: "ai-content.v2", type: "blog", purpose: "informational", outputFormat: "blog", title: "Tea", assets: [{ role: "html", index: 1, url: blobHtmlUrl, fileName: "article.html", mimeType: "text/html" }], content: { title: "Tea", metaTitle: "Tea guide", metaDescription: "Tea description", html } },
+      manifest: { version: "ai-content.v3", purpose: "informational", outputFormat: "blog", title: "Tea", assets: [{ role: "html", index: 1, url: blobHtmlUrl, fileName: "article.html", mimeType: "text/html" }], content: { title: "Tea", summary: "Summary", metaTitle: "Tea guide", metaDescription: "Tea description", html } },
       manifestUrl: blobManifestUrl,
     })).rejects.toThrow("ai_content_plan_invalid");
   });
@@ -275,18 +275,18 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
       contractVersion: "blog-plan.v2" as const, imagePackage: null,
       content: { title: "Tea", htmlTemplate: blogPlanHtml(), metaTitle: "Tea guide", metaDescription: "Tea description", usedEvidenceIds: [] },
     };
-    await db.query("update ai_content_generations set type='blog' where id=$1", [ids.generation]);
+    await db.query("update ai_content_generations set output_format='blog' where id=$1", [ids.generation]);
     await db.query("update ai_content_generation_outputs set plan_json=$2::jsonb where id=$1", [ids.output, JSON.stringify(plan)]);
     await db.query("insert into ai_content_generation_input_snapshots values($1,$2,$3,$4::jsonb)", [ids.generation, ids.workspace, ids.brand, JSON.stringify(input)]);
     await db.query(
-      "insert into ai_content_generation_jobs(id,generation_id,output_id,workspace_id,brand_id,job_type,content_type,status,payload_json) values($1,$2,$3,$4,$5,'generate','blog','succeeded',$6::jsonb)",
+      "insert into ai_content_generation_jobs(id,generation_id,output_id,workspace_id,brand_id,job_type,output_format,status,payload_json) values($1,$2,$3,$4,$5,'generate','blog','succeeded',$6::jsonb)",
       ["50000000-0000-4000-8000-000000000004", ids.generation, ids.output, ids.workspace, ids.brand, JSON.stringify({ planningMode: "selected_proposal", usageDate: "2026-07-31", usageIdempotencyKey: "usage-blog-no-images" })],
     );
     await enqueueAiContentRenderJobs(db as never, { workspaceId: ids.workspace, brandId: ids.brand, generationId: ids.generation, outputId: ids.output, plan, finalInput: input });
     const finalizer = await repository.claim({ workerId: "blog-finalizer", leaseSeconds: 180 });
     const complete = (html: string, assets: Array<Record<string, unknown>>) => repository.completePackage({
       jobId: finalizer!.id, workerId: "blog-finalizer", leaseToken: finalizer!.leaseToken, jobKind: "package_finalize",
-      manifest: { version: "ai-content.v2", type: "blog", purpose: "informational", outputFormat: "blog", title: "Tea", assets: assets as never, content: { title: "Tea", metaTitle: "Tea guide", metaDescription: "Tea description", html } },
+      manifest: { version: "ai-content.v3", purpose: "informational", outputFormat: "blog", title: "Tea", assets: assets as never, content: { title: "Tea", summary: "Summary", metaTitle: "Tea guide", metaDescription: "Tea description", html } },
       manifestUrl: blobManifestUrl,
     });
     const htmlAsset = { role: "html", index: 1, url: blobHtmlUrl, fileName: "article.html", mimeType: "text/html" };
@@ -318,11 +318,11 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
       contractVersion: "blog-plan.v2" as const, imagePackage: pkg,
       content: { title: "Tea", htmlTemplate: blogPlanHtml(2), metaTitle: "Tea guide", metaDescription: "Tea description", usedEvidenceIds: [] },
     };
-    await db.query("update ai_content_generations set type='blog' where id=$1", [ids.generation]);
+    await db.query("update ai_content_generations set output_format='blog' where id=$1", [ids.generation]);
     await db.query("update ai_content_generation_outputs set plan_json=$2::jsonb where id=$1", [ids.output, JSON.stringify(plan)]);
     await db.query("insert into ai_content_generation_input_snapshots values($1,$2,$3,$4::jsonb)", [ids.generation, ids.workspace, ids.brand, JSON.stringify(input)]);
     await db.query(
-      "insert into ai_content_generation_jobs(id,generation_id,output_id,workspace_id,brand_id,job_type,content_type,status,payload_json) values($1,$2,$3,$4,$5,'generate','blog','succeeded',$6::jsonb)",
+      "insert into ai_content_generation_jobs(id,generation_id,output_id,workspace_id,brand_id,job_type,output_format,status,payload_json) values($1,$2,$3,$4,$5,'generate','blog','succeeded',$6::jsonb)",
       ["50000000-0000-4000-8000-000000000005", ids.generation, ids.output, ids.workspace, ids.brand, JSON.stringify({ planningMode: "selected_proposal", usageDate: "2026-07-31", usageIdempotencyKey: "usage-blog-images" })],
     );
     await enqueueAiContentRenderJobs(db as never, { workspaceId: ids.workspace, brandId: ids.brand, generationId: ids.generation, outputId: ids.output, plan, finalInput: input });
@@ -340,7 +340,7 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     ];
     const complete = (html: string) => repository.completePackage({
       jobId: finalizer!.id, workerId: "blog-finalizer", leaseToken: finalizer!.leaseToken, jobKind: "package_finalize",
-      manifest: { version: "ai-content.v2", type: "blog", purpose: "informational", outputFormat: "blog", title: "Tea", assets: manifestAssets, content: { title: "Tea", metaTitle: "Tea guide", metaDescription: "Tea description", html } },
+      manifest: { version: "ai-content.v3", purpose: "informational", outputFormat: "blog", title: "Tea", assets: manifestAssets, content: { title: "Tea", summary: "Summary", metaTitle: "Tea guide", metaDescription: "Tea description", html } },
       manifestUrl: blobManifestUrl,
     });
 
@@ -355,16 +355,16 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     pkg.outputFormat = "reel";
     pkg.aspectRatio = "9:16";
     const plan = {
-      contractVersion: "marketing-plan.v2" as const,
+      contractVersion: "reel-plan.v2" as const,
       outputFormat: "reel" as const,
       content: { caption: "Tea", hashtags: [], cta: "Save" },
       imagePackage: pkg,
     };
-    await db.query("update ai_content_generations set type='marketing' where id=$1", [ids.generation]);
+    await db.query("update ai_content_generations set output_format='reel' where id=$1", [ids.generation]);
     await db.query("update ai_content_generation_outputs set plan_json=$2::jsonb where id=$1", [ids.output, JSON.stringify(plan)]);
     await db.query("insert into ai_content_generation_input_snapshots values($1,$2,$3,$4::jsonb)", [ids.generation, ids.workspace, ids.brand, JSON.stringify(input)]);
     await db.query(
-      "insert into ai_content_generation_jobs(id,generation_id,output_id,workspace_id,brand_id,job_type,content_type,status,payload_json) values($1,$2,$3,$4,$5,'generate','marketing','succeeded',$6::jsonb)",
+      "insert into ai_content_generation_jobs(id,generation_id,output_id,workspace_id,brand_id,job_type,output_format,status,payload_json) values($1,$2,$3,$4,$5,'generate','reel','succeeded',$6::jsonb)",
       ["50000000-0000-4000-8000-000000000007", ids.generation, ids.output, ids.workspace, ids.brand, JSON.stringify({ planningMode: "selected_proposal", usageDate: "2026-07-31", usageIdempotencyKey: "usage-reel" })],
     );
     await enqueueAiContentRenderJobs(db as never, { workspaceId: ids.workspace, brandId: ids.brand, generationId: ids.generation, outputId: ids.output, plan, finalInput: input });
@@ -380,7 +380,7 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     const complete = (videoUrl: string) => repository.completePackage({
       jobId: finalizer!.id, workerId: "reel-finalizer", leaseToken: finalizer!.leaseToken, jobKind: "package_finalize",
       manifest: {
-        version: "ai-content.v2", type: "marketing", purpose: "informational", outputFormat: "reel", title: "Tea",
+        version: "ai-content.v3", purpose: "informational", outputFormat: "reel", title: "Tea",
         assets: [
           ...rendered.map((asset) => ({ role: "scene" as const, index: asset.index, url: asset.url, fileName: `scene-0${asset.index}.png`, mimeType: asset.mimeType, width: asset.width, height: asset.height })),
           { ...video, url: videoUrl },
@@ -431,11 +431,11 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
       contractVersion: "blog-plan.v2" as const, imagePackage: pkg,
       content: { title: "Tea", htmlTemplate: blogPlanHtml(1), metaTitle: "Tea guide", metaDescription: "Tea description", usedEvidenceIds: [] },
     };
-    await db.query("update ai_content_generations set type='blog' where id=$1", [ids.generation]);
+    await db.query("update ai_content_generations set output_format='blog' where id=$1", [ids.generation]);
     await db.query("update ai_content_generation_outputs set plan_json=$2::jsonb where id=$1", [ids.output, JSON.stringify(plan)]);
     await db.query("insert into ai_content_generation_input_snapshots values($1,$2,$3,$4::jsonb)", [ids.generation, ids.workspace, ids.brand, JSON.stringify(input)]);
     await db.query(
-      "insert into ai_content_generation_jobs(id,generation_id,output_id,workspace_id,brand_id,job_type,content_type,status,payload_json) values($1,$2,$3,$4,$5,'generate','blog','succeeded',$6::jsonb)",
+      "insert into ai_content_generation_jobs(id,generation_id,output_id,workspace_id,brand_id,job_type,output_format,status,payload_json) values($1,$2,$3,$4,$5,'generate','blog','succeeded',$6::jsonb)",
       ["50000000-0000-4000-8000-000000000006", ids.generation, ids.output, ids.workspace, ids.brand, JSON.stringify({ planningMode: "selected_proposal", usageDate: "2026-07-31", usageIdempotencyKey: "usage-blog-url-bypass" })],
     );
     await enqueueAiContentRenderJobs(db as never, { workspaceId: ids.workspace, brandId: ids.brand, generationId: ids.generation, outputId: ids.output, plan, finalInput: input });
@@ -451,12 +451,12 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     await expect(repository.completePackage({
       jobId: finalizer!.id, workerId: "blog-finalizer", leaseToken: finalizer!.leaseToken, jobKind: "package_finalize",
       manifest: {
-        version: "ai-content.v2", type: "blog", purpose: "informational", outputFormat: "blog", title: "Tea",
+        version: "ai-content.v3", purpose: "informational", outputFormat: "blog", title: "Tea",
         assets: [
           { role: "html", index: 1, url: blobHtmlUrl, fileName: "article.html", mimeType: "text/html" },
           { role: "inline", index: 1, url: rendered.url, fileName: "inline-01.png", mimeType: "image/png", width: 1080, height: 1080 },
         ],
-        content: { title: "Tea", metaTitle: "Tea guide", metaDescription: "Tea description", html: maliciousHtml(rendered.url) },
+        content: { title: "Tea", summary: "Summary", metaTitle: "Tea guide", metaDescription: "Tea description", html: maliciousHtml(rendered.url) },
       },
       manifestUrl: blobManifestUrl,
     })).rejects.toThrow("ai_content_render_manifest_invalid");
