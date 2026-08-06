@@ -335,19 +335,14 @@ export function createMockAiContentGateway(): AiContentGateway {
       const output = generationRows.flatMap((job) => job.outputs).find((item) => item.id === outputId);
       if (!output) throw new Error("ai_content_output_not_found");
       if (output.status !== "failed") throw new Error("ai_content_output_not_failed");
-      output.status = "queued";
-      output.failureReason = null;
-      return copy(output);
-    },
-    async reviseOutput(_brandId, outputId, input) {
-      const output = generationRows.flatMap((job) => job.outputs).find((item) => item.id === outputId);
-      if (!output) throw new Error("ai_content_output_not_found");
-      if (output.status !== "completed") throw new Error("ai_content_output_not_completed");
-      if (input.action === "regenerate_card" && (!input.cardIndex || input.cardIndex < 1)) {
-        throw new Error("ai_content_revision_card_index_invalid");
-      }
-      output.status = "queued";
-      return copy(output);
+      const parent = generationRows.find((job) => job.outputs.some((item) => item.id === outputId));
+      if (!parent) throw new Error("ai_content_generation_not_found");
+      const child = copy(parent);
+      child.id = `${parent.id}-retry-${generationRows.length + 1}`;
+      child.status = "queued";
+      child.outputs = [{ ...copy(output), id: `${output.id}-retry-${generationRows.length + 1}`, status: "queued", failureReason: null }];
+      generationRows.push(child);
+      return copy(child);
     },
     async saveOutputCopy(_brandId, outputId, input) {
       const output = generationRows.flatMap((job) => job.outputs).find((item) => item.id === outputId);

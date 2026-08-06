@@ -42,7 +42,6 @@ function generationWith(output: AiGenerationOutput): AiContentGeneration {
 
 const callbacks = {
   onRetry: vi.fn(async () => undefined),
-  onRevise: vi.fn(async () => undefined),
   onDownload: vi.fn(async () => undefined),
   onPublish: vi.fn(async () => undefined),
   onToggleSelection: vi.fn(),
@@ -72,7 +71,7 @@ describe("AiGenerationOutputList V3 capabilities", () => {
       revisionCapabilities: [],
     } satisfies AiGenerationOutput;
 
-    render(<AiGenerationOutputList generation={generationWith(output)} downloadedKeys={new Set()} selectedForZip={new Set()} channels={[]} retryingOutputId={null} revisingOutputId={null} publishingOutputIds={new Set()} publishResults={{}} {...callbacks} />);
+    render(<AiGenerationOutputList generation={generationWith(output)} downloadedKeys={new Set()} selectedForZip={new Set()} channels={[]} retryingOutputId={null} publishingOutputIds={new Set()} publishResults={{}} {...callbacks} />);
 
     expect(screen.getByRole("button", { name: "릴스 결과 ZIP 다운로드" })).toBeEnabled();
     expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
@@ -101,7 +100,7 @@ describe("AiGenerationOutputList V3 capabilities", () => {
       revisionCapabilities: [],
     } satisfies AiGenerationOutput;
 
-    render(<AiGenerationOutputList generation={generationWith(output)} downloadedKeys={new Set()} selectedForZip={new Set()} channels={[]} retryingOutputId={null} revisingOutputId={null} publishingOutputIds={new Set()} publishResults={{}} {...callbacks} />);
+    render(<AiGenerationOutputList generation={generationWith(output)} downloadedKeys={new Set()} selectedForZip={new Set()} channels={[]} retryingOutputId={null} publishingOutputIds={new Set()} publishResults={{}} {...callbacks} />);
 
     expect(screen.getByRole("region", { name: "SNS에 바로 게시" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "카드뉴스 결과 ZIP 다운로드" })).toBeEnabled();

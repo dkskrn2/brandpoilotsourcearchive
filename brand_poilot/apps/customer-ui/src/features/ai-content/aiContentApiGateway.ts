@@ -561,6 +561,7 @@ function shouldRetryConfirm(error: unknown) {
 }
 
 export function createAiContentApiGateway(client = apiClient(), blobPut: typeof putBlob = putBlob): AiContentGateway {
+  const retryIdempotencyKeys = new Map<string, string>();
   return {
     async getUsage(brandId) {
       const usage = await client.requestJson<{ usageDate: string; generationCount: number; downloadCount: number; dailyGenerationLimit: number; dailyDownloadLimit: number }>(`/brands/${brandId}/ai-content/usage`, { method: "GET" });
@@ -674,26 +675,22 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
     },
     async retryOutput(brandId, outputId, reason) {
       if (!reason.trim()) throw new Error("retry_reason_required");
-      let generation = mapGeneration(await client.requestJson<ApiGeneration>(`/brands/${brandId}/ai-content/outputs/${outputId}/retry`, { method: "POST", body: JSON.stringify({ reason }) }));
-      let output = generation.outputs.find((item) => item.id === outputId);
-      if (!output) {
-        generation = mapGeneration(await client.requestJson<ApiGeneration>(
-          `/brands/${brandId}/ai-content/generations/${generation.id}`,
-          { method: "GET" },
-        ));
-        output = generation.outputs.find((item) => item.id === outputId);
-      }
-      if (!output) throw new Error("ai_content_output_not_found");
-      return output;
-    },
-    async reviseOutput(brandId, outputId, input) {
+      const normalizedReason = reason.trim();
+      const retryKey = `${brandId}:${outputId}:${normalizedReason}`;
+      const idempotencyKey = retryIdempotencyKeys.get(retryKey) ?? crypto.randomUUID();
+      retryIdempotencyKeys.set(retryKey, idempotencyKey);
       const generation = mapGeneration(await client.requestJson<ApiGeneration>(
-        `/brands/${brandId}/ai-content/outputs/${outputId}/revisions`,
-        { method: "POST", body: JSON.stringify(input) },
+        `/brands/${brandId}/ai-content/outputs/${outputId}/retry`,
+        {
+          method: "POST",
+          body: JSON.stringify({ contractVersion: "content-generation-retry.v1", idempotencyKey, reason: normalizedReason }),
+        },
       ));
-      const output = generation.outputs.find((item) => item.id === outputId);
-      if (!output) throw new Error("ai_content_output_not_found");
-      return output;
+      retryIdempotencyKeys.delete(retryKey);
+      if (generation.outputs.length !== 1 || generation.outputs[0]?.status !== "queued") {
+        throw new Error("ai_content_generation_retry_response_invalid");
+      }
+      return generation;
     },
     async saveOutputCopy(brandId, outputId, input) {
       const generation = mapGeneration(await client.requestJson<ApiGeneration>(

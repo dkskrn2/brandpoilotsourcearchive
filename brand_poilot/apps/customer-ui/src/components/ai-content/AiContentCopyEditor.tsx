@@ -32,16 +32,12 @@ export function AiContentCopyEditor({
   outputFormat,
   output,
   saving,
-  revising,
   onSave,
-  onRevise,
 }: {
   outputFormat: ContentOutputFormatV2;
   output: AiGenerationOutput;
   saving: boolean;
-  revising: boolean;
   onSave(fields: Partial<AiContentCopyFields>): Promise<void>;
-  onRevise(action: "regenerate_hook" | "regenerate_copy"): Promise<void>;
 }) {
   const [fields, setFields] = useState<AiContentCopyFields>(output.copy ?? emptyCopy);
 
@@ -97,19 +93,6 @@ export function AiContentCopyEditor({
               {saving ? "저장 중" : `${output.title} 카피 저장`}
             </button>
           </fieldset>
-          <div aria-label={`${output.title} AI 부분 재생성`}>
-            <strong>AI 부분 재생성</strong>
-            {output.revisionCapabilities?.includes("regenerate_hook") ? (
-              <button className="button" type="button" disabled={revising} onClick={() => void onRevise("regenerate_hook")}>
-                훅 다시 생성
-              </button>
-            ) : null}
-            {output.revisionCapabilities?.includes("regenerate_copy") ? (
-              <button className="button" type="button" disabled={revising} onClick={() => void onRevise("regenerate_copy")}>
-                카피 다시 생성
-              </button>
-            ) : null}
-          </div>
         </>
       ) : output.artifact?.text ? (
         <p>{output.artifact.text}</p>

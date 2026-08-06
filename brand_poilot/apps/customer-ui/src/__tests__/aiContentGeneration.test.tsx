@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -100,9 +100,12 @@ describe("AiContentGenerationPage", () => {
     expect(gateway.downloadOutput).toHaveBeenCalledTimes(1);
   });
 
-  it("shows failed output reason and retry control updates output state after reasoned retry", async () => {
+  it("keeps the failed attempt and opens the queued child generation after a reasoned retry", async () => {
     const user = userEvent.setup();
-    renderGeneration("generation-partial");
+    const { gateway } = renderGeneration("generation-partial", false, (configuredGateway) => {
+      configuredGateway.getGeneration = vi.fn(configuredGateway.getGeneration.bind(configuredGateway));
+      configuredGateway.retryOutput = vi.fn(configuredGateway.retryOutput.bind(configuredGateway));
+    });
 
     const outputRows = await screen.findAllByRole("listitem");
     const failedOutputRow = outputRows[1];
@@ -116,9 +119,18 @@ describe("AiContentGenerationPage", () => {
     expect(retryButton).toBeEnabled();
 
     await user.click(retryButton);
-    expect(await within(failedOutputRow).findByText("대기")).toBeVisible();
-    expect(within(failedOutputRow).queryByRole("button", { name: /결과 2 다시 생성/ })).not.toBeInTheDocument();
-    expect(within(failedOutputRow).queryByText("실패 사유: 이미지 생성 실패")).not.toBeInTheDocument();
+    expect(gateway.retryOutput).toHaveBeenCalledWith(
+      "00000000-0000-4000-8000-000000000100",
+      "output-marketing-2",
+      "이미지 구성 요소를 재생성해 주세요.",
+    );
+    await waitFor(() => {
+      expect(gateway.getGeneration).toHaveBeenCalledWith(
+        "00000000-0000-4000-8000-000000000100",
+        expect.stringMatching(/^generation-partial-retry-/),
+      );
+    });
+    expect(await screen.findByText("대기")).toBeVisible();
   });
 
   it("shows the localized retry deadline and form before attachment retention expires", async () => {
@@ -421,7 +433,7 @@ describe("AiContentGenerationPage", () => {
     expect(screen.queryByText(/기존 생성 건에는 orchestration snapshot이 없어/)).not.toBeInTheDocument();
   });
 
-  it("edits and saves structured copy separately from worker-backed regeneration", async () => {
+  it("edits and saves structured copy without exposing the retired partial-regeneration path", async () => {
     const user = userEvent.setup();
     const { gateway } = renderGeneration("generation-card-complete", false, (configuredGateway) => {
       const getGeneration = configuredGateway.getGeneration.bind(configuredGateway);
@@ -439,11 +451,7 @@ describe("AiContentGenerationPage", () => {
               caption: "저장 전 캡션",
               hashtags: ["기존", "태그"],
             },
-            revisionCapabilities: [
-              "save_copy",
-              "regenerate_hook",
-              "regenerate_copy",
-            ] as NonNullable<typeof output.revisionCapabilities>,
+            revisionCapabilities: ["save_copy"] as Array<"save_copy">,
           })),
         };
       });
@@ -471,7 +479,7 @@ describe("AiContentGenerationPage", () => {
     expect(screen.getByDisplayValue("저장 전 CTA")).toBeVisible();
     expect(screen.getByDisplayValue("저장 전 캡션")).toBeVisible();
     expect(screen.getByDisplayValue("기존, 태그")).toBeVisible();
-    expect(screen.getByRole("button", { name: "훅 다시 생성" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /다시 생성/ })).not.toBeInTheDocument();
 
     const cta = screen.getByLabelText("카드뉴스 표지 CTA");
     await user.clear(cta);
@@ -507,40 +515,6 @@ describe("AiContentGenerationPage", () => {
     expect(await screen.findByRole("button", { name: "혜택 강조형 결과 ZIP 다운로드" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: /훅.*재생성|카피.*재생성|카드.*재생성/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
-  });
-
-  it("queues supported hook, copy, and individual-card revisions from review", async () => {
-    const user = userEvent.setup();
-    const { gateway } = renderGeneration("generation-card-complete", false, (configuredGateway) => {
-      const getGeneration = configuredGateway.getGeneration.bind(configuredGateway);
-      configuredGateway.getGeneration = vi.fn(async (brandId, generationId) => {
-        const result = await getGeneration(brandId, generationId);
-        return {
-          ...result,
-          outputs: result.outputs.map((output) => ({
-            ...output,
-            revisionCapabilities: [
-              "regenerate_hook",
-              "regenerate_copy",
-              "regenerate_card",
-            ] as Array<"regenerate_hook" | "regenerate_copy" | "regenerate_card">,
-          })),
-        };
-      });
-      configuredGateway.reviseOutput = vi.fn(configuredGateway.reviseOutput);
-    });
-
-    await user.click(await screen.findByRole("button", { name: "1번 카드 다시 생성" }));
-
-    expect(gateway.reviseOutput).toHaveBeenCalledWith(
-      "00000000-0000-4000-8000-000000000100",
-      "output-card-news",
-      expect.objectContaining({
-        action: "regenerate_card",
-        cardIndex: 1,
-        idempotencyKey: expect.any(String),
-      }),
-    );
   });
 
   it("keeps completed outputs untouched while retrying only a failed output from review", async () => {

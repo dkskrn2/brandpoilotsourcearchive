@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { AiGenerationOutputList } from "../components/ai-content/AiGenerationOutputList";
 import { AiContentCopyEditor } from "../components/ai-content/AiContentCopyEditor";
 import { aiContentPublishErrorMessage } from "../components/ai-content/AiContentPublishPanel";
@@ -111,11 +111,11 @@ export function AiContentGenerationPage({
   brandId = DEMO_BRAND_ID
 }: AiContentGenerationPageProps) {
   const { generationId } = useParams();
+  const navigate = useNavigate();
   const [generation, setGeneration] = useState<AiContentGeneration | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryingOutputId, setRetryingOutputId] = useState<string | null>(null);
-  const [revisingOutputId, setRevisingOutputId] = useState<string | null>(null);
   const [savingCopyOutputId, setSavingCopyOutputId] = useState<string | null>(null);
   const [copySaveMessage, setCopySaveMessage] = useState<string | null>(null);
   const [downloadedKeys, setDownloadedKeys] = useState<Set<string>>(new Set());
@@ -127,7 +127,6 @@ export function AiContentGenerationPage({
   const [selectedReviewTab, setSelectedReviewTab] = useState<ReviewTab | null>(null);
   const actionLocks = useRef({
     retry: new Set<string>(),
-    revise: new Set<string>(),
     saveCopy: new Set<string>(),
     download: new Set<string>(),
     publish: new Set<string>(),
@@ -227,20 +226,8 @@ export function AiContentGenerationPage({
     try {
       setActionError(null);
       setRetryingOutputId(outputId);
-      const nextOutput = await gateway.retryOutput(brandId, outputId, reason);
-      setGeneration((current) => {
-        if (!current) return current;
-        return {
-          ...current,
-          outputs: current.outputs.map((output) => (output.id === outputId ? nextOutput : output)),
-          status: current.status === "partial_failed" ? "generating" : current.status
-        };
-      });
-      setSelectedForZip((current) => {
-        const next = new Set(current);
-        next.add(nextOutput.id);
-        return next;
-      });
+      const retryGeneration = await gateway.retryOutput(brandId, outputId, reason);
+      navigate(`/ai-content/${retryGeneration.id}`);
     } catch (err: unknown) {
       if (err instanceof ApiRequestError
         && err.status === 410
@@ -254,34 +241,6 @@ export function AiContentGenerationPage({
     } finally {
       actionLocks.current.retry.delete(outputId);
       setRetryingOutputId(null);
-    }
-  }
-
-  async function reviseOutput(
-    outputId: string,
-    action: "regenerate_hook" | "regenerate_copy" | "regenerate_card",
-    cardIndex?: number,
-  ) {
-    if (actionLocks.current.revise.has(outputId)) return;
-    actionLocks.current.revise.add(outputId);
-    try {
-      setActionError(null);
-      setRevisingOutputId(outputId);
-      const nextOutput = await gateway.reviseOutput(brandId, outputId, {
-        action,
-        ...(cardIndex === undefined ? {} : { cardIndex }),
-        idempotencyKey: crypto.randomUUID(),
-      });
-      setGeneration((current) => current ? {
-        ...current,
-        status: "generating",
-        outputs: current.outputs.map((output) => output.id === outputId ? nextOutput : output),
-      } : current);
-    } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : "부분 재생성을 시작하지 못했습니다.");
-    } finally {
-      actionLocks.current.revise.delete(outputId);
-      setRevisingOutputId(null);
     }
   }
 
@@ -386,11 +345,9 @@ export function AiContentGenerationPage({
       selectedForZip={selectedForZip}
       channels={channels}
       retryingOutputId={retryingOutputId}
-      revisingOutputId={revisingOutputId}
       publishingOutputIds={publishingOutputIds}
       publishResults={publishResults}
       onRetry={retryOutput}
-      onRevise={reviseOutput}
       onDownload={handleDownload}
       onPublish={handlePublish}
       onToggleSelection={toggleSelection}
@@ -507,9 +464,7 @@ export function AiContentGenerationPage({
                     outputFormat={generation.outputFormat}
                     output={output}
                     saving={savingCopyOutputId === output.id}
-                    revising={revisingOutputId === output.id}
                     onSave={(fields) => saveOutputCopy(output.id, fields)}
-                    onRevise={(action) => reviseOutput(output.id, action)}
                   />
                 ))}
               </section>

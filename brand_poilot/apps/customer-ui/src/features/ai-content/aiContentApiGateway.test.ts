@@ -196,34 +196,22 @@ describe("createAiContentApiGateway", () => {
     });
   });
 
-  it("refetches the generation when a retry response omits outputs", async () => {
-    const retriedOutput = {
-      id: "output-1",
-      generationId: "generation-1",
-      outputIndex: 1,
-      title: "다시 생성 중",
-      status: "planning",
-      content: {},
-      manifest: {},
-      manifestUrl: null,
-      failureCode: null,
-      failureMessage: null,
-      downloadedAt: null,
-      revisionCapabilities: [],
-    };
-    const requestJson = vi.fn()
-      .mockResolvedValueOnce({ ...generation("planning"), outputs: undefined })
-      .mockResolvedValueOnce({ ...generation("planning"), outputs: [retriedOutput] });
+  it("rejects a retry response that does not contain exactly one queued child output", async () => {
+    vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("11111111-1111-4111-8111-111111111111");
+    const requestJson = vi.fn().mockResolvedValueOnce({ ...generation("queued"), outputs: undefined });
     const gateway = createAiContentApiGateway(clientWith(requestJson));
 
     await expect(gateway.retryOutput("brand-1", "output-1", "다시 생성"))
-      .resolves.toMatchObject({ id: "output-1", status: "planning" });
+      .rejects.toThrow("ai_content_generation_retry_response_invalid");
     expect(requestJson.mock.calls).toEqual([
       ["/brands/brand-1/ai-content/outputs/output-1/retry", {
         method: "POST",
-        body: JSON.stringify({ reason: "다시 생성" }),
+        body: JSON.stringify({
+          contractVersion: "content-generation-retry.v1",
+          idempotencyKey: "11111111-1111-4111-8111-111111111111",
+          reason: "다시 생성",
+        }),
       }],
-      ["/brands/brand-1/ai-content/generations/generation-1", { method: "GET" }],
     ]);
   });
 
@@ -450,44 +438,6 @@ describe("createAiContentApiGateway", () => {
 
     await expect(createAiContentApiGateway(clientWith(requestJson)).getGeneration("brand-1", "generation-1"))
       .rejects.toThrow("ai_content_output_manifest_invalid");
-  });
-
-  it("queues supported partial revisions through the output revision endpoint", async () => {
-    const requestJson = vi.fn(async () => ({
-      ...generation("generating"),
-      outputs: [{
-        id: "output-1",
-        generationId: "generation-1",
-        outputIndex: 1,
-        title: "수정 중",
-        status: "generating",
-        content: {},
-        manifest: {},
-        manifestUrl: null,
-        failureCode: null,
-        failureMessage: null,
-        downloadedAt: null,
-        revisionCapabilities: ["regenerate_card"],
-      }],
-    }));
-    const gateway = createAiContentApiGateway(clientWith(requestJson));
-
-    await expect(gateway.reviseOutput("brand-1", "output-1", {
-      action: "regenerate_card",
-      cardIndex: 2,
-      idempotencyKey: "revision-card-2",
-    })).resolves.toMatchObject({ id: "output-1", status: "generating" });
-    expect(requestJson).toHaveBeenCalledWith(
-      "/brands/brand-1/ai-content/outputs/output-1/revisions",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          action: "regenerate_card",
-          cardIndex: 2,
-          idempotencyKey: "revision-card-2",
-        }),
-      },
-    );
   });
 
   it("propagates API failures instead of returning sample content", async () => {

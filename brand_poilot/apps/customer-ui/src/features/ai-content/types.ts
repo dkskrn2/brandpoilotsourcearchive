@@ -421,7 +421,7 @@ export interface AiGenerationOutput {
   copy?: AiContentCopyFields;
   failureReason: string | null;
   downloadedAt: string | null;
-  revisionCapabilities?: Array<"save_copy" | "regenerate_hook" | "regenerate_copy" | "regenerate_card">;
+  revisionCapabilities?: Array<"save_copy">;
   manifestVersion: "ai-content.v3" | null;
   outputFormat: ContentOutputFormatV2;
   publishSupported?: boolean;
@@ -495,12 +495,7 @@ export interface AiContentGateway {
   saveAppealPreset(brandId: string, input: Omit<AppealPreset, "id" | "useCount" | "lastUsedAt">): Promise<AppealPreset>;
   listReferences(brandId: string, query?: AiContentType | AiContentReferenceQuery): Promise<AiContentReference[]>;
   listReferenceSeeds(brandId: string, format: ContentOutputFormatV2): Promise<AiContentReferenceSeed[]>;
-  retryOutput(brandId: string, outputId: string, reason: string): Promise<AiGenerationOutput>;
-  reviseOutput(brandId: string, outputId: string, input: {
-    action: "regenerate_hook" | "regenerate_copy" | "regenerate_card";
-    cardIndex?: number;
-    idempotencyKey: string;
-  }): Promise<AiGenerationOutput>;
+  retryOutput(brandId: string, outputId: string, reason: string): Promise<AiContentGeneration>;
   saveOutputCopy(brandId: string, outputId: string, input: {
     fields: Partial<AiContentCopyFields>;
     idempotencyKey: string;
