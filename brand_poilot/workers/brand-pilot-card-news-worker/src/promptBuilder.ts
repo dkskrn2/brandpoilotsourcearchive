@@ -23,6 +23,12 @@ export function buildCardNewsPlanPrompt(
   if (job.generationId !== input.generationId) throw new Error("content_generation_input_generation_mismatch");
   const lockedCount = input.selectedProposal.assetCount;
   if (lockedCount === null) throw new Error("card_news_plan_asset_count_invalid");
+  const purpose = input.outputSettings.purpose;
+  const purposeRules = purpose === "informational"
+    ? ["정보성 카드뉴스는 교육, 문제 해결, 가이드 중심으로 구성하고 판매 주장이나 구매 압박을 넣지 마세요."]
+    : purpose === "marketing"
+      ? ["마케팅성 카드뉴스는 고정 product와 선택 proposal의 고객 상황, 강점, 한계, 구매 장벽, CTA만 사용하고 제품 사실을 추측하지 마세요."]
+      : (() => { throw new Error("card_news_plan_purpose_invalid"); })();
   const fixedInput = {
     generationId: input.generationId,
     brandCore: input.brandCore,
@@ -44,6 +50,7 @@ export function buildCardNewsPlanPrompt(
     "카드뉴스 imagePackage의 aspectRatio은 반드시 1:1로 유지하세요. 픽셀 해상도를 특정 값으로 고정하지 마세요.",
     "후속 이미지 렌더링은 Codex 내장 image_generation의 gpt-image-2를 사용합니다. 다른 이미지 모델이나 외부 이미지 API를 지시하지 마세요.",
     `선택 구성안에 잠긴 정확히 ${lockedCount}장을 유지하고 outline의 index, role, order를 한 글자도 바꾸지 마세요. 장수를 다시 판단하거나 장면을 추가·삭제·병합하지 마세요.`,
+    ...purposeRules,
     "각 장에는 모바일에서 바로 이해할 수 있는 구체적인 copy와 visualDirection을 작성하세요.",
     "한 장이 부실하지 않게 핵심 정보와 근거를 압축하되, 과도한 문장과 정보 밀도로 모바일 가독성을 해치지 마세요.",
     "각 copy의 사실 근거는 brandCore, researchEvidence, 선택 레퍼런스 텍스트와 product 스냅샷으로만 제한하세요. 근거 ID 자체를 독자용 카피에 노출하지 마세요.",

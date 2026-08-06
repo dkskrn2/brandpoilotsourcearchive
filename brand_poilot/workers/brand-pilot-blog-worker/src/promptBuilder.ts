@@ -11,6 +11,12 @@ export function buildBlogPlanPrompt(
   repairErrors?: string[],
 ) {
   const fixedEvidence = [...input.researchEvidence.items, ...(supplementalResearch?.items ?? [])];
+  const purpose = input.outputSettings.purpose;
+  const purposeRules = purpose === "informational"
+    ? ["정보성 블로그는 검색 질문에 대한 교육, 문제 해결, 가이드 중심으로 작성하고 판매 주장이나 구매 압박을 넣지 마세요."]
+    : purpose === "marketing"
+      ? ["마케팅성 블로그는 고정 product와 선택 proposal의 고객 상황, 강점, 한계, 구매 장벽, CTA만 사용하고 제품 사실을 검색 근거로 보강하거나 추측하지 마세요."]
+      : (() => { throw new Error("blog_plan_purpose_invalid"); })();
   const repair = repairErrors?.length
     ? ["이전 결과는 검증에 실패했습니다. 이 오류만 보정하고 전체 exact JSON을 다시 반환하세요.", ...repairErrors.map((error) => `- ${error}`)]
     : [];
@@ -18,6 +24,7 @@ export function buildBlogPlanPrompt(
     ".agents/skills/blog-writer/SKILL.md의 V3 HTML writer 규칙을 따르세요.",
     `계약 버전: ${blogPlanSkillVersion}`,
     "blog-plan.v2 exact JSON 하나만 반환하세요. HTML 한 개가 주 산출물이며 이미지 파일을 직접 만들거나 저장하지 마세요.",
+    ...purposeRules,
     "metadata 상한은 title 500자, metaTitle 500자, metaDescription 2,000자입니다.",
     "HTML은 article 정확히 1개와 h1 정확히 1개를 사용하세요. h1 바로 다음은 section data-summary=\"true\"이고 direct child p가 정확히 3개, 정규화 합계 300자 이하이어야 합니다.",
     "article visible text를 3,000~10,000자로 작성하세요. 결과를 임의로 자르거나 빈 문단으로 길이를 채우지 마세요.",

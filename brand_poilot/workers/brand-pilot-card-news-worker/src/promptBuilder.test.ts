@@ -185,6 +185,11 @@ describe("card-news prompt", () => {
     };
     const prompt = buildCardNewsPlanPrompt({ ...job, generationId: input.generationId }, input);
     expect(prompt).toContain("card-news-plan.v2");
+    expect(prompt).toContain("마케팅성 카드뉴스");
+    expect(buildCardNewsPlanPrompt(
+      { ...job, generationId: input.generationId },
+      { ...input, outputSettings: { ...input.outputSettings, purpose: "informational" } },
+    )).toContain("정보성 카드뉴스");
     expect(prompt).toContain("gpt-image-2");
     expect(prompt).toContain("1:1");
     expect(prompt).not.toContain("1080×1080");

@@ -122,6 +122,12 @@ describe("blog prompt", () => {
 
   it("builds a v3 HTML writer prompt without Wiki, FAQ, logos, or experience-story instructions", () => {
     const prompt = buildBlogPlanPrompt({ ...job, payload: { contentGenerationInput: v3Input } }, v3Input, null);
+    expect(prompt).toContain("정보성 블로그");
+    expect(buildBlogPlanPrompt(
+      { ...job, payload: { contentGenerationInput: v3Input } },
+      { ...v3Input, outputSettings: { ...v3Input.outputSettings, purpose: "marketing" } },
+      null,
+    )).toContain("마케팅성 블로그");
     expect(prompt).toContain("blog-plan.v2");
     expect(prompt).toContain("3,000~10,000자");
     expect(prompt).toContain("정확히 3개");
