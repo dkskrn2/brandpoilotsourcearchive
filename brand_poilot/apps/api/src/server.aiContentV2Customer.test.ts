@@ -25,6 +25,11 @@ const referenceSnapshotId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const seedId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const auth = { cookie: "bp_session=session-1", "idempotency-key": "proposal-v2-1" };
 const generationId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+const childGenerationId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+const outputId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+const jobId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+const leaseToken = "12121212-1212-4121-8121-121212121212";
+const workerAuthorization = "Bearer ai-content-worker-test";
 
 const core = {
   versionId: coreVersionId,
@@ -136,6 +141,7 @@ type SetupOverrides = {
 
 function setup(overrides: SetupOverrides = {}) {
   const legacyCreate = vi.fn();
+  const legacyDirectCreate = vi.fn();
   const listAiContentReferenceSeeds = vi.fn(async () => overrides.referenceSeeds ?? []);
   const repository = {
     health: vi.fn(async () => ({
@@ -148,9 +154,13 @@ function setup(overrides: SetupOverrides = {}) {
       },
     })),
     createAiContentProposalBatch: legacyCreate,
+    createAiContentAnalysis: legacyDirectCreate,
     listAiContentReferenceSeeds,
     updateAiContentFinalizationDraft: vi.fn(async (input) => ({ id: input.generationId, status: "draft" })),
     startAiContentGenerationV3: vi.fn(async (input) => ({ id: input.generationId, status: "queued" })),
+    retryAiContentOutput: vi.fn(async () => ({ id: childGenerationId, status: "queued" })),
+    claimAiContentJob: vi.fn(async () => null),
+    completeAiContentJob: vi.fn(async () => ({ id: generationId, status: "processing" })),
     listAiContentUsage: vi.fn(async () => ({ usageDate: "2026-08-01", generationCount: 0, downloadCount: 0 })),
   } as unknown as ApiRepository;
   const kakaoAuth = {
@@ -229,6 +239,7 @@ function setup(overrides: SetupOverrides = {}) {
         },
       },
     },
+    workerApiToken: "ai-content-worker-test",
     readinessPolicy: {
       schedulerEnabled: false,
       publishingEnabled: false,
@@ -242,6 +253,7 @@ function setup(overrides: SetupOverrides = {}) {
     kakaoAuth,
     dependencies,
     legacyCreate,
+    legacyDirectCreate,
     crawlUrl,
     loadChannelCapability,
     resolveSeed,
@@ -408,6 +420,18 @@ describe("V2 customer proposal batches", () => {
     await harness.app.close();
   });
 
+  it("rejects a proposal body without the V2 contract instead of invoking the V1 writer", async () => {
+    const harness = setup();
+    const { contractVersion: _removed, ...legacyBody } = v2Body();
+    const response = await postV2(harness.app, legacyBody);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "ai_content_proposal_contract_version_unsupported" });
+    expect(harness.legacyCreate).not.toHaveBeenCalled();
+    expect(harness.createAiContentProposalBatchV2).not.toHaveBeenCalled();
+    await harness.app.close();
+  });
+
   it.each([
     ["disabled", readyCapability({ enabled: false })],
     ["not connected", readyCapability({ connectionStatus: "not_connected", readiness: "needs_connection" })],
@@ -511,7 +535,8 @@ describe("V2 finalization customer boundary", () => {
   it.each([
     ["PATCH", { contractVersion: "content-finalization-draft.v99" }],
     ["POST", { contractVersion: "content-generation-start.v99" }],
-  ] as const)("rejects an unknown explicit %s contract instead of falling back to legacy", async (method, payload) => {
+    ["POST", { idempotencyKey: "legacy-start", outputCount: 1 }],
+  ] as const)("rejects a non-canonical %s contract instead of falling back to legacy", async (method, payload) => {
     const harness = setup();
     const response = await harness.app.inject({
       method,
@@ -597,7 +622,6 @@ describe("V2 finalization customer boundary", () => {
       }),
       harness.dependencies.snapshotRepository,
     );
-    expect(harness.repository.startAiContentGeneration).toBeUndefined();
     await harness.app.close();
   });
 
@@ -638,6 +662,189 @@ describe("V2 finalization customer boundary", () => {
     expect(different.json()).toEqual({ error: "ai_content_limit_reached" });
     expect(harness.repository.startAiContentGenerationV3).toHaveBeenCalledTimes(2);
     expect(harness.repository.listAiContentUsage).not.toHaveBeenCalled();
+    await harness.app.close();
+  });
+});
+
+describe("V3 manual generation HTTP boundary", () => {
+  it("does not expose the legacy direct generation writer", async () => {
+    const harness = setup();
+    const response = await harness.app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations`,
+      headers: auth,
+      payload: { type: "blog", title: "legacy", draft: {}, idempotencyKey: "legacy-direct" },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: "workspace_access_denied" });
+    expect(harness.legacyDirectCreate).not.toHaveBeenCalled();
+    await harness.app.close();
+  });
+
+  it.each([
+    ["card_news", "card_news"],
+    ["blog", "blog"],
+    ["reel", "reel"],
+  ] as const)("maps the exact %s worker slug to outputFormat %s", async (slug, outputFormat) => {
+    const harness = setup();
+    const response = await harness.app.inject({
+      method: "POST",
+      url: `/worker/ai-content-jobs/${slug}/claim`,
+      headers: { authorization: workerAuthorization },
+      payload: { workerId: `worker-${slug}`, leaseSeconds: 180 },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ job: null });
+    expect(harness.repository.claimAiContentJob).toHaveBeenCalledWith({
+      outputFormat,
+      workerId: `worker-${slug}`,
+      leaseSeconds: 180,
+    });
+    await harness.app.close();
+  });
+
+  it.each(["card-news", "marketing"])("rejects the retired %s worker slug", async (slug) => {
+    const harness = setup();
+    const response = await harness.app.inject({
+      method: "POST",
+      url: `/worker/ai-content-jobs/${slug}/claim`,
+      headers: { authorization: workerAuthorization },
+      payload: { workerId: "legacy-worker", leaseSeconds: 180 },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "ai_content_worker_type_not_found" });
+    expect(harness.repository.claimAiContentJob).not.toHaveBeenCalled();
+    await harness.app.close();
+  });
+
+  it("accepts only a generate plan completion payload", async () => {
+    const harness = setup();
+    const plan = { contractVersion: "blog-plan.v2", outputFormat: "blog" };
+    const response = await harness.app.inject({
+      method: "POST",
+      url: `/worker/ai-content-jobs/${jobId}/complete`,
+      headers: { authorization: workerAuthorization },
+      payload: {
+        workerId: "blog-worker",
+        leaseToken,
+        skillVersion: "blog-v3",
+        jobType: "generate",
+        plan,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(harness.repository.completeAiContentJob).toHaveBeenCalledWith({
+      jobId,
+      workerId: "blog-worker",
+      leaseToken,
+      skillVersion: "blog-v3",
+      jobType: "generate",
+      plan,
+    });
+    await harness.app.close();
+  });
+
+  it.each([
+    {
+      workerId: "legacy-worker",
+      leaseToken,
+      skillVersion: "legacy-v2",
+      jobType: "analyze",
+      analysisJson: { summary: "legacy" },
+    },
+    {
+      workerId: "legacy-worker",
+      leaseToken,
+      skillVersion: "legacy-v2",
+      jobType: "generate",
+      manifest: { type: "blog" },
+      manifestUrl: "https://example.test/manifest.json",
+    },
+    {
+      workerId: "legacy-worker",
+      leaseToken,
+      skillVersion: "legacy-v2",
+      jobType: "generate",
+      plan: {},
+      manifest: { type: "blog" },
+    },
+  ])("rejects a legacy or mixed worker completion payload", async (payload) => {
+    const harness = setup();
+    const response = await harness.app.inject({
+      method: "POST",
+      url: `/worker/ai-content-jobs/${jobId}/complete`,
+      headers: { authorization: workerAuthorization },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "ai_content_plan_completion_invalid" });
+    expect(harness.repository.completeAiContentJob).not.toHaveBeenCalled();
+    await harness.app.close();
+  });
+
+  it("accepts only the exact content-generation-retry.v1 body", async () => {
+    const harness = setup();
+    const response = await harness.app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/retry`,
+      headers: auth,
+      payload: {
+        contractVersion: "content-generation-retry.v1",
+        idempotencyKey: "retry-output-1",
+        reason: "첫 생성 결과가 비어 있어 다시 생성합니다.",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ id: childGenerationId, status: "queued" });
+    expect(harness.repository.retryAiContentOutput).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId,
+      brandId,
+      actorUserId,
+      outputId,
+      contractVersion: "content-generation-retry.v1",
+      idempotencyKey: "retry-output-1",
+      reason: "첫 생성 결과가 비어 있어 다시 생성합니다.",
+      usageDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      dailyGenerationLimit: 10,
+    }));
+    await harness.app.close();
+  });
+
+  it.each([
+    { idempotencyKey: "retry-output-1", reason: "missing contract" },
+    { contractVersion: "content-generation-retry.v0", idempotencyKey: "retry-output-1", reason: "old contract" },
+    { contractVersion: "content-generation-retry.v1", idempotencyKey: "retry-output-1", reason: "extra field", outputCount: 1 },
+  ])("rejects a non-exact retry body before the repository", async (payload) => {
+    const harness = setup();
+    const response = await harness.app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/retry`,
+      headers: auth,
+      payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(harness.repository.retryAiContentOutput).not.toHaveBeenCalled();
+    await harness.app.close();
+  });
+
+  it("does not expose the V2 revision executor to V3 outputs", async () => {
+    const harness = setup();
+    const response = await harness.app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/revisions`,
+      headers: auth,
+      payload: { action: "regenerate_copy", idempotencyKey: "legacy-revision" },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: "workspace_access_denied" });
     await harness.app.close();
   });
 });

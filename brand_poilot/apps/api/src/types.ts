@@ -24,7 +24,6 @@ import type {
   SaveAudienceInput,
   SubjectAnalysisBrandContext,
   SubjectAnalysisWorkerLease,
-  AiContentRevisionAction,
   CreateAiContentProposalBatchV2Input,
 } from "./aiContentRepository.js";
 
@@ -36,11 +35,9 @@ import type {
   AiContentType,
   CompleteAiContentJobInput,
   ContentOutputFormatV2,
-  CreateAiContentAnalysisInput,
   FailAiContentJobInput,
-  StartAiContentGenerationInput,
-  UpdateAiContentDraftInput,
 } from "./aiContentContracts.js";
+import type { ContentStudioOutputFormat } from "@brand-pilot/content-contracts";
 import type {
   SubjectAnalysisRecord,
   SubjectAnalysisRepository,
@@ -1096,15 +1093,12 @@ export interface ApiRepository
     workerId: string;
     leaseToken: string;
   }): Promise<SubjectAnalysisWorkerLease | null>;
-  createAiContentAnalysis(input: BrandScope & { actorUserId: string } & CreateAiContentAnalysisInput): Promise<AiContentGenerationRecord>;
-  updateAiContentDraft(input: BrandGenerationScope & { actorUserId: string } & UpdateAiContentDraftInput): Promise<AiContentGenerationRecord>;
   updateAiContentFinalizationDraft(input: BrandGenerationScope & { actorUserId: string; draft: import("./aiContentContracts.js").ContentFinalizationDraftV2 }): Promise<AiContentGenerationRecord>;
   startAiContentGenerationV3(
     input: BrandGenerationScope & { actorUserId: string; usageDate: string; dailyGenerationLimit: number } & import("./aiContentContracts.js").ContentGenerationStartV2,
     snapshots: import("./aiContentSnapshotRepository.js").AiContentSnapshotRepository,
     now?: () => Date,
   ): Promise<AiContentGenerationRecord>;
-  startAiContentGeneration(input: BrandGenerationScope & { actorUserId: string } & StartAiContentGenerationInput & { usageDate: string; dailyGenerationLimit: number }): Promise<AiContentGenerationRecord>;
   listAiContentGenerations(input: BrandScope): Promise<AiContentGenerationRecord[]>;
   getAiContentGeneration(input: BrandGenerationScope): Promise<AiContentGenerationRecord | null>;
   listAiContentUsage(input: BrandScope & { usageDate: string }): Promise<AiContentUsageRecord>;
@@ -1125,7 +1119,7 @@ export interface ApiRepository
   saveBrandAppeal(input: SaveAppealInput): Promise<AppealRecord>;
   confirmAiContentAttachment(input: BrandGenerationScope & import("./aiContentContracts.js").ConfirmAttachmentInput): Promise<AiContentAttachmentRecord>;
   removeAiContentAttachment(input: BrandGenerationScope & { attachmentId: string }): Promise<{ id: string }>;
-  claimAiContentJob(input: { contentType: AiContentType; workerId: string; leaseSeconds: number }): Promise<AiContentJobRecord | null>;
+  claimAiContentJob(input: { outputFormat: ContentStudioOutputFormat; workerId: string; leaseSeconds: number }): Promise<AiContentJobRecord | null>;
   heartbeatAiContentJob(input: { jobId: string; workerId: string; leaseToken: string; leaseSeconds: number }): Promise<boolean>;
   completeAiContentJob(input: CompleteAiContentJobInput): Promise<AiContentGenerationRecord>;
   failAiContentJob(input: FailAiContentJobInput): Promise<AiContentGenerationRecord>;
@@ -1135,13 +1129,7 @@ export interface ApiRepository
   completeAiContentRenderPackage?(input: import("./aiContentRenderJobs.js").RenderPackageCompletion): Promise<AiContentGenerationRecord>;
   failAiContentRenderJob?(input: import("./aiContentRenderJobs.js").RenderFailure): Promise<void>;
   saveAiContentOutputResearch?(input: { jobId: string; outputId: string; workerId: string; leaseToken: string; evidence: Record<string, unknown> }): Promise<void>;
-  retryAiContentOutput(input: BrandScope & { outputId: string }): Promise<AiContentGenerationRecord>;
-  reviseAiContentOutput(input: BrandScope & {
-    outputId: string;
-    action: AiContentRevisionAction;
-    cardIndex?: number;
-    idempotencyKey: string;
-  }): Promise<AiContentGenerationRecord>;
+  retryAiContentOutput(input: BrandScope & { actorUserId: string; outputId: string; contractVersion: "content-generation-retry.v1"; idempotencyKey: string; reason: string; usageDate: string; dailyGenerationLimit: number }): Promise<AiContentGenerationRecord>;
   saveAiContentOutputCopy(input: BrandScope & {
     outputId: string;
     fields: Partial<Record<import("./aiContentRepository.js").AiContentCopyField, string | string[]>>;

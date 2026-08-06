@@ -85,7 +85,7 @@ const confirmedSubjectBrandContext = {
 
 function generation(
   status = "analyzing",
-  type: "card_news" | "blog" | "marketing" = "card_news",
+  outputFormat: "card_news" | "blog" | "reel" = "card_news",
   title = "여름 추천",
   draft: Record<string, unknown> = {},
 ) {
@@ -93,7 +93,8 @@ function generation(
     id: generationId,
     workspaceId,
     brandId,
-    type,
+    outputFormat,
+    purpose: "informational" as const,
     title,
     status,
     currentStage: "analysis",
@@ -116,8 +117,6 @@ function setup(
     uploadSessionsEnabled?: boolean;
     actorUserId?: string | null;
     app?: FastifyInstance;
-    contentProposalsEnabled?: boolean;
-    contentProposalWorker?: "online" | "stale" | "offline";
   } = {},
 ) {
   const events: string[] = [];
@@ -129,12 +128,11 @@ function setup(
         activeDmEnabled: false,
         dmWorker: "offline" as const,
         wikiWorker: "offline" as const,
-        contentProposalWorker: options.contentProposalWorker ?? "online" as const,
+        contentProposalWorker: "online" as const,
       },
     })),
-    createAiContentAnalysis: vi.fn(async () => generation()),
-    updateAiContentDraft: vi.fn(async () => generation("analysis_ready")),
-    startAiContentGeneration: vi.fn(async () => generation("queued")),
+    updateAiContentFinalizationDraft: vi.fn(async () => generation("draft")),
+    startAiContentGenerationV3: vi.fn(async () => generation("queued")),
     listAiContentGenerations: vi.fn(async () => [generation()]),
     getAiContentGeneration: vi.fn(async () => generation()),
     listAiContentUsage: vi.fn(async (input) => ({ usageDate: input.usageDate, generationCount: 1, downloadCount: 2 })),
@@ -182,22 +180,7 @@ function setup(
     confirmLegacyAiContentAttachment: vi.fn(async (input) => ({ id: attachmentId, generationId: input.generationId, role: input.role, fileName: input.fileName, mimeType: input.mimeType, sizeBytes: input.sizeBytes, checksum: input.checksum, storageUrl: input.storageUrl, storagePath: input.storagePath, createdAt: "2026-07-18T00:00:00.000Z" })),
     removeAiContentAttachment: vi.fn(async (input) => ({ id: input.attachmentId })),
     retryAiContentOutput: vi.fn(async () => generation("queued")),
-    reviseAiContentOutput: vi.fn(async () => generation("queued")),
     saveAiContentOutputCopy: vi.fn(async () => generation("completed")),
-    createAiContentProposalBatch: vi.fn(async (input) => ({
-      id: "99999999-9999-4999-8999-999999999999",
-      workspaceId: input.workspaceId,
-      brandId: input.brandId,
-      origin: input.origin,
-      contentFamily: input.request.contentFamily,
-      request: input.request,
-      sourceSnapshots: [],
-      status: "queued" as const,
-      errorCode: null,
-      errorMessage: null,
-      createdAt: "2026-07-28T00:00:00.000Z",
-      updatedAt: "2026-07-28T00:00:00.000Z",
-    })),
     getAiContentProposalBatch: vi.fn(async () => null),
     listAiContentProposals: vi.fn(async () => []),
     selectAiContentProposal: vi.fn(async () => generation("draft", "blog", "선택 제안")),
@@ -268,7 +251,7 @@ function setup(
     readinessPolicy: {
       schedulerEnabled: false,
       publishingEnabled: false,
-      contentProposalsEnabled: options.contentProposalsEnabled ?? true,
+      contentProposalsEnabled: true,
     },
     logger: false,
   }, options.app);
@@ -276,28 +259,6 @@ function setup(
 }
 
 describe("AI content maintenance HTTP fence", () => {
-  it("returns stable 503 before create mutates repository state", async () => {
-    const harness = setup();
-    const repository = harness.repository as ApiRepository & {
-      assertAiContentWritable: ReturnType<typeof vi.fn>;
-    };
-    repository.assertAiContentWritable = vi.fn(async () => {
-      throw new Error("ai_content_maintenance");
-    });
-    const response = await harness.app.inject({
-      method: "POST",
-      url: `/brands/${brandId}/ai-content/generations`,
-      headers: { cookie: "bp_session=session-1", "idempotency-key": "maintenance-create" },
-      payload: { type: "card_news", title: "blocked", draft: {} },
-    });
-
-    expect(response.statusCode).toBe(503);
-    expect(response.json()).toEqual({ error: "ai_content_maintenance" });
-    expect(repository.assertAiContentWritable).toHaveBeenCalledTimes(1);
-    expect(repository.createAiContentAnalysis).not.toHaveBeenCalled();
-    await harness.app.close();
-  });
-
   it.each([
     ["output", `/brands/${brandId}/ai-content/outputs/output-1/download`, "downloadAiContentOutput"],
     ["generation", `/brands/${brandId}/ai-content/generations/${generationId}/download`, "downloadAiContentGeneration"],
@@ -324,11 +285,10 @@ describe("AI content maintenance HTTP fence", () => {
   });
 
   it.each([
-    ["proposal create", "POST", `/brands/${brandId}/ai-content/proposal-batches`, "createAiContentProposalBatch", {}],
+    ["proposal create", "POST", `/brands/${brandId}/ai-content/proposal-batches`, "createAiContentProposalBatchV2", {}],
     ["proposal select", "POST", `/brands/${brandId}/ai-content/proposals/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/select`, "selectAiContentProposal", {}],
-    ["generation start", "POST", `/brands/${brandId}/ai-content/generations/${generationId}/generate`, "startAiContentGeneration", {}],
+    ["generation start", "POST", `/brands/${brandId}/ai-content/generations/${generationId}/generate`, "startAiContentGenerationV3", {}],
     ["output retry", "POST", `/brands/${brandId}/ai-content/outputs/output-1/retry`, "retryAiContentOutput", {}],
-    ["output regenerate", "POST", `/brands/${brandId}/ai-content/outputs/output-1/revisions`, "reviseAiContentOutput", {}],
     ["finalization", "PATCH", `/brands/${brandId}/ai-content/generations/${generationId}`, "updateAiContentFinalizationDraft", {}],
     ["attachment confirm", "POST", `/brands/${brandId}/ai-content/generations/${generationId}/attachments/confirm`, "confirmLegacyAiContentAttachment", {}],
     ["attachment delete", "DELETE", `/brands/${brandId}/ai-content/generations/${generationId}/attachments/${attachmentId}`, "removeAiContentAttachment", undefined],
@@ -383,32 +343,6 @@ describe("AI content maintenance HTTP fence", () => {
 });
 
 const auth = { cookie: "bp_session=session-1" };
-const generationContractFixtures = [
-  {
-    type: "card_news",
-    title: "여름 추천 카드뉴스",
-    draft: { subjectType: "product", brief: { aspectRatio: "1:1" } },
-    updatedDraft: { subjectType: "product", brief: { aspectRatio: "4:5" } },
-    referenceIds: ["card-reference"],
-    outputCount: 2,
-  },
-  {
-    type: "blog",
-    title: "여름 운영 블로그",
-    draft: { subjectType: "service", brief: { aspectRatio: "16:9" } },
-    updatedDraft: { subjectType: "service", brief: { aspectRatio: "1:1" } },
-    referenceIds: ["blog-reference"],
-    outputCount: 1,
-  },
-  {
-    type: "marketing",
-    title: "여름 프로모션 소재",
-    draft: { subjectType: "product", brief: { aspectRatio: "9:16" } },
-    updatedDraft: { subjectType: "product", brief: { aspectRatio: "1:1" } },
-    referenceIds: ["marketing-reference"],
-    outputCount: 3,
-  },
-] as const;
 
 describe("AI content customer routes", () => {
   it("fails fast when configured upload routes lack a lifecycle dependency", async () => {
@@ -426,180 +360,26 @@ describe("AI content customer routes", () => {
     })).toThrow("ai_content_upload_repository_not_configured");
   });
 
-  it.each(generationContractFixtures)("locks the $type create, update, start, list, and get contracts", async (fixture) => {
-    const { app, repository } = setup();
-    const createdRecord = generation("analyzing", fixture.type, fixture.title, fixture.draft);
-    vi.mocked(repository.createAiContentAnalysis).mockResolvedValueOnce(createdRecord);
-    const create = await app.inject({
-      method: "POST",
-      url: `/brands/${brandId}/ai-content/generations`,
-      headers: auth,
-      payload: { type: fixture.type, title: fixture.title, draft: fixture.draft, idempotencyKey: `${fixture.type}-analysis` },
-    });
-    expect(create.statusCode).toBe(200);
-    expect(create.json()).toEqual(createdRecord);
-    expect(repository.createAiContentAnalysis).toHaveBeenCalledWith({
-      workspaceId,
-      brandId,
-      actorUserId,
-      type: fixture.type,
-      title: fixture.title,
-      draft: fixture.draft,
-      idempotencyKey: `${fixture.type}-analysis`,
-    });
-
-    const updatedRecord = generation("analysis_ready", fixture.type, fixture.title, fixture.updatedDraft);
-    vi.mocked(repository.updateAiContentDraft).mockResolvedValueOnce(updatedRecord);
-    const update = await app.inject({
-      method: "PATCH",
-      url: `/brands/${brandId}/ai-content/generations/${generationId}`,
-      headers: auth,
-      payload: { draft: fixture.updatedDraft, referenceIds: fixture.referenceIds },
-    });
-    expect(update.statusCode).toBe(200);
-    expect(update.json()).toEqual(updatedRecord);
-    expect(repository.updateAiContentDraft).toHaveBeenCalledWith({
-      workspaceId,
-      brandId,
-      generationId,
-      actorUserId,
-      draft: fixture.updatedDraft,
-      referenceIds: fixture.referenceIds,
-    });
-
-    const startedRecord = generation("queued", fixture.type, fixture.title, fixture.updatedDraft);
-    vi.mocked(repository.startAiContentGeneration).mockResolvedValueOnce(startedRecord);
-    const start = await app.inject({
-      method: "POST",
-      url: `/brands/${brandId}/ai-content/generations/${generationId}/generate`,
-      headers: auth,
-      payload: { idempotencyKey: `${fixture.type}-generate`, outputCount: fixture.outputCount },
-    });
-    expect(start.statusCode).toBe(200);
-    expect(start.json()).toEqual(startedRecord);
-    expect(repository.startAiContentGeneration).toHaveBeenCalledWith({
-      workspaceId,
-      brandId,
-      generationId,
-      actorUserId,
-      idempotencyKey: `${fixture.type}-generate`,
-      outputCount: fixture.outputCount,
-      usageDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
-      dailyGenerationLimit: 10,
-    });
-
-    vi.mocked(repository.listAiContentGenerations).mockResolvedValueOnce([startedRecord]);
-    const list = await app.inject({ method: "GET", url: `/brands/${brandId}/ai-content/generations`, headers: auth });
-    expect(list.statusCode).toBe(200);
-    expect(list.json()).toEqual([startedRecord]);
-    expect(repository.listAiContentGenerations).toHaveBeenCalledWith({ workspaceId, brandId });
-
-    vi.mocked(repository.getAiContentGeneration).mockResolvedValueOnce(startedRecord);
-    const detail = await app.inject({ method: "GET", url: `/brands/${brandId}/ai-content/generations/${generationId}`, headers: auth });
-    expect(detail.statusCode).toBe(200);
-    expect(detail.json()).toEqual(startedRecord);
-    expect(repository.getAiContentGeneration).toHaveBeenCalledWith({ workspaceId, brandId, generationId });
-    await app.close();
-  });
-
-  it("accepts canonical orchestration while enforcing the deterministic legacy type mapping", async () => {
-    const { app, repository } = setup();
-    const orchestration = {
-      contractVersion: "content-orchestration.v1",
-      contentFamily: "informational",
-      subject: { mode: "brand_topic", topic: "여름 관리" },
-      target: { id: null, snapshot: {} },
-      strategy: "how_to",
-      outputFormat: "blog",
-      channelTargets: ["blog_export"],
-      brief: {},
-      references: [],
-      avatar: null,
-    };
-    const accepted = await app.inject({
-      method: "POST",
-      url: `/brands/${brandId}/ai-content/generations`,
-      headers: auth,
-      payload: {
-        type: "blog",
-        title: "여름 관리",
-        draft: {},
-        orchestration,
-        idempotencyKey: "canonical-create-1",
-      },
-    });
-    expect(accepted.statusCode).toBe(200);
-    expect(repository.createAiContentAnalysis).toHaveBeenCalledWith(expect.objectContaining({
-      actorUserId,
-      type: "blog",
-      orchestration,
-    }));
-
-    const mismatch = await app.inject({
-      method: "POST",
-      url: `/brands/${brandId}/ai-content/generations`,
-      headers: auth,
-      payload: {
-        type: "marketing",
-        title: "여름 관리",
-        draft: {},
-        orchestration,
-        idempotencyKey: "canonical-create-2",
-      },
-    });
-    expect(mismatch.statusCode).toBe(400);
-    expect(mismatch.json()).toEqual({ error: "ai_content_type_mapping_mismatch" });
-
-    const updated = await app.inject({
-      method: "PATCH",
-      url: `/brands/${brandId}/ai-content/generations/${generationId}`,
-      headers: auth,
-      payload: { draft: {}, orchestration, referenceIds: [] },
-    });
-    expect(updated.statusCode).toBe(200);
-    expect(repository.updateAiContentDraft).toHaveBeenCalledWith(expect.objectContaining({
-      actorUserId,
-      orchestration,
-      referenceIds: [],
-    }));
-    await app.close();
-  });
-
-  it("exposes proposal batch, inbox, selection, dismissal, and draft-reference contracts", async () => {
+  it("exposes proposal progress, inbox, selection, dismissal, and draft-reference contracts", async () => {
     const { app, repository } = setup();
     const batchId = "99999999-9999-4999-8999-999999999999";
     const proposalId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     const referenceId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-    const request = {
-      contractVersion: "content-proposal-request.v1",
-      contentFamily: "informational",
-      subjectInput: { topic: "여름 관리" },
-      channelTargets: ["blog_export"],
-      outputFormats: ["blog"],
-      sourceSnapshotIds: [],
-      performanceSnapshotIds: [],
-    };
-    const created = await app.inject({
-      method: "POST",
-      url: `/brands/${brandId}/ai-content/proposal-batches`,
-      headers: auth,
-      payload: { idempotencyKey: "proposal-1", request },
-    });
-    expect(created.statusCode).toBe(202);
-    expect(created.json()).toMatchObject({ batchId, status: "queued" });
-    expect(repository.createAiContentProposalBatch).toHaveBeenCalledWith({
+    vi.mocked(repository.getAiContentProposalBatch!).mockResolvedValueOnce({
+      id: batchId,
       workspaceId,
       brandId,
-      actorUserId,
       origin: "manual",
-      idempotencyKey: "proposal-1",
-      request,
-    });
-
-    vi.mocked(repository.getAiContentProposalBatch!).mockResolvedValueOnce({
-      ...(await vi.mocked(repository.createAiContentProposalBatch!).mock.results[0]!.value),
+      contentFamily: "informational",
+      request: {},
+      sourceSnapshots: [],
+      status: "queued",
+      errorCode: null,
+      errorMessage: null,
+      createdAt: "2026-07-28T00:00:00.000Z",
+      updatedAt: "2026-07-28T00:00:00.000Z",
       proposals: [],
-    });
+    } as never);
     const progress = await app.inject({
       method: "GET",
       url: `/brands/${brandId}/ai-content/proposal-batches/${batchId}`,
@@ -665,72 +445,6 @@ describe("AI content customer routes", () => {
     await app.close();
   });
 
-  it.each([
-    ["disabled", false, "online", "content_proposals_disabled"],
-    ["offline", true, "offline", "content_proposal_worker_not_ready"],
-    ["stale", true, "stale", "content_proposal_worker_not_ready"],
-  ] as const)(
-    "blocks manual proposal creation when the gate/worker is %s",
-    async (_caseName, contentProposalsEnabled, contentProposalWorker, error) => {
-      const { app, repository } = setup(true, {
-        contentProposalsEnabled,
-        contentProposalWorker,
-      });
-      const response = await app.inject({
-        method: "POST",
-        url: `/brands/${brandId}/ai-content/proposal-batches`,
-        headers: auth,
-        payload: {
-          idempotencyKey: "proposal-gated",
-          request: {
-            contractVersion: "content-proposal-request.v1",
-            contentFamily: "informational",
-            subjectInput: { topic: "여름 관리" },
-            channelTargets: ["blog_export"],
-            outputFormats: ["blog"],
-            sourceSnapshotIds: [],
-            performanceSnapshotIds: [],
-          },
-        },
-      });
-
-      expect(response.statusCode).toBe(503);
-      expect(response.json()).toEqual({ error });
-      expect(repository.createAiContentProposalBatch).not.toHaveBeenCalled();
-      await app.close();
-    },
-  );
-
-  it.each([
-    ["empty", []],
-    ["duplicate", ["blog_export", "blog_export"]],
-    ["unsupported", ["email"]],
-  ])("rejects %s proposal channel targets before repository access", async (label, channelTargets) => {
-    const { app, repository } = setup();
-    const response = await app.inject({
-      method: "POST",
-      url: `/brands/${brandId}/ai-content/proposal-batches`,
-      headers: auth,
-      payload: {
-        idempotencyKey: `invalid-channels-${label}`,
-        request: {
-          contractVersion: "content-proposal-request.v1",
-          contentFamily: "informational",
-          subjectInput: { topic: "여름 관리" },
-          channelTargets,
-          outputFormats: ["blog"],
-          sourceSnapshotIds: [],
-          performanceSnapshotIds: [],
-        },
-      },
-    });
-
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({ error: "ai_content_proposal_request_invalid" });
-    expect(repository.createAiContentProposalBatch).not.toHaveBeenCalled();
-    await app.close();
-  });
-
   it("maps proposal selection ownership and state failures to explicit 404/409 responses", async () => {
     const { app, repository } = setup();
     const proposalId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -773,17 +487,8 @@ describe("AI content customer routes", () => {
     await app.close();
   });
 
-  it("validates generation input and exposes configured usage limits", async () => {
+  it("exposes configured usage limits", async () => {
     const { app } = setup();
-    const invalid = await app.inject({
-      method: "POST",
-      url: `/brands/${brandId}/ai-content/generations/${generationId}/generate`,
-      headers: auth,
-      payload: { idempotencyKey: "generate-1", outputCount: 4 },
-    });
-    expect(invalid.statusCode).toBe(400);
-    expect(invalid.json()).toEqual({ error: "ai_content_output_count_invalid" });
-
     const usage = await app.inject({ method: "GET", url: `/brands/${brandId}/ai-content/usage?date=2026-07-18`, headers: auth });
     expect(usage.statusCode).toBe(200);
     expect(usage.json()).toMatchObject({ generationCount: 1, downloadCount: 2, dailyGenerationLimit: 10, dailyDownloadLimit: 20 });
@@ -1351,65 +1056,6 @@ describe("AI content customer routes", () => {
     await app.close();
   });
 
-  it.each(generationContractFixtures)("locks the $type retry contract", async (fixture) => {
-    const { app, repository } = setup();
-    const retriedRecord = generation("queued", fixture.type, fixture.title, fixture.updatedDraft);
-    vi.mocked(repository.retryAiContentOutput).mockResolvedValueOnce(retriedRecord);
-    const fixtureOutputId = `${fixture.type}-output`;
-    const response = await app.inject({
-      method: "POST",
-      url: `/brands/${brandId}/ai-content/outputs/${fixtureOutputId}/retry`,
-      headers: auth,
-    });
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(retriedRecord);
-    expect(repository.retryAiContentOutput).toHaveBeenCalledWith({ workspaceId, brandId, outputId: fixtureOutputId });
-    await app.close();
-  });
-
-  it("queues a validated partial revision for the authenticated brand scope", async () => {
-    const { app, repository } = setup();
-    const response = await app.inject({
-      method: "POST",
-      url: `/brands/${brandId}/ai-content/outputs/${outputId}/revisions`,
-      headers: auth,
-      payload: {
-        action: "regenerate_card",
-        cardIndex: 2,
-        idempotencyKey: "revision-card-2",
-      },
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(repository.reviseAiContentOutput).toHaveBeenCalledWith({
-      workspaceId,
-      brandId,
-      outputId,
-      action: "regenerate_card",
-      cardIndex: 2,
-      idempotencyKey: "revision-card-2",
-    });
-    await app.close();
-  });
-
-  it("rejects a card index for non-card partial revision actions", async () => {
-    const { app, repository } = setup();
-    const response = await app.inject({
-      method: "POST",
-      url: `/brands/${brandId}/ai-content/outputs/${outputId}/revisions`,
-      headers: auth,
-      payload: {
-        action: "regenerate_copy",
-        cardIndex: 2,
-        idempotencyKey: "revision-copy-1",
-      },
-    });
-
-    expect(response.statusCode).toBe(400);
-    expect(repository.reviseAiContentOutput).not.toHaveBeenCalled();
-    await app.close();
-  });
-
   it("saves validated copy fields for the authenticated brand scope", async () => {
     const { app, repository } = setup();
     const response = await app.inject({
@@ -1474,12 +1120,26 @@ describe("AI content customer routes", () => {
       method: "POST",
       url: `/brands/${brandId}/ai-content/outputs/${outputId}/retry`,
       headers: auth,
+      payload: {
+        contractVersion: "content-generation-retry.v1",
+        idempotencyKey: "retry-after-retention-1",
+        reason: "첨부 보존 기간 경계 확인",
+      },
     });
 
     expect(response.statusCode).toBe(410);
     expect(response.json()).toEqual({
       error: "ai_content_attachment_retention_expired",
     });
+    expect(repository.retryAiContentOutput).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId,
+      brandId,
+      actorUserId,
+      outputId,
+      contractVersion: "content-generation-retry.v1",
+      idempotencyKey: "retry-after-retention-1",
+      reason: "첨부 보존 기간 경계 확인",
+    }));
     await app.close();
   });
 
