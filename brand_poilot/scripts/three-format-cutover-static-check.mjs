@@ -6,6 +6,7 @@ const CATALOG_FILE = "packages/brand-pilot-content-contracts/src/catalog.ts";
 const BINDING_FILE = "packages/brand-pilot-content-contracts/src/binding.ts";
 const REPOSITORY_FILE = "apps/api/src/aiContentRepository.ts";
 const CUSTOMER_UI_GATEWAY_FILE = "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts";
+const HTTP_SERVER_FILE = "apps/api/src/httpServer.ts";
 
 const SQL_FILES = Object.freeze([
   REPOSITORY_FILE,
@@ -16,7 +17,7 @@ const SQL_FILES = Object.freeze([
 
 const CLAIM_WORKER_FILES = Object.freeze([
   REPOSITORY_FILE,
-  "apps/api/src/httpServer.ts",
+  HTTP_SERVER_FILE,
   "workers/brand-pilot-reel-worker/src/contracts.ts",
   "workers/brand-pilot-reel-worker/src/client.ts",
   "workers/brand-pilot-reel-worker/src/index.ts",
@@ -196,6 +197,22 @@ function checkAssemblerIntegration(files, violations) {
   }
 }
 
+function checkV2OnlyCustomerWriters(files, violations) {
+  const server = files.get(HTTP_SERVER_FILE) ?? "";
+  const forbidden = [
+    /repository\.createAiContentAnalysis\s*\(/,
+    /repository\.updateAiContentDraft\s*\(/,
+    /repository\.startAiContentGeneration\s*\(/,
+    /requireContentProposalCustomerRepository\(repository\)\.createAiContentProposalBatch\s*\(/,
+  ];
+  if (forbidden.some((pattern) => pattern.test(server))) {
+    violations.push(violation("legacy_customer_content_writer", HTTP_SERVER_FILE, "customer writes must use Proposal V2 selection and Generation V3 start only"));
+  }
+  if (!/content-orchestration\.v2/.test(server) || !/content-generation-start\.v2/.test(server)) {
+    violations.push(violation("missing_v2_customer_content_writer", HTTP_SERVER_FILE, "exact Proposal V2 and Generation V3-start contracts are required"));
+  }
+}
+
 function checkActiveV3Readers(files, violations) {
   const repository = files.get(REPOSITORY_FILE) ?? "";
   if (!/ai-content\.v3/.test(repository)) {
@@ -232,6 +249,7 @@ export async function inspectThreeFormatCutover(rootDirectory) {
   checkGenerateOnlyPlannerWorkers(files, violations);
   checkCatalogAndPromptBranches(files, violations);
   checkAssemblerIntegration(files, violations);
+  checkV2OnlyCustomerWriters(files, violations);
   checkActiveV3Readers(files, violations);
   const uniqueViolations = [...new Map(
     violations.map((item) => [`${item.id}:${item.file}:${item.detail}`, item]),

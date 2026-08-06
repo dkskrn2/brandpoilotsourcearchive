@@ -41,7 +41,12 @@ const baseline = Object.freeze({
   "apps/api/src/aiContentDownload.ts": `const sql = \`select generation.output_format from ai_content_generations generation\`;`,
   "apps/api/src/aiContentPublish.ts": `const sql = \`select generation.output_format from ai_content_generations generation\`;`,
   "apps/api/src/aiContentPlanContracts.ts": `export const plans = ["card-news-plan.v2", "blog-plan.v2", "reel-plan.v2"];`,
-  "apps/api/src/httpServer.ts": `app.post("/worker/ai-content-jobs/reel/claim", claimReelJob); const workerId = "reel-worker";`,
+  "apps/api/src/httpServer.ts": `
+    app.post("/worker/ai-content-jobs/reel/claim", claimReelJob);
+    const workerId = "reel-worker";
+    const proposalContract = "content-orchestration.v2";
+    const startContract = "content-generation-start.v2";
+  `,
   "workers/brand-pilot-worker-runtime/src/aiContentV3.ts": `export const formats = ["card_news", "blog", "reel"]; export const manifest = "ai-content.v3";`,
   "workers/brand-pilot-card-news-worker/src/promptBuilder.ts": `const branch = purpose === "informational" ? informationalPrompt : purpose === "marketing" ? marketingPrompt : fail();`,
   "workers/brand-pilot-card-news-worker/src/contracts.ts": `export const jobType = "generate"; export const outputFormat = "card_news";`,
@@ -112,6 +117,8 @@ const violationFixtures = [
   ["legacy_pipeline_contract", "workers/brand-pilot-blog-worker/src/worker.ts", "const version = 'content-generation-input.v2'"],
   ["legacy_planner_worker_execution", "workers/brand-pilot-card-news-worker/src/contracts.ts", "type Job = { contentType: string };"],
   ["legacy_planner_worker_execution", "workers/brand-pilot-blog-worker/src/worker.ts", "if (job.jobType === 'analyze') run();"],
+  ["legacy_customer_content_writer", "apps/api/src/httpServer.ts", `${baseline["apps/api/src/httpServer.ts"]}\nrepository.startAiContentGeneration(input);`],
+  ["missing_v2_customer_content_writer", "apps/api/src/httpServer.ts", "app.post('/worker/ai-content-jobs/reel/claim', claimReelJob);"],
   ["missing_terra_format_model:blog", "packages/brand-pilot-content-contracts/src/catalog.ts", baseline["packages/brand-pilot-content-contracts/src/catalog.ts"].replace('blog: { model: "gpt-5.6-terra" }', 'blog: { model: "gpt-5.6-sol" }')],
   ["missing_prompt_binding_catalog_lookup", "packages/brand-pilot-content-contracts/src/binding.ts", "export function promptBindingFor() { return {}; }"],
   ["missing_purpose_prompt_branch:reel", "workers/brand-pilot-reel-worker/src/promptBuilder.ts", "const prompt = informationalPrompt;"],
