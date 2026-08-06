@@ -76,7 +76,7 @@ describe("parseWorkerManifest", () => {
     expect(result.validation).toEqual({ passed: true });
   });
 
-  it("keeps legacy Reel parsing at exactly one image while building a 1-5 scene V2 manifest", () => {
+  it("keeps legacy Reel parsing at exactly one image while building a 1-5 scene V3 manifest", () => {
     expect(() => parseWorkerManifest(reel(2))).toThrow("reel_asset_count_invalid");
     const manifest = buildAiContentReelManifest({
       purpose: "marketing",
@@ -86,7 +86,7 @@ describe("parseWorkerManifest", () => {
       content: { caption: "Caption", hashtags: ["#one"], cta: "CTA" }
     });
     expect(manifest).toMatchObject({
-      version: "ai-content.v2", type: "marketing", outputFormat: "reel",
+      version: "ai-content.v3", outputFormat: "reel",
       assets: [
         { role: "scene", index: 1 },
         { role: "scene", index: 2 },

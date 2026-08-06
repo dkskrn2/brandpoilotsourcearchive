@@ -6,6 +6,7 @@ export interface ClaimedImageJob {
   payload: Record<string, unknown>;
 }
 
+import type { AiContentManifestV3 } from "@brand-pilot/content-contracts";
 import {
   parseWorkerManifest,
   WorkerManifestValidationError,
@@ -26,7 +27,7 @@ import type {
   AiContentRenderClient,
   AiContentRenderedAsset,
 } from "./aiContentRenderClient.js";
-import { AiContentFinalizerError, type AiContentManifestV2 } from "./aiContentFinalizer.js";
+import { AiContentFinalizerError } from "./aiContentFinalizer.js";
 
 export interface RenderedImage {
   index: number;
@@ -95,7 +96,7 @@ export interface AiContentAssetStorage {
   uploadAsset(input: LocallyRenderedAiContentAsset & { path: string }): Promise<AiContentRenderedAsset>;
 }
 
-type AiContentFinalizer = (job: AiContentPackageFinalizeJob, signal: AbortSignal) => Promise<{ manifest: AiContentManifestV2; manifestUrl: string }>;
+type AiContentFinalizer = (job: AiContentPackageFinalizeJob, signal: AbortSignal) => Promise<{ manifest: AiContentManifestV3; manifestUrl: string }>;
 
 class AiContentLeaseLostError extends Error {
   constructor() { super("ai_content_render_job_lease_lost"); }

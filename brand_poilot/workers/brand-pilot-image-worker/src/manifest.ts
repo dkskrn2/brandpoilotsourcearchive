@@ -1,4 +1,8 @@
 import type { InstagramDeliveryFormat, WorkerPromptVersion } from "./promptBuilder.js";
+import {
+  parseAiContentManifestV3,
+  type AiContentManifestV3,
+} from "@brand-pilot/content-contracts";
 
 export interface WorkerManifestAsset {
   index: number;
@@ -54,23 +58,13 @@ export class WorkerManifestValidationError extends Error {
   }
 }
 
-export interface AiContentReelManifestV2 {
-  version: "ai-content.v2";
-  type: "marketing";
-  purpose: "informational" | "marketing";
-  outputFormat: "reel";
-  title: string;
-  assets: Array<Record<string, unknown>>;
-  content: Record<string, unknown>;
-}
-
 export function buildAiContentReelManifest(input: {
   purpose: "informational" | "marketing";
   title: string;
   scenes: Array<{ index: number; url: string; width: number; height: number }>;
   video: { url: string; width: number; height: number; durationSeconds: number };
   content: Record<string, unknown>;
-}): AiContentReelManifestV2 {
+}): AiContentManifestV3 {
   if (!input.title.trim() || input.scenes.length < 1 || input.scenes.length > 5) throw new Error("ai_content_reel_manifest_invalid");
   input.scenes.forEach((scene, offset) => {
     let url: URL;
@@ -84,9 +78,8 @@ export function buildAiContentReelManifest(input: {
   if (videoUrl.protocol !== "https:" || input.video.width * 16 !== input.video.height * 9 || Math.abs(input.video.durationSeconds - input.scenes.length * 4) > 1 / 30) {
     throw new Error("ai_content_reel_manifest_invalid");
   }
-  return {
-    version: "ai-content.v2",
-    type: "marketing",
+  return parseAiContentManifestV3({
+    version: "ai-content.v3",
     purpose: input.purpose,
     outputFormat: "reel",
     title: input.title.trim(),
@@ -94,8 +87,8 @@ export function buildAiContentReelManifest(input: {
       ...input.scenes.map((scene) => ({ role: "scene", index: scene.index, url: scene.url, fileName: `scene-${String(scene.index).padStart(2, "0")}.png`, mimeType: "image/png", width: scene.width, height: scene.height })),
       { role: "video", index: 1, url: input.video.url, fileName: "reel.mp4", mimeType: "video/mp4", width: input.video.width, height: input.video.height, durationSeconds: input.video.durationSeconds, videoCodec: "h264", fps: 30, audioCodec: null }
     ],
-    content: input.content
-  };
+    content: input.content,
+  });
 }
 
 function invalid(code: string): never {
