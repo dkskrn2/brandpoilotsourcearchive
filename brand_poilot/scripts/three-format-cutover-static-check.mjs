@@ -28,7 +28,13 @@ const NEW_PIPELINE_FILES = Object.freeze([
   "apps/api/src/aiContentRenderJobs.ts",
   "workers/brand-pilot-worker-runtime/src/aiContentV3.ts",
   "workers/brand-pilot-card-news-worker/src/promptBuilder.ts",
+  "workers/brand-pilot-card-news-worker/src/contracts.ts",
+  "workers/brand-pilot-card-news-worker/src/client.ts",
+  "workers/brand-pilot-card-news-worker/src/worker.ts",
   "workers/brand-pilot-blog-worker/src/promptBuilder.ts",
+  "workers/brand-pilot-blog-worker/src/contracts.ts",
+  "workers/brand-pilot-blog-worker/src/client.ts",
+  "workers/brand-pilot-blog-worker/src/worker.ts",
   "workers/brand-pilot-reel-worker/src/promptBuilder.ts",
   "workers/brand-pilot-reel-worker/src/contracts.ts",
   "workers/brand-pilot-image-worker/src/aiContentFinalizer.ts",
@@ -127,12 +133,31 @@ function checkLegacyClaims(files, violations) {
 }
 
 function checkLegacyPipelineContracts(files, violations) {
-  const forbidden = /marketing-plan\.v2|\bmarketing_content\b|ai-content\.v2/g;
+  const forbidden = /marketing-plan\.v2|\bmarketing_content\b|ai-content\.v2|content-generation-input\.v2/g;
   for (const file of NEW_PIPELINE_FILES) {
     if (forbidden.test(files.get(file) ?? "")) {
       violations.push(violation("legacy_pipeline_contract", file, "legacy writer/plan/finalizer contract"));
     }
     forbidden.lastIndex = 0;
+  }
+}
+
+function checkGenerateOnlyPlannerWorkers(files, violations) {
+  for (const file of [
+    "workers/brand-pilot-card-news-worker/src/contracts.ts",
+    "workers/brand-pilot-card-news-worker/src/client.ts",
+    "workers/brand-pilot-card-news-worker/src/worker.ts",
+    "workers/brand-pilot-blog-worker/src/contracts.ts",
+    "workers/brand-pilot-blog-worker/src/client.ts",
+    "workers/brand-pilot-blog-worker/src/worker.ts",
+    "workers/brand-pilot-reel-worker/src/contracts.ts",
+    "workers/brand-pilot-reel-worker/src/client.ts",
+    "workers/brand-pilot-reel-worker/src/worker.ts",
+  ]) {
+    const source = files.get(file) ?? "";
+    if (/\bcontentType\b|jobType\s*===?\s*["']analyze["']/.test(source)) {
+      violations.push(violation("legacy_planner_worker_execution", file, "content planners must be V3 generate-only workers"));
+    }
   }
 }
 
@@ -204,6 +229,7 @@ export async function inspectThreeFormatCutover(rootDirectory) {
   checkLegacySql(files, violations);
   checkLegacyClaims(files, violations);
   checkLegacyPipelineContracts(files, violations);
+  checkGenerateOnlyPlannerWorkers(files, violations);
   checkCatalogAndPromptBranches(files, violations);
   checkAssemblerIntegration(files, violations);
   checkActiveV3Readers(files, violations);
