@@ -49,6 +49,7 @@ import {
 } from "./aiContentRenderJobs.js";
 import { assertAiContentWritable, withAiContentTransactionFence } from "./aiContentMaintenance.js";
 import {
+  parseProposalBaseInputSnapshotV2 as parseCanonicalProposalBaseInputSnapshotV2,
   parseContentOrchestrationV2 as parseCanonicalContentOrchestrationV2,
   type ContentOrchestrationV2 as CanonicalContentOrchestrationV2,
 } from "@brand-pilot/content-contracts";
@@ -79,6 +80,8 @@ export interface AiContentGenerationRecord {
   workspaceId: string;
   brandId: string;
   type: AiContentType;
+  outputFormat?: ContentOutputFormatV2;
+  purpose?: ContentPurposeV2;
   title: string;
   status: string;
   currentStage: string | null;
@@ -1214,8 +1217,12 @@ function requestedDimensionsFromDraft(value: unknown) {
 }
 
 function mapGeneration(row: Record<string, unknown>): AiContentGenerationRecord {
+  const outputFormat = String(row.output_format ?? row.type) as ContentOutputFormatV2;
   return {
-    id: String(row.id), workspaceId: String(row.workspace_id), brandId: String(row.brand_id), type: row.type as AiContentType,
+    id: String(row.id), workspaceId: String(row.workspace_id), brandId: String(row.brand_id),
+    type: (outputFormat === "reel" ? "marketing" : outputFormat) as AiContentType,
+    outputFormat,
+    purpose: String(row.purpose ?? row.content_family ?? "informational") as ContentPurposeV2,
     title: String(row.title), status: String(row.status), currentStage: row.current_stage ? String(row.current_stage) : null,
     draft: object(row.draft_json), analysis: object(row.analysis_json), errorCode: row.error_code ? String(row.error_code) : null,
     errorMessage: row.error_message ? String(row.error_message) : null, createdAt: iso(row.created_at)!, updatedAt: iso(row.updated_at)!, completedAt: iso(row.completed_at),
@@ -1451,9 +1458,9 @@ async function outputsForGenerations(client: Queryable, generationIds: string[])
 
 async function scopedGeneration(client: Queryable, input: BrandGenerationScope, lock = false) {
   const result = await client.query(
-    `select id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
+    `select id, workspace_id, brand_id, output_format, purpose, title, status, current_stage, draft_json, analysis_json,
             generation_idempotency_key, subject_analysis_snapshot, generation_input_snapshot, attachments_locked_at,
-            content_family, output_format, subject_mode, product_service_id, orchestration_snapshot, avatar_snapshot,
+            subject_mode, product_service_id, orchestration_snapshot, avatar_snapshot,
             terminal_at, retryable_until, error_code, error_message, created_at, updated_at, completed_at
        from ai_content_generations
       where id = $1 and workspace_id = $2 and brand_id = $3${lock ? " for update" : ""}`,
@@ -2353,39 +2360,46 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           [input.proposalId, input.workspaceId, input.brandId, input.actorUserId],
         );
         const selected = await client.query(
-          `select proposal.id,proposal.proposal_json,proposal.generation_id,
-                  batch.content_family,batch.input_snapshot_json,
-                  research.evidence_json
+          `select proposal.id,proposal.batch_id,proposal.proposal_json,proposal.generation_id,
+                  batch.purpose,batch.input_snapshot_json
              from ai_content_proposals proposal
              join ai_content_proposal_batches batch
                on batch.id=proposal.batch_id
               and batch.workspace_id=proposal.workspace_id
               and batch.brand_id=proposal.brand_id
-             left join ai_content_proposal_research_snapshots research
-               on research.batch_id=batch.id
-              and research.workspace_id=batch.workspace_id
-              and research.brand_id=batch.brand_id
             where proposal.id=$1 and proposal.workspace_id=$2 and proposal.brand_id=$3
             for update of proposal`,
           [input.proposalId, input.workspaceId, input.brandId],
         );
         const proposal = selected.rows[0] as Record<string, unknown> | undefined;
         if (!proposal) throw new Error("ai_content_proposal_not_found");
-        const baseSnapshot = object(proposal.input_snapshot_json);
-        const isV2Selection = baseSnapshot.contractVersion === "proposal-base-input.v2"
-          || baseSnapshot.contractVersion === "proposal-input.v2";
-        const proposalInput = isV2Selection
-          ? parseProposalInputSnapshotV2(baseSnapshot.contractVersion === "proposal-input.v2"
-            ? baseSnapshot
-            : {
-              ...baseSnapshot,
-              contractVersion: "proposal-input.v2",
-              researchEvidence: proposal.evidence_json,
-            })
-          : null;
+        const baseInput = parseCanonicalProposalBaseInputSnapshotV2(proposal.input_snapshot_json);
+        const proposalJson = object(proposal.proposal_json);
+        const proposalId = String(proposal.id);
+        const proposalBatchId = String(proposal.batch_id);
+        const outputFormat = String(proposalJson.outputFormat) as ContentOutputFormatV2;
+        const purpose = String(object(proposalJson.purposeDetails).kind) as ContentPurposeV2;
+        if (proposalId !== input.proposalId
+          || outputFormat !== baseInput.outputSettings.outputFormat
+          || purpose !== baseInput.outputSettings.purpose
+          || purpose !== proposal.purpose) {
+          throw new Error("ai_content_proposal_selection_conflict");
+        }
+        const expectedDraft = {
+          origin: "proposal-v2",
+          proposalBatchId,
+          proposalId,
+          finalization: {
+            contractVersion: "content-finalization-draft.v2",
+            avatarStyleImageId: null,
+            userImageInstruction: null,
+            attachmentIds: [],
+          },
+        };
+        const selectionIdentity = `proposal-v2:${proposalBatchId}:${proposalId}:${input.idempotencyKey}`;
         if (proposal.generation_id) {
           const linked = await client.query(
-            `select id,workspace_id,brand_id,type,title,status,current_stage,draft_json,analysis_json,
+            `select id,workspace_id,brand_id,output_format,purpose,title,status,current_stage,draft_json,analysis_json,
                     analysis_idempotency_key,attachments_locked_at,terminal_at,retryable_until,
                     error_code,error_message,created_at,updated_at,completed_at
                from ai_content_generations
@@ -2394,151 +2408,41 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             [proposal.generation_id, input.workspaceId, input.brandId],
           );
           const existing = linked.rows[0] as Record<string, unknown> | undefined;
-          const existingDraft = object(existing?.draft_json);
           if (!existing
             || existing.status !== "draft"
-            || existing.analysis_idempotency_key !== `proposal:${input.proposalId}:${input.idempotencyKey}`
-            || (existingDraft.origin !== "proposal" && existingDraft.origin !== "proposal-v2")
-            || existingDraft.proposalId !== input.proposalId) {
+            || existing.analysis_idempotency_key !== selectionIdentity
+            || existing.output_format !== outputFormat
+            || existing.purpose !== purpose
+            || !isDeepStrictEqual(object(existing.draft_json), expectedDraft)) {
             throw new Error("ai_content_proposal_selection_conflict");
           }
           await client.query("COMMIT");
           return mapGeneration(existing);
         }
-        const proposalJson = object(proposal.proposal_json);
-        const outputFormat = String(proposalJson.outputFormat ?? "blog");
-        const type: AiContentType = outputFormat === "card_news"
-          ? "card_news"
-          : outputFormat === "blog"
-            ? "blog"
-            : "marketing";
         const generationId = randomUUID();
-        const approvedVersionId = randomUUID();
-        const approvedAt = new Date().toISOString();
-        const approvedSnapshot = {
-          contractVersion: "approved-proposal.v1",
-          sourceProposalId: input.proposalId,
-          revision: 1,
-          effectiveProposal: proposalJson,
-          editPatch: [],
-          validationResultId: `proposal-selection:${input.idempotencyKey}`,
-          approvedBy: input.actorUserId,
-          approvedAt,
-        };
         const created = await client.query(
           `insert into ai_content_generations (
-             id,workspace_id,brand_id,type,title,status,current_stage,draft_json,
-             analysis_json,analysis_idempotency_key,content_family,output_format,subject_mode,
+             id,workspace_id,brand_id,title,status,current_stage,draft_json,
+             analysis_json,analysis_idempotency_key,purpose,output_format,subject_mode,
              product_service_id,created_by_user_id,updated_by_user_id
-           ) values ($1,$2,$3,$4,$5,'draft','draft',$6::jsonb,'{}',$7,$8,$9,$10,$11,$12,$12)
-           returning id,workspace_id,brand_id,type,title,status,current_stage,draft_json,analysis_json,
+           ) values ($1,$2,$3,$4,'draft','draft',$5::jsonb,'{}',$6,$7,$8,$9,$10,$11,$11)
+           returning id,workspace_id,brand_id,output_format,purpose,title,status,current_stage,draft_json,analysis_json,
                      attachments_locked_at,terminal_at,retryable_until,error_code,error_message,
                      created_at,updated_at,completed_at`,
           [
             generationId,
             input.workspaceId,
             input.brandId,
-            type,
             String(proposalJson.title ?? "콘텐츠 제안"),
-            JSON.stringify({
-              origin: isV2Selection ? "proposal-v2" : "proposal",
-              proposalId: input.proposalId,
-              approvedProposalVersionId: approvedVersionId,
-              ...(isV2Selection ? {
-                finalization: {
-                  contractVersion: "content-finalization-draft.v2",
-                  avatarStyleImageId: null,
-                  userImageInstruction: null,
-                  attachmentIds: [],
-                },
-              } : {}),
-            }),
-            `proposal:${input.proposalId}:${input.idempotencyKey}`,
-            proposal.content_family,
+            JSON.stringify(expectedDraft),
+            selectionIdentity,
+            purpose,
             outputFormat,
             null,
             null,
             input.actorUserId,
           ],
         );
-        await client.query(
-          `insert into ai_content_approved_proposal_versions (
-             id,workspace_id,brand_id,proposal_id,revision,approved_proposal_snapshot,
-             validation_result_id,approved_by_user_id,approved_at
-           ) values ($1,$2,$3,$4,1,$5::jsonb,$6,$7,$8::timestamptz)`,
-          [
-            approvedVersionId,
-            input.workspaceId,
-            input.brandId,
-            input.proposalId,
-            JSON.stringify(approvedSnapshot),
-            approvedSnapshot.validationResultId,
-            input.actorUserId,
-            approvedAt,
-          ],
-        );
-        if (proposalInput) {
-          const referenceIds = proposalInput.references.map((reference) => reference.referenceItemId);
-          const snapshotIds = proposalInput.references.map((reference) => reference.snapshotId);
-          const canonical = referenceIds.length === 0
-            ? { rows: [], rowCount: 0 }
-            : await client.query(
-              `select requested.reference_item_id,requested.reference_snapshot_id,
-                      snapshot.snapshot_json,pattern.id pattern_version_id
-                 from unnest($3::uuid[],$4::uuid[]) with ordinality
-                      as requested(reference_item_id,reference_snapshot_id,position)
-                 join reference_items item
-                   on item.id=requested.reference_item_id
-                  and item.workspace_id=$1 and item.brand_id=$2
-                  and item.archived_at is null
-                 join reference_snapshots snapshot
-                   on snapshot.id=requested.reference_snapshot_id
-                  and snapshot.reference_item_id=requested.reference_item_id
-                  and snapshot.workspace_id=$1 and snapshot.brand_id=$2
-                 join lateral (
-                   select version.id
-                     from reference_pattern_versions version
-                    where version.reference_item_id=snapshot.reference_item_id
-                      and version.reference_snapshot_id=snapshot.id
-                      and version.workspace_id=snapshot.workspace_id
-                      and version.brand_id=snapshot.brand_id
-                    order by version.version desc
-                    limit 1
-                 ) pattern on true
-                where snapshot.snapshot_json #>> '{permittedUse,modelInput}'='true'
-                  and snapshot.snapshot_json #>> '{permittedUse,derivativeInspiration}'='true'
-                order by requested.position`,
-              [input.workspaceId, input.brandId, referenceIds, snapshotIds],
-            );
-          if (canonical.rows.length !== proposalInput.references.length) {
-            throw new Error("RESOURCE_NOT_AVAILABLE");
-          }
-          const byItemId = new Map(canonical.rows.map((row) => [String(row.reference_item_id), row]));
-          for (const [index, reference] of proposalInput.references.entries()) {
-            const row = byItemId.get(reference.referenceItemId) as Record<string, unknown> | undefined;
-            if (!row || String(row.reference_snapshot_id) !== reference.snapshotId) {
-              throw new Error("RESOURCE_NOT_AVAILABLE");
-            }
-            await client.query(
-              `insert into ai_content_generation_references (
-                 generation_id,reference_id,workspace_id,brand_id,position,reference_snapshot_json,
-                 reference_item_id,reference_snapshot_id,pattern_version_id,roles_json
-               ) values ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb)`,
-              [
-                generationId,
-                reference.referenceItemId,
-                input.workspaceId,
-                input.brandId,
-                index + 1,
-                JSON.stringify(row.snapshot_json),
-                reference.referenceItemId,
-                reference.snapshotId,
-                String(row.pattern_version_id),
-                JSON.stringify(reference.roles),
-              ],
-            );
-          }
-        }
         await client.query(
           `update ai_content_proposals
               set generation_id=$2,updated_at=now()

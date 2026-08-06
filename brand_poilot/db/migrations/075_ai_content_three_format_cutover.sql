@@ -1570,6 +1570,212 @@ alter table ai_content_proposals
   add constraint ai_content_proposals_successful_binding_scope_unique
     unique(id,generation_id,successful_model_attempt_id,successful_proposal_job_id,final_invocation_ordinal,workspace_id,brand_id);
 
+create or replace function public.select_ai_content_proposal(
+  target_proposal_id uuid,
+  target_workspace_id uuid,
+  target_brand_id uuid,
+  actor_user_id uuid
+)
+returns uuid
+language plpgsql
+security definer
+set search_path=pg_catalog,public,pg_temp
+as $$
+declare
+  target_batch_id uuid;
+  target_status text;
+  stored_attempt_id uuid;
+  stored_job_id uuid;
+  stored_invocation_ordinal integer;
+  already_selected_id uuid;
+  success_count integer;
+  success_attempt_id uuid;
+  success_job_id uuid;
+  success_invocation_ordinal integer;
+  locked_attempt_id uuid;
+  locked_job_id uuid;
+  locked_invocation_ordinal integer;
+begin
+  if not public.ai_content_actor_is_active(target_workspace_id, actor_user_id) then
+    raise exception using errcode = '42501', message = 'proposal_selection_actor_forbidden';
+  end if;
+
+  select proposal.batch_id
+    into target_batch_id
+    from public.ai_content_proposals proposal
+   where proposal.id = target_proposal_id
+     and proposal.workspace_id = target_workspace_id
+     and proposal.brand_id = target_brand_id;
+  if target_batch_id is null then
+    raise exception using errcode = 'P0002', message = 'proposal_not_found';
+  end if;
+
+  select count(*)::integer,
+         (array_agg(attempt.id order by event.created_at, event.id))[1],
+         (array_agg(job.id order by event.created_at, event.id))[1],
+         (array_agg(event.invocation_ordinal order by event.created_at, event.id))[1]
+    into success_count, success_attempt_id, success_job_id, success_invocation_ordinal
+    from public.ai_content_proposal_jobs job
+    join public.ai_content_proposal_model_attempts attempt
+      on attempt.job_id = job.id
+     and attempt.workspace_id = job.workspace_id
+     and attempt.brand_id = job.brand_id
+    join public.ai_content_proposal_attempt_events event
+      on event.model_attempt_id = attempt.id
+     and event.job_id = attempt.job_id
+     and event.workspace_id = attempt.workspace_id
+     and event.brand_id = attempt.brand_id
+   where job.batch_id = target_batch_id
+     and job.workspace_id = target_workspace_id
+     and job.brand_id = target_brand_id
+     and job.status = 'completed'
+     and event.event_type = 'attempt_succeeded'
+     and event.parser_valid is true
+     and event.invocation_ordinal between 1 and 2;
+
+  if success_count = 0 then
+    raise exception using errcode = '23514', message = 'proposal_success_attempt_missing';
+  end if;
+  if success_count <> 1 then
+    raise exception using errcode = '23514', message = 'proposal_success_attempt_ambiguous';
+  end if;
+  locked_attempt_id := success_attempt_id;
+  locked_job_id := success_job_id;
+  locked_invocation_ordinal := success_invocation_ordinal;
+
+  perform 1
+    from public.ai_content_proposal_model_attempts attempt
+   where attempt.id = success_attempt_id
+     and attempt.job_id = success_job_id
+     and attempt.workspace_id = target_workspace_id
+     and attempt.brand_id = target_brand_id
+   for update;
+  if not found then
+    raise exception using errcode = '23514', message = 'proposal_success_attempt_mismatch';
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended(success_job_id::text,0));
+  perform 1
+    from public.ai_content_proposal_jobs job
+   where job.id = success_job_id
+     and job.batch_id = target_batch_id
+     and job.workspace_id = target_workspace_id
+     and job.brand_id = target_brand_id
+     and job.status = 'completed'
+   for update;
+  if not found then
+    raise exception using errcode = '23514', message = 'proposal_success_attempt_mismatch';
+  end if;
+  perform 1
+    from public.ai_content_proposal_batches batch
+   where batch.id = target_batch_id
+     and batch.workspace_id = target_workspace_id
+     and batch.brand_id = target_brand_id
+     and batch.status = 'ready'
+   for update;
+  if not found then
+    raise exception using errcode = '23514', message = 'proposal_batch_not_ready';
+  end if;
+
+  select proposal.status,
+         proposal.successful_model_attempt_id,
+         proposal.successful_proposal_job_id,
+         proposal.final_invocation_ordinal
+    into target_status, stored_attempt_id, stored_job_id, stored_invocation_ordinal
+    from public.ai_content_proposals proposal
+   where proposal.id = target_proposal_id
+     and proposal.batch_id = target_batch_id
+     and proposal.workspace_id = target_workspace_id
+     and proposal.brand_id = target_brand_id
+   for update;
+  if not found then
+    raise exception using errcode = 'P0002', message = 'proposal_not_found';
+  end if;
+
+  select proposal.id
+    into already_selected_id
+    from public.ai_content_proposals proposal
+   where proposal.batch_id = target_batch_id
+     and proposal.status = 'selected'
+   limit 1;
+  if already_selected_id is not null and already_selected_id <> target_proposal_id then
+    raise exception using errcode = '23505', message = 'proposal_already_selected';
+  end if;
+  if target_status not in ('suggested', 'selected') then
+    raise exception using errcode = '23514', message = 'proposal_not_selectable';
+  end if;
+
+  select count(*)::integer,
+         (array_agg(attempt.id order by event.created_at, event.id))[1],
+         (array_agg(job.id order by event.created_at, event.id))[1],
+         (array_agg(event.invocation_ordinal order by event.created_at, event.id))[1]
+    into success_count, success_attempt_id, success_job_id, success_invocation_ordinal
+    from public.ai_content_proposal_jobs job
+    join public.ai_content_proposal_model_attempts attempt
+      on attempt.job_id = job.id
+     and attempt.workspace_id = job.workspace_id
+     and attempt.brand_id = job.brand_id
+    join public.ai_content_proposal_attempt_events event
+      on event.model_attempt_id = attempt.id
+     and event.job_id = attempt.job_id
+     and event.workspace_id = attempt.workspace_id
+     and event.brand_id = attempt.brand_id
+   where job.batch_id = target_batch_id
+     and job.workspace_id = target_workspace_id
+     and job.brand_id = target_brand_id
+     and job.status = 'completed'
+     and event.event_type = 'attempt_succeeded'
+     and event.parser_valid is true
+     and event.invocation_ordinal between 1 and 2;
+  if success_count = 0 then
+    raise exception using errcode = '23514', message = 'proposal_success_attempt_missing';
+  end if;
+  if success_count <> 1 then
+    raise exception using errcode = '23514', message = 'proposal_success_attempt_ambiguous';
+  end if;
+  if success_attempt_id is distinct from locked_attempt_id
+     or success_job_id is distinct from locked_job_id
+     or success_invocation_ordinal is distinct from locked_invocation_ordinal then
+    raise exception using errcode = '23514', message = 'proposal_success_attempt_mismatch';
+  end if;
+
+  if target_status = 'selected' then
+    if stored_attempt_id is distinct from success_attempt_id
+       or stored_job_id is distinct from success_job_id
+       or stored_invocation_ordinal is distinct from success_invocation_ordinal then
+      raise exception using errcode = '23514', message = 'proposal_success_attempt_mismatch';
+    end if;
+    return target_proposal_id;
+  end if;
+
+  if stored_attempt_id is not null
+     or stored_job_id is not null
+     or stored_invocation_ordinal is not null then
+    raise exception using errcode = '23514', message = 'proposal_success_attempt_mismatch';
+  end if;
+
+  update public.ai_content_proposals
+     set status = 'dismissed',
+         dismissed_by_user_id = actor_user_id,
+         dismissed_at = now(),
+         updated_at = now()
+   where batch_id = target_batch_id
+     and id <> target_proposal_id
+     and status = 'suggested';
+
+  update public.ai_content_proposals
+     set status = 'selected',
+         successful_model_attempt_id = success_attempt_id,
+         successful_proposal_job_id = success_job_id,
+         final_invocation_ordinal = success_invocation_ordinal,
+         selected_by_user_id = actor_user_id,
+         selected_at = now(),
+         updated_at = now()
+   where id = target_proposal_id;
+
+  return target_proposal_id;
+end;
+$$;
+
 create function enforce_ai_content_proposal_success_event() returns trigger
 language plpgsql security definer set search_path=pg_catalog,public,pg_temp as $$
 declare proposal public.ai_content_proposals%rowtype;

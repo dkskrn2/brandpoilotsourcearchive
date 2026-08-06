@@ -903,10 +903,16 @@ describe("AI content repository", () => {
         if (query.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
         if (query.includes("select select_ai_content_proposal")) return { rows: [{ selected: params[0] }], rowCount: 1 };
         if (query.includes("from ai_content_proposals proposal") && query.includes("join ai_content_proposal_batches")) {
-          return { rows: [{ id: params[0], proposal_json: { title: "선택 제안", outputFormat: "blog" }, content_family: "informational" }], rowCount: 1 };
+          return { rows: [{
+            id: params[0], batch_id: "71000000-0000-4000-8000-000000000007",
+            proposal_json: {
+              title: "선택 제안", outputFormat: "card_news",
+              purposeDetails: { kind: "informational" },
+            },
+            purpose: "informational", input_snapshot_json: proposalBaseInputV2,
+          }], rowCount: 1 };
         }
         if (query.includes("insert into ai_content_generations")) return { rows: [row("generation-1", "draft")], rowCount: 1 };
-        if (query.includes("insert into ai_content_approved_proposal_versions")) return { rows: [{ id: "approved-1" }], rowCount: 1 };
         if (query.includes("update ai_content_proposals")) return { rows: [], rowCount: 1 };
         return { rows: [], rowCount: 0 };
       }),
@@ -923,19 +929,29 @@ describe("AI content repository", () => {
 
     expect(selected.status).toBe("draft");
     expect(statements.map(({ sql }) => sql).join("\n")).toContain("select_ai_content_proposal");
-    expect(statements.map(({ sql }) => sql).join("\n")).toContain("insert into ai_content_approved_proposal_versions");
+    expect(statements.map(({ sql }) => sql).join("\n")).not.toContain("ai_content_approved_proposal_versions");
+    expect(statements.map(({ sql }) => sql).join("\n")).not.toContain("ai_content_generation_references");
     const generationInsert = statements.find(({ sql }) => sql.includes("insert into ai_content_generations"));
-    expect(generationInsert?.sql).not.toContain("'brand_topic'");
+    expect(generationInsert?.sql).not.toMatch(/\btype\b|content_family/);
     expect(generationInsert?.params.slice(-3)).toEqual([null, null, "10000000-0000-4000-8000-000000000001"]);
   });
 
   it("returns an existing linked draft only for the same locked idempotent selection", async () => {
     const statements: string[] = [];
     const proposalId = "70000000-0000-4000-8000-000000000007";
+    const batchId = "71000000-0000-4000-8000-000000000007";
     const existing = {
       ...row("generation-1", "draft"),
-      analysis_idempotency_key: `proposal:${proposalId}:select-1`,
-      draft_json: { origin: "proposal", proposalId },
+      output_format: "card_news",
+      purpose: "informational",
+      analysis_idempotency_key: `proposal-v2:${batchId}:${proposalId}:select-1`,
+      draft_json: {
+        origin: "proposal-v2", proposalBatchId: batchId, proposalId,
+        finalization: {
+          contractVersion: "content-finalization-draft.v2", avatarStyleImageId: null,
+          userImageInstruction: null, attachmentIds: [],
+        },
+      },
     };
     const client = {
       query: vi.fn(async (sql: string, params: unknown[] = []) => {
@@ -947,9 +963,11 @@ describe("AI content repository", () => {
           return {
             rows: [{
               id: proposalId,
-              proposal_json: { title: "선택 제안", outputFormat: "blog" },
+              batch_id: batchId,
+              proposal_json: { title: "선택 제안", outputFormat: "card_news", purposeDetails: { kind: "informational" } },
               generation_id: "generation-1",
-              content_family: "informational",
+              purpose: "informational",
+              input_snapshot_json: proposalBaseInputV2,
             }],
             rowCount: 1,
           };
@@ -971,15 +989,24 @@ describe("AI content repository", () => {
   });
 
   it.each([
-    ["different selection key", "draft", "proposal:70000000-0000-4000-8000-000000000007:other-key", "70000000-0000-4000-8000-000000000007"],
-    ["different proposal", "draft", "proposal:80000000-0000-4000-8000-000000000008:select-1", "80000000-0000-4000-8000-000000000008"],
-    ["failed generation", "failed", "proposal:70000000-0000-4000-8000-000000000007:select-1", "70000000-0000-4000-8000-000000000007"],
+    ["different selection key", "draft", "proposal-v2:71000000-0000-4000-8000-000000000007:70000000-0000-4000-8000-000000000007:other-key", "70000000-0000-4000-8000-000000000007"],
+    ["different proposal", "draft", "proposal-v2:71000000-0000-4000-8000-000000000007:80000000-0000-4000-8000-000000000008:select-1", "80000000-0000-4000-8000-000000000008"],
+    ["failed generation", "failed", "proposal-v2:71000000-0000-4000-8000-000000000007:70000000-0000-4000-8000-000000000007:select-1", "70000000-0000-4000-8000-000000000007"],
   ])("rejects an existing linked generation for a %s", async (_label, status, identity, draftProposalId) => {
     const proposalId = "70000000-0000-4000-8000-000000000007";
+    const batchId = "71000000-0000-4000-8000-000000000007";
     const existing = {
       ...row("generation-1", status),
+      output_format: "card_news",
+      purpose: "informational",
       analysis_idempotency_key: identity,
-      draft_json: { origin: "proposal", proposalId: draftProposalId },
+      draft_json: {
+        origin: "proposal-v2", proposalBatchId: batchId, proposalId: draftProposalId,
+        finalization: {
+          contractVersion: "content-finalization-draft.v2", avatarStyleImageId: null,
+          userImageInstruction: null, attachmentIds: [],
+        },
+      },
     };
     const client = {
       query: vi.fn(async (sql: string, params: unknown[] = []) => {
@@ -990,9 +1017,11 @@ describe("AI content repository", () => {
           return {
             rows: [{
               id: proposalId,
-              proposal_json: { title: "선택 제안", outputFormat: "blog" },
+              batch_id: batchId,
+              proposal_json: { title: "선택 제안", outputFormat: "card_news", purposeDetails: { kind: "informational" } },
               generation_id: "generation-1",
-              content_family: "informational",
+              purpose: "informational",
+              input_snapshot_json: proposalBaseInputV2,
             }],
             rowCount: 1,
           };
@@ -3729,7 +3758,7 @@ describe("AI content V2 proposal batch persistence", () => {
 });
 
 describe("AI content V2 proposal selection sealing", () => {
-  it("seals the selected proposal and copies the batch reference lineage in exact order", async () => {
+  it("creates only the exact V2 draft and defers all immutable input copies until start", async () => {
     const referenceA = "70000000-0000-4000-8000-000000000007";
     const referenceB = "70000000-0000-4000-8000-000000000008";
     const snapshotA = "71000000-0000-4000-8000-000000000007";
@@ -3819,18 +3848,12 @@ describe("AI content V2 proposal selection sealing", () => {
         if (sql.includes("select select_ai_content_proposal")) return { rows: [{ selected: params[0] }], rowCount: 1 };
         if (sql.includes("from ai_content_proposals proposal") && sql.includes("join ai_content_proposal_batches")) {
           return { rows: [{
-            id: params[0], proposal_json: proposalJson, generation_id: null,
-            content_family: "informational", input_snapshot_json: inputSnapshot,
-            evidence_json: evidence,
+            id: params[0], batch_id: "75000000-0000-4000-8000-000000000007",
+            proposal_json: proposalJson, generation_id: null,
+            purpose: "informational", input_snapshot_json: inputSnapshot,
           }], rowCount: 1 };
         }
-        if (sql.includes("join reference_snapshots snapshot")) return { rows: [
-          { reference_item_id: referenceA, reference_snapshot_id: snapshotA, pattern_version_id: patternA, snapshot_json: canonical(referenceA, snapshotA) },
-          { reference_item_id: referenceB, reference_snapshot_id: snapshotB, pattern_version_id: patternB, snapshot_json: canonical(referenceB, snapshotB) },
-        ], rowCount: 2 };
         if (sql.includes("insert into ai_content_generations")) return { rows: [row("generation-1", "draft")], rowCount: 1 };
-        if (sql.includes("insert into ai_content_approved_proposal_versions")) return { rows: [], rowCount: 1 };
-        if (sql.includes("insert into ai_content_generation_references")) return { rows: [], rowCount: 1 };
         if (sql.includes("update ai_content_proposals")) return { rows: [], rowCount: 1 };
         return { rows: [], rowCount: 0 };
       }),
@@ -3846,15 +3869,22 @@ describe("AI content V2 proposal selection sealing", () => {
 
     const selectedRead = statements.find(({ sql }) => sql.includes("from ai_content_proposals proposal") && sql.includes("join ai_content_proposal_batches"))!;
     expect(selectedRead.sql).toContain("input_snapshot_json");
-    expect(selectedRead.sql).toContain("ai_content_proposal_research_snapshots");
-    const referenceInserts = statements.filter(({ sql }) => sql.includes("insert into ai_content_generation_references"));
-    expect(referenceInserts).toHaveLength(2);
-    expect(referenceInserts.map(({ params }) => params.slice(4))).toEqual([
-      [1, JSON.stringify(canonical(referenceB, snapshotB)), referenceB, snapshotB, patternB, JSON.stringify(["copy_pattern"])],
-      [2, JSON.stringify(canonical(referenceA, snapshotA)), referenceA, snapshotA, patternA, JSON.stringify(["planning", "visual_composition"])],
-    ]);
-    expect(referenceInserts[0]!.params[5]).toBe(JSON.stringify(canonical(referenceB, snapshotB)));
-    expect(referenceInserts[1]!.params[5]).toBe(JSON.stringify(canonical(referenceA, snapshotA)));
+    expect(selectedRead.sql).not.toContain("ai_content_proposal_research_snapshots");
+    const allSql = statements.map(({ sql }) => sql).join("\n");
+    expect(allSql).not.toContain("ai_content_approved_proposal_versions");
+    expect(allSql).not.toContain("ai_content_generation_references");
+    const generationInsert = statements.find(({ sql }) => sql.includes("insert into ai_content_generations"))!;
+    expect(JSON.parse(String(generationInsert.params[4]))).toEqual({
+      origin: "proposal-v2",
+      proposalBatchId: "75000000-0000-4000-8000-000000000007",
+      proposalId: "74000000-0000-4000-8000-000000000007",
+      finalization: {
+        contractVersion: "content-finalization-draft.v2",
+        avatarStyleImageId: null,
+        userImageInstruction: null,
+        attachmentIds: [],
+      },
+    });
   });
 });
 
