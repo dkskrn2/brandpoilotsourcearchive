@@ -2373,7 +2373,10 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         );
         const proposal = selected.rows[0] as Record<string, unknown> | undefined;
         if (!proposal) throw new Error("ai_content_proposal_not_found");
-        const baseInput = parseCanonicalProposalBaseInputSnapshotV2(proposal.input_snapshot_json);
+        const batchInputSnapshot = object(proposal.input_snapshot_json);
+        const baseInput = parseCanonicalProposalBaseInputSnapshotV2(
+          batchInputSnapshot.baseInput ?? batchInputSnapshot,
+        );
         const proposalJson = object(proposal.proposal_json);
         const proposalId = String(proposal.id);
         const proposalBatchId = String(proposal.batch_id);

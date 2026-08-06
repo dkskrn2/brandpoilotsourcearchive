@@ -3850,7 +3850,11 @@ describe("AI content V2 proposal selection sealing", () => {
           return { rows: [{
             id: params[0], batch_id: "75000000-0000-4000-8000-000000000007",
             proposal_json: proposalJson, generation_id: null,
-            purpose: "informational", input_snapshot_json: inputSnapshot,
+            purpose: "informational", input_snapshot_json: {
+              replayFingerprint: "f".repeat(64),
+              baseInput: inputSnapshot,
+              resumeInput: { contractVersion: "content-orchestration.v2" },
+            },
           }], rowCount: 1 };
         }
         if (sql.includes("insert into ai_content_generations")) return { rows: [row("generation-1", "draft")], rowCount: 1 };
