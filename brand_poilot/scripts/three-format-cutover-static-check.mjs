@@ -181,7 +181,7 @@ function checkActiveV3Readers(files, violations) {
   }
 
   const gateway = files.get(CUSTOMER_UI_GATEWAY_FILE) ?? "";
-  if (!/ai-content\.v3/.test(gateway)) {
+  if (!/(?:ai-content\.v3|parseAiContentManifestV3)/.test(gateway)) {
     violations.push(violation("missing_active_v3_ui_reader", CUSTOMER_UI_GATEWAY_FILE, "customer UI must recognize active V3 manifests"));
   }
   if (/\bmarketing_content\b/.test(gateway)) {
