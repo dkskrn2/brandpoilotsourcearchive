@@ -4,8 +4,9 @@ import { extractManifestImageUrls } from "./repository.js";
 
 const manifestUrl = "https://assets.public.blob.vercel-storage.com/ai-content/manifest.json";
 const manifest = {
-  version: "ai-content.v1",
-  type: "card_news",
+  version: "ai-content.v3",
+  outputFormat: "card_news",
+  purpose: "informational",
   title: "여름 운영 체크리스트",
   assets: [
     { role: "slide", index: 1, url: "https://assets.public.blob.vercel-storage.com/1.png", fileName: "1.png", mimeType: "image/png", width: 1080, height: 1080 },
@@ -27,7 +28,8 @@ const staticPublishActionFixture = {
 
 function setup(options: {
   connected?: boolean;
-  type?: "card_news" | "blog" | "marketing";
+  outputFormat?: "card_news" | "blog" | "reel";
+  purpose?: "informational" | "marketing";
   status?: string;
   manifestUrl?: string;
   existingFormats?: string[];
@@ -52,7 +54,8 @@ function setup(options: {
       status: options.status ?? "completed",
       artifact_manifest_json: options.outputManifest ?? manifest,
       manifest_url: options.manifestUrl ?? manifestUrl,
-      type: options.type ?? "card_news",
+      output_format: options.outputFormat ?? "card_news",
+      purpose: options.purpose ?? "informational",
       title: manifest.title,
       draft_json: {},
     }] };
@@ -346,21 +349,20 @@ describe("AI content direct publishing", () => {
     expect(statements.filter((sql) => sql.includes("insert into jobs"))).toHaveLength(0);
   });
 
-  it("lets the Instagram publisher read ai-content.v1 image assets", () => {
+  it("lets the Instagram publisher read ai-content.v3 image assets", () => {
     expect(extractManifestImageUrls(manifest)).toEqual(manifest.assets.map((asset) => asset.url));
   });
 
-  it("publishes v2 card images through the existing image artifact adapter", async () => {
-    const v2Card = {
-      version: "ai-content.v2",
-      type: "card_news",
+  it("publishes V3 card images through the existing image artifact adapter", async () => {
+    const v3Card = {
+      version: "ai-content.v3",
       purpose: "informational",
       outputFormat: "card_news",
       title: "V2 카드",
       assets: manifest.assets.map((asset) => ({ ...asset, role: "slide" })),
       content: { caption: "V2 카드 설명", hashtags: ["#v2"], cta: "저장" },
     };
-    const { repository, statements } = setup({ outputManifest: v2Card });
+    const { repository, statements } = setup({ outputManifest: v3Card });
 
     await expect(repository.prepareAiContentPublish({
       ...staticPublishActionFixture,
@@ -369,17 +371,16 @@ describe("AI content direct publishing", () => {
     expect(statements.filter((sql) => sql.includes("insert into channel_outputs"))).toHaveLength(1);
   });
 
-  it("publishes a one-image v2 card through the existing instagram feed single adapter", async () => {
-    const v2Card = {
-      version: "ai-content.v2",
-      type: "card_news",
+  it("publishes a one-image V3 card through the existing instagram feed single adapter", async () => {
+    const v3Card = {
+      version: "ai-content.v3",
       purpose: "informational",
       outputFormat: "card_news",
       title: "V2 단일 카드",
       assets: [{ ...manifest.assets[0], role: "slide" }],
       content: { caption: "V2 단일 카드 설명", hashtags: ["#v2"], cta: "저장" },
     };
-    const { repository, query } = setup({ outputManifest: v2Card });
+    const { repository, query } = setup({ outputManifest: v3Card });
 
     await expect(repository.prepareAiContentPublish({
       ...staticPublishActionFixture,
@@ -392,17 +393,16 @@ describe("AI content direct publishing", () => {
     });
   });
 
-  it("publishes a multi-image v2 marketing_content as an existing image carousel", async () => {
-    const v2Marketing = {
-      version: "ai-content.v2",
-      type: "marketing",
+  it("publishes a marketing-purpose V3 card through the same format adapter", async () => {
+    const marketingCard = {
+      version: "ai-content.v3",
       purpose: "marketing",
-      outputFormat: "marketing_content",
-      title: "V2 마케팅",
-      assets: manifest.assets.map((asset) => ({ ...asset, role: "creative" })),
+      outputFormat: "card_news",
+      title: "마케팅 카드",
+      assets: manifest.assets.map((asset) => ({ ...asset, role: "slide" })),
       content: { caption: "전환 카피", hashtags: ["#전환"], cta: "확인" },
     };
-    const { repository, query } = setup({ type: "marketing", outputManifest: v2Marketing });
+    const { repository, query } = setup({ purpose: "marketing", outputManifest: marketingCard });
 
     await expect(repository.prepareAiContentPublish({
       ...staticPublishActionFixture,
@@ -419,8 +419,7 @@ describe("AI content direct publishing", () => {
 
   it.each([
     ["reel", {
-      version: "ai-content.v2",
-      type: "marketing",
+      version: "ai-content.v3",
       purpose: "marketing",
       outputFormat: "reel",
       title: "V2 릴스",
@@ -428,19 +427,18 @@ describe("AI content direct publishing", () => {
         { role: "scene", index: 1, url: "https://assets.public.blob.vercel-storage.com/scene-1.png", fileName: "scene-1.png", mimeType: "image/png", width: 1080, height: 1920 },
         { role: "video", index: 1, url: "https://assets.public.blob.vercel-storage.com/reel.mp4", fileName: "reel.mp4", mimeType: "video/mp4", width: 1080, height: 1920, durationSeconds: 4, videoCodec: "h264", fps: 30, audioCodec: null },
       ],
-      content: { caption: "릴스" },
+      content: { caption: "릴스", hashtags: [], cta: "보기" },
     }],
     ["blog", {
-      version: "ai-content.v2",
-      type: "blog",
+      version: "ai-content.v3",
       purpose: "informational",
       outputFormat: "blog",
       title: "V2 블로그",
       assets: [{ role: "html", index: 1, url: "https://assets.public.blob.vercel-storage.com/content.html", fileName: "content.html", mimeType: "text/html" }],
-      content: { title: "V2 블로그", html: "<article></article>" },
+      content: { title: "V3 블로그", summary: "요약", html: "<article></article>", metaTitle: "V3 블로그", metaDescription: "설명" },
     }],
-  ] as const)("rejects unsupported v2 %s publishing with a stable error and no sample success", async (_format, outputManifest) => {
-    const { repository, statements } = setup({ type: outputManifest.type, outputManifest });
+  ] as const)("rejects unsupported V3 %s publishing with a stable error and no sample success", async (_format, outputManifest) => {
+    const { repository, statements } = setup({ outputFormat: outputManifest.outputFormat, purpose: outputManifest.purpose, outputManifest });
 
     await expect(repository.prepareAiContentPublish({
       ...staticPublishActionFixture,
