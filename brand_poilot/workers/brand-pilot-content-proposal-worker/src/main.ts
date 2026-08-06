@@ -55,7 +55,6 @@ async function main(): Promise<void> {
   );
   const runner = createContentProposalRunner(createCodexContentProposalModel({
     command: process.env.CONTENT_PROPOSAL_CODEX_COMMAND?.trim() || "codex",
-    model: process.env.CONTENT_PROPOSAL_CODEX_MODEL?.trim() || "gpt-5.4",
     timeoutMs: boundedNumber(
       "CONTENT_PROPOSAL_CODEX_TIMEOUT_MS",
       300_000,
@@ -103,6 +102,7 @@ async function main(): Promise<void> {
         // The next iteration may claim either manual or scheduled proposal jobs.
         continue;
       }
+      if ("jobId" in result && result.status === "research_completed") continue;
       if ("jobId" in result && result.status === "failed") continue;
       if ("jobId" in result && result.status === "lease_lost") continue;
     } while (!controller.signal.aborted);

@@ -1,7 +1,6 @@
 import {
-  isContentProposalJobV2,
   parseContentProposalJob,
-  parseProposalInputSnapshotV2,
+  parseResearchSeal,
   type ContentProposalWorkerClient,
 } from "./contracts.js";
 
@@ -104,21 +103,39 @@ export function createContentProposalApiClient(
         workerId: job.workerId,
         leaseToken: job.leaseToken,
         leaseSeconds,
+        stage: job.stage,
+        attemptId: job.stage === "research_required" ? job.researchAttemptId : job.modelAttemptId,
       });
     },
     async completeResearch(job, evidence) {
       const payload = await request(`/worker/content-proposal-jobs/${job.id}/research-complete`, {
         workerId: job.workerId,
         leaseToken: job.leaseToken,
+        researchAttemptId: job.researchAttemptId,
         evidence,
       });
-      return parseProposalInputSnapshotV2(payload);
+      return parseResearchSeal(payload, job, evidence);
     },
-    async complete(job, proposals) {
+    async startInvocation(job, ordinal) {
+      const payload = await request(
+        `/worker/content-proposal-jobs/${job.id}/invocations/${ordinal}/start`,
+        { workerId: job.workerId, leaseToken: job.leaseToken, modelAttemptId: job.modelAttemptId },
+      );
+      return { eventSha256: String(payload.eventSha256) };
+    },
+    async recordInvocationTerminal(job, ordinal, input) {
+      const payload = await request(
+        `/worker/content-proposal-jobs/${job.id}/invocations/${ordinal}/terminal`,
+        { workerId: job.workerId, leaseToken: job.leaseToken, modelAttemptId: job.modelAttemptId, ...input },
+      );
+      return { eventSha256: String(payload.eventSha256), status: String(payload.status) };
+    },
+    async complete(job, proposalSet) {
       await request(`/worker/content-proposal-jobs/${job.id}/complete`, {
         workerId: job.workerId,
         leaseToken: job.leaseToken,
-        ...(isContentProposalJobV2(job) ? { proposalSet: proposals } : { proposals }),
+        modelAttemptId: job.modelAttemptId,
+        proposalSet,
       });
     },
     async fail(job, input) {

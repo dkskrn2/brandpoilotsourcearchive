@@ -4,15 +4,16 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "predev": "npm run build --workspace @brand-pilot/worker-runtime",
+    "predev": "npm run build --workspace @brand-pilot/content-contracts && npm run build --workspace @brand-pilot/worker-runtime",
     "dev": "tsx src/main.ts watch",
-    "prerun-once": "npm run build --workspace @brand-pilot/worker-runtime",
+    "prerun-once": "npm run build --workspace @brand-pilot/content-contracts && npm run build --workspace @brand-pilot/worker-runtime",
     "run-once": "tsx src/main.ts once",
-    "build": "npm run build --workspace @brand-pilot/worker-runtime && tsc -p tsconfig.json",
-    "pretest": "npm run build --workspace @brand-pilot/worker-runtime",
+    "build": "npm run build --workspace @brand-pilot/content-contracts && npm run build --workspace @brand-pilot/worker-runtime && tsc -p tsconfig.json",
+    "pretest": "npm run build --workspace @brand-pilot/content-contracts && npm run build --workspace @brand-pilot/worker-runtime",
     "test": "vitest run"
   },
   "dependencies": {
+    "@brand-pilot/content-contracts": "0.1.0",
     "@brand-pilot/worker-runtime": "0.1.0",
     "dotenv": "^17.2.3"
   },
