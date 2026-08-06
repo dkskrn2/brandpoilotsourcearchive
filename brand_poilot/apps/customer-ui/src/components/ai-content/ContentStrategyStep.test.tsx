@@ -12,7 +12,7 @@ const capabilities: ChannelCapability[] = [
     enabled: true,
     connectionStatus: "connected",
     canGenerate: true,
-    generationFormats: ["card_news", "reel", "marketing_content"],
+    generationFormats: ["card_news", "reel"],
     exportModes: ["image"],
     publishModes: ["instagram_feed_carousel", "instagram_reel"],
     readiness: "ready",
@@ -51,7 +51,7 @@ const readyState = {
 };
 
 describe("ContentStrategyStep", () => {
-  it("shows all four formats and only exact eligible remote channel logos", () => {
+  it("shows the three canonical formats and only exact eligible remote channel logos", () => {
     render(<ContentStrategyStep
       outputFormat="card_news"
       channelTarget={null}
@@ -64,8 +64,8 @@ describe("ContentStrategyStep", () => {
 
     expect(screen.getByRole("radio", { name: "카드뉴스" })).toBeVisible();
     expect(screen.getByRole("radio", { name: "블로그" })).toBeVisible();
-    expect(screen.getByRole("radio", { name: "릴스(세로 이미지)" })).toBeVisible();
-    expect(screen.getByRole("radio", { name: "마케팅 콘텐츠" })).toBeVisible();
+    expect(screen.getByRole("radio", { name: "릴스" })).toBeVisible();
+    expect(screen.getAllByRole("radio")).toHaveLength(3);
     expect(screen.getByRole("button", { name: "Instagram" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Threads" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "X" })).not.toBeInTheDocument();

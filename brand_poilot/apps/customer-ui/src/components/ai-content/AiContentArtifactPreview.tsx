@@ -1,9 +1,8 @@
 import type { MouseEvent } from "react";
-import type { AiContentType, AiGenerationOutput } from "../../features/ai-content/types";
+import type { AiGenerationOutput } from "../../features/ai-content/types";
 import { ArtifactCarousel } from "./ArtifactCarousel";
 
 interface Props {
-  type: AiContentType;
   output: AiGenerationOutput;
 }
 
@@ -36,20 +35,20 @@ function securedBlogDocument(html: string) {
   return `<!doctype html><html><head>${csp}</head><body>${document.body.innerHTML}</body></html>`;
 }
 
-export function AiContentArtifactPreview({ type, output }: Props) {
+export function AiContentArtifactPreview({ output }: Props) {
   const artifact = output.artifact;
   if (!artifact) {
     return <p className="ai-generation-output-list__empty">{output.status === "failed" ? "생성된 결과가 없습니다." : "결과를 생성하고 있습니다."}</p>;
   }
 
-  if (type === "card_news" || output.outputFormat === "card_news" || output.outputFormat === "marketing_content") {
+  if (output.outputFormat === "card_news") {
     return <div className="ai-content-artifact ai-content-artifact--gallery" onContextMenu={preventContextMenu}>
       <ArtifactCarousel assets={artifact.assets} />
       {artifact.text ? <div className="ai-content-artifact__copy">{artifact.text}</div> : null}
     </div>;
   }
 
-  if (type === "blog" || output.outputFormat === "blog") {
+  if (output.outputFormat === "blog") {
     const cover = artifact.assets.find((asset) => asset.fileName === "cover.png")
       ?? artifact.assets.find((asset) => asset.mimeType?.startsWith("image/") && asset.width === 1200 && asset.height === 630);
     return <div className="ai-content-artifact ai-content-artifact--blog" onContextMenu={preventContextMenu}>
@@ -58,15 +57,12 @@ export function AiContentArtifactPreview({ type, output }: Props) {
     </div>;
   }
 
-  if (output.manifestVersion === "ai-content.v2" && output.outputFormat === "reel") {
+  if (output.outputFormat === "reel") {
     const video = artifact.assets.find((asset) => asset.mimeType === "video/mp4");
     return <div className="ai-content-artifact ai-content-artifact--reel" onContextMenu={preventContextMenu}>
       {video ? <video src={video.url} poster={artifact.posterUrl ?? undefined} controls muted playsInline preload="metadata">릴스 미리보기를 지원하지 않는 브라우저입니다.</video> : <p>동영상 미리보기를 불러올 수 없습니다.</p>}
     </div>;
   }
 
-  return <div className="ai-content-artifact ai-content-artifact--marketing" onContextMenu={preventContextMenu}>
-    {artifact.assets.map((asset, index) => <img key={`${asset.url}-${index}`} src={asset.url} alt={`마케팅 소재 ${index + 1}`} draggable={false} />)}
-    {artifact.text ? <div className="ai-content-artifact__copy">{artifact.text}</div> : null}
-  </div>;
+  return null;
 }

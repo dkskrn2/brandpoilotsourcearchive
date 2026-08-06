@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import type {
   AiContentCopyFields,
-  AiContentType,
   AiGenerationOutput,
+  ContentOutputFormatV2,
 } from "../../features/ai-content/types";
 
 const emptyCopy: AiContentCopyFields = {
@@ -22,21 +22,21 @@ const copyLabels: Record<Exclude<keyof AiContentCopyFields, "hashtags">, string>
   caption: "캡션",
 };
 
-function visibleFields(type: AiContentType) {
-  return type === "blog"
+function visibleFields(outputFormat: ContentOutputFormatV2) {
+  return outputFormat === "blog"
     ? (["hook", "keyMessage", "body", "cta"] as const)
     : (["hook", "keyMessage", "body", "cta", "caption"] as const);
 }
 
 export function AiContentCopyEditor({
-  type,
+  outputFormat,
   output,
   saving,
   revising,
   onSave,
   onRevise,
 }: {
-  type: AiContentType;
+  outputFormat: ContentOutputFormatV2;
   output: AiGenerationOutput;
   saving: boolean;
   revising: boolean;
@@ -49,8 +49,7 @@ export function AiContentCopyEditor({
     setFields(output.copy ?? emptyCopy);
   }, [output.copy]);
 
-  const canSave = !output.legacyReadOnly
-    && output.status === "completed"
+  const canSave = output.status === "completed"
     && output.revisionCapabilities?.includes("save_copy");
 
   return (
@@ -60,7 +59,7 @@ export function AiContentCopyEditor({
         <>
           <fieldset disabled={saving}>
             <legend>직접 수정 후 저장</legend>
-            {visibleFields(type).map((field) => (
+            {visibleFields(outputFormat).map((field) => (
               <label key={field}>
                 <span>{copyLabels[field]}</span>
                 <textarea
@@ -73,7 +72,7 @@ export function AiContentCopyEditor({
                 />
               </label>
             ))}
-            {type !== "blog" ? (
+            {outputFormat !== "blog" ? (
               <label>
                 <span>해시태그</span>
                 <input
@@ -91,8 +90,8 @@ export function AiContentCopyEditor({
               type="button"
               disabled={saving}
               onClick={() => void onSave(Object.fromEntries([
-                ...visibleFields(type).map((field) => [field, fields[field]]),
-                ...(type === "blog" ? [] : [["hashtags", fields.hashtags]]),
+                ...visibleFields(outputFormat).map((field) => [field, fields[field]]),
+                ...(outputFormat === "blog" ? [] : [["hashtags", fields.hashtags]]),
               ]))}
             >
               {saving ? "저장 중" : `${output.title} 카피 저장`}

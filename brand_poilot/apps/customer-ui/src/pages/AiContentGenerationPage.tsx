@@ -72,7 +72,6 @@ const v3FormatLabels: Record<string, string> = {
   card_news: "카드뉴스",
   blog: "블로그",
   reel: "릴스",
-  marketing_content: "마케팅 콘텐츠",
 };
 
 const referenceRoleLabels: Record<ContentOrchestration["references"][number]["roles"][number], string> = {
@@ -505,7 +504,7 @@ export function AiContentGenerationPage({
                 {generation.outputs.map((output) => (
                   <AiContentCopyEditor
                     key={output.id}
-                    type={generation.type}
+                    outputFormat={generation.outputFormat}
                     output={output}
                     saving={savingCopyOutputId === output.id}
                     revising={revisingOutputId === output.id}

@@ -1,183 +1,64 @@
-import { ChevronLeft, ChevronRight, LoaderCircle, Sparkles } from "lucide-react";
-import { useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { AiContentWizardSteps, wizardStepNames } from "../components/ai-content/AiContentWizardSteps";
-import { PageGuideButton } from "../components/layout/PageHeader";
-import type { AiContentType, GenerationAttachment } from "../features/ai-content/types";
-import { aiContentApiGateway } from "../features/ai-content/aiContentApiGateway";
-import type { AiContentDraft, AiContentGateway } from "../features/ai-content/types";
-import { useAiContentDraft } from "../features/ai-content/useAiContentDraft";
-import { DEMO_BRAND_ID } from "../lib/apiClient";
-import { useAiContentUsage } from "../features/ai-content/AiContentUsageContext";
-import { attachmentLifecycleGuidance } from "../features/ai-content/attachmentErrors";
+import { useSearchParams } from "react-router-dom";
 import { ContentProposalFlow } from "../components/ai-content/ContentProposalFlow";
+import { aiContentApiGateway } from "../features/ai-content/aiContentApiGateway";
+import type {
+  AiContentGateway,
+  ContentChannelTarget,
+  ContentOutputFormatV2,
+} from "../features/ai-content/types";
+import { DEMO_BRAND_ID } from "../lib/apiClient";
 
-function serializableAttachments(attachments: GenerationAttachment[]) {
-  return attachments.flatMap((attachment) => {
-    const confirmed = attachment.uploadStatus === "confirmed"
-      || (attachment.uploadStatus === undefined && Boolean(attachment.storagePath && attachment.storageUrl));
-    if (!confirmed || !attachment.storagePath || !attachment.storageUrl) return [];
-    return [{
-      id: attachment.id,
-      role: attachment.role,
-      fileName: attachment.fileName,
-      mimeType: attachment.mimeType,
-      size: attachment.size,
-      storageUrl: attachment.storageUrl,
-      storagePath: attachment.storagePath,
-    }];
-  });
+const proposalFormats: readonly ContentOutputFormatV2[] = ["card_news", "blog", "reel"];
+const proposalChannels: readonly ContentChannelTarget[] = [
+  "instagram",
+  "threads",
+  "x",
+  "linkedin",
+  "youtube",
+  "tiktok",
+  "blog_export",
+];
+
+function activeProposalFormat(value: string | null): ContentOutputFormatV2 | null {
+  return proposalFormats.includes(value as ContentOutputFormatV2)
+    ? value as ContentOutputFormatV2
+    : null;
 }
 
-function serializableDraft(draft: AiContentDraft): AiContentDraft {
-  return {
-    ...draft,
-    subjectAttachments: serializableAttachments(draft.subjectAttachments ?? []),
-    brief: draft.brief ? { ...draft.brief, attachments: serializableAttachments(draft.brief.attachments) } : null,
-  };
+function activeProposalChannels(value: string | null): ContentChannelTarget[] {
+  return (value ?? "")
+    .split(",")
+    .filter((channel): channel is ContentChannelTarget => proposalChannels.includes(channel as ContentChannelTarget));
 }
 
-function hasUnresolvedAttachments(draft: AiContentDraft) {
-  return [...(draft.subjectAttachments ?? []), ...(draft.brief?.attachments ?? [])]
-    .some((attachment) => attachment.uploadStatus === "pending" || attachment.uploadStatus === "failed");
-}
-
-export function AiContentWizardPage({ gateway = aiContentApiGateway, brandId = DEMO_BRAND_ID }: { gateway?: AiContentGateway; brandId?: string }) {
+export function AiContentWizardPage({
+  gateway = aiContentApiGateway,
+  brandId = DEMO_BRAND_ID,
+}: {
+  gateway?: AiContentGateway;
+  brandId?: string;
+}) {
   const [params, setParams] = useSearchParams();
-  const navigate = useNavigate();
-  const queryType = params.get("type");
-  const initialType = (["card_news", "blog", "marketing"] as const).includes(queryType as AiContentType) ? queryType as AiContentType : null;
-  const returnToProductLibrary = params.get("returnTo") === "product-library";
-  const returnToContentProposal = params.get("returnTo") === "content-proposal";
-  const state = useAiContentDraft(initialType);
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const { refresh: refreshUsage } = useAiContentUsage();
-  const proposalBatchId = params.get("proposalBatch");
-  const seedReferenceId = params.get("reference");
-  const proposalFamily = params.get("proposalFamily");
-  const proposalFormat = params.get("proposalFormat");
-  const proposalChannels = (params.get("proposalChannels") ?? "").split(",").filter((channel) =>
-    ["instagram", "threads", "x", "linkedin", "youtube", "tiktok", "blog_export"].includes(channel),
-  );
-  if (!initialType || proposalBatchId) {
-    return <ContentProposalFlow
-      brandId={brandId}
-      gateway={gateway}
-      initialBatchId={proposalBatchId}
-      initialSeedReferenceId={seedReferenceId}
-      initialAnalyzedSubjectId={params.get("analysis")}
-      initialSetup={{
-        family: proposalFamily === "informational" || proposalFamily === "marketing" ? proposalFamily : null,
-        topic: params.get("proposalTopic") ?? "",
-        format: proposalFormat === "card_news" || proposalFormat === "blog" || proposalFormat === "single_image" || proposalFormat === "channel_text"
-          ? proposalFormat
-          : null,
-        channels: proposalChannels as import("../features/ai-content/types").ContentChannelTarget[],
-        brief: params.get("proposalBrief") ?? "",
-      }}
-      onSeedReferenceInvalid={() => {
-        const next = new URLSearchParams(params);
-        next.delete("reference");
-        setParams(next, { replace: true });
-      }}
-    />;
-  }
-  const valid = state.step === 1 ? Boolean(state.draft.type) : state.step === 3 ? Boolean(state.draft.selectedTarget && state.draft.selectedAppeal) : state.step === 5 ? Boolean(state.draft.brief?.purpose) && !hasUnresolvedAttachments(state.draft) : true;
-  const actions = {
-    setType: state.setType,
-    setSubjectType: state.setSubjectType,
-    setSubjectInput: state.setSubjectInput,
-    setSubjectAttachments: state.setSubjectAttachments,
-    setSubjectAnalysis: state.setSubjectAnalysis,
-    setSelectedSubjectImages: state.setSelectedSubjectImages,
-    setTarget: state.setTarget,
-    setAppeal: state.setAppeal,
-    setReferences: state.setReferences,
-    reorderReference: state.reorderReference,
-    setBrief: state.setBrief,
-  };
 
-  async function prepareAnalysis() {
-    if (!state.draft.type) throw new Error("ai_content_type_required");
-    const initialDraft = serializableDraft(state.draft);
-    const generation = state.generationId ? { id: state.generationId } : await gateway.createAnalysis(brandId, {
-      type: state.draft.type,
-      title: state.draft.subjectInput.name || `${state.draft.type} 콘텐츠`,
-      draft: initialDraft,
-      idempotencyKey: state.analysisIdempotencyKey,
-    });
-    if (!state.generationId) state.setGenerationId(generation.id);
-    const pendingAttachments = (state.draft.subjectAttachments ?? []).map((attachment) => (
-      attachment.file && !attachment.storageUrl
-        ? { ...attachment, uploadStatus: "pending" as const }
-        : attachment
-    ));
-    state.setSubjectAttachments(pendingAttachments);
-    const uploadResults = await Promise.allSettled(pendingAttachments.map(async (attachment) => {
-      if (!attachment.file || attachment.storageUrl) return attachment;
-      return gateway.uploadAttachment(brandId, generation.id, attachment);
-    }));
-    const uploadedAttachments = uploadResults.map((result, index) => result.status === "fulfilled"
-      ? { ...result.value, file: undefined, uploadStatus: "confirmed" as const }
-      : { ...pendingAttachments[index]!, uploadStatus: "failed" as const });
-    const finalDraft = serializableDraft({ ...state.draft, subjectAttachments: uploadedAttachments });
-    state.setSubjectAttachments(uploadedAttachments);
-    const failedUpload = uploadResults.find((result) => result.status === "rejected");
-    if (failedUpload?.status === "rejected") throw failedUpload.reason;
-    await gateway.updateGeneration(brandId, generation.id, { draft: finalDraft, referenceIds: state.draft.referenceIds });
-    return { generationId: generation.id, attachments: uploadedAttachments };
-  }
-
-  async function generate() {
-    if (!state.draft.type || !state.draft.brief || !state.subjectAnalysis) return;
-    setSubmitting(true);
-    setSubmitError(null);
-    try {
-      const initialDraft = serializableDraft(state.draft);
-      const generation = state.generationId ? await gateway.getGeneration(brandId, state.generationId) : await gateway.createAnalysis(brandId, {
-        type: state.draft.type,
-        title: state.draft.subjectInput.name || `${state.draft.type} 콘텐츠`,
-        draft: initialDraft,
-        idempotencyKey: state.generationIdempotencyKey,
-      });
-      state.setGenerationId(generation.id);
-      const uploadedAttachments = await Promise.all(state.draft.brief.attachments.map(async (attachment: GenerationAttachment) => {
-        if (!attachment.file || attachment.storageUrl) return attachment;
-        return gateway.uploadAttachment(brandId, generation.id, attachment);
-      }));
-      const finalDraft = serializableDraft({ ...state.draft, brief: { ...state.draft.brief, attachments: uploadedAttachments } });
-      await gateway.updateGeneration(brandId, generation.id, { draft: finalDraft, referenceIds: state.draft.referenceIds });
-      await gateway.startGeneration(brandId, generation.id, { idempotencyKey: state.generationIdempotencyKey, outputCount: finalDraft.brief?.outputCount ?? 1 });
-      await refreshUsage();
-      navigate(`/ai-content/${generation.id}`);
-    } catch (error) {
-      setSubmitError(attachmentLifecycleGuidance(error)?.message ?? "콘텐츠 생성을 시작하지 못했습니다. 다시 시도해 주세요.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return <div className="content ai-content-wizard">
-    <header className="wizard-header" data-guide="page-header"><div><p>AI 콘텐츠 스튜디오</p><h1>새 AI 콘텐츠</h1></div><div className="wizard-header-actions"><div className="wizard-step-current"><strong>{state.step} / 5</strong><span>{wizardStepNames[state.step - 1]}</span></div><PageGuideButton /></div></header>
-    <ol className="wizard-progress" aria-label="생성 단계">{wizardStepNames.map((name, index) => <li key={name} aria-current={state.step === index + 1 ? "step" : undefined}><span>{index + 1}</span>{name}</li>)}</ol>
-    <div className="wizard-workspace"><AiContentWizardSteps step={state.step} draft={state.draft} actions={{ ...actions, setSubjectAnalysis: (value) => {
-      state.setSubjectAnalysis(value);
-      if (!value || (value.status !== "ready" && value.status !== "partial")) return;
-      if (returnToProductLibrary) {
-        navigate(`/brand-center?${new URLSearchParams({ tab: "products", analysis: value.id }).toString()}`);
-        return;
-      }
-      if (returnToContentProposal) {
-        const next = new URLSearchParams(params);
-        next.delete("type");
-        next.set("analysis", value.id);
-        navigate(`/ai-content/new?${next.toString()}`);
-        return;
-      }
-      state.setStep(3);
-    } }} gateway={gateway} brandId={brandId} generationId={state.generationId} analysis={state.subjectAnalysis} attachmentControlsDisabled={submitting} onPrepareAnalysis={prepareAnalysis} /></div>
-    {submitError ? <p className="wizard-error" role="alert">{submitError}</p> : null}
-    <footer className="wizard-actions">{state.step > 1 ? <button type="button" className="button" onClick={state.goBack}><ChevronLeft size={17} />이전</button> : <span />}{state.step === 2 ? <span /> : state.step < 5 ? <button type="button" className="button primary" disabled={!valid} onClick={state.goNext}>다음<ChevronRight size={17} /></button> : <button type="button" className="button primary" disabled={!valid || submitting} onClick={() => void generate()}>{submitting ? <LoaderCircle className="inline-spinner" size={17} /> : <Sparkles size={17} />}{submitting ? "생성 요청 중" : "생성 시작"}</button>}</footer>
-  </div>;
+  return <ContentProposalFlow
+    brandId={brandId}
+    gateway={gateway}
+    initialBatchId={params.get("proposalBatch")}
+    initialSeedReferenceId={params.get("reference")}
+    initialAnalyzedSubjectId={params.get("analysis")}
+    initialSetup={{
+      family: params.get("proposalFamily") === "informational" || params.get("proposalFamily") === "marketing"
+        ? params.get("proposalFamily") as "informational" | "marketing"
+        : null,
+      topic: params.get("proposalTopic") ?? "",
+      format: activeProposalFormat(params.get("proposalFormat")),
+      channels: activeProposalChannels(params.get("proposalChannels")),
+      brief: params.get("proposalBrief") ?? "",
+    }}
+    onSeedReferenceInvalid={() => {
+      const next = new URLSearchParams(params);
+      next.delete("reference");
+      setParams(next, { replace: true });
+    }}
+  />;
 }

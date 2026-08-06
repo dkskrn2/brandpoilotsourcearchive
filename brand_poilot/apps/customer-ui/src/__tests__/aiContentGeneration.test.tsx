@@ -51,7 +51,7 @@ describe("AiContentGenerationPage", () => {
     renderGeneration("generation-card-complete");
 
     expect(await screen.findByRole("heading", { name: "생성 결과 상세" })).toBeVisible();
-    expect(screen.getByText("유형: 카드뉴스 · 여름 추천 카드뉴스")).toBeVisible();
+    expect(screen.getByText("형식: 카드뉴스 · 여름 추천 카드뉴스")).toBeVisible();
     expect(screen.getByText("Instagram OAuth 게시 계정 미연결")).toBeVisible();
     expect(screen.getAllByRole("link", { name: "연결하기" })[0]).toHaveAttribute("href", expect.stringContaining("/auth/meta/start"));
 
@@ -272,8 +272,7 @@ describe("AiContentGenerationPage", () => {
 
     const rows = await screen.findAllByRole("listitem");
     const failedRow = rows[1];
-    const publishSelection = screen.getByRole("checkbox", { name: "게시물" });
-    await user.click(publishSelection);
+    expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
     await user.type(within(failedRow).getByLabelText("문제 해결형 다시 생성 사유"), "다시 생성");
     await user.click(within(failedRow).getByRole("button", { name: /결과 2 다시 생성/ }));
 
@@ -281,8 +280,7 @@ describe("AiContentGenerationPage", () => {
     expect(within(failedRow).queryByRole("button", { name: /결과 2 다시 생성/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "혜택 강조형 결과 ZIP 다운로드" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "전체 ZIP" })).toBeEnabled();
-    expect(publishSelection).toBeChecked();
-    expect(screen.getByRole("button", { name: "선택한 1개 유형 게시" })).toBeEnabled();
+    expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
     expect(gateway.retryOutput).toHaveBeenCalledTimes(1);
   });
 
@@ -291,7 +289,7 @@ describe("AiContentGenerationPage", () => {
     renderGeneration("generation-completed");
 
     expect(await screen.findByRole("heading", { name: "생성 결과 상세" })).toBeVisible();
-    expect(screen.getByText("유형: 블로그 · 고객이 저장하는 운영 가이드")).toBeVisible();
+    expect(screen.getByText("형식: 블로그 · 고객이 저장하는 운영 가이드")).toBeVisible();
     expect(screen.queryByRole("button", { name: "게시 관리로 보내기" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "운영 가이드 결과 ZIP 다운로드" })).toBeEnabled();
     expect(screen.getByTitle("블로그 미리보기")).toBeVisible();
@@ -304,10 +302,10 @@ describe("AiContentGenerationPage", () => {
     expect(await screen.findByText("기획 중")).toBeVisible();
   });
 
-  it("shows marketing contracts with selected and all ZIP actions", async () => {
+  it("shows reel contracts with selected and all ZIP actions", async () => {
     renderGeneration("generation-partial");
 
-    expect(await screen.findByText("유형: 마케팅 소재 · 신제품 출시 마케팅 소재")).toBeVisible();
+    expect(await screen.findByText("형식: 릴스 · 신제품 출시 마케팅 소재")).toBeVisible();
 
     const outputRows = screen.getAllByRole("listitem");
     expect(within(outputRows[0]).getByRole("button", { name: "혜택 강조형 결과 ZIP 다운로드" })).toBeEnabled();
@@ -491,8 +489,8 @@ describe("AiContentGenerationPage", () => {
     expect(await screen.findByText("카피를 저장했습니다.")).toBeVisible();
   });
 
-  it("hides unsupported revision and publish actions for a legacy Reel result", async () => {
-    renderGeneration("generation-card-complete", true, (gateway) => {
+  it("hides unsupported revision and publish actions for a V3 reel result", async () => {
+    renderGeneration("generation-partial", true, (gateway) => {
       const getGeneration = gateway.getGeneration.bind(gateway);
       gateway.getGeneration = vi.fn(async (brandId, generationId) => {
         const result = await getGeneration(brandId, generationId);
@@ -500,17 +498,13 @@ describe("AiContentGenerationPage", () => {
           ...result,
           outputs: result.outputs.map((output) => ({
             ...output,
-            legacyReadOnly: true,
             revisionCapabilities: [],
-            artifact: output.artifact
-              ? { ...output.artifact, deliveryFormat: "instagram_reel" as const }
-              : null,
           })),
         };
       });
     });
 
-    expect(await screen.findByText("과거 Reel 결과는 읽기 전용입니다.")).toBeVisible();
+    expect(await screen.findByRole("button", { name: "혜택 강조형 결과 ZIP 다운로드" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: /훅.*재생성|카피.*재생성|카드.*재생성/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
   });

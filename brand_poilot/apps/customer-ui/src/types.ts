@@ -35,7 +35,7 @@ export interface ChannelCapability {
   enabled: boolean;
   connectionStatus: ChannelStatus;
   canGenerate: boolean;
-  generationFormats: Array<"card_news" | "blog" | "reel" | "marketing_content" | "single_image" | "channel_text">;
+  generationFormats: Array<"card_news" | "blog" | "reel" | "single_image" | "channel_text">;
   exportModes: Array<"image" | "html" | "text">;
   publishModes: DeliveryFormat[];
   readiness: "ready" | "needs_connection" | "needs_permission" | "not_supported";
@@ -345,7 +345,7 @@ export interface InstagramTrendSaveSource {
   alreadySaved: boolean;
 }
 
-export type AiContentReferenceSeedFormat = "card_news" | "blog" | "reel" | "marketing_content";
+export type AiContentReferenceSeedFormat = "card_news" | "blog" | "reel";
 
 export interface AiContentReferenceSeed {
   id: string;

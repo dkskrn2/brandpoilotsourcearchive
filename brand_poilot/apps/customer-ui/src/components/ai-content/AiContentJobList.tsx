@@ -1,10 +1,10 @@
 import { ArrowRight } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { BadgeVariant } from "../../types";
-import type { AiContentGeneration, AiContentType } from "../../features/ai-content/types";
+import type { AiContentGeneration, ContentOutputFormatV2 } from "../../features/ai-content/types";
 import { Badge } from "../ui/Badge";
 
-const typeLabels: Record<AiContentType, string> = { card_news: "카드뉴스", blog: "블로그", marketing: "마케팅 소재" };
+const formatLabels: Record<ContentOutputFormatV2, string> = { card_news: "카드뉴스", blog: "블로그", reel: "릴스" };
 const statusLabels: Record<AiContentGeneration["status"], { label: string; variant: BadgeVariant }> = {
   draft: { label: "작성 중", variant: "neutral" },
   analyzing: { label: "분석 중", variant: "info" },
@@ -19,7 +19,7 @@ const statusLabels: Record<AiContentGeneration["status"], { label: string; varia
 const stepLabels = ["콘텐츠 유형", "제품·서비스 분석", "타깃·소구점", "레퍼런스", "프롬프트·생성"];
 const WIZARD_STEP_COUNT = stepLabels.length;
 
-export type AiContentJobFilter = "all" | AiContentType;
+export type AiContentJobFilter = "all" | ContentOutputFormatV2;
 
 interface AiContentJobListProps {
   jobs: AiContentGeneration[];
@@ -28,15 +28,15 @@ interface AiContentJobListProps {
 }
 
 export function AiContentJobList({ jobs, filter, onFilterChange }: AiContentJobListProps) {
-  const visibleJobs = filter === "all" ? jobs : jobs.filter((job) => job.type === filter);
+  const visibleJobs = filter === "all" ? jobs : jobs.filter((job) => job.outputFormat === filter);
   return (
     <section className="ai-content-jobs" aria-label="AI 콘텐츠 작업">
       <div className="ai-content-section-head">
         <div><h2>진행 중·최근 작업</h2><p>생성 상태와 완료된 결과를 한곳에서 확인합니다.</p></div>
         <div className="ai-content-filter" role="group" aria-label="콘텐츠 유형 필터">
-          {(["all", "card_news", "blog", "marketing"] as const).map((value) => (
+          {(["all", "card_news", "blog", "reel"] as const).map((value) => (
             <button key={value} type="button" aria-pressed={filter === value} onClick={() => onFilterChange(value)}>
-              {value === "all" ? "전체" : typeLabels[value]}
+              {value === "all" ? "전체" : formatLabels[value]}
             </button>
           ))}
         </div>
@@ -62,7 +62,7 @@ export function AiContentJobList({ jobs, filter, onFilterChange }: AiContentJobL
                   </div>
                   <div className="ai-content-job-card__body">
                     <div className="ai-content-job-list__main">
-                      <div className="ai-content-job-list__title"><Badge>{typeLabels[job.type]}</Badge><strong>{job.title}</strong></div>
+                      <div className="ai-content-job-list__title"><Badge>{formatLabels[job.outputFormat]}</Badge><strong>{job.title}</strong></div>
                       <small>{isActive ? `${job.currentStep} / ${WIZARD_STEP_COUNT}단계 · ${stepLabels[Math.max(0, Math.min(WIZARD_STEP_COUNT - 1, job.currentStep - 1))]}` : `${completeCount} / ${job.outputs.length}개 완료`} · {new Date(job.updatedAt).toLocaleDateString("ko-KR")}</small>
                     </div>
                     <div className="ai-content-job-card__footer">

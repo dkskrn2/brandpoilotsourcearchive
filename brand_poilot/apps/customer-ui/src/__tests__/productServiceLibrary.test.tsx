@@ -231,18 +231,16 @@ describe("ProductServiceLibraryPanel", () => {
     expect(listProductServices).toHaveBeenCalledTimes(2);
   });
 
-  it("starts the existing analysis flow without asking the user for an internal ID", async () => {
+  it("does not route product analysis through the retired content-generation wizard", async () => {
     const api = gateway();
     renderPanel(<ProductServiceLibraryPanel brandId="brand-1" gateway={api as never} />);
     await screen.findByRole("button", { name: /콘텐츠 운영/ });
 
     await userEvent.click(screen.getByRole("button", { name: "새 제품·서비스" }));
-    expect(screen.getByRole("link", { name: "AI 분석 열기" })).toHaveAttribute(
-      "href",
-      "/ai-content/new?type=card_news&returnTo=product-library",
-    );
+    expect(screen.getByRole("button", { name: "AI 분석 준비 중" })).toBeDisabled();
+    expect(screen.queryByRole("link", { name: "AI 분석 열기" })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "완료된 분석 ID" })).not.toBeInTheDocument();
-    expect(screen.getByText(/분석이 완료되면 이 보관함으로 자동으로 돌아옵니다/)).toBeVisible();
+    expect(screen.getByText(/제품·서비스 전용 분석 경로를 준비 중입니다/)).toBeVisible();
   });
 
   it("returns a newly created manual draft to view mode after saving", async () => {

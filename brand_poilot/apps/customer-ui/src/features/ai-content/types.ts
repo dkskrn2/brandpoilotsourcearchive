@@ -1,4 +1,8 @@
 import type {
+  ContentPurpose,
+  ContentStudioOutputFormat,
+} from "@brand-pilot/content-contracts";
+import type {
   AiContentReferenceSeed,
   ChannelConnection,
   ChannelType,
@@ -11,8 +15,8 @@ export type AiContentWizardStep = 1 | 2 | 3 | 4 | 5;
 export type ContentCreationPhase = "setup" | "proposal_selection" | "generating" | "reviewing";
 export type ContentSetupSection = "intent" | "sources" | "delivery";
 export type ContentFamily = "informational" | "marketing";
-export type ContentPurposeV2 = ContentFamily;
-export type ContentOutputFormatV2 = "card_news" | "blog" | "reel" | "marketing_content";
+export type ContentPurposeV2 = ContentPurpose;
+export type ContentOutputFormatV2 = ContentStudioOutputFormat;
 export type ContentOutputFormat = "card_news" | "blog" | "single_image" | "channel_text";
 export type ContentChannelTarget = "instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok" | "blog_export";
 export type ContentReferenceRoleV2 = "planning" | "copy_pattern" | "visual_composition";
@@ -418,9 +422,8 @@ export interface AiGenerationOutput {
   failureReason: string | null;
   downloadedAt: string | null;
   revisionCapabilities?: Array<"save_copy" | "regenerate_hook" | "regenerate_copy" | "regenerate_card">;
-  legacyReadOnly?: boolean;
-  manifestVersion?: "ai-content.v1" | "ai-content.v2" | null;
-  outputFormat?: ContentOutputFormatV2 | ContentOutputFormat | null;
+  manifestVersion: "ai-content.v3" | null;
+  outputFormat: ContentOutputFormatV2;
   publishSupported?: boolean;
 }
 
@@ -451,7 +454,8 @@ export interface AiContentGeneration {
   id: string;
   brandId: string;
   title: string;
-  type: AiContentType;
+  outputFormat: ContentOutputFormatV2;
+  purpose: ContentPurposeV2;
   status: AiGenerationStatus;
   currentStep: AiContentWizardStep;
   draft: AiContentDraft;
@@ -483,9 +487,6 @@ export interface AiContentGateway {
   getBrandContext(brandId: string): Promise<AiContentBrandContext>;
   listGenerations(brandId: string): Promise<AiContentGeneration[]>;
   getGeneration(brandId: string, generationId: string): Promise<AiContentGeneration>;
-  createAnalysis(brandId: string, input: { type: AiContentType; title: string; draft: AiContentDraft; orchestration?: ContentOrchestration; idempotencyKey: string }): Promise<AiContentGeneration>;
-  updateGeneration(brandId: string, generationId: string, input: { draft: AiContentDraft; referenceIds: string[]; orchestration?: ContentOrchestration }): Promise<AiContentGeneration>;
-  startGeneration(brandId: string, generationId: string, input: { idempotencyKey: string; outputCount: 1 | 2 | 3; orchestration?: ContentOrchestration }): Promise<AiContentGeneration>;
   uploadAttachment(brandId: string, generationId: string, attachment: GenerationAttachment, onProgress?: (percentage: number) => void): Promise<GenerationAttachment>;
   removeAttachment(brandId: string, generationId: string, attachmentId: string): Promise<void>;
   listAudiencePresets(brandId: string): Promise<AudiencePreset[]>;

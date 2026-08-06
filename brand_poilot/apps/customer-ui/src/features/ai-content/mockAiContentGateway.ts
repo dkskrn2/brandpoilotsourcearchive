@@ -52,7 +52,7 @@ const emptyDraft = (type: AiContentDraft["type"]): AiContentDraft => ({
 
 const artifact = (
   queueId: string,
-  kind: "html" | "image" | "image_gallery",
+  kind: "html" | "image" | "image_gallery" | "video",
   assets: PublishArtifactAsset[] = [],
   text = "카피: 핵심 메시지입니다."
 ): NonNullable<AiGenerationOutput["artifact"]> => ({
@@ -70,11 +70,12 @@ const jobs: AiContentGeneration[] = [
     id: "generation-generating",
     brandId: "brand-demo",
     title: "여름 캠페인 카드뉴스",
-    type: "card_news",
+    outputFormat: "card_news",
+    purpose: "informational",
     status: "generating",
     currentStep: 5,
     draft: emptyDraft("card_news"),
-    outputs: [{ id: "output-generating", generationId: "generation-generating", title: "카드뉴스", status: "generating", artifact: null, failureReason: null, downloadedAt: null }],
+    outputs: [{ id: "output-generating", generationId: "generation-generating", title: "카드뉴스", status: "generating", artifact: null, failureReason: null, downloadedAt: null, manifestVersion: null, outputFormat: "card_news" }],
     attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-18T06:30:00.000Z",
     updatedAt: "2026-07-18T06:34:00.000Z"
@@ -83,11 +84,12 @@ const jobs: AiContentGeneration[] = [
     id: "generation-planning",
     brandId: "brand-demo",
     title: "마케팅 사전 기획",
-    type: "marketing",
+    outputFormat: "reel",
+    purpose: "marketing",
     status: "planning",
     currentStep: 3,
     draft: emptyDraft("marketing"),
-    outputs: [{ id: "output-marketing-planning", generationId: "generation-planning", title: "시안 후보", status: "queued", artifact: null, failureReason: null, downloadedAt: null }],
+    outputs: [{ id: "output-marketing-planning", generationId: "generation-planning", title: "시안 후보", status: "queued", artifact: null, failureReason: null, downloadedAt: null, manifestVersion: null, outputFormat: "reel" }],
     attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-18T03:20:00.000Z",
     updatedAt: "2026-07-18T03:40:00.000Z"
@@ -96,11 +98,12 @@ const jobs: AiContentGeneration[] = [
     id: "generation-completed",
     brandId: "brand-demo",
     title: "고객이 저장하는 운영 가이드",
-    type: "blog",
+    outputFormat: "blog",
+    purpose: "informational",
     status: "completed",
     currentStep: 5,
     draft: emptyDraft("blog"),
-    outputs: [{ id: "output-blog", generationId: "generation-completed", title: "운영 가이드", status: "completed", artifact: artifact("output-blog", "html"), failureReason: null, downloadedAt: null }],
+    outputs: [{ id: "output-blog", generationId: "generation-completed", title: "운영 가이드", status: "completed", artifact: artifact("output-blog", "html"), failureReason: null, downloadedAt: null, manifestVersion: "ai-content.v3", outputFormat: "blog", publishSupported: false }],
     attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-17T02:00:00.000Z",
     updatedAt: "2026-07-17T02:08:00.000Z"
@@ -109,7 +112,8 @@ const jobs: AiContentGeneration[] = [
     id: "generation-card-complete",
     brandId: "brand-demo",
     title: "여름 추천 카드뉴스",
-    type: "card_news",
+    outputFormat: "card_news",
+    purpose: "informational",
     status: "completed",
     currentStep: 5,
     draft: emptyDraft("card_news"),
@@ -121,7 +125,10 @@ const jobs: AiContentGeneration[] = [
         status: "completed",
         artifact: artifact("output-card-news", "image_gallery", [cardNewsImage], "핵심 메시지: 여름 캠페인 시작"),
         failureReason: null,
-        downloadedAt: null
+        downloadedAt: null,
+        manifestVersion: "ai-content.v3",
+        outputFormat: "card_news",
+        publishSupported: true,
       }
     ],
     attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
@@ -132,13 +139,14 @@ const jobs: AiContentGeneration[] = [
     id: "generation-partial",
     brandId: "brand-demo",
     title: "신제품 출시 마케팅 소재",
-    type: "marketing",
+    outputFormat: "reel",
+    purpose: "marketing",
     status: "partial_failed",
     currentStep: 5,
     draft: emptyDraft("marketing"),
     outputs: [
-      { id: "output-marketing-1", generationId: "generation-partial", title: "혜택 강조형", status: "completed", artifact: artifact("output-marketing-1", "image"), failureReason: null, downloadedAt: null },
-      { id: "output-marketing-2", generationId: "generation-partial", title: "문제 해결형", status: "failed", artifact: null, failureReason: "이미지 생성 실패", downloadedAt: null }
+      { id: "output-marketing-1", generationId: "generation-partial", title: "혜택 강조형", status: "completed", artifact: artifact("output-marketing-1", "video"), failureReason: null, downloadedAt: null, manifestVersion: "ai-content.v3", outputFormat: "reel", publishSupported: false },
+      { id: "output-marketing-2", generationId: "generation-partial", title: "문제 해결형", status: "failed", artifact: null, failureReason: "이미지 생성 실패", downloadedAt: null, manifestVersion: null, outputFormat: "reel", publishSupported: false }
     ],
     attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-16T04:00:00.000Z",
@@ -148,11 +156,12 @@ const jobs: AiContentGeneration[] = [
     id: "generation-failed",
     brandId: "brand-demo",
     title: "브랜드 톤 실패 테스트",
-    type: "blog",
+    outputFormat: "blog",
+    purpose: "informational",
     status: "failed",
     currentStep: 4,
     draft: emptyDraft("blog"),
-    outputs: [{ id: "output-failed", generationId: "generation-failed", title: "실패 결과", status: "failed", artifact: null, failureReason: "내부 분석 데이터 오류", downloadedAt: null }],
+    outputs: [{ id: "output-failed", generationId: "generation-failed", title: "실패 결과", status: "failed", artifact: null, failureReason: "내부 분석 데이터 오류", downloadedAt: null, manifestVersion: null, outputFormat: "blog", publishSupported: false }],
     attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-15T12:00:00.000Z",
     updatedAt: "2026-07-15T12:04:00.000Z"
@@ -287,42 +296,6 @@ export function createMockAiContentGateway(): AiContentGateway {
       if (!generation) throw new Error("ai_content_generation_not_found");
       return copy(generation);
     },
-    async createAnalysis(brandId, input) {
-      const created: AiContentGeneration = {
-        id: `generation-${generationRows.length + 1}`,
-        brandId,
-        title: input.title,
-        type: input.type,
-        status: "analysis_ready",
-        currentStep: 2,
-        draft: copy(input.draft),
-        analysis: {
-          summary: "내부 확인 근거",
-          evidence: [input.draft.productUrl || "등록된 자사 정보"]
-        },
-        outputs: [],
-        attachmentsLockedAt: null,
-        terminalAt: null,
-        retryableUntil: null,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      generationRows.push(created);
-      return copy(created);
-    },
-    async updateGeneration(_brandId, generationId, input) {
-      const generation = generationRows.find((item) => item.id === generationId);
-      if (!generation) throw new Error("ai_content_generation_not_found");
-      generation.draft = copy(input.draft);
-      return copy(generation);
-    },
-    async startGeneration(_brandId, generationId, input) {
-      const generation = generationRows.find((item) => item.id === generationId);
-      if (!generation) throw new Error("ai_content_generation_not_found");
-      generation.status = "queued";
-      generation.outputs = Array.from({ length: input.outputCount }, (_, index) => ({ id: `output-${generationId}-${index + 1}`, generationId, title: `결과 ${index + 1}`, status: "queued", artifact: null, failureReason: null, downloadedAt: null }));
-      return copy(generation);
-    },
     async uploadAttachment(_brandId, _generationId, attachment) { return copy({ ...attachment, file: undefined, storageUrl: "https://blob.example.com/attachment", storagePath: "attachment" }); },
     async removeAttachment() {},
     async listAudiencePresets(brandId) {
@@ -379,7 +352,7 @@ export function createMockAiContentGateway(): AiContentGateway {
     async saveOutputCopy(_brandId, outputId, input) {
       const output = generationRows.flatMap((job) => job.outputs).find((item) => item.id === outputId);
       if (!output) throw new Error("ai_content_output_not_found");
-      if (output.status !== "completed" || output.legacyReadOnly) throw new Error("ai_content_copy_edit_unsupported");
+      if (output.status !== "completed") throw new Error("ai_content_copy_edit_unsupported");
       output.copy = { ...(output.copy ?? {
         hook: "", keyMessage: "", body: "", cta: "", caption: "", hashtags: [],
       }), ...copy(input.fields) };
