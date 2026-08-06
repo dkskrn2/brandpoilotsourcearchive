@@ -25,6 +25,11 @@ import { createAiContentSnapshotRepository } from "./aiContentSnapshotRepository
 import { resolveAiContentSeed } from "./aiContentSeedResolver.js";
 import { crawlSourceUrl } from "./sourceCrawler.js";
 import { buildChannelCapabilities } from "./channelCapabilities.js";
+import { parseProposalBaseInputSnapshotV2 } from "@brand-pilot/content-contracts";
+import { createAiContentProposalV2Repository } from "./aiContentRepository.js";
+import { createAiContentProposalV2Service } from "./aiContentProposalV2Service.js";
+import { resolveContentProposalV2Input } from "./contentOrchestration.js";
+import { parseContentOrchestrationV2 } from "./aiContentGenerationInputV3.js";
 
 const runtimeConfig = loadApiRuntimeConfig();
 const port = Number(process.env.PORT ?? 4000);
@@ -117,11 +122,10 @@ const snapshotStorage: AiContentSnapshotStorage = {
     return { storageUrl: stored.url, storagePath: stored.pathname, sizeBytes: bytes.byteLength };
   },
 };
-const aiContentSnapshotRepository = createAiContentSnapshotRepository(
-  pool,
-  createAiContentSnapshotBlob(snapshotStorage),
-);
-const aiContentProposalV2 = {
+const aiContentSnapshotBlob = createAiContentSnapshotBlob(snapshotStorage);
+const aiContentSnapshotRepository = createAiContentSnapshotRepository(pool, aiContentSnapshotBlob);
+const proposalV2Repository = createAiContentProposalV2Repository(pool);
+const proposalV2Resolution = {
   async loadChannelCapability(scope: { brandId: string }, channel: Parameters<typeof buildChannelCapabilities>[0]["channels"][number]["channel"]) {
     const [channels, instagramSettings, instagramContext] = await Promise.all([
       repository.listChannels(scope.brandId),
@@ -138,10 +142,42 @@ const aiContentProposalV2 = {
     crawlUrl: crawlSourceUrl,
     now: () => new Date(),
   }),
-  snapshotRepository: aiContentSnapshotRepository,
-  getAiContentProposalBatchV2Replay: repository.getAiContentProposalBatchV2Replay.bind(repository),
-  createAiContentProposalBatchV2: repository.createAiContentProposalBatchV2.bind(repository),
   now: () => new Date(),
+};
+const aiContentProposalV2Service = createAiContentProposalV2Service({
+  ...proposalV2Repository,
+  async assertReady() {
+    if (!runtimeConfig.readiness.contentProposalsEnabled) {
+      throw new Error("content_proposals_disabled");
+    }
+    const health = await repository.health().catch(() => null);
+    if (health?.operations?.contentProposalWorker !== "online") {
+      throw new Error("content_proposal_worker_not_ready");
+    }
+  },
+  async resolve(command, tx) {
+    if (command.source === "performance_experiment") {
+      throw new Error("performance_proposal_v2_adapter_not_configured");
+    }
+    const request = parseContentOrchestrationV2(command.request);
+    const resolved = await resolveContentProposalV2Input(
+      request,
+      { workspaceId: command.workspaceId, brandId: command.brandId },
+      {
+        ...proposalV2Resolution,
+        snapshotRepository: createAiContentSnapshotRepository(tx, aiContentSnapshotBlob),
+      },
+    );
+    return {
+      request: command.request,
+      baseInput: parseProposalBaseInputSnapshotV2(resolved.inputSnapshot),
+      sourceSnapshots: [],
+    };
+  },
+});
+const aiContentProposalV2 = {
+  service: aiContentProposalV2Service,
+  snapshotRepository: aiContentSnapshotRepository,
 };
 const adminRepository = createAdminRepository(pool);
 const brandIntelligenceRepository = createBrandIntelligenceRepository(pool, {

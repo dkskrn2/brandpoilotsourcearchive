@@ -1956,18 +1956,10 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           end as wiki_worker,
           case
             when max(worker.last_heartbeat_at) filter (
-              where worker.worker_type = 'dm'
-                and (
-                  worker.metadata->>'mode' = 'content_proposal'
-                  or lower(worker.worker_id) like 'content-proposal-%'
-                )
+              where worker.worker_type = 'content_proposal'
             ) >= now() - interval '90 seconds' then 'online'
             when max(worker.last_heartbeat_at) filter (
-              where worker.worker_type = 'dm'
-                and (
-                  worker.metadata->>'mode' = 'content_proposal'
-                  or lower(worker.worker_id) like 'content-proposal-%'
-                )
+              where worker.worker_type = 'content_proposal'
             ) >= now() - interval '10 minutes' then 'stale'
             else 'offline'
           end as content_proposal_worker
@@ -5690,9 +5682,9 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     async heartbeatContentProposalWorker(workerId) {
       await pool.query(
         `insert into worker_instances (worker_id, worker_type, last_heartbeat_at, metadata)
-         values ($1, 'dm', now(), '{"mode":"content_proposal"}'::jsonb)
+         values ($1, 'content_proposal', now(), '{}'::jsonb)
          on conflict (worker_id) do update
-         set worker_type = 'dm',
+         set worker_type = 'content_proposal',
              last_heartbeat_at = now(),
              metadata = excluded.metadata,
              updated_at = now()`,

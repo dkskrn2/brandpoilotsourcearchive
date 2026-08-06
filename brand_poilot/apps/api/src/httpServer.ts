@@ -36,10 +36,8 @@ import { createKakaoAuthStore, type KakaoProfile } from "./kakaoAuth.js";
 import { brandLogoRequestBodyLimit, type BrandLogoService } from "./brandLogo.js";
 import { channelNames } from "./channelCatalog.js";
 import { buildChannelCapabilities } from "./channelCapabilities.js";
-import {
-  orchestrateContentProposalBatchV2,
-  type ContentProposalOrchestrationV2Dependencies,
-} from "./contentOrchestration.js";
+import type { AiContentProposalV2Service } from "./aiContentProposalV2Service.js";
+import type { AiContentSnapshotRepository } from "./aiContentSnapshotRepository.js";
 import {
   parseAttachmentUploadTokenInput,
   parseAiContentAttachmentId,
@@ -170,7 +168,10 @@ function instagramLoginCallbackUrl(
 
 interface CreateServerOptions {
   repository: ApiRepository;
-  aiContentProposalV2?: ContentProposalOrchestrationV2Dependencies;
+  aiContentProposalV2?: {
+    service: AiContentProposalV2Service;
+    snapshotRepository: AiContentSnapshotRepository;
+  };
   workerApiToken?: string;
   contentProposalWorkerApiToken?: string;
   cronSecret?: string;
@@ -1252,6 +1253,10 @@ export function createServer(
       } else {
         reply.code(400).send({ error: message });
       }
+      return;
+    }
+    if (message === "content_proposals_disabled" || message === "content_proposal_worker_not_ready") {
+      reply.code(503).send({ error: message });
       return;
     }
     if (message.startsWith("content_proposal_")) {
@@ -2927,21 +2932,21 @@ export function createServer(
     async (request, reply) => {
       if (isObject(request.body) && request.body.contractVersion === "content-orchestration.v2") {
         if (!aiContentProposalV2) throw new Error("content_proposal_v2_not_configured");
-        const batch = await orchestrateContentProposalBatchV2({
-          routeBrandId: request.params.brandId,
-          scope: {
-            ...aiContentScope(request, request.params.brandId),
-            actorUserId: requiredAiContentActorUserId(request),
-          },
-          body: request.body,
+        const scope = aiContentScope(request, request.params.brandId);
+        const result = await aiContentProposalV2.service.create({
+          source: "manual",
+          workspaceId: scope.workspaceId,
+          brandId: scope.brandId,
+          actorUserId: requiredAiContentActorUserId(request),
+          request: request.body as never,
           idempotencyKey: requiredAiContentField(
             request.headers["idempotency-key"],
             "ai_content_idempotency_key_invalid",
             200,
           ),
-        }, aiContentProposalV2);
+        });
         reply.code(202);
-        return { batchId: batch.id, status: batch.status };
+        return { batchId: result.proposalBatchId, status: "queued" };
       }
       if (isObject(request.body) && Object.prototype.hasOwnProperty.call(request.body, "contractVersion")) {
         throw new Error("ai_content_proposal_contract_version_unsupported");
@@ -2983,8 +2988,8 @@ export function createServer(
         queryKeys.length !== 1
         || queryKeys[0] !== "format"
         || typeof format !== "string"
-        || !(["card_news", "blog", "reel", "marketing_content"] as const).includes(
-          format as ContentOutputFormatV2,
+        || !(["card_news", "blog", "reel"] as const).includes(
+          format as "card_news" | "blog" | "reel",
         )
       ) {
         throw new Error("ai_content_reference_seed_query_invalid");

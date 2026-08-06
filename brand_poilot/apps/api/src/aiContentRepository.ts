@@ -1,5 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
   type AiContentManifest,
@@ -46,6 +48,18 @@ import {
   enqueueAiContentRenderJobs,
 } from "./aiContentRenderJobs.js";
 import { assertAiContentWritable, withAiContentTransactionFence } from "./aiContentMaintenance.js";
+import {
+  parseContentOrchestrationV2 as parseCanonicalContentOrchestrationV2,
+  type ContentOrchestrationV2 as CanonicalContentOrchestrationV2,
+} from "@brand-pilot/content-contracts";
+import {
+  canonicalProposalJson,
+  proposalSha256,
+  type EnqueueProposalV2Input,
+  type ProposalV2CreationResult,
+  type ProposalV2ReplayIdentity,
+  type ProposalV2Transaction,
+} from "./aiContentProposalV2Service.js";
 
 export interface BrandScope {
   workspaceId: string;
@@ -212,6 +226,7 @@ export interface AiContentProposalBatchRecord {
   origin: "manual" | "scheduled_crawl";
   contentFamily: "informational" | "marketing";
   request: Record<string, unknown>;
+  resumeInput?: CanonicalContentOrchestrationV2;
   sourceSnapshots: Record<string, unknown>[];
   status: "queued" | "building" | "ready" | "failed";
   proposals?: AiContentProposalRecord[];
@@ -434,6 +449,235 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(normalize(value));
 }
 
+type ProposalCatalog = {
+  contractSourceHash: string;
+  proposalContracts: {
+    requestVersion: "content-proposal-request.v2";
+    baseInputVersion: "proposal-base-input.v2";
+    outputVersion: "content-proposal.v2";
+    promptVersion: "proposal.writer.v2";
+    outputSchemaSha256: string;
+  };
+  researchEvidence: { version: "research-evidence.v1" };
+};
+
+const EXPECTED_PROPOSAL_CATALOG_SHA256 = "94c6622ce5c5ef74b9d011dd0d35035f0f0b5580160dc2a2264b08030a5724fb";
+const PROPOSAL_MODEL_ID = "gpt-5.6-terra";
+
+function loadProposalCatalog(): ProposalCatalog {
+  const url = import.meta.resolve("@brand-pilot/content-contracts/generated/content-catalog.json");
+  const bytes = readFileSync(fileURLToPath(url));
+  const catalogSha256 = createHash("sha256").update(bytes).digest("hex");
+  if (catalogSha256 !== EXPECTED_PROPOSAL_CATALOG_SHA256) {
+    throw new Error("content_contract_catalog_hash_mismatch");
+  }
+  const catalog = JSON.parse(bytes.toString("utf8")) as ProposalCatalog;
+  if (
+    catalog.contractSourceHash !== "f1e754cb2c2664ef21f41597a45b2ed424ebc040b949f5bf4cece251195ab5f8"
+    || catalog.proposalContracts.requestVersion !== "content-proposal-request.v2"
+    || catalog.proposalContracts.baseInputVersion !== "proposal-base-input.v2"
+    || catalog.proposalContracts.outputVersion !== "content-proposal.v2"
+    || catalog.proposalContracts.promptVersion !== "proposal.writer.v2"
+    || catalog.proposalContracts.outputSchemaSha256 !== "54bf063cf32926874af6b098272df08d41a9e7d7f578ee6560debe44428cf5f3"
+    || catalog.researchEvidence.version !== "research-evidence.v1"
+  ) {
+    throw new Error("content_contract_catalog_invalid");
+  }
+  return catalog;
+}
+
+export interface ProposalV2Repository {
+  findCommittedReplay(identity: ProposalV2ReplayIdentity): Promise<ProposalV2CreationResult | null>;
+  withTransaction<T>(work: (tx: ProposalV2Transaction) => Promise<T>): Promise<T>;
+  lockIdempotencyKey(tx: ProposalV2Transaction, identity: ProposalV2ReplayIdentity): Promise<void>;
+  findReplay(
+    tx: ProposalV2Transaction,
+    identity: ProposalV2ReplayIdentity,
+  ): Promise<ProposalV2CreationResult | null>;
+  enqueue(tx: ProposalV2Transaction, input: EnqueueProposalV2Input): Promise<ProposalV2CreationResult>;
+}
+
+function mapProposalV2CreationResult(
+  row: Record<string, unknown>,
+  disposition: ProposalV2CreationResult["disposition"],
+): ProposalV2CreationResult {
+  return {
+    disposition,
+    proposalRunId: row.proposal_run_id ? String(row.proposal_run_id) : null,
+    proposalBatchId: String(row.id),
+    status: "proposal_pending",
+  };
+}
+
+async function findProposalV2Replay(
+  database: Pick<Pool | PoolClient, "query">,
+  identity: ProposalV2ReplayIdentity,
+  lock: boolean,
+): Promise<ProposalV2CreationResult | null> {
+  const result = await database.query(
+    `select batch.*,run.id proposal_run_id,
+            batch.created_by_user_id is not distinct from $4::uuid actor_matches,
+            batch.input_snapshot_json->>'replayFingerprint' = $5 request_fingerprint_matches
+       from ai_content_proposal_batches batch
+       left join automated_content_proposal_runs run
+         on run.proposal_batch_id=batch.id
+        and run.workspace_id=batch.workspace_id and run.brand_id=batch.brand_id
+      where batch.workspace_id=$1 and batch.brand_id=$2 and batch.idempotency_key=$3
+      ${lock ? "for update of batch" : ""}`,
+    [
+      identity.workspaceId,
+      identity.brandId,
+      identity.idempotencyKey,
+      identity.actorUserId,
+      identity.replayFingerprint,
+    ],
+  );
+  if (!result.rowCount) return null;
+  const row = result.rows[0] as Record<string, unknown>;
+  if (row.actor_matches !== true || row.request_fingerprint_matches !== true) {
+    throw new Error("ai_content_proposal_batch_conflict");
+  }
+  return mapProposalV2CreationResult(row, "replayed");
+}
+
+export function createAiContentProposalV2Repository(pool: Pool): ProposalV2Repository {
+  const catalog = loadProposalCatalog();
+  const commandDescriptorSha256 = proposalSha256({
+    runner: "codex-exec",
+    model: PROPOSAL_MODEL_ID,
+    promptVersion: catalog.proposalContracts.promptVersion,
+    outputSchemaSha256: catalog.proposalContracts.outputSchemaSha256,
+    requestContractVersion: catalog.proposalContracts.requestVersion,
+    baseInputContractVersion: catalog.proposalContracts.baseInputVersion,
+    researchContractVersion: catalog.researchEvidence.version,
+    proposalContractVersion: catalog.proposalContracts.outputVersion,
+  });
+  return {
+    findCommittedReplay(identity) {
+      return findProposalV2Replay(pool, identity, false);
+    },
+    async withTransaction(work) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await assertAiContentWritable(client);
+        const result = await work(client as ProposalV2Transaction);
+        await client.query("COMMIT");
+        return result;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+    async lockIdempotencyKey(tx, identity) {
+      await tx.query(
+        "select pg_advisory_xact_lock(hashtextextended($1,0))",
+        [`proposal-v2:${identity.workspaceId}:${identity.brandId}:${identity.idempotencyKey}`],
+      );
+    },
+    findReplay(tx, identity) {
+      return findProposalV2Replay(tx, identity, true);
+    },
+    async enqueue(tx, input) {
+      if (input.actorUserId !== null) {
+        await assertActiveAiContentActor(tx, {
+          workspaceId: input.workspaceId,
+          brandId: input.brandId,
+          actorUserId: input.actorUserId,
+        });
+      }
+      const workerRequestJson = canonicalProposalJson(input.workerRequest);
+      const baseInputJson = canonicalProposalJson(input.baseInput);
+      const inputSnapshotJson = canonicalProposalJson({
+        replayFingerprint: input.replayFingerprint,
+        baseInput: input.baseInput,
+        resumeInput: input.request,
+      });
+      const requestSha256 = proposalSha256(input.workerRequest);
+      const baseInputSha256 = proposalSha256(input.baseInput);
+      const created = await tx.query(
+        `insert into ai_content_proposal_batches(
+           workspace_id,brand_id,origin,purpose,request_json,source_snapshot_json,
+           input_snapshot_json,status,idempotency_key,created_by_user_id
+         ) values($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,'queued',$8,$9::uuid)
+         on conflict(workspace_id,brand_id,idempotency_key) do nothing
+         returning *`,
+        [
+          input.workspaceId,
+          input.brandId,
+          input.source === "scheduled_crawl" ? "scheduled_crawl" : "manual",
+          input.request.purpose,
+          workerRequestJson,
+          canonicalProposalJson(input.sourceSnapshots),
+          inputSnapshotJson,
+          input.idempotencyKey,
+          input.actorUserId,
+        ],
+      );
+      const batch = created.rows[0] as Record<string, unknown> | undefined;
+      if (!batch) {
+        const replay = await findProposalV2Replay(tx, input, true);
+        if (!replay) throw new Error("ai_content_proposal_batch_conflict");
+        return replay;
+      }
+      const jobResult = await tx.query(
+        `insert into ai_content_proposal_jobs(workspace_id,brand_id,batch_id,status)
+         values($1,$2,$3,'queued') returning id`,
+        [input.workspaceId, input.brandId, batch.id],
+      );
+      const jobId = String(jobResult.rows[0]?.id ?? "");
+      if (!jobId) throw new Error("ai_content_proposal_job_insert_failed");
+      const enqueueContractSha256 = proposalSha256({
+        jobId,
+        batchId: String(batch.id),
+        workspaceId: input.workspaceId,
+        brandId: input.brandId,
+        requestSha256,
+        baseInputSha256,
+        commandDescriptorSha256,
+        contractSourceSha256: catalog.contractSourceHash,
+        catalogSha256: EXPECTED_PROPOSAL_CATALOG_SHA256,
+      });
+      await tx.query(
+        `insert into ai_content_proposal_job_contracts(
+           job_id,batch_id,workspace_id,brand_id,request_contract_version,
+           base_input_contract_version,research_contract_version,proposal_contract_version,
+           proposal_prompt_version,proposal_output_schema_sha256,proposal_model_id,
+           command_descriptor_sha256,request_sha256,base_input_sha256,
+           contract_source_sha256,catalog_sha256,enqueue_contract_sha256
+         ) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+        [
+          jobId,
+          batch.id,
+          input.workspaceId,
+          input.brandId,
+          catalog.proposalContracts.requestVersion,
+          catalog.proposalContracts.baseInputVersion,
+          catalog.researchEvidence.version,
+          catalog.proposalContracts.outputVersion,
+          catalog.proposalContracts.promptVersion,
+          catalog.proposalContracts.outputSchemaSha256,
+          PROPOSAL_MODEL_ID,
+          commandDescriptorSha256,
+          requestSha256,
+          baseInputSha256,
+          catalog.contractSourceHash,
+          EXPECTED_PROPOSAL_CATALOG_SHA256,
+          enqueueContractSha256,
+        ],
+      );
+      return {
+        disposition: "created",
+        proposalRunId: input.proposalRunId,
+        proposalBatchId: String(batch.id),
+        status: "proposal_pending",
+      };
+    },
+  };
+}
+
 const aiContentReferenceSeedFormats = new Set<ContentOutputFormatV2>([
   "card_news",
   "blog",
@@ -523,8 +767,8 @@ function mapProposal(row: Record<string, unknown>): AiContentProposalRecord {
 }
 
 function mapProposalBatch(row: Record<string, unknown>): AiContentProposalBatchRecord {
-  const request = object(row.request_json);
-  const v2 = request.contractVersion === "content-proposal-request.v2";
+  const workerRequest = object(row.request_json);
+  const v2 = workerRequest.contractVersion === "content-proposal-request.v2";
   const rawEvidence = object(row.evidence_json);
   const evidenceItems = Array.isArray(rawEvidence.items)
     ? rawEvidence.items.flatMap((value) => {
@@ -542,8 +786,17 @@ function mapProposalBatch(row: Record<string, unknown>): AiContentProposalBatchR
       })
     : [];
   const inputSnapshot = object(row.input_snapshot_json);
-  const selectedReferences = Array.isArray(inputSnapshot.references)
-    ? inputSnapshot.references.flatMap((value) => {
+  const baseInput = v2 ? object(inputSnapshot.baseInput) : inputSnapshot;
+  let resumeInput: CanonicalContentOrchestrationV2 | undefined;
+  if (v2) {
+    try {
+      resumeInput = parseCanonicalContentOrchestrationV2(inputSnapshot.resumeInput);
+    } catch {
+      throw new Error("ai_content_proposal_resume_input_invalid");
+    }
+  }
+  const selectedReferences = Array.isArray(baseInput.references)
+    ? baseInput.references.flatMap((value) => {
         const reference = object(value);
         if (typeof reference.referenceItemId !== "string" || typeof reference.title !== "string") return [];
         const image = object(reference.image);
@@ -562,9 +815,10 @@ function mapProposalBatch(row: Record<string, unknown>): AiContentProposalBatchR
     workspaceId: String(row.workspace_id),
     brandId: String(row.brand_id),
     origin: row.origin as AiContentProposalBatchRecord["origin"],
-    contentFamily: row.content_family as AiContentProposalBatchRecord["contentFamily"],
-    request,
-    sourceSnapshots: Array.isArray(row.source_snapshot_json)
+    contentFamily: (row.purpose ?? row.content_family) as AiContentProposalBatchRecord["contentFamily"],
+    request: v2 ? resumeInput as unknown as Record<string, unknown> : workerRequest,
+    ...(resumeInput ? { resumeInput } : {}),
+    sourceSnapshots: !v2 && Array.isArray(row.source_snapshot_json)
       ? row.source_snapshot_json as Record<string, unknown>[]
       : [],
     status: row.status as AiContentProposalBatchRecord["status"],
@@ -1764,7 +2018,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         await assertActiveAiContentActor(client, input);
         const replay = await client.query(
           `select *,
-                  created_by_user_id = $4 actor_matches,
+                  created_by_user_id is not distinct from $4::uuid actor_matches,
                   request_json->>'requestFingerprint' = $5 request_fingerprint_matches
              from ai_content_proposal_batches
             where workspace_id=$1 and brand_id=$2 and idempotency_key=$3
@@ -1812,7 +2066,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         await assertActiveAiContentActor(client, input);
         const replay = await client.query(
           `select *,
-                  created_by_user_id = $4 actor_matches,
+                  created_by_user_id is not distinct from $4::uuid actor_matches,
                   request_json->>'requestFingerprint' = $5 request_fingerprint_matches
              from ai_content_proposal_batches
             where workspace_id=$1 and brand_id=$2 and idempotency_key=$3
@@ -1836,7 +2090,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
 
         const created = await client.query(
           `insert into ai_content_proposal_batches (
-             workspace_id,brand_id,origin,content_family,request_json,
+             workspace_id,brand_id,origin,purpose,request_json,
              source_snapshot_json,input_snapshot_json,status,idempotency_key,created_by_user_id
            ) values ($1,$2,$3,$4,$5::jsonb,'[]'::jsonb,$6::jsonb,'queued',$7,$8)
            on conflict (workspace_id,brand_id,idempotency_key) do nothing
@@ -1856,7 +2110,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         if (!batch) {
           const existing = await client.query(
             `select *,
-                    created_by_user_id = $4 actor_matches,
+                    created_by_user_id is not distinct from $4::uuid actor_matches,
                     request_json->>'requestFingerprint' = $5 request_fingerprint_matches
                from ai_content_proposal_batches
               where workspace_id=$1 and brand_id=$2 and idempotency_key=$3

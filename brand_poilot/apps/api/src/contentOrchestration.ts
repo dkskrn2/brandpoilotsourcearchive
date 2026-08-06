@@ -97,6 +97,11 @@ export interface ContentProposalOrchestrationV2Dependencies {
   now(): Date;
 }
 
+export type ResolveContentProposalV2Dependencies = Pick<
+  ContentProposalOrchestrationV2Dependencies,
+  "loadChannelCapability" | "resolveAiContentSeed" | "snapshotRepository" | "now"
+>;
+
 function invalid(): never {
   throw new Error("content_orchestration_invalid");
 }
@@ -345,6 +350,35 @@ export async function orchestrateContentProposalBatchV2(
   });
   if (replay) return replay;
 
+  const { channelTarget, inputSnapshot } = await resolveContentProposalV2Input(
+    request,
+    scope,
+    dependencies,
+  );
+
+  return dependencies.createAiContentProposalBatchV2({
+    workspaceId: input.scope.workspaceId,
+    brandId: scopeBrandId,
+    actorUserId: input.scope.actorUserId,
+    origin: "manual",
+    idempotencyKey: input.idempotencyKey,
+    requestFingerprint,
+    purpose: request.purpose,
+    outputFormat: request.outputSettings.outputFormat,
+    channelTarget,
+    inputSnapshot,
+  });
+}
+
+export async function resolveContentProposalV2Input(
+  request: ContentOrchestrationV2,
+  scope: BrandScope,
+  dependencies: ResolveContentProposalV2Dependencies,
+): Promise<{
+  channelTarget: ContentOrchestrationV2["outputSettings"]["channelTargets"][number];
+  inputSnapshot: ProposalBaseInputSnapshotV2;
+}> {
+
   const channelTarget = request.outputSettings.channelTargets[0];
   if (channelTarget !== "blog_export") {
     const capability = await dependencies.loadChannelCapability(scope, channelTarget);
@@ -392,16 +426,5 @@ export async function orchestrateContentProposalBatchV2(
     capturedAt: dependencies.now().toISOString(),
   };
 
-  return dependencies.createAiContentProposalBatchV2({
-    workspaceId: input.scope.workspaceId,
-    brandId: scopeBrandId,
-    actorUserId: input.scope.actorUserId,
-    origin: "manual",
-    idempotencyKey: input.idempotencyKey,
-    requestFingerprint,
-    purpose: request.purpose,
-    outputFormat: request.outputSettings.outputFormat,
-    channelTarget,
-    inputSnapshot,
-  });
+  return { channelTarget, inputSnapshot };
 }

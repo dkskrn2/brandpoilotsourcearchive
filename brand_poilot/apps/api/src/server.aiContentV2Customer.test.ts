@@ -5,8 +5,12 @@ import type { ContentOrchestrationV2, ContentOutputFormatV2, ContentSeedV2 } fro
 import type { AiContentProposalBatchRecord } from "./aiContentRepository.js";
 import type { AiContentSnapshotRepository } from "./aiContentSnapshotRepository.js";
 import type { ChannelCapability } from "./channelCapabilities.js";
-import type { ContentProposalOrchestrationV2Dependencies } from "./contentOrchestration.js";
+import {
+  orchestrateContentProposalBatchV2,
+  type ContentProposalOrchestrationV2Dependencies,
+} from "./contentOrchestration.js";
 import type { ApiRepository } from "./types.js";
+import type { AiContentProposalV2Service } from "./aiContentProposalV2Service.js";
 
 const workspaceId = "11111111-1111-4111-8111-111111111111";
 const brandId = "22222222-2222-4222-8222-222222222222";
@@ -83,7 +87,7 @@ function readyCapability(overrides: Partial<ChannelCapability> = {}): ChannelCap
     enabled: true,
     connectionStatus: "connected",
     canGenerate: true,
-    generationFormats: ["card_news", "reel", "marketing_content"],
+    generationFormats: ["card_news", "reel"],
     exportModes: ["image"],
     publishModes: ["instagram_feed_carousel"],
     readiness: "ready",
@@ -127,6 +131,7 @@ type SetupOverrides = {
   loadApprovedProduct?: AiContentSnapshotRepository["loadApprovedProduct"];
   freezeReferences?: AiContentSnapshotRepository["freezeReferences"];
   referenceSeeds?: Awaited<ReturnType<ApiRepository["listAiContentReferenceSeeds"]>>;
+  proposalService?: AiContentProposalV2Service;
 };
 
 function setup(overrides: SetupOverrides = {}) {
@@ -200,7 +205,30 @@ function setup(overrides: SetupOverrides = {}) {
   const app = createServer({
     repository,
     kakaoAuth: kakaoAuth as never,
-    aiContentProposalV2: dependencies,
+    aiContentProposalV2: {
+      snapshotRepository,
+      service: overrides.proposalService ?? {
+        async create(command) {
+          if (command.source !== "manual") throw new Error("proposal_v2_source_unsupported");
+          const created = await orchestrateContentProposalBatchV2({
+            routeBrandId: command.brandId,
+            scope: {
+              workspaceId: command.workspaceId,
+              brandId: command.brandId,
+              actorUserId: command.actorUserId,
+            },
+            body: command.request,
+            idempotencyKey: command.idempotencyKey,
+          }, dependencies);
+          return {
+            disposition: "created",
+            proposalRunId: null,
+            proposalBatchId: created.id,
+            status: "proposal_pending",
+          };
+        },
+      },
+    },
     readinessPolicy: {
       schedulerEnabled: false,
       publishingEnabled: false,
@@ -252,10 +280,58 @@ describe("Proposal V2 maintenance fence", () => {
 });
 
 describe("V2 customer proposal batches", () => {
+  it("preserves the manual Proposal V2 HTTP contract and stable idempotency header", async () => {
+    const create = vi.fn(async (_command: Parameters<AiContentProposalV2Service["create"]>[0]) => ({
+      disposition: "created" as const,
+      proposalRunId: null,
+      proposalBatchId: batchId,
+      status: "proposal_pending" as const,
+    }));
+    const harness = setup({ proposalService: { create } });
+
+    const first = await postV2(harness.app);
+    const second = await postV2(harness.app);
+
+    expect(first.statusCode).toBe(202);
+    expect(second.statusCode).toBe(202);
+    expect(first.json()).toEqual({ batchId, status: "queued" });
+    expect(second.json()).toEqual(first.json());
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      source: "manual",
+      workspaceId,
+      brandId,
+      actorUserId,
+      idempotencyKey: "proposal-v2-1",
+      request: v2Body(),
+    }));
+    expect(Object.keys(create.mock.calls[0]![0])).toEqual([
+      "source", "workspaceId", "brandId", "actorUserId", "request", "idempotencyKey",
+    ]);
+    await harness.app.close();
+  });
+
+  it.each(["content_proposals_disabled", "content_proposal_worker_not_ready"])(
+    "maps %s from the common V2 service to 503",
+    async (errorCode) => {
+      const harness = setup({
+        proposalService: {
+          create: vi.fn(async () => { throw new Error(errorCode); }),
+        },
+      });
+
+      const response = await postV2(harness.app);
+
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual({ error: errorCode });
+      await harness.app.close();
+    },
+  );
+
   it.each([
     ["card_news", "informational", null, "1:1"],
     ["reel", "informational", null, "9:16"],
-    ["marketing_content", "marketing", productId, "1:1"],
+    ["reel", "marketing", productId, "9:16"],
   ] as const)("creates a connected Instagram %s batch", async (outputFormat, purpose, selectedProductId, aspectRatio) => {
     const harness = setup();
     const response = await postV2(harness.app, v2Body({
@@ -420,7 +496,7 @@ describe("V2 customer proposal batches", () => {
       ? { loadApprovedProduct: unavailable }
       : { freezeReferences: unavailable });
     const body = resource === "product"
-      ? v2Body({ purpose: "marketing", productId, outputSettings: { outputFormat: "marketing_content", channelTargets: ["instagram"], aspectRatio: "1:1", outputCount: 1 } })
+      ? v2Body({ purpose: "marketing", productId, outputSettings: { outputFormat: "reel", channelTargets: ["instagram"], aspectRatio: "9:16", outputCount: 1 } })
       : v2Body({ seed: { kind: "reference", items: [{ referenceId, roles: ["planning"] }] } });
     const response = await postV2(harness.app, body);
 
@@ -617,7 +693,7 @@ describe("customer reference seed route", () => {
     await harness.app.close();
   });
 
-  it.each(["card_news", "blog", "reel", "marketing_content"] as ContentOutputFormatV2[])(
+  it.each(["card_news", "blog", "reel"] as ContentOutputFormatV2[])(
     "accepts the exact %s format and allows an empty result",
     async (format) => {
       const harness = setup();
