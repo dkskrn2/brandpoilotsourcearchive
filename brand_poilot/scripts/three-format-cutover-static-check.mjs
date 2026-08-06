@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 const CATALOG_FILE = "packages/brand-pilot-content-contracts/src/catalog.ts";
 const BINDING_FILE = "packages/brand-pilot-content-contracts/src/binding.ts";
 const REPOSITORY_FILE = "apps/api/src/aiContentRepository.ts";
+const CUSTOMER_UI_GATEWAY_FILE = "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts";
 
 const SQL_FILES = Object.freeze([
   REPOSITORY_FILE,
@@ -51,6 +52,7 @@ export const PRODUCTION_FILE_ALLOWLIST = Object.freeze([
     ...CLAIM_WORKER_FILES,
     ...NEW_PIPELINE_FILES,
     ...Object.values(PROMPT_BRANCH_FILES),
+    CUSTOMER_UI_GATEWAY_FILE,
   ]),
 ].sort());
 
@@ -169,6 +171,21 @@ function checkAssemblerIntegration(files, violations) {
   }
 }
 
+function checkActiveV3Readers(files, violations) {
+  const repository = files.get(REPOSITORY_FILE) ?? "";
+  if (!/ai-content\.v3/.test(repository)) {
+    violations.push(violation("missing_active_v3_repository_reader", REPOSITORY_FILE, "generation DTOs must recognize active V3 manifests"));
+  }
+
+  const gateway = files.get(CUSTOMER_UI_GATEWAY_FILE) ?? "";
+  if (!/ai-content\.v3/.test(gateway)) {
+    violations.push(violation("missing_active_v3_ui_reader", CUSTOMER_UI_GATEWAY_FILE, "customer UI must recognize active V3 manifests"));
+  }
+  if (/\bmarketing_content\b/.test(gateway)) {
+    violations.push(violation("legacy_marketing_content_ui_path", CUSTOMER_UI_GATEWAY_FILE, "customer UI must not route new output through marketing_content"));
+  }
+}
+
 export async function inspectThreeFormatCutover(rootDirectory) {
   const root = resolve(rootDirectory);
   const { files, violations } = await readProductionFiles(root);
@@ -177,6 +194,7 @@ export async function inspectThreeFormatCutover(rootDirectory) {
   checkLegacyPipelineContracts(files, violations);
   checkCatalogAndPromptBranches(files, violations);
   checkAssemblerIntegration(files, violations);
+  checkActiveV3Readers(files, violations);
   const uniqueViolations = [...new Map(
     violations.map((item) => [`${item.id}:${item.file}:${item.detail}`, item]),
   ).values()];

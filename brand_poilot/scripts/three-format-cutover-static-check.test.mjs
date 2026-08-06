@@ -31,6 +31,7 @@ const baseline = Object.freeze({
   `,
   "apps/api/src/aiContentRepository.ts": `
     import { assembleAiContentFixedInput } from "./aiContentFixedInputAssembler.js";
+    const activeManifestVersion = "ai-content.v3";
     const assembly = assembleAiContentFixedInput(lockedSources);
     await tx.query("select create_ai_content_generation_prompt_binding($1,$2)", [id, assembly.binding]);
     await tx.query(\`select generation.output_format from ai_content_generations generation where generation.id=$1\`);
@@ -51,6 +52,10 @@ const baseline = Object.freeze({
   "workers/brand-pilot-reel-worker/src/worker.ts": `export const workerFailure = "reel_worker_failed";`,
   "workers/brand-pilot-image-worker/src/aiContentFinalizer.ts": `const plans = ["card-news-plan.v2", "blog-plan.v2", "reel-plan.v2"]; const manifest = "ai-content.v3";`,
   "apps/api/src/automatedCardNews.ts": `const intentionallyDeferred = "marketing-plan.v2 ai-content.v2 marketing-worker content_type";`,
+  "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts": `
+    const activeManifestVersion = "ai-content.v3";
+    const outputFormats = ["card_news", "blog", "reel"];
+  `,
 });
 
 async function createFixture() {
@@ -103,6 +108,9 @@ const violationFixtures = [
   ["missing_fixed_assembler_import", "apps/api/src/aiContentRepository.ts", baseline["apps/api/src/aiContentRepository.ts"].replace('import { assembleAiContentFixedInput } from "./aiContentFixedInputAssembler.js";', "")],
   ["missing_fixed_assembler_call", "apps/api/src/aiContentRepository.ts", baseline["apps/api/src/aiContentRepository.ts"].replace("const assembly = assembleAiContentFixedInput(lockedSources);", "const assembly = lockedSources;")],
   ["missing_prompt_binding_sql_call", "apps/api/src/aiContentRepository.ts", baseline["apps/api/src/aiContentRepository.ts"].replace("create_ai_content_generation_prompt_binding", "insert_prompt_binding_directly")],
+  ["missing_active_v3_repository_reader", "apps/api/src/aiContentRepository.ts", baseline["apps/api/src/aiContentRepository.ts"].replace("ai-content.v3", "unknown-manifest")],
+  ["missing_active_v3_ui_reader", "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts", "const outputFormats = ['card_news', 'blog', 'reel'];"],
+  ["legacy_marketing_content_ui_path", "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts", "const activeManifestVersion = 'ai-content.v3'; const oldFormat = 'marketing_content';"],
 ];
 
 for (const [expectedId, relativePath, content] of violationFixtures) {
