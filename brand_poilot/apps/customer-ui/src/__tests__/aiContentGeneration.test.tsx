@@ -379,7 +379,7 @@ describe("AiContentGenerationPage", () => {
     });
 
     expect(await screen.findByRole("tab", { name: "기획 근거" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "카피" })).toBeVisible();
+    expect(screen.queryByRole("tab", { name: "카피" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "완성본" })).toBeVisible();
     expect(screen.getByRole("tab", { name: "게시" })).toBeVisible();
     expect(screen.getByText("여름 피부 관리")).toBeVisible();
@@ -388,9 +388,8 @@ describe("AiContentGenerationPage", () => {
     expect(screen.getByText(/동결된 레퍼런스 제목/)).toBeVisible();
     expect(screen.getByText("동결된 브랜드 모델")).toBeVisible();
 
-    await user.click(screen.getByRole("tab", { name: "카피" }));
-    expect(screen.getByText("핵심 메시지: 여름 캠페인 시작")).toBeVisible();
     await user.click(screen.getByRole("tab", { name: "완성본" }));
+    expect(screen.getByText("핵심 메시지: 여름 캠페인 시작")).toBeVisible();
     expect(screen.getByRole("button", { name: "카드뉴스 표지 결과 ZIP 다운로드" })).toBeEnabled();
     await user.click(screen.getByRole("tab", { name: "게시" }));
     expect(screen.getByText("Instagram OAuth 게시 계정 미연결")).toBeVisible();
@@ -433,9 +432,8 @@ describe("AiContentGenerationPage", () => {
     expect(screen.queryByText(/기존 생성 건에는 orchestration snapshot이 없어/)).not.toBeInTheDocument();
   });
 
-  it("edits and saves structured copy without exposing the retired partial-regeneration path", async () => {
-    const user = userEvent.setup();
-    const { gateway } = renderGeneration("generation-card-complete", false, (configuredGateway) => {
+  it("does not expose the retired save-copy contract even when stale output metadata advertises it", async () => {
+    renderGeneration("generation-card-complete", false, (configuredGateway) => {
       const getGeneration = configuredGateway.getGeneration.bind(configuredGateway);
       configuredGateway.getGeneration = vi.fn(async (brandId, generationId) => {
         const result = await getGeneration(brandId, generationId);
@@ -455,46 +453,13 @@ describe("AiContentGenerationPage", () => {
           })),
         };
       });
-      configuredGateway.saveOutputCopy = vi.fn(async (_brandId, _outputId, input) => {
-        const result = await getGeneration("brand-1", "generation-card-complete");
-        return {
-          ...result.outputs[0],
-          copy: {
-            hook: "",
-            keyMessage: "",
-            body: "",
-            cta: "",
-            caption: "",
-            hashtags: [],
-            ...input.fields,
-          },
-        };
-      });
     });
 
-    await user.click(await screen.findByRole("tab", { name: "카피" }));
-    expect(screen.getByDisplayValue("저장 전 훅")).toBeVisible();
-    expect(screen.getByDisplayValue("저장 전 핵심 메시지")).toBeVisible();
-    expect(screen.getByDisplayValue("저장 전 본문")).toBeVisible();
-    expect(screen.getByDisplayValue("저장 전 CTA")).toBeVisible();
-    expect(screen.getByDisplayValue("저장 전 캡션")).toBeVisible();
-    expect(screen.getByDisplayValue("기존, 태그")).toBeVisible();
+    expect(await screen.findByRole("tab", { name: "완성본" })).toBeVisible();
+    expect(screen.queryByRole("tab", { name: "카피" })).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue("저장 전 훅")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /카피 저장/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /다시 생성/ })).not.toBeInTheDocument();
-
-    const cta = screen.getByLabelText("카드뉴스 표지 CTA");
-    await user.clear(cta);
-    await user.type(cta, "지금 확인");
-    await user.click(screen.getByRole("button", { name: "카드뉴스 표지 카피 저장" }));
-
-    expect(gateway.saveOutputCopy).toHaveBeenCalledWith(
-      "00000000-0000-4000-8000-000000000100",
-      "output-card-news",
-      expect.objectContaining({
-        fields: expect.objectContaining({ cta: "지금 확인" }),
-        idempotencyKey: expect.any(String),
-      }),
-    );
-    expect(await screen.findByText("카피를 저장했습니다.")).toBeVisible();
   });
 
   it("hides unsupported revision and publish actions for a V3 reel result", async () => {

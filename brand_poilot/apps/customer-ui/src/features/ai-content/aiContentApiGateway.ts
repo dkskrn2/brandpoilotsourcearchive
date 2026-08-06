@@ -102,7 +102,6 @@ interface ApiOutput {
   id: string; generationId: string; outputIndex: number; title: string | null; status: AiGenerationOutput["status"];
   content: Record<string, unknown>; manifest: Record<string, unknown>; manifestUrl: string | null;
   failureCode: string | null; failureMessage: string | null; downloadedAt: string | null;
-  revisionCapabilities?: AiGenerationOutput["revisionCapabilities"];
   manifestVersion?: AiGenerationOutput["manifestVersion"];
 }
 
@@ -110,18 +109,6 @@ function text(value: unknown) {
   return typeof value === "string" ? value : "";
 }
 
-function outputCopy(content: Record<string, unknown>) {
-  return {
-    hook: text(content.hook ?? content.headline ?? content.title),
-    keyMessage: text(content.keyMessage ?? content.concept ?? content.summary),
-    body: text(content.body),
-    cta: text(content.cta),
-    caption: text(content.caption),
-    hashtags: Array.isArray(content.hashtags)
-      ? content.hashtags.filter((tag): tag is string => typeof tag === "string")
-      : [],
-  };
-}
 interface ApiGeneration {
   id: string; brandId: string; outputFormat: ContentStudioOutputFormat; purpose: ContentPurpose;
   title: string; status: AiContentGeneration["status"];
@@ -486,10 +473,8 @@ function mapGeneration(value: ApiGeneration): AiContentGeneration {
         title: manifest?.title ?? output.title ?? `결과 ${output.outputIndex}`,
         status: output.status,
         artifact: manifest ? outputArtifact(output.id, manifest) : null,
-        copy: outputCopy(manifest?.content ?? output.content),
         failureReason: output.failureMessage ?? output.failureCode,
         downloadedAt: output.downloadedAt,
-        revisionCapabilities: output.revisionCapabilities ?? [],
         manifestVersion: manifest?.version ?? null,
         outputFormat,
         publishSupported: manifest?.outputFormat === "card_news",
@@ -691,15 +676,6 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
         throw new Error("ai_content_generation_retry_response_invalid");
       }
       return generation;
-    },
-    async saveOutputCopy(brandId, outputId, input) {
-      const generation = mapGeneration(await client.requestJson<ApiGeneration>(
-        `/brands/${brandId}/ai-content/outputs/${outputId}/copy`,
-        { method: "PUT", body: JSON.stringify(input) },
-      ));
-      const output = generation.outputs.find((item) => item.id === outputId);
-      if (!output) throw new Error("ai_content_output_not_found");
-      return output;
     },
     downloadOutput(brandId, outputId) {
       return client.requestBlob(`/brands/${brandId}/ai-content/outputs/${outputId}/download`, { method: "GET" });

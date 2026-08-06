@@ -408,7 +408,8 @@ describe("createAiContentApiGateway", () => {
       publishSupported,
       artifact: { kind: artifactKind },
     });
-    expect(result.outputs[0]?.copy?.caption).toBe(outputFormat === "blog" ? "" : `V3 ${purpose}`);
+    expect(result.outputs[0]).not.toHaveProperty("copy");
+    expect(result.outputs[0]?.artifact?.text).toContain(outputFormat === "blog" ? "V3 블로그" : `V3 ${purpose}`);
     if (outputFormat === "blog") expect(result.outputs[0]?.artifact?.html).toBe(manifestContent.html);
   });
 

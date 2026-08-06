@@ -1,14 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { AiGenerationOutputList } from "../components/ai-content/AiGenerationOutputList";
-import { AiContentCopyEditor } from "../components/ai-content/AiContentCopyEditor";
 import { aiContentPublishErrorMessage } from "../components/ai-content/AiContentPublishPanel";
 import { PageHeader } from "../components/layout/PageHeader";
 import { PageSkeleton } from "../components/ui/LoadingState";
 import { aiContentApiGateway } from "../features/ai-content/aiContentApiGateway";
 import type {
   AiContentGeneration,
-  AiContentCopyFields,
   AiContentGateway,
   AiContentPublishTargetInput,
   AiContentPublishTargetResult,
@@ -35,11 +33,10 @@ const generationStatusLabels: Record<AiContentGeneration["status"], string> = {
   failed: "실패"
 };
 
-type ReviewTab = "planning" | "copy" | "final" | "publish";
+type ReviewTab = "planning" | "final" | "publish";
 
 const reviewTabs: Array<{ id: ReviewTab; label: string }> = [
   { id: "planning", label: "기획 근거" },
-  { id: "copy", label: "카피" },
   { id: "final", label: "완성본" },
   { id: "publish", label: "게시" },
 ];
@@ -116,8 +113,6 @@ export function AiContentGenerationPage({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryingOutputId, setRetryingOutputId] = useState<string | null>(null);
-  const [savingCopyOutputId, setSavingCopyOutputId] = useState<string | null>(null);
-  const [copySaveMessage, setCopySaveMessage] = useState<string | null>(null);
   const [downloadedKeys, setDownloadedKeys] = useState<Set<string>>(new Set());
   const [selectedForZip, setSelectedForZip] = useState<Set<string>>(new Set());
   const [channels, setChannels] = useState<ChannelConnection[]>([]);
@@ -127,7 +122,6 @@ export function AiContentGenerationPage({
   const [selectedReviewTab, setSelectedReviewTab] = useState<ReviewTab | null>(null);
   const actionLocks = useRef({
     retry: new Set<string>(),
-    saveCopy: new Set<string>(),
     download: new Set<string>(),
     publish: new Set<string>(),
   });
@@ -241,30 +235,6 @@ export function AiContentGenerationPage({
     } finally {
       actionLocks.current.retry.delete(outputId);
       setRetryingOutputId(null);
-    }
-  }
-
-  async function saveOutputCopy(outputId: string, fields: Partial<AiContentCopyFields>) {
-    if (actionLocks.current.saveCopy.has(outputId)) return;
-    actionLocks.current.saveCopy.add(outputId);
-    try {
-      setActionError(null);
-      setCopySaveMessage(null);
-      setSavingCopyOutputId(outputId);
-      const nextOutput = await gateway.saveOutputCopy(brandId, outputId, {
-        fields,
-        idempotencyKey: crypto.randomUUID(),
-      });
-      setGeneration((current) => current ? {
-        ...current,
-        outputs: current.outputs.map((output) => output.id === outputId ? nextOutput : output),
-      } : current);
-      setCopySaveMessage("카피를 저장했습니다.");
-    } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : "카피를 저장하지 못했습니다.");
-    } finally {
-      actionLocks.current.saveCopy.delete(outputId);
-      setSavingCopyOutputId(null);
     }
   }
 
@@ -451,22 +421,6 @@ export function AiContentGenerationPage({
                 ) : (
                   <p className="muted">기존 생성 건에는 orchestration snapshot이 없어 저장된 초안과 결과만 표시합니다.</p>
                 )}
-              </section>
-            ) : null}
-
-            {activeReviewTab === "copy" ? (
-              <section className="panel content-review-copy">
-                <h2>결과 카피</h2>
-                {copySaveMessage ? <p role="status">{copySaveMessage}</p> : null}
-                {generation.outputs.map((output) => (
-                  <AiContentCopyEditor
-                    key={output.id}
-                    outputFormat={generation.outputFormat}
-                    output={output}
-                    saving={savingCopyOutputId === output.id}
-                    onSave={(fields) => saveOutputCopy(output.id, fields)}
-                  />
-                ))}
               </section>
             ) : null}
 

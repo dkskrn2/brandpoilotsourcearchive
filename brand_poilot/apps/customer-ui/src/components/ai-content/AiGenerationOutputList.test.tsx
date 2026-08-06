@@ -68,7 +68,6 @@ describe("AiGenerationOutputList V3 capabilities", () => {
       publishSupported: false,
       failureReason: null,
       downloadedAt: null,
-      revisionCapabilities: [],
     } satisfies AiGenerationOutput;
 
     render(<AiGenerationOutputList generation={generationWith(output)} downloadedKeys={new Set()} selectedForZip={new Set()} channels={[]} retryingOutputId={null} publishingOutputIds={new Set()} publishResults={{}} {...callbacks} />);
@@ -97,7 +96,6 @@ describe("AiGenerationOutputList V3 capabilities", () => {
       publishSupported: true,
       failureReason: null,
       downloadedAt: null,
-      revisionCapabilities: [],
     } satisfies AiGenerationOutput;
 
     render(<AiGenerationOutputList generation={generationWith(output)} downloadedKeys={new Set()} selectedForZip={new Set()} channels={[]} retryingOutputId={null} publishingOutputIds={new Set()} publishResults={{}} {...callbacks} />);

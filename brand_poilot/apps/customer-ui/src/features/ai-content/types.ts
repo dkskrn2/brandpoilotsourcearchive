@@ -418,22 +418,11 @@ export interface AiGenerationOutput {
   title: string;
   status: AiOutputStatus;
   artifact: PublishArtifact | null;
-  copy?: AiContentCopyFields;
   failureReason: string | null;
   downloadedAt: string | null;
-  revisionCapabilities?: Array<"save_copy">;
   manifestVersion: "ai-content.v3" | null;
   outputFormat: ContentOutputFormatV2;
   publishSupported?: boolean;
-}
-
-export interface AiContentCopyFields {
-  hook: string;
-  keyMessage: string;
-  body: string;
-  cta: string;
-  caption: string;
-  hashtags: string[];
 }
 
 export interface AiContentGenerationEvidenceSnapshot {
@@ -496,10 +485,6 @@ export interface AiContentGateway {
   listReferences(brandId: string, query?: AiContentType | AiContentReferenceQuery): Promise<AiContentReference[]>;
   listReferenceSeeds(brandId: string, format: ContentOutputFormatV2): Promise<AiContentReferenceSeed[]>;
   retryOutput(brandId: string, outputId: string, reason: string): Promise<AiContentGeneration>;
-  saveOutputCopy(brandId: string, outputId: string, input: {
-    fields: Partial<AiContentCopyFields>;
-    idempotencyKey: string;
-  }): Promise<AiGenerationOutput>;
   downloadOutput(brandId: string, outputId: string): Promise<{ blob: Blob; fileName: string }>;
   downloadGeneration(brandId: string, generationId: string, outputIds?: string[]): Promise<{ blob: Blob; fileName: string }>;
   publishOutput(brandId: string, outputId: string, input: {
