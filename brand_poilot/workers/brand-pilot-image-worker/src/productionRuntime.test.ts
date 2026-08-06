@@ -112,8 +112,11 @@ describe("production image worker runtime", () => {
     expect(dockerfile).toContain("render-reel.py");
     expect(dockerfile).toContain("run-codex-image-render.mjs");
     expect(lock.packages["node_modules/@brand-pilot/worker-runtime"]).toEqual({ resolved: "workers/brand-pilot-worker-runtime", link: true });
+    expect(lock.packages["node_modules/@brand-pilot/content-contracts"]).toEqual({ resolved: "packages/brand-pilot-content-contracts", link: true });
     expect(dockerfile).toContain("/app/workers/brand-pilot-worker-runtime/package.json ./workers/brand-pilot-worker-runtime/package.json");
     expect(dockerfile).toContain("/app/workers/brand-pilot-worker-runtime/dist ./workers/brand-pilot-worker-runtime/dist");
+    expect(dockerfile).toContain("/app/packages/brand-pilot-content-contracts/package.json ./packages/brand-pilot-content-contracts/package.json");
+    expect(dockerfile).toContain("/app/packages/brand-pilot-content-contracts/dist ./packages/brand-pilot-content-contracts/dist");
     expect(dockerfile).toContain("AGENTS.md");
     expect(dockerfile).toContain("image-render/SKILL.md");
     expect(dockerfile).toContain("threads-text/SKILL.md");
