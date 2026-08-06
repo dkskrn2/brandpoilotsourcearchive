@@ -313,6 +313,53 @@ const claimColumns = `
   composition.composed_input_json,composition.composed_input_sha256,
   composition.final_invocation_aggregate_sha256`;
 
+type ContentProposalAttemptTable =
+  | "ai_content_proposal_research_attempts"
+  | "ai_content_proposal_model_attempts";
+
+async function lockContentProposalAttemptContext(
+  client: PoolClient,
+  input: {
+    attemptTable: ContentProposalAttemptTable;
+    attemptId: string;
+    jobId?: string;
+  },
+): Promise<{ jobId: string; batchId: string } | null> {
+  const attempt = await client.query(
+    `select attempt.id,attempt.job_id
+       from ${input.attemptTable} attempt
+      where attempt.id=$1${input.jobId ? " and attempt.job_id=$2" : ""}
+      for update`,
+    input.jobId ? [input.attemptId, input.jobId] : [input.attemptId],
+  );
+  const attemptRow = attempt.rows[0] as Record<string, unknown> | undefined;
+  if (!attemptRow) return null;
+  const jobId = String(attemptRow.job_id);
+  await client.query(
+    "select pg_advisory_xact_lock(hashtextextended($1::text,0))",
+    [jobId],
+  );
+  const job = await client.query(
+    `select id,batch_id,workspace_id,brand_id
+       from ai_content_proposal_jobs
+      where id=$1
+      for update`,
+    [jobId],
+  );
+  const jobRow = job.rows[0] as Record<string, unknown> | undefined;
+  if (!jobRow) return null;
+  const batchId = String(jobRow.batch_id);
+  const batch = await client.query(
+    `select id
+       from ai_content_proposal_batches
+      where id=$1 and workspace_id=$2 and brand_id=$3
+      for update`,
+    [batchId, jobRow.workspace_id, jobRow.brand_id],
+  );
+  if (!batch.rowCount) return null;
+  return { jobId, batchId };
+}
+
 async function reclaimExpiredResearchAttempts(client: PoolClient): Promise<void> {
   const candidates = await client.query(
     `select attempt.id
@@ -333,10 +380,11 @@ async function reclaimExpiredResearchAttempts(client: PoolClient): Promise<void>
       order by job.lease_expires_at,attempt.id`,
   );
   for (const candidate of candidates.rows) {
-    await client.query(
-      "select id from ai_content_proposal_research_attempts where id=$1 for update",
-      [candidate.id],
-    );
+    const locked = await lockContentProposalAttemptContext(client, {
+      attemptTable: "ai_content_proposal_research_attempts",
+      attemptId: String(candidate.id),
+    });
+    if (!locked) continue;
     const current = await client.query(
       `select job.lease_token,job.max_attempts,attempt.attempt_number
          from ai_content_proposal_research_attempts attempt
@@ -352,8 +400,7 @@ async function reclaimExpiredResearchAttempts(client: PoolClient): Promise<void>
           and not exists(
             select 1 from ai_content_proposal_research_attempt_events event
              where event.research_attempt_id=attempt.id and event.event_type<>'research_started'
-          )
-        for update of job`,
+          )`,
       [candidate.id],
     );
     const row = current.rows[0];
@@ -384,10 +431,11 @@ async function reclaimExpiredModelAttempts(client: PoolClient): Promise<void> {
       order by job.lease_expires_at,attempt.id`,
   );
   for (const candidate of candidates.rows) {
-    await client.query(
-      "select id from ai_content_proposal_model_attempts where id=$1 for update",
-      [candidate.id],
-    );
+    const locked = await lockContentProposalAttemptContext(client, {
+      attemptTable: "ai_content_proposal_model_attempts",
+      attemptId: String(candidate.id),
+    });
+    if (!locked) continue;
     const current = await client.query(
       `select job.id job_id,job.lease_token,job.max_attempts,
               attempt.id attempt_id,attempt.attempt_number,attempt.worker_id,
@@ -404,8 +452,7 @@ async function reclaimExpiredModelAttempts(client: PoolClient): Promise<void> {
         where attempt.id=$1 and job.status='processing' and job.active_stage='model'
           and job.lease_expires_at<=clock_timestamp()
           and attempt.worker_id=job.lease_owner
-          and attempt.lease_token_sha256=encode(digest(job.lease_token::text,'sha256'),'hex')
-        for update of job`,
+          and attempt.lease_token_sha256=encode(digest(job.lease_token::text,'sha256'),'hex')`,
       [candidate.id],
     );
     const row = current.rows[0];
@@ -592,6 +639,12 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
     async completeContentProposalResearch(input) {
       const evidence = validateResearchEvidence(input.evidence);
       return transaction(pool, async (client) => {
+        const locked = await lockContentProposalAttemptContext(client, {
+          attemptTable: "ai_content_proposal_research_attempts",
+          attemptId: input.researchAttemptId,
+          jobId: input.jobId,
+        });
+        if (!locked) throw new Error("content_proposal_job_not_found");
         const result = await client.query(
           `select ${claimColumns},attempt.id research_attempt_id,attempt.attempt_number,
                   attempt.worker_id research_worker_id,
@@ -603,9 +656,9 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
              join ai_content_proposal_job_contracts contract on contract.job_id=job.id
              join ai_content_proposal_research_attempts attempt
                on attempt.id=$2 and attempt.job_id=job.id
-             left join ai_content_proposal_compositions composition on composition.job_id=job.id
-             left join ai_content_proposal_research_snapshots research on research.batch_id=job.batch_id
-            where job.id=$1 for update of job,batch,attempt`,
+              left join ai_content_proposal_compositions composition on composition.job_id=job.id
+              left join ai_content_proposal_research_snapshots research on research.batch_id=job.batch_id
+             where job.id=$1`,
           [input.jobId, input.researchAttemptId, input.leaseToken],
         );
         const row = result.rows[0] as Record<string, unknown> | undefined;
@@ -764,6 +817,12 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
       try { proposalSet = parseContentProposalSetV2(input.proposalSet); }
       catch { throw new Error("content_proposal_result_invalid"); }
       return transaction(pool, async (client) => {
+        const locked = await lockContentProposalAttemptContext(client, {
+          attemptTable: "ai_content_proposal_model_attempts",
+          attemptId: input.modelAttemptId,
+          jobId: input.jobId,
+        });
+        if (!locked) throw new Error("content_proposal_job_not_found");
         const result = await client.query(
           `select ${claimColumns},attempt.id model_attempt_id,attempt.worker_id model_worker_id,
                   terminal.event_sequence terminal_event_sequence,
@@ -788,9 +847,9 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
                   and event.invocation_ordinal=$3
                 limit 1
              ) terminal on true
-             left join ai_content_proposal_attempt_events succeeded
-               on succeeded.model_attempt_id=attempt.id and succeeded.event_type='attempt_succeeded'
-            where job.id=$1 for update of job,batch,attempt`,
+              left join ai_content_proposal_attempt_events succeeded
+                on succeeded.model_attempt_id=attempt.id and succeeded.event_type='attempt_succeeded'
+             where job.id=$1`,
           [input.jobId, input.modelAttemptId, input.invocationOrdinal],
         );
         const row = result.rows[0] as Record<string, unknown> | undefined;
@@ -887,6 +946,12 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
         const attemptTable = input.stage === "research_required"
           ? "ai_content_proposal_research_attempts"
           : "ai_content_proposal_model_attempts";
+        const locked = await lockContentProposalAttemptContext(client, {
+          attemptTable,
+          attemptId: input.attemptId,
+          jobId: input.jobId,
+        });
+        if (!locked) throw new Error("content_proposal_job_not_found");
         const result = await client.query(
           `select job.*,attempt.id attempt_id,attempt.attempt_number,
                   attempt.worker_id attempt_worker_id,
@@ -911,9 +976,9 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
                      where event.research_attempt_id=attempt.id and event.event_type='attempt_failed'
                      limit 1
                   )`} failure_terminal
-             from ai_content_proposal_jobs job
-             join ${attemptTable} attempt on attempt.id=$2 and attempt.job_id=job.id
-            where job.id=$1 for update of job`,
+              from ai_content_proposal_jobs job
+              join ${attemptTable} attempt on attempt.id=$2 and attempt.job_id=job.id
+             where job.id=$1`,
           [input.jobId, input.attemptId, input.leaseToken],
         );
         const row = result.rows[0] as Record<string, unknown> | undefined;

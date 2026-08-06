@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { Pool } from "pg";
 import {
@@ -223,6 +224,12 @@ function claimFixture(stage: "research" | "model", overrides: Record<string, unk
 }
 
 describe("content proposal job V2 claim protocol", () => {
+  it("contains no planner-dependent job-first append prelocks", () => {
+    const source = readFileSync(new URL("./contentProposalJobs.ts", import.meta.url), "utf8");
+    const jobFirstLocks = [...source.matchAll(/for update of\s+job[^\n`]*/gi)].map(([match]) => match);
+    expect(jobFirstLocks).toEqual(["for update of job,batch skip locked limit 1"]);
+  });
+
   it("claims research without consuming a model attempt and returns the frozen base input", async () => {
     const fixture = claimFixture("research");
 
@@ -298,6 +305,16 @@ describe("content proposal job V2 claim protocol", () => {
         && sql.includes("order by job.lease_expires_at")) {
         return { rows: [{ id: ids.modelAttempt }], rowCount: 1 };
       }
+      if (sql.includes("select attempt.id,attempt.job_id") && sql.includes("for update")) {
+        const attemptId = String(params[0]);
+        return { rows: [{ id: attemptId, job_id: ids.job }], rowCount: 1 };
+      }
+      if (sql.includes("select id,batch_id,workspace_id,brand_id") && sql.includes("for update")) {
+        return { rows: [{ id: ids.job, batch_id: ids.batch, workspace_id: ids.workspace, brand_id: ids.brand }], rowCount: 1 };
+      }
+      if (sql.includes("from ai_content_proposal_batches") && sql.includes("for update")) {
+        return { rows: [{ id: ids.batch }], rowCount: 1 };
+      }
       if (sql.includes("select job.id job_id,job.lease_token")) {
         return {
           rows: [{
@@ -331,6 +348,24 @@ describe("content proposal job V2 claim protocol", () => {
     const modelAppend = statements.find(({ sql }) =>
       sql.includes("'pre_invocation_failed'") && sql.includes("model_lease_expired"));
     expect(modelAppend?.params).toEqual([ids.modelAttempt, ids.lease, true]);
+    const modelAttemptLock = statements.findIndex(({ sql }) => (
+      sql.includes("from ai_content_proposal_model_attempts") && sql.includes("for update")
+    ));
+    const modelAdvisoryLock = statements.findIndex(({ sql }, index) => (
+      index > modelAttemptLock && sql.includes("pg_advisory_xact_lock")
+    ));
+    const modelJobLock = statements.findIndex(({ sql }, index) => (
+      index > modelAdvisoryLock && sql.includes("from ai_content_proposal_jobs") && sql.includes("for update")
+    ));
+    const modelBatchLock = statements.findIndex(({ sql }, index) => (
+      index > modelJobLock && sql.includes("from ai_content_proposal_batches") && sql.includes("for update")
+    ));
+    const modelAppendIndex = statements.indexOf(modelAppend!);
+    expect(modelAttemptLock).toBeGreaterThanOrEqual(0);
+    expect(modelAdvisoryLock).toBeGreaterThan(modelAttemptLock);
+    expect(modelJobLock).toBeGreaterThan(modelAdvisoryLock);
+    expect(modelBatchLock).toBeGreaterThan(modelJobLock);
+    expect(modelAppendIndex).toBeGreaterThan(modelBatchLock);
     const broadReclaim = statements.findIndex(({ sql }) =>
       sql.includes("set status='queued'") && sql.includes("lease_expires_at<=clock_timestamp()"));
     expect(broadReclaim).toBeGreaterThan(statements.indexOf(researchAppend!));
@@ -415,6 +450,15 @@ describe("content proposal research boundary", () => {
     const query = vi.fn(async (sql: string, params: unknown[] = []) => {
       statements.push({ sql, params });
       if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [], rowCount: 0 };
+      if (sql.includes("select attempt.id,attempt.job_id") && sql.includes("for update")) {
+        return { rows: [{ id: ids.researchAttempt, job_id: ids.job }], rowCount: 1 };
+      }
+      if (sql.includes("select id,batch_id,workspace_id,brand_id") && sql.includes("for update")) {
+        return { rows: [{ id: ids.job, batch_id: ids.batch, workspace_id: ids.workspace, brand_id: ids.brand }], rowCount: 1 };
+      }
+      if (sql.includes("from ai_content_proposal_batches") && sql.includes("for update")) {
+        return { rows: [{ id: ids.batch }], rowCount: 1 };
+      }
       if (sql.includes("from ai_content_proposal_jobs job") && sql.includes("research_attempt_id")) {
         return { rows: [row], rowCount: 1 };
       }
@@ -452,6 +496,20 @@ describe("content proposal research boundary", () => {
       composedInputSha256: "c".repeat(64),
     });
     expect(statements.some(({ sql }) => sql.includes("complete_ai_content_proposal_research"))).toBe(true);
+    const attemptLock = statements.findIndex(({ sql }) => (
+      sql.includes("from ai_content_proposal_research_attempts") && sql.includes("for update")
+    ));
+    const advisoryLock = statements.findIndex(({ sql }) => sql.includes("pg_advisory_xact_lock"));
+    const jobLock = statements.findIndex(({ sql }, index) => (
+      index > advisoryLock && sql.includes("from ai_content_proposal_jobs") && sql.includes("for update")
+    ));
+    const batchLock = statements.findIndex(({ sql }, index) => (
+      index > jobLock && sql.includes("from ai_content_proposal_batches") && sql.includes("for update")
+    ));
+    expect(attemptLock).toBeGreaterThanOrEqual(0);
+    expect(advisoryLock).toBeGreaterThan(attemptLock);
+    expect(jobLock).toBeGreaterThan(advisoryLock);
+    expect(batchLock).toBeGreaterThan(jobLock);
   });
 });
 
@@ -537,7 +595,16 @@ describe("content proposal model terminal protocol", () => {
     const query = vi.fn(async (sql: string, params: unknown[] = []) => {
       statements.push({ sql, params });
       if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [], rowCount: 0 };
-      if (sql.includes("terminal_event_sequence") && sql.includes("for update of job,batch,attempt")) {
+      if (sql.includes("select attempt.id,attempt.job_id") && sql.includes("for update")) {
+        return { rows: [{ id: ids.modelAttempt, job_id: ids.job }], rowCount: 1 };
+      }
+      if (sql.includes("select id,batch_id,workspace_id,brand_id") && sql.includes("for update")) {
+        return { rows: [{ id: ids.job, batch_id: ids.batch, workspace_id: ids.workspace, brand_id: ids.brand }], rowCount: 1 };
+      }
+      if (sql.includes("from ai_content_proposal_batches") && sql.includes("for update")) {
+        return { rows: [{ id: ids.batch }], rowCount: 1 };
+      }
+      if (sql.includes("terminal_event_sequence") && sql.includes("from ai_content_proposal_jobs job")) {
         return { rows: [row], rowCount: 1 };
       }
       if (sql.includes("insert into ai_content_proposals")) return { rows: [], rowCount: 3 };
@@ -575,6 +642,20 @@ describe("content proposal model terminal protocol", () => {
     expect(statements.some(({ sql }) => sql.includes("'attempt_succeeded'"))).toBe(true);
     expect(statements.some(({ sql }) => sql.includes("update ai_content_proposal_batches")
       && sql.includes("status='ready'"))).toBe(true);
+    const attemptLock = statements.findIndex(({ sql }) => (
+      sql.includes("from ai_content_proposal_model_attempts") && sql.includes("for update")
+    ));
+    const advisoryLock = statements.findIndex(({ sql }) => sql.includes("pg_advisory_xact_lock"));
+    const jobLock = statements.findIndex(({ sql }, index) => (
+      index > advisoryLock && sql.includes("from ai_content_proposal_jobs") && sql.includes("for update")
+    ));
+    const batchLock = statements.findIndex(({ sql }, index) => (
+      index > jobLock && sql.includes("from ai_content_proposal_batches") && sql.includes("for update")
+    ));
+    expect(attemptLock).toBeGreaterThanOrEqual(0);
+    expect(advisoryLock).toBeGreaterThan(attemptLock);
+    expect(jobLock).toBeGreaterThan(advisoryLock);
+    expect(batchLock).toBeGreaterThan(jobLock);
   });
 
   it("replays an exact atomic completion and rejects changed completion evidence", async () => {
@@ -599,9 +680,18 @@ describe("content proposal model terminal protocol", () => {
       completion_lease_owner: "proposal-worker-1",
       completion_lease_token: ids.lease,
     });
-    const query = vi.fn(async (sql: string) => {
+    const query = vi.fn(async (sql: string, params: unknown[] = []) => {
       if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [], rowCount: 0 };
-      if (sql.includes("terminal_event_sequence") && sql.includes("for update of job,batch,attempt")) {
+      if (sql.includes("select attempt.id,attempt.job_id") && sql.includes("for update")) {
+        return { rows: [{ id: params[0], job_id: ids.job }], rowCount: 1 };
+      }
+      if (sql.includes("select id,batch_id,workspace_id,brand_id") && sql.includes("for update")) {
+        return { rows: [{ id: ids.job, batch_id: ids.batch, workspace_id: ids.workspace, brand_id: ids.brand }], rowCount: 1 };
+      }
+      if (sql.includes("from ai_content_proposal_batches") && sql.includes("for update")) {
+        return { rows: [{ id: ids.batch }], rowCount: 1 };
+      }
+      if (sql.includes("terminal_event_sequence") && sql.includes("from ai_content_proposal_jobs job")) {
         return { rows: [row], rowCount: 1 };
       }
       if (sql.includes("select position,proposal_json")) {
@@ -645,6 +735,15 @@ describe("content proposal pre-invocation failure protocol", () => {
     const query = vi.fn(async (sql: string, params: unknown[] = []) => {
       statements.push({ sql, params });
       if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [], rowCount: 0 };
+      if (sql.includes("select attempt.id,attempt.job_id") && sql.includes("for update")) {
+        return { rows: [{ id: params[0], job_id: ids.job }], rowCount: 1 };
+      }
+      if (sql.includes("select id,batch_id,workspace_id,brand_id") && sql.includes("for update")) {
+        return { rows: [{ id: ids.job, batch_id: ids.batch, workspace_id: ids.workspace, brand_id: ids.brand }], rowCount: 1 };
+      }
+      if (sql.includes("from ai_content_proposal_batches") && sql.includes("for update")) {
+        return { rows: [{ id: ids.batch }], rowCount: 1 };
+      }
       if (sql.includes("from ai_content_proposal_jobs job") && sql.includes("attempt_id")) {
         return {
           rows: [{

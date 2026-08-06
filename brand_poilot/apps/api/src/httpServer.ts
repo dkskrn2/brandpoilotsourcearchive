@@ -4277,13 +4277,19 @@ export function createServer(
     "/worker/content-proposal-jobs/claim",
     async (request, reply) => {
       if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      exactContentProposalWorkerBody(
+        request.body,
+        ["workerId", "leaseSeconds"],
+        "content_proposal_claim_invalid",
+      );
       const workerId = requiredAiContentField(
         request.body?.workerId,
         "content_proposal_worker_id_required",
         200,
       );
-      const leaseSeconds = Number(request.body?.leaseSeconds ?? 180);
-      if (!Number.isSafeInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 300) {
+      const leaseSeconds = request.body.leaseSeconds;
+      if (typeof leaseSeconds !== "number"
+        || !Number.isSafeInteger(leaseSeconds) || leaseSeconds < 1 || leaseSeconds > 300) {
         throw new Error("content_proposal_lease_seconds_invalid");
       }
       return {
@@ -4310,8 +4316,9 @@ export function createServer(
         request.body?.leaseToken,
         "content_proposal_lease_token_invalid",
       );
-      const leaseSeconds = Number(request.body?.leaseSeconds ?? 180);
-      if (!Number.isSafeInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 300) {
+      const leaseSeconds = request.body.leaseSeconds;
+      if (typeof leaseSeconds !== "number"
+        || !Number.isSafeInteger(leaseSeconds) || leaseSeconds < 1 || leaseSeconds > 300) {
         throw new Error("content_proposal_lease_seconds_invalid");
       }
       const alive = await requireContentProposalJobsRepository(repository).heartbeatContentProposalJob({
@@ -4476,8 +4483,9 @@ export function createServer(
         ),
         leaseToken,
       };
-      const invocationOrdinal = Number(request.body.invocationOrdinal);
-      if (invocationOrdinal !== 1 && invocationOrdinal !== 2) {
+      const invocationOrdinal = request.body.invocationOrdinal;
+      if (typeof invocationOrdinal !== "number"
+        || (invocationOrdinal !== 1 && invocationOrdinal !== 2)) {
         throw new Error("content_proposal_invocation_ordinal_invalid");
       }
       const transcriptSha256 = contentProposalSha256(

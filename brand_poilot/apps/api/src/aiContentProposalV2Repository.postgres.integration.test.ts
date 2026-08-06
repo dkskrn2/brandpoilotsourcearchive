@@ -392,6 +392,37 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       return { created, jobs, research, seal, model };
     }
 
+    async function raceBehindModelAttemptLock(
+      modelAttemptId: string,
+      start: () => [Promise<unknown>, Promise<unknown>],
+    ) {
+      const gate = await pool.connect();
+      try {
+        await gate.query("begin");
+        await gate.query(
+          "select id from ai_content_proposal_model_attempts where id=$1 for update",
+          [modelAttemptId],
+        );
+        const pending = start();
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+        await gate.query("commit");
+        return await Promise.allSettled(pending);
+      } catch (error) {
+        await gate.query("rollback").catch(() => undefined);
+        throw error;
+      } finally {
+        gate.release();
+      }
+    }
+
+    function expectNoDeadlock(results: PromiseSettledResult<unknown>[]) {
+      for (const result of results) {
+        if (result.status === "rejected") {
+          expect(String(result.reason)).not.toContain("deadlock detected");
+        }
+      }
+    }
+
     it("runs manual research through a valid repaired model completion with exact replays", async () => {
       const fixture = await claimThroughComposition("proposal-worker-success");
       const staleResearchHeartbeat = await fixture.jobs.heartbeatContentProposalJob({
@@ -570,6 +601,108 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         error_code: "invocation_indeterminate",
         batch_status: "failed",
         batch_error_code: "invocation_indeterminate",
+      });
+    }, 30_000);
+
+    it("serializes completion against expiry reclaim with one attempt terminal", async () => {
+      const fixture = await claimThroughComposition("proposal-worker-complete-reclaim-race");
+      await fixture.jobs.startContentProposalInvocation({
+        jobId: fixture.model.id,
+        workerId: fixture.model.workerId,
+        leaseToken: fixture.model.leaseToken,
+        modelAttemptId: fixture.model.modelAttemptId,
+        invocationOrdinal: 1,
+      });
+      const invalid = {
+        jobId: fixture.model.id,
+        workerId: fixture.model.workerId,
+        leaseToken: fixture.model.leaseToken,
+        modelAttemptId: fixture.model.modelAttemptId,
+        invocationOrdinal: 1 as const,
+        eventType: "invocation_completed" as const,
+        transcriptSha256: "1".repeat(64),
+        outputSha256: "2".repeat(64),
+        parserSha256: "3".repeat(64),
+        parserValid: false,
+      };
+      await fixture.jobs.recordContentProposalInvocationTerminal(invalid);
+      await pool.query(
+        "update ai_content_proposal_jobs set lease_expires_at=clock_timestamp()-interval '1 second' where id=$1",
+        [fixture.model.id],
+      );
+
+      const results = await raceBehindModelAttemptLock(fixture.model.modelAttemptId, () => [
+        fixture.jobs.completeContentProposalJob({
+          jobId: fixture.model.id,
+          workerId: fixture.model.workerId,
+          leaseToken: fixture.model.leaseToken,
+          modelAttemptId: fixture.model.modelAttemptId,
+          invocationOrdinal: 1,
+          transcriptSha256: invalid.transcriptSha256,
+          outputSha256: invalid.outputSha256,
+          parserSha256: invalid.parserSha256,
+          proposalSet: proposalSet(),
+        }),
+        fixture.jobs.claimContentProposalJob({ workerId: "complete-race-reclaimer", leaseSeconds: 180 }),
+      ]);
+
+      expectNoDeadlock(results);
+      expect(results.map(({ status }) => status).sort()).toEqual(["fulfilled", "rejected"]);
+      const state = await pool.query(
+        `select job.status,
+                count(*) filter(where event.event_type in
+                  ('attempt_succeeded','attempt_failed','pre_invocation_failed'))::integer terminal_count,
+                array_agg(event.event_type order by event.event_sequence) events
+           from ai_content_proposal_jobs job
+           join ai_content_proposal_attempt_events event on event.job_id=job.id
+          where job.id=$1
+          group by job.id`,
+        [fixture.model.id],
+      );
+      expect(state.rows[0]).toEqual({
+        status: "queued",
+        terminal_count: 1,
+        events: ["invocation_started", "invocation_completed", "attempt_failed"],
+      });
+    }, 30_000);
+
+    it("serializes worker failure against expiry reclaim with one pre-invocation terminal", async () => {
+      const fixture = await claimThroughComposition("proposal-worker-fail-reclaim-race");
+      await pool.query(
+        "update ai_content_proposal_jobs set lease_expires_at=clock_timestamp()-interval '1 second' where id=$1",
+        [fixture.model.id],
+      );
+
+      const results = await raceBehindModelAttemptLock(fixture.model.modelAttemptId, () => [
+        fixture.jobs.failContentProposalJob({
+          jobId: fixture.model.id,
+          workerId: fixture.model.workerId,
+          leaseToken: fixture.model.leaseToken,
+          stage: "composition_ready",
+          attemptId: fixture.model.modelAttemptId,
+          errorCode: "worker_failed_before_model_start",
+          errorMessage: "worker stopped before model invocation",
+          retryable: false,
+        }),
+        fixture.jobs.claimContentProposalJob({ workerId: "failure-race-reclaimer", leaseSeconds: 180 }),
+      ]);
+
+      expectNoDeadlock(results);
+      expect(results.map(({ status }) => status).sort()).toEqual(["fulfilled", "rejected"]);
+      const state = await pool.query(
+        `select job.status,
+                count(*) filter(where event.event_type='pre_invocation_failed')::integer terminal_count,
+                array_agg(event.event_type order by event.event_sequence) events
+           from ai_content_proposal_jobs job
+           join ai_content_proposal_attempt_events event on event.job_id=job.id
+          where job.id=$1
+          group by job.id`,
+        [fixture.model.id],
+      );
+      expect(state.rows[0]).toEqual({
+        status: "queued",
+        terminal_count: 1,
+        events: ["pre_invocation_failed"],
       });
     }, 30_000);
 

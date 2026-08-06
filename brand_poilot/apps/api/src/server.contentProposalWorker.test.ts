@@ -111,14 +111,25 @@ describe("content proposal worker V2-only routes", () => {
     await app.close();
   });
 
-  it("claims without accepting client tenant identifiers", async () => {
+  it("rejects client tenant identifiers on the exact claim body", async () => {
     const { app, repository } = setup();
     const response = await app.inject({
       method: "POST", url: "/worker/content-proposal-jobs/claim", headers,
       payload: { workerId: "proposal-worker-1", leaseSeconds: 180, workspaceId: "attacker" },
     });
-    expect(response.statusCode).toBe(200);
-    expect(repository.claimContentProposalJob).toHaveBeenCalledWith({ workerId: "proposal-worker-1", leaseSeconds: 180 });
+    expect(response.statusCode).toBe(400);
+    expect(repository.claimContentProposalJob).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("requires both exact claim fields", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST", url: "/worker/content-proposal-jobs/claim", headers,
+      payload: { workerId: "proposal-worker-1" },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(repository.claimContentProposalJob).not.toHaveBeenCalled();
     await app.close();
   });
 
@@ -156,6 +167,53 @@ describe("content proposal worker V2-only routes", () => {
     });
     expect(claim.statusCode).toBe(400);
     expect(heartbeat.statusCode).toBe(400);
+    expect(repository.claimContentProposalJob).not.toHaveBeenCalled();
+    expect(repository.heartbeatContentProposalJob).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("accepts the one-second proposal lease protocol minimum", async () => {
+    const { app, repository } = setup();
+    const claim = await app.inject({
+      method: "POST",
+      url: "/worker/content-proposal-jobs/claim",
+      headers,
+      payload: { workerId: "proposal-worker-1", leaseSeconds: 1 },
+    });
+    const heartbeat = await app.inject({
+      method: "POST",
+      url: `/worker/content-proposal-jobs/${jobId}/heartbeat`,
+      headers,
+      payload: {
+        ...lease,
+        leaseSeconds: 1,
+        stage: "research_required",
+        attemptId: researchAttemptId,
+      },
+    });
+    expect(claim.statusCode).toBe(200);
+    expect(heartbeat.statusCode).toBe(200);
+    expect(repository.claimContentProposalJob).toHaveBeenCalledWith({
+      workerId: "proposal-worker-1",
+      leaseSeconds: 1,
+    });
+    expect(repository.heartbeatContentProposalJob).toHaveBeenCalledWith(expect.objectContaining({ leaseSeconds: 1 }));
+    await app.close();
+  });
+
+  it.each([
+    ["claim", "/worker/content-proposal-jobs/claim", { workerId: "proposal-worker-1", leaseSeconds: "180" }],
+    ["claim", "/worker/content-proposal-jobs/claim", { workerId: "proposal-worker-1", leaseSeconds: true }],
+    ["heartbeat", `/worker/content-proposal-jobs/${jobId}/heartbeat`, {
+      ...lease, leaseSeconds: "180", stage: "research_required", attemptId: researchAttemptId,
+    }],
+    ["heartbeat", `/worker/content-proposal-jobs/${jobId}/heartbeat`, {
+      ...lease, leaseSeconds: true, stage: "research_required", attemptId: researchAttemptId,
+    }],
+  ])("rejects non-number leaseSeconds on %s", async (_route, url, payload) => {
+    const { app, repository } = setup();
+    const response = await app.inject({ method: "POST", url, headers, payload });
+    expect(response.statusCode).toBe(400);
     expect(repository.claimContentProposalJob).not.toHaveBeenCalled();
     expect(repository.heartbeatContentProposalJob).not.toHaveBeenCalled();
     await app.close();
@@ -253,6 +311,21 @@ describe("content proposal worker V2-only routes", () => {
     });
     expect(v1.statusCode).toBe(400);
     expect(repository.completeContentProposalJob).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it.each(["1", true])("rejects non-number completion invocationOrdinal %j", async (invocationOrdinal) => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST", url: `/worker/content-proposal-jobs/${jobId}/complete`, headers,
+      payload: {
+        ...lease, modelAttemptId, invocationOrdinal,
+        transcriptSha256: sha, outputSha256: sha, parserSha256: sha,
+        proposalSet: workerProposalSet(),
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(repository.completeContentProposalJob).not.toHaveBeenCalled();
     await app.close();
   });
 
