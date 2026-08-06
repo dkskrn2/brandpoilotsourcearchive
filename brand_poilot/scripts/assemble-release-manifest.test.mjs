@@ -196,6 +196,7 @@ test("CLI assembles the one-time schema-3 cutover from checksum-bound files", ()
     sourceReleaseSchema: "2",
     sourceReleaseSha: SHA_A,
     sourceManifestSha256: "1".repeat(64),
+    baselineManifestSha256: createHash("sha256").update(readFileSync(baselinePath)).digest("hex"),
     legacyImage: image("marketing-worker", "a"),
     legacySourceSha: SHA_A,
   };
@@ -204,6 +205,7 @@ test("CLI assembles the one-time schema-3 cutover from checksum-bound files", ()
 
   const result = spawnSync(process.execPath, [
     "scripts/assemble-release-manifest.mjs",
+    "--mode", "initial-cutover",
     "--schema3-baseline", baselinePath,
     "--candidate-provenance", provenancePath,
     "--customer-ui-evidence", uiEvidencePath,
@@ -224,6 +226,7 @@ test("CLI assembles the one-time schema-3 cutover from checksum-bound files", ()
 
   const duplicate = spawnSync(process.execPath, [
     "scripts/assemble-release-manifest.mjs",
+    "--mode", "initial-cutover",
     "--schema3-baseline", baselinePath,
     "--candidate-provenance", provenancePath,
     "--customer-ui-evidence", uiEvidencePath,

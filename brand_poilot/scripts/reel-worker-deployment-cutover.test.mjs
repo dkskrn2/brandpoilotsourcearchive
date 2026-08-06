@@ -23,7 +23,6 @@ const deploymentRuntimeFiles = [
   "scripts/release-impact.mjs",
   "scripts/check-local-env.mjs",
   "scripts/ai-content-smoke.mjs",
-  "scripts/ai-content-subject-smoke.mjs",
 ];
 
 test("manual generation deployment exposes reel worker and no legacy marketing worker runtime", () => {
@@ -42,6 +41,11 @@ test("manual generation deployment exposes reel worker and no legacy marketing w
   for (const [path, source] of sources) {
     if (path === "scripts/assemble-release-manifest.mjs") {
       assert.doesNotMatch(source, /MARKETING_WORKER_IMAGE|brand-pilot-marketing-worker|@brand-pilot\/marketing-worker/);
+      continue;
+    }
+    if (path === "scripts/release-impact.mjs") {
+      assert.match(source, /workers\/brand-pilot-marketing-worker\//, "retirement deletion must remain classifiable");
+      assert.doesNotMatch(source, /MARKETING_WORKER_IMAGE|marketingWorker|@brand-pilot\/marketing-worker/);
       continue;
     }
     if ([
@@ -90,15 +94,29 @@ test("manual generation deployment exposes reel worker and no legacy marketing w
   assert.match(dockerfile, /workers\/brand-pilot-reel-worker\/dist\/index\.js/);
 });
 
-test("retired generation smokes fail closed without invoking legacy HTTP contracts", () => {
-  for (const path of ["scripts/ai-content-smoke.mjs", "scripts/ai-content-subject-smoke.mjs"]) {
-    const smoke = read(path);
-    assert.match(smoke, /ai_content_smoke_replaced_by_authenticated_browser_canary/);
-    assert.doesNotMatch(smoke, /content-orchestration\.v1|POST[^\n]*generations|analysis_ready|ai-content\.v1|marketing-worker/);
-    const result = spawnSync(process.execPath, [path], { encoding: "utf8" });
-    assert.equal(result.status, 2);
-    assert.match(result.stderr, /zero_writes/);
-  }
+test("general generation smoke is retired while scheduler, publishing, and subject ownership stay reachable", () => {
+  const generalSmoke = read("scripts/ai-content-smoke.mjs");
+  assert.match(generalSmoke, /ai_content_smoke_replaced_by_authenticated_browser_canary/);
+  assert.match(generalSmoke, /--scheduler-contract/);
+  assert.match(generalSmoke, /scheduled_crawl/);
+  assert.match(generalSmoke, /--latest-completed/);
+  assert.doesNotMatch(generalSmoke, /content-orchestration\.v1|ai-content\.v1|marketing-worker|marketing-worker:once/);
+  assert.doesNotMatch(generalSmoke, /request\(`\/brands\/\$\{brandId\}\/ai-content\/generations`\s*,\s*\{[\s\S]{0,300}?method:\s*"POST"/);
+  const generalResult = spawnSync(process.execPath, ["scripts/ai-content-smoke.mjs"], { encoding: "utf8" });
+  assert.equal(generalResult.status, 2);
+  assert.match(generalResult.stderr, /zero_writes/);
+
+  const subjectSmoke = read("scripts/ai-content-subject-smoke.mjs");
+  assert.match(subjectSmoke, /subject-analysis\.v2/);
+  assert.match(subjectSmoke, /subject-analysis-worker:once/);
+  assert.match(subjectSmoke, /generation\.draft\?\.origin[^\n]*proposal-v2/);
+  assert.match(subjectSmoke, /generation-id/);
+  assert.doesNotMatch(subjectSmoke, /content-orchestration\.v1|ai-content\.v1|marketing-worker|marketing-worker:once/);
+  assert.doesNotMatch(subjectSmoke, /request\(`\/brands\/\$\{brandId\}\/ai-content\/generations`\s*,\s*\{[\s\S]{0,300}?method:\s*"POST"|\/generate/);
+  const subjectResult = spawnSync(process.execPath, ["scripts/ai-content-subject-smoke.mjs"], { encoding: "utf8" });
+  assert.equal(subjectResult.status, 2);
+  assert.match(subjectResult.stderr, /zero_writes/);
+
   const envCheck = read("scripts/check-local-env.mjs");
   assert.match(envCheck, /"reel-worker"/);
   assert.match(envCheck, /brand-pilot-reel-worker/);
@@ -185,6 +203,7 @@ test("retirement executor verifies the legacy image then only stops and removes 
     sourceReleaseSchema: "2",
     sourceReleaseSha: "b".repeat(40),
     sourceManifestSha256: "c".repeat(64),
+    baselineManifestSha256: "d".repeat(64),
     legacyImage,
     legacySourceSha: "b".repeat(40),
   };
@@ -237,7 +256,7 @@ retire_legacy_marketing_worker "${bashPath(directory)}"
   assert.match(invalid.stderr, /marketing_retirement_record_invalid/);
 });
 
-test("promotion, backup, rollback, and transition recovery bind schema-2 state to the candidate retirement record", () => {
+test("promotion, backup, and transition recovery bind schema-2 state while normal rollback rejects it", () => {
   const lib = read("deploy/scripts/lib.sh");
   assert.match(lib, /candidate\) role_image_keys=\("\$\{RELEASE_IMAGE_KEYS\[@\]\}"\)/);
   assert.match(lib, /legacy-current\) role_image_keys=\("\$\{LEGACY_RELEASE_IMAGE_KEYS\[@\]\}"\)/);
@@ -254,6 +273,6 @@ test("promotion, backup, rollback, and transition recovery bind schema-2 state t
   }
   assert.match(read("deploy/scripts/deploy.sh"), /validate_state_release_directory "\$ROOT" "\$CURRENT_SHA"/);
   const rollback = read("deploy/scripts/rollback.sh");
-  assert.match(rollback, /ROLLBACK_RETIREMENT_SOURCE_SHA/);
-  assert.match(rollback, /validate_legacy_marketing_cutover_source[\s\S]*legacy-current/);
+  assert.match(rollback, /validate_normal_rollback_target/);
+  assert.doesNotMatch(rollback, /ROLLBACK_RETIREMENT_SOURCE_SHA|legacy-current/);
 });

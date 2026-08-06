@@ -110,6 +110,7 @@ require_digest_image() {
 declare -g MARKETING_RETIREMENT_SOURCE_SCHEMA=""
 declare -g MARKETING_RETIREMENT_SOURCE_RELEASE_SHA=""
 declare -g MARKETING_RETIREMENT_SOURCE_MANIFEST_SHA256=""
+declare -g MARKETING_RETIREMENT_BASELINE_MANIFEST_SHA256=""
 declare -g MARKETING_RETIREMENT_LEGACY_IMAGE=""
 declare -g MARKETING_RETIREMENT_LEGACY_SOURCE_SHA=""
 
@@ -124,12 +125,13 @@ validate_marketing_retirement_record() {
   [[ "${#record_lines[@]}" -eq 1 ]] || fail "marketing_retirement_record_invalid"
   line="${record_lines[0]}"
   [[ "$line" != *$'\r'* ]] || fail "marketing_retirement_record_invalid"
-  record_pattern='^\{"contractVersion":"marketing-worker-retirement\.v1","action":"stop_remove","service":"marketing-worker-1","restartAllowed":false,"sourceReleaseSchema":"[12]","sourceReleaseSha":"[a-f0-9]{40}","sourceManifestSha256":"[a-f0-9]{64}","legacyImage":"[a-zA-Z0-9._@:/-]+","legacySourceSha":"[a-f0-9]{40}"\}$'
+  record_pattern='^\{"contractVersion":"marketing-worker-retirement\.v1","action":"stop_remove","service":"marketing-worker-1","restartAllowed":false,"sourceReleaseSchema":"[12]","sourceReleaseSha":"[a-f0-9]{40}","sourceManifestSha256":"[a-f0-9]{64}","baselineManifestSha256":"[a-f0-9]{64}","legacyImage":"[a-zA-Z0-9._@:/-]+","legacySourceSha":"[a-f0-9]{40}"\}$'
   [[ "$line" =~ $record_pattern ]] || fail "marketing_retirement_record_invalid"
 
   MARKETING_RETIREMENT_SOURCE_SCHEMA="$(sed -E 's/^.*"sourceReleaseSchema":"([12])".*$/\1/' <<<"$line")"
   MARKETING_RETIREMENT_SOURCE_RELEASE_SHA="$(sed -E 's/^.*"sourceReleaseSha":"([a-f0-9]{40})".*$/\1/' <<<"$line")"
   MARKETING_RETIREMENT_SOURCE_MANIFEST_SHA256="$(sed -E 's/^.*"sourceManifestSha256":"([a-f0-9]{64})".*$/\1/' <<<"$line")"
+  MARKETING_RETIREMENT_BASELINE_MANIFEST_SHA256="$(sed -E 's/^.*"baselineManifestSha256":"([a-f0-9]{64})".*$/\1/' <<<"$line")"
   MARKETING_RETIREMENT_LEGACY_IMAGE="$(sed -E 's/^.*"legacyImage":"([^"]+)".*$/\1/' <<<"$line")"
   MARKETING_RETIREMENT_LEGACY_SOURCE_SHA="$(sed -E 's/^.*"legacySourceSha":"([a-f0-9]{40})".*$/\1/' <<<"$line")"
   require_release_sha "$MARKETING_RETIREMENT_SOURCE_RELEASE_SHA"
@@ -401,6 +403,7 @@ parse_release_manifest() {
   MARKETING_RETIREMENT_SOURCE_SCHEMA=""
   MARKETING_RETIREMENT_SOURCE_RELEASE_SHA=""
   MARKETING_RETIREMENT_SOURCE_MANIFEST_SHA256=""
+  MARKETING_RETIREMENT_BASELINE_MANIFEST_SHA256=""
   MARKETING_RETIREMENT_LEGACY_IMAGE=""
   MARKETING_RETIREMENT_LEGACY_SOURCE_SHA=""
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -528,6 +531,18 @@ validate_state_release_directory() {
   validate_release_directory "$root/releases/$release_sha" "$validation_role"
 }
 
+validate_normal_rollback_target() {
+  local root="$1"
+  local release_sha="$2"
+  local release_directory="$root/releases/$release_sha"
+  local manifest="$release_directory/release.env"
+  require_release_sha "$release_sha"
+  if [[ -f "$manifest" ]] && grep -Eq '^RELEASE_SCHEMA=[12]$' "$manifest"; then
+    fail "legacy_release_rollback_forbidden"
+  fi
+  validate_release_directory "$release_directory" candidate
+}
+
 release_file_specs() {
   local release_directory="${1:-}"
   local validation_role="${2:-candidate}"
@@ -551,10 +566,13 @@ release_file_specs() {
     printf '%s\n' \
       "755 scripts/rollout-workers.sh" \
       "755 scripts/backup-state.sh" \
-      "755 scripts/restore-state.sh"
+      "755 scripts/restore-state.sh" \
+      "755 scripts/ai-content-cutover.sh" \
+      "755 scripts/verify-ai-content-cutover.sh"
   else
     local optional_path
-    for optional_path in scripts/rollout-workers.sh scripts/backup-state.sh scripts/restore-state.sh; do
+    for optional_path in scripts/rollout-workers.sh scripts/backup-state.sh scripts/restore-state.sh \
+      scripts/ai-content-cutover.sh scripts/verify-ai-content-cutover.sh; do
       if [[ -f "$release_directory/release-integrity.sha256" ]] &&
          grep -Eq "^[a-f0-9]{64}  755  ${optional_path}$" "$release_directory/release-integrity.sha256"; then
         printf '755 %s\n' "$optional_path"
@@ -621,6 +639,49 @@ require_secure_state_file() {
   [[ -f "$path" && ! -L "$path" ]] || fail "state_file_invalid"
   [[ "$(stat -c '%a' -- "$path")" == "600" ]] || fail "state_file_mode_invalid"
   [[ "$(stat -c '%U' -- "$path")" == "bpdeploy" ]] || fail "state_file_owner_invalid"
+}
+
+ai_content_cutover_marker_present() {
+  local root="$1"
+  local active_file="$root/state/ai-content-cutover-id"
+  local operator_database_file="${AI_CONTENT_CUTOVER_OPERATOR_DATABASE_URL_FILE:-$root/shared/secrets/ai-content-operator-database-url}"
+  local cutover_id
+  local output
+  if [[ ! -e "$active_file" && ! -L "$active_file" ]]; then
+    return 1
+  fi
+  require_secure_state_file "$active_file"
+  cutover_id="$(<"$active_file")"
+  [[ "$cutover_id" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ ]] ||
+    fail "ai_content_cutover_active_id_invalid"
+  require_file_mode_600 "$operator_database_file" "${AI_CONTENT_CUTOVER_FILE_OWNER:-bpdeploy}"
+  if ! output="$("$(dirname -- "${BASH_SOURCE[0]}")/verify-ai-content-cutover.sh" \
+    --status --operator-url-file "$operator_database_file" --cutover-id "$cutover_id")"; then
+    return 2
+  fi
+  if grep -q '"markerPresent":true' <<<"$output"; then
+    return 0
+  fi
+  grep -q '"markerPresent":false' <<<"$output" || return 2
+  return 1
+}
+
+enforce_ai_content_roll_forward_floor() {
+  local root="$1"
+  local active_file="$root/state/ai-content-cutover-id"
+  local marker_status
+  if [[ ! -e "$active_file" && ! -L "$active_file" ]]; then
+    return 0
+  fi
+  if ai_content_cutover_marker_present "$root"; then
+    fail "ai_content_cutover_roll_forward_only"
+  else
+    marker_status="$?"
+  fi
+  if [[ "$marker_status" -eq 1 ]]; then
+    fail "ai_content_cutover_abort_pre_marker_required"
+  fi
+  fail "ai_content_cutover_floor_query_failed"
 }
 
 load_optional_state_sha() {

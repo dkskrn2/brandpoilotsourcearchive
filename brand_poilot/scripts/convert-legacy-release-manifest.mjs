@@ -120,6 +120,7 @@ export function convertLegacyReleaseManifest(text) {
     sourceReleaseSchema: manifest.RELEASE_SCHEMA,
     sourceReleaseSha: manifest.RELEASE_SHA,
     sourceManifestSha256: sha256(source),
+    baselineManifestSha256: sha256(baselineManifest),
     legacyImage: manifest.MARKETING_WORKER_IMAGE,
     legacySourceSha: manifest.RELEASE_SCHEMA === "2"
       ? manifest[`${marketingPrefix}_SOURCE_SHA`]

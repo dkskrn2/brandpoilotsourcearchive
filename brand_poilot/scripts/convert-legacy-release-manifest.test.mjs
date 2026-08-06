@@ -79,10 +79,12 @@ test("schema-2 conversion preserves unrelated values and emits a non-executable 
     sourceReleaseSchema: "2",
     sourceReleaseSha: LEGACY_SHA,
     sourceManifestSha256: converted.retirementRecord.sourceManifestSha256,
+    baselineManifestSha256: createHash("sha256").update(converted.baselineManifest).digest("hex"),
     legacyImage: legacyImages.MARKETING_WORKER_IMAGE,
     legacySourceSha: LEGACY_SHA,
   });
   assert.match(converted.retirementRecord.sourceManifestSha256, /^[0-9a-f]{64}$/);
+  assert.match(converted.retirementRecord.baselineManifestSha256, /^[0-9a-f]{64}$/);
   assert.equal(Object.keys(converted.retirementRecord).some((key) => /^(?:command|start|recreate)$/i.test(key)), false);
 });
 
@@ -240,6 +242,7 @@ test("schema-2 fixture flows through both CLIs into one sealed schema-3 release"
   })}\n`, { mode: 0o600 });
   const assembled = spawnSync(process.execPath, [
     "scripts/assemble-release-manifest.mjs",
+    "--mode", "initial-cutover",
     "--schema3-baseline", baseline,
     "--candidate-provenance", provenance,
     "--customer-ui-evidence", uiEvidence,
@@ -254,4 +257,61 @@ test("schema-2 fixture flows through both CLIs into one sealed schema-3 release"
   assert.equal(manifest.DM_WORKER_IMAGE, legacyImages.DM_WORKER_IMAGE);
   assert.equal(Object.hasOwn(manifest, "MARKETING_WORKER_IMAGE"), false);
   assert.match(manifest.MARKETING_RETIREMENT_SHA256, /^[a-f0-9]{64}$/);
+
+  const mixedInput = join(directory, "mixed-current-release.env");
+  const mixedBaseline = join(directory, "mixed-baseline.env");
+  const mixedRetirement = join(directory, "mixed-retirement.json");
+  writeFileSync(
+    mixedInput,
+    schema2Manifest().replace(legacyImages.DM_WORKER_IMAGE, digest("brand-pilot-dm-worker", "e")),
+    { mode: 0o600 },
+  );
+  const mixedConversion = spawnSync(process.execPath, [
+    "scripts/convert-legacy-release-manifest.mjs",
+    "--input", mixedInput,
+    "--baseline-output", mixedBaseline,
+    "--retirement-output", mixedRetirement,
+  ], { encoding: "utf8" });
+  assert.equal(mixedConversion.status, 0, mixedConversion.stderr);
+  const mixedOutput = join(directory, "mixed-release.env");
+  const mixedAssembly = spawnSync(process.execPath, [
+    "scripts/assemble-release-manifest.mjs",
+    "--mode", "initial-cutover",
+    "--schema3-baseline", baseline,
+    "--candidate-provenance", provenance,
+    "--customer-ui-evidence", uiEvidence,
+    "--retirement-record", mixedRetirement,
+    "--output", mixedOutput,
+  ], { encoding: "utf8" });
+  assert.notEqual(mixedAssembly.status, 0);
+  assert.match(mixedAssembly.stderr, /marketing_retirement_baseline_mismatch/);
+
+  const nextSha = "d".repeat(40);
+  const nextProvenance = join(directory, "next-deployment-provenance.json");
+  const nextOutput = join(directory, "next-release.env");
+  const nextBlogImage = digest("brand-pilot-blog-worker", "f");
+  writeFileSync(nextProvenance, `${JSON.stringify({
+    contractVersion: "brand-pilot-release-provenance.v1",
+    releaseSha: nextSha,
+    builtImages: {
+      BLOG_WORKER_IMAGE: { image: nextBlogImage, sourceSha: nextSha },
+    },
+    changedImageKeys: ["BLOG_WORKER_IMAGE"],
+  })}\n`, { mode: 0o600 });
+  const nextAssembly = spawnSync(process.execPath, [
+    "scripts/assemble-release-manifest.mjs",
+    "--mode", "normal",
+    "--schema3-current", output,
+    "--candidate-provenance", nextProvenance,
+    "--output", nextOutput,
+  ], { encoding: "utf8" });
+  assert.equal(nextAssembly.status, 0, nextAssembly.stderr);
+  const nextManifest = parseReleaseManifest(readFileSync(nextOutput, "utf8"));
+  assert.equal(nextManifest.RELEASE_SCHEMA, "3");
+  assert.equal(nextManifest.RELEASE_SHA, nextSha);
+  assert.equal(nextManifest.BLOG_WORKER_IMAGE, nextBlogImage);
+  assert.equal(nextManifest.BLOG_WORKER_CHANGED, "true");
+  assert.equal(nextManifest.DM_WORKER_IMAGE, manifest.DM_WORKER_IMAGE);
+  assert.equal(nextManifest.DM_WORKER_CHANGED, "false");
+  assert.equal(Object.hasOwn(nextManifest, "MARKETING_RETIREMENT_SHA256"), false);
 });
