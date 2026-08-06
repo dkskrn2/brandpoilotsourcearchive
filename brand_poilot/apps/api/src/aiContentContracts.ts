@@ -1,4 +1,5 @@
 import { parseContentOrchestrationV1 } from "./contentOrchestration.js";
+import type { ApprovedBrandRulesSnapshotV1 } from "@brand-pilot/content-contracts";
 
 export type AiContentType = "card_news" | "blog" | "marketing";
 export type ContentFamily = "informational" | "marketing";
@@ -257,6 +258,7 @@ export interface ContentGenerationInputV3 {
   contractVersion: "content-generation-input.v3";
   generationId: string;
   brandCore: ApprovedBrandCoreSnapshotV2;
+  brandRules: ApprovedBrandRulesSnapshotV1;
   subject: ProposalSubjectV2;
   contentInstruction: string | null;
   product: ApprovedProductSnapshotV2 | null;

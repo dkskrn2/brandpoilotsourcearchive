@@ -695,8 +695,8 @@ create table ai_content_proposal_job_contracts (
     and proposal_contract_version='content-proposal.v2'
     and proposal_prompt_version='proposal.writer.v2'
     and proposal_output_schema_sha256='54bf063cf32926874af6b098272df08d41a9e7d7f578ee6560debe44428cf5f3'
-    and contract_source_sha256='f1e754cb2c2664ef21f41597a45b2ed424ebc040b949f5bf4cece251195ab5f8'
-    and catalog_sha256='94c6622ce5c5ef74b9d011dd0d35035f0f0b5580160dc2a2264b08030a5724fb'
+    and contract_source_sha256='02760a1e006eb5920980a4b9c5b268cf53b3595543c5f909f2d66be53393c660'
+    and catalog_sha256='41ac04e76adf0fd9746ea7535b36f6c1ea314ec4890253a2cd56a9f215f7cdbe'
   ),
   constraint ai_content_proposal_job_contracts_job_fk
     foreign key(job_id,batch_id,workspace_id,brand_id)
@@ -1622,14 +1622,14 @@ create table ai_content_generation_prompt_bindings (
   proposal_prompt_version text not null check (proposal_prompt_version='proposal.writer.v2'),
   proposal_schema_sha256 text not null check (proposal_schema_sha256='54bf063cf32926874af6b098272df08d41a9e7d7f578ee6560debe44428cf5f3'),
   generation_input_version text not null check (generation_input_version='content-generation-input.v3'),
-  generation_schema_sha256 text not null check (generation_schema_sha256='9977b52a0b15d581cf529c3c034eb2670c361fd03434f5c3231a798c6f668ffd'),
+  generation_schema_sha256 text not null check (generation_schema_sha256='5f0123a5649ff04b93c49f5ec8a4e3a8cf501f5442ca915adcf1dd3fd64b6b00'),
   plan_contract_version text not null,
   plan_schema_sha256 text not null check (plan_schema_sha256 ~ '^[0-9a-f]{64}$'),
   planner_prompt_version text not null,
   image_prompt_version text not null,
   image_package_version text not null check (image_package_version='image-generation-package.v1'),
   manifest_version text not null check (manifest_version='ai-content.v3'),
-  contract_source_hash text not null check (contract_source_hash='f1e754cb2c2664ef21f41597a45b2ed424ebc040b949f5bf4cece251195ab5f8'),
+  contract_source_hash text not null check (contract_source_hash='02760a1e006eb5920980a4b9c5b268cf53b3595543c5f909f2d66be53393c660'),
   model text not null check (model='gpt-5.6-terra'),
   binding_json jsonb not null check (jsonb_typeof(binding_json)='object'),
   binding_sha256 text not null check (binding_sha256 ~ '^[0-9a-f]{64}$'),

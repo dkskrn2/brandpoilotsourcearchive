@@ -1,3 +1,10 @@
+import { createHash } from "node:crypto";
+import {
+  parseBrandRulesContentV1,
+  type ApprovedBrandRulesSnapshotV1,
+} from "@brand-pilot/content-contracts";
+export type { ApprovedBrandRulesSnapshotV1 } from "@brand-pilot/content-contracts";
+
 export type ContentPurposeV2 = "informational" | "marketing";
 export type ContentOutputFormatV2 = "card_news" | "blog" | "reel" | "marketing_content";
 export type ContentChannelTargetV2 =
@@ -207,6 +214,7 @@ export interface ContentGenerationInputV3 {
   contractVersion: "content-generation-input.v3";
   generationId: string;
   brandCore: ApprovedBrandCoreSnapshotV2;
+  brandRules: ApprovedBrandRulesSnapshotV1;
   subject: ContentSubjectV2;
   contentInstruction: string | null;
   product: ApprovedProductSnapshotV2 | null;
@@ -373,6 +381,28 @@ function parseBrandCore(value: unknown): ApprovedBrandCoreSnapshotV2 {
     differentiator: boundedString(source.differentiator, 4_000),
     coreAppeal: boundedString(source.coreAppeal, 4_000),
   };
+}
+
+function canonicalJson(value: unknown): string {
+  const normalize = (current: unknown): unknown => {
+    if (Array.isArray(current)) return current.map(normalize);
+    if (!current || typeof current !== "object") return current;
+    return Object.fromEntries(
+      Object.entries(current as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => [key, normalize(child)]),
+    );
+  };
+  return JSON.stringify(normalize(value));
+}
+
+function parseBrandRulesSnapshot(value: unknown): ApprovedBrandRulesSnapshotV1 {
+  const source = exactObject(value, ["versionId", "version", "content", "contentSha256"]);
+  const content = parseBrandRulesContentV1(source.content);
+  const contentSha256 = sha256(source.contentSha256);
+  if (typeof source.version !== "number" || !Number.isInteger(source.version) || source.version < 1
+    || contentSha256 !== createHash("sha256").update(canonicalJson(content)).digest("hex")) fail();
+  return { versionId: uuid(source.versionId), version: source.version, content, contentSha256 };
 }
 
 function parseImageFields(value: unknown): Omit<ApprovedProductImageSnapshotV2, "assetId" | "role"> {
@@ -711,12 +741,13 @@ function validateFinalBindings(input: ContentGenerationInputV3): void {
 }
 
 export function parseContentGenerationInputV3(value: unknown): ContentGenerationInputV3 {
-  const source = exactObject(value, ["contractVersion", "generationId", "brandCore", "subject", "contentInstruction", "product", "researchEvidence", "references", "selectedProposal", "userImageInstruction", "outputSettings", "capturedAt"]);
+  const source = exactObject(value, ["contractVersion", "generationId", "brandCore", "brandRules", "subject", "contentInstruction", "product", "researchEvidence", "references", "selectedProposal", "userImageInstruction", "outputSettings", "capturedAt"]);
   if (source.contractVersion !== "content-generation-input.v3") fail();
   const result: ContentGenerationInputV3 = {
     contractVersion: "content-generation-input.v3",
     generationId: uuid(source.generationId),
     brandCore: parseBrandCore(source.brandCore),
+    brandRules: parseBrandRulesSnapshot(source.brandRules),
     subject: parseSubject(source.subject),
     contentInstruction: nullableString(source.contentInstruction, 4_000),
     product: source.product === null ? null : parseProduct(source.product),

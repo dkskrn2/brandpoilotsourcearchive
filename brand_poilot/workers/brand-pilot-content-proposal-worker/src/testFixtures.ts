@@ -92,8 +92,8 @@ function contract(): ContentProposalJobContract {
     modelId: "gpt-5.6-terra",
     requestSha256: proposalSha256(request),
     baseInputSha256: proposalSha256(baseInput),
-    contractSourceSha256: "f1e754cb2c2664ef21f41597a45b2ed424ebc040b949f5bf4cece251195ab5f8",
-    catalogSha256: "94c6622ce5c5ef74b9d011dd0d35035f0f0b5580160dc2a2264b08030a5724fb",
+    contractSourceSha256: "02760a1e006eb5920980a4b9c5b268cf53b3595543c5f909f2d66be53393c660",
+    catalogSha256: "41ac04e76adf0fd9746ea7535b36f6c1ea314ec4890253a2cd56a9f215f7cdbe",
   };
   const commandDescriptorSha256 = proposalSha256({
     runner: "codex-exec",

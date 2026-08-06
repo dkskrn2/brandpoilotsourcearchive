@@ -30,6 +30,7 @@ function finalInput() {
   return {
     contractVersion: "content-generation-input.v3" as const, generationId: ids.generation,
     brandCore: { versionId: "80000000-0000-4000-8000-000000000001", companyOverview: "Company", businessDescription: "Description", primaryCategory: "Food", detailedCategory: "Tea", primaryTarget: "Adults", differentiator: "Direct", coreAppeal: "Calm" },
+    brandRules: { versionId: "80000000-0000-4000-8000-000000000002", version: 1, content: { contractVersion: "brand-rules.v1" as const, requiredPhrases: [], forbiddenPhrases: [], exaggerationRules: [], ctaRules: { defaultCta: "", allowed: [] }, channelRules: {}, designRules: { colors: [], fonts: [], notes: [], referenceImages: [] }, autoApprovalRules: { enabled: false, conditions: [] } }, contentSha256: "67b61ecaeab23a876527fa4148e4046c2721084306d79b60bfec4f96956ba84b" },
     subject: { kind: "topic_text" as const, title: "Tea" }, contentInstruction: null, product: null,
     researchEvidence: { contractVersion: "research-evidence.v1" as const, decision: "searched" as const, reason: "Needed", queries: ["tea"], capturedAt: now, items: [{ id: evidenceId, title: "Study", url: "https://source.example/study", publisher: "Source", publishedAt: now, capturedAt: now, claimSummary: "Claim", contentHash: "a".repeat(64) }] },
     references: { selected: [], brandStyleImages: [], avatarStyleImageId: null, attachments: [] },

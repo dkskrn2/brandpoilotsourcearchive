@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import {
   parseContentGenerationInputV3,
   parseImageGenerationPackageV1,
@@ -24,6 +25,23 @@ const brandCore = () => ({
   primaryTarget: " Adults ",
   differentiator: " Fresh ",
   coreAppeal: " Calm ",
+});
+
+const brandRulesContent = () => ({
+  contractVersion: "brand-rules.v1",
+  requiredPhrases: [], forbiddenPhrases: [], exaggerationRules: [],
+  ctaRules: { defaultCta: "", allowed: [] }, channelRules: {},
+  designRules: { colors: [], fonts: [], notes: [], referenceImages: [] },
+  autoApprovalRules: { enabled: false, conditions: [] },
+});
+const stable = (value: unknown): unknown => Array.isArray(value)
+  ? value.map(stable)
+  : value && typeof value === "object"
+    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => [key, stable(child)]))
+    : value;
+const brandRules = () => ({
+  versionId: id(11), version: 1, content: brandRulesContent(),
+  contentSha256: createHash("sha256").update(JSON.stringify(stable(brandRulesContent()))).digest("hex"),
 });
 
 const product = () => ({
@@ -143,6 +161,7 @@ const informationalInput = () => ({
   contractVersion: "content-generation-input.v3",
   generationId: id(10),
   brandCore: brandCore(),
+  brandRules: brandRules(),
   subject: { kind: "reference", referenceIds: [id(5)] },
   contentInstruction: " Make it practical ",
   product: null,

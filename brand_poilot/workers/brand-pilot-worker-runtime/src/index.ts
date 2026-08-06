@@ -15,6 +15,7 @@ export {
   type ReferenceRoleV2,
   type ContentAspectRatioV2,
   type ApprovedBrandCoreSnapshotV2,
+  type ApprovedBrandRulesSnapshotV1,
   type ApprovedProductSnapshotV2,
   type FrozenReferenceSnapshotV2,
   type ResearchEvidenceSnapshotV1,

@@ -35,6 +35,7 @@ const UUIDS = {
   brand: "00000000-0000-4000-8000-000000000001",
   product: "00000000-0000-4000-8000-000000000002",
   brandVersion: "00000000-0000-4000-8000-000000000010",
+  brandRulesVersion: "00000000-0000-4000-8000-000000000012",
   productVersion: "00000000-0000-4000-8000-000000000011",
   generation: "00000000-0000-4000-8000-000000000020",
   selectedProposal: "00000000-0000-4000-8000-000000000021",
@@ -73,6 +74,27 @@ const brandCore = {
   primaryTarget: "실무자",
   differentiator: "검증된 자동화",
   coreAppeal: "빠른 실행",
+};
+
+const brandRules = {
+  versionId: UUIDS.brandRulesVersion,
+  version: 1,
+  content: {
+    contractVersion: "brand-rules.v1",
+    requiredPhrases: ["정확한 정보"],
+    forbiddenPhrases: ["무조건"],
+    exaggerationRules: ["검증되지 않은 최상급 금지"],
+    ctaRules: { defaultCta: "더 알아보기", allowed: ["더 알아보기"] },
+    channelRules: { instagram: ["짧은 문장"] },
+    designRules: {
+      colors: ["#ffffff"],
+      fonts: ["Pretendard"],
+      notes: ["충분한 여백"],
+      referenceImages: [],
+    },
+    autoApprovalRules: { enabled: false, conditions: [] },
+  },
+  contentSha256: "c".repeat(64),
 };
 
 const product = {
@@ -161,6 +183,7 @@ function generationInput(outputFormat: "card_news" | "blog" | "reel" = "card_new
     contractVersion: CONTENT_GENERATION_INPUT_VERSION,
     generationId: UUIDS.generation,
     brandCore,
+    brandRules,
     subject: { kind: "topic_text", title: "검증 주제" },
     contentInstruction: null,
     product: purpose === "marketing" ? product : null,
@@ -405,6 +428,16 @@ describe("canonical content schemas", () => {
       .toThrow("reel_plan_v2_invalid");
     expect(() => parseReelPlanV2({ ...reelPlan, outputFormat: "marketing_content" }))
       .toThrow("reel_plan_v2_invalid");
+  });
+
+  it("requires an exact approved brand-rules.v1 snapshot in generation V3", () => {
+    expect(parseContentGenerationInputV3(generationInput()).brandRules).toEqual(brandRules);
+    const { brandRules: _missing, ...withoutRules } = generationInput();
+    expect(() => parseContentGenerationInputV3(withoutRules)).toThrow("content_generation_input_v3_invalid");
+    expect(() => parseContentGenerationInputV3({
+      ...generationInput(),
+      brandRules: { ...brandRules, legacyRules: true },
+    })).toThrow("content_generation_input_v3_invalid");
   });
 
   it.each([

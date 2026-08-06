@@ -171,6 +171,7 @@ describe("card-news prompt", () => {
     const input: ContentGenerationInputV3 = {
       contractVersion: "content-generation-input.v3", generationId: uid(10), capturedAt: "2026-07-31T00:00:00.000Z",
       brandCore: { versionId: uid(1), companyOverview: "Company", businessDescription: "Business", primaryCategory: "Food", detailedCategory: "Tea", primaryTarget: "Office workers", differentiator: "Fresh", coreAppeal: "Calm" },
+      brandRules: { versionId: uid(11), version: 1, content: { contractVersion: "brand-rules.v1", requiredPhrases: [], forbiddenPhrases: [], exaggerationRules: [], ctaRules: { defaultCta: "", allowed: [] }, channelRules: {}, designRules: { colors: [], fonts: [], notes: [], referenceImages: [] }, autoApprovalRules: { enabled: false, conditions: [] } }, contentSha256: "67b61ecaeab23a876527fa4148e4046c2721084306d79b60bfec4f96956ba84b" },
       subject: { kind: "topic_text", title: "Afternoon tea" }, contentInstruction: "Use concise practical copy", product,
       researchEvidence: { contractVersion: "research-evidence.v1", decision: "not_needed", reason: "Product facts suffice", queries: [], capturedAt: "2026-07-31T00:00:00.000Z", items: [] },
       references: { selected: [reference], brandStyleImages: [style], avatarStyleImageId: uid(5), attachments: [attachment] },
@@ -202,13 +203,15 @@ describe("card-news prompt", () => {
     const promptData = JSON.parse(prompt.split("고정 입력(JSON):\n")[1]!);
     expect(promptData).toMatchObject({
       brandCore: input.brandCore,
+      brandRules: input.brandRules,
       product,
       references: input.references,
       selectedProposal: input.selectedProposal,
       userImageInstruction: input.userImageInstruction,
     });
-    expect(promptData).not.toHaveProperty("brandRules");
-    expect(JSON.stringify(promptData)).not.toMatch(/wiki|faq|"colors"|"fonts"|"notes"/i);
+    expect(promptData.brandRules).toEqual(input.brandRules);
+    expect(prompt).toContain("requiredPhrases");
+    expect(JSON.stringify(promptData)).not.toMatch(/wiki|faq/i);
     expect(promptData.logoPolicy).toEqual({ allowGeneratedLogo: false, allowReservedLogoArea: false, allowExternalReferenceLogo: false, allowExistingProductPackagingLogo: true });
 
     const repair = buildCardNewsPlanPrompt({ ...job, generationId: input.generationId }, input, "card_news_plan_invalid:index mismatch");

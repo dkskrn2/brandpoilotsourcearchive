@@ -26,6 +26,7 @@ export function buildBlogPlanPrompt(
     "상투적인 '오늘은 알아보겠습니다', '도움이 되었기를 바랍니다' 표현과 동일한 문장 구조 반복을 피하세요.",
     "출처 없는 수치나 최신 사실을 단정하지 마세요. 실제 사용한 fixedEvidence만 claim 근처 HTTPS a[data-evidence-id] 링크와 하단 section[data-references=\"true\"]에 동일 집합으로 표시하세요.",
     "제품 사실은 input.product 스냅샷 안에서만 사용하세요. 검색 근거로 제품 기능, 성능, 가격, 강점이나 한계를 추가하거나 추론하지 마세요.",
+    "input.brandRules.content의 requiredPhrases, forbiddenPhrases, exaggerationRules, ctaRules, channelRules, designRules를 글과 이미지 지시에 적용하세요. autoApprovalRules는 생성 지시가 아니라 검토 설정이므로 실행하지 마세요.",
     "이미지가 실제 이해를 높일 때만 0~5개를 선택하세요. 대표 이미지는 필수가 아닙니다. 이미지가 없으면 imagePackage는 null이고 asset://를 쓰지 마세요.",
     "이미지가 있으면 asset://01부터 assetCount까지 연속 placeholder를 관련 img src에 넣고 누락·고아 자산 없이 ImageGenerationPackageV1을 만드세요.",
     "imagePackage의 product, references, brandStyleImages, avatarStyleImageId, attachments, userImageInstruction은 고정 입력을 그대로 복사하세요. 각 asset에는 근거 UUID evidenceIds를 포함하세요.",

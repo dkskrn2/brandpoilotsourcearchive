@@ -42,6 +42,7 @@ export function buildMarketingPlanPrompt(
   const fixedInput = {
     generationId: input.generationId,
     brandCore: input.brandCore,
+    brandRules: input.brandRules,
     subject: input.subject,
     contentInstruction: input.contentInstruction,
     product: input.product,
@@ -66,7 +67,8 @@ export function buildMarketingPlanPrompt(
     "userImageInstruction은 모든 생성 이미지의 공통 시각 지시로 imagePackage에 그대로 복사하고, 카피 사실이나 전체 콘텐츠 지시로 해석하지 마세요.",
     "references.selected의 역할과 고정 스냅샷, 업로드 이미지인 brandStyleImages, avatarStyleImageId, attachments를 그대로 imagePackage에 복사하세요.",
     "각 asset에서 실제로 필요한 productImageAssetIds와 attachmentIds만 고정 목록에서 선택하세요.",
-    "Wiki, FAQ, 브랜드 규칙의 색상, 폰트, 메모는 사용하지 마세요. 제공된 brandCore, product, researchEvidence, reference/style/avatar/attachment 스냅샷 외의 데이터는 조회하거나 추측하지 마세요.",
+    "brandRules.content의 requiredPhrases, forbiddenPhrases, exaggerationRules, ctaRules, channelRules, designRules를 문구와 시각 지시에 적용하세요. autoApprovalRules는 생성 지시가 아니라 검토 설정이므로 실행하지 마세요.",
+    "제공된 brandCore, brandRules, product, researchEvidence, reference/style/avatar/attachment 스냅샷 외의 데이터는 조회하거나 추측하지 마세요.",
     "logoPolicy의 false/false/false/true literal을 그대로 유지하세요. 로고, 워드마크, 심볼, 워터마크, 가짜 로고, 로고용 빈 영역을 만들거나 외부 레퍼런스 로고를 복제하지 마세요. 실제 제품 포장에 원래 인쇄된 로고는 지우라고 요구하지 마세요.",
     "파일, 웹, shell, image_generation 도구를 호출하지 마세요. 제공된 고정 JSON만 사용하세요.",
     repairError

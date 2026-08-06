@@ -67,8 +67,8 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
     );
     const hash = "a".repeat(64);
     const proposalSchema = "54bf063cf32926874af6b098272df08d41a9e7d7f578ee6560debe44428cf5f3";
-    const contractSource = "f1e754cb2c2664ef21f41597a45b2ed424ebc040b949f5bf4cece251195ab5f8";
-    const catalogSha = "94c6622ce5c5ef74b9d011dd0d35035f0f0b5580160dc2a2264b08030a5724fb";
+    const contractSource = "02760a1e006eb5920980a4b9c5b268cf53b3595543c5f909f2d66be53393c660";
+    const catalogSha = "41ac04e76adf0fd9746ea7535b36f6c1ea314ec4890253a2cd56a9f215f7cdbe";
     const createProposalJobFixture = async (label) => {
       const fixtureBatch = await admin.query(
         `insert into ai_content_proposal_batches(
@@ -1076,7 +1076,7 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
       proposalComposedInputVersion: "proposal-input.v2", proposalOutputVersion: "content-proposal.v2",
       proposalPromptVersion: "proposal.writer.v2", proposalSchemaSha256: proposalSchema,
       generationInputVersion: "content-generation-input.v3",
-      generationSchemaSha256: "9977b52a0b15d581cf529c3c034eb2670c361fd03434f5c3231a798c6f668ffd",
+      generationSchemaSha256: "5f0123a5649ff04b93c49f5ec8a4e3a8cf501f5442ca915adcf1dd3fd64b6b00",
       planContractVersion: "blog-plan.v2",
       planSchemaSha256: "03ceeed94fdda02f3935a37868a5c159a456d467200486236ecc968163794c82",
       plannerPromptVersion: "planner.blog.informational.v1",

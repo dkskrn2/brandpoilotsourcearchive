@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parseBrandRulesContentV1 } from "@brand-pilot/content-contracts";
 import {
   mapAnalysisToBrandCoreDraft,
   parseBrandCoreForApproval,
@@ -121,6 +122,29 @@ describe("brand evidence and review state", () => {
 });
 
 describe("BrandRulesV1 validation", () => {
+  it("keeps the API canonical parser in parity with the shared immutable snapshot schema", () => {
+    const raw = {
+      contractVersion: "brand-rules.v1",
+      requiredPhrases: [" 정확한 정보 "],
+      forbiddenPhrases: [],
+      exaggerationRules: [],
+      ctaRules: { defaultCta: " 더 알아보기 ", allowed: [] },
+      channelRules: { instagram: [" 짧은 문장 "] },
+      designRules: { colors: [], fonts: [], notes: [] },
+      autoApprovalRules: { enabled: false, conditions: [] },
+    };
+    const canonical = parseBrandRules(raw);
+
+    expect(parseBrandRulesContentV1(canonical)).toEqual(canonical);
+    expect(() => parseBrandRulesContentV1(raw)).toThrow("brand_rules_content_v1_invalid");
+    expect(canonical).toMatchObject({
+      requiredPhrases: ["정확한 정보"],
+      ctaRules: { defaultCta: "더 알아보기" },
+      channelRules: { instagram: ["짧은 문장"] },
+      designRules: { referenceImages: [] },
+    });
+  });
+
   it("keeps review suggestions separate from runtime switches", () => {
     expect(parseBrandRules({
       contractVersion: "brand-rules.v1",

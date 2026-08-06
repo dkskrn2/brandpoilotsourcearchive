@@ -12,6 +12,7 @@ import {
 } from "./proposal.js";
 import {
   ApprovedBrandCoreSnapshotV2Schema,
+  ApprovedBrandRulesSnapshotV1Schema,
   ApprovedProductSnapshotV2Schema,
   ContentAspectRatioSchema,
   ContentChannelTargetSchema,
@@ -50,6 +51,7 @@ export const ContentGenerationInputV3Schema = Type.Object({
   contractVersion: Type.Literal(CONTENT_GENERATION_INPUT_VERSION),
   generationId: UuidSchema,
   brandCore: ApprovedBrandCoreSnapshotV2Schema,
+  brandRules: ApprovedBrandRulesSnapshotV1Schema,
   subject: ProposalSubjectV2Schema,
   contentInstruction: Type.Union([Type.String({ minLength: 1, maxLength: 4_000 }), Type.Null()]),
   product: Type.Union([ApprovedProductSnapshotV2Schema, Type.Null()]),

@@ -30,7 +30,7 @@ export type {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SHA256 = /^[0-9a-f]{64}$/;
-const EXPECTED_CATALOG_SHA256 = "94c6622ce5c5ef74b9d011dd0d35035f0f0b5580160dc2a2264b08030a5724fb";
+const EXPECTED_CATALOG_SHA256 = "41ac04e76adf0fd9746ea7535b36f6c1ea314ec4890253a2cd56a9f215f7cdbe";
 
 export const CONTENT_PROPOSAL_OUTPUT_SCHEMA_PATH = fileURLToPath(import.meta.resolve(
   "@brand-pilot/content-contracts/generated/content-proposal-v2.schema.json",

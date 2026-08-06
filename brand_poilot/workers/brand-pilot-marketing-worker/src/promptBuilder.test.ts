@@ -24,6 +24,7 @@ function v3Input(purpose: "informational" | "marketing", outputFormat: "reel" | 
   return {
     contractVersion: "content-generation-input.v3" as const, generationId: uid(10), capturedAt: timestamp,
     brandCore: { versionId: uid(1), companyOverview: "Company", businessDescription: "Business", primaryCategory: "Food", detailedCategory: "Tea", primaryTarget: "Adults", differentiator: "Fresh", coreAppeal: "Calm" },
+    brandRules: { versionId: uid(11), version: 1, content: { contractVersion: "brand-rules.v1", requiredPhrases: [], forbiddenPhrases: [], exaggerationRules: [], ctaRules: { defaultCta: "", allowed: [] }, channelRules: {}, designRules: { colors: [], fonts: [], notes: [], referenceImages: [] }, autoApprovalRules: { enabled: false, conditions: [] } }, contentSha256: "67b61ecaeab23a876527fa4148e4046c2721084306d79b60bfec4f96956ba84b" },
     subject: { kind: "topic_text" as const, title: "Tea guide" }, contentInstruction: "전체 카피를 실용적으로 작성", product,
     researchEvidence: purpose === "informational"
       ? { contractVersion: "research-evidence.v1" as const, decision: "searched" as const, reason: "Current facts", queries: ["tea"], capturedAt: timestamp, items: [{ id: uid(7), title: "Study", url: "https://evidence.example/study", publisher: null, publishedAt: null, capturedAt: timestamp, claimSummary: "Warm water", contentHash: "a".repeat(64) }] }
@@ -206,9 +207,8 @@ describe("marketing prompt", () => {
     const prompt = buildMarketingPlanPrompt({ ...job, generationId: input.generationId }, input, "marketing_plan_invalid:asset_count_mismatch");
     expect(prompt).toContain("contentInstruction은 전체 카피");
     expect(prompt).toContain("userImageInstruction은 모든 생성 이미지의 공통 시각 지시");
-    expect(prompt).toContain("Wiki");
-    expect(prompt).toContain("FAQ");
-    expect(prompt).toContain("색상, 폰트, 메모");
+    expect(prompt).toContain("brandRules.content");
+    expect(prompt).toContain("requiredPhrases");
     expect(prompt).toContain("로고");
     expect(prompt).toContain("부실하지 않게");
     expect(prompt).toContain("과밀");
@@ -216,6 +216,7 @@ describe("marketing prompt", () => {
     const fixed = JSON.parse(prompt.split("고정 입력(JSON):\n")[1]!);
     expect(fixed.contentInstruction).toBe("전체 카피를 실용적으로 작성");
     expect(fixed.userImageInstruction).toBe("모든 이미지에 부드러운 자연광 적용");
+    expect(fixed.brandRules).toEqual(input.brandRules);
     expect(fixed.logoPolicy).toEqual({ allowGeneratedLogo: false, allowReservedLogoArea: false, allowExternalReferenceLogo: false, allowExistingProductPackagingLogo: true });
   });
 });

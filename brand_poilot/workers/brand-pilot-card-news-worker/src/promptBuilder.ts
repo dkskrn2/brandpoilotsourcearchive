@@ -26,6 +26,7 @@ export function buildCardNewsPlanPrompt(
   const fixedInput = {
     generationId: input.generationId,
     brandCore: input.brandCore,
+    brandRules: input.brandRules,
     subject: input.subject,
     contentInstruction: input.contentInstruction,
     product: input.product,
@@ -46,6 +47,7 @@ export function buildCardNewsPlanPrompt(
     "각 장에는 모바일에서 바로 이해할 수 있는 구체적인 copy와 visualDirection을 작성하세요.",
     "한 장이 부실하지 않게 핵심 정보와 근거를 압축하되, 과도한 문장과 정보 밀도로 모바일 가독성을 해치지 마세요.",
     "각 copy의 사실 근거는 brandCore, researchEvidence, 선택 레퍼런스 텍스트와 product 스냅샷으로만 제한하세요. 근거 ID 자체를 독자용 카피에 노출하지 마세요.",
+    "brandRules.content의 requiredPhrases, forbiddenPhrases, exaggerationRules, ctaRules, channelRules, designRules를 문구와 시각 지시에 적용하세요. autoApprovalRules는 생성 지시가 아니라 검토 설정이므로 실행하지 마세요.",
     "각 장의 사실, 수치, 최신 주장에는 researchEvidence.items의 해당 UUID만 evidenceIds에 넣으세요. 근거가 필요 없는 질문형 훅이나 CTA는 []를 사용하고 ID를 발명하지 마세요.",
     "제품 사실에는 research evidence ID를 발명하지 마세요. 제품 설명은 고정 product 스냅샷만 근거로 사용하세요.",
     "제품 사실은 product 스냅샷 안에서만 사용하고 기능, 가격, 장점, 한계, 구매 조건을 추측하지 마세요.",

@@ -25,6 +25,7 @@ function finalInput(outputFormat: "card_news" | "blog" | "reel" | "marketing_con
       primaryCategory: "Food", detailedCategory: "Tea", primaryTarget: "Adults",
       differentiator: "Direct", coreAppeal: "Calm",
     },
+    brandRules: { versionId: id(5), version: 1, content: { contractVersion: "brand-rules.v1", requiredPhrases: [], forbiddenPhrases: [], exaggerationRules: [], ctaRules: { defaultCta: "", allowed: [] }, channelRules: {}, designRules: { colors: [], fonts: [], notes: [], referenceImages: [] }, autoApprovalRules: { enabled: false, conditions: [] } }, contentSha256: "67b61ecaeab23a876527fa4148e4046c2721084306d79b60bfec4f96956ba84b" },
     subject: { kind: "topic_text", title: "Tea" }, contentInstruction: null, product: null,
     researchEvidence: {
       contractVersion: "research-evidence.v1", decision: "searched", reason: "Needed",

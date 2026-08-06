@@ -18,6 +18,7 @@ const uid = (n: number) => `10000000-0000-4000-8000-${String(n).padStart(12, "0"
 const v3Input = {
   contractVersion: "content-generation-input.v3" as const, generationId: uid(1),
   brandCore: { versionId: uid(2), companyOverview: "Overview", businessDescription: "Business", primaryCategory: "Category", detailedCategory: "Detail", primaryTarget: "Reader", differentiator: "Clear", coreAppeal: "Useful" },
+  brandRules: { versionId: uid(11), version: 1, content: { contractVersion: "brand-rules.v1", requiredPhrases: [], forbiddenPhrases: [], exaggerationRules: [], ctaRules: { defaultCta: "", allowed: [] }, channelRules: {}, designRules: { colors: [], fonts: [], notes: [], referenceImages: [] }, autoApprovalRules: { enabled: false, conditions: [] } }, contentSha256: "67b61ecaeab23a876527fa4148e4046c2721084306d79b60bfec4f96956ba84b" },
   subject: { kind: "topic_text" as const, title: "좋은 글 구조" }, contentInstruction: "구체적으로 작성",
   product: null,
   researchEvidence: { contractVersion: "research-evidence.v1" as const, decision: "searched" as const, reason: "Evidence", queries: ["query"], capturedAt: "2026-07-31T00:00:00.000Z", items: [{ id: uid(5), title: "Source", url: "https://example.com/source", publisher: null, publishedAt: null, capturedAt: "2026-07-31T00:00:00.000Z", claimSummary: "Claim", contentHash: "a".repeat(64) }] },
@@ -132,6 +133,8 @@ describe("blog prompt", () => {
     expect(prompt).toContain("로고를 생성하거나 배치하지 마세요");
     expect(prompt).toContain("contentInstruction");
     expect(prompt).toContain("제품 사실은 input.product");
+    expect(prompt).toContain("input.brandRules.content");
+    expect(prompt).toContain('"contractVersion": "brand-rules.v1"');
     expect(prompt).toContain("title 500자");
     expect(prompt).toContain("metaTitle 500자");
     expect(prompt).toContain("metaDescription 2,000자");

@@ -1,4 +1,5 @@
 import { Type, type Static } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 import { RESEARCH_EVIDENCE_VERSION } from "./catalog.js";
 
 export const NonEmptyStringSchema = Type.String({ minLength: 1 });
@@ -54,6 +55,53 @@ export const ApprovedBrandCoreSnapshotV2Schema = Type.Object({
   coreAppeal: Type.String({ minLength: 1, maxLength: 4_000 }),
 }, { additionalProperties: false });
 export type ApprovedBrandCoreSnapshotV2 = Static<typeof ApprovedBrandCoreSnapshotV2Schema>;
+
+const BrandRuleTextSchema = Type.String({ maxLength: 500 });
+const BrandRuleTextListSchema = Type.Array(BrandRuleTextSchema, { maxItems: 20 });
+
+export const BrandRulesContentV1Schema = Type.Object({
+  contractVersion: Type.Literal("brand-rules.v1"),
+  requiredPhrases: BrandRuleTextListSchema,
+  forbiddenPhrases: BrandRuleTextListSchema,
+  exaggerationRules: BrandRuleTextListSchema,
+  ctaRules: Type.Object({
+    defaultCta: Type.String({ maxLength: 500 }),
+    allowed: BrandRuleTextListSchema,
+  }, { additionalProperties: false }),
+  channelRules: Type.Record(
+    Type.String({ minLength: 1, maxLength: 50 }),
+    BrandRuleTextListSchema,
+    { additionalProperties: false, maxProperties: 20 },
+  ),
+  designRules: Type.Object({
+    colors: BrandRuleTextListSchema,
+    fonts: BrandRuleTextListSchema,
+    notes: BrandRuleTextListSchema,
+    referenceImages: Type.Array(Type.Object({
+      referenceItemId: UuidSchema,
+      description: Type.String({ maxLength: 240 }),
+      tags: Type.Array(Type.String({ maxLength: 40 }), { maxItems: 10 }),
+    }, { additionalProperties: false }), { maxItems: 5 }),
+  }, { additionalProperties: false }),
+  autoApprovalRules: Type.Object({
+    enabled: Type.Boolean(),
+    conditions: BrandRuleTextListSchema,
+  }, { additionalProperties: false }),
+}, { additionalProperties: false });
+export type BrandRulesContentV1 = Static<typeof BrandRulesContentV1Schema>;
+
+export function parseBrandRulesContentV1(value: unknown): BrandRulesContentV1 {
+  if (!Value.Check(BrandRulesContentV1Schema, value)) throw new Error("brand_rules_content_v1_invalid");
+  return value as BrandRulesContentV1;
+}
+
+export const ApprovedBrandRulesSnapshotV1Schema = Type.Object({
+  versionId: UuidSchema,
+  version: Type.Integer({ minimum: 1 }),
+  content: BrandRulesContentV1Schema,
+  contentSha256: LowercaseSha256Schema,
+}, { additionalProperties: false });
+export type ApprovedBrandRulesSnapshotV1 = Static<typeof ApprovedBrandRulesSnapshotV1Schema>;
 
 export const OwnedImageSnapshotV2Schema = Type.Object({
   storageUrl: HttpUrlSchema,
