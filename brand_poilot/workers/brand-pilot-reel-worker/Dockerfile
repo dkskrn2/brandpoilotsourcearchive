@@ -1,0 +1,33 @@
+FROM node:22-bookworm-slim AS build
+
+WORKDIR /app
+COPY . .
+RUN npm ci
+RUN npm run build --workspace @brand-pilot/reel-worker
+RUN npm prune --omit=dev
+
+FROM node:22-bookworm-slim AS runtime
+
+WORKDIR /app
+ENV NODE_ENV=production CODEX_HOME=/codex
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bubblewrap ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install --global --omit=dev @openai/codex@0.145.0 \
+    && mkdir -p /codex \
+    && chown node:node /codex
+
+COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/packages/brand-pilot-content-contracts/package.json ./packages/brand-pilot-content-contracts/package.json
+COPY --from=build --chown=node:node /app/packages/brand-pilot-content-contracts/dist ./packages/brand-pilot-content-contracts/dist
+COPY --from=build --chown=node:node /app/packages/brand-pilot-content-contracts/generated ./packages/brand-pilot-content-contracts/generated
+COPY --from=build --chown=node:node /app/workers/brand-pilot-worker-runtime/package.json ./workers/brand-pilot-worker-runtime/package.json
+COPY --from=build --chown=node:node /app/workers/brand-pilot-worker-runtime/dist ./workers/brand-pilot-worker-runtime/dist
+COPY --from=build --chown=node:node /app/workers/brand-pilot-reel-worker/package.json ./workers/brand-pilot-reel-worker/package.json
+COPY --from=build --chown=node:node /app/workers/brand-pilot-reel-worker/dist ./workers/brand-pilot-reel-worker/dist
+COPY --from=build --chown=node:node /app/workers/brand-pilot-reel-worker/scripts/run-codex-reel-plan.mjs ./workers/brand-pilot-reel-worker/scripts/run-codex-reel-plan.mjs
+
+WORKDIR /app/workers/brand-pilot-reel-worker
+USER node
+CMD ["node", "/app/workers/brand-pilot-reel-worker/dist/index.js", "watch"]
