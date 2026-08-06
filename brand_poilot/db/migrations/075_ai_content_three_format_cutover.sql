@@ -256,14 +256,28 @@ begin
       new.status is distinct from 'processing' or new.active_stage is distinct from 'model'
     ) then
       raise exception 'proposal_unresolved_invocation_terminal_state_invalid';
-    elsif new.status in ('completed','failed') and not exists (
-      select 1
-        from public.ai_content_proposal_model_attempts attempt
-        join public.ai_content_proposal_attempt_events terminal
-          on terminal.model_attempt_id=attempt.id and terminal.job_id=attempt.job_id
-       where attempt.job_id=new.id
-         and terminal.event_type=case new.status
-           when 'completed' then 'attempt_succeeded' else 'attempt_failed' end
+    elsif new.status in ('completed','failed') and not (
+      exists (
+        select 1
+          from public.ai_content_proposal_model_attempts attempt
+          join public.ai_content_proposal_attempt_events terminal
+            on terminal.model_attempt_id=attempt.id and terminal.job_id=attempt.job_id
+         where attempt.job_id=new.id
+           and terminal.event_type=case new.status
+             when 'completed' then 'attempt_succeeded' else 'attempt_failed' end
+      )
+      or (new.status='failed' and (
+        exists (
+          select 1 from public.ai_content_proposal_attempt_events failure
+           where failure.job_id=new.id and failure.workspace_id=new.workspace_id
+             and failure.brand_id=new.brand_id and failure.terminal=true
+        )
+        or exists (
+          select 1 from public.ai_content_proposal_research_attempt_events failure
+           where failure.job_id=new.id and failure.workspace_id=new.workspace_id
+             and failure.brand_id=new.brand_id and failure.terminal=true
+        )
+      ))
     ) then
       raise exception 'proposal_job_terminal_event_missing';
     end if;
@@ -333,6 +347,18 @@ begin
     checked_generation_id:=new.generation_id;
   end if;
   select * into strict generation_row from public.ai_content_generations where id=checked_generation_id;
+  if generation_row.operation_id is null then
+    if generation_row.status='draft'
+       and generation_row.current_stage='draft'
+       and generation_row.generation_idempotency_key is null
+       and generation_row.generation_input_snapshot is null
+       and generation_row.error_code is null
+       and generation_row.error_message is null
+       and generation_row.completed_at is null then
+      return new;
+    end if;
+    raise exception 'ai_content_generation_operation_required_before_start';
+  end if;
   select * into strict operation_row from public.ai_content_generation_operations
    where id=generation_row.operation_id;
   if operation_row.generation_id<>generation_row.id
@@ -365,7 +391,17 @@ $$;
 create function require_ai_content_generation_operation_on_insert() returns trigger
 language plpgsql set search_path=pg_catalog,public,pg_temp as $$
 begin
-  if new.operation_id is null then raise exception 'ai_content_generation_operation_required'; end if;
+  if new.operation_id is null and not (
+    new.status='draft'
+    and new.current_stage='draft'
+    and new.generation_idempotency_key is null
+    and new.generation_input_snapshot is null
+    and new.error_code is null
+    and new.error_message is null
+    and new.completed_at is null
+  ) then
+    raise exception 'ai_content_generation_operation_required_before_start';
+  end if;
   return new;
 end;
 $$;
@@ -406,8 +442,9 @@ begin
 end;
 $$;
 create trigger ai_content_generations_operation_required
-before insert on ai_content_generations for each row
-execute function require_ai_content_generation_operation_on_insert();
+before insert or update of operation_id,status,current_stage,generation_idempotency_key,
+  generation_input_snapshot,error_code,error_message,completed_at on ai_content_generations
+for each row execute function require_ai_content_generation_operation_on_insert();
 create trigger ai_content_generation_operations_identity_immutable
 before update of workspace_id,brand_id,operation_key,request_fingerprint_sha256,
   parent_operation_id,generation_id on ai_content_generation_operations
@@ -719,9 +756,15 @@ create table ai_content_proposal_research_attempt_events (
     event_type in ('research_started','evidence_committed','attempt_succeeded','attempt_failed')
   ),
   composition_id uuid null,
-  evidence_json jsonb null check (evidence_json is null or jsonb_typeof(evidence_json)='array'),
+  evidence_json jsonb null check (
+    evidence_json is null or jsonb_typeof(evidence_json) in ('array','object')
+  ),
   evidence_sha256 text null check (evidence_sha256 is null or evidence_sha256 ~ '^[0-9a-f]{64}$'),
   composition_sha256 text null check (composition_sha256 is null or composition_sha256 ~ '^[0-9a-f]{64}$'),
+  error_code text null check (error_code is null or length(trim(error_code))>0),
+  error_message text null check (error_message is null or length(trim(error_message))>0),
+  retryable boolean null,
+  terminal boolean null,
   previous_event_sha256 text null check (previous_event_sha256 is null or previous_event_sha256 ~ '^[0-9a-f]{64}$'),
   event_sha256 text not null unique check (event_sha256 ~ '^[0-9a-f]{64}$'),
   created_at timestamptz not null default now(),
@@ -732,7 +775,19 @@ create table ai_content_proposal_research_attempt_events (
     references ai_content_proposal_research_attempts(id,job_id,workspace_id,brand_id) on delete restrict,
   constraint ai_content_proposal_research_attempt_events_composition_fk
     foreign key(composition_id,job_id,workspace_id,brand_id)
-    references ai_content_proposal_compositions(id,job_id,workspace_id,brand_id) on delete restrict
+    references ai_content_proposal_compositions(id,job_id,workspace_id,brand_id) on delete restrict,
+  constraint ai_content_proposal_research_attempt_events_failure_check check ((
+    (event_type='attempt_failed'
+      and jsonb_typeof(evidence_json)='object'
+      and evidence_json ?& array['errorCode','errorMessage','retryable']
+      and evidence_json - array['errorCode','errorMessage','retryable']='{}'::jsonb
+      and error_code=evidence_json->>'errorCode'
+      and error_message=evidence_json->>'errorMessage'
+      and retryable=(evidence_json->>'retryable')::boolean
+      and terminal=(not retryable))
+    or (event_type<>'attempt_failed' and error_code is null and error_message is null
+      and retryable is null and terminal is null)
+  ) is true)
 );
 
 create function enforce_ai_content_proposal_composition_research_success() returns trigger
@@ -805,8 +860,13 @@ begin
        and (p_composition_id is null or p_evidence_json is null or jsonb_typeof(p_evidence_json)<>'array'
          or p_evidence_sha256 !~ '^[0-9a-f]{64}$' or p_composition_sha256 !~ '^[0-9a-f]{64}$'))
      or (p_event_type='attempt_failed'
-       and (p_composition_id is not null or p_evidence_json is not null
-         or p_evidence_sha256 is not null or p_composition_sha256 is not null)) then
+       and (p_composition_id is not null or jsonb_typeof(p_evidence_json)<>'object'
+         or not (p_evidence_json ?& array['errorCode','errorMessage','retryable'])
+         or p_evidence_json - array['errorCode','errorMessage','retryable']<>'{}'::jsonb
+         or length(trim(p_evidence_json->>'errorCode'))=0
+         or length(trim(p_evidence_json->>'errorMessage'))=0
+         or p_evidence_json->>'retryable' not in ('true','false')
+         or p_evidence_sha256 !~ '^[0-9a-f]{64}$' or p_composition_sha256 is not null)) then
     raise exception 'proposal_research_event_payload_invalid';
   end if;
   if p_evidence_json is not null
@@ -868,15 +928,32 @@ begin
   )::text,'sha256'),'hex');
   insert into public.ai_content_proposal_research_attempt_events(
     research_attempt_id,job_id,workspace_id,brand_id,event_sequence,event_type,composition_id,
-    evidence_json,evidence_sha256,composition_sha256,previous_event_sha256,event_sha256
+    evidence_json,evidence_sha256,composition_sha256,error_code,error_message,retryable,terminal,
+    previous_event_sha256,event_sha256
   ) values(
     p_attempt_id,attempt.job_id,attempt.workspace_id,attempt.brand_id,p_event_sequence,p_event_type,p_composition_id,
-    p_evidence_json,p_evidence_sha256,p_composition_sha256,previous.event_sha256,next_hash
+    p_evidence_json,p_evidence_sha256,p_composition_sha256,
+    case when p_event_type='attempt_failed' then p_evidence_json->>'errorCode' end,
+    case when p_event_type='attempt_failed' then p_evidence_json->>'errorMessage' end,
+    case when p_event_type='attempt_failed' then (p_evidence_json->>'retryable')::boolean end,
+    case when p_event_type='attempt_failed' then not (p_evidence_json->>'retryable')::boolean end,
+    previous.event_sha256,next_hash
   );
-  if p_event_type in ('attempt_succeeded','attempt_failed') then
+  if p_event_type='attempt_succeeded'
+     or (p_event_type='attempt_failed' and (p_evidence_json->>'retryable')::boolean) then
     update public.ai_content_proposal_jobs set status='queued',active_stage=null,lease_owner=null,
-      lease_token=null,lease_started_at=null,lease_expires_at=null
+      lease_token=null,lease_started_at=null,lease_expires_at=null,available_at=case
+        when p_event_type='attempt_failed' then now()+interval '60 seconds' else available_at end
      where id=attempt.job_id;
+  elsif p_event_type='attempt_failed' then
+    update public.ai_content_proposal_jobs set status='failed',active_stage=null,
+      lease_owner=null,lease_token=null,lease_started_at=null,lease_expires_at=null,
+      error_code=p_evidence_json->>'errorCode',error_message=p_evidence_json->>'errorMessage',
+      completed_at=now(),updated_at=now()
+     where id=attempt.job_id;
+    update public.ai_content_proposal_batches set status='failed',
+      error_code=p_evidence_json->>'errorCode',error_message=p_evidence_json->>'errorMessage',updated_at=now()
+     where id=job.batch_id and workspace_id=job.workspace_id and brand_id=job.brand_id;
   end if;
   return next_hash;
 end;
@@ -900,8 +977,12 @@ begin
     return new;
   end if;
   if new.event_type='attempt_failed' then
-    if new.composition_id is not null or new.evidence_json is not null
-       or new.evidence_sha256 is not null or new.composition_sha256 is not null then
+    if new.composition_id is not null or jsonb_typeof(new.evidence_json)<>'object'
+       or new.evidence_sha256 is null
+       or new.evidence_sha256 is distinct from encode(digest(new.evidence_json::text,'sha256'),'hex')
+       or new.composition_sha256 is not null or new.error_code is null
+       or new.error_message is null or new.retryable is null
+       or new.terminal is distinct from (not new.retryable) then
       raise exception 'proposal_research_failed_payload_invalid';
     end if;
     if exists (
@@ -1154,9 +1235,9 @@ create table ai_content_proposal_attempt_events (
   event_sequence integer not null check (event_sequence>0),
   event_type text not null check (event_type in (
     'invocation_started','invocation_completed','invocation_failed','invocation_indeterminate',
-    'attempt_succeeded','attempt_failed'
+    'attempt_succeeded','attempt_failed','pre_invocation_failed'
   )),
-  invocation_ordinal integer not null check (invocation_ordinal between 1 and 2),
+  invocation_ordinal integer null check (invocation_ordinal is null or invocation_ordinal between 1 and 2),
   aggregate_contract_sha256 text not null check (aggregate_contract_sha256 ~ '^[0-9a-f]{64}$'),
   model_sha256 text not null check (model_sha256 ~ '^[0-9a-f]{64}$'),
   command_descriptor_sha256 text not null check (command_descriptor_sha256 ~ '^[0-9a-f]{64}$'),
@@ -1166,6 +1247,10 @@ create table ai_content_proposal_attempt_events (
   output_sha256 text null check (output_sha256 is null or output_sha256 ~ '^[0-9a-f]{64}$'),
   parser_sha256 text null check (parser_sha256 is null or parser_sha256 ~ '^[0-9a-f]{64}$'),
   parser_valid boolean null,
+  error_code text null check (error_code is null or length(trim(error_code))>0),
+  error_message text null check (error_message is null or length(trim(error_message))>0),
+  retryable boolean null,
+  terminal boolean null,
   previous_event_sha256 text null check (previous_event_sha256 is null or previous_event_sha256 ~ '^[0-9a-f]{64}$'),
   event_sha256 text not null unique check (event_sha256 ~ '^[0-9a-f]{64}$'),
   created_at timestamptz not null default now(),
@@ -1174,18 +1259,27 @@ create table ai_content_proposal_attempt_events (
     foreign key(model_attempt_id,job_id,workspace_id,brand_id)
     references ai_content_proposal_model_attempts(id,job_id,workspace_id,brand_id) on delete restrict,
   constraint ai_content_proposal_attempt_events_payload_check check (
-    (event_type='invocation_started' and transcript_sha256 is null and output_sha256 is null
+    (event_type='pre_invocation_failed' and invocation_ordinal is null
+      and transcript_sha256 is null and output_sha256 is null and parser_sha256 is null
+      and parser_valid is null and error_code is not null and error_message is not null
+      and retryable is not null and terminal is not null and (terminal or retryable))
+    or (event_type='invocation_started' and invocation_ordinal is not null
+      and transcript_sha256 is null and output_sha256 is null
       and parser_sha256 is null and parser_valid is null)
-    or (event_type='invocation_completed' and output_sha256 is not null
+    or (event_type='invocation_completed' and invocation_ordinal is not null and output_sha256 is not null
       and parser_sha256 is not null and parser_valid is not null)
-    or (event_type in ('invocation_failed','invocation_indeterminate') and output_sha256 is null
+    or (event_type in ('invocation_failed','invocation_indeterminate') and invocation_ordinal is not null and output_sha256 is null
       and parser_sha256 is null and parser_valid is null)
-    or (event_type='attempt_succeeded' and output_sha256 is not null
+    or (event_type='attempt_succeeded' and invocation_ordinal is not null and output_sha256 is not null
       and parser_sha256 is not null and parser_valid=true)
-    or (event_type='attempt_failed' and (
+    or (event_type='attempt_failed' and invocation_ordinal is not null and (
       (output_sha256 is not null and parser_sha256 is not null and parser_valid=false)
       or (output_sha256 is null and parser_sha256 is null and parser_valid is null)
     ))
+  ),
+  constraint ai_content_proposal_attempt_events_failure_check check (
+    (event_type='pre_invocation_failed')
+    or (error_code is null and error_message is null and retryable is null and terminal is null)
   )
 );
 
@@ -1197,7 +1291,7 @@ create unique index ai_content_proposal_attempt_events_invocation_terminal_uq
   where event_type in ('invocation_completed','invocation_failed','invocation_indeterminate');
 create unique index ai_content_proposal_attempt_events_attempt_terminal_uq
   on ai_content_proposal_attempt_events(model_attempt_id)
-  where event_type in ('attempt_succeeded','attempt_failed');
+  where event_type in ('attempt_succeeded','attempt_failed','pre_invocation_failed');
 
 create function append_ai_content_proposal_attempt_event(
   p_attempt_id uuid,p_lease_token uuid,p_event_sequence integer,p_invocation_ordinal integer,p_event_type text,
@@ -1211,16 +1305,25 @@ declare replay public.ai_content_proposal_attempt_events%rowtype;
 declare invocation_terminal public.ai_content_proposal_attempt_events%rowtype;
 declare job public.ai_content_proposal_jobs%rowtype;
 declare next_hash text;
+declare pre_invocation_failure boolean;
+declare pre_invocation_terminal boolean;
 begin
   select * into strict attempt from public.ai_content_proposal_model_attempts where id=p_attempt_id for update;
   perform pg_advisory_xact_lock(hashtextextended(attempt.job_id::text,0));
-  if p_invocation_ordinal not between 1 and 2 then
+  pre_invocation_failure:=p_event_type='pre_invocation_failed';
+  if (pre_invocation_failure and p_invocation_ordinal<>0)
+     or (not pre_invocation_failure and p_invocation_ordinal not between 1 and 2) then
     raise exception 'proposal_invocation_ordinal_invalid';
   end if;
   if p_event_type not in ('invocation_started','invocation_completed','invocation_failed',
-      'invocation_indeterminate','attempt_succeeded','attempt_failed') then
+      'invocation_indeterminate','attempt_succeeded','attempt_failed','pre_invocation_failed') then
     raise exception 'proposal_attempt_event_type_invalid';
   end if;
+  if pre_invocation_failure and (
+    p_transcript_sha256 is null or length(trim(p_transcript_sha256))=0
+    or p_output_sha256 is null or length(trim(p_output_sha256))=0
+    or p_parser_sha256 is not null or p_parser_valid is null
+  ) then raise exception 'proposal_pre_invocation_failure_payload_invalid'; end if;
   if p_aggregate_contract_sha256 is distinct from attempt.aggregate_contract_sha256
      or p_model_sha256 is distinct from attempt.model_sha256
      or p_command_descriptor_sha256 is distinct from attempt.command_descriptor_sha256
@@ -1230,22 +1333,26 @@ begin
   select * into replay from public.ai_content_proposal_attempt_events
    where model_attempt_id=p_attempt_id and event_sequence=p_event_sequence;
   if found then
-    if replay.event_type=p_event_type and replay.invocation_ordinal=p_invocation_ordinal
+    if replay.event_type=p_event_type
+       and replay.invocation_ordinal is not distinct from (case when pre_invocation_failure then null else p_invocation_ordinal end)
        and replay.aggregate_contract_sha256=p_aggregate_contract_sha256
        and replay.model_sha256=p_model_sha256
        and replay.command_descriptor_sha256=p_command_descriptor_sha256
        and replay.composed_input_sha256=p_composed_input_sha256
-       and replay.transcript_sha256 is not distinct from p_transcript_sha256
-       and replay.output_sha256 is not distinct from p_output_sha256
-       and replay.parser_sha256 is not distinct from p_parser_sha256
-       and replay.parser_valid is not distinct from p_parser_valid then
+       and replay.transcript_sha256 is not distinct from (case when pre_invocation_failure then null else p_transcript_sha256 end)
+       and replay.output_sha256 is not distinct from (case when pre_invocation_failure then null else p_output_sha256 end)
+       and replay.parser_sha256 is not distinct from (case when pre_invocation_failure then null else p_parser_sha256 end)
+       and replay.parser_valid is not distinct from (case when pre_invocation_failure then null else p_parser_valid end)
+       and replay.error_code is not distinct from (case when pre_invocation_failure then p_transcript_sha256 end)
+       and replay.error_message is not distinct from (case when pre_invocation_failure then p_output_sha256 end)
+       and replay.retryable is not distinct from (case when pre_invocation_failure then p_parser_valid end) then
       return replay.event_sha256;
     end if;
     raise exception 'proposal_attempt_event_replay_conflict';
   end if;
   select * into previous from public.ai_content_proposal_attempt_events
    where model_attempt_id=p_attempt_id order by event_sequence desc limit 1 for update;
-  if previous.event_type in ('invocation_indeterminate','attempt_succeeded','attempt_failed') then
+  if previous.event_type in ('invocation_indeterminate','attempt_succeeded','attempt_failed','pre_invocation_failed') then
     raise exception 'proposal_attempt_terminal';
   end if;
   select * into strict job from public.ai_content_proposal_jobs where id=attempt.job_id for update;
@@ -1260,12 +1367,15 @@ begin
   if p_event_sequence<>coalesce(previous.event_sequence,0)+1 then
     raise exception 'proposal_attempt_event_sequence_invalid';
   end if;
+  if pre_invocation_failure and previous.id is not null then
+    raise exception 'proposal_invocation_already_started';
+  end if;
   if p_event_type='invocation_started' and p_invocation_ordinal=2 and not exists (
     select 1 from public.ai_content_proposal_attempt_events
      where model_attempt_id=p_attempt_id and invocation_ordinal=1
        and event_type='invocation_completed' and parser_valid=false
   ) then raise exception 'proposal_repair_precondition_invalid'; end if;
-  if p_event_type<>'invocation_started' and not exists (
+  if p_event_type not in ('invocation_started','pre_invocation_failed') and not exists (
     select 1 from public.ai_content_proposal_attempt_events
      where model_attempt_id=p_attempt_id and invocation_ordinal=p_invocation_ordinal
        and event_type='invocation_started'
@@ -1295,21 +1405,34 @@ begin
          or invocation_terminal.event_type in ('invocation_failed','invocation_indeterminate')
        ) then raise exception 'proposal_attempt_failure_precondition_invalid'; end if;
   end if;
+  pre_invocation_terminal:=pre_invocation_failure and (
+    not p_parser_valid or job.attempt_count>=job.max_attempts
+  );
   next_hash:=encode(digest(jsonb_build_array(
     p_attempt_id,p_event_sequence,p_invocation_ordinal,p_event_type,
     p_aggregate_contract_sha256,p_model_sha256,attempt.proposal_output_schema_sha256,
     p_command_descriptor_sha256,p_composed_input_sha256,p_transcript_sha256,
-    p_output_sha256,p_parser_sha256,p_parser_valid,previous.event_sha256
+    p_output_sha256,p_parser_sha256,p_parser_valid,pre_invocation_terminal,previous.event_sha256
   )::text,'sha256'),'hex');
   insert into public.ai_content_proposal_attempt_events(
     model_attempt_id,job_id,workspace_id,brand_id,event_sequence,event_type,invocation_ordinal,
     aggregate_contract_sha256,model_sha256,command_descriptor_sha256,
     proposal_output_schema_sha256,composed_input_sha256,transcript_sha256,output_sha256,
-    parser_sha256,parser_valid,previous_event_sha256,event_sha256
+    parser_sha256,parser_valid,error_code,error_message,retryable,terminal,
+    previous_event_sha256,event_sha256
   ) values(p_attempt_id,attempt.job_id,attempt.workspace_id,attempt.brand_id,p_event_sequence,
-    p_event_type,p_invocation_ordinal,p_aggregate_contract_sha256,p_model_sha256,
+    p_event_type,case when pre_invocation_failure then null else p_invocation_ordinal end,
+    p_aggregate_contract_sha256,p_model_sha256,
     p_command_descriptor_sha256,attempt.proposal_output_schema_sha256,p_composed_input_sha256,
-    p_transcript_sha256,p_output_sha256,p_parser_sha256,p_parser_valid,previous.event_sha256,next_hash);
+    case when pre_invocation_failure then null else p_transcript_sha256 end,
+    case when pre_invocation_failure then null else p_output_sha256 end,
+    case when pre_invocation_failure then null else p_parser_sha256 end,
+    case when pre_invocation_failure then null else p_parser_valid end,
+    case when pre_invocation_failure then p_transcript_sha256 end,
+    case when pre_invocation_failure then p_output_sha256 end,
+    case when pre_invocation_failure then p_parser_valid end,
+    case when pre_invocation_failure then pre_invocation_terminal end,
+    previous.event_sha256,next_hash);
   if p_event_type='invocation_indeterminate' then
     update public.ai_content_proposal_jobs set status='manual_review_required',active_stage=null,
       lease_owner=null,lease_token=null,lease_started_at=null,lease_expires_at=null,
@@ -1324,6 +1447,19 @@ begin
       lease_owner=null,lease_token=null,lease_started_at=null,lease_expires_at=null,
       error_code='model_attempt_failed',error_message='model attempt failed',completed_at=now()
      where id=attempt.job_id;
+  elsif pre_invocation_failure and pre_invocation_terminal then
+    update public.ai_content_proposal_jobs set status='failed',active_stage=null,
+      lease_owner=null,lease_token=null,lease_started_at=null,lease_expires_at=null,
+      error_code=p_transcript_sha256,error_message=p_output_sha256,completed_at=now(),updated_at=now()
+     where id=attempt.job_id;
+    update public.ai_content_proposal_batches set status='failed',error_code=p_transcript_sha256,
+      error_message=p_output_sha256,updated_at=now()
+     where id=job.batch_id and workspace_id=job.workspace_id and brand_id=job.brand_id;
+  elsif pre_invocation_failure then
+    update public.ai_content_proposal_jobs set status='queued',active_stage=null,
+      available_at=now()+interval '60 seconds',lease_owner=null,lease_token=null,
+      lease_started_at=null,lease_expires_at=null,error_code=null,error_message=null,
+      completed_at=null,updated_at=now() where id=attempt.job_id;
   end if;
   return next_hash;
 end;
@@ -1343,6 +1479,8 @@ alter table ai_content_proposals
   add constraint ai_content_proposals_successful_attempt_fk
     foreign key(successful_model_attempt_id,successful_proposal_job_id,workspace_id,brand_id)
     references ai_content_proposal_model_attempts(id,job_id,workspace_id,brand_id) on delete restrict,
+  add constraint ai_content_proposals_successful_binding_source_unique
+    unique(id,successful_model_attempt_id,successful_proposal_job_id,final_invocation_ordinal,workspace_id,brand_id),
   add constraint ai_content_proposals_successful_binding_scope_unique
     unique(id,generation_id,successful_model_attempt_id,successful_proposal_job_id,final_invocation_ordinal,workspace_id,brand_id);
 
@@ -1380,6 +1518,7 @@ execute function enforce_ai_content_proposal_success_event();
 create table ai_content_generation_prompt_bindings (
   id uuid primary key default gen_random_uuid(),
   generation_id uuid not null,
+  parent_binding_id uuid null,
   workspace_id uuid not null,
   brand_id uuid not null,
   selected_proposal_id uuid not null,
@@ -1410,6 +1549,7 @@ create table ai_content_generation_prompt_bindings (
   binding_sha256 text not null check (binding_sha256 ~ '^[0-9a-f]{64}$'),
   created_at timestamptz not null default now(),
   constraint ai_content_generation_prompt_bindings_generation_unique unique(generation_id),
+  constraint ai_content_generation_prompt_bindings_scope_unique unique(id,workspace_id,brand_id),
   constraint ai_content_generation_prompt_bindings_generation_fk
     foreign key(generation_id,workspace_id,brand_id)
     references ai_content_generations(id,workspace_id,brand_id) on delete restrict,
@@ -1420,10 +1560,13 @@ create table ai_content_generation_prompt_bindings (
     foreign key(successful_model_attempt_id,proposal_job_id,workspace_id,brand_id)
     references ai_content_proposal_model_attempts(id,job_id,workspace_id,brand_id) on delete restrict,
   constraint ai_content_generation_prompt_bindings_selected_proposal_fk
-    foreign key(selected_proposal_id,generation_id,successful_model_attempt_id,proposal_job_id,
+    foreign key(selected_proposal_id,successful_model_attempt_id,proposal_job_id,
       final_invocation_ordinal,workspace_id,brand_id)
-    references ai_content_proposals(id,generation_id,successful_model_attempt_id,
+    references ai_content_proposals(id,successful_model_attempt_id,
       successful_proposal_job_id,final_invocation_ordinal,workspace_id,brand_id) on delete restrict,
+  constraint ai_content_generation_prompt_bindings_parent_fk
+    foreign key(parent_binding_id,workspace_id,brand_id)
+    references ai_content_generation_prompt_bindings(id,workspace_id,brand_id) on delete restrict,
   constraint ai_content_generation_prompt_bindings_format_contract_check check (
     (output_format='card_news' and plan_contract_version='card-news-plan.v2'
       and plan_schema_sha256='00efc6f4fad458f598e40add213e5543ac950cd8c8df96323a97821f8238277b'
@@ -1478,13 +1621,55 @@ create table ai_content_generation_prompt_bindings (
 create function enforce_ai_content_prompt_binding_source() returns trigger
 language plpgsql security definer set search_path=pg_catalog,public,pg_temp as $$
 declare proposal public.ai_content_proposals%rowtype;
+declare generation_row public.ai_content_generations%rowtype;
+declare parent_binding public.ai_content_generation_prompt_bindings%rowtype;
 begin
   select * into strict proposal from public.ai_content_proposals
      where id=new.selected_proposal_id for update;
+  select * into strict generation_row from public.ai_content_generations
+     where id=new.generation_id;
   if proposal.status<>'selected'
      or proposal.proposal_json->>'outputFormat' is distinct from new.output_format
      or proposal.proposal_json#>>'{purposeDetails,kind}' is distinct from new.purpose then
     raise exception 'ai_content_prompt_binding_source_mismatch';
+  end if;
+  if generation_row.parent_generation_id is null then
+    if new.parent_binding_id is not null
+       or proposal.generation_id is distinct from new.generation_id then
+      raise exception 'ai_content_prompt_binding_source_mismatch';
+    end if;
+  else
+    if new.parent_binding_id is null then
+      raise exception 'ai_content_retry_prompt_binding_lineage_required';
+    end if;
+    select * into strict parent_binding from public.ai_content_generation_prompt_bindings
+     where id=new.parent_binding_id and workspace_id=new.workspace_id and brand_id=new.brand_id;
+    if parent_binding.generation_id is distinct from generation_row.parent_generation_id
+       or proposal.generation_id is distinct from generation_row.parent_generation_id
+       or parent_binding.selected_proposal_id is distinct from new.selected_proposal_id
+       or parent_binding.proposal_job_id is distinct from new.proposal_job_id
+       or parent_binding.proposal_contract_id is distinct from new.proposal_contract_id
+       or parent_binding.successful_model_attempt_id is distinct from new.successful_model_attempt_id
+       or parent_binding.final_invocation_ordinal is distinct from new.final_invocation_ordinal
+       or parent_binding.binding_json is distinct from new.binding_json
+       or parent_binding.binding_sha256 is distinct from new.binding_sha256 then
+      raise exception 'ai_content_retry_prompt_binding_lineage_mismatch';
+    end if;
+    if not exists (
+      select 1 from public.ai_content_generations parent_generation
+      join public.ai_content_generation_operations parent_operation
+        on parent_operation.id=parent_generation.operation_id
+       and parent_operation.generation_id=parent_generation.id
+       and parent_operation.workspace_id=parent_generation.workspace_id
+       and parent_operation.brand_id=parent_generation.brand_id
+      join public.ai_content_usage_ledger reversal
+        on reversal.operation_id=parent_operation.id
+       and reversal.generation_id=parent_generation.id
+       and reversal.usage_type='reversal'
+       and reversal.reservation_id=reversal.reversal_of_ledger_id
+      where parent_generation.id=generation_row.parent_generation_id
+        and parent_operation.status='reversed'
+    ) then raise exception 'ai_content_retry_prompt_binding_parent_not_reversed'; end if;
   end if;
   return new;
 end;
@@ -1501,6 +1686,8 @@ create function create_ai_content_generation_prompt_binding(
 declare created_id uuid;
 declare terminal public.ai_content_proposal_attempt_events%rowtype;
 declare proposal public.ai_content_proposals%rowtype;
+declare generation_row public.ai_content_generations%rowtype;
+declare source_binding_id uuid;
 begin
   select * into strict proposal from public.ai_content_proposals
    where id=p_selected_proposal_id for update;
@@ -1512,8 +1699,18 @@ begin
   select * into strict terminal from public.ai_content_proposal_attempt_events
    where model_attempt_id=p_successful_model_attempt_id and event_type='attempt_succeeded'
    order by event_sequence desc limit 1;
+  select * into strict generation_row from public.ai_content_generations
+   where id=p_generation_id and workspace_id=p_workspace_id and brand_id=p_brand_id;
+  if generation_row.parent_generation_id is not null then
+    select id into source_binding_id from public.ai_content_generation_prompt_bindings
+     where generation_id=generation_row.parent_generation_id
+       and workspace_id=p_workspace_id and brand_id=p_brand_id;
+    if source_binding_id is null then
+      raise exception 'ai_content_retry_prompt_binding_lineage_required';
+    end if;
+  end if;
   insert into public.ai_content_generation_prompt_bindings(
-    generation_id,workspace_id,brand_id,selected_proposal_id,proposal_job_id,proposal_contract_id,
+    generation_id,parent_binding_id,workspace_id,brand_id,selected_proposal_id,proposal_job_id,proposal_contract_id,
     successful_model_attempt_id,final_invocation_ordinal,contract_version,output_format,purpose,
     proposal_request_version,proposal_base_input_version,proposal_composed_input_version,
     proposal_output_version,proposal_prompt_version,proposal_schema_sha256,
@@ -1521,7 +1718,7 @@ begin
     planner_prompt_version,image_prompt_version,image_package_version,manifest_version,
     contract_source_hash,model,binding_json,binding_sha256
   ) values(
-    p_generation_id,p_workspace_id,p_brand_id,p_selected_proposal_id,p_proposal_job_id,p_proposal_contract_id,
+    p_generation_id,source_binding_id,p_workspace_id,p_brand_id,p_selected_proposal_id,p_proposal_job_id,p_proposal_contract_id,
     p_successful_model_attempt_id,terminal.invocation_ordinal,p_binding_json->>'contractVersion',p_binding_json->>'outputFormat',
     p_binding_json->>'purpose',p_binding_json->>'proposalRequestVersion',
     p_binding_json->>'proposalBaseInputVersion',p_binding_json->>'proposalComposedInputVersion',
@@ -1536,6 +1733,7 @@ begin
   return created_id;
 end;
 $$;
+
 
 alter table topic_uploads
   add column operation_key text null,
@@ -2409,7 +2607,7 @@ begin
     chr(30) order by parent_relation,child_relation,constraint_name
   ),'sha256'),'hex') into graph_count,graph_sha256 from graph;
   if graph_count<>56 or graph_sha256 is distinct from
-     '5588f6fea8759adb1bfe58c8c17c99bc122113f1c9ed6cc34fb48e76dcf3ebcd' then
+     'a5a0231c838d7a301f7c0c15cbb9ec590f7237951e4f5505fa34066a6d9bcbea' then
     raise exception 'ai_content_final_deletion_graph_mismatch:%:%',graph_count,graph_sha256;
   end if;
 end;

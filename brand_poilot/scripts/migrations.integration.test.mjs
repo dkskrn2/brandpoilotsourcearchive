@@ -7596,6 +7596,23 @@ test("075 creates the durable proposal audit, automated run, prompt binding, cle
     (migration) => migration.id === "075_ai_content_three_format_cutover.sql",
   );
   assert.ok(migration075, "075 migration is required");
+  assert.deepEqual({
+    relations: [...migration075.sql.matchAll(/^create table\b/gim)].length,
+    functions: [...migration075.sql.matchAll(/^create (?:or replace )?function\b/gim)].length,
+    triggers: [...migration075.sql.matchAll(/^create (?:constraint )?trigger\b/gim)].length,
+  }, {
+    relations: 13,
+    functions: 35,
+    triggers: 22,
+  }, "075 failure handling and retry lineage must reuse the sealed relation/function/trigger identities");
+  assert.doesNotMatch(
+    migration075.sql,
+    /create (?:or replace )?function\s+copy_ai_content_generation_prompt_binding\b/i,
+  );
+  assert.doesNotMatch(
+    migration075.sql,
+    /create (?:constraint )?trigger\s+ai_content_generations_operation_required_before_start\b/i,
+  );
 
   await withDatabase(async (database) => {
     await runMigrationRange(

@@ -69,6 +69,40 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
     const proposalSchema = "54bf063cf32926874af6b098272df08d41a9e7d7f578ee6560debe44428cf5f3";
     const contractSource = "f1e754cb2c2664ef21f41597a45b2ed424ebc040b949f5bf4cece251195ab5f8";
     const catalogSha = "94c6622ce5c5ef74b9d011dd0d35035f0f0b5580160dc2a2264b08030a5724fb";
+    const createProposalJobFixture = async (label) => {
+      const fixtureBatch = await admin.query(
+        `insert into ai_content_proposal_batches(
+           workspace_id,brand_id,origin,purpose,request_json,source_snapshot_json,idempotency_key
+         ) values($1,$2,'manual','informational','{}'::jsonb,'[]'::jsonb,$3) returning id`,
+        [workspace.rows[0].id, brand.rows[0].id, `${label}:${randomUUID()}`],
+      );
+      await admin.query("begin");
+      try {
+        const fixtureJob = await admin.query(
+          `insert into ai_content_proposal_jobs(workspace_id,brand_id,batch_id)
+           values($1,$2,$3) returning id`,
+          [workspace.rows[0].id, brand.rows[0].id, fixtureBatch.rows[0].id],
+        );
+        const fixtureContract = await admin.query(
+          `insert into ai_content_proposal_job_contracts(
+             job_id,batch_id,workspace_id,brand_id,request_contract_version,
+             base_input_contract_version,research_contract_version,proposal_contract_version,
+             proposal_prompt_version,proposal_output_schema_sha256,proposal_model_id,
+             command_descriptor_sha256,request_sha256,base_input_sha256,
+             contract_source_sha256,catalog_sha256,enqueue_contract_sha256
+           ) values($1,$2,$3,$4,'content-proposal-request.v2','proposal-base-input.v2',
+             'research-evidence.v1','content-proposal.v2','proposal.writer.v2',$5,
+             'gpt-5.6-terra',$6,$6,$6,$7,$8,$6) returning id`,
+          [fixtureJob.rows[0].id, fixtureBatch.rows[0].id,
+            workspace.rows[0].id, brand.rows[0].id, proposalSchema, hash, contractSource, catalogSha],
+        );
+        await admin.query("commit");
+        return { batch: fixtureBatch.rows[0], job: fixtureJob.rows[0], contract: fixtureContract.rows[0] };
+      } catch (error) {
+        await admin.query("rollback");
+        throw error;
+      }
+    };
     const batch = await admin.query(
       `insert into ai_content_proposal_batches(
          workspace_id,brand_id,origin,purpose,request_json,source_snapshot_json,idempotency_key
@@ -308,6 +342,13 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
       "select append_ai_content_proposal_research_attempt_event($1,$2,1,'research_started',null,null,null,null) as event_sha256",
       [researchAttempt.rows[0].id, researchLease],
     );
+    const researchFailureEnvelope = JSON.stringify({
+      errorCode: "research_failed", errorMessage: "research failed", retryable: true,
+    });
+    const researchFailureEnvelopeHash = (await admin.query(
+      "select encode(digest($1::jsonb::text,'sha256'),'hex') as hash",
+      [researchFailureEnvelope],
+    )).rows[0].hash;
     await admin.query(
       `update ai_content_proposal_jobs set lease_started_at=now()-interval '10 minutes',
          lease_expires_at=now()-interval '1 second' where id=$1`,
@@ -315,8 +356,8 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
     );
     await assert.rejects(
       admin.query(
-        "select append_ai_content_proposal_research_attempt_event($1,$2,2,'attempt_failed',null,null,null,null)",
-        [researchAttempt.rows[0].id, researchLease],
+        "select append_ai_content_proposal_research_attempt_event($1,$2,2,'attempt_failed',null,$3::jsonb,$4,null)",
+        [researchAttempt.rows[0].id, researchLease, researchFailureEnvelope, researchFailureEnvelopeHash],
       ),
       /proposal_research_lease_mismatch/,
     );
@@ -379,10 +420,13 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
     await admin.query(
       `insert into ai_content_proposal_research_attempt_events(
          research_attempt_id,job_id,workspace_id,brand_id,event_sequence,event_type,
+         evidence_json,evidence_sha256,error_code,error_message,retryable,terminal,
          previous_event_sha256,event_sha256
-       ) values($1,$2,$3,$4,3,'attempt_failed',$5,$6)`,
+       ) values($1,$2,$3,$4,3,'attempt_failed',$5::jsonb,$6,'research_failed',
+         'research failed',true,false,$7,$8)`,
       [researchAttempt.rows[0].id, job.rows[0].id, workspace.rows[0].id,
-        brand.rows[0].id, "4".repeat(64), "5".repeat(64)],
+        brand.rows[0].id, researchFailureEnvelope, researchFailureEnvelopeHash,
+        "4".repeat(64), "5".repeat(64)],
     );
     await assert.rejects(admin.query("commit"), /proposal_research_failure_after_evidence_invalid/);
 
@@ -628,8 +672,8 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
     );
     await assert.rejects(
       admin.query(
-        "select append_ai_content_proposal_research_attempt_event($1,$2,4,'attempt_failed',null,null,null,null)",
-        [researchAttempt.rows[0].id, researchLease],
+        "select append_ai_content_proposal_research_attempt_event($1,$2,4,'attempt_failed',null,$3::jsonb,$4,null)",
+        [researchAttempt.rows[0].id, researchLease, researchFailureEnvelope, researchFailureEnvelopeHash],
       ),
       /proposal_research_attempt_terminal/,
     );
@@ -841,14 +885,29 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
       /ai_content_cutover_record_immutable/,
     );
 
+    const draftGeneration = await admin.query(
+      `insert into ai_content_generations(
+         workspace_id,brand_id,purpose,output_format,title,status,current_stage,analysis_idempotency_key
+       ) values($1,$2,'informational','blog','operation-less draft','draft','draft',$3)
+       returning id,status,current_stage,operation_id`,
+      [workspace.rows[0].id, brand.rows[0].id, randomUUID()],
+    );
+    assert.deepEqual(draftGeneration.rows, [{
+      id: draftGeneration.rows[0].id, status: "draft", current_stage: "draft", operation_id: null,
+    }]);
     await assert.rejects(
       admin.query(
-        `insert into ai_content_generations(
-           workspace_id,brand_id,purpose,output_format,title,analysis_idempotency_key
-         ) values($1,$2,'informational','blog','identity-less',$3)`,
-        [workspace.rows[0].id, brand.rows[0].id, randomUUID()],
+        "update ai_content_generations set status='queued' where id=$1",
+        [draftGeneration.rows[0].id],
       ),
-      /ai_content_generation_operation_required/,
+      /ai_content_generation_operation_required_before_start/,
+    );
+    await assert.rejects(
+      admin.query(
+        "update ai_content_generations set generation_idempotency_key=$2 where id=$1",
+        [draftGeneration.rows[0].id, randomUUID()],
+      ),
+      /ai_content_generation_operation_required_before_start/,
     );
     const generationId = randomUUID();
     const operationId = randomUUID();
@@ -1126,6 +1185,49 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
     );
     assert.match(bindingCreated.rows[0].id, /^[0-9a-f-]{36}$/);
 
+    const childGenerationId = randomUUID();
+    const childOperationId = randomUUID();
+    await admin.query("begin");
+    await admin.query(
+      `insert into ai_content_generation_operations(
+         id,workspace_id,brand_id,operation_key,request_fingerprint_sha256,generation_id,parent_operation_id
+       ) values($1,$2,$3,$4,$5,$6,$7)`,
+      [childOperationId, workspace.rows[0].id, brand.rows[0].id, randomUUID(), hash,
+        childGenerationId, operationId],
+    );
+    await admin.query(
+      `insert into ai_content_generations(
+         id,workspace_id,brand_id,purpose,output_format,title,analysis_idempotency_key,
+         operation_id,parent_generation_id
+       ) values($1,$2,$3,'informational','blog','retry child',$4,$5,$6)`,
+      [childGenerationId, workspace.rows[0].id, brand.rows[0].id, randomUUID(),
+        childOperationId, generationId],
+    );
+    await admin.query("commit");
+    const childBinding = await admin.query(
+      "select create_ai_content_generation_prompt_binding($1,$2,$3,$4,$5,$6,$7,$8::jsonb) as id",
+      [childGenerationId, workspace.rows[0].id, brand.rows[0].id, selectedProposal.rows[0].id,
+        job.rows[0].id, contract.rows[0].id, attempt.rows[0].id, JSON.stringify(binding)],
+    );
+    assert.deepEqual((await admin.query(
+      `select parent_binding_id,selected_proposal_id,proposal_job_id,proposal_contract_id,
+              successful_model_attempt_id,final_invocation_ordinal,binding_json,binding_sha256
+         from ai_content_generation_prompt_bindings where id=$1`,
+      [childBinding.rows[0].id],
+    )).rows, [{
+      parent_binding_id: bindingCreated.rows[0].id,
+      selected_proposal_id: selectedProposal.rows[0].id,
+      proposal_job_id: job.rows[0].id,
+      proposal_contract_id: contract.rows[0].id,
+      successful_model_attempt_id: attempt.rows[0].id,
+      final_invocation_ordinal: 2,
+      binding_json: binding,
+      binding_sha256: (await admin.query(
+        "select encode(digest($1::jsonb::text,'sha256'),'hex') as hash",
+        [JSON.stringify(binding)],
+      )).rows[0].hash,
+    }]);
+
     const indeterminateBatch = await admin.query(
       `insert into ai_content_proposal_batches(
          workspace_id,brand_id,origin,purpose,request_json,source_snapshot_json,idempotency_key
@@ -1360,6 +1462,254 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
       ),
       /ai_content_proposal_success_event_missing/,
     );
+
+    const researchFailureFixture = await createProposalJobFixture("research-terminal");
+    const researchFailureLease = randomUUID();
+    const researchFailureLeaseHash = (await admin.query(
+      "select encode(digest($1::uuid::text,'sha256'),'hex') as hash",
+      [researchFailureLease],
+    )).rows[0].hash;
+    await admin.query(
+      `update ai_content_proposal_batches set status='building' where id=$1`,
+      [researchFailureFixture.batch.id],
+    );
+    await admin.query(
+      `update ai_content_proposal_jobs set status='processing',active_stage='research',
+         lease_owner='research-failure-worker',lease_token=$2,lease_started_at=now(),
+         lease_expires_at=now()+interval '5 minutes' where id=$1`,
+      [researchFailureFixture.job.id, researchFailureLease],
+    );
+    const researchFailureAttempt = await admin.query(
+      `insert into ai_content_proposal_research_attempts(
+         job_id,contract_id,workspace_id,brand_id,attempt_number,worker_id,
+         lease_token_sha256,enqueue_contract_sha256,base_input_sha256,lease_expires_at
+       ) select $1,$2,$3,$4,1,'research-failure-worker',$5,$6,$6,lease_expires_at
+           from ai_content_proposal_jobs where id=$1 returning id`,
+      [researchFailureFixture.job.id, researchFailureFixture.contract.id,
+        workspace.rows[0].id, brand.rows[0].id, researchFailureLeaseHash, hash],
+    );
+    await admin.query(
+      "select append_ai_content_proposal_research_attempt_event($1,$2,1,'research_started',null,null,null,null)",
+      [researchFailureAttempt.rows[0].id, researchFailureLease],
+    );
+    const terminalResearchFailure = JSON.stringify({
+      errorCode: "research_unavailable", errorMessage: "provider unavailable", retryable: false,
+    });
+    const terminalResearchFailureHash = (await admin.query(
+      "select encode(digest($1::jsonb::text,'sha256'),'hex') as hash",
+      [terminalResearchFailure],
+    )).rows[0].hash;
+    await assert.rejects(
+      admin.query(
+        `select append_ai_content_proposal_research_attempt_event(
+           $1,$2,2,'attempt_failed',null,$3::jsonb,$4,null)`,
+        [researchFailureAttempt.rows[0].id, randomUUID(),
+          terminalResearchFailure, terminalResearchFailureHash],
+      ),
+      /proposal_research_lease_mismatch/,
+    );
+    const researchFailureEvent = await admin.query(
+      `select append_ai_content_proposal_research_attempt_event(
+         $1,$2,2,'attempt_failed',null,$3::jsonb,$4,null) as event_sha256`,
+      [researchFailureAttempt.rows[0].id, researchFailureLease,
+        terminalResearchFailure, terminalResearchFailureHash],
+    );
+    const researchFailure = await admin.query(
+      "select status,error_code,error_message from ai_content_proposal_jobs where id=$1",
+      [researchFailureFixture.job.id],
+    );
+    assert.deepEqual(researchFailure.rows, [{
+      status: "failed", error_code: "research_unavailable", error_message: "provider unavailable",
+    }]);
+    assert.deepEqual((await admin.query(
+      `select append_ai_content_proposal_research_attempt_event(
+         $1,$2,2,'attempt_failed',null,$3::jsonb,$4,null) as event_sha256`,
+      [researchFailureAttempt.rows[0].id, researchFailureLease,
+        terminalResearchFailure, terminalResearchFailureHash],
+    )).rows, researchFailureEvent.rows);
+    const changedTerminalResearchFailure = JSON.stringify({
+      errorCode: "research_unavailable", errorMessage: "changed message", retryable: false,
+    });
+    const changedTerminalResearchFailureHash = (await admin.query(
+      "select encode(digest($1::jsonb::text,'sha256'),'hex') as hash",
+      [changedTerminalResearchFailure],
+    )).rows[0].hash;
+    await assert.rejects(
+      admin.query(
+        `select append_ai_content_proposal_research_attempt_event(
+           $1,$2,2,'attempt_failed',null,$3::jsonb,$4,null)`,
+        [researchFailureAttempt.rows[0].id, researchFailureLease,
+          changedTerminalResearchFailure, changedTerminalResearchFailureHash],
+      ),
+      /proposal_research_event_replay_conflict/,
+    );
+    assert.deepEqual((await admin.query(
+      `select error_code,error_message,retryable,terminal
+         from ai_content_proposal_research_attempt_events
+        where research_attempt_id=$1 and event_type='attempt_failed'`,
+      [researchFailureAttempt.rows[0].id],
+    )).rows, [{
+      error_code: "research_unavailable", error_message: "provider unavailable",
+      retryable: false, terminal: true,
+    }]);
+    assert.deepEqual((await admin.query(
+      `select event_type from ai_content_proposal_research_attempt_events
+        where research_attempt_id=$1 order by event_sequence`,
+      [researchFailureAttempt.rows[0].id],
+    )).rows, [{ event_type: "research_started" }, { event_type: "attempt_failed" }]);
+    assert.deepEqual((await admin.query(
+      "select status,error_code,error_message from ai_content_proposal_batches where id=$1",
+      [researchFailureFixture.batch.id],
+    )).rows, [{
+      status: "failed", error_code: "research_unavailable", error_message: "provider unavailable",
+    }]);
+
+    const researchRetryFixture = await createProposalJobFixture("research-retry");
+    const researchRetryLease = randomUUID();
+    const researchRetryLeaseHash = (await admin.query(
+      "select encode(digest($1::uuid::text,'sha256'),'hex') as hash",
+      [researchRetryLease],
+    )).rows[0].hash;
+    await admin.query("update ai_content_proposal_batches set status='building' where id=$1", [researchRetryFixture.batch.id]);
+    await admin.query(
+      `update ai_content_proposal_jobs set status='processing',active_stage='research',
+         lease_owner='research-retry-worker',lease_token=$2,lease_started_at=now(),
+         lease_expires_at=now()+interval '5 minutes' where id=$1`,
+      [researchRetryFixture.job.id, researchRetryLease],
+    );
+    const researchRetryAttempt = await admin.query(
+      `insert into ai_content_proposal_research_attempts(
+         job_id,contract_id,workspace_id,brand_id,attempt_number,worker_id,
+         lease_token_sha256,enqueue_contract_sha256,base_input_sha256,lease_expires_at
+       ) select $1,$2,$3,$4,1,'research-retry-worker',$5,$6,$6,lease_expires_at
+           from ai_content_proposal_jobs where id=$1 returning id`,
+      [researchRetryFixture.job.id, researchRetryFixture.contract.id,
+        workspace.rows[0].id, brand.rows[0].id, researchRetryLeaseHash, hash],
+    );
+    await admin.query(
+      "select append_ai_content_proposal_research_attempt_event($1,$2,1,'research_started',null,null,null,null)",
+      [researchRetryAttempt.rows[0].id, researchRetryLease],
+    );
+    const retryableResearchFailure = JSON.stringify({
+      errorCode: "research_timeout", errorMessage: "retry research later", retryable: true,
+    });
+    const retryableResearchFailureHash = (await admin.query(
+      "select encode(digest($1::jsonb::text,'sha256'),'hex') as hash",
+      [retryableResearchFailure],
+    )).rows[0].hash;
+    await admin.query(
+      `select append_ai_content_proposal_research_attempt_event(
+         $1,$2,2,'attempt_failed',null,$3::jsonb,$4,null)`,
+      [researchRetryAttempt.rows[0].id, researchRetryLease,
+        retryableResearchFailure, retryableResearchFailureHash],
+    );
+    assert.deepEqual((await admin.query(
+      "select status,error_code,completed_at from ai_content_proposal_jobs where id=$1",
+      [researchRetryFixture.job.id],
+    )).rows, [{ status: "queued", error_code: null, completed_at: null }]);
+    assert.deepEqual((await admin.query(
+      "select status,error_code,error_message from ai_content_proposal_batches where id=$1",
+      [researchRetryFixture.batch.id],
+    )).rows, [{ status: "building", error_code: null, error_message: null }]);
+
+    const modelFailureFixture = await createProposalJobFixture("model-final-pre-spawn");
+    const modelFailureAudit = await admin.query(
+      `insert into ai_content_proposal_performance_audits(
+         workspace_id,brand_id,batch_id,experiment_id,experiment_definition_json,
+         evidence_version,resolved_input_fingerprint_sha256,snapshot_audit_json,captured_from,captured_to
+       ) values($1,$2,$3,$4,'{}'::jsonb,'performance-evidence.v1',$5,'{}'::jsonb,now(),now())
+       returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, modelFailureFixture.batch.id, randomUUID(), hash],
+    );
+    const modelFailureEvidenceHash = (await admin.query(
+      "select encode(digest('[{}]'::jsonb::text,'sha256'),'hex') as hash",
+    )).rows[0].hash;
+    const modelFailureComposition = await admin.query(
+      `insert into ai_content_proposal_compositions(
+         job_id,batch_id,contract_id,performance_audit_id,workspace_id,brand_id,research_evidence_json,
+         research_evidence_set_sha256,composed_input_json,composed_input_sha256,
+         final_invocation_aggregate_sha256
+       ) values($1,$2,$3,$4,$5,$6,'[{}]'::jsonb,$7,
+         '{"contractVersion":"proposal-input.v2"}'::jsonb,$8,$9) returning id`,
+      [modelFailureFixture.job.id, modelFailureFixture.batch.id, modelFailureFixture.contract.id,
+        modelFailureAudit.rows[0].id, workspace.rows[0].id, brand.rows[0].id,
+        modelFailureEvidenceHash, composedInputHash, hash],
+    );
+    const modelFailureLease = randomUUID();
+    const modelFailureLeaseHash = (await admin.query(
+      "select encode(digest($1::uuid::text,'sha256'),'hex') as hash",
+      [modelFailureLease],
+    )).rows[0].hash;
+    await admin.query("update ai_content_proposal_batches set status='building' where id=$1", [modelFailureFixture.batch.id]);
+    await admin.query(
+      `update ai_content_proposal_jobs set status='processing',active_stage='model',attempt_count=max_attempts,
+         lease_owner='model-failure-worker',lease_token=$2,lease_started_at=now(),
+         lease_expires_at=now()+interval '5 minutes' where id=$1`,
+      [modelFailureFixture.job.id, modelFailureLease],
+    );
+    const modelFailureAttempt = await admin.query(
+      `insert into ai_content_proposal_model_attempts(
+         job_id,contract_id,composition_id,workspace_id,brand_id,attempt_number,
+         worker_id,lease_token_sha256,aggregate_contract_sha256,model_id,
+         model_sha256,command_descriptor_sha256,proposal_output_schema_sha256,composed_input_sha256
+       ) values($1,$2,$3,$4,$5,1,'model-failure-worker',$6,$7,'gpt-5.6-terra',$7,$7,$8,$9)
+       returning id`,
+      [modelFailureFixture.job.id, modelFailureFixture.contract.id, modelFailureComposition.rows[0].id,
+        workspace.rows[0].id, brand.rows[0].id, modelFailureLeaseHash, hash,
+        proposalSchema, composedInputHash],
+    );
+    // 074 fixes this function identity. For the explicit pre-invocation event only,
+    // ordinal 0 is a compatibility sentinel and the final four payload arguments are
+    // mapped as errorCode, errorMessage, NULL, retryable. The stored row uses proper
+    // failure columns and a NULL invocation_ordinal, so no invocation is fabricated.
+    const modelFailureEvent = await admin.query(
+      `select append_ai_content_proposal_attempt_event(
+         $1,$2,1,0,'pre_invocation_failed',$3,$3,$3,$4,$5,$6,null,true) as event_sha256`,
+      [modelFailureAttempt.rows[0].id, modelFailureLease, hash, composedInputHash,
+        "model_spawn_failed", "worker could not start model"],
+    );
+    const modelFailure = await admin.query(
+      "select status,error_code,error_message from ai_content_proposal_jobs where id=$1",
+      [modelFailureFixture.job.id],
+    );
+    assert.deepEqual(modelFailure.rows, [{
+      status: "failed", error_code: "model_spawn_failed", error_message: "worker could not start model",
+    }]);
+    assert.deepEqual((await admin.query(
+      `select append_ai_content_proposal_attempt_event(
+         $1,$2,1,0,'pre_invocation_failed',$3,$3,$3,$4,$5,$6,null,true) as event_sha256`,
+      [modelFailureAttempt.rows[0].id, modelFailureLease, hash, composedInputHash,
+        "model_spawn_failed", "worker could not start model"],
+    )).rows, modelFailureEvent.rows);
+    await assert.rejects(
+      admin.query(
+        `select append_ai_content_proposal_attempt_event(
+           $1,$2,1,0,'pre_invocation_failed',$3,$3,$3,$4,$5,$6,null,true)`,
+        [modelFailureAttempt.rows[0].id, modelFailureLease, hash, composedInputHash,
+          "model_spawn_failed", "changed message"],
+      ),
+      /proposal_attempt_event_replay_conflict/,
+    );
+    assert.equal((await admin.query(
+      `select count(*)::integer count from ai_content_proposal_attempt_events
+        where model_attempt_id=$1 and event_type like 'invocation_%'`,
+      [modelFailureAttempt.rows[0].id],
+    )).rows[0].count, 0, "pre-spawn exhaustion must not fabricate an invocation event");
+    assert.deepEqual((await admin.query(
+      `select event_type,invocation_ordinal,error_code,error_message,retryable,terminal
+         from ai_content_proposal_attempt_events where model_attempt_id=$1`,
+      [modelFailureAttempt.rows[0].id],
+    )).rows, [{
+      event_type: "pre_invocation_failed", invocation_ordinal: null,
+      error_code: "model_spawn_failed", error_message: "worker could not start model",
+      retryable: true, terminal: true,
+    }]);
+    assert.deepEqual((await admin.query(
+      "select status,error_code,error_message from ai_content_proposal_batches where id=$1",
+      [modelFailureFixture.batch.id],
+    )).rows, [{
+      status: "failed", error_code: "model_spawn_failed", error_message: "worker could not start model",
+    }]);
 
     const operatorRole = `cutover_operator_${randomUUID().replaceAll("-", "")}`;
     const cleanupRole = `cutover_cleanup_${randomUUID().replaceAll("-", "")}`;

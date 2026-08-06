@@ -1228,7 +1228,8 @@ const post075Trigger = (relationName, triggerName, triggerType, functionIdentity
   });
 };
 export const cutover075DomainTriggers = Object.freeze([
-  post075Trigger("ai_content_generations", "ai_content_generations_operation_required", 7, "public.require_ai_content_generation_operation_on_insert()"),
+  post075Trigger("ai_content_generations", "ai_content_generations_operation_required", 23, "public.require_ai_content_generation_operation_on_insert()", false,
+    ["operation_id", "status", "current_stage", "generation_idempotency_key", "generation_input_snapshot", "error_code", "error_message", "completed_at"]),
   post075Trigger("ai_content_generations", "ai_content_generations_operation_identity", 21, "public.enforce_ai_content_generation_operation_identity()", true,
     ["operation_id", "parent_generation_id", "workspace_id", "brand_id"]),
   post075Trigger("ai_content_generation_operations", "ai_content_generation_operations_identity_immutable", 19, "public.freeze_ai_content_generation_operation_identity()", false,
