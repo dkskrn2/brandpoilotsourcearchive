@@ -35,6 +35,10 @@ const EXPECTED_CATALOG_SHA256 = "94c6622ce5c5ef74b9d011dd0d35035f0f0b5580160dc2a
 export const CONTENT_PROPOSAL_OUTPUT_SCHEMA_PATH = fileURLToPath(import.meta.resolve(
   "@brand-pilot/content-contracts/generated/content-proposal-v2.schema.json",
 ));
+const outputSchemaBytes = readFileSync(CONTENT_PROPOSAL_OUTPUT_SCHEMA_PATH);
+export const CONTENT_PROPOSAL_OUTPUT_SCHEMA_SHA256 = createHash("sha256")
+  .update(outputSchemaBytes)
+  .digest("hex");
 const catalogPath = fileURLToPath(import.meta.resolve(
   "@brand-pilot/content-contracts/generated/content-catalog.json",
 ));
@@ -54,6 +58,9 @@ const catalog = JSON.parse(catalogBytes.toString("utf8")) as {
   };
   researchEvidence: { version: string };
 };
+if (CONTENT_PROPOSAL_OUTPUT_SCHEMA_SHA256 !== catalog.proposalContracts.outputSchemaSha256) {
+  throw new Error("content_proposal_output_schema_hash_mismatch");
+}
 
 export class ContentProposalContractError extends Error {
   readonly retryable = false;
@@ -323,6 +330,10 @@ export function parseContentProposalJob(value: unknown): ContentProposalJob {
       "evidenceSetSha256", "composedInputSha256", "finalInvocationAggregateSha256", "modelSha256",
     ]);
     const common = parseCommon(source);
+    const modelAttemptNumber = positiveInteger(source.modelAttemptNumber);
+    if (common.attemptCount < 1 || common.attemptCount !== modelAttemptNumber) {
+      fail("content_proposal_claim_contract_mismatch");
+    }
     let composedInput: ProposalInputSnapshotV2;
     try { composedInput = parseProposalInputSnapshotV2(source.composedInput); }
     catch { fail(); }
@@ -344,7 +355,7 @@ export function parseContentProposalJob(value: unknown): ContentProposalJob {
       })) fail("content_proposal_claim_contract_mismatch");
     return {
       ...common, stage: "composition_ready", modelAttemptId: uuid(source.modelAttemptId),
-      modelAttemptNumber: positiveInteger(source.modelAttemptNumber), compositionId: uuid(source.compositionId),
+      modelAttemptNumber, compositionId: uuid(source.compositionId),
       composedInput, evidenceSetSha256, composedInputSha256, finalInvocationAggregateSha256, modelSha256,
     };
   }
@@ -449,7 +460,7 @@ export type InvocationTerminalInput =
       transcriptSha256: string;
       outputSha256: string;
       parserSha256: string;
-      parserValid: boolean;
+      parserValid: false;
     }
   | {
       eventType: "invocation_failed" | "invocation_indeterminate";
@@ -458,6 +469,21 @@ export type InvocationTerminalInput =
       parserSha256: null;
       parserValid: null;
     };
+
+export type ContentProposalCompletionInput = {
+  transcriptSha256: string;
+  outputSha256: string;
+  parserSha256: string;
+  proposalSet: ContentProposalSetV2;
+};
+
+export type ContentProposalCompletion = {
+  jobId: string;
+  batchId: string;
+  status: "completed";
+  invocationEventSha256: string;
+  attemptEventSha256: string;
+};
 
 export interface ContentProposalWorkerClient {
   heartbeatWorker(workerId: string): Promise<void>;
@@ -469,8 +495,15 @@ export interface ContentProposalWorkerClient {
     job: ContentProposalCompositionJob,
     ordinal: InvocationOrdinal,
     input: InvocationTerminalInput,
-  ): Promise<{ eventSha256: string; status: string }>;
-  complete(job: ContentProposalCompositionJob, proposalSet: ContentProposalSetV2): Promise<void>;
+  ): Promise<{
+    eventSha256: string;
+    status: "queued" | "processing" | "failed" | "manual_review_required";
+  }>;
+  complete(
+    job: ContentProposalCompositionJob,
+    ordinal: InvocationOrdinal,
+    input: ContentProposalCompletionInput,
+  ): Promise<ContentProposalCompletion>;
   fail(job: ContentProposalJob, input: {
     stage: ContentProposalJob["stage"];
     attemptId: string;

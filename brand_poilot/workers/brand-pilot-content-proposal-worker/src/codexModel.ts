@@ -186,11 +186,11 @@ export function createCodexContentProposalModel({
             if (settled || stopping) return;
             const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
             stdoutBytes += bytes.byteLength;
+            transcriptHash.update(bytes);
             if (stdoutBytes > MAX_STDOUT_BYTES) {
               stop("content_proposal_model_output_limit_exceeded");
               return;
             }
-            transcriptHash.update(bytes);
             consumeStdout(stdoutDecoder.write(bytes));
           });
           child.stderr?.on("data", (chunk) => {

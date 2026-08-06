@@ -131,7 +131,7 @@ const common = {
   maxAttempts: 3,
   workerId: "proposal-worker-1",
   leaseToken: ids.lease,
-  leaseExpiresAt: "2026-08-01T04:03:00.000Z",
+  leaseExpiresAt: new Date(Date.now() + 180_000).toISOString(),
   availableAt: "2026-08-01T04:00:00.000Z",
   request,
   contract: contract(),

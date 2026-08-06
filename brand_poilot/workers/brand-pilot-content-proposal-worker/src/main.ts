@@ -33,7 +33,7 @@ async function main(): Promise<void> {
 
   const workerId = process.env.CONTENT_PROPOSAL_WORKER_ID?.trim()
     || `content-proposal-${process.pid}`;
-  const leaseSeconds = boundedNumber("CONTENT_PROPOSAL_LEASE_SECONDS", 180, 30, 900);
+  const leaseSeconds = boundedNumber("CONTENT_PROPOSAL_LEASE_SECONDS", 180, 30, 300);
   const pollMs = boundedNumber("CONTENT_PROPOSAL_POLL_MS", 5_000, 250, 60_000);
   const heartbeatMs = boundedNumber(
     "CONTENT_PROPOSAL_HEARTBEAT_MS",

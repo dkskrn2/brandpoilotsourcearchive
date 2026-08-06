@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -126,6 +127,23 @@ describe("Proposal V2 Codex model", () => {
     await vi.advanceTimersByTimeAsync(50);
     await timeoutAssertion;
     expect(terminate).toHaveBeenCalledWith(timedOut);
+  });
+
+  it("hashes the complete received stdout chunk that crosses the byte limit", async () => {
+    const process = child();
+    const terminate = vi.fn(async () => undefined);
+    const temp = runtime();
+    const promise = createCodexContentProposalModel({
+      command: "codex", timeoutMs: 10_000, spawnProcess: vi.fn(() => process),
+      terminateProcessTree: terminate, ...temp,
+    }).generate("prompt");
+    const assertion = expect(promise).rejects.toMatchObject({
+      outcome: "indeterminate",
+      transcriptSha256: createHash("sha256").update(Buffer.alloc(1024 * 1024 + 1, 97)).digest("hex"),
+    });
+    await Promise.resolve();
+    process.stdout.write(Buffer.alloc(1024 * 1024 + 1, 97));
+    await assertion;
   });
 
   it("excludes credentials and proxy secrets from the child environment", () => {

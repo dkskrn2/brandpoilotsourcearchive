@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ContentProposalApiError } from "./client.js";
 import type { ContentProposalModelResult } from "./codexModel.js";
 import type { ContentProposalWorkerClient } from "./contracts.js";
@@ -18,7 +18,10 @@ function api(overrides: Partial<ContentProposalWorkerClient> = {}): ContentPropo
     completeResearch: vi.fn(async () => { throw new Error("unexpected_research"); }),
     startInvocation: vi.fn(async () => ({ eventSha256: "a".repeat(64) })),
     recordInvocationTerminal: vi.fn(async () => ({ eventSha256: "a".repeat(64), status: "processing" })),
-    complete: vi.fn(async () => undefined),
+    complete: vi.fn(async (job) => ({
+      jobId: job.id, batchId: job.batchId, status: "completed" as const,
+      invocationEventSha256: "b".repeat(64), attemptEventSha256: "c".repeat(64),
+    })),
     fail: vi.fn(async () => undefined),
     ...overrides,
   };
@@ -30,6 +33,8 @@ function generated(output: unknown, rawOutput = JSON.stringify(output)): Content
     transcriptSha256: "e".repeat(64), outputSha256: "f".repeat(64),
   };
 }
+
+afterEach(() => vi.useRealTimers());
 
 describe("Proposal V2 staged worker", () => {
   it("seals research and stops before any model or invocation call", async () => {
@@ -50,7 +55,7 @@ describe("Proposal V2 staged worker", () => {
     expect(client.complete).not.toHaveBeenCalled();
   });
 
-  it("records start before spawn, terminal after parse, and then completes", async () => {
+  it("records start before spawn and atomically completes parser-valid output without terminal", async () => {
     const job = compositionJob();
     const order: string[] = [];
     const client = api({
@@ -59,14 +64,27 @@ describe("Proposal V2 staged worker", () => {
         order.push(`terminal:${ordinal}:${terminal.parserValid}`);
         return { eventSha256: "a".repeat(64), status: "processing" };
       }),
-      complete: vi.fn(async () => { order.push("complete"); }),
+      complete: vi.fn(async () => {
+        order.push("complete");
+        return {
+          jobId: job.id, batchId: job.batchId, status: "completed" as const,
+          invocationEventSha256: "b".repeat(64), attemptEventSha256: "c".repeat(64),
+        };
+      }),
     });
     const model = { generate: vi.fn(async () => { order.push("model:1"); return generated(proposalSet); }) };
     await expect(processContentProposalJob({
       client, runner: createContentProposalRunner(model), job,
       leaseSeconds: 180, heartbeatMs: 100_000,
     })).resolves.toEqual({ status: "completed", jobId: job.id });
-    expect(order).toEqual(["start:1", "model:1", "terminal:1:true", "complete"]);
+    expect(order).toEqual(["start:1", "model:1", "complete"]);
+    expect(client.recordInvocationTerminal).not.toHaveBeenCalled();
+    expect(client.complete).toHaveBeenCalledWith(job, 1, {
+      transcriptSha256: "e".repeat(64),
+      outputSha256: "f".repeat(64),
+      parserSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      proposalSet,
+    });
     expect(client.fail).not.toHaveBeenCalled();
   });
 
@@ -83,7 +101,13 @@ describe("Proposal V2 staged worker", () => {
         order.push(`terminal:${ordinal}:${terminal.parserValid}`);
         return { eventSha256: "a".repeat(64), status: "processing" };
       }),
-      complete: vi.fn(async () => { order.push("complete"); }),
+      complete: vi.fn(async () => {
+        order.push("complete");
+        return {
+          jobId: job.id, batchId: job.batchId, status: "completed" as const,
+          invocationEventSha256: "b".repeat(64), attemptEventSha256: "c".repeat(64),
+        };
+      }),
     });
     const model = {
       generate: vi.fn()
@@ -96,7 +120,7 @@ describe("Proposal V2 staged worker", () => {
     });
     expect(order).toEqual([
       "start:1", "model:1", "terminal:1:false",
-      "start:2", "model:2", "terminal:2:true", "complete",
+      "start:2", "model:2", "complete",
     ]);
     expect(model.generate).toHaveBeenCalledTimes(2);
     expect(model.generate.mock.calls[1]?.[0]).toContain("이번이 유일한 보정 기회다");
@@ -136,6 +160,67 @@ describe("Proposal V2 staged worker", () => {
     expect(client.fail).not.toHaveBeenCalled();
   });
 
+  it("aborts an active invocation before an unconfirmed lease can expire", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-06T00:00:00.000Z"));
+    const job = { ...compositionJob(), leaseExpiresAt: "2026-08-06T00:00:03.000Z" };
+    const external = new AbortController();
+    let modelSignal: AbortSignal | undefined;
+    const model = {
+      generate: vi.fn(async (_prompt: string, signal?: AbortSignal) => {
+        modelSignal = signal;
+        await new Promise<void>((_resolve, reject) => signal?.addEventListener("abort", () => {
+          reject(Object.assign(new Error("content_proposal_model_aborted"), { outcome: "indeterminate" }));
+        }, { once: true }));
+        return generated(proposalSet);
+      }),
+    };
+    const client = api({
+      heartbeat: vi.fn(async () => { throw new ContentProposalApiError("network_down", 0); }),
+    });
+    const running = processContentProposalJob({
+      client, runner: createContentProposalRunner(model), job,
+      leaseSeconds: 3, heartbeatMs: 500, signal: external.signal,
+    });
+    await vi.advanceTimersByTimeAsync(2_900);
+    const abortedBeforeCleanup = modelSignal?.aborted;
+    external.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    await running;
+    expect(abortedBeforeCleanup).toBe(true);
+    expect(client.recordInvocationTerminal).toHaveBeenCalledWith(
+      job, 1, expect.objectContaining({ eventType: "invocation_indeterminate" }),
+    );
+  });
+
+  it("extends the monotonic safety deadline only after heartbeat success", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-06T00:00:00.000Z"));
+    const job = { ...compositionJob(), leaseExpiresAt: "2026-08-06T00:00:03.000Z" };
+    const external = new AbortController();
+    let modelSignal: AbortSignal | undefined;
+    const model = {
+      generate: vi.fn(async (_prompt: string, signal?: AbortSignal) => {
+        modelSignal = signal;
+        await new Promise<void>((_resolve, reject) => signal?.addEventListener("abort", () => {
+          reject(Object.assign(new Error("content_proposal_model_aborted"), { outcome: "indeterminate" }));
+        }, { once: true }));
+        return generated(proposalSet);
+      }),
+    };
+    const client = api({ heartbeat: vi.fn(async () => undefined) });
+    const running = processContentProposalJob({
+      client, runner: createContentProposalRunner(model), job,
+      leaseSeconds: 3, heartbeatMs: 500, signal: external.signal,
+    });
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(modelSignal?.aborted).toBe(false);
+    expect(client.heartbeat).toHaveBeenCalled();
+    external.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    await running;
+  });
+
   it("does not spawn or fail when ordinal 2 start has an uncertain transport result", async () => {
     const job = compositionJob();
     const client = api({
@@ -149,6 +234,42 @@ describe("Proposal V2 staged worker", () => {
       leaseSeconds: 180, heartbeatMs: 100_000,
     })).resolves.toEqual({ status: "failed", jobId: job.id });
     expect(model.generate).toHaveBeenCalledTimes(1);
+    expect(client.fail).not.toHaveBeenCalled();
+  });
+
+  it("does not terminalize or fail after an uncertain atomic completion response", async () => {
+    const job = compositionJob();
+    const client = api({
+      complete: vi.fn(async () => { throw new ContentProposalApiError("content_proposal_api_timeout", 0); }),
+    });
+    const model = { generate: vi.fn(async () => generated(proposalSet)) };
+    await expect(processContentProposalJob({
+      client, runner: createContentProposalRunner(model), job,
+      leaseSeconds: 180, heartbeatMs: 100_000,
+    })).rejects.toThrow("content_proposal_api_timeout");
+    expect(model.generate).toHaveBeenCalledTimes(1);
+    expect(client.recordInvocationTerminal).not.toHaveBeenCalled();
+    expect(client.fail).not.toHaveBeenCalled();
+  });
+
+  it("replays the exact atomic completion once after retryable response loss without regenerating", async () => {
+    const job = compositionJob();
+    const complete = vi.fn()
+      .mockRejectedValueOnce(new ContentProposalApiError("content_proposal_api_timeout", 0))
+      .mockResolvedValueOnce({
+        jobId: job.id, batchId: job.batchId, status: "completed" as const,
+        invocationEventSha256: "b".repeat(64), attemptEventSha256: "c".repeat(64),
+      });
+    const client = api({ complete });
+    const model = { generate: vi.fn(async () => generated(proposalSet)) };
+    await expect(processContentProposalJob({
+      client, runner: createContentProposalRunner(model), job,
+      leaseSeconds: 180, heartbeatMs: 100_000,
+    })).resolves.toEqual({ status: "completed", jobId: job.id });
+    expect(model.generate).toHaveBeenCalledTimes(1);
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete.mock.calls[1]).toEqual(complete.mock.calls[0]);
+    expect(client.recordInvocationTerminal).not.toHaveBeenCalled();
     expect(client.fail).not.toHaveBeenCalled();
   });
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import * as contractModule from "./contracts.js";
 import {
   CONTENT_PROPOSAL_OUTPUT_SCHEMA_PATH,
   isContentProposalCompositionJob,
@@ -33,6 +34,14 @@ describe("Proposal V2 claim contract", () => {
     })).toThrow("content_proposal_job_invalid");
   });
 
+  it("requires composition attemptCount to be positive and equal modelAttemptNumber", () => {
+    const zero = { ...compositionJob(), attemptCount: 0 };
+    const mismatch = { ...compositionJob(), attemptCount: 2, modelAttemptNumber: 1 };
+    for (const candidate of [zero, mismatch]) {
+      expect(() => parseContentProposalJob(candidate)).toThrow("content_proposal_claim_contract_mismatch");
+    }
+  });
+
   it("rejects request, base, command, enqueue, model, and aggregate hash drift", () => {
     const cases = [
       { ...researchJob(), contract: { ...researchJob().contract, requestSha256: "0".repeat(64) } },
@@ -65,6 +74,8 @@ describe("Proposal V2 claim contract", () => {
   it("uses the canonical generated Proposal V2 output schema", () => {
     expect(CONTENT_PROPOSAL_OUTPUT_SCHEMA_PATH.replaceAll("\\", "/"))
       .toMatch(/brand-pilot-content-contracts\/generated\/content-proposal-v2\.schema\.json$/);
+    expect((contractModule as Record<string, unknown>).CONTENT_PROPOSAL_OUTPUT_SCHEMA_SHA256)
+      .toBe("54bf063cf32926874af6b098272df08d41a9e7d7f578ee6560debe44428cf5f3");
   });
 
   it("binds the research seal back to the claimed job, evidence, and aggregate chain", () => {

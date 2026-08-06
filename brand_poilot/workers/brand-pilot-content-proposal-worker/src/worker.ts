@@ -16,6 +16,14 @@ import {
 import { buildContentProposalPrompt, buildContentProposalRepairPrompt } from "./promptBuilder.js";
 import type { ContentProposalResearch } from "./research.js";
 
+const MAX_SERVER_LEASE_MS = 300_000;
+const MAX_SERVER_LEASE_LIFETIME_MS = 15 * 60_000;
+const LEASE_RENEWAL_UNCERTAIN = new Error("content_proposal_lease_renewal_uncertain");
+
+function leaseSafetyMargin(ttlMs: number): number {
+  return Math.min(5_000, Math.max(250, Math.floor(ttlMs / 10)));
+}
+
 export interface ContentProposalRunner {
   generate(prompt: string, signal?: AbortSignal): Promise<ContentProposalModelResult>;
 }
@@ -138,20 +146,42 @@ async function runComposition(
         if (isLeaseLost(terminalError)) return { status: "lease_lost", jobId: job.id };
         throw terminalError;
       }
-      return { status: signal.aborted ? "stopped" : "failed", jobId: job.id };
+      return {
+        status: signal.reason === LEASE_RENEWAL_UNCERTAIN
+          ? "lease_lost"
+          : signal.aborted ? "stopped" : "failed",
+        jobId: job.id,
+      };
     }
     const decision = parserDecision(result, job);
+    if (decision.proposalSet) {
+      const completionInput = {
+        transcriptSha256: result.transcriptSha256,
+        outputSha256: result.outputSha256,
+        parserSha256: decision.parserSha256,
+        proposalSet: decision.proposalSet,
+      };
+      for (let requestAttempt = 1; requestAttempt <= 2; requestAttempt += 1) {
+        try {
+          await client.complete(job, ordinal, completionInput);
+          break;
+        } catch (error) {
+          const canReplay = requestAttempt === 1
+            && error instanceof ContentProposalApiError
+            && error.retryable
+            && !signal.aborted;
+          if (!canReplay) throw error;
+        }
+      }
+      return { status: "completed", jobId: job.id };
+    }
     await client.recordInvocationTerminal(job, ordinal, {
       eventType: "invocation_completed",
       transcriptSha256: result.transcriptSha256,
       outputSha256: result.outputSha256,
       parserSha256: decision.parserSha256,
-      parserValid: decision.parserValid,
+      parserValid: false,
     });
-    if (decision.proposalSet) {
-      await client.complete(job, decision.proposalSet);
-      return { status: "completed", jobId: job.id };
-    }
     if (ordinal === 1) {
       prompt = buildContentProposalRepairPrompt(
         originalPrompt,
@@ -186,10 +216,45 @@ export async function processContentProposalJob({
   else signal?.addEventListener("abort", stop, { once: true });
   let heartbeatInFlight = false;
   let heartbeatLeaseLost = false;
+  let leaseRenewalUncertain = false;
+  const monotonicStartedAt = performance.now();
+  const renewalTtlMs = Math.min(Math.max(leaseSeconds * 1_000, 1), MAX_SERVER_LEASE_MS);
+  const safetyMarginMs = leaseSafetyMargin(renewalTtlMs);
+  const initialRemainingMs = Math.max(0, new Date(job.leaseExpiresAt).getTime() - Date.now());
+  const estimatedLeaseStartedAt = monotonicStartedAt - Math.max(0, renewalTtlMs - initialRemainingMs);
+  const absoluteLeaseDeadline = estimatedLeaseStartedAt + MAX_SERVER_LEASE_LIFETIME_MS - safetyMarginMs;
+  let confirmedLeaseDeadline = Math.min(
+    absoluteLeaseDeadline,
+    monotonicStartedAt + Math.max(0, Math.min(initialRemainingMs, renewalTtlMs) - safetyMarginMs),
+  );
+  let leaseSafetyTimer: ReturnType<typeof setTimeout> | undefined;
+  const abortForLeaseUncertainty = () => {
+    if (controller.signal.aborted) return;
+    leaseRenewalUncertain = true;
+    controller.abort(LEASE_RENEWAL_UNCERTAIN);
+  };
+  const scheduleLeaseSafetyTimer = () => {
+    if (leaseSafetyTimer !== undefined) clearTimeout(leaseSafetyTimer);
+    const delayMs = confirmedLeaseDeadline - performance.now();
+    if (delayMs <= 0) {
+      abortForLeaseUncertainty();
+      return;
+    }
+    leaseSafetyTimer = setTimeout(abortForLeaseUncertainty, delayMs);
+  };
+  scheduleLeaseSafetyTimer();
   const heartbeat = setInterval(() => {
     if (heartbeatInFlight || controller.signal.aborted) return;
     heartbeatInFlight = true;
     void client.heartbeat(job, leaseSeconds)
+      .then(() => {
+        if (controller.signal.aborted) return;
+        confirmedLeaseDeadline = Math.min(
+          absoluteLeaseDeadline,
+          performance.now() + renewalTtlMs - safetyMarginMs,
+        );
+        scheduleLeaseSafetyTimer();
+      })
       .catch((error) => {
         if (isLeaseLost(error)) {
           heartbeatLeaseLost = true;
@@ -220,6 +285,7 @@ export async function processContentProposalJob({
     return await runComposition(trackedClient, runner, job, controller.signal);
   } catch (error) {
     if (heartbeatLeaseLost || isLeaseLost(error)) return { status: "lease_lost", jobId: job.id };
+    if (leaseRenewalUncertain) return { status: "lease_lost", jobId: job.id };
     if (signal?.aborted) return { status: "stopped", jobId: job.id };
     if (invocationStarted) throw error;
     const details = errorDetails(error);
@@ -238,6 +304,7 @@ export async function processContentProposalJob({
     return { status: "failed", jobId: job.id };
   } finally {
     clearInterval(heartbeat);
+    if (leaseSafetyTimer !== undefined) clearTimeout(leaseSafetyTimer);
     controller.abort();
     signal?.removeEventListener("abort", stop);
   }
