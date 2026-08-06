@@ -1,411 +1,98 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import type { Pool } from "pg";
 import {
   createContentProposalJobsRepository,
-  parseContentProposalResult,
+  type ContentProposalJobRecord,
 } from "./contentProposalJobs.js";
-import type { ResearchEvidenceSnapshotV1 } from "./aiContentContracts.js";
+import { proposalSha256 } from "./aiContentProposalV2Service.js";
 
-function proposal(title: string) {
-  return {
-    contractVersion: "content-proposal.v1",
-    title,
-    reasonToCreateNow: "최근 근거가 확보됨",
-    contentFamily: "informational",
-    topic: "운영 체크리스트",
-    target: {},
-    messageStrategy: "how_to",
-    hook: "먼저 확인할 것",
-    keyMessage: "순서대로 점검하세요",
-    evidence: [],
-    outline: [{ heading: "점검", purpose: "실행 안내" }],
-    outputFormat: "blog",
-    channelTargets: ["blog_export"],
-    recommendedReferenceQuery: { strategies: ["how_to"], formats: ["blog"], tags: [] },
-  };
-}
+const ids = {
+  job: "10000000-0000-4000-8000-000000000001",
+  workspace: "20000000-0000-4000-8000-000000000002",
+  brand: "30000000-0000-4000-8000-000000000003",
+  batch: "40000000-0000-4000-8000-000000000004",
+  contract: "50000000-0000-4000-8000-000000000005",
+  lease: "60000000-0000-4000-8000-000000000006",
+  researchAttempt: "70000000-0000-4000-8000-000000000007",
+  evidence: "80000000-0000-4000-8000-000000000008",
+  composition: "90000000-0000-4000-8000-000000000009",
+  modelAttempt: "a0000000-0000-4000-8000-00000000000a",
+};
+const sha = "a".repeat(64);
 
-function setup(options: {
-  status?: "queued" | "processing" | "completed" | "failed";
-  attemptCount?: number;
-  maxAttempts?: number;
-  leaseExpired?: boolean;
-} = {}) {
-  const statements: Array<{ sql: string; params: unknown[] }> = [];
-  const job = {
-    id: "10000000-0000-4000-8000-000000000001",
-    workspace_id: "20000000-0000-4000-8000-000000000002",
-    brand_id: "30000000-0000-4000-8000-000000000003",
-    batch_id: "40000000-0000-4000-8000-000000000004",
-    status: options.status ?? "queued",
-    attempt_count: options.attemptCount ?? 0,
-    max_attempts: options.maxAttempts ?? 3,
-    lease_owner: options.status === "processing" ? "expired-worker" : null as string | null,
-    lease_token: options.status === "processing" ? "50000000-0000-4000-8000-000000000005" : null as string | null,
-    lease_expires_at: options.status === "processing"
-      ? new Date(options.leaseExpired === false ? "2099-07-28T00:03:00Z" : "2020-07-28T00:03:00Z")
-      : null as Date | null,
-    available_at: new Date("2026-07-28T00:00:00Z"),
-    content_family: "informational",
-    request_json: {
-      contractVersion: "content-proposal-request.v1",
-      contentFamily: "informational",
-      channelTargets: ["blog_export"],
-      outputFormats: ["blog"],
-      sourceSnapshotIds: ["source-1"],
-      performanceSnapshotIds: [],
-    },
-    source_snapshot_json: [{
-      sourceId: "source-1",
-      url: "https://example.com/source",
-      crawledAt: "2026-07-28T00:00:00.000Z",
-      contentHash: "a".repeat(64),
-      summary: "evidence",
-    }],
-    completion_lease_owner: null as string | null,
-    completion_lease_token: null as string | null,
-  };
-  const client = {
-    query: vi.fn(async (sql: string, params: unknown[] = []) => {
-      statements.push({ sql, params });
-      if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
-      if (sql.includes("set status='queued'") && sql.includes("attempt_count < max_attempts")) {
-        if (job.status === "processing" && options.leaseExpired !== false && job.attempt_count < job.max_attempts) {
-          Object.assign(job, {
-            status: "queued",
-            lease_owner: null,
-            lease_token: null,
-            lease_expires_at: null,
-          });
-          return { rows: [{ ...job }], rowCount: 1 };
-        }
-        return { rows: [], rowCount: 0 };
-      }
-      if (sql.includes("attempt_count >= max_attempts")) return { rows: [], rowCount: 0 };
-      if (sql.includes("select job.id") && sql.includes("skip locked")) {
-        return job.status === "queued" ? { rows: [{ id: job.id }], rowCount: 1 } : { rows: [], rowCount: 0 };
-      }
-      if (sql.includes("set status = 'processing'") && sql.includes("returning")) {
-        Object.assign(job, {
-          status: "processing",
-          attempt_count: Number(job.attempt_count) + 1,
-          lease_owner: params[1],
-          lease_token: params[2],
-          lease_expires_at: new Date("2026-07-28T00:03:00Z"),
-        });
-        return { rows: [{ ...job }], rowCount: 1 };
-      }
-      if (sql.includes("set (lease_expires_at, updated_at)")) {
-        const valid = job.status === "processing" && job.lease_owner === params[1] && job.lease_token === params[2];
-        return { rows: valid ? [{ id: job.id }] : [], rowCount: valid ? 1 : 0 };
-      }
-      if (sql.includes("from ai_content_proposal_jobs job") && sql.includes("for update")) {
-        return { rows: [{ ...job, lease_expired: false }], rowCount: 1 };
-      }
-      if (sql.includes("insert into ai_content_proposals")) return { rows: [], rowCount: 2 };
-      if (sql.includes("update ai_content_proposal_batches")) return { rows: [], rowCount: 1 };
-      if (sql.includes("set status = 'completed'")) {
-        job.status = "completed";
-        Object.assign(job, {
-          lease_owner: null,
-          lease_token: null,
-          lease_expires_at: null,
-          completion_lease_owner: params[1],
-          completion_lease_token: params[2],
-        });
-        return { rows: [], rowCount: 1 };
-      }
-      if (sql.includes("set status = $2")) {
-        job.status = String(params[1]) as typeof job.status;
-        Object.assign(job, { lease_owner: null, lease_token: null, lease_expires_at: null });
-        return { rows: [], rowCount: 1 };
-      }
-      return { rows: [], rowCount: 0 };
-    }),
-    release: vi.fn(),
-  };
-  const pool = { connect: vi.fn(async () => client), query: client.query };
-  return { repository: createContentProposalJobsRepository(pool as never), statements, job };
-}
+const request = {
+  contractVersion: "content-proposal-request.v2" as const,
+  purpose: "informational" as const,
+  outputFormat: "reel" as const,
+  channelTargets: ["instagram" as const],
+  requestFingerprint: "f".repeat(64),
+};
 
-describe("content proposal jobs", () => {
-  it("claims a queued job with a bounded lease and server-owned tenant context", async () => {
-    const { repository, statements } = setup();
-
-    const claimed = await repository.claimContentProposalJob({
-      workerId: "proposal-worker-1",
-      leaseSeconds: 180,
-    });
-
-    expect(claimed).toMatchObject({
-      workspaceId: "20000000-0000-4000-8000-000000000002",
-      brandId: "30000000-0000-4000-8000-000000000003",
-      attemptCount: 1,
-      workerId: "proposal-worker-1",
-    });
-    expect(statements.some(({ sql }) => sql.includes("skip locked"))).toBe(true);
-    expect(statements.some(({ sql }) => sql.includes("least($4::integer, 900)"))).toBe(true);
-  });
-
-  it("reclaims an expired processing lease without incrementing attempts until claim", async () => {
-    const { repository, statements } = setup({
-      status: "processing",
-      attemptCount: 1,
-      leaseExpired: true,
-    });
-
-    const claimed = await repository.claimContentProposalJob({
-      workerId: "proposal-worker-2",
-      leaseSeconds: 180,
-    });
-
-    expect(claimed).toMatchObject({ attemptCount: 2, workerId: "proposal-worker-2" });
-    expect(statements.some(({ sql }) => sql.includes("set status='queued'")
-      && sql.includes("attempt_count < max_attempts")
-      && sql.includes("lease_expires_at <= clock_timestamp()"))).toBe(true);
-  });
-
-  it("does not reclaim an unexpired processing lease", async () => {
-    const { repository } = setup({
-      status: "processing",
-      attemptCount: 1,
-      leaseExpired: false,
-    });
-
-    await expect(repository.claimContentProposalJob({
-      workerId: "proposal-worker-2",
-      leaseSeconds: 180,
-    })).resolves.toBeNull();
-  });
-
-  it("marks the parent batch building when a job is claimed", async () => {
-    const { repository, statements } = setup();
-
-    await repository.claimContentProposalJob({ workerId: "proposal-worker-1", leaseSeconds: 180 });
-
-    expect(statements.some(({ sql }) => sql.includes("update ai_content_proposal_batches")
-      && sql.includes("status='building'"))).toBe(true);
-  });
-
-  it("marks exhausted jobs and their parent batches failed", async () => {
-    const { repository, statements } = setup({
-      status: "processing",
-      attemptCount: 3,
-      maxAttempts: 3,
-      leaseExpired: true,
-    });
-
-    await expect(repository.claimContentProposalJob({
-      workerId: "proposal-worker-2",
-      leaseSeconds: 180,
-    })).resolves.toBeNull();
-
-    expect(statements.some(({ sql }) => sql.includes("update ai_content_proposal_batches")
-      && sql.includes("content_proposal_attempts_exhausted")
-      && sql.includes("status='failed'"))).toBe(true);
-  });
-
-  it("heartbeats only the matching unexpired lease", async () => {
-    const { repository } = setup();
-    const claimed = await repository.claimContentProposalJob({ workerId: "proposal-worker-1", leaseSeconds: 180 });
-
-    await expect(repository.heartbeatContentProposalJob({
-      jobId: claimed!.id,
-      workerId: "proposal-worker-1",
-      leaseToken: claimed!.leaseToken!,
-      leaseSeconds: 180,
-    })).resolves.toBe(true);
-    await expect(repository.heartbeatContentProposalJob({
-      jobId: claimed!.id,
-      workerId: "other-worker",
-      leaseToken: claimed!.leaseToken!,
-      leaseSeconds: 180,
-    })).resolves.toBe(false);
-  });
-
-  it("completes idempotently and persists only validated 2-3 proposals", async () => {
-    const { repository, statements } = setup();
-    const claimed = await repository.claimContentProposalJob({ workerId: "proposal-worker-1", leaseSeconds: 180 });
-    const proposals = [proposal("A"), proposal("B")];
-
-    await repository.completeContentProposalJob({
-      jobId: claimed!.id,
-      workerId: "proposal-worker-1",
-      leaseToken: claimed!.leaseToken!,
-      proposals,
-    });
-    await expect(repository.completeContentProposalJob({
-      jobId: claimed!.id,
-      workerId: "proposal-worker-1",
-      leaseToken: claimed!.leaseToken!,
-      proposals,
-    })).resolves.toMatchObject({ status: "completed" });
-    await expect(repository.completeContentProposalJob({
-      jobId: claimed!.id,
-      workerId: "other-worker",
-      leaseToken: "60000000-0000-4000-8000-000000000006",
-      proposals,
-    })).rejects.toThrow("content_proposal_job_lease_invalid");
-
-    const insert = statements.find(({ sql }) => sql.includes("insert into ai_content_proposals"));
-    expect(insert?.sql).toContain("job.workspace_id");
-    expect(insert?.sql).toContain("job.brand_id");
-    expect(insert?.params).toEqual(expect.arrayContaining([JSON.stringify(proposals)]));
-    expect(statements.some(({ sql }) => sql.includes("from ai_content_proposals")
-      && sql.includes("order by position"))).toBe(false);
-  });
-
-  it("keeps completed V1 proposalSet validation eager while ignoring a valid V2-shaped set", async () => {
-    const { repository } = setup();
-    const claimed = await repository.claimContentProposalJob({ workerId: "proposal-worker-1", leaseSeconds: 180 });
-    const identity = {
-      jobId: claimed!.id,
-      workerId: "proposal-worker-1",
-      leaseToken: claimed!.leaseToken!,
-    };
-    await repository.completeContentProposalJob({ ...identity, proposals: [proposal("A"), proposal("B")] });
-
-    await expect(repository.completeContentProposalJob({
-      ...identity,
-      proposalSet: { contractVersion: "content-proposal.v2", proposals: [] },
-    })).rejects.toThrow("content_proposal_result_invalid");
-    await expect(repository.completeContentProposalJob({
-      ...identity,
-      proposalSet: proposalSet(),
-    })).resolves.toMatchObject({ status: "completed" });
-  });
-
-  it("rejects completion payloads outside the 2-3 proposal bound", async () => {
-    const { repository } = setup();
-    await expect(repository.completeContentProposalJob({
-      jobId: "10000000-0000-4000-8000-000000000001",
-      workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005",
-      proposals: [{ contractVersion: "content-proposal.v1" }],
-    })).rejects.toThrow("content_proposal_result_invalid");
-  });
-
-  it("rejects structurally incomplete worker proposals", async () => {
-    const { repository } = setup();
-    const claimed = await repository.claimContentProposalJob({
-      workerId: "proposal-worker-1",
-      leaseSeconds: 180,
-    });
-    await expect(repository.completeContentProposalJob({
-      jobId: claimed!.id,
-      workerId: "proposal-worker-1",
-      leaseToken: claimed!.leaseToken!,
-      proposals: [
-        { contractVersion: "content-proposal.v1", title: "A" },
-        { contractVersion: "content-proposal.v1", title: "B" },
-      ],
-    })).rejects.toThrow("content_proposal_result_invalid");
-  });
-
-  it.each([
-    ["channel target", { channelTargets: ["email"] }],
-    ["recommended strategy", { recommendedReferenceQuery: { strategies: ["unknown"], formats: ["blog"], tags: [] } }],
-    ["recommended format", { recommendedReferenceQuery: { strategies: ["how_to"], formats: ["pdf"], tags: [] } }],
-    ["recommended tag", { recommendedReferenceQuery: { strategies: ["how_to"], formats: ["blog"], tags: [""] } }],
-    ["extra field", { unexpected: true }],
-  ])("rejects an invalid exact proposal %s", (_label, patch) => {
-    expect(() => parseContentProposalResult([
-      { ...proposal("A"), ...patch },
-      proposal("B"),
-    ])).toThrow("content_proposal_result_invalid");
-  });
-
-  it.each([
-    ["family", { contentFamily: "marketing" }],
-    ["format", { outputFormat: "card_news" }],
-    ["channel", { channelTargets: ["instagram"] }],
-    ["evidence", { evidence: [{ sourceSnapshotId: "other-source", summary: "foreign" }] }],
-  ])("rejects a proposal whose %s escapes the locked batch request", async (_label, patch) => {
-    const { repository, statements } = setup();
-    const claimed = await repository.claimContentProposalJob({
-      workerId: "proposal-worker-1",
-      leaseSeconds: 180,
-    });
-
-    await expect(repository.completeContentProposalJob({
-      jobId: claimed!.id,
-      workerId: "proposal-worker-1",
-      leaseToken: claimed!.leaseToken!,
-      proposals: [
-        { ...proposal("A"), ...patch },
-        proposal("B"),
-      ],
-    })).rejects.toThrow("content_proposal_batch_mismatch");
-
-    expect(statements.some(({ sql }) => sql.includes("insert into ai_content_proposals"))).toBe(false);
-    expect(statements.map(({ sql }) => sql)).toContain("ROLLBACK");
-  });
-
-  it("requeues retryable failures only while attempts remain", async () => {
-    const { repository, statements } = setup();
-    const claimed = await repository.claimContentProposalJob({ workerId: "proposal-worker-1", leaseSeconds: 180 });
-
-    const failed = await repository.failContentProposalJob({
-      jobId: claimed!.id,
-      workerId: "proposal-worker-1",
-      leaseToken: claimed!.leaseToken!,
-      errorCode: "proposal_generation_timeout",
-      errorMessage: "timeout",
-      retryable: true,
-    });
-
-    expect(failed.status).toBe("queued");
-    expect(statements.some(({ sql }) => sql.includes("attempt_count < max_attempts"))).toBe(true);
-  });
-});
-
-const v2BaseInput = {
-  contractVersion: "proposal-base-input.v2",
+const baseInput = {
+  contractVersion: "proposal-base-input.v2" as const,
   brandCore: {
-    versionId: "40000000-0000-4000-8000-000000000004",
-    companyOverview: "브랜드 개요", businessDescription: "사업 설명",
-    primaryCategory: "교육", detailedCategory: "온라인 교육", primaryTarget: "창업자",
-    differentiator: "실전형", coreAppeal: "바로 적용",
+    versionId: "b0000000-0000-4000-8000-00000000000b",
+    companyOverview: "브랜드 개요",
+    businessDescription: "사업 설명",
+    primaryCategory: "패션",
+    detailedCategory: "지속가능 패션",
+    primaryTarget: "의식 있는 소비자",
+    differentiator: "검증된 공급망",
+    coreAppeal: "투명성",
   },
-  subject: { kind: "topic_text", title: "운영 체크리스트" },
-  contentInstruction: "실무 중심",
+  subject: { kind: "topic_text" as const, title: "브랜드 운영 체크리스트" },
+  contentInstruction: null,
   product: null,
   references: [],
   outputSettings: {
-    outputFormat: "card_news", channelTargets: ["instagram"], aspectRatio: "4:5",
-    outputCount: 1, purpose: "informational",
+    outputFormat: "reel" as const,
+    channelTargets: ["instagram" as const],
+    aspectRatio: "9:16" as const,
+    outputCount: 1 as const,
+    purpose: "informational" as const,
   },
-  capturedAt: "2026-08-01T03:00:00.000Z",
+  capturedAt: "2026-08-05T00:00:00.000Z",
 };
 
-function researchItem(url = "https://source.example/article") {
-  const value = {
-    title: "검증 자료", url, publisher: "Source",
-    publishedAt: "2026-07-31T00:00:00.000Z", claimSummary: "실무 적용 근거",
+function evidenceItem(contentHash?: string) {
+  const fields = {
+    title: "검증 자료",
+    url: "https://source.example/article",
+    publisher: "Source",
+    publishedAt: null,
+    claimSummary: "실무 적용 근거",
   };
-  const contentHash = createHash("sha256").update(JSON.stringify(value)).digest("hex");
   return {
-    id: "7a000000-0000-4000-8000-000000000007",
-    ...value,
-    capturedAt: "2026-08-01T04:00:00.000Z",
-    contentHash,
+    id: ids.evidence,
+    ...fields,
+    capturedAt: "2026-08-05T01:00:00.000Z",
+    contentHash: contentHash ?? createHash("sha256").update(JSON.stringify(fields)).digest("hex"),
   };
 }
 
-function evidence(overrides: Record<string, unknown> = {}): ResearchEvidenceSnapshotV1 {
+function evidence(contentHash?: string) {
   return {
-    contractVersion: "research-evidence.v1",
-    decision: "searched",
+    contractVersion: "research-evidence.v1" as const,
+    decision: "searched" as const,
     reason: "최신 근거 필요",
     queries: ["브랜드 운영 최신 동향"],
-    capturedAt: "2026-08-01T04:00:00.000Z",
-    items: [researchItem()],
-    ...overrides,
-  } as ResearchEvidenceSnapshotV1;
+    capturedAt: "2026-08-05T01:00:00.000Z",
+    items: [evidenceItem(contentHash)],
+  };
 }
 
-function v2Proposal(conceptKey: string, patch: Record<string, unknown> = {}) {
-  const suffix = conceptKey.at(-1) ?? "A";
+function composedInput() {
+  const { contractVersion: _contractVersion, ...fields } = baseInput;
+  return {
+    ...fields,
+    contractVersion: "proposal-input.v2" as const,
+    researchEvidence: evidence(),
+  };
+}
+
+function proposal(conceptKey: string) {
+  const suffix = conceptKey.at(-1) ?? "a";
   return {
     conceptKey,
     title: `구성안 ${suffix}`,
@@ -413,499 +100,671 @@ function v2Proposal(conceptKey: string, patch: Record<string, unknown> = {}) {
     oneLineIntent: `의도 ${suffix}`,
     differentiator: `차별점 ${suffix}`,
     differentiationAxes: ["narrative"],
-    target: "초기 창업자",
+    target: "창업자",
     customerContext: "운영 시작",
-    keyMessage: `핵심 ${suffix}`,
+    keyMessage: `메시지 ${suffix}`,
     hook: `훅 ${suffix}`,
     selectionReason: `이유 ${suffix}`,
-    evidenceIds: ["7a000000-0000-4000-8000-000000000007"],
+    evidenceIds: [ids.evidence],
     referenceIds: [],
-    outputFormat: "card_news",
+    outputFormat: "reel",
     channelTargets: ["instagram"],
     assetCount: 1,
     outline: [{ index: 1, role: "hook", headline: `제목 ${suffix}`, purpose: `목적 ${suffix}` }],
     purposeDetails: {
-      kind: "informational", question: `질문 ${suffix}`, value: `가치 ${suffix}`,
-      whyNow: `시점 ${suffix}`, learningPoints: [`학습 ${suffix}`],
+      kind: "informational",
+      question: `질문 ${suffix}`,
+      value: `가치 ${suffix}`,
+      whyNow: `시점 ${suffix}`,
+      learningPoints: [`학습 ${suffix}`],
     },
-    ...patch,
   };
 }
 
-function proposalSet(...proposals: ReturnType<typeof v2Proposal>[]) {
+function proposalSet() {
   return {
     contractVersion: "content-proposal.v2",
-    proposals: proposals.length ? proposals : [v2Proposal("concept-a"), v2Proposal("concept-b"), v2Proposal("concept-c")],
+    proposals: [proposal("concept-a"), proposal("concept-b"), proposal("concept-c")],
   };
 }
 
-function setupV2(options: { expired?: boolean; version?: "v1" | "v2" } = {}) {
-  const statements: Array<{ sql: string; params: unknown[] }> = [];
-  let storedEvidence: Record<string, unknown> | null = null;
-  const storedProposals: Array<{ position: number; proposal_json: Record<string, unknown> }> = [];
-  const job: Record<string, unknown> = {
-    id: "10000000-0000-4000-8000-000000000001",
-    workspace_id: "20000000-0000-4000-8000-000000000002",
-    brand_id: "30000000-0000-4000-8000-000000000003",
-    batch_id: "40000000-0000-4000-8000-000000000004",
-    status: "processing", attempt_count: 1, max_attempts: 3,
-    lease_owner: "proposal-worker-1", lease_token: "50000000-0000-4000-8000-000000000005",
-    lease_expires_at: new Date("2099-08-01T05:00:00.000Z"),
-    lease_expired: options.expired ?? false,
-    available_at: new Date("2026-08-01T03:00:00.000Z"),
-    content_family: "informational",
-    request_json: options.version === "v1"
-      ? { contractVersion: "content-proposal-request.v1", contentFamily: "informational" }
-      : { contractVersion: "content-proposal-request.v2", purpose: "informational", outputFormat: "card_news", channelTargets: ["instagram"] },
-    source_snapshot_json: [],
-    input_snapshot_json: options.version === "v1" ? null : v2BaseInput,
-    completion_lease_owner: null, completion_lease_token: null,
+function contractColumns(overrides: Record<string, unknown> = {}) {
+  return {
+    contract_id: ids.contract,
+    request_contract_version: "content-proposal-request.v2",
+    base_input_contract_version: "proposal-base-input.v2",
+    research_contract_version: "research-evidence.v1",
+    proposal_contract_version: "content-proposal.v2",
+    proposal_prompt_version: "proposal.writer.v2",
+    proposal_output_schema_sha256: sha,
+    proposal_model_id: "gpt-5.6-terra",
+    command_descriptor_sha256: sha,
+    request_sha256: proposalSha256(request),
+    base_input_sha256: proposalSha256(baseInput),
+    contract_source_sha256: sha,
+    catalog_sha256: sha,
+    enqueue_contract_sha256: sha,
+    ...overrides,
   };
-  const client = {
-    query: vi.fn(async (sql: string, params: unknown[] = []) => {
+}
+
+function claimRow(stage: "research" | "model", overrides: Record<string, unknown> = {}) {
+  return {
+    id: ids.job,
+    workspace_id: ids.workspace,
+    brand_id: ids.brand,
+    batch_id: ids.batch,
+    status: "queued",
+    active_stage: null,
+    attempt_count: 0,
+    max_attempts: 3,
+    lease_owner: null,
+    lease_token: null,
+    lease_started_at: null,
+    lease_expires_at: null,
+    available_at: new Date("2026-08-05T00:00:00.000Z"),
+    purpose: "informational",
+    request_json: request,
+    input_snapshot_json: {
+      baseInput,
+      replayFingerprint: request.requestFingerprint,
+      resumeInput: {},
+    },
+    composition_id: stage === "model" ? ids.composition : null,
+    research_evidence_set_sha256: stage === "model" ? sha : null,
+    composed_input_json: stage === "model" ? composedInput() : null,
+    composed_input_sha256: stage === "model" ? sha : null,
+    final_invocation_aggregate_sha256: stage === "model" ? sha : null,
+    ...contractColumns(),
+    ...overrides,
+  };
+}
+
+function claimFixture(stage: "research" | "model", overrides: Record<string, unknown> = {}) {
+  const statements: Array<{ sql: string; params: unknown[] }> = [];
+  const initial = claimRow(stage, overrides);
+  const query = vi.fn(async (sql: string, params: unknown[] = []) => {
+    statements.push({ sql, params });
+    if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [], rowCount: 0 };
+    if (sql.includes("set status='queued'") && sql.includes("lease_expires_at<=clock_timestamp()")) {
+      return { rows: [], rowCount: 0 };
+    }
+    if (sql.includes("for update of job,batch skip locked")) return { rows: [{ ...initial }], rowCount: 1 };
+    if (sql.includes("set status='processing'") && sql.includes("returning *")) {
+      const model = params[1] === "model";
+      return {
+        rows: [{
+          ...initial,
+          status: "processing",
+          active_stage: params[1],
+          attempt_count: model ? 1 : 0,
+          lease_owner: params[2],
+          lease_token: params[3],
+          lease_started_at: new Date("2026-08-05T00:01:00.000Z"),
+          lease_expires_at: new Date("2026-08-05T00:04:00.000Z"),
+        }],
+        rowCount: 1,
+      };
+    }
+    if (sql.includes("insert into ai_content_proposal_research_attempts")) {
+      return { rows: [{ id: ids.researchAttempt, attempt_number: 1 }], rowCount: 1 };
+    }
+    if (sql.includes("insert into ai_content_proposal_model_attempts")) {
+      return { rows: [{ id: ids.modelAttempt, attempt_number: 1 }], rowCount: 1 };
+    }
+    if (sql.includes("append_ai_content_proposal_research_attempt_event")) {
+      return { rows: [{ event_sha256: sha }], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 1 };
+  });
+  const client = { query, release: vi.fn() };
+  const pool = { connect: vi.fn(async () => client), query } as unknown as Pool;
+  return { repository: createContentProposalJobsRepository(pool), statements };
+}
+
+describe("content proposal job V2 claim protocol", () => {
+  it("claims research without consuming a model attempt and returns the frozen base input", async () => {
+    const fixture = claimFixture("research");
+
+    const claimed = await fixture.repository.claimContentProposalJob({
+      workerId: "proposal-worker-1",
+      leaseSeconds: 180,
+    });
+
+    expect(claimed).toMatchObject({
+      id: ids.job,
+      stage: "research_required",
+      attemptCount: 0,
+      researchAttemptId: ids.researchAttempt,
+      researchAttemptNumber: 1,
+      baseInput,
+      request,
+      contract: { id: ids.contract, modelId: "gpt-5.6-terra" },
+    });
+    const claimUpdate = fixture.statements.find(({ sql }) => sql.includes("set status='processing'"));
+    expect(claimUpdate?.sql).toContain("case when $2='model' then 1 else 0 end");
+    expect(claimUpdate?.sql).toContain("least($5::integer,300)");
+  });
+
+  it("claims a sealed composition as a model attempt with all aggregate hashes", async () => {
+    const fixture = claimFixture("model");
+
+    const claimed = await fixture.repository.claimContentProposalJob({
+      workerId: "proposal-worker-1",
+      leaseSeconds: 180,
+    }) as Extract<ContentProposalJobRecord, { stage: "composition_ready" }>;
+
+    expect(claimed).toMatchObject({
+      stage: "composition_ready",
+      attemptCount: 1,
+      modelAttemptId: ids.modelAttempt,
+      modelAttemptNumber: 1,
+      compositionId: ids.composition,
+      composedInput: { contractVersion: "proposal-input.v2" },
+      evidenceSetSha256: sha,
+      composedInputSha256: sha,
+      finalInvocationAggregateSha256: sha,
+      modelSha256: proposalSha256({ modelId: "gpt-5.6-terra" }),
+    });
+  });
+
+  it("rejects a tampered frozen request before creating an attempt", async () => {
+    const fixture = claimFixture("research", {
+      request_json: { ...request, requestFingerprint: "e".repeat(64) },
+    });
+
+    await expect(fixture.repository.claimContentProposalJob({
+      workerId: "proposal-worker-1",
+      leaseSeconds: 180,
+    })).rejects.toThrow("content_proposal_claim_contract_mismatch");
+
+    expect(fixture.statements.some(({ sql }) => sql.includes("insert into ai_content_proposal_research_attempts")))
+      .toBe(false);
+  });
+
+  it("writes bounded failure evidence before reclaiming expired research and zero-event model leases", async () => {
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, params: unknown[] = []) => {
       statements.push({ sql, params });
-      if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
-      if (sql.includes("attempt_count >= max_attempts")
-        || sql.includes("set status='queued'") && sql.includes("attempt_count < max_attempts")) {
-        return { rows: [], rowCount: 0 };
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [], rowCount: 0 };
+      if (sql.includes("from ai_content_proposal_research_attempts attempt")
+        && sql.includes("order by job.lease_expires_at")) {
+        return { rows: [{ id: ids.researchAttempt }], rowCount: 1 };
       }
-      if (sql.includes("select job.id") && sql.includes("skip locked")) {
-        return job.status === "queued" ? { rows: [{ id: job.id }], rowCount: 1 } : { rows: [], rowCount: 0 };
+      if (sql.includes("select job.lease_token,job.max_attempts,attempt.attempt_number")) {
+        return { rows: [{ lease_token: ids.lease, max_attempts: 3, attempt_number: 1 }], rowCount: 1 };
       }
-      if (sql.includes("set status = 'processing'") && sql.includes("returning")) {
-        job.status = "processing";
-        job.attempt_count = Number(job.attempt_count) + 1;
-        job.lease_owner = params[1];
-        job.lease_token = params[2];
-        return { rows: [{ ...job, evidence_json: storedEvidence }], rowCount: 1 };
+      if (sql.includes("from ai_content_proposal_model_attempts attempt")
+        && sql.includes("order by job.lease_expires_at")) {
+        return { rows: [{ id: ids.modelAttempt }], rowCount: 1 };
+      }
+      if (sql.includes("select job.id job_id,job.lease_token")) {
+        return {
+          rows: [{
+            lease_token: ids.lease, max_attempts: 3, attempt_number: 2,
+            event_sequence: null, event_type: null,
+          }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("for update of job,batch skip locked")) return { rows: [], rowCount: 0 };
+      if (sql.includes("for update")) return { rows: [{ id: params[0] }], rowCount: 1 };
+      return { rows: [], rowCount: 0 };
+    });
+    const client = { query, release: vi.fn() };
+    const repository = createContentProposalJobsRepository({
+      connect: vi.fn(async () => client), query,
+    } as unknown as Pool);
+
+    await expect(repository.claimContentProposalJob({
+      workerId: "proposal-worker-reclaimer", leaseSeconds: 180,
+    })).resolves.toBeNull();
+
+    const researchAppend = statements.find(({ sql }) =>
+      sql.includes("append_ai_content_proposal_research_attempt_event"));
+    const researchFailure = JSON.parse(String(researchAppend?.params[2]));
+    expect(researchFailure).toEqual({
+      errorCode: "research_lease_expired",
+      errorMessage: "research lease expired before evidence commit",
+      retryable: true,
+    });
+    const modelAppend = statements.find(({ sql }) =>
+      sql.includes("'pre_invocation_failed'") && sql.includes("model_lease_expired"));
+    expect(modelAppend?.params).toEqual([ids.modelAttempt, ids.lease, true]);
+    const broadReclaim = statements.findIndex(({ sql }) =>
+      sql.includes("set status='queued'") && sql.includes("lease_expires_at<=clock_timestamp()"));
+    expect(broadReclaim).toBeGreaterThan(statements.indexOf(researchAppend!));
+    expect(broadReclaim).toBeGreaterThan(statements.indexOf(modelAppend!));
+  });
+
+  it("terminalizes an expired parser-invalid invocation using the stored terminal hashes", async () => {
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, params: unknown[] = []) => {
+      statements.push({ sql, params });
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [], rowCount: 0 };
+      if (sql.includes("from ai_content_proposal_research_attempts attempt")
+        && sql.includes("order by job.lease_expires_at")) return { rows: [], rowCount: 0 };
+      if (sql.includes("from ai_content_proposal_model_attempts attempt")
+        && sql.includes("order by job.lease_expires_at")) {
+        return { rows: [{ id: ids.modelAttempt }], rowCount: 1 };
+      }
+      if (sql.includes("select job.id job_id,job.lease_token")) {
+        return {
+          rows: [{
+            lease_token: ids.lease, max_attempts: 3, attempt_number: 3,
+            event_sequence: 2, event_type: "invocation_completed", invocation_ordinal: 1,
+            transcript_sha256: "b".repeat(64), output_sha256: "c".repeat(64),
+            parser_sha256: "d".repeat(64), parser_valid: false,
+          }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("for update of job,batch skip locked")) return { rows: [], rowCount: 0 };
+      if (sql.includes("for update")) return { rows: [{ id: params[0] }], rowCount: 1 };
+      return { rows: [], rowCount: 0 };
+    });
+    const client = { query, release: vi.fn() };
+    const repository = createContentProposalJobsRepository({
+      connect: vi.fn(async () => client), query,
+    } as unknown as Pool);
+
+    await expect(repository.claimContentProposalJob({
+      workerId: "proposal-worker-reclaimer", leaseSeconds: 180,
+    })).resolves.toBeNull();
+
+    const append = statements.find(({ sql }) => sql.includes("'attempt_failed'")
+      && sql.includes("ai_content_proposal_model_attempts"));
+    expect(append?.params).toEqual([
+      ids.modelAttempt, ids.lease, 3, 1,
+      "b".repeat(64), "c".repeat(64), "d".repeat(64),
+    ]);
+  });
+});
+
+describe("content proposal research boundary", () => {
+  it("rejects a research item whose contentHash does not match its canonical observed fields", async () => {
+    const connect = vi.fn(async () => { throw new Error("unexpected_database_access"); });
+    const repository = createContentProposalJobsRepository({ connect } as unknown as Pool);
+
+    await expect(repository.completeContentProposalResearch({
+      jobId: ids.job,
+      workerId: "proposal-worker-1",
+      leaseToken: ids.lease,
+      researchAttemptId: ids.researchAttempt,
+      evidence: evidence("0".repeat(64)),
+    })).rejects.toThrow("content_proposal_research_invalid");
+
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("seals research through the 075 function and returns the immutable composition identity", async () => {
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const row = claimRow("research", {
+      status: "processing",
+      active_stage: "research",
+      lease_owner: "proposal-worker-1",
+      lease_token: ids.lease,
+      lease_started_at: new Date("2026-08-05T00:00:00.000Z"),
+      lease_expires_at: new Date("2099-08-05T00:05:00.000Z"),
+      research_attempt_id: ids.researchAttempt,
+      attempt_number: 1,
+      research_worker_id: "proposal-worker-1",
+      token_matches: true,
+      evidence_json: null,
+    });
+    const query = vi.fn(async (sql: string, params: unknown[] = []) => {
+      statements.push({ sql, params });
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [], rowCount: 0 };
+      if (sql.includes("from ai_content_proposal_jobs job") && sql.includes("research_attempt_id")) {
+        return { rows: [row], rowCount: 1 };
+      }
+      if (sql.includes("evidence_sha256") && sql.includes("composed_sha256")) {
+        return { rows: [{ evidence_sha256: "b".repeat(64), composed_sha256: "c".repeat(64) }], rowCount: 1 };
       }
       if (sql.includes("insert into ai_content_proposal_research_snapshots")) {
-        if (storedEvidence) return { rows: [], rowCount: 0 };
-        storedEvidence = JSON.parse(String(params[1]));
-        return { rows: [{ evidence_json: storedEvidence }], rowCount: 1 };
+        return { rows: [{ id: "d0000000-0000-4000-8000-00000000000d" }], rowCount: 1 };
       }
-      if (sql.includes("insert into ai_content_proposals")) {
-        const proposals = JSON.parse(String(params[1])) as Record<string, unknown>[];
-        storedProposals.push(...proposals.map((storedProposal, index) => ({
-          position: index + 1,
-          proposal_json: storedProposal,
-        })));
-        return { rows: [], rowCount: proposals.length };
+      if (sql.includes("complete_ai_content_proposal_research")) {
+        return { rows: [{ id: ids.composition }], rowCount: 1 };
       }
-      if (sql.includes("from ai_content_proposals") && sql.includes("order by position")) {
-        const normalizedSql = sql.replace(/\s+/g, " ").trim();
-        const expectedSql = "select position,proposal_json from ai_content_proposals "
-          + "where batch_id=$1 and workspace_id=$2 and brand_id=$3 order by position";
-        const expectedParams = [job.batch_id, job.workspace_id, job.brand_id];
-        if (normalizedSql !== expectedSql
-          || params.length !== expectedParams.length
-          || params.some((param, index) => param !== expectedParams[index])) {
-          return { rows: [], rowCount: 0 };
-        }
-        return { rows: storedProposals.map((stored) => ({ ...stored })), rowCount: storedProposals.length };
+      return { rows: [], rowCount: 1 };
+    });
+    const client = { query, release: vi.fn() };
+    const repository = createContentProposalJobsRepository({
+      connect: vi.fn(async () => client), query,
+    } as unknown as Pool);
+
+    const result = await repository.completeContentProposalResearch({
+      jobId: ids.job,
+      workerId: "proposal-worker-1",
+      leaseToken: ids.lease,
+      researchAttemptId: ids.researchAttempt,
+      evidence: evidence(),
+    });
+
+    expect(result).toMatchObject({
+      jobId: ids.job,
+      batchId: ids.batch,
+      status: "queued",
+      compositionId: ids.composition,
+      composedInput: { contractVersion: "proposal-input.v2" },
+      evidenceSetSha256: "b".repeat(64),
+      composedInputSha256: "c".repeat(64),
+    });
+    expect(statements.some(({ sql }) => sql.includes("complete_ai_content_proposal_research"))).toBe(true);
+  });
+});
+
+describe("content proposal model terminal protocol", () => {
+  it("maps stored-function lease failures to the worker lease domain error", async () => {
+    const query = vi.fn(async () => {
+      throw new Error("proposal_model_lease_mismatch");
+    });
+    const repository = createContentProposalJobsRepository({ query } as unknown as Pool);
+
+    await expect(repository.startContentProposalInvocation({
+      jobId: ids.job,
+      workerId: "proposal-worker-1",
+      leaseToken: ids.lease,
+      modelAttemptId: ids.modelAttempt,
+      invocationOrdinal: 1,
+    })).rejects.toThrow("content_proposal_job_lease_invalid");
+  });
+
+  it("atomically terminalizes a parser-invalid repair invocation and projects the batch failure", async () => {
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    let appendCount = 0;
+    const query = vi.fn(async (sql: string, params: unknown[] = []) => {
+      statements.push({ sql, params });
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [], rowCount: 0 };
+      if (sql.includes("append_ai_content_proposal_attempt_event")) {
+        appendCount += 1;
+        return { rows: [{ event_sha256: appendCount === 1 ? "b".repeat(64) : "c".repeat(64), job_id: ids.job }], rowCount: 1 };
       }
-      if (sql.includes("set status = 'completed'")) {
-        job.status = "completed";
-        job.completion_lease_owner = params[1];
-        job.completion_lease_token = params[2];
-        return { rows: [], rowCount: 1 };
+      if (sql === "select status from ai_content_proposal_jobs where id=$1") {
+        return { rows: [{ status: "failed" }], rowCount: 1 };
       }
-      if (sql.includes("update ai_content_proposal_batches")) return { rows: [], rowCount: 1 };
-      if (sql.includes("from ai_content_proposal_jobs job") && sql.includes("for update")) {
-        return { rows: [{ ...job, evidence_json: storedEvidence }], rowCount: 1 };
+      return { rows: [], rowCount: 1 };
+    });
+    const client = { query, release: vi.fn() };
+    const repository = createContentProposalJobsRepository({
+      connect: vi.fn(async () => client),
+      query,
+    } as unknown as Pool);
+
+    await expect(repository.recordContentProposalInvocationTerminal({
+      jobId: ids.job,
+      workerId: "proposal-worker-1",
+      leaseToken: ids.lease,
+      modelAttemptId: ids.modelAttempt,
+      invocationOrdinal: 2,
+      eventType: "invocation_completed",
+      transcriptSha256: "d".repeat(64),
+      outputSha256: "e".repeat(64),
+      parserSha256: "f".repeat(64),
+      parserValid: false,
+    })).resolves.toMatchObject({ status: "failed" });
+
+    const appends = statements.filter(({ sql }) => sql.includes("append_ai_content_proposal_attempt_event"));
+    expect(appends).toHaveLength(2);
+    expect(appends[1]?.sql).toContain("'attempt_failed'");
+    expect(appends[1]?.params).toEqual(expect.arrayContaining([
+      "d".repeat(64), "e".repeat(64), "f".repeat(64), false,
+    ]));
+    expect(statements.some(({ sql }) => sql.includes("update ai_content_proposal_batches")
+      && sql.includes("status='failed'"))).toBe(true);
+  });
+
+  it("completes only from a parser-valid invocation and persists exactly three suggestions", async () => {
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const row = claimRow("model", {
+      status: "processing",
+      active_stage: "model",
+      lease_owner: "proposal-worker-1",
+      lease_token: ids.lease,
+      model_attempt_id: ids.modelAttempt,
+      model_worker_id: "proposal-worker-1",
+      terminal_event_sequence: null,
+      terminal_invocation_ordinal: null,
+      terminal_transcript_sha256: null,
+      terminal_output_sha256: null,
+      terminal_parser_sha256: null,
+      terminal_parser_valid: null,
+      succeeded_event_id: null,
+      completion_lease_owner: null,
+      completion_lease_token: null,
+    });
+    const query = vi.fn(async (sql: string, params: unknown[] = []) => {
+      statements.push({ sql, params });
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [], rowCount: 0 };
+      if (sql.includes("terminal_event_sequence") && sql.includes("for update of job,batch,attempt")) {
+        return { rows: [row], rowCount: 1 };
+      }
+      if (sql.includes("insert into ai_content_proposals")) return { rows: [], rowCount: 3 };
+      return { rows: [{ event_sha256: sha }], rowCount: 1 };
+    });
+    const client = { query, release: vi.fn() };
+    const repository = createContentProposalJobsRepository({
+      connect: vi.fn(async () => client), query,
+    } as unknown as Pool);
+
+    await expect(repository.completeContentProposalJob({
+      jobId: ids.job,
+      workerId: "proposal-worker-1",
+      leaseToken: ids.lease,
+      modelAttemptId: ids.modelAttempt,
+      invocationOrdinal: 1,
+      transcriptSha256: "b".repeat(64),
+      outputSha256: "c".repeat(64),
+      parserSha256: "d".repeat(64),
+      proposalSet: proposalSet(),
+    })).resolves.toEqual({
+      jobId: ids.job,
+      batchId: ids.batch,
+      status: "completed",
+      invocationEventSha256: sha,
+      attemptEventSha256: sha,
+    });
+
+    const insert = statements.find(({ sql }) => sql.includes("insert into ai_content_proposals"));
+    expect(insert?.sql).toContain("with ordinality");
+    expect(JSON.parse(String(insert?.params[1]))).toHaveLength(3);
+    const eventAppends = statements.filter(({ sql }) => sql.includes("append_ai_content_proposal_attempt_event"));
+    expect(eventAppends).toHaveLength(2);
+    expect(eventAppends[0]?.sql).toContain("'invocation_completed'");
+    expect(statements.some(({ sql }) => sql.includes("'attempt_succeeded'"))).toBe(true);
+    expect(statements.some(({ sql }) => sql.includes("update ai_content_proposal_batches")
+      && sql.includes("status='ready'"))).toBe(true);
+  });
+
+  it("replays an exact atomic completion and rejects changed completion evidence", async () => {
+    const invocationEventSha256 = "e".repeat(64);
+    const attemptEventSha256 = "f".repeat(64);
+    const row = claimRow("model", {
+      status: "completed",
+      active_stage: null,
+      lease_owner: null,
+      lease_token: null,
+      model_attempt_id: ids.modelAttempt,
+      model_worker_id: "proposal-worker-1",
+      terminal_event_sequence: 2,
+      terminal_invocation_ordinal: 1,
+      terminal_transcript_sha256: "b".repeat(64),
+      terminal_output_sha256: "c".repeat(64),
+      terminal_parser_sha256: "d".repeat(64),
+      terminal_parser_valid: true,
+      terminal_event_sha256: invocationEventSha256,
+      succeeded_event_id: "f0000000-0000-4000-8000-00000000000f",
+      succeeded_event_sha256: attemptEventSha256,
+      completion_lease_owner: "proposal-worker-1",
+      completion_lease_token: ids.lease,
+    });
+    const query = vi.fn(async (sql: string) => {
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [], rowCount: 0 };
+      if (sql.includes("terminal_event_sequence") && sql.includes("for update of job,batch,attempt")) {
+        return { rows: [row], rowCount: 1 };
+      }
+      if (sql.includes("select position,proposal_json")) {
+        return {
+          rows: proposalSet().proposals.map((item, index) => ({ position: index + 1, proposal_json: item })),
+          rowCount: 3,
+        };
       }
       return { rows: [], rowCount: 0 };
-    }),
-    release: vi.fn(),
-  };
-  return {
-    repository: createContentProposalJobsRepository({ connect: async () => client, query: client.query } as never),
-    statements,
-    job,
-    getStoredEvidence: () => storedEvidence,
-    storedProposals,
-  };
-}
-
-describe("V2 proposal research and completion", () => {
-  it("stores one immutable research snapshot and returns the composed proposal input", async () => {
-    const fixture = setupV2();
-    const input = {
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005", evidence: evidence(),
-    };
-    const first = await fixture.repository.completeContentProposalResearch(input);
-    const replay = await fixture.repository.completeContentProposalResearch(input);
-
-    expect(first).toEqual(replay);
-    expect(first).toMatchObject({
-      contractVersion: "proposal-input.v2",
-      researchEvidence: { contractVersion: "research-evidence.v1", decision: "searched" },
     });
-    expect(fixture.statements.filter(({ sql }) => sql.includes("insert into ai_content_proposal_research_snapshots"))).toHaveLength(1);
-    expect(fixture.getStoredEvidence()).toEqual(evidence());
-  });
-
-  it("rejects changed evidence after the immutable snapshot exists", async () => {
-    const fixture = setupV2();
+    const client = { query, release: vi.fn() };
+    const repository = createContentProposalJobsRepository({
+      connect: vi.fn(async () => client), query,
+    } as unknown as Pool);
     const identity = {
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005",
+      jobId: ids.job, workerId: "proposal-worker-1", leaseToken: ids.lease,
+      modelAttemptId: ids.modelAttempt, invocationOrdinal: 1 as const,
+      transcriptSha256: "b".repeat(64), outputSha256: "c".repeat(64),
+      parserSha256: "d".repeat(64), proposalSet: proposalSet(),
     };
-    await fixture.repository.completeContentProposalResearch({ ...identity, evidence: evidence() });
-    await expect(fixture.repository.completeContentProposalResearch({
-      ...identity, evidence: evidence({ reason: "변경된 근거" }),
-    })).rejects.toThrow("content_proposal_research_snapshot_conflict");
-  });
 
-  it.each([
-    ["wrong lease", {}, "other-worker", "content_proposal_job_lease_invalid"],
-    ["expired lease", { expired: true }, "proposal-worker-1", "content_proposal_job_lease_invalid"],
-    ["V1 batch", { version: "v1" as const }, "proposal-worker-1", "content_proposal_research_v2_required"],
-  ])("rejects research for %s", async (_label, options, workerId, code) => {
-    const fixture = setupV2(options);
-    await expect(fixture.repository.completeContentProposalResearch({
-      jobId: String(fixture.job.id), workerId,
-      leaseToken: "50000000-0000-4000-8000-000000000005", evidence: evidence(),
-    })).rejects.toThrow(code);
-  });
-
-  it.each([
-    ["informational not-needed", evidence({ decision: "not_needed", queries: [], items: [] })],
-    ["more than eight items", evidence({ items: Array.from({ length: 9 }, (_, index) => researchItem(`https://source.example/${index}`)) })],
-    ["non-HTTPS URL", evidence({ items: [researchItem("http://source.example/article")] })],
-    ["unobserved/altered URL", evidence({ items: [{ ...researchItem(), url: "https://invented.example/article" }] })],
-  ])("rejects invalid research: %s", async (_label, invalidEvidence) => {
-    const fixture = setupV2();
-    await expect(fixture.repository.completeContentProposalResearch({
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005", evidence: invalidEvidence as never,
-    })).rejects.toThrow("content_proposal_research_invalid");
-  });
-
-  it("includes stored research and composed input on a V2 claim retry without changing V1 shape", async () => {
-    const fixture = setupV2();
-    const identity = {
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005",
-    };
-    await fixture.repository.completeContentProposalResearch({ ...identity, evidence: evidence() });
-    fixture.job.status = "queued";
-    // The SQL fixture returns the stored evidence on the next claim row.
-    const claimed = await fixture.repository.claimContentProposalJob({ workerId: "proposal-worker-2", leaseSeconds: 180 });
-    expect(claimed).toMatchObject({
-      inputSnapshot: { contractVersion: "proposal-input.v2" },
-      researchEvidence: { contractVersion: "research-evidence.v1" },
+    await expect(repository.completeContentProposalJob(identity)).resolves.toEqual({
+      jobId: ids.job, batchId: ids.batch, status: "completed",
+      invocationEventSha256, attemptEventSha256,
     });
-
-    const v1 = setup();
-    const v1Claim = await v1.repository.claimContentProposalJob({ workerId: "proposal-worker-1", leaseSeconds: 180 });
-    expect(v1Claim).not.toHaveProperty("inputSnapshot");
-    expect(v1Claim).not.toHaveProperty("researchEvidence");
-  });
-
-  it("persists exactly three cross-checked V2 proposal rows at positions 1 to 3", async () => {
-    const fixture = setupV2();
-    const identity = {
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005",
-    };
-    await fixture.repository.completeContentProposalResearch({ ...identity, evidence: evidence() });
-    await fixture.repository.completeContentProposalJob({ ...identity, proposalSet: proposalSet() });
-
-    const insert = fixture.statements.find(({ sql }) => sql.includes("insert into ai_content_proposals"))!;
-    expect(insert.sql).toContain("with ordinality");
-    expect(insert.params[1]).toBe(JSON.stringify(proposalSet().proposals));
-  });
-
-  it("accepts only the same canonical V2 completion on retry without inserting duplicates", async () => {
-    const fixture = setupV2();
-    const identity = {
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005",
-    };
-    const normalizedFirst = proposalSet(
-      Object.fromEntries(Object.entries(v2Proposal("concept-a", {
-          conceptKey: " concept-a ",
-          title: " 구성안 a ",
-          evidenceIds: ["7a000000-0000-4000-8000-000000000007".toUpperCase()],
-        })).reverse()) as ReturnType<typeof v2Proposal>,
-      v2Proposal("concept-b"),
-      v2Proposal("concept-c"),
-    );
-
-    await fixture.repository.completeContentProposalResearch({ ...identity, evidence: evidence() });
-    await fixture.repository.completeContentProposalJob({ ...identity, proposalSet: normalizedFirst });
-    await expect(fixture.repository.completeContentProposalJob({
-      ...identity,
-      proposalSet: proposalSet(),
-    })).resolves.toMatchObject({ status: "completed" });
-
-    expect(fixture.statements.filter(({ sql }) => sql.includes("insert into ai_content_proposals"))).toHaveLength(1);
-    expect(fixture.storedProposals).toHaveLength(3);
-    const storedRead = fixture.statements.find(({ sql }) => sql.includes("from ai_content_proposals")
-      && sql.includes("order by position"));
-    expect(storedRead?.sql.replace(/\s+/g, " ").trim()).toBe(
-      "select position,proposal_json from ai_content_proposals "
-        + "where batch_id=$1 and workspace_id=$2 and brand_id=$3 order by position",
-    );
-    expect(storedRead?.params).toEqual([
-      fixture.job.batch_id,
-      fixture.job.workspace_id,
-      fixture.job.brand_id,
-    ]);
-    expect(storedRead?.sql).not.toMatch(/select\s+(?:proposal\.)?id/i);
-  });
-
-  it.each([
-    ["unknown explicit version", { contractVersion: "content-proposal-request.v3" }],
-    ["missing version", { purpose: "informational" }],
-    ["non-object metadata", []],
-  ])("rejects a completed replay with %s instead of classifying it as V1", async (_label, requestJson) => {
-    const fixture = setupV2();
-    const identity = {
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005",
-    };
-    await fixture.repository.completeContentProposalResearch({ ...identity, evidence: evidence() });
-    await fixture.repository.completeContentProposalJob({ ...identity, proposalSet: proposalSet() });
-    fixture.job.request_json = requestJson;
-
-    await expect(fixture.repository.completeContentProposalJob({
-      ...identity,
-      proposalSet: { arbitrary: true },
+    await expect(repository.completeContentProposalJob({
+      ...identity, outputSha256: "9".repeat(64),
     })).rejects.toThrow("content_proposal_completion_conflict");
   });
+});
 
-  it.each([
-    ["title", proposalSet(v2Proposal("concept-a", { title: "변경된 제목" }), v2Proposal("concept-b"), v2Proposal("concept-c"))],
-    ["concept key", proposalSet(v2Proposal("concept-z"), v2Proposal("concept-b"), v2Proposal("concept-c"))],
-    ["outline", proposalSet(v2Proposal("concept-a", {
-      outline: [{ index: 1, role: "hook", headline: "변경된 개요", purpose: "목적 a" }],
-    }), v2Proposal("concept-b"), v2Proposal("concept-c"))],
-    ["differentiation", proposalSet(v2Proposal("concept-a", { differentiator: "변경된 차별점" }), v2Proposal("concept-b"), v2Proposal("concept-c"))],
-    ["proposal position", proposalSet(v2Proposal("concept-b"), v2Proposal("concept-a"), v2Proposal("concept-c"))],
-  ])("rejects a completed V2 retry with changed %s without mutating stored output", async (_label, changed) => {
-    const fixture = setupV2();
-    const identity = {
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005",
-    };
-    await fixture.repository.completeContentProposalResearch({ ...identity, evidence: evidence() });
-    await fixture.repository.completeContentProposalJob({ ...identity, proposalSet: proposalSet() });
-    const original = structuredClone(fixture.storedProposals);
+describe("content proposal pre-invocation failure protocol", () => {
+  function failureFixture(
+    stage: "research" | "model",
+    attemptCount = 1,
+    modelEventExists = false,
+    failureTerminal: boolean | null = null,
+  ) {
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    let projectedStatus: "queued" | "failed" = "queued";
+    const query = vi.fn(async (sql: string, params: unknown[] = []) => {
+      statements.push({ sql, params });
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [], rowCount: 0 };
+      if (sql.includes("from ai_content_proposal_jobs job") && sql.includes("attempt_id")) {
+        return {
+          rows: [{
+            id: ids.job,
+            batch_id: ids.batch,
+            status: "processing",
+            active_stage: stage,
+            lease_owner: "proposal-worker-1",
+            lease_token: ids.lease,
+            lease_expires_at: new Date("2099-08-05T00:05:00.000Z"),
+            attempt_count: attemptCount,
+            attempt_number: attemptCount,
+            max_attempts: 3,
+            attempt_worker_id: "proposal-worker-1",
+            token_matches: true,
+            model_event_exists: modelEventExists,
+            failure_event_exists: failureTerminal !== null,
+            failure_terminal: failureTerminal,
+          }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("append_ai_content_proposal_research_attempt_event")) {
+        const envelope = JSON.parse(String(params.find((value) => typeof value === "string" && value.startsWith("{"))));
+        if (failureTerminal === null) projectedStatus = envelope.retryable ? "queued" : "failed";
+        return { rows: [{ event_sha256: sha }], rowCount: 1 };
+      }
+      if (sql.includes("append_ai_content_proposal_attempt_event")) {
+        const retryable = params.includes(true);
+        if (failureTerminal === null) projectedStatus = retryable && attemptCount < 3 ? "queued" : "failed";
+        return { rows: [{ event_sha256: sha }], rowCount: 1 };
+      }
+      if (sql.includes("select id,batch_id,status") && sql.includes("ai_content_proposal_jobs")) {
+        return { rows: [{ id: ids.job, batch_id: ids.batch, status: projectedStatus }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+    const client = { query, release: vi.fn() };
+    const repository = createContentProposalJobsRepository({
+      connect: vi.fn(async () => client), query,
+    } as unknown as Pool);
+    return { repository, statements };
+  }
 
-    await expect(fixture.repository.completeContentProposalJob({
-      ...identity,
-      proposalSet: changed,
-    })).rejects.toThrow("content_proposal_completion_conflict");
+  it("records a permanent research failure with the exact canonical failure envelope", async () => {
+    const fixture = failureFixture("research");
 
-    expect(fixture.storedProposals).toEqual(original);
-    expect(fixture.statements.filter(({ sql }) => sql.includes("insert into ai_content_proposals"))).toHaveLength(1);
-    expect(fixture.statements.filter(({ sql }) => sql.includes("set status = 'completed'"))).toHaveLength(1);
+    await expect(fixture.repository.failContentProposalJob({
+      jobId: ids.job,
+      workerId: "proposal-worker-1",
+      leaseToken: ids.lease,
+      stage: "research_required",
+      attemptId: ids.researchAttempt,
+      errorCode: "research_unavailable",
+      errorMessage: "provider unavailable",
+      retryable: false,
+    })).resolves.toEqual({ id: ids.job, batchId: ids.batch, status: "failed" });
+
+    const append = fixture.statements.find(({ sql }) => sql.includes("append_ai_content_proposal_research_attempt_event"));
+    expect(append?.sql).toContain("'attempt_failed'");
+    expect(append?.sql).toContain("digest");
+    expect(append?.params).toContain(JSON.stringify({
+      errorCode: "research_unavailable",
+      errorMessage: "provider unavailable",
+      retryable: false,
+    }));
   });
 
-  it.each([
-    ["missing", (rows: Array<{ position: number; proposal_json: Record<string, unknown> }>) => rows.pop()],
-    ["extra", (rows: Array<{ position: number; proposal_json: Record<string, unknown> }>) => (
-      rows.push({ position: 4, proposal_json: v2Proposal("concept-d") })
-    )],
-    ["out-of-order position", (rows: Array<{ position: number; proposal_json: Record<string, unknown> }>) => {
-      rows[1]!.position = 3;
-    }],
-  ])("rejects completed V2 output with %s stored proposal rows", async (_label, corrupt) => {
-    const fixture = setupV2();
-    const setupRows = fixture.storedProposals;
-    const identity = {
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005",
-    };
-    await fixture.repository.completeContentProposalResearch({ ...identity, evidence: evidence() });
-    await fixture.repository.completeContentProposalJob({ ...identity, proposalSet: proposalSet() });
-    corrupt(setupRows);
+  it("records final retryable model pre-spawn exhaustion without fabricating an invocation", async () => {
+    const fixture = failureFixture("model", 3);
 
-    await expect(fixture.repository.completeContentProposalJob({
-      ...identity,
-      proposalSet: proposalSet(),
-    })).rejects.toThrow("content_proposal_completion_conflict");
+    await expect(fixture.repository.failContentProposalJob({
+      jobId: ids.job,
+      workerId: "proposal-worker-1",
+      leaseToken: ids.lease,
+      stage: "composition_ready",
+      attemptId: ids.modelAttempt,
+      errorCode: "model_spawn_failed",
+      errorMessage: "worker could not start model",
+      retryable: true,
+    })).resolves.toEqual({ id: ids.job, batchId: ids.batch, status: "failed" });
+
+    const append = fixture.statements.find(({ sql }) => sql.includes("append_ai_content_proposal_attempt_event"));
+    expect(append?.sql).toContain("'pre_invocation_failed'");
+    expect(append?.params).toEqual(expect.arrayContaining([
+      0, "model_spawn_failed", "worker could not start model", true,
+    ]));
+    expect(fixture.statements.some(({ sql }) => sql.includes("'invocation_started'"))).toBe(false);
   });
 
-  it.each([
-    ["worker", { workerId: "other-worker" }],
-    ["lease token", { leaseToken: "60000000-0000-4000-8000-000000000006" }],
-  ])("keeps an invalid completed retry %s error ahead of stored proposal comparison", async (_label, invalidIdentity) => {
-    const fixture = setupV2();
-    const identity = {
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005",
-    };
-    await fixture.repository.completeContentProposalResearch({ ...identity, evidence: evidence() });
-    await fixture.repository.completeContentProposalJob({ ...identity, proposalSet: proposalSet() });
+  it("rejects pre-spawn failure as soon as any model event may have landed", async () => {
+    const fixture = failureFixture("model", 1, true);
 
-    await expect(fixture.repository.completeContentProposalJob({
-      ...identity,
-      ...invalidIdentity,
-      proposalSet: proposalSet(v2Proposal("concept-z"), v2Proposal("concept-b"), v2Proposal("concept-c")),
-    })).rejects.toThrow("content_proposal_job_lease_invalid");
+    await expect(fixture.repository.failContentProposalJob({
+      jobId: ids.job,
+      workerId: "proposal-worker-1",
+      leaseToken: ids.lease,
+      stage: "composition_ready",
+      attemptId: ids.modelAttempt,
+      errorCode: "model_spawn_failed",
+      errorMessage: "uncertain start",
+      retryable: true,
+    })).rejects.toThrow("content_proposal_invocation_already_started");
+
+    expect(fixture.statements.some(({ sql }) => sql.includes("append_ai_content_proposal_attempt_event")))
+      .toBe(false);
   });
 
-  it.each([
-    ["worker", { workerId: "other-worker" }],
-    ["lease token", { leaseToken: "60000000-0000-4000-8000-000000000006" }],
-  ])("checks an invalid completed retry %s before parsing malformed V2 output", async (_label, invalidIdentity) => {
-    const fixture = setupV2();
-    const identity = {
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005",
-    };
-    await fixture.repository.completeContentProposalResearch({ ...identity, evidence: evidence() });
-    await fixture.repository.completeContentProposalJob({ ...identity, proposalSet: proposalSet() });
+  it("replays the original nonterminal failure outcome after later attempts consume the retry budget", async () => {
+    const fixture = failureFixture("model", 3, true, false);
 
-    await expect(fixture.repository.completeContentProposalJob({
-      ...identity,
-      ...invalidIdentity,
-      proposalSet: { contractVersion: "content-proposal.v2", proposals: [] },
-    })).rejects.toThrow("content_proposal_job_lease_invalid");
-  });
-
-  it.each([
-    ["malformed proposal count", { contractVersion: "content-proposal.v2", proposals: [] }],
-    ["unknown key", { ...proposalSet(), unexpected: true }],
-    ["wrong proposal shape", { contractVersion: "content-proposal.v2", proposals: {} }],
-  ])("maps a valid completed retry with %s to the stable completion conflict", async (_label, malformed) => {
-    const fixture = setupV2();
-    const identity = {
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005",
-    };
-    await fixture.repository.completeContentProposalResearch({ ...identity, evidence: evidence() });
-    await fixture.repository.completeContentProposalJob({ ...identity, proposalSet: proposalSet() });
-
-    await expect(fixture.repository.completeContentProposalJob({
-      ...identity,
-      proposalSet: malformed,
-    })).rejects.toThrow("content_proposal_completion_conflict");
-  });
-
-  it.each([
-    ["legacy proposals arm", { proposals: [] }],
-    ["missing proposal set", {}],
-  ])("maps a valid completed V2 retry with %s to the stable completion conflict", async (_label, body) => {
-    const fixture = setupV2();
-    const identity = {
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005",
-    };
-    await fixture.repository.completeContentProposalResearch({ ...identity, evidence: evidence() });
-    await fixture.repository.completeContentProposalJob({ ...identity, proposalSet: proposalSet() });
-
-    await expect(fixture.repository.completeContentProposalJob({
-      ...identity,
-      ...body,
-    })).rejects.toThrow("content_proposal_completion_conflict");
-  });
-
-  it.each([
-    ["worker with legacy proposals arm", { workerId: "other-worker" }, { proposals: [] }],
-    ["lease token with missing proposal set", { leaseToken: "60000000-0000-4000-8000-000000000006" }, {}],
-  ])("checks an invalid completed retry %s before its wrong V2 completion arm", async (_label, invalidIdentity, body) => {
-    const fixture = setupV2();
-    const identity = {
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005",
-    };
-    await fixture.repository.completeContentProposalResearch({ ...identity, evidence: evidence() });
-    await fixture.repository.completeContentProposalJob({ ...identity, proposalSet: proposalSet() });
-
-    await expect(fixture.repository.completeContentProposalJob({
-      ...identity,
-      ...invalidIdentity,
-      ...body,
-    })).rejects.toThrow("content_proposal_job_lease_invalid");
-  });
-
-  it("keeps malformed V2 output invalid on the first processing completion", async () => {
-    const fixture = setupV2();
-    const identity = {
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005",
-    };
-    await fixture.repository.completeContentProposalResearch({ ...identity, evidence: evidence() });
-
-    await expect(fixture.repository.completeContentProposalJob({
-      ...identity,
-      proposalSet: { ...proposalSet(), unexpected: true },
-    })).rejects.toThrow("content_proposal_result_invalid");
-  });
-
-  it.each([
-    ["worker", () => setupV2(), { workerId: "other-worker" }],
-    ["lease token", () => setupV2(), { leaseToken: "60000000-0000-4000-8000-000000000006" }],
-    ["expired lease", () => setupV2({ expired: true }), {}],
-  ])("keeps malformed processing V2 output ahead of an invalid %s", async (_label, createFixture, invalidIdentity) => {
-    const fixture = createFixture();
-    const identity = {
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005",
-    };
-
-    await expect(fixture.repository.completeContentProposalJob({
-      ...identity,
-      ...invalidIdentity,
-      proposalSet: { ...proposalSet(), unexpected: true },
-    })).rejects.toThrow("content_proposal_result_invalid");
-  });
-
-  it.each([
-    ["legacy proposals arm", { proposals: [] }],
-    ["missing proposal set", {}],
-  ])("keeps a processing V2 %s invalid", async (_label, body) => {
-    const fixture = setupV2();
-    const identity = {
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005",
-    };
-    await fixture.repository.completeContentProposalResearch({ ...identity, evidence: evidence() });
-
-    await expect(fixture.repository.completeContentProposalJob({
-      ...identity,
-      ...body,
-    })).rejects.toThrow("content_proposal_result_invalid");
-  });
-
-  it("rejects a V2 batch request that diverges from its immutable input snapshot", async () => {
-    const fixture = setupV2();
-    const identity = {
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005",
-    };
-    await fixture.repository.completeContentProposalResearch({ ...identity, evidence: evidence() });
-    fixture.job.request_json = {
-      contractVersion: "content-proposal-request.v2",
-      purpose: "informational",
-      outputFormat: "reel",
-      channelTargets: ["instagram"],
-    };
-
-    await expect(fixture.repository.completeContentProposalJob({
-      ...identity, proposalSet: proposalSet(),
-    })).rejects.toThrow("content_proposal_batch_mismatch");
-  });
-
-  it.each([
-    ["format", v2Proposal("concept-a", { outputFormat: "reel", assetCount: 1 })],
-    ["channel", v2Proposal("concept-a", { channelTargets: ["threads"] })],
-    ["evidence", v2Proposal("concept-a", { evidenceIds: ["80000000-0000-4000-8000-000000000008"] })],
-    ["reference", v2Proposal("concept-a", { referenceIds: ["80000000-0000-4000-8000-000000000008"] })],
-  ])("rejects V2 proposal %s that escapes the snapshot", async (_label, invalid) => {
-    const fixture = setupV2();
-    const identity = {
-      jobId: String(fixture.job.id), workerId: "proposal-worker-1",
-      leaseToken: "50000000-0000-4000-8000-000000000005",
-    };
-    await fixture.repository.completeContentProposalResearch({ ...identity, evidence: evidence() });
-    await expect(fixture.repository.completeContentProposalJob({
-      ...identity, proposalSet: proposalSet(invalid, v2Proposal("concept-b"), v2Proposal("concept-c")),
-    })).rejects.toThrow("content_proposal_batch_mismatch");
+    await expect(fixture.repository.failContentProposalJob({
+      jobId: ids.job,
+      workerId: "proposal-worker-1",
+      leaseToken: ids.lease,
+      stage: "composition_ready",
+      attemptId: ids.modelAttempt,
+      errorCode: "model_spawn_failed",
+      errorMessage: "retry later",
+      retryable: true,
+    })).resolves.toEqual({ id: ids.job, batchId: ids.batch, status: "queued" });
   });
 });

@@ -22,10 +22,7 @@ import {
   type AiContentAttachmentGcRunResult,
 } from "./aiContentAttachmentGc.js";
 import type { AiContentAttachmentGcRepository } from "./aiContentAttachmentGcRepository.js";
-import {
-  parseContentProposalResult,
-  type ContentProposalJobsRepository,
-} from "./contentProposalJobs.js";
+import type { ContentProposalClaimStage, ContentProposalJobsRepository } from "./contentProposalJobs.js";
 import {
   parseContentFinalizationDraftV2,
   parseContentGenerationStartV2,
@@ -503,11 +500,39 @@ function requireContentProposalJobsRepository(repository: ApiRepository): Conten
   const candidate = repository as ApiRepository & Partial<ContentProposalJobsRepository>;
   if (!candidate.claimContentProposalJob
     || !candidate.heartbeatContentProposalJob
+    || !candidate.completeContentProposalResearch
+    || !candidate.startContentProposalInvocation
+    || !candidate.recordContentProposalInvocationTerminal
     || !candidate.completeContentProposalJob
     || !candidate.failContentProposalJob) {
     throw new Error("content_proposal_repository_not_configured");
   }
   return candidate as ContentProposalJobsRepository;
+}
+
+function exactContentProposalWorkerBody(
+  value: unknown,
+  keys: readonly string[],
+  code: string,
+): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).sort().join("\0") !== [...keys].sort().join("\0")) {
+    throw new Error(code);
+  }
+}
+
+function contentProposalStage(value: unknown): ContentProposalClaimStage {
+  if (value !== "research_required" && value !== "composition_ready") {
+    throw new Error("content_proposal_stage_invalid");
+  }
+  return value;
+}
+
+function contentProposalSha256(value: unknown, code: string): string | null {
+  if (value === null) return null;
+  const normalized = requiredAiContentField(value, code, 64).toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(normalized)) throw new Error(code);
+  return normalized;
 }
 
 type AiContentRenderWorkerRepository = Required<Pick<ApiRepository,
@@ -1281,7 +1306,9 @@ export function createServer(
     if (message.startsWith("content_proposal_")) {
       const status = message === "content_proposal_job_not_found"
         ? 404
-        : message === "content_proposal_job_lease_invalid" || message.endsWith("_conflict")
+        : message === "content_proposal_job_lease_invalid"
+          || message === "content_proposal_invocation_already_started"
+          || message.endsWith("_conflict")
           ? 409
           : 400;
       reply.code(status).send({ error: message });
@@ -4256,7 +4283,7 @@ export function createServer(
         200,
       );
       const leaseSeconds = Number(request.body?.leaseSeconds ?? 180);
-      if (!Number.isSafeInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 900) {
+      if (!Number.isSafeInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 300) {
         throw new Error("content_proposal_lease_seconds_invalid");
       }
       return {
@@ -4270,6 +4297,11 @@ export function createServer(
     "/worker/content-proposal-jobs/:jobId/heartbeat",
     async (request, reply) => {
       if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      exactContentProposalWorkerBody(
+        request.body,
+        ["workerId", "leaseToken", "leaseSeconds", "stage", "attemptId"],
+        "content_proposal_heartbeat_invalid",
+      );
       const jobId = parseAiContentUuid(
         request.params.jobId,
         "content_proposal_job_id_invalid",
@@ -4279,7 +4311,7 @@ export function createServer(
         "content_proposal_lease_token_invalid",
       );
       const leaseSeconds = Number(request.body?.leaseSeconds ?? 180);
-      if (!Number.isSafeInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 900) {
+      if (!Number.isSafeInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 300) {
         throw new Error("content_proposal_lease_seconds_invalid");
       }
       const alive = await requireContentProposalJobsRepository(repository).heartbeatContentProposalJob({
@@ -4291,6 +4323,8 @@ export function createServer(
         ),
         leaseToken,
         leaseSeconds,
+        stage: contentProposalStage(request.body.stage),
+        attemptId: parseAiContentUuid(request.body.attemptId, "content_proposal_attempt_id_invalid"),
       });
       if (!alive) throw new Error("content_proposal_job_lease_invalid");
       return { id: jobId, status: "processing" };
@@ -4301,10 +4335,11 @@ export function createServer(
     "/worker/content-proposal-jobs/:jobId/research-complete",
     async (request, reply) => {
       if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
-      const bodyKeys = Object.keys(request.body ?? {}).sort();
-      if (bodyKeys.join("\0") !== ["evidence", "leaseToken", "workerId"].join("\0")) {
-        throw new Error("content_proposal_research_invalid");
-      }
+      exactContentProposalWorkerBody(
+        request.body,
+        ["workerId", "leaseToken", "researchAttemptId", "evidence"],
+        "content_proposal_research_invalid",
+      );
       const jobId = parseAiContentUuid(
         request.params.jobId,
         "content_proposal_job_id_invalid",
@@ -4324,7 +4359,90 @@ export function createServer(
           200,
         ),
         leaseToken,
+        researchAttemptId: parseAiContentUuid(
+          request.body.researchAttemptId,
+          "content_proposal_research_attempt_id_invalid",
+        ),
         evidence,
+      });
+    },
+  );
+
+  app.post<{ Params: { jobId: string; ordinal: string }; Body: Record<string, unknown> }>(
+    "/worker/content-proposal-jobs/:jobId/invocations/:ordinal/start",
+    async (request, reply) => {
+      if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      exactContentProposalWorkerBody(
+        request.body,
+        ["workerId", "leaseToken", "modelAttemptId"],
+        "content_proposal_invocation_start_invalid",
+      );
+      const ordinal = Number(request.params.ordinal);
+      if (ordinal !== 1 && ordinal !== 2) throw new Error("content_proposal_invocation_ordinal_invalid");
+      return requireContentProposalJobsRepository(repository).startContentProposalInvocation({
+        jobId: parseAiContentUuid(request.params.jobId, "content_proposal_job_id_invalid"),
+        workerId: requiredAiContentField(request.body.workerId, "content_proposal_worker_id_required", 200),
+        leaseToken: parseAiContentUuid(request.body.leaseToken, "content_proposal_lease_token_invalid"),
+        modelAttemptId: parseAiContentUuid(
+          request.body.modelAttemptId,
+          "content_proposal_model_attempt_id_invalid",
+        ),
+        invocationOrdinal: ordinal,
+      });
+    },
+  );
+
+  app.post<{ Params: { jobId: string; ordinal: string }; Body: Record<string, unknown> }>(
+    "/worker/content-proposal-jobs/:jobId/invocations/:ordinal/terminal",
+    async (request, reply) => {
+      if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      exactContentProposalWorkerBody(
+        request.body,
+        [
+          "workerId", "leaseToken", "modelAttemptId", "eventType", "transcriptSha256",
+          "outputSha256", "parserSha256", "parserValid",
+        ],
+        "content_proposal_invocation_terminal_invalid",
+      );
+      const ordinal = Number(request.params.ordinal);
+      if (ordinal !== 1 && ordinal !== 2) throw new Error("content_proposal_invocation_ordinal_invalid");
+      const eventType = request.body.eventType;
+      if (![
+        "invocation_completed", "invocation_failed", "invocation_indeterminate",
+      ].includes(String(eventType))) throw new Error("content_proposal_invocation_terminal_invalid");
+      const transcriptSha256 = contentProposalSha256(
+        request.body.transcriptSha256,
+        "content_proposal_transcript_sha256_invalid",
+      );
+      const outputSha256 = contentProposalSha256(
+        request.body.outputSha256,
+        "content_proposal_output_sha256_invalid",
+      );
+      const parserSha256 = contentProposalSha256(
+        request.body.parserSha256,
+        "content_proposal_parser_sha256_invalid",
+      );
+      const parserValid = request.body.parserValid;
+      if ((eventType === "invocation_completed"
+          && (outputSha256 === null || parserSha256 === null || parserValid !== false))
+        || (eventType !== "invocation_completed"
+          && (outputSha256 !== null || parserSha256 !== null || parserValid !== null))) {
+        throw new Error("content_proposal_invocation_terminal_invalid");
+      }
+      return requireContentProposalJobsRepository(repository).recordContentProposalInvocationTerminal({
+        jobId: parseAiContentUuid(request.params.jobId, "content_proposal_job_id_invalid"),
+        workerId: requiredAiContentField(request.body.workerId, "content_proposal_worker_id_required", 200),
+        leaseToken: parseAiContentUuid(request.body.leaseToken, "content_proposal_lease_token_invalid"),
+        modelAttemptId: parseAiContentUuid(
+          request.body.modelAttemptId,
+          "content_proposal_model_attempt_id_invalid",
+        ),
+        invocationOrdinal: ordinal,
+        eventType: eventType as "invocation_completed" | "invocation_failed" | "invocation_indeterminate",
+        transcriptSha256,
+        outputSha256,
+        parserSha256,
+        parserValid: parserValid as boolean | null,
       });
     },
   );
@@ -4333,6 +4451,14 @@ export function createServer(
     "/worker/content-proposal-jobs/:jobId/complete",
     async (request, reply) => {
       if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      exactContentProposalWorkerBody(
+        request.body,
+        [
+          "workerId", "leaseToken", "modelAttemptId", "invocationOrdinal",
+          "transcriptSha256", "outputSha256", "parserSha256", "proposalSet",
+        ],
+        "content_proposal_result_invalid",
+      );
       const jobId = parseAiContentUuid(
         request.params.jobId,
         "content_proposal_job_id_invalid",
@@ -4350,24 +4476,39 @@ export function createServer(
         ),
         leaseToken,
       };
-      if (Object.prototype.hasOwnProperty.call(request.body, "proposalSet")) {
-        const bodyKeys = Object.keys(request.body).sort();
-        if (bodyKeys.join("\0") !== ["leaseToken", "proposalSet", "workerId"].join("\0")) {
-          throw new Error("content_proposal_result_invalid");
-        }
-        let proposalSet;
-        try { proposalSet = parseContentProposalSetV2(request.body.proposalSet); }
-        catch { throw new Error("content_proposal_result_invalid"); }
-        return requireContentProposalJobsRepository(repository).completeContentProposalJob({
-          ...identity,
-          proposalSet,
-        });
+      const invocationOrdinal = Number(request.body.invocationOrdinal);
+      if (invocationOrdinal !== 1 && invocationOrdinal !== 2) {
+        throw new Error("content_proposal_invocation_ordinal_invalid");
       }
-      if (!Array.isArray(request.body?.proposals)) throw new Error("content_proposal_result_invalid");
-      const proposals = parseContentProposalResult(request.body.proposals);
+      const transcriptSha256 = contentProposalSha256(
+        request.body.transcriptSha256,
+        "content_proposal_transcript_sha256_invalid",
+      );
+      const outputSha256 = contentProposalSha256(
+        request.body.outputSha256,
+        "content_proposal_output_sha256_invalid",
+      );
+      const parserSha256 = contentProposalSha256(
+        request.body.parserSha256,
+        "content_proposal_parser_sha256_invalid",
+      );
+      if (transcriptSha256 === null || outputSha256 === null || parserSha256 === null) {
+        throw new Error("content_proposal_result_invalid");
+      }
+      let proposalSet;
+      try { proposalSet = parseContentProposalSetV2(request.body.proposalSet); }
+      catch { throw new Error("content_proposal_result_invalid"); }
       return requireContentProposalJobsRepository(repository).completeContentProposalJob({
         ...identity,
-        proposals,
+        modelAttemptId: parseAiContentUuid(
+          request.body.modelAttemptId,
+          "content_proposal_model_attempt_id_invalid",
+        ),
+        invocationOrdinal,
+        transcriptSha256,
+        outputSha256,
+        parserSha256,
+        proposalSet,
       });
     },
   );
@@ -4376,6 +4517,13 @@ export function createServer(
     "/worker/content-proposal-jobs/:jobId/fail",
     async (request, reply) => {
       if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;
+      exactContentProposalWorkerBody(
+        request.body,
+        [
+          "workerId", "leaseToken", "stage", "attemptId", "errorCode", "errorMessage", "retryable",
+        ],
+        "content_proposal_failure_invalid",
+      );
       const jobId = parseAiContentUuid(
         request.params.jobId,
         "content_proposal_job_id_invalid",
@@ -4395,6 +4543,8 @@ export function createServer(
           200,
         ),
         leaseToken,
+        stage: contentProposalStage(request.body.stage),
+        attemptId: parseAiContentUuid(request.body.attemptId, "content_proposal_attempt_id_invalid"),
         errorCode: requiredAiContentField(
           request.body?.errorCode,
           "content_proposal_error_code_invalid",
