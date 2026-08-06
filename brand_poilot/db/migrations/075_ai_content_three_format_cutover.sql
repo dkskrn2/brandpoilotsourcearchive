@@ -4,6 +4,97 @@ begin;
 -- removes the incompatible graph; nullable compatibility columns keep this schema-only
 -- checkpoint forward-only without fabricating operation, reservation, or reversal evidence.
 
+-- 075_DELETION_GRAPH_GUARD_BEGIN
+do $$
+declare graph_difference text;
+declare preserved_provenance_conflicts text;
+begin
+  with expected(constraint_name,child_relation,parent_relation,definition) as (values
+    ('ai_content_generation_briefs_approved_proposal_ownership_fk','ai_content_generation_briefs','ai_content_approved_proposal_versions','FOREIGN KEY (approved_proposal_version_id, workspace_id, brand_id) REFERENCES ai_content_approved_proposal_versions(id, workspace_id, brand_id) ON DELETE RESTRICT'),
+    ('ai_content_generation_attachments_upload_session_fk','ai_content_generation_attachments','ai_content_attachment_upload_sessions','FOREIGN KEY (upload_session_id, workspace_id, brand_id) REFERENCES ai_content_attachment_upload_sessions(id, workspace_id, brand_id) DEFERRABLE INITIALLY DEFERRED'),
+    ('ai_content_attachment_upload_sessions_confirmed_attachment_fk','ai_content_attachment_upload_sessions','ai_content_generation_attachments','FOREIGN KEY (confirmed_attachment_id, workspace_id, brand_id) REFERENCES ai_content_generation_attachments(id, workspace_id, brand_id) DEFERRABLE INITIALLY DEFERRED'),
+    ('ai_content_generation_jobs_output_ownership_fk','ai_content_generation_jobs','ai_content_generation_outputs','FOREIGN KEY (output_id, generation_id, workspace_id, brand_id) REFERENCES ai_content_generation_outputs(id, generation_id, workspace_id, brand_id) ON DELETE CASCADE'),
+    ('ai_content_generation_render_jobs_output_fk','ai_content_generation_render_jobs','ai_content_generation_outputs','FOREIGN KEY (output_id, generation_id, workspace_id, brand_id) REFERENCES ai_content_generation_outputs(id, generation_id, workspace_id, brand_id) ON DELETE CASCADE'),
+    ('ai_content_output_research_snapshots_output_fk','ai_content_output_research_snapshots','ai_content_generation_outputs','FOREIGN KEY (output_id, generation_id, workspace_id, brand_id) REFERENCES ai_content_generation_outputs(id, generation_id, workspace_id, brand_id) ON DELETE RESTRICT'),
+    ('ai_content_usage_ledger_output_ownership_fk','ai_content_usage_ledger','ai_content_generation_outputs','FOREIGN KEY (output_id, generation_id, workspace_id, brand_id) REFERENCES ai_content_generation_outputs(id, generation_id, workspace_id, brand_id) ON DELETE CASCADE'),
+    ('channel_outputs_ai_content_generation_output_ownership_fk','channel_outputs','ai_content_generation_outputs','FOREIGN KEY (ai_content_generation_output_id, workspace_id, brand_id) REFERENCES ai_content_generation_outputs(id, workspace_id, brand_id) ON DELETE RESTRICT'),
+    ('ai_content_attachment_upload_sessions_generation_fk','ai_content_attachment_upload_sessions','ai_content_generations','FOREIGN KEY (generation_id, workspace_id, brand_id) REFERENCES ai_content_generations(id, workspace_id, brand_id) ON DELETE CASCADE'),
+    ('ai_content_generation_attachments_generation_ownership_fk','ai_content_generation_attachments','ai_content_generations','FOREIGN KEY (generation_id, workspace_id, brand_id) REFERENCES ai_content_generations(id, workspace_id, brand_id) ON DELETE CASCADE'),
+    ('ai_content_generation_briefs_generation_ownership_fk','ai_content_generation_briefs','ai_content_generations','FOREIGN KEY (generation_id, workspace_id, brand_id) REFERENCES ai_content_generations(id, workspace_id, brand_id) ON DELETE RESTRICT'),
+    ('ai_content_generation_input_snapshots_generation_fk','ai_content_generation_input_snapshots','ai_content_generations','FOREIGN KEY (generation_id, workspace_id, brand_id) REFERENCES ai_content_generations(id, workspace_id, brand_id) ON DELETE RESTRICT'),
+    ('ai_content_generation_jobs_generation_ownership_fk','ai_content_generation_jobs','ai_content_generations','FOREIGN KEY (generation_id, workspace_id, brand_id) REFERENCES ai_content_generations(id, workspace_id, brand_id) ON DELETE CASCADE'),
+    ('ai_content_generation_outputs_generation_ownership_fk','ai_content_generation_outputs','ai_content_generations','FOREIGN KEY (generation_id, workspace_id, brand_id) REFERENCES ai_content_generations(id, workspace_id, brand_id) ON DELETE CASCADE'),
+    ('ai_content_generation_reference_migration_audits_generation_fk','ai_content_generation_reference_migration_audits','ai_content_generations','FOREIGN KEY (generation_id, workspace_id, brand_id) REFERENCES ai_content_generations(id, workspace_id, brand_id) ON DELETE CASCADE'),
+    ('ai_content_generation_references_generation_ownership_fk','ai_content_generation_references','ai_content_generations','FOREIGN KEY (generation_id, workspace_id, brand_id) REFERENCES ai_content_generations(id, workspace_id, brand_id) ON DELETE CASCADE'),
+    ('ai_content_one_time_avatar_receipts_generation_fk','ai_content_one_time_avatar_receipts','ai_content_generations','FOREIGN KEY (generation_id, workspace_id, brand_id) REFERENCES ai_content_generations(id, workspace_id, brand_id) ON DELETE RESTRICT'),
+    ('ai_content_one_time_avatar_revocations_generation_fk','ai_content_one_time_avatar_revocations','ai_content_generations','FOREIGN KEY (generation_id, workspace_id, brand_id) REFERENCES ai_content_generations(id, workspace_id, brand_id) ON DELETE RESTRICT'),
+    ('ai_content_proposals_generation_ownership_fk','ai_content_proposals','ai_content_generations','FOREIGN KEY (generation_id, workspace_id, brand_id) REFERENCES ai_content_generations(id, workspace_id, brand_id) ON DELETE RESTRICT'),
+    ('ai_content_subject_generation_ownership_fk','ai_content_subject_analyses','ai_content_generations','FOREIGN KEY (generation_id, workspace_id, brand_id) REFERENCES ai_content_generations(id, workspace_id, brand_id) ON DELETE CASCADE'),
+    ('ai_content_usage_ledger_generation_ownership_fk','ai_content_usage_ledger','ai_content_generations','FOREIGN KEY (generation_id, workspace_id, brand_id) REFERENCES ai_content_generations(id, workspace_id, brand_id) ON DELETE CASCADE'),
+    ('ai_content_one_time_avatar_revocations_receipt_fk','ai_content_one_time_avatar_revocations','ai_content_one_time_avatar_receipts','FOREIGN KEY (receipt_id, workspace_id, brand_id) REFERENCES ai_content_one_time_avatar_receipts(id, workspace_id, brand_id) ON DELETE RESTRICT'),
+    ('ai_content_proposal_jobs_batch_ownership_fk','ai_content_proposal_jobs','ai_content_proposal_batches','FOREIGN KEY (batch_id, workspace_id, brand_id) REFERENCES ai_content_proposal_batches(id, workspace_id, brand_id) ON DELETE CASCADE'),
+    ('ai_content_proposal_research_snapshots_batch_fk','ai_content_proposal_research_snapshots','ai_content_proposal_batches','FOREIGN KEY (batch_id, workspace_id, brand_id) REFERENCES ai_content_proposal_batches(id, workspace_id, brand_id) ON DELETE RESTRICT'),
+    ('ai_content_proposals_batch_ownership_fk','ai_content_proposals','ai_content_proposal_batches','FOREIGN KEY (batch_id, workspace_id, brand_id) REFERENCES ai_content_proposal_batches(id, workspace_id, brand_id) ON DELETE CASCADE'),
+    ('ai_content_approved_proposal_versions_proposal_ownership_fk','ai_content_approved_proposal_versions','ai_content_proposals','FOREIGN KEY (proposal_id, workspace_id, brand_id) REFERENCES ai_content_proposals(id, workspace_id, brand_id) ON DELETE RESTRICT'),
+    ('ai_content_analyzed_subject_snapshots_analysis_fk','ai_content_analyzed_subject_snapshots','ai_content_subject_analyses','FOREIGN KEY (analysis_id, workspace_id, brand_id) REFERENCES ai_content_subject_analyses(id, workspace_id, brand_id) ON DELETE RESTRICT'),
+    ('ai_content_subject_appeal_regeneration_keys_analysis_fk','ai_content_subject_appeal_regeneration_keys','ai_content_subject_analyses','FOREIGN KEY (analysis_id) REFERENCES ai_content_subject_analyses(id) ON DELETE CASCADE'),
+    ('ai_content_subject_images_analysis_ownership_fk','ai_content_subject_images','ai_content_subject_analyses','FOREIGN KEY (analysis_id, workspace_id, brand_id) REFERENCES ai_content_subject_analyses(id, workspace_id, brand_id) ON DELETE CASCADE'),
+    ('product_service_versions_source_analysis_ownership_fk','product_service_versions','ai_content_subject_analyses','FOREIGN KEY (source_analysis_id, workspace_id, brand_id) REFERENCES ai_content_subject_analyses(id, workspace_id, brand_id) ON DELETE RESTRICT'),
+    ('ai_content_subject_selected_image_fk','ai_content_subject_analyses','ai_content_subject_images','FOREIGN KEY (selected_image_id, id, workspace_id, brand_id) REFERENCES ai_content_subject_images(id, analysis_id, workspace_id, brand_id) ON DELETE SET NULL (selected_image_id)'),
+    ('product_service_assets_source_image_ownership_fk','product_service_assets','ai_content_subject_images','FOREIGN KEY (source_image_id, workspace_id, brand_id) REFERENCES ai_content_subject_images(id, workspace_id, brand_id) ON DELETE RESTRICT')
+  ), actual as (
+    select constraint_record.conname::text as constraint_name,
+           child.relname::text as child_relation,parent.relname::text as parent_relation,
+           pg_get_constraintdef(constraint_record.oid,true) as definition
+      from pg_constraint constraint_record
+      join pg_class child on child.oid=constraint_record.conrelid
+      join pg_class parent on parent.oid=constraint_record.confrelid
+      join pg_namespace child_namespace on child_namespace.oid=child.relnamespace
+      join pg_namespace parent_namespace on parent_namespace.oid=parent.relnamespace
+     where constraint_record.contype='f'
+       and child_namespace.nspname='public' and parent_namespace.nspname='public'
+       and parent.relname=any(array[
+         'ai_content_approved_proposal_versions','ai_content_attachment_upload_sessions',
+         'ai_content_generation_attachments','ai_content_generation_outputs','ai_content_generations',
+         'ai_content_one_time_avatar_receipts','ai_content_proposal_batches','ai_content_proposals',
+         'ai_content_subject_analyses','ai_content_subject_images'
+       ])
+  ), difference as (
+    (select 'missing:'||row_to_json(expected)::text as detail from expected
+      except select 'missing:'||row_to_json(actual)::text from actual)
+    union all
+    (select 'unexpected:'||row_to_json(actual)::text from actual
+      except select 'unexpected:'||row_to_json(expected)::text from expected)
+  )
+  select string_agg(detail,E'\n' order by detail) into graph_difference from difference;
+  if graph_difference is not null then
+    raise exception 'ai_content_deletion_graph_mismatch:%',graph_difference;
+  end if;
+
+  select string_agg(conflict,E'\n' order by conflict) into preserved_provenance_conflicts
+    from (
+      select 'product_service_version:'||version.id::text||':analysis:'||analysis.id::text conflict
+        from product_service_versions version
+        join ai_content_subject_analyses analysis
+          on analysis.id=version.source_analysis_id
+         and analysis.workspace_id=version.workspace_id and analysis.brand_id=version.brand_id
+       where analysis.generation_id is not null
+      union all
+      select 'product_service_asset:'||asset.id::text||':image:'||image.id::text
+        from product_service_assets asset
+        join ai_content_subject_images image
+          on image.id=asset.source_image_id
+         and image.workspace_id=asset.workspace_id and image.brand_id=asset.brand_id
+        join ai_content_subject_analyses analysis on analysis.id=image.analysis_id
+       where analysis.generation_id is not null
+    ) conflicts;
+  if preserved_provenance_conflicts is not null then
+    raise exception 'ai_content_preserved_product_provenance_conflict:%',preserved_provenance_conflicts;
+  end if;
+end;
+$$;
+-- 075_DELETION_GRAPH_GUARD_END
+
 create function reject_ai_content_cutover_record_mutation() returns trigger
 language plpgsql set search_path=pg_catalog,public,pg_temp as $$
 declare unresolved_invocation boolean := false;
@@ -2073,6 +2164,395 @@ create table ai_content_storage_cleanup_outbox (
   ) is true)
 );
 
+-- 075_PROTECTED_STORAGE_RECONCILIATION_BEGIN
+create function ai_content_cutover_storage_value_to_path(value text) returns text
+language plpgsql immutable strict set search_path=pg_catalog,public,pg_temp as $$
+declare normalized text:=trim(value);
+begin
+  if normalized ~ '^https://[^/]+/.+' then
+    normalized:=regexp_replace(split_part(split_part(normalized,'?',1),'#',1),'^https://[^/]+/','');
+  end if;
+  return nullif(trim(normalized),'');
+end;
+$$;
+
+do $$
+declare active_deletion_leases text;
+begin
+  select string_agg(id::text,',' order by id::text) into active_deletion_leases
+    from ai_content_attachment_deletion_jobs
+   where status='deleting' and lease_expires_at>clock_timestamp();
+  if active_deletion_leases is not null then
+    raise exception 'ai_content_attachment_deletion_lease_active:%',active_deletion_leases;
+  end if;
+end;
+$$;
+
+create function ai_content_cutover_storage_candidates()
+returns table(
+  workspace_id uuid,source_row_id uuid,storage_path text,known_checksum_sha256 text,
+  object_kind text,source_relation text
+)
+language sql stable set search_path=pg_catalog,public,pg_temp as $$
+with json_candidates as (
+  select output.workspace_id,output.id source_row_id,node,
+         'generation_manifest'::text object_kind,
+         'ai_content_generation_outputs'::text source_relation
+    from ai_content_generation_outputs output
+    cross join lateral jsonb_path_query(
+      coalesce(output.artifact_manifest_json,'{}'::jsonb)
+        ||coalesce(output.content_json,'{}'::jsonb)||coalesce(output.plan_json,'{}'::jsonb),
+      'lax $.** ? (@.type() == "object")'
+    ) node
+  union all
+  select render.workspace_id,render.id,node,'render_job','ai_content_generation_render_jobs'
+    from ai_content_generation_render_jobs render
+    cross join lateral jsonb_path_query(
+      coalesce(render.payload_json,'{}'::jsonb)||coalesce(render.result_json,'{}'::jsonb),
+      'lax $.** ? (@.type() == "object")'
+    ) node
+), candidates as (
+  select workspace_id,id source_row_id,storage_path,
+         case when checksum ~ '^[0-9a-f]{64}$' then checksum end known_checksum_sha256,
+         'attachment'::text object_kind,'ai_content_generation_attachments'::text source_relation
+    from ai_content_generation_attachments where length(trim(storage_path))>0
+  union all
+  select workspace_id,id,storage_path,
+         case when expected_checksum ~ '^[0-9a-f]{64}$' then expected_checksum end,
+         'upload_session','ai_content_attachment_upload_sessions'
+    from ai_content_attachment_upload_sessions where length(trim(storage_path))>0
+  union all
+  select image.workspace_id,image.id,image.storage_path,null,'subject_image','ai_content_subject_images'
+    from ai_content_subject_images image
+    join ai_content_subject_analyses analysis
+      on analysis.id=image.analysis_id and analysis.workspace_id=image.workspace_id
+     and analysis.brand_id=image.brand_id
+   where analysis.generation_id is not null and length(trim(image.storage_path))>0
+  union all
+  select workspace_id,id,storage_path,
+         case when object_hash ~ '^[0-9a-f]{64}$' then object_hash end,
+         'one_time_avatar','ai_content_one_time_avatar_receipts'
+    from ai_content_one_time_avatar_receipts where length(trim(storage_path))>0
+  union all
+  select workspace_id,id,storage_path,null,'attachment_deletion','ai_content_attachment_deletion_jobs'
+    from ai_content_attachment_deletion_jobs where length(trim(storage_path))>0
+  union all
+  select workspace_id,source_row_id,
+         coalesce(node->>'storagePath',node->>'path',
+           case when node ? 'url' and node ? 'fileName' and node ? 'index' then node->>'url' end),
+         case when node->>'checksum' ~ '^[0-9a-f]{64}$' then node->>'checksum' end,
+         object_kind,source_relation
+    from json_candidates
+   where node ? 'storagePath' or node ? 'path'
+      or (node ? 'url' and node ? 'fileName' and node ? 'index')
+  union all
+  select output.workspace_id,output.id,output.manifest_url,null,
+         'generation_manifest','ai_content_generation_outputs'
+    from ai_content_generation_outputs output
+   where output.manifest_url is not null and length(trim(output.manifest_url))>0
+)
+select distinct workspace_id,source_row_id,
+       ai_content_cutover_storage_value_to_path(storage_path) storage_path,
+       known_checksum_sha256,object_kind,source_relation
+ from candidates
+ where ai_content_cutover_storage_value_to_path(storage_path) is not null;
+$$;
+
+do $$
+declare checksum_conflicts text;
+begin
+  with checksummed_sources as (
+    select workspace_id,storage_path,known_checksum_sha256 checksum
+      from ai_content_cutover_storage_candidates() where known_checksum_sha256 is not null
+    union all
+    select workspace_id,ai_content_cutover_storage_value_to_path(path),checksum
+      from storage_artifacts
+     where deleted_at is null and checksum ~ '^[0-9a-f]{64}$'
+    union all
+    select workspace_id,ai_content_cutover_storage_value_to_path(storage_path),checksum
+      from brand_avatar_images where checksum ~ '^[0-9a-f]{64}$'
+  ), conflicts as (
+    select workspace_id,storage_path,
+           string_agg(distinct checksum,',' order by checksum) checksums
+      from checksummed_sources
+     where storage_path is not null and exists (
+       select 1 from ai_content_cutover_storage_candidates() candidate
+        where candidate.workspace_id=checksummed_sources.workspace_id
+          and candidate.storage_path=checksummed_sources.storage_path
+     )
+     group by workspace_id,storage_path having count(distinct checksum)>1
+  )
+  select string_agg(workspace_id::text||':'||storage_path||':'||checksums,E'\n'
+    order by workspace_id::text,storage_path) into checksum_conflicts from conflicts;
+  if checksum_conflicts is not null then
+    raise exception 'ai_content_storage_checksum_conflict:%',checksum_conflicts;
+  end if;
+  if exists(select 1 from ai_content_cutover_storage_candidates())
+     and nullif(current_setting('app.ai_content_cutover_id',true),'') is null then
+    raise exception 'ai_content_storage_reconciliation_cutover_required';
+  end if;
+end;
+$$;
+
+update ai_content_attachment_deletion_jobs set
+  status='pending',attempt_count=0,next_attempt_at=now(),lease_token=null,lease_expires_at=null,
+  last_error_category=null,last_error_message=null,completed_at=null,
+  reason='three_format_cutover',updated_at=now()
+ where status in ('deleting','failed','dead_letter')
+   and (status<>'deleting' or lease_expires_at<=clock_timestamp());
+
+with selected_source as (
+  select distinct on(workspace_id,storage_path)
+         workspace_id,storage_path,source_row_id,object_kind,source_relation
+    from ai_content_cutover_storage_candidates()
+   order by workspace_id,storage_path,source_relation,source_row_id
+), rollup as (
+  select source.workspace_id,source.storage_path,
+         min(source.known_checksum_sha256) filter(where source.known_checksum_sha256 is not null)
+           known_checksum_sha256,
+         bool_or(coalesce(deletion.status='deleted',false)) already_deleted,
+         exists(select 1 from storage_artifacts artifact
+                 where artifact.workspace_id=source.workspace_id and artifact.deleted_at is null
+                   and (ai_content_cutover_storage_value_to_path(artifact.path)=source.storage_path
+                     or ai_content_cutover_storage_value_to_path(artifact.public_url)=source.storage_path))
+         or exists(select 1 from product_service_assets asset
+                    where asset.workspace_id=source.workspace_id
+                      and (ai_content_cutover_storage_value_to_path(asset.storage_path)=source.storage_path
+                        or ai_content_cutover_storage_value_to_path(asset.storage_url)=source.storage_path))
+         or exists(select 1 from brand_avatar_images image
+                    where image.workspace_id=source.workspace_id
+                      and (ai_content_cutover_storage_value_to_path(image.storage_path)=source.storage_path
+                        or ai_content_cutover_storage_value_to_path(image.storage_url)=source.storage_path))
+         or exists(select 1 from channel_outputs output
+                    cross join lateral jsonb_path_query(output.output_json,'lax $.** ? (@.type() == "string")') value
+                   where output.workspace_id=source.workspace_id
+                     and ai_content_cutover_storage_value_to_path(value#>>'{}')=source.storage_path)
+         or exists(select 1 from publish_attempts attempt
+                    cross join lateral jsonb_path_query(
+                      attempt.request_metadata||attempt.response_metadata,
+                      'lax $.** ? (@.type() == "string")'
+                    ) value
+                   where attempt.workspace_id=source.workspace_id
+                     and ai_content_cutover_storage_value_to_path(value#>>'{}')=source.storage_path)
+         or exists(select 1 from reference_items item
+                    left join lateral jsonb_path_query(item.metadata,'lax $.** ? (@.type() == "string")') value on true
+                   where item.workspace_id=source.workspace_id and item.archived_at is null
+                     and (ai_content_cutover_storage_value_to_path(item.preview_url)=source.storage_path
+                       or ai_content_cutover_storage_value_to_path(item.source_url)=source.storage_path
+                       or ai_content_cutover_storage_value_to_path(value#>>'{}')=source.storage_path))
+         or exists(select 1 from reference_snapshots snapshot
+                    cross join lateral jsonb_path_query(snapshot.snapshot_json,'lax $.** ? (@.type() == "string")') value
+                   where snapshot.workspace_id=source.workspace_id
+                     and ai_content_cutover_storage_value_to_path(value#>>'{}')=source.storage_path)
+         or exists(select 1 from reference_pattern_versions pattern
+                    cross join lateral jsonb_path_query(pattern.pattern_json,'lax $.** ? (@.type() == "string")') value
+                   where pattern.workspace_id=source.workspace_id
+                     and ai_content_cutover_storage_value_to_path(value#>>'{}')=source.storage_path) retained_reference
+    from ai_content_cutover_storage_candidates() source
+    left join ai_content_attachment_deletion_jobs deletion
+      on deletion.workspace_id=source.workspace_id and deletion.storage_path=source.storage_path
+   group by source.workspace_id,source.storage_path
+), cutover as (
+  select nullif(current_setting('app.ai_content_cutover_id',true),'')::uuid cutover_id
+   where nullif(current_setting('app.ai_content_cutover_id',true),'') is not null
+)
+insert into ai_content_storage_cleanup_outbox(
+  cutover_id,workspace_id,processor_kind,storage_path,object_kind,source_relation,source_row_id,
+  known_checksum_sha256,status,retention_evidence_sha256,last_transition_request_sha256,completed_at
+)
+select cutover.cutover_id,rollup.workspace_id,'cutover_storage_gc',rollup.storage_path,
+       selected_source.object_kind,selected_source.source_relation,selected_source.source_row_id,
+       rollup.known_checksum_sha256,
+       case when rollup.retained_reference then 'retained_reference'
+            when rollup.already_deleted then 'deleted' else 'pending' end,
+       case when rollup.retained_reference then encode(digest(jsonb_build_array(
+         'retained_reference',rollup.workspace_id,rollup.storage_path
+       )::text,'sha256'),'hex') end,
+       case when rollup.retained_reference or rollup.already_deleted then encode(digest(jsonb_build_array(
+         case when rollup.retained_reference then 'retained_reference' else 'deleted' end,
+         cutover.cutover_id,rollup.workspace_id,rollup.storage_path
+       )::text,'sha256'),'hex') end,
+       case when rollup.retained_reference or rollup.already_deleted then now() end
+  from rollup join selected_source using(workspace_id,storage_path) cross join cutover
+;
+
+-- 075_PROTECTED_STORAGE_RECONCILIATION_END
+
+-- 075_FINAL_DELETION_GRAPH_GUARD_BEGIN
+do $$
+declare graph_count integer;
+declare graph_sha256 text;
+begin
+  with graph as (
+    select constraint_record.conname::text constraint_name,
+           child.relname::text child_relation,parent.relname::text parent_relation,
+           pg_get_constraintdef(constraint_record.oid,true) definition
+      from pg_constraint constraint_record
+      join pg_class child on child.oid=constraint_record.conrelid
+      join pg_class parent on parent.oid=constraint_record.confrelid
+      join pg_namespace child_namespace on child_namespace.oid=child.relnamespace
+      join pg_namespace parent_namespace on parent_namespace.oid=parent.relnamespace
+     where constraint_record.contype='f'
+       and child_namespace.nspname='public' and parent_namespace.nspname='public'
+       and parent.relname=any(array[
+         'ai_content_approved_proposal_versions','ai_content_attachment_upload_sessions',
+         'ai_content_generation_attachments','ai_content_generation_outputs','ai_content_generations',
+         'ai_content_generation_operations','ai_content_one_time_avatar_receipts',
+         'ai_content_proposal_batches','ai_content_proposals','ai_content_proposal_jobs',
+         'ai_content_proposal_job_contracts','ai_content_proposal_performance_audits',
+         'ai_content_proposal_research_attempts','ai_content_proposal_model_attempts',
+         'ai_content_subject_analyses','ai_content_subject_images','ai_content_usage_ledger'
+       ])
+  )
+  select count(*)::integer,encode(digest(string_agg(
+    constraint_name||chr(31)||child_relation||chr(31)||parent_relation||chr(31)||definition,
+    chr(30) order by parent_relation,child_relation,constraint_name
+  ),'sha256'),'hex') into graph_count,graph_sha256 from graph;
+  if graph_count<>56 or graph_sha256 is distinct from
+     '5588f6fea8759adb1bfe58c8c17c99bc122113f1c9ed6cc34fb48e76dcf3ebcd' then
+    raise exception 'ai_content_final_deletion_graph_mismatch:%:%',graph_count,graph_sha256;
+  end if;
+end;
+$$;
+-- 075_FINAL_DELETION_GRAPH_GUARD_END
+
+-- 075_DESTRUCTIVE_EXECUTION_CLEANUP_BEGIN
+do $$
+declare trigger_difference text;
+begin
+  with expected(trigger_name,relation_name,function_name,definition,enabled) as (values
+    ('ai_content_analyzed_subject_snapshots_immutable','ai_content_analyzed_subject_snapshots','reject_ai_content_analyzed_subject_snapshot_mutation','CREATE TRIGGER ai_content_analyzed_subject_snapshots_immutable BEFORE DELETE OR UPDATE ON ai_content_analyzed_subject_snapshots FOR EACH ROW EXECUTE FUNCTION reject_ai_content_analyzed_subject_snapshot_mutation()','O'),
+    ('ai_content_approved_proposal_versions_immutable','ai_content_approved_proposal_versions','reject_ai_content_approved_proposal_version_mutation','CREATE TRIGGER ai_content_approved_proposal_versions_immutable BEFORE DELETE OR UPDATE ON ai_content_approved_proposal_versions FOR EACH ROW EXECUTE FUNCTION reject_ai_content_approved_proposal_version_mutation()','O'),
+    ('ai_content_generation_briefs_immutable','ai_content_generation_briefs','reject_ai_content_generation_brief_mutation','CREATE TRIGGER ai_content_generation_briefs_immutable BEFORE DELETE OR UPDATE ON ai_content_generation_briefs FOR EACH ROW EXECUTE FUNCTION reject_ai_content_generation_brief_mutation()','O'),
+    ('ai_content_one_time_avatar_receipts_immutable','ai_content_one_time_avatar_receipts','reject_ai_content_one_time_avatar_receipt_mutation','CREATE TRIGGER ai_content_one_time_avatar_receipts_immutable BEFORE DELETE OR UPDATE ON ai_content_one_time_avatar_receipts FOR EACH ROW EXECUTE FUNCTION reject_ai_content_one_time_avatar_receipt_mutation()','O'),
+    ('ai_content_one_time_avatar_revocations_immutable','ai_content_one_time_avatar_revocations','reject_ai_content_one_time_avatar_revocation_mutation','CREATE TRIGGER ai_content_one_time_avatar_revocations_immutable BEFORE DELETE OR UPDATE ON ai_content_one_time_avatar_revocations FOR EACH ROW EXECUTE FUNCTION reject_ai_content_one_time_avatar_revocation_mutation()','O'),
+    ('ai_content_v2_generation_input_snapshots_immutable','ai_content_generation_input_snapshots','ai_content_v2_reject_snapshot_mutation','CREATE TRIGGER ai_content_v2_generation_input_snapshots_immutable BEFORE DELETE OR UPDATE ON ai_content_generation_input_snapshots FOR EACH ROW EXECUTE FUNCTION ai_content_v2_reject_snapshot_mutation()','O'),
+    ('ai_content_v2_output_research_snapshots_immutable','ai_content_output_research_snapshots','ai_content_v2_reject_snapshot_mutation','CREATE TRIGGER ai_content_v2_output_research_snapshots_immutable BEFORE DELETE OR UPDATE ON ai_content_output_research_snapshots FOR EACH ROW EXECUTE FUNCTION ai_content_v2_reject_snapshot_mutation()','O'),
+    ('ai_content_v2_proposal_research_snapshots_immutable','ai_content_proposal_research_snapshots','ai_content_v2_reject_snapshot_mutation','CREATE TRIGGER ai_content_v2_proposal_research_snapshots_immutable BEFORE DELETE OR UPDATE ON ai_content_proposal_research_snapshots FOR EACH ROW EXECUTE FUNCTION ai_content_v2_reject_snapshot_mutation()','O')
+  ), actual as (
+    select trigger.tgname::text trigger_name,relation.relname::text relation_name,
+           function.proname::text function_name,pg_get_triggerdef(trigger.oid,true) definition,
+           trigger.tgenabled::text enabled
+      from pg_trigger trigger join pg_class relation on relation.oid=trigger.tgrelid
+      join pg_proc function on function.oid=trigger.tgfoid
+     where not trigger.tgisinternal and trigger.tgname in (
+       select trigger_name from expected
+     )
+  ), difference as (
+    (select row_to_json(expected)::text detail from expected
+      except select row_to_json(actual)::text from actual)
+    union all
+    (select row_to_json(actual)::text from actual
+      except select row_to_json(expected)::text from expected)
+  )
+  select string_agg(detail,E'\n' order by detail) into trigger_difference from difference;
+  if trigger_difference is not null then
+    raise exception 'ai_content_immutable_trigger_catalog_mismatch:%',trigger_difference;
+  end if;
+end;
+$$;
+
+create function ai_content_cutover_target_ids() returns table(id uuid)
+language sql stable set search_path=pg_catalog,public,pg_temp as $$
+select distinct id from (
+  select id from ai_content_generations union all
+  select id from ai_content_generation_outputs union all
+  select id from ai_content_generation_jobs union all
+  select id from ai_content_generation_render_jobs union all
+  select id from ai_content_generation_attachments union all
+  select id from ai_content_attachment_upload_sessions union all
+  select id from ai_content_subject_analyses where generation_id is not null union all
+  select image.id from ai_content_subject_images image join ai_content_subject_analyses analysis
+    on analysis.id=image.analysis_id where analysis.generation_id is not null union all
+  select id from ai_content_proposal_batches union all
+  select id from ai_content_proposal_jobs union all
+  select id from ai_content_proposals union all
+  select id from ai_content_approved_proposal_versions union all
+  select id from ai_content_generation_operations
+) target_ids;
+$$;
+
+update channel_outputs set ai_content_generation_output_id=null
+ where ai_content_generation_output_id in (select id from ai_content_cutover_target_ids());
+
+delete from ai_content_create_idempotency_records;
+delete from automation_runs run where run.run_type='daily_generation' or exists (
+  select 1 from ai_content_cutover_target_ids() target
+   where jsonb_path_exists(run.result_json,'lax $.** ? (@ == $id)',jsonb_build_object('id',target.id::text))
+);
+delete from audit_events event where event.entity_id in (select id from ai_content_cutover_target_ids())
+  or exists (
+    select 1 from ai_content_cutover_target_ids() target
+     where jsonb_path_exists(
+       coalesce(event.before_json,'{}'::jsonb)||coalesce(event.after_json,'{}'::jsonb)||event.metadata,
+       'lax $.** ? (@ == $id)',jsonb_build_object('id',target.id::text)
+     )
+  );
+
+alter table ai_content_analyzed_subject_snapshots disable trigger ai_content_analyzed_subject_snapshots_immutable;
+alter table ai_content_approved_proposal_versions disable trigger ai_content_approved_proposal_versions_immutable;
+alter table ai_content_generation_briefs disable trigger ai_content_generation_briefs_immutable;
+alter table ai_content_one_time_avatar_receipts disable trigger ai_content_one_time_avatar_receipts_immutable;
+alter table ai_content_one_time_avatar_revocations disable trigger ai_content_one_time_avatar_revocations_immutable;
+alter table ai_content_generation_input_snapshots disable trigger ai_content_v2_generation_input_snapshots_immutable;
+alter table ai_content_output_research_snapshots disable trigger ai_content_v2_output_research_snapshots_immutable;
+alter table ai_content_proposal_research_snapshots disable trigger ai_content_v2_proposal_research_snapshots_immutable;
+alter table ai_content_usage_ledger disable trigger ai_content_usage_ledger_immutable;
+
+delete from ai_content_generation_prompt_bindings;
+delete from automated_content_proposal_runs;
+delete from ai_content_generation_briefs;
+delete from ai_content_approved_proposal_versions;
+delete from ai_content_one_time_avatar_revocations;
+delete from ai_content_one_time_avatar_receipts;
+delete from ai_content_analyzed_subject_snapshots;
+delete from ai_content_output_research_snapshots;
+delete from ai_content_generation_input_snapshots;
+delete from ai_content_proposal_attempt_events;
+delete from ai_content_proposal_research_attempt_events;
+delete from ai_content_proposals;
+delete from ai_content_proposal_model_attempts;
+delete from ai_content_proposal_research_attempts;
+delete from ai_content_proposal_compositions;
+delete from ai_content_proposal_job_contracts;
+delete from ai_content_proposal_performance_audits;
+delete from ai_content_proposal_research_snapshots;
+delete from ai_content_proposal_jobs;
+delete from ai_content_proposal_batches;
+delete from ai_content_usage_ledger where usage_type='reversal';
+delete from ai_content_usage_ledger;
+
+delete from ai_content_generation_operations;
+delete from ai_content_generations;
+alter table ai_content_proposal_research_snapshots enable trigger ai_content_v2_proposal_research_snapshots_immutable;
+alter table ai_content_generation_input_snapshots enable trigger ai_content_v2_generation_input_snapshots_immutable;
+alter table ai_content_output_research_snapshots enable trigger ai_content_v2_output_research_snapshots_immutable;
+alter table ai_content_approved_proposal_versions enable trigger ai_content_approved_proposal_versions_immutable;
+alter table ai_content_generation_briefs enable trigger ai_content_generation_briefs_immutable;
+alter table ai_content_one_time_avatar_receipts enable trigger ai_content_one_time_avatar_receipts_immutable;
+alter table ai_content_one_time_avatar_revocations enable trigger ai_content_one_time_avatar_revocations_immutable;
+alter table ai_content_analyzed_subject_snapshots enable trigger ai_content_analyzed_subject_snapshots_immutable;
+alter table ai_content_usage_ledger enable trigger ai_content_usage_ledger_immutable;
+
+do $$
+declare remaining text;
+begin
+  select string_agg(relation_name||':'||row_count::text,',' order by relation_name) into remaining
+    from (values
+      ('ai_content_generations',(select count(*) from ai_content_generations)),
+      ('ai_content_generation_operations',(select count(*) from ai_content_generation_operations)),
+      ('ai_content_generation_outputs',(select count(*) from ai_content_generation_outputs)),
+      ('ai_content_generation_jobs',(select count(*) from ai_content_generation_jobs)),
+      ('ai_content_proposal_batches',(select count(*) from ai_content_proposal_batches)),
+      ('ai_content_proposal_jobs',(select count(*) from ai_content_proposal_jobs)),
+      ('ai_content_proposals',(select count(*) from ai_content_proposals)),
+      ('ai_content_attachment_storage_path_guards',(select count(*) from ai_content_attachment_storage_path_guards))
+    ) counts(relation_name,row_count) where row_count<>0;
+  if remaining is not null then raise exception 'ai_content_execution_cleanup_incomplete:%',remaining; end if;
+end;
+$$;
+-- 075_DESTRUCTIVE_EXECUTION_CLEANUP_END
+
 create function claim_ai_content_storage_cleanup(
   p_cutover_id uuid,p_workspace_id uuid,p_cleanup_token text,p_lease_owner text,
   p_lease_token uuid,p_limit integer
@@ -2262,6 +2742,138 @@ begin
   );
 end;
 $$;
+
+-- 075_FINAL_THREE_FORMAT_SCHEMA_BEGIN
+create or replace function start_ai_content_orchestration(
+  target_generation_id uuid,target_workspace_id uuid,target_brand_id uuid,
+  frozen_orchestration_snapshot jsonb,frozen_avatar_snapshot jsonb,actor_user_id uuid
+) returns uuid language plpgsql set search_path=pg_catalog,public,pg_temp as $$
+begin
+  raise exception using errcode='55000',message='ai_content_orchestration_retired';
+end;
+$$;
+
+alter table ai_content_generations
+  drop constraint ai_content_generations_type_check,
+  drop constraint ai_content_generations_content_family_check,
+  drop constraint ai_content_generations_output_format_check,
+  drop constraint ai_content_generations_orchestration_snapshot_check,
+  drop column type;
+alter table ai_content_generations rename column content_family to purpose;
+alter table ai_content_generations
+  alter column purpose set not null,
+  alter column output_format set not null,
+  add constraint ai_content_generations_purpose_check
+    check (purpose in ('informational','marketing')),
+  add constraint ai_content_generations_output_format_check
+    check (output_format in ('card_news','blog','reel'));
+
+alter table ai_content_proposal_batches
+  drop constraint ai_content_proposal_batches_content_family_check;
+alter table ai_content_proposal_batches rename column content_family to purpose;
+alter table ai_content_proposal_batches
+  add constraint ai_content_proposal_batches_purpose_check
+    check (purpose in ('informational','marketing'));
+
+alter table ai_content_generation_jobs
+  drop constraint ai_content_generation_jobs_content_type_check;
+alter table ai_content_generation_jobs rename column content_type to output_format;
+alter table ai_content_generation_jobs
+  add constraint ai_content_generation_jobs_output_format_check
+    check (output_format in ('card_news','blog','reel'));
+
+alter table worker_instances drop constraint worker_instances_type_check;
+alter table worker_instances add constraint worker_instances_type_check check (
+  worker_type in (
+    'image','dm','faq','content_proposal','card_news','blog','reel','ai_content_image'
+  )
+);
+
+create function ai_content_generation_input_v3_is_valid(value jsonb) returns boolean
+language sql immutable set search_path=pg_catalog,public,pg_temp as $$
+  select coalesce(
+    jsonb_typeof(value)='object'
+    and value->>'contractVersion'='content-generation-input.v3'
+    and jsonb_typeof(value->'outputSettings')='object'
+    and value->'outputSettings'->>'outputFormat' in ('card_news','blog','reel')
+    and value->'outputSettings'->>'purpose' in ('informational','marketing'),false
+  );
+$$;
+create function ai_content_plan_v2_is_valid(value jsonb) returns boolean
+language sql immutable set search_path=pg_catalog,public,pg_temp as $$
+  select coalesce(
+    jsonb_typeof(value)='object'
+    and value->>'contractVersion' in ('card-news-plan.v2','blog-plan.v2','reel-plan.v2')
+    and jsonb_typeof(value->'content')='object',false
+  );
+$$;
+create function ai_content_manifest_v3_is_valid(value jsonb) returns boolean
+language sql immutable set search_path=pg_catalog,public,pg_temp as $$
+  select coalesce(
+    jsonb_typeof(value)='object' and value->>'version'='ai-content.v3'
+    and value->>'outputFormat' in ('card_news','blog','reel')
+    and value->>'purpose' in ('informational','marketing')
+    and jsonb_typeof(value->'assets')='array' and jsonb_array_length(value->'assets')>0
+    and jsonb_typeof(value->'content')='object',false
+  );
+$$;
+
+alter table ai_content_generations
+  drop constraint ai_content_generations_input_snapshot_object_check,
+  add constraint ai_content_generations_input_snapshot_v3_check check (
+    generation_input_snapshot is null or ai_content_generation_input_v3_is_valid(generation_input_snapshot)
+  );
+alter table ai_content_generation_outputs
+  drop constraint ai_content_generation_outputs_plan_json_object_check,
+  add constraint ai_content_generation_outputs_plan_v2_check check (
+    plan_json is null or ai_content_plan_v2_is_valid(plan_json)
+  ),
+  add constraint ai_content_generation_outputs_manifest_v3_check check (
+    artifact_manifest_json='{}'::jsonb or ai_content_manifest_v3_is_valid(artifact_manifest_json)
+  );
+
+create function enforce_ai_content_three_format_identity() returns trigger
+language plpgsql set search_path=pg_catalog,public,pg_temp as $$
+declare generation_row public.ai_content_generations%rowtype;
+begin
+  if tg_table_name='ai_content_generations' then
+    generation_row:=new;
+    if new.generation_input_snapshot is not null and (
+      new.output_format is distinct from new.generation_input_snapshot->'outputSettings'->>'outputFormat'
+      or new.purpose is distinct from new.generation_input_snapshot->'outputSettings'->>'purpose'
+    ) then raise exception 'ai_content_generation_v3_identity_mismatch'; end if;
+    if exists (
+      select 1 from public.ai_content_generation_prompt_bindings binding
+       where binding.generation_id=new.id and (
+         binding.output_format is distinct from new.output_format
+         or binding.purpose is distinct from new.purpose
+       )
+    ) then raise exception 'ai_content_generation_binding_identity_mismatch'; end if;
+  elsif tg_table_name='ai_content_generation_jobs' then
+    select * into strict generation_row from public.ai_content_generations where id=new.generation_id;
+    if new.output_format is distinct from generation_row.output_format then
+      raise exception 'ai_content_generation_job_format_mismatch';
+    end if;
+  elsif tg_table_name='ai_content_generation_prompt_bindings' then
+    select * into strict generation_row from public.ai_content_generations where id=new.generation_id;
+    if new.output_format is distinct from generation_row.output_format
+       or new.purpose is distinct from generation_row.purpose then
+      raise exception 'ai_content_generation_binding_identity_mismatch';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+create constraint trigger ai_content_generations_three_format_identity
+after insert or update of output_format,purpose,generation_input_snapshot on ai_content_generations
+deferrable initially deferred for each row execute function enforce_ai_content_three_format_identity();
+create constraint trigger ai_content_generation_jobs_three_format_identity
+after insert or update of generation_id,output_format on ai_content_generation_jobs
+deferrable initially deferred for each row execute function enforce_ai_content_three_format_identity();
+create constraint trigger ai_content_generation_prompt_bindings_three_format_identity
+after insert or update of generation_id,output_format,purpose on ai_content_generation_prompt_bindings
+deferrable initially deferred for each row execute function enforce_ai_content_three_format_identity();
+-- 075_FINAL_THREE_FORMAT_SCHEMA_END
 
 do $$
 declare table_name text;

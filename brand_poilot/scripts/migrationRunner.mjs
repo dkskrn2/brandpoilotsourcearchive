@@ -1106,9 +1106,10 @@ export const cutover075RelationSecurityCatalog = Object.freeze([
 
 const post075Function = (identity, {
   securityDefiner = true, owner = "schemaOwner", execute = [], returnType = "pg_catalog.trigger", returnSet = false,
+  language = "plpgsql", volatility = "v", strict = false,
 } = {}) => Object.freeze({
   identity, securityDefiner, owner, execute: Object.freeze(execute),
-  language: "plpgsql", kind: "f", volatility: "v", parallel: "u", leakproof: false, strict: false,
+  language, kind: "f", volatility, parallel: "u", leakproof: false, strict,
   returnType, returnSet,
   config: Object.freeze(["search_path=pg_catalog,public,pg_temp"]),
 });
@@ -1142,6 +1143,28 @@ export const cutover075SecurityFunctions = Object.freeze([
   post075Function("public.complete_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)", { owner: "provider", execute: ["cleanup"], returnType: "public.ai_content_storage_cleanup_outbox" }),
   post075Function("public.fail_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)", { owner: "provider", execute: ["cleanup"], returnType: "public.ai_content_storage_cleanup_outbox" }),
   post075Function("public.is_ai_content_storage_path_protected(uuid,text)", { owner: "provider", execute: ["application"], returnType: "pg_catalog.bool" }),
+  post075Function("public.ai_content_generation_input_v3_is_valid(jsonb)", {
+    securityDefiner: false, language: "sql", volatility: "i", returnType: "pg_catalog.bool",
+  }),
+  post075Function("public.ai_content_plan_v2_is_valid(jsonb)", {
+    securityDefiner: false, language: "sql", volatility: "i", returnType: "pg_catalog.bool",
+  }),
+  post075Function("public.ai_content_manifest_v3_is_valid(jsonb)", {
+    securityDefiner: false, language: "sql", volatility: "i", returnType: "pg_catalog.bool",
+  }),
+  post075Function("public.enforce_ai_content_three_format_identity()", { securityDefiner: false }),
+  post075Function("public.ai_content_cutover_storage_value_to_path(text)", {
+    securityDefiner: false, volatility: "i", strict: true, returnType: "pg_catalog.text",
+  }),
+  post075Function("public.ai_content_cutover_storage_candidates()", {
+    securityDefiner: false, language: "sql", volatility: "s", returnType: "pg_catalog.record", returnSet: true,
+  }),
+  post075Function("public.ai_content_cutover_target_ids()", {
+    securityDefiner: false, language: "sql", volatility: "s", returnType: "pg_catalog.uuid", returnSet: true,
+  }),
+  post075Function("public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)", {
+    securityDefiner: false, returnType: "pg_catalog.uuid",
+  }),
 ]);
 
 const pgCatalogQualifiedFunctionIdentity = (identity) => identity.replace(
@@ -1168,8 +1191,13 @@ export function buildCutover075FunctionSourceHashes(migration) {
   const { sql } = migration;
   return Object.fromEntries(cutover075SecurityFunctions.map(({ identity }) => {
     const functionName = identity.slice("public.".length, identity.indexOf("("));
-    const unqualifiedStart = sql.indexOf(`create function ${functionName}(`);
-    const start = unqualifiedStart >= 0 ? unqualifiedStart : sql.indexOf(`create function public.${functionName}(`);
+    const starts = [
+      sql.indexOf(`create function ${functionName}(`),
+      sql.indexOf(`create function public.${functionName}(`),
+      sql.indexOf(`create or replace function ${functionName}(`),
+      sql.indexOf(`create or replace function public.${functionName}(`),
+    ].filter((index) => index >= 0);
+    const start = starts.length > 0 ? Math.min(...starts) : -1;
     const end = start < 0 ? -1 : sql.indexOf("\ncreate function ", start + 1);
     const definition = start < 0 ? "" : sql.slice(start, end < 0 ? sql.length : end);
     const body = definition.match(/\bas \$\$([\s\S]*?)\$\$;/i)?.[1];
@@ -1224,6 +1252,12 @@ export const cutover075DomainTriggers = Object.freeze([
   post075Trigger("ai_content_proposal_jobs", "ai_content_proposal_jobs_invocation_evidence_guard", 21,
     "public.reject_ai_content_cutover_record_mutation()", true),
   post075Trigger("ai_content_generation_prompt_bindings", "ai_content_generation_prompt_bindings_source", 21, "public.enforce_ai_content_prompt_binding_source()", true),
+  post075Trigger("ai_content_generation_prompt_bindings", "ai_content_generation_prompt_bindings_three_format_identity", 21,
+    "public.enforce_ai_content_three_format_identity()", true, ["generation_id", "output_format", "purpose"]),
+  post075Trigger("ai_content_generation_jobs", "ai_content_generation_jobs_three_format_identity", 21,
+    "public.enforce_ai_content_three_format_identity()", true, ["generation_id", "output_format"]),
+  post075Trigger("ai_content_generations", "ai_content_generations_three_format_identity", 21,
+    "public.enforce_ai_content_three_format_identity()", true, ["output_format", "purpose", "generation_input_snapshot"]),
   post075Trigger("topic_uploads", "topic_uploads_operation_identity_immutable", 19, "public.freeze_topic_upload_operation_identity()", false,
     ["operation_key", "request_fingerprint"]),
   post075Trigger("ai_content_usage_ledger", "ai_content_usage_reversal_identity", 7, "public.enforce_ai_content_usage_reversal_identity()"),
@@ -1326,7 +1360,7 @@ export function validateCutover075PostCatalog(
     })}`);
   }
   const canonicalJson = JSON.stringify({
-    contractVersion: "ai-content-075-post-security-catalog.v6",
+    contractVersion: "ai-content-075-post-security-catalog.v7",
     functions: actualFunctions.map(normalizeFunctionCatalog),
     relations: actualRelations.map((row) => ({
       relationName: String(row.relation_name), ...normalizeRelationStructure(row),
@@ -1957,6 +1991,11 @@ export function buildCutover075ExactDdlAllowlist(migration, names) {
 
   addSourceMatches(/^create table\s+(?:public\.)?([a-z_][a-z0-9_]*)\s*\(/gim, "CREATE TABLE");
   addSourceMatches(/^alter table\s+(?:public\.)?([a-z_][a-z0-9_]*)\b/gim, "ALTER TABLE");
+  for (const match of migration.sql.matchAll(
+    /^alter table\s+(?:public\.)?([a-z_][a-z0-9_]*)\s+rename column\s+[a-z_][a-z0-9_]*\s+to\s+([a-z_][a-z0-9_]*)\s*;/gim,
+  )) {
+    add("ALTER TABLE", `public.${match[1]}.${match[2]}`);
+  }
   addSourceMatches(/^create\s+(?:unique\s+)?index\s+(?:public\.)?([a-z_][a-z0-9_]*)\b/gim, "CREATE INDEX");
   const explicitIndexNames = new Set(rows.filter(({ commandTag }) => commandTag === "CREATE INDEX")
     .map(({ objectIdentityPattern }) => objectIdentityPattern.slice("public.".length)));
@@ -1998,7 +2037,7 @@ export function buildCutover075ExactDdlAllowlist(migration, names) {
     }
   }
 
-  const recognizedTopLevel = /^(?:create\s+(?:table|function|(?:unique\s+)?index|(?:constraint\s+)?trigger)|alter\s+table)\b/i;
+  const recognizedTopLevel = /^(?:create\s+(?:or\s+replace\s+)?(?:table|function|(?:unique\s+)?index|(?:constraint\s+)?trigger)|alter\s+table)\b/i;
   for (const match of migration.sql.matchAll(/^(create|alter|drop)\s+[^\r\n]+/gim)) {
     if (!recognizedTopLevel.test(match[0])) throw new Error("cutover_075_exact_allowlist_source_invalid");
   }

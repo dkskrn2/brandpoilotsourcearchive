@@ -71,7 +71,7 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
     const catalogSha = "94c6622ce5c5ef74b9d011dd0d35035f0f0b5580160dc2a2264b08030a5724fb";
     const batch = await admin.query(
       `insert into ai_content_proposal_batches(
-         workspace_id,brand_id,origin,content_family,request_json,source_snapshot_json,idempotency_key
+         workspace_id,brand_id,origin,purpose,request_json,source_snapshot_json,idempotency_key
        ) values($1,$2,'manual','informational','{}'::jsonb,'[]'::jsonb,$3) returning id`,
       [workspace.rows[0].id, brand.rows[0].id, randomUUID()],
     );
@@ -115,19 +115,19 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
     );
     const otherBatch = await admin.query(
       `insert into ai_content_proposal_batches(
-         workspace_id,brand_id,origin,content_family,request_json,source_snapshot_json,idempotency_key
+         workspace_id,brand_id,origin,purpose,request_json,source_snapshot_json,idempotency_key
        ) values($1,$2,'manual','informational','{}'::jsonb,'[]'::jsonb,$3) returning id`,
       [workspace.rows[0].id, brand.rows[0].id, randomUUID()],
     );
     const invalidContractBatch = await admin.query(
       `insert into ai_content_proposal_batches(
-         workspace_id,brand_id,origin,content_family,request_json,source_snapshot_json,idempotency_key
+         workspace_id,brand_id,origin,purpose,request_json,source_snapshot_json,idempotency_key
        ) values($1,$2,'manual','informational','{}'::jsonb,'[]'::jsonb,$3) returning id`,
       [workspace.rows[0].id, brand.rows[0].id, randomUUID()],
     );
     const invalidVersionBatch = await admin.query(
       `insert into ai_content_proposal_batches(
-         workspace_id,brand_id,origin,content_family,request_json,source_snapshot_json,idempotency_key
+         workspace_id,brand_id,origin,purpose,request_json,source_snapshot_json,idempotency_key
        ) values($1,$2,'manual','informational','{}'::jsonb,'[]'::jsonb,$3) returning id`,
       [workspace.rows[0].id, brand.rows[0].id, randomUUID()],
     );
@@ -844,8 +844,8 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
     await assert.rejects(
       admin.query(
         `insert into ai_content_generations(
-           workspace_id,brand_id,type,title,analysis_idempotency_key
-         ) values($1,$2,'blog','identity-less',$3)`,
+           workspace_id,brand_id,purpose,output_format,title,analysis_idempotency_key
+         ) values($1,$2,'informational','blog','identity-less',$3)`,
         [workspace.rows[0].id, brand.rows[0].id, randomUUID()],
       ),
       /ai_content_generation_operation_required/,
@@ -870,8 +870,8 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
     );
     await admin.query(
       `insert into ai_content_generations(
-         id,workspace_id,brand_id,type,title,analysis_idempotency_key,operation_id
-       ) values($1,$2,$3,'blog','bound generation',$4,$5)`,
+         id,workspace_id,brand_id,purpose,output_format,title,analysis_idempotency_key,operation_id
+       ) values($1,$2,$3,'informational','blog','bound generation',$4,$5)`,
       [generationId, workspace.rows[0].id, brand.rows[0].id, randomUUID(), operationId],
     );
     await admin.query("commit");
@@ -890,8 +890,8 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
     );
     await admin.query(
       `insert into ai_content_generations(
-         id,workspace_id,brand_id,type,title,analysis_idempotency_key,operation_id
-       ) values($1,$3,$4,'blog','cross-a',$5,$2),($6,$3,$4,'blog','cross-b',$7,$8)`,
+         id,workspace_id,brand_id,purpose,output_format,title,analysis_idempotency_key,operation_id
+       ) values($1,$3,$4,'informational','blog','cross-a',$5,$2),($6,$3,$4,'informational','blog','cross-b',$7,$8)`,
       [crossedGenerationA, crossedOperationB, workspace.rows[0].id, brand.rows[0].id,
         randomUUID(), crossedGenerationB, randomUUID(), crossedOperationA],
     );
@@ -945,8 +945,8 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
     );
     await admin.query(
       `insert into ai_content_generations(
-         id,workspace_id,brand_id,type,title,analysis_idempotency_key,operation_id
-       ) values($1,$2,$3,'blog','other parent',$4,$5)`,
+         id,workspace_id,brand_id,purpose,output_format,title,analysis_idempotency_key,operation_id
+       ) values($1,$2,$3,'informational','blog','other parent',$4,$5)`,
       [otherGenerationId, workspace.rows[0].id, brand.rows[0].id, randomUUID(), otherOperationId],
     );
     await admin.query("commit");
@@ -963,8 +963,8 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
     );
     await admin.query(
       `insert into ai_content_generations(
-         id,workspace_id,brand_id,type,title,analysis_idempotency_key,operation_id,parent_generation_id
-       ) values($1,$2,$3,'blog','bad retry',$4,$5,$6)`,
+         id,workspace_id,brand_id,purpose,output_format,title,analysis_idempotency_key,operation_id,parent_generation_id
+       ) values($1,$2,$3,'informational','blog','bad retry',$4,$5,$6)`,
       [badRetryGeneration, workspace.rows[0].id, brand.rows[0].id, randomUUID(),
         badRetryOperation, otherGenerationId],
     );
@@ -1128,7 +1128,7 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
 
     const indeterminateBatch = await admin.query(
       `insert into ai_content_proposal_batches(
-         workspace_id,brand_id,origin,content_family,request_json,source_snapshot_json,idempotency_key
+         workspace_id,brand_id,origin,purpose,request_json,source_snapshot_json,idempotency_key
        ) values($1,$2,'manual','informational','{}'::jsonb,'[]'::jsonb,$3) returning id`,
       [workspace.rows[0].id, brand.rows[0].id, randomUUID()],
     );
@@ -1290,7 +1290,7 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
 
     const preSpawnBatch = await admin.query(
       `insert into ai_content_proposal_batches(
-         workspace_id,brand_id,origin,content_family,request_json,source_snapshot_json,idempotency_key
+         workspace_id,brand_id,origin,purpose,request_json,source_snapshot_json,idempotency_key
        ) values($1,$2,'manual','informational','{}'::jsonb,'[]'::jsonb,$3) returning id`,
       [workspace.rows[0].id, brand.rows[0].id, randomUUID()],
     );
@@ -1332,7 +1332,7 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
 
     const forgedManualBatch = await admin.query(
       `insert into ai_content_proposal_batches(
-         workspace_id,brand_id,origin,content_family,request_json,source_snapshot_json,idempotency_key
+         workspace_id,brand_id,origin,purpose,request_json,source_snapshot_json,idempotency_key
        ) values($1,$2,'manual','informational','{}'::jsonb,'[]'::jsonb,$3) returning id`,
       [workspace.rows[0].id, brand.rows[0].id, randomUUID()],
     );
@@ -1407,9 +1407,9 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
     const postCatalog = await readCutover075PostCatalog(admin, postCatalogNames, {
       ownerRoleName: "postgres", cutover075Migration: migration075,
     });
-    assert.equal(postCatalog.functions.length, 27);
+    assert.equal(postCatalog.functions.length, 35);
     assert.equal(postCatalog.relations.length, 13);
-    assert.equal(postCatalog.triggers.length, 29);
+    assert.equal(postCatalog.triggers.length, 32);
     await admin.query("begin");
     await admin.query(
       `revoke execute on function public.create_ai_content_cutover_topic_upload(uuid,uuid,uuid,text,text,jsonb)
@@ -1945,6 +1945,371 @@ test("075 real PostgreSQL enforces exclusive proposal composition and append-onl
     }
     if (!testError && teardownFailures.length) {
       throw new AggregateError(teardownFailures, "075 PostgreSQL harness teardown failed");
+    }
+  }
+});
+
+test("075 real PostgreSQL reconciles only generation storage candidates and fails closed on unsafe pre-cutover state", { timeout: 180_000 }, async () => {
+  const { PostgreSqlContainer } = await import("@testcontainers/postgresql");
+  let container;
+  let admin;
+  let testError;
+  try {
+    container = await new PostgreSqlContainer("postgres:16-alpine")
+      .withUsername("postgres")
+      .withPassword("postgres")
+      .withDatabase("ai_content_storage_reconciliation")
+      .withEnvironment("POSTGRES_INITDB_ARGS", "--locale=C")
+      .start();
+    admin = new Client({ connectionString: container.getConnectionUri() });
+    await admin.connect();
+    const identity = await admin.query("select current_setting('server_version_num')::integer as version_num");
+    assert.ok(identity.rows[0].version_num >= 160000 && identity.rows[0].version_num < 170000);
+    await admin.query("create extension if not exists pgcrypto");
+
+    const migrations = (await loadMigrations()).filter(
+      (migration) => !excludedMigrationIds.has(migration.id)
+        && migration.id <= "075_ai_content_three_format_cutover.sql",
+    );
+    const migration075 = migrations.find((migration) => migration.id === "075_ai_content_three_format_cutover.sql");
+    assert.ok(migration075);
+    for (const migration of migrations) {
+      if (migration.id === migration075.id) break;
+      await admin.query(migration.sql);
+    }
+    const registrationStart = migration075.sql.indexOf("-- 075_FENCE_REGISTRATION_BEGIN");
+    const registrationEnd = migration075.sql.indexOf("-- 075_FENCE_REGISTRATION_END");
+    assert.ok(registrationStart > 0 && registrationEnd > registrationStart);
+    const migration075WithoutProviderRegistration = `${migration075.sql.slice(0, registrationStart)}${migration075.sql.slice(
+      registrationEnd + "-- 075_FENCE_REGISTRATION_END".length,
+    )}`;
+
+    const workspace = await admin.query(
+      "insert into workspaces(name,slug) values('075 storage reconciliation',$1) returning id",
+      [`storage-reconciliation-${randomUUID()}`],
+    );
+    const brand = await admin.query(
+      "insert into brands(workspace_id,name) values($1,'075 storage reconciliation') returning id",
+      [workspace.rows[0].id],
+    );
+    const generation = await admin.query(
+      `insert into ai_content_generations(
+         workspace_id,brand_id,type,title,status,analysis_idempotency_key
+       ) values($1,$2,'blog','Storage reconciliation','completed',$3) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, `storage-reconciliation-${randomUUID()}`],
+    );
+    const paths = Object.freeze({
+      boundSubject: "semantic/subject-bound.png",
+      unrelatedSubject: "semantic/subject-unrelated.png",
+      manifestUrl: "semantic/output-manifest.json",
+      renderResult: "semantic/render-result.mp4",
+      storageArtifact: "semantic/retained-storage-artifact.png",
+      channel: "semantic/retained-channel.png",
+      reference: "semantic/retained-reference.png",
+      checksumConflict: "semantic/checksum-conflict.png",
+      expiredDeleting: "semantic/expired-deleting.png",
+      failed: "semantic/failed.png",
+      deadLetter: "semantic/dead-letter.png",
+      deleted: "semantic/deleted.png",
+    });
+    const output = await admin.query(
+      `insert into ai_content_generation_outputs(
+         generation_id,workspace_id,brand_id,output_index,title,status,
+         artifact_manifest_json,manifest_url
+       ) values($1,$2,$3,1,'Storage output','completed',$4::jsonb,$5) returning id`,
+      [generation.rows[0].id, workspace.rows[0].id, brand.rows[0].id, JSON.stringify({ assets: [
+        { storagePath: paths.storageArtifact },
+        { storagePath: paths.channel },
+        { storagePath: paths.reference },
+      ] }), `https://storage.example.test/${paths.manifestUrl}?download=1`],
+    );
+    await admin.query(
+      `insert into ai_content_generation_render_jobs(
+         generation_id,output_id,workspace_id,brand_id,job_kind,status,payload_json,result_json,completed_at
+       ) values($1,$2,$3,$4,'package_finalize','succeeded','{}'::jsonb,$5::jsonb,now())`,
+      [generation.rows[0].id, output.rows[0].id, workspace.rows[0].id, brand.rows[0].id,
+        JSON.stringify({ video: { path: paths.renderResult } })],
+    );
+
+    const boundAnalysis = await admin.query(
+      `insert into ai_content_subject_analyses(
+         workspace_id,brand_id,generation_id,contract_version,subject_type,status,idempotency_key
+       ) values($1,$2,$3,'subject-analysis.v2','product','ready',$4) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, generation.rows[0].id, `bound-${randomUUID()}`],
+    );
+    const unrelatedAnalysis = await admin.query(
+      `insert into ai_content_subject_analyses(
+         workspace_id,brand_id,contract_version,subject_type,source_url,normalized_url,status,idempotency_key
+       ) values($1,$2,'subject-analysis.v1','product',$3,$3,'ready',$4) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id,
+        `https://example.test/unrelated-${randomUUID()}`, `unrelated-${randomUUID()}`],
+    );
+    await admin.query(
+      `insert into ai_content_subject_images(
+         analysis_id,workspace_id,brand_id,source_url,storage_url,storage_path,mime_type,role
+       ) values
+       ($1,$3,$4,$5,$6,$7,'image/png','product'),
+       ($2,$3,$4,$8,$9,$10,'image/png','product')`,
+      [boundAnalysis.rows[0].id, unrelatedAnalysis.rows[0].id,
+        workspace.rows[0].id, brand.rows[0].id,
+        "https://source.example.test/bound.png", `https://storage.example.test/${paths.boundSubject}`,
+        paths.boundSubject, "https://source.example.test/unrelated.png",
+        `https://storage.example.test/${paths.unrelatedSubject}`, paths.unrelatedSubject],
+    );
+
+    const retainedArtifact = await admin.query(
+      `insert into storage_artifacts(
+         workspace_id,brand_id,artifact_type,bucket,path,checksum
+       ) values($1,$2,'rendered_image','semantic',$3,$4) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, paths.storageArtifact, "b".repeat(64)],
+    );
+    assert.ok(retainedArtifact.rows[0].id);
+    const topic = await admin.query(
+      "insert into content_topics(workspace_id,brand_id,title,angle) values($1,$2,'Semantic retained channel','test') returning id",
+      [workspace.rows[0].id, brand.rows[0].id],
+    );
+    const draft = await admin.query(
+      `insert into master_drafts(workspace_id,brand_id,content_topic_id,prompt_version)
+       values($1,$2,$3,'semantic-test') returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, topic.rows[0].id],
+    );
+    const retainedChannel = await admin.query(
+      `insert into channel_outputs(
+         workspace_id,brand_id,content_topic_id,master_draft_id,channel,title,delivery_format,
+         output_json,ai_content_generation_output_id
+       ) values($1,$2,$3,$4,'instagram','Semantic channel','instagram_feed_carousel',$5::jsonb,$6)
+       returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, topic.rows[0].id, draft.rows[0].id,
+        JSON.stringify({ publishedAsset: paths.channel }), output.rows[0].id],
+    );
+    const referenceSource = await admin.query(
+      `insert into source_urls(workspace_id,brand_id,source_type,url,url_hash)
+       values($1,$2,'reference',$3,$4) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id,
+        `https://reference.example.test/${randomUUID()}`, randomUUID().replaceAll("-", "")],
+    );
+    await admin.query(
+      `insert into reference_items(
+         workspace_id,brand_id,kind,source_url_id,preview_url,title
+       ) values($1,$2,'external_url',$3,$4,'Semantic reference')`,
+      [workspace.rows[0].id, brand.rows[0].id, referenceSource.rows[0].id, paths.reference],
+    );
+
+    const knownChecksum = "c".repeat(64);
+    await admin.query(
+      `insert into ai_content_generation_attachments(
+         generation_id,workspace_id,brand_id,role,file_name,mime_type,size_bytes,
+         checksum,storage_url,storage_path
+       ) values($1,$2,$3,'visual_reference','checksum-conflict.png','image/png',1,$4,$5,$6)`,
+      [generation.rows[0].id, workspace.rows[0].id, brand.rows[0].id,
+        knownChecksum, `https://storage.example.test/${paths.checksumConflict}`, paths.checksumConflict],
+    );
+    const conflictingArtifact = await admin.query(
+      `insert into storage_artifacts(
+         workspace_id,brand_id,artifact_type,bucket,path,checksum
+       ) values($1,$2,'rendered_image','semantic-conflict',$3,$4) returning id`,
+      [workspace.rows[0].id, brand.rows[0].id, paths.checksumConflict, "d".repeat(64)],
+    );
+
+    const deletionFixtures = [
+      [paths.expiredDeleting, "deleting", 4, randomUUID(), "10 minutes"],
+      [paths.failed, "failed", 3, null, null],
+      [paths.deadLetter, "dead_letter", 10, null, null],
+      [paths.deleted, "deleted", 2, null, null],
+    ];
+    const deletionIds = new Map();
+    for (const [storagePath, status, attemptCount, leaseToken, leaseOffset] of deletionFixtures) {
+      const inserted = await admin.query(
+        `insert into ai_content_attachment_deletion_jobs(
+           workspace_id,brand_id,generation_id,storage_url,storage_path,reason,status,
+           attempt_count,lease_token,lease_expires_at,last_error_category,last_error_message,completed_at
+         ) values($1,$2,$3,$4,$5,'semantic_fixture',$6,$7,$8,
+           case when $9::text is null then null else now()+$9::interval end,
+           case when $6 in ('failed','dead_letter') then 'fixture' end,
+           case when $6 in ('failed','dead_letter') then 'fixture failure' end,
+           case when $6='deleted' then now() end) returning id`,
+        [workspace.rows[0].id, brand.rows[0].id, generation.rows[0].id,
+          `https://storage.example.test/${storagePath}`, storagePath, status,
+          attemptCount, leaseToken, leaseOffset],
+      );
+      deletionIds.set(storagePath, inserted.rows[0].id);
+    }
+
+    await assert.rejects(
+      admin.query(migration075WithoutProviderRegistration),
+      /ai_content_attachment_deletion_lease_active/,
+    );
+    await admin.query("rollback");
+    assert.equal((await admin.query("select to_regclass('public.ai_content_storage_cleanup_outbox') as relation")).rows[0].relation, null);
+
+    await admin.query(
+      `update ai_content_attachment_deletion_jobs set lease_expires_at=now()-interval '1 minute'
+        where id=$1`,
+      [deletionIds.get(paths.expiredDeleting)],
+    );
+    await assert.rejects(
+      admin.query(migration075WithoutProviderRegistration),
+      /ai_content_storage_checksum_conflict/,
+    );
+    await admin.query("rollback");
+    assert.equal((await admin.query("select to_regclass('public.ai_content_storage_cleanup_outbox') as relation")).rows[0].relation, null);
+    await admin.query("update storage_artifacts set checksum=$1 where id=$2", [knownChecksum, conflictingArtifact.rows[0].id]);
+
+    const cutoverId = randomUUID();
+    const hash = "e".repeat(64);
+    const preflightIdentity = {
+      preflightCandidateSha: "f".repeat(40),
+      contentProposalWorkerImageDigest: `sha256:${"1".repeat(64)}`,
+      proposalWorkerSourceSha: "2".repeat(40),
+      proposalWorkerTreeSha: "3".repeat(40),
+      proposalContractSourceSha256: "4".repeat(64),
+      proposalSchemaSha256: "5".repeat(64),
+      proposalCatalogSha256: "6".repeat(64),
+      proposalModelId: "gpt-5.6-terra",
+      proposalCommandDescriptorSha256: "7".repeat(64),
+      migrationSha256: migration075.checksum,
+    };
+    await admin.query(
+      `insert into ai_content_cutovers(
+         id,status,migration_id,schema_owner_role_name,application_role_name,operator_role_name,
+         migration_role_name,cleanup_role_name,bypass_token_sha256,cleanup_token_sha256,
+         database_role_catalog_sha256,provider_backup_id,provider_snapshot_created_at,
+         incident_bundle_sha256,preserved_data_manifest_sha256,proposal_preflight_identity_json,
+         proposal_preflight_identity_sha256,proposal_preflight_transfer_sha256,
+         intended_release_sha,latest_status_event_sha256
+       ) values($1,'maintenance_verified','075_ai_content_three_format_cutover.sql',
+         'semantic_schema_owner','semantic_application','semantic_operator','semantic_migration',
+         'semantic_cleanup',$2,$2,$2,'semantic-backup',now(),$2,$2,$3::jsonb,$2,$2,$4,$2)`,
+      [cutoverId, hash, JSON.stringify(preflightIdentity), "8".repeat(40)],
+    );
+    await admin.query(
+      "update ai_content_maintenance_state set enabled=true,cutover_id=$1,enabled_at=now() where singleton",
+      [cutoverId],
+    );
+    await admin.query("select set_config('app.ai_content_cutover_id',$1,false)", [cutoverId]);
+    // This supplemental harness isolates 075's reconciliation transaction. The exact
+    // provider-owned 074 fence lifecycle is covered by migrationRunner.test.mjs.
+    const writeFenceTriggers = (await admin.query(
+      `select relation.relname as relation_name,trigger.tgname as trigger_name
+         from pg_trigger trigger
+         join pg_class relation on relation.oid=trigger.tgrelid
+         join pg_namespace namespace on namespace.oid=relation.relnamespace
+        where namespace.nspname='public' and not trigger.tgisinternal
+          and trigger.tgfoid='public.enforce_ai_content_write_fence()'::regprocedure
+        order by relation.relname,trigger.tgname`,
+    )).rows;
+    assert.ok(writeFenceTriggers.length > 0);
+    for (const trigger of writeFenceTriggers) {
+      await admin.query(
+        `alter table ${quoteIdentifier(trigger.relation_name)} disable trigger ${quoteIdentifier(trigger.trigger_name)}`,
+      );
+    }
+    try {
+      await admin.query(migration075WithoutProviderRegistration);
+    } catch (error) {
+      await admin.query("rollback");
+      error.message = [error.message, error.where, error.detail].filter(Boolean).join(": ");
+      throw error;
+    } finally {
+      for (const trigger of writeFenceTriggers) {
+        await admin.query(
+          `alter table ${quoteIdentifier(trigger.relation_name)} enable always trigger ${quoteIdentifier(trigger.trigger_name)}`,
+        );
+      }
+    }
+
+    const outbox = (await admin.query(
+      `select storage_path,status,known_checksum_sha256,
+              retention_evidence_sha256 is not null as has_retention_evidence,
+              completed_at is not null as completed
+         from ai_content_storage_cleanup_outbox
+        where workspace_id=$1 order by storage_path`,
+      [workspace.rows[0].id],
+    )).rows;
+    const byPath = new Map(outbox.map((row) => [row.storage_path, row]));
+    assert.equal(byPath.get(paths.boundSubject)?.status, "pending");
+    assert.equal(byPath.has(paths.unrelatedSubject), false);
+    assert.equal(byPath.get(paths.manifestUrl)?.status, "pending");
+    assert.equal(byPath.get(paths.renderResult)?.status, "pending");
+    for (const storagePath of [paths.storageArtifact, paths.channel, paths.reference]) {
+      assert.deepEqual(byPath.get(storagePath), {
+        storage_path: storagePath,
+        status: "retained_reference",
+        known_checksum_sha256: null,
+        has_retention_evidence: true,
+        completed: true,
+      });
+    }
+    assert.deepEqual(byPath.get(paths.checksumConflict), {
+      storage_path: paths.checksumConflict,
+      status: "retained_reference",
+      known_checksum_sha256: knownChecksum,
+      has_retention_evidence: true,
+      completed: true,
+    });
+    for (const storagePath of [paths.expiredDeleting, paths.failed, paths.deadLetter]) {
+      assert.equal(byPath.get(storagePath)?.status, "pending");
+    }
+    assert.deepEqual(byPath.get(paths.deleted), {
+      storage_path: paths.deleted,
+      status: "deleted",
+      known_checksum_sha256: null,
+      has_retention_evidence: false,
+      completed: true,
+    });
+    const resetDeletionRows = (await admin.query(
+      `select storage_path,status,attempt_count,lease_token,lease_expires_at,
+              last_error_category,last_error_message,completed_at,reason
+         from ai_content_attachment_deletion_jobs
+        where storage_path=any($1::text[]) order by storage_path`,
+      [[paths.expiredDeleting, paths.failed, paths.deadLetter]],
+    )).rows;
+    for (const row of resetDeletionRows) {
+      assert.deepEqual(row, {
+        storage_path: row.storage_path,
+        status: "pending",
+        attempt_count: 0,
+        lease_token: null,
+        lease_expires_at: null,
+        last_error_category: null,
+        last_error_message: null,
+        completed_at: null,
+        reason: "three_format_cutover",
+      });
+    }
+    assert.equal(
+      Number((await admin.query("select count(*) count from ai_content_generations")).rows[0].count),
+      0,
+    );
+    assert.deepEqual(
+      (await admin.query(
+        "select ai_content_generation_output_id,output_json from channel_outputs where id=$1",
+        [retainedChannel.rows[0].id],
+      )).rows,
+      [{ ai_content_generation_output_id: null, output_json: { publishedAsset: paths.channel } }],
+      "publication history and preview payload must survive while only the retired output FK is detached",
+    );
+  } catch (error) {
+    testError = error;
+    throw error;
+  } finally {
+    const teardownFailures = [];
+    if (admin) {
+      try {
+        await admin.end();
+      } catch (error) {
+        teardownFailures.push(error);
+      }
+    }
+    if (container) {
+      try {
+        await container.stop();
+      } catch (error) {
+        teardownFailures.push(error);
+      }
+    }
+    if (!testError && teardownFailures.length) {
+      throw new AggregateError(teardownFailures, "075 storage reconciliation harness teardown failed");
     }
   }
 });

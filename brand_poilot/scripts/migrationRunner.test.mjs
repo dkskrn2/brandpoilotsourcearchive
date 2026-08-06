@@ -176,10 +176,10 @@ test("074 seals one no-argument 075 fence registration primitive and its exact r
   assert.match(sql, /schema_migrations[\s\S]*075_ai_content_three_format_cutover\.sql/i);
 });
 
-test("075 post-cutover security catalog is closed over 13 relations, 27 functions, and 29 domain triggers", () => {
+test("075 post-cutover security catalog is closed over 13 relations, 35 functions, and 32 domain triggers", () => {
   assert.equal(migrationRunner.cutover075RelationSecurityCatalog.length, 13);
-  assert.equal(migrationRunner.cutover075SecurityFunctions.length, 27);
-  assert.equal(migrationRunner.cutover075DomainTriggers.length, 29);
+  assert.equal(migrationRunner.cutover075SecurityFunctions.length, 35);
+  assert.equal(migrationRunner.cutover075DomainTriggers.length, 32);
   assert.deepEqual(
     migrationRunner.cutover075SecurityFunctions.filter(({ identity }) => [
       "public.complete_ai_content_proposal_research(uuid,uuid,jsonb,text,jsonb,text,text)",
@@ -327,7 +327,7 @@ test("075 post-cutover security catalog is closed over 13 relations, 27 function
   const postCatalog = migrationRunner.validateCutover075PostCatalog(
     valid, names, "postgres", sourceSha256ByIdentity,
   );
-  assert.equal(JSON.parse(postCatalog.canonicalJson).contractVersion, "ai-content-075-post-security-catalog.v6");
+  assert.equal(JSON.parse(postCatalog.canonicalJson).contractVersion, "ai-content-075-post-security-catalog.v7");
   assert.match(postCatalog.catalogSha256, /^[0-9a-f]{64}$/);
   assert.equal(
     createHash("sha256").update(postCatalog.canonicalJson).digest("hex"),
@@ -1514,7 +1514,17 @@ test("075 PostgreSQL harness applies 074 ACLs and proves atomic rollback and rec
       const failureClient = {
         async query(sql, parameters) {
           const normalized = String(sql).replace(/\s+/g, " ").trim();
-          const result = await migrationClient.query(sql, parameters);
+          let result;
+          try {
+            result = await migrationClient.query(sql, parameters);
+          } catch (error) {
+            t.diagnostic(JSON.stringify({
+              failurePoint: label, code: error.code, position: error.position,
+              internalPosition: error.internalPosition, where: error.where,
+              queryPrefix: normalized.slice(0, 160),
+            }));
+            throw error;
+          }
           if (!injected && matches(normalized)) {
             injected = true;
             throw new Error(`injected-${label}`);
@@ -1852,8 +1862,8 @@ test("075 PostgreSQL harness applies 074 ACLs and proves atomic rollback and rec
       await client.query("rollback");
     }
     assert.equal(livePostCatalog.relations.length, 13);
-    assert.equal(livePostCatalog.functions.length, 27);
-    assert.equal(livePostCatalog.triggers.length, 29);
+    assert.equal(livePostCatalog.functions.length, 35);
+    assert.equal(livePostCatalog.triggers.length, 32);
     assert.equal(recovered.cutover.post075CatalogSha256, livePostCatalog.catalogSha256);
   } finally {
     const teardownFailures = [];
@@ -2867,7 +2877,7 @@ test("074 migration source contains no provider-only event-trigger DDL", async (
     6,
     "074 must register the completion-pair trigger function in protected-ACL and scrub catalogs only",
   );
-  assert.match(migration.sql, /if protected_object_count<>40 then/i);
+  assert.match(migration.sql, /if protected_object_count<>48 then/i);
   assert.doesNotMatch(migration.sql, /^\s*(?:create|alter)\s+event\s+trigger\b/im);
   assert.match(migration.sql, /create function consume_ai_content_provider_attestation\(\)/i);
   assert.match(migration.sql, /current_setting\('role',\s*true\)/i);

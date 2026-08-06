@@ -7880,6 +7880,123 @@ test("075 creates the durable proposal audit, automated run, prompt binding, cle
   });
 });
 
+test("075 rejects deletion-graph drift before DDL and declares protected-path reconciliation", async () => {
+  const migrations = await loadMigrations();
+  const migration075 = migrations.find(
+    (migration) => migration.id === "075_ai_content_three_format_cutover.sql",
+  );
+  assert.ok(migration075, "075 migration is required");
+  assert.match(migration075.sql, /075_DELETION_GRAPH_GUARD_BEGIN/);
+  assert.match(migration075.sql, /ai_content_deletion_graph_mismatch/);
+  assert.match(migration075.sql, /075_PROTECTED_STORAGE_RECONCILIATION_BEGIN/);
+  assert.match(migration075.sql, /ai_content_attachment_deletion_lease_active/);
+  assert.match(migration075.sql, /retained_reference/);
+  assert.match(
+    migration075.sql,
+    /from ai_content_subject_images image\s+join ai_content_subject_analyses analysis[\s\S]*analysis\.generation_id is not null/,
+    "only subject images in the generation-bound deletion graph may become cleanup candidates",
+  );
+  assert.match(migration075.sql, /output\.manifest_url/);
+  assert.match(migration075.sql, /render\.result_json/);
+  assert.match(migration075.sql, /brand_avatar_images/);
+  assert.match(migration075.sql, /product_service_assets/);
+  assert.match(migration075.sql, /reference_snapshots/);
+  assert.match(
+    migration075.sql,
+    /status='pending'[\s\S]*where status in \('deleting','failed','dead_letter'\)/,
+    "expired and terminal attachment cleanup attempts must be reset for cutover",
+  );
+  assert.doesNotMatch(
+    migration075.sql,
+    /on conflict\s*\(cutover_id,workspace_id,storage_path\)\s*do nothing/i,
+    "an existing cleanup identity must never hide a source or checksum conflict",
+  );
+  assert.doesNotMatch(migration075.sql, /truncate[\s\S]*cascade/i);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "074_ai_content_maintenance_write_fence.sql",
+    );
+    await database.exec(`
+      create table task4_unexpected_generation_fk (
+        id uuid primary key default gen_random_uuid(),
+        generation_id uuid references ai_content_generations(id) on delete restrict
+      );
+    `);
+    await assert.rejects(
+      run075SchemaBodyForPglite(database, migration075),
+      /ai_content_deletion_graph_mismatch/,
+    );
+    await database.exec("rollback");
+    assert.equal(
+      (await database.query("select to_regclass('public.ai_content_generation_operations') as relation"))
+        .rows[0].relation,
+      null,
+      "graph drift must abort before the first 075 table is created",
+    );
+  });
+});
+
+test("075 leaves only the exact three-format and two-purpose relational schema", async () => {
+  const migrations = await loadMigrations();
+  const migration075 = migrations.find(
+    (migration) => migration.id === "075_ai_content_three_format_cutover.sql",
+  );
+  assert.ok(migration075);
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "074_ai_content_maintenance_write_fence.sql",
+    );
+    await run075SchemaBodyForPglite(database, migration075);
+    const columns = await database.query(`
+      select table_name,column_name,is_nullable
+        from information_schema.columns
+       where table_schema='public' and table_name in (
+         'ai_content_generations','ai_content_proposal_batches','ai_content_generation_jobs'
+       ) and column_name in ('type','content_family','content_type','output_format','purpose')
+       order by table_name,column_name
+    `);
+    assert.deepEqual(columns.rows, [
+      { table_name: "ai_content_generation_jobs", column_name: "output_format", is_nullable: "NO" },
+      { table_name: "ai_content_generations", column_name: "output_format", is_nullable: "NO" },
+      { table_name: "ai_content_generations", column_name: "purpose", is_nullable: "NO" },
+      { table_name: "ai_content_proposal_batches", column_name: "purpose", is_nullable: "NO" },
+    ]);
+    const canonicalChecks = await database.query(`
+      select conrelid::regclass::text relation,conname,pg_get_constraintdef(oid,true) definition
+        from pg_constraint
+       where conname in (
+         'ai_content_generation_jobs_output_format_check',
+         'ai_content_generations_output_format_check','ai_content_generations_purpose_check',
+         'ai_content_proposal_batches_purpose_check','worker_instances_type_check'
+       ) order by conname
+    `);
+    assert.equal(canonicalChecks.rows.length, 5);
+    const definitions = canonicalChecks.rows.map((row) => row.definition).join("\n");
+    assert.match(definitions, /card_news/);
+    assert.match(definitions, /blog/);
+    assert.match(definitions, /reel/);
+    assert.match(definitions, /informational/);
+    assert.match(definitions, /marketing/);
+    assert.doesNotMatch(definitions, /single_image|channel_text|marketing_content/);
+    assert.match(definitions, /content_proposal/);
+    assert.match(definitions, /card_news/);
+    const retiredWriter = await database.query(
+      `select pg_get_functiondef(
+         'start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)'::regprocedure
+       ) definition`,
+    );
+    assert.match(retiredWriter.rows[0].definition, /ai_content_orchestration_retired/);
+    assert.doesNotMatch(retiredWriter.rows[0].definition, /insert\s+into|update\s+ai_content/i);
+  });
+});
+
 test("075 makes proposal contracts, compositions, research and model attempt evidence, prompt bindings, and release adoption events immutable", async () => {
   const migrations = await loadMigrations();
   const migration075 = migrations.find(

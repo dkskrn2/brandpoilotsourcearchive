@@ -535,10 +535,18 @@ begin
           'public.claim_ai_content_storage_cleanup(uuid,uuid,text,text,uuid,integer)',
           'public.complete_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
           'public.fail_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
-          'public.is_ai_content_storage_path_protected(uuid,text)'
+          'public.is_ai_content_storage_path_protected(uuid,text)',
+          'public.ai_content_generation_input_v3_is_valid(jsonb)',
+          'public.ai_content_plan_v2_is_valid(jsonb)',
+          'public.ai_content_manifest_v3_is_valid(jsonb)',
+          'public.enforce_ai_content_three_format_identity()',
+          'public.ai_content_cutover_storage_value_to_path(text)',
+          'public.ai_content_cutover_storage_candidates()',
+          'public.ai_content_cutover_target_ids()',
+          'public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)'
         ]) as expected(identity) join pg_proc function on function.oid=to_regprocedure(expected.identity)) function_count
     ) counts;
-  if protected_object_count<>40 then raise exception 'ai_content_075_acl_catalog_object_missing'; end if;
+  if protected_object_count<>48 then raise exception 'ai_content_075_acl_catalog_object_missing'; end if;
 
   if p_object_identity is not null and not (
     p_object_identity = any(array[
@@ -575,7 +583,15 @@ begin
       'function:public.claim_ai_content_storage_cleanup(uuid,uuid,text,text,uuid,integer)',
       'function:public.complete_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
       'function:public.fail_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
-      'function:public.is_ai_content_storage_path_protected(uuid,text)'
+      'function:public.is_ai_content_storage_path_protected(uuid,text)',
+      'function:public.ai_content_generation_input_v3_is_valid(jsonb)',
+      'function:public.ai_content_plan_v2_is_valid(jsonb)',
+      'function:public.ai_content_manifest_v3_is_valid(jsonb)',
+      'function:public.enforce_ai_content_three_format_identity()',
+      'function:public.ai_content_cutover_storage_value_to_path(text)',
+      'function:public.ai_content_cutover_storage_candidates()',
+      'function:public.ai_content_cutover_target_ids()',
+      'function:public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)'
     ])
   ) then raise exception 'ai_content_075_acl_catalog_object_invalid'; end if;
 
@@ -622,7 +638,15 @@ begin
           'public.claim_ai_content_storage_cleanup(uuid,uuid,text,text,uuid,integer)',
           'public.complete_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
           'public.fail_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
-          'public.is_ai_content_storage_path_protected(uuid,text)'
+          'public.is_ai_content_storage_path_protected(uuid,text)',
+          'public.ai_content_generation_input_v3_is_valid(jsonb)',
+          'public.ai_content_plan_v2_is_valid(jsonb)',
+          'public.ai_content_manifest_v3_is_valid(jsonb)',
+          'public.enforce_ai_content_three_format_identity()',
+          'public.ai_content_cutover_storage_value_to_path(text)',
+          'public.ai_content_cutover_storage_candidates()',
+          'public.ai_content_cutover_target_ids()',
+          'public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)'
         ]) as expected(identity) join pg_proc function on function.oid=to_regprocedure(expected.identity)
     ), base_acl as (
       select object_kind,object_identity,owner_oid,acl.grantor,acl.grantee,
@@ -821,7 +845,15 @@ begin
           'public.claim_ai_content_storage_cleanup(uuid,uuid,text,text,uuid,integer)',
           'public.complete_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
           'public.fail_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
-          'public.is_ai_content_storage_path_protected(uuid,text)'
+          'public.is_ai_content_storage_path_protected(uuid,text)',
+          'public.ai_content_generation_input_v3_is_valid(jsonb)',
+          'public.ai_content_plan_v2_is_valid(jsonb)',
+          'public.ai_content_manifest_v3_is_valid(jsonb)',
+          'public.enforce_ai_content_three_format_identity()',
+          'public.ai_content_cutover_storage_value_to_path(text)',
+          'public.ai_content_cutover_storage_candidates()',
+          'public.ai_content_cutover_target_ids()',
+          'public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)'
         ]) as expected(identity)
     ), expected_objects as (
       select * from relation_objects union all select * from function_objects
@@ -1001,7 +1033,15 @@ begin
            'function:public.claim_ai_content_storage_cleanup(uuid,uuid,text,text,uuid,integer)',
            'function:public.complete_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
            'function:public.fail_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
-           'function:public.is_ai_content_storage_path_protected(uuid,text)'
+           'function:public.is_ai_content_storage_path_protected(uuid,text)',
+           'function:public.ai_content_generation_input_v3_is_valid(jsonb)',
+           'function:public.ai_content_plan_v2_is_valid(jsonb)',
+           'function:public.ai_content_manifest_v3_is_valid(jsonb)',
+           'function:public.enforce_ai_content_three_format_identity()',
+           'function:public.ai_content_cutover_storage_value_to_path(text)',
+           'function:public.ai_content_cutover_storage_candidates()',
+           'function:public.ai_content_cutover_target_ids()',
+           'function:public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)'
          ])
         )
        and command.object_type=(case when bootstrap.cutover_075_acl_object_identity like 'table:%'
@@ -1411,7 +1451,15 @@ begin
     'public.claim_ai_content_storage_cleanup(uuid,uuid,text,text,uuid,integer)',
     'public.complete_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
     'public.fail_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
-    'public.is_ai_content_storage_path_protected(uuid,text)'
+    'public.is_ai_content_storage_path_protected(uuid,text)',
+    'public.ai_content_generation_input_v3_is_valid(jsonb)',
+    'public.ai_content_plan_v2_is_valid(jsonb)',
+    'public.ai_content_manifest_v3_is_valid(jsonb)',
+    'public.enforce_ai_content_three_format_identity()',
+    'public.ai_content_cutover_storage_value_to_path(text)',
+    'public.ai_content_cutover_storage_candidates()',
+    'public.ai_content_cutover_target_ids()',
+    'public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)'
   ] loop
     final_acl_catalog_sha256:=public.apply_ai_content_075_acl_command(
       'REVOKE','function:'||missing_relations,'PUBLIC','ALL');
