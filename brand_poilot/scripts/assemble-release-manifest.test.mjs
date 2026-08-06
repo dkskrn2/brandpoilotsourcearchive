@@ -1,4 +1,9 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import {
@@ -25,7 +30,7 @@ const allBuilt = Object.fromEntries(IMAGE_KEYS.map((key, index) => [
   { image: image(key, String((index % 9) + 1)), sourceSha: SHA_A },
 ]));
 
-test("assembles a complete schema-2 bootstrap manifest", () => {
+test("assembles a complete schema-3 bootstrap manifest", () => {
   const text = assembleReleaseManifest({
     releaseSha: SHA_A,
     currentManifest: null,
@@ -35,8 +40,10 @@ test("assembles a complete schema-2 bootstrap manifest", () => {
   });
   const manifest = parseReleaseManifest(text);
 
-  assert.equal(manifest.RELEASE_SCHEMA, "2");
+  assert.equal(manifest.RELEASE_SCHEMA, "3");
   assert.equal(manifest.RELEASE_SHA, SHA_A);
+  assert.equal(IMAGE_KEYS.includes("REEL_WORKER_IMAGE"), true);
+  assert.equal(IMAGE_KEYS.includes("MARKETING_WORKER_IMAGE"), false);
   for (const key of IMAGE_KEYS) {
     const prefix = key.slice(0, -"_IMAGE".length);
     assert.equal(manifest[key], allBuilt[key].image);
@@ -132,4 +139,97 @@ test("emits deterministic key order and a final newline", () => {
   });
   assert.equal(first, second);
   assert.equal(first.endsWith("\n"), true);
+});
+
+test("CLI assembles the one-time schema-3 cutover from checksum-bound files", () => {
+  const directory = mkdtempSync(join(tmpdir(), "brand-pilot-assembler-"));
+  const baselinePath = join(directory, "baseline.env");
+  const provenancePath = join(directory, "deployment-provenance.json");
+  const uiEvidencePath = join(directory, "customer-ui-evidence.json");
+  const retirementPath = join(directory, "marketing-retirement.json");
+  const outputPath = join(directory, "release.env");
+  const cutoverKeys = [
+    "API_IMAGE",
+    "CONTENT_PROPOSAL_WORKER_IMAGE",
+    "IMAGE_WORKER_IMAGE",
+    "CARD_NEWS_WORKER_IMAGE",
+    "BLOG_WORKER_IMAGE",
+    "REEL_WORKER_IMAGE",
+  ];
+  const preservedKeys = [
+    "DM_WORKER_IMAGE",
+    "WIKI_WORKER_IMAGE",
+    "BRAND_INTELLIGENCE_WORKER_IMAGE",
+    "SUBJECT_ANALYSIS_WORKER_IMAGE",
+  ];
+  const baselineLines = ["RELEASE_SCHEMA=3"];
+  for (const key of preservedKeys) {
+    const prefix = key.slice(0, -"_IMAGE".length);
+    baselineLines.push(`${key}=${allBuilt[key].image}`, `${prefix}_SOURCE_SHA=${SHA_A}`, `${prefix}_CHANGED=false`);
+  }
+  for (const [key, value] of Object.entries(staticValues)) baselineLines.push(`${key}=${value}`);
+  writeFileSync(baselinePath, `${baselineLines.join("\n")}\n`, { mode: 0o600 });
+
+  const uiEvidence = `${JSON.stringify({
+    contractVersion: "customer-ui-deployment-evidence.v1",
+    sourceSha: SHA_B,
+    deploymentId: "dpl_cutover_123",
+    ready: true,
+  })}\n`;
+  writeFileSync(uiEvidencePath, uiEvidence, { mode: 0o600 });
+  const builtImages = Object.fromEntries(cutoverKeys.map((key, index) => [key, {
+    image: image(key, String((index % 9) + 1)),
+    sourceSha: SHA_B,
+  }]));
+  writeFileSync(provenancePath, `${JSON.stringify({
+    contractVersion: "brand-pilot-release-provenance.v1",
+    releaseSha: SHA_B,
+    builtImages,
+    changedImageKeys: cutoverKeys,
+    customerUiEvidenceSha256: createHash("sha256").update(uiEvidence).digest("hex"),
+  })}\n`, { mode: 0o600 });
+  const retirementRecord = {
+    contractVersion: "marketing-worker-retirement.v1",
+    action: "stop_remove",
+    service: "marketing-worker-1",
+    restartAllowed: false,
+    sourceReleaseSchema: "2",
+    sourceReleaseSha: SHA_A,
+    sourceManifestSha256: "1".repeat(64),
+    legacyImage: image("marketing-worker", "a"),
+    legacySourceSha: SHA_A,
+  };
+  writeFileSync(retirementPath, `${JSON.stringify(retirementRecord)}\n`, { mode: 0o400 });
+  chmodSync(retirementPath, 0o400);
+
+  const result = spawnSync(process.execPath, [
+    "scripts/assemble-release-manifest.mjs",
+    "--schema3-baseline", baselinePath,
+    "--candidate-provenance", provenancePath,
+    "--customer-ui-evidence", uiEvidencePath,
+    "--retirement-record", retirementPath,
+    "--output", outputPath,
+  ], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = parseReleaseManifest(readFileSync(outputPath, "utf8"));
+  assert.equal(manifest.RELEASE_SCHEMA, "3");
+  assert.equal(manifest.RELEASE_SHA, SHA_B);
+  assert.equal(manifest.REEL_WORKER_CHANGED, "true");
+  assert.equal(manifest.DM_WORKER_CHANGED, "false");
+  assert.equal(Object.hasOwn(manifest, "MARKETING_WORKER_IMAGE"), false);
+  assert.equal(result.stdout, `${JSON.stringify({
+    releaseSha: SHA_B,
+    manifestSha256: createHash("sha256").update(readFileSync(outputPath)).digest("hex"),
+  })}\n`);
+
+  const duplicate = spawnSync(process.execPath, [
+    "scripts/assemble-release-manifest.mjs",
+    "--schema3-baseline", baselinePath,
+    "--candidate-provenance", provenancePath,
+    "--customer-ui-evidence", uiEvidencePath,
+    "--retirement-record", retirementPath,
+    "--output", outputPath,
+  ], { encoding: "utf8" });
+  assert.notEqual(duplicate.status, 0);
+  assert.match(duplicate.stderr, /assembler_output_exists/);
 });

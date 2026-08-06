@@ -1,3 +1,8 @@
+import { createHash } from "node:crypto";
+import { open, readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
 export const IMAGE_KEYS = Object.freeze([
   "API_IMAGE",
   "DM_WORKER_IMAGE",
@@ -8,7 +13,7 @@ export const IMAGE_KEYS = Object.freeze([
   "IMAGE_WORKER_IMAGE",
   "CARD_NEWS_WORKER_IMAGE",
   "BLOG_WORKER_IMAGE",
-  "MARKETING_WORKER_IMAGE",
+  "REEL_WORKER_IMAGE",
 ]);
 
 const STATIC_KEYS = Object.freeze([
@@ -17,6 +22,22 @@ const STATIC_KEYS = Object.freeze([
   "PRIMARY_HOST",
   "ACME_EMAIL",
   "API_ENV_FILE",
+]);
+
+const CUTOVER_IMAGE_KEYS = Object.freeze([
+  "API_IMAGE",
+  "CONTENT_PROPOSAL_WORKER_IMAGE",
+  "IMAGE_WORKER_IMAGE",
+  "CARD_NEWS_WORKER_IMAGE",
+  "BLOG_WORKER_IMAGE",
+  "REEL_WORKER_IMAGE",
+]);
+
+const PRESERVED_IMAGE_KEYS = Object.freeze([
+  "DM_WORKER_IMAGE",
+  "WIKI_WORKER_IMAGE",
+  "BRAND_INTELLIGENCE_WORKER_IMAGE",
+  "SUBJECT_ANALYSIS_WORKER_IMAGE",
 ]);
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
@@ -51,15 +72,50 @@ const normalizeCurrent = (currentManifest) => {
   return typeof currentManifest === "string" ? parseReleaseManifest(currentManifest) : { ...currentManifest };
 };
 
+const validateRetirementRecord = (record) => {
+  const expectedKeys = [
+    "contractVersion",
+    "action",
+    "service",
+    "restartAllowed",
+    "sourceReleaseSchema",
+    "sourceReleaseSha",
+    "sourceManifestSha256",
+    "legacyImage",
+    "legacySourceSha",
+  ].sort();
+  const actualKeys = record && typeof record === "object" && !Array.isArray(record)
+    ? Object.keys(record).sort()
+    : [];
+  if (actualKeys.length !== expectedKeys.length
+    || actualKeys.some((key, index) => key !== expectedKeys[index])
+    || record?.contractVersion !== "marketing-worker-retirement.v1"
+    || record?.action !== "stop_remove"
+    || record?.service !== "marketing-worker-1"
+    || record?.restartAllowed !== false
+    || !new Set(["1", "2"]).has(record?.sourceReleaseSchema)
+    || !SHA_PATTERN.test(String(record?.sourceReleaseSha ?? ""))
+    || !IMAGE_PATTERN.test(String(record?.legacyImage ?? ""))
+    || !SHA_PATTERN.test(String(record?.legacySourceSha ?? ""))
+    || !/^[0-9a-f]{64}$/.test(String(record?.sourceManifestSha256 ?? ""))) {
+    throw new Error("marketing_retirement_record_invalid");
+  }
+};
+
 export function assembleReleaseManifest({
   releaseSha,
   currentManifest,
   builtImages,
   changedImageKeys,
   staticValues,
+  retirementRecord,
 }) {
   requireSha(releaseSha, "release_sha_invalid");
   const current = normalizeCurrent(currentManifest);
+  if (current?.RELEASE_SCHEMA === "3" && !current.RELEASE_SHA) {
+    if (!retirementRecord) throw new Error("marketing_retirement_record_required");
+    validateRetirementRecord(retirementRecord);
+  }
   const built = builtImages ?? {};
   const changed = new Set(changedImageKeys ?? []);
 
@@ -68,9 +124,15 @@ export function assembleReleaseManifest({
   }
 
   const values = {
-    RELEASE_SCHEMA: "2",
+    RELEASE_SCHEMA: "3",
     RELEASE_SHA: releaseSha,
   };
+  if (retirementRecord) {
+    validateRetirementRecord(retirementRecord);
+    values.MARKETING_RETIREMENT_SHA256 = createHash("sha256")
+      .update(`${JSON.stringify(retirementRecord)}\n`)
+      .digest("hex");
+  }
 
   for (const key of IMAGE_KEYS) {
     const prefix = prefixFor(key);
@@ -105,6 +167,7 @@ export function assembleReleaseManifest({
   const orderedKeys = [
     "RELEASE_SCHEMA",
     "RELEASE_SHA",
+    ...(values.MARKETING_RETIREMENT_SHA256 ? ["MARKETING_RETIREMENT_SHA256"] : []),
     ...IMAGE_KEYS.flatMap((key) => {
       const prefix = prefixFor(key);
       return [key, `${prefix}_SOURCE_SHA`, `${prefix}_CHANGED`];
@@ -112,4 +175,147 @@ export function assembleReleaseManifest({
     ...STATIC_KEYS,
   ];
   return `${orderedKeys.map((key) => `${key}=${values[key]}`).join("\n")}\n`;
+}
+
+const requireExactKeys = (value, expected, code) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(code);
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) throw new Error(code);
+};
+
+const parseCanonicalJson = (source, code) => {
+  let value;
+  try {
+    value = JSON.parse(source);
+  } catch {
+    throw new Error(code);
+  }
+  if (source !== `${JSON.stringify(value)}\n`) throw new Error(code);
+  return value;
+};
+
+const validateSchema3Baseline = (source) => {
+  const baseline = parseReleaseManifest(source);
+  const allowed = new Set(["RELEASE_SCHEMA", ...STATIC_KEYS]);
+  for (const key of PRESERVED_IMAGE_KEYS) {
+    const prefix = prefixFor(key);
+    allowed.add(key);
+    allowed.add(`${prefix}_SOURCE_SHA`);
+    allowed.add(`${prefix}_CHANGED`);
+  }
+  if (baseline.RELEASE_SCHEMA !== "3" || Object.hasOwn(baseline, "RELEASE_SHA")) {
+    throw new Error("assembler_schema3_baseline_invalid");
+  }
+  for (const key of Object.keys(baseline)) {
+    if (!allowed.has(key)) throw new Error("assembler_schema3_baseline_invalid");
+  }
+  return source;
+};
+
+const parseArguments = (argv) => {
+  const names = [
+    "--schema3-baseline",
+    "--candidate-provenance",
+    "--customer-ui-evidence",
+    "--retirement-record",
+    "--output",
+  ];
+  const allowed = new Set(names);
+  const values = new Map();
+  for (let index = 0; index < argv.length; index += 2) {
+    const key = argv[index];
+    const value = argv[index + 1];
+    if (!allowed.has(key) || !value || values.has(key)) throw new Error("assembler_usage_invalid");
+    values.set(key, resolve(value));
+  }
+  if (argv.length !== names.length * 2 || values.size !== names.length) throw new Error("assembler_usage_invalid");
+  if (new Set(values.values()).size !== values.size) throw new Error("assembler_path_collision");
+  return values;
+};
+
+async function writeExclusive(path, contents) {
+  let handle;
+  try {
+    handle = await open(path, "wx", 0o600);
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "EEXIST") throw new Error("assembler_output_exists");
+    throw error;
+  }
+  try {
+    await handle.writeFile(contents, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function main(argv) {
+  const args = parseArguments(argv);
+  const [baselineSource, provenanceSource, uiEvidenceSource, retirementSource] = await Promise.all([
+    readFile(args.get("--schema3-baseline"), "utf8"),
+    readFile(args.get("--candidate-provenance"), "utf8"),
+    readFile(args.get("--customer-ui-evidence"), "utf8"),
+    readFile(args.get("--retirement-record"), "utf8"),
+  ]);
+  const currentManifest = validateSchema3Baseline(baselineSource);
+  const provenance = parseCanonicalJson(provenanceSource, "assembler_candidate_provenance_invalid");
+  requireExactKeys(provenance, [
+    "contractVersion",
+    "releaseSha",
+    "builtImages",
+    "changedImageKeys",
+    "customerUiEvidenceSha256",
+  ], "assembler_candidate_provenance_invalid");
+  if (provenance.contractVersion !== "brand-pilot-release-provenance.v1") {
+    throw new Error("assembler_candidate_provenance_invalid");
+  }
+  requireSha(provenance.releaseSha, "assembler_candidate_provenance_invalid");
+  if (!Array.isArray(provenance.changedImageKeys)
+    || provenance.changedImageKeys.length !== CUTOVER_IMAGE_KEYS.length
+    || provenance.changedImageKeys.some((key, index) => key !== CUTOVER_IMAGE_KEYS[index])) {
+    throw new Error("assembler_cutover_component_set_invalid");
+  }
+  requireExactKeys(provenance.builtImages, CUTOVER_IMAGE_KEYS, "assembler_cutover_component_set_invalid");
+  for (const key of CUTOVER_IMAGE_KEYS) {
+    requireExactKeys(provenance.builtImages[key], ["image", "sourceSha"], "assembler_candidate_provenance_invalid");
+    requireImage(provenance.builtImages[key].image, "assembler_candidate_provenance_invalid");
+    if (provenance.builtImages[key].sourceSha !== provenance.releaseSha) {
+      throw new Error("assembler_candidate_provenance_invalid");
+    }
+  }
+
+  const uiEvidenceHash = createHash("sha256").update(uiEvidenceSource).digest("hex");
+  if (provenance.customerUiEvidenceSha256 !== uiEvidenceHash) throw new Error("assembler_customer_ui_evidence_mismatch");
+  const uiEvidence = parseCanonicalJson(uiEvidenceSource, "assembler_customer_ui_evidence_invalid");
+  requireExactKeys(uiEvidence, ["contractVersion", "sourceSha", "deploymentId", "ready"], "assembler_customer_ui_evidence_invalid");
+  if (uiEvidence.contractVersion !== "customer-ui-deployment-evidence.v1"
+    || uiEvidence.sourceSha !== provenance.releaseSha
+    || uiEvidence.ready !== true
+    || !/^[A-Za-z0-9._:-]{1,200}$/.test(String(uiEvidence.deploymentId ?? ""))) {
+    throw new Error("assembler_customer_ui_evidence_invalid");
+  }
+
+  const retirementRecord = parseCanonicalJson(retirementSource, "marketing_retirement_record_invalid");
+  validateRetirementRecord(retirementRecord);
+  const release = assembleReleaseManifest({
+    releaseSha: provenance.releaseSha,
+    currentManifest,
+    builtImages: provenance.builtImages,
+    changedImageKeys: provenance.changedImageKeys,
+    staticValues: null,
+    retirementRecord,
+  });
+  await writeExclusive(args.get("--output"), release);
+  process.stdout.write(`${JSON.stringify({
+    releaseSha: provenance.releaseSha,
+    manifestSha256: createHash("sha256").update(release).digest("hex"),
+  })}\n`);
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main(process.argv.slice(2)).catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : "assembler_failed"}\n`);
+    process.exitCode = 1;
+  });
 }

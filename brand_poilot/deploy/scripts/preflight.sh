@@ -140,7 +140,7 @@ SUBJECT_ANALYSIS_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/subject-analysis-worker-1.en
 IMAGE_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/image-worker-1.env"
 CARD_NEWS_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/card-news-worker-1.env"
 BLOG_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/blog-worker-1.env"
-MARKETING_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/marketing-worker-1.env"
+REEL_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/reel-worker-1.env"
 [[ "${RELEASE_MANIFEST[API_ENV_FILE]}" == "$API_ENV_FILE" ]] ||
   fail "manifest_api_env_file_not_fixed"
 require_file_mode_600 "$API_ENV_FILE" "bpdeploy"
@@ -153,7 +153,7 @@ require_file_mode_600 "$SUBJECT_ANALYSIS_WORKER_1_ENV_FILE" "bpdeploy"
 require_file_mode_600 "$IMAGE_WORKER_1_ENV_FILE" "bpdeploy"
 require_file_mode_600 "$CARD_NEWS_WORKER_1_ENV_FILE" "bpdeploy"
 require_file_mode_600 "$BLOG_WORKER_1_ENV_FILE" "bpdeploy"
-require_file_mode_600 "$MARKETING_WORKER_1_ENV_FILE" "bpdeploy"
+require_file_mode_600 "$REEL_WORKER_1_ENV_FILE" "bpdeploy"
 status_ok "shared_env_files"
 
 require_exact_boolean "LOCAL_SCHEDULER_ENABLED" "false" "$API_ENV_FILE"
@@ -194,7 +194,7 @@ export SUBJECT_ANALYSIS_WORKER_IMAGE="${RELEASE_MANIFEST[SUBJECT_ANALYSIS_WORKER
 export IMAGE_WORKER_IMAGE="${RELEASE_MANIFEST[IMAGE_WORKER_IMAGE]}"
 export CARD_NEWS_WORKER_IMAGE="${RELEASE_MANIFEST[CARD_NEWS_WORKER_IMAGE]}"
 export BLOG_WORKER_IMAGE="${RELEASE_MANIFEST[BLOG_WORKER_IMAGE]}"
-export MARKETING_WORKER_IMAGE="${RELEASE_MANIFEST[MARKETING_WORKER_IMAGE]}"
+export REEL_WORKER_IMAGE="${RELEASE_MANIFEST[REEL_WORKER_IMAGE]}"
 docker compose -p brand-pilot \
   -f "$RELEASE_DIR/compose.production.yml" \
   --env-file "$MANIFEST" config --quiet >/dev/null
@@ -219,7 +219,7 @@ CODEX_WORKER_IMAGE_KEYS=(
   IMAGE_WORKER_IMAGE
   CARD_NEWS_WORKER_IMAGE
   BLOG_WORKER_IMAGE
-  MARKETING_WORKER_IMAGE
+  REEL_WORKER_IMAGE
 )
 for codex_worker_image_key in "${CODEX_WORKER_IMAGE_KEYS[@]}"; do
   codex_worker_image="${RELEASE_MANIFEST[$codex_worker_image_key]}"

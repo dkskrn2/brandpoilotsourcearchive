@@ -22,6 +22,12 @@ test("builds the shared DM and Wiki image once for DM worker changes", () => {
   assert.deepEqual(enabled(impact), ["dmWikiWorker"]);
 });
 
+test("classifies reel worker changes without reviving the retired marketing worker component", () => {
+  const impact = classifyChangedPaths(["brand_poilot/workers/brand-pilot-reel-worker/src/worker.ts"]);
+  assert.deepEqual(enabled(impact), ["reelWorker"]);
+  assert.equal(SERVER_COMPONENTS.includes("marketingWorker"), false);
+});
+
 test("widens shared runtime and dependency graph changes to every server image", () => {
   for (const path of [
     "brand_poilot/workers/brand-pilot-worker-runtime/src/index.ts",

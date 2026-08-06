@@ -349,15 +349,15 @@ services:
         max-size: 10m
         max-file: "5"
 
-  marketing-worker-1:
+  reel-worker-1:
     profiles:
-      - "marketing-worker-1"
-    image: ${MARKETING_WORKER_IMAGE:?MARKETING_WORKER_IMAGE is required}
+      - "reel-worker-1"
+    image: ${REEL_WORKER_IMAGE:?REEL_WORKER_IMAGE is required}
     env_file:
-      - ${MARKETING_WORKER_1_ENV_FILE:-/opt/brand-pilot/shared/env/marketing-worker-1.env}
+      - ${REEL_WORKER_1_ENV_FILE:-/opt/brand-pilot/shared/env/reel-worker-1.env}
     environment:
       CODEX_HOME: /codex
-      MARKETING_WORKER_ID: marketing-worker-1
+      REEL_WORKER_ID: reel-worker-1
     user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
     restart: unless-stopped
     init: true

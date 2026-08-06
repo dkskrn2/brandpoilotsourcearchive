@@ -10,7 +10,7 @@ export const SERVER_COMPONENTS = Object.freeze([
   "imageWorker",
   "cardNewsWorker",
   "blogWorker",
-  "marketingWorker",
+  "reelWorker",
 ]);
 
 const COMPONENTS = Object.freeze(["customerUi", ...SERVER_COMPONENTS]);
@@ -23,7 +23,7 @@ const WORKER_PATHS = Object.freeze([
   ["workers/brand-pilot-image-worker/", "imageWorker"],
   ["workers/brand-pilot-card-news-worker/", "cardNewsWorker"],
   ["workers/brand-pilot-blog-worker/", "blogWorker"],
-  ["workers/brand-pilot-marketing-worker/", "marketingWorker"],
+  ["workers/brand-pilot-reel-worker/", "reelWorker"],
 ]);
 
 const RELEASE_TOOLING_TEST_PATHS = new Set([

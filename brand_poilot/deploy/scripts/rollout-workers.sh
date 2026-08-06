@@ -21,6 +21,12 @@ reconcile_transition_or_fail "$ROOT" "${READY_TIMEOUT_SECONDS:-120}"
 validate_release_directory "$RELEASE_DIR"
 require_worker_image_manifest
 RELEASE_SHA="${RELEASE_MANIFEST[RELEASE_SHA]}"
+MARKETING_CUTOVER=false
+if [[ -v "RELEASE_MANIFEST[MARKETING_RETIREMENT_SHA256]" ]]; then
+  MARKETING_CUTOVER=true
+  [[ "${RELEASE_MANIFEST[REEL_WORKER_CHANGED]}" == "true" ]] ||
+    fail "marketing_cutover_reel_change_required"
+fi
 
 CURRENT_SHA=""
 load_required_state_sha "$ROOT/state/current" CURRENT_SHA
@@ -35,7 +41,7 @@ declare -A SERVICES_BY_IMAGE=(
   [IMAGE_WORKER_IMAGE]="image-worker-1"
   [CARD_NEWS_WORKER_IMAGE]="card-news-worker-1"
   [BLOG_WORKER_IMAGE]="blog-worker-1"
-  [MARKETING_WORKER_IMAGE]="marketing-worker-1"
+  [REEL_WORKER_IMAGE]="reel-worker-1"
 )
 declare -A IMAGE_BY_SERVICE=(
   [dm-worker-1]="DM_WORKER_IMAGE"
@@ -47,7 +53,7 @@ declare -A IMAGE_BY_SERVICE=(
   [image-worker-1]="IMAGE_WORKER_IMAGE"
   [card-news-worker-1]="CARD_NEWS_WORKER_IMAGE"
   [blog-worker-1]="BLOG_WORKER_IMAGE"
-  [marketing-worker-1]="MARKETING_WORKER_IMAGE"
+  [reel-worker-1]="REEL_WORKER_IMAGE"
 )
 declare -A CANDIDATE_IMAGES=()
 declare -a CHANGED_IMAGE_KEYS=()
@@ -71,12 +77,25 @@ PREVIOUS_SHA=""
 load_required_state_sha "$ROOT/state/previous" PREVIOUS_SHA
 [[ "$PREVIOUS_SHA" != "$RELEASE_SHA" ]] || fail "worker_rollout_previous_release_invalid"
 PREVIOUS_DIR="$ROOT/releases/$PREVIOUS_SHA"
-validate_release_directory "$PREVIOUS_DIR"
-require_worker_image_manifest
+if [[ "$MARKETING_CUTOVER" == "true" ]]; then
+  validate_legacy_marketing_cutover_source "$PREVIOUS_DIR"
+else
+  validate_release_directory "$PREVIOUS_DIR"
+  require_worker_image_manifest
+fi
 
 declare -A PREVIOUS_IMAGES=()
 for image_key in "${WORKER_IMAGE_KEYS[@]}"; do
-  PREVIOUS_IMAGES["$image_key"]="${RELEASE_MANIFEST[$image_key]}"
+  if [[ "$MARKETING_CUTOVER" == "true" ]]; then
+    if [[ "$image_key" == "REEL_WORKER_IMAGE" ]]; then
+      PREVIOUS_IMAGES["$image_key"]="${CANDIDATE_IMAGES[$image_key]}"
+    else
+      PREVIOUS_IMAGES["$image_key"]="$(legacy_release_manifest_value "$PREVIOUS_DIR/release.env" "$image_key")"
+      require_digest_image "${PREVIOUS_IMAGES[$image_key]}"
+    fi
+  else
+    PREVIOUS_IMAGES["$image_key"]="${RELEASE_MANIFEST[$image_key]}"
+  fi
 done
 
 export_release_images() {
@@ -90,11 +109,14 @@ export_release_images() {
   export IMAGE_WORKER_IMAGE="${source_images[IMAGE_WORKER_IMAGE]}"
   export CARD_NEWS_WORKER_IMAGE="${source_images[CARD_NEWS_WORKER_IMAGE]}"
   export BLOG_WORKER_IMAGE="${source_images[BLOG_WORKER_IMAGE]}"
-  export MARKETING_WORKER_IMAGE="${source_images[MARKETING_WORKER_IMAGE]}"
+  export REEL_WORKER_IMAGE="${source_images[REEL_WORKER_IMAGE]}"
 }
 
 declare -a ALL_CHANGED_PROFILE_ARGS=()
 for service in "${CHANGED_SERVICES[@]}"; do
+  if [[ "$MARKETING_CUTOVER" == "true" && "$service" == "reel-worker-1" ]]; then
+    continue
+  fi
   ALL_CHANGED_PROFILE_ARGS+=(--profile "$service")
 done
 
@@ -106,6 +128,11 @@ running_before="$("${previous_compose_all[@]}" ps --status running --services)"
 declare -a ROLLOUT_SERVICES=()
 declare -a ROLLOUT_IMAGE_KEYS=()
 for image_key in "${CHANGED_IMAGE_KEYS[@]}"; do
+  if [[ "$MARKETING_CUTOVER" == "true" && "$image_key" == "REEL_WORKER_IMAGE" ]]; then
+    ROLLOUT_SERVICES+=("reel-worker-1")
+    ROLLOUT_IMAGE_KEYS+=("REEL_WORKER_IMAGE")
+    continue
+  fi
   image_is_active=false
   read -r -a mapped_services <<<"${SERVICES_BY_IMAGE[$image_key]}"
   for service in "${mapped_services[@]}"; do
@@ -128,6 +155,9 @@ fi
 # to use that manifest as a recovery target unless it matches the actual
 # pre-rollout containers exactly.
 for service in "${ROLLOUT_SERVICES[@]}"; do
+  if [[ "$MARKETING_CUTOVER" == "true" && "$service" == "reel-worker-1" ]]; then
+    continue
+  fi
   container_id="$("${previous_compose_all[@]}" ps -q "$service")"
   [[ "$container_id" =~ ^[0-9a-f]{12,64}$ ]] || fail "worker_previous_runtime_mismatch"
   running_image="$(docker inspect --format '{{.Config.Image}}' "$container_id")" ||
@@ -143,16 +173,25 @@ HEARTBEAT_VERIFIER="${WORKER_HEARTBEAT_VERIFY_SCRIPT:-}"
   fail "worker_heartbeat_evidence_required"
 
 declare -a PROFILE_ARGS=()
+declare -a PREVIOUS_PROFILE_ARGS=()
+declare -a RECOVERY_SERVICES=()
 for service in "${ROLLOUT_SERVICES[@]}"; do
   PROFILE_ARGS+=(--profile "$service")
+  if [[ "$MARKETING_CUTOVER" != "true" || "$service" != "reel-worker-1" ]]; then
+    PREVIOUS_PROFILE_ARGS+=(--profile "$service")
+    RECOVERY_SERVICES+=("$service")
+  fi
 done
 
-previous_compose=(docker compose -p brand-pilot -f "$PREVIOUS_DIR/compose.production.yml" --env-file "$PREVIOUS_DIR/release.env" "${PROFILE_ARGS[@]}")
+previous_compose=(docker compose -p brand-pilot -f "$PREVIOUS_DIR/compose.production.yml" --env-file "$PREVIOUS_DIR/release.env" "${PREVIOUS_PROFILE_ARGS[@]}")
 candidate_compose=(docker compose -p brand-pilot -f "$RELEASE_DIR/compose.production.yml" --env-file "$RELEASE_DIR/release.env" "${PROFILE_ARGS[@]}")
 
 # Pull and inspect the previous immutable images before mutation so recovery does
 # not depend on a registry request after a failed rollout.
 for image_key in "${ROLLOUT_IMAGE_KEYS[@]}"; do
+  if [[ "$MARKETING_CUTOVER" == "true" && "$image_key" == "REEL_WORKER_IMAGE" ]]; then
+    continue
+  fi
   docker pull --quiet "${PREVIOUS_IMAGES[$image_key]}" >/dev/null || fail "worker_previous_image_pull_failed"
 done
 "${previous_compose[@]}" config --quiet >/dev/null
@@ -172,15 +211,24 @@ recover_previous_workers() {
   local exit_code="$?"
   trap - EXIT
   if [[ "$exit_code" -ne 0 && "$ROLLOUT_MUTATED" == "true" ]]; then
-    export_release_images PREVIOUS_IMAGES
-    "${previous_compose[@]}" up -d --no-deps --pull never --force-recreate "${ROLLOUT_SERVICES[@]}" ||
-      printf '%s\n' "error=worker_previous_release_recovery_failed" >&2
+    if [[ "$MARKETING_CUTOVER" == "true" ]]; then
+      "${candidate_compose[@]}" stop --timeout 30 reel-worker-1 >/dev/null 2>&1 || true
+      "${candidate_compose[@]}" rm -f reel-worker-1 >/dev/null 2>&1 || true
+    fi
+    if [[ "${#RECOVERY_SERVICES[@]}" -gt 0 ]]; then
+      export_release_images PREVIOUS_IMAGES
+      "${previous_compose[@]}" up -d --no-deps --pull never --force-recreate "${RECOVERY_SERVICES[@]}" ||
+        printf '%s\n' "error=worker_previous_release_recovery_failed" >&2
+    fi
   fi
   exit "$exit_code"
 }
 trap recover_previous_workers EXIT
 
 ROLLOUT_MUTATED=true
+if [[ "$MARKETING_CUTOVER" == "true" ]]; then
+  retire_legacy_marketing_worker "$PREVIOUS_DIR"
+fi
 "${candidate_compose[@]}" up -d --no-deps --pull never --force-recreate "${ROLLOUT_SERVICES[@]}"
 
 running_services="$("${candidate_compose[@]}" ps --status running --services)"
@@ -193,3 +241,6 @@ done
 
 trap - EXIT
 printf 'worker_rollout=ok\nrelease_sha=%s\n' "$RELEASE_SHA"
+if [[ "$MARKETING_CUTOVER" == "true" ]]; then
+  printf '%s\n' "marketing_worker_retirement=ok"
+fi

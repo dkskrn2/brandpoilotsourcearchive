@@ -35,7 +35,7 @@ const deploymentArtifacts = [
   "workers/brand-pilot-image-worker/Dockerfile",
   "workers/brand-pilot-card-news-worker/Dockerfile",
   "workers/brand-pilot-blog-worker/Dockerfile",
-  "workers/brand-pilot-marketing-worker/Dockerfile",
+  "workers/brand-pilot-reel-worker/Dockerfile",
   "deploy/compose.production.yml",
   "deploy/Caddyfile",
   "deploy/Caddyfile.canary",
@@ -49,7 +49,7 @@ const deploymentArtifacts = [
   "deploy/env/image-worker.env.example",
   "deploy/env/card-news-worker.env.example",
   "deploy/env/blog-worker.env.example",
-  "deploy/env/marketing-worker.env.example",
+  "deploy/env/reel-worker.env.example",
   "deploy/scripts/preflight.sh",
   "deploy/scripts/deploy.sh",
   "deploy/scripts/rollout-workers.sh",
@@ -918,11 +918,11 @@ test("optional workers use dedicated profiles, identities, env files, and harden
       env: "BLOG_WORKER_1_ENV_FILE",
       identity: "BLOG_WORKER_ID: blog-worker-1",
     }],
-    ["marketing-worker-1", {
-      profile: "marketing-worker-1",
-      image: "MARKETING_WORKER_IMAGE",
-      env: "MARKETING_WORKER_1_ENV_FILE",
-      identity: "MARKETING_WORKER_ID: marketing-worker-1",
+    ["reel-worker-1", {
+      profile: "reel-worker-1",
+      image: "REEL_WORKER_IMAGE",
+      env: "REEL_WORKER_1_ENV_FILE",
+      identity: "REEL_WORKER_ID: reel-worker-1",
     }],
   ]);
 
@@ -1004,10 +1004,10 @@ test("Task 6 gives every CLI worker an isolated explicit Compose profile and wri
       "CARD_NEWS_WORKER_ID: card-news-worker-1",
     ]],
     ["blog-worker-1", ["BLOG_WORKER_IMAGE", "BLOG_WORKER_1_ENV_FILE", "BLOG_WORKER_ID: blog-worker-1"]],
-    ["marketing-worker-1", [
-      "MARKETING_WORKER_IMAGE",
-      "MARKETING_WORKER_1_ENV_FILE",
-      "MARKETING_WORKER_ID: marketing-worker-1",
+    ["reel-worker-1", [
+      "REEL_WORKER_IMAGE",
+      "REEL_WORKER_1_ENV_FILE",
+      "REEL_WORKER_ID: reel-worker-1",
     ]],
   ]);
   const runtimeUser =
@@ -1046,7 +1046,7 @@ test("Task 6 gives every CLI worker an isolated explicit Compose profile and wri
     "image-worker-1",
     "card-news-worker-1",
     "blog-worker-1",
-    "marketing-worker-1",
+    "reel-worker-1",
   ]) {
     const imageTmpfs = parseServiceList(services.get(serviceName), "tmpfs");
     assert.ok(
@@ -1077,7 +1077,7 @@ test("Task 6 release plumbing validates every immutable worker image and the per
     "IMAGE_WORKER_IMAGE",
     "CARD_NEWS_WORKER_IMAGE",
     "BLOG_WORKER_IMAGE",
-    "MARKETING_WORKER_IMAGE",
+    "REEL_WORKER_IMAGE",
   ];
 
   for (const key of workerImageKeys) {
@@ -1121,7 +1121,7 @@ test("Task 6 release plumbing validates every immutable worker image and the per
     "IMAGE_WORKER_IMAGE",
     "CARD_NEWS_WORKER_IMAGE",
     "BLOG_WORKER_IMAGE",
-    "MARKETING_WORKER_IMAGE",
+    "REEL_WORKER_IMAGE",
   ]) {
     assert.ok(runtimeBlock.includes(key), `Codex runtime preflight missing ${key}`);
   }
@@ -1168,7 +1168,7 @@ test("Task 6 deployment env examples expose only real worker settings and never 
       "CARD_NEWS_CODEX_TIMEOUT_MS",
     ]],
     ["deploy/env/blog-worker.env.example", ["BLOG_CODEX_COMMAND", "BLOG_CODEX_TIMEOUT_MS"]],
-    ["deploy/env/marketing-worker.env.example", ["MARKETING_CODEX_COMMAND", "MARKETING_CODEX_TIMEOUT_MS"]],
+    ["deploy/env/reel-worker.env.example", ["REEL_CODEX_PLAN_COMMAND", "REEL_CODEX_PLAN_TIMEOUT_MS"]],
   ]);
 
   for (const [path, requiredKeys] of expected) {
@@ -1244,10 +1244,10 @@ test("all CLI worker images install the pinned Codex runtime and run real entryp
       entrypoint: /workers\/brand-pilot-blog-worker\/dist\/index\.js/,
       assets: [/run-codex-blog\.mjs/, /blog-writer\/SKILL\.md/],
     }],
-    ["marketing", {
-      path: "workers/brand-pilot-marketing-worker/Dockerfile",
-      entrypoint: /workers\/brand-pilot-marketing-worker\/dist\/index\.js/,
-      assets: [/run-codex-marketing\.mjs/, /marketing-creative\/SKILL\.md/],
+    ["reel", {
+      path: "workers/brand-pilot-reel-worker/Dockerfile",
+      entrypoint: /workers\/brand-pilot-reel-worker\/dist\/index\.js/,
+      assets: [/run-codex-reel-plan\.mjs/, /reel-plan-v2\.schema\.json/],
     }],
   ]);
 
@@ -1851,14 +1851,16 @@ test("release manifests are parsed without source or eval and preflight is fail-
   assert.match(lib, /manifest_unknown_key/);
   assert.match(lib, /manifest_duplicate_key/);
   for (const key of [
-    "RELEASE_SCHEMA", "RELEASE_SHA", "API_IMAGE", "API_SOURCE_SHA", "API_CHANGED",
+    "RELEASE_SCHEMA", "RELEASE_SHA", "API_IMAGE",
     "DM_WORKER_IMAGE", "WIKI_WORKER_IMAGE", "CONTENT_PROPOSAL_WORKER_IMAGE",
     "BRAND_INTELLIGENCE_WORKER_IMAGE", "SUBJECT_ANALYSIS_WORKER_IMAGE", "IMAGE_WORKER_IMAGE",
-    "CARD_NEWS_WORKER_IMAGE", "BLOG_WORKER_IMAGE", "MARKETING_WORKER_IMAGE",
+    "CARD_NEWS_WORKER_IMAGE", "BLOG_WORKER_IMAGE", "REEL_WORKER_IMAGE",
     "CADDY_IMAGE", "CANARY_HOST", "PRIMARY_HOST", "ACME_EMAIL", "API_ENV_FILE",
   ]) {
     assert.ok(lib.includes(key), `manifest parser omits ${key}`);
   }
+  assert.match(lib, /\$\{prefix\}_SOURCE_SHA/);
+  assert.match(lib, /\$\{prefix\}_CHANGED/);
   assert.match(preflight, /VERSION_ID=.*24\\?\.04|24\\?\.04.*VERSION_ID/);
   assert.match(preflight, /dpkg --print-architecture/);
   assert.match(preflight, /COMPOSE_MINOR >= 24/);
@@ -1905,13 +1907,13 @@ test("release validation accepts signed schema-1 layouts while requiring the ful
   );
   assert.match(
     lib,
-    /validate_state_release_directory\(\)[\s\S]*validation_role="candidate"[\s\S]*RELEASE_SCHEMA=1[\s\S]*validation_role="legacy-current"/,
+    /validate_state_release_directory\(\)[\s\S]*validation_role="candidate"[\s\S]*RELEASE_SCHEMA=\[12\][\s\S]*validation_role="legacy-current"/,
   );
   assert.match(lib, /release-integrity\.sha256/);
   assert.match(lib, /scripts\/rollout-workers\.sh[\s\S]*scripts\/backup-state\.sh[\s\S]*scripts\/restore-state\.sh/);
   assert.match(
     lib,
-    /validate_state_release_directory "\$root" "\$from_current"[\s\S]*validate_state_release_directory "\$root" "\$from_candidate"[\s\S]*validate_state_release_directory "\$root" "\$from_previous"/,
+    /validate_state_release_directory "\$root" "\$\{TRANSITION_JOURNAL\[TO_RELEASE\]\}"[\s\S]*validate_state_release_directory "\$root" "\$from_current"[\s\S]*validate_state_release_directory "\$root" "\$from_candidate"/,
   );
   const promote = read("deploy/scripts/promote.sh");
   assert.match(
@@ -2211,7 +2213,7 @@ function writeReleaseManifest(directory, overrides = {}, extraLines = []) {
   mkdirSync(directory, { recursive: true });
   const digest = "a".repeat(64);
   const values = {
-    RELEASE_SCHEMA: "1",
+    RELEASE_SCHEMA: "3",
     RELEASE_SHA: "1".repeat(40),
     API_IMAGE: `ghcr.io/dkskrn2/brand-pilot-api@sha256:${digest}`,
     DM_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-dm-worker@sha256:${digest}`,
@@ -2222,7 +2224,7 @@ function writeReleaseManifest(directory, overrides = {}, extraLines = []) {
     IMAGE_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-image-worker@sha256:${digest}`,
     CARD_NEWS_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-card-news-worker@sha256:${digest}`,
     BLOG_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-blog-worker@sha256:${digest}`,
-    MARKETING_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-marketing-worker@sha256:${digest}`,
+    REEL_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-reel-worker@sha256:${digest}`,
     CADDY_IMAGE: `docker.io/library/caddy@sha256:${digest}`,
     CANARY_HOST: "canary-api.danbammsg.co.kr",
     PRIMARY_HOST: "api.danbammsg.co.kr",
@@ -2230,6 +2232,24 @@ function writeReleaseManifest(directory, overrides = {}, extraLines = []) {
     API_ENV_FILE: "/opt/brand-pilot/shared/env/api.env",
     ...overrides,
   };
+  if (values.RELEASE_SCHEMA === "2" || values.RELEASE_SCHEMA === "3") {
+    for (const imageKey of [
+      "API_IMAGE",
+      "DM_WORKER_IMAGE",
+      "WIKI_WORKER_IMAGE",
+      "CONTENT_PROPOSAL_WORKER_IMAGE",
+      "BRAND_INTELLIGENCE_WORKER_IMAGE",
+      "SUBJECT_ANALYSIS_WORKER_IMAGE",
+      "IMAGE_WORKER_IMAGE",
+      "CARD_NEWS_WORKER_IMAGE",
+      "BLOG_WORKER_IMAGE",
+      "REEL_WORKER_IMAGE",
+    ]) {
+      const prefix = imageKey.slice(0, -"_IMAGE".length);
+      values[`${prefix}_SOURCE_SHA`] ??= values.RELEASE_SHA;
+      values[`${prefix}_CHANGED`] ??= "true";
+    }
+  }
   const manifest = join(directory, "release.env");
   const contents = [
     ...Object.entries(values).map(([key, value]) => `${key}=${value}`),
@@ -2265,7 +2285,7 @@ function seedRelease(
     IMAGE_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-image-worker@sha256:${digest}`,
     CARD_NEWS_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-card-news-worker@sha256:${digest}`,
     BLOG_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-blog-worker@sha256:${digest}`,
-    MARKETING_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-marketing-worker@sha256:${digest}`,
+    REEL_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-reel-worker@sha256:${digest}`,
     CADDY_IMAGE: `docker.io/library/caddy@sha256:${digest}`,
     API_ENV_FILE: apiEnvFile,
     ...overrides,

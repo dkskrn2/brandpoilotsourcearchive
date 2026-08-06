@@ -40,6 +40,7 @@ CURRENT_CADDY_IMAGE=""
 CURRENT_CANARY_HOST=""
 CURRENT_PRIMARY_HOST=""
 CURRENT_API_ENV_FILE=""
+ROLLBACK_RETIREMENT_SOURCE_SHA=""
 if load_optional_state_sha "$ROOT/state/current" CURRENT_SHA; then
   validate_state_release_directory "$ROOT" "$CURRENT_SHA"
   CURRENT_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
@@ -47,6 +48,9 @@ if load_optional_state_sha "$ROOT/state/current" CURRENT_SHA; then
   CURRENT_CANARY_HOST="${RELEASE_MANIFEST[CANARY_HOST]}"
   CURRENT_PRIMARY_HOST="${RELEASE_MANIFEST[PRIMARY_HOST]}"
   CURRENT_API_ENV_FILE="${RELEASE_MANIFEST[API_ENV_FILE]}"
+  if [[ -v "RELEASE_MANIFEST[MARKETING_RETIREMENT_SHA256]" ]]; then
+    ROLLBACK_RETIREMENT_SOURCE_SHA="$MARKETING_RETIREMENT_SOURCE_RELEASE_SHA"
+  fi
 fi
 CANDIDATE_SHA=""
 CANDIDATE_API_IMAGE=""
@@ -70,7 +74,13 @@ if load_optional_state_sha "$ROOT/state/previous" ORIGINAL_PREVIOUS_SHA; then
   ORIGINAL_PREVIOUS_EXISTS=true
   validate_state_release_directory "$ROOT" "$ORIGINAL_PREVIOUS_SHA"
 fi
-validate_state_release_directory "$ROOT" "$TARGET_SHA"
+if [[ -n "$ROLLBACK_RETIREMENT_SOURCE_SHA" && "$TARGET_SHA" == "$ROLLBACK_RETIREMENT_SOURCE_SHA" ]]; then
+  validate_state_release_directory "$ROOT" "$CURRENT_SHA"
+  validate_legacy_marketing_cutover_source "$ROOT/releases/$TARGET_SHA"
+  validate_release_directory "$ROOT/releases/$TARGET_SHA" legacy-current
+else
+  validate_state_release_directory "$ROOT" "$TARGET_SHA"
+fi
 TARGET_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
 TARGET_CADDY_IMAGE="${RELEASE_MANIFEST[CADDY_IMAGE]}"
 TARGET_CANARY_HOST="${RELEASE_MANIFEST[CANARY_HOST]}"

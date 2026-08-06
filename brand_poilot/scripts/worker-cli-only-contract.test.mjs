@@ -155,10 +155,10 @@ test("published server images invoke valid clean-checkout build targets in depen
       requiresRuntime: true,
     },
     {
-      name: "marketing",
-      dockerfile: "workers/brand-pilot-marketing-worker/Dockerfile",
-      packagePath: "workers/brand-pilot-marketing-worker/package.json",
-      compile: "npm run build --workspace @brand-pilot/marketing-worker",
+      name: "reel",
+      dockerfile: "workers/brand-pilot-reel-worker/Dockerfile",
+      packagePath: "workers/brand-pilot-reel-worker/package.json",
+      compile: "npm run build --workspace @brand-pilot/reel-worker",
       requiresRuntime: true,
     },
   ];
@@ -201,7 +201,7 @@ test("Codex worker images install bubblewrap for the pinned Linux sandbox", asyn
     "brand-pilot-image-worker",
     "brand-pilot-card-news-worker",
     "brand-pilot-blog-worker",
-    "brand-pilot-marketing-worker",
+    "brand-pilot-reel-worker",
   ].map((directory) => join(workerRoot, directory, "Dockerfile"));
   const violations = [];
 
