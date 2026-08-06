@@ -128,6 +128,7 @@ import type {
   WikiStatusDto
 } from "./types.js";
 import { buildPerformanceInsights, type PerformanceInsightSnapshot } from "./performanceInsights.js";
+import { proposalSha256 } from "./aiContentProposalV2Service.js";
 import type {
   CreateWikiItemInput,
   ResolveWikiIssueInput,
@@ -142,6 +143,62 @@ import { resolveWorkerResourceLimits, type WorkerResourceLimits } from "./worker
 function toIso(value: Date | string | null): string | null {
   if (!value) return null;
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+export async function loadPerformanceInsightSnapshots(
+  queryable: Pick<Pool, "query"> | Pick<PoolClient, "query">,
+  scope: { brandId: string; workspaceId?: string },
+): Promise<PerformanceInsightSnapshot[]> {
+  const result = await queryable.query(
+    `/* performance_insights_v2_authoritative */
+     select cps.id,cps.workspace_id,cps.brand_id,cps.publish_queue_id,co.title,cps.channel,
+            co.delivery_format,cps.measurement_window,cps.exposure_count,cps.raw_metrics,
+            cps.content_features,cps.collected_at,cps.updated_at,pq.published_at,
+            co.output_json,latest_attempt.external_url
+     from content_performance_snapshots cps
+     join publish_queue pq
+       on pq.id=cps.publish_queue_id and pq.workspace_id=cps.workspace_id
+      and pq.brand_id=cps.brand_id and pq.status='published'
+     join channel_outputs co
+       on co.id=cps.channel_output_id and co.workspace_id=cps.workspace_id
+      and co.brand_id=cps.brand_id
+     left join lateral (
+       select pa.external_url
+       from publish_attempts pa
+       where pa.publish_queue_id=cps.publish_queue_id and pa.workspace_id=cps.workspace_id
+         and pa.brand_id=cps.brand_id and pa.status='succeeded'
+       order by pa.finished_at desc nulls last,pa.created_at desc,pa.id desc
+       limit 1
+     ) latest_attempt on true
+     where cps.brand_id=$1
+       and ($2::uuid is null or cps.workspace_id=$2::uuid)
+       and cps.measurement_window in ('24h','72h','7d')
+       and cps.collected_at>=now()-interval '30 days'
+     order by cps.collected_at,cps.id`,
+    [scope.brandId, scope.workspaceId ?? null],
+  );
+  return result.rows.map((row) => ({
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    brandId: String(row.brand_id),
+    publishQueueId: String(row.publish_queue_id),
+    title: String(row.title),
+    channel: row.channel as Channel,
+    deliveryFormat: row.delivery_format ?? null,
+    measurementWindow: row.measurement_window,
+    exposureCount: row.exposure_count === null ? null : Number(row.exposure_count),
+    rawMetrics: row.raw_metrics ?? {},
+    contentFeatures: row.content_features ?? {},
+    collectedAt: toIso(row.collected_at)!,
+    updatedAt: toIso(row.updated_at)!,
+    publishedAt: toIso(row.published_at),
+    contentHash: proposalSha256({
+      title: String(row.title),
+      deliveryFormat: row.delivery_format ?? null,
+      outputJson: row.output_json ?? {},
+    }),
+    externalUrl: row.external_url ?? null,
+  }));
 }
 
 function dmParticipantFallback(externalId: string) {
@@ -4874,44 +4931,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     },
 
     async getPerformanceInsights(brandId): Promise<PerformanceInsightsDto> {
-      const result = await pool.query(
-        `/* performance_insights */
-         select cps.id, cps.brand_id, cps.publish_queue_id, co.title, cps.channel,
-                co.delivery_format, cps.measurement_window, cps.exposure_count,
-                cps.raw_metrics, cps.content_features, cps.collected_at,
-                latest_attempt.external_url
-         from content_performance_snapshots cps
-         join publish_queue pq
-           on pq.id = cps.publish_queue_id and pq.brand_id = cps.brand_id
-         join channel_outputs co
-           on co.id = cps.channel_output_id and co.brand_id = cps.brand_id
-         left join lateral (
-           select pa.external_url
-           from publish_attempts pa
-           where pa.publish_queue_id = cps.publish_queue_id and pa.status = 'succeeded'
-           order by pa.finished_at desc nulls last, pa.created_at desc, pa.id desc
-           limit 1
-         ) latest_attempt on true
-         where cps.brand_id = $1
-           and cps.measurement_window in ('24h', '72h', '7d')
-           and cps.collected_at >= now() - interval '30 days'
-         order by cps.collected_at, cps.id`,
-        [brandId],
-      );
-      const snapshots: PerformanceInsightSnapshot[] = result.rows.map((row) => ({
-        id: String(row.id),
-        brandId: String(row.brand_id),
-        publishQueueId: String(row.publish_queue_id),
-        title: String(row.title),
-        channel: row.channel as Channel,
-        deliveryFormat: row.delivery_format ?? null,
-        measurementWindow: row.measurement_window,
-        exposureCount: row.exposure_count === null ? null : Number(row.exposure_count),
-        rawMetrics: row.raw_metrics ?? {},
-        contentFeatures: row.content_features ?? {},
-        collectedAt: toIso(row.collected_at)!,
-        externalUrl: row.external_url ?? null,
-      }));
+      const snapshots = await loadPerformanceInsightSnapshots(pool, { brandId });
       return buildPerformanceInsights({ brandId, period: "30d", snapshots });
     },
 

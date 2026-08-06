@@ -8,7 +8,7 @@ import {
   put as putBlob,
 } from "@vercel/blob";
 import { createPool } from "./db.js";
-import { createRepository } from "./repository.js";
+import { createRepository, loadPerformanceInsightSnapshots } from "./repository.js";
 import { resolveServerHost } from "./runtime.js";
 import { createFastifyOptions, createServer } from "./httpServer.js";
 import { createServerlessHandler } from "./serverlessHandler.js";
@@ -30,6 +30,7 @@ import { createAiContentProposalV2Repository } from "./aiContentRepository.js";
 import { createAiContentProposalV2Service } from "./aiContentProposalV2Service.js";
 import { resolveContentProposalV2Input } from "./contentOrchestration.js";
 import { parseContentOrchestrationV2 } from "./aiContentGenerationInputV3.js";
+import { createPerformanceProposalAdapter } from "./performanceProposalAdapter.js";
 
 const runtimeConfig = loadApiRuntimeConfig();
 const port = Number(process.env.PORT ?? 4000);
@@ -144,6 +145,26 @@ const proposalV2Resolution = {
   }),
   now: () => new Date(),
 };
+const resolveProposalBaseInput = async (
+  rawRequest: unknown,
+  scope: { workspaceId: string; brandId: string },
+  tx: Parameters<typeof createAiContentSnapshotRepository>[0],
+) => {
+  const request = parseContentOrchestrationV2(rawRequest);
+  const resolved = await resolveContentProposalV2Input(
+    request,
+    scope,
+    {
+      ...proposalV2Resolution,
+      snapshotRepository: createAiContentSnapshotRepository(tx, aiContentSnapshotBlob),
+    },
+  );
+  return parseProposalBaseInputSnapshotV2(resolved.inputSnapshot);
+};
+const performanceProposalAdapter = createPerformanceProposalAdapter({
+  loadSnapshots: (scope, tx) => loadPerformanceInsightSnapshots(tx, scope),
+  resolveBaseInput: (request, scope, tx) => resolveProposalBaseInput(request, scope, tx),
+});
 const aiContentProposalV2Service = createAiContentProposalV2Service({
   ...proposalV2Repository,
   async assertReady() {
@@ -157,20 +178,17 @@ const aiContentProposalV2Service = createAiContentProposalV2Service({
   },
   async resolve(command, tx) {
     if (command.source === "performance_experiment") {
-      throw new Error("performance_proposal_v2_adapter_not_configured");
+      return performanceProposalAdapter.resolve(command, tx);
     }
     const request = parseContentOrchestrationV2(command.request);
-    const resolved = await resolveContentProposalV2Input(
+    const baseInput = await resolveProposalBaseInput(
       request,
       { workspaceId: command.workspaceId, brandId: command.brandId },
-      {
-        ...proposalV2Resolution,
-        snapshotRepository: createAiContentSnapshotRepository(tx, aiContentSnapshotBlob),
-      },
+      tx,
     );
     return {
       request: command.request,
-      baseInput: parseProposalBaseInputSnapshotV2(resolved.inputSnapshot),
+      baseInput,
       sourceSnapshots: [],
     };
   },

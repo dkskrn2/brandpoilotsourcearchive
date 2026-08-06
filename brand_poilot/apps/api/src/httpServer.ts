@@ -984,6 +984,25 @@ export function createServer(
       reply.code(503).send({ error: message });
       return;
     }
+    if (message === "content_proposals_disabled" || message === "content_proposal_worker_not_ready") {
+      reply.code(503).send({ error: message });
+      return;
+    }
+    if (message === "performance_evidence_stale") {
+      reply.code(412).send({ error: message });
+      return;
+    }
+    if (message === "performance_proposal_request_invalid"
+      || message === "performance_evidence_version_required"
+      || message === "performance_evidence_version_invalid"
+      || message === "performance_experiment_invalid") {
+      reply.code(400).send({ error: message });
+      return;
+    }
+    if (message === "performance_experiment_not_available") {
+      reply.code(409).send({ error: message });
+      return;
+    }
     if (message.startsWith("content_orchestration_")) {
       reply.code(400).send({ error: message });
       return;
@@ -1988,6 +2007,30 @@ export function createServer(
       }
       return repository.getDashboard(request.params.brandId);
     }
+  );
+
+  app.post<{ Params: { brandId: string }; Body: unknown }>(
+    "/brands/:brandId/performance-experiments/proposal-batches",
+    async (request, reply) => {
+      if (!aiContentProposalV2) throw new Error("content_proposal_v2_not_configured");
+      if (!isObject(request.body)
+        || Object.keys(request.body).sort().join(",") !== "evidenceVersion,experimentId"
+        || typeof request.body.experimentId !== "string"
+        || typeof request.body.evidenceVersion !== "string") {
+        throw new Error("performance_proposal_request_invalid");
+      }
+      const scope = aiContentScope(request, request.params.brandId);
+      const result = await aiContentProposalV2.service.create({
+        source: "performance_experiment",
+        workspaceId: scope.workspaceId,
+        brandId: scope.brandId,
+        actorUserId: requiredAiContentActorUserId(request),
+        experimentId: request.body.experimentId,
+        evidenceVersion: request.body.evidenceVersion,
+      });
+      reply.code(202);
+      return { batchId: result.proposalBatchId, status: "queued" };
+    },
   );
 
   app.get<{ Params: { brandId: string }; Querystring: { period?: string } }>(

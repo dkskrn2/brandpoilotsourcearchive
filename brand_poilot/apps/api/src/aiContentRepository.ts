@@ -233,6 +233,14 @@ export interface AiContentProposalBatchRecord {
   researchEvidence?: {
     items: Array<{ id: string; title: string; url: string; publisher: string | null }>;
   };
+  provenance?: {
+    kind: "performance_experiment";
+    experimentId: string;
+    evidenceVersion: string;
+    snapshotCount: number;
+    capturedFrom: string;
+    capturedTo: string;
+  };
   selectedReferences?: Array<{
     id: string;
     title: string;
@@ -640,14 +648,15 @@ export function createAiContentProposalV2Repository(pool: Pool): ProposalV2Repos
         contractSourceSha256: catalog.contractSourceHash,
         catalogSha256: EXPECTED_PROPOSAL_CATALOG_SHA256,
       });
-      await tx.query(
+      const contractResult = await tx.query<{ id: string }>(
         `insert into ai_content_proposal_job_contracts(
            job_id,batch_id,workspace_id,brand_id,request_contract_version,
            base_input_contract_version,research_contract_version,proposal_contract_version,
            proposal_prompt_version,proposal_output_schema_sha256,proposal_model_id,
            command_descriptor_sha256,request_sha256,base_input_sha256,
            contract_source_sha256,catalog_sha256,enqueue_contract_sha256
-         ) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+         ) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+         returning id`,
         [
           jobId,
           batch.id,
@@ -668,6 +677,91 @@ export function createAiContentProposalV2Repository(pool: Pool): ProposalV2Repos
           enqueueContractSha256,
         ],
       );
+      const contractId = String(contractResult.rows[0]?.id ?? "");
+      if (!contractId) throw new Error("ai_content_proposal_job_contract_insert_failed");
+      if (input.performanceAudit) {
+        const audit = input.performanceAudit;
+        if ((audit.researchEvidence === null) !== (audit.composedInput === null)) {
+          throw new Error("ai_content_proposal_performance_composition_invalid");
+        }
+        if (audit.researchEvidence && audit.composedInput) {
+          const { contractVersion: _contractVersion, ...baseFields } = input.baseInput;
+          const expectedComposition = parseProposalInputSnapshotV2({
+            ...baseFields,
+            contractVersion: "proposal-input.v2",
+            researchEvidence: audit.researchEvidence,
+          });
+          if (canonicalProposalJson(expectedComposition) !== canonicalProposalJson(audit.composedInput)) {
+            throw new Error("ai_content_proposal_performance_composition_mismatch");
+          }
+        }
+        const snapshotAuditJson = canonicalProposalJson(audit.snapshotAudit);
+        const auditResult = await tx.query<{ id: string }>(
+          `insert into ai_content_proposal_performance_audits(
+             workspace_id,brand_id,batch_id,experiment_id,experiment_definition_json,
+             evidence_version,resolved_input_fingerprint_sha256,snapshot_audit_json,
+             captured_from,captured_to
+           ) values($1,$2,$3,$4,$5::jsonb,$6,$7,$8::jsonb,$9::timestamptz,$10::timestamptz)
+           returning id`,
+          [
+            input.workspaceId,
+            input.brandId,
+            batch.id,
+            audit.experimentId,
+            canonicalProposalJson(audit.experimentDefinition),
+            audit.evidenceVersion,
+            audit.resolvedInputFingerprint,
+            snapshotAuditJson,
+            audit.capturedFrom,
+            audit.capturedTo,
+          ],
+        );
+        const auditId = String(auditResult.rows[0]?.id ?? "");
+        if (!auditId) throw new Error("ai_content_proposal_performance_audit_insert_failed");
+        if (audit.researchEvidence) {
+          await tx.query(
+            `insert into ai_content_proposal_research_snapshots(
+               workspace_id,brand_id,batch_id,evidence_json
+             ) values($1,$2,$3,$4::jsonb)`,
+            [
+              input.workspaceId,
+              input.brandId,
+              batch.id,
+              canonicalProposalJson(audit.researchEvidence),
+            ],
+          );
+        }
+        if (audit.composedInput) {
+          const composedInputJson = canonicalProposalJson(audit.composedInput);
+          await tx.query(
+            `insert into ai_content_proposal_compositions(
+               job_id,batch_id,contract_id,performance_audit_id,workspace_id,brand_id,
+               research_evidence_json,research_evidence_set_sha256,composed_input_json,
+               composed_input_sha256,final_invocation_aggregate_sha256
+             ) values(
+               $1,$2,$3,$4,$5,$6,
+               jsonb_build_array($7::jsonb),
+               encode(digest(convert_to(jsonb_build_array($7::jsonb)::text,'UTF8'),'sha256'),'hex'),
+               $8::jsonb,encode(digest(convert_to(($8::jsonb)::text,'UTF8'),'sha256'),'hex'),$9
+             )`,
+            [
+              jobId,
+              batch.id,
+              contractId,
+              auditId,
+              input.workspaceId,
+              input.brandId,
+              snapshotAuditJson,
+              composedInputJson,
+              proposalSha256({
+                source: "performance_experiment",
+                auditId,
+                resolvedInputFingerprint: audit.resolvedInputFingerprint,
+              }),
+            ],
+          );
+        }
+      }
       return {
         disposition: "created",
         proposalRunId: input.proposalRunId,
@@ -766,6 +860,38 @@ function mapProposal(row: Record<string, unknown>): AiContentProposalRecord {
   };
 }
 
+function resumeInputFromLegacyV2Base(
+  input: CreateAiContentProposalBatchV2Input,
+): CanonicalContentOrchestrationV2 {
+  const base = input.inputSnapshot;
+  const seed = base.subject.kind === "topic_text"
+    ? { kind: "topic_text" as const, title: base.subject.title }
+    : base.subject.kind === "topic_url"
+      ? { kind: "topic_url" as const, url: base.subject.requestedUrl }
+      : {
+          kind: "reference" as const,
+          items: base.subject.referenceIds.map((referenceId) => {
+            const reference = base.references.find((item) => item.referenceItemId === referenceId);
+            if (!reference) throw new Error("ai_content_proposal_resume_input_invalid");
+            return { referenceId, roles: [...reference.roles] };
+          }),
+        };
+  return parseCanonicalContentOrchestrationV2({
+    contractVersion: "content-orchestration.v2",
+    brandId: input.brandId,
+    purpose: input.purpose,
+    seed,
+    contentInstruction: base.contentInstruction,
+    productId: base.product?.id ?? null,
+    outputSettings: {
+      outputFormat: input.outputFormat,
+      channelTargets: [input.channelTarget],
+      aspectRatio: base.outputSettings.aspectRatio,
+      outputCount: 1,
+    },
+  });
+}
+
 function mapProposalBatch(row: Record<string, unknown>): AiContentProposalBatchRecord {
   const workerRequest = object(row.request_json);
   const v2 = workerRequest.contractVersion === "content-proposal-request.v2";
@@ -810,6 +936,19 @@ function mapProposalBatch(row: Record<string, unknown>): AiContentProposalBatchR
         }];
       })
     : [];
+  const provenance = typeof row.performance_experiment_id === "string"
+    && typeof row.performance_evidence_version === "string"
+    && row.performance_captured_from
+    && row.performance_captured_to
+    ? {
+        kind: "performance_experiment" as const,
+        experimentId: row.performance_experiment_id,
+        evidenceVersion: row.performance_evidence_version,
+        snapshotCount: Number(row.performance_snapshot_count ?? 0),
+        capturedFrom: iso(row.performance_captured_from as Date | string)!,
+        capturedTo: iso(row.performance_captured_to as Date | string)!,
+      }
+    : undefined;
   return {
     id: String(row.id),
     workspaceId: String(row.workspace_id),
@@ -825,7 +964,8 @@ function mapProposalBatch(row: Record<string, unknown>): AiContentProposalBatchR
     ...(Array.isArray(row.proposals)
       ? { proposals: (row.proposals as Record<string, unknown>[]).map(mapProposal) }
       : {}),
-    ...(v2 && row.evidence_json ? { researchEvidence: { items: evidenceItems } } : {}),
+    ...(v2 && row.evidence_json && !provenance ? { researchEvidence: { items: evidenceItems } } : {}),
+    ...(provenance ? { provenance } : {}),
     ...(v2 ? { selectedReferences } : {}),
     errorCode: row.error_code ? String(row.error_code) : null,
     errorMessage: row.error_message ? String(row.error_message) : null,
@@ -2062,7 +2202,11 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         await client.query("BEGIN");
         await assertAiContentWritable(client);
         const requestJson = JSON.stringify(request);
-        const inputSnapshotJson = JSON.stringify(input.inputSnapshot);
+        const inputSnapshotJson = canonicalProposalJson({
+          replayFingerprint: input.requestFingerprint,
+          baseInput: input.inputSnapshot,
+          resumeInput: resumeInputFromLegacyV2Base(input),
+        });
         await assertActiveAiContentActor(client, input);
         const replay = await client.query(
           `select *,
@@ -2151,6 +2295,12 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
     async getAiContentProposalBatch(input) {
       const result = await pool.query(
         `select batch.*,research.evidence_json,
+                performance.experiment_id::text performance_experiment_id,
+                performance.evidence_version performance_evidence_version,
+                coalesce(jsonb_array_length(performance.snapshot_audit_json->'snapshots'),0)
+                  performance_snapshot_count,
+                performance.captured_from performance_captured_from,
+                performance.captured_to performance_captured_to,
                 coalesce(jsonb_agg(to_jsonb(proposal) order by proposal.position)
                   filter (where proposal.id is not null),'[]'::jsonb) proposals
            from ai_content_proposal_batches batch
@@ -2162,8 +2312,14 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
              on research.batch_id=batch.id
             and research.workspace_id=batch.workspace_id
             and research.brand_id=batch.brand_id
+           left join ai_content_proposal_performance_audits performance
+             on performance.batch_id=batch.id
+            and performance.workspace_id=batch.workspace_id
+            and performance.brand_id=batch.brand_id
           where batch.id=$1 and batch.workspace_id=$2 and batch.brand_id=$3
-          group by batch.id,research.evidence_json`,
+          group by batch.id,research.evidence_json,performance.experiment_id,
+                   performance.evidence_version,performance.snapshot_audit_json,
+                   performance.captured_from,performance.captured_to`,
         [input.batchId, input.workspaceId, input.brandId],
       );
       return result.rowCount ? mapProposalBatch(result.rows[0]) : null;

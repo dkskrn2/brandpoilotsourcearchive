@@ -468,6 +468,7 @@ export interface PerformanceInsightsDto {
     channelTargets: Array<"instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok" | "blog_export">;
     outputFormats: Array<"card_news" | "blog" | "single_image" | "channel_text">;
     performanceSnapshotIds: string[];
+    evidenceVersion: string;
   }>;
   sampleSize: number;
   lastCollectedAt: string | null;

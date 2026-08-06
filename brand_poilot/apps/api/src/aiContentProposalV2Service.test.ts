@@ -206,12 +206,12 @@ describe("Proposal V2 creation service", () => {
       brandId,
       actorUserId,
       experimentId: "00000000-0000-4000-8000-000000000050",
-      evidenceVersion: "evidence-v7",
+      evidenceVersion: "a".repeat(64),
     });
 
     expect(fixture.ports.withTransaction).toHaveBeenCalledTimes(1);
     expect(fixture.ports.resolve).toHaveBeenCalledWith(
-      expect.objectContaining({ source: "performance_experiment", evidenceVersion: "evidence-v7" }),
+      expect.objectContaining({ source: "performance_experiment", evidenceVersion: "a".repeat(64) }),
       fixture.tx,
     );
     expect(fixture.ports.enqueue).toHaveBeenCalledWith(
@@ -219,7 +219,7 @@ describe("Proposal V2 creation service", () => {
       expect.objectContaining({
         source: "performance_experiment",
         actorUserId,
-        idempotencyKey: `performance:${actorUserId}:00000000-0000-4000-8000-000000000050:evidence-v7`,
+        idempotencyKey: `performance:${actorUserId}:00000000-0000-4000-8000-000000000050:${"a".repeat(64)}`,
       }),
     );
   });

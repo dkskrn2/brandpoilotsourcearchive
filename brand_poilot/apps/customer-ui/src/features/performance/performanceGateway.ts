@@ -16,24 +16,12 @@ export function createPerformanceGateway(client: Client = apiClient()) {
     },
     createProposalBatch(brandId: string, experiment: PerformanceExperiment) {
       return client.requestJson<{ batchId: string; status: string }>(
-        `/brands/${brandId}/ai-content/proposal-batches`,
+        `/brands/${brandId}/performance-experiments/proposal-batches`,
         {
           method: "POST",
           body: JSON.stringify({
-            idempotencyKey: `performance-${experiment.id}-${experiment.performanceSnapshotIds[0] ?? "none"}-${experiment.performanceSnapshotIds.length}`,
-            request: {
-              contractVersion: "content-proposal-request.v1",
-              contentFamily: experiment.contentFamily,
-              subjectInput: {
-                topic: experiment.title,
-                hypothesis: experiment.hypothesis,
-                source: "performance_experiment",
-              },
-              channelTargets: experiment.channelTargets,
-              outputFormats: experiment.outputFormats,
-              sourceSnapshotIds: [],
-              performanceSnapshotIds: experiment.performanceSnapshotIds,
-            },
+            experimentId: experiment.id,
+            evidenceVersion: experiment.evidenceVersion,
           }),
         },
       );

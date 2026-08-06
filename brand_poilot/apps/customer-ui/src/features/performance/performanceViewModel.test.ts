@@ -23,6 +23,7 @@ const insights: PerformanceInsights = {
     channelTargets: ["instagram"],
     outputFormats: ["card_news"],
     performanceSnapshotIds: ["snapshot-1"],
+    evidenceVersion: "evidence-v1",
   }],
   sampleSize: 3,
   lastCollectedAt: "2026-07-28T03:00:00.000Z",

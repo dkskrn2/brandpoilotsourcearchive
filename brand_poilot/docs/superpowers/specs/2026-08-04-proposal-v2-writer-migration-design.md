@@ -126,7 +126,7 @@ The refactor must preserve the current request body, response body, idempotency 
 
 ### 7.1 Current experiment identity
 
-Performance experiments are currently calculated response objects, not persisted experiment rows. The ID `reuse-performing-pattern` can therefore recur while its underlying snapshot set changes. Treating `experimentId` as a durable database identity, or using only the first snapshot ID and item count, would create false idempotency replays or unexpected 409 responses.
+Performance experiments are calculated response objects, not persisted experiment rows. The `reuse-performing-pattern.v2` definition has the stable UUID `6f7772c4-7c03-4e2a-86f4-7c6bf3f65ef1`, matching the Proposal V2 database UUID contract. The UUID identifies only the definition; `evidenceVersion` identifies its mutable authoritative evidence. Using only the UUID, first snapshot ID, or item count would create false idempotency replays or unexpected 409 responses.
 
 The performance-insights response gains a server-generated `evidenceVersion`. It is a SHA-256 hash over an explicit experiment-definition version plus a canonical, sorted projection of every selected snapshot's immutable ID, mutable evidence fields, and update/capture version. Canonical JSON uses sorted object keys, sorted snapshot IDs, and normalized UTC timestamps. Changing metrics in an upserted snapshot or changing the experiment algorithm/output mapping therefore changes `evidenceVersion` even when the snapshot UUID remains the same.
 
@@ -136,7 +136,7 @@ The UI calls `POST /brands/{brandId}/performance-experiments/proposal-batches` w
 
 ```json
 {
-  "experimentId": "reuse-performing-pattern",
+  "experimentId": "6f7772c4-7c03-4e2a-86f4-7c6bf3f65ef1",
   "evidenceVersion": "<server-generated-sha256>"
 }
 ```

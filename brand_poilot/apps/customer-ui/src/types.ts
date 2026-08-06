@@ -95,6 +95,7 @@ export interface PerformanceExperiment {
   channelTargets: Array<"instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok" | "blog_export">;
   outputFormats: Array<"card_news" | "blog" | "single_image" | "channel_text">;
   performanceSnapshotIds: string[];
+  evidenceVersion: string;
 }
 
 export interface PerformanceInsights {

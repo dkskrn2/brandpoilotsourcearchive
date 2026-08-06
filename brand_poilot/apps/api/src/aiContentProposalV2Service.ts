@@ -8,6 +8,7 @@ import {
   type ProposalBaseInputSnapshotV2,
 } from "@brand-pilot/content-contracts";
 import { parseContentOrchestrationV2 as parseApiContentOrchestrationV2 } from "./aiContentGenerationInputV3.js";
+import type { ProposalInputSnapshotV2, ResearchEvidenceSnapshotV1 } from "./aiContentContracts.js";
 
 export type CreateProposalBatchV2Command = {
   workspaceId: string;
@@ -60,8 +61,13 @@ export interface ResolvedProposalV2Creation {
   performanceAudit?: {
     experimentId: string;
     evidenceVersion: string;
-    evidence: Record<string, unknown>;
-    composition: Record<string, unknown>;
+    experimentDefinition: Record<string, unknown>;
+    resolvedInputFingerprint: string;
+    snapshotAudit: Record<string, unknown>;
+    capturedFrom: string;
+    capturedTo: string;
+    researchEvidence: ResearchEvidenceSnapshotV1 | null;
+    composedInput: ProposalInputSnapshotV2 | null;
   } | null;
 }
 
@@ -153,7 +159,11 @@ function normalizedCommand(command: CreateProposalBatchV2Command): CreateProposa
       brandId,
       actorUserId: normalizedUuid(command.actorUserId, "ai_content_actor_required"),
       experimentId: normalizedUuid(command.experimentId, "performance_experiment_invalid"),
-      evidenceVersion: requiredText(command.evidenceVersion, "performance_evidence_version_required"),
+      evidenceVersion: (() => {
+        const value = requiredText(command.evidenceVersion, "performance_evidence_version_required").toLowerCase();
+        if (!/^[0-9a-f]{64}$/.test(value)) throw new Error("performance_evidence_version_invalid");
+        return value;
+      })(),
     };
   }
   const parsed = parseContentOrchestrationV2(parseApiContentOrchestrationV2(command.request));

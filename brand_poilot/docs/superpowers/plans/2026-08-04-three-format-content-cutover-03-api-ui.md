@@ -110,6 +110,14 @@ git commit -m "feat(api): centralize proposal v2 creation"
 - Modify: `apps/api/src/httpServer.ts`
 - Modify: `apps/api/src/server.performanceInsightsCustomer.test.ts`
 - Modify: `apps/api/src/repository.ts`
+- Modify: `apps/api/src/index.ts`
+- Modify: `apps/api/src/aiContentProposalV2Service.ts`
+- Modify: `apps/api/src/aiContentRepository.ts`
+- Modify: `apps/api/src/aiContentProposalV2Repository.pglite.test.ts`
+- Modify: `apps/api/src/types.ts`
+- Modify: `apps/customer-ui/src/features/performance/performanceGateway.ts`
+- Modify: `apps/customer-ui/src/features/performance/performanceGateway.test.ts`
+- Modify: `apps/customer-ui/src/types.ts`
 
 - [ ] **Step 1: Write RED tests for identifier-only input and stale evidence**
 

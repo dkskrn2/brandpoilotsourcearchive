@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ContentOrchestrationV2 } from "@brand-pilot/content-contracts";
 import { createAiContentProposalV2Repository } from "./aiContentRepository.js";
 import { createAiContentProposalV2Service } from "./aiContentProposalV2Service.js";
+import { parseProposalInputSnapshotV2 } from "./aiContentGenerationInputV3.js";
 
 const ids = {
   actor: "10000000-0000-4000-8000-000000000001",
@@ -202,6 +203,87 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         [first.proposalBatchId],
       );
       expect(stored.rows[0]).toEqual({ created_by_user_id: null, purpose: "informational" });
+    }, 30_000);
+
+    it("commits a performance audit, research snapshot, and composition under the real 075 constraints", async () => {
+      const repository = createAiContentProposalV2Repository(pool);
+      const requestValue: ContentOrchestrationV2 = {
+        ...request(),
+        seed: { kind: "topic_text" as const, title: "성과 패턴을 활용한 다음 구성안" },
+        contentInstruction: "관측된 메시지 구조를 새 주제에 적용합니다.",
+        outputSettings: {
+          outputFormat: "card_news" as const,
+          channelTargets: ["instagram" as const],
+          aspectRatio: "1:1" as const,
+          outputCount: 1 as const,
+        },
+      };
+      const base = resolved(requestValue).baseInput;
+      const evidence = {
+        contractVersion: "research-evidence.v1" as const,
+        decision: "searched" as const,
+        reason: "승인된 공개 성과 근거",
+        queries: [],
+        capturedAt: "2026-08-05T00:00:00.000Z",
+        items: [{
+          id: "70000000-0000-4000-8000-000000000007",
+          title: "공개 게시물",
+          url: "https://example.test/performance",
+          publisher: "example.test",
+          publishedAt: "2026-08-01T00:00:00.000Z",
+          capturedAt: "2026-08-05T00:00:00.000Z",
+          claimSummary: "공개된 성과 근거",
+          contentHash: "a".repeat(64),
+        }],
+      };
+      const { contractVersion: _baseVersion, ...baseFields } = base;
+      const service = createAiContentProposalV2Service({
+        ...repository,
+        assertReady: async () => undefined,
+        resolve: async () => ({
+          request: requestValue,
+          baseInput: base,
+          sourceSnapshots: [],
+          performanceAudit: {
+            experimentId: "6f7772c4-7c03-4e2a-86f4-7c6bf3f65ef1",
+            evidenceVersion: "b".repeat(64),
+            experimentDefinition: { version: "reuse-performing-pattern.v2" },
+            resolvedInputFingerprint: "c".repeat(64),
+            snapshotAudit: {
+              policyVersion: "performance-evidence.v2",
+              snapshots: [{ id: "80000000-0000-4000-8000-000000000008" }],
+            },
+            capturedFrom: "2026-08-05T00:00:00.000Z",
+            capturedTo: "2026-08-05T00:00:00.000Z",
+            researchEvidence: evidence,
+            composedInput: parseProposalInputSnapshotV2({
+              ...baseFields,
+              contractVersion: "proposal-input.v2",
+              researchEvidence: evidence,
+            }),
+          },
+        }),
+      });
+
+      await service.create({
+        source: "performance_experiment",
+        workspaceId: ids.workspace,
+        brandId: ids.brand,
+        actorUserId: ids.actor,
+        experimentId: "6f7772c4-7c03-4e2a-86f4-7c6bf3f65ef1",
+        evidenceVersion: "b".repeat(64),
+      });
+
+      const graph = await pool.query(`select
+        (select count(*)::int from ai_content_proposal_batches) batches,
+        (select count(*)::int from ai_content_proposal_jobs) jobs,
+        (select count(*)::int from ai_content_proposal_job_contracts) contracts,
+        (select count(*)::int from ai_content_proposal_performance_audits) audits,
+        (select count(*)::int from ai_content_proposal_research_snapshots) research,
+        (select count(*)::int from ai_content_proposal_compositions) compositions`);
+      expect(graph.rows[0]).toEqual({
+        batches: 1, jobs: 1, contracts: 1, audits: 1, research: 1, compositions: 1,
+      });
     }, 30_000);
   },
 );

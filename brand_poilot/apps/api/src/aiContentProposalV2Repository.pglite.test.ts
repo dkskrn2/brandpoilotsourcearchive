@@ -99,6 +99,7 @@ describe("Proposal V2 repository on the final purpose/job-contract schema", () =
   beforeEach(async () => {
     database = await PGlite.create({ extensions: { pgcrypto } });
     await database.exec(`
+      create extension if not exists pgcrypto;
       create table app_users(id uuid primary key);
       create table workspaces(id uuid primary key);
       create table brands(id uuid primary key, workspace_id uuid not null, unique(id,workspace_id));
@@ -133,6 +134,23 @@ describe("Proposal V2 repository on the final purpose/job-contract schema", () =
         command_descriptor_sha256 text not null,request_sha256 text not null,
         base_input_sha256 text not null,contract_source_sha256 text not null,
         catalog_sha256 text not null,enqueue_contract_sha256 text not null
+      );
+      create table ai_content_proposal_performance_audits(
+        id uuid primary key default gen_random_uuid(),workspace_id uuid not null,brand_id uuid not null,
+        batch_id uuid not null unique,experiment_id uuid not null,experiment_definition_json jsonb not null,
+        evidence_version text not null,resolved_input_fingerprint_sha256 text not null,
+        snapshot_audit_json jsonb not null,captured_from timestamptz not null,captured_to timestamptz not null
+      );
+      create table ai_content_proposal_research_snapshots(
+        id uuid primary key default gen_random_uuid(),workspace_id uuid not null,brand_id uuid not null,
+        batch_id uuid not null unique,evidence_json jsonb not null
+      );
+      create table ai_content_proposal_compositions(
+        id uuid primary key default gen_random_uuid(),job_id uuid not null unique,batch_id uuid not null,
+        contract_id uuid not null unique,performance_audit_id uuid null,workspace_id uuid not null,brand_id uuid not null,
+        research_evidence_json jsonb not null,research_evidence_set_sha256 text not null,
+        composed_input_json jsonb not null,composed_input_sha256 text not null,
+        final_invocation_aggregate_sha256 text not null
       );
       create table automated_content_proposal_runs(
         id uuid primary key,proposal_batch_id uuid null,workspace_id uuid not null,brand_id uuid not null
@@ -208,5 +226,82 @@ describe("Proposal V2 repository on the final purpose/job-contract schema", () =
     });
     await expect(repository.findCommittedReplay({ ...input, replayFingerprint: "c".repeat(64) }))
       .rejects.toThrow("ai_content_proposal_batch_conflict");
+  });
+
+  it("stores a performance audit and precomposed public evidence in the same transaction", async () => {
+    const input = enqueueInput();
+    const researchEvidence = {
+      contractVersion: "research-evidence.v1" as const,
+      decision: "searched" as const,
+      reason: "성과 근거",
+      queries: [],
+      capturedAt: input.baseInput.capturedAt,
+      items: [{
+        id: "70000000-0000-4000-8000-000000000007",
+        title: "게시물",
+        url: "https://example.test/post",
+        publisher: "example.test",
+        publishedAt: input.baseInput.capturedAt,
+        capturedAt: input.baseInput.capturedAt,
+        claimSummary: "성과가 확인된 공개 게시물",
+        contentHash: "b".repeat(64),
+      }],
+    };
+    const { contractVersion: _contractVersion, ...baseFields } = input.baseInput;
+    const performanceInput = enqueueInput({
+      source: "performance_experiment",
+      idempotencyKey: "performance-v2-pglite",
+      performanceAudit: {
+        experimentId: "6f7772c4-7c03-4e2a-86f4-7c6bf3f65ef1",
+        evidenceVersion: "c".repeat(64),
+        experimentDefinition: { version: "reuse-performing-pattern.v2" },
+        resolvedInputFingerprint: "d".repeat(64),
+        snapshotAudit: { policyVersion: "performance-evidence.v2", snapshots: [{ id: researchEvidence.items[0].id }] },
+        capturedFrom: input.baseInput.capturedAt,
+        capturedTo: input.baseInput.capturedAt,
+        researchEvidence,
+        composedInput: {
+          ...baseFields,
+          contractVersion: "proposal-input.v2",
+          researchEvidence,
+        } as never,
+      },
+    });
+
+    await repository.withTransaction((tx) => repository.enqueue(tx, performanceInput));
+
+    const graph = await database.query(`
+      select audit.snapshot_audit_json,research.evidence_json,composition.research_evidence_json,
+             composition.research_evidence_set_sha256,composition.composed_input_sha256
+      from ai_content_proposal_performance_audits audit
+      join ai_content_proposal_research_snapshots research on research.batch_id=audit.batch_id
+      join ai_content_proposal_compositions composition on composition.performance_audit_id=audit.id
+    `);
+    expect(graph.rows).toHaveLength(1);
+    const row = graph.rows[0] as Record<string, unknown>;
+    expect(row.research_evidence_json).toEqual([row.snapshot_audit_json]);
+    expect(row.evidence_json).toMatchObject({ contractVersion: "research-evidence.v1", decision: "searched" });
+    expect(row.research_evidence_set_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(row.composed_input_sha256).toMatch(/^[0-9a-f]{64}$/);
+
+    const mismatch = {
+      ...performanceInput,
+      idempotencyKey: "performance-v2-mismatch",
+      performanceAudit: {
+        ...performanceInput.performanceAudit!,
+        composedInput: {
+          ...performanceInput.performanceAudit!.composedInput!,
+          contentInstruction: "research와 결합되지 않은 다른 입력",
+        },
+      },
+    };
+    await expect(repository.withTransaction((tx) => repository.enqueue(tx, mismatch)))
+      .rejects.toThrow("ai_content_proposal_performance_composition_mismatch");
+    const counts = await database.query(`
+      select (select count(*)::int from ai_content_proposal_batches) batches,
+             (select count(*)::int from ai_content_proposal_performance_audits) audits,
+             (select count(*)::int from ai_content_proposal_compositions) compositions
+    `);
+    expect(counts.rows[0]).toMatchObject({ batches: 1, audits: 1, compositions: 1 });
   });
 });

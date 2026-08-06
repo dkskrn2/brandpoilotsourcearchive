@@ -3382,7 +3382,24 @@ function proposalV2BatchRow(overrides: Record<string, unknown> = {}) {
       channelTargets: ["instagram"],
     },
     source_snapshot_json: [],
-    input_snapshot_json: proposalBaseInputV2,
+    input_snapshot_json: {
+      replayFingerprint: "f".repeat(64),
+      baseInput: proposalBaseInputV2,
+      resumeInput: {
+        contractVersion: "content-orchestration.v2",
+        brandId: proposalV2Scope.brandId,
+        purpose: "informational",
+        seed: { kind: "topic_text", title: "운영 체크리스트" },
+        contentInstruction: "실무 중심으로",
+        productId: null,
+        outputSettings: {
+          outputFormat: "card_news",
+          channelTargets: ["instagram"],
+          aspectRatio: "4:5",
+          outputCount: 1,
+        },
+      },
+    },
     status: "queued",
     error_code: null,
     error_message: null,
@@ -3494,7 +3511,7 @@ describe("AI content V2 proposal batch persistence", () => {
         requestFingerprint: "f".repeat(64),
       }),
     ]);
-    expect(JSON.parse(String(insert.params[5]))).toEqual(proposalBaseInputV2);
+    expect(JSON.parse(String(insert.params[5])).baseInput).toEqual(proposalBaseInputV2);
     expect(fixture.statements[jobIndexes[0]!]!.params).toEqual([
       proposalV2Scope.workspaceId,
       proposalV2Scope.brandId,
@@ -3509,7 +3526,12 @@ describe("AI content V2 proposal batch persistence", () => {
     await fixture.repository.createAiContentProposalBatchV2(createProposalBatchV2Input());
 
     const insert = fixture.statements.find(({ sql }) => sql.includes("insert into ai_content_proposal_batches"))!;
-    const snapshot = JSON.parse(String(insert.params[5]));
+    const envelope = JSON.parse(String(insert.params[5]));
+    const snapshot = envelope.baseInput;
+    expect(envelope.resumeInput).toMatchObject({
+      contractVersion: "content-orchestration.v2",
+      seed: { kind: "topic_text", title: "운영 체크리스트" },
+    });
     expect(Object.keys(snapshot).sort()).toEqual([
       "brandCore",
       "capturedAt",
@@ -3529,8 +3551,24 @@ describe("AI content V2 proposal batch persistence", () => {
     const query = vi.fn(async (_sql: string, _params: unknown[] = []) => ({
       rows: [proposalV2BatchRow({
         input_snapshot_json: {
-          ...proposalBaseInputV2,
-          references: [{
+          replayFingerprint: "f".repeat(64),
+          resumeInput: {
+            contractVersion: "content-orchestration.v2",
+            brandId: proposalV2Scope.brandId,
+            purpose: "informational",
+            seed: { kind: "topic_text", title: "성과 주제" },
+            contentInstruction: "성과 가설",
+            productId: null,
+            outputSettings: {
+              outputFormat: "card_news",
+              channelTargets: ["instagram"],
+              aspectRatio: "1:1",
+              outputCount: 1,
+            },
+          },
+          baseInput: {
+            ...proposalBaseInputV2,
+            references: [{
             referenceItemId: referenceId,
             snapshotId: "80000000-0000-4000-8000-000000000008",
             roles: ["planning"],
@@ -3545,7 +3583,8 @@ describe("AI content V2 proposal batch persistence", () => {
               mimeType: "image/webp",
               checksum: "c".repeat(64),
             },
-          }],
+            }],
+          },
         },
         evidence_json: {
           contractVersion: "research-evidence.v1",
@@ -3561,6 +3600,11 @@ describe("AI content V2 proposal batch persistence", () => {
           }],
         },
         proposals: [],
+        performance_experiment_id: "6f7772c4-7c03-4e2a-86f4-7c6bf3f65ef1",
+        performance_evidence_version: "a".repeat(64),
+        performance_snapshot_count: 3,
+        performance_captured_from: "2026-08-01T01:00:00.000Z",
+        performance_captured_to: "2026-08-01T03:00:00.000Z",
       })],
       rowCount: 1,
     }));
@@ -3573,26 +3617,30 @@ describe("AI content V2 proposal batch persistence", () => {
     });
 
     expect(result).toMatchObject({
-      researchEvidence: {
-        items: [{
-          id: "90000000-0000-4000-8000-000000000009",
-          title: "검색 자료",
-          url: "https://source.example/article",
-          publisher: "Source",
-        }],
-      },
       selectedReferences: [{
         id: referenceId,
         title: "선택 레퍼런스",
         preview: { url: "https://blob.example/reference.webp", mimeType: "image/webp" },
       }],
+      provenance: {
+        kind: "performance_experiment",
+        experimentId: "6f7772c4-7c03-4e2a-86f4-7c6bf3f65ef1",
+        evidenceVersion: "a".repeat(64),
+        snapshotCount: 3,
+        capturedFrom: "2026-08-01T01:00:00.000Z",
+        capturedTo: "2026-08-01T03:00:00.000Z",
+      },
     });
     const serialized = JSON.stringify(result);
+    expect(result).not.toHaveProperty("researchEvidence");
+    expect(serialized).not.toContain("90000000-0000-4000-8000-000000000009");
     expect(serialized).not.toContain("긴 레퍼런스 원문");
     expect(serialized).not.toContain("내부 검색어");
     expect(serialized).not.toContain("긴 내부 요약");
     expect(serialized).not.toContain("private-source");
+    expect(serialized).not.toContain("raw_metrics");
     expect(query.mock.calls[0]![0]).toContain("ai_content_proposal_research_snapshots");
+    expect(query.mock.calls[0]![0]).toContain("ai_content_proposal_performance_audits");
   });
 
   it.each([

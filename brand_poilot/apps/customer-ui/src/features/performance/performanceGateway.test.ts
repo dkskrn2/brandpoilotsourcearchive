@@ -25,14 +25,15 @@ describe("createPerformanceGateway", () => {
       channelTargets: ["instagram"],
       outputFormats: ["card_news"],
       performanceSnapshotIds: ["snapshot-1"],
+      evidenceVersion: "evidence-v1",
     });
 
     expect(requestJson.mock.calls).toEqual([
       ["/brands/brand-1/performance/insights?period=30d", { method: "GET" }],
       ["/publish-queue/queue-1/artifacts", { method: "GET" }],
-      ["/brands/brand-1/ai-content/proposal-batches", expect.objectContaining({
+      ["/brands/brand-1/performance-experiments/proposal-batches", expect.objectContaining({
         method: "POST",
-        body: expect.stringContaining("\"performanceSnapshotIds\":[\"snapshot-1\"]"),
+        body: JSON.stringify({ experimentId: "experiment-1", evidenceVersion: "evidence-v1" }),
       })],
     ]);
     expect(requestJson.mock.calls.some(([path]) => String(path).includes("/generations"))).toBe(false);
