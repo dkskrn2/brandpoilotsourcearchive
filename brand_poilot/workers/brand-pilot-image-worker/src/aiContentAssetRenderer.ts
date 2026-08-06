@@ -4,7 +4,7 @@ import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:f
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import type { ContentAspectRatioV2 } from "@brand-pilot/worker-runtime";
+import type { ContentAspectRatio } from "@brand-pilot/content-contracts";
 import { buildImageWorkerChildEnvironment } from "./childEnvironment.mjs";
 import { signalProcessTree } from "./processTermination.mjs";
 import { buildAiContentAssetPrompt, type StagedAiContentAssetInputs } from "./aiContentAssetPrompt.js";
@@ -30,7 +30,7 @@ export type AiContentAssetChildRunner = (input: {
   signal: AbortSignal;
 }) => Promise<void>;
 
-export function dimensionsForAspectRatio(ratio: ContentAspectRatioV2): { width: number; height: number } {
+export function dimensionsForAspectRatio(ratio: ContentAspectRatio): { width: number; height: number } {
   switch (ratio) {
     case "4:5": return { width: 1080, height: 1350 };
     case "16:9": return { width: 1920, height: 1080 };

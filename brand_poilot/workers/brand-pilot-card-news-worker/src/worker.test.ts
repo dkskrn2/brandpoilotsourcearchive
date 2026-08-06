@@ -1,23 +1,13 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import sharp from "sharp";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AiContentJob, WorkerClient } from "./contracts.js";
 import { runOnce } from "./worker.js";
 
-function job(jobType: "analyze" | "generate"): AiContentJob {
-  const payload = jobType === "generate" ? { contentGenerationInput: {
-    contractVersion: "content-generation-input.v2",
-    contentType: "card_news",
-    subject: { analysisId: "analysis-1", analysisVersion: 2, analysisContractVersion: "subject-analysis.v2", analysisResult: { subjectType: "product", productProfile: {}, serviceProfile: null }, type: "product", sourceUrl: "https://example.com/product", facts: [{ claim: "검증된 사실" }], research: {}, selectedImages: [] },
-    message: { target: { id: "target-1", name: "고객" }, appeal: { id: "appeal-1", targetId: "target-1", title: "장점" }, qualityBrief: {} },
-    creativeDirection: { prompts: ["4:5 카드뉴스"], brandColor: "#0057B8", selectedColor: "#0057B8", aspectRatio: "4:5", outputCount: 1 },
-    brandContext: {}, references: [], attachments: [],
-  } } : {};
-  return { id: "job-1", generationId: "generation-1", outputId: jobType === "generate" ? "output-1" : null, workspaceId: "w", brandId: "brand-1", jobType, contentType: "card_news", status: "processing", payload, leaseToken: "lease-1" };
-}
-function client(item: AiContentJob) { return { claim: vi.fn(async () => item), heartbeat: vi.fn(), complete: vi.fn(), fail: vi.fn(), acquire: vi.fn(async () => ({ id: "resource-1", leaseToken: "resource-token" })), heartbeatResource: vi.fn(), releaseResource: vi.fn() } as unknown as WorkerClient; }
+function client(item: AiContentJob) { return { claim: vi.fn(async () => item), heartbeat: vi.fn(async () => undefined), complete: vi.fn(async () => undefined), fail: vi.fn(async () => undefined), acquire: vi.fn(async () => ({ id: "resource-1", leaseToken: "resource-token" })), heartbeatResource: vi.fn(async () => undefined), releaseResource: vi.fn(async () => undefined) } as unknown as WorkerClient; }
+
+afterEach(() => vi.useRealTimers());
 
 const uid = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
 const capturedAt = "2026-07-31T00:00:00.000Z";
@@ -31,6 +21,7 @@ function v3Input(purpose: "informational" | "marketing") {
   return {
     contractVersion: "content-generation-input.v3", generationId: uid(10), capturedAt,
     brandCore: { versionId: uid(1), companyOverview: "Company", businessDescription: "Business", primaryCategory: "Food", detailedCategory: "Tea", primaryTarget: "Adults", differentiator: "Fresh", coreAppeal: "Calm" },
+    brandRules: { versionId: uid(11), version: 1, content: { contractVersion: "brand-rules.v1", requiredPhrases: [], forbiddenPhrases: [], exaggerationRules: [], ctaRules: { defaultCta: "", allowed: [] }, channelRules: {}, designRules: { colors: [], fonts: [], notes: [], referenceImages: [] }, autoApprovalRules: { enabled: false, conditions: [] } }, contentSha256: "f".repeat(64) },
     subject: { kind: "topic_text", title: "Tea guide" }, contentInstruction: "Practical copy", product,
     researchEvidence: marketing
       ? { contractVersion: "research-evidence.v1", decision: "not_needed", reason: "Product facts suffice", queries: [], capturedAt, items: [] }
@@ -71,83 +62,29 @@ function v3Plan(input: ReturnType<typeof v3Input>) {
 function v3Job(purpose: "informational" | "marketing") {
   return {
     id: `job-v3-${purpose}`, generationId: uid(10), outputId: `output-v3-${purpose}`, workspaceId: "w", brandId: "brand-1",
-    jobType: "generate", contentType: "card_news", status: "processing",
+    jobType: "generate", outputFormat: "card_news", status: "processing",
     payload: { contentGenerationInput: v3Input(purpose) }, leaseToken: "lease-v3",
   } as AiContentJob;
 }
 
 describe("card-news worker", () => {
-  it("completes an analysis and releases the resource", async () => {
-    const api = client(job("analyze"));
-    const dir = await mkdtemp(path.join(os.tmpdir(), "card-analysis-"));
-    await writeFile(path.join(dir, "analysis.json"), JSON.stringify({ audience: "초보 대표" }));
-    await runOnce({ workerId: "worker-1", client: api, planner: { run: vi.fn() }, runner: { run: vi.fn(async () => ({ outputDir: dir, cleanup: vi.fn() })) }, storage: { upload: vi.fn() } });
-    expect(api.complete).toHaveBeenCalledWith("job-1", expect.objectContaining({ jobType: "analyze" }));
-    expect(api.releaseResource).toHaveBeenCalledOnce();
-  });
-
-  it("uploads and completes generated slides", async () => {
-    const api = client(job("generate"));
-    const dir = await mkdtemp(path.join(os.tmpdir(), "card-generate-"));
-    const planDir = await mkdtemp(path.join(os.tmpdir(), "card-plan-"));
-    await writeFile(path.join(planDir, "editorial-plan.json"), JSON.stringify({
-      version: "editorial-plan.v1", intent: "information", singleSubject: "검증된 주제", readerQuestion: "무엇인가?", corePromise: "검증된 사실을 설명합니다.",
-      slides: [{ index: 1, role: "fact", headline: "제목", keyMessage: "내용", evidenceIds: ["subject-1"] }],
-      cta: null, excludedTopics: [], referenceUses: [],
-    }));
-    await writeFile(path.join(dir, "content.json"), JSON.stringify({ title: "제목", content: { caption: "본문", hashtags: [], cta: "저장" } }));
-    await writeFile(path.join(dir, "slide-01.png"), await sharp({ create: { width: 1000, height: 1250, channels: 3, background: "#fff" } }).png().toBuffer());
-    const storage = { upload: vi.fn(async () => ({ manifest: { type: "card_news" }, manifestUrl: "https://blob/manifest.json" })) };
-    await runOnce({
-      workerId: "worker-1", client: api,
-      planner: { run: vi.fn(async () => ({ outputDir: planDir, cleanup: vi.fn() })) },
-      runner: { run: vi.fn(async () => ({ outputDir: dir, cleanup: vi.fn() })) }, storage: storage as never,
-    });
-    expect(storage.upload).toHaveBeenCalledOnce();
-    expect(api.complete).toHaveBeenCalledWith("job-1", expect.objectContaining({ jobType: "generate" }));
-  });
-
-  it("does not retry deterministic output contract failures", async () => {
-    const item = { ...job("generate"), outputId: null };
+  it("cancels planning and publishes no terminal result after the job lease is lost", async () => {
+    vi.useFakeTimers();
+    const item = v3Job("informational");
     const api = client(item);
+    api.heartbeat = vi.fn(async () => { throw new Error("worker_api_failed:409"); });
+    const planner = { run: vi.fn((_job: AiContentJob, _prompt: string, signal?: AbortSignal) => new Promise<never>((_resolve, reject) => {
+      signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+    })) };
 
-    await runOnce({
-      workerId: "worker-1",
-      client: api,
-      planner: { run: vi.fn() },
-      runner: { run: vi.fn() },
-      storage: { upload: vi.fn() },
-    });
+    const running = runOnce({ workerId: "worker-1", client: api, planner });
+    await vi.waitFor(() => expect(planner.run).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(30_000);
+    const result = await running;
 
-    expect(api.fail).toHaveBeenCalledWith("job-1", expect.objectContaining({
-      errorCode: "card_news_output_id_required",
-      retryable: false,
-    }));
-  });
-
-  it("preflights attachment blobs before either Codex command", async () => {
-    const item = job("generate");
-    const input = item.payload.contentGenerationInput as Record<string, unknown>;
-    input.attachments = [{
-      id: "attachment-1", generationId: "generation-1", role: "document",
-      fileName: "brief.pdf", mimeType: "application/pdf", sizeBytes: 42,
-      checksum: "a".repeat(64), storageUrl: "https://blob.example/brief.pdf",
-      storagePath: "generation/brief.pdf", createdAt: "2026-07-27T00:00:00.000Z",
-    }];
-    const api = client(item);
-    const planner = { run: vi.fn() };
-    const runner = { run: vi.fn() };
-    await runOnce({
-      workerId: "worker-1", client: api, planner, runner,
-      storage: { upload: vi.fn() },
-      head: vi.fn(async () => { throw Object.assign(new Error("not found"), { status: 404 }); }),
-    });
-    expect(planner.run).not.toHaveBeenCalled();
-    expect(runner.run).not.toHaveBeenCalled();
-    expect(api.fail).toHaveBeenCalledWith("job-1", expect.objectContaining({
-      errorCode: "ai_content_attachment_blob_unavailable",
-      retryable: false,
-    }));
+    expect(result).toEqual({ status: "lease_lost", jobId: item.id });
+    expect(api.complete).not.toHaveBeenCalled();
+    expect(api.fail).not.toHaveBeenCalled();
   });
 
   it.each(["informational", "marketing"] as const)("completes a %s v3 plan without rendering or uploading images", async (purpose) => {
@@ -157,14 +94,9 @@ describe("card-news worker", () => {
     const expectedPlan = v3Plan(v3Input(purpose));
     await writeFile(path.join(dir, "card-news-plan.json"), JSON.stringify(expectedPlan));
     const planner = { run: vi.fn(async () => ({ outputDir: dir, cleanup: vi.fn() })) };
-    const runner = { run: vi.fn() };
-    const storage = { upload: vi.fn() };
-
-    await runOnce({ workerId: "worker-1", client: api, planner, runner, storage });
+    await runOnce({ workerId: "worker-1", client: api, planner });
 
     expect(planner.run).toHaveBeenCalledOnce();
-    expect(runner.run).not.toHaveBeenCalled();
-    expect(storage.upload).not.toHaveBeenCalled();
     expect(api.complete).toHaveBeenCalledWith(item.id, {
       workerId: "worker-1", leaseToken: "lease-v3", jobType: "generate",
       skillVersion: expect.any(String), plan: expectedPlan,
@@ -191,16 +123,11 @@ describe("card-news worker", () => {
     const planner = { run: vi.fn()
       .mockResolvedValueOnce({ outputDir: invalidDir, cleanup: vi.fn() })
       .mockResolvedValueOnce({ outputDir: validDir, cleanup: vi.fn() }) };
-    const runner = { run: vi.fn() };
-    const storage = { upload: vi.fn() };
-
-    await runOnce({ workerId: "worker-1", client: api, planner, runner, storage });
+    await runOnce({ workerId: "worker-1", client: api, planner });
 
     expect(planner.run).toHaveBeenCalledTimes(2);
     expect(planner.run.mock.calls[1]![1]).toContain(`card_news_plan_invalid:${expectedError}`);
     expect(api.complete).toHaveBeenCalledWith(item.id, expect.objectContaining({ plan: valid }));
-    expect(runner.run).not.toHaveBeenCalled();
-    expect(storage.upload).not.toHaveBeenCalled();
   });
 
   it("fails after one v3 repair and never queues image work locally", async () => {
@@ -215,15 +142,10 @@ describe("card-news worker", () => {
     const planner = { run: vi.fn()
       .mockResolvedValueOnce({ outputDir: firstDir, cleanup: vi.fn() })
       .mockResolvedValueOnce({ outputDir: secondDir, cleanup: vi.fn() }) };
-    const runner = { run: vi.fn() };
-    const storage = { upload: vi.fn() };
-
-    await runOnce({ workerId: "worker-1", client: api, planner, runner, storage });
+    await runOnce({ workerId: "worker-1", client: api, planner });
 
     expect(planner.run).toHaveBeenCalledTimes(2);
     expect(api.complete).not.toHaveBeenCalled();
     expect(api.fail).toHaveBeenCalledWith(item.id, expect.objectContaining({ errorCode: "card_news_plan_invalid", retryable: false }));
-    expect(runner.run).not.toHaveBeenCalled();
-    expect(storage.upload).not.toHaveBeenCalled();
   });
 });

@@ -18,12 +18,16 @@ async function main() {
     process.env.REEL_CODEX_PLAN_COMMAND ?? "node scripts/run-codex-reel-plan.mjs --job \"{{jobFile}}\" --output \"{{outputDir}}\"",
     Math.max(1_000, Number(process.env.REEL_CODEX_PLAN_TIMEOUT_MS ?? 300_000)),
   );
-  const execute = () => runOnce({ workerId, client, planner });
+  const shutdown = new AbortController();
+  process.once("SIGINT", () => shutdown.abort());
+  process.once("SIGTERM", () => shutdown.abort());
+  const execute = () => runOnce({ workerId, client, planner, shutdownSignal: shutdown.signal });
   if (mode === "watch") {
-    for (;;) {
+    while (!shutdown.signal.aborted) {
       process.stdout.write(`${JSON.stringify(await execute())}\n`);
-      await wait(Math.max(1_000, Number(process.env.REEL_WORKER_POLL_MS ?? 10_000)));
+      if (!shutdown.signal.aborted) await wait(Math.max(1_000, Number(process.env.REEL_WORKER_POLL_MS ?? 10_000)));
     }
+    return;
   }
   process.stdout.write(`${JSON.stringify(await execute())}\n`);
 }

@@ -4,9 +4,8 @@ import {
   runControlledSearch,
   terminateProcessTree,
   type ControlledSearchInput,
-  type ContentGenerationInputV3,
-  type ResearchEvidenceSnapshotV1,
 } from "@brand-pilot/worker-runtime";
+import type { ContentGenerationInputV3, ResearchEvidenceSnapshotV1 } from "@brand-pilot/content-contracts";
 
 export interface BlogResearchDecision { decision: "needed" | "not_needed"; reason: string }
 export interface BlogResearch {

@@ -1,4 +1,4 @@
-import type { AiContentJob, WorkerClient } from "./contracts.js";
+import { parseCardNewsJob, type WorkerClient } from "./contracts.js";
 
 export function createClient(apiUrl: string, token: string, fetchImpl: typeof fetch = fetch): WorkerClient {
   const base = apiUrl.replace(/\/+$/, "");
@@ -9,7 +9,7 @@ export function createClient(apiUrl: string, token: string, fetchImpl: typeof fe
     return response;
   }
   return {
-    async claim(workerId) { return (await (await request("/worker/ai-content-jobs/card-news/claim", { workerId, leaseSeconds })).json() as { job: AiContentJob | null }).job; },
+    async claim(workerId) { const job = (await (await request("/worker/ai-content-jobs/card-news/claim", { workerId, leaseSeconds })).json() as { job?: unknown }).job; return job === null || job === undefined ? null : parseCardNewsJob(job); },
     async heartbeat(jobId, workerId, leaseToken) { await request(`/worker/ai-content-jobs/${jobId}/heartbeat`, { workerId, leaseToken, leaseSeconds }); },
     async complete(jobId, body) { await request(`/worker/ai-content-jobs/${jobId}/complete`, body); },
     async fail(jobId, body) { await request(`/worker/ai-content-jobs/${jobId}/fail`, body); },

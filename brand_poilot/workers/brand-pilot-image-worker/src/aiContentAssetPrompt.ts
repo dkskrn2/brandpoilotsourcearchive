@@ -1,4 +1,4 @@
-import type { ImageGenerationPackageV1 } from "@brand-pilot/worker-runtime";
+import type { ImageGenerationPackageV1 } from "@brand-pilot/content-contracts";
 
 export interface StagedAiContentAssetInputs {
   productImages: Array<{ id: string; path: string }>;

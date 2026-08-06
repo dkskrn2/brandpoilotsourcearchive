@@ -27,7 +27,6 @@ const CLAIM_WORKER_FILES = Object.freeze([
 const NEW_PIPELINE_FILES = Object.freeze([
   "apps/api/src/aiContentPlanContracts.ts",
   "apps/api/src/aiContentRenderJobs.ts",
-  "workers/brand-pilot-worker-runtime/src/aiContentV3.ts",
   "workers/brand-pilot-card-news-worker/src/promptBuilder.ts",
   "workers/brand-pilot-card-news-worker/src/contracts.ts",
   "workers/brand-pilot-card-news-worker/src/client.ts",
@@ -47,6 +46,13 @@ const PROMPT_BRANCH_FILES = Object.freeze({
   reel: "workers/brand-pilot-reel-worker/src/promptBuilder.ts",
 });
 
+const CANONICAL_CONSUMER_FILES = Object.freeze([
+  "workers/brand-pilot-card-news-worker/src/contracts.ts",
+  "workers/brand-pilot-blog-worker/src/contracts.ts",
+  "workers/brand-pilot-reel-worker/src/contracts.ts",
+  "workers/brand-pilot-image-worker/src/aiContentRenderClient.ts",
+]);
+
 export const AUTOMATED_CARD_NEWS_DEFERRED_FILES = Object.freeze([
   "apps/api/src/automatedCardNews.ts",
 ]);
@@ -60,6 +66,7 @@ export const PRODUCTION_FILE_ALLOWLIST = Object.freeze([
     ...NEW_PIPELINE_FILES,
     ...Object.values(PROMPT_BRANCH_FILES),
     CUSTOMER_UI_GATEWAY_FILE,
+    ...CANONICAL_CONSUMER_FILES,
   ]),
 ].sort());
 
@@ -162,6 +169,14 @@ function checkGenerateOnlyPlannerWorkers(files, violations) {
   }
 }
 
+function checkCanonicalWorkerConsumers(files, violations) {
+  for (const file of CANONICAL_CONSUMER_FILES) {
+    if (!/from\s*["']@brand-pilot\/content-contracts["']/.test(files.get(file) ?? "")) {
+      violations.push(violation("missing_canonical_worker_contract", file, "active V3 workers must import canonical content contracts directly"));
+    }
+  }
+}
+
 function checkCatalogAndPromptBranches(files, violations) {
   const catalog = files.get(CATALOG_FILE) ?? "";
   for (const format of ["card_news", "blog", "reel"]) {
@@ -247,6 +262,7 @@ export async function inspectThreeFormatCutover(rootDirectory) {
   checkLegacyClaims(files, violations);
   checkLegacyPipelineContracts(files, violations);
   checkGenerateOnlyPlannerWorkers(files, violations);
+  checkCanonicalWorkerConsumers(files, violations);
   checkCatalogAndPromptBranches(files, violations);
   checkAssemblerIntegration(files, violations);
   checkV2OnlyCustomerWriters(files, violations);

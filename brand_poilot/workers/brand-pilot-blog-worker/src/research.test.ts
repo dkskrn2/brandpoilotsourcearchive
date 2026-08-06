@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ContentGenerationInputV3 } from "@brand-pilot/worker-runtime";
+import type { ContentGenerationInputV3 } from "@brand-pilot/content-contracts";
 import { assessBlogResearchNeed, runBlogSupplementalSearch } from "./research.js";
 
 const input = {
