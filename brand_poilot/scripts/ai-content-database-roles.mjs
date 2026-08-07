@@ -935,6 +935,14 @@ export async function applyRoleBootstrap(client, rawPlan, passwords) {
         await client.query(`grant ${privileges.map((privilege) => privilege.toLowerCase()).join(",")} on sequence public.${quoteIdentifier(sequenceName)} to ${quoteIdentifier(names.applicationRoleName)}`);
       }
     }
+    // PostgreSQL 16 gives a CREATEROLE principal ADMIN but not SET on roles it
+    // creates. Managed providers therefore require a transaction-scoped SET
+    // membership before ownership can be transferred to the no-login owner.
+    // REVOKE below removes this self-granted SET edge while retaining the
+    // provider-managed ADMIN edge.
+    await client.query(
+      `grant ${quoteIdentifier(names.schemaOwnerRoleName)} to ${quoteIdentifier(plan.preservedRuntimeRoleName)} with set true, inherit false, admin false`,
+    );
     for (const relationName of plan.exclusiveOwnedRelations) {
       await client.query(`alter table public.${quoteIdentifier(relationName)} owner to ${quoteIdentifier(names.schemaOwnerRoleName)}`);
     }
@@ -999,6 +1007,9 @@ export async function applyRoleBootstrap(client, rawPlan, passwords) {
     for (const identity of plan.applicationOwnedFunctions) {
       await client.query(`alter function ${identity} owner to ${quoteIdentifier(names.schemaOwnerRoleName)}`);
     }
+    await client.query(
+      `revoke ${quoteIdentifier(names.schemaOwnerRoleName)} from ${quoteIdentifier(plan.preservedRuntimeRoleName)}`,
+    );
     await verifyApplicationRuntimeSecurity(client, plan);
     await client.query("commit");
     return Object.freeze({

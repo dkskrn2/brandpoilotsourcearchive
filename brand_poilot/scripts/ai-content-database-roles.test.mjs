@@ -218,6 +218,8 @@ test("role bootstrap applies only the closed role/schema/relation ownership plan
   assert.match(sql, /create role "content_migration" login noinherit/i);
   assert.doesNotMatch(sql, /alter role "content_(?:schema_owner|application|operator|migration|cleanup)"[^;\n]*nosuperuser/i);
   assert.match(sql, /grant "content_schema_owner" to "content_migration" with set true, inherit false, admin false/i);
+  assert.match(sql, /grant "content_schema_owner" to "postgres" with set true, inherit false, admin false/i);
+  assert.match(sql, /revoke "content_schema_owner" from "postgres"/i);
   assert.match(sql, /revoke create on schema public from public/i);
   assert.doesNotMatch(sql, /revoke all on schema public from public/i);
   assert.match(sql, /revoke all on table public\."ai_content_generations" from "content_application"/i);
@@ -229,6 +231,12 @@ test("role bootstrap applies only the closed role/schema/relation ownership plan
   assert.match(sql, /alter table public\."worker_instances" owner to "content_schema_owner"/i);
   assert.match(sql, /grant delete,insert,references,select,trigger,truncate,update on table public\."worker_instances" to "postgres"/i);
   assert.match(sql, /alter function public\.select_ai_content_proposal\(uuid,uuid,uuid,uuid\) owner to "content_schema_owner"/i);
+  const providerSetGrantIndex = calls.findIndex(({ sql: statement }) => /grant "content_schema_owner" to "postgres" with set true/i.test(statement));
+  const firstOwnerTransferIndex = calls.findIndex(({ sql: statement }) => /alter table public\."[^\"]+" owner to/i.test(statement));
+  const lastFunctionTransferIndex = calls.findLastIndex(({ sql: statement }) => /alter function .* owner to "content_schema_owner"/i.test(statement));
+  const providerSetRevokeIndex = calls.findIndex(({ sql: statement }) => /revoke "content_schema_owner" from "postgres"/i.test(statement));
+  assert.ok(providerSetGrantIndex >= 0 && providerSetGrantIndex < firstOwnerTransferIndex);
+  assert.ok(providerSetRevokeIndex > lastFunctionTransferIndex);
   assert.doesNotMatch(sql, /alter function public\.set_updated_at\(\) owner/i);
   assert.equal(
     mutationCountAfterFirstApply,
