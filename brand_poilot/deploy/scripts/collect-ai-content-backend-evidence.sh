@@ -87,6 +87,13 @@ done
 for command_name in awk basename cat chmod dirname docker flock grep id mktemp mv realpath rmdir rm sha256sum stat timeout; do
   require_command "$command_name"
 done
+CODEX_RUNTIME_UID="$(id -u "$FILE_OWNER")" || fail "ai_content_backend_runtime_identity_invalid"
+CODEX_RUNTIME_GID="$(id -g "$FILE_OWNER")" || fail "ai_content_backend_runtime_identity_invalid"
+[[ "$CODEX_RUNTIME_UID" =~ ^[0-9]+$ && "$CODEX_RUNTIME_GID" =~ ^[0-9]+$ ]] ||
+  fail "ai_content_backend_runtime_identity_invalid"
+(( CODEX_RUNTIME_UID > 0 && CODEX_RUNTIME_GID > 0 )) ||
+  fail "ai_content_backend_runtime_identity_invalid"
+export CODEX_RUNTIME_UID CODEX_RUNTIME_GID
 
 RELEASE_SHA="${OPTION[release]}"
 CUTOVER_ID="${OPTION[cutover-id]}"

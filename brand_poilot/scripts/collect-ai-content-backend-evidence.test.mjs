@@ -319,6 +319,7 @@ test("collector is strict, secret-safe, and names only the manual AI-content bac
     assert.match(source, new RegExp(`require_owned_directory \"\\$${directory.replace("/", "\\/")}`));
   }
   assert.match(source, /for command_name in[^\n]*awk[^\n]*basename[^\n]*cat[^\n]*dirname/);
+  assert.match(source, /CODEX_RUNTIME_UID="\$\(id -u "\$FILE_OWNER"\)"[\s\S]*CODEX_RUNTIME_GID="\$\(id -g "\$FILE_OWNER"\)"[\s\S]*export CODEX_RUNTIME_UID CODEX_RUNTIME_GID/);
   assert.match(source, /const init = kind === "ready" \? \{\s*signal: AbortSignal\.timeout\(10_000\)/);
   assert.match(source, /verify_container\(\) \{[\s\S]*docker image inspect --format '\{\{ index \.Config\.Labels "org\.opencontainers\.image\.revision" \}\}'/);
   assert.ok(
