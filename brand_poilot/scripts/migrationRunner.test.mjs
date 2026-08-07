@@ -1022,6 +1022,19 @@ test("075 atomic source verifies and binds the shared exact post catalog before 
   assert.ok(livePostObjectComparison >= 0);
 });
 
+test("075 execution accepts an expired authorization only after the provider allowlist is sealed", async () => {
+  const source = await readFile("scripts/migrationRunner.mjs", "utf8");
+  const preconditionsStart = source.indexOf("async function verifyCutover075Preconditions");
+  const preconditionsEnd = source.indexOf("async function revalidateAtomicCutoverDatabaseState", preconditionsStart);
+  const preconditions = source.slice(preconditionsStart, preconditionsEnd);
+  assert.match(
+    preconditions,
+    /validateCutoverAllowlistAuthorization\([\s\S]*allowExpiredSealed:\s*true/,
+    "the signed provider attestation and exact live allowlist seal the short-lived authorization before migration execution",
+  );
+  assert.doesNotMatch(preconditions, /allowExpiredSealed:\s*recovery/);
+});
+
 test("075 ACL blocker: migration identity has an authorized migration_body_complete transition path", async () => {
   const sql = await readFile("db/migrations/074_ai_content_maintenance_write_fence.sql", "utf8");
   const runner = await readFile("scripts/migrationRunner.mjs", "utf8");

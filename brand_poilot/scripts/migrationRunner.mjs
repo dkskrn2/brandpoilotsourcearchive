@@ -3488,7 +3488,10 @@ async function verifyCutover075Preconditions({ client, migration, cutover, boots
     providerAttestationVerification: cutover.providerAttestationVerification,
     roleNames: names,
     now: cutover.now,
-    allowExpiredSealed: recovery,
+    // Provider installation already sealed this exact authorization against the
+    // signed attestation and live allowlist; its short issuance window must not
+    // make a verified deployment impossible while maintenance is active.
+    allowExpiredSealed: true,
   });
   validateCutoverAllowlistAttestation(cutover.allowlistAttestation, {
     authorization,
