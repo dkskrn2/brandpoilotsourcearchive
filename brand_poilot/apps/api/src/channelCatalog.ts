@@ -6,7 +6,6 @@ export type ChannelGenerationFormat =
   | "card_news"
   | "blog"
   | "reel"
-  | "marketing_content"
   | "single_image"
   | "channel_text";
 export type ChannelExportMode = "image" | "html" | "text";
@@ -38,7 +37,7 @@ export const channelCatalog = [
     oauth: { provider: "meta", credentialType: "oauth" },
     generationConstraints: { maxAssetCount: 5, aspectRatio: "1:1" },
     generationReady: true,
-    generationFormats: ["card_news", "single_image", "reel", "marketing_content"],
+    generationFormats: ["card_news", "single_image", "reel"],
     exportModes: ["image"],
     displayOrder: 1
   },

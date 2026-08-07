@@ -14,7 +14,7 @@ export type ContentChannelTarget =
   | "blog_export";
 
 export type ContentPurposeV2 = "informational" | "marketing";
-export type ContentOutputFormatV2 = "card_news" | "blog" | "reel" | "marketing_content";
+export type ContentOutputFormatV2 = "card_news" | "blog" | "reel";
 export type ContentChannelV2 = ContentChannelTarget;
 export type ContentReferenceRoleV2 = "planning" | "copy_pattern" | "visual_composition";
 export type ContentRatioV2 = "1:1" | "4:5" | "16:9" | "9:16";

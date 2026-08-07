@@ -64,26 +64,24 @@ describe("channel catalog", () => {
     ]);
   });
 
-  it("adds the exact Instagram V2 generation formats without removing legacy compatibility", () => {
+  it("publishes only active Instagram generation formats and excludes retired marketing_content", () => {
     const instagram = channelCatalog.find((entry) => entry.channel === "instagram");
     const v2Formats = new Set<ChannelGenerationFormat>([
       "card_news",
       "blog",
       "reel",
-      "marketing_content",
     ]);
 
     expect(instagram?.generationFormats).toEqual([
       "card_news",
       "single_image",
       "reel",
-      "marketing_content",
     ]);
     expect(instagram?.generationFormats.filter((format) => v2Formats.has(format))).toEqual([
       "card_news",
       "reel",
-      "marketing_content",
     ]);
+    expect(instagram?.generationFormats).not.toContain("marketing_content");
     expect(channelCatalog.some((entry) =>
       (["blog", "blog_export"] as string[]).includes(entry.channel)
     )).toBe(false);

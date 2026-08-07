@@ -405,7 +405,7 @@ function readyCapability(
     enabled: true,
     connectionStatus: "connected",
     canGenerate: true,
-    generationFormats: ["card_news", "reel", "marketing_content"],
+    generationFormats: ["card_news", "reel"],
     exportModes: ["image"],
     publishModes: ["instagram_feed_carousel"],
     readiness: "ready",

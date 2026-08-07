@@ -105,7 +105,6 @@ const formats = new Set<ContentOutputFormatV2>([
   "card_news",
   "blog",
   "reel",
-  "marketing_content",
 ]);
 const ratios = new Set<ContentRatioV2>(["1:1", "4:5", "16:9", "9:16"]);
 const imageMimeTypes = new Set<GeneratedImageMimeTypeV2>([
