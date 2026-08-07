@@ -4329,11 +4329,20 @@ export async function runMigrationsWithClient({
         const expectedStableCoreSha256 = hashFenceSecurityStableCore(
           providerInstallRequest.expectedFinalFenceSecurityCatalog,
         );
-        if ((!recovering075
-            && (fenceSecurityCatalog.catalogSha256 !== providerInstallRequest.expectedFinalFenceSecurityCatalogSha256
-              || fenceSecurityCatalog.canonicalJson !== JSON.stringify(providerInstallRequest.expectedFinalFenceSecurityCatalog)))
-          || (recovering075 && fenceSecurityCatalog.stableCoreSha256 !== expectedStableCoreSha256)
-          || sealed.final_fence_security_catalog_sha256 !== providerInstallRequest.expectedFinalFenceSecurityCatalogSha256) {
+        const baselineMatches = recovering075
+          ? fenceSecurityCatalog.stableCoreSha256 === expectedStableCoreSha256
+          : fenceSecurityCatalog.catalogSha256 === providerInstallRequest.expectedFinalFenceSecurityCatalogSha256
+            && fenceSecurityCatalog.canonicalJson === JSON.stringify(providerInstallRequest.expectedFinalFenceSecurityCatalog);
+        if (!baselineMatches) {
+          const version = await client.query("select current_setting('server_version_num')::integer as server_version_num");
+          validateCutover075Pg17AclCompatibilityCatalog({
+            liveFence: fenceSecurityCatalog,
+            sealedCatalog: providerInstallRequest.expectedFinalFenceSecurityCatalog,
+            migration074,
+            serverVersionNum: version.rows[0]?.server_version_num,
+          });
+        }
+        if (sealed.final_fence_security_catalog_sha256 !== providerInstallRequest.expectedFinalFenceSecurityCatalogSha256) {
           throw new Error("bootstrap_074_final_fence_security_catalog_mismatch");
         }
         const storedAttestation = validateProviderEventTriggerAttestation(sealed.provider_attestation_json, {
