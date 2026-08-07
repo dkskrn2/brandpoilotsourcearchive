@@ -894,9 +894,12 @@ run_075() {
   load_runtime
   load_role_environment
   load_bootstrap_inputs
-  local database_file output_file cutover_id bypass_token_file provider_attestation_file
+  local database_file admin_file plan_file output_file cutover_id bypass_token_file provider_attestation_file
   local allowlist_authorization_file allowlist_attestation_file preflight_evidence_file output
+  local membership_directory membership_enable_evidence membership_disable_evidence membership_enabled=false
   database_file="$(option migration-url-file)"
+  admin_file="$(option admin-url-file)"
+  plan_file="$(option plan-file)"
   output_file="$(option output)"
   cutover_id="$(option cutover-id)"
   bypass_token_file="$(option bypass-token-file)"
@@ -906,18 +909,43 @@ run_075() {
   preflight_evidence_file="$(option preflight-evidence-file)"
   require_uuid "$cutover_id"
   require_active_cutover "$cutover_id"
-  for input_file in "$database_file" "$bypass_token_file" "$provider_attestation_file" \
+  for input_file in "$database_file" "$admin_file" "$plan_file" "$bypass_token_file" "$provider_attestation_file" \
     "$allowlist_authorization_file" "$allowlist_attestation_file" "$preflight_evidence_file"; do
     require_secure_input "$input_file"
   done
-  local -a database_mount=() bypass_mount=() provider_attestation_mount=()
+  membership_directory="$(dirname -- "$output_file")/075-provider-membership"
+  install -d -m 0700 "$membership_directory"
+  membership_enable_evidence="$membership_directory/enabled.json"
+  membership_disable_evidence="$membership_directory/disabled.json"
+  local -a database_mount=() admin_mount=() plan_mount=() bypass_mount=() provider_attestation_mount=()
   local -a allowlist_authorization_mount=() allowlist_attestation_mount=() preflight_mount=()
   mapfile -d '' -t database_mount < <(mount_readonly "$database_file" /run/secrets/migration-database-url)
+  mapfile -d '' -t admin_mount < <(mount_readonly "$admin_file" /run/secrets/provider-admin-database-url)
+  mapfile -d '' -t plan_mount < <(mount_readonly "$plan_file" /run/secrets/role-plan.json)
   mapfile -d '' -t bypass_mount < <(mount_readonly "$bypass_token_file" /run/secrets/cutover-token)
   mapfile -d '' -t provider_attestation_mount < <(mount_readonly "$provider_attestation_file" /run/secrets/provider-attestation.json)
   mapfile -d '' -t allowlist_authorization_mount < <(mount_readonly "$allowlist_authorization_file" /run/secrets/allowlist-authorization.json)
   mapfile -d '' -t allowlist_attestation_mount < <(mount_readonly "$allowlist_attestation_file" /run/secrets/allowlist-attestation.json)
   mapfile -d '' -t preflight_mount < <(mount_readonly "$preflight_evidence_file" /run/secrets/proposal-preflight.json)
+  set_provider_membership() {
+    local mode="$1" evidence="$2"
+    "${RUNTIME[@]}" "${admin_mount[@]}" "${plan_mount[@]}" \
+      --mount "type=bind,src=$membership_directory,dst=/run/output" \
+      "$API_IMAGE" /app/scripts/ai-content-database-roles.mjs "$mode" \
+      --admin-url-file /run/secrets/provider-admin-database-url \
+      --plan /run/secrets/role-plan.json --cutover-id "$cutover_id" \
+      --evidence "/run/output/$(basename -- "$evidence")"
+  }
+  cleanup_provider_membership() {
+    if [[ "$membership_enabled" == "true" ]]; then
+      set_provider_membership --disable-075-provider-membership "$membership_disable_evidence" >/dev/null ||
+        printf '%s\n' 'error=cutover_075_provider_membership_cleanup_failed' >&2
+    fi
+  }
+  trap cleanup_provider_membership EXIT
+  membership_enabled=true
+  set_provider_membership --enable-075-provider-membership "$membership_enable_evidence" >/dev/null ||
+    fail "cutover_075_provider_membership_enable_failed"
   output="$("${RUNTIME[@]}" "${database_mount[@]}" "${AUTHORIZATION_MOUNT[@]}" \
     "${AUTHORIZATION_PUBLIC_MOUNT[@]}" "${PROVIDER_PUBLIC_MOUNT[@]}" \
     "${bypass_mount[@]}" "${provider_attestation_mount[@]}" \
@@ -938,6 +966,10 @@ run_075() {
     --env "AI_CONTENT_075_PROVIDER_ATTESTATION_KEY_ID=$PROVIDER_KEY_ID" \
     --env "AI_CONTENT_075_PROVIDER_ATTESTATION_PUBLIC_KEY_SHA256=$PROVIDER_KEY_SHA256" \
     "$API_IMAGE" /app/scripts/migrate.mjs)" || fail "ai_content_cutover_075_failed"
+  set_provider_membership --disable-075-provider-membership "$membership_disable_evidence" >/dev/null ||
+    fail "cutover_075_provider_membership_disable_failed"
+  membership_enabled=false
+  trap - EXIT
   grep -q '"status": "migration_body_complete"' <<<"$output" || fail "ai_content_cutover_075_evidence_invalid"
   capture_evidence "$output_file" printf '%s' "$output"
 }
@@ -1332,7 +1364,7 @@ run_complete_cutover() {
   remove_state_file "$ROOT/state/ai-content-cutover-id"
 }
 
-for command_name in cmp docker flock id install mktemp readlink sed sha256sum sync wc; do
+for command_name in basename cmp dirname docker flock id install mktemp readlink sed sha256sum sync wc; do
   require_command "$command_name"
 done
 exec 9>"$ROOT/state/deploy.lock"

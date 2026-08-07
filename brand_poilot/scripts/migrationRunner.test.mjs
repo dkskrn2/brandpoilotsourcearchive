@@ -1035,6 +1035,42 @@ test("075 execution accepts an expired authorization only after the provider all
   assert.doesNotMatch(preconditions, /allowExpiredSealed:\s*recovery/);
 });
 
+test("075 role catalog accepts and removes only the exact transient provider inheritance edge", () => {
+  const baseline = [{
+    member_role_name: "postgres", parent_role_name: "content_schema_owner",
+    grantor_role_name: "supabase_admin", set_option: false, inherit_option: false, admin_option: true,
+  }, {
+    member_role_name: "content_migration", parent_role_name: "content_schema_owner",
+    grantor_role_name: "postgres", set_option: true, inherit_option: false, admin_option: false,
+  }];
+  const transient = {
+    member_role_name: "postgres", parent_role_name: "content_schema_owner",
+    grantor_role_name: "postgres", set_option: true, inherit_option: true, admin_option: false,
+  };
+  assert.deepEqual(
+    migrationRunner.withoutProvider075TransientMembership([...baseline, transient], cutover075RoleNames, {
+      required: true,
+    }),
+    baseline,
+  );
+  assert.throws(
+    () => migrationRunner.withoutProvider075TransientMembership(baseline, cutover075RoleNames, { required: true }),
+    /cutover_075_provider_membership_required/,
+  );
+  assert.deepEqual(
+    migrationRunner.withoutProvider075TransientMembership(baseline, cutover075RoleNames, {
+      required: true, providerIsSuperuser: true,
+    }),
+    baseline,
+  );
+  assert.throws(
+    () => migrationRunner.withoutProvider075TransientMembership([...baseline, {
+      ...transient, admin_option: true,
+    }], cutover075RoleNames, { required: true }),
+    /cutover_075_provider_membership_invalid/,
+  );
+});
+
 test("075 ACL blocker: migration identity has an authorized migration_body_complete transition path", async () => {
   const sql = await readFile("db/migrations/074_ai_content_maintenance_write_fence.sql", "utf8");
   const runner = await readFile("scripts/migrationRunner.mjs", "utf8");

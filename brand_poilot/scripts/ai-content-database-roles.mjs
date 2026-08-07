@@ -1260,6 +1260,92 @@ export async function restoreSharedRelationOwners(client, rawPlan, { now = new D
   }
 }
 
+export async function setProvider075SchemaOwnerMembership(client, rawPlan, cutoverId, enabled) {
+  const plan = validatePlan(rawPlan);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(cutoverId)
+    || typeof enabled !== "boolean") {
+    throw new Error("cutover_075_provider_membership_input_invalid");
+  }
+  const identity = await client.query(`/* ai_content_075_provider_membership_identity */
+    select session_user::text session_user,current_user::text current_user,
+           role.rolsuper as is_superuser,role.rolinherit as inherit
+      from pg_roles role where role.rolname=session_user`);
+  const provider = identity.rows[0];
+  if (!provider || provider.session_user !== plan.preservedRuntimeRoleName
+    || provider.current_user !== plan.preservedRuntimeRoleName || provider.inherit !== true) {
+    throw new Error("cutover_075_provider_membership_identity_invalid");
+  }
+  const state = await client.query(`/* ai_content_075_provider_membership_cutover */
+    select cutover.status,maintenance.enabled as maintenance_enabled,
+           exists(select 1 from public.schema_migrations where id=$2) as marker_present
+      from public.ai_content_cutovers cutover
+      join public.ai_content_maintenance_state maintenance
+        on maintenance.singleton and maintenance.cutover_id=cutover.id
+     where cutover.id=$1`, [cutoverId, plan.cutoverMigration]);
+  const cutover = state.rows[0];
+  if (!cutover || cutover.maintenance_enabled !== true
+    || (enabled && (cutover.status !== "maintenance_verified" || cutover.marker_present !== false))
+    || (!enabled && !["maintenance_verified", "migration_body_complete"].includes(cutover.status))) {
+    throw new Error("cutover_075_provider_membership_state_invalid");
+  }
+  if (provider.is_superuser === true) {
+    return Object.freeze({
+      contractVersion: "ai-content-075-provider-membership-evidence.v1",
+      cutoverId, transientMembershipRequired: false, transientMembershipEnabled: false,
+    });
+  }
+  const readMembership = async () => (await client.query(`/* ai_content_075_provider_membership_catalog */
+    select grantor.rolname as grantor_role_name,membership.set_option,
+           membership.inherit_option,membership.admin_option
+      from pg_auth_members membership
+      join pg_roles member on member.oid=membership.member
+      join pg_roles parent on parent.oid=membership.roleid
+      join pg_roles grantor on grantor.oid=membership.grantor
+     where member.rolname=$1 and parent.rolname=$2
+     order by grantor.rolname,membership.set_option,membership.inherit_option,membership.admin_option`,
+  [plan.preservedRuntimeRoleName, plan.roleNames.schemaOwnerRoleName])).rows;
+  const classify = (rows) => {
+    const baseline = rows.filter((row) => row.grantor_role_name !== plan.preservedRuntimeRoleName
+      && row.set_option === false && row.inherit_option === false && row.admin_option === true);
+    const transient = rows.filter((row) => row.grantor_role_name === plan.preservedRuntimeRoleName
+      && row.set_option === true && row.inherit_option === true && row.admin_option === false);
+    if (baseline.length !== 1 || rows.length !== baseline.length + transient.length || transient.length > 1) {
+      throw new Error("cutover_075_provider_membership_catalog_invalid");
+    }
+    return { baseline, transient };
+  };
+  await client.query("begin");
+  try {
+    const before = await readMembership();
+    const beforeState = classify(before);
+    if (enabled) {
+      if (beforeState.transient.length === 0) {
+        await client.query(`grant ${quoteIdentifier(plan.roleNames.schemaOwnerRoleName)}
+          to ${quoteIdentifier(plan.preservedRuntimeRoleName)} with inherit true`);
+      }
+    } else if (beforeState.transient.length === 1) {
+      await client.query(`revoke ${quoteIdentifier(plan.roleNames.schemaOwnerRoleName)}
+        from ${quoteIdentifier(plan.preservedRuntimeRoleName)}
+        granted by ${quoteIdentifier(plan.preservedRuntimeRoleName)}`);
+    }
+    const after = await readMembership();
+    const afterState = classify(after);
+    if (afterState.transient.length !== (enabled ? 1 : 0)) {
+      throw new Error("cutover_075_provider_membership_transition_invalid");
+    }
+    await client.query("commit");
+    return Object.freeze({
+      contractVersion: "ai-content-075-provider-membership-evidence.v1",
+      cutoverId, transientMembershipRequired: true, transientMembershipEnabled: enabled,
+      baselineCatalogSha256: sha256Json(beforeState.baseline),
+      resultCatalogSha256: sha256Json(after),
+    });
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  }
+}
+
 const cleanupRetirementCommentPrefix = "ai-content-cleanup-retirement:";
 const cleanupRetirementPayloadKeys = Object.freeze([
   "contractVersion", "planSha256", "cutoverId", "cutoverMigrationId", "cutoverMigrationSha256",
@@ -2134,6 +2220,15 @@ async function main(argv = process.argv) {
     if (mode === "--retire-cleanup-role") {
       const evidence = await retireCleanupRole(client, plan, args["cutover-id"]);
       await exclusiveJson(args.evidence, evidence);
+      return;
+    }
+    if (["--enable-075-provider-membership", "--disable-075-provider-membership"].includes(mode)) {
+      const evidence = await setProvider075SchemaOwnerMembership(
+        client, plan, args["cutover-id"], mode === "--enable-075-provider-membership",
+      );
+      await writeOrVerifyExactJson(
+        args.evidence, evidence, "cutover_075_provider_membership_evidence_mismatch",
+      );
       return;
     }
     if (mode === "--verify") {

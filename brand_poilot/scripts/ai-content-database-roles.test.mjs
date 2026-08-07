@@ -192,6 +192,52 @@ test("074 provider recovery uses the sealed schema and a real migration-role con
   assert.match(cutover, /--migration-url-file \/run\/secrets\/migration-database-url/);
 });
 
+test("075 provider inheritance bridge grants one exact managed edge and revokes it", async () => {
+  const plan = createTestRoleBootstrapPlan();
+  const cutoverId = "7b7c8ed7-e046-4bcd-8592-38606f547493";
+  let transient = false;
+  const baseline = {
+    grantor_role_name: "supabase_admin", set_option: false, inherit_option: false, admin_option: true,
+  };
+  const client = { query: async (sql) => {
+    const text = String(sql);
+    if (text.includes("ai_content_075_provider_membership_identity")) {
+      return { rows: [{ session_user: "postgres", current_user: "postgres", is_superuser: false, inherit: true }] };
+    }
+    if (text.includes("ai_content_075_provider_membership_cutover")) {
+      return { rows: [{ status: "maintenance_verified", maintenance_enabled: true, marker_present: false }] };
+    }
+    if (text.includes("ai_content_075_provider_membership_catalog")) {
+      return { rows: [baseline, ...(transient ? [{
+        grantor_role_name: "postgres", set_option: true, inherit_option: true, admin_option: false,
+      }] : [])] };
+    }
+    if (/^\s*grant\s+"content_schema_owner"\s+to\s+"postgres"\s+with inherit true\s*$/i.test(text)) transient = true;
+    if (/^\s*revoke\s+"content_schema_owner"\s+from\s+"postgres"\s+granted by\s+"postgres"\s*$/i.test(text)) transient = false;
+    return { rows: [] };
+  } };
+  const enabled = await databaseRoles.setProvider075SchemaOwnerMembership(client, plan, cutoverId, true);
+  assert.equal(enabled.transientMembershipEnabled, true);
+  const disabled = await databaseRoles.setProvider075SchemaOwnerMembership(client, plan, cutoverId, false);
+  assert.equal(disabled.transientMembershipEnabled, false);
+  assert.equal(transient, false);
+});
+
+test("075 cutover brackets migration execution with the provider membership bridge", async () => {
+  const [rolesSource, cutoverSource] = await Promise.all([
+    readFile(new URL("./ai-content-database-roles.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../deploy/scripts/ai-content-cutover.sh", import.meta.url), "utf8"),
+  ]);
+  assert.match(rolesSource, /--enable-075-provider-membership[\s\S]*setProvider075SchemaOwnerMembership\([\s\S]*mode === "--enable-075-provider-membership"/);
+  assert.match(rolesSource, /--disable-075-provider-membership[\s\S]*setProvider075SchemaOwnerMembership\([\s\S]*mode === "--enable-075-provider-membership"/);
+  const run075 = cutoverSource.slice(cutoverSource.indexOf("run_075()"), cutoverSource.indexOf("run_proposal_preflight()"));
+  const enable = run075.indexOf("--enable-075-provider-membership");
+  const migration = run075.indexOf("/app/scripts/migrate.mjs");
+  const disable = run075.lastIndexOf("--disable-075-provider-membership");
+  assert.ok(enable >= 0 && enable < migration && migration < disable);
+  assert.match(run075, /trap[\s\S]*disable-075-provider-membership/);
+});
+
 test("role bootstrap applies only the closed role/schema/relation ownership plan", async () => {
   const plan = createTestRoleBootstrapPlan();
   const calls = [];

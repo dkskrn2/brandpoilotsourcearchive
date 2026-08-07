@@ -1675,7 +1675,30 @@ export async function readFenceSecurityCatalog(client, names, {
   };
 }
 
-export async function readCanonicalBootstrapRoleCatalog(client, names) {
+export function withoutProvider075TransientMembership(rows, names, {
+  required = false, providerIsSuperuser = false,
+} = {}) {
+  if (!Array.isArray(rows) || typeof names?.schemaOwnerRoleName !== "string") {
+    throw new Error("cutover_075_provider_membership_invalid");
+  }
+  const candidates = rows.filter((row) => row.member_role_name === "postgres"
+    && row.parent_role_name === names.schemaOwnerRoleName
+    && row.grantor_role_name === "postgres");
+  const exact = candidates.filter((row) => row.set_option === true
+    && row.inherit_option === true && row.admin_option === false);
+  if (candidates.length !== exact.length || exact.length > 1) {
+    throw new Error("cutover_075_provider_membership_invalid");
+  }
+  if (required && !providerIsSuperuser && exact.length !== 1) {
+    throw new Error("cutover_075_provider_membership_required");
+  }
+  if (!required && exact.length !== 0) throw new Error("cutover_075_provider_membership_unexpected");
+  return rows.filter((row) => !exact.includes(row));
+}
+
+export async function readCanonicalBootstrapRoleCatalog(client, names, {
+  requireProvider075Membership = false,
+} = {}) {
   const roleNames = [names.schemaOwnerRoleName, names.applicationRoleName, names.operatorRoleName,
     names.migrationRoleName, names.cleanupRoleName];
   const roleResult = await client.query(
@@ -1692,10 +1715,12 @@ export async function readCanonicalBootstrapRoleCatalog(client, names) {
   const membershipResult = await client.query(
     `/* bootstrap_role_membership_catalog_v2 */
      select member.rolname as member_role_name,parent.rolname as parent_role_name,
+            grantor.rolname as grantor_role_name,
             membership.set_option,membership.inherit_option,membership.admin_option
        from pg_auth_members membership
        join pg_roles member on member.oid=membership.member
        join pg_roles parent on parent.oid=membership.roleid
+       join pg_roles grantor on grantor.oid=membership.grantor
       where membership.member=any(select oid from pg_roles where rolname=any($1::name[]))
          or membership.roleid=any(select oid from pg_roles where rolname=any($1::name[]))
       order by member.rolname,parent.rolname`,
@@ -1704,6 +1729,7 @@ export async function readCanonicalBootstrapRoleCatalog(client, names) {
   const environmentResult = await client.query(
     `/* bootstrap_role_environment_catalog_v1 */
      select current_database() as database_name,database_owner.rolname as database_owner_role_name,
+            provider_role.rolsuper as provider_is_superuser,
             schema_owner.rolname as public_schema_owner_role_name,
             coalesce((select jsonb_agg(jsonb_build_object(
               'grantee',case schema_acl.grantee when 0 then 'PUBLIC' else schema_grantee.rolname end,
@@ -1730,13 +1756,20 @@ export async function readCanonicalBootstrapRoleCatalog(client, names) {
        join pg_roles database_owner on database_owner.oid=database_record.datdba
        join pg_namespace public_schema on public_schema.nspname='public'
        join pg_roles schema_owner on schema_owner.oid=public_schema.nspowner
+       join pg_roles provider_role on provider_role.rolname='postgres'
       where database_record.datname=current_database()`,
     [roleNames],
   );
   const environment = environmentResult.rows[0];
+  const membershipEdges = withoutProvider075TransientMembership(
+    membershipResult.rows, names, {
+      required: requireProvider075Membership,
+      providerIsSuperuser: environment?.provider_is_superuser === true,
+    },
+  );
   const roleCatalog = {
     roles: roleResult.rows,
-    membershipEdges: membershipResult.rows,
+    membershipEdges,
     databaseSettings: environment?.database_settings,
     database: {
       database_name: environment?.database_name,
@@ -1751,7 +1784,7 @@ export async function readCanonicalBootstrapRoleCatalog(client, names) {
   validateBootstrapRoleSafety(roleCatalog, names);
   return {
     roleRows: roleResult.rows,
-    membershipEdges: membershipResult.rows,
+    membershipEdges,
     databaseSettings: roleCatalog.databaseSettings,
     database: roleCatalog.database,
     publicSchema: roleCatalog.publicSchema,
@@ -1760,10 +1793,10 @@ export async function readCanonicalBootstrapRoleCatalog(client, names) {
   };
 }
 
-export async function readCanonicalBootstrapCatalogs(client, names) {
+export async function readCanonicalBootstrapCatalogs(client, names, options = {}) {
   const roleNames = [names.schemaOwnerRoleName, names.applicationRoleName, names.operatorRoleName,
     names.migrationRoleName, names.cleanupRoleName];
-  const roleCatalog = await readCanonicalBootstrapRoleCatalog(client, names);
+  const roleCatalog = await readCanonicalBootstrapRoleCatalog(client, names, options);
   const triggerDependencyPairs = bootstrapTriggerFunctionDependencies.flatMap((entry) => (
     entry.dependencyFunctionIdentities.map((dependencyFunctionIdentity) => ({
       triggerFunctionIdentity: entry.triggerFunctionIdentity,
@@ -3522,7 +3555,7 @@ async function verifyCutover075Preconditions({ client, migration, cutover, boots
   }
   const liveRoles = recovery
     ? await readCanonicalBootstrapCatalogs(client, names)
-    : await readCanonicalBootstrapRoleCatalog(client, names);
+    : await readCanonicalBootstrapRoleCatalog(client, names, { requireProvider075Membership: true });
   if (liveRoles.roleCatalogSha256 !== state.role_catalog_sha256) {
     throw new Error("cutover_075_live_role_catalog_mismatch");
   }
@@ -3557,6 +3590,7 @@ async function verifyCutover075Preconditions({ client, migration, cutover, boots
     eventTriggerCatalogSha256: state.event_trigger_catalog_after_sha256,
     eventTriggerCatalogCount: state.event_trigger_catalog_after_count,
     sealedBootstrapEnvelopeSha256: hashCutover075BootstrapEnvelopeState(state),
+    provider075MembershipRequired: !recovery,
     ...proposalPreflight,
   };
 }
@@ -3633,11 +3667,14 @@ async function revalidateAtomicCutoverDatabaseState({ client, migration, cutover
     || hashCutoverDdlAllowlist(allowlistRows) !== cutover.allowlistRowsSha256) {
     throw new Error("cutover_075_transaction_allowlist_drift");
   }
+  const membershipOptions = {
+    requireProvider075Membership: cutover.provider075MembershipRequired === true,
+  };
   const liveBootstrapCatalogs = cutover075Applied
-    ? await readCanonicalBootstrapCatalogs(client, cutover.roleNames)
+    ? await readCanonicalBootstrapCatalogs(client, cutover.roleNames, membershipOptions)
     : null;
   const liveRoles = liveBootstrapCatalogs
-    ?? await readCanonicalBootstrapRoleCatalog(client, cutover.roleNames);
+    ?? await readCanonicalBootstrapRoleCatalog(client, cutover.roleNames, membershipOptions);
   if (liveRoles.roleCatalogSha256 !== cutover.roleCatalogSha256) {
     throw new Error("cutover_075_transaction_role_catalog_drift");
   }
@@ -3693,6 +3730,7 @@ export async function executeAtomicCutoverMigration({ client, migration, cutover
     || cutover.allowlistAuthorization?.cutoverId !== cutover.cutoverId
     || !cutover.sealed074Context?.bootstrap074 || !cutover.sealed074Context?.migration074
     || !cutover.roleNames || !exactHex(cutover.roleCatalogSha256, 64)
+    || typeof cutover.provider075MembershipRequired !== "boolean"
     || !exactHex(cutover.eventTriggerCatalogSha256, 64)
     || !Number.isInteger(cutover.eventTriggerCatalogCount)
     || !exactHex(cutover.sealedBootstrapEnvelopeSha256, 64)
