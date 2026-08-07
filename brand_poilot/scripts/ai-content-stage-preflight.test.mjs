@@ -376,7 +376,11 @@ esac
   rmSync(dockerLog, { force: true });
   const postBootstrap = run("post-bootstrap");
   assert.equal(postBootstrap.status, 0, postBootstrap.stderr);
-  assert.match(readFileSync(dockerLog, "utf8"), /example\.invalid\/api@[^\n]*ai_content_application_database_url/);
+  const postBootstrapLog = readFileSync(dockerLog, "utf8");
+  assert.match(postBootstrapLog, /example\.invalid\/api@[^\n]*ai_content_application_database_url/);
+  const databaseSecretValidation = postBootstrapLog.split("\n")
+    .find((line) => line.includes("ai_content_application_database_url"));
+  assert.match(databaseSecretValidation, /--user 1000:1000/);
 });
 
 test("active or marker-present cutover state blocks staging before any host mutation", (t) => {

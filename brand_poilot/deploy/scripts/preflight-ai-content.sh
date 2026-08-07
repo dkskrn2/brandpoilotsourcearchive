@@ -191,6 +191,7 @@ if [[ "$AI_CONTENT_PREFLIGHT_MODE" == "post-bootstrap" ]]; then
   timeout --signal=TERM --kill-after=5s 30s \
     docker run --rm --pull never \
       --network none \
+      --user "$(id -u):$(id -g)" \
       --read-only \
       --cap-drop ALL \
       --security-opt no-new-privileges \
