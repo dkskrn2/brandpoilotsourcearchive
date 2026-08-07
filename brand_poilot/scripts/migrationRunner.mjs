@@ -3567,6 +3567,7 @@ async function verifyCutover075Preconditions({ client, migration, cutover, boots
   let enforcementStableCoreSha256 = hashFenceSecurityStableCore(
     storedInstall.expectedFinalFenceSecurityCatalog,
   );
+  let enforcementCatalogSha256 = state.final_fence_security_catalog_sha256;
   const storedProviderAttestation = validateProviderEventTriggerAttestation(state.provider_attestation_json, {
     authorization: authorization074,
     installRequest: storedInstall,
@@ -3657,6 +3658,7 @@ async function verifyCutover075Preconditions({ client, migration, cutover, boots
       migration074,
       serverVersionNum: version.rows[0]?.server_version_num,
     });
+    enforcementCatalogSha256 = liveFence.catalogSha256;
     enforcementStableCoreSha256 = liveFence.stableCoreSha256;
   }
   const liveEventTriggers = await readCanonicalEventTriggerCatalog(client);
@@ -3670,7 +3672,7 @@ async function verifyCutover075Preconditions({ client, migration, cutover, boots
     allowlistRowsSha256: authorization.rowsSha256,
     allowlistAuthorizationSha256: hashCutoverAllowlistAuthorizationEnvelope(authorization),
     allowlistAttestationSha256: hashCutoverAllowlistAttestationEnvelope(cutover.allowlistAttestation),
-    enforcementCatalogSha256: state.final_fence_security_catalog_sha256,
+    enforcementCatalogSha256,
     enforcementStableCoreSha256,
     provider074AttestationSha256: state.provider_attestation_sha256,
     roleCatalogSha256: state.role_catalog_sha256,
