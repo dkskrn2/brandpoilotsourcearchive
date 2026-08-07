@@ -129,6 +129,17 @@ test("preserved runtime schema CREATE is accepted only for the managed database-
   }, "postgres"), false);
 });
 
+test("restored PostgreSQL 17 owners normalize only the implicit MAINTAIN privilege", () => {
+  assert.equal(typeof databaseRoles.sharedOwnerPrivilegesForComparison, "function");
+  const privileges = ["DELETE", "INSERT", "MAINTAIN", "REFERENCES", "SELECT", "TRIGGER", "TRUNCATE", "UPDATE"];
+  assert.deepEqual(databaseRoles.sharedOwnerPrivilegesForComparison({
+    privileges, owner_role_name: "postgres", preserved_owner_role_name: "postgres",
+  }, "restored"), privileges.filter((privilege) => privilege !== "MAINTAIN"));
+  assert.deepEqual(databaseRoles.sharedOwnerPrivilegesForComparison({
+    privileges, owner_role_name: "content_schema_owner", preserved_owner_role_name: "postgres",
+  }, "transferred"), privileges);
+});
+
 test("role database URLs preserve the Supabase pooler tenant suffix", () => {
   assert.equal(typeof databaseRoles.roleDatabaseUrl, "function");
   assert.equal(

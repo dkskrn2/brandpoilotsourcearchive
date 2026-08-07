@@ -492,6 +492,15 @@ export function preservedRuntimeSchemaAclIsValid(row, preservedRuntimeRoleName) 
     && row.database_owner_role_name === preservedRuntimeRoleName;
 }
 
+export function sharedOwnerPrivilegesForComparison(row, sharedOwnerState) {
+  const privileges = Array.isArray(row?.privileges) ? row.privileges.map(String) : [];
+  if (sharedOwnerState === "restored"
+    && row?.owner_role_name === row?.preserved_owner_role_name) {
+    return privileges.filter((privilege) => privilege !== "MAINTAIN");
+  }
+  return privileges;
+}
+
 export async function verifyApplicationRuntimeSecurity(client, rawPlan, {
   sharedOwnerState = "transferred",
   cutoverSecurityState = "pre-cutover",
@@ -721,7 +730,7 @@ export async function verifyApplicationRuntimeSecurity(client, rawPlan, {
     relation_name: String(row.relation_name),
     owner_role_name: String(row.owner_role_name),
     preserved_owner_role_name: String(row.preserved_owner_role_name),
-    privileges: Array.isArray(row.privileges) ? row.privileges.map(String) : [],
+    privileges: sharedOwnerPrivilegesForComparison(row, sharedOwnerState),
     grantable: Boolean(row.grantable),
   }));
   const expectedSharedOwnerAcl = plan.sharedOwnerTransfers.map(({
