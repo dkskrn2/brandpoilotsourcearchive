@@ -1278,6 +1278,7 @@ run_complete_cutover() {
   load_runtime
   local admin_file operator_file plan_file cutover_id output_file backend_evidence
   local retirement_directory retirement_evidence completion_directory completion_evidence completion_output
+  local membership_directory membership_enable_evidence membership_disable_evidence membership_enabled=false
   local -a admin_mount=() operator_mount=() plan_mount=() retirement_mount=()
   admin_file="$(option admin-url-file)"
   operator_file="$(option operator-url-file)"
@@ -1308,16 +1309,45 @@ run_complete_cutover() {
   else
     install -d -m 0700 "$retirement_directory"
   fi
+  membership_directory="$retirement_directory/provider-membership"
+  install -d -m 0700 "$membership_directory"
+  membership_enable_evidence="$membership_directory/enabled.json"
+  membership_disable_evidence="$membership_directory/disabled.json"
+  set_cleanup_retirement_provider_membership() {
+    local mode="$1" evidence="$2"
+    "${RUNTIME[@]}" "${admin_mount[@]}" "${plan_mount[@]}" \
+      --mount "type=bind,src=$membership_directory,dst=/run/output" \
+      "$API_IMAGE" /app/scripts/ai-content-database-roles.mjs "$mode" \
+      --admin-url-file /run/input/admin-database-url --plan /run/input/role-plan.json \
+      --cutover-id "$cutover_id" --evidence "/run/output/$(basename -- "$evidence")"
+  }
+  cleanup_retirement_provider_membership() {
+    if [[ "$membership_enabled" == "true" ]]; then
+      set_cleanup_retirement_provider_membership \
+        --disable-075-provider-membership "$membership_disable_evidence" >/dev/null || \
+        printf '%s\n' 'error=cutover_075_provider_membership_cleanup_failed' >&2
+    fi
+  }
   if [[ -e "$retirement_evidence" || -L "$retirement_evidence" ]]; then
     [[ -f "$retirement_evidence" && ! -L "$retirement_evidence" ]] ||
       fail "ai_content_cleanup_role_retirement_state_incomplete"
   else
+    trap cleanup_retirement_provider_membership EXIT
+    membership_enabled=true
+    set_cleanup_retirement_provider_membership \
+      --enable-075-provider-membership "$membership_enable_evidence" >/dev/null || \
+      fail "cutover_075_provider_membership_enable_failed"
     "${RUNTIME[@]}" "${admin_mount[@]}" "${plan_mount[@]}" \
       --mount "type=bind,src=$retirement_directory,dst=/run/output" \
       "$API_IMAGE" /app/scripts/ai-content-database-roles.mjs --retire-cleanup-role \
       --admin-url-file /run/input/admin-database-url --plan /run/input/role-plan.json \
       --cutover-id "$cutover_id" --evidence /run/output/evidence.json >/dev/null ||
       fail "ai_content_cleanup_role_retirement_failed"
+    set_cleanup_retirement_provider_membership \
+      --disable-075-provider-membership "$membership_disable_evidence" >/dev/null || \
+      fail "cutover_075_provider_membership_disable_failed"
+    membership_enabled=false
+    trap - EXIT
   fi
   require_file_mode_600 "$retirement_evidence" "$FILE_OWNER"
   grep -q '"contractVersion":"ai-content-cleanup-role-retirement-evidence.v1"' "$retirement_evidence" ||

@@ -85,7 +85,12 @@ test("post-075 lifecycle keeps maintenance across restore and rollout verificati
   assert.match(complete, /ai-content-cutover-control\.mjs --complete/);
   assert.match(complete, /'"status":"completed"'/);
   assert.match(complete, /'"maintenanceEnabled":false'/);
-  assert.ok(complete.indexOf("--retire-cleanup-role") < complete.indexOf("--complete"));
+  const membershipEnable = complete.indexOf("--enable-075-provider-membership");
+  const retirement = complete.indexOf("--retire-cleanup-role");
+  const membershipDisable = complete.lastIndexOf("--disable-075-provider-membership");
+  assert.ok(membershipEnable >= 0 && membershipEnable < retirement);
+  assert.ok(retirement < membershipDisable && membershipDisable < complete.indexOf("--complete"));
+  assert.match(complete, /trap cleanup_retirement_provider_membership EXIT/);
   assert.ok(complete.indexOf("--complete") < complete.indexOf('remove_state_file "$ROOT/state/ai-content-cutover-id"'));
 });
 
