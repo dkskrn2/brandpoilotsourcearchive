@@ -1781,7 +1781,7 @@ export async function installProvider074EnforcementBundle({
     }
     const attestation = validateProviderEventTriggerAttestation(recovery.provider_attestation_json, {
       authorization, installRequest, providerAttestationVerification: providerVerification,
-      finalFenceSecurityCatalogSha256: finalFence.catalogSha256, now,
+      finalFenceSecurityCatalogSha256: finalFence.catalogSha256, now, allowExpiredSealed: true,
     });
     const attestationSha256 = hashProviderAttestationEnvelope(attestation);
     if (attestationSha256 !== recovery.provider_attestation_sha256) {

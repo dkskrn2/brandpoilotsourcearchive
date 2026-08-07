@@ -2944,6 +2944,19 @@ test("074 bootstrap role authorization seals provider install and consumes exact
   };
 
   assert.equal(migrationRunner.validateProviderEventTriggerAttestation(attestation, context).eventTriggerOwner, "postgres");
+  const expiredSealedAttestation = signProviderAttestation({
+    ...unsigned,
+    issuedAt: "2026-08-05T00:02:00.000Z",
+  });
+  const expiredSealedContext = { ...context, now: new Date("2026-08-05T00:02:00.000Z") };
+  assert.throws(
+    () => migrationRunner.validateProviderEventTriggerAttestation(expiredSealedAttestation, expiredSealedContext),
+    /provider_attestation_stale/,
+  );
+  assert.equal(migrationRunner.validateProviderEventTriggerAttestation(expiredSealedAttestation, {
+    ...expiredSealedContext,
+    allowExpiredSealed: true,
+  }).eventTriggerOwner, "postgres");
   assert.throws(() => migrationRunner.validateProviderEventTriggerAttestation(signProviderAttestation({ ...unsigned, contractVersion: "ai-content-074-provider-attestation.v3" }), context), /provider_attestation_contract_invalid/);
   assert.throws(() => migrationRunner.validateProviderEventTriggerAttestation(signProviderAttestation({ ...unsigned, contractVersion: "ai-content-074-provider-attestation.v2" }), context), /provider_attestation_contract_invalid/);
   assert.throws(() => migrationRunner.validateProviderEventTriggerAttestation({ ...attestation, action: "arbitrary_sql" }, context), /provider_attestation_signature_invalid|provider_attestation_action_mismatch/);
@@ -3291,6 +3304,7 @@ test("074 bootstrap role authorization applies stage one then independently cons
     bootstrap074: { ...bootstrap, authorization: alteredAuthorization },
   }), /bootstrap_074_state_mismatch/);
   providerBundleInstalled = true;
+  bootstrap.now = new Date("2026-08-05T00:02:00.000Z");
   const finalFenceSecurityCatalog = await migrationRunner.readFenceSecurityCatalog(client, authorization, { ownerRoleName: "postgres" });
   assert.equal(finalFenceSecurityCatalog.catalogSha256, install.expectedFinalFenceSecurityCatalogSha256);
   const unsignedAttestation = {
@@ -3312,7 +3326,7 @@ test("074 bootstrap role authorization applies stage one then independently cons
     eventTriggerCatalogBeforeCount: install.eventTriggerCatalogBeforeCount,
     eventTriggerCatalogAfterSha256: migrationRunner.hashEventTriggerCatalog([preexistingEvent, approvedLiveEvent]),
     eventTriggerCatalogAfterCount: 2,
-    issuedAt: "2026-08-05T00:00:00.000Z",
+    issuedAt: "2026-08-05T00:02:00.000Z",
   };
   const providerAttestation = signProviderAttestation(unsignedAttestation);
   const providerAttestationSha256 = migrationRunner.hashProviderAttestationEnvelope(providerAttestation);

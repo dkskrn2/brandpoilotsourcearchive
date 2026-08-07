@@ -2842,6 +2842,7 @@ export function buildProviderEventTriggerInstallRequest(authorization, seals) {
 
 export function validateProviderEventTriggerAttestation(attestation, {
   authorization, installRequest, providerAttestationVerification, finalFenceSecurityCatalogSha256, now,
+  allowExpiredSealed = false,
 }) {
   if (!attestation || attestation.contractVersion !== providerAttestationContract) {
     throw new Error("provider_attestation_contract_invalid");
@@ -2857,7 +2858,7 @@ export function validateProviderEventTriggerAttestation(attestation, {
   const currentTime = new Date(now ?? Date.now()).getTime();
   if (!Number.isFinite(issued)
     || issued < Date.parse(authorization.issuedAt)
-    || issued > Date.parse(authorization.expiresAt)
+    || (!allowExpiredSealed && issued > Date.parse(authorization.expiresAt))
     || issued > currentTime) {
     throw new Error("provider_attestation_stale");
   }
@@ -3458,7 +3459,7 @@ async function verifyCutover075Preconditions({ client, migration, cutover, boots
     installRequest: storedInstall,
     providerAttestationVerification: bootstrap074.providerAttestationVerification,
     finalFenceSecurityCatalogSha256: state.final_fence_security_catalog_sha256,
-    now: bootstrap074.now,
+    now: bootstrap074.now, allowExpiredSealed: true,
   });
   const storedProviderAttestationSha256 = hashProviderAttestationEnvelope(storedProviderAttestation);
   const expectedRevocation = buildMembershipRevocationRequest(
@@ -4201,7 +4202,7 @@ export async function runMigrationsWithClient({
           authorization, installRequest: providerInstallRequest,
           providerAttestationVerification: bootstrap074.providerAttestationVerification,
           finalFenceSecurityCatalogSha256: providerInstallRequest.expectedFinalFenceSecurityCatalogSha256,
-          now: bootstrap074.now,
+          now: bootstrap074.now, allowExpiredSealed: true,
         });
         const storedAttestationSha256 = hashProviderAttestationEnvelope(storedAttestation);
         if (storedAttestationSha256 !== sealed.provider_attestation_sha256) {
@@ -4212,7 +4213,7 @@ export async function runMigrationsWithClient({
             authorization, installRequest: providerInstallRequest,
             providerAttestationVerification: bootstrap074.providerAttestationVerification,
             finalFenceSecurityCatalogSha256: providerInstallRequest.expectedFinalFenceSecurityCatalogSha256,
-            now: bootstrap074.now,
+            now: bootstrap074.now, allowExpiredSealed: true,
           });
           if (hashProviderAttestationEnvelope(suppliedAttestation) !== storedAttestationSha256) {
             throw new Error("provider_attestation_replayed");
