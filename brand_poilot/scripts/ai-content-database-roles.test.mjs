@@ -234,9 +234,18 @@ test("role bootstrap applies only the closed role/schema/relation ownership plan
   const providerSetGrantIndex = calls.findIndex(({ sql: statement }) => /grant "content_schema_owner" to "postgres" with set true/i.test(statement));
   const firstOwnerTransferIndex = calls.findIndex(({ sql: statement }) => /alter table public\."[^\"]+" owner to/i.test(statement));
   const lastFunctionTransferIndex = calls.findLastIndex(({ sql: statement }) => /alter function .* owner to "content_schema_owner"/i.test(statement));
+  const setSchemaOwnerIndex = calls.findIndex(({ sql: statement }) => /set local role "content_schema_owner"/i.test(statement));
+  const resetRoleIndex = calls.findIndex(({ sql: statement }) => /^reset role$/i.test(statement));
+  const transferredApplicationGrantIndex = calls.findIndex(({ sql: statement }) => /grant insert,select,update on table public\."ai_content_generations" to "content_application"/i.test(statement));
+  const externalApplicationGrantIndex = calls.findIndex(({ sql: statement }) => /grant select on table public\."workspace_members" to "content_application"/i.test(statement));
+  const preservedOwnerGrantIndex = calls.findIndex(({ sql: statement }) => /grant delete,insert,references,select,trigger,truncate,update on table public\."worker_instances" to "postgres"/i.test(statement));
   const providerSetRevokeIndex = calls.findIndex(({ sql: statement }) => /revoke "content_schema_owner" from "postgres"/i.test(statement));
   assert.ok(providerSetGrantIndex >= 0 && providerSetGrantIndex < firstOwnerTransferIndex);
-  assert.ok(providerSetRevokeIndex > lastFunctionTransferIndex);
+  assert.ok(externalApplicationGrantIndex > firstOwnerTransferIndex && externalApplicationGrantIndex < setSchemaOwnerIndex);
+  assert.ok(setSchemaOwnerIndex > lastFunctionTransferIndex);
+  assert.ok(transferredApplicationGrantIndex > setSchemaOwnerIndex && transferredApplicationGrantIndex < resetRoleIndex);
+  assert.ok(preservedOwnerGrantIndex > setSchemaOwnerIndex && preservedOwnerGrantIndex < resetRoleIndex);
+  assert.ok(providerSetRevokeIndex > resetRoleIndex);
   assert.doesNotMatch(sql, /alter function public\.set_updated_at\(\) owner/i);
   assert.equal(
     mutationCountAfterFirstApply,

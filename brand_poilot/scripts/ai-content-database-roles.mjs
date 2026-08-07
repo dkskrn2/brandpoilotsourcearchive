@@ -946,9 +946,8 @@ export async function applyRoleBootstrap(client, rawPlan, passwords) {
     for (const relationName of plan.exclusiveOwnedRelations) {
       await client.query(`alter table public.${quoteIdentifier(relationName)} owner to ${quoteIdentifier(names.schemaOwnerRoleName)}`);
     }
-    for (const { relationName, preservedOwnerRoleName, preservedPrivileges } of plan.sharedOwnerTransfers) {
+    for (const { relationName } of plan.sharedOwnerTransfers) {
       await client.query(`alter table public.${quoteIdentifier(relationName)} owner to ${quoteIdentifier(names.schemaOwnerRoleName)}`);
-      await client.query(`grant ${preservedPrivileges.map((privilege) => privilege.toLowerCase()).join(",")} on table public.${quoteIdentifier(relationName)} to ${quoteIdentifier(preservedOwnerRoleName)}`);
     }
     const exclusiveAclGrantees = await client.query(
       `/* ai_content_exclusive_acl_grantees_to_scrub */
@@ -989,7 +988,12 @@ export async function applyRoleBootstrap(client, rawPlan, passwords) {
       const grantee = row.grantee_role_name === "PUBLIC" ? "public" : quoteIdentifier(String(row.grantee_role_name));
       await client.query(`revoke all privileges (${quoteIdentifier(String(row.column_name))}) on table public.${quoteIdentifier(String(row.relation_name))} from ${grantee}`);
     }
-    for (const { relationName, privileges } of plan.applicationRelationGrants) {
+    const transferredRelationNames = new Set([
+      ...plan.exclusiveOwnedRelations,
+      ...plan.sharedOwnerTransfers.map(({ relationName }) => relationName),
+    ]);
+    for (const { relationName, privileges } of plan.applicationRelationGrants
+      .filter(({ relationName }) => !transferredRelationNames.has(relationName))) {
       await client.query(`revoke all on table public.${quoteIdentifier(relationName)} from ${quoteIdentifier(names.applicationRoleName)}`);
       await client.query(`grant ${privileges.map((privilege) => privilege.toLowerCase()).join(",")} on table public.${quoteIdentifier(relationName)} to ${quoteIdentifier(names.applicationRoleName)}`);
     }
@@ -1007,6 +1011,19 @@ export async function applyRoleBootstrap(client, rawPlan, passwords) {
     for (const identity of plan.applicationOwnedFunctions) {
       await client.query(`alter function ${identity} owner to ${quoteIdentifier(names.schemaOwnerRoleName)}`);
     }
+    // Grants issued while the provider merely has SET membership are dependent
+    // on that membership and PostgreSQL removes them when the edge is revoked.
+    // Issue grants on transferred objects as the durable no-login owner instead.
+    await client.query(`set local role ${quoteIdentifier(names.schemaOwnerRoleName)}`);
+    for (const { relationName, preservedOwnerRoleName, preservedPrivileges } of plan.sharedOwnerTransfers) {
+      await client.query(`grant ${preservedPrivileges.map((privilege) => privilege.toLowerCase()).join(",")} on table public.${quoteIdentifier(relationName)} to ${quoteIdentifier(preservedOwnerRoleName)}`);
+    }
+    for (const { relationName, privileges } of plan.applicationRelationGrants
+      .filter(({ relationName }) => transferredRelationNames.has(relationName))) {
+      await client.query(`revoke all on table public.${quoteIdentifier(relationName)} from ${quoteIdentifier(names.applicationRoleName)}`);
+      await client.query(`grant ${privileges.map((privilege) => privilege.toLowerCase()).join(",")} on table public.${quoteIdentifier(relationName)} to ${quoteIdentifier(names.applicationRoleName)}`);
+    }
+    await client.query("reset role");
     await client.query(
       `revoke ${quoteIdentifier(names.schemaOwnerRoleName)} from ${quoteIdentifier(plan.preservedRuntimeRoleName)}`,
     );
