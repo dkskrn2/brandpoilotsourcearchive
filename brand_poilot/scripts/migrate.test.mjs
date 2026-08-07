@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 const migrateModule = await import("./migrate.mjs");
@@ -13,6 +15,37 @@ test("migration CLI has an ESM main guard and is safe to import", async () => {
 
   assert.match(source, /pathToFileURL\(process\.argv\[1\]\)\.href === import\.meta\.url/);
   assert.match(source, /export async function main/);
+});
+
+test("migration CLI reserves stdout for its JSON evidence", async () => {
+  const originalCwd = process.cwd();
+  const originalConsoleLog = console.log;
+  const directory = await mkdtemp(join(tmpdir(), "brand-pilot-migrate-"));
+  const messages = [];
+  try {
+    await writeFile(join(directory, ".env"), "MIGRATE_STDOUT_TEST=loaded\n", "utf8");
+    process.chdir(directory);
+    console.log = (...args) => messages.push(args.join(" "));
+
+    await migrateModule.main({
+      env: { SUPABASE_DATABASE_URL: "postgresql://database.example/postgres" },
+      argv: ["node", "scripts/migrate.mjs", "--dry-run"],
+      runMigrationsImpl: async () => ({ pending: [], migrations: [], baselineRequired: false }),
+      logger: console,
+    });
+
+    assert.equal(messages.length, 1);
+    assert.deepEqual(JSON.parse(messages[0]), {
+      applied: [],
+      migrationCount: 0,
+      baselineRequired: false,
+    });
+  } finally {
+    console.log = originalConsoleLog;
+    process.chdir(originalCwd);
+    delete process.env.MIGRATE_STDOUT_TEST;
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("migration CLI strictly decodes optional CA runtime configuration", () => {

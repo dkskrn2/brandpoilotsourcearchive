@@ -7,10 +7,10 @@ import { decodeCaCertificate } from "./databaseTls.mjs";
 import { runMigrations } from "./migrationRunner.mjs";
 
 function loadEnvironmentFiles() {
-  config({ path: ".env" });
-  config({ path: ".env.local", override: true });
-  config({ path: "apps/api/.env", override: true });
-  config({ path: "apps/api/.env.local", override: true });
+  config({ path: ".env", quiet: true });
+  config({ path: ".env.local", override: true, quiet: true });
+  config({ path: "apps/api/.env", override: true, quiet: true });
+  config({ path: "apps/api/.env.local", override: true, quiet: true });
 }
 
 export function validateSecureCutoverFileMetadata(metadata, { platform, uid, maxBytes }) {
