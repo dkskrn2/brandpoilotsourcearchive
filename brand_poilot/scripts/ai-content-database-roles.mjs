@@ -1708,7 +1708,7 @@ async function probeProvider074Capability(client) {
 }
 
 export async function installProvider074EnforcementBundle({
-  client, migration, plan: rawPlan, authorization, installRequest,
+  client, migrationClient, migration, plan: rawPlan, authorization, installRequest,
   authorizationIdentity, providerIdentity, now = new Date(),
 }) {
   const plan = validatePlan(rawPlan);
@@ -1755,9 +1755,7 @@ export async function installProvider074EnforcementBundle({
   if (recoveryPresent && recoveryFields.some((value) => value === null || value === undefined)) {
     throw new Error("bootstrap_074_provider_artifact_state_incomplete");
   }
-  await client.query(`set session authorization ${quoteIdentifier(plan.roleNames.migrationRoleName)}`);
-  const catalogs = await readCanonicalBootstrapCatalogs(client, plan.roleNames);
-  await client.query("reset session authorization");
+  const catalogs = await readCanonicalBootstrapCatalogs(migrationClient, plan.roleNames);
   if (recoveryPresent) {
     validateBootstrapRoleAuthorization(authorization, {
       migration, roleCatalogSha256: catalogs.roleCatalogSha256,
@@ -2181,10 +2179,16 @@ async function main(argv = process.argv) {
         args["provider-private-key-file"], args["provider-key-id"],
         args["provider-public-key-sha256"],
       );
-      const evidence = await installProvider074EnforcementBundle({
-        client, migration, plan, authorization, installRequest,
-        authorizationIdentity, providerIdentity,
-      });
+      const { client: migrationClient } = await connectFromFile(args["migration-url-file"]);
+      let evidence;
+      try {
+        evidence = await installProvider074EnforcementBundle({
+          client, migrationClient, migration, plan, authorization, installRequest,
+          authorizationIdentity, providerIdentity,
+        });
+      } finally {
+        await migrationClient.end();
+      }
       await writeOrVerifyExactJson(
         args["attestation-output"], evidence.attestation, "bootstrap_074_provider_attestation_replay_mismatch",
       );

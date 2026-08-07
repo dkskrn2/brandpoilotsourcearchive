@@ -411,19 +411,20 @@ run_install_074_enforcement_bundle() {
   load_runtime_release
   require_pre_marker_inactive_phase
   load_runtime
-  local cutover_id admin_file plan_file stage_evidence_file attestation_output revocation_output
+  local cutover_id admin_file migration_file plan_file stage_evidence_file attestation_output revocation_output
   local state_directory authorization_file install_request_file attestation_file revocation_file temporary_directory
   local existing_provider_output input_file
-  local -a admin_mount=() plan_mount=() authorization_mount=() install_mount=()
+  local -a admin_mount=() migration_mount=() plan_mount=() authorization_mount=() install_mount=()
   local -a authorization_public_mount=() provider_private_mount=()
   cutover_id="$(option cutover-id)"
   admin_file="$(option admin-url-file)"
+  migration_file="$(option migration-url-file)"
   plan_file="$(option plan-file)"
   stage_evidence_file="$(option stage-evidence-file)"
   attestation_output="$(option attestation-output)"
   revocation_output="$(option revocation-output)"
   require_uuid "$cutover_id"
-  for input_file in "$admin_file" "$plan_file" "$stage_evidence_file"; do require_secure_input "$input_file"; done
+  for input_file in "$admin_file" "$migration_file" "$plan_file" "$stage_evidence_file"; do require_secure_input "$input_file"; done
   load_provider_artifacts "$cutover_id"
   state_directory="$PROVIDER_ARTIFACT_DIRECTORY/074-authorization"
   require_artifact_directory "$state_directory"
@@ -455,16 +456,18 @@ run_install_074_enforcement_bundle() {
     fi
   done
   mapfile -d '' -t admin_mount < <(mount_readonly "$admin_file" /run/secrets/provider-admin-database-url)
+  mapfile -d '' -t migration_mount < <(mount_readonly "$migration_file" /run/secrets/migration-database-url)
   mapfile -d '' -t plan_mount < <(mount_readonly "$plan_file" /run/secrets/role-plan.json)
   mapfile -d '' -t authorization_mount < <(mount_readonly "$authorization_file" /run/secrets/authorization.json)
   mapfile -d '' -t install_mount < <(mount_readonly "$install_request_file" /run/secrets/provider-install-request.json)
   mapfile -d '' -t authorization_public_mount < <(mount_readonly "$AUTHORIZATION_PUBLIC_KEY_FILE" /run/secrets/authorization-public.pem)
   mapfile -d '' -t provider_private_mount < <(mount_readonly "$PROVIDER_PRIVATE_KEY_FILE" /run/secrets/provider-private.pem)
-  "${RUNTIME[@]}" "${admin_mount[@]}" "${plan_mount[@]}" "${authorization_mount[@]}" \
+  "${RUNTIME[@]}" "${admin_mount[@]}" "${migration_mount[@]}" "${plan_mount[@]}" "${authorization_mount[@]}" \
     "${install_mount[@]}" "${authorization_public_mount[@]}" "${provider_private_mount[@]}" \
     --mount "type=bind,src=$state_directory,dst=/run/output" \
     "$API_IMAGE" /app/scripts/ai-content-database-roles.mjs --install-074-enforcement-bundle \
-    --admin-url-file /run/secrets/provider-admin-database-url --plan /run/secrets/role-plan.json \
+    --admin-url-file /run/secrets/provider-admin-database-url \
+    --migration-url-file /run/secrets/migration-database-url --plan /run/secrets/role-plan.json \
     --authorization /run/secrets/authorization.json --install-request /run/secrets/provider-install-request.json \
     --authorization-public-key-file /run/secrets/authorization-public.pem \
     --authorization-key-id "$AUTHORIZATION_KEY_ID" --authorization-public-key-sha256 "$AUTHORIZATION_KEY_SHA256" \
