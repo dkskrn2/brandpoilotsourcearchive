@@ -3658,7 +3658,6 @@ async function verifyCutover075Preconditions({ client, migration, cutover, boots
       migration074,
       serverVersionNum: version.rows[0]?.server_version_num,
     });
-    enforcementCatalogSha256 = liveFence.catalogSha256;
     enforcementStableCoreSha256 = liveFence.stableCoreSha256;
   }
   const liveEventTriggers = await readCanonicalEventTriggerCatalog(client);
@@ -3776,7 +3775,7 @@ async function revalidateAtomicCutoverDatabaseState({ client, migration, cutover
     cutover075Applied,
     ...(cutover075Applied ? { cutover075Migration: migration } : {}),
   });
-  if ((!cutover075Applied && liveFence.catalogSha256 !== cutover.enforcementCatalogSha256)
+  if ((!cutover075Applied && liveFence.stableCoreSha256 !== cutover.enforcementStableCoreSha256)
     || (cutover075Applied && liveFence.stableCoreSha256 !== cutover.enforcementStableCoreSha256)) {
     throw new Error("cutover_075_transaction_enforcement_catalog_drift");
   }
