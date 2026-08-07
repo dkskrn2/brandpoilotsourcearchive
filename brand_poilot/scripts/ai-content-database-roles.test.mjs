@@ -292,6 +292,8 @@ test("cleanup-role retirement drops inherited provider access outside ACL mutati
   assert.ok(firstDisable >= 0 && firstDisable < securityPreflight);
   assert.ok(securityPreflight < enable && enable < aclMutation);
   assert.ok(aclMutation < finalDisable && finalDisable < finalVerification);
+  assert.match(retirement, /alter role \$\{quoteIdentifier\(cleanupRoleName\)\} nologin inherit nobypassrls nocreatedb nocreaterole noreplication password null/);
+  assert.doesNotMatch(retirement, /alter role \$\{quoteIdentifier\(cleanupRoleName\)\}[^\n]*nosuperuser/);
 });
 
 test("role bootstrap applies only the closed role/schema/relation ownership plan", async () => {

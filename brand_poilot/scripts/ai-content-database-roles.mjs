@@ -1635,7 +1635,7 @@ export async function retireCleanupRole(client, rawPlan, cutoverId) {
     await client.query(`revoke all privileges on all functions in schema public from ${quoteIdentifier(cleanupRoleName)}`);
     await client.query(`revoke all privileges on schema public from ${quoteIdentifier(cleanupRoleName)}`);
     await client.query(`revoke all privileges on database ${quoteIdentifier(plan.databaseName)} from ${quoteIdentifier(cleanupRoleName)}`);
-    await client.query(`alter role ${quoteIdentifier(cleanupRoleName)} nologin inherit nosuperuser nobypassrls nocreatedb nocreaterole noreplication password null`);
+    await client.query(`alter role ${quoteIdentifier(cleanupRoleName)} nologin inherit nobypassrls nocreatedb nocreaterole noreplication password null`);
     await client.query(`alter role ${quoteIdentifier(cleanupRoleName)} reset all`);
     await setProviderSchemaOwnerMembershipInTransaction(client, plan, false);
     const retiredCatalog = await readCleanupRoleSecurityCatalog(client, cleanupRoleName);
