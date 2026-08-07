@@ -875,7 +875,8 @@ export async function applyRoleBootstrap(client, rawPlan, passwords) {
     const present = new Set(existing.rows.map((row) => String(row.rolname)));
     const create = async (name, attributes) => {
       if (!present.has(name)) await client.query(`create role ${quoteIdentifier(name)} ${attributes}`);
-      await client.query(`alter role ${quoteIdentifier(name)} ${attributes}`);
+      const alterAttributes = attributes.split(" ").filter((attribute) => attribute !== "nosuperuser").join(" ");
+      await client.query(`alter role ${quoteIdentifier(name)} ${alterAttributes}`);
     };
     await create(names.schemaOwnerRoleName, "nologin nosuperuser nobypassrls nocreatedb nocreaterole noreplication inherit");
     await create(names.applicationRoleName, "login inherit nosuperuser nobypassrls nocreatedb nocreaterole noreplication");

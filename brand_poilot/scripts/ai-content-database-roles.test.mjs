@@ -216,6 +216,7 @@ test("role bootstrap applies only the closed role/schema/relation ownership plan
   const sql = calls.map(({ sql }) => sql).join("\n");
   assert.match(sql, /create role "content_schema_owner" nologin nosuperuser nobypassrls/i);
   assert.match(sql, /create role "content_migration" login noinherit/i);
+  assert.doesNotMatch(sql, /alter role "content_(?:schema_owner|application|operator|migration|cleanup)"[^;\n]*nosuperuser/i);
   assert.match(sql, /grant "content_schema_owner" to "content_migration" with set true, inherit false, admin false/i);
   assert.match(sql, /revoke create on schema public from public/i);
   assert.doesNotMatch(sql, /revoke all on schema public from public/i);
