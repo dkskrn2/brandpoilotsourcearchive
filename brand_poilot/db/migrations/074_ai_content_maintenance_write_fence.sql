@@ -1,5 +1,37 @@
 begin;
 
+do $bootstrap_digest$
+declare
+  digest_identity regprocedure := to_regprocedure('public.digest(text,text)');
+  extension_owned boolean := false;
+begin
+  if digest_identity is not null then
+    select exists (
+      select 1
+        from pg_depend dependency
+        join pg_extension extension_record
+          on extension_record.oid=dependency.refobjid and extension_record.extname='pgcrypto'
+       where dependency.classid='pg_proc'::regclass
+         and dependency.objid=digest_identity
+         and dependency.deptype='e'
+    ) into extension_owned;
+  end if;
+  if not extension_owned then
+    execute $function$
+      create or replace function public.digest(p_value text,p_algorithm text) returns bytea
+      language plpgsql immutable strict parallel safe set search_path=pg_catalog as $body$
+      begin
+        if lower(p_algorithm)<>'sha256' then
+          raise exception 'ai_content_digest_algorithm_invalid';
+        end if;
+        return sha256(convert_to(p_value,'UTF8'));
+      end;
+      $body$
+    $function$;
+  end if;
+end;
+$bootstrap_digest$;
+
 create table ai_content_cutovers (
   id uuid primary key,
   status text not null check (status in (

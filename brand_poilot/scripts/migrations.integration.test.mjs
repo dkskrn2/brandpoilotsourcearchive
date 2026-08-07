@@ -726,7 +726,7 @@ test("074 canonical authorization hashes are recomputed from the live PostgreSQL
       member_role_name: "content_migration", parent_role_name: "content_schema_owner",
       set_option: true, inherit_option: false, admin_option: false,
     });
-    assert.equal(catalogs.roleCatalogSha256, "e4ba37a8732ded18b8ccf21766059600062ef24a3eaafa3e5b627cd990793d6b");
+    assert.equal(catalogs.roleCatalogSha256, "0f440f26dbbe370983b1d78663bb031884ced9cbfb08ebe85364e3c3f1084413");
     assert.equal(catalogs.objectCatalogSha256, "e0a668cd048d07833651f3b6607351a001291b39b80e4e5f3f8d469351b6a788");
     for (const row of catalogs.objectRows) {
       assert.equal(row.relation_persistence, "p", row.relation_name);
@@ -910,9 +910,9 @@ test("074 canonical authorization hashes are recomputed from the live PostgreSQL
     await database.exec(`set session authorization postgres; alter role content_application in database ${quoteIdentifier(databaseName)} set statement_timeout='1s'; set session authorization content_migration; set search_path=public,pg_catalog,pg_temp`);
     await assertRoleBoundaryRejected(/bootstrap_role_database_settings_invalid/);
     await database.exec(`set session authorization postgres; alter role content_application in database ${quoteIdentifier(databaseName)} reset statement_timeout; set session authorization content_migration; set search_path=public,pg_catalog,pg_temp`);
-    await database.exec("set session authorization postgres; grant usage on schema public to public; set session authorization content_migration; set search_path=public,pg_catalog,pg_temp");
+    await database.exec("set session authorization postgres; grant create on schema public to public; set session authorization content_migration; set search_path=public,pg_catalog,pg_temp");
     await assertRoleBoundaryRejected(/bootstrap_role_public_schema_acl_invalid/);
-    await database.exec("set session authorization postgres; revoke usage on schema public from public; alter schema public owner to content_schema_owner; set session authorization content_migration; set search_path=public,pg_catalog,pg_temp");
+    await database.exec("set session authorization postgres; revoke create on schema public from public; alter schema public owner to content_schema_owner; set session authorization content_migration; set search_path=public,pg_catalog,pg_temp");
     await assertRoleBoundaryRejected(/bootstrap_role_database_boundary_invalid/);
     await database.exec("set session authorization postgres; alter schema public owner to pg_database_owner; set session authorization content_migration; set search_path=public,pg_catalog,pg_temp");
     await database.exec("set session authorization postgres; grant content_schema_owner to content_application; set session authorization content_migration; set search_path=public,pg_catalog,pg_temp");

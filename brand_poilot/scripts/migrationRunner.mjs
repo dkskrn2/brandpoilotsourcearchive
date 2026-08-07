@@ -248,7 +248,7 @@ export function canonicalBootstrapRoleCatalog({
     acl: normalizeAcl(publicSchemaRow?.acl),
   };
   return JSON.stringify({
-    contractVersion: "ai-content-bootstrap-role-catalog.v4",
+    contractVersion: "ai-content-bootstrap-role-catalog.v5",
     roles,
     membershipEdges,
     databaseSettings,
@@ -580,8 +580,8 @@ const functionCatalogJsonSql = ({ functionAlias, namespaceAlias, ownerAlias, lan
   identitySql = `${namespaceAlias}.nspname || '.' || ${functionAlias}.proname || '(' || pg_get_function_identity_arguments(${functionAlias}.oid) || ')'`,
 }) => `jsonb_build_object(
     'identity',${identitySql},
-    'definition_sha256',encode(digest(pg_get_functiondef(${functionAlias}.oid),'sha256'),'hex'),
-    'source_sha256',encode(digest(${functionAlias}.prosrc,'sha256'),'hex'),
+    'definition_sha256',encode(sha256(convert_to(pg_get_functiondef(${functionAlias}.oid),'UTF8')),'hex'),
+    'source_sha256',encode(sha256(convert_to(${functionAlias}.prosrc,'UTF8')),'hex'),
     'owner_role_name',${ownerAlias}.rolname,'security_definer',${functionAlias}.prosecdef,
     'language_name',${languageAlias}.lanname,'function_kind',${functionAlias}.prokind,
     'volatility',${functionAlias}.provolatile,'parallel_safety',${functionAlias}.proparallel,
@@ -634,6 +634,8 @@ export function validateBootstrapRoleSafety({
   const byName = new Map(rows.map((row) => [String(row.role_name), row]));
   const exactNames = [names.schemaOwnerRoleName, names.applicationRoleName, names.operatorRoleName,
     names.migrationRoleName, names.cleanupRoleName];
+  const controlledNames = new Set(exactNames);
+  const providerOwnerRoleName = names.providerOwnerRoleName ?? "postgres";
   if (rows.length !== 5 || byName.size !== 5 || exactNames.some((name) => !byName.has(name))) throw new Error("bootstrap_role_catalog_invalid");
   const booleanRoleFields = ["can_login", "is_superuser", "bypass_rls", "can_create_db", "can_create_role", "can_replicate", "inherit"];
   const publicFirstRoles = new Set([names.schemaOwnerRoleName, names.migrationRoleName]);
@@ -653,25 +655,38 @@ export function validateBootstrapRoleSafety({
     || byName.get(names.migrationRoleName).inherit !== false) {
     throw new Error("bootstrap_role_catalog_invalid");
   }
-  const expectedMembershipEdges = [{
+  const expectedMembershipEdge = {
     member_role_name: names.migrationRoleName,
     parent_role_name: names.schemaOwnerRoleName,
     set_option: true,
     inherit_option: false,
     admin_option: false,
-  }];
+  };
   const normalizeEdge = (row) => ({
     member_role_name: String(row.member_role_name), parent_role_name: String(row.parent_role_name),
     set_option: row.set_option === true, inherit_option: row.inherit_option === true,
     admin_option: row.admin_option === true,
   });
-  const edges = membershipEdges.map(normalizeEdge).sort((left, right) => lexicalCompare(
+  const edges = membershipEdges.map(normalizeEdge).filter((edge) => (
+    controlledNames.has(edge.member_role_name) || controlledNames.has(edge.parent_role_name)
+  )).sort((left, right) => lexicalCompare(
     `${left.member_role_name}\0${left.parent_role_name}`,
     `${right.member_role_name}\0${right.parent_role_name}`,
   ));
-  if (JSON.stringify(edges) !== JSON.stringify(expectedMembershipEdges)) throw new Error("bootstrap_role_catalog_invalid");
-  if (databaseSettings.length !== 0) throw new Error("bootstrap_role_database_settings_invalid");
-  const providerOwnerRoleName = names.providerOwnerRoleName ?? "postgres";
+  const internalEdges = edges.filter((edge) => edge.member_role_name !== providerOwnerRoleName);
+  const providerEdges = edges.filter((edge) => edge.member_role_name === providerOwnerRoleName);
+  if (JSON.stringify(internalEdges) !== JSON.stringify([expectedMembershipEdge])
+    || providerEdges.some((edge) => !controlledNames.has(edge.parent_role_name)
+      || edge.set_option || edge.inherit_option || !edge.admin_option)
+    || new Set(providerEdges.map((edge) => edge.parent_role_name)).size !== providerEdges.length) {
+    throw new Error("bootstrap_role_catalog_invalid");
+  }
+  if (databaseSettings.some((row) => row.role_name != null
+    || row.database_name !== database.database_name
+    || !Array.isArray(row.settings) || row.settings.length === 0
+    || row.settings.some((setting) => !/^app\.settings\.jwt_exp=[0-9]+$/.test(String(setting).replace(/\s+/g, ""))))) {
+    throw new Error("bootstrap_role_database_settings_invalid");
+  }
   if (database.owner_role_name !== providerOwnerRoleName
     || publicSchema.owner_role_name !== "pg_database_owner") {
     throw new Error("bootstrap_role_database_boundary_invalid");
@@ -684,9 +699,15 @@ export function validateBootstrapRoleSafety({
     ...[names.applicationRoleName, names.operatorRoleName, names.migrationRoleName, names.cleanupRoleName]
       .map((grantee) => ({ grantee, privilege: "USAGE", grantable: false })),
   ]);
-  if (!Array.isArray(publicSchema.acl)
-    || exactJson(normalizeAcl(publicSchema.acl)) !== exactJson(expectedSchemaAcl)
-    || publicSchema.acl.some((entry) => entry.grantee === "PUBLIC")) {
+  if (!Array.isArray(publicSchema.acl)) throw new Error("bootstrap_role_public_schema_acl_invalid");
+  const actualSchemaAcl = normalizeAcl(publicSchema.acl);
+  const expectedSchemaAclNormalized = normalizeAcl(expectedSchemaAcl);
+  const expectedSchemaAclKeys = new Set(expectedSchemaAclNormalized.map((entry) => JSON.stringify(entry)));
+  const actualSchemaAclKeys = new Set(actualSchemaAcl.map((entry) => JSON.stringify(entry)));
+  if (expectedSchemaAclNormalized.some((entry) => !actualSchemaAclKeys.has(JSON.stringify(entry)))
+    || actualSchemaAcl.some((entry) => !expectedSchemaAclKeys.has(JSON.stringify(entry))
+      && (entry.privilege !== "USAGE" || entry.grantable !== false
+        || controlledNames.has(entry.grantee)))) {
     throw new Error("bootstrap_role_public_schema_acl_invalid");
   }
   const expectedCurrentRole = afterSetRole ? names.schemaOwnerRoleName : names.migrationRoleName;
@@ -989,7 +1010,7 @@ export async function readCanonicalEventTriggerCatalog(client) {
             case event_trigger.evtenabled when 'O' then 'enabled' else event_trigger.evtenabled::text end as event_trigger_enabled,
             owner.rolname as event_trigger_owner,
             namespace.nspname || '.' || function.proname as event_trigger_function,
-            encode(digest(pg_get_functiondef(function.oid),'sha256'),'hex') as event_trigger_function_sha256,
+            encode(sha256(convert_to(pg_get_functiondef(function.oid),'UTF8')),'hex') as event_trigger_function_sha256,
             ${functionCatalogJsonSql({
               functionAlias: "function", namespaceAlias: "namespace", ownerAlias: "function_owner",
               languageAlias: "function_language", returnTypeAlias: "function_return_type",
@@ -1395,8 +1416,8 @@ export async function readCutover075PostCatalog(client, names, {
   const functionResult = await client.query(
     `/* cutover_075_security_functions_v1 */
      select requested.identity,
-            encode(digest(pg_get_functiondef(function.oid),'sha256'),'hex') as definition_sha256,
-            encode(digest(function.prosrc,'sha256'),'hex') as source_sha256,
+            encode(sha256(convert_to(pg_get_functiondef(function.oid),'UTF8')),'hex') as definition_sha256,
+            encode(sha256(convert_to(function.prosrc,'UTF8')),'hex') as source_sha256,
             owner.rolname as owner_role_name,function.prosecdef as security_definer,
             language.lanname as language_name,function.prokind as function_kind,
             function.provolatile as volatility,function.proparallel as parallel_safety,
@@ -1468,7 +1489,7 @@ export async function readFenceSecurityCatalog(client, names, {
   const functionResult = await client.query(
     `/* fence_security_functions_v1 */
      select requested.identity,
-            encode(digest(pg_get_functiondef(function.oid),'sha256'),'hex') as definition_sha256,
+            encode(sha256(convert_to(pg_get_functiondef(function.oid),'UTF8')),'hex') as definition_sha256,
             owner.rolname as owner_role_name,function.prosecdef as security_definer,
             coalesce(function.proconfig,'{}'::text[]) as config,
             coalesce((select jsonb_agg(jsonb_build_object(
@@ -1660,21 +1681,13 @@ export async function readCanonicalBootstrapRoleCatalog(client, names) {
   );
   const membershipResult = await client.query(
     `/* bootstrap_role_membership_catalog_v2 */
-     with recursive connected_roles(oid) as (
-       select role.oid from pg_roles role where role.rolname=any($1::name[])
-       union
-       select case when membership.member=connected.oid then membership.roleid else membership.member end
-         from connected_roles connected
-         join pg_auth_members membership
-           on membership.member=connected.oid or membership.roleid=connected.oid
-     )
      select member.rolname as member_role_name,parent.rolname as parent_role_name,
             membership.set_option,membership.inherit_option,membership.admin_option
        from pg_auth_members membership
-       join connected_roles connected_member on connected_member.oid=membership.member
-       join connected_roles connected_parent on connected_parent.oid=membership.roleid
        join pg_roles member on member.oid=membership.member
        join pg_roles parent on parent.oid=membership.roleid
+      where membership.member=any(select oid from pg_roles where rolname=any($1::name[]))
+         or membership.roleid=any(select oid from pg_roles where rolname=any($1::name[]))
       order by member.rolname,parent.rolname`,
     [roleNames],
   );
@@ -2891,7 +2904,7 @@ async function readLiveEventTriggerEvidence(client, authorization) {
             owner.rolname as event_trigger_owner,
             case event_trigger.evtenabled when 'O' then 'enabled' else event_trigger.evtenabled::text end as event_trigger_enabled,
             namespace.nspname || '.' || function.proname as event_trigger_function,
-            encode(digest(pg_get_functiondef(function.oid),'sha256'),'hex') as event_trigger_function_sha256,
+            encode(sha256(convert_to(pg_get_functiondef(function.oid),'UTF8')),'hex') as event_trigger_function_sha256,
             ${functionCatalogJsonSql({
               functionAlias: "function", namespaceAlias: "namespace", ownerAlias: "function_owner",
               languageAlias: "function_language", returnTypeAlias: "function_return_type",

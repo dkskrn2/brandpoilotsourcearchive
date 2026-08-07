@@ -1077,7 +1077,7 @@ test("075 PostgreSQL harness uses the unmodified loaded migration and authentic 
   assert.match(harness, /alter role content_application set search_path=public[\s\S]*bootstrap_role_catalog_invalid/i);
   assert.match(harness, /alter role content_application in database[\s\S]*bootstrap_role_database_settings_invalid/i);
   assert.match(harness, /alter database[\s\S]*set search_path='public'[\s\S]*bootstrap_role_database_settings_invalid/i);
-  assert.match(harness, /grant usage on schema public to public[\s\S]*bootstrap_role_public_schema_acl_invalid/i);
+  assert.match(harness, /grant create on schema public to public[\s\S]*bootstrap_role_public_schema_acl_invalid/i);
   assert.match(harness, /alter schema public owner to content_schema_owner[\s\S]*bootstrap_role_database_boundary_invalid/i);
   assert.match(harness, /assertEventFunctionTamper[\s\S]*owner to content_schema_owner[\s\S]*grant execute[\s\S]*set search_path=public[\s\S]*security invoker[\s\S]*create or replace function public\.enforce_ai_content_ddl_allowlist/i);
   assert.match(harness, /pg_get_functiondef\('public\.reject_ai_content_analyzed_subject_snapshot_mutation\(\)'::regprocedure\)[\s\S]*create or replace function public\.reject_ai_content_analyzed_subject_snapshot_mutation\(\)[\s\S]*return new[\s\S]*originalAnalyzedSubjectSnapshotRejectDefinition/i);
@@ -1233,8 +1233,8 @@ test("075 PostgreSQL harness applies 074 ACLs and proves atomic rollback and rec
       /bootstrap_role_database_settings_invalid/,
     );
     await assertRoleBoundaryTamper(
-      "grant usage on schema public to public",
-      "revoke usage on schema public from public",
+      "grant create on schema public to public",
+      "revoke create on schema public from public",
       /bootstrap_role_public_schema_acl_invalid/,
     );
     await assertRoleBoundaryTamper(
@@ -2329,7 +2329,7 @@ test("074 canonical live role and object catalog hashes are order-independent an
   const roleHash = migrationRunner.hashBootstrapRoleCatalog(stableBootstrapRoleCatalog(roles, membershipEdges));
   assert.equal(
     JSON.parse(migrationRunner.canonicalBootstrapRoleCatalog(stableBootstrapRoleCatalog(roles, membershipEdges))).contractVersion,
-    "ai-content-bootstrap-role-catalog.v4",
+    "ai-content-bootstrap-role-catalog.v5",
   );
   const objectHash = migrationRunner.hashBootstrapObjectCatalog(objects);
   assert.equal(
@@ -2465,6 +2465,19 @@ test("074 bootstrap object catalog excludes only the separately sealed managed f
   assert.doesNotMatch(catalogQuery, /trigger\.tgname\s+like\s+'ai_content_fence_%'/i);
 });
 
+test("074 bootstraps a sealed core SHA-256 compatibility function for managed pgcrypto schemas", async () => {
+  const [migration, runner] = await Promise.all([
+    readFile("db/migrations/074_ai_content_maintenance_write_fence.sql", "utf8"),
+    readFile(new URL("./migrationRunner.mjs", import.meta.url), "utf8"),
+  ]);
+  assert.match(migration, /to_regprocedure\('public\.digest\(text,text\)'\)/);
+  assert.match(migration, /pg_depend[\s\S]*pg_extension[\s\S]*extname='pgcrypto'/);
+  assert.match(migration, /create or replace function public\.digest\(p_value text,p_algorithm text\)/);
+  assert.match(migration, /return sha256\(convert_to\(p_value,'UTF8'\)\)/);
+  assert.match(runner, /encode\(sha256\(convert_to\(pg_get_functiondef/);
+  assert.doesNotMatch(runner, /encode\(digest\(pg_get_functiondef/);
+});
+
 test("074 role safety seals both directions and rejects every non-approved PG16 membership edge", () => {
   const names = {
     schemaOwnerRoleName: "content_schema_owner",
@@ -2482,10 +2495,12 @@ test("074 role safety seals both directions and rejects every non-approved PG16 
   ];
   const soleEdge = [{ member_role_name: names.migrationRoleName, parent_role_name: names.schemaOwnerRoleName,
     set_option: true, inherit_option: false, admin_option: false }];
-  const roleCatalog = (roles, membershipEdges) => {
-    const environment = stableBootstrapRoleEnvironment();
+  const roleCatalog = (roles, membershipEdges, environment = stableBootstrapRoleEnvironment()) => {
     return {
       ...stableBootstrapRoleCatalog(roles, membershipEdges),
+      databaseSettings: environment.database_settings,
+      database: { database_name: environment.database_name, owner_role_name: environment.database_owner_role_name },
+      publicSchema: { owner_role_name: environment.public_schema_owner_role_name, acl: environment.public_schema_acl },
       session: {
         session_user_name: environment.session_user_name,
         current_user_name: environment.current_user_name,
@@ -2494,6 +2509,33 @@ test("074 role safety seals both directions and rejects every non-approved PG16 
     };
   };
   assert.doesNotThrow(() => migrationRunner.validateBootstrapRoleSafety(roleCatalog(safe, soleEdge), names));
+  const providerEdges = safe.map(({ role_name: parent_role_name }) => ({
+    member_role_name: "postgres", parent_role_name,
+    set_option: false, inherit_option: false, admin_option: true,
+  }));
+  const managedEnvironment = stableBootstrapRoleEnvironment({
+    public_schema_acl: [
+      ...stableBootstrapRoleEnvironment().public_schema_acl,
+      ...["PUBLIC", "anon", "authenticated", "postgres", "service_role"]
+        .map((grantee) => ({ grantee, privilege: "USAGE", grantable: false })),
+    ],
+    database_settings: [{ role_name: null, database_name: "ai_content_test", settings: ["app.settings.jwt_exp=3600"] }],
+  });
+  assert.doesNotThrow(() => migrationRunner.validateBootstrapRoleSafety(
+    roleCatalog(safe, [...soleEdge, ...providerEdges], managedEnvironment), names,
+  ));
+  assert.throws(() => migrationRunner.validateBootstrapRoleSafety(
+    roleCatalog(safe, [...soleEdge, { ...providerEdges[0], set_option: true }], managedEnvironment), names,
+  ), /bootstrap_role_catalog_invalid/);
+  assert.throws(() => migrationRunner.validateBootstrapRoleSafety(roleCatalog(safe, soleEdge,
+    stableBootstrapRoleEnvironment({
+      public_schema_acl: [...managedEnvironment.public_schema_acl,
+        { grantee: "rogue_login", privilege: "CREATE", grantable: false }],
+    })), names), /bootstrap_role_public_schema_acl_invalid/);
+  assert.throws(() => migrationRunner.validateBootstrapRoleSafety(roleCatalog(safe, soleEdge,
+    stableBootstrapRoleEnvironment({
+      database_settings: [{ role_name: null, database_name: "ai_content_test", settings: ["search_path=public"] }],
+    })), names), /bootstrap_role_database_settings_invalid/);
   for (const capability of ["can_create_db", "can_create_role", "can_replicate"]) {
     for (const roleName of safe.map((row) => row.role_name)) {
       const attacked = safe.map((row) => row.role_name === roleName ? { ...row, [capability]: true } : row);
