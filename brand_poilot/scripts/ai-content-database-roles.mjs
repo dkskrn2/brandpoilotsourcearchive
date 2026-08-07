@@ -1817,7 +1817,7 @@ export async function installProvider074EnforcementBundle({
       `/* bootstrap_074_provider_owner_membership */
        grant ${quoteIdentifier(plan.roleNames.schemaOwnerRoleName)}
           to ${quoteIdentifier(plan.preservedRuntimeRoleName)}
-        with set true, inherit false, admin false`,
+        with set true, inherit true, admin false`,
     );
     const allRoles = ["public", ...Object.values(plan.roleNames)];
     for (const functionIdentity of providerEnforcementBundle.functions) {
