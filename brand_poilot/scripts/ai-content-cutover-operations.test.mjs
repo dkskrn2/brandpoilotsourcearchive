@@ -45,6 +45,20 @@ test("073a is a provider prerequisite before role bootstrap and does not depend 
   );
 });
 
+test("cutover database containers receive only the production database CA projection", async () => {
+  const source = await read("deploy/scripts/ai-content-cutover.sh");
+  const runtime = source.slice(
+    source.indexOf("database_tls_environment()"),
+    source.indexOf("role_environment()"),
+  );
+  assert.match(runtime, /shared\/env\/api\.env/);
+  assert.match(runtime, /DB_SSL_CA_BASE64/);
+  assert.match(runtime, /--env/);
+  assert.doesNotMatch(runtime, /--env-file/);
+  assert.doesNotMatch(runtime, /SUPABASE_DATABASE_URL|WORKER_API_TOKEN|SESSION_SECRET/);
+  assert.ok(runtime.indexOf("database_tls_environment") < runtime.indexOf("docker_runtime_prefix"));
+});
+
 test("post-075 lifecycle keeps maintenance across restore and rollout verification, then completes", async () => {
   const source = await read("deploy/scripts/ai-content-cutover.sh");
   const restore = source.slice(source.indexOf("run_restore_shared_owners()"), source.indexOf("run_verify_backend()"));

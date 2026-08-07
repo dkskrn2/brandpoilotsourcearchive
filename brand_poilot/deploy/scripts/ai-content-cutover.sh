@@ -126,10 +126,22 @@ load_runtime_release() {
   require_staged_release_pointer_consistency
 }
 
+database_tls_environment() {
+  local env_file="$ROOT/shared/env/api.env"
+  local ca_line ca_count
+  require_file_mode_600 "$env_file" "$FILE_OWNER"
+  ca_count="$(grep -Ec '^DB_SSL_CA_BASE64=[A-Za-z0-9+/]+={0,2}$' "$env_file" || true)"
+  [[ "$ca_count" == "1" ]] || fail "ai_content_database_ca_invalid"
+  ca_line="$(grep -E '^DB_SSL_CA_BASE64=[A-Za-z0-9+/]+={0,2}$' "$env_file")"
+  printf '%s\0' --env "$ca_line"
+}
+
 docker_runtime_prefix() {
+  local -a database_tls_env=()
+  mapfile -d '' -t database_tls_env < <(database_tls_environment)
   printf '%s\0' docker run --rm --read-only \
     --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
-    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m --entrypoint node
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m "${database_tls_env[@]}" --entrypoint node
 }
 
 declare -a RUNTIME=()
