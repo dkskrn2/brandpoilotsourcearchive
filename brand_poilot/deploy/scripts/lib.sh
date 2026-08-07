@@ -701,20 +701,40 @@ resolve_ai_content_floor_database_input() {
   printf -v "$output_kind_variable" '%s' "env"
 }
 
+resolve_ai_content_floor_tls_environment() {
+  local root="$1"
+  local owner="${AI_CONTENT_CUTOVER_FILE_OWNER:-bpdeploy}"
+  local env_file="$root/shared/env/api.env"
+  local line ca_line="" ca_count=0
+  require_file_mode_600 "$env_file" "$owner"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == DB_SSL_CA_BASE64=* ]]; then
+      ca_count="$((ca_count + 1))"
+      [[ "$line" =~ ^DB_SSL_CA_BASE64=[A-Za-z0-9+/]+={0,2}$ ]] ||
+        fail "ai_content_database_ca_invalid"
+      ca_line="$line"
+    fi
+  done < "$env_file"
+  [[ "$ca_count" == "1" ]] || fail "ai_content_database_ca_invalid"
+  printf '%s\0' --env "$ca_line"
+}
+
 probe_ai_content_075_marker() {
   local root="$1"
   local database_input=""
   local database_input_kind=""
   local api_image
   local output
+  local -a tls_environment=()
   require_command docker
   require_command id
   resolve_ai_content_floor_database_input \
     "$root" database_input database_input_kind
+  mapfile -d '' -t tls_environment < <(resolve_ai_content_floor_tls_environment "$root")
   api_image="$(resolve_ai_content_floor_probe_image "$root")" || return 1
   if ! output="$(docker run --rm --pull never --read-only \
     --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
-    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m --entrypoint node \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m "${tls_environment[@]}" --entrypoint node \
     --mount "type=bind,src=$database_input,dst=/run/secrets/ai-content-floor-database-input,readonly" \
     "$api_image" /app/scripts/ai-content-cutover-floor-probe.mjs \
     --input-file /run/secrets/ai-content-floor-database-input \

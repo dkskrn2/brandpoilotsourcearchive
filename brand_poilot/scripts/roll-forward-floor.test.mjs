@@ -93,6 +93,7 @@ resolve_ai_content_floor_database_input() {
   printf -v "$3" '%s' "operator"
 }
 resolve_ai_content_floor_probe_image() { printf '%s\\n' 'example.invalid/api@sha256:${"a".repeat(64)}'; }
+resolve_ai_content_floor_tls_environment() { printf '%s\\0' --env DB_SSL_CA_BASE64=YWJj; }
 docker() {
   printf '%s\\n' "$@" > "$CAPTURED_ARGUMENTS"
   printf 'true\\n'
@@ -105,6 +106,7 @@ probe_ai_content_075_marker "/unused/root"
   const argumentsText = readFileSync(capturedArguments, "utf8");
   assert.match(argumentsText, /\/app\/scripts\/ai-content-cutover-floor-probe\.mjs/);
   assert.match(argumentsText, /--input-kind\r?\noperator/);
+  assert.match(argumentsText, /--env\r?\nDB_SSL_CA_BASE64=YWJj/);
   assert.doesNotMatch(argumentsText, /--eval/);
   const probe = readFileSync("scripts/ai-content-cutover-floor-probe.mjs", "utf8");
   assert.match(probe, /read_ai_content_cutover_control_state\('00000000-0000-0000-0000-000000000000'::uuid\)/);
