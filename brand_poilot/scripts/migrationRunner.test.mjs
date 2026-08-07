@@ -689,6 +689,29 @@ test("075 derives one closed exact DDL allowlist and rejects wildcard or lookali
     && objectIdentityPattern.startsWith("function:public.enforce_ai_content_proposal_research_completion_pair()|")), false);
   assert.ok(rows.some(({ commandTag, objectIdentityPattern }) => commandTag === "REVOKE"
     && objectIdentityPattern === "table:public.ai_content_storage_cleanup_outbox|PUBLIC|ALL"));
+  const productionAclRows = migrationRunner.buildCutover075ExactDdlAllowlist(
+    migration,
+    cutover075RoleNames,
+    [{
+      commandTag: "REVOKE",
+      objectIdentityPattern: "function:public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)|service_role|ALL",
+    }],
+  );
+  assert.ok(productionAclRows.some(({ commandTag, objectIdentityPattern }) => commandTag === "REVOKE"
+    && objectIdentityPattern === "function:public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)|service_role|ALL"));
+  assert.doesNotThrow(() => migrationRunner.validateCutover075ExactDdlAllowlist(
+    productionAclRows, migration, cutover075RoleNames,
+  ));
+  for (const invalidRuntimeRow of [
+    { commandTag: "GRANT", objectIdentityPattern: "function:public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)|service_role|EXECUTE" },
+    { commandTag: "REVOKE", objectIdentityPattern: "function:public.unknown()|service_role|ALL" },
+    { commandTag: "REVOKE", objectIdentityPattern: "function:public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)|service-role|ALL" },
+  ]) {
+    assert.throws(
+      () => migrationRunner.validateCutover075ExactDdlAllowlist([...rows, invalidRuntimeRow], migration, cutover075RoleNames),
+      /cutover_075_exact_allowlist_rows_invalid/,
+    );
+  }
   assert.doesNotThrow(() => migrationRunner.validateCutover075ExactDdlAllowlist(
     rows, migration, cutover075RoleNames,
   ));

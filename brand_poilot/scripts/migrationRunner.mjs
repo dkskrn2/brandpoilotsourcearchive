@@ -2060,7 +2060,22 @@ function deriveCutover075ImplicitIndexes(sql) {
   return indexes;
 }
 
-export function buildCutover075ExactDdlAllowlist(migration, names) {
+function normalizeCutover075LegacyAclRevocations(rows) {
+  const normalized = normalizeCutoverDdlAllowlist(rows ?? [], "cutover_075_exact_allowlist_rows_invalid");
+  const protectedObjects = new Set([
+    ...cutover075RelationSecurityCatalog.map(({ relationName }) => `table:public.${relationName}`),
+    ...cutover075SecurityFunctions.map(({ identity }) => `function:${identity}`),
+  ]);
+  for (const { commandTag, objectIdentityPattern } of normalized) {
+    const match = objectIdentityPattern.match(/^(.+)\|([A-Za-z_][A-Za-z0-9_$]{0,62})\|ALL$/);
+    if (commandTag !== "REVOKE" || !match || !protectedObjects.has(match[1]) || match[2] === "PUBLIC") {
+      throw new Error("cutover_075_exact_allowlist_rows_invalid");
+    }
+  }
+  return normalized;
+}
+
+export function buildCutover075ExactDdlAllowlist(migration, names, legacyAclRevocations = []) {
   assertCutover075RoleNames(names);
   buildCutover075FunctionSourceHashes(migration);
   const rows = [];
@@ -2117,6 +2132,9 @@ export function buildCutover075ExactDdlAllowlist(migration, names) {
       add("REVOKE", `function:${identity}|PUBLIC|ALL`);
       for (const role of execute) add("GRANT", `function:${identity}|${roleName(role)}|EXECUTE`);
     }
+    rows.push(...normalizeCutover075LegacyAclRevocations(legacyAclRevocations));
+  } else if ((legacyAclRevocations ?? []).length > 0) {
+    throw new Error("cutover_075_exact_allowlist_rows_invalid");
   }
 
   const recognizedTopLevel = /^(?:create\s+(?:or\s+replace\s+)?(?:table|function|(?:unique\s+)?index|(?:constraint\s+)?trigger)|alter\s+table)\b/i;
@@ -2129,7 +2147,12 @@ export function buildCutover075ExactDdlAllowlist(migration, names) {
 
 export function validateCutover075ExactDdlAllowlist(rows, migration, names) {
   const normalized = normalizeCutoverDdlAllowlist(rows, "cutover_075_exact_allowlist_rows_invalid");
-  const expected = buildCutover075ExactDdlAllowlist(migration, names);
+  const base = buildCutover075ExactDdlAllowlist(migration, names);
+  const baseKeys = new Set(base.map(({ commandTag, objectIdentityPattern }) => `${commandTag}\0${objectIdentityPattern}`));
+  const legacyAclRevocations = normalized.filter(({ commandTag, objectIdentityPattern }) => (
+    !baseKeys.has(`${commandTag}\0${objectIdentityPattern}`)
+  ));
+  const expected = buildCutover075ExactDdlAllowlist(migration, names, legacyAclRevocations);
   if (exactJson(normalized) !== exactJson(expected)) throw new Error("cutover_075_exact_allowlist_rows_invalid");
   return normalized;
 }

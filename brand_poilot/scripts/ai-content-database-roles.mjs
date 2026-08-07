@@ -12,6 +12,7 @@ import {
   buildProviderEventTriggerInstallRequest,
   buildCutover075ExactDdlAllowlist,
   cutover075RelationSecurityCatalog,
+  cutover075SecurityFunctions,
   canonicalBootstrapAuthorizationPayload,
   canonicalCutoverAllowlistAttestationPayload,
   canonicalCutoverAllowlistAuthorizationPayload,
@@ -1712,9 +1713,11 @@ export function signBootstrap074Authorization({
 
 export function buildAndSign075Allowlist({
   migration, roleNames, cutoverId, enforcementCatalogSha256, beforeRows,
-  requestId, issuedAt, authorizationIdentity, providerIdentity,
+  legacyAclRevocations = [], requestId, issuedAt, authorizationIdentity, providerIdentity,
 }) {
-  const rows = buildCutover075ExactDdlAllowlist(migration, validateRoleNames(roleNames));
+  const rows = buildCutover075ExactDdlAllowlist(
+    migration, validateRoleNames(roleNames), legacyAclRevocations,
+  );
   const rowsSha256 = hashCutoverDdlAllowlist(rows);
   const authorizationBase = {
     contractVersion: "ai-content-075-ddl-allowlist-authorization.v1",
@@ -1737,6 +1740,37 @@ export function buildAndSign075Allowlist({
     issuedAt: new Date(Date.parse(issuedAt) + 1_000).toISOString(),
   }, providerIdentity, canonicalCutoverAllowlistAttestationPayload);
   return { authorization, attestation };
+}
+
+export async function readCutover075LegacyAclRevocations(client) {
+  const relationNames = cutover075RelationSecurityCatalog.map(({ relationName }) => relationName);
+  const functionIdentities = cutover075SecurityFunctions.map(({ identity }) => identity);
+  const result = await client.query(
+    `/* cutover_075_live_legacy_acl_revocations_v1 */
+     with relation_acl as (
+       select 'table:public.'||expected.relation_name as object_identity,grantee.rolname as grantee
+         from unnest($1::text[]) as expected(relation_name)
+         join pg_class relation on relation.oid=to_regclass('public.'||expected.relation_name)
+         cross join lateral aclexplode(coalesce(relation.relacl,acldefault('r',relation.relowner))) acl
+         join pg_roles grantee on grantee.oid=acl.grantee
+        where acl.grantee<>relation.relowner
+     ), function_acl as (
+       select 'function:'||expected.identity as object_identity,grantee.rolname as grantee
+         from unnest($2::text[]) as expected(identity)
+         join pg_proc function on function.oid=to_regprocedure(expected.identity)
+         cross join lateral aclexplode(coalesce(function.proacl,acldefault('f',function.proowner))) acl
+         join pg_roles grantee on grantee.oid=acl.grantee
+        where acl.grantee<>function.proowner
+     )
+     select distinct 'REVOKE' as command_tag,object_identity||'|'||grantee||'|ALL' as object_identity_pattern
+       from (select * from relation_acl union all select * from function_acl) live_acl
+      order by command_tag,object_identity_pattern`,
+    [relationNames, functionIdentities],
+  );
+  return result.rows.map((row) => ({
+    commandTag: String(row.command_tag),
+    objectIdentityPattern: String(row.object_identity_pattern),
+  }));
 }
 
 export async function buildBootstrap074AuthorizationFromDatabase({
@@ -2319,6 +2353,7 @@ async function main(argv = process.argv) {
         "select command_tag as \"commandTag\",object_identity_pattern as \"objectIdentityPattern\" from ai_content_ddl_allowlist where migration_id=$1 order by command_tag,object_identity_pattern",
         [migration.id],
       );
+      const legacyAclRevocations = await readCutover075LegacyAclRevocations(client);
       const authIdentity = await signingIdentity(
         args["authorization-private-key-file"], args["authorization-key-id"],
         args["authorization-public-key-sha256"],
@@ -2334,7 +2369,8 @@ async function main(argv = process.argv) {
         createArtifacts: () => buildAndSign075Allowlist({
           migration, roleNames: plan.roleNames, cutoverId: args["cutover-id"],
           enforcementCatalogSha256: state.rows[0]?.final_fence_security_catalog_sha256,
-          beforeRows: before.rows, requestId: randomUUID(), issuedAt: new Date().toISOString(),
+          beforeRows: before.rows, legacyAclRevocations,
+          requestId: randomUUID(), issuedAt: new Date().toISOString(),
           authorizationIdentity: authIdentity, providerIdentity,
         }),
       });

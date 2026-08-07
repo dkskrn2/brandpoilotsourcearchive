@@ -489,3 +489,50 @@ test("075 provider artifacts contain the exact migration-derived allowlist and d
     now: new Date("2026-08-06T00:01:00.000Z"),
   }).afterSha256, sealed.authorization.rowsSha256);
 });
+
+test("075 provider signs exact live legacy ACL revocations", async () => {
+  const migration = (await runner.loadMigrations()).find(({ id }) => id === "075_ai_content_three_format_cutover.sql");
+  const plan = createTestRoleBootstrapPlan();
+  const legacyAclRevocations = [{
+    commandTag: "REVOKE",
+    objectIdentityPattern: "function:public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)|service_role|ALL",
+  }];
+  const sealed = buildAndSign075Allowlist({
+    migration, roleNames: plan.roleNames,
+    cutoverId: "11111111-1111-4111-8111-111111111111",
+    enforcementCatalogSha256: "a".repeat(64), beforeRows: [], legacyAclRevocations,
+    requestId: "22222222-2222-4222-8222-222222222222",
+    issuedAt: "2026-08-06T00:00:00.000Z",
+    authorizationIdentity: authorization, providerIdentity: provider,
+  });
+  assert.ok(sealed.authorization.rows.some((row) =>
+    row.commandTag === legacyAclRevocations[0].commandTag
+      && row.objectIdentityPattern === legacyAclRevocations[0].objectIdentityPattern));
+  assert.doesNotThrow(() => runner.validateCutoverAllowlistAuthorization(sealed.authorization, {
+    migration, roleNames: plan.roleNames, cutoverId: sealed.authorization.cutoverId,
+    enforcementCatalogSha256: "a".repeat(64),
+    authorizationVerification: { publicKeyPem: authorization.publicKeyPem, expectedKeyId: authorization.keyId, expectedPublicKeySha256: authorization.publicKeySha256 },
+    providerAttestationVerification: { publicKeyPem: provider.publicKeyPem, expectedKeyId: provider.keyId, expectedPublicKeySha256: provider.publicKeySha256 },
+    now: new Date("2026-08-06T00:01:00.000Z"),
+  }));
+});
+
+test("075 provider derives revocations from every live protected ACL grantee", async () => {
+  let queryParameters;
+  const rows = await databaseRoles.readCutover075LegacyAclRevocations({
+    async query(sql, parameters) {
+      assert.match(sql, /cutover_075_live_legacy_acl_revocations_v1/);
+      queryParameters = parameters;
+      return { rows: [{
+        command_tag: "REVOKE",
+        object_identity_pattern: "function:public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)|service_role|ALL",
+      }] };
+    },
+  });
+  assert.ok(queryParameters[0].includes("ai_content_generation_operations"));
+  assert.ok(queryParameters[1].includes("public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)"));
+  assert.deepEqual(rows, [{
+    commandTag: "REVOKE",
+    objectIdentityPattern: "function:public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)|service_role|ALL",
+  }]);
+});
