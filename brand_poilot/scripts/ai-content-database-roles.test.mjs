@@ -128,6 +128,34 @@ test("preserved runtime schema CREATE is accepted only for the managed database-
   }, "postgres"), false);
 });
 
+test("role database URLs preserve the Supabase pooler tenant suffix", () => {
+  assert.equal(typeof databaseRoles.roleDatabaseUrl, "function");
+  assert.equal(
+    databaseRoles.roleDatabaseUrl(
+      "postgresql://postgres.project_ref:admin@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres?sslmode=require",
+      "content_operator",
+      "operator-password",
+    ),
+    "postgresql://content_operator.project_ref:operator-password@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres?sslmode=require",
+  );
+  assert.equal(
+    databaseRoles.roleDatabaseUrl(
+      "postgresql://postgres:admin@db.example.test:5432/postgres",
+      "content_operator",
+      "operator-password",
+    ),
+    "postgresql://content_operator:operator-password@db.example.test:5432/postgres",
+  );
+  assert.throws(
+    () => databaseRoles.roleDatabaseUrl(
+      "postgresql://unexpected.user:admin@db.example.test/postgres",
+      "content_operator",
+      "operator-password",
+    ),
+    /ai_content_role_database_url_invalid/,
+  );
+});
+
 test("074 provider enforcement rejects a non-platform-postgres identity before any mutation", async () => {
   const plan = createTestRoleBootstrapPlan();
   const calls = [];

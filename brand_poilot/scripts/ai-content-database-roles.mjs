@@ -219,6 +219,27 @@ function quoteIdentifier(value) {
 function quoteLiteral(value) { return `'${String(value).replaceAll("'", "''")}'`; }
 function lexicalCompare(left, right) { return left < right ? -1 : left > right ? 1 : 0; }
 
+export function roleDatabaseUrl(connectionString, roleName, password) {
+  if (typeof connectionString !== "string" || !connectionString
+    || typeof roleName !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(roleName)
+    || typeof password !== "string" || !password) {
+    throw new Error("ai_content_role_database_url_invalid");
+  }
+  let value;
+  let sourceUsername;
+  try {
+    value = new URL(connectionString);
+    sourceUsername = decodeURIComponent(value.username);
+  } catch {
+    throw new Error("ai_content_role_database_url_invalid");
+  }
+  const match = /^postgres(\.[A-Za-z0-9_-]+)?$/.exec(sourceUsername);
+  if (!match) throw new Error("ai_content_role_database_url_invalid");
+  value.username = `${roleName}${match[1] ?? ""}`;
+  value.password = password;
+  return value.toString();
+}
+
 function validateRoleNames(names) {
   if (!record(names) || JSON.stringify(Object.keys(names).sort()) !== JSON.stringify([...roleNameKeys].sort())
     || Object.values(names).some((name) => typeof name !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(name))
@@ -2084,13 +2105,11 @@ async function main(argv = process.argv) {
       const urls = {};
       for (const [key, name] of Object.entries(plan.roleNames)) {
         if (key === "schemaOwnerRoleName") continue;
-        const value = new URL(connectionString);
-        value.username = name;
-        value.password = passwords[name];
+        const value = roleDatabaseUrl(connectionString, name, passwords[name]);
         const target = path.join(args["secret-output-dir"], `${key.replace(/RoleName$/, "")}-database-url`);
         const handle = await open(target, "wx", 0o600);
-        try { await handle.writeFile(`${value.toString()}\n`); await handle.sync(); } finally { await handle.close(); }
-        urls[key] = { fileName: path.basename(target), sha256: sha256(`${value.toString()}\n`) };
+        try { await handle.writeFile(`${value}\n`); await handle.sync(); } finally { await handle.close(); }
+        urls[key] = { fileName: path.basename(target), sha256: sha256(`${value}\n`) };
       }
       await exclusiveJson(args.evidence, { contractVersion: "ai-content-database-role-apply-evidence.v1", planSha256: plan.planSha256, urls });
       return;

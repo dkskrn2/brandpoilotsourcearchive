@@ -5,8 +5,8 @@ import { parseFloorProbeInput } from "./ai-content-cutover-floor-probe.mjs";
 
 test("floor probe accepts one operator URL or one exact API env contract", () => {
   assert.deepEqual(
-    parseFloorProbeInput("postgresql://operator:secret@db.example.test/postgres\n", "operator"),
-    { connectionString: "postgresql://operator:secret@db.example.test/postgres", caBase64: undefined },
+    parseFloorProbeInput("postgresql://operator:secret@db.example.test/postgres\n", "operator", "YWJj"),
+    { connectionString: "postgresql://operator:secret@db.example.test/postgres", caBase64: "YWJj" },
   );
   assert.deepEqual(
     parseFloorProbeInput([
@@ -34,5 +34,9 @@ test("floor probe rejects duplicate, missing, and unknown input kinds", () => {
   assert.throws(
     () => parseFloorProbeInput("postgresql://operator:secret@db.example.test/postgres", "other"),
     /ai_content_floor_probe_kind_invalid/,
+  );
+  assert.throws(
+    () => parseFloorProbeInput("postgresql://operator:secret@db.example.test/postgres", "operator", "invalid%%%"),
+    /ai_content_floor_probe_input_invalid/,
   );
 });

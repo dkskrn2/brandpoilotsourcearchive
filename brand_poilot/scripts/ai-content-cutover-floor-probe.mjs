@@ -18,13 +18,17 @@ function validateDatabaseUrl(value) {
   return value;
 }
 
-export function parseFloorProbeInput(input, kind) {
+export function parseFloorProbeInput(input, kind, operatorCaBase64) {
   if (kind === "operator") {
     const connectionString = String(input ?? "").trim();
     if (!connectionString || connectionString.includes("\n") || connectionString.includes("\r")) {
       fail("ai_content_floor_probe_input_invalid");
     }
-    return { connectionString: validateDatabaseUrl(connectionString), caBase64: undefined };
+    if (typeof operatorCaBase64 !== "string"
+      || !/^[A-Za-z0-9+/]+={0,2}$/.test(operatorCaBase64)) {
+      fail("ai_content_floor_probe_input_invalid");
+    }
+    return { connectionString: validateDatabaseUrl(connectionString), caBase64: operatorCaBase64 };
   }
   if (kind !== "env") fail("ai_content_floor_probe_kind_invalid");
   const exact = (key) => {
@@ -80,7 +84,11 @@ function parseArgs(argv) {
 
 async function main(argv = process.argv) {
   const args = parseArgs(argv);
-  const config = parseFloorProbeInput(await readFile(args["input-file"], "utf8"), args["input-kind"]);
+  const config = parseFloorProbeInput(
+    await readFile(args["input-file"], "utf8"),
+    args["input-kind"],
+    process.env.DB_SSL_CA_BASE64,
+  );
   const client = new Client(resolveVerifiedTlsConfig(config.connectionString, {
     caCertificate: decodeCaCertificate(config.caBase64),
   }));
