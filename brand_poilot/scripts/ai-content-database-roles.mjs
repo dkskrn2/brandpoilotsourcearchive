@@ -1286,8 +1286,10 @@ export async function setProvider075SchemaOwnerMembership(client, rawPlan, cutov
         on maintenance.singleton and maintenance.cutover_id=cutover.id
      where cutover.id=$1`, [cutoverId, plan.cutoverMigration]);
   const cutover = state.rows[0];
+  const enablePhaseValid = (cutover?.status === "maintenance_verified" && cutover?.marker_present === false)
+    || (cutover?.status === "migration_body_complete" && cutover?.marker_present === true);
   if (!cutover || cutover.maintenance_enabled !== true
-    || (enabled && (cutover.status !== "maintenance_verified" || cutover.marker_present !== false))
+    || (enabled && !enablePhaseValid)
     || (!enabled && !["maintenance_verified", "migration_body_complete"].includes(cutover.status))) {
     throw new Error("cutover_075_provider_membership_state_invalid");
   }

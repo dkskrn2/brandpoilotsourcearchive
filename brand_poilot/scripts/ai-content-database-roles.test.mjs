@@ -196,6 +196,7 @@ test("075 provider inheritance bridge grants one exact managed edge and revokes 
   const plan = createTestRoleBootstrapPlan();
   const cutoverId = "7b7c8ed7-e046-4bcd-8592-38606f547493";
   let transient = false;
+  let cutoverState = { status: "maintenance_verified", maintenance_enabled: true, marker_present: false };
   const baseline = {
     grantor_role_name: "supabase_admin", set_option: false, inherit_option: false, admin_option: true,
   };
@@ -205,7 +206,7 @@ test("075 provider inheritance bridge grants one exact managed edge and revokes 
       return { rows: [{ session_user: "postgres", current_user: "postgres", is_superuser: false, inherit: true }] };
     }
     if (text.includes("ai_content_075_provider_membership_cutover")) {
-      return { rows: [{ status: "maintenance_verified", maintenance_enabled: true, marker_present: false }] };
+      return { rows: [cutoverState] };
     }
     if (text.includes("ai_content_075_provider_membership_catalog")) {
       return { rows: [baseline, ...(transient ? [{
@@ -220,6 +221,11 @@ test("075 provider inheritance bridge grants one exact managed edge and revokes 
   assert.equal(enabled.transientMembershipEnabled, true);
   const disabled = await databaseRoles.setProvider075SchemaOwnerMembership(client, plan, cutoverId, false);
   assert.equal(disabled.transientMembershipEnabled, false);
+  cutoverState = { status: "migration_body_complete", maintenance_enabled: true, marker_present: true };
+  const restoreEnabled = await databaseRoles.setProvider075SchemaOwnerMembership(client, plan, cutoverId, true);
+  assert.equal(restoreEnabled.transientMembershipEnabled, true);
+  const restoreDisabled = await databaseRoles.setProvider075SchemaOwnerMembership(client, plan, cutoverId, false);
+  assert.equal(restoreDisabled.transientMembershipEnabled, false);
   assert.equal(transient, false);
 });
 
