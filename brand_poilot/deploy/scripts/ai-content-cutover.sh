@@ -943,10 +943,18 @@ run_proposal_preflight() {
   verify_release_image_revision "$worker_image" "$worker_source_sha"
   [[ "$(docker image inspect --format '{{.Config.User}}' "$worker_image")" == "node" ]] ||
     fail "proposal_preflight_image_user_invalid"
-  local image_uid image_gid
+  local image_uid image_gid runtime_uid runtime_gid
   image_uid="$(docker run --rm --entrypoint id "$worker_image" -u)"
   image_gid="$(docker run --rm --entrypoint id "$worker_image" -g)"
-  [[ "$image_uid" == "$(id -u)" && "$image_gid" == "$(id -g)" && "$image_uid" != "0" ]] ||
+  [[ "$image_uid" =~ ^[0-9]+$ && "$image_gid" =~ ^[0-9]+$ ]] ||
+    fail "proposal_preflight_image_identity_invalid"
+  (( image_uid > 0 && image_gid > 0 )) ||
+    fail "proposal_preflight_image_identity_invalid"
+  runtime_uid="$(id -u)"
+  runtime_gid="$(id -g)"
+  [[ "$runtime_uid" =~ ^[0-9]+$ && "$runtime_gid" =~ ^[0-9]+$ ]] ||
+    fail "proposal_preflight_runtime_identity_mismatch"
+  (( runtime_uid > 0 && runtime_gid > 0 )) ||
     fail "proposal_preflight_runtime_identity_mismatch"
   local state_parent state_directory codex_copy output
   state_parent="$ROOT/state/ai-content-cutovers/$cutover_id"
@@ -960,7 +968,7 @@ run_proposal_preflight() {
   trap cleanup_codex_copy EXIT
   cp -a "$codex_home_source/." "$codex_copy/"
   chmod 0700 "$codex_copy"
-  output="$(docker run --rm --read-only --user "$image_uid:$image_gid" \
+  output="$(docker run --rm --read-only --user "$runtime_uid:$runtime_gid" \
     --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m \
     --env CODEX_HOME=/codex \
     --mount "type=bind,src=$codex_copy,dst=/codex" \

@@ -170,3 +170,15 @@ test("cutover tools are integrity-bound and present in the two owning images", a
   assert.match(apiDockerfile, /ai-content-database-roles\.mjs/);
   assert.match(proposalDockerfile, /ai-content-proposal-schema-preflight\.mjs/);
 });
+
+test("proposal preflight uses the host owner identity without requiring image UID equality", async () => {
+  const source = await read("deploy/scripts/ai-content-cutover.sh");
+  const preflight = source.slice(
+    source.indexOf("run_proposal_preflight()"),
+    source.indexOf("require_active_cutover()"),
+  );
+  assert.match(preflight, /runtime_uid="\$\(id -u\)"/);
+  assert.match(preflight, /runtime_gid="\$\(id -g\)"/);
+  assert.match(preflight, /--user "\$runtime_uid:\$runtime_gid"/);
+  assert.doesNotMatch(preflight, /\$image_uid" == "\$\(id -u\)"/);
+});
