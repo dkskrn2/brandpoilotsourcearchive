@@ -35,10 +35,12 @@ API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
 verify_release_image_revision "$API_IMAGE" "$(release_image_source_revision API_IMAGE)"
 [[ "$(docker image inspect --format '{{.Config.User}}' "$API_IMAGE")" == "node" ]] ||
   fail "ai_content_cutover_api_image_user_invalid"
+require_file_mode_600 "${RELEASE_MANIFEST[API_ENV_FILE]}"
 
 OUTPUT="$(docker run --rm --read-only --user "$(id -u):$(id -g)" \
   --cap-drop ALL --security-opt no-new-privileges \
   --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m --entrypoint node \
+  --env-file "${RELEASE_MANIFEST[API_ENV_FILE]}" \
   --mount "type=bind,src=$DATABASE_FILE,dst=/run/secrets/operator-database-url,readonly" \
   "$API_IMAGE" /app/scripts/ai-content-cutover-control.mjs "$MODE" \
   --database-url-file /run/secrets/operator-database-url --cutover-id "$CUTOVER_ID")" ||

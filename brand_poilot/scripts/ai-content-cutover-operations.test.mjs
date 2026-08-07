@@ -121,6 +121,7 @@ test("marker verifier and generic rollback fail closed through the exact operato
   ]);
   assert.match(verify, /--assert-rollback-allowed/);
   assert.match(verify, /ai-content-cutover-control\.mjs/);
+  assert.match(verify, /--env-file "\$\{RELEASE_MANIFEST\[API_ENV_FILE\]\}"/);
   assert.match(rollback, /enforce_ai_content_roll_forward_floor/);
   assert.ok(rollback.indexOf("enforce_ai_content_roll_forward_floor") < rollback.indexOf('"${compose[@]}" up'));
   assert.match(rollback, /validate_normal_rollback_target/);
