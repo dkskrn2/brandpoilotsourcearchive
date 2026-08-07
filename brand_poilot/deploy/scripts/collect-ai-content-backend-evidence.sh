@@ -459,7 +459,7 @@ for service in "${API_SERVICES[@]}"; do
     "${database_path_lines[0]}" == "AI_CONTENT_DATABASE_URL_FILE=/run/secrets/ai_content_application_database_url" ]] ||
     fail "ai_content_backend_application_secret_env_invalid"
   mapfile -t application_mount_lines < <(
-    docker inspect --format '{{range .Mounts}}{{if eq .Destination "/run/secrets/ai_content_application_database_url"}}{{printf "%s|%s|%t|%s\n" .Source .Destination .RW .Type}}{{end}}{{end}}' \
+    docker inspect --format '{{range .Mounts}}{{if eq .Destination "/run/secrets/ai_content_application_database_url"}}{{printf "%s|%s|%t|%s" .Source .Destination .RW .Type}}{{end}}{{end}}' \
       "$container_id" 2>/dev/null
   )
   [[ "${#application_mount_lines[@]}" -eq 1 &&
