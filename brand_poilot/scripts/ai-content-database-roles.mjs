@@ -1813,6 +1813,12 @@ export async function installProvider074EnforcementBundle({
   if (!exactJson(expectedInstall, installRequest)) throw new Error("bootstrap_074_install_request_mismatch");
   await client.query("begin");
   try {
+    await client.query(
+      `/* bootstrap_074_provider_owner_membership */
+       grant ${quoteIdentifier(plan.roleNames.schemaOwnerRoleName)}
+          to ${quoteIdentifier(plan.preservedRuntimeRoleName)}
+        with set true, inherit false, admin false`,
+    );
     const allRoles = ["public", ...Object.values(plan.roleNames)];
     for (const functionIdentity of providerEnforcementBundle.functions) {
       await client.query(`alter function ${functionIdentity} owner to postgres`);
@@ -1852,6 +1858,10 @@ export async function installProvider074EnforcementBundle({
         await client.query(`grant select on table public.${quoteIdentifier(relationName)} to ${quoteIdentifier(plan.roleNames.schemaOwnerRoleName)}`);
       }
     }
+    await client.query(
+      `revoke ${quoteIdentifier(plan.roleNames.schemaOwnerRoleName)}
+          from ${quoteIdentifier(plan.preservedRuntimeRoleName)}`,
+    );
     await client.query("create event trigger ai_content_ddl_guard_074 on ddl_command_end execute function public.enforce_ai_content_ddl_allowlist()");
     await client.query("alter event trigger ai_content_ddl_guard_074 enable");
     const finalFence = await readFenceSecurityCatalog(client, plan.roleNames, { ownerRoleName: "postgres" });
