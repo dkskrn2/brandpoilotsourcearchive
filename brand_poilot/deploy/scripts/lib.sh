@@ -784,9 +784,15 @@ query_ai_content_cutover_status() {
   local root="$1"
   local cutover_id="$2"
   local operator_database_file="${AI_CONTENT_CUTOVER_OPERATOR_DATABASE_URL_FILE:-$root/shared/secrets/ai-content-operator-database-url}"
+  local current_sha=""
+  local verifier
   local output
   require_file_mode_600 "$operator_database_file" "${AI_CONTENT_CUTOVER_FILE_OWNER:-bpdeploy}"
-  if ! output="$("$(dirname -- "${BASH_SOURCE[0]}")/verify-ai-content-cutover.sh" \
+  load_required_state_sha "$root/state/current" current_sha
+  validate_state_release_directory "$root" "$current_sha"
+  verifier="$root/releases/$current_sha/scripts/verify-ai-content-cutover.sh"
+  require_release_file "$verifier" 755
+  if ! output="$("$verifier" \
     --status --operator-url-file "$operator_database_file" --cutover-id "$cutover_id")"; then
     return 1
   fi

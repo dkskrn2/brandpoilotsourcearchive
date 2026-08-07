@@ -77,6 +77,13 @@ test("all generic mutation entry points guard before mutation and reconciliation
   const probe = readFileSync("scripts/ai-content-cutover-floor-probe.mjs", "utf8");
   assert.match(probe, /select exists[\s\S]*075_ai_content_three_format_cutover\.sql/);
   assert.match(lib, /docker run --rm --pull never --read-only/);
+  const statusQuery = lib.slice(
+    lib.indexOf("query_ai_content_cutover_status()"),
+    lib.indexOf("validate_ai_content_completed_floor()"),
+  );
+  assert.match(statusQuery, /load_required_state_sha "\$root\/state\/current" current_sha/);
+  assert.match(statusQuery, /\$root\/releases\/\$current_sha\/scripts\/verify-ai-content-cutover\.sh/);
+  assert.doesNotMatch(statusQuery, /dirname -- "\$\{BASH_SOURCE\[0\]\}"/);
 });
 
 test("the marker probe uses the operator security-definer snapshot without requiring table ACLs", (t) => {
