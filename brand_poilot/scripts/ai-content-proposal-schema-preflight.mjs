@@ -239,11 +239,20 @@ export async function runProposalSchemaPreflight({
     "Return JSON only and conform exactly to the provided output schema.",
   ].join(" ");
   const result = await spawn({ command, args, prompt });
-  if (!plainRecord(result) || result.exitCode !== 0 || typeof result.stdout !== "string" || typeof result.stderr !== "string") {
+  if (!plainRecord(result) || !Number.isInteger(result.exitCode)
+    || typeof result.stdout !== "string" || typeof result.stderr !== "string") {
     throw new Error("proposal_preflight_invocation_failed");
   }
   const stdoutSha256 = await writeExclusiveText(directory, "stdout.jsonl", result.stdout);
   const stderrSha256 = await writeExclusiveText(directory, "stderr.log", result.stderr);
+  if (result.exitCode !== 0) {
+    await writeExclusiveJson(directory, "failed.json", journalRecord({
+      event: "invocation_failed", sequence: 3, previousSha256: startedSha256,
+      identitySha256, cutoverId, createdAt: now().toISOString(),
+      exitCode: result.exitCode, stdoutSha256, stderrSha256,
+    }));
+    throw new Error("proposal_preflight_invocation_failed");
+  }
   const rawOutput = finalAgentMessage(result.stdout);
   let output;
   try { output = JSON.parse(rawOutput); } catch { throw new Error("proposal_preflight_output_invalid"); }

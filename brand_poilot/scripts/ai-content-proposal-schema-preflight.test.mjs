@@ -126,6 +126,25 @@ test("a failure after invocation start is indeterminate and can never spend a se
   });
 });
 
+test("a completed non-zero Codex process preserves diagnostics before failing closed", async () => {
+  await withState(async (stateDirectory) => {
+    await assert.rejects(
+      runProposalSchemaPreflight({
+        stateDirectory, cutoverId, identity, schema, schemaPath: "/schema.json",
+        spawn: async () => ({ exitCode: 17, stdout: "partial-jsonl\n", stderr: "token unavailable\n" }),
+      }),
+      /proposal_preflight_invocation_failed/,
+    );
+    assert.equal(await readFile(path.join(stateDirectory, "stdout.jsonl"), "utf8"), "partial-jsonl\n");
+    assert.equal(await readFile(path.join(stateDirectory, "stderr.log"), "utf8"), "token unavailable\n");
+    const failure = JSON.parse(await readFile(path.join(stateDirectory, "failed.json"), "utf8"));
+    assert.equal(failure.event, "invocation_failed");
+    assert.equal(failure.exitCode, 17);
+    assert.equal(failure.sequence, 3);
+    assert.equal((await inspectPreflightState({ stateDirectory, identity })).status, "invocation_indeterminate");
+  });
+});
+
 test("verification fails closed on identity drift or journal tampering", async () => {
   await withState(async (stateDirectory) => {
     await runProposalSchemaPreflight({
