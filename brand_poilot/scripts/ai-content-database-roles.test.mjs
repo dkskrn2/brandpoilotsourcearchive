@@ -244,6 +244,23 @@ test("075 cutover brackets migration execution with the provider membership brid
   assert.match(run075, /trap[\s\S]*disable-075-provider-membership/);
 });
 
+test("shared-owner restore drops inherited provider access outside the ownership mutation", async () => {
+  const source = await readFile(new URL("./ai-content-database-roles.mjs", import.meta.url), "utf8");
+  const restore = source.slice(
+    source.indexOf("export async function restoreSharedRelationOwners"),
+    source.indexOf("export async function setProvider075SchemaOwnerMembership"),
+  );
+  const firstDisable = restore.indexOf("setProviderSchemaOwnerMembershipInTransaction(client, plan, false)");
+  const preflight = restore.indexOf("sharedOwnerState: \"transferred\"");
+  const enable = restore.indexOf("setProviderSchemaOwnerMembershipInTransaction(client, plan, true)");
+  const ownerMutation = restore.indexOf("alter table public.${quoteIdentifier(relationName)} owner to");
+  const finalDisable = restore.lastIndexOf("setProviderSchemaOwnerMembershipInTransaction(client, plan, false)");
+  const finalVerification = restore.indexOf("verifyRestoredSharedRelationSecurity(client, plan)");
+  assert.ok(firstDisable >= 0 && firstDisable < preflight);
+  assert.ok(preflight < enable && enable < ownerMutation);
+  assert.ok(ownerMutation < finalDisable && finalDisable < finalVerification);
+});
+
 test("role bootstrap applies only the closed role/schema/relation ownership plan", async () => {
   const plan = createTestRoleBootstrapPlan();
   const calls = [];

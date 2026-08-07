@@ -1120,6 +1120,51 @@ function expectedSharedApplicationAclRows(plan) {
     ));
 }
 
+async function readProviderSchemaOwnerMembershipCatalog(client, plan) {
+  return (await client.query(`/* ai_content_075_provider_membership_catalog */
+    select grantor.rolname as grantor_role_name,membership.set_option,
+           membership.inherit_option,membership.admin_option
+      from pg_auth_members membership
+      join pg_roles member on member.oid=membership.member
+      join pg_roles parent on parent.oid=membership.roleid
+      join pg_roles grantor on grantor.oid=membership.grantor
+     where member.rolname=$1 and parent.rolname=$2
+     order by grantor.rolname,membership.set_option,membership.inherit_option,membership.admin_option`,
+  [plan.preservedRuntimeRoleName, plan.roleNames.schemaOwnerRoleName])).rows;
+}
+
+function classifyProviderSchemaOwnerMembership(rows, plan) {
+  const baseline = rows.filter((row) => row.grantor_role_name !== plan.preservedRuntimeRoleName
+    && row.set_option === false && row.inherit_option === false && row.admin_option === true);
+  const transient = rows.filter((row) => row.grantor_role_name === plan.preservedRuntimeRoleName
+    && row.set_option === true && row.inherit_option === true && row.admin_option === false);
+  if (baseline.length !== 1 || rows.length !== baseline.length + transient.length || transient.length > 1) {
+    throw new Error("cutover_075_provider_membership_catalog_invalid");
+  }
+  return { baseline, transient };
+}
+
+async function setProviderSchemaOwnerMembershipInTransaction(client, plan, enabled) {
+  const before = await readProviderSchemaOwnerMembershipCatalog(client, plan);
+  const beforeState = classifyProviderSchemaOwnerMembership(before, plan);
+  if (beforeState.transient.length !== (enabled ? 0 : 1)) {
+    throw new Error("ai_content_shared_owner_restore_membership_state_invalid");
+  }
+  if (enabled) {
+    await client.query(`grant ${quoteIdentifier(plan.roleNames.schemaOwnerRoleName)}
+      to ${quoteIdentifier(plan.preservedRuntimeRoleName)} with set true, inherit true, admin false`);
+  } else {
+    await client.query(`revoke ${quoteIdentifier(plan.roleNames.schemaOwnerRoleName)}
+      from ${quoteIdentifier(plan.preservedRuntimeRoleName)}
+      granted by ${quoteIdentifier(plan.preservedRuntimeRoleName)}`);
+  }
+  const after = await readProviderSchemaOwnerMembershipCatalog(client, plan);
+  const afterState = classifyProviderSchemaOwnerMembership(after, plan);
+  if (afterState.transient.length !== (enabled ? 1 : 0)) {
+    throw new Error("ai_content_shared_owner_restore_membership_transition_invalid");
+  }
+}
+
 async function verifyRestoredSharedRelationSecurity(client, plan) {
   await verifyApplicationRuntimeSecurity(client, plan, {
     sharedOwnerState: "restored",
@@ -1209,15 +1254,18 @@ export async function restoreSharedRelationOwners(client, rawPlan, { now = new D
     const allRestored = ownerState.rows.length === plan.sharedOwnerTransfers.length
       && ownerState.rows.every((row) => row.owner_role_name === row.preserved_owner_role_name);
     if (!allTransferred && !allRestored) throw new Error("ai_content_shared_relation_owner_restore_state_invalid");
+    await setProviderSchemaOwnerMembershipInTransaction(client, plan, false);
     if (allTransferred) {
       await verifyApplicationRuntimeSecurity(client, plan, {
         sharedOwnerState: "transferred",
         cutoverSecurityState: "post-cutover",
       });
+      await setProviderSchemaOwnerMembershipInTransaction(client, plan, true);
       for (const { relationName, preservedOwnerRoleName } of plan.sharedOwnerTransfers) {
         await client.query(`alter table public.${quoteIdentifier(relationName)} owner to ${quoteIdentifier(preservedOwnerRoleName)}`);
         await client.query(`revoke all privileges on table public.${quoteIdentifier(relationName)} from ${quoteIdentifier(plan.roleNames.schemaOwnerRoleName)}`);
       }
+      await setProviderSchemaOwnerMembershipInTransaction(client, plan, false);
     }
     const schemaOwnerColumnAcl = await client.query(
       `/* ai_content_restored_schema_owner_column_acl_to_scrub */
@@ -1299,30 +1347,10 @@ export async function setProvider075SchemaOwnerMembership(client, rawPlan, cutov
       cutoverId, transientMembershipRequired: false, transientMembershipEnabled: false,
     });
   }
-  const readMembership = async () => (await client.query(`/* ai_content_075_provider_membership_catalog */
-    select grantor.rolname as grantor_role_name,membership.set_option,
-           membership.inherit_option,membership.admin_option
-      from pg_auth_members membership
-      join pg_roles member on member.oid=membership.member
-      join pg_roles parent on parent.oid=membership.roleid
-      join pg_roles grantor on grantor.oid=membership.grantor
-     where member.rolname=$1 and parent.rolname=$2
-     order by grantor.rolname,membership.set_option,membership.inherit_option,membership.admin_option`,
-  [plan.preservedRuntimeRoleName, plan.roleNames.schemaOwnerRoleName])).rows;
-  const classify = (rows) => {
-    const baseline = rows.filter((row) => row.grantor_role_name !== plan.preservedRuntimeRoleName
-      && row.set_option === false && row.inherit_option === false && row.admin_option === true);
-    const transient = rows.filter((row) => row.grantor_role_name === plan.preservedRuntimeRoleName
-      && row.set_option === true && row.inherit_option === true && row.admin_option === false);
-    if (baseline.length !== 1 || rows.length !== baseline.length + transient.length || transient.length > 1) {
-      throw new Error("cutover_075_provider_membership_catalog_invalid");
-    }
-    return { baseline, transient };
-  };
   await client.query("begin");
   try {
-    const before = await readMembership();
-    const beforeState = classify(before);
+    const before = await readProviderSchemaOwnerMembershipCatalog(client, plan);
+    const beforeState = classifyProviderSchemaOwnerMembership(before, plan);
     if (enabled) {
       if (beforeState.transient.length === 0) {
         await client.query(`grant ${quoteIdentifier(plan.roleNames.schemaOwnerRoleName)}
@@ -1333,8 +1361,8 @@ export async function setProvider075SchemaOwnerMembership(client, rawPlan, cutov
         from ${quoteIdentifier(plan.preservedRuntimeRoleName)}
         granted by ${quoteIdentifier(plan.preservedRuntimeRoleName)}`);
     }
-    const after = await readMembership();
-    const afterState = classify(after);
+    const after = await readProviderSchemaOwnerMembershipCatalog(client, plan);
+    const afterState = classifyProviderSchemaOwnerMembership(after, plan);
     if (afterState.transient.length !== (enabled ? 1 : 0)) {
       throw new Error("cutover_075_provider_membership_transition_invalid");
     }
