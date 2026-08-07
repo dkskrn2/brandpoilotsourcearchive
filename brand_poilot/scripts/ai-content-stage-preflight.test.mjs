@@ -44,6 +44,7 @@ function functionBody(source, name, nextName) {
 test("AI-content staging and preflight are isolated from generic deployment and unrelated workers", () => {
   const stage = readFileSync("deploy/scripts/stage-ai-content-release.sh", "utf8");
   const preflight = readFileSync("deploy/scripts/preflight-ai-content.sh", "utf8");
+  const genericPreflight = readFileSync("deploy/scripts/preflight.sh", "utf8");
   const lib = readFileSync("deploy/scripts/lib.sh", "utf8");
 
   assert.match(stage, /state\/ai-content-staged-release/);
@@ -86,6 +87,8 @@ test("AI-content staging and preflight are isolated from generic deployment and 
   assert.match(preflight, /require_exact_boolean\s+"LOCAL_SCHEDULER_ENABLED"\s+"false"/);
   assert.doesNotMatch(preflight, /require_exact_boolean\s+"CONTENT_PROPOSALS_ENABLED"\s+"false"/);
   assert.match(preflight, /CONTENT_PROPOSALS_ENABLED=\(true\|false\)/);
+  assert.doesNotMatch(genericPreflight, /require_exact_boolean\s+"CONTENT_PROPOSALS_ENABLED"\s+"false"/);
+  assert.match(genericPreflight, /CONTENT_PROPOSALS_ENABLED=\(true\|false\)/);
   assert.match(preflight, /docker pull/);
   assert.match(preflight, /verify_release_image_revision/);
   assert.match(preflight, /docker compose/);
