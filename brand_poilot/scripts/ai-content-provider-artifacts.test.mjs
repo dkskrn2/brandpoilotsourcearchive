@@ -181,6 +181,8 @@ test("cutover shell exposes phase-bound artifact modes without logging or env-in
   const install075 = source.slice(source.indexOf("run_install_075_ddl_allowlist()"), source.indexOf("run_create_prepare_evidence()"));
   assert.match(install075, /require_active_cutover/);
   assert.match(install075, /parse-074-consume-evidence/);
+  assert.match(install075, /cmp -s <\(jq -S -c \. "\$temporary_directory\/revocation\.json"\) <\(jq -S -c \. "\$revocation_file"\)/);
+  assert.doesNotMatch(install075, /cmp -s "\$temporary_directory\/revocation\.json" "\$revocation_file"/);
   assert.match(install075, /for existing_provider_output in "\$authorization_file" "\$attestation_file"/);
   assert.doesNotMatch(install075, /ai_content_075_provider_artifact_state_incomplete/);
   const providerLifecycle = source.slice(

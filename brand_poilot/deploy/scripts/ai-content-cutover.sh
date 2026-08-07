@@ -525,7 +525,8 @@ run_install_075_ddl_allowlist() {
     --consume-evidence-file /run/input/074-consume-evidence.json \
     --revocation-file /run/input/membership-revocation.json --output /run/output/revocation.json >/dev/null ||
     fail "ai_content_074_consume_evidence_invalid"
-  cmp -s "$temporary_directory/revocation.json" "$revocation_file" || fail "ai_content_074_revocation_mismatch"
+  cmp -s <(jq -S -c . "$temporary_directory/revocation.json") <(jq -S -c . "$revocation_file") ||
+    fail "ai_content_074_revocation_mismatch"
   remove_provider_temporary_directory "$temporary_directory" "$state_directory" consume
   for existing_provider_output in "$authorization_file" "$attestation_file"; do
     if [[ -e "$existing_provider_output" || -L "$existing_provider_output" ]]; then
