@@ -8,6 +8,7 @@ import { Client } from "pg";
 import { decodeCaCertificate, resolveVerifiedTlsConfig } from "./databaseTls.mjs";
 import {
   bootstrapFenceRelations,
+  buildCutover075Pg17AclCompatibility,
   buildMembershipRevocationRequest,
   buildProviderEventTriggerInstallRequest,
   buildCutover075ExactDdlAllowlist,
@@ -35,6 +36,7 @@ import {
   validateBootstrapRoleAuthorization,
   validateEventTriggerCatalogDelta,
   validateMembershipRevocationEvidence,
+  validateCutover075Pg17AclCompatibilityCatalog,
   validateProviderEventTriggerAttestation,
 } from "./migrationRunner.mjs";
 
@@ -1773,6 +1775,37 @@ export async function readCutover075LegacyAclRevocations(client) {
   }));
 }
 
+export async function ensureCutover075Pg17AclCompatibility({
+  client, migration074, roleNames, sealedCatalog, sealedCatalogSha256,
+}) {
+  const version = await client.query("select current_setting('server_version_num')::integer as server_version_num");
+  const serverVersionNum = Number(version.rows[0]?.server_version_num);
+  if (serverVersionNum < 170000) return { applied: false, serverVersionNum };
+  const readLive = () => readFenceSecurityCatalog(client, roleNames, { ownerRoleName: "postgres" });
+  let liveFence = await readLive();
+  if (liveFence.catalogSha256 === sealedCatalogSha256) {
+    const compatibility = buildCutover075Pg17AclCompatibility(migration074);
+    await client.query("begin");
+    try {
+      await client.query(compatibility.sql);
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    }
+    liveFence = await readLive();
+  }
+  const compatibility = validateCutover075Pg17AclCompatibilityCatalog({
+    liveFence, sealedCatalog, migration074, serverVersionNum,
+  });
+  return {
+    applied: true, serverVersionNum,
+    sourceSha256: compatibility.sourceSha256,
+    catalogSha256: liveFence.catalogSha256,
+    stableCoreSha256: liveFence.stableCoreSha256,
+  };
+}
+
 export async function buildBootstrap074AuthorizationFromDatabase({
   client, migration, plan: rawPlan, imageDigest, imageSourceLabel, requestId,
   issuedAt, authorizationIdentity, providerIdentity,
@@ -2339,9 +2372,10 @@ async function main(argv = process.argv) {
     }
     if (mode === "--install-075-ddl-allowlist") {
       const migration = await migrationById(plan.cutoverMigration);
+      const migration074 = await migrationById("074_ai_content_maintenance_write_fence.sql");
       const state = await client.query(
         `select final_fence_security_catalog_sha256,attestation_consumed_at,
-                provider_attestation_sha256,revocation_request_sha256
+                provider_attestation_sha256,revocation_request_sha256,install_request_json
            from ai_content_bootstrap_state where singleton`,
       );
       if (!state.rows[0]?.attestation_consumed_at
@@ -2349,6 +2383,11 @@ async function main(argv = process.argv) {
         || !/^[0-9a-f]{64}$/.test(state.rows[0]?.revocation_request_sha256 ?? "")) {
         throw new Error("ai_content_074_attestation_not_consumed");
       }
+      await ensureCutover075Pg17AclCompatibility({
+        client, migration074, roleNames: plan.roleNames,
+        sealedCatalog: state.rows[0]?.install_request_json?.expectedFinalFenceSecurityCatalog,
+        sealedCatalogSha256: state.rows[0]?.final_fence_security_catalog_sha256,
+      });
       const before = await client.query(
         "select command_tag as \"commandTag\",object_identity_pattern as \"objectIdentityPattern\" from ai_content_ddl_allowlist where migration_id=$1 order by command_tag,object_identity_pattern",
         [migration.id],

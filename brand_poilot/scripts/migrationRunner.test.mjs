@@ -431,6 +431,39 @@ test("075 post-cutover security catalog is closed over 13 relations, 37 function
   );
 });
 
+test("075 PG17 compatibility ignores only the implicit owner MAINTAIN ACL", async () => {
+  const migration074 = (await migrationRunner.loadMigrations())
+    .find(({ id }) => id === "074_ai_content_maintenance_write_fence.sql");
+  const compatibility = migrationRunner.buildCutover075Pg17AclCompatibility(migration074);
+  assert.match(compatibility.sql, /create or replace function verify_ai_content_075_acl_final_catalog\(\)/i);
+  assert.match(compatibility.sql, /granteeRoleName'=row->>'ownerRoleName'[\s\S]*privilege'='MAINTAIN'/);
+  assert.match(compatibility.sourceSha256, /^[0-9a-f]{64}$/);
+  const verifier = {
+    identity: compatibility.functionIdentity,
+    definition_sha256: "a".repeat(64), source_sha256: "0".repeat(64),
+    owner_role_name: "postgres", security_definer: true,
+    config: ["search_path=pg_catalog,public"],
+    acl: [{ grantee: "postgres", privilege: "EXECUTE", grantable: false }],
+  };
+  const sealedCatalog = {
+    functions: [verifier], ordinaryTriggers: [], controlTriggers: [], fenceCatalog: [], controlRelations: [],
+  };
+  const liveFence = {
+    ...sealedCatalog,
+    functions: [{ ...verifier, definition_sha256: "b".repeat(64), source_sha256: compatibility.sourceSha256 }],
+  };
+  assert.doesNotThrow(() => migrationRunner.validateCutover075Pg17AclCompatibilityCatalog({
+    liveFence, sealedCatalog, migration074, serverVersionNum: 170000,
+  }));
+  assert.throws(() => migrationRunner.validateCutover075Pg17AclCompatibilityCatalog({
+    liveFence, sealedCatalog, migration074, serverVersionNum: 160000,
+  }), /cutover_075_pg17_acl_compatibility_version_invalid/);
+  assert.throws(() => migrationRunner.validateCutover075Pg17AclCompatibilityCatalog({
+    liveFence: { ...liveFence, functions: [{ ...liveFence.functions[0], source_sha256: "c".repeat(64) }] },
+    sealedCatalog, migration074, serverVersionNum: 170000,
+  }), /cutover_075_pg17_acl_compatibility_source_mismatch/);
+});
+
 test("075 proposal preflight identity is a closed immutable cutover contract", () => {
   const migrationSha256 = "7".repeat(64);
   const identity = {

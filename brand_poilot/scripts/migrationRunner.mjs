@@ -1229,6 +1229,57 @@ export const cutover075OwnerAuthorizationRows = Object.freeze([
   `${right.commandTag}\0${right.objectIdentityPattern}`,
 )));
 
+export function buildCutover075Pg17AclCompatibility(migration074) {
+  if (migration074?.id !== bootstrap074MigrationId || typeof migration074.sql !== "string"
+    || !exactHex(migration074.checksum, 64) || checksum(migration074.sql) !== migration074.checksum) {
+    throw new Error("cutover_075_pg17_acl_compatibility_migration_invalid");
+  }
+  const start = migration074.sql.indexOf("create function verify_ai_content_075_acl_final_catalog()");
+  const endMarker = "\n$$;";
+  const end = start < 0 ? -1 : migration074.sql.indexOf(endMarker, start);
+  if (start < 0 || end < 0) throw new Error("cutover_075_pg17_acl_compatibility_source_invalid");
+  const original = migration074.sql.slice(start, end + endMarker.length);
+  const needle = "        from jsonb_array_elements(catalog->'rows') row\n    ), difference as (";
+  const replacement = "        from jsonb_array_elements(catalog->'rows') row\n"
+    + "       where not (row->>'granteeRoleName'=row->>'ownerRoleName'\n"
+    + "         and row->>'privilege'='MAINTAIN')\n    ), difference as (";
+  if (original.split(needle).length !== 2) throw new Error("cutover_075_pg17_acl_compatibility_source_invalid");
+  const sql = original.replace(/^create function /, "create or replace function ").replace(needle, replacement);
+  const body = sql.match(/\bas \$\$([\s\S]*?)\$\$;/i)?.[1];
+  if (body == null) throw new Error("cutover_075_pg17_acl_compatibility_source_invalid");
+  return Object.freeze({
+    functionIdentity: "public.verify_ai_content_075_acl_final_catalog()",
+    sql,
+    sourceSha256: checksum(body),
+  });
+}
+
+export function validateCutover075Pg17AclCompatibilityCatalog({
+  liveFence, sealedCatalog, migration074, serverVersionNum,
+}) {
+  const version = Number(serverVersionNum);
+  const compatibility = buildCutover075Pg17AclCompatibility(migration074);
+  if (!Number.isInteger(version) || version < 170000) {
+    throw new Error("cutover_075_pg17_acl_compatibility_version_invalid");
+  }
+  const rawFunction = liveFence?.functions?.find((row) => String(row.identity) === compatibility.functionIdentity);
+  if (rawFunction?.source_sha256 !== compatibility.sourceSha256) {
+    throw new Error("cutover_075_pg17_acl_compatibility_source_mismatch");
+  }
+  const live = JSON.parse(canonicalFenceSecurityStableCore(liveFence));
+  const sealed = JSON.parse(canonicalFenceSecurityStableCore(sealedCatalog));
+  const liveFunction = live.functions.find((row) => row.identity === compatibility.functionIdentity);
+  const sealedFunction = sealed.functions.find((row) => row.identity === compatibility.functionIdentity);
+  if (!liveFunction || !sealedFunction || liveFunction.definitionSha256 === sealedFunction.definitionSha256) {
+    throw new Error("cutover_075_pg17_acl_compatibility_catalog_invalid");
+  }
+  liveFunction.definitionSha256 = sealedFunction.definitionSha256;
+  if (exactJson(live) !== exactJson(sealed)) {
+    throw new Error("cutover_075_pg17_acl_compatibility_catalog_invalid");
+  }
+  return compatibility;
+}
+
 export function buildCutover075FunctionSourceHashes(migration) {
   if (migration?.id !== cutover075MigrationId || typeof migration.sql !== "string"
     || !exactHex(migration.checksum, 64) || checksum(migration.sql) !== migration.checksum) {
@@ -1500,6 +1551,7 @@ export async function readFenceSecurityCatalog(client, names, {
     `/* fence_security_functions_v1 */
      select requested.identity,
             encode(sha256(convert_to(pg_get_functiondef(function.oid),'UTF8')),'hex') as definition_sha256,
+            encode(sha256(convert_to(function.prosrc,'UTF8')),'hex') as source_sha256,
             owner.rolname as owner_role_name,function.prosecdef as security_definer,
             coalesce(function.proconfig,'{}'::text[]) as config,
             coalesce((select jsonb_agg(jsonb_build_object(
@@ -1642,7 +1694,8 @@ export async function readFenceSecurityCatalog(client, names, {
     const ownerAcl = tableOwnerPrivileges.map((privilege) => ({ grantee: ownerRoleName, privilege, grantable: false }));
     const actualAcl = normalizeAcl(row.acl).filter((item) => !(
       item.grantee === ownerRoleName && item.privilege === "MAINTAIN"
-    ));
+));
+
     if (!liveRelationStructureIsValid(row) || row.row_security || row.force_row_security
       || row.rules.length !== 0 || row.policies.length !== 0
       || row.owner_role_name !== ownerRoleName
@@ -3511,7 +3564,7 @@ async function verifyCutover075Preconditions({ client, migration, cutover, boots
     state.install_request_json,
     state.install_request_sha256,
   );
-  const enforcementStableCoreSha256 = hashFenceSecurityStableCore(
+  let enforcementStableCoreSha256 = hashFenceSecurityStableCore(
     storedInstall.expectedFinalFenceSecurityCatalog,
   );
   const storedProviderAttestation = validateProviderEventTriggerAttestation(state.provider_attestation_json, {
@@ -3593,9 +3646,18 @@ async function verifyCutover075Preconditions({ client, migration, cutover, boots
     cutover075Applied: recovery,
     ...(recovery ? { cutover075Migration: migration } : {}),
   });
-  if ((!recovery && liveFence.catalogSha256 !== state.final_fence_security_catalog_sha256)
-    || (recovery && liveFence.stableCoreSha256 !== enforcementStableCoreSha256)) {
-    throw new Error("cutover_075_enforcement_catalog_mismatch");
+  const compatibilityRequired = (!recovery
+    && liveFence.catalogSha256 !== state.final_fence_security_catalog_sha256)
+    || (recovery && liveFence.stableCoreSha256 !== enforcementStableCoreSha256);
+  if (compatibilityRequired) {
+    const version = await client.query("select current_setting('server_version_num')::integer as server_version_num");
+    validateCutover075Pg17AclCompatibilityCatalog({
+      liveFence,
+      sealedCatalog: storedInstall.expectedFinalFenceSecurityCatalog,
+      migration074,
+      serverVersionNum: version.rows[0]?.server_version_num,
+    });
+    enforcementStableCoreSha256 = liveFence.stableCoreSha256;
   }
   const liveEventTriggers = await readCanonicalEventTriggerCatalog(client);
   if (liveEventTriggers.catalogSha256 !== state.event_trigger_catalog_after_sha256
