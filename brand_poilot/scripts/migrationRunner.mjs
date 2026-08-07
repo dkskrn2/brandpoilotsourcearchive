@@ -988,7 +988,17 @@ function validateStoredEventTriggerCatalogEnvelope(value, expectedSha256, expect
   }
   const canonicalJson = canonicalEventTriggerCatalog(value.eventTriggers);
   const canonical = JSON.parse(canonicalJson);
-  const exactRows = value.eventTriggers.map((row) => Object.fromEntries(eventTriggerCatalogRowKeys.map((key) => [key, row[key]])));
+  const exactRows = value.eventTriggers.map((row) => Object.fromEntries(eventTriggerCatalogRowKeys.map((key) => [
+    key,
+    key === "functionCatalog"
+      ? Object.fromEntries(eventTriggerFunctionCatalogKeys.map((functionKey) => [
+        functionKey,
+        functionKey === "acl"
+          ? row.functionCatalog.acl.map((acl) => Object.fromEntries(aclKeys.map((aclKey) => [aclKey, acl[aclKey]])))
+          : row.functionCatalog[functionKey],
+      ]))
+      : row[key],
+  ])));
   if (JSON.stringify(exactRows) !== JSON.stringify(canonical.eventTriggers)
     || value.eventTriggers.length !== expectedCount
     || !exactHex(expectedSha256, 64)

@@ -3251,6 +3251,14 @@ test("074 bootstrap role authorization applies stage one then independently cons
   const reorderedJsonb = sealedStageOne();
   sealedState.install_request_json = Object.fromEntries(Object.entries(sealedState.install_request_json).reverse());
   sealedState.event_trigger_catalog_before_json = Object.fromEntries(Object.entries(sealedState.event_trigger_catalog_before_json).reverse());
+  sealedState.event_trigger_catalog_before_json.eventTriggers = sealedState.event_trigger_catalog_before_json.eventTriggers
+    .map((row) => ({
+      ...row,
+      functionCatalog: {
+        ...Object.fromEntries(Object.entries(row.functionCatalog).reverse()),
+        acl: row.functionCatalog.acl.map((entry) => Object.fromEntries(Object.entries(entry).reverse())),
+      },
+    }));
   assert.deepEqual((await exactStageOneRecovery()).providerInstallRequest, install);
   restoreStageOne(reorderedJsonb);
   for (const mutate of [
