@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import * as runner from "./migrationRunner.mjs";
 import {
@@ -168,6 +169,18 @@ test("074 provider enforcement rejects a non-platform-postgres identity before a
     authorizationIdentity: {}, providerIdentity: {},
   }), /bootstrap_074_provider_identity_invalid/);
   assert.equal(calls.some((sql) => /^\s*begin\s*$/i.test(sql)), false);
+});
+
+test("074 provider recovery reads only columns created by the sealed bootstrap migration", async () => {
+  const [source, migration] = await Promise.all([
+    readFile(new URL("./ai-content-database-roles.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../db/migrations/074_ai_content_maintenance_write_fence.sql", import.meta.url), "utf8"),
+  ]);
+  assert.match(migration, /authorization_request_id text not null/);
+  assert.match(migration, /authorization_sha256 text not null/);
+  assert.doesNotMatch(migration, /authorization_json/);
+  assert.match(source, /select authorization_request_id,authorization_sha256,install_request_json/);
+  assert.doesNotMatch(source, /select authorization_json,install_request_json/);
 });
 
 test("role bootstrap applies only the closed role/schema/relation ownership plan", async () => {

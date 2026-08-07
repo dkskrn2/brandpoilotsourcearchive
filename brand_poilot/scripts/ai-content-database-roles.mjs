@@ -1729,7 +1729,7 @@ export async function installProvider074EnforcementBundle({
   }
   const recoveryResult = await client.query(
     `/* provider_074_artifact_recovery_v1 */
-     select authorization_json,install_request_json,install_request_sha256,
+     select authorization_request_id,authorization_sha256,install_request_json,install_request_sha256,
             final_fence_security_catalog_sha256,event_trigger_catalog_after_sha256,
             event_trigger_catalog_after_count,provider_attestation_json,
             provider_attestation_sha256,revocation_request_json,revocation_request_sha256
@@ -1737,6 +1737,14 @@ export async function installProvider074EnforcementBundle({
   );
   const recovery = recoveryResult.rows[0];
   if (!recovery) throw new Error("bootstrap_074_provider_state_missing");
+  const { signature: _authorizationSignature, ...authorizationPayload } = authorization;
+  const authorizationSha256 = sha256(canonicalBootstrapAuthorizationPayload(authorizationPayload));
+  if (recovery.authorization_request_id !== authorization.requestId
+    || recovery.authorization_sha256 !== authorizationSha256
+    || !exactJson(recovery.install_request_json, installRequest)
+    || recovery.install_request_sha256 !== installRequest.requestSha256) {
+    throw new Error("bootstrap_074_install_request_mismatch");
+  }
   const recoveryFields = [
     recovery.provider_attestation_json, recovery.provider_attestation_sha256,
     recovery.revocation_request_json, recovery.revocation_request_sha256,
@@ -1760,11 +1768,6 @@ export async function installProvider074EnforcementBundle({
       authorizationVerification, providerAttestationVerification: providerVerification, now,
       allowExpiredSealed: true,
     });
-    if (!exactJson(recovery.authorization_json, authorization)
-      || !exactJson(recovery.install_request_json, installRequest)
-      || recovery.install_request_sha256 !== installRequest.requestSha256) {
-      throw new Error("bootstrap_074_install_request_mismatch");
-    }
     const finalFence = await readFenceSecurityCatalog(client, plan.roleNames, { ownerRoleName: "postgres" });
     const eventAfter = await readCanonicalEventTriggerCatalog(client);
     const eventDelta = validateEventTriggerCatalogDelta(
