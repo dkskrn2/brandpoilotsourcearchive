@@ -82,8 +82,50 @@ test("all generic mutation entry points guard before mutation and reconciliation
     lib.indexOf("validate_ai_content_completed_floor()"),
   );
   assert.match(statusQuery, /load_required_state_sha "\$root\/state\/current" current_sha/);
-  assert.match(statusQuery, /\$root\/releases\/\$current_sha\/scripts\/verify-ai-content-cutover\.sh/);
+  assert.match(statusQuery, /resolve_ai_content_floor_tls_environment "\$root"/);
+  assert.match(statusQuery, /\/app\/scripts\/ai-content-cutover-control\.mjs/);
+  assert.match(statusQuery, /--status/);
+  assert.doesNotMatch(statusQuery, /verify-ai-content-cutover\.sh/);
   assert.doesNotMatch(statusQuery, /dirname -- "\$\{BASH_SOURCE\[0\]\}"/);
+});
+
+test("completed-status query uses the current immutable API image with the verified CA", (t) => {
+  const bash = findBash();
+  if (!bash) return t.skip("bash unavailable");
+  const directory = mkdtempSync(join(tmpdir(), "brand-pilot-completed-query-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const capturedArguments = join(directory, "docker-arguments.txt");
+  const sha = "1".repeat(40);
+  const digest = `example.invalid/api@sha256:${"a".repeat(64)}`;
+  const runner = writeRunner(directory, `
+source "${bashPath(LIB)}"
+require_command() { :; }
+require_file_mode_600() { :; }
+load_required_state_sha() { printf -v "$2" '%s' '${sha}'; }
+validate_state_release_directory() {
+  RELEASE_MANIFEST=()
+  RELEASE_MANIFEST[API_IMAGE]='${digest}'
+  RELEASE_MANIFEST[API_SOURCE_SHA]='${sha}'
+}
+verify_release_image_revision() { :; }
+release_image_source_revision() { printf '%s\\n' '${sha}'; }
+resolve_ai_content_floor_tls_environment() { printf '%s\\0' --env DB_SSL_CA_BASE64=YWJj; }
+docker() {
+  printf '%s\\n' "$@" > "$CAPTURED_ARGUMENTS"
+  printf '%s\\n' '{"cutoverId":"${UUID}","status":"completed"}'
+}
+query_ai_content_cutover_status "$ROOT" '${UUID}'
+`);
+  const result = runRunner(bash, runner, {
+    ROOT: bashPath(directory),
+    CAPTURED_ARGUMENTS: bashPath(capturedArguments),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const argumentsText = readFileSync(capturedArguments, "utf8");
+  assert.match(argumentsText, new RegExp(`${digest.replaceAll(".", "\\.")}`));
+  assert.match(argumentsText, /--env\r?\nDB_SSL_CA_BASE64=YWJj/);
+  assert.match(argumentsText, /\/app\/scripts\/ai-content-cutover-control\.mjs/);
+  assert.match(argumentsText, /--status/);
 });
 
 test("the marker probe uses the operator security-definer snapshot without requiring table ACLs", (t) => {

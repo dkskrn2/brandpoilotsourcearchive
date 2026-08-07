@@ -785,15 +785,23 @@ query_ai_content_cutover_status() {
   local cutover_id="$2"
   local operator_database_file="${AI_CONTENT_CUTOVER_OPERATOR_DATABASE_URL_FILE:-$root/shared/secrets/ai-content-operator-database-url}"
   local current_sha=""
-  local verifier
+  local api_image
   local output
+  local -a tls_environment=()
+  require_command docker
+  require_command id
   require_file_mode_600 "$operator_database_file" "${AI_CONTENT_CUTOVER_FILE_OWNER:-bpdeploy}"
   load_required_state_sha "$root/state/current" current_sha
   validate_state_release_directory "$root" "$current_sha"
-  verifier="$root/releases/$current_sha/scripts/verify-ai-content-cutover.sh"
-  require_release_file "$verifier" 755
-  if ! output="$("$verifier" \
-    --status --operator-url-file "$operator_database_file" --cutover-id "$cutover_id")"; then
+  api_image="${RELEASE_MANIFEST[API_IMAGE]}"
+  verify_release_image_revision "$api_image" "$(release_image_source_revision API_IMAGE)"
+  mapfile -d '' -t tls_environment < <(resolve_ai_content_floor_tls_environment "$root")
+  if ! output="$(docker run --rm --pull never --read-only \
+    --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m "${tls_environment[@]}" --entrypoint node \
+    --mount "type=bind,src=$operator_database_file,dst=/run/secrets/operator-database-url,readonly" \
+    "$api_image" /app/scripts/ai-content-cutover-control.mjs --status \
+    --database-url-file /run/secrets/operator-database-url --cutover-id "$cutover_id")"; then
     return 1
   fi
   [[ -n "$output" && "$output" != *$'\n'* ]] || return 1
