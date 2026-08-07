@@ -73,10 +73,7 @@ done
 require_exact_boolean "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED" "true" "$API_ENV_FILE"
 require_exact_boolean "AUTOMATED_CONTENT_ENABLED" "false" "$API_ENV_FILE"
 require_exact_boolean "LOCAL_SCHEDULER_ENABLED" "false" "$API_ENV_FILE"
-proposal_flag_count="$(grep -Ec '^CONTENT_PROPOSALS_ENABLED=(true|false)$' "$API_ENV_FILE" || true)"
-proposal_key_count="$(grep -Ec '^CONTENT_PROPOSALS_ENABLED=' "$API_ENV_FILE" || true)"
-[[ "$proposal_flag_count" == "1" && "$proposal_key_count" == "1" ]] ||
-  fail "content_proposals_enabled_invalid"
+require_exact_boolean "CONTENT_PROPOSALS_ENABLED" "true" "$API_ENV_FILE"
 require_matching_env_secret \
   "CONTENT_PROPOSAL_WORKER_API_TOKEN" \
   "$API_ENV_FILE" \

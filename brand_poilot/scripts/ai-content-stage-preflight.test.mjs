@@ -85,10 +85,8 @@ test("AI-content staging and preflight are isolated from generic deployment and 
   assert.match(preflight, /post-bootstrap/);
   assert.match(preflight, /ai-content-application-database-url/);
   assert.match(preflight, /require_exact_boolean\s+"LOCAL_SCHEDULER_ENABLED"\s+"false"/);
-  assert.doesNotMatch(preflight, /require_exact_boolean\s+"CONTENT_PROPOSALS_ENABLED"\s+"false"/);
-  assert.match(preflight, /CONTENT_PROPOSALS_ENABLED=\(true\|false\)/);
-  assert.doesNotMatch(genericPreflight, /require_exact_boolean\s+"CONTENT_PROPOSALS_ENABLED"\s+"false"/);
-  assert.match(genericPreflight, /CONTENT_PROPOSALS_ENABLED=\(true\|false\)/);
+  assert.match(preflight, /require_exact_boolean\s+"CONTENT_PROPOSALS_ENABLED"\s+"true"/);
+  assert.match(genericPreflight, /require_exact_boolean\s+"CONTENT_PROPOSALS_ENABLED"\s+"true"/);
   assert.match(preflight, /docker pull/);
   assert.match(preflight, /verify_release_image_revision/);
   assert.match(preflight, /docker compose/);
