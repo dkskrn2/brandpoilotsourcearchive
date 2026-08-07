@@ -2290,11 +2290,11 @@ export function validateCutoverAllowlistAttestation(attestation, {
 const defaultJournalFilesystem = Object.freeze({ lstat, open, link, unlink });
 
 async function assertSecureJournalDirectory(directory, { platform, uid }, filesystem) {
-  if (platform === "win32" || uid !== 0) {
+  if (platform === "win32" || !Number.isSafeInteger(uid) || uid < 0) {
     throw new Error("cutover_075_secure_journal_platform_unsupported");
   }
   const metadata = await filesystem.lstat(directory);
-  if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== 0
+  if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== uid
     || (metadata.mode & 0o077) !== 0) {
     throw new Error("cutover_075_secure_journal_directory_invalid");
   }

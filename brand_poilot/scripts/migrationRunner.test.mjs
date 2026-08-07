@@ -2070,7 +2070,7 @@ test("075 provider journal uses exclusive durable files and rejects corrupt or l
       const metadata = await lstat(target);
       if (target === linkedFile) return { isSymbolicLink: () => true };
       if (target === directory) return {
-        isDirectory: () => true, isSymbolicLink: () => false, uid: 0, mode: 0o40700,
+        isDirectory: () => true, isSymbolicLink: () => false, uid: 1000, mode: 0o40700,
       };
       return metadata;
     },
@@ -2085,14 +2085,14 @@ test("075 provider journal uses exclusive durable files and rejects corrupt or l
         sync: async () => { fileSyncCount += 1; await handle.sync(); }, close: () => handle.close(),
         stat: async () => {
           const metadata = await handle.stat();
-          return { isFile: () => metadata.isFile(), uid: 0, mode: 0o100600, size: metadata.size };
+          return { isFile: () => metadata.isFile(), uid: 1000, mode: 0o100600, size: metadata.size };
         },
       };
     },
     link, unlink,
   };
   try {
-    const journal = migrationRunner.createCutover075ProviderJournal({ directory, platform: "linux", uid: 0, filesystem });
+    const journal = migrationRunner.createCutover075ProviderJournal({ directory, platform: "linux", uid: 1000, filesystem });
     await journal.prepare(requestId, value);
     assert.ok(fileSyncCount > 0, "journal record must be fsynced before publication");
     assert.ok(directorySyncCount > 0, "journal directory must be fsynced after publication");
