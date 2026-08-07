@@ -1802,6 +1802,7 @@ export async function installProvider074EnforcementBundle({
     eventTriggerCatalogBeforeCount: eventBefore.count,
     imageDigest: authorization.imageDigest, imageSourceLabel: authorization.imageSourceLabel,
     authorizationVerification, providerAttestationVerification: providerVerification, now,
+    allowExpiredSealed: true,
   });
   const interim = await readFenceSecurityCatalog(client, plan.roleNames);
   const expectedInstall = buildProviderEventTriggerInstallRequest(authorization, {

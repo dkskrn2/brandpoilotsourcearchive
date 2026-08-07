@@ -184,6 +184,7 @@ test("074 provider recovery uses the sealed schema and a real migration-role con
   assert.doesNotMatch(source, /select authorization_json,install_request_json/);
   assert.doesNotMatch(source, /set session authorization/);
   assert.match(source, /connectFromFile\(args\["migration-url-file"\]\)/);
+  assert.match(source, /await probeProvider074Capability\(client\);[\s\S]*?validateBootstrapRoleAuthorization\(authorization,[\s\S]*?allowExpiredSealed: true,[\s\S]*?const interim/);
   assert.match(cutover, /migration_file="\$\(option migration-url-file\)"/);
   assert.match(cutover, /mount_readonly "\$migration_file" \/run\/secrets\/migration-database-url/);
   assert.match(cutover, /--migration-url-file \/run\/secrets\/migration-database-url/);
