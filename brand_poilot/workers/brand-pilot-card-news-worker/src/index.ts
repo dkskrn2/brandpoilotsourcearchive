@@ -1,4 +1,8 @@
 import "dotenv/config";
+import {
+  contentWorkerPollDelayMs,
+  contentWorkerPollObservation,
+} from "@brand-pilot/worker-runtime";
 import { createClient } from "./client.js";
 import { createCommandRunner, runOnce } from "./worker.js";
 
@@ -15,8 +19,15 @@ async function main() {
   process.once("SIGTERM", () => shutdown.abort());
   const execute = () => runOnce({ workerId, client, planner, shutdownSignal: shutdown.signal });
   if (mode === "watch") {
-    const pollMs = Math.max(1_000, Number(process.env.CARD_NEWS_WORKER_POLL_MS ?? 10_000));
-    while (!shutdown.signal.aborted) { process.stdout.write(`${JSON.stringify(await execute().catch((error) => ({ status: "error", error: error instanceof Error ? error.message : String(error) })))}\n`); if (!shutdown.signal.aborted) await wait(pollMs); }
+    const pollMs = contentWorkerPollDelayMs(process.env.CARD_NEWS_WORKER_POLL_MS, 10_000);
+    while (!shutdown.signal.aborted) {
+      try {
+        process.stdout.write(`${JSON.stringify(await execute())}\n`);
+      } catch (error) {
+        process.stderr.write(`${JSON.stringify(contentWorkerPollObservation(error))}\n`);
+      }
+      if (!shutdown.signal.aborted) await wait(pollMs);
+    }
     return;
   }
   process.stdout.write(`${JSON.stringify(await execute())}\n`);

@@ -1,4 +1,8 @@
 import "dotenv/config";
+import {
+  contentWorkerPollDelayMs,
+  contentWorkerPollObservation,
+} from "@brand-pilot/worker-runtime";
 import { createClient } from "./client.js";
 import { createCommandRunner, runOnce } from "./worker.js";
 
@@ -22,10 +26,15 @@ async function main() {
     Math.max(1_000, Number(process.env.BLOG_CODEX_PLAN_TIMEOUT_MS ?? 300_000)),
   );
   const execute = () => runOnce({ workerId, client, runner, shutdownSignal: shutdown.signal });
+  const pollMs = contentWorkerPollDelayMs(process.env.BLOG_WORKER_POLL_MS, 10_000);
   if (mode === "watch") {
     while (!shutdown.signal.aborted) {
-      process.stdout.write(`${JSON.stringify(await execute())}\n`);
-      if (!shutdown.signal.aborted) await wait(Math.max(1_000, Number(process.env.BLOG_WORKER_POLL_MS ?? 10_000)));
+      try {
+        process.stdout.write(`${JSON.stringify(await execute())}\n`);
+      } catch (error) {
+        process.stderr.write(`${JSON.stringify(contentWorkerPollObservation(error))}\n`);
+      }
+      if (!shutdown.signal.aborted) await wait(pollMs);
     }
     return;
   }

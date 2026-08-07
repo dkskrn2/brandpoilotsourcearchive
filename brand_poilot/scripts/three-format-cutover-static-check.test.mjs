@@ -41,6 +41,7 @@ const baseline = Object.freeze({
   "apps/api/src/aiContentDownload.ts": `const sql = \`select generation.output_format from ai_content_generations generation\`;`,
   "apps/api/src/aiContentPublish.ts": `const sql = \`select generation.output_format from ai_content_generations generation\`;`,
   "apps/api/src/aiContentPlanContracts.ts": `export const plans = ["card-news-plan.v2", "blog-plan.v2", "reel-plan.v2"];`,
+  "apps/api/src/aiContentContracts.ts": `export const activeProposalContract = "content-proposal.v2";`,
   "apps/api/src/httpServer.ts": `
     app.post("/worker/ai-content-jobs/reel/claim", claimReelJob);
     const workerId = "reel-worker";
@@ -118,6 +119,9 @@ const violationFixtures = [
   ["legacy_planner_worker_execution", "workers/brand-pilot-blog-worker/src/worker.ts", "if (job.jobType === 'analyze') run();"],
   ["missing_canonical_worker_contract", "workers/brand-pilot-reel-worker/src/contracts.ts", "export const outputFormat = 'reel';"],
   ["legacy_customer_content_writer", "apps/api/src/httpServer.ts", `${baseline["apps/api/src/httpServer.ts"]}\nrepository.startAiContentGeneration(input);`],
+  ["legacy_v1_customer_contract", "apps/api/src/httpServer.ts", `${baseline["apps/api/src/httpServer.ts"]}\nfunction parseContentProposalRequest(): ContentProposalRequestV1 { return { contractVersion: "content-proposal-request.v1" }; }`],
+  ["legacy_v1_customer_contract", "apps/api/src/aiContentContracts.ts", `export interface ContentProposalV1 { contractVersion: "content-proposal.v1" }`],
+  ["legacy_proposal_repository_writer", "apps/api/src/aiContentRepository.ts", `${baseline["apps/api/src/aiContentRepository.ts"]}\nasync function createAiContentProposalBatchV2(input) { return input; }`],
   ["missing_v2_customer_content_writer", "apps/api/src/httpServer.ts", "app.post('/worker/ai-content-jobs/reel/claim', claimReelJob);"],
   ["missing_terra_format_model:blog", "packages/brand-pilot-content-contracts/src/catalog.ts", baseline["packages/brand-pilot-content-contracts/src/catalog.ts"].replace('blog: { model: "gpt-5.6-terra" }', 'blog: { model: "gpt-5.6-sol" }')],
   ["missing_prompt_binding_catalog_lookup", "packages/brand-pilot-content-contracts/src/binding.ts", "export function promptBindingFor() { return {}; }"],
@@ -131,6 +135,8 @@ const violationFixtures = [
   ["legacy_generation_dto_fallback", "apps/api/src/aiContentRepository.ts", `${baseline["apps/api/src/aiContentRepository.ts"]}\nconst outputFormat = row.output_format ?? row.type;`],
   ["missing_canonical_v3_ui_parsers", "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts", "const activeManifestVersion = 'ai-content.v3';"],
   ["legacy_generation_type_ui_fallback", "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts", `${baseline["apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts"]}\nconst kind = value.type;`],
+  ["legacy_generation_type_ui_fallback", "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts", `${baseline["apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts"]}\nconst kind = source.type;`],
+  ["unscoped_automated_card_news_ui_fallback", "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts", `${baseline["apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts"]}\nif (request.contractVersion !== "content-proposal-request.v2") return value as ContentProposalBatch;`],
 ];
 
 for (const [expectedId, relativePath, content] of violationFixtures) {

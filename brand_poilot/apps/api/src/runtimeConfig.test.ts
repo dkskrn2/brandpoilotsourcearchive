@@ -5,6 +5,7 @@ function validProductionEnv(): NodeJS.ProcessEnv {
   return {
     NODE_ENV: "production",
     SUPABASE_DATABASE_URL: "postgresql://database.example.com/brand_pilot",
+    AI_CONTENT_DATABASE_URL_FILE: "/run/secrets/ai_content_application_database_url",
     AUTH_FRONTEND_URL: "https://app.danbammsg.co.kr",
     WORKER_API_TOKEN: "worker-secret",
     CONTENT_PROPOSAL_WORKER_API_TOKEN: "content-proposal-worker-secret",
@@ -33,6 +34,22 @@ function validProductionEnv(): NodeJS.ProcessEnv {
 }
 
 describe("loadApiRuntimeConfig", () => {
+  it("requires the dedicated AI-content database secret in production", () => {
+    const env = validProductionEnv();
+    delete env.AI_CONTENT_DATABASE_URL_FILE;
+
+    expect(() => loadApiRuntimeConfig(env)).toThrow(
+      "runtime_config_missing:AI_CONTENT_DATABASE_URL_FILE",
+    );
+  });
+
+  it("accepts only the fixed read-only mount path for the AI-content database secret", () => {
+    const env = validProductionEnv();
+    env.AI_CONTENT_DATABASE_URL_FILE = "/opt/brand-pilot/shared/secrets/application-database-url";
+
+    expect(() => loadApiRuntimeConfig(env)).toThrow("AI_CONTENT_DATABASE_URL_FILE");
+  });
+
   it("requires a dedicated content proposal worker token in production", () => {
     const env = validProductionEnv();
     delete env.CONTENT_PROPOSAL_WORKER_API_TOKEN;
@@ -260,6 +277,9 @@ describe("loadApiRuntimeConfig", () => {
       idleTimeoutMillis: 10_000,
       connectionTimeoutMillis: 10_000,
     });
+    expect(config.aiContentDatabaseUrlFile).toBe(
+      "/run/secrets/ai_content_application_database_url",
+    );
   });
 
   it.each(["yes", "1", "TRUE", ""])("accepts only literal true or false booleans (%s)", (value) => {

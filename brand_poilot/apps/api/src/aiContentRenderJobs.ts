@@ -9,7 +9,7 @@ import type {
   ContentStudioOutputFormat,
   ImageGenerationPackageV1,
 } from "@brand-pilot/content-contracts";
-import type { AiContentGenerationRecord, BrandScope } from "./aiContentRepository.js";
+import type { AiContentGenerationRecord } from "./aiContentRepository.js";
 import {
   BLOG_PASSIVE_HTML_FORBIDDEN_ATTRIBUTES,
   BLOG_PASSIVE_HTML_FORBIDDEN_TAGS,
@@ -18,6 +18,10 @@ import {
 } from "./aiContentPlanContracts.js";
 import { parseActiveAiContentManifestV3 } from "./aiContentManifest.js";
 import { parseContentGenerationInputV3, parseResearchEvidenceSnapshotV1 } from "./aiContentGenerationInputV3.js";
+import {
+  completeGenerationOperationIfTerminal,
+  reverseGenerationReservationIfTerminalFailure,
+} from "./aiContentGenerationOperations.js";
 
 type Queryable = Pick<PoolClient, "query">;
 
@@ -83,7 +87,6 @@ export interface AiContentRenderJobsRepository {
   completeAsset(input: RenderAssetCompletion): Promise<void>;
   completePackage(input: RenderPackageCompletion): Promise<AiContentGenerationRecord>;
   fail(input: RenderFailure): Promise<void>;
-  retryFailedOutput(input: BrandScope & { outputId: string }): Promise<AiContentGenerationRecord>;
   saveOutputResearch(input: {
     jobId: string;
     outputId: string;
@@ -295,20 +298,80 @@ async function lockedRenderJob(client: Queryable, jobId: string): Promise<Record
   return result.rows[0] as Record<string, unknown>;
 }
 
-async function lockRenderOutputForJob(client: Queryable, jobId: string): Promise<void> {
+async function renderJobScope(client: Queryable, jobId: string): Promise<Record<string, unknown>> {
   const scope = await client.query(
     `select output_id,generation_id,workspace_id,brand_id
        from ai_content_generation_render_jobs where id=$1`,
     [jobId],
   );
   if (!scope.rows.length) throw new Error("ai_content_render_job_not_found");
-  const row = scope.rows[0] as Record<string, unknown>;
+  return scope.rows[0] as Record<string, unknown>;
+}
+
+function hasSameRenderScope(left: Record<string, unknown>, right: Record<string, unknown>): boolean {
+  return ["output_id", "generation_id", "workspace_id", "brand_id"]
+    .every((key) => String(left[key]) === String(right[key]));
+}
+
+async function lockRenderGeneration(client: Queryable, scope: Record<string, unknown>): Promise<void> {
+  const generation = await client.query(
+    `select id from ai_content_generations
+      where id=$1 and workspace_id=$2 and brand_id=$3 for update`,
+    [scope.generation_id, scope.workspace_id, scope.brand_id],
+  );
+  if (!generation.rows.length) throw new Error("ai_content_render_snapshot_missing");
+}
+
+async function lockRenderOutput(client: Queryable, row: Record<string, unknown>): Promise<void> {
   const output = await client.query(
     `select id from ai_content_generation_outputs
       where id=$1 and generation_id=$2 and workspace_id=$3 and brand_id=$4 for update`,
     [row.output_id, row.generation_id, row.workspace_id, row.brand_id],
   );
   if (!output.rows.length) throw new Error("ai_content_render_snapshot_missing");
+}
+
+async function lockTerminalRenderGraph(client: Queryable, jobId: string): Promise<Record<string, unknown>> {
+  const scope = await renderJobScope(client, jobId);
+  await lockRenderGeneration(client, scope);
+  const row = await lockedRenderJob(client, jobId);
+  if (!hasSameRenderScope(scope, row)) throw new Error("ai_content_render_snapshot_missing");
+  await lockRenderOutput(client, row);
+  return row;
+}
+
+async function failRenderOutputAndGeneration(
+  client: Queryable,
+  row: Record<string, unknown>,
+  errorCode: string,
+  errorMessage: string,
+): Promise<void> {
+  await client.query(
+    `update ai_content_generation_outputs set status='failed',failure_code=$2,failure_message=$3,updated_at=now() where id=$1`,
+    [row.output_id, errorCode, errorMessage],
+  );
+  const counts = await client.query(
+    `select count(*)::integer total,count(*) filter(where status='completed')::integer completed,
+            count(*) filter(where status='failed')::integer failed
+       from ai_content_generation_outputs where generation_id=$1`,
+    [row.generation_id],
+  );
+  const total = Number(counts.rows[0]?.total ?? 0);
+  const completed = Number(counts.rows[0]?.completed ?? 0);
+  const failed = Number(counts.rows[0]?.failed ?? 0);
+  const generationStatus = total > 0 && failed === total
+    ? "failed"
+    : total > 0 && completed + failed === total
+      ? "partial_failed"
+      : "generating";
+  await client.query(
+    `update ai_content_generations set status=$2,current_stage=case when $2='generating' then 'generation' else 'completed' end,
+       terminal_at=case when $2<>'generating' then coalesce(terminal_at,now()) else terminal_at end,
+       retryable_until=case when $2<>'generating' then coalesce(retryable_until,now()+interval '15 days') else retryable_until end,
+       error_code=$3,error_message=$4,updated_at=now() where id=$1`,
+    [row.generation_id, generationStatus, errorCode, errorMessage],
+  );
+  await reverseGenerationReservationIfTerminalFailure(client, String(row.generation_id));
 }
 
 function requireLease(row: Record<string, unknown>, input: { workerId: string; leaseToken: string }): void {
@@ -469,25 +532,31 @@ export function createAiContentRenderJobsRepository(
       try {
         await client.query("BEGIN");
         const exhausted = await client.query(
-          `update ai_content_generation_render_jobs
-              set status='failed',
-                  worker_id=null,lease_token=null,lease_expires_at=null,
-                  error_code='ai_content_render_lease_expired',updated_at=now()
+          `select id from ai_content_generation_render_jobs
             where status='processing' and lease_expires_at<=clock_timestamp() and attempt_count>=max_attempts
-            returning generation_id,output_id`,
+            order by generation_id,output_id,id`,
         );
         for (const expired of exhausted.rows) {
+          const row = await lockTerminalRenderGraph(client, String(expired.id));
+          if (
+            row.status !== "processing"
+            || row.lease_expired !== true
+            || Number(row.attempt_count) < Number(row.max_attempts)
+          ) continue;
           await client.query(
-            `update ai_content_generation_outputs set status='failed',failure_code='ai_content_render_lease_expired',
-                    failure_message='Render worker lease expired after the final attempt',updated_at=now() where id=$1`,
-            [expired.output_id],
-          );
-          await client.query(
-            `update ai_content_generations set status='partial_failed',current_stage='completed',
-                    terminal_at=coalesce(terminal_at,now()),retryable_until=coalesce(retryable_until,now()+interval '15 days'),
-                    error_code='ai_content_render_lease_expired',error_message='Render worker lease expired after the final attempt',updated_at=now()
+            `update ai_content_generation_render_jobs
+                set status='failed',worker_id=null,lease_token=null,lease_expires_at=null,
+                    error_code='ai_content_render_lease_expired',
+                    error_message='Render worker lease expired after the final attempt',
+                    completed_at=coalesce(completed_at,now()),updated_at=now()
               where id=$1`,
-            [expired.generation_id],
+            [row.id],
+          );
+          await failRenderOutputAndGeneration(
+            client,
+            row,
+            "ai_content_render_lease_expired",
+            "Render worker lease expired after the final attempt",
           );
         }
         await client.query(
@@ -543,8 +612,8 @@ export function createAiContentRenderJobsRepository(
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        await lockRenderOutputForJob(client, input.jobId);
         const row = await lockedRenderJob(client, input.jobId);
+        await lockRenderOutput(client, row);
         if (row.status === "succeeded") {
           if (row.worker_id !== input.workerId || String(row.lease_token) !== input.leaseToken) {
             throw new Error("ai_content_render_job_lease_invalid");
@@ -591,7 +660,7 @@ export function createAiContentRenderJobsRepository(
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        const row = await lockedRenderJob(client, input.jobId);
+        const row = await lockTerminalRenderGraph(client, input.jobId);
         if (row.status === "succeeded") {
           if (row.worker_id !== input.workerId || String(row.lease_token) !== input.leaseToken) {
             throw new Error("ai_content_render_job_lease_invalid");
@@ -672,23 +741,10 @@ export function createAiContentRenderJobsRepository(
         const resultJson = { manifest, manifestUrl: input.manifestUrl };
         if (row.status === "succeeded") {
           if (!isDeepStrictEqual(row.result_json, resultJson)) throw new Error("ai_content_render_completion_conflict");
+          await completeGenerationOperationIfTerminal(client, String(row.generation_id));
           const generation = await loadGeneration(client, String(row.generation_id));
           await client.query("COMMIT");
           return generation;
-        }
-        const billing = await client.query(
-          `select payload_json->>'usageDate' as usage_date,
-                  payload_json->>'usageIdempotencyKey' as usage_idempotency_key
-             from ai_content_generation_jobs
-            where generation_id=$1 and output_id=$2 and workspace_id=$3 and brand_id=$4
-              and job_type='generate' and payload_json->>'planningMode'='selected_proposal'
-            order by created_at,id limit 1`,
-          [row.generation_id, row.output_id, row.workspace_id, row.brand_id],
-        );
-        const usageDate = billing.rows[0]?.usage_date;
-        const usageIdempotencyKey = billing.rows[0]?.usage_idempotency_key;
-        if (typeof usageDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(usageDate) || typeof usageIdempotencyKey !== "string" || !usageIdempotencyKey) {
-          throw new Error("ai_content_render_usage_snapshot_missing");
         }
         await client.query(
           `update ai_content_generation_render_jobs set status='succeeded',result_json=$2::jsonb,lease_expires_at=null,
@@ -700,13 +756,6 @@ export function createAiContentRenderJobsRepository(
              artifact_manifest_json=$4::jsonb,manifest_url=$5,failure_code=null,failure_message=null,
              completed_at=coalesce(completed_at,now()),updated_at=now() where id=$1`,
           [row.output_id, manifest.title, JSON.stringify(manifest.content), JSON.stringify(manifest), input.manifestUrl],
-        );
-        await client.query(
-          `insert into ai_content_usage_ledger
-             (workspace_id,brand_id,generation_id,output_id,usage_type,quantity,usage_date,idempotency_key)
-           values($1,$2,$3,$4,'generation',1,$5::date,$6)
-           on conflict (brand_id,idempotency_key) do nothing`,
-          [row.workspace_id, row.brand_id, row.generation_id, row.output_id, usageDate, usageIdempotencyKey],
         );
         const counts = await client.query(
           `select count(*)::integer total,count(*) filter(where status='completed')::integer completed,
@@ -726,6 +775,7 @@ export function createAiContentRenderJobsRepository(
              error_code=null,error_message=null,updated_at=now() where id=$1`,
           [row.generation_id, status],
         );
+        await completeGenerationOperationIfTerminal(client, String(row.generation_id));
         const generation = await loadGeneration(client, String(row.generation_id));
         await client.query("COMMIT");
         return generation;
@@ -739,11 +789,12 @@ export function createAiContentRenderJobsRepository(
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        const row = await lockedRenderJob(client, input.jobId);
+        const row = await lockTerminalRenderGraph(client, input.jobId);
         if (row.status === "failed" && row.error_code === input.errorCode) {
           if (row.worker_id !== input.workerId || String(row.lease_token) !== input.leaseToken) {
             throw new Error("ai_content_render_job_lease_invalid");
           }
+          await reverseGenerationReservationIfTerminalFailure(client, String(row.generation_id));
           await client.query("COMMIT");
           return;
         }
@@ -759,16 +810,7 @@ export function createAiContentRenderJobsRepository(
           [input.jobId, retry ? "queued" : "failed", input.errorCode, input.errorMessage],
         );
         if (!retry) {
-          await client.query(
-            `update ai_content_generation_outputs set status='failed',failure_code=$2,failure_message=$3,updated_at=now() where id=$1`,
-            [row.output_id, input.errorCode, input.errorMessage],
-          );
-          await client.query(
-            `update ai_content_generations set status='partial_failed',current_stage='completed',
-               terminal_at=coalesce(terminal_at,now()),retryable_until=coalesce(retryable_until,now()+interval '15 days'),
-               error_code=$2,error_message=$3,updated_at=now() where id=$1`,
-            [row.generation_id, input.errorCode, input.errorMessage],
-          );
+          await failRenderOutputAndGeneration(client, row, input.errorCode, input.errorMessage);
         }
         await client.query("COMMIT");
       } catch (error) {
@@ -777,44 +819,6 @@ export function createAiContentRenderJobsRepository(
       } finally { client.release(); }
     },
 
-    async retryFailedOutput(input) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const output = await client.query(
-          `select generation_id from ai_content_generation_outputs
-            where id=$1 and workspace_id=$2 and brand_id=$3 and status='failed' for update`,
-          [input.outputId, input.workspaceId, input.brandId],
-        );
-        if (!output.rows.length) throw new Error("ai_content_output_not_failed");
-        const failed = await client.query(
-          `select job_kind from ai_content_generation_render_jobs where output_id=$1 and workspace_id=$2 and brand_id=$3 and status='failed' for update`,
-          [input.outputId, input.workspaceId, input.brandId],
-        );
-        if (!failed.rows.length) throw new Error("ai_content_render_retry_not_available");
-        await client.query(
-          `update ai_content_generation_render_jobs set status='queued',attempt_count=0,result_json=null,
-             available_at=now(),worker_id=null,lease_token=null,lease_expires_at=null,error_code=null,error_message=null,
-             completed_at=null,updated_at=now() where output_id=$1 and workspace_id=$2 and brand_id=$3 and status='failed'`,
-          [input.outputId, input.workspaceId, input.brandId],
-        );
-        await client.query(
-          `update ai_content_generation_outputs set status='generating',failure_code=null,failure_message=null,completed_at=null,updated_at=now() where id=$1`,
-          [input.outputId],
-        );
-        await client.query(
-          `update ai_content_generations set status='generating',current_stage='generation',completed_at=null,
-             error_code=null,error_message=null,updated_at=now() where id=$1`,
-          [output.rows[0].generation_id],
-        );
-        const generation = await loadGeneration(client, String(output.rows[0].generation_id));
-        await client.query("COMMIT");
-        return generation;
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally { client.release(); }
-    },
 
     async saveOutputResearch(input) {
       const client = await pool.connect();

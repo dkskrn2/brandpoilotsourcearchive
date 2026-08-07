@@ -6,7 +6,6 @@ import { contentGenerationFieldError, createAiContentApiGateway } from "./aiCont
 import type { AiContentDraft, GenerationAttachment, SubjectAnalysisInput } from "./types";
 
 const draft: AiContentDraft = {
-  type: "card_news",
   subjectType: "product",
   subjectInput: { sourceUrl: "https://example.com/product", name: "제품", promotion: "", description: "" },
   subjectAnalysisId: "analysis-1",
@@ -67,9 +66,9 @@ describe("createAiContentApiGateway", () => {
       brandId: "brand-1",
       origin: "manual",
       contentFamily: "informational",
-      request: {},
+      request: { contractVersion: "content-proposal-request.v2" },
       sourceSnapshots: [],
-      status: "ready",
+      status: "queued",
       proposals: [],
       errorCode: null,
       errorMessage: null,
@@ -803,6 +802,28 @@ describe("createAiContentApiGateway", () => {
       proposals: [{ id: "proposal-1", proposal: { title: "불완전한 안" } }],
       researchEvidence: { items: [] },
       selectedReferences: [],
+      errorCode: null,
+      errorMessage: null,
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+    });
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await expect(gateway.getProposalBatch("brand-1", "batch-1"))
+      .rejects.toThrow("ai_content_proposal_batch_response_invalid");
+  });
+
+  it("rejects a retired proposal contract on a manual batch instead of entering the automated-card fallback", async () => {
+    const requestJson = vi.fn().mockResolvedValue({
+      id: "batch-1",
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      origin: "manual",
+      contentFamily: "informational",
+      request: { contractVersion: "content-proposal-request.v1" },
+      sourceSnapshots: [],
+      status: "queued",
+      proposals: [],
       errorCode: null,
       errorMessage: null,
       createdAt: "2026-08-01T00:00:00.000Z",

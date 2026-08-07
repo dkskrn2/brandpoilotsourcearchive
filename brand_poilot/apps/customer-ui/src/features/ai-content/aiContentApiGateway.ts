@@ -269,7 +269,13 @@ function parseV2Proposal(value: unknown): ContentProposalV2 {
 function parseV2ProposalBatch(value: unknown): ContentProposalBatch {
   const source = responseObject(value);
   const request = responseObject(source.request);
-  if (request.contractVersion !== "content-proposal-request.v2") return value as ContentProposalBatch;
+  if (request.contractVersion !== "content-proposal-request.v2") {
+    if (source.origin === "scheduled_crawl"
+      && request.contractVersion === "content-proposal-request.v1") {
+      return value as ContentProposalBatch;
+    }
+    invalidProposalBatchResponse();
+  }
   if (
     typeof source.id !== "string"
     || typeof source.workspaceId !== "string"
@@ -388,7 +394,6 @@ export function normalizeAiContentDraft(outputFormat: ContentStudioOutputFormat,
     ? Object.fromEntries(Object.entries(source.appealOverridesByTarget).filter((entry): entry is [string, SubjectAppeal[]] => Array.isArray(entry[1])).map(([targetId, appeals]) => [targetId, appeals.map((appeal) => ({ ...appeal, sources: [...appeal.sources] }))]))
     : {};
   return {
-    type: source.type ?? (outputFormat === "reel" ? "marketing" : outputFormat),
     orchestration: source.orchestration as ContentOrchestration | undefined,
     subjectType,
     subjectInput,

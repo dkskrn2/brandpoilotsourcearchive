@@ -2,13 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { createServer } from "./httpServer.js";
 import { resolveAiContentSeed } from "./aiContentSeedResolver.js";
 import type { ContentOrchestrationV2, ContentOutputFormatV2, ContentSeedV2 } from "./aiContentContracts.js";
-import type { AiContentProposalBatchRecord } from "./aiContentRepository.js";
 import type { AiContentSnapshotRepository } from "./aiContentSnapshotRepository.js";
 import type { ChannelCapability } from "./channelCapabilities.js";
-import {
-  orchestrateContentProposalBatchV2,
-  type ContentProposalOrchestrationV2Dependencies,
-} from "./contentOrchestration.js";
+import { resolveContentProposalV2Input } from "./contentOrchestration.js";
+import { parseContentOrchestrationV2 } from "./aiContentGenerationInputV3.js";
 import type { ApiRepository } from "./types.js";
 import type { AiContentProposalV2Service } from "./aiContentProposalV2Service.js";
 
@@ -101,23 +98,6 @@ function readyCapability(overrides: Partial<ChannelCapability> = {}): ChannelCap
   };
 }
 
-function batch(input: { workspaceId: string; brandId: string; purpose: "informational" | "marketing" }): AiContentProposalBatchRecord {
-  return {
-    id: batchId,
-    workspaceId: input.workspaceId,
-    brandId: input.brandId,
-    origin: "manual",
-    contentFamily: input.purpose,
-    request: {},
-    sourceSnapshots: [],
-    status: "queued",
-    errorCode: null,
-    errorMessage: null,
-    createdAt: "2026-08-01T03:00:00.000Z",
-    updatedAt: "2026-08-01T03:00:00.000Z",
-  };
-}
-
 type SetupOverrides = {
   allowed?: boolean;
   capability?: ChannelCapability | null;
@@ -202,14 +182,20 @@ function setup(overrides: SetupOverrides = {}) {
     crawlUrl: crawlUrl as never,
     now: () => new Date("2026-08-01T02:00:00.000Z"),
   }));
-  const createAiContentProposalBatchV2 = vi.fn(async (input) => batch(input));
-  const getAiContentProposalBatchV2Replay = vi.fn(async () => null);
-  const dependencies: ContentProposalOrchestrationV2Dependencies = {
-    getAiContentProposalBatchV2Replay,
+  const recordResolvedProposal = vi.fn(async (input: {
+    workspaceId: string;
+    brandId: string;
+    actorUserId: string;
+    idempotencyKey: string;
+    purpose: ContentOrchestrationV2["purpose"];
+    outputFormat: ContentOutputFormatV2;
+    channelTarget: ContentOrchestrationV2["outputSettings"]["channelTargets"][number];
+    inputSnapshot: Awaited<ReturnType<typeof resolveContentProposalV2Input>>["inputSnapshot"];
+  }) => input);
+  const dependencies = {
     loadChannelCapability,
     resolveAiContentSeed: resolveSeed,
     snapshotRepository,
-    createAiContentProposalBatchV2,
     now: () => new Date("2026-08-01T03:00:00.000Z"),
   };
   const app = createServer({
@@ -220,20 +206,26 @@ function setup(overrides: SetupOverrides = {}) {
       service: overrides.proposalService ?? {
         async create(command) {
           if (command.source !== "manual") throw new Error("proposal_v2_source_unsupported");
-          const created = await orchestrateContentProposalBatchV2({
-            routeBrandId: command.brandId,
-            scope: {
-              workspaceId: command.workspaceId,
-              brandId: command.brandId,
-              actorUserId: command.actorUserId,
-            },
-            body: command.request,
-            idempotencyKey: command.idempotencyKey,
+          const request = parseContentOrchestrationV2(command.request);
+          if (request.brandId !== command.brandId) throw new Error("content_orchestration_v2_invalid");
+          const resolved = await resolveContentProposalV2Input(request, {
+            workspaceId: command.workspaceId,
+            brandId: command.brandId,
           }, dependencies);
+          await recordResolvedProposal({
+            workspaceId: command.workspaceId,
+            brandId: command.brandId,
+            actorUserId: command.actorUserId,
+            idempotencyKey: command.idempotencyKey,
+            purpose: request.purpose,
+            outputFormat: request.outputSettings.outputFormat,
+            channelTarget: resolved.channelTarget,
+            inputSnapshot: resolved.inputSnapshot,
+          });
           return {
             disposition: "created",
             proposalRunId: null,
-            proposalBatchId: created.id,
+            proposalBatchId: batchId,
             status: "proposal_pending",
           };
         },
@@ -260,7 +252,7 @@ function setup(overrides: SetupOverrides = {}) {
     loadApprovedCore,
     loadApprovedProduct,
     freezeReferences,
-    createAiContentProposalBatchV2,
+    recordResolvedProposal,
     listAiContentReferenceSeeds,
   };
 }
@@ -286,7 +278,7 @@ describe("Proposal V2 maintenance fence", () => {
     expect(response.json()).toEqual({ error: "ai_content_maintenance" });
     expect(guard).toHaveBeenCalledTimes(1);
     expect(harness.resolveSeed).not.toHaveBeenCalled();
-    expect(harness.createAiContentProposalBatchV2).not.toHaveBeenCalled();
+    expect(harness.recordResolvedProposal).not.toHaveBeenCalled();
     await harness.app.close();
   });
 });
@@ -354,7 +346,7 @@ describe("V2 customer proposal batches", () => {
 
     expect(response.statusCode).toBe(202);
     expect(response.json()).toEqual({ batchId, status: "queued" });
-    expect(harness.createAiContentProposalBatchV2).toHaveBeenCalledWith(expect.objectContaining({
+    expect(harness.recordResolvedProposal).toHaveBeenCalledWith(expect.objectContaining({
       workspaceId,
       brandId,
       actorUserId,
@@ -379,7 +371,7 @@ describe("V2 customer proposal batches", () => {
 
     expect(response.statusCode).toBe(202);
     expect(harness.loadChannelCapability).not.toHaveBeenCalled();
-    expect(harness.createAiContentProposalBatchV2).toHaveBeenCalledOnce();
+    expect(harness.recordResolvedProposal).toHaveBeenCalledOnce();
     await harness.app.close();
   });
 
@@ -404,7 +396,7 @@ describe("V2 customer proposal batches", () => {
     expect(harness.loadApprovedCore).not.toHaveBeenCalled();
     expect(harness.loadApprovedProduct).not.toHaveBeenCalled();
     expect(harness.freezeReferences).not.toHaveBeenCalled();
-    expect(harness.createAiContentProposalBatchV2).not.toHaveBeenCalled();
+    expect(harness.recordResolvedProposal).not.toHaveBeenCalled();
     expect(harness.legacyCreate).not.toHaveBeenCalled();
     await harness.app.close();
   });
@@ -416,7 +408,7 @@ describe("V2 customer proposal batches", () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: "ai_content_proposal_contract_version_unsupported" });
     expect(harness.legacyCreate).not.toHaveBeenCalled();
-    expect(harness.createAiContentProposalBatchV2).not.toHaveBeenCalled();
+    expect(harness.recordResolvedProposal).not.toHaveBeenCalled();
     await harness.app.close();
   });
 
@@ -428,7 +420,7 @@ describe("V2 customer proposal batches", () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: "ai_content_proposal_contract_version_unsupported" });
     expect(harness.legacyCreate).not.toHaveBeenCalled();
-    expect(harness.createAiContentProposalBatchV2).not.toHaveBeenCalled();
+    expect(harness.recordResolvedProposal).not.toHaveBeenCalled();
     await harness.app.close();
   });
 
@@ -445,7 +437,7 @@ describe("V2 customer proposal batches", () => {
     expect(response.json()).toEqual({ error: "content_orchestration_channel_capability_mismatch" });
     expect(harness.crawlUrl).not.toHaveBeenCalled();
     expect(harness.loadApprovedCore).not.toHaveBeenCalled();
-    expect(harness.createAiContentProposalBatchV2).not.toHaveBeenCalled();
+    expect(harness.recordResolvedProposal).not.toHaveBeenCalled();
     await harness.app.close();
   });
 
@@ -466,7 +458,7 @@ describe("V2 customer proposal batches", () => {
 
     expect(response.statusCode).toBe(202);
     expect(harness.crawlUrl).toHaveBeenCalledWith("https://example.test/original");
-    expect(harness.createAiContentProposalBatchV2).toHaveBeenCalledWith(expect.objectContaining({
+    expect(harness.recordResolvedProposal).toHaveBeenCalledWith(expect.objectContaining({
       inputSnapshot: expect.objectContaining({
         subject: expect.objectContaining({
           kind: "topic_url",
@@ -486,7 +478,7 @@ describe("V2 customer proposal batches", () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: "ai_content_seed_resolution_failed" });
     expect(response.body).not.toContain("private crawler failure");
-    expect(harness.createAiContentProposalBatchV2).not.toHaveBeenCalled();
+    expect(harness.recordResolvedProposal).not.toHaveBeenCalled();
     await harness.app.close();
   });
 
@@ -501,7 +493,7 @@ describe("V2 customer proposal batches", () => {
       { workspaceId, brandId },
       [{ referenceId, roles: ["planning"] }],
     );
-    expect(harness.createAiContentProposalBatchV2).toHaveBeenCalledWith(expect.objectContaining({
+    expect(harness.recordResolvedProposal).toHaveBeenCalledWith(expect.objectContaining({
       inputSnapshot: expect.objectContaining({ references: [frozenReference] }),
     }));
     expect(response.body).not.toContain(frozenReference.text);
@@ -526,7 +518,7 @@ describe("V2 customer proposal batches", () => {
 
     expect(response.statusCode).toBe(404);
     expect(response.json()).toEqual({ error: "RESOURCE_NOT_AVAILABLE" });
-    expect(harness.createAiContentProposalBatchV2).not.toHaveBeenCalled();
+    expect(harness.recordResolvedProposal).not.toHaveBeenCalled();
     await harness.app.close();
   });
 });

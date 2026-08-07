@@ -15,10 +15,20 @@ COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/apps/api/package.json ./apps/api/package.json
 COPY --from=build --chown=node:node /app/apps/api/dist ./apps/api/dist
+COPY --from=build --chown=node:node /app/packages/brand-pilot-content-contracts/package.json ./packages/brand-pilot-content-contracts/package.json
+COPY --from=build --chown=node:node /app/packages/brand-pilot-content-contracts/dist ./packages/brand-pilot-content-contracts/dist
+COPY --from=build --chown=node:node /app/packages/brand-pilot-content-contracts/generated ./packages/brand-pilot-content-contracts/generated
 COPY --from=build --chown=node:node /app/db/migrations ./db/migrations
 COPY --from=build --chown=node:node /app/scripts/migrationRunner.mjs ./scripts/migrationRunner.mjs
 COPY --from=build --chown=node:node /app/scripts/migrate.mjs ./scripts/migrate.mjs
 COPY --from=build --chown=node:node /app/scripts/databaseTls.mjs ./scripts/databaseTls.mjs
+COPY --from=build --chown=node:node /app/scripts/ai-content-cutover-control.mjs ./scripts/ai-content-cutover-control.mjs
+COPY --from=build --chown=node:node /app/scripts/ai-content-cutover-floor-probe.mjs ./scripts/ai-content-cutover-floor-probe.mjs
+COPY --from=build --chown=node:node /app/scripts/ai-content-cutover-evidence.mjs ./scripts/ai-content-cutover-evidence.mjs
+COPY --from=build --chown=node:node /app/scripts/ai-content-database-catalog.mjs ./scripts/ai-content-database-catalog.mjs
+COPY --from=build --chown=node:node /app/scripts/ai-content-database-roles.mjs ./scripts/ai-content-database-roles.mjs
+COPY --from=build --chown=node:node /app/scripts/ai-content-provider-artifacts.mjs ./scripts/ai-content-provider-artifacts.mjs
+COPY --from=build --chown=node:node /app/scripts/collect-ai-content-prepare-evidence.mjs ./scripts/collect-ai-content-prepare-evidence.mjs
 
 USER node
 EXPOSE 4000

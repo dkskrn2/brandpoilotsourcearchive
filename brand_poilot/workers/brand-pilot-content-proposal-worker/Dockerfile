@@ -27,6 +27,7 @@ COPY --from=build --chown=node:node /app/workers/brand-pilot-worker-runtime/pack
 COPY --from=build --chown=node:node /app/workers/brand-pilot-worker-runtime/dist ./workers/brand-pilot-worker-runtime/dist
 COPY --from=build --chown=node:node /app/workers/brand-pilot-content-proposal-worker/package.json ./workers/brand-pilot-content-proposal-worker/package.json
 COPY --from=build --chown=node:node /app/workers/brand-pilot-content-proposal-worker/dist ./workers/brand-pilot-content-proposal-worker/dist
+COPY --from=build --chown=node:node /app/scripts/ai-content-proposal-schema-preflight.mjs ./scripts/ai-content-proposal-schema-preflight.mjs
 
 USER node
 CMD ["node", "workers/brand-pilot-content-proposal-worker/dist/main.js", "watch"]

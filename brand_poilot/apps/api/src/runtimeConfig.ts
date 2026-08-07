@@ -13,6 +13,7 @@ export interface ApiRuntimeConfig {
     connectionTimeoutMillis: number;
     caCertificate?: string;
   };
+  aiContentDatabaseUrlFile?: string;
   schedulerEnabled: boolean;
   instagramPublishEnabled: boolean;
   aiContentAttachmentUploadSessionsEnabled: boolean;
@@ -28,6 +29,7 @@ export interface ApiRuntimeConfig {
 }
 
 const productionRequiredKeys = [
+  "AI_CONTENT_DATABASE_URL_FILE",
   "AUTH_FRONTEND_URL",
   "WORKER_API_TOKEN",
   "CONTENT_PROPOSAL_WORKER_API_TOKEN",
@@ -140,6 +142,13 @@ export function loadApiRuntimeConfig(
 ): ApiRuntimeConfig {
   const production = env.NODE_ENV === "production";
   if (production) assertProductionRequirements(env);
+  const aiContentDatabaseUrlFile = env.AI_CONTENT_DATABASE_URL_FILE?.trim();
+  if (
+    aiContentDatabaseUrlFile
+    && aiContentDatabaseUrlFile !== "/run/secrets/ai_content_application_database_url"
+  ) {
+    invalid("AI_CONTENT_DATABASE_URL_FILE");
+  }
 
   const cookieSecure = parseBoolean(env.COOKIE_SECURE, "COOKIE_SECURE");
   const devAuthEnabled = parseBoolean(env.DEV_AUTH_ENABLED, "DEV_AUTH_ENABLED");
@@ -220,6 +229,7 @@ export function loadApiRuntimeConfig(
       ),
       ...(caCertificate ? { caCertificate } : {}),
     },
+    ...(aiContentDatabaseUrlFile ? { aiContentDatabaseUrlFile } : {}),
     schedulerEnabled,
     instagramPublishEnabled,
     aiContentAttachmentUploadSessionsEnabled,

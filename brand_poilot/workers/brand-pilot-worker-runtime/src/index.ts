@@ -194,3 +194,41 @@ export function isRetryableContentWorkerError(error: unknown): boolean {
   if (code === "ENOENT" || code.includes("output_id_required")) return false;
   return !/_(?:invalid|required|mismatch)$/.test(code);
 }
+
+export type ContentWorkerPollObservation = Readonly<{
+  event: "content_worker_poll_error";
+  classification: "maintenance" | "transient_error";
+  errorCode: "ai_content_maintenance" | "content_worker_poll_failed";
+  nextAction: "poll_after_delay";
+}>;
+
+export function contentWorkerPollDelayMs(value: unknown, fallbackMs: number): number {
+  const parsed = Number(value ?? fallbackMs);
+  return Math.max(1_000, Number.isFinite(parsed) ? parsed : fallbackMs);
+}
+
+export async function contentWorkerApiError(response: Response): Promise<Error> {
+  let maintenance = false;
+  if (response.status === 503) {
+    try {
+      const body = await response.json() as { error?: unknown };
+      maintenance = body.error === "ai_content_maintenance";
+    } catch {
+      // Preserve a stable status-only error when the response has no JSON contract.
+    }
+  }
+  return new Error(
+    `worker_api_failed:${response.status}${maintenance ? ":ai_content_maintenance" : ""}`,
+  );
+}
+
+export function contentWorkerPollObservation(error: unknown): ContentWorkerPollObservation {
+  const message = error instanceof Error ? error.message : "";
+  const maintenance = /(?:^|:)ai_content_maintenance$/.test(message);
+  return Object.freeze({
+    event: "content_worker_poll_error",
+    classification: maintenance ? "maintenance" : "transient_error",
+    errorCode: maintenance ? "ai_content_maintenance" : "content_worker_poll_failed",
+    nextAction: "poll_after_delay",
+  });
+}

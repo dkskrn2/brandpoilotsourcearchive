@@ -568,11 +568,17 @@ release_file_specs() {
       "755 scripts/backup-state.sh" \
       "755 scripts/restore-state.sh" \
       "755 scripts/ai-content-cutover.sh" \
-      "755 scripts/verify-ai-content-cutover.sh"
+      "755 scripts/verify-ai-content-cutover.sh" \
+      "755 scripts/stage-ai-content-release.sh" \
+      "755 scripts/preflight-ai-content.sh" \
+      "755 scripts/rollout-ai-content-cutover.sh" \
+      "755 scripts/collect-ai-content-backend-evidence.sh"
   else
     local optional_path
     for optional_path in scripts/rollout-workers.sh scripts/backup-state.sh scripts/restore-state.sh \
-      scripts/ai-content-cutover.sh scripts/verify-ai-content-cutover.sh; do
+      scripts/ai-content-cutover.sh scripts/verify-ai-content-cutover.sh \
+      scripts/stage-ai-content-release.sh scripts/preflight-ai-content.sh \
+      scripts/rollout-ai-content-cutover.sh scripts/collect-ai-content-backend-evidence.sh; do
       if [[ -f "$release_directory/release-integrity.sha256" ]] &&
          grep -Eq "^[a-f0-9]{64}  755  ${optional_path}$" "$release_directory/release-integrity.sha256"; then
         printf '755 %s\n' "$optional_path"
@@ -641,47 +647,227 @@ require_secure_state_file() {
   [[ "$(stat -c '%U' -- "$path")" == "bpdeploy" ]] || fail "state_file_owner_invalid"
 }
 
-ai_content_cutover_marker_present() {
+require_secure_state_directory() {
+  local path="$1"
+  [[ -d "$path" && ! -L "$path" ]] || fail "state_directory_invalid"
+  [[ "$(stat -c '%a' -- "$path")" == "700" ]] || fail "state_directory_mode_invalid"
+  [[ "$(stat -c '%U' -- "$path")" == "bpdeploy" ]] || fail "state_directory_owner_invalid"
+}
+
+resolve_ai_content_floor_probe_image() {
   local root="$1"
-  local active_file="$root/state/ai-content-cutover-id"
-  local operator_database_file="${AI_CONTENT_CUTOVER_OPERATOR_DATABASE_URL_FILE:-$root/shared/secrets/ai-content-operator-database-url}"
-  local cutover_id
+  local script_release_directory
+  local state_file
+  local release_sha=""
+  local -a state_files=("$root/state/candidate" "$root/state/current")
+
+  script_release_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+  if [[ -f "$script_release_directory/release.env" ]]; then
+    validate_release_directory "$script_release_directory" candidate
+    verify_release_image_revision \
+      "${RELEASE_MANIFEST[API_IMAGE]}" "$(release_image_source_revision API_IMAGE)"
+    printf '%s\n' "${RELEASE_MANIFEST[API_IMAGE]}"
+    return 0
+  fi
+
+  for state_file in "${state_files[@]}"; do
+    if load_optional_state_sha "$state_file" release_sha; then
+      validate_state_release_directory "$root" "$release_sha"
+      verify_release_image_revision \
+        "${RELEASE_MANIFEST[API_IMAGE]}" "$(release_image_source_revision API_IMAGE)"
+      printf '%s\n' "${RELEASE_MANIFEST[API_IMAGE]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+resolve_ai_content_floor_database_input() {
+  local root="$1"
+  local output_file_variable="$2"
+  local output_kind_variable="$3"
+  local owner="${AI_CONTENT_CUTOVER_FILE_OWNER:-bpdeploy}"
+  local operator_file="${AI_CONTENT_CUTOVER_OPERATOR_DATABASE_URL_FILE:-$root/shared/secrets/ai-content-operator-database-url}"
+  local api_env_file="$root/shared/env/api.env"
+
+  if [[ -e "$operator_file" || -L "$operator_file" ]]; then
+    require_file_mode_600 "$operator_file" "$owner"
+    printf -v "$output_file_variable" '%s' "$operator_file"
+    printf -v "$output_kind_variable" '%s' "operator"
+    return 0
+  fi
+  require_file_mode_600 "$api_env_file" "$owner"
+  printf -v "$output_file_variable" '%s' "$api_env_file"
+  printf -v "$output_kind_variable" '%s' "env"
+}
+
+probe_ai_content_075_marker() {
+  local root="$1"
+  local database_input=""
+  local database_input_kind=""
+  local api_image
   local output
-  if [[ ! -e "$active_file" && ! -L "$active_file" ]]; then
+  require_command docker
+  require_command id
+  resolve_ai_content_floor_database_input \
+    "$root" database_input database_input_kind
+  api_image="$(resolve_ai_content_floor_probe_image "$root")" || return 1
+  if ! output="$(docker run --rm --pull never --read-only \
+    --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m --entrypoint node \
+    --mount "type=bind,src=$database_input,dst=/run/secrets/ai-content-floor-database-input,readonly" \
+    "$api_image" /app/scripts/ai-content-cutover-floor-probe.mjs \
+    --input-file /run/secrets/ai-content-floor-database-input \
+    --input-kind "$database_input_kind")"; then
     return 1
   fi
-  require_secure_state_file "$active_file"
-  cutover_id="$(<"$active_file")"
-  [[ "$cutover_id" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ ]] ||
-    fail "ai_content_cutover_active_id_invalid"
+  [[ "$output" == "true" || "$output" == "false" ]] || return 1
+  printf '%s\n' "$output"
+}
+
+ai_content_cutover_marker_present() {
+  local marker
+  if ! marker="$(probe_ai_content_075_marker "$1")"; then
+    return 2
+  fi
+  [[ "$marker" == "true" ]] && return 0
+  [[ "$marker" == "false" ]] && return 1
+  return 2
+}
+
+declare -g AI_CONTENT_COMPLETED_EVIDENCE_FILE=""
+
+find_ai_content_completed_evidence() {
+  local root="$1"
+  local base="$root/state/ai-content-cutovers"
+  local nullglob_was_set=false
+  local -a evidence_files=()
+  AI_CONTENT_COMPLETED_EVIDENCE_FILE=""
+  if [[ ! -e "$base" && ! -L "$base" ]]; then
+    return 1
+  fi
+  require_secure_state_directory "$base"
+  if shopt -q nullglob; then
+    nullglob_was_set=true
+  fi
+  shopt -s nullglob
+  evidence_files=("$base"/*/finalize-post-075/completed/evidence.json)
+  if [[ "$nullglob_was_set" == "false" ]]; then
+    shopt -u nullglob
+  fi
+  [[ "${#evidence_files[@]}" -le 1 ]] || fail "ai_content_cutover_completed_evidence_ambiguous"
+  [[ "${#evidence_files[@]}" -eq 1 ]] || return 1
+  AI_CONTENT_COMPLETED_EVIDENCE_FILE="${evidence_files[0]}"
+}
+
+query_ai_content_cutover_status() {
+  local root="$1"
+  local cutover_id="$2"
+  local operator_database_file="${AI_CONTENT_CUTOVER_OPERATOR_DATABASE_URL_FILE:-$root/shared/secrets/ai-content-operator-database-url}"
+  local output
   require_file_mode_600 "$operator_database_file" "${AI_CONTENT_CUTOVER_FILE_OWNER:-bpdeploy}"
   if ! output="$("$(dirname -- "${BASH_SOURCE[0]}")/verify-ai-content-cutover.sh" \
     --status --operator-url-file "$operator_database_file" --cutover-id "$cutover_id")"; then
-    return 2
+    return 1
   fi
-  if grep -q '"markerPresent":true' <<<"$output"; then
-    return 0
+  [[ -n "$output" && "$output" != *$'\n'* ]] || return 1
+  printf '%s\n' "$output"
+}
+
+validate_ai_content_completed_floor() {
+  local root="$1"
+  local evidence_file
+  local completed_directory
+  local finalize_directory
+  local cutover_directory
+  local cutover_id
+  local evidence_line
+  local evidence_timestamp
+  local evidence_cleanup_sha
+  local current_sha=""
+  local database_status
+  local database_timestamp
+  local database_cleanup_sha
+  local evidence_pattern
+  local database_pattern
+
+  find_ai_content_completed_evidence "$root" || return 1
+  evidence_file="$AI_CONTENT_COMPLETED_EVIDENCE_FILE"
+  completed_directory="$(dirname -- "$evidence_file")"
+  finalize_directory="$(dirname -- "$completed_directory")"
+  cutover_directory="$(dirname -- "$finalize_directory")"
+  cutover_id="$(basename -- "$cutover_directory")"
+  [[ "$cutover_id" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ ]] ||
+    fail "ai_content_cutover_completed_evidence_invalid"
+  require_secure_state_directory "$cutover_directory"
+  require_secure_state_directory "$finalize_directory"
+  require_secure_state_directory "$completed_directory"
+  require_secure_state_file "$evidence_file"
+  evidence_line="$(<"$evidence_file")"
+  [[ -n "$evidence_line" && "$evidence_line" != *$'\n'* && "$evidence_line" != *$'\r'* ]] ||
+    fail "ai_content_cutover_completed_evidence_invalid"
+  evidence_pattern='^\{"cleanupCredentialRevokedAt":"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z)","cleanupRevocationEvidenceSha256":"([a-f0-9]{64})","cutoverId":"([a-f0-9-]{36})","eventSha256":"[a-f0-9]{64}","evidenceSha256":"[a-f0-9]{64}","maintenanceEnabled":false,"markerPresent":true,"status":"completed"\}$'
+  [[ "$evidence_line" =~ $evidence_pattern ]] || fail "ai_content_cutover_completed_evidence_invalid"
+  evidence_timestamp="${BASH_REMATCH[1]}"
+  evidence_cleanup_sha="${BASH_REMATCH[2]}"
+  [[ "${BASH_REMATCH[3]}" == "$cutover_id" ]] || fail "ai_content_cutover_completed_evidence_invalid"
+
+  load_required_state_sha "$root/state/current" current_sha
+  validate_state_release_directory "$root" "$current_sha"
+  [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "3" ]] ||
+    fail "ai_content_cutover_completed_current_schema_invalid"
+
+  if ! database_status="$(query_ai_content_cutover_status "$root" "$cutover_id")"; then
+    fail "ai_content_cutover_floor_query_failed"
   fi
-  grep -q '"markerPresent":false' <<<"$output" || return 2
-  return 1
+  database_pattern='^\{"activeCutoverCount":0,"activeCutoverId":null,"cleanupCredentialRevokedAt":"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z)","cleanupRevocationEvidenceSha256":"([a-f0-9]{64})","cutoverId":"([a-f0-9-]{36})","maintenanceCutoverId":null,"maintenanceEnabled":false,"markerPresent":true,"status":"completed"\}$'
+  [[ "$database_status" =~ $database_pattern ]] ||
+    fail "ai_content_cutover_completed_database_status_invalid"
+  database_timestamp="${BASH_REMATCH[1]}"
+  database_cleanup_sha="${BASH_REMATCH[2]}"
+  [[ "${BASH_REMATCH[3]}" == "$cutover_id" &&
+    "$database_timestamp" == "$evidence_timestamp" &&
+    "$database_cleanup_sha" == "$evidence_cleanup_sha" ]] ||
+    fail "ai_content_cutover_completed_database_status_invalid"
 }
 
 enforce_ai_content_roll_forward_floor() {
   local root="$1"
   local active_file="$root/state/ai-content-cutover-id"
   local marker_status
-  if [[ ! -e "$active_file" && ! -L "$active_file" ]]; then
-    return 0
-  fi
+  local active_cutover_id=""
+
   if ai_content_cutover_marker_present "$root"; then
-    fail "ai_content_cutover_roll_forward_only"
+    marker_status=0
   else
     marker_status="$?"
   fi
-  if [[ "$marker_status" -eq 1 ]]; then
+  [[ "$marker_status" -eq 0 || "$marker_status" -eq 1 ]] ||
+    fail "ai_content_cutover_floor_query_failed"
+
+  if [[ -e "$active_file" || -L "$active_file" ]]; then
+    require_secure_state_file "$active_file"
+    active_cutover_id="$(<"$active_file")"
+    [[ "$active_cutover_id" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ ]] ||
+      fail "ai_content_cutover_active_id_invalid"
+  fi
+
+  if [[ "$marker_status" -eq 0 && -n "$active_cutover_id" ]]; then
+    fail "ai_content_cutover_roll_forward_only"
+  fi
+  if [[ "$marker_status" -eq 1 && -n "$active_cutover_id" ]]; then
     fail "ai_content_cutover_abort_pre_marker_required"
   fi
-  fail "ai_content_cutover_floor_query_failed"
+  if [[ "$marker_status" -eq 1 ]]; then
+    if find_ai_content_completed_evidence "$root"; then
+      fail "ai_content_cutover_marker_status_invalid"
+    fi
+    return 0
+  fi
+  if validate_ai_content_completed_floor "$root"; then
+    return 0
+  fi
+  fail "ai_content_cutover_completed_evidence_required"
 }
 
 load_optional_state_sha() {
@@ -1006,6 +1192,7 @@ reconcile_transition() {
 }
 
 reconcile_transition_or_fail() {
+  enforce_ai_content_roll_forward_floor "$1"
   if ! (reconcile_transition "$@"); then
     printf 'error=recovery_failed\n' >&2
     exit 70

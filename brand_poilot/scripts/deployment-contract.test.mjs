@@ -51,6 +51,10 @@ const deploymentArtifacts = [
   "deploy/env/blog-worker.env.example",
   "deploy/env/reel-worker.env.example",
   "deploy/scripts/preflight.sh",
+  "deploy/scripts/preflight-ai-content.sh",
+  "deploy/scripts/stage-ai-content-release.sh",
+  "deploy/scripts/rollout-ai-content-cutover.sh",
+  "deploy/scripts/collect-ai-content-backend-evidence.sh",
   "deploy/scripts/deploy.sh",
   "deploy/scripts/rollout-workers.sh",
   "deploy/scripts/lib.sh",
@@ -67,6 +71,10 @@ const deploymentArtifacts = [
 const deploymentScripts = [
   "deploy/scripts/lib.sh",
   "deploy/scripts/preflight.sh",
+  "deploy/scripts/preflight-ai-content.sh",
+  "deploy/scripts/stage-ai-content-release.sh",
+  "deploy/scripts/rollout-ai-content-cutover.sh",
+  "deploy/scripts/collect-ai-content-backend-evidence.sh",
   "deploy/scripts/deploy.sh",
   "deploy/scripts/rollout-workers.sh",
   "deploy/scripts/verify-canary.sh",
@@ -77,7 +85,7 @@ const deploymentScripts = [
   ubuntuBootstrapPath,
 ];
 
-test("fence API image contains 074 and excludes 075", () => {
+test("cutover API image contains both ordered 074 and 075 migrations", () => {
   const dockerfile = read("apps/api/Dockerfile");
   const migrate = read("scripts/migrate.mjs");
   const runner = read("scripts/migrationRunner.mjs");
@@ -87,7 +95,7 @@ test("fence API image contains 074 and excludes 075", () => {
   assert.match(dockerfile, /scripts\/migrate\.mjs/);
   assert.match(dockerfile, /scripts\/databaseTls\.mjs/);
   assert.equal(existsSync("db/migrations/074_ai_content_maintenance_write_fence.sql"), true);
-  assert.equal(existsSync("db/migrations/075_ai_content_three_format_cutover.sql"), false);
+  assert.equal(existsSync("db/migrations/075_ai_content_three_format_cutover.sql"), true);
   assert.match(migrate, /AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_FILE/);
   assert.match(migrate, /AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_FILE/);
   assert.doesNotMatch(migrate, /readFile\([^\n]*(?:PRIVATE|SIGNING)|createPrivateKey|AI_CONTENT_074_(?:AUTHORIZATION|PROVIDER_ATTESTATION)_KEY_FILE/);
@@ -110,7 +118,6 @@ test("fence API image contains 074 and excludes 075", () => {
   assert.match(postgresHarness, /disable trigger|drop trigger|ai_content_ddl_allowlist|ai_content_bootstrap_state|ai_content_maintenance_state|ai_content_cutovers/is);
   assert.match(postgresHarness, /allowlisted.*ddl.*succeed|positive.*allowlist/is);
   assert.match(postgresHarness, /rogue.*schema.*owner|schema.*owner.*rogue/is);
-  assert.doesNotMatch(postgresHarness, /ddl_command_end\s+when\s+tag\s+in/i);
   assert.doesNotMatch(postgresHarness, /with\s+set\s+true\s*,/i);
   assert.match(postgresHarness, /create index public\.ai_content_074_arbitrary_index/i);
   for (const classifier of ["whole_relation", "legacy_automated_topic", "scheduled_proposal_refresh",
@@ -121,7 +128,7 @@ test("fence API image contains 074 and excludes 075", () => {
   assert.match(postgresHarness, /perBranchThreshold|maxObservedRatio/);
 });
 
-test("fence API image contains 074 and excludes 075 in an actual no-network container", {
+test("cutover API image contains both ordered migrations in an actual no-network container", {
   skip: process.env.RUN_DOCKER_FENCE_IMAGE_INSPECTION !== "1",
 }, () => {
   const tag = `brand-pilot-fence-contract:${process.pid}`;
@@ -133,9 +140,8 @@ test("fence API image contains 074 and excludes 075 in an actual no-network cont
   try {
     const script = [
       "const fs=require('node:fs');",
-      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
+      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
       "for(const path of required)if(!fs.existsSync(path))throw new Error('missing:'+path);",
-      "if(fs.existsSync('/app/db/migrations/075_ai_content_three_format_cutover.sql'))throw new Error('unexpected:075');",
     ].join("");
     const inspect = spawnSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "node", tag, "-e", script], {
       encoding: "utf8",
@@ -1237,12 +1243,12 @@ test("all CLI worker images install the pinned Codex runtime and run real entryp
     ["card news", {
       path: "workers/brand-pilot-card-news-worker/Dockerfile",
       entrypoint: /workers\/brand-pilot-card-news-worker\/dist\/index\.js/,
-      assets: [/editorial-plan\.schema\.json/, /card-news-creator\/SKILL\.md/],
+      assets: [/brand-pilot-content-contracts\/generated/, /card-news-creator\/SKILL\.md/],
     }],
     ["blog", {
       path: "workers/brand-pilot-blog-worker/Dockerfile",
       entrypoint: /workers\/brand-pilot-blog-worker\/dist\/index\.js/,
-      assets: [/run-codex-blog\.mjs/, /blog-writer\/SKILL\.md/],
+      assets: [/run-codex-blog-v2-plan\.mjs/, /blog-writer\/SKILL\.md/],
     }],
     ["reel", {
       path: "workers/brand-pilot-reel-worker/Dockerfile",
@@ -2301,7 +2307,17 @@ function seedRelease(
     "verify-canary.sh",
     "promote.sh",
     "rollback.sh",
-    ...(legacyFileSet ? [] : ["rollout-workers.sh", "backup-state.sh", "restore-state.sh"]),
+    ...(legacyFileSet ? [] : [
+      "rollout-workers.sh",
+      "backup-state.sh",
+      "restore-state.sh",
+      "ai-content-cutover.sh",
+      "verify-ai-content-cutover.sh",
+      "stage-ai-content-release.sh",
+      "preflight-ai-content.sh",
+      "rollout-ai-content-cutover.sh",
+      "collect-ai-content-backend-evidence.sh",
+    ]),
   ];
   for (const name of releaseScripts) {
     copyFileSync(join("deploy", "scripts", name), join(releaseDirectory, "scripts", name));
@@ -2321,6 +2337,12 @@ function seedRelease(
           [0o755, "scripts/rollout-workers.sh"],
           [0o755, "scripts/backup-state.sh"],
           [0o755, "scripts/restore-state.sh"],
+          [0o755, "scripts/ai-content-cutover.sh"],
+          [0o755, "scripts/verify-ai-content-cutover.sh"],
+          [0o755, "scripts/stage-ai-content-release.sh"],
+          [0o755, "scripts/preflight-ai-content.sh"],
+          [0o755, "scripts/rollout-ai-content-cutover.sh"],
+          [0o755, "scripts/collect-ai-content-backend-evidence.sh"],
         ]),
   ];
   const integrity = specs.map(([mode, relative]) => {
@@ -2356,7 +2378,18 @@ function dockerMockScript() {
   return `#!/usr/bin/env bash
 printf 'PRIMARY_API_IMAGE=%s CANDIDATE_API_IMAGE=%s CADDY_IMAGE=%s CADDYFILE_PATH=%s %s\\n' "\${PRIMARY_API_IMAGE:-}" "\${CANDIDATE_API_IMAGE:-}" "\${CADDY_IMAGE:-}" "\${CADDYFILE_PATH:-}" "$*" >> "$DOCKER_LOG"
 if [[ -n "\${EVENT_LOG:-}" ]]; then printf 'docker %s\\n' "$*" >> "$EVENT_LOG"; fi
-if [[ "$1 $2" == "image inspect" ]]; then printf '%s\\n' "$RELEASE_SHA_FOR_TEST"; fi
+if [[ "$*" == *"/app/scripts/ai-content-cutover-floor-probe.mjs"* ]]; then
+  printf '%s\\n' "\${AI_CONTENT_FLOOR_MARKER_FOR_TEST:-false}"
+  exit 0
+fi
+if [[ "$1 $2" == "image inspect" ]]; then
+  case "\${@: -1}" in
+    *@sha256:a*) printf '%s\\n' "$(printf '1%.0s' {1..40})" ;;
+    *@sha256:b*) printf '%s\\n' "$(printf '2%.0s' {1..40})" ;;
+    *@sha256:c*) printf '%s\\n' "$(printf '3%.0s' {1..40})" ;;
+    *) printf '%s\\n' "$RELEASE_SHA_FOR_TEST" ;;
+  esac
+fi
 if [[ "$*" == *" up -d "* ]]; then
   count=0
   [[ ! -f "$DOCKER_UP_COUNT_FILE" ]] || count="$(cat "$DOCKER_UP_COUNT_FILE")"
@@ -2436,6 +2469,9 @@ function runDeployFixture({
   const incoming = join(fixture, "incoming");
   const mocks = join(fixture, "bin");
   mkdirSync(join(root, "state"), { recursive: true });
+  mkdirSync(join(root, "shared", "env"), { recursive: true });
+  writeFileSync(join(root, "shared", "env", "api.env"), "TEST_ONLY=true\n", { mode: 0o600 });
+  chmodSync(join(root, "shared", "env", "api.env"), 0o600);
   mkdirSync(mocks, { recursive: true });
   const manifest = writeReleaseManifest(incoming, {
     API_ENV_FILE: `${bashPath(root)}/shared/env/api.env`,
@@ -2533,6 +2569,9 @@ function runRollbackFixture({
   const targetSha = "1".repeat(40);
   const apiEnvFile = `${bashPath(root)}/shared/env/api.env`;
   mkdirSync(join(root, "state"), { recursive: true });
+  mkdirSync(join(root, "shared", "env"), { recursive: true });
+  writeFileSync(join(root, "shared", "env", "api.env"), "TEST_ONLY=true\n", { mode: 0o600 });
+  chmodSync(join(root, "shared", "env", "api.env"), 0o600);
   mkdirSync(mocks, { recursive: true });
   const candidateSha = "3".repeat(40);
   if (current) {
@@ -3934,7 +3973,9 @@ test("deploy rejects host drift against current or resident candidate before Doc
     for (const fixture of fixtures) {
       assert.notEqual(fixture.result.status, 0);
       assert.match(fixture.result.stderr, /release_hosts_mismatch/);
-      assert.equal(existsSync(fixture.dockerLog), false);
+      const dockerLog = readFileSync(fixture.dockerLog, "utf8");
+      assert.match(dockerLog, /ai-content-cutover-floor-probe\.mjs/);
+      assert.doesNotMatch(dockerLog, /\bcompose\b|\bup -d\b/);
     }
   } finally {
     for (const fixture of fixtures) {
@@ -3958,9 +3999,11 @@ test("rollback rejects target host drift and empty production state before Docke
   try {
     assert.notEqual(drift.result.status, 0);
     assert.match(drift.result.stderr, /release_hosts_mismatch/);
-    assert.equal(existsSync(drift.dockerLog), false);
+    const driftDockerLog = readFileSync(drift.dockerLog, "utf8");
+    assert.match(driftDockerLog, /ai-content-cutover-floor-probe\.mjs/);
+    assert.doesNotMatch(driftDockerLog, /\bcompose\b|\bup -d\b/);
     assert.notEqual(empty.result.status, 0);
-    assert.match(empty.result.stderr, /production_rollback_requires_runtime_state/);
+    assert.match(empty.result.stderr, /ai_content_cutover_floor_query_failed/);
     assert.equal(existsSync(empty.dockerLog), false);
   } finally {
     rmSync(drift.fixture, { recursive: true, force: true });

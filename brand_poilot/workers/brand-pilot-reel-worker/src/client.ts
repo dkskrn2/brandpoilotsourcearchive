@@ -1,3 +1,4 @@
+import { contentWorkerApiError } from "@brand-pilot/worker-runtime";
 import { parseReelJob, type ReelClient } from "./contracts.js";
 
 export function createClient(apiUrl: string, token: string, fetchImpl: typeof fetch = fetch): ReelClient {
@@ -9,7 +10,7 @@ export function createClient(apiUrl: string, token: string, fetchImpl: typeof fe
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (!response.ok) throw new Error(`worker_api_failed:${response.status}`);
+    if (!response.ok) throw await contentWorkerApiError(response);
     return response;
   }
   return {

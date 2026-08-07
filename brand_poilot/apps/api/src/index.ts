@@ -7,7 +7,12 @@ import {
   head as headBlob,
   put as putBlob,
 } from "@vercel/blob";
-import { createPool } from "./db.js";
+import {
+  assertDatabaseIdentity,
+  createPool,
+  createPoolForUrl,
+  readDatabaseUrlSecret,
+} from "./db.js";
 import { createRepository, loadPerformanceInsightSnapshots } from "./repository.js";
 import { resolveServerHost } from "./runtime.js";
 import { createFastifyOptions, createServer } from "./httpServer.js";
@@ -36,8 +41,18 @@ const runtimeConfig = loadApiRuntimeConfig();
 const port = Number(process.env.PORT ?? 4000);
 const host = resolveServerHost();
 const pool = createPool(runtimeConfig.db);
+const aiContentPool = runtimeConfig.aiContentDatabaseUrlFile
+  ? createPoolForUrl(
+      readDatabaseUrlSecret(runtimeConfig.aiContentDatabaseUrlFile),
+      runtimeConfig.db,
+    )
+  : pool;
+if (runtimeConfig.aiContentDatabaseUrlFile) {
+  await assertDatabaseIdentity(aiContentPool, "content_application");
+}
 const blobReadWriteToken = process.env.BLOB_READ_WRITE_TOKEN ?? "";
 const repository = createRepository(pool, {
+  aiContentPool,
   instagramPublish: {
     enabled: runtimeConfig.instagramPublishEnabled,
   },
@@ -124,8 +139,8 @@ const snapshotStorage: AiContentSnapshotStorage = {
   },
 };
 const aiContentSnapshotBlob = createAiContentSnapshotBlob(snapshotStorage);
-const aiContentSnapshotRepository = createAiContentSnapshotRepository(pool, aiContentSnapshotBlob);
-const proposalV2Repository = createAiContentProposalV2Repository(pool);
+const aiContentSnapshotRepository = createAiContentSnapshotRepository(aiContentPool, aiContentSnapshotBlob);
+const proposalV2Repository = createAiContentProposalV2Repository(aiContentPool);
 const proposalV2Resolution = {
   async loadChannelCapability(scope: { brandId: string }, channel: Parameters<typeof buildChannelCapabilities>[0]["channels"][number]["channel"]) {
     const [channels, instagramSettings, instagramContext] = await Promise.all([
@@ -286,7 +301,13 @@ registerAdminRoutes(app, {
 const serverlessHandler = createServerlessHandler(app);
 
 if (!process.env.VERCEL) {
-  const shutdown = createShutdown(app, pool);
+  const shutdown = createShutdown(app, {
+    async end() {
+      await Promise.all(aiContentPool === pool
+        ? [pool.end()]
+        : [pool.end(), aiContentPool.end()]);
+    },
+  });
   const handleShutdown = (signal: NodeJS.Signals) => {
     void shutdown(signal).catch(() => {
       logShutdownFailure(app.log, signal);

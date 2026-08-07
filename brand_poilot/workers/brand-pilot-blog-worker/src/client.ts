@@ -1,9 +1,10 @@
+import { contentWorkerApiError } from "@brand-pilot/worker-runtime";
 import { parseBlogJob, type BlogClient } from "./contracts.js";
 export function createClient(apiUrl: string, token: string, fetchImpl: typeof fetch = fetch): BlogClient {
   const base = apiUrl.replace(/\/+$/, "");
   const claimedWorkers = new Map<string, string>();
   const leaseSeconds = Math.max(30, Math.min(900, Number(process.env.AI_CONTENT_JOB_LEASE_SECONDS ?? 180)));
-  async function request(path: string, body: Record<string, unknown>) { const response = await fetchImpl(`${base}${path}`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) }); if (!response.ok) throw new Error(`worker_api_failed:${response.status}`); return response; }
+  async function request(path: string, body: Record<string, unknown>) { const response = await fetchImpl(`${base}${path}`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) }); if (!response.ok) throw await contentWorkerApiError(response); return response; }
   return {
     async claim(workerId) { const raw = (await (await request("/worker/ai-content-jobs/blog/claim", { workerId, leaseSeconds })).json() as { job?: unknown }).job; const job = raw === null || raw === undefined ? null : parseBlogJob(raw); if (job) claimedWorkers.set(job.id, workerId); return job; },
     async heartbeat(jobId, workerId, leaseToken) { await request(`/worker/ai-content-jobs/${jobId}/heartbeat`, { workerId, leaseToken, leaseSeconds }); },

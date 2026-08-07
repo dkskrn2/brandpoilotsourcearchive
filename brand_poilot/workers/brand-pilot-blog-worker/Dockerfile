@@ -30,7 +30,6 @@ COPY --from=build --chown=node:node /app/workers/brand-pilot-worker-runtime/dist
 COPY --from=build --chown=node:node /app/workers/brand-pilot-blog-worker/package.json ./workers/brand-pilot-blog-worker/package.json
 COPY --from=build --chown=node:node /app/workers/brand-pilot-blog-worker/dist ./workers/brand-pilot-blog-worker/dist
 COPY --from=build --chown=node:node /app/workers/brand-pilot-blog-worker/scripts/run-codex-blog-v2-plan.mjs ./workers/brand-pilot-blog-worker/scripts/run-codex-blog-v2-plan.mjs
-COPY --from=build --chown=node:node /app/workers/brand-pilot-blog-worker/scripts/blog-plan-v2.schema.json ./workers/brand-pilot-blog-worker/scripts/blog-plan-v2.schema.json
 COPY --from=build --chown=node:node /app/workers/brand-pilot-blog-worker/.agents/skills/blog-writer/SKILL.md ./workers/brand-pilot-blog-worker/.agents/skills/blog-writer/SKILL.md
 
 WORKDIR /app/workers/brand-pilot-blog-worker

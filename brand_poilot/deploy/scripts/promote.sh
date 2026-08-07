@@ -23,6 +23,7 @@ fi
 for command_name in awk docker flock sha256sum sync; do
   require_command "$command_name"
 done
+enforce_ai_content_roll_forward_floor "$ROOT"
 exec 9>"$ROOT/state/deploy.lock"
 flock -n 9 || fail "deploy_lock_busy"
 reconcile_transition_or_fail "$ROOT" "$READY_TIMEOUT_SECONDS"

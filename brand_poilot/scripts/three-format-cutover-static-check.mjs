@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 const CATALOG_FILE = "packages/brand-pilot-content-contracts/src/catalog.ts";
 const BINDING_FILE = "packages/brand-pilot-content-contracts/src/binding.ts";
 const REPOSITORY_FILE = "apps/api/src/aiContentRepository.ts";
+const API_CONTRACTS_FILE = "apps/api/src/aiContentContracts.ts";
 const CUSTOMER_UI_GATEWAY_FILE = "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts";
 const HTTP_SERVER_FILE = "apps/api/src/httpServer.ts";
 
@@ -61,6 +62,7 @@ export const PRODUCTION_FILE_ALLOWLIST = Object.freeze([
   ...new Set([
     CATALOG_FILE,
     BINDING_FILE,
+    API_CONTRACTS_FILE,
     ...SQL_FILES,
     ...CLAIM_WORKER_FILES,
     ...NEW_PIPELINE_FILES,
@@ -214,6 +216,7 @@ function checkAssemblerIntegration(files, violations) {
 
 function checkV2OnlyCustomerWriters(files, violations) {
   const server = files.get(HTTP_SERVER_FILE) ?? "";
+  const repository = files.get(REPOSITORY_FILE) ?? "";
   const forbidden = [
     /repository\.createAiContentAnalysis\s*\(/,
     /repository\.updateAiContentDraft\s*\(/,
@@ -223,8 +226,34 @@ function checkV2OnlyCustomerWriters(files, violations) {
   if (forbidden.some((pattern) => pattern.test(server))) {
     violations.push(violation("legacy_customer_content_writer", HTTP_SERVER_FILE, "customer writes must use Proposal V2 selection and Generation V3 start only"));
   }
+  if ([
+    /\bcreateAiContentProposalBatch\s*\(/,
+    /\bcreateAiContentProposalBatchV2\s*\(/,
+    /\bgetAiContentProposalBatchV2Replay\s*\(/,
+  ].some((pattern) => pattern.test(repository))) {
+    violations.push(violation(
+      "legacy_proposal_repository_writer",
+      REPOSITORY_FILE,
+      "general proposal creation must use AiContentProposalV2Service and its dedicated V2 repository",
+    ));
+  }
   if (!/content-orchestration\.v2/.test(server) || !/content-generation-start\.v2/.test(server)) {
     violations.push(violation("missing_v2_customer_content_writer", HTTP_SERVER_FILE, "exact Proposal V2 and Generation V3-start contracts are required"));
+  }
+}
+
+function checkRetiredV1CustomerContracts(files, violations) {
+  const server = files.get(HTTP_SERVER_FILE) ?? "";
+  const contracts = files.get(API_CONTRACTS_FILE) ?? "";
+  const retired = /\b(?:ContentProposalV1|ContentProposalRequestV1|parseContentProposalRequest)\b|content-proposal(?:-request)?\.v1/;
+  for (const [file, source] of [[HTTP_SERVER_FILE, server], [API_CONTRACTS_FILE, contracts]]) {
+    if (retired.test(source)) {
+      violations.push(violation(
+        "legacy_v1_customer_contract",
+        file,
+        "general customer proposal paths must not retain the retired Proposal V1 parser or types",
+      ));
+    }
   }
 }
 
@@ -250,8 +279,18 @@ function checkActiveV3Readers(files, violations) {
     || !/from\s*["']@brand-pilot\/content-contracts["']/.test(gateway)) {
     violations.push(violation("missing_canonical_v3_ui_parsers", CUSTOMER_UI_GATEWAY_FILE, "customer UI must import canonical V3 manifest, format, and purpose parsers"));
   }
-  if (/legacyTypeForOrchestration|generation\.type|value\.type/.test(gateway)) {
+  if (/legacyTypeForOrchestration|(?:generation|value|source)\.type/.test(gateway)) {
     violations.push(violation("legacy_generation_type_ui_fallback", CUSTOMER_UI_GATEWAY_FILE, "customer UI must not use generation type aliases"));
+  }
+  const broadProposalFallback = /request\.contractVersion\s*!==\s*["']content-proposal-request\.v2["'](?:(?!scheduled_crawl)[\s\S]){0,240}return\s+value\s+as\s+ContentProposalBatch/;
+  if (broadProposalFallback.test(gateway)
+    || (/content-proposal-request\.v1/.test(gateway)
+      && !/source\.origin\s*===\s*["']scheduled_crawl["'][\s\S]{0,200}content-proposal-request\.v1/.test(gateway))) {
+    violations.push(violation(
+      "unscoped_automated_card_news_ui_fallback",
+      CUSTOMER_UI_GATEWAY_FILE,
+      "retired proposal reads are allowed only for the explicitly deferred scheduled-card path",
+    ));
   }
 }
 
@@ -266,6 +305,7 @@ export async function inspectThreeFormatCutover(rootDirectory) {
   checkCatalogAndPromptBranches(files, violations);
   checkAssemblerIntegration(files, violations);
   checkV2OnlyCustomerWriters(files, violations);
+  checkRetiredV1CustomerContracts(files, violations);
   checkActiveV3Readers(files, violations);
   const uniqueViolations = [...new Map(
     violations.map((item) => [`${item.id}:${item.file}:${item.detail}`, item]),

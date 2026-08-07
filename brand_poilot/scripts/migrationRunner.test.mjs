@@ -5,6 +5,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { Client } from "pg";
+import {
+  applicationRuntimeFunctionOwnershipCatalog,
+  schemaOwnerCutoverRelationSecurityCatalog,
+  sharedOwnerTransferSecurityCatalog,
+} from "./ai-content-database-roles.mjs";
 import * as migrationRunner from "./migrationRunner.mjs";
 import { resolveMigrationRuntimeConfig, validateSecureCutoverFileMetadata } from "./migrate.mjs";
 
@@ -176,10 +181,32 @@ test("074 seals one no-argument 075 fence registration primitive and its exact r
   assert.match(sql, /schema_migrations[\s\S]*075_ai_content_three_format_cutover\.sql/i);
 });
 
-test("075 post-cutover security catalog is closed over 13 relations, 35 functions, and 32 domain triggers", () => {
+test("075 post-cutover security catalog is closed over 13 relations, 37 functions, and 32 domain triggers", () => {
   assert.equal(migrationRunner.cutover075RelationSecurityCatalog.length, 13);
-  assert.equal(migrationRunner.cutover075SecurityFunctions.length, 35);
+  assert.equal(migrationRunner.cutover075SecurityFunctions.length, 37);
   assert.equal(migrationRunner.cutover075DomainTriggers.length, 32);
+  assert.deepEqual(
+    migrationRunner.cutover075SecurityFunctions.filter(({ identity }) => [
+      "public.transition_ai_content_generation_operation(uuid,text,text)",
+      "public.create_ai_content_generation_prompt_binding(uuid,uuid,uuid,uuid,uuid,uuid,uuid,jsonb)",
+      "public.select_ai_content_proposal(uuid,uuid,uuid,uuid)",
+    ].includes(identity)).map(({ identity, securityDefiner, execute }) => ({
+      identity, securityDefiner, execute,
+    })),
+    [{
+      identity: "public.transition_ai_content_generation_operation(uuid,text,text)",
+      securityDefiner: true,
+      execute: ["application"],
+    }, {
+      identity: "public.select_ai_content_proposal(uuid,uuid,uuid,uuid)",
+      securityDefiner: false,
+      execute: ["application"],
+    }, {
+      identity: "public.create_ai_content_generation_prompt_binding(uuid,uuid,uuid,uuid,uuid,uuid,uuid,jsonb)",
+      securityDefiner: true,
+      execute: ["application"],
+    }],
+  );
   assert.deepEqual(
     migrationRunner.cutover075SecurityFunctions.filter(({ identity }) => [
       "public.complete_ai_content_proposal_research(uuid,uuid,jsonb,text,jsonb,text,text)",
@@ -292,7 +319,7 @@ test("075 post-cutover security catalog is closed over 13 relations, 35 function
     language_name: expected.language, function_kind: expected.kind, volatility: expected.volatility,
     parallel_safety: expected.parallel, leakproof: expected.leakproof, strict: expected.strict,
     return_set: expected.returnSet, return_type_identity: expected.returnType,
-    config: ["search_path=pg_catalog,public,pg_temp"],
+    config: expected.config,
     acl: [
       { grantee: roleFor(expected.owner), privilege: "EXECUTE", grantable: false },
       ...(expected.execute ?? []).filter((key) => roleFor(key) !== roleFor(expected.owner))
@@ -571,10 +598,16 @@ function makeInterimFenceSecurityCatalog(schemaOwnerRoleName = "content_schema_o
     }],
     fenceCatalog: [],
     controlRelations: migrationRunner.providerEnforcementBundle.controlRelations.map((relationName) => {
-      const extras = relationName === "ai_content_maintenance_state"
-        ? [{ grantee: "content_application", privilege: "SELECT", grantable: false }]
-        : ["ai_content_bootstrap_state", "ai_content_ddl_allowlist", "ai_content_write_fence_catalog"].includes(relationName)
-          ? [{ grantee: "content_migration", privilege: "SELECT", grantable: false }] : [];
+      const extras = [];
+      if (relationName === "ai_content_maintenance_state") {
+        extras.push({ grantee: "content_application", privilege: "SELECT", grantable: false });
+      }
+      if (["ai_content_bootstrap_state", "ai_content_ddl_allowlist", "ai_content_write_fence_catalog"].includes(relationName)) {
+        extras.push({ grantee: "content_migration", privilege: "SELECT", grantable: false });
+      }
+      if (relationName === "ai_content_bootstrap_state" && schemaOwnerRoleName !== "content_schema_owner") {
+        extras.push({ grantee: "content_schema_owner", privilege: "SELECT", grantable: false });
+      }
       return {
         relationName,
         ...stableStoredRelationShape(schemaOwnerRoleName, [
@@ -640,6 +673,12 @@ test("075 derives one closed exact DDL allowlist and rejects wildcard or lookali
     && objectIdentityPattern === "ai_content_proposal_research_attempt_events_completion_pair on public.ai_content_proposal_research_attempt_events"));
   assert.ok(rows.some(({ commandTag, objectIdentityPattern }) => commandTag === "CREATE FUNCTION"
     && objectIdentityPattern === "public.complete_ai_content_proposal_research(pg_catalog.uuid,pg_catalog.uuid,pg_catalog.jsonb,pg_catalog.text,pg_catalog.jsonb,pg_catalog.text,pg_catalog.text)"));
+  assert.ok(rows.some(({ commandTag, objectIdentityPattern }) => commandTag === "CREATE FUNCTION"
+    && objectIdentityPattern === "public.select_ai_content_proposal(pg_catalog.uuid,pg_catalog.uuid,pg_catalog.uuid,pg_catalog.uuid)"));
+  assert.ok(rows.some(({ commandTag, objectIdentityPattern }) => commandTag === "REVOKE"
+    && objectIdentityPattern === "function:public.select_ai_content_proposal(uuid,uuid,uuid,uuid)|PUBLIC|ALL"));
+  assert.ok(rows.some(({ commandTag, objectIdentityPattern }) => commandTag === "GRANT"
+    && objectIdentityPattern === "function:public.select_ai_content_proposal(uuid,uuid,uuid,uuid)|content_application|EXECUTE"));
   assert.ok(rows.some(({ commandTag, objectIdentityPattern }) => commandTag === "REVOKE"
     && objectIdentityPattern === "function:public.complete_ai_content_proposal_research(uuid,uuid,jsonb,text,jsonb,text,text)|PUBLIC|ALL"));
   assert.ok(rows.some(({ commandTag, objectIdentityPattern }) => commandTag === "GRANT"
@@ -703,7 +742,7 @@ test("075 allowlist authorization and provider attestation are closed signed con
   assert.ok(migration);
   const rows = migrationRunner.buildCutover075ExactDdlAllowlist(migration, cutover075RoleNames);
   const rowsSha256 = migrationRunner.hashCutoverDdlAllowlist(rows);
-  assert.equal(migrationRunner.cutover075OwnerAuthorizationRows.length, 10);
+  assert.equal(migrationRunner.cutover075OwnerAuthorizationRows.length, 11);
   assert.ok(migrationRunner.cutover075OwnerAuthorizationRows
     .filter(({ commandTag }) => commandTag === "ALTER FUNCTION")
     .every(({ objectIdentityPattern }) => !/(?<!pg_catalog\.)\b(?:uuid|text|jsonb)\b/.test(objectIdentityPattern)
@@ -1055,16 +1094,20 @@ test("075 PostgreSQL harness uses the unmodified loaded migration and authentic 
     harness,
     /drop trigger ai_content_bootstrap_075_registration_must_clear on ai_content_bootstrap_state[\s\S]*create constraint trigger ai_content_bootstrap_075_registration_must_clear[\s\S]*deferrable initially deferred[\s\S]*when \(false\)[\s\S]*drop trigger ai_content_bootstrap_075_registration_must_clear on ai_content_bootstrap_state[\s\S]*create constraint trigger ai_content_bootstrap_075_registration_must_clear[\s\S]*deferrable initially deferred[\s\S]*enable trigger[\s\S]*ai_content_bootstrap_075_registration_must_clear/i,
   );
-  assert.match(harness, /grant update\(status\) on table ai_content_generation_operations to content_application/i);
-  assert.match(harness, /revoke update\(status\) on table ai_content_generation_operations from content_application/i);
-  assert.match(harness, /has_column_privilege\('content_application','ai_content_generation_operations','status','UPDATE'\)/i);
+  assert.match(harness, /grant references\(status\) on table ai_content_generation_operations to content_application/i);
+  assert.match(harness, /revoke references\(status\) on table ai_content_generation_operations from content_application/i);
+  assert.match(harness, /has_column_privilege\('content_application','ai_content_generation_operations','status','REFERENCES'\)/i);
   assert.match(
     harness,
-    /grant\s+select\s*,\s*insert\s+on\s+table\s+schema_migrations\s+to\s+content_migration/i,
+    /grant\s+select\s+on\s+table\s+schema_migrations\s+to\s+content_migration/i,
+  );
+  assert.match(
+    harness,
+    /grant\s+select\s*,\s*insert\s+on\s+table\s+schema_migrations\s+to\s+content_schema_owner/i,
   );
   assert.doesNotMatch(
     harness,
-    /grant\s+(?:all|delete|references|trigger|truncate|update)[^;]*on\s+table\s+schema_migrations\s+to\s+content_migration/i,
+    /grant\s+(?:all|delete|insert|references|trigger|truncate|update)[^;]*on\s+table\s+schema_migrations\s+to\s+content_migration/i,
   );
   const consume074 = harness.indexOf("client: migrationClient, migrations, bootstrap074: bootstrap074Config");
   const begin075 = harness.indexOf('const cutoverId = "7b7c8ed7-e046-4bcd-8592-38606f547493"');
@@ -1120,10 +1163,9 @@ test("075 PostgreSQL harness applies 074 ACLs and proves atomic rollback and rec
     const migration075 = migrations.find(({ id }) => id === "075_ai_content_three_format_cutover.sql");
     assert.ok(migration073a && migration074 && migration075);
     const pre074Migrations = migrations.filter(({ id }) => id < migration073a.id);
-    await client.query("set role content_schema_owner");
     await migrationRunner.runMigrationsWithClient({ client, migrations: pre074Migrations });
-    await client.query("reset role");
-    await client.query("grant select, insert on table schema_migrations to content_migration");
+    await client.query("grant select on table schema_migrations to content_migration");
+    await client.query("grant select, insert on table schema_migrations to content_schema_owner");
     const migrationHistoryPrivileges = await client.query(`
       select privilege_type
         from information_schema.role_table_grants
@@ -1132,20 +1174,17 @@ test("075 PostgreSQL harness applies 074 ACLs and proves atomic rollback and rec
          and grantee='content_migration'
        order by privilege_type
     `);
-    assert.deepEqual(migrationHistoryPrivileges.rows, [
-      { privilege_type: "INSERT" },
-      { privilege_type: "SELECT" },
-    ]);
+    assert.deepEqual(migrationHistoryPrivileges.rows, [{ privilege_type: "SELECT" }]);
     const migrationUri = new URL(container.getConnectionUri());
     migrationUri.username = "content_migration";
     migrationUri.password = "migration-secret";
     migrationClient = new Client({ connectionString: migrationUri.toString() });
     await migrationClient.connect();
     const prerequisite = await migrationRunner.runMigrationsWithClient({
-      client: migrationClient,
+      client,
       migrations,
       bootstrap074PrerequisiteMode: true,
-      bootstrap074Prerequisite: prerequisiteRoleNames,
+      bootstrap074PrerequisiteProviderRoleName: "postgres",
     });
     assert.deepEqual(prerequisite.pending, [migration073a.id]);
     assert.equal(prerequisite.bootstrap074RestartRequired, true);
@@ -1153,6 +1192,18 @@ test("075 PostgreSQL harness applies 074 ACLs and proves atomic rollback and rec
       "select id from schema_migrations where id>= $1 order by id",
       [migration073a.id],
     )).rows, [{ id: migration073a.id }]);
+    for (const relationName of new Set([
+      ...migrationRunner.bootstrapFenceRelations,
+      ...sharedOwnerTransferSecurityCatalog.map(({ relationName }) => relationName),
+    ])) {
+      await client.query(`alter table public.${quote(relationName)} owner to content_schema_owner`);
+    }
+    for (const { relationName, privileges } of schemaOwnerCutoverRelationSecurityCatalog) {
+      await client.query(`grant ${privileges.join(",")} on table public.${quote(relationName)} to content_schema_owner`);
+    }
+    for (const identity of applicationRuntimeFunctionOwnershipCatalog) {
+      await client.query(`alter function ${identity} owner to content_schema_owner`);
+    }
     const names = {
       schemaOwnerRoleName: "content_schema_owner", applicationRoleName: "content_application",
       operatorRoleName: "content_operator", migrationRoleName: "content_migration", cleanupRoleName: "content_cleanup",
@@ -1270,6 +1321,7 @@ test("075 PostgreSQL harness applies 074 ACLs and proves atomic rollback and rec
       await client.query(`revoke all on function ${identity} from public,content_schema_owner,content_application,content_operator,content_migration,content_cleanup`);
       if (identity.includes("assert_ai_content_writable")) await client.query(`grant execute on function ${identity} to content_application`);
       if (/prepare_ai_content_cutover|set_ai_content_maintenance/.test(identity)) await client.query(`grant execute on function ${identity} to content_operator`);
+      if (identity.includes("read_ai_content_cutover_control_state")) await client.query(`grant execute on function ${identity} to content_operator`);
       if (identity.includes("transition_ai_content_cutover_status")) await client.query(`grant execute on function ${identity} to content_operator,content_migration`);
       if (identity.includes("register_ai_content_075_fence_relations")) {
         await client.query(`grant execute on function ${identity} to content_migration,content_schema_owner`);
@@ -1285,6 +1337,9 @@ test("075 PostgreSQL harness applies 074 ACLs and proves atomic rollback and rec
       if (relation === "ai_content_maintenance_state") await client.query(`grant select on table public.${quote(relation)} to content_application`);
       if (["ai_content_bootstrap_state", "ai_content_ddl_allowlist", "ai_content_write_fence_catalog"].includes(relation)) {
         await client.query(`grant select on table public.${quote(relation)} to content_migration`);
+      }
+      if (relation === "ai_content_bootstrap_state") {
+        await client.query(`grant select on table public.${quote(relation)} to content_schema_owner`);
       }
     }
     const liveRoles = await migrationRunner.readCanonicalBootstrapRoleCatalog(migrationClient, names);
@@ -1413,19 +1468,23 @@ test("075 PostgreSQL harness applies 074 ACLs and proves atomic rollback and rec
     const cutoverId = "7b7c8ed7-e046-4bcd-8592-38606f547493";
     const bypassToken = "harness-never-log-token";
     const tokenSha = createHash("sha256").update(bypassToken).digest("hex");
-    const preparedPreflightIdentity = JSON.stringify({
+    const preparedPreflightIdentityValue = {
       preflightCandidateSha: "f".repeat(40), contentProposalWorkerImageDigest: `sha256:${"e".repeat(64)}`,
       proposalWorkerSourceSha: "f".repeat(40), proposalWorkerTreeSha: "d".repeat(40),
       proposalContractSourceSha256: "e".repeat(64), proposalSchemaSha256: "e".repeat(64),
       proposalCatalogSha256: "e".repeat(64), proposalModelId: "gpt-5.6-terra",
       proposalCommandDescriptorSha256: "e".repeat(64), migrationSha256: migration075.checksum,
-    });
+    };
+    const preparedPreflightIdentity = JSON.stringify(preparedPreflightIdentityValue);
+    const preparedPreflightIdentitySha256 = createHash("sha256").update(JSON.stringify(
+      Object.fromEntries(Object.entries(preparedPreflightIdentityValue).sort(([left], [right]) => left.localeCompare(right))),
+    )).digest("hex");
     assert.equal(Object.keys(JSON.parse(preparedPreflightIdentity)).length, 10);
     await client.query("set session authorization content_operator");
     await client.query(`select prepare_ai_content_cutover($1,'content_schema_owner','content_application','content_operator',
-      'content_migration','content_cleanup',$2,$2,$3,'backup',now(),$4,$4,$6::jsonb,$4,$5,$4)`,
+      'content_migration','content_cleanup',$2,$2,$3,'backup',now(),$4,$4,$6::jsonb,$7,$4,$5,$4)`,
     [cutoverId, tokenSha, liveRoles.roleCatalogSha256, "e".repeat(64), "f".repeat(40),
-      preparedPreflightIdentity]);
+      preparedPreflightIdentity, preparedPreflightIdentitySha256]);
     await client.query("select set_ai_content_maintenance($1,true)", [cutoverId]);
     await client.query("select transition_ai_content_cutover_status($1,'prepared','maintenance_verified',$2)", [cutoverId, "f".repeat(64)]);
     await client.query("reset session authorization");
@@ -1690,13 +1749,13 @@ test("075 PostgreSQL harness applies 074 ACLs and proves atomic rollback and rec
       expectedError: /cutover_075_post_trigger_catalog_mismatch/,
     });
     assert.equal((await client.query(
-      "select has_column_privilege('content_application','ai_content_generation_operations','status','UPDATE') as allowed",
+      "select has_column_privilege('content_application','ai_content_generation_operations','status','REFERENCES') as allowed",
     )).rows[0].allowed, false);
     await mutatePostSchema([
-      "grant update(status) on table ai_content_generation_operations to content_application",
+      "grant references(status) on table ai_content_generation_operations to content_application",
     ]);
     assert.equal((await client.query(
-      "select has_column_privilege('content_application','ai_content_generation_operations','status','UPDATE') as allowed",
+      "select has_column_privilege('content_application','ai_content_generation_operations','status','REFERENCES') as allowed",
     )).rows[0].allowed, true);
     await assert.rejects(
       client.query("select verify_ai_content_075_acl_final_catalog()"),
@@ -1708,10 +1767,10 @@ test("075 PostgreSQL harness applies 074 ACLs and proves atomic rollback and rec
       /cutover_075_recovery_(?:body_evidence|post_bootstrap_object_catalog)_mismatch|cutover_075_post_relation_catalog_mismatch/,
     );
     await mutatePostSchema([
-      "revoke update(status) on table ai_content_generation_operations from content_application",
+      "revoke references(status) on table ai_content_generation_operations from content_application",
     ]);
     assert.equal((await client.query(
-      "select has_column_privilege('content_application','ai_content_generation_operations','status','UPDATE') as allowed",
+      "select has_column_privilege('content_application','ai_content_generation_operations','status','REFERENCES') as allowed",
     )).rows[0].allowed, false);
     await assertPostSchemaTamperRejected({
       apply: [`alter table ai_content_proposal_performance_audits
@@ -1862,7 +1921,7 @@ test("075 PostgreSQL harness applies 074 ACLs and proves atomic rollback and rec
       await client.query("rollback");
     }
     assert.equal(livePostCatalog.relations.length, 13);
-    assert.equal(livePostCatalog.functions.length, 35);
+    assert.equal(livePostCatalog.functions.length, 37);
     assert.equal(livePostCatalog.triggers.length, 32);
     assert.equal(recovered.cutover.post075CatalogSha256, livePostCatalog.catalogSha256);
   } finally {
@@ -2877,7 +2936,15 @@ test("074 migration source contains no provider-only event-trigger DDL", async (
     6,
     "074 must register the completion-pair trigger function in protected-ACL and scrub catalogs only",
   );
-  assert.match(migration.sql, /if protected_object_count<>48 then/i);
+  assert.equal(
+    migration.sql.split("public.select_ai_content_proposal(uuid,uuid,uuid,uuid)").length - 1,
+    8,
+    "074 must register proposal selection in every protected-ACL and scrub/grant catalog",
+  );
+  assert.match(migration.sql, /if protected_object_count<>50 then/i);
+  assert.match(migration.sql, /ai_content_proposal_model_attempts'[\s\S]*'INSERT,SELECT,UPDATE'/i);
+  assert.match(migration.sql, /ai_content_proposal_research_attempts'[\s\S]*'INSERT,SELECT,UPDATE'/i);
+  assert.match(migration.sql, /ai_content_generation_operations'[\s\S]*'INSERT,SELECT,UPDATE'/i);
   assert.doesNotMatch(migration.sql, /^\s*(?:create|alter)\s+event\s+trigger\b/im);
   assert.match(migration.sql, /create function consume_ai_content_provider_attestation\(\)/i);
   assert.match(migration.sql, /current_setting\('role',\s*true\)/i);
@@ -2991,7 +3058,9 @@ test("074 bootstrap role authorization applies stage one then independently cons
               : identity.includes("register_ai_content_075_fence_relations")
                 ? [{ grantee: "content_migration", privilege: "EXECUTE", grantable: false },
                   ...(providerBundleInstalled ? [{ grantee: "content_schema_owner", privilege: "EXECUTE", grantable: false }] : [])]
-              : identity.includes("prepare_ai_content_cutover") || identity.includes("set_ai_content_maintenance")
+              : identity.includes("prepare_ai_content_cutover")
+                || identity.includes("read_ai_content_cutover_control_state")
+                || identity.includes("set_ai_content_maintenance")
               ? [{ grantee: "content_operator", privilege: "EXECUTE", grantable: false }]
               : identity.includes("ai_content_cutover_bypass_allowed") || identity.includes("lock_ai_content_cutover_transaction_state") || identity.includes("verify_ai_content_cutover_preflight_identity") || identity.includes("verify_ai_content_write_fence_catalog") || identity.includes("consume_ai_content_provider_attestation") || identity.includes("read_ai_content_cutover_migration_body_evidence")
                 ? [{ grantee: "content_migration", privilege: "EXECUTE", grantable: false }]
@@ -3057,7 +3126,12 @@ test("074 bootstrap role authorization applies stage one then independently cons
             ? [{ grantee: "content_schema_owner", privilege: "REFERENCES", grantable: false }]
             : relation_name === "ai_content_maintenance_state" ? [{ grantee: "content_application", privilege: "SELECT", grantable: false }]
             : ["ai_content_bootstrap_state", "ai_content_ddl_allowlist", "ai_content_write_fence_catalog"].includes(relation_name)
-              ? [{ grantee: "content_migration", privilege: "SELECT", grantable: false }] : [],
+              ? [
+                { grantee: "content_migration", privilege: "SELECT", grantable: false },
+                ...(providerBundleInstalled && relation_name === "ai_content_bootstrap_state"
+                  ? [{ grantee: "content_schema_owner", privilege: "SELECT", grantable: false }]
+                  : []),
+              ] : [],
         ),
       })) };
       if (normalized.startsWith("insert into ai_content_bootstrap_state")) {
@@ -3116,6 +3190,7 @@ test("074 bootstrap role authorization applies stage one then independently cons
   assert.ok(calls.some(({ sql }) => sql === "select verify_ai_content_write_fence_catalog()"));
   assert.ok(calls.some(({ sql }) => sql.includes("authorization_sha256") && sql.includes("install_request_json")));
   assert.ok(calls.some(({ sql }) => sql === 'grant select on table ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog to "content_migration"'));
+  assert.ok(calls.some(({ sql }) => sql === 'grant select on table ai_content_bootstrap_state to "content_schema_owner"'));
 
   const install = stageOne.providerInstallRequest;
   const bootstrapInsertCount = () => calls.filter(({ sql }) => sql.startsWith("insert into ai_content_bootstrap_state")).length;
@@ -3378,6 +3453,7 @@ test("074 bootstrap rejects an earlier or extra pending migration and any 075 pr
       cutover: {},
       bootstrap074Prerequisite: prerequisiteRoleNames,
       bootstrap074PrerequisiteMode: true,
+      bootstrap074PrerequisiteProviderRoleName: "postgres",
     }),
     /bootstrap_074_pending_set_invalid/,
   );
@@ -3388,43 +3464,24 @@ test("074 bootstrap rejects an earlier or extra pending migration and any 075 pr
     checksum: "5acce238ce19656738aff6e311d7f3db4a9763c5aee8a3ea1d6e338ce6f84001",
     sql: "select prerequisite_073a",
   };
-  for (const [marker, mutate, expectedError] of [
-    ["bootstrap_role_catalog_v4", (rows) => rows.map((row) => row.role_name === "content_application"
-      ? { ...row, config: ["search_path=public"] } : row), /bootstrap_role_catalog_invalid/],
-    ["bootstrap_role_environment_catalog_v1", (rows) => [{ ...rows[0], database_settings: [{ role_name: "content_application", database_name: "test", settings: ["statement_timeout=1s"] }] }], /bootstrap_role_database_settings_invalid/],
-    ["bootstrap_role_environment_catalog_v1", (rows) => [{ ...rows[0], public_schema_owner_role_name: "content_schema_owner" }], /bootstrap_role_database_boundary_invalid/],
-    ["bootstrap_role_environment_catalog_v1", (rows) => [{ ...rows[0], public_schema_acl: [...rows[0].public_schema_acl, { grantee: "PUBLIC", privilege: "USAGE", grantable: false }] }], /bootstrap_role_public_schema_acl_invalid/],
-  ]) {
-    const unsafe = makeClient([]);
-    const originalUnsafeQuery = unsafe.query.bind(unsafe);
-    unsafe.query = async (sql, parameters) => {
-      const result = await originalUnsafeQuery(sql, parameters);
-      return sql.includes(marker) ? { ...result, rows: mutate(result.rows) } : result;
-    };
-    await assert.rejects(migrationRunner.runMigrationsWithClient({
-      client: unsafe, migrations: [prerequisite, migration074],
-      bootstrap074Prerequisite: prerequisiteRoleNames, bootstrap074PrerequisiteMode: true,
-    }), expectedError);
-    assert.equal(unsafe.calls.some((sql) => sql.startsWith("select pg_advisory_lock")), false);
-  }
   const tamperedPrerequisiteClient = makeClient([]);
   await assert.rejects(migrationRunner.runMigrationsWithClient({
     client: tamperedPrerequisiteClient,
     migrations: [{ ...prerequisite, checksum: "a".repeat(64) }, migration074],
     bootstrap074Prerequisite: prerequisiteRoleNames,
     bootstrap074PrerequisiteMode: true,
+    bootstrap074PrerequisiteProviderRoleName: "postgres",
   }), /bootstrap_074_prerequisite_source_invalid/);
   assert.equal(tamperedPrerequisiteClient.calls.some((sql) => mutationPattern.test(sql)), false);
   const prerequisiteClient = makeClient([]);
   const originalQuery = prerequisiteClient.query.bind(prerequisiteClient);
   prerequisiteClient.query = async (sql, parameters) => {
     const normalized = sql.replace(/\s+/g, " ").trim();
-    if (normalized.includes("legacy_trigger_search_path_owner_v2")) {
+    if (normalized.includes("legacy_trigger_search_path_provider_owner_v1")) {
       prerequisiteClient.calls.push(normalized);
       return { rows: [{
-        owner_role_name: "content_schema_owner", function_count: 19, owner_count: 1,
-        session_user_name: "content_migration", current_user_name: "content_migration",
-        can_set_schema_owner: true, has_exact_set_membership: true,
+        owner_role_name: "postgres", function_count: 19, owner_count: 1,
+        session_user_name: "postgres", current_user_name: "postgres",
       }] };
     }
     return originalQuery(sql, parameters);
@@ -3434,14 +3491,15 @@ test("074 bootstrap rejects an earlier or extra pending migration and any 075 pr
     migrations: [prerequisite, migration074],
     bootstrap074Prerequisite: prerequisiteRoleNames,
     bootstrap074PrerequisiteMode: true,
+    bootstrap074PrerequisiteProviderRoleName: "postgres",
   });
   assert.deepEqual(prerequisiteResult.pending, [prerequisite.id]);
   assert.equal(prerequisiteResult.bootstrap074RestartRequired, true);
   assert.equal(prerequisiteResult.bootstrap074PrerequisiteMigrationId, prerequisite.id);
-  const prerequisiteRoleIndex = prerequisiteClient.calls.indexOf('set local role "content_schema_owner"');
   const prerequisiteSqlIndex = prerequisiteClient.calls.indexOf("select prerequisite_073a");
   const prerequisiteCommitIndex = prerequisiteClient.calls.indexOf("commit");
-  assert.ok(prerequisiteRoleIndex >= 0 && prerequisiteRoleIndex < prerequisiteSqlIndex);
+  assert.equal(prerequisiteClient.calls.some((sql) => sql.startsWith("set local role")), false);
+  assert.equal(prerequisiteClient.calls.some((sql) => sql.includes("bootstrap_role_catalog_v4")), false);
   assert.ok(prerequisiteSqlIndex < prerequisiteCommitIndex);
   assert.equal(prerequisiteClient.calls.some((sql) => sql === "select 74"), false);
   assert.equal(prerequisiteClient.calls.some((sql) => sql.includes("bootstrap_object_catalog_v7")), false);
@@ -3452,12 +3510,11 @@ test("074 bootstrap rejects an earlier or extra pending migration and any 075 pr
   const missingIdentityOriginalQuery = missingIdentityClient.query.bind(missingIdentityClient);
   missingIdentityClient.query = async (sql, parameters) => {
     const normalized = sql.replace(/\s+/g, " ").trim();
-    if (normalized.includes("legacy_trigger_search_path_owner_v2")) {
+    if (normalized.includes("legacy_trigger_search_path_provider_owner_v1")) {
       missingIdentityClient.calls.push(normalized);
       return { rows: [{
-        owner_role_name: "content_schema_owner", function_count: 18, owner_count: 1,
-        session_user_name: "content_migration", current_user_name: "content_migration",
-        can_set_schema_owner: true, has_exact_set_membership: true,
+        owner_role_name: "postgres", function_count: 18, owner_count: 1,
+        session_user_name: "postgres", current_user_name: "postgres",
       }] };
     }
     return missingIdentityOriginalQuery(sql, parameters);
@@ -3468,25 +3525,24 @@ test("074 bootstrap rejects an earlier or extra pending migration and any 075 pr
       migrations: [prerequisite, migration074],
       bootstrap074Prerequisite: prerequisiteRoleNames,
       bootstrap074PrerequisiteMode: true,
+      bootstrap074PrerequisiteProviderRoleName: "postgres",
     }),
-    /legacy_trigger_search_path_owner_invalid/,
+    /legacy_trigger_search_path_provider_owner_invalid/,
   );
   assert.equal(missingIdentityClient.calls.some((sql) => mutationPattern.test(sql)), false);
 
   for (const invalidOwnerEvidence of [{
     owner_role_name: "content_rogue", function_count: 19, owner_count: 1,
-    session_user_name: "content_migration", current_user_name: "content_migration",
-    can_set_schema_owner: true, has_exact_set_membership: true,
+    session_user_name: "postgres", current_user_name: "postgres",
   }, {
-    owner_role_name: "content_schema_owner", function_count: 19, owner_count: 1,
+    owner_role_name: "postgres", function_count: 19, owner_count: 1,
     session_user_name: "content_migration", current_user_name: "content_migration",
-    can_set_schema_owner: false, has_exact_set_membership: true,
   }]) {
     const unsafeClient = makeClient([]);
     const unsafeOriginalQuery = unsafeClient.query.bind(unsafeClient);
     unsafeClient.query = async (sql, parameters) => {
       const normalized = sql.replace(/\s+/g, " ").trim();
-      if (normalized.includes("legacy_trigger_search_path_owner_v2")) {
+      if (normalized.includes("legacy_trigger_search_path_provider_owner_v1")) {
         unsafeClient.calls.push(normalized);
         return { rows: [invalidOwnerEvidence] };
       }
@@ -3497,7 +3553,8 @@ test("074 bootstrap rejects an earlier or extra pending migration and any 075 pr
       migrations: [prerequisite, migration074],
       bootstrap074Prerequisite: prerequisiteRoleNames,
       bootstrap074PrerequisiteMode: true,
-    }), /legacy_trigger_search_path_owner_invalid/);
+      bootstrap074PrerequisiteProviderRoleName: "postgres",
+    }), /legacy_trigger_search_path_provider_owner_invalid/);
     assert.equal(unsafeClient.calls.some((sql) => mutationPattern.test(sql)), false);
   }
 

@@ -114,12 +114,18 @@ export function resolveMigrationRuntimeConfig(
   ];
   const hasBootstrapPrerequisiteRoles = prerequisiteRoleValues.some(Boolean);
   const bootstrap074PrerequisiteMode = argv.includes("--bootstrap-074-prerequisite");
+  const bootstrap074PrerequisiteProviderRoleName = env.AI_CONTENT_074_PREREQUISITE_PROVIDER_ROLE;
+  const allowConsumedRecovery = env.AI_CONTENT_074_ALLOW_CONSUMED_RECOVERY;
+  if (allowConsumedRecovery !== undefined && !["true", "false"].includes(allowConsumedRecovery)) {
+    throw new Error("bootstrap_074_consumed_recovery_flag_invalid");
+  }
   if (hasBootstrapPrerequisiteRoles && (
     prerequisiteRoleValues.some((value) => !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(value ?? ""))
     || new Set(prerequisiteRoleValues).size !== prerequisiteRoleValues.length
   )) throw new Error("bootstrap_074_prerequisite_roles_invalid");
-  if (bootstrap074PrerequisiteMode && !hasBootstrapPrerequisiteRoles) {
-    throw new Error("bootstrap_074_prerequisite_roles_required");
+  if (bootstrap074PrerequisiteMode
+    && !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(bootstrap074PrerequisiteProviderRoleName ?? "")) {
+    throw new Error("bootstrap_074_prerequisite_provider_role_required");
   }
   return {
     connectionString: env.SUPABASE_DATABASE_URL || env.DATABASE_URL,
@@ -135,7 +141,10 @@ export function resolveMigrationRuntimeConfig(
         cleanupRoleName: env.AI_CONTENT_074_CLEANUP_ROLE,
       },
     } : {}),
-    ...(bootstrap074PrerequisiteMode ? { bootstrap074PrerequisiteMode: true } : {}),
+    ...(bootstrap074PrerequisiteMode ? {
+      bootstrap074PrerequisiteMode: true,
+      bootstrap074PrerequisiteProviderRoleName,
+    } : {}),
     ...(env.AI_CONTENT_074_AUTHORIZATION_FILE ? {
       bootstrap074Files: {
         authorizationFile: env.AI_CONTENT_074_AUTHORIZATION_FILE,
@@ -150,6 +159,7 @@ export function resolveMigrationRuntimeConfig(
         imageSourceLabel: env.AI_CONTENT_F_API_SOURCE_LABEL,
         roleCatalogSha256: env.AI_CONTENT_DATABASE_ROLE_CATALOG_SHA256,
         objectCatalogSha256: env.AI_CONTENT_074_OBJECT_CATALOG_SHA256,
+        allowConsumedRecovery: allowConsumedRecovery === "true",
       },
     } : {}),
     ...(hasCutover075Config ? {
@@ -197,6 +207,7 @@ async function loadBootstrap074(files) {
     imageSourceLabel: files.imageSourceLabel,
     roleCatalogSha256: files.roleCatalogSha256,
     objectCatalogSha256: files.objectCatalogSha256,
+    allowConsumedRecovery: files.allowConsumedRecovery === true,
   };
 }
 
@@ -285,11 +296,29 @@ export async function main({
   env = process.env,
   argv = process.argv,
   loadEnvironment = loadEnvironmentFiles,
+  readDatabaseUrlFileImpl = (fileName) => readSecureCutoverFile(fileName, {
+    kind: "database-url", maxBytes: 32 * 1024,
+  }),
   runMigrationsImpl = runMigrations,
   logger = console,
 } = {}) {
   loadEnvironment();
-  const runtimeConfig = resolveMigrationRuntimeConfig(env, argv);
+  const databaseUrlFiles = [env.SUPABASE_DATABASE_URL_FILE, env.DATABASE_URL_FILE].filter(Boolean);
+  const inlineDatabaseUrls = [env.SUPABASE_DATABASE_URL, env.DATABASE_URL].filter(Boolean);
+  if (databaseUrlFiles.length > 1 || (databaseUrlFiles.length > 0 && inlineDatabaseUrls.length > 0)) {
+    throw new Error("migration_database_url_input_ambiguous");
+  }
+  const effectiveEnv = { ...env };
+  if (databaseUrlFiles.length === 1) {
+    const connectionString = String(await readDatabaseUrlFileImpl(databaseUrlFiles[0])).trim();
+    if (!connectionString || connectionString.includes("\0")) {
+      throw new Error("migration_database_url_file_invalid");
+    }
+    effectiveEnv.SUPABASE_DATABASE_URL = connectionString;
+    delete effectiveEnv.SUPABASE_DATABASE_URL_FILE;
+    delete effectiveEnv.DATABASE_URL_FILE;
+  }
+  const runtimeConfig = resolveMigrationRuntimeConfig(effectiveEnv, argv);
   const { bootstrap074Files, cutover075Files, ...migrationConfig } = runtimeConfig;
   const bootstrap074 = await loadBootstrap074(bootstrap074Files);
   const cutover = await loadCutover075(cutover075Files);
@@ -307,6 +336,9 @@ export async function main({
       bootstrap074RestartRequired: true,
       ...(result.bootstrap074PrerequisiteMigrationId
         ? { bootstrap074PrerequisiteMigrationId: result.bootstrap074PrerequisiteMigrationId }
+        : {}),
+      ...(result.bootstrap074PrerequisiteProviderRoleName
+        ? { bootstrap074PrerequisiteProviderRoleName: result.bootstrap074PrerequisiteProviderRoleName }
         : {}),
       ...(result.bootstrap074Stage ? { bootstrap074Stage: result.bootstrap074Stage } : {}),
       ...(result.cutover075Deferred ? { cutover075Deferred: true } : {}),

@@ -1,8 +1,47 @@
 import { describe, expect, it } from "vitest";
 import pg from "pg";
-import { resolveDatabaseUrl, resolvePoolConfig } from "./db";
+import {
+  assertDatabaseIdentity,
+  readDatabaseUrlSecret,
+  resolveDatabaseUrl,
+  resolvePoolConfig,
+} from "./db";
 
 describe("resolvePoolConfig", () => {
+  it("accepts only the sealed content-application session identity", async () => {
+    await expect(assertDatabaseIdentity({
+      query: async () => ({ rows: [{ session_user: "content_application", current_user: "content_application" }] }),
+    }, "content_application")).resolves.toBeUndefined();
+    await expect(assertDatabaseIdentity({
+      query: async () => ({ rows: [{ session_user: "postgres", current_user: "postgres" }] }),
+    }, "content_application")).rejects.toThrow("database_identity_invalid");
+  });
+
+  it("reads one database URL from the dedicated secret without returning surrounding whitespace", () => {
+    const reads: string[] = [];
+    const value = readDatabaseUrlSecret("/run/secrets/ai_content_application_database_url", {
+      readFile(path) {
+        reads.push(path);
+        return "postgresql://content_application:secret@database.example/brand_pilot\n";
+      },
+    });
+
+    expect(reads).toEqual(["/run/secrets/ai_content_application_database_url"]);
+    expect(value).toBe("postgresql://content_application:secret@database.example/brand_pilot");
+  });
+
+  it("rejects an empty, passwordless, or non-PostgreSQL database secret", () => {
+    expect(() => readDatabaseUrlSecret("/run/secrets/ai_content_application_database_url", {
+      readFile: () => "\n",
+    })).toThrow("database_url_secret_invalid");
+    expect(() => readDatabaseUrlSecret("/run/secrets/ai_content_application_database_url", {
+      readFile: () => "https://database.example/brand_pilot\n",
+    })).toThrow("database_url_secret_invalid");
+    expect(() => readDatabaseUrlSecret("/run/secrets/ai_content_application_database_url", {
+      readFile: () => "postgresql://content_application@database.example/brand_pilot\n",
+    })).toThrow("database_url_secret_invalid");
+  });
+
   it("uses verified TLS and bounded defaults for a Supabase pooler URL", () => {
     const config = resolvePoolConfig(
       "postgresql://postgres.project:secret@aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"

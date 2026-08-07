@@ -16,6 +16,7 @@ MINIMUM_FREE_KIB=$((10 * 1024 * 1024))
 MANIFEST="$1"
 require_command flock
 require_command sync
+enforce_ai_content_roll_forward_floor "$ROOT"
 mkdir -p -- "$ROOT/state"
 if [[ "${BRAND_PILOT_PARENT_LOCK_FD:-}" == "9" && -e "/proc/$$/fd/9" ]]; then
   flock -n 9 || fail "deploy_lock_busy"

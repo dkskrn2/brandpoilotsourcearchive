@@ -177,6 +177,38 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       await container?.stop();
     });
 
+    it("installs invoker selection and one-success lineage indexes", async () => {
+      const boundary = await pool.query(
+        `select procedure.proname,procedure.prosecdef,
+                array_to_string(procedure.proconfig, ',') settings
+           from pg_proc procedure
+           join pg_namespace namespace on namespace.oid=procedure.pronamespace
+          where namespace.nspname='public' and procedure.proname=any($1::text[])
+          order by procedure.proname`,
+        [[
+          "create_ai_content_generation_prompt_binding",
+          "select_ai_content_proposal",
+          "transition_ai_content_generation_operation",
+        ]],
+      );
+      expect(boundary.rows).toHaveLength(3);
+      expect(boundary.rows.every(({ prosecdef, settings }) => prosecdef === false
+        && settings === "search_path=pg_catalog, public, pg_temp")).toBe(true);
+      const indexes = await pool.query(
+        `select indexname, indexdef
+           from pg_indexes
+          where schemaname='public' and indexname=any($1::text[])
+          order by indexname`,
+        [[
+          "ai_content_proposal_attempt_events_one_success_per_job",
+          "ai_content_proposal_jobs_one_completed_per_batch",
+        ]],
+      );
+      expect(indexes.rows).toHaveLength(2);
+      expect(indexes.rows.map(({ indexdef }) => String(indexdef)).join("\n"))
+        .toMatch(/attempt_succeeded[\s\S]*status = 'completed'|status = 'completed'[\s\S]*attempt_succeeded/i);
+    });
+
     it("binds the completed parser-valid attempt and creates only one exact V2 draft", async () => {
       const proposalRepository = createAiContentProposalV2Repository(pool);
       const created = await createAiContentProposalV2Service({

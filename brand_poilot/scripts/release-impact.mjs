@@ -66,7 +66,12 @@ const CUTOVER_WORKER_PATHS = Object.freeze([
 
 const CUTOVER_API_SCRIPT_PATHS = Object.freeze([
   "scripts/ai-content-cutover-control.mjs",
+  "scripts/ai-content-cutover-evidence.mjs",
+  "scripts/ai-content-cutover-floor-probe.mjs",
+  "scripts/ai-content-database-catalog.mjs",
   "scripts/ai-content-database-roles.mjs",
+  "scripts/ai-content-provider-artifacts.mjs",
+  "scripts/collect-ai-content-prepare-evidence.mjs",
   "scripts/migrate.mjs",
   "scripts/migrationRunner.mjs",
 ]);
@@ -82,6 +87,7 @@ const CUTOVER_TOOLING_PATHS = Object.freeze([
   "scripts/convert-legacy-release-manifest.mjs",
   "scripts/release-impact.mjs",
   "scripts/check-local-env.mjs",
+  "scripts/three-format-cutover-static-check.mjs",
 ]);
 
 function classifyAiContentCutoverPath(path, components) {

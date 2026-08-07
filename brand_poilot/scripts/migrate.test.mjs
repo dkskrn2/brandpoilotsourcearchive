@@ -74,7 +74,23 @@ test("074 migration CLI exposes only pinned Ed25519 public-key inputs", () => {
     imageSourceLabel: undefined,
     roleCatalogSha256: undefined,
     objectCatalogSha256: undefined,
+    allowConsumedRecovery: false,
   });
+  assert.equal(migrateModule.resolveMigrationRuntimeConfig({
+    SUPABASE_DATABASE_URL: "postgresql://database.example/postgres",
+    AI_CONTENT_074_AUTHORIZATION_FILE: "/run/secrets/authorization.json",
+    AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_FILE: "/run/secrets/authorization-public.pem",
+    AI_CONTENT_074_AUTHORIZATION_KEY_ID: "authorization-2026-08",
+    AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_SHA256: "a".repeat(64),
+    AI_CONTENT_074_PROVIDER_ATTESTATION_FILE: "/run/secrets/provider-attestation.json",
+    AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_FILE: "/run/secrets/provider-public.pem",
+    AI_CONTENT_074_PROVIDER_ATTESTATION_KEY_ID: "provider-2026-08",
+    AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_SHA256: "b".repeat(64),
+    AI_CONTENT_074_ALLOW_CONSUMED_RECOVERY: "true",
+  }).bootstrap074Files.allowConsumedRecovery, true);
+  assert.throws(() => migrateModule.resolveMigrationRuntimeConfig({
+    AI_CONTENT_074_ALLOW_CONSUMED_RECOVERY: "TRUE",
+  }), /bootstrap_074_consumed_recovery_flag_invalid/);
   assert.throws(() => migrateModule.resolveMigrationRuntimeConfig({
     AI_CONTENT_074_AUTHORIZATION_FILE: "/run/secrets/authorization.json",
     AI_CONTENT_074_AUTHORIZATION_KEY_FILE: "/run/secrets/private.key",
@@ -111,6 +127,38 @@ test("migration CLI passes decoded CA to the migration runner without connecting
     dryRun: true,
     caCertificate: certificate,
   });
+});
+
+test("migration CLI reads a protected database URL file without exposing it as container env", async () => {
+  let receivedOptions;
+  const reads = [];
+  await migrateModule.main({
+    env: { SUPABASE_DATABASE_URL_FILE: "/run/secrets/migration-database-url" },
+    argv: ["node", "scripts/migrate.mjs", "--dry-run"],
+    loadEnvironment: () => {},
+    readDatabaseUrlFileImpl: async (fileName) => {
+      reads.push(fileName);
+      return "postgresql://content_migration:secret@database.example/postgres\n";
+    },
+    runMigrationsImpl: async (options) => {
+      receivedOptions = options;
+      return { pending: [], migrations: [], baselineRequired: false };
+    },
+    logger: { log() {} },
+  });
+  assert.deepEqual(reads, ["/run/secrets/migration-database-url"]);
+  assert.equal(receivedOptions.connectionString, "postgresql://content_migration:secret@database.example/postgres");
+  assert.equal(Object.hasOwn(receivedOptions, "connectionStringFile"), false);
+  await assert.rejects(migrateModule.main({
+    env: {
+      SUPABASE_DATABASE_URL: "postgresql://inline.example/postgres",
+      SUPABASE_DATABASE_URL_FILE: "/run/secrets/migration-database-url",
+    },
+    loadEnvironment: () => {},
+    readDatabaseUrlFileImpl: async () => "postgresql://file.example/postgres",
+    runMigrationsImpl: async () => ({ pending: [], migrations: [], baselineRequired: false }),
+    logger: { log() {} },
+  }), /migration_database_url_input_ambiguous/);
 });
 
 test("migration CLI exposes the 073a-to-074 restart boundary", async () => {
@@ -168,11 +216,10 @@ test("migration CLI routes the real full source through 073a before touching 074
         return { rows: [{ relation: "schema_migrations" }] };
       }
       if (normalized.includes("select id, checksum from schema_migrations")) return { rows: historyRows };
-      if (normalized.includes("legacy_trigger_search_path_owner_v2")) {
+      if (normalized.includes("legacy_trigger_search_path_provider_owner_v1")) {
         return { rows: [{
-          owner_role_name: "content_schema_owner", function_count: 19, owner_count: 1,
-          session_user_name: "content_migration", current_user_name: "content_migration",
-          can_set_schema_owner: true, has_exact_set_membership: true,
+          owner_role_name: "postgres", function_count: 19, owner_count: 1,
+          session_user_name: "postgres", current_user_name: "postgres",
         }] };
       }
       return { rows: [] };
@@ -196,6 +243,7 @@ test("migration CLI routes the real full source through 073a before touching 074
       migrations,
       bootstrap074Prerequisite: options.bootstrap074Prerequisite,
       bootstrap074PrerequisiteMode: options.bootstrap074PrerequisiteMode,
+      bootstrap074PrerequisiteProviderRoleName: options.bootstrap074PrerequisiteProviderRoleName,
     }),
     logger: { log() {} },
   }), /bootstrap_074_prerequisite_required/);
@@ -211,6 +259,7 @@ test("migration CLI routes the real full source through 073a before touching 074
       AI_CONTENT_074_OPERATOR_ROLE: "content_operator",
       AI_CONTENT_074_MIGRATION_ROLE: "content_migration",
       AI_CONTENT_074_CLEANUP_ROLE: "content_cleanup",
+      AI_CONTENT_074_PREREQUISITE_PROVIDER_ROLE: "postgres",
     },
     argv: ["node", "scripts/migrate.mjs", "--bootstrap-074-prerequisite"],
     loadEnvironment: () => {},
@@ -219,13 +268,15 @@ test("migration CLI routes the real full source through 073a before touching 074
       migrations,
       bootstrap074Prerequisite: options.bootstrap074Prerequisite,
       bootstrap074PrerequisiteMode: options.bootstrap074PrerequisiteMode,
+      bootstrap074PrerequisiteProviderRoleName: options.bootstrap074PrerequisiteProviderRoleName,
     }),
     logger: { log: (message) => messages.push(message) },
   });
   const output = JSON.parse(messages[0]);
   assert.deepEqual(output.applied, ["073a_legacy_trigger_function_search_path.sql"]);
   assert.equal(output.bootstrap074RestartRequired, true);
-  assert.ok(optedIn.calls.some((sql) => sql === 'set local role "content_schema_owner"'));
+  assert.equal(optedIn.calls.some((sql) => sql.startsWith("set local role")), false);
+  assert.ok(optedIn.calls.some((sql) => sql.includes("legacy_trigger_search_path_provider_owner_v1")));
   assert.equal(optedIn.calls.some((sql) => sql.includes("bootstrap_object_catalog_")), false);
   assert.equal(optedIn.calls.some((sql) => sql.includes("bootstrap_event_trigger_catalog_")), false);
   assert.equal(optedIn.calls.some((sql) => /create table ai_content_maintenance_state/i.test(sql)), false);

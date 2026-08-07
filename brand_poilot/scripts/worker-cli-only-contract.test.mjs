@@ -70,14 +70,16 @@ test("runtime consumers build the emitted package before developer entrypoints",
       ["dev", "predev"],
       ["run-once", "prerun-once"],
     ]) {
-      if (packageJson.scripts?.[script] && packageJson.scripts?.[lifecycle] !== runtimeBuild) {
+      const lifecycleCommands = packageJson.scripts?.[lifecycle]?.split("&&").map((value) => value.trim()) ?? [];
+      if (packageJson.scripts?.[script] && !lifecycleCommands.includes(runtimeBuild)) {
         violations.push(`${packageJson.name}:${lifecycle}`);
       }
     }
   }
 
   const apiPackage = JSON.parse(await readFile("apps/api/package.json", "utf8"));
-  if (apiPackage.scripts?.pretest !== runtimeBuild) {
+  const apiPretestCommands = apiPackage.scripts?.pretest?.split("&&").map((value) => value.trim()) ?? [];
+  if (!apiPretestCommands.includes(runtimeBuild)) {
     violations.push(`${apiPackage.name}:pretest`);
   }
 
@@ -178,8 +180,12 @@ test("published server images invoke valid clean-checkout build targets in depen
 
     const directRuntimeIndex = dockerfile.indexOf(runtimeBuild);
     const buildsRuntimeDirectly = directRuntimeIndex >= 0 && directRuntimeIndex < compileIndex;
+    const packageBuildCommands = packageJson.scripts?.build?.split("&&").map((value) => value.trim()) ?? [];
+    const runtimeBuildIndex = packageBuildCommands.indexOf(runtimeBuild);
+    const compileStepIndex = packageBuildCommands.findIndex((command) => /^(?:tsc|\.\/node_modules\/\.bin\/tsc)\b/.test(command));
     const delegatesToOrderedPackageBuild = image.compile.includes(packageJson.name)
-      && packageJson.scripts?.build?.startsWith(`${runtimeBuild} &&`);
+      && runtimeBuildIndex >= 0
+      && compileStepIndex > runtimeBuildIndex;
     if (!buildsRuntimeDirectly && !delegatesToOrderedPackageBuild) {
       violations.push(`${image.name}:worker-runtime must build before ${image.compile}`);
     }

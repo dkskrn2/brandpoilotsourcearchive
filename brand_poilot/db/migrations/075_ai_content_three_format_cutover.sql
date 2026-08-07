@@ -470,8 +470,13 @@ create function transition_ai_content_generation_operation(
   p_operation_id uuid,p_expected_status text,p_next_status text
 ) returns public.ai_content_generation_operations
 language plpgsql security definer set search_path=pg_catalog,public,pg_temp as $$
+declare bootstrap public.ai_content_bootstrap_state%rowtype;
 declare transitioned public.ai_content_generation_operations%rowtype;
 begin
+  select * into strict bootstrap from public.ai_content_bootstrap_state where singleton;
+  if session_user<>bootstrap.application_role_name::text then
+    raise exception 'ai_content_application_role_invalid';
+  end if;
   if (p_expected_status,p_next_status) not in (
     ('reserved','started'),('reserved','failed'),('reserved','reversed'),
     ('started','completed'),('started','failed'),('started','reversed'),('failed','reversed')
@@ -1578,7 +1583,7 @@ create or replace function public.select_ai_content_proposal(
 )
 returns uuid
 language plpgsql
-security definer
+security invoker
 set search_path=pg_catalog,public,pg_temp
 as $$
 declare
@@ -1975,12 +1980,17 @@ create function create_ai_content_generation_prompt_binding(
   p_generation_id uuid,p_workspace_id uuid,p_brand_id uuid,p_selected_proposal_id uuid,p_proposal_job_id uuid,
   p_proposal_contract_id uuid,p_successful_model_attempt_id uuid,p_binding_json jsonb
 ) returns uuid language plpgsql security definer set search_path=pg_catalog,public,pg_temp as $$
+declare bootstrap public.ai_content_bootstrap_state%rowtype;
 declare created_id uuid;
 declare terminal public.ai_content_proposal_attempt_events%rowtype;
 declare proposal public.ai_content_proposals%rowtype;
 declare generation_row public.ai_content_generations%rowtype;
 declare source_binding_id uuid;
 begin
+  select * into strict bootstrap from public.ai_content_bootstrap_state where singleton;
+  if session_user<>bootstrap.application_role_name::text then
+    raise exception 'ai_content_application_role_invalid';
+  end if;
   select * into strict proposal from public.ai_content_proposals
    where id=p_selected_proposal_id for update;
   if proposal.status<>'selected'
@@ -3009,6 +3019,16 @@ delete from ai_content_proposal_performance_audits;
 delete from ai_content_proposal_research_snapshots;
 delete from ai_content_proposal_jobs;
 delete from ai_content_proposal_batches;
+
+-- Retried attempts may fail before a later attempt succeeds, but a proposal job and
+-- its batch have exactly one successful terminal lineage.
+create unique index ai_content_proposal_attempt_events_one_success_per_job
+  on ai_content_proposal_attempt_events(job_id)
+  where event_type='attempt_succeeded';
+create unique index ai_content_proposal_jobs_one_completed_per_batch
+  on ai_content_proposal_jobs(batch_id)
+  where status='completed';
+
 delete from ai_content_usage_ledger where usage_type='reversal';
 delete from ai_content_usage_ledger;
 
@@ -3278,6 +3298,84 @@ alter table worker_instances add constraint worker_instances_type_check check (
     'image','dm','faq','content_proposal','card_news','blog','reel','ai_content_image'
   )
 );
+
+create function lock_ai_content_fixed_input_sources(
+  p_workspace_id uuid,
+  p_brand_id uuid,
+  p_brand_core_version_id uuid,
+  p_product_service_id uuid,
+  p_product_service_version_id uuid,
+  p_reference_item_ids uuid[],
+  p_reference_snapshot_ids uuid[]
+) returns boolean
+language plpgsql security definer set search_path=pg_catalog,public as $$
+declare locked_rules jsonb;
+begin
+  if p_workspace_id is null or p_brand_id is null or p_brand_core_version_id is null
+     or p_reference_item_ids is null or p_reference_snapshot_ids is null
+     or cardinality(p_reference_item_ids)<>cardinality(p_reference_snapshot_ids)
+     or ((p_product_service_id is null)<>(p_product_service_version_id is null)) then
+    raise exception 'ai_content_fixed_input_lock_invalid';
+  end if;
+
+  perform 1 from public.brand_core_versions core
+   where core.id=p_brand_core_version_id and core.workspace_id=p_workspace_id
+     and core.brand_id=p_brand_id and core.status='approved'
+   for update;
+
+  if p_product_service_id is not null then
+    perform 1
+      from public.product_services item
+      join public.product_service_versions version
+        on version.id=p_product_service_version_id and version.product_service_id=item.id
+       and version.workspace_id=item.workspace_id and version.brand_id=item.brand_id
+       and version.status='approved'
+     where item.id=p_product_service_id and item.workspace_id=p_workspace_id
+       and item.brand_id=p_brand_id and item.status='active'
+     for update of item,version;
+  end if;
+
+  perform 1
+    from unnest(p_reference_item_ids,p_reference_snapshot_ids)
+         requested(reference_item_id,snapshot_id)
+    join public.reference_items item
+      on item.id=requested.reference_item_id and item.workspace_id=p_workspace_id
+     and item.brand_id=p_brand_id and item.archived_at is null
+    join public.reference_snapshots snapshot
+      on snapshot.id=requested.snapshot_id and snapshot.reference_item_id=item.id
+     and snapshot.workspace_id=item.workspace_id and snapshot.brand_id=item.brand_id
+   where snapshot.snapshot_json #>> '{permittedUse,modelInput}'='true'
+     and snapshot.snapshot_json #>> '{permittedUse,derivativeInspiration}'='true'
+   for update of item,snapshot;
+
+  select rules.rules_json into locked_rules
+    from public.brand_profiles profile
+    join public.brand_rule_sets rules
+      on rules.id=profile.active_brand_rule_set_id
+     and rules.workspace_id=profile.workspace_id and rules.brand_id=profile.brand_id
+     and rules.status='approved'
+   where profile.workspace_id=p_workspace_id and profile.brand_id=p_brand_id
+   for update of profile,rules;
+
+  if locked_rules is not null then
+    perform 1
+      from jsonb_array_elements(coalesce(locked_rules #> '{designRules,referenceImages}','[]'::jsonb))
+           style(image)
+      join public.reference_items item
+        on item.id::text=style.image->>'referenceItemId'
+       and item.workspace_id=p_workspace_id and item.brand_id=p_brand_id
+       and item.kind='upload' and item.archived_at is null
+      join public.storage_artifacts artifact
+        on artifact.id=item.storage_artifact_id and artifact.workspace_id=item.workspace_id
+       and artifact.brand_id=item.brand_id and artifact.deleted_at is null
+       and artifact.public_url is not null and artifact.path is not null
+       and artifact.checksum ~ '^[0-9a-f]{64}$'
+       and lower(artifact.mime_type) in ('image/png','image/jpeg','image/webp')
+     for update of item,artifact;
+  end if;
+  return true;
+end;
+$$;
 
 create function ai_content_generation_input_v3_is_valid(value jsonb) returns boolean
 language sql immutable set search_path=pg_catalog,public,pg_temp as $$

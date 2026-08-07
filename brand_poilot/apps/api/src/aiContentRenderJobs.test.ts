@@ -142,11 +142,13 @@ describe("ai-content render job boundary helpers", () => {
     let releaseUnlockedCounts: (() => void) | null = null;
     const unlockedCountBarrier = new Promise<void>((resolve) => { releaseUnlockedCounts = resolve; });
     let finalizerCount = 0;
+    const lockSequences: string[][] = [];
 
     const pool = {
       connect: async () => {
         const transaction = {
           id: Symbol("transaction"), localStatuses: new Map<string, string>(), insertsFinalizer: false, holdsOutputLock: false,
+          lockOrder: [] as string[],
         };
         const releaseOutputLock = () => {
           if (!transaction.holdsOutputLock || outputLockOwner !== transaction.id) return;
@@ -160,6 +162,7 @@ describe("ai-content render job boundary helpers", () => {
           if (normalized === "commit") {
             for (const [jobId, status] of transaction.localStatuses) committed.get(jobId)!.status = status;
             if (transaction.insertsFinalizer && finalizerCount === 0) finalizerCount += 1;
+            lockSequences.push([...transaction.lockOrder]);
             releaseOutputLock();
             return { rows: [] };
           }
@@ -169,6 +172,7 @@ describe("ai-content render job boundary helpers", () => {
             return { rows: job ? [{ output_id: identity.output, generation_id: identity.generation, workspace_id: identity.workspace, brand_id: identity.brand }] : [] };
           }
           if (normalized.includes("from ai_content_generation_outputs") && normalized.endsWith("for update")) {
+            transaction.lockOrder.push("output");
             if (outputLockOwner !== null && outputLockOwner !== transaction.id) {
               await new Promise<void>((resolve) => outputLockWaiters.push(resolve));
             }
@@ -177,6 +181,7 @@ describe("ai-content render job boundary helpers", () => {
             return { rows: [{ id: identity.output }] };
           }
           if (normalized.includes("from ai_content_generation_render_jobs where id=$1 for update")) {
+            transaction.lockOrder.push("job");
             const jobId = String(params[0]);
             const job = committed.get(jobId);
             return { rows: job ? [{
@@ -219,5 +224,48 @@ describe("ai-content render job boundary helpers", () => {
 
     await Promise.all([completion("job-1", 1, "lease-1"), completion("job-2", 2, "lease-2")]);
     expect(finalizerCount).toBe(1);
+    expect(lockSequences).toEqual([["job", "output"], ["job", "output"]]);
+  });
+
+  it("locks the parent generation before the render job and output on failure paths", async () => {
+    const locks: string[] = [];
+    const scope = { output_id: "output", generation_id: "generation", workspace_id: "workspace", brand_id: "brand" };
+    const client = {
+      query: async (sql: string) => {
+        const normalized = sql.replace(/\s+/g, " ").trim().toLowerCase();
+        if (normalized === "begin" || normalized === "commit" || normalized === "rollback") return { rows: [] };
+        if (normalized.includes("select output_id,generation_id,workspace_id,brand_id") && normalized.includes("ai_content_generation_render_jobs")) {
+          return { rows: [scope] };
+        }
+        if (normalized.includes("from ai_content_generations") && normalized.endsWith("for update")) {
+          locks.push("generation");
+          return { rows: [{ id: scope.generation_id }] };
+        }
+        if (normalized.includes("from ai_content_generation_render_jobs where id=$1 for update")) {
+          locks.push("job");
+          return { rows: [{
+            id: "job", ...scope, job_kind: "image_asset", asset_index: 1, status: "processing",
+            worker_id: "image-worker", lease_token: "lease", lease_expires_at: new Date(Date.now() + 60_000),
+            lease_expired: false, attempt_count: 1, max_attempts: 3,
+          }] };
+        }
+        if (normalized.includes("from ai_content_generation_outputs") && normalized.endsWith("for update")) {
+          locks.push("output");
+          return { rows: [{ id: scope.output_id }] };
+        }
+        if (normalized.startsWith("update ai_content_generation_render_jobs set status=$2")) return { rows: [] };
+        throw new Error(`unexpected query: ${normalized}`);
+      },
+      release() {},
+    };
+    const pool = { connect: async () => client };
+    const repository = createAiContentRenderJobsRepository(pool as never, async () => ({}) as never);
+
+    await repository.fail({
+      jobId: "job", workerId: "image-worker", leaseToken: "lease",
+      errorCode: "retryable_render_error", errorMessage: "retry", retryable: true,
+    });
+
+    expect(locks).toEqual(["generation", "job", "output"]);
   });
 });

@@ -15,6 +15,31 @@ function setup() {
 }
 
 describe("AI content render worker routes", () => {
+  it("authenticates a claim before returning the maintenance fence", async () => {
+    const assertAiContentWritable = vi.fn(async () => { throw new Error("ai_content_maintenance"); });
+    const claimAiContentRenderJob = vi.fn(async () => null);
+    const repository = { assertAiContentWritable, claimAiContentRenderJob } as unknown as ApiRepository;
+    const app = createServer({ repository, workerApiToken: "worker-token", logger: false });
+    const payload = { workerId: "image-worker-1", leaseSeconds: 180 };
+
+    const unauthorized = await app.inject({
+      method: "POST", url: "/worker/ai-content-render-jobs/claim", payload,
+    });
+    expect(unauthorized.statusCode).toBe(401);
+    expect(unauthorized.json()).toEqual({ error: "worker_api_unauthorized" });
+    expect(assertAiContentWritable).not.toHaveBeenCalled();
+
+    const fenced = await app.inject({
+      method: "POST", url: "/worker/ai-content-render-jobs/claim",
+      headers: { authorization: "Bearer worker-token" }, payload,
+    });
+    expect(fenced.statusCode).toBe(503);
+    expect(fenced.json()).toEqual({ error: "ai_content_maintenance" });
+    expect(assertAiContentWritable).toHaveBeenCalledTimes(1);
+    expect(claimAiContentRenderJob).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("fails deterministically when the optional render repository is not configured", async () => {
     const repository = {} as unknown as ApiRepository;
     const app = createServer({ repository, workerApiToken: "worker-token", logger: false });

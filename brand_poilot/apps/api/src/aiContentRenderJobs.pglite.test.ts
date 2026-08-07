@@ -101,15 +101,21 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
   beforeEach(async () => {
     db = await PGlite.create({ extensions: { pgcrypto } });
     await db.exec(`
-      create table ai_content_generations(id uuid primary key,workspace_id uuid,brand_id uuid,output_format text,purpose text,title text,status text,current_stage text,draft_json jsonb default '{}',analysis_json jsonb default '{}',error_code text,error_message text,created_at timestamptz default now(),updated_at timestamptz default now(),completed_at timestamptz,attachments_locked_at timestamptz,terminal_at timestamptz,retryable_until timestamptz);
+      create table ai_content_generations(id uuid primary key,workspace_id uuid,brand_id uuid,output_format text,purpose text,title text,status text,current_stage text,draft_json jsonb default '{}',analysis_json jsonb default '{}',operation_id uuid,error_code text,error_message text,created_at timestamptz default now(),updated_at timestamptz default now(),completed_at timestamptz,attachments_locked_at timestamptz,terminal_at timestamptz,retryable_until timestamptz);
       create table ai_content_generation_outputs(id uuid primary key,generation_id uuid,workspace_id uuid,brand_id uuid,output_index integer default 1,title text,status text,content_json jsonb default '{}',artifact_manifest_json jsonb default '{}',manifest_url text,failure_code text,failure_message text,downloaded_at timestamptz,created_at timestamptz default now(),updated_at timestamptz default now(),completed_at timestamptz,plan_json jsonb);
       create table ai_content_generation_input_snapshots(generation_id uuid,workspace_id uuid,brand_id uuid,input_json jsonb);
       create table ai_content_output_research_snapshots(output_id uuid unique,generation_id uuid,workspace_id uuid,brand_id uuid,evidence_json jsonb,created_at timestamptz default now());
       create table ai_content_generation_jobs(id uuid primary key,generation_id uuid,output_id uuid,workspace_id uuid,brand_id uuid,job_type text,output_format text,status text,worker_id text,lease_token uuid,lease_expires_at timestamptz,payload_json jsonb default '{}',created_at timestamptz default now());
-      create table ai_content_usage_ledger(workspace_id uuid,brand_id uuid,generation_id uuid,output_id uuid,usage_type text,quantity integer,usage_date date,idempotency_key text,unique(brand_id,idempotency_key));
+      create table ai_content_generation_operations(id uuid primary key,generation_id uuid,status text);
+      create table ai_content_usage_ledger(id uuid primary key default gen_random_uuid(),workspace_id uuid,brand_id uuid,generation_id uuid,output_id uuid,usage_type text,quantity integer,usage_date date,idempotency_key text,operation_id uuid,reservation_id uuid,reversal_of_ledger_id uuid,unique(brand_id,idempotency_key));
       create table ai_content_generation_render_jobs(id uuid primary key default gen_random_uuid(),generation_id uuid,output_id uuid,workspace_id uuid,brand_id uuid,job_kind text,asset_index integer,status text default 'queued',payload_json jsonb,result_json jsonb,attempt_count integer default 0,max_attempts integer default 3,available_at timestamptz default now(),worker_id text,lease_token uuid,lease_expires_at timestamptz,error_code text,error_message text,created_at timestamptz default now(),updated_at timestamptz default now(),completed_at timestamptz);
       create unique index render_asset_unique on ai_content_generation_render_jobs(output_id,asset_index) where job_kind='image_asset';
       create unique index render_finalize_unique on ai_content_generation_render_jobs(output_id) where job_kind='package_finalize';
+      create function transition_ai_content_generation_operation(p_operation_id uuid,p_expected_status text,p_next_status text)
+      returns text language sql as $$
+        update ai_content_generation_operations set status=p_next_status
+         where id=p_operation_id and status=p_expected_status returning status
+      $$;
     `);
     await db.query("insert into ai_content_generations(id,workspace_id,brand_id,output_format,purpose,title,status,current_stage,retryable_until) values($1,$2,$3,'card_news','informational','Tea','generating','generation',now()+interval '15 days')", [ids.generation, ids.workspace, ids.brand]);
     await db.query("insert into ai_content_generation_outputs(id,generation_id,workspace_id,brand_id,status) values($1,$2,$3,$4,'generating')", [ids.output, ids.generation, ids.workspace, ids.brand]);
@@ -129,8 +135,8 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
       await repository.completeAsset({ jobId: job!.id, workerId: "image-worker", leaseToken: job!.leaseToken, jobKind: "image_asset", asset: { index: job!.assetIndex!, url: blobAssetUrl(job!.assetIndex!), storagePath: `ai-content/${ids.brand}/${ids.generation}/${ids.output}/assets/${String(job!.assetIndex).padStart(2, "0")}.png`, mimeType: "image/png", width: 1080, height: 1080, checksum: String(index).repeat(64) } });
     }
     const failed = await repository.claim({ workerId: "image-worker", leaseSeconds: 180 });
-    await repository.fail({ jobId: failed!.id, workerId: "image-worker", leaseToken: failed!.leaseToken, errorCode: "render_failed", errorMessage: "failed", retryable: false });
-    await repository.retryFailedOutput({ workspaceId: ids.workspace, brandId: ids.brand, outputId: ids.output });
+    await repository.fail({ jobId: failed!.id, workerId: "image-worker", leaseToken: failed!.leaseToken, errorCode: "render_failed", errorMessage: "failed", retryable: true });
+    await db.query("update ai_content_generation_render_jobs set available_at=now() where id=$1", [failed!.id]);
     const retry = await repository.claim({ workerId: "image-worker", leaseSeconds: 180 });
     expect(retry?.assetIndex).toBe(failed?.assetIndex);
     await repository.completeAsset({ jobId: retry!.id, workerId: "image-worker", leaseToken: retry!.leaseToken, jobKind: "image_asset", asset: { index: retry!.assetIndex!, url: blobAssetUrl(retry!.assetIndex!), storagePath: `ai-content/${ids.brand}/${ids.generation}/${ids.output}/assets/${String(retry!.assetIndex).padStart(2, "0")}.png`, mimeType: "image/png", width: 1080, height: 1080, checksum: "b".repeat(64) } });
@@ -177,6 +183,59 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     await expect(repository.fail(failure)).resolves.toBeUndefined();
   });
 
+  it("closes a final lease-exhausted V3 render as failed and reverses its reservation", async () => {
+    const operationId = "a0000000-0000-4000-8000-000000000001";
+    const reservationId = "b0000000-0000-4000-8000-000000000001";
+    await db.query("insert into ai_content_generation_operations(id,generation_id,status) values($1,$2,'started')", [operationId, ids.generation]);
+    await db.query("update ai_content_generations set operation_id=$2 where id=$1", [ids.generation, operationId]);
+    await db.query(
+      `insert into ai_content_usage_ledger(
+         id,workspace_id,brand_id,generation_id,output_id,usage_type,quantity,usage_date,
+         idempotency_key,operation_id,reservation_id,reversal_of_ledger_id
+       ) values($1,$2,$3,$4,null,'generation',1,'2026-08-06','reservation-1',$5,$1,null)`,
+      [reservationId, ids.workspace, ids.brand, ids.generation, operationId],
+    );
+    await enqueueAiContentRenderJobs(db as never, {
+      workspaceId: ids.workspace, brandId: ids.brand, generationId: ids.generation, outputId: ids.output,
+      plan: { contractVersion: "card-news-plan.v2", content: { caption: "Tea", hashtags: [], cta: "Read" }, imagePackage: imagePackage(1) },
+      finalInput: { contractVersion: "content-generation-input.v3" } as never,
+    });
+    await db.query("update ai_content_generation_render_jobs set max_attempts=1");
+    await repository.claim({ workerId: "image-worker", leaseSeconds: 180 });
+    await db.query("update ai_content_generation_render_jobs set lease_expires_at=now()-interval '1 second'");
+
+    await expect(repository.claim({ workerId: "image-worker", leaseSeconds: 180 })).resolves.toBeNull();
+
+    expect((await db.query<{ status: string }>("select status from ai_content_generation_render_jobs")).rows[0]?.status).toBe("failed");
+    expect((await db.query<{ status: string }>("select status from ai_content_generation_outputs where id=$1", [ids.output])).rows[0]?.status).toBe("failed");
+    expect((await db.query<{ status: string }>("select status from ai_content_generations where id=$1", [ids.generation])).rows[0]?.status).toBe("failed");
+    expect((await db.query<{ status: string }>("select status from ai_content_generation_operations where id=$1", [operationId])).rows[0]?.status).toBe("reversed");
+    expect((await db.query<{ usage_type: string; quantity: number }>("select usage_type,quantity from ai_content_usage_ledger order by quantity desc")).rows)
+      .toEqual([{ usage_type: "generation", quantity: 1 }, { usage_type: "reversal", quantity: -1 }]);
+  });
+
+  it("rolls back final lease exhaustion when its reservation graph cannot be reversed", async () => {
+    const operationId = "a0000000-0000-4000-8000-000000000002";
+    await db.query("insert into ai_content_generation_operations(id,generation_id,status) values($1,$2,'started')", [operationId, ids.generation]);
+    await db.query("update ai_content_generations set operation_id=$2 where id=$1", [ids.generation, operationId]);
+    await enqueueAiContentRenderJobs(db as never, {
+      workspaceId: ids.workspace, brandId: ids.brand, generationId: ids.generation, outputId: ids.output,
+      plan: { contractVersion: "card-news-plan.v2", content: { caption: "Tea", hashtags: [], cta: "Read" }, imagePackage: imagePackage(1) },
+      finalInput: { contractVersion: "content-generation-input.v3" } as never,
+    });
+    await db.query("update ai_content_generation_render_jobs set max_attempts=1");
+    await repository.claim({ workerId: "image-worker", leaseSeconds: 180 });
+    await db.query("update ai_content_generation_render_jobs set lease_expires_at=now()-interval '1 second'");
+
+    await expect(repository.claim({ workerId: "image-worker", leaseSeconds: 180 }))
+      .rejects.toThrow("ai_content_generation_reservation_missing");
+
+    expect((await db.query<{ status: string }>("select status from ai_content_generation_render_jobs")).rows[0]?.status).toBe("processing");
+    expect((await db.query<{ status: string }>("select status from ai_content_generation_outputs where id=$1", [ids.output])).rows[0]?.status).toBe("generating");
+    expect((await db.query<{ status: string }>("select status from ai_content_generations where id=$1", [ids.generation])).rows[0]?.status).toBe("generating");
+    expect((await db.query<{ status: string }>("select status from ai_content_generation_operations where id=$1", [operationId])).rows[0]?.status).toBe("started");
+  });
+
   it("requires final manifest PNG assets to match each successful render result in asset order", async () => {
     const input = finalInput();
     const plan = { contractVersion: "card-news-plan.v2" as const, content: { caption: "Tea", hashtags: [], cta: "Read" }, imagePackage: imagePackage() };
@@ -190,10 +249,12 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     const rendered: AiContentRenderedAsset[] = [];
     for (let index = 1; index <= 3; index += 1) {
       const job = await repository.claim({ workerId: "image-worker", leaseSeconds: 180 });
-      const asset = { index, url: blobAssetUrl(index), storagePath: `ai-content/${ids.brand}/${ids.generation}/${ids.output}/assets/0${index}.png`, mimeType: "image/png" as const, width: 1080, height: 1080, checksum: String(index).repeat(64) };
+      const assetIndex = job!.assetIndex!;
+      const asset = { index: assetIndex, url: blobAssetUrl(assetIndex), storagePath: `ai-content/${ids.brand}/${ids.generation}/${ids.output}/assets/${String(assetIndex).padStart(2, "0")}.png`, mimeType: "image/png" as const, width: 1080, height: 1080, checksum: String(assetIndex).repeat(64) };
       await repository.completeAsset({ jobId: job!.id, workerId: "image-worker", leaseToken: job!.leaseToken, jobKind: "image_asset", asset });
       rendered.push(asset);
     }
+    rendered.sort((left, right) => left.index - right.index);
     const finalizer = await repository.claim({ workerId: "finalizer", leaseSeconds: 180 });
     const manifest = {
       version: "ai-content.v3" as const, purpose: "informational" as const, outputFormat: "card_news" as const,
@@ -329,10 +390,12 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     const rendered: AiContentRenderedAsset[] = [];
     for (let index = 1; index <= 2; index += 1) {
       const job = await repository.claim({ workerId: "image-worker", leaseSeconds: 180 });
-      const asset = { index, url: blobAssetUrl(index), storagePath: `ai-content/${ids.brand}/${ids.generation}/${ids.output}/assets/0${index}.png`, mimeType: "image/png" as const, width: 1080, height: 1080, checksum: String(index).repeat(64) };
+      const assetIndex = job!.assetIndex!;
+      const asset = { index: assetIndex, url: blobAssetUrl(assetIndex), storagePath: `ai-content/${ids.brand}/${ids.generation}/${ids.output}/assets/${String(assetIndex).padStart(2, "0")}.png`, mimeType: "image/png" as const, width: 1080, height: 1080, checksum: String(assetIndex).repeat(64) };
       await repository.completeAsset({ jobId: job!.id, workerId: "image-worker", leaseToken: job!.leaseToken, jobKind: "image_asset", asset });
       rendered.push(asset);
     }
+    rendered.sort((left, right) => left.index - right.index);
     const finalizer = await repository.claim({ workerId: "blog-finalizer", leaseSeconds: 180 });
     const manifestAssets = [
       { role: "html" as const, index: 1, url: blobHtmlUrl, fileName: "article.html", mimeType: "text/html" as const },
@@ -371,10 +434,12 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     const rendered: AiContentRenderedAsset[] = [];
     for (let index = 1; index <= 2; index += 1) {
       const job = await repository.claim({ workerId: "image-worker", leaseSeconds: 180 });
-      const asset = { index, url: blobAssetUrl(index), storagePath: `ai-content/${ids.brand}/${ids.generation}/${ids.output}/assets/0${index}.png`, mimeType: "image/png" as const, width: 1080, height: 1920, checksum: String(index).repeat(64) };
+      const assetIndex = job!.assetIndex!;
+      const asset = { index: assetIndex, url: blobAssetUrl(assetIndex), storagePath: `ai-content/${ids.brand}/${ids.generation}/${ids.output}/assets/${String(assetIndex).padStart(2, "0")}.png`, mimeType: "image/png" as const, width: 1080, height: 1920, checksum: String(assetIndex).repeat(64) };
       await repository.completeAsset({ jobId: job!.id, workerId: "image-worker", leaseToken: job!.leaseToken, jobKind: "image_asset", asset });
       rendered.push(asset);
     }
+    rendered.sort((left, right) => left.index - right.index);
     const finalizer = await repository.claim({ workerId: "reel-finalizer", leaseSeconds: 180 });
     const video = { role: "video" as const, index: 1, url: blobVideoUrl, fileName: "reel.mp4", mimeType: "video/mp4" as const, width: 1080, height: 1920, durationSeconds: 8, videoCodec: "h264" as const, fps: 30 as const, audioCodec: null };
     const complete = (videoUrl: string) => repository.completePackage({

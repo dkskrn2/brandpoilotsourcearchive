@@ -280,7 +280,9 @@ function source() {
       brandId: ids.brand,
       composedInput: composed,
       researchEvidenceSetSha256: evidenceSetSha256,
+      researchEvidenceSetHashMatches: true,
       composedInputSha256,
+      composedInputHashMatches: true,
       finalInvocationAggregateSha256,
     },
     successfulAttempt: {
@@ -423,6 +425,8 @@ describe("assembleAiContentFixedInput", () => {
     ["reference mismatch", (value: any) => { value.references[0].snapshot.snapshotId = "20000000-0000-4000-8000-000000000003"; }],
     ["attachment mismatch", (value: any) => { value.attachments[0].status = "uploaded"; }],
     ["proposal contract mismatch", (value: any) => { value.proposalJob.proposalPromptVersion = "proposal.writer.v1"; }],
+    ["research evidence DB hash mismatch", (value: any) => { value.composition.researchEvidenceSetHashMatches = false; }],
+    ["composed input DB hash mismatch", (value: any) => { value.composition.composedInputHashMatches = false; }],
     ["composed hash mismatch", (value: any) => { value.composition.composedInputSha256 = "f".repeat(64); }],
     ["brand rules content mutation", (value: any) => { value.approvedBrandRules.content.requiredPhrases[0] = "부정확한 정보"; }],
     ["brand rules hash mutation", (value: any) => { value.approvedBrandRules.contentSha256 = "f".repeat(64); }],

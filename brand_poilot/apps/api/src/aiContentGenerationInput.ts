@@ -1,7 +1,6 @@
 import type {
   AiContentAttachmentRecord,
   AiContentBrandContextRecord,
-  AiContentGenerationRecord,
   AiContentReferenceRecord,
 } from "./aiContentRepository.js";
 import type {
@@ -73,7 +72,12 @@ export interface ContentGenerationInputDependencies {
   getAttachments(input: SubjectBrandScope & { generationId: string }): Promise<AiContentAttachmentRecord[]>;
 }
 
-export interface ContentGenerationInputGeneration extends Pick<AiContentGenerationRecord, "id" | "workspaceId" | "brandId" | "type" | "draft"> {
+export interface ContentGenerationInputGeneration {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  type: AiContentType;
+  draft: Record<string, unknown>;
   subjectAnalysisSnapshot?: unknown;
 }
 

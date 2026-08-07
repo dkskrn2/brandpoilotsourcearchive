@@ -15,7 +15,6 @@ import { normalizeInstagramHashtag } from "./instagramTrend.js";
 import { StoryCapabilityRequiredError } from "./repository.js";
 import type { ApiRepository, BrandProfileInput, Channel, DmAttentionType, DmConversationFilter, InstagramDeliveryFormat, InstagramFormatSettingsInput, InstagramTrendMediaTypeFilter, InstagramTrendPageDto, InstagramTrendSort, SourceType, SubjectAnalysisRepositoryV2, SupportRequestCategory, SupportRequestStatus } from "./types.js";
 import type { AiContentAttachmentLifecycleRepository } from "./aiContentAttachmentRepository.js";
-import type { AiContentCopyField } from "./aiContentRepository.js";
 import {
   runAiContentAttachmentGc,
   type DeleteAiContentAttachmentBlob,
@@ -45,9 +44,7 @@ import {
   parseV3AttachmentUploadTokenInput,
   type AiContentType,
   type CompleteAiContentJobInput,
-  type ContentChannelTarget,
   type ContentOutputFormatV2,
-  type ContentProposalRequestV1,
   type FailAiContentJobInput,
 } from "./aiContentContracts.js";
 import { parseAiContentPublishRequest } from "./aiContentPublishTargets.js";
@@ -336,45 +333,6 @@ function assertExactAiContentWorkerBody(value: Record<string, unknown>, allowed:
   if (Object.keys(value).some((key) => !allowed.includes(key))) throw new Error(code);
 }
 
-const aiContentCopyFields = new Set<AiContentCopyField>([
-  "hook",
-  "keyMessage",
-  "body",
-  "cta",
-  "caption",
-  "hashtags",
-]);
-
-function parseAiContentCopyInput(value: unknown): {
-  fields: Partial<Record<AiContentCopyField, string | string[]>>;
-  idempotencyKey: string;
-} {
-  if (!isObject(value) || !isObject(value.fields)) throw new Error("ai_content_copy_input_invalid");
-  const idempotencyKey = requiredAiContentField(
-    value.idempotencyKey,
-    "ai_content_idempotency_key_invalid",
-    200,
-  );
-  const entries = Object.entries(value.fields);
-  if (!entries.length || entries.some(([field]) => !aiContentCopyFields.has(field as AiContentCopyField))) {
-    throw new Error("ai_content_copy_fields_invalid");
-  }
-  const fields: Partial<Record<AiContentCopyField, string | string[]>> = {};
-  for (const [field, raw] of entries) {
-    if (field === "hashtags") {
-      if (!Array.isArray(raw) || raw.length > 30
-        || raw.some((tag) => typeof tag !== "string" || tag.length > 100)) {
-        throw new Error("ai_content_copy_fields_invalid");
-      }
-      fields.hashtags = raw;
-    } else {
-      if (typeof raw !== "string" || raw.length > 20_000) throw new Error("ai_content_copy_fields_invalid");
-      fields[field as Exclude<AiContentCopyField, "hashtags">] = raw;
-    }
-  }
-  return { fields, idempotencyKey };
-}
-
 function parseAiContentBrandId(value: string) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
     throw new Error("ai_content_brand_id_invalid");
@@ -385,45 +343,6 @@ function parseAiContentBrandId(value: string) {
 function parseAiContentUuid(value: unknown, code: string): string {
   if (typeof value !== "string" || !uuidPattern.test(value)) throw new Error(code);
   return value.toLowerCase();
-}
-
-const contentChannelTargets: readonly ContentChannelTarget[] = [
-  "instagram",
-  "threads",
-  "x",
-  "linkedin",
-  "youtube",
-  "tiktok",
-  "blog_export",
-];
-
-function parseContentProposalRequest(value: unknown): ContentProposalRequestV1 {
-  if (!isObject(value)) throw new Error("ai_content_proposal_request_invalid");
-  if (value.contractVersion !== "content-proposal-request.v1"
-    || !["informational", "marketing"].includes(String(value.contentFamily))
-    || !isObject(value.subjectInput)
-    || !Array.isArray(value.channelTargets)
-    || value.channelTargets.length === 0
-    || value.channelTargets.some((item) => !contentChannelTargets.includes(item as ContentChannelTarget))
-    || new Set(value.channelTargets).size !== value.channelTargets.length
-    || !Array.isArray(value.outputFormats)
-    || value.outputFormats.length === 0
-    || value.outputFormats.some((item) => !["card_news", "blog", "single_image", "channel_text"].includes(String(item)))
-    || !Array.isArray(value.sourceSnapshotIds)
-    || value.sourceSnapshotIds.some((id) => typeof id !== "string" || !uuidPattern.test(id))
-    || !Array.isArray(value.performanceSnapshotIds)
-    || value.performanceSnapshotIds.some((id) => typeof id !== "string" || !uuidPattern.test(id))) {
-    throw new Error("ai_content_proposal_request_invalid");
-  }
-  return {
-    contractVersion: "content-proposal-request.v1",
-    contentFamily: value.contentFamily as ContentProposalRequestV1["contentFamily"],
-    subjectInput: value.subjectInput,
-    channelTargets: value.channelTargets as ContentChannelTarget[],
-    outputFormats: value.outputFormats as ContentProposalRequestV1["outputFormats"],
-    sourceSnapshotIds: value.sourceSnapshotIds.map((id) => String(id).toLowerCase()),
-    performanceSnapshotIds: value.performanceSnapshotIds.map((id) => String(id).toLowerCase()),
-  };
 }
 
 async function validateAiContentLifecycleBrand(request: FastifyRequest) {
@@ -1301,6 +1220,8 @@ export function createServer(
   app.addHook("preHandler", async (request, reply) => {
     const route = request.routeOptions.url ?? "";
     const method = request.method.toUpperCase();
+    const aiContentWorkerMutation = ["POST", "PUT", "PATCH", "DELETE"].includes(method)
+      && route.startsWith("/worker/ai-content-");
     const aiContentMutation = (
       (["POST", "PUT", "PATCH", "DELETE"].includes(method) && route.includes("/ai-content"))
       || (method === "POST" && route === "/brands/:brandId/content-generation/run")
@@ -1310,8 +1231,10 @@ export function createServer(
         route === "/brands/:brandId/ai-content/outputs/:outputId/download"
         || route === "/brands/:brandId/ai-content/generations/:generationId/download"
       ))
-      || (["POST", "PUT", "PATCH", "DELETE"].includes(method) && route.startsWith("/worker/ai-content-"))
+      || aiContentWorkerMutation
     );
+    if (aiContentWorkerMutation
+      && !authenticateAiContentWorker(request.headers.authorization, reply)) return reply;
     if (maintenanceRepository.assertAiContentWritable
       && aiContentMutation) {
       await maintenanceRepository.assertAiContentWritable();
@@ -3169,15 +3092,6 @@ export function createServer(
         ...retry,
       });
     },
-  );
-
-  app.put<{ Params: { brandId: string; outputId: string }; Body: unknown }>(
-    "/brands/:brandId/ai-content/outputs/:outputId/copy",
-    async (request) => repository.saveAiContentOutputCopy({
-      ...aiContentScope(request, request.params.brandId),
-      outputId: request.params.outputId,
-      ...parseAiContentCopyInput(request.body),
-    }),
   );
 
   app.get<{ Params: { brandId: string; outputId: string } }>(

@@ -13,7 +13,6 @@ function generationWith(output: AiGenerationOutput): AiContentGeneration {
     status: "completed",
     currentStep: 5,
     draft: {
-      type: "marketing",
       subjectType: null,
       subjectInput: { sourceUrl: "", name: "", promotion: "", description: "" },
       subjectAnalysisId: null,

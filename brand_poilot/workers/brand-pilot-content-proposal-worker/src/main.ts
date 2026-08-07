@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { contentWorkerPollObservation } from "@brand-pilot/worker-runtime";
 import { createCodexContentProposalModel } from "./codexModel.js";
 import { createContentProposalApiClient } from "./client.js";
 import {
@@ -93,7 +94,7 @@ async function main(): Promise<void> {
             pollMs,
             signal: controller.signal,
             onError: (error) => {
-              process.stderr.write(`${error.message}\n`);
+              process.stderr.write(`${JSON.stringify(contentWorkerPollObservation(error))}\n`);
             },
           });
       process.stdout.write(`${JSON.stringify(result)}\n`);

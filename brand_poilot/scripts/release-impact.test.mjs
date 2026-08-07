@@ -148,6 +148,24 @@ test("three-format cutover profile fails closed without selecting unrelated imag
   assert.deepEqual(impact.unknownPaths, ["brand_poilot/workers/brand-pilot-dm-worker/src/worker.ts"]);
 });
 
+test("three-format cutover maps every production cutover artifact without widening unrelated workers", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/scripts/ai-content-cutover-evidence.mjs",
+    "brand_poilot/scripts/ai-content-cutover-floor-probe.mjs",
+    "brand_poilot/scripts/ai-content-database-catalog.mjs",
+    "brand_poilot/scripts/ai-content-provider-artifacts.mjs",
+    "brand_poilot/scripts/collect-ai-content-prepare-evidence.mjs",
+    "brand_poilot/deploy/scripts/collect-ai-content-backend-evidence.sh",
+    "brand_poilot/deploy/scripts/rollout-ai-content-cutover.sh",
+    "brand_poilot/scripts/three-format-cutover-static-check.mjs",
+  ], { profile: "ai-content-three-format-cutover" });
+
+  assert.deepEqual(enabled(impact), ["api"]);
+  assert.equal(impact.deployBundleChanged, true);
+  assert.equal(impact.verifiedScope, true);
+  assert.deepEqual(impact.unknownPaths, []);
+});
+
 test("CLI includes deleted marketing paths and maps retirement only to reel and deploy", () => {
   const directory = mkdtempSync(join(tmpdir(), "brand-pilot-impact-deletion-"));
   try {

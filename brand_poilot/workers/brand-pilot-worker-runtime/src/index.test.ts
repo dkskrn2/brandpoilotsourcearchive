@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  contentWorkerApiError,
+  contentWorkerPollDelayMs,
+  contentWorkerPollObservation,
   isRetryableContentWorkerError,
   runShellCommandWithTimeout,
   terminateProcessTree,
@@ -142,5 +145,48 @@ describe("worker runtime process helpers", () => {
     expect(isRetryableContentWorkerError(new Error("card_news_content_invalid"))).toBe(false);
     expect(isRetryableContentWorkerError(new Error("card_news_output_id_required"))).toBe(false);
     expect(isRetryableContentWorkerError(new Error("codex_card_news_failed:1"))).toBe(true);
+  });
+
+  it("preserves only the exact maintenance code from a 503 response", async () => {
+    const maintenance = await contentWorkerApiError(new Response(
+      JSON.stringify({ error: "ai_content_maintenance" }),
+      { status: 503, headers: { "content-type": "application/json" } },
+    ));
+    const ordinary503 = await contentWorkerApiError(new Response(
+      JSON.stringify({ error: "upstream included SECRET_DETAIL" }),
+      { status: 503, headers: { "content-type": "application/json" } },
+    ));
+
+    expect(maintenance.message).toBe("worker_api_failed:503:ai_content_maintenance");
+    expect(ordinary503.message).toBe("worker_api_failed:503");
+  });
+
+  it("emits non-secret poll observations that distinguish maintenance from other errors", () => {
+    expect(contentWorkerPollObservation(
+      new Error("worker_api_failed:503:ai_content_maintenance"),
+    )).toEqual({
+      event: "content_worker_poll_error",
+      classification: "maintenance",
+      errorCode: "ai_content_maintenance",
+      nextAction: "poll_after_delay",
+    });
+    const ordinary = contentWorkerPollObservation(
+      new Error("fetch failed for https://api.example/?token=SECRET_TOKEN"),
+    );
+    expect(ordinary).toEqual({
+      event: "content_worker_poll_error",
+      classification: "transient_error",
+      errorCode: "content_worker_poll_failed",
+      nextAction: "poll_after_delay",
+    });
+    expect(JSON.stringify(ordinary)).not.toContain("SECRET_TOKEN");
+  });
+
+  it("keeps poll delays bounded away from a tight loop when configuration is invalid", () => {
+    expect(contentWorkerPollDelayMs(undefined, 10_000)).toBe(10_000);
+    expect(contentWorkerPollDelayMs("not-a-number", 10_000)).toBe(10_000);
+    expect(contentWorkerPollDelayMs(0, 10_000)).toBe(1_000);
+    expect(contentWorkerPollDelayMs(-50, 10_000)).toBe(1_000);
+    expect(contentWorkerPollDelayMs("2500", 10_000)).toBe(2_500);
   });
 });

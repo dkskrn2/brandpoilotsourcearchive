@@ -920,6 +920,9 @@ function deriveExpectedFinalFenceSecurityCatalog(interimCanonicalJson, schemaOwn
         ...(row.relationName === "ai_content_cutovers"
           ? [{ grantee: schemaOwnerRoleName, privilege: "REFERENCES", grantable: false }]
           : []),
+        ...(row.relationName === "ai_content_bootstrap_state"
+          ? [{ grantee: schemaOwnerRoleName, privilege: "SELECT", grantable: false }]
+          : []),
       ]),
     })),
   };
@@ -1064,7 +1067,8 @@ const fenceSecurityFunctions = Object.freeze([
   { identity: "public.enforce_ai_content_write_fence()", securityDefiner: true, config: ["search_path=pg_catalog,public"] },
   { identity: "public.forbid_ai_content_cutover_event_mutation()", securityDefiner: false, config: ["search_path=pg_catalog,public"] },
   { identity: "public.lock_ai_content_cutover_transaction_state(uuid)", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "migration" },
-  { identity: "public.prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamp with time zone,text,text,jsonb,text,text,text)", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "operator" },
+  { identity: "public.prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamp with time zone,text,text,jsonb,text,text,text,text)", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "operator" },
+  { identity: "public.read_ai_content_cutover_control_state(uuid)", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "operator" },
   { identity: "public.read_ai_content_cutover_migration_body_evidence(uuid)", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "migration" },
   { identity: "public.register_ai_content_075_fence_relations()", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "migration", executeAlso: "schemaOwner" },
   { identity: "public.set_ai_content_maintenance(uuid,boolean)", securityDefiner: true, config: ["search_path=pg_catalog,public"], execute: "operator" },
@@ -1091,34 +1095,36 @@ const tableOwnerPrivileges = Object.freeze(["DELETE", "INSERT", "REFERENCES", "S
 export const cutover075RelationSecurityCatalog = Object.freeze([
   { relationName: "ai_content_cutover_release_adoption_events", owner: "provider", grants: [{ role: "operator", privileges: ["SELECT"] }] },
   { relationName: "ai_content_cutover_release_adoptions", owner: "provider", grants: [{ role: "operator", privileges: ["SELECT"] }] },
-  { relationName: "ai_content_generation_operations", owner: "schemaOwner", grants: [{ role: "application", privileges: ["INSERT", "SELECT"] }] },
+  { relationName: "ai_content_generation_operations", owner: "schemaOwner", grants: [{ role: "application", privileges: ["INSERT", "SELECT", "UPDATE"] }] },
   { relationName: "ai_content_generation_prompt_bindings", owner: "schemaOwner", grants: [{ role: "application", privileges: ["SELECT"] }] },
   { relationName: "ai_content_proposal_attempt_events", owner: "schemaOwner", grants: [{ role: "application", privileges: ["SELECT"] }] },
   { relationName: "ai_content_proposal_compositions", owner: "schemaOwner", grants: [{ role: "application", privileges: ["INSERT", "SELECT"] }] },
   { relationName: "ai_content_proposal_job_contracts", owner: "schemaOwner", grants: [{ role: "application", privileges: ["INSERT", "SELECT"] }] },
-  { relationName: "ai_content_proposal_model_attempts", owner: "schemaOwner", grants: [{ role: "application", privileges: ["INSERT", "SELECT"] }] },
+  { relationName: "ai_content_proposal_model_attempts", owner: "schemaOwner", grants: [{ role: "application", privileges: ["INSERT", "SELECT", "UPDATE"] }] },
   { relationName: "ai_content_proposal_performance_audits", owner: "schemaOwner", grants: [{ role: "application", privileges: ["INSERT", "SELECT"] }] },
   { relationName: "ai_content_proposal_research_attempt_events", owner: "schemaOwner", grants: [{ role: "application", privileges: ["SELECT"] }] },
-  { relationName: "ai_content_proposal_research_attempts", owner: "schemaOwner", grants: [{ role: "application", privileges: ["INSERT", "SELECT"] }] },
+  { relationName: "ai_content_proposal_research_attempts", owner: "schemaOwner", grants: [{ role: "application", privileges: ["INSERT", "SELECT", "UPDATE"] }] },
   { relationName: "ai_content_storage_cleanup_outbox", owner: "provider", grants: [{ role: "cleanup", privileges: ["SELECT"] }] },
   { relationName: "automated_content_proposal_runs", owner: "schemaOwner", grants: [{ role: "application", privileges: ["INSERT", "SELECT"] }] },
 ].map(Object.freeze));
 
 const post075Function = (identity, {
   securityDefiner = true, owner = "schemaOwner", execute = [], returnType = "pg_catalog.trigger", returnSet = false,
-  language = "plpgsql", volatility = "v", strict = false,
+  language = "plpgsql", volatility = "v", strict = false, config = ["search_path=pg_catalog,public,pg_temp"],
 } = {}) => Object.freeze({
   identity, securityDefiner, owner, execute: Object.freeze(execute),
   language, kind: "f", volatility, parallel: "u", leakproof: false, strict,
   returnType, returnSet,
-  config: Object.freeze(["search_path=pg_catalog,public,pg_temp"]),
+  config: Object.freeze(config),
 });
 export const cutover075SecurityFunctions = Object.freeze([
   post075Function("public.reject_ai_content_cutover_record_mutation()", { securityDefiner: false, owner: "provider" }),
   post075Function("public.enforce_ai_content_generation_operation_identity()"),
   post075Function("public.require_ai_content_generation_operation_on_insert()", { securityDefiner: false }),
   post075Function("public.freeze_ai_content_generation_operation_identity()", { securityDefiner: false }),
-  post075Function("public.transition_ai_content_generation_operation(uuid,text,text)", { execute: ["application"], returnType: "public.ai_content_generation_operations" }),
+  post075Function("public.transition_ai_content_generation_operation(uuid,text,text)", {
+    execute: ["application"], returnType: "public.ai_content_generation_operations",
+  }),
   post075Function("public.freeze_automated_content_proposal_run_identity()", { securityDefiner: false }),
   post075Function("public.transition_automated_content_proposal_run(uuid,text,text,uuid,uuid,uuid,text,text)", { execute: ["application"], returnType: "public.automated_content_proposal_runs" }),
   post075Function("public.enforce_ai_content_proposal_research_attempt_contract()"),
@@ -1130,9 +1136,14 @@ export const cutover075SecurityFunctions = Object.freeze([
   }),
   post075Function("public.enforce_ai_content_proposal_model_attempt_contract()"),
   post075Function("public.append_ai_content_proposal_attempt_event(uuid,uuid,integer,integer,text,text,text,text,text,text,text,text,boolean)", { execute: ["application"], returnType: "pg_catalog.text" }),
+  post075Function("public.select_ai_content_proposal(uuid,uuid,uuid,uuid)", {
+    securityDefiner: false, execute: ["application"], returnType: "pg_catalog.uuid",
+  }),
   post075Function("public.enforce_ai_content_proposal_success_event()"),
   post075Function("public.enforce_ai_content_prompt_binding_source()"),
-  post075Function("public.create_ai_content_generation_prompt_binding(uuid,uuid,uuid,uuid,uuid,uuid,uuid,jsonb)", { execute: ["application"], returnType: "pg_catalog.uuid" }),
+  post075Function("public.create_ai_content_generation_prompt_binding(uuid,uuid,uuid,uuid,uuid,uuid,uuid,jsonb)", {
+    execute: ["application"], returnType: "pg_catalog.uuid",
+  }),
   post075Function("public.freeze_topic_upload_operation_identity()", { securityDefiner: false }),
   post075Function("public.create_ai_content_cutover_topic_upload(uuid,uuid,uuid,text,text,jsonb)", { execute: ["application"], returnType: "pg_catalog.record", returnSet: true }),
   post075Function("public.enforce_ai_content_usage_reversal_identity()", { securityDefiner: false }),
@@ -1143,14 +1154,18 @@ export const cutover075SecurityFunctions = Object.freeze([
   post075Function("public.complete_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)", { owner: "provider", execute: ["cleanup"], returnType: "public.ai_content_storage_cleanup_outbox" }),
   post075Function("public.fail_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)", { owner: "provider", execute: ["cleanup"], returnType: "public.ai_content_storage_cleanup_outbox" }),
   post075Function("public.is_ai_content_storage_path_protected(uuid,text)", { owner: "provider", execute: ["application"], returnType: "pg_catalog.bool" }),
+  post075Function("public.lock_ai_content_fixed_input_sources(uuid,uuid,uuid,uuid,uuid,uuid[],uuid[])", {
+    owner: "provider", execute: ["application"], returnType: "pg_catalog.bool",
+    config: ["search_path=pg_catalog,public"],
+  }),
   post075Function("public.ai_content_generation_input_v3_is_valid(jsonb)", {
-    securityDefiner: false, language: "sql", volatility: "i", returnType: "pg_catalog.bool",
+    securityDefiner: false, execute: ["application"], language: "sql", volatility: "i", returnType: "pg_catalog.bool",
   }),
   post075Function("public.ai_content_plan_v2_is_valid(jsonb)", {
-    securityDefiner: false, language: "sql", volatility: "i", returnType: "pg_catalog.bool",
+    securityDefiner: false, execute: ["application"], language: "sql", volatility: "i", returnType: "pg_catalog.bool",
   }),
   post075Function("public.ai_content_manifest_v3_is_valid(jsonb)", {
-    securityDefiner: false, language: "sql", volatility: "i", returnType: "pg_catalog.bool",
+    securityDefiner: false, execute: ["application"], language: "sql", volatility: "i", returnType: "pg_catalog.bool",
   }),
   post075Function("public.enforce_ai_content_three_format_identity()", { securityDefiner: false }),
   post075Function("public.ai_content_cutover_storage_value_to_path(text)", {
@@ -1580,13 +1595,19 @@ export async function readFenceSecurityCatalog(client, names, {
   );
   if (controlResult.rows.length !== fenceControlRelations.length) throw new Error("bootstrap_074_fence_security_control_mismatch");
   for (const row of controlResult.rows) {
-    const extra = row.relation_name === "ai_content_cutovers" && ownerRoleName !== names.schemaOwnerRoleName
-      ? [{ grantee: names.schemaOwnerRoleName, privilege: "REFERENCES", grantable: false }]
-      : row.relation_name === "ai_content_maintenance_state"
-      ? [{ grantee: names.applicationRoleName, privilege: "SELECT", grantable: false }]
-      : ["ai_content_bootstrap_state", "ai_content_ddl_allowlist", "ai_content_write_fence_catalog"].includes(row.relation_name)
-        ? [{ grantee: names.migrationRoleName, privilege: "SELECT", grantable: false }]
-        : [];
+    const extra = [];
+    if (row.relation_name === "ai_content_cutovers" && ownerRoleName !== names.schemaOwnerRoleName) {
+      extra.push({ grantee: names.schemaOwnerRoleName, privilege: "REFERENCES", grantable: false });
+    }
+    if (row.relation_name === "ai_content_maintenance_state") {
+      extra.push({ grantee: names.applicationRoleName, privilege: "SELECT", grantable: false });
+    }
+    if (["ai_content_bootstrap_state", "ai_content_ddl_allowlist", "ai_content_write_fence_catalog"].includes(row.relation_name)) {
+      extra.push({ grantee: names.migrationRoleName, privilege: "SELECT", grantable: false });
+    }
+    if (row.relation_name === "ai_content_bootstrap_state" && ownerRoleName !== names.schemaOwnerRoleName) {
+      extra.push({ grantee: names.schemaOwnerRoleName, privilege: "SELECT", grantable: false });
+    }
     const ownerAcl = tableOwnerPrivileges.map((privilege) => ({ grantee: ownerRoleName, privilege, grantable: false }));
     const actualAcl = normalizeAcl(row.acl).filter((item) => !(
       item.grantee === ownerRoleName && item.privilege === "MAINTAIN"
@@ -3120,18 +3141,6 @@ export async function loadMigrations(directory = defaultMigrationDirectory) {
   }));
 }
 
-function validateBootstrap074PrerequisiteRoles(value) {
-  const requiredKeys = ["applicationRoleName", "cleanupRoleName", "migrationRoleName",
-    "operatorRoleName", "schemaOwnerRoleName"];
-  if (!value || typeof value !== "object" || Array.isArray(value)
-    || Object.keys(value).sort().join("|") !== requiredKeys.sort().join("|")
-    || requiredKeys.some((key) => !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(value[key] ?? ""))
-    || new Set(requiredKeys.map((key) => value[key])).size !== requiredKeys.length) {
-    throw new Error("bootstrap_074_prerequisite_roles_invalid");
-  }
-  return value;
-}
-
 async function assertBootstrapSessionEnvironment(client, names, { afterSetRole = false } = {}) {
   const result = await client.query(
     `/* bootstrap_session_environment_v1 */
@@ -3147,37 +3156,35 @@ async function assertBootstrapSessionEnvironment(client, names, { afterSetRole =
   }
 }
 
-async function readLegacyTriggerSearchPathOwner(client, prerequisiteRoles) {
-  const roles = validateBootstrap074PrerequisiteRoles(prerequisiteRoles);
+function validateBootstrap074PrerequisiteProviderRoleName(value) {
+  if (typeof value !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(value)) {
+    throw new Error("bootstrap_074_prerequisite_provider_role_invalid");
+  }
+  return value;
+}
+
+async function readLegacyTriggerSearchPathProviderOwner(client, providerRoleName) {
+  const expectedProviderRoleName = validateBootstrap074PrerequisiteProviderRoleName(providerRoleName);
   const result = await client.query(
-    `/* legacy_trigger_search_path_owner_v2 */
+    `/* legacy_trigger_search_path_provider_owner_v1 */
      select min(owner.rolname::text) as owner_role_name,
             count(function.oid)::integer as function_count,
             count(distinct owner.rolname)::integer as owner_count,
-            session_user::text as session_user_name,current_user::text as current_user_name,
-            pg_has_role(session_user,$2::name,'SET') as can_set_schema_owner,
-            exists (
-              select 1 from pg_auth_members membership
-               where membership.member=(select oid from pg_roles where rolname=$3::name)
-                 and membership.roleid=(select oid from pg_roles where rolname=$2::name)
-                 and membership.set_option and not membership.inherit_option and not membership.admin_option
-            ) as has_exact_set_membership
+            session_user::text as session_user_name,current_user::text as current_user_name
        from unnest($1::text[]) requested(identity)
        left join pg_proc function on function.oid=to_regprocedure(requested.identity)
        left join pg_roles owner on owner.oid=function.proowner`,
-    [legacyTriggerSearchPathFunctionIdentities, roles.schemaOwnerRoleName, roles.migrationRoleName],
+    [legacyTriggerSearchPathFunctionIdentities],
   );
   const owner = result.rows[0];
   if (!owner || Number(owner.function_count) !== legacyTriggerSearchPathFunctionIdentities.length
     || Number(owner.owner_count) !== 1
-    || owner.owner_role_name !== roles.schemaOwnerRoleName
-    || owner.session_user_name !== roles.migrationRoleName
-    || owner.current_user_name !== roles.migrationRoleName
-    || owner.can_set_schema_owner !== true
-    || owner.has_exact_set_membership !== true) {
-    throw new Error("legacy_trigger_search_path_owner_invalid");
+    || owner.owner_role_name !== expectedProviderRoleName
+    || owner.session_user_name !== expectedProviderRoleName
+    || owner.current_user_name !== expectedProviderRoleName) {
+    throw new Error("legacy_trigger_search_path_provider_owner_invalid");
   }
-  return roles.schemaOwnerRoleName;
+  return expectedProviderRoleName;
 }
 
 async function hasExistingApplicationSchema(client) {
@@ -3684,10 +3691,12 @@ export async function executeAtomicCutoverMigration({ client, migration, cutover
       client, migration, cutover: authoritativeCutover, cutover075Applied: true,
     });
     const bodyEvidence = buildCutoverBodyEvidence(migration, verifiedPostCutover);
+    await client.query(`set local role ${quoteIdentifier(authoritativeCutover.schemaOwnerRoleName)}`);
     await client.query(
       "insert into schema_migrations (id, checksum) values ($1, $2)",
       [migration.id, migration.checksum],
     );
+    await client.query("reset role");
     const transition = await client.query(
       `select transition_ai_content_cutover_status(
         $1,'maintenance_verified','migration_body_complete',$2,null,null,null,null,$3
@@ -3812,12 +3821,17 @@ export async function runMigrationsWithClient({
   bootstrap074,
   bootstrap074Prerequisite,
   bootstrap074PrerequisiteMode = false,
+  bootstrap074PrerequisiteProviderRoleName,
   cutover,
 }) {
   const hasProtectedBootstrapSource = migrations.some((migration) => [
     legacyTriggerSearchPathMigrationId, bootstrap074MigrationId,
   ].includes(migration.id));
-  if (!dryRun && hasProtectedBootstrapSource) {
+  const providerPrerequisiteMode = bootstrap074PrerequisiteMode === true;
+  if (providerPrerequisiteMode) {
+    validateBootstrap074PrerequisiteProviderRoleName(bootstrap074PrerequisiteProviderRoleName);
+  }
+  if (!dryRun && hasProtectedBootstrapSource && !providerPrerequisiteMode) {
     const roleNames = bootstrap074?.authorization ?? bootstrap074Prerequisite;
     const requiredRoleNameKeys = ["schemaOwnerRoleName", "applicationRoleName", "operatorRoleName",
       "migrationRoleName", "cleanupRoleName"];
@@ -3901,11 +3915,12 @@ export async function runMigrationsWithClient({
         || prerequisiteMigration.checksum !== legacyTriggerSearchPathMigrationChecksum) {
         throw new Error("bootstrap_074_prerequisite_source_invalid");
       }
-      const ownerRoleName = await readLegacyTriggerSearchPathOwner(client, bootstrap074Prerequisite);
+      const ownerRoleName = await readLegacyTriggerSearchPathProviderOwner(
+        client,
+        bootstrap074PrerequisiteProviderRoleName,
+      );
       await client.query("begin");
       try {
-        await client.query(`set local role ${quoteIdentifier(ownerRoleName)}`);
-        await assertBootstrapSessionEnvironment(client, bootstrap074Prerequisite, { afterSetRole: true });
         await client.query(unwrapFileTransaction(prerequisiteMigration.sql));
         await client.query(
           "insert into schema_migrations (id, checksum) values ($1, $2)",
@@ -3922,6 +3937,7 @@ export async function runMigrationsWithClient({
         baselineRequired: false,
         bootstrap074RestartRequired: true,
         bootstrap074PrerequisiteMigrationId: prerequisiteMigration.id,
+        bootstrap074PrerequisiteProviderRoleName: ownerRoleName,
       };
     }
     let authorization;
@@ -3983,13 +3999,6 @@ export async function runMigrationsWithClient({
       }
       await client.query("begin");
       try {
-        if (migration.id === legacyTriggerSearchPathMigrationId) {
-          if (bootstrap074Prerequisite) {
-            const ownerRoleName = await readLegacyTriggerSearchPathOwner(client, bootstrap074Prerequisite);
-            await client.query(`set local role ${quoteIdentifier(ownerRoleName)}`);
-            await assertBootstrapSessionEnvironment(client, bootstrap074Prerequisite, { afterSetRole: true });
-          }
-        }
         if (migration.id === bootstrap074MigrationId) {
           if (containsEventTriggerDdl(migration.sql)) throw new Error("bootstrap_074_event_trigger_ddl_forbidden");
           await client.query(`set local role ${quoteIdentifier(authorization.schemaOwnerRoleName)}`);
@@ -4004,8 +4013,9 @@ export async function runMigrationsWithClient({
           await client.query(`revoke all on table ai_content_cutovers,ai_content_cutover_status_events,ai_content_maintenance_state,ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog from ${appRole}`);
           await client.query(`grant select on table ai_content_maintenance_state to ${appRole}`);
           await client.query(`grant execute on function assert_ai_content_writable() to ${appRole}`);
-          await client.query(`grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,jsonb,text,text,text),set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text,text) to ${operatorRole}`);
+          await client.query(`grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,jsonb,text,text,text,text),read_ai_content_cutover_control_state(uuid),set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text,text) to ${operatorRole}`);
           await client.query(`grant select on table ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog to ${migrationRole}`);
+          await client.query(`grant select on table ai_content_bootstrap_state to ${schemaOwnerRole}`);
           await client.query(`grant execute on function ai_content_cutover_bypass_allowed(),lock_ai_content_cutover_transaction_state(uuid),verify_ai_content_cutover_preflight_identity(uuid,jsonb,text,text),verify_ai_content_write_fence_catalog(),consume_ai_content_provider_attestation(),read_ai_content_cutover_migration_body_evidence(uuid),register_ai_content_075_fence_relations() to ${migrationRole}`);
           await client.query(`grant execute on function register_ai_content_075_fence_relations() to ${schemaOwnerRole}`);
           await client.query(`grant execute on function transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text,text) to ${migrationRole}`);
@@ -4026,7 +4036,8 @@ export async function runMigrationsWithClient({
                     not has_table_privilege(app.rolname,'public.ai_content_maintenance_state','SELECT')
                       or not has_function_privilege(app.rolname,'public.assert_ai_content_writable()','EXECUTE') as app_missing_minimum,
                     has_function_privilege(app.rolname,'public.ai_content_cutover_bypass_allowed()','EXECUTE')
-                      or has_function_privilege(app.rolname,'public.prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamp with time zone,text,text,jsonb,text,text,text)','EXECUTE')
+                      or has_function_privilege(app.rolname,'public.prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamp with time zone,text,text,jsonb,text,text,text,text)','EXECUTE')
+                      or has_function_privilege(app.rolname,'public.read_ai_content_cutover_control_state(uuid)','EXECUTE')
                       or has_function_privilege(app.rolname,'public.set_ai_content_maintenance(uuid,boolean)','EXECUTE')
                       or has_function_privilege(app.rolname,'public.transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamp with time zone,text,text)','EXECUTE')
                       or has_function_privilege(app.rolname,'public.read_ai_content_cutover_migration_body_evidence(uuid)','EXECUTE')
@@ -4217,7 +4228,8 @@ export async function runMigrationsWithClient({
       }
     }
     if (fullSource075Stage && !cutover
-      && bootstrap074Stage === "provider_evidence_already_consumed") {
+      && bootstrap074Stage === "provider_evidence_already_consumed"
+      && !bootstrap074?.allowConsumedRecovery) {
       throw new Error("cutover_075_config_required");
     }
     if (pending075 && !deferPending075) {
@@ -4263,6 +4275,7 @@ export async function runMigrations({
   bootstrap074,
   bootstrap074Prerequisite,
   bootstrap074PrerequisiteMode = false,
+  bootstrap074PrerequisiteProviderRoleName,
   cutover,
 }) {
   if (!connectionString) throw new Error("database_url_required");
@@ -4280,6 +4293,7 @@ export async function runMigrations({
       bootstrap074,
       bootstrap074Prerequisite,
       bootstrap074PrerequisiteMode,
+      bootstrap074PrerequisiteProviderRoleName,
       cutover,
     });
   } finally {

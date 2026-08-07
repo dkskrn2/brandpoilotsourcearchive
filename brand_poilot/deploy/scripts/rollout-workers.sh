@@ -13,6 +13,7 @@ for command_name in docker flock grep; do
   require_command "$command_name"
 done
 
+enforce_ai_content_roll_forward_floor "$ROOT"
 mkdir -p -- "$ROOT/state"
 exec 9>"$ROOT/state/deploy.lock"
 flock -n 9 || fail "deploy_lock_busy"

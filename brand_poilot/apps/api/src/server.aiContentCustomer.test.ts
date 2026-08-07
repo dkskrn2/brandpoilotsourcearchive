@@ -180,7 +180,6 @@ function setup(
     confirmLegacyAiContentAttachment: vi.fn(async (input) => ({ id: attachmentId, generationId: input.generationId, role: input.role, fileName: input.fileName, mimeType: input.mimeType, sizeBytes: input.sizeBytes, checksum: input.checksum, storageUrl: input.storageUrl, storagePath: input.storagePath, createdAt: "2026-07-18T00:00:00.000Z" })),
     removeAiContentAttachment: vi.fn(async (input) => ({ id: input.attachmentId })),
     retryAiContentOutput: vi.fn(async () => generation("queued")),
-    saveAiContentOutputCopy: vi.fn(async () => generation("completed")),
     getAiContentProposalBatch: vi.fn(async () => null),
     listAiContentProposals: vi.fn(async () => []),
     selectAiContentProposal: vi.fn(async () => generation("draft", "blog", "선택 제안")),
@@ -317,7 +316,7 @@ describe("AI content maintenance HTTP fence", () => {
     await harness.app.close();
   });
 
-  it("blocks an internal render mutation before worker authentication or repository work", async () => {
+  it("authenticates an internal render mutation before exposing maintenance state", async () => {
     const harness = setup();
     const repository = harness.repository as ApiRepository & {
       assertAiContentWritable: ReturnType<typeof vi.fn>;
@@ -335,8 +334,8 @@ describe("AI content maintenance HTTP fence", () => {
     });
 
     expect(response.statusCode).toBe(503);
-    expect(response.json()).toEqual({ error: "ai_content_maintenance" });
-    expect(repository.assertAiContentWritable).toHaveBeenCalledTimes(1);
+    expect(response.json()).toEqual({ error: "worker_api_not_configured" });
+    expect(repository.assertAiContentWritable).not.toHaveBeenCalled();
     expect(claim).not.toHaveBeenCalled();
     await harness.app.close();
   });
@@ -1056,8 +1055,9 @@ describe("AI content customer routes", () => {
     await app.close();
   });
 
-  it("saves validated copy fields for the authenticated brand scope", async () => {
-    const { app, repository } = setup();
+  it("does not expose the retired output copy endpoint before a V3 edit contract exists", async () => {
+    const { app } = setup();
+    expect(app.printRoutes()).not.toContain("outputs/:outputId/copy");
     const response = await app.inject({
       method: "PUT",
       url: `/brands/${brandId}/ai-content/outputs/${outputId}/copy`,
@@ -1075,26 +1075,12 @@ describe("AI content customer routes", () => {
       },
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(repository.saveAiContentOutputCopy).toHaveBeenCalledWith({
-      workspaceId,
-      brandId,
-      outputId,
-      fields: {
-        hook: "수정 훅",
-        keyMessage: "수정 핵심",
-        body: "수정 본문",
-        cta: "지금 확인",
-        caption: "수정 캡션",
-        hashtags: ["여름", "브랜드"],
-      },
-      idempotencyKey: "save-copy-1",
-    });
+    expect(response.statusCode).toBe(403);
     await app.close();
   });
 
-  it("rejects unknown copy fields before the repository", async () => {
-    const { app, repository } = setup();
+  it("keeps malformed requests on the retired output copy endpoint unreachable", async () => {
+    const { app } = setup();
     const response = await app.inject({
       method: "PUT",
       url: `/brands/${brandId}/ai-content/outputs/${outputId}/copy`,
@@ -1105,8 +1091,7 @@ describe("AI content customer routes", () => {
       },
     });
 
-    expect(response.statusCode).toBe(400);
-    expect(repository.saveAiContentOutputCopy).not.toHaveBeenCalled();
+    expect(response.statusCode).toBe(403);
     await app.close();
   });
 

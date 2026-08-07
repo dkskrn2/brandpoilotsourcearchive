@@ -36,7 +36,12 @@ create table ai_content_cutovers (
   ),
   constraint ai_content_cutover_cleanup_revocation_check check (
     (status = 'completed' and cleanup_credential_revoked_at is not null and cleanup_revocation_evidence_sha256 is not null)
-    or (status <> 'completed' and cleanup_credential_revoked_at is null and cleanup_revocation_evidence_sha256 is null)
+    or (status = 'backend_verified' and (
+      (cleanup_credential_revoked_at is null and cleanup_revocation_evidence_sha256 is null)
+      or (cleanup_credential_revoked_at is not null and cleanup_revocation_evidence_sha256 is not null)
+    ))
+    or (status not in ('backend_verified','completed')
+      and cleanup_credential_revoked_at is null and cleanup_revocation_evidence_sha256 is null)
   ),
   constraint ai_content_cutover_preflight_identity_check check ((
     jsonb_typeof(proposal_preflight_identity_json)='object'
@@ -400,9 +405,6 @@ begin
   end if;
   if p_identity is distinct from cutover_row.proposal_preflight_identity_json
      or p_identity_sha256 is distinct from cutover_row.proposal_preflight_identity_sha256
-     or encode(digest(p_identity::text,'sha256'),'hex') is distinct from p_identity_sha256
-     or encode(digest(cutover_row.proposal_preflight_identity_json::text,'sha256'),'hex')
-       is distinct from cutover_row.proposal_preflight_identity_sha256
      or p_transfer_sha256 is distinct from cutover_row.proposal_preflight_transfer_sha256 then
     raise exception 'ai_content_cutover_preflight_identity_evidence_invalid';
   end if;
@@ -485,7 +487,7 @@ begin
     if p_command_tag='REVOKE' and p_privileges='ALL' then
       privilege_names:=array[]::text[];
     elsif p_command_tag='GRANT' and p_object_identity like 'table:%'
-          and p_privileges in ('SELECT','INSERT,SELECT') then
+          and p_privileges in ('SELECT','INSERT,SELECT','INSERT,SELECT,UPDATE') then
       privilege_names:=string_to_array(p_privileges,',');
     elsif p_command_tag='GRANT' and p_object_identity like 'function:%'
           and p_privileges='EXECUTE' then
@@ -536,6 +538,7 @@ begin
           'public.complete_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
           'public.fail_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
           'public.is_ai_content_storage_path_protected(uuid,text)',
+          'public.lock_ai_content_fixed_input_sources(uuid,uuid,uuid,uuid,uuid,uuid[],uuid[])',
           'public.ai_content_generation_input_v3_is_valid(jsonb)',
           'public.ai_content_plan_v2_is_valid(jsonb)',
           'public.ai_content_manifest_v3_is_valid(jsonb)',
@@ -543,10 +546,11 @@ begin
           'public.ai_content_cutover_storage_value_to_path(text)',
           'public.ai_content_cutover_storage_candidates()',
           'public.ai_content_cutover_target_ids()',
-          'public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)'
+          'public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)',
+          'public.select_ai_content_proposal(uuid,uuid,uuid,uuid)'
         ]) as expected(identity) join pg_proc function on function.oid=to_regprocedure(expected.identity)) function_count
     ) counts;
-  if protected_object_count<>48 then raise exception 'ai_content_075_acl_catalog_object_missing'; end if;
+  if protected_object_count<>50 then raise exception 'ai_content_075_acl_catalog_object_missing'; end if;
 
   if p_object_identity is not null and not (
     p_object_identity = any(array[
@@ -584,6 +588,7 @@ begin
       'function:public.complete_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
       'function:public.fail_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
       'function:public.is_ai_content_storage_path_protected(uuid,text)',
+      'function:public.lock_ai_content_fixed_input_sources(uuid,uuid,uuid,uuid,uuid,uuid[],uuid[])',
       'function:public.ai_content_generation_input_v3_is_valid(jsonb)',
       'function:public.ai_content_plan_v2_is_valid(jsonb)',
       'function:public.ai_content_manifest_v3_is_valid(jsonb)',
@@ -591,7 +596,8 @@ begin
       'function:public.ai_content_cutover_storage_value_to_path(text)',
       'function:public.ai_content_cutover_storage_candidates()',
       'function:public.ai_content_cutover_target_ids()',
-      'function:public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)'
+      'function:public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)',
+      'function:public.select_ai_content_proposal(uuid,uuid,uuid,uuid)'
     ])
   ) then raise exception 'ai_content_075_acl_catalog_object_invalid'; end if;
 
@@ -639,6 +645,7 @@ begin
           'public.complete_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
           'public.fail_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
           'public.is_ai_content_storage_path_protected(uuid,text)',
+          'public.lock_ai_content_fixed_input_sources(uuid,uuid,uuid,uuid,uuid,uuid[],uuid[])',
           'public.ai_content_generation_input_v3_is_valid(jsonb)',
           'public.ai_content_plan_v2_is_valid(jsonb)',
           'public.ai_content_manifest_v3_is_valid(jsonb)',
@@ -646,7 +653,8 @@ begin
           'public.ai_content_cutover_storage_value_to_path(text)',
           'public.ai_content_cutover_storage_candidates()',
           'public.ai_content_cutover_target_ids()',
-          'public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)'
+          'public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)',
+          'public.select_ai_content_proposal(uuid,uuid,uuid,uuid)'
         ]) as expected(identity) join pg_proc function on function.oid=to_regprocedure(expected.identity)
     ), base_acl as (
       select object_kind,object_identity,owner_oid,acl.grantor,acl.grantee,
@@ -816,7 +824,8 @@ begin
                'public.claim_ai_content_storage_cleanup(uuid,uuid,text,text,uuid,integer)',
                'public.complete_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
                'public.fail_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
-               'public.is_ai_content_storage_path_protected(uuid,text)'
+               'public.is_ai_content_storage_path_protected(uuid,text)',
+               'public.lock_ai_content_fixed_input_sources(uuid,uuid,uuid,uuid,uuid,uuid[],uuid[])'
              ]) then current_user else bootstrap.schema_owner_role_name::text end owner_role_name
         from unnest(array[
           'public.reject_ai_content_cutover_record_mutation()',
@@ -846,6 +855,7 @@ begin
           'public.complete_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
           'public.fail_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
           'public.is_ai_content_storage_path_protected(uuid,text)',
+          'public.lock_ai_content_fixed_input_sources(uuid,uuid,uuid,uuid,uuid,uuid[],uuid[])',
           'public.ai_content_generation_input_v3_is_valid(jsonb)',
           'public.ai_content_plan_v2_is_valid(jsonb)',
           'public.ai_content_manifest_v3_is_valid(jsonb)',
@@ -853,7 +863,8 @@ begin
           'public.ai_content_cutover_storage_value_to_path(text)',
           'public.ai_content_cutover_storage_candidates()',
           'public.ai_content_cutover_target_ids()',
-          'public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)'
+          'public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)',
+          'public.select_ai_content_proposal(uuid,uuid,uuid,uuid)'
         ]) as expected(identity)
     ), expected_objects as (
       select * from relation_objects union all select * from function_objects
@@ -871,11 +882,19 @@ begin
       union all
       select 'table:public.'||name,bootstrap.application_role_name::text,privilege
         from unnest(array[
-          'ai_content_generation_operations','ai_content_proposal_performance_audits',
+          'ai_content_proposal_performance_audits',
           'automated_content_proposal_runs','ai_content_proposal_job_contracts',
-          'ai_content_proposal_compositions','ai_content_proposal_research_attempts',
-          'ai_content_proposal_model_attempts'
+          'ai_content_proposal_compositions'
         ]) as expected(name) cross join unnest(array['INSERT','SELECT']) as grant_privilege(privilege)
+      union all
+      select 'table:public.ai_content_proposal_model_attempts',bootstrap.application_role_name::text,privilege
+        from unnest(array['INSERT','SELECT','UPDATE']) as grant_privilege(privilege)
+      union all
+      select 'table:public.ai_content_proposal_research_attempts',bootstrap.application_role_name::text,privilege
+        from unnest(array['INSERT','SELECT','UPDATE']) as grant_privilege(privilege)
+      union all
+      select 'table:public.ai_content_generation_operations',bootstrap.application_role_name::text,privilege
+        from unnest(array['INSERT','SELECT','UPDATE']) as grant_privilege(privilege)
       union all
       select 'table:public.'||name,bootstrap.application_role_name::text,'SELECT'
         from unnest(array[
@@ -903,9 +922,14 @@ begin
           'public.append_ai_content_proposal_research_attempt_event(uuid,uuid,integer,text,uuid,jsonb,text,text)',
           'public.complete_ai_content_proposal_research(uuid,uuid,jsonb,text,jsonb,text,text)',
           'public.append_ai_content_proposal_attempt_event(uuid,uuid,integer,integer,text,text,text,text,text,text,text,text,boolean)',
+          'public.select_ai_content_proposal(uuid,uuid,uuid,uuid)',
           'public.create_ai_content_generation_prompt_binding(uuid,uuid,uuid,uuid,uuid,uuid,uuid,jsonb)',
           'public.create_ai_content_cutover_topic_upload(uuid,uuid,uuid,text,text,jsonb)',
-          'public.is_ai_content_storage_path_protected(uuid,text)'
+          'public.is_ai_content_storage_path_protected(uuid,text)',
+          'public.lock_ai_content_fixed_input_sources(uuid,uuid,uuid,uuid,uuid,uuid[],uuid[])',
+          'public.ai_content_generation_input_v3_is_valid(jsonb)',
+          'public.ai_content_plan_v2_is_valid(jsonb)',
+          'public.ai_content_manifest_v3_is_valid(jsonb)'
         ]) as expected(identity)
     ), expected_acl as (
       select * from owner_acl
@@ -1034,6 +1058,7 @@ begin
            'function:public.complete_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
            'function:public.fail_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
            'function:public.is_ai_content_storage_path_protected(uuid,text)',
+           'function:public.lock_ai_content_fixed_input_sources(uuid,uuid,uuid,uuid,uuid,uuid[],uuid[])',
            'function:public.ai_content_generation_input_v3_is_valid(jsonb)',
            'function:public.ai_content_plan_v2_is_valid(jsonb)',
            'function:public.ai_content_manifest_v3_is_valid(jsonb)',
@@ -1041,7 +1066,8 @@ begin
            'function:public.ai_content_cutover_storage_value_to_path(text)',
            'function:public.ai_content_cutover_storage_candidates()',
            'function:public.ai_content_cutover_target_ids()',
-           'function:public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)'
+           'function:public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)',
+           'function:public.select_ai_content_proposal(uuid,uuid,uuid,uuid)'
          ])
         )
        and command.object_type=(case when bootstrap.cutover_075_acl_object_identity like 'table:%'
@@ -1452,6 +1478,7 @@ begin
     'public.complete_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
     'public.fail_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
     'public.is_ai_content_storage_path_protected(uuid,text)',
+    'public.lock_ai_content_fixed_input_sources(uuid,uuid,uuid,uuid,uuid,uuid[],uuid[])',
     'public.ai_content_generation_input_v3_is_valid(jsonb)',
     'public.ai_content_plan_v2_is_valid(jsonb)',
     'public.ai_content_manifest_v3_is_valid(jsonb)',
@@ -1459,7 +1486,8 @@ begin
     'public.ai_content_cutover_storage_value_to_path(text)',
     'public.ai_content_cutover_storage_candidates()',
     'public.ai_content_cutover_target_ids()',
-    'public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)'
+    'public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)',
+    'public.select_ai_content_proposal(uuid,uuid,uuid,uuid)'
   ] loop
     final_acl_catalog_sha256:=public.apply_ai_content_075_acl_command(
       'REVOKE','function:'||missing_relations,'PUBLIC','ALL');
@@ -1508,7 +1536,8 @@ begin
     'public.claim_ai_content_storage_cleanup(uuid,uuid,text,text,uuid,integer)',
     'public.complete_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
     'public.fail_ai_content_storage_cleanup(uuid,text,text,uuid,text,text)',
-    'public.is_ai_content_storage_path_protected(uuid,text)'
+    'public.is_ai_content_storage_path_protected(uuid,text)',
+    'public.lock_ai_content_fixed_input_sources(uuid,uuid,uuid,uuid,uuid,uuid[],uuid[])'
   ] loop
     execute format('alter function %s owner to current_user',missing_relations);
     if (select pg_get_userbyid(function.proowner) from pg_proc function
@@ -1539,14 +1568,22 @@ begin
     'GRANT','table:public.ai_content_storage_cleanup_outbox',bootstrap.cleanup_role_name::text,'SELECT');
 
   foreach missing_relations in array array[
-    'ai_content_generation_operations','ai_content_proposal_performance_audits',
+    'ai_content_proposal_performance_audits',
     'automated_content_proposal_runs','ai_content_proposal_job_contracts',
-    'ai_content_proposal_compositions','ai_content_proposal_research_attempts',
-    'ai_content_proposal_model_attempts'
+    'ai_content_proposal_compositions'
   ] loop
     final_acl_catalog_sha256:=public.apply_ai_content_075_acl_command(
       'GRANT','table:public.'||missing_relations,bootstrap.application_role_name::text,'INSERT,SELECT');
   end loop;
+  final_acl_catalog_sha256:=public.apply_ai_content_075_acl_command(
+    'GRANT','table:public.ai_content_proposal_model_attempts',bootstrap.application_role_name::text,
+    'INSERT,SELECT,UPDATE');
+  final_acl_catalog_sha256:=public.apply_ai_content_075_acl_command(
+    'GRANT','table:public.ai_content_proposal_research_attempts',bootstrap.application_role_name::text,
+    'INSERT,SELECT,UPDATE');
+  final_acl_catalog_sha256:=public.apply_ai_content_075_acl_command(
+    'GRANT','table:public.ai_content_generation_operations',bootstrap.application_role_name::text,
+    'INSERT,SELECT,UPDATE');
   foreach missing_relations in array array[
     'ai_content_proposal_research_attempt_events','ai_content_proposal_attempt_events',
     'ai_content_generation_prompt_bindings'
@@ -1576,9 +1613,14 @@ begin
     'public.append_ai_content_proposal_research_attempt_event(uuid,uuid,integer,text,uuid,jsonb,text,text)',
     'public.complete_ai_content_proposal_research(uuid,uuid,jsonb,text,jsonb,text,text)',
     'public.append_ai_content_proposal_attempt_event(uuid,uuid,integer,integer,text,text,text,text,text,text,text,text,boolean)',
+    'public.select_ai_content_proposal(uuid,uuid,uuid,uuid)',
     'public.create_ai_content_generation_prompt_binding(uuid,uuid,uuid,uuid,uuid,uuid,uuid,jsonb)',
     'public.create_ai_content_cutover_topic_upload(uuid,uuid,uuid,text,text,jsonb)',
-    'public.is_ai_content_storage_path_protected(uuid,text)'
+    'public.is_ai_content_storage_path_protected(uuid,text)',
+    'public.lock_ai_content_fixed_input_sources(uuid,uuid,uuid,uuid,uuid,uuid[],uuid[])',
+    'public.ai_content_generation_input_v3_is_valid(jsonb)',
+    'public.ai_content_plan_v2_is_valid(jsonb)',
+    'public.ai_content_manifest_v3_is_valid(jsonb)'
   ] loop
     final_acl_catalog_sha256:=public.apply_ai_content_075_acl_command(
       'GRANT','function:'||missing_relations,bootstrap.application_role_name::text,'EXECUTE');
@@ -1629,13 +1671,13 @@ create function prepare_ai_content_cutover(
   p_incident_bundle_sha256 text,
   p_preserved_manifest_sha256 text,
   p_preflight_identity_json jsonb,
+  p_preflight_identity_sha256 text,
   p_preflight_transfer_sha256 text,
   p_intended_release_sha text,
   p_evidence_sha256 text
 ) returns text
 language plpgsql security definer set search_path=pg_catalog,public as $$
 declare event_hash text;
-declare preflight_identity_sha256 text;
 declare bootstrap public.ai_content_bootstrap_state%rowtype;
 begin
   select * into strict bootstrap from public.ai_content_bootstrap_state where singleton for update;
@@ -1644,14 +1686,14 @@ begin
      or p_operator_role<>bootstrap.operator_role_name
      or p_migration_role<>bootstrap.migration_role_name
      or p_cleanup_role<>bootstrap.cleanup_role_name
-     or p_role_catalog_sha256<>bootstrap.role_catalog_sha256 then
+     or p_role_catalog_sha256<>bootstrap.role_catalog_sha256
+     or p_preflight_identity_sha256 !~ '^[0-9a-f]{64}$' then
     raise exception 'ai_content_cutover_roles_not_sealed';
   end if;
-  preflight_identity_sha256:=encode(digest(p_preflight_identity_json::text,'sha256'),'hex');
   event_hash := encode(digest(concat_ws('|',p_cutover_id::text,'0','', 'prepared',
     p_evidence_sha256,p_schema_owner::text,p_application_role::text,p_operator_role::text,
     p_migration_role::text,p_cleanup_role::text,p_bypass_token_sha256,p_cleanup_token_sha256,
-    p_role_catalog_sha256,preflight_identity_sha256,p_preflight_transfer_sha256),'sha256'),'hex');
+    p_role_catalog_sha256,p_preflight_identity_sha256,p_preflight_transfer_sha256),'sha256'),'hex');
   insert into public.ai_content_cutovers (
     id,status,migration_id,schema_owner_role_name,application_role_name,operator_role_name,
     migration_role_name,cleanup_role_name,bypass_token_sha256,cleanup_token_sha256,
@@ -1663,7 +1705,7 @@ begin
     p_cutover_id,'prepared','075_ai_content_three_format_cutover.sql',p_schema_owner,p_application_role,
     p_operator_role,p_migration_role,p_cleanup_role,p_bypass_token_sha256,p_cleanup_token_sha256,
     p_role_catalog_sha256,p_provider_backup_id,p_provider_snapshot_created_at,p_incident_bundle_sha256,
-    p_preserved_manifest_sha256,p_preflight_identity_json,preflight_identity_sha256,
+    p_preserved_manifest_sha256,p_preflight_identity_json,p_preflight_identity_sha256,
     p_preflight_transfer_sha256,p_intended_release_sha,event_hash
   );
   insert into public.ai_content_cutover_status_events (
@@ -1695,6 +1737,53 @@ begin
      where singleton and (not enabled or cutover_id=p_cutover_id);
     if not found then raise exception 'ai_content_maintenance_cutover_conflict'; end if;
   end if;
+end;
+$$;
+
+create function read_ai_content_cutover_control_state(p_cutover_id uuid)
+returns table (
+  requested_cutover_exists boolean,
+  cutover_status text,
+  cleanup_credential_revoked_at timestamptz,
+  cleanup_revocation_evidence_sha256 text,
+  marker_present boolean,
+  maintenance_enabled boolean,
+  maintenance_cutover_id uuid,
+  active_cutover_count bigint,
+  active_cutover_id uuid
+)
+language plpgsql security definer set search_path=pg_catalog,public as $$
+declare bootstrap public.ai_content_bootstrap_state%rowtype;
+begin
+  if p_cutover_id is null then
+    raise exception 'ai_content_cutover_control_state_id_required';
+  end if;
+  select * into strict bootstrap from public.ai_content_bootstrap_state where singleton;
+  if session_user<>bootstrap.operator_role_name::text then
+    raise exception 'ai_content_cutover_control_state_role_invalid';
+  end if;
+  if exists (select 1 from public.ai_content_cutovers where id=p_cutover_id) then
+    perform public.verify_ai_content_cutover_status_chain(p_cutover_id);
+  end if;
+  return query
+  select requested.id is not null,
+         requested.status,
+         requested.cleanup_credential_revoked_at,
+         requested.cleanup_revocation_evidence_sha256,
+         exists(select 1 from public.schema_migrations where id='075_ai_content_three_format_cutover.sql'),
+         maintenance.enabled,
+         maintenance.cutover_id,
+         active.count,
+         active.id
+    from public.ai_content_maintenance_state maintenance
+    left join public.ai_content_cutovers requested on requested.id=p_cutover_id
+    cross join lateral (
+      select count(*)::bigint as count,
+             (array_agg(cutover.id order by cutover.id))[1] as id
+        from public.ai_content_cutovers cutover
+       where cutover.status not in ('completed','abandoned_pre_marker')
+    ) active
+   where maintenance.singleton;
 end;
 $$;
 
@@ -1763,8 +1852,30 @@ begin
        and evidence_sha256=p_evidence_sha256
        and post_075_bootstrap_object_catalog_sha256
          is not distinct from p_post_075_bootstrap_object_catalog_sha256;
-    if next_hash is not null and current_row.status=p_to_status then return next_hash; end if;
+    if next_hash is not null and current_row.status=p_to_status
+       and (p_to_status<>'abandoned_pre_marker' or (
+         current_row.abandoned_reason is not distinct from p_abandoned_reason
+         and current_row.successor_cutover_id is not distinct from p_successor_cutover_id
+       ))
+       and (p_to_status<>'completed' or (
+         current_row.cleanup_credential_revoked_at is not distinct from p_cleanup_revoked_at
+         and current_row.cleanup_revocation_evidence_sha256 is not distinct from p_cleanup_revocation_sha256
+       )) then
+      return next_hash;
+    end if;
     raise exception 'ai_content_cutover_status_conflict';
+  end if;
+  if p_to_status='completed' then
+    if p_from_status<>'backend_verified'
+       or p_evidence_sha256 is distinct from p_cleanup_revocation_sha256
+       or p_cleanup_revocation_sha256 !~ '^[0-9a-f]{64}$'
+       or p_cleanup_revoked_at is null
+       or current_row.cleanup_credential_revoked_at is distinct from p_cleanup_revoked_at
+       or current_row.cleanup_revocation_evidence_sha256 is distinct from p_cleanup_revocation_sha256 then
+      raise exception 'ai_content_cutover_cleanup_revocation_evidence_invalid';
+    end if;
+  elsif p_cleanup_revoked_at is not null or p_cleanup_revocation_sha256 is not null then
+    raise exception 'ai_content_cutover_cleanup_revocation_evidence_invalid';
   end if;
   select * into strict previous_event from public.ai_content_cutover_status_events
    where cutover_id=p_cutover_id and event_sha256=current_row.latest_status_event_sha256 for update;
@@ -2067,6 +2178,50 @@ begin
     ) then
       raise exception 'ai_content_cutovers_schema_owner_references_acl_invalid';
     end if;
+    select count(*) into mismatch
+      from aclexplode(coalesce(
+        (select relation.relacl from pg_class relation
+          where relation.oid='public.ai_content_bootstrap_state'::regclass),
+        acldefault('r',(select relation.relowner from pg_class relation
+          where relation.oid='public.ai_content_bootstrap_state'::regclass))
+      )) acl
+      left join pg_roles grantee on grantee.oid=acl.grantee
+     where acl.grantee=0
+        or (acl.grantee<>(select relation.relowner from pg_class relation
+              where relation.oid='public.ai_content_bootstrap_state'::regclass)
+          and not (
+            grantee.rolname in (
+              bootstrap.migration_role_name::text,
+              bootstrap.schema_owner_role_name::text
+            )
+            and acl.privilege_type='SELECT'
+            and not acl.is_grantable
+          ));
+    if mismatch<>0 or not exists (
+      select 1
+        from aclexplode(coalesce(
+          (select relation.relacl from pg_class relation
+            where relation.oid='public.ai_content_bootstrap_state'::regclass),
+          acldefault('r',(select relation.relowner from pg_class relation
+            where relation.oid='public.ai_content_bootstrap_state'::regclass))
+        )) acl
+        join pg_roles grantee on grantee.oid=acl.grantee
+       where grantee.rolname=bootstrap.migration_role_name::text
+         and acl.privilege_type='SELECT' and not acl.is_grantable
+    ) or not exists (
+      select 1
+        from aclexplode(coalesce(
+          (select relation.relacl from pg_class relation
+            where relation.oid='public.ai_content_bootstrap_state'::regclass),
+          acldefault('r',(select relation.relowner from pg_class relation
+            where relation.oid='public.ai_content_bootstrap_state'::regclass))
+        )) acl
+        join pg_roles grantee on grantee.oid=acl.grantee
+       where grantee.rolname=bootstrap.schema_owner_role_name::text
+         and acl.privilege_type='SELECT' and not acl.is_grantable
+    ) then
+      raise exception 'ai_content_bootstrap_state_schema_owner_select_acl_invalid';
+    end if;
   end if;
   return true;
 end;
@@ -2108,7 +2263,8 @@ revoke execute on function ai_content_cutover_bypass_allowed(),assert_ai_content
   ai_content_075_acl_catalog(text,text,text,text),apply_ai_content_075_acl_command(text,text,text,text),
   verify_ai_content_075_acl_final_catalog(),
   enforce_ai_content_075_registration_seal_cleared(),
-  forbid_ai_content_cutover_event_mutation(),prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,jsonb,text,text,text),
+  forbid_ai_content_cutover_event_mutation(),prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,jsonb,text,text,text,text),
+  read_ai_content_cutover_control_state(uuid),
   set_ai_content_maintenance(uuid,boolean),
   transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text,text),
   read_ai_content_cutover_migration_body_evidence(uuid),

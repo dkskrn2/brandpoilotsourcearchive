@@ -361,7 +361,6 @@ export type GenerationBriefUpdate =
   | ((current: GenerationBrief) => GenerationBrief);
 
 export interface AiContentDraft {
-  type: AiContentType | null;
   orchestration?: ContentOrchestration | null;
   subjectType: SubjectType | null;
   subjectInput: {

@@ -12,7 +12,10 @@ export function buildCodexPrompt(prompt) {
 }
 
 export function buildCodexArgs(outputDir) {
-  const schemaFile = path.resolve(import.meta.dirname, "card-news-plan-v2.schema.json");
+  const schemaFile = path.resolve(
+    import.meta.dirname,
+    "../../../packages/brand-pilot-content-contracts/generated/card-news-plan-v2.schema.json",
+  );
   const outputFile = path.join(outputDir, "card-news-plan.json");
   return [
     "--model",

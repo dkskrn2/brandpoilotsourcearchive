@@ -13,9 +13,11 @@ import {
   readCanonicalEventTriggerCatalog,
   readFenceSecurityCatalog,
 } from "./migrationRunner.mjs";
+import { abortCutoverPreMarker } from "./ai-content-cutover-control.mjs";
 
 const maxOverheadRatio = Number(process.env.AI_CONTENT_074_BULK_DML_MAX_OVERHEAD_RATIO ?? "8");
 const benchmarkRowCount = Number(process.env.AI_CONTENT_074_BENCHMARK_ROW_COUNT ?? "250");
+const preflightHashOnly = process.env.AI_CONTENT_074_PREFLIGHT_HASH_ONLY === "true";
 const classifierNames = Object.freeze([
   "whole_relation", "legacy_automated_topic", "scheduled_proposal_refresh", "legacy_content_job",
   "ai_content_generated_artifact", "ai_content_scheduled_publish", "ai_content_publish_attempt",
@@ -36,6 +38,9 @@ const names = {
 
 const quoteIdentifier = (value) => `"${String(value).replaceAll('"', '""')}"`;
 const triggerName = (relation) => `ai_content_fence_${relation.slice(0, 30)}_${createHash("md5").update(relation).digest("hex").slice(0, 12)}`;
+const canonicalJson = (value) => JSON.stringify(Object.fromEntries(
+  Object.entries(value).sort(([left], [right]) => left.localeCompare(right)),
+));
 
 async function asRoleExpectRejection(client, sessionRole, effectiveRole, statement) {
   await client.query(`set session authorization ${quoteIdentifier(sessionRole)}`);
@@ -85,7 +90,7 @@ async function transferProviderBundle(client) {
     await client.query(`alter function ${identity} owner to postgres`);
     await client.query(`revoke all on function ${identity} from public,content_schema_owner,content_application,content_operator,content_migration,content_cleanup`);
     const grantee = identity.includes("assert_ai_content_writable") ? "content_application"
-      : /prepare_ai_content_cutover|set_ai_content_maintenance/.test(identity) ? "content_operator"
+      : /prepare_ai_content_cutover|read_ai_content_cutover_control_state|set_ai_content_maintenance/.test(identity) ? "content_operator"
         : /ai_content_cutover_bypass_allowed|lock_ai_content_cutover_transaction_state|verify_ai_content_cutover_preflight_identity|verify_ai_content_write_fence_catalog|consume_ai_content_provider_attestation|read_ai_content_cutover_migration_body_evidence|register_ai_content_075_fence_relations/.test(identity) ? "content_migration"
           : null;
     if (grantee) await client.query(`grant execute on function ${identity} to ${quoteIdentifier(grantee)}`);
@@ -105,6 +110,9 @@ async function transferProviderBundle(client) {
       await client.query("grant select on table public.ai_content_maintenance_state to content_application");
     } else if (["ai_content_bootstrap_state", "ai_content_ddl_allowlist", "ai_content_write_fence_catalog"].includes(relation)) {
       await client.query(`grant select on table public.${quoteIdentifier(relation)} to content_migration`);
+    }
+    if (relation === "ai_content_bootstrap_state") {
+      await client.query("grant select on table public.ai_content_bootstrap_state to content_schema_owner");
     }
   }
 }
@@ -230,8 +238,9 @@ test("074 real PostgreSQL provider-owned bundle blocks migration-to-schema-owner
       revoke all on table ai_content_cutovers,ai_content_cutover_status_events,ai_content_maintenance_state,ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog from content_application;
       grant select on table ai_content_maintenance_state to content_application;
       grant execute on function assert_ai_content_writable() to content_application;
-      grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,jsonb,text,text,text),set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text,text) to content_operator;
+      grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,jsonb,text,text,text,text),read_ai_content_cutover_control_state(uuid),set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text,text) to content_operator;
       grant select on table ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog to content_migration;
+      grant select on table ai_content_bootstrap_state to content_schema_owner;
       grant select,insert on table schema_migrations to content_migration;
       grant execute on function transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text,text),ai_content_cutover_bypass_allowed(),lock_ai_content_cutover_transaction_state(uuid),verify_ai_content_cutover_preflight_identity(uuid,jsonb,text,text),verify_ai_content_write_fence_catalog(),consume_ai_content_provider_attestation(),read_ai_content_cutover_migration_body_evidence(uuid),register_ai_content_075_fence_relations() to content_migration;
     `);
@@ -419,23 +428,71 @@ test("074 real PostgreSQL provider-owned bundle blocks migration-to-schema-owner
     const cutoverId = randomUUID();
     const token = `074-token-${randomUUID()}`;
     const tokenHash = createHash("sha256").update(token).digest("hex");
-    const preparedPreflightIdentity = JSON.stringify({
+    const preparedPreflightIdentityValue = {
       preflightCandidateSha: "c".repeat(40), contentProposalWorkerImageDigest: `sha256:${"a".repeat(64)}`,
       proposalWorkerSourceSha: "c".repeat(40), proposalWorkerTreeSha: "d".repeat(40),
       proposalContractSourceSha256: "a".repeat(64), proposalSchemaSha256: "a".repeat(64),
       proposalCatalogSha256: "a".repeat(64), proposalModelId: "gpt-5.6-terra",
       proposalCommandDescriptorSha256: "a".repeat(64), migrationSha256: "a".repeat(64),
-    });
+    };
+    const preparedPreflightIdentity = JSON.stringify(preparedPreflightIdentityValue);
+    const canonicalPreflightIdentitySha256 = createHash("sha256")
+      .update(canonicalJson(preparedPreflightIdentityValue)).digest("hex");
+    const prepareCutoverFixture = (fixtureCutoverId) => client.query(
+      `select prepare_ai_content_cutover($1,'content_schema_owner','content_application','content_operator',
+      'content_migration','content_cleanup',$2,$2,$3,'harness',now(),$3,$3,$5::jsonb,$6,$3,$4,$3)`,
+      [fixtureCutoverId, tokenHash, "a".repeat(64), "c".repeat(40), preparedPreflightIdentity,
+        canonicalPreflightIdentitySha256],
+    );
+    const abortCutoverId = randomUUID();
     await client.query("set session authorization content_operator");
-    await client.query(`select prepare_ai_content_cutover($1,'content_schema_owner','content_application','content_operator',
-      'content_migration','content_cleanup',$2,$2,$3,'harness',now(),$3,$3,$5::jsonb,$3,$4,$3)`,
-    [cutoverId, tokenHash, "a".repeat(64), "c".repeat(40), preparedPreflightIdentity]);
+    await prepareCutoverFixture(abortCutoverId);
+    await client.query("select set_ai_content_maintenance($1,true)", [abortCutoverId]);
+    const abortResult = await abortCutoverPreMarker(client, {
+      cutoverId: abortCutoverId,
+      fromStatus: "prepared",
+      evidenceSha256: "b".repeat(64),
+    });
+    assert.deepEqual({ ...abortResult, eventSha256: undefined }, {
+      cutoverId: abortCutoverId,
+      status: "abandoned_pre_marker",
+      markerPresent: false,
+      maintenanceEnabled: false,
+      eventSha256: undefined,
+      evidenceSha256: "b".repeat(64),
+    });
+    assert.match(abortResult.eventSha256, /^[0-9a-f]{64}$/);
+    await client.query("reset session authorization");
+    assert.deepEqual((await client.query(
+      `select cutover.status,cutover.abandoned_reason,maintenance.enabled,
+              maintenance.cutover_id,
+              (select count(*)::integer from ai_content_cutovers active
+                where active.status not in ('completed','abandoned_pre_marker')) as active_count
+         from ai_content_cutovers cutover
+         cross join ai_content_maintenance_state maintenance
+        where cutover.id=$1 and maintenance.singleton`,
+      [abortCutoverId],
+    )).rows, [{
+      status: "abandoned_pre_marker",
+      abandoned_reason: "operator_requested_pre_marker_abort",
+      enabled: false,
+      cutover_id: null,
+      active_count: 0,
+    }]);
+    await client.query("set session authorization content_operator");
+    await prepareCutoverFixture(cutoverId);
     await client.query("select set_ai_content_maintenance($1,true)", [cutoverId]);
     await client.query("reset session authorization");
-    const preparedPreflightIdentityHash = (await client.query(
-      "select proposal_preflight_identity_sha256 from ai_content_cutovers where id=$1",
+    const preparedPreflightIdentityRow = (await client.query(
+      `select proposal_preflight_identity_sha256,
+              encode(digest(proposal_preflight_identity_json::text,'sha256'),'hex') as postgres_jsonb_text_sha256
+         from ai_content_cutovers where id=$1`,
       [cutoverId],
-    )).rows[0].proposal_preflight_identity_sha256;
+    )).rows[0];
+    const preparedPreflightIdentityHash = preparedPreflightIdentityRow.proposal_preflight_identity_sha256;
+    assert.equal(preparedPreflightIdentityHash, canonicalPreflightIdentitySha256);
+    assert.notEqual(preparedPreflightIdentityHash, preparedPreflightIdentityRow.postgres_jsonb_text_sha256,
+      "the sealed canonical preflight SHA must not be replaced by PostgreSQL jsonb::text serialization");
     const beginPreflightVerification = async ({ role = null } = {}) => {
       await client.query("set session authorization content_migration");
       await client.query("begin");
@@ -473,6 +530,10 @@ test("074 real PostgreSQL provider-owned bundle blocks migration-to-schema-owner
     await client.query("reset session authorization");
     await beginPreflightVerification();
     assert.deepEqual((await verifyPreflight()).rows, [{ verified: true }]);
+    if (preflightHashOnly) {
+      t.diagnostic("canonical preflight identity hash round-trip verified against PostgreSQL 16");
+      return;
+    }
     for (const invalidCall of [
       () => verifyPreflight(preparedPreflightIdentity, preparedPreflightIdentityHash, "a".repeat(64), null),
       () => verifyPreflight(null),

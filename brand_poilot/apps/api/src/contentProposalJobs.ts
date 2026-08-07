@@ -722,8 +722,10 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
           }
         }
         const sealed = await client.query(
-          `select (complete_ai_content_proposal_research(
-             $1,$2,$3::jsonb,$4,$5::jsonb,$6,$7)).*`,
+          `select sealed.*
+             from public.complete_ai_content_proposal_research(
+               $1,$2,$3::jsonb,$4,$5::jsonb,$6,$7
+             ) sealed`,
           [
             input.researchAttemptId, input.leaseToken, evidenceSetJson, evidenceSetSha256,
             composedInputJson, composedInputSha256, finalInvocationAggregateSha256,

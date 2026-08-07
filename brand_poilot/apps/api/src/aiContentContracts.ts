@@ -338,37 +338,6 @@ export interface ContentOrchestrationV1 {
   };
 }
 
-export interface ContentProposalV1 {
-  contractVersion: "content-proposal.v1";
-  title: string;
-  reasonToCreateNow: string;
-  contentFamily: ContentFamily;
-  topic: string;
-  target: Record<string, unknown>;
-  messageStrategy: MessageStrategy;
-  hook: string;
-  keyMessage: string;
-  evidence: Array<{ sourceSnapshotId: string; summary: string }>;
-  outline: Array<{ heading: string; purpose: string }>;
-  outputFormat: OutputFormat;
-  channelTargets: ContentChannelTarget[];
-  recommendedReferenceQuery: {
-    strategies: MessageStrategy[];
-    formats: OutputFormat[];
-    tags: string[];
-  };
-}
-
-export interface ContentProposalRequestV1 {
-  contractVersion: "content-proposal-request.v1";
-  contentFamily: ContentFamily;
-  subjectInput: Record<string, unknown>;
-  channelTargets: string[];
-  outputFormats: OutputFormat[];
-  sourceSnapshotIds: string[];
-  performanceSnapshotIds: string[];
-}
-
 export type AiContentJobType = "analyze" | "generate";
 export type AiContentGenerationStatus =
   | "draft"
@@ -488,6 +457,12 @@ export interface ContentGenerationStartV2 {
   idempotencyKey: string;
 }
 
+export interface ContentGenerationRetryV1 {
+  contractVersion: "content-generation-retry.v1";
+  idempotencyKey: string;
+  reason: string;
+}
+
 export type AiContentAttachmentRole = "product" | "person" | "scale" | "visual_reference" | "document";
 
 export interface AttachmentUploadTokenInput {
@@ -551,10 +526,7 @@ export interface CompleteAiContentPlanningJobInput extends CompleteAiContentJobB
   plan: import("./aiContentPlanContracts.js").ContentPlanResultV2;
 }
 
-export type CompleteAiContentJobInput =
-  | CompleteAiContentAnalysisJobInput
-  | CompleteAiContentGenerationJobInput
-  | CompleteAiContentPlanningJobInput;
+export type CompleteAiContentJobInput = CompleteAiContentPlanningJobInput;
 
 export interface FailAiContentJobInput {
   jobId: string;
@@ -672,6 +644,18 @@ export function parseStartAiContentGenerationInput(value: unknown): StartAiConte
   return {
     idempotencyKey: requiredString(source.idempotencyKey, "ai_content_idempotency_key_invalid", 200),
     outputCount: source.outputCount,
+  };
+}
+
+export function parseContentGenerationRetryV1(value: unknown): ContentGenerationRetryV1 {
+  const source = exactObject(value, ["contractVersion", "idempotencyKey", "reason"], "ai_content_generation_retry_invalid");
+  if (source.contractVersion !== "content-generation-retry.v1") {
+    fail("ai_content_contract_version_unsupported");
+  }
+  return {
+    contractVersion: "content-generation-retry.v1",
+    idempotencyKey: requiredString(source.idempotencyKey, "ai_content_generation_retry_invalid", 200),
+    reason: requiredString(source.reason, "ai_content_generation_retry_invalid", 4_000),
   };
 }
 

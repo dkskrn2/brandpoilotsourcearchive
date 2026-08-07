@@ -16,7 +16,6 @@ import type {
   AiContentUsageRecord,
   AiContentBrandContextRecord,
   AppealRecord,
-  AuthenticatedBrandScope,
   AudienceRecord,
   BrandGenerationScope,
   BrandScope,
@@ -24,7 +23,6 @@ import type {
   SaveAudienceInput,
   SubjectAnalysisBrandContext,
   SubjectAnalysisWorkerLease,
-  CreateAiContentProposalBatchV2Input,
 } from "./aiContentRepository.js";
 
 export type AiContentGenerationDto = AiContentGenerationRecord;
@@ -1130,22 +1128,6 @@ export interface ApiRepository
   failAiContentRenderJob?(input: import("./aiContentRenderJobs.js").RenderFailure): Promise<void>;
   saveAiContentOutputResearch?(input: { jobId: string; outputId: string; workerId: string; leaseToken: string; evidence: Record<string, unknown> }): Promise<void>;
   retryAiContentOutput(input: BrandScope & { actorUserId: string; outputId: string; contractVersion: "content-generation-retry.v1"; idempotencyKey: string; reason: string; usageDate: string; dailyGenerationLimit: number }): Promise<AiContentGenerationRecord>;
-  saveAiContentOutputCopy(input: BrandScope & {
-    outputId: string;
-    fields: Partial<Record<import("./aiContentRepository.js").AiContentCopyField, string | string[]>>;
-    idempotencyKey: string;
-  }): Promise<AiContentGenerationRecord>;
-  createAiContentProposalBatch?(input: BrandScope & {
-    actorUserId: string;
-    origin: "manual" | "scheduled_crawl";
-    idempotencyKey: string;
-    request: import("./aiContentContracts.js").ContentProposalRequestV1;
-  }): Promise<AiContentProposalBatchRecord>;
-  createAiContentProposalBatchV2(input: CreateAiContentProposalBatchV2Input): Promise<AiContentProposalBatchRecord>;
-  getAiContentProposalBatchV2Replay(input: AuthenticatedBrandScope & {
-    idempotencyKey: string;
-    requestFingerprint: string;
-  }): Promise<AiContentProposalBatchRecord | null>;
   getAiContentProposalBatch?(input: BrandScope & { batchId: string }): Promise<AiContentProposalBatchRecord | null>;
   listAiContentProposals?(input: BrandScope & {
     status: "suggested" | "selected" | "dismissed";

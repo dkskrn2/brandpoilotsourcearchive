@@ -112,7 +112,9 @@ export interface AiContentFixedInputSource {
     batchId: string;
     composedInput: ProposalInputSnapshotV2;
     researchEvidenceSetSha256: string;
+    researchEvidenceSetHashMatches: boolean;
     composedInputSha256: string;
+    composedInputHashMatches: boolean;
     finalInvocationAggregateSha256: string;
   };
   successfulAttempt: Scope & {
@@ -223,7 +225,8 @@ function validateSourceShape(source: AiContentFixedInputSource): void {
   ]);
   exactObject(source.composition, [
     "id", "jobId", "contractId", "batchId", "workspaceId", "brandId", "composedInput",
-    "researchEvidenceSetSha256", "composedInputSha256", "finalInvocationAggregateSha256",
+    "researchEvidenceSetSha256", "researchEvidenceSetHashMatches", "composedInputSha256",
+    "composedInputHashMatches", "finalInvocationAggregateSha256",
   ]);
   exactObject(source.successfulAttempt, [
     "id", "jobId", "contractId", "compositionId", "workspaceId", "brandId", "aggregateContractSha256",
@@ -339,7 +342,7 @@ function assertProposalContract(source: AiContentFixedInputSource): {
     || proposalJob.enqueueContractSha256 !== expectedEnqueueContractSha256
     || proposalJob.requestSha256 !== proposalSha256(request)
     || proposalJob.baseInputSha256 !== proposalSha256(baseInput)
-    || composition.composedInputSha256 !== proposalSha256(composedInput)) {
+    || composition.composedInputHashMatches !== true) {
     fail("fixed_input_proposal_contract_mismatch");
   }
   const { contractVersion: _baseVersion, ...baseFields } = baseInput;
@@ -350,7 +353,6 @@ function assertProposalContract(source: AiContentFixedInputSource): {
     || !same(request.channelTargets, baseInput.outputSettings.channelTargets)) {
     fail("fixed_input_request_mismatch");
   }
-  const expectedEvidenceSetSha256 = proposalSha256([composedInput.researchEvidence]);
   const expectedAggregateSha256 = proposalSha256({
     enqueueContractSha256: proposalJob.enqueueContractSha256,
     modelId: proposalJob.proposalModelId,
@@ -359,7 +361,7 @@ function assertProposalContract(source: AiContentFixedInputSource): {
     evidenceSetSha256: composition.researchEvidenceSetSha256,
     composedInputSha256: composition.composedInputSha256,
   });
-  if (composition.researchEvidenceSetSha256 !== expectedEvidenceSetSha256
+  if (composition.researchEvidenceSetHashMatches !== true
     || composition.finalInvocationAggregateSha256 !== expectedAggregateSha256) {
     fail("fixed_input_composition_hash_mismatch");
   }

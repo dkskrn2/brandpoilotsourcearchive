@@ -30,8 +30,7 @@ const cardNewsImage: PublishArtifactAsset = {
   height: 1200
 };
 
-const emptyDraft = (type: AiContentDraft["type"]): AiContentDraft => ({
-  type,
+const emptyDraft = (): AiContentDraft => ({
   subjectType: null,
   subjectInput: { sourceUrl: "", name: "", promotion: "", description: "" },
   subjectAnalysisId: null,
@@ -74,7 +73,7 @@ const jobs: AiContentGeneration[] = [
     purpose: "informational",
     status: "generating",
     currentStep: 5,
-    draft: emptyDraft("card_news"),
+    draft: emptyDraft(),
     outputs: [{ id: "output-generating", generationId: "generation-generating", title: "카드뉴스", status: "generating", artifact: null, failureReason: null, downloadedAt: null, manifestVersion: null, outputFormat: "card_news" }],
     attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-18T06:30:00.000Z",
@@ -88,7 +87,7 @@ const jobs: AiContentGeneration[] = [
     purpose: "marketing",
     status: "planning",
     currentStep: 3,
-    draft: emptyDraft("marketing"),
+    draft: emptyDraft(),
     outputs: [{ id: "output-marketing-planning", generationId: "generation-planning", title: "시안 후보", status: "queued", artifact: null, failureReason: null, downloadedAt: null, manifestVersion: null, outputFormat: "reel" }],
     attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-18T03:20:00.000Z",
@@ -102,7 +101,7 @@ const jobs: AiContentGeneration[] = [
     purpose: "informational",
     status: "completed",
     currentStep: 5,
-    draft: emptyDraft("blog"),
+    draft: emptyDraft(),
     outputs: [{ id: "output-blog", generationId: "generation-completed", title: "운영 가이드", status: "completed", artifact: artifact("output-blog", "html"), failureReason: null, downloadedAt: null, manifestVersion: "ai-content.v3", outputFormat: "blog", publishSupported: false }],
     attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-17T02:00:00.000Z",
@@ -116,7 +115,7 @@ const jobs: AiContentGeneration[] = [
     purpose: "informational",
     status: "completed",
     currentStep: 5,
-    draft: emptyDraft("card_news"),
+    draft: emptyDraft(),
     outputs: [
       {
         id: "output-card-news",
@@ -143,7 +142,7 @@ const jobs: AiContentGeneration[] = [
     purpose: "marketing",
     status: "partial_failed",
     currentStep: 5,
-    draft: emptyDraft("marketing"),
+    draft: emptyDraft(),
     outputs: [
       { id: "output-marketing-1", generationId: "generation-partial", title: "혜택 강조형", status: "completed", artifact: artifact("output-marketing-1", "video"), failureReason: null, downloadedAt: null, manifestVersion: "ai-content.v3", outputFormat: "reel", publishSupported: false },
       { id: "output-marketing-2", generationId: "generation-partial", title: "문제 해결형", status: "failed", artifact: null, failureReason: "이미지 생성 실패", downloadedAt: null, manifestVersion: null, outputFormat: "reel", publishSupported: false }
@@ -160,7 +159,7 @@ const jobs: AiContentGeneration[] = [
     purpose: "informational",
     status: "failed",
     currentStep: 4,
-    draft: emptyDraft("blog"),
+    draft: emptyDraft(),
     outputs: [{ id: "output-failed", generationId: "generation-failed", title: "실패 결과", status: "failed", artifact: null, failureReason: "내부 분석 데이터 오류", downloadedAt: null, manifestVersion: null, outputFormat: "blog", publishSupported: false }],
     attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
     createdAt: "2026-07-15T12:00:00.000Z",

@@ -678,7 +678,7 @@ test("074 prepare cutover accepts only the five roles sealed by bootstrap", asyn
     );
     await assert.rejects(database.query(
       `select prepare_ai_content_cutover($1,'content_owner','content_app','content_operator','content_app','content_cleanup',
-         $2,$2,$2,'backup',now(),$2,$2,'{}'::jsonb,$2,$3,$2)`,
+         $2,$2,$2,'backup',now(),$2,$2,'{}'::jsonb,$2,$2,$3,$2)`,
       [randomUUID(), "b".repeat(64), "c".repeat(40)],
     ), /ai_content_cutover_roles_not_sealed/);
   });
@@ -964,7 +964,7 @@ test("074 post-migration security catalog is independently read from live Postgr
       revoke all on table ai_content_cutovers,ai_content_cutover_status_events,ai_content_maintenance_state,ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog from content_application;
       grant select on table ai_content_maintenance_state to content_application;
       grant execute on function assert_ai_content_writable() to content_application;
-      grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,jsonb,text,text,text),set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text,text) to content_operator;
+      grant execute on function prepare_ai_content_cutover(uuid,name,name,name,name,name,text,text,text,text,timestamptz,text,text,jsonb,text,text,text,text),read_ai_content_cutover_control_state(uuid),set_ai_content_maintenance(uuid,boolean),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text,text) to content_operator;
       grant select on table ai_content_bootstrap_state,ai_content_ddl_allowlist,ai_content_write_fence_catalog to content_migration;
       grant execute on function ai_content_cutover_bypass_allowed(),lock_ai_content_cutover_transaction_state(uuid),verify_ai_content_cutover_preflight_identity(uuid,jsonb,text,text),verify_ai_content_write_fence_catalog(),consume_ai_content_provider_attestation(),read_ai_content_cutover_migration_body_evidence(uuid),register_ai_content_075_fence_relations(),transition_ai_content_cutover_status(uuid,text,text,text,text,uuid,timestamptz,text,text) to content_migration;
       grant execute on function register_ai_content_075_fence_relations() to content_schema_owner;
@@ -5326,6 +5326,9 @@ test("migration runner records forward-only 060 through 073 without changing the
   const through058 = runnableMigrations.filter(
     (migration) => migration.id <= "058_avatar_and_reference_libraries.sql",
   );
+  const through073 = runnableMigrations.filter(
+    (migration) => migration.id <= "073_ai_content_generation_v2_render_pipeline.sql",
+  );
 
   await withDatabase(async (database) => {
     const client = createPgliteMigrationClient(database);
@@ -5341,7 +5344,7 @@ test("migration runner records forward-only 060 through 073 without changing the
 
     const upgraded = await runMigrationsWithClient({
       client,
-      migrations: runnableMigrations,
+      migrations: through073,
     });
     assert.deepEqual(upgraded.pending.slice(-14), [
       "060_content_orchestration.sql",
@@ -5443,7 +5446,7 @@ test("migration runner records forward-only 060 through 073 without changing the
     ]);
     const repeated = await runMigrationsWithClient({
       client,
-      migrations: runnableMigrations,
+      migrations: through073,
     });
     assert.deepEqual(repeated.pending, []);
   });
@@ -5924,6 +5927,9 @@ test("065 direct SQL and migration runner pending-tail paths converge on lifecyc
   const through064 = runnable.filter(
     (migration) => migration.id <= "064_reference_upload_finalization.sql",
   );
+  const through073 = runnable.filter(
+    (migration) => migration.id <= "073_ai_content_generation_v2_render_pipeline.sql",
+  );
   const migration065 = runnable.find(
     (migration) => migration.id === "065_ai_content_attachment_upload_sessions.sql",
   );
@@ -5948,7 +5954,7 @@ test("065 direct SQL and migration runner pending-tail paths converge on lifecyc
     const client = createPgliteMigrationClient(database);
     await runMigrationsWithClient({ client, migrations: through064 });
     await seedAttachmentLifecycleUpgradeFixture(database, fixture);
-    const result = await runMigrationsWithClient({ client, migrations: runnable });
+    const result = await runMigrationsWithClient({ client, migrations: through073 });
     assert.deepEqual(result.pending, [
       "065_ai_content_attachment_upload_sessions.sql",
       "066_ai_content_analyzed_subject_orchestration.sql",
@@ -7602,7 +7608,7 @@ test("075 creates the durable proposal audit, automated run, prompt binding, cle
     triggers: [...migration075.sql.matchAll(/^create (?:constraint )?trigger\b/gim)].length,
   }, {
     relations: 13,
-    functions: 35,
+    functions: 36,
     triggers: 22,
   }, "075 failure handling and retry lineage must reuse the sealed relation/function/trigger identities");
   assert.doesNotMatch(

@@ -1,0 +1,349 @@
+import assert from "node:assert/strict";
+import { createHash, generateKeyPairSync } from "node:crypto";
+import test from "node:test";
+import * as runner from "./migrationRunner.mjs";
+import {
+  applyRoleBootstrap,
+  buildAndSign075Allowlist,
+  createRoleBootstrapPlan,
+  installProvider074EnforcementBundle,
+  signBootstrap074Authorization,
+} from "./ai-content-database-roles.mjs";
+import * as databaseRoles from "./ai-content-database-roles.mjs";
+
+function identity(keyId) {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
+  const publicKeySha256 = createHash("sha256").update(publicKey.export({ type: "spki", format: "der" })).digest("hex");
+  return { keyId, privateKey, publicKeyPem, publicKeySha256 };
+}
+
+const authorization = identity("authorization-2026-08");
+const provider = identity("provider-2026-08");
+const testPreservedRelationOwners = Object.fromEntries(
+  databaseRoles.sharedOwnerTransferSecurityCatalog.map(({ relationName }) => [relationName, "postgres"]),
+);
+const testSharedRelationAclBefore = {
+  relationAclRows: databaseRoles.sharedOwnerTransferSecurityCatalog.flatMap(({ relationName, preservedPrivileges }) => (
+    preservedPrivileges.map((privilege) => ({
+      relationName,
+      grantorRoleName: "postgres",
+      granteeRoleName: "postgres",
+      privilege,
+      grantable: false,
+    }))
+  )),
+  columnAclRows: [],
+};
+const createTestRoleBootstrapPlan = (input = {}) => createRoleBootstrapPlan({
+  databaseName: "postgres",
+  preservedRelationOwners: testPreservedRelationOwners,
+  sharedRelationAclBefore: testSharedRelationAclBefore,
+  migrationHistoryOwnerRoleName: "postgres",
+  ...input,
+});
+
+test("role bootstrap plan is closed over five distinct least-privilege identities", () => {
+  const plan = createTestRoleBootstrapPlan({
+    roleNames: {
+      schemaOwnerRoleName: "content_schema_owner", applicationRoleName: "content_application",
+      operatorRoleName: "content_operator", migrationRoleName: "content_migration",
+      cleanupRoleName: "content_cleanup",
+    },
+  });
+  assert.equal(plan.contractVersion, "ai-content-database-role-plan.v1");
+  assert.deepEqual(plan.relations, runner.bootstrapFenceRelations);
+  assert.ok(Array.isArray(plan.applicationRelationGrants));
+  assert.deepEqual(
+    plan.applicationRelationGrants.find(({ relationName }) => relationName === "ai_content_generations"),
+    { relationName: "ai_content_generations", privileges: ["INSERT", "SELECT", "UPDATE"] },
+  );
+  assert.deepEqual(
+    plan.applicationRelationGrants.find(({ relationName }) => relationName === "workspace_members"),
+    { relationName: "workspace_members", privileges: ["SELECT"] },
+  );
+  assert.deepEqual(plan.applicationSequenceGrants, []);
+  assert.deepEqual(plan.applicationSchemaPrivileges, ["USAGE"]);
+  assert.deepEqual(
+    plan.schemaOwnerRelationGrants.find(({ relationName }) => relationName === "product_service_versions"),
+    { relationName: "product_service_versions", privileges: ["SELECT"] },
+  );
+  assert.deepEqual(
+    plan.schemaOwnerRelationGrants.find(({ relationName }) => relationName === "schema_migrations"),
+    { relationName: "schema_migrations", privileges: ["INSERT", "SELECT"] },
+  );
+  assert.deepEqual(plan.migrationRelationGrants, [
+    { relationName: "schema_migrations", privileges: ["SELECT"] },
+  ]);
+  assert.equal(plan.migrationHistoryOwnerRoleName, "postgres");
+  assert.deepEqual(
+    plan.schemaOwnerRelationGrants.find(({ relationName }) => relationName === "brands"),
+    { relationName: "brands", privileges: ["REFERENCES"] },
+  );
+  assert.deepEqual(
+    plan.sharedOwnerTransfers.find(({ relationName }) => relationName === "worker_instances"),
+    {
+      relationName: "worker_instances",
+      preservedOwnerRoleName: "postgres",
+      preservedPrivileges: ["DELETE", "INSERT", "REFERENCES", "SELECT", "TRIGGER", "TRUNCATE", "UPDATE"],
+    },
+  );
+  assert.equal(plan.exclusiveOwnedRelations.every((relationName) => relationName.startsWith("ai_content_")), true);
+  assert.deepEqual(plan.sharedRelationAclBefore, testSharedRelationAclBefore);
+  assert.match(plan.sharedRelationAclBeforeSha256, /^[0-9a-f]{64}$/);
+  assert.deepEqual(plan.applicationOwnedFunctions, [
+    "public.select_ai_content_proposal(uuid,uuid,uuid,uuid)",
+    "public.start_ai_content_orchestration(uuid,uuid,uuid,jsonb,jsonb,uuid)",
+  ]);
+  assert.equal(new Set(Object.values(plan.roleNames)).size, 5);
+  assert.match(plan.planSha256, /^[0-9a-f]{64}$/);
+  assert.equal(typeof databaseRoles.readSharedRelationAclCatalog, "function");
+  assert.equal(typeof databaseRoles.restoreSharedRelationOwners, "function");
+  assert.ok(runner.providerEnforcementBundle.functions.includes(
+    "public.read_ai_content_cutover_control_state(uuid)",
+  ));
+  assert.throws(
+    () => createTestRoleBootstrapPlan({ roleNames: { ...plan.roleNames, cleanupRoleName: plan.roleNames.applicationRoleName } }),
+    /ai_content_role_names_invalid/,
+  );
+});
+
+test("074 provider enforcement rejects a non-platform-postgres identity before any mutation", async () => {
+  const plan = createTestRoleBootstrapPlan();
+  const calls = [];
+  const client = { query: async (sql) => {
+    calls.push(String(sql));
+    return { rows: [{ session_user: "content_operator", current_user: "content_operator", rolsuper: false }] };
+  } };
+  await assert.rejects(installProvider074EnforcementBundle({
+    client, migration: {}, plan, authorization: {}, installRequest: {},
+    authorizationIdentity: {}, providerIdentity: {},
+  }), /bootstrap_074_provider_identity_invalid/);
+  assert.equal(calls.some((sql) => /^\s*begin\s*$/i.test(sql)), false);
+});
+
+test("role bootstrap applies only the closed role/schema/relation ownership plan", async () => {
+  const plan = createTestRoleBootstrapPlan();
+  const calls = [];
+  let bootstrapCommitted = false;
+  const client = { query: async (sql, values = []) => {
+    calls.push({ sql: String(sql), values });
+    if (/^\s*commit\s*$/i.test(String(sql))) bootstrapCommitted = true;
+    if (String(sql).includes("ai_content_shared_relation_owner_before_transfer")) {
+      return { rows: plan.sharedOwnerTransfers.map(({ relationName, preservedOwnerRoleName }) => ({
+        relation_name: relationName,
+        owner_role_name: bootstrapCommitted ? plan.roleNames.schemaOwnerRoleName : preservedOwnerRoleName,
+      })) };
+    }
+    if (String(sql).includes("ai_content_shared_relation_acl_snapshot")) {
+      return { rows: plan.sharedRelationAclBefore.relationAclRows.map((row) => ({
+        relation_name: row.relationName,
+        column_name: null,
+        grantor_role_name: row.grantorRoleName,
+        grantee_role_name: row.granteeRoleName,
+        privilege: row.privilege,
+        grantable: row.grantable,
+        acl_level: "relation",
+      })) };
+    }
+    if (String(sql).includes("ai_content_exclusive_acl_grantees_to_scrub")
+      || String(sql).includes("ai_content_controlled_column_acl_to_scrub")) return { rows: [] };
+    if (String(sql).includes("ai_content_schema_owner_relation_acl")) {
+      return { rows: plan.schemaOwnerRelationGrants.map(({ relationName, privileges }) => ({
+        relation_name: relationName,
+        privileges,
+        grantable: false,
+      })) };
+    }
+    if (String(sql).includes("ai_content_migration_relation_acl")) {
+      return { rows: plan.migrationRelationGrants.map(({ relationName, privileges }) => ({
+        relation_name: relationName,
+        owner_role_name: plan.migrationHistoryOwnerRoleName,
+        privileges,
+        grantable: false,
+      })) };
+    }
+    if (String(sql).includes("ai_content_shared_relation_owner_acl")) {
+      return { rows: plan.sharedOwnerTransfers.map(({ relationName, preservedOwnerRoleName, preservedPrivileges }) => ({
+        relation_name: relationName,
+        owner_role_name: plan.roleNames.schemaOwnerRoleName,
+        preserved_owner_role_name: preservedOwnerRoleName,
+        privileges: preservedPrivileges,
+        grantable: false,
+      })) };
+    }
+    if (String(sql).includes("ai_content_exclusive_relation_acl")) {
+      return { rows: plan.exclusiveOwnedRelations.flatMap((relationName) => {
+        const grant = plan.applicationRelationGrants.find((candidate) => candidate.relationName === relationName);
+        return (grant?.privileges ?? []).map((privilege) => ({
+          relation_name: relationName,
+          grantee_role_name: plan.roleNames.applicationRoleName,
+          privilege,
+          grantable: false,
+        }));
+      }) };
+    }
+    if (String(sql).includes("ai_content_exclusive_column_acl")) return { rows: [] };
+    if (String(sql).includes("ai_content_exclusive_preserved_runtime_write_acl")) return { rows: [] };
+    if (String(sql).includes("ai_content_preserved_runtime_schema_acl")) {
+      return { rows: [{ usage_allowed: true, create_allowed: false }] };
+    }
+    if (String(sql).includes("to_regclass")) return { rows: values[0].map((relation_name) => ({ relation_name })) };
+    if (String(sql).includes("ai_content_application_owned_function_catalog")) {
+      return { rows: plan.applicationOwnedFunctions.map((identity) => ({ identity })) };
+    }
+    if (String(sql).includes("ai_content_application_relation_acl")) {
+      return { rows: plan.applicationRelationGrants.map(({ relationName, privileges }) => ({ relation_name: relationName, privileges, column_acl_count: 0 })) };
+    }
+    if (String(sql).includes("ai_content_application_sequence_acl")) return { rows: [] };
+    if (String(sql).includes("ai_content_application_schema_acl")) {
+      return { rows: [{ schema_name: "public", privileges: plan.applicationSchemaPrivileges }] };
+    }
+    if (String(sql).includes("ai_content_application_function_owner")) {
+      return { rows: plan.applicationOwnedFunctions.map((identity) => ({ identity, owner_role_name: plan.roleNames.schemaOwnerRoleName })) };
+    }
+    if (String(sql).includes("from pg_roles")) return { rows: [] };
+    if (String(sql).includes("pg_get_triggerdef")) return { rows: [] };
+    return { rows: [], rowCount: 1 };
+  } };
+  const passwords = {
+    content_application: "app-password", content_operator: "operator-password",
+    content_migration: "migration-password", content_cleanup: "cleanup-password",
+  };
+  const firstResult = await applyRoleBootstrap(client, plan, passwords);
+  const mutationCountAfterFirstApply = calls.filter(({ sql }) => /alter table public\."[^"]+" owner to/i.test(sql)).length;
+  const replayResult = await applyRoleBootstrap(client, plan, passwords);
+  const sql = calls.map(({ sql }) => sql).join("\n");
+  assert.match(sql, /create role "content_schema_owner" nologin nosuperuser nobypassrls/i);
+  assert.match(sql, /create role "content_migration" login noinherit/i);
+  assert.match(sql, /grant "content_schema_owner" to "content_migration" with set true, inherit false, admin false/i);
+  assert.match(sql, /revoke create on schema public from public/i);
+  assert.doesNotMatch(sql, /revoke all on schema public from public/i);
+  assert.match(sql, /revoke all on table public\."ai_content_generations" from "content_application"/i);
+  assert.match(sql, /grant insert,select,update on table public\."ai_content_generations" to "content_application"/i);
+  assert.match(sql, /grant select on table public\."workspace_members" to "content_application"/i);
+  assert.match(sql, /grant select on table public\."product_service_versions" to "content_schema_owner"/i);
+  assert.match(sql, /grant insert,select on table public\."schema_migrations" to "content_schema_owner"/i);
+  assert.match(sql, /grant select on table public\."schema_migrations" to "content_migration"/i);
+  assert.match(sql, /alter table public\."worker_instances" owner to "content_schema_owner"/i);
+  assert.match(sql, /grant delete,insert,references,select,trigger,truncate,update on table public\."worker_instances" to "postgres"/i);
+  assert.match(sql, /alter function public\.select_ai_content_proposal\(uuid,uuid,uuid,uuid\) owner to "content_schema_owner"/i);
+  assert.doesNotMatch(sql, /alter function public\.set_updated_at\(\) owner/i);
+  assert.equal(
+    mutationCountAfterFirstApply,
+    plan.exclusiveOwnedRelations.length + plan.sharedOwnerTransfers.length,
+  );
+  assert.equal(
+    calls.filter(({ sql: statement }) => /alter table public\."[^"]+" owner to/i.test(statement)).length,
+    mutationCountAfterFirstApply,
+  );
+  assert.deepEqual(replayResult, firstResult);
+  assert.match(firstResult.securityCatalogSha256, /^[0-9a-f]{64}$/);
+  assert.doesNotMatch(sql, /drop role|drop table|reassign owned/i);
+});
+
+test("role bootstrap rejects shared relation ACL drift before ownership transfer", async () => {
+  const plan = createTestRoleBootstrapPlan();
+  const calls = [];
+  const client = { query: async (sql, values = []) => {
+    calls.push(String(sql));
+    if (String(sql).includes("ai_content_shared_relation_acl_snapshot")) return { rows: [] };
+    if (String(sql).includes("ai_content_shared_relation_owner_before_transfer")) {
+      return { rows: plan.sharedOwnerTransfers.map(({ relationName, preservedOwnerRoleName }) => ({
+        relation_name: relationName, owner_role_name: preservedOwnerRoleName,
+      })) };
+    }
+    if (String(sql).includes("to_regclass")) return { rows: values[0].map((relation_name) => ({ relation_name })) };
+    if (String(sql).includes("from pg_roles")) return { rows: [] };
+    return { rows: [], rowCount: 1 };
+  } };
+  await assert.rejects(applyRoleBootstrap(client, plan, {
+    content_application: "app-password", content_operator: "operator-password",
+    content_migration: "migration-password", content_cleanup: "cleanup-password",
+  }), /ai_content_shared_relation_acl_drift/);
+  assert.equal(calls.some((sql) => /alter table public\./i.test(sql)), false);
+});
+
+test("application runtime grant verification rejects a missing direct relation privilege", async () => {
+  assert.equal(typeof databaseRoles.verifyApplicationRuntimeSecurity, "function");
+  const plan = createTestRoleBootstrapPlan();
+  const client = {
+    query: async (sql) => {
+      if (String(sql).includes("ai_content_application_relation_acl")) {
+        return {
+          rows: plan.applicationRelationGrants.map((grant) => ({
+            relation_name: grant.relationName,
+            privileges: grant.relationName === "ai_content_generations"
+              ? grant.privileges.filter((privilege) => privilege !== "UPDATE")
+              : grant.privileges,
+            column_acl_count: 0,
+          })),
+        };
+      }
+      if (String(sql).includes("ai_content_application_sequence_acl")) return { rows: [] };
+      if (String(sql).includes("ai_content_application_function_owner")) {
+        return { rows: plan.applicationOwnedFunctions.map((identity) => ({ identity, owner_role_name: plan.roleNames.schemaOwnerRoleName })) };
+      }
+      throw new Error(`unexpected_query:${String(sql)}`);
+    },
+  };
+  await assert.rejects(
+    databaseRoles.verifyApplicationRuntimeSecurity(client, plan),
+    /ai_content_application_relation_acl_invalid/,
+  );
+});
+
+test("074 authorization is signed by the authorization key and pins the provider identity", async () => {
+  const migration = (await runner.loadMigrations()).find(({ id }) => id === "074_ai_content_maintenance_write_fence.sql");
+  const plan = createTestRoleBootstrapPlan();
+  const eventBefore = { catalogSha256: "a".repeat(64), count: 0 };
+  const signed = signBootstrap074Authorization({
+    migration, roleNames: plan.roleNames,
+    roleCatalogSha256: "b".repeat(64), objectCatalogSha256: "c".repeat(64),
+    eventTriggerFunctionSha256: "d".repeat(64), eventBefore,
+    imageDigest: `sha256:${"e".repeat(64)}`, imageSourceLabel: "f".repeat(40),
+    requestId: "bootstrap-074-production", issuedAt: "2026-08-06T00:00:00.000Z",
+    authorizationIdentity: authorization, providerIdentity: provider,
+  });
+  assert.equal(runner.validateBootstrapRoleAuthorization(signed, {
+    migration, roleCatalogSha256: "b".repeat(64), objectCatalogSha256: "c".repeat(64),
+    eventTriggerCatalogBeforeSha256: eventBefore.catalogSha256,
+    eventTriggerCatalogBeforeCount: 0,
+    imageDigest: `sha256:${"e".repeat(64)}`, imageSourceLabel: "f".repeat(40),
+    authorizationVerification: {
+      publicKeyPem: authorization.publicKeyPem, expectedKeyId: authorization.keyId,
+      expectedPublicKeySha256: authorization.publicKeySha256,
+    },
+    providerAttestationVerification: {
+      publicKeyPem: provider.publicKeyPem, expectedKeyId: provider.keyId,
+      expectedPublicKeySha256: provider.publicKeySha256,
+    },
+    now: new Date("2026-08-06T00:01:00.000Z"),
+  }).requestId, "bootstrap-074-production");
+});
+
+test("075 provider artifacts contain the exact migration-derived allowlist and distinct signatures", async () => {
+  const migration = (await runner.loadMigrations()).find(({ id }) => id === "075_ai_content_three_format_cutover.sql");
+  const plan = createTestRoleBootstrapPlan();
+  const sealed = buildAndSign075Allowlist({
+    migration, roleNames: plan.roleNames,
+    cutoverId: "11111111-1111-4111-8111-111111111111",
+    enforcementCatalogSha256: "a".repeat(64), beforeRows: [],
+    requestId: "22222222-2222-4222-8222-222222222222",
+    issuedAt: "2026-08-06T00:00:00.000Z",
+    authorizationIdentity: authorization, providerIdentity: provider,
+  });
+  const validated = runner.validateCutoverAllowlistAuthorization(sealed.authorization, {
+    migration, roleNames: plan.roleNames, cutoverId: sealed.authorization.cutoverId,
+    enforcementCatalogSha256: "a".repeat(64),
+    authorizationVerification: { publicKeyPem: authorization.publicKeyPem, expectedKeyId: authorization.keyId, expectedPublicKeySha256: authorization.publicKeySha256 },
+    providerAttestationVerification: { publicKeyPem: provider.publicKeyPem, expectedKeyId: provider.keyId, expectedPublicKeySha256: provider.publicKeySha256 },
+    now: new Date("2026-08-06T00:01:00.000Z"),
+  });
+  assert.deepEqual(validated.rows, runner.buildCutover075ExactDdlAllowlist(migration, plan.roleNames));
+  assert.equal(runner.validateCutoverAllowlistAttestation(sealed.attestation, {
+    authorization: validated,
+    providerAttestationVerification: { publicKeyPem: provider.publicKeyPem, expectedKeyId: provider.keyId, expectedPublicKeySha256: provider.publicKeySha256 },
+    now: new Date("2026-08-06T00:01:00.000Z"),
+  }).afterSha256, sealed.authorization.rowsSha256);
+});

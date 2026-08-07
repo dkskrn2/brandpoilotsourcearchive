@@ -1192,6 +1192,7 @@ interface RepositoryInstagramPublishOptions {
 }
 
 interface RepositoryOptions {
+  aiContentPool?: Pool;
   artifactStorageDir?: string;
   fetchPublishArtifact?: typeof fetch;
   publishArtifactFetchTimeoutMs?: number;
@@ -1408,18 +1409,19 @@ export async function fetchInstagramImageManifest(
 }
 
 export function createRepository(pool: Pool, options: RepositoryOptions = {}): ApiRepository {
-  const fencedAiContentSubrepositoryPool = withAiContentTransactionFence(pool);
+  const aiContentPool = options.aiContentPool ?? pool;
+  const fencedAiContentSubrepositoryPool = withAiContentTransactionFence(aiContentPool);
   const subjectAnalysis = createAiContentSubjectRepository(fencedAiContentSubrepositoryPool);
   const brandCore = createBrandCoreRepository(pool);
   const productLibrary = createProductLibraryRepository(pool);
   const assetLibrary = createAssetLibraryRepository(pool);
   const faqSuggestions = createFaqSuggestionRepository(pool);
   const brandIntelligenceProvider = createBrandIntelligenceProvider(createBrandIntelligenceRepository(pool));
-  const aiContent = createAiContentRepository(pool, {
+  const aiContent = createAiContentRepository(aiContentPool, {
     brandIntelligenceProvider,
   });
   const aiContentAttachmentGc = createAiContentAttachmentGcRepository(fencedAiContentSubrepositoryPool);
-  const aiContentDownload = createAiContentDownloadRepository(pool, { fetchImpl: options.fetchPublishArtifact ?? fetch });
+  const aiContentDownload = createAiContentDownloadRepository(aiContentPool, { fetchImpl: options.fetchPublishArtifact ?? fetch });
   const aiContentPublish = createAiContentPublishRepository(fencedAiContentSubrepositoryPool);
   const instagramPublish = resolveInstagramPublishOptions(options);
   const imageRenderCooldownMs = resolveImageRenderCooldownMs(options);
