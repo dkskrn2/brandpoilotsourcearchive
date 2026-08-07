@@ -1480,25 +1480,38 @@ async function readCleanupRoleSecurityCatalog(client, cleanupRoleName) {
   const memberships = await client.query(
     `/* ai_content_cleanup_role_retirement_membership_catalog */
      select member.rolname::text member_role_name,parent.rolname::text parent_role_name,
-            membership.admin_option,membership.inherit_option,membership.set_option
+            grantor.rolname::text grantor_role_name,membership.admin_option,
+            membership.inherit_option,membership.set_option
        from pg_auth_members membership
        join pg_roles member on member.oid=membership.member
        join pg_roles parent on parent.oid=membership.roleid
+       join pg_roles grantor on grantor.oid=membership.grantor
       where member.rolname=$1::name or parent.rolname=$1::name
-      order by member.rolname collate "C",parent.rolname collate "C"`,
+      order by member.rolname collate "C",parent.rolname collate "C",grantor.rolname collate "C"`,
     [cleanupRoleName],
   );
   return { roleRows: role.rows, aclRows: acl.rows, membershipRows: memberships.rows };
 }
 
-function assertCleanupRoleRetiredCatalog(catalog, cleanupRoleName) {
+function isProviderCleanupControlMembership(membership, plan, cleanupRoleName) {
+  return membership.member_role_name === plan.preservedRuntimeRoleName
+    && membership.parent_role_name === cleanupRoleName
+    && membership.grantor_role_name === "supabase_admin"
+    && membership.admin_option === true
+    && membership.inherit_option === false
+    && membership.set_option === false;
+}
+
+function assertCleanupRoleRetiredCatalog(catalog, plan) {
+  const cleanupRoleName = plan.roleNames.cleanupRoleName;
   if (catalog.roleRows.length !== 1) throw new Error("ai_content_cleanup_role_retirement_role_invalid");
   const role = catalog.roleRows[0];
   if (role.role_name !== cleanupRoleName || role.can_login !== false || role.is_superuser !== false
     || role.bypass_rls !== false || role.can_create_db !== false || role.can_create_role !== false
     || role.can_replicate !== false || role.inherit !== true || role.password_is_null !== true
     || (role.config != null && (!Array.isArray(role.config) || role.config.length !== 0))
-    || catalog.aclRows.length !== 0 || catalog.membershipRows.length !== 0) {
+    || catalog.aclRows.length !== 0 || catalog.membershipRows.length !== 1
+    || !isProviderCleanupControlMembership(catalog.membershipRows[0], plan, cleanupRoleName)) {
     throw new Error("ai_content_cleanup_role_retirement_role_invalid");
   }
 }
@@ -1565,7 +1578,7 @@ export async function retireCleanupRole(client, rawPlan, cutoverId) {
         cutoverId,
         migration,
       );
-      assertCleanupRoleRetiredCatalog(beforeCatalog, cleanupRoleName);
+      assertCleanupRoleRetiredCatalog(beforeCatalog, plan);
       const revokedAt = cleanupSealPresent
         ? exactIsoTimestamp(
           cutover.rows[0].cleanup_credential_revoked_at,
@@ -1606,6 +1619,7 @@ export async function retireCleanupRole(client, rawPlan, cutoverId) {
     }
     await setProviderSchemaOwnerMembershipInTransaction(client, plan, true);
     for (const membership of beforeCatalog.membershipRows) {
+      if (isProviderCleanupControlMembership(membership, plan, cleanupRoleName)) continue;
       if (membership.member_role_name === cleanupRoleName) {
         await client.query(`revoke ${quoteIdentifier(String(membership.parent_role_name))} from ${quoteIdentifier(cleanupRoleName)}`);
       } else {
@@ -1639,7 +1653,7 @@ export async function retireCleanupRole(client, rawPlan, cutoverId) {
     await client.query(`alter role ${quoteIdentifier(cleanupRoleName)} reset all`);
     await setProviderSchemaOwnerMembershipInTransaction(client, plan, false);
     const retiredCatalog = await readCleanupRoleSecurityCatalog(client, cleanupRoleName);
-    assertCleanupRoleRetiredCatalog(retiredCatalog, cleanupRoleName);
+    assertCleanupRoleRetiredCatalog(retiredCatalog, plan);
     const transactionClock = await client.query(
       `/* ai_content_cleanup_role_retirement_transaction_clock */
        select transaction_timestamp() retired_at`,
@@ -1690,7 +1704,7 @@ export async function retireCleanupRole(client, rawPlan, cutoverId) {
       throw new Error("ai_content_cleanup_role_retirement_cutover_seal_invalid");
     }
     const sealedCatalog = await readCleanupRoleSecurityCatalog(client, cleanupRoleName);
-    assertCleanupRoleRetiredCatalog(sealedCatalog, cleanupRoleName);
+    assertCleanupRoleRetiredCatalog(sealedCatalog, plan);
     if (sealedCatalog.roleRows[0]?.role_comment !==
       `${cleanupRetirementCommentPrefix}${canonicalJson(evidence)}`) {
       throw new Error("ai_content_cleanup_role_retirement_comment_invalid");
