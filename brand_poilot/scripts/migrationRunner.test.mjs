@@ -1053,6 +1053,12 @@ test("075 role catalog accepts and removes only the exact transient provider inh
     }),
     baseline,
   );
+  assert.deepEqual(
+    migrationRunner.withoutProvider075TransientMembership([...baseline, transient], cutover075RoleNames, {
+      allowed: true,
+    }),
+    baseline,
+  );
   assert.throws(
     () => migrationRunner.withoutProvider075TransientMembership(baseline, cutover075RoleNames, { required: true }),
     /cutover_075_provider_membership_required/,

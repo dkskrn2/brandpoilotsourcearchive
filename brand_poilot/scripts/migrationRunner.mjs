@@ -1676,7 +1676,7 @@ export async function readFenceSecurityCatalog(client, names, {
 }
 
 export function withoutProvider075TransientMembership(rows, names, {
-  required = false, providerIsSuperuser = false,
+  allowed = false, required = false, providerIsSuperuser = false,
 } = {}) {
   if (!Array.isArray(rows) || typeof names?.schemaOwnerRoleName !== "string") {
     throw new Error("cutover_075_provider_membership_invalid");
@@ -1692,11 +1692,14 @@ export function withoutProvider075TransientMembership(rows, names, {
   if (required && !providerIsSuperuser && exact.length !== 1) {
     throw new Error("cutover_075_provider_membership_required");
   }
-  if (!required && exact.length !== 0) throw new Error("cutover_075_provider_membership_unexpected");
+  if (!allowed && !required && exact.length !== 0) {
+    throw new Error("cutover_075_provider_membership_unexpected");
+  }
   return rows.filter((row) => !exact.includes(row));
 }
 
 export async function readCanonicalBootstrapRoleCatalog(client, names, {
+  allowProvider075Membership = false,
   requireProvider075Membership = false,
 } = {}) {
   const roleNames = [names.schemaOwnerRoleName, names.applicationRoleName, names.operatorRoleName,
@@ -1763,6 +1766,7 @@ export async function readCanonicalBootstrapRoleCatalog(client, names, {
   const environment = environmentResult.rows[0];
   const membershipEdges = withoutProvider075TransientMembership(
     membershipResult.rows, names, {
+      allowed: allowProvider075Membership,
       required: requireProvider075Membership,
       providerIsSuperuser: environment?.provider_is_superuser === true,
     },
@@ -3903,7 +3907,9 @@ export async function runMigrationsWithClient({
     if (!roleNames || requiredRoleNameKeys.some((key) => typeof roleNames[key] !== "string")) {
       throw new Error("bootstrap_role_environment_required");
     }
-    await readCanonicalBootstrapRoleCatalog(client, roleNames);
+    await readCanonicalBootstrapRoleCatalog(client, roleNames, {
+      allowProvider075Membership: Boolean(cutover),
+    });
   }
   await client.query("select pg_advisory_lock(hashtext($1))", [migrationAdvisoryLockName]);
   try {
@@ -4029,7 +4035,9 @@ export async function runMigrationsWithClient({
         || identity.rows[0]?.session_user === "postgres") {
         throw new Error("bootstrap_role_session_identity_invalid");
       }
-      liveCatalogs = await readCanonicalBootstrapCatalogs(client, authorization);
+      liveCatalogs = await readCanonicalBootstrapCatalogs(client, authorization, {
+        allowProvider075Membership: Boolean(cutover),
+      });
       if (authorization.roleCatalogSha256 !== liveCatalogs.roleCatalogSha256) {
         throw new Error("bootstrap_role_authorization_role_catalog_mismatch");
       }
@@ -4214,8 +4222,12 @@ export async function runMigrationsWithClient({
       }
       providerInstallRequest = sealedInstall;
       liveCatalogs = recovering075
-        ? await readCanonicalBootstrapRoleCatalog(client, authorization)
-        : await readCanonicalBootstrapCatalogs(client, authorization);
+        ? await readCanonicalBootstrapRoleCatalog(client, authorization, {
+          allowProvider075Membership: Boolean(cutover),
+        })
+        : await readCanonicalBootstrapCatalogs(client, authorization, {
+          allowProvider075Membership: Boolean(cutover),
+        });
       if (authorization.roleCatalogSha256 !== liveCatalogs.roleCatalogSha256
         || (!recovering075
           && authorization.objectCatalogSha256 !== liveCatalogs.objectCatalogSha256)) {
