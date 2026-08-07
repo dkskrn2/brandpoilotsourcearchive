@@ -237,6 +237,11 @@ test("075 provider inheritance bridge grants one exact managed edge and revokes 
   assert.equal(restoreEnabled.transientMembershipEnabled, true);
   const restoreDisabled = await databaseRoles.setProvider075SchemaOwnerMembership(client, plan, cutoverId, false);
   assert.equal(restoreDisabled.transientMembershipEnabled, false);
+  cutoverState = { status: "backend_verified", maintenance_enabled: true, marker_present: true };
+  const retirementEnabled = await databaseRoles.setProvider075SchemaOwnerMembership(client, plan, cutoverId, true);
+  assert.equal(retirementEnabled.transientMembershipEnabled, true);
+  const retirementDisabled = await databaseRoles.setProvider075SchemaOwnerMembership(client, plan, cutoverId, false);
+  assert.equal(retirementDisabled.transientMembershipEnabled, false);
   assert.equal(transient, false);
 });
 
@@ -270,6 +275,23 @@ test("shared-owner restore drops inherited provider access outside the ownership
   assert.ok(firstDisable >= 0 && firstDisable < preflight);
   assert.ok(preflight < enable && enable < ownerMutation);
   assert.ok(ownerMutation < finalDisable && finalDisable < finalVerification);
+});
+
+test("cleanup-role retirement drops inherited provider access outside ACL mutation", async () => {
+  const source = await readFile(new URL("./ai-content-database-roles.mjs", import.meta.url), "utf8");
+  const retirement = source.slice(
+    source.indexOf("export async function retireCleanupRole"),
+    source.indexOf("function privateKey"),
+  );
+  const firstDisable = retirement.indexOf("setProviderSchemaOwnerMembershipInTransaction(client, plan, false)");
+  const securityPreflight = retirement.indexOf("verifyRestoredSharedRelationSecurity(client, plan)");
+  const enable = retirement.indexOf("setProviderSchemaOwnerMembershipInTransaction(client, plan, true)");
+  const aclMutation = retirement.indexOf("ai_content_cleanup_role_retirement_column_acl_to_revoke");
+  const finalDisable = retirement.lastIndexOf("setProviderSchemaOwnerMembershipInTransaction(client, plan, false)");
+  const finalVerification = retirement.indexOf("const retiredCatalog = await readCleanupRoleSecurityCatalog");
+  assert.ok(firstDisable >= 0 && firstDisable < securityPreflight);
+  assert.ok(securityPreflight < enable && enable < aclMutation);
+  assert.ok(aclMutation < finalDisable && finalDisable < finalVerification);
 });
 
 test("role bootstrap applies only the closed role/schema/relation ownership plan", async () => {

@@ -1344,10 +1344,11 @@ export async function setProvider075SchemaOwnerMembership(client, rawPlan, cutov
      where cutover.id=$1`, [cutoverId, plan.cutoverMigration]);
   const cutover = state.rows[0];
   const enablePhaseValid = (cutover?.status === "maintenance_verified" && cutover?.marker_present === false)
-    || (cutover?.status === "migration_body_complete" && cutover?.marker_present === true);
+    || (["migration_body_complete", "backend_verified"].includes(cutover?.status)
+      && cutover?.marker_present === true);
   if (!cutover || cutover.maintenance_enabled !== true
     || (enabled && !enablePhaseValid)
-    || (!enabled && !["maintenance_verified", "migration_body_complete"].includes(cutover.status))) {
+    || (!enabled && !["maintenance_verified", "migration_body_complete", "backend_verified"].includes(cutover.status))) {
     throw new Error("cutover_075_provider_membership_state_invalid");
   }
   if (provider.is_superuser === true) {
@@ -1542,6 +1543,7 @@ export async function retireCleanupRole(client, rawPlan, cutoverId) {
       || (cutover.rows[0].status === "completed" && !cleanupSealPresent)) {
       throw new Error("ai_content_cleanup_role_retirement_cutover_state_invalid");
     }
+    await setProviderSchemaOwnerMembershipInTransaction(client, plan, false);
     const sharedSecurity = await verifyRestoredSharedRelationSecurity(client, plan);
     const outbox = await client.query(
       `/* ai_content_cleanup_role_retirement_outbox_catalog */
@@ -1602,6 +1604,7 @@ export async function retireCleanupRole(client, rawPlan, cutoverId) {
     if (!ownedObjects.rows[0] || Object.values(ownedObjects.rows[0]).some((count) => Number(count) !== 0)) {
       throw new Error("ai_content_cleanup_role_retirement_owned_objects_invalid");
     }
+    await setProviderSchemaOwnerMembershipInTransaction(client, plan, true);
     for (const membership of beforeCatalog.membershipRows) {
       if (membership.member_role_name === cleanupRoleName) {
         await client.query(`revoke ${quoteIdentifier(String(membership.parent_role_name))} from ${quoteIdentifier(cleanupRoleName)}`);
@@ -1634,6 +1637,7 @@ export async function retireCleanupRole(client, rawPlan, cutoverId) {
     await client.query(`revoke all privileges on database ${quoteIdentifier(plan.databaseName)} from ${quoteIdentifier(cleanupRoleName)}`);
     await client.query(`alter role ${quoteIdentifier(cleanupRoleName)} nologin inherit nosuperuser nobypassrls nocreatedb nocreaterole noreplication password null`);
     await client.query(`alter role ${quoteIdentifier(cleanupRoleName)} reset all`);
+    await setProviderSchemaOwnerMembershipInTransaction(client, plan, false);
     const retiredCatalog = await readCleanupRoleSecurityCatalog(client, cleanupRoleName);
     assertCleanupRoleRetiredCatalog(retiredCatalog, cleanupRoleName);
     const transactionClock = await client.query(
