@@ -108,6 +108,26 @@ test("role bootstrap plan is closed over five distinct least-privilege identitie
   );
 });
 
+test("preserved runtime schema CREATE is accepted only for the managed database-owner topology", () => {
+  assert.equal(typeof databaseRoles.preservedRuntimeSchemaAclIsValid, "function");
+  assert.equal(databaseRoles.preservedRuntimeSchemaAclIsValid({
+    usage_allowed: true, create_allowed: false,
+    schema_owner_role_name: "content_schema_owner", database_owner_role_name: "postgres",
+  }, "postgres"), true);
+  assert.equal(databaseRoles.preservedRuntimeSchemaAclIsValid({
+    usage_allowed: true, create_allowed: true,
+    schema_owner_role_name: "pg_database_owner", database_owner_role_name: "postgres",
+  }, "postgres"), true);
+  assert.equal(databaseRoles.preservedRuntimeSchemaAclIsValid({
+    usage_allowed: true, create_allowed: true,
+    schema_owner_role_name: "postgres", database_owner_role_name: "postgres",
+  }, "postgres"), false);
+  assert.equal(databaseRoles.preservedRuntimeSchemaAclIsValid({
+    usage_allowed: true, create_allowed: true,
+    schema_owner_role_name: "pg_database_owner", database_owner_role_name: "another_owner",
+  }, "postgres"), false);
+});
+
 test("074 provider enforcement rejects a non-platform-postgres identity before any mutation", async () => {
   const plan = createTestRoleBootstrapPlan();
   const calls = [];
@@ -146,8 +166,12 @@ test("role bootstrap applies only the closed role/schema/relation ownership plan
         acl_level: "relation",
       })) };
     }
-    if (String(sql).includes("ai_content_exclusive_acl_grantees_to_scrub")
-      || String(sql).includes("ai_content_controlled_column_acl_to_scrub")) return { rows: [] };
+    if (String(sql).includes("ai_content_exclusive_acl_grantees_to_scrub")) {
+      return { rows: [{ relation_name: "ai_content_generations", grantee_role_name: "anon" }] };
+    }
+    if (String(sql).includes("ai_content_controlled_column_acl_to_scrub")) {
+      return { rows: [{ relation_name: "ai_content_generations", column_name: "title", grantee_role_name: "anon" }] };
+    }
     if (String(sql).includes("ai_content_schema_owner_relation_acl")) {
       return { rows: plan.schemaOwnerRelationGrants.map(({ relationName, privileges }) => ({
         relation_name: relationName,
@@ -239,12 +263,16 @@ test("role bootstrap applies only the closed role/schema/relation ownership plan
   const transferredApplicationGrantIndex = calls.findIndex(({ sql: statement }) => /grant insert,select,update on table public\."ai_content_generations" to "content_application"/i.test(statement));
   const externalApplicationGrantIndex = calls.findIndex(({ sql: statement }) => /grant select on table public\."workspace_members" to "content_application"/i.test(statement));
   const preservedOwnerGrantIndex = calls.findIndex(({ sql: statement }) => /grant delete,insert,references,select,trigger,truncate,update on table public\."worker_instances" to "postgres"/i.test(statement));
+  const exclusiveThirdPartyRevokeIndex = calls.findIndex(({ sql: statement }) => /revoke all privileges on table public\."ai_content_generations" from "anon"/i.test(statement));
+  const exclusiveColumnRevokeIndex = calls.findIndex(({ sql: statement }) => /revoke all privileges \("title"\) on table public\."ai_content_generations" from "anon"/i.test(statement));
   const providerSetRevokeIndex = calls.findIndex(({ sql: statement }) => /revoke "content_schema_owner" from "postgres"/i.test(statement));
   assert.ok(providerSetGrantIndex >= 0 && providerSetGrantIndex < firstOwnerTransferIndex);
   assert.ok(externalApplicationGrantIndex > firstOwnerTransferIndex && externalApplicationGrantIndex < setSchemaOwnerIndex);
   assert.ok(setSchemaOwnerIndex > lastFunctionTransferIndex);
   assert.ok(transferredApplicationGrantIndex > setSchemaOwnerIndex && transferredApplicationGrantIndex < resetRoleIndex);
   assert.ok(preservedOwnerGrantIndex > setSchemaOwnerIndex && preservedOwnerGrantIndex < resetRoleIndex);
+  assert.ok(exclusiveThirdPartyRevokeIndex > setSchemaOwnerIndex && exclusiveThirdPartyRevokeIndex < resetRoleIndex);
+  assert.ok(exclusiveColumnRevokeIndex > setSchemaOwnerIndex && exclusiveColumnRevokeIndex < resetRoleIndex);
   assert.ok(providerSetRevokeIndex > resetRoleIndex);
   assert.doesNotMatch(sql, /alter function public\.set_updated_at\(\) owner/i);
   assert.equal(

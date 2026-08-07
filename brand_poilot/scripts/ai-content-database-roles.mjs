@@ -460,6 +460,14 @@ function compareCatalogRows(actual, expected, errorCode) {
   if (canonicalJson(actual) !== canonicalJson(expected)) throw new Error(errorCode);
 }
 
+export function preservedRuntimeSchemaAclIsValid(row, preservedRuntimeRoleName) {
+  if (!record(row) || row.usage_allowed !== true) return false;
+  if (row.create_allowed === false) return true;
+  return row.create_allowed === true
+    && row.schema_owner_role_name === "pg_database_owner"
+    && row.database_owner_role_name === preservedRuntimeRoleName;
+}
+
 export async function verifyApplicationRuntimeSecurity(client, rawPlan, {
   sharedOwnerState = "transferred",
   cutoverSecurityState = "pre-cutover",
@@ -782,12 +790,16 @@ export async function verifyApplicationRuntimeSecurity(client, rawPlan, {
 
   const runtimeSchemaAcl = await client.query(
     `/* ai_content_preserved_runtime_schema_acl */
-     select has_schema_privilege($1::name,'public','USAGE') usage_allowed,
-            has_schema_privilege($1::name,'public','CREATE') create_allowed`,
+     select pg_get_userbyid(namespace.nspowner)::text schema_owner_role_name,
+            pg_get_userbyid(database.datdba)::text database_owner_role_name,
+            has_schema_privilege($1::name,'public','USAGE') usage_allowed,
+            has_schema_privilege($1::name,'public','CREATE') create_allowed
+       from pg_namespace namespace cross join pg_database database
+      where namespace.nspname='public' and database.datname=current_database()`,
     [plan.preservedRuntimeRoleName],
   );
-  if (runtimeSchemaAcl.rows.length !== 1 || runtimeSchemaAcl.rows[0]?.usage_allowed !== true
-    || runtimeSchemaAcl.rows[0]?.create_allowed !== false) {
+  if (runtimeSchemaAcl.rows.length !== 1
+    || !preservedRuntimeSchemaAclIsValid(runtimeSchemaAcl.rows[0], plan.preservedRuntimeRoleName)) {
     throw new Error("ai_content_preserved_runtime_schema_acl_invalid");
   }
 
@@ -949,6 +961,7 @@ export async function applyRoleBootstrap(client, rawPlan, passwords) {
     for (const { relationName } of plan.sharedOwnerTransfers) {
       await client.query(`alter table public.${quoteIdentifier(relationName)} owner to ${quoteIdentifier(names.schemaOwnerRoleName)}`);
     }
+    const exclusiveRelationNames = new Set(plan.exclusiveOwnedRelations);
     const exclusiveAclGrantees = await client.query(
       `/* ai_content_exclusive_acl_grantees_to_scrub */
        select * from (
@@ -963,10 +976,6 @@ export async function applyRoleBootstrap(client, rawPlan, passwords) {
         order by relation_name collate "C",grantee_role_name collate "C"`,
       [plan.exclusiveOwnedRelations],
     );
-    for (const row of exclusiveAclGrantees.rows) {
-      const grantee = row.grantee_role_name === "PUBLIC" ? "public" : quoteIdentifier(String(row.grantee_role_name));
-      await client.query(`revoke all privileges on table public.${quoteIdentifier(String(row.relation_name))} from ${grantee}`);
-    }
     const controlledColumnAcl = await client.query(
       `/* ai_content_controlled_column_acl_to_scrub */
        select * from (
@@ -984,7 +993,8 @@ export async function applyRoleBootstrap(client, rawPlan, passwords) {
         order by relation_name collate "C",column_name collate "C",grantee_role_name collate "C"`,
       [runtimeRelations, plan.exclusiveOwnedRelations, Object.values(names)],
     );
-    for (const row of controlledColumnAcl.rows) {
+    for (const row of controlledColumnAcl.rows
+      .filter(({ relation_name: relationName }) => !exclusiveRelationNames.has(String(relationName)))) {
       const grantee = row.grantee_role_name === "PUBLIC" ? "public" : quoteIdentifier(String(row.grantee_role_name));
       await client.query(`revoke all privileges (${quoteIdentifier(String(row.column_name))}) on table public.${quoteIdentifier(String(row.relation_name))} from ${grantee}`);
     }
@@ -1015,6 +1025,15 @@ export async function applyRoleBootstrap(client, rawPlan, passwords) {
     // on that membership and PostgreSQL removes them when the edge is revoked.
     // Issue grants on transferred objects as the durable no-login owner instead.
     await client.query(`set local role ${quoteIdentifier(names.schemaOwnerRoleName)}`);
+    for (const row of exclusiveAclGrantees.rows) {
+      const grantee = row.grantee_role_name === "PUBLIC" ? "public" : quoteIdentifier(String(row.grantee_role_name));
+      await client.query(`revoke all privileges on table public.${quoteIdentifier(String(row.relation_name))} from ${grantee}`);
+    }
+    for (const row of controlledColumnAcl.rows
+      .filter(({ relation_name: relationName }) => exclusiveRelationNames.has(String(relationName)))) {
+      const grantee = row.grantee_role_name === "PUBLIC" ? "public" : quoteIdentifier(String(row.grantee_role_name));
+      await client.query(`revoke all privileges (${quoteIdentifier(String(row.column_name))}) on table public.${quoteIdentifier(String(row.relation_name))} from ${grantee}`);
+    }
     for (const { relationName, preservedOwnerRoleName, preservedPrivileges } of plan.sharedOwnerTransfers) {
       await client.query(`grant ${preservedPrivileges.map((privilege) => privilege.toLowerCase()).join(",")} on table public.${quoteIdentifier(relationName)} to ${quoteIdentifier(preservedOwnerRoleName)}`);
     }
