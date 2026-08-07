@@ -93,6 +93,20 @@ test("only API services receive the restricted AI-content database secret", asyn
   const compose = await read("deploy/compose.production.yml");
   const mounts = compose.match(/ai_content_application_database_url/g) ?? [];
   assert.equal(mounts.length, 4, "primary and canary each declare one env path and one mount target");
+  const serviceBlock = (name) => {
+    const start = compose.indexOf(`  ${name}:`);
+    assert.notEqual(start, -1, `${name} service is missing`);
+    const next = compose.slice(start + 3).search(/\r?\n  [a-z0-9-]+:/);
+    return next === -1 ? compose.slice(start) : compose.slice(start, start + 3 + next);
+  };
+  const runtimeUser = 'user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"';
+  for (const service of ["api-primary", "api-canary"]) {
+    assert.match(
+      serviceBlock(service),
+      new RegExp(`^ {4}${runtimeUser.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"),
+      `${service} must run as the owner of its mode-600 database secret`,
+    );
+  }
   const workerSection = compose.slice(compose.indexOf("content-proposal-worker-1:"));
   assert.doesNotMatch(workerSection, /AI_CONTENT_DATABASE_URL_FILE|ai_content_application_database_url/);
 });
