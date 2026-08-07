@@ -1737,7 +1737,7 @@ export function buildAndSign075Allowlist({
     cutoverId, migrationId: migration.id, migrationSha256: migration.checksum, rowsSha256,
     beforeCount: beforeRows.length, beforeSha256: hashCutoverDdlAllowlist(beforeRows),
     afterCount: rows.length, afterSha256: rowsSha256,
-    issuedAt: new Date(Date.parse(issuedAt) + 1_000).toISOString(),
+    issuedAt,
   }, providerIdentity, canonicalCutoverAllowlistAttestationPayload);
   return { authorization, attestation };
 }

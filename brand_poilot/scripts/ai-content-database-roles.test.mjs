@@ -508,6 +508,11 @@ test("075 provider signs exact live legacy ACL revocations", async () => {
   assert.ok(sealed.authorization.rows.some((row) =>
     row.commandTag === legacyAclRevocations[0].commandTag
       && row.objectIdentityPattern === legacyAclRevocations[0].objectIdentityPattern));
+  assert.doesNotThrow(() => runner.validateCutoverAllowlistAttestation(sealed.attestation, {
+    authorization: sealed.authorization,
+    providerAttestationVerification: { publicKeyPem: provider.publicKeyPem, expectedKeyId: provider.keyId, expectedPublicKeySha256: provider.publicKeySha256 },
+    now: new Date("2026-08-06T00:00:00.000Z"),
+  }), "an attestation must be valid immediately when its signed artifacts are created");
   assert.doesNotThrow(() => runner.validateCutoverAllowlistAuthorization(sealed.authorization, {
     migration, roleNames: plan.roleNames, cutoverId: sealed.authorization.cutoverId,
     enforcementCatalogSha256: "a".repeat(64),
