@@ -94,6 +94,7 @@ test("cutover API image contains both ordered 074 and 075 migrations", () => {
   assert.match(dockerfile, /scripts\/migrationRunner\.mjs/);
   assert.match(dockerfile, /scripts\/migrate\.mjs/);
   assert.match(dockerfile, /scripts\/databaseTls\.mjs/);
+  assert.match(dockerfile, /RUN chmod -R a\+rX \/app/);
   assert.equal(existsSync("db/migrations/074_ai_content_maintenance_write_fence.sql"), true);
   assert.equal(existsSync("db/migrations/075_ai_content_three_format_cutover.sql"), true);
   assert.match(migrate, /AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_FILE/);

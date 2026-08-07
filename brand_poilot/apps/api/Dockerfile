@@ -29,6 +29,7 @@ COPY --from=build --chown=node:node /app/scripts/ai-content-database-catalog.mjs
 COPY --from=build --chown=node:node /app/scripts/ai-content-database-roles.mjs ./scripts/ai-content-database-roles.mjs
 COPY --from=build --chown=node:node /app/scripts/ai-content-provider-artifacts.mjs ./scripts/ai-content-provider-artifacts.mjs
 COPY --from=build --chown=node:node /app/scripts/collect-ai-content-prepare-evidence.mjs ./scripts/collect-ai-content-prepare-evidence.mjs
+RUN chmod -R a+rX /app
 
 USER node
 EXPOSE 4000
